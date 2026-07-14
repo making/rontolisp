@@ -91,3 +91,11 @@ host; the whole WebGL pipeline is driven from Lisp through 34 imports -- GLSL so
 Lisp strings via `:string` params, handle-table one-liner JS bindings, `:string` results
 for shader info logs, Math.sin/cos -- staged to Pages via pom.xml); cube, galaxy,
 heat3d and robot-arm all pull the WebGL2 boundary from `examples/browser/webgl-common/gl.lisp`.
+
+**The component path does NOT go through this compiler** (todo 128): `rontolisp:wasm-import`
+is still a Preview-1-only directive (`--component` throws). A `rontolisp:wit-import` under
+`--component` instead lowers to the internal `rontolisp::%component-import` form, which
+`WasmComponentImportCompiler` turns into canonical-ABI marshalling defuns — a different
+compiler, but the SAME synthetic-defun + `PLACEHOLDER_FUNC_BASE` + `WasmImportInjector`
+mechanism described above, sharing one ordinal space with these imports. See `.kb/wit.md`
+("Component imports").

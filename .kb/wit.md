@@ -317,9 +317,12 @@ only way to see it, and it is what a host / `jco` must consume. For a program WI
 world (hand-written `wasm-export`, or an `:s-expr` export, which has no WIT spelling)
 `--emit-wit` remains the sole generator, as before todo 126.
 
-Transitional: when `.todo/128` (component imports) lands, the import side becomes
-something the user declares in the world too — and only THEN does `--emit-wit` become a
-real two-sided consistency check.
+Since component imports landed (todo 128), the import side is REAL: a `wit-import` under
+`--component` becomes a component-level instance import, and `--emit-wit` prints it into
+the world (pruned to the bound members) — byte-diffed against `wasm-tools component wit`
+by the oracle. A world's `import` ITEMS are still not the authoritative import list (the
+program declares what it calls with a separate `wit-import` directive); `--emit-wit` now
+reports both sides of the component's real type.
 
 The world's payoff on the **browser** is real TODAY, not a promise: a
 `--no-gc --component` world has no imports, so `jco transpile` turns it into a single
@@ -679,3 +682,108 @@ authoritative export list. So the four call sites get renamed instead
 (`get-shader-parameter` &c). That migration is `.todo/132`; the smaller second item there is
 the module split, since one directive binds one interface into one module, so `ui:fail`
 needs its own interface (or its own directive with `:from "ui"`).
+
+## Component imports — `canon lower` (todo 128, 2026-07-14)
+
+Step 4 of `.todo/124`, and the payoff: **a `--component` build is no longer import-locked
+to the fixed WASI blob surface.** A `rontolisp:wit-import` under `--component` becomes a
+real component-model instance import whose functions are `canon lower`ed into the core
+module — so the provider is the HOST, and the component composes (`wac plug`) with anyone
+who exports the interface. `examples/wit/keyvalue/page-hits.lisp` runs against
+**wasmtime's own `wasi:keyvalue` implementation** (`-S keyvalue=y`), printing exactly what
+the interpreter's Lisp store and the JVM's `java.util.LinkedHashMap` store print.
+
+### The reference probe (do this before touching the encoders again)
+
+Everything here was derived from, and validated against, a hand-built probe in a
+scratchpad, NOT from reading the spec: a WAT core module with hand-computed flat
+signatures + `wasm-tools component embed/new` + `wasmtime -S keyvalue=y`. A checksum over
+all six `wasi:keyvalue` functions came back exactly right, which is what pinned the
+flattening and every load offset. The golden bytes of the resulting instance type are
+`ComponentWriterTest.instanceTypeMatchesWasmToolsReference` (393 bytes); the layout facts
+are `WitCanonicalAbiTest`. Two things that probe taught, which no document says:
+
+- wasmtime's in-memory keyvalue provider recognizes **only the empty store identifier**
+  (`open ""`); anything else is `no-such-store`. Both Lisp stores in the example follow
+  that rule, which is why all three backends print the same `no-such-store` line.
+- a **forged handle traps at the boundary** (`unknown handle index`) before it ever
+  reaches the provider — uncatchable. So a program must not stunt with a made-up handle;
+  the example demonstrates the error arm with a bad store identifier instead.
+
+### The pieces
+
+- **`compiler/WitImportDirective`** gained the `WASM_COMPONENT` backend (a new
+  `WitExportDirective.Backend` value; `wit-export` treats it exactly like `WASM_GC`). It
+  lowers to an internal `(rontolisp::%component-import "<canonical-iface-id>" "<wit text>"
+  ("member" "lisp-name") ...)` form — **the WIT TEXT TRAVELS INSIDE THE FORM**, so the WASM
+  compiler reads no files and the browser playground (no filesystem) works by construction.
+- **`codegen/wasm/WitCanonicalAbi`** — size / alignment / flattening / despecialization
+  over the `am.ik.wit` model (option = variant{none,some}, result = variant{ok,err}, enum =
+  payload-less variant, tuple = record). No codegen.
+- **`codegen/wasm/WasmComponentImportCompiler`** — the guest-side marshalling, the exact
+  `WasmImportCompiler` pattern: one synthetic defun per bound function (so `#'kv:open` /
+  `funcall` / `mapcar` / `eval` work), a placeholder call `1<<27 + ordinal` that
+  **`WasmImportInjector` renumbers — REUSED UNCHANGED**, and the body deferred until the
+  memory-helper indices are known. Params lower to flat values; results lift recursively
+  from the return area.
+- **`codegen/wasm/WitComponentTypeEncoder`** — the imported instance TYPE. Declaration
+  grammar pinned by the probe: a resource is `export "name" (type (sub resource))`, a named
+  type is a type decl + an `eq`-bound export of the same name, structural types are
+  unexported type decls memoized by shape, and **type decls AND type-bound exports append to
+  the instance type's local type index space; function exports do not**.
+- **`codegen/wasm/WasmComponentBuilder.appendUserImports`** — type + import + per-function
+  alias + `canon lower` (memory 0, realloc = the shared mem module's `cabi_realloc` = core
+  func 0, utf8 — exactly when the call touches linear memory) + one synthesized core
+  instance per interface, passed as an extra instantiation arg named by the canonical id.
+  Every downstream hardcoded index (the `run` alias / lift / export, `appendFuncExports`)
+  shifts by the user-import counts. **Zero imports = zero shift = byte-identical**
+  (stash-dance proven on base / http-client / sockets, with and without a `:string`
+  wasm-export). Works on all three non-serve variants; serve is a clear error.
+- **`codegen/wasm/WitImportWorldEmitter`** — the `--emit-wit` import side.
+
+### `result` = the envelope + a Lisp wrapper (NOT a codegen catch)
+
+A result-returning function binds TWO names: the synthetic defun takes the internal raw
+name (`kv::%open`) and returns the envelope cons `(:ok . V)` / `(:error . E)`; a generated
+public wrapper `(defun kv:open (identifier) (rontolisp::%wit-result (kv::%open identifier)))`
+unwraps it. `rontolisp::%wit-result` is a new **`wit.lisp`** defun (added to `WitLibrary`'s
+trigger names) that yields the ok value or `(error 'rontolisp:wit-error :payload ...)`.
+
+Why this and not a throw emitted by the marshalling codegen: the error arm then rides the
+ORDINARY condition machinery, so EH-mode gating, `handler-case`, the uncaught-trap shape
+and the `:report` all come for free and stay identical to the interpreter/JVM. The
+codegen never mentions conditions at all.
+
+### Type tiers, restated (the doc pages carry the user-facing version)
+
+| | Preview 1 core import | `--component` |
+|---|---|---|
+| params | flat set only | scalars / bool / string / list<u8> / handles / option of those |
+| results | flat set only | **everything except flags** — scalars, bool, string, char, list<T>, list<u8>, tuple, option, result, record, variant, enum, handles |
+
+Preview 1's limit is not laziness: a core import is a bare host function with **no
+component type to declare a richer shape with**. An earlier round of this work lowered rich
+P1 types through `:s-expr` (prin1 out, embedded reader back) — it was REVERTED: that is a
+rontolisp-specific pseudo-protocol, not a WIT boundary, and it would have broken the P1
+byte-identity property. The honest line is the one shipped: rich types need the component
+boundary. (`flags` is unimplemented in both directions; `stream`/`future` are refused
+everywhere, as ever.)
+
+### Member pruning replaces the tree shaker on this path
+
+`--component` skips `WasmTreeShaker` by design, so an unused interface function would
+otherwise cost a real import. `WitImportInliner` therefore passes a **member filter** (the
+symbol names the program textually references, the `LibraryDefunPruner` convention) and the
+directive binds only those; `--no-prune` / `--dynamic` disable it. Measured: a program
+calling 2 of `wasi:keyvalue`'s 6 functions imports exactly 2, and the now-unreachable
+`key-response` record vanishes from the component's type too.
+
+### The alignment trap (this cost the only real debugging round)
+
+`__ronto_alloc` returns `HEAP_PTR` as-is, and **`HEAP_PTR` is not always 8-aligned**:
+`_intern` copies a first-seen symbol's bytes into the permanent low region and advances the
+pointer by their exact length. Hand that pointer to the canonical ABI as a return area and
+wasmtime traps with `pointer not aligned` — nondeterministically, only after a program
+happens to intern something. So the wrapper **aligns HEAP_PTR up to 8 on entry** (that is
+also the staging floor) and pops back to `align8(max(mark, intern-high-water))` on exit.
+Do not "simplify" either of those.

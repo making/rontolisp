@@ -1,4 +1,4 @@
-# wit/keyvalue -- one WIT interface, two stores behind it
+# wit/keyvalue -- one WIT interface, three stores behind it
 
 [`wit/world/`](../world) implements a WIT world: it is about the functions a
 program *exports*. This one is the other half -- the functions a program
@@ -8,7 +8,7 @@ key-value pairs live:
 
 ```lisp
 (rontolisp:wit-import "wit/keyvalue.wit"
-                      :interface "wasi:keyvalue/store@0.2.0"
+                      :interface "wasi:keyvalue/store@0.2.0-draft"
                       :package kv)
 
 (defun record-hit (bucket page)
@@ -24,14 +24,16 @@ them is the program:
 
 | File | What it is |
 | --- | --- |
-| [`wit/keyvalue.wit`](wit/keyvalue.wit) | The interface. An honest subset of the real [wasi:keyvalue 0.2](https://github.com/WebAssembly/wasi-keyvalue) `store` |
+| [`wit/keyvalue.wit`](wit/keyvalue.wit) | The interface: the real [wasi:keyvalue](https://github.com/WebAssembly/wasi-keyvalue) `store`, vendored verbatim |
 | [`page-hits.lisp`](page-hits.lisp) | The program. It knows the WIT and nothing else |
-| [`memory-store.lisp`](memory-store.lisp) | An implementation: a portable Lisp hash-table store, ~40 lines, ending in one `rontolisp:wit-provide` |
+| [`memory-store.lisp`](memory-store.lisp) | An implementation: a portable Lisp hash-table store, ~50 lines, ending in one `rontolisp:wit-provide` |
 | [`java-store.lisp`](java-store.lisp) | The **same** interface over a real `java.util.LinkedHashMap`, through [`java:` interop](../../doc/en/guides/java-interop.md). Bound after the first, so it replaces it |
 
-Run the program on the interpreter and the memory store answers; compile it to
-the JVM and the Java store answers. **The program's own output is identical
-either way** -- that identity is the whole point of the example.
+Run the program on the interpreter and the Lisp store answers; compile it to the
+JVM and the Java store answers; compile it to a **WASI component** and
+**wasmtime's own `wasi:keyvalue` implementation** answers -- a host that has never
+heard of this program. **The program's own output is identical all three ways**,
+and that identity is the whole point of the example.
 
 The commands below say `rontolisp`, the native binary
 (`./mvnw -Pnative clean package -DskipTests`). With the executable JAR
@@ -41,12 +43,12 @@ directory.
 
 ## 1. The interface
 
-[`wit/keyvalue.wit`](wit/keyvalue.wit) is upstream's `store`, name for name,
-minus two things: `list-keys` answers every key instead of paging with a cursor,
-and the sibling `atomics` / `batch` interfaces are not here.
+[`wit/keyvalue.wit`](wit/keyvalue.wit) is upstream's `store`, name for name. Not
+a subset, not a simplification -- the real thing, which is what lets the component
+below talk to a real host with no adapter in between.
 
 ```wit
-package wasi:keyvalue@0.2.0;
+package wasi:keyvalue@0.2.0-draft;
 
 interface store {
   variant error {
@@ -55,15 +57,20 @@ interface store {
     other(string),
   }
 
+  record key-response {
+    keys: list<string>,
+    cursor: option<u64>,
+  }
+
+  open: func(identifier: string) -> result<bucket, error>;
+
   resource bucket {
     get: func(key: string) -> result<option<list<u8>>, error>;
     set: func(key: string, value: list<u8>) -> result<_, error>;
     delete: func(key: string) -> result<_, error>;
     exists: func(key: string) -> result<bool, error>;
-    list-keys: func() -> result<list<string>, error>;
+    list-keys: func(cursor: option<u64>) -> result<key-response, error>;
   }
-
-  open: func(identifier: string) -> result<bucket, error>;
 }
 ```
 
@@ -74,7 +81,7 @@ interface store {
 | --- | --- |
 | `open: func(identifier: string)` | `(kv:open identifier)` |
 | `bucket.get`, a **resource method** | `(kv:bucket-get b key)` -- the handle comes first |
-| `bucket.list-keys` | `(kv:bucket-list-keys b)` |
+| `bucket.list-keys` | `(kv:bucket-list-keys b cursor)` |
 | a resource **constructor** | `bucket-new` |
 | a resource **static** func `f` | `bucket-f` |
 
@@ -90,7 +97,8 @@ And the types are rontolisp's settled WIT mapping:
 | `result<bucket, error>` | the bucket handle -- and the **error arm signals** `rontolisp:wit-error` |
 | `option<list<u8>>` | the value string, or `nil` when the key is absent |
 | `list<u8>` | a string (bytes, one per character) |
-| `list<string>` | a list of strings |
+| `option<u64>` | a number, or `nil` -- so a cursor-less `list-keys` passes `nil` |
+| `record key-response` | a keyword plist: `(:keys ("/index" ...) :cursor nil)` |
 | a `resource` handle | an opaque integer -- pass it back, never interpret it |
 
 There is no `unwrap` step and no error-code plumbing: the ok arm *is* the return
@@ -99,9 +107,9 @@ other rontolisp error is.
 
 ```lisp
 (handler-case
-    (kv:bucket-get 42 "/index")            ; a handle no store ever handed out
+    (kv:open "not-a-store-anyone-has")
   (rontolisp:wit-error (e)
-    (format t "bad handle:        ~a~%" (rontolisp:wit-error-payload e))))
+    (format t "bad store:         ~a~%" (rontolisp:wit-error-payload e))))
 ```
 
 ## 2. The store is user code -- rontolisp ships none
@@ -125,13 +133,12 @@ handle included. That is the entire contract:
          (gethash (nth 1 args) (kv-bucket (nth 0 args))))
         ...))
 
-(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'memory-store)
+(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0-draft" #'memory-store)
 ```
 
 Nothing is wrapped on the way out: the ok arm of a `result` **is** the return
 value, and the error arm is the provider signaling `rontolisp:wit-error` with the
-WIT variant as its payload (`memory-store.lisp` does exactly that for a handle it
-never handed out). The whole file is ~40 lines of portable Lisp, and
+WIT variant as its payload. The whole file is ~50 lines of portable Lisp, and
 [`page-hits.lisp`](page-hits.lisp) pulls it in with one line:
 
 ```lisp
@@ -152,8 +159,8 @@ hits per page:
 /docs exists now?  no
 keys:              ("/index" "/pricing")
 /nope:             nil
-bad handle:        :no-such-store
-second bucket:     ("a" "b")
+bad store:         :no-such-store
+seeded:            ("/a" "/b")
 ```
 
 A `wasi:keyvalue` program normally needs a host before it can be run at all. Here
@@ -176,7 +183,7 @@ the same dispatch function over a real `java.util.LinkedHashMap`, reached throug
          (java:call (java-bucket (nth 0 args)) "get" (nth 1 args)))
         ...))
 
-(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'java-store)
+(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0-draft" #'java-store)
 ```
 
 `rontolisp:wit-provide` **replaces** whatever was bound for the interface, so
@@ -195,7 +202,7 @@ proof that the very same `(kv:bucket-set ...)` now lands somewhere else:
 
 ```console
 $ rontolisp page-hits.lisp -o PageHits.class && java -cp . PageHits
-;; [java store] open "page-hits" -> handle 500
+;; [java store] open "" -> handle 500
 ;; [java store] set /index = 1
 ;; [java store] set /pricing = 1
 ;; [java store] set /index = 2
@@ -213,24 +220,69 @@ hits per page:
 /docs exists now?  no
 keys:              ("/index" "/pricing")
 /nope:             nil
-bad handle:        :no-such-store
-;; [java store] open "second-bucket" -> handle 501
-;; [java store] set a = seeded
-;; [java store] set b = seeded
-second bucket:     ("a" "b")
+bad store:         :no-such-store
+;; [java store] set /a = seeded
+;; [java store] set /b = seeded
+seeded:            ("/a" "/b")
 ```
 
 Strip the trace lines and the two runs are the same report, character for
-character. That is the payoff: develop against a fake, deploy against the real
-thing, and never touch the program in between. A production store would swap
-`java.util.LinkedHashMap` for a Redis client or a JDBC connection -- nothing else
-in `java-store.lisp` would change, and nothing at all in `page-hits.lisp` would.
+character.
 
-(On the WASM backends a `rontolisp:wit-provide` form is *dropped* rather than
-rejected -- the host is the provider there -- so a program written this way still
-compiles everywhere it can compile at all.)
+## 5. Run it as a component -- against a store nobody here wrote
 
-## 5. Why the bindings are just `defun`s
+Compile it with `--component` and the program becomes a WASI component that
+**imports `wasi:keyvalue/store`**. There is no provider in it at all: the calls go
+out through the component model's canonical ABI, and whatever the host plugs in
+answers them. wasmtime ships an implementation, so this is the whole ceremony:
+
+```console
+$ rontolisp page-hits.lisp -o page-hits.wasm --component
+$ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
+      -S keyvalue=y page-hits.wasm
+
+hits per page:
+  /docs = 1
+  /index = 3
+  /pricing = 2
+
+/docs exists?      yes
+/docs exists now?  no
+keys:              ("/index" "/pricing")
+/nope:             nil
+bad store:         :no-such-store
+seeded:            ("/a" "/b")
+```
+
+Character for character the interpreter's report -- from a store written in Rust,
+inside the runtime, by people who have never seen this program. The `.wit` is the
+only thing the two ends share.
+
+Nothing in `page-hits.lisp` mentions a component, and neither store file is
+consulted: on the WASM backends a `rontolisp:wit-provide` is *inert* (the host is
+the provider), so the same source compiles and runs everywhere.
+
+What actually crossed that boundary is worth spelling out, because it is the
+whole of the type mapping at once: a `resource` handle, a `string`, a
+`list<u8>`, an `option`, a `bool`, a `record` holding a `list<string>` and an
+`option<u64>`, and a `result` whose **error arm arrived as a condition** and was
+caught by `handler-case`.
+
+`--emit-wit` writes the component's real type next to it, and the imported
+interface is in there -- pruned to the functions the program actually calls:
+
+```console
+$ rontolisp page-hits.lisp -o page-hits.wasm --component --emit-wit
+$ grep -A 2 keyvalue page-hits.wit
+  import wasi:keyvalue/store@0.2.0-draft;
+```
+
+That is also how you compose: a component that *imports* `wasi:keyvalue/store` can
+be plugged into any component that *exports* it, in any language, with
+[`wac`](https://github.com/bytecodealliance/wac) -- the host does not have to be a
+runtime built-in.
+
+## 6. Why the bindings are just `defun`s
 
 Each WIT function lowers into an **ordinary `defun`**, not into some special call
 form. So everything that works on a function works on them, with no extra wiring
@@ -238,67 +290,59 @@ form. So everything that works on a function works on them, with no extra wiring
 maps it, `eval` finds it:
 
 ```lisp
-(let ((bucket (kv:open "second-bucket"))
+(let ((bucket (kv:open *store*))
       (set-key #'kv:bucket-set))
   (mapcar (lambda (key) (funcall set-key bucket key "seeded"))
-          '("a" "b"))
-  (format t "second bucket:     ~s~%" (sorted-keys bucket)))
+          '("/a" "/b"))
+  ...)
 ```
 
 Nothing about the boundary leaks into the call sites: they are Lisp calls, and
-the WIT is the only thing that says what is on the other end.
+the WIT is the only thing that says what is on the other end. That holds on the
+component too, where those calls are canonical-ABI lowerings.
 
 ## Limitations
 
-**This example's backends are the interpreter and the JVM.** Two separate
-reasons, and both are worth knowing before writing a `.wit` of your own:
+**The two WASM backends this example does not reach**, and why -- both worth
+knowing before writing a `.wit` of your own:
 
-1. **`--component` and `--no-gc` reject `wit-import` outright.**
+1. **Preview 1 WASM (`-o out.wasm`) carries the flat set only.** A Preview 1
+   import is a bare core-WASM function: there is no component type with which to
+   describe a richer shape to the host, so only the integer scalars up to 32
+   bits, the float scalars, `bool`, `string`, `list<u8>` and resource handles
+   cross it. Every function of `wasi:keyvalue` returns a `result`, so this WIT is
+   a compile error there, naming the line that cannot cross:
 
    ```console
-   $ rontolisp page-hits.lisp -o page-hits.wasm --component
-   rontolisp:wit-import is not supported with --component yet: a component's imports
-   need the canonical-ABI lower, which is not implemented. It works on the interpreter,
-   the JVM backend and Preview 1 WASM (a plain -o out.wasm).
+   $ rontolisp page-hits.lisp -o page-hits.wasm
+   wit/keyvalue.wit:36: 'open': the WIT type of the result does not cross the Preview 1
+   WASM import boundary, which carries the flat set (the integer scalars up to 32 bits,
+   the float scalars, bool, string, list<u8> and resource handles). Its rontolisp
+   representation is settled (RESULT): compile with --component, where the canonical ABI
+   marshals it, or run on the interpreter or the JVM backend, which bind it through a
+   provider
+   ```
 
+   `wit-import` *does* work on Preview 1 for an interface written within that set
+   -- a WebGL binding, say, which is all handles and scalars. It lowers into one
+   `rontolisp:wasm-import` per WIT function, byte-identically to the hand-written
+   import block, and `--optimize` still shakes out the functions the program never
+   calls. (The import *field* a WIT label becomes is `createShader` for
+   `create-shader` by default -- the JavaScript convention, and what `jco` produces
+   from a component; `:field-style :kebab` keeps the label verbatim instead.)
+
+2. **`--no-gc` rejects `wit-import` outright**: its contract is a plain MVP module
+   that imports nothing at all.
+
+   ```console
    $ rontolisp page-hits.lisp -o page-hits.wasm --no-gc
    rontolisp:wit-import is not supported with --no-gc: the scalar backend emits a plain
    MVP module with no imports
    ```
 
-   The component one is the interesting gap: importing an interface into a
-   component needs the canonical ABI's `lower`, which the export side
-   ([`wit-export`](../world)) already has and the import side does not yet.
-
-2. **A `result`/`option`-bearing interface does not cross the Preview 1 WASM
-   import boundary either** -- so *this* WIT, unchanged, is a compile error there,
-   naming the line that cannot cross:
-
-   ```console
-   $ rontolisp page-hits.lisp -o page-hits.wasm
-   wit/keyvalue.wit:32: 'bucket-get': the WIT type of the result does not cross the
-   Preview 1 WASM import boundary (supported: the integer scalars up to 32 bits, the
-   float scalars, bool, string, list<u8> and resource handles). Its rontolisp
-   representation is settled (RESULT), and the interpreter and the JVM backend bind
-   it today -- only the WASM import boundary cannot marshal it yet
-   ```
-
-   `wit-import` *does* work on Preview 1 WASM (`-o out.wasm`): it lowers into one
-   `rontolisp:wasm-import` per WIT function, byte-identically to the hand-written
-   import block, and `--optimize` still shakes out the functions the program never
-   calls. (The import *field* a WIT label becomes is `createShader` for
-   `create-shader` by default -- the JavaScript convention, and what `jco` produces
-   from a component; `:field-style :kebab` keeps the label verbatim instead.) But a
-   Preview 1 import is a raw core-WASM function, so only the **flat** set crosses
-   it: the integer scalars up to 32 bits, the float scalars, `bool`, `string`,
-   `list<u8>` and resource handles. An interface written within that set -- a
-   WebGL binding, say, which is all handles and scalars -- can bind on all three
-   of interpreter, JVM and Preview 1 WASM from one `.wit`. `wasi:keyvalue`
-   cannot, because every one of its functions returns a `result`.
-
-On the interpreter and the JVM there is no such restriction: the boundary is an
-ordinary Lisp call, so every representation in the mapping crosses (records as
-plists, variants as tagged lists, enums as keywords, ...). Only `stream` and
+On the interpreter and the JVM there is no type restriction at all: the boundary
+is an ordinary Lisp call, so every representation in the mapping crosses (records
+as plists, variants as tagged lists, enums as keywords, ...). Only `stream` and
 `future` are refused, having no rontolisp value on any backend yet.
 
 Full reference:

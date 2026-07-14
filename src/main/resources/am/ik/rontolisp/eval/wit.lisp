@@ -49,3 +49,18 @@
                (concatenate 'string "No provider is bound for the WIT interface "
                             interface " -- bind one with rontolisp:wit-provide"))
         (apply provider member args))))
+
+(defun rontolisp::%wit-result (envelope)
+  ;; The WASM boundaries cannot signal across the host call, so a
+  ;; result-returning wit-imported function crosses as the envelope
+  ;; (:ok . value) / (:error . payload) and its public wrapper defun unwraps it
+  ;; here: the ok arm IS the value, the error arm signals rontolisp:wit-error
+  ;; exactly as an interpreter/JVM provider would have (the settled result
+  ;; mapping, a condition on every backend).
+  (if (and (consp envelope) (eq (car envelope) :ok))
+      (cdr envelope)
+      (if (and (consp envelope) (eq (car envelope) :error))
+          (error 'rontolisp:wit-error :payload (cdr envelope)
+                 :message (concatenate 'string "the WIT call answered its error arm: "
+                                       (prin1-to-string (cdr envelope))))
+          envelope)))

@@ -87,8 +87,17 @@ public final class WitExportDirective {
 	 */
 	public enum Backend {
 
-		/** The wasm-GC backend ({@code -o out.wasm}). */
+		/** The wasm-GC backend, Preview 1 ({@code -o out.wasm}). */
 		WASM_GC,
+
+		/**
+		 * The wasm-GC backend in component mode ({@code -o out.wasm --component}).
+		 * {@code wit-export} treats it exactly like {@link #WASM_GC} (the export boundary
+		 * is the same); {@code wit-import} lowers differently -- a component's imports go
+		 * through the canonical ABI ({@code canon lower}) instead of Preview 1 core
+		 * imports.
+		 */
+		WASM_COMPONENT,
 
 		/** The scalar backend ({@code -o out.wasm --no-gc}). */
 		WASM_NO_GC,
@@ -372,7 +381,7 @@ public final class WitExportDirective {
 				case "s32":
 					return ":int";
 				case "s64":
-					if (backend == Backend.WASM_GC) {
+					if (backend == Backend.WASM_GC || backend == Backend.WASM_COMPONENT) {
 						throw error(witPath, locations, item, "export '" + exportName + "': s64 (" + what
 								+ ") requires --no-gc (the wasm-GC backend's integers are i31ref)");
 					}

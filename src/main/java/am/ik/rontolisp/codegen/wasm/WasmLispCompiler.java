@@ -1004,6 +1004,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// mode), calling the imported host function through a placeholder index that
 		// the WasmImportInjector post-pass resolves.
 		List<WasmImportCompiler.Decl> importDecls = new ArrayList<>();
+		// (rontolisp::%component-import ...) forms (the --component lowering of
+		// rontolisp:wit-import): each bound WIT function becomes a synthetic defun whose
+		// body marshals through the canonical ABI, and the interface becomes a
+		// component-level import wired by WasmComponentBuilder (canon lower).
+		List<WasmComponentImportCompiler.Import> componentImports = new ArrayList<>();
 		for (LispVal expr : program) {
 			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 					&& LispNames.DEFUN.equals(sym.name())) {
@@ -1015,6 +1020,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			else if (WasmImportCompiler.isImportForm(expr)) {
 				importDecls.add(WasmImportCompiler.parse((LispCons) expr));
 			}
+			else if (WasmComponentImportCompiler.isComponentImportForm(expr)) {
+				componentImports.add(WasmComponentImportCompiler.parse((LispCons) expr));
+			}
 			else {
 				topLevelExprs.add(expr);
 			}
@@ -1022,6 +1030,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (!importDecls.isEmpty() && this.component) {
 			throw new UnsupportedOperationException(
 					"rontolisp:wasm-import is not supported with --component (Preview 1 core modules only)");
+		}
+		if (!componentImports.isEmpty() && (!this.component || this.serve)) {
+			throw new UnsupportedOperationException(this.serve
+					? "rontolisp:wit-import cannot be combined with rontolisp:http-handler yet: a serve-mode "
+							+ "component's imports are the fixed wasi:http surface"
+					: "the canonical-ABI import lowering requires --component");
 		}
 		// Register each import as a synthetic defun so ordinary calls, #'name, funcall
 		// and eval all reach it through the regular defun machinery; Pass 2a swaps in
@@ -1040,6 +1054,26 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			importWrappers.put(decl.name(), decl);
 			defuns.add(new DefunDecl(decl.name(), paramNames, false, List.of()));
+		}
+		// Component-import bindings register the same way: a synthetic defun per bound
+		// WIT function (Pass 2a reserves the body slot; the canonical-ABI marshalling
+		// body is filled in once the memory-helper indices are known).
+		Map<String, WasmComponentImportCompiler.Decl> componentImportWrappers = new LinkedHashMap<>();
+		for (WasmComponentImportCompiler.Import imported : componentImports) {
+			for (WasmComponentImportCompiler.Decl decl : imported.decls()) {
+				boolean duplicate = componentImportWrappers.containsKey(decl.lispName())
+						|| defuns.stream().anyMatch(d -> d.name.equals(decl.lispName()));
+				if (duplicate) {
+					throw new UnsupportedOperationException(
+							"rontolisp:wit-import name collides with an existing function: " + decl.lispName());
+				}
+				List<String> paramNames = new ArrayList<>();
+				for (int i = 0; i < WasmComponentImportCompiler.lispArity(decl); i++) {
+					paramNames.add("%component-import-p" + i);
+				}
+				componentImportWrappers.put(decl.lispName(), decl);
+				defuns.add(new DefunDecl(decl.lispName(), paramNames, false, List.of()));
+			}
 		}
 		// A :s-expr export parameter parses host-provided text with the embedded reader,
 		// so
@@ -1189,7 +1223,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// result calls the _str_from_mem helper, whose index follows the lambdas.
 		Map<String, Integer> importBodySlots = new HashMap<>();
 		for (DefunDecl defun : defuns) {
-			if (importWrappers.containsKey(defun.name)) {
+			if (importWrappers.containsKey(defun.name) || componentImportWrappers.containsKey(defun.name)) {
 				importBodySlots.put(defun.name, userFunctionBodies.size());
 				userFunctionBodies.add(null); // filled in below
 				continue;
@@ -1383,7 +1417,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A :string import result is written into linear memory by the host and boxed
 		// with the same _str_from_mem helper, so it forces the helper pair on too.
 		boolean importUsesStrFromMem = importDecls.stream().anyMatch(WasmImportCompiler::usesStrFromMem);
-		boolean memoryHelpers = exportUsesMemory || importUsesStrFromMem;
+		// A component-import wrapper stages arguments and lifts string results through
+		// the same helper pair (__ronto_alloc for the return area, _str_from_mem for
+		// host-written bytes), so any bound interface forces the helpers on.
+		boolean memoryHelpers = exportUsesMemory || importUsesStrFromMem || !componentImportWrappers.isEmpty();
 		int allocFuncIndex = memoryHelpers ? exportHelperBase : -1;
 		int strFromMemFuncIndex = memoryHelpers ? exportHelperBase + 1 : -1;
 		// Host arena API: __ronto_alloc_mark / __ronto_alloc_reset, appended right after
@@ -1403,6 +1440,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (WasmImportCompiler.Decl decl : importWrappers.values()) {
 				byte[] body = WasmImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal++, strFromMemFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.name())), body);
+			}
+			for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {
+				byte[] body = WasmComponentImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal++, allocFuncIndex,
+						strFromMemFuncIndex);
+				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.lispName())), body);
 			}
 		}
 		if (!exportDecls.isEmpty()) {
@@ -1503,7 +1545,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// import signatures: the component string-ABI block, or (mutually exclusive,
 		// since
 		// the host arena is non-component only) the two arena signatures.
-		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importWrappers.size();
+		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importWrappers.size()
+				+ componentImportWrappers.size();
 		int abiFuncBase = exportHelperBase + helperFuncCount + exportPlans.size();
 		int cabiReallocFuncIndex = abiFuncBase;
 		int cabiPostFuncBase = cabiReallocFuncIndex + 1;
@@ -1515,6 +1558,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<am.ik.wasm.WasmImportInjector.HostImport> hostImports = new ArrayList<>();
 		int importTypeIndex = fixedTypeCount() + exportPlans.size();
 		for (WasmImportCompiler.Decl decl : importWrappers.values()) {
+			hostImports
+				.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), importTypeIndex++));
+		}
+		// Component-import calls follow in the same placeholder ordinal space: the core
+		// module imports module = the interface's canonical id, field = the canonical-ABI
+		// function name, satisfied at instantiation by the canon-lowered core instance.
+		for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {
 			hostImports
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), importTypeIndex++));
 		}
@@ -1982,6 +2032,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				// wrapper types (matching the indices recorded in hostImports).
 				for (WasmImportCompiler.Decl decl : importWrappers.values()) {
 					types.addFunc(WasmImportCompiler.hostParamTypes(decl), WasmImportCompiler.hostResultTypes(decl));
+				}
+				// The canonical-ABI flat signatures of the component-import bindings,
+				// in the same ordinal order as their hostImports entries.
+				for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {
+					types.addFunc(WasmComponentImportCompiler.hostParamTypes(decl),
+							WasmComponentImportCompiler.hostResultTypes(decl));
 				}
 				// Component string-ABI signatures (todo 92 Tier 2), from abiTypeBase:
 				// cabi_realloc, one cabi_post_* per flat-result signature, then one
@@ -2624,8 +2680,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.componentWit = WitEmitter.emit(
 					emitHttpImport ? WitEmitter.VARIANT_HTTP_CLIENT
 							: emitSockImport ? WitEmitter.VARIANT_SOCKETS : WitEmitter.VARIANT_BASE,
-					componentExportDecls);
-			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport, componentExportDecls);
+					componentExportDecls, componentImports);
+			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport, componentExportDecls,
+					componentImports);
 		}
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
 	}

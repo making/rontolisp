@@ -60,6 +60,21 @@ public final class ComponentWriter {
 	/** Primitive value type code for {@code bool}. */
 	public static final int VT_BOOL = 0x7f;
 
+	/** Primitive value type code for {@code s8}. */
+	public static final int VT_S8 = 0x7e;
+
+	/** Primitive value type code for {@code s16}. */
+	public static final int VT_S16 = 0x7c;
+
+	/** Primitive value type code for {@code u16}. */
+	public static final int VT_U16 = 0x7b;
+
+	/** Primitive value type code for {@code f32}. */
+	public static final int VT_F32 = 0x76;
+
+	/** Primitive value type code for {@code char}. */
+	public static final int VT_CHAR = 0x74;
+
 	/**
 	 * Primitive value type code for {@code u8} (the element type of {@code stream<u8>}).
 	 */
@@ -636,6 +651,261 @@ public final class ComponentWriter {
 			declName(w, exportName);
 			w.write(0x05).writeUnsignedLeb128(instanceIndex); // sortidx: instance
 			w.write(0x00); // no type ascription
+		});
+	}
+
+	// --- user-defined WIT types + instance-type imports (component imports)
+	//
+	// Generic encoders for the defined-value-type grammar of the component-model binary
+	// format, byte-validated against `wasm-tools dump` of a wasm-tools-built reference
+	// component importing wasi:keyvalue/store (pinned in ComponentWriterTest). A
+	// "valtype" operand is passed pre-encoded (see valTypePrim / valTypeIndex) because
+	// it is either a negative signed-LEB primitive code or a non-negative type index.
+
+	/**
+	 * Encode a value-type operand referring to a primitive type (e.g.
+	 * {@link #VT_STRING}).
+	 * @param primCode the primitive value type code
+	 * @return the encoded valtype operand
+	 */
+	public static byte[] valTypePrim(int primCode) {
+		return enc(w -> w.writeSignedLeb128(primCode - 0x80));
+	}
+
+	/**
+	 * Encode a value-type operand referring to a defined type by index.
+	 * @param typeIndex the type index (local to the enclosing instance type, or a
+	 * component type index at the outer level)
+	 * @return the encoded valtype operand
+	 */
+	public static byte[] valTypeIndex(int typeIndex) {
+		return enc(w -> w.writeSignedLeb128(typeIndex));
+	}
+
+	/**
+	 * Encode the defined value type {@code record} (tag {@code 0x72}).
+	 * @param fieldNames the field names, in order
+	 * @param fieldTypes the encoded valtype of each field
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedRecordOf(List<String> fieldNames, List<byte[]> fieldTypes) {
+		return enc(w -> {
+			w.write(0x72).writeUnsignedLeb128(fieldNames.size());
+			for (int i = 0; i < fieldNames.size(); i++) {
+				plainName(w, fieldNames.get(i));
+				w.write((Object) fieldTypes.get(i));
+			}
+		});
+	}
+
+	/**
+	 * Encode the defined value type {@code variant} (tag {@code 0x71}).
+	 * @param caseNames the case names, in order
+	 * @param casePayloads the encoded valtype of each case's payload, or {@code null} for
+	 * a payload-less case
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedVariantOf(List<String> caseNames, List<byte @Nullable []> casePayloads) {
+		return enc(w -> {
+			w.write(0x71).writeUnsignedLeb128(caseNames.size());
+			for (int i = 0; i < caseNames.size(); i++) {
+				plainName(w, caseNames.get(i));
+				byte[] payload = casePayloads.get(i);
+				if (payload == null) {
+					w.write(0x00);
+				}
+				else {
+					w.write(0x01).write((Object) payload);
+				}
+				w.write(0x00); // refines: none
+			}
+		});
+	}
+
+	/**
+	 * Encode the defined value type {@code list<T>} (tag {@code 0x70}) over an arbitrary
+	 * element valtype.
+	 * @param elementType the encoded element valtype
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedListOf(byte[] elementType) {
+		return enc(w -> w.write(0x70).write((Object) elementType));
+	}
+
+	/**
+	 * Encode the defined value type {@code tuple} (tag {@code 0x6f}).
+	 * @param elementTypes the encoded valtype of each element, in order
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedTupleOf(List<byte[]> elementTypes) {
+		return enc(w -> {
+			w.write(0x6f).writeUnsignedLeb128(elementTypes.size());
+			elementTypes.forEach(t -> w.write((Object) t));
+		});
+	}
+
+	/**
+	 * Encode the defined value type {@code flags} (tag {@code 0x6e}).
+	 * @param names the flag names, in order
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedFlagsOf(List<String> names) {
+		return enc(w -> {
+			w.write(0x6e).writeUnsignedLeb128(names.size());
+			names.forEach(n -> plainName(w, n));
+		});
+	}
+
+	/**
+	 * Encode the defined value type {@code enum} (tag {@code 0x6d}).
+	 * @param names the enum case names, in order
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedEnumOf(List<String> names) {
+		return enc(w -> {
+			w.write(0x6d).writeUnsignedLeb128(names.size());
+			names.forEach(n -> plainName(w, n));
+		});
+	}
+
+	/**
+	 * Encode the defined value type {@code option<T>} (tag {@code 0x6b}) over an
+	 * arbitrary payload valtype.
+	 * @param payloadType the encoded payload valtype
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedOptionOf(byte[] payloadType) {
+		return enc(w -> w.write(0x6b).write((Object) payloadType));
+	}
+
+	/**
+	 * Encode the defined value type {@code result<T, E>} (tag {@code 0x6a}) with
+	 * arbitrary (or absent) payload valtypes.
+	 * @param okType the encoded ok-arm valtype, or {@code null} for a payload-less ok arm
+	 * @param errType the encoded error-arm valtype, or {@code null} for a payload-less
+	 * error arm
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedResultOf(byte @Nullable [] okType, byte @Nullable [] errType) {
+		return enc(w -> {
+			w.write(0x6a);
+			if (okType == null) {
+				w.write(0x00);
+			}
+			else {
+				w.write(0x01).write((Object) okType);
+			}
+			if (errType == null) {
+				w.write(0x00);
+			}
+			else {
+				w.write(0x01).write((Object) errType);
+			}
+		});
+	}
+
+	/**
+	 * Encode the defined value type {@code borrow<resource>} (tag {@code 0x68}).
+	 * @param resourceTypeIndex the type index of the resource
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedBorrow(int resourceTypeIndex) {
+		return enc(w -> w.write(0x68).writeUnsignedLeb128(resourceTypeIndex));
+	}
+
+	/**
+	 * Encode a component function type with named parameters of arbitrary valtypes and an
+	 * optional single result of an arbitrary valtype &mdash; the general form of
+	 * {@link #funcTypeScalars}, used inside imported-instance types.
+	 * @param paramNames the parameter names, in order
+	 * @param paramTypes the encoded valtype of each parameter
+	 * @param resultType the encoded result valtype, or {@code null} for no result
+	 * @return the encoded function type
+	 */
+	public static byte[] funcTypeOf(List<String> paramNames, List<byte[]> paramTypes, byte @Nullable [] resultType) {
+		return enc(w -> {
+			w.write(0x40);
+			w.writeUnsignedLeb128(paramNames.size());
+			for (int i = 0; i < paramNames.size(); i++) {
+				plainName(w, paramNames.get(i));
+				w.write((Object) paramTypes.get(i));
+			}
+			if (resultType == null) {
+				w.write(0x01).writeUnsignedLeb128(0);
+			}
+			else {
+				w.write(0x00).write((Object) resultType);
+			}
+		});
+	}
+
+	/**
+	 * Encode an instance-type declaration that defines a type (tag {@code 0x01}). Each
+	 * such declaration appends one entry to the instance type's local type index space.
+	 * @param definedType the encoded defined type (or function type)
+	 * @return the encoded instance-type declaration
+	 */
+	public static byte[] instanceDeclType(byte[] definedType) {
+		return enc(w -> w.write(0x01).write((Object) definedType));
+	}
+
+	/**
+	 * Encode an instance-type declaration exporting a <strong>resource</strong> type
+	 * (externdesc {@code type} with the {@code sub resource} bound). The export appends
+	 * one entry to the local type index space &mdash; the resource type itself.
+	 * @param name the export name (e.g. {@code "bucket"})
+	 * @return the encoded instance-type declaration
+	 */
+	public static byte[] instanceDeclExportResource(String name) {
+		return enc(w -> {
+			w.write(0x04);
+			declName(w, name);
+			w.write(0x03).write(0x01); // externdesc: type, bound: sub resource
+		});
+	}
+
+	/**
+	 * Encode an instance-type declaration exporting a previously declared type under a
+	 * name (externdesc {@code type} with an {@code eq} bound). The export appends one
+	 * entry to the local type index space &mdash; the exported alias.
+	 * @param name the export name (e.g. {@code "error"})
+	 * @param localTypeIndex the local type index of the declared type
+	 * @return the encoded instance-type declaration
+	 */
+	public static byte[] instanceDeclExportTypeEq(String name, int localTypeIndex) {
+		return enc(w -> {
+			w.write(0x04);
+			declName(w, name);
+			w.write(0x03).write(0x00).writeUnsignedLeb128(localTypeIndex);
+		});
+	}
+
+	/**
+	 * Encode an instance-type declaration exporting a function of a previously declared
+	 * function type. Function exports do <strong>not</strong> append to the local type
+	 * index space.
+	 * @param name the export name (e.g. {@code "[method]bucket.get"})
+	 * @param localFuncTypeIndex the local type index of the function type
+	 * @return the encoded instance-type declaration
+	 */
+	public static byte[] instanceDeclExportFunc(String name, int localFuncTypeIndex) {
+		return enc(w -> {
+			w.write(0x04);
+			declName(w, name);
+			w.write(0x01).writeUnsignedLeb128(localFuncTypeIndex);
+		});
+	}
+
+	/**
+	 * Encode an instance type (tag {@code 0x42}) from its declarations.
+	 * @param decls the encoded instance-type declarations, in order
+	 * @return the encoded instance type
+	 */
+	public static byte[] instanceTypeOf(List<byte[]> decls) {
+		return enc(w -> {
+			w.write(0x42);
+			w.writeUnsignedLeb128(decls.size());
+			decls.forEach(d -> w.write((Object) d));
 		});
 	}
 

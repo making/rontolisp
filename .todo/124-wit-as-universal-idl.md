@@ -1,6 +1,8 @@
 # WIT as rontolisp's universal IDL (roadmap anchor)
 
-**Status:** open; **step 1 (`.todo/125`) DONE 2026-07-13** — `am.ik.wit` shipped,
+**Status:** ROADMAP COMPLETE 2026-07-14 (all four steps shipped); kept open as the
+anchor for the follow-on frontier (`.todo/133`-`136`, `.todo/132`) — see the roadmap
+table. **step 1 (`.todo/125`) DONE 2026-07-13** — `am.ik.wit` shipped,
 `WitEmitter` migrated onto it, the type mapping settled in `compiler/WitTypeMapper`
 and recorded in `.kb/wit.md` (todo file deleted on completion). **Step 2
 (`.todo/126`) DONE 2026-07-14** — `rontolisp:wit-export` (contract check + lowering
@@ -126,13 +128,33 @@ no external dependencies.
 |---|---|---|---|
 | 1 | ~~`.todo/125`~~ **DONE 2026-07-13** — `am.ik.wit` parser/printer + settled mapping; `WitEmitter` on `WitPrinter`; variants renamed (`http-client`/`http-server`/`http-server-client`/`sockets`); `.kb/wit.md` | medium | self-validated via `WitOracleE2eTest` |
 | 2 | ~~`.todo/126`~~ **DONE 2026-07-14** — `wit-export`: implement-this-world contract checking (compile path + interpreter) lowered into `wasm-export` (byte-identical components), `wasm-export :param-names`, `--scaffold-wit`; `.kb/wit.md` | small | killed the `:params`/`:returns` double-maintenance |
-| 3 | `.todo/127` — `wit-import` on interpreter + JVM (provider binding) | medium | one Lisp source, host impl per backend |
-| 4 | `.todo/128` — component imports (canon lower) | **large** | wasi:keyvalue, component composition, wasmCloud |
+| 3 | ~~`.todo/127`~~ **DONE 2026-07-14** — `wit-import` on interpreter + JVM (provider binding); the core ships NO provider for any interface | medium | one Lisp source, host impl per backend |
+| 4 | ~~`.todo/128`~~ **DONE 2026-07-14** — component imports (`canon lower`): instance import + per-function lower, rich results, member pruning, `--emit-wit` import side | **large** | wasi:keyvalue against wasmtime's REAL host, component composition |
 
-Steps 1-3 are re-arrangements of existing machinery. Step 4 is the only one that
-needs genuinely new encoder work, and it is the payoff. `.todo/52` (wasi:keyvalue)
-is the designated first proof of step 4 — do it *through* this pipeline, not
-around it.
+**THE ROADMAP IS COMPLETE (2026-07-14).** All four steps shipped; `.kb/wit.md` is the
+record. `.todo/52` (wasi:keyvalue) was the designated proof of step 4 and it landed —
+`examples/wit/keyvalue` runs one source against a Lisp store (interpreter), a Java map
+(JVM) and **wasmtime's own `wasi:keyvalue` implementation** (component), with identical
+output.
+
+**What remains of this file is the "absorbed afterwards" list below — and it is now the
+actionable frontier**, with the blocker identified. Concretely:
+
+| | |
+|---|---|
+| `.todo/133` | `variant`/`enum`/`result` as a component-import PARAMETER. **The keystone** — the only thing blocking 135 and 136, both verified function-by-function |
+| `.todo/134` | serve mode accepts user WIT imports (small; an HTTP server with a real store) |
+| `.todo/135` | serve's HTTP glue through WIT — the "http-handler becomes a world" bullet below |
+| `.todo/136` | `rontolisp:fetch` through WIT — deletes ~10.5 KB, the biggest hand-written blob |
+| `.todo/132` | the WebGL demos adopt `local:webgl/gl.wit` — the gl.lisp bullet below |
+
+The blobs that CANNOT be externalized, so nobody re-proposes it: the **base adapter**
+(the core's Preview-1-identical `wasi_snapshot_preview1` import layout is what every
+`FUNC_*` constant rests on — and every program uses it), the **serve preview1 bridge**
+(the same thing in miniature), the **`--no-gc` print micro-adapter** (a different backend;
+`wit-import` is rejected there by design), and **`wasi:sockets`** (its 0.3 surface is
+fundamentally `stream`/`future`-based, which has no rontolisp value on ANY backend until
+language-level async — a wall, not a gap).
 
 ## What gets absorbed afterwards (the follow-on prize, not a step)
 

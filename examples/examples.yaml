@@ -347,19 +347,27 @@ examples:
 
   # --- wit/keyvalue: a WIT interface CALLED, with a provider per backend -------
   - path: wit/keyvalue/page-hits.lisp
-    backends: [interpreter, jvm]
+    backends: [interpreter, jvm, wasm-component]
     note: >-
-      binds wit/keyvalue.wit (an honest subset of wasi:keyvalue/store) with
-      rontolisp:wit-import. rontolisp ships NO provider for any interface, so both
-      legs run against a store written in Lisp beside the program: the interpreter
-      leg requires memory-store.lisp (a portable hash-table store), and the jvm leg
-      runs the SAME source with java-store.lisp required on top under
-      #+rontolisp-jvm, whose rontolisp:wit-provide REPLACES it with a
-      java.util.LinkedHashMap and prints a ";; [java store]" trace -- hence
-      contains, not equals (the program's own lines are identical on both). No wasm
-      leg: --component and --no-gc reject wit-import, and every function of this
-      interface returns a result, which does not cross the Preview 1 WASM import
-      boundary (only the flat scalar/string/handle set does)
+      binds wit/keyvalue.wit (the REAL wasi:keyvalue/store@0.2.0-draft, vendored
+      verbatim) with rontolisp:wit-import, and the provider behind it differs per
+      backend with no change to the program. rontolisp ships NO provider for any
+      interface, so the two JVM-family legs run against a store written in Lisp
+      beside the program: the interpreter leg requires memory-store.lisp (a
+      portable hash-table store), and the jvm leg runs the SAME source with
+      java-store.lisp required on top under #+rontolisp-jvm, whose
+      rontolisp:wit-provide REPLACES it with a java.util.LinkedHashMap and prints
+      a ";; [java store]" trace -- hence contains, not equals (the program's own
+      lines are identical on both). The wasm-component leg pins the canonical-ABI
+      import lowering (canon lower: result / option / variant / record /
+      list<u8> / list<string> / bool / resource handles all marshalled); the
+      harness only compiles it, because RUNNING it needs a host that provides
+      wasi:keyvalue -- and wasmtime does: `wasmtime run -W gc=y -W exceptions=y
+      -W component-model-more-async-builtins=y -S keyvalue=y prog.wasm` prints
+      exactly the interpreter's lines, from a store that has never heard of this
+      program. No Preview 1 leg: a core import carries flat values only, and every
+      function of this interface returns a result. No --no-gc leg: its MVP module
+      imports nothing
     expect:
       contains:
         - "hits per page:"
@@ -368,8 +376,8 @@ examples:
         - "/docs exists?      yes"
         - "/docs exists now?  no"
         - 'keys:              ("/index" "/pricing")'
-        - "bad handle:        :no-such-store"
-        - 'second bucket:     ("a" "b")'
+        - "bad store:         :no-such-store"
+        - 'seeded:            ("/a" "/b")'
 
   # --- net: sockets / HTTP servers & clients (blocking -> compile-only) -------
   - path: net/echo-server.lisp

@@ -12,8 +12,10 @@ path. What it lowers to depends on the backend, and that is the whole point:
 **interpreter** and the **JVM** each binding becomes a `defun` dispatching
 through a *provider* — an ordinary Lisp callable you bind with
 [`rontolisp:wit-provide`](rontolisp-wit-provide.md); on **Preview 1 WASM** it
-becomes a [`rontolisp:wasm-import`](rontolisp-wasm-import.md), and the WASM host
-is the provider. See
+becomes a [`rontolisp:wasm-import`](rontolisp-wasm-import.md); and under
+**`--component`** the interface becomes a real component-model **import**, whose
+functions are `canon lower`ed into the module — so the provider is the *host*,
+and the component composes with anyone who exports that interface. See
 [Importing a WIT Interface](../../compiling/wasm.md#importing-a-wit-interface-wit-import)
 for the full guide.
 
@@ -86,9 +88,10 @@ implementation of a WIT interface is therefore ordinary Lisp code, like
 `my-store` above, and swapping that hash table for a real store is one line the
 program never sees.
 [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/develop/examples/wit/keyvalue)
-is exactly that: one page-view counter, a portable in-memory Lisp store behind it
-on the interpreter and a `java.util.LinkedHashMap` one on the JVM, with identical
-output either way.
+is exactly that: one page-view counter, with a portable in-memory Lisp store
+behind it on the interpreter, a `java.util.LinkedHashMap` one on the JVM, and —
+compiled with `--component` — **wasmtime's own `wasi:keyvalue` implementation**, a
+host that has never heard of the program. The output is identical all three ways.
 
 ## Arguments
 
@@ -102,7 +105,8 @@ output either way.
   A `defpackage` exporting them is synthesized, so no `defpackage` is written by
   hand. Omitted, the names land in the current package.
 - `:from` — the Preview 1 WASM import module name. Defaults to the interface's
-  bare name (`store`). Ignored on the other backends.
+  bare name (`store`). Ignored on the other backends (a component imports the
+  interface under its fully-qualified id, which is not renameable).
 - `:field-style` — how a WIT label is spelled as a Preview 1 import **field**:
   `:camel` (the default — `create-shader` becomes `createShader`, the JavaScript
   convention and what `jco` produces) or `:kebab` (the label verbatim). Ignored
@@ -132,7 +136,7 @@ no extra wiring.
 | interpreter | one `defun` per WIT function, dispatching through the interface's provider |
 | JVM (`-o Prog.class`) | the same `defun`s, compiled |
 | Preview 1 WASM (`-o prog.wasm`) | one [`rontolisp:wasm-import`](rontolisp-wasm-import.md) per WIT function |
-| `--component` | a compile error (a component's imports need the canonical-ABI lower) |
+| `--component` | a component-model **instance import** of the interface, each function `canon lower`ed into the core module |
 | `--no-gc` | a compile error (its MVP module imports nothing) |
 
 On Preview 1 the module is **byte-identical** to the hand-written equivalent, and
@@ -144,6 +148,20 @@ imports the program never calls:
 ;;; lowers to on Preview 1 WASM, for `add-ints: func(a: s32, b: s32) -> s32`:
 (rontolisp:wasm-import 'add-ints :from "math" :as "addInts"
                        :params '(:int :int) :returns :int)
+```
+
+Under `--component` the interface becomes an instance import of the component,
+and each bound function a `canon lower`ed core import. A component **only imports
+the functions the program actually calls** (the component path has no core tree
+shaker, so unused interface members are dropped from the import instead;
+`--no-prune` keeps them all), and [`--emit-wit`](../../compiling/wasm.md) writes
+that pruned interface into the component's world — where `wasm-tools component
+wit` agrees with it, byte for byte. An import-free component is unchanged.
+
+```bash
+rontolisp counter.lisp -o counter.wasm --component
+wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
+    -S keyvalue=y counter.wasm             # the HOST is the provider
 ```
 
 ## Providers
@@ -181,44 +199,56 @@ signals it; a caller handles it with `handler-case` and reads the payload with
 
 ## Supported WIT types
 
-The boundary is two-tiered. On the **interpreter and the JVM** the call is an
+The boundary is three-tiered. On the **interpreter and the JVM** the call is an
 ordinary Lisp call, so every representation crosses — the table is the contract
 the provider is written against, not a marshaller. On the **Preview 1 WASM**
-boundary only the flat set `rontolisp:wasm-import` can carry crosses; anything
-else is a compile error naming the WIT file and line.
+boundary only the flat set `rontolisp:wasm-import` can carry crosses: a core
+import is a bare host function, with no component type to describe a richer shape
+with. Under **`--component`** the canonical ABI marshals the rich types, and the
+distinction that remains is *direction*: a **result** is lifted recursively (so a
+`record`, `variant`, `enum`, `option`, `list<T>` or nested `result` all cross),
+while a **parameter** is lowered as a flat value, so it must be a scalar, `bool`,
+`string`, `list<u8>`, a handle, or an `option` of those. Anything unsupported is
+a compile error naming the WIT file and line.
 
-| WIT type | Lisp value | Preview 1 WASM |
-| --- | --- | --- |
-| `s8` `s16` `s32` `u8` `u16` `u32` | an integer | `:int` |
-| `s64` `u64` | an integer | no (wasm-GC integers are `i31ref`) |
-| `f32` `f64` | a float | `:float` |
-| `bool` | `t` / `nil` | `:bool` |
-| `string` | a string | `:string` |
-| `char` | a character | no |
-| `list<u8>` | a string of raw bytes (one per char) | `:string` |
-| `list<T>`, `tuple<...>` | a proper list | no |
-| `option<T>` | the value, or `nil` | no |
-| `result<T, E>` | the ok value; the error arm signals `rontolisp:wit-error` | no |
-| `record` | a keyword plist | no |
-| `enum` | a keyword | no |
-| `variant` | a tagged list | no |
-| `flags` | a list of keywords | no |
-| `resource`, `borrow<R>`, `own<R>` | an opaque integer handle | `:int` |
-| `stream`, `future` | — | no |
+| WIT type | Lisp value | Preview 1 | `--component` |
+| --- | --- | --- | --- |
+| `s8` `s16` `s32` `u8` `u16` `u32` | an integer | `:int` | yes |
+| `s64` `u64` | an integer | no | yes |
+| `f32` `f64` | a float | `:float` | yes |
+| `bool` | `t` / `nil` | `:bool` | yes |
+| `string` | a string | `:string` | yes |
+| `char` | a character | no | result only |
+| `list<u8>` | a string of raw bytes (one per char) | `:string` | yes |
+| `list<T>`, `tuple<...>` | a proper list | no | result only |
+| `option<T>` | the value, or `nil` | no | yes |
+| `result<T, E>` | the ok value; the error arm signals `rontolisp:wit-error` | no | result only |
+| `record` | a keyword plist | no | result only |
+| `enum` | a keyword | no | result only |
+| `variant` | a tagged list | no | result only |
+| `flags` | a list of keywords | no | no |
+| `resource`, `borrow<R>`, `own<R>` | an opaque integer handle | `:int` | yes |
+| `stream`, `future` | — | no | no |
 
 `stream` and `future` have no rontolisp value on any backend (they need
 language-level async), so they are rejected everywhere.
 
 ## Limitations
 
-- `--component` and `--no-gc` reject the directive with a clear error. It works
-  on the interpreter, the JVM backend and Preview 1 WASM.
+- `--no-gc` rejects the directive with a clear error: its contract is a plain MVP
+  module that imports nothing at all.
 - On the Preview 1 boundary only the flat set above crosses; a `record`,
   `option`, `result` or `s64` is a compile error naming the WIT file and line —
-  `wit/store.wit:12: 'bucket-get': the WIT type of the result does not cross the Preview 1 WASM import boundary (supported: the integer scalars up to 32 bits, the float scalars, bool, string, list<u8> and resource handles)` —
-  even though the interpreter and the JVM bind it today. The `wasi:keyvalue`
-  example above is therefore an interpreter/JVM program: its `result` arms keep
-  it off the Preview 1 boundary.
+  `wit/store.wit:12: 'bucket-get': the WIT type of the result does not cross the Preview 1 WASM import boundary, which carries the flat set (...)` —
+  even though `--component`, the interpreter and the JVM all bind it. The
+  `wasi:keyvalue` example above is therefore a component (or an interpreter/JVM)
+  program, not a Preview 1 one: its `result` arms keep it off that boundary.
+- Under `--component` a **rich parameter** (a `record`, `variant`, `list<T>`,
+  `tuple`, or a `flags` anywhere) is a compile error, though the same type crosses
+  as a *result*. `flags` does not cross in either direction yet.
+- A component cannot combine `wit-import` with
+  [`rontolisp:http-handler`](rontolisp-http-handler.md) (serve mode): a served
+  component's imports are the fixed `wasi:http` surface.
 - The directive must appear at **top level, before the code that calls the
   interface** (the opposite of [`wit-export`](rontolisp-wit-export.md), which
   must come last): it is what defines the package and the bindings. A directive

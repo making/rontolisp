@@ -248,7 +248,7 @@ public final class RontoLispCli {
 		// The whole frontend reads with the target backend's feature set, so
 		// #+rontolisp-jvm / #+rontolisp-wasm conditionals select per-backend code.
 		Features features = outputFile.endsWith(".wasm") ? Features.WASM : Features.JVM;
-		WitExportDirective.Backend witBackend = witBackend(outputFile, noGc);
+		WitExportDirective.Backend witBackend = witBackend(outputFile, noGc, component);
 		// (rontolisp:wit-import "kv.wit" :interface "..."): bind a WIT interface's
 		// functions. Unlike wit-export this runs BEFORE UserMacroExpander, because the
 		// names it binds live in a package the WIT names -- the (defpackage kv ...) it
@@ -259,14 +259,10 @@ public final class RontoLispCli {
 		// file, not against the program.
 		List<LispVal> loaded = LoadInliner.inline(LispReader.readAllFromString(source, features),
 				SourceLoader.fileSystem(), baseDir, systemPath, features);
-		boolean witImports = WitImportInliner.usesWitImport(loaded);
-		if (witImports && component) {
-			throw new UnsupportedOperationException(
-					"rontolisp:wit-import is not supported with --component yet: a component's imports need the "
-							+ "canonical-ABI lower, which is not implemented. It works on the interpreter, the JVM "
-							+ "backend and Preview 1 WASM (a plain -o out.wasm).");
-		}
-		loaded = WitImportInliner.inline(loaded, baseDir, witBackend, SourceLoader.fileSystem());
+		// Under --component the inliner also prunes the interface members the program
+		// never references (the component path skips --optimize's core tree shaker by
+		// design); --no-prune / --dynamic disable that, like the library defun pruner.
+		loaded = WitImportInliner.inline(loaded, baseDir, witBackend, SourceLoader.fileSystem(), !dynamic && !noPrune);
 		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
 		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
 		// any
@@ -408,12 +404,17 @@ public final class RontoLispCli {
 	// The backend a rontolisp:wit-export world is checked against: only the WASM backends
 	// impose the export boundary's backend-specific rules (s64 needs --no-gc, an async
 	// func cannot be lifted by the --no-gc reactor). Compiling to a .class checks the
-	// contract but exports nothing, like the interpreter.
-	private static WitExportDirective.Backend witBackend(String outputFile, boolean noGc) {
+	// contract but exports nothing, like the interpreter. wit-export treats WASM_GC and
+	// WASM_COMPONENT identically; wit-import lowers them differently (Preview 1 core
+	// imports vs the canonical-ABI lower).
+	private static WitExportDirective.Backend witBackend(String outputFile, boolean noGc, boolean component) {
 		if (!outputFile.endsWith(".wasm")) {
 			return WitExportDirective.Backend.OTHER;
 		}
-		return noGc ? WitExportDirective.Backend.WASM_NO_GC : WitExportDirective.Backend.WASM_GC;
+		if (noGc) {
+			return WitExportDirective.Backend.WASM_NO_GC;
+		}
+		return component ? WitExportDirective.Backend.WASM_COMPONENT : WitExportDirective.Backend.WASM_GC;
 	}
 
 	// Emits a one-line warning to stderr. Kept off stdout (this.out) so it never corrupts

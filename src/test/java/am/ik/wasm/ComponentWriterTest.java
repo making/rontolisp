@@ -3,6 +3,7 @@ package am.ik.wasm;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -268,6 +269,128 @@ class ComponentWriterTest {
 		assertThat(hex(ComponentWriter.canonStreamWrite(3, 0))).isEqualTo("1003010300");
 		assertThat(hex(ComponentWriter.canonStreamDropReadable(0))).isEqualTo("1300");
 		assertThat(hex(ComponentWriter.canonStreamDropWritable(3))).isEqualTo("1403");
+	}
+
+	@Test
+	void definedTypeEncodings() {
+		// Golden bytes from `wasm-tools dump` of a wasm-tools-built component importing
+		// wasi:keyvalue/store@0.2.0-draft (the component-import reference probe).
+		final byte[] string = ComponentWriter.valTypePrim(ComponentWriter.VT_STRING);
+		final byte[] u64 = ComponentWriter.valTypePrim(ComponentWriter.VT_U64);
+		assertThat(hex(ComponentWriter.definedListOf(string))).isEqualTo("7073");
+		assertThat(hex(ComponentWriter.definedListOf(ComponentWriter.valTypePrim(ComponentWriter.VT_U8))))
+			.isEqualTo("707d");
+		assertThat(hex(ComponentWriter.definedOptionOf(u64))).isEqualTo("6b77");
+		assertThat(hex(ComponentWriter.definedOptionOf(ComponentWriter.valTypeIndex(8)))).isEqualTo("6b08");
+		assertThat(
+				hex(ComponentWriter.definedResultOf(ComponentWriter.valTypeIndex(9), ComponentWriter.valTypeIndex(2))))
+			.isEqualTo("6a01090102");
+		assertThat(hex(ComponentWriter.definedResultOf(null, ComponentWriter.valTypeIndex(2)))).isEqualTo("6a000102");
+		assertThat(hex(ComponentWriter.definedBorrow(0))).isEqualTo("6800");
+		// variant error { no-such-store, access-denied, other(string) }
+		final List<byte @Nullable []> payloads = new java.util.ArrayList<>();
+		payloads.add(null);
+		payloads.add(null);
+		payloads.add(string);
+		assertThat(hex(ComponentWriter.definedVariantOf(List.of("no-such-store", "access-denied", "other"), payloads)))
+			.isEqualTo(
+					"71030d6e6f2d737563682d73746f726500000d6163636573732d64656e6965" + "640000056f746865720173" + "00");
+		// record key-response { keys: list<string>(3), cursor: option<u64>(4) }
+		assertThat(hex(ComponentWriter.definedRecordOf(List.of("keys", "cursor"),
+				List.of(ComponentWriter.valTypeIndex(3), ComponentWriter.valTypeIndex(4)))))
+			.isEqualTo("7202046b6579730306637572736f7204");
+		assertThat(hex(ComponentWriter.definedEnumOf(List.of("a", "b")))).isEqualTo("6d0201610162");
+		assertThat(hex(ComponentWriter.definedFlagsOf(List.of("x")))).isEqualTo("6e010178");
+		assertThat(hex(ComponentWriter.definedTupleOf(List.of(string, u64)))).isEqualTo("6f027377");
+		// func (self: type7, key: string) -> type10
+		assertThat(hex(ComponentWriter.funcTypeOf(List.of("self", "key"),
+				List.of(ComponentWriter.valTypeIndex(7), string), ComponentWriter.valTypeIndex(10))))
+			.isEqualTo("40020473656c6607036b6579" + "73000a");
+	}
+
+	@Test
+	void instanceTypeMatchesWasmToolsReference() {
+		// Rebuild the imported wasi:keyvalue/store@0.2.0-draft instance type exactly as
+		// `wasm-tools component new` encodes it, and pin the 393 golden bytes captured
+		// from the reference probe. Local type index space: type declarations AND
+		// type-bound export declarations append to it; function exports do not.
+		final byte[] str = ComponentWriter.valTypePrim(ComponentWriter.VT_STRING);
+		final byte[] boolVt = ComponentWriter.valTypePrim(ComponentWriter.VT_BOOL);
+		final List<byte @Nullable []> errCases = new java.util.ArrayList<>();
+		errCases.add(null);
+		errCases.add(null);
+		errCases.add(str);
+		final List<byte[]> decls = List.of(
+				// local 0: the bucket resource (a sub-resource-bound export)
+				ComponentWriter.instanceDeclExportResource("bucket"),
+				// local 1: variant error
+				ComponentWriter.instanceDeclType(
+						ComponentWriter.definedVariantOf(List.of("no-such-store", "access-denied", "other"), errCases)),
+				// local 2: export "error" = eq(1)
+				ComponentWriter.instanceDeclExportTypeEq("error", 1),
+				// local 3: list<string>, local 4: option<u64>, local 5: record
+				ComponentWriter.instanceDeclType(ComponentWriter.definedListOf(str)),
+				ComponentWriter.instanceDeclType(
+						ComponentWriter.definedOptionOf(ComponentWriter.valTypePrim(ComponentWriter.VT_U64))),
+				ComponentWriter.instanceDeclType(ComponentWriter.definedRecordOf(List.of("keys", "cursor"),
+						List.of(ComponentWriter.valTypeIndex(3), ComponentWriter.valTypeIndex(4)))),
+				// local 6: export "key-response" = eq(5)
+				ComponentWriter.instanceDeclExportTypeEq("key-response", 5),
+				// local 7: borrow<bucket>, local 8: list<u8>, local 9: option(8),
+				// local 10: result(9, 2), local 11: func get
+				ComponentWriter.instanceDeclType(ComponentWriter.definedBorrow(0)),
+				ComponentWriter.instanceDeclType(
+						ComponentWriter.definedListOf(ComponentWriter.valTypePrim(ComponentWriter.VT_U8))),
+				ComponentWriter.instanceDeclType(ComponentWriter.definedOptionOf(ComponentWriter.valTypeIndex(8))),
+				ComponentWriter.instanceDeclType(ComponentWriter.definedResultOf(ComponentWriter.valTypeIndex(9),
+						ComponentWriter.valTypeIndex(2))),
+				ComponentWriter.instanceDeclType(ComponentWriter.funcTypeOf(List.of("self", "key"),
+						List.of(ComponentWriter.valTypeIndex(7), str), ComponentWriter.valTypeIndex(10))),
+				ComponentWriter.instanceDeclExportFunc("[method]bucket.get", 11),
+				// local 12: result(_, 2), local 13: func set
+				ComponentWriter
+					.instanceDeclType(ComponentWriter.definedResultOf(null, ComponentWriter.valTypeIndex(2))),
+				ComponentWriter.instanceDeclType(ComponentWriter.funcTypeOf(List.of("self", "key", "value"),
+						List.of(ComponentWriter.valTypeIndex(7), str, ComponentWriter.valTypeIndex(8)),
+						ComponentWriter.valTypeIndex(12))),
+				ComponentWriter.instanceDeclExportFunc("[method]bucket.set", 13),
+				// local 14: func delete
+				ComponentWriter.instanceDeclType(ComponentWriter.funcTypeOf(List.of("self", "key"),
+						List.of(ComponentWriter.valTypeIndex(7), str), ComponentWriter.valTypeIndex(12))),
+				ComponentWriter.instanceDeclExportFunc("[method]bucket.delete", 14),
+				// local 15: result(bool, 2), local 16: func exists
+				ComponentWriter
+					.instanceDeclType(ComponentWriter.definedResultOf(boolVt, ComponentWriter.valTypeIndex(2))),
+				ComponentWriter.instanceDeclType(ComponentWriter.funcTypeOf(List.of("self", "key"),
+						List.of(ComponentWriter.valTypeIndex(7), str), ComponentWriter.valTypeIndex(15))),
+				ComponentWriter.instanceDeclExportFunc("[method]bucket.exists", 16),
+				// local 17: result(6, 2), local 18: func list-keys
+				ComponentWriter.instanceDeclType(ComponentWriter.definedResultOf(ComponentWriter.valTypeIndex(6),
+						ComponentWriter.valTypeIndex(2))),
+				ComponentWriter.instanceDeclType(ComponentWriter.funcTypeOf(List.of("self", "cursor"),
+						List.of(ComponentWriter.valTypeIndex(7), ComponentWriter.valTypeIndex(4)),
+						ComponentWriter.valTypeIndex(17))),
+				ComponentWriter.instanceDeclExportFunc("[method]bucket.list-keys", 18),
+				// local 19: own<bucket>, local 20: result(19, 2), local 21: func open
+				ComponentWriter.instanceDeclType(ComponentWriter.definedOwn(0)),
+				ComponentWriter.instanceDeclType(ComponentWriter.definedResultOf(ComponentWriter.valTypeIndex(19),
+						ComponentWriter.valTypeIndex(2))),
+				ComponentWriter.instanceDeclType(ComponentWriter.funcTypeOf(List.of("identifier"), List.of(str),
+						ComponentWriter.valTypeIndex(20))),
+				ComponentWriter.instanceDeclExportFunc("open", 21));
+		final String golden = "421c0400066275636b657403010171030d6e6f2d737563682d73746f72650000"
+				+ "0d6163636573732d64656e6965640000056f746865720173000400056572726f"
+				+ "72030001017073016b77017202046b6579730306637572736f720404000c6b65"
+				+ "792d726573706f6e736503000501680001707d016b08016a0109010201400204"
+				+ "73656c6607036b657973000a0400125b6d6574686f645d6275636b65742e6765"
+				+ "74010b016a0001020140030473656c6607036b6579730576616c756508000c04"
+				+ "00125b6d6574686f645d6275636b65742e736574010d0140020473656c660703"
+				+ "6b657973000c0400155b6d6574686f645d6275636b65742e64656c657465010e"
+				+ "016a017f01020140020473656c6607036b657973000f0400155b6d6574686f64"
+				+ "5d6275636b65742e6578697374730110016a010601020140020473656c660706"
+				+ "637572736f720400110400185b6d6574686f645d6275636b65742e6c6973742d"
+				+ "6b6579730112016900016a011301020140010a6964656e746966696572730014" + "0400046f70656e0115";
+		assertThat(hex(ComponentWriter.instanceTypeOf(decls))).isEqualTo(golden);
 	}
 
 	@Test

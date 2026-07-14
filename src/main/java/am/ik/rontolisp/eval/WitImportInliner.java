@@ -3,7 +3,9 @@ package am.ik.rontolisp.eval;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
@@ -75,17 +77,40 @@ public final class WitImportInliner {
 	 */
 	public static List<LispVal> inline(List<LispVal> program, @Nullable String baseDir,
 			WitExportDirective.Backend backend, SourceLoader loader) {
+		return inline(program, baseDir, backend, loader, true);
+	}
+
+	/**
+	 * Like {@link #inline(List, String, WitExportDirective.Backend, SourceLoader)}, with
+	 * control over member pruning on the {@code --component} backend: there
+	 * {@code --optimize}'s core tree shaker is skipped by design, so a {@code wit-import}
+	 * binds only the interface functions the program references (a textual reachability
+	 * judgment, the {@code LibraryDefunPruner} convention) unless pruning is disabled
+	 * ({@code --no-prune} / {@code --dynamic}). The other backends always bind every
+	 * function (Preview 1 byte-identity; the tree shaker handles it).
+	 * @param program the top-level forms
+	 * @param baseDir the directory of the source file, or {@code null}
+	 * @param backend the backend being compiled for
+	 * @param loader reads the WIT text for a resolved path
+	 * @param pruneMembers whether a component build binds only the referenced members
+	 * @return the rewritten program, or {@code program} itself when it binds no interface
+	 */
+	public static List<LispVal> inline(List<LispVal> program, @Nullable String baseDir,
+			WitExportDirective.Backend backend, SourceLoader loader, boolean pruneMembers) {
 		boolean wasm = backend == WitExportDirective.Backend.WASM_GC
+				|| backend == WitExportDirective.Backend.WASM_COMPONENT
 				|| backend == WitExportDirective.Backend.WASM_NO_GC;
 		if (!usesWitImport(program) && !(wasm && bindsProvider(program))) {
 			return program;
 		}
+		Set<String> memberFilter = backend == WitExportDirective.Backend.WASM_COMPONENT && pruneMembers
+				? referencedNames(program) : null;
 		List<LispVal> result = new ArrayList<>(program.size());
 		for (LispVal form : program) {
 			if (WitImportDirective.isDirective(form)) {
 				WitImportDirective.Directive directive = WitImportDirective.parse((LispCons) form);
 				String path = SourceLoader.resolve(baseDir, directive.path());
-				result.addAll(WitImportDirective.lower(directive, read(loader, path), path, backend));
+				result.addAll(WitImportDirective.lower(directive, read(loader, path), path, backend, memberFilter));
 			}
 			else if (wasm && isProviderBinding(form)) {
 				// The host is the provider on the WASM backends; a binding is inert
@@ -98,6 +123,37 @@ public final class WitImportInliner {
 			}
 		}
 		return result;
+	}
+
+	// Every symbol name the program mentions anywhere (conservatively: quoted data
+	// included), plus the member part of each qualified spelling, so a directive can ask
+	// "does the program reference this interface function" by its bare member name.
+	private static Set<String> referencedNames(List<LispVal> program) {
+		Set<String> names = new HashSet<>();
+		for (LispVal form : program) {
+			if (!WitImportDirective.isDirective(form)) {
+				collectNames(form, names);
+			}
+		}
+		return names;
+	}
+
+	private static void collectNames(LispVal form, Set<String> names) {
+		switch (form) {
+			case LispSymbol sym -> {
+				names.add(sym.name());
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+				if (qn != null) {
+					names.add(qn.member());
+				}
+			}
+			case LispCons cons -> {
+				collectNames(cons.car(), names);
+				collectNames(cons.cdr(), names);
+			}
+			default -> {
+			}
+		}
 	}
 
 	private static String read(SourceLoader loader, String path) {

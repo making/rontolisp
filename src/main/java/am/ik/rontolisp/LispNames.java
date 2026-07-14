@@ -2773,6 +2773,24 @@ public final class LispNames {
 	public static final String WIT_ERROR_PAYLOAD = "wit-error-payload";
 
 	/**
+	 * The internal form a {@link #WIT_IMPORT} directive lowers to under
+	 * {@code --component}: {@code (rontolisp::%component-import "iface-id" "wit text"
+	 * ("member" "lisp-name") ...)}. The WIT text travels inside the form so the WASM
+	 * compiler reads no files (the browser playground has no filesystem). Consumed by
+	 * {@code WasmComponentImportCompiler}; never user-written.
+	 */
+	public static final String COMPONENT_IMPORT = "%component-import";
+
+	/**
+	 * The internal envelope unwrapper a result-returning {@link #WIT_IMPORT} binding's
+	 * public wrapper defun calls on the WASM backends: the raw import returns
+	 * {@code (:ok . V)} / {@code (:error . E)} and {@code rontolisp::%wit-result} either
+	 * yields the ok value or signals {@link #WIT_ERROR} with the error payload. Defined
+	 * in {@code wit.lisp}.
+	 */
+	public static final String WIT_RESULT = "%wit-result";
+
+	/**
 	 * The {@code java} package name (interpreter-only Java interop by reflection). It
 	 * does not use {@code cl}; its functions wrap arbitrary host objects as
 	 * {@code LispJavaObject} and so run on the JVM interpreter only -- the JVM-class and

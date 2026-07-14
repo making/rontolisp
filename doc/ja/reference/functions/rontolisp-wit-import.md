@@ -12,8 +12,10 @@ Lisp 関数として束縛されます。[`rontolisp:wit-export`](rontolisp-wit-
 [`rontolisp:wit-provide`](rontolisp-wit-provide.md)
 で束縛する、通常の Lisp 呼び出し可能オブジェクト — 経由でディスパッチする
 `defun` になり、**Preview 1 WASM** では
-[`rontolisp:wasm-import`](rontolisp-wasm-import.md) になって WASM
-ホストがプロバイダになります。詳細は
+[`rontolisp:wasm-import`](rontolisp-wasm-import.md) になります。そして
+**`--component`** では、インターフェースがコンポーネントモデルの本物の**インポート**
+になり、その関数群はモジュールへ `canon lower` されます — つまりプロバイダは*ホスト*
+であり、そのインターフェースをエクスポートする相手となら誰とでも合成できます。詳細は
 [WIT インターフェースのインポート](../../compiling/wasm.md#importing-a-wit-interface-wit-import)
 を参照してください。
 
@@ -88,7 +90,9 @@ rontolisp counter.lisp -o Counter.class && java Counter
 [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/develop/examples/wit/keyvalue)
 がまさにそれです: 1 つのページビューカウンタに対して、インタプリタでは可搬な
 インメモリ Lisp ストアが、JVM では `java.util.LinkedHashMap`
-のストアが後ろに立ち、出力はどちらでも同一です。
+のストアが後ろに立ち、そして `--component` でコンパイルすれば
+**wasmtime 自身の `wasi:keyvalue` 実装** — このプログラムのことなど何も知らない
+ホスト — が後ろに立ちます。出力は 3 通りとも同一です。
 
 ## 引数
 
@@ -102,7 +106,8 @@ rontolisp counter.lisp -o Counter.class && java Counter
   エクスポートする `defpackage` が合成されるため、`defpackage` を手で書く必要は
   ありません。省略すると、名前は現在のパッケージに入ります。
 - `:from` — Preview 1 WASM のインポートモジュール名。既定値はインターフェースの素の
-  名前 (`store`) です。他のバックエンドでは無視されます。
+  名前 (`store`) です。他のバックエンドでは無視されます (コンポーネントは
+  インターフェースを完全修飾 id でインポートし、これは改名できません)。
 - `:field-style` — WIT のラベルを Preview 1 のインポート**フィールド**としてどう綴るか:
   `:camel` (既定 — `create-shader` は `createShader` になります。JavaScript
   の慣習であり、`jco` が生成するものでもあります) または `:kebab` (ラベルをそのまま)。
@@ -130,7 +135,7 @@ rontolisp counter.lisp -o Counter.class && java Counter
 | interpreter | one `defun` per WIT function, dispatching through the interface's provider |
 | JVM (`-o Prog.class`) | the same `defun`s, compiled |
 | Preview 1 WASM (`-o prog.wasm`) | one [`rontolisp:wasm-import`](rontolisp-wasm-import.md) per WIT function |
-| `--component` | a compile error (a component's imports need the canonical-ABI lower) |
+| `--component` | a component-model **instance import** of the interface, each function `canon lower`ed into the core module |
 | `--no-gc` | a compile error (its MVP module imports nothing) |
 
 Preview 1 では、生成されるモジュールは手書きの等価物と**バイト単位で同一**であり、
@@ -142,6 +147,21 @@ Preview 1 では、生成されるモジュールは手書きの等価物と**�
 ;;; lowers to on Preview 1 WASM, for `add-ints: func(a: s32, b: s32) -> s32`:
 (rontolisp:wasm-import 'add-ints :from "math" :as "addInts"
                        :params '(:int :int) :returns :int)
+```
+
+`--component` では、インターフェースはコンポーネントのインスタンスインポートになり、
+束縛された各関数は `canon lower` されたコアインポートになります。コンポーネントが
+**インポートするのはプログラムが実際に呼ぶ関数だけ**です (コンポーネント経路には
+コアのツリーシェイカーがないため、使われないインターフェースメンバーはインポート自体
+から落とされます。`--no-prune` ですべて残せます)。
+[`--emit-wit`](../../compiling/wasm.md) はその刈り込まれたインターフェースを
+コンポーネントの world に書き出し、`wasm-tools component wit`
+の出力とバイト単位で一致します。インポートのないコンポーネントは従来どおりです。
+
+```bash
+rontolisp counter.lisp -o counter.wasm --component
+wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
+    -S keyvalue=y counter.wasm             # the HOST is the provider
 ```
 
 ## プロバイダ
@@ -182,44 +202,59 @@ WIT の `result<T, E>` は値ではありません。**ok アームが関数の�
 
 ## サポートする WIT 型
 
-境界は 2 段構えです。**インタプリタと JVM**
+境界は 3 段構えです。**インタプリタと JVM**
 では呼び出しは通常の Lisp 呼び出しなので、あらゆる表現が渡ります — この表は
 マーシャラーの仕様ではなく、プロバイダを書くときの契約です。**Preview 1 WASM**
-の境界では `rontolisp:wasm-import` が運べるフラットな型集合だけが渡り、それ以外は
-WIT ファイル名と行番号を示すコンパイルエラーになります。
+の境界では `rontolisp:wasm-import` が運べるフラットな型集合だけが渡ります。コア
+インポートは素のホスト関数であり、より豊かな形をホストに伝えるためのコンポーネント型
+が存在しないからです。**`--component`** では canonical ABI
+が豊かな型をマーシャリングし、残る区別は*向き*です。**戻り値**は再帰的にリフトされ
+(`record`、`variant`、`enum`、`option`、`list<T>`、入れ子の `result`
+がすべて渡ります)、**引数**はフラット値としてローワリングされるため、スカラー、`bool`、
+`string`、`list<u8>`、ハンドル、またはそれらの `option`
+でなければなりません。サポートされない型は WIT
+ファイル名と行番号を示すコンパイルエラーになります。
 
-| WIT type | Lisp value | Preview 1 WASM |
-| --- | --- | --- |
-| `s8` `s16` `s32` `u8` `u16` `u32` | an integer | `:int` |
-| `s64` `u64` | an integer | no (wasm-GC integers are `i31ref`) |
-| `f32` `f64` | a float | `:float` |
-| `bool` | `t` / `nil` | `:bool` |
-| `string` | a string | `:string` |
-| `char` | a character | no |
-| `list<u8>` | a string of raw bytes (one per char) | `:string` |
-| `list<T>`, `tuple<...>` | a proper list | no |
-| `option<T>` | the value, or `nil` | no |
-| `result<T, E>` | the ok value; the error arm signals `rontolisp:wit-error` | no |
-| `record` | a keyword plist | no |
-| `enum` | a keyword | no |
-| `variant` | a tagged list | no |
-| `flags` | a list of keywords | no |
-| `resource`, `borrow<R>`, `own<R>` | an opaque integer handle | `:int` |
-| `stream`, `future` | — | no |
+| WIT type | Lisp value | Preview 1 | `--component` |
+| --- | --- | --- | --- |
+| `s8` `s16` `s32` `u8` `u16` `u32` | an integer | `:int` | yes |
+| `s64` `u64` | an integer | no | yes |
+| `f32` `f64` | a float | `:float` | yes |
+| `bool` | `t` / `nil` | `:bool` | yes |
+| `string` | a string | `:string` | yes |
+| `char` | a character | no | result only |
+| `list<u8>` | a string of raw bytes (one per char) | `:string` | yes |
+| `list<T>`, `tuple<...>` | a proper list | no | result only |
+| `option<T>` | the value, or `nil` | no | yes |
+| `result<T, E>` | the ok value; the error arm signals `rontolisp:wit-error` | no | result only |
+| `record` | a keyword plist | no | result only |
+| `enum` | a keyword | no | result only |
+| `variant` | a tagged list | no | result only |
+| `flags` | a list of keywords | no | no |
+| `resource`, `borrow<R>`, `own<R>` | an opaque integer handle | `:int` | yes |
+| `stream`, `future` | — | no | no |
 
 `stream` と `future` はどのバックエンドにも対応する rontolisp
 の値がないため (言語レベルの async が必要)、すべてのバックエンドで拒否されます。
 
 ## 制限事項
 
-- `--component` と `--no-gc` はこのディレクティブを明確なエラーで拒否します。動作するのは
-  インタプリタ、JVM バックエンド、Preview 1 WASM です。
+- `--no-gc` はこのディレクティブを明確なエラーで拒否します。その契約は、何もインポート
+  しない素の MVP モジュールだからです。
 - Preview 1 の境界を渡れるのは上表のフラットな集合だけです。`record`、`option`、
   `result`、`s64` は WIT ファイル名と行番号を示すコンパイルエラーになります —
-  `wit/store.wit:12: 'bucket-get': the WIT type of the result does not cross the Preview 1 WASM import boundary (supported: the integer scalars up to 32 bits, the float scalars, bool, string, list<u8> and resource handles)` —
-  インタプリタと JVM が今日それを束縛できるとしてもです。上の `wasi:keyvalue`
-  の例はしたがってインタプリタ／JVM のプログラムです: その `result`
+  `wit/store.wit:12: 'bucket-get': the WIT type of the result does not cross the Preview 1 WASM import boundary, which carries the flat set (...)` —
+  `--component`、インタプリタ、JVM のいずれもが束縛できるとしてもです。上の
+  `wasi:keyvalue` の例はしたがって Preview 1 のプログラムではなく、コンポーネント
+  (あるいはインタプリタ／JVM) のプログラムです: その `result`
   アームが Preview 1 の境界から遠ざけています。
+- `--component` では、**豊かな引数** (`record`、`variant`、`list<T>`、`tuple`、
+  および位置を問わず `flags`) はコンパイルエラーになります。同じ型が*戻り値*としては
+  渡るとしてもです。`flags` は今のところどちらの向きでも渡りません。
+- コンポーネントは `wit-import` と
+  [`rontolisp:http-handler`](rontolisp-http-handler.md) (serve モード)
+  を組み合わせられません。serve されるコンポーネントのインポートは固定の
+  `wasi:http` 表面だからです。
 - ディレクティブは**トップレベルで、インターフェースを呼ぶコードより前**に置かなければ
   なりません ([`wit-export`](rontolisp-wit-export.md) は逆に最後に置きます)。
   パッケージと束縛を定義するのがこのディレクティブだからです。呼び出し箇所より後に

@@ -63,14 +63,49 @@ final class WitEmitter {
 	 * @return the WIT text (ends with a newline)
 	 */
 	static String emit(String variant, List<WasmExportCompiler.Decl> exportDecls) {
+		return emit(variant, exportDecls, List.of());
+	}
+
+	/**
+	 * Renders the WIT text for a component of the given variant with the given export
+	 * directives and user WIT-interface imports ({@code rontolisp:wit-import}).
+	 * @param variant one of the {@code VARIANT_*} names
+	 * @param exportDecls the {@code rontolisp:wasm-export} directives lifted as
+	 * component-model exports, in export order
+	 * @param imports the user interfaces the component imports, in import order (each
+	 * pruned to the functions the program binds -- the component's type declares nothing
+	 * else, so neither may the emitted WIT)
+	 * @return the WIT text (ends with a newline)
+	 */
+	static String emit(String variant, List<WasmExportCompiler.Decl> exportDecls,
+			List<WasmComponentImportCompiler.Import> imports) {
 		WitDocument document = WasiWitDefinitions.document(variant);
-		if (!exportDecls.isEmpty()) {
+		if (!exportDecls.isEmpty() || !imports.isEmpty()) {
 			WitItem.World world = document.world();
 			List<WitItem> items = new ArrayList<>(world.items());
+			// A user import joins the world's import block: after the fixed WASI imports,
+			// before the export block (the printer separates the two with a blank line).
+			int firstExport = items.size();
+			for (int i = 0; i < items.size(); i++) {
+				if (items.get(i) instanceof WitItem.ExportRef || items.get(i) instanceof WitItem.ExportNamed) {
+					firstExport = i;
+					break;
+				}
+			}
+			List<WitItem> importItems = new ArrayList<>();
+			for (WasmComponentImportCompiler.Import imported : imports) {
+				importItems.add(WitImportWorldEmitter.importItem(imported));
+			}
+			items.addAll(firstExport, importItems);
 			for (WasmExportCompiler.Decl decl : exportDecls) {
 				items.add(exportItem(decl));
 			}
 			document = document.withWorld(new WitItem.World(world.meta(), world.name(), List.copyOf(items)));
+		}
+		if (!imports.isEmpty()) {
+			List<WitItem> items = new ArrayList<>(document.items());
+			items.addAll(WitImportWorldEmitter.packageBlocks(imports));
+			document = new WitDocument(List.copyOf(items));
 		}
 		return WitPrinter.print(document);
 	}

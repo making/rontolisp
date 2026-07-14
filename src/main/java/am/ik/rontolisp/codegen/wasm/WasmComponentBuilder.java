@@ -234,7 +234,7 @@ public final class WasmComponentBuilder {
 	 * {@code run} lift)
 	 */
 	private static void appendFuncExports(ComponentWriter c, List<WasmExportCompiler.Decl> decls, int nextCoreFunc,
-			int nextType, int nextComponentFunc) {
+			int nextType, int nextComponentFunc, int rontolispInstance) {
 		if (decls.isEmpty()) {
 			return;
 		}
@@ -250,13 +250,14 @@ public final class WasmComponentBuilder {
 		int realloc = -1;
 		final java.util.Map<String, Integer> postFuncs = new java.util.LinkedHashMap<>();
 		if (decls.stream().anyMatch(WasmExportCompiler::usesMemory)) {
-			aliases.add(ComponentWriter.aliasCoreFunc(3, WasmExportCompiler.CABI_REALLOC));
+			aliases.add(ComponentWriter.aliasCoreFunc(rontolispInstance, WasmExportCompiler.CABI_REALLOC));
 			realloc = coreFunc++;
 			for (WasmExportCompiler.Decl d : decls) {
 				if (WasmExportCompiler.usesMemory(d)) {
 					String kind = WasmExportCompiler.componentPostReturnKind(d);
 					if (!postFuncs.containsKey(kind)) {
-						aliases.add(ComponentWriter.aliasCoreFunc(3, WasmExportCompiler.cabiPostExportName(kind)));
+						aliases.add(ComponentWriter.aliasCoreFunc(rontolispInstance,
+								WasmExportCompiler.cabiPostExportName(kind)));
 						postFuncs.put(kind, coreFunc++);
 					}
 				}
@@ -265,9 +266,9 @@ public final class WasmComponentBuilder {
 		for (int i = 0; i < decls.size(); i++) {
 			WasmExportCompiler.Decl decl = decls.get(i);
 			FuncExport e = WasmExportCompiler.componentExport(decl);
-			// Alias the core wrapper export out of the rontolisp instance (3); a
+			// Alias the core wrapper export out of the rontolisp instance; a
 			// :string/:s-expr-returning export's core export is its retptr shim.
-			aliases.add(ComponentWriter.aliasCoreFunc(3, e.name()));
+			aliases.add(ComponentWriter.aliasCoreFunc(rontolispInstance, e.name()));
 			int func = coreFunc++;
 			// One function type per export (params p0, p1, ... unless the directive names
 			// them): synchronous by default; an :async t export (todo 92 Tier 3) gets the
@@ -346,14 +347,121 @@ public final class WasmComponentBuilder {
 	 */
 	public static byte[] build(byte[] coreModule, boolean usesHttp, boolean usesSockets,
 			List<WasmExportCompiler.Decl> funcExports) {
+		return build(coreModule, usesHttp, usesSockets, funcExports, List.of());
+	}
+
+	/**
+	 * Assemble a runnable WASI 0.3 component around the given rontolisp core module,
+	 * additionally importing the given user WIT interfaces ({@code rontolisp:wit-import}
+	 * under {@code --component}): each interface becomes a component-level instance
+	 * import whose functions are {@code canon lower}ed into a synthesized core instance
+	 * that satisfies the core module's matching imports at instantiation. An empty import
+	 * list emits nothing and shifts nothing, so an import-free component stays
+	 * byte-identical.
+	 * @param coreModule the rontolisp core module compiled in component mode
+	 * @param usesHttp whether the program uses {@code rontolisp:fetch}
+	 * @param usesSockets whether the program uses a {@code rontolisp:tcp-*} built-in
+	 * @param funcExports the parsed function export directives (empty for none)
+	 * @param imports the user WIT interface imports (empty for none)
+	 * @return the WASI 0.3 component binary
+	 */
+	static byte[] build(byte[] coreModule, boolean usesHttp, boolean usesSockets,
+			List<WasmExportCompiler.Decl> funcExports, List<WasmComponentImportCompiler.Import> imports) {
 		if (usesHttp && usesSockets) {
 			// The compiler rejects this combination before reaching here.
 			throw new UnsupportedOperationException("fetch and tcp sockets cannot be combined in one component yet");
 		}
 		if (usesHttp) {
-			return buildHttp(coreModule, funcExports);
+			return buildHttp(coreModule, funcExports, imports);
 		}
-		return usesSockets ? buildSock(coreModule, funcExports) : buildBase(coreModule, funcExports);
+		return usesSockets ? buildSock(coreModule, funcExports, imports) : buildBase(coreModule, funcExports, imports);
+	}
+
+	/**
+	 * Emits the user WIT-interface import wiring: one component <strong>type</strong>
+	 * (the imported instance's type) + <strong>import</strong> per interface, an
+	 * <strong>alias</strong> per bound function, a {@code canon lower} per function
+	 * (memory 0 / realloc = the shared memory module's {@code cabi_realloc} = core func 0
+	 * / UTF-8, exactly when the call touches linear memory), and one synthesized core
+	 * instance per interface whose export names match the core module's import fields.
+	 * Emits nothing when {@code imports} is empty.
+	 * @param c the component writer
+	 * @param imports the user interface imports
+	 * @param nextType the first free component type index
+	 * @param firstImportInstance the first free component instance index (right after the
+	 * variant's fixed import instances)
+	 * @param nextComponentFunc the first free component function index
+	 * @param nextCoreFunc the first free core function index
+	 */
+	private static void appendUserImports(ComponentWriter c, List<WasmComponentImportCompiler.Import> imports,
+			int nextType, int firstImportInstance, int nextComponentFunc, int nextCoreFunc) {
+		if (imports.isEmpty()) {
+			return;
+		}
+		final List<byte[]> types = new java.util.ArrayList<>();
+		final List<byte[]> importEntries = new java.util.ArrayList<>();
+		final List<byte[]> aliases = new java.util.ArrayList<>();
+		final List<byte[]> lowers = new java.util.ArrayList<>();
+		final List<byte[]> coreInstances = new java.util.ArrayList<>();
+		int typeIdx = nextType;
+		int instIdx = firstImportInstance;
+		int compFunc = nextComponentFunc;
+		int coreFunc = nextCoreFunc;
+		final java.util.Set<String> names = new java.util.HashSet<>();
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			if (!names.add(imported.ifaceId())) {
+				throw new UnsupportedOperationException(
+						"the component already imports the WIT interface '" + imported.ifaceId() + "'");
+			}
+			types.add(WitComponentTypeEncoder.encode(imported));
+			importEntries.add(ComponentWriter.importInstance(imported.ifaceId(), typeIdx));
+			final List<String> fields = new java.util.ArrayList<>();
+			final List<Integer> coreIndices = new java.util.ArrayList<>();
+			for (WasmComponentImportCompiler.Decl decl : imported.decls()) {
+				aliases.add(ComponentWriter.aliasInstanceFunc(instIdx, decl.field()));
+				lowers.add(WasmComponentImportCompiler.needsMemory(decl)
+						? ComponentWriter.canonLowerMemoryReallocUtf8(compFunc, 0, 0)
+						: ComponentWriter.canonLower(compFunc));
+				fields.add(decl.field());
+				coreIndices.add(coreFunc);
+				compFunc++;
+				coreFunc++;
+			}
+			coreInstances.add(ComponentWriter.coreInstanceFromFuncs(fields, coreIndices));
+			typeIdx++;
+			instIdx++;
+		}
+		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(types));
+		c.rawSection(ComponentWriter.SEC_IMPORT, ComponentWriter.vec(importEntries));
+		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
+		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(lowers));
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(coreInstances));
+	}
+
+	// The total bound-function count across the user imports (each costs one component
+	// func alias and one lowered core func).
+	private static int userImportFuncs(List<WasmComponentImportCompiler.Import> imports) {
+		int n = 0;
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			n += imported.decls().size();
+		}
+		return n;
+	}
+
+	// The rontolisp core instance's instantiation arguments: mem + the fixed adapter
+	// names, then one argument per user interface (module name = the interface's
+	// canonical id, satisfied by its synthesized core instance starting right after the
+	// adapter instance).
+	private static byte[] rontolispInstantiate(int moduleIndex, List<String> fixedNames, List<Integer> fixedInstances,
+			List<WasmComponentImportCompiler.Import> imports, int firstUserCoreInstance) {
+		final List<String> names = new java.util.ArrayList<>(fixedNames);
+		final List<Integer> instances = new java.util.ArrayList<>(fixedInstances);
+		int idx = firstUserCoreInstance;
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			names.add(imported.ifaceId());
+			instances.add(idx++);
+		}
+		return ComponentWriter.coreInstanceInstantiate(moduleIndex, names, instances);
 	}
 
 	/**
@@ -393,7 +501,10 @@ public final class WasmComponentBuilder {
 	 * @param funcExports the {@code wasm-export} directives to lift and export
 	 * @return the WASI 0.3 component binary
 	 */
-	private static byte[] buildBase(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports) {
+	private static byte[] buildBase(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
+			List<WasmComponentImportCompiler.Import> imports) {
+		final int userIfaces = imports.size();
+		final int userFuncs = userImportFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// All imported WASI 0.3 interfaces in one block: import instances 0-8, types
 		// 0-11.
@@ -487,29 +598,36 @@ public final class WasmComponentBuilder {
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
-		// Instantiate rontolisp (core instance 3): mem = instance 0,
-		// wasi_snapshot_preview1 = adapter instance 2.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List
-			.of(ComponentWriter.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1"), List.of(0, 2)))));
+		// User WIT-interface imports (rontolisp:wit-import): instance types from
+		// component type 24, import instances from 10, function aliases from component
+		// func 11, lowered core funcs from 22. Emits nothing when there are none, so
+		// every fixed index below shifts by zero.
+		appendUserImports(c, imports, T_RUN_FUNC + 1, 10, 11, 22);
+		// Instantiate rontolisp (core instance 3 + one per user interface): mem =
+		// instance 0, wasi_snapshot_preview1 = adapter instance 2, plus each user
+		// interface's canon-lowered core instance (3..) under its canonical id.
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(
+				List.of(rontolispInstantiate(2, List.of("mem", "wasi_snapshot_preview1"), List.of(0, 2), imports, 3))));
+		final int rontolisp = 3 + userIfaces;
 		// Alias rontolisp's run (core func 22 = cabi_realloc + 21 lowered/built-in
-		// funcs).
-		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(3, "run"))));
-		// Lift run (core func 22) into component func 11 with the async function type 23
-		// (stackful async: no callback option). Component func 11 follows the 11 aliased
-		// WASI funcs (0-10).
+		// funcs, + the user-import lowers).
+		c.rawSection(ComponentWriter.SEC_ALIAS,
+				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp, "run"))));
+		// Lift run into component func 11 (+ the user-import aliases) with the async
+		// function type 23 (stackful async: no callback option). Component func 11
+		// follows the 11 aliased WASI funcs (0-10).
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(22, T_RUN_FUNC))));
-		// Component instance 10 (after import instances 0-9) exporting run, exported as
-		// the
-		// wasi:cli/run@0.3.0 interface.
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(22 + userFuncs, T_RUN_FUNC))));
+		// Component instance 10 (after import instances 0-9 + the user imports)
+		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 11))));
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 11 + userFuncs))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 10))));
+				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 10 + userIfaces))));
 		// Scalar wasm-export functions: next free indices after the run wiring are core
 		// func 23 (run = 22), component type 24 (T_RUN_FUNC = 23) and component func 12
-		// (the run lift = 11).
-		appendFuncExports(c, funcExports, 23, T_RUN_FUNC + 1, 12);
+		// (the run lift = 11), each shifted by the user-import counts.
+		appendFuncExports(c, funcExports, 23 + userFuncs, T_RUN_FUNC + 1 + userIfaces, 12 + userFuncs, rontolisp);
 		return c.toByteArray();
 	}
 
@@ -611,7 +729,10 @@ public final class WasmComponentBuilder {
 	 * @param funcExports the {@code wasm-export} directives to lift and export
 	 * @return the WASI 0.3 (+ 0.2 http) component binary
 	 */
-	private static byte[] buildHttp(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports) {
+	private static byte[] buildHttp(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
+			List<WasmComponentImportCompiler.Import> imports) {
+		final int userIfaces = imports.size();
+		final int userFuncs = userImportFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// Base WASI 0.3 + WASI 0.2 http import instances 0-13, component types 0-24.
 		c.writeRaw(IMPORT_BLOCK_HTTP_CLIENT);
@@ -779,31 +900,36 @@ public final class WasmComponentBuilder {
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
-		// Instantiate rontolisp (core instance 3): mem = instance 0, and
-		// wasi_snapshot_preview1, sock AND http all satisfied by the adapter instance 2
-		// (which exports the eight preview1 functions, the four errno-returning tcp-*
-		// stubs for the reserved sock slots, and fetch-start / fetch-await).
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(2,
-						List.of("mem", "wasi_snapshot_preview1", "sock", "http"), List.of(0, 2, 2, 2)))));
+		// User WIT-interface imports (rontolisp:wit-import): instance types from
+		// component type 46, import instances from 15, function aliases from component
+		// func 32, lowered core funcs from 52. Emits nothing when there are none.
+		appendUserImports(c, imports, H_T_RUN_FUNC + 1, 15, 32, 52);
+		// Instantiate rontolisp (core instance 3 + one per user interface): mem =
+		// instance 0, and wasi_snapshot_preview1, sock AND http all satisfied by the
+		// adapter instance 2 (which exports the eight preview1 functions, the four
+		// errno-returning tcp-* stubs for the reserved sock slots, and fetch-start /
+		// fetch-await), plus each user interface's canon-lowered core instance.
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(rontolispInstantiate(2,
+				List.of("mem", "wasi_snapshot_preview1", "sock", "http"), List.of(0, 2, 2, 2), imports, 3))));
+		final int rontolisp = 3 + userIfaces;
 		// Alias rontolisp's run (core func 52 = cabi_realloc + 51 lowered/built-in
-		// funcs).
-		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(3, "run"))));
-		// Lift run (core func 52) into component func 32 with the async function type 45.
-		// Component func 32 follows the 32 aliased WASI funcs (0-31).
+		// funcs, + the user-import lowers).
+		c.rawSection(ComponentWriter.SEC_ALIAS,
+				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp, "run"))));
+		// Lift run into component func 32 (+ the user-import aliases) with the async
+		// function type 45. Component func 32 follows the 32 aliased WASI funcs (0-31).
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(52, H_T_RUN_FUNC))));
-		// Component instance 15 (after import instances 0-14) exporting run, exported as
-		// the
-		// wasi:cli/run@0.3.0 interface.
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(52 + userFuncs, H_T_RUN_FUNC))));
+		// Component instance 15 (after import instances 0-14 + the user imports)
+		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 32))));
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 32 + userFuncs))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 15))));
+				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 15 + userIfaces))));
 		// Scalar wasm-export functions: next free indices after the run wiring are core
 		// func 53 (run = 52), component type 46 (H_T_RUN_FUNC = 45) and component func 33
-		// (the run lift = 32).
-		appendFuncExports(c, funcExports, 53, H_T_RUN_FUNC + 1, 33);
+		// (the run lift = 32), each shifted by the user-import counts.
+		appendFuncExports(c, funcExports, 53 + userFuncs, H_T_RUN_FUNC + 1 + userIfaces, 33 + userFuncs, rontolisp);
 		return c.toByteArray();
 	}
 
@@ -869,7 +995,10 @@ public final class WasmComponentBuilder {
 	 * @param funcExports the {@code wasm-export} directives to lift and export
 	 * @return the WASI 0.3 component binary
 	 */
-	private static byte[] buildSock(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports) {
+	private static byte[] buildSock(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
+			List<WasmComponentImportCompiler.Import> imports) {
+		final int userIfaces = imports.size();
+		final int userFuncs = userImportFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// Base WASI 0.3 + wasi:sockets import instances 0-9, component types 0-12.
 		c.writeRaw(IMPORT_BLOCK_SOCKETS);
@@ -988,30 +1117,37 @@ public final class WasmComponentBuilder {
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
-		// Instantiate rontolisp (core instance 3): mem = instance 0, and both
-		// wasi_snapshot_preview1 AND sock satisfied by the adapter instance 2 (which
-		// exports the eight preview1 functions plus tcp-connect / tcp-listen /
-		// tcp-accept / tcp-local-port).
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(ComponentWriter
-			.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1", "sock"), List.of(0, 2, 2)))));
+		// User WIT-interface imports (rontolisp:wit-import): instance types from
+		// component type 31, import instances from 11, function aliases from component
+		// func 18, lowered core funcs from 33. Emits nothing when there are none.
+		appendUserImports(c, imports, S_T_SOCK_FUTURE + 1, 11, 18, 33);
+		// Instantiate rontolisp (core instance 3 + one per user interface): mem =
+		// instance 0, and both wasi_snapshot_preview1 AND sock satisfied by the adapter
+		// instance 2 (which exports the eight preview1 functions plus tcp-connect /
+		// tcp-listen / tcp-accept / tcp-local-port), plus each user interface's
+		// canon-lowered core instance.
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(rontolispInstantiate(2,
+				List.of("mem", "wasi_snapshot_preview1", "sock"), List.of(0, 2, 2), imports, 3))));
+		final int rontolisp = 3 + userIfaces;
 		// Alias rontolisp's run (core func 33 = cabi_realloc + 32 lowered/built-in
-		// funcs).
-		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(3, "run"))));
-		// Lift run (core func 33) into component func 18 with the async function type 26
-		// (stackful async: no callback option). Component func 18 follows the 18 aliased
-		// WASI funcs (0-17).
+		// funcs, + the user-import lowers).
+		c.rawSection(ComponentWriter.SEC_ALIAS,
+				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp, "run"))));
+		// Lift run into component func 18 (+ the user-import aliases) with the async
+		// function type 26 (stackful async: no callback option). Component func 18
+		// follows the 18 aliased WASI funcs (0-17).
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(33, S_T_RUN_FUNC))));
-		// Component instance 11 (after import instances 0-10) exporting run, exported as
-		// the wasi:cli/run@0.3.0 interface.
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(33 + userFuncs, S_T_RUN_FUNC))));
+		// Component instance 11 (after import instances 0-10 + the user imports)
+		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 18))));
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 18 + userFuncs))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 11))));
+				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 11 + userIfaces))));
 		// Scalar wasm-export functions: next free indices after the run wiring are core
 		// func 34 (run = 33), component type 31 (S_T_SOCK_FUTURE = 30) and component func
-		// 19 (the run lift = 18).
-		appendFuncExports(c, funcExports, 34, S_T_SOCK_FUTURE + 1, 19);
+		// 19 (the run lift = 18), each shifted by the user-import counts.
+		appendFuncExports(c, funcExports, 34 + userFuncs, S_T_SOCK_FUTURE + 1 + userIfaces, 19 + userFuncs, rontolisp);
 		return c.toByteArray();
 	}
 

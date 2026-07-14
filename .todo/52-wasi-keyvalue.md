@@ -3,7 +3,28 @@
 Status: PLANNED (do AFTER `.todo/51-wasi-http-incoming-handler-spin.md`).
 Created 2026-07-04.
 
-**RETARGETED 2026-07-13:** do this **through** the WIT-as-IDL pipeline
+**LARGELY DELIVERED 2026-07-14 — read this before doing anything below.** The
+component-import pipeline landed (`canon lower`, `.kb/wit.md` "Component imports"),
+and with it `wasi:keyvalue` itself: `examples/wit/keyvalue` binds the REAL upstream
+`wasi:keyvalue/store@0.2.0-draft` with one `rontolisp:wit-import` and runs against
+**wasmtime's own implementation** (`-S keyvalue=y`) as a component, against a
+portable Lisp store on the interpreter, and against a `java.util.LinkedHashMap` on
+the JVM — one source, identical output. **The `rontolisp:kv-*` built-ins and the
+bespoke blob variant proposed below are DEAD**: no core code was needed and none
+should be added; a host interface costs a `.wit` file. Preview 1 is the one backend
+it cannot reach (a core import carries flat values only, and every kv function
+returns a `result`) — that is by design, not a gap to close.
+
+What is left of this todo, and all that is left:
+
+- the `examples/kv-server.lisp` pairing (an HTTP server whose state lives in a real
+  kv store rather than a process-local hash table) — but note a served component
+  cannot currently combine `wit-import` with `rontolisp:http-handler`, whose imports
+  are the fixed `wasi:http` surface. That restriction is the actual work.
+- the sibling `wasi:keyvalue/atomics` and `/batch` interfaces, if anyone wants them:
+  they are now just more `.wit`, not more compiler.
+
+**Original retarget note (2026-07-13):** do this **through** the WIT-as-IDL pipeline
 (`.todo/124` roadmap, landing in `.todo/128`), not as the hand-rolled
 `rontolisp:kv-*` built-ins + bespoke blob variant proposed below. `wasi:keyvalue`
 is the designated first proof that a new host interface costs a `.wit` file rather

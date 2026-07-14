@@ -866,8 +866,9 @@ The payoff is that a provider is *just a function*: swap the hash table above fo
 a real store — Redis, a file, a JDBC connection — and the code calling
 `(kv:bucket-set b "visits" "41")` does not change. The
 [`wit/keyvalue` example](https://github.com/making/rontolisp/tree/develop/examples/wit/keyvalue)
-runs one page-view counter over two of them (a portable Lisp store, and a
-`java.util.LinkedHashMap` one on the JVM) with identical output. Compile the same
+runs one page-view counter over three of them (a portable Lisp store, a
+`java.util.LinkedHashMap` one on the JVM, and wasmtime's own `wasi:keyvalue`
+implementation as a component) with identical output. Compile the same
 source to WASM instead and the **host** implements the interface: a top-level
 `rontolisp:wit-provide` is then **dropped** (the host is the provider), rather
 than being an error, precisely so that one source runs everywhere.
@@ -876,20 +877,61 @@ A WIT `result<T, E>` is not a value: the ok arm is the return value, and the
 error arm signals the `rontolisp:wit-error` condition carrying the mapped `E`,
 which `handler-case` catches and `rontolisp:wit-error-payload` unpacks.
 
+### Components: the host is the provider (`--component`)
+
+Compile the very same source with `--component` and the interface becomes a real
+component-model **import**: the component declares it in its type, and every bound
+function is `canon lower`ed into the core module, so the calls go out through the
+canonical ABI. There is no provider inside the component at all — **the host is the
+provider**, and any host (or any other component) that exports the interface satisfies
+it. wasmtime implements `wasi:keyvalue`, so a program written against it runs with no
+adapter and no rewriting:
+
+```bash
+rontolisp counter.lisp -o counter.wasm --component
+wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
+    -S keyvalue=y counter.wasm
+```
+
+The canonical ABI is what marshals the rich types, so the component boundary carries
+much more than the Preview 1 one: a `result` (whose error arm arrives as a
+`rontolisp:wit-error` condition, caught with `handler-case`), an `option`, a `record`
+(a keyword plist), a `variant`, an `enum`, a `list<T>`, a `list<u8>`, a `string`, a
+`bool`, and `resource` handles. The one asymmetry is direction — a **result** is lifted
+recursively, while a **parameter** must lower to a flat value (a scalar, `bool`,
+`string`, `list<u8>`, a handle, or an `option` of those), so a `record` parameter is a
+compile error naming the WIT line even though a `record` result crosses.
+
+A component imports **only the functions the program actually calls** (there is no core
+tree shaker on this path, so unused interface members are dropped from the import
+itself; `--no-prune` keeps them all), and [`--emit-wit`](#emit-wit) writes that pruned
+interface into the component's world — where `wasm-tools component wit` agrees with it,
+byte for byte. A component that imports nothing is byte-identical to one built before
+any of this existed.
+
+That is also how components **compose**: a component that imports
+`wasi:keyvalue/store` plugs into any component that exports it, in any language, with
+[`wac`](https://github.com/bytecodealliance/wac). The host does not have to be a
+runtime built-in.
+
 Current limitations:
 
-- `--component` and `--no-gc` reject the directive with a clear error: a
-  component's imports need the canonical-ABI lower, and the `--no-gc` MVP module
-  imports nothing. It works on the interpreter, the JVM backend and Preview 1
-  WASM.
+- `--no-gc` rejects the directive with a clear error: its contract is a plain MVP
+  module that imports nothing at all.
 - On the Preview 1 boundary only the types `rontolisp:wasm-import` can carry
   cross — the integer scalars up to 32 bits, the float scalars, `bool`,
   `string`, `list<u8>` and resource handles. A `record`, `option`, `result` or
-  `s64` is a compile error
-  naming the WIT file and line, even though the interpreter and the JVM bind it
-  today (the `wasi:keyvalue` program above is therefore an interpreter/JVM
-  program: its `result` arms keep it off the Preview 1 boundary). `stream` and
-  `future` are rejected on every backend.
+  `s64` is a compile error naming the WIT file and line, even though
+  `--component`, the interpreter and the JVM all bind it (the `wasi:keyvalue`
+  program above is therefore a component or an interpreter/JVM program, not a
+  Preview 1 one: its `result` arms keep it off that boundary). A core import is a
+  bare host function, with no component type to describe a richer shape with.
+  `stream` and `future` are rejected on every backend.
+- Under `--component` a rich **parameter** (a `record`, `variant`, `list<T>`,
+  `tuple`, or a `flags` anywhere) is a compile error, though the same type crosses
+  as a result.
+- A component cannot combine `wit-import` with `rontolisp:http-handler` (serve
+  mode): a served component's imports are the fixed `wasi:http` surface.
 - The directive binds an **interface**. A world's `import` items are still not
   read.
 - It must appear at top level **before** the code that calls the interface — it
