@@ -166,9 +166,75 @@ traps `unreachable`).
 - **F** — `fetch.lisp` + `FetchLibrary` (component-path-only splice, inline WIT on the
   classpath; the ordering trap is that `WitImportInliner` runs BEFORE the library splices).
   Everything it needs now exists: the POST probe in the scratchpad IS `fetch.lisp`, modulo
-  the splice mechanism and the `rontolisp:fetch` promise API (`fetch-start` / `fetch-await`
-  back a `rontolisp:await`-able promise — preserve that, do not quietly make fetch
-  synchronous).
+  the splice mechanism and the `rontolisp:fetch` promise API. **Surveyed 2026-07-15; design
+  below.**
+
+### F design (surveyed 2026-07-15)
+
+**The promise API is preservable — via `rontolisp:then`, NOT a synchronous fetch.** This was
+the open worry ("do not quietly make fetch synchronous"). `wasi:http`'s `outgoing-handler.handle`
+returns a `future-incoming-response` handle WITHOUT blocking — the request is in flight the
+moment it returns — and only `future-incoming-response.get` (after `pollable.block`) reads the
+result. So:
+
+```lisp
+(defun rontolisp:fetch (url &rest options)
+  (let ((future (%http-send url options)))   ; a handle: non-blocking, request in flight
+    (rontolisp:then future                    ; a promise whose base is the handle
+      (lambda (f) (%http-read-response f))))) ; blocks (pollable.block) only when awaited
+```
+
+`then` builds a `{kind 1, base, fn}` promise; `await` of it awaits the base (a plain handle,
+so it passes through) then applies `fn`, which blocks. `fetch` returns immediately with a
+promise, two fetches overlap because each `%http-send` returns before the response arrives,
+and `_promise_await`'s existing settle-in-place memoization gives double-await for free. **No
+change to the promise runtime, no synchronous fetch.** (The async wall a survey flagged is a
+non-issue: `future-incoming-response` is a WIT `resource`, not a `future<T>` — it crosses as a
+handle, proven by the hand-written POST probe.)
+
+**The splice — `eval/FetchLibrary` that self-lowers** (the WitLibrary pattern, but it calls
+`WitImportDirective.lower()` ITSELF so the `WitImportInliner`-runs-first ordering trap is
+irrelevant). `lower()` already takes WIT TEXT, not a path, and embeds it in the
+`%component-import` form, so `fetch.wit` is a classpath resource read with `getResourceAsStream`
+(no `SourceLoader`). Gate: `WASM_COMPONENT && !serve && program-references-fetch && !already-defines-fetch`.
+Pass the members `fetch.lisp` itself references as BOTH member and drop filter. No
+`LibraryDefunPruner` change (fetch.lisp names are roots, never pruned). Hooks: one
+`FetchLibrary.process` in `RontoLispCli.compileToFile` after the `VecLibrary` splice (compute
+`serve` early), one inert call in `RontoPlayground.frontend` (playground never compiles
+`WASM_COMPONENT`).
+
+**The dispatch — `WasmFetchCompiler` becomes a validator that falls through.** At
+`WasmExprCompiler:154`, on `component && !serve`: call `WasmFetchCompiler.validate(cons)` (the
+compile-time arity + literal-`:method` check a defun cannot do) and DON'T return — control
+reaches `compileDefault` → the `fetch.lisp` defun. On serve / Preview 1, keep
+`WasmFetchCompiler.compile` as today (WAT adapter / compile error). Add a `serve` flag to
+`Ctx` (mirror `component`). And **gate `emitHttpImport` on `this.serve`**
+(`this.component && this.serve && usesFetch`) so a non-serve fetch does NOT also pull the WAT
+http-client blob (which would double-import `wasi:http` and trip
+`rejectAdapterImportCollisions`). Re-home the fetch+tcp mutual-exclusion check, which today
+rides on `emitHttpImport && emitSockImport`.
+
+**Tests that BREAK (and must be dealt with, most in G):**
+- `fetchWithLiteralUnsupportedMethodIsCompileError` survives ONLY if `validate()` is kept
+  (recommended). Without it, the check becomes runtime, matching interpreter/JVM.
+- `awaitOfFetchCompilesInComponentMode`, `fetchWithSupportedMethodsAndBodyCompilesInComponentMode`,
+  `componentFetchUnreachableReturnsNil`, `componentFetchRequiresHttpFlag`, the `componentFetch*`
+  E2Es — all build the compiler with raw `new WasmLispCompiler(...)`, which does NOT splice
+  fetch.lisp. Their harness must route through the CLI splice (or a test helper that applies
+  `FetchLibrary.process`). The E2E BEHAVIOUR is reproducible; the wiring is not automatic.
+- The http-client BLOB pins — `WitExportInlinerTest.gcHttpClientComponentIsByteIdenticalToTheHandWrittenExport`,
+  `WasmExportCompilerTest.componentWitPicksTheImportVariant` (fetch half), `WasiWitDefinitionsTest`
+  / `WitEmitterTest` (×3) / `WitOracleE2eTest` (fetch half) — all pin `VARIANT_HTTP_CLIENT` /
+  `http-client.wit`, which G deletes. Restructure or remove in G.
+- The `rontolisp` roster (`ci-spec.yaml`, `listFunctionsForRontolisp`) does NOT change:
+  `RONTOLISP_FUNCTION_NAMES` is hardcoded and `rontolisp:fetch` stays a genuine built-in on
+  interpreter/JVM; leave the list intact.
+
+**Headers**: `:headers` is an alist of DOTTED `(name . value)` string conses on every backend
+(not 2-element lists). fetch.lisp reads them with `fields.entries()` (a `list<tuple>` result —
+lifts) and must cons dotted pairs. Watch multi-valued headers: the interpreter emits one entry
+per value, the JVM joins with `", "` — an existing UNPINNED divergence, so match whichever is
+convenient but note it.
 - **G** — delete the blobs, the `H_*` constants, `buildHttp`; regen the WIT fixtures; the
   `rontolisp` package function roster in `ci-spec.yaml` (fetch becomes a Lisp defun). Also
   the `--emit-wit` ORACLE (`WitOracleE2eTest`) has never been run against a cross-interface
