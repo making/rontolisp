@@ -94,7 +94,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 
 | | GC core module (default / `--no-wasi`) | GC `--component` | `--no-gc` core module | `--no-gc --component` |
 | --- | --- | --- | --- | --- |
-| ホスト要件 | wasm-GC エンジン(`wasmtime -W gc`、Node 22+、現行ブラウザ) | wasmtime 46+(`-W gc=y -W component-model-more-async-builtins=y`)または wasm-GC + JSPI 対応のコンポーネントホスト | **任意の** WebAssembly エンジン | 任意のコンポーネントモデルホスト、**フラグ不要** |
+| ホスト要件 | wasm-GC エンジン(`wasmtime -W gc`、Node 22+、現行ブラウザ) | wasmtime 46+(`-W gc=y -W component-model-more-async-builtins=y`)または wasm-GC + JSPI 対応のコンポーネントホスト([jco 経由のブラウザ](#running-a-component-in-a-browser-jco)ではロードと計算はできるが、まだ印字はできない) | **任意の** WebAssembly エンジン | 任意のコンポーネントモデルホスト、**フラグ不要** — 依存ゼロで動く [jco 経由のブラウザ](#running-a-component-in-a-browser-jco)を含む |
 | エクスポートの形 | 生のコア関数 | 型付きコンポーネントモデルエクスポート(WAVE `--invoke`、jco) | 生のコア関数 | 型付きコンポーネントモデルエクスポート(WAVE `--invoke`、jco) |
 | スカラー | `:int`/`:float`/`:bool`/void | `:int`/`:float`/`:bool`/void | + `:long`(`i64`) | + `:long`(`s64`) |
 | `:string` | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) |
@@ -667,6 +667,33 @@ wasmtime run --invoke 'show(4)' show.wasm
 - エクスポート名は lower-kebab-case のコンポーネントモデル名でなければなりません。その文法から外れる Lisp 名については、コンパイラが `:as` での改名を求めます。
 - `--optimize` は組み合わせられます: コアモジュールはラップの前にツリーシェイキングされます。
 - [`--emit-wit`](#emitting-the-wit-world---emit-wit) も組み合わせられ、型付きエクスポートだけの小さなインポートなし world(プログラムが印字するときは 0.2 stdio インポート付き)を書き出します。
+
+## ブラウザでコンポーネントを実行する(jco)
+
+コンポーネントは wasmtime 専用の成果物ではありません。`jco transpile` はコンポーネントを JavaScript に変換し、その結果はブラウザで動作します — エクスポートはただの JavaScript 関数になります。jco はコンポーネントモデルのエクスポート名を camelCase 化するため、WIT の `count-vowels` は `countVowels` として現れます。(jco 1.25.2 + Chrome 149 で確認。)
+
+**`--no-gc --component` は何も必要としません。** その world はインポートを持たないため、jco は自己完結した単一の ES モジュール(コア WASM が base64 で内部に埋め込まれ、[`count-vowels`](#compact-component-output---no-gc---component) の例で約 90 KB)を、それ自身の `import` 文なしで出力します。ページ側が供給するものは何もありません — シムも、import map も、ポリフィルも不要です:
+
+```bash
+rontolisp count-vowels.lisp --no-gc --component --optimize -o cv.wasm
+npx @bytecodealliance/jco transpile cv.wasm -o dist
+```
+
+```html
+<script type="module">
+  const { countVowels } = await import('./dist/cv.js');
+  console.log(countVowels('Hello, World!'));  // 3
+</script>
+```
+
+**印字する `--no-gc --component` は import map が 1 つだけ必要です。** その[印字マイクロアダプタ](#compact-component-output---no-gc---component)は WASI 0.2 stdio(`wasi:cli/stdout@0.2.0`、`wasi:io/streams@0.2.0`)をインポートし、これを実装するのが `@bytecodealliance/preview2-shim` です — このパッケージはブラウザ向けビルド(`dist/browser/`、`node:` 組み込みを含まない)を同梱しています。ページがすべきことは、jco がインポートする 2 つの指定子をそこへ対応づけることだけで、`print` はコンソールに書き出されます。
+
+**wasm-GC の `--component` はロードされ計算もできますが、まだ印字はできません。** Chrome は wasm-GC、JSPI、正準 ABI のいずれにも対応しており、コンポーネントの同期エクスポートは正しい値を返します。残りを阻んでいるのは 2 つのギャップで、どちらも JavaScript 側にあります(wasmtime はすべて実行できます):
+
+- 必要となる WASI 0.3 インポートにブラウザ実装がありません: `@bytecodealliance/preview3-shim` はパッケージの `exports` に `node` 条件しか宣言しておらず、`node:worker_threads`、`node:net`、`node:http` などを取り込みます。したがってページは、jco がモジュール先頭で分割代入する 9 つのメンバー — `environment.getEnvironment`、`stdout.writeViaStream`、`stderr.writeViaStream`、`stdin.readViaStream`、`monotonicClock.now`、`systemClock.now`、`preopens.getDirectories`、`types.Descriptor`、`random.getRandomU64` — の代役を手書きする必要があります。純粋計算のエクスポートであれば、これらは存在しさえすれば十分です。
+- 印字はその先、jco 自身の生成コードの中で失敗します。生成コードは `FutureReadableEnd` / `FutureWritableEnd` / `FutureEnd` を*参照*しているのに、そのいずれも定義していません(`ReferenceError: FutureReadableEnd is not defined`)。この経路は `wasi:cli/stdout` の `write-via-stream` から到達します — その WIT の結果型が `future` だからです。これとは別に、jco はスタックフル非同期エクスポートをまだ*呼び出せません*。[`:async t`](#component-model-function-exports-wasm-export) の I/O エクスポートがまさにそれです。
+
+ここでは Node の方が弱いホストです: Node 22 には JSPI がなく(`WebAssembly.Suspending is not a constructor`)、トランスパイルされた GC コンポーネントをインスタンス化することすらできません。Chrome にはできます。
 
 ## 横断的なフラグ
 

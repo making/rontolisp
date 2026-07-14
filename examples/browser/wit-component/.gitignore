@@ -1,0 +1,6 @@
+# Build artifacts of build.sh. wit/fractal.wit is the input contract and IS
+# committed; fractal.wit is what --emit-wit regenerates from the component.
+/fractal.wasm
+/fractal.wit
+/dist/
+/node_modules/

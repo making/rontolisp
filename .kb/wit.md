@@ -318,6 +318,13 @@ Transitional: when `.todo/128` (component imports) lands, the import side become
 something the user declares in the world too — and only THEN does `--emit-wit` become a
 real two-sided consistency check.
 
+The world's payoff on the **browser** is real TODAY, not a promise: a
+`--no-gc --component` world has no imports, so `jco transpile` turns it into a single
+self-contained ESM with zero `import` statements that a page runs with no shim / import
+map / polyfill — the world's export names (kebab-case, camelCased by jco) ARE the
+JavaScript API. Measured on Chrome 149; the GC path's browser limits and the two upstream
+jco gaps are in `.kb/wasi-component.md` ("Components in a browser (jco)").
+
 Two deliberate differences from the input file, in any case:
 
 1. **`///` doc comments are not carried.** A component's *type* does not store them —

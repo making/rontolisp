@@ -134,7 +134,7 @@ The same directive compiles into four different host contracts depending on the
 
 | | GC core module (default / `--no-wasi`) | GC `--component` | `--no-gc` core module | `--no-gc --component` |
 | --- | --- | --- | --- | --- |
-| Host requirements | wasm-GC engine (`wasmtime -W gc`, Node 22+, current browsers) | wasmtime 46+ (`-W gc=y -W component-model-more-async-builtins=y`) or a component host with wasm-GC + JSPI | **any** WebAssembly engine | any component-model host, **no flags** |
+| Host requirements | wasm-GC engine (`wasmtime -W gc`, Node 22+, current browsers) | wasmtime 46+ (`-W gc=y -W component-model-more-async-builtins=y`) or a component host with wasm-GC + JSPI (a [browser via jco](#running-a-component-in-a-browser-jco) loads and computes, but cannot print yet) | **any** WebAssembly engine | any component-model host, **no flags** — including a [browser via jco](#running-a-component-in-a-browser-jco), with no dependencies at all |
 | Export shape | raw core function | typed component-model export (WAVE `--invoke`, jco) | raw core function | typed component-model export (WAVE `--invoke`, jco) |
 | Scalars | `:int`/`:float`/`:bool`/void | `:int`/`:float`/`:bool`/void | + `:long` (`i64`) | + `:long` (`s64`) |
 | `:string` | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) |
@@ -1144,6 +1144,63 @@ Trade-offs against the plain `--no-gc` output, and current limits:
 - [`--emit-wit`](#emitting-the-wit-world---emit-wit) composes too, and writes a tiny
   import-free world of just the typed exports (plus the 0.2 stdio imports when
   the program prints).
+
+## Running a Component in a Browser (jco)
+
+A component is not a wasmtime-only artifact. `jco transpile` turns one into
+JavaScript, and the result runs in a browser — the exports become plain
+JavaScript functions. jco camel-cases the component-model export name, so the
+WIT export `count-vowels` arrives as `countVowels`. (Verified with jco 1.25.2 on
+Chrome 149.)
+
+**A `--no-gc --component` needs nothing at all.** Its world has no imports, so
+jco emits one self-contained ES module — the core WASM base64-inlined inside it,
+about 90 KB for the [`count-vowels`](#compact-component-output---no-gc---component)
+example — with no `import` statements of its own. The page supplies no shim, no
+import map and no polyfill:
+
+```bash
+rontolisp count-vowels.lisp --no-gc --component --optimize -o cv.wasm
+npx @bytecodealliance/jco transpile cv.wasm -o dist
+```
+
+```html
+<script type="module">
+  const { countVowels } = await import('./dist/cv.js');
+  console.log(countVowels('Hello, World!'));  // 3
+</script>
+```
+
+**A printing `--no-gc --component` needs one import map.** Its
+[print micro-adapter](#compact-component-output---no-gc---component) imports WASI
+0.2 stdio (`wasi:cli/stdout@0.2.0`, `wasi:io/streams@0.2.0`), which
+`@bytecodealliance/preview2-shim` implements — and that package ships a browser
+build (`dist/browser/`, free of `node:` built-ins). Mapping the two specifiers
+jco imports to it is all the page has to do; `print` then writes to the console.
+
+**A wasm-GC `--component` loads and computes, but cannot print there yet.** Chrome
+supports wasm-GC, JSPI and the canonical ABI, and the component's synchronous
+exports return correct values. Two gaps are in the way of the rest, both on the
+JavaScript side (wasmtime runs all of it):
+
+- The WASI 0.3 imports it needs have no browser implementation:
+  `@bytecodealliance/preview3-shim` declares only a `node` condition in its
+  package `exports` and pulls in `node:worker_threads`, `node:net`, `node:http`,
+  ... A page must hand-write a stand-in for the nine members jco destructures at
+  module top level — `environment.getEnvironment`, `stdout.writeViaStream`,
+  `stderr.writeViaStream`, `stdin.readViaStream`, `monotonicClock.now`,
+  `systemClock.now`, `preopens.getDirectories`, `types.Descriptor`,
+  `random.getRandomU64` — which for a pure-compute export only have to exist.
+- Printing then fails inside jco's own generated code, which *references*
+  `FutureReadableEnd` / `FutureWritableEnd` / `FutureEnd` but defines none of
+  them (`ReferenceError: FutureReadableEnd is not defined`). It is reached
+  through `wasi:cli/stdout`'s `write-via-stream`, whose WIT result is a `future`.
+  Separately, jco cannot yet *call* a stackful-async export, which is what an
+  [`:async t`](#component-model-function-exports-wasm-export) I/O export is.
+
+Node is the weaker host here: Node 22 has no JSPI (`WebAssembly.Suspending is
+not a constructor`), so it cannot even instantiate a transpiled GC component,
+while Chrome can.
 
 ## Cross-Cutting Flags
 

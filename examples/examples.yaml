@@ -40,7 +40,10 @@
 #
 # GUI examples (jvm/, minesweeper, rainbow/, the webgl-*/ and other browser
 # demos) are intentionally absent: they open a window or run in a page and
-# cannot be checked headless.
+# cannot be checked headless. The one exception is browser/wit-component, whose
+# Lisp half is a pure-compute module with no host imports: its jco/browser half
+# cannot run here, but its COMPILE leg can, and that is what pins its WIT world
+# against the program.
 
 examples:
   # --- console: pure, cross-backend algorithms & I/O -------------------------
@@ -331,6 +334,11 @@ examples:
   - path: count-vowels/count-vowels.lisp
     backends: [no-gc, wasm-component]
     note: implements count_vowels_component.wit via rontolisp:wit-export -- the world is the export list, so this also pins the contract check on both component paths (the README builds it --no-gc --component; the wasm-component backend here exercises the wasm-GC lowering of the same world). Host-invoked (wasmtime run --invoke 'count-vowels("Hello, World!")' -> 3), so the harness only compiles
+
+  # --- browser/wit-component: a component loaded by a page, with no glue -------
+  - path: browser/wit-component/fractal.lisp
+    backends: [no-gc, wasm-component]
+    note: implements wit/fractal.wit via rontolisp:wit-export. The page loads the --no-gc --component build through jco (browsers cannot be driven headless here, so only the compile legs run); wasm-component additionally pins that the same world lowers on wasm-GC, which is why every export stays within the 7-parameter callable limit. Host-invoked (wasmtime run --invoke 'escape-time(0.0, 0.0, 50)' -> 50), so the harness only compiles
 
   # --- wit-world: a handed-over WIT world, scaffolded and implemented ---------
   - path: wit-world/analyzer.lisp

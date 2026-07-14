@@ -12,7 +12,7 @@ The programs are grouped by theme, one directory per group:
 | [`deep-learning-from-scratch/`](deep-learning-from-scratch) | The book *Deep Learning from Scratch* (ゼロから作るDeep Learning) ch02-ch06, ported |
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
 | [`jvm/`](jvm) | `java:` interop and Swing GUIs (JVM only) |
-| [`rainbow/`](browser/rainbow), [`wasm-browser/`](browser/wasm-browser), [`webgl-*/`](browser/webgl-common), [`minesweeper/`](browser/minesweeper), [`hiragana/`](browser/hiragana) | Browser demos (compile to WASM, run in a page) |
+| [`rainbow/`](browser/rainbow), [`wasm-browser/`](browser/wasm-browser), [`webgl-*/`](browser/webgl-common), [`minesweeper/`](browser/minesweeper), [`hiragana/`](browser/hiragana), [`wit-component/`](browser/wit-component) | Browser demos (compile to WASM, run in a page) |
 | [`count-vowels/`](count-vowels), [`wit-world/`](wit-world) | Embedding a rontolisp Wasm module in a host; implementing a WIT world |
 | [`asdf/`](asdf), [`wasmcloud/`](wasmcloud) | Third-party libraries and platform templates |
 
@@ -124,10 +124,13 @@ display. See the
 ## Browser demos (compile to WASM, run in a page)
 
 These are directories rather than single files: a Lisp program is compiled to
-`.wasm` and driven from plain HTML/JavaScript via a tiny WASI shim.
+`.wasm` and driven from plain HTML/JavaScript via a tiny WASI shim — except
+[`wit-component/`](browser/wit-component), which loads a WebAssembly *component*
+and needs no glue at all.
 
 | Directory | What it demonstrates |
 | --- | --- |
+| [`wit-component/`](browser/wit-component) | The first rontolisp **component** in a browser: an interactive Mandelbrot/Julia explorer whose page supplies *nothing* — no `WebAssembly.instantiate`, no import object, no WASI shim, no `__ronto_alloc`, no `(ptr, len)` decoding. A hand-written WIT world types the five exports, `rontolisp:wit-export` checks the program against it, `--no-gc --component --optimize` compiles a ~2.5 KB import-free component, and `jco transpile` turns it into one self-contained ES module the page just `import`s. The honest counterpoint (why the demo is `--no-gc`, and what a wasm-GC component still cannot do in a browser) is in its README |
 | [`rainbow/`](browser/rainbow) | Per-character rainbow text: HSV↔RGB color-space conversion and shortest-arc hue interpolation done entirely in Lisp, compiled ahead of time to a `--no-wasi` WebAssembly-GC reactor (no imports) and driven from a page that colors your text as you type through a single `rainbow-html(string) -> string` export |
 | [`wasm-browser/`](browser/wasm-browser) | Running a rontolisp-compiled `.wasm` in the browser from plain HTML + JavaScript, including feeding stdin from the page |
 | [`minesweeper/`](browser/minesweeper) | A playable Minesweeper: the rules (flood fill, win/lose) live in a shared `minesweeper-core.lisp` that both a browser build (compiled to a `--no-wasi` WebAssembly reactor, HTML rendering) and a [Swing build](browser/minesweeper/minesweeper-swing.lisp) load -- only the drawing differs |

@@ -123,6 +123,70 @@ existing output):
 - wasmtime enabling the sync stream/future built-ins by default (drops
   `-W component-model-more-async-builtins=y`).
 
+## Addendum 2026-07-14: the jco gap is TWO gaps, and a browser hits the other one first
+
+Measured in a real browser (jco 1.25.2, Chrome 149, Node 22.16), not recalled.
+Nothing above is retracted -- the decision stands -- but Finding 2's "the real
+gap is stackful vs stackless(callback) async lift" was **incomplete**. There are
+two independent jco 1.25.2 bugs, and the one this file names is not the one a
+browser meets:
+
+**(a) The export-lift gap (already recorded).** jco's generated `_driverLoop`
+assumes the callback ABI and misreads our stackful flat result ("invalid async
+return value [13]"). Reached only when CALLING an `:async t` export.
+
+**(b) The import-side gap (NEW).** jco's emitted bundle *references*
+`FutureReadableEnd` (5x), `FutureEnd` (2x) and `FutureWritableEnd` (1x) and
+**defines none of them**, while the analogous stream family
+(`StreamEnd`/`StreamReadableEnd`/`StreamWritableEnd`/`InternalStream`/`HostStream`)
+is fully emitted. The future runtime is half-emitted -- pure codegen bug:
+
+```
+ReferenceError: FutureReadableEnd is not defined
+    at new InternalFuture (analyzer.js:5788)
+    at ComponentAsyncState.createFuture
+    at _trampoline0
+    at fd_write (wasm://wasm/...)
+```
+
+It is reached via `fd_write` -> `wasi:cli/stdout.write-via-stream`, whose WIT
+result is `future<result<_, error-code>>` -- so it fires on **anything that
+prints**, `run` included, BEFORE any export lift. Reproduced under every flag
+combination (`--async-mode jspi|sync`, `--async-wasi-imports/exports`,
+`--no-nodejs-compat`, `--instantiation async`, `--tla-compat`).
+
+Consequences for the decision:
+
+- The rejection holds, and gets *stronger*: a 0.2 stdio island on the GC path
+  would be paying a permanent architectural cost to route around two jco BUGS
+  (not around a missing 0.3 -- jco does target all of 0.3). Both are upstream and
+  fixable there; our bytes are not the thing to change.
+- What is genuinely new and positive: **a wasm-GC component LOADS and its SYNC
+  exports RUN in Chrome 149** (wordCount=4, longestWord="quick",
+  isPalindrome=true on the `analyzer` example). wasm-GC, JSPI and the canonical
+  ABI are NOT the blockers -- so "GC components are browser-hostile" would be the
+  wrong lesson to draw from this file.
+- And the escape hatch is now measured, not just asserted: `--no-gc --component`
+  transpiles to a single self-contained ESM with **zero `import` statements**
+  (~90 KiB) that a browser runs with no shim/import-map/polyfill at all; a
+  *printing* one needs only preview2-shim's browser build (2 import-map lines).
+
+Two more facts a future agent will need: `@bytecodealliance/preview3-shim` 0.2.0
+has **no browser build** (its `exports` map has only a `node` condition; it
+imports `node:worker_threads`/`net`/`http`/`dgram`/`fs/promises`/...), so a GC
+component in a browser needs a hand-written ~90-line 0.3 shim supplying the nine
+names jco destructures at module top level (`getEnvironment`, `writeViaStream`
+for stdout AND stderr, `readViaStream`, `now` for monotonic AND system,
+`getDirectories`, `Descriptor`, `getRandomU64`) -- for a non-I/O export they only
+have to exist. And Node 22.16 is a *worse* jco host than Chrome: it cannot even
+import a transpiled GC component (`TypeError: WebAssembly.Suspending is not a
+constructor` -- no JSPI in that V8).
+
+Upstream watch gains one entry: **jco emitting the `Future*` end classes** (gap
+(b)) -- independent of the stackful export call (gap (a)), and the cheaper of the
+two to fix. Full record: `.kb/wasi-component.md` ("Components in a browser
+(jco)"); user-facing half in `doc/{en,ja}/compiling/wasm.md`.
+
 ## Related
 
 - `.todo/92` (`:async t` stackful lift; the jco gap + minimal repro)
