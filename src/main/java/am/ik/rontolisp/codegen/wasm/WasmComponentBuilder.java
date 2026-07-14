@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.util.List;
+import java.util.Objects;
 
 import am.ik.wasm.ComponentWriter;
 import am.ik.wit.WitItem;
@@ -432,27 +433,86 @@ public final class WasmComponentBuilder {
 		if (imports.isEmpty()) {
 			return;
 		}
-		final List<byte[]> types = new java.util.ArrayList<>();
-		final List<byte[]> importEntries = new java.util.ArrayList<>();
-		final List<byte[]> aliases = new java.util.ArrayList<>();
-		final List<byte[]> lowers = new java.util.ArrayList<>();
-		final List<byte[]> coreInstances = new java.util.ArrayList<>();
-		int typeIdx = nextType;
+		// The imports are already in dependency order (WasmComponentImportCompiler
+		// .inDependencyOrder, applied once where they are collected), so an interface is
+		// imported before any interface that uses its resources -- which is what lets the
+		// projection below name an instance that already exists.
+		final java.util.Map<String, Integer> instanceOf = new java.util.LinkedHashMap<>();
 		int instIdx = firstImportInstance;
-		int compFunc = nextComponentFunc;
-		int coreFunc = nextCoreFunc;
-		final java.util.Set<String> names = new java.util.HashSet<>();
 		for (WasmComponentImportCompiler.Import imported : imports) {
-			if (!names.add(imported.ifaceId())) {
+			if (instanceOf.put(imported.ifaceId(), instIdx++) != null) {
 				throw new UnsupportedOperationException(
 						"the component already imports the WIT interface '" + imported.ifaceId() + "'");
 			}
-			types.add(WitComponentTypeEncoder.encode(imported));
-			importEntries.add(ComponentWriter.importInstance(imported.ifaceId(), typeIdx));
+		}
+		// Which resources each interface must EXPORT because another one uses them: a
+		// type
+		// can only be projected out of an instance that exports it. This is why an
+		// interface may be imported with no bound functions at all (wasi:io/error exists
+		// in a fetch component purely to own the `error` resource wasi:io/streams' own
+		// `stream-error` carries), and it is knowable only here, with every import in
+		// hand.
+		final java.util.Map<String, java.util.Set<String>> provides = new java.util.LinkedHashMap<>();
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			for (WitComponentTypeEncoder.ForeignResource foreign : WitComponentTypeEncoder
+				.foreignResourcesOf(imported)) {
+				provides.computeIfAbsent(foreign.ownerIfaceId(), id -> new java.util.LinkedHashSet<>())
+					.add(foreign.resource());
+			}
+		}
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			if (imported.decls().isEmpty() && !provides.containsKey(imported.ifaceId())) {
+				throw new UnsupportedOperationException("rontolisp:wit-import of '" + imported.ifaceId()
+						+ "': the program calls none of its functions, and no other imported interface uses its types");
+			}
+		}
+		// "<owner iface id>#<resource>" -> the component type index it was projected to.
+		final java.util.Map<String, Integer> outerOf = new java.util.LinkedHashMap<>();
+		final List<byte[]> funcAliases = new java.util.ArrayList<>();
+		final List<byte[]> lowers = new java.util.ArrayList<>();
+		final List<byte[]> coreInstances = new java.util.ArrayList<>();
+		int typeIdx = nextType;
+		int compFunc = nextComponentFunc;
+		int coreFunc = nextCoreFunc;
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			// Project every resource this interface USES from another one out of that
+			// interface's instance, into this component's type index space. The instance
+			// type below points at these with an `alias outer` instead of re-declaring
+			// the resource -- a resource is nominal (WitComponentTypeEncoder's comment).
+			final List<byte[]> typeAliases = new java.util.ArrayList<>();
+			for (WitComponentTypeEncoder.ForeignResource foreign : WitComponentTypeEncoder
+				.foreignResourcesOf(imported)) {
+				String key = foreign.ownerIfaceId() + "#" + foreign.resource();
+				if (outerOf.containsKey(key)) {
+					continue;
+				}
+				Integer ownerInstance = instanceOf.get(foreign.ownerIfaceId());
+				if (ownerInstance == null) {
+					throw new UnsupportedOperationException("rontolisp:wit-import of '" + imported.ifaceId()
+							+ "' cannot bind the resource '" + foreign.resource() + "', which it uses from '"
+							+ foreign.ownerIfaceId()
+							+ "': a component-model resource is its defining interface's type, so that interface must "
+							+ "be imported too. Add (rontolisp:wit-import ... :interface \"" + foreign.ownerIfaceId()
+							+ "\")");
+				}
+				typeAliases.add(ComponentWriter.aliasInstanceType(ownerInstance, foreign.resource()));
+				outerOf.put(key, typeIdx++);
+			}
+			if (!typeAliases.isEmpty()) {
+				c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(typeAliases));
+			}
+			byte[] instanceType = WitComponentTypeEncoder.encode(imported,
+					(ownerId, resource) -> Objects.requireNonNull(outerOf.get(ownerId + "#" + resource),
+							() -> ownerId + "#" + resource),
+					provides.getOrDefault(imported.ifaceId(), java.util.Set.of()));
+			c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(List.of(instanceType)));
+			c.rawSection(ComponentWriter.SEC_IMPORT,
+					ComponentWriter.vec(List.of(ComponentWriter.importInstance(imported.ifaceId(), typeIdx++))));
+			final int instance = Objects.requireNonNull(instanceOf.get(imported.ifaceId()));
 			final List<String> fields = new java.util.ArrayList<>();
 			final List<Integer> coreIndices = new java.util.ArrayList<>();
 			for (WasmComponentImportCompiler.Decl decl : imported.decls()) {
-				aliases.add(ComponentWriter.aliasInstanceFunc(instIdx, decl.field()));
+				funcAliases.add(ComponentWriter.aliasInstanceFunc(instance, decl.field()));
 				lowers.add(WasmComponentImportCompiler.needsMemory(decl)
 						? ComponentWriter.canonLowerMemoryReallocUtf8(compFunc, 0, 0)
 						: ComponentWriter.canonLower(compFunc));
@@ -462,12 +522,8 @@ public final class WasmComponentBuilder {
 				coreFunc++;
 			}
 			coreInstances.add(ComponentWriter.coreInstanceFromFuncs(fields, coreIndices));
-			typeIdx++;
-			instIdx++;
 		}
-		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(types));
-		c.rawSection(ComponentWriter.SEC_IMPORT, ComponentWriter.vec(importEntries));
-		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
+		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(funcAliases));
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(lowers));
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(coreInstances));
 	}
@@ -480,6 +536,22 @@ public final class WasmComponentBuilder {
 			n += imported.decls().size();
 		}
 		return n;
+	}
+
+	// The component TYPE indices the user imports consume: one instance type each, plus
+	// one projected type per resource an interface uses from another one. Downstream
+	// hardcoded type indices (appendFuncExports) shift by this, NOT by the interface
+	// count -- an import with no `use`d resources costs exactly one, which is why every
+	// pre-existing artifact stays byte-identical.
+	static int userImportTypes(List<WasmComponentImportCompiler.Import> imports) {
+		final java.util.Set<String> projected = new java.util.LinkedHashSet<>();
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			for (WitComponentTypeEncoder.ForeignResource foreign : WitComponentTypeEncoder
+				.foreignResourcesOf(imported)) {
+				projected.add(foreign.ownerIfaceId() + "#" + foreign.resource());
+			}
+		}
+		return imports.size() + projected.size();
 	}
 
 	// The rontolisp core instance's instantiation arguments: mem + the fixed adapter
@@ -557,6 +629,11 @@ public final class WasmComponentBuilder {
 	private static byte[] buildBase(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
 			List<WasmComponentImportCompiler.Import> imports) {
 		final int userIfaces = imports.size();
+		// The type index space grows by the instance types AND the resources projected
+		// out of them for a `use`d-across-interfaces reference; the instance index space
+		// only by the interfaces. They are equal until an interface uses another's
+		// resource, which is why every pre-existing component is byte-identical.
+		final int userTypes = userImportTypes(imports);
 		final int userFuncs = userImportFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// All imported WASI 0.3 interfaces in one block: import instances 0-8, types
@@ -680,7 +757,7 @@ public final class WasmComponentBuilder {
 		// Scalar wasm-export functions: next free indices after the run wiring are core
 		// func 23 (run = 22), component type 24 (T_RUN_FUNC = 23) and component func 12
 		// (the run lift = 11), each shifted by the user-import counts.
-		appendFuncExports(c, funcExports, 23 + userFuncs, T_RUN_FUNC + 1 + userIfaces, 12 + userFuncs, rontolisp);
+		appendFuncExports(c, funcExports, 23 + userFuncs, T_RUN_FUNC + 1 + userTypes, 12 + userFuncs, rontolisp);
 		return c.toByteArray();
 	}
 
@@ -785,6 +862,11 @@ public final class WasmComponentBuilder {
 	private static byte[] buildHttp(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
 			List<WasmComponentImportCompiler.Import> imports) {
 		final int userIfaces = imports.size();
+		// The type index space grows by the instance types AND the resources projected
+		// out of them for a `use`d-across-interfaces reference; the instance index space
+		// only by the interfaces. They are equal until an interface uses another's
+		// resource, which is why every pre-existing component is byte-identical.
+		final int userTypes = userImportTypes(imports);
 		final int userFuncs = userImportFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// Base WASI 0.3 + WASI 0.2 http import instances 0-13, component types 0-24.
@@ -982,7 +1064,7 @@ public final class WasmComponentBuilder {
 		// Scalar wasm-export functions: next free indices after the run wiring are core
 		// func 53 (run = 52), component type 46 (H_T_RUN_FUNC = 45) and component func 33
 		// (the run lift = 32), each shifted by the user-import counts.
-		appendFuncExports(c, funcExports, 53 + userFuncs, H_T_RUN_FUNC + 1 + userIfaces, 33 + userFuncs, rontolisp);
+		appendFuncExports(c, funcExports, 53 + userFuncs, H_T_RUN_FUNC + 1 + userTypes, 33 + userFuncs, rontolisp);
 		return c.toByteArray();
 	}
 
@@ -1051,6 +1133,11 @@ public final class WasmComponentBuilder {
 	private static byte[] buildSock(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
 			List<WasmComponentImportCompiler.Import> imports) {
 		final int userIfaces = imports.size();
+		// The type index space grows by the instance types AND the resources projected
+		// out of them for a `use`d-across-interfaces reference; the instance index space
+		// only by the interfaces. They are equal until an interface uses another's
+		// resource, which is why every pre-existing component is byte-identical.
+		final int userTypes = userImportTypes(imports);
 		final int userFuncs = userImportFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// Base WASI 0.3 + wasi:sockets import instances 0-9, component types 0-12.
@@ -1200,7 +1287,7 @@ public final class WasmComponentBuilder {
 		// Scalar wasm-export functions: next free indices after the run wiring are core
 		// func 34 (run = 33), component type 31 (S_T_SOCK_FUTURE = 30) and component func
 		// 19 (the run lift = 18), each shifted by the user-import counts.
-		appendFuncExports(c, funcExports, 34 + userFuncs, S_T_SOCK_FUTURE + 1 + userIfaces, 19 + userFuncs, rontolisp);
+		appendFuncExports(c, funcExports, 34 + userFuncs, S_T_SOCK_FUTURE + 1 + userTypes, 19 + userFuncs, rontolisp);
 		return c.toByteArray();
 	}
 

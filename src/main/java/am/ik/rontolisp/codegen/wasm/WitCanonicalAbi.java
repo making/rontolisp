@@ -20,7 +20,21 @@ import org.jspecify.annotations.Nullable;
  * (the component-import reference probe).
  *
  * <p>
- * Named type references resolve through a {@link WitResolver} within one interface scope.
+ * <strong>A WIT type only means something together with the interface scope its named
+ * references resolve in</strong>, and that scope CHANGES as the walk descends. Follow a
+ * {@code use} clause into another interface and you are looking at that interface's
+ * types, whose own internal references were never imported into the scope you started
+ * from: {@code wasi:http/outgoing-handler} uses {@code error-code} from
+ * {@code wasi:http/types}, and {@code error-code}'s {@code DNS-error} case carries a
+ * {@code DNS-error-payload} that {@code outgoing-handler} neither defines nor imports. So
+ * every named type is resolved with {@link WitResolver#resolveOwned}, which reports the
+ * interface that DEFINES it, and the walk continues in {@link #scopedTo that} interface's
+ * scope. {@link VariantInfo} and {@link RecordInfo} carry the scope their payload / field
+ * types belong to, because a consumer that gets those types back has to keep walking them
+ * -- doing it against the original scope is how a layout comes out wrong (or a resolution
+ * fails outright).
+ *
+ * <p>
  * A bare resource reference (and {@code own}/{@code borrow}) is an {@code i32} handle.
  */
 final class WitCanonicalAbi {
@@ -35,9 +49,23 @@ final class WitCanonicalAbi {
 
 	private final WitItem.InterfaceDef scope;
 
+	// Sibling calculators for the other interfaces this one's types reach, by identity.
+	private final java.util.Map<WitItem.InterfaceDef, WitCanonicalAbi> siblings = new java.util.IdentityHashMap<>();
+
 	WitCanonicalAbi(WitResolver resolver, WitItem.InterfaceDef scope) {
 		this.resolver = resolver;
 		this.scope = scope;
+	}
+
+	/**
+	 * A WIT type together with the calculator whose interface scope its named references
+	 * resolve in. Handing the two around as a pair is what keeps a walk that has crossed
+	 * a {@code use} clause honest.
+	 *
+	 * @param abi the calculator scoped to the interface the type is written in
+	 * @param type the type
+	 */
+	record Scoped(WitCanonicalAbi abi, WitType type) {
 	}
 
 	/**
@@ -48,8 +76,12 @@ final class WitCanonicalAbi {
 	 * @param payloads the case payload types ({@code null} = payload-less case)
 	 * @param discSize the discriminant byte width (1 / 2 / 4)
 	 * @param payloadOffset the payload offset from the variant's start
+	 * @param abi the calculator whose scope the payload types are written in -- NOT
+	 * necessarily the one {@link #variantInfo} was called on (a variant reached through a
+	 * {@code use} clause belongs to the interface that defines it)
 	 */
-	record VariantInfo(List<String> names, List<@Nullable WitType> payloads, int discSize, int payloadOffset) {
+	record VariantInfo(List<String> names, List<@Nullable WitType> payloads, int discSize, int payloadOffset,
+			WitCanonicalAbi abi) {
 	}
 
 	/**
@@ -59,8 +91,10 @@ final class WitCanonicalAbi {
 	 * @param names the field names (tuple fields are {@code "0"}, {@code "1"}, ...)
 	 * @param types the field types
 	 * @param offsets the field offsets from the record's start
+	 * @param abi the calculator whose scope the field types are written in (see
+	 * {@link VariantInfo#abi()})
 	 */
-	record RecordInfo(List<String> names, List<WitType> types, List<Integer> offsets) {
+	record RecordInfo(List<String> names, List<WitType> types, List<Integer> offsets, WitCanonicalAbi abi) {
 	}
 
 	/**
@@ -137,14 +171,17 @@ final class WitCanonicalAbi {
 			case WitType.TupleOf tuple -> recordSize(tuple.elements());
 			case WitType.BorrowOf ignored -> 4;
 			case WitType.OwnOf ignored -> 4;
-			case WitType.Named named -> switch (resolveNamed(named)) {
-				case WitItem.TypeAlias alias -> size(alias.target());
-				case WitItem.RecordDef record -> recordSize(fieldTypes(record));
-				case WitItem.VariantDef variant -> variantSize(casePayloads(variant));
-				case WitItem.EnumDef en -> variantSize(nCases(en.cases().size()));
-				case WitItem.ResourceDef ignored -> 4;
-				default -> throw unsupported(named.name());
-			};
+			case WitType.Named named -> {
+				WitCanonicalAbi in = scopeOf(named);
+				yield switch (resolveNamed(named)) {
+					case WitItem.TypeAlias alias -> in.size(alias.target());
+					case WitItem.RecordDef record -> in.recordSize(fieldTypes(record));
+					case WitItem.VariantDef variant -> in.variantSize(casePayloads(variant));
+					case WitItem.EnumDef en -> in.variantSize(nCases(en.cases().size()));
+					case WitItem.ResourceDef ignored -> 4;
+					default -> throw unsupported(named.name());
+				};
+			}
 			default -> throw unsupported(describe(type));
 		};
 	}
@@ -163,14 +200,17 @@ final class WitCanonicalAbi {
 			case WitType.TupleOf tuple -> recordAlignment(tuple.elements());
 			case WitType.BorrowOf ignored -> 4;
 			case WitType.OwnOf ignored -> 4;
-			case WitType.Named named -> switch (resolveNamed(named)) {
-				case WitItem.TypeAlias alias -> alignment(alias.target());
-				case WitItem.RecordDef record -> recordAlignment(fieldTypes(record));
-				case WitItem.VariantDef variant -> variantAlignment(casePayloads(variant));
-				case WitItem.EnumDef en -> variantAlignment(nCases(en.cases().size()));
-				case WitItem.ResourceDef ignored -> 4;
-				default -> throw unsupported(named.name());
-			};
+			case WitType.Named named -> {
+				WitCanonicalAbi in = scopeOf(named);
+				yield switch (resolveNamed(named)) {
+					case WitItem.TypeAlias alias -> in.alignment(alias.target());
+					case WitItem.RecordDef record -> in.recordAlignment(fieldTypes(record));
+					case WitItem.VariantDef variant -> in.variantAlignment(casePayloads(variant));
+					case WitItem.EnumDef en -> in.variantAlignment(nCases(en.cases().size()));
+					case WitItem.ResourceDef ignored -> 4;
+					default -> throw unsupported(named.name());
+				};
+			}
 			default -> throw unsupported(describe(type));
 		};
 	}
@@ -196,14 +236,17 @@ final class WitCanonicalAbi {
 			case WitType.TupleOf tuple -> recordFlatTypes(tuple.elements());
 			case WitType.BorrowOf ignored -> List.of(Type.I32);
 			case WitType.OwnOf ignored -> List.of(Type.I32);
-			case WitType.Named named -> switch (resolveNamed(named)) {
-				case WitItem.TypeAlias alias -> flatTypes(alias.target());
-				case WitItem.RecordDef record -> recordFlatTypes(fieldTypes(record));
-				case WitItem.VariantDef variant -> variantFlatTypes(casePayloads(variant));
-				case WitItem.EnumDef ignored -> List.of(Type.I32);
-				case WitItem.ResourceDef ignored -> List.of(Type.I32);
-				default -> throw unsupported(named.name());
-			};
+			case WitType.Named named -> {
+				WitCanonicalAbi in = scopeOf(named);
+				yield switch (resolveNamed(named)) {
+					case WitItem.TypeAlias alias -> in.flatTypes(alias.target());
+					case WitItem.RecordDef record -> in.recordFlatTypes(fieldTypes(record));
+					case WitItem.VariantDef variant -> in.variantFlatTypes(casePayloads(variant));
+					case WitItem.EnumDef ignored -> List.of(Type.I32);
+					case WitItem.ResourceDef ignored -> List.of(Type.I32);
+					default -> throw unsupported(named.name());
+				};
+			}
 			default -> throw unsupported(describe(type));
 		};
 	}
@@ -218,14 +261,17 @@ final class WitCanonicalAbi {
 		return switch (type) {
 			case WitType.OptionOf opt -> variantInfoOf(List.of("none", "some"), payloadsOf(opt));
 			case WitType.ResultOf res -> variantInfoOf(List.of("ok", "error"), payloadsOf(res));
-			case WitType.Named named -> switch (resolveNamed(named)) {
-				case WitItem.TypeAlias alias -> variantInfo(alias.target());
-				case WitItem.VariantDef variant ->
-					variantInfoOf(variant.cases().stream().map(WitItem.Case::name).toList(), casePayloads(variant));
-				case WitItem.EnumDef en ->
-					variantInfoOf(en.cases().stream().map(WitItem.Case::name).toList(), nCases(en.cases().size()));
-				default -> throw unsupported(named.name());
-			};
+			case WitType.Named named -> {
+				WitCanonicalAbi in = scopeOf(named);
+				yield switch (resolveNamed(named)) {
+					case WitItem.TypeAlias alias -> in.variantInfo(alias.target());
+					case WitItem.VariantDef variant -> in.variantInfoOf(
+							variant.cases().stream().map(WitItem.Case::name).toList(), casePayloads(variant));
+					case WitItem.EnumDef en -> in.variantInfoOf(en.cases().stream().map(WitItem.Case::name).toList(),
+							nCases(en.cases().size()));
+					default -> throw unsupported(named.name());
+				};
+			}
 			default -> throw unsupported(describe(type));
 		};
 	}
@@ -239,14 +285,32 @@ final class WitCanonicalAbi {
 	RecordInfo recordInfo(WitType type) {
 		return switch (type) {
 			case WitType.TupleOf tuple -> recordInfoOf(positionalNames(tuple.elements().size()), tuple.elements());
-			case WitType.Named named -> switch (resolveNamed(named)) {
-				case WitItem.TypeAlias alias -> recordInfo(alias.target());
-				case WitItem.RecordDef record ->
-					recordInfoOf(record.fields().stream().map(WitItem.Field::name).toList(), fieldTypes(record));
-				default -> throw unsupported(named.name());
-			};
+			case WitType.Named named -> {
+				WitCanonicalAbi in = scopeOf(named);
+				yield switch (resolveNamed(named)) {
+					case WitItem.TypeAlias alias -> in.recordInfo(alias.target());
+					case WitItem.RecordDef record ->
+						in.recordInfoOf(record.fields().stream().map(WitItem.Field::name).toList(), fieldTypes(record));
+					default -> throw unsupported(named.name());
+				};
+			}
 			default -> throw unsupported(describe(type));
 		};
+	}
+
+	/**
+	 * Resolves a named type reference within this interface scope, reporting the
+	 * interface that DEFINES it.
+	 * @param named the named reference
+	 * @return the definition and its defining interface
+	 */
+	WitResolver.Owned resolveOwned(WitType.Named named) {
+		WitResolver.Owned owned = this.resolver.resolveOwned(this.scope, named.name());
+		if (owned == null) {
+			throw new UnsupportedOperationException("WIT type '" + named.name() + "' is not defined in interface '"
+					+ this.scope.name() + "' (nor imported with a use clause)");
+		}
+		return owned;
 	}
 
 	/**
@@ -255,12 +319,54 @@ final class WitCanonicalAbi {
 	 * @return the definition
 	 */
 	WitItem resolveNamed(WitType.Named named) {
-		WitItem definition = this.resolver.resolveType(this.scope, named.name());
-		if (definition == null) {
-			throw new UnsupportedOperationException("WIT type '" + named.name() + "' is not defined in interface '"
-					+ this.scope.name() + "' (nor imported with a use clause)");
+		return resolveOwned(named).item();
+	}
+
+	/**
+	 * The calculator to continue a walk in once a named type has been resolved: the one
+	 * scoped to the interface that DEFINES it, since that is where its fields' / cases'
+	 * own type references resolve.
+	 * @param named the named reference
+	 * @return the calculator for the defining interface ({@code this} when it defines it)
+	 */
+	WitCanonicalAbi scopeOf(WitType.Named named) {
+		return scopedTo(resolveOwned(named).owner());
+	}
+
+	/**
+	 * The calculator scoped to another interface.
+	 * @param owner the interface
+	 * @return the calculator for it ({@code this} when it is this calculator's own scope)
+	 */
+	WitCanonicalAbi scopedTo(WitItem.InterfaceDef owner) {
+		if (owner == this.scope) {
+			return this;
 		}
-		return definition;
+		return this.siblings.computeIfAbsent(owner, o -> new WitCanonicalAbi(this.resolver, o));
+	}
+
+	/**
+	 * Follows a {@code type} alias chain (across interfaces) to the type it bottoms out
+	 * at, and reports the scope THAT type is written in. A non-alias is returned
+	 * unchanged, in this scope.
+	 * @param type the type
+	 * @return the aliased-through type and its scope
+	 */
+	Scoped resolveAliases(WitType type) {
+		if (type instanceof WitType.Named named && resolveNamed(named) instanceof WitItem.TypeAlias alias) {
+			return scopeOf(named).resolveAliases(alias.target());
+		}
+		return new Scoped(this, type);
+	}
+
+	/**
+	 * Whether a type is {@code u8} (through any alias chain) -- the element type that
+	 * makes a {@code list} a byte string rather than a refused {@code list<T>}.
+	 * @param type the type
+	 * @return {@code true} for {@code u8}
+	 */
+	boolean isU8(WitType type) {
+		return resolveAliases(type).type() instanceof WitType.Prim prim && "u8".equals(prim.name());
 	}
 
 	// --- variant / record layout math (per the canonical ABI spec) ---
@@ -273,7 +379,7 @@ final class WitCanonicalAbi {
 				maxAlign = Math.max(maxAlign, alignment(payload));
 			}
 		}
-		return new VariantInfo(names, payloads, discSize, alignTo(discSize, maxAlign));
+		return new VariantInfo(names, payloads, discSize, alignTo(discSize, maxAlign), this);
 	}
 
 	private RecordInfo recordInfoOf(List<String> names, List<WitType> types) {
@@ -284,7 +390,7 @@ final class WitCanonicalAbi {
 			offsets.add(offset);
 			offset += size(t);
 		}
-		return new RecordInfo(names, types, offsets);
+		return new RecordInfo(names, types, offsets, this);
 	}
 
 	private int variantSize(List<@Nullable WitType> payloads) {

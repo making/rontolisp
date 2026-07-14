@@ -850,6 +850,33 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode an instance-type declaration that aliases a type from an <strong>enclosing
+	 * scope</strong> into the instance type's local type index space (tag {@code 0x02} =
+	 * alias, sort {@code 0x03} = type, target {@code 0x02} = outer). Like
+	 * {@link #instanceDeclType}, it appends one entry to the local type index space.
+	 * <p>
+	 * This is how a type an interface {@code use}s from ANOTHER interface is referred to:
+	 * the enclosing component first projects it out of the defining instance with
+	 * {@link #aliasInstanceType}, and the dependent instance type then points at that
+	 * component type index. Structurally re-declaring it instead is wrong for a
+	 * {@code resource}, which is NOMINAL &mdash; the two would be different types, the
+	 * host could not satisfy the import, and the handles would index different tables.
+	 * @param count the number of enclosing scopes to skip ({@code 1} = the component
+	 * containing this instance type)
+	 * @param outerTypeIndex the type index in that enclosing scope
+	 * @return the encoded instance-type declaration
+	 */
+	public static byte[] instanceDeclAliasOuterType(int count, int outerTypeIndex) {
+		return enc(w -> {
+			w.write(0x02); // instance decl: alias
+			w.write(0x03); // sort: type
+			w.write(0x02); // target: outer
+			w.writeUnsignedLeb128(count);
+			w.writeUnsignedLeb128(outerTypeIndex);
+		});
+	}
+
+	/**
 	 * Encode an instance-type declaration exporting a <strong>resource</strong> type
 	 * (externdesc {@code type} with the {@code sub resource} bound). The export appends
 	 * one entry to the local type index space &mdash; the resource type itself.

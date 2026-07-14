@@ -8410,4 +8410,117 @@ class WasmLispCompilerIntegrationTest {
 			.doesNotContain("failed to parse");
 	}
 
+	// --- rontolisp:wit-import under --component: a FAMILY of interrelated interfaces
+
+	// The REAL wasi:io / wasi:http the repo vendors, folded into one document: each io
+	// file's `package wasi:io@0.2.0;` header is dropped in favour of one nested package
+	// block, and only outgoing-handler is kept from handler.wit (incoming-handler is an
+	// export, not an import). Trimming the interfaces by hand would defeat the test --
+	// the component-model subtype check compares the instance types we emit against the
+	// HOST's real ones, so ours have to be structurally the real ones.
+	private static String vendoredWasiHttpWit() throws Exception {
+		java.nio.file.Path deps = java.nio.file.Path.of("src", "wasm-component", "deps");
+		String io = witBody(deps.resolve("io-0.2").resolve("poll.wit"))
+				+ witBody(deps.resolve("io-0.2").resolve("error.wit"))
+				+ witBody(deps.resolve("io-0.2").resolve("streams.wit"));
+		String handler = java.nio.file.Files.readString(deps.resolve("http").resolve("handler.wit"));
+		String http = java.nio.file.Files.readString(deps.resolve("http").resolve("types.wit"))
+				+ handler.substring(handler.indexOf("interface outgoing-handler"));
+		return "package root:fetchprobe;\n\npackage wasi:io@0.2.0 {\n" + io + "}\n\npackage wasi:http@0.2.0 {\n" + http
+				+ "}\n";
+	}
+
+	// A vendored WIT file's interfaces, without its `package ...;` header (the http ones
+	// carry none -- their package is declared in package.wit).
+	private static String witBody(java.nio.file.Path wit) throws Exception {
+		String text = java.nio.file.Files.readString(wit);
+		return text.startsWith("package ") ? text.substring(text.indexOf(';') + 1) : text;
+	}
+
+	@Test
+	void componentImportLetsLispDriveWasiHttpAcrossSeparatelyImportedInterfaces() throws Exception {
+		// A fetch written entirely in Lisp over wit-imported wasi:io/{poll,error,streams}
+		// and wasi:http/{types,outgoing-handler} -- no adapter blob. The load-bearing
+		// part
+		// is that wasi:http/types does not DEFINE input-stream or pollable, it `use`s
+		// them
+		// from the io interfaces: the handles only flow between two SEPARATELY imported
+		// instances if their resource types are the same nominal type on both sides,
+		// which
+		// is what the alias-out / alias-outer wiring of the imports exists to arrange.
+		// A unit test can only say the bytes name the import; only a host that ANSWERS --
+		// wasmtime's real wasi:http, under -S http=y -- proves the types unified, because
+		// otherwise the component fails the subtype check at instantiation (or reads the
+		// stream out of the wrong handle table).
+		// The backend is a plain rontolisp serve component, so the test stays offline.
+		List<LispVal> backend = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+				(defun handle (request)
+				  (list :status 200
+				        :body (concatenate 'string "backend " (getf request :path))))
+				(rontolisp:http-handler 'handle)
+				"""));
+		byte[] backendBytes = new WasmLispCompiler(false, true, false, false, true).compile(backend);
+		// blocking-read signals rontolisp:wit-error on the `closed` arm (a WIT result's
+		// error arm), so reading to EOF needs handler-case -- hence -W exceptions=y.
+		byte[] fetchBytes = compileWitImportComponent(vendoredWasiHttpWit(), """
+				(rontolisp:wit-import "iface.wit" :interface "wasi:io/poll@0.2.0" :package poll)
+				;; streams' stream-error carries an io/error `error` resource, and a resource
+				;; is its defining interface's type, so that interface is imported too -- for
+				;; the type alone, nothing calls it.
+				(rontolisp:wit-import "iface.wit" :interface "wasi:io/error@0.2.0" :package ioerr)
+				(rontolisp:wit-import "iface.wit" :interface "wasi:io/streams@0.2.0" :package streams)
+				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.2.0" :package http)
+				(rontolisp:wit-import "iface.wit" :interface "wasi:http/outgoing-handler@0.2.0" :package outgoing)
+
+				(defun read-all (stream acc)
+				  (let ((chunk (handler-case (streams:input-stream-blocking-read stream 4096)
+				                 (rontolisp:wit-error () nil))))
+				    (if (or (null chunk) (= (length chunk) 0))
+				        acc
+				        (read-all stream (concatenate 'string acc chunk)))))
+
+				(defun get-url (authority path)
+				  (let ((req (http:outgoing-request-new (http:fields-new))))
+				    (http:outgoing-request-set-method req :get)
+				    ;; the scheme variant's cases are HTTP / HTTPS, and keywords are
+				    ;; case-preserving.
+				    (http:outgoing-request-set-scheme req :HTTP)
+				    (http:outgoing-request-set-authority req authority)
+				    (http:outgoing-request-set-path-with-query req path)
+				    (let ((future (outgoing:handle req nil)))
+				      ;; the pollable comes from wasi:io/poll but is handed out by
+				      ;; wasi:http/types -- the whole point of the probe.
+				      (poll:pollable-block (http:future-incoming-response-subscribe future))
+				      ;; option<result<result<incoming-response, error-code>, _>>: nil while
+				      ;; pending, then the nested envelopes the canonical-ABI lift builds.
+				      (let* ((got (http:future-incoming-response-get future))
+				             (inner (rontolisp::%wit-result (cdr got)))
+				             (response (rontolisp::%wit-result inner)))
+				        (list :status (http:incoming-response-status response)
+				              :body (read-all (rontolisp::%wit-result
+				                                (http:incoming-body-stream
+				                                  (rontolisp::%wit-result
+				                                    (http:incoming-response-consume response))))
+				                              ""))))))
+
+				(let ((r (get-url "127.0.0.1:8086" "/hello")))
+				  (print (getf r :status))
+				  (print (getf r :body)))
+				""");
+		wasmtime.copyFileToContainer(Transferable.of(backendBytes), "/tmp/wit-fetch-backend.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(fetchBytes), "/tmp/wit-fetch.component.wasm");
+		// Wait for the backend before running the fetch: it has one shot, and a
+		// connection
+		// refused would be reported as a wit-error, not as this test's answer.
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime serve -W gc=y --addr 127.0.0.1:8086 /tmp/wit-fetch-backend.wasm >/tmp/wit-fetch-backend.log 2>&1 &"
+						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8086/hello >/dev/null && break; sleep 0.25; done;"
+						+ " curl -sf http://127.0.0.1:8086/hello >/dev/null"
+						+ " || { echo 'backend never came up' 1>&2; cat /tmp/wit-fetch-backend.log 1>&2; exit 1; };"
+						+ " wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y"
+						+ " /tmp/wit-fetch.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("200\n\"backend /hello\"");
+	}
+
 }

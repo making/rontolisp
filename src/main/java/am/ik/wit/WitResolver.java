@@ -163,16 +163,38 @@ public final class WitResolver {
 	 * document defines no such type in this scope
 	 */
 	public @Nullable WitItem resolveType(WitItem.InterfaceDef scope, String name) {
-		return resolveType(scope, name, new HashSet<>());
+		Owned owned = resolveOwned(scope, name);
+		return owned == null ? null : owned.item();
 	}
 
-	private @Nullable WitItem resolveType(WitItem.InterfaceDef scope, String name, Set<WitItem.InterfaceDef> visited) {
+	/**
+	 * Resolves a named type reference the way {@link #resolveType} does, but reports the
+	 * interface that DEFINES it as well as the definition.
+	 * <p>
+	 * The distinction is invisible to a consumer that only wants to classify a type, and
+	 * decisive for one that has to ENCODE it: in the component model a {@code resource}
+	 * is NOMINAL, so a type an interface merely {@code use}s is the defining interface's
+	 * type and must be referred to as such (an {@code alias outer} to the type aliased
+	 * out of the defining instance), not re-declared structurally. Re-declaring it mints
+	 * a second, unrelated resource -- a component the host cannot satisfy, and handle
+	 * tables that do not line up.
+	 * @param scope the interface the reference appears in
+	 * @param name the type name as written in {@code scope} (a {@code use} clause's local
+	 * alias, when it has one)
+	 * @return the definition and its defining interface, or {@code null} when the
+	 * document defines no such type in this scope
+	 */
+	public @Nullable Owned resolveOwned(WitItem.InterfaceDef scope, String name) {
+		return resolveOwned(scope, name, new HashSet<>());
+	}
+
+	private @Nullable Owned resolveOwned(WitItem.InterfaceDef scope, String name, Set<WitItem.InterfaceDef> visited) {
 		if (!visited.add(scope)) {
 			return null;
 		}
 		for (WitItem item : scope.items()) {
 			if (name.equals(definedTypeName(item))) {
-				return item;
+				return new Owned(item, scope);
 			}
 		}
 		for (WitItem item : scope.items()) {
@@ -188,10 +210,26 @@ public final class WitResolver {
 				if (source == null) {
 					return null;
 				}
-				return resolveType(source, imported.name(), visited);
+				return resolveOwned(source, imported.name(), visited);
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * A resolved type reference: the item that defines it, and the interface that item
+	 * was found in.
+	 * <p>
+	 * {@code owner} is the interface whose scope the definition literally sits in, after
+	 * every {@code use} clause and {@code type} alias has been followed -- so for
+	 * {@code wasi:http/types}'s {@code input-stream} it is {@code wasi:io/streams}, which
+	 * is exactly the interface a component-model consumer must alias the type out of.
+	 *
+	 * @param item the defining item ({@code record} / {@code variant} / {@code enum} /
+	 * {@code flags} / {@code resource} / {@code type} alias)
+	 * @param owner the interface that defines it
+	 */
+	public record Owned(WitItem item, WitItem.InterfaceDef owner) {
 	}
 
 	// The name a type-defining item introduces; null for anything that is not a type

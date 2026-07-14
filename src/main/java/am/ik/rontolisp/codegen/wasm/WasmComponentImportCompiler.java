@@ -103,6 +103,62 @@ final class WasmComponentImportCompiler {
 	}
 
 	/**
+	 * Orders the imports so that an interface is imported <strong>before</strong> any
+	 * interface that {@code use}s its resources.
+	 * <p>
+	 * The component wiring has no choice about this: a used resource is projected out of
+	 * the DEFINING interface's imported instance and pointed at by an {@code alias outer}
+	 * inside the dependent's instance type, so the provider's instance must already
+	 * exist. (Applied once, where the imports are collected, so that every consumer --
+	 * the type / import / alias emission, the synthesized core instances and the core
+	 * module's instantiation arguments -- agrees on one order.) The sort is stable, so a
+	 * program whose interfaces use nothing from each other keeps its source order and its
+	 * bytes.
+	 * @param imports the imports in program order
+	 * @return the imports in dependency order
+	 * @throws UnsupportedOperationException when two interfaces use each other's
+	 * resources
+	 */
+	static List<Import> inDependencyOrder(List<Import> imports) {
+		if (imports.size() < 2) {
+			return imports;
+		}
+		final java.util.Map<String, Import> byId = new java.util.LinkedHashMap<>();
+		for (Import imported : imports) {
+			byId.put(imported.ifaceId(), imported);
+		}
+		final List<Import> ordered = new ArrayList<>();
+		final java.util.Set<String> done = new java.util.LinkedHashSet<>();
+		final java.util.Set<String> visiting = new java.util.LinkedHashSet<>();
+		for (Import imported : imports) {
+			visit(imported, byId, ordered, done, visiting);
+		}
+		return ordered;
+	}
+
+	private static void visit(Import imported, java.util.Map<String, Import> byId, List<Import> ordered,
+			java.util.Set<String> done, java.util.Set<String> visiting) {
+		if (done.contains(imported.ifaceId())) {
+			return;
+		}
+		if (!visiting.add(imported.ifaceId())) {
+			throw new UnsupportedOperationException(
+					"the WIT interfaces " + visiting + " use each other's resources, so neither can be imported first");
+		}
+		for (WitComponentTypeEncoder.ForeignResource foreign : WitComponentTypeEncoder.foreignResourcesOf(imported)) {
+			Import owner = byId.get(foreign.ownerIfaceId());
+			// An owner the program did not import is reported where the whole picture is
+			// known (WasmComponentBuilder.appendUserImports), with the fix to make.
+			if (owner != null) {
+				visit(owner, byId, ordered, done, visiting);
+			}
+		}
+		visiting.remove(imported.ifaceId());
+		done.add(imported.ifaceId());
+		ordered.add(imported);
+	}
+
+	/**
 	 * Returns whether the form is a {@code (rontolisp::%component-import ...)} form.
 	 * @param form the top-level form
 	 * @return {@code true} for the internal component-import form
@@ -214,14 +270,21 @@ final class WasmComponentImportCompiler {
 			case WitType.ResultOf res -> (res.ok() != null && stagesMemory(res.ok(), abi))
 					|| (res.err() != null && stagesMemory(res.err(), abi));
 			case WitType.TupleOf tuple -> tuple.elements().stream().anyMatch(element -> stagesMemory(element, abi));
-			case WitType.Named named -> switch (abi.resolveNamed(named)) {
-				case WitItem.TypeAlias alias -> stagesMemory(alias.target(), abi);
-				case WitItem.RecordDef record ->
-					record.fields().stream().anyMatch(field -> stagesMemory(field.type(), abi));
-				case WitItem.VariantDef variant ->
-					variant.cases().stream().anyMatch(c -> c.payload() != null && stagesMemory(c.payload(), abi));
-				default -> false;
-			};
+			case WitType.Named named -> {
+				// A named type's fields / cases are written in the interface that DEFINES
+				// it,
+				// so the walk continues there -- not in the interface that merely uses
+				// it.
+				WitCanonicalAbi in = abi.scopeOf(named);
+				yield switch (abi.resolveNamed(named)) {
+					case WitItem.TypeAlias alias -> stagesMemory(alias.target(), in);
+					case WitItem.RecordDef record ->
+						record.fields().stream().anyMatch(field -> stagesMemory(field.type(), in));
+					case WitItem.VariantDef variant ->
+						variant.cases().stream().anyMatch(c -> c.payload() != null && stagesMemory(c.payload(), in));
+					default -> false;
+				};
+			}
 			default -> false;
 		};
 	}
@@ -411,7 +474,7 @@ final class WasmComponentImportCompiler {
 				WasmEmitHelper.castI31GetS(this.ctx);
 			}
 			for (var param : func.def().func().params()) {
-				emitLowerParam(param.type(), slot++);
+				emitLowerParam(this.decl.abi(), param.type(), slot++);
 				resetScratch();
 			}
 			// The return pointer, when the results are indirect: bump-allocated above the
@@ -435,10 +498,10 @@ final class WasmComponentImportCompiler {
 				refNullEq();
 			}
 			else if (sig.retptr()) {
-				emitLiftAt(result, rp, 0);
+				emitLiftAt(this.decl.abi(), result, rp, 0);
 			}
 			else {
-				emitLiftFlat(result);
+				emitLiftFlat(this.decl.abi(), result);
 			}
 			int resultTmp = this.ctx.allocTemp();
 			setLocal(resultTmp);
@@ -475,8 +538,10 @@ final class WasmComponentImportCompiler {
 		// --- argument lowering ---
 
 		// Pushes the flat value(s) of the boxed Lisp argument in the given local slot.
-		private void emitLowerParam(WitType type, int slot) {
-			WitType t = resolveAlias(type);
+		private void emitLowerParam(WitCanonicalAbi outer, WitType type, int slot) {
+			WitCanonicalAbi.Scoped scoped = outer.resolveAliases(type);
+			WitCanonicalAbi abi = scoped.abi();
+			WitType t = scoped.type();
 			switch (t) {
 				case WitType.Prim prim -> {
 					switch (prim.name()) {
@@ -526,19 +591,19 @@ final class WasmComponentImportCompiler {
 						default -> throw paramUnsupported(prim.name());
 					}
 				}
-				case WitType.ListOf list when isU8(list.element()) -> emitStageStringParam(slot);
+				case WitType.ListOf list when abi.isU8(list.element()) -> emitStageStringParam(slot);
 				case WitType.ListOf ignored -> throw paramUnsupported("list<T>");
 				case WitType.BorrowOf ignored -> emitLowerHandleParam(slot);
 				case WitType.OwnOf ignored -> emitLowerHandleParam(slot);
-				case WitType.OptionOf ignored -> emitLowerVariantParam(t, slot);
-				case WitType.ResultOf ignored -> emitLowerVariantParam(t, slot);
-				case WitType.TupleOf ignored -> emitLowerRecordParam(t, slot, false);
+				case WitType.OptionOf ignored -> emitLowerVariantParam(abi, t, slot);
+				case WitType.ResultOf ignored -> emitLowerVariantParam(abi, t, slot);
+				case WitType.TupleOf ignored -> emitLowerRecordParam(abi, t, slot, false);
 				case WitType.Named named -> {
-					switch (this.decl.abi().resolveNamed(named)) {
+					switch (abi.resolveNamed(named)) {
 						case WitItem.ResourceDef ignored -> emitLowerHandleParam(slot);
-						case WitItem.EnumDef ignored -> emitLowerVariantParam(t, slot);
-						case WitItem.VariantDef ignored -> emitLowerVariantParam(t, slot);
-						case WitItem.RecordDef ignored -> emitLowerRecordParam(t, slot, true);
+						case WitItem.EnumDef ignored -> emitLowerVariantParam(abi, t, slot);
+						case WitItem.VariantDef ignored -> emitLowerVariantParam(abi, t, slot);
+						case WitItem.RecordDef ignored -> emitLowerRecordParam(abi, t, slot, true);
 						default -> throw paramUnsupported(named.name());
 					}
 				}
@@ -564,27 +629,27 @@ final class WasmComponentImportCompiler {
 		// anything else is the case keyword (`:get`), or a `(keyword . payload)` cons
 		// when
 		// the case carries one -- for a result, the (:ok . V) / (:error . E) envelope.
-		private void emitLowerVariantParam(WitType type, int slot) {
-			WitCanonicalAbi.VariantInfo info = this.decl.abi().variantInfo(type);
-			List<Type> flats = this.decl.abi().flatTypes(type);
+		private void emitLowerVariantParam(WitCanonicalAbi abi, WitType type, int slot) {
+			WitCanonicalAbi.VariantInfo info = abi.variantInfo(type);
+			List<Type> flats = abi.flatTypes(type);
 			List<Type> joined = flats.subList(1, flats.size());
 			int disc = allocI32();
 			List<Integer> payloadLocals = new ArrayList<>();
 			for (Type flat : joined) {
 				payloadLocals.add(storageOf(flat) == Type.I64 ? allocI64() : allocI32());
 			}
-			if (resolveAlias(type) instanceof WitType.OptionOf opt) {
+			if (abi.resolveAliases(type).type() instanceof WitType.OptionOf opt) {
 				// none = nil, some(v) = the value itself: no tag to read.
 				getLocal(slot);
 				this.w.write(Instruction.REF_IS_NULL);
 				this.w.write(Instruction.IF, 0x40);
 				i32Const(0);
 				setLocal(disc);
-				emitCasePayload(null, -1, joined, payloadLocals);
+				emitCasePayload(info.abi(), null, -1, joined, payloadLocals);
 				this.w.write(Instruction.ELSE);
 				i32Const(1);
 				setLocal(disc);
-				emitCasePayload(opt.element(), slot, joined, payloadLocals);
+				emitCasePayload(info.abi(), opt.element(), slot, joined, payloadLocals);
 				this.w.write(Instruction.END);
 			}
 			else {
@@ -598,7 +663,7 @@ final class WasmComponentImportCompiler {
 					this.w.write(Instruction.IF, 0x40);
 					i32Const(i);
 					setLocal(disc);
-					emitCasePayload(info.payloads().get(i), payload, joined, payloadLocals);
+					emitCasePayload(info.abi(), info.payloads().get(i), payload, joined, payloadLocals);
 					this.w.write(Instruction.ELSE);
 				}
 				// The argument names no case of this variant: a type error, and it traps
@@ -626,7 +691,7 @@ final class WasmComponentImportCompiler {
 		// joined positions this case does not reach. The scratch cursors are rolled back
 		// afterwards: the cases are mutually exclusive, so each may reuse the same
 		// locals.
-		private void emitCasePayload(@Nullable WitType payload, int payloadSlot, List<Type> joined,
+		private void emitCasePayload(WitCanonicalAbi abi, @Nullable WitType payload, int payloadSlot, List<Type> joined,
 				List<Integer> payloadLocals) {
 			int save32 = this.i32Cursor;
 			int save64 = this.i64Cursor;
@@ -635,12 +700,12 @@ final class WasmComponentImportCompiler {
 			// which
 			// case there is nothing to lower and nothing to read the payload from -- the
 			// case is payload-less as far as the ABI is concerned.
-			if (payload != null && !this.decl.abi().flatTypes(payload).isEmpty()) {
+			if (payload != null && !abi.flatTypes(payload).isEmpty()) {
 				if (payloadSlot < 0) {
 					throw new IllegalStateException("a payload-bearing case has no payload value");
 				}
-				List<Type> payloadFlats = this.decl.abi().flatTypes(payload);
-				emitLowerParam(payload, payloadSlot);
+				List<Type> payloadFlats = abi.flatTypes(payload);
+				emitLowerParam(abi, payload, payloadSlot);
 				// The flats are on the stack in order, so they pop in reverse.
 				for (int i = payloadFlats.size() - 1; i >= 0; i--) {
 					emitCoerceToStorage(payloadFlats.get(i), joined.get(i));
@@ -757,8 +822,8 @@ final class WasmComponentImportCompiler {
 
 		// A record parameter (a keyword plist) or a tuple parameter (a positional list):
 		// the fields' flats concatenate, in WIT order.
-		private void emitLowerRecordParam(WitType type, int slot, boolean plist) {
-			WitCanonicalAbi.RecordInfo info = this.decl.abi().recordInfo(type);
+		private void emitLowerRecordParam(WitCanonicalAbi abi, WitType type, int slot, boolean plist) {
+			WitCanonicalAbi.RecordInfo info = abi.recordInfo(type);
 			for (int i = 0; i < info.names().size(); i++) {
 				int save32 = this.i32Cursor;
 				int save64 = this.i64Cursor;
@@ -778,7 +843,7 @@ final class WasmComponentImportCompiler {
 					structGet(WasmLispCompiler.TYPE_CONS, 0);
 				}
 				setLocal(field);
-				emitLowerParam(info.types().get(i), field);
+				emitLowerParam(info.abi(), info.types().get(i), field);
 				this.i32Cursor = save32;
 				this.i64Cursor = save64;
 			}
@@ -829,8 +894,10 @@ final class WasmComponentImportCompiler {
 		// --- result lifting ---
 
 		// Lifts a single-flat result already on the stack into a boxed value.
-		private void emitLiftFlat(WitType type) {
-			WitType t = resolveAlias(type);
+		private void emitLiftFlat(WitCanonicalAbi outer, WitType type) {
+			WitCanonicalAbi.Scoped scoped = outer.resolveAliases(type);
+			WitCanonicalAbi abi = scoped.abi();
+			WitType t = scoped.type();
 			switch (t) {
 				case WitType.Prim prim -> {
 					switch (prim.name()) {
@@ -853,15 +920,15 @@ final class WasmComponentImportCompiler {
 				}
 				case WitType.BorrowOf ignored -> boxI31();
 				case WitType.OwnOf ignored -> boxI31();
-				case WitType.ResultOf ignored -> emitLiftVariantFromStackDisc(t);
-				case WitType.OptionOf ignored -> emitLiftVariantFromStackDisc(t);
-				case WitType.TupleOf ignored -> emitLiftRecordFlat(t, false);
+				case WitType.ResultOf ignored -> emitLiftVariantFromStackDisc(abi, t);
+				case WitType.OptionOf ignored -> emitLiftVariantFromStackDisc(abi, t);
+				case WitType.TupleOf ignored -> emitLiftRecordFlat(abi, t, false);
 				case WitType.Named named -> {
-					switch (this.decl.abi().resolveNamed(named)) {
+					switch (abi.resolveNamed(named)) {
 						case WitItem.ResourceDef ignored -> boxI31();
-						case WitItem.EnumDef ignored -> emitLiftVariantFromStackDisc(t);
-						case WitItem.VariantDef ignored -> emitLiftVariantFromStackDisc(t);
-						case WitItem.RecordDef ignored -> emitLiftRecordFlat(t, true);
+						case WitItem.EnumDef ignored -> emitLiftVariantFromStackDisc(abi, t);
+						case WitItem.VariantDef ignored -> emitLiftVariantFromStackDisc(abi, t);
+						case WitItem.RecordDef ignored -> emitLiftRecordFlat(abi, t, true);
 						default -> throw resultUnsupported(named.name());
 					}
 				}
@@ -875,17 +942,17 @@ final class WasmComponentImportCompiler {
 		// no memory to read the fields out of. It still has to lift to a plist / a list
 		// --
 		// the shape does not change with how the ABI happened to carry it.
-		private void emitLiftRecordFlat(WitType type, boolean plist) {
-			WitCanonicalAbi.RecordInfo info = this.decl.abi().recordInfo(type);
+		private void emitLiftRecordFlat(WitCanonicalAbi abi, WitType type, boolean plist) {
+			WitCanonicalAbi.RecordInfo info = abi.recordInfo(type);
 			int carrier = -1;
 			for (int i = 0; i < info.types().size(); i++) {
-				if (!this.decl.abi().flatTypes(info.types().get(i)).isEmpty()) {
+				if (!info.abi().flatTypes(info.types().get(i)).isEmpty()) {
 					carrier = i; // at most one, or the record would not be single-flat
 				}
 			}
 			int value = -1;
 			if (carrier >= 0) {
-				emitLiftFlat(info.types().get(carrier));
+				emitLiftFlat(info.abi(), info.types().get(carrier));
 				value = this.ctx.allocTemp();
 				setLocal(value);
 			}
@@ -912,16 +979,18 @@ final class WasmComponentImportCompiler {
 
 		// A single-flat variant-shaped result (every arm payload-less): the flat i32 IS
 		// the discriminant.
-		private void emitLiftVariantFromStackDisc(WitType type) {
+		private void emitLiftVariantFromStackDisc(WitCanonicalAbi abi, WitType type) {
 			int disc = allocI32();
 			setLocal(disc);
-			emitVariantDispatch(type, disc, -1, 0);
+			emitVariantDispatch(abi, type, disc, -1, 0);
 		}
 
 		// Lifts the canonical memory representation of `type` at [base + offset] into a
 		// boxed value.
-		private void emitLiftAt(WitType type, int base, int offset) {
-			WitType t = resolveAlias(type);
+		private void emitLiftAt(WitCanonicalAbi outer, WitType type, int base, int offset) {
+			WitCanonicalAbi.Scoped scoped = outer.resolveAliases(type);
+			WitCanonicalAbi abi = scoped.abi();
+			WitType t = scoped.type();
 			switch (t) {
 				case WitType.Prim prim -> {
 					switch (prim.name()) {
@@ -978,8 +1047,8 @@ final class WasmComponentImportCompiler {
 						default -> throw resultUnsupported(prim.name());
 					}
 				}
-				case WitType.ListOf list when isU8(list.element()) -> emitLiftString(base, offset);
-				case WitType.ListOf list -> emitLiftList(list.element(), base, offset);
+				case WitType.ListOf list when abi.isU8(list.element()) -> emitLiftString(base, offset);
+				case WitType.ListOf list -> emitLiftList(abi, list.element(), base, offset);
 				case WitType.BorrowOf ignored -> {
 					load(base, offset, Instruction.I32_LOAD, 2);
 					boxI31();
@@ -988,18 +1057,18 @@ final class WasmComponentImportCompiler {
 					load(base, offset, Instruction.I32_LOAD, 2);
 					boxI31();
 				}
-				case WitType.OptionOf ignored -> emitLiftVariantAt(t, base, offset);
-				case WitType.ResultOf ignored -> emitLiftVariantAt(t, base, offset);
-				case WitType.TupleOf ignored -> emitLiftRecordAt(t, base, offset, false);
+				case WitType.OptionOf ignored -> emitLiftVariantAt(abi, t, base, offset);
+				case WitType.ResultOf ignored -> emitLiftVariantAt(abi, t, base, offset);
+				case WitType.TupleOf ignored -> emitLiftRecordAt(abi, t, base, offset, false);
 				case WitType.Named named -> {
-					switch (this.decl.abi().resolveNamed(named)) {
+					switch (abi.resolveNamed(named)) {
 						case WitItem.ResourceDef ignored -> {
 							load(base, offset, Instruction.I32_LOAD, 2);
 							boxI31();
 						}
-						case WitItem.RecordDef ignored -> emitLiftRecordAt(t, base, offset, true);
-						case WitItem.VariantDef ignored -> emitLiftVariantAt(t, base, offset);
-						case WitItem.EnumDef ignored -> emitLiftVariantAt(t, base, offset);
+						case WitItem.RecordDef ignored -> emitLiftRecordAt(abi, t, base, offset, true);
+						case WitItem.VariantDef ignored -> emitLiftVariantAt(abi, t, base, offset);
+						case WitItem.EnumDef ignored -> emitLiftVariantAt(abi, t, base, offset);
 						default -> throw resultUnsupported(named.name());
 					}
 				}
@@ -1018,8 +1087,8 @@ final class WasmComponentImportCompiler {
 
 		// A variant-shaped value (variant / enum / option / result) in memory: load the
 		// discriminant, dispatch to the per-case constructors.
-		private void emitLiftVariantAt(WitType type, int base, int offset) {
-			WitCanonicalAbi.VariantInfo info = this.decl.abi().variantInfo(type);
+		private void emitLiftVariantAt(WitCanonicalAbi abi, WitType type, int base, int offset) {
+			WitCanonicalAbi.VariantInfo info = abi.variantInfo(type);
 			int disc = allocI32();
 			int discOp = switch (info.discSize()) {
 				case 1 -> Instruction.I32_LOAD8_U;
@@ -1028,13 +1097,14 @@ final class WasmComponentImportCompiler {
 			};
 			load(base, offset, discOp, info.discSize() == 1 ? 0 : info.discSize() == 2 ? 1 : 2);
 			setLocal(disc);
-			emitVariantDispatch(type, disc, base, offset + info.payloadOffset());
+			emitVariantDispatch(abi, type, disc, base, offset + info.payloadOffset());
 		}
 
 		// Emits the if-chain over a variant's discriminant local. payloadBase = -1 means
 		// no memory payload exists (the single-flat, all-arms-payload-less shape).
-		private void emitVariantDispatch(WitType type, int discLocal, int payloadBase, int payloadOffset) {
-			WitCanonicalAbi.VariantInfo info = this.decl.abi().variantInfo(type);
+		private void emitVariantDispatch(WitCanonicalAbi abi, WitType type, int discLocal, int payloadBase,
+				int payloadOffset) {
+			WitCanonicalAbi.VariantInfo info = abi.variantInfo(type);
 			int n = info.names().size();
 			for (int i = 0; i < n - 1; i++) {
 				getLocal(discLocal);
@@ -1043,10 +1113,10 @@ final class WasmComponentImportCompiler {
 				this.w.write(Instruction.IF);
 				this.w.write(Type.REFNULL.code());
 				this.w.writeHeapType(Type.EQ.code());
-				emitVariantCase(type, info, i, payloadBase, payloadOffset);
+				emitVariantCase(abi, type, info, i, payloadBase, payloadOffset);
 				this.w.write(Instruction.ELSE);
 			}
-			emitVariantCase(type, info, n - 1, payloadBase, payloadOffset);
+			emitVariantCase(abi, type, info, n - 1, payloadBase, payloadOffset);
 			for (int i = 0; i < n - 1; i++) {
 				this.w.write(Instruction.END);
 			}
@@ -1055,34 +1125,35 @@ final class WasmComponentImportCompiler {
 		// One case's value: option -> nil / payload; result -> the (:ok . V) /
 		// (:error . E) envelope; enum -> the case keyword; variant -> the keyword, or
 		// (keyword . payload) when the case carries one.
-		private void emitVariantCase(WitType type, WitCanonicalAbi.VariantInfo info, int index, int payloadBase,
-				int payloadOffset) {
+		private void emitVariantCase(WitCanonicalAbi abi, WitType type, WitCanonicalAbi.VariantInfo info, int index,
+				int payloadBase, int payloadOffset) {
 			WitType payload = info.payloads().get(index);
-			WitType resolved = resolveAlias(type);
+			WitType resolved = abi.resolveAliases(type).type();
 			if (resolved instanceof WitType.OptionOf) {
 				if (index == 0) {
 					refNullEq();
 				}
 				else {
-					emitPayloadOrNil(payload, payloadBase, payloadOffset);
+					emitPayloadOrNil(info.abi(), payload, payloadBase, payloadOffset);
 				}
 				return;
 			}
 			if (resolved instanceof WitType.ResultOf) {
 				WasmEmitHelper.compileStringLiteral(index == 0 ? ":ok" : ":error", this.ctx);
-				emitPayloadOrNil(payload, payloadBase, payloadOffset);
+				emitPayloadOrNil(info.abi(), payload, payloadBase, payloadOffset);
 				newCons();
 				return;
 			}
 			// enum / variant: the case keyword, dotted with the payload when present.
 			WasmEmitHelper.compileStringLiteral(":" + info.names().get(index), this.ctx);
 			if (payload != null) {
-				emitPayloadOrNil(payload, payloadBase, payloadOffset);
+				emitPayloadOrNil(info.abi(), payload, payloadBase, payloadOffset);
 				newCons();
 			}
 		}
 
-		private void emitPayloadOrNil(@Nullable WitType payload, int payloadBase, int payloadOffset) {
+		private void emitPayloadOrNil(WitCanonicalAbi abi, @Nullable WitType payload, int payloadBase,
+				int payloadOffset) {
 			if (payload == null) {
 				refNullEq();
 			}
@@ -1090,20 +1161,20 @@ final class WasmComponentImportCompiler {
 				if (payloadBase < 0) {
 					throw new IllegalStateException("a payload-bearing case cannot be single-flat");
 				}
-				emitLiftAt(payload, payloadBase, payloadOffset);
+				emitLiftAt(abi, payload, payloadBase, payloadOffset);
 			}
 		}
 
 		// record -> (:field value ...) keyword plist; tuple -> (v0 v1 ...) proper list.
-		private void emitLiftRecordAt(WitType type, int base, int offset, boolean plist) {
-			WitCanonicalAbi.RecordInfo info = this.decl.abi().recordInfo(type);
+		private void emitLiftRecordAt(WitCanonicalAbi abi, WitType type, int base, int offset, boolean plist) {
+			WitCanonicalAbi.RecordInfo info = abi.recordInfo(type);
 			int conses = 0;
 			for (int i = 0; i < info.names().size(); i++) {
 				if (plist) {
 					WasmEmitHelper.compileStringLiteral(":" + info.names().get(i), this.ctx);
 					conses++;
 				}
-				emitLiftAt(info.types().get(i), base, offset + info.offsets().get(i));
+				emitLiftAt(info.abi(), info.types().get(i), base, offset + info.offsets().get(i));
 				conses++;
 			}
 			refNullEq();
@@ -1114,13 +1185,13 @@ final class WasmComponentImportCompiler {
 
 		// list<T> at [base + offset]: (element base @+0, count @+4) -> a proper list,
 		// built back to front so the accumulator is the cdr.
-		private void emitLiftList(WitType element, int base, int offset) {
+		private void emitLiftList(WitCanonicalAbi abi, WitType element, int base, int offset) {
 			int save = this.i32Cursor;
 			int elems = allocI32();
 			int idx = allocI32();
 			int elemBase = allocI32();
 			int acc = this.ctx.allocTemp();
-			int elemSize = this.decl.abi().size(element);
+			int elemSize = abi.size(element);
 			load(base, offset, Instruction.I32_LOAD, 2);
 			setLocal(elems);
 			load(base, offset + 4, Instruction.I32_LOAD, 2);
@@ -1144,7 +1215,7 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.I32_MUL);
 			this.w.write(Instruction.I32_ADD);
 			setLocal(elemBase);
-			emitLiftAt(element, elemBase, 0);
+			emitLiftAt(abi, element, elemBase, 0);
 			getLocal(acc);
 			newCons();
 			setLocal(acc);
@@ -1157,18 +1228,6 @@ final class WasmComponentImportCompiler {
 		}
 
 		// --- tiny emission helpers ---
-
-		private WitType resolveAlias(WitType type) {
-			if (type instanceof WitType.Named named
-					&& this.decl.abi().resolveNamed(named) instanceof WitItem.TypeAlias alias) {
-				return resolveAlias(alias.target());
-			}
-			return type;
-		}
-
-		private boolean isU8(WitType type) {
-			return resolveAlias(type) instanceof WitType.Prim prim && "u8".equals(prim.name());
-		}
 
 		private void boxI31() {
 			this.w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);

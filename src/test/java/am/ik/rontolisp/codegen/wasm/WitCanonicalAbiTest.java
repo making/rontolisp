@@ -7,9 +7,11 @@ import am.ik.wasm.Type;
 import am.ik.wit.WitItem;
 import am.ik.wit.WitParser;
 import am.ik.wit.WitResolver;
+import am.ik.wit.WitType;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Pins the canonical-ABI layout facts of {@link WitCanonicalAbi} against the upstream
@@ -18,6 +20,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * module using exactly these flat signatures and load offsets, wrapped by
  * {@code wasm-tools component new}, linked and answered the expected values (the
  * reference probe).
+ *
+ * <p>
+ * The second fixture pins the other half of the contract: a type only means something
+ * together with the interface SCOPE its names resolve in, and that scope changes the
+ * moment a walk follows a {@code use} clause.
  */
 class WitCanonicalAbiTest {
 
@@ -44,6 +51,47 @@ class WitCanonicalAbiTest {
 			    }
 			}
 			""";
+
+	// wasi:http in miniature, and the exact shape that forced the scope threading:
+	// `outgoing-handler` uses `error-code` from `types`, and `error-code`'s `DNS-error`
+	// case
+	// carries a `DNS-error-payload` record that `outgoing-handler` never imported and
+	// cannot
+	// see. Laying out that payload in the scope the walk STARTED in ("what does
+	// DNS-error-payload mean in outgoing-handler?") has no answer at all.
+	private static final String HTTP_WIT = """
+			package wasi:http@0.2.0;
+
+			interface types {
+			    record DNS-error-payload {
+			        rcode: option<string>,
+			        info-code: option<u16>
+			    }
+			    variant error-code {
+			        DNS-timeout,
+			        DNS-error(DNS-error-payload),
+			        connection-refused,
+			        internal-error(option<string>)
+			    }
+			    resource outgoing-request;
+			    resource future-incoming-response;
+			}
+
+			interface outgoing-handler {
+			    use types.{outgoing-request, future-incoming-response, error-code};
+
+			    handle: func(request: outgoing-request) -> result<future-incoming-response, error-code>;
+			}
+			""";
+
+	// ONE resolver over ONE document: a calculator caches its siblings by interface
+	// identity, so an interface re-parsed from a second document would not be the same
+	// scope.
+	private static final WitResolver HTTP = new WitResolver(WitParser.parse(HTTP_WIT));
+
+	private static WitItem.InterfaceDef httpIface(String reference) {
+		return Objects.requireNonNull(HTTP.findInterface(reference), reference);
+	}
 
 	private static WitCanonicalAbi abi() {
 		WitResolver resolver = new WitResolver(WitParser.parse(STORE_WIT));
@@ -114,6 +162,91 @@ class WitCanonicalAbiTest {
 		WitCanonicalAbi.VariantInfo error = abi.variantInfo(Objects.requireNonNull(result.payloads().get(1)));
 		assertThat(error.names()).containsExactly("no-such-store", "access-denied", "other");
 		assertThat(error.payloadOffset()).isEqualTo(4);
+	}
+
+	@Test
+	void laysOutATypeReachedThroughAUseClauseInTheInterfaceThatDEFINESIt() {
+		// The calculator is scoped to `outgoing-handler`, which knows `error-code` only
+		// as a
+		// name its use clause imported. Laying it out means descending into cases it
+		// never
+		// wrote, whose own type references (`DNS-error-payload`) belong to `types` -- so
+		// the
+		// walk has to CONTINUE in the owner's scope. Before the scope threading,
+		// computing
+		// any of this from here threw "WIT type 'DNS-error-payload' is not defined in
+		// interface 'outgoing-handler'".
+		WitCanonicalAbi handler = new WitCanonicalAbi(HTTP, httpIface("outgoing-handler"));
+		WitCanonicalAbi types = handler.scopedTo(httpIface("types"));
+		assertThat(types).isNotSameAs(handler);
+
+		// handle(request) -> result<future-incoming-response, error-code>: the result
+		// flattens to 7 core values (a disc + the widest arm, error-code's 6), well past
+		// the
+		// canonical ABI's one flat result, so it comes back through a return pointer --
+		// and
+		// the size of that return area is only computable in the owner's scope.
+		WitResolver.Func handle = WitResolver.functions(httpIface("outgoing-handler"))
+			.stream()
+			.filter(f -> "handle".equals(f.def().name()))
+			.findFirst()
+			.orElseThrow();
+		WitCanonicalAbi.FlatSig sig = handler.flatSig(handle);
+		assertThat(sig.params()).containsExactly(Type.I32, Type.I32); // the handle, the
+																		// retptr
+		assertThat(sig.results()).isEmpty();
+		assertThat(sig.retptr()).isTrue();
+		assertThat(sig.retSize()).isEqualTo(24);
+
+		// The result is written in `outgoing-handler`'s signature, so ITS scope is the
+		// one
+		// the walk starts in...
+		WitType handleResult = Objects.requireNonNull(handle.def().func().result());
+		WitCanonicalAbi.VariantInfo result = handler.variantInfo(handleResult);
+		assertThat(result.abi()).isSameAs(handler);
+		assertThat(result.names()).containsExactly("ok", "error");
+		assertThat(result.discSize()).isEqualTo(1);
+		assertThat(result.payloadOffset()).isEqualTo(4);
+
+		// ... and the error arm hands the walk over to `types`: the cases it reports are
+		// written there, so VariantInfo carries THAT scope, not the one variantInfo was
+		// called on.
+		WitType errorCodeType = Objects.requireNonNull(result.payloads().get(1));
+		WitCanonicalAbi.VariantInfo errorCode = handler.variantInfo(errorCodeType);
+		assertThat(errorCode.abi()).isSameAs(types).isNotSameAs(handler);
+		assertThat(errorCode.names()).containsExactly("DNS-timeout", "DNS-error", "connection-refused",
+				"internal-error");
+		assertThat(errorCode.discSize()).isEqualTo(1);
+		assertThat(errorCode.payloadOffset()).isEqualTo(4);
+		// Its layout facts, computed from the handler's scope through the owner's:
+		// 4 (payload offset) + 16 (the widest case, DNS-error-payload), 4-aligned.
+		assertThat(handler.size(errorCodeType)).isEqualTo(20);
+		assertThat(handler.alignment(errorCodeType)).isEqualTo(4);
+		assertThat(handler.flatTypes(errorCodeType)).containsExactly(Type.I32, Type.I32, Type.I32, Type.I32, Type.I32,
+				Type.I32);
+
+		// The foreign record payload: rcode option<string> at 0 (disc + ptr/len = 12
+		// bytes),
+		// info-code option<u16> at 12 (disc + u16 = 4 bytes), so 16 bytes, 4-aligned.
+		WitType payloadType = Objects.requireNonNull(errorCode.payloads().get(1));
+		WitCanonicalAbi.RecordInfo payload = errorCode.abi().recordInfo(payloadType);
+		assertThat(payload.abi()).isSameAs(types);
+		assertThat(payload.names()).containsExactly("rcode", "info-code");
+		assertThat(payload.offsets()).containsExactly(0, 12);
+		assertThat(types.size(payloadType)).isEqualTo(16);
+		assertThat(types.alignment(payloadType)).isEqualTo(4);
+		assertThat(types.flatTypes(payloadType)).containsExactly(Type.I32, Type.I32, Type.I32, Type.I32, Type.I32);
+
+		// And the scope really is load-bearing rather than decorative: the same payload
+		// type
+		// asked of the STARTING scope is a name `outgoing-handler` has never heard of.
+		// This
+		// is what a consumer that kept walking with the abi it started with would hit --
+		// so
+		// VariantInfo/RecordInfo hand their scope back along with the types.
+		assertThatThrownBy(() -> handler.recordInfo(payloadType)).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("WIT type 'DNS-error-payload' is not defined in interface 'outgoing-handler' (nor imported "
+					+ "with a use clause)");
 	}
 
 }

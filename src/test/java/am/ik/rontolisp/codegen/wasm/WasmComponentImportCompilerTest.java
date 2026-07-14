@@ -1,13 +1,21 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.wasm.ComponentWriter;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -48,6 +56,35 @@ class WasmComponentImportCompilerTest {
 			}
 			""";
 
+	// Two interfaces of ONE document where the second `use`s the first's RESOURCE -- the
+	// shape wasi:http/types has (it does not define `input-stream`, it uses
+	// wasi:io/streams'
+	// one), reduced to what a unit test can hold.
+	private static final String TOKENS_WIT = """
+			package local:x@0.1.0;
+
+			interface tokens {
+			    resource token {
+			        value: func() -> u32;
+			    }
+			}
+
+			interface bag {
+			    use tokens.{token};
+			    take: func() -> token;
+			}
+			""";
+
+	private static final String TOKENS_ID = "local:x/tokens@0.1.0";
+
+	private static final String BAG_ID = "local:x/bag@0.1.0";
+
+	// The prefix of an instance-type declaration that aliases a type IN from the
+	// enclosing
+	// component: alias (0x02) / sort type (0x03) / target outer (0x02). Its operands (the
+	// scope count and the component type index) follow.
+	private static final byte[] ALIAS_OUTER_TYPE = { 0x02, 0x03, 0x02 };
+
 	private static WitImportDirective.Directive directive(String iface, String pkg) {
 		return new WitImportDirective.Directive("kv.wit", iface, pkg, null, WitImportDirective.FieldStyle.CAMEL);
 	}
@@ -74,6 +111,116 @@ class WasmComponentImportCompilerTest {
 
 	private static boolean containsAscii(byte[] bytes, String needle) {
 		return new String(bytes, StandardCharsets.ISO_8859_1).contains(needle);
+	}
+
+	private static boolean containsBytes(byte[] haystack, byte[] needle) {
+		for (int i = 0; i + needle.length <= haystack.length; i++) {
+			if (Arrays.equals(haystack, i, i + needle.length, needle, 0, needle.length)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// The WIT text as a Lisp string literal, the way it travels inside the internal
+	// %component-import form (a `%`-heavy source, so it is concatenated rather than
+	// String.format-ed).
+	private static String witLiteral(String wit) {
+		return "\"" + wit.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
+	}
+
+	// The %component-import form of one interface, with its ("member" "lisp-name") pairs
+	// (none = a type-only import: an interface imported purely for a type another one
+	// uses).
+	private static String importForm(String ifaceId, String wit, String... members) {
+		return "(rontolisp::%component-import \"" + ifaceId + "\" " + witLiteral(wit) + " " + String.join(" ", members)
+				+ ")\n";
+	}
+
+	private static WasmComponentImportCompiler.Import parseImport(String ifaceId, String wit, String... members) {
+		return WasmComponentImportCompiler
+			.parse((LispCons) LispReader.readAllFromString(importForm(ifaceId, wit, members)).get(0));
+	}
+
+	/** One top-level component section: its id and its payload. */
+	private record Section(int id, byte[] payload) {
+	}
+
+	// The component's top-level sections, in order. Splitting them is what makes an
+	// assertion about the emitted bytes precise: the same declaration bytes occur inside
+	// the embedded core module and inside the fixed WASI import blob (which has `alias
+	// outer` declarations of its own), so a search over the whole binary proves nothing.
+	private static List<Section> sections(byte[] component) {
+		List<Section> sections = new ArrayList<>();
+		int pos = 8; // "\0asm" + version 0x0d / layer 0x01
+		while (pos < component.length) {
+			int id = component[pos++] & 0xff;
+			int size = 0;
+			int shift = 0;
+			int b;
+			do {
+				b = component[pos++] & 0xff;
+				size |= (b & 0x7f) << shift;
+				shift += 7;
+			}
+			while ((b & 0x80) != 0);
+			assertThat(pos + size).as("section %d overruns the component", id).isLessThanOrEqualTo(component.length);
+			sections.add(new Section(id, Arrays.copyOfRange(component, pos, pos + size)));
+			pos += size;
+		}
+		return sections;
+	}
+
+	// The section index of the component import of an interface (one entry per section:
+	// appendUserImports writes them one interface at a time).
+	private static int importSectionIndex(List<Section> sections, String ifaceId) {
+		for (int i = 0; i < sections.size(); i++) {
+			Section section = sections.get(i);
+			if (section.id() == ComponentWriter.SEC_IMPORT && containsAscii(section.payload(), ifaceId)) {
+				return i;
+			}
+		}
+		throw new AssertionError("the component does not import '" + ifaceId + "'");
+	}
+
+	// The section index of an interface's instance TYPE: written immediately before the
+	// import that references it.
+	private static int instanceTypeSectionIndex(List<Section> sections, String ifaceId) {
+		for (int i = importSectionIndex(sections, ifaceId) - 1; i >= 0; i--) {
+			if (sections.get(i).id() == ComponentWriter.SEC_TYPE) {
+				return i;
+			}
+		}
+		throw new AssertionError("no instance type precedes the import of '" + ifaceId + "'");
+	}
+
+	// The component type index an instance import points at -- the trailing `0x05 <type>`
+	// externdesc of the single entry its section carries. Every index here is a one-byte
+	// LEB128 (a component has a few dozen types, not a few hundred).
+	private static int importedInstanceTypeIndex(List<Section> sections, String ifaceId) {
+		byte[] payload = sections.get(importSectionIndex(sections, ifaceId)).payload();
+		assertThat(payload[payload.length - 2]).as("externdesc: instance").isEqualTo((byte) 0x05);
+		return payload[payload.length - 1];
+	}
+
+	// The keyvalue program the component tests compile: one interface, two bound members,
+	// and (unlike the tokens/bag pair below) nothing used from another interface.
+	private static byte[] keyvalueComponent() {
+		return compileComponent("(defpackage kv (:use cl) (:export open))\n"
+				+ importForm("wasi:keyvalue/store@0.2.0-draft", KV_WIT, "(\"open\" \"kv::%open\")",
+						"(\"bucket-get\" \"kv::%bucket-get\")")
+				+ "(defun kv:open (identifier) (rontolisp::%wit-result (kv::%open identifier)))\n"
+				+ "(print (kv:open \"\"))\n");
+	}
+
+	// A program over the tokens/bag pair, with the two %component-import forms written in
+	// the given source order.
+	private static byte[] tokensAndBagComponent(boolean providerFirst) {
+		String tokens = importForm(TOKENS_ID, TOKENS_WIT, "(\"token-value\" \"tk:token-value\")");
+		String bag = importForm(BAG_ID, TOKENS_WIT, "(\"take\" \"bg:take\")");
+		return compileComponent(
+				"(defpackage tk (:use cl) (:export token-value))\n" + "(defpackage bg (:use cl) (:export take))\n"
+						+ (providerFirst ? tokens + bag : bag + tokens) + "(print (tk:token-value (bg:take)))\n");
 	}
 
 	@Test
@@ -118,14 +265,7 @@ class WasmComponentImportCompilerTest {
 
 	@Test
 	void componentImportsTheInterfaceAndLowersItsFunctions() {
-		// The WIT text is a Lisp string literal inside the internal form (a `%`-heavy
-		// source, so it is concatenated rather than String.format-ed).
-		String witLiteral = "\"" + KV_WIT.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
-		byte[] component = compileComponent("(defpackage kv (:use cl) (:export open))\n"
-				+ "(rontolisp::%component-import \"wasi:keyvalue/store@0.2.0-draft\" " + witLiteral
-				+ " (\"open\" \"kv::%open\") (\"bucket-get\" \"kv::%bucket-get\"))\n"
-				+ "(defun kv:open (identifier) (rontolisp::%wit-result (kv::%open identifier)))\n"
-				+ "(print (kv:open \"\"))\n");
+		byte[] component = keyvalueComponent();
 		// The component declares the interface as an instance import, and the core module
 		// imports its canonical-ABI function names from it.
 		assertThat(containsAscii(component, "wasi:keyvalue/store@0.2.0-draft")).isTrue();
@@ -139,6 +279,37 @@ class WasmComponentImportCompilerTest {
 		// keeps every existing component byte-identical.
 		byte[] plain = compileComponent("(print (+ 1 2))");
 		assertThat(containsAscii(plain, "wasi:keyvalue")).isFalse();
+		// Not one section, not one type index: without this, adding the import machinery
+		// to
+		// the builder would have moved every hardcoded index the fixed WASI blobs are
+		// wired
+		// with, and every component ever emitted would have changed shape.
+		ComponentWriter writer = new ComponentWriter();
+		byte[] preamble = writer.toByteArray();
+		WasmComponentBuilder.appendUserImports(writer, List.of(), 0, 0, 0, 0);
+		assertThat(writer.toByteArray()).isEqualTo(preamble);
+		assertThat(WasmComponentBuilder.userImportTypes(List.of())).isZero();
+	}
+
+	@Test
+	void anInterfaceThatUsesNoForeignTypeProjectsNothing() {
+		// The cross-interface projection is INERT for an interface that uses nothing from
+		// another: it costs no alias and no extra component type, so the type cursor the
+		// fixed WASI wiring downstream is compiled against shifts by the import count
+		// alone
+		// -- which is what keeps every component emitted before the projection existed
+		// byte-identical.
+		WasmComponentImportCompiler.Import kv = parseImport("wasi:keyvalue/store@0.2.0-draft", KV_WIT,
+				"(\"open\" \"kv::%open\")", "(\"bucket-get\" \"kv::%bucket-get\")");
+		assertThat(WitComponentTypeEncoder.foreignResourcesOf(kv)).isEmpty();
+		assertThat(WasmComponentBuilder.userImportTypes(List.of(kv))).isEqualTo(1);
+		// Its `bucket` is its own, so the instance type DECLARES the resource rather than
+		// aliasing one in from the enclosing component.
+		List<Section> sections = sections(keyvalueComponent());
+		byte[] instanceType = sections.get(instanceTypeSectionIndex(sections, "wasi:keyvalue/store@0.2.0-draft"))
+			.payload();
+		assertThat(instanceType).containsSequence(ComponentWriter.instanceDeclExportResource("bucket"));
+		assertThat(containsBytes(instanceType, ALIAS_OUTER_TYPE)).isFalse();
 	}
 
 	@Test
@@ -436,6 +607,133 @@ class WasmComponentImportCompilerTest {
 		assertThat(containsAscii(component, "wasi:keyvalue/store@0.2.0-draft")).isTrue();
 		assertThat(containsAscii(component, "[method]bucket.get")).isTrue();
 		assertThat(containsAscii(component, "wasi:http/incoming-handler@0.2.0")).isTrue();
+	}
+
+	@Test
+	void aUsedResourceIsTheDefiningInterfacesOwnType() {
+		// A component-model resource is NOMINAL, so `bag`'s `token` must BE the `token`
+		// of
+		// `tokens`: the component projects it out of tokens' imported instance and bag's
+		// instance type points AT that projection. Declaring a second `(sub resource)` of
+		// the same name inside bag -- which is what a structural walk through the `use`
+		// clause produces -- mints an unrelated type instead: the host's real `bag`
+		// instance
+		// has no such export to satisfy, and a handle minted by one interface would index
+		// the other's table.
+		List<Section> sections = sections(tokensAndBagComponent(true));
+		// The provider is imported FIRST: the projection can only name an instance that
+		// already exists.
+		assertThat(importSectionIndex(sections, TOKENS_ID)).isLessThan(importSectionIndex(sections, BAG_ID));
+		int tokensType = importedInstanceTypeIndex(sections, TOKENS_ID);
+		int bagType = importedInstanceTypeIndex(sections, BAG_ID);
+		// The three component types the pair costs: tokens' instance type, the `token`
+		// projected out of its instance, then bag's instance type.
+		assertThat(bagType).isEqualTo(tokensType + 2);
+		// The projection: one alias of the type export "token" out of tokens' instance,
+		// written right before bag's instance type. The instance index is the only
+		// operand
+		// left free here -- it counts the blob variant's own fixed WASI imports.
+		Section projection = sections.get(instanceTypeSectionIndex(sections, BAG_ID) - 1);
+		assertThat(projection.id()).isEqualTo(ComponentWriter.SEC_ALIAS);
+		int tokensInstance = projection.payload()[3];
+		assertThat(projection.payload())
+			.isEqualTo(ComponentWriter.vec(List.of(ComponentWriter.aliasInstanceType(tokensInstance, "token"))));
+		byte[] tokensInstanceType = sections.get(instanceTypeSectionIndex(sections, TOKENS_ID)).payload();
+		byte[] bagInstanceType = sections.get(instanceTypeSectionIndex(sections, BAG_ID)).payload();
+		// tokens DEFINES the resource; bag ALIASES the projected type in (and re-exports
+		// it
+		// under the name its `use` clause gives it) instead of declaring a second one.
+		assertThat(tokensInstanceType).containsSequence(ComponentWriter.instanceDeclExportResource("token"));
+		assertThat(bagInstanceType).containsSequence(ComponentWriter.instanceDeclAliasOuterType(1, tokensType + 1));
+		assertThat(containsBytes(bagInstanceType, ComponentWriter.instanceDeclExportResource("token"))).isFalse();
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.codegen.wasm.WitOracleE2eTest#wasmToolsIsAvailable")
+	void theCrossInterfaceComponentValidates(@TempDir Path tempDir) throws Exception {
+		// Resource identity across two instance imports is the component model's rule,
+		// not
+		// ours, so the byte-level pins above are only worth what a real validator says of
+		// them. Runs where a wasm-tools binary is on PATH (like WitOracleE2eTest).
+		Path file = tempDir.resolve("tokens-bag.wasm");
+		Files.write(file, tokensAndBagComponent(true));
+		Process process = new ProcessBuilder("wasm-tools", "validate", "--features", "all", file.toString())
+			.redirectErrorStream(true)
+			.start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor()).as(output).isZero();
+	}
+
+	@Test
+	void theProviderIsImportedFirstWhicheverOrderTheDirectivesAreWrittenIn() {
+		// Source order is the user's business; the wiring's order is not negotiable (a
+		// dependent's instance type aliases a type out of an instance that must already
+		// exist). WasmComponentImportCompiler.inDependencyOrder sorts the imports ONCE,
+		// where they are collected, so the component types, the synthesized core
+		// instances,
+		// the core module's import fields and its instantiation arguments cannot disagree
+		// about it -- and the two spellings emit the very same component.
+		assertThat(tokensAndBagComponent(false)).isEqualTo(tokensAndBagComponent(true));
+	}
+
+	@Test
+	void anInterfaceMayBeImportedForItsTypesAlone() {
+		// wasi:io/error exists in a fetch component purely to own the `error` resource
+		// that
+		// wasi:io/streams' `stream-error` carries: nothing calls its one function.
+		// Rejecting
+		// an import whose functions the program never calls would make that component
+		// unbuildable, so the component path defers the judgement to appendUserImports --
+		// the only place that sees every import and can tell a type provider from a
+		// mistake.
+		List<LispVal> forms = WitImportDirective.lower(directive(TOKENS_ID, "tk"), TOKENS_WIT, "kv.wit",
+				WitExportDirective.Backend.WASM_COMPONENT, java.util.Set.of());
+		assertThat(forms.get(1).print()).startsWith("(rontolisp::%component-import \"" + TOKENS_ID + "\"")
+			.doesNotContain("token-value");
+		// On every other backend an interface is a set of callable functions and nothing
+		// else, so an unused one stays a mistake worth naming.
+		assertThatThrownBy(() -> WitImportDirective.lower(directive(TOKENS_ID, "tk"), TOKENS_WIT, "kv.wit",
+				WitExportDirective.Backend.WASM_GC, java.util.Set.of()))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("the program calls none of its functions");
+		// And the component really imports it, with a resource-only instance type: an
+		// instance can only be projected from for a name it EXPORTS, so the resource has
+		// to
+		// be declared even though no signature of this interface mentions it.
+		byte[] component = compileComponent(
+				"(defpackage bg (:use cl) (:export take))\n" + importForm(TOKENS_ID, TOKENS_WIT)
+						+ importForm(BAG_ID, TOKENS_WIT, "(\"take\" \"bg:take\")") + "(print (bg:take))\n");
+		List<Section> sections = sections(component);
+		assertThat(sections.get(instanceTypeSectionIndex(sections, TOKENS_ID)).payload()).isEqualTo(ComponentWriter.vec(
+				List.of(ComponentWriter.instanceTypeOf(List.of(ComponentWriter.instanceDeclExportResource("token"))))));
+	}
+
+	@Test
+	void rejectsAnInterfaceImportNothingUses() {
+		// The type-only exemption above is not a blanket one: an interface the program
+		// neither calls nor uses a type of is dead weight the component would still have
+		// to
+		// be given at instantiation.
+		assertThatThrownBy(() -> compileComponent(importForm("local:webgl/gl@0.1.0", GL_WIT) + "(print 1)\n"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("local:webgl/gl@0.1.0")
+			.hasMessageContaining(
+					"the program calls none of its functions, and no other imported interface uses its types");
+	}
+
+	@Test
+	void rejectsAUsedResourceWhoseOwningInterfaceIsNotImported() {
+		// Nothing downstream would say so in words: the encoder would have no component
+		// type
+		// index to alias `token` in from, and a structural re-declaration is exactly the
+		// wrong answer (see aUsedResourceIsTheDefiningInterfacesOwnType). So the error
+		// names
+		// the interface to add.
+		assertThatThrownBy(() -> compileComponent("(defpackage bg (:use cl) (:export take))\n"
+				+ importForm(BAG_ID, TOKENS_WIT, "(\"take\" \"bg:take\")") + "(print (bg:take))\n"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("cannot bind the resource 'token', which it uses from '" + TOKENS_ID + "'")
+			.hasMessageContaining("(rontolisp:wit-import ... :interface \"" + TOKENS_ID + "\")");
 	}
 
 }

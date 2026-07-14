@@ -309,6 +309,63 @@ class ComponentWriterTest {
 	}
 
 	@Test
+	void instanceTypeAliasesAUsedTypeFromTheEnclosingComponent() {
+		// The imported wasi:io/streams@0.2.0 instance type, byte-for-byte as wasm-tools
+		// encodes it inside a real fetch component (258 bytes, captured with
+		// `wasm-tools dump`). What it pins is the `use` rule: io/streams does not DEFINE
+		// `error` -- it uses it from wasi:io/error -- so the type is ALIASED IN from the
+		// enclosing component (which projected it out of the wasi:io/error instance as
+		// component type 14) instead of being re-declared. A resource is nominal, so a
+		// structural re-declaration would mint a second, unrelated `error` that the host
+		// cannot satisfy. The alias appends to the local type index space, like a type
+		// declaration.
+		final byte[] u8 = ComponentWriter.valTypePrim(ComponentWriter.VT_U8);
+		final byte[] u64 = ComponentWriter.valTypePrim(ComponentWriter.VT_U64);
+		final List<byte @Nullable []> streamErrorCases = new java.util.ArrayList<>();
+		streamErrorCases.add(ComponentWriter.valTypeIndex(3));
+		streamErrorCases.add(null);
+		final List<byte[]> decls = List.of(
+				// local 0: the output-stream resource, defined by this interface
+				ComponentWriter.instanceDeclExportResource("output-stream"),
+				// local 1: wasi:io/error's `error` resource, aliased from outer type 14
+				ComponentWriter.instanceDeclAliasOuterType(1, 14),
+				// local 2: export "error" = eq(1) -- the name io/streams `use`s it under
+				ComponentWriter.instanceDeclExportTypeEq("error", 1),
+				// local 3: own<error>, local 4: variant stream-error, local 5: its export
+				ComponentWriter.instanceDeclType(ComponentWriter.definedOwn(2)),
+				ComponentWriter.instanceDeclType(
+						ComponentWriter.definedVariantOf(List.of("last-operation-failed", "closed"), streamErrorCases)),
+				ComponentWriter.instanceDeclExportTypeEq("stream-error", 4),
+				// local 6: the input-stream resource, also defined here
+				ComponentWriter.instanceDeclExportResource("input-stream"),
+				// local 7: borrow<input-stream>, 8: list<u8>, 9: result<8, 5>, 10: func
+				ComponentWriter.instanceDeclType(ComponentWriter.definedBorrow(6)),
+				ComponentWriter.instanceDeclType(ComponentWriter.definedListOf(u8)),
+				ComponentWriter.instanceDeclType(ComponentWriter.definedResultOf(ComponentWriter.valTypeIndex(8),
+						ComponentWriter.valTypeIndex(5))),
+				ComponentWriter.instanceDeclType(ComponentWriter.funcTypeOf(List.of("self", "len"),
+						List.of(ComponentWriter.valTypeIndex(7), u64), ComponentWriter.valTypeIndex(9))),
+				ComponentWriter.instanceDeclExportFunc("[method]input-stream.blocking-read", 10),
+				// local 11: borrow<output-stream>, 12: result<_, 5>, 13: func
+				ComponentWriter.instanceDeclType(ComponentWriter.definedBorrow(0)),
+				ComponentWriter
+					.instanceDeclType(ComponentWriter.definedResultOf(null, ComponentWriter.valTypeIndex(5))),
+				ComponentWriter.instanceDeclType(ComponentWriter.funcTypeOf(List.of("self", "contents"),
+						List.of(ComponentWriter.valTypeIndex(11), ComponentWriter.valTypeIndex(8)),
+						ComponentWriter.valTypeIndex(12))),
+				ComponentWriter.instanceDeclExportFunc("[method]output-stream.blocking-write-and-flush", 13));
+		final String golden = "421004000d6f75747075742d73747265616d0301020302010e0400056572726f"
+				+ "72030001016902017102156c6173742d6f7065726174696f6e2d6661696c6564"
+				+ "01030006636c6f736564000004000c73747265616d2d6572726f720300040400"
+				+ "0c696e7075742d73747265616d030101680601707d016a010801050140020473"
+				+ "656c6607036c656e7700090400225b6d6574686f645d696e7075742d73747265"
+				+ "616d2e626c6f636b696e672d72656164010a016800016a000105014002047365"
+				+ "6c660b08636f6e74656e747308000c04002e5b6d6574686f645d6f7574707574"
+				+ "2d73747265616d2e626c6f636b696e672d77726974652d616e642d666c757368" + "010d";
+		assertThat(hex(ComponentWriter.instanceTypeOf(decls))).isEqualTo(golden);
+	}
+
+	@Test
 	void instanceTypeMatchesWasmToolsReference() {
 		// Rebuild the imported wasi:keyvalue/store@0.2.0-draft instance type exactly as
 		// `wasm-tools component new` encodes it, and pin the 393 golden bytes captured

@@ -1027,6 +1027,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				topLevelExprs.add(expr);
 			}
 		}
+		// An interface whose resources another one uses must be imported first (its
+		// instance is what the dependent's instance type aliases the resource out of).
+		// Sorted HERE, once, so the component wiring, the synthesized core instances, the
+		// core module's import fields and its instantiation arguments cannot disagree.
+		componentImports = WasmComponentImportCompiler.inDependencyOrder(componentImports);
 		if (!importDecls.isEmpty() && this.component) {
 			throw new UnsupportedOperationException(
 					"rontolisp:wasm-import is not supported with --component (Preview 1 core modules only)");

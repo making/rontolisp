@@ -1,22 +1,198 @@
 # `rontolisp:fetch` through WIT — delete the biggest hand-written blob
 
-**Status:** open, unstarted. **Large, and the biggest single blob win.** **UNBLOCKED
-2026-07-14**: `.todo/133` landed, so `set-method(method)` / `set-scheme(option<scheme>)`
-cross the component import boundary (verified against wasmtime's real `wasi:http` host —
+**Status:** IN PROGRESS 2026-07-14. **Large, and the biggest single blob win.** Selected
+ahead of `.todo/135` (user decision 2026-07-14). `.todo/133` landed, so
+`set-method(method)` / `set-scheme(option<scheme>)` cross the component import boundary
+(verified against wasmtime's real `wasi:http` host —
 `WasmLispCompilerIntegrationTest.componentImportLowersAVariantParameter`). The
 user-facing API does not change at all.
+
+## READ THIS FIRST: the type tiers were never the blocker (survey, 2026-07-14)
+
+The framing below ("the blocker that WAS") is right but **incomplete**, and acting on it
+alone walks straight into a wall. What the survey established:
+
+- **Every one of the 21 WIT functions a Lisp `fetch` needs already passes the
+  `--component` type gate**, `error-code`'s 41 cases included. `fields.set` /
+  `fields.from-list` are the only refusals (`list<list<u8>>` params), and `fields.append`
+  replaces them exactly as this file predicted. `WitCanonicalAbi.flatSig` was hand-checked
+  against the WAT adapter's core arities on all 21 and agrees on every one.
+- **The real blockers are two STRUCTURAL gaps, and neither is in this file.** Both are
+  shared with `.todo/135`, so they are this todo's to build.
+
+**Blocker 1 — `canon resource.drop` is unreachable from Lisp.** `wit-import` binds an
+interface's funcs / constructors / methods / statics; a drop is a canonical built-in, not a
+WIT-declared function, so `WitResolver.functions` never yields one and nothing in
+`appendUserImports` emits `ComponentWriter.canonResourceDrop` (which exists, and is called
+only by the hardcoded blob builders). This is **not just a leak**: `wasi:http`'s
+`types.wit:518-521` says the `output-stream` from `outgoing-body.write` is a CHILD resource
+that must be dropped before the parent is finished, *"otherwise the `outgoing-body` drop or
+`finish` will trap"* — the WAT adapter duly calls `drop-out` immediately before
+`body_finish` (`adapter-http-client.wat:392-393`). **Without drops a Lisp fetch cannot even
+send a request body.** Resources fetch must drop: `pollable`, `output-stream`, `fields`,
+`input-stream`, `incoming-body`, `incoming-response`, `future-incoming-response`.
+
+**Blocker 2 — cross-interface resource types are not unified.** `wasi:http/types` does not
+DEFINE `input-stream` / `output-stream` / `pollable`; it `use`s them from `wasi:io/streams`
+and `wasi:io/poll`. `WitComponentTypeEncoder` resolves a named type through
+`WitResolver.resolveType`, which follows `use` clauses transparently, and then declares a
+**fresh nominal `(export "input-stream" (type (sub resource)))` inside the http/types
+instance type**. Two consequences, either fatal: the host's real `wasi:http/types` instance
+has no `input-stream` export to match it, and the handle `incoming-body.stream()` returns
+would index a different handle table than `wasi:io/streams.blocking-read` expects. Resources
+are NOMINAL in the component model; structural re-declaration is not equivalence.
+
+### The target encoding — confirmed by `wasm-tools print` on today's real fetch component
+
+Do not re-derive this; it is measured (`rontolisp f.lisp -o f.wasm --component`, then
+`wasm-tools print`). Imports go in DEPENDENCY ORDER, each `use`d type is aliased OUT of the
+providing instance into the outer type space and then pulled back IN with an **`alias
+outer`** inside the dependent's instance type:
+
+```wat
+(import "wasi:io/error@0.2.0" (instance (;10;) (type 13)))
+(alias export 10 "error" (type (;14;)))              ;; -> outer type 14
+(type (;15;) (instance                               ;; wasi:io/streams
+    (export (;0;) "output-stream" (type (sub resource)))
+    (alias outer 1 14 (type (;1;)))                  ;; <- the SAME error resource
+    (export (;2;) "error" (type (eq 1)))
+    (type (;4;) (variant (case "last-operation-failed" 3) (case "closed")))
+    (export (;5;) "stream-error" (type (eq 4)))      ;; defined HERE -> declared, not aliased
+    (export (;6;) "input-stream" (type (sub resource)))
+    ...))
+(import "wasi:io/streams@0.2.0" (instance (;11;) (type 15)))
+(alias export 11 "output-stream" (type (;16;)))
+(alias export 9  "pollable"      (type (;17;)))
+(alias export 11 "input-stream"  (type (;18;)))
+(type (;19;) (instance                               ;; wasi:http/types
+    (export (;0;) "fields" (type (sub resource)))    ;; defined here
+    ...
+    (alias outer 1 16 (type (;14;)))                 ;; used from io/streams
+    (export (;15;) "output-stream" (type (eq 14)))
+    (alias outer 1 17 (type (;32;)))
+    (export (;33;) "pollable" (type (eq 32)))
+    (alias outer 1 18 (type (;38;)))
+    (export (;39;) "input-stream" (type (eq 38)))
+    ...))
+(import "wasi:http/types@0.2.0" (instance (;12;) (type 19)))
+```
+
+`wasm-tools` outer-aliases every `use`d type, resource or not (`outgoing-handler`'s
+instance type aliases the `error-code` VARIANT too). Only resources strictly REQUIRE it
+(non-resource component types are structural), but following the tool exactly is the shape
+to aim at.
+
+## The pieces of new machinery, in order
+
+- **A. `am.ik.wit`: `WitResolver` must report a resolved type's OWNER.** `resolveType`
+  returns the defining item and throws the owning interface away — precisely the
+  information the encoder needs. Add an owner-returning sibling; keep it
+  language-independent.
+- **B. `am.ik.wasm`: `ComponentWriter.instanceDeclAliasOuterType(count, outerTypeIndex)`**
+  — the instance-type declaration `0x02` (alias) / sort `0x03` (type) / target `0x02`
+  (outer). It appends to the instance type's local type index space, like
+  `instanceDeclType`. Pin it with a reference probe against `wasm-tools`, per the
+  `.kb/wit.md` rule.
+- **C. `appendUserImports` + `WitComponentTypeEncoder`: dependency-ordered imports with
+  outer-aliased `use`d types**, keyed by `(defining interface's canonical id, type name)` so
+  identity holds across separate `wit-import` directives and even separate WIT files. A
+  foreign RESOURCE whose owning interface is not also wit-imported is a compile error naming
+  the WIT line ("also `rontolisp:wit-import` <id>").
+- **D. resource `drop` binding** (`<resource>-drop`, bound only when textually referenced so
+  every existing artifact stays byte-identical; a provider member on interpreter/JVM; a
+  no-op defun on Preview 1; `canon resource.drop` on `--component`).
+
+Only then **E**: a hand-written Lisp fetch, E2E against wasmtime's real `wasi:http` — that
+is the proof, and it needs no `fetch.lisp` and no blob deletion. Then **F**: `fetch.lisp` +
+its splice. Then **G**: delete the blobs.
+
+## Progress, 2026-07-14 (uncommitted, working tree)
+
+**A, B, C DONE. E PROVEN.** A fetch written entirely in Lisp over wit-imported
+`wasi:io/{poll,error,streams}` + `wasi:http/{types,outgoing-handler}` prints `200` and the
+response body against **wasmtime's real `wasi:http` host**
+(`wasmtime run -W gc=y -W exceptions=y -S http=y`). Full suite 3653/0. A component with no
+user imports is byte-identical (rebuilt a fetch component before/after and diffed).
+
+- **A** — `WitResolver.resolveOwned` (the defining interface of a resolved type) and
+  `resolveOwnedDeep`.
+- **B** — `ComponentWriter.instanceDeclAliasOuterType`, pinned by
+  `ComponentWriterTest.instanceTypeAliasesAUsedTypeFromTheEnclosingComponent`: the 258
+  golden bytes are the REAL `wasi:io/streams` instance type, lifted out of a fetch component
+  with `wasm-tools dump`.
+- **C** — `WitComponentTypeEncoder` runs twice (collect foreign resources -> emit with their
+  outer indices), `WasmComponentImportCompiler.inDependencyOrder` sorts the imports once
+  where they are collected (so the wiring, the core instances and the instantiation args
+  cannot disagree), `WasmComponentBuilder.appendUserImports` interleaves
+  alias-out / type / import per interface, and `userImportTypes` replaces `userIfaces` in
+  the three `appendFuncExports` type cursors.
+
+Three things the work forced, all of which turned out to be right:
+
+- **A type-only interface import is legal under `--component`.** `wasi:io/error` is imported
+  purely to own the `error` resource that `wasi:io/streams`' `stream-error` carries; a real
+  fetch component's instance type for it is one resource and ZERO functions. So
+  "the program calls none of its functions" no longer fires on the component path — it
+  defers to `appendUserImports`, which is the only place that sees every import and can
+  tell an unused interface from a type provider. Both the encoder and `WitImportWorldEmitter`
+  take the resources they must DECLARE (an instance type can only be projected from for a
+  name it exports; a package block whose `use` clause points at nothing is not a document).
+- **A TYPE ONLY MEANS SOMETHING WITH ITS SCOPE, and the scope CHANGES as a walk descends.**
+  Follow a `use` clause into another interface and you are looking at ITS types, whose
+  internal references the starting scope never imported: `outgoing-handler` uses
+  `error-code`, whose `DNS-error` case carries a `DNS-error-payload` it has never heard of.
+  A latent bug that keyvalue (self-contained) never hit. **Fully threaded** —
+  `WitResolver.resolveOwned` reports the OWNER; `WitCanonicalAbi` carries a scope and hands
+  out `scopedTo` siblings, and `VariantInfo`/`RecordInfo` carry the `abi` their payload /
+  field types are written in (a consumer that gets those types back HAS to keep walking
+  them, and doing that against the original scope is how a layout silently comes out
+  wrong); the gate, the type encoder, the import codegen and `WitImportWorldEmitter` all
+  thread it. Resolution stays STRICT — an earlier round shipped a nearest-wins
+  `resolveOwnedDeep` search instead, and it is **deleted**: strict resolution is what caught
+  the one consumer that had been missed (`WitImportWorldEmitter`, which runs on EVERY
+  component compile because `componentWit()` is recorded there, not just under `--emit-wit`).
+- **`--emit-wit`'s import side prints `use` clauses now**, rather than copying a foreign
+  type into the wrong package block — which for a `resource` would have printed a document
+  claiming two unrelated types where the component has one. A type ALIAS the bound surface
+  reaches is printed too (`type headers = fields`): transparent at the ABI boundary is not
+  transparent in the document, and a signature can name it.
+
+Gotcha for whoever writes `fetch.lisp`: the `scheme` variant's cases are `HTTP` / `HTTPS`,
+so the keyword is `:HTTP`, not `:http` (keywords are case-preserving, and one naming no case
+traps `unreachable`).
+
+### Left to do
+
+- **D — resource `drop`.** Still missing, and it is what stops a request BODY (see Blocker 1
+  above: `outgoing-body.finish` traps without dropping the child `output-stream`). The GET
+  probe gets away with leaking. Design is in `.todo/135`'s survey notes and the
+  `WasmServeComponentBuilder:210-217` precedent.
+- **F** — `fetch.lisp` + `FetchLibrary` (component-path-only splice, inline WIT on the
+  classpath; the ordering trap is that `WitImportInliner` runs BEFORE the library splices).
+- **G** — delete the blobs, the `H_*` constants, `buildHttp`; regen the WIT fixtures; the
+  `rontolisp` package function roster in `ci-spec.yaml` (fetch becomes a Lisp defun). Also
+  the `--emit-wit` ORACLE (`WitOracleE2eTest`) has never been run against a cross-interface
+  import: the world we print is a coherent document and re-parses, but whether it is
+  BYTE-identical to `wasm-tools component wit` on the same bytes is unmeasured. Measure it
+  before shipping, and if it differs, decide deliberately (the fixed-variant fixtures are
+  byte-diffed; nothing forces the user-import side to be).
 
 Two things todo 133 leaves you:
 
 - `fields.set(name, value: list<list<u8>>)` and `from-list` do NOT cross (a `list<T>`
   argument is still a compile error). Build headers with `fields.append(name,
-  value: list<u8>)`, which does.
-- The new collision guard (`WasmComponentBuilder.rejectAdapterImportCollisions`) rejects a
-  `wit-import` of an interface the blob already imports. So `fetch.lisp` must **replace**
-  the `buildHttp` blob's `wasi:http` / `wasi:io` imports, not sit beside them — which is
-  the invariant that keeps this migration honest, but it does mean the "keep the WAT
-  adapter alive while the Lisp path is built" plan below needs the two paths selected
-  exclusively (they already are: `emitHttpImport`).
+  value: list<u8>)`, which does. `fields.entries()` — a `list<T>` RESULT — DOES lift (into
+  a list of 2-element lists), so response headers can be read.
+- The collision guard (`WasmComponentBuilder.rejectAdapterImportCollisions`) rejects a
+  `wit-import` of an interface the blob already imports. **Measured: there is no collision
+  on the plain `wasmtime run` path** — a WIT-driven fetch has no `rontolisp:fetch` call
+  site, so `usesHttp` is false and the **base** blob is selected, whose surface is WASI 0.3
+  only (`uni.wit` carries no `wasi:io/*` or `wasi:http/*`). **Serve + fetch is the
+  exception**: the serve blob's fixed surface really does import `wasi:http/types`, so a
+  spliced `fetch.lisp` collides there. Keep the serve+fetch WAT variant selected as-is
+  until `.todo/135` turns the serve blob's own `wasi:http` imports into user imports too —
+  that is when `http-server-client` finally collapses, and it is why 135's definition of
+  done claims the collapse while this file's does too. Neither can do it alone.
 
 ## What goes away
 

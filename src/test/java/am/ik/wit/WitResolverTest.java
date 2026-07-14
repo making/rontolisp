@@ -253,6 +253,56 @@ class WitResolverTest {
 	}
 
 	@Test
+	void reportsTheInterfaceThatDefinesAResolvedType() {
+		WitResolver resolver = resolver(KEYVALUE);
+		WitItem.InterfaceDef store = iface(resolver, "store");
+		WitItem.InterfaceDef types = iface(resolver, "types");
+		// A type the interface defines itself: the owner is the interface.
+		WitResolver.Owned bucket = Objects.requireNonNull(resolver.resolveOwned(store, "bucket"));
+		assertThat(bucket.item()).isInstanceOf(WitItem.ResourceDef.class);
+		assertThat(bucket.owner()).isSameAs(store);
+		// A type it merely USES: the owner is the interface the `use` clause names, which
+		// is the whole point -- a component-model consumer must alias a used resource out
+		// of the DEFINING instance rather than re-declare it (a resource is nominal).
+		WitResolver.Owned error = Objects.requireNonNull(resolver.resolveOwned(store, "error"));
+		assertThat(error.item()).isInstanceOf(WitItem.ResourceDef.class);
+		assertThat(error.owner()).isSameAs(types);
+		assertThat(resolver.canonicalId(error.owner())).isEqualTo("wasi:keyvalue/types@0.2.0");
+		// Unresolvable stays null, exactly as resolveType does.
+		assertThat(resolver.resolveOwned(store, "nope")).isNull();
+	}
+
+	@Test
+	void reportsTheOwnerAndTheOwnersOwnNameForATypeResolvedThroughAnAlias() {
+		// `use types.{error as io-error}` -- the shape wasi:http/types writes for
+		// wasi:io/error's `error` resource. The local spelling is `io-error`, but the
+		// component-model type is the OWNER's: an encoder has to alias `error` (not
+		// `io-error`) out of the wasi:io/error instance, because that is the name that
+		// instance exports. So resolveOwned must report the definition's own name and the
+		// interface it sits in, not the importing scope's alias.
+		WitResolver resolver = resolver("""
+				package root:component;
+
+				interface api {
+				  use types.{error as io-error};
+
+				  fail: func() -> io-error;
+				}
+
+				interface types {
+				  resource error;
+				}
+				""");
+		WitItem.InterfaceDef api = iface(resolver, "api");
+		WitItem.InterfaceDef types = iface(resolver, "types");
+		WitResolver.Owned owned = Objects.requireNonNull(resolver.resolveOwned(api, "io-error"));
+		assertThat(owned.owner()).isSameAs(types);
+		assertThat(owned.item()).isInstanceOfSatisfying(WitItem.ResourceDef.class,
+				resource -> assertThat(resource.name()).isEqualTo("error"));
+		assertThat(owned.item()).isSameAs(resolver.resolveType(types, "error"));
+	}
+
+	@Test
 	void resolvesThroughAnAliasedUseName() {
 		WitResolver resolver = resolver("""
 				package root:component;
@@ -272,6 +322,58 @@ class WitResolverTest {
 			.isSameAs(resolver.resolveType(iface(resolver, "types"), "error"));
 		// `as` RENAMES: the source spelling is not in scope in the importing interface.
 		assertThat(resolver.resolveType(api, "error")).isNull();
+	}
+
+	@Test
+	void aTypeAUseClauseDidNotImportDoesNotResolveInTheImportingScope() {
+		// The strictness that makes threading the DEFINING scope through a type-structure
+		// walk necessary rather than merely tidy. This is wasi:http in miniature:
+		// `outgoing-handler` uses `error-code` from `types`, and `error-code`'s
+		// `DNS-error`
+		// case carries a `DNS-error-payload` that `outgoing-handler` never imported and
+		// cannot see. A walk that descends into the variant's payloads has therefore left
+		// the scope it started in: it must resolve them in `types`, the owner reported
+		// for
+		// `error-code`. Resolution stays strict here -- a lenient "look everywhere"
+		// search
+		// would paper over the bug and pick a same-named type from the wrong interface.
+		WitResolver resolver = resolver("""
+				package wasi:http@0.2.0;
+
+				interface types {
+				  record DNS-error-payload {
+				    rcode: option<string>,
+				    info-code: option<u16>
+				  }
+
+				  variant error-code {
+				    DNS-timeout,
+				    DNS-error(DNS-error-payload),
+				    connection-refused
+				  }
+				}
+
+				interface outgoing-handler {
+				  use types.{error-code};
+
+				  handle: func(request: u32) -> result<u32, error-code>;
+				}
+				""");
+		WitItem.InterfaceDef handler = iface(resolver, "outgoing-handler");
+		WitItem.InterfaceDef types = iface(resolver, "types");
+		// The used type resolves, and hands back the scope its cases are written in.
+		WitResolver.Owned errorCode = Objects.requireNonNull(resolver.resolveOwned(handler, "error-code"));
+		assertThat(errorCode.item()).isInstanceOf(WitItem.VariantDef.class);
+		assertThat(errorCode.owner()).isSameAs(types);
+		// Its payload type does NOT: the use clause imported `error-code` and nothing
+		// else.
+		assertThat(resolver.resolveOwned(handler, "DNS-error-payload")).isNull();
+		assertThat(resolver.resolveType(handler, "DNS-error-payload")).isNull();
+		// In the owner's scope -- the one the walk continues in -- it does.
+		WitResolver.Owned payload = Objects
+			.requireNonNull(resolver.resolveOwned(errorCode.owner(), "DNS-error-payload"));
+		assertThat(payload.item()).isInstanceOf(WitItem.RecordDef.class);
+		assertThat(payload.owner()).isSameAs(types);
 	}
 
 	@Test

@@ -69,6 +69,38 @@ class WitImportDirectiveTest {
 			}
 			""";
 
+	// wasi:http in miniature: `outgoing-handler` uses `error-code` from `types`, and
+	// `error-code`'s `DNS-error` case carries a `DNS-error-payload` record that
+	// `outgoing-handler` never imported. The gate walks type structure, so it meets that
+	// payload -- and can only resolve it in the interface that DEFINES the variant.
+	private static final String HTTP = """
+			package wasi:http@0.2.0;
+
+			interface types {
+			  record DNS-error-payload {
+			    rcode: option<string>,
+			    info-code: option<u16>
+			  }
+
+			  variant error-code {
+			    DNS-timeout,
+			    DNS-error(DNS-error-payload),
+			    connection-refused,
+			    internal-error(option<string>)
+			  }
+
+			  resource outgoing-request;
+
+			  resource future-incoming-response;
+			}
+
+			interface outgoing-handler {
+			  use types.{outgoing-request, future-incoming-response, error-code};
+
+			  handle: func(request: outgoing-request) -> result<future-incoming-response, error-code>;
+			}
+			""";
+
 	private static final String TWO_INTERFACES = """
 			package example:app@0.1.0;
 
@@ -395,6 +427,70 @@ class WitImportDirectiveTest {
 			.hasMessageStartingWith("kv.wit:10: 'save': the WIT type of parameter 'p' does not cross the Preview 1 "
 					+ "WASM import boundary")
 			.hasMessageContaining("PLIST");
+	}
+
+	@Test
+	void theComponentGateWalksAUsedVariantIntoTheScopeThatDefinesIt() {
+		// The gate walks type structure, and the walk crosses a use clause here:
+		// `handle`'s
+		// result is a `result<_, error-code>`, `error-code` belongs to `types`, and its
+		// DNS-error case carries a `DNS-error-payload` that `outgoing-handler` never
+		// imported. Judged in the scope the walk STARTED in, that payload is an undefined
+		// type and the whole component import is refused -- which is what this used to
+		// do.
+		// Judged in the scope that WROTE it, it is a record, and the canonical ABI
+		// marshals
+		// it.
+		Directive directive = new Directive(WIT, "wasi:http/outgoing-handler@0.2.0", null, null, FieldStyle.CAMEL);
+		List<LispVal> forms = WitImportDirective.lower(directive, HTTP, WIT, Backend.WASM_COMPONENT);
+		// A result-returning function is bound as the raw envelope member plus the public
+		// wrapper that unwraps it (and signals the error arm).
+		assertThat(forms).hasSize(2);
+		assertThat(forms.get(0).print())
+			.startsWith("(rontolisp::%component-import \"wasi:http/outgoing-handler@0.2.0\" \"package wasi:http@0.2.0;")
+			.endsWith("(\"handle\" \"%handle\"))");
+		assertThat(forms.get(1).print())
+			.isEqualTo("(defun handle (request) (rontolisp::%wit-result (%handle request)))");
+	}
+
+	@Test
+	void theComponentGateStillReportsAnUndefinedTypeAgainstTheWitLine() {
+		// Following a use clause is not the same as searching every interface in the
+		// file:
+		// `DNS-error-payload` is defined in `types`, but `outgoing-handler` imported
+		// `error-code` alone, so writing the payload type in ITS signature is an
+		// undefined
+		// reference -- resolving it anyway would silently bind a same-named type from
+		// whichever interface happened to be nearest.
+		String wit = """
+				package wasi:http@0.2.0;
+
+				interface types {
+				  record DNS-error-payload {
+				    rcode: option<string>
+				  }
+
+				  variant error-code {
+				    DNS-error(DNS-error-payload)
+				  }
+				}
+
+				interface outgoing-handler {
+				  use types.{error-code};
+
+				  describe: func(p: DNS-error-payload) -> string;
+				}
+				""";
+		Directive directive = new Directive(WIT, "wasi:http/outgoing-handler@0.2.0", null, null, FieldStyle.CAMEL);
+		assertThatThrownBy(() -> WitImportDirective.lower(directive, wit, WIT, Backend.WASM_COMPONENT))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("kv.wit:16: 'describe': the WIT type of parameter 'p' is 'DNS-error-payload', which the file "
+					+ "does not define (nor import with a use clause)");
+		// A name nothing defines anywhere is reported the same way, from the same gate.
+		assertThatThrownBy(() -> lowerApi("  save: func(p: point);", Backend.WASM_COMPONENT))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("kv.wit:4: 'save': the WIT type of parameter 'p' is 'point', which the file does not define "
+					+ "(nor import with a use clause)");
 	}
 
 	@Test

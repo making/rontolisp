@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import am.ik.wasm.ComponentWriter;
 import am.ik.wit.WitItem;
@@ -23,10 +24,54 @@ import org.jspecify.annotations.Nullable;
  * exports append to the instance type's LOCAL type index space (function exports do not).
  * References always point at already-declared indices, so everything is created on first
  * use, in function order.
+ *
+ * <p>
+ * <strong>A resource an interface {@code use}s from ANOTHER interface is not declared
+ * here.</strong> A component-model resource is NOMINAL, so {@code wasi:http/types}'s
+ * {@code input-stream} -- which it does not define but {@code use}s from
+ * {@code wasi:io/streams} -- has to BE that interface's type: the enclosing component
+ * projects it out of the defining instance ({@link ComponentWriter#aliasInstanceType})
+ * and this encoder points at that component type index with an
+ * {@link ComponentWriter#instanceDeclAliasOuterType alias outer}, then re-exports it
+ * under the name the {@code use} clause gives it. Declaring a fresh
+ * {@code (sub resource)} instead would mint a second, unrelated resource: the host's real
+ * instance has no such export to satisfy it, and a handle from one interface would index
+ * the other's table. Non-resource types stay structural (the component model compares
+ * them structurally), so a {@code use}d record / variant / enum is still inlined.
+ *
+ * <p>
+ * Because an {@code alias outer} needs a component type index that only exists once the
+ * DEFINING interface has been imported, encoding runs twice: a collecting pass (where
+ * {@link OuterResources} records what was asked for and answers a dummy index) tells the
+ * builder which types to alias out and in what order, and the emitting pass answers the
+ * real indices. Both passes traverse identically, so the local index space is the same.
  */
 final class WitComponentTypeEncoder {
 
+	/**
+	 * Supplies the component type index of a resource an interface {@code use}s from
+	 * another interface -- the index the enclosing component aliased it out of the
+	 * defining instance to.
+	 */
+	interface OuterResources {
+
+		/**
+		 * Returns the component type index of a foreign resource.
+		 * @param ownerIfaceId the canonical id of the interface that DEFINES the resource
+		 * @param resource the resource's name in that interface
+		 * @return the component type index (a dummy in the collecting pass)
+		 */
+		int indexOf(String ownerIfaceId, String resource);
+
+	}
+
 	private final WitCanonicalAbi abi;
+
+	private final WitResolver resolver;
+
+	private final WitItem.InterfaceDef iface;
+
+	private final OuterResources outer;
 
 	private final List<byte[]> decls = new ArrayList<>();
 
@@ -35,22 +80,69 @@ final class WitComponentTypeEncoder {
 
 	private int nextLocal;
 
-	private WitComponentTypeEncoder(WitCanonicalAbi abi) {
-		this.abi = abi;
+	private WitComponentTypeEncoder(WasmComponentImportCompiler.Import imported, OuterResources outer) {
+		this.resolver = imported.resolver();
+		this.iface = imported.iface();
+		this.abi = new WitCanonicalAbi(this.resolver, this.iface);
+		this.outer = outer;
 	}
 
 	/**
-	 * Encodes the instance type of the given import (its bound functions only).
+	 * Encodes the instance type of the given import: the resources other imported
+	 * interfaces project out of it, then its bound functions.
 	 * @param imported the parsed component import
+	 * @param outer the component type indices of the resources this interface uses from
+	 * other interfaces
+	 * @param provided the resources this interface must EXPORT because another imported
+	 * interface uses them -- an instance type can only be projected from
+	 * ({@link ComponentWriter#aliasInstanceType}) for a name it exports, and a function
+	 * signature is not the only thing that can reach a resource. An interface may end up
+	 * with these and no functions at all: a real fetch component's {@code wasi:io/error}
+	 * instance type is exactly one resource and nothing else.
 	 * @return the encoded instance type bytes
 	 */
-	static byte[] encode(WasmComponentImportCompiler.Import imported) {
-		WitComponentTypeEncoder encoder = new WitComponentTypeEncoder(
-				new WitCanonicalAbi(imported.resolver(), imported.iface()));
+	static byte[] encode(WasmComponentImportCompiler.Import imported, OuterResources outer,
+			java.util.Set<String> provided) {
+		WitComponentTypeEncoder encoder = new WitComponentTypeEncoder(imported, outer);
+		for (String resource : provided) {
+			encoder.resourceIndex(encoder.abi, resource);
+		}
 		for (WasmComponentImportCompiler.Decl decl : imported.decls()) {
 			encoder.declareFunction(decl);
 		}
 		return ComponentWriter.instanceTypeOf(encoder.decls);
+	}
+
+	/**
+	 * A resource an interface {@code use}s from another interface.
+	 *
+	 * @param ownerIfaceId the canonical id of the interface that DEFINES the resource
+	 * @param resource the resource's name in that interface (the name its instance
+	 * exports it under, and so the name to project it out by)
+	 */
+	record ForeignResource(String ownerIfaceId, String resource) {
+	}
+
+	/**
+	 * Returns the resources this import uses from OTHER interfaces, in the order the
+	 * encoder reaches them &mdash; the collecting pass. It runs the very same traversal
+	 * {@link #encode} does, so the caller cannot project a type the emitting pass will
+	 * not ask for, or miss one that it will.
+	 * @param imported the parsed component import
+	 * @return the foreign resources, deduplicated, in first-use order (empty for an
+	 * interface that uses none, which is every import before this machinery existed
+	 * &mdash; hence byte-identical output for them)
+	 */
+	static List<ForeignResource> foreignResourcesOf(WasmComponentImportCompiler.Import imported) {
+		final List<ForeignResource> found = new ArrayList<>();
+		final Map<String, Boolean> seen = new LinkedHashMap<>();
+		encode(imported, (ownerIfaceId, resource) -> {
+			if (seen.putIfAbsent(ownerIfaceId + "#" + resource, Boolean.TRUE) == null) {
+				found.add(new ForeignResource(ownerIfaceId, resource));
+			}
+			return 0; // a dummy: the collecting pass throws its bytes away
+		}, java.util.Set.of());
+		return found;
 	}
 
 	private void declareFunction(WasmComponentImportCompiler.Decl decl) {
@@ -59,73 +151,108 @@ final class WitComponentTypeEncoder {
 		List<byte[]> paramTypes = new ArrayList<>();
 		if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
 			paramNames.add("self");
-			paramTypes.add(ComponentWriter.valTypeIndex(borrowIndex(func.resource())));
+			paramTypes.add(ComponentWriter.valTypeIndex(borrowIndex(this.abi, func.resource())));
 		}
 		for (var param : func.def().func().params()) {
 			paramNames.add(param.name());
-			paramTypes.add(valType(param.type()));
+			paramTypes.add(valType(this.abi, param.type()));
 		}
 		WitType result = this.abi.resultType(func);
-		byte[] resultType = result == null ? null : valType(result);
+		byte[] resultType = result == null ? null : valType(this.abi, result);
 		int funcType = addDecl(ComponentWriter.funcTypeOf(paramNames, paramTypes, resultType));
 		this.decls.add(ComponentWriter.instanceDeclExportFunc(decl.field(), funcType));
 	}
 
-	// The encoded valtype operand of a WIT type use: a primitive code, or the local
-	// index of its (memoized, on-demand) type declaration.
-	private byte[] valType(WitType type) {
+	// The encoded valtype operand of a WIT type use: a primitive code, or the local index
+	// of its (memoized, on-demand) type declaration. `abi` is the scope the type's named
+	// references resolve in, and it CHANGES on the way down: a type reached through a
+	// `use`
+	// clause is written in the interface that defines it, and so are its fields and
+	// cases.
+	private byte[] valType(WitCanonicalAbi abi, WitType type) {
 		return switch (type) {
 			case WitType.Prim prim -> ComponentWriter.valTypePrim(primCode(prim.name()));
-			case WitType.ListOf list -> ComponentWriter.valTypeIndex(memoized("list<" + key(list.element()) + ">",
-					() -> ComponentWriter.definedListOf(valType(list.element()))));
-			case WitType.OptionOf opt -> ComponentWriter.valTypeIndex(memoized("option<" + key(opt.element()) + ">",
-					() -> ComponentWriter.definedOptionOf(valType(opt.element()))));
+			case WitType.ListOf list -> ComponentWriter.valTypeIndex(memoized("list<" + key(abi, list.element()) + ">",
+					() -> ComponentWriter.definedListOf(valType(abi, list.element()))));
+			case WitType.OptionOf opt ->
+				ComponentWriter.valTypeIndex(memoized("option<" + key(abi, opt.element()) + ">",
+						() -> ComponentWriter.definedOptionOf(valType(abi, opt.element()))));
 			case WitType.ResultOf res -> ComponentWriter.valTypeIndex(memoized(
-					"result<" + (res.ok() == null ? "_" : key(res.ok())) + ","
-							+ (res.err() == null ? "_" : key(res.err())) + ">",
-					() -> ComponentWriter.definedResultOf(res.ok() == null ? null : valType(res.ok()),
-							res.err() == null ? null : valType(res.err()))));
-			case WitType.TupleOf tuple -> ComponentWriter.valTypeIndex(memoized(key(tuple), () -> {
+					"result<" + (res.ok() == null ? "_" : key(abi, res.ok())) + ","
+							+ (res.err() == null ? "_" : key(abi, res.err())) + ">",
+					() -> ComponentWriter.definedResultOf(res.ok() == null ? null : valType(abi, res.ok()),
+							res.err() == null ? null : valType(abi, res.err()))));
+			case WitType.TupleOf tuple -> ComponentWriter.valTypeIndex(memoized(key(abi, tuple), () -> {
 				List<byte[]> elements = new ArrayList<>();
 				for (WitType element : tuple.elements()) {
-					elements.add(valType(element));
+					elements.add(valType(abi, element));
 				}
 				return ComponentWriter.definedTupleOf(elements);
 			}));
-			case WitType.BorrowOf borrow -> ComponentWriter.valTypeIndex(borrowIndex(borrow.resource()));
-			case WitType.OwnOf own -> ComponentWriter.valTypeIndex(ownIndex(own.resource()));
-			case WitType.Named named -> switch (this.abi.resolveNamed(named)) {
-				case WitItem.TypeAlias alias -> valType(alias.target());
-				// A bare resource reference is an own handle (WIT's rule; borrow must be
-				// explicit).
-				case WitItem.ResourceDef resource -> ComponentWriter.valTypeIndex(ownIndex(resource.name()));
-				case WitItem.RecordDef record -> ComponentWriter.valTypeIndex(namedIndex(record.name(), () -> {
-					List<String> names = new ArrayList<>();
-					List<byte[]> types = new ArrayList<>();
-					for (WitItem.Field field : record.fields()) {
-						names.add(field.name());
-						types.add(valType(field.type()));
-					}
-					return ComponentWriter.definedRecordOf(names, types);
-				}));
-				case WitItem.VariantDef variant -> ComponentWriter.valTypeIndex(namedIndex(variant.name(), () -> {
-					List<String> names = new ArrayList<>();
-					List<byte @Nullable []> payloads = new ArrayList<>();
-					for (WitItem.Case c : variant.cases()) {
-						names.add(c.name());
-						payloads.add(c.payload() == null ? null : valType(c.payload()));
-					}
-					return ComponentWriter.definedVariantOf(names, payloads);
-				}));
-				case WitItem.EnumDef en -> ComponentWriter.valTypeIndex(namedIndex(en.name(),
-						() -> ComponentWriter.definedEnumOf(en.cases().stream().map(WitItem.Case::name).toList())));
-				case WitItem.FlagsDef flags -> ComponentWriter.valTypeIndex(namedIndex(flags.name(),
-						() -> ComponentWriter.definedFlagsOf(flags.cases().stream().map(WitItem.Case::name).toList())));
-				default -> throw new UnsupportedOperationException(
-						"the WIT type '" + named.name() + "' cannot be encoded as a component import type");
-			};
+			case WitType.BorrowOf borrow -> ComponentWriter.valTypeIndex(borrowIndex(abi, borrow.resource()));
+			case WitType.OwnOf own -> ComponentWriter.valTypeIndex(ownIndex(abi, own.resource()));
+			case WitType.Named named -> {
+				WitResolver.Owned owned = abi.resolveOwned(named);
+				// The interface that DEFINES the type is where its own members resolve.
+				WitCanonicalAbi in = abi.scopedTo(owned.owner());
+				String id = nominalId(owned);
+				yield switch (owned.item()) {
+					case WitItem.TypeAlias alias -> valType(in, alias.target());
+					// A bare resource reference is an own handle (WIT's rule; borrow must
+					// be
+					// explicit). Key it by the name THIS interface writes -- a `use`
+					// clause
+					// may rename the resource, and resourceIndex resolves that name
+					// itself.
+					case WitItem.ResourceDef ignored -> ComponentWriter.valTypeIndex(ownIndex(abi, named.name()));
+					case WitItem.RecordDef record -> ComponentWriter.valTypeIndex(namedIndex(id, named.name(), () -> {
+						List<String> names = new ArrayList<>();
+						List<byte[]> types = new ArrayList<>();
+						for (WitItem.Field field : record.fields()) {
+							names.add(field.name());
+							types.add(valType(in, field.type()));
+						}
+						return ComponentWriter.definedRecordOf(names, types);
+					}));
+					case WitItem.VariantDef variant -> ComponentWriter.valTypeIndex(namedIndex(id, named.name(), () -> {
+						List<String> names = new ArrayList<>();
+						List<byte @Nullable []> payloads = new ArrayList<>();
+						for (WitItem.Case c : variant.cases()) {
+							names.add(c.name());
+							payloads.add(c.payload() == null ? null : valType(in, c.payload()));
+						}
+						return ComponentWriter.definedVariantOf(names, payloads);
+					}));
+					case WitItem.EnumDef en -> ComponentWriter.valTypeIndex(namedIndex(id, named.name(),
+							() -> ComponentWriter.definedEnumOf(en.cases().stream().map(WitItem.Case::name).toList())));
+					case WitItem.FlagsDef flags ->
+						ComponentWriter.valTypeIndex(namedIndex(id, named.name(), () -> ComponentWriter
+							.definedFlagsOf(flags.cases().stream().map(WitItem.Case::name).toList())));
+					default -> throw new UnsupportedOperationException(
+							"the WIT type '" + named.name() + "' cannot be encoded as a component import type");
+				};
+			}
 			default -> throw new UnsupportedOperationException("the WIT type '" + type.getClass().getSimpleName()
 					+ "' cannot be encoded as a component import type");
+		};
+	}
+
+	// A named type's identity across scopes: "<defining interface>#<its own name>". Two
+	// interfaces reaching one type by different local names must share one declaration.
+	private String nominalId(WitResolver.Owned owned) {
+		return Objects.requireNonNull(this.resolver.canonicalId(owned.owner()), "canonical id") + "#"
+				+ definedName(owned.item());
+	}
+
+	private static String definedName(WitItem item) {
+		return switch (item) {
+			case WitItem.TypeAlias alias -> alias.name();
+			case WitItem.RecordDef def -> def.name();
+			case WitItem.VariantDef def -> def.name();
+			case WitItem.EnumDef def -> def.name();
+			case WitItem.FlagsDef def -> def.name();
+			case WitItem.ResourceDef def -> def.name();
+			default -> throw new IllegalStateException("not a type definition: " + item);
 		};
 	}
 
@@ -146,38 +273,62 @@ final class WitComponentTypeEncoder {
 	// export of the WIT name; references use the exported index (the wasm-tools shape).
 	// get/put rather than computeIfAbsent: encoding the definition can recursively
 	// declare (and memoize) the types its fields use.
-	private int namedIndex(String name, java.util.function.Supplier<byte[]> encode) {
-		Integer existing = this.memo.get("named:" + name);
+	private int namedIndex(String nominalId, String exportName, java.util.function.Supplier<byte[]> encode) {
+		Integer existing = this.memo.get("named:" + nominalId);
 		if (existing != null) {
 			return existing;
 		}
 		byte[] encoded = encode.get();
 		int defined = addDecl(encoded);
-		this.decls.add(ComponentWriter.instanceDeclExportTypeEq(name, defined));
+		this.decls.add(ComponentWriter.instanceDeclExportTypeEq(exportName, defined));
 		int exported = this.nextLocal++;
-		this.memo.put("named:" + name, exported);
+		this.memo.put("named:" + nominalId, exported);
 		return exported;
 	}
 
-	private int resourceIndex(String name) {
-		Integer existing = this.memo.get("resource:" + name);
+	// The local type index of a resource, BY THE NAME THE GIVEN SCOPE CALLS IT (a `use`
+	// clause may rename it). A resource the encoded interface defines is declared here;
+	// one
+	// it uses from another interface is aliased in from the enclosing component -- see
+	// the
+	// class comment for why a nominal type cannot be re-declared. The memo is keyed by
+	// the
+	// resource's true identity, so two scopes reaching one resource share one
+	// declaration.
+	private int resourceIndex(WitCanonicalAbi abi, String localName) {
+		WitResolver.Owned owned = abi.resolveOwned(new WitType.Named(localName));
+		if (!(owned.item() instanceof WitItem.ResourceDef def)) {
+			throw new UnsupportedOperationException("the WIT type '" + localName + "' is not a resource");
+		}
+		String id = nominalId(owned);
+		Integer existing = this.memo.get("resource:" + id);
 		if (existing != null) {
 			return existing;
 		}
-		this.decls.add(ComponentWriter.instanceDeclExportResource(name));
-		int index = this.nextLocal++;
-		this.memo.put("resource:" + name, index);
+		int index;
+		if (owned.owner() == this.iface) {
+			this.decls.add(ComponentWriter.instanceDeclExportResource(localName));
+			index = this.nextLocal++;
+		}
+		else {
+			String ownerId = Objects.requireNonNull(this.resolver.canonicalId(owned.owner()));
+			this.decls.add(ComponentWriter.instanceDeclAliasOuterType(1, this.outer.indexOf(ownerId, def.name())));
+			int aliased = this.nextLocal++;
+			this.decls.add(ComponentWriter.instanceDeclExportTypeEq(localName, aliased));
+			index = this.nextLocal++;
+		}
+		this.memo.put("resource:" + id, index);
 		return index;
 	}
 
-	private int borrowIndex(String resource) {
-		int resourceIdx = resourceIndex(resource);
-		return memoized("borrow:" + resource, () -> ComponentWriter.definedBorrow(resourceIdx));
+	private int borrowIndex(WitCanonicalAbi abi, String resource) {
+		int resourceIdx = resourceIndex(abi, resource);
+		return memoized("borrow:" + resourceIdx, () -> ComponentWriter.definedBorrow(resourceIdx));
 	}
 
-	private int ownIndex(String resource) {
-		int resourceIdx = resourceIndex(resource);
-		return memoized("own:" + resource, () -> ComponentWriter.definedOwn(resourceIdx));
+	private int ownIndex(WitCanonicalAbi abi, String resource) {
+		int resourceIdx = resourceIndex(abi, resource);
+		return memoized("own:" + resourceIdx, () -> ComponentWriter.definedOwn(resourceIdx));
 	}
 
 	private int addDecl(byte[] definedType) {
@@ -185,25 +336,27 @@ final class WitComponentTypeEncoder {
 		return this.nextLocal++;
 	}
 
-	// A stable structural key for memoization (named types key by name, which is unique
-	// within the interface scope).
-	private String key(WitType type) {
+	// A stable structural key for memoization. A named type keys by its NOMINAL identity
+	// (defining interface + name), so one type reached from two scopes -- or under two
+	// `use` aliases -- memoizes to one declaration.
+	private String key(WitCanonicalAbi abi, WitType type) {
 		return switch (type) {
 			case WitType.Prim prim -> prim.name();
-			case WitType.ListOf list -> "list<" + key(list.element()) + ">";
-			case WitType.OptionOf opt -> "option<" + key(opt.element()) + ">";
-			case WitType.ResultOf res -> "result<" + (res.ok() == null ? "_" : key(res.ok())) + ","
-					+ (res.err() == null ? "_" : key(res.err())) + ">";
+			case WitType.ListOf list -> "list<" + key(abi, list.element()) + ">";
+			case WitType.OptionOf opt -> "option<" + key(abi, opt.element()) + ">";
+			case WitType.ResultOf res -> "result<" + (res.ok() == null ? "_" : key(abi, res.ok())) + ","
+					+ (res.err() == null ? "_" : key(abi, res.err())) + ">";
 			case WitType.TupleOf tuple -> {
 				StringBuilder sb = new StringBuilder("tuple<");
 				for (WitType element : tuple.elements()) {
-					sb.append(key(element)).append(',');
+					sb.append(key(abi, element)).append(',');
 				}
 				yield sb.append('>').toString();
 			}
-			case WitType.BorrowOf borrow -> "borrow<" + borrow.resource() + ">";
-			case WitType.OwnOf own -> "own<" + own.resource() + ">";
-			case WitType.Named named -> "named:" + named.name();
+			case WitType.BorrowOf borrow ->
+				"borrow<" + nominalId(abi.resolveOwned(new WitType.Named(borrow.resource()))) + ">";
+			case WitType.OwnOf own -> "own<" + nominalId(abi.resolveOwned(new WitType.Named(own.resource()))) + ">";
+			case WitType.Named named -> "named:" + nominalId(abi.resolveOwned(named));
 			default -> type.toString();
 		};
 	}

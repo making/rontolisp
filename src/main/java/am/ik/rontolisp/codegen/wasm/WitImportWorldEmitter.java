@@ -14,6 +14,7 @@ import am.ik.wit.WitItem;
 import am.ik.wit.WitMeta;
 import am.ik.wit.WitPackageName;
 import am.ik.wit.WitRef;
+import am.ik.wit.WitResolver;
 import am.ik.wit.WitType;
 
 /**
@@ -27,9 +28,18 @@ import am.ik.wit.WitType;
  *
  * <p>
  * The item order mirrors {@link WitComponentTypeEncoder}'s declaration order, which is
- * what the tool reads back: named definitions (resources, variants, records, enums,
- * flags) in the order the traversal first reaches them, then the freestanding functions.
- * Doc comments and gates are dropped -- a component's type does not carry them.
+ * what the tool reads back: {@code use} clauses, then named definitions (resources,
+ * variants, records, enums, flags) in the order the traversal first reaches them, then
+ * the freestanding functions. Doc comments and gates are dropped -- a component's type
+ * does not carry them.
+ *
+ * <p>
+ * A type the interface {@code use}s from ANOTHER interface is emitted as a {@code use}
+ * clause, not copied in: it is that interface's type (nominally so, for a
+ * {@code resource}), and duplicating the definition into this package block would print a
+ * document claiming two unrelated types where the component has one -- see
+ * {@link WitComponentTypeEncoder}. Which means the type walk has to track the scope it is
+ * in, exactly as the encoder and the layout calculator do.
  */
 final class WitImportWorldEmitter {
 
@@ -37,8 +47,12 @@ final class WitImportWorldEmitter {
 
 	private final WasmComponentImportCompiler.Import imported;
 
-	// Discovery-ordered named definitions: the WIT name -> the item to print.
+	// Discovery-ordered named definitions THIS interface owns: the WIT name -> the item.
 	private final Map<String, WitItem> named = new LinkedHashMap<>();
+
+	// The types this interface uses from others: the defining interface -> the names, in
+	// discovery order. Printed as `use` clauses ahead of the definitions.
+	private final Map<WitItem.InterfaceDef, Set<String>> used = new LinkedHashMap<>();
 
 	// The bound methods of each resource, in binding order.
 	private final Map<String, List<WitItem>> resourceMembers = new LinkedHashMap<>();
@@ -66,11 +80,24 @@ final class WitImportWorldEmitter {
 	 * @return the package block items, in import order
 	 */
 	static List<WitItem> packageBlocks(List<WasmComponentImportCompiler.Import> imports) {
+		// The resources each interface must DECLARE because another one uses them. An
+		// interface can be imported purely to own a type (wasi:io/error owns the `error`
+		// resource that wasi:io/streams' `stream-error` carries), and its own bound
+		// functions -- there may be none at all -- would never reach it: printing the
+		// block
+		// without it would leave a `use` clause pointing at nothing.
+		Map<String, Set<String>> provides = new LinkedHashMap<>();
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			for (WitComponentTypeEncoder.ForeignResource foreign : WitComponentTypeEncoder
+				.foreignResourcesOf(imported)) {
+				provides.computeIfAbsent(foreign.ownerIfaceId(), id -> new LinkedHashSet<>()).add(foreign.resource());
+			}
+		}
 		Map<WitPackageName, List<WitItem>> byPackage = new LinkedHashMap<>();
 		for (WasmComponentImportCompiler.Import imported : imports) {
 			WitPackageName pkg = packageOf(imported.ifaceId());
 			byPackage.computeIfAbsent(pkg, ignored -> new ArrayList<>())
-				.add(new WitImportWorldEmitter(imported).iface());
+				.add(new WitImportWorldEmitter(imported).iface(provides.getOrDefault(imported.ifaceId(), Set.of())));
 		}
 		List<WitItem> blocks = new ArrayList<>();
 		byPackage
@@ -80,7 +107,10 @@ final class WitImportWorldEmitter {
 
 	// The pruned interface: the named definitions the bound functions reach, in discovery
 	// order, then the bound freestanding functions.
-	private WitItem.InterfaceDef iface() {
+	private WitItem.InterfaceDef iface(Set<String> provided) {
+		for (String resource : provided) {
+			discoverResource(resource);
+		}
 		List<WitItem.FuncDef> freestanding = new ArrayList<>();
 		for (WasmComponentImportCompiler.Decl decl : this.imported.decls()) {
 			var func = decl.func();
@@ -93,14 +123,18 @@ final class WitImportWorldEmitter {
 				freestanding.add(strip(func.def()));
 			}
 			for (var param : func.def().func().params()) {
-				discover(param.type());
+				discover(this.abi, param.type());
 			}
 			WitType result = this.abi.resultType(func);
 			if (result != null) {
-				discover(result);
+				discover(this.abi, result);
 			}
 		}
 		List<WitItem> items = new ArrayList<>();
+		this.used.forEach((owner,
+				names) -> items.add(new WitItem.Use(WitMeta.none(),
+						ref(Objects.requireNonNull(this.imported.resolver().canonicalId(owner))),
+						names.stream().map(name -> new WitItem.UseName(name, null)).toList())));
 		this.named
 			.forEach(
 					(name, item) -> items.add(
@@ -112,37 +146,40 @@ final class WitImportWorldEmitter {
 		return new WitItem.InterfaceDef(WitMeta.none(), this.imported.iface().name(), List.copyOf(items));
 	}
 
-	// Walks a type use, registering every named definition it reaches.
-	private void discover(WitType type) {
+	// Walks a type use, registering every named definition it reaches. `abi` is the scope
+	// the type's names resolve in: a definition reached through a `use` clause belongs to
+	// the interface that owns it, and so do its own fields and cases.
+	private void discover(WitCanonicalAbi abi, WitType type) {
 		switch (type) {
-			case WitType.ListOf list -> discover(list.element());
-			case WitType.OptionOf opt -> discover(opt.element());
+			case WitType.ListOf list -> discover(abi, list.element());
+			case WitType.OptionOf opt -> discover(abi, opt.element());
 			case WitType.ResultOf res -> {
 				if (res.ok() != null) {
-					discover(res.ok());
+					discover(abi, res.ok());
 				}
 				if (res.err() != null) {
-					discover(res.err());
+					discover(abi, res.err());
 				}
 			}
-			case WitType.TupleOf tuple -> tuple.elements().forEach(this::discover);
-			case WitType.BorrowOf borrow -> discoverResource(borrow.resource());
-			case WitType.OwnOf own -> discoverResource(own.resource());
-			case WitType.Named name -> discoverNamed(name);
+			case WitType.TupleOf tuple -> tuple.elements().forEach(element -> discover(abi, element));
+			case WitType.BorrowOf borrow -> discoverNamed(abi, new WitType.Named(borrow.resource()));
+			case WitType.OwnOf own -> discoverNamed(abi, new WitType.Named(own.resource()));
+			case WitType.Named name -> discoverNamed(abi, name);
 			default -> {
 				// a primitive: nothing to define
 			}
 		}
 	}
 
-	private void discoverNamed(WitType.Named reference) {
-		WitItem definition = this.abi.resolveNamed(reference);
+	private void discoverNamed(WitCanonicalAbi abi, WitType.Named reference) {
+		WitResolver.Owned owned = abi.resolveOwned(reference);
+		WitItem definition = owned.item();
 		String name = reference.name();
-		if (definition instanceof WitItem.TypeAlias alias) {
-			// An alias is transparent at the component boundary: the type it names is
-			// what
-			// the instance type declares.
-			discover(alias.target());
+		// A type this interface does not define is the OTHER interface's type: say so
+		// with
+		// a `use` clause rather than copying the definition into this package block.
+		if (owned.owner() != this.imported.iface()) {
+			this.used.computeIfAbsent(owned.owner(), ignored -> new LinkedHashSet<>()).add(name);
 			return;
 		}
 		if (definition instanceof WitItem.ResourceDef) {
@@ -152,11 +189,20 @@ final class WitImportWorldEmitter {
 		if (this.named.containsKey(name) || !this.visiting.add(name)) {
 			return;
 		}
+		WitCanonicalAbi in = abi.scopedTo(owned.owner());
 		switch (definition) {
+			case WitItem.TypeAlias alias -> {
+				// An alias is transparent at the ABI boundary, but NOT in the document: a
+				// bound signature can name it (`constructor(headers: headers)`), so
+				// leaving
+				// it out prints a block that references a type it never defines.
+				discover(in, alias.target());
+				this.named.put(name, new WitItem.TypeAlias(WitMeta.none(), name, alias.target()));
+			}
 			case WitItem.RecordDef record -> {
 				List<WitItem.Field> fields = new ArrayList<>();
 				for (WitItem.Field field : record.fields()) {
-					discover(field.type());
+					discover(in, field.type());
 					fields.add(new WitItem.Field(WitMeta.none(), field.name(), field.type()));
 				}
 				this.named.put(name, new WitItem.RecordDef(WitMeta.none(), name, List.copyOf(fields)));
@@ -165,7 +211,7 @@ final class WitImportWorldEmitter {
 				List<WitItem.Case> cases = new ArrayList<>();
 				for (WitItem.Case c : variant.cases()) {
 					if (c.payload() != null) {
-						discover(c.payload());
+						discover(in, c.payload());
 					}
 					cases.add(new WitItem.Case(WitMeta.none(), c.name(), c.payload()));
 				}

@@ -320,7 +320,18 @@ public final class WitImportDirective {
 			bindings.add(wasm ? wasmImportForm(name, module, directive.fieldStyle().apply(member), params, returns)
 					: providerDefun(name, ifaceId, member, params));
 		}
-		if (boundMembers.isEmpty()) {
+		// A component may import an interface purely for its TYPES: wasi:io/streams' own
+		// `stream-error` carries a wasi:io/error `error` resource, and a resource is its
+		// defining interface's type, so that interface has to be imported for the type to
+		// exist -- even though nothing calls its one function. (wasm-tools encodes
+		// exactly
+		// that: the wasi:io/error instance type of a real fetch component declares the
+		// resource and no functions at all.) Whether such an import is actually needed is
+		// only knowable once every import is in hand, so the component path defers the
+		// judgement to WasmComponentBuilder.appendUserImports. On every other backend an
+		// interface is a set of callable functions and nothing else, so an unused one is
+		// a mistake worth naming.
+		if (boundMembers.isEmpty() && !component) {
 			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(iface) + ": interface '"
 					+ iface.name() + "': the program calls none of its functions");
 		}
@@ -385,19 +396,34 @@ public final class WitImportDirective {
 		if (result == null) {
 			return false;
 		}
-		WitType resolved = resolveAliases(result, resolver, iface);
-		return resolved instanceof WitType.ResultOf;
+		return resolveAliases(result, resolver, iface).type() instanceof WitType.ResultOf;
 	}
 
-	private static WitType resolveAliases(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
-		if (type instanceof WitType.Named named
-				&& resolver.resolveType(iface, named.name()) instanceof WitItem.TypeAlias alias) {
-			return resolveAliases(alias.target(), resolver, iface);
+	/**
+	 * A WIT type together with the interface scope its named references resolve in. The
+	 * scope CHANGES as a walk descends: follow a {@code use} clause into another
+	 * interface and you are looking at THAT interface's types, whose own internal
+	 * references the starting scope never imported ({@code wasi:http/outgoing-handler}
+	 * uses {@code error-code} from {@code wasi:http/types}, and {@code error-code}'s
+	 * {@code DNS-error} case carries a {@code DNS-error-payload} it has never heard of).
+	 *
+	 * @param iface the interface the type is written in
+	 * @param type the type
+	 */
+	private record Scoped(WitItem.InterfaceDef iface, WitType type) {
+	}
+
+	// Follows a `type` alias chain (across interfaces) to the type it bottoms out at, and
+	// reports the scope THAT type is written in.
+	private static Scoped resolveAliases(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
+		if (type instanceof WitType.Named named) {
+			WitResolver.Owned owned = resolver.resolveOwned(iface, named.name());
+			if (owned != null && owned.item() instanceof WitItem.TypeAlias alias) {
+				return resolveAliases(alias.target(), resolver, owned.owner());
+			}
 		}
-		return type;
+		return new Scoped(iface, type);
 	}
-
-	// --- component-boundary validation: errors name the WIT line ---
 
 	// What the canonical-ABI wrapper codegen supports today. Results lift recursively
 	// from
@@ -420,12 +446,16 @@ public final class WitImportDirective {
 	private static void validateComponentParam(WitType type, String witPath, WitLocations locations,
 			WitResolver resolver, WitItem.InterfaceDef iface, WitResolver.Func func, String member, String what,
 			boolean optionAllowed) {
-		WitType t = resolveAliases(type, resolver, iface);
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		// From here on the type's names resolve in the interface that WROTE it, which is
+		// not necessarily the one this walk started in.
+		WitItem.InterfaceDef in = scoped.iface();
+		WitType t = scoped.type();
 		switch (t) {
 			case WitType.StreamOf ignored -> throw asyncOnly(witPath, locations, func, member, what);
 			case WitType.FutureOf ignored -> throw asyncOnly(witPath, locations, func, member, what);
 			case WitType.ListOf list -> {
-				if (!isU8(list.element(), resolver, iface)) {
+				if (!isU8(list.element(), resolver, in)) {
 					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '"
 							+ member + "': the WIT type of " + what
 							+ " is a list, which does not cross the component import "
@@ -444,35 +474,38 @@ public final class WitImportDirective {
 							+ "rontolisp value (an option is the value or nil, so `none` and `some(none)` would be the "
 							+ "same nil)");
 				}
-				validateComponentParam(opt.element(), witPath, locations, resolver, iface, func, member, what, false);
+				validateComponentParam(opt.element(), witPath, locations, resolver, in, func, member, what, false);
 			}
 			case WitType.ResultOf res -> {
 				if (res.ok() != null) {
-					validateComponentParam(res.ok(), witPath, locations, resolver, iface, func, member, what, true);
+					validateComponentParam(res.ok(), witPath, locations, resolver, in, func, member, what, true);
 				}
 				if (res.err() != null) {
-					validateComponentParam(res.err(), witPath, locations, resolver, iface, func, member, what, true);
+					validateComponentParam(res.err(), witPath, locations, resolver, in, func, member, what, true);
 				}
 			}
 			case WitType.TupleOf tuple -> {
 				for (WitType element : tuple.elements()) {
-					validateComponentParam(element, witPath, locations, resolver, iface, func, member, what, true);
+					validateComponentParam(element, witPath, locations, resolver, in, func, member, what, true);
 				}
 			}
 			case WitType.Named named -> {
-				WitItem definition = resolver.resolveType(iface, named.name());
-				switch (definition) {
+				WitResolver.Owned owned = resolver.resolveOwned(in, named.name());
+				// A definition's fields / cases are written in the interface that owns
+				// it.
+				WitItem.InterfaceDef owner = owned == null ? in : owned.owner();
+				switch (owned == null ? null : owned.item()) {
 					case WitItem.RecordDef record -> {
 						rejectEmptyRecord(record, witPath, locations, func, member, what);
 						for (WitItem.Field field : record.fields()) {
-							validateComponentParam(field.type(), witPath, locations, resolver, iface, func, member,
+							validateComponentParam(field.type(), witPath, locations, resolver, owner, func, member,
 									what, true);
 						}
 					}
 					case WitItem.VariantDef variant -> {
 						for (WitItem.Case c : variant.cases()) {
 							if (c.payload() != null) {
-								validateComponentParam(c.payload(), witPath, locations, resolver, iface, func, member,
+								validateComponentParam(c.payload(), witPath, locations, resolver, owner, func, member,
 										what, true);
 							}
 						}
@@ -512,7 +545,7 @@ public final class WitImportDirective {
 	}
 
 	private static boolean isU8(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
-		return resolveAliases(type, resolver, iface) instanceof WitType.Prim prim && "u8".equals(prim.name());
+		return resolveAliases(type, resolver, iface).type() instanceof WitType.Prim prim && "u8".equals(prim.name());
 	}
 
 	private static UnsupportedOperationException asyncOnly(String witPath, WitLocations locations,
@@ -531,41 +564,44 @@ public final class WitImportDirective {
 
 	private static void validateComponentResult(WitType type, String witPath, WitLocations locations,
 			WitResolver resolver, WitItem.InterfaceDef iface, WitResolver.Func func, String member, String what) {
-		WitType t = resolveAliases(type, resolver, iface);
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		WitItem.InterfaceDef in = scoped.iface();
+		WitType t = scoped.type();
 		switch (t) {
 			case WitType.StreamOf ignored -> throw asyncOnly(witPath, locations, func, member, what);
 			case WitType.FutureOf ignored -> throw asyncOnly(witPath, locations, func, member, what);
 			case WitType.ListOf list ->
-				validateComponentResult(list.element(), witPath, locations, resolver, iface, func, member, what);
+				validateComponentResult(list.element(), witPath, locations, resolver, in, func, member, what);
 			case WitType.OptionOf opt ->
-				validateComponentResult(opt.element(), witPath, locations, resolver, iface, func, member, what);
+				validateComponentResult(opt.element(), witPath, locations, resolver, in, func, member, what);
 			case WitType.ResultOf res -> {
 				if (res.ok() != null) {
-					validateComponentResult(res.ok(), witPath, locations, resolver, iface, func, member, what);
+					validateComponentResult(res.ok(), witPath, locations, resolver, in, func, member, what);
 				}
 				if (res.err() != null) {
-					validateComponentResult(res.err(), witPath, locations, resolver, iface, func, member, what);
+					validateComponentResult(res.err(), witPath, locations, resolver, in, func, member, what);
 				}
 			}
 			case WitType.TupleOf tuple -> {
 				for (WitType element : tuple.elements()) {
-					validateComponentResult(element, witPath, locations, resolver, iface, func, member, what);
+					validateComponentResult(element, witPath, locations, resolver, in, func, member, what);
 				}
 			}
 			case WitType.Named named -> {
-				WitItem definition = resolver.resolveType(iface, named.name());
-				switch (definition) {
+				WitResolver.Owned owned = resolver.resolveOwned(in, named.name());
+				WitItem.InterfaceDef owner = owned == null ? in : owned.owner();
+				switch (owned == null ? null : owned.item()) {
 					case WitItem.RecordDef record -> {
 						rejectEmptyRecord(record, witPath, locations, func, member, what);
 						for (WitItem.Field field : record.fields()) {
-							validateComponentResult(field.type(), witPath, locations, resolver, iface, func, member,
+							validateComponentResult(field.type(), witPath, locations, resolver, owner, func, member,
 									what);
 						}
 					}
 					case WitItem.VariantDef variant -> {
 						for (WitItem.Case c : variant.cases()) {
 							if (c.payload() != null) {
-								validateComponentResult(c.payload(), witPath, locations, resolver, iface, func, member,
+								validateComponentResult(c.payload(), witPath, locations, resolver, owner, func, member,
 										what);
 							}
 						}
@@ -694,13 +730,14 @@ public final class WitImportDirective {
 		// an alias whose target is itself a name (`type headers = fields`, which every
 		// real
 		// wasi:http interface writes) -- only the resolver can.
-		WitType t = resolveAliases(type, resolver, iface);
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		WitType t = scoped.type();
 		if (t instanceof WitType.Named named) {
-			WitItem definition = resolver.resolveType(iface, named.name());
-			if (definition == null) {
+			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
+			if (owned == null) {
 				throw undefinedType(witPath, locations, func, member, what, named);
 			}
-			return WitTypeMapper.repOfDefinition(definition);
+			return WitTypeMapper.repOfDefinition(owned.item());
 		}
 		return WitTypeMapper.rep(t);
 	}
