@@ -122,7 +122,7 @@ final class JvmStringTrimCompiler {
 			asm.branch(Opcode.GOTO, loop);
 			asm.bind(done);
 		}
-		ctx.code.addAll(asm.finish());
+		ctx.emitBlock(asm.finish());
 
 		// "\"" + s.substring(start, end) + "\""
 		JvmEmitHelper.compileStringLiteral("\"", ctx);

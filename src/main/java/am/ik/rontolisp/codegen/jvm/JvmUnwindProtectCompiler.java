@@ -60,8 +60,11 @@ final class JvmUnwindProtectCompiler {
 		ctx.emitU2(0);
 		// Error unwind: store the throwable (the handler's operand stack holds only it),
 		// run the cleanups, rethrow. A cleanup that itself throws replaces the pending
-		// unwind (CL semantics: the newer exit wins).
+		// unwind (CL semantics: the newer exit wins). This path never merges back into
+		// the normal one -- it ends in a throw -- so operands live across the protected
+		// region survive on the normal path and need no spill.
 		int handler = ctx.code.size();
+		ctx.stack.enterHandler();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(excSlot);
 		compileCleanups(cleanups, ctx, className);

@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.Opcode;
+import am.ik.jvm.OperandStack;
 
 /**
  * Emits the CL string-designator coercion shared by {@code string-upcase} /
@@ -64,7 +65,7 @@ final class JvmStringDesignatorHelper {
 		asm.astore(sSlot);
 		asm.bind(done);
 		asm.aload(sSlot);
-		ctx.code.addAll(asm.finish());
+		ctx.emitBlock(asm.finish(), OperandStack.Slot.REF);
 	}
 
 }

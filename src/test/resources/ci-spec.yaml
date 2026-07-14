@@ -3905,3 +3905,26 @@ cases:
       (:outer :inner)
       nil
       42
+  # A catching form in an ARGUMENT position: the enclosing call has operands live
+  # when the protected region begins, and entering a handler discards them (on the
+  # JVM the compiler spills them around the region). The float case keeps a raw
+  # two-slot double there, and the return abandons them altogether.
+  - name: handler-case-in-argument-position
+    source: |
+      (defun ci-hc-arg-risky (x) (if (= x 2) (error "boom") x))
+      (print (list "result:" (handler-case (ci-hc-arg-risky 2) (error (e) "caught"))))
+      (print (+ 1.5 (handler-case (ci-hc-arg-risky 2) (error (e) 2.0))))
+      (print (list "r:" (ignore-errors (ci-hc-arg-risky 2)) (ignore-errors 42)))
+      (print (mapcar (lambda (x) (list x (handler-case (ci-hc-arg-risky x) (error (e) :err))))
+                     (list 1 2 3)))
+      (print (list "outer"
+                   (dolist (x (list 1 2 3))
+                     (print (list "seen" (handler-case (ci-hc-arg-risky x)
+                                           (error (e) (return :caught))))))))
+    expected: |
+      ("result:" "caught")
+      3.5
+      ("r:" nil 42)
+      ((1 1) (2 :err) (3 3))
+      ("seen" 1)
+      ("outer" :caught)

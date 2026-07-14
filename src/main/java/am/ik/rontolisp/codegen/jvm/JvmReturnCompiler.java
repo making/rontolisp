@@ -42,10 +42,42 @@ final class JvmReturnCompiler {
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(target.rvSlot());
 		compileEscapedCleanups(ctx, className);
+		emitStackUnwind(ctx, target);
 		int gotoPos = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
 		target.exitPatches().add(gotoPos);
+	}
+
+	/**
+	 * Brings the operand stack to the shape the target block's exit is reached with on
+	 * every other path -- the stack the block was entered with. The operands the body
+	 * pushed on top of it belong to expressions this exit abandons half-evaluated, so
+	 * they are simply discarded.
+	 *
+	 * <p>
+	 * A {@code handler-case} this {@code return} escapes complicates that: it spilled the
+	 * operand stack into locals and compiled its body on an empty one (see
+	 * {@link JvmHandlerCaseCompiler}), so the block's own operands are no longer on the
+	 * stack to keep -- they are reloaded from the outermost escaped spill, whose saved
+	 * stack has the block's as its bottom (a block enclosing the catching form was
+	 * entered with fewer operands).
+	 */
+	private static void emitStackUnwind(JvmLispCompiler.Ctx ctx, JvmLispCompiler.BlockTarget target) {
+		int exitDepth = target.entryStack().size();
+		JvmLispCompiler.SpillScope escaped = null;
+		for (JvmLispCompiler.SpillScope scope : ctx.spillScopes) {
+			if (scope.blockDepth() < ctx.blockTargets.size()) {
+				break;
+			}
+			escaped = scope;
+		}
+		if (escaped == null) {
+			ctx.discardOperandsDownTo(exitDepth);
+			return;
+		}
+		ctx.discardOperandsDownTo(0);
+		escaped.spill().restore(ctx, exitDepth);
 	}
 
 	/**

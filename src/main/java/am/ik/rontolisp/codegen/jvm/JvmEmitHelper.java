@@ -224,8 +224,14 @@ final class JvmEmitHelper {
 		patchBranch(ctx, gotoEndPos, ctx.code.size());
 	}
 
+	/**
+	 * Binds a forward branch to its target -- the position about to be emitted. The
+	 * operand-stack model adopts the shape the branch jumped with, which is how the merge
+	 * points of {@code if}/{@code %block}/the predicate guards stay tracked.
+	 */
 	static void patchBranch(JvmLispCompiler.Ctx ctx, int branchPos, int targetPos) {
 		JvmRuntimeBuilder.patchBranch(ctx.code, branchPos, targetPos);
+		ctx.stack.reconcile(branchPos, targetPos, ctx.code.size());
 	}
 
 	/**

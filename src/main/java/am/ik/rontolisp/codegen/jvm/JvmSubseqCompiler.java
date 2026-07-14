@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.Opcode;
+import am.ik.jvm.OperandStack;
 
 /**
  * Compiles {@code subseq} for strings and lists: {@code (subseq seq start [end])}.
@@ -224,7 +225,7 @@ final class JvmSubseqCompiler {
 
 		asm.bind(doneLabel);
 		asm.aload(resultSlot);
-		ctx.code.addAll(asm.finish());
+		ctx.emitBlock(asm.finish(), OperandStack.Slot.REF);
 	}
 
 }

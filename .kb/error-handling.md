@@ -127,6 +127,26 @@ everywhere except `--no-gc`.
   `RuntimeException` on the JVM (so `(car 5)`-style runtime failures are
   catchable as `error`); the interpreter catches `LispEvalException` only —
   a small cross-backend divergence for interpreter-internal Java exceptions.
+  **The operand-stack spill (the reason it works in an ARGUMENT position).**
+  Unlike unwind-protect, whose handler path ends in ATHROW and never rejoins,
+  the handler-case handler MERGES back into the normal path — and the JVM
+  discards the operand stack when it enters a handler. So the two edges into
+  the merge point disagree by exactly the operands the ENCLOSING form had
+  already evaluated (`(print (list "x" (handler-case ...)))` reaches it with
+  `[arrayref, arrayref, int]` live on one edge and nothing on the other), and
+  the class does not verify. `Ctx.spillOperandStack()` therefore saves the
+  live operands into fresh locals BEFORE the protected region and
+  `Spill.restore` reloads them past the merge, so both edges arrive empty; a
+  handler-case compiled as a statement spills nothing and stays byte-identical.
+  What is live comes from `am.ik.jvm.OperandStack`, a typed model of the stack
+  that `Ctx.emit`/`emitU2` feed as the method is emitted (it also supplies a
+  real `max_stack`, and raises on a merge-point mismatch rather than writing an
+  unverifiable class). An object under construction (`new`, pre-`<init>`) can
+  never be spilled — the model tags it `Slot.UNINIT` and the compiler rejects
+  it, which no emitter triggers today (the `error` throw shape binds its
+  message to a local first). A `return` that escapes a spilled region cannot
+  keep the block's operands on the stack either — it reloads them from the
+  outermost escaped `SpillScope` (`JvmReturnCompiler.emitStackUnwind`).
 - `FreeVarAnalyzer` learned `handler-case` (clause var is BOUND in the clause
   body), `ignore-errors` and `with-slots` — without this a lambda enclosing
   them mis-captures the bound variables.
@@ -229,7 +249,11 @@ whole concatenated program in EH mode, so `CiSpecE2eTest.runBackend` passes
 `-W exceptions=y` to both wasmtime invocations. Behavior is pinned in
 `LispEvaluatorTest` / `JvmLispCompilerTest` / the `eh*` tests of
 `WasmLispCompilerIntegrationTest` (`--no-gc` compile-error pins stay in
-`NoGcWasmCompilerTest`).
+`NoGcWasmCompilerTest`). The argument-position shapes are pinned by the
+`compileAndRunHandlerCaseIn*` block of `JvmLispCompilerTest` — which must
+COMPILE, LOAD and RUN the class, since the broken class was written without
+complaint and only failed at link time — and cross-backend by the ci-spec
+`handler-case-in-argument-position` case.
 `ParseNumberE2eTest` now expects the `:report`-rendered `Invalid number: ...`
 message (the stopgap `Condition ... was signalled.` pin was updated).
 

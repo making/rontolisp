@@ -172,6 +172,153 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunHandlerCaseInArgumentPosition() throws Exception {
+		// Entering the handler clears the operand stack, so the values the enclosing
+		// call had already evaluated must be spilled around the protected region.
+		assertThat(compileAndRun("""
+				(defun hc-arg-risky () (error "boom"))
+				(print (list "result:" (handler-case (hc-arg-risky) (error (e) e "caught"))))
+				""")).isEqualTo("(\"result:\" \"caught\")");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseAsFirstOfSeveralArguments() throws Exception {
+		assertThat(compileAndRun("""
+				(defun hc-first-risky () (error "boom"))
+				(print (list (handler-case (hc-first-risky) (error (e) "c")) "tail"))
+				""")).isEqualTo("(\"c\" \"tail\")");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseInUserFunctionArgument() throws Exception {
+		assertThat(compileAndRun("""
+				(defun hc-fn-risky () (error "boom"))
+				(defun hc-fn-take3 (a b c) (list a b c))
+				(print (hc-fn-take3 1 (handler-case (hc-fn-risky) (error (e) 2)) 3))
+				""")).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseInIntegerArithmeticArgument() throws Exception {
+		assertThat(compileAndRun("""
+				(defun hc-int-risky () (error "boom"))
+				(print (+ 1 (handler-case (hc-int-risky) (error (e) 2))))
+				""")).isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseInFloatArithmeticArgument() throws Exception {
+		// The double path keeps a raw (two-slot) double on the operand stack across the
+		// argument, so the spill must be width-aware.
+		assertThat(compileAndRun("""
+				(defun hc-flt-risky () (error "boom"))
+				(print (+ 1.5 (handler-case (hc-flt-risky) (error (e) 2.0))))
+				(print (* 2.0 (handler-case (hc-flt-risky) (error (e) 3)) 10.0))
+				""")).isEqualTo("3.5\n60.0");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseInConsArgument() throws Exception {
+		assertThat(compileAndRun("""
+				(defun hc-cons-risky () (error "boom"))
+				(print (cons 1 (cons 2 (handler-case (hc-cons-risky) (error (e) 3)))))
+				""")).isEqualTo("(1 2 . 3)");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseInSetfArefValue() throws Exception {
+		// The array-store sequence keeps an int index on the operand stack.
+		assertThat(compileAndRun("""
+				(defun hc-aref-risky () (error "boom"))
+				(let ((a (make-array 2)))
+				  (setf (aref a 0) (handler-case (hc-aref-risky) (error (e) 9)))
+				  (print (aref a 0)))
+				""")).isEqualTo("9");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseInsideLambdaArgument() throws Exception {
+		assertThat(compileAndRun("""
+				(defun hc-lam-risky (x) (if (= x 2) (error "boom") x))
+				(print (mapcar (lambda (x) (list x (handler-case (hc-lam-risky x) (error (e) :err))))
+				               (list 1 2 3)))
+				""")).isEqualTo("((1 1) (2 :err) (3 3))");
+	}
+
+	@Test
+	void compileAndRunNestedHandlerCaseInArgumentPosition() throws Exception {
+		assertThat(compileAndRun("""
+				(defun hc-nest-risky () (error "boom"))
+				(print (list "x" (handler-case (list "y" (handler-case (hc-nest-risky) (error (e) "i")))
+				                   (error (e) "o"))))
+				""")).isEqualTo("(\"x\" (\"y\" \"i\"))");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseInIfBranchInArgumentPosition() throws Exception {
+		assertThat(compileAndRun("""
+				(defun hc-if-risky () (error "boom"))
+				(print (list "r:" (if t (handler-case (hc-if-risky) (error (e) "c")) "n")))
+				""")).isEqualTo("(\"r:\" \"c\")");
+	}
+
+	@Test
+	void compileAndRunIgnoreErrorsInArgumentPosition() throws Exception {
+		assertThat(compileAndRun("""
+				(defun ie-arg-risky () (error "boom"))
+				(print (list "r:" (ignore-errors (ie-arg-risky)) (ignore-errors 42)))
+				""")).isEqualTo("(\"r:\" nil 42)");
+	}
+
+	@Test
+	void compileAndRunLongQuotedLiteralStaysWithinTheLocalSlots() throws Exception {
+		// A quoted list costs locals by its nesting depth, not its length: one temp per
+		// cons cell would walk past slot 255, which a one-byte load/store operand cannot
+		// name.
+		StringBuilder items = new StringBuilder();
+		for (int i = 0; i < 400; i++) {
+			items.append(i).append(' ');
+		}
+		String source = "(print (length '(%s))) (print (car '(%s))) (print (nth 399 '(%s)))".formatted(items, items,
+				items);
+		assertThat(compileAndRun(source)).isEqualTo("400\n0\n399");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseAsTheMessageOfAnError() throws Exception {
+		// The throw shape allocates the exception before evaluating its message, so this
+		// pins that the message is bound to a local first: an object under construction
+		// cannot be spilled across the protected region (the compiler rejects it).
+		assertThat(compileAndRun("""
+				(defun hc-msg-risky () (error "boom"))
+				(print (handler-case (error (handler-case (hc-msg-risky) (error (e) "recovered")))
+				         (error (e) (nth 1 e))))
+				""")).isEqualTo("\"recovered\"");
+	}
+
+	@Test
+	void compileAndRunReturnOutOfHandlerCaseInArgumentPosition() throws Exception {
+		// The return abandons the spilled operands of the enclosing list, and the block's
+		// exit still has to be reached with the operand stack the block was entered with.
+		assertThat(compileAndRun("""
+				(defun hc-ret-risky (x) (if (= x 2) (error "boom") x))
+				(print (list "outer"
+				             (dolist (x (list 1 2 3))
+				               (print (list "seen" (handler-case (hc-ret-risky x) (error (e) (return :caught))))))))
+				""")).isEqualTo("(\"seen\" 1)\n(\"outer\" :caught)");
+	}
+
+	@Test
+	void compileAndRunReturnInArgumentPosition() throws Exception {
+		// A return abandons the operands the enclosing call had already evaluated, so
+		// the block exit is reached with the same operand stack on every path.
+		assertThat(compileAndRun("""
+				(print (dolist (x (list 1 2 3))
+				         (print (list "seen" x (if (= x 2) (return (list "early" x)) x)))))
+				""")).isEqualTo("(\"seen\" 1 1)\n(\"early\" 2)");
+	}
+
+	@Test
 	void compileAndRunHandlerCaseCatchesUsocketSocketError() throws Exception {
 		// The .todo/116 Phase 3 acceptance shape on the JVM backend.
 		assertThat(compileAndRunUsocket("""

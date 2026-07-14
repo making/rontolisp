@@ -55,9 +55,19 @@ final class JvmHandlerCaseCompiler {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensure(ctx.cp, className);
 		int savedNextLocal = ctx.nextLocal;
+		// Entering the handler discards the operand stack, so the values the enclosing
+		// form had already evaluated are saved into locals and reloaded past the merge:
+		// both edges into it then arrive with the same (empty) stack. A handler-case
+		// compiled as a statement spills nothing and is byte-identical to before.
+		JvmLispCompiler.Ctx.Spill spill = ctx.spillOperandStack();
 		int resultSlot = ctx.allocTemp();
 		int excSlot = ctx.allocTemp();
 		int condSlot = ctx.allocTemp();
+		if (!spill.live().isEmpty()) {
+			// A return escaping the form cannot leave the enclosing block's operands on
+			// the stack: they are in the spill now, and JvmReturnCompiler reloads them.
+			ctx.spillScopes.push(new JvmLispCompiler.SpillScope(spill, ctx.blockTargets.size()));
+		}
 		// depth++ so signal raises inside the protected region (incl. called functions).
 		emitDepthAdjust(ctx, className, true);
 		LispVal depthDecForm = new LispCons(new LispSymbol(LispNames.HC_DEPTH_DEC_INTERNAL), LispNil.INSTANCE);
@@ -82,6 +92,7 @@ final class JvmHandlerCaseCompiler {
 		// Handler: depth--, read (and clear) the condition channel, synthesize a
 		// simple-error from the message when it is empty, dispatch through the clauses.
 		int handler = ctx.code.size();
+		ctx.stack.enterHandler();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(excSlot);
 		emitDepthAdjust(ctx, className, false);
@@ -142,6 +153,10 @@ final class JvmHandlerCaseCompiler {
 		JvmEmitHelper.patchBranch(ctx, gotoDonePos, done);
 		for (int patch : donePatches) {
 			JvmEmitHelper.patchBranch(ctx, patch, done);
+		}
+		if (!spill.live().isEmpty()) {
+			ctx.spillScopes.pop();
+			spill.restore(ctx);
 		}
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(resultSlot);

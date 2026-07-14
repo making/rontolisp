@@ -4,6 +4,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
+import am.ik.jvm.OperandStack;
 
 /**
  * Compiles {@code string-capitalize}: capitalizes the first letter of each alphanumeric
@@ -112,7 +113,7 @@ final class JvmStringCapitalizeCompiler {
 		asm.aload(sbSlot);
 		asm.invokevirtual(sbToString);
 
-		ctx.code.addAll(asm.finish());
+		ctx.emitBlock(asm.finish(), OperandStack.Slot.REF);
 	}
 
 }

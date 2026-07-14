@@ -39,6 +39,7 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.jvm.OperandStack;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -1137,7 +1138,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.writeMethods(methods -> {
 				methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainUtf8, mainDesc,
 						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(mainCtx.maxStack)
+							attr.writeU2(mainCtx.maxStack())
 								.writeU2(mainCtx.maxLocals)
 								.writeCode((Object[]) mainCtx.code.toArray(new Integer[0]))
 								.writeExceptionTable(mainCtx.exceptionTable)
@@ -1149,7 +1150,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					final Ctx chunk = topChunks.get(i);
 					methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, topChunkNames.get(i), topChunkDesc,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(chunk.maxStack)
+								attr.writeU2(chunk.maxStack())
 									.writeU2(chunk.maxLocals)
 									.writeCode((Object[]) chunk.code.toArray(new Integer[0]))
 									.writeExceptionTable(chunk.exceptionTable)
@@ -1161,7 +1162,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					final Ctx funcCtx = funcCtxs.get(i);
 					methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(funcCtx.maxStack)
+								attr.writeU2(funcCtx.maxStack())
 									.writeU2(funcCtx.maxLocals)
 									.writeCode((Object[]) funcCtx.code.toArray(new Integer[0]))
 									.writeExceptionTable(funcCtx.exceptionTable)
@@ -1173,7 +1174,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					final Ctx lambdaCtx = lambdaCtxs.get(i);
 					methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(lambdaCtx.maxStack)
+								attr.writeU2(lambdaCtx.maxStack())
 									.writeU2(lambdaCtx.maxLocals)
 									.writeCode((Object[]) lambdaCtx.code.toArray(new Integer[0]))
 									.writeExceptionTable(lambdaCtx.exceptionTable)
@@ -1873,9 +1874,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * An active {@code %block} return boundary during compilation. {@code rvSlot} is the
 	 * local that holds the block's value; {@code exitPatches} collects the positions of
 	 * the {@code goto} instructions emitted by {@code return} forms, all back-patched to
-	 * the block's exit once its body has been compiled.
+	 * the block's exit once its body has been compiled; {@code entryStack} is the operand
+	 * stack the block was entered with, which is the shape its exit is reached with on
+	 * every path -- a {@code return} discards whatever the body had pushed on top of it
+	 * (see {@link JvmReturnCompiler}).
 	 */
-	record BlockTarget(int rvSlot, List<Integer> exitPatches) {
+	record BlockTarget(int rvSlot, List<Integer> exitPatches, List<OperandStack.Slot> entryStack) {
 	}
 
 	/**
@@ -1975,7 +1979,22 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	}
 
+	/**
+	 * An active {@code handler-case} operand-stack spill during compilation: the values
+	 * the catching form saved out of the operand stack, and the {@code %block} stack
+	 * depth at the spill. Everything compiled inside the form -- the protected region and
+	 * the clause bodies alike -- runs on an operand stack based at empty, so a
+	 * {@code return} that escapes the form cannot simply discard its way back to the
+	 * block's exit shape: those values are in the spill's locals, and
+	 * {@link JvmReturnCompiler} reloads them.
+	 */
+	record SpillScope(Ctx.Spill spill, int blockDepth) {
+	}
+
 	static final class Ctx {
+
+		/** The highest local slot a one-byte load/store operand can name. */
+		private static final int MAX_LOCAL_SLOT = 255;
 
 		final ConstantPool cp;
 
@@ -2098,6 +2117,14 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final List<Integer> code = new ArrayList<>();
 
+		/**
+		 * This method body's operand stack, tracked as it is emitted: it says what is
+		 * live on the stack right now (which {@code handler-case} must spill, and
+		 * {@code return} must discard, before a control-flow edge that arrives with an
+		 * empty one) and how deep the stack ever got.
+		 */
+		final OperandStack stack;
+
 		Map<String, Integer> locals = new HashMap<>();
 
 		Map<String, FunctionInfo> functions;
@@ -2117,8 +2144,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		int nextLocal = 1;
 
 		int maxLocals = 1;
-
-		int maxStack = 64;
 
 		boolean dynamic = false;
 
@@ -2210,6 +2235,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		final Deque<UnwindScope> unwindScopes = new ArrayDeque<>();
 
 		/**
+		 * Stack of active {@code handler-case} operand-stack spills, innermost on top.
+		 * Only a catching form compiled with operands live pushes one.
+		 */
+		final Deque<SpillScope> spillScopes = new ArrayDeque<>();
+
+		/**
 		 * This method's {@code Code} attribute exception table, in dispatch order.
 		 * {@code unwind-protect} appends catch-any entries covering its protected region
 		 * (class version 50 verifies handlers without a StackMapTable).
@@ -2235,6 +2266,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.specialVars = builder.specialVars;
 			this.globalFields = builder.globalFields;
 			this.cp = Objects.requireNonNull(builder.cp);
+			this.stack = new OperandStack(this.cp);
 			this.systemOut = Objects.requireNonNull(builder.systemOut);
 			this.printlnStr = Objects.requireNonNull(builder.printlnStr);
 			this.lispToString = Objects.requireNonNull(builder.lispToString);
@@ -2780,20 +2812,139 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		void emit(int opcode) {
 			this.code.add(opcode);
+			this.stack.feed(opcode);
 		}
 
 		void emitU2(int value) {
 			byte[] bytes = ByteBuffer.allocate(2).putShort((short) value).array();
 			this.code.add((int) bytes[0]);
+			this.stack.feed(bytes[0]);
 			this.code.add((int) bytes[1]);
+			this.stack.feed(bytes[1]);
+		}
+
+		/**
+		 * Appends an assembled block ({@link JvmAsm}) whole: a self-contained sequence
+		 * with its own internal labels that computes over locals and leaves
+		 * {@code produced} on the operand stack.
+		 */
+		void emitBlock(List<Integer> block, OperandStack.Slot... produced) {
+			this.code.addAll(block);
+			this.stack.appendOpaque(block.size(), produced);
+		}
+
+		/**
+		 * The deepest this method body's operand stack ever gets. The floor keeps the
+		 * emitted {@code Code} attribute byte-identical to the fixed value this used to
+		 * be, which every existing method stayed well under.
+		 */
+		int maxStack() {
+			return Math.max(64, this.stack.maxDepth());
+		}
+
+		/**
+		 * Spills the values live on the operand stack into fresh locals, leaving it
+		 * empty, and returns the spill (empty when the stack already was). Entering a JVM
+		 * exception handler discards the operand stack, so a form that catches -- whose
+		 * handler merges back into the normal path -- must not be entered with operands
+		 * live: they are saved here and reloaded by {@link Spill#restore} past the merge.
+		 */
+		Spill spillOperandStack() {
+			List<OperandStack.Slot> live = this.stack.snapshot();
+			if (live.isEmpty()) {
+				return Spill.EMPTY;
+			}
+			if (live.contains(OperandStack.Slot.UNINIT)) {
+				// A half-constructed object cannot be saved into a local across an
+				// exception-protected region: the verifier invalidates it in the handler.
+				// No emitter puts a catching form there today; one that did would have to
+				// evaluate the value into a local before the `new`.
+				throw new UnsupportedOperationException(
+						"Cannot compile a catching form while an object is under construction");
+			}
+			int[] slots = new int[live.size()];
+			for (int i = live.size() - 1; i >= 0; i--) {
+				OperandStack.Slot slot = live.get(i);
+				slots[i] = this.allocTemp();
+				if (slot.wide()) {
+					this.allocTemp();
+				}
+				if (this.nextLocal - 1 > MAX_LOCAL_SLOT) {
+					// A spilled value must survive the protected region, so it cannot
+					// ride
+					// a slot whose number the one-byte operand of the load/store opcodes
+					// (there is no `wide` form here) silently wraps into another slot's.
+					throw new UnsupportedOperationException(
+							"Cannot compile a catching form here: the function is out of local variable slots");
+				}
+				this.emit(storeOpcode(slot));
+				this.emit(slots[i]);
+			}
+			return new Spill(live, slots);
+		}
+
+		/**
+		 * Discards the operands the current form pushed on top of {@code keep} entries,
+		 * so a jump out of it reaches its target with the operand stack the target is
+		 * reached with on every other path.
+		 * @param keep the number of entries, counted from the bottom, to leave in place
+		 */
+		void discardOperandsDownTo(int keep) {
+			for (int i = this.stack.snapshot().size(); i > keep; i--) {
+				this.emit(this.stack.snapshot().getLast().wide() ? Opcode.POP2 : Opcode.POP);
+			}
+		}
+
+		/**
+		 * The values a catching form saved out of the operand stack, and the locals
+		 * holding them.
+		 */
+		record Spill(List<OperandStack.Slot> live, int[] slots) {
+
+			static final Spill EMPTY = new Spill(List.of(), new int[0]);
+
+			/**
+			 * Reloads the spilled values, restoring the operand stack it was taken from.
+			 */
+			void restore(Ctx ctx) {
+				this.restore(ctx, this.live.size());
+			}
+
+			/** Reloads the bottom {@code count} of the spilled values. */
+			void restore(Ctx ctx, int count) {
+				for (int i = 0; i < count; i++) {
+					ctx.emit(loadOpcode(this.live.get(i)));
+					ctx.emit(this.slots[i]);
+				}
+			}
+
+		}
+
+		private static int storeOpcode(OperandStack.Slot slot) {
+			return switch (slot) {
+				case REF -> Opcode.ASTORE;
+				case INT -> Opcode.ISTORE;
+				case FLOAT -> Opcode.FSTORE;
+				case LONG -> Opcode.LSTORE;
+				case DOUBLE -> Opcode.DSTORE;
+				case UNINIT -> throw new IllegalStateException("an object under construction cannot be spilled");
+			};
+		}
+
+		private static int loadOpcode(OperandStack.Slot slot) {
+			return switch (slot) {
+				case REF -> Opcode.ALOAD;
+				case INT -> Opcode.ILOAD;
+				case FLOAT -> Opcode.FLOAD;
+				case LONG -> Opcode.LLOAD;
+				case DOUBLE -> Opcode.DLOAD;
+				case UNINIT -> throw new IllegalStateException("an object under construction cannot be spilled");
+			};
 		}
 
 		int allocLocal(String name) {
-			int slot = this.nextLocal++;
+			int slot = this.allocTemp();
 			this.locals.put(name, slot);
-			if (this.nextLocal > this.maxLocals) {
-				this.maxLocals = this.nextLocal;
-			}
 			return slot;
 		}
 

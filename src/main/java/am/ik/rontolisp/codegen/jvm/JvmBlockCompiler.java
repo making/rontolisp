@@ -17,10 +17,10 @@ import am.ik.jvm.Opcode;
  *
  * <p>
  * Storing the value into a local and jumping (rather than leaving it on the operand
- * stack) keeps the operand stack empty at the exit on every path, which the version-50
- * type-inference verifier requires. {@code return} is therefore supported only where the
- * surrounding operand stack is empty (e.g. as a branch of {@code if}/{@code when} or a
- * statement in a loop body), not mid-expression.
+ * stack) means the exit is reached with the operand stack the block was entered with --
+ * recorded here as {@code entryStack} -- on every path, which the version-50
+ * type-inference verifier requires. A {@code return} mid-expression discards whatever the
+ * body had pushed on top of that (see {@link JvmReturnCompiler}).
  */
 final class JvmBlockCompiler {
 
@@ -31,7 +31,7 @@ final class JvmBlockCompiler {
 		List<LispVal> parts = cons.toList();
 		int savedNextLocal = ctx.nextLocal;
 		int rvSlot = ctx.allocTemp();
-		ctx.blockTargets.push(new JvmLispCompiler.BlockTarget(rvSlot, new ArrayList<>()));
+		ctx.blockTargets.push(new JvmLispCompiler.BlockTarget(rvSlot, new ArrayList<>(), ctx.stack.snapshot()));
 		// Body forms run as a progn, leaving the last value on the stack.
 		if (parts.size() <= 1) {
 			ctx.emit(Opcode.ACONST_NULL);

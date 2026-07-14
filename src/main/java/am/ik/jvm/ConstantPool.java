@@ -8,6 +8,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Consumer;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * JVM class file constant pool builder. Entries are deduplicated by their serialized
  * bytes: adding the same constant twice returns the first entry instead of appending a
@@ -24,10 +26,28 @@ public final class ConstantPool {
 
 	private final Map<ByteBuffer, Constant> dedup = new HashMap<>();
 
+	private final Map<Integer, String> utf8Values = new HashMap<>();
+
+	private final Map<Integer, String> descriptors = new HashMap<>();
+
 	private int size = 0;
 
 	/** Creates a new empty constant pool. */
 	public ConstantPool() {
+	}
+
+	/**
+	 * Returns the type descriptor of the entry at {@code index}, as needed to compute an
+	 * instruction's operand-stack effect from its constant-pool operand: a field
+	 * descriptor for a Fieldref, a method descriptor for a Methodref/InterfaceMethodref,
+	 * and the descriptor of the pushed value for the {@code ldc}-able constants
+	 * (Integer/Float/Long/Double/String/Class).
+	 * @param index the constant pool index
+	 * @return the descriptor, or {@code null} when the entry has none (or was not added
+	 * through this pool's typed factory methods)
+	 */
+	public @Nullable String descriptorOf(int index) {
+		return this.descriptors.get(index);
 	}
 
 	/**
@@ -72,7 +92,9 @@ public final class ConstantPool {
 	 * @return the UTF-8 constant entry
 	 */
 	public Utf8Constant addUtf8(String s) {
-		return new Utf8Constant(this.add(ConstantType.UTF8, o -> o.writeUtf8Info(s)));
+		Utf8Constant utf8 = new Utf8Constant(this.add(ConstantType.UTF8, o -> o.writeUtf8Info(s)));
+		this.utf8Values.put(utf8.index(), s);
+		return utf8;
 	}
 
 	/**
@@ -81,7 +103,9 @@ public final class ConstantPool {
 	 * @return the class constant entry
 	 */
 	public ClassConstant addClass(Utf8Constant classUtf8) {
-		return new ClassConstant(this.add(ConstantType.CLASS, o -> o.writeU2(classUtf8)));
+		ClassConstant clazz = new ClassConstant(this.add(ConstantType.CLASS, o -> o.writeU2(classUtf8)));
+		this.descriptors.put(clazz.index(), "Ljava/lang/Class;");
+		return clazz;
 	}
 
 	/**
@@ -91,8 +115,10 @@ public final class ConstantPool {
 	 * @return the name-and-type constant entry
 	 */
 	public NameAndTypeConstant addNameAndType(Utf8Constant nameUtf8, Utf8Constant typeUtf8) {
-		return new NameAndTypeConstant(
+		NameAndTypeConstant nameAndType = new NameAndTypeConstant(
 				this.add(ConstantType.NAME_AND_TYPE, o -> o.writeU2(nameUtf8).writeU2(typeUtf8)));
+		this.descriptors.put(nameAndType.index(), this.utf8Values.get(typeUtf8.index()));
+		return nameAndType;
 	}
 
 	/**
@@ -102,7 +128,10 @@ public final class ConstantPool {
 	 * @return the field reference constant entry
 	 */
 	public FieldrefConstant addFieldref(ClassConstant clazz, NameAndTypeConstant nameAndType) {
-		return new FieldrefConstant(this.add(ConstantType.FIELDREF, o -> o.writeU2(clazz).writeU2(nameAndType)));
+		FieldrefConstant ref = new FieldrefConstant(
+				this.add(ConstantType.FIELDREF, o -> o.writeU2(clazz).writeU2(nameAndType)));
+		this.descriptors.put(ref.index(), this.descriptors.get(nameAndType.index()));
+		return ref;
 	}
 
 	/**
@@ -112,7 +141,10 @@ public final class ConstantPool {
 	 * @return the method reference constant entry
 	 */
 	public MethodrefConstant addMethodref(ClassConstant clazz, NameAndTypeConstant nameAndType) {
-		return new MethodrefConstant(this.add(ConstantType.METHODREF, o -> o.writeU2(clazz).writeU2(nameAndType)));
+		MethodrefConstant ref = new MethodrefConstant(
+				this.add(ConstantType.METHODREF, o -> o.writeU2(clazz).writeU2(nameAndType)));
+		this.descriptors.put(ref.index(), this.descriptors.get(nameAndType.index()));
+		return ref;
 	}
 
 	/**
@@ -123,8 +155,10 @@ public final class ConstantPool {
 	 * @return the interface method reference constant entry
 	 */
 	public MethodrefConstant addInterfaceMethodref(ClassConstant clazz, NameAndTypeConstant nameAndType) {
-		return new MethodrefConstant(
+		MethodrefConstant ref = new MethodrefConstant(
 				this.add(ConstantType.INTERFACE_METHODREF, o -> o.writeU2(clazz).writeU2(nameAndType)));
+		this.descriptors.put(ref.index(), this.descriptors.get(nameAndType.index()));
+		return ref;
 	}
 
 	/**
@@ -133,7 +167,9 @@ public final class ConstantPool {
 	 * @return the string constant entry
 	 */
 	public StringConstant addString(Utf8Constant utf8) {
-		return new StringConstant(this.add(ConstantType.STRING, o -> o.writeU2(utf8)));
+		StringConstant string = new StringConstant(this.add(ConstantType.STRING, o -> o.writeU2(utf8)));
+		this.descriptors.put(string.index(), "Ljava/lang/String;");
+		return string;
 	}
 
 	/**
@@ -151,7 +187,9 @@ public final class ConstantPool {
 	 * @return the integer constant entry
 	 */
 	public IntegerConstant addInteger(int value) {
-		return new IntegerConstant(this.add(ConstantType.INTEGER, o -> o.writeU4(value)));
+		IntegerConstant constant = new IntegerConstant(this.add(ConstantType.INTEGER, o -> o.writeU4(value)));
+		this.descriptors.put(constant.index(), "I");
+		return constant;
 	}
 
 	/**
@@ -160,10 +198,12 @@ public final class ConstantPool {
 	 * @return the long constant entry
 	 */
 	public LongConstant addLong(long value) {
-		return new LongConstant(this.add(ConstantType.LONG, o -> {
+		LongConstant constant = new LongConstant(this.add(ConstantType.LONG, o -> {
 			o.writeU4((int) (value >>> 32));
 			o.writeU4((int) value);
 		}, true));
+		this.descriptors.put(constant.index(), "J");
+		return constant;
 	}
 
 	/**
@@ -175,10 +215,12 @@ public final class ConstantPool {
 		// Key by the serialized bits (doubleToLongBits), so -0.0 and 0.0 stay distinct
 		// entries and every NaN shares the canonical bit pattern it serializes to.
 		long bits = Double.doubleToLongBits(value);
-		return new DoubleConstant(this.add(ConstantType.DOUBLE, o -> {
+		DoubleConstant constant = new DoubleConstant(this.add(ConstantType.DOUBLE, o -> {
 			o.writeU4((int) (bits >>> 32));
 			o.writeU4((int) bits);
 		}, true));
+		this.descriptors.put(constant.index(), "D");
+		return constant;
 	}
 
 	/**

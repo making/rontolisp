@@ -241,8 +241,14 @@ final class JvmQuoteCompiler {
 			tail = cell.cdr();
 		}
 		compileQuotedVal(tail, ctx, className);
+		// One temp for the whole spine: it holds the tail only while the cell in front of
+		// it is built, and is dead again by the next iteration. A sublist compiled into
+		// the car allocates ABOVE it and gives its slots back, so the locals a literal
+		// costs are bounded by its nesting depth, not by its length -- and a long list
+		// cannot walk past the highest slot a one-byte operand can name.
+		int savedNextLocal = ctx.nextLocal;
+		int tempSlot = ctx.allocTemp();
 		for (int i = cars.size() - 1; i >= 0; i--) {
-			int tempSlot = ctx.allocTemp();
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(tempSlot);
 			ctx.emit(Opcode.ICONST_2);
@@ -258,6 +264,7 @@ final class JvmQuoteCompiler {
 			ctx.emit(tempSlot);
 			ctx.emit(Opcode.AASTORE);
 		}
+		ctx.nextLocal = savedNextLocal;
 	}
 
 }
