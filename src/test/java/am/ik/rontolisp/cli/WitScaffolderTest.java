@@ -9,6 +9,8 @@ import java.nio.file.Path;
 
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.WitExportInliner;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -193,7 +195,7 @@ class WitScaffolderTest {
 		runCli("--scaffold-wit", wit.toString(), "-o", lisp.toString());
 		assertThatCode(() -> new WasmLispCompiler(false, true, false, false, false, false)
 			.compile(WitExportInliner.inline(LispReader.readAllFromString(Files.readString(lisp)),
-					this.tempDir.toString(), WitExportDirective.Backend.WASM_GC)))
+					this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem())))
 			.doesNotThrowAnyException();
 		// And end-to-end through the CLI, which is how a user meets it.
 		Path wasm = this.tempDir.resolve("analyzer.wasm");

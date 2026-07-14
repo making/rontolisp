@@ -1,17 +1,18 @@
-package am.ik.rontolisp.cli;
+package am.ik.rontolisp.eval;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.compiler.WitExportDirective;
-import am.ik.rontolisp.eval.LibraryDefunPruner;
-import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -34,6 +35,40 @@ class WitExportInlinerTest {
 
 	@TempDir
 	Path tempDir;
+
+	/**
+	 * A world compiles with no filesystem at all: the WIT text comes from an injected
+	 * {@link SourceLoader}, which is what lets the browser playground -- whose "files"
+	 * are an in-memory map of uploads and which never touches {@code java.nio.file} --
+	 * run the same contract check its REPL does. Before this the compile buttons met the
+	 * directive itself and died with an unhelpful "Cannot compile: rontolisp:wit-export".
+	 */
+	@Test
+	void aWorldIsReadThroughTheSourceLoaderSoABrowserCanCompileOne() {
+		Map<String, String> uploads = Map.of("world.wit", WORLD);
+		List<LispVal> out = WitExportInliner.inline(
+				LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"world.wit\")"), null,
+				WitExportDirective.Backend.WASM_GC, path -> {
+					String content = uploads.get(path);
+					if (content == null) {
+						throw new FileNotFoundException(path + " (upload it first)");
+					}
+					return content;
+				});
+		assertThat(String.join("\n", out.stream().map(LispVal::print).toList())).doesNotContain("wit-export")
+			.contains("(rontolisp:wasm-export (quote count-vowels) :params (quote (:string)) "
+					+ ":param-names (quote (s)) :returns :int)");
+	}
+
+	@Test
+	void aWorldMissingFromTheLoaderNamesTheLoadersOwnError() {
+		assertThatThrownBy(() -> WitExportInliner.inline(
+				LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"world.wit\")"), null,
+				WitExportDirective.Backend.WASM_GC, path -> {
+					throw new FileNotFoundException(path + " (upload it first; available: )");
+				}))
+			.hasMessageContaining("cannot read WIT file world.wit");
+	}
 
 	/**
 	 * The body every variant shares: one exported defun taking a string, returning an
@@ -76,7 +111,7 @@ class WitExportInlinerTest {
 		Files.writeString(wit, WORLD);
 		List<LispVal> witProgram = WitExportInliner.inline(
 				LispReader.readAllFromString(prelude + BODY + "(rontolisp:wit-export \"world.wit\")"),
-				this.tempDir.toString(), backend);
+				this.tempDir.toString(), backend, SourceLoader.fileSystem());
 		List<LispVal> handWritten = LispReader.readAllFromString(prelude + BODY + HAND_WRITTEN);
 		assertThat(compile.apply(witProgram)).isEqualTo(compile.apply(handWritten));
 	}
@@ -92,7 +127,9 @@ class WitExportInlinerTest {
 	@Test
 	void aProgramWithoutTheDirectiveIsUntouched() {
 		List<LispVal> program = LispReader.readAllFromString("(defun f (x) x)");
-		assertThat(WitExportInliner.inline(program, null, WitExportDirective.Backend.WASM_GC)).isSameAs(program);
+		assertThat(
+				WitExportInliner.inline(program, null, WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem()))
+			.isSameAs(program);
 	}
 
 	@Test
@@ -101,7 +138,7 @@ class WitExportInlinerTest {
 		Files.writeString(wit, WORLD);
 		List<LispVal> out = WitExportInliner.inline(
 				LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"world.wit\")"), this.tempDir.toString(),
-				WitExportDirective.Backend.WASM_GC);
+				WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		String printed = String.join("\n", out.stream().map(LispVal::print).toList());
 		assertThat(printed).doesNotContain("wit-export")
 			.contains("(rontolisp:wasm-export (quote count-vowels) :params (quote (:string)) "
@@ -167,7 +204,7 @@ class WitExportInlinerTest {
 		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, false, false);
 		compiler.compile(
 				WitExportInliner.inline(LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"world.wit\")"),
-						this.tempDir.toString(), WitExportDirective.Backend.WASM_GC));
+						this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem()));
 		assertThat(compiler.componentWit()).contains("  export count-vowels: func(s: string) -> s32;");
 	}
 
@@ -179,8 +216,8 @@ class WitExportInlinerTest {
 		Files.writeString(wit, WORLD);
 		List<LispVal> program = LispReader
 			.readAllFromString(BODY + HAND_WRITTEN + "\n(rontolisp:wit-export \"world.wit\")");
-		assertThatThrownBy(
-				() -> WitExportInliner.inline(program, this.tempDir.toString(), WitExportDirective.Backend.WASM_GC))
+		assertThatThrownBy(() -> WitExportInliner.inline(program, this.tempDir.toString(),
+				WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem()))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("rontolisp:wasm-export cannot be combined with rontolisp:wit-export")
 			.hasMessageContaining("count-vowels");
@@ -226,7 +263,7 @@ class WitExportInlinerTest {
 				(rontolisp:wit-export "world.wit")
 				"""));
 		List<LispVal> out = WitExportInliner.inline(expanded, this.tempDir.toString(),
-				WitExportDirective.Backend.WASM_GC);
+				WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList()))
 			.contains("(rontolisp:wasm-export (quote count-vowels) :params (quote (:string)) "
 					+ ":param-names (quote (s)) :returns :int)");
@@ -235,8 +272,8 @@ class WitExportInlinerTest {
 	@Test
 	void anUnreadableWitFileIsAClearError() {
 		List<LispVal> program = LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"missing.wit\")");
-		assertThatThrownBy(
-				() -> WitExportInliner.inline(program, this.tempDir.toString(), WitExportDirective.Backend.WASM_GC))
+		assertThatThrownBy(() -> WitExportInliner.inline(program, this.tempDir.toString(),
+				WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem()))
 			.hasMessageContaining("cannot read WIT file")
 			.hasMessageContaining("missing.wit");
 	}
@@ -249,7 +286,7 @@ class WitExportInlinerTest {
 		Files.writeString(dir.resolve("world.wit"), WORLD);
 		List<LispVal> out = WitExportInliner.inline(
 				LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"wit/world.wit\")"),
-				this.tempDir.toString(), WitExportDirective.Backend.WASM_GC);
+				this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList()))
 			.contains("(rontolisp:wasm-export (quote count-vowels)");
 	}
@@ -271,7 +308,7 @@ class WitExportInlinerTest {
 		List<LispVal> program = UrlLibrary.process(LispReader.readAllFromString(
 				"(defun greet (name) (rontolisp:url-encode name))\n" + "(rontolisp:wit-export \"world.wit\")"));
 		List<LispVal> lowered = WitExportInliner.inline(program, this.tempDir.toString(),
-				WitExportDirective.Backend.WASM_GC);
+				WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		String printed = String.join("\n", LibraryDefunPruner.prune(lowered).stream().map(LispVal::print).toList());
 		assertThat(printed).contains("(defun greet")
 			.contains("(rontolisp:wasm-export (quote greet)")

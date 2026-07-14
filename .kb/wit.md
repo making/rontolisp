@@ -199,15 +199,22 @@ whole point of the design: a front-end for machinery that already exists.
 splices the returned forms. Its `Backend` enum (`WASM_GC` / `WASM_NO_GC` / `OTHER`)
 selects the backend-specific rules only.
 
-Two call sites:
+Three call sites:
 
-- **Compile path**: `cli/WitExportInliner`, run in `RontoLispCli.compileToFile` between
+- **Compile path**: `eval/WitExportInliner`, run in `RontoLispCli.compileToFile` between
   the library splices and `LibraryDefunPruner` — after `LoadInliner` /
   `UserMacroExpander` (so every `defun`, including a load-spliced or macro-produced one,
   is a literal top-level form and can be checked) and before the pruner (so the
   synthesized `wasm-export` directives still count as pruning roots). Backend from
   `RontoLispCli.witBackend` (`.wasm` + `--no-gc` -> `WASM_NO_GC`, `.wasm` -> `WASM_GC`,
   else `OTHER`).
+- **Browser playground**: `RontoPlayground.frontend` runs the SAME inliner. It lives in
+  `eval` (not `cli`) and reads the WIT through an injected `SourceLoader` precisely so
+  that it can: the playground has no filesystem and backs the loader with its map of
+  uploaded files, the same way `(load "x.lisp")` works there. Without this the compile
+  buttons met the directive itself and died with `Cannot compile: rontolisp:wit-export`
+  while the REPL on the same page happily checked it — do not regress that asymmetry.
+  (`.wit` is in the upload picker's `accept` list.)
 - **Interpreter**: `LispEvaluator.evalWitExport` — a SPECIAL FORM, so it runs the same
   contract check against the functions defined **so far**. Put the directive at the END
   of the file (where the scaffold puts it). It exports nothing and returns `nil`;

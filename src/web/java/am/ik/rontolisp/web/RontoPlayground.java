@@ -19,7 +19,10 @@ import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
+import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
+import am.ik.rontolisp.eval.WitExportInliner;
+import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.VecLibrary;
@@ -63,15 +66,22 @@ public final class RontoPlayground {
 	 */
 	private static final Map<String, String> uploadedFiles = new LinkedHashMap<>();
 
+	/**
+	 * Reads an uploaded file. Backs {@code (load "x.lisp")} on the REPL and
+	 * {@code (rontolisp:wit-export "w.wit")} on both compile paths, so a WIT world is
+	 * dropped onto the page like any other companion file.
+	 */
+	private static final SourceLoader uploads = path -> {
+		String content = uploadedFiles.get(path);
+		if (content == null) {
+			throw new FileNotFoundException(
+					path + " (upload it first; available: " + String.join(", ", uploadedFiles.keySet()) + ")");
+		}
+		return content;
+	};
+
 	static {
-		evaluator.setSourceLoader(path -> {
-			String content = uploadedFiles.get(path);
-			if (content == null) {
-				throw new FileNotFoundException(
-						path + " (upload it first; available: " + String.join(", ", uploadedFiles.keySet()) + ")");
-			}
-			return content;
-		});
+		evaluator.setSourceLoader(uploads);
 	}
 
 	private RontoPlayground() {
@@ -103,9 +113,7 @@ public final class RontoPlayground {
 	/** Compile {@code source} to a JVM class, returned as Base64. */
 	static String compileJvm(String source, String className) {
 		try {
-			List<LispVal> program = LibraryDefunPruner
-				.prune(UsocketLibrary.process(VecLibrary.process(LispPreludeLibrary.process(UrlLibrary.process(
-						LinalgLibrary.process(JsonLibrary.process(LispReader.readAllFromString(source, Features.JVM))))))));
+			List<LispVal> program = frontend(source, Features.JVM, WitExportDirective.Backend.OTHER);
 			String name = (className == null || className.isBlank()) ? "Main" : className;
 			byte[] bytes = new JvmLispCompiler(name).compile(program);
 			return Base64.getEncoder().encodeToString(bytes);
@@ -118,15 +126,27 @@ public final class RontoPlayground {
 	/** Compile {@code source} to a WebAssembly module, returned as Base64. */
 	static String compileWasm(String source) {
 		try {
-			List<LispVal> program = LibraryDefunPruner
-				.prune(UsocketLibrary.process(VecLibrary.process(LispPreludeLibrary.process(UrlLibrary.process(
-						LinalgLibrary.process(JsonLibrary.process(LispReader.readAllFromString(source, Features.WASM))))))));
+			// The playground emits a Preview 1 core module (no --component), so the world
+			// is checked against the wasm-GC backend's rules.
+			List<LispVal> program = frontend(source, Features.WASM, WitExportDirective.Backend.WASM_GC);
 			byte[] bytes = new WasmLispCompiler().compile(program);
 			return Base64.getEncoder().encodeToString(bytes);
 		}
 		catch (RuntimeException ex) {
 			return ERROR_PREFIX + ex.getMessage();
 		}
+	}
+
+	// The playground's compile-time frontend: the library splices, then the WIT world
+	// check (a rontolisp:wit-export directive is lowered into the wasm-export directives
+	// it stands for -- without this the backends would meet the directive itself and
+	// report an unhelpful "Cannot compile"), then the library tree-shake. It has no
+	// LoadInliner: the browser resolves (load ...) at run time, against the same uploaded
+	// files a WIT world is read from.
+	private static List<LispVal> frontend(String source, Features features, WitExportDirective.Backend backend) {
+		List<LispVal> program = UsocketLibrary.process(VecLibrary.process(LispPreludeLibrary.process(UrlLibrary
+			.process(LinalgLibrary.process(JsonLibrary.process(LispReader.readAllFromString(source, features)))))));
+		return LibraryDefunPruner.prune(WitExportInliner.inline(program, null, backend, uploads));
 	}
 
 	@JS(args = { "fn" }, value = "globalThis.rontoEval = fn;")

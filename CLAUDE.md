@@ -46,11 +46,17 @@ reader -> rontolisp (AST types only)
 ```
 
 `compiler` holds the backend-shared, backend-FREE directive front-ends, so anything that
-must behave identically on every backend may depend on it: `cli` does (`WitExportInliner`
--> `WitExportDirective`, and `WitScaffolder` -> `am.ik.wit` directly) and so does `eval`
-(`LispEvaluator.evalWitExport` runs the same `wit-export` contract check the compile path
-runs). The direction stays one-way -- `compiler` imports neither, and depends on no
-backend.
+must behave identically on every backend may depend on it: `eval` does (`WitExportInliner`
+and `LispEvaluator.evalWitExport` both run the `wit-export` contract check through
+`WitExportDirective`) and so does `cli` (`WitScaffolder` -> `am.ik.wit` directly). The
+direction stays one-way -- `compiler` imports neither, and depends on no backend.
+
+**A compile-time AST pass that reads a file belongs in `eval`, not `cli`, and must read
+through `SourceLoader`** (`WitExportInliner` is the model): the browser playground has its
+own front-end (`RontoPlayground.frontend`, `src/web/java`) which never touches `cli` and
+has no filesystem, so a pass living in `cli` or calling `Files` directly is simply absent
+there -- which is how `wit-export` first shipped, working in the playground's REPL but
+dying with `Cannot compile` on its Compile buttons.
 
 ## Key Design Constraints
 

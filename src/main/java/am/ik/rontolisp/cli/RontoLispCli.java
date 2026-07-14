@@ -35,6 +35,7 @@ import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UsocketLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
+import am.ik.rontolisp.eval.WitExportInliner;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -264,7 +265,7 @@ public final class RontoLispCli {
 		// literal top-level form, and because the synthesized directives must still count
 		// as pruning roots below.
 		boolean witWorld = WitExportInliner.usesWitExport(program);
-		program = WitExportInliner.inline(program, baseDir, witBackend(outputFile, noGc));
+		program = WitExportInliner.inline(program, baseDir, witBackend(outputFile, noGc), SourceLoader.fileSystem());
 		// Drop spliced library definitions unreachable from the user program (the AST
 		// tree-shaker; see LibraryDefunPruner). Skipped under --dynamic (late binding
 		// can resolve any name at runtime) and --no-prune (the explicit escape hatch).

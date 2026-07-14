@@ -1,9 +1,7 @@
-package am.ik.rontolisp.cli;
+package am.ik.rontolisp.eval;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -14,7 +12,6 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.WitExportDirective;
-import am.ik.rontolisp.eval.SourceLoader;
 
 import org.jspecify.annotations.Nullable;
 
@@ -26,11 +23,15 @@ import org.jspecify.annotations.Nullable;
  * would have produced, and the emitted component is byte-identical to it.
  *
  * <p>
- * It runs after {@link LoadInliner} and {@link am.ik.rontolisp.eval.UserMacroExpander},
- * so every {@code defun} the program has (including those spliced in from a
- * {@code load}ed file or produced by a macro) is a literal top-level form and can be
- * checked. The interpreter does its own check as it evaluates the directive
- * ({@code LispEvaluator.evalWitExport}).
+ * It runs after the {@code load} inlining and {@link UserMacroExpander}, so every
+ * {@code defun} the program has (including those spliced in from a {@code load}ed file or
+ * produced by a macro) is a literal top-level form and can be checked. The interpreter
+ * does its own check as it evaluates the directive ({@code LispEvaluator.evalWitExport}).
+ *
+ * <p>
+ * The WIT text is read through a {@link SourceLoader}, the same indirection {@code load}
+ * uses, so a front-end with no filesystem works: the browser playground backs it with its
+ * map of uploaded files, exactly as it does for {@code (load "x.lisp")}.
  *
  * <p>
  * When a world is in effect it is the <strong>authoritative</strong> export list: a
@@ -60,10 +61,13 @@ public final class WitExportInliner {
 	 * it), or {@code null} for the working directory
 	 * @param backend the backend being compiled for (only the WASM ones impose the
 	 * boundary's backend-specific rules)
+	 * @param loader reads the WIT text for a resolved path
+	 * ({@link SourceLoader#fileSystem()} on the compile path; the playground's
+	 * uploaded-file map in the browser)
 	 * @return the rewritten program, or {@code program} itself if it implements no world
 	 */
 	public static List<LispVal> inline(List<LispVal> program, @Nullable String baseDir,
-			WitExportDirective.Backend backend) {
+			WitExportDirective.Backend backend, SourceLoader loader) {
 		if (!usesWitExport(program)) {
 			return program;
 		}
@@ -73,7 +77,7 @@ public final class WitExportInliner {
 			if (WitExportDirective.isDirective(form)) {
 				WitExportDirective.Directive directive = WitExportDirective.parse((LispCons) form);
 				String path = SourceLoader.resolve(baseDir, directive.path());
-				result.addAll(WitExportDirective.lower(directive, read(path), path, defuns::get, backend));
+				result.addAll(WitExportDirective.lower(directive, read(loader, path), path, defuns::get, backend));
 			}
 			else if (isWasmExport(form)) {
 				throw new UnsupportedOperationException(
@@ -88,9 +92,9 @@ public final class WitExportInliner {
 		return result;
 	}
 
-	private static String read(String path) {
+	private static String read(SourceLoader loader, String path) {
 		try {
-			return Files.readString(Path.of(path));
+			return loader.load(path);
 		}
 		catch (IOException ex) {
 			throw new UncheckedIOException("rontolisp:wit-export: cannot read WIT file " + path, ex);
