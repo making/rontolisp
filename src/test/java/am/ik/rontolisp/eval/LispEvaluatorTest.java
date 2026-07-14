@@ -3971,7 +3971,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
 	}
 
 	@Test
@@ -4015,7 +4015,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
 	}
 
 	@Test
@@ -7053,6 +7053,258 @@ class LispEvaluatorTest {
 		assertThat(eval("(max (/ 0.0 0.0) 1.0)")).isEqualTo(new LispDouble(Double.NaN));
 		// float contagion on the result is unchanged
 		assertThat(eval("(min 1 2.0)")).isEqualTo(new LispDouble(1.0));
+	}
+
+	// ---- rontolisp:wit-import: one WIT, a provider per backend ----
+	//
+	// The interpreter half of the boundary. The same programs are compiled and RUN on the
+	// JVM backend by JvmLispCompilerTest (the compile path lowers the directive through
+	// WitImportInliner instead of evaluating it), and the Preview 1 WASM half -- where
+	// the
+	// host is the provider and the lowering is a rontolisp:wasm-import block -- is pinned
+	// by WitImportInlinerTest. One source, three bindings.
+
+	/**
+	 * The interface the tests bind: a wasi:keyvalue-shaped store, whose {@code bucket} is
+	 * a WIT resource (so its methods bind as {@code bucket-get} / {@code bucket-set} /
+	 * ... taking the handle as their first argument), with a {@code variant} error arm
+	 * and a freestanding opener.
+	 */
+	private static final String KEYVALUE_WIT = """
+			package wasi:keyvalue@0.2.0;
+
+			interface store {
+			  variant error {
+			    no-such-store,
+			    access-denied,
+			    other(string),
+			  }
+
+			  resource bucket {
+			    get: func(key: string) -> result<option<list<u8>>, error>;
+			    set: func(key: string, value: list<u8>) -> result<_, error>;
+			    delete: func(key: string) -> result<_, error>;
+			    exists: func(key: string) -> result<bool, error>;
+			    list-keys: func() -> result<list<string>, error>;
+			  }
+
+			  open: func(identifier: string) -> result<bucket, error>;
+			}
+			""";
+
+	/**
+	 * A second interface, bound by the tests that pin what a call with NO provider does.
+	 */
+	private static final String WEBGL_WIT = """
+			package local:webgl;
+
+			interface gl {
+			  create-shader: func(kind: s32) -> s32;
+			}
+			""";
+
+	/**
+	 * The store the tests bind -- an in-memory wasi:keyvalue/store, the shape of
+	 * {@code examples/wit/keyvalue/memory-store.lisp}.
+	 *
+	 * <p>
+	 * rontolisp ships NO provider for any concrete interface: the core knows the provider
+	 * MECHANISM, and nothing about what wasi:keyvalue is. Implementing a WIT interface is
+	 * therefore ordinary user code, so a test writes its own store exactly as a program
+	 * does -- and if this file's stopped compiling because a built-in store went away,
+	 * the fix is to write one here, never to put one back in the core.
+	 *
+	 * <p>
+	 * A provider is an ordinary Lisp callable taking the bound function's Lisp member
+	 * NAME (a string: {@code "open"}, {@code "bucket-get"}) and then that function's
+	 * arguments, a resource method's handle included. The ok arm of a WIT result IS the
+	 * return value, so nothing is wrapped -- {@code get} answers
+	 * {@code option<list<u8>>}, which is the value string or nil -- and the error arm
+	 * SIGNALS {@code rontolisp:wit-error}, which is what an unknown handle does here.
+	 */
+	private static final String MEMORY_STORE = """
+			(defvar *buckets* (make-hash-table :test #'eql))
+			(defvar *next-handle* 1)
+			(defun store-bucket (handle)
+			  (let ((bucket (gethash handle *buckets*)))
+			    (if (null bucket)
+			        (error 'rontolisp:wit-error :payload :no-such-store
+			               :message "memory store: not an open bucket handle")
+			        bucket)))
+			(defun memory-store (member &rest args)
+			  (cond ((string= member "open")
+			         (let ((handle *next-handle*))
+			           (setq *next-handle* (+ handle 1))
+			           (setf (gethash handle *buckets*) (make-hash-table :test #'equal))
+			           handle))
+			        ((string= member "bucket-get")
+			         (gethash (nth 1 args) (store-bucket (nth 0 args))))
+			        ((string= member "bucket-set")
+			         (setf (gethash (nth 1 args) (store-bucket (nth 0 args))) (nth 2 args))
+			         nil)
+			        ((string= member "bucket-delete")
+			         (remhash (nth 1 args) (store-bucket (nth 0 args)))
+			         nil)
+			        ((string= member "bucket-exists")
+			         (if (gethash (nth 1 args) (store-bucket (nth 0 args))) t nil))
+			        ((string= member "bucket-list-keys")
+			         (let ((keys nil))
+			           (maphash (lambda (key value) value (push key keys))
+			                    (store-bucket (nth 0 args)))
+			           (nreverse keys)))
+			        (t (error 'rontolisp:wit-error :payload (list :other member)
+			                  :message "memory store: no such member"))))
+			(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'memory-store)
+			""";
+
+	// Writes a WIT file and returns the (rontolisp:wit-import ...) directive binding it.
+	// The path is absolute because these programs are evaluated form by form, like the
+	// REPL: there is no source file for a relative path to resolve against.
+	private static String witImport(Path tempDir, String file, String wit, String iface, String pkg) throws Exception {
+		Path path = tempDir.resolve(file);
+		Files.writeString(path, wit);
+		return "(rontolisp:wit-import \"" + path.toString().replace("\\", "\\\\") + "\" :interface \"" + iface
+				+ "\" :package " + pkg + ")\n";
+	}
+
+	private static String keyvalueImport(Path tempDir) throws Exception {
+		return witImport(tempDir, "kv.wit", KEYVALUE_WIT, "wasi:keyvalue/store@0.2.0", "kv");
+	}
+
+	@Test
+	void witImportRunsAgainstTheProviderTheProgramBinds(@TempDir Path tempDir) throws Exception {
+		// The whole interface, driven end to end through a store the PROGRAM binds: a
+		// resource is an opaque integer handle, a value is a byte string (list<u8>), and
+		// a
+		// missing key is nil (option<list<u8>> = value-or-nil, NOT an error).
+		// The writes are separate top-level forms, and only pure reads are grouped into a
+		// list, so nothing here depends on argument evaluation order.
+		assertThat(evalMulti(keyvalueImport(tempDir) + MEMORY_STORE + """
+				(defvar *b* (kv:open "cache"))
+				(kv:bucket-set *b* "greeting" "hello")
+				(kv:bucket-set *b* "count" "3")
+				(defvar *stored* (list (integerp *b*)
+				                       (kv:bucket-get *b* "greeting")
+				                       (kv:bucket-get *b* "absent")
+				                       (kv:bucket-exists *b* "greeting")
+				                       (sort (kv:bucket-list-keys *b*) #'string<)))
+				(kv:bucket-delete *b* "greeting")
+				(append *stored* (list (kv:bucket-exists *b* "greeting")
+				                       (sort (kv:bucket-list-keys *b*) #'string<)))
+				""").print()).isEqualTo("(t \"hello\" nil t (\"count\" \"greeting\") nil (\"count\"))");
+	}
+
+	@Test
+	void witImportBindingsAreOrdinaryDefunsSoTheyWorkAsValues(@TempDir Path tempDir) throws Exception {
+		// The property most likely to regress: a binding is an ORDINARY defun, not a
+		// special call form, so #'kv:bucket-get / funcall / apply / mapcar need no wiring
+		// of their own.
+		assertThat(evalMulti(keyvalueImport(tempDir) + MEMORY_STORE + """
+				(defvar *b* (kv:open "cache"))
+				(kv:bucket-set *b* "a" "1")
+				(kv:bucket-set *b* "b" "2")
+				(list (functionp #'kv:bucket-get)
+				      (funcall #'kv:bucket-get *b* "a")
+				      (apply #'kv:bucket-get (list *b* "b"))
+				      (mapcar (lambda (k) (funcall #'kv:bucket-get *b* k)) '("a" "b" "zz")))
+				""").print()).isEqualTo("(t \"1\" \"2\" (\"1\" \"2\" nil))");
+	}
+
+	@Test
+	void aSecondWitProvideReplacesTheFirst(@TempDir Path tempDir) throws Exception {
+		// Binding a provider REPLACES whatever was bound for the interface before it, and
+		// that is what makes a store swappable: examples/wit/keyvalue develops against an
+		// in-memory store and then, on the JVM, binds a java.util.LinkedHashMap-backed
+		// one
+		// over the top of it -- one line, and not a character of the program changes.
+		// Here
+		// the memory store is bound first and a stub replaces it, so every call below
+		// lands
+		// in the stub.
+		assertThat(evalMulti(keyvalueImport(tempDir) + MEMORY_STORE + """
+				(defvar *writes* nil)
+				(defun stub-store (member &rest args)
+				  (cond ((string= member "open") 7)
+				        ((string= member "bucket-set")
+				         (setq *writes* (cons (nth 1 args) *writes*))
+				         nil)
+				        ((string= member "bucket-get")
+				         (concatenate 'string "stub:" (nth 1 args)))
+				        (t (error 'rontolisp:wit-error :payload (list :other member)
+				                  :message "the stub store does not implement it"))))
+				(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'stub-store)
+				(defvar *b* (kv:open "cache"))
+				(kv:bucket-set *b* "k" "v")
+				(list *b* (kv:bucket-get *b* "k") *writes*)
+				""").print()).isEqualTo("(7 \"stub:k\" (\"k\"))");
+	}
+
+	@Test
+	void witErrorArmSignalsWitErrorCarryingTheMappedPayload(@TempDir Path tempDir) throws Exception {
+		// The settled mapping: a WIT result<T, E>'s ok arm is the value and its error arm
+		// SIGNALS rontolisp:wit-error, whose payload is the mapped E. The PROVIDER is
+		// what
+		// signals it -- so both arms below come out of a store written in the test: the
+		// memory store's `no-such-store` for a handle it never handed out (an enum-shaped
+		// variant arm = a keyword), and a stub's own `other(string)` (a payload-carrying
+		// arm = a tagged list).
+		// handler-case sits in a defvar initform, never in argument position: the JVM
+		// sibling of this test cannot compile a handler-case with a non-empty operand
+		// stack.
+		assertThat(evalMulti(keyvalueImport(tempDir) + MEMORY_STORE + """
+				(defvar *bad-handle* (handler-case (kv:bucket-get 424242 "k")
+				                       (rontolisp:wit-error (e) (rontolisp:wit-error-payload e))))
+				(defun stub-store (member &rest args)
+				  (if (string= member "open")
+				      7
+				      (error 'rontolisp:wit-error :payload (list :other member)
+				             :message "the stub store does not implement it")))
+				(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'stub-store)
+				(defvar *stub* (handler-case (kv:bucket-set (kv:open "cache") "k" "v")
+				                 (rontolisp:wit-error (e) (rontolisp:wit-error-payload e))))
+				(list *bad-handle* *stub*)
+				""").print()).isEqualTo("(:no-such-store (:other \"bucket-set\"))");
+	}
+
+	@Test
+	void witImportWithNoProviderBoundSignalsAClearWitError(@TempDir Path tempDir) throws Exception {
+		// The honest statement of what the core does with a wit-import: it binds the
+		// WIT's
+		// functions, and NOTHING ELSE. rontolisp knows the provider mechanism; it does
+		// not
+		// know what any concrete interface means, and it ships an implementation of none
+		// --
+		// so a bound function with no provider behind it does not quietly answer a
+		// default,
+		// it says so, and names the one thing that fixes it.
+		String directive = witImport(tempDir, "gl.wit", WEBGL_WIT, "local:webgl/gl", "gl");
+		assertThatThrownBy(() -> evalMulti(directive + "(gl:create-shader 35633)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("No provider is bound for the WIT interface local:webgl/gl")
+			.hasMessageContaining("rontolisp:wit-provide");
+		// And it is an ordinary rontolisp:wit-error, so a program can catch it; the
+		// payload
+		// is the interface nothing was bound for.
+		assertThat(evalMulti(directive + """
+				(handler-case (gl:create-shader 35633)
+				  (rontolisp:wit-error (e) (rontolisp:wit-error-payload e)))
+				""").print()).isEqualTo("\"local:webgl/gl\"");
+	}
+
+	@Test
+	void witErrorIsUsableAsAConditionClassWithoutAnyWitImport() {
+		// The WIT runtime defines rontolisp:wit-error as a CONDITION CLASS, and a class
+		// name is a quoted datum -- not a resolved function name. The interpreter's lazy
+		// load used to trigger only on the latter, so `error` expanded against a
+		// ClosRegistry that had never heard of the class and built a bogus condition
+		// whose payload reader answered :payload. The compile path always got this right
+		// (its pre-pass walks the AST, quoted symbols included), so the interpreter
+		// DIVERGED from the JVM on the same source.
+		assertThat(evalMulti("""
+				(defun boom () (error 'rontolisp:wit-error :payload (list :other "no store")))
+				(handler-case (boom)
+				  (rontolisp:wit-error (e) (rontolisp:wit-error-payload e)))
+				""").print()).isEqualTo("(:other \"no store\")");
 	}
 
 }

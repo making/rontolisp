@@ -224,7 +224,11 @@ class WitExportDirectiveTest {
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageStartingWith("world.wit:4: export 'count-vowels': the WIT type of s is not supported at the "
 					+ "export boundary yet (supported: s32, s64, f64, bool, string)")
-			.hasMessageContaining(".todo/128");
+			// The settled house representation is named, so the error says what the value
+			// WOULD be -- but it must not cite a .todo file, which is deleted the moment
+			// the work lands.
+			.hasMessageContaining("BYTE_STRING")
+			.hasMessageNotContaining(".todo");
 		assertThatThrownBy(() -> lower(world("  export count-vowels: func(s: u32) -> s32;"), Backend.WASM_GC))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("world.wit:4:")
@@ -279,6 +283,7 @@ class WitExportDirectiveTest {
 				}
 				""", Backend.WASM_GC)).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageStartingWith("world.wit:4: import 'log':")
+			.hasMessageContaining("rontolisp:wit-import")
 			.hasMessageContaining("rontolisp:wasm-import");
 	}
 

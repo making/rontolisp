@@ -73,6 +73,46 @@ comes from a provider rather than from a parallel hand-written implementation.
 If that works, **it is the proof the whole IDL bet was right**: a new host
 interface costs a `.wit` file, not a blob variant.
 
+### The target program already exists: `examples/wit/keyvalue/`
+
+Written for `.todo/127` (DONE 2026-07-14) and **running today on the interpreter and
+the JVM**, from one source, with the store swapped underneath it:
+
+| file | what it is |
+|---|---|
+| `wit/keyvalue.wit` | the interface -- a faithful subset of real `wasi:keyvalue` 0.2 `store`: a `variant error`, a `resource bucket` with get/set/delete/exists/list-keys, `open: func(identifier: string) -> result<bucket, error>` |
+| `memory-store.lisp` | a portable Lisp hash-table implementation; ends in one `(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'memory-store)` |
+| `java-store.lisp` | the same interface over a real `java.util.LinkedHashMap` (`java:` interop); bound after, so it REPLACES the memory store on the JVM |
+| `page-hits.lisp` | the program. It knows the WIT and nothing else -- no line of it says where the pairs live |
+
+**The definition of done for this todo is that `page-hits.lisp` compiles to a component
+and runs against a real host store WITHOUT A SINGLE CHARACTER CHANGING.** That is the
+whole claim of `.todo/124`, made falsifiable. Do not write a new example for it; if the
+existing one needs to change to work, the design is wrong.
+
+What stops it today, verified 2026-07-14 (these are the two things this todo builds):
+
+```console
+$ rontolisp page-hits.lisp -o kv.wasm            # Preview 1
+wit/keyvalue.wit:32: 'bucket-get': the WIT type of the result does not cross the
+Preview 1 WASM import boundary (...). Its rontolisp representation is settled
+(RESULT), and the interpreter and the JVM backend bind it today -- only the WASM
+import boundary cannot marshal it yet
+
+$ rontolisp page-hits.lisp -o kv.wasm --component
+rontolisp:wit-import is not supported with --component yet: a component's imports
+need the canonical-ABI lower, which is not implemented.
+```
+
+So the two halves are exactly: (1) the marshalling of the rich types
+(`result`/`option`/`variant`/`list<u8>`) -- which also unblocks Preview 1, where a
+FLAT interface (scalars/string/bool/handle only) already works today and is
+byte-identical to a hand-written `wasm-import` block; and (2) `canon lower` itself.
+Land (1) and Preview 1 keyvalue starts working on the way past.
+
+Note `--no-gc` stays a clear refusal by design (its MVP module imports nothing), so
+this example's backends will be interpreter / JVM / Preview 1 / component -- not five.
+
 Second target once it lands: composing with a component written in another
 language (`wac plug` a Rust component's exports into a rontolisp component's
 imports) — the "Lisp as glue" demo, and the thing that makes rontolisp interesting

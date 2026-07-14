@@ -418,7 +418,7 @@ export greet: func(who: string) -> string;
 
 現在の制限:
 
-- 束縛されるのは world の**エクスポート**側だけです。`import` 項目は無視され(コンポーネントの WASI インポートは、それが構築される固定のアダプタ表面から来ます — それを見る手段が [`--emit-wit`](#emitting-the-wit-world---emit-wit) です)、インラインの `import name: func(...)` は黙って捨てるのではなく拒否されます。ホスト関数は引き続き `rontolisp:wasm-import` で宣言します。
+- 束縛されるのは world の**エクスポート**側だけです。`import` 項目は無視され(コンポーネントの WASI インポートは、それが構築される固定のアダプタ表面から来ます — それを見る手段が [`--emit-wit`](#emitting-the-wit-world---emit-wit) です)、インラインの `import name: func(...)` は黙って捨てるのではなく拒否されます。プログラムが呼び出す関数は、[`wit-import`](#importing-a-wit-interface-wit-import) でインターフェースから束縛します(あるいは `rontolisp:wasm-import` で手書きします)。
 - 実装できるのは素の関数エクスポートだけです。インターフェースをエクスポートする world はエラーであり、`rontolisp:http-handler` のプログラムは world をまったく使えません(serve モードのコンポーネントの唯一のエクスポートは `wasi:http/incoming-handler` です)。
 - `:s-expr` に対応する WIT の綴りはないため、任意の S 式を境界で受け渡すエクスポートには引き続き手書きの `rontolisp:wasm-export` が必要です。
 - インタプリタではディレクティブは順に評価され、それまでに定義された関数しか見えません。ファイルの末尾に置いてください。
@@ -448,6 +448,92 @@ rontolisp --scaffold-wit wit/greeter.wit -o greet.lisp   # no -o: print to stdou
 ```
 
 引数は WIT の名前のまま命名され、各エクスポートの WIT シグネチャは満たすべき契約としてスタブの上に書き出され、`///` ドキュメントコメントは `;;;` コメントになります。スタブはコンパイル時ではなく**実行**時にシグナルするため、生成されたファイルはそのままコンパイルでき、エクスポートを 1 つずつ埋めていけます。`.wit` が複数の world を宣言している場合は `--world NAME` を追加してください。
+
+## WIT インターフェースのインポート(`wit-import`)
+
+`wit-export` が WIT 契約のエクスポート側だとすれば、**`rontolisp:wit-import`** はインポート側です。プログラムが WIT インターフェースを**呼び出す**ことを宣言し、そのインターフェースが宣言するすべての関数を通常の Lisp 関数として束縛します — 名前もラムダリストも型も、すべて `.wit` から取られます。これは既存のフォームへローワリングされるコンパイル時ディレクティブであり、*何に*ローワリングされるかはバックエンドごとに異なります。それこそが要点です: **1 つの WIT、バックエンドごとに異なる実装、ソース変更はゼロ**。
+
+```console
+// wit/host.wit
+package example:host@0.1.0;
+
+interface math {
+  /// Add two integers on the host.
+  add-ints: func(a: s32, b: s32) -> s32;
+}
+```
+
+```console
+;;; main.lisp -- the directive comes FIRST: it defines the functions the rest of
+;;; the file calls.
+(rontolisp:wit-import "wit/host.wit" :interface "example:host/math@0.1.0")
+
+(defun add10 (n) (add-ints n 10))
+(rontolisp:wasm-export 'add10 :params '(:int) :returns :int)
+```
+
+Preview 1 WASM では、各 WIT 関数が [`rontolisp:wasm-import`](#importing-host-functions) になります。インポート**モジュール**はインターフェースの素の名前 (`math`。`:from` で変更可)、インポート**フィールド**は WIT ラベルの camelCase 表記 (`addInts` — JavaScript の慣習であり、`jco` が生成するものでもあります。`:field-style :kebab` でラベルのままにできます) です。したがってホスト側の満たし方は従来どおりです。ここではそのフィールド名で関数をエクスポートする、もう 1 つの Lisp モジュールが担います:
+
+```console
+;;; host.lisp
+(defun host-add (a b) (+ a b))
+(rontolisp:wasm-export 'host-add :as "addInts" :params '(:int :int) :returns :int)
+```
+
+```bash
+rontolisp host.lisp -o host.wasm --no-wasi
+rontolisp main.lisp -o main.wasm --no-wasi
+wasmtime run -W gc --preload math=host.wasm --invoke add10 main.wasm 32
+# 42
+```
+
+生成されるモジュールは、手書きの
+`(rontolisp:wasm-import 'add-ints :from "math" :as "addInts" :params '(:int :int) :returns :int)`
+が生成するものと**バイト単位で同一**です — このディレクティブは第 2 のインポート経路ではなく、その機構への型付きフロントエンドです。また [`--optimize`](#optimize-tree-shaking) はプログラムが呼び出さないインポートを従来どおり削ぎ落とすため、34 関数のインターフェースを束縛して 3 つだけ使ってもコストはかかりません。
+
+### プロバイダ: インタプリタと JVM でも同じソース
+
+インタプリタと JVM には WASM ホストが存在しないため、そこでは各 WIT 関数がインターフェースの**プロバイダ**へディスパッチする通常の `defun` になります。プロバイダとは、束縛された関数の Lisp メンバー名 (文字列) に続けてその関数の引数を受け取る Lisp 呼び出し可能オブジェクトです。[`rontolisp:wit-provide`](../reference/functions/rontolisp-wit-provide.md) がそれを束縛します — そして rontolisp は**どのインターフェースについてもプロバイダを同梱していません**。同梱しているのはプロバイダの仕組みであって、`wasi:keyvalue` が何であるかを rontolisp は知りません。WIT インターフェースの実装は通常の Lisp コードです:
+
+```console
+;;; counter.lisp -- wasi:keyvalue, against a store written in Lisp.
+(rontolisp:wit-import "wit/store.wit" :interface "wasi:keyvalue/store@0.2.0" :package kv)
+
+(defvar *rows* (make-hash-table :test #'equal))
+
+(defun my-store (member &rest args)
+  (cond ((string= member "open") 1)              ; the bucket handle: any integer
+        ((string= member "bucket-set")
+         (setf (gethash (nth 1 args) *rows*) (nth 2 args))
+         nil)
+        ((string= member "bucket-get") (gethash (nth 1 args) *rows*))
+        (t (error 'rontolisp:wit-error :payload (list :other member)))))
+
+(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-store)
+
+(defvar *bucket* (kv:open "counts"))
+
+(kv:bucket-set *bucket* "visits" "41")
+(print (kv:bucket-get *bucket* "visits"))   ; "41"
+```
+
+`:package kv` は束縛をエクスポートする `defpackage` を合成します。WIT の `resource` のメソッドはハンドルを第 1 引数として取り (`bucket.get` は `(kv:bucket-get b "visits")` になります)、各束縛は通常の関数なので `#'kv:bucket-get`、`funcall`、`mapcar` がそのまま使えます。プロバイダが束縛されていない状態で呼ぶと、何らかの既定値に到達するのではなく `rontolisp:wit-error` がシグナルされます (`No provider is bound for the WIT interface wasi:keyvalue/store@0.2.0 -- bind one with rontolisp:wit-provide`)。
+
+要点は、プロバイダが*ただの関数*だということです: 上のハッシュテーブルを本物のストア — Redis、ファイル、JDBC 接続 — に差し替えても、`(kv:bucket-set b "visits" "41")` を呼ぶコードは変わりません。[`wit/keyvalue` の例](https://github.com/making/rontolisp/tree/develop/examples/wit/keyvalue)は、1 つのページビューカウンタを 2 つのストア (可搬な Lisp ストアと、JVM では `java.util.LinkedHashMap` のストア) の上で動かし、出力は同一です。同じソースを WASM にコンパイルすれば、代わりに**ホスト**がインターフェースを実装します。その場合トップレベルの `rontolisp:wit-provide` はエラーにならず**捨てられます** (ホストがプロバイダだからです)。まさに 1 つのソースがどこでも動くようにするためです。
+
+WIT の `result<T, E>` は値ではありません。ok アームが戻り値で、error アームはマップされた `E` を運ぶ `rontolisp:wit-error` コンディションをシグナルします。これは `handler-case` で捕捉でき、`rontolisp:wit-error-payload` でペイロードを取り出せます。
+
+現在の制限事項:
+
+- `--component` と `--no-gc` はこのディレクティブを明確なエラーで拒否します。コンポーネントのインポートには canonical ABI の lower が必要であり、`--no-gc` の MVP モジュールは何もインポートしないからです。動作するのはインタプリタ、JVM バックエンド、Preview 1 WASM です。
+- Preview 1 の境界を渡れるのは `rontolisp:wasm-import` が運べる型だけです — 32 ビットまでの整数スカラー、浮動小数点スカラー、`bool`、`string`、`list<u8>`、リソースハンドル。`record`、`option`、`result`、`s64` は、インタプリタと JVM が今日それを束縛できるとしても、WIT ファイル名と行番号を示すコンパイルエラーになります (上の `wasi:keyvalue` プログラムがインタプリタ／JVM 向けなのはそのためです: その `result` アームが Preview 1 の境界から遠ざけています)。`stream` と `future` はすべてのバックエンドで拒否されます。
+- 束縛できるのは**インターフェース**です。world の `import` 項目は依然として読まれません。
+- ディレクティブはトップレベルで、インターフェースを呼ぶコードより**前**に置かなければなりません (パッケージと束縛を定義するのがこれだからです)。`wit-export` とは逆です。
+
+オプションの一覧、名前マッピングの規則、WIT 型の表は
+[wit-import](../reference/functions/rontolisp-wit-import.md) と
+[wit-provide](../reference/functions/rontolisp-wit-provide.md)
+のリファレンスページにあります。
 
 ## 非 GC 出力(`--no-gc`)
 

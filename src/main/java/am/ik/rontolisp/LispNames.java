@@ -2727,6 +2727,52 @@ public final class LispNames {
 	public static final String WASM_IMPORT = "wasm-import";
 
 	/**
+	 * The {@code wit-import} directive provided by the {@code rontolisp} package. Used as
+	 * {@code (rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0" :package
+	 * kv)} to bind a WIT interface's functions as ordinary Lisp functions. The mirror of
+	 * {@link #WIT_EXPORT}: the WIT file is the single description of the boundary, and
+	 * each backend binds it to what it can reach -- Preview 1 WASM lowers it to
+	 * {@link #WASM_IMPORT} directives, while the interpreter and the JVM backend dispatch
+	 * through the provider bound for the interface ({@link #WIT_PROVIDE}, or a built-in
+	 * one).
+	 */
+	public static final String WIT_IMPORT = "wit-import";
+
+	/** The fully qualified {@code rontolisp:wit-import} directive name. */
+	public static final String WIT_IMPORT_QUALIFIED = RONTOLISP_PKG + ":" + WIT_IMPORT;
+
+	/**
+	 * The {@code wit-provide} function provided by the {@code rontolisp} package. Used as
+	 * {@code (rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-store)} to bind the
+	 * implementation of a {@link #WIT_IMPORT}ed interface: the provider is an ordinary
+	 * Lisp callable taking the bound function's name followed by its arguments. It is
+	 * what makes the same WIT-importing source run against a different implementation per
+	 * backend. A no-op on the WASM backends, where the host supplies the imports.
+	 */
+	public static final String WIT_PROVIDE = "wit-provide";
+
+	/**
+	 * The internal {@code rontolisp::%wit-call} dispatch primitive: the body every
+	 * {@link #WIT_IMPORT} binding lowers to on the interpreter and the JVM backend.
+	 * Defined in {@code wit.lisp} (see {@code WitLibrary}), not by a backend.
+	 */
+	public static final String WIT_CALL = "%wit-call";
+
+	/**
+	 * The {@code wit-error} condition provided by the {@code rontolisp} package: what the
+	 * error arm of a WIT {@code result<T, E>} signals, carrying the mapped {@code E}
+	 * payload in its {@code payload} slot (the settled type mapping, {@code .kb/wit.md}).
+	 * Defined in {@code wit.lisp} (see {@code WitLibrary}).
+	 */
+	public static final String WIT_ERROR = "wit-error";
+
+	/**
+	 * The reader of {@link #WIT_ERROR}'s {@code payload} slot: the mapped {@code E} value
+	 * of the WIT {@code result} whose error arm signaled.
+	 */
+	public static final String WIT_ERROR_PAYLOAD = "wit-error-payload";
+
+	/**
 	 * The {@code java} package name (interpreter-only Java interop by reflection). It
 	 * does not use {@code cl}; its functions wrap arbitrary host objects as
 	 * {@code LispJavaObject} and so run on the JVM interpreter only -- the JVM-class and

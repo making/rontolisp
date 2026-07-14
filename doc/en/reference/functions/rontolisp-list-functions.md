@@ -10,5 +10,5 @@ function exactly when it is usable as a function value via `#'name`. For
 See [Package introspection](../packages.md#package-introspection) for details.
 
 ```lisp
-(rontolisp:list-functions :rontolisp) ; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
+(rontolisp:list-functions :rontolisp) ; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
 ```

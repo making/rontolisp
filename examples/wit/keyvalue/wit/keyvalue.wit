@@ -1,0 +1,49 @@
+package wasi:keyvalue@0.2.0;
+
+/// A key-value store, keyed by string and holding opaque byte values.
+///
+/// This is an honest SUBSET of the real wasi:keyvalue 0.2 `store` interface
+/// (https://github.com/WebAssembly/wasi-keyvalue), hand-written here so the
+/// example is self-contained. Two simplifications, and nothing else:
+///
+///   - `list-keys` answers every key at once. Upstream pages it: it takes an
+///     `option<u64>` cursor and answers a `key-response` record.
+///   - the sibling `wasi:keyvalue/atomics` and `wasi:keyvalue/batch`
+///     interfaces are not here at all.
+///
+/// Everything below -- the `error` variant, the `bucket` resource, and `open`
+/// -- is upstream's, name for name.
+interface store {
+  /// The set of errors a store operation may raise.
+  variant error {
+    /// The host does not recognize the store identifier requested.
+    no-such-store,
+    /// The requesting component does not have access to the specified store.
+    access-denied,
+    /// Some implementation-specific error occurred (an I/O error, say).
+    other(string),
+  }
+
+  /// A collection of key-value pairs. Each key is unique within the bucket, and
+  /// the value is an opaque byte sequence.
+  resource bucket {
+    /// The value associated with the key, or nothing when the bucket holds no
+    /// such key.
+    get: func(key: string) -> result<option<list<u8>>, error>;
+
+    /// Associate the value with the key, replacing any previous value.
+    set: func(key: string, value: list<u8>) -> result<_, error>;
+
+    /// Delete the key-value pair, if the bucket holds one.
+    delete: func(key: string) -> result<_, error>;
+
+    /// Whether the bucket holds the key.
+    exists: func(key: string) -> result<bool, error>;
+
+    /// Every key in the bucket. (Upstream pages this with a cursor.)
+    list-keys: func() -> result<list<string>, error>;
+  }
+
+  /// Open the bucket with the given identifier.
+  open: func(identifier: string) -> result<bucket, error>;
+}

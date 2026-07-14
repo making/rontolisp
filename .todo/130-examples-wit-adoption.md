@@ -21,7 +21,7 @@ name a world cannot express. The "blocked" half below is the load-bearing half.
 | `browser/webgl-cube/cube.lisp:216`, `webgl-galaxy/galaxy.lisp:193-194` | 1 / 2 | `frame(f64)`, `init(s32)` | deferred -- their story is the import side (§5) |
 | `browser/webgl-triangle/triangle.lisp` | **0** | 11 imports, no exports | not applicable -- a world with no exports is a compile error (§5) |
 | `net/*`, `wasmcloud/*/app.lisp` | -- | `rontolisp:http-handler` | excluded by construction (§6) |
-| `count-vowels/count-vowels.lisp`, `wit-world/analyzer.lisp` | 1 / 4 | -- | already on `wit-export` -- nothing to do |
+| `count-vowels/count-vowels.lisp`, `wit/world/analyzer.lisp` | 1 / 4 | -- | already on `wit-export` -- nothing to do |
 
 Aliased exports total **12**, over three demos. `:s-expr` exports total **8**, over two.
 

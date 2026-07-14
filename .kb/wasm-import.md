@@ -60,6 +60,24 @@ import wrappers reachable through the funcall dispatcher — webgl-heat3d ends u
 importing `disable`/`depthMask` it never calls, and its page provides those two
 bindings for that reason.
 
+**It is now also a LOWERING TARGET** (todo 127, `.kb/wit.md`): on the Preview 1 backend a
+`(rontolisp:wit-import "gl.wit" :interface "local:webgl/gl" :package gl)` expands to
+exactly one of these directives per WIT function — same `:from`/`:as`/`:params`/`:returns`
+shape, same synthetic-defun mechanism, same `WasmImportInjector` post-pass — so the module
+is byte-identical to the hand-written block and `--optimize` still shakes the never-called
+imports. `:from` defaults to the interface's bare name; the WIT label becomes the `:as`
+field camelCased (`:field-style :camel`, the default) or verbatim (`:kebab`). Only
+`:int`/`:float`/`:bool`/`:string` are reachable from a WIT type (nothing maps to
+`:s-expr`), so a WIT type outside that flat set is a compile error naming the WIT file and
+line — the interpreter/JVM lowering has no such limit, because there a `wit-import` lowers
+to a provider call, not to an import. The `gl.lisp` block above is precisely the shape that
+crosses (handles, scalars, strings): a hand-written `local:webgl/gl.wit` was measured to
+reproduce it byte-for-byte, and all but four of its imports are an exact kebab -> camel
+match. The four that are not are places gl.lisp gave the Lisp side DIFFERENT WORDS from the
+host field (`shader-compiled-p` / `getShaderParameter`, ...), which a WIT label — one name
+serving as both — cannot express; the decision is that the WIT names win, so migrating the
+demos means renaming those four call sites (`.todo/132`).
+
 Tests: `WasmImportCompilerTest` (structural: import-section order, index shift,
 allocator gating, mode rejection), preload-based E2E in
 `WasmLispCompilerIntegrationTest` (`wasmtime run --preload host=... main.wasm`, host

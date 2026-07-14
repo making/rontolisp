@@ -1,9 +1,9 @@
-# `am.ik.wit` — the WIT parser/printer library, the settled type mapping, and `wit-export`
+# `am.ik.wit` — the WIT parser/printer library, the settled type mapping, `wit-export` and `wit-import`
 
 Todo 125 (step 1 of the `.todo/124` "WIT as universal IDL" roadmap), 2026-07-13, plus
-todo 126 (`rontolisp:wit-export`, 2026-07-14). Everything downstream (`wit-import`
-`.todo/127`, component imports `.todo/128`) consumes this model; nothing downstream
-re-parses text.
+todo 126 (`rontolisp:wit-export`, 2026-07-14) and todo 127 (`rontolisp:wit-import`,
+2026-07-14). Everything downstream (component imports, `.todo/128`) consumes this model;
+nothing downstream re-parses text.
 
 ## The library (`am.ik.wit`)
 
@@ -248,12 +248,15 @@ Every one names the WIT file and line (`WitLocations`), e.g.
 - an export that names an interface (`export foo/bar;` or an inline interface):
   `wit-export` implements plain function exports only (a program's
   `wasi:http/incoming-handler` export comes from `rontolisp:http-handler`)
-- an inline `import name: func(...)` in the world — rejected, not silently dropped
-  (`.todo/127`)
+- an inline `import name: func(...)` in the world — rejected, not silently dropped; it is
+  the one import shape `rontolisp:wit-import` cannot bind either (it is not an interface),
+  and the message says to declare the interface to call instead
 - a WIT type outside the export boundary's subset (`s32` / `s64` / `f64` / `bool` /
   `string`). The error names the type's SETTLED house representation via
-  `WitTypeMapper.rep` and points at `.todo/128` — "your `record` is a keyword plist,
-  marshalling it is not built yet", not a bare refusal
+  `WitTypeMapper.rep` and says the component boundary cannot marshal it yet (`.todo/128`)
+  — "your `record` is a keyword plist, marshalling it is not built yet", not a bare
+  refusal. The message itself carries no `.todo` pointer: a todo file is deleted the
+  moment the work lands, so a user-facing string must never name one
 - `s64` on the wasm-GC backend (its integers are `i31ref`; only `--no-gc --component`
   lifts an `s64`) — the pre-existing rule, now reported against the WIT line that asked
   for it
@@ -349,8 +352,330 @@ in one export at a time.
 
 ### What `wit-export` does NOT do: the import side
 
-A world's imports are not bound to anything. Binding them is `.todo/127` (interpreter +
-JVM: `wit-import` against a provider) and `.todo/128` (component imports via canon lower,
-the wasi:keyvalue unblocker). `rontolisp:wit-import` does not exist yet; an inline
-function import in an implemented world is an error precisely so that it does not read as
-supported.
+A world's `import` items still bind nothing, and the contract check still ignores them.
+Since todo 127 a program declares what it CALLS in a separate `rontolisp:wit-import`
+directive naming the interface (next section) — the two directives do not talk to each
+other. An inline `import name: func(...)` in an implemented world stays an error: it is
+the one import shape `wit-import` cannot bind (it is not an interface), so it must not
+read as supported. Making a world's import LIST authoritative the way its export list is
+needs the component boundary — `.todo/128` (canon lower, the wasi:keyvalue unblocker) —
+and only then does `--emit-wit` become a two-sided check.
+
+## `rontolisp:wit-import` — calling a WIT interface (todo 127, 2026-07-14)
+
+Step 3 of `.todo/124`, the mirror of `wit-export`: *this program CALLS this WIT
+interface*. One WIT file, a different implementation behind it per backend, zero source
+changes — a `wasi:keyvalue` program is developed against an in-memory bucket (a Lisp file
+it `require`s, see the provider decision below), swapped onto a real store by binding one
+provider, and (once `.todo/128` lands) compiled to a component that talks to a real host.
+
+```lisp
+;; kv.wit: interface store {
+;;           open: func(identifier: string) -> result<bucket, error>;
+;;           resource bucket { get: ...; set: ...; delete: ...; }
+;;         }
+(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0" :package kv)
+
+;; ...and, on the backends that dispatch a provider, WHO implements it -- ordinary user
+;; code, ending in (rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'memory-store).
+(require :kv-memory "memory-store.lisp")
+
+(let ((b (kv:open "cache")))         ; a resource = an opaque integer handle
+  (kv:bucket-set b "hello" "world")  ; a method takes its handle as the FIRST argument
+  (print (kv:bucket-get b "hello"))) ; => "world"
+```
+
+Options (`compiler/WitImportDirective.parse`; every name may be written as a string or as
+a bare symbol in the WIT's own spelling):
+
+| option | meaning |
+|---|---|
+| (the path) | the WIT file, resolved against the source file's directory (`SourceLoader.resolve`, like `load`) and READ through `SourceLoader` — the playground has no filesystem |
+| `:interface` | **required**: `wasi:keyvalue/store@0.2.0`, or the version-less `wasi:keyvalue/store`, or the bare `store`. `WitResolver.findInterface` tries those spellings in that order; an ambiguous one resolves to nothing and the error lists every id the file defines. All three lower to the CANONICAL id, which is what the provider registry is keyed by (see below) |
+| `:package kv` | the bindings land in package `kv`: the directive synthesizes `(defpackage kv (:use cl) (:export ...))` and qualifies each binding `kv:member`. Omitted = the current package |
+| `:from "module"` | Preview 1 only: the WASM import module. Defaults to the interface's BARE name (`store`, `gl`) |
+| `:field-style` | `:camel` (default) or `:kebab` — how a WIT label is spelled as the Preview 1 import FIELD |
+
+### It LOWERS — there is no new call path on any backend
+
+`WitImportDirective.lower()` returns, in WIT order, the forms the directive stands for.
+Like `WitExportDirective` it does no I/O and no codegen (the caller hands it the WIT
+*text*), and its `Backend` enum is shared with the export side.
+
+| backend | the directive becomes |
+|---|---|
+| Preview 1 WASM (`-o out.wasm`) | one `(rontolisp:wasm-import 'name :from M :as FIELD :params '(...) :returns T)` per WIT function — literally what a hand-written import block carries |
+| interpreter, JVM (`-o Prog.class`) | the `defpackage`, then one ordinary `(defun kv:bucket-get (self key) (rontolisp::%wit-call "wasi:keyvalue/store@0.2.0" "bucket-get" self key))` per WIT function |
+| `--component` | clear error (`RontoLispCli`) — a component's imports need the canonical-ABI lower, `.todo/128` |
+| `--no-gc` | clear error (`WitImportDirective.lower`) — its MVP module imports nothing |
+
+The Preview 1 output is **measured byte-identical** to the hand-written `wasm-import`
+block it lowers to, and identical again under `--optimize` with a never-called import
+shaken out — the same "front-end for machinery that already exists" property `wit-export`
+has on the export side. The interpreter/JVM binding is an **ordinary defun**, so
+`#'kv:bucket-get` / `funcall` / `mapcar` / `eval` work with no extra wiring (the property
+todo 127 flagged as the one most likely to regress); `%wit-call` is itself an ordinary
+defun, from `wit.lisp` below.
+
+### Where the passes run — and why the IMPORT inliner runs BEFORE `UserMacroExpander`
+
+The asymmetry a future reader will get backwards. Both inliners live in `eval` and read
+through `SourceLoader` (CLAUDE.md's rule — the playground has its own front-end and no
+filesystem), but they sit on opposite sides of macro expansion:
+
+- **`eval/WitImportInliner` runs straight after `LoadInliner`, BEFORE `UserMacroExpander`**
+  (`RontoLispCli.compileToFile`; `RontoPlayground.frontend` runs it first too). It has to:
+  the names it binds live in a package the WIT names, so the `(defpackage kv ...)` it
+  synthesizes must exist **before anything resolves a `kv:get` call site** — and
+  `UserMacroExpander` resolves every top-level form through its own `PackageResolver`,
+  where an unknown package is a hard error. It can afford to run that early because it
+  needs nothing macro expansion produces: a `wit-import` is checked against a WIT FILE,
+  never against the program.
+- **`eval/WitExportInliner` runs AFTER `UserMacroExpander`**, for the exactly opposite
+  reason: its contract check must see every `defun`, including one a macro or a `load`
+  produced.
+
+After the import inliner, `WitLibrary.process` splices the runtime alongside the other
+Lisp-source library splices, and `LibraryDefunPruner` runs last (as ever).
+
+Because the directive is replaced **in place**, put a `wit-import` at the TOP of the file
+— the opposite end from a `wit-export`, which goes last. On the interpreter both are
+special forms evaluated in source order, so the rule is the same there:
+`LispEvaluator.evalWitImport` reads the WIT through its `SourceLoader`, lowers with
+`Backend.OTHER`, calls `ensureWitLoaded()`, and evaluates each lowered form through
+`packageResolver.resolve` so the synthesized `defpackage` registers exactly as a
+hand-written one would.
+
+`PackageResolver` exempts a `wit-import`'s arguments from resolution (they are WIT data,
+like `wit-export`'s). The names the directive BINDS need no resolution either — it
+qualifies them itself.
+
+### The provider: decision record — the ESCAPE HATCH ONLY, and it is a Lisp callable
+
+Todo 127 recommended (c) built-in providers for the WASI interfaces rontolisp already
+implements + (a) an escape hatch spelled
+`(java:bind-wit "iface" (java:new "com.example.RedisStore" url))`. Shipped: **the escape
+hatch, as `(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-dispatch)`, and NO
+built-in provider for anything.** Two separate decisions; keep them apart.
+
+**1. The escape hatch is a Lisp callable, not `java:bind-wit`.** A provider is an ordinary
+Lisp callable taking the bound function's Lisp member name (a STRING: `"open"`,
+`"bucket-get"`) followed by that function's arguments. Why (a) was dropped:
+
+- `java:` interop is JVM + interpreter only, and **the native binary cannot INTERPRET it**
+  (no reflection metadata, `.kb/java-interop.md`) — the escape hatch would be dead in the
+  configuration most users actually run.
+- it would drag the hand-synced `JavaInterop`/`JavaBridgeTemplate` pair (overload
+  selection by cost, sequence marshalling, callback proxying) into the WIT boundary for a
+  dispatch that is one `apply`.
+- a Lisp callable is the same value on every backend that has a provider at all, so
+  `wit-provide` needs no `#+jvm` guard around it.
+
+A user who wants a Java-backed store loses nothing: they write a few lines of Lisp over
+the existing `java:` interop — a function dispatching on the member string into
+`java:call` — and hand THAT to `wit-provide`. `examples/wit/keyvalue/java-store.lisp` is
+exactly that, ~35 lines over a `java.util.LinkedHashMap`. (b), a `ServiceLoader` SPI,
+stays rejected: invisible magic plus a native-image reflection problem.
+
+**2. NO built-in provider ships — (c) is REVERSED (user decision, 2026-07-14).** An
+earlier round of this work did ship an in-memory `wasi:keyvalue/store@0.2.0` provider
+inside `wit.lisp`; it was **removed**. The rule now:
+
+> rontolisp's core knows the provider **mechanism**. It does not know what
+> `wasi:keyvalue` is, and it ships no provider for any concrete interface.
+
+The reasoning, so nobody re-adds one:
+
+- a built-in store hardcodes ONE third-party spec's interface id, its member names AND its
+  version (`wasi:keyvalue/store@0.2.0`) into the core of a Lisp. It is version-pinned and
+  name-pinned to something we do not own, and it privileges one spec over every other.
+- it contradicts the bet of `.todo/124`: **a new host interface should cost a `.wit` file,
+  not core code.** An implementation of a WIT interface is ordinary USER code — that is
+  what the mechanism is FOR, and shipping one implementation in the core says the opposite.
+- the cost is honest and small: a `wasi:keyvalue` program cannot run bare, it needs one
+  `(require :kv-memory "memory-store.lisp")` of a ~40-line portable Lisp store. That store
+  is `examples/wit/keyvalue/memory-store.lisp`, and having it be READABLE user code is
+  worth more than having it be invisible.
+
+So `wit.lisp` (below) is now only the registry + `wit-provide` + `%wit-call` + the
+`wit-error` condition — ~50 lines. Calling a wit-imported function with no provider bound
+signals `rontolisp:wit-error`: *"No provider is bound for the WIT interface `<id>` — bind
+one with rontolisp:wit-provide"*. `wit-provide` REPLACES any provider (it is a hash-table
+put), which is how `examples/wit/keyvalue` swaps its memory store for its Java one by
+loading a second file.
+
+On the WASM backends the host IS the provider, so a top-level `rontolisp:wit-provide` is
+**dropped** by `WitImportInliner` — inert, not a compile error. One source runs
+everywhere.
+
+### The runtime is `wit.lisp` — so neither backend gained a codegen case
+
+`eval/WitLibrary` + `src/main/resources/am/ik/rontolisp/eval/wit.lisp`, the `usocket.lisp`
+pattern. Everything the runtime does is expressible in core primitives — a hash table of
+callables, `apply`, a `define-condition` — so ONE implementation in Lisp serves both
+backends that need it and no `Jvm*Compiler`/`Wasm*Compiler` case exists at all:
+
+- `rontolisp::*wit-providers*` — an `equal` hash table, interface id -> callable. The key
+  is the interface's CANONICAL id (`WitResolver.canonicalId`), never the reference as the
+  user spelled it: `findInterface` accepts three spellings of one interface, so lowering
+  the spelling as written gave one interface three registry keys — and a `wit-provide`
+  writes only one of them, so `:interface store` compiled clean and then died at runtime
+  with "No provider is bound" against a store the program had plainly bound.
+  `WitImportDirective.lower` canonicalizes; a `wit-provide` key is therefore always the
+  fully-qualified id, whatever the `:interface` spelling was.
+- `rontolisp:wit-provide` — `(setf (gethash interface *wit-providers*) provider)`.
+- `rontolisp::%wit-call` — `(apply provider member args)`; an interface with no provider
+  bound signals `rontolisp:wit-error` telling you to call `wit-provide`.
+- `rontolisp:wit-error` (a `define-condition` over the CLOS subset,
+  `.kb/error-handling.md`) + its `rontolisp:wit-error-payload` reader — what the error arm
+  of a WIT `result` signals.
+
+That is ALL of it — no provider for any concrete interface lives here (the decision record
+above).
+
+Splice policy, exactly like the other Lisp-source libraries:
+
+- **compile path**: `WitLibrary.process` prepends the forms when the program REFERENCES
+  one of the runtime's names (`%wit-call` / `wit-provide` / `wit-error` /
+  `wit-error-payload`) — which is precisely when `WitImportInliner` lowered a `wit-import`
+  for the interpreter/JVM boundary, or the program binds a provider itself. It is
+  idempotent (a program that already defines `%wit-call` is left alone). A WASM program
+  references none of those names — its bindings ARE `wasm-import` directives — so its
+  output stays byte-identical to a build that never knew the library.
+- **interpreter**: lazy, `ensureWitLoaded()` — on the `wit-import` special form, and on the
+  first resolution of one of the runtime's own names, so a program may bind a provider
+  BEFORE the directive that uses it.
+- `wit.lisp` is **not in `LibraryDefunPruner`'s prunable set**, like `usocket`
+  (`.kb/library-defun-pruning.md`): the whole runtime is two defuns, a defvar and a
+  condition whose surface is reached indirectly — the provider comes out of a hash table
+  through `apply`,
+  its members are dispatched by STRING, and the condition's reader is named only inside its
+  own `:report` — so a textual reachability shake could only go wrong here and has nothing
+  to win. Spliced, it survives whole.
+
+`(rontolisp:list-functions :rontolisp)` therefore grew two names, `wit-provide` and
+`wit-error-payload` (`wit-error` is a condition, not a function) — pinned by `ci-spec.yaml`
+and the `list-functions` tests on every backend.
+
+### Name mapping (user-facing, pinned)
+
+`WitImportDirective.memberName`:
+
+| WIT | Lisp |
+|---|---|
+| interface func `create-shader` | `create-shader` (`gl:create-shader` with `:package gl`) |
+| `resource bucket { get: func(...) }` | `bucket-get`, handle FIRST: `(kv:bucket-get b "k")` |
+| `resource bucket { constructor(...) }` | `bucket-new` |
+| `resource bucket { f: static func(...) }` | `bucket-f` |
+
+- The resource prefix is what keeps the flat, Lisp-2 function namespace unambiguous when
+  two resources declare the same method name.
+- WIT parameter names become the Lisp lambda list **verbatim**; a resource method gets a
+  leading `self` (the receiver the WIT model leaves implicit). A method whose WIT signature
+  already declares a parameter called `self` is a clear error naming the line.
+- A constructor's result is its resource (`:int`) — also implicit in the model.
+- An interface that binds the same member name twice is an error naming the line.
+- The Preview 1 import FIELD is `:field-style` applied to the label: `create-shader` ->
+  `createShader`. **`:camel` is the default** because it is the JavaScript convention, what
+  `jco` emits when it transpiles a component, and what the browser demos' hand-written
+  import objects already spell (`.kb/wasm-import.md`). `:kebab` keeps the label verbatim
+  for a host that wants it.
+
+### Two type tiers, and why there are two
+
+`WitTypeMapper` says what a WIT type IS in rontolisp; what a BOUNDARY can carry is a
+second question, and the two backends answer it differently. `WitImportDirective` is where
+a WIT type is judged, and its `wasm` flag is the whole difference:
+
+- **Interpreter / JVM — everything except `stream`/`future`.** The boundary is an ordinary
+  Lisp call: the synthesized defun hands its arguments to `%wit-call`, which `apply`s the
+  provider. Nothing is marshalled, so every settled representation crosses by construction
+  — `record` = keyword plist, `variant` = tagged list, `enum` = keyword, `flags` = keyword
+  list, `option<T>` = value-or-nil, `tuple` = list, `list<u8>` = byte string, `s64` =
+  bignum-safe int. The type designator is computed and then thrown away; only
+  `Rep.UNSUPPORTED` (`stream`/`future`, which have no rontolisp value on ANY backend until
+  language-level async) is refused.
+- **Preview 1 WASM — only the flat set `rontolisp:wasm-import` can carry.** `INT`/`HANDLE`
+  -> `:int`, `FLOAT` -> `:float`, `BOOLEAN` -> `:bool`, `STRING`/`BYTE_STRING` ->
+  `:string`, no result -> `:void`. Everything else — `s64`/`u64`, `char`, `list<T>`,
+  `tuple`, `option`, `result`, `record`, `variant`, `enum`, `flags` — is a compile error
+  naming the WIT file and LINE, and the message says so honestly: the representation IS
+  settled and the other two backends bind it today; it is the WASM import boundary that
+  cannot marshal it yet.
+
+Say the consequence out loud: `wasi:keyvalue/store` itself does **not** cross the Preview 1
+boundary (`open` returns `result<bucket, error>`, `bucket.get` returns
+`result<option<list<u8>>, error>`). kv is an interpreter/JVM story until `.todo/128` lifts
+it onto the canonical ABI. The interfaces that DO cross Preview 1 today are the flat,
+host-shaped ones — WebGL, see the spike below.
+
+`result<T, E>` on the interpreter/JVM: **nothing in the lowering inspects the return
+value.** The ok arm is simply what the provider returned; the error arm is **the PROVIDER**
+calling `(error 'rontolisp:wit-error :payload ...)` with the mapped `E` (a `variant` = a
+tagged list, so `wasi:keyvalue`'s payload-less `no-such-store` arm is the keyword
+`:no-such-store`). Signaling is a provider-side obligation that no one enforces — which is
+exactly the settled mapping above (a condition on every backend), and what both stores in
+`examples/wit/keyvalue` do on a bad handle. `handler-case` on `rontolisp:wit-error` plus
+`wit-error-payload` is the caller's half of it.
+
+### Resource handles: allocated BY THE PROVIDER, and not in the stream handle space
+
+A WIT `resource` is an opaque integer (`Rep.HANDLE`). Who allocates it is **the provider** —
+the host on Preview 1 (the WebGL demos' handle-table JS bindings are exactly this shape),
+the Lisp callable on the interpreter/JVM. `bucket-new` / `open` returns one; each method
+takes it as the leading `self`. Nothing in rontolisp interprets the integer, so any counter
+a provider likes will do (`examples/wit/keyvalue/memory-store.lisp` counts from 1, its Java
+sibling from 500 — and neither number means anything).
+
+Be honest about what this is NOT: it is **not** the shared stream/socket handle space
+todo 127 sketched (`.kb/read-load-streams.md`), and **`cl:close` does not apply to a WIT
+resource**. A resource is released by its own interface's `drop`, which `wasi:keyvalue`'s
+store does not even expose — there is nothing for `close` to mean here, and a provider's
+handles are its own private numbering, not a slot in a rontolisp table. The shared space
+becomes relevant only when the component ABI needs it (`.todo/128`, where the handles are
+the host's anyway).
+
+### New in `am.ik.wit`: `WitResolver`
+
+The parser's model is deliberately syntactic and lossless: a `use` clause is a
+`WitItem.Use` record and a type reference is a `WitType.Named(name)` with no link to its
+definition. That is right for a round-tripping printer and useless for a binder — you
+cannot classify a type you have not resolved. `WitResolver` is that missing link
+(language-independent, no rontolisp imports, like the rest of the library):
+
+- `findInterface(reference)` — indexed over package headers AND `package foo:bar { }`
+  blocks; accepts the fully-qualified id, the version-less id, or the bare name.
+- `resolveType(scope, name)` — the interface's own definitions first, then transitively
+  through its `use` clauses, following aliases, cycle-guarded.
+- `functions(iface)` (static) — the interface's freestanding funcs plus every resource's
+  constructor / methods / statics, in document order, each tagged with its owning resource.
+
+### The `gl.lisp` spike (the todo asked for it; the answer is "yes, and the WIT names win")
+
+Todo 127's definition of done demanded a spike on
+`examples/browser/webgl-common/gl.lisp` (30 `wasm-import`s: 29 into module `gl` plus the
+one `ui`-module `fail`) — explicitly NOT a migration. Result:
+
+- **Yes on the mechanism.** A hand-written `local:webgl/gl.wit` reproduces the Preview 1
+  boundary **byte-for-byte** (name the interface `gl` and `:from` needs no override;
+  `:field-style :camel` regenerates `createShader` and friends exactly), and `--optimize`
+  still shakes the imports a demo never calls — so declaring the whole WebGL2 union stays
+  free, which is the entire reason gl.lisp exists. `.todo/124`'s follow-on prize (one WIT
+  describing the browser boundary) is reachable.
+- **All but four of them are an exact kebab -> camel match** (`create-shader` ->
+  `createShader`, ... , and `ui`'s `fail`), so they migrate untouched.
+- **The four that are not are a RENAME, not a case problem.** They are the places gl.lisp
+  chose different WORDS on the Lisp side: `shader-compiled-p`/`getShaderParameter`,
+  `shader-info-log`/`getShaderInfoLog`, `program-linked-p`/`getProgramParameter`,
+  `program-info-log`/`getProgramInfoLog`. `wasm-import` lets the two names differ
+  (`:as "getShaderParameter"` beside the Lisp name `shader-compiled-p`); a **WIT label is
+  ONE name** that becomes both the Lisp name and (camelCased) the host field, so it cannot
+  serve both.
+
+**USER DECISION (2026-07-14): the WIT-generated names win, and `wit-import` does NOT grow a
+per-function alias option.** An alias would restore exactly the two-places-to-maintain
+drift the directive exists to kill — the same argument that makes a `wit-export` world the
+authoritative export list. So the four call sites get renamed instead
+(`get-shader-parameter` &c). That migration is `.todo/132`; the smaller second item there is
+the module split, since one directive binds one interface into one module, so `ui:fail`
+needs its own interface (or its own directive with `:from "ui"`).

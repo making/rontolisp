@@ -267,6 +267,8 @@
 | `rontolisp:wasm-export` | `(rontolisp:wasm-export 'fact :params '(:int) :returns :int)` | WASMコアモジュールへのコンパイル時に `defun` をホストから呼び出し可能にします |
 | `rontolisp:wasm-import` | `(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)` | WASMコアモジュールへのコンパイル時に、ホスト関数をLispから呼び出し可能として宣言します |
 | `rontolisp:wit-export` | `(rontolisp:wit-export "greeter.wit" :world greeter)` | プログラムがWIT worldを実装していることを宣言します。worldのエクスポートはプログラムの `defun` と照合され、型はWITから得られます |
+| `rontolisp:wit-import` | `(rontolisp:wit-import "store.wit" :interface "wasi:keyvalue/store@0.2.0" :package kv)` | プログラムがWITインターフェースを呼び出すことを宣言します。宣言された各関数が通常のLisp関数（`kv:bucket-get`）として束縛され、インタプリタ／JVMではプロバイダに、Preview 1ではWASMインポートに向かいます |
+| `rontolisp:wit-provide` | `(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-store)` | `wit-import` したインターフェースの実装をインタプリタとJVMバックエンドで束縛します（WASMではホストが供給するため無効化されます） |
 
 イントロスペクション関数(`list-functions` / `list-macros` /
 `list-special-forms`)については
@@ -289,11 +291,13 @@
 [tcp-local-port](functions/rontolisp-tcp-local-port.md) のリファレンスページを参照してください。既存のCommon Lispコードとの互換のために、これらの上に[usocket互換シム](#usocket-パッケージの関数)が用意されています。TLS版（`rontolisp:tls-connect` / `tls-listen` / `tls-listen-pem`）は同じストリームハンドルをTLSで包みます。
 [tls-connect](functions/rontolisp-tls-connect.md)、
 [tls-listen](functions/rontolisp-tls-listen.md)、
-[tls-listen-pem](functions/rontolisp-tls-listen-pem.md) のリファレンスページを参照してください。`rontolisp:wasm-export`、`rontolisp:wasm-import`、`rontolisp:wit-export`
-はWASMバックエンド向けのコンパイル時ディレクティブです。最後のものはプログラムがWIT worldを実装していることを宣言し、各エクスポートの境界型を手書きせず `.wit` ファイルから得ます（`--scaffold-wit` はそこから実装のスケルトンを生成します）。
+[tls-listen-pem](functions/rontolisp-tls-listen-pem.md) のリファレンスページを参照してください。`rontolisp:wasm-export`、`rontolisp:wasm-import`、`rontolisp:wit-export`、`rontolisp:wit-import`
+はコンパイル時ディレクティブです。WITの2つは `.wit` ファイルを境界の唯一の真実の源とするため、型を手書きすることはありません。`wit-export` はプログラムがWIT worldを**実装している**ことを宣言し（`--scaffold-wit` はそこから実装のスケルトンを生成します）、`wit-import` はWITインターフェースを**呼び出す**ことを宣言して、インターフェースが宣言する各関数を通常のLisp関数として束縛します。インタプリタとJVMバックエンドでは*プロバイダ*（[`rontolisp:wit-provide`](functions/rontolisp-wit-provide.md)）へ、Preview 1 WASMではホストがプロバイダとなる `rontolisp:wasm-import` へローワリングされるため、1つのソースがすべてのバックエンドで動きます。rontolispは**どのインターフェースについてもプロバイダを同梱していません**。同梱しているのはプロバイダの仕組みであって、個々のインターフェースが何であるかは知らないため、WITインターフェースの実装は通常のLispコードです。WITの `result` のerrorアームは `rontolisp:wit-error` コンディションをシグナルし、そのペイロードは `rontolisp:wit-error-payload` で読みます。
 [wasm-export](functions/rontolisp-wasm-export.md)、
 [wasm-import](functions/rontolisp-wasm-import.md)、
-[wit-export](functions/rontolisp-wit-export.md) のリファレンスページ、および
+[wit-export](functions/rontolisp-wit-export.md)、
+[wit-import](functions/rontolisp-wit-import.md)、
+[wit-provide](functions/rontolisp-wit-provide.md) のリファレンスページ、および
 [WebAssemblyへのコンパイル](../compiling/wasm.md) ガイドを参照してください。
 
 ## linalg パッケージの関数

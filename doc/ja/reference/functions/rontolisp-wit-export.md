@@ -104,8 +104,10 @@ world と `rontolisp:http-handler` の併用 (serve モードのコンポーネ�
 - 契約となるのは world の**エクスポート**側だけです。`import` 項目は無視され
   (コンポーネントの WASI インポートは、それが構築される固定のアダプタ表面から
   来ます)、インラインの `import name: func(...)` は黙って捨てるのではなく拒否
-  されます。ホスト関数の宣言は今のところ
-  [`rontolisp:wasm-import`](rontolisp-wasm-import.md) (Preview 1 のみ) です。
+  されます。プログラムが呼び出す関数は
+  [`rontolisp:wit-import`](rontolisp-wit-import.md) でインターフェースから束縛するか、
+  [`rontolisp:wasm-import`](rontolisp-wasm-import.md) で手書きします
+  (どちらも Preview 1 のみ)。
   そのため、得られるコンポーネントは書いた world よりずっと大きな型を持ちます:
   上の 6 行の world は 149 行のコンポーネント型 (10 個の `wasi:*` インポートと
   `export wasi:cli/run`) にコンパイルされ、`greet` の中で `rontolisp:fetch` を

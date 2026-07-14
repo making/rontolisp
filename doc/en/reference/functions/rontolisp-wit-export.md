@@ -106,8 +106,9 @@ serve-mode component exports only `wasi:http/incoming-handler`).
 - Only the world's **export** side is a contract. `import` items are ignored (a
   component's WASI imports come from the fixed adapter surface it is built on),
   and an inline `import name: func(...)` is rejected rather than silently
-  dropped — host functions are declared with
-  [`rontolisp:wasm-import`](rontolisp-wasm-import.md) (Preview 1 only) for now.
+  dropped — the functions a program calls are bound from an interface with
+  [`rontolisp:wit-import`](rontolisp-wit-import.md), or declared by hand with
+  [`rontolisp:wasm-import`](rontolisp-wasm-import.md) (both Preview 1 only).
   The component you get therefore has a much larger type than the world you wrote:
   the 6-line world above compiles to a 149-line component type (ten `wasi:*`
   imports plus `export wasi:cli/run`), and calling `rontolisp:fetch` inside `greet`

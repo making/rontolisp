@@ -313,11 +313,15 @@ public final class PackageResolver {
 				if (LispNames.WASM_IMPORT.equals(qn.member()) || LispNames.WASM_EXPORT.equals(qn.member())) {
 					return resolveWasmDirective(op, cons);
 				}
-				if (LispNames.WIT_EXPORT.equals(qn.member())) {
+				if (LispNames.WIT_EXPORT.equals(qn.member()) || LispNames.WIT_IMPORT.equals(qn.member())) {
 					// Every argument is data the directive reads itself (a WIT file path,
-					// the :world keyword and a bare world name in the WIT's own
-					// spelling),
-					// so nothing inside resolves as a Lisp variable or function.
+					// the :world / :interface / :package keywords and names in the WIT's
+					// own spelling), so nothing inside resolves as a Lisp variable or
+					// function. A wit-import is consumed by WitImportInliner before this
+					// resolver runs on the compile path; the interpreter evaluates it as
+					// a
+					// special form, and in both cases the names it BINDS are canonical
+					// already.
 					return new LispCons(op, cons.cdr());
 				}
 			}

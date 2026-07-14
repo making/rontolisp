@@ -20,7 +20,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [load-inliner.md](load-inliner.md) -- compile-time `load` inlining (`LoadInliner`)
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
 - [wasi-component.md](wasi-component.md) -- `--component` WASI 0.3 component output
-- [wit.md](wit.md) -- `am.ik.wit` WIT parser/printer library, the model-based `--emit-wit` emission (`WasiWitDefinitions` + fixtures + generator), the blob-variant renaming, and the settled `WitTypeMapper` table (the `result<T,E>` = condition-everywhere decision record)
+- [wit.md](wit.md) -- `am.ik.wit` WIT parser/printer library + `WitResolver`, the model-based `--emit-wit` emission (`WasiWitDefinitions` + fixtures + generator), the blob-variant renaming, the settled `WitTypeMapper` table (the `result<T,E>` = condition-everywhere decision record), `rontolisp:wit-export` (a world as the authoritative export list) and `rontolisp:wit-import` (calling a WIT interface: the per-backend lowering, the provider decision record, `wit.lisp`)
 - [wasm-export-no-wasi.md](wasm-export-no-wasi.md) -- `rontolisp:wasm-export` + `--no-wasi` reactor mode
 - [wasm-import.md](wasm-import.md) -- `rontolisp:wasm-import` (host functions callable from Lisp) + export `:as` aliases
 - [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md) -- `--optimize` tree-shaking (WASM + JVM)

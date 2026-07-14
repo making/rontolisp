@@ -28,6 +28,8 @@ import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UsocketLibrary;
+import am.ik.rontolisp.eval.WitImportInliner;
+import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 
@@ -137,15 +139,20 @@ public final class RontoPlayground {
 		}
 	}
 
-	// The playground's compile-time frontend: the library splices, then the WIT world
-	// check (a rontolisp:wit-export directive is lowered into the wasm-export directives
-	// it stands for -- without this the backends would meet the directive itself and
-	// report an unhelpful "Cannot compile"), then the library tree-shake. It has no
-	// LoadInliner: the browser resolves (load ...) at run time, against the same uploaded
-	// files a WIT world is read from.
+	// The playground's compile-time frontend: the WIT interface bindings (a
+	// rontolisp:wit-import directive becomes the defpackage + bindings it stands for --
+	// first, because the package it declares must exist before anything resolves a call
+	// site in it), then the library splices, then the WIT world check (a
+	// rontolisp:wit-export directive is lowered into the wasm-export directives it stands
+	// for -- without this the backends would meet the directive itself and report an
+	// unhelpful "Cannot compile"), then the library tree-shake. It has no LoadInliner: the
+	// browser resolves (load ...) at run time, against the same uploaded files a WIT file
+	// is read from.
 	private static List<LispVal> frontend(String source, Features features, WitExportDirective.Backend backend) {
-		List<LispVal> program = UsocketLibrary.process(VecLibrary.process(LispPreludeLibrary.process(UrlLibrary
-			.process(LinalgLibrary.process(JsonLibrary.process(LispReader.readAllFromString(source, features)))))));
+		List<LispVal> read = WitImportInliner.inline(LispReader.readAllFromString(source, features), null, backend,
+				uploads);
+		List<LispVal> program = WitLibrary.process(UsocketLibrary.process(VecLibrary.process(LispPreludeLibrary
+			.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(read)))))));
 		return LibraryDefunPruner.prune(WitExportInliner.inline(program, null, backend, uploads));
 	}
 

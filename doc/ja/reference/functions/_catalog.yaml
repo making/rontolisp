@@ -313,6 +313,8 @@ categories:
       - { slug: rontolisp-wasm-export, name: "rontolisp:wasm-export" }
       - { slug: rontolisp-wasm-import, name: "rontolisp:wasm-import" }
       - { slug: rontolisp-wit-export, name: "rontolisp:wit-export" }
+      - { slug: rontolisp-wit-import, name: "rontolisp:wit-import" }
+      - { slug: rontolisp-wit-provide, name: "rontolisp:wit-provide" }
   - title: "linalg パッケージ"
     functions:
       - { slug: linalg-zeros, name: "linalg:zeros" }

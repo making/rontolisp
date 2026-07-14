@@ -1,4 +1,4 @@
-# wit-world -- someone handed me a `.wit`, now what
+# wit/world -- someone handed me a `.wit`, now what
 
 A [WIT](https://component-model.bytecodealliance.org/design/wit.html) world is a
 language-independent contract: it names the functions a component must export,

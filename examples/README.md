@@ -13,7 +13,8 @@ The programs are grouped by theme, one directory per group:
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
 | [`jvm/`](jvm) | `java:` interop and Swing GUIs (JVM only) |
 | [`rainbow/`](browser/rainbow), [`wasm-browser/`](browser/wasm-browser), [`webgl-*/`](browser/webgl-common), [`minesweeper/`](browser/minesweeper), [`hiragana/`](browser/hiragana), [`wit-component/`](browser/wit-component) | Browser demos (compile to WASM, run in a page) |
-| [`count-vowels/`](count-vowels), [`wit-world/`](wit-world) | Embedding a rontolisp Wasm module in a host; implementing a WIT world |
+| [`count-vowels/`](count-vowels), [`wit/world/`](wit/world) | Embedding a rontolisp Wasm module in a host; implementing a WIT world |
+| [`wit/keyvalue/`](wit/keyvalue) | The other direction: *calling* a WIT interface, with a different implementation behind it per backend |
 | [`asdf/`](asdf), [`wasmcloud/`](wasmcloud) | Third-party libraries and platform templates |
 
 Assuming the executable JAR has been built
@@ -74,7 +75,7 @@ hyperparameter search), with the book's `common/` library rebuilt on the
 directory (WASM needs `--dir .`), and `--simd` speeds the training runs up
 without changing a byte of their output (everything is `#d` double-float).
 See [`deep-learning-from-scratch/README.md`](deep-learning-from-scratch/README.md)
-for the per-program table and `.todo/117` for the ch07-ch08 CNN follow-up.
+for the per-program table.
 
 ## Networking, HTTP & services — `net/`
 
@@ -150,8 +151,17 @@ through linear memory, and implementing a WIT world someone else wrote.
 
 | Directory | What it demonstrates |
 | --- | --- |
-| [`wit-world/`](wit-world) | *Someone handed me a `.wit`, now what.* The whole workflow, starting from a world nobody wrote for rontolisp ([`wit/analyzer.wit`](wit-world/wit/analyzer.wit): `package example:analyzer`, four exports over `s32` / `string` / `bool` plus an `async func` that prints, each with `///` docs). `rontolisp --scaffold-wit wit/analyzer.wit -o analyzer.lisp` turns it into a runnable skeleton -- one `defun` stub per export, the WIT's own parameter names, its doc comments carried over as `;;;` comments, and the `rontolisp:wit-export` directive -- which **already compiles** (the stubs signal at run time), so the world is filled in one export at a time. Then `--component` builds it and `wasmtime run --invoke 'longest-word("...")'` calls it by name with no memory code at all. Rename a `defun` and the build stops with `wit/analyzer.wit:16: export 'is-palindrome' has no matching (defun is-palindrome ...)`; `--emit-wit` prints the component's own world back out, showing the two ways it must differ from the input (normalized to `package root:component`, plus the WASI imports the build really links) |
+| [`wit/world/`](wit/world) | *Someone handed me a `.wit`, now what.* The whole workflow, starting from a world nobody wrote for rontolisp ([`wit/analyzer.wit`](wit/world/wit/analyzer.wit): `package example:analyzer`, four exports over `s32` / `string` / `bool` plus an `async func` that prints, each with `///` docs). `rontolisp --scaffold-wit wit/analyzer.wit -o analyzer.lisp` turns it into a runnable skeleton -- one `defun` stub per export, the WIT's own parameter names, its doc comments carried over as `;;;` comments, and the `rontolisp:wit-export` directive -- which **already compiles** (the stubs signal at run time), so the world is filled in one export at a time. Then `--component` builds it and `wasmtime run --invoke 'longest-word("...")'` calls it by name with no memory code at all. Rename a `defun` and the build stops with `wit/analyzer.wit:16: export 'is-palindrome' has no matching (defun is-palindrome ...)`; `--emit-wit` prints the component's own world back out, showing the two ways it must differ from the input (normalized to `package root:component`, plus the WASI imports the build really links) |
 | [`count-vowels/`](count-vowels) | The rontolisp counterpart of the classic *"share a string through Wasm memory"* host tutorial, and the `rontolisp:wit-export` showcase: the export's type lives in a checked-in WIT world (`export count-vowels: func(s: string) -> s32;`), the Lisp only says `(rontolisp:wit-export "count_vowels_component.wit")`, and the compiler checks the `defun`s against it -- so a drifted signature is a compile error naming the WIT line. Because `--no-gc` imports nothing, `--emit-wit` prints the component's whole type back out byte-identical to the file it was handed (a wasm-GC build of the same source would add the ~10 `wasi:*` imports a hand-written world never states). Compiled with `--no-gc` to a plain MVP module (no wasm-GC, no WASI imports) that **any** engine runs. A string crosses that boundary as a `(pointer, length)` pair of raw UTF-8 bytes, so the module also exports its `memory` and a bump allocator `__ronto_alloc(size)` -- the host reserves space, writes the bytes, then calls `count-vowels(ptr, len)`, exactly the alloc / writeString / call flow of the tutorial; the `--no-gc --component` build of the same source lets the canonical ABI do all of it instead. Driven from a pure-Java [Endive](https://endive.run) host (a Maven project, [`src/main/java/CountVowels.java`](count-vowels/src/main/java/CountVowels.java)) and, equivalently, a three-line Node script |
+
+## Calling a WIT interface — `wit/keyvalue/`
+
+The mirror image of the two directories above: not the functions a program
+exports, but the ones it **calls**.
+
+| Directory | What it demonstrates |
+| --- | --- |
+| [`wit/keyvalue/`](wit/keyvalue) | A page-view counter written against [`wasi:keyvalue/store`](wit/keyvalue/wit/keyvalue.wit) (a hand-written honest subset -- a `variant error`, a `resource bucket`, `open: func(identifier: string) -> result<bucket, error>`). `(rontolisp:wit-import "wit/keyvalue.wit" :interface "wasi:keyvalue/store@0.2.0" :package kv)` binds every function of it as an ordinary `defun` -- `bucket.get` becomes `(kv:bucket-get b key)`, the resource handle first -- and **what those calls reach is bound separately, so it changes without the program changing**. rontolisp ships no store (it knows how to bind a provider, not what `wasi:keyvalue` is), so the directory holds two, both ordinary user code: [`memory-store.lisp`](wit/keyvalue/memory-store.lisp), ~40 lines of portable Lisp over a hash table, and [`java-store.lisp`](wit/keyvalue/java-store.lisp), the same interface over a real `java.util.LinkedHashMap` through `java:` interop, whose `rontolisp:wit-provide` replaces the first on the JVM -- and the program's output is identical either way. `result<T, E>`'s ok arm is the return value and its error arm signals `rontolisp:wit-error`, so a store's failures are caught with `handler-case` like anything else. Interpreter + JVM only: `--component` and `--no-gc` reject `wit-import`, and a `result`/`option`-bearing interface does not cross the Preview 1 WASM import boundary (only the flat scalar / string / handle set does) |
 
 ## Running
 

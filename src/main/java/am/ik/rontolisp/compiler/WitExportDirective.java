@@ -241,7 +241,8 @@ public final class WitExportDirective {
 					}
 				}
 				case WitItem.ImportNamed named -> throw error(witPath, locations, item, "import '" + named.name()
-						+ "': a world's inline function imports are not bound yet (use rontolisp:wasm-import; see .todo/127)");
+						+ "': a world's inline function imports are not bound; declare the interface to call with "
+						+ "rontolisp:wit-import (or a host function with rontolisp:wasm-import)");
 				// A world's interface imports come from the fixed WASI surface the
 				// component is built on, and its type definitions only describe the
 				// signatures. Neither is part of the export contract.
@@ -389,7 +390,7 @@ public final class WitExportDirective {
 		throw error(witPath, locations, item,
 				"export '" + exportName + "': the WIT type of " + what + " is not supported at the export boundary yet "
 						+ "(supported: s32, s64, f64, bool, string). Its rontolisp representation is settled " + "("
-						+ describe(type) + "), but marshalling it is .todo/128");
+						+ describe(type) + "), but the component boundary cannot marshal it yet");
 	}
 
 	// Names the WIT type and its settled house representation, so the error says what the

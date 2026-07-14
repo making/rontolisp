@@ -258,6 +258,7 @@ public final class PackageRegistry {
 						LispNames.THEN, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.URL_DECODE,
 						LispNames.URL_ENCODE, LispNames.QUERY_PARAMS, LispNames.QUERY_PARAM, LispNames.URL_PATH,
 						LispNames.URL_QUERY, LispNames.WASM_EXPORT, LispNames.WASM_IMPORT, LispNames.WIT_EXPORT,
+						LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE, LispNames.WIT_ERROR, LispNames.WIT_ERROR_PAYLOAD,
 						LispNames.WITH_ARENA, LispNames.HTTP_HANDLER, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN,
 						LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS,
 						LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT,

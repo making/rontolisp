@@ -32,6 +32,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SpecialVarCollector;
 import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -66,6 +67,8 @@ public final class LispEvaluator {
 	private boolean urlLibraryLoaded = false;
 
 	private boolean usocketLibraryLoaded = false;
+
+	private boolean witLibraryLoaded = false;
 
 	/**
 	 * User macros defined with {@code defmacro}, keyed by name. A macro call is expanded
@@ -1046,6 +1049,39 @@ public final class LispEvaluator {
 		}
 	}
 
+	/**
+	 * Evaluates the WIT runtime ({@code wit.lisp}: the provider registry,
+	 * {@code rontolisp:wit-provide} and the {@code rontolisp:wit-error} condition -- the
+	 * provider mechanism, and no provider for any concrete interface) into the global
+	 * environment once. Triggered by a {@code rontolisp:wit-import} directive and by the
+	 * first resolution of one of the runtime's own names.
+	 */
+	private void ensureWitLoaded() {
+		if (this.witLibraryLoaded) {
+			return;
+		}
+		this.witLibraryLoaded = true;
+		for (LispVal form : WitLibrary.forms()) {
+			eval(form, this.globalEnv);
+		}
+	}
+
+	/**
+	 * Loads the WIT runtime when a condition form names one of its classes
+	 * ({@code rontolisp:wit-error}). A class name is a quoted DATUM, never a resolved
+	 * function name, so the trigger in the function-resolution path above cannot see it
+	 * -- and {@code error} would then expand against a {@link ClosRegistry} that has
+	 * never heard of the class and build a bogus condition whose payload reader answers
+	 * {@code :payload}. The compile path has no such gap (its pre-pass walks the AST,
+	 * quoted symbols included), so without this the interpreter DIVERGES from the JVM on
+	 * the same source.
+	 */
+	private void ensureWitLoadedForConditionClass(LispCons cons) {
+		if (!this.witLibraryLoaded && WitLibrary.referencesWitRuntime(cons)) {
+			ensureWitLoaded();
+		}
+	}
+
 	private LispVal evalCons(LispCons cons, Environment env) {
 		LispVal head = cons.car();
 		// A dotted tail is only meaningful as data (inside quote); in call position it
@@ -1108,14 +1144,18 @@ public final class LispEvaluator {
 				case LispNames.CCASE:
 					return eval(LispMacroExpander.expandCcase(cons), env);
 				case LispNames.ERROR:
+					ensureWitLoadedForConditionClass(cons);
 					return eval(LispMacroExpander.expandError(cons, this.closRegistry), env);
 				case LispNames.WARN:
+					ensureWitLoadedForConditionClass(cons);
 					return eval(LispMacroExpander.expandWarn(cons, this.closRegistry), env);
 				case LispNames.SIGNAL:
+					ensureWitLoadedForConditionClass(cons);
 					return eval(LispMacroExpander.expandSignalMacro(cons, this.closRegistry), env);
 				case LispNames.SIGNAL_COND_INTERNAL:
 					return evalSignalCond(cons, env);
 				case LispNames.HANDLER_CASE:
+					ensureWitLoadedForConditionClass(cons);
 					return evalHandlerCase(cons, env);
 				case LispNames.IGNORE_ERRORS:
 					return eval(LispMacroExpander.expandIgnoreErrors(cons), env);
@@ -1203,6 +1243,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandWithArena(cons), env);
 				case LispNames.WIT_EXPORT_QUALIFIED:
 					return evalWitExport(cons);
+				case LispNames.WIT_IMPORT_QUALIFIED:
+					return evalWitImport(cons);
 				case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
 					return eval(LispMacroExpander.expandUsocketWithClientSocket(cons), env);
 				case LispNames.USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED:
@@ -1472,6 +1514,42 @@ public final class LispEvaluator {
 		}
 		catch (UnsupportedOperationException ex) {
 			throw new LispEvalException(LispNames.WIT_EXPORT_QUALIFIED + ": " + ex.getMessage());
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * {@code (rontolisp:wit-import "kv.wit" :interface "..." :package kv)}: binds the WIT
+	 * interface's functions as ordinary {@code defun}s dispatching through the
+	 * interface's provider ({@code rontolisp:wit-provide}, or a built-in one), and
+	 * defines the package that exports them. A special form, so the bindings exist for
+	 * the rest of the file -- put the directive at the top, before the code that calls
+	 * the interface.
+	 */
+	private LispVal evalWitImport(LispCons cons) {
+		WitImportDirective.Directive directive = WitImportDirective.parse(cons);
+		String resolved = SourceLoader.resolve(this.loadDirStack.peekLast(), directive.path());
+		String source;
+		try {
+			source = this.sourceLoader.load(resolved);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException(
+					LispNames.WIT_IMPORT_QUALIFIED + ": cannot read file " + resolved + ": " + ex.getMessage());
+		}
+		List<LispVal> bindings;
+		try {
+			bindings = WitImportDirective.lower(directive, source, resolved, WitExportDirective.Backend.OTHER);
+		}
+		catch (UnsupportedOperationException ex) {
+			throw new LispEvalException(LispNames.WIT_IMPORT_QUALIFIED + ": " + ex.getMessage());
+		}
+		ensureWitLoaded();
+		for (LispVal binding : bindings) {
+			// Through the resolver, so the synthesized (defpackage kv ...) registers and
+			// the kv:-qualified defun names that follow it resolve -- exactly what a
+			// hand-written defpackage in the source would do.
+			eval(this.packageResolver.resolve(binding), this.globalEnv);
 		}
 		return LispNil.INSTANCE;
 	}
@@ -1953,6 +2031,17 @@ public final class LispEvaluator {
 		// usocket:-qualified function.
 		if (!this.usocketLibraryLoaded && UsocketLibrary.isUsocketQualified(name)) {
 			ensureUsocketLoaded();
+			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+			if (loaded != null) {
+				return loaded;
+			}
+		}
+		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
+		// rontolisp:wit-error condition) loads on the first resolution of one of its
+		// names, so a program may bind a provider before the wit-import directive that
+		// uses it.
+		if (!this.witLibraryLoaded && WitLibrary.isWitRuntimeName(name)) {
+			ensureWitLoaded();
 			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 			if (loaded != null) {
 				return loaded;

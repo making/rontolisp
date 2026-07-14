@@ -36,6 +36,8 @@ import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UsocketLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
 import am.ik.rontolisp.eval.WitExportInliner;
+import am.ik.rontolisp.eval.WitImportInliner;
+import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -246,10 +248,34 @@ public final class RontoLispCli {
 		// The whole frontend reads with the target backend's feature set, so
 		// #+rontolisp-jvm / #+rontolisp-wasm conditionals select per-backend code.
 		Features features = outputFile.endsWith(".wasm") ? Features.WASM : Features.JVM;
-		List<LispVal> program = UsocketLibrary
-			.process(LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary
-				.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(source, features),
-						SourceLoader.fileSystem(), baseDir, systemPath, features)))))));
+		WitExportDirective.Backend witBackend = witBackend(outputFile, noGc);
+		// (rontolisp:wit-import "kv.wit" :interface "..."): bind a WIT interface's
+		// functions. Unlike wit-export this runs BEFORE UserMacroExpander, because the
+		// names it binds live in a package the WIT names -- the (defpackage kv ...) it
+		// synthesizes must exist before any pass resolves a kv:get call site, and the
+		// macro expander resolves every top-level form through its own PackageResolver.
+		// It
+		// needs nothing macro expansion produces: a wit-import is checked against a WIT
+		// file, not against the program.
+		List<LispVal> loaded = LoadInliner.inline(LispReader.readAllFromString(source, features),
+				SourceLoader.fileSystem(), baseDir, systemPath, features);
+		boolean witImports = WitImportInliner.usesWitImport(loaded);
+		if (witImports && component) {
+			throw new UnsupportedOperationException(
+					"rontolisp:wit-import is not supported with --component yet: a component's imports need the "
+							+ "canonical-ABI lower, which is not implemented. It works on the interpreter, the JVM "
+							+ "backend and Preview 1 WASM (a plain -o out.wasm).");
+		}
+		loaded = WitImportInliner.inline(loaded, baseDir, witBackend, SourceLoader.fileSystem());
+		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
+		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
+		// any
+		// concrete interface) backs the %wit-call bodies the inliner just synthesized for
+		// the interpreter/JVM boundary. On the WASM backends it splices nothing: there
+		// the
+		// bindings ARE rontolisp:wasm-import directives and the host is the provider.
+		List<LispVal> program = WitLibrary.process(UsocketLibrary.process(LispPreludeLibrary.process(
+				UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded)))))));
 		// Splice the Lisp-source vec library (the scalar reference over the packed
 		// double-float array type) when the program references the vec package. The
 		// --no-gc scalar WASM backend is the exception: it has no general array type and
@@ -265,7 +291,7 @@ public final class RontoLispCli {
 		// literal top-level form, and because the synthesized directives must still count
 		// as pruning roots below.
 		boolean witWorld = WitExportInliner.usesWitExport(program);
-		program = WitExportInliner.inline(program, baseDir, witBackend(outputFile, noGc), SourceLoader.fileSystem());
+		program = WitExportInliner.inline(program, baseDir, witBackend, SourceLoader.fileSystem());
 		// Drop spliced library definitions unreachable from the user program (the AST
 		// tree-shaker; see LibraryDefunPruner). Skipped under --dynamic (late binding
 		// can resolve any name at runtime) and --no-prune (the explicit escape hatch).

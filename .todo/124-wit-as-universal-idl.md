@@ -23,7 +23,7 @@ none of the three know about each other:
   outright with an `UnsupportedOperationException` (`.kb/wasm-import.md`).
 - Hand-written per-feature surfaces: `rontolisp:http-handler`'s request/response
   plists, `rontolisp:fetch`, `rontolisp:tcp-*`, `examples/browser/webgl-common/gl.lisp`'s
-  34 hand-declared imports.
+  31 hand-declared imports.
 
 A component compiled today therefore **cannot import anything but the fixed WASI
 blob surface** (`src/wasm-component/uni.wit`), which is the single biggest hole in
@@ -139,7 +139,7 @@ around it.
 - `rontolisp:http-handler` becomes "a program implementing the
   `wasi:http/incoming-handler` world", with the request plist **derived** from the
   WIT `record` instead of hand-shaped differently per backend.
-- `gl.lisp`'s 34 `wasm-import` directives become a `local:webgl/gl.wit`, from which
+- `gl.lisp`'s 31 `wasm-import` directives become a `local:webgl/gl.wit`, from which
   the demos' **JS import object can also be generated** — today the handle-table
   bindings in each `index.html` are hand-written against a Lisp-side declaration
   with nothing checking the two agree.

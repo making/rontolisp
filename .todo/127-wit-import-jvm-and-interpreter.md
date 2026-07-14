@@ -1,87 +1,69 @@
 # `rontolisp:wit-import` on the interpreter + JVM: one WIT, a provider per backend
 
-**Status:** open, unstarted. Step 3 of `.todo/124`. Depends on `.todo/125`.
-Can proceed in parallel with `.todo/126`.
+**Status:** IMPLEMENTED 2026-07-14; **not yet fully verified.** Step 3 of `.todo/124`.
+Full mechanics and every decision record: `.kb/wit.md`. Do not delete this file until
+the "Remaining" section below is empty.
 
-## Goal
+## What shipped
 
-`(rontolisp:wit-import "wit/kv.wit" :interface "wasi:keyvalue/store@0.2.0" :package kv)`
-declares a foreign boundary once, and **the same Lisp source binds to a different
-implementation per backend**. This step does the two backends that need no new
-encoder work (interpreter, JVM); `.todo/128` does the component.
+A compile-time front-end that **lowers into forms that already exist** -- the
+`wit-export` design. No backend gained a codegen case.
 
-The point is not "call Java from Lisp" — `java:` already does that. The point is
-that a program written against `wasi:keyvalue` can be *developed and tested on the
-JVM* against a `HashMap` and then compiled to a component that talks to a real
-host, with **zero source changes**. Today `.todo/52` has to invent that parity by
-hand ("back it with either an in-memory HashMap or a file store"); with a WIT the
-parity is structural.
+| backend | `(rontolisp:wit-import "kv.wit" :interface "..." :package kv)` lowers to |
+|---|---|
+| Preview 1 WASM | one `rontolisp:wasm-import` per WIT func. **Measured byte-identical** to the hand-written block, and identical again under `--optimize` with a never-called import shaken out |
+| interpreter / JVM | a synthesized `(defpackage kv ...)` + one ORDINARY `defun` per func calling `rontolisp::%wit-call`. Ordinary defuns, so `#'kv:get` / `funcall` / `mapcar` / `eval` work with no wiring |
+| `--component` | clear error (needs `canon lower` -- `.todo/128`) |
+| `--no-gc` | clear error (its MVP module imports nothing) |
 
-## How it lowers
+New: `am/ik/wit/WitResolver.java`, `compiler/WitImportDirective.java`,
+`eval/WitImportInliner.java`, `eval/WitLibrary.java` +
+`resources/am/ik/rontolisp/eval/wit.lisp`. `WitImportInliner` runs **BEFORE**
+`UserMacroExpander` (its synthesized `defpackage` must exist before any pass resolves a
+`kv:get` call site) -- the opposite of `WitExportInliner`, and the thing a future reader
+will get wrong.
 
-Reuse the `wasm-import` shape wholesale (`.kb/wasm-import.md`): each WIT function
-becomes a **synthetic defun**, registered in Pass 1, so `#'kv:get` / `funcall` /
-`mapcar` / `eval` all work with no extra wiring. `compiler/WitDirective` is the
-shared parse result (sibling of `WasmImportDirective`), and the name is
-package-resolved exactly like `wasm-import`'s quoted name is today
-(`PackageResolver.resolveWasmDirective`) so `(in-package kv)` behaves.
+## Decisions taken (all recorded in `.kb/wit.md`)
 
-The difference from `wasm-import` is only **what the defun body resolves to**:
+- **The core ships NO provider for any interface** -- this REVERSES this todo's own
+  recommendation of option (c). rontolisp knows the provider *mechanism*, not what
+  `wasi:keyvalue` is; a built-in store would pin one third-party spec's id, member names
+  and version into a Lisp's core, contradicting `.todo/124`'s bet that a new host
+  interface costs a `.wit` file rather than core code. A store is ordinary user code:
+  `examples/wit/keyvalue/{memory-store,java-store}.lisp`.
+- The escape hatch is `rontolisp:wit-provide` taking a **Lisp callable**, not the todo's
+  `java:bind-wit` (JVM-only, un-interpretable in the native binary, and it would drag in
+  the hand-synced `JavaInterop`/`JavaBridgeTemplate` pair). A Java-backed store is then a
+  few lines of Lisp over the existing `java:` interop -- `java-store.lisp` is exactly that.
+- `:field-style` defaults to `:camel` (the WIT label `create-shader` -> the Preview 1
+  import field `createShader`, the JS convention and what jco produces).
+- A WIT resource is an opaque integer handle allocated **by the provider** -- NOT the
+  shared stream/socket handle space this todo sketched. `cl:close` does not apply to a WIT
+  resource (a resource is released by its own interface's drop, which `wasi:keyvalue`'s
+  store does not even expose). The shared space becomes relevant at the component ABI.
+- The **`gl.lisp` spike is answered**: a hand-written `local:webgl/gl.wit` reproduces the
+  boundary byte-for-byte and `--optimize` still shakes the unused imports. 28 of gl.lisp's
+  31 imports are an exact kebab->camel match; the 4 that are not are cases where gl.lisp
+  chose *different words* on the Lisp side. A WIT label is ONE name serving both sides, so
+  it cannot keep them -- and the user decided the WIT-generated names win and `wit-import`
+  gets **no** alias option. The migration is `.todo/132`.
 
-- **Preview 1 WASM**: literally today's `wasm-import` — module/field, `--preload`
-  or a JS import object. `wit-import` becomes a typed front-end for it.
-- **Interpreter** (`eval/WitProviders.java`) and **JVM**
-  (`codegen/jvm/JvmWitImportCompiler`): a call into a registered **provider
-  object**, marshalled through `WitTypeMapper` on top of the existing
-  `JavaInterop` / `JavaBridgeTemplate` machinery — which already does cost-based
-  overload selection, sequence marshalling and callback proxying. Today these two
-  backends synthesize a defun stub that *signals an error*; this step gives that
-  stub somewhere to go.
+## Found on the way (separate work, do not fold in)
 
-## The provider question (decide before coding)
+- `.todo/131` -- a **pre-existing JVM bug**: `handler-case`/`ignore-errors` in ARGUMENT
+  position (non-empty operand stack) emits a class the verifier rejects, with no compile
+  error. Unrelated to this todo; keep `handler-case` at statement position meanwhile.
+- `.todo/132` -- the WebGL demos adopt `gl.wit` (unblocked by the spike above).
 
-How does the JVM know what implements `wasi:keyvalue/store`? Three candidates:
+## Remaining before this file can be deleted
 
-- (a) **Explicit in Lisp**, using existing interop:
-  `(java:bind-wit "wasi:keyvalue/store" (java:new "com.example.RedisStore" url))`.
-  Zero new infrastructure, honest about being a JVM-only line, and it keeps the
-  *program* portable while the *binding* is per-backend (guard with `#+jvm`).
-- (b) A Java **SPI** (`WitProvider` interface, `ServiceLoader`) keyed by interface
-  name — nothing in the Lisp source at all, but invisible magic and a native-image
-  reflection problem.
-- (c) A **built-in provider set** for the WASI interfaces we already implement
-  natively (`wasi:cli/environment` -> our env built-ins, `wasi:clocks` -> our time
-  built-ins, `wasi:random` -> `random`, `wasi:http/handler` -> `fetch`). This is
-  not an alternative to (a) — it is what makes a WIT-importing program *run on the
-  interpreter out of the box*, and it is where most of the value is.
-
-Recommendation: **(c) + (a)**. Ship built-in providers for the WASI interfaces
-rontolisp already implements (so a `wasi:keyvalue` program can at least be *run*
-on the interpreter against an in-memory bucket), plus an explicit escape hatch for
-user code. Skip (b).
-
-Note the native-image constraint from `.kb/java-interop.md`: the native binary can
-*compile* `java:` programs but cannot *interpret* them (no reflection metadata).
-A provider bound reflectively inherits that limit; a built-in provider (c) does not
-— another reason (c) carries the weight.
-
-## Resources and handles
-
-`wasi:keyvalue`'s `bucket` is a WIT `resource`. Map it to an opaque integer handle
-in the **existing stream/socket handle space** (`.kb/read-load-streams.md`), so
-`close` already works on it and the whole thing needs no new value type. Pin this:
-it is the pattern for every resource-bearing WIT (filesystem, http bodies, sockets).
-
-## Definition of done
-
-- `wit-import` works on interpreter + JVM + Preview 1 WASM; `--component` still
-  gives the current clear "not supported" error (lifted by `.todo/128`).
-- A `wasi:keyvalue`-shaped program runs on the interpreter against a built-in
-  in-memory provider, and on the JVM against a user-supplied one, from one source.
-- `examples/browser/webgl-common/gl.lisp` **spike** (do not migrate yet): can a
-  hand-written `local:webgl/gl.wit` reproduce its 34 imports, and does `--optimize`
-  still shake the unused ones? If yes, that is the proof the browser boundary is
-  expressible and `.todo/124`'s follow-on prize is reachable.
-- `#'kv:get` as a value, `funcall`, `mapcar` all work (inherited from the synthetic
-  defun shape — pin it with a test, it is the property most likely to regress).
-- Four-backend + native E2E; docs; `.kb/` note.
+- [ ] **Full `./mvnw test` re-run after the `examples/wit/` directory move.** The suite was
+      green (3607 / 0 failures) BEFORE the move; the move touched `examples/examples.yaml`,
+      the docs and comments only, so `ExamplesE2eTest` + `DocExamplesTest` are the two that
+      can break -- but they have not been run since.
+- [ ] **Native `CiSpecE2eTest`.** `src/test/resources/ci-spec.yaml` CHANGED (the
+      `rontolisp:list-functions :rontolisp` expectation gained `wit-error-payload` and
+      `wit-provide`), and CLAUDE.md says a `ci-spec.yaml` edit must be verified against the
+      native binary -- a plain `./mvnw test` SKIPS that test, so only the CI native-image
+      job would catch a mistake.
+- [ ] `./mvnw -Pweb compile` was green before the move; re-confirm.

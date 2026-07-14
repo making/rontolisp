@@ -129,7 +129,7 @@ inside another form (not top-level) is an error.
 (print (rontolisp:list-functions :cl-user))
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
-; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version)
+; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
 (print (rontolisp:list-functions :java))
 ; => (call field new proxy static)
 ```
