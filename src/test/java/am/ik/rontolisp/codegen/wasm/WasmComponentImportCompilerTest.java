@@ -134,6 +134,54 @@ class WasmComponentImportCompilerTest {
 	}
 
 	@Test
+	void followsATypeAliasWhoseTargetIsItselfAName() {
+		// `type headers = fields` -- the shape every wasi:http-flavored interface writes.
+		// WitTypeMapper classifies a type STRUCTURALLY, so only the resolver can follow
+		// an
+		// alias to a named definition; the directive must do that before asking for the
+		// representation.
+		String aliasWit = """
+				package local:x@0.1.0;
+
+				interface s {
+				    resource fields {
+				        constructor();
+				    }
+				    type headers = fields;
+				    send: func(h: headers) -> u32;
+				}
+				""";
+		assertThat(lower(aliasWit, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT).get(1).print())
+			.contains("(\"send\" \"kv:send\")");
+		// Preview 1 wants the same alias resolved down to its flat designator.
+		assertThat(lower(aliasWit, "local:x/s", WitExportDirective.Backend.WASM_GC).stream().map(LispVal::print))
+			.anyMatch(form -> form.contains("wasm-import") && form.contains("send") && form.contains(":int"));
+	}
+
+	@Test
+	void rejectsAUserImportTheWasiSurfaceAlreadyCarries() {
+		// The component would then carry the same instance import name twice -- invalid,
+		// and
+		// nothing downstream says so in words.
+		String fsWit = """
+				package wasi:filesystem@0.3.0;
+
+				interface types {
+				    resource descriptor {
+				        sync: func();
+				    }
+				}
+				""";
+		String witLiteral = "\"" + fsWit.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
+		assertThatThrownBy(() -> compileComponent("(defpackage fs (:use cl) (:export descriptor-sync))\n"
+				+ "(rontolisp::%component-import \"wasi:filesystem/types@0.3.0\" " + witLiteral
+				+ " (\"descriptor-sync\" \"fs:descriptor-sync\"))\n" + "(fs:descriptor-sync 1)\n"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("wasi:filesystem/types@0.3.0")
+			.hasMessageContaining("already imports that interface as part of its own WASI surface");
+	}
+
+	@Test
 	void rejectsAStreamOrFutureAtTheBoundary() {
 		String streamWit = """
 				package local:x@0.1.0;
@@ -147,23 +195,196 @@ class WasmComponentImportCompilerTest {
 			.hasMessageContaining("stream or a future");
 	}
 
+	// A probe interface over every parameter shape the canonical ABI flattens: a variant
+	// with a payload-less and a string-payload case, an enum, a record, a tuple, an
+	// option,
+	// and a result whose arms carry a record and a string.
+	private static final String RICH_PARAM_WIT = """
+			package local:x@0.1.0;
+
+			interface s {
+			    variant method {
+			        get,
+			        post,
+			        other(string)
+			    }
+			    enum color {
+			        red,
+			        green
+			    }
+			    record point {
+			        x: s32,
+			        y: s32,
+			    }
+			    resource thing {
+			        constructor();
+			        set-method: func(m: method) -> result<_, string>;
+			        paint: func(c: color);
+			        move-to: func(p: point);
+			        span: func(t: tuple<s32, string>);
+			        nudge: func(p: option<point>);
+			        send: func(r: result<point, string>);
+			    }
+			}
+			""";
+
 	@Test
-	void rejectsARichParameterNamingTheWitLine() {
-		String recordParamWit = """
+	void richParametersCrossTheComponentBoundary() {
+		// Parameters flatten, so every shape the canonical ABI flattens crosses: a
+		// variant
+		// (payload-less or payload-bearing), an enum, a record, a tuple, an option, a
+		// result.
+		List<LispVal> forms = lower(RICH_PARAM_WIT, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT);
+		assertThat(forms.get(1).print()).contains("(\"thing-paint\" \"kv:thing-paint\")")
+			.contains("(\"thing-move-to\" \"kv:thing-move-to\")")
+			.contains("(\"thing-span\" \"kv:thing-span\")")
+			.contains("(\"thing-nudge\" \"kv:thing-nudge\")")
+			.contains("(\"thing-send\" \"kv:thing-send\")")
+			// set-method returns a result, so it keeps the raw name + wrapper split.
+			.contains("(\"thing-set-method\" \"kv::%thing-set-method\")");
+	}
+
+	@Test
+	void lowersRichParametersThroughTheCanonicalAbi() {
+		String witLiteral = "\"" + RICH_PARAM_WIT.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
+		byte[] component = compileComponent("(defpackage kv (:use cl) (:export thing-new thing-set-method thing-paint "
+				+ "thing-move-to thing-span thing-nudge thing-send))\n" + "(rontolisp::%component-import \"local:x/s\" "
+				+ witLiteral + " (\"thing-new\" \"kv:thing-new\") (\"thing-set-method\" \"kv::%thing-set-method\")"
+				+ " (\"thing-paint\" \"kv:thing-paint\") (\"thing-move-to\" \"kv:thing-move-to\")"
+				+ " (\"thing-span\" \"kv:thing-span\") (\"thing-nudge\" \"kv:thing-nudge\")"
+				+ " (\"thing-send\" \"kv:thing-send\"))\n"
+				+ "(defun kv:thing-set-method (self m) (rontolisp::%wit-result (kv::%thing-set-method self m)))\n"
+				+ "(let ((th (kv:thing-new)))\n" + "  (kv:thing-set-method th :get)\n"
+				+ "  (kv:thing-set-method th '(:other . \"PATCH\"))\n" + "  (kv:thing-paint th :red)\n"
+				+ "  (kv:thing-move-to th '(:x 1 :y 2))\n" + "  (kv:thing-span th '(1 \"a\"))\n"
+				+ "  (kv:thing-nudge th nil)\n" + "  (kv:thing-send th '(:ok :x 1 :y 2))\n"
+				+ "  (kv:thing-send th '(:error . \"boom\")))\n");
+		assertThat(containsAscii(component, "local:x/s")).isTrue();
+		assertThat(containsAscii(component, "[method]thing.set-method")).isTrue();
+		assertThat(containsAscii(component, "[method]thing.send")).isTrue();
+	}
+
+	// The shape that broke the first cut of this: `wasi:http`'s `error-code` -- 39 cases,
+	// payloads that are records of options of strings -- inside a `result` ARGUMENT. It
+	// is
+	// the ONE call that sends a serve-mode response, so it is the whole point of the
+	// work.
+	private static final String DEEP_VARIANT_WIT = """
+			package local:x@0.1.0;
+
+			interface s {
+			    record dns-error-payload {
+			        rcode: option<string>,
+			        info-code: option<u16>,
+			    }
+			    record field-size-payload {
+			        field-name: option<string>,
+			        field-size: option<u32>,
+			    }
+			    variant error-code {
+			        dns-timeout,
+			        dns-error(dns-error-payload),
+			        http-request-body-size(option<u64>),
+			        http-request-header-size(option<field-size-payload>),
+			        http-response-trailer-size(field-size-payload),
+			        internal-error(option<string>),
+			    }
+			    resource response-outparam {
+			        set: static func(param: response-outparam, response: result<u32, error-code>);
+			    }
+			}
+			""";
+
+	@Test
+	void lowersAParameterThatNestsThroughResultVariantOptionAndRecord() {
+		// The scratch a wrapper needs is a property of how deeply its parameter types
+		// NEST,
+		// so the local pools are measured, not fixed: this one reaches
+		// result -> variant -> option -> record -> option<string>, five levels, and a
+		// fixed
+		// pool sized for anything shallower simply runs out.
+		String witLiteral = "\"" + DEEP_VARIANT_WIT.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
+		byte[] component = compileComponent("(defpackage kv (:use cl) (:export response-outparam-set))\n"
+				+ "(rontolisp::%component-import \"local:x/s\" " + witLiteral
+				+ " (\"response-outparam-set\" \"kv:response-outparam-set\"))\n"
+				+ "(kv:response-outparam-set 1 '(:ok . 200))\n"
+				+ "(kv:response-outparam-set 1 '(:error :dns-error :rcode \"NXDOMAIN\" :info-code 3))\n"
+				+ "(kv:response-outparam-set 1 '(:error :http-request-header-size :field-name \"x\" :field-size 9))\n");
+		assertThat(containsAscii(component, "[static]response-outparam.set")).isTrue();
+	}
+
+	@Test
+	void rejectsAnEmptyRecordNamingTheWitLine() {
+		// The component model has no empty record type, so this would otherwise surface
+		// as
+		// an unreadable component rather than a compile error.
+		String emptyRecordWit = """
 				package local:x@0.1.0;
 
 				interface s {
-				    record point {
-				        x: s32,
-				        y: s32,
+				    record nothing {
 				    }
-				    move-to: func(p: point);
+				    take: func(n: nothing);
 				}
 				""";
-		assertThatThrownBy(() -> lower(recordParamWit, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT))
+		assertThatThrownBy(() -> lower(emptyRecordWit, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("kv.wit:6")
+			.hasMessageContaining("declares no fields");
+	}
+
+	@Test
+	void rejectsAListParameterNamingTheWitLine() {
+		// A list<T> parameter would have to be written into linear memory as a canonical
+		// array, which is a different mechanism from flattening -- so it is still refused
+		// (list<u8> crosses, as a byte string).
+		String listParamWit = """
+				package local:x@0.1.0;
+
+				interface s {
+				    plot: func(xs: list<s32>);
+				    write: func(bytes: list<u8>);
+				}
+				""";
+		assertThatThrownBy(() -> lower(listParamWit, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("kv.wit:4")
+			.hasMessageContaining("is a list, which does not cross the component import boundary as a parameter yet");
+	}
+
+	@Test
+	void rejectsAFlagsParameterNamingTheWitLine() {
+		String flagsParamWit = """
+				package local:x@0.1.0;
+
+				interface s {
+				    flags perm {
+				        read,
+				        write,
+				    }
+				    chmod: func(p: perm);
+				}
+				""";
+		assertThatThrownBy(() -> lower(flagsParamWit, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("kv.wit:8")
-			.hasMessageContaining("does not cross the component import boundary as a parameter yet");
+			.hasMessageContaining("involves flags");
+	}
+
+	@Test
+	void rejectsAnOptionNestedInsideAnOptionParameter() {
+		// Both `none` and `some(none)` would be nil: the shape has no rontolisp value.
+		String nestedOptionWit = """
+				package local:x@0.1.0;
+
+				interface s {
+				    maybe: func(v: option<option<s32>>);
+				}
+				""";
+		assertThatThrownBy(() -> lower(nestedOptionWit, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("kv.wit:4")
+			.hasMessageContaining("nests an option directly inside an option");
 	}
 
 	@Test

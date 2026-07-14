@@ -35,12 +35,23 @@ import org.jspecify.annotations.Nullable;
  * {@link am.ik.wasm.WasmImportInjector} post-pass resolves, and its body is deferred
  * until the memory-helper indices are known. What is new is the marshalling: arguments
  * lower to the canonical flat representation (strings and {@code list<u8>} staged into
- * linear memory, {@code option} discriminants, 64-bit integers through the wide-int
- * convention), and results lift from the flat value or the return area per the canonical
- * ABI's layout rules ({@link WitCanonicalAbi}) into rontolisp values &mdash; a
- * {@code result} lifts to the {@code (:ok . V)} / {@code (:error . E)} envelope the
- * Lisp-side {@code rontolisp::%wit-result} wrapper unwraps (and whose error arm it
- * signals as {@code rontolisp:wit-error}).
+ * linear memory, a {@code variant} / {@code enum} / {@code result} / {@code option} to
+ * its discriminant plus the joined payload flats, a {@code record} / {@code tuple} to its
+ * fields' flats, 64-bit integers through the wide-int convention), and results lift from
+ * the flat value or the return area per the canonical ABI's layout rules
+ * ({@link WitCanonicalAbi}) into rontolisp values &mdash; a {@code result} lifts to the
+ * {@code (:ok . V)} / {@code (:error . E)} envelope the Lisp-side
+ * {@code rontolisp::%wit-result} wrapper unwraps (and whose error arm it signals as
+ * {@code rontolisp:wit-error}).
+ *
+ * <p>
+ * Lowering and lifting are mirror images of one shape, which is what makes a lifted value
+ * passable straight back into another call: a variant case is the keyword {@code :get}
+ * (or {@code (:other . "PATCH")} when it carries a payload), an enum is a keyword, a
+ * record is a keyword plist, an option is the value or {@code nil}. The one thing
+ * lowering refuses that lifting does not is a {@code list<T>} (other than
+ * {@code list<u8>}): writing a canonical array into linear memory is a different
+ * mechanism from flattening, and nothing needs it yet.
  *
  * <p>
  * The wrapper stages per-call bytes above a heap-pointer mark and pops back to it
@@ -52,8 +63,13 @@ import org.jspecify.annotations.Nullable;
  */
 final class WasmComponentImportCompiler {
 
-	/** The number of reserved i32 scratch locals in a wrapper body. */
-	private static final int I32_SCRATCH = 16;
+	/**
+	 * The ceiling on a wrapper's scratch locals of one core type. The pools are SIZED BY
+	 * MEASUREMENT ({@link #buildWrapperBody} emits the body twice), so this is only a
+	 * runaway guard -- no real WIT comes near it, and a program that did would get a
+	 * clear error rather than a mis-sized frame.
+	 */
+	private static final int MAX_SCRATCH = 512;
 
 	private WasmComponentImportCompiler() {
 	}
@@ -185,13 +201,27 @@ final class WasmComponentImportCompiler {
 		return false;
 	}
 
+	// Whether lowering a value of this type stages bytes into linear memory -- a string
+	// or
+	// a list<u8> ANYWHERE inside it, including as a variant case's payload or a record
+	// field (miss one of those and the canon lower would carry no memory options, so the
+	// staged pointer would have nothing to point into).
 	private static boolean stagesMemory(WitType type, WitCanonicalAbi abi) {
 		return switch (type) {
 			case WitType.Prim prim -> "string".equals(prim.name());
 			case WitType.ListOf ignored -> true;
 			case WitType.OptionOf opt -> stagesMemory(opt.element(), abi);
-			case WitType.Named named ->
-				abi.resolveNamed(named) instanceof WitItem.TypeAlias alias && stagesMemory(alias.target(), abi);
+			case WitType.ResultOf res -> (res.ok() != null && stagesMemory(res.ok(), abi))
+					|| (res.err() != null && stagesMemory(res.err(), abi));
+			case WitType.TupleOf tuple -> tuple.elements().stream().anyMatch(element -> stagesMemory(element, abi));
+			case WitType.Named named -> switch (abi.resolveNamed(named)) {
+				case WitItem.TypeAlias alias -> stagesMemory(alias.target(), abi);
+				case WitItem.RecordDef record ->
+					record.fields().stream().anyMatch(field -> stagesMemory(field.type(), abi));
+				case WitItem.VariantDef variant ->
+					variant.cases().stream().anyMatch(c -> c.payload() != null && stagesMemory(c.payload(), abi));
+				default -> false;
+			};
 			default -> false;
 		};
 	}
@@ -215,29 +245,61 @@ final class WasmComponentImportCompiler {
 	 */
 	static byte[] buildWrapperBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Decl decl, int ordinal, int allocFuncIndex,
 			int strFromMemFuncIndex) {
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
-		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
-		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		int numParams = lispArity(decl);
-		Gen gen = new Gen(ctx, decl, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex);
-		gen.emitBody();
-		// Locals: the fixed i32 scratch pool, one i64, then the eq temps allocTemp
-		// handed out during emission.
-		int numEqTemps = ctx.nextLocal - (numParams + 1 + I32_SCRATCH + 1);
+		// How much scratch a wrapper needs is a property of how deeply its parameter
+		// types
+		// NEST -- `wasi:http`'s `response-outparam.set` reaches through result -> variant
+		// ->
+		// option -> record -> option<string> -- so no fixed pool size is defensible: a
+		// deeper WIT walks past any constant. Emit the body ONCE into a throwaway stream
+		// to
+		// measure the high-water marks, then emit it again with pools of exactly that
+		// size.
+		// (The locals declaration is written after the body either way; what the first
+		// pass
+		// buys is the local INDICES, which must already be right while the body is
+		// written.)
+		Body probe = emitBody(ctxBuilder, decl, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, MAX_SCRATCH,
+				MAX_SCRATCH);
+		Body body = emitBody(ctxBuilder, decl, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, probe.i32Pool(),
+				probe.i64Pool());
 		ByteArrayOutputStream entry = new ByteArrayOutputStream();
 		am.ik.wasm.WasmWriter entryWriter = new am.ik.wasm.WasmWriter(entry);
-		entryWriter.write(numEqTemps > 0 ? 3 : 2);
-		entryWriter.writeUnsignedLeb128(I32_SCRATCH);
+		entryWriter.write(body.eqTemps() > 0 ? 3 : 2);
+		entryWriter.writeUnsignedLeb128(body.i32Pool());
 		entryWriter.write(Type.I32);
-		entryWriter.writeUnsignedLeb128(1);
+		entryWriter.writeUnsignedLeb128(body.i64Pool());
 		entryWriter.write(Type.I64);
-		if (numEqTemps > 0) {
-			entryWriter.writeUnsignedLeb128(numEqTemps);
+		if (body.eqTemps() > 0) {
+			entryWriter.writeUnsignedLeb128(body.eqTemps());
 			entryWriter.write(Type.REFNULL.code());
 			entryWriter.writeHeapType(Type.EQ.code());
 		}
-		entryWriter.write((Object) bodyStream.toByteArray());
+		entryWriter.write((Object) body.bytes());
 		return entry.toByteArray();
+	}
+
+	// One emission of a wrapper body, and what it cost in locals.
+	private record Body(byte[] bytes, int i32Pool, int i64Pool, int eqTemps) {
+	}
+
+	// Emits the body with scratch pools of the given sizes, and reports the sizes it
+	// actually used. Re-emitting is safe and repeatable: the only state it shares with
+	// the
+	// caller is the string table, whose entries are content-keyed (adding the same
+	// literal
+	// twice yields the same offset).
+	private static Body emitBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Decl decl, int numParams, int ordinal,
+			int allocFuncIndex, int strFromMemFuncIndex, int i32Pool, int i64Pool) {
+		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
+		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
+		Gen gen = new Gen(ctx, decl, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool, i64Pool);
+		gen.emitBody();
+		// Locals: the i32 scratch pool, the i64 scratch pool, then the eq temps allocTemp
+		// handed out during emission.
+		int eqTemps = ctx.nextLocal - (numParams + 1 + i32Pool + i64Pool);
+		return new Body(bodyStream.toByteArray(), gen.i32High, gen.i64High, eqTemps);
 	}
 
 	// The per-body generator: tracks the i32 scratch cursor (stack discipline around
@@ -252,7 +314,13 @@ final class WasmComponentImportCompiler {
 
 		private final int i32Base;
 
+		private final int i64Base;
+
 		private final int i64Local;
+
+		private final int i32Pool;
+
+		private final int i64Pool;
 
 		private final int allocFuncIndex;
 
@@ -262,28 +330,64 @@ final class WasmComponentImportCompiler {
 
 		private int i32Cursor;
 
+		private int i64Cursor;
+
+		// The pool sizes this body actually needs: the high-water marks of the cursors.
+		private int i32High;
+
+		private int i64High;
+
 		private final int mark;
 
 		Gen(WasmLispCompiler.Ctx ctx, Decl decl, int numParams, int ordinal, int allocFuncIndex,
-				int strFromMemFuncIndex) {
+				int strFromMemFuncIndex, int i32Pool, int i64Pool) {
 			this.ctx = ctx;
 			this.w = ctx.writer;
 			this.decl = decl;
+			this.i32Pool = i32Pool;
+			this.i64Pool = i64Pool;
 			this.i32Base = numParams + 1;
-			this.i64Local = numParams + 1 + I32_SCRATCH;
+			this.i64Base = numParams + 1 + i32Pool;
+			this.i64Local = this.i64Base; // slot 0 of the pool: boxI64's permanent
+											// scratch
+			this.i64Cursor = 1;
+			this.i64High = 1;
 			this.ordinal = ordinal;
 			this.allocFuncIndex = allocFuncIndex;
 			this.strFromMemFuncIndex = strFromMemFuncIndex;
-			ctx.nextLocal = numParams + 1 + I32_SCRATCH + 1;
+			ctx.nextLocal = numParams + 1 + i32Pool + i64Pool;
 			this.mark = allocI32();
 		}
 
 		private int allocI32() {
-			if (this.i32Cursor >= I32_SCRATCH) {
-				throw new IllegalStateException("component-import wrapper ran out of i32 scratch locals for '"
-						+ this.decl.lispName() + "' (nesting too deep)");
+			if (this.i32Cursor >= this.i32Pool) {
+				throw new UnsupportedOperationException("'" + this.decl.lispName()
+						+ "': the WIT parameter and result types nest deeper than the component import boundary can "
+						+ "marshal (more than " + MAX_SCRATCH + " scratch locals)");
 			}
-			return this.i32Base + this.i32Cursor++;
+			int slot = this.i32Base + this.i32Cursor++;
+			this.i32High = Math.max(this.i32High, this.i32Cursor);
+			return slot;
+		}
+
+		private int allocI64() {
+			if (this.i64Cursor >= this.i64Pool) {
+				throw new UnsupportedOperationException("'" + this.decl.lispName()
+						+ "': the WIT parameter and result types nest deeper than the component import boundary can "
+						+ "marshal (more than " + MAX_SCRATCH + " scratch locals)");
+			}
+			int slot = this.i64Base + this.i64Cursor++;
+			this.i64High = Math.max(this.i64High, this.i64Cursor);
+			return slot;
+		}
+
+		// The scratch a lowered ARGUMENT used dies the moment its flats are on the stack,
+		// so the next argument starts from the floor again (slot 0 of each pool is
+		// permanent: the staging mark, and boxI64's scratch). Without this, N arguments
+		// would cost the SUM of their scratch rather than the deepest one's.
+		private void resetScratch() {
+			this.i32Cursor = 1;
+			this.i64Cursor = 1;
 		}
 
 		void emitBody() {
@@ -308,6 +412,7 @@ final class WasmComponentImportCompiler {
 			}
 			for (var param : func.def().func().params()) {
 				emitLowerParam(param.type(), slot++);
+				resetScratch();
 			}
 			// The return pointer, when the results are indirect: bump-allocated above the
 			// staged arguments (__ronto_alloc aligns to 8, satisfying every canonical
@@ -413,58 +518,138 @@ final class WasmComponentImportCompiler {
 							getLocal(slot);
 							WasmEmitHelper.castFloatGetF64(this.ctx);
 						}
+						case "char" -> {
+							getLocal(slot);
+							structGet(WasmLispCompiler.TYPE_CHAR, 0);
+						}
 						case "string" -> emitStageStringParam(slot);
 						default -> throw paramUnsupported(prim.name());
 					}
 				}
 				case WitType.ListOf list when isU8(list.element()) -> emitStageStringParam(slot);
-				case WitType.BorrowOf ignored -> {
-					getLocal(slot);
-					WasmEmitHelper.castI31GetS(this.ctx);
-				}
-				case WitType.OwnOf ignored -> {
-					getLocal(slot);
-					WasmEmitHelper.castI31GetS(this.ctx);
-				}
-				case WitType.OptionOf opt -> emitLowerOptionParam(opt, slot);
+				case WitType.ListOf ignored -> throw paramUnsupported("list<T>");
+				case WitType.BorrowOf ignored -> emitLowerHandleParam(slot);
+				case WitType.OwnOf ignored -> emitLowerHandleParam(slot);
+				case WitType.OptionOf ignored -> emitLowerVariantParam(t, slot);
+				case WitType.ResultOf ignored -> emitLowerVariantParam(t, slot);
+				case WitType.TupleOf ignored -> emitLowerRecordParam(t, slot, false);
 				case WitType.Named named -> {
-					if (this.decl.abi().resolveNamed(named) instanceof WitItem.ResourceDef) {
-						getLocal(slot);
-						WasmEmitHelper.castI31GetS(this.ctx);
-					}
-					else {
-						throw paramUnsupported(named.name());
+					switch (this.decl.abi().resolveNamed(named)) {
+						case WitItem.ResourceDef ignored -> emitLowerHandleParam(slot);
+						case WitItem.EnumDef ignored -> emitLowerVariantParam(t, slot);
+						case WitItem.VariantDef ignored -> emitLowerVariantParam(t, slot);
+						case WitItem.RecordDef ignored -> emitLowerRecordParam(t, slot, true);
+						default -> throw paramUnsupported(named.name());
 					}
 				}
 				default -> throw paramUnsupported(t.getClass().getSimpleName());
 			}
 		}
 
-		// option<T> parameter: flats = [disc i32] + flats(T). The payload flats are
-		// computed into scratch locals on the some-branch (zeroed on the none-branch) so
-		// both branches leave the stack untouched, then pushed in order.
-		private void emitLowerOptionParam(WitType.OptionOf opt, int slot) {
-			List<Type> payloadFlats = this.decl.abi().flatTypes(opt.element());
+		private void emitLowerHandleParam(int slot) {
+			getLocal(slot);
+			WasmEmitHelper.castI31GetS(this.ctx);
+		}
+
+		// A variant-shaped parameter (variant / enum / option / result): flats are
+		// [disc i32] + the JOINED payload flats (one slot per position, widened across
+		// the
+		// cases -- WitCanonicalAbi.flatTypes). Every branch computes the discriminant and
+		// the joined flats into scratch locals and leaves the stack untouched, so the
+		// values can be pushed in flat order afterwards.
+		//
+		// The Lisp shape is the settled mapping, and it is EXACTLY what the lifting side
+		// builds, so a lifted value can be passed straight back: an option is
+		// nil-or-value;
+		// anything else is the case keyword (`:get`), or a `(keyword . payload)` cons
+		// when
+		// the case carries one -- for a result, the (:ok . V) / (:error . E) envelope.
+		private void emitLowerVariantParam(WitType type, int slot) {
+			WitCanonicalAbi.VariantInfo info = this.decl.abi().variantInfo(type);
+			List<Type> flats = this.decl.abi().flatTypes(type);
+			List<Type> joined = flats.subList(1, flats.size());
 			int disc = allocI32();
 			List<Integer> payloadLocals = new ArrayList<>();
-			for (Type flat : payloadFlats) {
-				if (flat == Type.I32) {
-					payloadLocals.add(allocI32());
+			for (Type flat : joined) {
+				payloadLocals.add(storageOf(flat) == Type.I64 ? allocI64() : allocI32());
+			}
+			if (resolveAlias(type) instanceof WitType.OptionOf opt) {
+				// none = nil, some(v) = the value itself: no tag to read.
+				getLocal(slot);
+				this.w.write(Instruction.REF_IS_NULL);
+				this.w.write(Instruction.IF, 0x40);
+				i32Const(0);
+				setLocal(disc);
+				emitCasePayload(null, -1, joined, payloadLocals);
+				this.w.write(Instruction.ELSE);
+				i32Const(1);
+				setLocal(disc);
+				emitCasePayload(opt.element(), slot, joined, payloadLocals);
+				this.w.write(Instruction.END);
+			}
+			else {
+				int tagId = emitTagId(slot);
+				int payload = joined.isEmpty() ? -1 : emitPayload(slot);
+				int n = info.names().size();
+				for (int i = 0; i < n; i++) {
+					getLocal(tagId);
+					i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
+					this.w.write(Instruction.I32_EQ);
+					this.w.write(Instruction.IF, 0x40);
+					i32Const(i);
+					setLocal(disc);
+					emitCasePayload(info.payloads().get(i), payload, joined, payloadLocals);
+					this.w.write(Instruction.ELSE);
 				}
-				else if (flat == Type.I64) {
-					payloadLocals.add(this.i64Local);
-				}
-				else {
-					throw paramUnsupported("option over a float payload");
+				// The argument names no case of this variant: a type error, and it traps
+				// exactly as every other type error does on this backend (a ref.cast on a
+				// value of the wrong shape).
+				this.w.write(Instruction.UNREACHABLE);
+				for (int i = 0; i < n; i++) {
+					this.w.write(Instruction.END);
 				}
 			}
-			getLocal(slot);
-			this.w.write(Instruction.REF_IS_NULL);
-			this.w.write(Instruction.IF, 0x40);
-			i32Const(0);
-			setLocal(disc);
-			for (int i = 0; i < payloadFlats.size(); i++) {
-				if (payloadFlats.get(i) == Type.I64) {
+			getLocal(disc);
+			for (int i = 0; i < joined.size(); i++) {
+				getLocal(payloadLocals.get(i));
+				if (joined.get(i) == Type.F32) {
+					this.w.write(Instruction.F32_REINTERPRET_I32);
+				}
+				else if (joined.get(i) == Type.F64) {
+					this.w.write(Instruction.F64_REINTERPRET_I64);
+				}
+			}
+		}
+
+		// One case of a lowered variant: compute the payload's flats into the joined
+		// locals (coerced to the joined type, the canonical ABI's rule), and zero the
+		// joined positions this case does not reach. The scratch cursors are rolled back
+		// afterwards: the cases are mutually exclusive, so each may reuse the same
+		// locals.
+		private void emitCasePayload(@Nullable WitType payload, int payloadSlot, List<Type> joined,
+				List<Integer> payloadLocals) {
+			int save32 = this.i32Cursor;
+			int save64 = this.i64Cursor;
+			int lowered = 0;
+			// A payload can FLATTEN to nothing (an empty record, a tuple of none), in
+			// which
+			// case there is nothing to lower and nothing to read the payload from -- the
+			// case is payload-less as far as the ABI is concerned.
+			if (payload != null && !this.decl.abi().flatTypes(payload).isEmpty()) {
+				if (payloadSlot < 0) {
+					throw new IllegalStateException("a payload-bearing case has no payload value");
+				}
+				List<Type> payloadFlats = this.decl.abi().flatTypes(payload);
+				emitLowerParam(payload, payloadSlot);
+				// The flats are on the stack in order, so they pop in reverse.
+				for (int i = payloadFlats.size() - 1; i >= 0; i--) {
+					emitCoerceToStorage(payloadFlats.get(i), joined.get(i));
+					setLocal(payloadLocals.get(i));
+				}
+				lowered = payloadFlats.size();
+			}
+			for (int i = lowered; i < joined.size(); i++) {
+				if (storageOf(joined.get(i)) == Type.I64) {
 					this.w.write(Instruction.I64_CONST);
 					this.w.writeSignedLeb128(0);
 				}
@@ -473,17 +658,129 @@ final class WasmComponentImportCompiler {
 				}
 				setLocal(payloadLocals.get(i));
 			}
-			this.w.write(Instruction.ELSE);
-			i32Const(1);
-			setLocal(disc);
-			emitLowerParam(opt.element(), slot);
-			for (int i = payloadFlats.size() - 1; i >= 0; i--) {
-				setLocal(payloadLocals.get(i));
+			this.i32Cursor = save32;
+			this.i64Cursor = save64;
+		}
+
+		// The core type a joined flat is held in between the branches and the call: a
+		// float
+		// flat rides in an integer local as its bit pattern, which keeps the scratch
+		// pools
+		// to two (and costs nothing -- the reinterpret pair is free).
+		private static Type storageOf(Type flat) {
+			return flat == Type.I64 || flat == Type.F64 ? Type.I64 : Type.I32;
+		}
+
+		// Converts the flat value on the stack (of a case's own flat type) to the joined
+		// flat type, then to that type's storage type. The widening pairs are the
+		// canonical
+		// ABI's, and nothing else can occur: the join only ever widens i32 -> i64 and
+		// reinterprets a float into the integer that covers it.
+		private void emitCoerceToStorage(Type have, Type want) {
+			if (have == want) {
+				if (want == Type.F32) {
+					this.w.write(Instruction.I32_REINTERPRET_F32);
+				}
+				else if (want == Type.F64) {
+					this.w.write(Instruction.I64_REINTERPRET_F64);
+				}
+				return;
 			}
+			if (have == Type.F32 && want == Type.I32) {
+				this.w.write(Instruction.I32_REINTERPRET_F32);
+				return;
+			}
+			if (have == Type.I32 && want == Type.I64) {
+				this.w.write(Instruction.I64_EXTEND_U_I32);
+				return;
+			}
+			if (have == Type.F32 && want == Type.I64) {
+				this.w.write(Instruction.I32_REINTERPRET_F32);
+				this.w.write(Instruction.I64_EXTEND_U_I32);
+				return;
+			}
+			if (have == Type.F64 && want == Type.I64) {
+				this.w.write(Instruction.I64_REINTERPRET_F64);
+				return;
+			}
+			throw new IllegalStateException(
+					"'" + this.decl.lispName() + "': a variant case's flat " + have + " does not join into " + want);
+		}
+
+		// tagId = the interned string id of the value's tag -- car when it is a
+		// (keyword . payload) cons, the value itself otherwise -- or -1 when the tag is
+		// not
+		// a symbol at all (so no case can match it and the dispatch traps).
+		private int emitTagId(int slot) {
+			int tag = this.ctx.allocTemp();
+			getLocal(slot);
+			refTest(WasmLispCompiler.TYPE_CONS);
+			this.w.write(Instruction.IF);
+			this.w.write(Type.REFNULL.code());
+			this.w.writeHeapType(Type.EQ.code());
+			getLocal(slot);
+			structGet(WasmLispCompiler.TYPE_CONS, 0);
+			this.w.write(Instruction.ELSE);
+			getLocal(slot);
 			this.w.write(Instruction.END);
-			getLocal(disc);
-			for (int local : payloadLocals) {
-				getLocal(local);
+			setLocal(tag);
+			int tagId = allocI32();
+			getLocal(tag);
+			refTest(WasmLispCompiler.TYPE_STRING);
+			this.w.write(Instruction.IF, Type.I32);
+			getLocal(tag);
+			structGet(WasmLispCompiler.TYPE_STRING, 0);
+			this.w.write(Instruction.ELSE);
+			i32Const(-1);
+			this.w.write(Instruction.END);
+			setLocal(tagId);
+			return tagId;
+		}
+
+		// The payload of a tagged value: cdr when it is a cons, nil otherwise (a
+		// payload-less case may be written as the bare keyword).
+		private int emitPayload(int slot) {
+			int payload = this.ctx.allocTemp();
+			getLocal(slot);
+			refTest(WasmLispCompiler.TYPE_CONS);
+			this.w.write(Instruction.IF);
+			this.w.write(Type.REFNULL.code());
+			this.w.writeHeapType(Type.EQ.code());
+			getLocal(slot);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			this.w.write(Instruction.ELSE);
+			refNullEq();
+			this.w.write(Instruction.END);
+			setLocal(payload);
+			return payload;
+		}
+
+		// A record parameter (a keyword plist) or a tuple parameter (a positional list):
+		// the fields' flats concatenate, in WIT order.
+		private void emitLowerRecordParam(WitType type, int slot, boolean plist) {
+			WitCanonicalAbi.RecordInfo info = this.decl.abi().recordInfo(type);
+			for (int i = 0; i < info.names().size(); i++) {
+				int save32 = this.i32Cursor;
+				int save64 = this.i64Cursor;
+				int field = this.ctx.allocTemp();
+				getLocal(slot);
+				if (plist) {
+					// _plist_get(plist, ":field") -- nil when the key is absent, which is
+					// what an option field wants.
+					i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
+					this.w.write(Instruction.CALL);
+					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_FETCH_PLIST_GET);
+				}
+				else {
+					for (int k = 0; k < i; k++) {
+						structGet(WasmLispCompiler.TYPE_CONS, 1);
+					}
+					structGet(WasmLispCompiler.TYPE_CONS, 0);
+				}
+				setLocal(field);
+				emitLowerParam(info.types().get(i), field);
+				this.i32Cursor = save32;
+				this.i64Cursor = save64;
 			}
 		}
 
@@ -558,15 +855,58 @@ final class WasmComponentImportCompiler {
 				case WitType.OwnOf ignored -> boxI31();
 				case WitType.ResultOf ignored -> emitLiftVariantFromStackDisc(t);
 				case WitType.OptionOf ignored -> emitLiftVariantFromStackDisc(t);
+				case WitType.TupleOf ignored -> emitLiftRecordFlat(t, false);
 				case WitType.Named named -> {
 					switch (this.decl.abi().resolveNamed(named)) {
 						case WitItem.ResourceDef ignored -> boxI31();
 						case WitItem.EnumDef ignored -> emitLiftVariantFromStackDisc(t);
 						case WitItem.VariantDef ignored -> emitLiftVariantFromStackDisc(t);
+						case WitItem.RecordDef ignored -> emitLiftRecordFlat(t, true);
 						default -> throw resultUnsupported(named.name());
 					}
 				}
 				default -> throw resultUnsupported(t.getClass().getSimpleName());
+			}
+		}
+
+		// A record / tuple result that flattens to ONE core value (a single-field record,
+		// say) never reaches the return area: the value comes back in the flat, so there
+		// is
+		// no memory to read the fields out of. It still has to lift to a plist / a list
+		// --
+		// the shape does not change with how the ABI happened to carry it.
+		private void emitLiftRecordFlat(WitType type, boolean plist) {
+			WitCanonicalAbi.RecordInfo info = this.decl.abi().recordInfo(type);
+			int carrier = -1;
+			for (int i = 0; i < info.types().size(); i++) {
+				if (!this.decl.abi().flatTypes(info.types().get(i)).isEmpty()) {
+					carrier = i; // at most one, or the record would not be single-flat
+				}
+			}
+			int value = -1;
+			if (carrier >= 0) {
+				emitLiftFlat(info.types().get(carrier));
+				value = this.ctx.allocTemp();
+				setLocal(value);
+			}
+			int conses = 0;
+			for (int i = 0; i < info.names().size(); i++) {
+				if (plist) {
+					WasmEmitHelper.compileStringLiteral(":" + info.names().get(i), this.ctx);
+					conses++;
+				}
+				if (i == carrier) {
+					getLocal(value);
+				}
+				else {
+					// A field that flattens to nothing is an empty record / tuple: nil.
+					refNullEq();
+				}
+				conses++;
+			}
+			refNullEq();
+			for (int i = 0; i < conses; i++) {
+				newCons();
 			}
 		}
 
@@ -875,6 +1215,23 @@ final class WasmComponentImportCompiler {
 		private void newCons() {
 			this.w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 			this.w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		}
+
+		// i32 = 1 when the (ref null eq) on the stack is of the given struct type.
+		private void refTest(int typeIndex) {
+			this.w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			this.w.writeHeapType(typeIndex);
+		}
+
+		// Casts the (ref null eq) on the stack to the struct type -- trapping when it is
+		// something else, the house behavior of a type error on this backend -- and reads
+		// one field.
+		private void structGet(int typeIndex, int field) {
+			this.w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			this.w.writeHeapType(typeIndex);
+			this.w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			this.w.writeSignedLeb128(typeIndex);
+			this.w.writeSignedLeb128(field);
 		}
 
 		private void refNullEq() {

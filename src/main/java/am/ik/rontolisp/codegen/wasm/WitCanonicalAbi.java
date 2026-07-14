@@ -92,8 +92,11 @@ final class WitCanonicalAbi {
 			params.addAll(flatTypes(param.type()));
 		}
 		if (params.size() > MAX_FLAT_PARAMS) {
-			throw new UnsupportedOperationException("'" + func.def().name()
-					+ "': more than 16 flattened parameters do not cross the component import boundary yet");
+			throw new UnsupportedOperationException("'" + func.def().name() + "': its parameters flatten to "
+					+ params.size() + " core values, and beyond " + MAX_FLAT_PARAMS
+					+ " the canonical ABI spills them into a caller-allocated memory area -- a mechanism the component "
+					+ "import boundary does not implement yet. The WIT types themselves are fine; it is the width of "
+					+ "their flattening that is not");
 		}
 		WitType result = resultType(func);
 		if (result == null) {

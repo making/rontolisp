@@ -758,7 +758,7 @@ codegen never mentions conditions at all.
 
 | | Preview 1 core import | `--component` |
 |---|---|---|
-| params | flat set only | scalars / bool / string / list<u8> / handles / option of those |
+| params | flat set only | **everything except flags and `list<T>`** (`list<u8>` crosses) |
 | results | flat set only | **everything except flags** — scalars, bool, string, char, list<T>, list<u8>, tuple, option, result, record, variant, enum, handles |
 
 Preview 1's limit is not laziness: a core import is a bare host function with **no
@@ -777,6 +777,112 @@ symbol names the program textually references, the `LibraryDefunPruner` conventi
 directive binds only those; `--no-prune` / `--dynamic` disable it. Measured: a program
 calling 2 of `wasi:keyvalue`'s 6 functions imports exactly 2, and the now-unreachable
 `key-response` record vanishes from the component's type too.
+
+## Rich PARAMETERS across the component boundary (todo 133, 2026-07-14)
+
+The v1 cut lowered params flat (scalar / bool / string / `list<u8>` / handle / `option` of
+those) while results lifted recursively. That asymmetry is gone: **a param now lowers
+everything a result lifts, except `list<T>` (T != u8)**. What made it worth doing is that
+`.todo/135` and `.todo/136` are blocked by exactly this — and the todo's own premise ("the
+blocking variants are all flat-payload") was WRONG, which is the thing to remember:
+
+- `wasi:http`'s `method` variant carries a **string** (`other(string)`), and
+  `response-outparam.set` takes `result<outgoing-response, error-code>` whose `error-code`
+  cases carry **records** (`DNS-error-payload`) and `option<string>`. Cut string/record
+  payloads and the keystone unblocks nothing. So the line is drawn at `list<T>` instead:
+  writing a canonical ARRAY into linear memory is a different mechanism (a memory `store`
+  recursion mirroring `emitLiftAt`), and nothing in sight needs it. `fields.append`
+  (`list<u8>`) is the reason `.todo/136` still doesn't.
+
+### The Lisp shape is the LIFT's shape, and the codegen is the mirror image
+
+No new representation, no new runtime, no Lisp-side helper: `emitLowerVariantParam` /
+`emitLowerRecordParam` consume exactly what `emitVariantCase` / `emitLiftRecordAt` build.
+A lifted value therefore goes straight back into another call (`(http:set-method r
+(http:method r))`), and **the settled `result` ARGUMENT is the envelope** `(:ok . V)` /
+`(:error . E)` — the same cons `%wit-result` unwraps, so the mapping cell that todo 133
+left open is closed by construction rather than by decree. A payload-less arm may also be
+written as the bare keyword (`(cli:exit :ok)`), because the tag/payload split is
+`consp` ? `car`/`cdr` : the value itself.
+
+Keyword identity in wasm is **`struct.get $string 0` (the interned id) + `i32.eq` against
+`ctx.stringTable.addString(":case").offset()`** — NOT `ref.eq`: `compileStringLiteral`
+allocates a fresh struct each time (`_str_build`), and only field 0 is canonical. The
+idiom is `WasmFetchRuntimeBuilder.buildPlistGet`, which is also what a `record` param calls
+(`FUNC_FETCH_PLIST_GET`, always emitted) to pull a field out of the keyword plist.
+
+A keyword naming no case traps (`unreachable`). That is deliberate and consistent: a type
+error on this backend is a `ref.cast` trap already (`(+ 1 "a")`), and the alternative — a
+Lisp-side normalizing wrapper that could signal — would have put a second, divergent copy
+of the shape rules next to the codegen's.
+
+### Three things the encoders needed
+
+- **The joined payload flats** (`WitCanonicalAbi.flatTypes` already computed them): each
+  case's flats are coerced to the joined type per the canonical ABI (`i32`->`i64` =
+  `extend_u`, `f32`->`i32` = `reinterpret`, `f64`->`i64` = `reinterpret`) and the positions
+  a case does not reach are zero-filled. A joined FLOAT flat rides in an integer scratch
+  local as its bit pattern (`storageOf`), which keeps the scratch pools to two. Per-case,
+  per-field and per-ARGUMENT cursors are rolled back (a lowered argument's scratch dies the
+  moment its flats are on the stack), so the cost is the deepest nesting, not the sum.
+- **The scratch pools are SIZED BY MEASUREMENT, not by a constant** -- `buildWrapperBody`
+  emits the body twice, reads the cursors' high-water marks off the first pass, and emits
+  again with pools of exactly that size (the locals declaration is written after the body
+  either way; what pass 1 buys is the local INDICES, which must already be right while the
+  body is written). This is not a nicety: the first cut used fixed pools (i32 x 24, i64 x
+  5) and **`wasi:http`'s `response-outparam.set` -- the ONE call this whole line of work
+  exists for -- blew through them** (result -> variant -> option -> record ->
+  option<string>, five levels), while the test corpus, whose trimmed WIT dropped
+  `error-code`, stayed green. Any constant is walked past by a deeper WIT; do not re-fix
+  this by raising one.
+- **`needsMemory` must recurse into variant cases and record fields** — a string inside a
+  case payload stages memory, and missing that would emit a `canon lower` with no memory
+  options.
+- **`repOf` must resolve aliases first.** `type headers = fields` (every wasi:http-shaped
+  interface writes it) is an alias whose target is itself a NAME, and `WitTypeMapper`
+  classifies structurally, so it threw `IllegalArgumentException`. A latent crash on EVERY
+  backend, not just this one; `WasmComponentImportCompilerTest.followsATypeAlias...` pins it.
+
+### Two shapes the gate must refuse, and one the lift had never seen
+
+- An **empty `record`** is not encodable in the component model at all ("record type must
+  have at least one field"), so it is a compile error naming the WIT line rather than an
+  unreadable component.
+- A **`record` / `tuple` RESULT that flattens to one core value** (a single-field record)
+  never reaches the return area -- it comes back IN the flat -- and `emitLiftFlat` had no
+  case for it, so the gate accepted what the codegen then refused. `emitLiftRecordFlat`
+  lifts it into the same plist / list the memory path would have.
+- `option<bool>` remains representationally ambiguous (`some(false)` and `none` are both
+  nil). It is accepted, not refused: a program can still pass `t` or `nil`-as-none, and
+  refusing it would lock out interfaces that only ever use those. Known hole, both
+  directions.
+
+### Verified against real hosts (nothing else can check a lowered param)
+
+A unit test can only say the bytes contain the import name. What proves a param is right is
+a host that ANSWERS with what it received, so the E2Es (in `WasmLispCompilerIntegrationTest`,
+container wasmtime) call wasmtime's own implementations:
+
+- `wasi:http/types` — `set-method :post` / `'(:other . "PATCH")`, read back with `method`
+  (round trip); an invalid method makes the host answer the error arm -> `wit-error`.
+- `wasi:sockets/types` — `tcp-socket-create :ipv4` (enum), `bind '(:ipv4 :port 0 :address
+  (127 0 0 1))` (variant -> record -> tuple), read back with `get-local-address`. The host
+  binds the address it was handed, which is the actual proof.
+- `wasi:cli/exit` — `exit: func(status: result)`, the cheapest result PARAM: the arm the
+  host received IS the process exit code (`:ok` -> 0, `'(:error)` -> 1).
+
+Trimmed WIT in a test must match the host's real interface EXACTLY (the component-model
+subtype check is structural): a hand-written `enum error-code` for wasi:sockets failed with
+"expected variant found enum" until it was copied from the vendored `.wit`.
+
+### A user import must not collide with the WASI surface (fixed here)
+
+Nothing compared a user's interface id against the fixed adapter blob's imports, so
+`(wit-import "wasi:sockets/types@0.3.0")` in a program that also calls `rontolisp:tcp-*`
+emitted a component with the SAME instance import name twice — invalid, and only wasmtime
+said so, at a byte offset. `WasmComponentBuilder.rejectAdapterImportCollisions` now names
+it at compile time. The surface grows with what the program uses, which is why the check
+lives where the blob variant is finally known (`build`), not in the directive.
 
 ### The alignment trap (this cost the only real debugging round)
 

@@ -1,7 +1,22 @@
 # `rontolisp:fetch` through WIT — delete the biggest hand-written blob
 
-**Status:** open, unstarted. **Large, and the biggest single blob win.** Blocked only by
-`.todo/133` (variant parameters). The user-facing API does not change at all.
+**Status:** open, unstarted. **Large, and the biggest single blob win.** **UNBLOCKED
+2026-07-14**: `.todo/133` landed, so `set-method(method)` / `set-scheme(option<scheme>)`
+cross the component import boundary (verified against wasmtime's real `wasi:http` host —
+`WasmLispCompilerIntegrationTest.componentImportLowersAVariantParameter`). The
+user-facing API does not change at all.
+
+Two things todo 133 leaves you:
+
+- `fields.set(name, value: list<list<u8>>)` and `from-list` do NOT cross (a `list<T>`
+  argument is still a compile error). Build headers with `fields.append(name,
+  value: list<u8>)`, which does.
+- The new collision guard (`WasmComponentBuilder.rejectAdapterImportCollisions`) rejects a
+  `wit-import` of an interface the blob already imports. So `fetch.lisp` must **replace**
+  the `buildHttp` blob's `wasi:http` / `wasi:io` imports, not sit beside them — which is
+  the invariant that keeps this migration honest, but it does mean the "keep the WAT
+  adapter alive while the Lisp path is built" plan below needs the two paths selected
+  exclusively (they already are: `emitHttpImport`).
 
 ## What goes away
 
@@ -41,7 +56,7 @@ Scope: the **WASM component leg only**. The interpreter and the JVM keep their
 `HttpClient` implementation (`.kb/fetch-http.md`); Preview 1 WASM has no fetch at all
 today. So the splice is component-path-only, like `VecLibrary`'s `--no-gc` exclusion.
 
-## The one blocker (`.todo/133`)
+## The blocker that WAS (`.todo/133`, landed 2026-07-14)
 
 Read function by function against `src/wasm-component/deps/http/types.wit`, the entire
 fetch surface crosses the component import boundary **today** — handles, `option<handle>`
@@ -50,8 +65,9 @@ fetch surface crosses the component import boundary **today** — handles, `opti
 `option<result<result<incoming-response, error-code>, _>>` that
 `future-incoming-response.get` returns (results lift recursively).
 
-The exceptions are `outgoing-request.set-method(method)` and `set-scheme(option<scheme>)`,
-whose arguments are **variants** — `.todo/133`, and nothing else.
+The exceptions were `outgoing-request.set-method(method)` and `set-scheme(option<scheme>)`,
+whose arguments are **variants** — `.todo/133`, and nothing else. Both cross now, verified
+against wasmtime's real `wasi:http` host.
 
 ## The real risk, and how to retire it
 

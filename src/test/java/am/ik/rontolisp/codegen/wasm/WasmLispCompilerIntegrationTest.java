@@ -8039,4 +8039,317 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunEh("(ignore-errors 1) (print (signal \"quiet\"))")).isEqualTo("nil");
 	}
 
+	// --- rontolisp:wit-import under --component: rich PARAMETERS across the canonical
+	// ABI
+	//
+	// These run against wasmtime's own hosts, which is the only way to know a lowered
+	// parameter is right: a component import is checked against the host's real instance
+	// type, and the host then answers with what it actually received.
+
+	// The full compile path of a wit-import program: the directive is inlined against a
+	// WIT file (as the CLI does), then the WIT runtime library is spliced in, then the
+	// component is built.
+	private static byte[] compileWitImportComponent(String wit, String lispCode) throws Exception {
+		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("wit-import");
+		java.nio.file.Files.writeString(dir.resolve("iface.wit"), wit);
+		List<LispVal> program = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(lispCode),
+				dir.toString(), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
+				am.ik.rontolisp.eval.SourceLoader.fileSystem());
+		return new WasmLispCompiler(false, true).compile(am.ik.rontolisp.eval.WitLibrary.process(program));
+	}
+
+	// A subset of the real wasi:http/types@0.2.0: enough of it to construct an outgoing
+	// request and read back its method. `method` is the variant that makes this worth
+	// running -- most cases carry nothing, `other` carries a string.
+	private static final String WASI_HTTP_TYPES_WIT = """
+			package wasi:http@0.2.0;
+
+			interface types {
+			  variant method {
+			    get,
+			    head,
+			    post,
+			    put,
+			    delete,
+			    connect,
+			    options,
+			    trace,
+			    patch,
+			    other(string)
+			  }
+
+			  resource fields {
+			    constructor();
+			  }
+
+			  type headers = fields;
+
+			  resource outgoing-request {
+			    constructor(headers: headers);
+
+			    method: func() -> method;
+
+			    set-method: func(method: method) -> result;
+			  }
+			}
+			""";
+
+	@Test
+	void componentImportLowersAVariantParameter() throws Exception {
+		// wasmtime's real wasi:http host receives the method we lower and answers with
+		// the
+		// method it holds -- so a payload-less case and a string-payload case both make
+		// the
+		// round trip. The last one is the error arm: the host rejects a syntactically
+		// invalid method, and the result signals rontolisp:wit-error.
+		byte[] component = compileWitImportComponent(WASI_HTTP_TYPES_WIT, """
+				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.2.0" :package http)
+				(let ((req (http:outgoing-request-new (http:fields-new))))
+				  (print (http:outgoing-request-method req))
+				  (http:outgoing-request-set-method req :post)
+				  (print (http:outgoing-request-method req))
+				  (http:outgoing-request-set-method req '(:other . "PATCH"))
+				  (print (http:outgoing-request-method req))
+				  (handler-case (http:outgoing-request-set-method req '(:other . "bad method"))
+				    (rontolisp:wit-error (e) (print :rejected))))
+				""");
+		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/wit-variant.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
+				"component-model-more-async-builtins=y", "-S", "http=y", "/tmp/wit-variant.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo(":get\n:post\n(:other . \"PATCH\")\n:rejected");
+	}
+
+	// A subset of the real wasi:sockets/types@0.3.0: `create` takes an enum, `bind` takes
+	// a
+	// variant whose case payload is a record carrying a tuple -- the deepest parameter
+	// shape the canonical ABI flattens.
+	private static final String WASI_SOCKETS_TYPES_WIT = """
+			package wasi:sockets@0.3.0;
+
+			interface types {
+			  variant error-code {
+			    access-denied,
+			    not-supported,
+			    invalid-argument,
+			    out-of-memory,
+			    timeout,
+			    invalid-state,
+			    address-not-bindable,
+			    address-in-use,
+			    remote-unreachable,
+			    connection-refused,
+			    connection-broken,
+			    connection-reset,
+			    connection-aborted,
+			    datagram-too-large,
+			    other(option<string>)
+			  }
+
+			  enum ip-address-family {
+			    ipv4,
+			    ipv6
+			  }
+
+			  type ipv4-address = tuple<u8, u8, u8, u8>;
+			  type ipv6-address = tuple<u16, u16, u16, u16, u16, u16, u16, u16>;
+
+			  record ipv4-socket-address {
+			    port: u16,
+			    address: ipv4-address
+			  }
+
+			  record ipv6-socket-address {
+			    port: u16,
+			    flow-info: u32,
+			    address: ipv6-address,
+			    scope-id: u32
+			  }
+
+			  variant ip-socket-address {
+			    ipv4(ipv4-socket-address),
+			    ipv6(ipv6-socket-address)
+			  }
+
+			  resource tcp-socket {
+			    create: static func(address-family: ip-address-family) -> result<tcp-socket, error-code>;
+
+			    bind: func(local-address: ip-socket-address) -> result<_, error-code>;
+
+			    get-local-address: func() -> result<ip-socket-address, error-code>;
+			  }
+			}
+			""";
+
+	@Test
+	void componentImportLowersARecordInsideAVariantParameter() throws Exception {
+		// The host binds the socket to the address we lower and then hands the address
+		// back
+		// through get-local-address: proof the record (a keyword plist) and the tuple (a
+		// positional list) inside the variant case arrived intact. The port is ephemeral
+		// (bind 0), so only the family and the address are pinned.
+		byte[] component = compileWitImportComponent(WASI_SOCKETS_TYPES_WIT, """
+				(rontolisp:wit-import "iface.wit" :interface "wasi:sockets/types@0.3.0" :package sock)
+				(let ((s (sock:tcp-socket-create :ipv4)))
+				  (sock:tcp-socket-bind s '(:ipv4 :port 0 :address (127 0 0 1)))
+				  (let ((addr (sock:tcp-socket-get-local-address s)))
+				    (print (list (car addr) (getf (cdr addr) :address)))
+				    (print (> (getf (cdr addr) :port) 0))))
+				""");
+		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/wit-record.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
+				"component-model-more-async-builtins=y", "-S", "inherit-network=y", "/tmp/wit-record.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("(:ipv4 (127 0 0 1))\nt");
+	}
+
+	@Test
+	void componentImportLowersAResultParameter() throws Exception {
+		// wasi:cli/exit's `exit: func(status: result)` -- the cheapest result PARAMETER
+		// there is, and the host reports which arm it received as the process exit code.
+		// The ok arm is written as the bare keyword, the error arm as the envelope cons:
+		// both are the shape a result RESULT lifts to.
+		String wit = """
+				package wasi:cli@0.3.0;
+
+				interface exit {
+				  exit: func(status: result);
+				}
+				""";
+		byte[] ok = compileWitImportComponent(wit, """
+				(rontolisp:wit-import "iface.wit" :interface "wasi:cli/exit@0.3.0" :package cli)
+				(print :bye)
+				(cli:exit :ok)
+				(print :unreachable)
+				""");
+		wasmtime.copyFileToContainer(Transferable.of(ok), "/tmp/wit-exit-ok.component.wasm");
+		ExecResult okResult = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
+				"component-model-more-async-builtins=y", "/tmp/wit-exit-ok.component.wasm");
+		assertThat(okResult.getExitCode()).as("stderr: %s", okResult.getStderr()).isZero();
+		assertThat(okResult.getStdout().trim()).isEqualTo(":bye");
+
+		byte[] err = compileWitImportComponent(wit, """
+				(rontolisp:wit-import "iface.wit" :interface "wasi:cli/exit@0.3.0" :package cli)
+				(print :bye)
+				(cli:exit '(:error))
+				(print :unreachable)
+				""");
+		wasmtime.copyFileToContainer(Transferable.of(err), "/tmp/wit-exit-err.component.wasm");
+		ExecResult errResult = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
+				"component-model-more-async-builtins=y", "/tmp/wit-exit-err.component.wasm");
+		assertThat(errResult.getExitCode()).isEqualTo(1);
+		assertThat(errResult.getStdout().trim()).isEqualTo(":bye");
+	}
+
+	// Every parameter shape the canonical ABI flattens, including the ones no wasmtime
+	// host
+	// happens to take: an f32 / f64 / u64 payload inside a variant (the join coercions --
+	// a float flat rides in an integer local as its bit pattern), a record of floats,
+	// strings and options, a tuple, a char, an option of a variant, a result whose arms
+	// are
+	// a record and a variant, and a result nested in a result.
+	private static final String EXOTIC_PARAM_WIT = """
+			package local:probe@0.1.0;
+
+			interface p {
+			  variant num {
+			    none-of-it,
+			    small(u8),
+			    wide(u64),
+			    single(f32),
+			    double(f64),
+			    text(string)
+			  }
+
+			  record pt {
+			    x: f64,
+			    y: s64,
+			    label: string,
+			    tag: option<string>
+			  }
+
+			  enum color { red, green }
+
+			  record wide { a: u64, b: u64, c: u64, d: u64, e: u64 }
+
+			  record size-payload {
+			    field-name: option<string>,
+			    field-size: option<u32>
+			  }
+
+			  // `wasi:http`'s error-code in miniature: the shape that decides how much
+			  // scratch a wrapper needs -- result -> variant -> option -> record ->
+			  // option<string>, five levels down.
+			  variant deep {
+			    timeout,
+			    body-size(option<u64>),
+			    header-size(option<size-payload>),
+			    trailer-size(size-payload),
+			    internal(option<string>)
+			  }
+
+			  record single { x: s32 }
+
+			  resource thing {
+			    constructor();
+			    take-num: func(n: num) -> u32;
+			    take-pt: func(p: pt) -> u32;
+			    take-tuple: func(t: tuple<s32, f64, string>) -> u32;
+			    take-char: func(c: char) -> u32;
+			    take-opt-num: func(n: option<num>) -> u32;
+			    take-res: func(r: result<pt, num>) -> u32;
+			    take-color: func(c: color) -> u32;
+			    take-nested: func(v: result<num, color>) -> u32;
+			    take-wide: func(w: wide) -> u32;
+			    take-deep: func(d: result<u32, deep>) -> u32;
+			    take-many: func(a: option<s64>, b: option<s64>, c: option<s64>, d: option<s64>, e: option<s64>) -> u32;
+			    get-single: func() -> single;
+			  }
+			}
+			""";
+
+	@Test
+	void componentImportLowersEveryFlattenableParameterShape() throws Exception {
+		// Nothing implements this probe interface, so the component cannot LINK -- but
+		// wasmtime VALIDATES the bytes before it links, and validation is what
+		// type-checks
+		// every lowered instruction: the flats of each variant case against the joined
+		// signature, the reinterprets, the locals, the stack balance of the case
+		// dispatch.
+		// So reaching the linker error IS the assertion. (The shapes a real wasmtime host
+		// does take are pinned by value in the three tests above.)
+		byte[] component = compileWitImportComponent(EXOTIC_PARAM_WIT, """
+				(rontolisp:wit-import "iface.wit" :interface "local:probe/p@0.1.0" :package p)
+				(let ((th (p:thing-new)))
+				  (p:thing-take-num th :none-of-it)
+				  (p:thing-take-num th '(:small . 7))
+				  (p:thing-take-num th '(:wide . 9007199254740993))
+				  (p:thing-take-num th '(:single . 1.5))
+				  (p:thing-take-num th '(:double . 2.5))
+				  (p:thing-take-num th '(:text . "hi"))
+				  (p:thing-take-pt th '(:x 1.5 :y 42 :label "L" :tag nil))
+				  (p:thing-take-tuple th (list 1 2.5 "t"))
+				  (p:thing-take-char th #\\A)
+				  (p:thing-take-opt-num th nil)
+				  (p:thing-take-opt-num th '(:double . 3.5))
+				  (p:thing-take-res th '(:ok :x 1.0 :y 2 :label "k" :tag "T"))
+				  (p:thing-take-res th '(:error :text . "bad"))
+				  (p:thing-take-color th :green)
+				  (p:thing-take-nested th '(:ok :single . 0.5))
+				  (p:thing-take-wide th '(:a 1 :b 2 :c 3 :d 4 :e 5))
+				  (p:thing-take-deep th '(:ok . 200))
+				  (p:thing-take-deep th '(:error :header-size :field-name "x" :field-size 9))
+				  (p:thing-take-deep th '(:error :internal . "boom"))
+				  (p:thing-take-many th 1 2 3 4 5)
+				  (p:thing-get-single th))
+				""");
+		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/wit-exotic.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
+				"component-model-more-async-builtins=y", "/tmp/wit-exotic.component.wasm");
+		assertThat(result.getExitCode()).isNotZero();
+		assertThat(result.getStderr()).as("the bytes must reach the LINKER, i.e. validate")
+			.contains("was not found in the linker")
+			.doesNotContain("failed to parse");
+	}
+
 }

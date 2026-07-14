@@ -533,7 +533,26 @@ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
     -S keyvalue=y counter.wasm
 ```
 
-豊かな型をマーシャリングするのは canonical ABI なので、コンポーネントの境界は Preview 1 の境界よりはるかに多くを運びます: `result` (その error アームは `rontolisp:wit-error` コンディションとして到着し、`handler-case` で捕捉できます)、`option`、`record` (キーワード plist)、`variant`、`enum`、`list<T>`、`list<u8>`、`string`、`bool`、そして `resource` ハンドル。唯一の非対称は*向き*です — **戻り値**は再帰的にリフトされますが、**引数**はフラット値へローワリングされなければならない (スカラー、`bool`、`string`、`list<u8>`、ハンドル、またはそれらの `option`) ため、`record` の戻り値は渡るのに `record` の引数は WIT の行を示すコンパイルエラーになります。
+豊かな型をマーシャリングするのは canonical ABI なので、コンポーネントの境界は Preview 1 の境界よりはるかに多くを運びます: `result` (その error アームは `rontolisp:wit-error` コンディションとして到着し、`handler-case` で捕捉できます)、`option`、`record` (キーワード plist)、`variant`、`enum`、`tuple`、`list<T>`、`list<u8>`、`string`、`bool`、そして `resource` ハンドル。
+
+`list<T>` を除くすべてが**両方向で**渡ります。しかも引数は、同じ型が戻り値として取るのとまったく同じ形を取ります — ある呼び出しが返した値を、そのまま次の呼び出しに渡せます:
+
+```console
+;;; wasi:http/types, imported and called: a variant argument, whose `other` case
+;;; carries a string
+(http:outgoing-request-set-method req :post)
+(http:outgoing-request-set-method req '(:other . "PATCH"))
+(http:outgoing-request-method req)                 ; => (:other . "PATCH")
+
+;;; wasi:sockets/types: an enum argument, then a variant whose case payload is a
+;;; record (a keyword plist) carrying a tuple (a positional list)
+(let ((s (sock:tcp-socket-create :ipv4)))
+  (sock:tcp-socket-bind s '(:ipv4 :port 0 :address (127 0 0 1))))
+```
+
+いまだにローワリングできない唯一の形は **`list<T>` の引数**です (`list<u8>` はバイト文字列として渡ります)。引数はフラット化されますが、リストは代わりに canonical な配列としてリニアメモリに書き込む必要があるためです。これは WIT の行を示すコンパイルエラーになります。`flags` は今のところどちらの向きでも渡りません。
+
+コンポーネントが束縛**できない**インターフェースが 1 つあります: そのコンポーネントが自身の WASI 表面としてすでにインポートしているものです。しかもその表面はプログラムが使う機能に応じて増えます (`rontolisp:fetch` は `wasi:http` と `wasi:io` を、`rontolisp:tcp-*` 組み込みは `wasi:sockets/types` を引き込みます)。コンポーネントは同じインターフェースを 2 回インポートできないため、これもコンパイルエラーです: 組み込みと併用するのではなく、組み込みの*代わりに* WIT 束縛経由で使ってください。
 
 コンポーネントが**インポートするのはプログラムが実際に呼ぶ関数だけ**です (この経路にはコアのツリーシェイカーがないため、使われないインターフェースメンバーはインポート自体から落とされます。`--no-prune` ですべて残せます)。[`--emit-wit`](#emit-wit) はその刈り込まれたインターフェースをコンポーネントの world に書き出し、`wasm-tools component wit` の出力とバイト単位で一致します。何もインポートしないコンポーネントは、この機能が存在しなかった頃のビルドとバイト単位で同一です。
 
@@ -543,7 +562,7 @@ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
 
 - `--no-gc` はこのディレクティブを明確なエラーで拒否します。その契約は、何もインポートしない素の MVP モジュールだからです。
 - Preview 1 の境界を渡れるのは `rontolisp:wasm-import` が運べる型だけです — 32 ビットまでの整数スカラー、浮動小数点スカラー、`bool`、`string`、`list<u8>`、リソースハンドル。`record`、`option`、`result`、`s64` は、`--component`・インタプリタ・JVM のいずれもが束縛できるとしても、WIT ファイル名と行番号を示すコンパイルエラーになります (上の `wasi:keyvalue` プログラムが Preview 1 向けではなく、コンポーネントまたはインタプリタ／JVM 向けなのはそのためです: その `result` アームが Preview 1 の境界から遠ざけています)。コアインポートは素のホスト関数であり、より豊かな形を記述するためのコンポーネント型を持たないからです。`stream` と `future` はすべてのバックエンドで拒否されます。
-- `--component` では、豊かな**引数** (`record`、`variant`、`list<T>`、`tuple`、および位置を問わず `flags`) はコンパイルエラーになります。同じ型が戻り値としては渡るとしてもです。
+- `--component` では、**`list<T>` の引数** (`list<u8>` を除く)、および位置を問わず `flags` はコンパイルエラーになります。`list<T>` は戻り値としては渡ります。
 - コンポーネントは `wit-import` と `rontolisp:http-handler` (serve モード) を組み合わせられません。serve されるコンポーネントのインポートは固定の `wasi:http` 表面だからです。
 - 束縛できるのは**インターフェース**です。world の `import` 項目は依然として読まれません。
 - ディレクティブはトップレベルで、インターフェースを呼ぶコードより**前**に置かなければなりません (パッケージと束縛を定義するのがこれだからです)。`wit-export` とは逆です。

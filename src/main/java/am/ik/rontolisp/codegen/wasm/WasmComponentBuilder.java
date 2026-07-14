@@ -6,6 +6,7 @@ import java.io.UncheckedIOException;
 import java.util.List;
 
 import am.ik.wasm.ComponentWriter;
+import am.ik.wit.WitItem;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -371,10 +372,43 @@ public final class WasmComponentBuilder {
 			// The compiler rejects this combination before reaching here.
 			throw new UnsupportedOperationException("fetch and tcp sockets cannot be combined in one component yet");
 		}
+		String variant = usesHttp ? WitEmitter.VARIANT_HTTP_CLIENT
+				: usesSockets ? WitEmitter.VARIANT_SOCKETS : WitEmitter.VARIANT_BASE;
+		rejectAdapterImportCollisions(imports, variant);
 		if (usesHttp) {
 			return buildHttp(coreModule, funcExports, imports);
 		}
 		return usesSockets ? buildSock(coreModule, funcExports, imports) : buildBase(coreModule, funcExports, imports);
+	}
+
+	// A user import must not name an interface the component's own WASI surface already
+	// imports: the component would carry that instance import name TWICE, which is
+	// invalid
+	// -- and nothing downstream says so in words (wasmtime and wasm-tools reject the
+	// module
+	// at load time with a byte offset). Which interfaces those are depends on what the
+	// program uses, so the check is here, where the blob variant is finally known.
+	private static void rejectAdapterImportCollisions(List<WasmComponentImportCompiler.Import> imports,
+			String variant) {
+		if (imports.isEmpty()) {
+			return;
+		}
+		final java.util.Set<String> wasiSurface = new java.util.LinkedHashSet<>();
+		for (WitItem item : WasiWitDefinitions.document(variant).world().items()) {
+			if (item instanceof WitItem.ImportRef importRef) {
+				wasiSurface.add(importRef.target().toString());
+			}
+		}
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			if (wasiSurface.contains(imported.ifaceId())) {
+				throw new UnsupportedOperationException("rontolisp:wit-import cannot bind '" + imported.ifaceId()
+						+ "': this component already imports that interface as part of its own WASI surface, and a "
+						+ "component cannot import the same interface twice. The surface grows with what the program "
+						+ "uses -- rontolisp:fetch adds the wasi:http and wasi:io interfaces, the rontolisp:tcp-* "
+						+ "built-ins add wasi:sockets/types -- so either drop the built-in and drive the interface "
+						+ "through the WIT binding, or bind a different interface");
+			}
+		}
 	}
 
 	/**

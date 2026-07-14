@@ -197,6 +197,13 @@ value**, and the **error arm signals `rontolisp:wit-error`** carrying the mapped
 signals it; a caller handles it with `handler-case` and reads the payload with
 [`rontolisp:wit-error-payload`](rontolisp-wit-provide.md#the-wit-error-condition).
 
+That is the RETURN direction — the only one a `result` had until now. A `result`
+you **pass in** cannot signal anything (an argument has to *say* which arm it
+is), so it keeps its arm: the envelope cons `(:ok . V)` / `(:error . E)`, which
+is exactly the shape a returned `result` has before the ok arm is unwrapped. The
+asymmetry is one-way and deliberate: **unwrapped on the way out, wrapped on the
+way in** — so a value one call returns can be passed straight into the next.
+
 ## Supported WIT types
 
 The boundary is three-tiered. On the **interpreter and the JVM** the call is an
@@ -204,12 +211,12 @@ ordinary Lisp call, so every representation crosses — the table is the contrac
 the provider is written against, not a marshaller. On the **Preview 1 WASM**
 boundary only the flat set `rontolisp:wasm-import` can carry crosses: a core
 import is a bare host function, with no component type to describe a richer shape
-with. Under **`--component`** the canonical ABI marshals the rich types, and the
-distinction that remains is *direction*: a **result** is lifted recursively (so a
-`record`, `variant`, `enum`, `option`, `list<T>` or nested `result` all cross),
-while a **parameter** is lowered as a flat value, so it must be a scalar, `bool`,
-`string`, `list<u8>`, a handle, or an `option` of those. Anything unsupported is
-a compile error naming the WIT file and line.
+with. Under **`--component`** the canonical ABI marshals the rich types, so a
+`record`, `variant`, `enum`, `option`, `tuple` or `result` crosses **in both
+directions** — as an argument as well as a result. Two do not: `flags` (in
+neither direction), and a `list<T>` **as an argument** (`list<u8>` crosses, as a
+byte string). Anything unsupported is a compile error naming the WIT file and
+line.
 
 | WIT type | Lisp value | Preview 1 | `--component` |
 | --- | --- | --- | --- |
@@ -218,20 +225,51 @@ a compile error naming the WIT file and line.
 | `f32` `f64` | a float | `:float` | yes |
 | `bool` | `t` / `nil` | `:bool` | yes |
 | `string` | a string | `:string` | yes |
-| `char` | a character | no | result only |
+| `char` | a character | no | yes |
 | `list<u8>` | a string of raw bytes (one per char) | `:string` | yes |
-| `list<T>`, `tuple<...>` | a proper list | no | result only |
+| `list<T>` | a proper list | no | result only |
+| `tuple<...>` | a proper list, positional | no | yes |
 | `option<T>` | the value, or `nil` | no | yes |
-| `result<T, E>` | the ok value; the error arm signals `rontolisp:wit-error` | no | result only |
-| `record` | a keyword plist | no | result only |
-| `enum` | a keyword | no | result only |
-| `variant` | a tagged list | no | result only |
+| `result<T, E>` | returned: the ok value, the error arm signals `rontolisp:wit-error`; passed: the `(:ok . V)` / `(:error . E)` envelope | no | yes |
+| `record` | a keyword plist | no | yes |
+| `enum` | a keyword | no | yes |
+| `variant` | a keyword, or `(keyword . payload)` | no | yes |
 | `flags` | a list of keywords | no | no |
 | `resource`, `borrow<R>`, `own<R>` | an opaque integer handle | `:int` | yes |
 | `stream`, `future` | — | no | no |
 
 `stream` and `future` have no rontolisp value on any backend (they need
 language-level async), so they are rejected everywhere.
+
+### Rich values as arguments
+
+An argument takes **exactly the shape the same type takes as a return value**, so
+a value one call hands you can be passed straight into the next:
+
+```console
+;;; a variant: the case keyword, or (keyword . payload) when the case carries one
+(http:outgoing-request-set-method req :post)
+(http:outgoing-request-set-method req '(:other . "PATCH"))
+(http:outgoing-request-method req)                 ; => (:other . "PATCH")
+
+;;; an enum: a keyword
+(sock:tcp-socket-create :ipv4)
+
+;;; a record is a keyword plist, a tuple a positional list -- here both, inside a
+;;; variant case's payload
+(sock:tcp-socket-bind s '(:ipv4 :port 0 :address (127 0 0 1)))
+
+;;; a result ARGUMENT is the (:ok . V) / (:error . E) envelope -- the same shape a
+;;; result RESULT has before the ok arm is unwrapped. A payload-less arm may also
+;;; be written as the bare keyword.
+(cli:exit '(:error))
+(cli:exit :ok)
+```
+
+A keyword that names no case of the variant is a **type error**: on the WASM
+backends it traps, exactly as every other type error does there (`(+ 1 "a")`
+included); on the interpreter and the JVM it simply reaches the provider, which
+decides what to make of it.
 
 ## Limitations
 
@@ -243,9 +281,16 @@ language-level async), so they are rejected everywhere.
   even though `--component`, the interpreter and the JVM all bind it. The
   `wasi:keyvalue` example above is therefore a component (or an interpreter/JVM)
   program, not a Preview 1 one: its `result` arms keep it off that boundary.
-- Under `--component` a **rich parameter** (a `record`, `variant`, `list<T>`,
-  `tuple`, or a `flags` anywhere) is a compile error, though the same type crosses
-  as a *result*. `flags` does not cross in either direction yet.
+- Under `--component` a **`list<T>` argument** (other than `list<u8>`) is a
+  compile error, though the same type crosses as a *result*: an argument is
+  flattened, and a list would have to be written into linear memory as a canonical
+  array instead. `flags` does not cross in either direction yet.
+- Under `--component` the interface must not be one the component **already
+  imports for its own WASI surface** (which grows with what the program uses:
+  `rontolisp:fetch` adds `wasi:http` and `wasi:io`, the `rontolisp:tcp-*`
+  built-ins add `wasi:sockets/types`). A component cannot import the same
+  interface twice, so this is a compile error naming it — drive the interface
+  through the WIT binding *instead of* the built-in, not alongside it.
 - A component cannot combine `wit-import` with
   [`rontolisp:http-handler`](rontolisp-http-handler.md) (serve mode): a served
   component's imports are the fixed `wasi:http` surface.

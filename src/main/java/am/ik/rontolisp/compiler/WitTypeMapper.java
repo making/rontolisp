@@ -5,27 +5,29 @@ import am.ik.wit.WitType;
 
 /**
  * The settled WIT type &lt;-&gt; rontolisp value mapping — the single vocabulary every
- * backend binder ({@code wit-import} / {@code wit-export}, todos 126-128) consults, in
- * the same way {@link WasmImportDirective} is the shared import directive. This class
- * contains <strong>no codegen</strong>; it names the house representation of each WIT
- * type. Full rationale (and the {@code result} decision record): {@code .kb/wit.md}.
+ * backend binder ({@code wit-import} / {@code wit-export}) consults, in the same way
+ * {@link WasmImportDirective} is the shared import directive. This class contains
+ * <strong>no codegen</strong>; it names the house representation of each WIT type. Full
+ * rationale (and the {@code result} decision record): {@code .kb/wit.md}.
  *
  * <p>
  * The two decisions pinned here (reversing either later would break user programs):
  *
  * <ul>
- * <li><strong>{@code result<T, E>}</strong> — option (c) of todo 124: the ok arm is the
- * function's return value ({@code nil} when the ok arm is {@code _} or absent); the error
- * arm <strong>signals a condition on every backend</strong>, catchable with
- * {@code handler-case}. On the WASM backends, where {@code handler-case} is still a
- * compile-time error (traps are uncatchable; {@code .kb/error-handling.md}), signaling
- * means trapping with the message <em>as a temporary limitation, not a contract</em> — a
- * WASM catch mechanism is a prerequisite of todo 128's result-returning imports, and user
- * code written against this mapping starts compiling there unchanged the day it
- * lands.</li>
+ * <li><strong>{@code result<T, E>}</strong> — the ok arm is the function's return value
+ * ({@code nil} when the ok arm is {@code _} or absent); the error arm <strong>signals a
+ * condition on every backend</strong>, catchable with {@code handler-case} — including
+ * the wasm-GC ones, where a program containing a catching form compiles in EH mode
+ * ({@code .kb/error-handling.md}).</li>
  * <li><strong>{@code list<u8>}</strong> — a rontolisp string (byte-per-char, the existing
  * fetch/socket byte-marshalling convention), NOT a list of integers; distinct from WIT
  * {@code string}, which crosses as canonical-ABI UTF-8.</li>
+ * <li><strong>A {@code result} as an ARGUMENT</strong> — the envelope cons
+ * {@code (:ok . V)} / {@code (:error . E)}. The ok arm is unwrapped on the way OUT of a
+ * call, so on the way IN a value still carries its arm; this is exactly the shape a
+ * {@code result} lifts to before {@code rontolisp::%wit-result} unwraps it, so a value
+ * one call returns can be passed straight into the next. A payload-less arm may also be
+ * written as the bare keyword ({@code :ok}) — the general variant rule.</li>
  * </ul>
  */
 public final class WitTypeMapper {
@@ -79,8 +81,8 @@ public final class WitTypeMapper {
 		 * {@code result} / {@code result<T>} / {@code result<_, E>} /
 		 * {@code result<T, E>}: the ok payload is the return value ({@code nil} for a
 		 * payload-less ok arm); the error arm signals a condition carrying the mapped
-		 * {@code E} payload on EVERY backend (todo 124 option (c) — see the class doc for
-		 * the WASM interim behavior).
+		 * {@code E} payload on EVERY backend. As an ARGUMENT it is the envelope cons —
+		 * see the class doc.
 		 */
 		RESULT,
 
@@ -100,7 +102,11 @@ public final class WitTypeMapper {
 		/** An {@code enum} definition: keyword. */
 		KEYWORD,
 
-		/** A {@code variant} definition: {@code (tag . payload)} tagged list. */
+		/**
+		 * A {@code variant} definition: the case keyword ({@code :get}), or
+		 * {@code (keyword . payload)} when the case carries a payload
+		 * ({@code (:other . "PATCH")}).
+		 */
 		TAGGED_LIST,
 
 		/** A {@code flags} definition: list of keywords. */
@@ -108,7 +114,7 @@ public final class WitTypeMapper {
 
 		/**
 		 * {@code stream}/{@code future}: no rontolisp value yet — a binder must reject
-		 * them until language-level async lands (the WASI 0.3 async plan); todo 124.
+		 * them until language-level async lands (the WASI 0.3 async plan).
 		 */
 		UNSUPPORTED
 
@@ -153,7 +159,10 @@ public final class WitTypeMapper {
 	 * @param definition the type definition ({@code record} / {@code variant} /
 	 * {@code enum} / {@code flags} / {@code resource} / {@code type} alias)
 	 * @return the representation ({@code type} aliases classify by their target)
-	 * @throws IllegalArgumentException when the item is not a type definition
+	 * @throws IllegalArgumentException when the item is not a type definition, or when it
+	 * is an alias whose target is itself a {@link WitType.Named} reference
+	 * ({@code type headers = fields}) — only a resolver can follow that, so the caller
+	 * must resolve aliases before asking
 	 */
 	public static Rep repOfDefinition(WitItem definition) {
 		return switch (definition) {

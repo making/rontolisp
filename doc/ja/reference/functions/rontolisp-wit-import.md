@@ -200,6 +200,14 @@ WIT の `result<T, E>` は値ではありません。**ok アームが関数の�
 [`rontolisp:wit-error-payload`](rontolisp-wit-provide.md#the-wit-error-condition)
 でペイロードを読みます。
 
+これは「戻り値」方向の話であり、`result` にはこれまでこの方向しかありませんでした。
+**引数として渡す** `result` は何もシグナルできません (引数はどちらのアームなのかを
+*値として言う*しかありません)。そのためアームを保ったまま渡します: エンベロープの
+cons `(:ok . V)` / `(:error . E)` — これは戻り値の `result` が ok
+アームをほどかれる前に持っている形とまったく同じです。この非対称は一方向で、意図的です:
+**出るときはほどく、入るときは包んだまま**。だからこそ、ある呼び出しが返した値を
+そのまま次の呼び出しに渡せます。
+
 ## サポートする WIT 型
 
 境界は 3 段構えです。**インタプリタと JVM**
@@ -208,11 +216,10 @@ WIT の `result<T, E>` は値ではありません。**ok アームが関数の�
 の境界では `rontolisp:wasm-import` が運べるフラットな型集合だけが渡ります。コア
 インポートは素のホスト関数であり、より豊かな形をホストに伝えるためのコンポーネント型
 が存在しないからです。**`--component`** では canonical ABI
-が豊かな型をマーシャリングし、残る区別は*向き*です。**戻り値**は再帰的にリフトされ
-(`record`、`variant`、`enum`、`option`、`list<T>`、入れ子の `result`
-がすべて渡ります)、**引数**はフラット値としてローワリングされるため、スカラー、`bool`、
-`string`、`list<u8>`、ハンドル、またはそれらの `option`
-でなければなりません。サポートされない型は WIT
+が豊かな型をマーシャリングするので、`record`、`variant`、`enum`、`option`、`tuple`、
+`result` は**両方向で** — 戻り値としてだけでなく引数としても — 渡ります。渡らないのは
+2 つだけです: `flags` (どちらの向きでも)、および**引数としての** `list<T>`
+(`list<u8>` はバイト文字列として渡ります)。サポートされない型は WIT
 ファイル名と行番号を示すコンパイルエラーになります。
 
 | WIT type | Lisp value | Preview 1 | `--component` |
@@ -222,20 +229,50 @@ WIT の `result<T, E>` は値ではありません。**ok アームが関数の�
 | `f32` `f64` | a float | `:float` | yes |
 | `bool` | `t` / `nil` | `:bool` | yes |
 | `string` | a string | `:string` | yes |
-| `char` | a character | no | result only |
+| `char` | a character | no | yes |
 | `list<u8>` | a string of raw bytes (one per char) | `:string` | yes |
-| `list<T>`, `tuple<...>` | a proper list | no | result only |
+| `list<T>` | a proper list | no | result only |
+| `tuple<...>` | a proper list, positional | no | yes |
 | `option<T>` | the value, or `nil` | no | yes |
-| `result<T, E>` | the ok value; the error arm signals `rontolisp:wit-error` | no | result only |
-| `record` | a keyword plist | no | result only |
-| `enum` | a keyword | no | result only |
-| `variant` | a tagged list | no | result only |
+| `result<T, E>` | returned: the ok value, the error arm signals `rontolisp:wit-error`; passed: the `(:ok . V)` / `(:error . E)` envelope | no | yes |
+| `record` | a keyword plist | no | yes |
+| `enum` | a keyword | no | yes |
+| `variant` | a keyword, or `(keyword . payload)` | no | yes |
 | `flags` | a list of keywords | no | no |
 | `resource`, `borrow<R>`, `own<R>` | an opaque integer handle | `:int` | yes |
 | `stream`, `future` | — | no | no |
 
 `stream` と `future` はどのバックエンドにも対応する rontolisp
 の値がないため (言語レベルの async が必要)、すべてのバックエンドで拒否されます。
+
+### 豊かな値を引数として渡す
+
+引数は、**同じ型が戻り値として取るのとまったく同じ形**を取ります。ある呼び出しが返した値を、
+そのまま次の呼び出しに渡せます:
+
+```console
+;;; variant: case のキーワード。ペイロードを持つ case は (keyword . payload)
+(http:outgoing-request-set-method req :post)
+(http:outgoing-request-set-method req '(:other . "PATCH"))
+(http:outgoing-request-method req)                 ; => (:other . "PATCH")
+
+;;; enum: キーワード
+(sock:tcp-socket-create :ipv4)
+
+;;; record はキーワード plist、tuple は位置指定のリスト。ここでは variant の case
+;;; ペイロードの中に両方が入っている
+(sock:tcp-socket-bind s '(:ipv4 :port 0 :address (127 0 0 1)))
+
+;;; result の「引数」は (:ok . V) / (:error . E) というエンベロープ — result が
+;;; 「戻り値」のとき ok アームがほどかれる前と同じ形です。ペイロードのないアームは
+;;; 裸のキーワードでも書けます。
+(cli:exit '(:error))
+(cli:exit :ok)
+```
+
+variant のどの case でもないキーワードを渡すのは**型エラー**です。WASM
+バックエンドではトラップし (`(+ 1 "a")` など他のあらゆる型エラーとまったく同じ挙動)、
+インタプリタと JVM ではそのままプロバイダに届き、扱いはプロバイダが決めます。
 
 ## 制限事項
 
@@ -248,9 +285,16 @@ WIT の `result<T, E>` は値ではありません。**ok アームが関数の�
   `wasi:keyvalue` の例はしたがって Preview 1 のプログラムではなく、コンポーネント
   (あるいはインタプリタ／JVM) のプログラムです: その `result`
   アームが Preview 1 の境界から遠ざけています。
-- `--component` では、**豊かな引数** (`record`、`variant`、`list<T>`、`tuple`、
-  および位置を問わず `flags`) はコンパイルエラーになります。同じ型が*戻り値*としては
-  渡るとしてもです。`flags` は今のところどちらの向きでも渡りません。
+- `--component` では、**引数としての `list<T>`** (`list<u8>` を除く)
+  はコンパイルエラーになります。同じ型が*戻り値*としては渡るとしてもです。引数はフラット化
+  されますが、リストは代わりに canonical な配列としてリニアメモリに書き込む必要があるためです。
+  `flags` は今のところどちらの向きでも渡りません。
+- `--component` では、コンポーネントが**自身の WASI 表面としてすでにインポートしている**
+  インターフェースを束縛できません (その表面はプログラムが使う機能に応じて増えます:
+  `rontolisp:fetch` は `wasi:http` と `wasi:io` を、`rontolisp:tcp-*`
+  組み込みは `wasi:sockets/types` を追加します)。コンポーネントは同じインターフェースを
+  2 回インポートできないため、これはインターフェース名を示すコンパイルエラーになります —
+  組み込みと併用するのではなく、組み込みの*代わりに* WIT 束縛経由で使ってください。
 - コンポーネントは `wit-import` と
   [`rontolisp:http-handler`](rontolisp-http-handler.md) (serve モード)
   を組み合わせられません。serve されるコンポーネントのインポートは固定の

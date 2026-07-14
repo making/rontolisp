@@ -57,6 +57,7 @@ serve call site passes `List.of()`).
 ## Relationship to `.todo/135`
 
 `.todo/135` makes serve's HTTP glue itself a WIT import, which would give this for free —
-but it is a much larger restructure and needs `.todo/133` first. **This todo is the cheap
+but it is a much larger restructure (`.todo/133`, its parameter half, has landed; its
+`wit-export`-learns-interface-exports half has not). **This todo is the cheap
 path to the capability**, and its plumbing is not wasted: `appendUserImports` is what
 `.todo/135` would use as well.

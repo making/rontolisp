@@ -142,7 +142,7 @@ actionable frontier**, with the blocker identified. Concretely:
 
 | | |
 |---|---|
-| `.todo/133` | `variant`/`enum`/`result` as a component-import PARAMETER. **The keystone** — the only thing blocking 135 and 136, both verified function-by-function |
+| ~~`.todo/133`~~ | **DONE 2026-07-14.** `variant`/`enum`/`result`/`record`/`tuple` as a component-import PARAMETER — everything a result lifts except `list<T>`. It unblocked 135 and 136 |
 | `.todo/134` | serve mode accepts user WIT imports (small; an HTTP server with a real store) |
 | `.todo/135` | serve's HTTP glue through WIT — the "http-handler becomes a world" bullet below |
 | `.todo/136` | `rontolisp:fetch` through WIT — deletes ~10.5 KB, the biggest hand-written blob |

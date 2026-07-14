@@ -1,7 +1,11 @@
 # serve's HTTP glue through WIT (`wit-export` learns interface exports)
 
-**Status:** open, unstarted. Medium-large. Blocked by `.todo/133` (variant/result
-parameters). Do it AFTER `.todo/136` — same machinery, bigger blob, lower risk there.
+**Status:** open, unstarted. Medium-large. **UNBLOCKED 2026-07-14**: `.todo/133` landed,
+so capability 1 below is done — a `result` argument crosses (as the `(:ok . V)` /
+`(:error . E)` envelope), and so does `error-code`, whose cases carry `record`s and
+`option<string>`s (todo 133 had to go past its own "flat payloads only" plan for exactly
+this). Capability 2 (`wit-export` learns INTERFACE exports) is now the only blocker. Do it
+AFTER `.todo/136` — same machinery, bigger blob, lower risk there.
 
 This is `.todo/124`'s stated follow-on prize ("`rontolisp:http-handler` becomes a program
 implementing the `wasi:http/incoming-handler` world, with the request plist **derived** from
@@ -26,7 +30,7 @@ So the blob win here is smaller than `.todo/136`'s. The *design* win is what jus
 
 ## The two capabilities this needs
 
-**1. Rich parameters (`.todo/133`).** The single call that sends a response takes a
+**1. Rich parameters — DONE (`.todo/133`, landed).** The single call that sends a response takes a
 `result` argument:
 
 ```wit

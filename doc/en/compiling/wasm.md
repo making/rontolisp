@@ -896,11 +896,37 @@ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
 The canonical ABI is what marshals the rich types, so the component boundary carries
 much more than the Preview 1 one: a `result` (whose error arm arrives as a
 `rontolisp:wit-error` condition, caught with `handler-case`), an `option`, a `record`
-(a keyword plist), a `variant`, an `enum`, a `list<T>`, a `list<u8>`, a `string`, a
-`bool`, and `resource` handles. The one asymmetry is direction — a **result** is lifted
-recursively, while a **parameter** must lower to a flat value (a scalar, `bool`,
-`string`, `list<u8>`, a handle, or an `option` of those), so a `record` parameter is a
-compile error naming the WIT line even though a `record` result crosses.
+(a keyword plist), a `variant`, an `enum`, a `tuple`, a `list<T>`, a `list<u8>`, a
+`string`, a `bool`, and `resource` handles.
+
+Everything but `list<T>` crosses **in both directions**, and an argument takes exactly
+the shape the same type takes as a return value — so a value one call hands you goes
+straight into the next:
+
+```console
+;;; wasi:http/types, imported and called: a variant argument, whose `other` case
+;;; carries a string
+(http:outgoing-request-set-method req :post)
+(http:outgoing-request-set-method req '(:other . "PATCH"))
+(http:outgoing-request-method req)                 ; => (:other . "PATCH")
+
+;;; wasi:sockets/types: an enum argument, then a variant whose case payload is a
+;;; record (a keyword plist) carrying a tuple (a positional list)
+(let ((s (sock:tcp-socket-create :ipv4)))
+  (sock:tcp-socket-bind s '(:ipv4 :port 0 :address (127 0 0 1))))
+```
+
+The one shape that still does not lower is a **`list<T>` argument** (`list<u8>` does,
+as a byte string): an argument is flattened, and a list would have to be written into
+linear memory as a canonical array instead. It is a compile error naming the WIT line,
+and `flags` does not cross in either direction yet.
+
+One interface a component **cannot** bind is one it already imports for its own WASI
+surface — and that surface grows with what the program uses (`rontolisp:fetch` pulls in
+`wasi:http` and `wasi:io`, the `rontolisp:tcp-*` built-ins pull in
+`wasi:sockets/types`). A component cannot import the same interface twice, so that is a
+compile error too: drive the interface through the WIT binding *instead of* the
+built-in, not alongside it.
 
 A component imports **only the functions the program actually calls** (there is no core
 tree shaker on this path, so unused interface members are dropped from the import
@@ -927,9 +953,8 @@ Current limitations:
   Preview 1 one: its `result` arms keep it off that boundary). A core import is a
   bare host function, with no component type to describe a richer shape with.
   `stream` and `future` are rejected on every backend.
-- Under `--component` a rich **parameter** (a `record`, `variant`, `list<T>`,
-  `tuple`, or a `flags` anywhere) is a compile error, though the same type crosses
-  as a result.
+- Under `--component` a **`list<T>` argument** (other than `list<u8>`), and
+  `flags` anywhere, is a compile error; a `list<T>` still crosses as a result.
 - A component cannot combine `wit-import` with `rontolisp:http-handler` (serve
   mode): a served component's imports are the fixed `wasi:http` surface.
 - The directive binds an **interface**. A world's `import` items are still not
