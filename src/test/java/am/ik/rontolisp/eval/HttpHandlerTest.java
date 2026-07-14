@@ -8,6 +8,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 
@@ -15,6 +17,7 @@ import am.ik.rontolisp.reader.LispReader;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -158,6 +161,66 @@ class HttpHandlerTest {
 		HttpResponse<String> response = get(port, "/");
 		assertThat(response.statusCode()).isEqualTo(200);
 		assertThat(response.body()).isEqualTo("ok");
+	}
+
+	// The wasi:keyvalue store, cut to what a page-hit counter binds. The component built
+	// from the same source imports this interface from its host; here the provider below
+	// answers it.
+	private static final String KEYVALUE_WIT = """
+			package wasi:keyvalue@0.2.0-draft;
+
+			interface store {
+			  variant error {
+			    no-such-store,
+			    other(string)
+			  }
+
+			  open: func(identifier: string) -> result<bucket, error>;
+
+			  resource bucket {
+			    get: func(key: string) -> result<option<list<u8>>, error>;
+			    set: func(key: string, value: list<u8>) -> result<_, error>;
+			  }
+			}
+			""";
+
+	@Test
+	void aServedHandlerCountsHitsInAWitImportedStore(@TempDir Path tempDir) throws Exception {
+		// The pairing rontolisp:http-handler and rontolisp:wit-import make possible: a
+		// handler whose state lives OUTSIDE it, in whatever implements the interface. The
+		// store outlives the request here (one process, one provider), so the counter
+		// accumulates -- the property a process-local hash table cannot give a served
+		// component, whose instance a wasi:http host recreates per request.
+		Path wit = tempDir.resolve("kv.wit");
+		Files.writeString(wit, KEYVALUE_WIT);
+		int port = freePort();
+		serveInBackground("""
+				(rontolisp:wit-import "%s" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
+
+				(defvar *pages* (make-hash-table :test #'equal))
+				(defun page-store (member &rest args)
+				  (cond ((string= member "open") 1)
+				        ((string= member "bucket-get") (gethash (nth 1 args) *pages*))
+				        ((string= member "bucket-set")
+				         (setf (gethash (nth 1 args) *pages*) (nth 2 args))
+				         nil)
+				        (t (error 'rontolisp:wit-error :payload :other :message member))))
+				(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0-draft" #'page-store)
+
+				(defun handle (request)
+				  (let* ((page (getf request :path))
+				         (bucket (kv:open ""))
+				         (seen (kv:bucket-get bucket page)))
+				    (kv:bucket-set bucket page
+				                   (princ-to-string (+ 1 (if seen (parse-integer seen) 0))))
+				    (list :status 200
+				          :body (concatenate 'string page " " (kv:bucket-get bucket page)))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(wit.toString().replace("\\", "\\\\"), port), port);
+		assertThat(get(port, "/index").body()).isEqualTo("/index 1");
+		assertThat(get(port, "/index").body()).isEqualTo("/index 2");
+		assertThat(get(port, "/pricing").body()).isEqualTo("/pricing 1");
+		assertThat(get(port, "/index").body()).isEqualTo("/index 3");
 	}
 
 	private static LispEvaluator evaluator() {

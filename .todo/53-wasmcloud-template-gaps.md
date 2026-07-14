@@ -16,11 +16,20 @@ interpreter and JVM because the process lives across requests.
 It compiles under `--component`, but is useless there: `wasmtime serve`
 instantiates the component per request, and instance-reusing hosts
 (jco, wasmCloud) get their bump allocators reset per request by the serve
-adapter, so the global store is empty on every request either way. The real
-fix is the `wasi:keyvalue` binding planned in `.todo/52-wasi-keyvalue.md`;
-once `open`/`get`/`set` exist, this example should switch to them (the
-in-memory hash table then remains as the interpreter/JVM fallback or is
-dropped).
+adapter, so the global store is empty on every request either way.
+
+**UNBLOCKED 2026-07-14.** The fix this was waiting for has landed: a serve-mode
+component may `rontolisp:wit-import` a user WIT interface, so a handler's state
+can live in a real `wasi:keyvalue` store — `examples/wit/keyvalue/page-hits-server.lisp`
+does exactly that and accumulates its counts on wasmCloud (`wash dev`, an
+out-of-process provider) while running unchanged on the interpreter and the JVM
+against a Lisp store. What is left here is only the PORT: rewrite
+`examples/wasmcloud/http-kv-handler/app.lisp` against the real
+`wasi:keyvalue/store` (vendored in `examples/wit/keyvalue/wit/keyvalue.wit`), add a
+`.wash/config.yaml` (`gc` + `exception-handling` proposals), and flip its two `no
+(needs wasi:keyvalue)` cells in `examples/wasmcloud/README.md`. Note wasmtime's own
+`-S keyvalue=y` provider is rebuilt per instance, so under `wasmtime serve` the
+store reads back empty each request — that column stays honest only if it says so.
 
 ## service-tcp: no WASM path for either half
 

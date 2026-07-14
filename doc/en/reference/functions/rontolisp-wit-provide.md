@@ -100,7 +100,8 @@ It is an ordinary condition class: `handler-case`, `ignore-errors` and
 | interpreter | binds the provider; imported functions dispatch to it |
 | JVM (`-o Prog.class`) | the same |
 | Preview 1 WASM (`-o prog.wasm`) | a top-level form is **dropped** — the WASM host is the provider |
-| `--component`, `--no-gc` | these reject `rontolisp:wit-import` itself |
+| `--component` | the same: dropped, the host (or a composed component) is the provider |
+| `--no-gc` | it rejects `rontolisp:wit-import` itself |
 
 Dropping the form rather than rejecting it is what lets **one source run on every
 backend**: the `rontolisp:wit-provide` that backs the program on the interpreter

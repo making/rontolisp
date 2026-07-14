@@ -174,6 +174,48 @@ a reproduction of
 every request fetches a random dog picture URL from the dog.ceo API and
 answers it as JSON.
 
+## Keeping State: a store, not a global
+
+On the interpreter and the JVM the server is one long-lived process, so a global
+hash table survives between requests. **A served component's does not**: a
+`wasi:http` host instantiates the component afresh for every request, so anything
+the handler wrote reads back empty on the next one.
+
+The way to keep state is therefore to put it outside the component — in a WIT
+interface the handler *calls*, bound with
+[`rontolisp:wit-import`](../reference/functions/rontolisp-wit-import.md). A served
+component imports it alongside its fixed `wasi:http` surface:
+
+```console
+(rontolisp:wit-import "wit/keyvalue.wit"
+                      :interface "wasi:keyvalue/store@0.2.0-draft"
+                      :package kv)
+
+(defun handle (request)
+  (let* ((page (getf request :path))
+         (bucket (kv:open ""))
+         (seen (kv:bucket-get bucket page))
+         (hits (+ 1 (if seen (parse-integer seen) 0))))
+    (kv:bucket-set bucket page (princ-to-string hits))
+    (list :status 200 :body (format nil "~a: ~a hits~%" page hits))))
+
+(rontolisp:http-handler 'handle 8080)
+```
+
+```console
+$ rontolisp page-hits-server.lisp -o server.wasm --component
+$ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+```
+
+The same source runs on the interpreter and the JVM, where a
+[provider](../reference/functions/rontolisp-wit-provide.md) written in Lisp
+answers the interface instead. Whether the counts *survive* on a component is the
+host's business: wasmtime's built-in key-value provider is an in-memory store it
+rebuilds per instance (so, under `wasmtime serve`, per request), while a host that
+links an out-of-process provider — wasmCloud (`wash dev`), say — keeps them. The
+worked example is
+[`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue).
+
 ## Limitations
 
 On the WASI component backend, request and response headers are not marshalled

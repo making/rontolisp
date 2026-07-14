@@ -164,6 +164,24 @@ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
     -S keyvalue=y counter.wasm             # the HOST is the provider
 ```
 
+That holds for a **served** component too
+([`rontolisp:http-handler`](rontolisp-http-handler.md) + `--component`): its
+imports are no longer only the fixed `wasi:http` surface, so a handler's state can
+live in a real store instead of a process-local hash table — which is the only way
+a served component can keep state at all, since a `wasi:http` host instantiates it
+afresh for every request.
+
+```bash
+rontolisp page-hits-server.lisp -o server.wasm --component
+wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+```
+
+Whether the state then *survives* is the host's business, not the component's:
+wasmtime's built-in key-value provider is an in-memory store it rebuilds per
+instance (so, under `wasmtime serve`, per request), while a host that links an
+out-of-process provider — wasmCloud, say — keeps it. The component is the same
+either way.
+
 ## Providers
 
 On the interpreter and the JVM there is no host, so the call goes to a
@@ -291,9 +309,6 @@ decides what to make of it.
   built-ins add `wasi:sockets/types`). A component cannot import the same
   interface twice, so this is a compile error naming it — drive the interface
   through the WIT binding *instead of* the built-in, not alongside it.
-- A component cannot combine `wit-import` with
-  [`rontolisp:http-handler`](rontolisp-http-handler.md) (serve mode): a served
-  component's imports are the fixed `wasi:http` surface.
 - The directive must appear at **top level, before the code that calls the
   interface** (the opposite of [`wit-export`](rontolisp-wit-export.md), which
   must come last): it is what defines the package and the bindings. A directive

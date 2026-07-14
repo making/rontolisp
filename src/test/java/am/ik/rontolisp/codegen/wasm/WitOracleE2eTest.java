@@ -118,4 +118,42 @@ class WitOracleE2eTest {
 		assertThat(wit.replace(useClause, "")).isEqualTo(oracle(component));
 	}
 
+	@Test
+	void aServedComponentsUserImportIsInItsRealTypeToo() throws Exception {
+		// The import side is what --emit-wit uniquely reports (the export side is a
+		// fixpoint), so the oracle is the only proof that the WIT text a SERVED component
+		// records is the type the component really carries -- the fixed wasi:http surface
+		// plus the interface the handler calls.
+		Files.writeString(tempDir.resolve("kv.wit"), """
+				package wasi:keyvalue@0.2.0-draft;
+
+				interface store {
+				    variant error {
+				        no-such-store,
+				        access-denied,
+				        other(string)
+				    }
+				    open: func(identifier: string) -> result<bucket, error>;
+				    resource bucket {
+				        get: func(key: string) -> result<option<list<u8>>, error>;
+				    }
+				}
+				""");
+		List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.WitImportInliner.inline(
+				LispReader.readAllFromString("""
+						(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
+						(defun handle (request)
+						  (list :status 200 :body (kv:bucket-get (kv:open "") (getf request :path))))
+						(rontolisp:http-handler 'handle)
+						"""), tempDir.toString(), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
+				am.ik.rontolisp.eval.SourceLoader.fileSystem());
+		program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(am.ik.rontolisp.eval.WitLibrary.process(program));
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, true);
+		byte[] component = compiler.compile(program);
+		String useClause = "    use types.{incoming-request, response-outparam};\n\n";
+		String wit = Objects.requireNonNull(compiler.componentWit());
+		assertThat(wit).contains("  import wasi:keyvalue/store@0.2.0-draft;");
+		assertThat(wit.replace(useClause, "")).isEqualTo(oracle(component));
+	}
+
 }

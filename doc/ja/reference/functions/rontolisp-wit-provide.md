@@ -102,7 +102,8 @@ No provider is bound for the WIT interface wasi:keyvalue/store@0.2.0 -- bind one
 | interpreter | binds the provider; imported functions dispatch to it |
 | JVM (`-o Prog.class`) | the same |
 | Preview 1 WASM (`-o prog.wasm`) | a top-level form is **dropped** — the WASM host is the provider |
-| `--component`, `--no-gc` | these reject `rontolisp:wit-import` itself |
+| `--component` | the same: dropped, the host (or a composed component) is the provider |
+| `--no-gc` | it rejects `rontolisp:wit-import` itself |
 
 エラーにせず捨てるからこそ、**1 つのソースがすべてのバックエンドで動きます**。
 インタプリタでプログラムを支えていた `rontolisp:wit-provide`

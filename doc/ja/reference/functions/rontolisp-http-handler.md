@@ -86,6 +86,13 @@ serve コンポーネントのハンドラ内でも `random`、時刻系の組�
 します）。プロキシ型のハンドラはすべてのバックエンドで動作します — ホストに
 外向き HTTP を許可してください（例: `wasmtime serve -W gc=y -S http=y`）。
 
+ハンドラは [`rontolisp:wit-import`](rontolisp-wit-import.md)
+で自前の WIT インターフェースを呼ぶこともできます。serve されるコンポーネントは
+それを固定の `wasi:http` 表面と並べてインポートします。これが serve される
+ハンドラが**状態**を保つ方法です — `wasi:http` ホストはリクエストごとに
+コンポーネントを新しくインスタンス化するので、グローバルなハッシュテーブルは
+毎回空で読み戻されますが、`wasi:keyvalue` のストアはその外側に生きています。
+
 serve コンポーネントは純粋な WASI 0.2 なので wasmtime 専用ではありません。
 `wasi:http` 0.2 を提供し WebAssembly GC プロポーザルを有効化できるホストであれば
 実行できます — jco（Node.js 上の `jco serve`。V8 では wasm-GC がデフォルトで有効）

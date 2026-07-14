@@ -164,6 +164,24 @@ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
     -S keyvalue=y counter.wasm             # the HOST is the provider
 ```
 
+これは **serve される**コンポーネント
+([`rontolisp:http-handler`](rontolisp-http-handler.md) + `--component`)
+でも同じです。そのインポートはもはや固定の `wasi:http`
+表面だけではないので、ハンドラの状態をプロセスローカルなハッシュテーブルではなく本物の
+ストアに置けます — `wasi:http` ホストはリクエストごとにコンポーネントを新しく
+インスタンス化するので、serve されるコンポーネントが状態を保つ道はこれしかありません。
+
+```bash
+rontolisp page-hits-server.lisp -o server.wasm --component
+wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+```
+
+その状態が実際に*残る*かどうかはコンポーネントではなくホストの都合です:
+wasmtime 組み込みのキーバリュープロバイダはインスタンスごとに作り直されるインメモリ
+ストアなので (`wasmtime serve` の下ではリクエストごと)、カウントは残りません。一方、
+プロセス外のプロバイダをリンクするホスト (たとえば wasmCloud) なら残ります。
+コンポーネント自体はどちらでも同じものです。
+
 ## プロバイダ
 
 インタプリタと JVM にはホストが存在しないため、呼び出しは**プロバイダ**へ向かいます。
@@ -295,10 +313,6 @@ variant のどの case でもないキーワードを渡すのは**型エラー*
   組み込みは `wasi:sockets/types` を追加します)。コンポーネントは同じインターフェースを
   2 回インポートできないため、これはインターフェース名を示すコンパイルエラーになります —
   組み込みと併用するのではなく、組み込みの*代わりに* WIT 束縛経由で使ってください。
-- コンポーネントは `wit-import` と
-  [`rontolisp:http-handler`](rontolisp-http-handler.md) (serve モード)
-  を組み合わせられません。serve されるコンポーネントのインポートは固定の
-  `wasi:http` 表面だからです。
 - ディレクティブは**トップレベルで、インターフェースを呼ぶコードより前**に置かなければ
   なりません ([`wit-export`](rontolisp-wit-export.md) は逆に最後に置きます)。
   パッケージと束縛を定義するのがこのディレクティブだからです。呼び出し箇所より後に

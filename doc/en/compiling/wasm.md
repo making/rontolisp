@@ -940,6 +940,32 @@ That is also how components **compose**: a component that imports
 [`wac`](https://github.com/bytecodealliance/wac). The host does not have to be a
 runtime built-in.
 
+#### A served handler with a real store
+
+A **served** component ([`rontolisp:http-handler`](../guides/http-handler.md) +
+`--component`) imports user interfaces the same way: its imports are not only the
+fixed `wasi:http` surface it exports through. That is what lets a handler keep
+state at all — a `wasi:http` host instantiates the component **afresh for every
+request**, so a global hash table reads back empty every time, while a store lives
+outside it:
+
+```bash
+rontolisp page-hits-server.lisp -o server.wasm --component
+wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+curl http://127.0.0.1:8080/index
+```
+
+Whether the counts then *survive* is the host's business, not the component's:
+wasmtime's built-in key-value provider is an in-memory store it rebuilds per
+instance (so, under `wasmtime serve`, per request), while a host that links an
+out-of-process provider keeps them — on wasmCloud (`wash dev`) the same component
+counts 1, 2, 3. The interfaces a served component may *not* bind are the ones its
+own surface already imports: `wasi:http/types`, `wasi:io/streams`,
+`wasi:cli/stdout`, `wasi:clocks/*`, `wasi:random/random` (and
+`wasi:http/outgoing-handler` when the handler also uses `rontolisp:fetch`).
+
+The full example is [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue).
+
 Current limitations:
 
 - `--no-gc` rejects the directive with a clear error: its contract is a plain MVP
@@ -955,8 +981,6 @@ Current limitations:
   `stream` and `future` are rejected on every backend.
 - Under `--component` a **`list<T>` argument** (other than `list<u8>`), and
   `flags` anywhere, is a compile error; a `list<T>` still crosses as a result.
-- A component cannot combine `wit-import` with `rontolisp:http-handler` (serve
-  mode): a served component's imports are the fixed `wasi:http` surface.
 - The directive binds an **interface**. A world's `import` items are still not
   read.
 - It must appear at top level **before** the code that calls the interface — it

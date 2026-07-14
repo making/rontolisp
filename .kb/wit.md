@@ -409,7 +409,7 @@ Like `WitExportDirective` it does no I/O and no codegen (the caller hands it the
 |---|---|
 | Preview 1 WASM (`-o out.wasm`) | one `(rontolisp:wasm-import 'name :from M :as FIELD :params '(...) :returns T)` per WIT function — literally what a hand-written import block carries |
 | interpreter, JVM (`-o Prog.class`) | the `defpackage`, then one ordinary `(defun kv:bucket-get (self key) (rontolisp::%wit-call "wasi:keyvalue/store@0.2.0" "bucket-get" self key))` per WIT function |
-| `--component` | clear error (`RontoLispCli`) — a component's imports need the canonical-ABI lower, `.todo/128` |
+| `--component` | a component-model **instance import** of the interface, each bound function `canon lower`ed (`(rontolisp::%component-import ...)`, below) — on every variant, `rontolisp:http-handler` (serve) included |
 | `--no-gc` | clear error (`WitImportDirective.lower`) — its MVP module imports nothing |
 
 The Preview 1 output is **measured byte-identical** to the hand-written `wasm-import`
@@ -738,7 +738,30 @@ are `WitCanonicalAbiTest`. Two things that probe taught, which no document says:
   Every downstream hardcoded index (the `run` alias / lift / export, `appendFuncExports`)
   shifts by the user-import counts. **Zero imports = zero shift = byte-identical**
   (stash-dance proven on base / http-client / sockets, with and without a `:string`
-  wasm-export). Works on all three non-serve variants; serve is a clear error.
+  wasm-export — and on both serve variants).
+- **`codegen/wasm/WasmServeComponentBuilder`** (todo 134) — the SAME `appendUserImports`
+  on the two serve variants (`build` = serve, `buildHttp` = serve+fetch), so a
+  `rontolisp:http-handler` component imports user interfaces too. The only difference is
+  the index bookkeeping, because serve has TWO adapters: the preview1 bridge is
+  instantiated BEFORE the rontolisp core (it satisfies its `wasi_snapshot_preview1`
+  imports) and the serve adapter AFTER it (it imports `%http-dispatch`). So the
+  synthesized user core instances sit between them (from core instance 3) and the core /
+  the serve adapter's "w" group / the serve adapter become 3+N / 4+N / 5+N; the adapter's
+  `serve` core func is 23+F (serve) / 44+F (serve+fetch), the lifted `handle` component
+  func 18+F / 33+F, the exported instance 8+N / 10+N, and `appendUserImports` is called
+  with (nextType, firstImportInstance, nextComponentFunc, nextCoreFunc) = (19, 8, 18, 23)
+  / (29, 10, 33, 44). The serve core module exports no `cabi_realloc` (`componentStringAbi`
+  is `component && !serve`) and needs none — the lower's realloc is the shared memory
+  module's, core func 0, aliased there as everywhere. `rejectAdapterImportCollisions` runs
+  for the serve blobs too. **The state a served handler cannot otherwise have**: a
+  `wasi:http` host recreates the instance per request, so its globals are not state; a
+  store behind a WIT import is (`examples/wit/keyvalue/page-hits-server.lisp`). Whether
+  that store SURVIVES is the host's, not ours: wasmtime's `-S keyvalue=y` provider is an
+  in-memory store **rebuilt per instance** (measured: a preset `-S
+  keyvalue-in-memory-data=k=41` reads back 41 on every request, so a counter answers 42
+  forever), while wasmCloud's `wash dev` links an out-of-process provider and the same
+  component counts 1, 2, 3.
+- **`codegen/wasm/WitImportWorldEmitter`** — the `--emit-wit` import side.
 - **`codegen/wasm/WitImportWorldEmitter`** — the `--emit-wit` import side.
 
 ### `result` = the envelope + a Lisp wrapper (NOT a codegen catch)

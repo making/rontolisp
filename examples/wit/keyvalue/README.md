@@ -28,6 +28,7 @@ them is the program:
 | [`page-hits.lisp`](page-hits.lisp) | The program. It knows the WIT and nothing else |
 | [`memory-store.lisp`](memory-store.lisp) | An implementation: a portable Lisp hash-table store, ~50 lines, ending in one `rontolisp:wit-provide` |
 | [`java-store.lisp`](java-store.lisp) | The **same** interface over a real `java.util.LinkedHashMap`, through [`java:` interop](../../doc/en/guides/java-interop.md). Bound after the first, so it replaces it |
+| [`page-hits-server.lisp`](page-hits-server.lisp) | The same counter as an **HTTP server** ([§7](#7-serve-it----an-http-server-whose-state-is-somebody-elses)): a served component's state has to live in a store, because its globals do not survive a request |
 
 Run the program on the interpreter and the Lisp store answers; compile it to the
 JVM and the Java store answers; compile it to a **WASI component** and
@@ -300,6 +301,85 @@ maps it, `eval` finds it:
 Nothing about the boundary leaks into the call sites: they are Lisp calls, and
 the WIT is the only thing that says what is on the other end. That holds on the
 component too, where those calls are canonical-ABI lowerings.
+
+## 7. Serve it -- an HTTP server whose state is somebody else's
+
+[`page-hits-server.lisp`](page-hits-server.lisp) is the same counter behind an
+HTTP server: `rontolisp:http-handler` for the requests,
+`rontolisp:wit-import` for the store. Every request records a hit for its own
+path and answers the tally.
+
+The two halves need each other. A served component's globals are **not** state: a
+`wasi:http` host instantiates it afresh for every request, so a hash table reads
+back empty every time and a page-hit counter simply cannot be written that way.
+Through a store it can -- and the store is the one thing that outlives the
+instance.
+
+```lisp
+(defun handle (request)
+  (let* ((page (getf request :path))
+         (bucket (kv:open *store*))
+         (hits (record-hit bucket page)))
+    (list :status 200
+          :headers (list (cons "content-type" "text/plain"))
+          :body (format nil "~a -> ~a hit~:[s~;~]~%~%hits per page:~%~a"
+                        page hits (= hits 1) (report bucket)))))
+
+(rontolisp:http-handler 'handle 8080)
+```
+
+On the interpreter (and, with `-o Server.class`, on the JVM) the process outlives
+the requests, so the Lisp store beside the program keeps the counts:
+
+```console
+$ rontolisp page-hits-server.lisp &
+$ curl http://127.0.0.1:8080/index
+/index -> 1 hit
+
+hits per page:
+/index = 1
+$ curl http://127.0.0.1:8080/index
+/index -> 2 hits
+
+hits per page:
+/index = 2
+```
+
+As a **component** it exports `wasi:http/incoming-handler` and imports
+`wasi:keyvalue/store` -- and now *whose* store answers, and whether it survives,
+is the host's business:
+
+```console
+$ rontolisp page-hits-server.lisp -o server.wasm --component
+$ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+```
+
+wasmtime's key-value host is an **in-memory store it rebuilds per instance** --
+so under `wasmtime serve` (a fresh instance per request) the tally starts over
+every time. The calls really do cross into it (seed one with
+`-S keyvalue-in-memory-data=/index=41` and the first request answers 42), but the
+counts do not accumulate, and nothing in the component can change that.
+
+A host that links an **out-of-process** provider keeps them. wasmCloud does, and
+[`.wash/config.yaml`](.wash/config.yaml) is the whole configuration -- `wash dev`
+compiles this directory with rontolisp, deploys the component and links it:
+
+```console
+$ wash dev                      # serves on :8000
+$ curl http://127.0.0.1:8000/index
+/index -> 1 hit
+
+hits per page:
+/index = 1
+$ curl http://127.0.0.1:8000/index
+/index -> 2 hits
+
+hits per page:
+/index = 2
+```
+
+Same component, same source, a store that outlives the instance. That the
+component cannot tell the two hosts apart is the point of the boundary.
 
 ## Limitations
 

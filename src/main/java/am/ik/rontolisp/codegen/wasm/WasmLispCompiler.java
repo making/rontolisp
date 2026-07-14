@@ -1031,11 +1031,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			throw new UnsupportedOperationException(
 					"rontolisp:wasm-import is not supported with --component (Preview 1 core modules only)");
 		}
-		if (!componentImports.isEmpty() && (!this.component || this.serve)) {
-			throw new UnsupportedOperationException(this.serve
-					? "rontolisp:wit-import cannot be combined with rontolisp:http-handler yet: a serve-mode "
-							+ "component's imports are the fixed wasi:http surface"
-					: "the canonical-ABI import lowering requires --component");
+		if (!componentImports.isEmpty() && !this.component) {
+			throw new UnsupportedOperationException("the canonical-ABI import lowering requires --component");
 		}
 		// Register each import as a synthetic defun so ordinary calls, #'name, funcall
 		// and eval all reach it through the regular defun machinery; Pass 2a swaps in
@@ -2664,10 +2661,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				// a wasi:http/incoming-handler component (wasmtime serve). When the
 				// program also uses fetch, the serve+fetch variant wires the outgoing
 				// http machinery into the preview1 bridge (wasmtime serve -S http=y).
+				// A rontolisp:wit-import joins the fixed wasi:http surface as an extra
+				// instance import (canon lower), so a handler's state can live in a real
+				// store.
 				this.componentWit = WitEmitter.emit(
 						emitHttpImport ? WitEmitter.VARIANT_HTTP_SERVER_CLIENT : WitEmitter.VARIANT_HTTP_SERVER,
-						List.of());
-				return WasmComponentBuilder.buildServe(coreModule, emitHttpImport);
+						List.of(), componentImports);
+				return WasmComponentBuilder.buildServe(coreModule, emitHttpImport, componentImports);
 			}
 			// Lift each wasm-export into a host-callable component-model export
 			// (synchronous canon lift; WAVE-invokable) alongside wasi:cli/run. Scalar

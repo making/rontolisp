@@ -10,12 +10,16 @@ Each port keeps the routes and response bodies of the original template.
 | http-hello-world | [`http-hello-world/app.lisp`](http-hello-world/app.lisp) | yes | yes | yes | yes |
 | http-handler | [`http-handler/app.lisp`](http-handler/app.lisp) | yes | yes | yes | yes |
 | http-client | [`http-client/app.lisp`](http-client/app.lisp) | yes | yes | yes (`-S http=y`) | yes |
-| http-kv-handler | [`http-kv-handler/app.lisp`](http-kv-handler/app.lisp) | yes (in-memory) | yes (in-memory) | no (needs `wasi:keyvalue`) | no (needs `wasi:keyvalue`) |
+| http-kv-handler | [`http-kv-handler/app.lisp`](http-kv-handler/app.lisp) | yes (in-memory) | yes (in-memory) | not yet ported to `wasi:keyvalue` | not yet ported to `wasi:keyvalue` |
 | service-tcp | [`service-tcp/`](service-tcp/) | yes | yes | no (serve + tcp) | no (service model) |
 | http-api-with-distributed-workloads | not ported | - | - | - | - |
 
 The gaps in the last three rows are recorded in
-`.todo/53-wasmcloud-template-gaps.md`.
+`.todo/53-wasmcloud-template-gaps.md`. The `wasi:keyvalue` one is no longer a
+missing capability -- a served component can import the interface, and
+[`examples/wit/keyvalue/page-hits-server.lisp`](../wit/keyvalue/page-hits-server.lisp)
+is a page-hit counter that does, keeping its counts on wasmCloud across requests.
+This port has simply not been rewritten against it yet.
 
 ## Running
 

@@ -64,6 +64,14 @@ class WasmComponentImportCompilerTest {
 		return new WasmLispCompiler(false, true).compile(program);
 	}
 
+	// The same path in SERVE mode: the CLI splices the %http-dispatch wrapper last (after
+	// every library pass), then compiles the core in serve mode.
+	private static byte[] compileServeComponent(String source) {
+		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner
+			.inline(am.ik.rontolisp.eval.WitLibrary.process(LispReader.readAllFromString(source)));
+		return new WasmLispCompiler(false, true, false, false, true).compile(program);
+	}
+
 	private static boolean containsAscii(byte[] bytes, String needle) {
 		return new String(bytes, StandardCharsets.ISO_8859_1).contains(needle);
 	}
@@ -410,6 +418,24 @@ class WasmComponentImportCompilerTest {
 		List<LispVal> forms = lower(richWit, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT);
 		assertThat(forms.get(1).print()).contains("(\"where-is\" \"kv:where-is\")")
 			.contains("(\"palette\" \"kv:palette\")");
+	}
+
+	@Test
+	void aServedComponentImportsTheInterfaceAlongsideItsFixedWasiHttpSurface() {
+		// A rontolisp:http-handler component wires TWO adapters (the preview1 bridge
+		// before the core, the serve adapter after it), so its index bookkeeping is its
+		// own -- but the user import rides the same appendUserImports wiring as the other
+		// three variants, and the fixed wasi:http/incoming-handler export survives it.
+		String witLiteral = "\"" + KV_WIT.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
+		byte[] component = compileServeComponent("(defpackage kv (:use cl) (:export open))\n"
+				+ "(rontolisp::%component-import \"wasi:keyvalue/store@0.2.0-draft\" " + witLiteral
+				+ " (\"open\" \"kv::%open\") (\"bucket-get\" \"kv::%bucket-get\"))\n"
+				+ "(defun kv:open (identifier) (rontolisp::%wit-result (kv::%open identifier)))\n"
+				+ "(defun handle (request) (list :status 200 :body (kv:open \"\")))\n"
+				+ "(rontolisp:http-handler 'handle)\n");
+		assertThat(containsAscii(component, "wasi:keyvalue/store@0.2.0-draft")).isTrue();
+		assertThat(containsAscii(component, "[method]bucket.get")).isTrue();
+		assertThat(containsAscii(component, "wasi:http/incoming-handler@0.2.0")).isTrue();
 	}
 
 }

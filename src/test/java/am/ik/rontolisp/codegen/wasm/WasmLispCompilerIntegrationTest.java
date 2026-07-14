@@ -2037,6 +2037,64 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(result.getStdout().trim()).isEqualTo("proxied backend /up 200");
 	}
 
+	// The wasi:keyvalue store, cut down to what a page-hit counter binds. It is the real
+	// upstream interface (wasmtime's own host answers it under -S keyvalue=y), so every
+	// function returns a result and `get` an option<list<u8>> -- exactly the shapes only
+	// the canonical ABI carries.
+	private static final String WASI_KEYVALUE_WIT = """
+			package wasi:keyvalue@0.2.0-draft;
+
+			interface store {
+			  variant error {
+			    no-such-store,
+			    access-denied,
+			    other(string)
+			  }
+
+			  open: func(identifier: string) -> result<bucket, error>;
+
+			  resource bucket {
+			    get: func(key: string) -> result<option<list<u8>>, error>;
+			    set: func(key: string, value: list<u8>) -> result<_, error>;
+			  }
+			}
+			""";
+
+	@Test
+	void httpHandlerCallsAUserWitImportUnderWasmtimeServe() throws Exception {
+		// A served handler whose state lives in a real key-value store: the component
+		// exports wasi:http/incoming-handler AND imports wasi:keyvalue/store, and
+		// wasmtime answers both. The counter is seeded through the host's own CLI
+		// (-S keyvalue-in-memory-data), so the reply proves the handler READ the host's
+		// store across the canonical ABI and wrote back a value it read again -- which no
+		// process-local hash table could fake.
+		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("wit-serve");
+		java.nio.file.Files.writeString(dir.resolve("kv.wit"), WASI_KEYVALUE_WIT);
+		List<LispVal> program = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString("""
+				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
+				(defun handle (request)
+				  (let* ((page (getf request :path))
+				         (bucket (kv:open ""))
+				         (seen (kv:bucket-get bucket page)))
+				    (kv:bucket-set bucket page
+				                   (princ-to-string (+ 1 (if seen (parse-integer seen) 0))))
+				    (list :status 200
+				          :body (concatenate 'string page " " (kv:bucket-get bucket page)))))
+				(rontolisp:http-handler 'handle)
+				"""), dir.toString(), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
+				am.ik.rontolisp.eval.SourceLoader.fileSystem());
+		byte[] component = new WasmLispCompiler(false, true, false, false, true)
+			.compile(am.ik.rontolisp.cli.HttpHandlerInliner.inline(am.ik.rontolisp.eval.WitLibrary.process(program)));
+		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/serve-kv.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y -S keyvalue-in-memory-data=/hits=41"
+						+ " --addr 127.0.0.1:8085 /tmp/serve-kv.wasm >/tmp/serve-kv.log 2>&1 &"
+						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8085/hits) && [ -n \"$out\" ]"
+						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-kv.log; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve keyvalue round trip; log: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("/hits 42");
+	}
+
 	@Test
 	void componentFileWriteThenRead() throws Exception {
 		// Component mode does file I/O over wasi:filesystem@0.3.0 (read-via-stream /

@@ -175,6 +175,50 @@ $ wasmtime serve -W gc=y -S http=y proxy.wasm
 の再現で、リクエストごとに dog.ceo API からランダムな犬の画像 URL を取得して
 JSON で応答します。
 
+## 状態を保つ: グローバル変数ではなくストアへ
+
+インタープリタと JVM ではサーバは 1 つの長命プロセスなので、グローバルなハッシュ
+テーブルはリクエストを跨いで生き残ります。**serve されるコンポーネントではそう
+なりません**。`wasi:http` ホストはリクエストごとにコンポーネントを新しく
+インスタンス化するため、ハンドラが書いた内容は次のリクエストでは空で読み戻されます。
+
+したがって状態を保つ方法は、それをコンポーネントの外 — ハンドラが*呼ぶ* WIT
+インターフェース — に置くことです。束縛には
+[`rontolisp:wit-import`](../reference/functions/rontolisp-wit-import.md)
+を使います。serve されるコンポーネントは、それを固定の `wasi:http`
+表面と並べてインポートします:
+
+```console
+(rontolisp:wit-import "wit/keyvalue.wit"
+                      :interface "wasi:keyvalue/store@0.2.0-draft"
+                      :package kv)
+
+(defun handle (request)
+  (let* ((page (getf request :path))
+         (bucket (kv:open ""))
+         (seen (kv:bucket-get bucket page))
+         (hits (+ 1 (if seen (parse-integer seen) 0))))
+    (kv:bucket-set bucket page (princ-to-string hits))
+    (list :status 200 :body (format nil "~a: ~a hits~%" page hits))))
+
+(rontolisp:http-handler 'handle 8080)
+```
+
+```console
+$ rontolisp page-hits-server.lisp -o server.wasm --component
+$ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+```
+
+同じソースがインタープリタと JVM でも動きます。そこでは Lisp で書かれた
+[プロバイダ](../reference/functions/rontolisp-wit-provide.md)
+がインターフェースに応答します。コンポーネントでカウントが実際に*残る*かどうかは
+ホストの都合です: wasmtime 組み込みのキーバリュープロバイダはインスタンスごとに
+作り直されるインメモリストアなので (`wasmtime serve` の下ではリクエストごと)
+残りませんが、プロセス外のプロバイダをリンクするホスト (たとえば wasmCloud の
+`wash dev`) なら残ります。実例は
+[`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue)
+にあります。
+
 ## 制限
 
 WASI コンポーネントバックエンドでは、リクエスト／レスポンスのヘッダはまだ

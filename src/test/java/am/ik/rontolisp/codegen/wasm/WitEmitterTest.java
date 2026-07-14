@@ -116,6 +116,48 @@ class WitEmitterTest {
 	}
 
 	@Test
+	void aServeWorldCarriesTheUserImportsToo() {
+		// A served component's imports are no longer only the fixed wasi:http surface:
+		// a rontolisp:wit-import joins the world's import block (before the fixed
+		// incoming-handler export), and its package definition is appended, pruned to
+		// the members the program binds.
+		String wit = WitEmitter.emit(WitEmitter.VARIANT_HTTP_SERVER, List.of(), List.of(keyvalueImport()));
+		assertThat(wit).contains("""
+				  import wasi:cli/stderr@0.2.0;
+				  import wasi:keyvalue/store@0.2.0-draft;
+
+				  export wasi:http/incoming-handler@0.2.0;
+				""");
+		assertThat(wit).contains("package wasi:keyvalue@0.2.0-draft {")
+			.contains("    open: func(identifier: string) -> result<bucket, error>;");
+	}
+
+	// The keyvalue store interface as the --component lowering hands it to the emitter:
+	// the directive's %component-import form, parsed back into an Import.
+	private static WasmComponentImportCompiler.Import keyvalueImport() {
+		String wit = """
+				package wasi:keyvalue@0.2.0-draft;
+
+				interface store {
+				    variant error {
+				        no-such-store,
+				        access-denied,
+				        other(string)
+				    }
+				    open: func(identifier: string) -> result<bucket, error>;
+				    resource bucket {
+				        get: func(key: string) -> result<option<list<u8>>, error>;
+				    }
+				}
+				""";
+		List<LispVal> forms = am.ik.rontolisp.compiler.WitImportDirective.lower(
+				new am.ik.rontolisp.compiler.WitImportDirective.Directive("kv.wit", "wasi:keyvalue/store@0.2.0-draft",
+						"kv", null, am.ik.rontolisp.compiler.WitImportDirective.FieldStyle.CAMEL),
+				wit, "kv.wit", am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
+		return WasmComponentImportCompiler.parse((LispCons) forms.get(1));
+	}
+
+	@Test
 	void everyVariantTemplateLoadsAndOpensTheRootWorld() {
 		for (String variant : new String[] { WitEmitter.VARIANT_BASE, WitEmitter.VARIANT_HTTP_CLIENT,
 				WitEmitter.VARIANT_SOCKETS, WitEmitter.VARIANT_HTTP_SERVER, WitEmitter.VARIANT_HTTP_SERVER_CLIENT,

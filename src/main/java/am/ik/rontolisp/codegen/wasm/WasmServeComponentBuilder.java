@@ -121,7 +121,17 @@ final class WasmServeComponentBuilder {
 	private WasmServeComponentBuilder() {
 	}
 
-	static byte[] build(byte[] coreModule) {
+	/**
+	 * Assemble the serve component, importing the given user WIT interfaces
+	 * ({@code rontolisp:wit-import}) alongside the fixed wasi:http surface.
+	 * @param coreModule the rontolisp core module compiled in serve mode
+	 * @param imports the user WIT interface imports (empty for none, which emits nothing
+	 * and shifts nothing: the component then stays byte-identical)
+	 * @return the WASI 0.2 (http/incoming-handler) component binary
+	 */
+	static byte[] build(byte[] coreModule, List<WasmComponentImportCompiler.Import> imports) {
+		final int userIfaces = imports.size();
+		final int userFuncs = WasmComponentBuilder.userImportFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// Import instances 0-7, component types 0-12.
 		c.writeRaw(IMPORT_BLOCK_HTTP_SERVER);
@@ -221,11 +231,20 @@ final class WasmServeComponentBuilder {
 		// wasi_snapshot_preview1 imports bind its exports.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
-		// Instantiate the rontolisp core (core instance 3): mem = instance 0,
-		// wasi_snapshot_preview1 = the bridge (instance 2). It exports run /
-		// %http-dispatch / __ronto_alloc, which the serve adapter imports by name.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List
-			.of(ComponentWriter.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1"), List.of(0, 2)))));
+		// User WIT-interface imports (rontolisp:wit-import): instance types from
+		// component type 19, import instances from 8, function aliases from component
+		// func 18, lowered core funcs from 23, and one synthesized core instance each
+		// from 3 -- right after the bridge, so the core below can bind them. Emits
+		// nothing when there are none, so every index below shifts by zero.
+		WasmComponentBuilder.appendUserImports(c, imports, T_HANDLE_FUNC + 1, 8, 18, 23);
+		// Instantiate the rontolisp core (core instance 3 + one per user interface):
+		// mem = instance 0, wasi_snapshot_preview1 = the bridge (instance 2), plus each
+		// user interface's canon-lowered core instance under its canonical id. The core
+		// exports run / %http-dispatch / __ronto_alloc, which the serve adapter imports
+		// by name.
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(WasmComponentBuilder
+			.rontolispInstantiate(2, List.of("mem", "wasi_snapshot_preview1"), List.of(0, 2), imports, 3))));
+		final int rontolisp = 3 + userIfaces;
 		// Group the 17 lowered/drop core funcs for the serve adapter's "w" import (core
 		// instance 4). Names match adapter-http-server.wat's imports.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
@@ -234,23 +253,23 @@ final class WasmServeComponentBuilder {
 								"resp-new", "set-status", "resp-body", "body-write", "io-write", "drop-out",
 								"body-finish", "resp-set", "drop-req", "drop-in", "drop-body"),
 						List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 12, 13, 15, 16, 17)))));
-		// Instantiate the serve adapter (core instance 5): mem = instance 0, core =
-		// instance 3, w = instance 4.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
-			.vec(List.of(ComponentWriter.coreInstanceInstantiate(3, List.of("mem", "core", "w"), List.of(0, 3, 4)))));
-		// Alias the adapter's serve function (core func 23).
+		// Instantiate the serve adapter (core instance 5): mem = instance 0, core = the
+		// rontolisp instance, w = its "w" group (both shifted by the user interfaces).
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(ComponentWriter
+			.coreInstanceInstantiate(3, List.of("mem", "core", "w"), List.of(0, rontolisp, rontolisp + 1)))));
+		// Alias the adapter's serve function (core func 23 + the user-import lowers).
 		c.rawSection(ComponentWriter.SEC_ALIAS,
-				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(5, "serve"))));
-		// Lift serve (core func 23) into a component func with the handle func type 18.
-		// Component func 18 follows the 18 aliased WASI funcs (0-17).
+				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp + 2, "serve"))));
+		// Lift serve into a component func with the handle func type 18. Component
+		// func 18 follows the 18 aliased WASI funcs (0-17) + the user-import aliases.
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(23, T_HANDLE_FUNC))));
-		// Component instance 8 (after import instances 0-7) exporting handle, exported as
-		// the wasi:http/incoming-handler@0.2.0 interface.
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(23 + userFuncs, T_HANDLE_FUNC))));
+		// Component instance 8 (after import instances 0-7 + the user imports) exporting
+		// handle, exported as the wasi:http/incoming-handler@0.2.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("handle", 18))));
-		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:http/incoming-handler@0.2.0", 8))));
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("handle", 18 + userFuncs))));
+		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter
+			.vec(List.of(ComponentWriter.exportInstance("wasi:http/incoming-handler@0.2.0", 8 + userIfaces))));
 		return c.toByteArray();
 	}
 
@@ -320,9 +339,13 @@ final class WasmServeComponentBuilder {
 	 * constants were derived from a {@code wasm-tools dump} of the
 	 * {@code uni-http-server-client} reference generated by {@code regen.sh}.
 	 * @param coreModule the rontolisp core module compiled in serve mode with fetch
+	 * @param imports the user WIT interface imports (empty for none, which emits nothing
+	 * and shifts nothing)
 	 * @return the WASI 0.2 (http/incoming-handler) component binary
 	 */
-	static byte[] buildHttp(byte[] coreModule) {
+	static byte[] buildHttp(byte[] coreModule, List<WasmComponentImportCompiler.Import> imports) {
+		final int userIfaces = imports.size();
+		final int userFuncs = WasmComponentBuilder.userImportFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// Import instances 0-9, component types 0-19.
 		c.writeRaw(IMPORT_BLOCK_HTTP_SERVER_CLIENT);
@@ -482,14 +505,21 @@ final class WasmServeComponentBuilder {
 		// sock / http imports bind its exports.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
-		// Instantiate the rontolisp core (core instance 3): mem = instance 0, and
-		// wasi_snapshot_preview1, sock AND http all satisfied by the bridge (instance 2;
-		// it exports the eight preview1 functions, the four errno-returning tcp stubs
-		// and fetch-start / fetch-await). It exports run / %http-dispatch /
-		// __ronto_alloc, which the serve adapter imports by name.
+		// User WIT-interface imports (rontolisp:wit-import): instance types from
+		// component type 29, import instances from 10, function aliases from component
+		// func 33, lowered core funcs from 44, and one synthesized core instance each
+		// from 3. Emits nothing when there are none.
+		WasmComponentBuilder.appendUserImports(c, imports, HS_T_HANDLE_FUNC + 1, 10, 33, 44);
+		// Instantiate the rontolisp core (core instance 3 + one per user interface):
+		// mem = instance 0, and wasi_snapshot_preview1, sock AND http all satisfied by
+		// the bridge (instance 2; it exports the eight preview1 functions, the four
+		// errno-returning tcp stubs and fetch-start / fetch-await), plus each user
+		// interface's canon-lowered core instance. The core exports run / %http-dispatch
+		// / __ronto_alloc, which the serve adapter imports by name.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(2,
-						List.of("mem", "wasi_snapshot_preview1", "sock", "http"), List.of(0, 2, 2, 2)))));
+				ComponentWriter.vec(List.of(WasmComponentBuilder.rontolispInstantiate(2,
+						List.of("mem", "wasi_snapshot_preview1", "sock", "http"), List.of(0, 2, 2, 2), imports, 3))));
+		final int rontolisp = 3 + userIfaces;
 		// Group the 17 lowered/drop core funcs for the serve adapter's "w" import (core
 		// instance 4). Names match adapter-http-server.wat's imports.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
@@ -498,23 +528,23 @@ final class WasmServeComponentBuilder {
 								"resp-new", "set-status", "resp-body", "body-write", "io-write", "drop-out",
 								"body-finish", "resp-set", "drop-req", "drop-in", "drop-body"),
 						List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 34, 12, 13, 35, 36, 37)))));
-		// Instantiate the serve adapter (core instance 5): mem = instance 0, core =
-		// instance 3, w = instance 4.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
-			.vec(List.of(ComponentWriter.coreInstanceInstantiate(3, List.of("mem", "core", "w"), List.of(0, 3, 4)))));
-		// Alias the adapter's serve function (core func 44).
+		// Instantiate the serve adapter (core instance 5): mem = instance 0, core = the
+		// rontolisp instance, w = its "w" group (both shifted by the user interfaces).
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(ComponentWriter
+			.coreInstanceInstantiate(3, List.of("mem", "core", "w"), List.of(0, rontolisp, rontolisp + 1)))));
+		// Alias the adapter's serve function (core func 44 + the user-import lowers).
 		c.rawSection(ComponentWriter.SEC_ALIAS,
-				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(5, "serve"))));
-		// Lift serve (core func 44) into a component func with the handle func type 28.
-		// Component func 33 follows the 33 aliased WASI funcs (0-32).
+				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp + 2, "serve"))));
+		// Lift serve into a component func with the handle func type 28. Component
+		// func 33 follows the 33 aliased WASI funcs (0-32) + the user-import aliases.
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(44, HS_T_HANDLE_FUNC))));
-		// Component instance 10 (after import instances 0-9) exporting handle, exported
-		// as the wasi:http/incoming-handler@0.2.0 interface.
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(44 + userFuncs, HS_T_HANDLE_FUNC))));
+		// Component instance 10 (after import instances 0-9 + the user imports) exporting
+		// handle, exported as the wasi:http/incoming-handler@0.2.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("handle", 33))));
-		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:http/incoming-handler@0.2.0", 10))));
+				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("handle", 33 + userFuncs))));
+		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter
+			.vec(List.of(ComponentWriter.exportInstance("wasi:http/incoming-handler@0.2.0", 10 + userIfaces))));
 		return c.toByteArray();
 	}
 

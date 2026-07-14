@@ -558,12 +558,25 @@ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
 
 コンポーネントの**合成**もこの仕組みです: `wasi:keyvalue/store` をインポートするコンポーネントは、それをエクスポートする任意の言語のコンポーネントへ [`wac`](https://github.com/bytecodealliance/wac) で差し込めます。ホストがランタイム組み込みである必要はありません。
 
+#### 本物のストアを持つ serve ハンドラ
+
+**serve される**コンポーネント ([`rontolisp:http-handler`](../guides/http-handler.md) + `--component`) も同じようにユーザーインターフェースをインポートします。そのインポートは、エクスポート先である固定の `wasi:http` 表面だけではありません。これこそがハンドラが状態を持てる唯一の道です — `wasi:http` ホストは**リクエストごとにコンポーネントを新しくインスタンス化する**ので、グローバルなハッシュテーブルは毎回空で読み戻されます。ストアはその外側に生きています:
+
+```bash
+rontolisp page-hits-server.lisp -o server.wasm --component
+wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+curl http://127.0.0.1:8080/index
+```
+
+そのカウントが実際に*残る*かどうかはコンポーネントではなくホストの都合です: wasmtime 組み込みのキーバリュープロバイダはインスタンスごとに作り直されるインメモリストアなので (`wasmtime serve` の下ではリクエストごと)、カウントは残りません。プロセス外のプロバイダをリンクするホストなら残ります — wasmCloud (`wash dev`) では同じコンポーネントが 1、2、3 と数えます。serve されるコンポーネントが束縛**できない**インターフェースは、自身の表面がすでにインポートしているものです: `wasi:http/types`、`wasi:io/streams`、`wasi:cli/stdout`、`wasi:clocks/*`、`wasi:random/random` (ハンドラが `rontolisp:fetch` も使う場合は `wasi:http/outgoing-handler` も)。
+
+完全な例は [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue) にあります。
+
 現在の制限事項:
 
 - `--no-gc` はこのディレクティブを明確なエラーで拒否します。その契約は、何もインポートしない素の MVP モジュールだからです。
 - Preview 1 の境界を渡れるのは `rontolisp:wasm-import` が運べる型だけです — 32 ビットまでの整数スカラー、浮動小数点スカラー、`bool`、`string`、`list<u8>`、リソースハンドル。`record`、`option`、`result`、`s64` は、`--component`・インタプリタ・JVM のいずれもが束縛できるとしても、WIT ファイル名と行番号を示すコンパイルエラーになります (上の `wasi:keyvalue` プログラムが Preview 1 向けではなく、コンポーネントまたはインタプリタ／JVM 向けなのはそのためです: その `result` アームが Preview 1 の境界から遠ざけています)。コアインポートは素のホスト関数であり、より豊かな形を記述するためのコンポーネント型を持たないからです。`stream` と `future` はすべてのバックエンドで拒否されます。
 - `--component` では、**`list<T>` の引数** (`list<u8>` を除く)、および位置を問わず `flags` はコンパイルエラーになります。`list<T>` は戻り値としては渡ります。
-- コンポーネントは `wit-import` と `rontolisp:http-handler` (serve モード) を組み合わせられません。serve されるコンポーネントのインポートは固定の `wasi:http` 表面だからです。
 - 束縛できるのは**インターフェース**です。world の `import` 項目は依然として読まれません。
 - ディレクティブはトップレベルで、インターフェースを呼ぶコードより**前**に置かなければなりません (パッケージと束縛を定義するのがこれだからです)。`wit-export` とは逆です。
 

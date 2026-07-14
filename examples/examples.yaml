@@ -379,6 +379,21 @@ examples:
         - "bad store:         :no-such-store"
         - 'seeded:            ("/a" "/b")'
 
+  - path: wit/keyvalue/page-hits-server.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      the same counter behind rontolisp:http-handler -- the pairing a served
+      component NEEDS, since a wasi:http host instantiates it afresh per request
+      and a global hash table would read back empty every time. wasm-component is
+      the leg that matters: it pins that a serve-mode component
+      (wasi:http/incoming-handler, TWO adapters, its own index bookkeeping) also
+      carries user WIT instance imports; jvm-compile pins that the same source
+      compiles where the store is a Lisp provider instead. Compile-only, like
+      every blocking server here: running it means `wasmtime serve -W gc=y -W
+      exceptions=y -S keyvalue=y server.wasm` (whose in-memory kv store is rebuilt
+      per instance, so the tally restarts each request) or `wash dev` on wasmCloud,
+      where an out-of-process provider holds the counts and they accumulate
+
   # --- net: sockets / HTTP servers & clients (blocking -> compile-only) -------
   - path: net/echo-server.lisp
     backends: [jvm-compile, wasm-component]

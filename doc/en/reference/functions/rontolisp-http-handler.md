@@ -84,6 +84,13 @@ served handler (the component then additionally imports
 `wasi:http/outgoing-handler`), so proxy-style handlers run on every backend —
 grant the host outbound HTTP, e.g. `wasmtime serve -W gc=y -S http=y`.
 
+A handler may also call a WIT interface of its own with
+[`rontolisp:wit-import`](rontolisp-wit-import.md), which the served component
+imports alongside its fixed `wasi:http` surface. That is how a served handler
+keeps **state**: a `wasi:http` host instantiates the component afresh for every
+request, so a global hash table reads back empty every time, while a
+`wasi:keyvalue` store lives outside it.
+
 The serve component is plain WASI 0.2, so it is not tied to wasmtime: any host
 that serves `wasi:http` 0.2 and enables the WebAssembly GC proposal can run it —
 jco (`jco serve` on Node.js, where wasm-GC is on by default) and wasmCloud

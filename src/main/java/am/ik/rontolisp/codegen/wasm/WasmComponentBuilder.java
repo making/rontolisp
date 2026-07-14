@@ -427,8 +427,8 @@ public final class WasmComponentBuilder {
 	 * @param nextComponentFunc the first free component function index
 	 * @param nextCoreFunc the first free core function index
 	 */
-	private static void appendUserImports(ComponentWriter c, List<WasmComponentImportCompiler.Import> imports,
-			int nextType, int firstImportInstance, int nextComponentFunc, int nextCoreFunc) {
+	static void appendUserImports(ComponentWriter c, List<WasmComponentImportCompiler.Import> imports, int nextType,
+			int firstImportInstance, int nextComponentFunc, int nextCoreFunc) {
 		if (imports.isEmpty()) {
 			return;
 		}
@@ -474,7 +474,7 @@ public final class WasmComponentBuilder {
 
 	// The total bound-function count across the user imports (each costs one component
 	// func alias and one lowered core func).
-	private static int userImportFuncs(List<WasmComponentImportCompiler.Import> imports) {
+	static int userImportFuncs(List<WasmComponentImportCompiler.Import> imports) {
 		int n = 0;
 		for (WasmComponentImportCompiler.Import imported : imports) {
 			n += imported.decls().size();
@@ -486,7 +486,7 @@ public final class WasmComponentBuilder {
 	// names, then one argument per user interface (module name = the interface's
 	// canonical id, satisfied by its synthesized core instance starting right after the
 	// adapter instance).
-	private static byte[] rontolispInstantiate(int moduleIndex, List<String> fixedNames, List<Integer> fixedInstances,
+	static byte[] rontolispInstantiate(int moduleIndex, List<String> fixedNames, List<Integer> fixedInstances,
 			List<WasmComponentImportCompiler.Import> imports, int firstUserCoreInstance) {
 		final List<String> names = new java.util.ArrayList<>(fixedNames);
 		final List<Integer> instances = new java.util.ArrayList<>(fixedInstances);
@@ -526,7 +526,26 @@ public final class WasmComponentBuilder {
 	 * @return the WASI 0.2 (http/incoming-handler) component binary
 	 */
 	public static byte[] buildServe(byte[] coreModule, boolean usesHttp) {
-		return usesHttp ? WasmServeComponentBuilder.buildHttp(coreModule) : WasmServeComponentBuilder.build(coreModule);
+		return buildServe(coreModule, usesHttp, List.of());
+	}
+
+	/**
+	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program,
+	 * additionally importing the given user WIT interfaces
+	 * ({@code rontolisp:wit-import}): a served handler whose state lives in a real store
+	 * is exactly this combination. The wiring is {@link #appendUserImports}, as on the
+	 * three non-serve variants; an empty import list emits nothing and shifts nothing, so
+	 * an import-free serve component stays byte-identical.
+	 * @param coreModule the rontolisp core module compiled in serve mode
+	 * @param usesHttp whether the program uses {@code rontolisp:fetch}
+	 * @param imports the user WIT interface imports (empty for none)
+	 * @return the WASI 0.2 (http/incoming-handler) component binary
+	 */
+	static byte[] buildServe(byte[] coreModule, boolean usesHttp, List<WasmComponentImportCompiler.Import> imports) {
+		rejectAdapterImportCollisions(imports,
+				usesHttp ? WitEmitter.VARIANT_HTTP_SERVER_CLIENT : WitEmitter.VARIANT_HTTP_SERVER);
+		return usesHttp ? WasmServeComponentBuilder.buildHttp(coreModule, imports)
+				: WasmServeComponentBuilder.build(coreModule, imports);
 	}
 
 	/**

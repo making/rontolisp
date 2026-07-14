@@ -15,12 +15,17 @@ should be added; a host interface costs a `.wit` file. Preview 1 is the one back
 it cannot reach (a core import carries flat values only, and every kv function
 returns a `result`) — that is by design, not a gap to close.
 
+**The served pairing landed 2026-07-14** (`examples/wit/keyvalue/page-hits-server.lisp`):
+a serve-mode component imports user WIT interfaces now, so the page-hit counter runs
+behind `rontolisp:http-handler` with its state in a real store. One host fact worth
+carrying: wasmtime's own `-S keyvalue=y` provider is an in-memory store it **rebuilds
+per instance**, and `wasmtime serve` instantiates per request — so the counts do not
+accumulate there (a `-S keyvalue-in-memory-data=` preset reads back on every request,
+which is how the E2E asserts the calls really cross). wasmCloud (`wash dev`) links an
+out-of-process provider and the same component counts 1, 2, 3.
+
 What is left of this todo, and all that is left:
 
-- the `examples/kv-server.lisp` pairing (an HTTP server whose state lives in a real
-  kv store rather than a process-local hash table) — but note a served component
-  cannot currently combine `wit-import` with `rontolisp:http-handler`, whose imports
-  are the fixed `wasi:http` surface. That restriction is the actual work.
 - the sibling `wasi:keyvalue/atomics` and `/batch` interfaces, if anyone wants them:
   they are now just more `.wit`, not more compiler.
 
