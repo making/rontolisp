@@ -8523,4 +8523,98 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(result.getStdout().trim()).isEqualTo("200\n\"backend /hello\"");
 	}
 
+	@Test
+	void componentImportDropsResourcesSoALispRequestCanCarryABody() throws Exception {
+		// The case the GET above dodges. A request that leaks every handle still WORKS --
+		// a request with a BODY cannot: wasi:http's `outgoing-body.write` hands back an
+		// output-stream that is a CHILD of the body, and types.wit requires it to be
+		// dropped before the parent is finished, "otherwise the outgoing-body drop or
+		// finish will trap". A drop is not a WIT function, so nothing in an interface's
+		// bound surface can perform one -- this program sends its body only because
+		// `<resource>-drop` lowers to `canon resource.drop`. Without it the component
+		// traps at `finish`, so this test fails outright rather than merely leaking.
+		// The same rule bites on the reading side: the pollable that `subscribe` returns
+		// is a child of the future, and the host answers "resource has children" if the
+		// future is dropped first.
+		// The backend echoes the request body back, so the assertion proves the body
+		// ARRIVED -- not merely that the request was accepted.
+		List<LispVal> backend = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+				(defun handle (request)
+				  (list :status 200
+				        :body (concatenate 'string "echo " (getf request :body))))
+				(rontolisp:http-handler 'handle)
+				"""));
+		byte[] backendBytes = new WasmLispCompiler(false, true, false, false, true).compile(backend);
+		byte[] postBytes = compileWitImportComponent(vendoredWasiHttpWit(), """
+				(rontolisp:wit-import "iface.wit" :interface "wasi:io/poll@0.2.0" :package poll)
+				(rontolisp:wit-import "iface.wit" :interface "wasi:io/error@0.2.0" :package ioerr)
+				(rontolisp:wit-import "iface.wit" :interface "wasi:io/streams@0.2.0" :package streams)
+				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.2.0" :package http)
+				(rontolisp:wit-import "iface.wit" :interface "wasi:http/outgoing-handler@0.2.0" :package outgoing)
+
+				(defun read-all (stream acc)
+				  (let ((chunk (handler-case (streams:input-stream-blocking-read stream 4096)
+				                 (rontolisp:wit-error () nil))))
+				    (if (or (null chunk) (= (length chunk) 0))
+				        acc
+				        (read-all stream (concatenate 'string acc chunk)))))
+
+				(defun post-url (authority path body)
+				  ;; content-length goes on with fields.append -- the one fields writer whose
+				  ;; value (list<u8>) crosses as a parameter; set / from-list take
+				  ;; list<list<u8>>, which does not. It has to be on the fields BEFORE they
+				  ;; are handed to the outgoing-request.
+				  (let* ((headers (http:fields-new))
+				         (appended (http:fields-append headers "content-length"
+				                                       (princ-to-string (length body))))
+				         (req (http:outgoing-request-new headers)))
+				    appended
+				    (http:outgoing-request-set-method req :post)
+				    (http:outgoing-request-set-scheme req :HTTP)
+				    (http:outgoing-request-set-authority req authority)
+				    (http:outgoing-request-set-path-with-query req path)
+				    ;; the body must be taken before `handle` consumes the request.
+				    (let* ((obody (rontolisp::%wit-result (http:outgoing-request-body req)))
+				           (future (outgoing:handle req nil))
+				           (ostream (rontolisp::%wit-result (http:outgoing-body-write obody))))
+				      (streams:output-stream-blocking-write-and-flush ostream body)
+				      ;; THE line this test exists for: the child stream goes back before the
+				      ;; parent body is finished, or `finish` traps.
+				      (streams:output-stream-drop ostream)
+				      (http:outgoing-body-finish obody nil)
+				      ;; the pollable is a child of the future, so it goes back first too.
+				      (let ((p (http:future-incoming-response-subscribe future)))
+				        (poll:pollable-block p)
+				        (poll:pollable-drop p))
+				      (let* ((response (rontolisp::%wit-result
+				                         (rontolisp::%wit-result
+				                           (cdr (http:future-incoming-response-get future)))))
+				             (ibody (rontolisp::%wit-result (http:incoming-response-consume response)))
+				             (istream (rontolisp::%wit-result (http:incoming-body-stream ibody)))
+				             (text (read-all istream ""))
+				             (status (http:incoming-response-status response)))
+				        ;; and every handle the response arrived on, child before parent.
+				        (streams:input-stream-drop istream)
+				        (http:incoming-body-drop ibody)
+				        (http:incoming-response-drop response)
+				        (http:future-incoming-response-drop future)
+				        (list :status status :body text)))))
+
+				(let ((r (post-url "127.0.0.1:8087" "/echo" "hello from a lisp POST")))
+				  (print (getf r :status))
+				  (print (getf r :body)))
+				""");
+		wasmtime.copyFileToContainer(Transferable.of(backendBytes), "/tmp/wit-post-backend.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(postBytes), "/tmp/wit-post.component.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime serve -W gc=y --addr 127.0.0.1:8087 /tmp/wit-post-backend.wasm >/tmp/wit-post-backend.log 2>&1 &"
+						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8087/echo -d probe >/dev/null && break; sleep 0.25; done;"
+						+ " curl -sf http://127.0.0.1:8087/echo -d probe >/dev/null"
+						+ " || { echo 'backend never came up' 1>&2; cat /tmp/wit-post-backend.log 1>&2; exit 1; };"
+						+ " wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y"
+						+ " /tmp/wit-post.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("200\n\"echo hello from a lisp POST\"");
+	}
+
 }

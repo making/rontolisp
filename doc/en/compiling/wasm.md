@@ -966,6 +966,38 @@ own surface already imports: `wasi:http/types`, `wasi:io/streams`,
 
 The full example is [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue).
 
+### Releasing a resource (`<resource>-drop`)
+
+A handle has to be given back, and **WIT declares no function for giving it
+back**: releasing a resource is a canonical built-in of the component model, not
+a member of the interface. So rontolisp names it — **`<resource>-drop`**, one
+argument, the handle — symmetric with the `<resource>-new` a constructor binds:
+
+```console
+(let ((bucket (kv:open "")))
+  (kv:bucket-set bucket "visits" "41")
+  (print (kv:bucket-get bucket "visits"))
+  (kv:bucket-drop bucket))
+```
+
+It is bound **only when the program names it** (`--no-prune` and `--dynamic` bind
+every resource's drop instead), which is why a component compiled before drops
+existed comes out byte-identical — a WIT *function*, by contrast, is bound
+whether the program calls it or not. On the interpreter and
+the JVM the drop reaches the interface's provider as the member `"bucket-drop"`,
+so what it *means* is the provider's decision: forget the handle, close the
+connection, or answer `nil` because there is nothing to release. On Preview 1 it
+is a **no-op** — a handle there is an opaque integer the host handed over, and
+rontolisp will not invent an import for a function the WIT never declared. Under
+`--component` it becomes `canon resource.drop`, handing the handle back to the
+host's own table.
+
+This is not only about leaks. An interface may make dropping an **obligation**:
+`wasi:http` requires an `outgoing-body`'s child `output-stream` to be dropped
+before the body is finished, and traps if it is not. And a drop releases the
+*reference*, never the thing behind it — the store stays, and the next `kv:open`
+sees every key still in it.
+
 Current limitations:
 
 - `--no-gc` rejects the directive with a clear error: its contract is a plain MVP

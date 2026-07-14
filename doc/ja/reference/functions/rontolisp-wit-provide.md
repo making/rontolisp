@@ -29,6 +29,7 @@ rontolisp はどのインターフェースについても**プロバイダを�
          nil)
         ((string= member "bucket-get") (gethash (nth 1 args) *rows*))
         ((string= member "bucket-exists") (if (gethash (nth 1 args) *rows*) t nil))
+        ((string= member "bucket-drop") nil)  ; the handle is gone; the rows stay
         (t (error 'rontolisp:wit-error :payload (list :other member)))))
 
 (rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-store) ; => "wasi:keyvalue/store@0.2.0"
@@ -48,6 +49,32 @@ rontolisp はどのインターフェースについても**プロバイダを�
   そのため、このキー 1 つですべての綴りに対してプロバイダが束縛されます。
 - プロバイダ: `(member &rest args)` の形の任意の Lisp 呼び出し可能オブジェクト —
   `#'name` 関数、`lambda`、その他 `funcall` が受け付けるものなら何でも構いません。
+
+## プロバイダが尋ねられるメンバー
+
+インターフェースが宣言する関数ごとに 1 つ、綴りは
+[`wit-import` が束縛するとおり](rontolisp-wit-import.md#何が束縛されるか)です:
+`"open"`、`"bucket-get"`、コンストラクタなら `"bucket-new"`。加えてリソースごとに
+**`"<resource>-drop"`** があり、その引数はハンドル 1 つだけです。この最後のメンバーは
+どの `.wit` も宣言していません。リソースの解放はインターフェースの関数ではなく
+コンポーネントモデルの canonical な組み込み機能だからです。そこで rontolisp
+がこれに
+[`<resource>-drop`](rontolisp-wit-import.md#リソースを解放する-resource-drop)
+という名前を与え、他のメンバーと同じようにプロバイダへディスパッチします。
+
+**drop が何を*意味するか*を決めるのはプロバイダであり、プロバイダだけです。**
+コアが知っているのは「プログラムがそのハンドルを使い終えた」ことだけで、そのハンドルが
+何を指していたかは知りません。ですから、行をハッシュテーブルに持つストアはハンドルを
+忘れて行はそのまま残し (上の `my-store` は `nil` を返すだけで、それで実装として完全
+です)、JDBC 接続や開いたファイルを握っているプロバイダはそれを閉じ、ハンドルに何の
+コストもないプロバイダは解放するものが無いので同じく `nil` を返します。drop
+がやっては**いけない**のは、ハンドルが指していたものを破棄することです。ハンドルは
+ストアへの*参照*であってストアそのものではないので、後から `(kv:open "counts")`
+したときには、drop されたハンドル経由で書かれたキーがすべて見えなければなりません。
+
+メンバーを書き落とすと、drop はプロバイダのフォールバック節に落ちます — 上の
+`my-store` なら `rontolisp:wit-error` の節です。解放するものが無いプロバイダも、
+黙っているのではなく `nil` を返すようにしてください。
 
 ## rontolisp はプロバイダを同梱しません
 

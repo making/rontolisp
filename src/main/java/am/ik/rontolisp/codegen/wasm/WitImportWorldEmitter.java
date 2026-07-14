@@ -92,6 +92,13 @@ final class WitImportWorldEmitter {
 				.foreignResourcesOf(imported)) {
 				provides.computeIfAbsent(foreign.ownerIfaceId(), id -> new LinkedHashSet<>()).add(foreign.resource());
 			}
+			// A resource the program only DROPS is exported by the instance type all the
+			// same, so the world has to declare it -- a drop is a canonical built-in, not
+			// a
+			// WIT function, and never appears as one.
+			for (WasmComponentImportCompiler.Drop drop : imported.drops()) {
+				provides.computeIfAbsent(imported.ifaceId(), id -> new LinkedHashSet<>()).add(drop.resource());
+			}
 		}
 		Map<WitPackageName, List<WitItem>> byPackage = new LinkedHashMap<>();
 		for (WasmComponentImportCompiler.Import imported : imports) {

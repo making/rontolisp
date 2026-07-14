@@ -121,12 +121,21 @@ rontolisp counter.lisp -o Counter.class && java Counter
 | `resource bucket` method `get: func(key: string) -> ...` | `kv:bucket-get` | `(kv:bucket-get b "visits")` |
 | `resource bucket` `constructor(...)` | `kv:bucket-new` | `(kv:bucket-new ...)` |
 | `resource bucket` `static func from-name` | `kv:bucket-from-name` | `(kv:bucket-from-name "x")` |
+| `resource bucket` — その**解放** (WIT はそのための関数を宣言しません) | `kv:bucket-drop` | `(kv:bucket-drop b)` |
 
 リソースのメンバーにはリソース名が前置されるため、2 つのリソースが同じメソッド名を
 宣言してもフラットな Lisp-2 の関数名前空間で衝突しません。また**メソッドはハンドルを
 第 1 引数として取ります** (`self`。WIT では暗黙のもの)。残りの引数は WIT
 の名前のままで、リソース自体は不透明な整数ハンドルです。各束縛は**通常の関数**なので、
 `#'kv:bucket-get`、`funcall`、`mapcar`、`eval` が追加の配線なしにそのまま使えます。
+
+最後の行だけは毛色が違います。`.wit` はリソースを解放する関数を宣言しません。
+コンポーネントモデルでは、リソースの解放はインターフェースのメンバーではなく
+canonical な組み込み機能だからです。つまり束縛すべきものが存在しません — それでも
+rontolisp はそれに名前を与えます。コンストラクタが束縛する `<resource>-new`
+と対になる **`<resource>-drop`** です。どちらも、WIT が関数として名付けないものに
+rontolisp が与えた綴りです。
+[リソースを解放する](#リソースを解放する-resource-drop)を参照してください。
 
 ## どうローワリングされるか
 
@@ -182,11 +191,54 @@ wasmtime 組み込みのキーバリュープロバイダはインスタンス�
 プロセス外のプロバイダをリンクするホスト (たとえば wasmCloud) なら残ります。
 コンポーネント自体はどちらでも同じものです。
 
+## リソースを解放する (`<resource>-drop`)
+
+受け取ったハンドルは返さなければなりません。そして **WIT
+はそのための関数を宣言しません**。リソースの解放はインターフェースのメンバーではなく、
+コンポーネントモデルの canonical な組み込み機能だからです。つまり `.wit`
+の中には束縛器が見つけられるものが何もありません。rontolisp はこれを
+**`<resource>-drop`** として束縛します。引数はハンドル 1 つだけです。
+
+```console
+;;; The handle kv:open handed over -- give it back when the work is done.
+(let ((bucket (kv:open "")))
+  (kv:bucket-set bucket "visits" "41")
+  (print (kv:bucket-get bucket "visits"))
+  (kv:bucket-drop bucket))
+```
+
+これが束縛されるのは、**プログラムがその名前を書いたときだけ**です。だからこそ、drop
+が存在しなかった頃にコンパイルされたプログラムはバイト単位で同一のまま出てきます —
+その中には `-drop` という名前がどこにも現れないからです。WIT の*関数*のほうは、
+プログラムが呼ぶかどうかに関わらず束縛されます (Preview 1
+はインターフェース全体を束縛します)。`--no-prune` と `--dynamic`
+はすべてのリソースの drop を束縛します — バイト単位で同一に保つべき出力を持たない
+インタプリタも同様です。
+
+| Backend | `(kv:bucket-drop b)` becomes |
+| --- | --- |
+| interpreter, JVM | a call into the interface's provider, with the member name `"bucket-drop"` and the handle as its only argument |
+| Preview 1 WASM (`-o prog.wasm`) | a **no-op**. A handle there is an opaque integer the host handed over and the guest holds nothing; importing a release function the WIT never declared would be inventing one |
+| `--component` | `canon resource.drop` — the handle goes back to the host's own table |
+| `--no-gc` | it rejects `rontolisp:wit-import` itself |
+
+ここから 2 つのことが導かれます。どちらも「行儀の良さ」以上の話です。
+
+- **インターフェースは drop を作法ではなく「義務」にできます。** `wasi:http` は、
+  `outgoing-body` の子である `output-stream` を body を finish する前に drop
+  しなければならないと定めており、そうしないと呼び出しは**トラップ**します。drop
+  できないプログラムは、そもそもリクエストボディを送れません。
+- **ハンドルの drop が解放するのは*参照*であって、その先にあるものではありません。**
+  ストアは — ファイルも、ソケットも — そのままそこに残ります。次の `kv:open`
+  はすべてのキーをそのまま見ます。drop が何を*意味するか*を決めるのは常にプロバイダで
+  あって、言語ではありません (下記)。
+
 ## プロバイダ
 
 インタプリタと JVM にはホストが存在しないため、呼び出しは**プロバイダ**へ向かいます。
 プロバイダとは、束縛された関数の Lisp メンバー名 (**文字列** — `"open"`、
-`"bucket-get"`) に続けてその関数の引数を受け取る、通常の Lisp
+`"bucket-get"`、そしてリソースの解放なら `"bucket-drop"`)
+に続けてその関数の引数を受け取る、通常の Lisp
 呼び出し可能オブジェクトです。[`rontolisp:wit-provide`](rontolisp-wit-provide.md)
 がそれを束縛します。
 
@@ -324,9 +376,11 @@ variant のどの case でもないキーワードを渡すのは**型エラー*
 - 束縛できるのは**インターフェース**だけです。world の `import`
   項目は読まれません (コンポーネントの WASI インポートは、それが構築される固定の
   アダプタ表面から来ます)。
-- リソースハンドルは不透明で、rontolisp が解放することはありません。`drop`
-  はありません。インターフェース自身が解放用の関数を宣言していれば、それは他の
-  メンバーと同様に束縛されます。
+- リソースハンドルは不透明で — その整数から何かを読み取ってよいのは、それを手渡した
+  当人だけです — rontolisp が勝手に解放することはありません。解放できるのは
+  [`<resource>-drop`](#リソースを解放する-resource-drop) だけです。WIT
+  リソースに `cl:close` は使えません。そのハンドルはプロバイダ (あるいはホスト)
+  の私的な番号付けであって、rontolisp のストリームテーブルの枠ではないからです。
 - WASM バックエンドでは、他の関数と同様に 7 引数のアリティ制限が束縛にも適用されます。
   メソッドの先頭の `self` も数えます。
 - コンパイルされた Preview 1 モジュールをインスタンス化するには、ツリーシェイキング後に

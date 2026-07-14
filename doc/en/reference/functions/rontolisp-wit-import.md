@@ -120,6 +120,7 @@ host that has never heard of the program. The output is identical all three ways
 | `resource bucket` method `get: func(key: string) -> ...` | `kv:bucket-get` | `(kv:bucket-get b "visits")` |
 | `resource bucket` `constructor(...)` | `kv:bucket-new` | `(kv:bucket-new ...)` |
 | `resource bucket` `static func from-name` | `kv:bucket-from-name` | `(kv:bucket-from-name "x")` |
+| `resource bucket` — its **release** (WIT declares no function for it) | `kv:bucket-drop` | `(kv:bucket-drop b)` |
 
 A resource member is prefixed with the resource, so two resources may declare
 the same method without colliding in the flat Lisp-2 function namespace, and a
@@ -128,6 +129,14 @@ implicit). The other parameters are named exactly as the WIT names them, and a
 resource itself is an opaque integer handle. Each binding is an **ordinary
 function**, so `#'kv:bucket-get`, `funcall`, `mapcar` and `eval` work on it with
 no extra wiring.
+
+The last row is the odd one out: a `.wit` never declares a function that
+releases a resource, because the component model makes releasing one a canonical
+built-in rather than a member of the interface. So there is nothing to bind — and
+rontolisp names it anyway, as **`<resource>-drop`**, symmetric with the
+`<resource>-new` a constructor binds. Both are rontolisp spellings of something
+WIT does not name as a function. See
+[Releasing a resource](#releasing-a-resource-resource-drop).
 
 ## How it lowers
 
@@ -182,12 +191,53 @@ instance (so, under `wasmtime serve`, per request), while a host that links an
 out-of-process provider — wasmCloud, say — keeps it. The component is the same
 either way.
 
+## Releasing a resource (`<resource>-drop`)
+
+A handle you were given has to be given back, and **WIT declares no function for
+that**: releasing a resource is a canonical built-in of the component model, not
+a member of the interface, so there is nothing in the `.wit` for a binder to
+find. rontolisp binds it as **`<resource>-drop`** — one argument, the handle:
+
+```console
+;;; The handle kv:open handed over -- give it back when the work is done.
+(let ((bucket (kv:open "")))
+  (kv:bucket-set bucket "visits" "41")
+  (print (kv:bucket-get bucket "visits"))
+  (kv:bucket-drop bucket))
+```
+
+It is bound **only when the program names it**, which is why a program compiled
+before drops existed comes out byte-identical: nothing in it mentions a `-drop`
+name. A WIT *function*, by contrast, is bound whether the program calls it or not
+(Preview 1 binds the whole interface). `--no-prune` and `--dynamic` bind every
+resource's drop instead — and so does the interpreter, which compiles nothing
+whose bytes have to stay the same.
+
+| Backend | `(kv:bucket-drop b)` becomes |
+| --- | --- |
+| interpreter, JVM | a call into the interface's provider, with the member name `"bucket-drop"` and the handle as its only argument |
+| Preview 1 WASM (`-o prog.wasm`) | a **no-op**. A handle there is an opaque integer the host handed over and the guest holds nothing; importing a release function the WIT never declared would be inventing one |
+| `--component` | `canon resource.drop` — the handle goes back to the host's own table |
+| `--no-gc` | it rejects `rontolisp:wit-import` itself |
+
+Two things follow, and both matter more than tidiness:
+
+- **An interface may make dropping an obligation, not a courtesy.** `wasi:http`
+  says an `outgoing-body`'s child `output-stream` must be dropped before the body
+  is finished — otherwise the call **traps**. A program that cannot drop cannot
+  send a request body at all.
+- **Dropping a handle releases the *reference*, not the thing behind it.** The
+  store — or the file, or the socket — stays exactly where it was; the next
+  `kv:open` sees every key still in it. What a drop *means* is the provider's
+  decision, never the language's (below).
+
 ## Providers
 
 On the interpreter and the JVM there is no host, so the call goes to a
 **provider**: an ordinary Lisp callable taking the bound function's Lisp member
-name (a **string** — `"open"`, `"bucket-get"`) followed by that function's
-arguments. [`rontolisp:wit-provide`](rontolisp-wit-provide.md) binds one:
+name (a **string** — `"open"`, `"bucket-get"`, and `"bucket-drop"` for a
+resource's release) followed by that function's arguments.
+[`rontolisp:wit-provide`](rontolisp-wit-provide.md) binds one:
 
 ```console
 (rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-store)
@@ -319,9 +369,11 @@ decides what to make of it.
   the JVM backend takes the `cl` function.
 - Only an **interface** can be bound. A world's `import` items are not read (a
   component's WASI imports come from the fixed adapter surface it is built on).
-- A resource handle is opaque and is never released by rontolisp — there is no
-  `drop`; the interface's own release function, if it declares one, is bound like
-  any other member.
+- A resource handle is opaque — only whoever handed it out may read anything into
+  the integer — and rontolisp never releases one on its own. It is released by
+  [`<resource>-drop`](#releasing-a-resource-resource-drop) and by nothing else:
+  `cl:close` does not apply to a WIT resource, whose handles are the provider's
+  (or the host's) private numbering, not a slot in a rontolisp stream table.
 - On the WASM backend the 7-parameter arity limit applies to a binding like any
   other function, counting a method's leading `self`.
 - Instantiating the compiled Preview 1 module requires the host to provide every

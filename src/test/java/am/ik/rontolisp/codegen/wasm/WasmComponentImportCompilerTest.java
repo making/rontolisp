@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
@@ -13,6 +14,7 @@ import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.wasm.ComponentWriter;
+import am.ik.wasm.Type;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.io.TempDir;
@@ -97,8 +99,12 @@ class WasmComponentImportCompilerTest {
 	// defines the %wit-result envelope unwrapper the result wrappers call) is spliced in
 	// when the program references it.
 	private static byte[] compileComponent(String source) {
-		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary.process(LispReader.readAllFromString(source));
-		return new WasmLispCompiler(false, true).compile(program);
+		return compileForms(LispReader.readAllFromString(source));
+	}
+
+	// The same path, from forms a directive lowered rather than from source text.
+	private static byte[] compileForms(List<LispVal> forms) {
+		return new WasmLispCompiler(false, true).compile(am.ik.rontolisp.eval.WitLibrary.process(forms));
 	}
 
 	// The same path in SERVE mode: the CLI splices the %http-dispatch wrapper last (after
@@ -194,6 +200,38 @@ class WasmComponentImportCompilerTest {
 		throw new AssertionError("no instance type precedes the import of '" + ifaceId + "'");
 	}
 
+	// The program's own core module: the LAST of the component's embedded core modules
+	// (the
+	// memory module and the WASI adapter precede it in every blob variant).
+	private static byte[] coreModule(List<Section> sections) {
+		byte[] core = null;
+		for (Section section : sections) {
+			if (section.id() == ComponentWriter.SEC_CORE_MODULE) {
+				core = section.payload();
+			}
+		}
+		return Objects.requireNonNull(core, "the component embeds no core module");
+	}
+
+	// The bytes a core module's import section carries for a FUNC import of (module,
+	// field): the two length-prefixed names, then importdesc 0x00. Both names are short,
+	// so
+	// each length is a one-byte LEB128. (The type index that follows is not checked here
+	// --
+	// theComponentImportingADropValidates is what cross-checks it against the canon
+	// resource.drop, which is the only place the two sides can disagree.)
+	private static byte[] coreFuncImport(String module, String field) {
+		byte[] m = module.getBytes(StandardCharsets.UTF_8);
+		byte[] f = field.getBytes(StandardCharsets.UTF_8);
+		byte[] entry = new byte[m.length + f.length + 3];
+		entry[0] = (byte) m.length;
+		System.arraycopy(m, 0, entry, 1, m.length);
+		entry[1 + m.length] = (byte) f.length;
+		System.arraycopy(f, 0, entry, 2 + m.length, f.length);
+		entry[entry.length - 1] = 0x00; // importdesc: func
+		return entry;
+	}
+
 	// The component type index an instance import points at -- the trailing `0x05 <type>`
 	// externdesc of the single entry its section carries. Every index here is a one-byte
 	// LEB128 (a component has a few dozen types, not a few hundred).
@@ -221,6 +259,27 @@ class WasmComponentImportCompilerTest {
 		return compileComponent(
 				"(defpackage tk (:use cl) (:export token-value))\n" + "(defpackage bg (:use cl) (:export take))\n"
 						+ (providerFirst ? tokens + bag : bag + tokens) + "(print (tk:token-value (bg:take)))\n");
+	}
+
+	// A program that binds the `token` resource's DROP -- the one binding WIT declares no
+	// function for -- alongside one of its methods.
+	private static byte[] tokensDropComponent() {
+		return compileComponent(
+				"(defpackage tk (:use cl) (:export token-value token-drop))\n"
+						+ importForm(TOKENS_ID, TOKENS_WIT, "(\"token-value\" \"tk:token-value\")",
+								"(:drop \"token\" \"tk:token-drop\")")
+						+ "(print (tk:token-value 1))\n(tk:token-drop 1)\n");
+	}
+
+	// The same program as the DIRECTIVE lowers it, with and without a call to the drop --
+	// which is the only thing that decides whether one is bound at all.
+	private static byte[] tokensComponentNaming(boolean drop) {
+		List<LispVal> forms = new ArrayList<>(WitImportDirective.lower(
+				new WitImportDirective.Directive("x.wit", TOKENS_ID, "tk", null, WitImportDirective.FieldStyle.CAMEL),
+				TOKENS_WIT, "x.wit", WitExportDirective.Backend.WASM_COMPONENT, java.util.Set.of("token-value"),
+				drop ? java.util.Set.of("token-drop") : java.util.Set.of()));
+		forms.addAll(LispReader.readAllFromString("(print (tk:token-value 1))" + (drop ? "\n(tk:token-drop 1)" : "")));
+		return compileForms(forms);
 	}
 
 	@Test
@@ -734,6 +793,119 @@ class WasmComponentImportCompilerTest {
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("cannot bind the resource 'token', which it uses from '" + TOKENS_ID + "'")
 			.hasMessageContaining("(rontolisp:wit-import ... :interface \"" + TOKENS_ID + "\")");
+	}
+
+	@Test
+	void dropsAResourceThroughCanonResourceDropAndAnOrdinaryCoreImport() {
+		// A drop is not a WIT function, so there is no instance function to alias and
+		// nothing to `canon lower`: the outer side is a SECOND emission kind -- project
+		// the
+		// resource type out of the instance that owns it, then `canon resource.drop` it,
+		// which produces a CORE function with no component function behind it. The core
+		// side, by contrast, is an ordinary host import, so the placeholder-ordinal /
+		// WasmImportInjector machinery is reused unchanged. The two sides meet BY NAME
+		// through the synthesized core instance, so their orders are independent.
+		List<Section> sections = sections(tokensDropComponent());
+		int imported = importSectionIndex(sections, TOKENS_ID);
+		int tokensType = importedInstanceTypeIndex(sections, TOKENS_ID);
+		// Right after the one import, in this order: the bound functions' aliases, their
+		// canon lowers, then the drop's alias and its canon, then the core instance.
+		Section alias = sections.get(imported + 3);
+		Section canon = sections.get(imported + 4);
+		Section coreInstance = sections.get(imported + 5);
+		assertThat(alias.id()).isEqualTo(ComponentWriter.SEC_ALIAS);
+		// The instance index is the only operand left free here -- it counts the blob
+		// variant's own fixed WASI imports.
+		int instance = alias.payload()[3];
+		assertThat(alias.payload())
+			.isEqualTo(ComponentWriter.vec(List.of(ComponentWriter.aliasInstanceType(instance, "token"))));
+		// `canon resource.drop` names a TYPE, and it is the one that projection produced:
+		// the index right after the instance type the import points at.
+		assertThat(canon.id()).isEqualTo(ComponentWriter.SEC_CANON);
+		assertThat(canon.payload())
+			.isEqualTo(ComponentWriter.vec(List.of(ComponentWriter.canonResourceDrop(tokensType + 1))));
+		assertThat(coreInstance.id()).isEqualTo(ComponentWriter.SEC_CORE_INSTANCE);
+		assertThat(containsAscii(coreInstance.payload(), "[resource-drop]token")).isTrue();
+		// The core module imports it like any other host function: module = the canonical
+		// interface id, field = "[resource-drop]token", type (func (param i32)) -- the
+		// i31
+		// handle, unboxed.
+		assertThat(containsBytes(coreModule(sections), coreFuncImport(TOKENS_ID, "[resource-drop]token"))).isTrue();
+		assertThat(WasmComponentImportCompiler.dropParamTypes()).containsExactly(Type.I32);
+	}
+
+	@Test
+	void aDropCostsACoreFunctionAndNoComponentFunction() {
+		// THE trap. `canon resource.drop` produces a core function directly, so a drop
+		// adds
+		// to the CORE function index space and not to the component one -- and the single
+		// number the user imports used to cost becomes two. canonLift's operand and
+		// appendFuncExports' core cursor must count the drops;
+		// componentInstanceFromFunc's
+		// must not. Get it backwards and you get a component that VALIDATES while lifting
+		// the wrong core function.
+		WasmComponentImportCompiler.Import tokens = parseImport(TOKENS_ID, TOKENS_WIT,
+				"(\"token-value\" \"tk:token-value\")", "(:drop \"token\" \"tk:token-drop\")");
+		assertThat(tokens.decls()).hasSize(1);
+		assertThat(tokens.drops()).hasSize(1);
+		assertThat(WasmComponentBuilder.userImportFuncs(List.of(tokens))).isEqualTo(1);
+		assertThat(WasmComponentBuilder.userImportCoreFuncs(List.of(tokens))).isEqualTo(2);
+		// The TYPE space grows too: the instance type, plus the `token` the drop's canon
+		// names.
+		assertThat(WasmComponentBuilder.userImportTypes(List.of(tokens))).isEqualTo(2);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.codegen.wasm.WitOracleE2eTest#wasmToolsIsAvailable")
+	void theComponentImportingADropValidates(@TempDir Path tempDir) throws Exception {
+		// The counter split above is only worth what a real validator says of it: a
+		// mis-split lift yields a component that fails to validate -- or, worse, one that
+		// validates while lifting the wrong function. This is also what cross-checks the
+		// core import's (func (param i32)) against the type `canon resource.drop` gives
+		// its
+		// core function. Runs where a wasm-tools binary is on PATH (like
+		// WitOracleE2eTest).
+		Path file = tempDir.resolve("token-drop.wasm");
+		Files.write(file, tokensDropComponent());
+		Process process = new ProcessBuilder("wasm-tools", "validate", "--features", "all", file.toString())
+			.redirectErrorStream(true)
+			.start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor()).as(output).isZero();
+	}
+
+	@Test
+	void aProgramThatNamesNoDropCompilesToTheBytesItAlwaysDid() {
+		// The whole byte-identity property rests on ONE rule: a drop binds only when the
+		// program names it. So the same source, compiled without the `-drop` call, must
+		// reach the backend with no drop member at all -- and come out as the very bytes
+		// a
+		// component built before drops existed did, which is what the hand-written import
+		// form (the shape the directive emitted then) stands in for here.
+		byte[] preDrops = compileComponent("(defpackage tk (:use cl) (:export token-value))\n"
+				+ importForm(TOKENS_ID, TOKENS_WIT, "(\"token-value\" \"tk:token-value\")")
+				+ "(print (tk:token-value 1))\n");
+		assertThat(tokensComponentNaming(false)).isEqualTo(preDrops);
+		assertThat(containsAscii(preDrops, "resource-drop")).isFalse();
+		// And naming it really does move the bytes -- otherwise the pin above would hold
+		// for a feature that does nothing.
+		assertThat(tokensComponentNaming(true)).isNotEqualTo(preDrops);
+	}
+
+	@Test
+	void aResourceThatIsOnlyDroppedIsStillDeclaredInTheInstanceType() {
+		// The type encoder declares a resource LAZILY -- only when a bound function's
+		// signature reaches one -- and a program may bind nothing of an interface but a
+		// drop. The drop has to force the declaration: `canon resource.drop` projects the
+		// resource out of this instance, and an instance can only be projected from for a
+		// name it EXPORTS. It also makes such an import legal at all, since an interface
+		// whose functions the program never calls is otherwise dead weight.
+		byte[] component = compileComponent("(defpackage tk (:use cl) (:export token-drop))\n"
+				+ importForm(TOKENS_ID, TOKENS_WIT, "(:drop \"token\" \"tk:token-drop\")") + "(tk:token-drop 1)\n");
+		List<Section> sections = sections(component);
+		assertThat(sections.get(instanceTypeSectionIndex(sections, TOKENS_ID)).payload()).isEqualTo(ComponentWriter.vec(
+				List.of(ComponentWriter.instanceTypeOf(List.of(ComponentWriter.instanceDeclExportResource("token"))))));
+		assertThat(containsAscii(component, "[resource-drop]token")).isTrue();
 	}
 
 }

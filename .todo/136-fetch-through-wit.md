@@ -161,11 +161,51 @@ Gotcha for whoever writes `fetch.lisp`: the `scheme` variant's cases are `HTTP` 
 so the keyword is `:HTTP`, not `:http` (keywords are case-preserving, and one naming no case
 traps `unreachable`).
 
-### Left to do
+### Left to do (F and G; D is done, below)
 
-## D — resource `drop`: the design, written out
+- **F** — `fetch.lisp` + `FetchLibrary` (component-path-only splice, inline WIT on the
+  classpath; the ordering trap is that `WitImportInliner` runs BEFORE the library splices).
+  Everything it needs now exists: the POST probe in the scratchpad IS `fetch.lisp`, modulo
+  the splice mechanism and the `rontolisp:fetch` promise API (`fetch-start` / `fetch-await`
+  back a `rontolisp:await`-able promise — preserve that, do not quietly make fetch
+  synchronous).
+- **G** — delete the blobs, the `H_*` constants, `buildHttp`; regen the WIT fixtures; the
+  `rontolisp` package function roster in `ci-spec.yaml` (fetch becomes a Lisp defun). Also
+  the `--emit-wit` ORACLE (`WitOracleE2eTest`) has never been run against a cross-interface
+  import: the world we print is a coherent document and re-parses, but whether it is
+  BYTE-identical to `wasm-tools component wit` on the same bytes is unmeasured. Measure it
+  before shipping, and if it differs, decide deliberately (the fixed-variant fixtures are
+  byte-diffed; nothing forces the user-import side to be).
 
-Steps A-C landed as commit `a74421f`. **D is next, and it is what a request BODY needs**
+## D — resource `drop`: DONE (2026-07-15). Design below; what it cost, first
+
+**PROVEN**: a POST written entirely in Lisp over wit-imported `wasi:io/{poll,error,streams}`
++ `wasi:http/{types,outgoing-handler}` sends a request BODY and reads the response back from
+wasmtime's real `wasi:http` — the case a GET could dodge, because `outgoing-body.finish`
+traps unless the child `output-stream` is dropped first. Every artifact that existed before
+is byte-identical (a 0-import component, keyvalue, a serve component and the Lisp-fetch
+component all hash the same), because nothing names a `-drop`. Interpreter and JVM dispatch
+`"bucket-drop"` to the provider; a dropped handle then answers `no-such-store` while the
+STORE survives and the next `open` reads every key.
+
+Three things it cost that are not in the design below:
+
+- **A wrapper's first parameter is local slot 1, not 0.** Every compiled function carries an
+  implicit closure environment in slot 0 (`WasmLispCompiler`: *"Slot 0 = env (unused for
+  defuns), params start at slot 1"*). The first drop wrapper read slot 0 and trapped casting
+  the null env to an i31 — a `cast failure` with no other clue.
+- **`examples/wit/keyvalue/memory-store.lisp` hung its DATA off the handle**, so a naive
+  `(remhash handle ...)` would have deleted the store. It now keys the data by store
+  IDENTIFIER with the handle table a separate indirection, and hands out a FRESH handle per
+  `open` (what a real host does). Dropping a handle releases the reference, not the store —
+  which is the thing the example is now there to teach.
+- **Measured, and it contradicts a comment that was in the tree:** wasmtime's own
+  `-S keyvalue=y` provider hands each `open` an INDEPENDENT snapshot — a write through one
+  bucket is invisible to a later `open` there (a seeded key still reads back, so it is not a
+  plumbing failure). It is an in-memory convenience, not a store. The old comment claiming
+  "two opens of the same store see each other's writes (the host's rule)" was simply false.
+
+Steps A-C landed as commit `a74421f`. **D is what a request BODY needs**
 (Blocker 1 above: `wasi:http` makes `outgoing-body.finish` TRAP unless the child
 `output-stream` is dropped first, `types.wit:518-521`; the WAT adapter duly calls `drop-out`
 immediately before `body_finish`, `adapter-http-client.wat:392-393`). The GET-only probe got
@@ -231,15 +271,6 @@ worth having in a readable example.
 **Nothing existing changes**: no program references a `-drop` name today, so every artifact
 stays byte-identical, the emitted `--emit-wit` world is unchanged (a drop is a canonical
 built-in, not a WIT function), and `WitOracleE2eTest` is untouched.
-- **F** — `fetch.lisp` + `FetchLibrary` (component-path-only splice, inline WIT on the
-  classpath; the ordering trap is that `WitImportInliner` runs BEFORE the library splices).
-- **G** — delete the blobs, the `H_*` constants, `buildHttp`; regen the WIT fixtures; the
-  `rontolisp` package function roster in `ci-spec.yaml` (fetch becomes a Lisp defun). Also
-  the `--emit-wit` ORACLE (`WitOracleE2eTest`) has never been run against a cross-interface
-  import: the world we print is a coherent document and re-parses, but whether it is
-  BYTE-identical to `wasm-tools component wit` on the same bytes is unmeasured. Measure it
-  before shipping, and if it differs, decide deliberately (the fixed-variant fixtures are
-  byte-diffed; nothing forces the user-import side to be).
 
 Two things todo 133 leaves you:
 

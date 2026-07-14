@@ -570,6 +570,7 @@ and the `list-functions` tests on every backend.
 | `resource bucket { get: func(...) }` | `bucket-get`, handle FIRST: `(kv:bucket-get b "k")` |
 | `resource bucket { constructor(...) }` | `bucket-new` |
 | `resource bucket { f: static func(...) }` | `bucket-f` |
+| `resource bucket` — its RELEASE, which WIT declares no func for | `bucket-drop`, handle its only argument — bound only when the program NAMES it ("Resource drops" below) |
 
 - The resource prefix is what keeps the flat, Lisp-2 function namespace unambiguous when
   two resources declare the same method name.
@@ -800,6 +801,71 @@ symbol names the program textually references, the `LibraryDefunPruner` conventi
 directive binds only those; `--no-prune` / `--dynamic` disable it. Measured: a program
 calling 2 of `wasi:keyvalue`'s 6 functions imports exactly 2, and the now-unreachable
 `key-response` record vanishes from the component's type too.
+
+### Resource drops — `<resource>-drop` (step D of todo 136, 2026-07-14)
+
+A `resource` is released by a canonical built-in, not by a WIT function: nothing in
+`WitResolver.functions` yields one, so a program that RECEIVED a handle had no way to give
+it back. `WitImportDirective` therefore walks `iface.items()` for `WitItem.ResourceDef`
+itself and binds **`<resource>-drop`** (`kv:bucket-drop`, one parameter — the handle),
+symmetric with the `<resource>-new` a constructor binds; the synthetic name goes through
+the same `allMembers` set, so an interface that really declares a method called `drop` is
+still the existing "binds 'x' twice" error. Not a nicety: `wasi:http` makes
+`outgoing-body.finish` TRAP unless the child `output-stream` is dropped first
+(`types.wit:518-521`), so without drops a Lisp `fetch` could not send a request BODY at
+all.
+
+**Reference-gated, on every backend — and that is what buys byte identity.** A drop is not
+a WIT function, so it is deliberately OUTSIDE the "Preview 1 binds every function"
+convention: `WitImportInliner` passes `referencedNames(program)` as a **drop filter**
+alongside the component `memberFilter` (`WitImportDirective.lower`'s 6-arg overload), so a
+program that never writes a `-drop` name emits nothing new. Verified: a 0-import component,
+the keyvalue component, a serve component and the Lisp-fetch component all hash the same
+before and after. `--no-prune` / `--dynamic` bind them all; so does the interpreter
+(`LispEvaluator.evalWitImport` passes a null drop filter — it produces no artifact to keep
+identical, and a program may reach a drop through `funcall` / `eval`).
+
+Per backend:
+
+| backend | `(kv:bucket-drop b)` |
+|---|---|
+| interpreter / JVM | the ordinary `providerDefun` — the provider gets the member string `"bucket-drop"`. The core does NOT decide what a drop MEANS; the provider does (a Java store closes a connection, a Lisp store forgets a handle, a provider with nothing to release answers nil) |
+| Preview 1 WASM | a **no-op defun** `(defun kv:bucket-drop (self) self nil)` and **NO `wasm-import`**: importing a `[resource-drop]` field would invent a host function the interface never declared, breaking the byte-identity-with-a-hand-written-import-block property and the browser demos' hand-written JS import objects. A P1 handle is an opaque integer the host handed over; the guest holds nothing |
+| `--component` | core side = an ORDINARY core import (module = the canonical iface id, field = `"[resource-drop]bucket"`, type `(func (param i32))`), so `PLACEHOLDER_FUNC_BASE + ordinal` / `WasmImportInjector` are reused unchanged. Outer side = a SECOND emission kind (below) |
+| `--no-gc` | unchanged — `wit-import` is already rejected there |
+
+**Why the outer side is a second emission kind, and the TWO counters it forces.**
+`canon resource.drop` (`ComponentWriter.canonResourceDrop`, fed by an
+`aliasInstanceType(ownerInstance, resource)`) produces a **CORE function with NO component
+function behind it** — unlike a bound function, which costs one component-func alias AND
+one `canon lower`ed core func. So `WasmComponentBuilder` now has two numbers where it had
+one, and mixing them yields a component that VALIDATES while lifting the wrong core
+function:
+
+- `userImportFuncs` = decls only → every **component**-func index (`componentInstanceFromFunc("run", ...)`, `appendFuncExports`'s component cursor)
+- `userImportCoreFuncs` = decls **+ drops** → every **core**-func index (`canonLift`'s operand in `WasmComponentBuilder` and in both `WasmServeComponentBuilder` variants, `appendFuncExports`'s core cursor)
+- `userImportTypes` = interfaces + projected + **dropped** resources → the first free TYPE index. A dropped resource must be projected out of its instance for `canon resource.drop` to name it, and `appendUserImports` REUSES the projection a `use` clause already made (keyed `ifaceId#resource`), so the count must not double it.
+
+Two more things the drop forced, both of which will bite again:
+
+- **A wrapper's first parameter is local slot 1, not 0.** Every compiled function carries an
+  implicit closure environment in slot 0 and starts its parameters at 1
+  (`WasmComponentImportCompiler.buildDropBody`). The first drop wrapper read slot 0 and
+  trapped casting the null env to an `i31`.
+- **The encoder declares resources LAZILY** (only when a bound function's signature reaches
+  one), so a resource that is ONLY dropped is never declared. `WasmComponentBuilder` /
+  `WitImportWorldEmitter` force-declare it through the `provided` hook, after the function
+  walk — which keeps the bytes unchanged when the resource was already reached (the
+  keyvalue shape). `--emit-wit` prints it into the world the same way; a drop itself never
+  appears there (it is a canonical built-in, not a WIT function), so the emitted world is
+  unchanged.
+
+**The example teaches the semantics, and had to be fixed to do it.**
+`examples/wit/keyvalue/memory-store.lisp` hung its DATA off the handle, so a naive
+`(remhash handle ...)` would have deleted the STORE. It now keys the data by store
+IDENTIFIER with the handle table as a separate indirection (the Java store likewise), so
+**dropping a handle releases the reference, not the store** — the next `open` sees every
+key. That is the line the doc pages carry too.
 
 ## Rich PARAMETERS across the component boundary (todo 133, 2026-07-14)
 

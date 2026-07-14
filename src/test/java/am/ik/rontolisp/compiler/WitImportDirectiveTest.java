@@ -1,6 +1,7 @@
 package am.ik.rontolisp.compiler;
 
 import java.util.List;
+import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
@@ -9,6 +10,8 @@ import am.ik.rontolisp.compiler.WitImportDirective.Directive;
 import am.ik.rontolisp.compiler.WitImportDirective.FieldStyle;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
+
+import org.jspecify.annotations.Nullable;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -130,6 +133,14 @@ class WitImportDirectiveTest {
 	// The `api` interface of iface(...), bound without a package.
 	private static List<LispVal> lowerApi(String body, Backend backend) {
 		return lower(iface(body), backend, new Directive(WIT, API, null, null, FieldStyle.CAMEL));
+	}
+
+	// The keyvalue store, with a filter over the resource DROPS -- the one thing the WIT
+	// does not decide, since a drop is not a WIT function and binds only when the program
+	// names it. Every function binds (no member filter).
+	private static List<LispVal> lowerKeyvalue(Backend backend, @Nullable Set<String> dropFilter) {
+		return WitImportDirective.lower(new Directive(WIT, STORE, "kv", null, FieldStyle.CAMEL), KEYVALUE, WIT, backend,
+				null, dropFilter);
 	}
 
 	private static String printed(List<LispVal> forms) {
@@ -378,6 +389,97 @@ class WitImportDirectiveTest {
 				:params (quote (:int)) :returns :void)
 				(rontolisp:wasm-import (quote owner) :from "api" :as "owner" \
 				:params (quote (:int)) :returns :string)""");
+	}
+
+	@Test
+	void bindsAResourceDropOnlyWhenTheProgramNamesIt() {
+		// A resource is released by its interface's drop, which WIT declares no function
+		// for -- so WitResolver.functions never yields one, and a program that receives a
+		// handle would have no way to give it back. It binds as `<resource>-drop`,
+		// symmetric with the `<resource>-new` a constructor binds.
+		//
+		// And ONLY when the program names it, on every backend: a drop is not a WIT
+		// function, so it is outside the "Preview 1 binds every function" convention --
+		// and that one rule is what keeps every artifact that existed before drops
+		// byte-identical, since nothing in one references a `-drop` name.
+		assertThat(printed(lowerKeyvalue(Backend.OTHER, Set.of("bucket-get")))).doesNotContain("bucket-drop");
+		assertThat(printed(lowerKeyvalue(Backend.OTHER, Set.of("bucket-drop")))).contains("kv:bucket-drop");
+		// No filter at all = every resource's drop: --no-prune / --dynamic, and the
+		// interpreter, which produces no artifact to keep identical.
+		assertThat(printed(lowerKeyvalue(Backend.OTHER, null))).contains("kv:bucket-drop");
+		// The 5-arg overload binds NONE, which is what leaves every existing caller --
+		// and
+		// every artifact it built -- exactly as it was.
+		assertThat(printed(WitImportDirective.lower(new Directive(WIT, STORE, "kv", null, FieldStyle.CAMEL), KEYVALUE,
+				WIT, Backend.OTHER, null)))
+			.doesNotContain("bucket-drop");
+	}
+
+	@Test
+	void lowersAResourceDropIntoAProviderDefunOnTheInterpreterAndJvm() {
+		// An ordinary provider defun, like every other binding, and the bound name joins
+		// the package's exports. The core does NOT decide what a drop MEANS -- the
+		// provider does (a Java store closes a connection, a Lisp one releases a handle
+		// into its table; one with nothing to release just returns nil).
+		List<LispVal> forms = lowerKeyvalue(Backend.OTHER, Set.of("bucket-drop"));
+		assertThat(printed(forms))
+			.startsWith("(defpackage kv (:use cl) "
+					+ "(:export open bucket-new bucket-get bucket-set bucket-count bucket-drop))")
+			.endsWith("(defun kv:bucket-drop (self) "
+					+ "(rontolisp::%wit-call \"wasi:keyvalue/store@0.2.0\" \"bucket-drop\" self))");
+	}
+
+	@Test
+	void lowersAResourceDropIntoANoOpDefunOnPreview1() {
+		// A no-op defun and NO rontolisp:wasm-import -- the absence is the point. A
+		// Preview 1 handle is an opaque integer the host handed over, so there is nothing
+		// on the guest side to release; importing a `[resource-drop]bucket` field would
+		// INVENT a host function the interface never declared, breaking both the
+		// byte-identity-with-a-hand-written-import-block property and the browser demos'
+		// hand-written JS import objects.
+		List<LispVal> forms = lowerKeyvalue(Backend.WASM_GC, Set.of("bucket-drop"));
+		assertThat(printed(forms)).isEqualTo("""
+				(defpackage kv (:use cl) (:export open bucket-new bucket-get bucket-set bucket-count bucket-drop))
+				(rontolisp:wasm-import (quote kv:open) :from "store" :as "open" \
+				:params (quote (:string)) :returns :int)
+				(rontolisp:wasm-import (quote kv:bucket-new) :from "store" :as "bucketNew" \
+				:params (quote (:string)) :returns :int)
+				(rontolisp:wasm-import (quote kv:bucket-get) :from "store" :as "bucketGet" \
+				:params (quote (:int :string)) :returns :string)
+				(rontolisp:wasm-import (quote kv:bucket-set) :from "store" :as "bucketSet" \
+				:params (quote (:int :string :string)) :returns :void)
+				(rontolisp:wasm-import (quote kv:bucket-count) :from "store" :as "bucketCount" \
+				:params (quote (:string)) :returns :int)
+				(defun kv:bucket-drop (self) self nil)""");
+	}
+
+	@Test
+	void carriesAResourceDropAsAKeywordMemberOfTheComponentImportForm() {
+		// On --component a drop is a SECOND emission kind (`canon resource.drop` produces
+		// a core function with no component function behind it), so the internal form has
+		// to tell it apart from a bound function: the (:drop "bucket" "kv:bucket-drop")
+		// member's keyword head is what does it, against a ("member" "lisp-name") pair.
+		assertThat(lowerKeyvalue(Backend.WASM_COMPONENT, Set.of("bucket-drop")).get(1).print())
+			.startsWith("(rontolisp::%component-import \"wasi:keyvalue/store@0.2.0\"")
+			.endsWith("(:drop \"bucket\" \"kv:bucket-drop\"))");
+		assertThat(lowerKeyvalue(Backend.WASM_COMPONENT, Set.of()).get(1).print()).doesNotContain(":drop");
+	}
+
+	@Test
+	void reportsAResourceThatDeclaresAMethodCalledDropAgainstTheWitLine() {
+		// The drop's name is SYNTHESIZED, so it goes through the same duplicate check
+		// every
+		// binding does: `bucket.drop` already binds `bucket-drop` in the flat Lisp-2
+		// function namespace, and the two cannot both have it. Reported whether or not
+		// the
+		// program names the drop, because the interface cannot be bound coherently either
+		// way.
+		String body = """
+				resource bucket {
+				  drop: func();
+				}""";
+		assertThatThrownBy(() -> lowerApi(body, Backend.OTHER)).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("kv.wit:4: interface 'api' binds 'bucket-drop' twice");
 	}
 
 	@Test

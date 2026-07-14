@@ -93,13 +93,30 @@ final class WasmComponentImportCompiler {
 	/**
 	 * A parsed {@code %component-import} form: the interface (for the component-level
 	 * wiring) plus its bound functions.
-	 *
 	 * @param ifaceId the interface's canonical id (the component import name)
 	 * @param iface the interface definition
 	 * @param resolver the resolver over the parsed WIT document
 	 * @param decls the bound functions, in WIT order
 	 */
-	record Import(String ifaceId, WitItem.InterfaceDef iface, WitResolver resolver, List<Decl> decls) {
+	/**
+	 * A bound resource {@code drop}.
+	 * <p>
+	 * Not a {@link Decl}: {@code canon resource.drop} is a different emission kind. It
+	 * produces a CORE function directly, with no component function alias and no
+	 * {@code canon lower} behind it -- which is why the user imports' core-function count
+	 * and their component-function count stop being the same number the moment a drop
+	 * exists.
+	 *
+	 * @param lispName the Lisp-visible synthetic defun name ({@code kv:bucket-drop})
+	 * @param module the WASM import module = the interface's canonical id
+	 * @param field the WASM import field = {@code "[resource-drop]bucket"}
+	 * @param resource the resource's name in its defining interface
+	 */
+	record Drop(String lispName, String module, String field, String resource) {
+	}
+
+	record Import(String ifaceId, WitItem.InterfaceDef iface, WitResolver resolver, List<Decl> decls,
+			List<Drop> drops) {
 	}
 
 	/**
@@ -193,9 +210,25 @@ final class WasmComponentImportCompiler {
 		WitCanonicalAbi abi = new WitCanonicalAbi(resolver, iface);
 		List<WitResolver.Func> funcs = WitResolver.functions(iface);
 		List<Decl> decls = new ArrayList<>();
+		List<Drop> drops = new ArrayList<>();
 		for (int i = 3; i < items.size(); i++) {
-			if (!(items.get(i) instanceof LispCons pair) || !(pair.car() instanceof LispString member)
-					|| !(pair.cdr() instanceof LispCons rest) || !(rest.car() instanceof LispString lispName)) {
+			if (!(items.get(i) instanceof LispCons pair) || !(pair.cdr() instanceof LispCons rest)) {
+				throw new UnsupportedOperationException(
+						"Malformed internal component-import member: " + items.get(i).print());
+			}
+			// (:drop "bucket" "kv:bucket-drop") -- the keyword head is what tells a drop
+			// apart from a ("member" "lisp-name") function binding.
+			if (pair.car() instanceof LispSymbol keyword && keyword.isKeyword()) {
+				if (!":drop".equals(keyword.name()) || !(rest.car() instanceof LispString resource)
+						|| !(rest.cdr() instanceof LispCons tail) || !(tail.car() instanceof LispString dropName)) {
+					throw new UnsupportedOperationException(
+							"Malformed internal component-import member: " + items.get(i).print());
+				}
+				drops.add(new Drop(dropName.value(), ifaceId.value(), "[resource-drop]" + resource.value(),
+						resource.value()));
+				continue;
+			}
+			if (!(pair.car() instanceof LispString member) || !(rest.car() instanceof LispString lispName)) {
 				throw new UnsupportedOperationException(
 						"Malformed internal component-import member: " + items.get(i).print());
 			}
@@ -206,7 +239,7 @@ final class WasmComponentImportCompiler {
 						"Internal component-import form names an unknown member: " + member.value()));
 			decls.add(new Decl(lispName.value(), ifaceId.value(), cabiFieldName(func), func, abi, abi.flatSig(func)));
 		}
-		return new Import(ifaceId.value(), iface, resolver, decls);
+		return new Import(ifaceId.value(), iface, resolver, decls, drops);
 	}
 
 	/**
@@ -340,6 +373,41 @@ final class WasmComponentImportCompiler {
 		}
 		entryWriter.write((Object) body.bytes());
 		return entry.toByteArray();
+	}
+
+	/**
+	 * Builds the code entry of a resource {@code drop} wrapper: unbox the i31 handle to
+	 * an {@code i32}, hand it to the host, return nil. The simplest wrapper there is --
+	 * no memory, no staging, no lift -- and it needs no locals beyond its one parameter.
+	 * @param ctxBuilder the shared context builder
+	 * @param drop the bound drop
+	 * @param ordinal the import's ordinal (shared with the function imports)
+	 * @return the code entry bytes
+	 */
+	static byte[] buildDropBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Drop drop, int ordinal) {
+		ByteArrayOutputStream entry = new ByteArrayOutputStream();
+		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(entry);
+		writer.write(0); // no local groups
+		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(entry).build();
+		// Local 1, not 0: every compiled function carries an implicit closure environment
+		// in
+		// slot 0 and starts its parameters at 1. Reading slot 0 here casts the null env
+		// to
+		// an i31 and traps.
+		writer.write(Instruction.GET_LOCAL);
+		writer.writeSignedLeb128(1);
+		WasmEmitHelper.castI31GetS(ctx);
+		writer.write(Instruction.CALL);
+		writer.writeUnsignedLeb128(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + ordinal);
+		writer.write(Instruction.REF_NULL);
+		writer.writeHeapType(Type.EQ.code());
+		writer.write(Instruction.END);
+		return entry.toByteArray();
+	}
+
+	/** Returns the WASM parameter types of a drop's core signature: the i32 handle. */
+	static Type[] dropParamTypes() {
+		return new Type[] { Type.I32 };
 	}
 
 	// One emission of a wrapper body, and what it cost in locals.

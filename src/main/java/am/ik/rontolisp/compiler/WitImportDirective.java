@@ -252,6 +252,36 @@ public final class WitImportDirective {
 	 */
 	public static List<LispVal> lower(Directive directive, String witSource, String witPath,
 			WitExportDirective.Backend backend, @Nullable Set<String> memberFilter) {
+		return lower(directive, witSource, witPath, backend, memberFilter, Set.of());
+	}
+
+	/**
+	 * Like {@link #lower(Directive, String, String, WitExportDirective.Backend, Set)},
+	 * plus the filter for resource {@code drop}s.
+	 * <p>
+	 * A WIT {@code resource} is released by its interface's {@code drop}, which the model
+	 * does not spell out as a function -- so there is nothing in
+	 * {@link WitResolver#functions} to bind, and a program that receives a handle has no
+	 * way to give it back. It is bound as <strong>{@code <resource>-drop}</strong>,
+	 * symmetric with the {@code <resource>-new} a constructor binds: both are rontolisp
+	 * spellings of something WIT does not name.
+	 * <p>
+	 * <strong>Only when the program names it</strong>, on every backend. A drop is not a
+	 * WIT function, so it is exempt from the "Preview 1 binds every function" convention
+	 * -- and this one rule is what keeps every artifact that existed before drops
+	 * byte-identical, since nothing references a {@code -drop} name in it.
+	 * @param directive the parsed directive
+	 * @param witSource the WIT text
+	 * @param witPath the WIT file path, for error messages
+	 * @param backend the backend being compiled for
+	 * @param memberFilter the FUNCTIONS to bind, or {@code null} for all of them
+	 * @param dropFilter the drop names the program references, or {@code null} to bind a
+	 * drop for every resource ({@code --no-prune} / {@code --dynamic}, and the
+	 * interpreter, which produces no artifact to keep identical)
+	 * @return the forms the directive stands for, in WIT order
+	 */
+	public static List<LispVal> lower(Directive directive, String witSource, String witPath,
+			WitExportDirective.Backend backend, @Nullable Set<String> memberFilter, @Nullable Set<String> dropFilter) {
 		if (backend == WitExportDirective.Backend.WASM_NO_GC) {
 			throw new UnsupportedOperationException("rontolisp:wit-import is not supported with --no-gc: the scalar "
 					+ "backend emits a plain MVP module with no imports");
@@ -320,6 +350,42 @@ public final class WitImportDirective {
 			bindings.add(wasm ? wasmImportForm(name, module, directive.fieldStyle().apply(member), params, returns)
 					: providerDefun(name, ifaceId, member, params));
 		}
+		// A resource is released by its own interface's `drop`, which WIT declares no
+		// function for -- see the lower() javadoc for the name and why it is bound only
+		// when
+		// the program asks for it.
+		for (WitItem item : iface.items()) {
+			if (!(item instanceof WitItem.ResourceDef resource)) {
+				continue;
+			}
+			String member = resource.name() + "-drop";
+			if (!allMembers.add(member)) {
+				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
+						+ iface.name() + "' binds '" + member + "' twice");
+			}
+			if (dropFilter != null && !dropFilter.contains(member)) {
+				continue;
+			}
+			boundMembers.add(member);
+			String name = directive.pkg() == null ? member : PackageRegistry.qualify(directive.pkg(), member);
+			if (component) {
+				componentMembers.add(dropBinding(resource.name(), name));
+			}
+			else if (wasm) {
+				// Preview 1: a handle is an opaque integer the host handed over -- there
+				// is
+				// no guest-side table and nothing to release. Importing a
+				// `[resource-drop]` field would INVENT a host function the interface
+				// never
+				// declared, breaking both the
+				// byte-identity-with-a-hand-written-import-block
+				// property and the browser demos' hand-written import objects.
+				bindings.add(noopDropDefun(name));
+			}
+			else {
+				bindings.add(providerDefun(name, ifaceId, member, List.of(new Param("self", ":int"))));
+			}
+		}
 		// A component may import an interface purely for its TYPES: wasi:io/streams' own
 		// `stream-error` carries a wasi:io/error `error` resource, and a resource is its
 		// defining interface's type, so that interface has to be imported for the type to
@@ -354,6 +420,22 @@ public final class WitImportDirective {
 	// ("member" "lisp-name") -- one bound member of a %component-import form.
 	private static LispVal memberBinding(String member, String lispName) {
 		return list(List.of(new LispString(member), new LispString(lispName)));
+	}
+
+	// (:drop "bucket" "kv:bucket-drop") -- a resource drop of a %component-import form.
+	// The
+	// keyword head is what tells it apart from a ("member" "lisp-name") function binding:
+	// `canon resource.drop` is a different emission kind, producing a CORE function with
+	// no
+	// component function behind it.
+	private static LispVal dropBinding(String resource, String lispName) {
+		return list(List.of(new LispSymbol(":drop"), new LispString(resource), new LispString(lispName)));
+	}
+
+	// (defun name (self) self nil) -- a Preview 1 drop, which releases nothing.
+	private static LispVal noopDropDefun(String name) {
+		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name),
+				list(List.of(new LispSymbol("self"))), new LispSymbol("self"), LispNil.INSTANCE));
 	}
 
 	// (rontolisp::%component-import "iface-id" "wit text" ("member" "lisp-name") ...) --

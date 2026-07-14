@@ -1077,6 +1077,23 @@ public final class WasmLispCompiler implements LispCompiler {
 				defuns.add(new DefunDecl(decl.lispName(), paramNames, false, List.of()));
 			}
 		}
+		// A resource drop binds the same way, and takes the handle as its one parameter.
+		// It follows the function bindings in the placeholder ordinal space, so the two
+		// maps are walked in this order everywhere below.
+		Map<String, WasmComponentImportCompiler.Drop> componentDropWrappers = new LinkedHashMap<>();
+		for (WasmComponentImportCompiler.Import imported : componentImports) {
+			for (WasmComponentImportCompiler.Drop drop : imported.drops()) {
+				boolean duplicate = componentDropWrappers.containsKey(drop.lispName())
+						|| componentImportWrappers.containsKey(drop.lispName())
+						|| defuns.stream().anyMatch(d -> d.name.equals(drop.lispName()));
+				if (duplicate) {
+					throw new UnsupportedOperationException(
+							"rontolisp:wit-import name collides with an existing function: " + drop.lispName());
+				}
+				componentDropWrappers.put(drop.lispName(), drop);
+				defuns.add(new DefunDecl(drop.lispName(), List.of("%component-import-p0"), false, List.of()));
+			}
+		}
 		// A :s-expr export parameter parses host-provided text with the embedded reader,
 		// so
 		// force the reader runtime on (FUNC_READ_EXPR must be a real body, not a stub).
@@ -1225,7 +1242,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// result calls the _str_from_mem helper, whose index follows the lambdas.
 		Map<String, Integer> importBodySlots = new HashMap<>();
 		for (DefunDecl defun : defuns) {
-			if (importWrappers.containsKey(defun.name) || componentImportWrappers.containsKey(defun.name)) {
+			if (importWrappers.containsKey(defun.name) || componentImportWrappers.containsKey(defun.name)
+					|| componentDropWrappers.containsKey(defun.name)) {
 				importBodySlots.put(defun.name, userFunctionBodies.size());
 				userFunctionBodies.add(null); // filled in below
 				continue;
@@ -1448,6 +1466,10 @@ public final class WasmLispCompiler implements LispCompiler {
 						strFromMemFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.lispName())), body);
 			}
+			for (WasmComponentImportCompiler.Drop drop : componentDropWrappers.values()) {
+				byte[] body = WasmComponentImportCompiler.buildDropBody(ctxBuilder, drop, ordinal++);
+				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(drop.lispName())), body);
+			}
 		}
 		if (!exportDecls.isEmpty()) {
 			int wrapperFuncIndex = exportHelperBase + helperFuncCount;
@@ -1547,8 +1569,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// import signatures: the component string-ABI block, or (mutually exclusive,
 		// since
 		// the host arena is non-component only) the two arena signatures.
-		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importWrappers.size()
-				+ componentImportWrappers.size();
+		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importWrappers.size() + componentImportWrappers.size()
+				+ componentDropWrappers.size();
 		int abiFuncBase = exportHelperBase + helperFuncCount + exportPlans.size();
 		int cabiReallocFuncIndex = abiFuncBase;
 		int cabiPostFuncBase = cabiReallocFuncIndex + 1;
@@ -1569,6 +1591,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {
 			hostImports
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), importTypeIndex++));
+		}
+		// A drop is an ORDINARY core import from the core module's side -- module = the
+		// interface's canonical id, field = "[resource-drop]<resource>", (func (param
+		// i32)).
+		// It is only the COMPONENT side that is different (canon resource.drop makes a
+		// core
+		// function with no component function behind it).
+		for (WasmComponentImportCompiler.Drop drop : componentDropWrappers.values()) {
+			hostImports
+				.add(new am.ik.wasm.WasmImportInjector.HostImport(drop.module(), drop.field(), importTypeIndex++));
 		}
 
 		List<byte[]> dispatchBodies = new ArrayList<>();
@@ -2040,6 +2072,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {
 					types.addFunc(WasmComponentImportCompiler.hostParamTypes(decl),
 							WasmComponentImportCompiler.hostResultTypes(decl));
+				}
+				// The drops follow the functions, matching the order importTypeIndex
+				// hands
+				// out the types above: a host import's declared type index is positional.
+				for (WasmComponentImportCompiler.Drop drop : componentDropWrappers.values()) {
+					types.addFunc(WasmComponentImportCompiler.dropParamTypes(), new Type[] {});
 				}
 				// Component string-ABI signatures (todo 92 Tier 2), from abiTypeBase:
 				// cabi_realloc, one cabi_post_* per flat-result signature, then one

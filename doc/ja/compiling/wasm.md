@@ -572,6 +572,21 @@ curl http://127.0.0.1:8080/index
 
 完全な例は [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue) にあります。
 
+### リソースを解放する(`<resource>-drop`)
+
+ハンドルは返さなければなりません。そして **WIT はそれを返すための関数を宣言しません**: リソースの解放はインターフェースのメンバーではなく、コンポーネントモデルの canonical な組み込み機能だからです。そこで rontolisp が名前を与えます — **`<resource>-drop`**、引数はハンドル 1 つ。コンストラクタが束縛する `<resource>-new` と対になる名前です:
+
+```console
+(let ((bucket (kv:open "")))
+  (kv:bucket-set bucket "visits" "41")
+  (print (kv:bucket-get bucket "visits"))
+  (kv:bucket-drop bucket))
+```
+
+これが束縛されるのは、**プログラムがその名前を書いたときだけ**です (`--no-prune` と `--dynamic` はすべてのリソースの drop を束縛します)。だからこそ、drop が存在しなかった頃にコンパイルされたコンポーネントはバイト単位で同一のまま出てきます — 呼ぶかどうかに関わらず束縛される WIT の*関数*とは対照的です。インタプリタと JVM では、drop はメンバー名 `"bucket-drop"` としてインターフェースのプロバイダに届きます。したがってそれが何を*意味するか*はプロバイダが決めます: ハンドルを忘れる、接続を閉じる、あるいは解放するものが無いので `nil` を返す。Preview 1 では **no-op** です — そこでのハンドルはホストが手渡した不透明な整数にすぎず、WIT が宣言していない解放関数のインポートを rontolisp が勝手に作り出すことはありません。`--component` では `canon resource.drop` になり、ハンドルはホスト自身のテーブルへ返されます。
+
+これはリークだけの話ではありません。インターフェースは drop を**義務**にできます: `wasi:http` は `outgoing-body` の子である `output-stream` を body を finish する前に drop するよう要求し、そうしなければトラップします。そして drop が解放するのは*参照*であって、その先にあるものではありません — ストアはそのまま残り、次の `kv:open` はすべてのキーをそのまま見ます。
+
 現在の制限事項:
 
 - `--no-gc` はこのディレクティブを明確なエラーで拒否します。その契約は、何もインポートしない素の MVP モジュールだからです。

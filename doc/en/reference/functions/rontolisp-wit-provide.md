@@ -28,6 +28,7 @@ complete one — a store in a hash table, which is all a store has to be:
          nil)
         ((string= member "bucket-get") (gethash (nth 1 args) *rows*))
         ((string= member "bucket-exists") (if (gethash (nth 1 args) *rows*) t nil))
+        ((string= member "bucket-drop") nil)  ; the handle is gone; the rows stay
         (t (error 'rontolisp:wit-error :payload (list :other member)))))
 
 (rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-store) ; => "wasi:keyvalue/store@0.2.0"
@@ -47,6 +48,32 @@ that knows where the pairs live.
   one key binds the provider for all of them.
 - The provider: any Lisp callable of `(member &rest args)` — a `#'name` function,
   a `lambda`, or anything else `funcall` accepts.
+
+## The members a provider is asked for
+
+One per function the interface declares, spelled as
+[`wit-import` binds it](rontolisp-wit-import.md#what-gets-bound): `"open"`,
+`"bucket-get"`, `"bucket-new"` for a constructor — plus, for each resource,
+**`"<resource>-drop"`**, whose only argument is the handle. That last one is a
+member no `.wit` declares: releasing a resource is a canonical built-in of the
+component model rather than a function of the interface, so rontolisp names it
+[`<resource>-drop`](rontolisp-wit-import.md#releasing-a-resource-resource-drop)
+and dispatches it to the provider like any other member.
+
+**What a drop *means* is the provider's decision, and only the provider's.** The
+core knows that the program is done with a handle; it does not know what the
+handle stood for. So a store that keeps its rows in a hash table forgets the
+handle and keeps the rows (the `my-store` above answers `nil`, and that is a
+complete implementation); one holding a JDBC connection or an open file closes
+it; a provider whose handles cost nothing has nothing to release and simply
+answers `nil` too. What a drop must **not** do is destroy the thing the handle
+referred to: a handle is a *reference* to a store, never the store itself, so a
+later `(kv:open "counts")` must still find every key that was written through
+the dropped one.
+
+Leave the member out and a drop falls into whatever fallback the provider has —
+in `my-store` above, the `rontolisp:wit-error` clause. So a provider with nothing
+to release should still answer `nil` for it rather than say nothing at all.
 
 ## rontolisp ships no providers
 

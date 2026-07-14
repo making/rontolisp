@@ -103,14 +103,23 @@ public final class WitImportInliner {
 		if (!usesWitImport(program) && !(wasm && bindsProvider(program))) {
 			return program;
 		}
-		Set<String> memberFilter = backend == WitExportDirective.Backend.WASM_COMPONENT && pruneMembers
-				? referencedNames(program) : null;
+		Set<String> referenced = referencedNames(program);
+		Set<String> memberFilter = backend == WitExportDirective.Backend.WASM_COMPONENT && pruneMembers ? referenced
+				: null;
+		// A resource `drop` is bound only when the program NAMES it, on every backend --
+		// a
+		// drop is not a WIT function, so it is outside the "Preview 1 binds every
+		// function"
+		// convention, and this is what keeps every pre-drop artifact byte-identical.
+		// --no-prune / --dynamic bind them all, like everything else there.
+		Set<String> dropFilter = pruneMembers ? referenced : null;
 		List<LispVal> result = new ArrayList<>(program.size());
 		for (LispVal form : program) {
 			if (WitImportDirective.isDirective(form)) {
 				WitImportDirective.Directive directive = WitImportDirective.parse((LispCons) form);
 				String path = SourceLoader.resolve(baseDir, directive.path());
-				result.addAll(WitImportDirective.lower(directive, read(loader, path), path, backend, memberFilter));
+				result.addAll(WitImportDirective.lower(directive, read(loader, path), path, backend, memberFilter,
+						dropFilter));
 			}
 			else if (wasm && isProviderBinding(form)) {
 				// The host is the provider on the WASM backends; a binding is inert

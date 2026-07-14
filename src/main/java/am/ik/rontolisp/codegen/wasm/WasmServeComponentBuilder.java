@@ -132,6 +132,11 @@ final class WasmServeComponentBuilder {
 	static byte[] build(byte[] coreModule, List<WasmComponentImportCompiler.Import> imports) {
 		final int userIfaces = imports.size();
 		final int userFuncs = WasmComponentBuilder.userImportFuncs(imports);
+		// The other function count: a resource drop is a CORE function with no component
+		// function behind it (canon resource.drop), so an index into the core function
+		// space must skip the drops too. Confusing the two yields a component that
+		// VALIDATES while lifting the wrong function.
+		final int userCoreFuncs = WasmComponentBuilder.userImportCoreFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// Import instances 0-7, component types 0-12.
 		c.writeRaw(IMPORT_BLOCK_HTTP_SERVER);
@@ -263,7 +268,7 @@ final class WasmServeComponentBuilder {
 		// Lift serve into a component func with the handle func type 18. Component
 		// func 18 follows the 18 aliased WASI funcs (0-17) + the user-import aliases.
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(23 + userFuncs, T_HANDLE_FUNC))));
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(23 + userCoreFuncs, T_HANDLE_FUNC))));
 		// Component instance 8 (after import instances 0-7 + the user imports) exporting
 		// handle, exported as the wasi:http/incoming-handler@0.2.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,
@@ -346,6 +351,11 @@ final class WasmServeComponentBuilder {
 	static byte[] buildHttp(byte[] coreModule, List<WasmComponentImportCompiler.Import> imports) {
 		final int userIfaces = imports.size();
 		final int userFuncs = WasmComponentBuilder.userImportFuncs(imports);
+		// The other function count: a resource drop is a CORE function with no component
+		// function behind it (canon resource.drop), so an index into the core function
+		// space must skip the drops too. Confusing the two yields a component that
+		// VALIDATES while lifting the wrong function.
+		final int userCoreFuncs = WasmComponentBuilder.userImportCoreFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// Import instances 0-9, component types 0-19.
 		c.writeRaw(IMPORT_BLOCK_HTTP_SERVER_CLIENT);
@@ -538,7 +548,7 @@ final class WasmServeComponentBuilder {
 		// Lift serve into a component func with the handle func type 28. Component
 		// func 33 follows the 33 aliased WASI funcs (0-32) + the user-import aliases.
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(44 + userFuncs, HS_T_HANDLE_FUNC))));
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(44 + userCoreFuncs, HS_T_HANDLE_FUNC))));
 		// Component instance 10 (after import instances 0-9 + the user imports) exporting
 		// handle, exported as the wasi:http/incoming-handler@0.2.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE,

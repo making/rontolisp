@@ -1539,7 +1539,11 @@ public final class LispEvaluator {
 		}
 		List<LispVal> bindings;
 		try {
-			bindings = WitImportDirective.lower(directive, source, resolved, WitExportDirective.Backend.OTHER);
+			// null drop filter: the interpreter binds a drop for every resource. It
+			// produces no artifact whose bytes have to stay identical, and a program may
+			// well reach a drop through funcall or eval.
+			bindings = WitImportDirective.lower(directive, source, resolved, WitExportDirective.Backend.OTHER, null,
+					null);
 		}
 		catch (UnsupportedOperationException ex) {
 			throw new LispEvalException(LispNames.WIT_IMPORT_QUALIFIED + ": " + ex.getMessage());
