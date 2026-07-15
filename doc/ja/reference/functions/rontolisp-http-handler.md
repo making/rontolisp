@@ -84,7 +84,7 @@ serve コンポーネントのハンドラ内でも `random`、時刻系の組�
 [`rontolisp:fetch`](rontolisp-fetch.md) もサービング中のハンドラ内で動作します
 （この場合コンポーネントは追加で `wasi:http/outgoing-handler` をインポート
 します）。プロキシ型のハンドラはすべてのバックエンドで動作します — ホストに
-外向き HTTP を許可してください（例: `wasmtime serve -W gc=y -S http=y`）。
+外向き HTTP を許可してください（例: `wasmtime serve -W gc=y -W exceptions=y -S http=y`）。
 
 ハンドラは [`rontolisp:wit-import`](rontolisp-wit-import.md)
 で自前の WIT インターフェースを呼ぶこともできます。serve されるコンポーネントは

@@ -7,7 +7,6 @@ import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class HttpHandlerInlinerTest {
 
@@ -17,38 +16,10 @@ class HttpHandlerInlinerTest {
 
 	@Test
 	void usesHttpHandlerDetectsTheDirective() {
+		// The class is now only the presence check the CLI routes on; the HTTP glue is
+		// serve.lisp (eval/ServeLibrary), covered by the serve integration tests.
 		assertThat(HttpHandlerInliner.usesHttpHandler(read("(defun h (r) nil) (rontolisp:http-handler 'h)"))).isTrue();
 		assertThat(HttpHandlerInliner.usesHttpHandler(read("(defun h (r) nil)"))).isFalse();
-	}
-
-	@Test
-	void inlineSplicesDispatchWrapperAndDropsDirective() {
-		List<LispVal> out = HttpHandlerInliner
-			.inline(read("(defun handle (r) (list :status 200 :body \"hi\")) (rontolisp:http-handler 'handle 8080)"));
-		String printed = out.stream().map(LispVal::print).reduce("", (a, b) -> a + "\n" + b);
-		// The http-handler directive is gone.
-		assertThat(printed).doesNotContain("http-handler");
-		// The dispatch wrapper (calling the user handler on the split request plist)
-		// and the wasm-export directive are spliced in.
-		assertThat(printed).contains("%http-dispatch");
-		assertThat(printed).contains("(handle (%http-request");
-		assertThat(printed).contains(":query");
-		assertThat(printed).contains("wasm-export");
-		// The user's own defun is preserved.
-		assertThat(printed).contains("(defun handle");
-	}
-
-	@Test
-	void inlineWithoutDirectiveIsUnchanged() {
-		List<LispVal> program = read("(defun handle (r) nil)");
-		assertThat(HttpHandlerInliner.inline(program)).isSameAs(program);
-	}
-
-	@Test
-	void inlineRejectsNonQuotedHandler() {
-		assertThatThrownBy(() -> HttpHandlerInliner.inline(read("(rontolisp:http-handler handle)")))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("quoted handler name");
 	}
 
 }

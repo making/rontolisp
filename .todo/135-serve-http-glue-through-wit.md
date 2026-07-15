@@ -1,7 +1,15 @@
 # serve's HTTP glue through WIT (`wit-export` learns interface exports)
 
-**Status:** open, unstarted, DEFERRED behind `.todo/136` (user decision 2026-07-14, after
-the survey below). **UNBLOCKED 2026-07-14**: `.todo/133` landed, so capability 1 below is
+**Status: DONE 2026-07-15 (session 3).** Plain-serve MUST committed `bc29daa` (session 2);
+step 6 (serve+fetch collapse) done + verified in session 3, committed alongside this update.
+Serve AND serve+fetch are now `serve.lisp` + `fetch.lisp` over wit-imported wasi:http, one
+`WasmServeComponentBuilder.build` (narrow/wide `ServeBlock`); all WAT serve/fetch adapters
+deleted. See "SESSION STATE (session 3)" below. Only leftover = the block-deletion "later
+refinement" (structurally deferred -- a minimal preview1-bridge block is impossible).
+
+**Historical status (pre-session-2):** open, unstarted, DEFERRED behind `.todo/136` (user
+decision 2026-07-14, after the survey below). **UNBLOCKED 2026-07-14**: `.todo/133` landed, so
+capability 1 below is
 done — a `result` argument crosses (as the `(:ok . V)` / `(:error . E)` envelope), and so
 does `error-code`, whose cases carry `record`s and `option<string>`s (todo 133 had to go
 past its own "flat payloads only" plan for exactly this). Capability 2 (`wit-export` learns
@@ -221,10 +229,54 @@ Steps 1-5 + 7 (minus the deferred collapse) are DONE this session:
   `WasiWitDefinitions` regen'd (http-server gains headers/fields.append/entries). Full suite
   GREEN (3677, was 3 backend-flag failures, fixed). Docs en/ja + `.kb` updated.
 
-STILL OPEN (step 6, deferred "come last"): collapse serve+fetch into serve.lisp + fetch.lisp
-(both then wit-import wasi:http, no collision) and delete `adapter-http-server.wat` + the
-serve import blocks + the serve+fetch adapter. Serve+fetch still rides the WAT adapter
-(`buildHttp`), unchanged.
+STEP 6 DONE in session 3 (below). Serve+fetch no longer rides the WAT adapter.
+
+## SESSION STATE (2026-07-15, session 3) -- STEP 6 DONE
+
+serve+fetch collapsed into `serve.lisp` + `fetch.lisp`. Both are spliced (CLI:
+`FetchLibrary.process` -- its `serve` gate REMOVED, 3rd param gone -- then
+`ServeLibrary.process`); `HttpHandlerInliner.inline`/`wrapperForms` DELETED (the class is now
+just the `usesHttpHandler` detector). `WasmServeComponentBuilder.build` selects a `ServeBlock`
+descriptor (NARROW plain / WIDE serve+fetch, `usesWideBlock` = a fetch-only iface present);
+`lowerServeIoFromBlock` generalized (parameterized by the block, dedups bound funcs by field /
+drops by resource, returns a `coreInstanceOf` map). `buildHttp` + the WAT adapters
+`adapter-http-server.wat` + `adapter-http-server-client-p1.wat` (+ their `.wasm`) DELETED; the
+preview1 bridge `adapter-http-server-p1.wasm` is shared by both shapes (once fetch is
+fetch.lisp the core imports no `http` function). Wide block `import-block-http-server-client.bin`
+regen'd to add `[method]incoming-request.headers`.
+
+Two overlaps solved:
+1. **iface merge** -- `WasmComponentImportCompiler.mergeByIface` (new) folds serve.lisp's and
+   fetch.lisp's duplicate `%component-import`s of the same interface into one (each `%`-package
+   keeps its own Lisp wrappers); runs before `inDependencyOrder`.
+2. **core-import dedup** -- the component model FORBIDS a core module importing one
+   (module,field) twice (verified: `wasm-tools component new` auto-dedups but hand-assembly does
+   not). `WasmLispCompiler` gained an import-slot pass: the two libraries' wrappers stay distinct
+   defuns but SHARE one core import (one placeholder ordinal), keyed by (module,field).
+   `emitHttpImport` REMOVED (fetch-start/await = permanent trap stubs).
+
+KEY BUG fixed: `WasmExprCompiler` dispatched `rontolisp:fetch` to the builtin
+(`WasmFetchCompiler` -> `FUNC_FETCH_START` trap stub) whenever `ctx.serve`; guard
+`component && !serve` -> `component` so serve+fetch falls through to fetch.lisp's defun.
+
+Verified on wasmtime 46: plain serve + response headers, serve+fetch proxy round-trip
+("proxied backend /up 200"), serve+fetch POST body, non-serve fetch. Full suite GREEN
+(3674/0/0, 4 skipped) incl. the Docker serve+fetch round-trip; native image + CiSpecE2eTest
+(820/0/0) green; web profile compile OK; javadoc clean (Version-class exception only). Run
+serve+fetch with `wasmtime serve -W gc=y -W exceptions=y -S http=y`. Fixtures
+(`http-server-client.wit` + `WasiWitDefinitions.httpServerClient`) regen'd; docs en/ja + .kb +
+all serve example headers updated (every serve command needs `-W exceptions=y` -- a plain-serve
+`wasmtime serve -W gc=y app.wasm` FAILS to parse; bc29daa's plain-serve commit missed the
+example headers, fixed here).
+
+STILL OPEN (deferred "later refinement", NOT this todo's blocker): delete the serve import
+blocks (`import-block-http-server*.bin`) themselves -- structurally hard, because a minimal
+preview1-bridge-only block is impossible (wasi:cli/stdout implicitly uses wasi:io/streams'
+output-stream, which collides with serve.lisp's io/streams user import). The blocks are KEPT
+and the http/io surface is lowered FROM them. TCP externalization (sockets over Lisp, like
+fetch) was CONSIDERED and HELD 2026-07-15 (user aims for full WASI 0.3; the current sockets
+adapter is intentionally 0.3-native, and a Lisp sockets.lisp would need either the async
+stream/future canonical ABI in canon-lower, or a downgrade to wasi:sockets@0.2).
 
 ## SESSION STATE (2026-07-15) -- WHERE THIS STANDS, for the next session
 

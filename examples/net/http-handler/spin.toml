@@ -2,7 +2,7 @@
 #
 # NOTE: `spin up` does not run this yet -- Spin's embedded wasmtime does not
 # enable the WebAssembly GC proposal, which every rontolisp component requires,
-# and has no flag to turn it on. Use `wasmtime serve -W gc=y app.wasm`, jco
+# and has no flag to turn it on. Use `wasmtime serve -W gc=y -W exceptions=y app.wasm`, jco
 # (`npx @bytecodealliance/jco serve app.wasm`) or wasmCloud (`wash` with the gc
 # proposal enabled) instead (see examples/net/http-handler.lisp).
 # Build the component first:

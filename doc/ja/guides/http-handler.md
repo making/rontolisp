@@ -167,7 +167,7 @@ wasmtime では `-S http=y` を付けます（`component-model-async` 系のフ�
 
 ```console
 $ rontolisp proxy.lisp -o proxy.wasm --component
-$ wasmtime serve -W gc=y -S http=y proxy.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -S http=y proxy.wasm
 ```
 
 完全な例は

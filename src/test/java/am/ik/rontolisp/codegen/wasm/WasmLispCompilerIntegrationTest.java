@@ -73,12 +73,14 @@ class WasmLispCompilerIntegrationTest {
 	// lowered against baseDir (where its .wit lives) first, exactly like the CLI. This
 	// mirrors RontoLispCli's --component serve pipeline for the library steps these
 	// handlers
-	// need; serve+fetch keeps the old HttpHandlerInliner path (buildHttp), untouched
-	// here.
+	// need -- including FetchLibrary, so a handler that also calls rontolisp:fetch (the
+	// proxy shape) gets fetch.lisp spliced alongside serve.lisp, over the wider block.
 	private static byte[] compileServeComponent(String source, @org.jspecify.annotations.Nullable String baseDir) {
 		List<LispVal> loaded = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(source),
 				baseDir, am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
 				am.ik.rontolisp.eval.SourceLoader.fileSystem());
+		loaded = am.ik.rontolisp.eval.FetchLibrary.process(loaded,
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
 		loaded = am.ik.rontolisp.eval.ServeLibrary.process(loaded,
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
@@ -174,7 +176,7 @@ class WasmLispCompilerIntegrationTest {
 	private static byte[] compileFetchComponent(String program) {
 		List<am.ik.rontolisp.LispVal> forms = am.ik.rontolisp.eval.WitLibrary
 			.process(am.ik.rontolisp.eval.FetchLibrary.process(LispReader.readAllFromString(program),
-					am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false));
+					am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT));
 		return new WasmLispCompiler(false, true).compile(forms);
 	}
 
@@ -2027,28 +2029,31 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void httpHandlerFetchInsideServeUnderWasmtimeServe() throws Exception {
-		// A proxy-style handler: rontolisp:fetch inside a served handler works because
-		// the serve+fetch component variant (WasmServeComponentBuilder.buildHttp) wires
-		// the wasi:http outgoing machinery into the preview1 bridge
-		// (adapter-http-server-client-p1.wat); run the proxy with `wasmtime serve -S
-		// http=y`.
-		// The backend is itself a plain rontolisp serve component, so the test stays
-		// offline.
+		// A proxy-style handler: rontolisp:fetch inside a served handler. Both halves are
+		// Lisp over wit-imported wasi:http now -- serve.lisp (incoming-handler) and
+		// fetch.lisp
+		// (outgoing-handler) spliced into one component over the wider serve+fetch block,
+		// no
+		// hand-written adapter -- so the proxy compiles through the same CLI pipeline
+		// (compileServeComponent runs FetchLibrary then ServeLibrary). Both are EH-mode,
+		// and
+		// fetch needs outbound HTTP, so run the proxy with `-W exceptions=y -S http=y`.
+		// The
+		// backend is itself a plain rontolisp serve component, so the test stays offline.
 		byte[] backendBytes = compileServeComponent("""
 				(defun handle (request)
 				  (list :status 200
 				        :body (concatenate 'string "backend " (getf request :path))))
 				(rontolisp:http-handler 'handle)
 				""", null);
-		List<LispVal> proxy = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+		byte[] proxyBytes = compileServeComponent("""
 				(defun handle (request)
 				  (let ((resp (rontolisp:await (rontolisp:fetch "http://127.0.0.1:8083/up"))))
 				    (list :status 200
 				          :body (concatenate 'string "proxied " (getf resp :body)
 				                             " " (princ-to-string (getf resp :status))))))
 				(rontolisp:http-handler 'handle)
-				"""));
-		byte[] proxyBytes = new WasmLispCompiler(false, true, false, false, true).compile(proxy);
+				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(backendBytes), "/tmp/serve-backend.wasm");
 		wasmtime.copyFileToContainer(Transferable.of(proxyBytes), "/tmp/serve-proxy.wasm");
 		// Wait for the BACKEND before querying the proxy: if the proxy answers first,
@@ -2056,7 +2061,7 @@ class WasmLispCompilerIntegrationTest {
 		// would end the poll loop with the wrong output (a startup race, not a bug).
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8083 /tmp/serve-backend.wasm >/tmp/serve-backend.log 2>&1 &"
-						+ " wasmtime serve -W gc=y -S http=y --addr 127.0.0.1:8084 /tmp/serve-proxy.wasm >/tmp/serve-proxy.log 2>&1 &"
+						+ " wasmtime serve -W gc=y -W exceptions=y -S http=y --addr 127.0.0.1:8084 /tmp/serve-proxy.wasm >/tmp/serve-proxy.log 2>&1 &"
 						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8083/up >/dev/null && break; sleep 0.25; done;"
 						+ " curl -sf http://127.0.0.1:8083/up >/dev/null"
 						+ " || { echo 'backend never came up' 1>&2; cat /tmp/serve-backend.log 1>&2; exit 1; };"

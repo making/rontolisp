@@ -152,16 +152,16 @@ final class WasmExprCompiler {
 					return;
 				}
 				if (LispNames.FETCH.equals(qn.member())) {
-					if (ctx.component && !ctx.serve) {
-						// Off serve, fetch is the spliced fetch.lisp defun (over
-						// wit-imported
-						// wasi:http). Run the compile-time checks a defun cannot -- arity
-						// and a
-						// literal unsupported :method -- then fall through to the
-						// ordinary call
-						// path, which resolves the defun. Serve and Preview 1 keep the
-						// special
-						// form (the WAT adapter / the component-only compile error).
+					if (ctx.component) {
+						// Under --component, fetch is the spliced fetch.lisp defun (over
+						// wit-imported wasi:http) on BOTH serve and non-serve -- a served
+						// handler that fetches carries fetch.lisp alongside serve.lisp.
+						// Run
+						// the compile-time checks a defun cannot -- arity and a literal
+						// unsupported :method -- then fall through to the ordinary call
+						// path,
+						// which resolves the defun. Preview 1 keeps the special form (the
+						// component-only compile error).
 						WasmFetchCompiler.validate(cons);
 					}
 					else {

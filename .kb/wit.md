@@ -110,12 +110,13 @@ grew by accretion: "http" meant fetch because fetch came first, then the server 
 | `sock` | `sockets` |
 
 Applied to `WitEmitter.VARIANT_*`, fixture names, ALL blob artifacts
-(`adapter-http-client.wasm`, `import-block-http-server.bin`,
-`adapter-http-server-client-p1.wasm`, `mem-http-client.wasm`, ...), the
-`src/wasm-component` sources (`uni-http-client.wit`, `core-sockets.wat`, ...), regen
+(`import-block-http-server.bin`, `import-block-http-server-client.bin`,
+`adapter-http-server-p1.wasm`, `mem-http-client.wasm`, ...), the
+`src/wasm-component` sources (`core-http-server-client.wat`, `core-sockets.wat`, ...), regen
 scripts and docs. **Mode vocabulary is unchanged**: the `serve` boolean on
-`WasmLispCompiler`, `WasmServeComponentBuilder`, `buildServe`/`buildHttp` still name
-the `wasmtime serve` MODE; the kb rule is mode `serve` -> variant `http-server`.
+`WasmLispCompiler`, `WasmServeComponentBuilder`, `buildServe` still name
+the `wasmtime serve` MODE; the kb rule is mode `serve` -> variant `http-server`
+(plain) / `http-server-client` (serve + fetch).
 Component output bytes are unchanged (integration suite + oracle re-run green).
 
 ## The settled type mapping (`compiler/WitTypeMapper`, todo 124's table)
@@ -756,21 +757,22 @@ are `WitCanonicalAbiTest`. Two things that probe taught, which no document says:
   shifts by the user-import counts. **Zero imports = zero shift = byte-identical**
   (stash-dance proven on base / sockets, with and without a `:string`
   wasm-export — and on both serve variants).
-- **`codegen/wasm/WasmServeComponentBuilder`** (todo 134) — the SAME `appendUserImports`
-  on the two serve variants (`build` = serve, `buildHttp` = serve+fetch), so a
-  `rontolisp:http-handler` component imports user interfaces too. The only difference is
-  the index bookkeeping, because serve has TWO adapters: the preview1 bridge is
-  instantiated BEFORE the rontolisp core (it satisfies its `wasi_snapshot_preview1`
-  imports) and the serve adapter AFTER it (it imports `%http-dispatch`). So the
-  synthesized user core instances sit between them (from core instance 3) and the core /
-  the serve adapter's "w" group / the serve adapter become 3+N / 4+N / 5+N; the adapter's
-  `serve` core func is 23+F (serve) / 44+F (serve+fetch), the lifted `handle` component
-  func 18+F / 33+F, the exported instance 8+N / 10+N, and `appendUserImports` is called
-  with (nextType, firstImportInstance, nextComponentFunc, nextCoreFunc) = (19, 8, 18, 23)
-  / (29, 10, 33, 44). The serve core module exports no `cabi_realloc` (`componentStringAbi`
-  is `component && !serve`) and needs none — the lower's realloc is the shared memory
-  module's, core func 0, aliased there as everywhere. `rejectAdapterImportCollisions` runs
-  for the serve blobs too. **The state a served handler cannot otherwise have**: a
+- **`codegen/wasm/WasmServeComponentBuilder`** (todo 134 + 135 step 6) — ONE `build`
+  serves both serve shapes, selected by a `ServeBlock` descriptor (NARROW plain serve /
+  WIDE serve+fetch) chosen from the imports (`usesWideBlock`: a fetch-only iface present).
+  There is NO serve adapter and NO `buildHttp` any more: serve.lisp is the incoming glue,
+  fetch.lisp the outgoing glue (both spliced, their overlapping bindings merged +
+  deduplicated upstream), and the ONLY extra module is the preview1 bridge, instantiated
+  BEFORE the rontolisp core to satisfy its `wasi_snapshot_preview1` imports. Core instances
+  are mem(0) / bridge-w(1) / bridge(2) / one per fixed io/http iface (from core instance 3,
+  via `lowerServeIoFromBlock`, which lowers each bound function FROM the block and dedups by
+  field) / one per user iface / rontolisp core; the `ServeIo` cursors + `coreInstanceOf` map
+  make every downstream index (the own<> handle functype, the lift, the exported instance,
+  `appendUserImports`) relative, so nothing is hardcoded per shape. The serve core module
+  exports no `cabi_realloc` (`componentStringAbi` is `component && !serve`) and needs none —
+  the lower's realloc is the shared memory module's, core func 0, aliased there as
+  everywhere. `rejectAdapterImportCollisions` runs against the ADDITIONAL imports for the
+  variant `usesFetchSurface` picks (`http-server` / `http-server-client`). **The state a served handler cannot otherwise have**: a
   `wasi:http` host recreates the instance per request, so its globals are not state; a
   store behind a WIT import is (`examples/wit/keyvalue/page-hits-server.lisp`). Whether
   that store SURVIVES is the host's, not ours: wasmtime's `-S keyvalue=y` provider is an

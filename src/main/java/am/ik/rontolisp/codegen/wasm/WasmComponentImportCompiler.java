@@ -120,6 +120,52 @@ final class WasmComponentImportCompiler {
 	}
 
 	/**
+	 * Merges imports that name the <strong>same interface</strong> into one,
+	 * concatenating their bound functions and drops.
+	 * <p>
+	 * Two independently spliced libraries can bind the same interface: a serve+fetch
+	 * program carries both {@code serve.lisp} and {@code fetch.lisp}, and each lowers its
+	 * own {@code rontolisp:wit-import "wasi:http/types@0.2.0"} (into a different
+	 * {@code %}-package). The Lisp-callable wrappers must stay distinct -- both packages'
+	 * defuns are referenced by their own source -- so their {@link Decl}s are kept as-is
+	 * (a duplicate core import of the same host function is legal, and both bindings
+	 * resolve to the one lowered component instance export). What must NOT be duplicated
+	 * is the component-level instance: an interface can be imported only once. This merge
+	 * produces that single import; the component wiring then deduplicates the bound
+	 * functions by their canonical field name when it emits the one shared instance.
+	 * <p>
+	 * First-occurrence order is preserved, and an interface that appears once is returned
+	 * unchanged, so a program with no overlapping imports is byte-identical.
+	 * @param imports the imports in program order
+	 * @return one import per interface, decls and drops concatenated in encounter order
+	 */
+	static List<Import> mergeByIface(List<Import> imports) {
+		if (imports.size() < 2) {
+			return imports;
+		}
+		final java.util.Map<String, Import> byId = new java.util.LinkedHashMap<>();
+		for (Import imported : imports) {
+			Import prev = byId.get(imported.ifaceId());
+			if (prev == null) {
+				byId.put(imported.ifaceId(), imported);
+				continue;
+			}
+			final List<Decl> decls = new ArrayList<>(prev.decls());
+			decls.addAll(imported.decls());
+			final List<Drop> drops = new ArrayList<>(prev.drops());
+			drops.addAll(imported.drops());
+			// The interface / resolver are the same WIT type across both bindings (the
+			// same
+			// interface id, parsed from the same WIT text), so either serves the
+			// component-level wiring; each Decl keeps its own abi, which is all the
+			// lowering
+			// reads.
+			byId.put(imported.ifaceId(), new Import(prev.ifaceId(), prev.iface(), prev.resolver(), decls, drops));
+		}
+		return new ArrayList<>(byId.values());
+	}
+
+	/**
 	 * Orders the imports so that an interface is imported <strong>before</strong> any
 	 * interface that {@code use}s its resources.
 	 * <p>

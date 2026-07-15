@@ -277,27 +277,33 @@ public final class RontoLispCli {
 		// 1
 		// has no fetch.
 		boolean serve = component && HttpHandlerInliner.usesHttpHandler(loaded);
-		// Plain serve (no rontolisp:fetch) drives its HTTP glue through serve.lisp
-		// (ServeLibrary), the mirror of fetch.lisp: the wasi:http/incoming-handler export
-		// is
-		// lifted from a Lisp-written handler over wit-imported wasi:http/types, with no
-		// hand-written serve adapter. Serve+fetch stays on the WAT adapter until the two
-		// wasi:http/types imports (serve.lisp's and fetch.lisp's) are reconciled -- so
-		// the
-		// serve.lisp splice is gated off there, and HttpHandlerInliner keeps that path.
-		boolean serveUsesFetch = serve && FetchLibrary.referencesFetch(loaded);
-		loaded = FetchLibrary.process(loaded, witBackend, serve);
-		// serve + rontolisp:wit-export is an error (a serve component's only export is
-		// wasi:http/incoming-handler); the check fires below on the macro-expanded
-		// program.
-		// Splicing serve.lisp's %serve-handle wasm-export first would make that surface
-		// as a
-		// DIFFERENT error (wit-export forbids a hand-written wasm-export beside it), so
-		// gate
-		// the splice off when a wit-export world is present and let the clearer guard
-		// win.
-		boolean plainServe = serve && !serveUsesFetch && !WitExportInliner.usesWitExport(loaded);
-		loaded = ServeLibrary.process(loaded, witBackend, plainServe);
+		// rontolisp:fetch is the fetch.lisp library over wit-imported wasi:http, spliced
+		// whether or not the program serves: a served handler that also fetches (the
+		// classic
+		// proxy shape) carries BOTH fetch.lisp and serve.lisp, and their overlapping
+		// wasi:http/wasi:io imports are merged into one component-level import downstream
+		// --
+		// no hand-written adapter, no collision. So the fetch splice is no longer gated
+		// off
+		// in serve mode.
+		loaded = FetchLibrary.process(loaded, witBackend);
+		// The HTTP glue of rontolisp:http-handler is serve.lisp (ServeLibrary), the
+		// mirror
+		// of fetch.lisp: the wasi:http/incoming-handler export is lifted from a
+		// Lisp-written
+		// handler over wit-imported wasi:http/types, with no hand-written serve adapter.
+		// It
+		// fires for plain serve AND serve+fetch. serve + rontolisp:wit-export is an error
+		// (a
+		// serve component's only export is wasi:http/incoming-handler); the check fires
+		// below
+		// on the macro-expanded program. Splicing serve.lisp's %serve-handle wasm-export
+		// first would surface as a DIFFERENT error (wit-export forbids a hand-written
+		// wasm-export beside it), so gate the splice off when a wit-export world is
+		// present
+		// and let the clearer guard win.
+		boolean serveGlue = serve && !WitExportInliner.usesWitExport(loaded);
+		loaded = ServeLibrary.process(loaded, witBackend, serveGlue);
 		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
 		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
 		// any
@@ -363,11 +369,11 @@ public final class RontoLispCli {
 							"rontolisp:wit-export cannot be combined with rontolisp:http-handler: a serve-mode "
 									+ "component exports only wasi:http/incoming-handler");
 				}
-				// Plain serve already carries serve.lisp's %serve-handle wasm-export
-				// (spliced
-				// by ServeLibrary above); only the serve+fetch path still synthesizes the
-				// %http-dispatch wrapper for the WAT adapter.
-				List<LispVal> wasmProgram = serveUsesFetch ? HttpHandlerInliner.inline(program) : program;
+				// Serve (plain or serve+fetch) already carries serve.lisp's %serve-handle
+				// wasm-export, spliced by ServeLibrary above; the http-handler directive
+				// was
+				// removed there. Nothing more to synthesize -- the WAT serve adapter is
+				// gone.
 				// --simd routes the vectorizable vec: kernels to emitted v128 helpers and
 				// switches a packed float array's storage to an (array (mut v128)) of
 				// lane
@@ -375,7 +381,7 @@ public final class RontoLispCli {
 				// it
 				// does without the flag.
 				WasmLispCompiler compiler = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd);
-				bytes = compiler.compile(wasmProgram);
+				bytes = compiler.compile(program);
 				witText = compiler.componentWit();
 			}
 		}

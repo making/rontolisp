@@ -13,13 +13,14 @@
 # an interface LAST in uni.wit keeps existing indices stable.
 #
 # mem-http-client.wasm (the 16-page memory module) is still regenerated here: the serve
-# variant reuses it. The standalone rontolisp:fetch http-client adapter is gone -- fetch is
-# now the fetch.lisp library over wit-imported wasi:http (eval/FetchLibrary).
-# It keeps the base I/O on WASI 0.3 but adds the WASI 0.2 wasi:http + wasi:io machinery
-# (async wasi:http@0.3 does not exist upstream yet; see ../../TODO.md). The 0.2 deps live
-# alongside the 0.3 ones in deps/ under version-suffixed directories (clocks-0.2, io-0.2,
-# http). After regenerating, re-derive the WasmComponentBuilder.buildHttp
-# wiring constants from `wasm-tools dump`.
+# variants reuse it. Both rontolisp:fetch AND rontolisp:http-handler are Lisp libraries now
+# (fetch.lisp / serve.lisp) over wit-imported wasi:http (eval/FetchLibrary, eval/ServeLibrary);
+# the standalone http-client adapter, the serve adapter and the extended serve+fetch bridge
+# are all gone. It keeps the base I/O on WASI 0.3 but adds the WASI 0.2 wasi:http + wasi:io
+# machinery (async wasi:http@0.3 does not exist upstream yet; see ../../TODO.md). The 0.2 deps
+# live alongside the 0.3 ones in deps/ under version-suffixed directories (clocks-0.2, io-0.2,
+# http). After regenerating an import block, re-derive the fixed instance / type constants in
+# WasmServeComponentBuilder (NARROW / WIDE) from `wasm-tools dump`.
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT=../main/resources/am/ik/rontolisp/codegen/wasm/component
@@ -61,16 +62,15 @@ wasm-tools validate "$OUT/fixup-nogc-print.wasm"
 wasm-tools parse adapter.wat      -o "$OUT/adapter.wasm"
 wasm-tools parse mem-http-client.wat     -o "$OUT/mem-http-client.wasm"
 wasm-tools parse adapter-sockets.wat -o "$OUT/adapter-sockets.wasm"
-wasm-tools parse adapter-http-server.wat -o "$OUT/adapter-http-server.wasm"
+# The preview1 bridge is shared by plain serve AND serve+fetch: fetch is the fetch.lisp
+# library over wit-imported wasi:http/outgoing-handler now, so the core imports no `http`
+# function and needs no extended bridge or serve adapter.
 wasm-tools parse adapter-http-server-p1.wat -o "$OUT/adapter-http-server-p1.wasm"
-wasm-tools parse adapter-http-server-client-p1.wat -o "$OUT/adapter-http-server-client-p1.wasm"
 wasm-tools validate "$OUT/mem.wasm"
 wasm-tools validate "$OUT/adapter.wasm"
 wasm-tools validate "$OUT/mem-http-client.wasm"
 wasm-tools validate "$OUT/adapter-sockets.wasm"
-wasm-tools validate "$OUT/adapter-http-server.wasm"
 wasm-tools validate "$OUT/adapter-http-server-p1.wasm"
-wasm-tools validate "$OUT/adapter-http-server-client-p1.wasm"
 
 echo "== unified import block (base) =="
 wasm-tools parse core.wat -o core.wasm

@@ -16,7 +16,7 @@
 ;;     java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
 ;; Run (WASI component under wasmtime serve):
 ;;   rontolisp examples/wasmcloud/http-handler/app.lisp -o app.wasm --component && \
-;;     wasmtime serve -W gc=y app.wasm
+;;     wasmtime serve -W gc=y -W exceptions=y app.wasm
 ;; Run (wasmCloud; .wash/config.yaml builds app.wasm and enables the gc proposal):
 ;;   wash dev    # in this directory; serves on :8000
 ;; Talk to it with:

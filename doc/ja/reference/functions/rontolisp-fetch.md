@@ -80,7 +80,7 @@ JSON のレスポンスボディは
   (コアモジュール) モードでは fetch はコンパイルエラーのままです。汎用のプロミス
   操作 (`await`、`then`、`promisep`) はどのモードでもコンパイルできます。fetch は
   [`rontolisp:http-handler`](rontolisp-http-handler.md) の serve コンポーネント内
-  (プロキシ型のハンドラ) でも動作します。`wasmtime serve -W gc=y -S http=y` で
+  (プロキシ型のハンドラ) でも動作します。`wasmtime serve -W gc=y -W exceptions=y -S http=y` で
   実行してください — この場合、非同期フラグは不要です。
 - **ブラウザ プレイグラウンド**: 真に非同期です。インタプリタは Web Worker 内で
   実行され、`fetch` はリクエストをページのメインスレッドに引き渡します。メイン

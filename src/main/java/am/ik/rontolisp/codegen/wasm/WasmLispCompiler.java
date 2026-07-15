@@ -961,14 +961,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean ehMode = programUsesEhForm(program);
 		boolean usesFetch = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH));
-		// The WAT http-client adapter fires ONLY in serve mode now (serve + fetch = the
-		// http-server-client blob). Off serve, rontolisp:fetch is the fetch.lisp library,
-		// which pulls wasi:http in through a canon-lowered %component-import (the base
-		// blob),
-		// so the WAT adapter and its http-client blob variant must NOT also be wired --
-		// two
-		// wasi:http imports would collide (rejectAdapterImportCollisions).
-		boolean emitHttpImport = this.component && this.serve && usesFetch;
+		// A serve-mode program that also fetches: fetch is now the fetch.lisp library
+		// (its
+		// own canon-lowered wasi:http user imports), spliced ALONGSIDE serve.lisp, so the
+		// serve component is the wider http-server-client blob. There is no hand-written
+		// http
+		// adapter and no `http` core import any more -- both halves of wasi:http come in
+		// through %component-import, exactly like a non-serve fetch, so this flag only
+		// selects
+		// the emitted-WIT blob variant below.
+		boolean serveFetch = this.component && this.serve && usesFetch;
 		// The rontolisp:tcp-* built-ins are component-only the same way: in component
 		// mode they drive the sock.* imports (function indices FUNC_TCP_CONNECT ..
 		// FUNC_TCP_LOCAL_PORT) implemented by the sockets adapter over
@@ -1038,6 +1040,19 @@ public final class WasmLispCompiler implements LispCompiler {
 				topLevelExprs.add(expr);
 			}
 		}
+		// Two spliced libraries can bind the SAME interface: a serve+fetch program
+		// carries
+		// serve.lisp AND fetch.lisp, and both %component-import wasi:io/streams and
+		// wasi:http/types (each in its own %-package). Merge them into one import per
+		// interface so the component-level wiring sees a single instance -- the two
+		// packages'
+		// wrappers stay distinct defuns (their duplicate core imports of the same host
+		// function are legal and both resolve to the one lowered instance export). A
+		// program
+		// with no such overlap is unchanged (merge is a no-op), so every existing
+		// component
+		// stays byte-identical.
+		componentImports = WasmComponentImportCompiler.mergeByIface(componentImports);
 		// An interface whose resources another one uses must be imported first (its
 		// instance is what the dependent's instance type aliases the resource out of).
 		// Sorted HERE, once, so the component wiring, the synthesized core instances, the
@@ -1465,21 +1480,64 @@ public final class WasmLispCompiler implements LispCompiler {
 		int helperFuncCount = memoryHelpers ? (hostArena ? 4 : 2) : 0;
 		int allocMarkFuncIndex = hostArena ? exportHelperBase + 2 : -1;
 		int allocResetFuncIndex = hostArena ? exportHelperBase + 3 : -1;
+		// Unique host-import slots. Two Lisp wrappers can bind the SAME host function --
+		// a
+		// serve+fetch program's serve.lisp and fetch.lisp each call
+		// wasi:http/types.fields-append, wasi:io/streams.blocking-read, ... in their own
+		// %-package -- and the component model forbids a core module from importing one
+		// (module, field) twice. So the wrappers stay distinct defuns but SHARE one core
+		// import: this list has one entry per unique (module, field), and every wrapper
+		// of
+		// that function calls its slot's placeholder ordinal. Order = wasm-import decls,
+		// then
+		// component-import decls, then drops (the hostImports / import-type order below).
+		// A
+		// program with no overlap gets one slot per wrapper, exactly as before, so its
+		// bytes
+		// do not change.
+		record ImportSlot(String module, String field, Type[] params, Type[] results) {
+		}
+		LinkedHashMap<String, Integer> importSlotIndex = new LinkedHashMap<>();
+		List<ImportSlot> importSlots = new ArrayList<>();
+		for (WasmImportCompiler.Decl decl : importWrappers.values()) {
+			if (importSlotIndex.putIfAbsent(decl.module() + " " + decl.field(), importSlots.size()) == null) {
+				importSlots.add(new ImportSlot(decl.module(), decl.field(), WasmImportCompiler.hostParamTypes(decl),
+						WasmImportCompiler.hostResultTypes(decl)));
+			}
+		}
+		for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {
+			if (importSlotIndex.putIfAbsent(decl.module() + " " + decl.field(), importSlots.size()) == null) {
+				importSlots
+					.add(new ImportSlot(decl.module(), decl.field(), WasmComponentImportCompiler.hostParamTypes(decl),
+							WasmComponentImportCompiler.hostResultTypes(decl)));
+			}
+		}
+		for (WasmComponentImportCompiler.Drop drop : componentDropWrappers.values()) {
+			if (importSlotIndex.putIfAbsent(drop.module() + " " + drop.field(), importSlots.size()) == null) {
+				importSlots.add(new ImportSlot(drop.module(), drop.field(),
+						WasmComponentImportCompiler.dropParamTypes(), new Type[] {}));
+			}
+		}
 		// Fill in the deferred import wrapper bodies now that the helper indices are
-		// known (their positions in userFunctionBodies were reserved in Pass 2a).
+		// known (their positions in userFunctionBodies were reserved in Pass 2a). Each
+		// wrapper calls its (module, field) slot's ordinal, so duplicate bindings
+		// collapse
+		// onto one import.
 		{
-			int ordinal = 0;
 			for (WasmImportCompiler.Decl decl : importWrappers.values()) {
-				byte[] body = WasmImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal++, strFromMemFuncIndex);
+				int ordinal = Objects.requireNonNull(importSlotIndex.get(decl.module() + " " + decl.field()));
+				byte[] body = WasmImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal, strFromMemFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.name())), body);
 			}
 			for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {
-				byte[] body = WasmComponentImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal++, allocFuncIndex,
+				int ordinal = Objects.requireNonNull(importSlotIndex.get(decl.module() + " " + decl.field()));
+				byte[] body = WasmComponentImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal, allocFuncIndex,
 						strFromMemFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.lispName())), body);
 			}
 			for (WasmComponentImportCompiler.Drop drop : componentDropWrappers.values()) {
-				byte[] body = WasmComponentImportCompiler.buildDropBody(ctxBuilder, drop, ordinal++);
+				int ordinal = Objects.requireNonNull(importSlotIndex.get(drop.module() + " " + drop.field()));
+				byte[] body = WasmComponentImportCompiler.buildDropBody(ctxBuilder, drop, ordinal);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(drop.lispName())), body);
 			}
 		}
@@ -1581,8 +1639,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// import signatures: the component string-ABI block, or (mutually exclusive,
 		// since
 		// the host arena is non-component only) the two arena signatures.
-		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importWrappers.size() + componentImportWrappers.size()
-				+ componentDropWrappers.size();
+		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importSlots.size();
 		int abiFuncBase = exportHelperBase + helperFuncCount + exportPlans.size();
 		int cabiReallocFuncIndex = abiFuncBase;
 		int cabiPostFuncBase = cabiReallocFuncIndex + 1;
@@ -1590,29 +1647,19 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		// Host-ABI type entries for the imported functions follow the export wrapper
 		// types; the WasmImportInjector post-pass prepends the matching import entries
-		// and resolves the placeholder call indices after the module is assembled.
+		// and resolves the placeholder call indices after the module is assembled. One
+		// entry
+		// per unique (module, field) slot -- a wasm-import, a component-import call
+		// (module =
+		// the interface's canonical id, field = the canonical-ABI function name), or a
+		// resource drop (field = "[resource-drop]<resource>") -- so a host function bound
+		// by
+		// two Lisp wrappers is imported once, which the component model requires.
 		List<am.ik.wasm.WasmImportInjector.HostImport> hostImports = new ArrayList<>();
 		int importTypeIndex = fixedTypeCount() + exportPlans.size();
-		for (WasmImportCompiler.Decl decl : importWrappers.values()) {
+		for (ImportSlot slot : importSlots) {
 			hostImports
-				.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), importTypeIndex++));
-		}
-		// Component-import calls follow in the same placeholder ordinal space: the core
-		// module imports module = the interface's canonical id, field = the canonical-ABI
-		// function name, satisfied at instantiation by the canon-lowered core instance.
-		for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {
-			hostImports
-				.add(new am.ik.wasm.WasmImportInjector.HostImport(decl.module(), decl.field(), importTypeIndex++));
-		}
-		// A drop is an ORDINARY core import from the core module's side -- module = the
-		// interface's canonical id, field = "[resource-drop]<resource>", (func (param
-		// i32)).
-		// It is only the COMPONENT side that is different (canon resource.drop makes a
-		// core
-		// function with no component function behind it).
-		for (WasmComponentImportCompiler.Drop drop : componentDropWrappers.values()) {
-			hostImports
-				.add(new am.ik.wasm.WasmImportInjector.HostImport(drop.module(), drop.field(), importTypeIndex++));
+				.add(new am.ik.wasm.WasmImportInjector.HostImport(slot.module(), slot.field(), importTypeIndex++));
 		}
 
 		List<byte[]> dispatchBodies = new ArrayList<>();
@@ -2073,23 +2120,17 @@ public final class WasmLispCompiler implements LispCompiler {
 					types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()),
 							WasmExportCompiler.resultWasmTypes(p.decl()));
 				}
-				// Host-ABI signatures of the imported functions, one per
-				// (rontolisp:wasm-import ...), in ordinal order after the export
-				// wrapper types (matching the indices recorded in hostImports).
-				for (WasmImportCompiler.Decl decl : importWrappers.values()) {
-					types.addFunc(WasmImportCompiler.hostParamTypes(decl), WasmImportCompiler.hostResultTypes(decl));
-				}
-				// The canonical-ABI flat signatures of the component-import bindings,
-				// in the same ordinal order as their hostImports entries.
-				for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {
-					types.addFunc(WasmComponentImportCompiler.hostParamTypes(decl),
-							WasmComponentImportCompiler.hostResultTypes(decl));
-				}
-				// The drops follow the functions, matching the order importTypeIndex
-				// hands
-				// out the types above: a host import's declared type index is positional.
-				for (WasmComponentImportCompiler.Drop drop : componentDropWrappers.values()) {
-					types.addFunc(WasmComponentImportCompiler.dropParamTypes(), new Type[] {});
+				// Host-ABI signatures of the imported functions, one per unique (module,
+				// field) slot, in the same order as the hostImports entries above -- a
+				// host
+				// import's declared type index is positional. A slot is a wasm-import
+				// signature, a component-import binding's canonical-ABI flat signature,
+				// or a
+				// resource drop's (func (param i32)); duplicate bindings of one host
+				// function
+				// share a slot, so its type is written once.
+				for (ImportSlot slot : importSlots) {
+					types.addFunc(slot.params(), slot.results());
 				}
 				// Component string-ABI signatures (todo 92 Tier 2), from abiTypeBase:
 				// cabi_realloc, one cabi_post_* per flat-result signature, then one
@@ -2153,20 +2194,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				// tcp-connect/tcp-listen(hostPtr, hostLen, port, fdOut) -> errno share
 				// fd_write's (4x i32) -> i32 shape; tcp-accept(fd, fdOut) -> errno and
 				// tcp-local-port(fd, portOut) -> errno are (2x i32) -> i32 like _intern.
-				if (emitSockImport || emitHttpImport) {
+				if (emitSockImport) {
 					imports.addImport("sock", "tcp-connect", ExternalKind.FUNCTION, TYPE_FD_WRITE);
 					imports.addImport("sock", "tcp-listen", ExternalKind.FUNCTION, TYPE_FD_WRITE);
 					imports.addImport("sock", "tcp-accept", ExternalKind.FUNCTION, TYPE_INTERN);
 					imports.addImport("sock", "tcp-local-port", ExternalKind.FUNCTION, TYPE_INTERN);
 				}
-				// Function imports at indices FUNC_FETCH_START / FUNC_FETCH_AWAIT (12-13)
-				// when the program calls fetch/await in component mode: the adapter's
-				// exported http.fetch-start / http.fetch-await. In Preview 1 mode (or a
-				// component without fetch) those indices are defined trap stubs instead.
-				if (emitHttpImport) {
-					imports.addImport("http", "fetch-start", ExternalKind.FUNCTION, TYPE_FETCH_START);
-					imports.addImport("http", "fetch-await", ExternalKind.FUNCTION, TYPE_FETCH_AWAIT);
-				}
+				// Function indices FUNC_FETCH_START / FUNC_FETCH_AWAIT (12-13) are always
+				// defined trap stubs now: rontolisp:fetch is the fetch.lisp library over
+				// canon-lowered wasi:http (a user %component-import), so nothing ever
+				// calls
+				// them, on Preview 1 or as a component. The slots stay reserved so every
+				// following FUNC_* constant keeps its value.
 				if (this.component) {
 					// Import the linear memory from the shared canonical-memory module so
 					// the
@@ -2202,22 +2241,19 @@ public final class WasmLispCompiler implements LispCompiler {
 				// mode (the fetch case binds the http adapter's errno stubs); otherwise
 				// defined trap stubs so the following defined-function indices line up
 				// with the FUNC_* constants.
-				if (!(emitSockImport || emitHttpImport)) {
+				if (!emitSockImport) {
 					fnDef.addFunction(TYPE_FD_WRITE); // index 8: unused tcp-connect stub
 					fnDef.addFunction(TYPE_FD_WRITE); // index 9: unused tcp-listen stub
 					fnDef.addFunction(TYPE_INTERN); // index 10: unused tcp-accept stub
 					fnDef.addFunction(TYPE_INTERN); // index 11: unused tcp-local-port
 													// stub
 				}
-				// Reserve function indices FUNC_FETCH_START (12) / FUNC_FETCH_AWAIT (13):
-				// in component+fetch they are the http.fetch-start / http.fetch-await
-				// imports (emitted above); otherwise defined trap stubs.
-				if (!emitHttpImport) {
-					fnDef.addFunction(TYPE_FETCH_START); // index 12: unused fetch-start
-															// stub
-					fnDef.addFunction(TYPE_FETCH_AWAIT); // index 13: unused fetch-await
-															// stub
-				}
+				// Reserve function indices FUNC_FETCH_START (12) / FUNC_FETCH_AWAIT (13)
+				// as
+				// defined trap stubs: fetch is the fetch.lisp library over canon-lowered
+				// wasi:http now, so these are never called on any backend.
+				fnDef.addFunction(TYPE_FETCH_START); // index 12: unused fetch-start stub
+				fnDef.addFunction(TYPE_FETCH_AWAIT); // index 13: unused fetch-await stub
 				fnDef.addFunction(TYPE_START) // _start
 					.addFunction(TYPE_PRINT_I32) // print_i32
 					.addFunction(TYPE_WRITE_STR) // _write_str
@@ -2524,18 +2560,19 @@ public final class WasmLispCompiler implements LispCompiler {
 				// function indices FUNC_TCP_CONNECT .. FUNC_TCP_LOCAL_PORT (only when
 				// they are not the sock.* imports): no locals, unreachable, end. Never
 				// called.
-				if (!(emitSockImport || emitHttpImport)) {
+				if (!emitSockImport) {
 					for (int i = 0; i < 4; i++) {
 						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 					}
 				}
 				// fetch-start / fetch-await trap stubs at function indices
-				// FUNC_FETCH_START / FUNC_FETCH_AWAIT (only when they are not the http
-				// imports): no locals, unreachable, end. They are never called.
-				if (!emitHttpImport) {
-					code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
-					code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
-				}
+				// FUNC_FETCH_START / FUNC_FETCH_AWAIT: no locals, unreachable, end. Fetch
+				// is
+				// the fetch.lisp library over canon-lowered wasi:http now, so these are
+				// never
+				// called.
+				code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
+				code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 				code.addFunction(finalStartBody.toByteArray())
 					.addFunction(printI32Body)
 					.addFunction(writeStrBody)
@@ -2731,9 +2768,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				List<WasmComponentImportCompiler.Import> serveUserImports = WasmServeComponentBuilder
 					.additionalImports(componentImports);
 				this.componentWit = WitEmitter.emit(
-						emitHttpImport ? WitEmitter.VARIANT_HTTP_SERVER_CLIENT : WitEmitter.VARIANT_HTTP_SERVER,
-						List.of(), serveUserImports);
-				return WasmComponentBuilder.buildServe(coreModule, emitHttpImport, componentImports);
+						serveFetch ? WitEmitter.VARIANT_HTTP_SERVER_CLIENT : WitEmitter.VARIANT_HTTP_SERVER, List.of(),
+						serveUserImports);
+				return WasmComponentBuilder.buildServe(coreModule, componentImports);
 			}
 			// Lift each wasm-export into a host-callable component-model export
 			// (synchronous canon lift; WAVE-invokable) alongside wasi:cli/run. Scalar

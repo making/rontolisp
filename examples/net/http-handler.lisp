@@ -17,7 +17,7 @@
 ;;   java -jar $JAR examples/net/http-handler.lisp -o App.class && java -cp $JAR:. App
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/http-handler.lisp -o app.wasm --component && \
-;;     wasmtime serve -W gc=y app.wasm
+;;     wasmtime serve -W gc=y -W exceptions=y app.wasm
 ;; Or under jco (Node.js; wasm-GC is on by default in V8):
 ;;   npx @bytecodealliance/jco serve app.wasm --port 8080
 ;; Or under wasmCloud: `wash dev` / `wash host` with the gc proposal enabled

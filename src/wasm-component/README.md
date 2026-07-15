@@ -279,53 +279,42 @@ src/main/resources/.../component/
 
 `uni-http-server.wit` (world `uni-http-server`) imports the 0.2 http/io incoming-handler
 machinery plus the proxy world's `wasi:random/random`, `wasi:clocks/{wall,
-monotonic-}clock` and `wasi:cli/{stdout,stderr}`. Two adapters sandwich the
-rontolisp core because instantiation order forces it: `adapter-http-server.wat`
-(reads the incoming request, calls the core's exported `%http-dispatch`,
-writes the outgoing response) imports the core, so it comes AFTER — which
-means it cannot also provide the core's `wasi_snapshot_preview1` imports the
-way `adapter.wat` does for `wasmtime run` components. `adapter-http-server-p1.wat`
-is that missing preview1 bridge, instantiated BEFORE the core: `random_get`
-over `get-random-u64`, `clock_time_get` over the 0.2 clocks, `fd_write` (fd
-1/2) over the cli stdout/stderr streams, a zero environment for `environ_*`
-(`getenv` returns nil), EOF for `fd_read`, errno 76 for `path_open` (no
-filesystem in the proxy world). `WasmServeComponentBuilder.build` wires
-mem -> bridge -> core -> serve adapter and lifts the adapter's `serve` export
-synchronously as `handle`. Note `wasi:clocks/monotonic-clock` lands as import
-instance 0 (wasm-tools hoists it first as a dependency of `wasi:http/types`),
-before `wasi:io/error`. Details: `../../.kb/fetch-http.md`.
+monotonic-}clock` and `wasi:cli/{stdout,stderr}`. There is NO serve adapter: the HTTP
+glue is `serve.lisp` (spliced by `eval/ServeLibrary`), whose `wasi:io` / `wasi:http/types`
+calls the core `canon lower`s and whose `%serve-handle` the core exports as `handle`. The
+one helper module is `adapter-http-server-p1.wat`, the preview1 bridge, instantiated
+BEFORE the core to satisfy its `wasi_snapshot_preview1` imports: `random_get` over
+`get-random-u64`, `clock_time_get` over the 0.2 clocks, `fd_write` (fd 1/2) over the cli
+stdout/stderr streams, a zero environment for `environ_*` (`getenv` returns nil), EOF for
+`fd_read`, errno 76 for `path_open` (no filesystem in the proxy world).
+`WasmServeComponentBuilder.build` wires mem -> bridge -> core, lowers the fixed
+`wasi:io`/`wasi:http/types` surface FROM the import block, and lifts the core's `handle`
+export synchronously into `wasi:http/incoming-handler@0.2.0`. Note
+`wasi:clocks/monotonic-clock` lands as import instance 0 (wasm-tools hoists it first as a
+dependency of `wasi:http/types`), before `wasi:io/error`. Details: `../../.kb/fetch-http.md`.
 
 ### HTTP server+client variant (`rontolisp:http-handler` + `rontolisp:fetch`)
 
 A handler program that also uses `rontolisp:fetch` (a proxy-style server making
-outgoing requests) compiles to a third parallel http-server blob set (the http-server-client variant):
+outgoing requests) compiles with the SAME builder over a wider block — no extra adapter:
 
 ```
 src/wasm-component/
-  uni-http-server-client.wit  core-http-server-client.wat  adapter-http-server-client-p1.wat
+  uni-http-server-client.wit  core-http-server-client.wat
 
 src/main/resources/.../component/
-  import-block-http-server-client.bin  adapter-http-server-client-p1.wasm
+  import-block-http-server-client.bin
 ```
 
 `uni-http-server-client.wit` (world `uni-http-server-client`) is the serve surface plus
-`wasi:io/poll` and `wasi:http/outgoing-handler` appended last — still entirely
-inside the wasi:http proxy world, so any host that serves the plain variant can
-serve this one (grant outbound HTTP: `wasmtime serve -W gc=y -S http=y`).
-`adapter-http-server-client-p1.wat` is `adapter-http-server-p1.wat` plus its own
-`fetch-start`/`fetch-await` bodies over `wasi:http@0.2` and the
-errno-returning tcp stubs: the bridge (instantiated BEFORE the core, unlike the
-serve adapter) is what satisfies the rontolisp core's `http` and `sock`
-imports when the program uses fetch. This is the ONLY hand-written WAT fetch
-adapter left: the non-serve fetch path is now the `fetch.lisp` library over
-canon-lowered `wasi:http` user imports (above), but the serve blob already
-imports `wasi:http`, so a spliced `fetch.lisp` would collide there
-(`rejectAdapterImportCollisions`) — this variant keeps its WAT adapter until the
-serve path also turns its own `wasi:http` imports into user imports.
-`WasmServeComponentBuilder.buildHttp`
-wires it; note `wasi:io/poll` is dependency-hoisted to import instance 0, so
-every instance index shifts by one relative to the plain serve block and the
-constants were re-derived from a fresh `wasm-tools dump`. The fetch
-response-body scratch (0x70000) overlaps the serve adapter's request-body
-scratch, which is safe: `%http-dispatch` marshals the request into GC strings
-before the Lisp handler (and therefore any fetch) runs.
+`wasi:io/poll` and `wasi:http/outgoing-handler` appended last, plus the outgoing-request /
+future / incoming-response members of `wasi:http/types` — still entirely inside the
+wasi:http proxy world, so any host that serves the plain variant can serve this one (grant
+outbound HTTP: `wasmtime serve -W gc=y -W exceptions=y -S http=y`). Both halves are Lisp:
+`serve.lisp` handles the incoming side, `fetch.lisp` the outgoing side, spliced together and
+their overlapping `wasi:http`/`wasi:io` bindings merged + deduplicated. The preview1 bridge
+is the SAME `adapter-http-server-p1.wat` (once fetch is fetch.lisp the core imports no `http`
+function, so there is no extended bridge and no serve adapter). `WasmServeComponentBuilder.build`
+picks this block when a fetch-only interface is present; note `wasi:io/poll` is
+dependency-hoisted to import instance 0, so every instance index shifts by one relative to
+the plain serve block and the `WIDE` constants were re-derived from a fresh `wasm-tools dump`.

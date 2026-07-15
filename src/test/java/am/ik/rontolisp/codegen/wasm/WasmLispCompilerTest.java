@@ -28,7 +28,7 @@ class WasmLispCompilerTest {
 		// special form, so a raw compile of a fetch program would fail to resolve it. A
 		// no-op for every non-fetch program.
 		List<LispVal> program = FetchLibrary.process(LispReader.readAllFromString(lispCode),
-				WitExportDirective.Backend.WASM_COMPONENT, false);
+				WitExportDirective.Backend.WASM_COMPONENT);
 		// fetch.lisp's result wrappers call rontolisp::%wit-result, backed by wit.lisp --
 		// spliced by WitLibrary, the same order the CLI runs them in.
 		program = WitLibrary.process(program);
@@ -309,17 +309,32 @@ class WasmLispCompilerTest {
 			.hasMessageContaining("tls-listen-pem is not supported on the WASM backend");
 	}
 
+	// The serve library pipeline the CLI runs for a --component rontolisp:http-handler:
+	// fetch
+	// first (a served handler that fetches carries fetch.lisp too), then serve.lisp, then
+	// the
+	// macro expansion serve.lisp's cond/handler-case bodies need.
+	private static List<LispVal> serveProgram(String source) {
+		List<LispVal> loaded = am.ik.rontolisp.eval.FetchLibrary.process(LispReader.readAllFromString(source),
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
+		loaded = am.ik.rontolisp.eval.ServeLibrary.process(loaded,
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
+		return am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
+	}
+
 	@Test
 	void httpHandlerWithFetchCompilesInServeMode() {
-		// fetch inside a served handler compiles to the serve+fetch component variant
-		// (WasmServeComponentBuilder.buildHttp); the round trip under `wasmtime serve
-		// -S http=y` is exercised in WasmLispCompilerIntegrationTest.
-		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+		// fetch inside a served handler compiles: serve.lisp and fetch.lisp are spliced
+		// together over the wider serve+fetch block (no hand-written adapter); the round
+		// trip
+		// under `wasmtime serve -W exceptions=y -S http=y` is exercised in
+		// WasmLispCompilerIntegrationTest.
+		List<LispVal> program = serveProgram("""
 				(defun h (r)
 				  (list :status 200
 				        :body (getf (rontolisp:await (rontolisp:fetch "http://127.0.0.1:9/")) :body)))
 				(rontolisp:http-handler 'h)
-				"""));
+				""");
 		assertThat(new WasmLispCompiler(false, true, false, false, true).compile(program)).isNotEmpty();
 	}
 
@@ -327,11 +342,11 @@ class WasmLispCompilerTest {
 	void httpHandlerWithTcpIsCompileErrorInServeMode() {
 		// There is no serve blob variant with wasi:sockets: fail at compile time
 		// instead of emitting a component that cannot instantiate.
-		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+		List<LispVal> program = serveProgram("""
 				(defun h (r) (list :status 200 :body "x"))
 				(rontolisp:http-handler 'h)
 				(rontolisp:tcp-listen 7777)
-				"""));
+				""");
 		assertThatThrownBy(() -> new WasmLispCompiler(false, true, false, false, true).compile(program))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("rontolisp:tcp-* cannot be used in a rontolisp:http-handler");

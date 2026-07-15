@@ -24,7 +24,7 @@
 ;;   java -jar $JAR examples/net/httpbin.lisp -o Httpbin.class && java -cp $JAR:. Httpbin
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/httpbin.lisp -o httpbin.wasm --component && \
-;;     wasmtime serve -W gc=y httpbin.wasm
+;;     wasmtime serve -W gc=y -W exceptions=y httpbin.wasm
 ;; Talk to it with:
 ;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'
 ;;   curl -X POST -d '{"name":"rontolisp"}' http://127.0.0.1:8080/post

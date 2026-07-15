@@ -67,6 +67,7 @@ package wasi:http@0.2.0 {
     resource incoming-request {
       method: func() -> method;
       path-with-query: func() -> option<string>;
+      headers: func() -> headers;
       consume: func() -> result<incoming-body>;
     }
 
@@ -83,10 +84,6 @@ package wasi:http@0.2.0 {
       other(string),
     }
 
-    resource incoming-body {
-      %stream: func() -> result<input-stream>;
-    }
-
     resource fields {
       constructor();
       append: func(name: field-key, value: field-value) -> result<_, header-error>;
@@ -94,6 +91,10 @@ package wasi:http@0.2.0 {
     }
 
     type headers = fields;
+
+    resource incoming-body {
+      %stream: func() -> result<input-stream>;
+    }
 
     resource outgoing-response {
       constructor(headers: headers);

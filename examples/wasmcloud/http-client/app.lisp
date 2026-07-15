@@ -12,7 +12,7 @@
 ;;     java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
 ;; Run (WASI component under wasmtime serve; -S http=y grants outbound HTTP):
 ;;   rontolisp examples/wasmcloud/http-client/app.lisp -o app.wasm --component && \
-;;     wasmtime serve -W gc=y -S http=y app.wasm
+;;     wasmtime serve -W gc=y -W exceptions=y -S http=y app.wasm
 ;; Run (wasmCloud; .wash/config.yaml builds app.wasm, enables the gc proposal
 ;; and allowlists the upstream -- wash denies outgoing HTTP by default):
 ;;   wash dev    # in this directory; serves on :8000

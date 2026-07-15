@@ -1,15 +1,18 @@
 ;; Stub core whose only purpose is to make `wasm-tools component new` emit the imports for
 ;; import-block-http-server-client.bin (the serve + fetch variant: rontolisp:http-handler AND
-;; rontolisp:fetch in one program). Imports every lowered function the serve-variant
-;; adapters bind -- the full core-http-server.wat set (incoming-request machinery for
-;; adapter-http-server.wat, proxy-world entropy / clock / stdio for the preview1 bridge) PLUS
-;; the outgoing-request machinery of core-http-client.wat's WASI 0.2 http portion, which the
-;; extended bridge (adapter-http-server-client-p1.wat) drives for fetch-start / fetch-await.
-;; Exports a memory (16 pages, shared canonical scratch) + cabi_realloc + run.
+;; rontolisp:fetch in one program). Both halves are Lisp libraries over wit-imported wasi:http
+;; now (serve.lisp handles the incoming side, fetch.lisp the outgoing side), so this imports
+;; the UNION of what they lower: serve.lisp's incoming-request / outgoing-response machinery
+;; (including incoming-request.headers, which the serve adapter never read) PLUS fetch.lisp's
+;; outgoing-request / future / incoming-response machinery, plus wasi:io/poll and
+;; wasi:http/outgoing-handler, plus the proxy-world entropy / clock / stdio the preview1 bridge
+;; (adapter-http-server-p1.wat) provides. Exports a memory (16 pages, shared canonical scratch)
+;; + cabi_realloc + run.
 (module
   ;; wasi:http/types 0.2: incoming request + outgoing response machinery (adapter-http-server)
   (import "wasi:http/types@0.2.0" "[method]incoming-request.method" (func (param i32 i32)))
   (import "wasi:http/types@0.2.0" "[method]incoming-request.path-with-query" (func (param i32 i32)))
+  (import "wasi:http/types@0.2.0" "[method]incoming-request.headers" (func (param i32) (result i32)))
   (import "wasi:http/types@0.2.0" "[method]incoming-request.consume" (func (param i32 i32)))
   (import "wasi:http/types@0.2.0" "[method]incoming-body.stream" (func (param i32 i32)))
   (import "wasi:http/types@0.2.0" "[constructor]fields" (func (result i32)))

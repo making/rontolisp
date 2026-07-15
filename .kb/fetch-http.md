@@ -63,39 +63,38 @@ arrives depends on whether the program also SERVES:
   `canon lower` machinery as any user `wit-import` (`.kb/wit.md`, "Component imports"): the
   **base** blob set is selected and `wasi:http@0.2` + `wasi:io@0.2` come in as canon-lowered
   user imports, so there is NO `http-client` blob variant and NO WAT adapter here.
-  `WasmFetchCompiler` is now a **validator that falls through**: on `component && !serve` it
-  runs the compile-time arity / literal-`:method` check and returns WITHOUT emitting, so
-  control reaches the `fetch.lisp` defun. `emitHttpImport` is gated
-  `component && serve && usesFetch`, so the non-serve path does NOT pull the WAT http
-  machinery (which would double-import `wasi:http` and trip `rejectAdapterImportCollisions`).
-  The promise API is preserved WITHOUT a synchronous fetch: the defun is
+  `WasmFetchCompiler` is now a **validator that falls through**: on `component` (serve OR
+  non-serve) it runs the compile-time arity / literal-`:method` check and returns WITHOUT
+  emitting, so control reaches the `fetch.lisp` defun. There is no `emitHttpImport` /
+  `http` core seam any more (`FUNC_FETCH_START`/`FUNC_FETCH_AWAIT` are permanent trap stubs):
+  fetch is fetch.lisp over canon-lowered `wasi:http` on every `--component` path, serve
+  included. The promise API is preserved WITHOUT a synchronous fetch: the defun is
   `(then (%http-send url options) #'%http-read-response)` -- `%http-send` calls `wasi:http`'s
   `outgoing-handler.handle` (non-blocking, request in flight) and returns the
   `future-incoming-response` handle, and `%http-read-response` blocks (`pollable.block`) only
   when the promise is awaited. Two WASM-subset gotchas `fetch.lisp` hit: **no `search`** and
   **no `position :start`**, so it splits the URL with `subseq` off the first colon.
-- **Serve + fetch (`rontolisp:http-handler` with `rontolisp:fetch` inside) -- the WAT adapter
-  stays.** The serve blob already imports `wasi:http`, so a spliced `fetch.lisp` would
-  collide (`rejectAdapterImportCollisions`); this variant keeps its hand-written adapter
-  (`adapter-http-server-client-p1.wat`, over the 16-page `mem-http-client.wasm`) until the
-  serve path also turns its `wasi:http` imports into user imports. Here the rontolisp core
-  imports a version-agnostic two-function seam (module "http": `fetch-start` (8 x i32, last =
-  handle out-pointer) and `fetch-await` (6 x i32), function indices `FUNC_FETCH_START`=8 /
-  `FUNC_FETCH_AWAIT`=9, trap stubs when unused so `FUNC_START` stays 10 in every mode), and
-  `WasmFetchCompiler.compile` emits the call to it. The adapter's `fetch-start` parses the
-  URL, builds/sends the outgoing-request (streaming the request body) and hands back the
-  `future-incoming-response` handle without waiting; `fetch-await` does
-  `subscribe`/`pollable.block`/`get`, serializes status/headers/body and drops the settled
-  future -- so multiple requests genuinely overlap between start and await. The core rebuilds
-  the result plist inside `_promise_await` via `WasmFetchRuntimeBuilder` helpers; `:method` is
-  resolved statically by `WasmFetchCompiler.methodDiscriminant` (unsupported literal = compile
-  error; runtime-computed = GET). The 0x60000/0x70000 response buffers are shared scratch,
-  safe because the core copies them into GC values before the next `fetch-await`.
-  Regenerating/re-wiring follows `src/wasm-component/README.md`.
+- **Serve + fetch (`rontolisp:http-handler` with `rontolisp:fetch` inside) -- collapsed into
+  serve.lisp + fetch.lisp (todo 135 step 6).** Both halves are Lisp over wit-imported
+  `wasi:http` now: `serve.lisp` handles the incoming side (`wasi:http/incoming-handler`),
+  `fetch.lisp` the outgoing side (`wasi:http/outgoing-handler`). The CLI splices BOTH
+  (`FetchLibrary.process` then `ServeLibrary.process`), and their overlapping `wasi:http/types`
+  / `wasi:io/streams` bindings are merged into one component-level import
+  (`WasmComponentImportCompiler.mergeByIface`); the two `%`-packages keep their own Lisp
+  wrappers, whose duplicate core imports of the same host function are deduplicated onto one
+  import by `WasmLispCompiler`'s import-slot pass (the component model forbids a core module
+  importing one (module,field) twice). `WasmServeComponentBuilder.build` selects the **wide**
+  block (`import-block-http-server-client.bin`: adds `wasi:io/poll` + `wasi:http/outgoing-handler`
+  + the outgoing-request / future / incoming-response members) over the narrow plain-serve
+  block, and lowers the whole surface from it (`lowerServeIoFromBlock`, deduping by field). The
+  preview1 bridge is the SAME `adapter-http-server-p1.wasm` as plain serve -- once fetch is
+  fetch.lisp the core imports no `http` function, so the extended bridge and the WAT serve
+  adapter are both **deleted**. Run with `wasmtime serve -W gc=y -W exceptions=y -S http=y`
+  (EH-mode, outbound HTTP). Regenerating/re-wiring follows `src/wasm-component/README.md`.
 
-**URL/body staging on the serve+fetch WAT path (fixed 2026-07-11, with todo 92 Tier 3)**
-(the non-serve path stages nothing itself -- `fetch.lisp` marshals through the canonical
-ABI): the fetch call site
+**URL/body staging (`fetch.lisp` marshals through the canonical ABI, all paths).** The old
+serve+fetch WAT staging note (fixed 2026-07-11) is retired with the WAT adapter; for the
+record it worked like this: the fetch call site
 stages the URL and request-body bytes into the linear heap via `_str_to_mem` before
 calling `fetch-start` (fixed cells `FETCH_URL_PTR/LEN_ADDR` + `FETCH_REQ_BODY_PTR/LEN_ADDR`
 at 0x4001C-0x40028; HEAP_PTR is advanced past the copies so `_fetch_ser_headers`' own
@@ -183,10 +182,11 @@ here.
   now **`serve.lisp`** (a Lisp-source library, `eval/ServeLibrary`, the mirror of
   `fetch.lisp`): fetch IMPORTS `wasi:http/outgoing-handler`, serve EXPORTS
   `wasi:http/incoming-handler`, and both drive `wasi:http/types` from Lisp. There is
-  **no hand-written serve adapter** on this path (`adapter-http-server.wasm` is used
-  only by serve+fetch below). `ServeLibrary.process` (spliced in the CLI right after
-  `WitImportInliner`, before `UserMacroExpander`, gated to `--component` plain serve --
-  NOT serve+fetch, NOT a `wit-export` world) replaces the `rontolisp:http-handler`
+  **no hand-written serve adapter** on this path (the WAT serve adapter is deleted; the
+  serve+fetch variant below is the SAME builder over a wider block, also adapter-free).
+  `ServeLibrary.process` (spliced in the CLI right after `WitImportInliner`, before
+  `UserMacroExpander`, gated to `--component` serve -- plain OR serve+fetch -- and off for
+  a `wit-export` world) replaces the `rontolisp:http-handler`
   directive with: `serve.lisp` (its own `wasi:io/error` + `wasi:io/streams` +
   `wasi:http/types` `wit-import`s lowered by `ServeLibrary` itself, like `FetchLibrary`),
   a `(defun %serve-dispatch (r) (HANDLER r))` bridge to the program's handler, and a
@@ -210,16 +210,13 @@ here.
   `regen.sh`) plus `needsMemory` decide it. Tests: the serve cases in
   `WasmLispCompilerIntegrationTest` (echo / big response / random-clock-print / keyvalue,
   all through the `compileServeComponent` CLI-path helper).
-- **WASM component, serve+fetch (implemented, `--component` + `rontolisp:fetch`)** -- a
-  `HttpHandlerInliner` cli pre-pass rewrites the directive into a `%http-dispatch`
-  wasm-export wrapper (`"<status>\n<body>"` encoding; a `%http-request` helper splits the
-  adapter's path-with-query at the first `?` into `:path`/`:query` before building the
-  request plist), `WasmLispCompiler` serve mode un-gates wasm-export in component mode, and
-  `WasmServeComponentBuilder.buildHttp` wires mem + `adapter-http-server-client-p1.wasm` +
-  core + `adapter-http-server.wasm` into a `wasi:http/incoming-handler@0.2.0` component for
-  `wasmtime serve -S http=y`. This path keeps the hand-written serve adapter until
-  serve.lisp's and fetch.lisp's `wasi:http/types` imports are reconciled (a later
-  refinement); the plain-serve path above dropped it. On BOTH paths
+- **WASM component, serve+fetch (implemented, `--component` + `rontolisp:fetch`)** -- the
+  SAME `WasmServeComponentBuilder.build` as plain serve, selecting the wide block: serve.lisp
+  and fetch.lisp are both spliced (see the serve+fetch bullet above), `rontolisp:fetch`
+  resolves to fetch.lisp's defun (not `WasmFetchCompiler`), and the component exports
+  `wasi:http/incoming-handler@0.2.0` while importing `wasi:http/outgoing-handler` for the
+  outbound leg. Run with `wasmtime serve -W gc=y -W exceptions=y -S http=y`. There is no
+  serve adapter and no extended bridge -- on BOTH serve paths
   `adapter-http-server-p1.wat` is the preview1 bridge: instantiated BEFORE the core, it
   implements `random_get` over
   `wasi:random/random@0.2.0`, `clock_time_get` over `wasi:clocks/{wall,
@@ -247,49 +244,20 @@ here.
   wasm-GC in Spin's wasmtime and no flag to enable it -- exactly the gap
   wasmCloud's proposal switch fills); Preview-1 WASM output is a compile error
   ("requires --component").
-- **Serve adapter hardening (2026-07-04)** -- three fixes in `adapter-http-server.wat`:
-  (1) response bodies are written in 4096-byte chunks (`blocking-write-and-flush`
-  rejects larger buffers, so any response > 4 KiB used to 500 on every host);
-  (2) `response-outparam.set` runs BEFORE the body writes -- the host only
-  consumes the body stream after the outparam is set, so set-after-write
-  deadlocks past one 4096-byte host buffer; (3) both bump allocators (mem
-  module `cabi_realloc` via the newly exported `"hp"` global, core
-  `__ronto_alloc` heap ptr @84) are reset per request to their post-init
-  snapshots -- `wasmtime serve` instantiates per request, but jco/wasmCloud
-  reuse one instance, where memory otherwise grew by ~response size per
-  request. The core-heap restore is guarded by the runtime intern count (@100):
-  if `_intern` appended records since the snapshot (their (off,len) reference
-  token bytes in place), the snapshot ratchets up instead. The init flag and
-  snapshots are ADAPTER-LOCAL GLOBALS, never linear memory -- a large response
-  sweeps the core bump heap across the 0x50000 scratch page and would corrupt
-  them (the response body sweeping that page is otherwise harmless: all
-  per-request scratch there is written before use).
-- **fetch inside a served handler (serve+fetch variant, 2026-07-04)** -- a
-  program using BOTH `rontolisp:http-handler` and `rontolisp:fetch` compiles to
-  a parallel serve blob set (proxy/aggregator shapes): the preview1
-  bridge is swapped for `adapter-http-server-client-p1.wat` (= adapter-http-server-p1 + its
-  own fetch-start/fetch-await bodies over `wasi:http@0.2` + the errno-returning tcp
-  stubs -- the sole hand-written fetch WAT adapter left, now that the non-serve path is
-  `fetch.lisp`), instantiated BEFORE the core so it can satisfy the core's
-  `http`/`sock` imports (the serve adapter, which comes after the core, cannot).
-  `WasmServeComponentBuilder.buildHttp` wires it over
-  `import-block-http-server-client.bin` (world `uni-http-server-client` = the serve surface +
-  `wasi:io/poll` + `wasi:http/outgoing-handler`; io/poll is dependency-hoisted
-  to instance 0, shifting every serve instance index by one -- constants are
-  independent of `build()` and re-derived from `wasm-tools dump`).
-  `WasmLispCompiler` passes `emitHttpImport` through
-  `WasmComponentBuilder.buildServe(core, usesHttp)`. Still the plain proxy
-  world: run with `wasmtime serve -W gc=y -S http=y` (no async flags). Memory
-  safety: the fetch response-body scratch (0x70000) overlaps the serve
-  adapter's request-body scratch, which is safe because `%http-dispatch`
-  marshals the request into GC strings before the handler (and any fetch)
-  runs. serve + `rontolisp:tcp-*` is a compile error ("cannot be used in a
-  rontolisp:http-handler --component program yet") -- no serve blob variant
-  with wasi:sockets. Interpreter/JVM needed no changes (both sides are
-  `java.net.http.HttpClient` / `HttpServer`). Test:
-  `WasmLispCompilerIntegrationTest.httpHandlerFetchInsideServeUnderWasmtimeServe`
-  (the fetch backend is itself a plain rontolisp serve component, so the test
-  stays offline).
+- **Serve adapter hardening + fetch-inside-serve (2026-07-04, SUPERSEDED by todo 135)** --
+  the hand-written serve adapter (`adapter-http-server.wat`) and the extended serve+fetch
+  bridge (`adapter-http-server-client-p1.wat`) are both DELETED. Their behaviours are now
+  serve.lisp's: response bodies chunked in 4096-byte `blocking-write-and-flush` calls (larger
+  buffers are rejected), `response-outparam.set` BEFORE the body writes (set-after-write
+  deadlocks past one host buffer), child streams dropped before finishing the parent
+  outgoing-body. The old adapter's per-request bump-allocator reset (for jco/wasmCloud, which
+  reuse one instance where wasmtime serve re-instantiates) is a FOLLOW-UP for stateful
+  handlers -- serve.lisp is stateless per request today (HEAP_PTR is re-seeded by an active
+  data segment at instantiation, so a stateless handler needs no reset trigger). serve +
+  `rontolisp:tcp-*` is still a compile error (no serve blob variant with wasi:sockets).
+  Interpreter/JVM needed no changes (both sides are `java.net.http.HttpClient` / `HttpServer`).
+  Test: `WasmLispCompilerIntegrationTest.httpHandlerFetchInsideServeUnderWasmtimeServe` (the
+  fetch backend is itself a plain rontolisp serve component, so the test stays offline).
 - **v1 limitations** -- on the WASM component, request/response headers are
   dropped (the handler sees `:headers nil`, response `:headers` is ignored).
   The interpreter and the JVM backend (since 2026-07-04,

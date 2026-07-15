@@ -505,7 +505,7 @@ class WasmExportCompilerTest {
 		WasmLispCompiler http = new WasmLispCompiler(false, true);
 		http.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.FetchLibrary.process(
 				LispReader.readAllFromString("(print (rontolisp:fetch \"http://127.0.0.1:9/\"))"),
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT)));
 		assertThat(http.componentWit()).contains("  import wasi:http/outgoing-handler@0.2.0;");
 		WasmLispCompiler sock = new WasmLispCompiler(false, true);
 		sock.compile(LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"));

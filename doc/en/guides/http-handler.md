@@ -166,7 +166,7 @@ needed):
 
 ```console
 $ rontolisp proxy.lisp -o proxy.wasm --component
-$ wasmtime serve -W gc=y -S http=y proxy.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -S http=y proxy.wasm
 ```
 
 A complete example is

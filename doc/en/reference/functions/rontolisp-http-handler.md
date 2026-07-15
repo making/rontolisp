@@ -82,7 +82,7 @@ they are bridged to `wasi:random` / `wasi:clocks` / `wasi:cli`, which every
 unavailable. [`rontolisp:fetch`](rontolisp-fetch.md) also works inside a
 served handler (the component then additionally imports
 `wasi:http/outgoing-handler`), so proxy-style handlers run on every backend —
-grant the host outbound HTTP, e.g. `wasmtime serve -W gc=y -S http=y`.
+grant the host outbound HTTP, e.g. `wasmtime serve -W gc=y -W exceptions=y -S http=y`.
 
 A handler may also call a WIT interface of its own with
 [`rontolisp:wit-import`](rontolisp-wit-import.md), which the served component

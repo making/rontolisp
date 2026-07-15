@@ -38,12 +38,14 @@ import org.jspecify.annotations.Nullable;
  * library.
  *
  * <p>
- * <strong>Serve keeps the WAT adapter.</strong> A {@code rontolisp:http-handler}
- * component already imports {@code wasi:http/types} as part of its fixed surface, so a
- * spliced {@code fetch.lisp} importing it again would collide
- * ({@code WasmComponentBuilder.rejectAdapterImportCollisions}). Serve + fetch therefore
- * stays on the hand-written adapter until the serve blob's own {@code wasi:http} imports
- * become user imports too; {@link #process} is gated off when {@code serve} is set.
+ * <strong>Serve + fetch splices this too.</strong> A {@code rontolisp:http-handler}
+ * program that also fetches carries BOTH {@code serve.lisp} (via {@link ServeLibrary})
+ * and {@code fetch.lisp}. Both bind {@code wasi:http/types} / {@code wasi:io}, in
+ * different {@code %}-packages, and the two bindings are merged into one component-level
+ * import downstream ({@code WasmComponentImportCompiler.mergeByIface}), so there is no
+ * collision and no hand-written adapter -- serve.lisp handles the incoming half over
+ * {@code wasi:http/incoming-handler}, fetch.lisp the outgoing half over
+ * {@code wasi:http/outgoing-handler}.
  */
 public final class FetchLibrary {
 
@@ -55,20 +57,19 @@ public final class FetchLibrary {
 	}
 
 	/**
-	 * The compile-path splice: when a {@code --component}, non-serve program references
+	 * The compile-path splice: when a {@code --component} program references
 	 * {@code rontolisp:fetch}, prepend {@code fetch.lisp} with its {@code wit-import}
-	 * directives already lowered. A no-op on every other backend, in serve mode, and when
-	 * the program does not fetch (so a non-fetching component is byte-identical to one
-	 * built before this library existed) or already defines {@code rontolisp:fetch}
-	 * itself.
+	 * directives already lowered. This fires whether or not the program also serves (a
+	 * served handler that fetches gets both this and {@link ServeLibrary}). A no-op on
+	 * every other backend, and when the program does not fetch (so a non-fetching
+	 * component is byte-identical to one built before this library existed) or already
+	 * defines {@code rontolisp:fetch} itself.
 	 * @param program the top-level forms
 	 * @param backend the backend being compiled for
-	 * @param serve whether this is a {@code rontolisp:http-handler} (serve-mode)
-	 * component
 	 * @return the program, spliced when applicable
 	 */
-	public static List<LispVal> process(List<LispVal> program, WitExportDirective.Backend backend, boolean serve) {
-		if (backend != WitExportDirective.Backend.WASM_COMPONENT || serve) {
+	public static List<LispVal> process(List<LispVal> program, WitExportDirective.Backend backend) {
+		if (backend != WitExportDirective.Backend.WASM_COMPONENT) {
 			return program;
 		}
 		if (!referencesFetch(program) || definesFetch(program)) {
@@ -99,10 +100,7 @@ public final class FetchLibrary {
 
 	/**
 	 * Returns whether any top-level form references the built-in {@code rontolisp:fetch}
-	 * (as a call or a first-class value). The serve wiring uses this to keep a
-	 * serve+fetch program on the WAT adapter (where the fixed surface already imports
-	 * wasi:http) rather than the serve.lisp path, whose own wasi:http import would
-	 * collide with fetch.lisp's.
+	 * (as a call or a first-class value) -- the trigger for splicing {@code fetch.lisp}.
 	 * @param program the top-level forms
 	 * @return {@code true} when the program references {@code rontolisp:fetch}
 	 */

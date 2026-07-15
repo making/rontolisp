@@ -98,7 +98,7 @@ class WitOracleE2eTest {
 		WasmLispCompiler http = new WasmLispCompiler(false, true);
 		http.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.FetchLibrary.process(
 				LispReader.readAllFromString("(print (rontolisp:fetch \"http://127.0.0.1:9/\"))"),
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT)));
 		String wit = Objects.requireNonNull(http.componentWit());
 		assertThat(wit).contains("import wasi:http/types@0.2.0;")
 			.contains("import wasi:http/outgoing-handler@0.2.0;")

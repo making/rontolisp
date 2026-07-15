@@ -606,63 +606,47 @@ public final class WasmComponentBuilder {
 
 	/**
 	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program:
-	 * wrap the rontolisp core (which exports {@code %http-dispatch},
-	 * {@code __ronto_alloc} and {@code run}) with the preview1 bridge
+	 * wrap the rontolisp core (compiled in serve mode, exporting serve.lisp's
+	 * {@code handle} and {@code __ronto_alloc}) with the preview1 bridge
 	 * ({@code adapter-http-server-p1.wasm}: random / clocks / stdout-stderr for the
-	 * core's {@code wasi_snapshot_preview1} imports) and the serve adapter
-	 * ({@code adapter-http-server.wasm}) so the component exports
-	 * {@code wasi:http/incoming-handler@0.2.0} and runs under {@code wasmtime serve} (or
-	 * any {@code wasi:http} 0.2 host with wasm-GC enabled, e.g. jco or wasmCloud).
+	 * core's {@code wasi_snapshot_preview1} imports) and lift {@code handle} into
+	 * {@code wasi:http/incoming-handler@0.2.0}. The HTTP glue is Lisp (serve.lisp), so
+	 * there is no hand-written serve adapter. Runs under {@code wasmtime serve} (or any
+	 * {@code wasi:http} 0.2 host with wasm-GC enabled, e.g. jco or wasmCloud).
 	 * @param coreModule the rontolisp core module compiled in serve mode
 	 * @return the WASI 0.2 (http/incoming-handler) component binary
 	 */
 	public static byte[] buildServe(byte[] coreModule) {
-		return buildServe(coreModule, false);
+		return buildServe(coreModule, List.of());
 	}
 
 	/**
-	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program.
-	 * When the program also uses {@code rontolisp:fetch}, the serve+fetch variant is
-	 * assembled instead: the preview1 bridge is the extended
-	 * {@code adapter-http-server-client-p1.wasm}, which additionally satisfies the core's
-	 * {@code http} (fetch-start / fetch-await) imports so a served handler can make
-	 * outgoing requests (run with {@code wasmtime serve -S http=y}).
+	 * Assemble the serve-variant component, additionally importing the given interfaces.
+	 * A handler that also uses {@code rontolisp:fetch} carries fetch.lisp's outgoing
+	 * {@code wasi:http} bindings here too, and {@link WasmServeComponentBuilder#build}
+	 * selects the wider import block for it (run with {@code wasmtime serve -S http=y});
+	 * a served handler whose state lives in a real store adds a
+	 * {@code rontolisp:wit-import} (e.g. wasi:keyvalue), wired by
+	 * {@link #appendUserImports}. An import-free plain serve component stays
+	 * byte-identical.
 	 * @param coreModule the rontolisp core module compiled in serve mode
-	 * @param usesHttp whether the program uses {@code rontolisp:fetch}
+	 * @param imports the interface imports (fixed wasi:io / wasi:http from serve.lisp /
+	 * fetch.lisp, plus any user {@code rontolisp:wit-import}; empty for none)
 	 * @return the WASI 0.2 (http/incoming-handler) component binary
 	 */
-	public static byte[] buildServe(byte[] coreModule, boolean usesHttp) {
-		return buildServe(coreModule, usesHttp, List.of());
-	}
-
-	/**
-	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program,
-	 * additionally importing the given user WIT interfaces
-	 * ({@code rontolisp:wit-import}): a served handler whose state lives in a real store
-	 * is exactly this combination. The wiring is {@link #appendUserImports}, as on the
-	 * three non-serve variants; an empty import list emits nothing and shifts nothing, so
-	 * an import-free serve component stays byte-identical.
-	 * @param coreModule the rontolisp core module compiled in serve mode
-	 * @param usesHttp whether the program uses {@code rontolisp:fetch}
-	 * @param imports the user WIT interface imports (empty for none)
-	 * @return the WASI 0.2 (http/incoming-handler) component binary
-	 */
-	static byte[] buildServe(byte[] coreModule, boolean usesHttp, List<WasmComponentImportCompiler.Import> imports) {
-		if (usesHttp) {
-			// Serve+fetch still rides the hand-written serve adapter, whose fixed surface
-			// is
-			// FIXED (not in the import list), so every interface in the list is an
-			// additional
-			// user import.
-			rejectAdapterImportCollisions(imports, WitEmitter.VARIANT_HTTP_SERVER_CLIENT);
-			return WasmServeComponentBuilder.buildHttp(coreModule, imports);
-		}
-		// Plain serve: serve.lisp's own wasi:io / wasi:http/types imports ARE the fixed
-		// surface (lowered from the block by WasmServeComponentBuilder.build), not user
-		// imports, so only the ADDITIONAL interfaces are checked for a double-import
-		// collision.
-		rejectAdapterImportCollisions(WasmServeComponentBuilder.additionalImports(imports),
-				WitEmitter.VARIANT_HTTP_SERVER);
+	static byte[] buildServe(byte[] coreModule, List<WasmComponentImportCompiler.Import> imports) {
+		// Only the ADDITIONAL rontolisp:wit-import interfaces are checked for a
+		// double-import
+		// collision -- the fixed wasi:io / wasi:http surface is declared by the import
+		// block
+		// and lowered from it, not re-imported. The surface's variant grows with fetch,
+		// so
+		// pick the WIT world that matches (its interface list is what the check compares
+		// a
+		// user import against).
+		final String variant = WasmServeComponentBuilder.usesFetchSurface(imports)
+				? WitEmitter.VARIANT_HTTP_SERVER_CLIENT : WitEmitter.VARIANT_HTTP_SERVER;
+		rejectAdapterImportCollisions(WasmServeComponentBuilder.additionalImports(imports), variant);
 		return WasmServeComponentBuilder.build(coreModule, imports);
 	}
 
