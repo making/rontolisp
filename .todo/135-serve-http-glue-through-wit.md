@@ -140,3 +140,177 @@ instance-type declaration encoder for this; nothing needs it.
 - `wasmtime serve` still runs it with the same flags; the fetch-inside-serve variant
   (`http-server-client`) collapses into "serve + the fetch library" (`.todo/136`).
 - `.kb/wasi-component.md` + `.kb/fetch-http.md` + `.kb/wit.md`; docs en/ja.
+
+## Implementation plan (session 2026-07-15, after the second survey)
+
+The second survey (six parallel readers) confirmed the six gap sites and, crucially,
+**simplified the codegen**: the core `handle` wrapper is byte-identical to a plain
+`wasm-export` with two `:int` params and a `:void` return, because a handle box/unbox
+(`ref.i31` / `i31.get_s`) is exactly `WasmExportCompiler`'s `:int` box/unbox. So there is
+**no new `WasmComponentExportCompiler` marshalling** for the serve case; the only new thing
+is at the COMPONENT level (the exported `handle`'s functype must reference
+`own<incoming-request>` / `own<response-outparam>` aliased from the wit-imported
+`wasi:http/types` instance, and it is exported as an INSTANCE under
+`wasi:http/incoming-handler@0.2.0`, not a bare func). The byte encoders for all of that
+already exist (`aliasInstanceType` / `definedOwn` / `funcTypeParamsNoResult` / `canonLift` /
+`componentInstanceFromFunc` / `exportInstance`) and are exercised by the hardcoded
+`WasmServeComponentBuilder` today.
+
+Target serve component shape (no serve adapter):
+```
+core 0 = mem module
+core 1 = preview1 bridge (adapter-http-server-p1.wasm)  -- STAYS
+core 2 = rontolisp core, serve mode:
+           - wit-imports wasi:io + wasi:http/types (incoming half) via serve.lisp
+             (canon-lowered through appendUserImports, the fetch.lisp pattern)
+           - exports %serve-handle (wasm-export :int :int -> :void), the Lisp glue
+           - imports wasi_snapshot_preview1 from the bridge (print/clock/random)
+interface export:
+   alias incoming-request / response-outparam out of the wit-imported wasi:http/types
+   instance; own<>; funcTypeParamsNoResult; canonLift the core %serve-handle; instance;
+   exportInstance "wasi:http/incoming-handler@0.2.0"
+```
+
+Stages (each verified before the next; the WAT/import-block blobs are the byte-identity
+oracle -- do NOT delete them until the new path is green on `wasmtime serve`):
+
+1. **serve.lisp + eval/ServeLibrary** (the fetch.lisp mirror): wit-imports
+   `wasi:http/types@0.2.0` + `wasi:io/streams@0.2.0` (+ error/poll as needed) into package
+   `%serve-http` etc., defines `%serve-handle(request response-out)` reproducing
+   `adapter-http-server.wat`'s algorithm (read method/path/headers/body, call the user
+   handler, build+set the response, write the body in <=4096 chunks, drops in child-first
+   order). **NEW: reads request headers and writes response headers** (the WAT drops them) --
+   "serve on WASM grows headers". Spliced only on `--component` serve.
+2. **wit-export interface exports** (front-end): `WitExportDirective` stops refusing an
+   `ExportRef`/`use`d interface, resolves its functions, and lowers each to an internal
+   interface-export form (mirror of `%component-import`); `designator` grows a `Rep.HANDLE`
+   arm. `RontoLispCli` drops the `serve && witWorld` mutual-exclusion guard.
+3. **export-side component wiring**: generalize the interface-export lift so the serve
+   builder lifts the core's `%serve-handle` wasm-export (not the deleted adapter's `serve`),
+   building the `own<>` funcType from the wit-imported instance.
+4. **reshape the serve import block + rewrite WasmServeComponentBuilder**: wasi:http/io move
+   to user imports (appendUserImports); a new minimal fixed import block provides ONLY the
+   preview1 bridge's WASI (random/clocks/cli). Blob regen (`src/wasm-component/regen.sh`,
+   re-derive indices from `wasm-tools dump`). Drop the serve adapter.
+5. **verify plain serve** on `wasmtime serve` (GET/POST/headers).
+6. **collapse serve+fetch** into serve + fetch.lisp (both now wit-import wasi:http, no
+   collision); delete `adapter-http-server.wat` + the import blocks + the serve+fetch adapter.
+7. byte-identity of unaffected artifacts, full test suite, native E2E, docs en/ja, then
+   confirm commit.
+
+## SESSION STATE (2026-07-15, session 2) -- PLAIN-SERVE MUST DONE
+
+Steps 1-5 + 7 (minus the deferred collapse) are DONE this session:
+- `WasmServeComponentBuilder.build` rewritten: no serve adapter. `lowerServeIoFromBlock`
+  lowers serve.lisp's wasi:io/http calls FROM the block (alias-out + `canon lower`,
+  `needsMemory` picking options, io/error skipped); the core's `handle` wasm-export is lifted
+  directly against `own<incoming-request>`/`own<response-outparam>`. Additional user imports
+  (keyvalue) partition off via `WasmServeComponentBuilder.additionalImports` and ride
+  `appendUserImports`; a `ServeIo` record threads the next comp-func/core-func/type/core-inst
+  cursors so nothing is hardcoded.
+- `RontoLispCli` wired: `ServeLibrary.process` for `--component` plain serve, gated off for
+  serve+fetch (`FetchLibrary.referencesFetch`) and for a `wit-export` world.
+- `WasmLispCompiler` serve path passes only `additionalImports` to `WitEmitter` (else the
+  fixed surface's packages get double-declared in the emitted WIT -- a bug found + fixed).
+- Verified on `wasmtime serve -W gc=y -W exceptions=y`: GET/POST/query, >4 KiB chunking,
+  **request headers read + response headers written**, and serve+keyvalue `/hits 42` against
+  wasmtime's real `-S keyvalue=y` store.
+- Tests routed to the ServeLibrary path (integration `compileServeComponent` CLI helper +
+  the WasmComponentImportCompiler/WasmExportCompiler/WitOracle serve unit tests); the three
+  serve BACKEND run commands gained `-W exceptions=y` (serve.lisp is EH-mode). WIT fixture +
+  `WasiWitDefinitions` regen'd (http-server gains headers/fields.append/entries). Full suite
+  GREEN (3677, was 3 backend-flag failures, fixed). Docs en/ja + `.kb` updated.
+
+STILL OPEN (step 6, deferred "come last"): collapse serve+fetch into serve.lisp + fetch.lisp
+(both then wit-import wasi:http, no collision) and delete `adapter-http-server.wat` + the
+serve import blocks + the serve+fetch adapter. Serve+fetch still rides the WAT adapter
+(`buildHttp`), unchanged.
+
+## SESSION STATE (2026-07-15) -- WHERE THIS STANDS, for the next session
+
+DONE + in the tree (tree GREEN, always-on WIT tests 40/0):
+- `src/main/resources/am/ik/rontolisp/eval/serve.lisp` -- the Lisp glue (fetch.lisp mirror
+  + WAT algorithm + request/response HEADERS, which the WAT dropped). References these
+  wasi:http/types members (all cross --component): incoming-request-{method,path-with-query,
+  headers,consume,drop}, incoming-body-{stream,drop}, input-stream-{blocking-read,drop},
+  output-stream-{blocking-write-and-flush,drop}, fields-{entries,drop,new,append},
+  outgoing-response-{new,set-status-code,body}, outgoing-body-{write,finish},
+  response-outparam-set. Imports wasi:io/error + wasi:io/streams + wasi:http/types.
+- `src/main/java/am/ik/rontolisp/eval/ServeLibrary.java` -- the splice (FetchLibrary mirror):
+  lowers serve.lisp's wit-imports itself, synthesizes `(defun %serve-dispatch (r) (HANDLER r))`
+  + `(rontolisp:wasm-export '%serve-handle :as "handle" :params '(:int :int) :returns :void)`.
+  NOT yet wired into RontoLispCli.
+- `src/wasm-component/core-http-server.wat` EXPANDED (+incoming-request.headers, +fields.append,
+  +fields.entries, +[resource-drop]fields) and `import-block-http-server.bin` REGEN'D
+  (2966->3226 bytes). OUTER component-type space UNCHANGED (0-12; T_INPUT_STREAM=4,
+  T_OUTPUT_STREAM=5; next free 13); import instances 0-7 unchanged.
+
+KEY DESIGN FACTS decided this session (do NOT re-derive):
+- The core `handle` wrapper == a plain `wasm-export :int :int -> :void` (handle box/unbox ==
+  :int box/unbox). NO new WasmComponentExportCompiler for serve. NO general wit-export
+  interface-export front-end needed for the MUST -- the serve builder lifts the core's
+  `handle` wrapper directly, like it lifts the adapter's `serve` today.
+- A minimal preview1-bridge block (random/clocks/cli only) is IMPOSSIBLE: wasi:cli/stdout
+  implicitly imports wasi:io/streams' output-stream (nominal), which collides with serve.lisp's
+  io/streams user import. => REUSE the (expanded) full block and lower http/io FROM IT for the
+  core (NOT appendUserImports, which would double-import). This is why the block is kept, not
+  deleted (a documented deviation from the table above -- the deletion is a later refinement).
+- INIT: HEAP_PTR is seeded by an ACTIVE DATA SEGMENT at instantiation (WasmLispCompiler
+  :1320,:2689), NOT by FUNC_START. So a STATELESS handler works with NO init trigger. The
+  init-once (call FUNC_START from the handle wrapper, guarded like the old adapter's $inited)
+  is a FOLLOW-UP for stateful handlers.
+
+NEXT STEP = rewrite `WasmServeComponentBuilder.build` (plain serve, imports =
+io/error+io/streams+http/types). FULL layout (component funcs / core funcs / core instances /
+component types):
+
+- `writeRaw(IMPORT_BLOCK_HTTP_SERVER)`  [types 0-12, import instances 0-7]
+- core modules: 0=`MEM_MODULE`, 1=`ADAPTER_HTTP_SERVER_P1` (bridge), 2=coreModule. NO serve
+  adapter.
+- core inst 0 = mem instantiate; alias mem `memory`(0) + `cabi_realloc` (core func 0)
+- bridge WASI: alias+lower 6 -> component funcs 0-5, core funcs 1-6:
+  - `get-random-u64`(INST_RANDOM=4)=canonLower -> core 1
+  - wall `now`(INST_WALL_CLOCK=5)=canonLowerMemory(_,0) -> core 2
+  - mono `now`(INST_MONO_CLOCK=0)=canonLower -> core 3
+  - `get-stdout`(INST_CLI_STDOUT=6)=canonLower -> core 4
+  - `get-stderr`(INST_CLI_STDERR=7)=canonLower -> core 5
+  - `[method]output-stream.blocking-write-and-flush`(INST_IO_STREAMS=2)=canonLowerMemory(_,0) -> core 6
+- core inst 1 = bridge "w": `coreInstanceFromFuncs([rand-u64,wall-now,mono-now,get-stdout,
+  get-stderr,io-write],[1,2,3,4,5,6])`
+- core inst 2 = bridge instantiate(module 1,[mem,w],[0,1])
+- serve.lisp http/io lowering FROM BLOCK (a helper): for the http/types(inst3) + io/streams(inst2)
+  Imports, per `decl`: `aliasInstanceFunc(blockInst, decl.field())` + `canonLower`
+  (`WasmComponentImportCompiler.needsMemory(decl)` ? `canonLowerMemoryReallocUtf8(f,0,0)` :
+  `canonLower(f)`); per `drop`: project the resource (`aliasInstanceType`, ONCE into a shared
+  map) + `canonResourceDrop`; build one `coreInstanceFromFuncs` per iface, exports keyed by
+  `decl.field()` / `drop.field()`. io/error is skipped (0 decls). -> component funcs 6.., core
+  funcs 7.. ; the core instances land at 3 (io/streams), 4 (http/types).
+- core inst 5 = coreModule instantiate(module 2,[mem, wasi_snapshot_preview1,
+  "wasi:io/streams@0.2.0", "wasi:http/types@0.2.0"],[0,2,3,4]). (module names = the canonical
+  iface ids the core imports under.)
+- Interface export: project `incoming-request` + `response-outparam` from block inst 3 (REUSE
+  the drop projection of incoming-request); `definedOwn`x2; `funcTypeParamsNoResult(
+  [request,response-out],[own_req,own_resp])`; `aliasCoreFunc(core inst 5, "handle")`;
+  `canonLift(handle core func, handleFuncType)`; `componentInstanceFromFunc("handle", handle
+  comp func)`; `exportInstance("wasi:http/incoming-handler@0.2.0", inst)`. Component types
+  13.. = the resource projections + the two own<> + the handle funcType. The exported handle
+  instance = component instance 8 (no user imports).
+
+Then wire `ServeLibrary.process` into `RontoLispCli` (replace the `HttpHandlerInliner.inline`
+call for --component serve; splice at the pre-`UserMacroExpander` point, ~line 279, so
+serve.lisp's cond/handler-case/let* expand). The `serve && witWorld` guard is unaffected (serve
+uses no user wit-export). Ensure WasmLispCompiler serve mode still collects the %component-import
+imports and generates the "handle" wasm-export wrapper (both already happen; just verify).
+Verify: `rontolisp h.lisp -o h.wasm --component && wasmtime serve -W gc=y h.wasm` + curl
+GET/POST/headers. Then regen the WasiWitDefinitions http-server fixture (adds
+headers/fields.append/entries to the emitted WIT) so WitOracleE2eTest stays consistent.
+serve+fetch collapse (serve.lisp + fetch.lisp share the http/types import) + adapter-http-server.wat
+deletion come last.
+
+Handy API notes: `componentInstanceFromFunc` hardcodes a count of 1 (fine, incoming-handler has
+one func). `exportInstance` writes no type ascription (0x00), which is why referencing the
+imported resource types structurally is legal. Do NOT call `appendUserImports` for the three
+serve built-ins (io/error/io/streams/http/types) -- they are in the block, and appendUserImports
+would re-import them (collision); it IS still the path for any ADDITIONAL user wit-import
+(serve+keyvalue, todo 134) -- those are not in the block. Toolchain present: wasmtime 46.0.1,
+wasm-tools 1.252.0.

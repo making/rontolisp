@@ -61,7 +61,7 @@ It also compiles to a **WASI HTTP component** that runs under
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y app.wasm
+$ wasmtime serve -W gc=y -W exceptions=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -71,7 +71,9 @@ There the module exports `wasi:http/incoming-handler` and the host owns the
 socket, so the `port` argument is ignored. Note the command needs none of the
 `component-model-async` flags that `wasmtime run` needs for a regular rontolisp
 component: the serve component is plain WASI 0.2, so its only non-default host
-requirement is the WebAssembly GC proposal (`-W gc=y`).
+requirements are the WebAssembly GC proposal (`-W gc=y`) and the exception-handling
+proposal (`-W exceptions=y`, which the Lisp-written HTTP glue uses to detect
+end-of-body).
 
 ## Other WASI HTTP runtimes
 
@@ -218,9 +220,9 @@ worked example is
 
 ## Limitations
 
-On the WASI component backend, request and response headers are not marshalled
-yet: the handler sees `:headers nil` and `:headers` in the response is ignored.
-The interpreter and the JVM backend pass headers through.
+Request and response headers are marshalled on every backend, including the WASI
+component: the handler reads `:headers` (an alist of `(name . value)` string pairs)
+from the request and any `:headers` in the response is written back.
 
 Inside a served component handler, `random`, the time built-ins and `print`
 (to the host's stdout) all work — the component bridges them to the

@@ -107,12 +107,14 @@ class WasmComponentImportCompilerTest {
 		return new WasmLispCompiler(false, true).compile(am.ik.rontolisp.eval.WitLibrary.process(forms));
 	}
 
-	// The same path in SERVE mode: the CLI splices the %http-dispatch wrapper last (after
-	// every library pass), then compiles the core in serve mode.
+	// The same path in SERVE mode: the CLI splices serve.lisp's HTTP glue (ServeLibrary),
+	// whose `handle` wrapper is lifted into wasi:http/incoming-handler -- no serve
+	// adapter.
 	private static byte[] compileServeComponent(String source) {
-		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner
-			.inline(am.ik.rontolisp.eval.WitLibrary.process(LispReader.readAllFromString(source)));
-		return new WasmLispCompiler(false, true, false, false, true).compile(program);
+		List<LispVal> loaded = am.ik.rontolisp.eval.ServeLibrary.process(LispReader.readAllFromString(source),
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
+		return new WasmLispCompiler(false, true, false, false, true)
+			.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
 	}
 
 	private static boolean containsAscii(byte[] bytes, String needle) {
@@ -652,10 +654,12 @@ class WasmComponentImportCompilerTest {
 
 	@Test
 	void aServedComponentImportsTheInterfaceAlongsideItsFixedWasiHttpSurface() {
-		// A rontolisp:http-handler component wires TWO adapters (the preview1 bridge
-		// before the core, the serve adapter after it), so its index bookkeeping is its
-		// own -- but the user import rides the same appendUserImports wiring as the other
-		// three variants, and the fixed wasi:http/incoming-handler export survives it.
+		// A rontolisp:http-handler component wraps the preview1 bridge and the serve core
+		// (serve.lisp's HTTP glue, whose wasi:io / wasi:http imports are lowered from the
+		// block), so its index bookkeeping is its own -- but an ADDITIONAL user import
+		// rides
+		// the same appendUserImports wiring as the other three variants, and the fixed
+		// wasi:http/incoming-handler export survives it.
 		String witLiteral = "\"" + KV_WIT.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
 		byte[] component = compileServeComponent("(defpackage kv (:use cl) (:export open))\n"
 				+ "(rontolisp::%component-import \"wasi:keyvalue/store@0.2.0-draft\" " + witLiteral

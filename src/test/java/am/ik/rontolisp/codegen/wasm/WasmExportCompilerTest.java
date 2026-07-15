@@ -514,10 +514,12 @@ class WasmExportCompilerTest {
 
 	@Test
 	void serveComponentWitExportsTheIncomingHandlerOnly() {
-		List<LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(LispReader.readAllFromString("""
+		List<LispVal> loaded = am.ik.rontolisp.eval.ServeLibrary.process(LispReader.readAllFromString("""
 				(defun h (r) (list :status 200 :body "x"))
 				(rontolisp:http-handler 'h)
-				"""));
+				"""), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
+		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
 		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, true);
 		compiler.compile(program);
 		assertThat(compiler.componentWit()).contains("  export wasi:http/incoming-handler@0.2.0;")

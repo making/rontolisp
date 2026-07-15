@@ -2719,9 +2719,20 @@ public final class WasmLispCompiler implements LispCompiler {
 				// A rontolisp:wit-import joins the fixed wasi:http surface as an extra
 				// instance import (canon lower), so a handler's state can live in a real
 				// store.
+				// serve.lisp's own wasi:io / wasi:http/types imports are part of the
+				// FIXED
+				// surface (the import block), so they must NOT be re-emitted as user
+				// imports
+				// (that double-declares their packages in the emitted WIT) -- only the
+				// ADDITIONAL rontolisp:wit-import interfaces are (a served handler whose
+				// state
+				// lives in a real store: wasi:keyvalue joins as an extra instance
+				// import).
+				List<WasmComponentImportCompiler.Import> serveUserImports = WasmServeComponentBuilder
+					.additionalImports(componentImports);
 				this.componentWit = WitEmitter.emit(
 						emitHttpImport ? WitEmitter.VARIANT_HTTP_SERVER_CLIENT : WitEmitter.VARIANT_HTTP_SERVER,
-						List.of(), componentImports);
+						List.of(), serveUserImports);
 				return WasmComponentBuilder.buildServe(coreModule, emitHttpImport, componentImports);
 			}
 			// Lift each wasm-export into a host-callable component-model export

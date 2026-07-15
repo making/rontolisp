@@ -8,9 +8,12 @@
   ;; wasi:http/types 0.2: incoming request + outgoing response machinery
   (import "wasi:http/types@0.2.0" "[method]incoming-request.method" (func (param i32 i32)))
   (import "wasi:http/types@0.2.0" "[method]incoming-request.path-with-query" (func (param i32 i32)))
+  (import "wasi:http/types@0.2.0" "[method]incoming-request.headers" (func (param i32) (result i32)))
   (import "wasi:http/types@0.2.0" "[method]incoming-request.consume" (func (param i32 i32)))
   (import "wasi:http/types@0.2.0" "[method]incoming-body.stream" (func (param i32 i32)))
   (import "wasi:http/types@0.2.0" "[constructor]fields" (func (result i32)))
+  (import "wasi:http/types@0.2.0" "[method]fields.append" (func (param i32 i32 i32 i32 i32 i32)))
+  (import "wasi:http/types@0.2.0" "[method]fields.entries" (func (param i32 i32)))
   (import "wasi:http/types@0.2.0" "[constructor]outgoing-response" (func (param i32) (result i32)))
   (import "wasi:http/types@0.2.0" "[method]outgoing-response.set-status-code" (func (param i32 i32) (result i32)))
   (import "wasi:http/types@0.2.0" "[method]outgoing-response.body" (func (param i32 i32)))
@@ -19,6 +22,7 @@
   (import "wasi:http/types@0.2.0" "[static]response-outparam.set" (func (param i32 i32 i32 i32 i64 i32 i32 i32 i32)))
   (import "wasi:http/types@0.2.0" "[resource-drop]incoming-request" (func (param i32)))
   (import "wasi:http/types@0.2.0" "[resource-drop]incoming-body" (func (param i32)))
+  (import "wasi:http/types@0.2.0" "[resource-drop]fields" (func (param i32)))
   ;; wasi:io/streams 0.2: request/response body streaming
   (import "wasi:io/streams@0.2.0" "[method]input-stream.blocking-read" (func (param i32 i64 i32)))
   (import "wasi:io/streams@0.2.0" "[method]output-stream.blocking-write-and-flush" (func (param i32 i32 i32 i32)))

@@ -97,7 +97,16 @@ public final class FetchLibrary {
 		return out;
 	}
 
-	private static boolean referencesFetch(List<LispVal> program) {
+	/**
+	 * Returns whether any top-level form references the built-in {@code rontolisp:fetch}
+	 * (as a call or a first-class value). The serve wiring uses this to keep a
+	 * serve+fetch program on the WAT adapter (where the fixed surface already imports
+	 * wasi:http) rather than the serve.lisp path, whose own wasi:http import would
+	 * collide with fetch.lisp's.
+	 * @param program the top-level forms
+	 * @return {@code true} when the program references {@code rontolisp:fetch}
+	 */
+	public static boolean referencesFetch(List<LispVal> program) {
 		String fetch = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
 		for (LispVal form : program) {
 			if (references(form, fetch)) {

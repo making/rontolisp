@@ -60,7 +60,7 @@ GET /hello
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y app.wasm
+$ wasmtime serve -W gc=y -W exceptions=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -70,8 +70,9 @@ GET /hello
 ホストが所有するため `port` 引数は無視されます。通常の rontolisp コンポーネントを
 `wasmtime run` で実行する際に必要な `component-model-async` 系のフラグが一切
 不要な点に注目してください。serve コンポーネントは純粋な WASI 0.2 であり、
-ホストに要求するデフォルト外の機能は WebAssembly GC プロポーザル（`-W gc=y`）
-だけです。
+ホストに要求するデフォルト外の機能は WebAssembly GC プロポーザル（`-W gc=y`）と
+例外処理プロポーザル（`-W exceptions=y`。Lisp で書かれた HTTP グルーがボディの
+終端検出に使用します）だけです。
 
 ## その他の WASI HTTP ランタイム
 
@@ -221,10 +222,10 @@ $ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
 
 ## 制限
 
-WASI コンポーネントバックエンドでは、リクエスト／レスポンスのヘッダはまだ
-受け渡しされません。ハンドラには `:headers nil` が渡され、レスポンスの
-`:headers` は無視されます。インタープリタと JVM バックエンドはヘッダを
-そのまま受け渡しします。
+リクエスト／レスポンスのヘッダは WASI コンポーネントを含むすべての
+バックエンドで受け渡しされます。ハンドラはリクエストの `:headers`
+（`(名前 . 値)` という文字列ペアの連想リスト）を読み取り、レスポンスに
+`:headers` があれば書き戻します。
 
 serve コンポーネントのハンドラ内でも `random`、時刻系の組み込み関数、
 `print`（ホストの標準出力への出力）はすべて動作します — コンポーネントが

@@ -179,18 +179,49 @@ here.
   program. Tests: `HttpHandlerJvmTest` (eval pkg for the shutdown seam;
   compile + curl round trips incl. `--optimize`) and
   `JvmLispCompilerTest.compileHttpHandlerImplementsHandlerInterface`.
-- **WASM component (implemented, `--component`)** -- a `HttpHandlerInliner` cli
-  pre-pass rewrites the directive into a `%http-dispatch` wasm-export wrapper
-  (`"<status>\n<body>"` encoding; a `%http-request` helper splits the adapter's
-  path-with-query at the first `?` into `:path`/`:query` before building the
-  request plist), `WasmLispCompiler` serve mode un-gates
-  wasm-export in component mode, and `WasmServeComponentBuilder.buildServe`
-  wires mem + `adapter-http-server-p1.wasm` + core + `adapter-http-server.wasm` into a
-  `wasi:http/incoming-handler@0.2.0` component for `wasmtime serve -W gc=y`.
-  `adapter-http-server-p1.wat` is the preview1 bridge: instantiated BEFORE the core
-  (the serve adapter imports the core's `%http-dispatch`, so unlike the
-  `wasmtime run` adapter it cannot also provide the core's
-  `wasi_snapshot_preview1` imports), it implements `random_get` over
+- **WASM component, plain serve (implemented, `--component`)** -- the HTTP glue is
+  now **`serve.lisp`** (a Lisp-source library, `eval/ServeLibrary`, the mirror of
+  `fetch.lisp`): fetch IMPORTS `wasi:http/outgoing-handler`, serve EXPORTS
+  `wasi:http/incoming-handler`, and both drive `wasi:http/types` from Lisp. There is
+  **no hand-written serve adapter** on this path (`adapter-http-server.wasm` is used
+  only by serve+fetch below). `ServeLibrary.process` (spliced in the CLI right after
+  `WitImportInliner`, before `UserMacroExpander`, gated to `--component` plain serve --
+  NOT serve+fetch, NOT a `wit-export` world) replaces the `rontolisp:http-handler`
+  directive with: `serve.lisp` (its own `wasi:io/error` + `wasi:io/streams` +
+  `wasi:http/types` `wit-import`s lowered by `ServeLibrary` itself, like `FetchLibrary`),
+  a `(defun %serve-dispatch (r) (HANDLER r))` bridge to the program's handler, and a
+  `(rontolisp:wasm-export '%serve-handle :as "handle" :params '(:int :int) :returns :void)`.
+  The core `handle` wrapper == a plain `wasm-export` of two handle-carrying `:int` params
+  (a resource handle boxes/unboxes exactly as an `:int`), so there is no new export-side
+  marshalling. `WasmServeComponentBuilder.build` lowers serve.lisp's `wasi:io` /
+  `wasi:http/types` calls **FROM the import block** (`aliasInstanceFunc` + `canon lower`,
+  the same canonical ABI `fetch.lisp` uses -- NOT `appendUserImports`, which would
+  re-import them), then lifts the core's `handle` export against the
+  `own<incoming-request>` / `own<response-outparam>` function type into
+  `wasi:http/incoming-handler@0.2.0`. **serve on WASM grows headers here**: `serve.lisp`
+  reads request headers (`incoming-request.headers` + `fields.entries`) and writes
+  response headers (`fields.append`) -- both were silently dropped by the old WAT adapter.
+  serve.lisp uses `handler-case` (EOF on `blocking-read`), so the component is EH-mode:
+  run with `wasmtime serve -W gc=y -W exceptions=y`. An ADDITIONAL `rontolisp:wit-import`
+  (e.g. `wasi:keyvalue`, so a handler's state lives in a real store) rides
+  `appendUserImports` alongside the fixed surface, exactly like the other variants.
+  `WasmServeComponentBuilder.build`'s wiring carries no hardcoded per-function canonical
+  option table -- the block's expanded import set (`core-http-server.wat`, regen'd via
+  `regen.sh`) plus `needsMemory` decide it. Tests: the serve cases in
+  `WasmLispCompilerIntegrationTest` (echo / big response / random-clock-print / keyvalue,
+  all through the `compileServeComponent` CLI-path helper).
+- **WASM component, serve+fetch (implemented, `--component` + `rontolisp:fetch`)** -- a
+  `HttpHandlerInliner` cli pre-pass rewrites the directive into a `%http-dispatch`
+  wasm-export wrapper (`"<status>\n<body>"` encoding; a `%http-request` helper splits the
+  adapter's path-with-query at the first `?` into `:path`/`:query` before building the
+  request plist), `WasmLispCompiler` serve mode un-gates wasm-export in component mode, and
+  `WasmServeComponentBuilder.buildHttp` wires mem + `adapter-http-server-client-p1.wasm` +
+  core + `adapter-http-server.wasm` into a `wasi:http/incoming-handler@0.2.0` component for
+  `wasmtime serve -S http=y`. This path keeps the hand-written serve adapter until
+  serve.lisp's and fetch.lisp's `wasi:http/types` imports are reconciled (a later
+  refinement); the plain-serve path above dropped it. On BOTH paths
+  `adapter-http-server-p1.wat` is the preview1 bridge: instantiated BEFORE the core, it
+  implements `random_get` over
   `wasi:random/random@0.2.0`, `clock_time_get` over `wasi:clocks/{wall,
   monotonic-}clock@0.2.0` and `fd_write` (fd 1/2) over `wasi:cli/{stdout,
   stderr}@0.2.0` streams in 4096-byte `blocking-write-and-flush` chunks (the

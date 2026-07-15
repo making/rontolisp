@@ -60,7 +60,7 @@ GET /hello
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y app.wasm
+$ wasmtime serve -W gc=y -W exceptions=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -73,10 +73,10 @@ GET /hello
 実行可能 JAR `rontolisp-0.1.0-SNAPSHOT-exec.jar` がクラスパスに必要）、
 **WASI コンポーネント** バックエンド
 （`--component`、`wasmtime serve` 用の `wasi:http/incoming-handler`
-コンポーネント）で動作します。WASI コンポーネントバックエンドでは、
-リクエスト／レスポンスのヘッダはまだ受け渡しされません。ハンドラには
-`:headers nil` が渡され、レスポンスの `:headers` は無視されます。
-インタープリタと JVM バックエンドはヘッダをそのまま受け渡しします。
+コンポーネント）で動作します。リクエスト／レスポンスのヘッダは WASI
+コンポーネントを含むすべてのバックエンドで受け渡しされます。ハンドラは
+`:headers`（`(名前 . 値)` という文字列ペアの連想リスト）を読み取り、
+レスポンスに `:headers` があれば書き戻します。
 serve コンポーネントのハンドラ内でも `random`、時刻系の組み込み関数、
 `print`（ホストの標準出力への出力）は動作します — すべての `wasi:http`
 ホストが提供する `wasi:random` / `wasi:clocks` / `wasi:cli` へブリッジ

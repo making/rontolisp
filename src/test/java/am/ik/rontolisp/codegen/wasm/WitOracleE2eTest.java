@@ -132,15 +132,12 @@ class WitOracleE2eTest {
 		// wasm-tools drops incoming-handler's `use types.{...};` and prints a WIT that
 		// does not parse; the template restores it, so the emitted text is the oracle
 		// plus exactly that clause -- and, unlike the oracle, round-trips the parser.
-		List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.cli.HttpHandlerInliner
-			.inline(LispReader.readAllFromString("""
-					(defun h (r) (list :status 200 :body "x"))
-					(rontolisp:http-handler 'h)
-					"""));
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, true);
-		byte[] component = compiler.compile(program);
+		byte[] component = compileServeViaCli("""
+				(defun h (r) (list :status 200 :body "x"))
+				(rontolisp:http-handler 'h)
+				""");
 		String useClause = "    use types.{incoming-request, response-outparam};\n\n";
-		String wit = Objects.requireNonNull(compiler.componentWit());
+		String wit = Files.readString(this.tempDir.resolve("prog.wit"));
 		assertThat(wit).contains(useClause);
 		assertThat(wit.replace(useClause, "")).isEqualTo(oracle(component));
 	}
@@ -166,21 +163,34 @@ class WitOracleE2eTest {
 				    }
 				}
 				""");
-		List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.WitImportInliner.inline(
-				LispReader.readAllFromString("""
-						(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
-						(defun handle (request)
-						  (list :status 200 :body (kv:bucket-get (kv:open "") (getf request :path))))
-						(rontolisp:http-handler 'handle)
-						"""), tempDir.toString(), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
-				am.ik.rontolisp.eval.SourceLoader.fileSystem());
-		program = am.ik.rontolisp.cli.HttpHandlerInliner.inline(am.ik.rontolisp.eval.WitLibrary.process(program));
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, true);
-		byte[] component = compiler.compile(program);
+		byte[] component = compileServeViaCli("""
+				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
+				(defun handle (request)
+				  (list :status 200 :body (kv:bucket-get (kv:open "") (getf request :path))))
+				(rontolisp:http-handler 'handle)
+				""");
 		String useClause = "    use types.{incoming-request, response-outparam};\n\n";
-		String wit = Objects.requireNonNull(compiler.componentWit());
+		String wit = Files.readString(this.tempDir.resolve("prog.wit"));
 		assertThat(wit).contains("  import wasi:keyvalue/store@0.2.0-draft;");
 		assertThat(wit.replace(useClause, "")).isEqualTo(oracle(component));
+	}
+
+	// Compiles source to a --component serve component through the REAL CLI (writing
+	// prog.wit via --emit-wit alongside prog.wasm), so the emitted WIT and the bytes are
+	// exactly what a user gets -- the pruned, full-pipeline component the
+	// WasiWitDefinitions
+	// fixtures are generated from. serve.lisp's HTTP glue is spliced by the CLI's
+	// ServeLibrary step; a bare in-process pipeline would skip LibraryDefunPruner and
+	// leave
+	// redundant type declarations wasm-tools then prints twice.
+	private byte[] compileServeViaCli(String source) throws Exception {
+		Path lisp = this.tempDir.resolve("prog.lisp");
+		Files.writeString(lisp, source);
+		Path wasm = this.tempDir.resolve("prog.wasm");
+		new am.ik.rontolisp.cli.RontoLispCli(new java.io.ByteArrayInputStream(new byte[0]),
+				new java.io.PrintStream(java.io.OutputStream.nullOutputStream()))
+			.run(new String[] { lisp.toString(), "-o", wasm.toString(), "--component", "--emit-wit" });
+		return Files.readAllBytes(wasm);
 	}
 
 }

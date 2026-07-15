@@ -694,14 +694,20 @@ who exports the interface. `examples/wit/keyvalue/page-hits.lisp` runs against
 **wasmtime's own `wasi:keyvalue` implementation** (`-S keyvalue=y`), printing exactly what
 the interpreter's Lisp store and the JVM's `java.util.LinkedHashMap` store print.
 
-`rontolisp:fetch` is now itself a consumer of this path: on the non-serve `--component`
-route it is a Lisp-source library (`fetch.lisp`, spliced by `eval/FetchLibrary`) that
-`wit-import`s `wasi:http` / `wasi:io` and reaches this exact `canon lower` machinery,
-instead of the hand-written WAT `adapter-http-client.wat` blob it used to be (now deleted).
-That is the **self-hosting proof of the whole IDL bet** — a core built-in re-implemented over
-the same WIT pipeline any user interface arrives through, so a new host interface costs a
-`.wit` file rather than core code. Serve + fetch still keeps a WAT adapter (the serve blob
-already imports `wasi:http`, so a spliced `fetch.lisp` would collide); the split is in
+`rontolisp:fetch` AND `rontolisp:http-handler` are now both consumers of this path: on the
+non-serve `--component` route fetch is a Lisp-source library (`fetch.lisp`, spliced by
+`eval/FetchLibrary`) that `wit-import`s `wasi:http` / `wasi:io` and reaches this exact
+`canon lower` machinery, instead of the hand-written WAT `adapter-http-client.wat` blob it
+used to be (now deleted); and **plain serve** is its mirror (`serve.lisp`, spliced by
+`eval/ServeLibrary`, todo 135) that `wit-import`s the incoming half of `wasi:http/types` /
+`wasi:io` and EXPORTS `wasi:http/incoming-handler` — fetch imports the outgoing handler,
+serve exports the incoming one, both drive `wasi:http/types` from Lisp, and the
+hand-written `adapter-http-server.wat` is gone from that path (the serve builder lowers
+serve.lisp's imports FROM the block and lifts the core's `handle` wasm-export directly).
+That is the **self-hosting proof of the whole IDL bet** — the two core HTTP built-ins
+re-implemented over the same WIT pipeline any user interface arrives through, so a new host
+interface costs a `.wit` file rather than core code. Serve + fetch still keeps a WAT adapter
+(both halves' `wasi:http/types` imports would collide until reconciled); the split is in
 `.kb/fetch-http.md`.
 
 ### The reference probe (do this before touching the encoders again)

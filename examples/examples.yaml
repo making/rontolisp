@@ -386,8 +386,10 @@ examples:
       component NEEDS, since a wasi:http host instantiates it afresh per request
       and a global hash table would read back empty every time. wasm-component is
       the leg that matters: it pins that a serve-mode component
-      (wasi:http/incoming-handler, TWO adapters, its own index bookkeeping) also
-      carries user WIT instance imports; jvm-compile pins that the same source
+      (wasi:http/incoming-handler, its HTTP glue the serve.lisp library over
+      wit-imported wasi:http, its own index bookkeeping) ALSO carries an ADDITIONAL
+      user WIT instance import alongside its fixed wasi:http surface; jvm-compile
+      pins that the same source
       compiles where the store is a Lisp provider instead. Compile-only, like
       every blocking server here: running it means `wasmtime serve -W gc=y -W
       exceptions=y -S keyvalue=y server.wasm` (whose in-memory kv store is rebuilt

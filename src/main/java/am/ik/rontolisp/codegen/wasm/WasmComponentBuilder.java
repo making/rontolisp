@@ -648,10 +648,22 @@ public final class WasmComponentBuilder {
 	 * @return the WASI 0.2 (http/incoming-handler) component binary
 	 */
 	static byte[] buildServe(byte[] coreModule, boolean usesHttp, List<WasmComponentImportCompiler.Import> imports) {
-		rejectAdapterImportCollisions(imports,
-				usesHttp ? WitEmitter.VARIANT_HTTP_SERVER_CLIENT : WitEmitter.VARIANT_HTTP_SERVER);
-		return usesHttp ? WasmServeComponentBuilder.buildHttp(coreModule, imports)
-				: WasmServeComponentBuilder.build(coreModule, imports);
+		if (usesHttp) {
+			// Serve+fetch still rides the hand-written serve adapter, whose fixed surface
+			// is
+			// FIXED (not in the import list), so every interface in the list is an
+			// additional
+			// user import.
+			rejectAdapterImportCollisions(imports, WitEmitter.VARIANT_HTTP_SERVER_CLIENT);
+			return WasmServeComponentBuilder.buildHttp(coreModule, imports);
+		}
+		// Plain serve: serve.lisp's own wasi:io / wasi:http/types imports ARE the fixed
+		// surface (lowered from the block by WasmServeComponentBuilder.build), not user
+		// imports, so only the ADDITIONAL interfaces are checked for a double-import
+		// collision.
+		rejectAdapterImportCollisions(WasmServeComponentBuilder.additionalImports(imports),
+				WitEmitter.VARIANT_HTTP_SERVER);
+		return WasmServeComponentBuilder.build(coreModule, imports);
 	}
 
 	/**
