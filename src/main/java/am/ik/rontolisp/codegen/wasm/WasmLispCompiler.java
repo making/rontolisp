@@ -822,6 +822,28 @@ public final class WasmLispCompiler implements LispCompiler {
 	// max(mark, high-water) pop wants.
 	static final int RT_INTERN_HEAP_ADDR = 172;
 
+	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
+	// and
+	// the allocation base just above its 8 bytes. cabi_realloc keeps its pointer in this
+	// linear-memory cell rather than a wasm global so the core -- which shares this
+	// memory
+	// -- can reset it: cabi_realloc is where the host writes an incoming request's result
+	// buffers (path / headers / body), and it only grows, so an instance-reusing host
+	// (jco /
+	// wasmCloud) that calls handle many times on one instance would grow linear memory by
+	// ~one request per call. WasmExportCompiler emits `mem[CELL] = BASE` at the top of
+	// the
+	// serve `handle` wrapper (the core HEAP_PTR needs no reset -- the %component-import
+	// wrapper's pop-back already keeps it at the intern high-water). A memory cell needs
+	// no
+	// global import (which would shift the core's whole global index space) and no
+	// adapter.
+	// Serve only: a non-serve component's memory module is mem.wasm, unchanged.
+	static final int CABI_HP_CELL_ADDR = 0x10000; // 65536, start of page 1 (serve
+													// scratch)
+
+	static final int CABI_HP_BASE = 0x10008; // 65544, just above the 8-byte cell
+
 	static final int ENV_PTRS_ADDR = 0x30000; // 196608, page 3
 
 	static final int ENV_BUF_ADDR = 0x34000; // 212992, page 3 + 16 KiB

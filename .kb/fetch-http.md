@@ -251,9 +251,19 @@ here.
   buffers are rejected), `response-outparam.set` BEFORE the body writes (set-after-write
   deadlocks past one host buffer), child streams dropped before finishing the parent
   outgoing-body. The old adapter's per-request bump-allocator reset (for jco/wasmCloud, which
-  reuse one instance where wasmtime serve re-instantiates) is a FOLLOW-UP for stateful
-  handlers -- serve.lisp is stateless per request today (HEAP_PTR is re-seeded by an active
-  data segment at instantiation, so a stateless handler needs no reset trigger). serve +
+  reuse one instance where wasmtime serve re-instantiates) is now serve.lisp's too, but
+  SIMPLER than the old adapter's. Measured across 40 reused-instance requests (jco): the core
+  `HEAP_PTR` stays put (16384) -- every `%component-import` wrapper already pops it back to
+  the intern high-water -- so ONLY the canonical-ABI allocator leaks, by ~one request's
+  host-written result buffers (the incoming path / headers / body it hands back through
+  `cabi_realloc`) per call. So only that one pointer is reset, to a constant base, with no
+  intern-ratchet guard: `mem-http-client.wat`'s `cabi_realloc` keeps its bump pointer in a
+  linear-memory CELL (`WasmLispCompiler.CABI_HP_CELL_ADDR` = 0x10000, base 0x10008) rather
+  than a wasm global, and `WasmExportCompiler` emits `mem[cell] = base` at the top of the
+  serve `handle` wrapper. A memory cell needs no global import (which would shift the core's
+  whole global index space) and no re-introduced adapter; wasmtime serve re-instantiates so
+  it never saw the growth. Verified on jco: the cell resets to the base every request instead
+  of climbing monotonically. serve +
   `rontolisp:tcp-*` is still a compile error (no serve blob variant with wasi:sockets).
   Interpreter/JVM needed no changes (both sides are `java.net.http.HttpClient` / `HttpServer`).
   Test: `WasmLispCompilerIntegrationTest.httpHandlerFetchInsideServeUnderWasmtimeServe` (the

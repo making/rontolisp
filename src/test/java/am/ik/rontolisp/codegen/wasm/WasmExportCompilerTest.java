@@ -28,6 +28,23 @@ class WasmExportCompilerTest {
 		return new WasmLispCompiler().compile(program);
 	}
 
+	// The CLI-equivalent serve compile pipeline (mirrors
+	// WasmLispCompilerIntegrationTest.compileServeComponent, minus the wasmtime run): splice
+	// fetch.lisp then serve.lisp, expand, compile in serve mode. No Docker needed for a
+	// bytes-only check.
+	private static byte[] compileServe(String source) {
+		List<LispVal> loaded = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(source), null,
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
+				am.ik.rontolisp.eval.SourceLoader.fileSystem());
+		loaded = am.ik.rontolisp.eval.FetchLibrary.process(loaded,
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
+		loaded = am.ik.rontolisp.eval.ServeLibrary.process(loaded,
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
+		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
+		return new WasmLispCompiler(false, true, false, false, true).compile(program);
+	}
+
 	private static boolean containsAscii(byte[] bytes, String needle) {
 		return new String(bytes, StandardCharsets.ISO_8859_1).contains(needle);
 	}
@@ -428,6 +445,28 @@ class WasmExportCompilerTest {
 		byte[] guardStore = hexBytes("41AC01"); // i32.const 172 (RT_INTERN_HEAP_ADDR)
 		assertThat(indexOf(WasmReadRuntimeBuilder.buildInternBody(0, 0, true), guardStore)).isNotNegative();
 		assertThat(indexOf(WasmReadRuntimeBuilder.buildInternBody(0, 0, false), guardStore)).isNegative();
+	}
+
+	@Test
+	void serveHandleWrapperResetsTheCanonicalAllocatorPerRequest() {
+		// `handle` (wasi:http/incoming-handler) is called once per request on a possibly
+		// REUSED instance (jco / wasmCloud); mem-http-client's cabi_realloc is where the host
+		// writes each request's result buffers (path / headers / body) and only ever grows,
+		// so the wrapper resets its bump-pointer cell to the base FIRST. Without it an
+		// instance-reusing host leaks ~one request per call; wasmtime serve re-instantiates,
+		// so it never showed. Pin the reset prologue: i32.const 0x10000 (CABI_HP_CELL_ADDR) ;
+		// i32.const 0x10008 (CABI_HP_BASE) ; i32.store.
+		byte[] reset = hexBytes("4180800441888004360200");
+		byte[] serve = compileServe("""
+				(defun h (r) (list :status 200 :body "ok"))
+				(rontolisp:http-handler 'h)
+				""");
+		assertThat(indexOf(serve, reset)).as("the serve handle wrapper resets the cabi bump cell").isNotNegative();
+		// Gated on serve mode: a plain --component export shares no serve-only cell, so it
+		// never emits the reset.
+		byte[] nonServe = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(
+				"(defun add (a b) (+ a b)) (rontolisp:wasm-export 'add :params '(:int :int) :returns :int)"));
+		assertThat(indexOf(nonServe, reset)).as("a non-serve component never resets a serve-only cell").isNegative();
 	}
 
 	private static byte[] hexBytes(String hex) {
