@@ -24,6 +24,7 @@ import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.eval.FetchLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
@@ -263,6 +264,19 @@ public final class RontoLispCli {
 		// never references (the component path skips --optimize's core tree shaker by
 		// design); --no-prune / --dynamic disable that, like the library defun pruner.
 		loaded = WitImportInliner.inline(loaded, baseDir, witBackend, SourceLoader.fileSystem(), !dynamic && !noPrune);
+		// rontolisp:fetch on the --component path is a Lisp-source library (fetch.lisp)
+		// over
+		// a wit-imported wasi:http surface, spliced HERE -- right after WitImportInliner,
+		// which fetch.lisp's own wit-import directives are lowered against (FetchLibrary
+		// does
+		// that itself), and before UserMacroExpander, which its cond/handler-case bodies
+		// need. Serve keeps the WAT adapter (its fixed surface already imports
+		// wasi:http), so
+		// the splice is gated off there. The interpreter/JVM keep java.net.http; Preview
+		// 1
+		// has no fetch.
+		boolean serve = component && HttpHandlerInliner.usesHttpHandler(loaded);
+		loaded = FetchLibrary.process(loaded, witBackend, serve);
 		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
 		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
 		// any
@@ -315,10 +329,11 @@ public final class RontoLispCli {
 			}
 			else {
 				// rontolisp:http-handler compiles to a wasi:http/incoming-handler
-				// component
-				// (--component only). The HttpHandlerInliner splices in a %http-dispatch
-				// wasm-export wrapper that the serve adapter calls per request.
-				boolean serve = component && HttpHandlerInliner.usesHttpHandler(program);
+				// component (--component only). The HttpHandlerInliner splices in a
+				// %http-dispatch wasm-export wrapper that the serve adapter calls per
+				// request.
+				// `serve` was computed above (http-handler is a special form the library
+				// splices leave untouched, so its presence is unchanged here).
 				// A serve-mode component's only export is wasi:http/incoming-handler (the
 				// component builder lifts no user exports there), so a world of function
 				// exports could not be honored -- say so instead of dropping it.

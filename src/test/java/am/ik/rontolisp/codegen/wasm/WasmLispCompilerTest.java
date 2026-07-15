@@ -4,6 +4,9 @@ import java.util.Arrays;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.eval.FetchLibrary;
+import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -18,7 +21,17 @@ class WasmLispCompilerTest {
 	}
 
 	private byte[] compileComponent(String lispCode) {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		// Splice fetch.lisp when the program references rontolisp:fetch, mirroring the
+		// CLI:
+		// on the --component path fetch is a Lisp library over wit-imported wasi:http,
+		// not a
+		// special form, so a raw compile of a fetch program would fail to resolve it. A
+		// no-op for every non-fetch program.
+		List<LispVal> program = FetchLibrary.process(LispReader.readAllFromString(lispCode),
+				WitExportDirective.Backend.WASM_COMPONENT, false);
+		// fetch.lisp's result wrappers call rontolisp::%wit-result, backed by wit.lisp --
+		// spliced by WitLibrary, the same order the CLI runs them in.
+		program = WitLibrary.process(program);
 		return new WasmLispCompiler(false, true).compile(program);
 	}
 

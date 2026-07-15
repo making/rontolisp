@@ -72,14 +72,41 @@ class WitOracleE2eTest {
 	}
 
 	@Test
-	void fetchAndSocketVariantWitsMatchWasmToolsByteForByte() throws Exception {
-		WasmLispCompiler http = new WasmLispCompiler(false, true);
-		byte[] httpComponent = http
-			.compile(LispReader.readAllFromString("(print (rontolisp:fetch \"http://127.0.0.1:9/\"))"));
-		assertThat(http.componentWit()).isEqualTo(oracle(httpComponent));
+	void socketVariantWitMatchesWasmToolsByteForByte() throws Exception {
+		// The sockets blob is a FIXED variant, so its emitted world is held
+		// byte-identical
+		// to wasm-tools (like every WasiWitDefinitions fixture).
 		WasmLispCompiler sock = new WasmLispCompiler(false, true);
 		byte[] sockComponent = sock.compile(LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"));
 		assertThat(sock.componentWit()).isEqualTo(oracle(sockComponent));
+	}
+
+	@Test
+	void fetchWorldReParsesAndCarriesItsWasiHttpImports() {
+		// rontolisp:fetch is now the fetch.lisp library over canon-lowered wasi:http USER
+		// imports, so its world is emitted by the cross-interface user-import emitter,
+		// which
+		// deliberately keeps the WIT structure that lets it re-parse -- type aliases
+		// (`type headers = fields`), fully-qualified `use` clauses. `wasm-tools component
+		// wit` expands the aliases and abbreviates the `use`s when it prints a
+		// component's
+		// raw type, so the two are semantically equal but not byte-identical. Only the
+		// fixed
+		// blob variants (the sockets test above, WasiWitDefinitionsTest) are pinned to
+		// wasm-tools byte-for-byte; the user-import side is checked structurally and by
+		// re-parsing, which is the property that actually has to hold.
+		WasmLispCompiler http = new WasmLispCompiler(false, true);
+		http.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.FetchLibrary.process(
+				LispReader.readAllFromString("(print (rontolisp:fetch \"http://127.0.0.1:9/\"))"),
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
+		String wit = Objects.requireNonNull(http.componentWit());
+		assertThat(wit).contains("import wasi:http/types@0.2.0;")
+			.contains("import wasi:http/outgoing-handler@0.2.0;")
+			.contains("import wasi:io/streams@0.2.0;");
+		// It re-parses through our own parser -- the deliberate deviation from wasm-tools
+		// is
+		// that ours stays consumable.
+		assertThat(am.ik.wit.WitParser.parse(wit)).isNotNull();
 	}
 
 	@Test

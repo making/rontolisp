@@ -155,15 +155,6 @@ class WitExportInlinerTest {
 	}
 
 	@Test
-	void gcHttpClientComponentIsByteIdenticalToTheHandWrittenExport() throws IOException {
-		// rontolisp:fetch selects the http-client blob variant
-		// (wasi:http/outgoing-handler).
-		assertByteIdentical("(defun ping () (rontolisp:fetch \"http://127.0.0.1:9/\"))\n",
-				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(program),
-				WitExportDirective.Backend.WASM_GC);
-	}
-
-	@Test
 	void gcSocketsComponentIsByteIdenticalToTheHandWrittenExport() throws IOException {
 		// rontolisp:tcp-* selects the sockets blob variant (wasi:sockets@0.3.0).
 		assertByteIdentical("(defun listen () (rontolisp:tcp-listen 7777))\n",

@@ -43,7 +43,6 @@ public final class WasiWitDefinitionsGenerator {
 	private static Map<String, String> orderedVariants() {
 		Map<String, String> variants = new LinkedHashMap<>();
 		variants.put("base", "VARIANT_BASE");
-		variants.put("http-client", "VARIANT_HTTP_CLIENT");
 		variants.put("sockets", "VARIANT_SOCKETS");
 		variants.put("http-server", "VARIANT_HTTP_SERVER");
 		variants.put("http-server-client", "VARIANT_HTTP_SERVER_CLIENT");

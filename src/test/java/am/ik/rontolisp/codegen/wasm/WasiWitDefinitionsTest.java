@@ -24,9 +24,9 @@ class WasiWitDefinitionsTest {
 
 	@Test
 	void everyVariantMatchesItsCapturedFixtureByteForByte() throws IOException {
-		for (String variant : new String[] { WitEmitter.VARIANT_BASE, WitEmitter.VARIANT_HTTP_CLIENT,
-				WitEmitter.VARIANT_SOCKETS, WitEmitter.VARIANT_HTTP_SERVER, WitEmitter.VARIANT_HTTP_SERVER_CLIENT,
-				WitEmitter.VARIANT_NOGC, WitEmitter.VARIANT_NOGC_PRINT }) {
+		for (String variant : new String[] { WitEmitter.VARIANT_BASE, WitEmitter.VARIANT_SOCKETS,
+				WitEmitter.VARIANT_HTTP_SERVER, WitEmitter.VARIANT_HTTP_SERVER_CLIENT, WitEmitter.VARIANT_NOGC,
+				WitEmitter.VARIANT_NOGC_PRINT }) {
 			String fixture = Files.readString(FIXTURES.resolve(variant + ".wit"), StandardCharsets.UTF_8);
 			assertThat(WitPrinter.print(WasiWitDefinitions.document(variant))).as(variant).isEqualTo(fixture);
 		}

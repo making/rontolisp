@@ -1,6 +1,7 @@
 # `rontolisp:fetch` through WIT — delete the biggest hand-written blob
 
-**Status:** IN PROGRESS 2026-07-14. **Large, and the biggest single blob win.** Selected
+**Status:** DONE 2026-07-15 (uncommitted). A-G all landed; the WAT http-client adapter is
+gone. **Large, and the biggest single blob win.** Selected
 ahead of `.todo/135` (user decision 2026-07-14). `.todo/133` landed, so
 `set-method(method)` / `set-scheme(option<scheme>)` cross the component import boundary
 (verified against wasmtime's real `wasi:http` host —
@@ -168,6 +169,61 @@ traps `unreachable`).
   Everything it needs now exists: the POST probe in the scratchpad IS `fetch.lisp`, modulo
   the splice mechanism and the `rontolisp:fetch` promise API. **Surveyed 2026-07-15; design
   below.**
+
+### F IMPLEMENTED 2026-07-15 (uncommitted). Design below.
+
+`rontolisp:fetch` on the `--component` non-serve path is now `fetch.lisp` over a
+wit-imported wasi:http surface — no WAT adapter. **Verified against wasmtime's real
+`wasi:http`**: a plain `(rontolisp:fetch url)` program (no wit-import in the user source)
+prints `200` and the body; two fetches awaited in reverse order print their own bodies;
+`promisep`/`then` work; unreachable and malformed both yield `nil`; the response `:headers`
+alist carries `content-type`. The user API is unchanged.
+
+Files: `src/main/resources/am/ik/rontolisp/eval/fetch.lisp` (+ `fetch.wit`), `eval/FetchLibrary`,
+`RontoLispCli` (compute `serve` early + one `FetchLibrary.process` call), `RontoPlayground`
+(inert), `WasmExprCompiler` (validate-then-fall-through), `WasmLispCompiler` (`Ctx.serve`,
+`emitHttpImport = component && serve && usesFetch`, fetch+tcp check re-homed to
+`usesFetch && usesTcp`), `WasmFetchCompiler.validate`, resource-config for native image.
+Two WASM-subset gotchas in fetch.lisp: no `search` and no `position :start` — split the URL
+with `subseq` off the first colon.
+
+### G DONE 2026-07-15 (uncommitted) — the WAT http-client adapter is deleted
+
+Deleted: `adapter-http-client.wat` / `core-http-client.wat` / `uni-http-client.wit` /
+`adapter-http-client.wasm` / `import-block-http-client.bin`, the `H_*` constants and
+`buildHttp` in `WasmComponentBuilder`, the `VARIANT_HTTP_CLIENT` fixture + variant, the
+`usesHttp` parameter of `build()`. Kept: `mem-http-client.wasm` (serve reuses it) and the
+whole serve+fetch (`http-server-client`) WAT path — the serve blob already imports
+`wasi:http`, so a spliced `fetch.lisp` would collide (`rejectAdapterImportCollisions`);
+serve+fetch stays on its adapter until `.todo/135`.
+
+The 5 RED tests handled: the two `compile`-only ones fixed by splicing `fetch.lisp` +
+`wit.lisp` in the `compileComponent` helper (and the 5 Docker/env-gated integration E2Es
+via a `compileFetchComponent` helper); `WasmExportCompilerTest` / `WitOracleE2eTest` fetch
+halves re-routed through the splice; `gcHttpClientComponentIsByteIdenticalToTheHandWrittenExport`
+DELETED (its subject, the http-client blob, is gone; base-variant byte-identity is still
+covered).
+
+**The `--emit-wit` cross-interface oracle: MEASURED, and deliberately not byte-pinned.**
+G's own open question. Our emitted world for a fetch component is NOT byte-identical to
+`wasm-tools component wit` — it keeps the WIT structure (`type headers = fields`,
+fully-qualified `use wasi:io/error@0.2.0.{error}`, `resource error { }`) that lets it
+re-parse, while `wasm-tools` expands the aliases and abbreviates the `use`s when it prints a
+component's raw type. Semantically equal. So `WitOracleE2eTest` now byte-pins only the FIXED
+blob variants (sockets, and every `WasiWitDefinitions` fixture) against `wasm-tools`, and
+checks the user-import fetch world structurally + by re-parsing
+(`fetchWorldReParsesAndCarriesItsWasiHttpImports`). Decision recorded in that test's comment.
+
+Full suite 3677/0 (integration incl. Docker). fetch verified working on wasmtime's real
+`wasi:http` after the deletion; non-fetch components byte-identical.
+
+Below is the original F red-test note (all now dealt with):
+**5 tests were RED, all as the survey predicted** (raw `new WasmLispCompiler` does not splice
+fetch.lisp, and the http-client blob pins are being deleted): `awaitOfFetchCompilesInComponentMode`,
+`fetchWithSupportedMethodsAndBodyCompilesInComponentMode`,
+`componentWitPicksTheImportVariantOfTheCompiledBlobSet`,
+`fetchAndSocketVariantWitsMatchWasmToolsByteForByte`,
+`gcHttpClientComponentIsByteIdenticalToTheHandWrittenExport`.
 
 ### F design (surveyed 2026-07-15)
 

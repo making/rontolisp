@@ -12,8 +12,9 @@
 # instance/type indices and per-function canonical options) and re-run the tests. Appending
 # an interface LAST in uni.wit keeps existing indices stable.
 #
-# The rontolisp:fetch HTTP variant is also regenerated here (import-block-http-client.bin /
-# mem-http-client.wasm / adapter-http-client.wasm), from uni-http-client.wit (world uni-http-client) + core-http-client.wat.
+# mem-http-client.wasm (the 16-page memory module) is still regenerated here: the serve
+# variant reuses it. The standalone rontolisp:fetch http-client adapter is gone -- fetch is
+# now the fetch.lisp library over wit-imported wasi:http (eval/FetchLibrary).
 # It keeps the base I/O on WASI 0.3 but adds the WASI 0.2 wasi:http + wasi:io machinery
 # (async wasi:http@0.3 does not exist upstream yet; see ../../TODO.md). The 0.2 deps live
 # alongside the 0.3 ones in deps/ under version-suffixed directories (clocks-0.2, io-0.2,
@@ -59,7 +60,6 @@ wasm-tools validate "$OUT/bridge-nogc-print.wasm"
 wasm-tools validate "$OUT/fixup-nogc-print.wasm"
 wasm-tools parse adapter.wat      -o "$OUT/adapter.wasm"
 wasm-tools parse mem-http-client.wat     -o "$OUT/mem-http-client.wasm"
-wasm-tools parse adapter-http-client.wat -o "$OUT/adapter-http-client.wasm"
 wasm-tools parse adapter-sockets.wat -o "$OUT/adapter-sockets.wasm"
 wasm-tools parse adapter-http-server.wat -o "$OUT/adapter-http-server.wasm"
 wasm-tools parse adapter-http-server-p1.wat -o "$OUT/adapter-http-server-p1.wasm"
@@ -67,7 +67,6 @@ wasm-tools parse adapter-http-server-client-p1.wat -o "$OUT/adapter-http-server-
 wasm-tools validate "$OUT/mem.wasm"
 wasm-tools validate "$OUT/adapter.wasm"
 wasm-tools validate "$OUT/mem-http-client.wasm"
-wasm-tools validate "$OUT/adapter-http-client.wasm"
 wasm-tools validate "$OUT/adapter-sockets.wasm"
 wasm-tools validate "$OUT/adapter-http-server.wasm"
 wasm-tools validate "$OUT/adapter-http-server-p1.wasm"
@@ -79,13 +78,6 @@ wasm-tools component embed . core.wasm -o embedded.wasm --world uni
 wasm-tools component new embedded.wasm -o uni.wasm
 wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni.wasm
 slice_import_block uni.wasm "$OUT/import-block.bin"
-
-echo "== unified import block (http variant) =="
-wasm-tools parse core-http-client.wat -o core-http-client.wasm
-wasm-tools component embed . core-http-client.wasm -o embedded-http-client.wasm --world uni-http-client
-wasm-tools component new embedded-http-client.wasm -o uni-http-client.wasm
-wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni-http-client.wasm
-slice_import_block uni-http-client.wasm "$OUT/import-block-http-client.bin"
 
 echo "== unified import block (sockets variant) =="
 wasm-tools parse core-sockets.wat -o core-sockets.wasm
@@ -116,7 +108,7 @@ wasm-tools validate -f component-model uni-nogc-print.wasm
 slice_import_block uni-nogc-print.wasm "$OUT/import-block-nogc-print.bin"
 
 rm -f core-nogc-print.wasm embedded-nogc-print.wasm uni-nogc-print.wasm \
-      core.wasm embedded.wasm uni.wasm core-http-client.wasm embedded-http-client.wasm uni-http-client.wasm \
+      core.wasm embedded.wasm uni.wasm \
       core-sockets.wasm embedded-sockets.wasm uni-sockets.wasm \
       core-http-server.wasm embedded-http-server.wasm uni-http-server.wasm \
       core-http-server-client.wasm embedded-http-server-client.wasm uni-http-server-client.wasm

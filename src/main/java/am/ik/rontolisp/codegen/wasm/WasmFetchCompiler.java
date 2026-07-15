@@ -41,15 +41,32 @@ final class WasmFetchCompiler {
 	private WasmFetchCompiler() {
 	}
 
+	/**
+	 * Compile-time checks a {@code (defun rontolisp:fetch ...)} could not do: the arity
+	 * and a statically-known unsupported {@code :method}. On the {@code --component}
+	 * non-serve path fetch is a spliced Lisp defun (fetch.lisp), so
+	 * {@link WasmExprCompiler} runs this validator and then lets the call fall through to
+	 * that defun -- the diagnostic is kept (parity with the interpreter/JVM's runtime
+	 * validation) without the WAT adapter.
+	 * @param cons the {@code (rontolisp:fetch ...)} call form
+	 * @throws UnsupportedOperationException on a bad arity or a literal unsupported
+	 * method
+	 */
+	static void validate(LispCons cons) {
+		List<LispVal> args = cons.toList();
+		if (args.size() < 2 || args.size() > 3) {
+			throw new UnsupportedOperationException("fetch expects 1 or 2 arguments, got " + (args.size() - 1));
+		}
+		methodDiscriminant(staticMethod(args.size() == 3 ? args.get(2) : null));
+	}
+
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (!ctx.component) {
 			throw new UnsupportedOperationException(
 					"rontolisp:fetch is only available in WASI 0.2 component mode (--component), not Preview 1 WASM");
 		}
+		validate(cons);
 		List<LispVal> args = cons.toList();
-		if (args.size() < 2 || args.size() > 3) {
-			throw new UnsupportedOperationException("fetch expects 1 or 2 arguments, got " + (args.size() - 1));
-		}
 		// Resolve the method discriminant statically (matching the interpreter/JVM, which
 		// validate at runtime). A method computed at runtime cannot be checked and is
 		// treated as GET; a statically-known unsupported method is rejected here.

@@ -143,6 +143,19 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
+	// rontolisp:fetch on the --component path is the fetch.lisp library over wit-imported
+	// wasi:http, spliced by FetchLibrary in the CLI front-end. A raw compiler does not
+	// splice
+	// it, so a fetch program is compiled through the same two library passes the CLI runs
+	// (a
+	// no-op for a non-fetch program).
+	private static byte[] compileFetchComponent(String program) {
+		List<am.ik.rontolisp.LispVal> forms = am.ik.rontolisp.eval.WitLibrary
+			.process(am.ik.rontolisp.eval.FetchLibrary.process(LispReader.readAllFromString(program),
+					am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false));
+		return new WasmLispCompiler(false, true).compile(forms);
+	}
+
 	@Test
 	void exportScalarFunctionsCallableViaInvoke() throws Exception {
 		String program = """
@@ -5646,7 +5659,7 @@ class WasmLispCompilerIntegrationTest {
 		// the full request-start/poll/response path; the connection error is detected at
 		// await time and await returns nil (deterministic, no server).
 		String program = "(print (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:1/nope\")))";
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/fetch-err.component.wasm");
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
 				"component-model-more-async-builtins=y", "-S", "http=y", "/tmp/fetch-err.component.wasm");
@@ -5660,7 +5673,7 @@ class WasmLispCompilerIntegrationTest {
 		// fails to instantiate -- confirming non-fetch components (which do not import
 		// wasi:http) keep running without the flag.
 		String program = "(print (rontolisp:fetch \"http://127.0.0.1:1/nope\"))";
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/fetch-noflag.component.wasm");
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
 				"component-model-more-async-builtins=y", "/tmp/fetch-noflag.component.wasm");
@@ -5690,7 +5703,7 @@ class WasmLispCompilerIntegrationTest {
 				    (close server)
 				    (close listener)))
 				""";
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-echo.component.wasm");
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
 				"component-model-more-async-builtins=y", "-S", "tcp=y", "-S", "inherit-network=y",
@@ -5732,7 +5745,7 @@ class WasmLispCompilerIntegrationTest {
 		// Connecting to a closed port returns nil instead of trapping (the fetch error
 		// convention). Deterministic, no server.
 		String program = "(print (rontolisp:tcp-connect \"127.0.0.1\" 1))";
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-refused.component.wasm");
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
 				"component-model-more-async-builtins=y", "-S", "tcp=y", "-S", "inherit-network=y",
@@ -5748,7 +5761,7 @@ class WasmLispCompilerIntegrationTest {
 		// component still instantiates without -S tcp / -S inherit-network, and the
 		// socket operations fail, so the built-ins yield nil.
 		String program = "(print (rontolisp:tcp-listen 0 \"127.0.0.1\"))";
-		byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-noflag.component.wasm");
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
 				"component-model-more-async-builtins=y", "/tmp/tcp-noflag.component.wasm");
@@ -5808,7 +5821,7 @@ class WasmLispCompilerIntegrationTest {
 					// a fetch promise chains with then (the callback extracts the status)
 					+ " (print (rontolisp:await (rontolisp:then (rontolisp:fetch \"" + url
 					+ "\") (lambda (r) (getf r :status)))))";
-			byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+			byte[] componentBytes = compileFetchComponent(program);
 			java.nio.file.Path wasm = tempDir.resolve("fetch.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);
 			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
@@ -5864,7 +5877,7 @@ class WasmLispCompilerIntegrationTest {
 					+ " (let ((body (concatenate 'string \"pay\" \"load\")))"
 					+ "   (print (getf (rontolisp:await (rontolisp:fetch \"" + base
 					+ "/a\" (list :method \"POST\" :body body))) :status)))";
-			byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+			byte[] componentBytes = compileFetchComponent(program);
 			java.nio.file.Path wasm = tempDir.resolve("fetch-fresh-urls.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);
 			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
@@ -5905,7 +5918,7 @@ class WasmLispCompilerIntegrationTest {
 					  (getf (rontolisp:await (rontolisp:fetch url)) :body))
 					(rontolisp:wasm-export 'fetch-body :params '(:string) :returns :string :async t)
 					""";
-			byte[] componentBytes = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+			byte[] componentBytes = compileFetchComponent(program);
 			java.nio.file.Path wasm = tempDir.resolve("fetch-export.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);
 			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",

@@ -66,6 +66,18 @@
           "typeReachable": "am.ik.rontolisp.eval.UsocketLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/usocket\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.FetchLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/fetch\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.FetchLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/fetch\\.wit"
       }
     ]
   }

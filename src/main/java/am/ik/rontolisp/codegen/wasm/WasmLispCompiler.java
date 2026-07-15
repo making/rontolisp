@@ -961,7 +961,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean ehMode = programUsesEhForm(program);
 		boolean usesFetch = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH));
-		boolean emitHttpImport = this.component && usesFetch;
+		// The WAT http-client adapter fires ONLY in serve mode now (serve + fetch = the
+		// http-server-client blob). Off serve, rontolisp:fetch is the fetch.lisp library,
+		// which pulls wasi:http in through a canon-lowered %component-import (the base
+		// blob),
+		// so the WAT adapter and its http-client blob variant must NOT also be wired --
+		// two
+		// wasi:http imports would collide (rejectAdapterImportCollisions).
+		boolean emitHttpImport = this.component && this.serve && usesFetch;
 		// The rontolisp:tcp-* built-ins are component-only the same way: in component
 		// mode they drive the sock.* imports (function indices FUNC_TCP_CONNECT ..
 		// FUNC_TCP_LOCAL_PORT) implemented by the sockets adapter over
@@ -975,8 +982,12 @@ public final class WasmLispCompiler implements LispCompiler {
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_PORT));
 		boolean emitSockImport = this.component && usesTcp;
 		// fetch and tcp sockets need different component blob variants (wasi:http 0.2
-		// hybrid vs wasi:sockets 0.3); a combined variant does not exist yet.
-		if (emitHttpImport && emitSockImport) {
+		// hybrid vs wasi:sockets 0.3); a combined variant does not exist yet. Keyed off
+		// the
+		// usage, not emitHttpImport, because a non-serve fetch (fetch.lisp) no longer
+		// sets
+		// emitHttpImport but must still be refused alongside tcp.
+		if (this.component && usesFetch && usesTcp) {
 			throw new UnsupportedOperationException(
 					"rontolisp:fetch and rontolisp:tcp-* cannot be combined in one --component program yet");
 		}
@@ -1227,6 +1238,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.nextFuncId(nextFuncId)
 			.dynamic(this.dynamic)
 			.component(this.component)
+			.serve(this.serve)
 			.simd(this.simd)
 			.userFuncBase(userFuncBase())
 			.userDefunNames(Set.copyOf(userDefinedNames))
@@ -2720,12 +2732,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (ExportPlan p : exportPlans) {
 				componentExportDecls.add(p.decl());
 			}
-			this.componentWit = WitEmitter.emit(
-					emitHttpImport ? WitEmitter.VARIANT_HTTP_CLIENT
-							: emitSockImport ? WitEmitter.VARIANT_SOCKETS : WitEmitter.VARIANT_BASE,
+			// This is the non-serve component path (serve returned above), where
+			// emitHttpImport is always false: rontolisp:fetch here is the fetch.lisp
+			// library
+			// over canon-lowered wasi:http user imports (the base variant), not the WAT
+			// http-client blob.
+			this.componentWit = WitEmitter.emit(emitSockImport ? WitEmitter.VARIANT_SOCKETS : WitEmitter.VARIANT_BASE,
 					componentExportDecls, componentImports);
-			return WasmComponentBuilder.build(coreModule, emitHttpImport, emitSockImport, componentExportDecls,
-					componentImports);
+			return WasmComponentBuilder.build(coreModule, emitSockImport, componentExportDecls, componentImports);
 		}
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
 	}
@@ -3021,6 +3035,13 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		boolean component = false;
 
+		// True in a rontolisp:http-handler (serve-mode) component: rontolisp:fetch stays
+		// on
+		// the WAT adapter there (WasmFetchCompiler.compile), because the serve blob
+		// already
+		// imports wasi:http; off serve it falls through to the fetch.lisp defun.
+		boolean serve = false;
+
 		/**
 		 * True when the program uses {@code handler-case}/{@code ignore-errors}/
 		 * {@code unwind-protect}: the module carries the {@code $lisp-cond} exception tag
@@ -3144,6 +3165,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.nextFuncId = builder.nextFuncId;
 			this.dynamic = builder.dynamic;
 			this.component = builder.component;
+			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
 			this.simd = builder.simd;
@@ -3179,6 +3201,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean dynamic = false;
 
 			private boolean component = false;
+
+			private boolean serve = false;
 
 			private boolean ehMode = false;
 
@@ -3242,6 +3266,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder component(boolean component) {
 				this.component = component;
+				return this;
+			}
+
+			Builder serve(boolean serve) {
+				this.serve = serve;
 				return this;
 			}
 

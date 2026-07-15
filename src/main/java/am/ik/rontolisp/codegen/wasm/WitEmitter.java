@@ -33,7 +33,6 @@ final class WitEmitter {
 	static final String VARIANT_BASE = "base";
 
 	/** The GC component's {@code rontolisp:fetch} (outgoing HTTP) variant. */
-	static final String VARIANT_HTTP_CLIENT = "http-client";
 
 	/** The GC component's {@code rontolisp:tcp-*} variant. */
 	static final String VARIANT_SOCKETS = "sockets";

@@ -61,8 +61,6 @@ PY
 echo "== --emit-wit fixtures =="
 echo '(print "x")' > "$WORK/base.lisp"
 capture base
-echo '(print (rontolisp:fetch "http://127.0.0.1:9/"))' > "$WORK/http-client.lisp"
-capture http-client
 echo '(close (rontolisp:tcp-listen 7777))' > "$WORK/sockets.lisp"
 capture sockets
 printf '(defun h (r) (list :status 200 :body "x"))\n(rontolisp:http-handler (quote h))\n' > "$WORK/http-server.lisp"

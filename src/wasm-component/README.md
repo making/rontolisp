@@ -43,7 +43,7 @@ src/wasm-component/regen.sh     # regenerate all three artifacts (needs wasm-too
 The CLI's `--emit-wit` option writes the component's WIT world next to the `.wasm`. The fixed
 part of that text (world imports, the fixed `wasi:cli/run` / `wasi:http/incoming-handler`
 export, the referenced package definitions) is the per-variant document model in
-`WasiWitDefinitions.java` — `base`/`http-client`/`sockets`/`http-server`/
+`WasiWitDefinitions.java` — `base`/`sockets`/`http-server`/
 `http-server-client` (GC) and `nogc`/`nogc-print` — **generated** by
 `WasiWitDefinitionsGenerator` (test sources) from the fixtures under
 `src/test/resources/.../component/wit/`, which are captured verbatim from
@@ -190,44 +190,42 @@ rontolisp core's stream built-ins work on sockets unchanged) and the
 `tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port` exports (the
 core's `"sock"` import seam). Run a socket component with
 `-S tcp=y -S inherit-network=y` in addition to the async flags; IPv4 literals
-only (`wasi:sockets/ip-name-lookup` is not wired yet). Because imports precede
-defined functions and the sock slots (core function indices 8-11) sit before
-the http slots (12-13), `adapter-http-client.wat` exports four errno-returning tcp
-stubs that satisfy the sock imports of a fetch component; combining fetch and
-tcp in one component is a compile error (see
-`../../.todo/49-combine-fetch-and-sockets-component.md`). Details:
+only (`wasi:sockets/ip-name-lookup` is not wired yet). Combining `rontolisp:fetch`
+and the tcp functions in one component is a compile error. Details:
 `../../.kb/tcp-sockets.md`.
 
-## HTTP client variant (`rontolisp:fetch`) — hybrid
+## HTTP client (`rontolisp:fetch`) — the `fetch.lisp` library, no adapter blob
 
-A `fetch` program compiles to the http-client variant, a **hybrid** component: the base I/O stays WASI 0.3, but
-fetch imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not exist upstream
-yet — the wasi-http repo's `v0.3.0-rc` tags and `main` are still `wasi:http@0.2.x`, and
-wasmtime 46 hosts only `wasi:http@0.2`; see `../../.todo/02-upgrade-fetch-to-wasi-http-0.3.md`). The parallel blob set is:
+`rontolisp:fetch` on the plain `wasmtime run` (`--component`, non-serve) path has **no
+hand-written adapter and no blob variant of its own**. It is a spliced Lisp-source library,
+`src/main/resources/am/ik/rontolisp/eval/fetch.lisp` (spliced by `eval/FetchLibrary`), over a
+`rontolisp:wit-import`ed `wasi:http` / `wasi:io` surface (`fetch.wit`, a classpath resource
+carried inline) — the same canon-lower machinery any `rontolisp:wit-import` uses. So a
+non-serve fetch selects the **base** blob set and pulls `wasi:http@0.2` + `wasi:io@0.2` in
+through canon-lowered user imports; its `--emit-wit` world shows
+`import wasi:http/types@0.2.0;` + `import wasi:http/outgoing-handler@0.2.0;` + the
+`wasi:io/*` imports. The user-facing API is unchanged: `fetch` still returns an `await`-able
+promise (via `rontolisp:then`, non-blocking), same options, same response plist. Run a fetch
+component with `-S http=y` in addition to the async flags. Mechanics: `../../.kb/fetch-http.md`.
+
+The `adapter-http-client.wat` / `core-http-client.wat` / `uni-http-client.wit` sources and the
+`adapter-http-client.wasm` / `import-block-http-client.bin` blobs are **deleted**. What stays
+from the old set:
 
 ```
 src/wasm-component/
-  uni-http-client.wit  core-http-client.wat  mem-http-client.wat  adapter-http-client.wat   (http sources)
-  deps/clocks-0.2  deps/io-0.2  deps/http   (0.2 deps; http's proxy world is trimmed)
+  mem-http-client.wat            (16-page memory source; the serve+fetch variant reuses it)
+  deps/clocks-0.2  deps/io-0.2  deps/http   (0.2 deps; still used by the serve variants)
 
 src/main/resources/.../component/
-  import-block-http-client.bin  mem-http-client.wasm  adapter-http-client.wasm
+  mem-http-client.wasm           (16-page memory module; kept for serve+fetch)
 ```
 
-`uni-http-client.wit` (world `uni-http-client`) is the base 0.3 surface plus the 0.2 http interfaces; the
-0.2 deps live alongside the 0.3 ones in `deps/` under version-suffixed directories.
-`regen.sh` regenerates both variants. `WasmComponentBuilder.buildHttp` wires the
-http-client variant (next free component type index 25; 31 lowered WASI funcs + 10 resource drops + the
-0.3 stream/future built-ins; `run` lifted async as in the base). `adapter-http-client.wat` is
-`adapter.wat` plus `fetch-start` / `fetch-await` exports driving the asynchronous outgoing
-request (the `rontolisp:fetch` promise API) over `wasi:http@0.2`: `fetch-start` sends the
-request and returns the `future-incoming-response` handle immediately, `fetch-await`
-blocks on its pollable and reads the response. Run a fetch component with `-S http=y` in
-addition to the async flags.
-
-When async `wasi:http@0.3` ships upstream, rewrite the http portion of `adapter-http-client.wat`
-over `stream`/`future`, drop the `wasi:io@0.2` imports from `uni-http-client.wit`, regenerate, and
-re-derive the `buildHttp` constants — the rontolisp core's `http.fetch` seam stays unchanged.
+`mem-http-client.wasm` (the 16-page memory module) is kept because the serve+fetch
+(`http-server-client`) variant below still needs it; `regen.sh` still regenerates it. Async
+`wasi:http@0.3` does not exist upstream yet (the wasi-http repo's `v0.3.0-rc` tags and `main`
+are still `wasi:http@0.2.x`, and wasmtime 46 hosts only `wasi:http@0.2`), which is why the
+imported surface is the 0.2 http interfaces on every fetch path.
 
 ## `--no-gc --component` print micro-adapter — pure WASI 0.2
 
@@ -314,11 +312,17 @@ src/main/resources/.../component/
 `wasi:io/poll` and `wasi:http/outgoing-handler` appended last — still entirely
 inside the wasi:http proxy world, so any host that serves the plain variant can
 serve this one (grant outbound HTTP: `wasmtime serve -W gc=y -S http=y`).
-`adapter-http-server-client-p1.wat` is `adapter-http-server-p1.wat` plus the
-`fetch-start`/`fetch-await` bodies of `adapter-http-client.wat` and the
+`adapter-http-server-client-p1.wat` is `adapter-http-server-p1.wat` plus its own
+`fetch-start`/`fetch-await` bodies over `wasi:http@0.2` and the
 errno-returning tcp stubs: the bridge (instantiated BEFORE the core, unlike the
 serve adapter) is what satisfies the rontolisp core's `http` and `sock`
-imports when the program uses fetch. `WasmServeComponentBuilder.buildHttp`
+imports when the program uses fetch. This is the ONLY hand-written WAT fetch
+adapter left: the non-serve fetch path is now the `fetch.lisp` library over
+canon-lowered `wasi:http` user imports (above), but the serve blob already
+imports `wasi:http`, so a spliced `fetch.lisp` would collide there
+(`rejectAdapterImportCollisions`) — this variant keeps its WAT adapter until the
+serve path also turns its own `wasi:http` imports into user imports.
+`WasmServeComponentBuilder.buildHttp`
 wires it; note `wasi:io/poll` is dependency-hoisted to import instance 0, so
 every instance index shifts by one relative to the plain serve block and the
 constants were re-derived from a fresh `wasm-tools dump`. The fetch
