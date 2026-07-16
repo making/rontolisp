@@ -374,6 +374,60 @@ public final class LispMacroExpander {
 	 * @param cons the when expression
 	 * @return the expanded expression
 	 */
+	/**
+	 * Expands {@code (rontolisp:async-defun name (ll) body...)} into
+	 * {@code (defun name (ll) (rontolisp::%async-run (lambda () body...)))} -- the
+	 * lowering shared by the interpreter, the JVM backend and Preview-1 WASM, which
+	 * implement asynchrony in the one {@code %async-run} primitive and inherit
+	 * lambda-list desugaring, closures and Lisp-2 function values from the ordinary defun
+	 * machinery. The {@code --component} backend compiles the form natively instead (a
+	 * state machine needs the raw body) and never calls this.
+	 * @param cons the async-defun form
+	 * @return the expansion
+	 */
+	public static LispVal expandAsyncDefun(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol)) {
+			throw new IllegalArgumentException(
+					LispNames.ASYNC_DEFUN_QUALIFIED + " expects a name and a lambda list, got: " + cons.print());
+		}
+		List<LispVal> defun = new ArrayList<>();
+		defun.add(new LispSymbol(LispNames.DEFUN));
+		defun.add(parts.get(1));
+		defun.add(parts.get(2));
+		defun.add(asyncRunForm(parts.subList(3, parts.size())));
+		return listToCons(defun);
+	}
+
+	/**
+	 * Expands {@code (rontolisp:async-lambda (ll) body...)} into
+	 * {@code (lambda (ll) (rontolisp::%async-run (lambda () body...)))}; see
+	 * {@link #expandAsyncDefun(LispCons)}.
+	 * @param cons the async-lambda form
+	 * @return the expansion
+	 */
+	public static LispVal expandAsyncLambda(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException(
+					LispNames.ASYNC_LAMBDA_QUALIFIED + " expects a lambda list, got: " + cons.print());
+		}
+		List<LispVal> lambda = new ArrayList<>();
+		lambda.add(new LispSymbol(LispNames.LAMBDA));
+		lambda.add(parts.get(1));
+		lambda.add(asyncRunForm(parts.subList(2, parts.size())));
+		return listToCons(lambda);
+	}
+
+	/** Builds {@code (rontolisp::%async-run (lambda () body...))}. */
+	private static LispVal asyncRunForm(List<LispVal> body) {
+		List<LispVal> thunk = new ArrayList<>();
+		thunk.add(new LispSymbol(LispNames.LAMBDA));
+		thunk.add(LispNil.INSTANCE);
+		thunk.addAll(body);
+		return listToCons(List.of(new LispSymbol(LispNames.ASYNC_RUN_QUALIFIED), listToCons(thunk)));
+	}
+
 	public static LispVal expandWhen(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispVal condition = parts.get(1);

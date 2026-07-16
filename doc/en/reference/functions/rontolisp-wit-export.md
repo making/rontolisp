@@ -40,7 +40,7 @@ world greeter {
 
 ```bash
 rontolisp greet.lisp --component -o greet.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("world")' greet.wasm
+wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
 # "Hello, world!"
 ```
 
@@ -67,8 +67,11 @@ Everything else comes from the world: `rontolisp:wasm-export`'s `:params`,
 | `string` | `:string` | a string |
 | (no result) | `:void` | the function's value is discarded |
 
-An `async func` in the world lifts the export with `:async t`, so I/O inside it
-(`print`, `rontolisp:fetch`, ...) works instead of trapping — the WIT states
+An `async func` in the world lifts the export with `:async t`, so blocking is
+always legal inside it: I/O inside a sync export usually works too (the
+asynchronous built-ins complete without blocking when the host accepts
+immediately), but a host that reports BLOCKED would make it trap, and the
+async lift removes that residual risk — the WIT states
 which exports are async rather than leaving it to be guessed. Every other WIT
 type (`record`, `list`, `option`, `result`, resources, ...) is a compile error at
 the export boundary today; the error names the rontolisp representation the type

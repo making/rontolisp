@@ -39,7 +39,7 @@ world greeter {
 
 ```bash
 rontolisp greet.lisp --component -o greet.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("world")' greet.wasm
+wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
 # "Hello, world!"
 ```
 
@@ -66,8 +66,11 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("w
 | `string` | `:string` | a string |
 | (no result) | `:void` | the function's value is discarded |
 
-world 中の `async func` はエクスポートを `:async t` としてリフトするため、その中の
-I/O (`print`、`rontolisp:fetch` など) はトラップせずに動作します — 非同期かどうかを
+world 中の `async func` はエクスポートを `:async t` としてリフトするため、その中では
+ブロッキング待機が常に合法です: 同期エクスポート内の I/O も通常は動作します
+(非同期組み込みはホストが即座に受理する限りブロックせずに完了します) が、BLOCKED を
+報告するホストではトラップし、非同期リフトはその残余リスクを取り除きます —
+非同期かどうかを
 推測させるのではなく、WIT が宣言します。それ以外の WIT 型 (`record`、`list`、
 `option`、`result`、リソースなど) は現時点ではエクスポート境界でコンパイルエラーに
 なります。エラーメッセージは、その型のマーシャリングが実装された際に得られる、

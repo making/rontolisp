@@ -13,9 +13,9 @@ import org.jspecify.annotations.Nullable;
 /**
  * Wraps a rontolisp core module (compiled in component mode) into a WASI 0.3 (Preview 3)
  * <strong>component</strong> that prints through {@code wasi:cli/stdout@0.3.0} and is
- * runnable with {@code wasmtime run -W gc=y -W component-model-more-async-builtins=y}
- * (wasmtime 46+; the async canonical ABI and stackful lifts are on by default there, only
- * the synchronous stream/future built-ins the adapter uses are still gated).
+ * runnable with {@code wasmtime run -W gc=y} (wasmtime 46+; the async canonical ABI and
+ * stackful lifts are on by default there, only the synchronous stream/future built-ins
+ * the adapter uses are still gated).
  *
  * <p>
  * In WASI 0.3 the {@code wasi:io} package is gone: all byte I/O flows through the
@@ -48,8 +48,8 @@ import org.jspecify.annotations.Nullable;
  * programmatically below; the indices and per-function canonical options were derived
  * from {@code wasm-tools dump} of a generated reference (see
  * {@code src/wasm-component/README.md}). Each artifact was validated with
- * {@code wasm-tools validate -f component-model -f cm-async -f cm-async-stackful
- * -f cm-more-async-builtins} and executed with {@code wasmtime run}.
+ * {@code wasm-tools validate -f component-model -f cm-async} and executed with
+ * {@code wasmtime run}.
  */
 public final class WasmComponentBuilder {
 
@@ -620,7 +620,7 @@ public final class WasmComponentBuilder {
 		// into the same canon run as the async built-ins; the type derivation must
 		// precede the flush below.
 		for (WasmComponentImportCompiler.Import imported : imports) {
-			if (imported.taskReturns().isEmpty() && imported.calls().isEmpty()) {
+			if (imported.taskReturns().isEmpty() && imported.calls().isEmpty() && imported.asyncs().isEmpty()) {
 				continue;
 			}
 			final List<Integer> coreIndices = asyncCoreOf.computeIfAbsent(imported.ifaceId(),
@@ -637,7 +637,9 @@ public final class WasmComponentBuilder {
 				fields.add(tr.field());
 				coreIndices.add(coreFunc++);
 			}
-			if (!imported.calls().isEmpty()) {
+			if (!imported.calls().isEmpty() || !imported.asyncs().isEmpty()) {
+				// async calls await through the waitable-set; the async (non-blocking)
+				// stream/future built-in wrappers park on it when BLOCKED
 				for (String field : WasmComponentImportCompiler.WAITABLE_FIELDS) {
 					if (!seen.add(field)) {
 						continue;
@@ -685,11 +687,15 @@ public final class WasmComponentBuilder {
 	static byte[] asyncCanon(WasmComponentImportCompiler.Async async, int type) {
 		return switch (async.op()) {
 			case NEW -> async.stream() ? ComponentWriter.canonStreamNew(type) : ComponentWriter.canonFutureNew(type);
-			case READ -> async.stream() ? ComponentWriter.canonStreamRead(type, 0)
+			// reads/writes are the ASYNC (non-blocking) built-in variants of base
+			// component-model-async: the generated wrapper parks on the interface's
+			// waitable-set when one reports BLOCKED (no gated feature involved)
+			case READ -> async.stream() ? ComponentWriter.canonStreamReadAsync(type, 0)
 					: (WasmComponentImportCompiler.asyncReadNeedsRealloc(async)
-							? ComponentWriter.canonFutureRead(type, 0, 0) : ComponentWriter.canonFutureRead(type, 0));
-			case WRITE ->
-				async.stream() ? ComponentWriter.canonStreamWrite(type, 0) : ComponentWriter.canonFutureWrite(type, 0);
+							? ComponentWriter.canonFutureReadAsync(type, 0, 0)
+							: ComponentWriter.canonFutureReadAsync(type, 0));
+			case WRITE -> async.stream() ? ComponentWriter.canonStreamWriteAsync(type, 0)
+					: ComponentWriter.canonFutureWriteAsync(type, 0);
 			case DROP_READABLE -> async.stream() ? ComponentWriter.canonStreamDropReadable(type)
 					: ComponentWriter.canonFutureDropReadable(type);
 			case DROP_WRITABLE -> async.stream() ? ComponentWriter.canonStreamDropWritable(type)
@@ -738,11 +744,10 @@ public final class WasmComponentBuilder {
 	 * wrap the rontolisp core (compiled in serve mode, exporting http.lisp's
 	 * {@code handle}) with the preview1 bridge ({@code adapter-http-server-p1.wasm}:
 	 * random / clocks / stdout-stderr over the 0.3 service-world interfaces) and lift
-	 * {@code handle} as the stackful-async {@code wasi:http/handler@0.3.0} export. The
+	 * {@code handle} as the callback-async {@code wasi:http/handler@0.3.0} export. The
 	 * HTTP glue is Lisp (http.lisp), so there is no hand-written serve adapter. Runs
-	 * under {@code wasmtime serve -W gc=y -W exceptions=y -W
-	 * component-model-async-stackful=y -W component-model-more-async-builtins=y}
-	 * (wasmtime 46+).
+	 * under {@code wasmtime serve -W gc=y -W exceptions=y} (wasmtime 46+; everything is
+	 * base component-model-async).
 	 * @param coreModule the rontolisp core module compiled in serve mode
 	 * @return the wasi:http@0.3.0 handler component binary
 	 */
@@ -847,29 +852,39 @@ public final class WasmComponentBuilder {
 				ComponentWriter.canonLower(9), // 10 get-random-u64
 				ComponentWriter.canonResourceDrop(T_DESCRIPTOR), // 11 drop descriptor
 				ComponentWriter.canonStreamNew(T_STREAM), // 12
-				ComponentWriter.canonStreamRead(T_STREAM, 0), // 13
-				ComponentWriter.canonStreamWrite(T_STREAM, 0), // 14
+				// The ASYNC (non-blocking) built-in variants of base
+				// component-model-async: a BLOCKED result completes through the
+				// waitable-set trio below (the adapter's blocking wrappers), so no
+				// gated feature is needed (neither more-async-builtins nor stackful).
+				ComponentWriter.canonStreamReadAsync(T_STREAM, 0), // 13
+				ComponentWriter.canonStreamWriteAsync(T_STREAM, 0), // 14
 				ComponentWriter.canonStreamDropReadable(T_STREAM), // 15
 				ComponentWriter.canonStreamDropWritable(T_STREAM), // 16
-				ComponentWriter.canonFutureRead(T_CLI_FUTURE, 0), // 17 future-read-cli
+				ComponentWriter.canonFutureReadAsync(T_CLI_FUTURE, 0), // 17
+																		// future-read-cli
 				ComponentWriter.canonFutureDropReadable(T_CLI_FUTURE), // 18
 																		// future-drop-cli
 				// the filesystem error-code is a variant with a string-bearing case, so
 				// its
 				// future payload needs realloc (cabi_realloc = core func 0)
-				ComponentWriter.canonFutureRead(T_FS_FUTURE, 0, 0), // 19 future-read-fs
+				ComponentWriter.canonFutureReadAsync(T_FS_FUTURE, 0, 0), // 19
+																			// future-read-fs
 				ComponentWriter.canonFutureDropReadable(T_FS_FUTURE), // 20
 																		// future-drop-fs
-				ComponentWriter.canonLower(10)))); // 21 stderr write-via-stream
-		// Group the 21 lowered/built-in core funcs (1-21) for the adapter's "w" import
+				ComponentWriter.canonLower(10), // 21 stderr write-via-stream
+				ComponentWriter.canonWaitableSetNew(), // 22
+				ComponentWriter.canonWaitableJoin(), // 23
+				ComponentWriter.canonWaitableSetWait(0)))); // 24
+		// Group the 24 lowered/built-in core funcs (1-24) for the adapter's "w" import
 		// (core instance 1). Names match adapter.wat's imports.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
 					List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",
 							"file-append", "open-at", "get-directories", "get-random-u64", "drop-desc", "stream-new",
 							"stream-read", "stream-write", "stream-drop-r", "stream-drop-w", "future-read-cli",
-							"future-drop-cli", "future-read-fs", "future-drop-fs", "stderr-write"),
-					List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21)))));
+							"future-drop-cli", "future-read-fs", "future-drop-fs", "stderr-write", "waitable-set-new",
+							"waitable-join", "waitable-set-wait"),
+					List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)))));
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
@@ -879,22 +894,23 @@ public final class WasmComponentBuilder {
 		// every fixed index below shifts by zero -- and what it DID consume of each
 		// index space comes back as `user`, the single source every downstream fixed
 		// index shifts by.
-		final Appended user = appendUserImports(c, imports, T_RUN_FUNC + 1, 10, 11, 22);
+		final Appended user = appendUserImports(c, imports, T_RUN_FUNC + 1, 10, 11, 25);
 		// Instantiate rontolisp (core instance 3 + one per user interface): mem =
 		// instance 0, wasi_snapshot_preview1 = adapter instance 2, plus each user
 		// interface's canon-lowered core instance (3..) under its canonical id.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(
 				List.of(rontolispInstantiate(2, List.of("mem", "wasi_snapshot_preview1"), List.of(0, 2), imports, 3))));
 		final int rontolisp = 3 + userIfaces;
-		// Alias rontolisp's run (core func 22 = cabi_realloc + 21 lowered/built-in
+		// Alias rontolisp's run (core func 25 = cabi_realloc + 24 lowered/built-in
 		// funcs, + the user-import lowers).
 		c.rawSection(ComponentWriter.SEC_ALIAS,
 				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp, "run"))));
 		// Lift run into component func 11 (+ the user-import aliases) with the async
-		// function type 23 (stackful async: no callback option). Component func 11
-		// follows the 11 aliased WASI funcs (0-10).
+		// function type 23 (an async-typed sync-ABI lift: the task may block, no gated
+		// feature involved). Component func 11 follows the 11 aliased WASI funcs
+		// (0-10).
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(22 + user.coreFuncs(), T_RUN_FUNC))));
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(25 + user.coreFuncs(), T_RUN_FUNC))));
 		// Component instance 10 (after import instances 0-9 + the user imports)
 		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter
@@ -902,9 +918,9 @@ public final class WasmComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_EXPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 10 + userIfaces))));
 		// Scalar wasm-export functions: next free indices after the run wiring are core
-		// func 23 (run = 22), component type 24 (T_RUN_FUNC = 23) and component func 12
+		// func 26 (run = 25), component type 24 (T_RUN_FUNC = 23) and component func 12
 		// (the run lift = 11), each shifted by the user-import counts.
-		appendFuncExports(c, funcExports, 23 + user.coreFuncs(), T_RUN_FUNC + 1 + user.types(),
+		appendFuncExports(c, funcExports, 26 + user.coreFuncs(), T_RUN_FUNC + 1 + user.types(),
 				12 + user.componentFuncs(), rontolisp);
 		return c.toByteArray();
 	}
@@ -1050,13 +1066,17 @@ public final class WasmComponentBuilder {
 				ComponentWriter.canonLower(9), // 10 get-random-u64
 				ComponentWriter.canonResourceDrop(S_T_DESCRIPTOR), // 11 drop descriptor
 				ComponentWriter.canonStreamNew(S_T_STREAM), // 12
-				ComponentWriter.canonStreamRead(S_T_STREAM, 0), // 13
-				ComponentWriter.canonStreamWrite(S_T_STREAM, 0), // 14
+				// async (non-blocking) variants; BLOCKED completes through the
+				// waitable-set trio appended below (see buildBase)
+				ComponentWriter.canonStreamReadAsync(S_T_STREAM, 0), // 13
+				ComponentWriter.canonStreamWriteAsync(S_T_STREAM, 0), // 14
 				ComponentWriter.canonStreamDropReadable(S_T_STREAM), // 15
 				ComponentWriter.canonStreamDropWritable(S_T_STREAM), // 16
-				ComponentWriter.canonFutureRead(S_T_CLI_FUTURE, 0), // 17 future-read-cli
+				ComponentWriter.canonFutureReadAsync(S_T_CLI_FUTURE, 0), // 17
+																			// future-read-cli
 				ComponentWriter.canonFutureDropReadable(S_T_CLI_FUTURE), // 18
-				ComponentWriter.canonFutureRead(S_T_FS_FUTURE, 0, 0), // 19 future-read-fs
+				ComponentWriter.canonFutureReadAsync(S_T_FS_FUTURE, 0, 0), // 19
+																			// future-read-fs
 				ComponentWriter.canonFutureDropReadable(S_T_FS_FUTURE), // 20
 				// sockets lowered 21-27: the ip-socket-address / error-code carry
 				// strings,
@@ -1073,29 +1093,34 @@ public final class WasmComponentBuilder {
 				ComponentWriter.canonLowerMemoryReallocUtf8(16, 0, 0), // 27
 																		// tcp-local-addr
 				ComponentWriter.canonResourceDrop(S_T_TCP_SOCKET), // 28 drop-tcp
-				ComponentWriter.canonStreamRead(S_T_ACCEPT_STREAM, 0), // 29 accept-read
+				ComponentWriter.canonStreamReadAsync(S_T_ACCEPT_STREAM, 0), // 29
+																			// accept-read
 				ComponentWriter.canonStreamDropReadable(S_T_ACCEPT_STREAM), // 30
 				ComponentWriter.canonFutureDropReadable(S_T_SOCK_FUTURE), // 31
-				ComponentWriter.canonLower(17)))); // 32 stderr write-via-stream
-		// Group the 32 lowered/built-in core funcs (1-32) for the adapter's "w" import
+				ComponentWriter.canonLower(17), // 32 stderr write-via-stream
+				ComponentWriter.canonWaitableSetNew(), // 33
+				ComponentWriter.canonWaitableJoin(), // 34
+				ComponentWriter.canonWaitableSetWait(0)))); // 35
+		// Group the 35 lowered/built-in core funcs (1-35) for the adapter's "w" import
 		// (core instance 1). Names match adapter-sockets.wat's imports.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
-			.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
-					List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",
-							"file-append", "open-at", "get-directories", "get-random-u64", "drop-desc", "stream-new",
-							"stream-read", "stream-write", "stream-drop-r", "stream-drop-w", "future-read-cli",
-							"future-drop-cli", "future-read-fs", "future-drop-fs", "tcp-create", "tcp-bind",
-							"tcp-connect-raw", "tcp-listen-raw", "tcp-send", "tcp-receive", "tcp-local-addr",
-							"drop-tcp", "accept-read", "accept-drop-r", "future-drop-sock", "stderr-write"),
-					List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-							26, 27, 28, 29, 30, 31, 32)))));
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
+				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
+						List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",
+								"file-append", "open-at", "get-directories", "get-random-u64", "drop-desc",
+								"stream-new", "stream-read", "stream-write", "stream-drop-r", "stream-drop-w",
+								"future-read-cli", "future-drop-cli", "future-read-fs", "future-drop-fs", "tcp-create",
+								"tcp-bind", "tcp-connect-raw", "tcp-listen-raw", "tcp-send", "tcp-receive",
+								"tcp-local-addr", "drop-tcp", "accept-read", "accept-drop-r", "future-drop-sock",
+								"stderr-write", "waitable-set-new", "waitable-join", "waitable-set-wait"),
+						List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+								25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35)))));
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
 		// User WIT-interface imports (rontolisp:wit-import): instance types from
 		// component type 31, import instances from 11, function aliases from component
 		// func 18, lowered core funcs from 33. Emits nothing when there are none.
-		final Appended user = appendUserImports(c, imports, S_T_SOCK_FUTURE + 1, 11, 18, 33);
+		final Appended user = appendUserImports(c, imports, S_T_SOCK_FUTURE + 1, 11, 18, 36);
 		// Instantiate rontolisp (core instance 3 + one per user interface): mem =
 		// instance 0, and both wasi_snapshot_preview1 AND sock satisfied by the adapter
 		// instance 2 (which exports the eight preview1 functions plus tcp-connect /
@@ -1104,15 +1129,16 @@ public final class WasmComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(rontolispInstantiate(2,
 				List.of("mem", "wasi_snapshot_preview1", "sock"), List.of(0, 2, 2), imports, 3))));
 		final int rontolisp = 3 + userIfaces;
-		// Alias rontolisp's run (core func 33 = cabi_realloc + 32 lowered/built-in
+		// Alias rontolisp's run (core func 36 = cabi_realloc + 35 lowered/built-in
 		// funcs, + the user-import lowers).
 		c.rawSection(ComponentWriter.SEC_ALIAS,
 				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp, "run"))));
 		// Lift run into component func 18 (+ the user-import aliases) with the async
-		// function type 26 (stackful async: no callback option). Component func 18
-		// follows the 18 aliased WASI funcs (0-17).
+		// function type 26 (an async-typed sync-ABI lift: the task may block, no gated
+		// feature involved). Component func 18 follows the 18 aliased WASI funcs
+		// (0-17).
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(33 + user.coreFuncs(), S_T_RUN_FUNC))));
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(36 + user.coreFuncs(), S_T_RUN_FUNC))));
 		// Component instance 11 (after import instances 0-10 + the user imports)
 		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter
@@ -1120,9 +1146,9 @@ public final class WasmComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_EXPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 11 + userIfaces))));
 		// Scalar wasm-export functions: next free indices after the run wiring are core
-		// func 34 (run = 33), component type 31 (S_T_SOCK_FUTURE = 30) and component func
+		// func 37 (run = 36), component type 31 (S_T_SOCK_FUTURE = 30) and component func
 		// 19 (the run lift = 18), each shifted by the user-import counts.
-		appendFuncExports(c, funcExports, 34 + user.coreFuncs(), S_T_SOCK_FUTURE + 1 + user.types(),
+		appendFuncExports(c, funcExports, 37 + user.coreFuncs(), S_T_SOCK_FUTURE + 1 + user.types(),
 				19 + user.componentFuncs(), rontolisp);
 		return c.toByteArray();
 	}

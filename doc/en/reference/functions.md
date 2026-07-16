@@ -251,9 +251,16 @@ package system. Each name below links to its own page.
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | the macro symbols of a package, sorted |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | the special-form symbols of a package, sorted |
 | `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | start an HTTP request asynchronously; returns a promise |
-| `rontolisp:await` | `(rontolisp:await p)` | resolve a promise (blocking); a non-promise passes through unchanged |
 | `rontolisp:then` | `(rontolisp:then p (lambda (r) (getf r :status)))` | derive a new promise that applies a callback to the settled value |
 | `rontolisp:promisep` | `(rontolisp:promisep p)` | `t` if the value is a promise |
+| `rontolisp:futurep` | `(rontolisp:futurep v)` | `t` if the value is a future (as returned by calling an `async-defun` function, `rontolisp:fetch`, `rontolisp:stream-read`, ...) |
+| `rontolisp:streamp` | `(rontolisp:streamp v)` | `t` if the value is an asynchronous stream (a different predicate from `cl:streamp`, which answers file streams) |
+| `rontolisp:make-stream` | `(rontolisp:make-stream)` | create a fresh open asynchronous stream; one value owns both the read and the write end |
+| `rontolisp:stream-read` | `(rontolisp:stream-read s)` | a future settling to the stream's next chunk, or `nil` at end of stream |
+| `rontolisp:stream-write` | `(rontolisp:stream-write s "chunk")` | append a chunk (never `nil`); returns a future that settles when the stream accepted it |
+| `rontolisp:stream-close` | `(rontolisp:stream-close s)` | close the write end; buffered chunks stay readable, then reads observe end of stream |
+| `rontolisp:read-all` | `(rontolisp:read-all s)` | a future settling to the concatenation of all remaining string chunks |
+| `rontolisp:wait-for` | `(rontolisp:wait-for 100)` | a future settling to `nil` after the given milliseconds; the async counterpart of `cl:sleep` |
 | `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | serve HTTP requests with a handler function (a blocking server; a `wasi:http` component under `--component`) |
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | parse a JSON string: objects become keyword plists, or hash tables with `:hash-table` |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (list :n 1))` | serialize a value (plists and hash tables become objects) to a JSON string |
@@ -281,7 +288,7 @@ generic promise operations `rontolisp:await` / `rontolisp:then` /
 `rontolisp:promisep`; see the
 [HTTP Requests guide](../guides/http-fetch.md) for a worked overview, and the
 [fetch](functions/rontolisp-fetch.md),
-[await](functions/rontolisp-await.md), [then](functions/rontolisp-then.md) and
+[await](special-forms/rontolisp-await.md), [then](functions/rontolisp-then.md) and
 [promisep](functions/rontolisp-promisep.md) reference pages for options, the
 result plist, backend support, and limitations. `rontolisp:http-handler` is
 the incoming counterpart of `fetch` -- it serves HTTP requests with a handler

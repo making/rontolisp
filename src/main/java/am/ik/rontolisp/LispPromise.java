@@ -117,7 +117,9 @@ public final class LispPromise implements LispVal {
 
 	@Override
 	public String print() {
-		return "#<PROMISE>";
+		// the legacy chain prints like the future it resolves through, so the opaque
+		// label is uniform across backends during the promise-to-future transition
+		return "#<FUTURE>";
 	}
 
 }

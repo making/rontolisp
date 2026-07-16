@@ -26,7 +26,9 @@ class JvmLispCompilerTest {
 	Path tempDir;
 
 	private String compileAndRun(String lispCode) throws Exception {
-		return compileAndRun(LispReader.readAllFromString(lispCode));
+		// mirror the CLI pipeline's prelude splice (equalp/string</read-all) so the
+		// prelude-backed built-ins resolve like they do in a real compile
+		return compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
 	}
 
 	// JSON tests pre-process with JsonLibrary.process, mirroring the compile-path
@@ -4347,9 +4349,13 @@ class JvmLispCompilerTest {
 			assertThat(compileAndRun("(print (getf (rontolisp:await (rontolisp:fetch \"" + url
 					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\"))))) " + ":status))"))
 				.isEqualTo("200");
-			assertThat(compileAndRun("(print (getf (rontolisp:await (rontolisp:fetch \"" + url
-					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\"))))) " + ":body))"))
+			assertThat(compileAndRun(
+					"(print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await" + " (rontolisp:fetch \"" + url
+							+ "\" (list :headers (list (cons \"X-Custom\" \"abc\")))))" + " :body))))"))
 				.isEqualTo("\"got:abc\"");
+			assertThat(compileAndRun(
+					"(print (rontolisp:streamp (getf (rontolisp:await (rontolisp:fetch \"" + url + "\")) :body)))"))
+				.isEqualTo("t");
 			String headers = compileAndRun(
 					"(print (getf (rontolisp:await (rontolisp:fetch \"" + url + "\")) :headers))");
 			assertThat(headers).contains("x-test");
@@ -4359,11 +4365,11 @@ class JvmLispCompilerTest {
 					+ "\"))) (rontolisp:await p1)"
 					+ " (print (list (getf (rontolisp:await p2) :status) (getf (rontolisp:await p1) :status))))"))
 				.isEqualTo("(200 200)");
-			// a fetch promise prints opaquely, satisfies promisep and chains with then
+			// a fetch future prints opaquely, satisfies futurep and chains with then
 			assertThat(compileAndRun(
-					"(let ((p (rontolisp:fetch \"" + url + "\")))" + " (print (rontolisp:promisep p)) (print p)"
+					"(let ((p (rontolisp:fetch \"" + url + "\")))" + " (print (rontolisp:futurep p)) (print p)"
 							+ " (print (rontolisp:await (rontolisp:then p (lambda (r) (getf r :status))))))"))
-				.isEqualTo("t\n#<PROMISE>\n200");
+				.isEqualTo("t\n#<FUTURE>\n200");
 		}
 		finally {
 			server.stop(0);
@@ -4384,8 +4390,9 @@ class JvmLispCompilerTest {
 		server.start();
 		try {
 			int port = server.getAddress().getPort();
-			assertThat(compileAndRun("(print (getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port
-					+ "/post\" (list :method \"post\" :body \"hello\"))) :body))"))
+			assertThat(compileAndRun("(print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await"
+					+ " (rontolisp:fetch \"http://127.0.0.1:" + port
+					+ "/post\" (list :method \"post\" :body \"hello\"))) :body))))"))
 				.isEqualTo("\"POST:hello\"");
 		}
 		finally {
@@ -4798,7 +4805,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(
 				"(print (rontolisp:await (rontolisp:then 5 (lambda (x) (rontolisp:then x (lambda (y) (+ y 1)))))))"))
 			.isEqualTo("6");
-		assertThat(compileAndRun("(print (rontolisp:then 1 (lambda (x) x)))")).isEqualTo("#<PROMISE>");
+		assertThat(compileAndRun("(print (rontolisp:then 1 (lambda (x) x)))")).isEqualTo("#<FUTURE>");
 		assertThat(compileAndRun("(setq cnt 0)" + " (let ((p (rontolisp:then 1 (lambda (x) (setq cnt (+ cnt 1)) x))))"
 				+ " (rontolisp:await p) (rontolisp:await p) (print cnt))"))
 			.isEqualTo("1");

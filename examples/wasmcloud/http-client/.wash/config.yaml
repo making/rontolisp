@@ -5,6 +5,8 @@ build:
 dev:
   wasm_proposals:
     - gc
+    - exception-handling
+    - component-model-async
 
 # wash denies all outgoing HTTP unless the upstream is allowlisted.
 workload:

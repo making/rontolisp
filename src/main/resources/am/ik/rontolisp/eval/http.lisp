@@ -199,14 +199,16 @@
     (%http:fields-drop rheaders)
     (list :method method :path path :query query :headers headers :body body)))
 
-(defun %serve-handle (request)
-  ;; The handler.handle export body (a stackful async task). Read the request, run the
-  ;; user handler (%serve-dispatch, synthesized by the serve inliner), DELIVER the
-  ;; response through task.return -- only then can the host start reading the contents
-  ;; stream -- and stream the body after it (the rendezvous order verified on
-  ;; wasmtime 46).
+(rontolisp:async-defun %serve-handle (request)
+  ;; The handler.handle export body (an asynchronous task; today its awaits still
+  ;; block the task, which is legal under base component-model-async). Read the
+  ;; request, run the user handler (%serve-dispatch, synthesized by the serve
+  ;; inliner) -- awaiting its future, so the handler itself may be an async-defun --
+  ;; DELIVER the response through task.return -- only then can the host start reading
+  ;; the contents stream -- and stream the body after it (the rendezvous order
+  ;; verified on wasmtime 46).
   (let* ((req (%serve-read-request request))
-         (resp (%serve-dispatch req))
+         (resp (rontolisp:await (%serve-dispatch req)))
          (status (or (getf resp :status) 200))
          (body (or (getf resp :body) ""))
          (fields (%http:fields-new)))

@@ -46,8 +46,9 @@ import am.ik.wasm.ComponentWriter;
  * block ({@link #lowerServeIoFromBlock}); anything else in the import list is a genuine
  * {@code rontolisp:wit-import} (e.g. {@code wasi:keyvalue}) and rides
  * {@link WasmComponentBuilder#appendUserImports}. Run under {@code wasmtime serve -W gc=y
- * -W exceptions=y -W component-model-async-stackful=y
- * -W component-model-more-async-builtins=y}.
+ * -W exceptions=y} -- the handle export is a CALLBACK async lift and every stream/future
+ * built-in is the asynchronous variant with a blocking waitable-set park, all base
+ * component-model-async.
  */
 final class WasmServeComponentBuilder {
 
@@ -175,14 +176,19 @@ final class WasmServeComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_TYPE,
 				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8),
 						ComponentWriter.definedResultErr(T_CLI_ERRCODE), ComponentWriter.definedFuture(tCliResult))));
+		// The async (non-blocking) built-in variants + the waitable-set trio: the
+		// bridge's blocking wrappers park on BLOCKED, so no gated feature is needed.
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonStreamNew(tStream), // 6
-				ComponentWriter.canonStreamWrite(tStream, 0), // 7
+				ComponentWriter.canonStreamWriteAsync(tStream, 0), // 7
 				ComponentWriter.canonStreamDropWritable(tStream), // 8
-				ComponentWriter.canonFutureRead(tCliFuture, 0), // 9
-				ComponentWriter.canonFutureDropReadable(tCliFuture)))); // 10
-		bridgeNames
-			.addAll(List.of("stream-new", "stream-write", "stream-drop-w", "future-read-cli", "future-drop-cli"));
-		bridgeCoreIndices.addAll(List.of(6, 7, 8, 9, 10));
+				ComponentWriter.canonFutureReadAsync(tCliFuture, 0), // 9
+				ComponentWriter.canonFutureDropReadable(tCliFuture), // 10
+				ComponentWriter.canonWaitableSetNew(), // 11
+				ComponentWriter.canonWaitableJoin(), // 12
+				ComponentWriter.canonWaitableSetWait(0)))); // 13
+		bridgeNames.addAll(List.of("stream-new", "stream-write", "stream-drop-w", "future-read-cli", "future-drop-cli",
+				"waitable-set-new", "waitable-join", "waitable-set-wait"));
+		bridgeCoreIndices.addAll(List.of(6, 7, 8, 9, 10, 11, 12, 13));
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
 				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(bridgeNames, bridgeCoreIndices))));
 		// Instantiate the preview1 bridge (core instance 2): mem = instance 0, w =
@@ -195,7 +201,7 @@ final class WasmServeComponentBuilder {
 		// component types 16..), one synthesized core instance per interface, from core
 		// instance 3. This is appendUserImports MINUS the instance-type / importInstance
 		// emission, because the block already declared these interfaces. ---
-		final ServeIo io = lowerServeIoFromBlock(c, serveFixed, 5, 11, FIRST_FREE_TYPE + 3, 3);
+		final ServeIo io = lowerServeIoFromBlock(c, serveFixed, 5, 14, FIRST_FREE_TYPE + 3, 3);
 		// Additional user imports (rontolisp:wit-import): component types / import
 		// instances / component funcs / core funcs / core instances continue right after
 		// the fixed serve surface. Emits nothing when there are none.
@@ -231,12 +237,18 @@ final class WasmServeComponentBuilder {
 						ComponentWriter.valTypeIndex(T_HTTP_ERRCODE)),
 				ComponentWriter.asyncFuncTypeOf(List.of("request"), List.of(ComponentWriter.valTypeIndex(tOwnRequest)),
 						ComponentWriter.valTypeIndex(tHandleResult)))));
-		// Alias the core's `handle` wasm-export and lift it stackful-async: the core
-		// signature is [i32 request] -> [] and the result arrives via task.return.
-		c.rawSection(ComponentWriter.SEC_ALIAS,
-				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(coreInst, "handle"))));
-		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List
-			.of(ComponentWriter.canonLiftMemoryUtf8Async(io.nextCoreFunc() + user.coreFuncs(), tHandleFunc, 0))));
+		// Alias the core's `handle` wasm-export plus the bridge's stub callback, and
+		// lift handle with the CALLBACK async ABI (base component-model-async; no
+		// stackful-lift feature): the core signature is [i32 request] -> [i32 code],
+		// the result arrives via task.return, and the task's blocking is the parked
+		// waitable-set.wait inside the wrappers -- so the callback is never invoked
+		// and stays a stub.
+		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
+			.of(ComponentWriter.aliasCoreFunc(coreInst, "handle"), ComponentWriter.aliasCoreFunc(2, "async_cb"))));
+		c.rawSection(ComponentWriter.SEC_CANON,
+				ComponentWriter
+					.vec(List.of(ComponentWriter.canonLiftMemoryUtf8AsyncCallback(io.nextCoreFunc() + user.coreFuncs(),
+							tHandleFunc, 0, io.nextCoreFunc() + user.coreFuncs() + 1))));
 		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(List
 			.of(ComponentWriter.componentInstanceFromFunc("handle", io.nextComponentFunc() + user.componentFuncs()))));
 		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter.vec(List
@@ -378,7 +390,9 @@ final class WasmServeComponentBuilder {
 				fieldNames.add(tr.field());
 				coreIndices.add(coreFunc++);
 			}
-			if (!imported.calls().isEmpty()) {
+			if (!imported.calls().isEmpty() || !imported.asyncs().isEmpty()) {
+				// async calls await through the waitable-set; the async (non-blocking)
+				// stream/future built-in wrappers park on it when BLOCKED
 				for (String field : WasmComponentImportCompiler.WAITABLE_FIELDS) {
 					if (!seen.add(field)) {
 						continue;

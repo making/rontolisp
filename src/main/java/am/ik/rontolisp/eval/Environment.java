@@ -32,6 +32,7 @@ import java.util.function.DoubleUnaryOperator;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDoubleFloatArray;
 import am.ik.rontolisp.LispFloatArray;
+import am.ik.rontolisp.LispFuture;
 import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
@@ -46,6 +47,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispPromise;
 import am.ik.rontolisp.LispRatio;
+import am.ik.rontolisp.LispStream;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
@@ -797,10 +799,10 @@ public final class Environment implements Scope {
 			String method = fetchMethod(options);
 			List<HttpSupport.Header> requestHeaders = parseHeaderAlist(plistGet(options, ":headers"));
 			String body = fetchBody(options);
-			return LispPromise.root(HttpSupport.requestAsync(method, url.value(), requestHeaders, body)
-				.thenApply(result -> fetchList(new LispSymbol(":status"), new LispInteger(result.status()),
-						new LispSymbol(":body"), new LispString(result.body()), new LispSymbol(":headers"),
-						buildHeaderAlist(result.headers()))));
+			return LispFuture.of(HttpSupport.requestAsync(method, url.value(), requestHeaders, body)
+				.thenApply(start -> fetchList(new LispSymbol(":status"), new LispInteger(start.status()),
+						new LispSymbol(":headers"), buildHeaderAlist(start.headers()), new LispSymbol(":body"),
+						start.body())));
 		}));
 		// then derives a new promise from a value (usually a promise): awaiting the
 		// derived promise awaits the base and applies the callback to its value. The
@@ -822,6 +824,86 @@ public final class Environment implements Scope {
 			}
 			return (args.get(0) instanceof LispPromise) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		// futurep tests whether a value is a future (calling an async-defun function,
+		// rontolisp:fetch, rontolisp:stream-read, ...).
+		String futurepName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FUTUREP);
+		env.defineFunction(futurepName, new LispFunction(futurepName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.FUTUREP + " expects 1 argument, got " + args.size());
+			}
+			return (args.get(0) instanceof LispFuture) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// rontolisp:streamp tests whether a value is an asynchronous stream -- a
+		// different symbol from the cl:streamp file-stream predicate; each answers nil
+		// for the other's streams.
+		String asyncStreampName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_STREAMP);
+		env.defineFunction(asyncStreampName, new LispFunction(asyncStreampName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.ASYNC_STREAMP + " expects 1 argument, got " + args.size());
+			}
+			return (args.get(0) instanceof LispStream) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// make-stream creates a fresh open asynchronous stream (both ends in one value).
+		String makeStreamName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_STREAM);
+		env.defineFunction(makeStreamName, new LispFunction(makeStreamName, args -> {
+			if (!args.isEmpty()) {
+				throw new LispEvalException(LispNames.MAKE_STREAM + " expects no arguments, got " + args.size());
+			}
+			return LispStream.open();
+		}));
+		// stream-read yields a future settling to the next chunk (nil = end of stream).
+		String streamReadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_READ);
+		env.defineFunction(streamReadName, new LispFunction(streamReadName, args -> {
+			LispStream stream = requireAsyncStream(LispNames.STREAM_READ, args, 1);
+			return LispFuture.of(stream.read());
+		}));
+		// stream-write appends a chunk; the returned future settles when accepted.
+		String streamWriteName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_WRITE);
+		env.defineFunction(streamWriteName, new LispFunction(streamWriteName, args -> {
+			LispStream stream = requireAsyncStream(LispNames.STREAM_WRITE, args, 2);
+			LispVal chunk = args.get(1);
+			if (chunk instanceof LispNil) {
+				throw new LispEvalException(LispNames.STREAM_WRITE + ": a chunk must not be nil");
+			}
+			try {
+				stream.write(chunk);
+			}
+			catch (IllegalStateException ex) {
+				throw new LispEvalException(LispNames.STREAM_WRITE + ": the stream is closed");
+			}
+			return LispFuture.settled(LispNil.INSTANCE);
+		}));
+		// stream-close ends the stream: reads drain the buffer, then observe nil.
+		String streamCloseName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_CLOSE);
+		env.defineFunction(streamCloseName, new LispFunction(streamCloseName, args -> {
+			LispStream stream = requireAsyncStream(LispNames.STREAM_CLOSE, args, 1);
+			stream.close();
+			return LispNil.INSTANCE;
+		}));
+		// wait-for starts a timer: a future settling to nil after the given number of
+		// milliseconds (the async surface's timer; awaiting it is the sleeping form).
+		String waitForName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WAIT_FOR);
+		env.defineFunction(waitForName, new LispFunction(waitForName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.WAIT_FOR + " expects 1 argument, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispInteger millis) || millis.value() < 0) {
+				throw new LispEvalException(LispNames.WAIT_FOR
+						+ " expects a non-negative integer of milliseconds, got: " + args.get(0).print());
+			}
+			return AsyncRuntime.timer(millis.value());
+		}));
+	}
+
+	private static LispStream requireAsyncStream(String name, List<LispVal> args, int arity) {
+		if (args.size() != arity) {
+			throw new LispEvalException(
+					name + " expects " + arity + " argument" + (arity == 1 ? "" : "s") + ", got " + args.size());
+		}
+		if (!(args.get(0) instanceof LispStream stream)) {
+			throw new LispEvalException(name + " expects a stream, got: " + args.get(0).print());
+		}
+		return stream;
 	}
 
 	private static LispVal fetchList(LispVal... elements) {

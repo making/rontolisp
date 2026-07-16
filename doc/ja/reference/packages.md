@@ -186,6 +186,6 @@ defpackage の慣用形)です。`:shadow` と `:shadowing-import-from` はエ�
 [関数](functions.md#rontolisp-package-functions)
 リファレンスに独自のページを持ち、完全な
 [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
-[`rontolisp:await`](functions/rontolisp-await.md) /
+[`rontolisp:await`](special-forms/rontolisp-await.md) /
 [`rontolisp:then`](functions/rontolisp-then.md) /
 [`rontolisp:promisep`](functions/rontolisp-promisep.md) ドキュメントも含まれます。

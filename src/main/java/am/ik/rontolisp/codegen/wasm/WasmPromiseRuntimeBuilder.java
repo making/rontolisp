@@ -57,12 +57,15 @@ final class WasmPromiseRuntimeBuilder {
 		promiseField(w, V, 0);
 		setLocal(w, KIND);
 
-		// kind 2: settled -> the memoized value
+		// kind 2: settled -> the memoized value, recursively awaited so a nested
+		// settled future (an async body returning another async call's future)
+		// flattens like JavaScript await; a non-promise value returns immediately.
 		getLocal(w, KIND);
 		i32(w, 2);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
 		promiseField(w, V, 1);
+		call(w, WasmLispCompiler.FUNC_PROMISE_AWAIT);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 

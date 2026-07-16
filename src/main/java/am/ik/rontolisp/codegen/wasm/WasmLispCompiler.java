@@ -869,6 +869,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
 		program = LispMacroExpander.flattenTopLevel(program);
+		// rontolisp:await placement is checked on the raw forms; then every
+		// async-defun/async-lambda lowers to an ordinary defun/lambda over the
+		// %async-run primitive. On this backend %async-run runs the body immediately
+		// and wraps the result in a settled future: Preview 1 has no asynchronous host
+		// I/O (everything settles), and under --component the body's awaits block the
+		// stackful task exactly like the rest of the module's I/O.
+		try {
+			am.ik.rontolisp.LispAsync.checkTopLevel(program);
+		}
+		catch (IllegalArgumentException ex) {
+			throw new UnsupportedOperationException(ex.getMessage());
+		}
+		program = am.ik.rontolisp.LispAsync.lowerProgram(program);
 		// Splice top-level defstructs/defclasses/defgenerics/defmethods into their
 		// generated defuns before lambda-list desugaring (the generated constructors
 		// use &key) so Pass 1 collects them as ordinary functions; the registries make
@@ -1554,9 +1567,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		for (WasmComponentImportCompiler.Import imported : componentImports) {
-			if (imported.calls().isEmpty()) {
+			if (imported.calls().isEmpty() && imported.asyncs().isEmpty()) {
 				continue;
 			}
+			// async calls await through the waitable-set, and the async (non-blocking)
+			// stream/future built-in wrappers park on it when BLOCKED -- so any
+			// interface with either binds the trio.
 			for (String field : WasmComponentImportCompiler.WAITABLE_FIELDS) {
 				if (importSlotIndex.putIfAbsent(imported.ifaceId() + " " + field, importSlots.size()) == null) {
 					importSlots.add(new ImportSlot(imported.ifaceId(), field,
@@ -1595,8 +1611,19 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			for (WasmComponentImportCompiler.Async async : componentAsyncWrappers.values()) {
 				int ordinal = Objects.requireNonNull(importSlotIndex.get(async.module() + " " + async.field()));
-				byte[] body = WasmComponentImportCompiler.buildAsyncBody(ctxBuilder, async, ordinal, allocFuncIndex,
-						strFromMemFuncIndex);
+				WasmComponentImportCompiler.WaitOrdinals asyncWaitOrdinals = new WasmComponentImportCompiler.WaitOrdinals(
+						Objects.requireNonNull(importSlotIndex
+							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_NEW)),
+						Objects.requireNonNull(importSlotIndex
+							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_WAIT)),
+						Objects.requireNonNull(importSlotIndex
+							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_DROP)),
+						Objects.requireNonNull(importSlotIndex
+							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_JOIN)),
+						Objects.requireNonNull(importSlotIndex
+							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP)));
+				byte[] body = WasmComponentImportCompiler.buildAsyncBody(ctxBuilder, async, ordinal, asyncWaitOrdinals,
+						allocFuncIndex, strFromMemFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(async.lispName())), body);
 			}
 			for (WasmComponentImportCompiler.AsyncCall call : componentCallStartWrappers.values()) {
@@ -2193,8 +2220,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				// fixed type (TYPE_F32ARR, or the --simd block's TYPE_V_SET). One per
 				// (rontolisp:wasm-export ...) directive.
 				for (ExportPlan p : exportPlans) {
+					// the serve-mode handle is CALLBACK-lifted: its core signature
+					// carries the trailing i32 packed callback code
 					types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()),
-							WasmExportCompiler.resultWasmTypes(p.decl()));
+							WasmExportCompiler.isServeHandle(this.serve, p.decl()) ? new Type[] { Type.I32 }
+									: WasmExportCompiler.resultWasmTypes(p.decl()));
 				}
 				// Host-ABI signatures of the imported functions, one per unique (module,
 				// field) slot, in the same order as the hostImports entries above -- a
@@ -3508,7 +3538,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.dot = addString(" . ");
 			this.newline = addString("\n");
 			this.funcStr = addString("#<function>");
-			this.promiseStr = addString("#<PROMISE>");
+			this.promiseStr = addString("#<FUTURE>");
 			this.vecPrefix = addString("#(");
 			this.hashPrefix = addString("#");
 			this.rankAOpen = addString("A(");

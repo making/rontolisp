@@ -29,6 +29,8 @@ import am.ik.rontolisp.reader.LispReader;
  * {@code eql}).</li>
  * <li>{@code string<} -- case-sensitive lexicographic less-than, returning the mismatch
  * index or nil.</li>
+ * <li>{@code rontolisp:read-all} -- an {@code rontolisp:async-defun} draining an
+ * asynchronous stream's string chunks into one string.</li>
  * </ul>
  */
 public final class LispPreludeLibrary {
@@ -47,6 +49,15 @@ public final class LispPreludeLibrary {
 				        ((and (consp a) (consp b))
 				         (and (equalp (car a) (car b)) (equalp (cdr a) (cdr b))))
 				        (t (eql a b))))
+				""");
+		SOURCES.put(LispNames.READ_ALL, """
+				(rontolisp:async-defun rontolisp:read-all (s)
+				  (let ((acc "")
+				        (chunk (rontolisp:await (rontolisp:stream-read s))))
+				    (while chunk
+				      (setq acc (concatenate 'string acc chunk))
+				      (setq chunk (rontolisp:await (rontolisp:stream-read s))))
+				    acc))
 				""");
 		SOURCES.put(LispNames.STRING_LT, """
 				(defun string< (a b)
@@ -126,8 +137,9 @@ public final class LispPreludeLibrary {
 	private static boolean definesName(List<LispVal> program, String name) {
 		for (LispVal form : program) {
 			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
-					&& LispNames.DEFUN.equals(member(op.name())) && cons.cdr() instanceof LispCons rest
-					&& rest.car() instanceof LispSymbol defName && name.equals(member(defName.name()))) {
+					&& (LispNames.DEFUN.equals(member(op.name())) || LispNames.ASYNC_DEFUN.equals(member(op.name())))
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol defName
+					&& name.equals(member(defName.name()))) {
 				return true;
 			}
 		}

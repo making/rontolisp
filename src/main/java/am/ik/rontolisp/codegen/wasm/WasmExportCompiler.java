@@ -312,6 +312,19 @@ final class WasmExportCompiler {
 	}
 
 	/**
+	 * Returns whether this export is the serve-mode {@code handle} entry, whose
+	 * CALLBACK-lifted core signature carries a trailing {@code i32} packed callback code
+	 * ({@code EXIT} = 0; the response itself is delivered by {@code canon task.return}
+	 * mid-task).
+	 * @param serve whether the compilation targets a serve component
+	 * @param decl the parsed declaration
+	 * @return true for the callback-lifted handle wrapper
+	 */
+	static boolean isServeHandle(boolean serve, Decl decl) {
+		return serve && "handle".equals(decl.exportName());
+	}
+
+	/**
 	 * Emits the wrapper body (terminated by {@code end}) into {@code ctx.writer}. The
 	 * body boxes each parameter, calls the target function and unboxes the result.
 	 * @param ctx the compilation context (its writer receives the instructions)
@@ -360,6 +373,12 @@ final class WasmExportCompiler {
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(targetFuncIndex);
 		emitUnboxResult(ctx, decl.returnType());
+		if (isServeHandle(ctx.serve, decl)) {
+			// the callback-lifted handle returns the packed EXIT code; the response
+			// went out through task.return inside %serve-handle
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(0);
+		}
 		if (ctx.ehMode) {
 			WasmEmitHelper.emitCatchAllEpilogue(ctx);
 		}

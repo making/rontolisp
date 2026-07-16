@@ -248,9 +248,16 @@
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | パッケージのマクロシンボルをソートしたもの |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | パッケージの特殊形式シンボルをソートしたもの |
 | `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | HTTPリクエストを非同期に開始します。プロミスを返します |
-| `rontolisp:await` | `(rontolisp:await p)` | プロミスを解決します (ブロッキング)。プロミス以外はそのまま返します |
 | `rontolisp:then` | `(rontolisp:then p (lambda (r) (getf r :status)))` | 確定値にコールバックを適用する新しいプロミスを導出します |
 | `rontolisp:promisep` | `(rontolisp:promisep p)` | 値がプロミスなら `t` |
+| `rontolisp:futurep` | `(rontolisp:futurep v)` | 値が future（`async-defun` で定義した関数の呼び出し、`rontolisp:fetch`、`rontolisp:stream-read` などが返す値）なら `t` |
+| `rontolisp:streamp` | `(rontolisp:streamp v)` | 値が非同期ストリームなら `t`（ファイルストリームに答える `cl:streamp` とは別の述語） |
+| `rontolisp:make-stream` | `(rontolisp:make-stream)` | 新しいオープン状態の非同期ストリームを作成します。1 つの値が読み側と書き側の両端を持ちます |
+| `rontolisp:stream-read` | `(rontolisp:stream-read s)` | ストリームの次のチャンク（終端では `nil`）で確定する future |
+| `rontolisp:stream-write` | `(rontolisp:stream-write s "chunk")` | チャンク（`nil` は不可）を追加します。ストリームが受け付けた時点で確定する future を返します |
+| `rontolisp:stream-close` | `(rontolisp:stream-close s)` | 書き側をクローズします。バッファ済みチャンクは読み取り可能なままで、その後の read は終端を観測します |
+| `rontolisp:read-all` | `(rontolisp:read-all s)` | 残りの文字列チャンクすべての連結で確定する future |
+| `rontolisp:wait-for` | `(rontolisp:wait-for 100)` | 指定ミリ秒後に `nil` で確定する future。`cl:sleep` の非同期版の対応物 |
 | `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | ハンドラ関数でHTTPリクエストを処理します（ブロッキングサーバ。`--component` では `wasi:http` コンポーネント） |
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | JSON文字列をパースします: オブジェクトはキーワードのplist（`:hash-table` 指定でハッシュテーブル）になります |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (list :n 1))` | 値（plistとハッシュテーブルはオブジェクト）をJSON文字列にシリアライズします |
@@ -277,7 +284,7 @@
 は外向きのHTTPリクエストを開始してプロミスを返し、汎用のプロミス操作 `rontolisp:await` / `rontolisp:then` / `rontolisp:promisep` がそれを解決します。全体像は
 [HTTPリクエストガイド](../guides/http-fetch.md)を、オプション、結果plist、バックエンドのサポート、制限については
 [fetch](functions/rontolisp-fetch.md)、
-[await](functions/rontolisp-await.md)、
+[await](special-forms/rontolisp-await.md)、
 [then](functions/rontolisp-then.md)、
 [promisep](functions/rontolisp-promisep.md) のリファレンスページを参照してください。`rontolisp:http-handler` は `fetch` の受信側で、同じリクエスト／レスポンスのプロパティリストを使ってハンドラ関数でHTTPリクエストを処理します。各バックエンドでの実例は
 [HTTPサーバガイド](../guides/http-handler.md)を、バックエンドのサポートと制限は

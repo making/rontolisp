@@ -4,14 +4,14 @@
 それと自然に組み合わせられるJSON関数を提供します。いずれも Common Lisp の
 一部ではないため、`rontolisp:` 修飾子で参照します
 ([パッケージ](../reference/packages.md)を参照)。`rontolisp:fetch` は
-リクエストを開始して即座に **プロミス** を返します。汎用のプロミス操作が
+リクエストを開始して即座に **future** を返します。汎用の future 操作が
 それを解決・変換し、`rontolisp:json-parse` / `rontolisp:json-stringify` が
 JSONドキュメントとLispの値を相互変換します。
 
 | 関数 | 用途 |
 |----------|---------|
 | [`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) | HTTPリクエストを開始する: `(rontolisp:fetch url &optional options)` |
-| [`rontolisp:await`](../reference/functions/rontolisp-await.md) | プロミスが確定するまでブロックして値を返す |
+| [`rontolisp:await`](../reference/special-forms/rontolisp-await.md) | future が確定するまでブロックして値を返す |
 | [`rontolisp:then`](../reference/functions/rontolisp-then.md) | 確定値にコールバックを適用する新しいプロミスを導出する |
 | [`rontolisp:promisep`](../reference/functions/rontolisp-promisep.md) | 値がプロミスなら `t` |
 | [`rontolisp:json-parse`](../reference/functions/rontolisp-json-parse.md) | JSON文字列をLispの値にパースする |
@@ -31,10 +31,12 @@ JSONドキュメントとLispの値を相互変換します。
 
 ## 最初のリクエスト
 
-`fetch` はリクエストが飛び始めたらすぐに返ります。プロミスを
+`fetch` はリクエストが飛び始めたらすぐに返ります。future を
 `rontolisp:await` に渡すとレスポンスの到着までブロックし、結果の
-プロパティリスト `(:status <integer> :body <string> :headers <alist>)` が
-得られます:
+プロパティリスト `(:status <integer> :headers <alist> :body <stream>)` が
+得られます — インタープリタと JVM バックエンドでは `:body` は非同期ストリームで、
+[`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) で読み尽くします。
+`--component` では現状ボディ全体がひとつの文字列のままです:
 
 ```lisp
 (let ((p (rontolisp:fetch "https://httpbin.org/get")))
@@ -46,7 +48,8 @@ JSONドキュメントとLispの値を相互変換します。
 ```console
 (let ((res (rontolisp:await (rontolisp:fetch "http://example.com/"))))
   (print (getf res :status))    ; => 200
-  (print (getf res :body))      ; => "<html>...</html>"
+  (print (rontolisp:await (rontolisp:read-all (getf res :body))))
+                                ; => "<html>...</html>"  (--component: (getf res :body))
   (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
 ```
 
@@ -171,7 +174,8 @@ alist)、`:body` (文字列) を指定できます:
                               (list :method "POST"
                                     :headers (list (cons "Content-Type" "application/json"))
                                     :body payload))))
-       (json (rontolisp:json-parse (getf res :body))))
+       (body (rontolisp:await (rontolisp:read-all (getf res :body))))
+       (json (rontolisp:json-parse body)))
   (print (getf res :status))
   (write-line (getf json :data)))
 ```
@@ -202,7 +206,7 @@ WASM componentにコンパイルして (wasmtime 46+。外向きHTTPを許可す
 
 ```bash
 rontolisp fetch-post.lisp -o fetch-post.wasm --component
-wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y fetch-post.wasm
+wasmtime run -W gc=y -W exceptions=y -S http=y fetch-post.wasm
 ```
 
 HTTPではなく素のTCPを使う場合 — あるいは *サーバー* 側を実装する場合 —

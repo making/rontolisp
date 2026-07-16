@@ -24,6 +24,9 @@
 | `defconstant` | `(defconstant name value)` | `defparameter` と同様(rontolispは定数性を強制しません)。名前を返します |
 | `function` | `(function name)` or `#'name` | 関数名前空間から関数を検索し、値として返します |
 | `defpackage` | `(defpackage name (:use ...) (:export ...))` | 新しいパッケージを定義します(トップレベルの read/コンパイル時ディレクティブ。clause は `:use` と `:export` のみ)。名前を返します |
+| `rontolisp:async-defun` | `(rontolisp:async-defun name (params...) body...)` | 非同期関数を定義します: 呼び出すと本体が eager に開始され、本体の値 (またはエラー) で確定する future を返します |
+| `rontolisp:async-lambda` | `(rontolisp:async-lambda (params...) body...)` | 無名の非同期関数。呼び出しごとに future を返します |
+| `rontolisp:await` | `(rontolisp:await value)` | future が確定するまで現在の非同期関数をサスペンドし、確定値を返します。future 以外はそのまま通過します。`async-defun`/`async-lambda` の本体内とトップレベルでのみ使えます |
 
 rontolispはCommon Lispのような **Lisp-2** です。関数と変数は別々の名前空間に存在します。裸のシンボルは変数として評価され(`car`
 単独は未束縛変数エラー)、呼び出し位置のシンボルは関数名前空間のみで解決され(`car`

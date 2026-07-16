@@ -159,6 +159,6 @@ returns a promise) together with the generic promise operations
 (JavaScript `JSON.parse`/`JSON.stringify` style). All of these have their own
 pages in the [Functions](functions.md#rontolisp-package-functions) reference,
 including the full [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
-[`rontolisp:await`](functions/rontolisp-await.md) /
+[`rontolisp:await`](special-forms/rontolisp-await.md) /
 [`rontolisp:then`](functions/rontolisp-then.md) /
 [`rontolisp:promisep`](functions/rontolisp-promisep.md) documentation.

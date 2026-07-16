@@ -766,12 +766,12 @@ final class WasmComponentImportCompiler {
 	 * @param strFromMemFuncIndex the function index of {@code _str_from_mem}
 	 * @return the code entry bytes
 	 */
-	static byte[] buildAsyncBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int ordinal, int allocFuncIndex,
-			int strFromMemFuncIndex) {
+	static byte[] buildAsyncBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int ordinal,
+			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex) {
 		int numParams = lispArity(async);
-		Body probe = emitAsync(ctxBuilder, async, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, MAX_SCRATCH,
-				MAX_SCRATCH);
-		Body body = emitAsync(ctxBuilder, async, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex,
+		Body probe = emitAsync(ctxBuilder, async, numParams, ordinal, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
+				MAX_SCRATCH, MAX_SCRATCH);
+		Body body = emitAsync(ctxBuilder, async, numParams, ordinal, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
 				probe.i32Pool(), probe.i64Pool());
 		return wrapEntry(body);
 	}
@@ -885,12 +885,13 @@ final class WasmComponentImportCompiler {
 	}
 
 	private static Body emitAsync(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int numParams, int ordinal,
-			int allocFuncIndex, int strFromMemFuncIndex, int i32Pool, int i64Pool) {
+			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex, int i32Pool, int i64Pool) {
 		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		Gen gen = new Gen(ctx, async.lispName(), numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool,
 				i64Pool);
+		gen.waitOrdinals = waitOrdinals;
 		gen.emitAsyncBody(async);
 		int eqTemps = ctx.nextLocal - (numParams + 1 + i32Pool + i64Pool);
 		return new Body(bodyStream.toByteArray(), gen.i32High, gen.i64High, eqTemps);
@@ -956,6 +957,10 @@ final class WasmComponentImportCompiler {
 		private int i64High;
 
 		private final int mark;
+
+		// The interface's waitable-set builtin ordinals, set for the async built-in
+		// wrappers (the BLOCKED park needs them); null for plain function wrappers.
+		private @Nullable WaitOrdinals waitOrdinals;
 
 		Gen(WasmLispCompiler.Ctx ctx, String lispName, int numParams, int ordinal, int allocFuncIndex,
 				int strFromMemFuncIndex, int i32Pool, int i64Pool) {
@@ -1242,19 +1247,24 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.END);
 		}
 
-		// stream.read into a staged chunk: one blocking read per call, returning the
-		// bytes as a Lisp string, or nil once the stream is dropped (EOF). The return
-		// value is (count << 4) | status; a blocking read yields at least one byte
-		// unless the writer is gone, so count 0 = EOF.
+		// stream.read into a staged chunk: the ASYNC (non-blocking) built-in, parking
+		// on the waitable-set when it reports BLOCKED; one chunk per call, returning
+		// the bytes as a Lisp string, or nil once the stream is dropped (EOF). The
+		// completion value is (count << 4) | status; a read completes with at least
+		// one byte unless the writer is gone, so count 0 = EOF.
 		private void emitStreamRead() {
 			emitStagingPrologue();
 			int buf = allocRetArea(ASYNC_READ_CHUNK);
 			int n = allocI32();
+			int handle = allocI32();
 			getLocal(1);
 			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(handle);
+			getLocal(handle);
 			getLocal(buf);
 			i32Const(ASYNC_READ_CHUNK);
 			callImport();
+			emitBlockedWait(handle);
 			i32Const(4);
 			this.w.write(Instruction.I32_SHR_U);
 			this.w.write(Instruction.TEE_LOCAL);
@@ -1274,15 +1284,19 @@ final class WasmComponentImportCompiler {
 			emitStagingEpilogue(resultTmp);
 		}
 
-		// stream.write of a whole Lisp string: the synchronous built-in blocks until the
-		// bytes are accepted (the fixed adapter's fd_write precedent). Returns the
-		// accepted byte count.
+		// stream.write of a whole Lisp string: the async built-in plus the BLOCKED
+		// park, so one call carries the whole payload (the rendezvous the sync variant
+		// used to provide). Returns the accepted byte count.
 		private void emitStreamWrite() {
 			emitStagingPrologue();
+			int handle = allocI32();
 			getLocal(1);
 			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(handle);
+			getLocal(handle);
 			emitStageStringParam(2);
 			callImport();
+			emitBlockedWait(handle);
 			i32Const(4);
 			this.w.write(Instruction.I32_SHR_U);
 			boxI31();
@@ -1291,18 +1305,23 @@ final class WasmComponentImportCompiler {
 			emitStagingEpilogue(resultTmp);
 		}
 
-		// future.read: block until the payload arrives, then lift it from the return
-		// area with the same machinery as an indirect function result -- so a
-		// future<result<...>> reads out as the (:ok . V) / (:error . E) envelope. A
-		// dropped future (the writer went away without a value) reads as nil.
+		// future.read: the async built-in plus the BLOCKED park until the payload
+		// arrives, then lift it from the return area with the same machinery as an
+		// indirect function result -- so a future<result<...>> reads out as the
+		// (:ok . V) / (:error . E) envelope. A dropped future (the writer went away
+		// without a value) reads as nil.
 		private void emitFutureRead(Async async) {
 			WitType payload = Objects.requireNonNull(async.payload(), "future payload");
 			emitStagingPrologue();
 			int rp = allocRetArea(async.abi().size(payload));
+			int handle = allocI32();
 			getLocal(1);
 			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(handle);
+			getLocal(handle);
 			getLocal(rp);
 			callImport();
+			emitBlockedWait(handle);
 			i32Const(0xF);
 			this.w.write(Instruction.I32_AND);
 			this.w.write(Instruction.I32_EQZ);
@@ -1319,17 +1338,22 @@ final class WasmComponentImportCompiler {
 		}
 
 		// future.write: lower the Lisp value into the canonical memory representation
-		// (the mirror of emitLiftAt) and hand it to the pending reader. Returns t when
-		// the reader took it, nil when the readable end was dropped first.
+		// (the mirror of emitLiftAt) and hand it to the pending reader, parking on
+		// BLOCKED until one exists. Returns t when the reader took it, nil when the
+		// readable end was dropped first.
 		private void emitFutureWrite(Async async) {
 			WitType payload = Objects.requireNonNull(async.payload(), "future payload");
 			emitStagingPrologue();
 			int rp = allocRetArea(async.abi().size(payload));
+			int handle = allocI32();
 			emitLowerAt(async.abi(), payload, 2, rp, 0);
 			getLocal(1);
 			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(handle);
+			getLocal(handle);
 			getLocal(rp);
 			callImport();
+			emitBlockedWait(handle);
 			i32Const(0xF);
 			this.w.write(Instruction.I32_AND);
 			this.w.write(Instruction.I32_EQZ);
@@ -1337,6 +1361,55 @@ final class WasmComponentImportCompiler {
 			int resultTmp = this.ctx.allocTemp();
 			setLocal(resultTmp);
 			emitStagingEpilogue(resultTmp);
+		}
+
+		// The BLOCKED (-1) park shared by the four async built-in wrappers: with the
+		// operation's packed result on the stack, leaves the FINAL packed result on
+		// the stack -- immediately when the built-in completed, or the completion
+		// event's payload after a blocking waitable-set.wait (legal from any
+		// async-typed task under base component-model-async). The handle is unjoined
+		// (waitable.join with set 0) and the throwaway set dropped, so the
+		// stream/future handle survives for later operations.
+		private void emitBlockedWait(int handleLocal) {
+			WaitOrdinals ordinals = Objects.requireNonNull(this.waitOrdinals,
+					"async built-in wrapper emitted without waitable-set ordinals");
+			int ret = allocI32();
+			int set = allocI32();
+			setLocal(ret);
+			int evtp = allocRetArea(8);
+			getLocal(ret);
+			i32Const(-1);
+			this.w.write(Instruction.I32_EQ);
+			this.w.write(Instruction.IF, 0x40);
+			callOrdinal(ordinals.setNew());
+			setLocal(set);
+			getLocal(handleLocal);
+			getLocal(set);
+			callOrdinal(ordinals.join());
+			this.w.write(Instruction.BLOCK, 0x40);
+			this.w.write(Instruction.LOOP, 0x40);
+			getLocal(set);
+			getLocal(evtp);
+			callOrdinal(ordinals.setWait());
+			this.w.write(Instruction.DROP);
+			load(evtp, 0, Instruction.I32_LOAD, 2);
+			getLocal(handleLocal);
+			this.w.write(Instruction.I32_EQ);
+			this.w.write(Instruction.BR_IF);
+			this.w.writeUnsignedLeb128(1);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(0);
+			this.w.write(Instruction.END);
+			this.w.write(Instruction.END);
+			load(evtp, 4, Instruction.I32_LOAD, 2);
+			setLocal(ret);
+			getLocal(handleLocal);
+			i32Const(0);
+			callOrdinal(ordinals.join());
+			getLocal(set);
+			callOrdinal(ordinals.setDrop());
+			this.w.write(Instruction.END);
+			getLocal(ret);
 		}
 
 		// --- shared scaffolding ---

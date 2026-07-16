@@ -5,3 +5,5 @@ build:
 dev:
   wasm_proposals:
     - gc
+    - exception-handling
+    - component-model-async

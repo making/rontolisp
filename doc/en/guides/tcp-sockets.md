@@ -25,7 +25,7 @@ returns `nil` once the peer has closed the connection.
 > **component-only** (`--component`, over `wasi:sockets@0.3.0`): the tcp
 > functions are a compile error in Preview 1 (core-module) mode, hosts must be
 > IPv4 literals, and the component must run with `-S tcp=y
-> -S inherit-network=y` on top of the async flags. In the **browser
+> -S inherit-network=y` on top of the usual flags. In the **browser
 > playground** every tcp function signals an error (the browser sandbox has no
 > raw TCP), so the runnable example below only works outside the browser. See
 > the [tcp-connect](../reference/functions/rontolisp-tcp-connect.md) reference
@@ -103,7 +103,7 @@ returns `nil`):
 
 ```bash
 rontolisp echo-server.lisp -o echo-server.wasm --component
-wasmtime run -W gc=y -W component-model-more-async-builtins=y -S tcp=y -S inherit-network=y echo-server.wasm
+wasmtime run -W gc=y -S tcp=y -S inherit-network=y echo-server.wasm
 ```
 
 Whichever backend serves, talk to it with any TCP client, for example

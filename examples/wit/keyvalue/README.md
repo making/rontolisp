@@ -239,7 +239,7 @@ answers them. wasmtime ships an implementation, so this is the whole ceremony:
 
 ```console
 $ rontolisp page-hits.lisp -o page-hits.wasm --component
-$ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
+$ wasmtime run -W gc=y -W exceptions=y \
       -S keyvalue=y page-hits.wasm
 
 hits per page:
@@ -351,7 +351,7 @@ is the host's business:
 
 ```console
 $ rontolisp page-hits-server.lisp -o server.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y server.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
 ```
 
 wasmtime's key-value host is an **in-memory store it rebuilds per instance** --

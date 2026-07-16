@@ -363,7 +363,7 @@ examples:
       list<u8> / list<string> / bool / resource handles all marshalled); the
       harness only compiles it, because RUNNING it needs a host that provides
       wasi:keyvalue -- and wasmtime does: `wasmtime run -W gc=y -W exceptions=y
-      -W component-model-more-async-builtins=y -S keyvalue=y prog.wasm` prints
+      -S keyvalue=y prog.wasm` prints
       exactly the interpreter's lines, from a store that has never heard of this
       program. No Preview 1 leg: a core import carries flat values only, and every
       function of this interface returns a result. No --no-gc leg: its MVP module

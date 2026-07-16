@@ -11,10 +11,10 @@
 (rontolisp:promisep 42)                                   ; => nil
 ```
 
-プロミスは不透明な値です: リーダ構文はなく、`#<PROMISE>` と印字されます。
+プロミスは不透明な値です: リーダ構文はなく、`#<FUTURE>` と印字されます。
 
 ```lisp
-(rontolisp:then 1 (lambda (x) x))   ; => #<PROMISE>
+(rontolisp:then 1 (lambda (x) x))   ; => #<FUTURE>
 ```
 
 ## バックエンドのサポート

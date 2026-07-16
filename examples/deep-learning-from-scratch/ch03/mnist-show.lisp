@@ -9,7 +9,7 @@
 ;;   rontolisp ch03/mnist-show.lisp -o Prog.class && java -cp .:<rontolisp jar> Prog
 ;;   rontolisp ch03/mnist-show.lisp -o prog.wasm --optimize && wasmtime run -W gc --dir . prog.wasm
 ;;   rontolisp ch03/mnist-show.lisp -o comp.wasm --component && \
-;;     wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . comp.wasm
+;;     wasmtime run -W gc=y --dir . comp.wasm
 
 (load "../dataset/mnist.lisp")
 

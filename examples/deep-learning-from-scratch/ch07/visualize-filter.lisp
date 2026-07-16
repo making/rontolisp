@@ -14,7 +14,7 @@
 ;;   rontolisp ch07/visualize-filter.lisp -o Prog.class && java -cp .:<rontolisp jar> Prog
 ;;   rontolisp ch07/visualize-filter.lisp -o prog.wasm --optimize && wasmtime run -W gc --dir . prog.wasm
 ;;   rontolisp ch07/visualize-filter.lisp -o comp.wasm --component && \
-;;     wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . comp.wasm
+;;     wasmtime run -W gc=y --dir . comp.wasm
 
 (load "simple-convnet.lisp")
 

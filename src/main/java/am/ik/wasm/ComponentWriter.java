@@ -942,8 +942,8 @@ public final class ComponentWriter {
 	// component-model types stream<u8> / future<T>, driven by the async canonical
 	// built-ins below. All opcodes and option encodings here are golden values captured
 	// from `wasm-tools dump` of a component validated with
-	// `wasm-tools validate -f component-model -f cm-async -f cm-async-stackful
-	// -f cm-more-async-builtins` and executed with the matching `wasmtime run -W` flags;
+	// `wasm-tools validate -f component-model -f cm-async` (the callback-ABI encoders
+	// below need nothing beyond base cm-async) and executed on wasmtime 46;
 	// they are pinned by ComponentWriterTest. These primitives are intentionally general
 	// (not tied to the preview1 adapter) so they can be reused for future language-level
 	// async (future/stream as rontolisp values).
@@ -1365,8 +1365,10 @@ public final class ComponentWriter {
 	 * UTF-8 string-encoding and {@code async} options, in that order (the byte sequence
 	 * wasm-tools emits for an async-without-callback export). The lifted core function's
 	 * signature is {@code [flat params] -> []} &mdash; the result is delivered
-	 * exclusively through {@code canon task.return} &mdash; and running it requires
-	 * {@code wasmtime -W component-model-async-stackful=y}.
+	 * exclusively through {@code canon task.return} &mdash; and running it requires the
+	 * gated stackful-lift wasmtime feature. Superseded by
+	 * {@link #canonLiftMemoryUtf8AsyncCallback}, which stays within base
+	 * component-model-async; kept until the last stackful call site is gone.
 	 * @param coreFuncIndex the core function index to lift
 	 * @param typeIndex the component function type index (an async function type)
 	 * @param memoryIndex the core memory index used by the canonical ABI
@@ -1400,6 +1402,202 @@ public final class ComponentWriter {
 			.write(0x03)
 			.writeUnsignedLeb128(memoryIndex)
 			.write(0x00));
+	}
+
+	// --- callback-based async ABI (base component-model-async; bytes derived from
+	// wasm-tools dump, pinned in ComponentWriterTest and validated with `wasm-tools
+	// validate -f component-model,cm-async` only -- no more-async-builtins feature,
+	// no stackful-lift feature) ---
+
+	/**
+	 * Encode a <strong>callback</strong> async lift: {@code canon lift} with the
+	 * {@code (memory, string-encoding=utf8, async, callback $cb)} options against an
+	 * async function type. The lifted core export returns a packed callback code
+	 * ({@code EXIT}/{@code YIELD}/{@code WAIT|set<<4}/{@code POLL|set<<4}); completion
+	 * events arrive through the callback core function {@code (event, waitable,
+	 * payload) -> code}, and the result is delivered by {@code canon task.return}. Golden
+	 * bytes from {@code wasm-tools dump} (2026-07-16):
+	 * {@code Lift '{' core_func_index, type_index, options: [Memory, UTF8, Async,
+	 * Callback(f)] '}'} -- the callback canonical option is tag {@code 0x07} followed by
+	 * the callback's core function index.
+	 * @param coreFuncIndex the core function index to lift
+	 * @param typeIndex the component function type index (an async function type)
+	 * @param memoryIndex the core memory index used by the canonical ABI
+	 * @param callbackCoreFuncIndex the callback core function index
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonLiftMemoryUtf8AsyncCallback(int coreFuncIndex, int typeIndex, int memoryIndex,
+			int callbackCoreFuncIndex) {
+		return enc(w -> w.write(0x00)
+			.write(0x00)
+			.writeUnsignedLeb128(coreFuncIndex)
+			.writeUnsignedLeb128(4) // four canonical options
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex) // memory
+			.write(0x00) // string-encoding utf8
+			.write(0x06) // async
+			.write(0x07)
+			.writeUnsignedLeb128(callbackCoreFuncIndex) // callback
+			.writeUnsignedLeb128(typeIndex));
+	}
+
+	/**
+	 * Encode the <strong>asynchronous</strong> (non-blocking) {@code canon stream.read}:
+	 * the sync encoding plus the {@code async} canonical option (tag {@code 0x06}). The
+	 * core function {@code (handle, ptr, count) -> i32} returns {@code BLOCKED} (-1) or
+	 * the packed {@code (amount << 4) | status} immediately; a blocked read completes
+	 * with an {@code EVENT_STREAM_READ} on the handle's waitable.
+	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type
+	 * @param memoryIndex the core memory index the bytes are read into
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonStreamReadAsync(int streamTypeIndex, int memoryIndex) {
+		return enc(w -> w.write(0x0f)
+			.writeUnsignedLeb128(streamTypeIndex)
+			.writeUnsignedLeb128(2)
+			.write(0x06)
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex));
+	}
+
+	/**
+	 * Encode the asynchronous (non-blocking) {@code canon stream.write}; see
+	 * {@link #canonStreamReadAsync}.
+	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type
+	 * @param memoryIndex the core memory index the bytes are written from
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonStreamWriteAsync(int streamTypeIndex, int memoryIndex) {
+		return enc(w -> w.write(0x10)
+			.writeUnsignedLeb128(streamTypeIndex)
+			.writeUnsignedLeb128(2)
+			.write(0x06)
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex));
+	}
+
+	/**
+	 * Encode the asynchronous (non-blocking) {@code canon future.read}; see
+	 * {@link #canonStreamReadAsync}. A blocked read completes with an
+	 * {@code EVENT_FUTURE_READ} on the handle's waitable.
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @param memoryIndex the core memory index the payload is read into
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureReadAsync(int futureTypeIndex, int memoryIndex) {
+		return enc(w -> w.write(0x16)
+			.writeUnsignedLeb128(futureTypeIndex)
+			.writeUnsignedLeb128(2)
+			.write(0x06)
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex));
+	}
+
+	/**
+	 * Encode the asynchronous (non-blocking) {@code canon future.read} with the realloc
+	 * option too (a payload carrying a variable-length value).
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @param memoryIndex the core memory index the payload is read into
+	 * @param reallocFuncIndex the core function index of {@code cabi_realloc}
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureReadAsync(int futureTypeIndex, int memoryIndex, int reallocFuncIndex) {
+		return enc(w -> w.write(0x16)
+			.writeUnsignedLeb128(futureTypeIndex)
+			.writeUnsignedLeb128(3)
+			.write(0x06)
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex)
+			.write(0x04)
+			.writeUnsignedLeb128(reallocFuncIndex));
+	}
+
+	/**
+	 * Encode the asynchronous (non-blocking) {@code canon future.write}; see
+	 * {@link #canonStreamReadAsync}.
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @param memoryIndex the core memory index the payload is written from
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureWriteAsync(int futureTypeIndex, int memoryIndex) {
+		return enc(w -> w.write(0x17)
+			.writeUnsignedLeb128(futureTypeIndex)
+			.writeUnsignedLeb128(2)
+			.write(0x06)
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex));
+	}
+
+	/**
+	 * Encode the asynchronous (non-blocking) {@code canon future.write} with the UTF-8
+	 * string-encoding option too (a payload carrying a string).
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @param memoryIndex the core memory index the payload is written from
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureWriteAsyncUtf8(int futureTypeIndex, int memoryIndex) {
+		return enc(w -> w.write(0x17)
+			.writeUnsignedLeb128(futureTypeIndex)
+			.writeUnsignedLeb128(3)
+			.write(0x06)
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex)
+			.write(0x00));
+	}
+
+	/**
+	 * Encode {@code canon context.get} (opcode {@code 0x0a}) for an {@code i32} slot: a
+	 * core function {@code () -> i32} reading the current task's context-local storage.
+	 * Golden bytes: {@code 0a 7f <slot>}.
+	 * @param slot the context slot (0 or 1)
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonContextGet(int slot) {
+		return enc(w -> w.write(0x0a).write(0x7f).writeUnsignedLeb128(slot));
+	}
+
+	/**
+	 * Encode {@code canon context.set} (opcode {@code 0x0b}) for an {@code i32} slot: a
+	 * core function {@code (i32) -> ()} writing the current task's context-local storage.
+	 * Golden bytes: {@code 0b 7f <slot>}.
+	 * @param slot the context slot (0 or 1)
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonContextSet(int slot) {
+		return enc(w -> w.write(0x0b).write(0x7f).writeUnsignedLeb128(slot));
+	}
+
+	/**
+	 * Encode {@code canon waitable-set.poll} (opcode {@code 0x21}, non-cancellable): a
+	 * core function {@code (set, ptr) -> i32} delivering a ready event without blocking
+	 * ({@code EVENT_NONE} when nothing is ready). Golden bytes: {@code 21 00 <mem>}.
+	 * @param memoryIndex the core memory index the event payload is written into
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonWaitableSetPoll(int memoryIndex) {
+		return enc(w -> w.write(0x21).write(0x00).writeUnsignedLeb128(memoryIndex));
+	}
+
+	/**
+	 * Encode {@code canon stream.cancel-read} (opcode {@code 0x11}, synchronous variant):
+	 * a core function {@code (handle) -> i32} withdrawing a pending read. Golden bytes:
+	 * {@code 11 <ty> 00}.
+	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonStreamCancelRead(int streamTypeIndex) {
+		return enc(w -> w.write(0x11).writeUnsignedLeb128(streamTypeIndex).write(0x00));
+	}
+
+	/**
+	 * Encode {@code canon future.cancel-read} (opcode {@code 0x18}, synchronous variant):
+	 * a core function {@code (handle) -> i32} withdrawing a pending read. Golden bytes:
+	 * {@code 18 <ty> 00}.
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureCancelRead(int futureTypeIndex) {
+		return enc(w -> w.write(0x18).writeUnsignedLeb128(futureTypeIndex).write(0x00));
 	}
 
 	/**

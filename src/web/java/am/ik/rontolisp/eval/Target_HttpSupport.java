@@ -37,7 +37,7 @@ import org.graalvm.webimage.api.JSString;
 final class Target_HttpSupport {
 
 	@Substitute
-	static CompletableFuture<HttpSupport.HttpResult> requestAsync(String method, String url,
+	static CompletableFuture<HttpSupport.Start> requestAsync(String method, String url,
 			List<HttpSupport.Header> requestHeaders, String requestBody) {
 		StringBuilder encoded = new StringBuilder();
 		for (HttpSupport.Header header : requestHeaders) {
@@ -57,7 +57,7 @@ final class Target_HttpSupport {
 				.asString();
 			CompletableFuture<HttpSupport.HttpResult> settled = new CompletableFuture<>();
 			BrowserHttpResponses.completeFromRaw(settled, raw);
-			return settled;
+			return settled.thenApply(Target_HttpSupport::toStart);
 		}
 		BrowserFuture<HttpSupport.HttpResult> root = new BrowserFuture<>();
 		root.settler(() -> {
@@ -66,7 +66,16 @@ final class Target_HttpSupport {
 			}
 			BrowserHttpResponses.completeFromRaw(root, BrowserHttp.awaitResponse(JSString.of(id)).asString());
 		});
-		return root;
+		return root.thenApply(Target_HttpSupport::toStart);
+	}
+
+	/**
+	 * Converts the broker's buffered outcome into the streaming shape: the whole body
+	 * becomes a single already-settled stream chunk.
+	 */
+	private static HttpSupport.Start toStart(HttpSupport.HttpResult result) {
+		return new HttpSupport.Start(result.status(), result.headers(),
+				am.ik.rontolisp.LispStream.settled(new am.ik.rontolisp.LispString(result.body())));
 	}
 
 

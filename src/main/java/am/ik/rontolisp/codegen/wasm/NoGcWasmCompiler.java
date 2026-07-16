@@ -26,6 +26,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.wasm.ExternalKind;
@@ -299,6 +300,24 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// Splice top-level (progn ...)/(eval-when ...) so nested defuns are collected,
 		// like the other backends.
 		program = LispMacroExpander.flattenTopLevel(program);
+
+		// The async/await surface never: this backend has no futures, no suspension
+		// and no boxed values to represent them, so each name gets the clear error.
+		for (String asyncName : List.of(LispNames.ASYNC_DEFUN_QUALIFIED, LispNames.ASYNC_LAMBDA_QUALIFIED,
+				LispNames.AWAIT_QUALIFIED, LispNames.ASYNC_RUN_QUALIFIED,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FUTUREP),
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_STREAMP),
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_STREAM),
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_READ),
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_WRITE),
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_CLOSE),
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.READ_ALL),
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WAIT_FOR))) {
+			if (referencesSymbol(program, asyncName)) {
+				throw new UnsupportedOperationException(
+						asyncName + " is not supported with --no-gc (use the default GC backend)");
+			}
+		}
 
 		// Collect defuns and export directives. A --no-gc module is a pure-compute
 		// reactor, so only function definitions and export directives are allowed at top
@@ -5218,6 +5237,25 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			tail = cell;
 		}
 		return head;
+	}
+
+	// Walks the whole program for a symbol occurrence (head or argument position),
+	// used by the async-surface rejection above.
+	private static boolean referencesSymbol(List<LispVal> program, String name) {
+		for (LispVal form : program) {
+			if (referencesSymbol(form, name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean referencesSymbol(LispVal form, String name) {
+		return switch (form) {
+			case LispSymbol sym -> name.equals(sym.name());
+			case LispCons cons -> referencesSymbol(cons.car(), name) || referencesSymbol(cons.cdr(), name);
+			default -> false;
+		};
 	}
 
 	private static Defun extractDefun(LispVal setqLambda) {

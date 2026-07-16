@@ -60,7 +60,7 @@ rontolisp examples/asdf/split-sequence-demo.lisp -o demo.wasm --system-path $SYS
 
 # 4. WASM component / WASI 0.3 (requires wasmtime 46+)
 rontolisp examples/asdf/split-sequence-demo.lisp -o demo-comp.wasm --component --system-path $SYS && \
-  wasmtime run -W gc=y -W component-model-more-async-builtins=y demo-comp.wasm
+  wasmtime run -W gc=y demo-comp.wasm
 ```
 
 The compile path splices the system's component files in at compile time

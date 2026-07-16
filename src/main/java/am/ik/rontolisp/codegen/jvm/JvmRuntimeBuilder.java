@@ -783,7 +783,18 @@ final class JvmRuntimeBuilder {
 	 * lisp-to-string builders only when the program can create promises
 	 * ({@code rontolisp:fetch} / {@code rontolisp:then}).
 	 */
-	record PromisePrint(ClassConstant futureClass, ConstantPool.StringConstant promiseStr) {
+	/**
+	 * Constant-pool references for printing the opaque asynchronous values: a
+	 * {@code CompletableFuture} (and a pending stream-read token, when the async
+	 * machinery is present) prints as {@code promiseStr}; a stream as {@code streamStr}.
+	 * The marker/label/array entries are null in promise-era programs that never touch
+	 * streams, keeping those branches out.
+	 */
+	record PromisePrint(ClassConstant futureClass, ConstantPool.StringConstant promiseStr,
+			@org.jspecify.annotations.Nullable ClassConstant objectArrayClass,
+			ConstantPool.@org.jspecify.annotations.Nullable StringConstant streamMarker,
+			ConstantPool.@org.jspecify.annotations.Nullable StringConstant readMarker,
+			ConstantPool.@org.jspecify.annotations.Nullable StringConstant streamStr) {
 	}
 
 	/**
@@ -822,6 +833,48 @@ final class JvmRuntimeBuilder {
 		emitLdc(code, promisePrint.promiseStr().index());
 		code.add(Opcode.ARETURN);
 		patchBranch(code, skip, code.size());
+		emitMarkerPrintBranch(code, promisePrint, true);
+		emitMarkerPrintBranch(code, promisePrint, false);
+	}
+
+	// Emits "if (val is Object[3] headed by the stream/read-token marker) return the
+	// opaque label" -- streams print as #<STREAM>, pending stream-read tokens as the
+	// future label. A no-op when the async value machinery is absent.
+	private static void emitMarkerPrintBranch(List<Integer> code, PromisePrint promisePrint, boolean stream) {
+		ConstantPool.StringConstant marker = stream ? promisePrint.streamMarker() : promisePrint.readMarker();
+		ConstantPool.StringConstant label = stream ? promisePrint.streamStr() : promisePrint.promiseStr();
+		if (marker == null || label == null || promisePrint.objectArrayClass() == null) {
+			return;
+		}
+		List<Integer> skips = new ArrayList<>();
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, promisePrint.objectArrayClass().index());
+		skips.add(code.size());
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, promisePrint.objectArrayClass().index());
+		code.add(Opcode.ARRAYLENGTH);
+		code.add(Opcode.ICONST_3);
+		skips.add(code.size());
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, promisePrint.objectArrayClass().index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.AALOAD);
+		emitLdc(code, marker.index());
+		skips.add(code.size());
+		code.add(Opcode.IF_ACMPNE);
+		emitU2(code, 0);
+		emitLdc(code, label.index());
+		code.add(Opcode.ARETURN);
+		for (int skip : skips) {
+			patchBranch(code, skip, code.size());
+		}
 	}
 
 	/**

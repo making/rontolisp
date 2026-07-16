@@ -16,7 +16,7 @@
 ;; Run (WASI component under wasmtime serve; the wasi:http/client import that
 ;; carries the outbound fetch is host-provided by default):
 ;;   java -jar $JAR examples/net/dog-fetcher.lisp -o dog-fetcher.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y dog-fetcher.wasm
+;;     wasmtime serve -W gc=y -W exceptions=y dog-fetcher.wasm
 ;; Talk to it with:
 ;;   curl http://127.0.0.1:8080/
 
@@ -28,17 +28,22 @@
 ;; One upstream round trip: dog.ceo answers {"message": "<image url>",
 ;; "status": "success"}. A failed fetch surfaces as a nil/non-200 response
 ;; plist, mapped to 502.
-(defun fetch-dog ()
+(rontolisp:async-defun fetch-dog ()
+  ;; awaiting needs an async-defun; the response :body is an asynchronous
+  ;; stream on the interpreter/JVM (drained with read-all) and still a whole
+  ;; string under --component, hence the feature conditional.
   (let* ((res (rontolisp:await
                (rontolisp:fetch "https://dog.ceo/api/breeds/image/random")))
-         (status (getf res :status)))
+         (status (getf res :status))
+         (body #+rontolisp-wasm (getf res :body)
+               #-rontolisp-wasm (rontolisp:await (rontolisp:read-all (getf res :body)))))
     (if (and (integerp status) (= status 200))
-        (getf (rontolisp:json-parse (getf res :body)) :message)
+        (getf (rontolisp:json-parse body) :message)
         nil)))
 
-(defun handle (request)
+(rontolisp:async-defun handle (request)
   (if (string= (getf request :path) "/")
-      (let ((dog (fetch-dog)))
+      (let ((dog (rontolisp:await (fetch-dog))))
         (if dog
             (json-response 200 (list :dog dog))
             (json-response 502 (list :error "the dog API did not answer"))))

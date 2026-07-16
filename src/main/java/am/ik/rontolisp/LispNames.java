@@ -1974,22 +1974,116 @@ public final class LispNames {
 	/**
 	 * The {@code fetch} function provided by the {@code rontolisp} package. Starts an
 	 * outgoing HTTP request (JavaScript {@code fetch}-style) and immediately returns a
-	 * <em>promise</em> while the request runs asynchronously. The optional second
-	 * argument is an options property list ({@code :method}, {@code :headers},
-	 * {@code :body}). The result property list
-	 * {@code (:status <int> :body <string> :headers <alist>)} is obtained by passing the
-	 * promise to {@code rontolisp:await}.
+	 * <em>future</em> while the request runs asynchronously. The optional second argument
+	 * is an options property list ({@code :method}, {@code :headers}, {@code :body}).
+	 * Awaiting the future yields the result property list
+	 * {@code (:status <int> :headers <alist> :body <stream>)} whose body is a stream of
+	 * string chunks ({@code rontolisp:read-all} drains it).
 	 */
 	public static final String FETCH = "fetch";
 
 	/**
-	 * The {@code await} function provided by the {@code rontolisp} package. Given a
-	 * promise, blocks until it settles and returns its value (for a
-	 * {@code rontolisp:fetch} promise, the result property list
-	 * {@code (:status <int> :body <string> :headers <alist>)}). Any other value is
-	 * returned unchanged, like a JavaScript {@code await} on a non-promise.
+	 * The {@code await} special form provided by the {@code rontolisp} package. Legal
+	 * inside {@code rontolisp:async-defun}/{@code async-lambda} bodies and at top level
+	 * (the top level is implicitly asynchronous). Given a future, suspends the current
+	 * asynchronous function until it settles and returns its value; a future that settled
+	 * with an error re-signals that condition. A settled future never suspends, nested
+	 * futures are flattened, and any other value is returned unchanged, like a JavaScript
+	 * {@code await} on a non-promise.
 	 */
 	public static final String AWAIT = "await";
+
+	/**
+	 * The {@code async-defun} special form provided by the {@code rontolisp} package.
+	 * Defines an asynchronous function: same surface as {@code defun} (full lambda-list
+	 * support), but calling it runs the body only until its first suspension point (an
+	 * {@code rontolisp:await} of an unsettled future) and returns a future that settles
+	 * with the body's value (or its error).
+	 */
+	public static final String ASYNC_DEFUN = "async-defun";
+
+	/**
+	 * The {@code async-lambda} special form provided by the {@code rontolisp} package.
+	 * The anonymous counterpart of {@code rontolisp:async-defun}: evaluates to a function
+	 * value whose invocation returns a future.
+	 */
+	public static final String ASYNC_LAMBDA = "async-lambda";
+
+	/**
+	 * The {@code futurep} predicate provided by the {@code rontolisp} package. Returns
+	 * {@code t} if the argument is a future (as returned by calling an
+	 * {@code rontolisp:async-defun} function or {@code rontolisp:fetch}), {@code nil}
+	 * otherwise.
+	 */
+	public static final String FUTUREP = "futurep";
+
+	/**
+	 * The {@code streamp} predicate provided by the {@code rontolisp} package. Returns
+	 * {@code t} if the argument is an asynchronous stream value (as returned by
+	 * {@code rontolisp:make-stream} or carried in a {@code rontolisp:fetch} response
+	 * body), {@code nil} otherwise. The same spelling as the {@code cl:streamp}
+	 * file-stream predicate ({@link #STREAMP}) but a different symbol: the packages
+	 * disambiguate, and each predicate answers {@code nil} for the other's streams.
+	 */
+	public static final String ASYNC_STREAMP = "streamp";
+
+	/**
+	 * The {@code make-stream} function provided by the {@code rontolisp} package. Creates
+	 * a fresh open asynchronous stream; one value owns both the read and the write end.
+	 * Producers append chunks with {@code rontolisp:stream-write} and finish with
+	 * {@code rontolisp:stream-close}; consumers take chunks with
+	 * {@code rontolisp:stream-read}.
+	 */
+	public static final String MAKE_STREAM = "make-stream";
+
+	/**
+	 * The {@code stream-read} function provided by the {@code rontolisp} package. Returns
+	 * a future that settles to the stream's next chunk, or {@code nil} once the stream is
+	 * closed and drained (end of stream). Chunks are never {@code nil}.
+	 */
+	public static final String STREAM_READ = "stream-read";
+
+	/**
+	 * The {@code stream-write} function provided by the {@code rontolisp} package.
+	 * Appends a chunk to a stream and returns a future that settles when the stream has
+	 * accepted it, so producers can be flow-controlled with {@code rontolisp:await}.
+	 */
+	public static final String STREAM_WRITE = "stream-write";
+
+	/**
+	 * The {@code stream-close} function provided by the {@code rontolisp} package. Closes
+	 * a stream's write end: pending and future reads drain the remaining chunks and then
+	 * observe end of stream.
+	 */
+	public static final String STREAM_CLOSE = "stream-close";
+
+	/**
+	 * The {@code read-all} function provided by the {@code rontolisp} package. Returns a
+	 * future that settles to the concatenation of all remaining string chunks of a stream
+	 * (an error is signaled for a non-string chunk).
+	 */
+	public static final String READ_ALL = "read-all";
+
+	/**
+	 * The {@code wait-for} function provided by the {@code rontolisp} package. Returns a
+	 * future that settles (to {@code nil}) after the given number of milliseconds -- the
+	 * timer primitive of the async/await surface, mirroring WASI 0.3's
+	 * {@code wasi:clocks/monotonic-clock.wait-for}. Deliberately NOT named {@code sleep}:
+	 * Common Lisp's {@code sleep} is a blocking function taking seconds, while this one
+	 * only starts a timer ({@code (rontolisp:await (rontolisp:wait-for
+	 * 500))} is the sleeping form).
+	 */
+	public static final String WAIT_FOR = "wait-for";
+
+	/**
+	 * The internal {@code %async-run} primitive backing the
+	 * {@code rontolisp:async-defun}/{@code async-lambda} lowering on the interpreter, JVM
+	 * and Preview-1 WASM backends: takes a zero-argument function value, runs it under
+	 * the backend's asynchronous mechanism and returns the resulting future. The
+	 * {@code --component} backend compiles the async defining forms natively (state
+	 * machines) and never sees this name.
+	 */
+	public static final String ASYNC_RUN = "%async-run";
 
 	/**
 	 * The {@code promisep} predicate provided by the {@code rontolisp} package. Returns
@@ -2716,6 +2810,31 @@ public final class LispNames {
 	 * appears in call position after {@code PackageResolver} resolution.
 	 */
 	public static final String WITH_ARENA_QUALIFIED = RONTOLISP_PKG + ":" + WITH_ARENA;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:async-defun}, as it
+	 * appears in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String ASYNC_DEFUN_QUALIFIED = RONTOLISP_PKG + ":" + ASYNC_DEFUN;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:async-lambda}, as it
+	 * appears in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String ASYNC_LAMBDA_QUALIFIED = RONTOLISP_PKG + ":" + ASYNC_LAMBDA;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:await}, as it appears
+	 * in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String AWAIT_QUALIFIED = RONTOLISP_PKG + ":" + AWAIT;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%async-run}, the
+	 * name the {@code async-defun}/{@code async-lambda} lowering synthesizes in call
+	 * position.
+	 */
+	public static final String ASYNC_RUN_QUALIFIED = RONTOLISP_PKG + "::" + ASYNC_RUN;
 
 	/**
 	 * The {@code wasm-import} directive provided by the {@code rontolisp} package. Used

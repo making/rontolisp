@@ -94,13 +94,13 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 
 | | GC core module (default / `--no-wasi`) | GC `--component` | `--no-gc` core module | `--no-gc --component` |
 | --- | --- | --- | --- | --- |
-| ホスト要件 | wasm-GC エンジン(`wasmtime -W gc`、Node 22+、現行ブラウザ) | wasmtime 46+(`-W gc=y -W component-model-more-async-builtins=y`)または wasm-GC + JSPI 対応のコンポーネントホスト([jco 経由のブラウザ](#running-a-component-in-a-browser-jco)ではロードと計算はできるが、まだ印字はできない) | **任意の** WebAssembly エンジン | 任意のコンポーネントモデルホスト、**フラグ不要** — 依存ゼロで動く [jco 経由のブラウザ](#running-a-component-in-a-browser-jco)を含む |
+| ホスト要件 | wasm-GC エンジン(`wasmtime -W gc`、Node 22+、現行ブラウザ) | wasmtime 46+(`-W gc=y`)または wasm-GC + JSPI 対応のコンポーネントホスト([jco 経由のブラウザ](#running-a-component-in-a-browser-jco)ではロードと計算はできるが、まだ印字はできない) | **任意の** WebAssembly エンジン | 任意のコンポーネントモデルホスト、**フラグ不要** — 依存ゼロで動く [jco 経由のブラウザ](#running-a-component-in-a-browser-jco)を含む |
 | エクスポートの形 | 生のコア関数 | 型付きコンポーネントモデルエクスポート(WAVE `--invoke`、jco) | 生のコア関数 | 型付きコンポーネントモデルエクスポート(WAVE `--invoke`、jco) |
 | スカラー | `:int`/`:float`/`:bool`/void | `:int`/`:float`/`:bool`/void | + `:long`(`i64`) | + `:long`(`s64`) |
 | `:string` | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) |
 | `:s-expr` | 手動の `(ptr,len)` | コンポーネントモデル `string`(印字テキスト) | 非対応 | 非対応 |
 | 関数本体で使える機能 | 言語全機能 | 言語全機能 | [非 GC サブセット](#eligible-subset) | [非 GC サブセット](#eligible-subset) |
-| エクスポート内の I/O | 動作する(実 WASI インポート。`--no-wasi` ではトラップ) | 同期エクスポートではトラップ。[`:async t`](#component-model-function-exports-wasm-export) を宣言する | `print` のみ(単一の `fd_write` インポート) | `print` のみ(組み込み WASI 0.2 stdio ブリッジ) |
+| エクスポート内の I/O | 動作する(実 WASI インポート。`--no-wasi` ではトラップ) | 同期エクスポートでも通常は動作する。[`:async t`](#component-model-function-exports-wasm-export) で残余のトラップリスクを除去 | `print` のみ(単一の `fd_write` インポート) | `print` のみ(組み込み WASI 0.2 stdio ブリッジ) |
 | プログラムのトップレベル | `_start` として実行 | `wasi:cli/run` として共存 | `defun` + ディレクティブのみ | `defun` + ディレクティブのみ |
 | 呼び出しごとの文字列メモリ | ホスト管理(`__ronto_alloc` + [アリーナ API](#reclaiming-the-hosts-buffer-the-arena-api)。Lisp 側はエンジンが回収) | 正準 post-return が解放 | ホスト管理(`__ronto_alloc` + [アリーナ API](#reclaiming-memory-the-arena-api)。スカラー戻り値では自動) | 正準 post-return が解放 |
 | 典型的なサイズ | 約 100 KB([`--optimize`](#optimize-tree-shaking) で約 2 KB) | 約 110 KB | 数十バイト〜数 KB | 数百バイト〜数 KB |
@@ -226,14 +226,14 @@ wasmtime run --invoke fact -W gc fact.wasm 5      # => 120
 
 ```bash
 rontolisp hello.lisp --component -o hello.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y hello.wasm
+wasmtime run -W gc=y hello.wasm
 ```
 
 ```
 3
 ```
 
-WASI 0.3 ではすべてのバイト I/O が組み込みのコンポーネントモデル型 `stream<u8>` / `future<T>` と非同期正準 ABI を流れます。rontolisp は同じ Preview 1 コアモジュールを無変更のまま保ち — 依然として 8 つの `wasi_snapshot_preview1` 関数をインポートします — **アダプタ**コアモジュールがそれらを WASI 0.3(`wasi:cli`、`wasi:filesystem`、`wasi:clocks`、`wasi:random`)の上に `stream.new`/`stream.read`/`stream.write` と `future.read` を使って実装します。コンポーネントの `wasi:cli/run@0.3.0` エクスポート(`async func`)は**スタックフル**な非同期エクスポートとしてリフトされるため、同期的な stream/future 組み込みは協調的にブロックし、アダプタは直線的なコードのままです。非同期正準 ABI とスタックフルリフトは wasmtime 46+ でデフォルト有効です。同期的な stream/future 組み込みだけがまだフィーチャーゲートされており、それが `-W component-model-more-async-builtins=y` の理由です(wasm-GC コアのための `-W gc=y` も併せて)。
+WASI 0.3 ではすべてのバイト I/O が組み込みのコンポーネントモデル型 `stream<u8>` / `future<T>` と非同期正準 ABI を流れます。rontolisp は同じ Preview 1 コアモジュールを無変更のまま保ち — 依然として 8 つの `wasi_snapshot_preview1` 関数をインポートします — **アダプタ**コアモジュールがそれらを WASI 0.3(`wasi:cli`、`wasi:filesystem`、`wasi:clocks`、`wasi:random`)の上に `stream.new`/`stream.read`/`stream.write` と `future.read` を使って実装します。これらの組み込みは**非同期**(ノンブロッキング)版です: BLOCKED が報告されると、タスクは完了イベントが届くまでブロッキング待機の `waitable-set.wait` で待つため、アダプタは直線的なコードのままです。コンポーネントの `wasi:cli/run@0.3.0` エクスポート(`async func`)は非同期型付きのエクスポートとしてリフトされ、そこからこのブロッキング待機は合法です。これらはすべて wasmtime 46+ でデフォルト有効な基本のコンポーネントモデル非同期 ABI の上に成り立っています — ゲートされた機能フラグは残っておらず、必要なのは(wasm-GC コアのための)`-W gc=y` だけです。
 
 wasmtime の起動方法が出力の種類を選ぶわけでは**ありません**。`wasmtime run` は wasmtime のデフォルトサブコマンドで、コアモジュールかコンポーネントかを自動検出するため、`wasmtime run -W gc` は Preview 1 の `hello.wasm` も同様に実行します。Preview 1 コアモジュールと WASI 0.3 コンポーネントのどちらが生成されるかを決めるのは、コンパイル時の `--component` フラグだけです。(実際上の違いはコンポーネント専用ランタイムで現れます。そこではコンポーネントは動きますが Preview 1 コアモジュールは動きません。)
 
@@ -249,13 +249,13 @@ cat > fileio.lisp <<'EOF'
   (print (read-line in)))
 EOF
 rontolisp fileio.lisp --component -o fileio.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.wasm
+wasmtime run -W gc=y --dir . fileio.wasm
 # "hello"
 ```
 
 - `random` は `wasi:random@0.3.0` から本物のエントロピーを引きます(Preview 1 はホストの `random_get` を使います)。そのため `(random N)` は実行ごとに異なります。`get-universal-time` / `get-internal-real-time` / `get-internal-run-time` は `wasi:clocks@0.3.0`(`system-clock`/`monotonic-clock`)を読み、`getenv` は `wasi:cli/environment@0.3.0` を読みます。
-- 送信 HTTP(`rontolisp:fetch` と `rontolisp:await` / `rontolisp:then` / `rontolisp:promisep` のプロミス操作)はコンポーネントモードで動作し、真の非同期性も含みます: `fetch` はリクエストを送って(処理中の `wasi:http` レスポンスハンドルをラップした)プロミスを即座に返すため、`await` が各リクエストをブロックする前に複数のリクエストを重ねられます。プロミス操作自体はどのモードでもコンパイルできます。コンポーネント専用なのは `fetch` だけです。fetch は非同期の `wasi:http@0.3.0`(`wasi:http/types` + `wasi:http/client`)をインポートします — コンポーネントの他の部分と同じく一様に WASI 0.3 です。fetch コンポーネントは通常のフラグに加えて `-S http=y`(ホストに `wasi:http` を提供させるフラグ)で実行してください。fetch を使わないコンポーネントは `wasi:http` をインポートしないため、`-S http` は不要です。トランスポートの失敗(接続拒否、名前解決不能)はどのバックエンドでも `await` 時に `rontolisp:wit-error` をシグナルします。`nil` が返るのはリクエストを開始できなかった場合だけです。
-- TCP ソケット(`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port`)はコンポーネントモードで `wasi:sockets@0.3.0` の上で動作します(ネイティブに WASI 0.3 — 0.2 ハイブリッドではありません)。ソケットは双方向ストリームハンドルなので、`read-line` / `write-line` / `read-byte` / `write-byte` / `close` が直接使えます。ソケットコンポーネントは非同期フラグに加えて `-S tcp=y -S inherit-network=y` で実行してください。これらがなくてもコンポーネントは起動しますが、すべてのソケット操作が失敗して `nil` を返します。ホストは IPv4 リテラルでなければならず(ホスト名解決はまだありません)、`rontolisp:fetch` と tcp 関数はまだ 1 つのコンポーネントで組み合わせられません。
+- 送信 HTTP(`rontolisp:fetch` と `rontolisp:await` / `rontolisp:then` / `rontolisp:futurep` の future 操作)はコンポーネントモードで動作し、真の非同期性も含みます: `fetch` はリクエストを送って(処理中の `wasi:http` レスポンスハンドルをラップした)future を即座に返すため、`await` が各リクエストをブロックする前に複数のリクエストを重ねられます。future 操作自体はどのモードでもコンパイルできます。コンポーネント専用なのは `fetch` だけです。fetch は非同期の `wasi:http@0.3.0`(`wasi:http/types` + `wasi:http/client`)をインポートします — コンポーネントの他の部分と同じく一様に WASI 0.3 です。fetch コンポーネントは通常のフラグに加えて `-S http=y`(ホストに `wasi:http` を提供させるフラグ)で実行してください。fetch を使わないコンポーネントは `wasi:http` をインポートしないため、`-S http` は不要です。トランスポートの失敗(接続拒否、名前解決不能)はどのバックエンドでも `await` 時に `rontolisp:wit-error` をシグナルします。`nil` が返るのはリクエストを開始できなかった場合だけです。
+- TCP ソケット(`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port`)はコンポーネントモードで `wasi:sockets@0.3.0` の上で動作します(ネイティブに WASI 0.3 — 0.2 ハイブリッドではありません)。ソケットは双方向ストリームハンドルなので、`read-line` / `write-line` / `read-byte` / `write-byte` / `close` が直接使えます。ソケットコンポーネントは通常のフラグに加えて `-S tcp=y -S inherit-network=y` で実行してください。これらがなくてもコンポーネントは起動しますが、すべてのソケット操作が失敗して `nil` を返します。ホストは IPv4 リテラルでなければならず(ホスト名解決はまだありません)、`rontolisp:fetch` と tcp 関数はまだ 1 つのコンポーネントで組み合わせられません。
 - それ以外の点では、コンパイルされた Lisp はサポートされる機能について Preview 1 出力と同一に振る舞います。受信 HTTP のサービング(`rontolisp:http-handler`)もコンポーネントにコンパイルされますが、別種のコンポーネント(`wasi:http/handler@0.3.0` をエクスポート)で、`wasmtime serve` のもとで動きます — [HTTP ハンドラーガイド](../guides/http-handler.md)を参照してください。
 
 ### コンポーネントモデル関数エクスポート(wasm-export)
@@ -270,9 +270,9 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.was
 
 ```bash
 rontolisp sumsq.lisp --component -o sumsq.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'sumsquared(2, 3)' sumsq.wasm
+wasmtime run -W gc=y --invoke 'sumsquared(2, 3)' sumsq.wasm
 # 25    (the export's return value, rendered by wasmtime)
-wasmtime run -W gc=y -W component-model-more-async-builtins=y sumsq.wasm
+wasmtime run -W gc=y sumsq.wasm
 # 400    (the ordinary run entry executes the top-level program)
 ```
 
@@ -290,15 +290,15 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y sumsq.wasm
 
 ```bash
 rontolisp greet.lisp --component -o greet.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("世界")' greet.wasm
+wasmtime run -W gc=y --invoke 'greet("世界")' greet.wasm
 # "Hello, 世界"
 ```
 
-デフォルトではエクスポートは**同期的に**リフトされ、純粋計算でなければなりません: その中の I/O(`print`、`read`、`rontolisp:fetch`、ファイルアクセス)は実行時に "cannot block a synchronous task" でトラップします。**`:async t`** でエクスポートを非同期と宣言すると、代わりに非同期関数型に対してリフトされ — `run` エントリと同じスタックフル非同期の形です — その中の I/O が動作します。`wasmtime --invoke` は非同期エクスポートもまったく同じ方法で呼び出します:
+デフォルトではエクスポートは**同期的に**リフトされます。それでも、その中の I/O は通常動作します: 非同期組み込みはホストが即座に受理する限り(標準出力はそうです)ブロックせずに完了し、BLOCKED を報告するホストだけがブロッキング待機を強制します。この待機は同期タスク内では "cannot block a synchronous task" でトラップします。**`:async t`** でエクスポートを非同期と宣言すると、代わりに非同期関数型に対してリフトされ — `run` エントリと同じ非同期型付きリフトです — この残余リスクがなくなります。`wasmtime --invoke` は非同期エクスポートもまったく同じ方法で呼び出します:
 
 ```lisp
 ;; status.lisp
-(defun fetch-status (url)
+(rontolisp:async-defun fetch-status (url)
   (print "fetching")
   (getf (rontolisp:await (rontolisp:fetch url)) :status))
 (rontolisp:wasm-export 'fetch-status :params '(:string) :returns :int :async t)
@@ -306,7 +306,7 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("�
 
 ```bash
 rontolisp status.lisp --component -o status.wasm
-wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y \
+wasmtime run -W gc=y -W exceptions=y -S http=y \
   --invoke 'fetch-status("https://httpbin.org/status/204")' status.wasm
 # "fetching"
 # 204
@@ -316,9 +316,9 @@ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S
 
 コンポーネントエクスポートの現在の制限:
 
-- **同期**(デフォルト)エクスポートは純粋計算専用です: その中の I/O は実行時に "cannot block a synchronous task" でトラップします。エクスポートが印字・fetch・その他の I/O を行うときは `:async t` にオプトインし、純粋計算のエクスポートは同期のままにしてください。
+- **同期**(デフォルト)エクスポートでも I/O は通常動作します(非同期組み込みはホストが即座に受理する限りブロックせずに完了します)。BLOCKED を報告するホストだけがブロッキング待機を "cannot block a synchronous task" でトラップさせます。エクスポートが印字・fetch・その他の I/O を行うときは `:async t` にオプトインしてこの残余リスクを除き、純粋計算のエクスポートは同期のままにしてください。
 - `:async` が意味を持つのはここだけです: Preview 1 / `--no-wasi` のコアエクスポートは無視し(そこではホストが直接 I/O を提供します)、`--no-gc --component` は拒否します(コンパクトなリアクターコンポーネントには非同期アダプタがありません)。
-- jco(1.25.2)は `:async t` エクスポートをトランスパイルして非同期として型付けしますが、まだ呼び出せません — 生成されるドライバはコールバック方式の非同期タスクを前提としており、スタックフル非同期エクスポートは上流で未実装です(トランスパイルされた `run` を呼べないのと同系統のギャップです)。非同期エクスポートの検証済みパスは `wasmtime run --invoke` です。同期エクスポートはどちらでも動作します。
+- jco(1.25.2)は `:async t` エクスポートをトランスパイルして非同期として型付けしますが、まだ呼び出せません — 0.3 非同期 ABI のサポートが上流で未実装です(トランスパイルされた `run` を呼べないのと同系統のギャップです)。非同期エクスポートの検証済みパスは `wasmtime run --invoke` です。同期エクスポートはどちらでも動作します。
 - エクスポート名は lower-kebab-case のコンポーネントモデル名(`sum-squared`)でなければなりません。その文法から外れる Lisp 名については、コンパイラが `:as` での改名を求めます。
 - エクスポートの呼び出しはプログラムのトップレベルを先に実行しないため、`defvar`/`defparameter` のグローバルを読むエクスポートは未初期化の値を見ることになります(これは Preview 1 の `--invoke` の動作と一致します)。
 
@@ -391,7 +391,7 @@ world greeter {
 
 ```bash
 rontolisp greet.lisp --component -o greet.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("world")' greet.wasm
+wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
 # "Hello, world!"
 ```
 
@@ -529,7 +529,7 @@ WIT の `result<T, E>` は値ではありません。ok アームが戻り値で
 
 ```bash
 rontolisp counter.lisp -o counter.wasm --component
-wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
+wasmtime run -W gc=y -W exceptions=y \
     -S keyvalue=y counter.wasm
 ```
 
@@ -564,7 +564,7 @@ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
 
 ```bash
 rontolisp page-hits-server.lisp -o server.wasm --component
-wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y server.wasm
+wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
 curl http://127.0.0.1:8080/index
 ```
 
@@ -842,7 +842,7 @@ npx @bytecodealliance/jco transpile cv.wasm -o dist
 **wasm-GC の `--component` はロードされ計算もできますが、まだ印字はできません。** Chrome は wasm-GC、JSPI、正準 ABI のいずれにも対応しており、コンポーネントの同期エクスポートは正しい値を返します。残りを阻んでいるのは 2 つのギャップで、どちらも JavaScript 側にあります(wasmtime はすべて実行できます):
 
 - 必要となる WASI 0.3 インポートにブラウザ実装がありません: `@bytecodealliance/preview3-shim` はパッケージの `exports` に `node` 条件しか宣言しておらず、`node:worker_threads`、`node:net`、`node:http` などを取り込みます。したがってページは、jco がモジュール先頭で分割代入する 9 つのメンバー — `environment.getEnvironment`、`stdout.writeViaStream`、`stderr.writeViaStream`、`stdin.readViaStream`、`monotonicClock.now`、`systemClock.now`、`preopens.getDirectories`、`types.Descriptor`、`random.getRandomU64` — の代役を手書きする必要があります。純粋計算のエクスポートであれば、これらは存在しさえすれば十分です。
-- 印字はその先、jco 自身の生成コードの中で失敗します。生成コードは `FutureReadableEnd` / `FutureWritableEnd` / `FutureEnd` を*参照*しているのに、そのいずれも定義していません(`ReferenceError: FutureReadableEnd is not defined`)。この経路は `wasi:cli/stdout` の `write-via-stream` から到達します — その WIT の結果型が `future` だからです。これとは別に、jco はスタックフル非同期エクスポートをまだ*呼び出せません*。[`:async t`](#component-model-function-exports-wasm-export) の I/O エクスポートがまさにそれです。
+- 印字はその先、jco 自身の生成コードの中で失敗します。生成コードは `FutureReadableEnd` / `FutureWritableEnd` / `FutureEnd` を*参照*しているのに、そのいずれも定義していません(`ReferenceError: FutureReadableEnd is not defined`)。この経路は `wasi:cli/stdout` の `write-via-stream` から到達します — その WIT の結果型が `future` だからです。これとは別に、jco は非同期エクスポート自体をまだ*呼び出せません*(こちらも 0.3 非同期 ABI のギャップです)。[`:async t`](#component-model-function-exports-wasm-export) の I/O エクスポートがまさにそれです。
 
 ここでは Node の方が弱いホストです: Node 22 には JSPI がなく(`WebAssembly.Suspending is not a constructor`)、トランスパイルされた GC コンポーネントをインスタンス化することすらできません。Chrome にはできます。
 

@@ -25,7 +25,7 @@
 > バックエンドは **componentモード専用** です (`--component`、
 > `wasi:sockets@0.3.0` 経由): tcp関数はPreview 1 (コアモジュール) モードでは
 > コンパイルエラーになり、ホストはIPv4リテラルでなければならず、component
-> は非同期フラグに加えて `-S tcp=y -S inherit-network=y` を付けて実行する
+> は通常のフラグに加えて `-S tcp=y -S inherit-network=y` を付けて実行する
 > 必要があります。**ブラウザプレイグラウンド** ではすべてのtcp関数がエラーを
 > シグナルします (ブラウザのサンドボックスには素のTCPがありません) — 下の
 > 実行可能な例はブラウザの外でのみ動作します。共通の制限 (TCPのみ、
@@ -108,7 +108,7 @@ WASM componentにコンパイルして (wasmtime 46+。ネットワークアク�
 
 ```bash
 rontolisp echo-server.lisp -o echo-server.wasm --component
-wasmtime run -W gc=y -W component-model-more-async-builtins=y -S tcp=y -S inherit-network=y echo-server.wasm
+wasmtime run -W gc=y -S tcp=y -S inherit-network=y echo-server.wasm
 ```
 
 どのバックエンドでサーブしていても、任意のTCPクライアント、たとえば

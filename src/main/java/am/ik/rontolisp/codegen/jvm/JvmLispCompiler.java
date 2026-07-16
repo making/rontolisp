@@ -14,6 +14,7 @@ import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
+import am.ik.rontolisp.LispAsync;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispMacroExpander;
@@ -124,6 +125,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
 		program = LispMacroExpander.flattenTopLevel(program);
+		// rontolisp:await placement is checked on the raw forms; then every
+		// async-defun/async-lambda lowers to an ordinary defun/lambda over the
+		// %async-run primitive (virtual threads), so Pass 1 and everything below see
+		// only the ordinary shapes.
+		try {
+			LispAsync.checkTopLevel(program);
+		}
+		catch (IllegalArgumentException ex) {
+			throw new UnsupportedOperationException(ex.getMessage());
+		}
+		program = LispAsync.lowerProgram(program);
 		// Splice top-level defstructs/defclasses/defgenerics/defmethods into their
 		// generated defuns before lambda-list desugaring (the generated constructors
 		// use &key) so Pass 1 collects them as ordinary functions; the registries make
@@ -266,22 +278,75 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant readLineHelperMethod = cp.addMethodref(thisClass,
 				cp.addNameAndType(readLineHelperName, readLineHelperDesc));
 
-		// fetch/await helpers: emitted only when the program uses rontolisp:fetch or
-		// rontolisp:await (both live in the same builder, so they are emitted together).
-		// rontolisp:then and rontolisp:promisep compile inline (JvmThenCompiler /
-		// JvmPromisepCompiler); then just additionally gates the #<PROMISE> print branch.
+		// The async/await runtime (JvmAsyncRuntimeBuilder): %async-run (the lowered
+		// async-defun/async-lambda), the generic _await resolver, the first-class stream
+		// operations and the futurep/streamp predicates all live in one builder, emitted
+		// when the program touches any of them (http-handler included: its handle()
+		// awaits the handler's future and drains a stream response body). _fetch is
+		// separate (JvmFetchRuntimeBuilder) and additionally gates _await's HttpResponse
+		// branch so fetch-free programs never load java.net.http classes.
 		String fetchQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
-		String awaitQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT);
+		String awaitQualified = LispNames.AWAIT_QUALIFIED;
 		String thenQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THEN);
-		boolean usesFetch = programUsesSymbol(program, fetchQualified) || programUsesSymbol(program, awaitQualified);
-		boolean usesPromise = usesFetch || programUsesSymbol(program, thenQualified);
+		boolean usesHttpHandler = programUsesSymbol(program,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.HTTP_HANDLER));
+		boolean usesFetch = programUsesSymbol(program, fetchQualified);
+		boolean usesAsyncSpawn = programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED) || usesHttpHandler;
+		boolean usesStreamOps = programUsesSymbol(program,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_STREAM))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_READ))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_WRITE))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_CLOSE))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_STREAMP));
+		boolean usesAsyncRuntime = usesFetch || usesAsyncSpawn || usesStreamOps
+				|| programUsesSymbol(program, awaitQualified) || programUsesSymbol(program, thenQualified)
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FUTUREP))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WAIT_FOR));
+		boolean usesPromise = usesAsyncRuntime;
 		MethodrefConstant fetchHelperMethod = usesFetch
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_NAME),
 						cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_DESC)))
 				: null;
-		MethodrefConstant awaitHelperMethod = usesFetch
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFetchRuntimeBuilder.AWAIT_METHOD_NAME),
-						cp.addUtf8(JvmFetchRuntimeBuilder.AWAIT_METHOD_DESC)))
+		MethodrefConstant awaitHelperMethod = usesAsyncRuntime
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.AWAIT_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.AWAIT_DESC)))
+				: null;
+		MethodrefConstant asyncRunHelperMethod = usesAsyncRuntime
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.ASYNC_RUN_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.ASYNC_RUN_DESC)))
+				: null;
+		MethodrefConstant futurepHelperMethod = usesAsyncRuntime
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.FUTUREP_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
+				: null;
+		MethodrefConstant streampHelperMethod = usesAsyncRuntime
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAMP_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
+				: null;
+		MethodrefConstant makeStreamHelperMethod = usesAsyncRuntime
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_DESC)))
+				: null;
+		MethodrefConstant streamReadHelperMethod = usesAsyncRuntime
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_READ_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
+				: null;
+		MethodrefConstant streamWriteHelperMethod = usesAsyncRuntime
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_WRITE_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_WRITE_DESC)))
+				: null;
+		MethodrefConstant streamCloseHelperMethod = usesAsyncRuntime
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_CLOSE_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
+				: null;
+		MethodrefConstant drainBodyHelperMethod = usesAsyncRuntime
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.DRAIN_BODY_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
+				: null;
+		MethodrefConstant waitForHelperMethod = usesAsyncRuntime
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.WAIT_FOR_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
 				: null;
 
 		// TCP/TLS socket helpers: emitted only when the program uses a rontolisp:tcp-*
@@ -357,11 +422,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// directive stores the handler funcref in a static field and calls
 		// HttpHandlerSupport.serve(port, new Prog()), and the injected handle() method
 		// marshals the request/response plists through the _invoke_1 dispatcher.
-		boolean usesHttpHandler = programUsesSymbol(program,
-				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.HTTP_HANDLER));
-		// Both mechanisms need `new Prog()`, so the class gets a public no-arg
-		// constructor when either is present.
-		boolean needsInstanceCtor = usesTlsConnect || usesHttpHandler;
+		// The async runtime is a third user: the class implements Runnable and
+		// _async_run does `new Prog()` per spawned body.
+		boolean needsInstanceCtor = usesTlsConnect || usesHttpHandler || usesAsyncRuntime;
 		ClassConstant x509TrustManagerClass = usesTlsConnect ? cp.addClass(cp.addUtf8("javax/net/ssl/X509TrustManager"))
 				: null;
 		ClassConstant x509CertificateClass = usesTlsConnect
@@ -550,10 +613,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				indirectCallArities.add(arity);
 			}
 		}
-		// _await applies rontolisp:then callbacks through the arity-1 dispatcher, so its
-		// emission must be forced whenever the fetch/await runtime is present; the
-		// http-handler handle() method applies the handler the same way.
-		if (usesFetch || usesHttpHandler) {
+		// _await applies rontolisp:then callbacks through the arity-1 dispatcher and
+		// _async_run applies the body thunk through the arity-0 one, so their emission
+		// must be forced whenever the async runtime is present; the http-handler
+		// handle() method applies the handler through arity 1 the same way.
+		if (usesAsyncRuntime) {
+			indirectCallArities.add(0);
 			indirectCallArities.add(1);
 		}
 
@@ -619,6 +684,15 @@ public final class JvmLispCompiler implements LispCompiler {
 			.readLineHelper(readLineHelperMethod)
 			.fetchHelper(fetchHelperMethod)
 			.awaitHelper(awaitHelperMethod)
+			.asyncRunHelper(asyncRunHelperMethod)
+			.futurepHelper(futurepHelperMethod)
+			.streampHelper(streampHelperMethod)
+			.makeStreamHelper(makeStreamHelperMethod)
+			.streamReadHelper(streamReadHelperMethod)
+			.streamWriteHelper(streamWriteHelperMethod)
+			.streamCloseHelper(streamCloseHelperMethod)
+			.drainBodyHelper(drainBodyHelperMethod)
+			.waitForHelper(waitForHelperMethod)
 			.tcpConnectHelper(tcpConnectHelperMethod)
 			.tcpListenHelper(tcpListenHelperMethod)
 			.tcpAcceptHelper(tcpAcceptHelperMethod)
@@ -960,10 +1034,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			javaPrint = null;
 		}
 
-		// Promises (CompletableFutures at runtime) print as #<PROMISE> (interpreter
-		// parity); the branch is emitted only when the program can create promises.
-		final JvmRuntimeBuilder.@Nullable PromisePrint promisePrint = usesPromise ? new JvmRuntimeBuilder.PromisePrint(
-				cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture")), cp.addString("#<PROMISE>")) : null;
+		// Futures (CompletableFutures / stream-read tokens at runtime) print as
+		// #<FUTURE> and streams as #<STREAM> (interpreter parity); the branches are
+		// emitted only when the program can create them.
+		final JvmRuntimeBuilder.@Nullable PromisePrint promisePrint = usesPromise
+				? new JvmRuntimeBuilder.PromisePrint(cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture")),
+						cp.addString("#<FUTURE>"), objectArrayClass, cp.addString(JvmAsyncRuntimeBuilder.SMARKER),
+						cp.addString(JvmAsyncRuntimeBuilder.RMARKER), cp.addString("#<STREAM>"))
+				: null;
 
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
@@ -1021,6 +1099,41 @@ public final class JvmLispCompiler implements LispCompiler {
 						stringLength, stringSubstring, stringConcat)
 				: null;
 
+		// The async/await runtime: %async-run + run() (the class implements Runnable),
+		// the generic _await, streams and predicates. It rides the condition channel
+		// (the error payload re-signals typed conditions across the await), so the
+		// channel is forced on.
+		final JvmAsyncRuntimeBuilder.@Nullable AsyncRuntime asyncRuntimeBodies;
+		final @Nullable ClassConstant runnableClass;
+		if (usesAsyncRuntime) {
+			mainCtx.conditionChannel.ensure(cp, this.className);
+			MethodrefConstant progInitForAsync = cp.addMethodref(thisClass,
+					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+			asyncRuntimeBodies = JvmAsyncRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass,
+					mainCtx.conditionChannel, progInitForAsync, usesFetch, longValueOf, stringLength, stringSubstring,
+					stringConcat);
+			runnableClass = cp.addClass(cp.addUtf8("java/lang/Runnable"));
+		}
+		else {
+			asyncRuntimeBodies = null;
+			runnableClass = null;
+		}
+		final @Nullable Utf8Constant handoffFieldName = usesAsyncRuntime
+				? cp.addUtf8(JvmAsyncRuntimeBuilder.HANDOFF_FIELD) : null;
+		final @Nullable Utf8Constant handoffFieldDesc = usesAsyncRuntime ? cp.addUtf8("Ljava/lang/ThreadLocal;") : null;
+		final @Nullable Utf8Constant asyncFnFieldName = usesAsyncRuntime ? cp.addUtf8(JvmAsyncRuntimeBuilder.FN_FIELD)
+				: null;
+		final @Nullable Utf8Constant asyncFutureFieldName = usesAsyncRuntime
+				? cp.addUtf8(JvmAsyncRuntimeBuilder.FUTURE_FIELD) : null;
+		final @Nullable Utf8Constant asyncLatchFieldName = usesAsyncRuntime
+				? cp.addUtf8(JvmAsyncRuntimeBuilder.LATCH_FIELD) : null;
+		final @Nullable Utf8Constant asyncInstanceFieldDesc = usesAsyncRuntime ? cp.addUtf8("Ljava/lang/Object;")
+				: null;
+		final ConstantPool.@Nullable FieldrefConstant handoffFieldRef = usesAsyncRuntime
+				? cp.addFieldref(thisClass, cp.addNameAndType(java.util.Objects.requireNonNull(handoffFieldName),
+						java.util.Objects.requireNonNull(handoffFieldDesc)))
+				: null;
+
 		// length runtime helper. Emitted unconditionally (it is small and lives in its
 		// own
 		// method): length is also generated internally by other compilers (e.g. format
@@ -1054,6 +1167,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				if (httpHandlerRuntime != null) {
 					i.add(w -> w.writeU2(httpHandlerRuntime.handlerInterface().index()));
 				}
+				if (runnableClass != null) {
+					i.add(w -> w.writeU2(runnableClass.index()));
+				}
 			})
 			.writeFields(f -> {
 				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
@@ -1081,6 +1197,20 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(httpHandlerRuntime.handlerFieldName())
 						.writeU2(httpHandlerRuntime.handlerFieldDesc())
 						.writeU2(0));
+				}
+				if (asyncRuntimeBodies != null) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(java.util.Objects.requireNonNull(handoffFieldName))
+						.writeU2(java.util.Objects.requireNonNull(handoffFieldDesc))
+						.writeU2(0));
+					for (Utf8Constant instField : List.of(java.util.Objects.requireNonNull(asyncFnFieldName),
+							java.util.Objects.requireNonNull(asyncFutureFieldName),
+							java.util.Objects.requireNonNull(asyncLatchFieldName))) {
+						f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE)
+							.writeU2(instField)
+							.writeU2(java.util.Objects.requireNonNull(asyncInstanceFieldDesc))
+							.writeU2(0));
+					}
 				}
 				// One static Object field per top-level global variable (default null =
 				// nil); written by setq/defvar, read by getstatic from any method body.
@@ -1193,26 +1323,32 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 				if (mainCtx.conditionChannel.used) {
 					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
-					// on a thread with no pending condition returns null).
+					// on a thread with no pending condition returns null). The async
+					// runtime's _handoffTl (the eager-start handoff) joins the same
+					// initializer when present.
 					ConditionChannel channel = mainCtx.conditionChannel;
+					List<Integer> clinitCode = new java.util.ArrayList<>();
+					for (FieldrefConstant tlField : (handoffFieldRef != null)
+							? List.of(java.util.Objects.requireNonNull(channel.condTlField),
+									java.util.Objects.requireNonNull(channel.depthTlField), handoffFieldRef)
+							: List.of(java.util.Objects.requireNonNull(channel.condTlField),
+									java.util.Objects.requireNonNull(channel.depthTlField))) {
+						clinitCode.add(Opcode.NEW);
+						JvmRuntimeBuilder.emitU2(clinitCode,
+								java.util.Objects.requireNonNull(channel.threadLocalClass).index());
+						clinitCode.add(Opcode.DUP);
+						clinitCode.add(Opcode.INVOKESPECIAL);
+						JvmRuntimeBuilder.emitU2(clinitCode, java.util.Objects.requireNonNull(channel.tlCtor).index());
+						clinitCode.add(Opcode.PUTSTATIC);
+						JvmRuntimeBuilder.emitU2(clinitCode, tlField.index());
+					}
+					clinitCode.add(Opcode.RETURN);
 					methods.add(AccessFlag.ACC_STATIC, java.util.Objects.requireNonNull(channel.clinitName),
 							java.util.Objects.requireNonNull(channel.clinitDesc),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(2)
 									.writeU2(0)
-									.writeCode(Opcode.NEW,
-											java.util.Objects.requireNonNull(channel.threadLocalClass).indexAsU2(),
-											Opcode.DUP, Opcode.INVOKESPECIAL,
-											java.util.Objects.requireNonNull(channel.tlCtor).indexAsU2(),
-											Opcode.PUTSTATIC,
-											java.util.Objects.requireNonNull(channel.condTlField).indexAsU2(),
-											Opcode.NEW,
-											java.util.Objects.requireNonNull(channel.threadLocalClass).indexAsU2(),
-											Opcode.DUP, Opcode.INVOKESPECIAL,
-											java.util.Objects.requireNonNull(channel.tlCtor).indexAsU2(),
-											Opcode.PUTSTATIC,
-											java.util.Objects.requireNonNull(channel.depthTlField).indexAsU2(),
-											Opcode.RETURN)
+									.writeCode((Object[]) clinitCode.toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));
@@ -1282,17 +1418,36 @@ public final class JvmLispCompiler implements LispCompiler {
 							})));
 				}
 				if (fetchRuntimeBodies != null) {
-					for (JvmFetchRuntimeBuilder.FetchMethod fm : List.of(fetchRuntimeBodies.fetch(),
-							fetchRuntimeBodies.await())) {
-						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.name(), fm.desc(),
+					JvmFetchRuntimeBuilder.FetchMethod fm = fetchRuntimeBodies.fetch();
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.name(), fm.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(fm.maxStack())
+									.writeU2(fm.maxLocals())
+									.writeCode((Object[]) fm.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				if (asyncRuntimeBodies != null) {
+					for (JvmAsyncRuntimeBuilder.AsyncMethod am : asyncRuntimeBodies.staticMethods()) {
+						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc(),
 								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-									attr.writeU2(fm.maxStack())
-										.writeU2(fm.maxLocals())
-										.writeCode((Object[]) fm.code().toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0);
+									attr.writeU2(am.maxStack())
+										.writeU2(am.maxLocals())
+										.writeCode((Object[]) am.code().toArray(new Integer[0]));
+									writeAsyncExceptionTable(attr, am);
+									attr.writeU2(0);
 								})));
 					}
+					JvmAsyncRuntimeBuilder.AsyncMethod runBody = asyncRuntimeBodies.runMethod();
+					methods.add(AccessFlag.ACC_PUBLIC, runBody.name(), runBody.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(runBody.maxStack())
+									.writeU2(runBody.maxLocals())
+									.writeCode((Object[]) runBody.code().toArray(new Integer[0]));
+								writeAsyncExceptionTable(attr, runBody);
+								attr.writeU2(0);
+							})));
 				}
 				if (socketRuntime != null) {
 					for (JvmSocketRuntimeBuilder.SocketMethod sm : socketRuntime.methods()) {
@@ -1511,6 +1666,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (usesHttpHandler) {
 				roots.add("handle");
 			}
+			// The async runtime's virtual thread invokes run() through the Runnable
+			// interface -- the same invisible edge; shaking it away would strand
+			// _async_run's eager-start latch forever.
+			if (usesAsyncRuntime) {
+				roots.add("run");
+			}
 			classBytes = JvmClassShaker.shake(classBytes, roots);
 		}
 		return classBytes;
@@ -1523,6 +1684,16 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		return false;
+	}
+
+	// Writes an async runtime method's exception table (or the empty-table u2 when the
+	// method has none) into its Code attribute.
+	private static void writeAsyncExceptionTable(ByteCodeWriter attr, JvmAsyncRuntimeBuilder.AsyncMethod am) {
+		List<ByteCodeWriter.ExceptionTableEntry> entries = new java.util.ArrayList<>();
+		for (int[] e : am.exceptionTable()) {
+			entries.add(new ByteCodeWriter.ExceptionTableEntry(e[0], e[1], e[2], e[3]));
+		}
+		attr.writeExceptionTable(entries);
 	}
 
 	private static boolean programUsesSymbol(List<LispVal> program, String name) {
@@ -2066,6 +2237,24 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodrefConstant awaitHelper;
 
+		final @Nullable MethodrefConstant asyncRunHelper;
+
+		final @Nullable MethodrefConstant futurepHelper;
+
+		final @Nullable MethodrefConstant streampHelper;
+
+		final @Nullable MethodrefConstant makeStreamHelper;
+
+		final @Nullable MethodrefConstant streamReadHelper;
+
+		final @Nullable MethodrefConstant streamWriteHelper;
+
+		final @Nullable MethodrefConstant streamCloseHelper;
+
+		final @Nullable MethodrefConstant drainBodyHelper;
+
+		final @Nullable MethodrefConstant waitForHelper;
+
 		final @Nullable MethodrefConstant tcpConnectHelper;
 
 		final @Nullable MethodrefConstant tcpListenHelper;
@@ -2301,6 +2490,15 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.readLineHelper = Objects.requireNonNull(builder.readLineHelper);
 			this.fetchHelper = builder.fetchHelper;
 			this.awaitHelper = builder.awaitHelper;
+			this.asyncRunHelper = builder.asyncRunHelper;
+			this.futurepHelper = builder.futurepHelper;
+			this.streampHelper = builder.streampHelper;
+			this.makeStreamHelper = builder.makeStreamHelper;
+			this.streamReadHelper = builder.streamReadHelper;
+			this.streamWriteHelper = builder.streamWriteHelper;
+			this.streamCloseHelper = builder.streamCloseHelper;
+			this.drainBodyHelper = builder.drainBodyHelper;
+			this.waitForHelper = builder.waitForHelper;
 			this.tcpConnectHelper = builder.tcpConnectHelper;
 			this.tcpListenHelper = builder.tcpListenHelper;
 			this.tcpAcceptHelper = builder.tcpAcceptHelper;
@@ -2404,6 +2602,24 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant fetchHelper;
 
 			private @Nullable MethodrefConstant awaitHelper;
+
+			private @Nullable MethodrefConstant asyncRunHelper;
+
+			private @Nullable MethodrefConstant futurepHelper;
+
+			private @Nullable MethodrefConstant streampHelper;
+
+			private @Nullable MethodrefConstant makeStreamHelper;
+
+			private @Nullable MethodrefConstant streamReadHelper;
+
+			private @Nullable MethodrefConstant streamWriteHelper;
+
+			private @Nullable MethodrefConstant streamCloseHelper;
+
+			private @Nullable MethodrefConstant drainBodyHelper;
+
+			private @Nullable MethodrefConstant waitForHelper;
 
 			private @Nullable MethodrefConstant tcpConnectHelper;
 
@@ -2635,6 +2851,51 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder awaitHelper(@Nullable MethodrefConstant awaitHelper) {
 				this.awaitHelper = awaitHelper;
+				return this;
+			}
+
+			Builder asyncRunHelper(@Nullable MethodrefConstant asyncRunHelper) {
+				this.asyncRunHelper = asyncRunHelper;
+				return this;
+			}
+
+			Builder futurepHelper(@Nullable MethodrefConstant futurepHelper) {
+				this.futurepHelper = futurepHelper;
+				return this;
+			}
+
+			Builder streampHelper(@Nullable MethodrefConstant streampHelper) {
+				this.streampHelper = streampHelper;
+				return this;
+			}
+
+			Builder makeStreamHelper(@Nullable MethodrefConstant makeStreamHelper) {
+				this.makeStreamHelper = makeStreamHelper;
+				return this;
+			}
+
+			Builder streamReadHelper(@Nullable MethodrefConstant streamReadHelper) {
+				this.streamReadHelper = streamReadHelper;
+				return this;
+			}
+
+			Builder streamWriteHelper(@Nullable MethodrefConstant streamWriteHelper) {
+				this.streamWriteHelper = streamWriteHelper;
+				return this;
+			}
+
+			Builder streamCloseHelper(@Nullable MethodrefConstant streamCloseHelper) {
+				this.streamCloseHelper = streamCloseHelper;
+				return this;
+			}
+
+			Builder drainBodyHelper(@Nullable MethodrefConstant drainBodyHelper) {
+				this.drainBodyHelper = drainBodyHelper;
+				return this;
+			}
+
+			Builder waitForHelper(@Nullable MethodrefConstant waitForHelper) {
+				this.waitForHelper = waitForHelper;
 				return this;
 			}
 

@@ -75,6 +75,22 @@ final class JvmHttpHandlerRuntimeBuilder {
 		MethodrefConstant serve = cp.addMethodref(supportClass,
 				cp.addNameAndType(cp.addUtf8("serve"), cp.addUtf8("(IL" + SUPPORT_CLASS + "$Handler;)V")));
 
+		// The async runtime helpers (forced on whenever http-handler is used): the
+		// request body streams in, the handler's future is awaited, a stream response
+		// body drains out.
+		MethodrefConstant makeStream = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_DESC)));
+		MethodrefConstant streamWrite = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_WRITE_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_WRITE_DESC)));
+		MethodrefConstant streamClose = cp.addMethodref(thisClass, cp.addNameAndType(
+				cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_CLOSE_METHOD), cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)));
+		MethodrefConstant awaitHelper = cp.addMethodref(thisClass, cp.addNameAndType(
+				cp.addUtf8(JvmAsyncRuntimeBuilder.AWAIT_METHOD), cp.addUtf8(JvmAsyncRuntimeBuilder.AWAIT_DESC)));
+		MethodrefConstant drainBody = cp.addMethodref(thisClass, cp.addNameAndType(
+				cp.addUtf8(JvmAsyncRuntimeBuilder.DRAIN_BODY_METHOD), cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)));
+
 		Utf8Constant stringGetterDesc = cp.addUtf8("()Ljava/lang/String;");
 		MethodrefConstant requestMethod = cp.addMethodref(requestClass,
 				cp.addNameAndType(cp.addUtf8("method"), stringGetterDesc));
@@ -147,6 +163,32 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.op(Opcode.INVOKEVIRTUAL);
 		a.u2(requestBody.index());
 		quoteWrap(a, quote, stringConcat);
+		a.astore(4);
+		// The handler sees the request body as an asynchronous stream: one settled
+		// quoted chunk when the request carries a body, an already-closed empty
+		// stream otherwise (its first read observes end of stream) -- interpreter
+		// parity.
+		a.op(Opcode.INVOKESTATIC);
+		a.u2(makeStream.index());
+		a.astore(18);
+		int bodyEmpty = a.label();
+		a.aload(1);
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(requestBody.index());
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(stringLength.index());
+		a.branch(Opcode.IFEQ, bodyEmpty);
+		a.aload(18);
+		a.aload(4);
+		a.op(Opcode.INVOKESTATIC);
+		a.u2(streamWrite.index());
+		a.op(Opcode.POP);
+		a.bind(bodyEmpty);
+		a.aload(18);
+		a.op(Opcode.INVOKESTATIC);
+		a.u2(streamClose.index());
+		a.op(Opcode.POP);
+		a.aload(18);
 		a.astore(4);
 		// query = request.query() quote-wrapped, or null (Lisp nil) when absent.
 		a.aload(1);
@@ -237,12 +279,16 @@ final class JvmHttpHandlerRuntimeBuilder {
 		consLdcCdr(a, objectClass, methodKey, 5); // (:method m ...)
 		a.astore(5);
 
-		// result = _invoke_1(_httpHandlerFn, plist)
+		// result = _await(_invoke_1(_httpHandlerFn, plist)) -- an async-defun handler
+		// returns a future; each request runs on its own virtual thread, so awaiting
+		// it here is the natural per-request suspension.
 		a.op(Opcode.GETSTATIC);
 		a.u2(handlerField.index());
 		a.aload(5);
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(invoke1.index());
+		a.op(Opcode.INVOKESTATIC);
+		a.u2(awaitHelper.index());
 		a.astore(6);
 
 		// status = (:status is a Long) ? (int) it : 200
@@ -262,8 +308,13 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.istore(9);
 		a.bind(statusDone);
 
-		// body = (:body is a quoted String) ? stripQuotes(it) : ""
+		// body = (:body is a quoted String) ? stripQuotes(it) : "" -- a stream body
+		// drains to its quoted concatenation first (buffered send)
 		emitPlistGet(a, bodyKey, 6, 7, 8, objectArrayClass, stringEquals);
+		a.aload(8);
+		a.op(Opcode.INVOKESTATIC);
+		a.u2(drainBody.index());
+		a.astore(8);
 		a.ldc(emptyStr.index());
 		a.astore(10);
 		int bodyDone = a.label();
@@ -362,7 +413,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.areturn();
 
 		HandleMethod handle = new HandleMethod(cp.addUtf8("handle"),
-				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), 8, 18, a.finish());
+				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), 8, 19, a.finish());
 		return new HttpHandlerRuntime(handlerInterface, handlerFieldName, handlerFieldDesc, handlerField, serve,
 				thisClass, progInit, handle);
 	}

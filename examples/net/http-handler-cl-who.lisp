@@ -25,7 +25,7 @@
 ;;     java -cp target/rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
 ;; Run (WASI component under wasmtime serve):
 ;;   rontolisp examples/net/http-handler-cl-who.lisp -o app.wasm --component --system-path src/test/resources/cl-who && \
-;;     wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
+;;     wasmtime serve -W gc=y -W exceptions=y app.wasm
 ;; Talk to it with:  curl http://127.0.0.1:8080/world
 
 (asdf:load-system :cl-who)

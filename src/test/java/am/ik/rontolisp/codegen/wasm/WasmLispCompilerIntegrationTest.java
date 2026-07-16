@@ -1646,8 +1646,8 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+				"/tmp/test.component.wasm");
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -1690,8 +1690,8 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "--invoke", waveInvocation, "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--invoke",
+				waveInvocation, "/tmp/test.component.wasm");
 		assertThat(result.getExitCode())
 			.as("exit code for component invoke %s: %s\nstderr: %s", waveInvocation, lispCode, result.getStderr())
 			.isZero();
@@ -1842,17 +1842,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void componentSyncExportWithIoStillTraps() throws Exception {
-		// Without :async the lift stays synchronous and I/O inside the export traps --
-		// pinned so the :async opt-in stays meaningful (and the trap message stays
-		// discoverable).
+	void componentSyncExportWithIoWorksWhenTheHostDoesNotBlock() throws Exception {
+		// Without :async the lift stays synchronous. The adapter's I/O built-ins are
+		// the async (non-blocking) variants now, and a host that accepts the bytes
+		// immediately (stdout here) never parks the task -- so print inside a sync
+		// export SUCCEEDS. Only when the host reports BLOCKED would the blocking park
+		// trap a synchronous task ("cannot block a synchronous task"); :async t
+		// removes that residual risk.
 		List<LispVal> program = LispReader.readAllFromString(COMPONENT_ASYNC_PROGRAM.replace(":async t", ":async nil"));
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "--invoke", "noisy-add(20, 22)", "/tmp/test.component.wasm");
-		assertThat(result.getExitCode()).isNotZero();
-		assertThat(result.getStderr()).contains("cannot block a synchronous task");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--invoke",
+				"noisy-add(20, 22)", "/tmp/test.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout()).contains("42");
 	}
 
 	@Test
@@ -1869,8 +1872,8 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "--env", env, "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--env",
+				env, "/tmp/test.component.wasm");
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -1945,7 +1948,7 @@ class WasmLispCompilerIntegrationTest {
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y --dir . test.component.wasm");
+				"cd /tmp && wasmtime run -W gc=y -W exceptions=y --dir . test.component.wasm");
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -1966,7 +1969,7 @@ class WasmLispCompilerIntegrationTest {
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y serve.wasm >/tmp/serve.log 2>&1 &"
+				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y serve.wasm >/tmp/serve.log 2>&1 &"
 						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8080/hello) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve round trip; log: %s", result.getStderr()).isZero();
@@ -1989,7 +1992,7 @@ class WasmLispCompilerIntegrationTest {
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-big.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8081 serve-big.wasm >/tmp/serve-big.log 2>&1 &"
+				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8081 serve-big.wasm >/tmp/serve-big.log 2>&1 &"
 						+ " for i in $(seq 1 60); do code=$(curl -s -m 20 -o /tmp/big.out -w '%{http_code}'"
 						+ " http://127.0.0.1:8081/big) && [ \"$code\" != 000 ]"
 						+ " && { echo \"$code $(wc -c < /tmp/big.out)\"; exit 0; }; sleep 0.25; done;"
@@ -2017,7 +2020,7 @@ class WasmLispCompilerIntegrationTest {
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-rand.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8082 serve-rand.wasm >/tmp/serve-rand.log 2>&1 &"
+				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8082 serve-rand.wasm >/tmp/serve-rand.log 2>&1 &"
 						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8082/) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-rand.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve random/clock round trip; log: %s", result.getStderr())
@@ -2045,7 +2048,7 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:http-handler 'handle)
 				""", null);
 		byte[] proxyBytes = compileServeComponent("""
-				(defun handle (request)
+				(rontolisp:async-defun handle (request)
 				  (let ((resp (rontolisp:await (rontolisp:fetch "http://127.0.0.1:8083/up"))))
 				    (list :status 200
 				          :body (concatenate 'string "proxied " (getf resp :body)
@@ -2058,8 +2061,8 @@ class WasmLispCompilerIntegrationTest {
 		// its fetch fails and it serves the non-empty body "proxied nil nil", which
 		// would end the poll loop with the wrong output (a startup race, not a bug).
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8083 /tmp/serve-backend.wasm >/tmp/serve-backend.log 2>&1 &"
-						+ " wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8084 /tmp/serve-proxy.wasm >/tmp/serve-proxy.log 2>&1 &"
+				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8083 /tmp/serve-backend.wasm >/tmp/serve-backend.log 2>&1 &"
+						+ " wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8084 /tmp/serve-proxy.wasm >/tmp/serve-proxy.log 2>&1 &"
 						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8083/up >/dev/null && break; sleep 0.25; done;"
 						+ " curl -sf http://127.0.0.1:8083/up >/dev/null"
 						+ " || { echo 'backend never came up' 1>&2; cat /tmp/serve-backend.log 1>&2; exit 1; };"
@@ -2118,7 +2121,7 @@ class WasmLispCompilerIntegrationTest {
 				""", dir.toString());
 		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/serve-kv.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y -S keyvalue-in-memory-data=/hits=41"
+				"wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y -S keyvalue-in-memory-data=/hits=41"
 						+ " --addr 127.0.0.1:8085 /tmp/serve-kv.wasm >/tmp/serve-kv.log 2>&1 &"
 						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8085/hits) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-kv.log; exit 1");
@@ -2190,7 +2193,7 @@ class WasmLispCompilerIntegrationTest {
 				Transferable.of("(defun sq (x) (* x x))".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
 				"/tmp/clib.lisp");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y --dir . test.component.wasm");
+				"cd /tmp && wasmtime run -W gc=y -W exceptions=y --dir . test.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("81");
 	}
@@ -2202,7 +2205,7 @@ class WasmLispCompilerIntegrationTest {
 		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
 				"/tmp/stdin.txt");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime run -W gc=y -W component-model-more-async-builtins=y /tmp/test.component.wasm < /tmp/stdin.txt");
+				"wasmtime run -W gc=y /tmp/test.component.wasm < /tmp/stdin.txt");
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -5665,7 +5668,42 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun(
 				"(print (rontolisp:promisep 42))" + " (print (rontolisp:promisep (rontolisp:then 1 (lambda (x) x))))"
 						+ " (print (rontolisp:then 1 (lambda (x) x)))"))
-			.isEqualTo("nil\nt\n#<PROMISE>");
+			.isEqualTo("nil\nt\n#<FUTURE>");
+	}
+
+	@Test
+	void asyncDefunRunsDegenerateSynchronousInPreview1Mode() throws Exception {
+		// Preview 1 has no asynchronous host I/O: an async-defun body runs to
+		// completion at the call and its value comes back as a settled future --
+		// same surface, degenerate timing (eager start trivially holds).
+		assertThat(compileAndRun("""
+				(rontolisp:async-defun add (a b) (print "in") (+ a b))
+				(print "before")
+				(let ((f (add 1 2)))
+				  (print "after")
+				  (print (rontolisp:futurep f))
+				  (print (rontolisp:await f))
+				  (print (rontolisp:await f))
+				  (print f))
+				(rontolisp:async-defun inner () 10)
+				(rontolisp:async-defun outer () (+ (rontolisp:await (inner)) 1))
+				(print (rontolisp:await (outer)))
+				(print (rontolisp:await (funcall (rontolisp:async-lambda (x) (* x 2)) 21)))
+				""")).isEqualTo("\"before\"\n\"in\"\n\"after\"\nt\n3\n3\n#<FUTURE>\n11\n42");
+	}
+
+	@Test
+	void asyncStreamsAreACompileErrorInPreview1Mode() {
+		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:make-stream))"))
+			.hasMessageContaining("asynchronous streams are not available on the WASM backends yet");
+		assertThatThrownBy(() -> compileAndRun("(defun bad () (rontolisp:await 1))"))
+			.hasMessageContaining("only allowed inside");
+	}
+
+	@Test
+	void waitForIsACompileErrorOnTheWasmBackends() {
+		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:await (rontolisp:wait-for 10)))"))
+			.hasMessageContaining("rontolisp:wait-for requires the interpreter or the JVM backend");
 	}
 
 	@Test
@@ -5680,8 +5718,8 @@ class WasmLispCompilerIntegrationTest {
 				+ " (rontolisp:wit-error () :refused)))";
 		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/fetch-err.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "-S", "http=y", "/tmp/fetch-err.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"http=y", "/tmp/fetch-err.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo(":refused");
 	}
@@ -5694,8 +5732,8 @@ class WasmLispCompilerIntegrationTest {
 		String program = "(print (rontolisp:fetch \"http://127.0.0.1:1/nope\"))";
 		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/fetch-noflag.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "/tmp/fetch-noflag.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+				"/tmp/fetch-noflag.component.wasm");
 		assertThat(result.getExitCode()).isNotZero();
 	}
 
@@ -5724,9 +5762,8 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-echo.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "-S", "tcp=y", "-S", "inherit-network=y",
-				"/tmp/tcp-echo.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"tcp=y", "-S", "inherit-network=y", "/tmp/tcp-echo.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("\"hello\"\n65\nnil");
 	}
@@ -5752,9 +5789,8 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> spliced = am.ik.rontolisp.eval.UsocketLibrary.process(LispReader.readAllFromString(program));
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(spliced);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/usocket-echo.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "-S", "tcp=y", "-S", "inherit-network=y",
-				"/tmp/usocket-echo.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"tcp=y", "-S", "inherit-network=y", "/tmp/usocket-echo.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("\"hello\"\nnil");
 	}
@@ -5766,9 +5802,8 @@ class WasmLispCompilerIntegrationTest {
 		String program = "(print (rontolisp:tcp-connect \"127.0.0.1\" 1))";
 		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-refused.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "-S", "tcp=y", "-S", "inherit-network=y",
-				"/tmp/tcp-refused.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"tcp=y", "-S", "inherit-network=y", "/tmp/tcp-refused.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("nil");
 	}
@@ -5782,8 +5817,8 @@ class WasmLispCompilerIntegrationTest {
 		String program = "(print (rontolisp:tcp-listen 0 \"127.0.0.1\"))";
 		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-noflag.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "/tmp/tcp-noflag.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+				"/tmp/tcp-noflag.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("nil");
 	}
@@ -5843,8 +5878,8 @@ class WasmLispCompilerIntegrationTest {
 			byte[] componentBytes = compileFetchComponent(program);
 			java.nio.file.Path wasm = tempDir.resolve("fetch.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);
-			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-					"component-model-more-async-builtins=y", "-S", "http=y", wasm.toString())
+			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S", "http=y",
+					wasm.toString())
 				.redirectErrorStream(true)
 				.start();
 			String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
@@ -5899,8 +5934,8 @@ class WasmLispCompilerIntegrationTest {
 			byte[] componentBytes = compileFetchComponent(program);
 			java.nio.file.Path wasm = tempDir.resolve("fetch-fresh-urls.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);
-			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-					"component-model-more-async-builtins=y", "-S", "http=y", wasm.toString())
+			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S", "http=y",
+					wasm.toString())
 				.redirectErrorStream(true)
 				.start();
 			String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
@@ -5940,9 +5975,8 @@ class WasmLispCompilerIntegrationTest {
 			byte[] componentBytes = compileFetchComponent(program);
 			java.nio.file.Path wasm = tempDir.resolve("fetch-export.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);
-			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-					"component-model-more-async-builtins=y", "-S", "http=y", "--invoke", "fetch-body(\"" + url + "\")",
-					wasm.toString())
+			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S", "http=y",
+					"--invoke", "fetch-body(\"" + url + "\")", wasm.toString())
 				.redirectErrorStream(true)
 				.start();
 			String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
@@ -8204,8 +8238,8 @@ class WasmLispCompilerIntegrationTest {
 				    (rontolisp:wit-error (e) (print :rejected))))
 				""");
 		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/wit-variant.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "-S", "http=y", "/tmp/wit-variant.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"http=y", "/tmp/wit-variant.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo(":get\n:post\n(:other . \"PATCH\")\n:rejected");
 	}
@@ -8287,8 +8321,8 @@ class WasmLispCompilerIntegrationTest {
 				    (print (> (getf (cdr addr) :port) 0))))
 				""");
 		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/wit-record.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "-S", "inherit-network=y", "/tmp/wit-record.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"inherit-network=y", "/tmp/wit-record.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("(:ipv4 (127 0 0 1))\nt");
 	}
@@ -8313,8 +8347,8 @@ class WasmLispCompilerIntegrationTest {
 				(print :unreachable)
 				""");
 		wasmtime.copyFileToContainer(Transferable.of(ok), "/tmp/wit-exit-ok.component.wasm");
-		ExecResult okResult = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "/tmp/wit-exit-ok.component.wasm");
+		ExecResult okResult = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+				"/tmp/wit-exit-ok.component.wasm");
 		assertThat(okResult.getExitCode()).as("stderr: %s", okResult.getStderr()).isZero();
 		assertThat(okResult.getStdout().trim()).isEqualTo(":bye");
 
@@ -8325,8 +8359,8 @@ class WasmLispCompilerIntegrationTest {
 				(print :unreachable)
 				""");
 		wasmtime.copyFileToContainer(Transferable.of(err), "/tmp/wit-exit-err.component.wasm");
-		ExecResult errResult = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "/tmp/wit-exit-err.component.wasm");
+		ExecResult errResult = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+				"/tmp/wit-exit-err.component.wasm");
 		assertThat(errResult.getExitCode()).isEqualTo(1);
 		assertThat(errResult.getStdout().trim()).isEqualTo(":bye");
 	}
@@ -8434,8 +8468,8 @@ class WasmLispCompilerIntegrationTest {
 				  (p:thing-get-single th))
 				""");
 		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/wit-exotic.component.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
-				"component-model-more-async-builtins=y", "/tmp/wit-exotic.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+				"/tmp/wit-exotic.component.wasm");
 		assertThat(result.getExitCode()).isNotZero();
 		assertThat(result.getStderr()).as("the bytes must reach the LINKER, i.e. validate")
 			.contains("was not found in the linker")
@@ -8513,7 +8547,7 @@ class WasmLispCompilerIntegrationTest {
 				        acc
 				        (read-all stream (concatenate 'string acc chunk)))))
 
-				(defun get-url (authority path)
+				(rontolisp:async-defun get-url (authority path)
 				  (let* ((trailers (http:trailers-future-new))
 				         (reqpair (http:request-new (http:fields-new) nil (car trailers) nil))
 				         (req (car reqpair)))
@@ -8543,7 +8577,7 @@ class WasmLispCompilerIntegrationTest {
 				        (http:transmit-future-write (cdr res) :ok)
 				        (list :status status :body text)))))
 
-				(let ((r (get-url "127.0.0.1:8086" "/hello")))
+				(let ((r (rontolisp:await (get-url "127.0.0.1:8086" "/hello"))))
 				  (print (getf r :status))
 				  (print (getf r :body)))
 				""");
@@ -8553,12 +8587,11 @@ class WasmLispCompilerIntegrationTest {
 		// connection
 		// refused would be reported as a wit-error, not as this test's answer.
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8086 /tmp/wit-fetch-backend.wasm >/tmp/wit-fetch-backend.log 2>&1 &"
+				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8086 /tmp/wit-fetch-backend.wasm >/tmp/wit-fetch-backend.log 2>&1 &"
 						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8086/hello >/dev/null && break; sleep 0.25; done;"
 						+ " curl -sf http://127.0.0.1:8086/hello >/dev/null"
 						+ " || { echo 'backend never came up' 1>&2; cat /tmp/wit-fetch-backend.log 1>&2; exit 1; };"
-						+ " wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y"
-						+ " /tmp/wit-fetch.component.wasm");
+						+ " wasmtime run -W gc=y -W exceptions=y -S http=y" + " /tmp/wit-fetch.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("200\n\"backend /hello\"");
 	}
@@ -8591,7 +8624,7 @@ class WasmLispCompilerIntegrationTest {
 				        acc
 				        (read-all stream (concatenate 'string acc chunk)))))
 
-				(defun post-url (authority path body)
+				(rontolisp:async-defun post-url (authority path body)
 				  ;; content-length goes on with fields.append -- its value (a field-value =
 				  ;; list<u8>) crosses as a byte string -- BEFORE the fields are handed to
 				  ;; request.new.
@@ -8625,19 +8658,18 @@ class WasmLispCompilerIntegrationTest {
 				          (http:transmit-future-write (cdr res) :ok)
 				          (list :status status :body text))))))
 
-				(let ((r (post-url "127.0.0.1:8087" "/echo" "hello from a lisp POST")))
+				(let ((r (rontolisp:await (post-url "127.0.0.1:8087" "/echo" "hello from a lisp POST"))))
 				  (print (getf r :status))
 				  (print (getf r :body)))
 				""");
 		wasmtime.copyFileToContainer(Transferable.of(backendBytes), "/tmp/wit-post-backend.wasm");
 		wasmtime.copyFileToContainer(Transferable.of(postBytes), "/tmp/wit-post.component.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8087 /tmp/wit-post-backend.wasm >/tmp/wit-post-backend.log 2>&1 &"
+				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8087 /tmp/wit-post-backend.wasm >/tmp/wit-post-backend.log 2>&1 &"
 						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8087/echo -d probe >/dev/null && break; sleep 0.25; done;"
 						+ " curl -sf http://127.0.0.1:8087/echo -d probe >/dev/null"
 						+ " || { echo 'backend never came up' 1>&2; cat /tmp/wit-post-backend.log 1>&2; exit 1; };"
-						+ " wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y"
-						+ " /tmp/wit-post.component.wasm");
+						+ " wasmtime run -W gc=y -W exceptions=y -S http=y" + " /tmp/wit-post.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("200\n\"echo hello from a lisp POST\"");
 	}

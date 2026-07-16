@@ -328,7 +328,7 @@ class WasmLispCompilerTest {
 		// under `wasmtime serve -W exceptions=y -S http=y` is exercised in
 		// WasmLispCompilerIntegrationTest.
 		List<LispVal> program = serveProgram("""
-				(defun h (r)
+				(rontolisp:async-defun h (r)
 				  (list :status 200
 				        :body (getf (rontolisp:await (rontolisp:fetch "http://127.0.0.1:9/")) :body)))
 				(rontolisp:http-handler 'h)

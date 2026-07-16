@@ -4,14 +4,14 @@ The `rontolisp` package provides outgoing HTTP modeled on the JavaScript
 `fetch` API, plus the JSON functions that pair naturally with it. None of
 these are part of Common Lisp; reference them with the `rontolisp:` qualifier
 (see [Packages](../reference/packages.md)). `rontolisp:fetch` starts a request
-and immediately returns a **promise**; the generic promise operations resolve
+and immediately returns a **future**; the generic future operations resolve
 or transform it, and `rontolisp:json-parse` / `rontolisp:json-stringify`
 convert between JSON documents and Lisp values.
 
 | Function | Purpose |
 |----------|---------|
 | [`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) | Start an HTTP request: `(rontolisp:fetch url &optional options)` |
-| [`rontolisp:await`](../reference/functions/rontolisp-await.md) | Block until a promise settles and return its value |
+| [`rontolisp:await`](../reference/special-forms/rontolisp-await.md) | Block until a future settles and return its value |
 | [`rontolisp:then`](../reference/functions/rontolisp-then.md) | Derive a new promise that applies a callback to the settled value |
 | [`rontolisp:promisep`](../reference/functions/rontolisp-promisep.md) | `t` if a value is a promise |
 | [`rontolisp:json-parse`](../reference/functions/rontolisp-json-parse.md) | Parse a JSON string into Lisp values |
@@ -30,9 +30,12 @@ convert between JSON documents and Lisp values.
 
 ## A first request
 
-`fetch` returns as soon as the request is in flight. Passing the promise to
+`fetch` returns as soon as the request is in flight. Passing the future to
 `rontolisp:await` blocks until the response arrives and yields the result
-property list `(:status <integer> :body <string> :headers <alist>)`:
+property list `(:status <integer> :headers <alist> :body <stream>)` — on the
+interpreter and the JVM backend `:body` is an asynchronous stream drained with
+[`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md); under
+`--component` it is currently still the whole body as one string:
 
 ```lisp
 (let ((p (rontolisp:fetch "https://httpbin.org/get")))
@@ -44,7 +47,8 @@ Reading the individual fields:
 ```console
 (let ((res (rontolisp:await (rontolisp:fetch "http://example.com/"))))
   (print (getf res :status))    ; => 200
-  (print (getf res :body))      ; => "<html>...</html>"
+  (print (rontolisp:await (rontolisp:read-all (getf res :body))))
+                                ; => "<html>...</html>"  (--component: (getf res :body))
   (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
 ```
 
@@ -164,7 +168,8 @@ with `json-parse`. Save the following as `fetch-post.lisp`:
                               (list :method "POST"
                                     :headers (list (cons "Content-Type" "application/json"))
                                     :body payload))))
-       (json (rontolisp:json-parse (getf res :body))))
+       (body (rontolisp:await (rontolisp:read-all (getf res :body))))
+       (json (rontolisp:json-parse body)))
   (print (getf res :status))
   (write-line (getf json :data)))
 ```
@@ -195,7 +200,7 @@ imports are unavailable):
 
 ```bash
 rontolisp fetch-post.lisp -o fetch-post.wasm --component
-wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y fetch-post.wasm
+wasmtime run -W gc=y -W exceptions=y -S http=y fetch-post.wasm
 ```
 
 For raw TCP instead of HTTP — or to implement the *server* side — see the

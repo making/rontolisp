@@ -72,13 +72,14 @@ compile error.
   retptr. The public defun is `(rontolisp:then (start ...) #'awaited)`, so the EXISTING
   promise machinery does the async part and awaiting SIGNALS the error arm
   (`rontolisp:wit-error`). Run flags:
-  `wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y`
-  (async LOWER is in the default feature set, so no stackful flag; `-S http=y` links the
+  `wasmtime run -W gc=y -W exceptions=y -S http=y`
+  (everything is base component-model-async, default-on; `-S http=y` links the
   host's `wasi:http`). Non-fetch components do not import `wasi:http`.
 - **serve (incoming)**: the handler implements `handler.handle: async func(request) ->
-  result<response, error-code>` as a stackful async lift; the response is delivered
+  result<response, error-code>` as a CALLBACK async lift (stub callback; the task's
+  blocking is the parked waitable-set.wait inside the wrappers); the response is delivered
   MID-TASK via `canon task.return` (the `<alias>-task-return` member kind) before the
-  body is streamed -- a stackful task's core return would otherwise complete the task
+  body is streamed -- the task's core return would otherwise complete the task
   before the host could read the contents stream (the built-ins are RENDEZVOUS,
   unbuffered). Serve and serve+fetch are ONE component shape over ONE import block
   (`import-block-http-server.bin`, regenerated from the 0.3 `uni-http-server` world);
@@ -86,8 +87,7 @@ compile error.
   block (`lowerServeIoFromBlock` emits every appendUserImports member kind against the
   block's instances) and an ADDITIONAL user `wit-import` (e.g. wasi:keyvalue) rides
   `appendUserImports` alongside. Run flags: `wasmtime serve -W gc=y -W exceptions=y
-  -W component-model-async-stackful=y -W component-model-more-async-builtins=y`
-  (stackful lift needs the stackful flag; the `service` world's client import is
+  ` -- no gated feature flags (the `service` world's client import is
   host-provided by default -- no `-S http=y`).
 - **Bodies (shared, symmetric)**: request and response are the same 0.3 shape
   (`contents: option<stream<u8>>` + a trailers future), so `%http-consume-text` /
@@ -190,7 +190,7 @@ here.
   **Headers are marshalled both directions** (`fields-copy-all` in,
   `fields.append` out). http.lisp uses `handler-case`, so a serve component is
   EH-mode. Run with `wasmtime serve -W gc=y -W exceptions=y
-  -W component-model-async-stackful=y -W component-model-more-async-builtins=y`.
+  `.
   An ADDITIONAL `rontolisp:wit-import` (e.g. `wasi:keyvalue`, so a handler's state
   lives in a real store) rides `appendUserImports` alongside the fixed surface.
   `adapter-http-server-p1.wat` is the preview1 bridge (instantiated BEFORE the
@@ -206,9 +206,11 @@ here.
   (wasmtime serve re-instantiates per request, so it never sees the growth).
   serve + `rontolisp:tcp-*` is still a compile error (no serve blob variant with
   wasi:sockets); Preview-1 WASM output is a compile error ("requires
-  --component"). Hosts: wasmtime 46+; wasmCloud's WASI P3 support is experimental
-  (`wasip3`-feature wash targeting an RC -- interop with final-`@0.3.0`
-  components unverified); jco cannot run the 0.3 async ABI; Spin has no wasm-GC.
+  --component"). Hosts: wasmtime 46+; wasmCloud
+  hosts it (released wash 2.5.2, `wash dev` with `dev.wasm_proposals:
+  [gc, exception-handling, component-model-async]` -- verified 2026-07-16 on
+  examples/wasmcloud/http-handler); jco cannot run the 0.3 async ABI; Spin has
+  no wasm-GC.
   Tests: the serve cases in `WasmLispCompilerIntegrationTest` (echo / big
   response / random-clock-print / keyvalue / fetch-inside-serve proxy, all
   through the `compileServeComponent` CLI-path helper).

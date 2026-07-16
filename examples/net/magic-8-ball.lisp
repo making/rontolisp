@@ -15,7 +15,7 @@
 ;;   java -jar $JAR examples/net/magic-8-ball.lisp -o Magic8Ball.class && java -cp $JAR:. Magic8Ball
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/magic-8-ball.lisp -o magic-8-ball.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y magic-8-ball.wasm
+;;     wasmtime serve -W gc=y -W exceptions=y magic-8-ball.wasm
 ;; Talk to it with:
 ;;   curl 'http://127.0.0.1:8080/?question=Will+rontolisp+run+everywhere'
 ;;   curl -X POST -d '{"question": "Should I deploy on Friday?"}' http://127.0.0.1:8080/magic-8

@@ -8,10 +8,12 @@
 ;; 0.3; random_get/clock_time_get/environ_* bridge wasi:random / wasi:clocks
 ;; (system-clock, renamed from 0.2's wall-clock) / wasi:cli/environment.
 ;;
-;; Straight-line synchronous code is fine: the whole component's `run` is lifted as a
-;; STACKFUL async export, so the synchronous stream.write / stream.read / future.read
-;; built-ins block cooperatively (they require the "more async builtins" feature) without
-;; the adapter needing a callback state machine.
+;; Straight-line synchronous code is fine WITHOUT any gated feature: the stream/future
+;; built-ins are the ASYNC (non-blocking) variants of base component-model-async, and a
+;; BLOCKED (-1) result parks the task on a blocking waitable-set.wait until the handle's
+;; completion event arrives (legal from any async-typed task under the base feature; only
+;; the synchronous built-in variants would need "more async builtins"). Each blocking
+;; wrapper below keeps the sync-looking signature, so the preview1 logic is unchanged.
 ;;
 ;; All scratch lives in page 5 (0x50000+), clear of rontolisp's data/heap (pages 0-3), its
 ;; environ scratch (page 3) and the canonical realloc heap (from 65536). The shared memory
@@ -25,6 +27,8 @@
 ;;   0x50060 file read-via-stream tuple {stream@0x50060, future@0x50064}
 ;;   0x50070 stdin read-via-stream tuple {stream@0x50070, future@0x50074}
 ;;   0x50080 stdin cache {flag@0x50080, stream@0x50084}
+;;   0x50090 waitable-set event scratch {waitable@0x50090, payload@0x50094}
+;;   0x5009c cached waitable-set handle (0 = not yet created)
 ;;   0x50100 fd table: 64 slots x 16 bytes {descriptor@0, read-stream@4, valid@12}
 ;; A preview1 file fd is 100 + slotIndex (so it never clashes with stdout=1 or dirfd=3).
 ;; Writes use append-via-stream (each fd_write is a full append cycle, so no per-fd write
@@ -48,18 +52,65 @@
   (import "w" "get-directories" (func $get_directories (param i32)))
   (import "w" "get-random-u64" (func $rand_u64 (result i64)))
   (import "w" "drop-desc" (func $drop_desc (param i32)))
-  ;; async canonical built-ins. stream<u8> is structural (one set); future built-ins are
-  ;; per-error-code-type: -cli for wasi:cli futures (stdout/stdin), -fs for wasi:filesystem
-  ;; futures (file read/append).
+  ;; async canonical built-ins (the non-blocking variants; BLOCKED completes through
+  ;; the waitable-set below). stream<u8> is structural (one set); future built-ins are
+  ;; per-error-code-type: -cli for wasi:cli futures (stdout/stdin), -fs for
+  ;; wasi:filesystem futures (file read/append).
   (import "w" "stream-new" (func $stream_new (result i64)))
-  (import "w" "stream-read" (func $stream_read (param i32 i32 i32) (result i32)))
-  (import "w" "stream-write" (func $stream_write (param i32 i32 i32) (result i32)))
+  (import "w" "stream-read" (func $stream_read_a (param i32 i32 i32) (result i32)))
+  (import "w" "stream-write" (func $stream_write_a (param i32 i32 i32) (result i32)))
   (import "w" "stream-drop-r" (func $stream_drop_r (param i32)))
   (import "w" "stream-drop-w" (func $stream_drop_w (param i32)))
-  (import "w" "future-read-cli" (func $future_read_cli (param i32 i32) (result i32)))
+  (import "w" "future-read-cli" (func $future_read_cli_a (param i32 i32) (result i32)))
   (import "w" "future-drop-cli" (func $future_drop_cli (param i32)))
-  (import "w" "future-read-fs" (func $future_read_fs (param i32 i32) (result i32)))
+  (import "w" "future-read-fs" (func $future_read_fs_a (param i32 i32) (result i32)))
   (import "w" "future-drop-fs" (func $future_drop_fs (param i32)))
+  (import "w" "waitable-set-new" (func $ws_new (result i32)))
+  (import "w" "waitable-join" (func $w_join (param i32 i32)))
+  (import "w" "waitable-set-wait" (func $ws_wait (param i32 i32) (result i32)))
+
+  ;; The adapter's one waitable-set, created on first blocking completion.
+  (func $ensure_ws (result i32)
+    (if (i32.eqz (i32.load (i32.const 0x5009c)))
+      (then (i32.store (i32.const 0x5009c) (call $ws_new))))
+    (i32.load (i32.const 0x5009c)))
+
+  ;; Parks the task until the given handle reports its completion event; returns the
+  ;; event payload (the packed (count << 4) | status of the finished operation).
+  (func $await_waitable (param $h i32) (result i32)
+    (call $w_join (local.get $h) (call $ensure_ws))
+    (block $got
+      (loop $l
+        (drop (call $ws_wait (call $ensure_ws) (i32.const 0x50090)))
+        (br_if $got (i32.eq (i32.load (i32.const 0x50090)) (local.get $h)))
+        (br $l)))
+    (i32.load (i32.const 0x50094)))
+
+  ;; Blocking wrappers with the sync-looking signatures the preview1 logic uses.
+  (func $stream_read (param $h i32) (param $ptr i32) (param $len i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $stream_read_a (local.get $h) (local.get $ptr) (local.get $len)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $h)))))
+    (local.get $ret))
+  (func $stream_write (param $h i32) (param $ptr i32) (param $len i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $stream_write_a (local.get $h) (local.get $ptr) (local.get $len)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $h)))))
+    (local.get $ret))
+  (func $future_read_cli (param $f i32) (param $ptr i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $future_read_cli_a (local.get $f) (local.get $ptr)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $f)))))
+    (local.get $ret))
+  (func $future_read_fs (param $f i32) (param $ptr i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $future_read_fs_a (local.get $f) (local.get $ptr)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $f)))))
+    (local.get $ret))
 
   ;; Return the first preopened directory descriptor (cached).
   (func $ensure_preopen (result i32)

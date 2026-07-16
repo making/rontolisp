@@ -222,10 +222,9 @@ class ComponentWriterTest {
 
 	// --- async canonical ABI (WASI 0.3 / Preview 3) ---------------------------------
 	// Golden bytes captured from `wasm-tools dump` of components validated with
-	// `wasm-tools validate -f component-model -f cm-async -f cm-async-stackful
-	// -f cm-more-async-builtins` and executed with `wasmtime run -W
-	// component-model-async=y -W component-model-async-stackful=y
-	// -W component-model-more-async-builtins=y -W gc=y` (printed "hello from wasi 0.3").
+	// `wasm-tools validate -f component-model -f cm-async` and executed with
+	// `wasmtime run -W gc=y` (printed "hello from wasi 0.3"); nothing needs the
+	// more-async-builtins or stackful-lift features anymore.
 
 	@Test
 	void definedStreamFutureResultTypeEncodings() {
@@ -288,6 +287,39 @@ class ComponentWriterTest {
 		// Lower { func_index: 0, options: [Async, Memory(0), Realloc(0), UTF8] } --
 		// the async option is tag 06.
 		assertThat(hex(ComponentWriter.canonLowerAsyncMemoryReallocUtf8(0, 0, 0))).isEqualTo("01000004060300040000");
+	}
+
+	@Test
+	void callbackAsyncAbiEncodings() {
+		// Golden bytes from `wasm-tools parse` + `dump` of the hand-written
+		// callback-ABI reference component (2026-07-16, validated with
+		// `wasm-tools validate -f component-model,cm-async` ONLY and run on wasmtime 46
+		// with NO feature flags -- base component-model-async, no more-async-builtins,
+		// no stackful lifts):
+		// StreamRead { ty: 0, options: [Async, Memory(0)] } = 0f 00 02 06 03 00
+		assertThat(hex(ComponentWriter.canonStreamReadAsync(0, 0))).isEqualTo("0f0002060300");
+		// StreamWrite { ty: 0, options: [Async, Memory(1)] } = 10 00 02 06 03 01
+		assertThat(hex(ComponentWriter.canonStreamWriteAsync(0, 1))).isEqualTo("100002060301");
+		// FutureRead { ty: 1, options: [Async, Memory(2)] } = 16 01 02 06 03 02
+		assertThat(hex(ComponentWriter.canonFutureReadAsync(1, 2))).isEqualTo("160102060302");
+		assertThat(hex(ComponentWriter.canonFutureReadAsync(1, 0, 0))).isEqualTo("1601030603000400");
+		// FutureWrite { ty: 1, options: [Async, Memory(3)] } = 17 01 02 06 03 03
+		assertThat(hex(ComponentWriter.canonFutureWriteAsync(1, 3))).isEqualTo("170102060303");
+		assertThat(hex(ComponentWriter.canonFutureWriteAsyncUtf8(1, 0))).isEqualTo("17010306030000");
+		// ContextGet { ty: I32, slot: 0 } = 0a 7f 00; ContextSet = 0b 7f 00
+		assertThat(hex(ComponentWriter.canonContextGet(0))).isEqualTo("0a7f00");
+		assertThat(hex(ComponentWriter.canonContextSet(0))).isEqualTo("0b7f00");
+		// WaitableSetPoll { cancellable: false, memory: 4 } = 21 00 04
+		assertThat(hex(ComponentWriter.canonWaitableSetPoll(4))).isEqualTo("210004");
+		// StreamCancelRead { ty: 0, async_: false } = 11 00 00
+		assertThat(hex(ComponentWriter.canonStreamCancelRead(0))).isEqualTo("110000");
+		// FutureCancelRead { ty: 1, async_: false } = 18 01 00
+		assertThat(hex(ComponentWriter.canonFutureCancelRead(1))).isEqualTo("180100");
+		// Lift { core_func_index: 9, type_index: 2,
+		// options: [Memory(5), UTF8, Async, Callback(10)] }
+		// = 00 00 09 04 03 05 00 06 07 0a 02 -- the callback option is tag 07
+		assertThat(hex(ComponentWriter.canonLiftMemoryUtf8AsyncCallback(9, 2, 5, 10)))
+			.isEqualTo("0000090403050006070a02");
 	}
 
 	@Test

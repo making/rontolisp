@@ -16,7 +16,7 @@
 ;;   java -jar $JAR examples/net/http-handler.lisp -o App.class && java -cp $JAR:. App
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/http-handler.lisp -o app.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
+;;     wasmtime serve -W gc=y -W exceptions=y app.wasm
 ;; Talk to it with:  curl http://127.0.0.1:8080/hello
 
 (defun handle (request)

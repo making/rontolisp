@@ -30,7 +30,7 @@
 ;;   java -jar $JAR examples/net/linalg-api.lisp -o LinalgApi.class && java -cp $JAR:. LinalgApi
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/linalg-api.lisp -o linalg-api.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y linalg-api.wasm
+;;     wasmtime serve -W gc=y -W exceptions=y linalg-api.wasm
 ;; Talk to it with:
 ;;   curl -X POST -d '{"a": [[2,1],[1,3]], "b": [5,10]}' http://127.0.0.1:8080/solve
 ;;   curl -X POST -d '{"degree": 1, "points": [[0,1],[1,2],[2,5],[3,5]]}' http://127.0.0.1:8080/fit

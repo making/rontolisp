@@ -60,7 +60,7 @@ GET /hello
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
+$ wasmtime serve -W gc=y -W exceptions=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -85,7 +85,11 @@ serve コンポーネントのハンドラ内でも `random`、時刻系の組�
 — serve と serve+fetch は 1 つのコンポーネント形状で、その
 `wasi:http/client@0.3.0` インポートは `wasmtime serve` がデフォルトで提供します
 — したがってプロキシ型のハンドラも同じ serve コマンドですべてのバックエンドで
-動作します。
+動作します。await するハンドラ（たとえば serve 内の fetch）は非同期関数であり、
+`defun` ではなく
+[`rontolisp:async-defun`](../special-forms/rontolisp-async-defun.md)
+で定義しなければなりません: `rontolisp:await` は非同期の本体の中でのみ
+合法です。
 
 ハンドラは [`rontolisp:wit-import`](rontolisp-wit-import.md)
 で自前の WIT インターフェースを呼ぶこともできます。serve されるコンポーネントは
@@ -95,10 +99,12 @@ serve コンポーネントのハンドラ内でも `random`、時刻系の組�
 毎回空で読み戻されますが、`wasi:keyvalue` のストアはその外側に生きています。
 
 serve コンポーネントは非同期の `wasi:http@0.3.0`（`service` world）を
-ターゲットとし、今日それをホストするのは wasmtime 46+ です。wasmCloud は
-実験的な WASI P3 サポートを持っています（0.3 のリリース候補をターゲットとした
-`wash` の `wasip3` フィーチャービルド — final-`@0.3.0` コンポーネントとの
-相互運用はまだ検証されていません）。jco は 0.3 の非同期 ABI を実装しておらず、
+ターゲットとします。ハンドラは wasmtime 46+ でデフォルト有効な基本の
+コンポーネントモデル非同期 ABI 上のコールバック非同期リフトであり、
+`wasmtime serve` にゲートされた機能フラグは不要です。wasmCloud もホスト
+します: リリース版の `wash`（2.5.2）が、
+`dev.wasm_proposals: [gc, exception-handling, component-model-async]` を
+指定した `wash dev` で実行します。jco は 0.3 の非同期 ABI を実装しておらず、
 Spin の組み込み wasmtime は rontolisp のすべてのコンポーネントが必要とする
 WebAssembly GC プロポーザルを有効化していません。
 

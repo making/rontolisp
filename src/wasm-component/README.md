@@ -9,7 +9,9 @@ component-model `stream<u8>` / `future<T>` types and the async canonical ABI. ro
 keeps its Preview 1 core module unchanged and an **adapter** core module implements the
 eight `wasi_snapshot_preview1` functions over WASI 0.3, driving the `stream.*` / `future.*`
 canon built-ins. The component's `wasi:cli/run@0.3.0` export (an `async func`) is lifted as
-a **stackful** async export, so the synchronous stream/future built-ins block cooperatively
+an async-typed export, and the adapters call the ASYNC (non-blocking) stream/future
+built-ins, parking on a blocking `waitable-set.wait` when one reports BLOCKED -- all of
+base `component-model-async`, so no gated wasmtime feature is needed
 and the adapter stays straight-line code.
 
 This directory is **not** under `src/main/resources`, so nothing here is packaged into the
@@ -78,7 +80,7 @@ and `WitOracleE2eTest` (live `wasm-tools` diff; skipped when the binary is not o
 Run a generated component with:
 
 ```bash
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . prog.wasm
+wasmtime run -W gc=y --dir . prog.wasm
 ```
 
 ## What the blobs declare, and how to see it
@@ -106,8 +108,8 @@ import wasi:cli/stderr@0.3.0;          // write-via-stream (fd 2, for warn); app
 ```
 
 `uni.wit` declares **imports only**. The `wasi:cli/run@0.3.0` export is an `async func`,
-which `wasm-tools component new` cannot wire from a core module, so the export (the async
-stackful lift of the rontolisp core's `run`) is emitted programmatically by
+which `wasm-tools component new` cannot wire from a core module, so the export (the
+async-typed lift of the rontolisp core's `run`) is emitted programmatically by
 `WasmComponentBuilder.build`.
 
 ## Helper core modules (`.wat` is the source, `.wasm` is generated)
@@ -159,8 +161,8 @@ function. If `uni.wit` / `core.wat` change, re-run `regen.sh`, re-derive those c
 from a fresh dump, and re-run the test suite. Validate end to end with:
 
 ```bash
-wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins prog.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . prog.wasm
+wasm-tools validate -f component-model -f cm-async prog.wasm
+wasmtime run -W gc=y --dir . prog.wasm
 ```
 
 ## Sockets variant (`rontolisp:tcp-*`) — pure WASI 0.3
@@ -208,11 +210,12 @@ imports; its `--emit-wit` world shows `import wasi:http/types@0.3.0;` +
 async-lowered (the `async` canonical option) and awaited through a waitable-set — which is
 exactly what the promise `fetch` returns drives; the request/response bodies flow through
 the `stream<u8>` / `future<T>` built-ins bound off `http.wit`'s transparent type aliases.
-The user-facing API is unchanged (`fetch` returns an `await`-able promise, same options,
+The user-facing API is unchanged (`fetch` returns an `await`-able future, same options,
 same response plist) except that a transport failure now SIGNALS `rontolisp:wit-error` at
-await time, like the interpreter and the JVM. Run a fetch component with `-S http=y` in
-addition to the async flags (no `-W component-model-async-stackful=y` needed: only the
-serve variant's async LIFT wants it). Mechanics: `../../.kb/fetch-http.md`.
+await time, like the interpreter and the JVM. Run a fetch component with
+`wasmtime run -W gc=y -W exceptions=y -S http=y` -- everything is base
+`component-model-async` (default-on in wasmtime 46+), so no gated feature flag is needed.
+Mechanics: `../../.kb/fetch-http.md`.
 
 What stays from the old 0.2-era set:
 
@@ -269,9 +272,9 @@ A program using `rontolisp:http-handler` compiles to the http-server variant: a
 `wasi:http/handler@0.3.0` component for `wasmtime serve` (wasmtime 46+). ONE shape serves
 plain serve AND serve+fetch — the 0.3 `service` world always imports `client`, so the
 block declares it either way and a handler that never fetches simply binds no `send`. Run
-with `wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y
--W component-model-more-async-builtins=y` (the stackful flag is what the async LIFT
-needs). The blob set is:
+with `wasmtime serve -W gc=y -W exceptions=y` (the handle export is a CALLBACK async
+lift against a stub callback; the task's blocking is the parked `waitable-set.wait`
+inside the wrappers, so neither gated wasmtime feature is needed). The blob set is:
 
 ```
 src/wasm-component/
@@ -299,9 +302,10 @@ filesystem in the service world).
 `WasmServeComponentBuilder.build` wires mem -> bridge -> core, lowers the fixed
 `wasi:http` surface FROM the import block (sync decls, the async-lowered `send`, drops,
 the alias-derived built-ins, `canon task.return`, the waitable-set builtins), and lifts
-the core's `handle` export as a **stackful async** function
+the core's `handle` export as a **callback async** function
 (`async func(request: own<request>) -> result<own<response>, error-code>`, canonical
-options `memory`/`utf8`/`async`): the core signature is `[i32] -> []` and the response is
+options `memory`/`utf8`/`async`/`callback` against the bridge's stub callback): the core
+signature is `[i32] -> [i32 packed-code]` (always `EXIT`) and the response is
 delivered mid-task through the task-return built-in — 0.3's replacement for 0.2's
 `response-outparam.set`-before-body — after which the body write rendezvouses with the
 host's eager read. The exported function type is built over the block's NAMED

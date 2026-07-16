@@ -61,7 +61,7 @@ It also compiles to a **WASI HTTP component** that runs under
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
+$ wasmtime serve -W gc=y -W exceptions=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -70,23 +70,24 @@ GET /hello
 There the module exports `wasi:http/handler@0.3.0` (the async WASI 0.3 HTTP
 world) and the host owns the socket, so the `port` argument is ignored. The
 flags enable what the component actually uses: the WebAssembly GC proposal
-(`-W gc=y`), the exception-handling proposal (`-W exceptions=y`, which the
-Lisp-written HTTP glue uses to detect end-of-body), and the component-model
-async ABI (`-W component-model-async-stackful=y` — the handler runs as a
-stackful async task — plus `-W component-model-more-async-builtins=y` for the
-`stream<u8>`/`future<T>` body built-ins).
+(`-W gc=y`) and the exception-handling proposal (`-W exceptions=y`, which the
+Lisp-written HTTP glue uses to detect end-of-body). The handler is lifted as a
+**callback async** export, and the `stream<u8>`/`future<T>` body built-ins are
+the asynchronous variants that park on a blocking wait when a read or write
+reports BLOCKED — all of it part of the base component-model async ABI, which
+is default-on in wasmtime 46+, so no gated feature flags are needed. The
+response is still delivered mid-task through `canon task.return`, and the body
+streams after it.
 
 ## Other WASI HTTP runtimes
 
-The component asks its host for `wasi:http` **0.3** (async) plus wasm-GC, and
-today that combination is hosted by wasmtime 46+. **wasmCloud** ships
-experimental WASI P3 support behind a `wasip3` feature build of `wash`
-targeting a 0.3 release candidate — see
-[wasmCloud's announcement](https://wasmcloud.com/blog/wasi-p3-on-wasmcloud/);
-whether that RC build links final-`@0.3.0` components is not yet verified.
-**jco** and **Spin** cannot run it yet: jco does not implement the 0.3 async
-ABI, and Spin's embedded wasmtime does not enable the WebAssembly GC proposal
-that every rontolisp component needs.
+The component asks its host for `wasi:http` **0.3** (async) plus wasm-GC.
+wasmtime 46+ serves it, and so does **wasmCloud**: the released `wash` (2.5.2)
+runs it with `wash dev`, given
+`dev.wasm_proposals: [gc, exception-handling, component-model-async]` in the
+project manifest. **jco** and **Spin** cannot run it yet: jco does not
+implement the 0.3 async ABI, and Spin's embedded wasmtime does not enable the
+WebAssembly GC proposal that every rontolisp component needs.
 
 ## Query strings
 
@@ -118,10 +119,13 @@ Hello, world!
 ## Calling other services from a handler
 
 [`rontolisp:fetch`](http-fetch.md) works inside a served handler on all three
-backends, enabling the classic proxy / aggregator shape:
+backends, enabling the classic proxy / aggregator shape. A handler that awaits
+is an asynchronous function, so define it with
+[`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md)
+instead of `defun`:
 
 ```console
-(defun handle (request)
+(rontolisp:async-defun handle (request)
   (let ((res (rontolisp:await
               (rontolisp:fetch "http://127.0.0.1:9000/upstream"))))
     (list :status (getf res :status)
@@ -137,7 +141,7 @@ the same component — serve and serve+fetch are one component shape, importing
 
 ```console
 $ rontolisp proxy.lisp -o proxy.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y proxy.wasm
+$ wasmtime serve -W gc=y -W exceptions=y proxy.wasm
 ```
 
 A complete example is
@@ -177,7 +181,7 @@ component imports it alongside its fixed `wasi:http` surface:
 
 ```console
 $ rontolisp page-hits-server.lisp -o server.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y server.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
 ```
 
 The same source runs on the interpreter and the JVM, where a

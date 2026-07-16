@@ -187,8 +187,8 @@ public final class HttpLibrary {
 
 	private static @Nullable String defunName(LispVal form) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
-				&& LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons rest
-				&& rest.car() instanceof LispSymbol name) {
+				&& (LispNames.DEFUN.equals(head.name()) || LispNames.ASYNC_DEFUN_QUALIFIED.equals(head.name()))
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
 			return name.name();
 		}
 		return null;

@@ -1144,6 +1144,35 @@ cases:
       (2 4 6)
       42
       (ci-pkg::ci-priv ci-pkg:ci-greet ci-pkg:ci-twice)
+  - name: async-defun-await-futurep
+    source: |
+      (rontolisp:async-defun ci-async-add (a b) (print "ci-async-in") (+ a b))
+      (print "ci-async-before")
+      (setq ci-async-f (ci-async-add 20 22))
+      (print "ci-async-after")
+      (print (rontolisp:futurep ci-async-f))
+      (print (rontolisp:futurep 42))
+      (print (rontolisp:await ci-async-f))
+      (print (rontolisp:await ci-async-f))
+      (print ci-async-f)
+      (rontolisp:async-defun ci-async-inner () 10)
+      (rontolisp:async-defun ci-async-outer () (+ (rontolisp:await (ci-async-inner)) 1))
+      (print (rontolisp:await (ci-async-outer)))
+      (print (rontolisp:await (funcall (rontolisp:async-lambda (x) (* x 2)) 21)))
+      (rontolisp:async-defun ci-async-failing () (error "ci-boom"))
+      (print (handler-case (rontolisp:await (ci-async-failing)) (error (e) "ci-caught")))
+    expected: |
+      "ci-async-before"
+      "ci-async-in"
+      "ci-async-after"
+      t
+      nil
+      42
+      42
+      #<FUTURE>
+      11
+      42
+      "ci-caught"
   - name: promise-generic-await-then-promisep
     source: |
       (print (rontolisp:await 42))
@@ -1165,7 +1194,7 @@ cases:
       nil
       nil
       t
-      #<PROMISE>
+      #<FUTURE>
       42
       43
       1

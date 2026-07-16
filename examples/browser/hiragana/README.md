@@ -139,7 +139,7 @@ java -jar $JAR infer.lisp -o /tmp/infer-p1.wasm && \
 
 # 4. WASM コンポーネント (WASI 0.3)
 java -jar $JAR infer.lisp -o /tmp/infer-c.wasm --component && \
-  wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . /tmp/infer-c.wasm < samples/u.txt
+  wasmtime run -W gc=y --dir . /tmp/infer-c.wasm < samples/u.txt
 ```
 
 4 バックエンドとも 46 個の参考字形をすべて正しく分類します（WASM は浮動小数の表示桁数だけが

@@ -25,6 +25,9 @@ and a runnable example you can evaluate in your browser.
 | `defconstant` | `(defconstant name value)` | Like `defparameter` (rontolisp does not enforce constancy). Returns the name |
 | `function` | `(function name)` or `#'name` | Look up a function in the function namespace and return it as a value |
 | `defpackage` | `(defpackage name (:use ...) (:export ...))` | Define a new package (a top-level, read/compile-time directive; `:use` and `:export` clauses only). Returns the name |
+| `rontolisp:async-defun` | `(rontolisp:async-defun name (params...) body...)` | Define an asynchronous function: calling it starts the body eagerly and returns a future that settles with the body's value (or error) |
+| `rontolisp:async-lambda` | `(rontolisp:async-lambda (params...) body...)` | Anonymous asynchronous function; each invocation returns a future |
+| `rontolisp:await` | `(rontolisp:await value)` | Suspend the current asynchronous function until a future settles and return its value; a non-future passes through unchanged. Legal only in `async-defun`/`async-lambda` bodies and at top level |
 
 rontolisp is a **Lisp-2** like Common Lisp: functions and variables live in separate
 namespaces. A bare symbol evaluates as a variable (`car` alone is an unbound-variable

@@ -17,10 +17,12 @@
 ;;                       nonzero open errno, matching the run-variant failure mode)
 ;;   fd_close         -> errno 0
 ;;
-;; Scratch: 0x50000-0x5001F, TRANSIENT only -- each cell is written and read back within
-;; a single export call.
+;; Scratch: 0x50000-0x5002F -- each cell but the waitable-set handle is written and
+;; read back within a single export call.
 ;;   0x50000  future-read-cli result (result<_, error-code>)
 ;;   0x50010  system-clock now instant (seconds s64 @0x50010, nanoseconds u32 @0x50018)
+;;   0x50020  waitable-set event scratch {waitable@0x50020, payload@0x50024}
+;;   0x5002c  cached waitable-set handle (0 = not yet created)
 (module
   (import "mem" "memory" (memory (;0;) 16))
   ;; Lowered wasi 0.3 functions + async built-ins (grouped under "w" by the builder).
@@ -30,10 +32,52 @@
   (import "w" "stdout-write" (func $stdout_write (param i32) (result i32)))
   (import "w" "stderr-write" (func $stderr_write (param i32) (result i32)))
   (import "w" "stream-new" (func $stream_new (result i64)))
-  (import "w" "stream-write" (func $stream_write (param i32 i32 i32) (result i32)))
+  (import "w" "stream-write" (func $stream_write_a (param i32 i32 i32) (result i32)))
   (import "w" "stream-drop-w" (func $stream_drop_w (param i32)))
-  (import "w" "future-read-cli" (func $future_read_cli (param i32 i32) (result i32)))
+  (import "w" "future-read-cli" (func $future_read_cli_a (param i32 i32) (result i32)))
   (import "w" "future-drop-cli" (func $future_drop_cli (param i32)))
+  (import "w" "waitable-set-new" (func $ws_new (result i32)))
+  (import "w" "waitable-join" (func $w_join (param i32 i32)))
+  (import "w" "waitable-set-wait" (func $ws_wait (param i32 i32) (result i32)))
+
+  ;; The bridge's one waitable-set, created on first blocking completion. Event
+  ;; scratch {waitable@0x50020, payload@0x50024}; the cached set handle at 0x5002c.
+  (func $ensure_ws (result i32)
+    (if (i32.eqz (i32.load (i32.const 0x5002c)))
+      (then (i32.store (i32.const 0x5002c) (call $ws_new))))
+    (i32.load (i32.const 0x5002c)))
+
+  ;; Parks the task until the given handle reports its completion event; returns the
+  ;; event payload. Legal from the callback-lifted handle task under base
+  ;; component-model-async.
+  (func $await_waitable (param $h i32) (result i32)
+    (call $w_join (local.get $h) (call $ensure_ws))
+    (block $got
+      (loop $l
+        (drop (call $ws_wait (call $ensure_ws) (i32.const 0x50020)))
+        (br_if $got (i32.eq (i32.load (i32.const 0x50020)) (local.get $h)))
+        (br $l)))
+    (i32.load (i32.const 0x50024)))
+
+  ;; Blocking wrappers over the async (non-blocking) built-ins.
+  (func $stream_write (param $h i32) (param $ptr i32) (param $len i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $stream_write_a (local.get $h) (local.get $ptr) (local.get $len)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $h)))))
+    (local.get $ret))
+  (func $future_read_cli (param $f i32) (param $ptr i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $future_read_cli_a (local.get $f) (local.get $ptr)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $f)))))
+    (local.get $ret))
+
+  ;; The stub callback of the callback-lifted handle export: the handle task never
+  ;; returns WAIT (its blocking is the parked waitable-set.wait above), so the host
+  ;; never invokes this.
+  (func $async_cb (export "async_cb") (param i32 i32 i32) (result i32)
+    unreachable)
 
   ;; fd_write(fd, iov, cnt, nwritten) -> errno. fd 1/2 only; one stream per call, every
   ;; iovec pushed through it, EOF by dropping the writable end, then the write future

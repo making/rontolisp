@@ -1884,6 +1884,31 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void asyncAwaitSurfaceIsRejected() {
+		// no futures, no suspension, no boxed values to represent them
+		assertThatThrownBy(() -> compile("""
+				(rontolisp:async-defun f () 1)
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rontolisp:async-defun is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:await 1))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rontolisp:await is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:make-stream))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rontolisp:make-stream is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:wait-for 10))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rontolisp:wait-for is not supported with --no-gc");
+	}
+
+	@Test
 	void componentRejectsAsyncExport() {
 		// :async (todo 92 Tier 3) is the GC component's stackful-async lift; the
 		// adapter-free reactor component has no async machinery, so it is a clear error

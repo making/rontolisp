@@ -45,6 +45,8 @@
 ;;   0x500A0 tcp receive tuple {stream@0x500A0, future@0x500A4}
 ;;   0x500B0 accepted tcp-socket handle scratch
 ;;   0x500C0 parsed IPv4 address {a@0x500C0, b@0x500C4, c@0x500C8, d@0x500CC}
+;;   0x500D0 waitable-set event scratch {waitable@0x500D0, payload@0x500D4}
+;;   0x500DC cached waitable-set handle (0 = not yet created)
 ;;   0x50100 fd table: 64 slots x 16 bytes {descriptor@0, read-stream@4, valid@12}
 ;;   0x50500 socket table: 32 slots x 16 bytes
 ;;           {tcp-socket@0, recv-or-listen-stream@4, send-tx@8, kind@12}
@@ -72,18 +74,22 @@
   (import "w" "get-directories" (func $get_directories (param i32)))
   (import "w" "get-random-u64" (func $rand_u64 (result i64)))
   (import "w" "drop-desc" (func $drop_desc (param i32)))
-  ;; async canonical built-ins. stream<u8> is structural (one set); future built-ins are
-  ;; per-error-code-type: -cli for wasi:cli futures (stdout/stdin), -fs for wasi:filesystem
-  ;; futures (file read/append).
+  ;; async canonical built-ins (the non-blocking variants; BLOCKED completes through
+  ;; the waitable-set below -- see adapter.wat, same pattern). stream<u8> is structural
+  ;; (one set); future built-ins are per-error-code-type: -cli for wasi:cli futures
+  ;; (stdout/stdin), -fs for wasi:filesystem futures (file read/append).
   (import "w" "stream-new" (func $stream_new (result i64)))
-  (import "w" "stream-read" (func $stream_read (param i32 i32 i32) (result i32)))
-  (import "w" "stream-write" (func $stream_write (param i32 i32 i32) (result i32)))
+  (import "w" "stream-read" (func $stream_read_a (param i32 i32 i32) (result i32)))
+  (import "w" "stream-write" (func $stream_write_a (param i32 i32 i32) (result i32)))
   (import "w" "stream-drop-r" (func $stream_drop_r (param i32)))
   (import "w" "stream-drop-w" (func $stream_drop_w (param i32)))
-  (import "w" "future-read-cli" (func $future_read_cli (param i32 i32) (result i32)))
+  (import "w" "future-read-cli" (func $future_read_cli_a (param i32 i32) (result i32)))
   (import "w" "future-drop-cli" (func $future_drop_cli (param i32)))
-  (import "w" "future-read-fs" (func $future_read_fs (param i32 i32) (result i32)))
+  (import "w" "future-read-fs" (func $future_read_fs_a (param i32 i32) (result i32)))
   (import "w" "future-drop-fs" (func $future_drop_fs (param i32)))
+  (import "w" "waitable-set-new" (func $ws_new (result i32)))
+  (import "w" "waitable-join" (func $w_join (param i32 i32)))
+  (import "w" "waitable-set-wait" (func $ws_wait (param i32 i32) (result i32)))
   ;; lowered wasi:sockets@0.3.0 tcp-socket functions. bind/connect take the flattened
   ;; ip-socket-address variant (disc + the 11-slot ipv6 arm = 12 i32s) plus self and the
   ;; retptr; send returns the future handle directly; receive/listen/create/local-addr
@@ -99,9 +105,59 @@
   ;; stream.drop-readable of the stream<tcp-socket> accept stream (4-byte handles), and
   ;; future.drop-readable of the sockets future<result<_, error-code>>.
   (import "w" "drop-tcp" (func $drop_tcp (param i32)))
-  (import "w" "accept-read" (func $accept_read (param i32 i32 i32) (result i32)))
+  (import "w" "accept-read" (func $accept_read_a (param i32 i32 i32) (result i32)))
   (import "w" "accept-drop-r" (func $accept_drop_r (param i32)))
   (import "w" "future-drop-sock" (func $future_drop_sock (param i32)))
+
+  ;; The adapter's one waitable-set, created on first blocking completion. Event
+  ;; scratch {waitable@0x500D0, payload@0x500D4}; the cached set handle at 0x500DC.
+  (func $ensure_ws (result i32)
+    (if (i32.eqz (i32.load (i32.const 0x500DC)))
+      (then (i32.store (i32.const 0x500DC) (call $ws_new))))
+    (i32.load (i32.const 0x500DC)))
+
+  ;; Parks the task until the given handle reports its completion event; returns the
+  ;; event payload (the packed (count << 4) | status of the finished operation).
+  (func $await_waitable (param $h i32) (result i32)
+    (call $w_join (local.get $h) (call $ensure_ws))
+    (block $got
+      (loop $l
+        (drop (call $ws_wait (call $ensure_ws) (i32.const 0x500D0)))
+        (br_if $got (i32.eq (i32.load (i32.const 0x500D0)) (local.get $h)))
+        (br $l)))
+    (i32.load (i32.const 0x500D4)))
+
+  ;; Blocking wrappers with the sync-looking signatures the preview1 logic uses.
+  (func $stream_read (param $h i32) (param $ptr i32) (param $len i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $stream_read_a (local.get $h) (local.get $ptr) (local.get $len)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $h)))))
+    (local.get $ret))
+  (func $stream_write (param $h i32) (param $ptr i32) (param $len i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $stream_write_a (local.get $h) (local.get $ptr) (local.get $len)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $h)))))
+    (local.get $ret))
+  (func $future_read_cli (param $f i32) (param $ptr i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $future_read_cli_a (local.get $f) (local.get $ptr)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $f)))))
+    (local.get $ret))
+  (func $future_read_fs (param $f i32) (param $ptr i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $future_read_fs_a (local.get $f) (local.get $ptr)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $f)))))
+    (local.get $ret))
+  (func $accept_read (param $h i32) (param $ptr i32) (param $len i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $accept_read_a (local.get $h) (local.get $ptr) (local.get $len)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $h)))))
+    (local.get $ret))
 
   ;; Return the first preopened directory descriptor (cached).
   (func $ensure_preopen (result i32)

@@ -134,13 +134,13 @@ The same directive compiles into four different host contracts depending on the
 
 | | GC core module (default / `--no-wasi`) | GC `--component` | `--no-gc` core module | `--no-gc --component` |
 | --- | --- | --- | --- | --- |
-| Host requirements | wasm-GC engine (`wasmtime -W gc`, Node 22+, current browsers) | wasmtime 46+ (`-W gc=y -W component-model-more-async-builtins=y`) or a component host with wasm-GC + JSPI (a [browser via jco](#running-a-component-in-a-browser-jco) loads and computes, but cannot print yet) | **any** WebAssembly engine | any component-model host, **no flags** — including a [browser via jco](#running-a-component-in-a-browser-jco), with no dependencies at all |
+| Host requirements | wasm-GC engine (`wasmtime -W gc`, Node 22+, current browsers) | wasmtime 46+ (`-W gc=y`) or a component host with wasm-GC + JSPI (a [browser via jco](#running-a-component-in-a-browser-jco) loads and computes, but cannot print yet) | **any** WebAssembly engine | any component-model host, **no flags** — including a [browser via jco](#running-a-component-in-a-browser-jco), with no dependencies at all |
 | Export shape | raw core function | typed component-model export (WAVE `--invoke`, jco) | raw core function | typed component-model export (WAVE `--invoke`, jco) |
 | Scalars | `:int`/`:float`/`:bool`/void | `:int`/`:float`/`:bool`/void | + `:long` (`i64`) | + `:long` (`s64`) |
 | `:string` | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) |
 | `:s-expr` | manual `(ptr,len)` | component-model `string` (printed text) | not supported | not supported |
 | Function body may use | the full language | the full language | the [non-GC subset](#eligible-subset) | the [non-GC subset](#eligible-subset) |
-| I/O inside the export | works (real WASI imports; traps under `--no-wasi`) | traps in a sync export; declare [`:async t`](#component-model-function-exports-wasm-export) | `print` only (one `fd_write` import) | `print` only (built-in WASI 0.2 stdio bridge) |
+| I/O inside the export | works (real WASI imports; traps under `--no-wasi`) | usually works even in a sync export; [`:async t`](#component-model-function-exports-wasm-export) removes the residual trap risk | `print` only (one `fd_write` import) | `print` only (built-in WASI 0.2 stdio bridge) |
 | Program top level | runs as `_start` | co-exists as `wasi:cli/run` | `defun` + directives only | `defun` + directives only |
 | Per-call string memory | host-managed (`__ronto_alloc` + the [arena API](#reclaiming-the-hosts-buffer-the-arena-api); the Lisp side is the engine's) | freed by the canonical post-return | host-managed (`__ronto_alloc` + the [arena API](#reclaiming-memory-the-arena-api); automatic for scalar returns) | freed by the canonical post-return |
 | Typical size | ~100 KB (~2 KB with [`--optimize`](#optimize-tree-shaking)) | ~110 KB | tens of bytes to a few KB | hundreds of bytes to a few KB |
@@ -369,7 +369,7 @@ Preview 1 core module. The component prints through `wasi:cli/stdout@0.3.0`:
 
 ```bash
 rontolisp hello.lisp --component -o hello.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y hello.wasm
+wasmtime run -W gc=y hello.wasm
 ```
 
 ```
@@ -382,13 +382,14 @@ the same Preview 1 core module unchanged — it still imports the eight
 `wasi_snapshot_preview1` functions — and an **adapter** core module implements
 them over WASI 0.3 (`wasi:cli`, `wasi:filesystem`, `wasi:clocks`,
 `wasi:random`) using `stream.new`/`stream.read`/`stream.write` and
-`future.read`. The component's `wasi:cli/run@0.3.0` export (an `async func`) is
-lifted as a **stackful** async export, so the synchronous stream/future
-built-ins block cooperatively and the adapter stays straight-line code. The
-async canonical ABI and the stackful lift are enabled by default in wasmtime
-46+; only the synchronous stream/future built-ins are still feature-gated,
-hence `-W component-model-more-async-builtins=y` (plus `-W gc=y` for the
-wasm-GC core).
+`future.read`. Those built-ins are the **asynchronous** (non-blocking)
+variants: when one reports BLOCKED, the task parks on a blocking
+`waitable-set.wait` until the completion event arrives, so the adapter stays
+straight-line code. The component's `wasi:cli/run@0.3.0` export (an
+`async func`) is lifted as an async-typed export, from which that blocking
+wait is legal. All of this sits on the base component-model async ABI, enabled
+by default in wasmtime 46+ — no gated feature flags remain; only `-W gc=y`
+(for the wasm-GC core) is needed.
 
 The wasmtime invocation does **not** select the output kind. `wasmtime run` is
 wasmtime's default subcommand and auto-detects a core module vs a component, so
@@ -413,7 +414,7 @@ cat > fileio.lisp <<'EOF'
   (print (read-line in)))
 EOF
 rontolisp fileio.lisp --component -o fileio.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.wasm
+wasmtime run -W gc=y --dir . fileio.wasm
 # "hello"
 ```
 
@@ -423,11 +424,11 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.was
   read `wasi:clocks@0.3.0` (`system-clock`/`monotonic-clock`), and `getenv`
   reads `wasi:cli/environment@0.3.0`.
 - Outgoing HTTP (`rontolisp:fetch` with the `rontolisp:await` /
-  `rontolisp:then` / `rontolisp:promisep` promise operations) works in
+  `rontolisp:then` / `rontolisp:futurep` future operations) works in
   component mode, including true asynchrony: `fetch` sends the request and
-  returns a promise (wrapping the in-flight `wasi:http` response handle)
+  returns a future (wrapping the in-flight `wasi:http` response handle)
   immediately, so several requests can overlap before `await` blocks on each.
-  The promise operations themselves compile in every mode; only `fetch` is
+  The future operations themselves compile in every mode; only `fetch` is
   component-only. fetch imports the async `wasi:http@0.3.0`
   (`wasi:http/types` + `wasi:http/client`) — uniformly WASI 0.3, like the rest
   of the component. Run a fetch component with `-S http=y` (which makes the
@@ -441,7 +442,7 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.was
   WASI 0.3 — no 0.2 hybrid). A socket is a bidirectional stream handle, so
   `read-line` / `write-line` / `read-byte` / `write-byte` / `close` work on it
   directly. Run a socket component with `-S tcp=y -S inherit-network=y` in
-  addition to the async flags; without them the component still starts but
+  addition to the usual flags; without them the component still starts but
   every socket operation fails and yields `nil`. Hosts must be IPv4 literals
   (no hostname resolution yet), and `rontolisp:fetch` cannot be combined with
   the tcp functions in one component yet.
@@ -467,9 +468,9 @@ component still runs as a command:
 
 ```bash
 rontolisp sumsq.lisp --component -o sumsq.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'sumsquared(2, 3)' sumsq.wasm
+wasmtime run -W gc=y --invoke 'sumsquared(2, 3)' sumsq.wasm
 # 25    (the export's return value, rendered by wasmtime)
-wasmtime run -W gc=y -W component-model-more-async-builtins=y sumsq.wasm
+wasmtime run -W gc=y sumsq.wasm
 # 400    (the ordinary run entry executes the top-level program)
 ```
 
@@ -499,20 +500,22 @@ calls:
 
 ```bash
 rontolisp greet.lisp --component -o greet.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("世界")' greet.wasm
+wasmtime run -W gc=y --invoke 'greet("世界")' greet.wasm
 # "Hello, 世界"
 ```
 
-By default an export is lifted **synchronously** and must be pure-compute: I/O
-inside it (`print`, `read`, `rontolisp:fetch`, file access) traps at runtime
-with "cannot block a synchronous task". Declare the export async with
+By default an export is lifted **synchronously**. Even so, I/O inside it
+usually works: the asynchronous built-ins complete without blocking whenever
+the host accepts immediately (stdout does), and only a host that reports
+BLOCKED forces the blocking wait, which traps in a synchronous task with
+"cannot block a synchronous task". Declare the export async with
 **`:async t`** to lift it against an async function type instead — the same
-stackful-async shape as the `run` entry — and I/O inside it works.
+async-typed lift as the `run` entry — and remove that residual risk.
 `wasmtime --invoke` calls an async export exactly the same way:
 
 ```lisp
 ;; status.lisp
-(defun fetch-status (url)
+(rontolisp:async-defun fetch-status (url)
   (print "fetching")
   (getf (rontolisp:await (rontolisp:fetch url)) :status))
 (rontolisp:wasm-export 'fetch-status :params '(:string) :returns :int :async t)
@@ -520,7 +523,7 @@ stackful-async shape as the `run` entry — and I/O inside it works.
 
 ```bash
 rontolisp status.lisp --component -o status.wasm
-wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y \
+wasmtime run -W gc=y -W exceptions=y -S http=y \
   --invoke 'fetch-status("https://httpbin.org/status/204")' status.wasm
 # "fetching"
 # 204
@@ -534,18 +537,19 @@ program without `:async` exports produces byte-identical output.
 
 Current limitations of component exports:
 
-- A **sync** (default) export is pure-compute only: I/O inside it traps at
-  runtime with "cannot block a synchronous task". Opt into `:async t` when the
-  export prints, fetches, or otherwise does I/O; keep pure-compute exports
+- A **sync** (default) export can usually do I/O anyway (the asynchronous
+  built-ins complete without blocking when the host accepts immediately); only
+  a host that reports BLOCKED makes the blocking wait trap with "cannot block
+  a synchronous task". Opt into `:async t` when the export prints, fetches, or
+  otherwise does I/O to remove that residual risk; keep pure-compute exports
   sync.
 - `:async` is meaningful only here: Preview 1 / `--no-wasi` core exports ignore
   it (the host provides I/O directly there), and `--no-gc --component` rejects
   it (the compact reactor component has no async adapter).
 - jco (1.25.2) transpiles an `:async t` export and types it as async, but
-  cannot call it yet — its generated driver assumes callback-style async tasks,
-  and stackful async exports are not implemented upstream (the same gap as
-  calling the transpiled `run`). `wasmtime run --invoke` is the verified path
-  for async exports; sync exports work on both.
+  cannot call it yet — its support for the 0.3 async ABI is not implemented
+  upstream (the same gap as calling the transpiled `run`). `wasmtime run
+  --invoke` is the verified path for async exports; sync exports work on both.
 - The export name must be a lower-kebab-case component-model name
   (`sum-squared`); for a Lisp name outside that grammar the compiler asks you
   to rename it with `:as`.
@@ -666,7 +670,7 @@ world greeter {
 
 ```bash
 rontolisp greet.lisp --component -o greet.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("world")' greet.wasm
+wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
 # "Hello, world!"
 ```
 
@@ -891,7 +895,7 @@ adapter and no rewriting:
 
 ```bash
 rontolisp counter.lisp -o counter.wasm --component
-wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
+wasmtime run -W gc=y -W exceptions=y \
     -S keyvalue=y counter.wasm
 ```
 
@@ -953,7 +957,7 @@ outside it:
 
 ```bash
 rontolisp page-hits-server.lisp -o server.wasm --component
-wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y server.wasm
+wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
 curl http://127.0.0.1:8080/index
 ```
 
@@ -1457,7 +1461,8 @@ JavaScript side (wasmtime runs all of it):
   `FutureReadableEnd` / `FutureWritableEnd` / `FutureEnd` but defines none of
   them (`ReferenceError: FutureReadableEnd is not defined`). It is reached
   through `wasi:cli/stdout`'s `write-via-stream`, whose WIT result is a `future`.
-  Separately, jco cannot yet *call* a stackful-async export, which is what an
+  Separately, jco cannot yet *call* an async export (its 0.3 async ABI gap
+  again), which is what an
   [`:async t`](#component-model-function-exports-wasm-export) I/O export is.
 
 Node is the weaker host here: Node 22 has no JSPI (`WebAssembly.Suspending is

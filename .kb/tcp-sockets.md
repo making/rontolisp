@@ -176,7 +176,7 @@ pattern), `stream.new` makes a pair whose read end goes to `send()` (callable
 at most once) while the write end stays for `fd_write` (`stream.write` blocks
 until accepted, so that future is dropped immediately too). `fd_close` drops
 the write end (FIN), the recv stream and the resource. `connect` is an async
-WIT function sync-lowered — it blocks cooperatively under the stackful lift.
+WIT function sync-lowered — the adapter parks on a blocking `waitable-set.wait` when an operation reports BLOCKED (base component-model-async).
 IPv4 literals are parsed in the adapter (`$parse_ipv4`); hostname lookup
 (`wasi:sockets/ip-name-lookup`) is not wired (`.todo`).
 

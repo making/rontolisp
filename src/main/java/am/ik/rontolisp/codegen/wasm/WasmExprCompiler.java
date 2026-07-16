@@ -185,9 +185,36 @@ final class WasmExprCompiler {
 					WasmThenCompiler.compile(cons, ctx);
 					return;
 				}
-				if (LispNames.PROMISEP.equals(qn.member())) {
+				if (LispNames.PROMISEP.equals(qn.member()) || LispNames.FUTUREP.equals(qn.member())) {
+					// both are one ref.test against TYPE_PROMISE (the degenerate future)
 					WasmPromisepCompiler.compile(cons, ctx);
 					return;
+				}
+				if (LispNames.ASYNC_RUN.equals(qn.member())) {
+					WasmAsyncRunCompiler.compile(cons, ctx);
+					return;
+				}
+				if (LispNames.ASYNC_DEFUN.equals(qn.member())) {
+					// normally lowered by the compile() pre-pass; a stray nested form
+					// lowers here
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandAsyncDefun(cons), ctx);
+					return;
+				}
+				if (LispNames.ASYNC_LAMBDA.equals(qn.member())) {
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandAsyncLambda(cons), ctx);
+					return;
+				}
+				if (LispNames.WAIT_FOR.equals(qn.member())) {
+					throw new UnsupportedOperationException(
+							"rontolisp:" + qn.member() + " requires the interpreter or the JVM backend"
+									+ " (no host timer is wired on the WASM backends yet)");
+				}
+				if (LispNames.ASYNC_STREAMP.equals(qn.member()) || LispNames.MAKE_STREAM.equals(qn.member())
+						|| LispNames.STREAM_READ.equals(qn.member()) || LispNames.STREAM_WRITE.equals(qn.member())
+						|| LispNames.STREAM_CLOSE.equals(qn.member())) {
+					throw new UnsupportedOperationException(
+							"rontolisp:" + qn.member() + " requires the interpreter or the JVM backend"
+									+ " (asynchronous streams are not available on the WASM backends yet)");
 				}
 				if (LispNames.TCP_CONNECT.equals(qn.member()) || LispNames.TCP_LISTEN.equals(qn.member())
 						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())
@@ -224,7 +251,7 @@ final class WasmExprCompiler {
 			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.
 			if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
 				switch (qn.member()) {
-					// unwindProtect = ctx.ehMode (todo-129 step 7): a literal usocket
+					// unwindProtect = ctx.ehMode: a literal usocket
 					// with-*/guard flips the module into EH mode via the gate, so these
 					// sites ride unwind-protect / the typed handler-case re-signal like
 					// the interpreter and the JVM; the flag is only false for
@@ -296,8 +323,7 @@ final class WasmExprCompiler {
 				case LispNames.MAKE_STRING_OUTPUT_STREAM -> WasmWriteStringCompiler.compileMakeOutputStream(cons, ctx);
 				case LispNames.MAKE_STRING_INPUT_STREAM -> WasmWriteStringCompiler.compileMakeInputStream(cons, ctx);
 				case LispNames.STRING_STREAM_CONTENTS -> WasmWriteStringCompiler.compileContents(cons, ctx);
-				// unwindProtect = ctx.ehMode (todo-129 step 7): a literal with-* flips
-				// the
+				// unwindProtect = ctx.ehMode: a literal with-* flips the
 				// module into EH mode via the gate, so these expansions ride
 				// unwind-protect like the interpreter/JVM (close on EVERY exit); the flag
 				// is only false for internally-generated occurrences (a :report lambda's

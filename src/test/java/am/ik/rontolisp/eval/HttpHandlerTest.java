@@ -140,11 +140,14 @@ class HttpHandlerTest {
 
 	@Test
 	void directiveEchoesMethodAndBody() throws Exception {
+		// the request body is an asynchronous stream, so a handler that reads it is an
+		// async-defun draining it with read-all; the server awaits the handler's future
 		int port = freePort();
 		serveInBackground("""
-				(defun handle (request)
+				(rontolisp:async-defun handle (request)
 				  (list :status 200
-				        :body (concatenate 'string (getf request :method) ":" (getf request :body))))
+				        :body (concatenate 'string (getf request :method) ":"
+				                           (rontolisp:await (rontolisp:read-all (getf request :body))))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		HttpResponse<String> response = post(port, "/", "payload");

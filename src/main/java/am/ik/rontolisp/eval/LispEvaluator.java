@@ -21,8 +21,10 @@ import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispFuture;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispPromise;
+import am.ik.rontolisp.LispStream;
 import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -63,6 +65,51 @@ public final class LispEvaluator {
 	private boolean simd = false;
 
 	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
+
+	// Forms already verified against the rontolisp:await placement rules, by identity:
+	// a lambda form evaluated repeatedly (a closure created in a loop) is walked once.
+	private final java.util.Set<LispVal> awaitCheckedForms = java.util.Collections
+		.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+
+	// Runs the shared rontolisp:await placement check once per form identity: await is
+	// legal only inside async-defun/async-lambda bodies and at top level, so a plain
+	// defun/lambda body must not contain one (LispAsync recognizes the %async-run thunk
+	// the async lowerings synthesize). A validated form's %async-run thunk lambdas are
+	// pre-approved: when the surrounding form was legal, the thunk's awaits were checked
+	// in async context, so evaluating the bare thunk as a lambda form later (which is
+	// how %async-run receives it) must not re-check it as a plain lambda.
+	private void checkAwaitPlacement(LispCons cons) {
+		if (!this.awaitCheckedForms.add(cons)) {
+			return;
+		}
+		try {
+			am.ik.rontolisp.LispAsync.check(cons, false);
+		}
+		catch (IllegalArgumentException ex) {
+			throw new LispEvalException(java.util.Objects.requireNonNullElse(ex.getMessage(),
+					am.ik.rontolisp.LispAsync.AWAIT_PLACEMENT_MESSAGE));
+		}
+		preapproveAsyncRunThunks(cons);
+	}
+
+	private void preapproveAsyncRunThunks(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		if (cons.car() instanceof LispSymbol sym) {
+			if (LispNames.QUOTE.equals(sym.name())) {
+				return;
+			}
+			if (LispNames.ASYNC_RUN_QUALIFIED.equals(sym.name()) && parts.size() == 2
+					&& parts.get(1) instanceof LispCons thunk) {
+				this.awaitCheckedForms.add(thunk);
+			}
+		}
+		for (LispVal part : parts) {
+			preapproveAsyncRunThunks(part);
+		}
+	}
 
 	private boolean urlLibraryLoaded = false;
 
@@ -358,14 +405,16 @@ public final class LispEvaluator {
 			}
 			return apply(args.get(0), args.subList(1, args.size()), this.globalEnv);
 		}));
-		// await lives here rather than in Environment because resolving a then-chain
-		// applies the callback, which needs the evaluator's apply.
-		String awaitName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT);
-		this.globalEnv.defineFunction(awaitName, new LispFunction(awaitName, args -> {
+		// %async-run (the async-defun/async-lambda lowering primitive) lives here rather
+		// than in Environment because running the body thunk needs the evaluator's
+		// apply. rontolisp:await itself is a special form (evalCons), not a function.
+		String asyncRunName = LispNames.ASYNC_RUN_QUALIFIED;
+		this.globalEnv.defineFunction(asyncRunName, new LispFunction(asyncRunName, args -> {
 			if (args.size() != 1) {
-				throw new LispEvalException(LispNames.AWAIT + " expects 1 argument, got " + args.size());
+				throw new LispEvalException(LispNames.ASYNC_RUN + " expects 1 argument, got " + args.size());
 			}
-			return awaitValue(args.get(0));
+			LispVal thunk = args.get(0);
+			return AsyncRuntime.run(() -> apply(thunk, List.of(), this.globalEnv));
 		}));
 		// http-handler lives here rather than in Environment because serving a request
 		// applies the handler function, which needs the evaluator's apply. It runs a
@@ -999,6 +1048,8 @@ public final class LispEvaluator {
 			case LispFloatArray fa -> fa;
 			case LispJavaObject j -> j;
 			case LispPromise p -> p;
+			case LispFuture f -> f;
+			case LispStream s -> s;
 			case LispSymbol sym -> evalSymbolRef(sym, env);
 			case LispCons cons -> evalCons(cons, env);
 		};
@@ -1133,6 +1184,12 @@ public final class LispEvaluator {
 					return evalSetq(cons, env);
 				case LispNames.LAMBDA:
 					return evalLambdaForm(cons, env);
+				case LispNames.ASYNC_DEFUN_QUALIFIED:
+					return eval(LispMacroExpander.expandAsyncDefun(cons), env);
+				case LispNames.ASYNC_LAMBDA_QUALIFIED:
+					return eval(LispMacroExpander.expandAsyncLambda(cons), env);
+				case LispNames.AWAIT_QUALIFIED:
+					return evalAwait(cons, env);
 				case LispNames.WHILE:
 					return evalWhile(cons, env);
 				case LispNames.COND:
@@ -1578,6 +1635,7 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefun(LispCons cons, Environment env) {
+		checkAwaitPlacement(cons);
 		List<LispVal> parts = cons.toList();
 		LispVal nameForm = parts.get(1);
 		// (defun (setf name) ...): a setf-function. Install it under the mangled internal
@@ -2415,6 +2473,7 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalLambdaForm(LispCons cons, Environment env) {
+		checkAwaitPlacement(cons);
 		List<LispVal> parts = cons.toList();
 		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), parts.subList(2, parts.size()));
 		return new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env);
@@ -2790,20 +2849,47 @@ public final class LispEvaluator {
 		return args;
 	}
 
-	// Resolves a promise to its value on the calling thread: a root promise joins its
-	// future, a chained promise (rontolisp:then) resolves its base, applies the callback
-	// and memoizes the result (flattening a promise-returning callback), and a
-	// non-promise value passes through unchanged, like JavaScript await. A failed root
-	// promise (e.g. a refused connection) signals here -- the same timing as a
-	// JavaScript await rejection; the failure skips any chained callbacks.
+	// The rontolisp:await special form: evaluates its one operand and resolves it.
+	private LispVal evalAwait(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new LispEvalException(LispNames.AWAIT + " expects 1 argument, got " + (parts.size() - 1));
+		}
+		return awaitValue(eval(parts.get(1), env));
+	}
+
+	// Resolves a value like JavaScript await: a future joins its computation (releasing
+	// the eager-start handoff first when it would block, so this is the async body's
+	// suspension point), re-signaling a stored error -- a Lisp-originated condition
+	// (LispEvalException) crosses intact so handler-case around the await catches it by
+	// type -- and flattening nested futures; a non-future passes through unchanged.
+	// Legacy promises (rontolisp:then chains) resolve as before until their machinery is
+	// removed: a root promise joins its future, a chain resolves its base, applies the
+	// callback and memoizes the result.
 	private LispVal awaitValue(LispVal v) {
+		while (v instanceof LispFuture future) {
+			java.util.concurrent.CompletableFuture<LispVal> cf = future.future();
+			if (!cf.isDone()) {
+				AsyncRuntime.releaseHandoffIfPending();
+			}
+			try {
+				v = cf.join();
+			}
+			catch (java.util.concurrent.CompletionException ex) {
+				Throwable cause = java.util.Objects.requireNonNullElse(ex.getCause(), ex);
+				if (cause instanceof LispEvalException lispError) {
+					throw lispError;
+				}
+				throw new LispEvalException(java.util.Objects.requireNonNullElse(cause.getMessage(), "await failed"));
+			}
+		}
 		if (!(v instanceof LispPromise promise)) {
 			return v;
 		}
 		java.util.concurrent.CompletableFuture<LispVal> future = promise.future();
 		if (future != null) {
 			try {
-				return future.join();
+				return awaitValue(future.join());
 			}
 			catch (java.util.concurrent.CompletionException ex) {
 				Throwable cause = java.util.Objects.requireNonNullElse(ex.getCause(), ex);
@@ -2830,10 +2916,23 @@ public final class LispEvaluator {
 					headers);
 		}
 		LispVal query = request.query() == null ? LispNil.INSTANCE : new LispString(request.query());
+		// The handler sees the request body as an asynchronous stream (one settled
+		// chunk here; the server buffers the body before dispatch). A bodyless request
+		// yields an already-drained stream, so its first read observes end of stream.
+		LispStream requestBody;
+		if (request.body().isEmpty()) {
+			requestBody = LispStream.open();
+			requestBody.close();
+		}
+		else {
+			requestBody = LispStream.settled(new LispString(request.body()));
+		}
 		LispVal requestPlist = plist(new LispSymbol(":method"), new LispString(request.method()),
 				new LispSymbol(":path"), new LispString(request.path()), new LispSymbol(":query"), query,
-				new LispSymbol(":headers"), headers, new LispSymbol(":body"), new LispString(request.body()));
-		LispVal result = apply(handler, List.of(requestPlist), this.globalEnv);
+				new LispSymbol(":headers"), headers, new LispSymbol(":body"), requestBody);
+		// An async-defun handler returns a future; each request runs on its own virtual
+		// thread, so awaiting it here is the natural per-request suspension.
+		LispVal result = awaitValue(apply(handler, List.of(requestPlist), this.globalEnv));
 		int status = 200;
 		if (httpPlistGet(result, ":status") instanceof LispInteger statusVal) {
 			status = (int) statusVal.value();
@@ -2842,6 +2941,21 @@ public final class LispEvaluator {
 		LispVal bodyVal = httpPlistGet(result, ":body");
 		if (bodyVal instanceof LispString bodyStr) {
 			body = bodyStr.value();
+		}
+		else if (bodyVal instanceof LispStream bodyStream) {
+			// A streaming response body is drained here (buffered send); true chunked
+			// transfer follows with the JVM handler-interface rework.
+			StringBuilder drained = new StringBuilder();
+			LispVal chunk = awaitValue(LispFuture.of(bodyStream.read()));
+			while (!(chunk instanceof LispNil)) {
+				if (!(chunk instanceof LispString chunkStr)) {
+					throw new LispEvalException(LispNames.HTTP_HANDLER
+							+ ": a response body stream must carry string chunks, got: " + chunk.print());
+				}
+				drained.append(chunkStr.value());
+				chunk = awaitValue(LispFuture.of(bodyStream.read()));
+			}
+			body = drained.toString();
 		}
 		List<HttpHandlerSupport.Header> responseHeaders = new ArrayList<>();
 		LispVal headerAlist = httpPlistGet(result, ":headers");

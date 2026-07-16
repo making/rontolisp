@@ -12,10 +12,10 @@ Returns `t` if `value` is a promise — as returned by
 ```
 
 A promise is an opaque value: it has no reader syntax and prints as
-`#<PROMISE>`.
+`#<FUTURE>`.
 
 ```lisp
-(rontolisp:then 1 (lambda (x) x))   ; => #<PROMISE>
+(rontolisp:then 1 (lambda (x) x))   ; => #<FUTURE>
 ```
 
 ## Backend support

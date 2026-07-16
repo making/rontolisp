@@ -4159,35 +4159,39 @@ class LispEvaluatorTest {
 		server.start();
 		try {
 			int port = server.getAddress().getPort();
-			// fetch returns a promise immediately; await resolves it into the plist
-			// (:status 200 :body "hello world" :headers (...))
+			// fetch returns a future immediately; await resolves it into the plist
+			// (:status 200 :headers (...) :body #<STREAM>)
 			assertThat(
 					eval("(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")) :status)"))
 				.isEqualTo(new LispInteger(200));
-			assertThat(eval("(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")) :body)"))
+			assertThat(eval("(rontolisp:await (rontolisp:read-all"
+					+ " (getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")) :body)))"))
 				.isEqualTo(new LispString("hello world"));
+			assertThat(eval("(rontolisp:streamp (getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port
+					+ "/hello\")) :body))")
+				.print()).isEqualTo("t");
 			LispVal headers = eval(
 					"(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")) :headers)");
 			// the JDK HttpClient normalizes response header names to lower case
 			assertThat(headers.print()).contains("x-test").contains("ok");
-			// fetch itself returns an opaque promise, not the result; it prints as
-			// #<PROMISE> and satisfies promisep
+			// fetch itself returns an opaque future, not the result; it prints as
+			// #<FUTURE> and satisfies futurep
 			assertThat(eval("(rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")"))
-				.isInstanceOf(am.ik.rontolisp.LispPromise.class);
+				.isInstanceOf(am.ik.rontolisp.LispFuture.class);
 			assertThat(eval("(rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")").print())
-				.isEqualTo("#<PROMISE>");
-			assertThat(eval("(rontolisp:promisep (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\"))").print())
+				.isEqualTo("#<FUTURE>");
+			assertThat(eval("(rontolisp:futurep (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\"))").print())
 				.isEqualTo("t");
-			// a settled promise can be awaited more than once
+			// a settled future can be awaited more than once
 			assertThat(eval("(let ((p (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")))"
 					+ " (rontolisp:await p) (getf (rontolisp:await p) :status))"))
 				.isEqualTo(new LispInteger(200));
-			// two in-flight promises resolve independently
+			// two in-flight futures resolve independently
 			assertThat(eval("(let ((p1 (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\"))"
 					+ " (p2 (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")))"
 					+ " (list (getf (rontolisp:await p2) :status) (getf (rontolisp:await p1) :status)))")
 				.print()).isEqualTo("(200 200)");
-			// a fetch promise chains with then
+			// a fetch future chains with then (legacy machinery over the new future)
 			assertThat(eval("(rontolisp:await (rontolisp:then (rontolisp:fetch \"http://127.0.0.1:" + port
 					+ "/hello\") (lambda (r) (getf r :status))))"))
 				.isEqualTo(new LispInteger(200));
@@ -4931,8 +4935,9 @@ class LispEvaluatorTest {
 		server.start();
 		try {
 			int port = server.getAddress().getPort();
-			LispVal result = eval("(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port
-					+ "/echo\" (list :headers (list (cons \"X-Custom\" \"abc\"))))) :body)");
+			LispVal result = eval("(rontolisp:await (rontolisp:read-all (getf (rontolisp:await (rontolisp:fetch"
+					+ " \"http://127.0.0.1:" + port
+					+ "/echo\" (list :headers (list (cons \"X-Custom\" \"abc\"))))) :body)))");
 			assertThat(result).isEqualTo(new LispString("got:abc"));
 		}
 		finally {
@@ -4954,8 +4959,8 @@ class LispEvaluatorTest {
 		server.start();
 		try {
 			int port = server.getAddress().getPort();
-			LispVal result = eval("(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port
-					+ "/post\" (list :method \"POST\" :body \"hello\"))) :body)");
+			LispVal result = eval("(rontolisp:await (rontolisp:read-all (getf (rontolisp:await (rontolisp:fetch"
+					+ " \"http://127.0.0.1:" + port + "/post\" (list :method \"POST\" :body \"hello\"))) :body)))");
 			assertThat(result).isEqualTo(new LispString("POST:hello"));
 		}
 		finally {
@@ -5003,7 +5008,7 @@ class LispEvaluatorTest {
 	void thenDerivesChainablePromises() {
 		// then always yields a promise, even from a plain value
 		assertThat(eval("(rontolisp:promisep (rontolisp:then 1 (lambda (x) x)))").print()).isEqualTo("t");
-		assertThat(eval("(rontolisp:then 1 (lambda (x) x))").print()).isEqualTo("#<PROMISE>");
+		assertThat(eval("(rontolisp:then 1 (lambda (x) x))").print()).isEqualTo("#<FUTURE>");
 		assertThat(eval("(rontolisp:await (rontolisp:then 21 (lambda (x) (* x 2))))")).isEqualTo(new LispInteger(42));
 		// chains compose left to right
 		assertThat(eval(

@@ -81,7 +81,8 @@ class HttpHandlerJvmTest {
 
 	private void compileAndServeInBackground(String program, int port, boolean optimize) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("TestHttpServe", false, optimize);
-		byte[] classBytes = compiler.compile(LispReader.readAllFromString(program));
+		// mirror the CLI pipeline's prelude splice so rontolisp:read-all resolves
+		byte[] classBytes = compiler.compile(LispPreludeLibrary.process(LispReader.readAllFromString(program)));
 		Path classFile = this.tempDir.resolve("TestHttpServe.class");
 		Files.write(classFile, classBytes);
 		URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
@@ -131,11 +132,14 @@ class HttpHandlerJvmTest {
 
 	@Test
 	void compiledDirectiveEchoesMethodAndBody() throws Exception {
+		// the request body is an asynchronous stream: an async-defun handler drains it
+		// with read-all and the injected handle() awaits the handler's future
 		int port = freePort();
 		compileAndServeInBackground("""
-				(defun handle (request)
+				(rontolisp:async-defun handle (request)
 				  (list :status 200
-				        :body (concatenate 'string (getf request :method) ":" (getf request :body))))
+				        :body (concatenate 'string (getf request :method) ":"
+				                           (rontolisp:await (rontolisp:read-all (getf request :body))))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		HttpResponse<String> response = post(port, "/", "payload");

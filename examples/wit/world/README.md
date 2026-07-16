@@ -170,7 +170,7 @@ The component's exports are typed, so `wasmtime` calls them by name with
 pointer arithmetic, no `__ronto_alloc`: the canonical ABI passes the string.
 
 ```bash
-W="wasmtime run -W gc=y -W component-model-more-async-builtins=y"
+W="wasmtime run -W gc=y"
 
 $W --invoke 'word-count("the quick brown fox jumps over the lazy dog")' analyzer.wasm
 # 9

@@ -3,12 +3,12 @@
 `(rontolisp:fetch url &optional options)`
 
 Starts an outgoing HTTP request, modeled on the JavaScript `fetch` API, and
-immediately returns a **promise** while the request runs asynchronously. A
-promise is an opaque value (it prints as `#<PROMISE>` and satisfies
-[`rontolisp:promisep`](rontolisp-promisep.md)); pass it to
-[`rontolisp:await`](rontolisp-await.md) to block until the response arrives and
-obtain the result property list
-`(:status <integer> :body <string> :headers <alist>)`, or chain a callback
+immediately returns a **future** while the request runs asynchronously. A
+future is an opaque value (it prints as `#<FUTURE>` and satisfies
+[`rontolisp:futurep`](rontolisp-futurep.md)); pass it to
+[`rontolisp:await`](../special-forms/rontolisp-await.md) to block until the
+response arrives and obtain the result property list
+`(:status <integer> :headers <alist> :body <stream>)`, or chain a callback
 with [`rontolisp:then`](rontolisp-then.md).
 
 ```lisp
@@ -52,16 +52,25 @@ which throws synchronously on invalid arguments).
 
 ## Result
 
-`fetch` itself returns the promise. Awaiting it yields the property list
-`(:status <integer> :body <string> :headers <alist>)`, where `:headers` is an
-alist of `(name . value)` response-header pairs:
+`fetch` itself returns the future. Awaiting it yields the property list
+`(:status <integer> :headers <alist> :body <stream>)`, where `:headers` is an
+alist of `(name . value)` response-header pairs and `:body` is an
+**asynchronous stream** of the body's chunks — drain it to one string with
+[`rontolisp:read-all`](rontolisp-read-all.md) (or take the chunks one at a
+time with [`rontolisp:stream-read`](rontolisp-stream-read.md)):
 
 ```console
 (let ((res (rontolisp:await (rontolisp:fetch "http://example.com/"))))
   (print (getf res :status))    ; => 200
-  (print (getf res :body))      ; => "<html>...</html>"
+  (print (rontolisp:await (rontolisp:read-all (getf res :body))))
+                                ; => "<html>...</html>"
   (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
 ```
+
+> **Backend note.** The stream-valued `:body` is the interpreter/JVM contract.
+> Under `--component` the response currently carries the whole body as one
+> string in `:body` (the component streaming body lands later), so read it
+> there with a plain `(getf res :body)`.
 
 A JSON response body parses into Lisp values with
 [`rontolisp:json-parse`](rontolisp-json-parse.md), and
@@ -74,16 +83,16 @@ request `:body` from an s-expression.
   request runs on a background thread from the moment `fetch` returns.
 - **WASM**: component-only, over the async `wasi:http@0.3.0` — fetch is
   ordinary Lisp glue calling the wit-imported `wasi:http/client@0.3.0`, so the
-  component is uniformly WASI 0.3. The promise wraps the in-flight async
+  component is uniformly WASI 0.3. The future wraps the in-flight async
   `client.send` subtask, so multiple requests genuinely overlap. Compile with
   `--component` and run with
-  `wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y`
+  `wasmtime run -W gc=y -W exceptions=y -S http=y`
   (wasmtime 46+; `-S http=y` makes the host provide `wasi:http`). fetch remains
   a compile error in Preview 1 (core-module) mode, which has no host
-  `wasi:http`; the generic promise operations (`await`, `then`, `promisep`)
+  `wasi:http`; the generic future operations (`await`, `then`, `futurep`)
   compile in every mode. fetch also works inside a
   [`rontolisp:http-handler`](rontolisp-http-handler.md) serve component (a
-  proxy-style handler): run it with `wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y` —
+  proxy-style handler): run it with `wasmtime serve -W gc=y -W exceptions=y` —
   the serve host provides `wasi:http/client` by default, no `-S http=y` needed.
 - **Browser playground**: truly asynchronous. The interpreter runs in a Web
   Worker; `fetch` hands the request to the page's main thread, which runs the
@@ -101,10 +110,10 @@ request `:body` from an s-expression.
   rejects a statically-known unsupported `:method` at compile time (a method
   computed at runtime cannot be checked there and is treated as GET, while a
   runtime-computed `:body` is sent normally).
-- A failed request (for example a refused connection) surfaces when the promise
+- A failed request (for example a refused connection) surfaces when the future
   is awaited — the same timing as a JavaScript `await` rejection: every backend
   signals an error there (on WASM it is a `rontolisp:wit-error` condition,
   catchable with `handler-case`). A request that cannot even be *started* (for
   example a malformed URL, or an unsupported runtime-computed method on the
   interpreter/JVM) makes `fetch` itself error or, on WASM, return `nil` instead
-  of a promise — and awaiting `nil` yields `nil`.
+  of a future — and awaiting `nil` yields `nil`.

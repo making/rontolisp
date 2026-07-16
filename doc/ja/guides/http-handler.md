@@ -60,7 +60,7 @@ GET /hello
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
+$ wasmtime serve -W gc=y -W exceptions=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -69,22 +69,23 @@ GET /hello
 この場合モジュールは `wasi:http/handler@0.3.0`（非同期の WASI 0.3 HTTP
 world）をエクスポートし、ソケットはホストが所有するため `port` 引数は無視
 されます。フラグはコンポーネントが実際に使う機能を有効化するものです:
-WebAssembly GC プロポーザル（`-W gc=y`）、例外処理プロポーザル
+WebAssembly GC プロポーザル（`-W gc=y`）と例外処理プロポーザル
 （`-W exceptions=y`。Lisp で書かれた HTTP グルーがボディの終端検出に使用
-します）、そしてコンポーネントモデルの非同期 ABI
-（`-W component-model-async-stackful=y` — ハンドラはスタックフルな非同期
-タスクとして実行されます — と、`stream<u8>`/`future<T>` のボディ用組み込みの
-ための `-W component-model-more-async-builtins=y`）です。
+します）です。ハンドラは**コールバック非同期リフト**のエクスポートで、
+`stream<u8>`/`future<T>` のボディ用組み込みは、読み書きが BLOCKED を
+報告するとブロッキング待機で待つ非同期版です — いずれも wasmtime 46+ で
+デフォルト有効な基本のコンポーネントモデル非同期 ABI の一部であり、
+ゲートされた機能フラグは不要です。レスポンスは従来どおり `canon
+task.return` を通じてタスクの途中で届けられ、その後にボディがストリーム
+されます。
 
 ## その他の WASI HTTP ランタイム
 
 このコンポーネントがホストに要求するのは `wasi:http` **0.3**（非同期）と
-wasm-GC で、今日この組み合わせをホストするのは wasmtime 46+ です。
-**wasmCloud** は、0.3 のリリース候補をターゲットとした `wash` の `wasip3`
-フィーチャービルドの背後に実験的な WASI P3 サポートを持っています —
-[wasmCloud のアナウンス](https://wasmcloud.com/blog/wasi-p3-on-wasmcloud/)
-を参照してください。その RC ビルドが final-`@0.3.0` のコンポーネントと
-リンクできるかはまだ検証されていません。**jco** と **Spin** ではまだ動作
+wasm-GC です。wasmtime 46+ がこれをホストし、**wasmCloud** もホストします:
+リリース版の `wash`（2.5.2）が、プロジェクトマニフェストに
+`dev.wasm_proposals: [gc, exception-handling, component-model-async]` を
+指定した `wash dev` で実行します。**jco** と **Spin** ではまだ動作
 しません: jco は 0.3 の非同期 ABI を実装しておらず、Spin の組み込み wasmtime
 は rontolisp のすべてのコンポーネントが必要とする WebAssembly GC
 プロポーザルを有効化していません。
@@ -120,10 +121,13 @@ Hello, world!
 ## ハンドラから他のサービスを呼び出す
 
 [`rontolisp:fetch`](http-fetch.md) は 3 つのバックエンドすべてで、サービング中の
-ハンドラ内でも動作します。古典的なプロキシ／アグリゲータの形が書けます:
+ハンドラ内でも動作します。古典的なプロキシ／アグリゲータの形が書けます。
+await するハンドラは非同期関数なので、`defun` ではなく
+[`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md)
+で定義してください:
 
 ```console
-(defun handle (request)
+(rontolisp:async-defun handle (request)
   (let ((res (rontolisp:await
               (rontolisp:fetch "http://127.0.0.1:9000/upstream"))))
     (list :status (getf res :status)
@@ -139,7 +143,7 @@ WASI コンポーネントバックエンドでは、外向きリクエストの
 
 ```console
 $ rontolisp proxy.lisp -o proxy.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y proxy.wasm
+$ wasmtime serve -W gc=y -W exceptions=y proxy.wasm
 ```
 
 完全な例は
@@ -179,7 +183,7 @@ JSON で応答します。
 
 ```console
 $ rontolisp page-hits-server.lisp -o server.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y server.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
 ```
 
 同じソースがインタープリタと JVM でも動きます。そこでは Lisp で書かれた

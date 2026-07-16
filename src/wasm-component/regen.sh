@@ -76,21 +76,21 @@ echo "== unified import block (base) =="
 wasm-tools parse core.wat -o core.wasm
 wasm-tools component embed . core.wasm -o embedded.wasm --world uni
 wasm-tools component new embedded.wasm -o uni.wasm
-wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni.wasm
+wasm-tools validate -f component-model -f cm-async uni.wasm
 slice_import_block uni.wasm "$OUT/import-block.bin"
 
 echo "== unified import block (sockets variant) =="
 wasm-tools parse core-sockets.wat -o core-sockets.wasm
 wasm-tools component embed . core-sockets.wasm -o embedded-sockets.wasm --world uni-sockets
 wasm-tools component new embedded-sockets.wasm -o uni-sockets.wasm
-wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni-sockets.wasm
+wasm-tools validate -f component-model -f cm-async uni-sockets.wasm
 slice_import_block uni-sockets.wasm "$OUT/import-block-sockets.bin"
 
 echo "== unified import block (serve variant: rontolisp:http-handler) =="
 wasm-tools parse core-http-server.wat -o core-http-server.wasm
 wasm-tools component embed . core-http-server.wasm -o embedded-http-server.wasm --world uni-http-server
 wasm-tools component new embedded-http-server.wasm -o uni-http-server.wasm
-wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni-http-server.wasm
+wasm-tools validate -f component-model -f cm-async uni-http-server.wasm
 slice_import_block uni-http-server.wasm "$OUT/import-block-http-server.bin"
 
 echo "== unified import block (--no-gc print micro-adapter: todo 93) =="

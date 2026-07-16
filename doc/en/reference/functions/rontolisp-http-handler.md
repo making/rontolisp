@@ -60,7 +60,7 @@ Or compile it to a WASI HTTP component and serve it with `wasmtime serve`:
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
+$ wasmtime serve -W gc=y -W exceptions=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -82,7 +82,11 @@ they are bridged to `wasi:random` / `wasi:clocks` / `wasi:cli`, which every
 unavailable. [`rontolisp:fetch`](rontolisp-fetch.md) also works inside a
 served handler — serve and serve+fetch are one component shape, whose
 `wasi:http/client@0.3.0` import `wasmtime serve` provides by default — so
-proxy-style handlers run on every backend with the same serve command.
+proxy-style handlers run on every backend with the same serve command. A
+handler that awaits (fetch inside serve, say) is an asynchronous function and
+must be defined with
+[`rontolisp:async-defun`](../special-forms/rontolisp-async-defun.md) rather
+than `defun`: `rontolisp:await` is legal only inside asynchronous bodies.
 
 A handler may also call a WIT interface of its own with
 [`rontolisp:wit-import`](rontolisp-wit-import.md), which the served component
@@ -91,12 +95,13 @@ keeps **state**: a `wasi:http` host instantiates the component afresh for every
 request, so a global hash table reads back empty every time, while a
 `wasi:keyvalue` store lives outside it.
 
-The serve component targets the async `wasi:http@0.3.0` (`service` world), and
-today wasmtime 46+ is the host that serves it. wasmCloud ships experimental
-WASI P3 support (a `wasip3`-feature `wash` build targeting a 0.3 release
-candidate — interop with final-`@0.3.0` components is not yet verified); jco
-does not implement the 0.3 async ABI, and Spin's embedded wasmtime does not
-enable the WebAssembly GC proposal that every rontolisp component needs.
+The serve component targets the async `wasi:http@0.3.0` (`service` world); its
+handler is a callback async lift over the base component-model async ABI,
+default-on in wasmtime 46+, so `wasmtime serve` needs no gated feature flags.
+wasmCloud hosts it too: the released `wash` (2.5.2) runs it with `wash dev`,
+given `dev.wasm_proposals: [gc, exception-handling, component-model-async]`.
+jco does not implement the 0.3 async ABI, and Spin's embedded wasmtime does
+not enable the WebAssembly GC proposal that every rontolisp component needs.
 
 See the [Serving HTTP guide](../../guides/http-handler.md) for the full
 example and the per-runtime commands.
