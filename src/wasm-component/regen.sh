@@ -93,13 +93,6 @@ wasm-tools component new embedded-http-server.wasm -o uni-http-server.wasm
 wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni-http-server.wasm
 slice_import_block uni-http-server.wasm "$OUT/import-block-http-server.bin"
 
-echo "== unified import block (serve+fetch variant: http-handler + fetch) =="
-wasm-tools parse core-http-server-client.wat -o core-http-server-client.wasm
-wasm-tools component embed . core-http-server-client.wasm -o embedded-http-server-client.wasm --world uni-http-server-client
-wasm-tools component new embedded-http-server-client.wasm -o uni-http-server-client.wasm
-wasm-tools validate -f component-model -f cm-async -f cm-async-stackful -f cm-more-async-builtins uni-http-server-client.wasm
-slice_import_block uni-http-server-client.wasm "$OUT/import-block-http-server-client.bin"
-
 echo "== unified import block (--no-gc print micro-adapter: todo 93) =="
 wasm-tools parse core-nogc-print.wat -o core-nogc-print.wasm
 wasm-tools component embed . core-nogc-print.wasm -o embedded-nogc-print.wasm --world uni-nogc-print
@@ -110,6 +103,5 @@ slice_import_block uni-nogc-print.wasm "$OUT/import-block-nogc-print.bin"
 rm -f core-nogc-print.wasm embedded-nogc-print.wasm uni-nogc-print.wasm \
       core.wasm embedded.wasm uni.wasm \
       core-sockets.wasm embedded-sockets.wasm uni-sockets.wasm \
-      core-http-server.wasm embedded-http-server.wasm uni-http-server.wasm \
-      core-http-server-client.wasm embedded-http-server-client.wasm uni-http-server-client.wasm
+      core-http-server.wasm embedded-http-server.wasm uni-http-server.wasm
 echo "== done =="

@@ -5,7 +5,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.WitExportDirective;
-import am.ik.rontolisp.eval.FetchLibrary;
+import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -27,8 +27,8 @@ class WasmLispCompilerTest {
 		// not a
 		// special form, so a raw compile of a fetch program would fail to resolve it. A
 		// no-op for every non-fetch program.
-		List<LispVal> program = FetchLibrary.process(LispReader.readAllFromString(lispCode),
-				WitExportDirective.Backend.WASM_COMPONENT);
+		List<LispVal> program = HttpLibrary.process(LispReader.readAllFromString(lispCode),
+				WitExportDirective.Backend.WASM_COMPONENT, false);
 		// fetch.lisp's result wrappers call rontolisp::%wit-result, backed by wit.lisp --
 		// spliced by WitLibrary, the same order the CLI runs them in.
 		program = WitLibrary.process(program);
@@ -315,9 +315,7 @@ class WasmLispCompilerTest {
 	// the
 	// macro expansion serve.lisp's cond/handler-case bodies need.
 	private static List<LispVal> serveProgram(String source) {
-		List<LispVal> loaded = am.ik.rontolisp.eval.FetchLibrary.process(LispReader.readAllFromString(source),
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
-		loaded = am.ik.rontolisp.eval.ServeLibrary.process(loaded,
+		List<LispVal> loaded = am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString(source),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		return am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
 	}

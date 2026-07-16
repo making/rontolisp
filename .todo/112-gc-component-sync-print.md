@@ -2,6 +2,12 @@
 
 ## STATUS: WILL NOT DO (decided 2026-07-13). Kept as the decision record.
 
+**2026-07-16 note:** the mirror-image trade-off on the `--no-gc` side -- the
+0.2 stdio island that kept PRINTING `--no-gc` components sync-lifted and
+flag-free -- was consciously reversed by `.todo/138` (purge the last 0.2
+island; the user accepted the async flags there). This todo's own conclusion
+stands: the GC adapters stay on 0.3, sync GC exports still cannot print.
+
 The proposal was: rewire the GC adapters' `fd_write` (fd 1/2) from WASI 0.3's
 async `stream.write` to WASI 0.2's synchronous
 `output-stream.blocking-write-and-flush`, so `print` works inside a sync-lifted

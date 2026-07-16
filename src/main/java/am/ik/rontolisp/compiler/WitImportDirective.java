@@ -333,6 +333,29 @@ public final class WitImportDirective {
 			if (component) {
 				validateComponentFunc(func, witPath, locations, resolver, iface, member);
 				List<Param> params = parameters(func, witPath, locations, resolver, iface, member, false, true);
+				if (func.def().func().async()) {
+					// An `async func` member async-lowers: the call starts as a subtask
+					// (%member-start, returning a (packed . retptr) token cons) and its
+					// completion is awaited through a waitable-set (%member-await), and
+					// the public defun composes the two over the EXISTING promise
+					// machinery -- `(rontolisp:then (start args...) #'await)` -- so
+					// callers get an ordinary awaitable promise, exactly like fetch.
+					String start = internalName(directive.pkg(), "%" + member + "-start");
+					String await = internalName(directive.pkg(), "%" + member + "-await");
+					componentMembers.add(asyncCallBinding(member, start, await));
+					if (isResultReturning(func, resolver, iface)) {
+						// The awaited value is the (:ok . V) / (:error . E) envelope;
+						// unwrap it inside the promise chain so awaiting the public
+						// promise signals the error arm, the settled result mapping.
+						String awaited = internalName(directive.pkg(), "%" + member + "-awaited");
+						bindings.add(awaitUnwrapDefun(awaited, await));
+						bindings.add(thenDefun(name, start, awaited, params));
+					}
+					else {
+						bindings.add(thenDefun(name, start, await, params));
+					}
+					continue;
+				}
 				if (isResultReturning(func, resolver, iface)) {
 					// The raw synthetic defun returns the (:ok . V) / (:error . E)
 					// envelope; the public wrapper unwraps it and signals the error arm.
@@ -400,6 +423,33 @@ public final class WitImportDirective {
 			Scoped target = resolveAliases(alias.target(), resolver, iface);
 			boolean stream = target.type() instanceof WitType.StreamOf;
 			if (!stream && !(target.type() instanceof WitType.FutureOf)) {
+				// A non-stream/future alias binds ONE derived member instead:
+				// `<alias>-task-return` -- `canon task.return` typed by the alias's
+				// target, the mid-task result delivery of a stackful async EXPORT (the
+				// WASI 0.3 replacement for 0.2's response-outparam.set). Like the async
+				// built-ins it is not a WIT function: bound ONLY when the program names
+				// it, and only under --component.
+				String member = alias.name() + "-task-return";
+				if (!allMembers.add(member)) {
+					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
+							+ iface.name() + "' binds '" + member + "' twice");
+				}
+				if (dropFilter != null && !dropFilter.contains(member)) {
+					continue;
+				}
+				if (!component) {
+					if (dropFilter != null) {
+						throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": '" + member
+								+ "' is the task-return built-in, which only the --component backend has (the async "
+								+ "canonical ABI); the interpreter, the JVM and Preview 1 WASM cannot bind it");
+					}
+					continue;
+				}
+				validateComponentParam(target.type(), witPath, locations, resolver, target.iface(), alias, member,
+						"the task result", true);
+				boundMembers.add(member);
+				String name = directive.pkg() == null ? member : PackageRegistry.qualify(directive.pkg(), member);
+				componentMembers.add(taskReturnBinding(alias.name(), name));
 				continue;
 			}
 			for (String op : ASYNC_OPS) {
@@ -457,6 +507,52 @@ public final class WitImportDirective {
 	// wrapper defun unwraps its envelope).
 	private static String rawName(@Nullable String pkg, String member) {
 		return pkg == null ? "%" + member : PackageRegistry.qualifyInternal(pkg, "%" + member);
+	}
+
+	// An internal (non-exported) name in the directive's package.
+	private static String internalName(@Nullable String pkg, String bare) {
+		return pkg == null ? bare : PackageRegistry.qualifyInternal(pkg, bare);
+	}
+
+	// (:async-call "send" "pkg::%send-start" "pkg::%send-await") -- an async func member
+	// of a %component-import form: the start wrapper async-lowers the call, the await
+	// wrapper drives the waitable-set until the subtask returns and lifts the result.
+	private static LispVal asyncCallBinding(String member, String startName, String awaitName) {
+		return list(List.of(new LispSymbol(":async-call"), new LispString(member), new LispString(startName),
+				new LispString(awaitName)));
+	}
+
+	// (:task-return "handle-result" "pkg::handle-result-task-return") -- the task-return
+	// built-in derived from a non-stream/future type alias.
+	private static LispVal taskReturnBinding(String alias, String lispName) {
+		return list(List.of(new LispSymbol(":task-return"), new LispString(alias), new LispString(lispName)));
+	}
+
+	// (defun name (p ...) (rontolisp:then (start p ...) (function await))) -- the public
+	// defun of an async func member: an ordinary promise over the started subtask.
+	private static LispVal thenDefun(String name, String start, String await, List<Param> params) {
+		List<LispVal> lambdaList = new ArrayList<>();
+		List<LispVal> startCall = new ArrayList<>();
+		startCall.add(new LispSymbol(start));
+		for (Param param : params) {
+			LispSymbol symbol = new LispSymbol(param.name());
+			lambdaList.add(symbol);
+			startCall.add(symbol);
+		}
+		LispVal awaitRef = list(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(await)));
+		LispVal then = list(List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THEN)),
+				list(startCall), awaitRef));
+		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(lambdaList), then));
+	}
+
+	// (defun awaited (tok) (rontolisp::%wit-result (await tok))) -- unwraps the awaited
+	// envelope inside the promise chain, so the error arm signals at await time.
+	private static LispVal awaitUnwrapDefun(String awaited, String await) {
+		LispSymbol tok = new LispSymbol("%wit-token");
+		LispVal unwrap = list(
+				List.of(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.WIT_RESULT)),
+						list(List.of(new LispSymbol(await), tok))));
+		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(awaited), list(List.of(tok)), unwrap));
 	}
 
 	// ("member" "lisp-name") -- one bound member of a %component-import form.

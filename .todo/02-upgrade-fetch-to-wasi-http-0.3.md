@@ -349,7 +349,78 @@ The sync canonical built-ins are RENDEZVOUS (unbuffered): a `stream.write` /
 
 Not upstream-gated -- can proceed now.
 
-### Phase 2 -- unified `http.lisp` over async wasi:http@0.3 (fetch + serve in ONE)
+### Phase 2 -- unified `http.lisp` over async wasi:http@0.3 (fetch + serve in ONE) -- **DONE (2026-07-16, uncommitted)**
+
+All three shapes run E2E on wasmtime 46 (manual + the Docker integration tests):
+fetch under `wasmtime run -S http=y` (GET + POST body, response plist identical to
+interp/JVM), serve under `wasmtime serve` (method/path/query/headers/request-body/
+status/response-headers/body), and the serve+fetch proxy -- ONE component shape.
+
+What landed (beyond the pre-recorded design):
+
+- **`eval/http.lisp` + `eval/http.wit` + `eval/HttpLibrary`** replace
+  fetch.lisp/serve.lisp/fetch.wit/FetchLibrary/ServeLibrary. The splice computes a
+  REACHABILITY-based member filter from the active roots (`rontolisp:fetch` /
+  `%serve-handle`), so a fetch-only program binds no serve member (no task-return --
+  which would be invalid outside a serve lift) and vice versa. http.wit = the vendored
+  v0.3.0 types/handler/client + a clocks/types shim + the four transparent aliases
+  (`body-stream`, `trailers-future`, `transmit-future`, `handle-result`).
+- **Async func members** (`client.send`): `(:async-call member start await)` in
+  %component-import; start wrapper = async canon lower, token `(packed . retptr)`, NO
+  staging pop; await wrapper = waitable-set new/join/wait loop (skipped when status ==
+  RETURNED at start: no subtask exists then) + subtask/set drop + emitLiftAt; public
+  defun = `(rontolisp:then (start ...) #'awaited)` with a `%member-awaited` unwrap
+  defun for result-returning members, so awaiting SIGNALS the error arm (parity with
+  the interpreter/JVM fetch, which signal at await time -- the 0.2 nil-on-failure
+  convention is gone by design). Fetch does NOT need
+  `-W component-model-async-stackful=y` (async LOWER is in the default feature set).
+- **task-return members**: a non-stream/future type alias binds
+  `<alias>-task-return` (component-only, bound only when named); the wrapper lowers
+  the value with emitLowerParam and calls `canon task.return (memory, utf8)`.
+- **Waitable builtins**: 5 per async-calling interface, module = the interface id,
+  fields `[waitable-set-new]`/`[waitable-set-wait]`/`[waitable-set-drop]`/
+  `[waitable-join]`/`[subtask-drop]`, exported by the interface's synthesized core
+  instance.
+- **WasmServeComponentBuilder rewritten** on ONE block
+  (`import-block-http-server.bin`, regenerated from the 0.3 `uni-http-server` world:
+  instances 0=http/types 1=http/client 2=random 3=system-clock 4=monotonic-clock
+  5=cli/types 6=stdout 7=stderr; pre-declared aliases: type 1=request 2=response
+  3=http error-code 9/11=cli error-code; first free type 13). NARROW/WIDE gone; the
+  serve+fetch variant (`http-server-client`) deleted everywhere (blob, WIT variant,
+  fixtures, WasiWitDefinitions, WitEmitter). The preview1 bridge
+  (`adapter-http-server-p1.wat`) rewritten over the 0.3 service interfaces + stream/
+  future built-ins (fd_write = the base adapter's cli path).
+- **The handle export**: core sig `[i32 request] -> []` (`:returns :void`
+  wasm-export), `canon lift (memory, utf8, async)` against
+  `async func(request: own<request>) -> result<own<response>, error-code>` -- the
+  function type is built over the block's NAMED aliases (request/response/error-code):
+  the component-model export rule requires every non-structural type an exported
+  function references to be a NAMED type, so the anonymous structural error-code the
+  internal task-return canon uses cannot appear in the export (learned the hard way:
+  "instance not valid to be used as export").
+- **`WitResolver` fix**: an unqualified `use types.{...}` now resolves against the
+  SAME package first (the WIT rule) -- wasi:clocks and wasi:http both define an
+  interface named `types`, which made the bare-name fallback ambiguous.
+- **`lowerServeIoFromBlock`** now emits every appendUserImports kind against the
+  block's instances: sync decls, async calls, drops, alias built-ins (via
+  WitComponentLevelTypes seeded with the block's projections), task-returns, waitable
+  builtins.
+- The two user-level live-host wasi:http integration tests rewritten onto 0.3 (user
+  wit-import of the vendored WIT + aliases; the GET one now also proves the USER-level
+  async-call promise path).
+- Serve run flags: `wasmtime serve -W gc=y -W exceptions=y
+  -W component-model-async-stackful=y -W component-model-more-async-builtins=y`.
+
+Phase-3 leftovers noted below still stand (vestigial FUNC_FETCH_* seam, docs/kb,
+`.kb/fetch-http.md`, examples/wasmcloud needs RE-VERIFICATION against wasmCloud's
+experimental P3 support (a `wasip3`-feature wash build targeting
+`0.3.0-rc-2026-03-15` -- an RC, so the version strings may not link against our
+final-`@0.3.0` components; https://wasmcloud.com/blog/wasi-p3-on-wasmcloud/),
+examples/net headers need the new flags). Also: http.lisp accepts the per-call bump-heap growth of an async start
+(staging not popped); the with-* drop macro was NOT introduced -- drops are
+straight-line in http.lisp, scope-guarantee deferred.
+
+### Phase 2 original notes (kept for reference)
 
 Replaces the separate Phase-2(fetch)/Phase-3(serve) of the old plan, per the
 "collapse into one module" decision.
@@ -365,6 +436,51 @@ canonical option = tag 0x06; core sig becomes `[flat params..., results-ptr] ->
 [(status << 4) | subtask]`). `am.ik.wit` already parses `async func`
 (WitFunc.async), so the directive can KEY the async lowering off the WIT
 itself: an `async func` member on `--component` async-lowers.
+
+**Host-verified constants (2026-07-16, hand-WAT spike on wasmtime 46.0.1 --
+`scratchpad/spike03`, hello.wat + proxy.wat, both served + curl-verified,
+proxy fetched a live python http.server through async client.send):**
+
+- **Async lift (stackful) core sig = `[flat params] -> []`** -- the result is
+  delivered EXCLUSIVELY by `task.return`; there is no final core return value
+  (resolves the "final return ignored" question: nothing to ignore). The lift's
+  canonical options are `(memory, string-encoding=utf8, async)` -- the `async`
+  canon option (0x06) on the LIFT is what makes it stackful, and it requires
+  the NEW run flag **`-W component-model-async-stackful=y`** (wasmtime 46; the
+  old `:async t` wasm-export lift -- async functype, sync-ABI core, no async
+  canon option -- never needed it and still runs without it).
+- **`task.return` canon options = `(memory, string-encoding=utf8)`** (no
+  realloc; wasm-tools' choice, validated + runs). Its core params are the flat
+  lowering of the declared result type: for `result<response, error-code>` that
+  is 8 flats `[i32 disc, i32, i32, i64, i32, i32, i32, i32]` (own joins into
+  error-code's first flat; the widened error-code payload follows).
+- **Async-lowered call packed return = `(subtask << 4) | status`**, status in
+  the LOW 4 bits (observed `0x21` = subtask 2, STARTED=1). Statuses: STARTING=0,
+  STARTED=1, RETURNED=2. Async lower options = `(memory, realloc, utf8, async)`;
+  core sig `[flat params..., i32 retptr] -> [i32 packed]`.
+- **waitable-set event**: `wait(set, ptr) -> event-code`; EVENT_SUBTASK = 1,
+  `mem[ptr]` = the subtask's waitable index, `mem[ptr+4]` = its state
+  (RETURNED = 2). Builtin core sigs: `waitable-set.new [] -> [i32]`,
+  `waitable.join [i32 waitable, i32 set] -> []`, `waitable-set.drop [i32] -> []`,
+  `subtask.drop [i32] -> []`.
+- **result<response, error-code> memory layout**: disc byte @0, payload @8
+  (error-code's u64 payloads set align 8); ok arm's response handle = i32 @8.
+- **`consume-body` MOVES its resource** (`request`/`response`): dropping the
+  handle afterwards traps "unknown handle index". `request.new`/`response.new`
+  move the headers fields and the trailers-future readable; `client.send` moves
+  the request.
+- **Rendezvous order verified**: (serve) `task.return` -> `stream.write` body ->
+  `stream.drop-writable` -> `future.write` trailers ok(none); (fetch)
+  async-lowered `send` -> `future.write` request-trailers ok(none) ->
+  waitable-set wait -> lift result -> `consume-body` -> `stream.read`.
+- **wit-component name mangling** (spike only; our own core imports keep the
+  `[async-<op>]<alias>` house convention): export
+  `[async-lift-stackful]<iface>#<func>`, import `[async-lower]<func>` from the
+  interface module, `[task-return]<func>` from module `[export]<iface>`,
+  waitable builtins from module `$root`, stream/future builtins
+  `[<kind>-<op>-<N>]<cabi-func-name>` indexed within that function's signature.
+- **`wasmtime run -S http=y` links `wasi:http/{types,client}@0.3.0`** -- the
+  non-serve fetch path stays runnable under `wasmtime run`.
 
 **Async-call binding design (decided): no new promise kind.** An `async func`
 member binds as `pkg::%member-start` (lower args, async-lowered call, return a
@@ -432,6 +548,21 @@ Depends on Phase 1. Not upstream-gated for DEVELOPMENT.
   resource-linking failure) -- keep hard-cutover-behind-a-flag as the
   contingency if a host bug blocks landing.
 - Fix stale docs (mirror en/ja per CLAUDE.md, run `DocExamplesTest#fixDetailResults`):
+  - every `wasmtime serve` invocation gains `-W component-model-async-stackful=y
+    -W component-model-more-async-builtins=y` and LOSES `-S http=y` (the service
+    world's client import is host-provided by default):
+    `doc/{en,ja}/guides/http-handler.md` (x3 each), `doc/{en,ja}/compiling/wasm.md`,
+    `examples/net/*` headers, `examples/wit/keyvalue/README.md` + example headers.
+  - non-serve fetch runs under `wasmtime run -S http=y -W gc=y -W exceptions=y
+    -W component-model-more-async-builtins=y` (unchanged except docs must say the
+    transport failure now SIGNALS `rontolisp:wit-error` at await time -- nil is only
+    returned for a request that cannot be STARTED).
+  - `examples/wasmcloud/**`: re-verify against wasmCloud's experimental P3 support
+    (`cargo build -p wash --features wasip3`, targeting `0.3.0-rc-2026-03-15` --
+    check whether the RC interface versions link against our final-`@0.3.0`
+    components; https://wasmcloud.com/blog/wasi-p3-on-wasmcloud/) and update the
+    README with the build flag + status (the hard cutover was deliberate; wasmtime
+    46 still hosts 0.2 but rontolisp no longer emits it).
   - `doc/{en,ja}/reference/functions/rontolisp-fetch.md:76-77` -- the "wasi:http@0.3
     does not exist upstream yet" claim + the `.todo/02` pointer are now false.
   - the "headers dropped" limitation (`CLAUDE.md:106`, `.kb/fetch-http.md`) is

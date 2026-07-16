@@ -96,13 +96,11 @@ class WitOracleE2eTest {
 		// wasm-tools byte-for-byte; the user-import side is checked structurally and by
 		// re-parsing, which is the property that actually has to hold.
 		WasmLispCompiler http = new WasmLispCompiler(false, true);
-		http.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.FetchLibrary.process(
+		http.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.HttpLibrary.process(
 				LispReader.readAllFromString("(print (rontolisp:fetch \"http://127.0.0.1:9/\"))"),
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT)));
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
 		String wit = Objects.requireNonNull(http.componentWit());
-		assertThat(wit).contains("import wasi:http/types@0.2.0;")
-			.contains("import wasi:http/outgoing-handler@0.2.0;")
-			.contains("import wasi:io/streams@0.2.0;");
+		assertThat(wit).contains("import wasi:http/types@0.3.0;").contains("import wasi:http/client@0.3.0;");
 		// It re-parses through our own parser -- the deliberate deviation from wasm-tools
 		// is
 		// that ours stays consumable.
@@ -129,17 +127,20 @@ class WitOracleE2eTest {
 
 	@Test
 	void serveComponentWitMatchesWasmToolsModuloTheRestoredUseClause() throws Exception {
-		// wasm-tools drops incoming-handler's `use types.{...};` and prints a WIT that
-		// does not parse; the template restores it, so the emitted text is the oracle
-		// plus exactly that clause -- and, unlike the oracle, round-trips the parser.
+		// wasm-tools drops the handler interface's `use types.{...};` and prints a WIT
+		// that does not parse; the template restores it, so the emitted text is the
+		// oracle plus exactly that clause -- and, unlike the oracle, round-trips the
+		// parser.
 		byte[] component = compileServeViaCli("""
 				(defun h (r) (list :status 200 :body "x"))
 				(rontolisp:http-handler 'h)
 				""");
-		String useClause = "    use types.{incoming-request, response-outparam};\n\n";
+		String restored = "  interface handler {\n    use types.{request, response, error-code};\n\n";
 		String wit = Files.readString(this.tempDir.resolve("prog.wit"));
-		assertThat(wit).contains(useClause);
-		assertThat(wit.replace(useClause, "")).isEqualTo(oracle(component));
+		assertThat(wit).contains(restored);
+		// Strip ONLY the restored handler clause -- the client interface's own use
+		// clause is genuine and the oracle prints it too.
+		assertThat(wit.replace(restored, "  interface handler {\n")).isEqualTo(oracle(component));
 	}
 
 	@Test
@@ -169,10 +170,10 @@ class WitOracleE2eTest {
 				  (list :status 200 :body (kv:bucket-get (kv:open "") (getf request :path))))
 				(rontolisp:http-handler 'handle)
 				""");
-		String useClause = "    use types.{incoming-request, response-outparam};\n\n";
+		String restored = "  interface handler {\n    use types.{request, response, error-code};\n\n";
 		String wit = Files.readString(this.tempDir.resolve("prog.wit"));
 		assertThat(wit).contains("  import wasi:keyvalue/store@0.2.0-draft;");
-		assertThat(wit.replace(useClause, "")).isEqualTo(oracle(component));
+		assertThat(wit.replace(restored, "  interface handler {\n")).isEqualTo(oracle(component));
 	}
 
 	// Compiles source to a --component serve component through the REAL CLI (writing

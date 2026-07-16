@@ -45,7 +45,6 @@ public final class WasiWitDefinitionsGenerator {
 		variants.put("base", "VARIANT_BASE");
 		variants.put("sockets", "VARIANT_SOCKETS");
 		variants.put("http-server", "VARIANT_HTTP_SERVER");
-		variants.put("http-server-client", "VARIANT_HTTP_SERVER_CLIENT");
 		variants.put("nogc", "VARIANT_NOGC");
 		variants.put("nogc-print", "VARIANT_NOGC_PRINT");
 		return variants;

@@ -326,10 +326,9 @@ public final class WasmComponentBuilder {
 	 */
 	static byte[] build(byte[] coreModule, boolean usesSockets, List<WasmExportCompiler.Decl> funcExports,
 			List<WasmComponentImportCompiler.Import> imports) {
-		// rontolisp:fetch off serve is the fetch.lisp library over canon-lowered
-		// wasi:http
-		// user imports (the base variant); the WAT http-client adapter is gone, and
-		// serve+fetch keeps its own adapter through buildServe, not here.
+		// rontolisp:fetch off serve is the http.lisp library over canon-lowered
+		// wasi:http@0.3 user imports (the base variant); a serving program goes through
+		// buildServe instead.
 		String variant = usesSockets ? WitEmitter.VARIANT_SOCKETS : WitEmitter.VARIANT_BASE;
 		rejectAdapterImportCollisions(imports, variant);
 		return usesSockets ? buildSock(coreModule, funcExports, imports) : buildBase(coreModule, funcExports, imports);
@@ -454,9 +453,19 @@ public final class WasmComponentBuilder {
 						.add(resource.resource());
 				}
 			}
+			// A task-return's declared result type reaches resources the same way (its
+			// component-level type is derived by the same machinery).
+			for (WasmComponentImportCompiler.TaskReturn tr : imported.taskReturns()) {
+				final List<WitComponentTypeEncoder.ForeignResource> reached = new java.util.ArrayList<>();
+				WitComponentLevelTypes.collectResources(imported.resolver(), tr.abi(), tr.type(), reached);
+				for (WitComponentTypeEncoder.ForeignResource resource : reached) {
+					provides.computeIfAbsent(resource.ownerIfaceId(), id -> new java.util.LinkedHashSet<>())
+						.add(resource.resource());
+				}
+			}
 		}
 		for (WasmComponentImportCompiler.Import imported : imports) {
-			if (imported.decls().isEmpty() && !provides.containsKey(imported.ifaceId())) {
+			if (imported.decls().isEmpty() && imported.calls().isEmpty() && !provides.containsKey(imported.ifaceId())) {
 				throw new UnsupportedOperationException("rontolisp:wit-import of '" + imported.ifaceId()
 						+ "': the program calls none of its functions, and no other imported interface uses its types");
 			}
@@ -513,6 +522,18 @@ public final class WasmComponentBuilder {
 						? ComponentWriter.canonLowerMemoryReallocUtf8(compFunc, 0, 0)
 						: ComponentWriter.canonLower(compFunc));
 				fields.add(decl.field());
+				coreIndices.add(coreFunc);
+				compFunc++;
+				coreFunc++;
+			}
+			// Async func members follow the sync ones: aliased like any bound function,
+			// but canon-lowered with the `async` option -- the core call returns the
+			// packed (subtask << 4) | status immediately, and the memory options cover
+			// the always-indirect result.
+			for (WasmComponentImportCompiler.AsyncCall call : imported.calls()) {
+				funcAliases.add(ComponentWriter.aliasInstanceFunc(instance, call.field()));
+				lowers.add(ComponentWriter.canonLowerAsyncMemoryReallocUtf8(compFunc, 0, 0));
+				fields.add(call.field());
 				coreIndices.add(coreFunc);
 				compFunc++;
 				coreFunc++;
@@ -594,6 +615,39 @@ public final class WasmComponentBuilder {
 				coreIndices.add(coreFunc++);
 			}
 		}
+		// Task-return built-ins (typed by their alias's derived component-level type)
+		// and the waitable-set builtins each async-calling interface shares. Emitted
+		// into the same canon run as the async built-ins; the type derivation must
+		// precede the flush below.
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			if (imported.taskReturns().isEmpty() && imported.calls().isEmpty()) {
+				continue;
+			}
+			final List<Integer> coreIndices = asyncCoreOf.computeIfAbsent(imported.ifaceId(),
+					id -> new java.util.ArrayList<>());
+			final List<String> fields = asyncFieldsOf.computeIfAbsent(imported.ifaceId(),
+					id -> new java.util.ArrayList<>());
+			final java.util.Set<String> seen = new java.util.LinkedHashSet<>(fields);
+			for (WasmComponentImportCompiler.TaskReturn tr : imported.taskReturns()) {
+				if (!seen.add(tr.field())) {
+					continue;
+				}
+				int type = componentTypes.indexOf(imported.resolver(), tr.abi(), tr.type());
+				asyncCanons.add(ComponentWriter.canonTaskReturnTypeMemoryUtf8(type, 0));
+				fields.add(tr.field());
+				coreIndices.add(coreFunc++);
+			}
+			if (!imported.calls().isEmpty()) {
+				for (String field : WasmComponentImportCompiler.WAITABLE_FIELDS) {
+					if (!seen.add(field)) {
+						continue;
+					}
+					asyncCanons.add(waitableCanon(field));
+					fields.add(field);
+					coreIndices.add(coreFunc++);
+				}
+			}
+		}
 		typeIdx = componentTypes.nextType();
 		componentTypes.flush(c);
 		if (!asyncCanons.isEmpty()) {
@@ -628,7 +682,7 @@ public final class WasmComponentBuilder {
 	// through the shared memory (core memory 0); a future.read whose payload carries a
 	// string/list<u8> additionally needs realloc (the shared memory's cabi_realloc =
 	// core func 0) for the host-staged bytes.
-	private static byte[] asyncCanon(WasmComponentImportCompiler.Async async, int type) {
+	static byte[] asyncCanon(WasmComponentImportCompiler.Async async, int type) {
 		return switch (async.op()) {
 			case NEW -> async.stream() ? ComponentWriter.canonStreamNew(type) : ComponentWriter.canonFutureNew(type);
 			case READ -> async.stream() ? ComponentWriter.canonStreamRead(type, 0)
@@ -640,6 +694,19 @@ public final class WasmComponentBuilder {
 					: ComponentWriter.canonFutureDropReadable(type);
 			case DROP_WRITABLE -> async.stream() ? ComponentWriter.canonStreamDropWritable(type)
 					: ComponentWriter.canonFutureDropWritable(type);
+		};
+	}
+
+	// The canon entry of one waitable-set builtin (host-verified core signatures; the
+	// wait's event payload is written through the shared memory, core memory 0).
+	static byte[] waitableCanon(String field) {
+		return switch (field) {
+			case WasmComponentImportCompiler.FIELD_WAITABLE_SET_NEW -> ComponentWriter.canonWaitableSetNew();
+			case WasmComponentImportCompiler.FIELD_WAITABLE_SET_WAIT -> ComponentWriter.canonWaitableSetWait(0);
+			case WasmComponentImportCompiler.FIELD_WAITABLE_SET_DROP -> ComponentWriter.canonWaitableSetDrop();
+			case WasmComponentImportCompiler.FIELD_WAITABLE_JOIN -> ComponentWriter.canonWaitableJoin();
+			case WasmComponentImportCompiler.FIELD_SUBTASK_DROP -> ComponentWriter.canonSubtaskDrop();
+			default -> throw new IllegalStateException("not a waitable builtin field: " + field);
 		};
 	}
 
@@ -668,15 +735,16 @@ public final class WasmComponentBuilder {
 
 	/**
 	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program:
-	 * wrap the rontolisp core (compiled in serve mode, exporting serve.lisp's
-	 * {@code handle} and {@code __ronto_alloc}) with the preview1 bridge
-	 * ({@code adapter-http-server-p1.wasm}: random / clocks / stdout-stderr for the
-	 * core's {@code wasi_snapshot_preview1} imports) and lift {@code handle} into
-	 * {@code wasi:http/incoming-handler@0.2.0}. The HTTP glue is Lisp (serve.lisp), so
-	 * there is no hand-written serve adapter. Runs under {@code wasmtime serve} (or any
-	 * {@code wasi:http} 0.2 host with wasm-GC enabled, e.g. jco or wasmCloud).
+	 * wrap the rontolisp core (compiled in serve mode, exporting http.lisp's
+	 * {@code handle}) with the preview1 bridge ({@code adapter-http-server-p1.wasm}:
+	 * random / clocks / stdout-stderr over the 0.3 service-world interfaces) and lift
+	 * {@code handle} as the stackful-async {@code wasi:http/handler@0.3.0} export. The
+	 * HTTP glue is Lisp (http.lisp), so there is no hand-written serve adapter. Runs
+	 * under {@code wasmtime serve -W gc=y -W exceptions=y -W
+	 * component-model-async-stackful=y -W component-model-more-async-builtins=y}
+	 * (wasmtime 46+).
 	 * @param coreModule the rontolisp core module compiled in serve mode
-	 * @return the WASI 0.2 (http/incoming-handler) component binary
+	 * @return the wasi:http@0.3.0 handler component binary
 	 */
 	public static byte[] buildServe(byte[] coreModule) {
 		return buildServe(coreModule, List.of());
@@ -684,31 +752,22 @@ public final class WasmComponentBuilder {
 
 	/**
 	 * Assemble the serve-variant component, additionally importing the given interfaces.
-	 * A handler that also uses {@code rontolisp:fetch} carries fetch.lisp's outgoing
-	 * {@code wasi:http} bindings here too, and {@link WasmServeComponentBuilder#build}
-	 * selects the wider import block for it (run with {@code wasmtime serve -S http=y});
-	 * a served handler whose state lives in a real store adds a
+	 * ONE shape serves plain serve AND serve+fetch (the 0.3 service world always imports
+	 * {@code client}); a served handler whose state lives in a real store adds a
 	 * {@code rontolisp:wit-import} (e.g. wasi:keyvalue), wired by
-	 * {@link #appendUserImports}. An import-free plain serve component stays
-	 * byte-identical.
+	 * {@link #appendUserImports}.
 	 * @param coreModule the rontolisp core module compiled in serve mode
-	 * @param imports the interface imports (fixed wasi:io / wasi:http from serve.lisp /
-	 * fetch.lisp, plus any user {@code rontolisp:wit-import}; empty for none)
-	 * @return the WASI 0.2 (http/incoming-handler) component binary
+	 * @param imports the interface imports (fixed wasi:http from http.lisp, plus any user
+	 * {@code rontolisp:wit-import}; empty for none)
+	 * @return the wasi:http@0.3.0 handler component binary
 	 */
 	static byte[] buildServe(byte[] coreModule, List<WasmComponentImportCompiler.Import> imports) {
 		// Only the ADDITIONAL rontolisp:wit-import interfaces are checked for a
-		// double-import
-		// collision -- the fixed wasi:io / wasi:http surface is declared by the import
-		// block
-		// and lowered from it, not re-imported. The surface's variant grows with fetch,
-		// so
-		// pick the WIT world that matches (its interface list is what the check compares
-		// a
-		// user import against).
-		final String variant = WasmServeComponentBuilder.usesFetchSurface(imports)
-				? WitEmitter.VARIANT_HTTP_SERVER_CLIENT : WitEmitter.VARIANT_HTTP_SERVER;
-		rejectAdapterImportCollisions(WasmServeComponentBuilder.additionalImports(imports), variant);
+		// double-import collision -- the fixed wasi:http surface is declared by the
+		// import block and lowered from it, not re-imported. ONE world serves plain
+		// serve and serve+fetch (the 0.3 service world always imports client).
+		rejectAdapterImportCollisions(WasmServeComponentBuilder.additionalImports(imports),
+				WitEmitter.VARIANT_HTTP_SERVER);
 		return WasmServeComponentBuilder.build(coreModule, imports);
 	}
 

@@ -35,7 +35,6 @@ final class WasiWitDefinitions {
 			case WitEmitter.VARIANT_BASE -> base();
 			case WitEmitter.VARIANT_SOCKETS -> sockets();
 			case WitEmitter.VARIANT_HTTP_SERVER -> httpServer();
-			case WitEmitter.VARIANT_HTTP_SERVER_CLIENT -> httpServerClient();
 			case WitEmitter.VARIANT_NOGC -> nogc();
 			case WitEmitter.VARIANT_NOGC_PRINT -> nogcPrint();
 			default -> throw new IllegalStateException("Missing WIT definition for variant: " + variant);
@@ -71,26 +70,13 @@ final class WasiWitDefinitions {
 
 	private static WitDocument httpServer() {
 		return Wit.document(packageHeader("root", "component", null), world("root",
-				importRef(ref("wasi", "clocks", "monotonic-clock", "0.2.0")),
-				importRef(ref("wasi", "io", "error", "0.2.0")), importRef(ref("wasi", "io", "streams", "0.2.0")),
-				importRef(ref("wasi", "http", "types", "0.2.0")), importRef(ref("wasi", "random", "random", "0.2.0")),
-				importRef(ref("wasi", "clocks", "wall-clock", "0.2.0")),
-				importRef(ref("wasi", "cli", "stdout", "0.2.0")), importRef(ref("wasi", "cli", "stderr", "0.2.0")),
-				exportRef(ref("wasi", "http", "incoming-handler", "0.2.0"))), wasiClocksV020(), wasiIoV020(),
-				wasiHttpV020(), wasiRandomV020(), wasiCliV020());
-	}
-
-	private static WitDocument httpServerClient() {
-		return Wit.document(packageHeader("root", "component", null), world("root",
-				importRef(ref("wasi", "io", "poll", "0.2.0")),
-				importRef(ref("wasi", "clocks", "monotonic-clock", "0.2.0")),
-				importRef(ref("wasi", "io", "error", "0.2.0")), importRef(ref("wasi", "io", "streams", "0.2.0")),
-				importRef(ref("wasi", "http", "types", "0.2.0")), importRef(ref("wasi", "random", "random", "0.2.0")),
-				importRef(ref("wasi", "clocks", "wall-clock", "0.2.0")),
-				importRef(ref("wasi", "cli", "stdout", "0.2.0")), importRef(ref("wasi", "cli", "stderr", "0.2.0")),
-				importRef(ref("wasi", "http", "outgoing-handler", "0.2.0")),
-				exportRef(ref("wasi", "http", "incoming-handler", "0.2.0"))), wasiIoV020HttpServerClient(),
-				wasiClocksV020(), wasiHttpV020HttpServerClient(), wasiRandomV020(), wasiCliV020());
+				importRef(ref("wasi", "http", "types", "0.3.0")), importRef(ref("wasi", "http", "client", "0.3.0")),
+				importRef(ref("wasi", "random", "random", "0.3.0")),
+				importRef(ref("wasi", "clocks", "system-clock", "0.3.0")),
+				importRef(ref("wasi", "clocks", "monotonic-clock", "0.3.0")),
+				importRef(ref("wasi", "cli", "types", "0.3.0")), importRef(ref("wasi", "cli", "stdout", "0.3.0")),
+				importRef(ref("wasi", "cli", "stderr", "0.3.0")), exportRef(ref("wasi", "http", "handler", "0.3.0"))),
+				wasiHttpV030(), wasiRandomV030(), wasiClocksV030(), wasiCliV030HttpServer());
 	}
 
 	private static WitDocument nogc() {
@@ -102,7 +88,7 @@ final class WasiWitDefinitions {
 				world("root", importRef(ref("wasi", "io", "error", "0.2.0")),
 						importRef(ref("wasi", "io", "streams", "0.2.0")),
 						importRef(ref("wasi", "cli", "stdout", "0.2.0"))),
-				wasiIoV020NogcPrint(), wasiCliV020NogcPrint());
+				wasiIoV020(), wasiCliV020());
 	}
 
 	private static WitItem wasiCliV030() {
@@ -194,220 +180,123 @@ final class WasiWitDefinitions {
 						vcase("ipv6", named("ipv6-socket-address")))));
 	}
 
-	private static WitItem wasiClocksV020() {
-		return packageBlock("wasi", "clocks", "0.2.0",
-				iface("monotonic-clock", typeAlias("instant", u64()), func("now", funcType(named("instant")))),
-				iface("wall-clock", record("datetime", field("seconds", u64()), field("nanoseconds", u32())),
-						func("now", funcType(named("datetime")))));
+	private static WitItem wasiHttpV030() {
+		return packageBlock("wasi", "http", "0.3.0",
+				iface("types",
+						resource("fields", constructor(),
+								func("append", funcType(result(null, named("header-error")),
+										param("name", named("field-name")), param("value", named("field-value")))),
+								func("copy-all", funcType(list(tuple(named("field-name"), named("field-value")))))),
+						typeAlias("field-name", string()), typeAlias("field-value", list(u8())),
+						variant("header-error", vcase("invalid-syntax"), vcase("forbidden"), vcase("immutable"),
+								vcase("size-exceeded"), vcase("other", option(string()))),
+						resource("request",
+								staticFunc("new",
+										funcType(tuple(named("request"), future(result(null, named("error-code")))),
+												param("headers", named("headers")),
+												param("contents", option(stream(u8()))),
+												param("trailers",
+														future(result(option(named("trailers")), named("error-code")))),
+												param("options", option(named("request-options"))))),
+								func("get-method", funcType(named("method"))),
+								func("set-method", funcType(result(), param("method", named("method")))),
+								func("get-path-with-query", funcType(option(string()))),
+								func("set-path-with-query",
+										funcType(result(), param("path-with-query", option(string())))),
+								func("set-scheme", funcType(result(), param("scheme", option(named("scheme"))))),
+								func("set-authority", funcType(result(), param("authority", option(string())))),
+								func("get-headers", funcType(
+										named("headers"))),
+								staticFunc("consume-body",
+										funcType(
+												tuple(stream(u8()),
+														future(result(option(named("trailers")), named("error-code")))),
+												param("this", named("request")),
+												param("res", future(result(null, named("error-code"))))))),
+						typeAlias("headers", named("fields")), typeAlias("trailers", named("fields")),
+						record("DNS-error-payload", field("rcode", option(string())), field("info-code",
+								option(u16()))),
+						record("TLS-alert-received-payload", field("alert-id", option(u8())),
+								field("alert-message", option(string()))),
+						record("field-size-payload", field("field-name", option(string())),
+								field("field-size", option(u32()))),
+						variant("error-code", vcase("DNS-timeout"), vcase("DNS-error", named("DNS-error-payload")),
+								vcase("destination-not-found"), vcase("destination-unavailable"),
+								vcase("destination-IP-prohibited"), vcase("destination-IP-unroutable"),
+								vcase("connection-refused"), vcase("connection-terminated"),
+								vcase("connection-timeout"), vcase("connection-read-timeout"),
+								vcase("connection-write-timeout"), vcase("connection-limit-reached"),
+								vcase("TLS-protocol-error"), vcase("TLS-certificate-error"),
+								vcase("TLS-alert-received", named("TLS-alert-received-payload")),
+								vcase("HTTP-request-denied"), vcase("HTTP-request-length-required"),
+								vcase("HTTP-request-body-size", option(u64())), vcase("HTTP-request-method-invalid"),
+								vcase("HTTP-request-URI-invalid"), vcase("HTTP-request-URI-too-long"),
+								vcase("HTTP-request-header-section-size", option(u32())),
+								vcase("HTTP-request-header-size", option(named("field-size-payload"))),
+								vcase("HTTP-request-trailer-section-size", option(u32())),
+								vcase("HTTP-request-trailer-size", named("field-size-payload")),
+								vcase("HTTP-response-incomplete"),
+								vcase("HTTP-response-header-section-size", option(u32())),
+								vcase("HTTP-response-header-size", named("field-size-payload")),
+								vcase("HTTP-response-body-size", option(u64())),
+								vcase("HTTP-response-trailer-section-size", option(u32())),
+								vcase("HTTP-response-trailer-size", named("field-size-payload")),
+								vcase("HTTP-response-transfer-coding", option(string())),
+								vcase("HTTP-response-content-coding", option(string())), vcase("HTTP-response-timeout"),
+								vcase("HTTP-upgrade-failed"), vcase(
+										"HTTP-protocol-error"),
+								vcase("loop-detected"), vcase("configuration-error"),
+								vcase("internal-error", option(string()))),
+						resource("request-options"),
+						variant("method", vcase("get"), vcase("head"), vcase("post"), vcase("put"), vcase("delete"),
+								vcase("connect"), vcase("options"), vcase("trace"), vcase("patch"),
+								vcase("other", string())),
+						variant("scheme", vcase("HTTP"), vcase("HTTPS"), vcase("other", string())),
+						resource("response", staticFunc("new",
+								funcType(tuple(named("response"), future(result(null, named("error-code")))),
+										param("headers", named("headers")), param("contents", option(stream(u8()))),
+										param("trailers",
+												future(result(option(named("trailers")), named("error-code")))))),
+								func("get-status-code", funcType(named("status-code"))),
+								func("set-status-code", funcType(result(), param("status-code", named("status-code")))),
+								func("get-headers", funcType(
+										named("headers"))),
+								staticFunc("consume-body",
+										funcType(
+												tuple(stream(u8()),
+														future(result(option(named("trailers")), named("error-code")))),
+												param("this", named("response")),
+												param("res", future(result(null, named("error-code"))))))),
+						typeAlias("status-code", u16())),
+				iface("client", use(localRef("types"), useName("request"), useName("response"), useName("error-code")),
+						func("send",
+								asyncFuncType(result(named("response"), named("error-code")),
+										param("request", named("request"))))),
+				iface("handler", use(localRef("types"), useName("request"), useName("response"), useName("error-code")),
+						func("handle", asyncFuncType(result(named("response"), named("error-code")),
+								param("request", named("request"))))));
+	}
+
+	private static WitItem wasiCliV030HttpServer() {
+		return packageBlock("wasi", "cli", "0.3.0",
+				iface("types", enumDef("error-code", "io", "illegal-byte-sequence", "pipe")),
+				iface("stdout", use(localRef("types"), useName("error-code")),
+						func("write-via-stream",
+								funcType(future(result(null, named("error-code"))), param("data", stream(u8()))))),
+				iface("stderr", use(localRef("types"), useName("error-code")), func("write-via-stream",
+						funcType(future(result(null, named("error-code"))), param("data", stream(u8()))))));
 	}
 
 	private static WitItem wasiIoV020() {
 		return packageBlock("wasi", "io", "0.2.0", iface("error", resource("error")),
 				iface("streams", use(localRef("error"), useName("error")),
-						resource("input-stream",
-								func("blocking-read",
-										funcType(result(list(u8()), named("stream-error")), param("len", u64())))),
 						resource("output-stream",
 								func("blocking-write-and-flush",
 										funcType(result(null, named("stream-error")), param("contents", list(u8()))))),
 						variant("stream-error", vcase("last-operation-failed", named("error")), vcase("closed"))));
-	}
-
-	private static WitItem wasiHttpV020() {
-		return packageBlock("wasi", "http", "0.2.0",
-				iface("types",
-						use(ref("wasi", "io", "streams", "0.2.0"), useName("input-stream"), useName("output-stream")),
-						resource("incoming-request", func("method", funcType(named("method"))),
-								func("path-with-query", funcType(option(string()))),
-								func("headers", funcType(named("headers"))),
-								func("consume", funcType(result(named("incoming-body"))))),
-						variant("method", vcase("get"), vcase("head"), vcase("post"), vcase("put"), vcase("delete"),
-								vcase("connect"), vcase("options"), vcase("trace"), vcase("patch"),
-								vcase("other", string())),
-						resource("fields", constructor(),
-								func("append",
-										funcType(result(null, named("header-error")), param("name", named("field-key")),
-												param("value", named("field-value")))),
-								func("entries", funcType(list(tuple(named("field-key"), named("field-value")))))),
-						typeAlias("headers", named("fields")),
-						resource("incoming-body", func("stream", funcType(result(named("input-stream"))))),
-						typeAlias("field-key", string()), typeAlias("field-value", list(u8())),
-						variant("header-error", vcase("invalid-syntax"), vcase("forbidden"), vcase("immutable")),
-						resource("outgoing-response", constructor(param("headers", named("headers"))),
-								func("set-status-code", funcType(result(), param("status-code", named("status-code")))),
-								func("body", funcType(result(named("outgoing-body"))))),
-						typeAlias("status-code", u16()),
-						resource("outgoing-body", func("write", funcType(result(named("output-stream")))), staticFunc(
-								"finish",
-								funcType(result(null, named("error-code")), param("this", named("outgoing-body")),
-										param("trailers", option(named("trailers")))))),
-						typeAlias("trailers", named("fields")), record(
-								"DNS-error-payload", field("rcode", option(string())),
-								field("info-code", option(u16()))),
-						record("TLS-alert-received-payload", field("alert-id", option(u8())),
-								field("alert-message", option(string()))),
-						record("field-size-payload", field("field-name", option(string())),
-								field("field-size", option(u32()))),
-						variant("error-code", vcase("DNS-timeout"), vcase("DNS-error", named("DNS-error-payload")),
-								vcase("destination-not-found"), vcase("destination-unavailable"),
-								vcase("destination-IP-prohibited"), vcase("destination-IP-unroutable"),
-								vcase("connection-refused"), vcase("connection-terminated"),
-								vcase("connection-timeout"), vcase("connection-read-timeout"),
-								vcase("connection-write-timeout"), vcase("connection-limit-reached"),
-								vcase("TLS-protocol-error"), vcase("TLS-certificate-error"),
-								vcase("TLS-alert-received", named("TLS-alert-received-payload")),
-								vcase("HTTP-request-denied"), vcase("HTTP-request-length-required"),
-								vcase("HTTP-request-body-size", option(u64())), vcase("HTTP-request-method-invalid"),
-								vcase("HTTP-request-URI-invalid"), vcase("HTTP-request-URI-too-long"),
-								vcase("HTTP-request-header-section-size", option(u32())),
-								vcase("HTTP-request-header-size", option(named("field-size-payload"))),
-								vcase("HTTP-request-trailer-section-size", option(u32())),
-								vcase("HTTP-request-trailer-size", named("field-size-payload")),
-								vcase("HTTP-response-incomplete"),
-								vcase("HTTP-response-header-section-size", option(u32())),
-								vcase("HTTP-response-header-size", named("field-size-payload")),
-								vcase("HTTP-response-body-size", option(u64())),
-								vcase("HTTP-response-trailer-section-size", option(u32())),
-								vcase("HTTP-response-trailer-size", named("field-size-payload")),
-								vcase("HTTP-response-transfer-coding", option(string())),
-								vcase("HTTP-response-content-coding", option(string())), vcase("HTTP-response-timeout"),
-								vcase("HTTP-upgrade-failed"), vcase("HTTP-protocol-error"), vcase("loop-detected"),
-								vcase("configuration-error"), vcase("internal-error", option(string()))),
-						resource("response-outparam", staticFunc("set",
-								funcType(param("param", named("response-outparam")),
-										param("response", result(named("outgoing-response"), named("error-code"))))))),
-				iface("incoming-handler",
-						use(localRef("types"), useName("incoming-request"), useName("response-outparam")),
-						func("handle", funcType(param("request", named("incoming-request")),
-								param("response-out", named("response-outparam"))))));
-	}
-
-	private static WitItem wasiRandomV020() {
-		return packageBlock("wasi", "random", "0.2.0", iface("random", func("get-random-u64", funcType(u64()))));
 	}
 
 	private static WitItem wasiCliV020() {
-		return packageBlock("wasi", "cli", "0.2.0",
-				iface("stdout", use(ref("wasi", "io", "streams", "0.2.0"), useName("output-stream")),
-						func("get-stdout", funcType(named("output-stream")))),
-				iface("stderr", use(ref("wasi", "io", "streams", "0.2.0"), useName("output-stream")),
-						func("get-stderr", funcType(named("output-stream")))));
-	}
-
-	private static WitItem wasiIoV020HttpServerClient() {
-		return packageBlock("wasi", "io", "0.2.0", iface("poll", resource("pollable", func("block", funcType()))),
-				iface("error", resource("error")),
-				iface("streams", use(localRef("error"), useName("error")),
-						resource("input-stream",
-								func("blocking-read",
-										funcType(result(list(u8()), named("stream-error")), param("len", u64())))),
-						resource("output-stream",
-								func("blocking-write-and-flush",
-										funcType(result(null, named("stream-error")), param("contents", list(u8()))))),
-						variant("stream-error", vcase("last-operation-failed", named("error")), vcase("closed"))));
-	}
-
-	private static WitItem wasiHttpV020HttpServerClient() {
-		return packageBlock("wasi", "http", "0.2.0",
-				iface("types",
-						use(ref("wasi", "io", "streams", "0.2.0"), useName("input-stream"), useName("output-stream")),
-						use(ref("wasi", "io", "poll", "0.2.0"), useName("pollable")),
-						resource("incoming-request", func("method", funcType(named("method"))),
-								func("path-with-query", funcType(option(string()))),
-								func("headers", funcType(named("headers"))),
-								func("consume", funcType(result(named("incoming-body"))))),
-						variant("method", vcase("get"), vcase("head"), vcase("post"), vcase("put"), vcase("delete"),
-								vcase("connect"), vcase("options"), vcase("trace"), vcase("patch"),
-								vcase("other", string())),
-						resource("fields", constructor(),
-								func("append",
-										funcType(result(null, named("header-error")), param("name", named("field-key")),
-												param("value", named("field-value")))),
-								func("entries", funcType(list(tuple(named("field-key"), named("field-value")))))),
-						typeAlias("headers", named("fields")),
-						resource("incoming-body", func("stream", funcType(result(named("input-stream"))))),
-						resource("outgoing-response", constructor(param("headers", named("headers"))),
-								func("set-status-code", funcType(result(), param("status-code", named("status-code")))),
-								func("body", funcType(result(named("outgoing-body"))))),
-						typeAlias("status-code", u16()),
-						resource("outgoing-body", func("write", funcType(result(named("output-stream")))), staticFunc(
-								"finish",
-								funcType(result(null, named("error-code")), param("this", named("outgoing-body")),
-										param("trailers", option(named("trailers")))))),
-						typeAlias("trailers", named("fields")), record(
-								"DNS-error-payload", field("rcode", option(string())),
-								field("info-code", option(u16()))),
-						record("TLS-alert-received-payload", field("alert-id", option(u8())),
-								field("alert-message", option(string()))),
-						record("field-size-payload", field("field-name", option(string())),
-								field("field-size", option(u32()))),
-						variant("error-code", vcase("DNS-timeout"), vcase("DNS-error", named("DNS-error-payload")),
-								vcase("destination-not-found"), vcase("destination-unavailable"),
-								vcase("destination-IP-prohibited"), vcase("destination-IP-unroutable"),
-								vcase("connection-refused"), vcase("connection-terminated"),
-								vcase("connection-timeout"), vcase("connection-read-timeout"),
-								vcase("connection-write-timeout"), vcase("connection-limit-reached"),
-								vcase("TLS-protocol-error"), vcase("TLS-certificate-error"),
-								vcase("TLS-alert-received", named("TLS-alert-received-payload")),
-								vcase("HTTP-request-denied"), vcase("HTTP-request-length-required"),
-								vcase("HTTP-request-body-size", option(u64())), vcase("HTTP-request-method-invalid"),
-								vcase("HTTP-request-URI-invalid"), vcase("HTTP-request-URI-too-long"),
-								vcase("HTTP-request-header-section-size", option(u32())),
-								vcase("HTTP-request-header-size", option(named("field-size-payload"))),
-								vcase("HTTP-request-trailer-section-size", option(u32())),
-								vcase("HTTP-request-trailer-size", named("field-size-payload")),
-								vcase("HTTP-response-incomplete"),
-								vcase("HTTP-response-header-section-size", option(u32())),
-								vcase("HTTP-response-header-size", named("field-size-payload")),
-								vcase("HTTP-response-body-size", option(u64())),
-								vcase("HTTP-response-trailer-section-size", option(u32())),
-								vcase("HTTP-response-trailer-size", named("field-size-payload")),
-								vcase("HTTP-response-transfer-coding", option(string())),
-								vcase("HTTP-response-content-coding", option(string())), vcase("HTTP-response-timeout"),
-								vcase("HTTP-upgrade-failed"), vcase("HTTP-protocol-error"), vcase("loop-detected"),
-								vcase("configuration-error"), vcase("internal-error", option(string()))),
-						resource("response-outparam", staticFunc("set",
-								funcType(param("param", named("response-outparam")),
-										param("response", result(named("outgoing-response"), named("error-code")))))),
-						typeAlias("field-key", string()), typeAlias("field-value", list(u8())),
-						variant("header-error", vcase("invalid-syntax"), vcase("forbidden"), vcase("immutable")),
-						resource("outgoing-request", constructor(param("headers", named("headers"))),
-								func("body", funcType(result(named("outgoing-body")))),
-								func("set-method", funcType(result(), param("method", named("method")))),
-								func("set-path-with-query",
-										funcType(result(), param("path-with-query", option(string())))),
-								func("set-scheme", funcType(result(), param("scheme", option(named("scheme"))))),
-								func("set-authority", funcType(result(), param("authority", option(string()))))),
-						variant("scheme", vcase("HTTP"), vcase("HTTPS"), vcase("other", string())),
-						resource("future-incoming-response", func("subscribe", funcType(named("pollable"))), func("get",
-								funcType(option(result(result(named("incoming-response"), named("error-code"))))))),
-						resource("incoming-response", func("status", funcType(named("status-code"))),
-								func("headers", funcType(named("headers"))),
-								func("consume", funcType(result(named("incoming-body"))))),
-						resource("request-options")),
-				iface("outgoing-handler",
-						use(localRef("types"), useName("outgoing-request"), useName("request-options"),
-								useName("future-incoming-response"), useName("error-code")),
-						func("handle",
-								funcType(result(named("future-incoming-response"), named("error-code")),
-										param("request", named("outgoing-request")),
-										param("options", option(named("request-options")))))),
-				iface("incoming-handler",
-						use(localRef("types"), useName("incoming-request"), useName("response-outparam")),
-						func("handle", funcType(param("request", named("incoming-request")),
-								param("response-out", named("response-outparam"))))));
-	}
-
-	private static WitItem wasiIoV020NogcPrint() {
-		return packageBlock("wasi", "io", "0.2.0", iface("error", resource("error")),
-				iface("streams", use(localRef("error"), useName("error")),
-						resource("output-stream",
-								func("blocking-write-and-flush",
-										funcType(result(null, named("stream-error")), param("contents", list(u8()))))),
-						variant("stream-error", vcase("last-operation-failed", named("error")), vcase("closed"))));
-	}
-
-	private static WitItem wasiCliV020NogcPrint() {
 		return packageBlock("wasi", "cli", "0.2.0",
 				iface("stdout", use(ref("wasi", "io", "streams", "0.2.0"), useName("output-stream")),
 						func("get-stdout", funcType(named("output-stream")))));

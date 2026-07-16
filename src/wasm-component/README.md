@@ -41,10 +41,10 @@ src/wasm-component/regen.sh     # regenerate all three artifacts (needs wasm-too
 ## The `--emit-wit` fixtures and `WasiWitDefinitions`
 
 The CLI's `--emit-wit` option writes the component's WIT world next to the `.wasm`. The fixed
-part of that text (world imports, the fixed `wasi:cli/run` / `wasi:http/incoming-handler`
+part of that text (world imports, the fixed `wasi:cli/run` / `wasi:http/handler`
 export, the referenced package definitions) is the per-variant document model in
-`WasiWitDefinitions.java` — `base`/`sockets`/`http-server`/
-`http-server-client` (GC) and `nogc`/`nogc-print` — **generated** by
+`WasiWitDefinitions.java` — `base`/`sockets`/`http-server` (GC) and
+`nogc`/`nogc-print` — **generated** by
 `WasiWitDefinitionsGenerator` (test sources) from the fixtures under
 `src/test/resources/.../component/wit/`, which are captured verbatim from
 `wasm-tools component wit` on a minimal reference component per variant. `WitEmitter`
@@ -52,9 +52,9 @@ appends the per-program `rontolisp:wasm-export` items to the world and prints th
 with `am.ik.wit.WitPrinter`; `WasiWitDefinitionsTest` pins each variant byte-for-byte
 against its fixture, always-on. Two deliberate fixture edits over the raw tool output,
 both encoded in `regen-wit.sh`: the reference program's own export lines are stripped,
-and the http-server variants restore incoming-handler's
-`use types.{incoming-request, response-outparam};` clause that `wasm-tools component wit`
-omits (its output does not parse without it; the upstream `deps/http/handler.wit` has it).
+and the http-server variant restores the handler interface's
+`use types.{request, response, error-code};` clause that `wasm-tools component wit`
+omits (its output does not parse without it; the upstream wasi:http worlds.wit has it).
 
 Regeneration is three-phase because the fixed exports are wired by `WasmComponentBuilder`
 (they are not in the `uni*.wit` reference worlds), so the reference components must be
@@ -194,38 +194,41 @@ only (`wasi:sockets/ip-name-lookup` is not wired yet). Combining `rontolisp:fetc
 and the tcp functions in one component is a compile error. Details:
 `../../.kb/tcp-sockets.md`.
 
-## HTTP client (`rontolisp:fetch`) — the `fetch.lisp` library, no adapter blob
+## HTTP client (`rontolisp:fetch`) — the `http.lisp` library, no adapter blob
 
 `rontolisp:fetch` on the plain `wasmtime run` (`--component`, non-serve) path has **no
 hand-written adapter and no blob variant of its own**. It is a spliced Lisp-source library,
-`src/main/resources/am/ik/rontolisp/eval/fetch.lisp` (spliced by `eval/FetchLibrary`), over a
-`rontolisp:wit-import`ed `wasi:http` / `wasi:io` surface (`fetch.wit`, a classpath resource
-carried inline) — the same canon-lower machinery any `rontolisp:wit-import` uses. So a
-non-serve fetch selects the **base** blob set and pulls `wasi:http@0.2` + `wasi:io@0.2` in
-through canon-lowered user imports; its `--emit-wit` world shows
-`import wasi:http/types@0.2.0;` + `import wasi:http/outgoing-handler@0.2.0;` + the
-`wasi:io/*` imports. The user-facing API is unchanged: `fetch` still returns an `await`-able
-promise (via `rontolisp:then`, non-blocking), same options, same response plist. Run a fetch
-component with `-S http=y` in addition to the async flags. Mechanics: `../../.kb/fetch-http.md`.
+`src/main/resources/am/ik/rontolisp/eval/http.lisp` (spliced by `eval/HttpLibrary`, which
+follows the reachable half — a fetch-only program binds none of the serve members), over a
+`rontolisp:wit-import`ed `wasi:http@0.3.0` surface (`http.wit`, a classpath resource carried
+inline) — the same canon-lower machinery any `rontolisp:wit-import` uses. So a non-serve
+fetch selects the **base** blob set and pulls `wasi:http@0.3` in through canon-lowered user
+imports; its `--emit-wit` world shows `import wasi:http/types@0.3.0;` +
+`import wasi:http/client@0.3.0;`. `client.send` is an `async func`, so its binding is
+async-lowered (the `async` canonical option) and awaited through a waitable-set — which is
+exactly what the promise `fetch` returns drives; the request/response bodies flow through
+the `stream<u8>` / `future<T>` built-ins bound off `http.wit`'s transparent type aliases.
+The user-facing API is unchanged (`fetch` returns an `await`-able promise, same options,
+same response plist) except that a transport failure now SIGNALS `rontolisp:wit-error` at
+await time, like the interpreter and the JVM. Run a fetch component with `-S http=y` in
+addition to the async flags (no `-W component-model-async-stackful=y` needed: only the
+serve variant's async LIFT wants it). Mechanics: `../../.kb/fetch-http.md`.
 
-The `adapter-http-client.wat` / `core-http-client.wat` / `uni-http-client.wit` sources and the
-`adapter-http-client.wasm` / `import-block-http-client.bin` blobs are **deleted**. What stays
-from the old set:
+What stays from the old 0.2-era set:
 
 ```
 src/wasm-component/
-  mem-http-client.wat            (16-page memory source; the serve+fetch variant reuses it)
-  deps/clocks-0.2  deps/io-0.2  deps/http   (0.2 deps; still used by the serve variants)
+  mem-http-client.wat            (16-page memory source; the serve variant reuses it)
+  deps/http                      (the vendored wasi:http@0.3.0 WIT; serve regen source)
 
 src/main/resources/.../component/
-  mem-http-client.wasm           (16-page memory module; kept for serve+fetch)
+  mem-http-client.wasm           (16-page memory module; kept for serve)
 ```
 
-`mem-http-client.wasm` (the 16-page memory module) is kept because the serve+fetch
-(`http-server-client`) variant below still needs it; `regen.sh` still regenerates it. Async
-`wasi:http@0.3` does not exist upstream yet (the wasi-http repo's `v0.3.0-rc` tags and `main`
-are still `wasi:http@0.2.x`, and wasmtime 46 hosts only `wasi:http@0.2`), which is why the
-imported surface is the 0.2 http interfaces on every fetch path.
+The `deps/clocks-0.2` and `deps/random-0.2` packages are deleted (nothing references
+them since the serve variant moved to 0.3); `deps/io-0.2` and `deps/cli-0.2` remain
+solely for the `--no-gc` print micro-adapter below, which deliberately stays on
+synchronous WASI 0.2 stdio.
 
 ## `--no-gc --component` print micro-adapter — pure WASI 0.2
 
@@ -260,61 +263,51 @@ that cycle — the same shim/fixup shape wit-component generates for the analogo
 lowering cycle — keeping the printing core module byte-identical to the plain
 `--no-gc` output. `NoGcWasmComponentBuilder` wires everything programmatically.
 
-## HTTP server variant (`rontolisp:http-handler`) — pure WASI 0.2
+## HTTP server variant (`rontolisp:http-handler`) — async wasi:http@0.3.0
 
 A program using `rontolisp:http-handler` compiles to the http-server variant: a
-`wasi:http/incoming-handler@0.2.0` component for `wasmtime serve` (or any
-`wasi:http` 0.2 host with wasm-GC). It is pure WASI 0.2 — no async canon
-built-ins, so none of the `component-model-async` flags. The parallel blob set
-is:
+`wasi:http/handler@0.3.0` component for `wasmtime serve` (wasmtime 46+). ONE shape serves
+plain serve AND serve+fetch — the 0.3 `service` world always imports `client`, so the
+block declares it either way and a handler that never fetches simply binds no `send`. Run
+with `wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y
+-W component-model-more-async-builtins=y` (the stackful flag is what the async LIFT
+needs). The blob set is:
 
 ```
 src/wasm-component/
-  uni-http-server.wit  core-http-server.wat  adapter-http-server.wat  adapter-http-server-p1.wat
-  deps/random-0.2  deps/cli-0.2   (0.2 deps; io-0.2 / clocks-0.2 / http shared)
+  uni-http-server.wit  core-http-server.wat  adapter-http-server-p1.wat
+  deps/http  deps/cli  deps/clocks  deps/random   (0.3 deps, shared with the base set)
 
 src/main/resources/.../component/
-  import-block-http-server.bin  adapter-http-server.wasm  adapter-http-server-p1.wasm
+  import-block-http-server.bin  adapter-http-server-p1.wasm
 ```
 
-`uni-http-server.wit` (world `uni-http-server`) imports the 0.2 http/io incoming-handler
-machinery plus the proxy world's `wasi:random/random`, `wasi:clocks/{wall,
-monotonic-}clock` and `wasi:cli/{stdout,stderr}`. There is NO serve adapter: the HTTP
-glue is `serve.lisp` (spliced by `eval/ServeLibrary`), whose `wasi:io` / `wasi:http/types`
-calls the core `canon lower`s and whose `%serve-handle` the core exports as `handle`. The
-one helper module is `adapter-http-server-p1.wat`, the preview1 bridge, instantiated
-BEFORE the core to satisfy its `wasi_snapshot_preview1` imports: `random_get` over
-`get-random-u64`, `clock_time_get` over the 0.2 clocks, `fd_write` (fd 1/2) over the cli
-stdout/stderr streams, a zero environment for `environ_*` (`getenv` returns nil), EOF for
-`fd_read`, errno 76 for `path_open` (no filesystem in the proxy world).
+`uni-http-server.wit` (world `uni-http-server`) imports `wasi:http/{types,client}@0.3.0`
+plus the service world's `wasi:random/random`, `wasi:clocks/{system,monotonic}-clock` and
+`wasi:cli/{stdout,stderr}` (`wasi:cli/types` and `wasi:clocks/types` come in implicitly
+through `use` clauses). There is NO serve adapter: the HTTP glue is `http.lisp` (spliced
+by `eval/HttpLibrary`), whose `wasi:http` calls the core `canon lower`s — `client.send`
+async-lowered, the body machinery through the alias-derived stream/future built-ins —
+and whose `%serve-handle` the core exports as `handle`. The one helper module is
+`adapter-http-server-p1.wat`, the preview1 bridge, instantiated BEFORE the core to
+satisfy its `wasi_snapshot_preview1` imports: `random_get` over `get-random-u64`,
+`clock_time_get` over the 0.3 clocks, `fd_write` (fd 1/2) over `write-via-stream` + the
+stream/future built-ins (the base `adapter.wat`'s cli path), a zero environment for
+`environ_*` (`getenv` returns nil), EOF for `fd_read`, errno 76 for `path_open` (no
+filesystem in the service world).
+
 `WasmServeComponentBuilder.build` wires mem -> bridge -> core, lowers the fixed
-`wasi:io`/`wasi:http/types` surface FROM the import block, and lifts the core's `handle`
-export synchronously into `wasi:http/incoming-handler@0.2.0`. Note
-`wasi:clocks/monotonic-clock` lands as import instance 0 (wasm-tools hoists it first as a
-dependency of `wasi:http/types`), before `wasi:io/error`. Details: `../../.kb/fetch-http.md`.
-
-### HTTP server+client variant (`rontolisp:http-handler` + `rontolisp:fetch`)
-
-A handler program that also uses `rontolisp:fetch` (a proxy-style server making
-outgoing requests) compiles with the SAME builder over a wider block — no extra adapter:
-
-```
-src/wasm-component/
-  uni-http-server-client.wit  core-http-server-client.wat
-
-src/main/resources/.../component/
-  import-block-http-server-client.bin
-```
-
-`uni-http-server-client.wit` (world `uni-http-server-client`) is the serve surface plus
-`wasi:io/poll` and `wasi:http/outgoing-handler` appended last, plus the outgoing-request /
-future / incoming-response members of `wasi:http/types` — still entirely inside the
-wasi:http proxy world, so any host that serves the plain variant can serve this one (grant
-outbound HTTP: `wasmtime serve -W gc=y -W exceptions=y -S http=y`). Both halves are Lisp:
-`serve.lisp` handles the incoming side, `fetch.lisp` the outgoing side, spliced together and
-their overlapping `wasi:http`/`wasi:io` bindings merged + deduplicated. The preview1 bridge
-is the SAME `adapter-http-server-p1.wat` (once fetch is fetch.lisp the core imports no `http`
-function, so there is no extended bridge and no serve adapter). `WasmServeComponentBuilder.build`
-picks this block when a fetch-only interface is present; note `wasi:io/poll` is
-dependency-hoisted to import instance 0, so every instance index shifts by one relative to
-the plain serve block and the `WIDE` constants were re-derived from a fresh `wasm-tools dump`.
+`wasi:http` surface FROM the import block (sync decls, the async-lowered `send`, drops,
+the alias-derived built-ins, `canon task.return`, the waitable-set builtins), and lifts
+the core's `handle` export as a **stackful async** function
+(`async func(request: own<request>) -> result<own<response>, error-code>`, canonical
+options `memory`/`utf8`/`async`): the core signature is `[i32] -> []` and the response is
+delivered mid-task through the task-return built-in — 0.3's replacement for 0.2's
+`response-outparam.set`-before-body — after which the body write rendezvouses with the
+host's eager read. The exported function type is built over the block's NAMED
+request/response/error-code aliases (component types 1/2/3): the component-model export
+rule forbids anonymous structural types in an exported signature. The block declares
+import instances 0-7 (`http/types`, `http/client`, `random`, `system-clock`,
+`monotonic-clock`, `cli/types`, `stdout`, `stderr`) and the first free component type is
+13; re-derive from a fresh `wasm-tools dump` after changing `uni-http-server.wit` or
+`core-http-server.wat`. Details: `../../.kb/fetch-http.md`.

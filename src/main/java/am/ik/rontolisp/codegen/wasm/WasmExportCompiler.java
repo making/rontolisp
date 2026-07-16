@@ -325,7 +325,7 @@ final class WasmExportCompiler {
 		// request on a possibly REUSED instance (jco / wasmCloud). The canonical-ABI
 		// allocator (mem-http-client's cabi_realloc) is where the host writes a request's
 		// result buffers -- the incoming path / headers / body -- and it only grows, so
-		// reset its bump-pointer cell to the base here, before serve.lisp reads anything.
+		// reset its bump-pointer cell to the base here, before http.lisp reads anything.
 		// Without it linear memory grows by ~one request per call; wasmtime serve
 		// re-instantiates per request, so it never showed. Only the cell needs resetting
 		// --

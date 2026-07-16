@@ -14,10 +14,10 @@ import am.ik.rontolisp.PackageRegistry;
  *
  * <p>
  * The HTTP glue itself is no longer synthesized here: under {@code --component} the
- * directive is turned into serve.lisp's {@code %serve-handle} export by
- * {@code eval/ServeLibrary} (the mirror of {@code eval/FetchLibrary}), replacing the
- * hand-written serve adapter. This class is just the presence check the CLI uses to route
- * a program down that path (and to reject {@code rontolisp:http-handler} on Preview 1).
+ * directive is turned into http.lisp's {@code %serve-handle} export by
+ * {@code eval/HttpLibrary}, replacing the hand-written serve adapter. This class is just
+ * the presence check the CLI uses to route a program down that path (and to reject
+ * {@code rontolisp:http-handler} on Preview 1).
  */
 public final class HttpHandlerInliner {
 

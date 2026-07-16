@@ -79,9 +79,7 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> loaded = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(source),
 				baseDir, am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
 				am.ik.rontolisp.eval.SourceLoader.fileSystem());
-		loaded = am.ik.rontolisp.eval.FetchLibrary.process(loaded,
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
-		loaded = am.ik.rontolisp.eval.ServeLibrary.process(loaded,
+		loaded = am.ik.rontolisp.eval.HttpLibrary.process(loaded,
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
 			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
@@ -175,8 +173,8 @@ class WasmLispCompilerIntegrationTest {
 	// no-op for a non-fetch program).
 	private static byte[] compileFetchComponent(String program) {
 		List<am.ik.rontolisp.LispVal> forms = am.ik.rontolisp.eval.WitLibrary
-			.process(am.ik.rontolisp.eval.FetchLibrary.process(LispReader.readAllFromString(program),
-					am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT));
+			.process(am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString(program),
+					am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false));
 		return new WasmLispCompiler(false, true).compile(forms);
 	}
 
@@ -1968,7 +1966,7 @@ class WasmLispCompilerIntegrationTest {
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y serve.wasm >/tmp/serve.log 2>&1 &"
+				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y serve.wasm >/tmp/serve.log 2>&1 &"
 						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8080/hello) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve round trip; log: %s", result.getStderr()).isZero();
@@ -1991,7 +1989,7 @@ class WasmLispCompilerIntegrationTest {
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-big.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8081 serve-big.wasm >/tmp/serve-big.log 2>&1 &"
+				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8081 serve-big.wasm >/tmp/serve-big.log 2>&1 &"
 						+ " for i in $(seq 1 60); do code=$(curl -s -m 20 -o /tmp/big.out -w '%{http_code}'"
 						+ " http://127.0.0.1:8081/big) && [ \"$code\" != 000 ]"
 						+ " && { echo \"$code $(wc -c < /tmp/big.out)\"; exit 0; }; sleep 0.25; done;"
@@ -2019,7 +2017,7 @@ class WasmLispCompilerIntegrationTest {
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-rand.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8082 serve-rand.wasm >/tmp/serve-rand.log 2>&1 &"
+				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8082 serve-rand.wasm >/tmp/serve-rand.log 2>&1 &"
 						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8082/) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-rand.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve random/clock round trip; log: %s", result.getStderr())
@@ -2037,7 +2035,7 @@ class WasmLispCompilerIntegrationTest {
 		// hand-written adapter -- so the proxy compiles through the same CLI pipeline
 		// (compileServeComponent runs FetchLibrary then ServeLibrary). Both are EH-mode,
 		// and
-		// fetch needs outbound HTTP, so run the proxy with `-W exceptions=y -S http=y`.
+		// fetch rides the host-provided wasi:http client the service world imports.
 		// The
 		// backend is itself a plain rontolisp serve component, so the test stays offline.
 		byte[] backendBytes = compileServeComponent("""
@@ -2060,8 +2058,8 @@ class WasmLispCompilerIntegrationTest {
 		// its fetch fails and it serves the non-empty body "proxied nil nil", which
 		// would end the poll loop with the wrong output (a startup race, not a bug).
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8083 /tmp/serve-backend.wasm >/tmp/serve-backend.log 2>&1 &"
-						+ " wasmtime serve -W gc=y -W exceptions=y -S http=y --addr 127.0.0.1:8084 /tmp/serve-proxy.wasm >/tmp/serve-proxy.log 2>&1 &"
+				"wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8083 /tmp/serve-backend.wasm >/tmp/serve-backend.log 2>&1 &"
+						+ " wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8084 /tmp/serve-proxy.wasm >/tmp/serve-proxy.log 2>&1 &"
 						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8083/up >/dev/null && break; sleep 0.25; done;"
 						+ " curl -sf http://127.0.0.1:8083/up >/dev/null"
 						+ " || { echo 'backend never came up' 1>&2; cat /tmp/serve-backend.log 1>&2; exit 1; };"
@@ -2120,7 +2118,7 @@ class WasmLispCompilerIntegrationTest {
 				""", dir.toString());
 		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/serve-kv.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y -S keyvalue-in-memory-data=/hits=41"
+				"wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y -S keyvalue-in-memory-data=/hits=41"
 						+ " --addr 127.0.0.1:8085 /tmp/serve-kv.wasm >/tmp/serve-kv.log 2>&1 &"
 						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8085/hits) && [ -n \"$out\" ]"
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-kv.log; exit 1");
@@ -5671,20 +5669,21 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void componentFetchUnreachableReturnsNil() throws Exception {
-		// A fetch component requires wasi:http (so it must be run with -S http=y) and
-		// must
-		// handle a failed request without trapping. Fetching an unreachable port
-		// exercises
-		// the full request-start/poll/response path; the connection error is detected at
-		// await time and await returns nil (deterministic, no server).
-		String program = "(print (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:1/nope\")))";
+	void componentFetchUnreachableSignalsAtAwait() throws Exception {
+		// A fetch component requires wasi:http (so it must be run with -S http=y) and a
+		// failed request unifies on the condition system: fetching an unreachable port
+		// exercises the full async-send/waitable-set/result-lift path, and the
+		// connection error (the send result's error arm) signals rontolisp:wit-error at
+		// AWAIT time -- exactly like the interpreter and the JVM. The 0.2-era
+		// nil-on-failure convention is gone with the wasi:http@0.3 cutover.
+		String program = "(print (handler-case (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:1/nope\"))"
+				+ " (rontolisp:wit-error () :refused)))";
 		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/fetch-err.component.wasm");
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-W",
 				"component-model-more-async-builtins=y", "-S", "http=y", "/tmp/fetch-err.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo("nil");
+		assertThat(result.getStdout().trim()).isEqualTo(":refused");
 	}
 
 	@Test
@@ -8445,42 +8444,52 @@ class WasmLispCompilerIntegrationTest {
 
 	// --- rontolisp:wit-import under --component: a FAMILY of interrelated interfaces
 
-	// The REAL wasi:io / wasi:http the repo vendors, folded into one document: each io
-	// file's `package wasi:io@0.2.0;` header is dropped in favour of one nested package
-	// block, and only outgoing-handler is kept from handler.wit (incoming-handler is an
-	// export, not an import). Trimming the interfaces by hand would defeat the test --
-	// the component-model subtype check compares the instance types we emit against the
+	// The REAL wasi:http@0.3.0 the repo vendors, folded into one document: each file's
+	// `package wasi:http@0.3.0;` header is dropped in favour of one nested package
+	// block, plus the wasi:clocks/types shim its `use` needs and -- appended inside the
+	// types interface -- the same TRANSPARENT stream/future type aliases http.lisp uses
+	// (an alias is structural and referenced by no function, so the instance types stay
+	// the host's real ones; the aliases only drive the derived async built-in
+	// bindings). Trimming the interfaces by hand would defeat the test -- the
+	// component-model subtype check compares the instance types we emit against the
 	// HOST's real ones, so ours have to be structurally the real ones.
 	private static String vendoredWasiHttpWit() throws Exception {
 		java.nio.file.Path deps = java.nio.file.Path.of("src", "wasm-component", "deps");
-		String io = witBody(deps.resolve("io-0.2").resolve("poll.wit"))
-				+ witBody(deps.resolve("io-0.2").resolve("error.wit"))
-				+ witBody(deps.resolve("io-0.2").resolve("streams.wit"));
-		String handler = java.nio.file.Files.readString(deps.resolve("http").resolve("handler.wit"));
-		String http = java.nio.file.Files.readString(deps.resolve("http").resolve("types.wit"))
-				+ handler.substring(handler.indexOf("interface outgoing-handler"));
-		return "package root:fetchprobe;\n\npackage wasi:io@0.2.0 {\n" + io + "}\n\npackage wasi:http@0.2.0 {\n" + http
-				+ "}\n";
+		String types = witBody(deps.resolve("http").resolve("types.wit"));
+		String handler = witBody(deps.resolve("http").resolve("handler.wit"));
+		String aliases = """
+				    type body-stream = stream<u8>;
+				    type trailers-future = future<result<option<trailers>, error-code>>;
+				    type transmit-future = future<result<_, error-code>>;
+				""";
+		int close = types.lastIndexOf('}');
+		types = types.substring(0, close) + aliases + types.substring(close);
+		return "package root:fetchprobe;\n\npackage wasi:clocks@0.3.0 {\n  interface types {\n"
+				+ "    type duration = u64;\n  }\n}\n\npackage wasi:http@0.3.0 {\n" + types + handler + "}\n";
 	}
 
-	// A vendored WIT file's interfaces, without its `package ...;` header (the http ones
-	// carry none -- their package is declared in package.wit).
+	// A vendored WIT file's interfaces, without its `package ...;` header and the
+	// `@since` gates our parser tolerates but the nested-package fold does not need.
 	private static String witBody(java.nio.file.Path wit) throws Exception {
 		String text = java.nio.file.Files.readString(wit);
-		return text.startsWith("package ") ? text.substring(text.indexOf(';') + 1) : text;
+		if (text.startsWith("package ")) {
+			text = text.substring(text.indexOf(';') + 1);
+		}
+		return text.lines()
+			.filter(line -> !line.strip().startsWith("@since"))
+			.map(line -> line + "\n")
+			.reduce("", String::concat);
 	}
 
 	@Test
 	void componentImportLetsLispDriveWasiHttpAcrossSeparatelyImportedInterfaces() throws Exception {
-		// A fetch written entirely in Lisp over wit-imported wasi:io/{poll,error,streams}
-		// and wasi:http/{types,outgoing-handler} -- no adapter blob. The load-bearing
-		// part
-		// is that wasi:http/types does not DEFINE input-stream or pollable, it `use`s
-		// them
-		// from the io interfaces: the handles only flow between two SEPARATELY imported
-		// instances if their resource types are the same nominal type on both sides,
-		// which
-		// is what the alias-out / alias-outer wiring of the imports exists to arrange.
+		// A fetch written entirely in Lisp over the wit-imported wasi:http@0.3.0
+		// types + client interfaces -- USER code walking the exact path the built-in
+		// http.lisp does: the async-lowered `client.send` promise, the stream/future
+		// built-ins bound off transparent type aliases, and -- the load-bearing part --
+		// a `request` resource minted by the types instance crossing into the
+		// SEPARATELY imported client instance, which only works because a `use`d
+		// resource is the same nominal type on both sides.
 		// A unit test can only say the bytes name the import; only a host that ANSWERS --
 		// wasmtime's real wasi:http, under -S http=y -- proves the types unified, because
 		// otherwise the component fails the subtype check at instantiation (or reads the
@@ -8495,45 +8504,44 @@ class WasmLispCompilerIntegrationTest {
 		// blocking-read signals rontolisp:wit-error on the `closed` arm (a WIT result's
 		// error arm), so reading to EOF needs handler-case -- hence -W exceptions=y.
 		byte[] fetchBytes = compileWitImportComponent(vendoredWasiHttpWit(), """
-				(rontolisp:wit-import "iface.wit" :interface "wasi:io/poll@0.2.0" :package poll)
-				;; streams' stream-error carries an io/error `error` resource, and a resource
-				;; is its defining interface's type, so that interface is imported too -- for
-				;; the type alone, nothing calls it.
-				(rontolisp:wit-import "iface.wit" :interface "wasi:io/error@0.2.0" :package ioerr)
-				(rontolisp:wit-import "iface.wit" :interface "wasi:io/streams@0.2.0" :package streams)
-				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.2.0" :package http)
-				(rontolisp:wit-import "iface.wit" :interface "wasi:http/outgoing-handler@0.2.0" :package outgoing)
+				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.3.0" :package http)
+				(rontolisp:wit-import "iface.wit" :interface "wasi:http/client@0.3.0" :package client)
 
 				(defun read-all (stream acc)
-				  (let ((chunk (handler-case (streams:input-stream-blocking-read stream 4096)
-				                 (rontolisp:wit-error () nil))))
+				  (let ((chunk (http:body-stream-read stream)))
 				    (if (or (null chunk) (= (length chunk) 0))
 				        acc
 				        (read-all stream (concatenate 'string acc chunk)))))
 
 				(defun get-url (authority path)
-				  (let ((req (http:outgoing-request-new (http:fields-new))))
-				    (http:outgoing-request-set-method req :get)
+				  (let* ((trailers (http:trailers-future-new))
+				         (reqpair (http:request-new (http:fields-new) nil (car trailers) nil))
+				         (req (car reqpair)))
+				    (http:request-set-method req :get)
 				    ;; the scheme variant's cases are HTTP / HTTPS, and keywords are
 				    ;; case-preserving.
-				    (http:outgoing-request-set-scheme req :HTTP)
-				    (http:outgoing-request-set-authority req authority)
-				    (http:outgoing-request-set-path-with-query req path)
-				    (let ((future (outgoing:handle req nil)))
-				      ;; the pollable comes from wasi:io/poll but is handed out by
-				      ;; wasi:http/types -- the whole point of the probe.
-				      (poll:pollable-block (http:future-incoming-response-subscribe future))
-				      ;; option<result<result<incoming-response, error-code>, _>>: nil while
-				      ;; pending, then the nested envelopes the canonical-ABI lift builds.
-				      (let* ((got (http:future-incoming-response-get future))
-				             (inner (rontolisp::%wit-result (cdr got)))
-				             (response (rontolisp::%wit-result inner)))
-				        (list :status (http:incoming-response-status response)
-				              :body (read-all (rontolisp::%wit-result
-				                                (http:incoming-body-stream
-				                                  (rontolisp::%wit-result
-				                                    (http:incoming-response-consume response))))
-				                              ""))))))
+				    (http:request-set-scheme req :HTTP)
+				    (http:request-set-authority req authority)
+				    (http:request-set-path-with-query req path)
+				    ;; send is an `async func`: the generated binding starts the subtask and
+				    ;; returns an ordinary promise whose await drives the waitable-set.
+				    (let ((promise (client:send req)))
+				      ;; resolve the request-side trailers (ok none) so the host can finish
+				      ;; sending, and drop the transmission-result future unread.
+				      (http:trailers-future-write (cdr trailers) (cons :ok nil))
+				      (http:transmit-future-drop-readable (car (cdr reqpair)))
+				      (let* ((response (rontolisp:await promise))
+				             (status (http:response-get-status-code response))
+				             (res (http:transmit-future-new))
+				             ;; consume-body MOVES the response and takes a guest-created
+				             ;; future through which we report our side's outcome.
+				             (pair (http:response-consume-body response (car res)))
+				             (stream (car pair))
+				             (text (read-all stream "")))
+				        (http:body-stream-drop-readable stream)
+				        (http:trailers-future-drop-readable (car (cdr pair)))
+				        (http:transmit-future-write (cdr res) :ok)
+				        (list :status status :body text)))))
 
 				(let ((r (get-url "127.0.0.1:8086" "/hello")))
 				  (print (getf r :status))
@@ -8545,7 +8553,7 @@ class WasmLispCompilerIntegrationTest {
 		// connection
 		// refused would be reported as a wit-error, not as this test's answer.
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8086 /tmp/wit-fetch-backend.wasm >/tmp/wit-fetch-backend.log 2>&1 &"
+				"wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8086 /tmp/wit-fetch-backend.wasm >/tmp/wit-fetch-backend.log 2>&1 &"
 						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8086/hello >/dev/null && break; sleep 0.25; done;"
 						+ " curl -sf http://127.0.0.1:8086/hello >/dev/null"
 						+ " || { echo 'backend never came up' 1>&2; cat /tmp/wit-fetch-backend.log 1>&2; exit 1; };"
@@ -8557,17 +8565,14 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void componentImportDropsResourcesSoALispRequestCanCarryABody() throws Exception {
-		// The case the GET above dodges. A request that leaks every handle still WORKS --
-		// a request with a BODY cannot: wasi:http's `outgoing-body.write` hands back an
-		// output-stream that is a CHILD of the body, and types.wit requires it to be
-		// dropped before the parent is finished, "otherwise the outgoing-body drop or
-		// finish will trap". A drop is not a WIT function, so nothing in an interface's
-		// bound surface can perform one -- this program sends its body only because
-		// `<resource>-drop` lowers to `canon resource.drop`. Without it the component
-		// traps at `finish`, so this test fails outright rather than merely leaking.
-		// The same rule bites on the reading side: the pollable that `subscribe` returns
-		// is a child of the future, and the host answers "resource has children" if the
-		// future is dropped first.
+		// The case the GET above dodges: a request that CARRIES a body. In 0.3 the body
+		// is a guest-created stream<u8> handed to request.new, and the transfer only
+		// completes when the guest closes the contents stream (drop-writable, the
+		// end-of-stream signal) AND resolves the trailers future -- an unfinished body
+		// is an error the host propagates. The drop built-ins are not WIT functions, so
+		// nothing in an interface's bound surface can perform them; this program sends
+		// its body only because the alias-derived `<alias>-drop-*` members lower to the
+		// canonical drop built-ins.
 		// The backend echoes the request body back, so the assertion proves the body
 		// ARRIVED -- not merely that the request was accepted.
 		byte[] backendBytes = compileServeComponent("""
@@ -8577,59 +8582,48 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:http-handler 'handle)
 				""", null);
 		byte[] postBytes = compileWitImportComponent(vendoredWasiHttpWit(), """
-				(rontolisp:wit-import "iface.wit" :interface "wasi:io/poll@0.2.0" :package poll)
-				(rontolisp:wit-import "iface.wit" :interface "wasi:io/error@0.2.0" :package ioerr)
-				(rontolisp:wit-import "iface.wit" :interface "wasi:io/streams@0.2.0" :package streams)
-				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.2.0" :package http)
-				(rontolisp:wit-import "iface.wit" :interface "wasi:http/outgoing-handler@0.2.0" :package outgoing)
+				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.3.0" :package http)
+				(rontolisp:wit-import "iface.wit" :interface "wasi:http/client@0.3.0" :package client)
 
 				(defun read-all (stream acc)
-				  (let ((chunk (handler-case (streams:input-stream-blocking-read stream 4096)
-				                 (rontolisp:wit-error () nil))))
+				  (let ((chunk (http:body-stream-read stream)))
 				    (if (or (null chunk) (= (length chunk) 0))
 				        acc
 				        (read-all stream (concatenate 'string acc chunk)))))
 
 				(defun post-url (authority path body)
-				  ;; content-length goes on with fields.append -- the one fields writer whose
-				  ;; value (list<u8>) crosses as a parameter; set / from-list take
-				  ;; list<list<u8>>, which does not. It has to be on the fields BEFORE they
-				  ;; are handed to the outgoing-request.
-				  (let* ((headers (http:fields-new))
-				         (appended (http:fields-append headers "content-length"
-				                                       (princ-to-string (length body))))
-				         (req (http:outgoing-request-new headers)))
-				    appended
-				    (http:outgoing-request-set-method req :post)
-				    (http:outgoing-request-set-scheme req :HTTP)
-				    (http:outgoing-request-set-authority req authority)
-				    (http:outgoing-request-set-path-with-query req path)
-				    ;; the body must be taken before `handle` consumes the request.
-				    (let* ((obody (rontolisp::%wit-result (http:outgoing-request-body req)))
-				           (future (outgoing:handle req nil))
-				           (ostream (rontolisp::%wit-result (http:outgoing-body-write obody))))
-				      (streams:output-stream-blocking-write-and-flush ostream body)
-				      ;; THE line this test exists for: the child stream goes back before the
-				      ;; parent body is finished, or `finish` traps.
-				      (streams:output-stream-drop ostream)
-				      (http:outgoing-body-finish obody nil)
-				      ;; the pollable is a child of the future, so it goes back first too.
-				      (let ((p (http:future-incoming-response-subscribe future)))
-				        (poll:pollable-block p)
-				        (poll:pollable-drop p))
-				      (let* ((response (rontolisp::%wit-result
-				                         (rontolisp::%wit-result
-				                           (cdr (http:future-incoming-response-get future)))))
-				             (ibody (rontolisp::%wit-result (http:incoming-response-consume response)))
-				             (istream (rontolisp::%wit-result (http:incoming-body-stream ibody)))
-				             (text (read-all istream ""))
-				             (status (http:incoming-response-status response)))
-				        ;; and every handle the response arrived on, child before parent.
-				        (streams:input-stream-drop istream)
-				        (http:incoming-body-drop ibody)
-				        (http:incoming-response-drop response)
-				        (http:future-incoming-response-drop future)
-				        (list :status status :body text)))))
+				  ;; content-length goes on with fields.append -- its value (a field-value =
+				  ;; list<u8>) crosses as a byte string -- BEFORE the fields are handed to
+				  ;; request.new.
+				  (let* ((headers (http:fields-new)))
+				    (http:fields-append headers "content-length" (princ-to-string (length body)))
+				    (let* ((contents (http:body-stream-new))
+				           (trailers (http:trailers-future-new))
+				           (reqpair (http:request-new headers (car contents) (car trailers) nil))
+				           (req (car reqpair)))
+				      (http:request-set-method req :post)
+				      (http:request-set-scheme req :HTTP)
+				      (http:request-set-authority req authority)
+				      (http:request-set-path-with-query req path)
+				      ;; start the async send FIRST: the body write below rendezvouses with
+				      ;; the host's eager read of the contents stream.
+				      (let ((promise (client:send req)))
+				        (http:body-stream-write (cdr contents) body)
+				        ;; THE lines this test exists for: close the contents stream and
+				        ;; resolve the trailers future, or the body never completes.
+				        (http:body-stream-drop-writable (cdr contents))
+				        (http:trailers-future-write (cdr trailers) (cons :ok nil))
+				        (http:transmit-future-drop-readable (car (cdr reqpair)))
+				        (let* ((response (rontolisp:await promise))
+				               (status (http:response-get-status-code response))
+				               (res (http:transmit-future-new))
+				               (pair (http:response-consume-body response (car res)))
+				               (stream (car pair))
+				               (text (read-all stream "")))
+				          (http:body-stream-drop-readable stream)
+				          (http:trailers-future-drop-readable (car (cdr pair)))
+				          (http:transmit-future-write (cdr res) :ok)
+				          (list :status status :body text))))))
 
 				(let ((r (post-url "127.0.0.1:8087" "/echo" "hello from a lisp POST")))
 				  (print (getf r :status))
@@ -8638,7 +8632,7 @@ class WasmLispCompilerIntegrationTest {
 		wasmtime.copyFileToContainer(Transferable.of(backendBytes), "/tmp/wit-post-backend.wasm");
 		wasmtime.copyFileToContainer(Transferable.of(postBytes), "/tmp/wit-post.component.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8087 /tmp/wit-post-backend.wasm >/tmp/wit-post-backend.log 2>&1 &"
+				"wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y --addr 127.0.0.1:8087 /tmp/wit-post-backend.wasm >/tmp/wit-post-backend.log 2>&1 &"
 						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8087/echo -d probe >/dev/null && break; sleep 0.25; done;"
 						+ " curl -sf http://127.0.0.1:8087/echo -d probe >/dev/null"
 						+ " || { echo 'backend never came up' 1>&2; cat /tmp/wit-post-backend.log 1>&2; exit 1; };"

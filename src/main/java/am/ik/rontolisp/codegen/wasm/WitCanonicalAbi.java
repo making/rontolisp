@@ -145,6 +145,38 @@ final class WitCanonicalAbi {
 	}
 
 	/**
+	 * Computes the flat core signature of an <strong>async-lowered</strong> import call
+	 * (the {@code async} canonical option): parameters flatten exactly as in
+	 * {@link #flatSig}, the result -- whatever its width -- is ALWAYS indirect through a
+	 * trailing return pointer, and the call itself returns one {@code i32}, the packed
+	 * {@code (subtask << 4) | status} value whose completion is awaited through a
+	 * waitable-set.
+	 * @param func the interface function (with its owning resource, if any)
+	 * @return the flat signature
+	 */
+	FlatSig flatSigAsyncLower(WitResolver.Func func) {
+		List<Type> params = new ArrayList<>();
+		if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
+			params.add(Type.I32); // the borrowed self handle
+		}
+		for (var param : func.def().func().params()) {
+			params.addAll(flatTypes(param.type()));
+		}
+		if (params.size() > MAX_FLAT_PARAMS) {
+			throw new UnsupportedOperationException("'" + func.def().name() + "': its parameters flatten to "
+					+ params.size() + " core values, and beyond " + MAX_FLAT_PARAMS
+					+ " the canonical ABI spills them into a caller-allocated memory area -- a mechanism the component "
+					+ "import boundary does not implement yet");
+		}
+		WitType result = resultType(func);
+		if (result == null) {
+			return new FlatSig(params.toArray(new Type[0]), new Type[] { Type.I32 }, false, 0);
+		}
+		params.add(Type.I32); // the return pointer (async results are always indirect)
+		return new FlatSig(params.toArray(new Type[0]), new Type[] { Type.I32 }, true, size(result));
+	}
+
+	/**
 	 * The WIT result type of a function; a constructor returns its own resource (an
 	 * {@code own} handle), which the WIT model leaves implicit.
 	 * @param func the interface function

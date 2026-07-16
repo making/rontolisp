@@ -153,9 +153,9 @@ final class WasmExprCompiler {
 				}
 				if (LispNames.FETCH.equals(qn.member())) {
 					if (ctx.component) {
-						// Under --component, fetch is the spliced fetch.lisp defun (over
+						// Under --component, fetch is the spliced http.lisp defun (over
 						// wit-imported wasi:http) on BOTH serve and non-serve -- a served
-						// handler that fetches carries fetch.lisp alongside serve.lisp.
+						// handler that fetches reaches http.lisp's fetch half too.
 						// Run
 						// the compile-time checks a defun cannot -- arity and a literal
 						// unsupported :method -- then fall through to the ordinary call

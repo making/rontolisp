@@ -40,9 +40,6 @@ final class WitEmitter {
 	/** The GC {@code rontolisp:http-handler} (incoming HTTP) variant. */
 	static final String VARIANT_HTTP_SERVER = "http-server";
 
-	/** The http-server variant of a handler program that also uses fetch. */
-	static final String VARIANT_HTTP_SERVER_CLIENT = "http-server-client";
-
 	/** The adapter-free {@code --no-gc} reactor variant. */
 	static final String VARIANT_NOGC = "nogc";
 

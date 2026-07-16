@@ -103,30 +103,29 @@ class WitEmitterTest {
 	}
 
 	@Test
-	void serveVariantsCarryTheFixedHandlerExportAndTheUseClause() {
-		for (String variant : new String[] { WitEmitter.VARIANT_HTTP_SERVER, WitEmitter.VARIANT_HTTP_SERVER_CLIENT }) {
-			String wit = WitEmitter.emit(variant, List.of());
-			assertThat(wit).as(variant).contains("  export wasi:http/incoming-handler@0.2.0;");
-			// wasm-tools component wit omits this use clause and prints an unparseable
-			// interface; the template deliberately restores it (the upstream
-			// wasi:http/handler.wit has it) so the emitted file stays consumable.
-			assertThat(wit).as(variant).contains("    use types.{incoming-request, response-outparam};");
-			assertThat(wit).as(variant).doesNotContain("func(p0");
-		}
+	void serveVariantCarriesTheFixedHandlerExportAndTheUseClause() {
+		String wit = WitEmitter.emit(WitEmitter.VARIANT_HTTP_SERVER, List.of());
+		assertThat(wit).contains("  export wasi:http/handler@0.3.0;");
+		// wasm-tools component wit omits this use clause and prints an unparseable
+		// interface; the template deliberately restores it (the upstream
+		// wasi:http worlds.wit has it) so the emitted file stays consumable.
+		assertThat(wit).contains("    use types.{request, response, error-code};");
+		assertThat(wit).contains("    handle: async func(request: request) -> result<response, error-code>;");
+		assertThat(wit).doesNotContain("func(p0");
 	}
 
 	@Test
 	void aServeWorldCarriesTheUserImportsToo() {
 		// A served component's imports are no longer only the fixed wasi:http surface:
 		// a rontolisp:wit-import joins the world's import block (before the fixed
-		// incoming-handler export), and its package definition is appended, pruned to
-		// the members the program binds.
+		// handler export), and its package definition is appended, pruned to the
+		// members the program binds.
 		String wit = WitEmitter.emit(WitEmitter.VARIANT_HTTP_SERVER, List.of(), List.of(keyvalueImport()));
 		assertThat(wit).contains("""
-				  import wasi:cli/stderr@0.2.0;
+				  import wasi:cli/stderr@0.3.0;
 				  import wasi:keyvalue/store@0.2.0-draft;
 
-				  export wasi:http/incoming-handler@0.2.0;
+				  export wasi:http/handler@0.3.0;
 				""");
 		assertThat(wit).contains("package wasi:keyvalue@0.2.0-draft {")
 			.contains("    open: func(identifier: string) -> result<bucket, error>;");
@@ -160,8 +159,7 @@ class WitEmitterTest {
 	@Test
 	void everyVariantTemplateLoadsAndOpensTheRootWorld() {
 		for (String variant : new String[] { WitEmitter.VARIANT_BASE, WitEmitter.VARIANT_SOCKETS,
-				WitEmitter.VARIANT_HTTP_SERVER, WitEmitter.VARIANT_HTTP_SERVER_CLIENT, WitEmitter.VARIANT_NOGC,
-				WitEmitter.VARIANT_NOGC_PRINT }) {
+				WitEmitter.VARIANT_HTTP_SERVER, WitEmitter.VARIANT_NOGC, WitEmitter.VARIANT_NOGC_PRINT }) {
 			String wit = WitEmitter.emit(variant, List.of());
 			assertThat(wit).as(variant).startsWith("package root:component;\n\nworld root {\n");
 		}

@@ -108,7 +108,13 @@ final class WitComponentTypeEncoder {
 			encoder.resourceIndex(encoder.abi, resource);
 		}
 		for (WasmComponentImportCompiler.Decl decl : imported.decls()) {
-			encoder.declareFunction(decl);
+			encoder.declareFunction(decl.func(), decl.field(), false);
+		}
+		// Async func members follow the sync ones; their instance-type declaration is the
+		// async function type (tag 0x43) -- the host's real instance declares them async,
+		// and instance linking checks the flag.
+		for (WasmComponentImportCompiler.AsyncCall call : imported.calls()) {
+			encoder.declareFunction(call.func(), call.field(), true);
 		}
 		return ComponentWriter.instanceTypeOf(encoder.decls);
 	}
@@ -145,8 +151,7 @@ final class WitComponentTypeEncoder {
 		return found;
 	}
 
-	private void declareFunction(WasmComponentImportCompiler.Decl decl) {
-		WitResolver.Func func = decl.func();
+	private void declareFunction(WitResolver.Func func, String field, boolean async) {
 		List<String> paramNames = new ArrayList<>();
 		List<byte[]> paramTypes = new ArrayList<>();
 		if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
@@ -159,8 +164,9 @@ final class WitComponentTypeEncoder {
 		}
 		WitType result = this.abi.resultType(func);
 		byte[] resultType = result == null ? null : valType(this.abi, result);
-		int funcType = addDecl(ComponentWriter.funcTypeOf(paramNames, paramTypes, resultType));
-		this.decls.add(ComponentWriter.instanceDeclExportFunc(decl.field(), funcType));
+		int funcType = addDecl(async ? ComponentWriter.asyncFuncTypeOf(paramNames, paramTypes, resultType)
+				: ComponentWriter.funcTypeOf(paramNames, paramTypes, resultType));
+		this.decls.add(ComponentWriter.instanceDeclExportFunc(field, funcType));
 	}
 
 	// The encoded valtype operand of a WIT type use: a primitive is inlined by its code;

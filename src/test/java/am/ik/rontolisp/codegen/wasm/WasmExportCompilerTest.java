@@ -37,9 +37,7 @@ class WasmExportCompilerTest {
 		List<LispVal> loaded = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(source), null,
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
 				am.ik.rontolisp.eval.SourceLoader.fileSystem());
-		loaded = am.ik.rontolisp.eval.FetchLibrary.process(loaded,
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
-		loaded = am.ik.rontolisp.eval.ServeLibrary.process(loaded,
+		loaded = am.ik.rontolisp.eval.HttpLibrary.process(loaded,
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
 			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
@@ -548,10 +546,10 @@ class WasmExportCompilerTest {
 		base.compile(LispReader.readAllFromString("(print 1)"));
 		assertThat(base.componentWit()).doesNotContain("wasi:http").doesNotContain("wasi:sockets");
 		WasmLispCompiler http = new WasmLispCompiler(false, true);
-		http.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.FetchLibrary.process(
+		http.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.HttpLibrary.process(
 				LispReader.readAllFromString("(print (rontolisp:fetch \"http://127.0.0.1:9/\"))"),
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT)));
-		assertThat(http.componentWit()).contains("  import wasi:http/outgoing-handler@0.2.0;");
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
+		assertThat(http.componentWit()).contains("  import wasi:http/client@0.3.0;");
 		WasmLispCompiler sock = new WasmLispCompiler(false, true);
 		sock.compile(LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"));
 		assertThat(sock.componentWit()).contains("  import wasi:sockets/types@0.3.0;");
@@ -559,7 +557,7 @@ class WasmExportCompilerTest {
 
 	@Test
 	void serveComponentWitExportsTheIncomingHandlerOnly() {
-		List<LispVal> loaded = am.ik.rontolisp.eval.ServeLibrary.process(LispReader.readAllFromString("""
+		List<LispVal> loaded = am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString("""
 				(defun h (r) (list :status 200 :body "x"))
 				(rontolisp:http-handler 'h)
 				"""), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
@@ -567,7 +565,7 @@ class WasmExportCompilerTest {
 			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
 		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, true);
 		compiler.compile(program);
-		assertThat(compiler.componentWit()).contains("  export wasi:http/incoming-handler@0.2.0;")
+		assertThat(compiler.componentWit()).contains("  export wasi:http/handler@0.3.0;")
 			.doesNotContain("http-dispatch");
 	}
 

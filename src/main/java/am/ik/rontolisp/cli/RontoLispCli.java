@@ -24,11 +24,10 @@ import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.compiler.WitExportDirective;
-import am.ik.rontolisp.eval.FetchLibrary;
+import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
-import am.ik.rontolisp.eval.ServeLibrary;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.VecLibrary;
@@ -265,45 +264,23 @@ public final class RontoLispCli {
 		// never references (the component path skips --optimize's core tree shaker by
 		// design); --no-prune / --dynamic disable that, like the library defun pruner.
 		loaded = WitImportInliner.inline(loaded, baseDir, witBackend, SourceLoader.fileSystem(), !dynamic && !noPrune);
-		// rontolisp:fetch on the --component path is a Lisp-source library (fetch.lisp)
-		// over
-		// a wit-imported wasi:http surface, spliced HERE -- right after WitImportInliner,
-		// which fetch.lisp's own wit-import directives are lowered against (FetchLibrary
-		// does
-		// that itself), and before UserMacroExpander, which its cond/handler-case bodies
-		// need. Serve keeps the WAT adapter (its fixed surface already imports
-		// wasi:http), so
-		// the splice is gated off there. The interpreter/JVM keep java.net.http; Preview
-		// 1
-		// has no fetch.
+		// Both rontolisp:fetch AND rontolisp:http-handler on the --component path are ONE
+		// Lisp-source library (http.lisp) over a wit-imported wasi:http@0.3.0 surface,
+		// spliced HERE -- right after WitImportInliner, which http.lisp's own wit-import
+		// directives are lowered against (HttpLibrary does that itself), and before
+		// UserMacroExpander, which its cond/handler-case bodies need. The splice's member
+		// filter follows the reachable half, so a fetch-only program binds no serve
+		// member and vice versa. The interpreter/JVM keep java.net.http / HttpServer;
+		// Preview 1 has neither.
 		boolean serve = component && HttpHandlerInliner.usesHttpHandler(loaded);
-		// rontolisp:fetch is the fetch.lisp library over wit-imported wasi:http, spliced
-		// whether or not the program serves: a served handler that also fetches (the
-		// classic
-		// proxy shape) carries BOTH fetch.lisp and serve.lisp, and their overlapping
-		// wasi:http/wasi:io imports are merged into one component-level import downstream
-		// --
-		// no hand-written adapter, no collision. So the fetch splice is no longer gated
-		// off
-		// in serve mode.
-		loaded = FetchLibrary.process(loaded, witBackend);
-		// The HTTP glue of rontolisp:http-handler is serve.lisp (ServeLibrary), the
-		// mirror
-		// of fetch.lisp: the wasi:http/incoming-handler export is lifted from a
-		// Lisp-written
-		// handler over wit-imported wasi:http/types, with no hand-written serve adapter.
-		// It
-		// fires for plain serve AND serve+fetch. serve + rontolisp:wit-export is an error
-		// (a
-		// serve component's only export is wasi:http/incoming-handler); the check fires
-		// below
-		// on the macro-expanded program. Splicing serve.lisp's %serve-handle wasm-export
-		// first would surface as a DIFFERENT error (wit-export forbids a hand-written
-		// wasm-export beside it), so gate the splice off when a wit-export world is
-		// present
-		// and let the clearer guard win.
+		// serve + rontolisp:wit-export is an error (a serve component's only export is
+		// wasi:http/handler); the check fires below on the macro-expanded program.
+		// Splicing http.lisp's %serve-handle wasm-export first would surface as a
+		// DIFFERENT error (wit-export forbids a hand-written wasm-export beside it), so
+		// gate the serve half off when a wit-export world is present and let the clearer
+		// guard win.
 		boolean serveGlue = serve && !WitExportInliner.usesWitExport(loaded);
-		loaded = ServeLibrary.process(loaded, witBackend, serveGlue);
+		loaded = HttpLibrary.process(loaded, witBackend, serveGlue);
 		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
 		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
 		// any
@@ -369,8 +346,8 @@ public final class RontoLispCli {
 							"rontolisp:wit-export cannot be combined with rontolisp:http-handler: a serve-mode "
 									+ "component exports only wasi:http/incoming-handler");
 				}
-				// Serve (plain or serve+fetch) already carries serve.lisp's %serve-handle
-				// wasm-export, spliced by ServeLibrary above; the http-handler directive
+				// Serve (plain or serve+fetch) already carries http.lisp's %serve-handle
+				// wasm-export, spliced by HttpLibrary above; the http-handler directive
 				// was
 				// removed there. Nothing more to synthesize -- the WAT serve adapter is
 				// gone.

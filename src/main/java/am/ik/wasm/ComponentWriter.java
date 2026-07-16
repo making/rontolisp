@@ -1312,6 +1312,97 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode {@code canon future.write} (opcode {@code 0x17}) with the canonical memory
+	 * and UTF-8 string-encoding options, required when the future payload can carry a
+	 * string (e.g. wasi:http's {@code error-code} cases). Golden bytes from
+	 * {@code wasm-tools dump} of the wasi:http 0.3 reference component (2026-07-16):
+	 * {@code FutureWrite '{' ty, options: [Memory(0), UTF8] '}'}.
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @param memoryIndex the core memory index the payload is written from
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureWriteUtf8(int futureTypeIndex, int memoryIndex) {
+		return enc(w -> w.write(0x17)
+			.writeUnsignedLeb128(futureTypeIndex)
+			.writeUnsignedLeb128(2)
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex)
+			.write(0x00));
+	}
+
+	/**
+	 * Encode an <strong>async</strong> component function type with the given named
+	 * parameters (each an encoded valtype) and an optional single result (component func
+	 * type tag {@code 0x43}) &mdash; the async counterpart of {@link #funcTypeOf}, used
+	 * for a WIT {@code async func} both inside an imported-instance type and at the
+	 * component level (the async-lifted export's type).
+	 * @param paramNames the parameter names, in order
+	 * @param paramTypes the encoded valtype of each parameter ({@link #valTypePrim} /
+	 * {@link #valTypeIndex})
+	 * @param resultType the encoded result valtype, or {@code null} for no result
+	 * @return the encoded async function type
+	 */
+	public static byte[] asyncFuncTypeOf(List<String> paramNames, List<byte[]> paramTypes,
+			byte @Nullable [] resultType) {
+		return enc(w -> {
+			w.write(0x43);
+			w.writeUnsignedLeb128(paramNames.size());
+			for (int i = 0; i < paramNames.size(); i++) {
+				plainName(w, paramNames.get(i));
+				w.write((Object) paramTypes.get(i));
+			}
+			if (resultType == null) {
+				w.write(0x01).writeUnsignedLeb128(0);
+			}
+			else {
+				w.write(0x00).write((Object) resultType);
+			}
+		});
+	}
+
+	/**
+	 * Encode a <strong>stackful async</strong> {@code canon lift}: the canonical memory,
+	 * UTF-8 string-encoding and {@code async} options, in that order (the byte sequence
+	 * wasm-tools emits for an async-without-callback export). The lifted core function's
+	 * signature is {@code [flat params] -> []} &mdash; the result is delivered
+	 * exclusively through {@code canon task.return} &mdash; and running it requires
+	 * {@code wasmtime -W component-model-async-stackful=y}.
+	 * @param coreFuncIndex the core function index to lift
+	 * @param typeIndex the component function type index (an async function type)
+	 * @param memoryIndex the core memory index used by the canonical ABI
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonLiftMemoryUtf8Async(int coreFuncIndex, int typeIndex, int memoryIndex) {
+		return enc(w -> w.write(0x00)
+			.write(0x00)
+			.writeUnsignedLeb128(coreFuncIndex)
+			.writeUnsignedLeb128(3) // three canonical options
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex) // memory
+			.write(0x00) // string-encoding utf8
+			.write(0x06) // async (stackful)
+			.writeUnsignedLeb128(typeIndex));
+	}
+
+	/**
+	 * Encode {@code canon task.return} with the canonical memory and UTF-8
+	 * string-encoding options (wasm-tools' choice for a result whose flattening reads
+	 * guest memory), for a result type referenced by index.
+	 * @param resultTypeIndex the component type index of the task's result type
+	 * @param memoryIndex the canonical memory index
+	 * @return the encoded canonical function
+	 */
+	public static byte[] canonTaskReturnTypeMemoryUtf8(int resultTypeIndex, int memoryIndex) {
+		return enc(w -> w.write(0x09)
+			.write(0x00)
+			.writeSignedLeb128(resultTypeIndex)
+			.writeUnsignedLeb128(2)
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex)
+			.write(0x00));
+	}
+
+	/**
 	 * Encode {@code canon future.drop-readable} (opcode {@code 0x1a}) for the given
 	 * future type, producing a core function {@code (handle) -> ()}.
 	 * @param futureTypeIndex the component type index of the {@code future<T>} type

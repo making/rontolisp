@@ -43,15 +43,15 @@ capture() {
   echo "$OUT/$name.wit"
 }
 
-# restore_use <name>  -- re-add the use clause wasm-tools drops from incoming-handler
+# restore_use <name>  -- re-add the use clause wasm-tools drops from the handler interface
 restore_use() {
   python3 - "$OUT/$1.wit" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
-old = "  interface incoming-handler {\n    handle: func(request: incoming-request, response-out: response-outparam);\n  }"
-new = ("  interface incoming-handler {\n    use types.{incoming-request, response-outparam};\n\n"
-       "    handle: func(request: incoming-request, response-out: response-outparam);\n  }")
+old = "  interface handler {\n    handle: async func(request: request) -> result<response, error-code>;\n  }"
+new = ("  interface handler {\n    use types.{request, response, error-code};\n\n"
+       "    handle: async func(request: request) -> result<response, error-code>;\n  }")
 assert text.count(old) == 1, path
 open(path, "w").write(text.replace(old, new))
 PY
@@ -66,9 +66,6 @@ capture sockets
 printf '(defun h (r) (list :status 200 :body "x"))\n(rontolisp:http-handler (quote h))\n' > "$WORK/http-server.lisp"
 capture http-server
 restore_use http-server
-printf '(defun h (r) (list :status 200 :body (getf (rontolisp:fetch "http://127.0.0.1:9/") :body)))\n(rontolisp:http-handler (quote h))\n' > "$WORK/http-server-client.lisp"
-capture http-server-client
-restore_use http-server-client
 printf '(defun f (n) n)\n(rontolisp:wasm-export (quote f) :params (quote (:int)) :returns :int)\n' > "$WORK/nogc.lisp"
 capture nogc --no-gc
 printf '(defun hello () (print "hi"))\n(rontolisp:wasm-export (quote hello))\n' > "$WORK/nogc-print.lisp"

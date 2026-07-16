@@ -111,7 +111,7 @@ class WasmComponentImportCompilerTest {
 	// whose `handle` wrapper is lifted into wasi:http/incoming-handler -- no serve
 	// adapter.
 	private static byte[] compileServeComponent(String source) {
-		List<LispVal> loaded = am.ik.rontolisp.eval.ServeLibrary.process(LispReader.readAllFromString(source),
+		List<LispVal> loaded = am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString(source),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		return new WasmLispCompiler(false, true, false, false, true)
 			.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
@@ -696,11 +696,10 @@ class WasmComponentImportCompilerTest {
 	@Test
 	void aServedComponentImportsTheInterfaceAlongsideItsFixedWasiHttpSurface() {
 		// A rontolisp:http-handler component wraps the preview1 bridge and the serve core
-		// (serve.lisp's HTTP glue, whose wasi:io / wasi:http imports are lowered from the
-		// block), so its index bookkeeping is its own -- but an ADDITIONAL user import
-		// rides
-		// the same appendUserImports wiring as the other three variants, and the fixed
-		// wasi:http/incoming-handler export survives it.
+		// (http.lisp's HTTP glue, whose wasi:http imports are lowered from the block), so
+		// its index bookkeeping is its own -- but an ADDITIONAL user import rides the
+		// same appendUserImports wiring as the other variants, and the fixed
+		// wasi:http/handler export survives it.
 		String witLiteral = "\"" + KV_WIT.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
 		byte[] component = compileServeComponent("(defpackage kv (:use cl) (:export open))\n"
 				+ "(rontolisp::%component-import \"wasi:keyvalue/store@0.2.0-draft\" " + witLiteral
@@ -710,7 +709,7 @@ class WasmComponentImportCompilerTest {
 				+ "(rontolisp:http-handler 'handle)\n");
 		assertThat(containsAscii(component, "wasi:keyvalue/store@0.2.0-draft")).isTrue();
 		assertThat(containsAscii(component, "[method]bucket.get")).isTrue();
-		assertThat(containsAscii(component, "wasi:http/incoming-handler@0.2.0")).isTrue();
+		assertThat(containsAscii(component, "wasi:http/handler@0.3.0")).isTrue();
 	}
 
 	@Test

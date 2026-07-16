@@ -44,7 +44,7 @@ final class WasmFetchCompiler {
 	/**
 	 * Compile-time checks a {@code (defun rontolisp:fetch ...)} could not do: the arity
 	 * and a statically-known unsupported {@code :method}. On the {@code --component}
-	 * non-serve path fetch is a spliced Lisp defun (fetch.lisp), so
+	 * non-serve path fetch is a spliced Lisp defun (http.lisp), so
 	 * {@link WasmExprCompiler} runs this validator and then lets the call fall through to
 	 * that defun -- the diagnostic is kept (parity with the interpreter/JVM's runtime
 	 * validation) without the WAT adapter.

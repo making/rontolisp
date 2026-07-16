@@ -291,6 +291,27 @@ class ComponentWriterTest {
 	}
 
 	@Test
+	void asyncLiftAndTaskReturnEncodings() {
+		// Golden bytes from `wasm-tools dump` of the hand-written wasi:http@0.3.0
+		// service reference component (2026-07-16, served + curl-verified on
+		// wasmtime 46):
+		// [type 16] Func { async_: true, params: [("request", Type(15))],
+		// result: Some(Type(14)) } = 43 01 07 "request" 0f 00 0e
+		assertThat(hex(ComponentWriter.asyncFuncTypeOf(java.util.List.of("request"),
+				java.util.List.of(ComponentWriter.valTypeIndex(15)), ComponentWriter.valTypeIndex(14))))
+			.isEqualTo("430107726571756573740f000e");
+		// [func 2] Lift { core_func_index: 15, type_index: 16,
+		// options: [Memory(0), UTF8, Async] } = 00 00 0f 03 03 00 00 06 10
+		assertThat(hex(ComponentWriter.canonLiftMemoryUtf8Async(15, 16, 0))).isEqualTo("00000f030300000610");
+		// [core func 14] TaskReturn { result: Some(Type(14)),
+		// options: [Memory(0), UTF8] } = 09 00 0e 02 03 00 00
+		assertThat(hex(ComponentWriter.canonTaskReturnTypeMemoryUtf8(14, 0))).isEqualTo("09000e02030000");
+		// [core func 13] FutureWrite { ty: 9, options: [Memory(0), UTF8] }
+		// = 17 09 02 03 00 00
+		assertThat(hex(ComponentWriter.canonFutureWriteUtf8(9, 0))).isEqualTo("170902030000");
+	}
+
+	@Test
 	void definedTypeEncodings() {
 		// Golden bytes from `wasm-tools dump` of a wasm-tools-built component importing
 		// wasi:keyvalue/store@0.2.0-draft (the component-import reference probe).

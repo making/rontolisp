@@ -983,16 +983,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean ehMode = programUsesEhForm(program);
 		boolean usesFetch = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH));
-		// A serve-mode program that also fetches: fetch is now the fetch.lisp library
-		// (its
-		// own canon-lowered wasi:http user imports), spliced ALONGSIDE serve.lisp, so the
-		// serve component is the wider http-server-client blob. There is no hand-written
-		// http
-		// adapter and no `http` core import any more -- both halves of wasi:http come in
-		// through %component-import, exactly like a non-serve fetch, so this flag only
-		// selects
-		// the emitted-WIT blob variant below.
-		boolean serveFetch = this.component && this.serve && usesFetch;
 		// The rontolisp:tcp-* built-ins are component-only the same way: in component
 		// mode they drive the sock.* imports (function indices FUNC_TCP_CONNECT ..
 		// FUNC_TCP_LOCAL_PORT) implemented by the sockets adapter over
@@ -1008,7 +998,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// fetch and tcp sockets need different component blob variants (wasi:http 0.2
 		// hybrid vs wasi:sockets 0.3); a combined variant does not exist yet. Keyed off
 		// the
-		// usage, not emitHttpImport, because a non-serve fetch (fetch.lisp) no longer
+		// usage, not emitHttpImport, because a non-serve fetch (http.lisp) no longer
 		// sets
 		// emitHttpImport but must still be refused alongside tcp.
 		if (this.component && usesFetch && usesTcp) {
@@ -1062,10 +1052,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				topLevelExprs.add(expr);
 			}
 		}
-		// Two spliced libraries can bind the SAME interface: a serve+fetch program
-		// carries
-		// serve.lisp AND fetch.lisp, and both %component-import wasi:io/streams and
-		// wasi:http/types (each in its own %-package). Merge them into one import per
+		// Two independently spliced libraries can bind the SAME interface (each in its
+		// own %-package). Merge them into one import per
 		// interface so the component-level wiring sees a single instance -- the two
 		// packages'
 		// wrappers stay distinct defuns (their duplicate core imports of the same host
@@ -1161,6 +1149,56 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				componentAsyncWrappers.put(async.lispName(), async);
 				defuns.add(new DefunDecl(async.lispName(), paramNames, false, List.of()));
+			}
+		}
+		// An async func member binds TWO wrappers -- the start (async-lowered call,
+		// returning the (packed . retptr) token) and the await (waitable-set wait +
+		// result
+		// lift) -- registered like the other synthetic defuns, after the async built-ins
+		// in the placeholder ordinal space.
+		Map<String, WasmComponentImportCompiler.AsyncCall> componentCallStartWrappers = new LinkedHashMap<>();
+		Map<String, WasmComponentImportCompiler.AsyncCall> componentCallAwaitWrappers = new LinkedHashMap<>();
+		for (WasmComponentImportCompiler.Import imported : componentImports) {
+			for (WasmComponentImportCompiler.AsyncCall call : imported.calls()) {
+				for (String wrapperName : List.of(call.startName(), call.awaitName())) {
+					boolean duplicate = componentCallStartWrappers.containsKey(wrapperName)
+							|| componentCallAwaitWrappers.containsKey(wrapperName)
+							|| componentAsyncWrappers.containsKey(wrapperName)
+							|| componentDropWrappers.containsKey(wrapperName)
+							|| componentImportWrappers.containsKey(wrapperName)
+							|| defuns.stream().anyMatch(d -> d.name.equals(wrapperName));
+					if (duplicate) {
+						throw new UnsupportedOperationException(
+								"rontolisp:wit-import name collides with an existing function: " + wrapperName);
+					}
+				}
+				List<String> startParams = new ArrayList<>();
+				for (int i = 0; i < WasmComponentImportCompiler.lispArity(call); i++) {
+					startParams.add("%component-import-p" + i);
+				}
+				componentCallStartWrappers.put(call.startName(), call);
+				defuns.add(new DefunDecl(call.startName(), startParams, false, List.of()));
+				componentCallAwaitWrappers.put(call.awaitName(), call);
+				defuns.add(new DefunDecl(call.awaitName(), List.of("%component-import-p0"), false, List.of()));
+			}
+		}
+		// A task-return built-in binds the same way (one parameter: the result value).
+		Map<String, WasmComponentImportCompiler.TaskReturn> componentTaskReturnWrappers = new LinkedHashMap<>();
+		for (WasmComponentImportCompiler.Import imported : componentImports) {
+			for (WasmComponentImportCompiler.TaskReturn tr : imported.taskReturns()) {
+				boolean duplicate = componentTaskReturnWrappers.containsKey(tr.lispName())
+						|| componentCallStartWrappers.containsKey(tr.lispName())
+						|| componentCallAwaitWrappers.containsKey(tr.lispName())
+						|| componentAsyncWrappers.containsKey(tr.lispName())
+						|| componentDropWrappers.containsKey(tr.lispName())
+						|| componentImportWrappers.containsKey(tr.lispName())
+						|| defuns.stream().anyMatch(d -> d.name.equals(tr.lispName()));
+				if (duplicate) {
+					throw new UnsupportedOperationException(
+							"rontolisp:wit-import name collides with an existing function: " + tr.lispName());
+				}
+				componentTaskReturnWrappers.put(tr.lispName(), tr);
+				defuns.add(new DefunDecl(tr.lispName(), List.of("%component-import-p0"), false, List.of()));
 			}
 		}
 		// A :s-expr export parameter parses host-provided text with the embedded reader,
@@ -1313,8 +1351,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, Integer> importBodySlots = new HashMap<>();
 		for (DefunDecl defun : defuns) {
 			if (importWrappers.containsKey(defun.name) || componentImportWrappers.containsKey(defun.name)
-					|| componentDropWrappers.containsKey(defun.name)
-					|| componentAsyncWrappers.containsKey(defun.name)) {
+					|| componentDropWrappers.containsKey(defun.name) || componentAsyncWrappers.containsKey(defun.name)
+					|| componentCallStartWrappers.containsKey(defun.name)
+					|| componentCallAwaitWrappers.containsKey(defun.name)
+					|| componentTaskReturnWrappers.containsKey(defun.name)) {
 				importBodySlots.put(defun.name, userFunctionBodies.size());
 				userFunctionBodies.add(null); // filled in below
 				continue;
@@ -1512,7 +1552,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the same helper pair (__ronto_alloc for the return area, _str_from_mem for
 		// host-written bytes), so any bound interface forces the helpers on.
 		boolean memoryHelpers = exportUsesMemory || importUsesStrFromMem || !componentImportWrappers.isEmpty()
-				|| !componentAsyncWrappers.isEmpty();
+				|| !componentAsyncWrappers.isEmpty() || !componentCallStartWrappers.isEmpty()
+				|| !componentTaskReturnWrappers.isEmpty();
 		int allocFuncIndex = memoryHelpers ? exportHelperBase : -1;
 		int strFromMemFuncIndex = memoryHelpers ? exportHelperBase + 1 : -1;
 		// Host arena API: __ronto_alloc_mark / __ronto_alloc_reset, appended right after
@@ -1527,7 +1568,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		int allocResetFuncIndex = hostArena ? exportHelperBase + 3 : -1;
 		// Unique host-import slots. Two Lisp wrappers can bind the SAME host function --
 		// a
-		// serve+fetch program's serve.lisp and fetch.lisp each call
+		// serve+fetch program's two spliced halves may each call
 		// wasi:http/types.fields-append, wasi:io/streams.blocking-read, ... in their own
 		// %-package -- and the component model forbids a core module from importing one
 		// (module, field) twice. So the wrappers stay distinct defuns but SHARE one core
@@ -1570,6 +1611,34 @@ public final class WasmLispCompiler implements LispCompiler {
 						WasmComponentImportCompiler.asyncResultTypes(async)));
 			}
 		}
+		// Async-lowered calls, then the waitable builtins each calling interface shares
+		// (one set per interface, driven by every await wrapper of that interface), then
+		// the task-return built-ins.
+		for (WasmComponentImportCompiler.AsyncCall call : componentCallStartWrappers.values()) {
+			if (importSlotIndex.putIfAbsent(call.module() + " " + call.field(), importSlots.size()) == null) {
+				importSlots
+					.add(new ImportSlot(call.module(), call.field(), WasmComponentImportCompiler.hostParamTypes(call),
+							WasmComponentImportCompiler.hostResultTypes(call)));
+			}
+		}
+		for (WasmComponentImportCompiler.Import imported : componentImports) {
+			if (imported.calls().isEmpty()) {
+				continue;
+			}
+			for (String field : WasmComponentImportCompiler.WAITABLE_FIELDS) {
+				if (importSlotIndex.putIfAbsent(imported.ifaceId() + " " + field, importSlots.size()) == null) {
+					importSlots.add(new ImportSlot(imported.ifaceId(), field,
+							WasmComponentImportCompiler.waitableParamTypes(field),
+							WasmComponentImportCompiler.waitableResultTypes(field)));
+				}
+			}
+		}
+		for (WasmComponentImportCompiler.TaskReturn tr : componentTaskReturnWrappers.values()) {
+			if (importSlotIndex.putIfAbsent(tr.module() + " " + tr.field(), importSlots.size()) == null) {
+				importSlots.add(new ImportSlot(tr.module(), tr.field(),
+						WasmComponentImportCompiler.taskReturnParamTypes(tr), new Type[] {}));
+			}
+		}
 		// Fill in the deferred import wrapper bodies now that the helper indices are
 		// known (their positions in userFunctionBodies were reserved in Pass 2a). Each
 		// wrapper calls its (module, field) slot's ordinal, so duplicate bindings
@@ -1597,6 +1666,34 @@ public final class WasmLispCompiler implements LispCompiler {
 				byte[] body = WasmComponentImportCompiler.buildAsyncBody(ctxBuilder, async, ordinal, allocFuncIndex,
 						strFromMemFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(async.lispName())), body);
+			}
+			for (WasmComponentImportCompiler.AsyncCall call : componentCallStartWrappers.values()) {
+				int ordinal = Objects.requireNonNull(importSlotIndex.get(call.module() + " " + call.field()));
+				byte[] body = WasmComponentImportCompiler.buildAsyncStartBody(ctxBuilder, call, ordinal, allocFuncIndex,
+						strFromMemFuncIndex);
+				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(call.startName())), body);
+			}
+			for (WasmComponentImportCompiler.AsyncCall call : componentCallAwaitWrappers.values()) {
+				WasmComponentImportCompiler.WaitOrdinals ordinals = new WasmComponentImportCompiler.WaitOrdinals(
+						Objects.requireNonNull(importSlotIndex
+							.get(call.module() + " " + WasmComponentImportCompiler.FIELD_WAITABLE_SET_NEW)),
+						Objects.requireNonNull(importSlotIndex
+							.get(call.module() + " " + WasmComponentImportCompiler.FIELD_WAITABLE_SET_WAIT)),
+						Objects.requireNonNull(importSlotIndex
+							.get(call.module() + " " + WasmComponentImportCompiler.FIELD_WAITABLE_SET_DROP)),
+						Objects.requireNonNull(importSlotIndex
+							.get(call.module() + " " + WasmComponentImportCompiler.FIELD_WAITABLE_JOIN)),
+						Objects.requireNonNull(importSlotIndex
+							.get(call.module() + " " + WasmComponentImportCompiler.FIELD_SUBTASK_DROP)));
+				byte[] body = WasmComponentImportCompiler.buildAsyncAwaitBody(ctxBuilder, call, ordinals,
+						allocFuncIndex, strFromMemFuncIndex);
+				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(call.awaitName())), body);
+			}
+			for (WasmComponentImportCompiler.TaskReturn tr : componentTaskReturnWrappers.values()) {
+				int ordinal = Objects.requireNonNull(importSlotIndex.get(tr.module() + " " + tr.field()));
+				byte[] body = WasmComponentImportCompiler.buildTaskReturnBody(ctxBuilder, tr, ordinal, allocFuncIndex,
+						strFromMemFuncIndex);
+				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(tr.lispName())), body);
 			}
 		}
 		if (!exportDecls.isEmpty()) {
@@ -2259,7 +2356,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					imports.addImport("sock", "tcp-local-port", ExternalKind.FUNCTION, TYPE_INTERN);
 				}
 				// Function indices FUNC_FETCH_START / FUNC_FETCH_AWAIT (12-13) are always
-				// defined trap stubs now: rontolisp:fetch is the fetch.lisp library over
+				// defined trap stubs now: rontolisp:fetch is the http.lisp library over
 				// canon-lowered wasi:http (a user %component-import), so nothing ever
 				// calls
 				// them, on Preview 1 or as a component. The slots stay reserved so every
@@ -2308,7 +2405,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				// Reserve function indices FUNC_FETCH_START (12) / FUNC_FETCH_AWAIT (13)
 				// as
-				// defined trap stubs: fetch is the fetch.lisp library over canon-lowered
+				// defined trap stubs: fetch is the http.lisp library over canon-lowered
 				// wasi:http now, so these are never called on any backend.
 				fnDef.addFunction(TYPE_FETCH_START); // index 12: unused fetch-start stub
 				fnDef.addFunction(TYPE_FETCH_AWAIT); // index 13: unused fetch-await stub
@@ -2626,7 +2723,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// fetch-start / fetch-await trap stubs at function indices
 				// FUNC_FETCH_START / FUNC_FETCH_AWAIT: no locals, unreachable, end. Fetch
 				// is
-				// the fetch.lisp library over canon-lowered wasi:http now, so these are
+				// the http.lisp library over canon-lowered wasi:http now, so these are
 				// never
 				// called.
 				code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
@@ -2814,7 +2911,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// A rontolisp:wit-import joins the fixed wasi:http surface as an extra
 				// instance import (canon lower), so a handler's state can live in a real
 				// store.
-				// serve.lisp's own wasi:io / wasi:http/types imports are part of the
+				// http.lisp's own wasi:http imports are part of the
 				// FIXED
 				// surface (the import block), so they must NOT be re-emitted as user
 				// imports
@@ -2825,9 +2922,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// import).
 				List<WasmComponentImportCompiler.Import> serveUserImports = WasmServeComponentBuilder
 					.additionalImports(componentImports);
-				this.componentWit = WitEmitter.emit(
-						serveFetch ? WitEmitter.VARIANT_HTTP_SERVER_CLIENT : WitEmitter.VARIANT_HTTP_SERVER, List.of(),
-						serveUserImports);
+				this.componentWit = WitEmitter.emit(WitEmitter.VARIANT_HTTP_SERVER, List.of(), serveUserImports);
 				return WasmComponentBuilder.buildServe(coreModule, componentImports);
 			}
 			// Lift each wasm-export into a host-callable component-model export
@@ -2839,7 +2934,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				componentExportDecls.add(p.decl());
 			}
 			// This is the non-serve component path (serve returned above), where
-			// emitHttpImport is always false: rontolisp:fetch here is the fetch.lisp
+			// emitHttpImport is always false: rontolisp:fetch here is the http.lisp
 			// library
 			// over canon-lowered wasi:http user imports (the base variant), not the WAT
 			// http-client blob.
@@ -3145,7 +3240,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// on
 		// the WAT adapter there (WasmFetchCompiler.compile), because the serve blob
 		// already
-		// imports wasi:http; off serve it falls through to the fetch.lisp defun.
+		// imports wasi:http; off serve it falls through to the http.lisp defun.
 		boolean serve = false;
 
 		/**

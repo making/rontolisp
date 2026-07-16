@@ -206,7 +206,7 @@ public final class WitResolver {
 				if (!name.equals(local)) {
 					continue;
 				}
-				WitItem.InterfaceDef source = findInterface(use.path());
+				WitItem.InterfaceDef source = findUsedInterface(scope, use.path());
 				if (source == null) {
 					return null;
 				}
@@ -214,6 +214,30 @@ public final class WitResolver {
 			}
 		}
 		return null;
+	}
+
+	// Resolves a `use` clause's interface path from within `scope`. An UNQUALIFIED path
+	// (`use types.{...}`) names a sibling of the SAME package (the WIT rule), so it is
+	// tried against the scope's own package first -- two packages may both define an
+	// interface named `types` (wasi:clocks and wasi:http both do), and the bare-name
+	// fallback alone would call that ambiguous.
+	private WitItem.@Nullable InterfaceDef findUsedInterface(WitItem.InterfaceDef scope, WitRef path) {
+		if (path.pkg() == null) {
+			String scopeId = canonicalId(scope);
+			if (scopeId != null) {
+				int slash = scopeId.lastIndexOf('/');
+				if (slash > 0) {
+					int at = scopeId.lastIndexOf('@');
+					String suffix = at > slash ? scopeId.substring(at) : "";
+					WitItem.InterfaceDef sibling = this.interfaces
+						.get(scopeId.substring(0, slash + 1) + path.name() + suffix);
+					if (sibling != null) {
+						return sibling;
+					}
+				}
+			}
+		}
+		return findInterface(path.toString());
 	}
 
 	/**

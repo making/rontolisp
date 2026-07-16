@@ -1,94 +1,26 @@
 package root:component;
 
 world root {
-  import wasi:clocks/monotonic-clock@0.2.0;
-  import wasi:io/error@0.2.0;
-  import wasi:io/streams@0.2.0;
-  import wasi:http/types@0.2.0;
-  import wasi:random/random@0.2.0;
-  import wasi:clocks/wall-clock@0.2.0;
-  import wasi:cli/stdout@0.2.0;
-  import wasi:cli/stderr@0.2.0;
+  import wasi:http/types@0.3.0;
+  import wasi:http/client@0.3.0;
+  import wasi:random/random@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:cli/types@0.3.0;
+  import wasi:cli/stdout@0.3.0;
+  import wasi:cli/stderr@0.3.0;
 
-  export wasi:http/incoming-handler@0.2.0;
+  export wasi:http/handler@0.3.0;
 }
-package wasi:clocks@0.2.0 {
-  interface monotonic-clock {
-    type instant = u64;
-
-    now: func() -> instant;
-  }
-  interface wall-clock {
-    record datetime {
-      seconds: u64,
-      nanoseconds: u32,
-    }
-
-    now: func() -> datetime;
-  }
-}
-
-
-package wasi:io@0.2.0 {
-  interface error {
-    resource error;
-  }
-  interface streams {
-    use error.{error};
-
-    resource input-stream {
-      blocking-read: func(len: u64) -> result<list<u8>, stream-error>;
-    }
-
-    resource output-stream {
-      blocking-write-and-flush: func(contents: list<u8>) -> result<_, stream-error>;
-    }
-
-    variant stream-error {
-      last-operation-failed(error),
-      closed,
-    }
-  }
-}
-
-
-package wasi:http@0.2.0 {
+package wasi:http@0.3.0 {
   interface types {
-    use wasi:io/streams@0.2.0.{input-stream, output-stream};
-
-    resource incoming-request {
-      method: func() -> method;
-      path-with-query: func() -> option<string>;
-      headers: func() -> headers;
-      consume: func() -> result<incoming-body>;
-    }
-
-    variant method {
-      get,
-      head,
-      post,
-      put,
-      delete,
-      connect,
-      options,
-      trace,
-      patch,
-      other(string),
-    }
-
     resource fields {
       constructor();
-      append: func(name: field-key, value: field-value) -> result<_, header-error>;
-      entries: func() -> list<tuple<field-key, field-value>>;
+      append: func(name: field-name, value: field-value) -> result<_, header-error>;
+      copy-all: func() -> list<tuple<field-name, field-value>>;
     }
 
-    type headers = fields;
-
-    resource incoming-body {
-      %stream: func() -> result<input-stream>;
-    }
-
-    type field-key = string;
+    type field-name = string;
 
     type field-value = list<u8>;
 
@@ -96,20 +28,23 @@ package wasi:http@0.2.0 {
       invalid-syntax,
       forbidden,
       immutable,
+      size-exceeded,
+      other(option<string>),
     }
 
-    resource outgoing-response {
-      constructor(headers: headers);
-      set-status-code: func(status-code: status-code) -> result;
-      body: func() -> result<outgoing-body>;
+    resource request {
+      new: static func(headers: headers, contents: option<stream<u8>>, trailers: future<result<option<trailers>, error-code>>, options: option<request-options>) -> tuple<request, future<result<_, error-code>>>;
+      get-method: func() -> method;
+      set-method: func(method: method) -> result;
+      get-path-with-query: func() -> option<string>;
+      set-path-with-query: func(path-with-query: option<string>) -> result;
+      set-scheme: func(scheme: option<scheme>) -> result;
+      set-authority: func(authority: option<string>) -> result;
+      get-headers: func() -> headers;
+      consume-body: static func(this: request, res: future<result<_, error-code>>) -> tuple<stream<u8>, future<result<option<trailers>, error-code>>>;
     }
 
-    type status-code = u16;
-
-    resource outgoing-body {
-      write: func() -> result<output-stream>;
-      finish: static func(this: outgoing-body, trailers: option<trailers>) -> result<_, error-code>;
-    }
+    type headers = fields;
 
     type trailers = fields;
 
@@ -170,34 +105,90 @@ package wasi:http@0.2.0 {
       internal-error(option<string>),
     }
 
-    resource response-outparam {
-      set: static func(param: response-outparam, response: result<outgoing-response, error-code>);
-    }
-  }
-  interface incoming-handler {
-    use types.{incoming-request, response-outparam};
+    resource request-options;
 
-    handle: func(request: incoming-request, response-out: response-outparam);
+    variant method {
+      get,
+      head,
+      post,
+      put,
+      delete,
+      connect,
+      options,
+      trace,
+      patch,
+      other(string),
+    }
+
+    variant scheme {
+      HTTP,
+      HTTPS,
+      other(string),
+    }
+
+    resource response {
+      new: static func(headers: headers, contents: option<stream<u8>>, trailers: future<result<option<trailers>, error-code>>) -> tuple<response, future<result<_, error-code>>>;
+      get-status-code: func() -> status-code;
+      set-status-code: func(status-code: status-code) -> result;
+      get-headers: func() -> headers;
+      consume-body: static func(this: response, res: future<result<_, error-code>>) -> tuple<stream<u8>, future<result<option<trailers>, error-code>>>;
+    }
+
+    type status-code = u16;
+  }
+  interface client {
+    use types.{request, response, error-code};
+
+    send: async func(request: request) -> result<response, error-code>;
+  }
+  interface handler {
+    use types.{request, response, error-code};
+
+    handle: async func(request: request) -> result<response, error-code>;
   }
 }
 
 
-package wasi:random@0.2.0 {
+package wasi:random@0.3.0 {
   interface random {
     get-random-u64: func() -> u64;
   }
 }
 
 
-package wasi:cli@0.2.0 {
-  interface stdout {
-    use wasi:io/streams@0.2.0.{output-stream};
+package wasi:clocks@0.3.0 {
+  interface system-clock {
+    record instant {
+      seconds: s64,
+      nanoseconds: u32,
+    }
 
-    get-stdout: func() -> output-stream;
+    now: func() -> instant;
+  }
+  interface monotonic-clock {
+    type mark = u64;
+
+    now: func() -> mark;
+  }
+}
+
+
+package wasi:cli@0.3.0 {
+  interface types {
+    enum error-code {
+      io,
+      illegal-byte-sequence,
+      pipe,
+    }
+  }
+  interface stdout {
+    use types.{error-code};
+
+    write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
   }
   interface stderr {
-    use wasi:io/streams@0.2.0.{output-stream};
+    use types.{error-code};
 
-    get-stderr: func() -> output-stream;
+    write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
   }
 }
