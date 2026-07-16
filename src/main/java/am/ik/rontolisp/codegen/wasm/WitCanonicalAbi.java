@@ -171,6 +171,14 @@ final class WitCanonicalAbi {
 			case WitType.TupleOf tuple -> recordSize(tuple.elements());
 			case WitType.BorrowOf ignored -> 4;
 			case WitType.OwnOf ignored -> 4;
+			// A stream<T>/future<T> crosses as a bare i32 handle (the readable/writable
+			// end),
+			// so its memory footprint is the handle's, exactly like a resource handle;
+			// the
+			// element type governs the async read/write marshalling, not the handle
+			// layout.
+			case WitType.StreamOf ignored -> 4;
+			case WitType.FutureOf ignored -> 4;
 			case WitType.Named named -> {
 				WitCanonicalAbi in = scopeOf(named);
 				yield switch (resolveNamed(named)) {
@@ -200,6 +208,8 @@ final class WitCanonicalAbi {
 			case WitType.TupleOf tuple -> recordAlignment(tuple.elements());
 			case WitType.BorrowOf ignored -> 4;
 			case WitType.OwnOf ignored -> 4;
+			case WitType.StreamOf ignored -> 4;
+			case WitType.FutureOf ignored -> 4;
 			case WitType.Named named -> {
 				WitCanonicalAbi in = scopeOf(named);
 				yield switch (resolveNamed(named)) {
@@ -236,6 +246,8 @@ final class WitCanonicalAbi {
 			case WitType.TupleOf tuple -> recordFlatTypes(tuple.elements());
 			case WitType.BorrowOf ignored -> List.of(Type.I32);
 			case WitType.OwnOf ignored -> List.of(Type.I32);
+			case WitType.StreamOf ignored -> List.of(Type.I32);
+			case WitType.FutureOf ignored -> List.of(Type.I32);
 			case WitType.Named named -> {
 				WitCanonicalAbi in = scopeOf(named);
 				yield switch (resolveNamed(named)) {

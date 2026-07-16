@@ -648,20 +648,142 @@ class WitImportDirectiveTest {
 	}
 
 	@Test
-	void refusesAStreamOrAFutureOnEveryBackend() {
-		// Unlike the types above, a stream/future has no rontolisp value on ANY backend
-		// --
-		// it needs language-level async -- so the interpreter refuses it too.
+	void refusesAStreamOrAFutureOnEveryNonComponentBackend() {
+		// A stream/future needs the component-model async ABI, so only --component can
+		// marshal it; the interpreter, the JVM and Preview 1 WASM have no rontolisp value
+		// for it and refuse it, naming the WIT line.
 		for (Backend backend : new Backend[] { Backend.OTHER, Backend.WASM_GC }) {
 			assertThatThrownBy(() -> lowerApi("  read: func(handle: u32) -> stream<u8>;", backend)).as("%s", backend)
 				.isInstanceOf(UnsupportedOperationException.class)
-				.hasMessage("kv.wit:4: 'read': the WIT type of the result is a stream or a future, which has no "
-						+ "rontolisp value on any backend (it needs language-level async)");
+				.hasMessage("kv.wit:4: 'read': the WIT type of the result is a stream or a future, which only the "
+						+ "--component backend can marshal (through the canonical ABI's async built-ins); the "
+						+ "interpreter, the JVM and Preview 1 WASM have no rontolisp value for it");
 			assertThatThrownBy(() -> lowerApi("  wait: func(f: future<string>);", backend)).as("%s", backend)
 				.isInstanceOf(UnsupportedOperationException.class)
-				.hasMessage("kv.wit:4: 'wait': the WIT type of parameter 'f' is a stream or a future, which has no "
-						+ "rontolisp value on any backend (it needs language-level async)");
+				.hasMessage("kv.wit:4: 'wait': the WIT type of parameter 'f' is a stream or a future, which only the "
+						+ "--component backend can marshal (through the canonical ABI's async built-ins); the "
+						+ "interpreter, the JVM and Preview 1 WASM have no rontolisp value for it");
 		}
+	}
+
+	@Test
+	void acceptsAStreamAndAFutureAcrossTheComponentBoundary() {
+		// On --component the canonical ABI marshals the async value types: a stream<u8>
+		// crosses as a byte-stream handle and a future<result<...>> as a readable handle,
+		// so the front-end admits them (the wrapper is driven off the WIT text carried in
+		// the %component-import form, not a flat designator).
+		String body = """
+				enum error-code { failed }
+				send: func(body: stream<u8>) -> future<result<_, error-code>>;""";
+		List<LispVal> forms = lowerApi(body, Backend.WASM_COMPONENT);
+		assertThat(printed(forms)).contains("rontolisp::%component-import").contains("send");
+	}
+
+	@Test
+	void refusesAStreamWhoseElementIsNotU8OnTheComponentBoundary() {
+		// Only a byte stream crosses in this release; a stream of a richer element has no
+		// canonical read yet, so it is a friendly compile error rather than a codegen
+		// throw.
+		assertThatThrownBy(() -> lowerApi("  drain: func(src: stream<string>);", Backend.WASM_COMPONENT))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("is a stream whose element is not u8")
+			.hasMessageContaining("only stream<u8>");
+	}
+
+	@Test
+	void refusesABareFutureWithNoPayloadOnTheComponentBoundary() {
+		// future.read needs a payload type to lift, so a bare (unparameterized) future is
+		// refused with the WIT line named.
+		assertThatThrownBy(() -> lowerApi("  wait: func(f: future);", Backend.WASM_COMPONENT))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("is a bare future with no payload type");
+	}
+
+	// An interface in the wasi:http@0.3 style: async type ALIASES anchor the built-in
+	// names (`type body-stream = stream<u8>` binds body-stream-read and friends).
+	private static final String ASYNC_ALIAS_BODY = """
+			resource fields {
+			  get: func(name: string) -> string;
+			}
+			type trailers = fields;
+			enum error-code { failed }
+			type body-stream = stream<u8>;
+			type trailers-future = future<result<option<trailers>, error-code>>;
+			probe: func(f: fields) -> u32;""";
+
+	@Test
+	void anAsyncAliasBindsItsBuiltInsOnlyWhenTheProgramNamesThem() {
+		// Like a drop, an async built-in is not a WIT function: it binds ONLY when the
+		// program references it, which is what keeps every artifact that existed before
+		// async built-ins byte-identical. Referenced ops become (:async alias op name)
+		// members of the %component-import form.
+		List<LispVal> forms = WitImportDirective.lower(new Directive(WIT, API, null, null, FieldStyle.CAMEL),
+				iface(ASYNC_ALIAS_BODY), WIT, Backend.WASM_COMPONENT,
+				Set.of("probe", "body-stream-read", "trailers-future-read"),
+				Set.of("probe", "body-stream-read", "trailers-future-read"));
+		String printed = printed(forms);
+		assertThat(printed).contains("(:async \"body-stream\" \"read\" \"body-stream-read\")")
+			.contains("(:async \"trailers-future\" \"read\" \"trailers-future-read\")");
+		assertThat(printed).doesNotContain("body-stream-write").doesNotContain("drop-readable");
+	}
+
+	@Test
+	void anUnreferencedAsyncAliasBindsNothing() {
+		// The drop rule applies: with a filter in force, an async member the program
+		// never names binds nothing -- the byte-identity guard for every artifact that
+		// existed before async built-ins.
+		List<LispVal> filtered = WitImportDirective.lower(new Directive(WIT, API, null, null, FieldStyle.CAMEL),
+				iface(ASYNC_ALIAS_BODY), WIT, Backend.WASM_COMPONENT, Set.of("probe"), Set.of("probe"));
+		assertThat(printed(filtered)).doesNotContain(":async");
+		// A bind-everything pass (no filter, i.e. --no-prune) binds them all on
+		// --component, like a drop...
+		List<LispVal> unfiltered = WitImportDirective.lower(new Directive(WIT, API, null, null, FieldStyle.CAMEL),
+				iface(ASYNC_ALIAS_BODY), WIT, Backend.WASM_COMPONENT, null, null);
+		assertThat(printed(unfiltered)).contains("(:async \"body-stream\" \"new\"")
+			.contains("(:async \"trailers-future\" \"drop-writable\"");
+		// ...but SKIPS them on a backend without the async ABI: the alias itself is
+		// legal WIT, and a program that never touches the built-ins must keep compiling
+		// everywhere -- including the interpreter and the JVM.
+		for (Backend backend : new Backend[] { Backend.OTHER, Backend.WASM_GC }) {
+			List<LispVal> forms = WitImportDirective.lower(new Directive(WIT, API, null, null, FieldStyle.CAMEL),
+					iface(ASYNC_ALIAS_BODY), WIT, backend, null, null);
+			assertThat(printed(forms)).as("%s", backend).doesNotContain(":async").doesNotContain("body-stream-read");
+		}
+	}
+
+	@Test
+	void anAsyncBuiltInReferencedOffTheComponentBackendIsAClearError() {
+		// The async canonical built-ins are a component-model mechanism; a program that
+		// names one on the interpreter, the JVM or Preview 1 WASM gets the reason, not
+		// an undefined-function fallout.
+		for (Backend backend : new Backend[] { Backend.OTHER, Backend.WASM_GC }) {
+			assertThatThrownBy(() -> WitImportDirective.lower(new Directive(WIT, API, null, null, FieldStyle.CAMEL),
+					iface(ASYNC_ALIAS_BODY), WIT, backend, Set.of("probe", "body-stream-read"),
+					Set.of("probe", "body-stream-read")))
+				.as("%s", backend)
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageContaining("body-stream-read")
+				.hasMessageContaining("only the --component backend");
+		}
+	}
+
+	@Test
+	void anAsyncAliasToANonU8StreamIsRefusedWhenBound() {
+		String body = "  type wide = stream<string>;\n  probe: func() -> u32;";
+		assertThatThrownBy(() -> WitImportDirective.lower(new Directive(WIT, API, null, null, FieldStyle.CAMEL),
+				iface(body), WIT, Backend.WASM_COMPONENT, Set.of("probe", "wide-read"), Set.of("probe", "wide-read")))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("names a stream whose element is not u8");
+	}
+
+	@Test
+	void anAsyncAliasToABareFutureIsRefusedWhenBound() {
+		String body = "  type signal = future;\n  probe: func() -> u32;";
+		assertThatThrownBy(
+				() -> WitImportDirective.lower(new Directive(WIT, API, null, null, FieldStyle.CAMEL), iface(body), WIT,
+						Backend.WASM_COMPONENT, Set.of("probe", "signal-read"), Set.of("probe", "signal-read")))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("names a bare future with no payload type");
 	}
 
 	@Test

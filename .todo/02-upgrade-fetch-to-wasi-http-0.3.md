@@ -235,10 +235,90 @@ not an http special case.
   REUSABLE (no CPS rewrite).
 - This file rewritten from "blocked on upstream" to this plan.
 
-### Phase 1 -- build the shared async-canon-lower capability (http-INDEPENDENT; the real work)
+### Phase 1 -- build the shared async-canon-lower capability -- **DONE (2026-07-16, uncommitted)**
 
-Teach the general wit-import canon-lower path to marshal `stream<u8>` /
-`future<T>`, deriving the component-type index from WIT (not hardcoded).
+Landed in two halves. Full suite green; the async component VALIDATES under
+`wasm-tools validate --features all` (the strongest host-free check; the
+runtime E2E rides Phase 2's `wasmtime serve`).
+
+**Phase 1a (type acceptance + derivation).** The wip branch
+`wip/wasi-http-0.3-phase1a` implementation was adopted after review (it matched
+the zero-based design): `WitTypeMapper` reps `STREAM_HANDLE`/`FUTURE_HANDLE`;
+`WitCanonicalAbi` leaf arms (size=align=4, flat=[I32], composites recurse);
+`WitComponentTypeEncoder` refactored `valType` -> `definedIndexOf` and encodes
+`definedStream`/`definedFuture` (payload chain walked, alias-to-primitive
+peeled); `WitImportDirective` threads a `component` flag and accepts
+stream<u8>/parameterized futures on `--component` only.
+
+**Phase 1b (the codegen half) -- the design that landed:**
+
+- **Async built-ins are derived from WIT type ALIASES** (no new directive
+  syntax): a `type body-stream = stream<u8>` / `type trailers-future =
+  future<...>` alias in the bound interface binds `<alias>-new` (returns the
+  `(readable . writable)` cons), `<alias>-read` (stream: one blocking chunk as a
+  byte string, nil = EOF; future: the lifted payload, nil = dropped),
+  `<alias>-write` (stream: stage + blocking write, returns count; future: lower
+  the value into memory, returns t/nil), `<alias>-drop-readable`,
+  `<alias>-drop-writable`. The drop rule applies: bound ONLY when the program
+  names them (byte-identity), `--component` only (clear error if referenced
+  elsewhere, silently skipped on bind-everything passes). Our embedded 0.3
+  http WIT will carry these aliases (they are transparent -- they change no
+  instance type and no host contract).
+- `WasmComponentImportCompiler`: `Async` member kind (`(:async "alias" "op"
+  "lisp-name")` in the `%component-import` form; core import field =
+  `[async-<op>]<alias>`); stream/future param/result arms = bare i32 handle;
+  **new `emitLowerAt`** -- the memory-direction mirror of `emitLiftAt` (store a
+  Lisp value at its canonical layout: prims, string/list<u8> staging, handles,
+  variants/options/results by disc+payload, records/tuples by field offsets) --
+  used by `future.write` today and by Phase 2's serve export result tomorrow.
+- `WasmComponentBuilder.appendUserImports`: a data-driven async block after the
+  drops -- component-LEVEL types derived by the new `WitComponentLevelTypes`
+  (structural types declared fresh -- value types are structural -- and
+  RESOURCES projected out of the owning instance via the shared `outerOf` map;
+  async-reached resources are merged into `provides` so the instance type
+  exports them), then one `canon stream.*`/`future.*` per bound op (a CORE func
+  with no component func, the drop precedent; `future.read` gets realloc when
+  its payload stages memory). **`appendUserImports` now RETURNS the consumed
+  counts** (`Appended{types, componentFuncs, coreFuncs}`) and both builders use
+  the returned record -- the static pre-count helpers are gone, so the
+  "validates while lifting the wrong function" double-bookkeeping hazard is
+  structurally eliminated.
+- `WasmLispCompiler`: async wrappers are the third member walk (after decls,
+  drops) in all four passes (defun+slot, importBodySlots, ImportSlot, body
+  fill); they force the memory helpers on.
+- `ComponentWriter.definedPrim` added (a future over a bare primitive payload).
+
+### Phase 1.5 -- findings that reshape Phase 2 (recorded 2026-07-16)
+
+The sync canonical built-ins are RENDEZVOUS (unbuffered): a `stream.write` /
+`future.write` blocks until the peer reads, and vice versa. Consequences:
+
+- **A guest-only loopback deadlocks by design** (write blocks with no reader;
+  nothing in-task can ever read). Runtime verification of the built-ins
+  therefore REQUIRES a concurrent host peer -- i.e. Phase 2's wasi:http E2E
+  itself. Phase 1's runtime-level assurance is wasm-tools validation plus the
+  fixed adapter's identical call shapes.
+- **serve**: `handle` cannot just RETURN the response -- a stackful task's
+  return completes the task, and only then would the host read the contents
+  stream, which the now-dead task can never write. 0.2's `response-outparam.set
+  BEFORE writing the body` is the tell: its 0.3 equivalent is **`canon
+  task.return`** (deliver the result mid-task, keep running). Phase 2 needs a
+  Lisp-callable `%task-return` built-in typed by the export's result, called by
+  the handler between constructing the response and writing its body; the final
+  core return is then ignored. (`ComponentWriter` needs a `canonTaskReturn`
+  encoder; wasmtime implements it as part of the async ABI.)
+- **fetch**: a SYNC-lowered `client.send` blocks the task before the body or
+  the trailers future can be written -> deadlock for every request (the host
+  awaits the trailers future even for GET). Phase 2 must **async-lower `send`**
+  (the canon-lower `async` option: returns subtask+status) and await its
+  completion with a wrapper-contained `waitable-set.new/join/wait` loop -- no
+  global scheduler, just one generated await wrapper; the natural Lisp shape is
+  the existing PROMISE (a new promise kind holding the subtask + retptr, so
+  `rontolisp:await` drives the waitable-set wait). Between the async send and
+  the await, the guest's sync body/trailers writes rendezvous with the host's
+  eager reads.
+
+### Phase 1 original work list (kept for reference; all landed)
 
 - `WitTypeMapper.rep` (`:150-151`): `StreamOf`/`FutureOf` -> handle-like rep.
 - `WitCanonicalAbi`: add `StreamOf`/`FutureOf` arms (size=4, align=4,
@@ -273,6 +353,32 @@ Not upstream-gated -- can proceed now.
 
 Replaces the separate Phase-2(fetch)/Phase-3(serve) of the old plan, per the
 "collapse into one module" decision.
+
+**Progress (2026-07-16):** the canonical encoders Phase 1.5's findings demand
+are LANDED and pinned (`ComponentWriterTest.canonTaskAndWaitableSetEncodings`,
+bytes derived empirically via `wasm-tools parse`+`dump`, the house method):
+`canonTaskReturnVoid`/`canonTaskReturnType[MemoryReallocUtf8]` (0x09),
+`canonWaitableSetNew` (0x1f) / `canonWaitableJoin` (0x23) /
+`canonWaitableSetWait` (0x20, blocking form) / `canonWaitableSetDrop` (0x22) /
+`canonSubtaskDrop` (0x0d), and `canonLowerAsyncMemoryReallocUtf8` (the `async`
+canonical option = tag 0x06; core sig becomes `[flat params..., results-ptr] ->
+[(status << 4) | subtask]`). `am.ik.wit` already parses `async func`
+(WitFunc.async), so the directive can KEY the async lowering off the WIT
+itself: an `async func` member on `--component` async-lowers.
+
+**Async-call binding design (decided): no new promise kind.** An `async func`
+member binds as `pkg::%member-start` (lower args, async-lowered call, return a
+token cons `(subtask . retptr)`) plus a generated `pkg::%member-await` wrapper
+(waitable-set.new + waitable.join + wait loop until the subtask reports
+RETURNED, then subtask.drop / waitable-set.drop and the ordinary emitLiftAt of
+the result at retptr), and the public defun is plain Lisp:
+`(defun send (req) (rontolisp:then (%send-start req) (function %send-await)))`
+-- the EXISTING then/await promise machinery (kind 1 over a non-promise base)
+does the rest. Two caveats discovered: (1) the start wrapper must NOT pop its
+staging (args + retptr must outlive the call until await; accept the per-call
+heap growth and note it), and (2) the waitable-set EVENT payload encoding
+(event-code + two payload words) is only verifiable against a live host -- so
+wire it, then verify on wasmtime serve E2E before trusting the loop.
 
 - Vendor the v0.3.0 http WIT (`types.wit`/`worlds.wit`/`handler.wit` +
   `deps.toml` = cli+clocks) into `src/wasm-component/deps/http` as the regen

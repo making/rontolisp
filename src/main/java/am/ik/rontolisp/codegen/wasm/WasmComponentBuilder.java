@@ -381,10 +381,31 @@ public final class WasmComponentBuilder {
 	 * @param nextComponentFunc the first free component function index
 	 * @param nextCoreFunc the first free core function index
 	 */
-	static void appendUserImports(ComponentWriter c, List<WasmComponentImportCompiler.Import> imports, int nextType,
+	/**
+	 * What {@link #appendUserImports} actually consumed of each index space -- the SINGLE
+	 * source of truth every downstream fixed index shifts by. Asyncs make the type count
+	 * derivation-dependent (a future's payload chain declares a data-dependent number of
+	 * component types), so a static pre-count would be the "validates while lifting the
+	 * wrong function" hazard incarnate; the emission reports what it did instead.
+	 *
+	 * @param types component type indices consumed (instance types + projections +
+	 * async-type declaration chains)
+	 * @param componentFuncs component function indices consumed (one alias per bound
+	 * function; drops and asyncs consume none)
+	 * @param coreFuncs core function indices consumed (one {@code canon lower} per bound
+	 * function + one {@code canon resource.drop} per drop + one async built-in per bound
+	 * async op)
+	 */
+	record Appended(int types, int componentFuncs, int coreFuncs) {
+
+		static final Appended NONE = new Appended(0, 0, 0);
+
+	}
+
+	static Appended appendUserImports(ComponentWriter c, List<WasmComponentImportCompiler.Import> imports, int nextType,
 			int firstImportInstance, int nextComponentFunc, int nextCoreFunc) {
 		if (imports.isEmpty()) {
-			return;
+			return Appended.NONE;
 		}
 		// The imports are already in dependency order (WasmComponentImportCompiler
 		// .inDependencyOrder, applied once where they are collected), so an interface is
@@ -421,6 +442,17 @@ public final class WasmComponentBuilder {
 			for (WasmComponentImportCompiler.Drop drop : imported.drops()) {
 				provides.computeIfAbsent(imported.ifaceId(), id -> new java.util.LinkedHashSet<>())
 					.add(drop.resource());
+			}
+			// A resource an ASYNC type's payload chain reaches must be declared too: the
+			// component-level future/stream type points at the projected resource, and
+			// the projection can only link against a name the instance type exports.
+			for (WasmComponentImportCompiler.Async async : distinctAsyncTypes(imported)) {
+				final List<WitComponentTypeEncoder.ForeignResource> reached = new java.util.ArrayList<>();
+				WitComponentLevelTypes.collectResources(imported.resolver(), async.abi(), async.type(), reached);
+				for (WitComponentTypeEncoder.ForeignResource resource : reached) {
+					provides.computeIfAbsent(resource.ownerIfaceId(), id -> new java.util.LinkedHashSet<>())
+						.add(resource.resource());
+				}
 			}
 		}
 		for (WasmComponentImportCompiler.Import imported : imports) {
@@ -522,11 +554,93 @@ public final class WasmComponentBuilder {
 		if (!dropCanons.isEmpty()) {
 			c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(dropCanons));
 		}
+		// Async built-ins. A `canon stream.*`/`future.*` is the THIRD emission kind: a
+		// CORE function (no component-func alias, like a drop), but typed by a
+		// COMPONENT-LEVEL stream/future type derived from the WIT here -- the
+		// data-driven counterpart of the hand-assembled base-adapter async block. The
+		// derivation declares the type's whole payload chain (structural types fresh,
+		// resources projected through the shared outerOf map), so the type count
+		// becomes data-dependent -- which is why this method reports its counts instead
+		// of trusting a static pre-count.
+		final WitComponentLevelTypes componentTypes = new WitComponentLevelTypes(typeIdx, outerOf,
+				ifaceId -> Objects.requireNonNull(instanceOf.get(ifaceId),
+						() -> "the WIT interface '" + ifaceId + "' owning an async type's resource is not imported"));
+		final List<byte[]> asyncCanons = new java.util.ArrayList<>();
+		final java.util.Map<String, java.util.List<Integer>> asyncCoreOf = new java.util.LinkedHashMap<>();
+		final java.util.Map<String, java.util.List<String>> asyncFieldsOf = new java.util.LinkedHashMap<>();
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			if (imported.asyncs().isEmpty()) {
+				continue;
+			}
+			final java.util.Map<String, Integer> typeOfAlias = new java.util.LinkedHashMap<>();
+			for (WasmComponentImportCompiler.Async async : distinctAsyncTypes(imported)) {
+				typeOfAlias.put(async.alias(), componentTypes.indexOf(imported.resolver(), async.abi(), async.type()));
+			}
+			// Two splices of one interface (mergeByIface) repeat the same ops: one canon
+			// per FIELD, exactly like the deduplicated (module, field) core imports both
+			// wrappers call through.
+			final java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+			final List<Integer> coreIndices = asyncCoreOf.computeIfAbsent(imported.ifaceId(),
+					id -> new java.util.ArrayList<>());
+			final List<String> fields = asyncFieldsOf.computeIfAbsent(imported.ifaceId(),
+					id -> new java.util.ArrayList<>());
+			for (WasmComponentImportCompiler.Async async : imported.asyncs()) {
+				if (!seen.add(async.field())) {
+					continue;
+				}
+				int type = Objects.requireNonNull(typeOfAlias.get(async.alias()));
+				asyncCanons.add(asyncCanon(async, type));
+				fields.add(async.field());
+				coreIndices.add(coreFunc++);
+			}
+		}
+		typeIdx = componentTypes.nextType();
+		componentTypes.flush(c);
+		if (!asyncCanons.isEmpty()) {
+			c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(asyncCanons));
+		}
 		for (WasmComponentImportCompiler.Import imported : imports) {
 			CoreExports core = Objects.requireNonNull(exports.get(imported.ifaceId()));
+			List<Integer> asyncCores = asyncCoreOf.get(imported.ifaceId());
+			if (asyncCores != null) {
+				core.fields().addAll(Objects.requireNonNull(asyncFieldsOf.get(imported.ifaceId())));
+				core.coreIndices().addAll(asyncCores);
+			}
 			coreInstances.add(ComponentWriter.coreInstanceFromFuncs(core.fields(), core.coreIndices()));
 		}
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(coreInstances));
+		return new Appended(typeIdx - nextType, compFunc - nextComponentFunc, coreFunc - nextCoreFunc);
+	}
+
+	// The first bound async op per ALIAS: the ops of one alias share one stream/future
+	// type, so the type derivation runs once per alias.
+	private static List<WasmComponentImportCompiler.Async> distinctAsyncTypes(
+			WasmComponentImportCompiler.Import imported) {
+		final java.util.Map<String, WasmComponentImportCompiler.Async> byAlias = new java.util.LinkedHashMap<>();
+		for (WasmComponentImportCompiler.Async async : imported.asyncs()) {
+			byAlias.putIfAbsent(async.alias(), async);
+		}
+		return new java.util.ArrayList<>(byAlias.values());
+	}
+
+	// The canon entry of one async built-in, typed by the derived component-level type.
+	// Memory options mirror the hand-assembled base block: reads and writes stage
+	// through the shared memory (core memory 0); a future.read whose payload carries a
+	// string/list<u8> additionally needs realloc (the shared memory's cabi_realloc =
+	// core func 0) for the host-staged bytes.
+	private static byte[] asyncCanon(WasmComponentImportCompiler.Async async, int type) {
+		return switch (async.op()) {
+			case NEW -> async.stream() ? ComponentWriter.canonStreamNew(type) : ComponentWriter.canonFutureNew(type);
+			case READ -> async.stream() ? ComponentWriter.canonStreamRead(type, 0)
+					: (WasmComponentImportCompiler.asyncReadNeedsRealloc(async)
+							? ComponentWriter.canonFutureRead(type, 0, 0) : ComponentWriter.canonFutureRead(type, 0));
+			case WRITE ->
+				async.stream() ? ComponentWriter.canonStreamWrite(type, 0) : ComponentWriter.canonFutureWrite(type, 0);
+			case DROP_READABLE -> async.stream() ? ComponentWriter.canonStreamDropReadable(type)
+					: ComponentWriter.canonFutureDropReadable(type);
+			case DROP_WRITABLE -> async.stream() ? ComponentWriter.canonStreamDropWritable(type)
+					: ComponentWriter.canonFutureDropWritable(type);
+		};
 	}
 
 	// The core functions an interface's synthesized core instance exports, by the field
@@ -534,58 +648,6 @@ public final class WasmComponentBuilder {
 	// functions,
 	// then the drops), so it outlives the loop that starts it.
 	private record CoreExports(List<String> fields, List<Integer> coreIndices) {
-	}
-
-	// The COMPONENT function indices the user imports consume: one alias per bound
-	// function. A resource drop consumes NONE -- `canon resource.drop` produces a core
-	// function directly -- which is exactly why this and userImportCoreFuncs are two
-	// numbers. Feed this one to a component-function index (componentInstanceFromFunc,
-	// the
-	// nextComponentFunc of appendFuncExports) and the other to a core-function index
-	// (aliasCoreFunc, canonLift's operand, the nextCoreFunc of appendFuncExports);
-	// confuse
-	// them and you get a component that VALIDATES while lifting the wrong function.
-	static int userImportFuncs(List<WasmComponentImportCompiler.Import> imports) {
-		int n = 0;
-		for (WasmComponentImportCompiler.Import imported : imports) {
-			n += imported.decls().size();
-		}
-		return n;
-	}
-
-	// The CORE function indices the user imports consume: one `canon lower` per bound
-	// function, plus one `canon resource.drop` per bound drop.
-	static int userImportCoreFuncs(List<WasmComponentImportCompiler.Import> imports) {
-		int n = 0;
-		for (WasmComponentImportCompiler.Import imported : imports) {
-			n += imported.decls().size() + imported.drops().size();
-		}
-		return n;
-	}
-
-	// The component TYPE indices the user imports consume: one instance type each, plus
-	// one projected type per resource an interface uses from another one. Downstream
-	// hardcoded type indices (appendFuncExports) shift by this, NOT by the interface
-	// count -- an import with no `use`d resources costs exactly one, which is why every
-	// pre-existing artifact stays byte-identical.
-	static int userImportTypes(List<WasmComponentImportCompiler.Import> imports) {
-		final java.util.Set<String> projected = new java.util.LinkedHashSet<>();
-		for (WasmComponentImportCompiler.Import imported : imports) {
-			for (WitComponentTypeEncoder.ForeignResource foreign : WitComponentTypeEncoder
-				.foreignResourcesOf(imported)) {
-				projected.add(foreign.ownerIfaceId() + "#" + foreign.resource());
-			}
-		}
-		// A dropped resource is projected too (canon resource.drop needs its type in this
-		// component's index space) -- unless a `use` clause already projected it, in
-		// which
-		// case appendUserImports reuses the one projection and so must this count.
-		for (WasmComponentImportCompiler.Import imported : imports) {
-			for (WasmComponentImportCompiler.Drop drop : imported.drops()) {
-				projected.add(imported.ifaceId() + "#" + drop.resource());
-			}
-		}
-		return imports.size() + projected.size();
 	}
 
 	// The rontolisp core instance's instantiation arguments: mem + the fixed adapter
@@ -659,17 +721,6 @@ public final class WasmComponentBuilder {
 	private static byte[] buildBase(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
 			List<WasmComponentImportCompiler.Import> imports) {
 		final int userIfaces = imports.size();
-		// The type index space grows by the instance types AND the resources projected
-		// out of them for a `use`d-across-interfaces reference; the instance index space
-		// only by the interfaces. They are equal until an interface uses another's
-		// resource, which is why every pre-existing component is byte-identical.
-		final int userTypes = userImportTypes(imports);
-		final int userFuncs = userImportFuncs(imports);
-		// The other function count: a resource drop is a CORE function with no component
-		// function behind it (canon resource.drop), so an index into the core function
-		// space must skip the drops too. Confusing the two yields a component that
-		// VALIDATES while lifting the wrong function.
-		final int userCoreFuncs = userImportCoreFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// All imported WASI 0.3 interfaces in one block: import instances 0-8, types
 		// 0-11.
@@ -766,8 +817,10 @@ public final class WasmComponentBuilder {
 		// User WIT-interface imports (rontolisp:wit-import): instance types from
 		// component type 24, import instances from 10, function aliases from component
 		// func 11, lowered core funcs from 22. Emits nothing when there are none, so
-		// every fixed index below shifts by zero.
-		appendUserImports(c, imports, T_RUN_FUNC + 1, 10, 11, 22);
+		// every fixed index below shifts by zero -- and what it DID consume of each
+		// index space comes back as `user`, the single source every downstream fixed
+		// index shifts by.
+		final Appended user = appendUserImports(c, imports, T_RUN_FUNC + 1, 10, 11, 22);
 		// Instantiate rontolisp (core instance 3 + one per user interface): mem =
 		// instance 0, wasi_snapshot_preview1 = adapter instance 2, plus each user
 		// interface's canon-lowered core instance (3..) under its canonical id.
@@ -782,17 +835,18 @@ public final class WasmComponentBuilder {
 		// function type 23 (stackful async: no callback option). Component func 11
 		// follows the 11 aliased WASI funcs (0-10).
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(22 + userCoreFuncs, T_RUN_FUNC))));
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(22 + user.coreFuncs(), T_RUN_FUNC))));
 		// Component instance 10 (after import instances 0-9 + the user imports)
 		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
-		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 11 + userFuncs))));
+		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter
+			.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 11 + user.componentFuncs()))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 10 + userIfaces))));
 		// Scalar wasm-export functions: next free indices after the run wiring are core
 		// func 23 (run = 22), component type 24 (T_RUN_FUNC = 23) and component func 12
 		// (the run lift = 11), each shifted by the user-import counts.
-		appendFuncExports(c, funcExports, 23 + userCoreFuncs, T_RUN_FUNC + 1 + userTypes, 12 + userFuncs, rontolisp);
+		appendFuncExports(c, funcExports, 23 + user.coreFuncs(), T_RUN_FUNC + 1 + user.types(),
+				12 + user.componentFuncs(), rontolisp);
 		return c.toByteArray();
 	}
 
@@ -861,17 +915,6 @@ public final class WasmComponentBuilder {
 	private static byte[] buildSock(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
 			List<WasmComponentImportCompiler.Import> imports) {
 		final int userIfaces = imports.size();
-		// The type index space grows by the instance types AND the resources projected
-		// out of them for a `use`d-across-interfaces reference; the instance index space
-		// only by the interfaces. They are equal until an interface uses another's
-		// resource, which is why every pre-existing component is byte-identical.
-		final int userTypes = userImportTypes(imports);
-		final int userFuncs = userImportFuncs(imports);
-		// The other function count: a resource drop is a CORE function with no component
-		// function behind it (canon resource.drop), so an index into the core function
-		// space must skip the drops too. Confusing the two yields a component that
-		// VALIDATES while lifting the wrong function.
-		final int userCoreFuncs = userImportCoreFuncs(imports);
 		final ComponentWriter c = new ComponentWriter();
 		// Base WASI 0.3 + wasi:sockets import instances 0-9, component types 0-12.
 		c.writeRaw(IMPORT_BLOCK_SOCKETS);
@@ -993,7 +1036,7 @@ public final class WasmComponentBuilder {
 		// User WIT-interface imports (rontolisp:wit-import): instance types from
 		// component type 31, import instances from 11, function aliases from component
 		// func 18, lowered core funcs from 33. Emits nothing when there are none.
-		appendUserImports(c, imports, S_T_SOCK_FUTURE + 1, 11, 18, 33);
+		final Appended user = appendUserImports(c, imports, S_T_SOCK_FUTURE + 1, 11, 18, 33);
 		// Instantiate rontolisp (core instance 3 + one per user interface): mem =
 		// instance 0, and both wasi_snapshot_preview1 AND sock satisfied by the adapter
 		// instance 2 (which exports the eight preview1 functions plus tcp-connect /
@@ -1010,18 +1053,18 @@ public final class WasmComponentBuilder {
 		// function type 26 (stackful async: no callback option). Component func 18
 		// follows the 18 aliased WASI funcs (0-17).
 		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(33 + userCoreFuncs, S_T_RUN_FUNC))));
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(33 + user.coreFuncs(), S_T_RUN_FUNC))));
 		// Component instance 11 (after import instances 0-10 + the user imports)
 		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
-		c.rawSection(ComponentWriter.SEC_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 18 + userFuncs))));
+		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter
+			.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 18 + user.componentFuncs()))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 11 + userIfaces))));
 		// Scalar wasm-export functions: next free indices after the run wiring are core
 		// func 34 (run = 33), component type 31 (S_T_SOCK_FUTURE = 30) and component func
 		// 19 (the run lift = 18), each shifted by the user-import counts.
-		appendFuncExports(c, funcExports, 34 + userCoreFuncs, S_T_SOCK_FUTURE + 1 + userTypes, 19 + userFuncs,
-				rontolisp);
+		appendFuncExports(c, funcExports, 34 + user.coreFuncs(), S_T_SOCK_FUTURE + 1 + user.types(),
+				19 + user.componentFuncs(), rontolisp);
 		return c.toByteArray();
 	}
 

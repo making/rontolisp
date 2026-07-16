@@ -970,6 +970,138 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode a type-section entry that IS a bare primitive value type (the
+	 * {@code defvaltype ::= primvaltype} production), so a container that references its
+	 * payload by index -- {@code future<u8>}, say -- can point at a primitive.
+	 * @param primCode the primitive value type code (e.g. {@link #VT_U8})
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedPrim(int primCode) {
+		return enc(w -> w.writeSignedLeb128(primCode - 0x80));
+	}
+
+	// --- task/subtask/waitable-set canonical built-ins (component-model async ABI) ---
+	//
+	// Byte encodings derived empirically from `wasm-tools parse` + `dump` of a
+	// hand-written reference (the same method as the stream/future built-ins above) and
+	// pinned by ComponentWriterTest. `task.return` is what lets a stackful async EXPORT
+	// deliver its result mid-task and keep running (the WASI 0.3 replacement for
+	// wasi:http 0.2's response-outparam.set); the waitable-set trio is what awaits an
+	// async-LOWERED import call's completion (its core call returns a subtask rather
+	// than blocking).
+
+	/**
+	 * Encode {@code canon task.return} for a task with no result (tag {@code 0x09},
+	 * result-list {@code none}).
+	 * @return the encoded canonical function
+	 */
+	public static byte[] canonTaskReturnVoid() {
+		return enc(w -> w.write(0x09).write(0x01).write(0x00).writeUnsignedLeb128(0));
+	}
+
+	/**
+	 * Encode {@code canon task.return} whose result is a defined type referenced by
+	 * index; the core signature takes the result's flattened values.
+	 * @param resultTypeIndex the component type index of the task's result type
+	 * @return the encoded canonical function
+	 */
+	public static byte[] canonTaskReturnType(int resultTypeIndex) {
+		return enc(w -> w.write(0x09).write(0x00).writeSignedLeb128(resultTypeIndex).writeUnsignedLeb128(0));
+	}
+
+	/**
+	 * Encode {@code canon task.return} with the canonical memory / realloc / UTF-8
+	 * options, for a result whose flattening spills to memory or stages string bytes.
+	 * @param resultTypeIndex the component type index of the task's result type
+	 * @param memoryIndex the canonical memory index
+	 * @param reallocFuncIndex the canonical realloc core function index
+	 * @return the encoded canonical function
+	 */
+	public static byte[] canonTaskReturnTypeMemoryReallocUtf8(int resultTypeIndex, int memoryIndex,
+			int reallocFuncIndex) {
+		return enc(w -> w.write(0x09)
+			.write(0x00)
+			.writeSignedLeb128(resultTypeIndex)
+			.writeUnsignedLeb128(3)
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex)
+			.write(0x04)
+			.writeUnsignedLeb128(reallocFuncIndex)
+			.write(0x00));
+	}
+
+	/**
+	 * Encode {@code canon waitable-set.new} (tag {@code 0x1f}); core signature
+	 * {@code [] -> [i32 set]}.
+	 * @return the encoded canonical function
+	 */
+	public static byte[] canonWaitableSetNew() {
+		return enc(w -> w.write(0x1f));
+	}
+
+	/**
+	 * Encode {@code canon waitable.join} (tag {@code 0x23}); core signature
+	 * {@code [i32 waitable, i32 set] -> []} (set 0 = leave the current set).
+	 * @return the encoded canonical function
+	 */
+	public static byte[] canonWaitableJoin() {
+		return enc(w -> w.write(0x23));
+	}
+
+	/**
+	 * Encode the blocking {@code canon waitable-set.wait} (tag {@code 0x20}); core
+	 * signature {@code [i32 set, i32 payload-ptr] -> [i32 event-code]}, the event's two
+	 * payload words written at the pointer.
+	 * @param memoryIndex the canonical memory index the payload is written into
+	 * @return the encoded canonical function
+	 */
+	public static byte[] canonWaitableSetWait(int memoryIndex) {
+		return enc(w -> w.write(0x20).write(0x00).writeUnsignedLeb128(memoryIndex));
+	}
+
+	/**
+	 * Encode {@code canon waitable-set.drop} (tag {@code 0x22}); core signature
+	 * {@code [i32 set] -> []}.
+	 * @return the encoded canonical function
+	 */
+	public static byte[] canonWaitableSetDrop() {
+		return enc(w -> w.write(0x22));
+	}
+
+	/**
+	 * Encode {@code canon subtask.drop} (tag {@code 0x0d}); core signature
+	 * {@code [i32 subtask] -> []}, releasing a completed async call's subtask handle.
+	 * @return the encoded canonical function
+	 */
+	public static byte[] canonSubtaskDrop() {
+		return enc(w -> w.write(0x0d));
+	}
+
+	/**
+	 * Encode an <strong>async</strong> {@code canon lower} with the canonical memory /
+	 * realloc / UTF-8 options (the {@code async} canonical option, tag {@code 0x06}). The
+	 * lowered core function's signature becomes {@code [flattened params..., i32
+	 * results-ptr] -> [i32 (status << 4) | subtask]} -- the call returns immediately and
+	 * its completion is awaited through a waitable-set.
+	 * @param funcIndex the component function index to lower
+	 * @param memoryIndex the canonical memory index
+	 * @param reallocFuncIndex the canonical realloc core function index
+	 * @return the encoded canonical function
+	 */
+	public static byte[] canonLowerAsyncMemoryReallocUtf8(int funcIndex, int memoryIndex, int reallocFuncIndex) {
+		return enc(w -> w.write(0x01)
+			.write(0x00)
+			.writeUnsignedLeb128(funcIndex)
+			.writeUnsignedLeb128(4)
+			.write(0x06) // async
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex)
+			.write(0x04)
+			.writeUnsignedLeb128(reallocFuncIndex)
+			.write(0x00)); // string-encoding utf8
+	}
+
+	/**
 	 * Encode the defined value type {@code own<resource>} (component type tag
 	 * {@code 0x69}), e.g. the element type of the wasi:sockets accept stream.
 	 * @param resourceTypeIndex the component type index of the resource type

@@ -347,9 +347,9 @@ class WasmComponentImportCompilerTest {
 		// with, and every component ever emitted would have changed shape.
 		ComponentWriter writer = new ComponentWriter();
 		byte[] preamble = writer.toByteArray();
-		WasmComponentBuilder.appendUserImports(writer, List.of(), 0, 0, 0, 0);
+		WasmComponentBuilder.Appended appended = WasmComponentBuilder.appendUserImports(writer, List.of(), 0, 0, 0, 0);
 		assertThat(writer.toByteArray()).isEqualTo(preamble);
-		assertThat(WasmComponentBuilder.userImportTypes(List.of())).isZero();
+		assertThat(appended).isEqualTo(WasmComponentBuilder.Appended.NONE);
 	}
 
 	@Test
@@ -363,7 +363,8 @@ class WasmComponentImportCompilerTest {
 		WasmComponentImportCompiler.Import kv = parseImport("wasi:keyvalue/store@0.2.0-draft", KV_WIT,
 				"(\"open\" \"kv::%open\")", "(\"bucket-get\" \"kv::%bucket-get\")");
 		assertThat(WitComponentTypeEncoder.foreignResourcesOf(kv)).isEmpty();
-		assertThat(WasmComponentBuilder.userImportTypes(List.of(kv))).isEqualTo(1);
+		assertThat(WasmComponentBuilder.appendUserImports(new ComponentWriter(), List.of(kv), 0, 0, 0, 0).types())
+			.isEqualTo(1);
 		// Its `bucket` is its own, so the instance type DECLARES the resource rather than
 		// aliasing one in from the enclosing component.
 		List<Section> sections = sections(keyvalueComponent());
@@ -422,17 +423,57 @@ class WasmComponentImportCompilerTest {
 	}
 
 	@Test
-	void rejectsAStreamOrFutureAtTheBoundary() {
+	void aStreamOrFutureHandleMarshalsAsABareI32AtTheBoundary() {
+		// A stream<u8>/future<...> crosses the boundary as its bare i32 end handle (the
+		// resource-handle convention): a function returning one compiles, and the core
+		// module imports it with the flat (result i32) signature. Reading/writing
+		// through the handle is the async built-ins' job, not this lowering's.
 		String streamWit = """
 				package local:x@0.1.0;
 
 				interface s {
 				    read: func() -> stream<u8>;
+				    feed: func(body: stream<u8>);
 				}
 				""";
-		assertThatThrownBy(() -> lower(streamWit, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("stream or a future");
+		String program = "(defpackage sx (:use cl) (:export read feed))\n"
+				+ importForm("local:x/s", streamWit, "(\"read\" \"sx:read\")", "(\"feed\" \"sx:feed\")")
+				+ "(sx:feed (sx:read))\n";
+		byte[] component = compileComponent(program);
+		assertThat(containsAscii(component, "local:x/s")).isTrue();
+		List<Section> sections = sections(component);
+		byte[] core = coreModule(sections);
+		assertThat(containsBytes(core, coreFuncImport("local:x/s", "read"))).isTrue();
+		assertThat(containsBytes(core, coreFuncImport("local:x/s", "feed"))).isTrue();
+	}
+
+	@Test
+	void encodesAStreamU8AndAFutureResultInTheInstanceTypeByDerivedIndex() {
+		// The instance type describes the imported interface's signature to the host. A
+		// stream<u8> inlines its u8 element (like the base adapter's own stream<u8>) and
+		// a
+		// future<result<_, error-code>> is a defined future over a defined result -- both
+		// component-type indices DERIVED from the WIT, not hardcoded.
+		String wit = """
+				package local:x@0.3.0;
+
+				interface streaming {
+				    enum error-code { failed }
+				    read-body: func(body: stream<u8>) -> future<result<_, error-code>>;
+				}
+				""";
+		WasmComponentImportCompiler.Import imported = parseImport("local:x/streaming@0.3.0", wit,
+				"(\"read-body\" \"sx:read-body\")");
+		byte[] instanceType = WitComponentTypeEncoder.encode(imported, (ownerId, resource) -> {
+			throw new AssertionError("no foreign resource expected: " + ownerId + "#" + resource);
+		}, java.util.Set.of());
+		// stream<u8> inlines its u8 element -- the exact bytes the base adapter's
+		// stream<u8>
+		// uses.
+		assertThat(containsBytes(instanceType, ComponentWriter.definedStream(ComponentWriter.VT_U8))).isTrue();
+		// The completion's error-code crosses as a keyword enum declaration; its presence
+		// confirms the future<result<...>> payload chain was walked and encoded.
+		assertThat(containsBytes(instanceType, ComponentWriter.definedEnumOf(List.of("failed")))).isTrue();
 	}
 
 	// A probe interface over every parameter shape the canonical ABI flattens: a variant
@@ -852,11 +893,13 @@ class WasmComponentImportCompilerTest {
 				"(\"token-value\" \"tk:token-value\")", "(:drop \"token\" \"tk:token-drop\")");
 		assertThat(tokens.decls()).hasSize(1);
 		assertThat(tokens.drops()).hasSize(1);
-		assertThat(WasmComponentBuilder.userImportFuncs(List.of(tokens))).isEqualTo(1);
-		assertThat(WasmComponentBuilder.userImportCoreFuncs(List.of(tokens))).isEqualTo(2);
+		WasmComponentBuilder.Appended appended = WasmComponentBuilder.appendUserImports(new ComponentWriter(),
+				List.of(tokens), 0, 0, 0, 0);
+		assertThat(appended.componentFuncs()).isEqualTo(1);
+		assertThat(appended.coreFuncs()).isEqualTo(2);
 		// The TYPE space grows too: the instance type, plus the `token` the drop's canon
 		// names.
-		assertThat(WasmComponentBuilder.userImportTypes(List.of(tokens))).isEqualTo(2);
+		assertThat(appended.types()).isEqualTo(2);
 	}
 
 	@Test
@@ -894,6 +937,109 @@ class WasmComponentImportCompilerTest {
 		// And naming it really does move the bytes -- otherwise the pin above would hold
 		// for a feature that does nothing.
 		assertThat(tokensComponentNaming(true)).isNotEqualTo(preDrops);
+	}
+
+	// A miniature of the wasi:http@0.3 async surface: a byte-stream body, a trailers
+	// future whose payload chain reaches the interface's OWN `fields` resource (through
+	// option + result + an alias), and a payload-less-ok transmission future. The async
+	// type ALIASES are what anchor the built-in names.
+	private static final String ASYNC_HTTP_ID = "local:h/types@0.3.0";
+
+	private static final String ASYNC_HTTP_WIT = """
+			package local:h@0.3.0;
+
+			interface types {
+			    resource fields {
+			        get: func(name: string) -> string;
+			    }
+			    type trailers = fields;
+			    enum error-code { failed, internal-error }
+			    type body-stream = stream<u8>;
+			    type trailers-future = future<result<option<trailers>, error-code>>;
+			    type transmit-future = future<result<_, error-code>>;
+			    consume: func(f: fields) -> tuple<stream<u8>, future<result<option<trailers>, error-code>>>;
+			}
+			""";
+
+	private static byte[] asyncHttpComponent() {
+		return compileComponent("(defpackage h (:use cl) (:export fields-get consume body-stream-new body-stream-read"
+				+ " body-stream-write body-stream-drop-readable body-stream-drop-writable trailers-future-read"
+				+ " trailers-future-write transmit-future-new transmit-future-read))\n"
+				+ importForm(ASYNC_HTTP_ID, ASYNC_HTTP_WIT, "(\"fields-get\" \"h:fields-get\")",
+						"(\"consume\" \"h:consume\")", "(:async \"body-stream\" \"new\" \"h:body-stream-new\")",
+						"(:async \"body-stream\" \"read\" \"h:body-stream-read\")",
+						"(:async \"body-stream\" \"write\" \"h:body-stream-write\")",
+						"(:async \"body-stream\" \"drop-readable\" \"h:body-stream-drop-readable\")",
+						"(:async \"body-stream\" \"drop-writable\" \"h:body-stream-drop-writable\")",
+						"(:async \"trailers-future\" \"read\" \"h:trailers-future-read\")",
+						"(:async \"trailers-future\" \"write\" \"h:trailers-future-write\")",
+						"(:async \"transmit-future\" \"new\" \"h:transmit-future-new\")",
+						"(:async \"transmit-future\" \"read\" \"h:transmit-future-read\")")
+				+ "(let ((ends (h:body-stream-new)))\n" + "  (h:body-stream-write (cdr ends) \"hi\")\n"
+				+ "  (h:body-stream-drop-writable (cdr ends))\n" + "  (print (h:body-stream-read (car ends)))\n"
+				+ "  (h:body-stream-drop-readable (car ends)))\n" + "(let ((pair (h:consume 1)))\n"
+				+ "  (h:trailers-future-write 2 (cons :ok nil))\n"
+				+ "  (print (h:trailers-future-read (car (cdr pair)))))\n"
+				+ "(print (h:transmit-future-read (car (h:transmit-future-new))))\n");
+	}
+
+	@Test
+	void asyncBuiltInsCompileAsCoreImportsTypedByDerivedComponentTypes() {
+		// The full async surface -- new / read / write / drop-readable / drop-writable
+		// over a stream<u8> and two future types -- compiles through the general
+		// wit-import path. Each built-in is a CORE import (module = the interface id,
+		// field = "[async-<op>]<alias>") satisfied by the interface's synthesized core
+		// instance, and its canon is typed by a component-level type DERIVED from the
+		// WIT (the stream<u8> declaration is byte-identical to the hand-assembled base
+		// adapter's own).
+		byte[] component = asyncHttpComponent();
+		byte[] core = coreModule(sections(component));
+		for (String field : new String[] { "[async-new]body-stream", "[async-read]body-stream",
+				"[async-write]body-stream", "[async-drop-readable]body-stream", "[async-drop-writable]body-stream",
+				"[async-read]trailers-future", "[async-write]trailers-future", "[async-new]transmit-future",
+				"[async-read]transmit-future" }) {
+			assertThat(containsBytes(core, coreFuncImport(ASYNC_HTTP_ID, field))).as(field).isTrue();
+			assertThat(containsAscii(component, field)).as(field).isTrue();
+		}
+		assertThat(containsBytes(component, ComponentWriter.definedStream(ComponentWriter.VT_U8))).isTrue();
+		// The trailers future's payload chain re-declares the error-code enum
+		// structurally at component level (value types are structural; only the fields
+		// RESOURCE is projected out of the instance, being nominal).
+		assertThat(containsBytes(component, ComponentWriter.definedEnumOf(List.of("failed", "internal-error"))))
+			.isTrue();
+	}
+
+	@Test
+	void anAsyncPayloadResourceForcesTheInstanceTypeExport() {
+		// Bind NOTHING but the trailers-future built-ins: the payload's own<fields>
+		// projection can only link against a name the instance type exports, so the
+		// async machinery must force the `fields` declaration exactly as a drop does --
+		// a bound function reaching it is not required.
+		byte[] component = compileComponent("(defpackage h (:use cl) (:export trailers-future-read))\n"
+				+ importForm(ASYNC_HTTP_ID, ASYNC_HTTP_WIT,
+						"(:async \"trailers-future\" \"read\" \"h:trailers-future-read\")")
+				+ "(print (h:trailers-future-read 1))\n");
+		List<Section> sections = sections(component);
+		byte[] instanceType = sections.get(instanceTypeSectionIndex(sections, ASYNC_HTTP_ID)).payload();
+		assertThat(instanceType).containsSequence(ComponentWriter.instanceDeclExportResource("fields"));
+		assertThat(containsAscii(component, "[async-read]trailers-future")).isTrue();
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.codegen.wasm.WitOracleE2eTest#wasmToolsIsAvailable")
+	void theComponentWithAsyncBuiltInsValidates(@TempDir Path tempDir) throws Exception {
+		// The index arithmetic (async canons are core funcs with no component function,
+		// async types are a data-dependent slice of the type space) is only worth what a
+		// real validator says of it. This is the Phase-1 golden gate: the derived
+		// stream/future types, the projected resource, the canon encodings and every
+		// shifted downstream index must all hold together for the component to validate.
+		Path file = tempDir.resolve("async-http.wasm");
+		Files.write(file, asyncHttpComponent());
+		Process process = new ProcessBuilder("wasm-tools", "validate", "--features", "all", file.toString())
+			.redirectErrorStream(true)
+			.start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor()).as(output).isZero();
 	}
 
 	@Test

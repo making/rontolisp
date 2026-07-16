@@ -87,9 +87,18 @@ class WitTypeMapperTest {
 	}
 
 	@Test
-	void streamAndFutureAreUnsupportedUntilLanguageAsync() {
-		assertThat(WitTypeMapper.rep(stream(u8()))).isEqualTo(WitTypeMapper.Rep.UNSUPPORTED);
-		assertThat(WitTypeMapper.rep(future())).isEqualTo(WitTypeMapper.Rep.UNSUPPORTED);
+	void streamAndFutureAreHandleLikeReps() {
+		// The async WASI 0.3 value types cross the --component boundary as a bare i32
+		// handle read/written through the canonical ABI's async built-ins; the
+		// interpreter,
+		// the JVM and Preview 1 WASM still reject them (WitImportDirective), but the
+		// settled
+		// house representation is a dedicated handle rep, no longer UNSUPPORTED.
+		assertThat(WitTypeMapper.rep(stream(u8()))).isEqualTo(WitTypeMapper.Rep.STREAM_HANDLE);
+		assertThat(WitTypeMapper.rep(stream())).isEqualTo(WitTypeMapper.Rep.STREAM_HANDLE);
+		assertThat(WitTypeMapper.rep(future(result(null, named("error-code")))))
+			.isEqualTo(WitTypeMapper.Rep.FUTURE_HANDLE);
+		assertThat(WitTypeMapper.rep(future())).isEqualTo(WitTypeMapper.Rep.FUTURE_HANDLE);
 	}
 
 	@Test

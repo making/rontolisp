@@ -94,6 +94,25 @@ public final class WitTypeMapper {
 		HANDLE,
 
 		/**
+		 * {@code stream<T>}: an opaque i32 handle (the readable or writable end), in the
+		 * same one-handle-space convention as {@link #HANDLE}, but read/written through
+		 * the async canonical built-ins ({@code stream.read} / {@code stream.write}).
+		 * Only the {@code --component} backend can marshal it; the interpreter, the JVM
+		 * and Preview 1 WASM reject it, since it needs the component-model async ABI. A
+		 * {@code stream<u8>} reads out as a byte string.
+		 */
+		STREAM_HANDLE,
+
+		/**
+		 * {@code future<T>}: an opaque i32 handle (the readable end), like
+		 * {@link #HANDLE}, but resolved through the async canonical built-in
+		 * {@code future.read}. Only {@code --component} can marshal it. A
+		 * {@code future<result<...>>} reads out as its mapped {@code result}
+		 * ({@link #RESULT}).
+		 */
+		FUTURE_HANDLE,
+
+		/**
 		 * A {@code record} definition: keyword plist ({@code rontolisp:http-handler}
 		 * precedent).
 		 */
@@ -113,8 +132,11 @@ public final class WitTypeMapper {
 		KEYWORD_LIST,
 
 		/**
-		 * {@code stream}/{@code future}: no rontolisp value yet — a binder must reject
-		 * them until language-level async lands (the WASI 0.3 async plan).
+		 * A defensive default with no producer today — every WIT type a binder can see
+		 * now maps to one of the reps above ({@code stream}/{@code future} became
+		 * {@link #STREAM_HANDLE}/{@link #FUTURE_HANDLE}). Kept as a safety net so a
+		 * future WIT type addition surfaces as a clear rejection rather than a silent
+		 * misclassification.
 		 */
 		UNSUPPORTED
 
@@ -147,8 +169,8 @@ public final class WitTypeMapper {
 			case WitType.ResultOf ignored -> Rep.RESULT;
 			case WitType.BorrowOf ignored -> Rep.HANDLE;
 			case WitType.OwnOf ignored -> Rep.HANDLE;
-			case WitType.StreamOf ignored -> Rep.UNSUPPORTED;
-			case WitType.FutureOf ignored -> Rep.UNSUPPORTED;
+			case WitType.StreamOf ignored -> Rep.STREAM_HANDLE;
+			case WitType.FutureOf ignored -> Rep.FUTURE_HANDLE;
 			case WitType.Named named -> throw new IllegalArgumentException(
 					"Named type '" + named.name() + "' must be resolved to its definition first");
 		};

@@ -179,15 +179,6 @@ final class WasmServeComponentBuilder {
 		}
 		final ServeBlock block = usesWideBlock(serveFixed) ? WIDE : NARROW;
 		final int userIfaces = userImports.size();
-		final int userFuncs = WasmComponentBuilder.userImportFuncs(userImports);
-		// A resource drop is a CORE function with no component function behind it (canon
-		// resource.drop), so the core-function count and the component-function count are
-		// two
-		// numbers; confusing them yields a component that VALIDATES while lifting the
-		// wrong
-		// function.
-		final int userCoreFuncs = WasmComponentBuilder.userImportCoreFuncs(userImports);
-		final int userTypes = WasmComponentBuilder.userImportTypes(userImports);
 		final ComponentWriter c = new ComponentWriter();
 		c.writeRaw(block.bytes());
 		// Core modules: 0 = shared memory, 1 = preview1 bridge, 2 = rontolisp core (serve
@@ -249,8 +240,12 @@ final class WasmServeComponentBuilder {
 		// surface. Emits nothing when there are none, so a plain serve component shifts
 		// by
 		// zero.
-		WasmComponentBuilder.appendUserImports(c, userImports, io.nextType(), block.firstImportInstance(),
-				io.nextComponentFunc(), io.nextCoreFunc());
+		// What the user imports actually consumed of each index space comes back as
+		// `user` -- the single source every downstream fixed index shifts by (a drop or
+		// an async built-in is a core function with no component function behind it, and
+		// an async type's declaration chain consumes a data-dependent number of types).
+		final WasmComponentBuilder.Appended user = WasmComponentBuilder.appendUserImports(c, userImports, io.nextType(),
+				block.firstImportInstance(), io.nextComponentFunc(), io.nextCoreFunc());
 		// Instantiate the rontolisp core: mem = 0, wasi_snapshot_preview1 = the bridge
 		// (instance 2), then one argument per fixed serve interface (module name = its
 		// canonical id, satisfied by the synthesized core instance lowered above), then
@@ -274,7 +269,7 @@ final class WasmServeComponentBuilder {
 		final int httpTypes = Objects.requireNonNull(block.instanceOf().get("wasi:http/types@0.2.0"));
 		c.rawSection(ComponentWriter.SEC_ALIAS,
 				ComponentWriter.vec(List.of(ComponentWriter.aliasInstanceType(httpTypes, "response-outparam"))));
-		final int tResponseOutparam = io.nextType() + userTypes;
+		final int tResponseOutparam = io.nextType() + user.types();
 		c.rawSection(ComponentWriter.SEC_TYPE,
 				ComponentWriter.vec(List.of(ComponentWriter.definedOwn(io.incomingRequestType()), // own<incoming-request>
 						ComponentWriter.definedOwn(tResponseOutparam), // own<response-outparam>
@@ -288,9 +283,9 @@ final class WasmServeComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_ALIAS,
 				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(coreInst, "handle"))));
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter
-			.vec(List.of(ComponentWriter.canonLift(io.nextCoreFunc() + userCoreFuncs, handleFuncType))));
-		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter
-			.vec(List.of(ComponentWriter.componentInstanceFromFunc("handle", io.nextComponentFunc() + userFuncs))));
+			.vec(List.of(ComponentWriter.canonLift(io.nextCoreFunc() + user.coreFuncs(), handleFuncType))));
+		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(List
+			.of(ComponentWriter.componentInstanceFromFunc("handle", io.nextComponentFunc() + user.componentFuncs()))));
 		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter.vec(List.of(ComponentWriter
 			.exportInstance("wasi:http/incoming-handler@0.2.0", block.firstImportInstance() + userIfaces))));
 		return c.toByteArray();

@@ -1142,6 +1142,27 @@ public final class WasmLispCompiler implements LispCompiler {
 				defuns.add(new DefunDecl(drop.lispName(), List.of("%component-import-p0"), false, List.of()));
 			}
 		}
+		// An async built-in binds the same way. It follows the drops in the placeholder
+		// ordinal space, so the three maps are walked in this order everywhere below.
+		Map<String, WasmComponentImportCompiler.Async> componentAsyncWrappers = new LinkedHashMap<>();
+		for (WasmComponentImportCompiler.Import imported : componentImports) {
+			for (WasmComponentImportCompiler.Async async : imported.asyncs()) {
+				boolean duplicate = componentAsyncWrappers.containsKey(async.lispName())
+						|| componentDropWrappers.containsKey(async.lispName())
+						|| componentImportWrappers.containsKey(async.lispName())
+						|| defuns.stream().anyMatch(d -> d.name.equals(async.lispName()));
+				if (duplicate) {
+					throw new UnsupportedOperationException(
+							"rontolisp:wit-import name collides with an existing function: " + async.lispName());
+				}
+				List<String> paramNames = new ArrayList<>();
+				for (int i = 0; i < WasmComponentImportCompiler.lispArity(async); i++) {
+					paramNames.add("%component-import-p" + i);
+				}
+				componentAsyncWrappers.put(async.lispName(), async);
+				defuns.add(new DefunDecl(async.lispName(), paramNames, false, List.of()));
+			}
+		}
 		// A :s-expr export parameter parses host-provided text with the embedded reader,
 		// so
 		// force the reader runtime on (FUNC_READ_EXPR must be a real body, not a stub).
@@ -1292,7 +1313,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, Integer> importBodySlots = new HashMap<>();
 		for (DefunDecl defun : defuns) {
 			if (importWrappers.containsKey(defun.name) || componentImportWrappers.containsKey(defun.name)
-					|| componentDropWrappers.containsKey(defun.name)) {
+					|| componentDropWrappers.containsKey(defun.name)
+					|| componentAsyncWrappers.containsKey(defun.name)) {
 				importBodySlots.put(defun.name, userFunctionBodies.size());
 				userFunctionBodies.add(null); // filled in below
 				continue;
@@ -1489,7 +1511,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A component-import wrapper stages arguments and lifts string results through
 		// the same helper pair (__ronto_alloc for the return area, _str_from_mem for
 		// host-written bytes), so any bound interface forces the helpers on.
-		boolean memoryHelpers = exportUsesMemory || importUsesStrFromMem || !componentImportWrappers.isEmpty();
+		boolean memoryHelpers = exportUsesMemory || importUsesStrFromMem || !componentImportWrappers.isEmpty()
+				|| !componentAsyncWrappers.isEmpty();
 		int allocFuncIndex = memoryHelpers ? exportHelperBase : -1;
 		int strFromMemFuncIndex = memoryHelpers ? exportHelperBase + 1 : -1;
 		// Host arena API: __ronto_alloc_mark / __ronto_alloc_reset, appended right after
@@ -1540,6 +1563,13 @@ public final class WasmLispCompiler implements LispCompiler {
 						WasmComponentImportCompiler.dropParamTypes(), new Type[] {}));
 			}
 		}
+		for (WasmComponentImportCompiler.Async async : componentAsyncWrappers.values()) {
+			if (importSlotIndex.putIfAbsent(async.module() + " " + async.field(), importSlots.size()) == null) {
+				importSlots.add(new ImportSlot(async.module(), async.field(),
+						WasmComponentImportCompiler.asyncParamTypes(async),
+						WasmComponentImportCompiler.asyncResultTypes(async)));
+			}
+		}
 		// Fill in the deferred import wrapper bodies now that the helper indices are
 		// known (their positions in userFunctionBodies were reserved in Pass 2a). Each
 		// wrapper calls its (module, field) slot's ordinal, so duplicate bindings
@@ -1561,6 +1591,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				int ordinal = Objects.requireNonNull(importSlotIndex.get(drop.module() + " " + drop.field()));
 				byte[] body = WasmComponentImportCompiler.buildDropBody(ctxBuilder, drop, ordinal);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(drop.lispName())), body);
+			}
+			for (WasmComponentImportCompiler.Async async : componentAsyncWrappers.values()) {
+				int ordinal = Objects.requireNonNull(importSlotIndex.get(async.module() + " " + async.field()));
+				byte[] body = WasmComponentImportCompiler.buildAsyncBody(ctxBuilder, async, ordinal, allocFuncIndex,
+						strFromMemFuncIndex);
+				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(async.lispName())), body);
 			}
 		}
 		if (!exportDecls.isEmpty()) {

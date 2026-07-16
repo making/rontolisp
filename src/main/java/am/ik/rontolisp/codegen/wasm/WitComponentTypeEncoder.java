@@ -163,49 +163,96 @@ final class WitComponentTypeEncoder {
 		this.decls.add(ComponentWriter.instanceDeclExportFunc(decl.field(), funcType));
 	}
 
-	// The encoded valtype operand of a WIT type use: a primitive code, or the local index
-	// of its (memoized, on-demand) type declaration. `abi` is the scope the type's named
-	// references resolve in, and it CHANGES on the way down: a type reached through a
-	// `use`
-	// clause is written in the interface that defines it, and so are its fields and
-	// cases.
+	// The encoded valtype operand of a WIT type use: a primitive is inlined by its code;
+	// everything else is referenced by the local index of its (memoized, on-demand) type
+	// declaration -- which {@link #definedIndexOf} computes. A transparent alias
+	// (`type headers = fields`, `type field-key = string`) is followed here, so an
+	// alias-to-primitive inlines as a primitive valtype rather than seeking a
+	// (nonexistent) type index.
 	private byte[] valType(WitCanonicalAbi abi, WitType type) {
+		if (type instanceof WitType.Prim prim) {
+			return ComponentWriter.valTypePrim(primCode(prim.name()));
+		}
+		if (type instanceof WitType.Named named) {
+			WitResolver.Owned owned = abi.resolveOwned(named);
+			if (owned.item() instanceof WitItem.TypeAlias alias) {
+				return valType(abi.scopedTo(owned.owner()), alias.target());
+			}
+		}
+		return ComponentWriter.valTypeIndex(definedIndexOf(abi, type));
+	}
+
+	// The local component-type index of a WIT type that is represented by its own
+	// defined-type declaration -- everything except a bare primitive, which is inlined
+	// and
+	// has no index. `abi` is the scope the type's named references resolve in, and it
+	// CHANGES on the way down: a type reached through a `use` clause is written in the
+	// interface that defines it, and so are its fields and cases. A
+	// `stream<T>`/`future<T>`
+	// references its element/payload BY INDEX (unlike list/option, which inline a
+	// valtype),
+	// so those arms resolve it through this method rather than through {@link #valType}.
+	private int definedIndexOf(WitCanonicalAbi abi, WitType type) {
 		return switch (type) {
-			case WitType.Prim prim -> ComponentWriter.valTypePrim(primCode(prim.name()));
-			case WitType.ListOf list -> ComponentWriter.valTypeIndex(memoized("list<" + key(abi, list.element()) + ">",
-					() -> ComponentWriter.definedListOf(valType(abi, list.element()))));
-			case WitType.OptionOf opt ->
-				ComponentWriter.valTypeIndex(memoized("option<" + key(abi, opt.element()) + ">",
-						() -> ComponentWriter.definedOptionOf(valType(abi, opt.element()))));
-			case WitType.ResultOf res -> ComponentWriter.valTypeIndex(memoized(
+			case WitType.Prim prim -> throw new UnsupportedOperationException("the primitive WIT type '" + prim.name()
+					+ "' is inlined as a valtype and has no component type index");
+			case WitType.ListOf list -> memoized("list<" + key(abi, list.element()) + ">",
+					() -> ComponentWriter.definedListOf(valType(abi, list.element())));
+			case WitType.OptionOf opt -> memoized("option<" + key(abi, opt.element()) + ">",
+					() -> ComponentWriter.definedOptionOf(valType(abi, opt.element())));
+			case WitType.ResultOf res -> memoized(
 					"result<" + (res.ok() == null ? "_" : key(abi, res.ok())) + ","
 							+ (res.err() == null ? "_" : key(abi, res.err())) + ">",
 					() -> ComponentWriter.definedResultOf(res.ok() == null ? null : valType(abi, res.ok()),
-							res.err() == null ? null : valType(abi, res.err()))));
-			case WitType.TupleOf tuple -> ComponentWriter.valTypeIndex(memoized(key(abi, tuple), () -> {
+							res.err() == null ? null : valType(abi, res.err())));
+			case WitType.TupleOf tuple -> memoized(key(abi, tuple), () -> {
 				List<byte[]> elements = new ArrayList<>();
 				for (WitType element : tuple.elements()) {
 					elements.add(valType(abi, element));
 				}
 				return ComponentWriter.definedTupleOf(elements);
-			}));
-			case WitType.BorrowOf borrow -> ComponentWriter.valTypeIndex(borrowIndex(abi, borrow.resource()));
-			case WitType.OwnOf own -> ComponentWriter.valTypeIndex(ownIndex(abi, own.resource()));
+			});
+			// A stream<u8> inlines its u8 element (definedStream), matching the base
+			// adapter's own stream<u8>; a stream over a defined element references it by
+			// index. A future references its payload by index (definedFuture). The
+			// encode-first discipline of `memoized` claims the element/payload's index
+			// before the stream/future's own, so the forward reference is valid.
+			case WitType.StreamOf stream -> memoized(key(abi, stream), () -> {
+				WitType element = stream.element();
+				if (element instanceof WitType.Prim prim) {
+					return ComponentWriter.definedStream(primCode(prim.name()));
+				}
+				if (element == null) {
+					throw new UnsupportedOperationException(
+							"a bare stream (no element type) cannot be encoded as a component import type");
+				}
+				return ComponentWriter.definedStreamOfType(definedIndexOf(abi, element));
+			});
+			case WitType.FutureOf fut -> memoized(key(abi, fut), () -> {
+				WitType payload = fut.element();
+				if (payload == null) {
+					throw new UnsupportedOperationException(
+							"a bare future (no payload type) cannot be encoded as a component import type");
+				}
+				return ComponentWriter.definedFuture(definedIndexOf(abi, payload));
+			});
+			case WitType.BorrowOf borrow -> borrowIndex(abi, borrow.resource());
+			case WitType.OwnOf own -> ownIndex(abi, own.resource());
 			case WitType.Named named -> {
 				WitResolver.Owned owned = abi.resolveOwned(named);
 				// The interface that DEFINES the type is where its own members resolve.
 				WitCanonicalAbi in = abi.scopedTo(owned.owner());
 				String id = nominalId(owned);
 				yield switch (owned.item()) {
-					case WitItem.TypeAlias alias -> valType(in, alias.target());
+					case WitItem.TypeAlias alias -> definedIndexOf(in, alias.target());
 					// A bare resource reference is an own handle (WIT's rule; borrow must
 					// be
 					// explicit). Key it by the name THIS interface writes -- a `use`
 					// clause
 					// may rename the resource, and resourceIndex resolves that name
 					// itself.
-					case WitItem.ResourceDef ignored -> ComponentWriter.valTypeIndex(ownIndex(abi, named.name()));
-					case WitItem.RecordDef record -> ComponentWriter.valTypeIndex(namedIndex(id, named.name(), () -> {
+					case WitItem.ResourceDef ignored -> ownIndex(abi, named.name());
+					case WitItem.RecordDef record -> namedIndex(id, named.name(), () -> {
 						List<String> names = new ArrayList<>();
 						List<byte[]> types = new ArrayList<>();
 						for (WitItem.Field field : record.fields()) {
@@ -213,8 +260,8 @@ final class WitComponentTypeEncoder {
 							types.add(valType(in, field.type()));
 						}
 						return ComponentWriter.definedRecordOf(names, types);
-					}));
-					case WitItem.VariantDef variant -> ComponentWriter.valTypeIndex(namedIndex(id, named.name(), () -> {
+					});
+					case WitItem.VariantDef variant -> namedIndex(id, named.name(), () -> {
 						List<String> names = new ArrayList<>();
 						List<byte @Nullable []> payloads = new ArrayList<>();
 						for (WitItem.Case c : variant.cases()) {
@@ -222,18 +269,15 @@ final class WitComponentTypeEncoder {
 							payloads.add(c.payload() == null ? null : valType(in, c.payload()));
 						}
 						return ComponentWriter.definedVariantOf(names, payloads);
-					}));
-					case WitItem.EnumDef en -> ComponentWriter.valTypeIndex(namedIndex(id, named.name(),
-							() -> ComponentWriter.definedEnumOf(en.cases().stream().map(WitItem.Case::name).toList())));
-					case WitItem.FlagsDef flags ->
-						ComponentWriter.valTypeIndex(namedIndex(id, named.name(), () -> ComponentWriter
-							.definedFlagsOf(flags.cases().stream().map(WitItem.Case::name).toList())));
+					});
+					case WitItem.EnumDef en -> namedIndex(id, named.name(),
+							() -> ComponentWriter.definedEnumOf(en.cases().stream().map(WitItem.Case::name).toList()));
+					case WitItem.FlagsDef flags -> namedIndex(id, named.name(), () -> ComponentWriter
+						.definedFlagsOf(flags.cases().stream().map(WitItem.Case::name).toList()));
 					default -> throw new UnsupportedOperationException(
 							"the WIT type '" + named.name() + "' cannot be encoded as a component import type");
 				};
 			}
-			default -> throw new UnsupportedOperationException("the WIT type '" + type.getClass().getSimpleName()
-					+ "' cannot be encoded as a component import type");
 		};
 	}
 
@@ -241,10 +285,10 @@ final class WitComponentTypeEncoder {
 	// interfaces reaching one type by different local names must share one declaration.
 	private String nominalId(WitResolver.Owned owned) {
 		return Objects.requireNonNull(this.resolver.canonicalId(owned.owner()), "canonical id") + "#"
-				+ definedName(owned.item());
+				+ definedNameOf(owned.item());
 	}
 
-	private static String definedName(WitItem item) {
+	static String definedNameOf(WitItem item) {
 		return switch (item) {
 			case WitItem.TypeAlias alias -> alias.name();
 			case WitItem.RecordDef def -> def.name();
@@ -356,12 +400,15 @@ final class WitComponentTypeEncoder {
 			case WitType.BorrowOf borrow ->
 				"borrow<" + nominalId(abi.resolveOwned(new WitType.Named(borrow.resource()))) + ">";
 			case WitType.OwnOf own -> "own<" + nominalId(abi.resolveOwned(new WitType.Named(own.resource()))) + ">";
+			case WitType.StreamOf stream ->
+				"stream<" + (stream.element() == null ? "" : key(abi, stream.element())) + ">";
+			case WitType.FutureOf fut -> "future<" + (fut.element() == null ? "" : key(abi, fut.element())) + ">";
 			case WitType.Named named -> "named:" + nominalId(abi.resolveOwned(named));
 			default -> type.toString();
 		};
 	}
 
-	private static int primCode(String name) {
+	static int primCode(String name) {
 		return switch (name) {
 			case "bool" -> ComponentWriter.VT_BOOL;
 			case "s8" -> ComponentWriter.VT_S8;

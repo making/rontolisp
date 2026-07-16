@@ -272,6 +272,25 @@ class ComponentWriterTest {
 	}
 
 	@Test
+	void canonTaskAndWaitableSetEncodings() {
+		// Golden bytes from `wasm-tools parse` + `dump` of a hand-written reference
+		// (2026-07-16, wasm-tools on PATH): task.return { result: None } = 09 01 00,
+		// task.return { result: Some(Type(0)) } = 09 00 00, each with an empty option
+		// vec; the waitable-set built-ins and subtask.drop are bare tags.
+		assertThat(hex(ComponentWriter.canonTaskReturnVoid())).isEqualTo("09010000");
+		assertThat(hex(ComponentWriter.canonTaskReturnType(0))).isEqualTo("09000000");
+		assertThat(hex(ComponentWriter.canonTaskReturnTypeMemoryReallocUtf8(1, 0, 0))).isEqualTo("090001030300040000");
+		assertThat(hex(ComponentWriter.canonWaitableSetNew())).isEqualTo("1f");
+		assertThat(hex(ComponentWriter.canonWaitableJoin())).isEqualTo("23");
+		assertThat(hex(ComponentWriter.canonWaitableSetWait(0))).isEqualTo("200000");
+		assertThat(hex(ComponentWriter.canonWaitableSetDrop())).isEqualTo("22");
+		assertThat(hex(ComponentWriter.canonSubtaskDrop())).isEqualTo("0d");
+		// Lower { func_index: 0, options: [Async, Memory(0), Realloc(0), UTF8] } --
+		// the async option is tag 06.
+		assertThat(hex(ComponentWriter.canonLowerAsyncMemoryReallocUtf8(0, 0, 0))).isEqualTo("01000004060300040000");
+	}
+
+	@Test
 	void definedTypeEncodings() {
 		// Golden bytes from `wasm-tools dump` of a wasm-tools-built component importing
 		// wasi:keyvalue/store@0.2.0-draft (the component-import reference probe).

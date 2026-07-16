@@ -332,7 +332,7 @@ public final class WitImportDirective {
 			String name = directive.pkg() == null ? member : PackageRegistry.qualify(directive.pkg(), member);
 			if (component) {
 				validateComponentFunc(func, witPath, locations, resolver, iface, member);
-				List<Param> params = parameters(func, witPath, locations, resolver, iface, member, false);
+				List<Param> params = parameters(func, witPath, locations, resolver, iface, member, false, true);
 				if (isResultReturning(func, resolver, iface)) {
 					// The raw synthetic defun returns the (:ok . V) / (:error . E)
 					// envelope; the public wrapper unwraps it and signals the error arm.
@@ -345,7 +345,7 @@ public final class WitImportDirective {
 				}
 				continue;
 			}
-			List<Param> params = parameters(func, witPath, locations, resolver, iface, member, wasm);
+			List<Param> params = parameters(func, witPath, locations, resolver, iface, member, wasm, false);
 			String returns = resultDesignator(func, witPath, locations, resolver, iface, member, wasm);
 			bindings.add(wasm ? wasmImportForm(name, module, directive.fieldStyle().apply(member), params, returns)
 					: providerDefun(name, ifaceId, member, params));
@@ -386,6 +386,48 @@ public final class WitImportDirective {
 				bindings.add(providerDefun(name, ifaceId, member, List.of(new Param("self", ":int"))));
 			}
 		}
+		// An async built-in is derived from a `type` ALIAS the interface declares to a
+		// stream or a future: `type body-stream = stream<u8>` binds body-stream-new /
+		// -read / -write / -drop-readable / -drop-writable. Like a drop, an async member
+		// is not a WIT function -- it is a rontolisp spelling of the canonical ABI's
+		// stream.*/future.* built-ins, typed by the alias's target -- so it is bound ONLY
+		// when the program names it, and it exists ONLY under --component: the built-ins
+		// are a component-model mechanism no other backend has.
+		for (WitItem item : iface.items()) {
+			if (!(item instanceof WitItem.TypeAlias alias)) {
+				continue;
+			}
+			Scoped target = resolveAliases(alias.target(), resolver, iface);
+			boolean stream = target.type() instanceof WitType.StreamOf;
+			if (!stream && !(target.type() instanceof WitType.FutureOf)) {
+				continue;
+			}
+			for (String op : ASYNC_OPS) {
+				String member = alias.name() + "-" + op;
+				if (!allMembers.add(member)) {
+					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
+							+ iface.name() + "' binds '" + member + "' twice");
+				}
+				if (dropFilter != null && !dropFilter.contains(member)) {
+					continue;
+				}
+				if (!component) {
+					if (dropFilter != null) {
+						throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": '" + member
+								+ "' is a stream/future built-in, which only the --component backend has (the async "
+								+ "canonical ABI); the interpreter, the JVM and Preview 1 WASM cannot bind it");
+					}
+					// A bind-everything pass (no filter) on a non-component backend just
+					// skips them: the alias itself is legal WIT, and a program that never
+					// calls the built-ins must keep compiling everywhere.
+					continue;
+				}
+				validateAsyncAlias(target, witPath, locations, resolver, alias, member);
+				boundMembers.add(member);
+				String name = directive.pkg() == null ? member : PackageRegistry.qualify(directive.pkg(), member);
+				componentMembers.add(asyncBinding(alias.name(), op, name));
+			}
+		}
 		// A component may import an interface purely for its TYPES: wasi:io/streams' own
 		// `stream-error` carries a wasi:io/error `error` resource, and a resource is its
 		// defining interface's type, so that interface has to be imported for the type to
@@ -420,6 +462,45 @@ public final class WitImportDirective {
 	// ("member" "lisp-name") -- one bound member of a %component-import form.
 	private static LispVal memberBinding(String member, String lispName) {
 		return list(List.of(new LispString(member), new LispString(lispName)));
+	}
+
+	// The operations an async (stream/future) type alias binds. `new` returns the
+	// (readable . writable) handle pair; the rest take an end. The set is the same for
+	// both kinds -- a future is a one-shot stream as far as its handle lifecycle goes.
+	private static final List<String> ASYNC_OPS = List.of("new", "read", "write", "drop-readable", "drop-writable");
+
+	// (:async "body-stream" "read" "h:body-stream-read") -- an async built-in binding of
+	// a %component-import form. Like :drop it is a distinct emission kind: a canon
+	// stream.*/future.* built-in is a CORE function typed by a component-level
+	// stream/future type, with no instance function behind it.
+	private static LispVal asyncBinding(String alias, String op, String lispName) {
+		return list(
+				List.of(new LispSymbol(":async"), new LispString(alias), new LispString(op), new LispString(lispName)));
+	}
+
+	// The element/payload contract of a bound async alias: a stream must be a byte
+	// stream (stream<u8> is what the canonical built-ins read/write through linear
+	// memory); a future must be parameterized, and its payload must be a liftable value
+	// (future.read lifts it with the same machinery as a function result).
+	private static void validateAsyncAlias(Scoped target, String witPath, WitLocations locations, WitResolver resolver,
+			WitItem.TypeAlias alias, String member) {
+		if (target.type() instanceof WitType.StreamOf stream) {
+			WitType element = stream.element();
+			if (element == null || !isU8(element, resolver, target.iface())) {
+				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(alias) + ": '" + member
+						+ "': the alias '" + alias.name() + "' names a stream whose element is not u8; only stream<u8> "
+						+ "(a byte stream) has async built-ins");
+			}
+			return;
+		}
+		WitType payload = ((WitType.FutureOf) target.type()).element();
+		if (payload == null) {
+			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(alias) + ": '" + member
+					+ "': the alias '" + alias.name() + "' names a bare future with no payload type; only a "
+					+ "parameterized future<T> can be read or written");
+		}
+		validateComponentResult(payload, witPath, locations, resolver, target.iface(), alias, member,
+				"the future payload");
 	}
 
 	// (:drop "bucket" "kv:bucket-drop") -- a resource drop of a %component-import form.
@@ -516,17 +597,17 @@ public final class WitImportDirective {
 	private static void validateComponentFunc(WitResolver.Func func, String witPath, WitLocations locations,
 			WitResolver resolver, WitItem.InterfaceDef iface, String member) {
 		for (var param : func.def().func().params()) {
-			validateComponentParam(param.type(), witPath, locations, resolver, iface, func, member,
+			validateComponentParam(param.type(), witPath, locations, resolver, iface, func.def(), member,
 					"parameter '" + param.name() + "'", true);
 		}
 		WitType result = func.def().func().result();
 		if (result != null) {
-			validateComponentResult(result, witPath, locations, resolver, iface, func, member, "the result");
+			validateComponentResult(result, witPath, locations, resolver, iface, func.def(), member, "the result");
 		}
 	}
 
 	private static void validateComponentParam(WitType type, String witPath, WitLocations locations,
-			WitResolver resolver, WitItem.InterfaceDef iface, WitResolver.Func func, String member, String what,
+			WitResolver resolver, WitItem.InterfaceDef iface, WitItem anchor, String member, String what,
 			boolean optionAllowed) {
 		Scoped scoped = resolveAliases(type, resolver, iface);
 		// From here on the type's names resolve in the interface that WROTE it, which is
@@ -534,13 +615,14 @@ public final class WitImportDirective {
 		WitItem.InterfaceDef in = scoped.iface();
 		WitType t = scoped.type();
 		switch (t) {
-			case WitType.StreamOf ignored -> throw asyncOnly(witPath, locations, func, member, what);
-			case WitType.FutureOf ignored -> throw asyncOnly(witPath, locations, func, member, what);
+			case WitType.StreamOf ignored ->
+				validateAsyncElement(t, witPath, locations, resolver, in, anchor, member, what);
+			case WitType.FutureOf ignored ->
+				validateAsyncElement(t, witPath, locations, resolver, in, anchor, member, what);
 			case WitType.ListOf list -> {
 				if (!isU8(list.element(), resolver, in)) {
-					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '"
-							+ member + "': the WIT type of " + what
-							+ " is a list, which does not cross the component import "
+					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '" + member
+							+ "': the WIT type of " + what + " is a list, which does not cross the component import "
 							+ "boundary as a parameter yet (only list<u8>, which crosses as a byte string, does). Its "
 							+ "rontolisp representation is settled (a proper list), and the interpreter and the JVM "
 							+ "backend bind it today");
@@ -550,25 +632,24 @@ public final class WitImportDirective {
 				if (!optionAllowed) {
 					// option<option<T>> has no rontolisp representation: both `none` and
 					// `some(none)` are nil.
-					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '"
-							+ member + "': the WIT type of " + what
-							+ " nests an option directly inside an option, which has no "
+					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '" + member
+							+ "': the WIT type of " + what + " nests an option directly inside an option, which has no "
 							+ "rontolisp value (an option is the value or nil, so `none` and `some(none)` would be the "
 							+ "same nil)");
 				}
-				validateComponentParam(opt.element(), witPath, locations, resolver, in, func, member, what, false);
+				validateComponentParam(opt.element(), witPath, locations, resolver, in, anchor, member, what, false);
 			}
 			case WitType.ResultOf res -> {
 				if (res.ok() != null) {
-					validateComponentParam(res.ok(), witPath, locations, resolver, in, func, member, what, true);
+					validateComponentParam(res.ok(), witPath, locations, resolver, in, anchor, member, what, true);
 				}
 				if (res.err() != null) {
-					validateComponentParam(res.err(), witPath, locations, resolver, in, func, member, what, true);
+					validateComponentParam(res.err(), witPath, locations, resolver, in, anchor, member, what, true);
 				}
 			}
 			case WitType.TupleOf tuple -> {
 				for (WitType element : tuple.elements()) {
-					validateComponentParam(element, witPath, locations, resolver, in, func, member, what, true);
+					validateComponentParam(element, witPath, locations, resolver, in, anchor, member, what, true);
 				}
 			}
 			case WitType.Named named -> {
@@ -578,22 +659,22 @@ public final class WitImportDirective {
 				WitItem.InterfaceDef owner = owned == null ? in : owned.owner();
 				switch (owned == null ? null : owned.item()) {
 					case WitItem.RecordDef record -> {
-						rejectEmptyRecord(record, witPath, locations, func, member, what);
+						rejectEmptyRecord(record, witPath, locations, anchor, member, what);
 						for (WitItem.Field field : record.fields()) {
-							validateComponentParam(field.type(), witPath, locations, resolver, owner, func, member,
+							validateComponentParam(field.type(), witPath, locations, resolver, owner, anchor, member,
 									what, true);
 						}
 					}
 					case WitItem.VariantDef variant -> {
 						for (WitItem.Case c : variant.cases()) {
 							if (c.payload() != null) {
-								validateComponentParam(c.payload(), witPath, locations, resolver, owner, func, member,
+								validateComponentParam(c.payload(), witPath, locations, resolver, owner, anchor, member,
 										what, true);
 							}
 						}
 					}
 					case WitItem.FlagsDef ignored -> throw new UnsupportedOperationException(witPath + ":"
-							+ locations.lineOf(func.def()) + ": '" + member + "': the WIT type of " + what
+							+ locations.lineOf(anchor) + ": '" + member + "': the WIT type of " + what
 							+ " involves flags, which does not cross the component import boundary yet (its rontolisp "
 							+ "representation is settled: a keyword list)");
 					case WitItem.EnumDef ignored -> {
@@ -602,7 +683,7 @@ public final class WitImportDirective {
 					case WitItem.ResourceDef ignored -> {
 						// a handle -- crosses
 					}
-					case null -> throw undefinedType(witPath, locations, func, member, what, named);
+					case null -> throw undefinedType(witPath, locations, anchor, member, what, named);
 					default -> {
 						// a type alias was already resolved above
 					}
@@ -618,9 +699,9 @@ public final class WitImportDirective {
 	// so
 	// it would surface as an unreadable component rather than a compile error.
 	private static void rejectEmptyRecord(WitItem.RecordDef record, String witPath, WitLocations locations,
-			WitResolver.Func func, String member, String what) {
+			WitItem anchor, String member, String what) {
 		if (record.fields().isEmpty()) {
-			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '" + member
 					+ "': the WIT type of " + what + " involves the record '" + record.name()
 					+ "', which declares no fields -- the component model has no empty record type");
 		}
@@ -630,43 +711,65 @@ public final class WitImportDirective {
 		return resolveAliases(type, resolver, iface).type() instanceof WitType.Prim prim && "u8".equals(prim.name());
 	}
 
-	private static UnsupportedOperationException asyncOnly(String witPath, WitLocations locations,
-			WitResolver.Func func, String member, String what) {
-		return new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
-				+ "': the WIT type of " + what + " is a stream or a future, which has no rontolisp value on any "
-				+ "backend (it needs language-level async)");
+	// The --component acceptance policy for a stream/future value type: the handle itself
+	// crosses as a bare i32 (the canonical ABI's async built-ins read/write it), but the
+	// element governs that marshalling, so an unmarshalable element is rejected here as a
+	// friendly compile error rather than surfacing later as a codegen throw. A stream
+	// must
+	// be a byte stream (stream<u8>); a future must be parameterized so its payload can be
+	// read out (future.read), and that payload is validated as a produced value.
+	private static void validateAsyncElement(WitType t, String witPath, WitLocations locations, WitResolver resolver,
+			WitItem.InterfaceDef in, WitItem anchor, String member, String what) {
+		if (t instanceof WitType.StreamOf stream) {
+			WitType elem = stream.element();
+			if (elem == null || !isU8(elem, resolver, in)) {
+				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '" + member
+						+ "': the WIT type of " + what + " is a stream whose element is not u8; only stream<u8> "
+						+ "(a byte stream) crosses the component boundary");
+			}
+		}
+		else if (t instanceof WitType.FutureOf fut) {
+			if (fut.element() == null) {
+				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '" + member
+						+ "': the WIT type of " + what + " is a bare future with no payload type; only a parameterized "
+						+ "future<T> can be read");
+			}
+			validateComponentResult(fut.element(), witPath, locations, resolver, in, anchor, member, what);
+		}
 	}
 
-	private static UnsupportedOperationException undefinedType(String witPath, WitLocations locations,
-			WitResolver.Func func, String member, String what, WitType.Named named) {
+	private static UnsupportedOperationException undefinedType(String witPath, WitLocations locations, WitItem anchor,
+			String member, String what, WitType.Named named) {
 		return new UnsupportedOperationException(
-				witPath + ":" + locations.lineOf(func.def()) + ": '" + member + "': the WIT type of " + what + " is '"
+				witPath + ":" + locations.lineOf(anchor) + ": '" + member + "': the WIT type of " + what + " is '"
 						+ named.name() + "', which the file does not define (nor import with a use clause)");
 	}
 
 	private static void validateComponentResult(WitType type, String witPath, WitLocations locations,
-			WitResolver resolver, WitItem.InterfaceDef iface, WitResolver.Func func, String member, String what) {
+			WitResolver resolver, WitItem.InterfaceDef iface, WitItem anchor, String member, String what) {
 		Scoped scoped = resolveAliases(type, resolver, iface);
 		WitItem.InterfaceDef in = scoped.iface();
 		WitType t = scoped.type();
 		switch (t) {
-			case WitType.StreamOf ignored -> throw asyncOnly(witPath, locations, func, member, what);
-			case WitType.FutureOf ignored -> throw asyncOnly(witPath, locations, func, member, what);
+			case WitType.StreamOf ignored ->
+				validateAsyncElement(t, witPath, locations, resolver, in, anchor, member, what);
+			case WitType.FutureOf ignored ->
+				validateAsyncElement(t, witPath, locations, resolver, in, anchor, member, what);
 			case WitType.ListOf list ->
-				validateComponentResult(list.element(), witPath, locations, resolver, in, func, member, what);
+				validateComponentResult(list.element(), witPath, locations, resolver, in, anchor, member, what);
 			case WitType.OptionOf opt ->
-				validateComponentResult(opt.element(), witPath, locations, resolver, in, func, member, what);
+				validateComponentResult(opt.element(), witPath, locations, resolver, in, anchor, member, what);
 			case WitType.ResultOf res -> {
 				if (res.ok() != null) {
-					validateComponentResult(res.ok(), witPath, locations, resolver, in, func, member, what);
+					validateComponentResult(res.ok(), witPath, locations, resolver, in, anchor, member, what);
 				}
 				if (res.err() != null) {
-					validateComponentResult(res.err(), witPath, locations, resolver, in, func, member, what);
+					validateComponentResult(res.err(), witPath, locations, resolver, in, anchor, member, what);
 				}
 			}
 			case WitType.TupleOf tuple -> {
 				for (WitType element : tuple.elements()) {
-					validateComponentResult(element, witPath, locations, resolver, in, func, member, what);
+					validateComponentResult(element, witPath, locations, resolver, in, anchor, member, what);
 				}
 			}
 			case WitType.Named named -> {
@@ -674,22 +777,22 @@ public final class WitImportDirective {
 				WitItem.InterfaceDef owner = owned == null ? in : owned.owner();
 				switch (owned == null ? null : owned.item()) {
 					case WitItem.RecordDef record -> {
-						rejectEmptyRecord(record, witPath, locations, func, member, what);
+						rejectEmptyRecord(record, witPath, locations, anchor, member, what);
 						for (WitItem.Field field : record.fields()) {
-							validateComponentResult(field.type(), witPath, locations, resolver, owner, func, member,
+							validateComponentResult(field.type(), witPath, locations, resolver, owner, anchor, member,
 									what);
 						}
 					}
 					case WitItem.VariantDef variant -> {
 						for (WitItem.Case c : variant.cases()) {
 							if (c.payload() != null) {
-								validateComponentResult(c.payload(), witPath, locations, resolver, owner, func, member,
-										what);
+								validateComponentResult(c.payload(), witPath, locations, resolver, owner, anchor,
+										member, what);
 							}
 						}
 					}
 					case WitItem.FlagsDef ignored ->
-						throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '"
+						throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '"
 								+ member + "': the WIT type of " + what + " involves flags, which does not cross the "
 								+ "component import boundary yet (its rontolisp representation is settled: a keyword "
 								+ "list)");
@@ -699,7 +802,7 @@ public final class WitImportDirective {
 					case WitItem.ResourceDef ignored -> {
 						// a handle -- crosses
 					}
-					case null -> throw undefinedType(witPath, locations, func, member, what, named);
+					case null -> throw undefinedType(witPath, locations, anchor, member, what, named);
 					default -> {
 						// a type alias was already resolved above
 					}
@@ -734,7 +837,7 @@ public final class WitImportDirective {
 	// The lambda list of a binding. A resource method takes the handle as its leading
 	// parameter (the WIT `self` receiver, which the model does not spell out).
 	private static List<Param> parameters(WitResolver.Func func, String witPath, WitLocations locations,
-			WitResolver resolver, WitItem.InterfaceDef iface, String member, boolean wasm) {
+			WitResolver resolver, WitItem.InterfaceDef iface, String member, boolean wasm, boolean component) {
 		List<Param> params = new ArrayList<>();
 		boolean method = func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN;
 		if (method) {
@@ -742,7 +845,7 @@ public final class WitImportDirective {
 		}
 		for (var param : func.def().func().params()) {
 			String designator = designatorOf(param.type(), witPath, locations, resolver, iface, func, member,
-					"parameter '" + param.name() + "'", wasm);
+					"parameter '" + param.name() + "'", wasm, component);
 			String name = param.name();
 			if (method && "self".equals(name)) {
 				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
@@ -765,7 +868,10 @@ public final class WitImportDirective {
 		if (result == null) {
 			return ":void";
 		}
-		return designatorOf(result, witPath, locations, resolver, iface, func, member, "the result", wasm);
+		// resultDesignator is only reached on the non-component path (the component path
+		// binds through the WIT text, not a flat designator), so component is always
+		// false.
+		return designatorOf(result, witPath, locations, resolver, iface, func, member, "the result", wasm, false);
 	}
 
 	// The one place a WIT type is judged. On the WASM boundary only the flat set
@@ -775,12 +881,26 @@ public final class WitImportDirective {
 	// representation (WitTypeMapper) and only stream/future -- which have no rontolisp
 	// value at all until language-level async lands -- are refused.
 	private static String designatorOf(WitType type, String witPath, WitLocations locations, WitResolver resolver,
-			WitItem.InterfaceDef iface, WitResolver.Func func, String member, String what, boolean wasm) {
+			WitItem.InterfaceDef iface, WitResolver.Func func, String member, String what, boolean wasm,
+			boolean component) {
 		WitTypeMapper.Rep rep = repOf(type, witPath, locations, resolver, iface, func, member, what);
+		if (rep == WitTypeMapper.Rep.STREAM_HANDLE || rep == WitTypeMapper.Rep.FUTURE_HANDLE) {
+			if (component) {
+				// --component marshals a stream/future handle through the canonical ABI's
+				// async built-ins (validated in validateComponentFunc); the flat
+				// designator
+				// is unused on the component path, which drives the wrapper off the WIT
+				// text.
+				return ":void";
+			}
+			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+					+ "': the WIT type of " + what + " is a stream or a future, which only the --component backend can "
+					+ "marshal (through the canonical ABI's async built-ins); the interpreter, the JVM and Preview 1 "
+					+ "WASM have no rontolisp value for it");
+		}
 		if (rep == WitTypeMapper.Rep.UNSUPPORTED) {
 			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
-					+ "': the WIT type of " + what + " is a stream or a future, which has no rontolisp value on any "
-					+ "backend (it needs language-level async)");
+					+ "': the WIT type of " + what + " has no rontolisp representation on any backend");
 		}
 		if (!wasm) {
 			// The interpreter and the JVM pass LispVals straight through to the provider,
@@ -817,7 +937,7 @@ public final class WitImportDirective {
 		if (t instanceof WitType.Named named) {
 			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
 			if (owned == null) {
-				throw undefinedType(witPath, locations, func, member, what, named);
+				throw undefinedType(witPath, locations, func.def(), member, what, named);
 			}
 			return WitTypeMapper.repOfDefinition(owned.item());
 		}

@@ -71,6 +71,13 @@ final class WasmComponentImportCompiler {
 	 */
 	private static final int MAX_SCRATCH = 512;
 
+	/**
+	 * How many bytes one {@code stream.read} call asks for. Each call stages its buffer
+	 * above the heap mark and pops it once the bytes are on the GC heap, so the chunk
+	 * size only caps a single blocking read; the Lisp-side loop accumulates.
+	 */
+	private static final int ASYNC_READ_CHUNK = 8192;
+
 	private WasmComponentImportCompiler() {
 	}
 
@@ -115,8 +122,64 @@ final class WasmComponentImportCompiler {
 	record Drop(String lispName, String module, String field, String resource) {
 	}
 
-	record Import(String ifaceId, WitItem.InterfaceDef iface, WitResolver resolver, List<Decl> decls,
-			List<Drop> drops) {
+	/** The async built-in operations a stream/future type alias binds. */
+	enum AsyncOp {
+
+		NEW("new"), READ("read"), WRITE("write"), DROP_READABLE("drop-readable"), DROP_WRITABLE("drop-writable");
+
+		final String suffix;
+
+		AsyncOp(String suffix) {
+			this.suffix = suffix;
+		}
+
+		static AsyncOp of(String suffix) {
+			for (AsyncOp op : values()) {
+				if (op.suffix.equals(suffix)) {
+					return op;
+				}
+			}
+			throw new IllegalStateException("Internal component-import form names an unknown async op: " + suffix);
+		}
+
+	}
+
+	/**
+	 * A bound async built-in: one {@code canon stream.*}/{@code future.*} operation on
+	 * the stream/future type a {@code type} alias of the interface names.
+	 * <p>
+	 * Not a {@link Decl}: like a {@link Drop}, an async built-in is a CORE function with
+	 * no component function alias and no {@code canon lower} behind it -- but unlike a
+	 * drop it is typed by a <em>component-level</em> stream/future type that
+	 * {@code WasmComponentBuilder} derives from the WIT, not by a resource projected out
+	 * of the instance.
+	 *
+	 * @param lispName the Lisp-visible synthetic defun name ({@code h:body-stream-read})
+	 * @param module the WASM import module = the interface's canonical id
+	 * @param field the WASM import field = {@code "[async-read]body-stream"}
+	 * @param alias the alias's name in the interface (the naming anchor)
+	 * @param op the built-in operation
+	 * @param abi the layout calculator scoped to the interface the alias's TARGET type is
+	 * written in (payload references resolve there)
+	 * @param type the resolved target: a {@link WitType.StreamOf} or
+	 * {@link WitType.FutureOf}
+	 */
+	record Async(String lispName, String module, String field, String alias, AsyncOp op, WitCanonicalAbi abi,
+			WitType type) {
+
+		boolean stream() {
+			return type() instanceof WitType.StreamOf;
+		}
+
+		/** The future's payload type ({@code null} for a stream). */
+		@Nullable WitType payload() {
+			return type() instanceof WitType.FutureOf fut ? fut.element() : null;
+		}
+
+	}
+
+	record Import(String ifaceId, WitItem.InterfaceDef iface, WitResolver resolver, List<Decl> decls, List<Drop> drops,
+			List<Async> asyncs) {
 	}
 
 	/**
@@ -154,13 +217,16 @@ final class WasmComponentImportCompiler {
 			decls.addAll(imported.decls());
 			final List<Drop> drops = new ArrayList<>(prev.drops());
 			drops.addAll(imported.drops());
+			final List<Async> asyncs = new ArrayList<>(prev.asyncs());
+			asyncs.addAll(imported.asyncs());
 			// The interface / resolver are the same WIT type across both bindings (the
 			// same
 			// interface id, parsed from the same WIT text), so either serves the
 			// component-level wiring; each Decl keeps its own abi, which is all the
 			// lowering
 			// reads.
-			byId.put(imported.ifaceId(), new Import(prev.ifaceId(), prev.iface(), prev.resolver(), decls, drops));
+			byId.put(imported.ifaceId(),
+					new Import(prev.ifaceId(), prev.iface(), prev.resolver(), decls, drops, asyncs));
 		}
 		return new ArrayList<>(byId.values());
 	}
@@ -257,14 +323,34 @@ final class WasmComponentImportCompiler {
 		List<WitResolver.Func> funcs = WitResolver.functions(iface);
 		List<Decl> decls = new ArrayList<>();
 		List<Drop> drops = new ArrayList<>();
+		List<Async> asyncs = new ArrayList<>();
 		for (int i = 3; i < items.size(); i++) {
 			if (!(items.get(i) instanceof LispCons pair) || !(pair.cdr() instanceof LispCons rest)) {
 				throw new UnsupportedOperationException(
 						"Malformed internal component-import member: " + items.get(i).print());
 			}
-			// (:drop "bucket" "kv:bucket-drop") -- the keyword head is what tells a drop
-			// apart from a ("member" "lisp-name") function binding.
+			// (:drop "bucket" "kv:bucket-drop") / (:async "body" "read" "h:body-read") --
+			// the keyword head is what tells these apart from a ("member" "lisp-name")
+			// function binding.
 			if (pair.car() instanceof LispSymbol keyword && keyword.isKeyword()) {
+				if (":async".equals(keyword.name())) {
+					if (!(rest.car() instanceof LispString alias) || !(rest.cdr() instanceof LispCons opCons)
+							|| !(opCons.car() instanceof LispString op) || !(opCons.cdr() instanceof LispCons nameCons)
+							|| !(nameCons.car() instanceof LispString asyncName)) {
+						throw new UnsupportedOperationException(
+								"Malformed internal component-import member: " + items.get(i).print());
+					}
+					WitCanonicalAbi.Scoped target = abi.resolveAliases(new WitType.Named(alias.value()));
+					if (!(target.type() instanceof WitType.StreamOf) && !(target.type() instanceof WitType.FutureOf)) {
+						throw new IllegalStateException("Internal component-import form names an async alias that is "
+								+ "neither a stream nor a future: " + alias.value());
+					}
+					AsyncOp asyncOp = AsyncOp.of(op.value());
+					asyncs.add(new Async(asyncName.value(), ifaceId.value(),
+							"[async-" + asyncOp.suffix + "]" + alias.value(), alias.value(), asyncOp, target.abi(),
+							target.type()));
+					continue;
+				}
 				if (!":drop".equals(keyword.name()) || !(rest.car() instanceof LispString resource)
 						|| !(rest.cdr() instanceof LispCons tail) || !(tail.car() instanceof LispString dropName)) {
 					throw new UnsupportedOperationException(
@@ -285,7 +371,7 @@ final class WasmComponentImportCompiler {
 						"Internal component-import form names an unknown member: " + member.value()));
 			decls.add(new Decl(lispName.value(), ifaceId.value(), cabiFieldName(func), func, abi, abi.flatSig(func)));
 		}
-		return new Import(ifaceId.value(), iface, resolver, decls, drops);
+		return new Import(ifaceId.value(), iface, resolver, decls, drops, asyncs);
 	}
 
 	/**
@@ -405,6 +491,12 @@ final class WasmComponentImportCompiler {
 				MAX_SCRATCH);
 		Body body = emitBody(ctxBuilder, decl, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, probe.i32Pool(),
 				probe.i64Pool());
+		return wrapEntry(body);
+	}
+
+	// The code-entry framing shared by every wrapper kind: the i32 scratch pool, the i64
+	// scratch pool, then the eq temps handed out during emission.
+	private static byte[] wrapEntry(Body body) {
 		ByteArrayOutputStream entry = new ByteArrayOutputStream();
 		am.ik.wasm.WasmWriter entryWriter = new am.ik.wasm.WasmWriter(entry);
 		entryWriter.write(body.eqTemps() > 0 ? 3 : 2);
@@ -456,6 +548,86 @@ final class WasmComponentImportCompiler {
 		return new Type[] { Type.I32 };
 	}
 
+	/**
+	 * The WASM parameter types of an async built-in's core signature, per the canonical
+	 * ABI's synchronous stream/future built-ins (the shapes the fixed base adapter
+	 * already exercises): {@code new: [] -> [i64]} (the packed readable/writable pair),
+	 * {@code stream.read/write: [end, ptr, len] -> [status]},
+	 * {@code future.read/write: [end, ptr] -> [status]}, {@code drop-*: [end] -> []}.
+	 * @param async the bound built-in
+	 * @return the flat parameter types
+	 */
+	static Type[] asyncParamTypes(Async async) {
+		return switch (async.op()) {
+			case NEW -> new Type[0];
+			case READ, WRITE ->
+				async.stream() ? new Type[] { Type.I32, Type.I32, Type.I32 } : new Type[] { Type.I32, Type.I32 };
+			case DROP_READABLE, DROP_WRITABLE -> new Type[] { Type.I32 };
+		};
+	}
+
+	/** Returns the WASM result types of an async built-in's core signature. */
+	static Type[] asyncResultTypes(Async async) {
+		return switch (async.op()) {
+			case NEW -> new Type[] { Type.I64 };
+			case READ, WRITE -> new Type[] { Type.I32 };
+			case DROP_READABLE, DROP_WRITABLE -> new Type[0];
+		};
+	}
+
+	/** Returns the Lisp parameter count of an async built-in's synthetic defun. */
+	static int lispArity(Async async) {
+		return switch (async.op()) {
+			case NEW -> 0;
+			case WRITE -> 2;
+			case READ, DROP_READABLE, DROP_WRITABLE -> 1;
+		};
+	}
+
+	/**
+	 * Whether a {@code future.read} of this built-in's type needs the canonical realloc
+	 * option: the host stages a string/{@code list<u8>} payload through it (the fixed
+	 * adapter's filesystem future precedent).
+	 * @param async the bound built-in
+	 * @return {@code true} when the read's {@code canon} needs realloc
+	 */
+	static boolean asyncReadNeedsRealloc(Async async) {
+		WitType payload = async.payload();
+		return payload != null && stagesMemory(payload, async.abi());
+	}
+
+	/**
+	 * Builds the code entry of an async built-in wrapper. Like {@link #buildWrapperBody}
+	 * it emits twice to size the scratch pools exactly.
+	 * @param ctxBuilder the shared context builder
+	 * @param async the bound built-in
+	 * @param ordinal the import's ordinal (shared with the function imports)
+	 * @param allocFuncIndex the function index of {@code __ronto_alloc}
+	 * @param strFromMemFuncIndex the function index of {@code _str_from_mem}
+	 * @return the code entry bytes
+	 */
+	static byte[] buildAsyncBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int ordinal, int allocFuncIndex,
+			int strFromMemFuncIndex) {
+		int numParams = lispArity(async);
+		Body probe = emitAsync(ctxBuilder, async, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, MAX_SCRATCH,
+				MAX_SCRATCH);
+		Body body = emitAsync(ctxBuilder, async, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex,
+				probe.i32Pool(), probe.i64Pool());
+		return wrapEntry(body);
+	}
+
+	private static Body emitAsync(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int numParams, int ordinal,
+			int allocFuncIndex, int strFromMemFuncIndex, int i32Pool, int i64Pool) {
+		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
+		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
+		Gen gen = new Gen(ctx, async.lispName(), numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool,
+				i64Pool);
+		gen.emitAsyncBody(async);
+		int eqTemps = ctx.nextLocal - (numParams + 1 + i32Pool + i64Pool);
+		return new Body(bodyStream.toByteArray(), gen.i32High, gen.i64High, eqTemps);
+	}
+
 	// One emission of a wrapper body, and what it cost in locals.
 	private record Body(byte[] bytes, int i32Pool, int i64Pool, int eqTemps) {
 	}
@@ -471,8 +643,9 @@ final class WasmComponentImportCompiler {
 		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
-		Gen gen = new Gen(ctx, decl, numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool, i64Pool);
-		gen.emitBody();
+		Gen gen = new Gen(ctx, decl.lispName(), numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool,
+				i64Pool);
+		gen.emitBody(decl);
 		// Locals: the i32 scratch pool, the i64 scratch pool, then the eq temps allocTemp
 		// handed out during emission.
 		int eqTemps = ctx.nextLocal - (numParams + 1 + i32Pool + i64Pool);
@@ -487,7 +660,7 @@ final class WasmComponentImportCompiler {
 
 		private final am.ik.wasm.WasmWriter w;
 
-		private final Decl decl;
+		private final String lispName;
 
 		private final int i32Base;
 
@@ -516,11 +689,11 @@ final class WasmComponentImportCompiler {
 
 		private final int mark;
 
-		Gen(WasmLispCompiler.Ctx ctx, Decl decl, int numParams, int ordinal, int allocFuncIndex,
+		Gen(WasmLispCompiler.Ctx ctx, String lispName, int numParams, int ordinal, int allocFuncIndex,
 				int strFromMemFuncIndex, int i32Pool, int i64Pool) {
 			this.ctx = ctx;
 			this.w = ctx.writer;
-			this.decl = decl;
+			this.lispName = lispName;
 			this.i32Pool = i32Pool;
 			this.i64Pool = i64Pool;
 			this.i32Base = numParams + 1;
@@ -538,7 +711,7 @@ final class WasmComponentImportCompiler {
 
 		private int allocI32() {
 			if (this.i32Cursor >= this.i32Pool) {
-				throw new UnsupportedOperationException("'" + this.decl.lispName()
+				throw new UnsupportedOperationException("'" + this.lispName
 						+ "': the WIT parameter and result types nest deeper than the component import boundary can "
 						+ "marshal (more than " + MAX_SCRATCH + " scratch locals)");
 			}
@@ -549,7 +722,7 @@ final class WasmComponentImportCompiler {
 
 		private int allocI64() {
 			if (this.i64Cursor >= this.i64Pool) {
-				throw new UnsupportedOperationException("'" + this.decl.lispName()
+				throw new UnsupportedOperationException("'" + this.lispName
 						+ "': the WIT parameter and result types nest deeper than the component import boundary can "
 						+ "marshal (more than " + MAX_SCRATCH + " scratch locals)");
 			}
@@ -567,36 +740,27 @@ final class WasmComponentImportCompiler {
 			this.i64Cursor = 1;
 		}
 
-		void emitBody() {
-			// mark = align8(HEAP_PTR), and HEAP_PTR = mark: the staging snapshot the
-			// epilogue pops back to, AND the alignment floor of everything staged above
-			// it. The canonical ABI rejects a misaligned return area outright ("pointer
-			// not aligned"), and the bump heap is NOT always 8-aligned when a call
-			// arrives: `_intern` copies a first-seen symbol's bytes into the permanent
-			// low region and advances the pointer by their exact length. So align here
-			// rather than trust the caller.
-			i32Const(WasmLispCompiler.HEAP_PTR_ADDR);
-			alignedHeapTop(() -> loadCell(WasmLispCompiler.HEAP_PTR_ADDR));
-			this.w.write(Instruction.TEE_LOCAL);
-			this.w.writeSignedLeb128(this.mark);
-			this.w.write(Instruction.I32_STORE, 0x02, 0x00);
+		void emitBody(Decl decl) {
+			emitStagingPrologue();
 			// Lower every Lisp argument onto the stack in flat order.
-			WitResolver.Func func = this.decl.func();
+			WitResolver.Func func = decl.func();
 			int slot = 1;
 			if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
 				getLocal(slot++);
 				WasmEmitHelper.castI31GetS(this.ctx);
 			}
 			for (var param : func.def().func().params()) {
-				emitLowerParam(this.decl.abi(), param.type(), slot++);
+				emitLowerParam(decl.abi(), param.type(), slot++);
 				resetScratch();
 			}
 			// The return pointer, when the results are indirect: bump-allocated above the
 			// staged arguments (__ronto_alloc aligns to 8, satisfying every canonical
 			// alignment), reclaimed by the epilogue's pop.
 			int rp = -1;
-			WitCanonicalAbi.FlatSig sig = this.decl.sig();
+			WitCanonicalAbi.FlatSig sig = decl.sig();
 			if (sig.retptr()) {
+				// TEE, not SET: the pointer stays on the stack as the call's trailing
+				// return-pointer parameter.
 				rp = allocI32();
 				i32Const(sig.retSize());
 				this.w.write(Instruction.CALL);
@@ -604,25 +768,194 @@ final class WasmComponentImportCompiler {
 				this.w.write(Instruction.TEE_LOCAL);
 				this.w.writeSignedLeb128(rp);
 			}
-			this.w.write(Instruction.CALL);
-			this.w.writeUnsignedLeb128(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + this.ordinal);
+			callImport();
 			// Lift the result into one boxed value.
-			WitType result = this.decl.abi().resultType(func);
+			WitType result = decl.abi().resultType(func);
 			if (result == null) {
 				refNullEq();
 			}
 			else if (sig.retptr()) {
-				emitLiftAt(this.decl.abi(), result, rp, 0);
+				emitLiftAt(decl.abi(), result, rp, 0);
 			}
 			else {
-				emitLiftFlat(this.decl.abi(), result);
+				emitLiftFlat(decl.abi(), result);
 			}
 			int resultTmp = this.ctx.allocTemp();
 			setLocal(resultTmp);
-			// HEAP_PTR = align8(max(mark, intern high-water)): pop the per-call staging,
-			// but never below the permanent interned-symbol region (the
-			// __ronto_alloc_reset rule) -- and keep the pointer 8-aligned, because that
-			// region's high-water is not (see the entry prologue).
+			emitStagingEpilogue(resultTmp);
+		}
+
+		// --- the async built-in bodies ---
+
+		void emitAsyncBody(Async async) {
+			switch (async.op()) {
+				case NEW -> emitAsyncNew();
+				case DROP_READABLE, DROP_WRITABLE -> emitAsyncDrop();
+				case READ -> {
+					if (async.stream()) {
+						emitStreamRead();
+					}
+					else {
+						emitFutureRead(async);
+					}
+				}
+				case WRITE -> {
+					if (async.stream()) {
+						emitStreamWrite();
+					}
+					else {
+						emitFutureWrite(async);
+					}
+				}
+			}
+		}
+
+		// new: [] -> [i64], low 32 bits = the readable end, high 32 = the writable end
+		// (the fixed adapter's convention). Lifts to the cons (readable . writable).
+		private void emitAsyncNew() {
+			callImport();
+			setLocal64();
+			getLocal64();
+			this.w.write(Instruction.I32_WRAP_I64);
+			boxI31();
+			getLocal64();
+			this.w.write(Instruction.I64_CONST);
+			this.w.writeSignedLeb128(32);
+			this.w.write(Instruction.I64_SHR_U);
+			this.w.write(Instruction.I32_WRAP_I64);
+			boxI31();
+			newCons();
+			this.w.write(Instruction.END);
+		}
+
+		// drop-readable / drop-writable: unbox the end's handle, hand it back, nil.
+		private void emitAsyncDrop() {
+			getLocal(1);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			callImport();
+			refNullEq();
+			this.w.write(Instruction.END);
+		}
+
+		// stream.read into a staged chunk: one blocking read per call, returning the
+		// bytes as a Lisp string, or nil once the stream is dropped (EOF). The return
+		// value is (count << 4) | status; a blocking read yields at least one byte
+		// unless the writer is gone, so count 0 = EOF.
+		private void emitStreamRead() {
+			emitStagingPrologue();
+			int buf = allocRetArea(ASYNC_READ_CHUNK);
+			int n = allocI32();
+			getLocal(1);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			getLocal(buf);
+			i32Const(ASYNC_READ_CHUNK);
+			callImport();
+			i32Const(4);
+			this.w.write(Instruction.I32_SHR_U);
+			this.w.write(Instruction.TEE_LOCAL);
+			this.w.writeSignedLeb128(n);
+			this.w.write(Instruction.IF);
+			this.w.write(Type.REFNULL.code());
+			this.w.writeHeapType(Type.EQ.code());
+			getLocal(buf);
+			getLocal(n);
+			this.w.write(Instruction.CALL);
+			this.w.writeSignedLeb128(this.strFromMemFuncIndex);
+			this.w.write(Instruction.ELSE);
+			refNullEq();
+			this.w.write(Instruction.END);
+			int resultTmp = this.ctx.allocTemp();
+			setLocal(resultTmp);
+			emitStagingEpilogue(resultTmp);
+		}
+
+		// stream.write of a whole Lisp string: the synchronous built-in blocks until the
+		// bytes are accepted (the fixed adapter's fd_write precedent). Returns the
+		// accepted byte count.
+		private void emitStreamWrite() {
+			emitStagingPrologue();
+			getLocal(1);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			emitStageStringParam(2);
+			callImport();
+			i32Const(4);
+			this.w.write(Instruction.I32_SHR_U);
+			boxI31();
+			int resultTmp = this.ctx.allocTemp();
+			setLocal(resultTmp);
+			emitStagingEpilogue(resultTmp);
+		}
+
+		// future.read: block until the payload arrives, then lift it from the return
+		// area with the same machinery as an indirect function result -- so a
+		// future<result<...>> reads out as the (:ok . V) / (:error . E) envelope. A
+		// dropped future (the writer went away without a value) reads as nil.
+		private void emitFutureRead(Async async) {
+			WitType payload = Objects.requireNonNull(async.payload(), "future payload");
+			emitStagingPrologue();
+			int rp = allocRetArea(async.abi().size(payload));
+			getLocal(1);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			getLocal(rp);
+			callImport();
+			i32Const(0xF);
+			this.w.write(Instruction.I32_AND);
+			this.w.write(Instruction.I32_EQZ);
+			this.w.write(Instruction.IF);
+			this.w.write(Type.REFNULL.code());
+			this.w.writeHeapType(Type.EQ.code());
+			emitLiftAt(async.abi(), payload, rp, 0);
+			this.w.write(Instruction.ELSE);
+			refNullEq();
+			this.w.write(Instruction.END);
+			int resultTmp = this.ctx.allocTemp();
+			setLocal(resultTmp);
+			emitStagingEpilogue(resultTmp);
+		}
+
+		// future.write: lower the Lisp value into the canonical memory representation
+		// (the mirror of emitLiftAt) and hand it to the pending reader. Returns t when
+		// the reader took it, nil when the readable end was dropped first.
+		private void emitFutureWrite(Async async) {
+			WitType payload = Objects.requireNonNull(async.payload(), "future payload");
+			emitStagingPrologue();
+			int rp = allocRetArea(async.abi().size(payload));
+			emitLowerAt(async.abi(), payload, 2, rp, 0);
+			getLocal(1);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			getLocal(rp);
+			callImport();
+			i32Const(0xF);
+			this.w.write(Instruction.I32_AND);
+			this.w.write(Instruction.I32_EQZ);
+			WasmEmitHelper.emitBoolFromI32(this.ctx);
+			int resultTmp = this.ctx.allocTemp();
+			setLocal(resultTmp);
+			emitStagingEpilogue(resultTmp);
+		}
+
+		// --- shared scaffolding ---
+
+		// mark = align8(HEAP_PTR), and HEAP_PTR = mark: the staging snapshot the
+		// epilogue pops back to, AND the alignment floor of everything staged above
+		// it. The canonical ABI rejects a misaligned return area outright ("pointer
+		// not aligned"), and the bump heap is NOT always 8-aligned when a call
+		// arrives: `_intern` copies a first-seen symbol's bytes into the permanent
+		// low region and advances the pointer by their exact length. So align here
+		// rather than trust the caller.
+		private void emitStagingPrologue() {
+			i32Const(WasmLispCompiler.HEAP_PTR_ADDR);
+			alignedHeapTop(() -> loadCell(WasmLispCompiler.HEAP_PTR_ADDR));
+			this.w.write(Instruction.TEE_LOCAL);
+			this.w.writeSignedLeb128(this.mark);
+			this.w.write(Instruction.I32_STORE, 0x02, 0x00);
+		}
+
+		// HEAP_PTR = align8(max(mark, intern high-water)): pop the per-call staging,
+		// but never below the permanent interned-symbol region (the
+		// __ronto_alloc_reset rule) -- and keep the pointer 8-aligned, because that
+		// region's high-water is not (see the staging prologue).
+		private void emitStagingEpilogue(int resultTmp) {
 			int water = allocI32();
 			loadCell(WasmLispCompiler.RT_INTERN_HEAP_ADDR);
 			setLocal(water);
@@ -638,6 +971,24 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.I32_STORE, 0x02, 0x00);
 			getLocal(resultTmp);
 			this.w.write(Instruction.END);
+		}
+
+		// A bump-allocated scratch area above the staging mark (__ronto_alloc aligns to
+		// 8, satisfying every canonical alignment), reclaimed by the epilogue's pop.
+		// Stores the pointer in a fresh i32 scratch local (nothing left on the stack)
+		// and returns its slot.
+		private int allocRetArea(int size) {
+			int rp = allocI32();
+			i32Const(size);
+			this.w.write(Instruction.CALL);
+			this.w.writeSignedLeb128(this.allocFuncIndex);
+			setLocal(rp);
+			return rp;
+		}
+
+		private void callImport() {
+			this.w.write(Instruction.CALL);
+			this.w.writeUnsignedLeb128(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + this.ordinal);
 		}
 
 		// Pushes align8(the i32 the given emitter pushes).
@@ -709,6 +1060,10 @@ final class WasmComponentImportCompiler {
 				case WitType.ListOf ignored -> throw paramUnsupported("list<T>");
 				case WitType.BorrowOf ignored -> emitLowerHandleParam(slot);
 				case WitType.OwnOf ignored -> emitLowerHandleParam(slot);
+				// A stream/future crosses as its bare i32 end handle; the async built-ins
+				// (not this lowering) are what read/write through it.
+				case WitType.StreamOf ignored -> emitLowerHandleParam(slot);
+				case WitType.FutureOf ignored -> emitLowerHandleParam(slot);
 				case WitType.OptionOf ignored -> emitLowerVariantParam(abi, t, slot);
 				case WitType.ResultOf ignored -> emitLowerVariantParam(abi, t, slot);
 				case WitType.TupleOf ignored -> emitLowerRecordParam(abi, t, slot, false);
@@ -883,7 +1238,7 @@ final class WasmComponentImportCompiler {
 				return;
 			}
 			throw new IllegalStateException(
-					"'" + this.decl.lispName() + "': a variant case's flat " + have + " does not join into " + want);
+					"'" + this.lispName + "': a variant case's flat " + have + " does not join into " + want);
 		}
 
 		// tagId = the interned string id of the value's tag -- car when it is a
@@ -1005,6 +1360,244 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.I32_SUB);
 		}
 
+		// --- argument lowering into memory (the mirror of emitLiftAt) ---
+
+		// Stores the canonical memory representation of the boxed Lisp value in `slot`
+		// at [base + offset]. This is what a guest-created value crosses through when
+		// the boundary is a memory area rather than flat core values: a future.write's
+		// payload today, an export's spilled result tomorrow. The Lisp shapes are the
+		// settled mapping, identical to what emitLiftAt reads back.
+		private void emitLowerAt(WitCanonicalAbi outer, WitType type, int slot, int base, int offset) {
+			WitCanonicalAbi.Scoped scoped = outer.resolveAliases(type);
+			WitCanonicalAbi abi = scoped.abi();
+			WitType t = scoped.type();
+			switch (t) {
+				case WitType.Prim prim -> {
+					switch (prim.name()) {
+						case "bool" -> {
+							getLocal(base);
+							getLocal(slot);
+							this.w.write(Instruction.REF_IS_NULL);
+							this.w.write(Instruction.I32_EQZ);
+							store(offset, Instruction.I32_STORE8, 0);
+						}
+						case "s8", "u8" -> {
+							getLocal(base);
+							getLocal(slot);
+							WasmEmitHelper.castI31GetS(this.ctx);
+							store(offset, Instruction.I32_STORE8, 0);
+						}
+						case "s16", "u16" -> {
+							getLocal(base);
+							getLocal(slot);
+							WasmEmitHelper.castI31GetS(this.ctx);
+							store(offset, Instruction.I32_STORE16, 1);
+						}
+						case "s32" -> {
+							getLocal(base);
+							getLocal(slot);
+							WasmEmitHelper.castFloatGetF64(this.ctx);
+							this.w.write(Instruction.I32_TRUNC_S_F64);
+							store(offset, Instruction.I32_STORE, 2);
+						}
+						case "u32" -> {
+							getLocal(base);
+							getLocal(slot);
+							WasmEmitHelper.castFloatGetF64(this.ctx);
+							this.w.write(Instruction.I32_TRUNC_U_F64);
+							store(offset, Instruction.I32_STORE, 2);
+						}
+						case "s64" -> {
+							getLocal(base);
+							getLocal(slot);
+							WasmEmitHelper.castFloatGetF64(this.ctx);
+							this.w.write(Instruction.I64_TRUNC_S_F64);
+							store(offset, Instruction.I64_STORE, 3);
+						}
+						case "u64" -> {
+							getLocal(base);
+							getLocal(slot);
+							WasmEmitHelper.castFloatGetF64(this.ctx);
+							this.w.write(Instruction.I64_TRUNC_U_F64);
+							store(offset, Instruction.I64_STORE, 3);
+						}
+						case "f32" -> {
+							getLocal(base);
+							getLocal(slot);
+							WasmEmitHelper.castFloatGetF64(this.ctx);
+							this.w.write(Instruction.F32_DEMOTE_F64);
+							store(offset, Instruction.F32_STORE, 2);
+						}
+						case "f64" -> {
+							getLocal(base);
+							getLocal(slot);
+							WasmEmitHelper.castFloatGetF64(this.ctx);
+							store(offset, Instruction.F64_STORE, 3);
+						}
+						case "char" -> {
+							getLocal(base);
+							getLocal(slot);
+							structGet(WasmLispCompiler.TYPE_CHAR, 0);
+							store(offset, Instruction.I32_STORE, 2);
+						}
+						case "string" -> emitStoreStringAt(slot, base, offset);
+						default -> throw paramUnsupported(prim.name());
+					}
+				}
+				case WitType.ListOf list when abi.isU8(list.element()) -> emitStoreStringAt(slot, base, offset);
+				case WitType.ListOf ignored -> throw paramUnsupported("list<T>");
+				case WitType.BorrowOf ignored -> emitStoreHandleAt(slot, base, offset);
+				case WitType.OwnOf ignored -> emitStoreHandleAt(slot, base, offset);
+				case WitType.StreamOf ignored -> emitStoreHandleAt(slot, base, offset);
+				case WitType.FutureOf ignored -> emitStoreHandleAt(slot, base, offset);
+				case WitType.OptionOf ignored -> emitLowerVariantAt(abi, t, slot, base, offset);
+				case WitType.ResultOf ignored -> emitLowerVariantAt(abi, t, slot, base, offset);
+				case WitType.TupleOf ignored -> emitLowerRecordAt(abi, t, slot, base, offset, false);
+				case WitType.Named named -> {
+					switch (abi.resolveNamed(named)) {
+						case WitItem.ResourceDef ignored -> emitStoreHandleAt(slot, base, offset);
+						case WitItem.EnumDef ignored -> emitLowerVariantAt(abi, t, slot, base, offset);
+						case WitItem.VariantDef ignored -> emitLowerVariantAt(abi, t, slot, base, offset);
+						case WitItem.RecordDef ignored -> emitLowerRecordAt(abi, t, slot, base, offset, true);
+						default -> throw paramUnsupported(named.name());
+					}
+				}
+				default -> throw paramUnsupported(t.getClass().getSimpleName());
+			}
+		}
+
+		private void emitStoreHandleAt(int slot, int base, int offset) {
+			getLocal(base);
+			getLocal(slot);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			store(offset, Instruction.I32_STORE, 2);
+		}
+
+		// string / list<u8> at [base + offset]: stage the bytes above the heap mark and
+		// store the canonical (content ptr @+0, content len @+4) pair.
+		private void emitStoreStringAt(int slot, int base, int offset) {
+			int save = this.i32Cursor;
+			int ptr = allocI32();
+			int len = allocI32();
+			emitStageStringParam(slot);
+			setLocal(len);
+			setLocal(ptr);
+			getLocal(base);
+			getLocal(ptr);
+			store(offset, Instruction.I32_STORE, 2);
+			getLocal(base);
+			getLocal(len);
+			store(offset + 4, Instruction.I32_STORE, 2);
+			this.i32Cursor = save;
+		}
+
+		// A variant-shaped value (variant / enum / option / result) into memory: store
+		// the discriminant, then the matched case's payload at the payload offset. The
+		// Lisp shapes are the same the flat lowering matches on (nil-or-value for an
+		// option, the case keyword or (keyword . payload) cons otherwise).
+		private void emitLowerVariantAt(WitCanonicalAbi abi, WitType type, int slot, int base, int offset) {
+			WitCanonicalAbi.VariantInfo info = abi.variantInfo(type);
+			int discOp = switch (info.discSize()) {
+				case 1 -> Instruction.I32_STORE8;
+				case 2 -> Instruction.I32_STORE16;
+				default -> Instruction.I32_STORE;
+			};
+			int discAlign = info.discSize() == 1 ? 0 : info.discSize() == 2 ? 1 : 2;
+			int payloadOffset = offset + info.payloadOffset();
+			if (abi.resolveAliases(type).type() instanceof WitType.OptionOf opt) {
+				// none = nil, some(v) = the value itself: no tag to read.
+				getLocal(slot);
+				this.w.write(Instruction.REF_IS_NULL);
+				this.w.write(Instruction.IF, 0x40);
+				getLocal(base);
+				i32Const(0);
+				store(offset, discOp, discAlign);
+				this.w.write(Instruction.ELSE);
+				getLocal(base);
+				i32Const(1);
+				store(offset, discOp, discAlign);
+				emitCasePayloadAt(info.abi(), opt.element(), slot, base, payloadOffset);
+				this.w.write(Instruction.END);
+				return;
+			}
+			int tagId = emitTagId(slot);
+			boolean anyPayload = false;
+			for (WitType payload : info.payloads()) {
+				anyPayload |= payload != null && !info.abi().flatTypes(payload).isEmpty();
+			}
+			int payload = anyPayload ? emitPayload(slot) : -1;
+			int n = info.names().size();
+			for (int i = 0; i < n; i++) {
+				getLocal(tagId);
+				i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
+				this.w.write(Instruction.I32_EQ);
+				this.w.write(Instruction.IF, 0x40);
+				getLocal(base);
+				i32Const(i);
+				store(offset, discOp, discAlign);
+				emitCasePayloadAt(info.abi(), info.payloads().get(i), payload, base, payloadOffset);
+				this.w.write(Instruction.ELSE);
+			}
+			// The value names no case of this variant: a type error, and it traps
+			// exactly as every other type error does on this backend.
+			this.w.write(Instruction.UNREACHABLE);
+			for (int i = 0; i < n; i++) {
+				this.w.write(Instruction.END);
+			}
+		}
+
+		// One case's payload into memory; a payload that flattens to nothing (an empty
+		// tuple, a payload-less case) writes nothing. The scratch cursors roll back
+		// afterwards: the cases are mutually exclusive.
+		private void emitCasePayloadAt(WitCanonicalAbi abi, @Nullable WitType payload, int payloadSlot, int base,
+				int payloadOffset) {
+			if (payload == null || abi.flatTypes(payload).isEmpty()) {
+				return;
+			}
+			if (payloadSlot < 0) {
+				throw new IllegalStateException("a payload-bearing case has no payload value");
+			}
+			int save32 = this.i32Cursor;
+			int save64 = this.i64Cursor;
+			emitLowerAt(abi, payload, payloadSlot, base, payloadOffset);
+			this.i32Cursor = save32;
+			this.i64Cursor = save64;
+		}
+
+		// record (a keyword plist) / tuple (a positional list) into memory: the fields
+		// at their canonical offsets, in WIT order.
+		private void emitLowerRecordAt(WitCanonicalAbi abi, WitType type, int slot, int base, int offset,
+				boolean plist) {
+			WitCanonicalAbi.RecordInfo info = abi.recordInfo(type);
+			for (int i = 0; i < info.names().size(); i++) {
+				int save32 = this.i32Cursor;
+				int save64 = this.i64Cursor;
+				int field = this.ctx.allocTemp();
+				getLocal(slot);
+				if (plist) {
+					i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
+					this.w.write(Instruction.CALL);
+					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_FETCH_PLIST_GET);
+				}
+				else {
+					for (int k = 0; k < i; k++) {
+						structGet(WasmLispCompiler.TYPE_CONS, 1);
+					}
+					structGet(WasmLispCompiler.TYPE_CONS, 0);
+				}
+				setLocal(field);
+				emitLowerAt(info.abi(), info.types().get(i), field, base, offset + info.offsets().get(i));
+				this.i32Cursor = save32;
+				this.i64Cursor = save64;
+			}
+		}
+
+		// [addr, value] -> store at the immediate offset.
+		private void store(int offset, int storeOp, int align) {
+			this.w.write(storeOp, align);
+			this.w.writeUnsignedLeb128(offset);
+		}
+
 		// --- result lifting ---
 
 		// Lifts a single-flat result already on the stack into a boxed value.
@@ -1034,6 +1627,8 @@ final class WasmComponentImportCompiler {
 				}
 				case WitType.BorrowOf ignored -> boxI31();
 				case WitType.OwnOf ignored -> boxI31();
+				case WitType.StreamOf ignored -> boxI31();
+				case WitType.FutureOf ignored -> boxI31();
 				case WitType.ResultOf ignored -> emitLiftVariantFromStackDisc(abi, t);
 				case WitType.OptionOf ignored -> emitLiftVariantFromStackDisc(abi, t);
 				case WitType.TupleOf ignored -> emitLiftRecordFlat(abi, t, false);
@@ -1168,6 +1763,14 @@ final class WasmComponentImportCompiler {
 					boxI31();
 				}
 				case WitType.OwnOf ignored -> {
+					load(base, offset, Instruction.I32_LOAD, 2);
+					boxI31();
+				}
+				case WitType.StreamOf ignored -> {
+					load(base, offset, Instruction.I32_LOAD, 2);
+					boxI31();
+				}
+				case WitType.FutureOf ignored -> {
 					load(base, offset, Instruction.I32_LOAD, 2);
 					boxI31();
 				}
@@ -1447,12 +2050,12 @@ final class WasmComponentImportCompiler {
 		}
 
 		private UnsupportedOperationException paramUnsupported(String what) {
-			return new UnsupportedOperationException("'" + this.decl.lispName() + "': the WIT parameter type '" + what
+			return new UnsupportedOperationException("'" + this.lispName + "': the WIT parameter type '" + what
 					+ "' does not cross the component import boundary yet");
 		}
 
 		private UnsupportedOperationException resultUnsupported(String what) {
-			return new UnsupportedOperationException("'" + this.decl.lispName() + "': the WIT result type '" + what
+			return new UnsupportedOperationException("'" + this.lispName + "': the WIT result type '" + what
 					+ "' does not cross the component import boundary yet");
 		}
 

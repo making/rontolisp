@@ -249,4 +249,72 @@ class WitCanonicalAbiTest {
 					+ "with a use clause)");
 	}
 
+	// A miniature WASI 0.3 async interface: a stream<u8> body, a future<result<...>>
+	// completion, and a named alias to a stream -- the shapes wasi:http@0.3 uses.
+	private static final String ASYNC_WIT = """
+			package test:async@0.3.0;
+
+			interface streaming {
+			  enum error-code { failed }
+			  type input-stream = stream<u8>;
+			  read-body: func(body: stream<u8>) -> future<result<_, error-code>>;
+			  echo: func(src: input-stream) -> stream<u8>;
+			}
+			""";
+
+	private static WitResolver.Func asyncFunc(WitItem.InterfaceDef iface, String witName) {
+		return WitResolver.functions(iface)
+			.stream()
+			.filter(f -> witName.equals(f.def().name()))
+			.findFirst()
+			.orElseThrow();
+	}
+
+	@Test
+	void streamAndFutureCrossAsABareI32Handle() {
+		WitResolver resolver = new WitResolver(WitParser.parse(ASYNC_WIT));
+		WitItem.InterfaceDef iface = Objects.requireNonNull(resolver.findInterface("test:async/streaming@0.3.0"));
+		WitCanonicalAbi abi = new WitCanonicalAbi(resolver, iface);
+
+		// A stream<u8> and a future<...> each lay out as one i32 handle: 4 bytes,
+		// 4-aligned,
+		// flattening to a single i32 -- exactly like a resource handle. The element type
+		// governs the async read/write marshalling, not the handle's footprint.
+		WitType stream = new WitType.StreamOf(new WitType.Prim("u8"));
+		WitType future = new WitType.FutureOf(new WitType.ResultOf(null, new WitType.Named("error-code")));
+		assertThat(abi.size(stream)).isEqualTo(4);
+		assertThat(abi.alignment(stream)).isEqualTo(4);
+		assertThat(abi.flatTypes(stream)).containsExactly(Type.I32);
+		assertThat(abi.size(future)).isEqualTo(4);
+		assertThat(abi.alignment(future)).isEqualTo(4);
+		// The future arm does NOT descend into its result<...> payload (that governs
+		// future.read, not the handle layout) -- it terminates at one i32.
+		assertThat(abi.flatTypes(future)).containsExactly(Type.I32);
+
+		// read-body(body: stream<u8>) -> future<result<_, error-code>>: the param and the
+		// single-i32 result each flatten to one core value, so the result comes back
+		// directly with no return pointer.
+		WitCanonicalAbi.FlatSig readBody = abi.flatSig(asyncFunc(iface, "read-body"));
+		assertThat(readBody.params()).containsExactly(Type.I32);
+		assertThat(readBody.results()).containsExactly(Type.I32);
+		assertThat(readBody.retptr()).isFalse();
+
+		// A named alias `type input-stream = stream<u8>` resolves through to the same
+		// leaf
+		// arm, so echo's stream param is one i32 too.
+		assertThat(abi.flatSig(asyncFunc(iface, "echo")).params()).containsExactly(Type.I32);
+	}
+
+	@Test
+	void optionWrappingAStreamRecursesIntoTheHandleArm() {
+		WitCanonicalAbi abi = abi();
+		// option<stream<u8>> = variant { none, some(stream<u8>) }: a discriminant plus a
+		// 4-byte handle payload at offset 4, 4-aligned -> size 8, flattening (disc,
+		// handle).
+		WitType optStream = new WitType.OptionOf(new WitType.StreamOf(new WitType.Prim("u8")));
+		assertThat(abi.size(optStream)).isEqualTo(8);
+		assertThat(abi.alignment(optStream)).isEqualTo(4);
+		assertThat(abi.flatTypes(optStream)).containsExactly(Type.I32, Type.I32);
+	}
+
 }
