@@ -18,7 +18,7 @@ import org.graalvm.webimage.api.JSString;
  * regular native-image builds use the real {@link HttpSupport}.
  *
  * <p>
- * Two paths preserve the promise API:
+ * Two paths preserve the future API:
  * <ul>
  * <li><strong>Async</strong> (worker + cross-origin isolation): {@code BrowserHttp.start}
  * hands the request to the main-thread fetch broker and returns immediately, so multiple
@@ -57,7 +57,7 @@ final class Target_HttpSupport {
 				.asString();
 			CompletableFuture<HttpSupport.HttpResult> settled = new CompletableFuture<>();
 			BrowserHttpResponses.completeFromRaw(settled, raw);
-			return settled.thenApply(Target_HttpSupport::toStart);
+			return settled.thenApply(BrowserHttpResponses::toStart);
 		}
 		BrowserFuture<HttpSupport.HttpResult> root = new BrowserFuture<>();
 		root.settler(() -> {
@@ -66,17 +66,7 @@ final class Target_HttpSupport {
 			}
 			BrowserHttpResponses.completeFromRaw(root, BrowserHttp.awaitResponse(JSString.of(id)).asString());
 		});
-		return root.thenApply(Target_HttpSupport::toStart);
+		return root.thenApply(BrowserHttpResponses::toStart);
 	}
-
-	/**
-	 * Converts the broker's buffered outcome into the streaming shape: the whole body
-	 * becomes a single already-settled stream chunk.
-	 */
-	private static HttpSupport.Start toStart(HttpSupport.HttpResult result) {
-		return new HttpSupport.Start(result.status(), result.headers(),
-				am.ik.rontolisp.LispStream.settled(new am.ik.rontolisp.LispString(result.body())));
-	}
-
 
 }

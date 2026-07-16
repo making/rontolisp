@@ -37,4 +37,13 @@ final class BrowserHttpResponses {
 		future.complete(new HttpSupport.HttpResult(status, body, headers));
 	}
 
+	/**
+	 * Converts the broker's buffered outcome into the streaming shape: the whole body
+	 * becomes a single already-settled stream chunk.
+	 */
+	static HttpSupport.Start toStart(HttpSupport.HttpResult result) {
+		return new HttpSupport.Start(result.status(), result.headers(),
+				am.ik.rontolisp.LispStream.settled(new am.ik.rontolisp.LispString(result.body())));
+	}
+
 }
