@@ -165,8 +165,7 @@ final class WasmExprCompiler {
 						WasmFetchCompiler.validate(cons);
 					}
 					else {
-						WasmFetchCompiler.compile(cons, ctx);
-						return;
+						WasmFetchCompiler.reject();
 					}
 				}
 				if (LispNames.HTTP_HANDLER.equals(qn.member())) {

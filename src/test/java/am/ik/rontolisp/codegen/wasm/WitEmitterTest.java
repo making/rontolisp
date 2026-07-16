@@ -157,6 +157,18 @@ class WitEmitterTest {
 	}
 
 	@Test
+	void serveVariantPrintsTheAsyncBodyTypes() {
+		// The 0.3 http surface is async end-to-end: client.send is an async func and
+		// both body directions carry stream<u8> contents plus a trailers future. Pin
+		// the emitted text (the printer's canonical rendering of those types), not
+		// just the fixture bytes.
+		String wit = WitEmitter.emit(WitEmitter.VARIANT_HTTP_SERVER, List.of());
+		assertThat(wit).contains("    send: async func(request: request) -> result<response, error-code>;");
+		assertThat(wit).contains("contents: option<stream<u8>>");
+		assertThat(wit).contains("future<result<option<trailers>, error-code>>");
+	}
+
+	@Test
 	void everyVariantTemplateLoadsAndOpensTheRootWorld() {
 		for (String variant : new String[] { WitEmitter.VARIANT_BASE, WitEmitter.VARIANT_SOCKETS,
 				WitEmitter.VARIANT_HTTP_SERVER, WitEmitter.VARIANT_NOGC, WitEmitter.VARIANT_NOGC_PRINT }) {

@@ -13,10 +13,10 @@
 ;;   java -jar $JAR examples/net/dog-fetcher.lisp
 ;; Run (JVM class; needs the rontolisp jar on the classpath):
 ;;   java -jar $JAR examples/net/dog-fetcher.lisp -o DogFetcher.class && java -cp $JAR:. DogFetcher
-;; Run (WASI component under wasmtime serve; -S http=y grants outbound HTTP):
+;; Run (WASI component under wasmtime serve; the wasi:http/client import that
+;; carries the outbound fetch is host-provided by default):
 ;;   java -jar $JAR examples/net/dog-fetcher.lisp -o dog-fetcher.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y -S http=y dog-fetcher.wasm
-;; Or under jco (Node.js) / wasmCloud (gc proposal on) -- see http-handler.lisp.
+;;     wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y dog-fetcher.wasm
 ;; Talk to it with:
 ;;   curl http://127.0.0.1:8080/
 

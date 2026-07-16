@@ -99,7 +99,7 @@ offending export:
 Because the world *is* the export list, so is mixing it with the hand-written
 form: a `rontolisp:wasm-export` in a program that also has a
 `rontolisp:wit-export`, and a `rontolisp:http-handler` together with a world (a
-serve-mode component exports only `wasi:http/incoming-handler`).
+serve-mode component exports only `wasi:http/handler@0.3.0`).
 
 ## Limitations
 

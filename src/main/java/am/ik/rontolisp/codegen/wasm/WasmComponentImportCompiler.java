@@ -1708,7 +1708,7 @@ final class WasmComponentImportCompiler {
 					// what an option field wants.
 					i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
 					this.w.write(Instruction.CALL);
-					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_FETCH_PLIST_GET);
+					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
 				}
 				else {
 					for (int k = 0; k < i; k++) {
@@ -1982,7 +1982,7 @@ final class WasmComponentImportCompiler {
 				if (plist) {
 					i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
 					this.w.write(Instruction.CALL);
-					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_FETCH_PLIST_GET);
+					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
 				}
 				else {
 					for (int k = 0; k < i; k++) {

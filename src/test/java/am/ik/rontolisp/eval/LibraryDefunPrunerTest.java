@@ -118,6 +118,19 @@ class LibraryDefunPrunerTest {
 	}
 
 	@Test
+	void httpLispDefinitionsAreNeverPruned() {
+		// http.lisp (the --component fetch/serve glue over wit-imported wasi:http) is
+		// not a prunable library: its defuns -- including the stream/future body
+		// helpers -- must survive the default-on pruner, or a compiled fetch would
+		// error at runtime. HttpLibrary does its own reachability-based member filter.
+		List<LispVal> spliced = HttpLibrary.process(
+				LispReader.readAllFromString("(print (rontolisp:await (rontolisp:fetch \"http://example.com\")))"),
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false);
+		List<String> names = definedNames(LibraryDefunPruner.prune(spliced));
+		assertThat(names).contains("rontolisp:fetch", "%http-read-all", "%http-write-body", "%fetch-send");
+	}
+
+	@Test
 	void aProgramWithoutLibrariesIsReturnedUnchanged() {
 		List<LispVal> program = LispReader.readAllFromString("(defun f (x) (+ x 1)) (print (f 2))");
 		assertThat(LibraryDefunPruner.prune(program)).isSameAs(program);

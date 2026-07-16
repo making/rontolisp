@@ -51,7 +51,7 @@ class WitRoundTripTest {
 	@Test
 	void verbatimRoundTripIsByteIdentical() throws IOException {
 		List<Path> corpus = corpus();
-		assertThat(corpus).hasSizeGreaterThan(40);
+		assertThat(corpus).hasSizeGreaterThan(30);
 		for (Path file : corpus) {
 			String text = Files.readString(file, StandardCharsets.UTF_8);
 			assertThat(WitPrinter.printVerbatim(WitLexer.lex(text))).as(file.toString()).isEqualTo(text);
@@ -65,6 +65,25 @@ class WitRoundTripTest {
 			String text = Files.readString(template, StandardCharsets.UTF_8);
 			assertThat(WitPrinter.print(WitParser.parse(text))).as(template.toString()).isEqualTo(text);
 		}
+	}
+
+	@Test
+	void printsAsyncFuncAndStreamFutureCanonically() {
+		// The wasi:http@0.3 surface leans on these three shapes; pin their canonical
+		// print directly (the fixture regen alone would let a printer regression slip
+		// through as a matching fixture).
+		String source = """
+				package demo:async@0.3.0;
+				interface body {
+				  read: func(contents: option<stream<u8>>) -> tuple<stream<u8>, future<result<option<string>, u32>>>;
+				  send: async func(data: stream<u8>) -> future<string>;
+				}
+				""";
+		String canonical = WitPrinter.print(WitParser.parse(source));
+		assertThat(canonical).contains(
+				"  read: func(contents: option<stream<u8>>) -> tuple<stream<u8>, future<result<option<string>, u32>>>;");
+		assertThat(canonical).contains("  send: async func(data: stream<u8>) -> future<string>;");
+		assertThat(WitPrinter.print(WitParser.parse(canonical))).isEqualTo(canonical);
 	}
 
 	@Test

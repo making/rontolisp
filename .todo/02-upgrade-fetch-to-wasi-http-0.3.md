@@ -532,49 +532,44 @@ wire it, then verify on wasmtime serve E2E before trusting the loop.
 
 Depends on Phase 1. Not upstream-gated for DEVELOPMENT.
 
-### Phase 3 -- cleanup, verification, docs
+### Phase 3 -- cleanup, verification, docs -- **DONE (2026-07-16)**
 
-- Delete the vestigial 0.2 seam: `FUNC_FETCH_START/AWAIT` trap stubs + slot/type
-  constants + `FETCH_*_ADDR` cells (`WasmLispCompiler` ~`:269-271`/`:596-601`/
-  `:866-883`/`:2273-2278`), `WasmFetchCompiler.compile()` dead body,
-  `WasmPromiseRuntimeBuilder` kind-0 fetch-root branch. (Independent -- can start
-  any time.)
-- **Four-backend E2E.** interp/JVM unchanged (java.net.http). Both WASM component
-  paths now run under `wasmtime serve` / component-model-async instead of `-S
-  http=y`. NOTE: `CiSpecE2eTest` concatenates cases and slices STDOUT -- it CANNOT
-  drive `wasmtime serve` + curl + assert. A serve round-trip needs a NEW test
-  surface (spin up `wasmtime serve`, curl, assert). **This CI-green step is
-  upstream-toolchain-gated** (cf. wasmtime issue #12714, a p3 `wasi:http/types`
-  resource-linking failure) -- keep hard-cutover-behind-a-flag as the
-  contingency if a host bug blocks landing.
-- Fix stale docs (mirror en/ja per CLAUDE.md, run `DocExamplesTest#fixDetailResults`):
-  - every `wasmtime serve` invocation gains `-W component-model-async-stackful=y
-    -W component-model-more-async-builtins=y` and LOSES `-S http=y` (the service
-    world's client import is host-provided by default):
-    `doc/{en,ja}/guides/http-handler.md` (x3 each), `doc/{en,ja}/compiling/wasm.md`,
-    `examples/net/*` headers, `examples/wit/keyvalue/README.md` + example headers.
-  - non-serve fetch runs under `wasmtime run -S http=y -W gc=y -W exceptions=y
-    -W component-model-more-async-builtins=y` (unchanged except docs must say the
-    transport failure now SIGNALS `rontolisp:wit-error` at await time -- nil is only
-    returned for a request that cannot be STARTED).
-  - `examples/wasmcloud/**`: re-verify against wasmCloud's experimental P3 support
-    (`cargo build -p wash --features wasip3`, targeting `0.3.0-rc-2026-03-15` --
-    check whether the RC interface versions link against our final-`@0.3.0`
-    components; https://wasmcloud.com/blog/wasi-p3-on-wasmcloud/) and update the
-    README with the build flag + status (the hard cutover was deliberate; wasmtime
-    46 still hosts 0.2 but rontolisp no longer emits it).
-  - `doc/{en,ja}/reference/functions/rontolisp-fetch.md:76-77` -- the "wasi:http@0.3
-    does not exist upstream yet" claim + the `.todo/02` pointer are now false.
-  - the "headers dropped" limitation (`CLAUDE.md:106`, `.kb/fetch-http.md`) is
-    REFUTED by the current `serve.lisp` (it reads+writes headers) -- correct it.
-  - drop the `-S http=y` note and the "wasi:io 0.2 island" language (the
-    component is uniformly 0.3 now); `doc/{en,ja}/compiling/wasm.md`.
-  - update `.kb/fetch-http.md`, `.kb/wasi-component.md`, `.kb/wit.md`.
-- Regenerate `--emit-wit` fixtures (`regen-wit.sh`) for the 0.3 `service`/
-  `middleware` worlds; add a `WitEmitterTest` case asserting the printer emits
-  `async func` + `stream<u8>`/`future<T>` canonically (not just a fixture regen).
-- Confirm `%stream-read`/`%stream-write`/`%future-read` survive default-on
-  `LibraryDefunPruner` + `--component` import member pruning.
+- **Vestigial 0.2 seam deleted.** `FUNC_FETCH_START/AWAIT` trap stubs +
+  `TYPE_FETCH_START/AWAIT` + every `FETCH_*_ADDR` cell + `REQ_HDR_BUF` removed
+  (`FUNC_START` is 12 now; type indices >= 31 shift by 2); `WasmFetchCompiler`
+  reduced to the validate/reject front-end (no codegen); `WasmPromiseRuntimeBuilder`
+  kind-0 fetch-root branch removed (kinds are 1=chain / 2=settled only);
+  `WasmFetchRuntimeBuilder` replaced by `WasmPlistRuntimeBuilder` (`_plist_get` is
+  the one survivor -- the component import compiler's record-plist lowering uses
+  it; `FUNC_FETCH_PLIST_GET` renamed `FUNC_PLIST_GET`).
+- **Four-backend E2E green.** Full suite 3694/0 (Docker integration incl. the
+  wasmtime-serve + curl round-trip tests, which ARE the serve test surface --
+  `httpHandlerServesUnderWasmtimeServe` etc. already exist); native-image
+  CiSpecE2eTest 820/0; manual verification on wasmtime 46.0.1: basic 4-backend,
+  fetch (interp/JVM/component with the documented flags), serve, serve+fetch
+  proxy, Preview-1 fetch = clear compile error. The feared wasmtime #12714
+  blocker did not materialize.
+- **Docs fixed (en/ja mirrored, DocExamplesTest 472/0).** Serve commands carry
+  `-W component-model-async-stackful=y -W component-model-more-async-builtins=y`
+  and lost `-S http=y`; fetch commands carry
+  `-W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y`
+  (exceptions=y because http.lisp's handler-case puts every fetch/serve program
+  in EH mode); error semantics (signal at await; nil = cannot start), the
+  incoming-handler -> `wasi:http/handler@0.3.0` rename, the fetch import list
+  (`wasi:http/{types,client}`), and the --emit-wit line counts (149 -> 216 with
+  fetch) updated across guides/reference/examples; `.kb/{fetch-http,
+  wasi-component,wit}.md` rewritten to the 0.3 reality; CLAUDE.md variant list
+  trimmed; the stale 576-KiB body cap and jco/wasmCloud-0.2-host claims removed.
+- **Fixtures + printer pins.** The `--emit-wit` fixtures were already 0.3 (Phase 2);
+  `WitOracleE2eTest` re-verified live against wasm-tools after the seam deletion.
+  Added `WitEmitterTest.serveVariantPrintsTheAsyncBodyTypes` and
+  `WitRoundTripTest.printsAsyncFuncAndStreamFutureCanonically` (direct printer
+  pins for `async func` + `stream<u8>`/`future<T>`, not just fixture bytes).
+- **Pruning confirmed.** http.lisp is not in `LibraryDefunPruner.prunableNames`
+  (never pruned) and `HttpLibrary` does its own reachability member filter;
+  pinned by `LibraryDefunPrunerTest.httpLispDefinitionsAreNeverPruned`.
+- **wasmCloud re-verification**: see the record in `examples/wasmcloud/README.md`
+  (updated this phase).
 
 ### Phase 4 (optional) -- externalize sockets, then adapter.wat, over the same capability
 

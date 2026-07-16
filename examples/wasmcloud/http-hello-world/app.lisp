@@ -12,9 +12,8 @@
 ;;     java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
 ;; Run (WASI component under wasmtime serve):
 ;;   rontolisp examples/wasmcloud/http-hello-world/app.lisp -o app.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y app.wasm
-;; Run (wasmCloud; .wash/config.yaml builds app.wasm and enables the gc proposal):
-;;   wash dev    # in this directory; serves on :8000
+;;     wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
+;; wasmCloud cannot run the wasi:http@0.3 component yet -- see ../README.md.
 ;; Talk to it with:
 ;;   curl http://127.0.0.1:8080/
 

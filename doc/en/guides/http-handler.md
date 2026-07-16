@@ -61,61 +61,32 @@ It also compiles to a **WASI HTTP component** that runs under
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y app.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
 ```
 
-There the module exports `wasi:http/incoming-handler` and the host owns the
-socket, so the `port` argument is ignored. Note the command needs none of the
-`component-model-async` flags that `wasmtime run` needs for a regular rontolisp
-component: the serve component is plain WASI 0.2, so its only non-default host
-requirements are the WebAssembly GC proposal (`-W gc=y`) and the exception-handling
-proposal (`-W exceptions=y`, which the Lisp-written HTTP glue uses to detect
-end-of-body).
+There the module exports `wasi:http/handler@0.3.0` (the async WASI 0.3 HTTP
+world) and the host owns the socket, so the `port` argument is ignored. The
+flags enable what the component actually uses: the WebAssembly GC proposal
+(`-W gc=y`), the exception-handling proposal (`-W exceptions=y`, which the
+Lisp-written HTTP glue uses to detect end-of-body), and the component-model
+async ABI (`-W component-model-async-stackful=y` — the handler runs as a
+stackful async task — plus `-W component-model-more-async-builtins=y` for the
+`stream<u8>`/`future<T>` body built-ins).
 
 ## Other WASI HTTP runtimes
 
-Because the component only asks its host for `wasi:http` 0.2 plus wasm-GC,
-wasmtime is not the only runtime that can serve it.
-
-**jco** (the Bytecode Alliance's JavaScript toolchain, running on Node.js/V8 —
-where wasm-GC is enabled by default) runs it with no extra configuration:
-
-```console
-$ npx @bytecodealliance/jco serve app.wasm --port 8080
-$ curl http://127.0.0.1:8080/hello
-Hello from rontolisp!
-GET /hello
-```
-
-**wasmCloud** (`wash` 2.x) runs it once the `gc` proposal is switched on. For
-`wash dev`, point the project's `.wash/config.yaml` at the prebuilt component
-and list the proposal (the no-op `build.command` skips wash's own build step):
-
-```yaml
-build:
-  command: "true"
-  component_path: app.wasm
-dev:
-  wasm_proposals:
-    - gc
-```
-
-```console
-$ wash dev
-$ curl http://127.0.0.1:8000/hello
-Hello from rontolisp!
-GET /hello
-```
-
-`wash host` exposes the same switch as `--wasm-proposal gc` (or the
-`WASH_WASM_PROPOSALS=gc` environment variable).
-
-**Spin** (`spin up`) cannot run the component yet: its embedded wasmtime does
-not enable the WebAssembly GC proposal that every rontolisp component needs,
-and it offers no flag to turn it on.
+The component asks its host for `wasi:http` **0.3** (async) plus wasm-GC, and
+today that combination is hosted by wasmtime 46+. **wasmCloud** ships
+experimental WASI P3 support behind a `wasip3` feature build of `wash`
+targeting a 0.3 release candidate — see
+[wasmCloud's announcement](https://wasmcloud.com/blog/wasi-p3-on-wasmcloud/);
+whether that RC build links final-`@0.3.0` components is not yet verified.
+**jco** and **Spin** cannot run it yet: jco does not implement the 0.3 async
+ABI, and Spin's embedded wasmtime does not enable the WebAssembly GC proposal
+that every rontolisp component needs.
 
 ## Query strings
 
@@ -160,13 +131,13 @@ backends, enabling the classic proxy / aggregator shape:
 ```
 
 On the WASI component backend the outgoing-request machinery rides along in
-the same component, so the only change is granting the host outbound HTTP —
-`-S http=y` for wasmtime (the `component-model-async` flags are still not
-needed):
+the same component — serve and serve+fetch are one component shape, importing
+`wasi:http/client@0.3.0`, which `wasmtime serve` provides by default (no
+`-S http=y` needed):
 
 ```console
 $ rontolisp proxy.lisp -o proxy.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -S http=y proxy.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y proxy.wasm
 ```
 
 A complete example is
@@ -206,7 +177,7 @@ component imports it alongside its fixed `wasi:http` surface:
 
 ```console
 $ rontolisp page-hits-server.lisp -o server.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y server.wasm
 ```
 
 The same source runs on the interpreter and the JVM, where a

@@ -20,9 +20,9 @@ JSONドキュメントとLispの値を相互変換します。
 > **バックエンドのサポート。** インタプリタとJVMコンパイル済みクラスはJDKの
 > `java.net.http.HttpClient` を使い、`fetch` が返った瞬間からリクエストは
 > バックグラウンドスレッドで走ります。WASMバックエンドは **componentモード
-> 専用** です (`--component`。`wasi:http@0.2` をimportするハイブリッド):
+> 専用** です (`--component`。非同期の `wasi:http@0.3.0` をimportします):
 > `fetch` はPreview 1 (コアモジュール) モードではコンパイルエラーになり、
-> fetchを使うcomponentは非同期フラグに加えて `-S http=y` を付けて実行する
+> fetchを使うcomponentは通常のフラグに加えて `-S http=y` を付けて実行する
 > 必要があります。**ブラウザプレイグラウンド** では本物のブラウザの
 > `fetch()` が実行され (CORSの制約を受けます)、その間プログラムは続行
 > します。プロミス操作 (`await` / `then` / `promisep`) とJSON関数は
@@ -71,7 +71,8 @@ alist)、`:body` (文字列) を指定できます:
 サポートされるメソッドは `GET`、`HEAD`、`POST`、`PUT`、`DELETE`、`OPTIONS`、
 `PATCH` です。バックエンドごとのバリデーションのタイミングとエラー時の
 挙動 (リクエストの失敗は `fetch` 時ではなく `await` 時に表面化します —
-インタプリタとJVMはエラーをシグナルし、WASMは `nil` を返します) は
+どのバックエンドもそこでエラーをシグナルし、`nil` が返るのはリクエストを
+*開始*すらできなかった場合だけです) は
 [fetch](../reference/functions/rontolisp-fetch.md)
 のリファレンスページを参照してください。
 
@@ -201,7 +202,7 @@ WASM componentにコンパイルして (wasmtime 46+。外向きHTTPを許可す
 
 ```bash
 rontolisp fetch-post.lisp -o fetch-post.wasm --component
-wasmtime run -W gc=y -W component-model-more-async-builtins=y -S http=y fetch-post.wasm
+wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y fetch-post.wasm
 ```
 
 HTTPではなく素のTCPを使う場合 — あるいは *サーバー* 側を実装する場合 —

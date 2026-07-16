@@ -20,9 +20,9 @@ convert between JSON documents and Lisp values.
 > **Backend support.** The interpreter and JVM-compiled classes use the JDK
 > `java.net.http.HttpClient`; the request runs on a background thread from the
 > moment `fetch` returns. The WASM backend is **component-only**
-> (`--component`, a hybrid that imports `wasi:http@0.2`): `fetch` is a compile
+> (`--component`, importing the async `wasi:http@0.3.0`): `fetch` is a compile
 > error in Preview 1 (core-module) mode, and a fetch component must run with
-> `-S http=y` on top of the async flags. In the **browser playground** `fetch`
+> `-S http=y` on top of the usual flags. In the **browser playground** `fetch`
 > runs the real browser `fetch()` (subject to CORS) while the program
 > continues. The promise operations (`await` / `then` / `promisep`) and the
 > JSON functions work on **every** backend and in every WASM mode — only
@@ -69,8 +69,8 @@ pairs) and `:body` (a string):
 The supported methods are `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS`
 and `PATCH`; see the [fetch](../reference/functions/rontolisp-fetch.md)
 reference page for validation timing and error behavior per backend (a failed
-request surfaces at `await`, not at `fetch` — the interpreter and JVM signal
-an error, WASM returns `nil`).
+request surfaces at `await`, not at `fetch` — every backend signals an error
+there; `nil` comes back only for a request that cannot be *started*).
 
 ## Promises
 
@@ -195,7 +195,7 @@ imports are unavailable):
 
 ```bash
 rontolisp fetch-post.lisp -o fetch-post.wasm --component
-wasmtime run -W gc=y -W component-model-more-async-builtins=y -S http=y fetch-post.wasm
+wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y fetch-post.wasm
 ```
 
 For raw TCP instead of HTTP — or to implement the *server* side — see the

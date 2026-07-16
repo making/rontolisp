@@ -71,17 +71,20 @@ JSON のレスポンスボディは
 
 - **インタプリタ** および **JVM**: JDK の `java.net.http.HttpClient` を使用します。
   `fetch` が返った瞬間からリクエストはバックグラウンドスレッドで実行されます。
-- **WASM**: コンポーネント専用で、**ハイブリッド** です。ベースの I/O は WASI 0.3
-  ですが、fetch は `wasi:http@0.2` + `wasi:io@0.2` をインポートします (非同期の
-  `wasi:http@0.3` はまだ上流に存在しません。`.todo/02-upgrade-fetch-to-wasi-http-0.3.md`
-  を参照)。プロミスは処理中の `wasi:http` レスポンスハンドルそのものなので、複数の
-  リクエストが実際に並行します。`--component` でコンパイルし、非同期フラグに加えて
-  `-S http=y` を付けて実行してください。ホストの `wasi:http` を持たない Preview 1
-  (コアモジュール) モードでは fetch はコンパイルエラーのままです。汎用のプロミス
-  操作 (`await`、`then`、`promisep`) はどのモードでもコンパイルできます。fetch は
+- **WASM**: コンポーネント専用で、非同期の `wasi:http@0.3.0` の上で動作します —
+  fetch は wit-import した `wasi:http/client@0.3.0` を呼ぶ通常の Lisp グルーであり、
+  コンポーネントは一様に WASI 0.3 です。プロミスは処理中の非同期 `client.send`
+  サブタスクをラップしているので、複数のリクエストが実際に並行します。
+  `--component` でコンパイルし、
+  `wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y`
+  で実行してください (wasmtime 46+。`-S http=y` はホストに `wasi:http` を提供させる
+  フラグです)。ホストの `wasi:http` を持たない Preview 1 (コアモジュール) モードでは
+  fetch はコンパイルエラーのままです。汎用のプロミス操作 (`await`、`then`、
+  `promisep`) はどのモードでもコンパイルできます。fetch は
   [`rontolisp:http-handler`](rontolisp-http-handler.md) の serve コンポーネント内
-  (プロキシ型のハンドラ) でも動作します。`wasmtime serve -W gc=y -W exceptions=y -S http=y` で
-  実行してください — この場合、非同期フラグは不要です。
+  (プロキシ型のハンドラ) でも動作します。`wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y` で
+  実行してください — serve ホストは `wasi:http/client` をデフォルトで提供するため、
+  `-S http=y` は不要です。
 - **ブラウザ プレイグラウンド**: 真に非同期です。インタプリタは Web Worker 内で
   実行され、`fetch` はリクエストをページのメインスレッドに引き渡します。メイン
   スレッドがブラウザの本物の `fetch()` を (CORS の制約の下で) 実行している間も
@@ -99,9 +102,9 @@ JSON のレスポンスボディは
   チェックできないため GET として扱われます。一方で実行時に計算される `:body` は通常
   どおり送信されます)。
 - 失敗したリクエスト (例えば接続拒否) はプロミスを await した時点で顕在化します —
-  JavaScript の `await` の reject と同じタイミングです。インタプリタと JVM ではエラーを
-  発生させ、WASM では `await` が `nil` を返します。WASM でリクエストの開始自体が
-  できない場合 (例えば不正な URL) は `fetch` がプロミスの代わりに `nil` を返し、
+  JavaScript の `await` の reject と同じタイミングで、どのバックエンドもそこで
+  エラーをシグナルします (WASM では `handler-case` で捕捉できる
+  `rontolisp:wit-error` コンディションです)。リクエストの*開始*自体ができない場合
+  (例えば不正な URL、インタプリタ/JVM での実行時計算のサポート外メソッド) は
+  `fetch` 自体がエラーになるか、WASM ではプロミスの代わりに `nil` を返します —
   `nil` を await すると `nil` になります。
-- WASM では、レスポンスボディには上限 (約 576 KiB) があり、非常に大きなプログラムは
-  レスポンスバッファが再利用する共有リニアメモリを使い果たす可能性があります。

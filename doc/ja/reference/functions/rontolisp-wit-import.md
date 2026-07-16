@@ -182,7 +182,7 @@ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
 
 ```bash
 rontolisp page-hits-server.lisp -o server.wasm --component
-wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y server.wasm
 ```
 
 その状態が実際に*残る*かどうかはコンポーネントではなくホストの都合です:
@@ -361,7 +361,7 @@ variant のどの case でもないキーワードを渡すのは**型エラー*
   `flags` は今のところどちらの向きでも渡りません。
 - `--component` では、コンポーネントが**自身の WASI 表面としてすでにインポートしている**
   インターフェースを束縛できません (その表面はプログラムが使う機能に応じて増えます:
-  `rontolisp:fetch` は `wasi:http` と `wasi:io` を、`rontolisp:tcp-*`
+  `rontolisp:fetch` は `wasi:http/types` と `wasi:http/client` を、`rontolisp:tcp-*`
   組み込みは `wasi:sockets/types` を追加します)。コンポーネントは同じインターフェースを
   2 回インポートできないため、これはインターフェース名を示すコンパイルエラーになります —
   組み込みと併用するのではなく、組み込みの*代わりに* WIT 束縛経由で使ってください。

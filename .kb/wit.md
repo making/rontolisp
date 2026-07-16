@@ -78,9 +78,8 @@ document (world imports + fixed export + reachability-pruned package definitions
 `WasiWitDefinitionsGenerator` (test sources) from per-variant fixtures under
 `src/test/resources/am/ik/rontolisp/codegen/wasm/component/wit/`; byte-identical
 package blocks shared by several variants are emitted once (the 0.3 GC trio shares
-cli/clocks/filesystem/random), per-variant projections (`wasi:http@0.2.0` /
-`wasi:io@0.2.0` — wasm-tools prunes to what each component reaches, so http-client=
-outgoing-only, http-server=incoming-only differ) get suffixed methods. `WitEmitter`
+cli/clocks/filesystem/random), per-variant projections (wasm-tools prunes each
+package to what the component reaches) get suffixed methods. `WitEmitter`
 appends each `rontolisp:wasm-export` Decl as a typed `export` world item and prints
 canonically. Oracles, strongest first:
 
@@ -92,9 +91,9 @@ canonically. Oracles, strongest first:
 The old `component/wit/*.wit` main resources are DELETED (the resource-config
 `WitEmitter` entry too); the fixtures are test resources. Regen is now three-phase
 (blobs -> jar -> fixtures -> generator); see `src/wasm-component/README.md`. The
-deliberate deviation is kept: the http-server fixtures restore incoming-handler's
-`use types.{incoming-request, response-outparam};` clause that `wasm-tools` drops
-(its own output does not re-parse); ours must stay consumable.
+deliberate deviation is kept: the http-server fixture restores the handler
+interface's `use types.{request, response, error-code};` clause that `wasm-tools`
+drops (its own output does not re-parse); ours must stay consumable.
 
 ## Variant renaming (same change, user-requested)
 
@@ -110,14 +109,15 @@ grew by accretion: "http" meant fetch because fetch came first, then the server 
 | `sock` | `sockets` |
 
 Applied to `WitEmitter.VARIANT_*`, fixture names, ALL blob artifacts
-(`import-block-http-server.bin`, `import-block-http-server-client.bin`,
-`adapter-http-server-p1.wasm`, `mem-http-client.wasm`, ...), the
-`src/wasm-component` sources (`core-http-server-client.wat`, `core-sockets.wat`, ...), regen
-scripts and docs. **Mode vocabulary is unchanged**: the `serve` boolean on
-`WasmLispCompiler`, `WasmServeComponentBuilder`, `buildServe` still name
-the `wasmtime serve` MODE; the kb rule is mode `serve` -> variant `http-server`
-(plain) / `http-server-client` (serve + fetch).
-Component output bytes are unchanged (integration suite + oracle re-run green).
+(`import-block-http-server.bin`, `adapter-http-server-p1.wasm`,
+`mem-http-client.wasm`, ...), the `src/wasm-component` sources
+(`core-http-server.wat`, `core-sockets.wat`, ...), regen scripts and docs.
+**Mode vocabulary is unchanged**: the `serve` boolean on `WasmLispCompiler`,
+`WasmServeComponentBuilder`, `buildServe` still name the `wasmtime serve` MODE.
+(HISTORICAL NOTE: the `http-client` variant died when fetch became a Lisp
+library over user imports, and the `http-server-client` variant died with the
+.todo/02 wasi:http@0.3 cutover -- serve and serve+fetch are ONE `http-server`
+variant now; mode `serve` -> variant `http-server`.)
 
 ## The settled type mapping (`compiler/WitTypeMapper`, todo 124's table)
 
@@ -229,7 +229,7 @@ Three call sites:
   `wit-export` directive. There is no merge — the component's exports and the `.wit` can
   never disagree.
 - `rontolisp:http-handler` + `wit-export` is a **compile error** (`RontoLispCli`, serve
-  mode): a serve-mode component's only export is `wasi:http/incoming-handler`, so a world
+  mode): a serve-mode component's only export is `wasi:http/handler@0.3.0`, so a world
   of function exports could not be honored. Say so rather than drop it.
 
 ### The contract checks
@@ -248,7 +248,7 @@ Every one names the WIT file and line (`WitLocations`), e.g.
   *correct* name authoritative, instead of the ad-hoc `:as` fix-up
 - an export that names an interface (`export foo/bar;` or an inline interface):
   `wit-export` implements plain function exports only (a program's
-  `wasi:http/incoming-handler` export comes from `rontolisp:http-handler`)
+  `wasi:http/handler@0.3.0` export comes from `rontolisp:http-handler`)
 - an inline `import name: func(...)` in the world — rejected, not silently dropped; it is
   the one import shape `rontolisp:wit-import` cannot bind either (it is not an interface),
   and the message says to declare the interface to call instead
@@ -311,8 +311,8 @@ What `--emit-wit` uniquely and genuinely reports is the **IMPORT side**, which
 `wit-export` never looks at (a component's WASI surface is the fixed adapter blob's, per
 variant). Measured on the greeter example: a **6-line** hand-written world compiles to a
 component whose real type is **149 lines** — 10 `wasi:*` imports + `export wasi:cli/run`
-around the single declared export; adding a `rontolisp:fetch` call makes it **325 lines**
-/ 15 imports (`wasi:io/{poll,error,streams}` + `wasi:http/{types,outgoing-handler}`),
+around the single declared export; adding a `rontolisp:fetch` call makes it **216 lines**
+/ 12 imports (+ `wasi:http/{types,client}@0.3.0`),
 and `rontolisp:tcp-*` adds `wasi:sockets`. Short of `wasm-tools`, `--emit-wit` is the
 only way to see it, and it is what a host / `jco` must consume. For a program WITHOUT a
 world (hand-written `wasm-export`, or an `:s-expr` export, which has no WIT spelling)
@@ -695,20 +695,17 @@ who exports the interface. `examples/wit/keyvalue/page-hits.lisp` runs against
 **wasmtime's own `wasi:keyvalue` implementation** (`-S keyvalue=y`), printing exactly what
 the interpreter's Lisp store and the JVM's `java.util.LinkedHashMap` store print.
 
-`rontolisp:fetch` AND `rontolisp:http-handler` are now both consumers of this path: on the
-non-serve `--component` route fetch is a Lisp-source library (`fetch.lisp`, spliced by
-`eval/FetchLibrary`) that `wit-import`s `wasi:http` / `wasi:io` and reaches this exact
-`canon lower` machinery, instead of the hand-written WAT `adapter-http-client.wat` blob it
-used to be (now deleted); and **plain serve** is its mirror (`serve.lisp`, spliced by
-`eval/ServeLibrary`, todo 135) that `wit-import`s the incoming half of `wasi:http/types` /
-`wasi:io` and EXPORTS `wasi:http/incoming-handler` — fetch imports the outgoing handler,
-serve exports the incoming one, both drive `wasi:http/types` from Lisp, and the
-hand-written `adapter-http-server.wat` is gone from that path (the serve builder lowers
-serve.lisp's imports FROM the block and lifts the core's `handle` wasm-export directly).
-That is the **self-hosting proof of the whole IDL bet** — the two core HTTP built-ins
-re-implemented over the same WIT pipeline any user interface arrives through, so a new host
-interface costs a `.wit` file rather than core code. Serve + fetch still keeps a WAT adapter
-(both halves' `wasi:http/types` imports would collide until reconciled); the split is in
+`rontolisp:fetch` AND `rontolisp:http-handler` are now both consumers of this path:
+both are ONE Lisp-source library (`http.lisp`, spliced by `eval/HttpLibrary` following
+the reachable half) over a wit-imported `wasi:http@0.3.0` surface — fetch calls
+`wasi:http/client.send` (an async-lowered `async func` member), serve implements
+`wasi:http/handler.handle` (a stackful async lift delivering its result via `canon
+task.return`), and both drive `wasi:http/types`' stream/future bodies through the
+alias-derived built-ins. No WAT http adapter remains on any path (the serve builder
+lowers http.lisp's imports FROM the block and lifts the core's `handle` wasm-export
+directly). That is the **self-hosting proof of the whole IDL bet** — the core HTTP
+built-ins re-implemented over the same WIT pipeline any user interface arrives
+through, so a new host interface costs a `.wit` file rather than core code. Details in
 `.kb/fetch-http.md`.
 
 ### The reference probe (do this before touching the encoders again)
@@ -757,22 +754,25 @@ are `WitCanonicalAbiTest`. Two things that probe taught, which no document says:
   shifts by the user-import counts. **Zero imports = zero shift = byte-identical**
   (stash-dance proven on base / sockets, with and without a `:string`
   wasm-export — and on both serve variants).
-- **`codegen/wasm/WasmServeComponentBuilder`** (todo 134 + 135 step 6) — ONE `build`
-  serves both serve shapes, selected by a `ServeBlock` descriptor (NARROW plain serve /
-  WIDE serve+fetch) chosen from the imports (`usesWideBlock`: a fetch-only iface present).
-  There is NO serve adapter and NO `buildHttp` any more: serve.lisp is the incoming glue,
-  fetch.lisp the outgoing glue (both spliced, their overlapping bindings merged +
-  deduplicated upstream), and the ONLY extra module is the preview1 bridge, instantiated
-  BEFORE the rontolisp core to satisfy its `wasi_snapshot_preview1` imports. Core instances
-  are mem(0) / bridge-w(1) / bridge(2) / one per fixed io/http iface (from core instance 3,
-  via `lowerServeIoFromBlock`, which lowers each bound function FROM the block and dedups by
-  field) / one per user iface / rontolisp core; the `ServeIo` cursors + `coreInstanceOf` map
-  make every downstream index (the own<> handle functype, the lift, the exported instance,
-  `appendUserImports`) relative, so nothing is hardcoded per shape. The serve core module
-  exports no `cabi_realloc` (`componentStringAbi` is `component && !serve`) and needs none —
-  the lower's realloc is the shared memory module's, core func 0, aliased there as
-  everywhere. `rejectAdapterImportCollisions` runs against the ADDITIONAL imports for the
-  variant `usesFetchSurface` picks (`http-server` / `http-server-client`). **The state a served handler cannot otherwise have**: a
+- **`codegen/wasm/WasmServeComponentBuilder`** (todos 134 + 135 + .todo/02 Phase 2) —
+  ONE `build` over ONE block (`import-block-http-server.bin`, from the 0.3
+  `uni-http-server` world; the NARROW/WIDE `ServeBlock` split died with the
+  `http-server-client` variant): serve and serve+fetch are the same shape, http.lisp's
+  two halves sharing the merged `wasi:http` bindings, and the ONLY extra module is the
+  preview1 bridge (`adapter-http-server-p1.wat`, rewritten over the 0.3 service
+  interfaces), instantiated BEFORE the rontolisp core to satisfy its
+  `wasi_snapshot_preview1` imports. Core instances are mem(0) / bridge-w(1) /
+  bridge(2) / one per fixed http iface (via `lowerServeIoFromBlock`, which emits every
+  `appendUserImports` member kind — sync decls, async calls, drops, alias built-ins,
+  task-returns, waitable builtins — against the block's instances and dedups by field)
+  / one per user iface / rontolisp core; the `ServeIo` cursors + `coreInstanceOf` map
+  make every downstream index (the handle functype, the async lift, the exported
+  instance, `appendUserImports`) relative, so nothing is hardcoded per shape. The
+  serve core module exports no `cabi_realloc` (`componentStringAbi` is
+  `component && !serve`) and needs none — the lower's realloc is the shared memory
+  module's, core func 0, aliased there as everywhere.
+  `rejectAdapterImportCollisions` runs against the ADDITIONAL imports.
+  **The state a served handler cannot otherwise have**: a
   `wasi:http` host recreates the instance per request, so its globals are not state; a
   store behind a WIT import is (`examples/wit/keyvalue/page-hits-server.lisp`). Whether
   that store SURVIVES is the host's, not ours: wasmtime's `-S keyvalue=y` provider is an
@@ -780,7 +780,6 @@ are `WitCanonicalAbiTest`. Two things that probe taught, which no document says:
   keyvalue-in-memory-data=k=41` reads back 41 on every request, so a counter answers 42
   forever), while wasmCloud's `wash dev` links an out-of-process provider and the same
   component counts 1, 2, 3.
-- **`codegen/wasm/WitImportWorldEmitter`** — the `--emit-wit` import side.
 - **`codegen/wasm/WitImportWorldEmitter`** — the `--emit-wit` import side.
 
 ### `result` = the envelope + a Lisp wrapper (NOT a codegen catch)

@@ -20,7 +20,7 @@ value model spans incoming and outgoing requests:
 On the **interpreter** and **JVM** backends `http-handler` starts a blocking
 embedded HTTP server on `port` (default `8080`, one virtual thread per request)
 and serves until the process is stopped (Ctrl-C). Compiled to a **WASI
-component** (`--component`) it instead exports `wasi:http/incoming-handler`, so
+component** (`--component`) it instead exports `wasi:http/handler@0.3.0`, so
 the module runs as a serverless HTTP component under `wasmtime serve` (the
 `port` argument is ignored — the host owns the socket).
 
@@ -60,7 +60,7 @@ Or compile it to a WASI HTTP component and serve it with `wasmtime serve`:
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y app.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -72,7 +72,7 @@ GET /hello
 **JVM** backend (the same blocking server; the compiled class needs the
 rontolisp executable JAR, `rontolisp-0.1.0-SNAPSHOT-exec.jar`, on the
 classpath) and the **WASI component** backend
-(`--component`, a `wasi:http/incoming-handler` component for `wasmtime serve`).
+(`--component`, a `wasi:http/handler@0.3.0` component for `wasmtime serve`).
 Request and response headers are marshalled on every backend, the WASI component
 included: the handler reads `:headers` (an alist of `(name . value)` string pairs)
 and any `:headers` in the response is written back. Inside a served
@@ -80,9 +80,9 @@ handler `random`, the time built-ins and `print` (to the host's stdout) work —
 they are bridged to `wasi:random` / `wasi:clocks` / `wasi:cli`, which every
 `wasi:http` host provides; `getenv` returns `nil` and file streams are
 unavailable. [`rontolisp:fetch`](rontolisp-fetch.md) also works inside a
-served handler (the component then additionally imports
-`wasi:http/outgoing-handler`), so proxy-style handlers run on every backend —
-grant the host outbound HTTP, e.g. `wasmtime serve -W gc=y -W exceptions=y -S http=y`.
+served handler — serve and serve+fetch are one component shape, whose
+`wasi:http/client@0.3.0` import `wasmtime serve` provides by default — so
+proxy-style handlers run on every backend with the same serve command.
 
 A handler may also call a WIT interface of its own with
 [`rontolisp:wit-import`](rontolisp-wit-import.md), which the served component
@@ -91,12 +91,12 @@ keeps **state**: a `wasi:http` host instantiates the component afresh for every
 request, so a global hash table reads back empty every time, while a
 `wasi:keyvalue` store lives outside it.
 
-The serve component is plain WASI 0.2, so it is not tied to wasmtime: any host
-that serves `wasi:http` 0.2 and enables the WebAssembly GC proposal can run it —
-jco (`jco serve` on Node.js, where wasm-GC is on by default) and wasmCloud
-(`wash` with the `gc` wasm proposal enabled) both work. Spin (`spin up`) cannot
-run the component yet: Spin's embedded wasmtime does not enable the GC proposal
-and offers no flag to turn it on.
+The serve component targets the async `wasi:http@0.3.0` (`service` world), and
+today wasmtime 46+ is the host that serves it. wasmCloud ships experimental
+WASI P3 support (a `wasip3`-feature `wash` build targeting a 0.3 release
+candidate — interop with final-`@0.3.0` components is not yet verified); jco
+does not implement the 0.3 async ABI, and Spin's embedded wasmtime does not
+enable the WebAssembly GC proposal that every rontolisp component needs.
 
 See the [Serving HTTP guide](../../guides/http-handler.md) for the full
 example and the per-runtime commands.

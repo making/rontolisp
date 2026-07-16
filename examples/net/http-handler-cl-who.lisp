@@ -15,8 +15,8 @@
 ;;
 ;; Supported on the interpreter and JVM backends (a blocking server on :8080,
 ;; one virtual thread per request) and the WASI component backend (--component),
-;; which compiles the handler into a plain WASI 0.2 wasi:http/incoming-handler
-;; component servable by any wasi:http host with the wasm-GC proposal enabled.
+;; which compiles the handler into an async wasi:http/handler@0.3.0 component
+;; served by wasmtime 46+.
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   rontolisp examples/net/http-handler-cl-who.lisp --system-path src/test/resources/cl-who
@@ -25,7 +25,7 @@
 ;;     java -cp target/rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
 ;; Run (WASI component under wasmtime serve):
 ;;   rontolisp examples/net/http-handler-cl-who.lisp -o app.wasm --component --system-path src/test/resources/cl-who && \
-;;     wasmtime serve -W gc=y -W exceptions=y app.wasm
+;;     wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
 ;; Talk to it with:  curl http://127.0.0.1:8080/world
 
 (asdf:load-system :cl-who)

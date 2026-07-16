@@ -254,9 +254,9 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.was
 ```
 
 - `random` は `wasi:random@0.3.0` から本物のエントロピーを引きます(Preview 1 はホストの `random_get` を使います)。そのため `(random N)` は実行ごとに異なります。`get-universal-time` / `get-internal-real-time` / `get-internal-run-time` は `wasi:clocks@0.3.0`(`system-clock`/`monotonic-clock`)を読み、`getenv` は `wasi:cli/environment@0.3.0` を読みます。
-- 送信 HTTP(`rontolisp:fetch` と `rontolisp:await` / `rontolisp:then` / `rontolisp:promisep` のプロミス操作)はコンポーネントモードで動作し、真の非同期性も含みます: `fetch` はリクエストを送って(処理中の `wasi:http` レスポンスハンドルをラップした)プロミスを即座に返すため、`await` が各リクエストをブロックする前に複数のリクエストを重ねられます。プロミス操作自体はどのモードでもコンパイルできます。コンポーネント専用なのは `fetch` だけです。これは**ハイブリッド**です: ベースの I/O は WASI 0.3 のまま、fetch 自体は `wasi:http@0.2` + `wasi:io@0.2` をインポートします(非同期の `wasi:http@0.3` はまだ上流に存在しません)。fetch コンポーネントは非同期フラグに加えて `-S http=y` で実行してください。fetch を使わないコンポーネントは `wasi:http` をインポートしないため、`-S http` は不要です。
+- 送信 HTTP(`rontolisp:fetch` と `rontolisp:await` / `rontolisp:then` / `rontolisp:promisep` のプロミス操作)はコンポーネントモードで動作し、真の非同期性も含みます: `fetch` はリクエストを送って(処理中の `wasi:http` レスポンスハンドルをラップした)プロミスを即座に返すため、`await` が各リクエストをブロックする前に複数のリクエストを重ねられます。プロミス操作自体はどのモードでもコンパイルできます。コンポーネント専用なのは `fetch` だけです。fetch は非同期の `wasi:http@0.3.0`(`wasi:http/types` + `wasi:http/client`)をインポートします — コンポーネントの他の部分と同じく一様に WASI 0.3 です。fetch コンポーネントは通常のフラグに加えて `-S http=y`(ホストに `wasi:http` を提供させるフラグ)で実行してください。fetch を使わないコンポーネントは `wasi:http` をインポートしないため、`-S http` は不要です。トランスポートの失敗(接続拒否、名前解決不能)はどのバックエンドでも `await` 時に `rontolisp:wit-error` をシグナルします。`nil` が返るのはリクエストを開始できなかった場合だけです。
 - TCP ソケット(`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port`)はコンポーネントモードで `wasi:sockets@0.3.0` の上で動作します(ネイティブに WASI 0.3 — 0.2 ハイブリッドではありません)。ソケットは双方向ストリームハンドルなので、`read-line` / `write-line` / `read-byte` / `write-byte` / `close` が直接使えます。ソケットコンポーネントは非同期フラグに加えて `-S tcp=y -S inherit-network=y` で実行してください。これらがなくてもコンポーネントは起動しますが、すべてのソケット操作が失敗して `nil` を返します。ホストは IPv4 リテラルでなければならず(ホスト名解決はまだありません)、`rontolisp:fetch` と tcp 関数はまだ 1 つのコンポーネントで組み合わせられません。
-- それ以外の点では、コンパイルされた Lisp はサポートされる機能について Preview 1 出力と同一に振る舞います。受信 HTTP のサービング(`rontolisp:http-handler`)もコンポーネントにコンパイルされますが、別種のコンポーネント(`wasi:http/incoming-handler`)で、`wasmtime serve` のもとで動きます — [HTTP ハンドラーガイド](../guides/http-handler.md)を参照してください。
+- それ以外の点では、コンパイルされた Lisp はサポートされる機能について Preview 1 出力と同一に振る舞います。受信 HTTP のサービング(`rontolisp:http-handler`)もコンポーネントにコンパイルされますが、別種のコンポーネント(`wasi:http/handler@0.3.0` をエクスポート)で、`wasmtime serve` のもとで動きます — [HTTP ハンドラーガイド](../guides/http-handler.md)を参照してください。
 
 ### コンポーネントモデル関数エクスポート(wasm-export)
 
@@ -306,7 +306,7 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --invoke 'greet("�
 
 ```bash
 rontolisp status.lisp --component -o status.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y -S http=y \
+wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y \
   --invoke 'fetch-status("https://httpbin.org/status/204")' status.wasm
 # "fetching"
 # 204
@@ -354,7 +354,7 @@ npx @bytecodealliance/jco types sumsq.wit -o types/
 # types/sumsq.d.ts: export function sumsquared(p0: number, p1: number): number;
 ```
 
-world のインポートはビルドのバリアントに従います(プレーン、`rontolisp:fetch`、`rontolisp:tcp-*`、`rontolisp:http-handler`。[`--no-gc --component`](#compact-component-output---no-gc---component) では world はインポートなしになり、プログラムが印字するときは 0.2 stdio のインポートを持ちます)。`:async t` エクスポートは `async func` として描画され、`rontolisp:http-handler` ビルドは `run` の代わりに `wasi:http/incoming-handler` をエクスポートします。`--component` なしの `--emit-wit` はコンパイルエラーです — コアモジュールには記述すべき WIT レベルの表面がありません。
+world のインポートはビルドのバリアントに従います(プレーン、`rontolisp:fetch`、`rontolisp:tcp-*`、`rontolisp:http-handler`。[`--no-gc --component`](#compact-component-output---no-gc---component) では world はインポートなしになり、プログラムが印字するときは 0.2 stdio のインポートを持ちます)。`:async t` エクスポートは `async func` として描画され、`rontolisp:http-handler` ビルドは `run` の代わりに `wasi:http/handler@0.3.0` をエクスポートします。`--component` なしの `--emit-wit` はコンパイルエラーです — コアモジュールには記述すべき WIT レベルの表面がありません。
 
 ### `--emit-wit` は何のためにあるか
 
@@ -362,7 +362,7 @@ world のインポートはビルドのバリアントに従います(プレー�
 
 **world を持たないプログラム** — `rontolisp:wasm-export` で手書きしたエクスポート、あるいは WIT の綴り自体が存在しない `:s-expr` エクスポート — には `.wit` がどこにもありません。上のとおり、`--emit-wit` がそれを得る唯一の手段です。
 
-**world を持つプログラム**([`wit-export`](#implementing-a-wit-world-wit-export))は、エクスポートについてはすでに書き下しています。書き下していないのはコンポーネントの**インポート**であり、そしてそちらの方が大きな半分です: `wit-export` が読むのは world の `export` 項目だけです。コンポーネントの WASI 表面は world からではなく、ビルドがリンクする固定のアダプタ blob から来るからです。[次節](#implementing-a-wit-world-wit-export)の 6 行の `wit/greeter.wit` は、実際の型が **149 行**あるコンポーネントにコンパイルされます — 宣言したただ 1 つの `greet` のまわりに、10 個の `wasi:*` インポートと `export wasi:cli/run@0.3.0` が付きます。その `greet` から `rontolisp:fetch` を呼べば、ビルドはさらに 5 つのインポート(`wasi:io/poll`、`wasi:io/error`、`wasi:io/streams`、`wasi:http/types`、`wasi:http/outgoing-handler`)を黙って追加し、**325 行**になります。`rontolisp:tcp-*` も同様に `wasi:sockets` を引き込みます。`wasm-tools` を入れてバイナリを内省するのでない限り、自分が実際に何をビルドしたのかを見る手段は `--emit-wit` だけです — そしてそれこそが、ホストや `jco` がそれらのインポートを*供給する*ために必要とするものです。
+**world を持つプログラム**([`wit-export`](#implementing-a-wit-world-wit-export))は、エクスポートについてはすでに書き下しています。書き下していないのはコンポーネントの**インポート**であり、そしてそちらの方が大きな半分です: `wit-export` が読むのは world の `export` 項目だけです。コンポーネントの WASI 表面は world からではなく、ビルドがリンクする固定のアダプタ blob から来るからです。[次節](#implementing-a-wit-world-wit-export)の 6 行の `wit/greeter.wit` は、実際の型が **149 行**あるコンポーネントにコンパイルされます — 宣言したただ 1 つの `greet` のまわりに、10 個の `wasi:*` インポートと `export wasi:cli/run@0.3.0` が付きます。その `greet` から `rontolisp:fetch` を呼べば、ビルドはさらに 2 つのインポート(`wasi:http/types`、`wasi:http/client`)を黙って追加し、**216 行**になります。`rontolisp:tcp-*` も同様に `wasi:sockets` を引き込みます。`wasm-tools` を入れてバイナリを内省するのでない限り、自分が実際に何をビルドしたのかを見る手段は `--emit-wit` だけです — そしてそれこそが、ホストや `jco` がそれらのインポートを*供給する*ために必要とするものです。
 
 一方、world を持つプログラムにとって `--emit-wit` が**そうではない**もの、それはそのプログラムの乖離チェックです。エクスポート行は構成上の不動点です: world が `rontolisp:wasm-export` ディレクティブを生み、それがコンポーネントの関数型を生み、それがそのまま印字されて戻ってくる — 双方向に 1 対 1 で対応する境界型の集合(`s32`、`s64`、`f64`、`bool`、`string`)の上での話です。渡した world と食い違って出てくることはありえません。したがって `.wit` を再出力して CI で差分を取るのは、*rontolisp 側の*型マッピングに対するリグレッションテストであって(安価であり、続ける価値もあります)、あなたのソースに対するチェックではありません。乖離したプログラムを捕まえるのは `wit-export` 自身であり、それはすでにすべてのバックエンド(素のインタプリタ実行を含む)で走っています。これは過渡的な状態です: world がプログラムの束縛するインポートも宣言できるようになれば、出力される WIT は真に双方向の契約になります。
 
@@ -419,7 +419,7 @@ export greet: func(who: string) -> string;
 現在の制限:
 
 - 束縛されるのは world の**エクスポート**側だけです。`import` 項目は無視され(コンポーネントの WASI インポートは、それが構築される固定のアダプタ表面から来ます — それを見る手段が [`--emit-wit`](#emitting-the-wit-world---emit-wit) です)、インラインの `import name: func(...)` は黙って捨てるのではなく拒否されます。プログラムが呼び出す関数は、[`wit-import`](#importing-a-wit-interface-wit-import) でインターフェースから束縛します(あるいは `rontolisp:wasm-import` で手書きします)。
-- 実装できるのは素の関数エクスポートだけです。インターフェースをエクスポートする world はエラーであり、`rontolisp:http-handler` のプログラムは world をまったく使えません(serve モードのコンポーネントの唯一のエクスポートは `wasi:http/incoming-handler` です)。
+- 実装できるのは素の関数エクスポートだけです。インターフェースをエクスポートする world はエラーであり、`rontolisp:http-handler` のプログラムは world をまったく使えません(serve モードのコンポーネントの唯一のエクスポートは `wasi:http/handler@0.3.0` です)。
 - `:s-expr` に対応する WIT の綴りはないため、任意の S 式を境界で受け渡すエクスポートには引き続き手書きの `rontolisp:wasm-export` が必要です。
 - インタプリタではディレクティブは順に評価され、それまでに定義された関数しか見えません。ファイルの末尾に置いてください。
 
@@ -552,7 +552,7 @@ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
 
 いまだにローワリングできない唯一の形は **`list<T>` の引数**です (`list<u8>` はバイト文字列として渡ります)。引数はフラット化されますが、リストは代わりに canonical な配列としてリニアメモリに書き込む必要があるためです。これは WIT の行を示すコンパイルエラーになります。`flags` は今のところどちらの向きでも渡りません。
 
-コンポーネントが束縛**できない**インターフェースが 1 つあります: そのコンポーネントが自身の WASI 表面としてすでにインポートしているものです。しかもその表面はプログラムが使う機能に応じて増えます (`rontolisp:fetch` は `wasi:http` と `wasi:io` を、`rontolisp:tcp-*` 組み込みは `wasi:sockets/types` を引き込みます)。コンポーネントは同じインターフェースを 2 回インポートできないため、これもコンパイルエラーです: 組み込みと併用するのではなく、組み込みの*代わりに* WIT 束縛経由で使ってください。
+コンポーネントが束縛**できない**インターフェースが 1 つあります: そのコンポーネントが自身の WASI 表面としてすでにインポートしているものです。しかもその表面はプログラムが使う機能に応じて増えます (`rontolisp:fetch` は `wasi:http/types` と `wasi:http/client` を、`rontolisp:tcp-*` 組み込みは `wasi:sockets/types` を引き込みます)。コンポーネントは同じインターフェースを 2 回インポートできないため、これもコンパイルエラーです: 組み込みと併用するのではなく、組み込みの*代わりに* WIT 束縛経由で使ってください。
 
 コンポーネントが**インポートするのはプログラムが実際に呼ぶ関数だけ**です (この経路にはコアのツリーシェイカーがないため、使われないインターフェースメンバーはインポート自体から落とされます。`--no-prune` ですべて残せます)。[`--emit-wit`](#emit-wit) はその刈り込まれたインターフェースをコンポーネントの world に書き出し、`wasm-tools component wit` の出力とバイト単位で一致します。何もインポートしないコンポーネントは、この機能が存在しなかった頃のビルドとバイト単位で同一です。
 
@@ -564,11 +564,11 @@ wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y \
 
 ```bash
 rontolisp page-hits-server.lisp -o server.wasm --component
-wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y server.wasm
 curl http://127.0.0.1:8080/index
 ```
 
-そのカウントが実際に*残る*かどうかはコンポーネントではなくホストの都合です: wasmtime 組み込みのキーバリュープロバイダはインスタンスごとに作り直されるインメモリストアなので (`wasmtime serve` の下ではリクエストごと)、カウントは残りません。プロセス外のプロバイダをリンクするホストなら残ります — wasmCloud (`wash dev`) では同じコンポーネントが 1、2、3 と数えます。serve されるコンポーネントが束縛**できない**インターフェースは、自身の表面がすでにインポートしているものです: `wasi:http/types`、`wasi:io/streams`、`wasi:cli/stdout`、`wasi:clocks/*`、`wasi:random/random` (ハンドラが `rontolisp:fetch` も使う場合は `wasi:http/outgoing-handler` も)。
+そのカウントが実際に*残る*かどうかはコンポーネントではなくホストの都合です: wasmtime 組み込みのキーバリュープロバイダはインスタンスごとに作り直されるインメモリストアなので (`wasmtime serve` の下ではリクエストごと)、カウントは残りません。プロセス外のプロバイダをリンクするホストなら残ります — wasmCloud (`wash dev`) では同じコンポーネントが 1、2、3 と数えます。serve されるコンポーネントが束縛**できない**インターフェースは、自身の表面がすでにインポートしているものです: `wasi:http/types`、`wasi:http/client`、`wasi:cli/types`、`wasi:cli/stdout`、`wasi:cli/stderr`、`wasi:clocks/*`、`wasi:random/random`。
 
 完全な例は [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue) にあります。
 

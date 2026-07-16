@@ -60,62 +60,34 @@ GET /hello
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y app.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
 ```
 
-この場合モジュールは `wasi:http/incoming-handler` をエクスポートし、ソケットは
-ホストが所有するため `port` 引数は無視されます。通常の rontolisp コンポーネントを
-`wasmtime run` で実行する際に必要な `component-model-async` 系のフラグが一切
-不要な点に注目してください。serve コンポーネントは純粋な WASI 0.2 であり、
-ホストに要求するデフォルト外の機能は WebAssembly GC プロポーザル（`-W gc=y`）と
-例外処理プロポーザル（`-W exceptions=y`。Lisp で書かれた HTTP グルーがボディの
-終端検出に使用します）だけです。
+この場合モジュールは `wasi:http/handler@0.3.0`（非同期の WASI 0.3 HTTP
+world）をエクスポートし、ソケットはホストが所有するため `port` 引数は無視
+されます。フラグはコンポーネントが実際に使う機能を有効化するものです:
+WebAssembly GC プロポーザル（`-W gc=y`）、例外処理プロポーザル
+（`-W exceptions=y`。Lisp で書かれた HTTP グルーがボディの終端検出に使用
+します）、そしてコンポーネントモデルの非同期 ABI
+（`-W component-model-async-stackful=y` — ハンドラはスタックフルな非同期
+タスクとして実行されます — と、`stream<u8>`/`future<T>` のボディ用組み込みの
+ための `-W component-model-more-async-builtins=y`）です。
 
 ## その他の WASI HTTP ランタイム
 
-このコンポーネントがホストに要求するのは `wasi:http` 0.2 と wasm-GC だけなので、
-実行できるランタイムは wasmtime に限りません。
-
-**jco**（Bytecode Alliance の JavaScript ツールチェーン。Node.js/V8 上で動作し、
-V8 では wasm-GC がデフォルトで有効）は追加設定なしで実行できます。
-
-```console
-$ npx @bytecodealliance/jco serve app.wasm --port 8080
-$ curl http://127.0.0.1:8080/hello
-Hello from rontolisp!
-GET /hello
-```
-
-**wasmCloud**（`wash` 2.x）は `gc` プロポーザルを有効化すれば実行できます。
-`wash dev` の場合、プロジェクトの `.wash/config.yaml` でビルド済みコンポーネントを
-指定し、プロポーザルを列挙します（no-op の `build.command` で wash 自身の
-ビルドステップをスキップします）。
-
-```yaml
-build:
-  command: "true"
-  component_path: app.wasm
-dev:
-  wasm_proposals:
-    - gc
-```
-
-```console
-$ wash dev
-$ curl http://127.0.0.1:8000/hello
-Hello from rontolisp!
-GET /hello
-```
-
-`wash host` にも同じスイッチが `--wasm-proposal gc`（または環境変数
-`WASH_WASM_PROPOSALS=gc`）として用意されています。
-
-**Spin**（`spin up`）ではまだ動作しません。組み込み wasmtime が、rontolisp の
-すべてのコンポーネントが必要とする WebAssembly GC プロポーザルを有効化しておらず、
-有効化するフラグも提供されていないためです。
+このコンポーネントがホストに要求するのは `wasi:http` **0.3**（非同期）と
+wasm-GC で、今日この組み合わせをホストするのは wasmtime 46+ です。
+**wasmCloud** は、0.3 のリリース候補をターゲットとした `wash` の `wasip3`
+フィーチャービルドの背後に実験的な WASI P3 サポートを持っています —
+[wasmCloud のアナウンス](https://wasmcloud.com/blog/wasi-p3-on-wasmcloud/)
+を参照してください。その RC ビルドが final-`@0.3.0` のコンポーネントと
+リンクできるかはまだ検証されていません。**jco** と **Spin** ではまだ動作
+しません: jco は 0.3 の非同期 ABI を実装しておらず、Spin の組み込み wasmtime
+は rontolisp のすべてのコンポーネントが必要とする WebAssembly GC
+プロポーザルを有効化していません。
 
 ## クエリ文字列
 
@@ -161,13 +133,13 @@ Hello, world!
 ```
 
 WASI コンポーネントバックエンドでは、外向きリクエストの機構も同じコンポーネント
-に同梱されるため、変更点はホストに外向き HTTP を許可することだけです —
-wasmtime では `-S http=y` を付けます（`component-model-async` 系のフラグは
-引き続き不要です）:
+に同梱されます — serve と serve+fetch は 1 つのコンポーネント形状で、
+インポートする `wasi:http/client@0.3.0` は `wasmtime serve` がデフォルトで
+提供します（`-S http=y` は不要です）:
 
 ```console
 $ rontolisp proxy.lisp -o proxy.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -S http=y proxy.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y proxy.wasm
 ```
 
 完全な例は
@@ -207,7 +179,7 @@ JSON で応答します。
 
 ```console
 $ rontolisp page-hits-server.lisp -o server.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y server.wasm
 ```
 
 同じソースがインタープリタと JVM でも動きます。そこでは Lisp で書かれた

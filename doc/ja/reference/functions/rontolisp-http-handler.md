@@ -21,7 +21,7 @@ Lisp のハンドラ関数で HTTP リクエストを処理します。`handler`
 （デフォルト `8080`、リクエストごとに 1 つの仮想スレッド）でブロッキングの
 組み込み HTTP サーバを起動し、プロセスが停止されるまで（Ctrl-C）処理を続けます。
 **WASI コンポーネント**（`--component`）にコンパイルすると、代わりに
-`wasi:http/incoming-handler` をエクスポートし、`wasmtime serve` 上でサーバレス
+`wasi:http/handler@0.3.0` をエクスポートし、`wasmtime serve` 上でサーバレス
 HTTP コンポーネントとして動作します（`port` 引数は無視されます。ソケットは
 ホストが所有します）。
 
@@ -60,7 +60,7 @@ GET /hello
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
-$ wasmtime serve -W gc=y -W exceptions=y app.wasm
+$ wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
 $ curl http://127.0.0.1:8080/hello
 Hello from rontolisp!
 GET /hello
@@ -72,7 +72,7 @@ GET /hello
 **JVM** バックエンド（同じブロッキングサーバ。生成クラスの実行には rontolisp の
 実行可能 JAR `rontolisp-0.1.0-SNAPSHOT-exec.jar` がクラスパスに必要）、
 **WASI コンポーネント** バックエンド
-（`--component`、`wasmtime serve` 用の `wasi:http/incoming-handler`
+（`--component`、`wasmtime serve` 用の `wasi:http/handler@0.3.0`
 コンポーネント）で動作します。リクエスト／レスポンスのヘッダは WASI
 コンポーネントを含むすべてのバックエンドで受け渡しされます。ハンドラは
 `:headers`（`(名前 . 値)` という文字列ペアの連想リスト）を読み取り、
@@ -82,9 +82,10 @@ serve コンポーネントのハンドラ内でも `random`、時刻系の組�
 ホストが提供する `wasi:random` / `wasi:clocks` / `wasi:cli` へブリッジ
 されるためです。`getenv` は `nil` を返し、ファイルストリームは利用できません。
 [`rontolisp:fetch`](rontolisp-fetch.md) もサービング中のハンドラ内で動作します
-（この場合コンポーネントは追加で `wasi:http/outgoing-handler` をインポート
-します）。プロキシ型のハンドラはすべてのバックエンドで動作します — ホストに
-外向き HTTP を許可してください（例: `wasmtime serve -W gc=y -W exceptions=y -S http=y`）。
+— serve と serve+fetch は 1 つのコンポーネント形状で、その
+`wasi:http/client@0.3.0` インポートは `wasmtime serve` がデフォルトで提供します
+— したがってプロキシ型のハンドラも同じ serve コマンドですべてのバックエンドで
+動作します。
 
 ハンドラは [`rontolisp:wit-import`](rontolisp-wit-import.md)
 で自前の WIT インターフェースを呼ぶこともできます。serve されるコンポーネントは
@@ -93,12 +94,13 @@ serve コンポーネントのハンドラ内でも `random`、時刻系の組�
 コンポーネントを新しくインスタンス化するので、グローバルなハッシュテーブルは
 毎回空で読み戻されますが、`wasi:keyvalue` のストアはその外側に生きています。
 
-serve コンポーネントは純粋な WASI 0.2 なので wasmtime 専用ではありません。
-`wasi:http` 0.2 を提供し WebAssembly GC プロポーザルを有効化できるホストであれば
-実行できます — jco（Node.js 上の `jco serve`。V8 では wasm-GC がデフォルトで有効）
-と wasmCloud（`gc` wasm プロポーザルを有効化した `wash`）のどちらでも動作します。
-Spin（`spin up`）ではまだ動作しません。Spin の組み込み wasmtime は GC プロポーザルを
-有効化しておらず、有効化するフラグも提供されていないためです。
+serve コンポーネントは非同期の `wasi:http@0.3.0`（`service` world）を
+ターゲットとし、今日それをホストするのは wasmtime 46+ です。wasmCloud は
+実験的な WASI P3 サポートを持っています（0.3 のリリース候補をターゲットとした
+`wash` の `wasip3` フィーチャービルド — final-`@0.3.0` コンポーネントとの
+相互運用はまだ検証されていません）。jco は 0.3 の非同期 ABI を実装しておらず、
+Spin の組み込み wasmtime は rontolisp のすべてのコンポーネントが必要とする
+WebAssembly GC プロポーザルを有効化していません。
 
 完全な例とランタイムごとのコマンドは
 [HTTP サーバガイド](../../guides/http-handler.md)を参照してください。

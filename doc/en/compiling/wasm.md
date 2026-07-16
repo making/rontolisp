@@ -428,11 +428,14 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.was
   returns a promise (wrapping the in-flight `wasi:http` response handle)
   immediately, so several requests can overlap before `await` blocks on each.
   The promise operations themselves compile in every mode; only `fetch` is
-  component-only. It is a **hybrid**: the base I/O stays WASI 0.3 while fetch
-  itself imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does
-  not exist upstream yet). Run a fetch component with `-S http=y` in addition
-  to the async flags. Non-fetch components do not import `wasi:http`, so they
-  do not need `-S http`.
+  component-only. fetch imports the async `wasi:http@0.3.0`
+  (`wasi:http/types` + `wasi:http/client`) — uniformly WASI 0.3, like the rest
+  of the component. Run a fetch component with `-S http=y` (which makes the
+  host provide `wasi:http`) in addition to the usual flags. Non-fetch
+  components do not import `wasi:http`, so they do not need `-S http`. A
+  transport failure (refused connection, unresolvable host) signals
+  `rontolisp:wit-error` at `await` time on every backend; `nil` comes back
+  only for a request that cannot be started.
 - TCP sockets (`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` /
   `tcp-local-port`) work in component mode over `wasi:sockets@0.3.0` (natively
   WASI 0.3 — no 0.2 hybrid). A socket is a bidirectional stream handle, so
@@ -444,8 +447,8 @@ wasmtime run -W gc=y -W component-model-more-async-builtins=y --dir . fileio.was
   the tcp functions in one component yet.
 - The compiled Lisp otherwise behaves identically to the Preview 1 output for
   the supported features. Serving incoming HTTP (`rontolisp:http-handler`) also
-  compiles to a component, but a different kind (`wasi:http/incoming-handler`)
-  run under `wasmtime serve` — see the
+  compiles to a component, but a different kind (exporting
+  `wasi:http/handler@0.3.0`) run under `wasmtime serve` — see the
   [HTTP handler guide](../guides/http-handler.md).
 
 ### Component-model Function Exports (wasm-export)
@@ -517,7 +520,7 @@ stackful-async shape as the `run` entry — and I/O inside it works.
 
 ```bash
 rontolisp status.lisp --component -o status.wasm
-wasmtime run -W gc=y -W component-model-more-async-builtins=y -S http=y \
+wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y \
   --invoke 'fetch-status("https://httpbin.org/status/204")' status.wasm
 # "fetching"
 # 204
@@ -596,7 +599,7 @@ The world's imports follow the build variant (plain, `rontolisp:fetch`,
 [`--no-gc --component`](#compact-component-output---no-gc---component) the
 world is import-free, or carries the 0.2 stdio imports when the program
 prints), an `:async t` export is rendered as `async func`, and a
-`rontolisp:http-handler` build exports `wasi:http/incoming-handler` instead of
+`rontolisp:http-handler` build exports `wasi:http/handler@0.3.0` instead of
 `run`. `--emit-wit` without `--component` is a compile error — a core module has no
 WIT-level surface to describe.
 
@@ -617,10 +620,9 @@ adapter blob the build links, not from the world. The 6-line `wit/greeter.wit` o
 the [next section](#implementing-a-wit-world-wit-export) compiles to a component
 whose real type is **149 lines** — ten `wasi:*` imports and
 `export wasi:cli/run@0.3.0` wrapped around the one `greet` you declared. Let that
-same `greet` call `rontolisp:fetch` and the build silently adds five more imports
-(`wasi:io/poll`, `wasi:io/error`, `wasi:io/streams`, `wasi:http/types`,
-`wasi:http/outgoing-handler`), for **325 lines**; `rontolisp:tcp-*` pulls in
-`wasi:sockets` the same way. Short of installing `wasm-tools` and introspecting
+same `greet` call `rontolisp:fetch` and the build silently adds two more imports
+(`wasi:http/types`, `wasi:http/client`), for **216 lines**; `rontolisp:tcp-*`
+pulls in `wasi:sockets` the same way. Short of installing `wasm-tools` and introspecting
 the binary, `--emit-wit` is the only way to see what you actually built — and it
 is precisely what a host, or `jco`, needs in order to *supply* those imports.
 
@@ -728,7 +730,7 @@ Current limitations:
   `rontolisp:wasm-import`).
 - Only plain function exports are implemented; a world exporting an interface is
   an error, and a `rontolisp:http-handler` program cannot use a world at all
-  (a serve-mode component's only export is `wasi:http/incoming-handler`).
+  (a serve-mode component's only export is `wasi:http/handler@0.3.0`).
 - `:s-expr` has no WIT spelling, so an export passing an arbitrary s-expression
   across the boundary still needs a hand-written `rontolisp:wasm-export`.
 - On the interpreter the directive is evaluated in order and sees only the
@@ -923,7 +925,7 @@ and `flags` does not cross in either direction yet.
 
 One interface a component **cannot** bind is one it already imports for its own WASI
 surface — and that surface grows with what the program uses (`rontolisp:fetch` pulls in
-`wasi:http` and `wasi:io`, the `rontolisp:tcp-*` built-ins pull in
+`wasi:http/types` and `wasi:http/client`, the `rontolisp:tcp-*` built-ins pull in
 `wasi:sockets/types`). A component cannot import the same interface twice, so that is a
 compile error too: drive the interface through the WIT binding *instead of* the
 built-in, not alongside it.
@@ -951,7 +953,7 @@ outside it:
 
 ```bash
 rontolisp page-hits-server.lisp -o server.wasm --component
-wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y server.wasm
 curl http://127.0.0.1:8080/index
 ```
 
@@ -960,9 +962,9 @@ wasmtime's built-in key-value provider is an in-memory store it rebuilds per
 instance (so, under `wasmtime serve`, per request), while a host that links an
 out-of-process provider keeps them — on wasmCloud (`wash dev`) the same component
 counts 1, 2, 3. The interfaces a served component may *not* bind are the ones its
-own surface already imports: `wasi:http/types`, `wasi:io/streams`,
-`wasi:cli/stdout`, `wasi:clocks/*`, `wasi:random/random` (and
-`wasi:http/outgoing-handler` when the handler also uses `rontolisp:fetch`).
+own surface already imports: `wasi:http/types`, `wasi:http/client`,
+`wasi:cli/types`, `wasi:cli/stdout`, `wasi:cli/stderr`, `wasi:clocks/*` and
+`wasi:random/random`.
 
 The full example is [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue).
 

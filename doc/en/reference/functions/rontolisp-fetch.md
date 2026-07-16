@@ -72,17 +72,19 @@ request `:body` from an s-expression.
 
 - **Interpreter** and **JVM**: use the JDK `java.net.http.HttpClient`; the
   request runs on a background thread from the moment `fetch` returns.
-- **WASM**: component-only, and a **hybrid** — the base I/O is WASI 0.3 but
-  fetch imports `wasi:http@0.2` + `wasi:io@0.2` (async `wasi:http@0.3` does not
-  exist upstream yet; see `.todo/02-upgrade-fetch-to-wasi-http-0.3.md`). The
-  promise is the in-flight `wasi:http` response handle, so multiple requests
-  genuinely overlap. Compile with `--component` and run with `-S http=y` plus
-  the async flags. fetch remains a compile error in Preview 1 (core-module)
-  mode, which has no host `wasi:http`; the generic promise operations
-  (`await`, `then`, `promisep`) compile in every mode. fetch also works inside
-  a [`rontolisp:http-handler`](rontolisp-http-handler.md) serve component
-  (a proxy-style handler): run it with `wasmtime serve -W gc=y -W exceptions=y -S http=y` —
-  the async flags are not needed there.
+- **WASM**: component-only, over the async `wasi:http@0.3.0` — fetch is
+  ordinary Lisp glue calling the wit-imported `wasi:http/client@0.3.0`, so the
+  component is uniformly WASI 0.3. The promise wraps the in-flight async
+  `client.send` subtask, so multiple requests genuinely overlap. Compile with
+  `--component` and run with
+  `wasmtime run -W gc=y -W exceptions=y -W component-model-more-async-builtins=y -S http=y`
+  (wasmtime 46+; `-S http=y` makes the host provide `wasi:http`). fetch remains
+  a compile error in Preview 1 (core-module) mode, which has no host
+  `wasi:http`; the generic promise operations (`await`, `then`, `promisep`)
+  compile in every mode. fetch also works inside a
+  [`rontolisp:http-handler`](rontolisp-http-handler.md) serve component (a
+  proxy-style handler): run it with `wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y` —
+  the serve host provides `wasi:http/client` by default, no `-S http=y` needed.
 - **Browser playground**: truly asynchronous. The interpreter runs in a Web
   Worker; `fetch` hands the request to the page's main thread, which runs the
   real browser `fetch()` (subject to CORS) while the program continues, so
@@ -100,9 +102,9 @@ request `:body` from an s-expression.
   computed at runtime cannot be checked there and is treated as GET, while a
   runtime-computed `:body` is sent normally).
 - A failed request (for example a refused connection) surfaces when the promise
-  is awaited — the same timing as a JavaScript `await` rejection: it raises an
-  error in the interpreter and JVM, and `await` returns `nil` in WASM. In WASM
-  a request that cannot even be started (for example a malformed URL) makes
-  `fetch` return `nil` instead of a promise, and awaiting `nil` yields `nil`.
-- In WASM, the response body is capped (about 576 KiB) and very large programs
-  may exhaust the shared linear memory the response buffers reuse.
+  is awaited — the same timing as a JavaScript `await` rejection: every backend
+  signals an error there (on WASM it is a `rontolisp:wit-error` condition,
+  catchable with `handler-case`). A request that cannot even be *started* (for
+  example a malformed URL, or an unsupported runtime-computed method on the
+  interpreter/JVM) makes `fetch` itself error or, on WASM, return `nil` instead
+  of a promise — and awaiting `nil` yields `nil`.

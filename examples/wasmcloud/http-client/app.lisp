@@ -10,12 +10,11 @@
 ;; Run (JVM class; running it needs the rontolisp jar on the classpath):
 ;;   rontolisp examples/wasmcloud/http-client/app.lisp -o App.class && \
 ;;     java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
-;; Run (WASI component under wasmtime serve; -S http=y grants outbound HTTP):
+;; Run (WASI component under wasmtime serve; the wasi:http/client import that
+;; carries the outbound fetch is host-provided by default):
 ;;   rontolisp examples/wasmcloud/http-client/app.lisp -o app.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y -S http=y app.wasm
-;; Run (wasmCloud; .wash/config.yaml builds app.wasm, enables the gc proposal
-;; and allowlists the upstream -- wash denies outgoing HTTP by default):
-;;   wash dev    # in this directory; serves on :8000
+;;     wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y app.wasm
+;; wasmCloud cannot run the wasi:http@0.3 component yet -- see ../README.md.
 ;; Talk to it with:
 ;;   curl http://127.0.0.1:8080/
 

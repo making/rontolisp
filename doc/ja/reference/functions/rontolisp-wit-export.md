@@ -97,7 +97,7 @@ I/O (`print`、`rontolisp:fetch` など) はトラップせずに動作します
 world がエクスポート一覧そのものであるため、手書きの形式との併用もエラーです:
 `rontolisp:wit-export` があるプログラム中の `rontolisp:wasm-export`、および
 world と `rontolisp:http-handler` の併用 (serve モードのコンポーネントは
-`wasi:http/incoming-handler` だけをエクスポートします)。
+`wasi:http/handler@0.3.0` だけをエクスポートします)。
 
 ## 制限事項
 

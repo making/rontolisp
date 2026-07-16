@@ -182,7 +182,7 @@ afresh for every request.
 
 ```bash
 rontolisp page-hits-server.lisp -o server.wasm --component
-wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
+wasmtime serve -W gc=y -W exceptions=y -W component-model-async-stackful=y -W component-model-more-async-builtins=y -S keyvalue=y server.wasm
 ```
 
 Whether the state then *survives* is the host's business, not the component's:
@@ -355,8 +355,8 @@ decides what to make of it.
   array instead. `flags` does not cross in either direction yet.
 - Under `--component` the interface must not be one the component **already
   imports for its own WASI surface** (which grows with what the program uses:
-  `rontolisp:fetch` adds `wasi:http` and `wasi:io`, the `rontolisp:tcp-*`
-  built-ins add `wasi:sockets/types`). A component cannot import the same
+  `rontolisp:fetch` adds `wasi:http/types` and `wasi:http/client`, the
+  `rontolisp:tcp-*` built-ins add `wasi:sockets/types`). A component cannot import the same
   interface twice, so this is a compile error naming it — drive the interface
   through the WIT binding *instead of* the built-in, not alongside it.
 - The directive must appear at **top level, before the code that calls the

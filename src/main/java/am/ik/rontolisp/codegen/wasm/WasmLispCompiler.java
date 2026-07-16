@@ -246,18 +246,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	/** Number of preview1-style imported functions (fd_write..environ_get). */
 	static final int IMPORT_FUNC_COUNT = 8;
 
-	// Function indices 8-13 are reserved for the rontolisp:tcp-* built-ins (8-11) and
-	// rontolisp:fetch / rontolisp:await (12-13) in BOTH modes so the defined-function
-	// indices stay identical across modes. Imports always precede defined functions,
-	// so a slot can be an import in one mode only if every EARLIER slot is an import in
-	// that mode too. The combinations (fetch + sockets together is a compile error):
-	// - sockets component: sock.* imported at 8-11, fetch trap stubs defined at 12-13.
-	// - fetch component: sock.* imported at 8-11 FROM THE HTTP ADAPTER (four tiny
-	// errno-returning stub exports in adapter-http-client.wat), http.* imported at 12-13.
-	// - plain component / Preview 1 / no-wasi: all six are defined trap stubs.
-	// This keeps FUNC_START at 14 uniformly, so all the static FUNC_* constants below
-	// are stable. The tcp/fetch built-ins raise a compile error in Preview 1 mode, so
-	// the stubs are never called.
+	// Function indices 8-11 are reserved for the rontolisp:tcp-* built-ins in BOTH
+	// modes so the defined-function indices stay identical across modes. Imports always
+	// precede defined functions, so the slots can be imports in one mode only because
+	// every earlier slot is an import in that mode too:
+	// - sockets component: sock.* imported at 8-11.
+	// - plain component / Preview 1 / no-wasi: all four are defined trap stubs.
+	// This keeps FUNC_START at 12 uniformly, so all the static FUNC_* constants below
+	// are stable. The tcp built-ins raise a compile error in Preview 1 mode, so the
+	// stubs are never called. (rontolisp:fetch needs no slots here: it is the http.lisp
+	// library over canon-lowered wasi:http user imports.)
 	static final int FUNC_TCP_CONNECT = IMPORT_FUNC_COUNT; // 8
 
 	static final int FUNC_TCP_LISTEN = FUNC_TCP_CONNECT + 1; // 9
@@ -266,11 +264,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_TCP_LOCAL_PORT = FUNC_TCP_ACCEPT + 1; // 11
 
-	static final int FUNC_FETCH_START = FUNC_TCP_LOCAL_PORT + 1; // 12
-
-	static final int FUNC_FETCH_AWAIT = FUNC_FETCH_START + 1; // 13
-
-	static final int FUNC_START = FUNC_FETCH_AWAIT + 1; // 14
+	static final int FUNC_START = FUNC_TCP_LOCAL_PORT + 1; // 12
 
 	static final int FUNC_PRINT_I32 = FUNC_START + 1;
 
@@ -388,22 +382,15 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// fetch runtime helpers (always emitted, just after the dispatch functions): build a
-	// heap string from raw bytes, look up a plist key by interned offset, serialize a
-	// request-header alist to REQ_HDR_BUF, and rebuild a response-header alist from the
-	// adapter's serialized buffer. Only the fetch compiler references them.
-	static final int FUNC_FETCH_STR = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1;
-
-	static final int FUNC_FETCH_PLIST_GET = FUNC_FETCH_STR + 1;
-
-	static final int FUNC_FETCH_SER_HDRS = FUNC_FETCH_PLIST_GET + 1;
-
-	static final int FUNC_FETCH_DESER_HDRS = FUNC_FETCH_SER_HDRS + 1;
+	// Plist runtime helper (always emitted, just after the dispatch functions): look up
+	// a plist key by interned offset. The component import compiler uses it to lower a
+	// record parameter written as a keyword plist.
+	static final int FUNC_PLIST_GET = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1;
 
 	// Structural hash (agrees with _equal): walks conses and folds i31 ints / interned
 	// string offsets / char codes / float bits / ratio components into an i32. Always
 	// present; only the hash-table compiler references it. Equal keys hash equal.
-	static final int FUNC_HASH = FUNC_FETCH_DESER_HDRS + 1;
+	static final int FUNC_HASH = FUNC_PLIST_GET + 1;
 
 	// Rehash helper: grows a hash table's bucket array (doubling capacity) and
 	// redistributes its entries. Always present; called by puthash when the load factor
@@ -491,7 +478,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// _str_fresh (off, len) -> (ref null eq): like _str_build, but stamps a fresh id
 	// from the monotonic STRING_ID_CTR counter instead of id=off. Every RUNTIME string
-	// build (concatenate/subseq/case/trim, read, gensym/make-symbol, getenv, fetch, the
+	// build (concatenate/subseq/case/trim, read, gensym/make-symbol, getenv, the
 	// capture path, string-stream contents, the host :string boundary) calls this. Its
 	// scratch offset is reused across builds (HEAP_PTR is a stack pointer now), so a
 	// counter id -- not the reused offset -- is what keeps distinct runtime strings and
@@ -514,7 +501,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// the block is present. Read the base through userFuncBase(), never FUNC_USER_BASE.
 	static final int FUNC_VEC_BASE = FUNC_WRITE_STR_GC + 1;
 
-	// User defuns start after the dispatch functions, the four fetch helpers, the two
+	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
 	// promise-await helper, the two binary stream helpers, the four string-stream
 	// helpers, the five symbol-API helpers, the read-char helper, and the four string
@@ -590,36 +577,24 @@ public final class WasmLispCompiler implements LispCompiler {
 	// clock_time_get (i32 clock_id, i64 precision, i32 result_ptr) -> i32 errno
 	static final int TYPE_CLOCK_TIME_GET = TYPE_OPEN + 1; // 30
 
-	// fetch-start (8x i32) -> i32 errno: the adapter's http.fetch-start import /
-	// Preview 1 stub type. Starts an outgoing request and writes the promise handle
-	// (the wasi:http future-incoming-response handle) through the out pointer.
-	static final int TYPE_FETCH_START = TYPE_CLOCK_TIME_GET + 1; // 31
-
-	// fetch-await (6x i32) -> i32 errno: the adapter's http.fetch-await import /
-	// Preview 1 stub type. Blocks on the promise handle and writes the response
-	// status / headers / body back through the out pointers.
-	static final int TYPE_FETCH_AWAIT = TYPE_FETCH_START + 1; // 32
-
 	// Character struct {i32 code}: the runtime representation of a character, distinct
 	// from
 	// an i31 integer so characterp and the accessors can dispatch on it via ref.test.
-	static final int TYPE_CHAR = TYPE_FETCH_AWAIT + 1; // 33
+	static final int TYPE_CHAR = TYPE_CLOCK_TIME_GET + 1; // 31
 
 	// Hash-table bucket array: array (mut (ref null eq)). Each slot holds a bucket alist
 	// (a cons chain of (key . value) entries) or null. Implicitly a subtype of eq, so a
 	// bucket array can be stored in a cons/cell field and compared with ref.eq.
-	static final int TYPE_HASH_BUCKETS = TYPE_CHAR + 1; // 34
+	static final int TYPE_HASH_BUCKETS = TYPE_CHAR + 1; // 32
 
 	// Promise struct {mut i32 kind, mut (ref null eq) base, mut (ref null eq) fn}: the
 	// runtime representation of a promise, distinct from every other value so promisep
-	// and _promise_await dispatch on it via ref.test. kind 0 = a fetch root (base = the
-	// i31-boxed wasi:http future handle), kind 1 = a rontolisp:then chain (base = the
-	// chained value-or-promise, fn = the callback), kind 2 = settled (base = the
-	// memoized result; _promise_await rewrites a promise in place after resolving it, so
-	// the wasi:http response -- which future-incoming-response.get hands out only once
-	// -- and a chain callback are each consumed exactly once however often the promise
-	// is awaited).
-	static final int TYPE_PROMISE = TYPE_HASH_BUCKETS + 1; // 35
+	// and _promise_await dispatch on it via ref.test. kind 1 = a rontolisp:then chain
+	// (base = the chained value-or-promise, fn = the callback), kind 2 = settled (base
+	// = the memoized result; _promise_await rewrites a promise in place after resolving
+	// it, so a chain callback is consumed exactly once however often the promise is
+	// awaited).
+	static final int TYPE_PROMISE = TYPE_HASH_BUCKETS + 1; // 33
 
 	// String byte array: array (mut i8) -- the GC-managed byte storage for a
 	// TYPE_STRING's `data` field (field 2). A bare array comptype (implicitly sub
@@ -627,14 +602,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// readers ref.cast it before array.get_u / array.len. Appended right after
 	// TYPE_PROMISE so the export/import wrapper type indices shift by one (see
 	// wrapperTypeIndex / importTypeIndex, both TYPE_WRITE_STR_GC + 1 based).
-	static final int TYPE_STR_BYTES = TYPE_PROMISE + 1; // 36
+	static final int TYPE_STR_BYTES = TYPE_PROMISE + 1; // 34
 
 	// _str_to_mem ((ref null eq) str, i32 ptr) -> i32: copies a string's $str_bytes
 	// array (with its surrounding quotes) into linear[ptr..) and returns the byte
 	// count. The array->linear bridge for the paths that still need a linear pointer
-	// (WASI iovecs for write-line/open, the reader input scratch, the fetch wire, the
-	// host :string boundary, runtime intern). Appended after TYPE_STR_BYTES.
-	static final int TYPE_STR_TO_MEM = TYPE_STR_BYTES + 1; // 37
+	// (WASI iovecs for write-line/open, the reader input scratch, the host :string
+	// boundary, runtime intern). Appended after TYPE_STR_BYTES.
+	static final int TYPE_STR_TO_MEM = TYPE_STR_BYTES + 1; // 35
 
 	// _write_str_gc ((ref null eq) str, i32 from, i32 to) -> (): writes bytes
 	// [from, to) of a string's $str_bytes array to the current print sink -- appended
@@ -642,13 +617,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// never aliases the capture buffer), else staged into heap scratch and handed to
 	// _write_str for stdout. The print path for string values now that their bytes live
 	// on the GC heap. Appended after TYPE_STR_TO_MEM.
-	static final int TYPE_WRITE_STR_GC = TYPE_STR_TO_MEM + 1; // 38
+	static final int TYPE_WRITE_STR_GC = TYPE_STR_TO_MEM + 1; // 36
 
 	// Packed float-array data storage: array (mut f64). A bare array comptype (implicitly
 	// sub final), so a subtype of eq -- it stores in TYPE_FARRAY's (ref null eq) data
 	// field and readers ref.cast it before array.get / array.len. The unboxed f64 storage
 	// of a packed float array. Appended after TYPE_WRITE_STR_GC.
-	static final int TYPE_F64ARR = TYPE_WRITE_STR_GC + 1; // 39
+	static final int TYPE_F64ARR = TYPE_WRITE_STR_GC + 1; // 37
 
 	// Packed float array: struct {(ref null eq) dims, (ref null eq) data} -- a rank-n
 	// packed float array as a distinct first-class type (disjoint from TYPE_CELL, so
@@ -660,7 +635,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// fill pointer / adjustable / displacement (a packed array is a pure compute buffer).
 	// Appended after TYPE_F64ARR; the export/import wrapper type indices below shift past
 	// it and TYPE_F32ARR.
-	static final int TYPE_FARRAY = TYPE_F64ARR + 1; // 40
+	static final int TYPE_FARRAY = TYPE_F64ARR + 1; // 38
 
 	// Packed single-float array data storage: array (mut f32). A bare array comptype
 	// (implicitly sub final), a subtype of eq -- it stores in TYPE_FARRAY's (ref null eq)
@@ -669,7 +644,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// array (#f(...) / make-array :element-type 'single-float). Reads widen f32->f64,
 	// writes narrow f64->f32; scalars stay f64 (no single-float scalar type). Appended
 	// after TYPE_FARRAY (last type of the DEFAULT module).
-	static final int TYPE_F32ARR = TYPE_FARRAY + 1; // 41
+	static final int TYPE_F32ARR = TYPE_FARRAY + 1; // 39
 
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
@@ -682,7 +657,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// array (mut v128) -- the lane-group storage of a packed float array under --simd.
 	// A bare array comptype (implicitly sub final), so a subtype of eq. array.new_default
 	// zeroes every lane, which is what lets the kernels drop their scalar tails.
-	static final int TYPE_V128ARR = TYPE_F32ARR + 1; // 42
+	static final int TYPE_V128ARR = TYPE_F32ARR + 1; // 40
 
 	// struct {i32 count, i32 kind, (ref null eq) groups} -- the --simd replacement for
 	// the
@@ -694,13 +669,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_V128ARR, and `groups` holds ceil(count / lanes) + 1 groups -- the trailing one
 	// a
 	// zero sentinel so matvec's shuffle window can always read one group past its last.
-	static final int TYPE_VBLOCK = TYPE_F32ARR + 2; // 43
+	static final int TYPE_VBLOCK = TYPE_F32ARR + 2; // 41
 
 	// _v_get ((ref null eq) vblock, i32 index) -> f64
-	static final int TYPE_V_GET = TYPE_F32ARR + 3; // 44
+	static final int TYPE_V_GET = TYPE_F32ARR + 3; // 42
 
 	// _v_set ((ref null eq) vblock, i32 index, f64 value) -> f64 (the value AS STORED)
-	static final int TYPE_V_SET = TYPE_F32ARR + 4; // 45
+	static final int TYPE_V_SET = TYPE_F32ARR + 4; // 43
 
 	// How many type entries the --simd block appends.
 	static final int SIMD_TYPE_COUNT = 4;
@@ -848,47 +823,14 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int ENV_BUF_ADDR = 0x34000; // 212992, page 3 + 16 KiB
 
-	// fetch scratch + request-header buffer in page 4 (0x40000), between the rontolisp
-	// data/heap (pages 0-3) and the adapter scratch (page 5+). The adapter writes the
-	// status and the addresses/lengths of the response-header and body buffers (which it
-	// places in its own pages 6/7) through these out-pointers; REQ_HDR_BUF holds the
-	// serialized request headers the adapter reads. Component mode only.
-	static final int FETCH_STATUS_ADDR = 0x40000;
-
-	static final int FETCH_RHDR_PTR_ADDR = 0x40004;
-
-	static final int FETCH_RHDR_LEN_ADDR = 0x40008;
-
-	static final int FETCH_BODY_PTR_ADDR = 0x4000C;
-
-	static final int FETCH_BODY_LEN_ADDR = 0x40010;
-
-	// fetch-start writes the promise handle (the wasi:http future-incoming-response
-	// handle) here; the compiler boxes it as an i31 integer -- the promise value.
-	static final int FETCH_HANDLE_ADDR = 0x40014;
-
-	// sock.tcp-connect / tcp-listen / tcp-accept write the preview1-style socket fd
-	// (>= 200, serviced by the sockets adapter's fd_read/fd_write/fd_close branches)
-	// through this out-pointer; the compiler boxes it as an i31 integer -- the stream
-	// handle. Component mode only.
+	// Socket scratch cell in page 4 (0x40000), between the rontolisp data/heap (pages
+	// 0-3) and the adapter scratch (page 5+). sock.tcp-connect / tcp-listen /
+	// tcp-accept write the preview1-style socket fd (>= 200, serviced by the sockets
+	// adapter's fd_read/fd_write/fd_close branches) through this out-pointer; the
+	// compiler boxes it as an i31 integer -- the stream handle. Component mode only.
+	// (The address is historical: the cells below it held the deleted 0.2 fetch
+	// adapter's scratch.)
 	static final int SOCK_FD_ADDR = 0x40018;
-
-	// fetch request staging cells: the (ptr,len) of the URL and request-body bytes the
-	// fetch call site copies into the linear heap via _str_to_mem before calling
-	// fetch-start (a string's field 0 is an IDENTITY id, not a linear offset, since the
-	// [[27]] GC-string redesign -- runtime-built strings have no linear bytes at their
-	// id, so the bytes must be staged explicitly). The staging advances HEAP_PTR so the
-	// header serialization's own scratch cannot clobber it, and pops it back after
-	// fetch-start returns. Component mode only.
-	static final int FETCH_URL_PTR_ADDR = 0x4001C;
-
-	static final int FETCH_URL_LEN_ADDR = 0x40020;
-
-	static final int FETCH_REQ_BODY_PTR_ADDR = 0x40024;
-
-	static final int FETCH_REQ_BODY_LEN_ADDR = 0x40028;
-
-	static final int REQ_HDR_BUF = 0x40100;
 
 	// Minimum base address of the growable runtime intern table (8-byte (offset,len)
 	// records appended by _intern for symbols first seen at runtime). The actual base
@@ -962,15 +904,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
 				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL);
-		// rontolisp:fetch is component-only. In component mode it drives the
-		// http.fetch-start / http.fetch-await imports (function indices
-		// FUNC_FETCH_START / FUNC_FETCH_AWAIT); the component wrapper then imports
-		// wasi:http. In Preview 1 mode those indices are unused trap stubs and fetch
-		// raises a compile error (WasmFetchCompiler), so the imports/wasi:http are never
-		// emitted. Only fetch itself needs the http machinery: await/then/promisep are
-		// generic promise operations that compile in every mode (a root promise simply
-		// cannot exist without fetch, so _promise_await's fetch-await call stays
-		// unreachable).
+		// rontolisp:fetch is component-only: it is the spliced http.lisp defun over the
+		// canon-lowered wasi:http user import. In Preview 1 mode it raises a compile
+		// error (WasmFetchCompiler). await/then/promisep are generic promise operations
+		// that compile in every mode.
 		// EH mode: the program uses a catching/cleanup form, so the module carries the
 		// $lisp-cond exception tag, %error/%error-cond throw it (instead of a bare
 		// unreachable) and every entry function converts an uncaught throw back into a
@@ -995,12 +932,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_PORT));
 		boolean emitSockImport = this.component && usesTcp;
-		// fetch and tcp sockets need different component blob variants (wasi:http 0.2
-		// hybrid vs wasi:sockets 0.3); a combined variant does not exist yet. Keyed off
-		// the
-		// usage, not emitHttpImport, because a non-serve fetch (http.lisp) no longer
-		// sets
-		// emitHttpImport but must still be refused alongside tcp.
+		// fetch and tcp sockets need different component blob variants (wasi:http vs
+		// wasi:sockets); a combined variant does not exist yet.
 		if (this.component && usesFetch && usesTcp) {
 			throw new UnsupportedOperationException(
 					"rontolisp:fetch and rontolisp:tcp-* cannot be combined in one --component program yet");
@@ -1567,9 +1500,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		int allocMarkFuncIndex = hostArena ? exportHelperBase + 2 : -1;
 		int allocResetFuncIndex = hostArena ? exportHelperBase + 3 : -1;
 		// Unique host-import slots. Two Lisp wrappers can bind the SAME host function --
-		// a
-		// serve+fetch program's two spliced halves may each call
-		// wasi:http/types.fields-append, wasi:io/streams.blocking-read, ... in their own
+		// a serve+fetch program's two spliced halves may each call
+		// wasi:http/types.fields-append, body-stream-read, ... in their own
 		// %-package -- and the component model forbids a core module from importing one
 		// (module, field) twice. So the wrappers stay distinct defuns but SHARE one core
 		// import: this list has one entry per unique (module, field), and every wrapper
@@ -2140,21 +2072,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				});
 				// type 30: clock_time_get (i32, i64, i32) -> i32
 				types.addFunc(new Type[] { Type.I32, Type.I64, Type.I32 }, new Type[] { Type.I32 });
-				// type 31 (TYPE_FETCH_START): fetch-start (8x i32) -> i32 errno. The 8
-				// params are method, urlPtr, urlLen, reqBodyPtr, reqBodyLen, reqHdrPtr,
-				// reqHdrLen, handleOut.
-				types.addFunc(
-						new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32 },
-						new Type[] { Type.I32 });
-				// type 32 (TYPE_FETCH_AWAIT): fetch-await (6x i32) -> i32 errno. The 6
-				// params are handle, statusPtr, rhdrPtrOut, rhdrLenOut, bodyPtrOut,
-				// bodyLenOut.
-				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32 },
-						new Type[] { Type.I32 });
-				// type 33 (TYPE_CHAR): character struct {i32 code}
+				// type 31 (TYPE_CHAR): character struct {i32 code}
 				types.addRecGroup(
 						rec -> rec.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.I32))));
-				// type 34 (TYPE_HASH_BUCKETS): array (mut (ref null eq)) -- hash-table
+				// type 32 (TYPE_HASH_BUCKETS): array (mut (ref null eq)) -- hash-table
 				// buckets. Encoded as a bare array comptype (sugar for sub final),
 				// implicitly
 				// a subtype of eq so it stores in cons/cell fields and supports ref.eq.
@@ -2163,7 +2084,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.writeRefType(true, Type.EQ.code());
 					w.write(am.ik.wasm.Mutability.VAR);
 				});
-				// type 35 (TYPE_PROMISE): promise struct {mut i32 kind, mut (ref null eq)
+				// type 33 (TYPE_PROMISE): promise struct {mut i32 kind, mut (ref null eq)
 				// base, mut (ref null eq) fn} -- all fields mutable so _promise_await can
 				// rewrite a promise to its settled state in place.
 				types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
@@ -2171,7 +2092,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 					fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 				}));
-				// type 36 (TYPE_STR_BYTES): array (mut i8) -- a string's byte storage.
+				// type 34 (TYPE_STR_BYTES): array (mut i8) -- a string's byte storage.
 				// A bare array comptype (implicitly sub final), so a subtype of eq: it
 				// stores in TYPE_STRING's (ref null eq) data field and readers ref.cast
 				// it.
@@ -2181,7 +2102,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(0x78); // i8 packed storage type
 					w.write(am.ik.wasm.Mutability.VAR);
 				});
-				// type 37 (TYPE_STR_TO_MEM): _str_to_mem ((ref null eq), i32) -> i32
+				// type 35 (TYPE_STR_TO_MEM): _str_to_mem ((ref null eq), i32) -> i32
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(2);
@@ -2191,7 +2112,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.write(Type.I32);
 				});
-				// type 38 (TYPE_WRITE_STR_GC): _write_str_gc ((ref null eq), i32, i32) ->
+				// type 36 (TYPE_WRITE_STR_GC): _write_str_gc ((ref null eq), i32, i32) ->
 				// ()
 				types.add(w -> {
 					w.write(Type.FUNC);
@@ -2202,7 +2123,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.I32);
 					w.write(0);
 				});
-				// type 39 (TYPE_F64ARR): array (mut f64) -- packed float-array data
+				// type 37 (TYPE_F64ARR): array (mut f64) -- packed float-array data
 				// storage.
 				// A bare array comptype (implicitly sub final), a subtype of eq.
 				types.add(w -> {
@@ -2210,7 +2131,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.F64);
 					w.write(am.ik.wasm.Mutability.VAR);
 				});
-				// type 40 (TYPE_FARRAY): struct {(ref null eq) dims, (ref null eq) data}
+				// type 38 (TYPE_FARRAY): struct {(ref null eq) dims, (ref null eq) data}
 				// --
 				// a packed rank-n double-float array (dims = a TYPE_HASH_BUCKETS of i31
 				// sizes, data = a TYPE_F64ARR). Both fields immutable (aset mutates the
@@ -2219,7 +2140,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
 					fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
 				}));
-				// type 41 (TYPE_F32ARR): array (mut f32) -- packed single-float array
+				// type 39 (TYPE_F32ARR): array (mut f32) -- packed single-float array
 				// data
 				// storage. A bare array comptype (implicitly sub final), a subtype of eq;
 				// stored in TYPE_FARRAY's data field alongside TYPE_F64ARR (the width is
@@ -2230,7 +2151,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(am.ik.wasm.Mutability.VAR);
 				});
 				if (this.simd) {
-					// type 42 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
+					// type 40 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
 					// proposal, which is why it is gated on --simd.
 					types.add(w -> {
@@ -2238,7 +2159,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.write(Type.V128);
 						w.write(am.ik.wasm.Mutability.VAR);
 					});
-					// type 43 (TYPE_VBLOCK): struct {i32 count, i32 kind, (ref null eq)
+					// type 41 (TYPE_VBLOCK): struct {i32 count, i32 kind, (ref null eq)
 					// groups} -- what TYPE_FARRAY's data field holds under --simd. All
 					// fields immutable (an aset mutates a v128 group, not the struct).
 					types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
@@ -2246,7 +2167,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						fields.addField(false, w -> w.write(Type.I32));
 						fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
 					}));
-					// type 44 (TYPE_V_GET): _v_get ((ref null eq), i32) -> f64
+					// type 42 (TYPE_V_GET): _v_get ((ref null eq), i32) -> f64
 					types.add(w -> {
 						w.write(Type.FUNC);
 						w.write(2);
@@ -2256,7 +2177,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.write(1);
 						w.write(Type.F64);
 					});
-					// type 45 (TYPE_V_SET): _v_set ((ref null eq), i32, f64) -> f64
+					// type 43 (TYPE_V_SET): _v_set ((ref null eq), i32, f64) -> f64
 					types.add(w -> {
 						w.write(Type.FUNC);
 						w.write(3);
@@ -2341,11 +2262,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				// Function imports at indices FUNC_TCP_CONNECT .. FUNC_TCP_LOCAL_PORT
 				// (8-11): the sockets adapter's exports over wasi:sockets@0.3.0 when the
-				// program uses a tcp built-in in component mode, or the http adapter's
-				// errno-returning stub exports when the program uses fetch (imports must
-				// precede defined functions, so the sock slots cannot be defined stubs
-				// while the http slots at 12-13 are imports). Otherwise (Preview 1, or a
-				// component using neither) they are defined trap stubs.
+				// program uses a tcp built-in in component mode. Otherwise (Preview 1, or
+				// a component not using tcp) they are defined trap stubs.
 				// tcp-connect/tcp-listen(hostPtr, hostLen, port, fdOut) -> errno share
 				// fd_write's (4x i32) -> i32 shape; tcp-accept(fd, fdOut) -> errno and
 				// tcp-local-port(fd, portOut) -> errno are (2x i32) -> i32 like _intern.
@@ -2355,12 +2273,6 @@ public final class WasmLispCompiler implements LispCompiler {
 					imports.addImport("sock", "tcp-accept", ExternalKind.FUNCTION, TYPE_INTERN);
 					imports.addImport("sock", "tcp-local-port", ExternalKind.FUNCTION, TYPE_INTERN);
 				}
-				// Function indices FUNC_FETCH_START / FUNC_FETCH_AWAIT (12-13) are always
-				// defined trap stubs now: rontolisp:fetch is the http.lisp library over
-				// canon-lowered wasi:http (a user %component-import), so nothing ever
-				// calls
-				// them, on Preview 1 or as a component. The slots stay reserved so every
-				// following FUNC_* constant keeps its value.
 				if (this.component) {
 					// Import the linear memory from the shared canonical-memory module so
 					// the
@@ -2392,10 +2304,9 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addFunction(TYPE_INTERN); // 7: environ_get
 				}
 				// Reserve function indices FUNC_TCP_CONNECT (8) .. FUNC_TCP_LOCAL_PORT
-				// (11): sock.* imports when the program uses tcp OR fetch in component
-				// mode (the fetch case binds the http adapter's errno stubs); otherwise
-				// defined trap stubs so the following defined-function indices line up
-				// with the FUNC_* constants.
+				// (11): sock.* imports when the program uses tcp in component mode;
+				// otherwise defined trap stubs so the following defined-function indices
+				// line up with the FUNC_* constants.
 				if (!emitSockImport) {
 					fnDef.addFunction(TYPE_FD_WRITE); // index 8: unused tcp-connect stub
 					fnDef.addFunction(TYPE_FD_WRITE); // index 9: unused tcp-listen stub
@@ -2403,12 +2314,6 @@ public final class WasmLispCompiler implements LispCompiler {
 					fnDef.addFunction(TYPE_INTERN); // index 11: unused tcp-local-port
 													// stub
 				}
-				// Reserve function indices FUNC_FETCH_START (12) / FUNC_FETCH_AWAIT (13)
-				// as
-				// defined trap stubs: fetch is the http.lisp library over canon-lowered
-				// wasi:http now, so these are never called on any backend.
-				fnDef.addFunction(TYPE_FETCH_START); // index 12: unused fetch-start stub
-				fnDef.addFunction(TYPE_FETCH_AWAIT); // index 13: unused fetch-await stub
 				fnDef.addFunction(TYPE_START) // _start
 					.addFunction(TYPE_PRINT_I32) // print_i32
 					.addFunction(TYPE_WRITE_STR) // _write_str
@@ -2469,14 +2374,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
 				}
-				// fetch runtime helpers (FUNC_FETCH_STR..FUNC_FETCH_DESER_HDRS)
-				fnDef.addFunction(TYPE_RAT_NEW); // _fetch_str (i32, i32) -> (ref null eq)
-				fnDef.addFunction(TYPE_OPEN); // _fetch_plist_get ((ref null eq), i32) ->
+				// plist runtime helper (FUNC_PLIST_GET)
+				fnDef.addFunction(TYPE_OPEN); // _plist_get ((ref null eq), i32) ->
 												// (ref null eq)
-				fnDef.addFunction(TYPE_RAT_GET); // _fetch_ser_headers ((ref null eq)) ->
-													// i32
-				fnDef.addFunction(TYPE_READ_LINE_FD); // _fetch_deser_headers (i32) ->
-														// (ref null eq)
 				// Hash-table runtime helpers
 				fnDef.addFunction(TYPE_RAT_GET); // _hash ((ref null eq)) -> i32
 				fnDef.addFunction(TYPE_PRINT_VAL); // _hash_resize ((ref null eq)) -> ()
@@ -2720,14 +2620,6 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 					}
 				}
-				// fetch-start / fetch-await trap stubs at function indices
-				// FUNC_FETCH_START / FUNC_FETCH_AWAIT: no locals, unreachable, end. Fetch
-				// is
-				// the http.lisp library over canon-lowered wasi:http now, so these are
-				// never
-				// called.
-				code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
-				code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 				code.addFunction(finalStartBody.toByteArray())
 					.addFunction(printI32Body)
 					.addFunction(writeStrBody)
@@ -2780,11 +2672,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (byte[] body : dispatchBodies) {
 					code.addFunction(body);
 				}
-				// fetch runtime helper bodies (FUNC_FETCH_STR..FUNC_FETCH_DESER_HDRS)
-				code.addFunction(WasmFetchRuntimeBuilder.buildStr());
-				code.addFunction(WasmFetchRuntimeBuilder.buildPlistGet());
-				code.addFunction(WasmFetchRuntimeBuilder.buildSerHeaders());
-				code.addFunction(WasmFetchRuntimeBuilder.buildDeserHeaders());
+				// plist runtime helper body (FUNC_PLIST_GET)
+				code.addFunction(WasmPlistRuntimeBuilder.buildPlistGet());
 				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HASH_RESIZE)
 				code.addFunction(WasmRuntimeBuilder.buildHashBody());
 				code.addFunction(WasmRuntimeBuilder.buildHashResizeBody());
@@ -2794,7 +2683,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// gensym runtime helper body (FUNC_GENSYM)
 				code.addFunction(WasmGensymRuntimeBuilder.build());
 				// promise-await runtime helper body (FUNC_PROMISE_AWAIT)
-				code.addFunction(WasmPromiseRuntimeBuilder.buildAwait(stringTable));
+				code.addFunction(WasmPromiseRuntimeBuilder.buildAwait());
 				// binary stream runtime helper bodies (FUNC_READ_BYTE, FUNC_WRITE_BYTE)
 				code.addFunction(WasmIoRuntimeBuilder.buildReadByteBody());
 				code.addFunction(WasmIoRuntimeBuilder.buildWriteByteBody());
@@ -2904,10 +2793,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			// untouched.
 			if (this.serve) {
 				// rontolisp:http-handler: wrap the core (which exports %http-dispatch)
-				// into
-				// a wasi:http/incoming-handler component (wasmtime serve). When the
-				// program also uses fetch, the serve+fetch variant wires the outgoing
-				// http machinery into the preview1 bridge (wasmtime serve -S http=y).
+				// into a wasi:http/handler@0.3 component (wasmtime serve). A program that
+				// also fetches reaches http.lisp's client half through the same block --
+				// serve and serve+fetch are ONE component shape.
 				// A rontolisp:wit-import joins the fixed wasi:http surface as an extra
 				// instance import (canon lower), so a handler's state can live in a real
 				// store.
@@ -3236,11 +3124,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		boolean component = false;
 
-		// True in a rontolisp:http-handler (serve-mode) component: rontolisp:fetch stays
-		// on
-		// the WAT adapter there (WasmFetchCompiler.compile), because the serve blob
-		// already
-		// imports wasi:http; off serve it falls through to the http.lisp defun.
+		// True in a rontolisp:http-handler (serve-mode) component.
 		boolean serve = false;
 
 		/**
