@@ -125,11 +125,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
 		program = LispMacroExpander.flattenTopLevel(program);
-		// rontolisp:await placement is checked on the raw forms; then every
+		// The (rontolisp:async (defun ...)) wrapper expands first (the CLI already did;
+		// this keeps direct compiler invocations and the playground equivalent), so the
+		// placement check, Pass 1 and the async lowering below only ever see the
+		// canonical async-defun/async-lambda forms.
+		// Then rontolisp:await placement is checked on the raw forms, and every
 		// async-defun/async-lambda lowers to an ordinary defun/lambda over the
 		// %async-run primitive (virtual threads), so Pass 1 and everything below see
 		// only the ordinary shapes.
 		try {
+			program = LispMacroExpander.rewriteAsyncSugar(program);
 			LispAsync.checkTopLevel(program);
 		}
 		catch (IllegalArgumentException ex) {

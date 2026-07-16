@@ -252,19 +252,18 @@ public final class PackageRegistry {
 		// cl-user exports nothing, like the Common Lisp COMMON-LISP-USER package: its
 		// symbols are reachable as cl-user::name, never cl-user:name.
 		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>(), Set.of()));
-		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.VERSION, LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
-						LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.AWAIT, LispNames.ASYNC_DEFUN,
-						LispNames.ASYNC_LAMBDA, LispNames.FUTUREP, LispNames.ASYNC_STREAMP, LispNames.MAKE_STREAM,
-						LispNames.STREAM_READ, LispNames.STREAM_WRITE, LispNames.STREAM_CLOSE, LispNames.READ_ALL,
-						LispNames.WAIT_FOR, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.URL_DECODE,
-						LispNames.URL_ENCODE, LispNames.QUERY_PARAMS, LispNames.QUERY_PARAM, LispNames.URL_PATH,
-						LispNames.URL_QUERY, LispNames.WASM_EXPORT, LispNames.WASM_IMPORT, LispNames.WIT_EXPORT,
-						LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE, LispNames.WIT_ERROR, LispNames.WIT_ERROR_PAYLOAD,
-						LispNames.WITH_ARENA, LispNames.HTTP_HANDLER, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN,
-						LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS,
-						LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT,
-						LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12))));
+		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(), new HashSet<>(Set.of(LispNames.VERSION,
+				LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS, LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH,
+				LispNames.AWAIT, LispNames.ASYNC, LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.FUTUREP,
+				LispNames.ASYNC_STREAMP, LispNames.MAKE_STREAM, LispNames.STREAM_READ, LispNames.STREAM_WRITE,
+				LispNames.STREAM_CLOSE, LispNames.READ_ALL, LispNames.WAIT_FOR, LispNames.JSON_PARSE,
+				LispNames.JSON_STRINGIFY, LispNames.URL_DECODE, LispNames.URL_ENCODE, LispNames.QUERY_PARAMS,
+				LispNames.QUERY_PARAM, LispNames.URL_PATH, LispNames.URL_QUERY, LispNames.WASM_EXPORT,
+				LispNames.WASM_IMPORT, LispNames.WIT_EXPORT, LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE,
+				LispNames.WIT_ERROR, LispNames.WIT_ERROR_PAYLOAD, LispNames.WITH_ARENA, LispNames.HTTP_HANDLER,
+				LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT,
+				LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT,
+				LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12))));
 		// numpy-style vector/matrix operations, implemented once in linalg.lisp and
 		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
 		// is external.

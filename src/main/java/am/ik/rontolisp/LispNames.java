@@ -1994,6 +1994,19 @@ public final class LispNames {
 	public static final String AWAIT = "await";
 
 	/**
+	 * The {@code async} wrapper macro provided by the {@code rontolisp} package. Wraps an
+	 * ordinary defining form and turns it into its asynchronous counterpart, for a
+	 * notation closer to JavaScript's {@code async function} / {@code async () =>}:
+	 * {@code (rontolisp:async (defun f (x) ...))} expands to
+	 * {@code (rontolisp:async-defun f (x) ...)} and
+	 * {@code (rontolisp:async (lambda (x) ...))} to
+	 * {@code (rontolisp:async-lambda (x) ...)}; anything else inside is an error. A pure
+	 * frontend rewrite: the expansion runs before the async machinery looks at the
+	 * program, so every backend only ever sees the canonical lowered forms.
+	 */
+	public static final String ASYNC = "async";
+
+	/**
 	 * The {@code async-defun} special form provided by the {@code rontolisp} package.
 	 * Defines an asynchronous function: same surface as {@code defun} (full lambda-list
 	 * support), but calling it runs the body only until its first suspension point (an
@@ -2838,6 +2851,12 @@ public final class LispNames {
 	 * appears in call position after {@code PackageResolver} resolution.
 	 */
 	public static final String WITH_ARENA_QUALIFIED = RONTOLISP_PKG + ":" + WITH_ARENA;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:async}, as it appears
+	 * in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String ASYNC_QUALIFIED = RONTOLISP_PKG + ":" + ASYNC;
 
 	/**
 	 * The canonical package-qualified spelling of {@code rontolisp:async-defun}, as it

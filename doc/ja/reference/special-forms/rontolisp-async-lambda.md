@@ -2,7 +2,7 @@
 
 `(rontolisp:async-lambda (params...) body...)`
 
-[`rontolisp:async-defun`](rontolisp-async-defun.md) の無名版: 評価すると、呼び出しが future を返す関数値になります。パラメータリストは [`lambda`](lambda.md) と同じラムダリストキーワードをサポートし、本体は `async-defun` の本体と同じセマンティクスに従います — 呼び出し時に eager に開始され、[`rontolisp:await`](rontolisp-await.md) を使え、その値 (またはエラー) が返された future を確定させます。
+[`rontolisp:async-defun`](rontolisp-async-defun.md) の無名版: 評価すると、呼び出しが future を返す関数値になります。パラメータリストは [`lambda`](lambda.md) と同じラムダリストキーワードをサポートし、本体は `async-defun` の本体と同じセマンティクスに従います — 呼び出し時に eager に開始され、[`rontolisp:await`](rontolisp-await.md) を使え、その値 (またはエラー) が返された future を確定させます。`(rontolisp:async (lambda ...))` — [`rontolisp:async`](rontolisp-async.md) ラッパー — は等価な JavaScript 風の記法です。
 
 ```lisp
 (rontolisp:await (funcall (rontolisp:async-lambda (x) (* x 2)) 21))   ; => 42

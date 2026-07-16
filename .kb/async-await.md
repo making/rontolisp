@@ -1,7 +1,18 @@
 # async/await: async-defun, await, futures and asynchronous streams
 
-The user surface is `rontolisp:async-defun` / `rontolisp:async-lambda` (defining forms),
-`rontolisp:await` (a SPECIAL FORM), the predicates `rontolisp:futurep` /
+The user surface is `rontolisp:async-defun` / `rontolisp:async-lambda` (defining forms)
+plus the `rontolisp:async` WRAPPER macro -- `(async (defun ...))` == async-defun,
+`(async (lambda ...))` == async-lambda, anything else inside = a clear error; a pure
+frontend rewrite (`LispMacroExpander.expandAsync` single-form,
+`rewriteAsyncSugar` deep pass) run before EVERY consumer of the canonical forms:
+the CLI right after LoadInliner (so HttpLibrary/WitExportInliner/pruner
+definition scanners see async-defun), both compilers' `compile()` right after
+flattenTopLevel (direct invocations + the playground Compile buttons -- the
+wit-export lesson), UserMacroExpander's expansion output (macro-generated sugar),
+an evalCons case on the interpreter, and `LispAsync.check`/`lowerForm` cases (a
+sugar lambda nested in a plain defun body is checked through its expansion).
+`rontolisp:async` joins NO introspection listing, like async-defun/async-lambda.
+Then `rontolisp:await` (a SPECIAL FORM), the predicates `rontolisp:futurep` /
 `rontolisp:streamp`, the stream operations `rontolisp:make-stream` /
 `stream-read` / `stream-write` / `stream-close` / `read-all`, and the timer
 `rontolisp:wait-for` (milliseconds -> a future settling to nil; deliberately

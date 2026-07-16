@@ -419,6 +419,108 @@ public final class LispMacroExpander {
 		return listToCons(lambda);
 	}
 
+	/**
+	 * Expands the {@code (rontolisp:async form)} wrapper macro into the canonical
+	 * asynchronous defining form: {@code (rontolisp:async (defun name (ll) body...))}
+	 * becomes {@code (rontolisp:async-defun name (ll) body...)} and
+	 * {@code (rontolisp:async (lambda (ll) body...))} becomes
+	 * {@code (rontolisp:async-lambda (ll) body...)}. Anything else inside is an error --
+	 * the wrapper accepts exactly one defun or lambda form.
+	 * @param cons the async form
+	 * @return the expansion
+	 */
+	public static LispVal expandAsync(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 2 && parts.get(1) instanceof LispCons inner && inner.isProperList()
+				&& inner.car() instanceof LispSymbol head) {
+			String member = unqualifiedClMember(head.name());
+			if (LispNames.DEFUN.equals(member)) {
+				return new LispCons(new LispSymbol(LispNames.ASYNC_DEFUN_QUALIFIED), inner.cdr());
+			}
+			if (LispNames.LAMBDA.equals(member)) {
+				return new LispCons(new LispSymbol(LispNames.ASYNC_LAMBDA_QUALIFIED), inner.cdr());
+			}
+		}
+		throw new IllegalArgumentException(LispNames.ASYNC_QUALIFIED
+				+ " expects a single (defun ...) or (lambda ...) form to make asynchronous, got: " + cons.print());
+	}
+
+	/**
+	 * Returns whether the given head symbol names the {@code rontolisp:async} wrapper
+	 * macro, in the canonical resolved spelling or any {@code rontolisp:}/
+	 * {@code rontolisp::}-qualified source spelling (the rewrite runs both before and
+	 * after {@code PackageResolver}).
+	 * @param name the head symbol name
+	 * @return {@code true} for a {@code rontolisp:async} head
+	 */
+	public static boolean isAsyncSugarHead(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.ASYNC.equals(qn.member());
+	}
+
+	// The member name of a cl-owned head symbol: bare ("defun") or qualified through
+	// the cl package or its standard nickname ("cl:defun", "common-lisp:defun").
+	private static @Nullable String unqualifiedClMember(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		if (qn == null) {
+			return name;
+		}
+		return (LispNames.CL_PKG.equals(qn.pkg()) || "common-lisp".equals(qn.pkg())) ? qn.member() : null;
+	}
+
+	/**
+	 * Rewrites every {@code (rontolisp:async form)} wrapper in a program -- top-level and
+	 * nested -- into its {@code async-defun}/{@code async-lambda} expansion
+	 * ({@link #expandAsync(LispCons)}), leaving quoted data and macro-definition bodies
+	 * untouched (their expansion output is rewritten instead, like
+	 * {@link LispAsync#check}). This is the one frontend pass that makes the wrapper
+	 * exist: it runs before every consumer of the canonical async forms (the await
+	 * placement check, the {@code %async-run}/state-machine lowerings and the
+	 * defun-definition scanners), so none of them ever sees the sugar.
+	 * @param program the top-level forms (resolved or unresolved)
+	 * @return the program with every wrapper expanded
+	 */
+	public static List<LispVal> rewriteAsyncSugar(List<LispVal> program) {
+		List<LispVal> out = new ArrayList<>(program.size());
+		for (LispVal form : program) {
+			out.add(rewriteAsyncSugarForm(form));
+		}
+		return out;
+	}
+
+	/**
+	 * The single-form variant of {@link #rewriteAsyncSugar(List)}, for callers holding
+	 * one form (a macro expansion's output) rather than a whole program.
+	 * @param form the form (resolved or unresolved)
+	 * @return the form with every wrapper expanded
+	 */
+	public static LispVal rewriteAsyncSugarForm(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol sym) {
+			switch (sym.name()) {
+				case LispNames.QUOTE, LispNames.DEFMACRO, LispNames.MACROLET -> {
+					return form;
+				}
+				default -> {
+					if (isAsyncSugarHead(sym.name())) {
+						return rewriteAsyncSugarForm(expandAsync(cons));
+					}
+				}
+			}
+		}
+		List<LispVal> parts = cons.toList();
+		List<LispVal> rewritten = new ArrayList<>(parts.size());
+		boolean changed = false;
+		for (LispVal part : parts) {
+			LispVal r = rewriteAsyncSugarForm(part);
+			changed |= (r != part);
+			rewritten.add(r);
+		}
+		return changed ? listToCons(rewritten) : form;
+	}
+
 	/** Builds {@code (rontolisp::%async-run (lambda () body...))}. */
 	private static LispVal asyncRunForm(List<LispVal> body) {
 		List<LispVal> thunk = new ArrayList<>();

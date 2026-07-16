@@ -207,6 +207,12 @@ final class WasmExprCompiler {
 					WasmAsyncRunCompiler.compile(cons, ctx);
 					return;
 				}
+				if (LispNames.ASYNC.equals(qn.member())) {
+					// normally rewritten by the compile() pre-pass; a stray nested
+					// wrapper expands to async-defun/async-lambda and re-dispatches here
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandAsync(cons), ctx);
+					return;
+				}
 				if (LispNames.ASYNC_DEFUN.equals(qn.member())) {
 					if (ctx.futureTypeIndex >= 0) {
 						// asyncMode compiles top-level async-defuns as state machines;

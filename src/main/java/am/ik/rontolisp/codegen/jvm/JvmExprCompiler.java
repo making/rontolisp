@@ -136,6 +136,12 @@ final class JvmExprCompiler {
 					JvmAsyncOpsCompiler.compile(qn.member(), cons, ctx, className);
 					return;
 				}
+				if (LispNames.ASYNC.equals(qn.member())) {
+					// normally rewritten by the compile() pre-pass; a stray nested
+					// wrapper expands to async-defun/async-lambda and re-dispatches here
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandAsync(cons), ctx, className);
+					return;
+				}
 				if (LispNames.ASYNC_DEFUN.equals(qn.member())) {
 					// normally lowered by the compile() pre-pass; a stray nested form
 					// (e.g. macro-synthesized after the pre-pass) lowers here

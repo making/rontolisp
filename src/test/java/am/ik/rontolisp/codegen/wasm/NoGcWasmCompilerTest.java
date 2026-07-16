@@ -1892,6 +1892,11 @@ class NoGcWasmCompilerTest {
 				""")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("rontolisp:async-defun is not supported with --no-gc");
 		assertThatThrownBy(() -> compile("""
+				(rontolisp:async (defun f () 1))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rontolisp:async is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
 				(defun f () (rontolisp:await 1))
 				(rontolisp:wasm-export 'f :returns :long)
 				""")).isInstanceOf(UnsupportedOperationException.class)

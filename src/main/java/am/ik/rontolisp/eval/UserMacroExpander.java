@@ -79,6 +79,11 @@ public final class UserMacroExpander {
 				continue;
 			}
 			LispVal expanded = expandAll(resolved, macroEval);
+			// A macro may expand into the (rontolisp:async (defun ...)) wrapper; rewrite
+			// it here so the definition scanners downstream (WitExportInliner, the
+			// library pruner) see the canonical async-defun/async-lambda forms, exactly
+			// as they would for source the CLI rewrote before macro expansion.
+			expanded = LispMacroExpander.rewriteAsyncSugarForm(expanded);
 			if (isOperator(expanded, LispNames.DEFMACRO)) {
 				// A macro expanded into a macro definition: consume it as well.
 				macroEval.eval(expanded);

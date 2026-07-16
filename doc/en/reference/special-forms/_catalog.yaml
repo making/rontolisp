@@ -23,6 +23,7 @@ categories:
       - { slug: defconstant, name: defconstant }
       - { slug: function, name: function }
       - { slug: defpackage, name: defpackage }
+      - { slug: rontolisp-async, name: "rontolisp:async" }
       - { slug: rontolisp-async-defun, name: "rontolisp:async-defun" }
       - { slug: rontolisp-async-lambda, name: "rontolisp:async-lambda" }
       - { slug: rontolisp-await, name: "rontolisp:await" }

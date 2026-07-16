@@ -1182,6 +1182,8 @@ public final class LispEvaluator {
 					return evalSetq(cons, env);
 				case LispNames.LAMBDA:
 					return evalLambdaForm(cons, env);
+				case LispNames.ASYNC_QUALIFIED:
+					return eval(LispMacroExpander.expandAsync(cons), env);
 				case LispNames.ASYNC_DEFUN_QUALIFIED:
 					return eval(LispMacroExpander.expandAsyncDefun(cons), env);
 				case LispNames.ASYNC_LAMBDA_QUALIFIED:

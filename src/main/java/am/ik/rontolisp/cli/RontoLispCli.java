@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Version;
@@ -260,6 +261,10 @@ public final class RontoLispCli {
 		// file, not against the program.
 		List<LispVal> loaded = LoadInliner.inline(LispReader.readAllFromString(source, features),
 				SourceLoader.fileSystem(), baseDir, systemPath, features);
+		// Expand the (rontolisp:async (defun ...)) wrapper before anything scans for
+		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
+		// checks and the library pruner all recognize async-defun, never the sugar.
+		loaded = LispMacroExpander.rewriteAsyncSugar(loaded);
 		// Under --component the inliner also prunes the interface members the program
 		// never references (the component path skips --optimize's core tree shaker by
 		// design); --no-prune / --dynamic disable that, like the library defun pruner.

@@ -2,7 +2,7 @@
 
 `(rontolisp:async-lambda (params...) body...)`
 
-The anonymous counterpart of [`rontolisp:async-defun`](rontolisp-async-defun.md): evaluates to a function value whose invocation returns a future. The parameter list supports the same lambda-list keywords as [`lambda`](lambda.md), and the body follows the same semantics as an `async-defun` body — it starts eagerly on invocation, may use [`rontolisp:await`](rontolisp-await.md), and its value (or error) settles the returned future.
+The anonymous counterpart of [`rontolisp:async-defun`](rontolisp-async-defun.md): evaluates to a function value whose invocation returns a future. The parameter list supports the same lambda-list keywords as [`lambda`](lambda.md), and the body follows the same semantics as an `async-defun` body — it starts eagerly on invocation, may use [`rontolisp:await`](rontolisp-await.md), and its value (or error) settles the returned future. `(rontolisp:async (lambda ...))` — the [`rontolisp:async`](rontolisp-async.md) wrapper — is an equivalent JavaScript-style spelling.
 
 ```lisp
 (rontolisp:await (funcall (rontolisp:async-lambda (x) (* x 2)) 21))   ; => 42

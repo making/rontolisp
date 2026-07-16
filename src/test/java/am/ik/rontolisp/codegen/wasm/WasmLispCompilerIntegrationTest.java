@@ -5709,6 +5709,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void componentAsyncWrapperCompilesThroughTheStateMachines() throws Exception {
+		// The (rontolisp:async (defun ...)) / (rontolisp:async (lambda ...)) wrapper is
+		// a pure frontend rewrite: the component state machines see only the canonical
+		// async-defun/async-lambda forms, real suspension included.
+		assertThat(compileAndRunComponent("""
+				(defvar *f* (rontolisp::%future-new))
+				(rontolisp:async (defun task ()
+				  (print 1)
+				  (+ (rontolisp:await *f*) 1)))
+				(defvar *tf* (task))
+				(print 2)
+				(rontolisp::%future-settle *f* 40)
+				(print (rontolisp:await *tf*))
+				(print (rontolisp:await (funcall (rontolisp:async (lambda (x) (* x 2))) 21)))
+				""")).isEqualTo("1\n2\n41\n42");
+	}
+
+	@Test
 	void componentRejectedAwaitResignalsMemoizedCondition() throws Exception {
 		// An errored async body rejects its future at the entry's catch; the condition
 		// re-signals AT AWAIT (memoized, however often it is awaited) -- the

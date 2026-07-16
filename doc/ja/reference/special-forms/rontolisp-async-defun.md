@@ -16,7 +16,7 @@
 (add-later 1 2)   ; => #<FUTURE>
 ```
 
-本体がシグナルしたエラーは呼び出し時点では外に出ず、future を確定させて `await` の時点で再シグナルされます — `handler-case` で捕捉する方法は [`rontolisp:await`](rontolisp-await.md) を参照してください。無名版は [`rontolisp:async-lambda`](rontolisp-async-lambda.md) です。
+本体がシグナルしたエラーは呼び出し時点では外に出ず、future を確定させて `await` の時点で再シグナルされます — `handler-case` で捕捉する方法は [`rontolisp:await`](rontolisp-await.md) を参照してください。無名版は [`rontolisp:async-lambda`](rontolisp-async-lambda.md) です。`(rontolisp:async (defun name ...))` — [`rontolisp:async`](rontolisp-async.md) ラッパー — は等価な JavaScript 風の記法です。
 
 ## バックエンドのサポート
 

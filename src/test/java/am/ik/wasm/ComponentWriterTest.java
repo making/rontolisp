@@ -263,9 +263,6 @@ class ComponentWriterTest {
 	@Test
 	void canonStreamBuiltinEncodings() {
 		assertThat(hex(ComponentWriter.canonStreamNew(3))).isEqualTo("0e03");
-		// stream.read ty 0, options [Memory(1)] = 0f 00 (count) 01 (tag) 03 (mem) 01
-		assertThat(hex(ComponentWriter.canonStreamRead(0, 1))).isEqualTo("0f00010301");
-		assertThat(hex(ComponentWriter.canonStreamWrite(3, 0))).isEqualTo("1003010300");
 		assertThat(hex(ComponentWriter.canonStreamDropReadable(0))).isEqualTo("1300");
 		assertThat(hex(ComponentWriter.canonStreamDropWritable(3))).isEqualTo("1403");
 	}
@@ -332,15 +329,9 @@ class ComponentWriterTest {
 		assertThat(hex(ComponentWriter.asyncFuncTypeOf(java.util.List.of("request"),
 				java.util.List.of(ComponentWriter.valTypeIndex(15)), ComponentWriter.valTypeIndex(14))))
 			.isEqualTo("430107726571756573740f000e");
-		// [func 2] Lift { core_func_index: 15, type_index: 16,
-		// options: [Memory(0), UTF8, Async] } = 00 00 0f 03 03 00 00 06 10
-		assertThat(hex(ComponentWriter.canonLiftMemoryUtf8Async(15, 16, 0))).isEqualTo("00000f030300000610");
 		// [core func 14] TaskReturn { result: Some(Type(14)),
 		// options: [Memory(0), UTF8] } = 09 00 0e 02 03 00 00
 		assertThat(hex(ComponentWriter.canonTaskReturnTypeMemoryUtf8(14, 0))).isEqualTo("09000e02030000");
-		// [core func 13] FutureWrite { ty: 9, options: [Memory(0), UTF8] }
-		// = 17 09 02 03 00 00
-		assertThat(hex(ComponentWriter.canonFutureWriteUtf8(9, 0))).isEqualTo("170902030000");
 	}
 
 	@Test
@@ -525,10 +516,6 @@ class ComponentWriterTest {
 	@Test
 	void canonFutureBuiltinEncodings() {
 		assertThat(hex(ComponentWriter.canonFutureNew(2))).isEqualTo("1502");
-		assertThat(hex(ComponentWriter.canonFutureRead(5, 1))).isEqualTo("1605010301");
-		// future.read ty 5, options [Memory(0), Realloc(0)] = 16 05 02 03 00 04 00
-		assertThat(hex(ComponentWriter.canonFutureRead(5, 0, 0))).isEqualTo("16050203000400");
-		assertThat(hex(ComponentWriter.canonFutureWrite(2, 0))).isEqualTo("1702010300");
 		assertThat(hex(ComponentWriter.canonFutureDropReadable(5))).isEqualTo("1a05");
 		assertThat(hex(ComponentWriter.canonFutureDropWritable(2))).isEqualTo("1b02");
 	}

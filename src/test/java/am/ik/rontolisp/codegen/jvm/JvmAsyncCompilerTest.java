@@ -154,6 +154,22 @@ class JvmAsyncCompilerTest {
 	}
 
 	@Test
+	void asyncWrapperExpandsToAsyncDefunAndAsyncLambda() throws Exception {
+		assertThat(compileAndRun("""
+				(rontolisp:async (defun add (a b) (+ a b)))
+				(print (rontolisp:futurep (add 1 2)))
+				(print (rontolisp:await (add 20 22)))
+				(print (rontolisp:await (funcall (rontolisp:async (lambda (x) (* x 2))) 21)))
+				""")).isEqualTo("t\n42\n42");
+	}
+
+	@Test
+	void asyncWrapperRejectsNonDefiningForms() {
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:async (+ 1 2))"))
+			.hasMessageContaining("expects a single (defun ...) or (lambda ...) form");
+	}
+
+	@Test
 	void awaitInPlainDefunIsACompileError() {
 		assertThatThrownBy(() -> compileAndRun("(defun bad () (rontolisp:await 1))"))
 			.hasMessageContaining("only allowed inside");

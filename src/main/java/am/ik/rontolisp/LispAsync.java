@@ -60,6 +60,11 @@ public final class LispAsync {
 					checkAll(parts, 1, asyncContext);
 					return;
 				}
+				case LispNames.ASYNC_QUALIFIED -> {
+					// the wrapper macro; check its async-defun/async-lambda expansion
+					check(LispMacroExpander.expandAsync(cons), asyncContext);
+					return;
+				}
 				case LispNames.ASYNC_DEFUN_QUALIFIED -> {
 					// the lambda list's default init forms run synchronously at entry
 					if (parts.size() > 2) {
@@ -153,6 +158,9 @@ public final class LispAsync {
 			switch (sym.name()) {
 				case LispNames.QUOTE -> {
 					return form;
+				}
+				case LispNames.ASYNC_QUALIFIED -> {
+					return lowerForm(LispMacroExpander.expandAsync(cons));
 				}
 				case LispNames.ASYNC_DEFUN_QUALIFIED -> {
 					return lowerForm(LispMacroExpander.expandAsyncDefun(cons));

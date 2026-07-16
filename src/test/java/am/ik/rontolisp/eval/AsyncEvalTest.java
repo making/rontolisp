@@ -131,6 +131,53 @@ class AsyncEvalTest {
 	}
 
 	@Test
+	void asyncWrapperOnDefunEqualsAsyncDefun() {
+		Run run = evalMulti("""
+				(rontolisp:async (defun add (a b) (+ a b)))
+				(let ((f (add 1 2)))
+				  (list (rontolisp:futurep f) (rontolisp:await f)))
+				""");
+		assertThat(run.result().print()).isEqualTo("(t 3)");
+	}
+
+	@Test
+	void asyncWrapperOnLambdaMayAwaitInsideItsBody() {
+		Run run = evalMulti("""
+				(rontolisp:async-defun inner () 10)
+				(rontolisp:await (funcall (rontolisp:async (lambda (x) (+ (rontolisp:await (inner)) x))) 1))
+				""");
+		assertThat(run.result().print()).isEqualTo("11");
+	}
+
+	@Test
+	void asyncWrapperLambdaInsidePlainDefunBodyIsLegal() {
+		// the wrapper's body is an async body even when the wrapper sits nested in a
+		// plain defun -- the placement check expands the sugar before walking
+		Run run = evalMulti("""
+				(defun make () (rontolisp:async (lambda () (rontolisp:await 7))))
+				(rontolisp:await (funcall (make)))
+				""");
+		assertThat(run.result().print()).isEqualTo("7");
+	}
+
+	@Test
+	void plainLambdaNestedInAsyncWrapperBodyIsStillRejected() {
+		assertThatThrownBy(() -> evalMulti("""
+				(rontolisp:async (defun outer ()
+				  (mapcar (lambda (x) (rontolisp:await x)) (list 1 2))))
+				(outer)
+				""")).hasMessageContaining("only allowed inside");
+	}
+
+	@Test
+	void asyncWrapperRejectsNonDefiningForms() {
+		assertThatThrownBy(() -> eval("(rontolisp:async (+ 1 2))"))
+			.hasMessageContaining("expects a single (defun ...) or (lambda ...) form");
+		assertThatThrownBy(() -> eval("(rontolisp:async)"))
+			.hasMessageContaining("expects a single (defun ...) or (lambda ...) form");
+	}
+
+	@Test
 	void awaitInPlainDefunIsRejected() {
 		assertThatThrownBy(() -> eval("(defun bad () (rontolisp:await 1))"))
 			.hasMessageContaining("only allowed inside");

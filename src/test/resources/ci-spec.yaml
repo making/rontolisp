@@ -1182,6 +1182,16 @@ cases:
       42
       nil
       "ci-await"
+  - name: async-wrapper-macro-expands-to-async-defun-and-lambda
+    source: |
+      (rontolisp:async (defun ci-async-wrap-add (a b) (+ a b)))
+      (print (rontolisp:futurep (ci-async-wrap-add 1 2)))
+      (print (rontolisp:await (ci-async-wrap-add 20 22)))
+      (print (rontolisp:await (funcall (rontolisp:async (lambda (x) (* x 2))) 21)))
+    expected: |
+      t
+      42
+      42
   - name: first-rest-nth-as-first-class-function
     source: |
       (print (funcall #'first '(1 2 3)))

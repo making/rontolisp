@@ -6,8 +6,8 @@
 ;; Supported on the interpreter and JVM backends (a blocking server on :8080,
 ;; one virtual thread per request) and the WASI component backend (--component),
 ;; which compiles the handler into an async wasi:http/handler@0.3.0 component
-;; served by wasmtime 46+ (wasmCloud's WASI P3 support is experimental; jco and
-;; Spin cannot run it yet).
+;; served by wasmtime 46+ and hosted by wasmCloud (`wash dev`, wash 2.5.2+ --
+;; see examples/wasmcloud/); jco and Spin cannot run it yet.
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   java -jar $JAR examples/net/http-handler.lisp

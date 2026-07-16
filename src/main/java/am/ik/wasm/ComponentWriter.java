@@ -1201,36 +1201,6 @@ public final class ComponentWriter {
 	}
 
 	/**
-	 * Encode {@code canon stream.read} (opcode {@code 0x0f}) for the given stream type,
-	 * producing a core function {@code (handle, ptr, count) -> i32} (the synchronous
-	 * variant blocks cooperatively under a stackful async task).
-	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type
-	 * @param memoryIndex the core memory index the bytes are read into
-	 * @return the encoded canonical entry
-	 */
-	public static byte[] canonStreamRead(int streamTypeIndex, int memoryIndex) {
-		return enc(w -> {
-			w.write(0x0f).writeUnsignedLeb128(streamTypeIndex);
-			memoryOption(w, memoryIndex);
-		});
-	}
-
-	/**
-	 * Encode {@code canon stream.write} (opcode {@code 0x10}) for the given stream type,
-	 * producing a core function {@code (handle, ptr, count) -> i32} (the synchronous
-	 * variant blocks cooperatively under a stackful async task).
-	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type
-	 * @param memoryIndex the core memory index the bytes are written from
-	 * @return the encoded canonical entry
-	 */
-	public static byte[] canonStreamWrite(int streamTypeIndex, int memoryIndex) {
-		return enc(w -> {
-			w.write(0x10).writeUnsignedLeb128(streamTypeIndex);
-			memoryOption(w, memoryIndex);
-		});
-	}
-
-	/**
 	 * Encode {@code canon stream.drop-readable} (opcode {@code 0x13}) for the given
 	 * stream type, producing a core function {@code (handle) -> ()}.
 	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type
@@ -1263,74 +1233,6 @@ public final class ComponentWriter {
 	}
 
 	/**
-	 * Encode {@code canon future.read} (opcode {@code 0x16}) for the given future type,
-	 * producing a core function {@code (handle, ptr) -> i32} (the synchronous variant
-	 * blocks cooperatively until the future resolves).
-	 * @param futureTypeIndex the component type index of the {@code future<T>} type
-	 * @param memoryIndex the core memory index the payload is read into
-	 * @return the encoded canonical entry
-	 */
-	public static byte[] canonFutureRead(int futureTypeIndex, int memoryIndex) {
-		return enc(w -> {
-			w.write(0x16).writeUnsignedLeb128(futureTypeIndex);
-			memoryOption(w, memoryIndex);
-		});
-	}
-
-	/**
-	 * Encode {@code canon future.read} (opcode {@code 0x16}) with both the canonical
-	 * memory and reallocation options, required when the future payload can carry a
-	 * variable-length value (e.g. a {@code result<_, error-code>} whose error case bears
-	 * a {@code string}, as {@code wasi:filesystem}'s {@code error-code} does).
-	 * @param futureTypeIndex the component type index of the {@code future<T>} type
-	 * @param memoryIndex the core memory index the payload is read into
-	 * @param reallocFuncIndex the core function index of {@code cabi_realloc}
-	 * @return the encoded canonical entry
-	 */
-	public static byte[] canonFutureRead(int futureTypeIndex, int memoryIndex, int reallocFuncIndex) {
-		return enc(w -> w.write(0x16)
-			.writeUnsignedLeb128(futureTypeIndex)
-			.writeUnsignedLeb128(2)
-			.write(0x03)
-			.writeUnsignedLeb128(memoryIndex)
-			.write(0x04)
-			.writeUnsignedLeb128(reallocFuncIndex));
-	}
-
-	/**
-	 * Encode {@code canon future.write} (opcode {@code 0x17}) for the given future type,
-	 * producing a core function {@code (handle, ptr) -> i32}.
-	 * @param futureTypeIndex the component type index of the {@code future<T>} type
-	 * @param memoryIndex the core memory index the payload is written from
-	 * @return the encoded canonical entry
-	 */
-	public static byte[] canonFutureWrite(int futureTypeIndex, int memoryIndex) {
-		return enc(w -> {
-			w.write(0x17).writeUnsignedLeb128(futureTypeIndex);
-			memoryOption(w, memoryIndex);
-		});
-	}
-
-	/**
-	 * Encode {@code canon future.write} (opcode {@code 0x17}) with the canonical memory
-	 * and UTF-8 string-encoding options, required when the future payload can carry a
-	 * string (e.g. wasi:http's {@code error-code} cases). Golden bytes from
-	 * {@code wasm-tools dump} of the wasi:http 0.3 reference component (2026-07-16):
-	 * {@code FutureWrite '{' ty, options: [Memory(0), UTF8] '}'}.
-	 * @param futureTypeIndex the component type index of the {@code future<T>} type
-	 * @param memoryIndex the core memory index the payload is written from
-	 * @return the encoded canonical entry
-	 */
-	public static byte[] canonFutureWriteUtf8(int futureTypeIndex, int memoryIndex) {
-		return enc(w -> w.write(0x17)
-			.writeUnsignedLeb128(futureTypeIndex)
-			.writeUnsignedLeb128(2)
-			.write(0x03)
-			.writeUnsignedLeb128(memoryIndex)
-			.write(0x00));
-	}
-
-	/**
 	 * Encode an <strong>async</strong> component function type with the given named
 	 * parameters (each an encoded valtype) and an optional single result (component func
 	 * type tag {@code 0x43}) &mdash; the async counterpart of {@link #funcTypeOf}, used
@@ -1358,32 +1260,6 @@ public final class ComponentWriter {
 				w.write(0x00).write((Object) resultType);
 			}
 		});
-	}
-
-	/**
-	 * Encode a <strong>stackful async</strong> {@code canon lift}: the canonical memory,
-	 * UTF-8 string-encoding and {@code async} options, in that order (the byte sequence
-	 * wasm-tools emits for an async-without-callback export). The lifted core function's
-	 * signature is {@code [flat params] -> []} &mdash; the result is delivered
-	 * exclusively through {@code canon task.return} &mdash; and running it requires the
-	 * gated stackful-lift wasmtime feature. Superseded by
-	 * {@link #canonLiftMemoryUtf8AsyncCallback}, which stays within base
-	 * component-model-async; kept until the last stackful call site is gone.
-	 * @param coreFuncIndex the core function index to lift
-	 * @param typeIndex the component function type index (an async function type)
-	 * @param memoryIndex the core memory index used by the canonical ABI
-	 * @return the encoded canonical entry
-	 */
-	public static byte[] canonLiftMemoryUtf8Async(int coreFuncIndex, int typeIndex, int memoryIndex) {
-		return enc(w -> w.write(0x00)
-			.write(0x00)
-			.writeUnsignedLeb128(coreFuncIndex)
-			.writeUnsignedLeb128(3) // three canonical options
-			.write(0x03)
-			.writeUnsignedLeb128(memoryIndex) // memory
-			.write(0x00) // string-encoding utf8
-			.write(0x06) // async (stackful)
-			.writeUnsignedLeb128(typeIndex));
 	}
 
 	/**

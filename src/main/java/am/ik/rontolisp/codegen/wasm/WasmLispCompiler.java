@@ -912,7 +912,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// and wraps the result in a settled future: Preview 1 has no asynchronous host
 		// I/O (everything settles), and under --component the body's awaits block the
 		// stackful task exactly like the rest of the module's I/O.
+		// The (rontolisp:async (defun ...)) wrapper expands first (the CLI already did;
+		// this keeps direct compiler invocations and the playground equivalent), so the
+		// placement check and the async passes below only ever see the canonical
+		// async-defun/async-lambda forms.
 		try {
+			program = LispMacroExpander.rewriteAsyncSugar(program);
 			am.ik.rontolisp.LispAsync.checkTopLevel(program);
 		}
 		catch (IllegalArgumentException ex) {

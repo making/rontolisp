@@ -303,8 +303,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 		// The async/await surface never: this backend has no futures, no suspension
 		// and no boxed values to represent them, so each name gets the clear error.
-		for (String asyncName : List.of(LispNames.ASYNC_DEFUN_QUALIFIED, LispNames.ASYNC_LAMBDA_QUALIFIED,
-				LispNames.AWAIT_QUALIFIED, LispNames.ASYNC_RUN_QUALIFIED,
+		for (String asyncName : List.of(LispNames.ASYNC_QUALIFIED, LispNames.ASYNC_DEFUN_QUALIFIED,
+				LispNames.ASYNC_LAMBDA_QUALIFIED, LispNames.AWAIT_QUALIFIED, LispNames.ASYNC_RUN_QUALIFIED,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FUTUREP),
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_STREAMP),
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_STREAM),

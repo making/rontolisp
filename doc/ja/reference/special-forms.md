@@ -24,6 +24,7 @@
 | `defconstant` | `(defconstant name value)` | `defparameter` と同様(rontolispは定数性を強制しません)。名前を返します |
 | `function` | `(function name)` or `#'name` | 関数名前空間から関数を検索し、値として返します |
 | `defpackage` | `(defpackage name (:use ...) (:export ...))` | 新しいパッケージを定義します(トップレベルの read/コンパイル時ディレクティブ。clause は `:use` と `:export` のみ)。名前を返します |
+| `rontolisp:async` | `(rontolisp:async (defun ...))` or `(rontolisp:async (lambda ...))` | ラップした `defun`/`lambda` を非同期版 (`async-defun`/`async-lambda`) に変えます — JavaScript 風の記法です |
 | `rontolisp:async-defun` | `(rontolisp:async-defun name (params...) body...)` | 非同期関数を定義します: 呼び出すと本体が eager に開始され、本体の値 (またはエラー) で確定する future を返します |
 | `rontolisp:async-lambda` | `(rontolisp:async-lambda (params...) body...)` | 無名の非同期関数。呼び出しごとに future を返します |
 | `rontolisp:await` | `(rontolisp:await value)` | future が確定するまで現在の非同期関数をサスペンドし、確定値を返します。future 以外はそのまま通過します。`async-defun`/`async-lambda` の本体内とトップレベルでのみ使えます |

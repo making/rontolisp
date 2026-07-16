@@ -16,7 +16,7 @@ The call itself yields an opaque future ([`rontolisp:futurep`](../functions/ront
 (add-later 1 2)   ; => #<FUTURE>
 ```
 
-An error signaled by the body does not escape at call time; it settles the future and re-signals at the `await` — see [`rontolisp:await`](rontolisp-await.md) for catching it with `handler-case`. The anonymous counterpart is [`rontolisp:async-lambda`](rontolisp-async-lambda.md).
+An error signaled by the body does not escape at call time; it settles the future and re-signals at the `await` — see [`rontolisp:await`](rontolisp-await.md) for catching it with `handler-case`. The anonymous counterpart is [`rontolisp:async-lambda`](rontolisp-async-lambda.md). `(rontolisp:async (defun name ...))` — the [`rontolisp:async`](rontolisp-async.md) wrapper — is an equivalent JavaScript-style spelling.
 
 ## Backend support
 
