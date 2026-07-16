@@ -35,7 +35,8 @@ final class WasmReturnCompiler {
 		}
 		List<LispVal> parts = cons.toList();
 		if (parts.size() > 1) {
-			WasmExprCompiler.compileExpr(parts.get(1), ctx);
+			// state-machine mode: the return value is a spine child (empty stack)
+			WasmAsyncEmit.spine(parts.get(1), ctx);
 		}
 		else {
 			ctx.writer.write(Instruction.REF_NULL);

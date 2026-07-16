@@ -38,6 +38,11 @@ final class WasmLetCompiler {
 		// A bare symbol entry is an init-less binding to nil.
 		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
+		// State-machine mode (asyncMode, awaits under this let): each init is guarded
+		// like a sequence statement (a resume restores the bound locals from the spill
+		// and skips the init), and the body routes through the shared guarded progn. A
+		// dynamic (special) binding cannot survive a suspension, so it is rejected.
+		boolean async = ctx.asyncResume != null && WasmAwaitAnalysis.countAwaits(cons) > 0;
 
 		// Pre-scan body for captured vars. Specials are globals reachable from any
 		// function,
@@ -63,6 +68,15 @@ final class WasmLetCompiler {
 				LispCons pair = (LispCons) binding;
 				List<LispVal> pairList = pair.toList();
 				String name = ((LispSymbol) pairList.get(0)).name();
+				if (async && ctx.specialVars.contains(name)) {
+					throw new UnsupportedOperationException("a dynamic (special) binding of " + name
+							+ " around rontolisp:await is not supported on the --component backend"
+							+ " (the saved global cannot be restored across a suspension)");
+				}
+				if (async) {
+					compileAsyncBinding(name, pairList.get(1), capturedInLet.contains(name), ctx);
+					continue;
+				}
 				if (ctx.specialVars.contains(name)) {
 					// Dynamic binding: [init] on stack; save the global into a temp
 					// local,
@@ -107,11 +121,16 @@ final class WasmLetCompiler {
 		newBoxed.addAll(capturedInLet);
 		ctx.boxedVars = newBoxed;
 
-		for (int i = 2; i < parts.size(); i++) {
-			if (i > 2) {
-				ctx.writer.write(Instruction.DROP);
+		if (async) {
+			WasmAsyncEmit.compileGuardedProgn(parts.subList(2, parts.size()), ctx);
+		}
+		else {
+			for (int i = 2; i < parts.size(); i++) {
+				if (i > 2) {
+					ctx.writer.write(Instruction.DROP);
+				}
+				WasmExprCompiler.compileExpr(parts.get(i), ctx);
 			}
-			WasmExprCompiler.compileExpr(parts.get(i), ctx);
 		}
 
 		// Restore each dynamically bound special to its saved value. Runs with the body's
@@ -129,6 +148,49 @@ final class WasmLetCompiler {
 
 		ctx.boxedVars = savedBoxed;
 		ctx.locals = savedLocals;
+	}
+
+	/**
+	 * State-machine mode: one guarded binding -- {@code init; [box]; local.set} runs when
+	 * executing normally or when the resume target lies inside the init (it dispatches
+	 * there); otherwise it is skipped, the local's value coming back from the frame's
+	 * spill restore.
+	 */
+	private static void compileAsyncBinding(String name, LispVal init, boolean boxed, WasmLispCompiler.Ctx ctx) {
+		int n = WasmAwaitAnalysis.countAwaits(init);
+		// The slot is reserved up front (the guard needs it) but the NAME binds only
+		// after the init compiles, so the init still sees an outer binding of the same
+		// name (let, not let*).
+		int slot = ctx.allocTemp();
+		int lo = java.util.Objects.requireNonNull(ctx.asyncResume).nextState;
+		if (n == 0) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(WasmAsyncEmit.RT_SLOT);
+			ctx.writer.write(Instruction.I32_EQZ);
+			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		}
+		else {
+			ctx.writer.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		}
+		ctx.wasmCtrlDepth++;
+		if (n > 0) {
+			WasmAsyncEmit.emitRangeGuard(ctx, lo, lo + n - 1);
+			ctx.writer.write(Instruction.I32_EQZ);
+			ctx.writer.write(Instruction.BR_IF, 0);
+		}
+		WasmAsyncEmit.spine(init, ctx);
+		if (boxed) {
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		}
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
+		ctx.locals.put(name, slot);
+		if (n > 0) {
+			WasmAsyncEmit.assertStates(ctx, lo, n, init);
+		}
 	}
 
 }

@@ -21,6 +21,12 @@ final class WasmAwaitCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (ctx.asyncResume != null) {
+			// asyncMode state machines: the await is a suspend point of the enclosing
+			// resume function (WasmAsyncEmit).
+			WasmAsyncEmit.compileAwait(cons, ctx);
+			return;
+		}
 		List<LispVal> args = cons.toList();
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("await expects 1 argument, got " + (args.size() - 1));

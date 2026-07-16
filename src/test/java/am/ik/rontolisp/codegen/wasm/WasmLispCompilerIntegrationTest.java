@@ -5693,6 +5693,169 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void componentAsyncDefunCompilesAsStateMachine() throws Exception {
+		// --component compiles async-defun/async-lambda/await as entry+resume state
+		// machines over first-class TYPE_FUTUREs. The eager subset (everything settles
+		// immediately) must match the interpreter/JVM/Preview-1 outputs verbatim --
+		// including the error-at-await re-signal, which the P1 degenerate path can only
+		// approximate.
+		assertThat(compileAndRunComponent("""
+				(rontolisp:async-defun add (a b) (print "in") (+ a b))
+				(print "before")
+				(let ((f (add 1 2)))
+				  (print "after")
+				  (print (rontolisp:futurep f))
+				  (print (rontolisp:await f))
+				  (print (rontolisp:await f))
+				  (print f))
+				(rontolisp:async-defun inner () 10)
+				(rontolisp:async-defun outer () (+ (rontolisp:await (inner)) 1))
+				(print (rontolisp:await (outer)))
+				(print (rontolisp:await (funcall (rontolisp:async-lambda (x) (* x 2)) 21)))
+				""")).isEqualTo("\"before\"\n\"in\"\n\"after\"\nt\n3\n3\n#<FUTURE>\n11\n42");
+	}
+
+	@Test
+	void componentRejectedAwaitResignalsMemoizedCondition() throws Exception {
+		// An errored async body rejects its future at the entry's catch; the condition
+		// re-signals AT AWAIT (memoized, however often it is awaited) -- the
+		// interpreter/JVM contract, now exact on the component state machines.
+		assertThat(compileAndRunComponent("""
+				(rontolisp:async-defun boom () (error "kaboom") 1)
+				(defvar *bf* (boom))
+				(print :not-yet)
+				(print (handler-case (rontolisp:await *bf*) (error (e) :caught)))
+				(print (handler-case (rontolisp:await *bf*) (error (e) :caught-again)))
+				""")).isEqualTo(":not-yet\n:caught\n:caught-again");
+	}
+
+	@Test
+	void componentAsyncSuspensionResumesOnSettle() throws Exception {
+		// A REAL suspension: the await of a pending future spills the frame, returns,
+		// and the later settle wakes the waiter, restores the locals and cascades the
+		// completion into the suspended function's own future. The internal
+		// %future-new/%future-settle test primitives stand in for the Phase-8 import
+		// layer as the pending-future source.
+		assertThat(compileAndRunComponent("""
+				(defvar *f* (rontolisp::%future-new))
+				(rontolisp:async-defun task ()
+				  (print 1)
+				  (let ((v (rontolisp:await *f*)))
+				    (print v)
+				    (print 3)
+				    99))
+				(defvar *tf* (task))
+				(print 2)
+				(rontolisp::%future-settle *f* 7)
+				(print (rontolisp:await *tf*))
+				""")).isEqualTo("1\n2\n7\n3\n99");
+	}
+
+	@Test
+	void componentHandlerCaseCatchesAcrossSuspension() throws Exception {
+		// An await inside a handler-case protected region suspends (undoing the
+		// handler-depth increment); the resume re-enters the try_table from the top, so
+		// a rejection delivered AFTER the suspension is caught by the re-armed handler.
+		assertThat(compileAndRunComponent("""
+				(defvar *f* (rontolisp::%future-new))
+				(rontolisp:async-defun task ()
+				  (handler-case (progn (print 10) (rontolisp:await *f*) :no)
+				    (error (e) (print :in-clause) 5)))
+				(defvar *tf* (task))
+				(print 20)
+				(rontolisp::%future-reject *f* "boom")
+				(print (rontolisp:await *tf*))
+				""")).isEqualTo("10\n20\n:in-clause\n5");
+	}
+
+	@Test
+	void componentUnwindProtectSkipsAndReArmsCleanupAcrossSuspension() throws Exception {
+		// A suspension is a plain return out of the protected region -- the cleanup
+		// does NOT run at the suspend (the task is not exiting) and re-arms on
+		// re-entry, firing once on the resumed completion.
+		assertThat(compileAndRunComponent("""
+				(defvar *u* (rontolisp::%future-new))
+				(rontolisp:async-defun up ()
+				  (unwind-protect (progn (print 30) (rontolisp:await *u*) (print 31))
+				    (print :cleanup)))
+				(defvar *uf* (up))
+				(print 32)
+				(rontolisp::%future-settle *u* 0)
+				(rontolisp:await *uf*)
+				""")).isEqualTo("30\n32\n31\n:cleanup");
+	}
+
+	@Test
+	void componentAsyncLambdaCapturesAndArgumentHoistAcrossSuspension() throws Exception {
+		// An async-lambda's captures live in the frame across a suspension, and an
+		// await in a strict call's argument position rides the let* hoist
+		// (WasmAwaitNormalizer).
+		assertThat(compileAndRunComponent("""
+				(defvar *g* (rontolisp::%future-new))
+				(defvar *lam* (let ((n 100)) (rontolisp:async-lambda (x) (+ x n (rontolisp:await *g*)))))
+				(defvar *lf* (funcall *lam* 1))
+				(print 40)
+				(rontolisp::%future-settle *g* 10)
+				(print (rontolisp:await *lf*))
+				""")).isEqualTo("40\n111");
+	}
+
+	@Test
+	void componentLoopAndWhileTestAwaitsResume() throws Exception {
+		// Awaits inside loop bodies (a setq value) and inside a while TEST both
+		// dispatch correctly: the first iteration suspends, the settle resumes it, and
+		// later iterations see the settled future immediately.
+		assertThat(compileAndRunComponent("""
+				(defvar *h* (rontolisp::%future-new))
+				(rontolisp:async-defun looper ()
+				  (let ((sum 0))
+				    (dotimes (i 3) (setq sum (+ sum (rontolisp:await *h*))))
+				    sum))
+				(defvar *lpf* (looper))
+				(print 50)
+				(rontolisp::%future-settle *h* 5)
+				(print (rontolisp:await *lpf*))
+				(defvar *w* (rontolisp::%future-new))
+				(rontolisp:async-defun wloop ()
+				  (let ((n 0))
+				    (while (< n (rontolisp:await *w*))
+				      (setq n (+ n 1)))
+				    n))
+				(defvar *wf* (wloop))
+				(print 60)
+				(rontolisp::%future-settle *w* 3)
+				(print (rontolisp:await *wf*))
+				""")).isEqualTo("50\n15\n60\n3");
+	}
+
+	@Test
+	void componentAsyncRestrictionsAreCompileErrors() {
+		// The v1 restrictions of the component state machines, each a clear error.
+		assertThatThrownBy(() -> compileAndRunComponent("""
+				(rontolisp:async-defun f ()
+				  (unwind-protect 1 (rontolisp:await (f))))
+				(f)
+				""")).hasMessageContaining("unwind-protect cleanup form is not supported");
+		assertThatThrownBy(() -> compileAndRunComponent("""
+				(rontolisp:async-defun f ()
+				  (handler-case 1 (error (e) (rontolisp:await (f)))))
+				(f)
+				""")).hasMessageContaining("clause body is not supported");
+		assertThatThrownBy(() -> compileAndRunComponent("""
+				(defvar *sp* 1)
+				(declaim (special *sp*))
+				(rontolisp:async-defun f ()
+				  (let ((*sp* 2)) (rontolisp:await (f))))
+				(f)
+				""")).hasMessageContaining("dynamic (special) binding");
+		assertThatThrownBy(() -> compileAndRunComponent("""
+				(defun outer ()
+				  (rontolisp:async-defun nested () 1))
+				(outer)
+				""")).hasMessageContaining("only supported as a top-level form");
+	}
+
+	@Test
 	void asyncStreamsAreACompileErrorInPreview1Mode() {
 		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:make-stream))"))
 			.hasMessageContaining("asynchronous streams are not available on the WASM backends yet");

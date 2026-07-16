@@ -372,6 +372,14 @@ final class WasmExportCompiler {
 		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(targetFuncIndex);
+		// asyncMode: an async-defun target returns a TYPE_FUTURE; poll it so the host
+		// sees the settled value (everything settles in this tier -- a suspension needs
+		// the import layer), and a rejected future's re-signal reaches the catch-all
+		// above (the trap an error in an exported function produces today).
+		if (ctx.asyncFuncBase >= 0 && ctx.asyncDefunNames.contains(decl.name())) {
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_POLL);
+		}
 		emitUnboxResult(ctx, decl.returnType());
 		if (isServeHandle(ctx.serve, decl)) {
 			// the callback-lifted handle returns the packed EXIT code; the response

@@ -31,7 +31,8 @@ final class WasmDefvarCompiler {
 			// only if not already bound (idempotent); defparameter/defconstant (force)
 			// always rebind. definedGlobals tracks compile-time "already bound".
 			if (parts.size() > 2 && (force || !ctx.definedGlobals.contains(name.name()))) {
-				WasmExprCompiler.compileExpr(parts.get(2), ctx);
+				// state-machine mode: the init is a spine child (empty stack)
+				WasmAsyncEmit.spine(parts.get(2), ctx);
 				int tmpSlot = ctx.allocTemp();
 				ctx.writer.write(Instruction.TEE_LOCAL);
 				ctx.writer.writeSignedLeb128(tmpSlot);
@@ -46,7 +47,7 @@ final class WasmDefvarCompiler {
 			}
 		}
 		else if (parts.size() > 2 && (force || !ctx.locals.containsKey(name.name()))) {
-			WasmExprCompiler.compileExpr(parts.get(2), ctx);
+			WasmAsyncEmit.spine(parts.get(2), ctx);
 			int slot = ctx.allocLocal(name.name());
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeSignedLeb128(slot);

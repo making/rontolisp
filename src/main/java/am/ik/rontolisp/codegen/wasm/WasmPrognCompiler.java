@@ -16,6 +16,17 @@ final class WasmPrognCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
+		if (parts.size() == 1) {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(am.ik.wasm.Type.EQ.code());
+			return;
+		}
+		if (ctx.asyncResume != null) {
+			// state-machine mode: resume-routing guards per statement (a no-await
+			// sequence compiles exactly like the plain loop below)
+			WasmAsyncEmit.compileGuardedProgn(parts.subList(1, parts.size()), ctx);
+			return;
+		}
 		for (int i = 1; i < parts.size(); i++) {
 			if (i > 1) {
 				ctx.writer.write(Instruction.DROP);

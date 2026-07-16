@@ -53,6 +53,14 @@ final class WasmHandlerCaseCompiler {
 				throw new IllegalArgumentException(
 						LispNames.HANDLER_CASE + " expects (type (var) body...) clauses: " + parts.get(i).print());
 			}
+			if (ctx.asyncResume != null && WasmAwaitAnalysis.countAwaits(parts.get(i)) > 0) {
+				// The protected expression may await (the state dispatch re-enters the
+				// try_table from the top); a clause body cannot yet -- its landing pad
+				// is only reachable through a catch.
+				throw new UnsupportedOperationException("rontolisp:await inside a " + LispNames.HANDLER_CASE
+						+ " clause body is not supported on the --component backend;"
+						+ " move the await outside the handler clause");
+			}
 			List<LispVal> clauseParts = clause.toList();
 			if (clause.car() instanceof LispSymbol head && ":no-error".equals(head.name())) {
 				noErrorClause = clauseParts;
@@ -104,7 +112,10 @@ final class WasmHandlerCaseCompiler {
 		LispVal depthDecForm = new LispCons(new LispSymbol(LispNames.HC_DEPTH_DEC_INTERNAL), LispNil.INSTANCE);
 		ctx.unwindScopes
 			.push(new WasmLispCompiler.UnwindScope(List.of(depthDecForm), ctx.blockMarkers.size(), trampolineDepth));
-		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		// State-machine mode: the protected expression is a spine child (an await there
+		// suspends; the resume routes back through this try_table, re-arming it, and
+		// the suspension undid the depth increment this form's head re-runs).
+		WasmAsyncEmit.spine(parts.get(1), ctx);
 		ctx.unwindScopes.pop();
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // try_table

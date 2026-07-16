@@ -193,8 +193,26 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * follows shifts, and only when {@code simd} is set.
 	 */
 	int userFuncBase() {
-		return FUNC_USER_BASE
+		return asyncFuncBase() + (this.asyncMode ? WasmFutureRuntimeBuilder.FUNC_COUNT : 0);
+	}
+
+	/**
+	 * The index of the first async-runtime function ({@code _future_new}), right after
+	 * the {@code --simd} block. The block itself is emitted only in {@code asyncMode}
+	 * (the program uses async-defun/async-lambda/await under {@code --component}); every
+	 * other module is byte-identical to a build that never knew about it.
+	 */
+	private int asyncFuncBase() {
+		return FUNC_VEC_BASE
 				+ (this.simd ? WasmVecSimdRuntimeBuilder.FUNC_COUNT + WasmLinalgSimdRuntimeBuilder.FUNC_COUNT : 0);
+	}
+
+	/**
+	 * The index of {@code TYPE_FUTURE} ({@code TYPE_ASYNC_FRAME} follows it), appended
+	 * after the fixed and {@code --simd} types in {@code asyncMode} only.
+	 */
+	private int asyncTypeBase() {
+		return TYPE_F32ARR + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
 	}
 
 	/**
@@ -214,8 +232,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @return the index of the first export wrapper type
 	 */
 	private int fixedTypeCount() {
-		return TYPE_F32ARR + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
+		return asyncTypeBase() + (this.asyncMode ? ASYNC_TYPE_COUNT : 0);
 	}
+
+	/**
+	 * Whether this compilation runs the {@code --component} async state machines: the
+	 * program uses {@code rontolisp:async-defun}/{@code async-lambda}/{@code await}.
+	 * Forces EH mode (the entry's reject path and the rejected-await re-signal throw on
+	 * the {@code $lisp-cond} tag), so an async component needs
+	 * {@code wasmtime -W exceptions=y}.
+	 */
+	private boolean asyncMode;
 
 	// Function indices (imports come first). Defined functions are indexed relative to
 	// IMPORT_FUNC_COUNT so adding an imported function only requires adding its constant
@@ -680,6 +707,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// How many type entries the --simd block appends.
 	static final int SIMD_TYPE_COUNT = 4;
 
+	// --- the async block (asyncMode only; see WasmAsyncEmit) ----------------------
+	//
+	// Two struct types in ONE rec group (they are structurally identical, and rec-group
+	// membership is what keeps them distinct under wasm-GC's structural type
+	// canonicalization): TYPE_FUTURE {mut i32 state, mut value, mut waiters, mut source}
+	// at asyncTypeBase(), TYPE_ASYNC_FRAME {mut i32 state, mut spill, mut future,
+	// mut env} right after it. Appended before the export/import wrapper signatures
+	// (which shift past them via fixedTypeCount()).
+	static final int ASYNC_TYPE_COUNT = 2;
+
 	// The exception tag index of the one Lisp condition tag ($lisp-cond), emitted only
 	// in EH mode (the program uses handler-case/ignore-errors/unwind-protect). Its
 	// payload is a cons (condition-instance . message-string) over TYPE_CONS, and its
@@ -881,7 +918,22 @@ public final class WasmLispCompiler implements LispCompiler {
 		catch (IllegalArgumentException ex) {
 			throw new UnsupportedOperationException(ex.getMessage());
 		}
-		program = am.ik.rontolisp.LispAsync.lowerProgram(program);
+		// --component compiles the raw async forms as entry+resume state machines
+		// (WasmAsyncEmit): a top-level async-defun becomes a plain defun whose name is
+		// remembered, and lowerProgram is skipped. Everything else (Preview 1, and a
+		// component with no async surface -- where lowering is a no-op) keeps the
+		// degenerate %async-run lowering.
+		boolean usesAsync = programUsesSymbol(program, LispNames.ASYNC_DEFUN_QUALIFIED)
+				|| programUsesSymbol(program, LispNames.ASYNC_LAMBDA_QUALIFIED)
+				|| programUsesSymbol(program, LispNames.AWAIT_QUALIFIED);
+		this.asyncMode = this.component && usesAsync;
+		Set<String> asyncDefunNames = new HashSet<>();
+		if (this.asyncMode) {
+			program = rewriteTopLevelAsyncDefuns(program, asyncDefunNames);
+		}
+		else {
+			program = am.ik.rontolisp.LispAsync.lowerProgram(program);
+		}
 		// Splice top-level defstructs/defclasses/defgenerics/defmethods into their
 		// generated defuns before lambda-list desugaring (the generated constructors
 		// use &key) so Pass 1 collects them as ordinary functions; the registries make
@@ -930,7 +982,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// todo-129 step-7 retrofit): their expansions ride unwind-protect /
 		// handler-case on WASM now, so a program using them needs the EH machinery --
 		// and the `wasmtime -W exceptions=y` run flag.
-		boolean ehMode = programUsesEhForm(program);
+		// asyncMode implies EH mode: the async entry's reject path and the
+		// rejected-await re-signal throw on the $lisp-cond tag.
+		boolean ehMode = programUsesEhForm(program) || this.asyncMode;
 		boolean usesFetch = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH));
 		// The rontolisp:tcp-* built-ins are component-only the same way: in component
@@ -1249,6 +1303,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Shared state for lambda discovery
 		List<LambdaInfo> lambdaDecls = new ArrayList<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
+		// The async waiter wake-up goes through the arity-1 dispatch (the resume
+		// functions are arity-1 lambdas), so its body must be real.
+		if (this.asyncMode) {
+			indirectCallArities.add(1);
+		}
 
 		// When eval is used, _eval applies any registered function via the dispatch
 		// functions, so ensure a real dispatch body exists for every registered arity.
@@ -1288,7 +1347,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			.closRegistry(closRegistry)
 			.globals(globals)
 			.specialVars(specialVars)
-			.globalIndices(globalIndices);
+			.globalIndices(globalIndices)
+			.futureTypeIndex(this.asyncMode ? asyncTypeBase() : -1)
+			.frameTypeIndex(this.asyncMode ? asyncTypeBase() + 1 : -1)
+			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
+			.asyncDefunNames(Set.copyOf(asyncDefunNames));
 
 		// Pass 2a: Compile each defun body (with env param at slot 0)
 		List<byte[]> userFunctionBodies = new ArrayList<>();
@@ -1303,6 +1366,16 @@ public final class WasmLispCompiler implements LispCompiler {
 					|| componentTaskReturnWrappers.containsKey(defun.name)) {
 				importBodySlots.put(defun.name, userFunctionBodies.size());
 				userFunctionBodies.add(null); // filled in below
+				continue;
+			}
+			if (this.asyncMode && asyncDefunNames.contains(defun.name)) {
+				// entry + resume state machine (WasmAsyncEmit): the resume registers
+				// itself in the lambda table; the entry is the defun's own function.
+				ByteArrayOutputStream protoBuf = new ByteArrayOutputStream();
+				Ctx protoCtx = ctxBuilder.writer(new WasmWriter(protoBuf)).bodyStream(protoBuf).build();
+				WasmAsyncEmit.Resume resume = WasmAsyncEmit.compileResume(protoCtx, defun.paramNames, defun.bodyExprs,
+						List.of(), false, false);
+				userFunctionBodies.add(WasmAsyncEmit.buildEntryBody(protoCtx, defun.paramNames.size(), false, resume));
 				continue;
 			}
 			ByteArrayOutputStream funcBody = new ByteArrayOutputStream();
@@ -1373,9 +1446,26 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (ehMode) {
 			WasmEmitHelper.emitCatchAllPrologue(ctx);
 		}
-		for (LispVal expr : topLevelExprs) {
-			WasmExprCompiler.compileExpr(expr, ctx);
-			startWriter.write(Instruction.DROP);
+		int topLevelAwaits = 0;
+		if (this.asyncMode) {
+			for (LispVal expr : topLevelExprs) {
+				topLevelAwaits += WasmAwaitAnalysis.countAwaits(expr);
+			}
+		}
+		if (topLevelAwaits > 0) {
+			// The top level is implicitly asynchronous: it compiles as an entry+resume
+			// pair like any async-defun. An uncaught condition (incl. a rejected
+			// top-level await's re-signal) escapes to the catch-all prologue -- the
+			// same trap an uncaught error produces today.
+			WasmAsyncEmit.Resume topResume = WasmAsyncEmit.compileResume(ctx, List.of(), topLevelExprs, List.of(), true,
+					usesEval);
+			WasmAsyncEmit.emitStartEntry(ctx, topResume);
+		}
+		else {
+			for (LispVal expr : topLevelExprs) {
+				WasmExprCompiler.compileExpr(expr, ctx);
+				startWriter.write(Instruction.DROP);
+			}
 		}
 		if (this.component) {
 			// _start returns i32 (0 = ok) so it can be lifted as wasi:cli/run `run`
@@ -1406,6 +1496,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		int lambdaIdx = 0;
 		while (lambdaIdx < lambdaDecls.size()) {
 			LambdaInfo lambda = lambdaDecls.get(lambdaIdx);
+			if (lambda.precompiled() != null) {
+				// an async entry/resume half, compiled out of line by WasmAsyncEmit
+				lambdaFunctionBodies.add(lambda.precompiled());
+				lambdaIdx++;
+				continue;
+			}
 			if (lambda.paramNames().size() > MAX_CALLABLE_ARITY) {
 				throw new UnsupportedOperationException("Cannot compile lambda: the WASM backend supports at most "
 						+ MAX_CALLABLE_ARITY + " parameters, got " + lambda.paramNames().size()
@@ -1796,13 +1892,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Build helper function bodies
 		byte[] printI32Body = WasmRuntimeBuilder.buildPrintI32Core(true);
 		byte[] writeStrBody = WasmRuntimeBuilder.buildWriteStrBody();
-		byte[] printValBody = WasmRuntimeBuilder.buildPrintValBody(stringTable, this.simd);
+		byte[] printValBody = WasmRuntimeBuilder.buildPrintValBody(stringTable, this.simd,
+				this.asyncMode ? asyncTypeBase() : -1);
 		byte[] printI32NoNlBody = WasmRuntimeBuilder.buildPrintI32Core(false);
 		byte[] printF64Body = WasmRuntimeBuilder.buildPrintF64Core(true, stringTable);
 		byte[] printF64NoNlBody = WasmRuntimeBuilder.buildPrintF64Core(false, stringTable);
 		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody();
 		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
-		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable, this.simd);
+		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable, this.simd,
+				this.asyncMode ? asyncTypeBase() : -1);
 
 		// Build the eval runtime (interpreter + function-name registry). The registry
 		// maps a symbol-name string offset to (funcId, arity). Because the string table
@@ -2216,6 +2314,30 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.write(Type.F64);
 					});
 				}
+				if (this.asyncMode) {
+					// TYPE_FUTURE + TYPE_ASYNC_FRAME in ONE rec group: they are
+					// structurally identical, and same-group membership is what keeps
+					// two identical shapes distinct under wasm-GC's structural type
+					// canonicalization (a separate group would canonicalize them EQUAL
+					// and ref.test could no longer tell them apart).
+					types.addRecGroup(rec -> {
+						// TYPE_FUTURE {mut i32 state, mut value, mut waiters, mut src}
+						rec.addSubFinalStruct(fields -> {
+							fields.addField(true, w -> w.write(Type.I32));
+							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+						});
+						// TYPE_ASYNC_FRAME {mut i32 state, mut spill, mut future,
+						// mut env}
+						rec.addSubFinalStruct(fields -> {
+							fields.addField(true, w -> w.write(Type.I32));
+							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+						});
+					});
+				}
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed type (TYPE_F32ARR, or the --simd block's TYPE_V_SET). One per
 				// (rontolisp:wasm-export ...) directive.
@@ -2455,6 +2577,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					// linalg: SIMD block (--simd only): fifteen kernels, right after.
 					for (int i = 0; i < WasmLinalgSimdRuntimeBuilder.FUNC_COUNT; i++) {
 						fnDef.addFunction(WasmLinalgSimdRuntimeBuilder.typeIndexOf(i));
+					}
+				}
+				// Async future runtime (asyncMode only), right after the --simd block.
+				if (this.asyncMode) {
+					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
+						fnDef.addFunction(WasmFutureRuntimeBuilder.typeIndexOf(i));
 					}
 				}
 				// User defun functions
@@ -2752,6 +2880,13 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(WasmLinalgSimdRuntimeBuilder.build(i, FUNC_VEC_BASE));
 					}
 				}
+				// Async future runtime bodies (asyncMode only), in asyncFuncBase() order.
+				if (this.asyncMode) {
+					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
+						code.addFunction(WasmFutureRuntimeBuilder.build(i, asyncFuncBase(), asyncTypeBase(),
+								asyncTypeBase() + 1));
+					}
+				}
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);
@@ -2922,6 +3057,36 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * asyncMode: rewrites every top-level {@code (rontolisp:async-defun name (ll)
+	 * body...)} into the equivalent plain {@code (defun name (ll) body...)} and records
+	 * the name -- Pass 2a compiles those defuns as entry+resume state machines
+	 * ({@code WasmAsyncEmit}) instead of plain bodies. A nested async-defun is rejected
+	 * (define it at top level; a first-class async function value is
+	 * {@code rontolisp:async-lambda}).
+	 * @param program the resolved, flattened top-level forms
+	 * @param asyncDefunNames receives the rewritten names
+	 * @return the rewritten program
+	 */
+	private static List<LispVal> rewriteTopLevelAsyncDefuns(List<LispVal> program, Set<String> asyncDefunNames) {
+		List<LispVal> out = new ArrayList<>(program.size());
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
+					&& LispNames.ASYNC_DEFUN_QUALIFIED.equals(head.name())) {
+				if (!(cons.cdr() instanceof LispCons rest) || !(rest.car() instanceof LispSymbol name)) {
+					throw new UnsupportedOperationException(LispNames.ASYNC_DEFUN_QUALIFIED
+							+ " expects (async-defun name (params) body...): " + form.print());
+				}
+				asyncDefunNames.add(name.name());
+				out.add(new LispCons(new LispSymbol(LispNames.DEFUN), cons.cdr()));
+			}
+			else {
+				out.add(form);
+			}
+		}
+		return out;
 	}
 
 	// True when the program contains a form that flips the module into EH mode: a
@@ -3101,8 +3266,36 @@ public final class WasmLispCompiler implements LispCompiler {
 	record WasmFunctionInfo(String name, int paramCount, boolean variadic, int funcId, int typeIndex, int funcIndex) {
 	}
 
+	/**
+	 * A function compiled in Pass 2c. {@code precompiled} is non-null for an async
+	 * entry/resume half ({@code WasmAsyncEmit}), whose body was compiled out of line;
+	 * Pass 2c then emits those bytes verbatim.
+	 */
 	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
-			List<String> freeVarNames, int funcIndex) {
+			List<String> freeVarNames, int funcIndex, byte @Nullable [] precompiled) {
+
+		LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
+				List<String> freeVarNames, int funcIndex) {
+			this(funcId, methodName, paramNames, variadic, bodyExprs, freeVarNames, funcIndex, null);
+		}
+	}
+
+	/**
+	 * Per-resume emission state of the {@code --component} async state machines: the
+	 * resume function's own funcId (each suspension registers a
+	 * {@code TYPE_CLOSURE{resumeFuncId, frame}} waiter) and the monotonically assigned
+	 * suspend-state counter ({@code $rt} dispatch values; 0 = initial entry).
+	 */
+	static final class AsyncResume {
+
+		final int resumeFuncId;
+
+		int nextState = 1;
+
+		AsyncResume(int resumeFuncId) {
+			this.resumeFuncId = resumeFuncId;
+		}
+
 	}
 
 	/**
@@ -3260,6 +3453,54 @@ public final class WasmLispCompiler implements LispCompiler {
 		final Deque<Integer> blockMarkers = new ArrayDeque<>();
 
 		/**
+		 * The {@code TYPE_FUTURE} type index, or -1 outside asyncMode.
+		 */
+		int futureTypeIndex = -1;
+
+		/**
+		 * The {@code TYPE_ASYNC_FRAME} type index, or -1 outside asyncMode.
+		 */
+		int frameTypeIndex = -1;
+
+		/**
+		 * The async runtime block's base function index ({@code _future_new}), or -1
+		 * outside asyncMode.
+		 */
+		int asyncFuncBase = -1;
+
+		/**
+		 * Names of the top-level {@code rontolisp:async-defun}s (asyncMode): their defuns
+		 * compile as entry+resume pairs, and an export wrapper targeting one polls the
+		 * returned future.
+		 */
+		Set<String> asyncDefunNames = Set.of();
+
+		/**
+		 * Non-null while compiling an async resume body (asyncMode): the state-machine
+		 * emission mode of the form compilers.
+		 */
+		@Nullable AsyncResume asyncResume;
+
+		/**
+		 * Transient marker that the NEXT {@code compileExpr} call compiles a spine child
+		 * (empty operand stack, so an await there may suspend). Set by the async-aware
+		 * form compilers, consumed at {@code compileExpr} entry.
+		 */
+		boolean asyncSpine;
+
+		/**
+		 * Whether the form currently being compiled sits at a spine position (the
+		 * consumed {@link #asyncSpine} of the enclosing {@code compileExpr} call).
+		 */
+		boolean asyncSpineCurrent;
+
+		/**
+		 * Monotonic counter for the {@code %await$N} hoist bindings
+		 * ({@code WasmAwaitNormalizer}); per body, purely for name uniqueness.
+		 */
+		int asyncHoistCounter;
+
+		/**
 		 * Stack of active unwind scopes (EH mode): one per {@code unwind-protect}
 		 * protected region (cleanup forms) and per {@code handler-case} protected region
 		 * (the {@code %hc-depth-dec} form), innermost on top. A {@code return} whose
@@ -3291,6 +3532,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.globals = builder.globals;
 			this.specialVars = builder.specialVars;
 			this.globalIndices = builder.globalIndices;
+			this.futureTypeIndex = builder.futureTypeIndex;
+			this.frameTypeIndex = builder.frameTypeIndex;
+			this.asyncFuncBase = builder.asyncFuncBase;
+			this.asyncDefunNames = builder.asyncDefunNames;
 		}
 
 		static Builder builder() {
@@ -3338,6 +3583,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<String> specialVars = Set.of();
 
 			private Map<String, Integer> globalIndices = Map.of();
+
+			private int futureTypeIndex = -1;
+
+			private int frameTypeIndex = -1;
+
+			private int asyncFuncBase = -1;
+
+			private Set<String> asyncDefunNames = Set.of();
 
 			Builder writer(WasmWriter writer) {
 				this.writer = writer;
@@ -3436,6 +3689,26 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder globalIndices(Map<String, Integer> globalIndices) {
 				this.globalIndices = globalIndices;
+				return this;
+			}
+
+			Builder futureTypeIndex(int futureTypeIndex) {
+				this.futureTypeIndex = futureTypeIndex;
+				return this;
+			}
+
+			Builder frameTypeIndex(int frameTypeIndex) {
+				this.frameTypeIndex = frameTypeIndex;
+				return this;
+			}
+
+			Builder asyncFuncBase(int asyncFuncBase) {
+				this.asyncFuncBase = asyncFuncBase;
+				return this;
+			}
+
+			Builder asyncDefunNames(Set<String> asyncDefunNames) {
+				this.asyncDefunNames = asyncDefunNames;
 				return this;
 			}
 

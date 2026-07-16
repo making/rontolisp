@@ -27,6 +27,12 @@ final class WasmExprCompiler {
 	}
 
 	static void compileExpr(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		if (ctx.asyncResume != null) {
+			// Consume the spine marker set by the async-aware form compilers: it
+			// applies to THIS form only (WasmAsyncEmit).
+			ctx.asyncSpineCurrent = ctx.asyncSpine;
+			ctx.asyncSpine = false;
+		}
 		switch (expr) {
 			case LispInteger i -> {
 				ctx.writer.write(Instruction.I32_CONST);
@@ -124,6 +130,16 @@ final class WasmExprCompiler {
 		if (!(head instanceof LispSymbol qhead && LispNames.QUOTE.equals(qhead.name())) && !cons.isProperList()) {
 			throw new UnsupportedOperationException("Improper list in call position: " + cons.print());
 		}
+		if (ctx.asyncResume != null) {
+			// A strict call with an await somewhere in its arguments hoists them into
+			// a let* so the await lands at a spine position (WasmAwaitNormalizer).
+			LispVal hoisted = WasmAwaitNormalizer.hoistCallArgs(cons, ctx);
+			if (hoisted != null) {
+				ctx.asyncSpine = ctx.asyncSpineCurrent;
+				compileExpr(hoisted, ctx);
+				return;
+			}
+		}
 		if (head instanceof LispSymbol sym) {
 			// --simd: the vectorizable vec: kernels are routed to the emitted v128
 			// runtime
@@ -186,7 +202,8 @@ final class WasmExprCompiler {
 					return;
 				}
 				if (LispNames.PROMISEP.equals(qn.member()) || LispNames.FUTUREP.equals(qn.member())) {
-					// both are one ref.test against TYPE_PROMISE (the degenerate future)
+					// one ref.test against TYPE_PROMISE (the degenerate future), plus
+					// TYPE_FUTURE under the asyncMode state machines
 					WasmPromisepCompiler.compile(cons, ctx);
 					return;
 				}
@@ -195,13 +212,31 @@ final class WasmExprCompiler {
 					return;
 				}
 				if (LispNames.ASYNC_DEFUN.equals(qn.member())) {
+					if (ctx.futureTypeIndex >= 0) {
+						// asyncMode compiles top-level async-defuns as state machines;
+						// there is no nested form (the degenerate %async-run lowering
+						// would silently change its semantics).
+						throw new UnsupportedOperationException(LispNames.ASYNC_DEFUN_QUALIFIED
+								+ " is only supported as a top-level form with --component"
+								+ " (use rontolisp:async-lambda for a nested async function)");
+					}
 					// normally lowered by the compile() pre-pass; a stray nested form
 					// lowers here
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandAsyncDefun(cons), ctx);
 					return;
 				}
 				if (LispNames.ASYNC_LAMBDA.equals(qn.member())) {
+					if (ctx.futureTypeIndex >= 0) {
+						WasmAsyncEmit.compileAsyncLambdaValue(cons, ctx);
+						return;
+					}
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandAsyncLambda(cons), ctx);
+					return;
+				}
+				if (LispNames.FUTURE_NEW_INTERNAL.equals(qn.member())
+						|| LispNames.FUTURE_SETTLE_INTERNAL.equals(qn.member())
+						|| LispNames.FUTURE_REJECT_INTERNAL.equals(qn.member())) {
+					WasmFutureInternalCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
 				if (LispNames.WAIT_FOR.equals(qn.member())) {

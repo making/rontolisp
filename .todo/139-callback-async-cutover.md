@@ -247,11 +247,160 @@ Validation: `wasm-tools validate -f component-model,cm-async` ONLY.
   component-model-async] (config updated in examples/wasmcloud/http-handler).
   Remaining for later phases: other examples' configs + README status flip,
   test-command flag reduction (they still pass the old flags, harmless).
-- Phases 7-10: pending. Task list mirrors the plan file. NOTE: with Phase 6,
-  every component is wasmCloud-hostable and flag-free; Phases 7-9 add TRUE
-  concurrency (state machines + event loop) on top -- serve currently handles
-  requests sequentially per instance (host re-instantiates per request anyway),
-  and in-flight fetches still block at the first await.
+- Phase 7 (component state machines + TYPE_FUTURE) LANDED 2026-07-17 (suite
+  3745/0 pre-new-tests; integration battery added; native E2E pending below):
+  - asyncMode = --component && program uses async-defun/async-lambda/await;
+    FORCES ehMode (entry reject + rejected-await re-signal throw $lisp-cond), so
+    an async component needs `-W exceptions=y` (serve/fetch docs already carry
+    it). Programs without async surface are byte-identical (--simd-style gating:
+    ASYNC_TYPE_COUNT=2 after the simd types, WasmFutureRuntimeBuilder FUNC_COUNT=6
+    at asyncFuncBase() after the simd block; userFuncBase()/fixedTypeCount()
+    account).
+  - TYPE_FUTURE{mut state 0P/1F/2R, mut value, mut waiters, mut source} +
+    TYPE_ASYNC_FRAME{mut state, mut spill, mut future, mut env} in ONE rec group
+    (same-group membership keeps the two structurally identical structs distinct
+    under wasm-GC structural canonicalization -- a separate group would merge
+    them). Runtime: _future_new/_settle/_reject/_add_waiter/_wake/_poll; wake =
+    direct dispatch_1 call of TYPE_CLOSURE{resumeFuncId, frame} waiters with a
+    per-waiter try_table (completion settles frame.future -> cascade, uncaught
+    condition rejects it); poll flattens settled chains, resolves legacy
+    TYPE_PROMISE via _promise_await (blocking, Phase-8 seam), throws rejected
+    payloads (memoized re-signal at await), returns pending futures unchanged.
+  - async-defun = entry (the defun, public signature) + resume (arity-1
+    LambdaInfo with PRECOMPILED bytes -- new nullable record component -- so the
+    dispatch table can wake it). Resume slots: 0=frame, 1=unused resume value
+    (landings re-poll the spilled future), 2=$rt i32 (own local-decl run),
+    params/temps from 3 mirrored 1:1 by the spill array; prologue restores all +
+    frame.env -> closureEnvSlot local + boxes captured params at state 0 only.
+    Suspension = plain wasm `return frame` (unforgeable sentinel, ref.eq'd by
+    entry/wake) after frame.state=k, unrolled local spill, add_waiter, and one
+    eh-depth decrement per enclosing handler-case protected region. asyncSpine
+    flag = the spine-position safety check (await elsewhere -> clear error).
+  - Structure dispatch: contiguous state ranges from WasmAwaitAnalysis.countAwaits
+    (mirrors LispAsync.check traversal; per-region assertStates catches
+    expansion-duplicated awaits). Guarded sequences (progn/let body/%block/defun
+    body/while body/setq pairs), if (test+branch ranges; test awaits SUPPORTED),
+    while (test awaits supported too), let inits (skip on resume; locals come
+    back from the spill; name binds after init = let semantics), handler-case
+    protected form (statement guard routes INTO the try_table; head depth++
+    re-runs on resume, suspend undid it), unwind-protect protected form
+    (suspend = return -> cleanups naturally skipped, re-armed on re-entry).
+  - A-normalization is at the COMPILE SITE, not a pre-pass: compileCons hoists
+    strict-call arguments containing awaits into let* (%await$N; literals stay);
+    denylist = specialOperatorNames() + %-heads + rontolisp/usocket directive
+    macros, so it also normalizes macro EXPANSIONS.
+  - v1 compile errors: await in handler-case CLAUSE bodies / :no-error, in
+    unwind-protect cleanups (user decision), special-var let around awaits,
+    nested async-defun (use async-lambda). async-lambda = entry+resume lambda
+    pair; captures ride frame.env.
+  - Top level with awaits = implicit async pair; _start entry runs it eagerly,
+    SUSPENSION TRAPS (unreachable -- nothing can produce a pending top-level
+    future until the Phase-8 event loop); uncaught rejection = catch-all trap as
+    today. Pass 2b unchanged when the top level has no awaits.
+  - wasm-export of an async defun: wrapper polls the returned future (serve's
+    handle drops the settled nil; a rejection traps through the wrapper
+    catch-all = today's error-in-handler shape). serve verified E2E on wasmtime
+    46 (`wasmtime serve -W gc=y -W exceptions=y`, %serve-handle now a state
+    machine).
+  - Internal TEST primitives (undocumented, asyncMode only):
+    rontolisp::%future-new/%future-settle/%future-reject let the integration
+    battery drive REAL suspensions before Phase 8: spill/restore, waiter
+    cascade, handler-case catch ACROSS a suspension, unwind-protect re-arm,
+    loop/while-test awaits, async-lambda captures -- all green on wasmtime 46.
+  - futurep = TYPE_PROMISE || TYPE_FUTURE ref.test; print/princ gained a
+    TYPE_FUTURE "#<FUTURE>" branch (parameterized builders, -1 = absent).
+  - Eager 4-backend parity verified manually (interp/JVM/P1/component identical
+    incl. handler-case around rejected await). KNOWN SEAM: rontolisp:then on a
+    TYPE_FUTURE passes the future to the callback unresolved (then is legacy,
+    deleted in Phase 10).
+  - DEFERRED to the final phase (user instruction 2026-07-17: "E2E is slow, run
+    it in the last phase"): native-image CiSpecE2eTest (ci-spec async case
+    expected outputs are unchanged, only the component implementation moved to
+    state machines -- still MUST run before push per CLAUDE.md), wasmCloud wash
+    re-verify (serve components now carry the async runtime; feature set
+    unchanged), docs note that async components need `-W exceptions=y` (Phase 10
+    docs pass).
+- Phases 8-10: pending. Task list mirrors the plan file. NOTE: with Phase 6,
+  every component is wasmCloud-hostable and flag-free; Phases 8-9 add TRUE
+  concurrency (import-layer pending futures + callback scheduler) on top --
+  serve currently handles requests sequentially per instance (host
+  re-instantiates per request anyway), and in-flight fetches still block at the
+  first await.
+
+## Phase 8 handoff (start a fresh session HERE)
+
+State at handoff (2026-07-17): Phases 0-6 committed `6dc8d12`; **Phase 7
+COMMITTED `ee2049c`** (25 files; new classes below). All Phase-7 gates green
+except the deliberately deferred ones listed above; the deferred native
+CiSpecE2eTest must run before any push.
+
+Phase 7 code map (all in `codegen/wasm`, package-private):
+
+- `WasmAsyncEmit` -- THE state-machine emitter: compileResume (registers the
+  resume LambdaInfo, builds prologue+body, returns Resume{funcId, funcIndex,
+  localCount}), buildEntryBody, emitStartEntry (top-level; suspension =
+  `unreachable`, REPLACE THIS with the Phase-8 event loop),
+  compileGuardedProgn/compileGuardedStatement/emitRangeGuard/emitInRange,
+  compileAwait (the suspend point; also where a pending future's waiter is
+  registered -- Phase 8's host-backed futures additionally need the
+  waitable-set join here or in the registry), compileAsyncLambdaValue,
+  freshCtx (builds a Ctx sharing module-wide state; add new Ctx fields HERE and
+  in Ctx.Builder or sub-compilations silently lose them).
+- `WasmFutureRuntimeBuilder` -- _future_new/_settle/_reject/_add_waiter/_wake/
+  _poll at ctx.asyncFuncBase + OFF_*. `_poll`'s TYPE_PROMISE branch calls
+  FUNC_PROMISE_AWAIT (the BLOCKING legacy seam): Phase 8 replaces the
+  wit-import async-call promise chains with pending TYPE_FUTUREs
+  (_subtask_future) and deletes that branch last. TYPE_FUTURE.source (field 3)
+  is reserved for the host-waitable registry key.
+- `WasmAwaitAnalysis.countAwaits` -- state counting; MUST stay in lockstep with
+  LispAsync.check's traversal and with emission order (assertStates enforces).
+- `WasmAwaitNormalizer.hoistCallArgs` -- strict-call arg hoist, called from
+  WasmExprCompiler.compileCons (asyncResume mode only).
+- `WasmFutureInternalCompiler` -- rontolisp::%future-new/-settle/-reject test
+  primitives (keep; Phase-8 tests can keep using them, Phase 10 decides fate).
+- Touched compilers: If/While/Let/Progn/Block/Setq/Defvar/Return/HandlerCase/
+  UnwindProtect (guard branches), AwaitCompiler (delegates to WasmAsyncEmit),
+  PromisepCompiler (futurep), RuntimeBuilder (print "#<FUTURE>" branch, builder
+  signature +futureTypeIndex), ExportCompiler (poll after async targets),
+  LambdaCompiler (emitClosureValue extracted), LispNames (+3 internals),
+  WasmLispCompiler (asyncMode wiring, rewriteTopLevelAsyncDefuns, AsyncResume,
+  LambdaInfo +precompiled component, Ctx +futureTypeIndex/frameTypeIndex/
+  asyncFuncBase/asyncDefunNames/asyncResume/asyncSpine*/asyncHoistCounter).
+
+Phase 8 pointers (plan section "Phase 8 -- import 層 + スケジューラ本稼働"):
+
+- Delete `WasmComponentImportCompiler.emitAsyncAwaitBody` (blocking spin) and
+  the emitBlockedWait plumbing; async wit-import calls become
+  `_subtask_future(token)` -> pending TYPE_FUTURE registered in a
+  waitable->future GC table; RETURNED-eagerly (subtask 0) -> settled.
+- Turn the serve builder's stub callback export ("async_cb", currently
+  `unreachable` -- see WasmServeComponentBuilder / Phase 6 note (e)) into the
+  real scheduler: EVENT_SUBTASK(RETURNED) -> lift + subtask.drop + settle +
+  wake; EVENT_STREAM/FUTURE_* -> packed decode + settle; root frame done ->
+  EXIT else WAIT|set<<4. Byte encodings + event constants are all in the
+  Phase 0 spike section of this file.
+- `run` needs the callback lift too (canonLiftMemoryUtf8AsyncCallback exists
+  since Phase 5) once the top level can genuinely suspend; emitStartEntry's
+  `unreachable` becomes task.return + the wait loop, per the scheduler design
+  notes (one waitable-set per task, per-task doorbell stream for cross-task
+  wakeup -- spike findings 5/6).
+- WitImportDirective: delete thenDefun/awaitUnwrapDefun/%member-await, wire
+  %subtask-future; interpreter/JVM wit-providers wrap sync results in settled
+  futures.
+- wait-for on component: lower to wasi:clocks monotonic-clock `wait-for`
+  (import block currently only declares `now`) -- first real pending-future
+  source outside http.
+- Known seam to resolve or document: `rontolisp:then` on TYPE_FUTURE (legacy;
+  Phase 10 deletes then/promisep + P1 TYPE_PROMISE machinery per the deletion
+  list).
+
+Verification recipe used in Phase 7 (repeat for Phase 8): full suite +
+`-Dtest=WasmLispCompilerIntegrationTest` (Docker; do NOT run other maven
+builds concurrently -- a parallel `-Pweb compile` clobbers target/classes and
+fakes 90+ NoClassDefFound failures), manual 4-backend smoke, `-Pweb compile`,
+javadoc (Version-class error is the allowed exception). Deferred-to-final:
+native CiSpecE2eTest + wasmCloud wash + docs (`-W exceptions=y` note, backends
+matrix, .kb/async-await.md update for the state machines).
 
 ## rontolisp:wait-for (DONE 2026-07-16, user-approved addition)
 

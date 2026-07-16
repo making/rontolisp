@@ -27,6 +27,46 @@ final class WasmSetqCompiler {
 			return;
 		}
 		int pairCount = (parts.size() - 1) / 2;
+		if (ctx.asyncResume != null && WasmAwaitAnalysis.countAwaits(cons) > 0) {
+			// State-machine mode: guard each pair like a sequence statement so a resume
+			// does not re-run earlier pairs' values (their locals are restored).
+			for (int p = 0; p < pairCount; p++) {
+				String name = ((LispSymbol) parts.get(1 + 2 * p)).name();
+				LispVal valueExpr = parts.get(2 + 2 * p);
+				if (p == pairCount - 1) {
+					ctx.asyncSpine = true;
+					compilePair(name, valueExpr, ctx);
+					continue;
+				}
+				int n = WasmAwaitAnalysis.countAwaits(valueExpr);
+				if (n == 0) {
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeSignedLeb128(WasmAsyncEmit.RT_SLOT);
+					ctx.writer.write(Instruction.I32_EQZ);
+					ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+					ctx.wasmCtrlDepth++;
+					ctx.asyncSpine = true;
+					compilePair(name, valueExpr, ctx);
+					ctx.writer.write(Instruction.DROP);
+					ctx.wasmCtrlDepth--;
+					ctx.writer.write(Instruction.END);
+					continue;
+				}
+				int lo = ctx.asyncResume.nextState;
+				ctx.writer.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+				ctx.wasmCtrlDepth++;
+				WasmAsyncEmit.emitRangeGuard(ctx, lo, lo + n - 1);
+				ctx.writer.write(Instruction.I32_EQZ);
+				ctx.writer.write(Instruction.BR_IF, 0);
+				ctx.asyncSpine = true;
+				compilePair(name, valueExpr, ctx);
+				ctx.writer.write(Instruction.DROP);
+				ctx.wasmCtrlDepth--;
+				ctx.writer.write(Instruction.END);
+				WasmAsyncEmit.assertStates(ctx, lo, n, valueExpr);
+			}
+			return;
+		}
 		for (int p = 0; p < pairCount; p++) {
 			compilePair(((LispSymbol) parts.get(1 + 2 * p)).name(), parts.get(2 + 2 * p), ctx);
 			if (p < pairCount - 1) {

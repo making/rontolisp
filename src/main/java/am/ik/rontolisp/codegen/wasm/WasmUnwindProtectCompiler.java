@@ -46,6 +46,16 @@ final class WasmUnwindProtectCompiler {
 		}
 		LispVal protectedForm = parts.get(1);
 		List<LispVal> cleanups = parts.subList(2, parts.size());
+		if (ctx.asyncResume != null) {
+			for (LispVal cleanup : cleanups) {
+				if (WasmAwaitAnalysis.countAwaits(cleanup) > 0) {
+					// the user-approved v1 restriction: a suspension skips cleanups (and
+					// re-arms them on re-entry), so a cleanup itself cannot suspend
+					throw new UnsupportedOperationException(
+							"rontolisp:await inside an " + LispNames.UNWIND_PROTECT + " cleanup form is not supported");
+				}
+			}
+		}
 		int resultSlot = ctx.allocTemp();
 		// block $done (result (ref null eq)) -- the unwind-protect value.
 		ctx.writer.write(Instruction.BLOCK);
@@ -81,7 +91,10 @@ final class WasmUnwindProtectCompiler {
 		ctx.writer.writeUnsignedLeb128(ctx.wasmCtrlDepth - landingDepth);
 		ctx.wasmCtrlDepth++;
 		ctx.unwindScopes.push(new WasmLispCompiler.UnwindScope(cleanups, ctx.blockMarkers.size(), trampolineDepth));
-		WasmExprCompiler.compileExpr(protectedForm, ctx);
+		// State-machine mode: the protected form is a spine child; a suspension inside
+		// it returns straight out (skipping the cleanups) and the resume re-enters this
+		// try_table from the top, re-arming them.
+		WasmAsyncEmit.spine(protectedForm, ctx);
 		ctx.unwindScopes.pop();
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // try_table

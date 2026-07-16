@@ -34,6 +34,9 @@ final class WasmBlockCompiler {
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
+		else if (ctx.asyncResume != null) {
+			WasmAsyncEmit.compileGuardedProgn(parts.subList(1, parts.size()), ctx);
+		}
 		else {
 			for (int i = 1; i < parts.size(); i++) {
 				if (i > 1) {

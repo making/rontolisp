@@ -2086,6 +2086,28 @@ public final class LispNames {
 	public static final String ASYNC_RUN = "%async-run";
 
 	/**
+	 * The internal {@code rontolisp::%future-new} test primitive of the
+	 * {@code --component} async state machines: a fresh PENDING first-class future.
+	 * Undocumented; it exists so the suspension machinery (spill/restore, waiter cascade)
+	 * is exercisable end-to-end before the Phase-8 import layer produces pending futures
+	 * of its own.
+	 */
+	public static final String FUTURE_NEW_INTERNAL = "%future-new";
+
+	/**
+	 * The internal {@code rontolisp::%future-settle} test primitive: settles a pending
+	 * future with a value, resuming its waiters. See {@link #FUTURE_NEW_INTERNAL}.
+	 */
+	public static final String FUTURE_SETTLE_INTERNAL = "%future-settle";
+
+	/**
+	 * The internal {@code rontolisp::%future-reject} test primitive: rejects a pending
+	 * future with a message (a {@code simple-error} re-signals at await). See
+	 * {@link #FUTURE_NEW_INTERNAL}.
+	 */
+	public static final String FUTURE_REJECT_INTERNAL = "%future-reject";
+
+	/**
 	 * The {@code promisep} predicate provided by the {@code rontolisp} package. Returns
 	 * {@code t} if the argument is a promise (as returned by {@code rontolisp:fetch} or
 	 * {@code rontolisp:then}), {@code nil} otherwise.

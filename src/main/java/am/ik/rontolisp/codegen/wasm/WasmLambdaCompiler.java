@@ -48,13 +48,24 @@ final class WasmLambdaCompiler {
 		ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(), bodyExprs,
 				new ArrayList<>(freeVars), funcIndex));
 
-		// Emit closure creation: {funcId, env}
+		emitClosureValue(funcId, new ArrayList<>(freeVars), ctx);
+	}
+
+	/**
+	 * Emits a closure value {@code {funcId, env}} whose environment is the cons list of
+	 * the given captured variables' cells (shared with the async-lambda entry pair, see
+	 * {@code WasmAsyncEmit}).
+	 * @param funcId the callee's funcId
+	 * @param freeVarList the captured variable names, in capture order
+	 * @param ctx the compilation context
+	 */
+	static void emitClosureValue(int funcId, List<String> freeVarList, WasmLispCompiler.Ctx ctx) {
 		// funcId
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(funcId);
 
 		// Build env as cons list of cells for captured variables
-		if (freeVars.isEmpty()) {
+		if (freeVarList.isEmpty()) {
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
@@ -64,7 +75,6 @@ final class WasmLambdaCompiler {
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
 			// Iterate free vars in reverse
-			List<String> freeVarList = new ArrayList<>(freeVars);
 			for (int i = freeVarList.size() - 1; i >= 0; i--) {
 				String varName = freeVarList.get(i);
 				// Push the cell for this var

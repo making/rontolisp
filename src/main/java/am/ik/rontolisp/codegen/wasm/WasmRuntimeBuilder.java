@@ -576,6 +576,31 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(func);
 	}
 
+	/**
+	 * Emits the {@code TYPE_FUTURE} print branch ("#&lt;FUTURE&gt;", the tag settled and
+	 * pending futures share with the legacy promise). A no-op when the module has no
+	 * async block ({@code futureTypeIndex < 0}), keeping every non-async module
+	 * byte-identical.
+	 */
+	private static void emitPrintFuture(WasmWriter w, WasmLispCompiler.StringTable st, int futureTypeIndex) {
+		if (futureTypeIndex < 0) {
+			return;
+		}
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(futureTypeIndex);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.promiseStr.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(st.promiseStr.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+	}
+
 	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase) {
@@ -1663,7 +1688,7 @@ final class WasmRuntimeBuilder {
 	 * newline. Handles null (nil), i31ref (integer), string struct, closure struct, and
 	 * cons struct (list).
 	 */
-	static byte[] buildPrintValBody(WasmLispCompiler.StringTable st, boolean simd) {
+	static byte[] buildPrintValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -1791,6 +1816,9 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// asyncMode: a first-class TYPE_FUTURE prints the same "#<FUTURE>" tag.
+		emitPrintFuture(w, st, futureTypeIndex);
+
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
 		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, simd);
 
@@ -1894,7 +1922,7 @@ final class WasmRuntimeBuilder {
 	 * Builds the princ_val helper function body. Same as print_val but strips quotes from
 	 * strings and uses FUNC_PRINC_VAL for recursive cons printing.
 	 */
-	static byte[] buildPrincValBody(WasmLispCompiler.StringTable st, boolean simd) {
+	static byte[] buildPrincValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -2056,6 +2084,9 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
+
+		// asyncMode: a first-class TYPE_FUTURE prints the same "#<FUTURE>" tag.
+		emitPrintFuture(w, st, futureTypeIndex);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
 		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, simd);

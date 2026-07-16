@@ -20,6 +20,10 @@ final class WasmWhileCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
+		if (ctx.asyncResume != null && WasmAwaitAnalysis.countAwaits(cons) > 0) {
+			compileAsync(parts, ctx);
+			return;
+		}
 		ctx.writer.write(Instruction.BLOCK, 0x40);
 		ctx.writer.write(Instruction.LOOP, 0x40);
 		// The test and body are compiled inside the block/loop pair; track the two extra
@@ -40,6 +44,49 @@ final class WasmWhileCompiler {
 		ctx.writer.write(Instruction.END); // loop
 		ctx.writer.write(Instruction.END); // block
 		// Push nil as the result of the while form.
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+	}
+
+	/**
+	 * State-machine mode: a {@code while} containing awaits. The loop-top test runs when
+	 * executing normally or when resuming into the test itself; a resume targeting a body
+	 * statement skips the test (the iteration state lives in restored locals) and routes
+	 * through the body guards. Once a landing completes, {@code $rt} is 0 and later
+	 * iterations run plainly.
+	 */
+	private static void compileAsync(List<LispVal> parts, WasmLispCompiler.Ctx ctx) {
+		WasmLispCompiler.AsyncResume ar = java.util.Objects.requireNonNull(ctx.asyncResume);
+		LispVal test = parts.get(1);
+		int testN = WasmAwaitAnalysis.countAwaits(test);
+		int testLo = ar.nextState;
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+		ctx.wasmCtrlDepth += 2;
+		if (testN == 0) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(WasmAsyncEmit.RT_SLOT);
+			ctx.writer.write(Instruction.I32_EQZ);
+		}
+		else {
+			WasmAsyncEmit.emitRangeGuard(ctx, testLo, testLo + testN - 1);
+		}
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.wasmCtrlDepth++;
+		WasmAsyncEmit.spine(test, ctx);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		// Exit the outer block: if (0), loop (1), block (2).
+		ctx.writer.write(Instruction.BR_IF, 2);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END); // if
+		WasmAsyncEmit.assertStates(ctx, testLo, testN, test);
+		for (int i = 2; i < parts.size(); i++) {
+			WasmAsyncEmit.compileGuardedStatement(parts.get(i), ctx);
+		}
+		ctx.writer.write(Instruction.BR, 0);
+		ctx.wasmCtrlDepth -= 2;
+		ctx.writer.write(Instruction.END); // loop
+		ctx.writer.write(Instruction.END); // block
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
 	}
