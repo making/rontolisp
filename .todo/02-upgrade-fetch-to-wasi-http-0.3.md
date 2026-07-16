@@ -235,7 +235,7 @@ not an http special case.
   REUSABLE (no CPS rewrite).
 - This file rewritten from "blocked on upstream" to this plan.
 
-### Phase 1 -- build the shared async-canon-lower capability -- **DONE (2026-07-16, uncommitted)**
+### Phase 1 -- build the shared async-canon-lower capability -- **DONE (2026-07-16, committed `4b07519`)**
 
 Landed in two halves. Full suite green; the async component VALIDATES under
 `wasm-tools validate --features all` (the strongest host-free check; the
@@ -349,7 +349,7 @@ The sync canonical built-ins are RENDEZVOUS (unbuffered): a `stream.write` /
 
 Not upstream-gated -- can proceed now.
 
-### Phase 2 -- unified `http.lisp` over async wasi:http@0.3 (fetch + serve in ONE) -- **DONE (2026-07-16, uncommitted)**
+### Phase 2 -- unified `http.lisp` over async wasi:http@0.3 (fetch + serve in ONE) -- **DONE (2026-07-16, committed `bef8c1b`)**
 
 All three shapes run E2E on wasmtime 46 (manual + the Docker integration tests):
 fetch under `wasmtime run -S http=y` (GET + POST body, response plist identical to
