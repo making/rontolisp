@@ -100,7 +100,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 | `:string` | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) |
 | `:s-expr` | 手動の `(ptr,len)` | コンポーネントモデル `string`(印字テキスト) | 非対応 | 非対応 |
 | 関数本体で使える機能 | 言語全機能 | 言語全機能 | [非 GC サブセット](#eligible-subset) | [非 GC サブセット](#eligible-subset) |
-| エクスポート内の I/O | 動作する(実 WASI インポート。`--no-wasi` ではトラップ) | 同期エクスポートでも通常は動作する。[`:async t`](#component-model-function-exports-wasm-export) で残余のトラップリスクを除去 | `print` のみ(単一の `fd_write` インポート) | `print` のみ(組み込み WASI 0.2 stdio ブリッジ) |
+| エクスポート内の I/O | 動作する(実 WASI インポート。`--no-wasi` ではトラップ) | 同期エクスポートでも通常は動作する。[`:async t`](#component-model-function-exports-wasm-export) で残余のトラップリスクを除去 | `print` のみ(単一の `fd_write` インポート) | `print` のみ(組み込み WASI 0.3 stdout ブリッジ。エクスポートは async リフトになる) |
 | プログラムのトップレベル | `_start` として実行 | `wasi:cli/run` として共存 | `defun` + ディレクティブのみ | `defun` + ディレクティブのみ |
 | 呼び出しごとの文字列メモリ | ホスト管理(`__ronto_alloc` + [アリーナ API](#reclaiming-the-hosts-buffer-the-arena-api)。Lisp 側はエンジンが回収) | 正準 post-return が解放 | ホスト管理(`__ronto_alloc` + [アリーナ API](#reclaiming-memory-the-arena-api)。スカラー戻り値では自動) | 正準 post-return が解放 |
 | 典型的なサイズ | 約 100 KB([`--optimize`](#optimize-tree-shaking) で約 2 KB) | 約 110 KB | 数十バイト〜数 KB | 数百バイト〜数 KB |
@@ -354,7 +354,7 @@ npx @bytecodealliance/jco types sumsq.wit -o types/
 # types/sumsq.d.ts: export function sumsquared(p0: number, p1: number): number;
 ```
 
-world のインポートはビルドのバリアントに従います(プレーン、`rontolisp:fetch`、`rontolisp:tcp-*`、`rontolisp:http-handler`。[`--no-gc --component`](#compact-component-output---no-gc---component) では world はインポートなしになり、プログラムが印字するときは 0.2 stdio のインポートを持ちます)。`:async t` エクスポートは `async func` として描画され、`rontolisp:http-handler` ビルドは `run` の代わりに `wasi:http/handler@0.3.0` をエクスポートします。`--component` なしの `--emit-wit` はコンパイルエラーです — コアモジュールには記述すべき WIT レベルの表面がありません。
+world のインポートはビルドのバリアントに従います(プレーン、`rontolisp:fetch`、`rontolisp:tcp-*`、`rontolisp:http-handler`。[`--no-gc --component`](#compact-component-output---no-gc---component) では world はインポートなしになり、プログラムが印字するときは `wasi:cli/stdout@0.3.0` のインポート — と `async func` のエクスポート — を持ちます)。`:async t` エクスポートは `async func` として描画され、`rontolisp:http-handler` ビルドは `run` の代わりに `wasi:http/handler@0.3.0` をエクスポートします。`--component` なしの `--emit-wit` はコンパイルエラーです — コアモジュールには記述すべき WIT レベルの表面がありません。
 
 ### `--emit-wit` は何のためにあるか
 
@@ -800,7 +800,7 @@ wasmtime run --invoke 'greet("world")' greet.wasm
 # "Hello, world"
 ```
 
-[印字](#printing-print--princ--terpri)もここで動作します: 印字するプログラムには組み込みの **print マイクロアダプタ** — コアの単一の `fd_write` インポートを WASI 0.2 stdio(`wasi:cli/stdout` と、`wasi:io/streams` の*同期的な* `blocking-write-and-flush`)の上に実装する 3 つの小さな固定コアモジュール — が、プログラムが印字するときだけ配線されます。エクスポートは通常の同期リフトのまま、フラグゼロという性質も維持され(ホストは 0.2 stdio をデフォルトで提供します)、印字出力はインタプリタとバイト単位で一致します — 先の `show.lisp` を使うと:
+[印字](#printing-print--princ--terpri)もここで動作します: 印字するプログラムには組み込みの **print マイクロアダプタ** — コアの単一の `fd_write` インポートを WASI 0.3(`wasi:cli/stdout` の `write-via-stream` と非同期の stream/future 組み込み)の上に実装する 3 つの小さな固定コアモジュール — が、プログラムが印字するときだけ配線されます。WASI 0.3 に同期書き込みは存在しないため、印字するプログラムのエクスポートは **async リフト**になります(WIT world では `async func` と表示されます)— それでもフラグゼロという性質は維持されます: 使うのはすべて base component-model async で、wasmtime 46+ ではデフォルトで有効です(これが*印字する*コンポーネントの wasmtime 下限になります。印字しないコンポーネントはインポートを一切持たず、より古いホストでも動きます)。印字出力はインタプリタとバイト単位で一致します — 先の `show.lisp` を使うと:
 
 ```bash
 rontolisp show.lisp --no-gc --component -o show.wasm
@@ -814,10 +814,10 @@ wasmtime run --invoke 'show(4)' show.wasm
 素の `--no-gc` 出力とのトレードオフ、および現在の制限:
 
 - コンポーネントはコンポーネントモデル対応のホストを必要とします。生のコアモジュールは素の埋め込み API を通じて**任意の** WebAssembly エンジンで動きます。両方の出力が使えます — ホストごとに選んでください。コンポーネントは `--no-gc` のデフォルトでは*ありません*。(`--component` なしでは、`:string` は代わりに手動の `(ptr,len)` コア ABI で境界を渡ります。)
-- コンポーネントは純粋なリアクターです: `wasi:cli/run` エントリはありません(トップレベルでは何も実行されません)。エクスポート内の印字は上記のマイクロアダプタで動作します。それ以外の I/O は通常どおり `--no-gc` サブセットの外です。`:async t` は拒否されます(サスペンドするための非同期アダプタが存在しません)。
+- コンポーネントは純粋なリアクターです: `wasi:cli/run` エントリはありません(トップレベルでは何も実行されません)。エクスポート内の印字は上記のマイクロアダプタで動作します。それ以外の I/O は通常どおり `--no-gc` サブセットの外です。`:async t` は拒否されます — 印字するプログラムのエクスポートは自動的に async リフトされ、それ以外にエクスポートがサスペンドし得るものは存在しません。
 - エクスポート名は lower-kebab-case のコンポーネントモデル名でなければなりません。その文法から外れる Lisp 名については、コンパイラが `:as` での改名を求めます。
 - `--optimize` は組み合わせられます: コアモジュールはラップの前にツリーシェイキングされます。
-- [`--emit-wit`](#emitting-the-wit-world---emit-wit) も組み合わせられ、型付きエクスポートだけの小さなインポートなし world(プログラムが印字するときは 0.2 stdio インポート付き)を書き出します。
+- [`--emit-wit`](#emitting-the-wit-world---emit-wit) も組み合わせられ、型付きエクスポートだけの小さなインポートなし world(プログラムが印字するときは `wasi:cli/stdout@0.3.0` インポートと `async func` のエクスポート署名付き)を書き出します。
 
 ## ブラウザでコンポーネントを実行する(jco)
 
@@ -837,7 +837,7 @@ npx @bytecodealliance/jco transpile cv.wasm -o dist
 </script>
 ```
 
-**印字する `--no-gc --component` は import map が 1 つだけ必要です。** その[印字マイクロアダプタ](#compact-component-output---no-gc---component)は WASI 0.2 stdio(`wasi:cli/stdout@0.2.0`、`wasi:io/streams@0.2.0`)をインポートし、これを実装するのが `@bytecodealliance/preview2-shim` です — このパッケージはブラウザ向けビルド(`dist/browser/`、`node:` 組み込みを含まない)を同梱しています。ページがすべきことは、jco がインポートする 2 つの指定子をそこへ対応づけることだけで、`print` はコンソールに書き出されます。
+**印字する `--no-gc --component` はまだ jco では実行できません。** その[印字マイクロアダプタ](#compact-component-output---no-gc---component)は `wasi:cli/stdout@0.3.0` をインポートし、すべてのエクスポートを async リフトするため、下記の GC コンポーネントと同じ jco のギャップ(jco は async リフトされたエクスポートを呼び出せず、`future` ランタイムも未完成)に当たります — そして WASI 0.3 シムはそもそも Node 専用です。コンポーネントの行き先が jco やブラウザであれば、プログラムを印字なしに保ってください。手書きのインポートオブジェクトを使う[素のモジュールパス](#appendix-calling-a-module-from-javascript)は影響を受けません。
 
 **wasm-GC の `--component` はロードされ計算もできますが、まだ印字はできません。** Chrome は wasm-GC、JSPI、正準 ABI のいずれにも対応しており、コンポーネントの同期エクスポートは正しい値を返します。残りを阻んでいるのは 2 つのギャップで、どちらも JavaScript 側にあります(wasmtime はすべて実行できます):
 

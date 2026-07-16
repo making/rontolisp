@@ -93,8 +93,14 @@ final class WitEmitter {
 				importItems.add(WitImportWorldEmitter.importItem(imported));
 			}
 			items.addAll(firstExport, importItems);
+			// On the nogc-print variant EVERY export is an async lift (the print bridge's
+			// blocking waitable-set park is legal only inside an async-typed task), so
+			// the
+			// emitted WIT must say `async func` the way wasm-tools does -- the directives
+			// themselves never carry :async there (it is rejected under --no-gc).
+			boolean forceAsync = VARIANT_NOGC_PRINT.equals(variant);
 			for (WasmExportCompiler.Decl decl : exportDecls) {
-				items.add(exportItem(decl));
+				items.add(exportItem(decl, forceAsync));
 			}
 			document = document.withWorld(new WitItem.World(world.meta(), world.name(), List.copyOf(items)));
 		}
@@ -112,14 +118,15 @@ final class WitEmitter {
 	// program was compiled against one with rontolisp:wit-export) -- the very labels
 	// WasmComponentBuilder/NoGcWasmComponentBuilder encode into the component's function
 	// types, which is what makes an implemented world round-trip unchanged.
-	private static WitItem exportItem(WasmExportCompiler.Decl decl) {
+	private static WitItem exportItem(WasmExportCompiler.Decl decl, boolean forceAsync) {
 		List<WitFunc.Param> params = new ArrayList<>();
 		List<String> paramTypes = decl.paramTypes();
 		for (int i = 0; i < paramTypes.size(); i++) {
 			params.add(new WitFunc.Param(decl.paramNames().get(i), witType(paramTypes.get(i))));
 		}
 		Integer result = WasmExportCompiler.componentValType(decl.returnType());
-		WitFunc func = new WitFunc(decl.async(), List.copyOf(params), result == null ? null : witTypeOf(result));
+		WitFunc func = new WitFunc(decl.async() || forceAsync, List.copyOf(params),
+				result == null ? null : witTypeOf(result));
 		return new WitItem.ExportNamed(WitMeta.none(), decl.exportName(), new WitItem.Extern.ExternFunc(func));
 	}
 

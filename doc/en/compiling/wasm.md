@@ -140,7 +140,7 @@ The same directive compiles into four different host contracts depending on the
 | `:string` | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) |
 | `:s-expr` | manual `(ptr,len)` | component-model `string` (printed text) | not supported | not supported |
 | Function body may use | the full language | the full language | the [non-GC subset](#eligible-subset) | the [non-GC subset](#eligible-subset) |
-| I/O inside the export | works (real WASI imports; traps under `--no-wasi`) | usually works even in a sync export; [`:async t`](#component-model-function-exports-wasm-export) removes the residual trap risk | `print` only (one `fd_write` import) | `print` only (built-in WASI 0.2 stdio bridge) |
+| I/O inside the export | works (real WASI imports; traps under `--no-wasi`) | usually works even in a sync export; [`:async t`](#component-model-function-exports-wasm-export) removes the residual trap risk | `print` only (one `fd_write` import) | `print` only (built-in WASI 0.3 stdout bridge; the exports become async lifts) |
 | Program top level | runs as `_start` | co-exists as `wasi:cli/run` | `defun` + directives only | `defun` + directives only |
 | Per-call string memory | host-managed (`__ronto_alloc` + the [arena API](#reclaiming-the-hosts-buffer-the-arena-api); the Lisp side is the engine's) | freed by the canonical post-return | host-managed (`__ronto_alloc` + the [arena API](#reclaiming-memory-the-arena-api); automatic for scalar returns) | freed by the canonical post-return |
 | Typical size | ~100 KB (~2 KB with [`--optimize`](#optimize-tree-shaking)) | ~110 KB | tens of bytes to a few KB | hundreds of bytes to a few KB |
@@ -601,8 +601,9 @@ npx @bytecodealliance/jco types sumsq.wit -o types/
 The world's imports follow the build variant (plain, `rontolisp:fetch`,
 `rontolisp:tcp-*`, or `rontolisp:http-handler`; with
 [`--no-gc --component`](#compact-component-output---no-gc---component) the
-world is import-free, or carries the 0.2 stdio imports when the program
-prints), an `:async t` export is rendered as `async func`, and a
+world is import-free, or carries the `wasi:cli/stdout@0.3.0` import — and
+`async func` exports — when the program prints), an `:async t` export is
+rendered as `async func`, and a
 `rontolisp:http-handler` build exports `wasi:http/handler@0.3.0` instead of
 `run`. `--emit-wit` without `--component` is a compile error — a core module has no
 WIT-level surface to describe.
@@ -1377,12 +1378,15 @@ wasmtime run --invoke 'greet("world")' greet.wasm
 
 [Printing](#printing-print--princ--terpri) works here too: a program that
 prints gets a built-in **print micro-adapter** — three tiny fixed core modules
-that implement the core's single `fd_write` import over WASI 0.2 stdio
-(`wasi:cli/stdout` plus `wasi:io/streams`' *synchronous*
-`blocking-write-and-flush`), wired in only when the program prints. The exports
-stay ordinary sync lifts, the zero-flag property is kept (hosts provide 0.2
-stdio by default), and the print output is byte-identical to the interpreter —
-with the earlier `show.lisp`:
+that implement the core's single `fd_write` import over WASI 0.3
+(`wasi:cli/stdout`'s `write-via-stream` plus the async stream/future
+built-ins), wired in only when the program prints. WASI 0.3 has no synchronous
+write, so the exports of a printing program become **async lifts** (the WIT
+world shows them as `async func`) — which is why the component still runs with
+zero flags: everything it uses is base component-model async, on by default in
+wasmtime 46+ (the wasmtime floor for a *printing* component; a print-free one
+has no imports at all and runs on older hosts too). The print output is
+byte-identical to the interpreter — with the earlier `show.lisp`:
 
 ```bash
 rontolisp show.lisp --no-gc --component -o show.wasm
@@ -1403,13 +1407,14 @@ Trade-offs against the plain `--no-gc` output, and current limits:
 - The component is a pure reactor: there is no `wasi:cli/run` entry (nothing
   runs at the top level). Printing inside an export works through the
   micro-adapter above; every other I/O stays outside the `--no-gc` subset as
-  usual. `:async t` is rejected (there is no async adapter to suspend on).
+  usual. `:async t` is rejected — a printing program's exports are lifted async
+  automatically, and there is nothing else an export could suspend on.
 - The export name must be a lower-kebab-case component-model name; for a Lisp
   name outside that grammar the compiler asks you to rename it with `:as`.
 - `--optimize` composes: the core module is tree-shaken before the wrap.
 - [`--emit-wit`](#emitting-the-wit-world---emit-wit) composes too, and writes a tiny
-  import-free world of just the typed exports (plus the 0.2 stdio imports when
-  the program prints).
+  import-free world of just the typed exports (plus the `wasi:cli/stdout@0.3.0`
+  import — and `async func` export signatures — when the program prints).
 
 ## Running a Component in a Browser (jco)
 
@@ -1437,12 +1442,14 @@ npx @bytecodealliance/jco transpile cv.wasm -o dist
 </script>
 ```
 
-**A printing `--no-gc --component` needs one import map.** Its
-[print micro-adapter](#compact-component-output---no-gc---component) imports WASI
-0.2 stdio (`wasi:cli/stdout@0.2.0`, `wasi:io/streams@0.2.0`), which
-`@bytecodealliance/preview2-shim` implements — and that package ships a browser
-build (`dist/browser/`, free of `node:` built-ins). Mapping the two specifiers
-jco imports to it is all the page has to do; `print` then writes to the console.
+**A printing `--no-gc --component` cannot run through jco yet.** Its
+[print micro-adapter](#compact-component-output---no-gc---component) imports
+`wasi:cli/stdout@0.3.0` and lifts every export async, so it hits the same jco
+gaps as the GC component below (jco cannot call an async-lifted export, and its
+`future` runtime is incomplete) — and the WASI 0.3 shim is Node-only anyway.
+Keep the program print-free if the component's destination is jco or a browser;
+the [plain module path](#appendix-calling-a-module-from-javascript) with a
+hand-written import object is unaffected.
 
 **A wasm-GC `--component` loads and computes, but cannot print there yet.** Chrome
 supports wasm-GC, JSPI and the canonical ABI, and the component's synchronous

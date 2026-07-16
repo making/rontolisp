@@ -586,11 +586,13 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void noGcComponentPrintWorksInsideSyncExportsViaTheMicroAdapter() throws Exception {
-		// The todo-93 print micro-adapter: print/princ/terpri inside a sync-lifted
-		// export write to stdout through the fixed WASI 0.2 stdio bridge (the core's
-		// fd_write import over output-stream.blocking-write-and-flush, a plain
-		// synchronous host function) with ZERO wasmtime flags -- interpreter-identical
+	void noGcComponentPrintWorksInsideAsyncLiftedExportsViaTheMicroAdapter() throws Exception {
+		// The print micro-adapter: print/princ/terpri inside an export write to stdout
+		// through the fixed WASI 0.3 bridge (the core's fd_write import over
+		// wasi:cli/stdout.write-via-stream + the async stream/future built-ins, parking
+		// on a blocking waitable-set.wait) with ZERO wasmtime flags -- the exports are
+		// async lifts (only an async-typed task may block), which is base
+		// component-model-async, default-on in wasmtime 46+. Interpreter-identical
 		// print output ahead of the WAVE-printed return value. A :string export (with
 		// its heap-popping post-return) composes in the same component.
 		String program = """
@@ -612,8 +614,9 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcComponentPrintCrossesTheBridgeChunkCap() throws Exception {
-		// One princ larger than the bridge's 4096-byte blocking-write-and-flush cap
-		// (its per-call maximum) crosses intact through the chunking loop.
+		// One princ larger than the 0.2-era bridge's 4096-byte chunk cap crosses intact
+		// (the 0.3 bridge pushes the whole iovec through one async stream.write, whose
+		// BLOCKED path parks on the waitable-set).
 		String program = """
 				(defun spam ()
 				  (let ((s "0123456789abcdef"))

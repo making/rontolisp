@@ -65,8 +65,9 @@ it exposes the full width with no `wrap`/`extend` conversion.
   `string` (plus `:long` with `--no-gc`, which has no `:s-expr`). A sync
   (default) export must be pure-compute — I/O inside it traps; declare
   `:async t` when the export prints or fetches. Under `--no-gc --component`,
-  `:async` is rejected but printing works in the sync export itself, through a
-  built-in WASI 0.2 stdio micro-adapter wired in only when the program prints.
+  `:async` is rejected but printing still works, through a built-in WASI 0.3
+  stdout micro-adapter wired in only when the program prints — every export of
+  a printing program is then lifted `async` automatically.
   The export name must be lower-kebab-case (rename with `:as` otherwise), and
   adding `--emit-wit` writes the component's WIT world (with every export's typed
   signature) next to the `.wasm`. See

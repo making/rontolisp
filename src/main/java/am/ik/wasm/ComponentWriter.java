@@ -250,7 +250,7 @@ public final class ComponentWriter {
 
 	/**
 	 * Encode a component import of an instance type.
-	 * @param importName the import name (e.g. {@code "wasi:random/random@0.2.0"})
+	 * @param importName the import name (e.g. {@code "wasi:random/random@0.3.0"})
 	 * @param instanceTypeIndex the component type index of the imported instance type
 	 * @return the encoded import entry
 	 */
@@ -640,7 +640,7 @@ public final class ComponentWriter {
 	}
 
 	/**
-	 * Encode a component export of an instance (e.g. the {@code wasi:cli/run@0.2.0}
+	 * Encode a component export of an instance (e.g. the {@code wasi:cli/run@0.3.0}
 	 * interface).
 	 * @param exportName the export name
 	 * @param instanceIndex the component instance index

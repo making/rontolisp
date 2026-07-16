@@ -8,6 +8,20 @@ flag-free -- was consciously reversed by `.todo/138` (purge the last 0.2
 island; the user accepted the async flags there). This todo's own conclusion
 stands: the GC adapters stay on 0.3, sync GC exports still cannot print.
 
+**2026-07-17 note (todo-138 executed):** the purge landed, and one premise of
+this file dissolved on the way: "0.3 print = gated wasmtime flags" stopped
+being true with the todo-139 callback-async cutover (the ASYNC stream/future
+built-in variants + a blocking `waitable-set.wait` park are BASE
+component-model-async, default-on in wasmtime 46+), so a printing
+`--no-gc --component` kept ZERO run flags -- what it paid was the wasmtime
+floor (46+) and jco callability (async lifts, gaps (a)/(b) below). Only the
+jco half of this file's trade-off analysis survives; the "escape hatch"
+paragraphs below describing a jco-callable printing `--no-gc` component and
+the preview2-shim browser trick are HISTORICAL (they described the 0.2-era
+artifact -- print-free components remain the universal escape hatch). The
+upstream-watch entry about `-W component-model-more-async-builtins=y` is moot:
+nothing in the repo uses the gated sync built-ins anymore.
+
 The proposal was: rewire the GC adapters' `fd_write` (fd 1/2) from WASI 0.3's
 async `stream.write` to WASI 0.2's synchronous
 `output-stream.blocking-write-and-flush`, so `print` works inside a sync-lifted

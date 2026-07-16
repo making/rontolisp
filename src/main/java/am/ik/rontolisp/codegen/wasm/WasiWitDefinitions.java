@@ -84,11 +84,9 @@ final class WasiWitDefinitions {
 	}
 
 	private static WitDocument nogcPrint() {
-		return Wit.document(packageHeader("root", "component", null),
-				world("root", importRef(ref("wasi", "io", "error", "0.2.0")),
-						importRef(ref("wasi", "io", "streams", "0.2.0")),
-						importRef(ref("wasi", "cli", "stdout", "0.2.0"))),
-				wasiIoV020(), wasiCliV020());
+		return Wit.document(packageHeader("root", "component", null), world("root",
+				importRef(ref("wasi", "cli", "types", "0.3.0")), importRef(ref("wasi", "cli", "stdout", "0.3.0"))),
+				wasiCliV030NogcPrint());
 	}
 
 	private static WitItem wasiCliV030() {
@@ -287,19 +285,11 @@ final class WasiWitDefinitions {
 						funcType(future(result(null, named("error-code"))), param("data", stream(u8()))))));
 	}
 
-	private static WitItem wasiIoV020() {
-		return packageBlock("wasi", "io", "0.2.0", iface("error", resource("error")),
-				iface("streams", use(localRef("error"), useName("error")),
-						resource("output-stream",
-								func("blocking-write-and-flush",
-										funcType(result(null, named("stream-error")), param("contents", list(u8()))))),
-						variant("stream-error", vcase("last-operation-failed", named("error")), vcase("closed"))));
-	}
-
-	private static WitItem wasiCliV020() {
-		return packageBlock("wasi", "cli", "0.2.0",
-				iface("stdout", use(ref("wasi", "io", "streams", "0.2.0"), useName("output-stream")),
-						func("get-stdout", funcType(named("output-stream")))));
+	private static WitItem wasiCliV030NogcPrint() {
+		return packageBlock("wasi", "cli", "0.3.0",
+				iface("types", enumDef("error-code", "io", "illegal-byte-sequence", "pipe")),
+				iface("stdout", use(localRef("types"), useName("error-code")), func("write-via-stream",
+						funcType(future(result(null, named("error-code"))), param("data", stream(u8()))))));
 	}
 
 }

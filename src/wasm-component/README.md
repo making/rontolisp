@@ -228,18 +228,17 @@ src/main/resources/.../component/
   mem-http-client.wasm           (16-page memory module; kept for serve)
 ```
 
-The `deps/clocks-0.2` and `deps/random-0.2` packages are deleted (nothing references
-them since the serve variant moved to 0.3); `deps/io-0.2` and `deps/cli-0.2` remain
-solely for the `--no-gc` print micro-adapter below, which deliberately stays on
-synchronous WASI 0.2 stdio.
+The `deps/clocks-0.2`, `deps/random-0.2`, `deps/io-0.2` and `deps/cli-0.2` packages are
+all deleted — since the `--no-gc` print micro-adapter moved to 0.3 (below), the repo
+carries **no WASI-0.2-era surface** at all (the vendored `wasi:keyvalue@0.2.0-draft`
+example WIT is a host-defined draft interface, not 0.2-era io).
 
-## `--no-gc --component` print micro-adapter — pure WASI 0.2
+## `--no-gc --component` print micro-adapter — WASI 0.3
 
-A **printing** program under `--no-gc --component` (todo 93 remaining task 1) gets a
-fourth, minimal blob set. A print-free `--no-gc` component embeds nothing from this
-directory (the adapter-free reactor wrap); a printing one needs exactly the two WASI
-0.2 stdio interfaces so a tiny bridge can implement the core's single
-`wasi_snapshot_preview1.fd_write` import:
+A **printing** program under `--no-gc --component` gets a fourth, minimal blob set. A
+print-free `--no-gc` component embeds nothing from this directory (the adapter-free
+reactor wrap); a printing one needs exactly `wasi:cli/stdout@0.3.0` so a tiny bridge
+can implement the core's single `wasi_snapshot_preview1.fd_write` import:
 
 ```
 src/wasm-component/
@@ -251,20 +250,28 @@ src/main/resources/.../component/
   shim-nogc-print.wasm  bridge-nogc-print.wasm  fixup-nogc-print.wasm
 ```
 
-`uni-nogc-print.wit` (world `uni-nogc-print`) imports only `wasi:cli/stdout@0.2.0` and
-`wasi:io/streams@0.2.0` (`wasi:io/error` is dependency-hoisted first, so the block
-declares import instances 0-2 and component types 0-4). `bridge-nogc-print.wat` is the
-adapter-http-server-p1 `fd_write` pattern in miniature: fd 1 only (`--no-gc` rejects every
-other I/O at compile time, so fd 2 / `wasi:cli/stderr` would be dead weight), chunked
-through the *synchronous* `blocking-write-and-flush` — so the component's exports stay
-sync lifts and the zero-flag property is preserved (0.2 stdio is default-provided by
-wasmtime and jco). The bridge reads the iovec out of the CORE's own exported memory
-while the core imports `fd_write` from the bridge; `shim-nogc-print.wat` (a funcref
-table + a forwarding `fd_write`, instantiated first) and `fixup-nogc-print.wat` (an
-element segment patching the real `fd_write` into the table, instantiated last) break
-that cycle — the same shim/fixup shape wit-component generates for the analogous
-lowering cycle — keeping the printing core module byte-identical to the plain
-`--no-gc` output. `NoGcWasmComponentBuilder` wires everything programmatically.
+`uni-nogc-print.wit` (world `uni-nogc-print`) imports only `wasi:cli/stdout@0.3.0`
+(`wasi:cli/types` is dependency-hoisted first, so the block declares import instances
+0-1 and component types 0-2, the aliased `error-code` at type 1).
+`bridge-nogc-print.wat` is the `adapter.wat` cli path in miniature: fd 1 only
+(`--no-gc` rejects every other I/O at compile time, so fd 2 / `wasi:cli/stderr` would
+be dead weight), one full stream cycle per `fd_write` — `stream.new`,
+`write-via-stream(readable)`, the ASYNC `stream.write` built-in, drop the writable end,
+await + drop the operation future — parking on a blocking `waitable-set.wait` when a
+built-in reports BLOCKED. Only an async-typed task may block, so
+`NoGcWasmComponentBuilder` lifts every export of a printing program against an async
+function type (the GC `:async t` shape; same flat core signature, post-return intact).
+All of that is base component-model-async, so a printing component still runs with
+**zero flags** on wasmtime 46+ (where cm-async is default-on — the printing
+component's wasmtime floor; jco cannot call async-lifted exports, so keep programs
+print-free for jco targets). The bridge reads the iovec out of the CORE's own exported
+memory while the core imports `fd_write` from the bridge; `shim-nogc-print.wat` (a
+funcref table + a forwarding `fd_write`, instantiated first) and
+`fixup-nogc-print.wat` (an element segment patching the real `fd_write` into the
+table, instantiated last) break that cycle — the same shim/fixup shape wit-component
+generates for the analogous lowering cycle — keeping the printing core module
+byte-identical to the plain `--no-gc` output. `NoGcWasmComponentBuilder` wires
+everything programmatically.
 
 ## HTTP server variant (`rontolisp:http-handler`) — async wasi:http@0.3.0
 

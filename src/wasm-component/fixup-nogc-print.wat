@@ -1,4 +1,4 @@
-;; Fixup module for the --no-gc --component print micro-adapter (todo 93): instantiated
+;; Fixup module for the --no-gc --component print micro-adapter: instantiated
 ;; LAST, its active element segment writes the bridge's real fd_write
 ;; (bridge-nogc-print.wat) into slot 0 of the shim's table (shim-nogc-print.wat), closing
 ;; the shim indirection. Both imports arrive under the empty instance name, grouped by

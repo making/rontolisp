@@ -16,10 +16,9 @@
 # variants reuse it. Both rontolisp:fetch AND rontolisp:http-handler are Lisp libraries now
 # (fetch.lisp / serve.lisp) over wit-imported wasi:http (eval/FetchLibrary, eval/ServeLibrary);
 # the standalone http-client adapter, the serve adapter and the extended serve+fetch bridge
-# are all gone. It keeps the base I/O on WASI 0.3 but adds the WASI 0.2 wasi:http + wasi:io
-# machinery (async wasi:http@0.3 does not exist upstream yet; see ../../TODO.md). The 0.2 deps
-# live alongside the 0.3 ones in deps/ under version-suffixed directories (clocks-0.2, io-0.2,
-# http). After regenerating an import block, re-derive the fixed instance / type constants in
+# are all gone. Every dep under deps/ is WASI 0.3 (the 0.2-era version-suffixed directories
+# are deleted; the --no-gc print micro-adapter, the last 0.2 consumer, is on 0.3 too). After
+# regenerating an import block, re-derive the fixed instance / type constants in
 # WasmServeComponentBuilder (NARROW / WIDE) from `wasm-tools dump`.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -93,11 +92,11 @@ wasm-tools component new embedded-http-server.wasm -o uni-http-server.wasm
 wasm-tools validate -f component-model -f cm-async uni-http-server.wasm
 slice_import_block uni-http-server.wasm "$OUT/import-block-http-server.bin"
 
-echo "== unified import block (--no-gc print micro-adapter: todo 93) =="
+echo "== unified import block (--no-gc print micro-adapter) =="
 wasm-tools parse core-nogc-print.wat -o core-nogc-print.wasm
 wasm-tools component embed . core-nogc-print.wasm -o embedded-nogc-print.wasm --world uni-nogc-print
 wasm-tools component new embedded-nogc-print.wasm -o uni-nogc-print.wasm
-wasm-tools validate -f component-model uni-nogc-print.wasm
+wasm-tools validate -f component-model -f cm-async uni-nogc-print.wasm
 slice_import_block uni-nogc-print.wasm "$OUT/import-block-nogc-print.bin"
 
 rm -f core-nogc-print.wasm embedded-nogc-print.wasm uni-nogc-print.wasm \

@@ -48,3 +48,36 @@ Landed after the cutover commit (2026-07-17, this trim's working tree):
    P1-future spelling, and remove the JVM `_await` MARKER then-chain branch
    (dead code inside hand-assembled v50 bytecode -- re-verify the verifier
    carefully; the wait-for LSTORE lesson applies).
+
+## Feedback from todo-138 (2026-07-17, the nogc-print 0.3 purge)
+
+Todo-138 executed the async-built-in + blocking `waitable-set.wait` pattern in
+a FOURTH hand-written site (`bridge-nogc-print.wat`, alongside `adapter.wat` /
+`adapter-sockets.wat` / `adapter-http-server-p1.wat`) and re-confirmed the
+spike findings 1/8 end to end (plain 0x43 async lift, zero flags, wasmtime 46).
+What that run teaches the remaining items:
+
+- **Item 2 (wait-for regen)**: the regen + re-derive workflow is proven and
+  cheaper than it sounds -- with wasm-tools 1.252.0, `regen.sh` left every
+  UNTOUCHED blob byte-identical (only the edited world's block changed;
+  `git status` on the resources tree is the quick check). But note the
+  nogc-print block now derives from `deps/cli` too, and
+  `NoGcWasmComponentBuilder` carries its own T_* constants -- an edit to
+  `deps/cli`/`deps/clocks` (not just `uni.wit`) must re-derive BOTH builders.
+  When dumping, watch for aliases INSIDE the block: the nogc-print block
+  aliases `error-code` at component type 1 between its two imports, so "count
+  the instance types" under-counts -- read the dump, don't infer.
+- **Item 2 workflow gotcha**: after any git-stash byte-identity check, the
+  exec jar in `target/` is stale (built from the stashed tree) -- rebuild
+  before compiling manual verification artifacts, or you verify the OLD code
+  (this bit todo-138 once; caught because the artifact still carried 0.2
+  import strings).
+- **Item 3 (per-task waitable-sets)**: `bridge-nogc-print.wat` makes the same
+  single-task assumption as the adapters -- ONE cached waitable-set (a module
+  global there) and a fixed per-call scratch (the core's 16-byte iov cell).
+  Fine for the reactor + `--invoke` shape, but if item 3 ever generalizes the
+  park to per-task waitable-sets/context slots, the nogc-print bridge is a
+  fourth copy of the pattern to visit (or to explicitly exempt as
+  single-task-by-design).
+- **Item 4**: unaffected by 138; no new TYPE_PROMISE call sites were added
+  (the nogc backend still rejects the whole async surface by name).

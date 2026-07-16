@@ -91,15 +91,17 @@ class WitEmitterTest {
 	@Test
 	void separatesImportsFromExportsWithOneBlankLineOnTheNoGcPrintVariant() {
 		// The no-gc print template's world ends on an import line; wasm-tools prints one
-		// blank line between a world's import block and its export block.
+		// blank line between a world's import block and its export block. Every export
+		// of a printing program is an async lift, so the emitted item says `async func`
+		// even though the directive itself never carries :async.
 		String wit = WitEmitter.emit(WitEmitter.VARIANT_NOGC_PRINT, List.of(parse("(rontolisp:wasm-export 'hello)")));
 		assertThat(wit).contains("""
-				  import wasi:cli/stdout@0.2.0;
+				  import wasi:cli/stdout@0.3.0;
 
-				  export hello: func();
+				  export hello: async func();
 				}
 				""");
-		assertThat(wit).contains("package wasi:io@0.2.0 {");
+		assertThat(wit).contains("package wasi:cli@0.3.0 {");
 	}
 
 	@Test

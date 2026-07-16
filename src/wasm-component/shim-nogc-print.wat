@@ -1,4 +1,4 @@
-;; Funcref-table shim for the --no-gc --component print micro-adapter (todo 93), breaking
+;; Funcref-table shim for the --no-gc --component print micro-adapter, breaking
 ;; the instantiation cycle the wit-component adapter pattern solves the same way: the
 ;; rontolisp core imports wasi_snapshot_preview1.fd_write from the bridge, but the bridge
 ;; (bridge-nogc-print.wat) must read the iovec out of the CORE's memory -- so neither can

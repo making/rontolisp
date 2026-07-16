@@ -437,9 +437,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// Post-stage wrap: the core module is byte-identical to the non-component
 			// output and the component just aliases + lifts its exports; a :string
 			// boundary additionally aliases the canonical string ABI helpers appended by
-			// assemble() above (todo 93 Tier 2), and a printing program (todo 93 print
-			// micro-adapter) wires the fixed shim/bridge/fixup modules implementing the
-			// fd_write import over WASI 0.2 stdio.
+			// assemble() above, and a printing program (the print micro-adapter) wires
+			// the fixed shim/bridge/fixup modules implementing the fd_write import over
+			// WASI 0.3 (async lifts + the blocking waitable-set park).
 			this.componentWit = WitEmitter
 				.emit(mem.printUsed() ? WitEmitter.VARIANT_NOGC_PRINT : WitEmitter.VARIANT_NOGC, exportDecls);
 			return NoGcWasmComponentBuilder.build(module, exportDecls, mem.printUsed());
@@ -461,15 +461,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					+ "' is not a valid component-model export name (lower-kebab-case words, e.g."
 					+ " \"sum-squared\"); rename it with :as \"kebab-name\"");
 		}
-		// :async (todo 92 Tier 3) is the GC component's stackful-async lift; the compact
-		// reactor component has no async machinery (and nothing to block on -- printing
-		// goes through the synchronous WASI 0.2 blocking-write-and-flush, every other
-		// I/O op is a compile error), so an :async request is a clear error rather than
-		// a silently-sync export.
+		// :async is the GC component's opt-in for I/O inside an export; here it is not a
+		// user-level knob: a printing program's exports become async lifts automatically
+		// (the print bridge's blocking park needs an async-typed task) and every other
+		// I/O op is a compile error, so an explicit :async request is a clear error
+		// rather than a silently-ignored option.
 		if (decl.async()) {
 			throw new UnsupportedOperationException("rontolisp:wasm-export :async is not supported with --no-gc"
-					+ " --component for '" + decl.name() + "' (the compact reactor component has no async adapter;"
-					+ " use the default GC backend's --component output)");
+					+ " --component for '" + decl.name() + "' (a printing program's exports are lifted async"
+					+ " automatically; every other I/O op is rejected at compile time)");
 		}
 	}
 

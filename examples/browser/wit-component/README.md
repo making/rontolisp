@@ -108,7 +108,10 @@ stating separately:
 
 Neither is a rontolisp bug, and neither can touch this demo: a non-printing
 `--no-gc` component imports **nothing**, so there is no WASI, no `future` and no
-shim in the picture. (Node is a *worse* host than Chrome here, incidentally:
+shim in the picture. (A *printing* `--no-gc` component shares the wasm-GC
+component's fate here since its print bridge moved to WASI 0.3: it imports
+`wasi:cli/stdout@0.3.0` and its exports are async lifts, so keep browser-bound
+programs print-free.) (Node is a *worse* host than Chrome here, incidentally:
 Node 22.16 cannot import a wasm-GC component at all -- `TypeError:
 WebAssembly.Suspending is not a constructor`.)
 

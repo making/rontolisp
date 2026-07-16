@@ -1716,13 +1716,13 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void componentPrintWiresTheMicroAdapter() {
-		// A printing program under --no-gc --component (the todo-93 print
-		// micro-adapter) is no longer a compile error: the wrap prepends the WASI 0.2
-		// stdio import block and wires three fixed core modules -- a funcref-table shim,
-		// the bridge implementing the core's single fd_write import over
-		// output-stream.blocking-write-and-flush (a plain synchronous host function, so
-		// the exports stay sync lifts), and the fixup whose element segment closes the
-		// shim indirection. The embedded core module stays byte-identical to the plain
+		// A printing program under --no-gc --component (the print micro-adapter) is not
+		// a compile error: the wrap prepends the WASI 0.3 stdout import block and wires
+		// three fixed core modules -- a funcref-table shim, the bridge implementing the
+		// core's single fd_write import over write-via-stream + the async stream/future
+		// canon built-ins (parking on a blocking waitable-set.wait, so the exports
+		// become ASYNC lifts), and the fixup whose element segment closes the shim
+		// indirection. The embedded core module stays byte-identical to the plain
 		// --no-gc printing output.
 		String program = """
 				(defun f (n) (print n) n)
@@ -1732,12 +1732,23 @@ class NoGcWasmCompilerTest {
 		byte[] component = compileComponent(program);
 		assertThat(component[6]).as("component layer byte").isEqualTo((byte) 0x01);
 		String text = new String(component, StandardCharsets.ISO_8859_1);
-		assertThat(text).contains("wasi:io/error@0.2.0", "wasi:io/streams@0.2.0", "wasi:cli/stdout@0.2.0");
+		assertThat(text).contains("wasi:cli/types@0.3.0", "wasi:cli/stdout@0.3.0", "write-via-stream");
+		assertThat(text).doesNotContain("@0.2.0");
 		List<byte[]> coreModules = sectionPayloads(component, 1);
 		assertThat(coreModules).as("core + shim + bridge + fixup").hasSize(4);
 		assertThat(coreModules.get(0)).isEqualTo(plain);
 		// The shim exports the fixup's patch target: the "$imports" funcref table.
 		assertThat(new String(coreModules.get(1), StandardCharsets.ISO_8859_1)).contains("$imports", "fd_write");
+		// The export is lifted against an ASYNC function type (tag 0x43, params vec,
+		// one named p0: s32 param, result s32) -- only an async-typed task may block in
+		// the bridge's waitable-set park.
+		boolean asyncFuncType = false;
+		for (byte[] typeSection : sectionPayloads(component, 7)) {
+			if (containsSequence(typeSection, 0x43, 0x01, 0x02, 'p', '0', 0x7a)) {
+				asyncFuncType = true;
+			}
+		}
+		assertThat(asyncFuncType).as("async function type for the printing export").isTrue();
 		// The fixed machinery adds O(hundreds of bytes) to the scalar baseline: the
 		// whole printing component of a tiny program stays around 2 KB.
 		assertThat(component.length).as("printing component size").isLessThan(2560);
@@ -1751,7 +1762,7 @@ class NoGcWasmCompilerTest {
 		// shape; this pins the gate from the print side).
 		byte[] component = compileComponent(COMPONENT_PROGRAM);
 		assertThat(sectionPayloads(component, 1)).hasSize(1);
-		assertThat(new String(component, StandardCharsets.ISO_8859_1)).doesNotContain("wasi:cli/stdout@0.2.0");
+		assertThat(new String(component, StandardCharsets.ISO_8859_1)).doesNotContain("wasi:cli/stdout@0.3.0");
 	}
 
 	@Test
@@ -1915,9 +1926,10 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void componentRejectsAsyncExport() {
-		// :async (todo 92 Tier 3) is the GC component's stackful-async lift; the
-		// adapter-free reactor component has no async machinery, so it is a clear error
-		// here rather than a silently-sync export.
+		// :async is not a user-level knob here: a printing program's exports become
+		// async lifts automatically and every other I/O op is a compile error, so an
+		// explicit :async request is a clear error rather than a silently-ignored
+		// option.
 		assertThatThrownBy(() -> compileComponent("""
 				(defun add2 (a b) (+ a b))
 				(rontolisp:wasm-export 'add2 :params '(:long :long) :returns :long :async t)
@@ -1963,9 +1975,10 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void componentWitOfAPrintingProgramCarriesTheStdioImports() {
-		// The print micro-adapter's WASI 0.2 stdio surface shows up as world imports
+		// The print micro-adapter's WASI 0.3 stdout surface shows up as world imports
 		// (plus their package definitions), separated from the exports by one blank
-		// line the way wasm-tools prints it.
+		// line the way wasm-tools prints it -- and the exports say `async func`,
+		// because a printing program's exports are async lifts.
 		NoGcWasmCompiler compiler = new NoGcWasmCompiler(false, false, true);
 		compiler.compile(LispReader.readAllFromString("""
 				(defun hello () (print "hi"))
@@ -1973,13 +1986,12 @@ class NoGcWasmCompilerTest {
 				"""));
 		assertThat(compiler.componentWit()).contains("""
 				world root {
-				  import wasi:io/error@0.2.0;
-				  import wasi:io/streams@0.2.0;
-				  import wasi:cli/stdout@0.2.0;
+				  import wasi:cli/types@0.3.0;
+				  import wasi:cli/stdout@0.3.0;
 
-				  export hello: func();
+				  export hello: async func();
 				}
-				""").contains("package wasi:io@0.2.0 {");
+				""").contains("package wasi:cli@0.3.0 {");
 	}
 
 	@Test
