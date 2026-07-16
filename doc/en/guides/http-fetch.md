@@ -4,16 +4,17 @@ The `rontolisp` package provides outgoing HTTP modeled on the JavaScript
 `fetch` API, plus the JSON functions that pair naturally with it. None of
 these are part of Common Lisp; reference them with the `rontolisp:` qualifier
 (see [Packages](../reference/packages.md)). `rontolisp:fetch` starts a request
-and immediately returns a **future**; the generic future operations resolve
-or transform it, and `rontolisp:json-parse` / `rontolisp:json-stringify`
+and immediately returns a **future**; `rontolisp:await` resolves it (inside an
+[`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md)
+or at top level), and `rontolisp:json-parse` / `rontolisp:json-stringify`
 convert between JSON documents and Lisp values.
 
 | Function | Purpose |
 |----------|---------|
 | [`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) | Start an HTTP request: `(rontolisp:fetch url &optional options)` |
-| [`rontolisp:await`](../reference/special-forms/rontolisp-await.md) | Block until a future settles and return its value |
-| [`rontolisp:then`](../reference/functions/rontolisp-then.md) | Derive a new promise that applies a callback to the settled value |
-| [`rontolisp:promisep`](../reference/functions/rontolisp-promisep.md) | `t` if a value is a promise |
+| [`rontolisp:await`](../reference/special-forms/rontolisp-await.md) | Suspend until a future settles and return its value |
+| [`rontolisp:futurep`](../reference/functions/rontolisp-futurep.md) | `t` if a value is a future |
+| [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) | Drain a body stream's chunks into one string (async) |
 | [`rontolisp:json-parse`](../reference/functions/rontolisp-json-parse.md) | Parse a JSON string into Lisp values |
 | [`rontolisp:json-stringify`](../reference/functions/rontolisp-json-stringify.md) | Serialize a Lisp value to a JSON string |
 
@@ -24,18 +25,16 @@ convert between JSON documents and Lisp values.
 > error in Preview 1 (core-module) mode, and a fetch component must run with
 > `-S http=y` on top of the usual flags. In the **browser playground** `fetch`
 > runs the real browser `fetch()` (subject to CORS) while the program
-> continues. The promise operations (`await` / `then` / `promisep`) and the
-> JSON functions work on **every** backend and in every WASM mode — only
-> `fetch` itself is restricted.
+> continues. `await`, `futurep` and the JSON functions work on **every**
+> backend and in every WASM mode — only `fetch` itself is restricted.
 
 ## A first request
 
 `fetch` returns as soon as the request is in flight. Passing the future to
-`rontolisp:await` blocks until the response arrives and yields the result
-property list `(:status <integer> :headers <alist> :body <stream>)` — on the
-interpreter and the JVM backend `:body` is an asynchronous stream drained with
-[`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md); under
-`--component` it is currently still the whole body as one string:
+`rontolisp:await` suspends until the response arrives and yields the result
+property list `(:status <integer> :headers <alist> :body <stream>)` — on
+every backend `:body` is an asynchronous stream, drained with
+[`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md):
 
 ```lisp
 (let ((p (rontolisp:fetch "https://httpbin.org/get")))
@@ -48,7 +47,7 @@ Reading the individual fields:
 (let ((res (rontolisp:await (rontolisp:fetch "http://example.com/"))))
   (print (getf res :status))    ; => 200
   (print (rontolisp:await (rontolisp:read-all (getf res :body))))
-                                ; => "<html>...</html>"  (--component: (getf res :body))
+                                ; => "<html>...</html>"
   (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
 ```
 
@@ -76,10 +75,10 @@ reference page for validation timing and error behavior per backend (a failed
 request surfaces at `await`, not at `fetch` — every backend signals an error
 there; `nil` comes back only for a request that cannot be *started*).
 
-## Promises
+## Futures
 
 Because the request is already running when `fetch` returns, several requests
-overlap — start them all, then await each:
+overlap — start them all, then await each (in any order):
 
 ```console
 (let ((p1 (rontolisp:fetch "http://example.com/a"))
@@ -87,32 +86,30 @@ overlap — start them all, then await each:
   (list (rontolisp:await p1) (rontolisp:await p2)))
 ```
 
-`rontolisp:then` derives a new promise that transforms the settled value, like
-JavaScript's `Promise.prototype.then` — calls chain, and a callback returning
-a promise is flattened:
+To transform a response — or to build any asynchronous helper — define an
+[`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md):
+its body runs eagerly to the first pending `await`, and the caller gets a
+future for the rest:
 
-```lisp
-(rontolisp:await
- (rontolisp:then (rontolisp:fetch "https://httpbin.org/get")
-                 (lambda (r) (getf r :status))))   ; => 200
+```console
+(rontolisp:async-defun fetch-status (url)
+  (getf (rontolisp:await (rontolisp:fetch url)) :status))
+
+(rontolisp:await (fetch-status "https://httpbin.org/get"))   ; => 200
 ```
 
-Both operations are generic: `await` passes a non-promise value through
-unchanged, and `then` accepts one, so a value that may or may not be a promise
-is handled uniformly. `rontolisp:promisep` tells the two apart:
+`await` is generic: a non-future value passes through unchanged, and a settled
+future can be awaited any number of times.
+[`rontolisp:futurep`](../reference/functions/rontolisp-futurep.md) tells
+futures apart from plain values:
 
 ```lisp
 (rontolisp:await 42)   ; => 42
 ```
 
 ```lisp
-(rontolisp:promisep (rontolisp:then 1 (lambda (x) x)))   ; => t
+(rontolisp:futurep (rontolisp:fetch "https://httpbin.org/get"))   ; => t
 ```
-
-A `then` callback runs lazily at first `await` and its result is memoized (a
-settled promise can be awaited any number of times); see the
-[then](../reference/functions/rontolisp-then.md) reference page for the exact
-timing.
 
 ## Working with JSON
 

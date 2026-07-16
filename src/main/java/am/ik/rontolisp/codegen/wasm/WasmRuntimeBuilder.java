@@ -578,8 +578,10 @@ final class WasmRuntimeBuilder {
 
 	/**
 	 * Emits the {@code TYPE_FUTURE} print branch ("#&lt;FUTURE&gt;", the tag settled and
-	 * pending futures share with the legacy promise). A no-op when the module has no
-	 * async block ({@code futureTypeIndex < 0}), keeping every non-async module
+	 * pending futures share with the legacy promise) and the {@code TYPE_WASI_STREAM} one
+	 * ("#&lt;STREAM&gt;", matching the interpreter/JVM opaque tag; the string is added to
+	 * the table lazily, so it exists only in async modules). A no-op when the module has
+	 * no async block ({@code futureTypeIndex < 0}), keeping every non-async module
 	 * byte-identical.
 	 */
 	private static void emitPrintFuture(WasmWriter w, WasmLispCompiler.StringTable st, int futureTypeIndex) {
@@ -595,6 +597,21 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(st.promiseStr.offset());
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(st.promiseStr.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// TYPE_WASI_STREAM sits two entries after TYPE_FUTURE in the async rec group.
+		WasmLispCompiler.StringTable.StringEntry streamStr = st.addString("#<STREAM>");
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(futureTypeIndex + 2);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(streamStr.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(streamStr.length());
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		w.write(Instruction.RETURN);

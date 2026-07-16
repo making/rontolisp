@@ -30,13 +30,11 @@
 ;; plist, mapped to 502.
 (rontolisp:async-defun fetch-dog ()
   ;; awaiting needs an async-defun; the response :body is an asynchronous
-  ;; stream on the interpreter/JVM (drained with read-all) and still a whole
-  ;; string under --component, hence the feature conditional.
+  ;; stream on every backend, drained with read-all.
   (let* ((res (rontolisp:await
                (rontolisp:fetch "https://dog.ceo/api/breeds/image/random")))
          (status (getf res :status))
-         (body #+rontolisp-wasm (getf res :body)
-               #-rontolisp-wasm (rontolisp:await (rontolisp:read-all (getf res :body)))))
+         (body (rontolisp:await (rontolisp:read-all (getf res :body)))))
     (if (and (integerp status) (= status 200))
         (getf (rontolisp:json-parse body) :message)
         nil)))

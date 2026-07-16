@@ -4,16 +4,17 @@
 それと自然に組み合わせられるJSON関数を提供します。いずれも Common Lisp の
 一部ではないため、`rontolisp:` 修飾子で参照します
 ([パッケージ](../reference/packages.md)を参照)。`rontolisp:fetch` は
-リクエストを開始して即座に **future** を返します。汎用の future 操作が
-それを解決・変換し、`rontolisp:json-parse` / `rontolisp:json-stringify` が
-JSONドキュメントとLispの値を相互変換します。
+リクエストを開始して即座に **future** を返します。`rontolisp:await`
+([`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md)
+の中、またはトップレベルで) がそれを解決し、`rontolisp:json-parse` /
+`rontolisp:json-stringify` がJSONドキュメントとLispの値を相互変換します。
 
 | 関数 | 用途 |
 |----------|---------|
 | [`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) | HTTPリクエストを開始する: `(rontolisp:fetch url &optional options)` |
-| [`rontolisp:await`](../reference/special-forms/rontolisp-await.md) | future が確定するまでブロックして値を返す |
-| [`rontolisp:then`](../reference/functions/rontolisp-then.md) | 確定値にコールバックを適用する新しいプロミスを導出する |
-| [`rontolisp:promisep`](../reference/functions/rontolisp-promisep.md) | 値がプロミスなら `t` |
+| [`rontolisp:await`](../reference/special-forms/rontolisp-await.md) | future が確定するまでサスペンドして値を返す |
+| [`rontolisp:futurep`](../reference/functions/rontolisp-futurep.md) | 値が future なら `t` |
+| [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) | ボディストリームのチャンクをひとつの文字列に読み尽くす (非同期) |
 | [`rontolisp:json-parse`](../reference/functions/rontolisp-json-parse.md) | JSON文字列をLispの値にパースする |
 | [`rontolisp:json-stringify`](../reference/functions/rontolisp-json-stringify.md) | Lispの値をJSON文字列にシリアライズする |
 
@@ -25,18 +26,17 @@ JSONドキュメントとLispの値を相互変換します。
 > fetchを使うcomponentは通常のフラグに加えて `-S http=y` を付けて実行する
 > 必要があります。**ブラウザプレイグラウンド** では本物のブラウザの
 > `fetch()` が実行され (CORSの制約を受けます)、その間プログラムは続行
-> します。プロミス操作 (`await` / `then` / `promisep`) とJSON関数は
-> **すべての** バックエンド・すべてのWASMモードで動作します — 制限が
-> あるのは `fetch` 自体だけです。
+> します。`await`、`futurep`、JSON関数は **すべての** バックエンド・
+> すべてのWASMモードで動作します — 制限があるのは `fetch` 自体だけです。
 
 ## 最初のリクエスト
 
 `fetch` はリクエストが飛び始めたらすぐに返ります。future を
-`rontolisp:await` に渡すとレスポンスの到着までブロックし、結果の
+`rontolisp:await` に渡すとレスポンスの到着までサスペンドし、結果の
 プロパティリスト `(:status <integer> :headers <alist> :body <stream>)` が
-得られます — インタープリタと JVM バックエンドでは `:body` は非同期ストリームで、
-[`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) で読み尽くします。
-`--component` では現状ボディ全体がひとつの文字列のままです:
+得られます — どのバックエンドでも `:body` は非同期ストリームで、
+[`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md)
+で読み尽くします:
 
 ```lisp
 (let ((p (rontolisp:fetch "https://httpbin.org/get")))
@@ -49,7 +49,7 @@ JSONドキュメントとLispの値を相互変換します。
 (let ((res (rontolisp:await (rontolisp:fetch "http://example.com/"))))
   (print (getf res :status))    ; => 200
   (print (rontolisp:await (rontolisp:read-all (getf res :body))))
-                                ; => "<html>...</html>"  (--component: (getf res :body))
+                                ; => "<html>...</html>"
   (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
 ```
 
@@ -79,10 +79,11 @@ alist)、`:body` (文字列) を指定できます:
 [fetch](../reference/functions/rontolisp-fetch.md)
 のリファレンスページを参照してください。
 
-## プロミス
+## Future
 
 `fetch` が返った時点でリクエストは既に走っているので、複数のリクエストは
-オーバーラップします — 全部開始してからそれぞれをawaitします:
+オーバーラップします — 全部開始してからそれぞれを (どの順番でも) await
+します:
 
 ```console
 (let ((p1 (rontolisp:fetch "http://example.com/a"))
@@ -90,32 +91,30 @@ alist)、`:body` (文字列) を指定できます:
   (list (rontolisp:await p1) (rontolisp:await p2)))
 ```
 
-`rontolisp:then` は確定値を変換する新しいプロミスを導出します。JavaScriptの
-`Promise.prototype.then` と同様に呼び出しはチェーンでき、プロミスを返す
-コールバックは平坦化されます:
+レスポンスを変換するには — あるいは任意の非同期ヘルパーを組み立てるには —
+[`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md)
+を定義します: 本体は最初の未確定の `await` まで即時に実行され、残りに
+対する future が呼び出し元に返ります:
 
-```lisp
-(rontolisp:await
- (rontolisp:then (rontolisp:fetch "https://httpbin.org/get")
-                 (lambda (r) (getf r :status))))   ; => 200
+```console
+(rontolisp:async-defun fetch-status (url)
+  (getf (rontolisp:await (rontolisp:fetch url)) :status))
+
+(rontolisp:await (fetch-status "https://httpbin.org/get"))   ; => 200
 ```
 
-どちらの操作も汎用です: `await` はプロミス以外の値をそのまま通し、`then` も
-プロミス以外を受け付けるので、プロミスかもしれない値を一様に扱えます。
-`rontolisp:promisep` で両者を見分けられます:
+`await` は汎用です: future 以外の値はそのまま通り、確定した future は
+何度でもawaitできます。
+[`rontolisp:futurep`](../reference/functions/rontolisp-futurep.md) で
+future と通常の値を見分けられます:
 
 ```lisp
 (rontolisp:await 42)   ; => 42
 ```
 
 ```lisp
-(rontolisp:promisep (rontolisp:then 1 (lambda (x) x)))   ; => t
+(rontolisp:futurep (rontolisp:fetch "https://httpbin.org/get"))   ; => t
 ```
-
-`then` のコールバックは最初の `await` 時に遅延実行され、結果はメモ化され
-ます (確定したプロミスは何度でもawaitできます)。正確なタイミングは
-[then](../reference/functions/rontolisp-then.md)
-のリファレンスページを参照してください。
 
 ## JSONの扱い
 

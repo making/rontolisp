@@ -17,7 +17,7 @@
 ;; Run (WASI component under wasmtime serve):
 ;;   rontolisp examples/wasmcloud/http-handler/app.lisp -o app.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y app.wasm
-;; wasmCloud cannot run the wasi:http@0.3 component yet -- see ../README.md.
+;; wasmCloud hosts it too: `wash dev` in this directory -- see ../README.md.
 ;; Talk to it with:
 ;;   curl http://127.0.0.1:8080/
 ;;   curl 'http://127.0.0.1:8080/api/greet?name=rontolisp'
@@ -53,8 +53,11 @@
   (let ((name (rontolisp:query-param (getf request :query) "name")))
     (text-response 200 (format nil "Hello, ~a!~%" (if name name "world")))))
 
-(defun echo (request)
-  (let ((body (getf request :body)))
+(rontolisp:async-defun echo (request)
+  ;; The request :body is an asynchronous stream on every backend; drain it
+  ;; first. The router stays a plain defun: the served dispatch awaits the
+  ;; handler's result, and await flattens the future echo returns.
+  (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
     (if (json-object-p body)
         (let ((message (getf (rontolisp:json-parse body) :message)))
           (if (stringp message)

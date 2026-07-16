@@ -23,7 +23,6 @@ import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispFuture;
 import am.ik.rontolisp.LispNil;
-import am.ik.rontolisp.LispPromise;
 import am.ik.rontolisp.LispStream;
 import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
@@ -1047,7 +1046,6 @@ public final class LispEvaluator {
 			case LispArray a -> a;
 			case LispFloatArray fa -> fa;
 			case LispJavaObject j -> j;
-			case LispPromise p -> p;
 			case LispFuture f -> f;
 			case LispStream s -> s;
 			case LispSymbol sym -> evalSymbolRef(sym, env);
@@ -2863,9 +2861,6 @@ public final class LispEvaluator {
 	// suspension point), re-signaling a stored error -- a Lisp-originated condition
 	// (LispEvalException) crosses intact so handler-case around the await catches it by
 	// type -- and flattening nested futures; a non-future passes through unchanged.
-	// Legacy promises (rontolisp:then chains) resolve as before until their machinery is
-	// removed: a root promise joins its future, a chain resolves its base, applies the
-	// callback and memoizes the result.
 	private LispVal awaitValue(LispVal v) {
 		while (v instanceof LispFuture future) {
 			java.util.concurrent.CompletableFuture<LispVal> cf = future.future();
@@ -2883,26 +2878,7 @@ public final class LispEvaluator {
 				throw new LispEvalException(java.util.Objects.requireNonNullElse(cause.getMessage(), "await failed"));
 			}
 		}
-		if (!(v instanceof LispPromise promise)) {
-			return v;
-		}
-		java.util.concurrent.CompletableFuture<LispVal> future = promise.future();
-		if (future != null) {
-			try {
-				return awaitValue(future.join());
-			}
-			catch (java.util.concurrent.CompletionException ex) {
-				Throwable cause = java.util.Objects.requireNonNullElse(ex.getCause(), ex);
-				throw new LispEvalException(java.util.Objects.requireNonNullElse(cause.getMessage(), "await failed"));
-			}
-		}
-		if (promise.isSettled()) {
-			return promise.settledValue();
-		}
-		LispVal base = awaitValue(promise.base());
-		LispVal resolved = awaitValue(apply(promise.fn(), List.of(base), this.globalEnv));
-		promise.settle(resolved);
-		return resolved;
+		return v;
 	}
 
 	// Adapts one incoming HTTP request to the Lisp handler: builds the request property

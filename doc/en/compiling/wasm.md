@@ -424,12 +424,12 @@ wasmtime run -W gc=y --dir . fileio.wasm
   read `wasi:clocks@0.3.0` (`system-clock`/`monotonic-clock`), and `getenv`
   reads `wasi:cli/environment@0.3.0`.
 - Outgoing HTTP (`rontolisp:fetch` with the `rontolisp:await` /
-  `rontolisp:then` / `rontolisp:futurep` future operations) works in
+  `rontolisp:futurep` future operations) works in
   component mode, including true asynchrony: `fetch` sends the request and
   returns a future (wrapping the in-flight `wasi:http` response handle)
-  immediately, so several requests can overlap before `await` blocks on each.
-  The future operations themselves compile in every mode; only `fetch` is
-  component-only. fetch imports the async `wasi:http@0.3.0`
+  immediately, so several requests can overlap before `await` suspends on
+  each. The future operations themselves compile in every mode; only `fetch`
+  is component-only. fetch imports the async `wasi:http@0.3.0`
   (`wasi:http/types` + `wasi:http/client`) — uniformly WASI 0.3, like the rest
   of the component. Run a fetch component with `-S http=y` (which makes the
   host provide `wasi:http`) in addition to the usual flags. Non-fetch

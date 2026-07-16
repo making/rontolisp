@@ -45,7 +45,6 @@ import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
-import am.ik.rontolisp.LispPromise;
 import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispStream;
 import am.ik.rontolisp.LispString;
@@ -779,8 +778,8 @@ public final class Environment implements Scope {
 			return target;
 		}));
 		// fetch starts an outgoing HTTP request, JavaScript fetch-style, and immediately
-		// returns a promise (a LispPromise wrapping the future, which settles with the
-		// result property list) while the request runs on a background thread. It
+		// returns a future (settling with the result property list) while the request
+		// runs on a background thread. It
 		// belongs to the rontolisp package (it is not a Common Lisp standard function).
 		// The optional second argument is an options property list (:method, :headers,
 		// :body); the options are validated eagerly (like JavaScript fetch, which throws
@@ -803,26 +802,6 @@ public final class Environment implements Scope {
 				.thenApply(start -> fetchList(new LispSymbol(":status"), new LispInteger(start.status()),
 						new LispSymbol(":headers"), buildHeaderAlist(start.headers()), new LispSymbol(":body"),
 						start.body())));
-		}));
-		// then derives a new promise from a value (usually a promise): awaiting the
-		// derived promise awaits the base and applies the callback to its value. The
-		// callback runs lazily at first await (memoized), which is the timing all three
-		// backends implement identically. await itself is registered by the evaluator
-		// because resolving a chain applies the callback.
-		String thenName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THEN);
-		env.defineFunction(thenName, new LispFunction(thenName, args -> {
-			if (args.size() != 2) {
-				throw new LispEvalException(LispNames.THEN + " expects 2 arguments, got " + args.size());
-			}
-			return LispPromise.chain(args.get(0), args.get(1));
-		}));
-		// promisep tests whether a value is a promise.
-		String promisepName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.PROMISEP);
-		env.defineFunction(promisepName, new LispFunction(promisepName, args -> {
-			if (args.size() != 1) {
-				throw new LispEvalException(LispNames.PROMISEP + " expects 1 argument, got " + args.size());
-			}
-			return (args.get(0) instanceof LispPromise) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// futurep tests whether a value is a future (calling an async-defun function,
 		// rontolisp:fetch, rontolisp:stream-read, ...).

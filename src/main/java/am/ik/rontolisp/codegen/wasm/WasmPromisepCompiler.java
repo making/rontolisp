@@ -7,9 +7,10 @@ import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 
 /**
- * Compiles the {@code rontolisp:promisep} predicate: a single {@code ref.test} against
- * the {@code TYPE_PROMISE} struct (the runtime representation of both a
- * {@code rontolisp:fetch} root and a {@code rontolisp:then} chain).
+ * Compiles the {@code rontolisp:futurep} predicate: a {@code ref.test} against
+ * {@code TYPE_PROMISE} (the internal degenerate-future struct a Preview-1
+ * {@code %async-run} produces), plus {@code TYPE_FUTURE} under the asyncMode state
+ * machines.
  */
 final class WasmPromisepCompiler {
 
@@ -19,12 +20,12 @@ final class WasmPromisepCompiler {
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		if (args.size() != 2) {
-			throw new UnsupportedOperationException("promisep expects 1 argument, got " + (args.size() - 1));
+			throw new UnsupportedOperationException("futurep expects 1 argument, got " + (args.size() - 1));
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		if (ctx.futureTypeIndex >= 0) {
 			// asyncMode: a future is a first-class TYPE_FUTURE (the state machines) OR
-			// a legacy TYPE_PROMISE chain (a wit-import async call).
+			// the degenerate TYPE_PROMISE a non-async-mode %async-run produced.
 			int tmp = ctx.allocTemp();
 			ctx.writer.write(Instruction.TEE_LOCAL);
 			ctx.writer.writeSignedLeb128(tmp);

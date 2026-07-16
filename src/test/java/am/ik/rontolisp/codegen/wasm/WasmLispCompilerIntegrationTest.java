@@ -81,8 +81,10 @@ class WasmLispCompilerIntegrationTest {
 				am.ik.rontolisp.eval.SourceLoader.fileSystem());
 		loaded = am.ik.rontolisp.eval.HttpLibrary.process(loaded,
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
-		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
-			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
+		// The prelude splice mirrors the CLI: a handler draining a body stream calls
+		// the prelude's rontolisp:read-all.
+		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary.process(
+				am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
 		return new WasmLispCompiler(false, true, false, false, true).compile(program);
 	}
 
@@ -2049,9 +2051,10 @@ class WasmLispCompilerIntegrationTest {
 				""", null);
 		byte[] proxyBytes = compileServeComponent("""
 				(rontolisp:async-defun handle (request)
-				  (let ((resp (rontolisp:await (rontolisp:fetch "http://127.0.0.1:8083/up"))))
+				  (let* ((resp (rontolisp:await (rontolisp:fetch "http://127.0.0.1:8083/up")))
+				         (body (rontolisp:await (rontolisp:read-all (getf resp :body)))))
 				    (list :status 200
-				          :body (concatenate 'string "proxied " (getf resp :body)
+				          :body (concatenate 'string "proxied " body
 				                             " " (princ-to-string (getf resp :status))))))
 				(rontolisp:http-handler 'handle)
 				""", null);
@@ -5622,7 +5625,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("nil");
 	}
 
@@ -5651,24 +5654,14 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void promiseOpsWorkInPreview1Mode() throws Exception {
-		// await/then/promisep are generic promise operations that run in Preview 1 too
-		// (only fetch itself is component-only): non-promise passthrough, then chains
-		// with flattening and at-first-await memoization, promisep, and opaque printing.
+		// await is the one generic asynchronous operation that runs in Preview 1 too
+		// (only fetch itself is component-only): a non-future passes through unchanged.
+		// The promise-era then/promisep were deleted in the async/await redesign.
 		assertThat(compileAndRun("(print (rontolisp:await 42)) (print (rontolisp:await nil))")).isEqualTo("42\nnil");
-		assertThat(compileAndRun("(print (rontolisp:await (rontolisp:then 21 (lambda (x) (* x 2)))))")).isEqualTo("42");
-		assertThat(compileAndRun(
-				"(print (rontolisp:await (rontolisp:then (rontolisp:then 10 (lambda (x) (+ x 1))) (lambda (x) (* x 3)))))"))
-			.isEqualTo("33");
-		assertThat(compileAndRun(
-				"(print (rontolisp:await (rontolisp:then 5 (lambda (x) (rontolisp:then x (lambda (y) (+ y 1)))))))"))
-			.isEqualTo("6");
-		assertThat(compileAndRun("(setq cnt 0)" + " (let ((p (rontolisp:then 1 (lambda (x) (setq cnt (+ cnt 1)) x))))"
-				+ " (rontolisp:await p) (rontolisp:await p) (print cnt))"))
-			.isEqualTo("1");
-		assertThat(compileAndRun(
-				"(print (rontolisp:promisep 42))" + " (print (rontolisp:promisep (rontolisp:then 1 (lambda (x) x))))"
-						+ " (print (rontolisp:then 1 (lambda (x) x)))"))
-			.isEqualTo("nil\nt\n#<FUTURE>");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:then 1 (lambda (x) x))"))
+			.hasMessageContaining("not external in the rontolisp package");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:promisep 42)"))
+			.hasMessageContaining("not external in the rontolisp package");
 	}
 
 	@Test
@@ -5858,7 +5851,9 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void asyncStreamsAreACompileErrorInPreview1Mode() {
 		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:make-stream))"))
-			.hasMessageContaining("asynchronous streams are not available on the WASM backends yet");
+			.hasMessageContaining("guest-created streams are not available on the WASM backends yet");
+		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:stream-read 1))"))
+			.hasMessageContaining("requires the interpreter, the JVM backend or an asynchronous --component program");
 		assertThatThrownBy(() -> compileAndRun("(defun bad () (rontolisp:await 1))"))
 			.hasMessageContaining("only allowed inside");
 	}
@@ -6022,22 +6017,20 @@ class WasmLispCompilerIntegrationTest {
 			String url = base + "/hello";
 			String echo = base + "/echo";
 			String program = "(let ((r (rontolisp:await (rontolisp:fetch \"" + url + "\"))))"
-					+ " (print (getf r :status))" + " (print (getf r :body)) (print (getf r :headers)))"
-					+ " (print (getf (rontolisp:await (rontolisp:fetch \"" + url
-					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\"))))) :body))"
-					+ " (print (getf (rontolisp:await (rontolisp:fetch \"" + echo
-					+ "\" (list :method \"POST\" :body \"hi\"))) :body))"
-					// two promises in flight at once, awaited out of order; p1 is awaited
-					// twice (the second await must come from the result cache --
-					// wasi:http
-					// hands out the response only once)
+					+ " (print (getf r :status))"
+					+ " (print (rontolisp:await (rontolisp:read-all (getf r :body)))) (print (getf r :headers)))"
+					+ " (print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await (rontolisp:fetch \"" + url
+					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\"))))) :body))))"
+					+ " (print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await (rontolisp:fetch \"" + echo
+					+ "\" (list :method \"POST\" :body \"hi\"))) :body))))"
+					// two futures in flight at once, awaited out of order; p1 is awaited
+					// twice (the second await must come from the settled future --
+					// wasi:http hands out the response only once)
 					+ " (let ((p1 (rontolisp:fetch \"" + echo + "\" (list :method \"POST\" :body \"one\")))"
 					+ "       (p2 (rontolisp:fetch \"" + echo + "\" (list :method \"POST\" :body \"two\"))))"
-					+ "   (print (getf (rontolisp:await p2) :body))" + "   (print (getf (rontolisp:await p1) :body))"
-					+ "   (print (getf (rontolisp:await p1) :status)))"
-					// a fetch promise chains with then (the callback extracts the status)
-					+ " (print (rontolisp:await (rontolisp:then (rontolisp:fetch \"" + url
-					+ "\") (lambda (r) (getf r :status)))))";
+					+ "   (print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await p2) :body))))"
+					+ "   (print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await p1) :body))))"
+					+ "   (print (getf (rontolisp:await p1) :status)))";
 			byte[] componentBytes = compileFetchComponent(program);
 			java.nio.file.Path wasm = tempDir.resolve("fetch.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);
@@ -6088,8 +6081,8 @@ class WasmLispCompilerIntegrationTest {
 			String base = "http://127.0.0.1:" + server.getAddress().getPort();
 			String program = "(let ((u1 (concatenate 'string \"" + base + "\" \"/a\"))"
 					+ "      (u2 (concatenate 'string \"" + base + "\" \"/b\")))"
-					+ "  (print (getf (rontolisp:await (rontolisp:fetch u1)) :body))"
-					+ "  (print (getf (rontolisp:await (rontolisp:fetch u2)) :body)))"
+					+ "  (print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await (rontolisp:fetch u1)) :body))))"
+					+ "  (print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await (rontolisp:fetch u2)) :body)))))"
 					// a runtime-built request body must be staged too
 					+ " (let ((body (concatenate 'string \"pay\" \"load\")))"
 					+ "   (print (getf (rontolisp:await (rontolisp:fetch \"" + base
@@ -6130,9 +6123,11 @@ class WasmLispCompilerIntegrationTest {
 		try {
 			String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/ping";
 			String program = """
-					(defun fetch-body (url)
+					(rontolisp:async-defun fetch-body (url)
 					  (print "fetching")
-					  (getf (rontolisp:await (rontolisp:fetch url)) :body))
+					  (let* ((r (rontolisp:await (rontolisp:fetch url)))
+					         (body (rontolisp:await (rontolisp:read-all (getf r :body)))))
+					    body))
 					(rontolisp:wasm-export 'fetch-body :params '(:string) :returns :string :async t)
 					""";
 			byte[] componentBytes = compileFetchComponent(program);
@@ -8772,9 +8767,10 @@ class WasmLispCompilerIntegrationTest {
 		// The backend echoes the request body back, so the assertion proves the body
 		// ARRIVED -- not merely that the request was accepted.
 		byte[] backendBytes = compileServeComponent("""
-				(defun handle (request)
-				  (list :status 200
-				        :body (concatenate 'string "echo " (getf request :body))))
+				(rontolisp:async-defun handle (request)
+				  (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
+				    (list :status 200
+				          :body (concatenate 'string "echo " body))))
 				(rontolisp:http-handler 'handle)
 				""", null);
 		byte[] postBytes = compileWitImportComponent(vendoredWasiHttpWit(), """

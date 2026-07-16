@@ -247,9 +247,7 @@
 | `rontolisp:list-functions` | `(rontolisp:list-functions :cl)` | パッケージの関数シンボルをソートしたもの(デフォルトは `:cl`) |
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | パッケージのマクロシンボルをソートしたもの |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | パッケージの特殊形式シンボルをソートしたもの |
-| `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | HTTPリクエストを非同期に開始します。プロミスを返します |
-| `rontolisp:then` | `(rontolisp:then p (lambda (r) (getf r :status)))` | 確定値にコールバックを適用する新しいプロミスを導出します |
-| `rontolisp:promisep` | `(rontolisp:promisep p)` | 値がプロミスなら `t` |
+| `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | HTTPリクエストを非同期に開始します。future を返します |
 | `rontolisp:futurep` | `(rontolisp:futurep v)` | 値が future（`async-defun` で定義した関数の呼び出し、`rontolisp:fetch`、`rontolisp:stream-read` などが返す値）なら `t` |
 | `rontolisp:streamp` | `(rontolisp:streamp v)` | 値が非同期ストリームなら `t`（ファイルストリームに答える `cl:streamp` とは別の述語） |
 | `rontolisp:make-stream` | `(rontolisp:make-stream)` | 新しいオープン状態の非同期ストリームを作成します。1 つの値が読み側と書き側の両端を持ちます |
@@ -281,12 +279,11 @@
 `list-special-forms`)については
 [パッケージのイントロスペクション](packages.md#package-introspection)
 で詳しく説明しています。`rontolisp:fetch`
-は外向きのHTTPリクエストを開始してプロミスを返し、汎用のプロミス操作 `rontolisp:await` / `rontolisp:then` / `rontolisp:promisep` がそれを解決します。全体像は
+は外向きのHTTPリクエストを開始して future を返し、`rontolisp:await` がそれを解決します。全体像は
 [HTTPリクエストガイド](../guides/http-fetch.md)を、オプション、結果plist、バックエンドのサポート、制限については
 [fetch](functions/rontolisp-fetch.md)、
 [await](special-forms/rontolisp-await.md)、
-[then](functions/rontolisp-then.md)、
-[promisep](functions/rontolisp-promisep.md) のリファレンスページを参照してください。`rontolisp:http-handler` は `fetch` の受信側で、同じリクエスト／レスポンスのプロパティリストを使ってハンドラ関数でHTTPリクエストを処理します。各バックエンドでの実例は
+[futurep](functions/rontolisp-futurep.md) のリファレンスページを参照してください。`rontolisp:http-handler` は `fetch` の受信側で、同じリクエスト／レスポンスのプロパティリストを使ってハンドラ関数でHTTPリクエストを処理します。各バックエンドでの実例は
 [HTTPサーバガイド](../guides/http-handler.md)を、バックエンドのサポートと制限は
 [http-handler](functions/rontolisp-http-handler.md) のリファレンスページを参照してください。`rontolisp:json-parse` と `rontolisp:json-stringify` はJSONドキュメントとLispの値を相互変換します（JavaScriptの `JSON.parse`/`JSON.stringify` 相当。fetchレスポンスボディのパースなどに使えます）。値の対応と制限については
 [json-parse](functions/rontolisp-json-parse.md) と

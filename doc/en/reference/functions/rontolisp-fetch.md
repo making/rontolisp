@@ -6,10 +6,10 @@ Starts an outgoing HTTP request, modeled on the JavaScript `fetch` API, and
 immediately returns a **future** while the request runs asynchronously. A
 future is an opaque value (it prints as `#<FUTURE>` and satisfies
 [`rontolisp:futurep`](rontolisp-futurep.md)); pass it to
-[`rontolisp:await`](../special-forms/rontolisp-await.md) to block until the
+[`rontolisp:await`](../special-forms/rontolisp-await.md) to suspend until the
 response arrives and obtain the result property list
-`(:status <integer> :headers <alist> :body <stream>)`, or chain a callback
-with [`rontolisp:then`](rontolisp-then.md).
+`(:status <integer> :headers <alist> :body <stream>)`; the `:body` stream is
+drained with [`rontolisp:read-all`](rontolisp-read-all.md).
 
 ```lisp
 (let ((p (rontolisp:fetch "https://httpbin.org/get")))

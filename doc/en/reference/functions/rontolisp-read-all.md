@@ -28,5 +28,7 @@ To take the chunks one at a time instead, use
 
 ## Backend support
 
-Asynchronous streams exist on the interpreter and the JVM backend today; the
-WASM backends reject the stream operations at compile time.
+Asynchronous streams exist on the interpreter, the JVM backend and -- for the
+request/response body streams `rontolisp:fetch` / `rontolisp:http-handler`
+produce -- the `--component` WASM backend; Preview 1 WASM rejects the stream
+operations at compile time.

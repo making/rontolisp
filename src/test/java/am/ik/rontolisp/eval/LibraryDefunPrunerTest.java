@@ -127,7 +127,7 @@ class LibraryDefunPrunerTest {
 				LispReader.readAllFromString("(print (rontolisp:await (rontolisp:fetch \"http://example.com\")))"),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false);
 		List<String> names = definedNames(LibraryDefunPruner.prune(spliced));
-		assertThat(names).contains("rontolisp:fetch", "%http-read-all", "%http-write-body", "%fetch-send");
+		assertThat(names).contains("rontolisp:fetch", "%http-body-value", "%http-write-body", "%fetch-send");
 	}
 
 	@Test

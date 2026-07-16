@@ -1,50 +1,33 @@
-# Promises (`rontolisp:await` / `then` / `promisep`) and `rontolisp:fetch` (async HTTP)
+# Futures (`rontolisp:await` / `futurep`) and `rontolisp:fetch` (async HTTP)
 
 `rontolisp`-package functions (not CL standard). `fetch` starts the request and
-immediately returns a **promise**; the promise operations are generic and fetch is just
-their only built-in producer today: `await` resolves (blocking; a non-promise passes
-through unchanged, JS-style), `then` derives a chained promise (callback applied lazily
-at first await, memoized, promise-returning callbacks flattened), `promisep` is the type
-predicate. Promises print as `#<PROMISE>` in all backends. Behavior and limitations live
-in the doc site (`doc/*/reference/functions/rontolisp-{fetch,await,then,promisep}.md`).
+immediately returns a **future** (`.kb/async-await.md` has the full future/stream
+machinery); `await` resolves it, `futurep` is the type predicate. The promise-era
+`then`/`promisep` surface is DELETED (the todo-139 breaking redesign): composition is
+`async-defun`/`async-lambda` + `await`. Futures print as `#<FUTURE>`, streams as
+`#<STREAM>`, on every backend.
 
-**Promise representation** (a first-class, distinguishable type everywhere):
+**Future representation per backend**: interpreter = `LispFuture` (wraps a
+`CompletableFuture<LispVal>`; the resolver `LispEvaluator.awaitValue` joins and
+flattens); JVM = a bare `java.util.concurrent.CompletableFuture` (nothing else in the
+runtime value representation is one); WASM `--component` asyncMode = the first-class
+`TYPE_FUTURE` struct (state machines + scheduler, `.kb/async-await.md`); Preview 1 =
+the internal degenerate `TYPE_PROMISE` struct (settled at creation;
+`FUNC_PROMISE_AWAIT` resolves it).
 
-- interpreter -- `LispPromise` (core AST package): root shape wraps a
-  `CompletableFuture<LispVal>`; chain shape wraps (base, fn) + a memo slot. `await`/`then`
-  are registered in `LispEvaluator` / `Environment`; the resolver
-  (`LispEvaluator.awaitValue`) lives in the evaluator because applying a chain callback
-  needs `apply`.
-- JVM -- the promise IS a `java.util.concurrent.CompletableFuture` (nothing else in the
-  runtime value representation is one, so `promisep`/printing are single instanceofs and
-  consp/car/cdr are untouched). `_fetch` returns `sendAsync`'s future directly; a `then`
-  chain is a *completed* future holding the payload `{MARKER, base, fn}` (MARKER =
-  interned `"%promise\n"`, unreachable from the reader); `_await`
-  (JvmFetchRuntimeBuilder) resolves recursively, applies callbacks via the `_invoke_1`
-  dispatcher (arity 1 is force-registered when the fetch runtime is emitted), and
-  memoizes with `obtrudeValue({MARKER, value, MARKER})`. The HttpResponse->plist branch
-  is ordered after the chain branch so then-only programs never touch `java.net.http`.
-- WASM -- a `TYPE_PROMISE` struct `{mut i32 kind, mut eqref base, mut eqref fn}`:
-  kind 1 = then chain, 2 = settled (base = memoized result). `_promise_await`
-  (`FUNC_PROMISE_AWAIT`, WasmPromiseRuntimeBuilder; a real function because it recurses)
-  rewrites the struct to kind 2 in place after resolving, so each chain callback is
-  consumed exactly once. There is NO dedicated fetch kind: http.lisp's fetch is
-  `(then (%fetch-send ...) #'%fetch-read-response)` -- a kind-1 chain whose base is the
-  async `client.send` start token (a `(packed . retptr)` cons) and whose callback is the
-  generated await wrapper. (The 0.2-era kind 0 / `FUNC_FETCH_START`/`FUNC_FETCH_AWAIT`
-  adapter seam was deleted in the .todo/02 Phase-3 cleanup.)
+`await`/`futurep` compile/run on every backend and WASM mode (Preview 1 included);
+**only `fetch` is component-only** (`WasmFetchCompiler` is a compile error outside
+`--component`; the JVM emits the fetch/await runtime when fetch or await is used).
 
-`await`/`then`/`promisep` compile/run on every backend and WASM mode (Preview 1
-included); **only `fetch` is component-only** (`WasmFetchCompiler` is a compile error
-outside `--component`; the JVM emits the fetch/await runtime when fetch or await is used).
+**The result plist is `(:status <int> :headers <alist> :body <stream>)` on every
+backend** -- `:body` is an asynchronous stream drained with
+`(rontolisp:await (rontolisp:read-all ...))`.
 
 **Error timing** is JS-like: options are validated at `fetch` time; request/transport
 failures surface at `await` -- EVERY backend signals there (on WASM the send result's
 error arm becomes a `rontolisp:wit-error` condition, catchable with `handler-case`; the
-0.2-era nil-on-failure convention is gone with the wasi:http@0.3 cutover). A fetch that
-cannot even start (malformed URL) returns `nil` instead of a promise on WASM. There is
-deliberately no onRejected/catch parameter yet (see
-`.todo/45-promise-error-callback.md`).
+interpreter/JVM signal a plain error there, a known type divergence). A fetch that
+cannot even start (malformed URL) returns `nil` instead of a future on WASM.
 
 Interpreter (`eval/HttpSupport.requestAsync`, via `HttpClient.sendAsync` -- request
 building failures fail the future; the per-request client is deliberately never closed)
@@ -67,14 +50,18 @@ compile error.
 - **fetch (outgoing)**: `%fetch-send` builds the request resource, writes the body via
   the `body-stream` alias built-ins, and calls `%http-client:send` -- an `async func`
   member, so it async-lowers (`canon lower ... async`): the start wrapper returns a
-  `(packed . retptr)` token and the generated await wrapper drives a
-  `waitable-set.new/join/wait` loop, then lifts the `result<response, error-code>` at
-  retptr. The public defun is `(rontolisp:then (start ...) #'awaited)`, so the EXISTING
-  promise machinery does the async part and awaiting SIGNALS the error arm
-  (`rontolisp:wit-error`). Run flags:
+  `(packed . retptr)` token, which `rontolisp::%subtask-future` turns into a
+  first-class PENDING `TYPE_FUTURE` (registry + task waitable-set; the generated
+  LIFT wrapper reads the result out at retptr when the scheduler sees the subtask's
+  RETURNED event). The public `send` binding is an async-defun that awaits and
+  unwraps the `result<response, error-code>` envelope, so awaiting SIGNALS the error
+  arm (`rontolisp:wit-error`); `rontolisp:fetch` composes it through the async-defun
+  `%fetch-run` and keeps the nil-on-start-failure contract. `:body` comes back as a
+  `TYPE_WASI_STREAM` (see `.kb/async-await.md`). Run flags:
   `wasmtime run -W gc=y -W exceptions=y -S http=y`
   (everything is base component-model-async, default-on; `-S http=y` links the
-  host's `wasi:http`). Non-fetch components do not import `wasi:http`.
+  host's `wasi:http`; `-W exceptions=y` because asyncMode forces EH mode).
+  Non-fetch components do not import `wasi:http`.
 - **serve (incoming)**: the handler implements `handler.handle: async func(request) ->
   result<response, error-code>` as a CALLBACK async lift (stub callback; the task's
   blocking is the parked waitable-set.wait inside the wrappers); the response is delivered
@@ -90,13 +77,18 @@ compile error.
   ` -- no gated feature flags (the `service` world's client import is
   host-provided by default -- no `-S http=y`).
 - **Bodies (shared, symmetric)**: request and response are the same 0.3 shape
-  (`contents: option<stream<u8>>` + a trailers future), so `%http-consume-text` /
-  `%http-write-body` serve both directions. `consume-body` MOVES its resource (dropping
-  the handle afterwards traps); an unfinished body traps, so the guest resolves its
-  transmit future ok once the body is read. Drops are straight-line in http.lisp (the
-  `with-*` scope-guarantee macro was deliberately deferred). http.lisp accepts the
-  per-call bump-heap growth of an async start (the start wrapper must not pop its
-  staging -- args + retptr outlive the call until await).
+  (`contents: option<stream<u8>>` + a trailers future), so `%http-body-value` serves
+  both directions: it runs `consume-body` (which MOVES its resource) eagerly and
+  wraps the (stream, trailers, transmit-res) protocol into a first-class stream
+  value via `rontolisp::%wasi-stream-new` -- the read thunk pulls one blocking chunk
+  per call, and the close thunk (run ONCE, at EOF or an early stream-close) drops
+  the readable end + the unread trailers and resolves the transmit future ok (an
+  unfinished body traps). `%serve-handle` stream-closes the request body after
+  dispatch so the protocol completes even when the handler never read it, and
+  drains a STREAM response body via its private `%http-drain` (http.lisp stays
+  self-contained -- no prelude dependency). http.lisp accepts the per-call
+  bump-heap growth of an async start (the start wrapper must not pop its staging --
+  args + retptr outlive the call until the lift).
 
 **Browser playground**: truly async. The Web Image runtime runs inside a Web Worker
 (`web/ronto-worker.js`); the web-profile substitution
@@ -116,11 +108,12 @@ thread, e.g. `compile-run.html` -- `start` returns `"sync"` and the substitution
 back to the synchronous XHR (`BrowserHttp.request`, settled future, no overlap).
 
 Tests: interpreter/JVM use a local `HttpServer` (awaited-twice, two-in-flight
-out-of-order, then-chain cases); Preview-1 promise ops run under wasmtime in
+out-of-order cases); Preview-1 await passthrough runs under wasmtime in
 `WasmLispCompilerIntegrationTest.promiseOpsWorkInPreview1Mode`; deterministic
 component error-path + `-S http` gate tests plus an opt-in (`RONTOLISP_HTTP_E2E=1`)
-success test exercise overlap, out-of-order awaits and a then chain; ci-spec has a
-network-free `promise-generic-await-then-promisep` case covering all four backends.
+success test exercise overlap and out-of-order awaits; ci-spec has network-free
+`async-defun-await-futurep` / `await-passes-non-futures-through` cases covering all
+four backends.
 
 ## `rontolisp:http-handler` (incoming HTTP / serving)
 

@@ -1122,7 +1122,7 @@ cases:
       (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf signal slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string with-slots)
       (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq unwind-protect while)
       252
-      (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
+      (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
       (call field new proxy static)
       ci-intro-fn
       nil
@@ -1173,32 +1173,15 @@ cases:
       11
       42
       "ci-caught"
-  - name: promise-generic-await-then-promisep
+  - name: await-passes-non-futures-through
     source: |
       (print (rontolisp:await 42))
       (print (rontolisp:await nil))
-      (print (rontolisp:promisep 42))
-      (setq ci-then-p (rontolisp:then 21 (lambda (x) (* x 2))))
-      (print (rontolisp:promisep ci-then-p))
-      (print ci-then-p)
-      (print (rontolisp:await ci-then-p))
-      (print (rontolisp:await (rontolisp:then ci-then-p (lambda (x) (+ x 1)))))
-      (setq ci-then-cnt 0)
-      (setq ci-then-memo (rontolisp:then 1 (lambda (x) (setq ci-then-cnt (+ ci-then-cnt 1)) x)))
-      (rontolisp:await ci-then-memo)
-      (rontolisp:await ci-then-memo)
-      (print ci-then-cnt)
-      (print (rontolisp:await (rontolisp:then 5 (lambda (x) (rontolisp:then x (lambda (y) (+ y 1)))))))
+      (print (rontolisp:await "ci-await"))
     expected: |
       42
       nil
-      nil
-      t
-      #<FUTURE>
-      42
-      43
-      1
-      6
+      "ci-await"
   - name: first-rest-nth-as-first-class-function
     source: |
       (print (funcall #'first '(1 2 3)))

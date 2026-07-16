@@ -20,5 +20,7 @@
 
 ## バックエンドのサポート
 
-非同期ストリームは現在インタプリタと JVM バックエンドに存在します。WASM
-バックエンドはストリーム操作をコンパイル時に拒否します。
+ゲスト側で作るストリーム (`rontolisp:make-stream` / `rontolisp:stream-write`)
+は現在インタプリタと JVM バックエンドに存在します。WASM バックエンドは
+コンパイル時に拒否します (`--component` プログラムのストリームは
+`rontolisp:fetch` / `rontolisp:http-handler` のボディ由来です)。

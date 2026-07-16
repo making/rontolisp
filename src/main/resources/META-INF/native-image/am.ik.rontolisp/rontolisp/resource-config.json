@@ -69,15 +69,21 @@
       },
       {
         "condition": {
-          "typeReachable": "am.ik.rontolisp.eval.FetchLibrary"
+          "typeReachable": "am.ik.rontolisp.eval.HttpLibrary"
         },
-        "pattern": "am/ik/rontolisp/eval/fetch\\.lisp"
+        "pattern": "am/ik/rontolisp/eval/http\\.lisp"
       },
       {
         "condition": {
-          "typeReachable": "am.ik.rontolisp.eval.FetchLibrary"
+          "typeReachable": "am.ik.rontolisp.eval.HttpLibrary"
         },
-        "pattern": "am/ik/rontolisp/eval/fetch\\.wit"
+        "pattern": "am/ik/rontolisp/eval/http\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.WitLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/wit\\.lisp"
       }
     ]
   }

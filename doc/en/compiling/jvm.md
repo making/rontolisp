@@ -63,10 +63,9 @@ helpers reference `java.math` (`BigInteger`/`BigDecimal`/`MathContext`, for the
 overflow-promoting integer and exact ratio arithmetic) and `java.util`
 (`ArrayList`/`Arrays`, and `HashMap` for hash tables) -- all of which already
 exist in Java 6. One exception is a program that calls `rontolisp:fetch`: it additionally
-references `java.net`/`java.net.http`, so such a program needs JRE 11+ (the
-generic promise operations `rontolisp:await` / `rontolisp:then` /
-`rontolisp:promisep` also represent promises as `java.util.concurrent`
-futures, present since Java 8). The
+references `java.net`/`java.net.http`, so such a program needs JRE 11+
+(`rontolisp:await` / `rontolisp:futurep` also represent futures as
+`java.util.concurrent` futures, present since Java 8). The
 other is a program that uses the [`java:` interop
 package](../guides/java-interop.md): the compiler embeds a reflection bridge
 (compiled with the project's own Java release) into the class, so it needs a

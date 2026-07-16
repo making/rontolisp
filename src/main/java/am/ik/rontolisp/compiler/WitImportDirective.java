@@ -335,25 +335,19 @@ public final class WitImportDirective {
 				List<Param> params = parameters(func, witPath, locations, resolver, iface, member, false, true);
 				if (func.def().func().async()) {
 					// An `async func` member async-lowers: the call starts as a subtask
-					// (%member-start, returning a (packed . retptr) token cons) and its
-					// completion is awaited through a waitable-set (%member-await), and
-					// the public defun composes the two over the EXISTING promise
-					// machinery -- `(rontolisp:then (start args...) #'await)` -- so
-					// callers get an ordinary awaitable promise, exactly like fetch.
+					// (%member-start, returning a (packed . retptr) token cons), which
+					// rontolisp::%subtask-future turns into a FIRST-CLASS FUTURE --
+					// settled immediately when the call completed eagerly (lifted
+					// through %member-lift), pending and scheduler-registered otherwise.
+					// The public defun returns that future; a result-returning member's
+					// public defun is an async-defun that awaits it and unwraps the
+					// (:ok . V) / (:error . E) envelope, so the error arm re-signals at
+					// the caller's await (the settled result mapping).
 					String start = internalName(directive.pkg(), "%" + member + "-start");
-					String await = internalName(directive.pkg(), "%" + member + "-await");
-					componentMembers.add(asyncCallBinding(member, start, await));
-					if (isResultReturning(func, resolver, iface)) {
-						// The awaited value is the (:ok . V) / (:error . E) envelope;
-						// unwrap it inside the promise chain so awaiting the public
-						// promise signals the error arm, the settled result mapping.
-						String awaited = internalName(directive.pkg(), "%" + member + "-awaited");
-						bindings.add(awaitUnwrapDefun(awaited, await));
-						bindings.add(thenDefun(name, start, awaited, params));
-					}
-					else {
-						bindings.add(thenDefun(name, start, await, params));
-					}
+					String lift = internalName(directive.pkg(), "%" + member + "-lift");
+					componentMembers.add(asyncCallBinding(member, start, lift));
+					bindings
+						.add(subtaskFutureDefun(name, start, lift, params, isResultReturning(func, resolver, iface)));
 					continue;
 				}
 				if (isResultReturning(func, resolver, iface)) {
@@ -370,6 +364,17 @@ public final class WitImportDirective {
 			}
 			List<Param> params = parameters(func, witPath, locations, resolver, iface, member, wasm, false);
 			String returns = resultDesignator(func, witPath, locations, resolver, iface, member, wasm);
+			if (!wasm && func.def().func().async()) {
+				// An `async func` member on the interpreter / the JVM: the provider call
+				// is synchronous, but the binding is an async-defun so callers get a
+				// FUTURE on every backend that has one -- settled with the provider's
+				// result (eager-start runs the body to completion), or rejected when the
+				// provider signals (the condition re-signals at await, matching the
+				// component's error-arm mapping). Preview 1 stays the degenerate
+				// synchronous binding below (its async contract).
+				bindings.add(asyncProviderDefun(name, ifaceId, member, params));
+				continue;
+			}
 			bindings.add(wasm ? wasmImportForm(name, module, directive.fieldStyle().apply(member), params, returns)
 					: providerDefun(name, ifaceId, member, params));
 		}
@@ -514,12 +519,13 @@ public final class WitImportDirective {
 		return pkg == null ? bare : PackageRegistry.qualifyInternal(pkg, bare);
 	}
 
-	// (:async-call "send" "pkg::%send-start" "pkg::%send-await") -- an async func member
-	// of a %component-import form: the start wrapper async-lowers the call, the await
-	// wrapper drives the waitable-set until the subtask returns and lifts the result.
-	private static LispVal asyncCallBinding(String member, String startName, String awaitName) {
+	// (:async-call "send" "pkg::%send-start" "pkg::%send-lift") -- an async func member
+	// of a %component-import form: the start wrapper async-lowers the call, the lift
+	// wrapper reads the result out of the return area once the subtask has returned
+	// (called by %subtask-future for an eager completion, or by the scheduler).
+	private static LispVal asyncCallBinding(String member, String startName, String liftName) {
 		return list(List.of(new LispSymbol(":async-call"), new LispString(member), new LispString(startName),
-				new LispString(awaitName)));
+				new LispString(liftName)));
 	}
 
 	// (:task-return "handle-result" "pkg::handle-result-task-return") -- the task-return
@@ -528,9 +534,21 @@ public final class WitImportDirective {
 		return list(List.of(new LispSymbol(":task-return"), new LispString(alias), new LispString(lispName)));
 	}
 
-	// (defun name (p ...) (rontolisp:then (start p ...) (function await))) -- the public
-	// defun of an async func member: an ordinary promise over the started subtask.
-	private static LispVal thenDefun(String name, String start, String await, List<Param> params) {
+	// The public binding of an async func member under --component. A plain member:
+	// (defun name (p ...)
+	// (rontolisp::%subtask-future (start p ...) (function lift)))
+	// -- the future settles to the lifted result. A result-returning member instead:
+	// (rontolisp:async-defun name (p ...)
+	// (let ((%wit-envelope (rontolisp:await
+	// (rontolisp::%subtask-future (start p ...)
+	// (function lift)))))
+	// (rontolisp::%wit-result %wit-envelope)))
+	// -- awaiting inside an async-defun keeps the eager-start contract (the subtask is
+	// in flight before the caller resumes) and re-signals the envelope's error arm at
+	// the caller's await. The await sits in a let init (a spine position) so the state
+	// machine suspends there structurally.
+	private static LispVal subtaskFutureDefun(String name, String start, String lift, List<Param> params,
+			boolean resultReturning) {
 		List<LispVal> lambdaList = new ArrayList<>();
 		List<LispVal> startCall = new ArrayList<>();
 		startCall.add(new LispSymbol(start));
@@ -539,20 +557,42 @@ public final class WitImportDirective {
 			lambdaList.add(symbol);
 			startCall.add(symbol);
 		}
-		LispVal awaitRef = list(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(await)));
-		LispVal then = list(List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THEN)),
-				list(startCall), awaitRef));
-		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(lambdaList), then));
-	}
-
-	// (defun awaited (tok) (rontolisp::%wit-result (await tok))) -- unwraps the awaited
-	// envelope inside the promise chain, so the error arm signals at await time.
-	private static LispVal awaitUnwrapDefun(String awaited, String await) {
-		LispSymbol tok = new LispSymbol("%wit-token");
+		LispVal liftRef = list(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(lift)));
+		LispVal future = list(List.of(
+				new LispSymbol(
+						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.SUBTASK_FUTURE_INTERNAL)),
+				list(startCall), liftRef));
+		if (!resultReturning) {
+			return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(lambdaList), future));
+		}
+		LispSymbol envelope = new LispSymbol("%wit-envelope");
+		LispVal await = list(
+				List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT)), future));
 		LispVal unwrap = list(
 				List.of(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.WIT_RESULT)),
-						list(List.of(new LispSymbol(await), tok))));
-		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(awaited), list(List.of(tok)), unwrap));
+						envelope));
+		LispVal let = list(
+				List.of(new LispSymbol(LispNames.LET), list(List.of(list(List.of(envelope, await)))), unwrap));
+		return list(List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_DEFUN)),
+				new LispSymbol(name), list(lambdaList), let));
+	}
+
+	// (rontolisp:async-defun name (p ...) (rontolisp::%wit-call "iface" "member" p ...))
+	// -- an async func member on the interpreter / the JVM: the synchronous provider
+	// call wrapped so the binding returns a settled (or, on a signal, rejected) future.
+	private static LispVal asyncProviderDefun(String name, String iface, String member, List<Param> params) {
+		List<LispVal> lambdaList = new ArrayList<>();
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.WIT_CALL)));
+		call.add(new LispString(iface));
+		call.add(new LispString(member));
+		for (Param param : params) {
+			LispSymbol symbol = new LispSymbol(param.name());
+			lambdaList.add(symbol);
+			call.add(symbol);
+		}
+		return list(List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_DEFUN)),
+				new LispSymbol(name), list(lambdaList), list(call)));
 	}
 
 	// ("member" "lisp-name") -- one bound member of a %component-import form.

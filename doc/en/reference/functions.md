@@ -250,9 +250,7 @@ package system. Each name below links to its own page.
 | `rontolisp:list-functions` | `(rontolisp:list-functions :cl)` | the function symbols of a package, sorted (defaults to `:cl`) |
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | the macro symbols of a package, sorted |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | the special-form symbols of a package, sorted |
-| `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | start an HTTP request asynchronously; returns a promise |
-| `rontolisp:then` | `(rontolisp:then p (lambda (r) (getf r :status)))` | derive a new promise that applies a callback to the settled value |
-| `rontolisp:promisep` | `(rontolisp:promisep p)` | `t` if the value is a promise |
+| `rontolisp:fetch` | `(rontolisp:fetch "http://example.com/")` | start an HTTP request asynchronously; returns a future |
 | `rontolisp:futurep` | `(rontolisp:futurep v)` | `t` if the value is a future (as returned by calling an `async-defun` function, `rontolisp:fetch`, `rontolisp:stream-read`, ...) |
 | `rontolisp:streamp` | `(rontolisp:streamp v)` | `t` if the value is an asynchronous stream (a different predicate from `cl:streamp`, which answers file streams) |
 | `rontolisp:make-stream` | `(rontolisp:make-stream)` | create a fresh open asynchronous stream; one value owns both the read and the write end |
@@ -283,13 +281,12 @@ package system. Each name below links to its own page.
 The introspection functions (`list-functions` / `list-macros` /
 `list-special-forms`) are described in detail under
 [Package introspection](packages.md#package-introspection). `rontolisp:fetch`
-starts an outgoing HTTP request and returns a promise, resolved with the
-generic promise operations `rontolisp:await` / `rontolisp:then` /
-`rontolisp:promisep`; see the
+starts an outgoing HTTP request and returns a future, resolved with
+`rontolisp:await`; see the
 [HTTP Requests guide](../guides/http-fetch.md) for a worked overview, and the
 [fetch](functions/rontolisp-fetch.md),
-[await](special-forms/rontolisp-await.md), [then](functions/rontolisp-then.md) and
-[promisep](functions/rontolisp-promisep.md) reference pages for options, the
+[await](special-forms/rontolisp-await.md) and
+[futurep](functions/rontolisp-futurep.md) reference pages for options, the
 result plist, backend support, and limitations. `rontolisp:http-handler` is
 the incoming counterpart of `fetch` -- it serves HTTP requests with a handler
 function over the same request/response property lists; see the

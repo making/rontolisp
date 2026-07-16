@@ -373,12 +373,32 @@ final class WasmExportCompiler {
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(targetFuncIndex);
 		// asyncMode: an async-defun target returns a TYPE_FUTURE; poll it so the host
-		// sees the settled value (everything settles in this tier -- a suspension needs
-		// the import layer), and a rejected future's re-signal reaches the catch-all
-		// above (the trap an error in an exported function produces today).
+		// sees the settled value, and drive a still-pending one through the blocking
+		// event loop (_sched_loop) -- an async target that awaited a host-backed
+		// future (a fetch inside a served handler) suspended, and the export boundary
+		// is synchronous, so the loop runs it to completion here. A rejected future's
+		// re-signal reaches the catch-all above (the trap an error in an exported
+		// function produces today).
 		if (ctx.asyncFuncBase >= 0 && ctx.asyncDefunNames.contains(decl.name())) {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_POLL);
+			int polled = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(ctx.futureTypeIndex);
+			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SCHED_LOOP);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.write(Instruction.END);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(polled);
 		}
 		emitUnboxResult(ctx, decl.returnType());
 		if (isServeHandle(ctx.serve, decl)) {

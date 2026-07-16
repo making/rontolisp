@@ -320,19 +320,251 @@ Validation: `wasm-tools validate -f component-model,cm-async` ONLY.
     re-verify (serve components now carry the async runtime; feature set
     unchanged), docs note that async components need `-W exceptions=y` (Phase 10
     docs pass).
-- Phases 8-10: pending. Task list mirrors the plan file. NOTE: with Phase 6,
-  every component is wasmCloud-hostable and flag-free; Phases 8-9 add TRUE
-  concurrency (import-layer pending futures + callback scheduler) on top --
-  serve currently handles requests sequentially per instance (host
-  re-instantiates per request anyway), and in-flight fetches still block at the
-  first await.
+- Phase 8 (import layer + scheduler) LANDED 2026-07-17 (full suite BUILD
+  SUCCESS incl. Docker; wasmtime 46 smokes green; uncommitted):
+  - `WasmComponentImportCompiler`: `emitAsyncAwaitBody` (blocking spin) DELETED;
+    the second wrapper of an async call is now a LIFT-ONLY wrapper
+    (`%member-lift`, `buildAsyncLiftBody` -- token cons in, result lifted from
+    the retptr, no waiting, no drops; AsyncCall.awaitName renamed liftName).
+    The async BUILT-IN wrappers (stream/future read/write) KEEP emitBlockedWait
+    (own fresh set, unjoin after) -- flipping them to pending futures is the
+    Phase 9 stream item.
+  - `WasmFutureRuntimeBuilder` FUNC_COUNT 6->8: OFF_SUBTASK_FUTURE=6
+    (`_subtask_future(token, lift) -> future`: RETURNED-eagerly -> dispatch_1
+    lift -> settled struct; else pending future + registry push + lazy
+    task-set create + waitable.join) and OFF_SCHED_LOOP=7 (`_sched_loop(fut) ->
+    value`: blocking waitable-set.wait loop; EVENT_SUBTASK/RETURNED -> unlink
+    registry entry by waitable, dispatch_1 lift, subtask.drop, _future_settle
+    (cascade wakes waiters); exits via _future_poll so a rejection re-signals).
+    Bodies embed placeholder-ordinal calls (WasmImportInjector resolves them);
+    `Sched` record carries (WaitOrdinals of the FIRST async-calling interface
+    -- any trio works, they alias the same built-ins --, registry global,
+    set global, __ronto_alloc index); null Sched -> unreachable stubs.
+  - 2 new asyncMode-only globals after ehDepth: scheduler registry (ref null
+    eq, cons list of (subtask . (future . (lift . token)))) and the task
+    waitable-set handle (i32, 0 = not created).
+  - `WasmAsyncEmit.emitStartEntry`: the top-level suspension `unreachable` is
+    now `_sched_loop(frame.future)` -- the top level drives real pending
+    futures to completion (deadlock with an empty set traps).
+  - `WasmExportCompiler`: an async-defun export target's wrapper polls, and a
+    STILL-PENDING future is driven through `_sched_loop` -- this is what makes
+    fetch-inside-a-served-handler work (the handler suspends, the synchronous
+    handle boundary drives it; still sequential per task, real callback
+    concurrency = Phase 9).
+  - `rontolisp::%subtask-future` internal (LispNames SUBTASK_FUTURE_INTERNAL
+    [+_QUALIFIED], WasmFutureInternalCompiler case, counted into usesAsync so
+    a never-awaiting program still gets the runtime).
+  - `WitImportDirective`: thenDefun/awaitUnwrapDefun DELETED. An async func
+    member now binds: component non-result = plain defun returning
+    `(%subtask-future (start p...) #'lift)`; component result-returning =
+    `(rontolisp:async-defun name (p...) (let ((%wit-envelope (await
+    (%subtask-future ...)))) (rontolisp::%wit-result %wit-envelope)))` (await
+    in a let init = spine position, deliberately NOT relying on the
+    normalizer); interp/JVM = `(rontolisp:async-defun name (p...) (%wit-call
+    ...))` (settled/rejected future, futurep parity); P1 unchanged (degenerate
+    sync, documented).
+  - http.lisp: `rontolisp:then` composition replaced by `%fetch-run`
+    (async-defun awaiting the send future) + fetch keeping the
+    nil-on-start-failure contract; %http-client:send now returns a first-class
+    future.
+  - Verified on wasmtime 46 (`-S http=y -W gc=y -W exceptions=y`): fetch
+    round-trip, 2-in-flight reverse-order await, transport-error rejection
+    caught by handler-case at await THEN a subsequent fetch succeeding, plain
+    serve, and the fetch-in-serve proxy (real suspension driven by the export
+    wrapper). componentFetchOverHttp's legacy then-chain assertion removed
+    (then dies in Phase 10).
+  - DEFERRED from Phase 8: wasi:clocks monotonic-clock `wait-for` on component
+    (needs import-block.bin regeneration -- the block's monotonic-clock
+    instance type declares `now` only, no `wait-for`; regen shifts the block's
+    type indices, so every T_* in WasmComponentBuilder must be re-derived via
+    wasm-tools dump and the WIT fixtures regenerated); interpreter fetch
+    transport errors are a plain error, NOT rontolisp:wit-error (pre-existing
+    divergence, noted for the Phase 10 docs).
+- Phase 9 (component streams + serve) IN PROGRESS 2026-07-17 (uncommitted):
+  - `TYPE_WASI_STREAM {mut i32 eof, mut readFn, mut closeFn}` joined the async
+    rec group (ASYNC_TYPE_COUNT 2->3; Ctx.wasiStreamTypeIndex threaded incl.
+    WasmAsyncEmit.freshCtx); the two closures are arity-0 Lisp lambdas
+    (asyncMode adds dispatch_0 to indirectCallArities), so the close PROTOCOL
+    lives in http.lisp, not codegen.
+  - WasmFutureRuntimeBuilder FUNC_COUNT 8->10: OFF_WSTREAM_READ (settled
+    future of the next chunk; first nil flips eof + runs closeFn once) and
+    OFF_WSTREAM_CLOSE (idempotent). Reads still BLOCK the task while a chunk
+    is in flight (settled futures) -- the pending-future upgrade of the async
+    built-in wrappers is the remaining true-concurrency item.
+  - `rontolisp::%wasi-stream-new` internal (LispNames, WasmFutureInternal
+    Compiler); streamp/stream-read/stream-close compile on --component in
+    asyncMode (WasmWasiStreamCompiler); make-stream/stream-write keep a clear
+    error; print/princ gained a lazily-added "#<STREAM>" branch (the string
+    joins the table only in async modules -- byte-identity).
+  - http.lisp: %http-read-all/%http-consume-text -> %http-body-value (wraps
+    consume-body's stream+trailers+transmit protocol into the stream value);
+    fetch :body AND serve request :body are now first-class streams on EVERY
+    backend (the user-approved decision 3 -- component finally matches the
+    interpreter/JVM); %serve-handle drains a STREAM response body (a proxied
+    fetch :body passes straight through) via prelude read-all, and
+    stream-closes the request body after dispatch (idempotent).
+  - Tests updated to the stream :body contract: componentFetchOverHttp /
+    WithRuntimeBuiltUrls / InsideAsyncExport (the last also fixed: its await
+    sat in a PLAIN defun, which LispAsync rejects since Phase 1 -- env-gated,
+    so nobody had run it), fetch-in-serve proxy, the wit-user-program echo
+    backend; WasmLispCompilerTest.serveProgram now splices the prelude
+    (http.lisp references read-all). Examples cut over: wasmcloud
+    http-handler/http-kv-handler/service-tcp + net magic-8-ball/httpbin/
+    linalg-api use a `route` + async-defun `handle` body-drain wrapper
+    (`(append (list :body body) request)` shadows :body); dog-fetcher and
+    http-client COLLAPSED their #+rontolisp-wasm body split (streams exist on
+    wasm now).
+  - Verified on wasmtime 46: fetch :body stream round-trip byte-identical to
+    the interpreter (incl. re-drain -> ""), serve request-body echo, GET empty
+    body, upstream-fetch stream passthrough as response body, and 3
+    OVERLAPPING curls against the fetch-proxy handler (concurrent serve, one
+    instance per request).
+  - FOUND + FIXED a pre-existing native-image break: resource-config.json
+    still declared fetch.lisp/fetch.wit under FetchLibrary (deleted in
+    .todo/02 Phase 3) and never declared wit.lisp -- so the NATIVE binary
+    could not compile ANY fetch/serve/wit-import program ("http.lisp is
+    missing from the classpath"; `wash dev` builds through the native binary,
+    which is how it surfaced). Now http.lisp/http.wit under HttpLibrary +
+    wit.lisp under WitLibrary.
+  - wasmCloud `wash dev` E2E GREEN 2026-07-17 (examples/wasmcloud/http-handler:
+    GET / + /api/greet + the POST /api/echo stream-drain route all answer;
+    build ran through the rebuilt native binary). NOTE: /usr/local/bin/
+    rontolisp is Gatekeeper-SIGKILLed after an in-place `cp` over the old
+    signed binary (`codesign` cannot re-sign in the root-owned dir); wash was
+    verified via a PATH shim to target/rontolisp -- the user should reinstall
+    the binary properly (rm + cp needs sudo).
+  - Concurrent serve verified manually: 3 overlapping curls against the
+    fetch-proxy handler under `wasmtime serve` all completed with the upstream
+    body (one instance per request; the export wrapper's _sched_loop drives
+    each instance's suspension).
+- Phase 9 DONE (full suite + Docker BUILD SUCCESS after the %http-drain fix +
+  test-helper prelude splice; the earlier read-all coupling was removed --
+  http.lisp is self-contained again).
+- Phase 10 LANDED 2026-07-17 (uncommitted), scope-adjusted from the plan:
+  - DELETED: `rontolisp:then` + `rontolisp:promisep` (LispNames constants,
+    PackageRegistry exports, PackageIntrospection list -- so `list-functions`
+    output changed --, Environment registrations, evaluator LispPromise
+    self-eval + awaitValue promise tail, `LispPromise.java` + LispVal permits,
+    `JvmThenCompiler`/`JvmPromisepCompiler` + JvmExprCompiler dispatch +
+    JvmLispCompiler thenQualified detection, `WasmThenCompiler` + WasmExpr
+    dispatch, `_future_poll`'s TYPE_PROMISE branch -- unreachable in asyncMode
+    once then was gone), `.todo/45` (superseded: rejection handling =
+    handler-case around await). `rontolisp:then/promisep` now fail at package
+    resolution ("not external in the rontolisp package").
+  - KEPT AS INTERNAL (deliberate deviation from the plan's deletion list, all
+    documented in .kb): `TYPE_PROMISE` + `WasmPromiseRuntimeBuilder` +
+    `FUNC_PROMISE_AWAIT` = P1's degenerate-future representation (%async-run
+    producer; a rename would be cosmetic churn); the JVM `_await`'s MARKER
+    then-chain branch (dead code inside hand-assembled bytecode -- removing it
+    risks the v50 verifier lesson; a later mechanical pass);
+    `canonWaitableSetWait` and the sync stream/future encoders that adapters
+    still bind... actually the ADAPTERS bind the ASYNC variants since Phase 6;
+    the sync encoders + stackful `canonLiftMemoryUtf8Async` in ComponentWriter
+    are now likely dead -- grep + golden cleanup left for a later pass.
+  - Docs (en+ja, mirrored): then/promisep pages + catalog entries + curated
+    table rows deleted; http-fetch guide rewritten around
+    async-defun/await/futurep and the everywhere-stream :body; fetch /
+    http-handler reference pages (request `:body <stream>` + async-defun
+    requirement, stream response bodies); the 6 stream pages' backend notes
+    (component supports the fetch/serve body streams; make-stream/stream-write
+    stay interpreter/JVM); async-defun component note = state machines + event
+    loop + `-W exceptions=y`; packages/list-functions/eval-limitations/
+    compiling wasm+jvm mentions. DocExamplesTest 480/0.
+  - ci-spec: `promise-generic-await-then-promisep` ->
+    `await-passes-non-futures-through`; list-functions expected updated.
+  - CLAUDE.md: async invariant line rewritten (state machines, EH-mode force,
+    streams everywhere); manual verify command 4 lost the stale
+    `-W component-model-more-async-builtins=y`.
+  - .kb/async-await.md + .kb/fetch-http.md rewritten for the new tiers.
+  - native resource-config fix (see Phase 9) + native rebuilt.
+- FOUND + FIXED during the (previously deferred) native CiSpecE2eTest: a
+  PHASE-7 scaling cliff -- the implicit top-level async pair compiled the
+  WHOLE top level into ONE resume function; for the concatenated ci-spec
+  corpus that was a ~110k-instruction function with 1300+ locals, and
+  CRANELIFT's compile time explodes superlinearly on it (the "hang" was
+  wasmtime still compiling: main thread parked in CompileInputs::compile /
+  rayon, RSS ballooning to tens of GB; the guest never started; `wasmtime
+  compile -W gc=y` timed the halves at 13s -> 31s for +5 corpus cases).
+  Diagnosed via `sample` of the wasmtime process (guest profiling pointed the
+  wrong way). FIX: `WasmAsyncEmit.compileTopLevelChunkedProgn` -- the
+  OUTERMOST top-level resume body outlines every await-free run of statements
+  into its own plain arity-0 lambda-table function (`_toplevel_chunk_N`,
+  called DIRECTLY with a nil env under a single `$rt == 0` guard; ctx keeps
+  topLevel/usesEval so eval-global mirroring still works inside a chunk), so
+  the resume keeps only the await statements + one call per chunk. Nested
+  guarded bodies (a top-level let's) are NEVER outlined
+  (AsyncResume.topLevelChunked one-shot flag) -- they may reference enclosing
+  locals, which a chunk cannot see (the first cut broke exactly that,
+  componentAsyncDefunCompilesAsStateMachine). Full corpus component run:
+  never-finished -> 1.1 s. Suite + Docker green after the fix.
+- FINAL GATES all green 2026-07-17 (uncommitted): full suite 3749/0 incl.
+  Docker; native CiSpecE2eTest 824/0 across all four backends (5 s -- the
+  component corpus that previously never finished); `-Pweb compile`; javadoc
+  (Version-only, the allowed exception); DocExamplesTest 480/0; wasmCloud
+  `wash dev`; manual 4-backend smoke byte-identical (futurep/await).
+## NEXT (user request 2026-07-17, start a fresh session here): the `async` macro
 
-## Phase 8 handoff (start a fresh session HERE)
+Add `rontolisp:async` -- a WRAPPER macro that turns the ordinary defining
+forms into their asynchronous counterparts, for a notation closer to
+JavaScript's `async function` / `async (…) =>`:
 
-State at handoff (2026-07-17): Phases 0-6 committed `6dc8d12`; **Phase 7
-COMMITTED `ee2049c`** (25 files; new classes below). All Phase-7 gates green
-except the deliberately deferred ones listed above; the deferred native
-CiSpecE2eTest must run before any push.
+- `(rontolisp:async (defun f (x) body...))` == `(rontolisp:async-defun f (x) body...)`
+- `(rontolisp:async (lambda (x) body...))` == `(rontolisp:async-lambda (x) body...)`
+- anything else inside = a clear compile/eval error naming what `async`
+  accepts (a defun or a lambda form).
+
+Design notes for the implementer:
+- This is a pure FRONTEND rewrite -- expand it EVERYWHERE BEFORE the async
+  machinery looks at the program, so `LispAsync.checkTopLevel`,
+  `rewriteTopLevelAsyncDefuns` (WasmLispCompiler), `LispAsync.lowerProgram`
+  (interp/JVM/P1) and `HttpLibrary.defunName`-style definition scanners only
+  ever see async-defun/async-lambda. The natural home is
+  `LispMacroExpander` (`expandAsync`), wired like the existing shared macros:
+  LispNames + PackageRegistry rontolisp exports (+ PackageIntrospection?
+  decide: async is a MACRO/special form, so it belongs in list-macros or
+  list-special-forms, NOT list-functions -- ci-spec + doc page expectations
+  change accordingly), evalCons case, JvmExprCompiler + WasmExprCompiler
+  cases -- BUT a call-position-only expansion is NOT enough: a top-level
+  `(async (defun ...))` must be rewritten before Pass 1 defun collection, so
+  hook the TOP-LEVEL rewrite where flattenTopLevel/expandTopLevelDefinitions
+  run (all three compilers + the evaluator's top-level path + UserMacroExpander
+  so macro-generated `(async (defun ...))` works too).
+- await placement: after expansion the existing checker just works; add a
+  test that `(async (lambda ...))` bodies may await and a plain nested lambda
+  inside still may not.
+- Keep async-defun/async-lambda as the canonical lowered forms (docs may call
+  `async` the sugar); no backend codegen changes at all.
+- Tests: AsyncEvalTest + JvmAsyncCompilerTest + WasmLispCompilerIntegrationTest
+  (component state machine through the sugar) + a ci-spec case; docs en+ja:
+  new special-forms/rontolisp-async.md page + catalog + curated table +
+  cross-links from async-defun/async-lambda pages.
+
+- Phase 10 REMAINING (deferred, in priority order):
+  1. native CiSpecE2eTest against the rebuilt binary (ci-spec changed -- MUST
+     run before push; the binary at target/rontolisp is current except for the
+     then/promisep deletion, so REBUILD FIRST).
+  2. sockets/stdin async promotion (tcp-accept/recv + read-line as implicit
+     suspension points in async context) -- an enhancement; blocking behavior
+     is correct-if-sequential today.
+  3. wait-for on --component (wasi:clocks monotonic-clock wait-for; needs
+     import-block regen + T_* re-derivation, see the Phase 8 deferral note).
+  4. Pending-future stream reads (async built-in wrappers returning pending
+     TYPE_FUTUREs + EVENT_STREAM_* dispatch in the scheduler) and the REAL
+     serve callback (per-task tables + context slot + doorbells, spike
+     findings 5/6) -- true intra-instance concurrency; hosts re-instantiate
+     per request today so this is unobservable until a host reuses instances.
+  5. Sync stream/future encoder + stackful-lift encoder deletion in
+     am.ik.wasm.ComponentWriter + goldens; TYPE_PROMISE -> a P1-future rename;
+     the JVM _await then-branch removal.
+  6. examples/wasmcloud README + app.lisp headers still say wasmCloud cannot
+     run 0.3 components (stale since Phase 6); dog-fetcher/http-client headers
+     mention the deleted #+rontolisp-wasm split.
+
+## Phase 8 handoff (superseded -- Phases 8-10 landed 2026-07-17, see Status)
+
+State at the Phase-8 handoff (2026-07-17): Phases 0-6 committed `6dc8d12`;
+Phase 7 committed `9d4c05d`. Everything below in this section described the
+Phase-7 code map and the Phase-8 pointers; it is kept for the class map.
 
 Phase 7 code map (all in `codegen/wasm`, package-private):
 

@@ -129,7 +129,7 @@ inside another form (not top-level) is an error.
 (print (rontolisp:list-functions :cl-user))
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
-; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
+; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
 (print (rontolisp:list-functions :java))
 ; => (call field new proxy static)
 ```
@@ -151,14 +151,12 @@ part of Common Lisp**. They must be referenced with the `rontolisp:` qualifier
 (or used unqualified after `(in-package rontolisp)`). Besides the introspection
 helpers above (`version`, `list-functions`, `list-macros`, `list-special-forms`),
 the package provides asynchronous outgoing HTTP via `rontolisp:fetch` (which
-returns a promise) together with the generic promise operations
-`rontolisp:await` (resolve, blocking), `rontolisp:then` (chain a callback) and
-`rontolisp:promisep` (type predicate), and JSON conversion via
+returns a future) together with `rontolisp:await` (resolve) and
+`rontolisp:futurep` (type predicate), and JSON conversion via
 [`rontolisp:json-parse`](functions/rontolisp-json-parse.md) /
 [`rontolisp:json-stringify`](functions/rontolisp-json-stringify.md)
 (JavaScript `JSON.parse`/`JSON.stringify` style). All of these have their own
 pages in the [Functions](functions.md#rontolisp-package-functions) reference,
 including the full [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
 [`rontolisp:await`](special-forms/rontolisp-await.md) /
-[`rontolisp:then`](functions/rontolisp-then.md) /
-[`rontolisp:promisep`](functions/rontolisp-promisep.md) documentation.
+[`rontolisp:futurep`](functions/rontolisp-futurep.md) documentation.

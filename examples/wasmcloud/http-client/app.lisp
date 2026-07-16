@@ -14,7 +14,7 @@
 ;; carries the outbound fetch is host-provided by default):
 ;;   rontolisp examples/wasmcloud/http-client/app.lisp -o app.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y app.wasm
-;; wasmCloud cannot run the wasi:http@0.3 component yet -- see ../README.md.
+;; wasmCloud hosts it too: `wash dev` in this directory -- see ../README.md.
 ;; Talk to it with:
 ;;   curl http://127.0.0.1:8080/
 
@@ -25,12 +25,10 @@
 ;; anything else (including upstream 4xx/5xx) is forwarded unchanged.
 (rontolisp:async-defun handle (request)
   ;; awaiting needs an async-defun; the response :body is an asynchronous
-  ;; stream on the interpreter/JVM (drained with read-all) and still a whole
-  ;; string under --component, hence the feature conditional.
+  ;; stream on every backend, drained with read-all.
   (let* ((res (rontolisp:await (rontolisp:fetch (upstream-url))))
          (status (getf res :status))
-         (body #+rontolisp-wasm (getf res :body)
-               #-rontolisp-wasm (rontolisp:await (rontolisp:read-all (getf res :body)))))
+         (body (rontolisp:await (rontolisp:read-all (getf res :body)))))
     (if (integerp status)
         (list :status status
               :headers (list (cons "content-type" "application/json"))

@@ -3971,7 +3971,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
 	}
 
 	@Test
@@ -4015,7 +4015,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
 	}
 
 	@Test
@@ -4191,10 +4191,6 @@ class LispEvaluatorTest {
 					+ " (p2 (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")))"
 					+ " (list (getf (rontolisp:await p2) :status) (getf (rontolisp:await p1) :status)))")
 				.print()).isEqualTo("(200 200)");
-			// a fetch future chains with then (legacy machinery over the new future)
-			assertThat(eval("(rontolisp:await (rontolisp:then (rontolisp:fetch \"http://127.0.0.1:" + port
-					+ "/hello\") (lambda (r) (getf r :status))))"))
-				.isEqualTo(new LispInteger(200));
 		}
 		finally {
 			server.stop(0);
@@ -4997,31 +4993,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void promisepDistinguishesPromises() {
-		assertThat(eval("(rontolisp:promisep 42)").print()).isEqualTo("nil");
-		assertThat(eval("(rontolisp:promisep nil)").print()).isEqualTo("nil");
-		assertThat(eval("(rontolisp:promisep \"p\")").print()).isEqualTo("nil");
-		assertThatThrownBy(() -> eval("(rontolisp:promisep)")).hasMessageContaining("promisep");
-	}
-
-	@Test
-	void thenDerivesChainablePromises() {
-		// then always yields a promise, even from a plain value
-		assertThat(eval("(rontolisp:promisep (rontolisp:then 1 (lambda (x) x)))").print()).isEqualTo("t");
-		assertThat(eval("(rontolisp:then 1 (lambda (x) x))").print()).isEqualTo("#<FUTURE>");
-		assertThat(eval("(rontolisp:await (rontolisp:then 21 (lambda (x) (* x 2))))")).isEqualTo(new LispInteger(42));
-		// chains compose left to right
-		assertThat(eval(
-				"(rontolisp:await (rontolisp:then (rontolisp:then 10 (lambda (x) (+ x 1))) (lambda (x) (* x 3))))"))
-			.isEqualTo(new LispInteger(33));
-		// a callback returning a promise is flattened, like JavaScript then
-		assertThat(eval("(rontolisp:await (rontolisp:then 5 (lambda (x) (rontolisp:then x (lambda (y) (+ y 1))))))"))
-			.isEqualTo(new LispInteger(6));
-		// the callback runs at first await only; the result is memoized
-		assertThat(eval("(progn (setq cnt 0)" + " (let ((p (rontolisp:then 1 (lambda (x) (setq cnt (+ cnt 1)) x))))"
-				+ " (rontolisp:await p) (rontolisp:await p) cnt))"))
-			.isEqualTo(new LispInteger(1));
-		assertThatThrownBy(() -> eval("(rontolisp:then 1)")).hasMessageContaining("then");
+	void thenAndPromisepAreGone() {
+		// The promise-era surface was deleted in the async/await redesign: futures are
+		// the one asynchronous value (rontolisp:futurep), and composition is
+		// async-defun/async-lambda + await.
+		assertThatThrownBy(() -> eval("(rontolisp:then 1 (lambda (x) x))"))
+			.hasMessageContaining("not external in the rontolisp package");
+		assertThatThrownBy(() -> eval("(rontolisp:promisep 42)"))
+			.hasMessageContaining("not external in the rontolisp package");
 	}
 
 	// Characters and string/number parsing

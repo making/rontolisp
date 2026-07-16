@@ -290,8 +290,6 @@ categories:
       - { slug: rontolisp-list-macros, name: "rontolisp:list-macros" }
       - { slug: rontolisp-list-special-forms, name: "rontolisp:list-special-forms" }
       - { slug: rontolisp-fetch, name: "rontolisp:fetch" }
-      - { slug: rontolisp-then, name: "rontolisp:then" }
-      - { slug: rontolisp-promisep, name: "rontolisp:promisep" }
       - { slug: rontolisp-futurep, name: "rontolisp:futurep" }
       - { slug: rontolisp-streamp, name: "rontolisp:streamp" }
       - { slug: rontolisp-make-stream, name: "rontolisp:make-stream" }

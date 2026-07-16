@@ -92,7 +92,7 @@
 
 ;; The request plist's :path carries the path only (the query string arrives
 ;; separately as :query), so the comparisons are exact.
-(defun handle (request)
+(defun route (request)
   (let ((path (getf request :path)))
     (cond ((string= path "/get") (echo-when request "GET" nil))
           ((string= path "/post") (echo-when request "POST" t))
@@ -100,6 +100,13 @@
           ((string= path "/patch") (echo-when request "PATCH" t))
           ((string= path "/delete") (echo-when request "DELETE" t))
           (t (json-response 404 (list :error "not found" :path path))))))
+
+;; The request :body is an asynchronous stream on every backend; drain it once
+;; here and hand the helpers a request whose :body is the whole string (getf
+;; finds the prepended pair first).
+(rontolisp:async-defun handle (request)
+  (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
+    (route (append (list :body body) request))))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

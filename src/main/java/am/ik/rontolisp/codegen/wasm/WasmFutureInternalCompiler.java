@@ -10,12 +10,12 @@ import am.ik.wasm.Type;
 
 /**
  * Compiles the internal {@code rontolisp::%future-new}/{@code %future-settle}/
- * {@code %future-reject} test primitives of the {@code --component} async state machines:
- * thin bindings of the {@link WasmFutureRuntimeBuilder} runtime, available only in
- * asyncMode. They exist so the suspension machinery is exercisable end-to-end (a pending
- * future an async function suspends on, settled or rejected later) before the import
- * layer produces pending futures of its own; they are deliberately undocumented and
- * absent from every other backend.
+ * {@code %future-reject} test primitives of the {@code --component} async state machines
+ * -- thin bindings of the {@link WasmFutureRuntimeBuilder} runtime, available only in
+ * asyncMode, deliberately undocumented and absent from every other backend -- plus the
+ * import layer's {@code rontolisp::%subtask-future} (the bridge from an async-lowered
+ * call's token to a first-class future, synthesized by {@code WitImportDirective} for an
+ * {@code async func} member's binding).
  */
 final class WasmFutureInternalCompiler {
 
@@ -54,6 +54,23 @@ final class WasmFutureInternalCompiler {
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_REJECT);
+			}
+			case LispNames.SUBTASK_FUTURE_INTERNAL -> {
+				expectArgs(member, args, 2);
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				WasmExprCompiler.compileExpr(args.get(2), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SUBTASK_FUTURE);
+			}
+			case LispNames.WASI_STREAM_NEW_INTERNAL -> {
+				expectArgs(member, args, 2);
+				// TYPE_WASI_STREAM {eof = 0, readFn, closeFn}
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(0);
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				WasmExprCompiler.compileExpr(args.get(2), ctx);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeSignedLeb128(ctx.wasiStreamTypeIndex);
 			}
 			default -> throw new IllegalArgumentException("unknown future internal: " + member);
 		}

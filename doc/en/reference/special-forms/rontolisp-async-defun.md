@@ -21,6 +21,6 @@ An error signaled by the body does not escape at call time; it settles the futur
 ## Backend support
 
 - **Interpreter / JVM**: the body runs on a virtual thread — real parallelism with the caller after the first suspension.
-- **WASM `--component`**: the body runs as part of the component's asynchronous task; an `await` inside currently blocks that task (asynchronous host completion still drives it).
+- **WASM `--component`**: the body compiles into a state machine; an `await` of a pending future genuinely suspends it, and the component's event loop resumes it when the awaited host operation (e.g. a `fetch` response) completes. The tasks of one component instance are cooperative (single-threaded). An asynchronous component needs `wasmtime -W exceptions=y` on top of `-W gc=y`.
 - **Preview 1 WASM**: the body runs to completion immediately (no asynchronous host I/O exists there).
 - **`--no-gc`**: rejected at compile time.

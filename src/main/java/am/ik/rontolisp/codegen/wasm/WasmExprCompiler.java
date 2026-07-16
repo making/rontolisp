@@ -197,13 +197,9 @@ final class WasmExprCompiler {
 					WasmAwaitCompiler.compile(cons, ctx);
 					return;
 				}
-				if (LispNames.THEN.equals(qn.member())) {
-					WasmThenCompiler.compile(cons, ctx);
-					return;
-				}
-				if (LispNames.PROMISEP.equals(qn.member()) || LispNames.FUTUREP.equals(qn.member())) {
-					// one ref.test against TYPE_PROMISE (the degenerate future), plus
-					// TYPE_FUTURE under the asyncMode state machines
+				if (LispNames.FUTUREP.equals(qn.member())) {
+					// one ref.test against TYPE_PROMISE (the degenerate Preview-1
+					// future), plus TYPE_FUTURE under the asyncMode state machines
 					WasmPromisepCompiler.compile(cons, ctx);
 					return;
 				}
@@ -235,7 +231,9 @@ final class WasmExprCompiler {
 				}
 				if (LispNames.FUTURE_NEW_INTERNAL.equals(qn.member())
 						|| LispNames.FUTURE_SETTLE_INTERNAL.equals(qn.member())
-						|| LispNames.FUTURE_REJECT_INTERNAL.equals(qn.member())) {
+						|| LispNames.FUTURE_REJECT_INTERNAL.equals(qn.member())
+						|| LispNames.SUBTASK_FUTURE_INTERNAL.equals(qn.member())
+						|| LispNames.WASI_STREAM_NEW_INTERNAL.equals(qn.member())) {
 					WasmFutureInternalCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
@@ -244,12 +242,23 @@ final class WasmExprCompiler {
 							"rontolisp:" + qn.member() + " requires the interpreter or the JVM backend"
 									+ " (no host timer is wired on the WASM backends yet)");
 				}
-				if (LispNames.ASYNC_STREAMP.equals(qn.member()) || LispNames.MAKE_STREAM.equals(qn.member())
-						|| LispNames.STREAM_READ.equals(qn.member()) || LispNames.STREAM_WRITE.equals(qn.member())
+				if (LispNames.ASYNC_STREAMP.equals(qn.member()) || LispNames.STREAM_READ.equals(qn.member())
 						|| LispNames.STREAM_CLOSE.equals(qn.member())) {
+					// asyncMode --component: streamp/stream-read/stream-close operate on
+					// the first-class TYPE_WASI_STREAM values fetch/serve bodies produce.
+					if (ctx.wasiStreamTypeIndex >= 0) {
+						WasmWasiStreamCompiler.compile(qn.member(), cons, ctx);
+						return;
+					}
+					throw new UnsupportedOperationException("rontolisp:" + qn.member()
+							+ " requires the interpreter, the JVM backend or an asynchronous --component program"
+							+ " (streams come from rontolisp:fetch / rontolisp:http-handler bodies there)");
+				}
+				if (LispNames.MAKE_STREAM.equals(qn.member()) || LispNames.STREAM_WRITE.equals(qn.member())) {
 					throw new UnsupportedOperationException(
 							"rontolisp:" + qn.member() + " requires the interpreter or the JVM backend"
-									+ " (asynchronous streams are not available on the WASM backends yet)");
+									+ " (guest-created streams are not available on the WASM backends yet; a"
+									+ " --component program's streams come from fetch / http-handler bodies)");
 				}
 				if (LispNames.TCP_CONNECT.equals(qn.member()) || LispNames.TCP_LISTEN.equals(qn.member())
 						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())

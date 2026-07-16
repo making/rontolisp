@@ -9,13 +9,18 @@ list, mirroring the shape of [`rontolisp:fetch`](rontolisp-fetch.md) so one HTTP
 value model spans incoming and outgoing requests:
 
 - **request** — `(:method <string> :path <string> :query <string-or-nil>
-  :headers <alist> :body <string>)`. `:path` is the path only, with the query
+  :headers <alist> :body <stream>)`. `:path` is the path only, with the query
   string stripped; `:query` is the raw query string without the leading `?`
   (`"a=1&b=2"` for `/get?a=1&b=2`), or `nil` when the request has none — parse
   it with [`rontolisp:query-param`](rontolisp-query-param.md) /
-  [`rontolisp:query-params`](rontolisp-query-params.md).
-- **response** — `(:status <integer> :headers <alist> :body <string>)`. Missing
-  keys default to `:status 200` and an empty body.
+  [`rontolisp:query-params`](rontolisp-query-params.md). `:body` is an
+  asynchronous stream; a handler that reads it drains it with
+  `(rontolisp:await (rontolisp:read-all (getf request :body)))` and must be an
+  [`rontolisp:async-defun`](../special-forms/rontolisp-async-defun.md).
+- **response** — `(:status <integer> :headers <alist> :body
+  <string-or-stream>)`. Missing keys default to `:status 200` and an empty
+  body; a stream body (e.g. a proxied fetch response's `:body`) is drained by
+  the server.
 
 On the **interpreter** and **JVM** backends `http-handler` starts a blocking
 embedded HTTP server on `port` (default `8080`, one virtual thread per request)

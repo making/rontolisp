@@ -715,7 +715,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// at asyncTypeBase(), TYPE_ASYNC_FRAME {mut i32 state, mut spill, mut future,
 	// mut env} right after it. Appended before the export/import wrapper signatures
 	// (which shift past them via fixedTypeCount()).
-	static final int ASYNC_TYPE_COUNT = 2;
+	static final int ASYNC_TYPE_COUNT = 3;
 
 	// The exception tag index of the one Lisp condition tag ($lisp-cond), emitted only
 	// in EH mode (the program uses handler-case/ignore-errors/unwind-protect). Its
@@ -923,9 +923,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// remembered, and lowerProgram is skipped. Everything else (Preview 1, and a
 		// component with no async surface -- where lowering is a no-op) keeps the
 		// degenerate %async-run lowering.
+		// %subtask-future counts too: a wit-import binding of an async func member
+		// returns a first-class future through it, which needs the async runtime even
+		// when the program itself never awaits (the caller may hand the future around).
 		boolean usesAsync = programUsesSymbol(program, LispNames.ASYNC_DEFUN_QUALIFIED)
 				|| programUsesSymbol(program, LispNames.ASYNC_LAMBDA_QUALIFIED)
-				|| programUsesSymbol(program, LispNames.AWAIT_QUALIFIED);
+				|| programUsesSymbol(program, LispNames.AWAIT_QUALIFIED)
+				|| programUsesSymbol(program, LispNames.SUBTASK_FUTURE_INTERNAL_QUALIFIED);
 		this.asyncMode = this.component && usesAsync;
 		Set<String> asyncDefunNames = new HashSet<>();
 		if (this.asyncMode) {
@@ -1152,17 +1156,17 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		// An async func member binds TWO wrappers -- the start (async-lowered call,
-		// returning the (packed . retptr) token) and the await (waitable-set wait +
-		// result
-		// lift) -- registered like the other synthetic defuns, after the async built-ins
-		// in the placeholder ordinal space.
+		// returning the (packed . retptr) token) and the lift (result lift out of the
+		// return area, called by _subtask_future / the scheduler once the subtask has
+		// returned) -- registered like the other synthetic defuns, after the async
+		// built-ins in the placeholder ordinal space.
 		Map<String, WasmComponentImportCompiler.AsyncCall> componentCallStartWrappers = new LinkedHashMap<>();
-		Map<String, WasmComponentImportCompiler.AsyncCall> componentCallAwaitWrappers = new LinkedHashMap<>();
+		Map<String, WasmComponentImportCompiler.AsyncCall> componentCallLiftWrappers = new LinkedHashMap<>();
 		for (WasmComponentImportCompiler.Import imported : componentImports) {
 			for (WasmComponentImportCompiler.AsyncCall call : imported.calls()) {
-				for (String wrapperName : List.of(call.startName(), call.awaitName())) {
+				for (String wrapperName : List.of(call.startName(), call.liftName())) {
 					boolean duplicate = componentCallStartWrappers.containsKey(wrapperName)
-							|| componentCallAwaitWrappers.containsKey(wrapperName)
+							|| componentCallLiftWrappers.containsKey(wrapperName)
 							|| componentAsyncWrappers.containsKey(wrapperName)
 							|| componentDropWrappers.containsKey(wrapperName)
 							|| componentImportWrappers.containsKey(wrapperName)
@@ -1178,8 +1182,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				componentCallStartWrappers.put(call.startName(), call);
 				defuns.add(new DefunDecl(call.startName(), startParams, false, List.of()));
-				componentCallAwaitWrappers.put(call.awaitName(), call);
-				defuns.add(new DefunDecl(call.awaitName(), List.of("%component-import-p0"), false, List.of()));
+				componentCallLiftWrappers.put(call.liftName(), call);
+				defuns.add(new DefunDecl(call.liftName(), List.of("%component-import-p0"), false, List.of()));
 			}
 		}
 		// A task-return built-in binds the same way (one parameter: the result value).
@@ -1188,7 +1192,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (WasmComponentImportCompiler.TaskReturn tr : imported.taskReturns()) {
 				boolean duplicate = componentTaskReturnWrappers.containsKey(tr.lispName())
 						|| componentCallStartWrappers.containsKey(tr.lispName())
-						|| componentCallAwaitWrappers.containsKey(tr.lispName())
+						|| componentCallLiftWrappers.containsKey(tr.lispName())
 						|| componentAsyncWrappers.containsKey(tr.lispName())
 						|| componentDropWrappers.containsKey(tr.lispName())
 						|| componentImportWrappers.containsKey(tr.lispName())
@@ -1280,6 +1284,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// EH mode: the handler-depth counter global goes AFTER the user-variable
 		// globals, so their indices are unchanged whether or not EH mode is on.
 		int ehDepthGlobalIndex = ehMode ? GLOBAL_FENV + 1 + globalCount : -1;
+		// asyncMode: the scheduler registry (a cons list of (subtask . (future .
+		// (lift . token))) entries) and the task waitable-set handle, after the EH
+		// depth counter (asyncMode implies ehMode). Every non-async module is
+		// byte-identical to a build that never knew about them.
+		int schedRegistryGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 1 : -1;
+		int schedSetGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 2 : -1;
 
 		// Create string table
 		StringTable stringTable = new StringTable(DATA_BASE_OFFSET);
@@ -1304,8 +1314,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<LambdaInfo> lambdaDecls = new ArrayList<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
 		// The async waiter wake-up goes through the arity-1 dispatch (the resume
-		// functions are arity-1 lambdas), so its body must be real.
+		// functions are arity-1 lambdas), and the wasi-stream read/close thunks
+		// through the arity-0 one, so both bodies must be real.
 		if (this.asyncMode) {
+			indirectCallArities.add(0);
 			indirectCallArities.add(1);
 		}
 
@@ -1350,6 +1362,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.globalIndices(globalIndices)
 			.futureTypeIndex(this.asyncMode ? asyncTypeBase() : -1)
 			.frameTypeIndex(this.asyncMode ? asyncTypeBase() + 1 : -1)
+			.wasiStreamTypeIndex(this.asyncMode ? asyncTypeBase() + 2 : -1)
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
 			.asyncDefunNames(Set.copyOf(asyncDefunNames));
 
@@ -1362,7 +1375,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (importWrappers.containsKey(defun.name) || componentImportWrappers.containsKey(defun.name)
 					|| componentDropWrappers.containsKey(defun.name) || componentAsyncWrappers.containsKey(defun.name)
 					|| componentCallStartWrappers.containsKey(defun.name)
-					|| componentCallAwaitWrappers.containsKey(defun.name)
+					|| componentCallLiftWrappers.containsKey(defun.name)
 					|| componentTaskReturnWrappers.containsKey(defun.name)) {
 				importBodySlots.put(defun.name, userFunctionBodies.size());
 				userFunctionBodies.add(null); // filled in below
@@ -1683,6 +1696,36 @@ public final class WasmLispCompiler implements LispCompiler {
 						WasmComponentImportCompiler.taskReturnParamTypes(tr), new Type[] {}));
 			}
 		}
+		// The scheduler's waitable trio: any async-calling interface's builtins work
+		// (they alias the same canonical built-ins as every other interface's), so the
+		// first one's ordinals are wired into the async runtime (_subtask_future /
+		// _sched_loop). Null when the program binds no async-calling interface --
+		// nothing can produce a host-backed pending future there, and the two
+		// scheduler members become unreachable stubs.
+		WasmFutureRuntimeBuilder.Sched schedWiring = null;
+		if (this.asyncMode) {
+			for (WasmComponentImportCompiler.Import imported : componentImports) {
+				if (imported.calls().isEmpty() && imported.asyncs().isEmpty()) {
+					continue;
+				}
+				String schedIface = imported.ifaceId();
+				schedWiring = new WasmFutureRuntimeBuilder.Sched(
+						new WasmComponentImportCompiler.WaitOrdinals(
+								Objects.requireNonNull(importSlotIndex
+									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_NEW)),
+								Objects.requireNonNull(importSlotIndex
+									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_WAIT)),
+								Objects.requireNonNull(importSlotIndex
+									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_DROP)),
+								Objects.requireNonNull(importSlotIndex
+									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_JOIN)),
+								Objects.requireNonNull(importSlotIndex
+									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP))),
+						schedRegistryGlobalIndex, schedSetGlobalIndex, allocFuncIndex);
+				break;
+			}
+		}
+		final WasmFutureRuntimeBuilder.Sched sched = schedWiring;
 		// Fill in the deferred import wrapper bodies now that the helper indices are
 		// known (their positions in userFunctionBodies were reserved in Pass 2a). Each
 		// wrapper calls its (module, field) slot's ordinal, so duplicate bindings
@@ -1728,21 +1771,10 @@ public final class WasmLispCompiler implements LispCompiler {
 						strFromMemFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(call.startName())), body);
 			}
-			for (WasmComponentImportCompiler.AsyncCall call : componentCallAwaitWrappers.values()) {
-				WasmComponentImportCompiler.WaitOrdinals ordinals = new WasmComponentImportCompiler.WaitOrdinals(
-						Objects.requireNonNull(importSlotIndex
-							.get(call.module() + " " + WasmComponentImportCompiler.FIELD_WAITABLE_SET_NEW)),
-						Objects.requireNonNull(importSlotIndex
-							.get(call.module() + " " + WasmComponentImportCompiler.FIELD_WAITABLE_SET_WAIT)),
-						Objects.requireNonNull(importSlotIndex
-							.get(call.module() + " " + WasmComponentImportCompiler.FIELD_WAITABLE_SET_DROP)),
-						Objects.requireNonNull(importSlotIndex
-							.get(call.module() + " " + WasmComponentImportCompiler.FIELD_WAITABLE_JOIN)),
-						Objects.requireNonNull(importSlotIndex
-							.get(call.module() + " " + WasmComponentImportCompiler.FIELD_SUBTASK_DROP)));
-				byte[] body = WasmComponentImportCompiler.buildAsyncAwaitBody(ctxBuilder, call, ordinals,
-						allocFuncIndex, strFromMemFuncIndex);
-				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(call.awaitName())), body);
+			for (WasmComponentImportCompiler.AsyncCall call : componentCallLiftWrappers.values()) {
+				byte[] body = WasmComponentImportCompiler.buildAsyncLiftBody(ctxBuilder, call, allocFuncIndex,
+						strFromMemFuncIndex);
+				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(call.liftName())), body);
 			}
 			for (WasmComponentImportCompiler.TaskReturn tr : componentTaskReturnWrappers.values()) {
 				int ordinal = Objects.requireNonNull(importSlotIndex.get(tr.module() + " " + tr.field()));
@@ -2315,11 +2347,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					});
 				}
 				if (this.asyncMode) {
-					// TYPE_FUTURE + TYPE_ASYNC_FRAME in ONE rec group: they are
-					// structurally identical, and same-group membership is what keeps
-					// two identical shapes distinct under wasm-GC's structural type
-					// canonicalization (a separate group would canonicalize them EQUAL
-					// and ref.test could no longer tell them apart).
+					// TYPE_FUTURE + TYPE_ASYNC_FRAME + TYPE_WASI_STREAM in ONE rec
+					// group: the first two are structurally identical, and same-group
+					// membership is what keeps identical shapes distinct under wasm-GC's
+					// structural type canonicalization (a separate group would
+					// canonicalize them EQUAL and ref.test could no longer tell them
+					// apart). TYPE_WASI_STREAM joins the group for the same reason (its
+					// shape is one field away from colliding with a future refactor).
 					types.addRecGroup(rec -> {
 						// TYPE_FUTURE {mut i32 state, mut value, mut waiters, mut src}
 						rec.addSubFinalStruct(fields -> {
@@ -2333,6 +2367,16 @@ public final class WasmLispCompiler implements LispCompiler {
 						rec.addSubFinalStruct(fields -> {
 							fields.addField(true, w -> w.write(Type.I32));
 							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+						});
+						// TYPE_WASI_STREAM {mut i32 eof, mut readFn, mut closeFn}: a
+						// first-class stream value over a wasi-backed byte stream. The
+						// two closures (arity 0, dispatched through dispatch_0) carry
+						// the handle and the close protocol; eof flips once and makes
+						// close idempotent.
+						rec.addSubFinalStruct(fields -> {
+							fields.addField(true, w -> w.write(Type.I32));
 							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 						});
@@ -2685,6 +2729,25 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(Instruction.END);
 					});
 				}
+				// asyncMode: the scheduler registry, a (mut (ref null eq)) = null, and
+				// the task waitable-set handle, a (mut i32) = 0 (created lazily).
+				if (this.asyncMode) {
+					gs.add(g -> {
+						g.write(Type.REFNULL.code());
+						g.writeHeapType(Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
+						g.write(Instruction.END);
+					});
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+				}
 			})
 			// Export section -- component mode exports `run` (the i32-returning _start)
 			// for
@@ -2884,7 +2947,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.asyncMode) {
 					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
 						code.addFunction(WasmFutureRuntimeBuilder.build(i, asyncFuncBase(), asyncTypeBase(),
-								asyncTypeBase() + 1));
+								asyncTypeBase() + 1, asyncTypeBase() + 2, sched));
 					}
 				}
 				// User defun function bodies
@@ -3292,6 +3355,14 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		int nextState = 1;
 
+		/**
+		 * Whether the implicit top-level resume's OUTERMOST body has already been
+		 * chunk-outlined ({@code WasmAsyncEmit.compileTopLevelChunkedProgn}); nested
+		 * bodies (a top-level {@code let}'s, whose statements may reference its locals)
+		 * must never be outlined.
+		 */
+		boolean topLevelChunked;
+
 		AsyncResume(int resumeFuncId) {
 			this.resumeFuncId = resumeFuncId;
 		}
@@ -3463,6 +3534,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		int frameTypeIndex = -1;
 
 		/**
+		 * The {@code TYPE_WASI_STREAM} type index, or -1 outside asyncMode.
+		 */
+		int wasiStreamTypeIndex = -1;
+
+		/**
 		 * The async runtime block's base function index ({@code _future_new}), or -1
 		 * outside asyncMode.
 		 */
@@ -3534,6 +3610,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.globalIndices = builder.globalIndices;
 			this.futureTypeIndex = builder.futureTypeIndex;
 			this.frameTypeIndex = builder.frameTypeIndex;
+			this.wasiStreamTypeIndex = builder.wasiStreamTypeIndex;
 			this.asyncFuncBase = builder.asyncFuncBase;
 			this.asyncDefunNames = builder.asyncDefunNames;
 		}
@@ -3587,6 +3664,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int futureTypeIndex = -1;
 
 			private int frameTypeIndex = -1;
+
+			private int wasiStreamTypeIndex = -1;
 
 			private int asyncFuncBase = -1;
 
@@ -3699,6 +3778,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder frameTypeIndex(int frameTypeIndex) {
 				this.frameTypeIndex = frameTypeIndex;
+				return this;
+			}
+
+			Builder wasiStreamTypeIndex(int wasiStreamTypeIndex) {
+				this.wasiStreamTypeIndex = wasiStreamTypeIndex;
 				return this;
 			}
 

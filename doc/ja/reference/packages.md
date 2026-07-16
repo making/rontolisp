@@ -140,7 +140,7 @@ defpackage の慣用形)です。`:shadow` と `:shadowing-import-from` はエ�
 (print (rontolisp:list-functions :cl-user))
 ; => (square)
 (print (rontolisp:list-functions :rontolisp))
-; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
+; => (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
 (print (rontolisp:list-functions :java))
 ; => (call field new proxy static)
 ```
@@ -177,9 +177,8 @@ defpackage の慣用形)です。`:shadow` と `:shadowing-import-from` はエ�
 `rontolisp` パッケージが所有するシンボルは **実装固有であり、Common Lispの一部ではありません**。`rontolisp:`
 修飾子で参照する(または `(in-package rontolisp)`
 の後に修飾なしで使用する)必要があります。上記のイントロスペクションヘルパー(`version`、`list-functions`、`list-macros`、`list-special-forms`)に加え、このパッケージは
-`rontolisp:fetch` (プロミスを返す) と、汎用のプロミス操作である
-`rontolisp:await` (解決・ブロッキング)、`rontolisp:then` (コールバックのチェーン)、
-`rontolisp:promisep` (型述語) を通じて非同期の外向きHTTPを提供し、さらに
+`rontolisp:fetch` (future を返す) と、`rontolisp:await` (解決)、
+`rontolisp:futurep` (型述語) を通じて非同期の外向きHTTPを提供し、さらに
 [`rontolisp:json-parse`](functions/rontolisp-json-parse.md) /
 [`rontolisp:json-stringify`](functions/rontolisp-json-stringify.md)
 によるJSON変換(JavaScriptの `JSON.parse`/`JSON.stringify` 相当)を提供します。これらはすべて
@@ -187,5 +186,4 @@ defpackage の慣用形)です。`:shadow` と `:shadowing-import-from` はエ�
 リファレンスに独自のページを持ち、完全な
 [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
 [`rontolisp:await`](special-forms/rontolisp-await.md) /
-[`rontolisp:then`](functions/rontolisp-then.md) /
-[`rontolisp:promisep`](functions/rontolisp-promisep.md) ドキュメントも含まれます。
+[`rontolisp:futurep`](functions/rontolisp-futurep.md) ドキュメントも含まれます。

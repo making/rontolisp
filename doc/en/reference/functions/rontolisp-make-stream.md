@@ -20,5 +20,7 @@ future) or drain the string chunks in one go with
 
 ## Backend support
 
-Asynchronous streams exist on the interpreter and the JVM backend today; the
-WASM backends reject the stream operations at compile time.
+Guest-created streams (`rontolisp:make-stream` / `rontolisp:stream-write`)
+exist on the interpreter and the JVM backend today; the WASM backends reject
+them at compile time (a `--component` program's streams come from
+`rontolisp:fetch` / `rontolisp:http-handler` bodies).

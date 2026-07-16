@@ -84,7 +84,7 @@ dying with `Cannot compile` on its Compile buttons.
 - **CLOS static subset** (`defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value`): the defstruct pattern extended -- a `ClosRegistry` + ONE generated dispatcher defun per generic (single dispatch on arg 1). Single inheritance; no qualifiers/`call-next-method`, no MOP, no `--no-gc`. `.kb/clos.md`, `.todo/40`
 - **`flet`/`labels`**: expansions to let-bound lambdas plus a Lisp-2 body rewrite. `macrolet`/`symbol-macrolet` unsupported. `.kb/flet-labels.md`
 - **Dynamic (special) variables**: `defvar`/`declaim special` + `let` = a **shallow binding** (save/set/restore over the global cell), thread-scoped on the interpreter. Compile-path lite limits: `progv` = compile error, unwinding via `return` does not restore, `--no-gc` rejects specials. `.kb/dynamic-special-variables.md`
-- **async/await** (`rontolisp:async-defun`/`async-lambda`/`await` + futures/streams): eager-start (body runs to the first unsettled await before the caller resumes); `await` is a SPECIAL FORM legal only inside async bodies and at top level (`LispAsync` checks the resolved AST on every backend); an errored future re-signals AT AWAIT; interpreter/JVM = virtual threads (real parallelism after the first suspension; `eval/AsyncRuntime` is the ONLY evaluator-reachable thread site -- the playground substitutes it), wasm backends = degenerate synchronous today (component awaits park the task), `--no-gc` = compile error, streams = interpreter/JVM only. `rontolisp:read-all` is a prelude async-defun. `.kb/async-await.md`
+- **async/await** (`rontolisp:async-defun`/`async-lambda`/`await` + futures/streams; the promise-era `then`/`promisep` are DELETED): eager-start (body runs to the first unsettled await before the caller resumes); `await` is a SPECIAL FORM legal only inside async bodies and at top level (`LispAsync` checks the resolved AST on every backend); an errored future re-signals AT AWAIT; interpreter/JVM = virtual threads (real parallelism after the first suspension; `eval/AsyncRuntime` is the ONLY evaluator-reachable thread site -- the playground substitutes it), `--component` = entry+resume state machines over first-class futures with a blocking event-loop scheduler (cooperative single-threaded; forces EH mode, so async components need `wasmtime -W exceptions=y`), P1 = degenerate synchronous, `--no-gc` = compile error. Streams: interpreter/JVM everywhere; on `--component` only the fetch/serve body streams exist (guest `make-stream`/`stream-write` = compile error). fetch/serve `:body` is a STREAM on every backend. `rontolisp:read-all` is a prelude async-defun. `.kb/async-await.md`
 - **Multiple values (syntactic tier)**: `values`/`multiple-value-bind`/... are lowerings with NO runtime representation -- the consumer must recognize the producer syntactically (a literal `(values ...)`, the floor-family, `gethash`); any other producer yields its primary value only. `.kb/multiple-values.md`
 - **Error handling** (`unwind-protect`, condition objects, `handler-case`): conditions are CLOS-subset instances; interpreter + JVM + wasm-GC catch by type (**only `--no-gc` rejects `unwind-protect`/`handler-case`/`ignore-errors` at compile time**). The wasm-GC path is EH-MODE GATED: only a program containing a catching form gets the `$lisp-cond` tag/`try_table` machinery and needs `wasmtime -W exceptions=y` (37+); anything else stays byte-identical. wasm-GC catches signaled conditions only — runtime traps stay uncatchable there. No restarts. On the JVM, a catching form in an ARGUMENT position spills the live operand stack around its protected region (entering a handler discards it), which is what `am.ik.jvm.OperandStack` -- a typed model of the stack that `Ctx.emit` feeds, and the source of a real `max_stack` -- exists for. `.kb/error-handling.md`
 - **Declarations / `eval-when` / `check-type`**: `declare`/`declaim`/`the` are no-ops, `eval-when` -> `progn` (+ top-level flattening so nested defuns are collected); `check-type`/`assert` are lite error-signaling expansions. `.kb/declarations-type-checks.md`
@@ -193,13 +193,15 @@ java -jar $JAR test.lisp -o test.wasm && wasmtime run -W gc test.wasm
 
 # 4. WASM component / WASI 0.3 (requires wasmtime 46+)
 java -jar $JAR test.lisp -o test-comp.wasm --component && \
-  wasmtime run -W gc=y -W component-model-more-async-builtins=y test-comp.wasm
+  wasmtime run -W gc=y test-comp.wasm
 ```
 
 A program using `handler-case`/`ignore-errors`/`unwind-protect` compiles in EH
-mode: add `-W exceptions=y` to BOTH wasm run commands (wasmtime 37+; without it
-the module fails to parse). Programs without those forms are byte-identical to
-pre-EH output and keep the flags above.
+mode, and an ASYNC component (async-defun/async-lambda/await, incl. every
+fetch/serve program) forces EH mode too: add `-W exceptions=y` to BOTH wasm
+run commands (wasmtime 37+; without it the module fails to parse). A fetch
+component additionally needs `-S http=y`. Programs without those forms are
+byte-identical to pre-EH output and keep the flags above.
 
 ### Verifying the Native Image End-to-End (run locally before every push)
 

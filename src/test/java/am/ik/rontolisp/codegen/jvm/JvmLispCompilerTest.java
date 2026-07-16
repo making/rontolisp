@@ -4304,7 +4304,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms promisep query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port then tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
+				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("nil");
 	}
 
@@ -4365,10 +4365,9 @@ class JvmLispCompilerTest {
 					+ "\"))) (rontolisp:await p1)"
 					+ " (print (list (getf (rontolisp:await p2) :status) (getf (rontolisp:await p1) :status))))"))
 				.isEqualTo("(200 200)");
-			// a fetch future prints opaquely, satisfies futurep and chains with then
-			assertThat(compileAndRun(
-					"(let ((p (rontolisp:fetch \"" + url + "\")))" + " (print (rontolisp:futurep p)) (print p)"
-							+ " (print (rontolisp:await (rontolisp:then p (lambda (r) (getf r :status))))))"))
+			// a fetch future prints opaquely and satisfies futurep
+			assertThat(compileAndRun("(let ((p (rontolisp:fetch \"" + url + "\")))"
+					+ " (print (rontolisp:futurep p)) (print p)" + " (print (getf (rontolisp:await p) :status)))"))
 				.isEqualTo("t\n#<FUTURE>\n200");
 		}
 		finally {
@@ -4424,9 +4423,6 @@ class JvmLispCompilerTest {
 	void compileFetchRejectsWrongArgCount() {
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:fetch)")).isInstanceOf(UnsupportedOperationException.class);
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:await)")).isInstanceOf(UnsupportedOperationException.class);
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:then 1)")).isInstanceOf(UnsupportedOperationException.class);
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:promisep)"))
-			.isInstanceOf(UnsupportedOperationException.class);
 	}
 
 	// The serving round trip lives in HttpHandlerJvmTest (eval package, where the test
@@ -4457,11 +4453,11 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunFetchFailureSignalsAtAwaitTime() throws Exception {
-		// fetch itself returns the promise even for a request that will fail; the
-		// failure surfaces when the promise is awaited (JavaScript await-rejection
+		// fetch itself returns the future even for a request that will fail; the
+		// failure surfaces when the future is awaited (JavaScript await-rejection
 		// timing)
 		assertThat(
-				compileAndRun("(let ((p (rontolisp:fetch \"http://127.0.0.1:1/x\"))) (print (rontolisp:promisep p)))"))
+				compileAndRun("(let ((p (rontolisp:fetch \"http://127.0.0.1:1/x\"))) (print (rontolisp:futurep p)))"))
 			.isEqualTo("t");
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:await (rontolisp:fetch \"http://127.0.0.1:1/x\"))"))
 			.hasStackTraceContaining("java.net.ConnectException");
@@ -4788,27 +4784,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunPromisepDistinguishesPromises() throws Exception {
-		assertThat(compileAndRun("(print (rontolisp:promisep 42)) (print (rontolisp:promisep nil))"
-				+ " (print (rontolisp:promisep (rontolisp:then 1 (lambda (x) x))))"))
-			.isEqualTo("nil\nnil\nt");
-	}
-
-	@Test
-	void compileAndRunThenDerivesChainablePromises() throws Exception {
-		// then works on plain values, chains, flattens, prints opaquely, and its
-		// callback runs at first await only (memoized)
-		assertThat(compileAndRun("(print (rontolisp:await (rontolisp:then 21 (lambda (x) (* x 2)))))")).isEqualTo("42");
-		assertThat(compileAndRun(
-				"(print (rontolisp:await (rontolisp:then (rontolisp:then 10 (lambda (x) (+ x 1))) (lambda (x) (* x 3)))))"))
-			.isEqualTo("33");
-		assertThat(compileAndRun(
-				"(print (rontolisp:await (rontolisp:then 5 (lambda (x) (rontolisp:then x (lambda (y) (+ y 1)))))))"))
-			.isEqualTo("6");
-		assertThat(compileAndRun("(print (rontolisp:then 1 (lambda (x) x)))")).isEqualTo("#<FUTURE>");
-		assertThat(compileAndRun("(setq cnt 0)" + " (let ((p (rontolisp:then 1 (lambda (x) (setq cnt (+ cnt 1)) x))))"
-				+ " (rontolisp:await p) (rontolisp:await p) (print cnt))"))
-			.isEqualTo("1");
+	void thenAndPromisepAreGoneOnTheJvm() {
+		// The promise-era surface was deleted in the async/await redesign: the names
+		// are no longer exported from the rontolisp package.
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:then 1 (lambda (x) x))"))
+			.hasMessageContaining("not external in the rontolisp package");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:promisep 42)"))
+			.hasMessageContaining("not external in the rontolisp package");
 	}
 
 	// Characters and string/number parsing

@@ -2108,20 +2108,26 @@ public final class LispNames {
 	public static final String FUTURE_REJECT_INTERNAL = "%future-reject";
 
 	/**
-	 * The {@code promisep} predicate provided by the {@code rontolisp} package. Returns
-	 * {@code t} if the argument is a promise (as returned by {@code rontolisp:fetch} or
-	 * {@code rontolisp:then}), {@code nil} otherwise.
+	 * The internal {@code rontolisp::%subtask-future} primitive of the
+	 * {@code --component} async import layer: takes an async-lowered call's
+	 * {@code (packed . retptr)} token and the member's lift wrapper (as a function
+	 * value), and returns a first-class future -- settled immediately when the call
+	 * completed eagerly ({@code RETURNED}), otherwise pending and registered in the
+	 * task's waitable&rarr;future scheduler registry, to be settled by the event loop
+	 * when the subtask reports {@code RETURNED}. Synthesized by
+	 * {@code WitImportDirective} for {@code async func} members; component-only.
 	 */
-	public static final String PROMISEP = "promisep";
+	public static final String SUBTASK_FUTURE_INTERNAL = "%subtask-future";
 
 	/**
-	 * The {@code then} function provided by the {@code rontolisp} package. Derives a new
-	 * promise from a value (usually a promise) and a callback: awaiting the derived
-	 * promise awaits the base value and applies the callback to it (lazily, at first
-	 * await; the result is memoized). A callback returning a promise is flattened, like
-	 * JavaScript {@code Promise.prototype.then}.
+	 * The internal {@code rontolisp::%wasi-stream-new} primitive of the
+	 * {@code --component} async import layer: takes a read thunk and a close thunk
+	 * (arity-0 function values over a wasi byte-stream handle) and returns a first-class
+	 * stream value ({@code TYPE_WASI_STREAM}) that
+	 * {@code rontolisp:stream-read}/{@code stream-close}/{@code streamp} operate on.
+	 * Synthesized by http.lisp for request/response bodies; component-only.
 	 */
-	public static final String THEN = "then";
+	public static final String WASI_STREAM_NEW_INTERNAL = "%wasi-stream-new";
 
 	/**
 	 * The {@code json-parse} function provided by the {@code rontolisp} package. Parses a
@@ -2857,6 +2863,13 @@ public final class LispNames {
 	 * position.
 	 */
 	public static final String ASYNC_RUN_QUALIFIED = RONTOLISP_PKG + "::" + ASYNC_RUN;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%subtask-future},
+	 * the name {@code WitImportDirective} synthesizes in call position for an
+	 * {@code async func} member's binding under {@code --component}.
+	 */
+	public static final String SUBTASK_FUTURE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + SUBTASK_FUTURE_INTERNAL;
 
 	/**
 	 * The {@code wasm-import} directive provided by the {@code rontolisp} package. Used

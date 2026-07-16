@@ -14,12 +14,12 @@
 ;;;; The whole of it is ordinary Lisp over the WIT bindings -- no core codegen (the
 ;;;; .todo/124 stance). The async machinery is the canonical ABI driven through the
 ;;;; general wit-import path:
-;;;;   - `client.send` is an `async func`, so its binding is a promise: the public
-;;;;     `%http-client:send` starts the subtask and `rontolisp:await` drives the
-;;;;     waitable-set until it returns (the error arm of its result signals
-;;;;     rontolisp:wit-error, the settled mapping -- matching the interpreter/JVM,
-;;;;     which signal at await time).
-;;;;   - the exported `handler.handle` is a stackful async task: it DELIVERS the
+;;;;   - `client.send` is an `async func`, so its binding returns a FIRST-CLASS
+;;;;     FUTURE (rontolisp::%subtask-future over the async-lowered call): pending
+;;;;     while the subtask runs, settled by the scheduler when it returns (the
+;;;;     error arm of its result re-signals rontolisp:wit-error at await -- the
+;;;;     settled mapping, matching the interpreter/JVM).
+;;;;   - the exported `handler.handle` is an asynchronous task: it DELIVERS the
 ;;;;     response mid-task through the task-return built-in (0.3's equivalent of
 ;;;;     0.2's response-outparam.set-before-body) and then streams the body, which
 ;;;;     rendezvouses with the host's eager reads.
@@ -51,31 +51,30 @@
   (mapcar (lambda (entry) (cons (car entry) (car (cdr entry))))
           (%http:fields-copy-all fields)))
 
-;;; --- body reading (shared): consume-body -> stream -> chunks -> byte string ---
+;;; --- body reading (shared): consume-body -> a first-class stream value ---
 
-(defun %http-read-all (stream acc)
-  ;; One blocking chunk per built-in call; nil or "" = the writer dropped its end (EOF).
-  (let ((chunk (%http:body-stream-read stream)))
-    (if (or (null chunk) (= (length chunk) 0))
-        acc
-        (%http-read-all stream (concatenate 'string acc chunk)))))
-
-(defun %http-consume-text (consume thing)
+(defun %http-body-value (consume thing)
   ;; consume-body(this, res) MOVES `thing` and returns tuple<stream<u8>,
-  ;; future<result<option<trailers>, error-code>>>. `res` is a GUEST-created
-  ;; future<result<_, error-code>> through which we report our side's outcome: resolve
-  ;; it ok once the body is read (dropping it instead would signal an error to the
-  ;; host). The trailers future is dropped unread -- rontolisp's request/response
-  ;; plists carry no trailers.
+  ;; future<result<option<trailers>, error-code>>>. The pair is wrapped into a
+  ;; first-class rontolisp stream (TYPE_WASI_STREAM): each rontolisp:stream-read
+  ;; future settles to the next chunk (nil = EOF), and the close protocol -- run
+  ;; ONCE, at EOF or an early rontolisp:stream-close -- drops the readable end and
+  ;; the (unread) trailers and resolves `res` ok, reporting our side's outcome to
+  ;; the host (dropping `res` instead would signal an error). rontolisp's
+  ;; request/response plists carry no trailers.
   (let* ((res (%http:transmit-future-new))
          (pair (funcall consume thing (car res)))
          (stream (car pair))
-         (trailers (car (cdr pair)))
-         (text (%http-read-all stream "")))
-    (%http:body-stream-drop-readable stream)
-    (%http:trailers-future-drop-readable trailers)
-    (%http:transmit-future-write (cdr res) :ok)
-    text))
+         (trailers (car (cdr pair))))
+    (rontolisp::%wasi-stream-new
+     (lambda ()
+       ;; One blocking chunk per built-in call; nil or "" = EOF.
+       (let ((chunk (%http:body-stream-read stream)))
+         (if (or (null chunk) (= (length chunk) 0)) nil chunk)))
+     (lambda ()
+       (%http:body-stream-drop-readable stream)
+       (%http:trailers-future-drop-readable trailers)
+       (%http:transmit-future-write (cdr res) :ok)))))
 
 ;;; --- body writing (shared): stream the bytes, close, resolve the trailers ---
 
@@ -111,7 +110,7 @@
 
 (defun %fetch-send (url options)
   ;; scheme://authority/path -- the scheme's colon is the first colon. Returns the
-  ;; send promise with the request already fully in flight: the async-lowered send
+  ;; send future with the request already fully in flight: the async-lowered send
   ;; starts the subtask immediately, and the body / trailers writes below rendezvous
   ;; with the host's eager reads before this function returns.
   (let ((colon (position #\: url)))
@@ -136,36 +135,56 @@
         (%http:request-set-scheme req (%fetch-scheme-keyword url colon))
         (%http:request-set-authority req authority)
         (%http:request-set-path-with-query req path)
-        (let ((promise (%http-client:send req)))
+        (let ((future (%http-client:send req)))
           (when bodypair
             (%http-write-body (cdr bodypair) body))
           (%http:trailers-future-write (cdr trailers) (cons :ok nil))
           (%http:transmit-future-drop-readable (car (cdr reqpair)))
-          promise)))))
+          future)))))
 
 (defun %fetch-read-response (response)
-  ;; The send promise resolved to the response resource; build the
-  ;; (:status :body :headers) plist. consume-body moves the response, so the headers
-  ;; are read first (the WIT guarantees previously acquired headers stay valid).
+  ;; The send future settled to the response resource; build the
+  ;; (:status :body :headers) plist -- :body is a first-class stream (drain it with
+  ;; (rontolisp:await (rontolisp:read-all body)), matching the interpreter/JVM).
+  ;; consume-body moves the response, so the headers are read first (the WIT
+  ;; guarantees previously acquired headers stay valid).
   (let* ((status (%http:response-get-status-code response))
          (rheaders (%http:response-get-headers response))
          (headers (%http-header-alist rheaders))
-         (text (%http-consume-text (function %http:response-consume-body) response)))
+         (body (%http-body-value (function %http:response-consume-body) response)))
     (%http:fields-drop rheaders)
-    (list :status status :body text :headers headers)))
+    (list :status status :body body :headers headers)))
+
+(rontolisp:async-defun %fetch-run (send-future)
+  ;; Awaits the in-flight send -- a REAL suspension when the response has not
+  ;; arrived (the scheduler resumes this frame on the subtask's completion) -- and
+  ;; reads the response. A transport failure re-signals rontolisp:wit-error at the
+  ;; await, rejecting the fetch future, so it surfaces at the CALLER's await.
+  (let ((response (rontolisp:await send-future)))
+    (%fetch-read-response response)))
 
 (defun rontolisp:fetch (url &rest options)
-  ;; Returns a promise immediately (the request is already in flight); await it for the
+  ;; Returns a future immediately (the request is already in flight); await it for the
   ;; (:status :body :headers) plist. A request that cannot even be started -- a
-  ;; malformed URL, an unsupported method -- returns nil rather than a promise; a
+  ;; malformed URL, an unsupported method -- returns nil rather than a future; a
   ;; transport failure signals rontolisp:wit-error at await time, matching the
   ;; interpreter/JVM.
   (handler-case
-      (let ((promise (%fetch-send url (if options (car options) nil))))
-        (rontolisp:then promise (function %fetch-read-response)))
+      (%fetch-run (%fetch-send url (if options (car options) nil)))
     (rontolisp:wit-error () nil)))
 
 ;;; --- serve (incoming): read the request, dispatch, deliver, stream the body ---
+
+(rontolisp:async-defun %http-drain (s)
+  ;; Drain a stream response body into one string -- a private read-all:
+  ;; http.lisp must stay self-contained (the prelude splice is a separate,
+  ;; later pass, and library splices must not depend on each other's order).
+  (let ((acc "")
+        (chunk (rontolisp:await (rontolisp:stream-read s))))
+    (while chunk
+      (setq acc (concatenate 'string acc chunk))
+      (setq chunk (rontolisp:await (rontolisp:stream-read s))))
+    acc))
 
 (defun %serve-method-string (m)
   ;; request.get-method returns the `method` variant: a keyword (:get/:post/...) for a
@@ -186,8 +205,8 @@
 (defun %serve-read-request (request)
   ;; Build the (:method :path :query :headers :body) request plist, splitting
   ;; path-with-query at the first ? into :path / :query (nil when there is none),
-  ;; matching the interpreter and JVM backends. consume-body moves the request, so
-  ;; everything else is read first.
+  ;; matching the interpreter and JVM backends -- :body is a first-class stream
+  ;; there too. consume-body moves the request, so everything else is read first.
   (let* ((method (%serve-method-string (%http:request-get-method request)))
          (pq (or (%http:request-get-path-with-query request) "/"))
          (q (position #\? pq))
@@ -195,24 +214,29 @@
          (query (if q (subseq pq (+ q 1)) nil))
          (rheaders (%http:request-get-headers request))
          (headers (%http-header-alist rheaders))
-         (body (%http-consume-text (function %http:request-consume-body) request)))
+         (body (%http-body-value (function %http:request-consume-body) request)))
     (%http:fields-drop rheaders)
     (list :method method :path path :query query :headers headers :body body)))
 
 (rontolisp:async-defun %serve-handle (request)
-  ;; The handler.handle export body (an asynchronous task; today its awaits still
-  ;; block the task, which is legal under base component-model-async). Read the
-  ;; request, run the user handler (%serve-dispatch, synthesized by the serve
-  ;; inliner) -- awaiting its future, so the handler itself may be an async-defun --
-  ;; DELIVER the response through task.return -- only then can the host start reading
-  ;; the contents stream -- and stream the body after it (the rendezvous order
-  ;; verified on wasmtime 46).
+  ;; The handler.handle export body (an asynchronous task). Read the request (its
+  ;; :body stays a lazy stream), run the user handler (%serve-dispatch, synthesized
+  ;; by the serve inliner) -- awaiting its future, so the handler itself may be an
+  ;; async-defun -- drain a stream response body (a proxied fetch :body passes
+  ;; straight through), DELIVER the response through task.return -- only then can
+  ;; the host start reading the contents stream -- and stream the body after it
+  ;; (the rendezvous order verified on wasmtime 46). The request body's close
+  ;; protocol runs even when the handler never read it (stream-close is idempotent).
   (let* ((req (%serve-read-request request))
          (resp (rontolisp:await (%serve-dispatch req)))
          (status (or (getf resp :status) 200))
-         (body (or (getf resp :body) ""))
+         (body-val (or (getf resp :body) ""))
+         (body (if (rontolisp:streamp body-val)
+                   (rontolisp:await (%http-drain body-val))
+                   body-val))
          (fields (%http:fields-new)))
     (%http-add-headers fields (getf resp :headers))
+    (rontolisp:stream-close (getf req :body))
     (let* ((bodypair (%http:body-stream-new))
            (trailers (%http:trailers-future-new))
            (rpair (%http:response-new fields (car bodypair) (car trailers)))

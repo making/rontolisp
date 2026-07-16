@@ -6,9 +6,9 @@ JavaScript の `fetch` API を模した送信 HTTP リクエストを開始し�
 非同期に実行されている間に **future** を即座に返します。future は不透明な値で、
 `#<FUTURE>` と印字され、[`rontolisp:futurep`](rontolisp-futurep.md) を満たします。
 future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと、
-レスポンスの到着までブロックし、結果のプロパティリスト
+レスポンスの到着までサスペンドし、結果のプロパティリスト
 `(:status <integer> :headers <alist> :body <stream>)` が得られます。
-[`rontolisp:then`](rontolisp-then.md) でコールバックをチェーンすることもできます。
+`:body` ストリームは [`rontolisp:read-all`](rontolisp-read-all.md) で読み尽くします。
 
 ```lisp
 (let ((p (rontolisp:fetch "https://httpbin.org/get")))

@@ -287,7 +287,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		// branch so fetch-free programs never load java.net.http classes.
 		String fetchQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
 		String awaitQualified = LispNames.AWAIT_QUALIFIED;
-		String thenQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THEN);
 		boolean usesHttpHandler = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.HTTP_HANDLER));
 		boolean usesFetch = programUsesSymbol(program, fetchQualified);
@@ -300,7 +299,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_STREAMP));
 		boolean usesAsyncRuntime = usesFetch || usesAsyncSpawn || usesStreamOps
-				|| programUsesSymbol(program, awaitQualified) || programUsesSymbol(program, thenQualified)
+				|| programUsesSymbol(program, awaitQualified)
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FUTUREP))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WAIT_FOR));
 		boolean usesPromise = usesAsyncRuntime;

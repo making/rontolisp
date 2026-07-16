@@ -6,8 +6,10 @@ The user surface is `rontolisp:async-defun` / `rontolisp:async-lambda` (defining
 `stream-read` / `stream-write` / `stream-close` / `read-all`, and the timer
 `rontolisp:wait-for` (milliseconds -> a future settling to nil; deliberately
 NOT named sleep -- `cl:sleep` exists with blocking-seconds semantics). The
-legacy promise vocabulary (`rontolisp:then` / `promisep`) still exists but is
-transitional; new code (and the docs) use futures.
+promise-era vocabulary (`rontolisp:then` / `promisep`, and the interpreter's
+`LispPromise`) is DELETED -- the names are no longer exported from the
+rontolisp package; a future is the one asynchronous value and composition is
+async-defun/async-lambda + await.
 
 ## The cross-backend contract
 
@@ -61,16 +63,32 @@ transitional; new code (and the docs) use futures.
   (CompletableFuture or read token), `#<STREAM>`.
 - **Preview-1 wasm-GC**: degenerate synchronous. `%async-run`
   (`WasmAsyncRunCompiler`) calls the thunk through dispatch-0 and wraps the
-  value in a settled kind-2 `TYPE_PROMISE`; `_promise_await`'s kind-2 branch
-  recursively awaits (nested-future flattening). Streams are a compile error
-  ("asynchronous streams are not available on the WASM backends yet").
+  value in a settled kind-2 `TYPE_PROMISE` -- the struct is KEPT as P1's
+  internal degenerate-future representation (its former producer,
+  `rontolisp:then`, is gone); `_promise_await` (`FUNC_PROMISE_AWAIT`) is P1's
+  await resolver, and `futurep` ref.tests it. Streams are a compile error.
   CAVEAT: an async body's ERROR signals at the CALL, not at await (eager
   run-to-completion) -- observably identical when the await is adjacent.
-- **--component**: same degenerate `%async-run` for now; the awaits inside the
-  body block the component's task via the parked `waitable-set.wait`
-  (see `.kb/wasi-component.md` -- all base component-model-async, wasmCloud
-  hosts it). True cooperative concurrency (state-machine compilation of async
-  bodies + a guest event loop) is the planned next step (`.todo/139`).
+- **--component (asyncMode)**: async-defun/async-lambda (and a top level with
+  awaits) compile as ENTRY+RESUME state machines over first-class
+  `TYPE_FUTURE`s (`WasmAsyncEmit`, `.todo/139` Phase 7). The import layer is a
+  real scheduler (Phase 8): an `async func` wit-import member returns a
+  pending `TYPE_FUTURE` through `rontolisp::%subtask-future` (registry +
+  per-task waitable-set), and the blocking event loop `_sched_loop`
+  (`WasmFutureRuntimeBuilder`) drives suspensions from the synchronous
+  boundaries (the top-level `_start` entry, and a wasm-export wrapper whose
+  async target suspended -- the fetch-inside-serve case). Tasks are
+  cooperative and single-threaded; blocking `waitable-set.wait` is base
+  component-model-async (wasmCloud-legal, see `.kb/wasi-component.md`).
+  asyncMode FORCES EH mode, so an async component needs
+  `wasmtime -W exceptions=y`. Component streams: `TYPE_WASI_STREAM
+  {eof, readFn, closeFn}` wraps the wasi-backed body streams http.lisp
+  produces (`rontolisp::%wasi-stream-new` over two arity-0 Lisp thunks; the
+  close protocol lives in http.lisp, runs once at EOF or stream-close);
+  stream-read returns settled futures (the underlying built-in still blocks
+  the task while a chunk is in flight -- the pending-future upgrade is the
+  remaining true-concurrency item); guest `make-stream`/`stream-write` stay
+  compile errors.
 - **--no-gc**: the whole async surface is rejected by name with
   "... is not supported with --no-gc (use the default GC backend)".
 - **wait-for**: interpreter = `AsyncRuntime.timer` and JVM = `_wait_for`, both
@@ -94,5 +112,9 @@ A handler that awaits (fetch inside serve) must itself be an async-defun; the
 servers await the handler's future (interpreter `invokeHttpHandler`, the JVM
 generated `handle()`, http.lisp's `%serve-handle` -- itself an async-defun,
 recognized by `HttpLibrary.defunName` for the splice reachability walk). The
-request `:body` is an asynchronous stream (one settled chunk today); a stream
-response `:body` is drained before sending (buffered transport v1).
+request `:body` is an asynchronous stream ON EVERY BACKEND (the component
+wraps the wasi request body; the interpreter/JVM buffer into one settled
+chunk); a stream response `:body` is drained before sending (buffered
+transport v1; the component's `%serve-handle` drains via its private
+`%http-drain` -- http.lisp must stay self-contained, so it does NOT call the
+prelude's read-all).

@@ -146,14 +146,6 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandAsyncLambda(cons), ctx, className);
 					return;
 				}
-				if (LispNames.THEN.equals(qn.member())) {
-					JvmThenCompiler.compile(cons, ctx, className);
-					return;
-				}
-				if (LispNames.PROMISEP.equals(qn.member())) {
-					JvmPromisepCompiler.compile(cons, ctx, className);
-					return;
-				}
 				if (LispNames.TCP_CONNECT.equals(qn.member()) || LispNames.TCP_LISTEN.equals(qn.member())
 						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())
 						|| LispNames.TCP_LOCAL_ADDRESS.equals(qn.member())

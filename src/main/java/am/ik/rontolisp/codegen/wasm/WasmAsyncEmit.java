@@ -312,9 +312,11 @@ final class WasmAsyncEmit {
 
 	/**
 	 * Emits the entry protocol of the implicit top-level async function into the
-	 * {@code _start} body (called when the top level contains awaits). A suspension has
-	 * nothing to run the event loop yet, so it traps (nothing can produce a pending
-	 * future the top level waits on in this tier); an escaping condition reaches the
+	 * {@code _start} body (called when the top level contains awaits). A suspension hands
+	 * the root future to {@code _sched_loop}, the blocking event loop that settles
+	 * registered subtask futures (and, through the waiter cascade, the root) until it
+	 * completes -- legal from the async-typed {@code run} task under base
+	 * component-model-async. A rejected root re-signals out of the loop and reaches the
 	 * surrounding catch-all prologue -- the uncaught-condition trap, as today.
 	 * @param ctx the {@code _start} compilation context
 	 * @param resume the top-level resume
@@ -356,15 +358,32 @@ final class WasmAsyncEmit {
 		w.writeSignedLeb128(frame);
 		w.write(Instruction.REF_EQ);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
-		// A pending top level cannot make progress without the Phase 8 event loop.
-		w.write(Instruction.UNREACHABLE);
+		// Suspended: block on the event loop until the root future settles (a
+		// rejection re-signals out of it into the catch-all prologue).
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(frame);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(ctx.frameTypeIndex);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(ctx.frameTypeIndex);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SCHED_LOOP);
+		w.write(Instruction.DROP);
 		w.write(Instruction.END);
 	}
 
 	/**
 	 * Compiles a body sequence with resume-routing guards, leaving the last statement's
 	 * value (nil when empty). A sequence without awaits compiles exactly as the plain
-	 * emission would.
+	 * emission would. The implicit TOP-LEVEL resume instead outlines every await-free run
+	 * of statements into its own plain function ({@link #compileTopLevelChunk}): a
+	 * program's top level is unbounded (the ci-spec corpus concatenates hundreds of
+	 * cases), and a single resume carrying all of it -- with the spill-mirrored locals
+	 * and per-statement guards -- grows past what Cranelift compiles in sane time
+	 * (superlinear; the full corpus never finished). The chunks are the traditional plain
+	 * shape the non-async {@code _start} always had, and the resume keeps only the await
+	 * statements plus one guarded direct call per chunk.
 	 * @param stmts the statements
 	 * @param ctx the resume compilation context
 	 */
@@ -387,10 +406,109 @@ final class WasmAsyncEmit {
 			}
 			return;
 		}
+		if (ctx.topLevel && ctx.asyncResume != null && !ctx.asyncResume.topLevelChunked) {
+			// Outermost top-level body only: a NESTED guarded body (a top-level let's)
+			// may reference enclosing locals, which an outlined chunk cannot see.
+			ctx.asyncResume.topLevelChunked = true;
+			compileTopLevelChunkedProgn(stmts, ctx);
+			return;
+		}
 		for (int i = 0; i < stmts.size() - 1; i++) {
 			compileGuardedStatement(stmts.get(i), ctx);
 		}
 		spine(stmts.get(stmts.size() - 1), ctx);
+	}
+
+	// The top-level resume body: await-free runs are outlined into chunk functions
+	// (one guarded direct call each); statements with awaits stay inline. Every
+	// statement's value is dropped and the progn result is nil (the top-level
+	// future's value is unused).
+	private static void compileTopLevelChunkedProgn(List<LispVal> stmts, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> run = new ArrayList<>();
+		for (LispVal stmt : stmts) {
+			if (WasmAwaitAnalysis.countAwaits(stmt) == 0) {
+				run.add(stmt);
+				continue;
+			}
+			flushTopLevelChunk(run, ctx);
+			compileGuardedStatement(stmt, ctx);
+		}
+		flushTopLevelChunk(run, ctx);
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+	}
+
+	// Outlines the gathered await-free run into a chunk function and emits the
+	// guarded call ($rt == 0 only: a resume targeting a later state skips it).
+	private static void flushTopLevelChunk(List<LispVal> run, WasmLispCompiler.Ctx ctx) {
+		if (run.isEmpty()) {
+			return;
+		}
+		int funcIndex = compileTopLevelChunk(new ArrayList<>(run), ctx);
+		run.clear();
+		WasmWriter w = ctx.writer;
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(RT_SLOT);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		ctx.wasmCtrlDepth++;
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(funcIndex);
+		w.write(Instruction.DROP);
+		ctx.wasmCtrlDepth--;
+		w.write(Instruction.END);
+	}
+
+	/**
+	 * Compiles an await-free run of top-level statements into its own arity-0
+	 * lambda-table function ({@code (env) -> eq}, called directly -- never through the
+	 * dispatch), preserving the top-level compilation context ({@code topLevel} /
+	 * {@code usesEval}, so eval-global mirroring keeps working inside a chunk).
+	 * @param stmts the run
+	 * @param proto the resume context (supplies the shared module state)
+	 * @return the chunk's function index
+	 */
+	private static int compileTopLevelChunk(List<LispVal> stmts, WasmLispCompiler.Ctx proto) {
+		int funcId = proto.nextFuncId[0]++;
+		int funcIndex = proto.userFuncBase + proto.functions.size() + proto.lambdaDecls.size();
+		int lambdaIdx = proto.lambdaDecls.size();
+		// Reserve the slot first, like compileResume: lambdas discovered while
+		// compiling the chunk body append after it.
+		proto.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(funcId, "_toplevel_chunk_" + funcId, List.of(), false,
+				List.of(), List.of(), funcIndex, new byte[] { 0x00, 0x00, 0x0b }));
+		ByteArrayOutputStream bodyBuf = new ByteArrayOutputStream();
+		WasmWriter bodyWriter = new WasmWriter(bodyBuf);
+		WasmLispCompiler.Ctx ctx = freshCtx(proto, bodyWriter, bodyBuf);
+		ctx.topLevel = true;
+		ctx.usesEval = proto.usesEval;
+		ctx.closureEnvSlot = 0;
+		ctx.nextLocal = 1;
+		ctx.boxedVars = FreeVarAnalyzer.findCapturedVars(stmts, new HashSet<>(), proto.functions.keySet());
+		for (LispVal stmt : stmts) {
+			WasmExprCompiler.compileExpr(stmt, ctx);
+			bodyWriter.write(Instruction.DROP);
+		}
+		bodyWriter.write(Instruction.REF_NULL);
+		bodyWriter.writeHeapType(Type.EQ.code());
+		bodyWriter.write(Instruction.END);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(out);
+		int extraLocals = ctx.nextLocal - 1;
+		if (extraLocals > 0) {
+			w.write(1);
+			w.writeUnsignedLeb128(extraLocals);
+			w.write(Type.REFNULL.code());
+			w.writeHeapType(Type.EQ.code());
+		}
+		else {
+			w.write(0);
+		}
+		w.write((Object) bodyBuf.toByteArray());
+		proto.lambdaDecls.set(lambdaIdx, new WasmLispCompiler.LambdaInfo(funcId, "_toplevel_chunk_" + funcId, List.of(),
+				false, List.of(), List.of(), funcIndex, out.toByteArray()));
+		return funcIndex;
 	}
 
 	/**
@@ -694,6 +812,7 @@ final class WasmAsyncEmit {
 			.globalIndices(proto.globalIndices)
 			.futureTypeIndex(proto.futureTypeIndex)
 			.frameTypeIndex(proto.frameTypeIndex)
+			.wasiStreamTypeIndex(proto.wasiStreamTypeIndex)
 			.asyncFuncBase(proto.asyncFuncBase)
 			.asyncDefunNames(proto.asyncDefunNames)
 			.build();
