@@ -4,8 +4,8 @@ rontolispには、一連の組み込みパッケージと[`defpackage` による
 
 - **`cl`** — 標準パッケージ。すべての組み込み関数、マクロ、特殊形式、および `*package*` 変数がここに属します。
 - **`cl-user`** — デフォルトの作業パッケージ。`cl` を *使用* するため、標準シンボルを修飾なしで利用できます。プログラム開始時のカレントパッケージです。ユーザ定義はここに置かれます。
-- **`rontolisp`** — 実装固有のシンボルのためのパッケージ。`cl` を **使用しません**。`version`、`list-functions`、`list-macros`、`list-special-forms` の各関数を所有します。
-- **`linalg`** — numpy スタイルのベクトル・行列演算(`linalg:zeros`、`linalg:matmul`、`linalg:solve` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`cl` を **使用しません**。[ベクトルと行列ガイド](../guides/linear-algebra.md)を参照してください。
+- **`rontolisp`** — 実装固有のシンボルのためのパッケージ。`rl` は組み込みのニックネームです。`cl` を **使用しません**。`version`、`list-functions`、`list-macros`、`list-special-forms` の各関数を所有します。
+- **`linalg`** — numpy スタイルのベクトル・行列演算(`linalg:zeros`、`linalg:matmul`、`linalg:solve` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`la` は組み込みのニックネームです。`cl` を **使用しません**。[ベクトルと行列ガイド](../guides/linear-algebra.md)を参照してください。
 - **`java`** — リフレクションによる Java 連携。JVM インタプリタ (`java -jar rontolisp.jar`) でのみ使え、コンパイラやネイティブバイナリでは使えません。`cl` を **使用しません**。`new`、`call`、`static`、`field`、`proxy` を所有します。[Java 連携ガイド](../guides/java-interop.md)を参照してください。
 - **`asdf`** — ASDF の限定的な API 互換サブセット(システム定義): `defsystem` と `load-system`。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md)を参照してください。
 - **`ql`** — Quicklisp の限定的な API 互換サブセット: `quickload` は本物の Quicklisp ディストリビューションからシステムをダウンロードし、`asdf` サブセットを経由してロードします。`quicklisp` は組み込みのニックネームです。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md#quickload-でダウンロードする)を参照してください。
@@ -17,12 +17,15 @@ Common Lisp と同じシングル/ダブルコロンの区別です([external �
 はカレントパッケージの名前に評価され、`(in-package name)`
 はそれを切り替えます(名前はキーワード、シンボル、または文字列です: `:rontolisp`、`rontolisp`、`"rontolisp"`)。標準の Common Lisp 名
 `common-lisp` と `common-lisp-user` は `cl` と `cl-user` の組み込み **ニックネーム** なので、ポータブルな
-`(:use #:common-lisp)` clause や `common-lisp:car` の参照も解決されます。ユーザーパッケージは `defpackage` の
+`(:use #:common-lisp)` clause や `common-lisp:car` の参照も解決されます。短縮名 `rl` と `la` は `rontolisp` と `linalg`
+の、`quicklisp` は `ql` の組み込みニックネームです。ユーザーパッケージは `defpackage` の
 `:nicknames` clause で独自のニックネームを登録できます。
 
 ```lisp
 (print *package*)              ; => cl-user
 (print (rontolisp:version))    ; => (:version "0.1.0-SNAPSHOT" :build-timestamp "..." :git-commit "..." :git-branch "...")
+(print (getf (rl:json-parse "{\"n\": 41}") :n))     ; => 41
+(print (la:to-list (la:from-list '(1 2 3))))        ; => (1.0 2.0 3.0)
 ```
 
 `rontolisp:version` は `rontolisp --version` と同じ情報をプロパティリストとして返します。
@@ -113,7 +116,9 @@ defpackage の慣用形)です。`:shadow` と `:shadowing-import-from` はエ�
   `defun` や自由変数)は、組み込みパッケージとまったく同様に internal です。
 - `:nicknames` は、正規名が解決されるすべての場所(修飾子、`in-package`、`:use`
   など)で解決される別名を登録します。既存のパッケージやニックネームと衝突する
-  ニックネームはエラーです。
+  ニックネームはエラーです — 組み込みニックネーム(`common-lisp`、
+  `common-lisp-user`、`rl`、`la`、`quicklisp`)も組み込みパッケージ名と同様に
+  予約されています。
 - `:import-from` は、パッケージ全体を use せずに、1 つのパッケージの指定シンボル
   だけを修飾なしで見えるようにします。解決はテキストベースです: import された
   名前はソースパッケージの正規表記に解決されるため、import して re-export した

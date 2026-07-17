@@ -459,13 +459,14 @@ public final class LispMacroExpander {
 	}
 
 	// The member name of a cl-owned head symbol: bare ("defun") or qualified through
-	// the cl package or its standard nickname ("cl:defun", "common-lisp:defun").
+	// the cl package ("cl:defun"; splitQualified normalizes the built-in nicknames,
+	// so "common-lisp:defun" splits to the cl package too).
 	private static @Nullable String unqualifiedClMember(String name) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 		if (qn == null) {
 			return name;
 		}
-		return (LispNames.CL_PKG.equals(qn.pkg()) || "common-lisp".equals(qn.pkg())) ? qn.member() : null;
+		return LispNames.CL_PKG.equals(qn.pkg()) ? qn.member() : null;
 	}
 
 	/**

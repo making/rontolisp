@@ -6,7 +6,7 @@
 
 - `(:use package...)` は、列挙したパッケージの external(export 済み)シンボルを修飾なしで見えるようにします。使用するパッケージは先に存在していなければなりません。`:use` clause がない場合、修飾なしで見えるものは **何もありません** — 標準シンボルを `cl:` プレフィックスなしで使うには `(:use :cl)` と書きます。`common-lisp` と `common-lisp-user` は `cl` と `cl-user` の組み込みニックネームなので、`(:use #:common-lisp)` も動作します。
 - `(:export symbol...)` はパッケージの external シンボルを宣言します: 他のパッケージから `name:symbol` として参照でき、このパッケージを使用するパッケージに継承されます。後から intern されるシンボル(例えば `(in-package name)` の下で定義され `:export` clause に含まれない `defun`)は internal であり、ダブルコロン `name::symbol` が必要です。
-- `(:nicknames name...)` はパッケージの別名を登録します。ニックネームは正規名が解決されるすべての場所で解決されます。既存のパッケージ(またはニックネーム)と衝突するニックネームはエラーです。
+- `(:nicknames name...)` はパッケージの別名を登録します。ニックネームは正規名が解決されるすべての場所で解決されます。既存のパッケージ(またはニックネーム)と衝突するニックネームはエラーです。組み込みニックネーム — `common-lisp` と `common-lisp-user`(`cl`/`cl-user`)、`rl`(`rontolisp`)、`la`(`linalg`)、`quicklisp`(`ql`)— も組み込みパッケージ名と同様に予約されています。
 - `(:import-from package symbol...)` は、パッケージ全体を use せずに `package` の指定シンボルだけを修飾なしで見えるようにします。解決はテキストベースです: import された名前はソースパッケージの正規表記に解決されるので、`(:import-from #:common-lisp #:car)` は何も use しないパッケージに `car` だけを与えます。
 - `(:documentation "...")` と `(:size n)` は受理されますが無視されます。
 

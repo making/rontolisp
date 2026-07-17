@@ -443,6 +443,24 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void builtinNicknamesResolveToRontolispAndLinalg() {
+		PackageResolver resolver = new PackageResolver();
+		assertThat(resolve(resolver, "(rl:version)")).isEqualTo("(rontolisp:version)");
+		assertThat(resolve(resolver, "(rl:json-parse s)")).isEqualTo("(rontolisp:json-parse s)");
+		assertThat(resolve(resolver, "(la:zeros 2 2)")).isEqualTo("(linalg:zeros 2 2)");
+		assertThat(resolve(resolver, "(in-package :rl)")).isEqualTo("(quote rontolisp)");
+	}
+
+	@Test
+	void builtinNicknamesAreReservedLikePackageNames() {
+		assertThatThrownBy(() -> resolve("(defpackage :rl)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Package already exists: rl");
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:nicknames :la))"))
+			.isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Package already exists: la");
+	}
+
+	@Test
 	void defpackageUninternedSymbolDesignatorsAreAccepted() {
 		// The portable defpackage idiom spells every designator #:name.
 		PackageResolver resolver = new PackageResolver();

@@ -4,18 +4,20 @@ rontolisp has a small namespace (package) system with a set of built-in packages
 
 - **`cl`** — the standard package. All built-in functions, macros, special forms and the `*package*` variable belong here.
 - **`cl-user`** — the default working package. It *uses* `cl`, so standard symbols are available unqualified. The current package when a program starts. User definitions go here.
-- **`rontolisp`** — a package for implementation-specific symbols. It does **not** use `cl`. It owns the `version`, `list-functions`, `list-macros` and `list-special-forms` functions.
-- **`linalg`** — numpy-style vector/matrix operations (`linalg:zeros`, `linalg:matmul`, `linalg:solve`, ...), implemented once in Lisp source and available in every backend. It does **not** use `cl`. See the [Vectors & Matrices guide](../guides/linear-algebra.md).
+- **`rontolisp`** — a package for implementation-specific symbols. `rl` is a built-in nickname. It does **not** use `cl`. It owns the `version`, `list-functions`, `list-macros` and `list-special-forms` functions.
+- **`linalg`** — numpy-style vector/matrix operations (`linalg:zeros`, `linalg:matmul`, `linalg:solve`, ...), implemented once in Lisp source and available in every backend. `la` is a built-in nickname. It does **not** use `cl`. See the [Vectors & Matrices guide](../guides/linear-algebra.md).
 - **`java`** — Java interop by reflection, usable only under the JVM interpreter (`java -jar rontolisp.jar`), not the compilers or the native binary. It does **not** use `cl`. It owns `new`, `call`, `static`, `field` and `proxy`; see the [Java interop guide](../guides/java-interop.md).
 - **`asdf`** — a limited, API-compatible subset of ASDF (system definitions): `defsystem` and `load-system`. It does **not** use `cl`. See the [Systems guide](../guides/asdf-systems.md).
 - **`ql`** — a limited, API-compatible subset of Quicklisp: `quickload` downloads a system from the real Quicklisp distribution and loads it through the `asdf` subset. `quicklisp` is a built-in nickname. It does **not** use `cl`. See the [Systems guide](../guides/asdf-systems.md#downloading-with-quickload).
 - **`usocket`** — a [usocket](https://github.com/usocket/usocket)-compatible shim over the `rontolisp:tcp-*` socket built-ins (`usocket:socket-connect`, `usocket:socket-listen`, ...), implemented once in Lisp source; also registered as the built-in ASDF system `"usocket"`. It does **not** use `cl`. See the [TCP Sockets guide](../guides/tcp-sockets.md#the-usocket-compatible-shim).
 
-A symbol can be referenced with a package qualifier: `package:symbol` (e.g. `cl:car`, `rontolisp:version`) reaches the package's external (exported) symbols, and `package::symbol` reaches any of its symbols, internal ones included — the same single/double colon distinction as Common Lisp (see [External and internal symbols](#external-and-internal-symbols)). `*package*` evaluates to the name of the current package, and `(in-package name)` switches it (the name is a keyword, a symbol, or a string: `:rontolisp`, `rontolisp`, `"rontolisp"`). The standard Common Lisp names `common-lisp` and `common-lisp-user` are built-in **nicknames** for `cl` and `cl-user`, so portable `(:use #:common-lisp)` clauses and `common-lisp:car` references resolve; user packages can register their own nicknames with the `defpackage` `:nicknames` clause.
+A symbol can be referenced with a package qualifier: `package:symbol` (e.g. `cl:car`, `rontolisp:version`) reaches the package's external (exported) symbols, and `package::symbol` reaches any of its symbols, internal ones included — the same single/double colon distinction as Common Lisp (see [External and internal symbols](#external-and-internal-symbols)). `*package*` evaluates to the name of the current package, and `(in-package name)` switches it (the name is a keyword, a symbol, or a string: `:rontolisp`, `rontolisp`, `"rontolisp"`). The standard Common Lisp names `common-lisp` and `common-lisp-user` are built-in **nicknames** for `cl` and `cl-user`, so portable `(:use #:common-lisp)` clauses and `common-lisp:car` references resolve; the shorthands `rl` and `la` are built-in nicknames for `rontolisp` and `linalg`, and `quicklisp` for `ql`. User packages can register their own nicknames with the `defpackage` `:nicknames` clause.
 
 ```lisp
 (print *package*)              ; => cl-user
 (print (rontolisp:version))    ; => (:version "0.1.0-SNAPSHOT" :build-timestamp "..." :git-commit "..." :git-branch "...")
+(print (getf (rl:json-parse "{\"n\": 41}") :n))     ; => 41
+(print (la:to-list (la:from-list '(1 2 3))))        ; => (1.0 2.0 3.0)
 ```
 
 `rontolisp:version` returns the same information as `rontolisp --version`, as a property list.
@@ -104,7 +106,9 @@ does not exist yet.
   free variable) are internal, exactly like the built-in packages.
 - `:nicknames` registers alternate names that resolve everywhere the canonical
   name does (in qualifiers, `in-package`, `:use`, ...). A nickname colliding
-  with an existing package or nickname is an error.
+  with an existing package or nickname is an error — the built-in nicknames
+  (`common-lisp`, `common-lisp-user`, `rl`, `la`, `quicklisp`) are reserved the
+  same way as the built-in package names.
 - `:import-from` makes the named symbols of one package visible unqualified
   without using the whole package. Resolution is textual: an imported name
   resolves to the source package's canonical spelling, so importing and then

@@ -235,23 +235,34 @@ public final class PackageRegistry {
 	private final Map<String, LispPackage> packages = new HashMap<>();
 
 	/**
-	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
-	 * the standard Common Lisp names ({@code common-lisp} for {@code cl},
+	 * The built-in package nicknames, mapping each nickname to the canonical package
+	 * name: the standard Common Lisp names ({@code common-lisp} for {@code cl},
 	 * {@code common-lisp-user} for {@code cl-user}) so portable {@code (:use
-	 * #:common-lisp)} clauses resolve; {@code defpackage :nicknames} adds more.
+	 * #:common-lisp)} clauses resolve, plus the shorthands {@code rl} for
+	 * {@code rontolisp}, {@code la} for {@code linalg} and {@code quicklisp} for
+	 * {@code ql}. Static (unlike user {@code defpackage :nicknames}) so
+	 * {@link #splitQualified} can normalize built-in qualifiers for the compile-path
+	 * pre-passes that scan the program before package resolution runs.
 	 */
-	private final Map<String, String> nicknames = new HashMap<>();
+	private static final Map<String, String> BUILTIN_NICKNAMES = Map.of("common-lisp", LispNames.CL_PKG,
+			"common-lisp-user", LispNames.CL_USER_PKG, "rl", LispNames.RONTOLISP_PKG, "la", LispNames.LINALG_PKG,
+			"quicklisp", LispNames.QL_PKG);
+
+	/**
+	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
+	 * {@link #BUILTIN_NICKNAMES}; {@code defpackage :nicknames} adds more.
+	 */
+	private final Map<String, String> nicknames = new HashMap<>(BUILTIN_NICKNAMES);
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
 	 */
 	public PackageRegistry() {
-		this.nicknames.put("common-lisp", LispNames.CL_PKG);
-		this.nicknames.put("common-lisp-user", LispNames.CL_USER_PKG);
 		define(new LispPackage(LispNames.CL_PKG, List.of(), CL_SYMBOLS, CL_EXTERNALS));
 		// cl-user exports nothing, like the Common Lisp COMMON-LISP-USER package: its
 		// symbols are reachable as cl-user::name, never cl-user:name.
 		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>(), Set.of()));
+		// Its canonical spelling is rontolisp; rl is a built-in nickname.
 		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(), new HashSet<>(Set.of(LispNames.VERSION,
 				LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS, LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH,
 				LispNames.AWAIT, LispNames.ASYNC, LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.FUTUREP,
@@ -266,7 +277,7 @@ public final class PackageRegistry {
 				LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12))));
 		// numpy-style vector/matrix operations, implemented once in linalg.lisp and
 		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
-		// is external.
+		// is external. Its canonical spelling is linalg; la is a built-in nickname.
 		define(new LispPackage(LispNames.LINALG_PKG, List.of(), new HashSet<>(LINALG_FUNCTIONS)));
 		// Portable packed-f64 vector kernels, implemented once in vec.lisp (VecLibrary)
 		// as the scalar reference and spliced/loaded on demand like linalg. The JVM
@@ -292,9 +303,8 @@ public final class PackageRegistry {
 		// A limited, API-compatible subset of Quicklisp: ql:quickload downloads a system
 		// (and its dependencies) from the real Quicklisp distribution into a local cache
 		// and then defers to the asdf subset (see eval.QuicklispClient). Its canonical
-		// spelling is ql; quicklisp is a nickname. Does not use cl; the symbol is
-		// external.
-		this.nicknames.put("quicklisp", LispNames.QL_PKG);
+		// spelling is ql; quicklisp is a built-in nickname. Does not use cl; the symbol
+		// is external.
 		define(new LispPackage(LispNames.QL_PKG, List.of(), new HashSet<>(Set.of(LispNames.QUICKLOAD))));
 	}
 
@@ -466,10 +476,28 @@ public final class PackageRegistry {
 	}
 
 	/**
+	 * Resolves a built-in package nickname to the canonical package name ({@code rl} to
+	 * {@code rontolisp}, {@code la} to {@code linalg}, ...); any other name is returned
+	 * unchanged. Unlike the instance {@link #canonicalName(String)} it knows nothing of
+	 * user {@code defpackage :nicknames}, so it is safe for the compile-path pre-passes
+	 * that scan the program before package resolution runs.
+	 * @param name the package name or built-in nickname
+	 * @return the canonical package name
+	 */
+	public static String canonicalBuiltinName(String name) {
+		return BUILTIN_NICKNAMES.getOrDefault(name, name);
+	}
+
+	/**
 	 * Splits a package-qualified symbol name into its package and member parts. A single
 	 * colon ({@code pkg:name}) references an external symbol, a double colon
 	 * ({@code pkg::name}) an internal one, mirroring Common Lisp. Returns {@code null}
-	 * for unqualified names and for keywords (a leading {@code :}).
+	 * for unqualified names and for keywords (a leading {@code :}). A built-in nickname
+	 * in the package part is normalized to the canonical name ({@code rl:version} splits
+	 * to {@code rontolisp}/{@code version}), so every pass that matches
+	 * {@link QualifiedName#pkg()} against a built-in package sees one spelling — user
+	 * {@code defpackage :nicknames} are instead resolved by {@code PackageResolver}
+	 * through the instance {@link #canonicalName(String)}.
 	 * @param name the symbol name
 	 * @return the split parts, or {@code null} if the name is not package-qualified
 	 */
@@ -483,7 +511,7 @@ public final class PackageRegistry {
 			// No colon, or a leading colon (keyword): not package-qualified.
 			return null;
 		}
-		String pkg = name.substring(0, idx);
+		String pkg = canonicalBuiltinName(name.substring(0, idx));
 		if (idx + 1 < name.length() && name.charAt(idx + 1) == ':') {
 			return new QualifiedName(pkg, name.substring(idx + 2), true);
 		}

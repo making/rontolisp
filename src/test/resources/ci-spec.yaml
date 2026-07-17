@@ -1144,6 +1144,21 @@ cases:
       (2 4 6)
       42
       (ci-pkg::ci-priv ci-pkg:ci-greet ci-pkg:ci-twice)
+  # rl/la are built-in nicknames for rontolisp/linalg; a user defpackage nickname
+  # resolves everywhere the canonical name does.
+  - name: builtin-package-nicknames
+    source: |
+      (print (getf (rl:json-parse "{\"a\": 7}") :a))
+      (print (la:to-list (la:from-list '(1 2 3))))
+      (defpackage :ci-nick (:use :cl) (:nicknames :cn) (:export :ci-nick-inc))
+      (in-package :ci-nick)
+      (defun ci-nick-inc (x) (+ x 1))
+      (in-package :cl-user)
+      (print (cn:ci-nick-inc 41))
+    expected: |
+      7
+      (1.0 2.0 3.0)
+      42
   - name: async-defun-await-futurep
     source: |
       (rontolisp:async-defun ci-async-add (a b) (print "ci-async-in") (+ a b))

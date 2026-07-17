@@ -124,7 +124,7 @@ public final class LinalgLibrary {
 					case LispString str -> str.value();
 					default -> this.currentPackage;
 				};
-				this.currentPackage = name;
+				this.currentPackage = PackageRegistry.canonicalBuiltinName(name);
 			}
 		}
 
