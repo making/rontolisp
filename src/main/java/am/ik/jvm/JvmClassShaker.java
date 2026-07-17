@@ -38,15 +38,17 @@ import org.jspecify.annotations.Nullable;
  * default deterministic output.
  * <p>
  * Correctness rests on properties of the rontolisp output that this class verifies by
- * construction: methods carry exactly one {@code Code} attribute with no nested
- * attributes, fields and the class itself carry none (no StackMapTable at class version
- * 50, no {@code invokedynamic}), and every constant-pool tag and instruction is in the
- * finite set enumerated here. Anything unrecognized makes the pass throw rather than
- * silently emit a corrupt class. Dynamically-reached methods stay alive the same way they
- * do on WASM: first-class calls go through dispatch methods whose bodies contain real
- * {@code invokestatic}s to every registered function. The one edge invisible to bytecode
- * is a reflective call by name; the caller lists such methods as extra roots (rontolisp:
- * {@code _apply}, looked up reflectively by the embedded {@code java:} bridge).
+ * construction: methods carry exactly one {@code Code} attribute whose only permitted
+ * sub-attribute is a {@code StackMapTable} (dropped, not preserved -- its frames index
+ * the pool being compacted; run {@link StackMapAugmenter} after shaking to restore it),
+ * fields and the class itself carry no attributes (no {@code invokedynamic}), and every
+ * constant-pool tag and instruction is in the finite set enumerated here. Anything
+ * unrecognized makes the pass throw rather than silently emit a corrupt class.
+ * Dynamically-reached methods stay alive the same way they do on WASM: first-class calls
+ * go through dispatch methods whose bodies contain real {@code invokestatic}s to every
+ * registered function. The one edge invisible to bytecode is a reflective call by name;
+ * the caller lists such methods as extra roots (rontolisp: {@code _apply}, looked up
+ * reflectively by the embedded {@code java:} bridge).
  */
 public final class JvmClassShaker {
 
@@ -391,8 +393,17 @@ public final class JvmClassShaker {
 					readU2(classFile, p)));
 		}
 		int codeAttrCount = readU2(classFile, p);
-		if (codeAttrCount != 0) {
-			throw new IllegalStateException("JvmClassShaker: unsupported Code sub-attribute");
+		for (int i = 0; i < codeAttrCount; i++) {
+			// A StackMapTable (from a prior StackMapAugmenter run) is dropped: its frames
+			// reference constant-pool entries the compaction would invalidate, and the
+			// caller re-augments after shaking anyway. Anything else is unsupported.
+			int subAttrNameIdx = readU2(classFile, p);
+			if (!"StackMapTable".equals(utf8(cp, subAttrNameIdx))) {
+				throw new IllegalStateException(
+						"JvmClassShaker: unsupported Code sub-attribute " + utf8(cp, subAttrNameIdx));
+			}
+			int subAttrLen = readU4(classFile, p);
+			p[0] += subAttrLen;
 		}
 		return new MethodInfo(access, nameIdx, descIdx, attrNameIdx, maxStack, maxLocals, code, exceptionTable,
 				scanCpSites(code));

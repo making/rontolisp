@@ -41,6 +41,7 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import am.ik.jvm.OperandStack;
+import am.ik.jvm.StackMapAugmenter;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -49,6 +50,14 @@ import org.jspecify.annotations.Nullable;
  * capture-by-reference semantics.
  */
 public final class JvmLispCompiler implements LispCompiler {
+
+	/**
+	 * The class-file major version the finished class is stamped with (61 = Java 17).
+	 * Emission itself stays version-agnostic; {@link StackMapAugmenter} computes the
+	 * StackMapTable that every version above 50 requires and stamps this version as the
+	 * final step of {@link #compile}.
+	 */
+	private static final int CLASS_MAJOR_VERSION = 61;
 
 	private final String className;
 
@@ -1677,7 +1686,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			classBytes = JvmClassShaker.shake(classBytes, roots);
 		}
-		return classBytes;
+		// Insert the StackMapTable every class version above 50 requires (and the shaker
+		// could not have preserved), stamping the target version. Must stay after the
+		// shake: the shaker rejects Code sub-attributes and would not rewrite the
+		// constant-pool entries the frames reference.
+		return StackMapAugmenter.augment(classBytes, CLASS_MAJOR_VERSION);
 	}
 
 	private static boolean programUsesEval(List<LispVal> program) {
