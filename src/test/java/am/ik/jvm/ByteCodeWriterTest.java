@@ -116,10 +116,11 @@ class ByteCodeWriterTest {
 		}
 	}
 
-	// Pins the exception-table emission AND the class-version-50 contract the Lisp JVM
-	// backend relies on: a Code attribute with a non-empty exception table verifies and
-	// runs WITHOUT a StackMapTable (the type-inference verifier computes handler frames
-	// itself; from version 51 stack maps would be mandatory).
+	// Pins the exception-table emission AND the raw-assembler contract the Lisp JVM
+	// backend's emitters rely on: version-50 output with a non-empty exception table
+	// verifies and runs WITHOUT a StackMapTable (the type-inference verifier computes
+	// handler frames itself; the shipped version-61 classes get their mandatory frames
+	// from the StackMapAugmenter post-pass, not from the emitters).
 	@Test
 	void generateAndRunTypedCatchHandler() throws Exception {
 		assertThat(runCatchClass("TypedCatch", true)).isEqualTo("boom");

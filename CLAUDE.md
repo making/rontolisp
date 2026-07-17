@@ -62,7 +62,7 @@ dying with `Cannot compile` on its Compile buttons.
 
 ### Core representation (no `.kb` file -- the detail is here)
 
-- **JVM Class Version 50 (Java 6)**: avoids the mandatory StackMapTable of v51+; the lenient v50 verifier is relied on throughout.
+- **JVM Class Version 61 (Java 17)**: emitters still write frame-free version-50-style code; `am.ik.jvm.StackMapAugmenter` (an offline post-pass at the end of `JvmLispCompiler.compile()`, after the optional shake) computes the mandatory StackMapTable frames and stamps the version. Compiled classes need a Java 17+ JRE. `.kb/stackmap-augmenter.md`
 - **WASM function types outside rec group**: wasmtime's WASI host requires plain `(func ...)` types for imports; only the cons struct goes inside a rec group.
 - **symbolp/stringp**: quoted symbols and string literals share a runtime representation, distinguished by a leading `"`.
 - **consp in JVM**: cons cells and function references are both `Object[]`, distinguished by `arr[0] instanceof Integer`.

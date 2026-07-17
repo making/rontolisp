@@ -24,9 +24,13 @@ everywhere except `--no-gc`.
   replaces the pending unwind (CL: the newer exit wins — Java `finally`
   semantics exactly).
 - **JVM**: `ByteCodeWriter.writeExceptionTable` +
-  `ByteCodeWriter.ExceptionTableEntry` are the assembler additions (class
-  version 50 verifies exception handlers WITHOUT a StackMapTable — pinned by
-  `ByteCodeWriterTest.generateAndRun{TypedCatch,CatchAny}Handler`). Each
+  `ByteCodeWriter.ExceptionTableEntry` are the assembler additions. The
+  emitters stay frame-free (raw assembler output is still version-50 and
+  verifies handlers without a StackMapTable — pinned by
+  `ByteCodeWriterTest.generateAndRun{TypedCatch,CatchAny}Handler`); the
+  handler-entry frames the shipped version-61 class needs are synthesized
+  afterwards by the offline `StackMapAugmenter` pass
+  ([stackmap-augmenter.md](stackmap-augmenter.md)). Each
   `JvmLispCompiler.Ctx` carries a per-method `exceptionTable`; the four
   method-writing sites (main/chunks/defuns/lambdas) emit it.
   `JvmUnwindProtectCompiler` lays out protected-region / cleanup+GOTO /

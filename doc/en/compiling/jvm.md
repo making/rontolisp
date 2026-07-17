@@ -57,16 +57,15 @@ computed strings and called through `eval`/`apply` signals the usual
 "undefined function" error. Compile with `--no-prune` (or `--dynamic`) to keep
 every library definition in that case.
 
-The generated `.class` file targets Java 6 (class version 50), so its bytecode
-loads on any JRE 6+. Beyond `java.lang` and `java.io`, the emitted runtime
-helpers reference `java.math` (`BigInteger`/`BigDecimal`/`MathContext`, for the
-overflow-promoting integer and exact ratio arithmetic) and `java.util`
-(`ArrayList`/`Arrays`, and `HashMap` for hash tables) -- all of which already
-exist in Java 6. One exception is a program that calls `rontolisp:fetch`: it additionally
-references `java.net`/`java.net.http`, so such a program needs JRE 11+
-(`rontolisp:await` / `rontolisp:futurep` also represent futures as
-`java.util.concurrent` futures, present since Java 8). The
-other is a program that uses the [`java:` interop
-package](../guides/java-interop.md): the compiler embeds a reflection bridge
-(compiled with the project's own Java release) into the class, so it needs a
-JRE at least as new as the one rontolisp was built with.
+The generated `.class` file targets Java 17 (class version 61), so running it
+requires a Java 17 or newer JRE. Beyond `java.lang` and `java.io`, the emitted
+runtime helpers reference `java.math` (`BigInteger`/`BigDecimal`/`MathContext`,
+for the overflow-promoting integer and exact ratio arithmetic) and `java.util`
+(`ArrayList`/`Arrays`, and `HashMap` for hash tables); a program that calls
+`rontolisp:fetch` additionally references `java.net`/`java.net.http`, and
+`rontolisp:await` / `rontolisp:futurep` represent futures as
+`java.util.concurrent` futures -- all of which are part of Java 17, so none of
+these raise the requirement. The one exception is a program that uses the
+[`java:` interop package](../guides/java-interop.md): the compiler embeds a
+reflection bridge (compiled with the project's own Java release) into the
+class, so it needs a JRE at least as new as the one rontolisp was built with.

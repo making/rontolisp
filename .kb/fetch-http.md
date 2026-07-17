@@ -178,8 +178,10 @@ lives in the URL library (`.kb/url.md`), not here.
   `JvmFetchRuntimeBuilder`), applies the handler via the `_invoke_1` dispatcher
   (arity 1 is force-registered like the fetch runtime does), reads
   `:status`/`:body` back with a plist-get loop and returns
-  `new Response(status, Collections.emptyList(), body)` (`List.of()` would need
-  an interface-static invokestatic, illegal in class version 50). CONSEQUENCE:
+  `new Response(status, Collections.emptyList(), body)` (`List.of()` needs an
+  interface-static invokestatic, which was illegal in the class-version-50 era;
+  legal at version 61, so the workaround could be simplified — `.todo/145`).
+  CONSEQUENCE:
   the compiled class is NOT standalone -- it needs the rontolisp jar on the
   runtime classpath (`java -cp rontolisp.jar:. App`), unlike every other JVM
   program. Tests: `HttpHandlerJvmTest` (eval pkg for the shutdown seam;

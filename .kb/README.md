@@ -30,7 +30,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins
 - [fetch-http.md](fetch-http.md) -- `rontolisp:fetch` outgoing HTTP
 - [async-await.md](async-await.md) -- async-defun/await, futures and asynchronous streams
-- [error-handling.md](error-handling.md) -- unwind-protect (interpreter try/finally, JVM v50 exception tables + return-escape cleanups), condition objects (define-condition over the CLOS subset, seeded hierarchy, error/signal/warn designators, with-slots) and handler-case/ignore-errors (typed catching, ThreadLocal condition/depth channels; WASM rejects catching)
+- [error-handling.md](error-handling.md) -- unwind-protect (interpreter try/finally, JVM exception tables + return-escape cleanups), condition objects (define-condition over the CLOS subset, seeded hierarchy, error/signal/warn designators, with-slots) and handler-case/ignore-errors (typed catching, ThreadLocal condition/depth channels; WASM rejects catching)
 - [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` TCP sockets, `rontolisp:tls-connect`/`tls-listen` (stream-handle integration + the wasi:sockets component variant) and the `usocket` compatibility shim (usocket.lisp + the built-in ASDF system)
 - [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify` Lisp-source library + splice
 - [linalg.md](linalg.md) -- `linalg` package (numpy-style vector/matrix ops) Lisp-source library + the standard array functions
@@ -41,6 +41,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [url.md](url.md) -- `rontolisp:url-*`/`query-param*` URL / query-string Lisp-source library
 - [java-interop.md](java-interop.md) -- `java:` reflection interop bridge
 - [template-class-embedding.md](template-class-embedding.md) -- when/how to embed a Java "template" class
+- [stackmap-augmenter.md](stackmap-augmenter.md) -- class version 61 via `am.ik.jvm.StackMapAugmenter` (offline StackMapTable computation over frame-free emitter output; pipeline order, merge rules, size cost, what v61 unlocks)
 - [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output
 - [hash-tables.md](hash-tables.md) -- hash table representation per backend
 - [documentation-site.md](documentation-site.md) -- doc site layout, code-fence conventions, build/preview
