@@ -45,7 +45,7 @@ The next frontier. None started as of 2026-07-06:
 - Dynamic/special variable binding (.todo/084, since DONE) -- was the root cause
   behind the former `.todo/82` (macro-time setf replay) and `.todo/83`
   (`*package*` load scoping) workarounds, both since resolved.
-- CLOS subset (.todo/040)
+- CLOS subset (DONE; `.kb/clos.md`)
 - Pathname layer (`merge-pathnames`, `probe-file`, `*load-pathname*`)
 - Readtables (.todo/041)
 

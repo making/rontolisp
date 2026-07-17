@@ -1,74 +1,107 @@
 # `--no-gc`: a non-GC WASM lowering for pure-numeric exports
 
-**Status:** Phase 1 LANDED (2026-06-29), extended with iteration + math (2026-06-29),
-then **Phase 2a strings LANDED (2026-06-29)**. Only `:s-expr` (cons/reader/printer) is
-still open. Phase 1 shipped as
-`codegen.wasm.NoGcWasmCompiler` (a separate backend, GC path untouched): `--no-gc`
-emits a plain MVP module (no rec group / GC types / memory / import) for pure-numeric
-`rontolisp:wasm-export` functions with scalar boundary types (`:int`/`:float`/`:bool`/
-`:void`), runs with no `-W gc`. Resolved open decisions: integers are unboxed `i64` and
-floats `f64`, chosen by a monotone type-inference fixpoint (not all-`f64` — `i64` keeps
-integer arithmetic exact to 2^63; `/` is float division; `0` is false in a boolean
-context); `--no-gc` is a self-contained reactor (no `--no-wasi` needed) and errors with
-`--component`; eligibility + reachability are enforced in one compile pass (an unreached
-ineligible defun is dropped, a reached one is a compile error naming the op). Composes
-with `--optimize`.
+**Status:** The backend shipped and has since grown well past this file's original
+scope. **The only item still open here is `:s-expr`** — the cons/reader/printer
+runtime (a uniform tagged value for heterogeneous lists) is the genuinely large
+piece, and remains rejected at `NoGcWasmCompiler.java:5217`; see "Out of scope"
+below. The authoritative record of what the backend actually does is now
+`.kb/no-gc-scalar-wasm.md`; the phase-by-phase history below is kept only as
+background for the design decisions.
 
-**Extension (2026-06-29) — iteration + math.** To make the backend practical for real
-numeric kernels (which are usually written iteratively, not recursively, and have no TCO
-here): added **iteration & local mutation** — `setq` (`local.tee` to a param/let slot),
-`while` (block/loop), the internal `%block`/`return` non-local exit (typed wasm block
-whose result = join of normal completion and every enclosing `return`), and the
-`dotimes`/`do`/`do*` macros that expand into them; type inference now widens let/`do`-bound
-**local** types (`Types.locals`) so an integer accumulator summed with floats becomes
-`f64`. Added **math builtins** `sqrt` (`f64.sqrt`) and the integer bitwise ops
-`logand`/`logior`/`logxor`/`lognot`/`ash` (`ash` picks `shl`/`shr_s` by `select` on the
-shift sign). `dolist`/list iteration, a free variable and assignment to a global stay
-ineligible (compile error). Docs: README "Non-GC Output" (`doc/en/compiling/wasm.md`);
-CLAUDE.md design-constraint bullet. Tests: `NoGcWasmCompilerTest` (structural) +
-`--no-gc` cases in `WasmLispCompilerIntegrationTest` (`wasmtime --invoke` without `-W gc`,
-interpreter parity), incl. `noGcSupportsIterationAndLocalMutation`,
-`noGcSupportsReturnFromALoop`, `noGcSupportsSqrtAndBitwiseOps`.
+## What landed (compressed history)
 
-**Phase 2a (2026-06-29) — strings.** Motivated by making `examples/mandelbrot.lisp` run
-under `--no-gc`: the blocker was never strings/sexpr per se but that mandelbrot prints to
-stdout, which an import-free reactor cannot do. The fix is to **return the rendered grid
-as a string** (`examples/mandelbrot-nogc.lisp`) and let the host print it. Implemented in
-`NoGcWasmCompiler`: a `Ty.STRING` = `i32` pointer to a linear-memory `[len:i32 LE][UTF-8
-bytes]` header; string literals laid out 4-byte-aligned in a data segment from
-`STR_DATA_BASE`=8 (memory addr 0 is a canonical empty string, used to type-check the
-`cond`/`(if t body nil)` expansion); `(concatenate 'string ...)` bump-allocates via an
-`__alloc` helper (mut-i32 heap-pointer global, page-growing) and copies via `__memcpy` (a
-byte loop, no bulk-memory). The memory + global + data + the two helpers + the `memory` /
-`__ronto_alloc` exports are emitted **only when the module uses strings** (`Mem.used`), so
-a pure-numeric module stays byte-identical to Phase 1 (zero regression). `:string` boundary
-ABI: a param is a `(ptr,len)` pair copied into a fresh internal header; a result is the
-internal pointer returned as `(ptr+4, len)`. The `Ty.join` lattice treats INT as the
-inference bottom that yields to STRING and makes FLOAT-vs-STRING a type error; `coerce`
-rejects string/number mixing (except nil->""). Composes with `--optimize` (the tree shaker
-already decodes the memory/global/grow/block/loop opcodes). Tests: `NoGcWasmCompilerTest`
-(memory/data/export structure, `:s-expr` still rejected) + `noGcSupportsStringConcatenation
-AtTheBoundary` in `WasmLispCompilerIntegrationTest` (wasmtime, no `-W gc`, asserts the
-returned `:string` length). Docs: README "Strings under `--no-gc`"; CLAUDE.md bullet.
+- **Phase 1 (2026-06-29) — scalars.** Shipped as
+  `src/main/java/am/ik/rontolisp/codegen/wasm/NoGcWasmCompiler.java`, a separate
+  backend leaving the GC path untouched: `--no-gc` emits a plain MVP module for
+  `rontolisp:wasm-export` functions with scalar boundary types
+  (`:int`/`:float`/`:bool`/`:void`), running with no `-W gc`. Resolved open
+  decisions: integers are unboxed `i64` and floats `f64`, chosen by a monotone
+  type-inference fixpoint (not all-`f64` — `i64` keeps integer arithmetic exact to
+  2^63; `/` is float division; `0` is false in a boolean context); `--no-gc` is a
+  self-contained reactor (no `--no-wasi` needed); eligibility + reachability are
+  enforced in one compile pass (an unreached ineligible defun is dropped, a reached
+  one is a compile error naming the op). Composes with `--optimize`.
+- **Iteration + math (2026-06-29).** To make the backend practical for real numeric
+  kernels (usually written iteratively, and with no TCO here): **iteration & local
+  mutation** — `setq` (`local.tee` to a param/let slot), `while` (block/loop), the
+  internal `%block`/`return` non-local exit (typed wasm block whose result = join of
+  normal completion and every enclosing `return`), and the `dotimes`/`do`/`do*`
+  macros that expand into them; type inference widens let/`do`-bound **local** types
+  (`Types.locals`) so an integer accumulator summed with floats becomes `f64`. Math
+  builtins `sqrt` (`f64.sqrt`) and the integer bitwise ops
+  `logand`/`logior`/`logxor`/`lognot`/`ash` (`ash` picks `shl`/`shr_s` by `select` on
+  the shift sign). `dolist`/list iteration, a free variable and assignment to a
+  global stay ineligible (compile error).
+- **Phase 2a (2026-06-29) — strings.** A `Ty.STRING` = `i32` pointer to a
+  linear-memory `[len:i32 LE][UTF-8 bytes]` header; string literals laid out
+  4-byte-aligned in a data segment from `STR_DATA_BASE`=8 (memory addr 0 is a
+  canonical empty string, used to type-check the `cond`/`(if t body nil)`
+  expansion); `(concatenate 'string ...)` bump-allocates via an `__alloc` helper
+  (mut-i32 heap-pointer global, page-growing) and copies via `__memcpy` (a byte loop,
+  no bulk-memory). The memory + global + data + the helpers + the `memory` /
+  `__ronto_alloc` exports are emitted **only when the module uses strings**
+  (`Mem.used`), so a pure-numeric module stays byte-identical to Phase 1 (zero
+  regression). `:string` boundary ABI: a param is a `(ptr,len)` pair copied into a
+  fresh internal header; a result is the internal pointer returned as `(ptr+4, len)`.
+  The `Ty.join` lattice treats INT as the inference bottom that yields to STRING and
+  makes FLOAT-vs-STRING a type error; `coerce` rejects string/number mixing (except
+  nil->""). Composes with `--optimize` (the tree shaker already decodes the
+  memory/global/grow/block/loop opcodes). `examples/console/mandelbrot-nogc.lisp`
+  returns the rendered grid as a string rather than printing it — a shape that
+  predates `--no-gc` printing and still works.
+- **Phase 2b (2026-07-04) — string/char primitives.** `length`, `subseq` (end
+  optional, no bounds check), `string=` (a `__streq` helper), `char` / `char-code` /
+  `code-char` / `char=` (a character IS its i64 code point — no separate type;
+  `char-code`/`code-char` are identities, `char=` is numeric `=`, `#\x` literals
+  compile as their code, so `(char= (char s i) #\x)` is portable across backends) and
+  `princ-to-string`. String-producing ops (concatenate/subseq/princ-to-string) also
+  flag the memory as used, so `(length (princ-to-string n))` works with no literal
+  and no `:string` boundary.
 
-**Phase 2b (2026-07-04) — string/char primitives.** Follow-up (b) landed: `length`,
-`subseq` (end optional, no bounds check), `string=` (a `__streq` helper), `char` /
-`char-code` / `code-char` / `char=` (a character IS its i64 code point — no separate
-type; `char-code`/`code-char` are identities, `char=` is numeric `=`, `#\x` literals
-compile as their code, so `(char= (char s i) #\x)` is portable across backends) and
-`princ-to-string` (INT via a `__itoa` helper; STRING passthrough; FLOAT = compile
-error). String-producing ops (concatenate/subseq/princ-to-string) also flag the memory
-as used, so `(length (princ-to-string n))` works with no literal and no `:string`
-boundary. Motivated by the no-gc http-handler Tier A study (2026-07-04 session): these
-are its prerequisite string ops, and independently make routing/parsing kernels
-expressible. Tests: `WasmLispCompilerIntegrationTest.noGcSupportsStringPrimitives`;
-docs: "Strings" section of `doc/*/compiling/wasm.md`.
+Docs: README "Non-GC Output" / "Strings under `--no-gc`" (`doc/*/compiling/wasm.md`);
+CLAUDE.md design-constraint bullet. Tests: `NoGcWasmCompilerTest` (structural,
+`:s-expr` still rejected) + the `--no-gc` cases in `WasmLispCompilerIntegrationTest`
+(`wasmtime --invoke` without `-W gc`, interpreter parity), incl.
+`noGcSupportsIterationAndLocalMutation`, `noGcSupportsReturnFromALoop`,
+`noGcSupportsSqrtAndBitwiseOps`, `noGcSupportsStringConcatenationAtTheBoundary`,
+`noGcSupportsStringPrimitives`.
 
-**Remaining follow-ups.** (a) Convenience numeric builtins `gcd`/`lcm`/`expt`/`isqrt` are
-not yet primitives, but are now user-expressible via the loop forms (e.g. an iterative
-Euclid `gcd`); add them as builtins only if demand warrants. (b) **`:s-expr`** — the
-cons/reader/printer runtime (a uniform tagged value for heterogeneous lists) remains the
-genuinely large piece; see "Out of scope" below.
+## Superseded by later work (do not re-read this file for these)
+
+Several claims in the original design below were overtaken and are corrected here:
+
+- **`--component` is supported.** `--no-gc --component` is implemented (the
+  `NoGcWasmCompiler` component ctor arg + `NoGcWasmComponentBuilder`); it wraps the
+  plain core module verbatim. See `.kb/no-gc-scalar-wasm.md`; tests
+  `NoGcWasmCompilerTest#componentWrapsThePlainCoreModuleVerbatim` and the E2E
+  `noGcComponentExportsCallableViaWaveInvokeWithNoFlags`.
+- **The backend is no longer import-free / I/O-free.** `--no-gc` supports
+  `print`/`princ`/`terpri` via an `fd_write` import plus a WASI 0.3 print
+  micro-adapter, so the "pure-compute reactor that cannot print" framing (and the
+  rationale it implied for the mandelbrot string-return shape) no longer holds. See
+  `.todo/110-nogc-print-io-and-with-arena.md`.
+- **`princ-to-string` on a FLOAT is no longer a compile error.** `.todo/110` shipped
+  the `__ftoa` helper.
+
+## Remaining follow-ups
+
+(a) Convenience numeric builtins `gcd`/`lcm`/`expt`/`isqrt` are still not primitives,
+but are user-expressible via the loop forms (e.g. an iterative Euclid `gcd`); add them
+as builtins only if demand warrants.
+
+## See also
+
+The backend's later growth is owned by its successor todos, not by this file:
+`.todo/094` (packed float arrays), `.todo/099` (rank-2 matvec), `.todo/104` (linear-memory
+arena and free), `.todo/107` (linalg kernel interception), `.todo/109` (elementwise
+ufuncs), `.todo/110` (print I/O and `with-arena`), `.todo/111` (start/command module),
+`.todo/113` (diff/gradient/SIMD stencil kernels), `.todo/121` (linalg `--simd` comparison
+and indexing members).
+
+## Original design (2026-06-28, historical)
+
+Everything below is the pre-implementation design, kept for its rationale. Where it
+disagrees with "Superseded by later work" above, that section wins.
 
 **Original design note (2026-06-28).** Raised in the `claude-opus` session
 right after `--optimize` + the `--no-wasi` `_initialize` rename, while discussing how
@@ -132,7 +165,8 @@ non-GC output can be numerically *better*, not just smaller.
 - No rec group, no `struct`/`array`/`i31` types, no `eqref`. Function params/results and
   locals are `i32`/`i64`/`f64` only.
 - No `wasi_snapshot_preview1` imports (this mode pairs with / implies `--no-wasi`; it is a
-  pure-compute reactor). Import-free: instantiate with no import object.
+  pure-compute reactor). Import-free: instantiate with no import object. (Superseded: a
+  printing program now imports `fd_write` — see `.todo/110`.)
 - Reactor init entry exported as `_initialize` (same convention as `--no-wasi`, see
   CLAUDE.md). For pure-scalar exports there is usually no top-level init at all, so it can
   often be dropped by `--optimize`.
@@ -142,12 +176,13 @@ non-GC output can be numerically *better*, not just smaller.
 
 ## Flag / wiring design
 - New opt-in CLI flag `--no-gc`. Pairs with `--no-wasi` (both pure-compute reactor); decide
-  whether `--no-gc` implies `--no-wasi` or requires it explicitly (recommend: implies, and
-  error if combined with `--component`, since the component path is GC-bound).
+  whether `--no-gc` implies `--no-wasi` or requires it explicitly (recommend: implies). The
+  original recommendation to error on `--component` was later reversed — see "Superseded"
+  above.
 - Thread a `noGc` boolean the same way `dynamic`/`component`/`noWasi`/`optimize` are
   threaded (CliOptions.noValueKeys, RontoLispCli.compileToFile, WasmLispCompiler ctor).
-- **Recommended structure:** a **separate backend class** (e.g.
-  `codegen.wasm.scalar.NoGcWasmCompiler`) rather than branching the GC `WasmLispCompiler`
+- **Recommended structure:** a **separate backend class** (it shipped as
+  `codegen.wasm.NoGcWasmCompiler`) rather than branching the GC `WasmLispCompiler`
   everywhere. The GC compiler's fixed-`FUNC_*`-index invariant and 200-function runtime are
   irrelevant here (no runtime is emitted), so a clean small compiler that only knows numeric
   ops is far simpler and keeps the GC path untouched (zero regression risk). `RontoLispCli`
@@ -186,7 +221,7 @@ non-GC output can be numerically *better*, not just smaller.
 
 ## Touch points
 - `cli/CliOptions.java`, `cli/RontoLispCli.java` (the `--no-gc` flag + dispatch).
-- New `codegen/wasm/scalar/NoGcWasmCompiler.java` (the lowering) over `am.ik.wasm`
+- New `src/main/java/am/ik/rontolisp/codegen/wasm/NoGcWasmCompiler.java` (the lowering) over `am.ik.wasm`
   (reuse the section/encoder writers; emit no rec group).
 - An eligibility analyzer (call-graph closure over the numeric-op allow-list).
 - `am.ik.wasm.WasmTreeShaker` corpus/test additions for the non-GC shape.

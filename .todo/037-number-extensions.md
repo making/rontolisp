@@ -3,9 +3,12 @@
 > only), float-type + computed-type `coerce`, and the predefined
 > `*read-default-float-format*` (informational; every float is double).
 
-# Number system extensions (`rational`, `rationalize`, `complex` numbers, `realp`, `complexp`, `realpart`, `imagpart`, `phase`, `conjugate`, `integer-decode-float`, `decode-universal-time`, `encode-universal-time`, `day`, `month`, `year`, `second`, `minute`, `hour`, `timezone`)
+# Number system extensions (`rational`, `rationalize`, `complex` numbers, `realp`, `complexp`, `realpart`, `imagpart`, `phase`, `conjugate`, `integer-decode-float`, `scale-float`, `float-radix`, `decode-universal-time`, `encode-universal-time`)
 
-**Status:** not implemented. Low priority — complex numbers and time decomposition are niche.
+**Status:** partially implemented — the lite `complex`, float-type `coerce`,
+`/=` and `*read-default-float-format*` shipped 2026-07-05 (see the update
+above). The rest is low priority: full complex numbers and time decomposition
+are niche.
 
 ## What's missing
 
@@ -22,24 +25,23 @@ RontoLisp has the core numeric tower: integers (with `BigInteger` bignum), float
 | `realpart` / `imagpart` | Complex accessors | — (no complex type) |
 | `conjugate` | Complex conjugate | — (no complex type) |
 | `phase` | Complex phase angle | — (no complex type) |
-| `make-complex` | Construct complex number | — (no complex type) |
 | `integer-decode-float` | Decode float into significand, base, exponent | Easy |
 | `scale-float` | Scale float by power of radix | Easy |
 | `float-radix` | Radix of float type (always 2) | Trivial |
-| `most-positive-exponent` | Max exponent | Trivial |
-| `most-negative-exponent` | Min exponent | Trivial |
-| `most-positive-floating-point` | Max float | Trivial |
-| `most-negative-floating-point` | Min float | Trivial |
-| `shortest-float` / `float-shortest` | Shortest representation | Medium |
-| `long-float` / `single-float` / `double-float` | Float type constructors | Trivial |
+| `float-digits` | Significand digits of a float | Trivial |
+| `float-sign` | Sign of a float, as a float | Trivial |
+| `most-positive-double-float` | Largest representable double | Trivial |
+| `most-negative-double-float` | Most negative representable double | Trivial |
 
 ### Missing time decomposition
+
+`get-universal-time` already exists (see `.kb/time-environment-builtins.md`);
+only the decomposition/composition pair is missing.
 
 | Function | Purpose | Difficulty |
 |----------|---------|------------|
 | `decode-universal-time` | Break down universal time | Medium |
 | `encode-universal-time` | Build universal time | Medium |
-| `day` / `month` / `year` | (Not CL standard; some implementations) | — |
 
 ### Complex numbers
 
@@ -57,12 +59,12 @@ This is a significant undertaking with limited ROI for the typical use cases Ron
 
 1. `rational` — convert float to exact ratio (Easy, useful).
 2. `realp` — always true for existing types (Trivial).
-3. `float-radix`, `most-positive/exponent`, `most-positive/negative-floating-point` — constants (Trivial).
-4. `integer-decode-float`, `scale-float` — IEEE 754 bit manipulation (Easy).
+3. `float-radix`, `float-digits`, `most-positive-double-float`, `most-negative-double-float` — constants (Trivial).
+4. `integer-decode-float`, `scale-float`, `float-sign` — IEEE 754 bit manipulation (Easy).
 5. Complex numbers — defer until there's a concrete use case.
 6. Time decomposition — `decode-universal-time` is useful but requires timezone handling.
 
 ### Related
 
-- `[[32-multiple-value-system]]` (`integer-decode-float`, `decode-universal-time` return multiple values)
-- `[[35-type-system]]` (`coerce` between number types)
+- `[[032-multiple-value-system]]` (`integer-decode-float`, `decode-universal-time` return multiple values)
+- `[[035-type-system]]` (`coerce` between number types)

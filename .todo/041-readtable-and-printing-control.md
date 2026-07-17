@@ -1,6 +1,10 @@
-# Readtable and printing control (`*readtable*`, `make-readtable`, `readtable-p`, `readtable-case`, `set-dispatch-macro-character`, `set-macro-character`, `get-macro-character`, `unread-char`, `peek-char`, `listen`, `file-string-length`, `file-string`, `start-of-line`, `finish-output`, `force-output`, `clear-input`, `ecase` (done), `style-warnings`, `*print-level*`, `*print-length*`, `*print-circle*`, `*print-array*`, `*print-gensym*`, `*print-base*`, `*print-case*`, `*print-escape*`, `*print-readably*`, `*print-right-margin*`, `*print-lines*`, `*print-pprint-dispatch*`, `*print-miser-width*`, `*standard-output*`, `*error-output*`, `*query-io*`, `*debug-io*`, `*terminal-io*`, `*trace-output*`, `*standard-input*`, `*break-level*`, `*print-unreadable-object` (not CL), `pprint`, `pprint-linear`, `pprint-tabular`, `pprint-indent`, `pprint-newline`, `pprint-fill`, `pprint-tab`, `pprint-logical-block`, `pprint-simple-dispatch`, `pprint-dispatch`, `set-pprint-dispatch`, `with-pprint-dedicated-column`, `with-input-from-string` (see #36), `with-output-to-string` (see #36))
+# Readtable and printing control (`*readtable*` + the reader-macro API, `peek-char`/`unread-char`/`write-char`, output flushing, the `*print-*` / stream variables, `pprint`)
 
-**Status:** not implemented. Low priority — readtable customization and pretty printing are advanced features.
+**Status:** mostly not implemented. Low priority — readtable customization and
+pretty printing are advanced features. Done since: `read-char`
+(`LispNames.READ_CHAR`, in the `PackageRegistry` CL symbols;
+`doc/en/reference/functions/read-char.md`), and the string-stream macros
+`with-input-from-string` / `with-output-to-string` (see #36).
 
 ## What's missing
 
@@ -9,8 +13,7 @@
 | Operator | Purpose |
 |----------|---------|
 | `*readtable*` | Current readtable |
-| `make-readtable` | Create readtable |
-| `readtable-p` | Predicate |
+| `readtablep` | Predicate |
 | `readtable-case` | Case mode (`:upper`, `:infer`, `:preserve`, `:normalize`) |
 | `set-dispatch-macro-character` | Dispatch macro |
 | `set-macro-character` | Single-character macro |
@@ -24,12 +27,10 @@
 | `unread-char` | Push back character |
 | `peek-char` | Look ahead |
 | `listen` | Check if input available |
-| `read-char` | Read single char |
+| `read-char` (done) | Already implemented |
 | `read-char-no-hang` | Non-blocking read |
-| `terminate-char` | (Not CL) |
 | `write-char` | Write single char |
 | `fresh-line` (done) | Already implemented |
-| `start-of-line` | Check if at line start |
 
 ### Stream flushing
 
@@ -81,7 +82,6 @@
 | `pprint-logical-block` | Logical block |
 | `pprint-dispatch` | Custom dispatch |
 | `set-pprint-dispatch` | Set dispatch table |
-| `with-pprint-dedicated-column` | Dedicated column |
 
 ### Implementation approach
 
@@ -89,7 +89,7 @@
 1. `*standard-output*`, `*standard-input*`, `*error-output*` — stream variables.
 2. `*print-base*` — affect integer printing.
 3. `*print-case*` — affect symbol/string case in output.
-4. `write-char`, `read-char` — character-level I/O.
+4. `write-char` — character-level output (`read-char` is done).
 5. `finish-output`, `force-output` — stream flushing.
 
 **Readtable** (deferred):
@@ -101,5 +101,5 @@
 
 ### Related
 
-- `[[36-io-extensions]]` (stream I/O)
-- `[[38-symbol-and-package-extensions]]` (symbol printing)
+- `[[036-io-extensions]]` (stream I/O)
+- `[[038-symbol-and-package-extensions]]` (symbol printing)

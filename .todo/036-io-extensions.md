@@ -8,7 +8,14 @@
 
 ## What's missing
 
-RontoLisp has `print`, `prin1`, `princ`, `terpri`, `fresh-line`, `read-line`, `read`, `read-from-string`, `parse-integer`, `write-line`, `write-string`, `write-to-string`, `open`, `close`, `with-open-file`, `with-output-to-string`, `with-input-from-string`, `prin1-to-string`, `princ-to-string`. The following I/O operators are absent:
+RontoLisp's I/O surface is broad: `print`, `prin1`, `princ`, `terpri`,
+`fresh-line`, `read-line`, `read`, `read-char`, `read-byte`, `read-sequence`,
+`read-from-string`, `parse-integer`, `write-line`, `write-string`, `write-byte`,
+`write-sequence`, `write-to-string`, `open`, `close`, `streamp`,
+`with-open-file`, `with-output-to-string`, `with-input-from-string`,
+`prin1-to-string`, `princ-to-string`, plus the `rontolisp:` stream API
+(`make-stream`, `stream-read`, `stream-write`, `stream-close`, `read-all`). What
+is absent is the file-system / pathname layer and the full `write`:
 
 ### Missing string I/O
 
@@ -50,7 +57,6 @@ RontoLisp has `print`, `prin1`, `princ`, `terpri`, `fresh-line`, `read-line`, `r
 | `wild-pathname-p` | Function | Check for wildcards |
 | `translate-logical-pathname` | Function | Logical pathname translation |
 | `logical-pathname` | Function | Create logical pathname |
-| `merge-pathnames` | Function | Default pathname merging |
 
 ### Implementation approach
 
@@ -68,5 +74,5 @@ RontoLisp has `print`, `prin1`, `princ`, `terpri`, `fresh-line`, `read-line`, `r
 
 ### Related
 
-- `[[32-multiple-value-system]]` (`delete-file`, `rename-file`, `file-position` return multiple values)
-- `[[31-lambda-list-extensions]]` (`write`, `file-position` use `&optional`/`&key`)
+- `[[032-multiple-value-system]]` (`delete-file`, `rename-file`, `file-position` return multiple values)
+- `[[031-lambda-list-extensions]]` (`write`, `file-position` use `&optional`/`&key`)

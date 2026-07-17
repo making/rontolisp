@@ -1,51 +1,42 @@
-# Local function and macro definition (`flet`, `labels`, `macrolet`, `symbol-macrolet`)
+# Local macro definition (`symbol-macrolet`)
 
-**Status:** `flet`/`labels` DONE 2026-07-05 (expansion route, all backends; see
-`.kb/flet-labels.md`). Remaining: `macrolet`/`symbol-macrolet` below.
+**Status:** `flet`/`labels`/`macrolet` DONE 2026-07-05 (expansion route, all
+backends; see `.kb/flet-labels.md`). Remaining: `symbol-macrolet` below.
+
+`macrolet` shipped without the per-backend compiler work the approach below
+predicted: `eval/UserMacroExpander` expands it away on the compile path (it
+installs each local macro into the macro-time evaluator, walks the body, and
+returns a `(progn ...)`), so the JVM and WASM compilers never see a `macrolet`
+at all; the interpreter handles it natively in `eval/LispEvaluator`.
 
 ## What's missing
 
-RontoLisp has `defun` (top-level function definition) but no way to define functions or macros locally within a lexical scope.
+RontoLisp can define functions and macros locally within a lexical scope
+(`flet`/`labels`/`macrolet`), but has no way to define local SYMBOL macros --
+bindings that expand a symbol REFERENCE (not a call) into a form.
 
 ### Missing operators
 
 | Operator | Kind | Purpose |
 |----------|------|---------|
-| `flet` | Special form | Local function definitions (non-recursive): `(flet ((f (x) (+ x 1))) (f 2))` |
-| `labels` | Special form | Local function definitions (recursive): functions can call each other |
-| `macrolet` | Special form | Local macro definitions: `(macrolet ((m (x) x)) (m 1))` |
 | `symbol-macrolet` | Special form | Local symbol macros: `(symbol-macrolet ((y (car x))) y)` |
+
+Documented as unavailable in `doc/en/guides/missing-features.md` ("Other
+omissions").
 
 ### Design considerations
 
-- **`flet`**: Each name binds in the function namespace for the body. Since RontoLisp is Lisp-2, `flet` only affects the function namespace (call position and `funcall`), not the variable namespace.
-- **`labels`**: Same as `flet` but the functions can reference each other (mutual recursion). The function values must be constructed before any body runs.
-- **`macrolet`**: Macros expand at read/compile time. `macrolet` needs to be handled by the macro expander (or a pre-expansion pass). In the interpreter, it's an `evalCons` case that adds macros to the environment. In compilers, it needs to be handled before the main macro expansion pass.
-- **`symbol-macrolet`**: Expands symbol references (not calls) to forms. Needs a rewrite pass on the body before evaluation/compilation.
-
-### Implementation approach
-
-1. **Interpreter**:
-   - `flet`/`labels`: Add function-local environment layer in `Environment`.
-   - `macrolet`: Add macro-local environment layer; expand in `evalCons`.
-   - `symbol-macrolet`: Rewrite pass on body forms.
-
-2. **JVM compiler**:
-   - `flet`/`labels`: The function value representation already supports closures. Need to emit local function definitions and register them in a local function namespace.
-   - `macrolet`: Expand at compile time before the main compilation.
-   - `symbol-macrolet`: Rewrite at compile time.
-
-3. **WASM compiler**:
-   - Similar to JVM but with WASM function indexing.
-
-### Complexity
-
-- `flet` is straightforward (lexical function binding).
-- `labels` requires fixed-point construction of function values (all must exist before any runs).
-- `macrolet` is the hardest for compilers (expansion timing).
-- `symbol-macrolet` is a rewrite pass (scoping is the tricky part).
+- **`symbol-macrolet`**: Expands symbol references (not calls) to forms. Needs a
+  rewrite pass over the body before evaluation/compilation. Because `macrolet`
+  proved that a body-rewriting pass in `UserMacroExpander` is enough to keep the
+  backends untouched, the same shape should work here: rewrite the body at
+  expansion time and drop the wrapper, so no compiler gains a case.
+- Scoping is the tricky part: the rewrite must stop at a shadowing binding
+  (`let`/lambda parameter/`do` &c. rebinding the symbol as a variable), and a
+  symbol in an assignment position (`setq`/`setf`) has to expand into a `setf`
+  of the expansion rather than a plain assignment.
 
 ### Related
 
-- `[[31-lambda-list-extensions]]` (local functions use lambda lists)
-- `[[32-multiple-value-system]]` (local functions may return multiple values)
+- `[[031-lambda-list-extensions]]` (local functions use lambda lists)
+- `[[032-multiple-value-system]]` (local functions may return multiple values)

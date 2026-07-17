@@ -4,19 +4,29 @@ The `java:` interop package (interpreter-only reflection bridge) was adopted int
 `develop`: `LispJavaObject` + the `java` package (`java:new`/`call`/`static`/
 `field`/`proxy`) in `eval/JavaInterop.java`, with deterministic cost-based
 overload resolution, `JavaInteropTest`, docs (`doc/{en,ja}/guides/java-interop.md`
-+ five `reference/functions/java-*.md`), and examples `java-interop.lisp` /
-`swing.lisp` / `life-core.lisp` / `life-gui.lisp` (the console `life.lisp` was
-split to load the shared core). See the CLAUDE.md "java: interop" bullet.
++ five `reference/functions/java-*.md`), and examples
+`examples/jvm/java-interop.lisp` / `examples/jvm/swing.lisp` /
+`examples/console/life-core.lisp` / `examples/jvm/life-gui.lisp` (the console
+`examples/console/life.lisp` was split to load the shared core). See the
+CLAUDE.md "java: interop" bullet.
 
 Deliberately deferred (scope was kept to one clean GUI demo; the existing
 `maze-rl.lisp` / `nqueens.lisp` were left untouched):
 
-- **More GUI demos.** The `gui-poc` branch also has `maze-rl-gui.lisp` /
-  `maze-rl-core.lisp` and `nqueens-gui.lisp` / `nqueens-core.lisp` (same
-  core/gui split pattern as life). Bring them over if more Swing examples are
-  wanted: `git checkout gui-poc -- examples/<file>` then update the headers the
-  same way `life-gui.lisp`/`swing.lisp` were (file-relative `load` works now, so
-  drop the "run from inside examples/" caveat) and add README rows.
+- **More GUI demos.** A second Swing demo landed since: commit 440056c added
+  `examples/browser/minesweeper/minesweeper-swing.lisp`. Still on the `gui-poc`
+  branch: `maze-rl-gui.lisp` / `maze-rl-core.lisp` and `nqueens-gui.lisp` /
+  `nqueens-core.lisp` (same core/gui split pattern as life). Bring them over if
+  more Swing examples are wanted, but note 440056c also reorganized `examples/`
+  into category subdirs while `gui-poc`'s paths are still flat
+  (`examples/maze-rl-gui.lisp`), so a bare
+  `git checkout gui-poc -- examples/<file>` lands them at the top level and they
+  must then be relocated (Swing demos to `examples/jvm/`, their cores next to the
+  console programs in `examples/console/`). Update the headers the same way
+  `life-gui.lisp`/`swing.lisp` were (file-relative `load` works now, so drop the
+  "run from inside examples/" caveat), add README rows, and add a row to
+  `examples/examples.yaml` -- the smoke-test index that `ExamplesE2eTest` turns
+  into one dynamic test per (example x backend) pair.
 
 - ~~**Friendlier compile error.**~~ OBSOLETE for the JVM (2026-07-02): the JVM
   compiler now supports the five `java:` functions natively via an embedded
@@ -28,12 +38,15 @@ Deliberately deferred (scope was kept to one clean GUI demo; the existing
   remains low value.
 
 - **First-class `java:` functions in compiled code.** The compilers have no
-  `BuiltinFunctionWrappers` entries for the five functions (they are variadic,
-  which the fixed-arity wrapper scheme cannot express), so `#'java:call` /
+  `BuiltinFunctionWrappers` entries for the five functions, so `#'java:call` /
   `(funcall 'java:new ...)` is a compile error while the interpreter allows it;
-  the embedded `eval` runtime does not know `java:` either. Documented in the
-  guide's limitations. Would need variadic wrapper support or dedicated
-  dispatch entries.
+  the embedded `eval` runtime has no `java:` dispatch either. Variadity is NOT
+  the blocker -- the wrapper scheme already expresses `&rest`
+  (`variadicIdentity`/`variadicNonEmpty`/`variadicNconc`/`variadicUnaryLeft`/
+  `variadicMakeArray`/`variadicStableSort`, plus the `(&rest r)` entry for
+  `values`); the entries were simply never written. Documented in the guide's
+  limitations. Would need wrapper entries for the five functions plus `java:`
+  dispatch in the emitted `eval` runtime.
 
 - ~~**Richer marshalling (optional).**~~ DONE (2026-07-02): proper lists /
   rank-1 vectors now marshal to Java arrays (element-wise, incl. primitives)

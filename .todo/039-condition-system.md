@@ -14,99 +14,50 @@
 > **Update 2026-07-12:** todo-116 Phases 1-3 SHIPPED: `unwind-protect`,
 > `define-condition`/`make-condition`/condition classes, `signal`, `warn`
 > designators, `handler-case`, `ignore-errors` and `with-slots` are real on
-> the interpreter/JVM (WASM rejects catching). See `.kb/error-handling.md`.
-> Still missing from the catalog below: `handler-bind`, `restart-case` (a
-> primary-form no-op) and the whole restart layer (`invoke-restart`,
-> `with-simple-restart`, `cerror`, `abort`, `continue`, `break`),
-> `muffle-warning`, `condition-format-*` accessors, `typep` as a function.
+> the interpreter/JVM. See `.kb/error-handling.md`.
+>
+> **Update 2026-07-14:** WASM catching shipped too, via the wasm exception
+> handling proposal (`try_table`/`throw`, `-W exceptions=y`, wasmtime 37+),
+> EH-mode gated so a program without a catching form stays byte-identical.
+> Only `--no-gc` rejects `unwind-protect`/`handler-case`/`ignore-errors` at
+> compile time. The catalog below is superseded by the residual list.
 
-# Condition system (`handler-case`, `handler-bind`, `restart-case`, `restart-bind`, `invoke-restart`, `invoke-restart-interactively`, `signal`, `error` (done), `warn`, `cerror`, `abort`, `continue`, `break`, `make-condition`, `condition-type`, `simple-condition`, `simple-error`, `simple-warning`, `style-warning`, `serious-condition`, `warning`, `condition`, `storage-condition`, `program`, `control`, `serious-condition`, `error` (condition class))
+# Condition system — residuals
 
-**Status:** not implemented. Low-Hard priority — the full condition system is one of CL's most complex subsystems.
+**Status:** implemented except for the restart layer and the items below.
+`handler-case`, `ignore-errors`, `unwind-protect`, `signal`, `warn`,
+`define-condition`/`make-condition` and the condition class hierarchy are real
+on every backend but `--no-gc`; conditions are CLOS-subset instances and are
+caught by type. Mechanics, per-backend details and pinning tests:
+`.kb/error-handling.md`.
 
-## What's missing
+## Still missing
 
-RontoLisp has the `error` macro (signals a fatal error with a formatted message, expanded by `LispMacroExpander.expandError` into `%error`). The rest of the condition system is absent.
+| Operator | Kind | Note |
+|----------|------|------|
+| `handler-bind` | Macro | `.kb/error-handling.md` names it Phase 4 with `restart-case` |
+| `invoke-restart` | Function | the restart layer, none of which exists |
+| `with-simple-restart` | Macro | restart layer |
+| `cerror` | Function | restart layer (continuable error) |
+| `abort` | Function | restart layer |
+| `continue` | Function | restart layer |
+| `break` | Function | restart layer + REPL integration |
+| `muffle-warning` | Function | restart layer (the `warning` restart) |
+| `condition-format-control` | Function | condition accessor |
+| `condition-format-arguments` | Function | condition accessor |
+| `typep` | Function | exists only as the compile-time type test, not as a function |
 
-### Missing condition signaling
+`restart-case` exists (`LispNames.java:1129`) but only as a lite lowering to its
+primary form: the restart clauses are dead code, reachable only through an
+`invoke-restart` that does not exist. A signaling primary form signals as usual.
 
-| Operator | Kind | Purpose |
-|----------|------|---------|
-| `signal` | Function | Non-fatal condition: `(signal 'my-condition)` |
-| `warn` | Function | Non-fatal warning (prints message, continues) |
-| `cerror` | Function | Continuable error: `(cerror "continue" 'error 'msg)` |
-| `abort` | Function | Transfer to abort restart |
-| `continue` | Function | Transfer to continue restart |
-| `break` | Function | Interactive debug loop |
-
-### Missing condition handling
-
-| Operator | Kind | Purpose |
-|----------|------|---------|
-| `handler-case` | Macro | Catch conditions by type: `(handler-case (..) 'error ((c) (print c)))` |
-| `handler-bind` | Macro | Bind handlers dynamically: `(handler-bind ((error #'..)) (..))` |
-| `restart-case` | Macro | Define restarts: `(restart-case (..) (:retry ()))` |
-| `restart-bind` | Macro | Bind restarts dynamically |
-| `invoke-restart` | Function | Invoke named restart |
-| `invoke-restart-interactively` | Function | Interactive restart |
-| `with-simple-restart` | Macro | Define simple restart |
-
-### Missing condition types
-
-| Type | Purpose |
-|------|---------|
-| `condition` | Root class |
-| `serious-condition` | Serious (non-recoverable by default) |
-| `warning` | Non-serious |
-| `error` | Serious error |
-| `simple-condition` | Condition with format string + args |
-| `simple-error` | Simple error |
-| `simple-warning` | Simple warning |
-| `style-warning` | Style warning |
-| `control-error` | Control error |
-| `program-error` | Program error |
-| `storage-condition` | Storage condition |
-
-### Missing condition accessors
-
-| Function | Purpose |
-|----------|---------|
-| `make-condition` | Construct condition |
-| `condition-type` | (Not CL; some implementations) |
-| `condition-format-control` | Format string |
-| `condition-format-arguments` | Format args |
-
-### Implementation approach
-
-The full CL condition system with CLOS-based condition classes is a massive undertaking. A pragmatic subset:
-
-**Phase 1 — Basic exception handling** (highest ROI):
-1. `handler-case` — catch/finally-like exception handling.
-   - Expand to try/catch in JVM (`athrow`/catch blocks).
-   - In WASM: structured exception handling via `br` to outer block.
-   - Interpreter: throw/catch `LispEvalException`.
-2. `signal` — throw a condition.
-3. `warn` — print warning, continue.
-4. `cerror` — error with continue option (without interactive restart, just continue).
-
-**Phase 2 — Condition types** (deferred):
-5. `simple-condition`, `simple-error`, `simple-warning`.
-6. `make-condition`, `condition-format-control`, `condition-format-arguments`.
-7. Condition type hierarchy (without full CLOS).
-
-**Phase 3 — Restart system** (lowest priority):
-8. `restart-case`, `invoke-restart`.
-9. `break` (interactive debug loop — needs REPL integration).
-
-### Complexity
-
-- `handler-case` is the most valuable operator (like try/catch in other languages).
-- The restart system is deeply intertwined with the condition system and CLOS.
-- Without CLOS (`defclass`/`defmethod`), condition types are limited to a fixed hierarchy.
-- JVM has native try/catch/finally bytecode. WASM has `try`/`catch`/`delegate` in the exception handling proposal (not in GC).
+The restart layer is the lowest-priority piece and is deeply intertwined with
+the condition system; `.todo/116-error-handling-foundation.md` records the
+Step-0 survey that deferred it (no library-side `invoke-restart` in the
+motivating corpus; the real gate is Postmodern proper).
 
 ### Related
 
-- `[[40-clos-and-defstruct]]` (condition types are CLOS classes)
-- `[[35-type-system]]` (`typep` on condition types)
-- `[[34-local-function-definition]]` (handlers are often local functions)
+- `[[035-type-system]]` (`typep` on condition types)
+- `[[034-local-function-definition]]` (handlers are often local functions)
+- `.kb/clos.md` (condition types are CLOS classes)

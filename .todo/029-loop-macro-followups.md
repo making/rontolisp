@@ -65,10 +65,21 @@ core via `LispMacroExpander.expandLoop` + the private `LoopExpander` class
   `LispMacroExpander.destructurePairs` walker (lifted out of `LoopExpander`
   when `destructuring-bind` landed; also its keyword-free fast path) walks a
   pattern into car/cdr accessor chains; `for` patterns bind vars to nil
-  and re-destructure in `preBody` each iteration. Patterns are proper lists only
-  — the reader rejects dotted-pair syntax, so `(a . b)` cannot even be written;
-  lambda-list keywords are not recognized in loop patterns (use
-  `destructuring-bind` in the body for those).
+  and re-destructure in `preBody` each iteration. Dotted patterns work too
+  (`for (a . b) in '((1 . 2) ...)`, `with (x . y) = ...`): `destructurePairs`
+  recurses on car AND cdr, so a symbol in cdr position simply binds to the
+  `(cdr ...)` chain. Lambda-list keywords are not recognized in loop patterns —
+  `&optional` binds as an ordinary variable named `&optional` — so use
+  `destructuring-bind` in the body for those.
+
+- **DONE** `for VAR being ...` (hash-table iteration): `LispMacroExpander`'s
+  `parseForBeing` / `parseForBeingHash` handle `hash-keys`/`hash-key`/
+  `hash-values`/`hash-value` (with the optional `the`/`each` filler and either
+  `of` or `in`), including `using (hash-value V)` / `using (hash-key K)` for the
+  companion variable. Iteration order is unspecified (it follows the backend's
+  hash-table order). Landed in `b5ab2db`; covered by
+  `src/test/java/am/ik/rontolisp/e2e/AssocUtilsE2eTest.java` and
+  `LispEvaluatorTest#evalLoopBeingSymbols`.
 
 Tests: `LispEvaluatorTest#evalLoop*`, `JvmLispCompilerTest#compileAndRunLoop*`,
 `WasmLispCompilerIntegrationTest#loopExtendedClausesCompileAndRun`,
@@ -76,12 +87,16 @@ Tests: `LispEvaluatorTest#evalLoop*`, `JvmLispCompilerTest#compileAndRunLoop*`,
 
 ## Still out of scope
 
-- **`named NAME` + `return-from NAME`**: needs named block support
-  (`block`/`return-from`), which rontolisp does not have generally. Out of scope
-  until block/return-from exist.
+- **`named NAME` + `return-from NAME`**: still needs named block support. `block`
+  remains unsupported; `return-from` now exists, but only in a name-ignoring lite
+  form (`LambdaLists.rewriteReturnFrom` rewrites it to a `return` scoped to the
+  nearest enclosing function — see `.kb/do-return-block.md`), which cannot target a
+  named loop. Out of scope until a real `block` lands.
 
-- **`being` (hash-table/package iteration)**: needs a way to enumerate hash
-  keys/values as a driver; revisit if a `hash-table-keys`-style primitive lands.
-
-- **Dotted destructuring patterns**: blocked on the reader (no dotted-pair
-  syntax).
+- **`being` over a PACKAGE**: `symbols`/`present-symbols`/`external-symbols` parse,
+  but are lite: rontolisp has no runtime intern table (`.kb/symbol-runtime-api.md`),
+  so the package form is evaluated once for effect and the EMPTY sequence is
+  iterated — `VAR` binds to nil and the body never runs
+  (`LispMacroExpander.java:1385-1391`). Enough for cl-who's hyperdoc table; a real
+  enumeration needs an intern table first. The hash-table `being` variants are done
+  (see above).

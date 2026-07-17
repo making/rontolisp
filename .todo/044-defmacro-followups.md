@@ -20,12 +20,22 @@ on the compile path). Remaining gap: the counter is not CL's
 `*gensym-counter*`, and interpreter vs compile-path counters can disagree when
 a macro body calls gensym (documented in ci-spec).
 
-## Nested backquote
+## Nested backquote — DONE
 
-`` `(a `(b ,c)) `` is a read error ("Nested backquote is not supported").
-Supporting it needs the standard depth-tracking expansion algorithm in
-`LispReader.readTemplateElement`. Mostly needed for macro-defining macros;
-those can be written with explicit `list`/`quote` today.
+`` `(a `(b ,c)) `` works. `LispReader` carries a faithful port of the CLtL2 /
+Steele Appendix C backquote algorithm (`LispReader.java:561+`): `readBackquote`
+raw-reads the template first (`readRawTemplate`, marker conses + identity-compared
+sentinel symbols), and routes anything containing an inner backquote through
+`bqCompletelyProcess`, which lowers every level to `list`/`append`/`cons`/
+`list*`/`quote` at read time — so no backquote survives to run time and no
+backend gained a case. The
+`LispReadException("Nested backquote is not supported")` at `LispReader.java:444`
+is now unreachable for that case: it sits in the optimized single-level path,
+which `readBackquote` skips once `rawSawNestedBackquote` is set.
+
+Verified against SBCL including `once-only` three levels deep (`.kb/defmacro-backquote.md`).
+Tests: `LispReaderTest:315`, `JvmLispCompilerTest:558`,
+`WasmLispCompilerIntegrationTest:4224`.
 
 ## defmacro lambda lists — DONE
 
@@ -56,13 +66,21 @@ result is the expansion form as data). Documented in the defmacro reference
 page and eval-limitations; full parity would need the backquote expansion in
 both emitted readers.
 
-## Macros outside cl-user
+## Macros outside cl-user — OBSOLETE
 
-`UserMacroExpander` matches macro names by bare (unresolved) name and its
-macro-time evaluator processes `defmacro`/`defun` forms through the default
-package state, so macros defined/used after `(in-package rontolisp)` or via
-qualified names are untested/unsupported. Fine for the built-in three-package
-world; revisit if `defpackage` ever lands.
+This section's revisit trigger ("if `defpackage` ever lands") has fired:
+`defpackage` is real (`LispNames.java:1902`,
+`doc/en/reference/special-forms/defpackage.md`, `.kb/packages.md`), so the
+"built-in three-package world" framing no longer describes anything, and the
+gap it recorded is gone. `UserMacroExpander` is package-aware: it recognizes
+`in-package`/`defpackage` (plus the `%push-package`/`%pop-package` markers
+`LoadInliner` brackets a loaded file with) BEFORE resolution and keeps them
+verbatim for the compilers' own pass, feeds them to the macro evaluator's
+resolver, and resolves every other form through that same resolver — so a
+`defmacro` under `(in-package P)` registers its canonical P-qualified name, its
+template symbols resolve against P, and call sites match the canonical name.
+A form the walk did not touch keeps its ORIGINAL spelling (a canonicalized
+`cl:` symbol is not always re-resolvable by the compilers' pass).
 
 ## Compile-time side effects
 

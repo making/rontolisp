@@ -77,7 +77,7 @@ the API-surface catalog); written against the 2026-07-11 codebase.
   **Decision: WASM is out of scope for catching in v1** -- `handler-case` /
   `unwind-protect` = compile error on the WASM path (the TLS gating
   precedent), revisit as its own todo once wasmtime's EH is on by default.
-- **Condition types**: the CLOS static subset (todo-040, `.kb/clos.md`)
+- **Condition types**: the CLOS static subset (`.kb/clos.md`)
   exists NOW (it did not when todo-039 was sketched) -- `defclass` single
   inheritance over tagged lists + `generateDispatcher` type tests +
   `makeTypeTest` (`typep`/`typecase`) are exactly the pieces a condition

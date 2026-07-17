@@ -195,4 +195,7 @@ Tracked here because they are all facets of `--optimize`. Priority order:
    (a) have `shake` assert the module has no element/table section (the call-graph
    shaker is only sound without `call_indirect` tables — today there are none), and
    (b) when a new built-in adds an opcode, extend `WasmTreeShaker.scanInstr` and add
-   a case to the corpus. Low effort, defensive.
+   a case to the corpus. The enumerated opcode set now reaches the `0xFD` SIMD
+   sub-opcodes too (`WasmTreeShaker.skipSimd`, needed by the `--no-gc --simd` `vec:`
+   kernels), so extending `scanInstr` covers those the same way. Low effort,
+   defensive.
