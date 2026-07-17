@@ -45,8 +45,10 @@ Implementation shape:
   `eql`). Pre-existing behavior -- it was already true for `member`/`assoc`
   `:test` -- now documented in `doc/*/guides/eval-limitations.md`. Fixing it
   means teaching `Jvm/WasmEvalRuntimeBuilder` keyword parsing per function.
-- The `-if`/`-if-not` variants (`find-if`, `remove-if`, ...) take no `:key`
-  (CL allows one); add only if real code needs it.
+- The `-if`/`-if-not` variants other than `position-if`/`position-if-not`
+  (`find-if`, `remove-if`, `count-if`, `member-if`, `delete-if`, ...) take no
+  `:key` (CL allows one); add only if real code needs it. The position pair got
+  `:key` (plus `:start`/`:end`/`:from-end`) with the 2026-07-05 update above.
 - First-class values (`#'find` etc. via `BuiltinFunctionWrappers` and the
   `Environment` registrations) stay fixed-arity -- keywords work in call
   position only, except `member`/`assoc`/`rassoc` whose interpreter

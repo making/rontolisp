@@ -21,9 +21,11 @@ backends:
   structural). For `eql`, key on the object itself (Long/String value-equal,
   Object[] cons identity). Needs the test stored on/with the table (e.g. a
   wrapper object or a sentinel entry) and the get/put/rem helpers to branch.
-- WASM (`WasmHashTableCompiler`): scans with `_equal`; add an `_eql`-based scan
-  and store the test in the box (the `TYPE_CELL` holds only the alist today, so
-  the representation must carry a test flag too).
+- WASM (`WasmHashTableCompiler`): a real open-chaining bucketed table -- the
+  `TYPE_CELL` box holds a `(count . buckets)` header cons and `_equal` compares
+  within a bucket. So `eql` needs BOTH an `_eql` bucket comparison AND an
+  `eql`-consistent `_hash` variant (the `_hash` <-> `_equal` invariant in
+  `.kb/hash-tables.md`), plus a test flag carried in the header.
 
 Keep `equal` the default-friendly behavior; only narrow `eql`/`eq` tables.
 
@@ -32,4 +34,4 @@ Keep `equal` the default-friendly behavior; only narrow `eql`/`eq` tables.
 `(let ((h (make-hash-table)))           ; eql by default
    (setf (gethash (list 1) h) 'a)
    (gethash (list 1) h))`  => nil  (distinct cons, eql miss) on all backends,
-while an `equal` table hits. Add cross-backend tests + a `ci-spec.yaml` case.
+while an `equal` table hits. Add cross-backend tests + a `src/test/resources/ci-spec.yaml` case.

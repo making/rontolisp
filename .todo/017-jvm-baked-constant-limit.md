@@ -105,8 +105,9 @@ the cheap middle if a self-contained big-constant class is ever really needed.
 
 ## References
 - `examples/browser/hiragana/` (the demo that found this; it now READS its
-  weights -- `net.lisp` `save-rlw1` / `dataset/rlw1.lisp` `load-rlw1`).
+  weights -- `net.lisp` `save-rlw1` /
+  `examples/deep-learning-from-scratch/dataset/rlw1.lisp` `load-rlw1`).
 - `JvmLispCompiler` / `codegen.jvm` (constant emission, class version 50),
   `am.ik.jvm` (bytecode writer — where StackMapTable would go).
 - CLAUDE.md: "JVM Class Version 50", "JVM method name mangling".
-- `.todo/16-extend-hiragana-to-full-set.md` (where the cap currently bites).
+- `.todo/137-jvm-local-slot-overflow.md` -- the sibling JVM codegen ceiling.

@@ -19,7 +19,8 @@ giving wasmtime errors like "type mismatch: expected i32, found (ref ...)").
 Now `WasmLispCompiler` raises a clear `UnsupportedOperationException` for any
 defun/lambda with > 7 parameters ("the WASM backend supports at most 7
 parameters ... bundle the extra arguments into a list"), and the limit is noted
-in the README. The interpreter and JVM backends have no such limit.
+in `doc/{en,ja}/compiling/wasm.md`. The interpreter and JVM backends have no
+such limit.
 
 ## Why not raised now
 
@@ -63,5 +64,5 @@ close to mechanical; it just buys nothing today.
 ## Workaround (idiomatic)
 
 Bundle related arguments into a list/plist, which keeps arities small and reads
-better than long positional lists. `examples/maze-rl.lisp` does this with its
+better than long positional lists. `examples/ml/maze-rl.lisp` does this with its
 `(alpha gamma epsilon max-steps)` hyper-parameter list.

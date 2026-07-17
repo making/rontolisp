@@ -47,7 +47,7 @@ RontoLisp has a solid base of sequence functions (`member`, `find`, `count`, `re
 - `mismatch` and `search` work on both strings and lists (rontoLisp sequences).
 - `merge` requires knowing the sequence type of the result and the test predicate.
 - `stable-sort` needs a stable sorting algorithm (TimSort or merge sort) instead of the current quicksort.
-- All the sequence functions already implemented accept `:test` and `:key` in some capacity (see `[[06-sequence-test-key-keywords]]` for the remaining gap there).
+- All the sequence functions already implemented accept `:test` and `:key` in some capacity (see `[[006-sequence-test-key-keywords]]` for the remaining gap there).
 
 ### Implementation approach
 
@@ -59,5 +59,5 @@ RontoLisp has a solid base of sequence functions (`member`, `find`, `count`, `re
 
 ### Related
 
-- `[[06-sequence-test-key-keywords]]` (:test/:key parity)
+- `[[006-sequence-test-key-keywords]]` (:test/:key parity)
 - `[[31-lambda-list-extensions]]` (these functions use `&key`)

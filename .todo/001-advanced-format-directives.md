@@ -31,6 +31,7 @@ set (`~a`/`~s`, `~d`, `~f`, `~e`, `~$`, `~%`, `~&`, `~~`, prefix parameters,
 - Runtime (`v`) pad characters (`~v,vd`), `~f` scale factor and overflowchar,
   `~e` exponent-digit count / overflowchar / exponentchar (scale factor fixed
   at 1).
+- `~<newline>` (line continuation), with its `:` / `@` variants.
 
 Implementation: `LispMacroExpander.FmtParser` (recursive descent) +
 `FmtArgs` (static temporaries at the top level, on-demand item temporaries
