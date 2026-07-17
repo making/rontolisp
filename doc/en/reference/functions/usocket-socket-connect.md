@@ -44,10 +44,13 @@ spliced into the compiled program (JVM / WASM component), and is also
 registered as the built-in ASDF system `"usocket"`, so
 `(asdf:load-system "usocket")`, `(ql:quickload :usocket)` and a third-party
 `.asd`'s `:depends-on ("usocket")` all resolve to it without touching the
-network. rontolisp has no condition system, so `usocket:socket-error` and the
-other condition types exist as data symbols only -- a connection failure
-signals an error (interpreter / JVM) or returns `nil` (WASM component), and
-`handler-case` over usocket conditions is not supported.
+network. On the interpreter and the JVM a connection failure signals a typed
+`usocket:socket-error` condition (message preserved), so
+`(handler-case (usocket:socket-connect ...) (usocket:socket-error (e) ...))`
+works there; the subtypes (`usocket:connection-refused-error` etc.) are
+defined, but the re-signal always uses `socket-error`, so catch that. On the
+WASM component backend a failed connection returns `nil` instead of signaling
+-- test the returned handle for `nil`.
 
 ## Backend support
 

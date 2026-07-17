@@ -25,8 +25,8 @@
 
 ;; --- request helpers --------------------------------------------------------
 
-;; t when the body looks like a JSON object (json-parse signals on garbage,
-;; and rontolisp has no condition handling to recover from that).
+;; t when the body looks like a JSON object (json-parse signals on garbage;
+;; the cheap guard answers 400 without wrapping the parse in handler-case).
 (defun json-object-p (body)
   (and (stringp body) (> (length body) 0) (eql (char body 0) #\{)))
 

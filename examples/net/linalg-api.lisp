@@ -49,8 +49,8 @@
   (json-response 405 (list :error "method not allowed" :allowed "POST")))
 
 ;; Parse the body as a JSON object into a keyword plist, or nil when the
-;; body is not a JSON object (rontolisp has no condition handling, so a
-;; malformed object body still signals an error instead of answering 400).
+;; body is not a JSON object (the cheap guard answers 400 without wrapping
+;; the parse in handler-case; a malformed OBJECT body still signals).
 (defun body-object (body)
   (if (and (stringp body) (> (length body) 0) (eql (char body 0) #\{))
       (rontolisp:json-parse body)

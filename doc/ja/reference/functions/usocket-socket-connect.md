@@ -43,11 +43,13 @@ connect、相手が読む前に write):
 組み込み ASDF システム `"usocket"` としても登録されているため、
 `(asdf:load-system "usocket")`、`(ql:quickload :usocket)`、サードパーティ
 `.asd` の `:depends-on ("usocket")` はいずれもネットワークに触れずに解決
-されます。rontolisp にはコンディションシステムがないため、
-`usocket:socket-error` などのコンディション型はデータシンボルとしてのみ
-存在します -- 接続失敗はエラーを通知し(インタープリタ / JVM)、または
-`nil` を返します(WASM コンポーネント)。usocket コンディションに対する
-`handler-case` は非対応です。
+されます。インタープリタと JVM では、接続失敗は型付きの
+`usocket:socket-error` コンディションを通知する(メッセージは保持される)ため、
+`(handler-case (usocket:socket-connect ...) (usocket:socket-error (e) ...))`
+がそのまま機能します。サブタイプ(`usocket:connection-refused-error` など)も
+定義されていますが、再通知は常に `socket-error` を使うので、捕捉はそちらで
+行ってください。WASM コンポーネントバックエンドでは接続失敗は通知ではなく
+`nil` を返します -- 返されたハンドルが `nil` かどうかを確認してください。
 
 ## バックエンドごとの対応
 
