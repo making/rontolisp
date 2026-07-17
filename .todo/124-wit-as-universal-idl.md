@@ -1,15 +1,16 @@
 # WIT as rontolisp's universal IDL (roadmap anchor)
 
 **Status:** ROADMAP COMPLETE 2026-07-14 (all four steps shipped); kept open as the
-anchor for the follow-on frontier (`.todo/133`-`136`, `.todo/132`) — see the roadmap
-table. **step 1 (`.todo/125`) DONE 2026-07-13** — `am.ik.wit` shipped,
+anchor for the follow-on frontier, of which only `.todo/132` remains open — see the
+roadmap table. **step 1 (`.todo/125`) DONE 2026-07-13** — `am.ik.wit` shipped,
 `WitEmitter` migrated onto it, the type mapping settled in `compiler/WitTypeMapper`
 and recorded in `.kb/wit.md` (todo file deleted on completion). **Step 2
 (`.todo/126`) DONE 2026-07-14** — `rontolisp:wit-export` (contract check + lowering
 into `wasm-export`, byte-identical components) and `--scaffold-wit`, recorded in
 `.kb/wit.md` (todo file deleted on completion). Raised 2026-07-13, immediately after
 `--wit` closed todos 92+93. Anchor todo: the design and the type mapping live here;
-the remaining executable steps are `.todo/127` and `.todo/128` (the import side).
+every executable step, the import side (`.todo/127`/`.todo/128`) included, has
+shipped and its todo file has been deleted.
 
 ## The idea
 
@@ -137,16 +138,20 @@ record. `.todo/52` (wasi:keyvalue) was the designated proof of step 4 and it lan
 (JVM) and **wasmtime's own `wasi:keyvalue` implementation** (component), with identical
 output.
 
-**What remains of this file is the "absorbed afterwards" list below — and it is now the
-actionable frontier**, with the blocker identified. Concretely:
+**What remains of this file is the "absorbed afterwards" list below.** All of the HTTP
+frontier has since shipped; only the WebGL adoption is still open:
 
 | | |
 |---|---|
 | ~~`.todo/133`~~ | **DONE 2026-07-14.** `variant`/`enum`/`result`/`record`/`tuple` as a component-import PARAMETER — everything a result lifts except `list<T>`. It unblocked 135 and 136 |
-| `.todo/134` | serve mode accepts user WIT imports (small; an HTTP server with a real store) |
-| `.todo/135` | serve's HTTP glue through WIT — the "http-handler becomes a world" bullet below |
-| `.todo/136` | `rontolisp:fetch` through WIT — deletes ~10.5 KB, the biggest hand-written blob |
+| ~~`.todo/134`~~ | **DONE 2026-07-14.** serve mode accepts user WIT imports (an HTTP server with a real store) |
+| ~~`.todo/136`~~ | **DONE 2026-07-15.** `rontolisp:fetch` through WIT — the hand-written http-client blob deleted |
+| ~~`.todo/135`~~ | **DONE 2026-07-15.** serve's HTTP glue through WIT — the "http-handler becomes a world" bullet below; it also collapsed serve+fetch, so no WAT HTTP adapter survives |
 | `.todo/132` | the WebGL demos adopt `local:webgl/gl.wit` — the gl.lisp bullet below |
+
+The three DONE todo files were deleted on completion; `.kb/wit.md` + `.kb/fetch-http.md`
+are the record. fetch and serve are now ONE Lisp library (`http.lisp`) over a wit-imported
+`wasi:http`, which is where 135 and 136 landed after the 0.2 -> 0.3 cutover (`.todo/02`).
 
 The blobs that CANNOT be externalized, so nobody re-proposes it: the **base adapter**
 (the core's Preview-1-identical `wasi_snapshot_preview1` import layout is what every

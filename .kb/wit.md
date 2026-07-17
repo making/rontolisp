@@ -894,8 +894,9 @@ key. That is the line the doc pages carry too.
 The v1 cut lowered params flat (scalar / bool / string / `list<u8>` / handle / `option` of
 those) while results lifted recursively. That asymmetry is gone: **a param now lowers
 everything a result lifts, except `list<T>` (T != u8)**. What made it worth doing is that
-`.todo/135` and `.todo/136` are blocked by exactly this — and the todo's own premise ("the
-blocking variants are all flat-payload") was WRONG, which is the thing to remember:
+serve's and fetch's move onto wit-imported `wasi:http` was blocked by exactly this — and the
+todo's own premise ("the blocking variants are all flat-payload") was WRONG, which is the
+thing to remember:
 
 - `wasi:http`'s `method` variant carries a **string** (`other(string)`), and
   `response-outparam.set` takes `result<outgoing-response, error-code>` whose `error-code`
@@ -903,7 +904,7 @@ blocking variants are all flat-payload") was WRONG, which is the thing to rememb
   payloads and the keystone unblocks nothing. So the line is drawn at `list<T>` instead:
   writing a canonical ARRAY into linear memory is a different mechanism (a memory `store`
   recursion mirroring `emitLiftAt`), and nothing in sight needs it. `fields.append`
-  (`list<u8>`) is the reason `.todo/136` still doesn't.
+  (`list<u8>`) is the reason the HTTP libraries never needed it either.
 
 ### The Lisp shape is the LIFT's shape, and the codegen is the mirror image
 
