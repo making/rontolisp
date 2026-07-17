@@ -156,10 +156,18 @@ are the record. fetch and serve are now ONE Lisp library (`http.lisp`) over a wi
 The blobs that CANNOT be externalized, so nobody re-proposes it: the **base adapter**
 (the core's Preview-1-identical `wasi_snapshot_preview1` import layout is what every
 `FUNC_*` constant rests on — and every program uses it), the **serve preview1 bridge**
-(the same thing in miniature), the **`--no-gc` print micro-adapter** (a different backend;
-`wit-import` is rejected there by design), and **`wasi:sockets`** (its 0.3 surface is
-fundamentally `stream`/`future`-based, which has no rontolisp value on ANY backend until
-language-level async — a wall, not a gap).
+(the same thing in miniature), and the **`--no-gc` print micro-adapter** (a different
+backend; `wit-import` is rejected there by design).
+
+**`wasi:sockets` was on that list, and is NOT any more (2026-07-17).** The stated wall —
+"its 0.3 surface is fundamentally `stream`/`future`-based, which has no rontolisp value on
+ANY backend until language-level async" — was real when written and has since been torn
+down: async/await landed, `stream`/`future` ARE first-class rontolisp values, and
+`stream<u8>`/`future<T>` already cross `canon lower` (that is what `http.lisp` rides).
+`.todo/141` now plans exactly the externalization this paragraph said was impossible — a
+`sockets.lisp` over a wit-imported `wasi:sockets/types@0.3.0`, deleting
+`adapter-sockets.wat`. The lesson worth keeping: a "wall" here meant a missing LANGUAGE
+feature, and the language moved.
 
 ## What gets absorbed afterwards (the follow-on prize, not a step)
 
