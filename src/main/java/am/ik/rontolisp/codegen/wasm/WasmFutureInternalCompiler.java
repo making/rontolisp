@@ -62,6 +62,15 @@ final class WasmFutureInternalCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SUBTASK_FUTURE);
 			}
+			case LispNames.FUTURE_FORCE_INTERNAL -> {
+				// The synchronous force: block on the module scheduler until the future
+				// settles, yield its value (a rejection re-signals through _poll, like
+				// await). The blocking driver of sockets.lisp's synchronous tcp surface.
+				expectArgs(member, args, 1);
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SCHED_LOOP);
+			}
 			case LispNames.WASI_STREAM_NEW_INTERNAL -> {
 				expectArgs(member, args, 2);
 				// TYPE_WASI_STREAM {eof = 0, readFn, closeFn}

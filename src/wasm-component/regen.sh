@@ -60,7 +60,6 @@ wasm-tools validate "$OUT/bridge-nogc-print.wasm"
 wasm-tools validate "$OUT/fixup-nogc-print.wasm"
 wasm-tools parse adapter.wat      -o "$OUT/adapter.wasm"
 wasm-tools parse mem-http-client.wat     -o "$OUT/mem-http-client.wasm"
-wasm-tools parse adapter-sockets.wat -o "$OUT/adapter-sockets.wasm"
 # The preview1 bridge is shared by plain serve AND serve+fetch: fetch is the fetch.lisp
 # library over wit-imported wasi:http/outgoing-handler now, so the core imports no `http`
 # function and needs no extended bridge or serve adapter.
@@ -68,7 +67,6 @@ wasm-tools parse adapter-http-server-p1.wat -o "$OUT/adapter-http-server-p1.wasm
 wasm-tools validate "$OUT/mem.wasm"
 wasm-tools validate "$OUT/adapter.wasm"
 wasm-tools validate "$OUT/mem-http-client.wasm"
-wasm-tools validate "$OUT/adapter-sockets.wasm"
 wasm-tools validate "$OUT/adapter-http-server-p1.wasm"
 
 echo "== unified import block (base) =="
@@ -77,13 +75,6 @@ wasm-tools component embed . core.wasm -o embedded.wasm --world uni
 wasm-tools component new embedded.wasm -o uni.wasm
 wasm-tools validate -f component-model -f cm-async uni.wasm
 slice_import_block uni.wasm "$OUT/import-block.bin"
-
-echo "== unified import block (sockets variant) =="
-wasm-tools parse core-sockets.wat -o core-sockets.wasm
-wasm-tools component embed . core-sockets.wasm -o embedded-sockets.wasm --world uni-sockets
-wasm-tools component new embedded-sockets.wasm -o uni-sockets.wasm
-wasm-tools validate -f component-model -f cm-async uni-sockets.wasm
-slice_import_block uni-sockets.wasm "$OUT/import-block-sockets.bin"
 
 echo "== unified import block (serve variant: rontolisp:http-handler) =="
 wasm-tools parse core-http-server.wat -o core-http-server.wasm
@@ -101,6 +92,5 @@ slice_import_block uni-nogc-print.wasm "$OUT/import-block-nogc-print.bin"
 
 rm -f core-nogc-print.wasm embedded-nogc-print.wasm uni-nogc-print.wasm \
       core.wasm embedded.wasm uni.wasm \
-      core-sockets.wasm embedded-sockets.wasm uni-sockets.wasm \
       core-http-server.wasm embedded-http-server.wasm uni-http-server.wasm
 echo "== done =="

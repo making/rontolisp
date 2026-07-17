@@ -30,7 +30,7 @@ context receives the address.
 ## Backend support
 
 - **Interpreter** and **JVM**: full support.
-- **WASM**: component mode only; `get-local-port` works, the address and peer
-  accessors return `nil` (not wired through the sockets adapter). Preview 1 is
-  a compile error.
+- **WASM**: component mode only; all six accessors return real addresses and
+  ports, like the interpreter/JVM (a failure returns `nil` instead of
+  signaling). Preview 1 is a compile error.
 - **Browser playground**: not supported.

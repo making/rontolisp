@@ -156,9 +156,12 @@ class WitExportInlinerTest {
 
 	@Test
 	void gcSocketsComponentIsByteIdenticalToTheHandWrittenExport() throws IOException {
-		// rontolisp:tcp-* selects the sockets blob variant (wasi:sockets@0.3.0).
+		// rontolisp:tcp-* rides the sockets.lisp user import (wasi:sockets@0.3.0);
+		// both programs get the identical splice, so the wit-export byte-identity
+		// property holds on a socket-importing component too.
 		assertByteIdentical("(defun listen () (rontolisp:tcp-listen 7777))\n",
-				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(program),
+				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(
+						WitLibrary.process(SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT))),
 				WitExportDirective.Backend.WASM_GC);
 	}
 

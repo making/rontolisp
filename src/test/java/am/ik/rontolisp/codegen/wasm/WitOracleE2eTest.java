@@ -72,13 +72,19 @@ class WitOracleE2eTest {
 	}
 
 	@Test
-	void socketVariantWitMatchesWasmToolsByteForByte() throws Exception {
-		// The sockets blob is a FIXED variant, so its emitted world is held
-		// byte-identical
-		// to wasm-tools (like every WasiWitDefinitions fixture).
+	void socketsWorldReParsesAndCarriesItsWasiSocketsImport() {
+		// The rontolisp:tcp-* built-ins are the sockets.lisp library over a
+		// canon-lowered wasi:sockets USER import now (the dedicated sockets blob
+		// variant is gone), so like fetch its world is emitted by the user-import
+		// emitter and checked structurally + by re-parsing rather than byte-for-byte
+		// against wasm-tools (see the fetch test's rationale).
 		WasmLispCompiler sock = new WasmLispCompiler(false, true);
-		byte[] sockComponent = sock.compile(LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"));
-		assertThat(sock.componentWit()).isEqualTo(oracle(sockComponent));
+		sock.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.SocketsLibrary.process(
+				LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"),
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT)));
+		String wit = Objects.requireNonNull(sock.componentWit());
+		assertThat(wit).contains("import wasi:sockets/types@0.3.0;");
+		assertThat(am.ik.wit.WitParser.parse(wit)).isNotNull();
 	}
 
 	@Test

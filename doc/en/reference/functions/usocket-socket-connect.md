@@ -6,8 +6,8 @@ Opens a blocking TCP connection to `host` and `port` and returns a socket --
 the [usocket](https://github.com/usocket/usocket)-compatible entry point over
 [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md). In this shim a socket IS
 its stream handle, so `usocket:socket-stream` is the identity function and the
-stream built-ins (`read-line`, `write-line`, `read-byte`, `write-byte`,
-`close`) work on it directly.
+stream built-ins (`read-line`, `write-line`, `write-string`, `read-byte`,
+`write-byte`, `close`) work on it directly.
 
 Only TCP is supported: `:protocol :datagram` (UDP) signals an error. The other
 keyword arguments are accepted for compatibility and ignored --

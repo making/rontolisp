@@ -6,8 +6,8 @@
 ([`rontolisp:tcp-listen`](rontolisp-tcp-listen.md) のリスナーハンドルに対して)、
 受け付けた接続の**双方向ストリームハンドル**を返します —
 [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) が返すものと同じ種類の
-ハンドルで、`read-line`、`write-line`、`read-byte`、`write-byte`、`close` が
-使えます。
+ハンドルで、`read-line`、`write-line`、`write-string`、`read-byte`、
+`write-byte`、`close` が使えます。
 
 以下の例は自己完結しています: クライアントが accept より*前に*接続するため、
 接続は listen バックログで待機し、シングルスレッドのプログラムでも長時間
@@ -32,7 +32,9 @@
   閉じたリスナーでの accept はエラーを通知します。
 - **WASM**: コンポーネント専用。accept は `wasi:sockets@0.3.0` の accept
   ストリームから `tcp-socket` ハンドルを 1 つ読み出す協調ブロッキング読み取り
-  です。accept に失敗すると `nil` を返します。Preview 1(コアモジュール)
+  です。async 本体では、保留中の accept はそのタスクだけをサスペンドするため、
+  他のタスク(`rontolisp:wait-for` タイマーや別のリクエスト)は動き続けます。
+  accept に失敗すると `nil` を返します。Preview 1(コアモジュール)
   モードではコンパイルエラーです。
 - **ブラウザプレイグラウンド**: 非対応。
 

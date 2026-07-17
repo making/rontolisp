@@ -239,8 +239,37 @@ final class WasmExprCompiler {
 						|| LispNames.FUTURE_SETTLE_INTERNAL.equals(qn.member())
 						|| LispNames.FUTURE_REJECT_INTERNAL.equals(qn.member())
 						|| LispNames.SUBTASK_FUTURE_INTERNAL.equals(qn.member())
-						|| LispNames.WASI_STREAM_NEW_INTERNAL.equals(qn.member())) {
+						|| LispNames.WASI_STREAM_NEW_INTERNAL.equals(qn.member())
+						|| LispNames.FUTURE_FORCE_INTERNAL.equals(qn.member())) {
 					WasmFutureInternalCompiler.compile(qn.member(), cons, ctx);
+					return;
+				}
+				if (LispNames.READ_LINE_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.READ_CHAR_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.READ_BYTE_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.WRITE_LINE_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.WRITE_BYTE_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.WRITE_STRING_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.CLOSE_RAW_INTERNAL.equals(qn.member())) {
+					// The NATIVE stream built-ins under their internal alias names: the
+					// %io-* socket-dispatch defuns sockets.lisp splices fall back through
+					// these, so the compile-time socket rewrite of the public names
+					// cannot
+					// recurse (component-only; the names exist only post-splice).
+					if (!ctx.component) {
+						throw new UnsupportedOperationException(
+								"rontolisp::" + qn.member() + " is an internal --component binding");
+					}
+					switch (qn.member()) {
+						case LispNames.READ_LINE_RAW_INTERNAL -> WasmReadLineCompiler.compile(cons, ctx);
+						case LispNames.READ_CHAR_RAW_INTERNAL -> WasmReadCharCompiler.compile(cons, ctx);
+						case LispNames.READ_BYTE_RAW_INTERNAL -> WasmReadByteCompiler.compile(cons, ctx);
+						case LispNames.WRITE_LINE_RAW_INTERNAL -> WasmWriteLineCompiler.compile(cons, ctx);
+						case LispNames.WRITE_BYTE_RAW_INTERNAL -> WasmWriteByteCompiler.compile(cons, ctx);
+						case LispNames.WRITE_STRING_RAW_INTERNAL ->
+							WasmWriteStringCompiler.compileWriteString(cons, ctx);
+						default -> WasmCloseCompiler.compile(cons, ctx);
+					}
 					return;
 				}
 				if (LispNames.WAIT_FOR.equals(qn.member()) && !ctx.component) {
@@ -271,13 +300,20 @@ final class WasmExprCompiler {
 									+ " (guest-created streams are not available on the WASM backends yet; a"
 									+ " --component program's streams come from fetch / http-handler bodies)");
 				}
-				if (LispNames.TCP_CONNECT.equals(qn.member()) || LispNames.TCP_LISTEN.equals(qn.member())
+				if ((LispNames.TCP_CONNECT.equals(qn.member()) || LispNames.TCP_LISTEN.equals(qn.member())
 						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())
 						|| LispNames.TCP_LOCAL_ADDRESS.equals(qn.member())
 						|| LispNames.TCP_PEER_ADDRESS.equals(qn.member())
-						|| LispNames.TCP_PEER_PORT.equals(qn.member())) {
-					WasmTcpCompiler.compile(qn.member(), cons, ctx);
-					return;
+						|| LispNames.TCP_PEER_PORT.equals(qn.member())) && !ctx.component) {
+					// Under --component the tcp built-ins are the spliced sockets.lisp
+					// defuns (over the wit-imported wasi:sockets@0.3.0) -- the symbol
+					// falls
+					// through to the ordinary call path, which resolves the defun (the
+					// wait-for pattern). Preview 1 keeps the compile error (no host
+					// sockets).
+					throw new UnsupportedOperationException(
+							"rontolisp:" + qn.member() + " requires the interpreter, the JVM backend or --component"
+									+ " (no host socket API is wired on Preview 1 WASM)");
 				}
 				if (LispNames.WITH_ARENA.equals(qn.member())) {
 					// A reclamation boundary for --no-gc; the wasm-GC heap is

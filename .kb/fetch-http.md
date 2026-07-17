@@ -198,9 +198,9 @@ here.
   `CABI_HP_CELL_ADDR` = 0x10000 linear cell, base 0x10008) is reset at the top of
   the serve `handle` wrapper for hosts that reuse one instance across requests
   (wasmtime serve re-instantiates per request, so it never sees the growth).
-  serve + `rontolisp:tcp-*` is still a compile error (no serve blob variant with
-  wasi:sockets); Preview-1 WASM output is a compile error ("requires
-  --component"). Hosts: wasmtime 46+; wasmCloud
+  serve + `rontolisp:tcp-*` COMPILES now (sockets.lisp is one more user WIT
+  import beside the fixed wasi:http surface, `.kb/tcp-sockets.md`); Preview-1
+  WASM output is a compile error ("requires --component"). Hosts: wasmtime 46+; wasmCloud
   hosts it (released wash 2.5.2, `wash dev` with `dev.wasm_proposals:
   [gc, exception-handling, component-model-async]` -- verified 2026-07-16 on
   examples/wasmcloud/http-handler); jco cannot run the 0.3 async ABI; Spin has

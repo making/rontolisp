@@ -86,27 +86,6 @@ public final class WasmComponentBuilder {
 	 */
 	private static final byte[] ADAPTER_MODULE = resource("adapter.wasm");
 
-	/**
-	 * The sockets variant of the import block: the base WASI 0.3 interfaces PLUS
-	 * {@code wasi:sockets/types@0.3.0} (instance 10) for the {@code rontolisp:tcp-*}
-	 * built-ins, then {@code wasi:cli/stderr@0.3.0} appended last (instance 11, for
-	 * {@code warn} on fd&nbsp;2). Unlike fetch, sockets exist natively in WASI 0.3 so the
-	 * variant stays pure 0.3. It declares component import instances 0-11 and component
-	 * types 0-16, so the next free component type index is 17. Source:
-	 * {@code src/wasm-component/uni-sockets.wit} + {@code core-sockets.wat}.
-	 */
-	private static final byte[] IMPORT_BLOCK_SOCKETS = resource("import-block-sockets.bin");
-
-	/**
-	 * The sockets variant of the adapter: like {@link #ADAPTER_MODULE} but with extra
-	 * {@code tcp-connect} / {@code tcp-listen} / {@code tcp-accept} /
-	 * {@code tcp-local-port} exports and fd&nbsp;&gt;=&nbsp;200 socket branches in
-	 * {@code fd_write}/{@code fd_read}/{@code fd_close}, over {@code wasi:sockets@0.3.0}.
-	 * It shares {@link #MEM_MODULE} (the socket table and scratch fit in page 5). Source:
-	 * {@code src/wasm-component/adapter-sockets.wat}.
-	 */
-	private static final byte[] ADAPTER_MODULE_SOCKETS = resource("adapter-sockets.wasm");
-
 	// Component import-instance indices (from import-block.bin; see IMPORT_BLOCK).
 	// wasi:clocks/types (instance 4) is dependency-hoisted by wait-for's `use
 	// types.{duration}`, shifting everything after wasi:cli/environment by one.
@@ -293,17 +272,7 @@ public final class WasmComponentBuilder {
 	 * @return the WASI 0.3 component binary
 	 */
 	public static byte[] build(byte[] coreModule) {
-		return build(coreModule, false);
-	}
-
-	/**
-	 * Assemble a runnable WASI 0.3 component around the given rontolisp core module.
-	 * @param coreModule the rontolisp core module compiled in component mode
-	 * @param usesSockets whether the program uses a {@code rontolisp:tcp-*} built-in
-	 * @return the WASI 0.3 component binary
-	 */
-	public static byte[] build(byte[] coreModule, boolean usesSockets) {
-		return build(coreModule, usesSockets, List.of());
+		return build(coreModule, List.of());
 	}
 
 	/**
@@ -313,13 +282,12 @@ public final class WasmComponentBuilder {
 	 * stackful-async {@code wasi:cli/run} export; {@code :string}/{@code :s-expr}
 	 * boundaries lift through the canonical string ABI).
 	 * @param coreModule the rontolisp core module compiled in component mode
-	 * @param usesSockets whether the program uses a {@code rontolisp:tcp-*} built-in
 	 * @param funcExports the parsed function export directives (empty for none; an empty
-	 * list yields output byte-identical to {@link #build(byte[], boolean)})
+	 * list yields output byte-identical to {@link #build(byte[])})
 	 * @return the WASI 0.3 component binary
 	 */
-	public static byte[] build(byte[] coreModule, boolean usesSockets, List<WasmExportCompiler.Decl> funcExports) {
-		return build(coreModule, usesSockets, funcExports, List.of());
+	public static byte[] build(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports) {
+		return build(coreModule, funcExports, List.of());
 	}
 
 	/**
@@ -329,19 +297,19 @@ public final class WasmComponentBuilder {
 	 * import whose functions are {@code canon lower}ed into a synthesized core instance
 	 * that satisfies the core module's matching imports at instantiation. An empty import
 	 * list emits nothing and shifts nothing, so an import-free component stays
-	 * byte-identical.
+	 * byte-identical. A {@code rontolisp:tcp-*} program is just this path with
+	 * sockets.lisp's own {@code wasi:sockets/types@0.3.0} import in the list (the
+	 * dedicated sockets blob variant and its hand-written adapter are gone).
 	 * @param coreModule the rontolisp core module compiled in component mode
-	 * @param usesSockets whether the program uses a {@code rontolisp:tcp-*} built-in
 	 * @param funcExports the parsed function export directives (empty for none)
 	 * @param imports the user WIT interface imports (empty for none)
 	 * @return the WASI 0.3 component binary
 	 */
-	static byte[] build(byte[] coreModule, boolean usesSockets, List<WasmExportCompiler.Decl> funcExports,
+	static byte[] build(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
 			List<WasmComponentImportCompiler.Import> imports) {
 		// rontolisp:fetch off serve is the http.lisp library over canon-lowered
 		// wasi:http@0.3 user imports (the base variant); a serving program goes through
 		// buildServe instead.
-		String variant = usesSockets ? WitEmitter.VARIANT_SOCKETS : WitEmitter.VARIANT_BASE;
 		// An import of an interface the block itself declares (wait.lisp's
 		// wasi:clocks/monotonic-clock) is bound FROM the block, never re-imported.
 		final List<WasmComponentImportCompiler.Import> fixed = new java.util.ArrayList<>();
@@ -350,9 +318,25 @@ public final class WasmComponentBuilder {
 			(FIXED_BLOCK_IFACES.containsKey(imported.ifaceId()) ? fixed : user).add(imported);
 		}
 		validateFixedMembers(fixed);
-		rejectAdapterImportCollisions(user, variant);
-		return usesSockets ? buildSock(coreModule, funcExports, fixed, user)
-				: buildBase(coreModule, funcExports, fixed, user);
+		rejectAdapterImportCollisions(user, WitEmitter.VARIANT_BASE);
+		rejectDuplicateUserImports(user);
+		return buildBase(coreModule, funcExports, fixed, user);
+	}
+
+	// Two user imports of ONE interface id (a program's own wit-import of
+	// wasi:sockets/types beside the tcp built-ins' sockets.lisp import) would emit the
+	// same instance import name twice -- invalid, and nothing downstream says so in
+	// words.
+	private static void rejectDuplicateUserImports(List<WasmComponentImportCompiler.Import> imports) {
+		final java.util.Set<String> seen = new java.util.HashSet<>();
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			if (!seen.add(imported.ifaceId())) {
+				throw new UnsupportedOperationException("rontolisp:wit-import binds '" + imported.ifaceId()
+						+ "' twice: a component cannot import the same interface twice. The rontolisp:tcp-* built-ins "
+						+ "bind wasi:sockets/types@0.3.0 themselves, so either drop the built-ins and drive the "
+						+ "interface through your own binding, or drop the duplicate directive");
+			}
+		}
 	}
 
 	/**
@@ -423,10 +407,8 @@ public final class WasmComponentBuilder {
 			if (wasiSurface.contains(imported.ifaceId())) {
 				throw new UnsupportedOperationException("rontolisp:wit-import cannot bind '" + imported.ifaceId()
 						+ "': this component already imports that interface as part of its own WASI surface, and a "
-						+ "component cannot import the same interface twice. The surface grows with what the program "
-						+ "uses -- rontolisp:fetch adds the wasi:http and wasi:io interfaces, the rontolisp:tcp-* "
-						+ "built-ins add wasi:sockets/types -- so either drop the built-in and drive the interface "
-						+ "through the WIT binding, or bind a different interface");
+						+ "component cannot import the same interface twice. Either drop the built-in that carries it "
+						+ "and drive the interface through the WIT binding, or bind a different interface");
 			}
 		}
 	}
@@ -1191,248 +1173,6 @@ public final class WasmComponentBuilder {
 			.of(ComponentWriter.componentInstanceFromFunc("run", io.nextComponentFunc() + user.componentFuncs()))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 11 + userIfaces))));
-		// Scalar wasm-export functions: next free indices after the run wiring, each
-		// shifted by the fixed and user-import counts.
-		appendFuncExports(c, funcExports, io.nextCoreFunc() + user.coreFuncs() + 1, io.nextType() + user.types(),
-				io.nextComponentFunc() + user.componentFuncs() + 1, rontolisp);
-		return c.toByteArray();
-	}
-
-	// Sockets-variant component import-instance indices (from import-block-sockets.bin).
-	// The base WASI 0.3 instances 0-9 keep the same order as buildBase (including the
-	// dependency-hoisted wasi:clocks/types at 4); wasi:sockets/types is appended at 10
-	// and wasi:cli/stderr (for warn) last at 11.
-	private static final int S_INST_SOCKETS = 10;
-
-	private static final int S_INST_STDERR = 11;
-
-	// First free component type index after import-block-sockets.bin (types 0-16 used;
-	// the appended stderr interface adds two: an aliased cli error-code + the stderr
-	// instance type). Aliased resource/enum types (component types 17-21).
-	private static final int S_T_CLI_ERRCODE = 17;
-
-	private static final int S_T_FS_ERRCODE = 18;
-
-	private static final int S_T_DESCRIPTOR = 19;
-
-	private static final int S_T_SOCK_ERRCODE = 20;
-
-	private static final int S_T_TCP_SOCKET = 21;
-
-	// Defined async value/function types (component types 22-32).
-	private static final int S_T_STREAM = 22;
-
-	private static final int S_T_CLI_RESULT = 23;
-
-	private static final int S_T_CLI_FUTURE = 24;
-
-	private static final int S_T_FS_RESULT = 25;
-
-	private static final int S_T_FS_FUTURE = 26;
-
-	private static final int S_T_RUN_RESULT = 27;
-
-	private static final int S_T_RUN_FUNC = 28;
-
-	private static final int S_T_OWN_TCP = 29;
-
-	private static final int S_T_ACCEPT_STREAM = 30;
-
-	private static final int S_T_SOCK_RESULT = 31;
-
-	private static final int S_T_SOCK_FUTURE = 32;
-
-	/**
-	 * Assemble the sockets-variant component for a {@code rontolisp:tcp-*} program. It is
-	 * the base WASI 0.3 component plus {@code wasi:sockets/types@0.3.0} (import instance
-	 * 9): the tcp-socket send/receive plumbing flows through the same built-in
-	 * {@code stream<u8>} machinery as the base I/O, plus a {@code stream<own tcp-socket>}
-	 * accept stream (its own element-typed {@code stream.read}/{@code drop-readable}
-	 * built-ins) and a sockets-error-code {@code future} drop built-in. Run with
-	 * {@code -S tcp=y -S inherit-network=y} on top of the async flags.
-	 *
-	 * <p>
-	 * All wiring constants (instance indices 9/10, the next-free type index 15, the 18
-	 * lowered functions and their canonical options) were derived from {@code wasm-tools
-	 * dump} of a reference generated by {@code regen.sh} from {@code uni-sockets.wit} +
-	 * {@code core-sockets.wat}.
-	 * @param coreModule the rontolisp core module compiled in component mode
-	 * @param funcExports the {@code wasm-export} directives to lift and export
-	 * @return the WASI 0.3 component binary
-	 */
-	private static byte[] buildSock(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
-			List<WasmComponentImportCompiler.Import> fixed, List<WasmComponentImportCompiler.Import> imports) {
-		final int userIfaces = imports.size();
-		final ComponentWriter c = new ComponentWriter();
-		// Base WASI 0.3 + wasi:sockets import instances 0-11, component types 0-16.
-		c.writeRaw(IMPORT_BLOCK_SOCKETS);
-		// Core modules: 0 = shared memory (base 6-page module), 1 = sockets adapter,
-		// 2 = rontolisp.
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, MEM_MODULE);
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_MODULE_SOCKETS);
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
-		// Instantiate the shared memory module (core instance 0).
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(0, List.of(), List.of()))));
-		// Alias the shared memory (core memory 0) and cabi_realloc (core func 0).
-		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
-			.of(ComponentWriter.aliasCoreMemory(0, "memory"), ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
-		// Alias the resource/enum types (component types 15-19) and the WASI functions
-		// (component funcs 0-17), all in one alias section.
-		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(
-				// types 15 cli error-code, 16 fs error-code, 17 descriptor,
-				// 18 sockets error-code, 19 tcp-socket
-				ComponentWriter.aliasInstanceType(INST_CLI_TYPES, "error-code"),
-				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "error-code"),
-				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "descriptor"),
-				ComponentWriter.aliasInstanceType(S_INST_SOCKETS, "error-code"),
-				ComponentWriter.aliasInstanceType(S_INST_SOCKETS, "tcp-socket"),
-				// funcs 0-9: the base WASI functions (same set/order as buildBase)
-				ComponentWriter.aliasInstanceFunc(INST_STDOUT, "write-via-stream"),
-				ComponentWriter.aliasInstanceFunc(INST_STDIN, "read-via-stream"),
-				ComponentWriter.aliasInstanceFunc(INST_ENVIRON, "get-environment"),
-				ComponentWriter.aliasInstanceFunc(INST_SYS_CLOCK, "now"),
-				ComponentWriter.aliasInstanceFunc(INST_MONO_CLOCK, "now"),
-				ComponentWriter.aliasInstanceFunc(INST_FS_TYPES, "[method]descriptor.read-via-stream"),
-				ComponentWriter.aliasInstanceFunc(INST_FS_TYPES, "[method]descriptor.append-via-stream"),
-				ComponentWriter.aliasInstanceFunc(INST_FS_TYPES, "[method]descriptor.open-at"),
-				ComponentWriter.aliasInstanceFunc(INST_FS_PREOPENS, "get-directories"),
-				ComponentWriter.aliasInstanceFunc(INST_RANDOM, "get-random-u64"),
-				// funcs 10-16: the tcp-socket functions
-				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[static]tcp-socket.create"),
-				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[method]tcp-socket.bind"),
-				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[method]tcp-socket.connect"),
-				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[method]tcp-socket.listen"),
-				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[method]tcp-socket.send"),
-				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[method]tcp-socket.receive"),
-				ComponentWriter.aliasInstanceFunc(S_INST_SOCKETS, "[method]tcp-socket.get-local-address"),
-				// func 17: stderr write-via-stream (appended last, for warn on fd 2)
-				ComponentWriter.aliasInstanceFunc(S_INST_STDERR, "write-via-stream"))));
-		// Define the async value/function types (component types 20-30).
-		c.rawSection(ComponentWriter.SEC_TYPE,
-				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8), // 20
-						ComponentWriter.definedResultErr(S_T_CLI_ERRCODE), // 21
-						ComponentWriter.definedFuture(S_T_CLI_RESULT), // 22
-						ComponentWriter.definedResultErr(S_T_FS_ERRCODE), // 23
-						ComponentWriter.definedFuture(S_T_FS_RESULT), // 24
-						ComponentWriter.definedResultVoid(), // 25
-						ComponentWriter.asyncFuncTypeResultType(S_T_RUN_RESULT), // 26
-						ComponentWriter.definedOwn(S_T_TCP_SOCKET), // 27
-						ComponentWriter.definedStreamOfType(S_T_OWN_TCP), // 28 accept
-																			// stream
-						ComponentWriter.definedResultErr(S_T_SOCK_ERRCODE), // 29
-						ComponentWriter.definedFuture(S_T_SOCK_RESULT)))); // 30
-		// Lower the base WASI funcs (core funcs 1-10) + descriptor drop (11) + the shared
-		// stream/future built-ins (12-20) exactly as buildBase, then the sockets funcs
-		// (21-27), the tcp-socket resource drop (28), the sockets built-ins (29-31) and
-		// finally stderr write-via-stream (component func 17 -> core func 32).
-		// Canonical options mirror wasm-tools' choices for each function.
-		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLower(0), // 1
-				ComponentWriter.canonLowerMemory(1, 0), // 2 read-via-stream (stdin)
-				ComponentWriter.canonLowerMemoryReallocUtf8(2, 0, 0), // 3 get-environment
-				ComponentWriter.canonLowerMemory(3, 0), // 4 system-clock.now
-				ComponentWriter.canonLower(4), // 5 monotonic.now
-				ComponentWriter.canonLowerMemory(5, 0), // 6 descriptor.read-via-stream
-				ComponentWriter.canonLower(6), // 7 descriptor.append-via-stream
-				ComponentWriter.canonLowerMemoryReallocUtf8(7, 0, 0), // 8 open-at
-				ComponentWriter.canonLowerMemoryReallocUtf8(8, 0, 0), // 9 get-directories
-				ComponentWriter.canonLower(9), // 10 get-random-u64
-				ComponentWriter.canonResourceDrop(S_T_DESCRIPTOR), // 11 drop descriptor
-				ComponentWriter.canonStreamNew(S_T_STREAM), // 12
-				// async (non-blocking) variants; BLOCKED completes through the
-				// waitable-set trio appended below (see buildBase)
-				ComponentWriter.canonStreamReadAsync(S_T_STREAM, 0), // 13
-				ComponentWriter.canonStreamWriteAsync(S_T_STREAM, 0), // 14
-				ComponentWriter.canonStreamDropReadable(S_T_STREAM), // 15
-				ComponentWriter.canonStreamDropWritable(S_T_STREAM), // 16
-				ComponentWriter.canonFutureReadAsync(S_T_CLI_FUTURE, 0), // 17
-																			// future-read-cli
-				ComponentWriter.canonFutureDropReadable(S_T_CLI_FUTURE), // 18
-				ComponentWriter.canonFutureReadAsync(S_T_FS_FUTURE, 0, 0), // 19
-																			// future-read-fs
-				ComponentWriter.canonFutureDropReadable(S_T_FS_FUTURE), // 20
-				// sockets lowered 21-27: the ip-socket-address / error-code carry
-				// strings,
-				// so everything except send (plain handles) and receive (memory only)
-				// lowers with memory + realloc + utf8, matching the reference dump.
-				ComponentWriter.canonLowerMemoryReallocUtf8(10, 0, 0), // 21 tcp-create
-				ComponentWriter.canonLowerMemoryReallocUtf8(11, 0, 0), // 22 tcp-bind
-				ComponentWriter.canonLowerMemoryReallocUtf8(12, 0, 0), // 23
-																		// tcp-connect-raw
-				ComponentWriter.canonLowerMemoryReallocUtf8(13, 0, 0), // 24
-																		// tcp-listen-raw
-				ComponentWriter.canonLower(14), // 25 tcp-send
-				ComponentWriter.canonLowerMemory(15, 0), // 26 tcp-receive
-				ComponentWriter.canonLowerMemoryReallocUtf8(16, 0, 0), // 27
-																		// tcp-local-addr
-				ComponentWriter.canonResourceDrop(S_T_TCP_SOCKET), // 28 drop-tcp
-				ComponentWriter.canonStreamReadAsync(S_T_ACCEPT_STREAM, 0), // 29
-																			// accept-read
-				ComponentWriter.canonStreamDropReadable(S_T_ACCEPT_STREAM), // 30
-				ComponentWriter.canonFutureDropReadable(S_T_SOCK_FUTURE), // 31
-				ComponentWriter.canonLower(17), // 32 stderr write-via-stream
-				ComponentWriter.canonWaitableSetNew(), // 33
-				ComponentWriter.canonWaitableJoin(), // 34
-				ComponentWriter.canonWaitableSetWait(0)))); // 35
-		// Group the 35 lowered/built-in core funcs (1-35) for the adapter's "w" import
-		// (core instance 1). Names match adapter-sockets.wat's imports.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
-						List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",
-								"file-append", "open-at", "get-directories", "get-random-u64", "drop-desc",
-								"stream-new", "stream-read", "stream-write", "stream-drop-r", "stream-drop-w",
-								"future-read-cli", "future-drop-cli", "future-read-fs", "future-drop-fs", "tcp-create",
-								"tcp-bind", "tcp-connect-raw", "tcp-listen-raw", "tcp-send", "tcp-receive",
-								"tcp-local-addr", "drop-tcp", "accept-read", "accept-drop-r", "future-drop-sock",
-								"stderr-write", "waitable-set-new", "waitable-join", "waitable-set-wait"),
-						List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-								25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35)))));
-		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
-			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
-		// Block-declared interfaces the program binds (wait.lisp's monotonic-clock):
-		// lowered FROM the block's own import instances. Emits nothing when there are
-		// none.
-		final FixedIo io = lowerFixedFromBlock(c, fixed,
-				java.util.Map.of("wasi:clocks/monotonic-clock@0.3.0", INST_MONO_CLOCK), new java.util.LinkedHashMap<>(),
-				18, 36, S_T_SOCK_FUTURE + 1, 3);
-		// User WIT-interface imports (rontolisp:wit-import): instance types, import
-		// instances (from 12, right after the block's 0-11), function aliases and
-		// lowered core funcs continue after the fixed surface. Emits nothing when there
-		// are none.
-		final Appended user = appendUserImports(c, imports, io.nextType(), 12, io.nextComponentFunc(),
-				io.nextCoreFunc());
-		// Instantiate rontolisp (core instance 3 + one per fixed/user interface): mem =
-		// instance 0, and both wasi_snapshot_preview1 AND sock satisfied by the adapter
-		// instance 2 (which exports the eight preview1 functions plus tcp-connect /
-		// tcp-listen / tcp-accept / tcp-local-port), plus each fixed interface's
-		// block-lowered core instance and each user interface's canon-lowered core
-		// instance.
-		final List<String> coreNames = new java.util.ArrayList<>(List.of("mem", "wasi_snapshot_preview1", "sock"));
-		final List<Integer> coreInstances = new java.util.ArrayList<>(List.of(0, 2, 2));
-		io.coreInstanceOf().forEach((ifaceId, instance) -> {
-			coreNames.add(ifaceId);
-			coreInstances.add(instance);
-		});
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
-			.vec(List.of(rontolispInstantiate(2, coreNames, coreInstances, imports, io.nextCoreInstance()))));
-		final int rontolisp = io.nextCoreInstance() + userIfaces;
-		// Alias rontolisp's run (core func 36 = cabi_realloc + 35 lowered/built-in
-		// funcs, + the fixed and user-import lowers).
-		c.rawSection(ComponentWriter.SEC_ALIAS,
-				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp, "run"))));
-		// Lift run into component func 18 (+ the fixed/user-import aliases) with the
-		// async function type 28 (an async-typed sync-ABI lift: the task may block, no
-		// gated feature involved). Component func 18 follows the 18 aliased WASI funcs
-		// (0-17).
-		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter
-			.vec(List.of(ComponentWriter.canonLift(io.nextCoreFunc() + user.coreFuncs(), S_T_RUN_FUNC))));
-		// Component instance 12 (after import instances 0-11 + the user imports)
-		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
-		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(List
-			.of(ComponentWriter.componentInstanceFromFunc("run", io.nextComponentFunc() + user.componentFuncs()))));
-		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 12 + userIfaces))));
 		// Scalar wasm-export functions: next free indices after the run wiring, each
 		// shifted by the fixed and user-import counts.
 		appendFuncExports(c, funcExports, io.nextCoreFunc() + user.coreFuncs() + 1, io.nextType() + user.types(),

@@ -477,7 +477,7 @@ public final class WitImportDirective {
 					// calls the built-ins must keep compiling everywhere.
 					continue;
 				}
-				validateAsyncAlias(target, witPath, locations, resolver, alias, member);
+				validateAsyncAlias(target, witPath, locations, resolver, alias, member, op);
 				boundMembers.add(member);
 				String name = directive.pkg() == null ? member : PackageRegistry.qualify(directive.pkg(), member);
 				componentMembers.add(asyncBinding(alias.name(), op, name));
@@ -616,16 +616,28 @@ public final class WitImportDirective {
 
 	// The element/payload contract of a bound async alias: a stream must be a byte
 	// stream (stream<u8> is what the canonical built-ins read/write through linear
-	// memory); a future must be parameterized, and its payload must be a liftable value
-	// (future.read lifts it with the same machinery as a function result).
+	// memory) -- EXCEPT a stream of resource handles (wasi:sockets' accept
+	// stream<tcp-socket>), whose 4-byte elements the read built-in lifts as opaque
+	// integer handles; such a stream is read-only for the guest, so only read /
+	// drop-readable bind. A future must be parameterized, and its payload must be a
+	// liftable value (future.read lifts it with the same machinery as a function
+	// result).
 	private static void validateAsyncAlias(Scoped target, String witPath, WitLocations locations, WitResolver resolver,
-			WitItem.TypeAlias alias, String member) {
+			WitItem.TypeAlias alias, String member, String op) {
 		if (target.type() instanceof WitType.StreamOf stream) {
 			WitType element = stream.element();
+			if (element != null && isResourceHandle(element, resolver, target.iface())) {
+				if (!"read".equals(op) && !"drop-readable".equals(op)) {
+					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(alias) + ": '" + member
+							+ "': the alias '" + alias.name() + "' names a stream of resource handles, which is "
+							+ "read-only for the guest -- only the -read and -drop-readable built-ins bind");
+				}
+				return;
+			}
 			if (element == null || !isU8(element, resolver, target.iface())) {
 				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(alias) + ": '" + member
 						+ "': the alias '" + alias.name() + "' names a stream whose element is not u8; only stream<u8> "
-						+ "(a byte stream) has async built-ins");
+						+ "(a byte stream) and a stream of resource handles have async built-ins");
 			}
 			return;
 		}
@@ -847,21 +859,33 @@ public final class WitImportDirective {
 		return resolveAliases(type, resolver, iface).type() instanceof WitType.Prim prim && "u8".equals(prim.name());
 	}
 
+	// Whether the type is (an own of, or a bare reference to) a resource -- the element
+	// shape of a handle stream like wasi:sockets' stream<tcp-socket>.
+	private static boolean isResourceHandle(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		if (scoped.type() instanceof WitType.OwnOf) {
+			return true;
+		}
+		return scoped.type() instanceof WitType.Named named
+				&& resolver.resolveType(scoped.iface(), named.name()) instanceof WitItem.ResourceDef;
+	}
+
 	// The --component acceptance policy for a stream/future value type: the handle itself
 	// crosses as a bare i32 (the canonical ABI's async built-ins read/write it), but the
 	// element governs that marshalling, so an unmarshalable element is rejected here as a
 	// friendly compile error rather than surfacing later as a codegen throw. A stream
-	// must
-	// be a byte stream (stream<u8>); a future must be parameterized so its payload can be
-	// read out (future.read), and that payload is validated as a produced value.
+	// must be a byte stream (stream<u8>) or a stream of resource handles (wasi:sockets'
+	// accept stream<tcp-socket>, read through a handle-element alias built-in); a future
+	// must be parameterized so its payload can be read out (future.read), and that
+	// payload is validated as a produced value.
 	private static void validateAsyncElement(WitType t, String witPath, WitLocations locations, WitResolver resolver,
 			WitItem.InterfaceDef in, WitItem anchor, String member, String what) {
 		if (t instanceof WitType.StreamOf stream) {
 			WitType elem = stream.element();
-			if (elem == null || !isU8(elem, resolver, in)) {
+			if (elem == null || (!isU8(elem, resolver, in) && !isResourceHandle(elem, resolver, in))) {
 				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '" + member
 						+ "': the WIT type of " + what + " is a stream whose element is not u8; only stream<u8> "
-						+ "(a byte stream) crosses the component boundary");
+						+ "(a byte stream) and a stream of resource handles cross the component boundary");
 			}
 		}
 		else if (t instanceof WitType.FutureOf fut) {

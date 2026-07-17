@@ -952,6 +952,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		catch (IllegalArgumentException ex) {
 			throw new UnsupportedOperationException(ex.getMessage());
 		}
+		if (this.component) {
+			// Socket I/O redirection + async promotion: a no-op unless sockets.lisp is
+			// spliced. Runs before any await counting so the promoted awaits are sized
+			// like user awaits.
+			program = WasmSocketsRewrite.rewrite(program);
+		}
 		// --component compiles the raw async forms as entry+resume state machines
 		// (WasmAsyncEmit): a top-level async-defun becomes a plain defun whose name is
 		// remembered, and lowerProgram is skipped. Everything else (Preview 1, and a
@@ -1028,33 +1034,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// asyncMode implies EH mode: the async entry's reject path and the
 		// rejected-await re-signal throw on the $lisp-cond tag.
 		boolean ehMode = programUsesEhForm(program) || this.asyncMode;
-		boolean usesFetch = programUsesSymbol(program,
-				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH));
-		// The rontolisp:tcp-* built-ins are component-only the same way: in component
-		// mode they drive the sock.* imports (function indices FUNC_TCP_CONNECT ..
-		// FUNC_TCP_LOCAL_PORT) implemented by the sockets adapter over
-		// wasi:sockets@0.3.0; in Preview 1 mode those indices are unused trap stubs and
-		// the built-ins raise a compile error (WasmTcpCompiler).
-		boolean usesTcp = programUsesSymbol(program,
-				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT))
-				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LISTEN))
-				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT))
-				|| programUsesSymbol(program,
-						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LOCAL_PORT));
-		boolean emitSockImport = this.component && usesTcp;
-		// fetch and tcp sockets need different component blob variants (wasi:http vs
-		// wasi:sockets); a combined variant does not exist yet.
-		if (this.component && usesFetch && usesTcp) {
-			throw new UnsupportedOperationException(
-					"rontolisp:fetch and rontolisp:tcp-* cannot be combined in one --component program yet");
-		}
-		// The serve component wires the wasi:http proxy world only; there is no serve
-		// blob variant with wasi:sockets, so fail at compile time instead of emitting a
-		// component that cannot instantiate.
-		if (this.serve && emitSockImport) {
-			throw new UnsupportedOperationException(
-					"rontolisp:tcp-* cannot be used in a rontolisp:http-handler --component program yet");
-		}
+		// The rontolisp:tcp-* built-ins are component-only the same way: they are the
+		// spliced sockets.lisp defuns over a wit-imported wasi:sockets@0.3.0 (an
+		// ordinary user import -- the base variant; the dedicated sockets blob variant
+		// and its hand-written adapter are gone). In Preview 1 mode they raise a
+		// compile error (WasmExprCompiler). fetch + tcp and serve + tcp now compose:
+		// both are just user imports of different interfaces.
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
 		// binds a variable to a closure like any other setq.
@@ -2545,19 +2530,6 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addImport("wasi_snapshot_preview1", "environ_sizes_get", ExternalKind.FUNCTION, TYPE_INTERN)
 						.addImport("wasi_snapshot_preview1", "environ_get", ExternalKind.FUNCTION, TYPE_INTERN);
 				}
-				// Function imports at indices FUNC_TCP_CONNECT .. FUNC_TCP_LOCAL_PORT
-				// (8-11): the sockets adapter's exports over wasi:sockets@0.3.0 when the
-				// program uses a tcp built-in in component mode. Otherwise (Preview 1, or
-				// a component not using tcp) they are defined trap stubs.
-				// tcp-connect/tcp-listen(hostPtr, hostLen, port, fdOut) -> errno share
-				// fd_write's (4x i32) -> i32 shape; tcp-accept(fd, fdOut) -> errno and
-				// tcp-local-port(fd, portOut) -> errno are (2x i32) -> i32 like _intern.
-				if (emitSockImport) {
-					imports.addImport("sock", "tcp-connect", ExternalKind.FUNCTION, TYPE_FD_WRITE);
-					imports.addImport("sock", "tcp-listen", ExternalKind.FUNCTION, TYPE_FD_WRITE);
-					imports.addImport("sock", "tcp-accept", ExternalKind.FUNCTION, TYPE_INTERN);
-					imports.addImport("sock", "tcp-local-port", ExternalKind.FUNCTION, TYPE_INTERN);
-				}
 				if (this.component) {
 					// Import the linear memory from the shared canonical-memory module so
 					// the
@@ -2588,17 +2560,18 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addFunction(TYPE_INTERN) // 6: environ_sizes_get
 						.addFunction(TYPE_INTERN); // 7: environ_get
 				}
-				// Reserve function indices FUNC_TCP_CONNECT (8) .. FUNC_TCP_LOCAL_PORT
-				// (11): sock.* imports when the program uses tcp in component mode;
-				// otherwise defined trap stubs so the following defined-function indices
-				// line up with the FUNC_* constants.
-				if (!emitSockImport) {
-					fnDef.addFunction(TYPE_FD_WRITE); // index 8: unused tcp-connect stub
-					fnDef.addFunction(TYPE_FD_WRITE); // index 9: unused tcp-listen stub
-					fnDef.addFunction(TYPE_INTERN); // index 10: unused tcp-accept stub
-					fnDef.addFunction(TYPE_INTERN); // index 11: unused tcp-local-port
-													// stub
-				}
+				// Function indices FUNC_TCP_CONNECT (8) .. FUNC_TCP_LOCAL_PORT (11) are
+				// RETIRED trap stubs: the old sock.* adapter seam died when the tcp
+				// built-ins became the spliced sockets.lisp defuns over a wit-imported
+				// wasi:sockets@0.3.0. The four indices are kept as never-called stubs so
+				// every following FUNC_* constant (and every non-socket artifact byte)
+				// stays identical; collapsing them is a mechanical FUNC_START shift left
+				// for a dedicated cleanup.
+				fnDef.addFunction(TYPE_FD_WRITE); // index 8: retired tcp-connect stub
+				fnDef.addFunction(TYPE_FD_WRITE); // index 9: retired tcp-listen stub
+				fnDef.addFunction(TYPE_INTERN); // index 10: retired tcp-accept stub
+				fnDef.addFunction(TYPE_INTERN); // index 11: retired tcp-local-port
+												// stub
 				fnDef.addFunction(TYPE_START) // _start
 					.addFunction(TYPE_PRINT_I32) // print_i32
 					.addFunction(TYPE_WRITE_STR) // _write_str
@@ -2964,14 +2937,10 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 					}
 				}
-				// tcp-connect / tcp-listen / tcp-accept / tcp-local-port trap stubs at
-				// function indices FUNC_TCP_CONNECT .. FUNC_TCP_LOCAL_PORT (only when
-				// they are not the sock.* imports): no locals, unreachable, end. Never
-				// called.
-				if (!emitSockImport) {
-					for (int i = 0; i < 4; i++) {
-						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
-					}
+				// The retired tcp trap stubs at function indices FUNC_TCP_CONNECT ..
+				// FUNC_TCP_LOCAL_PORT: no locals, unreachable, end. Never called.
+				for (int i = 0; i < 4; i++) {
+					code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 				}
 				code.addFunction(finalStartBody.toByteArray())
 					.addFunction(printI32Body)
@@ -3194,9 +3163,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			// An interface the block itself declares (wait.lisp's
 			// wasi:clocks/monotonic-clock) is part of the fixed WASI surface, so the
 			// emitted WIT must not re-declare it as a user import.
-			this.componentWit = WitEmitter.emit(emitSockImport ? WitEmitter.VARIANT_SOCKETS : WitEmitter.VARIANT_BASE,
-					componentExportDecls, WasmComponentBuilder.additionalImports(componentImports));
-			return WasmComponentBuilder.build(coreModule, emitSockImport, componentExportDecls, componentImports);
+			this.componentWit = WitEmitter.emit(WitEmitter.VARIANT_BASE, componentExportDecls,
+					WasmComponentBuilder.additionalImports(componentImports));
+			return WasmComponentBuilder.build(coreModule, componentExportDecls, componentImports);
 		}
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
 	}

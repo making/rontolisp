@@ -32,11 +32,6 @@ final class WitEmitter {
 	/** The GC component's base variant (no fetch, no sockets). */
 	static final String VARIANT_BASE = "base";
 
-	/** The GC component's {@code rontolisp:fetch} (outgoing HTTP) variant. */
-
-	/** The GC component's {@code rontolisp:tcp-*} variant. */
-	static final String VARIANT_SOCKETS = "sockets";
-
 	/** The GC {@code rontolisp:http-handler} (incoming HTTP) variant. */
 	static final String VARIANT_HTTP_SERVER = "http-server";
 

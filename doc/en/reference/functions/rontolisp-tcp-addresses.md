@@ -37,7 +37,9 @@ Error: tcp-peer-address expects a connected socket handle
   `getPort()` on the underlying `java.net.Socket` / `ServerSocket`. A handle
   that is not the right kind of socket signals an error (interpreter) or fails
   with a cast error (JVM).
-- **WASM**: not wired through the sockets adapter -- all three return `nil` in
-  component mode (so a spliced usocket program still compiles and runs there).
-  Compile error in Preview 1 (core-module) mode, like every tcp built-in.
+- **WASM**: component mode only -- all three return real addresses and ports,
+  exactly like the interpreter/JVM. On failure or a wrong kind of handle they
+  return `nil` instead of signaling (so a spliced usocket program still runs
+  there). Compile error in Preview 1 (core-module) mode, like every tcp
+  built-in.
 - **Browser playground**: not supported.

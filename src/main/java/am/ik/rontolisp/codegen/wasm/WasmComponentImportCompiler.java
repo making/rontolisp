@@ -171,6 +171,20 @@ final class WasmComponentImportCompiler {
 			return type() instanceof WitType.StreamOf;
 		}
 
+		/**
+		 * Whether the stream's element is a resource handle (wasi:sockets' accept
+		 * {@code stream<tcp-socket>}): 4-byte i32 elements read one at a time and lifted
+		 * as opaque integer handles, where a byte stream reads a chunk and lifts a
+		 * string. The directive's alias validation admits only u8 and resource elements,
+		 * so non-prim means resource here.
+		 */
+		boolean handleElement() {
+			if (!(type() instanceof WitType.StreamOf s) || s.element() == null) {
+				return false;
+			}
+			return !(abi().resolveAliases(s.element()).type() instanceof WitType.Prim);
+		}
+
 		/** The future's payload type ({@code null} for a stream). */
 		@Nullable WitType payload() {
 			return type() instanceof WitType.FutureOf fut ? fut.element() : null;
@@ -1139,16 +1153,42 @@ final class WasmComponentImportCompiler {
 			emitStagingPrologue();
 			WitResolver.Func func = call.func();
 			int slot = 1;
-			if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
-				getLocal(slot++);
-				WasmEmitHelper.castI31GetS(this.ctx);
+			WitCanonicalAbi.FlatSig sig = call.sig();
+			if (sig.spilledParams()) {
+				// Past the async 4-flat cap the arguments travel as a tuple in one
+				// caller-allocated area (which, like the return area, must survive
+				// until the await -- no staging pop here). Only the pointer goes on
+				// the stack.
+				WitCanonicalAbi.SpillLayout layout = call.abi().spillLayout(func);
+				int area = allocI32();
+				i32Const(layout.size());
+				this.w.write(Instruction.CALL);
+				this.w.writeSignedLeb128(this.allocFuncIndex);
+				setLocal(area);
+				int index = 0;
+				if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
+					getLocal(area);
+					getLocal(slot++);
+					WasmEmitHelper.castI31GetS(this.ctx);
+					store(layout.offsets()[index++], Instruction.I32_STORE, 2);
+				}
+				for (var param : func.def().func().params()) {
+					emitLowerAt(call.abi(), param.type(), slot++, area, layout.offsets()[index++]);
+					resetScratch();
+				}
+				getLocal(area);
 			}
-			for (var param : func.def().func().params()) {
-				emitLowerParam(call.abi(), param.type(), slot++);
-				resetScratch();
+			else {
+				if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
+					getLocal(slot++);
+					WasmEmitHelper.castI31GetS(this.ctx);
+				}
+				for (var param : func.def().func().params()) {
+					emitLowerParam(call.abi(), param.type(), slot++);
+					resetScratch();
+				}
 			}
 			int rp = -1;
-			WitCanonicalAbi.FlatSig sig = call.sig();
 			if (sig.retptr()) {
 				rp = allocI32();
 				i32Const(sig.retSize());
@@ -1222,7 +1262,7 @@ final class WasmComponentImportCompiler {
 				case DROP_READABLE, DROP_WRITABLE -> emitAsyncDrop();
 				case READ -> {
 					if (async.stream()) {
-						emitStreamRead();
+						emitStreamRead(async.handleElement());
 					}
 					else {
 						emitFutureRead(async);
@@ -1277,7 +1317,11 @@ final class WasmComponentImportCompiler {
 		// flight. The chunk buffer must outlive this call, so it never comes from the
 		// popped staging: it is recycled through the scheduler's free list (bounding
 		// linear-memory growth by the maximum number of concurrent reads).
-		private void emitStreamRead() {
+		// A HANDLE-element stream (handleElem: wasi:sockets' accept stream) reads ONE
+		// 4-byte element instead of a byte chunk, lifts it as an opaque integer handle
+		// (count 0 = EOF -> nil), and registers as kind 2 so the scheduler lifts it the
+		// same way.
+		private void emitStreamRead(boolean handleElem) {
 			WasmFutureRuntimeBuilder.Sched wiring = this.sched;
 			if (wiring == null) {
 				emitStagingPrologue();
@@ -1289,7 +1333,7 @@ final class WasmComponentImportCompiler {
 				setLocal(handle);
 				getLocal(handle);
 				getLocal(buf);
-				i32Const(ASYNC_READ_CHUNK);
+				i32Const(handleElem ? 1 : ASYNC_READ_CHUNK);
 				callImport();
 				emitBlockedWait(handle);
 				i32Const(4);
@@ -1299,10 +1343,7 @@ final class WasmComponentImportCompiler {
 				this.w.write(Instruction.IF);
 				this.w.write(Type.REFNULL.code());
 				this.w.writeHeapType(Type.EQ.code());
-				getLocal(buf);
-				getLocal(n);
-				this.w.write(Instruction.CALL);
-				this.w.writeSignedLeb128(this.strFromMemFuncIndex);
+				emitReadLift(handleElem, buf, n);
 				this.w.write(Instruction.ELSE);
 				refNullEq();
 				this.w.write(Instruction.END);
@@ -1339,7 +1380,7 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.END);
 			getLocal(handle);
 			getLocal(buf);
-			i32Const(ASYNC_READ_CHUNK);
+			i32Const(handleElem ? 1 : ASYNC_READ_CHUNK);
 			callImport();
 			setLocal(ret);
 			getLocal(ret);
@@ -1349,16 +1390,17 @@ final class WasmComponentImportCompiler {
 			this.w.write(Type.REFNULL.code());
 			this.w.writeHeapType(Type.EQ.code());
 			// BLOCKED: a fresh pending future, registered as
-			// (handle . (1 . (future . (buf . nil)))) -- the stream struct is attached
-			// by _wasi_stream_read -- with the handle joined into the task
-			// waitable-set (created lazily).
+			// (handle . (kind . (future . (buf . nil)))) -- kind 1 = byte chunk (the
+			// stream struct is attached by _wasi_stream_read), kind 2 = a handle
+			// element -- with the handle joined into the task waitable-set (created
+			// lazily).
 			this.w.write(Instruction.CALL);
 			this.w.writeSignedLeb128(this.ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_NEW);
 			int fut = this.ctx.allocTemp();
 			setLocal(fut);
 			getLocal(handle);
 			boxI31();
-			i32Const(1);
+			i32Const(handleElem ? 2 : 1);
 			boxI31();
 			getLocal(fut);
 			getLocal(buf);
@@ -1382,8 +1424,8 @@ final class WasmComponentImportCompiler {
 			callOrdinal(ordinals.join());
 			getLocal(fut);
 			this.w.write(Instruction.ELSE);
-			// Completed immediately: lift the chunk (count 0 = EOF -> nil) and recycle
-			// the buffer.
+			// Completed immediately: lift the element (count 0 = EOF -> nil) and
+			// recycle the buffer.
 			getLocal(ret);
 			i32Const(4);
 			this.w.write(Instruction.I32_SHR_U);
@@ -1392,10 +1434,7 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.IF);
 			this.w.write(Type.REFNULL.code());
 			this.w.writeHeapType(Type.EQ.code());
-			getLocal(buf);
-			getLocal(n);
-			this.w.write(Instruction.CALL);
-			this.w.writeSignedLeb128(this.strFromMemFuncIndex);
+			emitReadLift(handleElem, buf, n);
 			this.w.write(Instruction.ELSE);
 			refNullEq();
 			this.w.write(Instruction.END);
@@ -1406,6 +1445,22 @@ final class WasmComponentImportCompiler {
 			globalSet(wiring.readFreeGlobal());
 			this.w.write(Instruction.END);
 			this.w.write(Instruction.END);
+		}
+
+		// The completed-read lift: a byte chunk becomes a Lisp string; a handle
+		// element (4 bytes, count 1) becomes the opaque integer handle.
+		private void emitReadLift(boolean handleElem, int buf, int n) {
+			if (handleElem) {
+				getLocal(buf);
+				this.w.write(Instruction.I32_LOAD, 0x02);
+				this.w.writeUnsignedLeb128(0);
+				boxI31();
+				return;
+			}
+			getLocal(buf);
+			getLocal(n);
+			this.w.write(Instruction.CALL);
+			this.w.writeSignedLeb128(this.strFromMemFuncIndex);
 		}
 
 		// stream.write of a whole Lisp string: the async built-in plus the BLOCKED

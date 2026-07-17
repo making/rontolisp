@@ -33,7 +33,6 @@ final class WasiWitDefinitions {
 	static WitDocument document(String variant) {
 		return switch (variant) {
 			case WitEmitter.VARIANT_BASE -> base();
-			case WitEmitter.VARIANT_SOCKETS -> sockets();
 			case WitEmitter.VARIANT_HTTP_SERVER -> httpServer();
 			case WitEmitter.VARIANT_NOGC -> nogc();
 			case WitEmitter.VARIANT_NOGC_PRINT -> nogcPrint();
@@ -53,21 +52,6 @@ final class WasiWitDefinitions {
 				importRef(ref("wasi", "random", "random", "0.3.0")), importRef(ref("wasi", "cli", "stderr", "0.3.0")),
 				exportRef(ref("wasi", "cli", "run", "0.3.0"))), wasiCliV030(), wasiClocksV030(), wasiFilesystemV030(),
 				wasiRandomV030());
-	}
-
-	private static WitDocument sockets() {
-		return Wit.document(packageHeader("root", "component", null), world("root",
-				importRef(ref("wasi", "cli", "types", "0.3.0")), importRef(ref("wasi", "cli", "stdout", "0.3.0")),
-				importRef(ref("wasi", "cli", "stdin", "0.3.0")), importRef(ref("wasi", "cli", "environment", "0.3.0")),
-				importRef(ref("wasi", "clocks", "types", "0.3.0")),
-				importRef(ref("wasi", "clocks", "system-clock", "0.3.0")),
-				importRef(ref("wasi", "clocks", "monotonic-clock", "0.3.0")),
-				importRef(ref("wasi", "filesystem", "types", "0.3.0")),
-				importRef(ref("wasi", "filesystem", "preopens", "0.3.0")),
-				importRef(ref("wasi", "random", "random", "0.3.0")),
-				importRef(ref("wasi", "sockets", "types", "0.3.0")), importRef(ref("wasi", "cli", "stderr", "0.3.0")),
-				exportRef(ref("wasi", "cli", "run", "0.3.0"))), wasiCliV030(), wasiClocksV030(), wasiFilesystemV030(),
-				wasiRandomV030(), wasiSocketsV030());
 	}
 
 	private static WitDocument httpServer() {
@@ -148,38 +132,6 @@ final class WasiWitDefinitions {
 
 	private static WitItem wasiRandomV030() {
 		return packageBlock("wasi", "random", "0.3.0", iface("random", func("get-random-u64", funcType(u64()))));
-	}
-
-	private static WitItem wasiSocketsV030() {
-		return packageBlock("wasi", "sockets", "0.3.0", iface("types",
-				resource("tcp-socket",
-						staticFunc(
-								"create",
-								funcType(result(named("tcp-socket"), named("error-code")),
-										param("address-family", named("ip-address-family")))),
-						func("bind",
-								funcType(result(null, named("error-code")),
-										param("local-address", named("ip-socket-address")))),
-						func("connect",
-								asyncFuncType(result(null, named("error-code")),
-										param("remote-address", named("ip-socket-address")))),
-						func("listen", funcType(result(stream(named("tcp-socket")), named("error-code")))),
-						func("send", funcType(future(result(null, named("error-code"))), param("data", stream(u8())))),
-						func("receive", funcType(tuple(stream(u8()), future(result(null, named("error-code")))))),
-						func("get-local-address", funcType(result(named("ip-socket-address"), named("error-code"))))),
-				enumDef("ip-address-family", "ipv4", "ipv6"),
-				variant("error-code", vcase("access-denied"), vcase("not-supported"), vcase("invalid-argument"),
-						vcase("out-of-memory"), vcase("timeout"), vcase("invalid-state"), vcase("address-not-bindable"),
-						vcase("address-in-use"), vcase("remote-unreachable"), vcase("connection-refused"),
-						vcase("connection-broken"), vcase("connection-reset"), vcase("connection-aborted"),
-						vcase("datagram-too-large"), vcase("other", option(string()))),
-				typeAlias("ipv4-address", tuple(u8(), u8(), u8(), u8())),
-				record("ipv4-socket-address", field("port", u16()), field("address", named("ipv4-address"))),
-				typeAlias("ipv6-address", tuple(u16(), u16(), u16(), u16(), u16(), u16(), u16(), u16())),
-				record("ipv6-socket-address", field("port", u16()), field("flow-info", u32()),
-						field("address", named("ipv6-address")), field("scope-id", u32())),
-				variant("ip-socket-address", vcase("ipv4", named("ipv4-socket-address")),
-						vcase("ipv6", named("ipv6-socket-address")))));
 	}
 
 	private static WitItem wasiHttpV030() {

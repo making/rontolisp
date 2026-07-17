@@ -6,7 +6,8 @@ are **not part of Common Lisp**; reference them with the `rontolisp:`
 qualifier (see [Packages](../reference/packages.md)). A connected socket is a
 **bidirectional stream handle** in the same handle space as file streams, so
 the standard stream functions work on it directly: `read-line`, `write-line`,
-`read-byte`, `write-byte` and `close`. Unlike buffered file output, socket
+`write-string`, `read-byte`, `write-byte` and `close`. Unlike buffered file
+output, socket
 writes are sent immediately (`write-line` flushes per line), and `read-line`
 returns `nil` once the peer has closed the connection.
 
@@ -24,8 +25,9 @@ returns `nil` once the peer has closed the connection.
 > socket classes and accept hostnames or IP literals. The WASM backend is
 > **component-only** (`--component`, over `wasi:sockets@0.3.0`): the tcp
 > functions are a compile error in Preview 1 (core-module) mode, hosts must be
-> IPv4 literals, and the component must run with `-S tcp=y
-> -S inherit-network=y` on top of the usual flags. In the **browser
+> IPv4 literals, and the component must run with `-W exceptions=y -S tcp=y
+> -S inherit-network=y` on top of the usual flags (a tcp component always
+> compiles in exception-handling mode). In the **browser
 > playground** every tcp function signals an error (the browser sandbox has no
 > raw TCP), so the runnable example below only works outside the browser. See
 > the [tcp-connect](../reference/functions/rontolisp-tcp-connect.md) reference
@@ -103,7 +105,7 @@ returns `nil`):
 
 ```bash
 rontolisp echo-server.lisp -o echo-server.wasm --component
-wasmtime run -W gc=y -S tcp=y -S inherit-network=y echo-server.wasm
+wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y echo-server.wasm
 ```
 
 Whichever backend serves, talk to it with any TCP client, for example
@@ -213,13 +215,13 @@ Limitations of the shim (deliberate -- rontolisp's socket model is lite):
 - **The `with-*` macros close the socket on every exit** on the interpreter
   and the JVM (they expand over
   [`unwind-protect`](../reference/special-forms/unwind-protect.md)); this
-  includes the WASM component backend since the exception-handling support
-  landed (such a program then needs `wasmtime serve`/`run` with
+  includes the WASM component backend (every tcp component already runs with
   `-W exceptions=y`). The compatibility keyword arguments
   (`:element-type`, `:timeout`, `:nodelay`, `:reuse-address`, ...) are
   accepted and ignored.
 - **Backends**: interpreter and JVM are full; WASM is component-only like the
-  tcp built-ins, and the address/peer accessors return `nil` there.
+  tcp built-ins, and the address/peer accessors return real addresses and
+  ports there (a failure returns `nil` instead of signaling).
 
 ## More examples
 

@@ -6,7 +6,8 @@ Blocks until a client connects to the given listener handle (from
 [`rontolisp:tcp-listen`](rontolisp-tcp-listen.md)) and returns a
 **bidirectional stream handle** for the accepted connection — the same kind of
 handle [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) returns, usable
-with `read-line`, `write-line`, `read-byte`, `write-byte` and `close`.
+with `read-line`, `write-line`, `write-string`, `read-byte`, `write-byte` and
+`close`.
 
 The example is self-contained: because the client connects *before* the
 accept, the connection waits in the listen backlog and the single-threaded
@@ -30,7 +31,9 @@ program never blocks for long:
 - **Interpreter** and **JVM**: `java.net.ServerSocket.accept()`; accepting on
   a closed listener signals an error.
 - **WASM**: component-only. The accept is a cooperatively blocking read of one
-  `tcp-socket` handle from the `wasi:sockets@0.3.0` accept stream. Returns
+  `tcp-socket` handle from the `wasi:sockets@0.3.0` accept stream; in an async
+  body a pending accept suspends only its own task, so other tasks (a
+  `rontolisp:wait-for` timer, another request) keep running. Returns
   `nil` if accepting fails. Compile error in Preview 1 (core-module) mode.
 - **Browser playground**: not supported.
 

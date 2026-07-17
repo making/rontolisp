@@ -45,7 +45,7 @@ src/wasm-component/regen.sh     # regenerate all three artifacts (needs wasm-too
 The CLI's `--emit-wit` option writes the component's WIT world next to the `.wasm`. The fixed
 part of that text (world imports, the fixed `wasi:cli/run` / `wasi:http/handler`
 export, the referenced package definitions) is the per-variant document model in
-`WasiWitDefinitions.java` — `base`/`sockets`/`http-server` (GC) and
+`WasiWitDefinitions.java` — `base`/`http-server` (GC) and
 `nogc`/`nogc-print` — **generated** by
 `WasiWitDefinitionsGenerator` (test sources) from the fixtures under
 `src/test/resources/.../component/wit/`, which are captured verbatim from
@@ -166,36 +166,17 @@ wasm-tools validate -f component-model -f cm-async prog.wasm
 wasmtime run -W gc=y --dir . prog.wasm
 ```
 
-## Sockets variant (`rontolisp:tcp-*`) — pure WASI 0.3
+## Sockets (`rontolisp:tcp-*`) — the `sockets.lisp` library, no adapter blob
 
-A program using a `rontolisp:tcp-*` built-in compiles to the sockets variant:
-unlike fetch, `wasi:sockets@0.3.0` exists upstream and wasmtime 46 hosts it, so
-the variant stays pure WASI 0.3 (the tcp send/receive plumbing flows through the
-same built-in `stream<u8>` machinery as the base I/O). The parallel blob set is:
-
-```
-src/wasm-component/
-  uni-sockets.wit  core-sockets.wat  adapter-sockets.wat   (sockets sources; mem.wat is shared)
-
-src/main/resources/.../component/
-  import-block-sockets.bin  adapter-sockets.wasm
-```
-
-`uni-sockets.wit` (world `uni-sockets`) is the base 0.3 surface plus
-`import wasi:sockets/types@0.3.0;` appended last (import instance 10; next free
-component type 17). `WasmComponentBuilder.buildSock` wires the variant:
-alongside the shared `stream<u8>`/future built-ins it defines `own<tcp-socket>`
-and the element-typed `stream<own tcp-socket>` accept stream (its own
-`stream.read`/`drop-readable` built-ins) plus a drop-only sockets-error-code
-future. `adapter-sockets.wat` is `adapter.wat` plus a 32-slot socket table (fd =
-200 + slot; `fd_write`/`fd_read`/`fd_close` dispatch on fd >= 200, so the
-rontolisp core's stream built-ins work on sockets unchanged) and the
-`tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port` exports (the
-core's `"sock"` import seam). Run a socket component with
-`-S tcp=y -S inherit-network=y` in addition to the async flags; IPv4 literals
-only (`wasi:sockets/ip-name-lookup` is not wired yet). Combining `rontolisp:fetch`
-and the tcp functions in one component is a compile error. Details:
-`../../.kb/tcp-sockets.md`.
+There is no sockets blob variant anymore: the tcp built-ins are the
+`sockets.lisp` Lisp-source library over a wit-imported
+`wasi:sockets/types@0.3.0` (`src/main/resources/am/ik/rontolisp/eval/sockets.{lisp,wit}`,
+spliced by `eval/SocketsLibrary`), so a tcp program is the BASE variant plus
+one appended user import — which is why tcp now composes with fetch and with
+`rontolisp:http-handler` in one component. Run a socket component with
+`-W gc=y -W exceptions=y -S tcp=y -S inherit-network=y` (it is an async
+component); IPv4 literals only (`wasi:sockets/ip-name-lookup` is not wired
+yet). Details: `../../.kb/tcp-sockets.md`.
 
 ## HTTP client (`rontolisp:fetch`) — the `http.lisp` library, no adapter blob
 

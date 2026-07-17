@@ -2146,6 +2146,44 @@ public final class LispNames {
 	public static final String WASI_STREAM_NEW_INTERNAL = "%wasi-stream-new";
 
 	/**
+	 * The internal {@code rontolisp::%future-force} primitive of the {@code --component}
+	 * synchronous surface: blocks on the module scheduler ({@code _sched_loop}) until the
+	 * given future settles and yields its value (a rejection re-signals, like await). It
+	 * is what lets a synchronous built-in surface (the tcp-* wrappers in sockets.lisp)
+	 * sit on an asynchronous WIT import; async bodies get the await-shaped promotion
+	 * instead. Component-only.
+	 */
+	public static final String FUTURE_FORCE_INTERNAL = "%future-force";
+
+	/**
+	 * The internal {@code rontolisp::%read-line-raw}/{@code %read-char-raw}/
+	 * {@code %read-byte-raw}/{@code %write-line-raw}/{@code %write-byte-raw}/
+	 * {@code %close-raw} aliases of the NATIVE stream built-ins on the
+	 * {@code --component} backend: the socket-dispatch defuns sockets.lisp splices
+	 * ({@code %io-read-line} &amp;c) fall back through these for a non-socket handle, so
+	 * the compile-time socket rewrite of the public names cannot recurse. Component-only.
+	 */
+	public static final String READ_LINE_RAW_INTERNAL = "%read-line-raw";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String READ_CHAR_RAW_INTERNAL = "%read-char-raw";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String READ_BYTE_RAW_INTERNAL = "%read-byte-raw";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String WRITE_LINE_RAW_INTERNAL = "%write-line-raw";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String WRITE_BYTE_RAW_INTERNAL = "%write-byte-raw";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String WRITE_STRING_RAW_INTERNAL = "%write-string-raw";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String CLOSE_RAW_INTERNAL = "%close-raw";
+
+	/**
 	 * The {@code json-parse} function provided by the {@code rontolisp} package. Parses a
 	 * JSON document string into Lisp values (JavaScript {@code JSON.parse}-style). The
 	 * optional second argument selects the object representation: {@code :plist} (the

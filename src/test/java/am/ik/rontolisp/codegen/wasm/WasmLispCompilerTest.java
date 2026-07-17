@@ -6,6 +6,7 @@ import java.util.List;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.HttpLibrary;
+import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,9 @@ class WasmLispCompilerTest {
 		// no-op for every non-fetch program.
 		List<LispVal> program = HttpLibrary.process(LispReader.readAllFromString(lispCode),
 				WitExportDirective.Backend.WASM_COMPONENT, false);
+		// The tcp built-ins are the sockets.lisp library over wit-imported
+		// wasi:sockets the same way (a no-op for every non-socket program).
+		program = SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		// fetch.lisp's result wrappers call rontolisp::%wit-result, backed by wit.lisp --
 		// spliced by WitLibrary, the same order the CLI runs them in.
 		program = WitLibrary.process(program);
@@ -200,13 +204,13 @@ class WasmLispCompilerTest {
 			.hasMessageContaining("tcp-connect expects 2 arguments");
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-listen)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tcp-listen expects 1 or 2 arguments");
+			.hasMessageContaining("tcp-listen expects at least 1 argument");
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-accept)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tcp-accept expects 1 arguments");
+			.hasMessageContaining("tcp-accept expects 1 argument");
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-local-port 1 2)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tcp-local-port expects 1 arguments");
+			.hasMessageContaining("tcp-local-port expects 1 argument");
 	}
 
 	@Test
@@ -223,10 +227,10 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void tcpAddressAccessorsCompileToNilInComponentMode() {
-		// Not wired through the sockets adapter: they compile (drop the handle, yield
-		// nil) so a spliced usocket.lisp works on the component target even though the
-		// accessors themselves report nothing there.
+	void tcpAddressAccessorsCompileInComponentMode() {
+		// REAL on the component now: sockets.lisp reads get-local-address /
+		// get-remote-address, so the accessors report actual addresses (the old
+		// adapter-era nil stubs are gone).
 		assertThat(compileComponent("""
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
 				       (client (rontolisp:tcp-connect "127.0.0.1" (rontolisp:tcp-local-port listener))))
@@ -236,7 +240,7 @@ class WasmLispCompilerTest {
 				""")).isNotEmpty();
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-peer-address 1 2)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tcp-peer-address expects 1 arguments");
+			.hasMessageContaining("tcp-peer-address expects 1 argument");
 	}
 
 	@Test
@@ -253,7 +257,7 @@ class WasmLispCompilerTest {
 
 	@Test
 	void usocketSpliceCompilesInComponentMode() {
-		List<LispVal> program = am.ik.rontolisp.eval.UsocketLibrary.process(LispReader.readAllFromString("""
+		List<LispVal> program = compileChainForUsocket("""
 				(usocket:with-socket-listener (listener "127.0.0.1" 0)
 				  (usocket:with-client-socket (client stream "127.0.0.1" (usocket:get-local-port listener)
 				                               :element-type '(unsigned-byte 8))
@@ -261,8 +265,17 @@ class WasmLispCompilerTest {
 				    (usocket:with-connected-socket (server (usocket:socket-accept listener))
 				      (print (read-line server))
 				      (print (usocket:get-peer-address server)))))
-				"""));
+				""");
 		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
+	}
+
+	// The CLI order for a usocket component program: the usocket shim, then the
+	// sockets.lisp splice its tcp-* calls resolve against, then the wit runtime the
+	// binding wrappers reference.
+	private static List<LispVal> compileChainForUsocket(String source) {
+		List<LispVal> program = am.ik.rontolisp.eval.UsocketLibrary.process(LispReader.readAllFromString(source));
+		program = SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
+		return WitLibrary.process(program);
 	}
 
 	@Test
@@ -310,6 +323,7 @@ class WasmLispCompilerTest {
 	private static List<LispVal> serveProgram(String source) {
 		List<LispVal> loaded = am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString(source),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
+		loaded = SocketsLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT);
 		return am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
 	}
 
@@ -330,27 +344,24 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void httpHandlerWithTcpIsCompileErrorInServeMode() {
-		// There is no serve blob variant with wasi:sockets: fail at compile time
-		// instead of emitting a component that cannot instantiate.
+	void httpHandlerWithTcpCompilesInServeMode() {
+		// tcp inside a served handler compiles now: sockets.lisp is one more user WIT
+		// import beside the fixed wasi:http surface (the dedicated sockets blob
+		// variant and its adapter are gone).
 		List<LispVal> program = serveProgram("""
 				(defun h (r) (list :status 200 :body "x"))
 				(rontolisp:http-handler 'h)
 				(rontolisp:tcp-listen 7777)
 				""");
-		assertThatThrownBy(() -> new WasmLispCompiler(false, true, false, false, true).compile(program))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("rontolisp:tcp-* cannot be used in a rontolisp:http-handler");
+		assertThat(new WasmLispCompiler(false, true, false, false, true).compile(program)).isNotEmpty();
 	}
 
 	@Test
-	void fetchAndTcpInOneComponentProgramIsCompileError() {
-		// fetch (a wasi:http 0.2 hybrid) and tcp sockets (wasi:sockets 0.3) need
-		// different component blob variants; combining them is not supported yet.
-		assertThatThrownBy(
-				() -> compileComponent("(rontolisp:fetch \"http://x/\") (rontolisp:tcp-connect \"127.0.0.1\" 7777)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("cannot be combined");
+	void fetchAndTcpInOneComponentProgramCompiles() {
+		// fetch and tcp compose now: both are user WIT imports of different
+		// interfaces (wasi:http vs wasi:sockets) on the one base variant.
+		assertThat(compileComponent("(rontolisp:fetch \"http://x/\") (rontolisp:tcp-connect \"127.0.0.1\" 7777)"))
+			.isNotEmpty();
 	}
 
 	@Test

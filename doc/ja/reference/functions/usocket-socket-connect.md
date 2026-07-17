@@ -7,7 +7,7 @@
 [usocket](https://github.com/usocket/usocket) 互換のエントリポイントです。
 このシムではソケットはストリームハンドルそのものなので、
 `usocket:socket-stream` は恒等関数で、ストリーム組み込み(`read-line`、
-`write-line`、`read-byte`、`write-byte`、`close`)がそのまま使えます。
+`write-line`、`write-string`、`read-byte`、`write-byte`、`close`)がそのまま使えます。
 
 対応は TCP のみ: `:protocol :datagram`(UDP)はエラーを通知します。他の
 キーワード引数は互換性のために受理して無視します -- 特に `:element-type` は、

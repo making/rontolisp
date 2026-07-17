@@ -991,9 +991,11 @@ final class WasmFutureRuntimeBuilder {
 		getLocal(w, WAITABLE);
 		callOrdinal(w, sched.ordinals().subtaskDrop());
 		w.write(Instruction.ELSE);
-		// kind 1 (stream read): unjoin the handle, lift the chunk (0 bytes = EOF),
-		// recycle the buffer, and run the close protocol on an EOF of an attached,
-		// not-yet-closed stream.
+		// kind 1 (byte-stream read) / kind 2 (handle-stream read): unjoin the handle,
+		// lift the completion (0 elements = EOF; kind 1 lifts the chunk as a string,
+		// kind 2 loads the one 4-byte resource handle), recycle the buffer, and run
+		// the close protocol on an EOF of an attached, not-yet-closed stream (kind 2
+		// attaches none).
 		getLocal(w, WAITABLE);
 		i32(w, 0);
 		callOrdinal(w, sched.ordinals().join());
@@ -1001,7 +1003,13 @@ final class WasmFutureRuntimeBuilder {
 		i32(w, 4);
 		w.write(Instruction.I32_SHR_U);
 		w.write(Instruction.TEE_LOCAL);
-		w.writeSignedLeb128(N); // the byte count
+		w.writeSignedLeb128(N); // the element count
+		w.write(Instruction.IF);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		getLocal(w, KIND);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
@@ -1011,6 +1019,14 @@ final class WasmFutureRuntimeBuilder {
 		getLocal(w, N);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(sched.strFromMemFuncIndex());
+		w.write(Instruction.ELSE);
+		castCons(w, DATA);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+		unboxI31(w);
+		w.write(Instruction.I32_LOAD, 0x02);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.END);
 		w.write(Instruction.ELSE);
 		refNullEq(w);
 		w.write(Instruction.END);

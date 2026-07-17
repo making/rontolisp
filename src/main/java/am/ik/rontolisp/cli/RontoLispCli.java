@@ -37,6 +37,7 @@ import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UsocketLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
+import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.WaitForLibrary;
 import am.ik.rontolisp.eval.WitExportInliner;
 import am.ik.rontolisp.eval.WitImportInliner;
@@ -293,6 +294,13 @@ public final class RontoLispCli {
 		// interpreter/JVM keep their CompletableFuture timer, Preview 1 keeps the
 		// compile error).
 		loaded = WaitForLibrary.process(loaded, witBackend);
+		// The rontolisp:tcp-* built-ins on the --component path are the sockets.lisp
+		// library over a wit-imported wasi:sockets/types@0.3.0 (this splice replaced
+		// the hand-written sockets adapter). Spliced like http.lisp; a no-op elsewhere
+		// (the interpreter/JVM keep java.net.Socket, Preview 1 keeps the compile
+		// error). The trigger includes any usocket: reference: the usocket shim rides
+		// tcp-*, and its own splice runs later in this pipeline.
+		loaded = SocketsLibrary.process(loaded, witBackend);
 		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
 		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
 		// any

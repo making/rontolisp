@@ -6,7 +6,8 @@ Opens a blocking TCP connection to `host`/`port` and returns a
 **bidirectional stream handle**. The handle lives in the same handle space as
 file streams, so the standard stream functions work on it directly:
 [`read-line`](read-line.md), [`write-line`](write-line.md),
-[`read-byte`](read-byte.md), [`write-byte`](write-byte.md) and
+[`write-string`](write-string.md), [`read-byte`](read-byte.md),
+[`write-byte`](write-byte.md) and
 [`close`](close.md). Unlike buffered file output, socket writes are sent
 immediately (`write-line` flushes per line). `read-line` returns `nil` once
 the peer has closed the connection.
@@ -50,7 +51,8 @@ the server closes:
   unlike `rontolisp:fetch`, no 0.2 hybrid is needed). `host` must be an
   **IPv4 literal** such as `"127.0.0.1"` (hostname resolution via
   `wasi:sockets/ip-name-lookup` is not wired yet). Compile with `--component`
-  and run with `-S tcp=y -S inherit-network=y` on top of the async flags. A
+  and run with `wasmtime run -W gc=y -W exceptions=y -S tcp=y
+  -S inherit-network=y` (wasmtime 46+). A
   failed connection returns `nil` instead of a handle (the same nil-on-failure
   convention as `rontolisp:fetch`); without the `-S` flags the component still
   starts, but every socket operation fails and yields `nil`. The tcp built-ins
@@ -63,9 +65,7 @@ the server closes:
 - TCP only (no UDP yet): the connection is plain text. For an encrypted
   client connection use [`rontolisp:tls-connect`](rontolisp-tls-connect.md)
   (interpreter/JVM only).
-- The WASM component backend accepts IPv4 literals only, and a program cannot
-  combine `rontolisp:fetch` and the tcp functions in one `--component` binary
-  yet.
+- The WASM component backend accepts IPv4 literals only.
 - `read` (the s-expression reader) does not work on socket handles; read lines
   or bytes and parse them explicitly (e.g. with
   [`read-from-string`](read-from-string.md)).

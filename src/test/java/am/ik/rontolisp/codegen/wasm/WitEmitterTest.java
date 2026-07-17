@@ -172,8 +172,8 @@ class WitEmitterTest {
 
 	@Test
 	void everyVariantTemplateLoadsAndOpensTheRootWorld() {
-		for (String variant : new String[] { WitEmitter.VARIANT_BASE, WitEmitter.VARIANT_SOCKETS,
-				WitEmitter.VARIANT_HTTP_SERVER, WitEmitter.VARIANT_NOGC, WitEmitter.VARIANT_NOGC_PRINT }) {
+		for (String variant : new String[] { WitEmitter.VARIANT_BASE, WitEmitter.VARIANT_HTTP_SERVER,
+				WitEmitter.VARIANT_NOGC, WitEmitter.VARIANT_NOGC_PRINT }) {
 			String wit = WitEmitter.emit(variant, List.of());
 			assertThat(wit).as(variant).startsWith("package root:component;\n\nworld root {\n");
 		}
@@ -183,8 +183,6 @@ class WitEmitterTest {
 	void variantImportSurfacesMatchTheirBlobSets() {
 		assertThat(WitEmitter.emit(WitEmitter.VARIANT_BASE, List.of())).doesNotContain("wasi:http")
 			.doesNotContain("wasi:sockets");
-		assertThat(WitEmitter.emit(WitEmitter.VARIANT_SOCKETS, List.of()))
-			.contains("  import wasi:sockets/types@0.3.0;");
 		assertThat(WitEmitter.emit(WitEmitter.VARIANT_NOGC, List.of())).doesNotContain("import");
 	}
 

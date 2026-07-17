@@ -540,8 +540,9 @@ class WasmExportCompilerTest {
 
 	@Test
 	void componentWitPicksTheImportVariantOfTheCompiledBlobSet() {
-		// The world's imports are fixed per blob variant, so the recorded WIT must
-		// track the same fetch/tcp selection as the component wiring.
+		// The world's fixed imports come from the ONE base variant; fetch and tcp both
+		// show up as user WIT-interface imports on top of it (the http.lisp /
+		// sockets.lisp splices), so the recorded WIT tracks what the program uses.
 		WasmLispCompiler base = new WasmLispCompiler(false, true);
 		base.compile(LispReader.readAllFromString("(print 1)"));
 		assertThat(base.componentWit()).doesNotContain("wasi:http").doesNotContain("wasi:sockets");
@@ -551,7 +552,9 @@ class WasmExportCompilerTest {
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
 		assertThat(http.componentWit()).contains("  import wasi:http/client@0.3.0;");
 		WasmLispCompiler sock = new WasmLispCompiler(false, true);
-		sock.compile(LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"));
+		sock.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.SocketsLibrary.process(
+				LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"),
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT)));
 		assertThat(sock.componentWit()).contains("  import wasi:sockets/types@0.3.0;");
 	}
 

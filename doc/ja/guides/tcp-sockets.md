@@ -5,8 +5,8 @@
 これらは **Common Lispの一部ではない** ため、`rontolisp:` 修飾子で参照します
 ([パッケージ](../reference/packages.md)を参照)。接続されたソケットはファイル
 ストリームと同じハンドル空間の **双方向ストリームハンドル** なので、標準の
-ストリーム関数がそのまま使えます: `read-line`、`write-line`、`read-byte`、
-`write-byte`、`close`。バッファリングされるファイル出力と異なり、ソケットへの
+ストリーム関数がそのまま使えます: `read-line`、`write-line`、`write-string`、
+`read-byte`、`write-byte`、`close`。バッファリングされるファイル出力と異なり、ソケットへの
 書き込みは即時に送信され (`write-line` は行ごとにフラッシュ)、相手が接続を
 閉じると `read-line` は `nil` を返します。
 
@@ -25,8 +25,9 @@
 > バックエンドは **componentモード専用** です (`--component`、
 > `wasi:sockets@0.3.0` 経由): tcp関数はPreview 1 (コアモジュール) モードでは
 > コンパイルエラーになり、ホストはIPv4リテラルでなければならず、component
-> は通常のフラグに加えて `-S tcp=y -S inherit-network=y` を付けて実行する
-> 必要があります。**ブラウザプレイグラウンド** ではすべてのtcp関数がエラーを
+> は通常のフラグに加えて `-W exceptions=y -S tcp=y -S inherit-network=y` を
+> 付けて実行する必要があります (tcp componentは常にexception-handlingモードで
+> コンパイルされます)。**ブラウザプレイグラウンド** ではすべてのtcp関数がエラーを
 > シグナルします (ブラウザのサンドボックスには素のTCPがありません) — 下の
 > 実行可能な例はブラウザの外でのみ動作します。共通の制限 (TCPのみ、
 > UDPなし) については
@@ -108,7 +109,7 @@ WASM componentにコンパイルして (wasmtime 46+。ネットワークアク�
 
 ```bash
 rontolisp echo-server.lisp -o echo-server.wasm --component
-wasmtime run -W gc=y -S tcp=y -S inherit-network=y echo-server.wasm
+wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y echo-server.wasm
 ```
 
 どのバックエンドでサーブしていても、任意のTCPクライアント、たとえば
@@ -217,14 +218,13 @@ rontolisp のソケットはストリームハンドルそのものなので、�
   ブロックします。accept ループは自分で書いてください)。
 - **`with-*` マクロはインタープリタと JVM ではあらゆる脱出時にソケットを
   閉じます**([`unwind-protect`](../reference/special-forms/unwind-protect.md)
-  に展開されます)。exception-handling サポートの導入以降、これは WASM コンポーネント
-  バックエンドでも成り立ちます(そのようなプログラムは `wasmtime` に
-  `-W exceptions=y` が必要になります)。互換性の
+  に展開されます)。これは WASM コンポーネントバックエンドでも成り立ちます
+  (tcp コンポーネントはもともと `-W exceptions=y` 付きで実行されます)。互換性の
   ためのキーワード引数(`:element-type`、`:timeout`、`:nodelay`、
   `:reuse-address` など)は受理して無視します。
 - **バックエンド**: インタープリタと JVM はフル対応。WASM は tcp 組み込みと
-  同じくコンポーネント専用で、アドレス系・peer 系アクセサは `nil` を
-  返します。
+  同じくコンポーネント専用で、アドレス系・peer 系アクセサはそこでも実際の
+  アドレスとポートを返します(失敗時はエラーを通知せず `nil` を返します)。
 
 ## その他のサンプル
 

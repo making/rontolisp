@@ -11,7 +11,7 @@
 ;; Run (JVM):                java -jar $JAR examples/net/echo-client.lisp -o EchoClient.class && \
 ;;                           echo hello | java EchoClient
 ;; Run (WASM component):     java -jar $JAR examples/net/echo-client.lisp -o echo-client.wasm --component && \
-;;                           echo hello | wasmtime run -W gc=y \
+;;                           echo hello | wasmtime run -W gc=y -W exceptions=y \
 ;;                             -S tcp=y -S inherit-network=y echo-client.wasm
 (let ((sock (rontolisp:tcp-connect "127.0.0.1" 7777)))
   (if sock

@@ -42,6 +42,9 @@ final class WitCanonicalAbi {
 	/** The canonical ABI caps flattened parameters at 16 (beyond = spill to memory). */
 	static final int MAX_FLAT_PARAMS = 16;
 
+	/** An ASYNC lowering spills flattened parameters past 4 (the spec's async cap). */
+	static final int MAX_FLAT_PARAMS_ASYNC = 4;
+
 	/** The canonical ABI caps flattened results at 1 (beyond = return pointer). */
 	static final int MAX_FLAT_RESULTS = 1;
 
@@ -106,7 +109,50 @@ final class WitCanonicalAbi {
 	 * return pointer (appended as the last parameter)
 	 * @param retSize the byte size of the return area (0 without a retptr)
 	 */
-	record FlatSig(Type[] params, Type[] results, boolean retptr, int retSize) {
+	record FlatSig(Type[] params, Type[] results, boolean retptr, int retSize, boolean spilledParams,
+			int paramsAreaSize) {
+
+		FlatSig(Type[] params, Type[] results, boolean retptr, int retSize) {
+			this(params, results, retptr, retSize, false, 0);
+		}
+	}
+
+	/**
+	 * The spilled-arguments tuple layout of an async-lowered call whose parameters
+	 * flatten past {@link #MAX_FLAT_PARAMS_ASYNC}: one offset per parameter (a method's
+	 * borrowed self handle first) into the caller-allocated area, and the area's total
+	 * size.
+	 *
+	 * @param offsets the per-parameter byte offsets
+	 * @param size the area size in bytes
+	 */
+	record SpillLayout(int[] offsets, int size) {
+	}
+
+	/**
+	 * Computes the spilled-arguments tuple layout of the given function (the canonical
+	 * ABI stores the arguments as a tuple: each field at its aligned offset, the total
+	 * rounded up to the widest alignment).
+	 * @param func the interface function (with its owning resource, if any)
+	 * @return the layout
+	 */
+	SpillLayout spillLayout(WitResolver.Func func) {
+		List<Integer> offsets = new ArrayList<>();
+		int offset = 0;
+		int maxAlign = 1;
+		if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
+			offsets.add(0); // the borrowed self handle, i32
+			offset = 4;
+			maxAlign = 4;
+		}
+		for (var param : func.def().func().params()) {
+			int align = alignment(param.type());
+			offset = alignTo(offset, align);
+			offsets.add(offset);
+			offset += size(param.type());
+			maxAlign = Math.max(maxAlign, align);
+		}
+		return new SpillLayout(offsets.stream().mapToInt(Integer::intValue).toArray(), alignTo(offset, maxAlign));
 	}
 
 	/**
@@ -162,13 +208,19 @@ final class WitCanonicalAbi {
 		for (var param : func.def().func().params()) {
 			params.addAll(flatTypes(param.type()));
 		}
-		if (params.size() > MAX_FLAT_PARAMS) {
-			throw new UnsupportedOperationException("'" + func.def().name() + "': its parameters flatten to "
-					+ params.size() + " core values, and beyond " + MAX_FLAT_PARAMS
-					+ " the canonical ABI spills them into a caller-allocated memory area -- a mechanism the component "
-					+ "import boundary does not implement yet");
-		}
 		WitType result = resultType(func);
+		if (params.size() > MAX_FLAT_PARAMS_ASYNC) {
+			// The async lowering's spill threshold is 4 flat values (NOT the sync 16):
+			// past it the arguments are stored as a tuple in one caller-allocated area
+			// and the core signature takes just that pointer (wasi:sockets' connect --
+			// self + the flattened ip-socket-address variant -- is 14 flats).
+			SpillLayout layout = spillLayout(func);
+			if (result == null) {
+				return new FlatSig(new Type[] { Type.I32 }, new Type[] { Type.I32 }, false, 0, true, layout.size());
+			}
+			return new FlatSig(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 }, true, size(result), true,
+					layout.size());
+		}
 		if (result == null) {
 			return new FlatSig(params.toArray(new Type[0]), new Type[] { Type.I32 }, false, 0);
 		}
