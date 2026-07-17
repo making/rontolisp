@@ -41,6 +41,35 @@ Landed 2026-07-17 (this trim's working tree, after `9376a8f`):
    whose $await_waitable parks are invisible to the core scheduler, so the
    promotion needs either adapter-exposed non-blocking variants surfaced as
    registry entries, or core-side canon-lowered reads (item 2's machinery).
+   HANDOFF NOTES for the session that picks this up (2026-07-17, after
+   `786d60f` landed item 2's stream-read half):
+   - The kind-tagged registry + EVENT_STREAM_READ dispatch is exactly the
+     machinery this item needs on the core side: a new waitable kind is one
+     more registry kind + one more `_sched_loop` dispatch arm
+     (`WasmFutureRuntimeBuilder.buildSchedLoop`) + a wrapper that registers
+     instead of parking (`WasmComponentImportCompiler.emitStreamRead`'s
+     sched-gated shape is the model, incl. the buffer free list).
+   - The DESIGN QUESTION to settle first (likely with the user): "implicit
+     suspension point" semantics. stream-read returns a future the user
+     awaits; but `read-line`/`tcp-recv` return VALUES, so promoting them
+     means the compiled async body must suspend INSIDE the built-in call --
+     i.e. either (a) an await-shaped lowering in asyncMode (the built-in
+     becomes future-returning internally and LispAsync/WasmAwaitAnalysis
+     must count it as a suspension point -- state-machine surgery), or
+     (b) keep the blocking park on the ADAPTER path and only promote the
+     component-native (canon-lowered) reads. Decide before coding; (a)
+     touches the shared frontend contract on every backend (interpreter/JVM
+     already suspend only the virtual thread, which is invisible -- so the
+     cross-backend contract may already be "blocking is fine there").
+   - Adapter reality check: stdin/sockets on --component still go through
+     the P1 adapters' $await_waitable (single cached set per adapter,
+     fixed scratch). Surfacing non-blocking variants means new adapter
+     exports + regen (`src/wasm-component/regen-wit.sh`, read the dump --
+     the wait-for item's instance-hoisting lesson applies).
+   - Gates recipe used by the stream-read session: full suite, -Pweb
+     compile, native build + CiSpecE2eTest, wasmCloud `wash dev` via a PATH
+     shim to target/rontolisp, plus the opt-in RONTOLISP_HTTP_E2E tests
+     (which now include the overlap pin).
 2. ~~Pending-future stream reads~~ DONE 2026-07-17: `stream.read`'s wrapper
    returns a pending TYPE_FUTURE when the host reports BLOCKED -- registry
    entries are now `(waitable . (kind . (future . data)))` (kind 0 = subtask,
