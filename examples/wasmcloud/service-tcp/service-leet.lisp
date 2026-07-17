@@ -3,10 +3,10 @@
 ;; TCP server that accepts connections on 127.0.0.1:7777, reads lines and
 ;; replies with the leet-speak transformation of each line.
 ;;
-;; Interpreter / JVM only: rontolisp:http-handler and the tcp built-ins
-;; cannot be combined in one --component binary, and the wasmCloud v2 service
-;; model (wasi:cli/run + wasi:sockets 0.2) does not match rontolisp's WASI
-;; 0.3 sockets.
+;; Runs on the interpreter, the JVM and as a WASI component under wasmtime
+;; run. wasmCloud itself cannot host this half: its v2 service model
+;; (wasi:cli/run + wasi:sockets 0.2) does not match rontolisp's WASI 0.3
+;; sockets.
 ;;
 ;; Connections are served one at a time (accept returns to the loop when the
 ;; client closes), which is enough for the per-request open/close pattern of
@@ -17,6 +17,9 @@
 ;; Run (JVM):
 ;;   rontolisp examples/wasmcloud/service-tcp/service-leet.lisp -o ServiceLeet.class && \
 ;;     java ServiceLeet
+;; Run (WASI component under wasmtime run):
+;;   rontolisp examples/wasmcloud/service-tcp/service-leet.lisp -o service-leet.wasm --component && \
+;;     wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y service-leet.wasm
 ;; Talk to it with:
 ;;   nc 127.0.0.1 7777      (type a line, read it back in leet speak)
 

@@ -185,6 +185,22 @@ here.
   `fields.append` out). http.lisp uses `handler-case`, so a serve component is
   EH-mode. Run with `wasmtime serve -W gc=y -W exceptions=y
   `.
+  **Top-level init runs on the FIRST handle call, once per instance**: a serve
+  component never lifts `run`, so the `handle` wrapper
+  (`WasmExportCompiler.emitBody`) calls `_start` under a serve-only
+  `(mut i32)` init flag (`serveInitGlobalIndex`, the last module global;
+  non-serve output is byte-identical) before the request task begins --
+  without it NO top-level form ran and every defvar/defparameter global read
+  back null inside a handler (the "cast failure" trap on first arithmetic;
+  the 0.2-era serve adapter used to run `run` once as init, and the callback
+  cutover lost that). Init runs inside the handle call's task context, so a
+  top-level suspension drives through the blocking event loop as under
+  `wasmtime run`. Pinned by
+  `httpHandlerReadsATopLevelGlobalUnderWasmtimeServe`; the serve+tcp
+  composition (the shape that surfaced the bug) by
+  `httpHandlerConnectsTcpUnderWasmtimeServe` -- tcp under `wasmtime serve`
+  additionally needs `-S cli=y -S tcp=y -S inherit-network=y`
+  (`.kb/tcp-sockets.md`).
   An ADDITIONAL `rontolisp:wit-import` (e.g. `wasi:keyvalue`, so a handler's state
   lives in a real store) rides `appendUserImports` alongside the fixed surface.
   `adapter-http-server-p1.wat` is the preview1 bridge (instantiated BEFORE the

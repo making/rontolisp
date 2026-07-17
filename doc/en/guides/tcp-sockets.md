@@ -27,7 +27,15 @@ returns `nil` once the peer has closed the connection.
 > functions are a compile error in Preview 1 (core-module) mode, hosts must be
 > IPv4 literals, and the component must run with `-W exceptions=y -S tcp=y
 > -S inherit-network=y` on top of the usual flags (a tcp component always
-> compiles in exception-handling mode). In the **browser
+> compiles in exception-handling mode). Combining the tcp functions with
+> [`rontolisp:http-handler`](http-handler.md) compiles into one component
+> and runs under `wasmtime serve` — add `-S cli=y` to the flags above
+> (without it the serve linker reports the `wasi:sockets@0.3.0`
+> `tcp-socket` resource as missing at instantiation). wasmCloud's
+> `wash dev` (2.5.2) hosts that component too, but does not provide
+> `wasi:sockets` 0.3, so tcp connections fail there — when the served
+> handler must open sockets, serve it with `wasmtime serve` (or on the
+> interpreter / JVM). In the **browser
 > playground** every tcp function signals an error (the browser sandbox has no
 > raw TCP), so the runnable example below only works outside the browser. See
 > the [tcp-connect](../reference/functions/rontolisp-tcp-connect.md) reference

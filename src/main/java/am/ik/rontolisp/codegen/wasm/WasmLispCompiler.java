@@ -291,25 +291,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	/** Number of preview1-style imported functions (fd_write..environ_get). */
 	static final int IMPORT_FUNC_COUNT = 8;
 
-	// Function indices 8-11 are reserved for the rontolisp:tcp-* built-ins in BOTH
-	// modes so the defined-function indices stay identical across modes. Imports always
-	// precede defined functions, so the slots can be imports in one mode only because
-	// every earlier slot is an import in that mode too:
-	// - sockets component: sock.* imported at 8-11.
-	// - plain component / Preview 1 / no-wasi: all four are defined trap stubs.
-	// This keeps FUNC_START at 12 uniformly, so all the static FUNC_* constants below
-	// are stable. The tcp built-ins raise a compile error in Preview 1 mode, so the
-	// stubs are never called. (rontolisp:fetch needs no slots here: it is the http.lisp
-	// library over canon-lowered wasi:http user imports.)
-	static final int FUNC_TCP_CONNECT = IMPORT_FUNC_COUNT; // 8
-
-	static final int FUNC_TCP_LISTEN = FUNC_TCP_CONNECT + 1; // 9
-
-	static final int FUNC_TCP_ACCEPT = FUNC_TCP_LISTEN + 1; // 10
-
-	static final int FUNC_TCP_LOCAL_PORT = FUNC_TCP_ACCEPT + 1; // 11
-
-	static final int FUNC_START = FUNC_TCP_LOCAL_PORT + 1; // 12
+	static final int FUNC_START = IMPORT_FUNC_COUNT; // 8
 
 	static final int FUNC_PRINT_I32 = FUNC_START + 1;
 
@@ -1321,6 +1303,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		int currentTaskGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 4 : -1;
 		int tasksGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 5 : -1;
 		int taskSeqGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 6 : -1;
+		// Serve mode: the init-once flag (a mut i32 = 0) the handle wrapper checks. A
+		// serve component's `run` is never lifted, so nothing else executes the top
+		// level (defvar/defparameter globals, library state, user top-level forms);
+		// the first handle call runs _start under this flag instead. Appended after
+		// every other global so non-serve output is byte-identical (serve implies
+		// asyncMode, so taskSeqGlobalIndex is always valid here).
+		int serveInitGlobalIndex = this.serve ? taskSeqGlobalIndex + 1 : -1;
 
 		// Create string table
 		StringTable stringTable = new StringTable(DATA_BASE_OFFSET);
@@ -1397,6 +1386,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
 			.asyncDefunNames(Set.copyOf(asyncDefunNames))
 			.currentTaskGlobalIndex(currentTaskGlobalIndex)
+			.serveInitGlobalIndex(serveInitGlobalIndex)
 			.callbackExports(cbMode ? this.callbackExportsForTest : Set.of());
 
 		// Pass 2a: Compile each defun body (with env param at slot 0)
@@ -2560,18 +2550,6 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addFunction(TYPE_INTERN) // 6: environ_sizes_get
 						.addFunction(TYPE_INTERN); // 7: environ_get
 				}
-				// Function indices FUNC_TCP_CONNECT (8) .. FUNC_TCP_LOCAL_PORT (11) are
-				// RETIRED trap stubs: the old sock.* adapter seam died when the tcp
-				// built-ins became the spliced sockets.lisp defuns over a wit-imported
-				// wasi:sockets@0.3.0. The four indices are kept as never-called stubs so
-				// every following FUNC_* constant (and every non-socket artifact byte)
-				// stays identical; collapsing them is a mechanical FUNC_START shift left
-				// for a dedicated cleanup.
-				fnDef.addFunction(TYPE_FD_WRITE); // index 8: retired tcp-connect stub
-				fnDef.addFunction(TYPE_FD_WRITE); // index 9: retired tcp-listen stub
-				fnDef.addFunction(TYPE_INTERN); // index 10: retired tcp-accept stub
-				fnDef.addFunction(TYPE_INTERN); // index 11: retired tcp-local-port
-												// stub
 				fnDef.addFunction(TYPE_START) // _start
 					.addFunction(TYPE_PRINT_I32) // print_i32
 					.addFunction(TYPE_WRITE_STR) // _write_str
@@ -2845,6 +2823,18 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(Instruction.END);
 					});
 				}
+				// Serve mode: the init-once flag at serveInitGlobalIndex, a (mut i32) =
+				// 0. The handle wrapper runs the top level (_start) under it on the
+				// first request, since a serve component's `run` is never lifted.
+				if (this.serve) {
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+				}
 			})
 			// Export section -- component mode exports `run` (the i32-returning _start)
 			// for
@@ -2936,11 +2926,6 @@ public final class WasmLispCompiler implements LispCompiler {
 					for (int i = 0; i < IMPORT_FUNC_COUNT; i++) {
 						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 					}
-				}
-				// The retired tcp trap stubs at function indices FUNC_TCP_CONNECT ..
-				// FUNC_TCP_LOCAL_PORT: no locals, unreachable, end. Never called.
-				for (int i = 0; i < 4; i++) {
-					code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 				}
 				code.addFunction(finalStartBody.toByteArray())
 					.addFunction(printI32Body)
@@ -3673,6 +3658,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		int currentTaskGlobalIndex = -1;
 
 		/**
+		 * The global index of the serve init-once flag (a {@code mut i32}), or -1 outside
+		 * serve mode. The handle wrapper runs the top level (_start) under it on the
+		 * first request: a serve component's {@code run} is never lifted, so nothing else
+		 * executes the program's top-level initializers.
+		 */
+		int serveInitGlobalIndex = -1;
+
+		/**
 		 * Export names (beyond serve's {@code handle}) given the CALLBACK-lift treatment
 		 * (the test hook); empty on every CLI path.
 		 */
@@ -3741,6 +3734,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.asyncFuncBase = builder.asyncFuncBase;
 			this.asyncDefunNames = builder.asyncDefunNames;
 			this.currentTaskGlobalIndex = builder.currentTaskGlobalIndex;
+			this.serveInitGlobalIndex = builder.serveInitGlobalIndex;
 			this.callbackExports = builder.callbackExports;
 		}
 
@@ -3801,6 +3795,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<String> asyncDefunNames = Set.of();
 
 			private int currentTaskGlobalIndex = -1;
+
+			private int serveInitGlobalIndex = -1;
 
 			private Set<String> callbackExports = Set.of();
 
@@ -3931,6 +3927,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder currentTaskGlobalIndex(int currentTaskGlobalIndex) {
 				this.currentTaskGlobalIndex = currentTaskGlobalIndex;
+				return this;
+			}
+
+			Builder serveInitGlobalIndex(int serveInitGlobalIndex) {
+				this.serveInitGlobalIndex = serveInitGlobalIndex;
 				return this;
 			}
 

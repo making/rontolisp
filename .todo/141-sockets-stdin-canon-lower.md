@@ -310,28 +310,42 @@ Full suite after the change: 3795/0.
   notwithstanding. Phase 1 verified serve+tcp at compile level only
   (httpHandlerWithTcpCompilesInServeMode). Tracked below.
 
-## REMAINING
+## REMAINING -- ALL RESOLVED 2026-07-17 (this working tree; todo ready to close)
 
-  1. **`adapter.wat`'s remaining surface -- evaluation only, inherited from the
-     closed `.todo/002` (its optional Phase 4, second bullet).** With stdin's
-     ASYNC half off the adapter, what is left there is the sync stdin branch,
-     file reads, the write side, and env/clock/random. Whether those move to
-     Lisp over `wasi:cli`/`wasi:filesystem`
-     /`wasi:clocks`/`wasi:random` -- and thus whether `adapter.wat` can be deleted
-     outright -- is an OPEN evaluation, deliberately a non-goal of the phases
-     above. `.kb/wit.md` records why the base adapter was long considered
-     un-externalizable, and the sockets migration is the precedent that a wall
-     there meant a missing language feature, not a fixed constraint.
-  2. **FUNC_START 12 -> 8 stub collapse** (mechanical byte shift; the four
-     retired tcp trap stubs at indices 8-11 are kept for byte stability
-     today -- see the WasmLispCompiler comment).
-  3. Pre-existing doc inconsistency the doc sweep flagged (NOT this todo's):
-     usocket-socket-connect.md's "no condition handling" prose contradicts
-     the todo-116 error-handling foundation; fix separately.
-  4. The serve+tcp `wasmtime serve` instantiation failure above (host-side,
-     pre-existing): decide whether to document as a limitation in
-     doc/tcp-sockets or wait for a wasmtime release that wires the resource;
-     re-test wasmCloud `wash dev` for the same shape.
+  1. **`adapter.wat` evaluation DONE -- the adapter STAYS, deliberately.** The
+     full zero-base evaluation (per surface: sync stdin / file I/O / write
+     side / env-clock-random, with the revisit trigger) is recorded in
+     `.kb/wit.md`'s "What CANNOT be externalized" base-adapter bullet. Net:
+     the wall is no longer technical (all migration machinery exists); it is
+     the byte-stability/flag-neutrality contract for non-async programs --
+     0.3 file/stdio I/O is stream-based, so migrating it flips every
+     print/file-using component into async+EH, the exact flip phase 2 avoided.
+  2. **FUNC_START 12 -> 8 stub collapse DONE**: FUNC_TCP_* constants, the four
+     function-section stub entries and their code bodies deleted;
+     `FUNC_START = IMPORT_FUNC_COUNT` (8). Full suite 3795/0, native image +
+     CiSpecE2eTest 832/0, manual 4-backend run + component tcp echo /
+     async+sync stdin / usocket echo all verified. kb updated
+     (tcp-sockets.md retired-seam section, wasi-component.md index note).
+  3. **usocket-socket-connect.md fixed** (en+ja): the "no condition handling"
+     prose replaced with the todo-116 reality (typed usocket:socket-error,
+     handler-case works on interpreter/JVM; component connect failure = nil).
+     DocExamplesTest green. Same stale claim also purged from the
+     wasmcloud/http-handler, http-kv-handler, service-tcp example comments and
+     examples/net/linalg-api.lisp.
+  4. **serve+tcp: first closed with a WRONG host-blame diagnosis, then
+     ACTUALLY FIXED via `.todo/144`** (same day). The "instantiation fails /
+     host does not wire the resource" reading came from omitting `-S cli=y`
+     from `wasmtime serve`; with it the component instantiates, and the trap
+     that remained was OURS -- a 0.3 serve component never ran its top level
+     (no lifted `run`, and the deleted 0.2 serve adapter was what ran it as
+     init), so every defvar global read back null. Fixed by the handle
+     wrapper's init-once `_start` call; `.todo/144` has the full resolution
+     log, and the guides/kb/example prose written under the wrong diagnosis
+     was rewritten to the verified truth (wasmtime serve runs serve+tcp with
+     `-S cli=y -S tcp=y -S inherit-network=y`; wasmCloud hosts it but tcp
+     connections fail there -- failure shape under verification in
+     `.todo/145`). service-leet was additionally verified as a
+     `wasmtime run` component (header updated).
 
 ## Interactions / ordering
 

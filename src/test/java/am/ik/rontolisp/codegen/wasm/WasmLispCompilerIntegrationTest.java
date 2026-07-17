@@ -76,11 +76,16 @@ class WasmLispCompilerIntegrationTest {
 	// need -- including FetchLibrary, so a handler that also calls rontolisp:fetch (the
 	// proxy shape) gets fetch.lisp spliced alongside serve.lisp, over the wider block.
 	private static byte[] compileServeComponent(String source, @org.jspecify.annotations.Nullable String baseDir) {
+		var witBackend = am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT;
 		List<LispVal> loaded = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(source),
-				baseDir, am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
-				am.ik.rontolisp.eval.SourceLoader.fileSystem());
-		loaded = am.ik.rontolisp.eval.HttpLibrary.process(loaded,
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
+				baseDir, witBackend, am.ik.rontolisp.eval.SourceLoader.fileSystem());
+		loaded = am.ik.rontolisp.eval.HttpLibrary.process(loaded, witBackend, true);
+		// The wait-for / sockets / stdin splices mirror the CLI order (each a no-op for
+		// a handler that references nothing of it), so a served handler may also use
+		// the tcp built-ins.
+		loaded = am.ik.rontolisp.eval.WaitForLibrary.process(loaded, witBackend);
+		loaded = am.ik.rontolisp.eval.SocketsLibrary.process(loaded, witBackend);
+		loaded = am.ik.rontolisp.eval.StdinLibrary.process(loaded, witBackend, true);
 		// The prelude splice mirrors the CLI: a handler draining a body stream calls
 		// the prelude's rontolisp:read-all.
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary.process(
@@ -2130,6 +2135,58 @@ class WasmLispCompilerIntegrationTest {
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-kv.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve keyvalue round trip; log: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("/hits 42");
+	}
+
+	@Test
+	void httpHandlerReadsATopLevelGlobalUnderWasmtimeServe() throws Exception {
+		// A serve component never lifts `run`, so the handle wrapper itself must run
+		// the program's top level once before the first request: without that init a
+		// defvar global reads back null inside the handler and the first arithmetic
+		// on it traps with "cast failure".
+		byte[] componentBytes = compileServeComponent("""
+				(defvar *base* 41)
+				(defun handle (request)
+				  (list :status 200 :body (princ-to-string (+ *base* 1))))
+				(rontolisp:http-handler 'handle)
+				""", null);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-global.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8090 /tmp/serve-global.wasm >/tmp/serve-global.log 2>&1 &"
+						+ " for i in $(seq 1 60); do out=$(curl -sf http://127.0.0.1:8090/) && [ -n \"$out\" ]"
+						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-global.log 1>&2; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve top-level global; log: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("42");
+	}
+
+	@Test
+	void httpHandlerConnectsTcpUnderWasmtimeServe() throws Exception {
+		// serve + tcp actually RUNS: a served handler opens a plain TCP connection
+		// through the sync surface (%future-force under the callback driver) -- to the
+		// server's own listening socket, so no second process is needed -- and answers
+		// from the connected handle. The tcp state lives in sockets.lisp defvars, so
+		// this also covers the top-level init the handle wrapper performs. A
+		// compile-only assertion cannot catch a runtime-composition failure here;
+		// this test exists because serve+tcp once compiled fine and trapped on every
+		// request. Needs -S cli=y: without it wasmtime serve's linker reports the
+		// tcp-socket resource as missing at instantiation.
+		byte[] componentBytes = compileServeComponent("""
+				(defun handle (request)
+				  (let ((sock (rontolisp:tcp-connect "127.0.0.1" 8091)))
+				    (if sock
+				        (progn
+				          (close sock)
+				          (list :status 200 :body "connected"))
+				        (list :status 200 :body "no-listener"))))
+				(rontolisp:http-handler 'handle)
+				""", null);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-tcp.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y"
+						+ " --addr 127.0.0.1:8091 /tmp/serve-tcp.wasm >/tmp/serve-tcp.log 2>&1 &"
+						+ " for i in $(seq 1 60); do out=$(curl -sf http://127.0.0.1:8091/) && [ -n \"$out\" ]"
+						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-tcp.log 1>&2; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve tcp-connect; log: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("connected");
 	}
 
 	@Test

@@ -11,7 +11,7 @@ Each port keeps the routes and response bodies of the original template.
 | http-handler | [`http-handler/app.lisp`](http-handler/app.lisp) | yes | yes | yes | yes |
 | http-client | [`http-client/app.lisp`](http-client/app.lisp) | yes | yes | yes | yes (allowlist the upstream host) |
 | http-kv-handler | [`http-kv-handler/app.lisp`](http-kv-handler/app.lisp) | yes (in-memory) | yes (in-memory) | not yet ported to `wasi:keyvalue` | not yet ported to `wasi:keyvalue` |
-| service-tcp | [`service-tcp/`](service-tcp/) | yes | yes | no (serve + tcp) | no (service model) |
+| service-tcp | [`service-tcp/`](service-tcp/) | yes | yes | yes (http-api half; needs `-S cli=y -S tcp=y -S inherit-network=y`) | no (host has no `wasi:sockets` 0.3) |
 | http-api-with-distributed-workloads | not ported | - | - | - | - |
 
 The `wasi:keyvalue` gap is not a missing capability: a served component can
@@ -20,10 +20,14 @@ import the interface, and
 is a page-hit counter that does, keeping its counts on wasmCloud across
 requests. This port has simply not been rewritten against it yet.
 
-`service-tcp` has no WASM path for either half: serving and the tcp built-ins
-cannot be combined in one `--component` binary, and the wasmCloud v2 service
-model (`wasi:cli/run` + `wasi:sockets` 0.2) does not match rontolisp's WASI 0.3
-sockets.
+`service-tcp` has no wasmCloud path for either half. The `http-api` half
+(serving plus the tcp built-ins) compiles into one `--component` binary and
+runs under `wasmtime serve` with `-S cli=y -S tcp=y -S inherit-network=y`
+added to the usual flags (see its header) -- but wasmCloud's host does not
+provide `wasi:sockets` 0.3, so under `wash dev` its tcp connections fail
+instead of reaching the leet service. The `service-leet` half runs as
+a component under `wasmtime run` (see its header), but the wasmCloud v2
+service model (`wasi:cli/run` + `wasi:sockets` 0.2) cannot host it.
 
 ## Running
 

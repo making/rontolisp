@@ -27,7 +27,15 @@
 > コンパイルエラーになり、ホストはIPv4リテラルでなければならず、component
 > は通常のフラグに加えて `-W exceptions=y -S tcp=y -S inherit-network=y` を
 > 付けて実行する必要があります (tcp componentは常にexception-handlingモードで
-> コンパイルされます)。**ブラウザプレイグラウンド** ではすべてのtcp関数がエラーを
+> コンパイルされます)。tcp関数と
+> [`rontolisp:http-handler`](http-handler.md) の組み合わせは1つのcomponentに
+> コンパイルでき、`wasmtime serve` で動きます — 上のフラグに `-S cli=y` を
+> 追加してください (これがないとserveのリンカがインスタンス化時に
+> `wasi:sockets@0.3.0` の `tcp-socket` リソースを missing と報告します)。
+> wasmCloudの `wash dev` (2.5.2) もこのcomponentをホストできますが、
+> `wasi:sockets` 0.3 を提供しないため、そこではtcp接続は失敗します —
+> ハンドラが自らソケットを開く必要がある場合は `wasmtime serve`
+> (またはインタプリタ / JVM) で動かしてください。**ブラウザプレイグラウンド** ではすべてのtcp関数がエラーを
 > シグナルします (ブラウザのサンドボックスには素のTCPがありません) — 下の
 > 実行可能な例はブラウザの外でのみ動作します。共通の制限 (TCPのみ、
 > UDPなし) については

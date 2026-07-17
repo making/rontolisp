@@ -1045,6 +1045,25 @@ option (c) decision above.
 - **The base adapter.** The core module's `wasi_snapshot_preview1` import layout is
   Preview-1-IDENTICAL by design, and every `FUNC_*` constant in the WASM backend rests on
   that layout. It is not a boundary a program chose; it is the one every program has.
+  **Re-evaluated from zero 2026-07-17** (the deferred final item of the sockets/stdin
+  migration), per the "re-read a wall" lesson below: after sockets and async stdin moved
+  off, what remains on `adapter.wat` is the SYNC stdin branch, file I/O
+  (`path_open`/`fd_read`/`fd_close` + the `fd_write` append cycle), stdout/stderr writes,
+  and env/clock/random. The wall is NOT technical anymore -- every migration mechanism
+  exists (wit-import canon lower, the async promotion rewrite, `%future-force`,
+  `TYPE_WASI_STREAM` handles) -- it is the byte-stability/flag-neutrality CONTRACT for
+  non-async programs: 0.3 file/stdio I/O is stream-based, so a Lisp-library
+  implementation makes every file- or print-using component an async+EH component
+  (`-W exceptions=y` for hello-world), exactly the flip the stdin migration deliberately
+  avoided by keeping the adapter's sync branch. Per surface: env/clock/random are
+  sync-lowerable TODAY but buy nothing (no promotion goal, no blob deletion since the
+  `fd_*` surface stays, per-program WIT-world churn) -- declined; file I/O migration's
+  only functional gain is "file reads don't stall async bodies", with no recorded demand
+  -- deferred until that promotion goal is real; stdout writes virtually never block
+  (the sync-export finding) -- declined. So `adapter.wat` STAYS, deliberately.
+  Revisit trigger: a real need for non-stalling file reads inside async bodies (that
+  migration would follow the stdin.lisp pattern: a wit-imported filesystem library
+  behind the same `%io-*` dispatch, async-gated so sync programs stay byte-identical).
 - **The serve preview1 bridge** -- the same thing in miniature.
 - **The `--no-gc` print micro-adapter.** A different backend, whose value model is unboxed
   i64/f64 over linear memory; `wit-import` is rejected there by design.

@@ -366,6 +366,28 @@ final class WasmExportCompiler {
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(WasmLispCompiler.CABI_HP_BASE);
 			ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
+			// Run the program's top level once per instance before the first request. A
+			// serve component never lifts `run`, so nothing else would execute the
+			// top-level initializers (defvar/defparameter globals, spliced library
+			// state, user top-level forms) -- a handler reading one would see null. The
+			// old serve adapter ran `run` once as init; the callback shape does it
+			// here, inside the handle call's task context, so a top-level suspension
+			// drives through the blocking event loop exactly as under `wasmtime run`.
+			// The flag is set BEFORE the call so a handler reached from the top level
+			// itself cannot re-enter the init.
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeSignedLeb128(ctx.serveInitGlobalIndex);
+			ctx.writer.write(Instruction.I32_EQZ);
+			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(1);
+			ctx.writer.write(Instruction.SET_GLOBAL);
+			ctx.writer.writeSignedLeb128(ctx.serveInitGlobalIndex);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_START);
+			// _start returns i32 (0 = ok) in component mode.
+			ctx.writer.write(Instruction.DROP);
+			ctx.writer.write(Instruction.END);
 		}
 		// EH mode: an uncaught $lisp-cond throw escaping a host-callable entry must
 		// keep the trap shape (the host sees a trap, not a wasm exception), so the

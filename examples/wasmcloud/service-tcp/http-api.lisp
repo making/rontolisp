@@ -7,20 +7,26 @@
 ;;   POST /task  {"payload":"..."}  -> the payload in leet speak
 ;;   unknown path -> 404 "Not found"
 ;;
-;; Interpreter / JVM only: serving and the tcp built-ins cannot be combined
-;; in one --component binary.
+;; wasmCloud itself cannot run this half: its host does not provide
+;; wasi:sockets 0.3, so under `wash dev` the tcp connection to the leet
+;; service fails. Everywhere else it works, including as a WASI component
+;; under wasmtime serve (note the extra -S cli=y, without which the serve
+;; linker reports the tcp-socket resource as missing).
 ;;
 ;; Run (start service-leet.lisp first; then, interpreter):
 ;;   rontolisp examples/wasmcloud/service-tcp/http-api.lisp
 ;; Run (JVM class; running it needs the rontolisp jar on the classpath):
 ;;   rontolisp examples/wasmcloud/service-tcp/http-api.lisp -o HttpApi.class && \
 ;;     java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. HttpApi
+;; Run (WASI component under wasmtime serve):
+;;   rontolisp examples/wasmcloud/service-tcp/http-api.lisp -o http-api.wasm --component && \
+;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y http-api.wasm
 ;; Talk to it with:
 ;;   curl -X POST -d '{"payload":"Hello World"}' http://127.0.0.1:8080/task
 ;;   -> H3110 W0r1d
 
-;; t when the body looks like a JSON object (json-parse signals on garbage,
-;; and rontolisp has no condition handling to recover from that).
+;; t when the body looks like a JSON object (json-parse signals on garbage;
+;; the cheap guard answers 400 without wrapping the parse in handler-case).
 (defun json-object-p (body)
   (and (stringp body) (> (length body) 0) (eql (char body 0) #\{)))
 

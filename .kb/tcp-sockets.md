@@ -146,13 +146,12 @@ handshake failure surface at first-I/O time, not accept time).
   call differs; both headers carry the keytool one-liner that generates
   `tls-server.p12`).
 
-## The retired core seam (fixed indices 8-11)
+## The retired core seam (deleted)
 
 Core function indices 8-11 were the old `sock.*` adapter seam. The seam is
-GONE (sockets are a wit-imported Lisp library now), but the four indices are
-kept as never-called trap stubs in EVERY mode so every following `FUNC_*`
-constant -- and every non-socket artifact byte -- stays identical. Collapsing
-them is a mechanical `FUNC_START` 12 -> 8 shift left for a dedicated cleanup.
+GONE (sockets are a wit-imported Lisp library now); the four never-called trap
+stubs that briefly preserved the old indices were collapsed too, so `FUNC_START`
+is `IMPORT_FUNC_COUNT` (8) and defined functions follow the imports directly.
 
 ## The component mechanics (sockets.lisp over wasi:sockets@0.3.0)
 
@@ -161,6 +160,36 @@ The old third blob set (`uni-sockets.wit` / `core-sockets.wat` /
 program is the BASE variant plus one appended user import
 (`appendUserImports`), exactly like fetch -- which is why fetch+tcp and
 serve+tcp now compose in one component (the old compile errors are gone).
+
+**serve+tcp RUNS under `wasmtime serve` -- but only with `-S cli=y`** (fixed
+and verified 2026-07-17): without `-S cli=y` the serve linker reports
+"instance export `tcp-socket` has the wrong type: resource implementation is
+missing" at instantiation, an error that reads like a missing host feature
+and produced a WRONG host-blame diagnosis for a day (`wasmtime run` needs no
+such flag). With `-S cli=y -S tcp=y -S inherit-network=y` the component
+instantiates and the tcp calls work. The trap that remained after the flag
+("cast failure" on the first tcp call) was OURS -- the serve top-level-init
+bug below -- and is fixed; runtime coverage is
+`httpHandlerConnectsTcpUnderWasmtimeServe` (the compile-level
+`httpHandlerWithTcpCompilesInServeMode` proved unable to catch a runtime
+composition failure). wasmCloud `wash dev` (2.5.2) hosts the component but
+advertises `wasi:sockets@0.2.0` only; a connect-only probe yielded `nil` and
+http-api's `POST /task` answered 500 -- the exact failure chain (which call
+fails, how, and why 500) is UNVERIFIED and tracked in `.todo/145`; user docs
+deliberately say only "tcp connections fail there".
+
+**The serve top-level-init bug (fixed 2026-07-17)**: a serve component never
+lifts `run`, and after the hand-written serve adapter died (which used to run
+`run` once as init) NOTHING executed the program's top level -- every
+defvar/defparameter global (user or spliced-library) read back null inside a
+served handler, and the first arithmetic on one trapped with "cast failure"
+(sockets.lisp's `(+ rontolisp::*sock-next-fd* 1)` in `%sock-register` was how
+it surfaced). Fix: the `handle` wrapper (`WasmExportCompiler.emitBody`) runs
+`_start` once per instance under a new serve-only `(mut i32)` init flag
+(`serveInitGlobalIndex`, appended after every other global -- non-serve
+output is byte-identical), inside the handle call's task context, so a
+top-level suspension drives through the blocking event loop exactly as under
+`wasmtime run`. Pinned by `httpHandlerReadsATopLevelGlobalUnderWasmtimeServe`.
 
 - **Plumbing (sockets.lisp `%sock-plumb`, the old adapter's `$plumb` in
   Lisp)**: at connect/accept time `receive()` yields the recv stream (its

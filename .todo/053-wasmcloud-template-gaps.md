@@ -41,21 +41,19 @@ one host, talking over the host's loopback network. The port
 (`examples/wasmcloud/service-tcp/`) was verified with both halves as
 interpreter/JVM processes; the WASM story has since diverged per half:
 
-- `http-api.lisp` (serve + `rontolisp:tcp-connect`) **compiles now, but traps
-  at runtime** (re-verified 2026-07-17). The old COMPILE blocker is gone:
-  since commit c84708c, sockets.lisp is one more user WIT import beside the
-  fixed wasi:http surface, so serve + `rontolisp:tcp-*` compose in one
-  `--component` binary (`.kb/tcp-sockets.md`, `.kb/fetch-http.md`), and the
-  example builds to a 230 KB component. Under
-  `wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y
-  -S inherit-network=y` it really serves: `GET /` 200, `GET /nope` 404,
-  `GET /task` 405, a malformed `POST /task` 400. Only the route that touches
-  tcp fails -- `POST /task` with a valid payload returns 500 with
-  `wasm trap: cast failure`. That is a rontolisp bug in the serve+tcp path,
-  not a host gap; it is tracked by `.todo/144`, which carries the four-line
-  repro and owns the README/header prose. So the README cell stays `no`, but
-  its REASON must change: the combination is no longer a compile error, and
-  `-S cli=y` is what the invocation was missing.
+- `http-api.lisp` (serve + `rontolisp:tcp-connect`) **works under `wasmtime
+  serve` now** (the `.todo/144` trap -- serve components never ran their top
+  level -- was fixed 2026-07-17): under `wasmtime serve -W gc=y
+  -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y` all five routes
+  answer, including `POST /task` -> "H3110 W0r1d" end-to-end against an
+  interpreter `service-leet`. On wasmCloud it still has no path: `wash dev`
+  hosts the component and serves the non-tcp routes, but tcp connections
+  fail there (the host advertises `wasi:sockets` 0.2 only; the exact
+  failure shape -- a nil from a connect probe, a 500 from `POST /task` --
+  and its cause are under verification in `.todo/145`). The README's
+  wasmtime cell is `yes` (with the flags), the wasmCloud cell
+  `no (host has no wasi:sockets 0.3)` -- wasmCloud gaining 0.3 sockets is
+  what would flip it.
 - `service-leet.lisp` compiles to a `wasmtime run` component (tcp works
   there), but wasmCloud's v2 service model expects `wasi:sockets` 0.2 from a
   `wasi:cli/run` world, while rontolisp's tcp built-ins are natively WASI
