@@ -32,10 +32,12 @@
 > コンパイルでき、`wasmtime serve` で動きます — 上のフラグに `-S cli=y` を
 > 追加してください (これがないとserveのリンカがインスタンス化時に
 > `wasi:sockets@0.3.0` の `tcp-socket` リソースを missing と報告します)。
-> wasmCloudの `wash dev` (2.5.2) もこのcomponentをホストできますが、
-> `wasi:sockets` 0.3 を提供しないため、そこではtcp接続は失敗します —
-> ハンドラが自らソケットを開く必要がある場合は `wasmtime serve`
-> (またはインタプリタ / JVM) で動かしてください。**ブラウザプレイグラウンド** ではすべてのtcp関数がエラーを
+> wasmCloudの `wash dev` (2.5.2) もこのcomponentをホストでき、
+> `wasi:sockets` 0.3 を提供します。1つ違いがあります: loopback宛の接続先は
+> マシンの実際の127.0.0.1ではなく、workloadごとの仮想ネットワークを指します —
+> loopbackアドレスへの接続は同じwasmCloud workload内のリスナー
+> (そこにbindしたサービスcomponentなど) にのみ届き、loopback以外の
+> アドレスへは実ネットワーク経由で接続します。**ブラウザプレイグラウンド** ではすべてのtcp関数がエラーを
 > シグナルします (ブラウザのサンドボックスには素のTCPがありません) — 下の
 > 実行可能な例はブラウザの外でのみ動作します。共通の制限 (TCPのみ、
 > UDPなし) については

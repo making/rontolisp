@@ -3,10 +3,15 @@
 ;; TCP server that accepts connections on 127.0.0.1:7777, reads lines and
 ;; replies with the leet-speak transformation of each line.
 ;;
-;; Runs on the interpreter, the JVM and as a WASI component under wasmtime
-;; run. wasmCloud itself cannot host this half: its v2 service model
-;; (wasi:cli/run + wasi:sockets 0.2) does not match rontolisp's WASI 0.3
-;; sockets.
+;; Runs on the interpreter, the JVM, as a WASI component under wasmtime run,
+;; and on wasmCloud as a v2 SERVICE: compiled with --component the program
+;; exports wasi:cli/run@0.3.0, which is exactly the shape wash's service
+;; model hosts (this directory's .wash/config.yaml registers the build as
+;; dev.service_file, so one `wash dev` runs both halves). On wasmCloud the
+;; listener binds the workload's in-process virtual loopback, reachable only
+;; by components in the same workload -- and the listen host must be the
+;; explicit "127.0.0.1" below: wash's bind policy rejects the 0.0.0.0
+;; default before its loopback rewrite.
 ;;
 ;; Connections are served one at a time (accept returns to the loop when the
 ;; client closes), which is enough for the per-request open/close pattern of
@@ -20,6 +25,8 @@
 ;; Run (WASI component under wasmtime run):
 ;;   rontolisp examples/wasmcloud/service-tcp/service-leet.lisp -o service-leet.wasm --component && \
 ;;     wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y service-leet.wasm
+;; Run (wasmCloud, both halves in one host):
+;;   cd examples/wasmcloud/service-tcp && wash dev
 ;; Talk to it with:
 ;;   nc 127.0.0.1 7777      (type a line, read it back in leet speak)
 
@@ -40,7 +47,9 @@
 (defun to-leet-speak (s)
   (map 'string #'leet-char s))
 
-(let ((listener (rontolisp:tcp-listen 7777)))
+;; The explicit loopback host matters on wasmCloud (wash rejects a 0.0.0.0
+;; bind from a service); everywhere else it just narrows the listener.
+(let ((listener (rontolisp:tcp-listen 7777 "127.0.0.1")))
   (if listener
       (progn
         (write-line "leet service listening on 127.0.0.1:7777")

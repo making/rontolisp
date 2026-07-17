@@ -172,11 +172,21 @@ instantiates and the tcp calls work. The trap that remained after the flag
 bug below -- and is fixed; runtime coverage is
 `httpHandlerConnectsTcpUnderWasmtimeServe` (the compile-level
 `httpHandlerWithTcpCompilesInServeMode` proved unable to catch a runtime
-composition failure). wasmCloud `wash dev` (2.5.2) hosts the component but
-advertises `wasi:sockets@0.2.0` only; a connect-only probe yielded `nil` and
-http-api's `POST /task` answered 500 -- the exact failure chain (which call
-fails, how, and why 500) is UNVERIFIED and tracked in `.todo/145`; user docs
-deliberately say only "tcp connections fail there".
+composition failure). wasmCloud `wash dev` (2.5.2) hosts the component AND provides
+`wasi:sockets@0.3` -- its "Host provides interfaces" startup log is a stale
+hardcoded list naming 0.2 only; do not read it as the feature set. What
+differs from wasmtime: a loopback destination is routed to a per-workload
+in-memory virtual network, never the machine's real 127.0.0.1, so the old
+probe's connect to a host-side listener got `:connection-refused` (hence
+`nil`), while non-loopback destinations use the real network and work.
+http-api's `POST /task` 500 was the nil sock reaching `(read-line nil)` -- a
+cast-failure TRAP, uncatchable on wasm-GC (handler-case sees signaled
+conditions only). Both halves run inside one `wash dev` when service-leet is
+compiled `--component` (`wasi:cli/run@0.3.0` = wash's v2 service shape) and
+registered as `.wash/config.yaml` `dev.service_file` -- but the listen host
+must be an explicit `"127.0.0.1"`: wash's p3 bind check rejects the
+`tcp-listen` default 0.0.0.0 before its loopback rewrite. Full mechanics and
+the verification log: `.todo/145`.
 
 **The serve top-level-init bug (fixed 2026-07-17)**: a serve component never
 lifts `run`, and after the hand-written serve adapter died (which used to run

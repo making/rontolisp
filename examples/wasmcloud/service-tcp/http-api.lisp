@@ -7,11 +7,14 @@
 ;;   POST /task  {"payload":"..."}  -> the payload in leet speak
 ;;   unknown path -> 404 "Not found"
 ;;
-;; wasmCloud itself cannot run this half: its host does not provide
-;; wasi:sockets 0.3, so under `wash dev` the tcp connection to the leet
-;; service fails. Everywhere else it works, including as a WASI component
-;; under wasmtime serve (note the extra -S cli=y, without which the serve
-;; linker reports the tcp-socket resource as missing).
+;; Works everywhere, wasmCloud included. Under wasmtime serve note the extra
+;; -S cli=y, without which the serve linker reports the tcp-socket resource
+;; as missing. Under `wash dev` 127.0.0.1 names the workload's in-process
+;; virtual loopback, not the machine's -- so the leet service must run
+;; INSIDE wasmCloud too (service-leet.lisp deployed as a v2 service; this
+;; directory's .wash/config.yaml builds and registers both halves), while a
+;; leet service running as a host process is unreachable from the component.
+;; Non-loopback addresses connect over the real network.
 ;;
 ;; Run (start service-leet.lisp first; then, interpreter):
 ;;   rontolisp examples/wasmcloud/service-tcp/http-api.lisp
@@ -21,6 +24,8 @@
 ;; Run (WASI component under wasmtime serve):
 ;;   rontolisp examples/wasmcloud/service-tcp/http-api.lisp -o http-api.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y http-api.wasm
+;; Run (wasmCloud, both halves in one host; serves on :8000):
+;;   cd examples/wasmcloud/service-tcp && wash dev
 ;; Talk to it with:
 ;;   curl -X POST -d '{"payload":"Hello World"}' http://127.0.0.1:8080/task
 ;;   -> H3110 W0r1d
@@ -37,14 +42,18 @@
 
 ;; One round trip to the leet service: send the payload as a line, read the
 ;; transformed line back. A refused connection signals an error on the
-;; interpreter/JVM, so the service must be running; a nil reply (service
-;; closed early) maps to 502.
+;; interpreter/JVM but yields a nil sock on the WASM backend, so the nil
+;; guard answers 502 there instead of trapping on (read-line nil); a nil
+;; reply (service closed early) maps to 502 as well.
 (defun leet-request (payload)
   (let ((sock (rontolisp:tcp-connect "127.0.0.1" 7777)))
-    (write-line payload sock)
-    (let ((reply (read-line sock)))
-      (close sock)
-      reply)))
+    (if sock
+        (progn
+          (write-line payload sock)
+          (let ((reply (read-line sock)))
+            (close sock)
+            reply))
+        nil)))
 
 (defun handle-task (request)
   (let ((body (getf request :body)))
@@ -54,7 +63,7 @@
               (let ((reply (leet-request payload)))
                 (if reply
                     (text-response 200 (format nil "~a~%" reply))
-                    (text-response 502 (format nil "leet service closed the connection~%"))))
+                    (text-response 502 (format nil "leet service unavailable~%"))))
               (text-response 400 (format nil "expected a JSON object with a string payload field~%"))))
         (text-response 400 (format nil "expected a JSON object with a string payload field~%")))))
 

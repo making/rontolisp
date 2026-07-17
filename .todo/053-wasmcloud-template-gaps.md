@@ -33,32 +33,33 @@ against a Lisp store. What is left here is only the PORT: rewrite
 `-S keyvalue=y` provider is rebuilt per instance, so under `wasmtime serve` the
 store reads back empty each request — that column stays honest only if it says so.
 
-## service-tcp: no wasmCloud path for the service half
+## service-tcp: RESOLVED 2026-07-17 -- both halves run on wasmCloud
 
 The original demonstrates the wasmCloud v2 service model: a long-running TCP
 service (`wasi:cli/run` + `wasi:sockets`) plus a stateless HTTP component in
-one host, talking over the host's loopback network. The port
-(`examples/wasmcloud/service-tcp/`) was verified with both halves as
-interpreter/JVM processes; the WASM story has since diverged per half:
+one host, talking over the host's loopback network. The old story here
+("wash expects 0.2 sockets, cannot host either half") was WRONG -- wash
+2.5.x provides `wasi:sockets@0.3` (see `.todo/145` for the full
+source-verified mechanics); what actually differs from wasmtime is that a
+component's loopback is a per-workload VIRTUAL network:
 
-- `http-api.lisp` (serve + `rontolisp:tcp-connect`) **works under `wasmtime
-  serve` now** (the `.todo/144` trap -- serve components never ran their top
-  level -- was fixed 2026-07-17): under `wasmtime serve -W gc=y
-  -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y` all five routes
-  answer, including `POST /task` -> "H3110 W0r1d" end-to-end against an
-  interpreter `service-leet`. On wasmCloud it still has no path: `wash dev`
-  hosts the component and serves the non-tcp routes, but tcp connections
-  fail there (the host advertises `wasi:sockets` 0.2 only; the exact
-  failure shape -- a nil from a connect probe, a 500 from `POST /task` --
-  and its cause are under verification in `.todo/145`). The README's
-  wasmtime cell is `yes` (with the flags), the wasmCloud cell
-  `no (host has no wasi:sockets 0.3)` -- wasmCloud gaining 0.3 sockets is
-  what would flip it.
-- `service-leet.lisp` compiles to a `wasmtime run` component (tcp works
-  there), but wasmCloud's v2 service model expects `wasi:sockets` 0.2 from a
-  `wasi:cli/run` world, while rontolisp's tcp built-ins are natively WASI
-  0.3 (`wasi:sockets@0.3.0`) -- wash cannot host it. A 0.2 sockets fallback
-  (or wasmCloud gaining 0.3 sockets) would unblock the service half.
+- `http-api.lisp` works under `wasmtime serve` (with `-S cli=y -S tcp=y
+  -S inherit-network=y`) against a real-loopback service-leet, AND under
+  `wash dev` against a service-model service-leet (below). Under wash it
+  can also `tcp-connect` to any non-loopback address over the real network;
+  only 127.0.0.1 is virtualized.
+- `service-leet.lisp` compiled `--component` exports `wasi:cli/run@0.3.0`,
+  which is exactly wash's v2 service shape: registered as
+  `.wash/config.yaml` `dev.service_file` it binds the workload's virtual
+  loopback :7777 and http-api's `POST /task` roundtrips "H3110 W0r1d"
+  end-to-end, all inside one `wash dev`. Verified live 2026-07-17 (wash
+  2.5.2). Caveat: the listen host must be explicit `"127.0.0.1"` -- wash's
+  p3 bind check rejects the `tcp-listen` default "0.0.0.0" before the
+  rewrite that the wasmCloud template README promises.
+
+What remains is only the example/docs update (tracked in `.todo/145`):
+explicit listen host + `.wash/config.yaml` + nil-sock 502 guard + README
+cell flip.
 
 ## http-api-with-distributed-workloads: not ported at all
 

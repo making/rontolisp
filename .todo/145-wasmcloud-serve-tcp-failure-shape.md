@@ -70,28 +70,70 @@ The connect fails for a different reason: **loopback is virtualized**.
    nil-reply 502 branch is never reached because the failure is a signal, not
    a nil reply.
 
-## Still to verify (live, next wash session)
+## Live verification (2026-07-17, wash 2.5.2, wasmtime 46.0.1) -- ALL CONFIRMED
 
-1. Probe route wrapping `%sock:` calls in handler-case: confirm the payload is
-   `:connection-refused` at the connect call (expected per the chain above).
-2. `rontolisp:tcp-connect` to a NON-loopback address from inside `wash dev`
-   (e.g. the host's LAN IP where service-leet listens, or any public echo
-   service) -- expected to succeed via the real-network path.
-3. Trace the `POST /task` 500 to `(read-line nil)` vs `(close nil)`; guard a
-   nil sock in `leet-request` and answer 502 explicitly either way.
-4. The real wasmCloud path for the example: compile `service-leet.lisp` as a
-   `--component` (needs tcp-listen/accept on the component backend -- the
-   `%sock:tcp-socket-listen` surface exists in sockets.lisp) and register it
-   as `dev.service_file` so both halves share one workload's virtual
-   loopback. This re-opens the service-leet half of `.todo/053`.
+A probe serve component (scratch `wash-probe/probe.lisp`: routes /loop /raw
+/lan /svc /nilread /nilclose) run under both `wasmtime serve` (baseline,
+real loopback) and `wash dev`:
 
-## Docs state -- now known WRONG, fix after the live re-test
+1. **`:connection-refused` confirmed.** Under wash, a raw
+   `%sock:tcp-socket-create` + await `tcp-socket-connect` to 127.0.0.1:7777
+   signals `rontolisp:wit-error` with payload `:connection-refused` -- the
+   virtual-loopback chain exactly. (`%sock:` is directly callable from user
+   source once any tcp-* built-in triggers the sockets.lisp splice.)
+   `tcp-connect` on the same target = nil. Under wasmtime serve (real
+   loopback, interpreter service-leet listening) both connect.
+2. **Real-network path confirmed.** `tcp-connect "192.168.11.76" 7777` (the
+   host's LAN IP, interpreter service-leet) from inside `wash dev` connects
+   and completes the leet roundtrip -> "H3110 W0r1d". wasi:sockets@0.3 works
+   under wash 2.5.2; only loopback destinations are virtualized.
+3. **The 500 = a cast-failure TRAP, not a signaled condition.** With a nil
+   sock, `(read-line nil)` AND `(close nil)` each die on a serve component
+   with `wasm trap: cast failure` -- handler-case does NOT catch it (wasm-GC
+   catches signaled conditions only; traps stay uncatchable), so the host
+   answers its own 500 page. Identical under wasmtime serve and wash. The
+   http-api 502 branch is unreachable on this backend; the fix is an
+   explicit `(if sock ...)` guard in `leet-request` answering 502. (The
+   nil-as-stream trap itself is kin to the fixed `.todo/144` trap family --
+   arguably read-line/close should reject a nil handle cleanly on serve;
+   separate item if we care.)
+4. **The full wasmCloud path WORKS -- both halves in one `wash dev`.**
+   `service-leet.lisp` compiled `--component` (world exports
+   `wasi:cli/run@0.3.0`) and registered as `.wash/config.yaml`
+   `dev.service_file` runs as a wasmCloud SERVICE, binds the virtual
+   loopback :7777, and the probe component's
+   `tcp-connect "127.0.0.1" 7777` roundtrips -> "H3110 W0r1d". ONE caveat:
+   `(rontolisp:tcp-listen 7777)` -- host defaulted to "0.0.0.0" -- is DENIED
+   (wash's p3 bind check `addr.ip().is_loopback()` runs BEFORE the
+   0.0.0.0->127.0.0.1 rewrite in `tcp.rs start_bind`, unlike what the
+   template README advertises; possible upstream p2/p3 inconsistency), so
+   the service must bind explicitly: `(rontolisp:tcp-listen 7777
+   "127.0.0.1")`. This resolves the service-leet half of `.todo/053`.
 
-`examples/wasmcloud/README.md` (the "no (host has no `wasi:sockets` 0.3)"
-cell + prose), the guides, and the `http-api.lisp` header all say wasmCloud
-does not provide `wasi:sockets` 0.3. That is false for wash >= 2.5.x. The
-correct statement: wasmCloud provides wasi:sockets 0.3, but loopback inside a
-component is a per-workload virtual network -- a component cannot reach a
-process on the HOST's 127.0.0.1; both halves must run inside wasmCloud (the
-service model, item 4 above) or the connect must target a non-loopback
-address. Rewrite those after items 1/2/4 confirm live.
+## Docs + example follow-through -- ALL DONE 2026-07-17
+
+- `examples/wasmcloud/service-tcp/`: service-leet.lisp listens on an explicit
+  "127.0.0.1"; a new `.wash/config.yaml` chains both `--component` builds
+  (wash runs `build.command` through a shell, `&&` works) and registers
+  `dev.service_file: service-leet.wasm`; http-api's `leet-request` guards a
+  nil sock -> 502 "leet service unavailable" (was the read-line-nil trap).
+- `examples/wasmcloud/README.md`: wasmCloud cell flipped to "yes (both
+  halves; service-leet runs as a v2 service)", prose rewritten to the
+  virtual-loopback story, `wash dev` quick start added.
+- `http-api.lisp` / `service-leet.lisp` headers rewritten (wasmCloud run
+  instructions included).
+- `.todo/053` service-tcp section rewritten.
+- `doc/{en,ja}/guides/tcp-sockets.md` + `.kb/tcp-sockets.md` corrected.
+- Verified live 2026-07-17 with the actual example files: `wash dev` in the
+  example dir answers `POST /task` -> "H3110 W0r1d" (both halves in one
+  host); http-api under `wasmtime serve` answers 502 without a leet service
+  and 200 with the interpreter one; interpreter http-api and `wasmtime run`
+  service-leet unchanged-green. NOTE: the wash build takes `rontolisp` from
+  the PATH -- an installed binary older than the `.todo/144` serve fix
+  (400654d) produces a serve component whose handler traps; reinstall after
+  pulling.
+
+Nothing remains in this item. Possible upstream reports (optional, not ours
+to track here): the stale "Host provides interfaces" advertisement, and the
+p3 TcpBind check running before the 0.0.0.0->loopback rewrite that the
+service-tcp template README promises.

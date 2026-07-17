@@ -32,10 +32,12 @@ returns `nil` once the peer has closed the connection.
 > and runs under `wasmtime serve` — add `-S cli=y` to the flags above
 > (without it the serve linker reports the `wasi:sockets@0.3.0`
 > `tcp-socket` resource as missing at instantiation). wasmCloud's
-> `wash dev` (2.5.2) hosts that component too, but does not provide
-> `wasi:sockets` 0.3, so tcp connections fail there — when the served
-> handler must open sockets, serve it with `wasmtime serve` (or on the
-> interpreter / JVM). In the **browser
+> `wash dev` (2.5.2) hosts that component too and provides
+> `wasi:sockets` 0.3, with one difference: a loopback destination names a
+> per-workload virtual network, not the machine's real 127.0.0.1 — a
+> connect to a loopback address only reaches a listener inside the same
+> wasmCloud workload (such as a service component bound there), while
+> non-loopback addresses go out over the real network. In the **browser
 > playground** every tcp function signals an error (the browser sandbox has no
 > raw TCP), so the runnable example below only works outside the browser. See
 > the [tcp-connect](../reference/functions/rontolisp-tcp-connect.md) reference

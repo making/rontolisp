@@ -1,0 +1,10 @@
+build:
+  command: rontolisp http-api.lisp -o http-api.wasm --component && rontolisp service-leet.lisp -o service-leet.wasm --component
+  component_path: http-api.wasm
+
+dev:
+  service_file: service-leet.wasm
+  wasm_proposals:
+    - gc
+    - exception-handling
+    - component-model-async
