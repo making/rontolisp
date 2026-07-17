@@ -440,16 +440,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// references it.
 	static final int FUNC_GENSYM = FUNC_RAT_MOD + 1;
 
-	// _promise_await ((ref null eq)) -> (ref null eq): the generic rontolisp:await
-	// resolver (WasmPromiseRuntimeBuilder). Recursive, so it is a real function rather
+	// _p1_future_await ((ref null eq)) -> (ref null eq): the generic rontolisp:await
+	// resolver (WasmP1FutureRuntimeBuilder). Recursive, so it is a real function rather
 	// than inline code at each await site.
-	static final int FUNC_PROMISE_AWAIT = FUNC_GENSYM + 1;
+	static final int FUNC_P1_FUTURE_AWAIT = FUNC_GENSYM + 1;
 
 	// Binary stream runtime: read-byte / write-byte move one raw byte through the
 	// BYTE_SCRATCH_ADDR scratch cell via fd_read / fd_write (no quote framing, no
 	// newline). Appended before FUNC_USER_BASE like the mod/rem helpers, so no
 	// import/FUNC_START index shifts and the component blobs are unaffected.
-	static final int FUNC_READ_BYTE = FUNC_PROMISE_AWAIT + 1;
+	static final int FUNC_READ_BYTE = FUNC_P1_FUTURE_AWAIT + 1;
 
 	static final int FUNC_WRITE_BYTE = FUNC_READ_BYTE + 1;
 
@@ -530,7 +530,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
-	// promise-await helper, the two binary stream helpers, the four string-stream
+	// p1-future-await helper, the two binary stream helpers, the four string-stream
 	// helpers, the five symbol-API helpers, the read-char helper, and the four string
 	// GC helpers (_str_build, _str_fresh, _str_to_mem, _write_str_gc) -- plus, under
 	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
@@ -614,22 +614,21 @@ public final class WasmLispCompiler implements LispCompiler {
 	// bucket array can be stored in a cons/cell field and compared with ref.eq.
 	static final int TYPE_HASH_BUCKETS = TYPE_CHAR + 1; // 32
 
-	// Promise struct {mut i32 kind, mut (ref null eq) base, mut (ref null eq) fn}: the
-	// runtime representation of a promise, distinct from every other value so promisep
-	// and _promise_await dispatch on it via ref.test. kind 1 = a rontolisp:then chain
-	// (base = the chained value-or-promise, fn = the callback), kind 2 = settled (base
-	// = the memoized result; _promise_await rewrites a promise in place after resolving
-	// it, so a chain callback is consumed exactly once however often the promise is
-	// awaited).
-	static final int TYPE_PROMISE = TYPE_HASH_BUCKETS + 1; // 33
+	// Degenerate-future struct {mut i32 kind, mut (ref null eq) base, mut (ref null eq)
+	// fn}: the non-asyncMode runtime representation of a future, distinct from every
+	// other value so futurep and _p1_future_await dispatch on it via ref.test. kind 2 =
+	// settled (base = the memoized result); kind 1 (a base + callback chain) has no
+	// producer since the promise-era rontolisp:then was deleted, but the layout is kept
+	// so the always-emitted runtime bytes stay put.
+	static final int TYPE_P1_FUTURE = TYPE_HASH_BUCKETS + 1; // 33
 
 	// String byte array: array (mut i8) -- the GC-managed byte storage for a
 	// TYPE_STRING's `data` field (field 2). A bare array comptype (implicitly sub
 	// final), so it is a subtype of eq and stores in the (ref null eq) data field;
 	// readers ref.cast it before array.get_u / array.len. Appended right after
-	// TYPE_PROMISE so the export/import wrapper type indices shift by one (see
+	// TYPE_P1_FUTURE so the export/import wrapper type indices shift by one (see
 	// wrapperTypeIndex / importTypeIndex, both TYPE_WRITE_STR_GC + 1 based).
-	static final int TYPE_STR_BYTES = TYPE_PROMISE + 1; // 34
+	static final int TYPE_STR_BYTES = TYPE_P1_FUTURE + 1; // 34
 
 	// _str_to_mem ((ref null eq) str, i32 ptr) -> i32: copies a string's $str_bytes
 	// array (with its surrounding quotes) into linear[ptr..) and returns the byte
@@ -734,7 +733,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Global (wasm global section) index holding the runtime eval function namespace
 	// (Lisp-2): defuns evaluated at runtime (e.g. from load) are bound here, separate
 	// from the variable environment above. (Await results are memoized inside each
-	// TYPE_PROMISE struct, so no global cache is needed.)
+	// TYPE_P1_FUTURE struct, so no global cache is needed.)
 	static final int GLOBAL_FENV = 1;
 
 	// Memory layout
@@ -980,8 +979,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL);
 		// rontolisp:fetch is component-only: it is the spliced http.lisp defun over the
 		// canon-lowered wasi:http user import. In Preview 1 mode it raises a compile
-		// error (WasmFetchCompiler). await/then/promisep are generic promise operations
-		// that compile in every mode.
+		// error (WasmFetchCompiler). await/futurep are generic future operations that
+		// compile in every mode.
 		// EH mode: the program uses a catching/cleanup form, so the module carries the
 		// $lisp-cond exception tag, %error/%error-cond throw it (instead of a bare
 		// unreachable) and every entry function converts an uncaught throw back into a
@@ -2246,9 +2245,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.writeRefType(true, Type.EQ.code());
 					w.write(am.ik.wasm.Mutability.VAR);
 				});
-				// type 33 (TYPE_PROMISE): promise struct {mut i32 kind, mut (ref null eq)
-				// base, mut (ref null eq) fn} -- all fields mutable so _promise_await can
-				// rewrite a promise to its settled state in place.
+				// type 33 (TYPE_P1_FUTURE): degenerate-future struct {mut i32 kind, mut
+				// (ref null eq) base, mut (ref null eq) fn} -- all fields mutable so
+				// _p1_future_await can rewrite a future to its settled state in place.
 				types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
 					fields.addField(true, w -> w.write(Type.I32));
 					fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
@@ -2586,8 +2585,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_mod
 				// gensym runtime helper
 				fnDef.addFunction(TYPE_RAT_NEW); // _gensym (i32, i32) -> (ref null eq)
-				// promise-await runtime helper
-				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _promise_await
+				// p1-future-await runtime helper
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _p1_future_await
 				// binary stream runtime helpers
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _read_byte (stream,
 															// eof-error-p, eof-value) ->
@@ -2908,8 +2907,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(true));
 				// gensym runtime helper body (FUNC_GENSYM)
 				code.addFunction(WasmGensymRuntimeBuilder.build());
-				// promise-await runtime helper body (FUNC_PROMISE_AWAIT)
-				code.addFunction(WasmPromiseRuntimeBuilder.buildAwait());
+				// p1-future-await runtime helper body (FUNC_P1_FUTURE_AWAIT)
+				code.addFunction(WasmP1FutureRuntimeBuilder.buildAwait());
 				// binary stream runtime helper bodies (FUNC_READ_BYTE, FUNC_WRITE_BYTE)
 				code.addFunction(WasmIoRuntimeBuilder.buildReadByteBody());
 				code.addFunction(WasmIoRuntimeBuilder.buildWriteByteBody());
@@ -3059,8 +3058,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			// library
 			// over canon-lowered wasi:http user imports (the base variant), not the WAT
 			// http-client blob.
+			// An interface the block itself declares (wait.lisp's
+			// wasi:clocks/monotonic-clock) is part of the fixed WASI surface, so the
+			// emitted WIT must not re-declare it as a user import.
 			this.componentWit = WitEmitter.emit(emitSockImport ? WitEmitter.VARIANT_SOCKETS : WitEmitter.VARIANT_BASE,
-					componentExportDecls, componentImports);
+					componentExportDecls, WasmComponentBuilder.additionalImports(componentImports));
 			return WasmComponentBuilder.build(coreModule, emitSockImport, componentExportDecls, componentImports);
 		}
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
@@ -3841,7 +3843,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry funcStr;
 
-		final StringEntry promiseStr;
+		final StringEntry futureStr;
 
 		// Vector/array literal printing: the "#(" prefix for rank-1; a rank-n array
 		// prints "#", the rank as an integer, then "A(". A packed float array
@@ -3900,7 +3902,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.dot = addString(" . ");
 			this.newline = addString("\n");
 			this.funcStr = addString("#<function>");
-			this.promiseStr = addString("#<FUTURE>");
+			this.futureStr = addString("#<FUTURE>");
 			this.vecPrefix = addString("#(");
 			this.hashPrefix = addString("#");
 			this.rankAOpen = addString("A(");

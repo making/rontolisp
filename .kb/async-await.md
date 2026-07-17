@@ -60,7 +60,7 @@ async-defun/async-lambda + await.
   in REAL PARALLEL with the caller -- global state races are the user's business
   (documented divergence from the component backend's cooperative model).
 - **JVM**: `JvmAsyncRuntimeBuilder` (hand-assembled). A future is a bare
-  CompletableFuture (also the legacy then-chain carrier); a stream is
+  CompletableFuture; a stream is
   `{SMARKER, LinkedBlockingQueue, AtomicInteger}` with the interned SMARKER
   string re-enqueued as the EOF poison pill; `stream-read` returns an
   `{RMARKER, queue, state}` token whose blocking take happens at `_await`. The
@@ -74,9 +74,9 @@ async-defun/async-lambda + await.
   (CompletableFuture or read token), `#<STREAM>`.
 - **Preview-1 wasm-GC**: degenerate synchronous. `%async-run`
   (`WasmAsyncRunCompiler`) calls the thunk through dispatch-0 and wraps the
-  value in a settled kind-2 `TYPE_PROMISE` -- the struct is KEPT as P1's
+  value in a settled kind-2 `TYPE_P1_FUTURE` -- the struct is KEPT as P1's
   internal degenerate-future representation (its former producer,
-  `rontolisp:then`, is gone); `_promise_await` (`FUNC_PROMISE_AWAIT`) is P1's
+  `rontolisp:then`, is gone); `_p1_future_await` (`FUNC_P1_FUTURE_AWAIT`) is P1's
   await resolver, and `futurep` ref.tests it. Streams are a compile error.
   CAVEAT: an async body's ERROR signals at the CALL, not at await (eager
   run-to-completion) -- observably identical when the await is adjacent.
@@ -105,9 +105,22 @@ async-defun/async-lambda + await.
 - **wait-for**: interpreter = `AsyncRuntime.timer` and JVM = `_wait_for`, both
   `new CompletableFuture().completeOnTimeout(nil, ms, MILLISECONDS)` (the JDK's
   shared delayer -- no new thread site; the Web Image substitution settles
-  immediately). BOTH wasm backends reject it at compile time (no host timer
-  wired yet; the component lowering to `wasi:clocks/monotonic-clock@0.3.0`'s
-  own `wait-for` is recorded in `.todo/139`).
+  immediately). `--component` = the `wait.lisp` shim (spliced by
+  `eval/WaitForLibrary`, the http.lisp pattern in miniature) over a wit-imported
+  `wasi:clocks/monotonic-clock@0.3.0` `wait-for` (ns; the defun converts ms and
+  validates): an async import call, so it returns a PENDING `TYPE_FUTURE` via
+  `%subtask-future` that `_sched_loop` settles on EVENT_SUBTASK -- timers
+  genuinely overlap (delay order, not start order; the first true concurrency
+  outside http). The interface is part of the fixed import block on every GC
+  variant, so `WasmComponentBuilder.lowerFixedFromBlock` (the generalized serve
+  fixed-iface path) binds it FROM the block instead of re-importing it
+  (`FIXED_BLOCK_IFACES`; a hand-written wit-import of monotonic-clock may bind
+  only the members the block declares: `now`, `wait-for`). Adding `wait-for` to
+  the stub cores dependency-hoisted a `wasi:clocks/types@0.3.0` instance into
+  all three GC blocks, shifting every instance/type constant (re-derived from
+  wasm-tools dump). Preview 1 keeps the compile error (no host timer);
+  `--no-gc` keeps the async-surface rejection. wasmCloud (`wash dev` 2.5.2)
+  hosts a wait-for-awaiting handler too.
 
 ## read-all is prelude Lisp
 

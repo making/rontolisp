@@ -329,8 +329,8 @@ final class WasmFutureRuntimeBuilder {
 	// _future_poll (v) -> (ref null eq): resolves settled futures (flattening chains);
 	// returns a PENDING future unchanged (the await site suspends on it); throws the
 	// payload of a rejected future on $lisp-cond (the memoized re-signal at await). A
-	// TYPE_PROMISE cannot reach an asyncMode module (its only producer, %async-run, is
-	// the non-asyncMode lowering), so there is no promise branch.
+	// TYPE_P1_FUTURE cannot reach an asyncMode module (its only producer, %async-run, is
+	// the non-asyncMode lowering), so there is no degenerate-future branch.
 	private static byte[] buildPoll(int futureType) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);

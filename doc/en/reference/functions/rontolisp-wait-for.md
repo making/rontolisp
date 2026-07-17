@@ -26,5 +26,8 @@ not start order, and awaiting both takes about the longer delay, not the sum.
 
 ## Backend support
 
-`rontolisp:wait-for` exists on the interpreter and the JVM backend today; the
-WASM backends reject it at compile time (no host timer is wired up yet).
+`rontolisp:wait-for` exists on the interpreter, the JVM backend and WASM
+`--component` (where it lowers to the host timer,
+`wasi:clocks/monotonic-clock@0.3.0`'s `wait-for`, as a pending future the
+event loop settles -- timers genuinely overlap there too). Preview 1 WASM
+rejects it at compile time (no host timer).

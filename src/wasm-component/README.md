@@ -100,7 +100,8 @@ import wasi:cli/stdout@0.3.0;          // write-via-stream(stream<u8>) -> future
 import wasi:cli/stdin@0.3.0;           // read-via-stream() -> (stream<u8>, future<result>)
 import wasi:cli/environment@0.3.0;     // get-environment -> list<tuple<string,string>>
 import wasi:clocks/system-clock@0.3.0; // now -> instant{seconds s64, nanoseconds u32}
-import wasi:clocks/monotonic-clock@0.3.0; // now -> u64
+import wasi:clocks/monotonic-clock@0.3.0; // now -> u64; wait-for (async, rontolisp:wait-for's host timer)
+                                          // (pulls in wasi:clocks/types for `duration`, dependency-hoisted)
 import wasi:filesystem/types@0.3.0;    // descriptor.open-at / read-via-stream / append-via-stream
 import wasi:filesystem/preopens@0.3.0; // get-directories
 import wasi:random/random@0.3.0;       // get-random-u64
@@ -131,8 +132,8 @@ async-typed lift of the rontolisp core's `run`) is emitted programmatically by
 
 ## The unified import block (`import-block.bin`)
 
-`import-block.bin` is the raw component-model **type + import section bytes** for the 10
-imported WASI 0.3 interfaces (component import instances 0-9, component types 0-13). It is
+`import-block.bin` is the raw component-model **type + import section bytes** for the 11
+imported WASI 0.3 interfaces (component import instances 0-10, component types 0-15). It is
 written verbatim by `ComponentWriter.writeRaw`, after which `WasmComponentBuilder.build`
 does all remaining wiring programmatically (alias the cli/fs error-code + descriptor types
 and the WASI funcs incl. the stderr write-via-stream, define the
@@ -181,8 +182,8 @@ src/main/resources/.../component/
 ```
 
 `uni-sockets.wit` (world `uni-sockets`) is the base 0.3 surface plus
-`import wasi:sockets/types@0.3.0;` appended last (import instance 9; next free
-component type 13). `WasmComponentBuilder.buildSock` wires the variant:
+`import wasi:sockets/types@0.3.0;` appended last (import instance 10; next free
+component type 17). `WasmComponentBuilder.buildSock` wires the variant:
 alongside the shared `stream<u8>`/future built-ins it defines `own<tcp-socket>`
 and the element-typed `stream<own tcp-socket>` accept stream (its own
 `stream.read`/`drop-readable` built-ins) plus a drop-only sockets-error-code
@@ -316,9 +317,10 @@ signature is `[i32] -> [i32 packed-code]` (always `EXIT`) and the response is
 delivered mid-task through the task-return built-in — 0.3's replacement for 0.2's
 `response-outparam.set`-before-body — after which the body write rendezvouses with the
 host's eager read. The exported function type is built over the block's NAMED
-request/response/error-code aliases (component types 1/2/3): the component-model export
+request/response/error-code aliases (component types 2/3/4): the component-model export
 rule forbids anonymous structural types in an exported signature. The block declares
-import instances 0-7 (`http/types`, `http/client`, `random`, `system-clock`,
-`monotonic-clock`, `cli/types`, `stdout`, `stderr`) and the first free component type is
-13; re-derive from a fresh `wasm-tools dump` after changing `uni-http-server.wit` or
-`core-http-server.wat`. Details: `../../.kb/fetch-http.md`.
+import instances 0-8 (`clocks/types` -- dependency-hoisted by `wait-for`'s `duration` --
+`http/types`, `http/client`, `random`, `system-clock`, `monotonic-clock`, `cli/types`,
+`stdout`, `stderr`) and the first free component type is 15; re-derive from a fresh
+`wasm-tools dump` after changing `uni-http-server.wit` or `core-http-server.wat`.
+Details: `../../.kb/fetch-http.md`.

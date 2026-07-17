@@ -8,8 +8,8 @@ import am.ik.jvm.Opcode;
 
 /**
  * Compiles {@code rontolisp:fetch}: starts an outgoing HTTP request (JavaScript
- * {@code fetch}-style) and immediately returns a promise (a {@code Long} handle) whose
- * result plist {@code (:status <int> :body <string> :headers <alist>)} is obtained via
+ * {@code fetch}-style) and immediately returns a future whose result plist
+ * {@code (:status <int> :headers <alist> :body <stream>)} is obtained via
  * {@code rontolisp:await}. The request URL is the first argument; an optional second
  * argument is an options property list ({@code :method}, {@code :headers},
  * {@code :body}). The actual work is performed by the {@code _fetch} runtime helper

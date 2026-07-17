@@ -19,9 +19,9 @@ import am.ik.jvm.Opcode;
  * <p>
  * Representations in the compiled value model:
  * <ul>
- * <li>a <em>future</em> is a bare {@link java.util.concurrent.CompletableFuture} (the
- * promise-era choice, kept) OR a stream-read token {@code {RMARKER, queue, state}} -- a
- * deferred take whose blocking happens at await;</li>
+ * <li>a <em>future</em> is a bare {@link java.util.concurrent.CompletableFuture} OR a
+ * stream-read token {@code {RMARKER, queue, state}} -- a deferred take whose blocking
+ * happens at await;</li>
  * <li>a <em>stream</em> is {@code {SMARKER, LinkedBlockingQueue, AtomicInteger}}: chunks
  * ride the queue, the flag closes it, and end of stream is the {@code SMARKER} string
  * itself as a re-enqueued poison pill (an interned marker no reader-producible value can
@@ -37,12 +37,11 @@ import am.ik.jvm.Opcode;
  * on the awaiting thread before rethrowing -- {@code handler-case} around the await then
  * dispatches by type exactly like a same-thread signal.</li>
  * </ul>
- * {@code _await} also resolves the legacy {@code rontolisp:then} chain payloads
- * ({@code {MARKER, base, fn}}, see {@code JvmThenCompiler}) and, when the program uses
- * {@code rontolisp:fetch}, converts a settled {@code HttpResponse} into the result
- * property list {@code (:status <int> :headers <alist> :body <stream>)} whose body is a
- * one-chunk closed stream (the JVM fetch stays buffered). Futures are flattened in a
- * loop, like JavaScript await.
+ * When the program uses {@code rontolisp:fetch}, {@code _await} converts a settled
+ * {@code HttpResponse} into the result property list
+ * {@code (:status <int> :headers <alist> :body <stream>)} whose body is a one-chunk
+ * closed stream (the JVM fetch stays buffered). Futures are flattened in a loop, like
+ * JavaScript await.
  */
 final class JvmAsyncRuntimeBuilder {
 
@@ -152,8 +151,6 @@ final class JvmAsyncRuntimeBuilder {
 		MethodrefConstant futureCompleted = cp.addMethodref(futureClass,
 				cp.addNameAndType(cp.addUtf8("completedFuture"),
 						cp.addUtf8("(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;")));
-		MethodrefConstant futureObtrude = cp.addMethodref(futureClass,
-				cp.addNameAndType(cp.addUtf8("obtrudeValue"), cp.addUtf8("(Ljava/lang/Object;)V")));
 
 		ClassConstant queueClass = cp.addClass(cp.addUtf8("java/util/concurrent/LinkedBlockingQueue"));
 		MethodrefConstant queueCtor = cp.addMethodref(queueClass,
@@ -210,17 +207,12 @@ final class JvmAsyncRuntimeBuilder {
 
 		MethodrefConstant invoke0 = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8("_invoke_0"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		MethodrefConstant invoke1 = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_invoke_1"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
-		MethodrefConstant awaitSelf = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(AWAIT_METHOD), cp.addUtf8(AWAIT_DESC)));
 		MethodrefConstant releaseHandoff = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(RELEASE_HANDOFF_METHOD), cp.addUtf8(RELEASE_HANDOFF_DESC)));
 
 		ConstantPool.StringConstant sMarker = cp.addString(SMARKER);
 		ConstantPool.StringConstant rMarker = cp.addString(RMARKER);
 		ConstantPool.StringConstant eMarker = cp.addString(EMARKER);
-		ConstantPool.StringConstant thenMarker = cp.addString(JvmFetchRuntimeBuilder.MARKER);
 		ConstantPool.StringConstant tStr = cp.addString("t");
 		ConstantPool.StringConstant quote = cp.addString("\"");
 
@@ -447,7 +439,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.op(Opcode.INVOKEVIRTUAL);
 			a.u2(futureJoin.index());
 			a.astore(4); // r
-			// 3-element payloads: error / then-chain
+			// 3-element payload: the {EMARKER, t, cond} error envelope
 			int plain = a.label();
 			a.aload(4);
 			a.op(Opcode.INSTANCEOF);
@@ -458,13 +450,12 @@ final class JvmAsyncRuntimeBuilder {
 			a.op(Opcode.ARRAYLENGTH);
 			a.iconst(3);
 			a.branch(Opcode.IF_ICMPNE, plain);
-			int notError = a.label();
 			a.aload(4);
 			a.checkcast(objectArrayClass);
 			a.iconst(0);
 			a.aaload();
 			a.ldc(eMarker.index());
-			a.branch(Opcode.IF_ACMPNE, notError);
+			a.branch(Opcode.IF_ACMPNE, plain);
 			// {EMARKER, t, cond}: re-set the condition channel HERE (the awaiting
 			// thread) and rethrow, so handler-case dispatches by type
 			a.op(Opcode.GETSTATIC);
@@ -481,63 +472,6 @@ final class JvmAsyncRuntimeBuilder {
 			a.aaload();
 			a.checkcast(throwableClass);
 			a.op(Opcode.ATHROW);
-			a.bind(notError);
-			a.aload(4);
-			a.checkcast(objectArrayClass);
-			a.iconst(0);
-			a.aaload();
-			a.ldc(thenMarker.index());
-			a.branch(Opcode.IF_ACMPNE, plain);
-			// then chain {MARKER, base, fn}; memoized = {MARKER, value, MARKER}
-			int notMemo = a.label();
-			a.aload(4);
-			a.checkcast(objectArrayClass);
-			a.iconst(2);
-			a.aaload();
-			a.ldc(thenMarker.index());
-			a.branch(Opcode.IF_ACMPNE, notMemo);
-			a.aload(4);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
-			a.aaload();
-			a.astore(0);
-			a.branch(Opcode.GOTO, loop);
-			a.bind(notMemo);
-			// r' = _await(_invoke_1(fn, _await(base))); memoize via obtrudeValue
-			a.aload(4);
-			a.checkcast(objectArrayClass);
-			a.iconst(2);
-			a.aaload(); // [fn]
-			a.aload(4);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
-			a.aaload(); // [fn, base]
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(awaitSelf.index()); // [fn, baseV]
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(invoke1.index()); // [r0]
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(awaitSelf.index()); // [r']
-			a.astore(5);
-			a.aload(3);
-			a.iconst(3);
-			a.anewarray(objectClass);
-			a.op(Opcode.DUP);
-			a.iconst(0);
-			a.ldc(thenMarker.index());
-			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(1);
-			a.aload(5);
-			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(2);
-			a.ldc(thenMarker.index());
-			a.aastore();
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(futureObtrude.index());
-			a.aload(5);
-			a.areturn();
 			a.bind(plain);
 			if (usesFetch) {
 				emitHttpResponseBranch(a, cp, objectClass, objectArrayClass, stringClass, queueClass, queueCtor,

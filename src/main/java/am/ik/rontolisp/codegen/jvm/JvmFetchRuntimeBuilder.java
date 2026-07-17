@@ -12,25 +12,14 @@ import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 
 /**
- * Builds the JVM bytecode for the {@code rontolisp:fetch} / {@code rontolisp:await}
- * built-ins, emitted as two {@code private static} methods into the generated standalone
- * {@code .class}. A promise in this backend <em>is</em> a
- * {@link java.util.concurrent.CompletableFuture} (nothing else in the runtime value
- * representation is one, so {@code promisep} is a single {@code instanceof}).
+ * Builds the JVM bytecode for the {@code rontolisp:fetch} built-in, emitted as a
+ * {@code private static} method into the generated standalone {@code .class}.
  * {@code _fetch(Object url, Object options)} <em>starts</em> an outgoing HTTP request
  * (JavaScript {@code fetch}-style) via {@link java.net.http.HttpClient#sendAsync} and
- * returns the future itself. {@code _await(Object value)} is the generic promise
- * resolver: a non-promise value passes through unchanged; a fetch promise blocks on
- * {@code join()} and returns the property list
- * {@code (:status <int> :body <string> :headers <alist>)} in the shared runtime value
- * representation ({@code Long} status, quote-wrapped {@code String} body, and an alist of
- * quote-wrapped {@code (name . value)} string pairs); a {@code rontolisp:then} chain (a
- * completed future holding a {@code {MARKER, base, fn}} payload, see
- * {@code JvmThenCompiler}) resolves its base recursively, applies the callback through
- * the {@code _invoke_1} dispatcher, flattens a promise-returning callback and memoizes
- * the result back into the future ({@code obtrudeValue}) so the callback runs once. A
- * failed request propagates from {@code join()} as a {@code CompletionException} -- the
- * JavaScript await-rejection timing -- and skips any chained callbacks.
+ * returns the future itself -- a first-class rontolisp future the generic {@code _await}
+ * resolver ({@code JvmAsyncRuntimeBuilder}) converts into the response property list when
+ * awaited. A failed request propagates from {@code join()} as a
+ * {@code CompletionException} -- the JavaScript await-rejection timing.
  *
  * <p>
  * The optional {@code options} argument is a property list; {@code :method} (default
@@ -48,22 +37,6 @@ final class JvmFetchRuntimeBuilder {
 	/** The {@code _fetch} method descriptor. */
 	static final String METHOD_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
-	/** The emitted {@code _await} method name. */
-	static final String AWAIT_METHOD_NAME = "_await";
-
-	/** The {@code _await} method descriptor. */
-	static final String AWAIT_METHOD_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
-
-	/**
-	 * The chain-payload marker, the first element of the 3-element {@code Object[]} a
-	 * {@code rontolisp:then} future is completed with ({@code {MARKER, base, fn}}; a
-	 * memoized chain stores {@code {MARKER, value, MARKER}}). {@code ldc} of equal string
-	 * constants yields the same interned instance, so identity comparison works across
-	 * methods. The embedded newline keeps it distinct from every reader-producible symbol
-	 * (the runtime represents symbols as their bare name).
-	 */
-	static final String MARKER = "%promise\n";
-
 	private JvmFetchRuntimeBuilder() {
 	}
 
@@ -79,22 +52,16 @@ final class JvmFetchRuntimeBuilder {
 	}
 
 	/**
-	 * Builds the {@code _fetch} / {@code _await} method bodies and the constant-pool
-	 * entries they reference.
+	 * Builds the {@code _fetch} method body and the constant-pool entries it references.
 	 * @param cp the constant pool
-	 * @param thisClass the generated class
-	 * @param objectClass {@code java/lang/Object}
 	 * @param objectArrayClass {@code [Ljava/lang/Object;}
 	 * @param stringClass {@code java/lang/String}
-	 * @param longValueOf {@code Long.valueOf(J)}
 	 * @param stringLength {@code String.length()}
 	 * @param stringSubstring {@code String.substring(II)}
-	 * @param stringConcat {@code String.concat(String)}
-	 * @return the two method bodies
+	 * @return the method body
 	 */
-	static FetchRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
-			ClassConstant objectArrayClass, ClassConstant stringClass, MethodrefConstant longValueOf,
-			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat) {
+	static FetchRuntime build(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant stringClass,
+			MethodrefConstant stringLength, MethodrefConstant stringSubstring) {
 		// --- Interface / class references for the JDK HTTP client ---
 		ClassConstant uriClass = cp.addClass(cp.addUtf8("java/net/URI"));
 		MethodrefConstant uriCreate = cp.addMethodref(uriClass,
@@ -106,18 +73,6 @@ final class JvmFetchRuntimeBuilder {
 		MethodrefConstant clientSendAsync = cp
 			.addMethodref(httpClientClass, cp.addNameAndType(cp.addUtf8("sendAsync"), cp.addUtf8(
 					"(Ljava/net/http/HttpRequest;Ljava/net/http/HttpResponse$BodyHandler;)Ljava/util/concurrent/CompletableFuture;")));
-
-		// --- await support: the future itself is the promise value ---
-		ClassConstant futureClass = cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture"));
-		MethodrefConstant futureJoin = cp.addMethodref(futureClass,
-				cp.addNameAndType(cp.addUtf8("join"), cp.addUtf8("()Ljava/lang/Object;")));
-		MethodrefConstant futureObtrudeValue = cp.addMethodref(futureClass,
-				cp.addNameAndType(cp.addUtf8("obtrudeValue"), cp.addUtf8("(Ljava/lang/Object;)V")));
-		MethodrefConstant awaitSelf = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(AWAIT_METHOD_NAME), cp.addUtf8(AWAIT_METHOD_DESC)));
-		MethodrefConstant invoke1 = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_invoke_1"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
-		ConstantPool.StringConstant marker = cp.addString(MARKER);
 
 		ClassConstant httpRequestClass = cp.addClass(cp.addUtf8("java/net/http/HttpRequest"));
 		MethodrefConstant newBuilder = cp.addMethodref(httpRequestClass, cp.addNameAndType(cp.addUtf8("newBuilder"),
@@ -145,38 +100,6 @@ final class JvmFetchRuntimeBuilder {
 		MethodrefConstant publisherNoBody = cp.addMethodref(bodyPublishersClass,
 				cp.addNameAndType(cp.addUtf8("noBody"), cp.addUtf8("()Ljava/net/http/HttpRequest$BodyPublisher;")));
 
-		ClassConstant httpResponseClass = cp.addClass(cp.addUtf8("java/net/http/HttpResponse"));
-		MethodrefConstant statusCode = cp.addInterfaceMethodref(httpResponseClass,
-				cp.addNameAndType(cp.addUtf8("statusCode"), cp.addUtf8("()I")));
-		MethodrefConstant responseBody = cp.addInterfaceMethodref(httpResponseClass,
-				cp.addNameAndType(cp.addUtf8("body"), cp.addUtf8("()Ljava/lang/Object;")));
-		MethodrefConstant responseHeaders = cp.addInterfaceMethodref(httpResponseClass,
-				cp.addNameAndType(cp.addUtf8("headers"), cp.addUtf8("()Ljava/net/http/HttpHeaders;")));
-
-		ClassConstant httpHeadersClass = cp.addClass(cp.addUtf8("java/net/http/HttpHeaders"));
-		MethodrefConstant headersMap = cp.addMethodref(httpHeadersClass,
-				cp.addNameAndType(cp.addUtf8("map"), cp.addUtf8("()Ljava/util/Map;")));
-
-		ClassConstant mapClass = cp.addClass(cp.addUtf8("java/util/Map"));
-		MethodrefConstant mapEntrySet = cp.addInterfaceMethodref(mapClass,
-				cp.addNameAndType(cp.addUtf8("entrySet"), cp.addUtf8("()Ljava/util/Set;")));
-		ClassConstant setClass = cp.addClass(cp.addUtf8("java/util/Set"));
-		MethodrefConstant setIterator = cp.addInterfaceMethodref(setClass,
-				cp.addNameAndType(cp.addUtf8("iterator"), cp.addUtf8("()Ljava/util/Iterator;")));
-		ClassConstant iteratorClass = cp.addClass(cp.addUtf8("java/util/Iterator"));
-		MethodrefConstant iteratorHasNext = cp.addInterfaceMethodref(iteratorClass,
-				cp.addNameAndType(cp.addUtf8("hasNext"), cp.addUtf8("()Z")));
-		MethodrefConstant iteratorNext = cp.addInterfaceMethodref(iteratorClass,
-				cp.addNameAndType(cp.addUtf8("next"), cp.addUtf8("()Ljava/lang/Object;")));
-		ClassConstant entryClass = cp.addClass(cp.addUtf8("java/util/Map$Entry"));
-		MethodrefConstant entryGetKey = cp.addInterfaceMethodref(entryClass,
-				cp.addNameAndType(cp.addUtf8("getKey"), cp.addUtf8("()Ljava/lang/Object;")));
-		MethodrefConstant entryGetValue = cp.addInterfaceMethodref(entryClass,
-				cp.addNameAndType(cp.addUtf8("getValue"), cp.addUtf8("()Ljava/lang/Object;")));
-
-		ClassConstant iterableClass = cp.addClass(cp.addUtf8("java/lang/Iterable"));
-		MethodrefConstant stringJoin = cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("join"),
-				cp.addUtf8("(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;")));
 		MethodrefConstant stringEquals = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
 		MethodrefConstant stringEqualsIgnoreCase = cp.addMethodref(stringClass,
@@ -186,13 +109,9 @@ final class JvmFetchRuntimeBuilder {
 		MethodrefConstant runtimeExceptionInit = cp.addMethodref(runtimeExceptionClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 
-		ConstantPool.StringConstant quote = cp.addString("\"");
-		ConstantPool.StringConstant comma = cp.addString(", ");
 		ConstantPool.StringConstant methodKey = cp.addString(":method");
 		ConstantPool.StringConstant headersKey = cp.addString(":headers");
-		ConstantPool.StringConstant statusKey = cp.addString(":status");
 		ConstantPool.StringConstant bodyKey = cp.addString(":body");
-		ConstantPool.StringConstant headersResultKey = cp.addString(":headers");
 		ConstantPool.StringConstant unsupportedMsg = cp.addString("fetch: unsupported method");
 		// The supported HTTP methods, in canonical (upper-case) form. The request is sent
 		// with the canonical spelling regardless of the case the caller used.
@@ -202,11 +121,10 @@ final class JvmFetchRuntimeBuilder {
 			methodConsts[i] = cp.addString(methods[i]);
 		}
 
-		// Local slots: 0 url, 1 options, 2 builder, 3 cursor, 4 response,
-		// 5 response-header alist, 6 iterator, 7 entry, 8 pair, 9 request headers,
-		// 10 method value, 11 plist cursor, 12 status (Long), 13 result accumulator,
-		// 14 body (quoted String), 15 request-body value, 16 canonical method (String),
-		// 17 method scratch (unquoted String), 18 body publisher.
+		// Local slots: 0 url, 1 options, 2 builder, 3 cursor, 9 request headers,
+		// 10 method value, 11 plist cursor, 15 request-body value,
+		// 16 canonical method (String), 17 method scratch (unquoted String),
+		// 18 body publisher.
 		Asm a = new Asm();
 
 		// --- options parsing: method (10), request headers (9), request body (15) ---
@@ -326,10 +244,10 @@ final class JvmFetchRuntimeBuilder {
 		a.op(0);
 		a.op(Opcode.POP); // discard returned builder
 
-		// promise = HttpClient.newHttpClient().sendAsync(builder.build(),
+		// future = HttpClient.newHttpClient().sendAsync(builder.build(),
 		// BodyHandlers.ofString()) -- the request starts NOW and runs on the client's
 		// executor threads while the compiled program continues. The future itself is
-		// the promise value.
+		// the returned value.
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(newHttpClient.index()); // [client]
 		a.aload(2); // [client, builder]
@@ -403,34 +321,6 @@ final class JvmFetchRuntimeBuilder {
 		a.bind(end);
 	}
 
-	/** Pushes {@code new Object[]{ aload(carSlot), aload(cdrSlot) }}. */
-	private static void consSlots(Asm a, ClassConstant objectClass, int carSlot, int cdrSlot) {
-		a.iconst(2);
-		a.anewarray(objectClass);
-		a.op(Opcode.DUP);
-		a.iconst(0);
-		a.aload(carSlot);
-		a.aastore();
-		a.op(Opcode.DUP);
-		a.iconst(1);
-		a.aload(cdrSlot);
-		a.aastore();
-	}
-
-	/** Pushes {@code new Object[]{ <keyword symbol string>, aload(cdrSlot) }}. */
-	private static void consLdcCdr(Asm a, ClassConstant objectClass, ConstantPool.StringConstant sym, int cdrSlot) {
-		a.iconst(2);
-		a.anewarray(objectClass);
-		a.op(Opcode.DUP);
-		a.iconst(0);
-		a.ldc(sym.index());
-		a.aastore();
-		a.op(Opcode.DUP);
-		a.iconst(1);
-		a.aload(cdrSlot);
-		a.aastore();
-	}
-
 	/** Loads local {@code slot} (a quoted runtime String) and strips the quotes. */
 	private static void stripQuotes(Asm a, int slot, ClassConstant stringClass, MethodrefConstant stringLength,
 			MethodrefConstant stringSubstring) {
@@ -452,17 +342,6 @@ final class JvmFetchRuntimeBuilder {
 		a.op(Opcode.SWAP); // [s, 1, len-1]
 		a.op(Opcode.INVOKEVIRTUAL);
 		a.u2(stringSubstring.index()); // [inner]
-	}
-
-	/** Wraps the String on top of the stack in surrounding quotes. */
-	private static void quoteWrap(Asm a, ConstantPool.StringConstant quote, MethodrefConstant stringConcat) {
-		a.ldc(quote.index()); // [value, q]
-		a.op(Opcode.SWAP); // [q, value]
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringConcat.index()); // [q+value]
-		a.ldc(quote.index()); // [q+value, q]
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringConcat.index()); // [quoted]
 	}
 
 	/** Minimal label-based assembler, mirroring the one in JvmEvalRuntimeBuilder. */

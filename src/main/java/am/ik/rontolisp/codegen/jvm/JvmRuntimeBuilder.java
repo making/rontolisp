@@ -187,7 +187,7 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant charPrin1Method, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
-			@org.jspecify.annotations.Nullable PromisePrint promisePrint,
+			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
@@ -200,9 +200,9 @@ final class JvmRuntimeBuilder {
 
 		// if (val instanceof Long) return ((Long)val).toString();
 		patchBranch(code, ifNonnullPos, code.size());
-		// if (val instanceof CompletableFuture) return "#<PROMISE>"; (only when the
-		// program can create promises)
-		emitPromiseBranch(code, promisePrint);
+		// if (val instanceof CompletableFuture) return "#<FUTURE>"; (only when the
+		// program can create futures)
+		emitFutureBranch(code, futurePrint);
 		// if (val instanceof double[]) return
 		// _arrayToString(_fvToGeneral(val)).replaceFirst(...#d...); and
 		// if (val instanceof ArrayList) return _arrayToString(val); (only when arrays
@@ -498,7 +498,7 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant stringValueOfChar, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
-			@org.jspecify.annotations.Nullable PromisePrint promisePrint,
+			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
@@ -511,8 +511,8 @@ final class JvmRuntimeBuilder {
 
 		// if (val instanceof Long) return ((Long)val).toString();
 		patchBranch(code, ifNonnullPos, code.size());
-		// if (val instanceof CompletableFuture) return "#<PROMISE>"; (promises only)
-		emitPromiseBranch(code, promisePrint);
+		// if (val instanceof CompletableFuture) return "#<FUTURE>"; (futures only)
+		emitFutureBranch(code, futurePrint);
 		// if (val instanceof double[]) return
 		// _arrayToDisplayString(_fvToGeneral(val)).replaceFirst(...#d...); and
 		// if (val instanceof ArrayList) return _arrayToDisplayString(val); (arrays only)
@@ -778,19 +778,13 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * Constant-pool references for printing a promise (a {@code CompletableFuture} at
-	 * runtime) as {@code #<PROMISE>} (interpreter parity), threaded into the two
-	 * lisp-to-string builders only when the program can create promises
-	 * ({@code rontolisp:fetch} / {@code rontolisp:then}).
-	 */
-	/**
 	 * Constant-pool references for printing the opaque asynchronous values: a
 	 * {@code CompletableFuture} (and a pending stream-read token, when the async
-	 * machinery is present) prints as {@code promiseStr}; a stream as {@code streamStr}.
-	 * The marker/label/array entries are null in promise-era programs that never touch
-	 * streams, keeping those branches out.
+	 * machinery is present) prints as {@code futureStr}; a stream as {@code streamStr}.
+	 * The marker/label/array entries are null in programs that never touch streams,
+	 * keeping those branches out.
 	 */
-	record PromisePrint(ClassConstant futureClass, ConstantPool.StringConstant promiseStr,
+	record FuturePrint(ClassConstant futureClass, ConstantPool.StringConstant futureStr,
 			@org.jspecify.annotations.Nullable ClassConstant objectArrayClass,
 			ConstantPool.@org.jspecify.annotations.Nullable StringConstant streamMarker,
 			ConstantPool.@org.jspecify.annotations.Nullable StringConstant readMarker,
@@ -816,46 +810,46 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant prefixReplSingle) {
 	}
 
-	// Emits "if (val instanceof CompletableFuture) return "#<PROMISE>";" at the current
-	// position. A no-op when the program cannot create promises, keeping the branch out
-	// of promise-free programs.
-	private static void emitPromiseBranch(List<Integer> code,
-			@org.jspecify.annotations.Nullable PromisePrint promisePrint) {
-		if (promisePrint == null) {
+	// Emits "if (val instanceof CompletableFuture) return "#<FUTURE>";" at the current
+	// position. A no-op when the program cannot create futures, keeping the branch out
+	// of future-free programs.
+	private static void emitFutureBranch(List<Integer> code,
+			@org.jspecify.annotations.Nullable FuturePrint futurePrint) {
+		if (futurePrint == null) {
 			return;
 		}
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
-		emitU2(code, promisePrint.futureClass().index());
+		emitU2(code, futurePrint.futureClass().index());
 		int skip = code.size();
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
-		emitLdc(code, promisePrint.promiseStr().index());
+		emitLdc(code, futurePrint.futureStr().index());
 		code.add(Opcode.ARETURN);
 		patchBranch(code, skip, code.size());
-		emitMarkerPrintBranch(code, promisePrint, true);
-		emitMarkerPrintBranch(code, promisePrint, false);
+		emitMarkerPrintBranch(code, futurePrint, true);
+		emitMarkerPrintBranch(code, futurePrint, false);
 	}
 
 	// Emits "if (val is Object[3] headed by the stream/read-token marker) return the
 	// opaque label" -- streams print as #<STREAM>, pending stream-read tokens as the
 	// future label. A no-op when the async value machinery is absent.
-	private static void emitMarkerPrintBranch(List<Integer> code, PromisePrint promisePrint, boolean stream) {
-		ConstantPool.StringConstant marker = stream ? promisePrint.streamMarker() : promisePrint.readMarker();
-		ConstantPool.StringConstant label = stream ? promisePrint.streamStr() : promisePrint.promiseStr();
-		if (marker == null || label == null || promisePrint.objectArrayClass() == null) {
+	private static void emitMarkerPrintBranch(List<Integer> code, FuturePrint futurePrint, boolean stream) {
+		ConstantPool.StringConstant marker = stream ? futurePrint.streamMarker() : futurePrint.readMarker();
+		ConstantPool.StringConstant label = stream ? futurePrint.streamStr() : futurePrint.futureStr();
+		if (marker == null || label == null || futurePrint.objectArrayClass() == null) {
 			return;
 		}
 		List<Integer> skips = new ArrayList<>();
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
-		emitU2(code, promisePrint.objectArrayClass().index());
+		emitU2(code, futurePrint.objectArrayClass().index());
 		skips.add(code.size());
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.CHECKCAST);
-		emitU2(code, promisePrint.objectArrayClass().index());
+		emitU2(code, futurePrint.objectArrayClass().index());
 		code.add(Opcode.ARRAYLENGTH);
 		code.add(Opcode.ICONST_3);
 		skips.add(code.size());
@@ -863,7 +857,7 @@ final class JvmRuntimeBuilder {
 		emitU2(code, 0);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.CHECKCAST);
-		emitU2(code, promisePrint.objectArrayClass().index());
+		emitU2(code, futurePrint.objectArrayClass().index());
 		code.add(Opcode.ICONST_0);
 		code.add(Opcode.AALOAD);
 		emitLdc(code, marker.index());

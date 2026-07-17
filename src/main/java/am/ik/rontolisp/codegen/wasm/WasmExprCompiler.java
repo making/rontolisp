@@ -198,9 +198,9 @@ final class WasmExprCompiler {
 					return;
 				}
 				if (LispNames.FUTUREP.equals(qn.member())) {
-					// one ref.test against TYPE_PROMISE (the degenerate Preview-1
+					// one ref.test against TYPE_P1_FUTURE (the degenerate Preview-1
 					// future), plus TYPE_FUTURE under the asyncMode state machines
-					WasmPromisepCompiler.compile(cons, ctx);
+					WasmFuturepCompiler.compile(cons, ctx);
 					return;
 				}
 				if (LispNames.ASYNC_RUN.equals(qn.member())) {
@@ -243,10 +243,15 @@ final class WasmExprCompiler {
 					WasmFutureInternalCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
-				if (LispNames.WAIT_FOR.equals(qn.member())) {
+				if (LispNames.WAIT_FOR.equals(qn.member()) && !ctx.component) {
+					// Under --component, wait-for is the spliced wait.lisp defun (over
+					// the wit-imported wasi:clocks monotonic-clock, a pending future the
+					// scheduler settles) -- the symbol falls through to the ordinary
+					// call path, which resolves the defun. Preview 1 keeps the special
+					// form (the compile error: no host timer).
 					throw new UnsupportedOperationException(
-							"rontolisp:" + qn.member() + " requires the interpreter or the JVM backend"
-									+ " (no host timer is wired on the WASM backends yet)");
+							"rontolisp:" + qn.member() + " requires the interpreter, the JVM backend or --component"
+									+ " (no host timer is wired on Preview 1 WASM)");
 				}
 				if (LispNames.ASYNC_STREAMP.equals(qn.member()) || LispNames.STREAM_READ.equals(qn.member())
 						|| LispNames.STREAM_CLOSE.equals(qn.member())) {

@@ -17,7 +17,7 @@ when `_str_from_mem`'s index is known). The wrapper unboxes each arg (`castI31Ge
 `call (PLACEHOLDER_FUNC_BASE=1<<27) + ordinal` (written with writeUnsignedLeb128), then
 boxes the result. Because it IS a defun, `#'name`/`funcall`/`mapcar`/dispatch/`eval`
 work with no extra wiring. Host-ABI func types are appended after the export wrapper
-types (`TYPE_PROMISE + 1 + numExports + j`).
+types (`TYPE_P1_FUTURE + 1 + numExports + j`).
 
 The **`am.ik.wasm.WasmImportInjector` post-pass** (reuses `WasmTreeShaker`'s
 package-private section/opcode scanners) then rewrites the finished module: prepends the

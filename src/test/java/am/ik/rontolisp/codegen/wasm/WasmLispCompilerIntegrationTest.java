@@ -5880,9 +5880,59 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void waitForIsACompileErrorOnTheWasmBackends() {
+	void waitForIsACompileErrorInPreview1Mode() {
 		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:await (rontolisp:wait-for 10)))"))
-			.hasMessageContaining("rontolisp:wait-for requires the interpreter or the JVM backend");
+			.hasMessageContaining("rontolisp:wait-for requires the interpreter, the JVM backend or --component");
+	}
+
+	// rontolisp:wait-for on the --component path is the wait.lisp shim over the
+	// wit-imported wasi:clocks/monotonic-clock, spliced by WaitForLibrary in the CLI
+	// front-end; a raw compiler does not splice it, so wait-for programs run the same
+	// library pass the CLI does.
+	private static String compileAndRunWaitForComponent(String lispCode) throws Exception {
+		List<LispVal> forms = am.ik.rontolisp.eval.WaitForLibrary.process(LispReader.readAllFromString(lispCode),
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(forms);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+				"/tmp/test.component.wasm");
+		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void componentWaitForSettlesToNil() throws Exception {
+		// wait-for lowers to the block's async wasi:clocks monotonic-clock wait-for: a
+		// pending TYPE_FUTURE the scheduler settles when the timer subtask returns.
+		assertThat(compileAndRunWaitForComponent("""
+				(print (rontolisp:await (rontolisp:wait-for 20)))
+				(print (rontolisp:futurep (rontolisp:wait-for 0)))
+				(print 'done)
+				""")).isEqualTo("nil\nt\ndone");
+	}
+
+	@Test
+	void componentWaitForTimersGenuinelyOverlap() throws Exception {
+		// Two async bodies suspended on timers resolve in DELAY order, not start order
+		// (the interpreter/JVM contract): the scheduler parks on the task's
+		// waitable-set and each EVENT_SUBTASK wakes the frame whose timer fired.
+		assertThat(compileAndRunWaitForComponent("""
+				(rontolisp:async-defun slow () (rontolisp:await (rontolisp:wait-for 300)) (print 'slow))
+				(rontolisp:async-defun quick () (rontolisp:await (rontolisp:wait-for 50)) (print 'quick))
+				(let ((a (slow)) (b (quick)))
+				  (rontolisp:await a)
+				  (rontolisp:await b))
+				(print 'end)
+				""")).isEqualTo("quick\nslow\nend");
+	}
+
+	@Test
+	void componentWaitForRejectsNegativeAndNonInteger() throws Exception {
+		assertThat(compileAndRunWaitForComponent("""
+				(print (handler-case (rontolisp:await (rontolisp:wait-for -5)) (error (e) 'caught)))
+				(print (handler-case (rontolisp:await (rontolisp:wait-for "x")) (error (e) 'caught)))
+				""")).isEqualTo("caught\ncaught");
 	}
 
 	@Test

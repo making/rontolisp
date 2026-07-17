@@ -578,11 +578,11 @@ final class WasmRuntimeBuilder {
 
 	/**
 	 * Emits the {@code TYPE_FUTURE} print branch ("#&lt;FUTURE&gt;", the tag settled and
-	 * pending futures share with the legacy promise) and the {@code TYPE_WASI_STREAM} one
-	 * ("#&lt;STREAM&gt;", matching the interpreter/JVM opaque tag; the string is added to
-	 * the table lazily, so it exists only in async modules). A no-op when the module has
-	 * no async block ({@code futureTypeIndex < 0}), keeping every non-async module
-	 * byte-identical.
+	 * pending futures share with the degenerate P1 future) and the
+	 * {@code TYPE_WASI_STREAM} one ("#&lt;STREAM&gt;", matching the interpreter/JVM
+	 * opaque tag; the string is added to the table lazily, so it exists only in async
+	 * modules). A no-op when the module has no async block ({@code futureTypeIndex < 0}),
+	 * keeping every non-async module byte-identical.
 	 */
 	private static void emitPrintFuture(WasmWriter w, WasmLispCompiler.StringTable st, int futureTypeIndex) {
 		if (futureTypeIndex < 0) {
@@ -594,9 +594,9 @@ final class WasmRuntimeBuilder {
 		w.writeHeapType(futureTypeIndex);
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.promiseStr.offset());
+		w.writeSignedLeb128(st.futureStr.offset());
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.promiseStr.length());
+		w.writeSignedLeb128(st.futureStr.length());
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		w.write(Instruction.RETURN);
@@ -1818,16 +1818,16 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// Check promise struct -> print "#<PROMISE>"
+		// Check the degenerate-future struct -> print "#<FUTURE>"
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_PROMISE);
+		w.writeHeapType(WasmLispCompiler.TYPE_P1_FUTURE);
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.promiseStr.offset());
+		w.writeSignedLeb128(st.futureStr.offset());
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.promiseStr.length());
+		w.writeSignedLeb128(st.futureStr.length());
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		w.write(Instruction.RETURN);
@@ -2087,16 +2087,16 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// Check promise struct -> print "#<PROMISE>"
+		// Check the degenerate-future struct -> print "#<FUTURE>"
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_PROMISE);
+		w.writeHeapType(WasmLispCompiler.TYPE_P1_FUTURE);
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.promiseStr.offset());
+		w.writeSignedLeb128(st.futureStr.offset());
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.promiseStr.length());
+		w.writeSignedLeb128(st.futureStr.length());
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		w.write(Instruction.RETURN);

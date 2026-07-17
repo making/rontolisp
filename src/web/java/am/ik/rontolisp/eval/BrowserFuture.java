@@ -6,7 +6,7 @@ import java.util.concurrent.CompletableFuture;
  * A {@link CompletableFuture} whose {@link #join()} first runs a <em>settler</em> that
  * blocks (via {@code Atomics.wait} in {@code BrowserHttp.awaitResponse}) until the
  * browser delivers the response and then completes the root future. This is how the
- * single-threaded Web Image runtime awaits a pending promise: nothing can complete a
+ * single-threaded Web Image runtime awaits a pending future: nothing can complete a
  * future in the background there, so the blocking must happen inside {@code join()}
  * itself, on the JS side.
  *

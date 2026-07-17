@@ -7,11 +7,11 @@ import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles {@code rontolisp:await}: blocks until the promise returned by
- * {@code rontolisp:fetch} settles and yields the property list
- * {@code (:status <int> :body <string> :headers <alist>)}. The actual work is performed
- * by the {@code _await} runtime helper emitted by {@link JvmFetchRuntimeBuilder}; this
- * compiler only evaluates the promise argument and calls it.
+ * Compiles {@code rontolisp:await}: resolves a future to its settled value (blocking the
+ * current -- possibly virtual -- thread while it is pending). The actual work is
+ * performed by the {@code _await} runtime helper emitted by
+ * {@code JvmAsyncRuntimeBuilder}; this compiler only evaluates the future argument and
+ * calls it.
  */
 final class JvmAwaitCompiler {
 

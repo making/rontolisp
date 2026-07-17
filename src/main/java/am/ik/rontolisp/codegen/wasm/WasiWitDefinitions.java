@@ -45,6 +45,7 @@ final class WasiWitDefinitions {
 		return Wit.document(packageHeader("root", "component", null), world("root",
 				importRef(ref("wasi", "cli", "types", "0.3.0")), importRef(ref("wasi", "cli", "stdout", "0.3.0")),
 				importRef(ref("wasi", "cli", "stdin", "0.3.0")), importRef(ref("wasi", "cli", "environment", "0.3.0")),
+				importRef(ref("wasi", "clocks", "types", "0.3.0")),
 				importRef(ref("wasi", "clocks", "system-clock", "0.3.0")),
 				importRef(ref("wasi", "clocks", "monotonic-clock", "0.3.0")),
 				importRef(ref("wasi", "filesystem", "types", "0.3.0")),
@@ -58,6 +59,7 @@ final class WasiWitDefinitions {
 		return Wit.document(packageHeader("root", "component", null), world("root",
 				importRef(ref("wasi", "cli", "types", "0.3.0")), importRef(ref("wasi", "cli", "stdout", "0.3.0")),
 				importRef(ref("wasi", "cli", "stdin", "0.3.0")), importRef(ref("wasi", "cli", "environment", "0.3.0")),
+				importRef(ref("wasi", "clocks", "types", "0.3.0")),
 				importRef(ref("wasi", "clocks", "system-clock", "0.3.0")),
 				importRef(ref("wasi", "clocks", "monotonic-clock", "0.3.0")),
 				importRef(ref("wasi", "filesystem", "types", "0.3.0")),
@@ -70,13 +72,13 @@ final class WasiWitDefinitions {
 
 	private static WitDocument httpServer() {
 		return Wit.document(packageHeader("root", "component", null), world("root",
-				importRef(ref("wasi", "http", "types", "0.3.0")), importRef(ref("wasi", "http", "client", "0.3.0")),
-				importRef(ref("wasi", "random", "random", "0.3.0")),
+				importRef(ref("wasi", "clocks", "types", "0.3.0")), importRef(ref("wasi", "http", "types", "0.3.0")),
+				importRef(ref("wasi", "http", "client", "0.3.0")), importRef(ref("wasi", "random", "random", "0.3.0")),
 				importRef(ref("wasi", "clocks", "system-clock", "0.3.0")),
 				importRef(ref("wasi", "clocks", "monotonic-clock", "0.3.0")),
 				importRef(ref("wasi", "cli", "types", "0.3.0")), importRef(ref("wasi", "cli", "stdout", "0.3.0")),
 				importRef(ref("wasi", "cli", "stderr", "0.3.0")), exportRef(ref("wasi", "http", "handler", "0.3.0"))),
-				wasiHttpV030(), wasiRandomV030(), wasiClocksV030(), wasiCliV030HttpServer());
+				wasiClocksV030(), wasiHttpV030(), wasiRandomV030(), wasiCliV030HttpServer());
 	}
 
 	private static WitDocument nogc() {
@@ -106,10 +108,12 @@ final class WasiWitDefinitions {
 	}
 
 	private static WitItem wasiClocksV030() {
-		return packageBlock("wasi", "clocks", "0.3.0",
+		return packageBlock("wasi", "clocks", "0.3.0", iface("types", typeAlias("duration", u64())),
 				iface("system-clock", record("instant", field("seconds", s64()), field("nanoseconds", u32())),
 						func("now", funcType(named("instant")))),
-				iface("monotonic-clock", typeAlias("mark", u64()), func("now", funcType(named("mark")))));
+				iface("monotonic-clock", use(localRef("types"), useName("duration")), typeAlias("mark", u64()),
+						func("now", funcType(named("mark"))),
+						func("wait-for", asyncFuncType(param("how-long", named("duration"))))));
 	}
 
 	private static WitItem wasiFilesystemV030() {

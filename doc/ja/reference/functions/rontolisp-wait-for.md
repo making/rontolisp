@@ -26,6 +26,9 @@
 
 ## バックエンドのサポート
 
-`rontolisp:wait-for` は現在インタプリタと JVM バックエンドに存在します。
-WASM バックエンドはコンパイル時に拒否します (ホストタイマーがまだ配線
-されていません)。
+`rontolisp:wait-for` はインタプリタ、JVM バックエンド、WASM `--component`
+に存在します (`--component` ではホストタイマー
+`wasi:clocks/monotonic-clock@0.3.0` の `wait-for` に低下され、イベント
+ループが解決する保留中の future になるため、タイマーはそこでも本当に
+並行します)。Preview 1 WASM はコンパイル時に拒否します (ホストタイマー
+がありません)。

@@ -8,13 +8,13 @@ import am.ik.wasm.Instruction;
 
 /**
  * Compiles the internal {@code rontolisp::%async-run} primitive (the lowered
- * {@code rontolisp:async-defun}/{@code async-lambda} body). This backend has no
- * asynchronous execution of its own: on Preview 1 nothing can genuinely suspend
- * (everything settles immediately), and under {@code --component} the body's awaits block
- * the stackful task exactly like the rest of the module's I/O. So the body thunk runs to
- * completion right here through the arity-0 dispatch function, and its value is wrapped
- * in a settled (kind 2) {@code TYPE_PROMISE} struct -- the degenerate future that keeps
- * the cross-backend surface identical.
+ * {@code rontolisp:async-defun}/{@code async-lambda} body) outside asyncMode. Preview 1
+ * has no asynchronous execution of its own -- nothing can genuinely suspend, so the body
+ * thunk runs to completion right here through the arity-0 dispatch function, and its
+ * value is wrapped in a settled (kind 2) {@code TYPE_P1_FUTURE} struct -- the degenerate
+ * future that keeps the cross-backend surface identical. (A {@code --component} program
+ * with an async surface is asyncMode and compiles through the {@code WasmAsyncEmit} state
+ * machines instead.)
  */
 final class WasmAsyncRunCompiler {
 
@@ -35,7 +35,7 @@ final class WasmAsyncRunCompiler {
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(am.ik.wasm.Type.EQ.code());
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_PROMISE);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
 	}
 
 }

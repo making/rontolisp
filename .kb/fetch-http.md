@@ -12,8 +12,8 @@ machinery); `await` resolves it, `futurep` is the type predicate. The promise-er
 flattens); JVM = a bare `java.util.concurrent.CompletableFuture` (nothing else in the
 runtime value representation is one); WASM `--component` asyncMode = the first-class
 `TYPE_FUTURE` struct (state machines + scheduler, `.kb/async-await.md`); Preview 1 =
-the internal degenerate `TYPE_PROMISE` struct (settled at creation;
-`FUNC_PROMISE_AWAIT` resolves it).
+the internal degenerate `TYPE_P1_FUTURE` struct (settled at creation;
+`FUNC_P1_FUTURE_AWAIT` resolves it).
 
 `await`/`futurep` compile/run on every backend and WASM mode (Preview 1 included);
 **only `fetch` is component-only** (`WasmFetchCompiler` is a compile error outside

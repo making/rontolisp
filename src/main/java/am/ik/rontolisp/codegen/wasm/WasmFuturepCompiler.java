@@ -8,13 +8,13 @@ import am.ik.wasm.Instruction;
 
 /**
  * Compiles the {@code rontolisp:futurep} predicate: a {@code ref.test} against
- * {@code TYPE_PROMISE} (the internal degenerate-future struct a Preview-1
+ * {@code TYPE_P1_FUTURE} (the internal degenerate-future struct a Preview-1
  * {@code %async-run} produces), plus {@code TYPE_FUTURE} under the asyncMode state
  * machines.
  */
-final class WasmPromisepCompiler {
+final class WasmFuturepCompiler {
 
-	private WasmPromisepCompiler() {
+	private WasmFuturepCompiler() {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -25,12 +25,12 @@ final class WasmPromisepCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		if (ctx.futureTypeIndex >= 0) {
 			// asyncMode: a future is a first-class TYPE_FUTURE (the state machines) OR
-			// the degenerate TYPE_PROMISE a non-async-mode %async-run produced.
+			// the degenerate TYPE_P1_FUTURE a non-async-mode %async-run produced.
 			int tmp = ctx.allocTemp();
 			ctx.writer.write(Instruction.TEE_LOCAL);
 			ctx.writer.writeSignedLeb128(tmp);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_PROMISE);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_P1_FUTURE);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeSignedLeb128(tmp);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -40,7 +40,7 @@ final class WasmPromisepCompiler {
 			return;
 		}
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_PROMISE);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_P1_FUTURE);
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 

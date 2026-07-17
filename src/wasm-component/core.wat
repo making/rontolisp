@@ -8,6 +8,7 @@
   (import "wasi:cli/environment@0.3.0" "get-environment" (func (param i32)))
   (import "wasi:clocks/system-clock@0.3.0" "now" (func (param i32)))
   (import "wasi:clocks/monotonic-clock@0.3.0" "now" (func (result i64)))
+  (import "wasi:clocks/monotonic-clock@0.3.0" "[async-lower]wait-for" (func (param i64) (result i32)))
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.read-via-stream" (func (param i32 i64 i32)))
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.append-via-stream" (func (param i32 i32) (result i32)))
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.open-at" (func (param i32 i32 i32 i32 i32 i32 i32)))

@@ -307,7 +307,6 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, awaitQualified)
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FUTUREP))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WAIT_FOR));
-		boolean usesPromise = usesAsyncRuntime;
 		MethodrefConstant fetchHelperMethod = usesFetch
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_NAME),
 						cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_DESC)))
@@ -1041,8 +1040,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Futures (CompletableFutures / stream-read tokens at runtime) print as
 		// #<FUTURE> and streams as #<STREAM> (interpreter parity); the branches are
 		// emitted only when the program can create them.
-		final JvmRuntimeBuilder.@Nullable PromisePrint promisePrint = usesPromise
-				? new JvmRuntimeBuilder.PromisePrint(cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture")),
+		final JvmRuntimeBuilder.@Nullable FuturePrint futurePrint = usesAsyncRuntime
+				? new JvmRuntimeBuilder.FuturePrint(cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture")),
 						cp.addString("#<FUTURE>"), objectArrayClass, cp.addString(JvmAsyncRuntimeBuilder.SMARKER),
 						cp.addString(JvmAsyncRuntimeBuilder.RMARKER), cp.addString("#<STREAM>"))
 				: null;
@@ -1051,7 +1050,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
 				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, characterClass, charValue, charPrin1Method,
-				arrayListClassForPrint, arrayToStringMethod, javaPrint, promisePrint, packedPrint);
+				arrayListClassForPrint, arrayToStringMethod, javaPrint, futurePrint, packedPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
@@ -1059,7 +1058,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
 				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
 				characterClass, charValue, stringValueOfChar, arrayListClassForPrint, arrayToDisplayStringMethod,
-				javaPrint, promisePrint, packedPrint);
+				javaPrint, futurePrint, packedPrint);
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, stringValueOfChar);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
@@ -1096,12 +1095,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant gensymCtrFieldName = cp.addUtf8(JvmGensymCompiler.CTR_FIELD);
 		Utf8Constant gensymCtrFieldDesc = cp.addUtf8(JvmGensymCompiler.CTR_DESC);
 
-		// fetch/await runtime helper bodies (only when the program uses rontolisp:fetch
-		// or rontolisp:await).
+		// fetch runtime helper body (only when the program uses rontolisp:fetch; the
+		// generic _await lives in the async runtime).
 		final JvmFetchRuntimeBuilder.@Nullable FetchRuntime fetchRuntimeBodies = usesFetch
-				? JvmFetchRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf,
-						stringLength, stringSubstring, stringConcat)
-				: null;
+				? JvmFetchRuntimeBuilder.build(cp, objectArrayClass, stringClass, stringLength, stringSubstring) : null;
 
 		// The async/await runtime: %async-run + run() (the class implements Runnable),
 		// the generic _await, streams and predicates. It rides the condition channel

@@ -5,6 +5,7 @@ world root {
   import wasi:cli/stdout@0.3.0;
   import wasi:cli/stdin@0.3.0;
   import wasi:cli/environment@0.3.0;
+  import wasi:clocks/types@0.3.0;
   import wasi:clocks/system-clock@0.3.0;
   import wasi:clocks/monotonic-clock@0.3.0;
   import wasi:filesystem/types@0.3.0;
@@ -48,6 +49,9 @@ package wasi:cli@0.3.0 {
 
 
 package wasi:clocks@0.3.0 {
+  interface types {
+    type duration = u64;
+  }
   interface system-clock {
     record instant {
       seconds: s64,
@@ -57,9 +61,13 @@ package wasi:clocks@0.3.0 {
     now: func() -> instant;
   }
   interface monotonic-clock {
+    use types.{duration};
+
     type mark = u64;
 
     now: func() -> mark;
+
+    wait-for: async func(how-long: duration);
   }
 }
 

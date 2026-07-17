@@ -84,6 +84,18 @@
           "typeReachable": "am.ik.rontolisp.eval.WitLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/wit\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.WaitForLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/wait\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.WaitForLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/clocks\\.wit"
       }
     ]
   }

@@ -37,6 +37,7 @@ import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UsocketLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
+import am.ik.rontolisp.eval.WaitForLibrary;
 import am.ik.rontolisp.eval.WitExportInliner;
 import am.ik.rontolisp.eval.WitImportInliner;
 import am.ik.rontolisp.eval.WitLibrary;
@@ -286,6 +287,12 @@ public final class RontoLispCli {
 		// guard win.
 		boolean serveGlue = serve && !WitExportInliner.usesWitExport(loaded);
 		loaded = HttpLibrary.process(loaded, witBackend, serveGlue);
+		// rontolisp:wait-for on the --component path is the wait.lisp shim over a
+		// wit-imported wasi:clocks/monotonic-clock@0.3.0 (a pending future the
+		// scheduler settles). Spliced like http.lisp; a no-op elsewhere (the
+		// interpreter/JVM keep their CompletableFuture timer, Preview 1 keeps the
+		// compile error).
+		loaded = WaitForLibrary.process(loaded, witBackend);
 		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
 		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
 		// any

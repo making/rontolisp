@@ -60,13 +60,14 @@ public final class WasmComponentBuilder {
 	 * Pre-built component type/import sections declaring every imported WASI 0.3
 	 * interface, captured from a {@code wasm-tools}-generated reference for the
 	 * {@code uni} WIT world (see {@code src/wasm-component/uni.wit}). In order, component
-	 * import instances 0-9 are: {@code wasi:cli/types} (the {@code error-code} enum),
+	 * import instances 0-10 are: {@code wasi:cli/types} (the {@code error-code} enum),
 	 * {@code wasi:cli/stdout}, {@code wasi:cli/stdin}, {@code wasi:cli/environment},
-	 * {@code wasi:clocks/system-clock}, {@code wasi:clocks/monotonic-clock},
-	 * {@code wasi:filesystem/types}, {@code wasi:filesystem/preopens},
-	 * {@code wasi:random/random} and {@code wasi:cli/stderr} (appended last, for
-	 * {@code warn} on fd&nbsp;2). The block defines component types 0-13, so the next
-	 * free component type index is 14.
+	 * {@code wasi:clocks/types} (the {@code duration} alias {@code wait-for} pulls in),
+	 * {@code wasi:clocks/system-clock}, {@code wasi:clocks/monotonic-clock} (declaring
+	 * {@code now} and the async {@code wait-for}), {@code wasi:filesystem/types},
+	 * {@code wasi:filesystem/preopens}, {@code wasi:random/random} and
+	 * {@code wasi:cli/stderr} (appended last, for {@code warn} on fd&nbsp;2). The block
+	 * defines component types 0-15, so the next free component type index is 16.
 	 */
 	private static final byte[] IMPORT_BLOCK = resource("import-block.bin");
 
@@ -87,11 +88,11 @@ public final class WasmComponentBuilder {
 
 	/**
 	 * The sockets variant of the import block: the base WASI 0.3 interfaces PLUS
-	 * {@code wasi:sockets/types@0.3.0} (instance 9) for the {@code rontolisp:tcp-*}
-	 * built-ins, then {@code wasi:cli/stderr@0.3.0} appended last (instance 10, for
+	 * {@code wasi:sockets/types@0.3.0} (instance 10) for the {@code rontolisp:tcp-*}
+	 * built-ins, then {@code wasi:cli/stderr@0.3.0} appended last (instance 11, for
 	 * {@code warn} on fd&nbsp;2). Unlike fetch, sockets exist natively in WASI 0.3 so the
-	 * variant stays pure 0.3. It declares component import instances 0-10 and component
-	 * types 0-14, so the next free component type index is 15. Source:
+	 * variant stays pure 0.3. It declares component import instances 0-11 and component
+	 * types 0-16, so the next free component type index is 17. Source:
 	 * {@code src/wasm-component/uni-sockets.wit} + {@code core-sockets.wat}.
 	 */
 	private static final byte[] IMPORT_BLOCK_SOCKETS = resource("import-block-sockets.bin");
@@ -107,6 +108,8 @@ public final class WasmComponentBuilder {
 	private static final byte[] ADAPTER_MODULE_SOCKETS = resource("adapter-sockets.wasm");
 
 	// Component import-instance indices (from import-block.bin; see IMPORT_BLOCK).
+	// wasi:clocks/types (instance 4) is dependency-hoisted by wait-for's `use
+	// types.{duration}`, shifting everything after wasi:cli/environment by one.
 	private static final int INST_CLI_TYPES = 0;
 
 	private static final int INST_STDOUT = 1;
@@ -115,41 +118,50 @@ public final class WasmComponentBuilder {
 
 	private static final int INST_ENVIRON = 3;
 
-	private static final int INST_SYS_CLOCK = 4;
+	private static final int INST_SYS_CLOCK = 5;
 
-	private static final int INST_MONO_CLOCK = 5;
+	private static final int INST_MONO_CLOCK = 6;
 
-	private static final int INST_FS_TYPES = 6;
+	private static final int INST_FS_TYPES = 7;
 
-	private static final int INST_FS_PREOPENS = 7;
+	private static final int INST_FS_PREOPENS = 8;
 
-	private static final int INST_RANDOM = 8;
+	private static final int INST_RANDOM = 9;
 
-	private static final int INST_STDERR = 9;
+	private static final int INST_STDERR = 10;
 
-	// First free component type index after the import block. The stderr interface
-	// appended
-	// last to uni.wit adds two component types (an aliased cli error-code + the stderr
-	// instance type), so the block now defines types 0-13 and the next free index is 14.
-	private static final int T_CLI_ERRCODE = 14;
+	// First free component type index after the import block: the block defines types
+	// 0-15 (the wasi:clocks/types instance type and the aliased `duration` joined with
+	// the wait-for declaration), so the aliased resource/enum types start at 16.
+	private static final int T_CLI_ERRCODE = 16;
 
-	private static final int T_FS_ERRCODE = 15;
+	private static final int T_FS_ERRCODE = 17;
 
-	private static final int T_DESCRIPTOR = 16;
+	private static final int T_DESCRIPTOR = 18;
 
-	private static final int T_STREAM = 17;
+	private static final int T_STREAM = 19;
 
-	private static final int T_CLI_RESULT = 18;
+	private static final int T_CLI_RESULT = 20;
 
-	private static final int T_CLI_FUTURE = 19;
+	private static final int T_CLI_FUTURE = 21;
 
-	private static final int T_FS_RESULT = 20;
+	private static final int T_FS_RESULT = 22;
 
-	private static final int T_FS_FUTURE = 21;
+	private static final int T_FS_FUTURE = 23;
 
-	private static final int T_RUN_RESULT = 22;
+	private static final int T_RUN_RESULT = 24;
 
-	private static final int T_RUN_FUNC = 23;
+	private static final int T_RUN_FUNC = 25;
+
+	/**
+	 * The interfaces of the base/sockets blocks a {@code %component-import} may bind FROM
+	 * THE BLOCK (the wait.lisp shim's wasi:clocks/monotonic-clock): they are part of the
+	 * fixed WASI surface, so importing them again as user instances would be invalid.
+	 * Maps each interface to the member fields the block actually declares -- binding
+	 * anything else would only fail component validation with a byte offset.
+	 */
+	private static final java.util.Map<String, java.util.Set<String>> FIXED_BLOCK_IFACES = java.util.Map
+		.of("wasi:clocks/monotonic-clock@0.3.0", java.util.Set.of("now", "wait-for"));
 
 	private WasmComponentBuilder() {
 	}
@@ -330,8 +342,63 @@ public final class WasmComponentBuilder {
 		// wasi:http@0.3 user imports (the base variant); a serving program goes through
 		// buildServe instead.
 		String variant = usesSockets ? WitEmitter.VARIANT_SOCKETS : WitEmitter.VARIANT_BASE;
-		rejectAdapterImportCollisions(imports, variant);
-		return usesSockets ? buildSock(coreModule, funcExports, imports) : buildBase(coreModule, funcExports, imports);
+		// An import of an interface the block itself declares (wait.lisp's
+		// wasi:clocks/monotonic-clock) is bound FROM the block, never re-imported.
+		final List<WasmComponentImportCompiler.Import> fixed = new java.util.ArrayList<>();
+		final List<WasmComponentImportCompiler.Import> user = new java.util.ArrayList<>();
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			(FIXED_BLOCK_IFACES.containsKey(imported.ifaceId()) ? fixed : user).add(imported);
+		}
+		validateFixedMembers(fixed);
+		rejectAdapterImportCollisions(user, variant);
+		return usesSockets ? buildSock(coreModule, funcExports, fixed, user)
+				: buildBase(coreModule, funcExports, fixed, user);
+	}
+
+	/**
+	 * The imports that are NOT bound from the base/sockets blocks' own fixed WASI surface
+	 * -- the genuine user instance imports, which are the only ones the emitted WIT
+	 * describes on top of the fixed world (the counterpart of
+	 * {@link WasmServeComponentBuilder#additionalImports}).
+	 * @param imports the full import list
+	 * @return the additional user imports
+	 */
+	static List<WasmComponentImportCompiler.Import> additionalImports(
+			List<WasmComponentImportCompiler.Import> imports) {
+		final List<WasmComponentImportCompiler.Import> out = new java.util.ArrayList<>();
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			if (!FIXED_BLOCK_IFACES.containsKey(imported.ifaceId())) {
+				out.add(imported);
+			}
+		}
+		return out;
+	}
+
+	// A block-bound interface can only alias the member fields its instance type
+	// actually declares; anything else would only fail component validation downstream
+	// with a byte offset, so say it in words here.
+	static void validateFixedMembers(List<WasmComponentImportCompiler.Import> fixed) {
+		for (WasmComponentImportCompiler.Import imported : fixed) {
+			java.util.Set<String> allowed = FIXED_BLOCK_IFACES.get(imported.ifaceId());
+			if (allowed == null) {
+				continue;
+			}
+			final List<String> bound = new java.util.ArrayList<>();
+			imported.decls().forEach(d -> bound.add(d.field()));
+			imported.calls().forEach(call -> bound.add(call.field()));
+			if (!imported.drops().isEmpty() || !imported.asyncs().isEmpty() || !imported.taskReturns().isEmpty()) {
+				throw new UnsupportedOperationException("rontolisp:wit-import of '" + imported.ifaceId()
+						+ "': this interface is part of the component's fixed WASI surface and only its plain "
+						+ "functions " + allowed + " can be bound from it");
+			}
+			for (String field : bound) {
+				if (!allowed.contains(field)) {
+					throw new UnsupportedOperationException("rontolisp:wit-import of '" + imported.ifaceId()
+							+ "' cannot bind '" + field + "': this interface is part of the component's fixed WASI "
+							+ "surface, which declares only " + allowed);
+				}
+			}
+		}
 	}
 
 	// A user import must not name an interface the component's own WASI surface already
@@ -668,6 +735,194 @@ public final class WasmComponentBuilder {
 		return new Appended(typeIdx - nextType, compFunc - nextComponentFunc, coreFunc - nextCoreFunc);
 	}
 
+	/**
+	 * The outcome of lowering a set of block-declared interfaces: the synthesized core
+	 * instances are already emitted; {@code coreInstanceOf} maps each interface to its
+	 * core instance index (feeding the core module's instantiation arguments by name).
+	 * The {@code next*} cursors let the user imports and the export wiring continue
+	 * without a hardcoded count.
+	 */
+	record FixedIo(java.util.Map<String, Integer> coreInstanceOf, int nextComponentFunc, int nextCoreFunc, int nextType,
+			int nextCoreInstance) {
+	}
+
+	/**
+	 * Lowers interfaces the import block ALREADY DECLARES by aliasing each bound function
+	 * out of the block's import instance and canon-lowering it (async funcs with the
+	 * async option), then the resource drops, the stream/future built-ins bound off the
+	 * type aliases, the task-return built-ins and the waitable-set builtins -- the
+	 * {@link #appendUserImports} emission kinds, against the block's instances
+	 * (appendUserImports MINUS the instance-type / importInstance emission). Bound
+	 * functions are deduplicated by canonical field name (two splices of one interface
+	 * may repeat a function). Emits nothing when {@code fixed} is empty.
+	 * @param c the component writer
+	 * @param fixed the block-declared interfaces to lower
+	 * @param instanceOf the block import-instance index of each fixed interface
+	 * @param projected resource projections the block pre-declares, keyed
+	 * {@code "<iface>#<resource>"} (shared with, and extended by, the drop / async-type
+	 * machinery)
+	 * @param firstComponentFunc the first free component function index
+	 * @param firstCoreFunc the first free core function index
+	 * @param firstType the first free component type index
+	 * @param firstCoreInstance the first free core instance index
+	 */
+	static FixedIo lowerFixedFromBlock(ComponentWriter c, List<WasmComponentImportCompiler.Import> fixed,
+			java.util.Map<String, Integer> instanceOf, java.util.Map<String, Integer> projected, int firstComponentFunc,
+			int firstCoreFunc, int firstType, int firstCoreInstance) {
+		if (fixed.isEmpty()) {
+			// Emit nothing and shift nothing, so a component without a block-bound
+			// interface stays byte-identical.
+			return new FixedIo(new java.util.LinkedHashMap<>(), firstComponentFunc, firstCoreFunc, firstType,
+					firstCoreInstance);
+		}
+		final List<byte[]> funcAliases = new java.util.ArrayList<>();
+		final List<byte[]> lowers = new java.util.ArrayList<>();
+		final List<byte[]> dropAliases = new java.util.ArrayList<>();
+		final List<byte[]> dropCanons = new java.util.ArrayList<>();
+		final java.util.Map<String, List<String>> names = new java.util.LinkedHashMap<>();
+		final java.util.Map<String, List<Integer>> indices = new java.util.LinkedHashMap<>();
+		int compFunc = firstComponentFunc;
+		int coreFunc = firstCoreFunc;
+		int typeIdx = firstType;
+		// Pass A: the bound functions (sync then async), deduplicated by field within
+		// each interface.
+		for (WasmComponentImportCompiler.Import imported : fixed) {
+			final int instance = Objects.requireNonNull(instanceOf.get(imported.ifaceId()));
+			final List<String> fieldNames = new java.util.ArrayList<>();
+			final List<Integer> coreIndices = new java.util.ArrayList<>();
+			final java.util.Set<String> seen = new java.util.HashSet<>();
+			for (WasmComponentImportCompiler.Decl decl : imported.decls()) {
+				if (!seen.add(decl.field())) {
+					continue;
+				}
+				funcAliases.add(ComponentWriter.aliasInstanceFunc(instance, decl.field()));
+				lowers.add(WasmComponentImportCompiler.needsMemory(decl)
+						? ComponentWriter.canonLowerMemoryReallocUtf8(compFunc, 0, 0)
+						: ComponentWriter.canonLower(compFunc));
+				fieldNames.add(decl.field());
+				coreIndices.add(coreFunc);
+				compFunc++;
+				coreFunc++;
+			}
+			for (WasmComponentImportCompiler.AsyncCall call : imported.calls()) {
+				if (!seen.add(call.field())) {
+					continue;
+				}
+				funcAliases.add(ComponentWriter.aliasInstanceFunc(instance, call.field()));
+				lowers.add(ComponentWriter.canonLowerAsyncMemoryReallocUtf8(compFunc, 0, 0));
+				fieldNames.add(call.field());
+				coreIndices.add(coreFunc);
+				compFunc++;
+				coreFunc++;
+			}
+			names.put(imported.ifaceId(), fieldNames);
+			indices.put(imported.ifaceId(), coreIndices);
+		}
+		// Pass B: the resource drops, deduplicated by resource, reusing an
+		// already-projected resource type.
+		for (WasmComponentImportCompiler.Import imported : fixed) {
+			final List<String> fieldNames = Objects.requireNonNull(names.get(imported.ifaceId()));
+			final List<Integer> coreIndices = Objects.requireNonNull(indices.get(imported.ifaceId()));
+			final java.util.Set<String> seenDrops = new java.util.HashSet<>(fieldNames);
+			for (WasmComponentImportCompiler.Drop drop : imported.drops()) {
+				if (!seenDrops.add(drop.field())) {
+					continue;
+				}
+				final String key = imported.ifaceId() + "#" + drop.resource();
+				Integer type = projected.get(key);
+				if (type == null) {
+					dropAliases.add(ComponentWriter.aliasInstanceType(
+							Objects.requireNonNull(instanceOf.get(imported.ifaceId())), drop.resource()));
+					type = typeIdx++;
+					projected.put(key, type);
+				}
+				dropCanons.add(ComponentWriter.canonResourceDrop(type));
+				fieldNames.add(drop.field());
+				coreIndices.add(coreFunc++);
+			}
+		}
+		if (!funcAliases.isEmpty()) {
+			c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(funcAliases));
+		}
+		if (!lowers.isEmpty()) {
+			c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(lowers));
+		}
+		if (!dropAliases.isEmpty()) {
+			c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(dropAliases));
+		}
+		if (!dropCanons.isEmpty()) {
+			c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(dropCanons));
+		}
+		// Pass C: the async built-ins (typed by component-level types derived from the
+		// WIT, resources projected through the shared map), the task-return built-ins
+		// and the waitable-set builtins of each async-calling interface.
+		final WitComponentLevelTypes componentTypes = new WitComponentLevelTypes(typeIdx, projected,
+				ifaceId -> Objects.requireNonNull(instanceOf.get(ifaceId),
+						() -> "the WIT interface '" + ifaceId + "' owning an async type's resource is not imported"));
+		final List<byte[]> asyncCanons = new java.util.ArrayList<>();
+		for (WasmComponentImportCompiler.Import imported : fixed) {
+			final List<String> fieldNames = Objects.requireNonNull(names.get(imported.ifaceId()));
+			final List<Integer> coreIndices = Objects.requireNonNull(indices.get(imported.ifaceId()));
+			final java.util.Set<String> seen = new java.util.LinkedHashSet<>(fieldNames);
+			final java.util.Map<String, Integer> typeOfAlias = new java.util.LinkedHashMap<>();
+			for (WasmComponentImportCompiler.Async async : imported.asyncs()) {
+				typeOfAlias.computeIfAbsent(async.alias(),
+						a -> componentTypes.indexOf(imported.resolver(), async.abi(), async.type()));
+			}
+			for (WasmComponentImportCompiler.Async async : imported.asyncs()) {
+				if (!seen.add(async.field())) {
+					continue;
+				}
+				int type = Objects.requireNonNull(typeOfAlias.get(async.alias()));
+				asyncCanons.add(asyncCanon(async, type));
+				fieldNames.add(async.field());
+				coreIndices.add(coreFunc++);
+			}
+			for (WasmComponentImportCompiler.TaskReturn tr : imported.taskReturns()) {
+				if (!seen.add(tr.field())) {
+					continue;
+				}
+				int type = componentTypes.indexOf(imported.resolver(), tr.abi(), tr.type());
+				asyncCanons.add(ComponentWriter.canonTaskReturnTypeMemoryUtf8(type, 0));
+				fieldNames.add(tr.field());
+				coreIndices.add(coreFunc++);
+			}
+			if (!imported.calls().isEmpty() || !imported.asyncs().isEmpty()) {
+				// async calls await through the waitable-set; the async (non-blocking)
+				// stream/future built-in wrappers park on it when BLOCKED
+				for (String field : WasmComponentImportCompiler.WAITABLE_FIELDS) {
+					if (!seen.add(field)) {
+						continue;
+					}
+					asyncCanons.add(waitableCanon(field));
+					fieldNames.add(field);
+					coreIndices.add(coreFunc++);
+				}
+			}
+		}
+		typeIdx = componentTypes.nextType();
+		componentTypes.flush(c);
+		if (!asyncCanons.isEmpty()) {
+			c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(asyncCanons));
+		}
+		final List<byte[]> coreInstanceDefs = new java.util.ArrayList<>();
+		final java.util.Map<String, Integer> coreInstanceOf = new java.util.LinkedHashMap<>();
+		int coreInstance = firstCoreInstance;
+		for (WasmComponentImportCompiler.Import imported : fixed) {
+			final List<String> fieldNames = Objects.requireNonNull(names.get(imported.ifaceId()));
+			if (fieldNames.isEmpty()) {
+				continue;
+			}
+			coreInstanceDefs.add(ComponentWriter.coreInstanceFromFuncs(fieldNames,
+					Objects.requireNonNull(indices.get(imported.ifaceId()))));
+			coreInstanceOf.put(imported.ifaceId(), coreInstance++);
+		}
+		if (!coreInstanceDefs.isEmpty()) {
+			c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(coreInstanceDefs));
+		}
+		return new FixedIo(coreInstanceOf, compFunc, coreFunc, typeIdx, coreInstance);
+	}
+
 	// The first bound async op per ALIAS: the ops of one alias share one stream/future
 	// type, so the type derivation runs once per alias.
 	private static List<WasmComponentImportCompiler.Async> distinctAsyncTypes(
@@ -780,10 +1035,13 @@ public final class WasmComponentBuilder {
 	 * Assemble the base WASI 0.3 component (no {@code rontolisp:fetch}).
 	 * @param coreModule the rontolisp core module compiled in component mode
 	 * @param funcExports the {@code wasm-export} directives to lift and export
+	 * @param fixed the block-declared interfaces to bind FROM the block (wait.lisp's
+	 * wasi:clocks/monotonic-clock; empty for none)
+	 * @param imports the genuine user interface imports
 	 * @return the WASI 0.3 component binary
 	 */
 	private static byte[] buildBase(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
-			List<WasmComponentImportCompiler.Import> imports) {
+			List<WasmComponentImportCompiler.Import> fixed, List<WasmComponentImportCompiler.Import> imports) {
 		final int userIfaces = imports.size();
 		final ComponentWriter c = new ComponentWriter();
 		// All imported WASI 0.3 interfaces in one block: import instances 0-8, types
@@ -888,86 +1146,99 @@ public final class WasmComponentBuilder {
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
-		// User WIT-interface imports (rontolisp:wit-import): instance types from
-		// component type 24, import instances from 10, function aliases from component
-		// func 11, lowered core funcs from 22. Emits nothing when there are none, so
-		// every fixed index below shifts by zero -- and what it DID consume of each
-		// index space comes back as `user`, the single source every downstream fixed
-		// index shifts by.
-		final Appended user = appendUserImports(c, imports, T_RUN_FUNC + 1, 10, 11, 25);
-		// Instantiate rontolisp (core instance 3 + one per user interface): mem =
-		// instance 0, wasi_snapshot_preview1 = adapter instance 2, plus each user
-		// interface's canon-lowered core instance (3..) under its canonical id.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(
-				List.of(rontolispInstantiate(2, List.of("mem", "wasi_snapshot_preview1"), List.of(0, 2), imports, 3))));
-		final int rontolisp = 3 + userIfaces;
+		// Block-declared interfaces the program binds (wait.lisp's monotonic-clock):
+		// lowered FROM the block's own import instances (component funcs 11.., core
+		// funcs 25.., core instances 3..). Emits nothing when there are none.
+		final FixedIo io = lowerFixedFromBlock(c, fixed,
+				java.util.Map.of("wasi:clocks/monotonic-clock@0.3.0", INST_MONO_CLOCK), new java.util.LinkedHashMap<>(),
+				11, 25, T_RUN_FUNC + 1, 3);
+		// User WIT-interface imports (rontolisp:wit-import): instance types, import
+		// instances (from 11, right after the block's 0-10), function aliases and
+		// lowered core funcs continue after the fixed surface. Emits nothing when there
+		// are none, so every fixed index below shifts by zero -- and what it DID consume
+		// of each index space comes back as `user`, the single source every downstream
+		// fixed index shifts by.
+		final Appended user = appendUserImports(c, imports, io.nextType(), 11, io.nextComponentFunc(),
+				io.nextCoreFunc());
+		// Instantiate rontolisp (core instance 3 + one per fixed/user interface): mem =
+		// instance 0, wasi_snapshot_preview1 = adapter instance 2, plus each fixed
+		// interface's block-lowered core instance and each user interface's
+		// canon-lowered core instance under its canonical id.
+		final List<String> coreNames = new java.util.ArrayList<>(List.of("mem", "wasi_snapshot_preview1"));
+		final List<Integer> coreInstances = new java.util.ArrayList<>(List.of(0, 2));
+		io.coreInstanceOf().forEach((ifaceId, instance) -> {
+			coreNames.add(ifaceId);
+			coreInstances.add(instance);
+		});
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
+			.vec(List.of(rontolispInstantiate(2, coreNames, coreInstances, imports, io.nextCoreInstance()))));
+		final int rontolisp = io.nextCoreInstance() + userIfaces;
 		// Alias rontolisp's run (core func 25 = cabi_realloc + 24 lowered/built-in
-		// funcs, + the user-import lowers).
+		// funcs, + the fixed and user-import lowers).
 		c.rawSection(ComponentWriter.SEC_ALIAS,
 				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp, "run"))));
-		// Lift run into component func 11 (+ the user-import aliases) with the async
-		// function type 23 (an async-typed sync-ABI lift: the task may block, no gated
-		// feature involved). Component func 11 follows the 11 aliased WASI funcs
+		// Lift run into component func 11 (+ the fixed/user-import aliases) with the
+		// async function type 25 (an async-typed sync-ABI lift: the task may block, no
+		// gated feature involved). Component func 11 follows the 11 aliased WASI funcs
 		// (0-10).
-		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(25 + user.coreFuncs(), T_RUN_FUNC))));
-		// Component instance 10 (after import instances 0-9 + the user imports)
+		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter
+			.vec(List.of(ComponentWriter.canonLift(io.nextCoreFunc() + user.coreFuncs(), T_RUN_FUNC))));
+		// Component instance 11 (after import instances 0-10 + the user imports)
 		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
-		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter
-			.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 11 + user.componentFuncs()))));
+		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(List
+			.of(ComponentWriter.componentInstanceFromFunc("run", io.nextComponentFunc() + user.componentFuncs()))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 10 + userIfaces))));
-		// Scalar wasm-export functions: next free indices after the run wiring are core
-		// func 26 (run = 25), component type 24 (T_RUN_FUNC = 23) and component func 12
-		// (the run lift = 11), each shifted by the user-import counts.
-		appendFuncExports(c, funcExports, 26 + user.coreFuncs(), T_RUN_FUNC + 1 + user.types(),
-				12 + user.componentFuncs(), rontolisp);
+				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 11 + userIfaces))));
+		// Scalar wasm-export functions: next free indices after the run wiring, each
+		// shifted by the fixed and user-import counts.
+		appendFuncExports(c, funcExports, io.nextCoreFunc() + user.coreFuncs() + 1, io.nextType() + user.types(),
+				io.nextComponentFunc() + user.componentFuncs() + 1, rontolisp);
 		return c.toByteArray();
 	}
 
 	// Sockets-variant component import-instance indices (from import-block-sockets.bin).
-	// The base WASI 0.3 instances 0-8 keep the same order as buildBase;
-	// wasi:sockets/types is appended at 9 and wasi:cli/stderr (for warn) last at 10.
-	private static final int S_INST_SOCKETS = 9;
+	// The base WASI 0.3 instances 0-9 keep the same order as buildBase (including the
+	// dependency-hoisted wasi:clocks/types at 4); wasi:sockets/types is appended at 10
+	// and wasi:cli/stderr (for warn) last at 11.
+	private static final int S_INST_SOCKETS = 10;
 
-	private static final int S_INST_STDERR = 10;
+	private static final int S_INST_STDERR = 11;
 
-	// First free component type index after import-block-sockets.bin (types 0-14 used;
-	// the
-	// appended stderr interface adds two: an aliased cli error-code + the stderr instance
-	// type). Aliased resource/enum types (component types 15-19).
-	private static final int S_T_CLI_ERRCODE = 15;
+	// First free component type index after import-block-sockets.bin (types 0-16 used;
+	// the appended stderr interface adds two: an aliased cli error-code + the stderr
+	// instance type). Aliased resource/enum types (component types 17-21).
+	private static final int S_T_CLI_ERRCODE = 17;
 
-	private static final int S_T_FS_ERRCODE = 16;
+	private static final int S_T_FS_ERRCODE = 18;
 
-	private static final int S_T_DESCRIPTOR = 17;
+	private static final int S_T_DESCRIPTOR = 19;
 
-	private static final int S_T_SOCK_ERRCODE = 18;
+	private static final int S_T_SOCK_ERRCODE = 20;
 
-	private static final int S_T_TCP_SOCKET = 19;
+	private static final int S_T_TCP_SOCKET = 21;
 
-	// Defined async value/function types (component types 20-30).
-	private static final int S_T_STREAM = 20;
+	// Defined async value/function types (component types 22-32).
+	private static final int S_T_STREAM = 22;
 
-	private static final int S_T_CLI_RESULT = 21;
+	private static final int S_T_CLI_RESULT = 23;
 
-	private static final int S_T_CLI_FUTURE = 22;
+	private static final int S_T_CLI_FUTURE = 24;
 
-	private static final int S_T_FS_RESULT = 23;
+	private static final int S_T_FS_RESULT = 25;
 
-	private static final int S_T_FS_FUTURE = 24;
+	private static final int S_T_FS_FUTURE = 26;
 
-	private static final int S_T_RUN_RESULT = 25;
+	private static final int S_T_RUN_RESULT = 27;
 
-	private static final int S_T_RUN_FUNC = 26;
+	private static final int S_T_RUN_FUNC = 28;
 
-	private static final int S_T_OWN_TCP = 27;
+	private static final int S_T_OWN_TCP = 29;
 
-	private static final int S_T_ACCEPT_STREAM = 28;
+	private static final int S_T_ACCEPT_STREAM = 30;
 
-	private static final int S_T_SOCK_RESULT = 29;
+	private static final int S_T_SOCK_RESULT = 31;
 
-	private static final int S_T_SOCK_FUTURE = 30;
+	private static final int S_T_SOCK_FUTURE = 32;
 
 	/**
 	 * Assemble the sockets-variant component for a {@code rontolisp:tcp-*} program. It is
@@ -988,10 +1259,10 @@ public final class WasmComponentBuilder {
 	 * @return the WASI 0.3 component binary
 	 */
 	private static byte[] buildSock(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
-			List<WasmComponentImportCompiler.Import> imports) {
+			List<WasmComponentImportCompiler.Import> fixed, List<WasmComponentImportCompiler.Import> imports) {
 		final int userIfaces = imports.size();
 		final ComponentWriter c = new ComponentWriter();
-		// Base WASI 0.3 + wasi:sockets import instances 0-9, component types 0-12.
+		// Base WASI 0.3 + wasi:sockets import instances 0-11, component types 0-16.
 		c.writeRaw(IMPORT_BLOCK_SOCKETS);
 		// Core modules: 0 = shared memory (base 6-page module), 1 = sockets adapter,
 		// 2 = rontolisp.
@@ -1117,39 +1388,53 @@ public final class WasmComponentBuilder {
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
-		// User WIT-interface imports (rontolisp:wit-import): instance types from
-		// component type 31, import instances from 11, function aliases from component
-		// func 18, lowered core funcs from 33. Emits nothing when there are none.
-		final Appended user = appendUserImports(c, imports, S_T_SOCK_FUTURE + 1, 11, 18, 36);
-		// Instantiate rontolisp (core instance 3 + one per user interface): mem =
+		// Block-declared interfaces the program binds (wait.lisp's monotonic-clock):
+		// lowered FROM the block's own import instances. Emits nothing when there are
+		// none.
+		final FixedIo io = lowerFixedFromBlock(c, fixed,
+				java.util.Map.of("wasi:clocks/monotonic-clock@0.3.0", INST_MONO_CLOCK), new java.util.LinkedHashMap<>(),
+				18, 36, S_T_SOCK_FUTURE + 1, 3);
+		// User WIT-interface imports (rontolisp:wit-import): instance types, import
+		// instances (from 12, right after the block's 0-11), function aliases and
+		// lowered core funcs continue after the fixed surface. Emits nothing when there
+		// are none.
+		final Appended user = appendUserImports(c, imports, io.nextType(), 12, io.nextComponentFunc(),
+				io.nextCoreFunc());
+		// Instantiate rontolisp (core instance 3 + one per fixed/user interface): mem =
 		// instance 0, and both wasi_snapshot_preview1 AND sock satisfied by the adapter
 		// instance 2 (which exports the eight preview1 functions plus tcp-connect /
-		// tcp-listen / tcp-accept / tcp-local-port), plus each user interface's
-		// canon-lowered core instance.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(rontolispInstantiate(2,
-				List.of("mem", "wasi_snapshot_preview1", "sock"), List.of(0, 2, 2), imports, 3))));
-		final int rontolisp = 3 + userIfaces;
+		// tcp-listen / tcp-accept / tcp-local-port), plus each fixed interface's
+		// block-lowered core instance and each user interface's canon-lowered core
+		// instance.
+		final List<String> coreNames = new java.util.ArrayList<>(List.of("mem", "wasi_snapshot_preview1", "sock"));
+		final List<Integer> coreInstances = new java.util.ArrayList<>(List.of(0, 2, 2));
+		io.coreInstanceOf().forEach((ifaceId, instance) -> {
+			coreNames.add(ifaceId);
+			coreInstances.add(instance);
+		});
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
+			.vec(List.of(rontolispInstantiate(2, coreNames, coreInstances, imports, io.nextCoreInstance()))));
+		final int rontolisp = io.nextCoreInstance() + userIfaces;
 		// Alias rontolisp's run (core func 36 = cabi_realloc + 35 lowered/built-in
-		// funcs, + the user-import lowers).
+		// funcs, + the fixed and user-import lowers).
 		c.rawSection(ComponentWriter.SEC_ALIAS,
 				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp, "run"))));
-		// Lift run into component func 18 (+ the user-import aliases) with the async
-		// function type 26 (an async-typed sync-ABI lift: the task may block, no gated
-		// feature involved). Component func 18 follows the 18 aliased WASI funcs
+		// Lift run into component func 18 (+ the fixed/user-import aliases) with the
+		// async function type 28 (an async-typed sync-ABI lift: the task may block, no
+		// gated feature involved). Component func 18 follows the 18 aliased WASI funcs
 		// (0-17).
-		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter.vec(List.of(ComponentWriter.canonLift(36 + user.coreFuncs(), S_T_RUN_FUNC))));
-		// Component instance 11 (after import instances 0-10 + the user imports)
+		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter
+			.vec(List.of(ComponentWriter.canonLift(io.nextCoreFunc() + user.coreFuncs(), S_T_RUN_FUNC))));
+		// Component instance 12 (after import instances 0-11 + the user imports)
 		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
-		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter
-			.vec(List.of(ComponentWriter.componentInstanceFromFunc("run", 18 + user.componentFuncs()))));
+		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(List
+			.of(ComponentWriter.componentInstanceFromFunc("run", io.nextComponentFunc() + user.componentFuncs()))));
 		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 11 + userIfaces))));
-		// Scalar wasm-export functions: next free indices after the run wiring are core
-		// func 37 (run = 36), component type 31 (S_T_SOCK_FUTURE = 30) and component func
-		// 19 (the run lift = 18), each shifted by the user-import counts.
-		appendFuncExports(c, funcExports, 37 + user.coreFuncs(), S_T_SOCK_FUTURE + 1 + user.types(),
-				19 + user.componentFuncs(), rontolisp);
+				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 12 + userIfaces))));
+		// Scalar wasm-export functions: next free indices after the run wiring, each
+		// shifted by the fixed and user-import counts.
+		appendFuncExports(c, funcExports, io.nextCoreFunc() + user.coreFuncs() + 1, io.nextType() + user.types(),
+				io.nextComponentFunc() + user.componentFuncs() + 1, rontolisp);
 		return c.toByteArray();
 	}
 
