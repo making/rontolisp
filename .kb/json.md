@@ -29,8 +29,14 @@ sound). One implementation runs on every backend:
   (`(defun rontolisp:json-parse (s) ...)`, reached only via
   `function`/`symbol-function`). A program without JSON is returned unchanged.
 
-**Why not plain defuns/&optional**: user lambda lists support required
-parameters only (`.todo/31`), hence the dispatcher/rewrite split. The `%json-`
+**Why not plain defuns/&optional**: nothing forces the split any more — it
+predates the lambda-list extensions and has not been revisited. When it was
+written, a user lambda list took required parameters only; today
+`LambdaLists.desugarProgram` runs inside each compiler, i.e. after
+`JsonLibrary.process` has prepended the library defuns, so an `&optional` in
+`json.lisp` would be desugared like any other. Collapsing the dispatcher and
+the call-site rewrite into one `&optional` defun is therefore open work, not a
+constraint. The `%json-`
 helper names are excluded from `cl-user` introspection by the existing
 `PackageIntrospection.userFunctionNames` filter (`%` prefix / `:` qualified).
 
