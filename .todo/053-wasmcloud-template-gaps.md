@@ -41,14 +41,21 @@ one host, talking over the host's loopback network. The port
 (`examples/wasmcloud/service-tcp/`) was verified with both halves as
 interpreter/JVM processes; the WASM story has since diverged per half:
 
-- `http-api.lisp` (serve + `rontolisp:tcp-connect`) should compile now and
-  needs RE-VERIFYING under `wasmtime serve`. The old blocker is gone: since
-  commit c84708c, sockets.lisp is one more user WIT import beside the fixed
-  wasi:http surface, so serve + `rontolisp:tcp-*` compose in one
-  `--component` binary (`.kb/tcp-sockets.md`, `.kb/fetch-http.md`). If it
-  runs, flip the `no (serve + tcp)` cell in `examples/wasmcloud/README.md`
-  and rewrite its "serving and the tcp built-ins cannot be combined"
-  paragraph.
+- `http-api.lisp` (serve + `rontolisp:tcp-connect`) **compiles now, but traps
+  at runtime** (re-verified 2026-07-17). The old COMPILE blocker is gone:
+  since commit c84708c, sockets.lisp is one more user WIT import beside the
+  fixed wasi:http surface, so serve + `rontolisp:tcp-*` compose in one
+  `--component` binary (`.kb/tcp-sockets.md`, `.kb/fetch-http.md`), and the
+  example builds to a 230 KB component. Under
+  `wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y
+  -S inherit-network=y` it really serves: `GET /` 200, `GET /nope` 404,
+  `GET /task` 405, a malformed `POST /task` 400. Only the route that touches
+  tcp fails -- `POST /task` with a valid payload returns 500 with
+  `wasm trap: cast failure`. That is a rontolisp bug in the serve+tcp path,
+  not a host gap; it is tracked by `.todo/144`, which carries the four-line
+  repro and owns the README/header prose. So the README cell stays `no`, but
+  its REASON must change: the combination is no longer a compile error, and
+  `-S cli=y` is what the invocation was missing.
 - `service-leet.lisp` compiles to a `wasmtime run` component (tcp works
   there), but wasmCloud's v2 service model expects `wasi:sockets` 0.2 from a
   `wasi:cli/run` world, while rontolisp's tcp built-ins are natively WASI
