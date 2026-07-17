@@ -27,10 +27,10 @@ import am.ik.rontolisp.PackageRegistry;
  * <li><strong>Asynchronous context</strong> (async-defun/async-lambda bodies and the top
  * level -- the {@code LispAsync} placement rule): a read is PROMOTED instead --
  * {@code (read-line s)} -&gt; {@code (rontolisp:await (rontolisp::%read-line-future s))}
- * -- so a pending socket read suspends the task and other tasks keep running, the
- * .todo/141 contract. {@code rontolisp:tcp-connect}/{@code tcp-accept} promote the same
- * way onto their {@code %tcp-connect-f}/{@code %tcp-accept-f} async internals (which
- * carry the nil-on-failure convention, so both surfaces behave identically). The inserted
+ * -- so a pending socket read suspends the task and other tasks keep running.
+ * {@code rontolisp:tcp-connect}/{@code tcp-accept} promote the same way onto their
+ * {@code %tcp-connect-f}/{@code %tcp-accept-f} async internals (which carry the
+ * nil-on-failure convention, so both surfaces behave identically). The inserted
  * {@code rontolisp:await} is counted by {@code WasmAwaitAnalysis} like any user await,
  * which is why this runs BEFORE compilation, right after the async-sugar rewrite.</li>
  * </ul>

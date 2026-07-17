@@ -233,7 +233,8 @@ top-level suspension drives through the blocking event loop exactly as under
   and `tcp-connect`/`tcp-accept` promote onto `%tcp-connect-f`/`%tcp-accept-f`
   (which carry the nil-on-failure convention, so both surfaces agree). A
   PENDING accept/read therefore no longer stalls the instance -- a concurrent
-  `wait-for` timer fires while an accept waits (the .todo/141 goal). In sync
+  `wait-for` timer fires while an accept waits (the promotion goal of the
+  sockets/stdin canon-lower migration). In sync
   context the same calls are rewritten onto the `%io-*` dispatch defuns
   (`read-line`/`read-char`/`read-byte`/`write-line`/`write-byte`/
   `write-string`/`close`), which branch: socket handle -> the Lisp entry's
