@@ -185,10 +185,10 @@ Triangle has **zero** exports and a world with no exports is a compile error
 others a world could describe only their 1-3 `frame`/`init` exports -- while the whole
 interest of these demos is the ~40-import GL surface, which `wit-export` never looks at
 (a world's `import` items are ignored today; `.kb/wit.md`). The artifact worth having is
-`local:webgl/gl.wit` **plus a generated JS import object** -- and that is already the
-spike in `.todo/127`'s Definition of Done (`.todo/127:81-84`) and the "follow-on prize" in
-`.todo/124:143-147`. Cross-reference it; do not duplicate it, and do not migrate these
-demos' export side ahead of it (§4 blocks three of them anyway).
+`local:webgl/gl.wit` **plus a generated JS import object** -- and that SHIPPED as
+`.todo/132` on 2026-07-17 (`.kb/wit.md`, "The migration"): gl.wit is checked in, gl.lisp
+binds it, and `gl-imports.js` is generated from it. Do not duplicate that here, and do not
+migrate these demos' export side ahead of §4 (which blocks three of them anyway).
 
 ## 6. Excluded by construction
 
@@ -196,8 +196,8 @@ demos' export side ahead of it (§4 blocks three of them anyway).
 `wit-export` + `http-handler` is a hard compile error (`RontoLispCli.java:304-307`: a
 serve-mode component's only export is `wasi:http/incoming-handler`, so a world of function
 exports could not be honored). They acquire a world when `http-handler` *becomes* "a
-program implementing the `wasi:http/incoming-handler` world" -- `.todo/124`'s absorption
-list -- not before.
+program implementing the `wasi:http/incoming-handler` world" -- `.todo/143` -- not
+before.
 
 ## Definition of done
 
@@ -234,6 +234,6 @@ list -- not before.
 `.kb/wit.md` (the contract check, the `--emit-wit` fixpoint, the `:as` note at :247 and
 the `:s-expr` note at :314), `.kb/wasi-component.md`, `.kb/wasm-export-no-wasi.md`,
 `.kb/no-gc-scalar-wasm.md`, `examples/count-vowels/README.md` (the model to copy),
-`.todo/124` (the anchor), `.todo/127` (the import side + the `gl.lisp` spike),
+`.kb/wit.md` (the record, now that the `.todo/124` anchor is closed),
 `.todo/128` (marshalling -- the gate on §3 option (b)), `.todo/112` (jco cannot call a
 stackful-async GC export; irrelevant here only because mandelbrot's export is sync).

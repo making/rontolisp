@@ -30,7 +30,8 @@ What is left of this todo, and all that is left:
   they are now just more `.wit`, not more compiler.
 
 **Original retarget note (2026-07-13):** do this **through** the WIT-as-IDL pipeline
-(`.todo/124` roadmap, landing in `.todo/128`), not as the hand-rolled
+(the `.todo/124` roadmap, since completed and closed -- `.kb/wit.md` is the record),
+not as the hand-rolled
 `rontolisp:kv-*` built-ins + bespoke blob variant proposed below. `wasi:keyvalue`
 is the designated first proof that a new host interface costs a `.wit` file rather
 than a blob: the surface becomes a plain `wit-import` of the published `.wit`, the

@@ -1033,3 +1033,28 @@ wasmtime traps with `pointer not aligned` — nondeterministically, only after a
 happens to intern something. So the wrapper **aligns HEAP_PTR up to 8 on entry** (that is
 also the staging floor) and pops back to `align8(max(mark, intern-high-water))` on exit.
 Do not "simplify" either of those.
+
+## What CANNOT be externalized as a WIT import (so nobody re-proposes it)
+
+The roadmap that produced all of the above (the `.todo/124` anchor, closed 2026-07-17 once
+the WebGL demos adopted `gl.wit`) left one list worth keeping: the blobs that stay
+hand-written WAT on purpose, and why. Everything else the anchor recorded is here already
+-- the type mapping in `compiler/WitTypeMapper` + `WitTypeMapperTest`, the `result<T,E>`
+option (c) decision above.
+
+- **The base adapter.** The core module's `wasi_snapshot_preview1` import layout is
+  Preview-1-IDENTICAL by design, and every `FUNC_*` constant in the WASM backend rests on
+  that layout. It is not a boundary a program chose; it is the one every program has.
+- **The serve preview1 bridge** -- the same thing in miniature.
+- **The `--no-gc` print micro-adapter.** A different backend, whose value model is unboxed
+  i64/f64 over linear memory; `wit-import` is rejected there by design.
+
+**`wasi:sockets` used to be on this list and is NOT (2026-07-17).** The stated wall -- "its
+0.3 surface is fundamentally `stream`/`future`-based, which has no rontolisp value on ANY
+backend until language-level async" -- was true when written and has since been torn down:
+async/await landed, `stream`/`future` ARE first-class rontolisp values, and
+`stream<u8>`/`future<T>` already cross `canon lower` (it is what `http.lisp` rides).
+`sockets.lisp` now rides a wit-imported `wasi:sockets/types@0.3.0` and
+`adapter-sockets.wat` is deleted (`.kb/tcp-sockets.md`). The lesson worth keeping: a "wall"
+here meant a missing LANGUAGE feature, and the language moved -- so re-read a wall before
+trusting it.

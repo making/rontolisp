@@ -113,7 +113,8 @@ through the general wit-import path), not a bet on unproven technology.
 
 ### Keep -- already the refined choice (a clean slate lands here anyway)
 
-- **WIT-as-IDL / Lisp-over-wit-import** (the `.todo/124` north star). Glue is
+- **WIT-as-IDL / Lisp-over-wit-import** (the north star of the closed `.todo/124`
+  anchor; the record is `.kb/wit.md`). Glue is
   ordinary Lisp, no core codegen; http/sockets/keyvalue converge on ONE
   mechanism. This is why the WAT adapters were deleted; do not regress it.
 - **The promise as the user-facing async API** (`then`/`await`, `TYPE_PROMISE`).
