@@ -156,29 +156,37 @@ public final class HttpLibrary {
 	 * @return {@code true} when the program references {@code rontolisp:fetch}
 	 */
 	public static boolean referencesFetch(List<LispVal> program) {
-		String fetch = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
 		for (LispVal form : program) {
-			if (references(form, fetch)) {
+			if (references(form, LispNames.FETCH)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean references(LispVal form, String name) {
+	private static boolean references(LispVal form, String member) {
 		return switch (form) {
-			case LispSymbol sym -> name.equals(sym.name());
-			case LispCons cons -> references(cons.car(), name) || references(cons.cdr(), name);
+			case LispSymbol sym -> namesRontolispMember(sym.name(), member);
+			case LispCons cons -> references(cons.car(), member) || references(cons.cdr(), member);
 			default -> false;
 		};
+	}
+
+	// Whether the symbol names the given rontolisp-package member, in any source
+	// spelling (rontolisp:fetch, rl:fetch, rontolisp::fetch): this scan runs before
+	// PackageResolver normalizes the program, so it must normalize itself --
+	// splitQualified resolves the built-in nicknames.
+	private static boolean namesRontolispMember(String symbolName, String member) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbolName);
+		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && member.equals(qn.member());
 	}
 
 	// Whether the user program already defines rontolisp:fetch (a defun of it), so the
 	// splice does not collide with it -- the dedup guard every library splice carries.
 	private static boolean definesFetch(List<LispVal> program) {
-		String fetch = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
 		for (LispVal form : program) {
-			if (fetch.equals(defunName(form))) {
+			String name = defunName(form);
+			if (name != null && namesRontolispMember(name, LispNames.FETCH)) {
 				return true;
 			}
 		}
@@ -186,12 +194,23 @@ public final class HttpLibrary {
 	}
 
 	private static @Nullable String defunName(LispVal form) {
-		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
-				&& (LispNames.DEFUN.equals(head.name()) || LispNames.ASYNC_DEFUN_QUALIFIED.equals(head.name()))
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && isDefunHead(head.name())
 				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
 			return name.name();
 		}
 		return null;
+	}
+
+	// A defun head in any source spelling: bare defun, cl:defun and
+	// rontolisp:async-defun, the latter two normalized through splitQualified so the
+	// built-in nicknames (rl:async-defun) and the :: spelling count too.
+	private static boolean isDefunHead(String name) {
+		if (LispNames.DEFUN.equals(name)) {
+			return true;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn != null && ((LispNames.CL_PKG.equals(qn.pkg()) && LispNames.DEFUN.equals(qn.member()))
+				|| (LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.ASYNC_DEFUN.equals(qn.member())));
 	}
 
 	private static boolean isHttpHandlerForm(LispVal form) {
