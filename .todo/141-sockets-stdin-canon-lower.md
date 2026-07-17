@@ -258,10 +258,19 @@ regen; (6) stdin (phase 2); gates last.
        adapter's stdin branch; weigh byte-stability of non-async programs.
      Non-goals unchanged (file reads, write side, env/clock/random stay on
      adapter.wat).
-  2. **FUNC_START 12 -> 8 stub collapse** (mechanical byte shift; the four
+  2. **`adapter.wat`'s remaining surface -- evaluation only, inherited from the
+     closed `.todo/002` (its optional Phase 4, second bullet).** Once stdin is
+     off the adapter, what is left there is file reads, the write side, and
+     env/clock/random. Whether those move to Lisp over `wasi:cli`/`wasi:filesystem`
+     /`wasi:clocks`/`wasi:random` -- and thus whether `adapter.wat` can be deleted
+     outright -- is an OPEN evaluation, deliberately a non-goal of the phases
+     above. `.kb/wit.md` records why the base adapter was long considered
+     un-externalizable, and the sockets migration is the precedent that a wall
+     there meant a missing language feature, not a fixed constraint.
+  3. **FUNC_START 12 -> 8 stub collapse** (mechanical byte shift; the four
      retired tcp trap stubs at indices 8-11 are kept for byte stability
      today -- see the WasmLispCompiler comment).
-  3. Pre-existing doc inconsistency the doc sweep flagged (NOT this todo's):
+  4. Pre-existing doc inconsistency the doc sweep flagged (NOT this todo's):
      usocket-socket-connect.md's "no condition handling" prose contradicts
      the todo-116 error-handling foundation; fix separately.
 
