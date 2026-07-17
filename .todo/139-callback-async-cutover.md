@@ -34,66 +34,81 @@ Landed 2026-07-17 (this trim's working tree, after `9376a8f`):
 
 ## Remaining (enhancements, in priority order)
 
-1. sockets/stdin async promotion (tcp-accept/recv + read-line as implicit
-   suspension points in async context) -- an enhancement; blocking behavior is
-   correct-if-sequential today. These ops flow through the hand-written
-   ADAPTERS (`adapter.wat` / `adapter-sockets.wat` / the serve p1 bridge),
-   whose $await_waitable parks are invisible to the core scheduler, so the
-   promotion needs either adapter-exposed non-blocking variants surfaced as
-   registry entries, or core-side canon-lowered reads (item 2's machinery).
-   HANDOFF NOTES for the session that picks this up (2026-07-17, after
-   `786d60f` landed item 2's stream-read half):
-   - The kind-tagged registry + EVENT_STREAM_READ dispatch is exactly the
-     machinery this item needs on the core side: a new waitable kind is one
-     more registry kind + one more `_sched_loop` dispatch arm
-     (`WasmFutureRuntimeBuilder.buildSchedLoop`) + a wrapper that registers
-     instead of parking (`WasmComponentImportCompiler.emitStreamRead`'s
-     sched-gated shape is the model, incl. the buffer free list).
-   - The DESIGN QUESTION to settle first (likely with the user): "implicit
-     suspension point" semantics. stream-read returns a future the user
-     awaits; but `read-line`/`tcp-recv` return VALUES, so promoting them
-     means the compiled async body must suspend INSIDE the built-in call --
-     i.e. either (a) an await-shaped lowering in asyncMode (the built-in
-     becomes future-returning internally and LispAsync/WasmAwaitAnalysis
-     must count it as a suspension point -- state-machine surgery), or
-     (b) keep the blocking park on the ADAPTER path and only promote the
-     component-native (canon-lowered) reads. Decide before coding; (a)
-     touches the shared frontend contract on every backend (interpreter/JVM
-     already suspend only the virtual thread, which is invisible -- so the
-     cross-backend contract may already be "blocking is fine there").
-   - Adapter reality check: stdin/sockets on --component still go through
-     the P1 adapters' $await_waitable (single cached set per adapter,
-     fixed scratch). Surfacing non-blocking variants means new adapter
-     exports + regen (`src/wasm-component/regen-wit.sh`, read the dump --
-     the wait-for item's instance-hoisting lesson applies).
-   - Gates recipe used by the stream-read session: full suite, -Pweb
-     compile, native build + CiSpecE2eTest, wasmCloud `wash dev` via a PATH
-     shim to target/rontolisp, plus the opt-in RONTOLISP_HTTP_E2E tests
-     (which now include the overlap pin).
-2. ~~Pending-future stream reads~~ DONE 2026-07-17: `stream.read`'s wrapper
-   returns a pending TYPE_FUTURE when the host reports BLOCKED -- registry
-   entries are now `(waitable . (kind . (future . data)))` (kind 0 = subtask,
-   kind 1 = stream read; the staged 8K chunk buffer rides in `data`, recycled
-   through a new free-list global so linear memory is bounded by CONCURRENT
-   reads, not total reads), the handle joins the task waitable-set, and
-   `_sched_loop` gained the EVENT_STREAM_READ dispatch (lift chunk, EOF close
-   protocol via the TYPE_WASI_STREAM that `_wasi_stream_read` attaches to the
-   entry, settle). http.lisp's read thunk passes the raw result through
-   (chunk / nil / pending future). Overlap pinned by
-   `componentPendingBodyReadOverlapsTimer` (RONTOLISP_HTTP_E2E): a wait-for
-   timer fires WHILE another body drains a slow fetch body. Known limit
-   (documented in `.kb/async-await.md`): a second stream-read before the
-   first settles is a host trap; write-side built-ins keep the blocking park.
-   REMAINING from this item: the REAL serve callback (per-task waitable-sets
-   + context slots + per-task doorbell streams -- spike findings 5/6 in the
-   pre-trim revision), still unobservable until a host reuses instances;
-   `bridge-nogc-print.wat` stays single-task-by-design (see the todo-138
-   feedback below) unless that lands.
-3. One leftover from the cleanup pass, deliberately kept: `_p1_future_await`'s
-   kind-1 chain branch is dead emitted code in EVERY wasm module (producer
-   deleted). Removing it (and possibly shrinking TYPE_P1_FUTURE to 2 fields)
-   changes every module's bytes -- fold it into the next change that already
-   moves the runtime bytes wholesale.
+1. ~~sockets/stdin async promotion~~ SPLIT OUT 2026-07-17 to `.todo/141`
+   (sockets-stdin-canon-lower). The design question was settled with the
+   user: not adapter non-blocking variants but a full canon-lower migration
+   -- sockets/stdin become wit-imported Lisp-source libraries (the
+   http.lisp/wait.lisp pattern) and the value-returning built-ins get an
+   await-shaped async-body lowering (`WasmAwaitAnalysis` counts literal
+   awaits, so no state-machine surgery). Grounding facts, phases and the
+   gates recipe moved there. Items 2/3 below are to be done FIRST (user,
+   2026-07-17); where item 2 would generalize `adapter-sockets.wat`, exempt
+   it as single-task-by-design instead -- `.todo/141` deletes it.
+2. The REAL serve callback -- the ACTIVE item, to be done TOGETHER WITH item 3
+   (plan agreed with the user 2026-07-17; item 3 rides this item's wholesale
+   byte move). HANDOFF PLAN for the session that picks this up:
+
+   **Read first**: `git show dbe4e2b:.todo/139-callback-async-cutover.md` --
+   the "Behavioral findings" 5/6 (context.get/set persists from initial call
+   into the same task's callback; intra-component u64 streams work = the
+   per-task doorbell primitive) and the whole "Scheduler design notes fixed
+   by the spike" section (one waitable-set per TASK; cross-task wakeup =
+   doorbell write, never resuming another task's frames in your callback).
+   Also the Phase-0 spike notes there for the callback protocol byte
+   encodings. Then `.kb/async-await.md` + `.kb/wasi-component.md`.
+
+   **Current state (verified 2026-07-17)**: serve's `handle` is ALREADY a
+   callback async lift, but the callback is a never-invoked STUB
+   (`WasmServeComponentBuilder.java` ~256-260) because the export wrapper
+   parks inside blocking `waitable-set.wait` -- `_sched_loop`
+   (`WasmFutureRuntimeBuilder.buildSchedLoop`, the blocking wait is at
+   ~line 668) drives everything from synchronous boundaries. Per-task
+   waitable-sets + the kind-tagged registry already exist (item 2's landed
+   half). What is missing is returning control to the host instead of
+   blocking.
+
+   **The flip**:
+   - Factor `buildSchedLoop` into (a) the event-dispatch core (the
+     EVENT_SUBTASK / EVENT_STREAM_READ arms, unchanged) and (b) the driver.
+     The BLOCKING driver stays for the synchronous boundaries -- top-level
+     `_start` (the `run` export is an async-typed SYNC-ABI 0x43 lift, spike
+     finding 8; it blocks legally, finding 1) and wasm-export wrappers whose
+     async target suspended. The serve `handle` path gets a CALLBACK driver:
+     on pending, return `CALLBACK_WAIT | (set << 4)` to the host; the real
+     callback function receives the event, runs the dispatch core, resumes
+     the task's frames, and returns WAIT again or EXIT (task.return already
+     happened mid-task -- that part is landed).
+   - Task identity across re-entry = `context.get/set` (2 i32 slots per
+     task, finding 5): store the task's state root (registry/frame head) at
+     initial call, reload in the callback.
+   - Cross-task wakeup = per-task doorbell: each task owns an
+     intra-component u64 stream with a standing pending read joined into its
+     set; a task settling a guest future another task awaits writes 1 to the
+     owner's doorbell-writable (completes immediately, finding 6); the
+     owner's callback fires, re-arms the read, resumes its own frames.
+   - EXEMPT (document in each header, do NOT generalize): `adapter.wat` /
+     `adapter-sockets.wat` / `adapter-http-server-p1.wat` /
+     `bridge-nogc-print.wat` stay single-task-by-design -- `.todo/141`
+     deletes adapter-sockets, and the others' ops are sync-boundary-only
+     today. Their $await_waitable parks are legal from a callback task
+     (finding 1).
+
+   **Verification**: the protocol flip itself is observable SINGLE-task on
+   current hosts (wasmtime serve re-enters the callback for every pending
+   event even with one request) -- all existing serve/fetch/timer/overlap
+   gates must stay green through it. The multi-task payoff (two requests
+   interleaving in ONE instance) is what current hosts don't exercise
+   (wasmtime serve re-instantiates per request): add a wast-based
+   intra-instance probe in the cb-spike style (a driver invoking the async
+   export twice in one instance) so the doorbell/context machinery is
+   actually observed, not just carried. Gates recipe: full suite, `-Pweb`
+   compile, native build + CiSpecE2eTest, wasmCloud `wash dev` via PATH
+   shim, opt-in RONTOLISP_HTTP_E2E (incl. the overlap pin).
+3. Fold INTO item 2's byte move: delete `_p1_future_await`'s dead kind-1
+   chain branch (producer deleted with `rontolisp:then`; currently emitted
+   into EVERY wasm module) and evaluate shrinking TYPE_P1_FUTURE to 2 fields.
+   Component bytes move wholesale with item 2 anyway; P1 module bytes move
+   only from this deletion, which is the accepted cost.
 
 ## Feedback from todo-138 (2026-07-17, the nogc-print 0.3 purge)
 
