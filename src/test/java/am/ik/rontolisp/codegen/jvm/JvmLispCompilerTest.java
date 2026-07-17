@@ -5538,6 +5538,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunBuiltinNicknamesTriggerLibrarySplice() throws Exception {
+		// rl:/la: are built-in nicknames for rontolisp/linalg; the library pre-passes
+		// scan the program before package resolution, so they must recognize the
+		// nickname spellings or the splice never fires and compilation fails.
+		assertThat(compileAndRunJson("(print (getf (rl:json-parse \"{\\\"a\\\": 7}\") :a))")).isEqualTo("7");
+		assertThat(compileAndRunLinalg("(print (la:to-list (la:from-list '(1 2 3))))")).isEqualTo("(1.0 2.0 3.0)");
+	}
+
+	@Test
 	void compileAndRunJsonParseScalarsAndEscapes() throws Exception {
 		assertThat(compileAndRunJson("""
 				(print (rontolisp:json-parse "42"))
