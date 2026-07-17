@@ -245,6 +245,20 @@ top-level suspension drives through the blocking event loop exactly as under
   mechanics live in `.kb/read-load-streams.md`); anything else -> the
   `%...-raw` internal aliases of the NATIVE built-ins (no rewrite recursion).
   A wrong-arity call is left unrewritten so it errors under its public name.
+- **The two rewrites MEET in an async body, and the `%` prefix is a naming
+  convention there, not a marker of specialness**: a write is never promoted,
+  so it takes the `%io-*` dispatch head even in async context, while a read in
+  its arguments becomes an await -- `(write-line (read-line s))` (the
+  echo-client shape) is `(%io-write-line (await (%read-line-future s)))`.
+  `WasmAwaitNormalizer` therefore has to hoist that await out of a `%`-named
+  head's argument, which it refused to do while it read any `%` member as one
+  of the internal forms with non-value positions (`%block`, `%error`, ...) --
+  so the example failed to compile with "await in this position", while the
+  identical `(princ (read-line s))` compiled because `princ` keeps its name.
+  `WasmSocketsRewrite.strictDispatchMembers()` is what tells the normalizer
+  these particular `%` heads are ORDINARY defuns; keep the two in step when
+  adding a dispatch defun. (Pinned by `WasmLispCompilerTest`
+  `promotedSocketReadHoistsOutOfADispatchDefunArgument`.)
 - **EH/async run flags**: sockets.lisp carries async-defuns and handler-case,
   so a component tcp program is asyncMode + EH mode -- run with
   `-W gc=y -W exceptions=y -S tcp=y -S inherit-network=y`. Unlike wasi:http

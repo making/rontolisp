@@ -102,7 +102,10 @@ final class WasmAwaitNormalizer {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 		if (qn != null) {
 			if (qn.member().startsWith("%")) {
-				return false;
+				// The socket rewrite substitutes ORDINARY defuns under %-prefixed names,
+				// so the reason the prefix excludes the rest (non-value positions) does
+				// not hold for them: they take their arguments strictly.
+				return WasmSocketsRewrite.strictDispatchMembers().contains(qn.member());
 			}
 			if (LispNames.RONTOLISP_PKG.equals(qn.pkg())) {
 				// The rontolisp package's directive/special members; its ordinary

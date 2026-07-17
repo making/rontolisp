@@ -201,6 +201,23 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void promotedSocketReadHoistsOutOfADispatchDefunArgument() {
+		// In an async context a socket read is promoted to (await (%read-line-future s))
+		// while write-line redirects onto the library's %io-write-line dispatch defun, so
+		// the await lands in that call's argument. %io-write-line is an ordinary defun
+		// whose arguments are all value positions, so the await must hoist to a spine
+		// position exactly as it does for a head the rewrite leaves alone (princ below).
+		assertThat(compileComponent("""
+				(let ((s (rontolisp:tcp-connect "127.0.0.1" 7777)))
+				  (write-line (read-line s)))
+				""")).isNotEmpty();
+		assertThat(compileComponent("""
+				(let ((s (rontolisp:tcp-connect "127.0.0.1" 7777)))
+				  (princ (read-line s)))
+				""")).isNotEmpty();
+	}
+
+	@Test
 	void tcpRejectsWrongArgCounts() {
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-connect \"127.0.0.1\")"))
 			.isInstanceOf(UnsupportedOperationException.class)

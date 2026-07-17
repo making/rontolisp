@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
@@ -70,6 +71,20 @@ final class WasmSocketsRewrite {
 	private static final String IO_MARKER = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%io-read-line");
 
 	private WasmSocketsRewrite() {
+	}
+
+	/**
+	 * The dispatch defuns this rewrite substitutes for the stream built-ins, by member
+	 * name. They are ORDINARY defuns -- every argument is a value position -- so an await
+	 * among their arguments hoists like any other strict call's, even though the
+	 * {@code %} prefix marks the rest of the internal forms as structurally special
+	 * ({@link WasmAwaitNormalizer#isStrictCallHead}). Without this, an async
+	 * {@code (write-line (read-line s))} -- the write redirected here, the read promoted
+	 * to an await -- would leave the await in an unhoisted argument and be rejected.
+	 * @return the {@code %io-*} member names
+	 */
+	static Set<String> strictDispatchMembers() {
+		return Set.copyOf(SYNC_DISPATCH.values());
 	}
 
 	/**
