@@ -5,7 +5,9 @@
 Three templates could not be ported fully; this note records why and what
 would unblock each.
 
-## http-kv-handler: WASM/wasmCloud need wasi:keyvalue (.todo/052)
+## http-kv-handler: WASM/wasmCloud need wasi:keyvalue
+
+(`.kb/wit.md`, `examples/wit/keyvalue/README.md`)
 
 The original stores through `wasi:keyvalue` with a pluggable backend
 (in_memory / filesystem / NATS / Redis selected by `.wash/config.yaml`).
@@ -14,8 +16,8 @@ default in_memory backend as a global hash table, which works on the
 interpreter and JVM because the process lives across requests.
 
 It compiles under `--component`, but is useless there: `wasmtime serve`
-instantiates the component per request, and instance-reusing hosts
-(jco, wasmCloud) get their bump allocators reset per request by the serve
+instantiates the component per request, and an instance-reusing host
+(wasmCloud) gets its bump allocator reset per request by the serve
 adapter, so the global store is empty on every request either way.
 
 **UNBLOCKED 2026-07-14.** The fix this was waiting for has landed: a serve-mode
@@ -31,20 +33,22 @@ against a Lisp store. What is left here is only the PORT: rewrite
 `-S keyvalue=y` provider is rebuilt per instance, so under `wasmtime serve` the
 store reads back empty each request — that column stays honest only if it says so.
 
-## service-tcp: no WASM path for either half
+## service-tcp: no wasmCloud path for the service half
 
 The original demonstrates the wasmCloud v2 service model: a long-running TCP
 service (`wasi:cli/run` + `wasi:sockets`) plus a stateless HTTP component in
 one host, talking over the host's loopback network. The port
-(`examples/wasmcloud/service-tcp/`) runs both halves as interpreter/JVM
-processes only:
+(`examples/wasmcloud/service-tcp/`) was verified with both halves as
+interpreter/JVM processes; the WASM story has since diverged per half:
 
-- `http-api.lisp` (serve + `rontolisp:tcp-connect`) cannot compile to a
-  component: serve + `rontolisp:tcp-*` in one `--component` binary is a
-  compile error (the serve bridge and the sockets adapter both claim the
-  same import surface; see `.kb/tcp-sockets.md` and
-  `.todo/049-combine-fetch-and-sockets-component.md` for the same-shape
-  fetch+tcp limitation).
+- `http-api.lisp` (serve + `rontolisp:tcp-connect`) should compile now and
+  needs RE-VERIFYING under `wasmtime serve`. The old blocker is gone: since
+  commit c84708c, sockets.lisp is one more user WIT import beside the fixed
+  wasi:http surface, so serve + `rontolisp:tcp-*` compose in one
+  `--component` binary (`.kb/tcp-sockets.md`, `.kb/fetch-http.md`). If it
+  runs, flip the `no (serve + tcp)` cell in `examples/wasmcloud/README.md`
+  and rewrite its "serving and the tcp built-ins cannot be combined"
+  paragraph.
 - `service-leet.lisp` compiles to a `wasmtime run` component (tcp works
   there), but wasmCloud's v2 service model expects `wasi:sockets` 0.2 from a
   `wasi:cli/run` world, while rontolisp's tcp built-ins are natively WASI

@@ -35,7 +35,7 @@ Correction to the earlier note (which said "wasmtime hosts no TLS for WASI
 async interface over `stream<u8>`), enabled with `-S tls=y` alongside the
 existing `-S tcp=y -S inherit-network=y`. Its `connector.send`/`receive`
 transform `stream<u8>` <-> `stream<u8>`, the same currency as the existing
-`adapter-sockets.wat` plumbing, so a component-mode `tls-connect` is technically
+`sockets.lisp` plumbing, so a component-mode `tls-connect` is technically
 feasible without any 0.2 hybrid machinery.
 
 Why it is deferred anyway:
@@ -49,11 +49,16 @@ Why it is deferred anyway:
    verbatim it is "under heavy development ... not ready for production ... no
    patch releases for wasip3 fixes." The WIT will churn between wasmtime
    releases, and no ALPN / client-cert / insecure knobs are exposed yet.
-3. **Large effort.** A p3 wasi:tls `tls-connect` needs a new tls import
-   instance, the `connector` resource type, ~4 new stream built-ins wiring
-   cleartext<->ciphertext through the tcp socket streams, and async `connect`
-   lowering under the stackful lift -- comparable in size to the whole tcp
-   sockets component feature.
+3. **Upstream churn is the only real blocker -- the effort is now small.**
+   The earlier "large effort" estimate (a new tls import instance, the
+   `connector` resource type, ~4 new stream built-ins, an async `connect`
+   lowering) predates the `wit-import` pipeline. Since that landed, a new host
+   interface costs a `.wit` file plus a Lisp library, NOT compiler work
+   (`.kb/wasi-component.md`, `.kb/wit.md`); `sockets.lisp`, `http.lisp` and
+   `examples/wit/keyvalue` are all exactly this shape. So a component-mode
+   `tls-connect` is a `rontolisp:wit-import` of wasi-tls's
+   `wit-0.3.0-draft/client.wit` plus a `tls.lisp` over the existing stream
+   built-ins -- small. It is deferred on reasons 1 and 2 alone.
 
 Decision: keep `tls-connect` / `tls-listen` / `tls-listen-pem` a WASM compile
 error for now; revisit a component-mode `tls-connect` when `wasi:tls` stabilizes

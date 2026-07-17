@@ -25,9 +25,9 @@ Goal: consume a slice of the CL ecosystem through ASDF-style system definitions
   linked `.kb/*.md` files; `SplitSequenceE2eTest` + ci-spec
   `split-sequence-residue-features`.
 - **Beyond the plan** -- parse-number + cl-utilities also run on all 4 backends
-  (todo 65); `ql:quickload` (limited Quicklisp subset, auto-download + cache)
-  layered on top, all 4 backends (todo removed). See memories
-  [[asdf-library-candidates]], [[quicklisp-quickload]].
+  ([[asdf-library-candidates]]); `ql:quickload` (limited Quicklisp subset,
+  auto-download + cache) layered on top, all 4 backends (todo removed). See
+  memories [[asdf-library-candidates]], [[quicklisp-quickload]].
 
 ## Verdict (unchanged)
 
@@ -37,17 +37,26 @@ package manipulation, readtables, multiple values. The shipped path is an
 **API-compatible mini-ASDF shim**: parse `.asd` as data, resolve
 component/dependency order ourselves, drive the existing `load` machinery.
 
-## Phase 4 (remaining -- medium libraries, still not real ASDF)
+## Phase 4 (medium libraries, still not real ASDF) -- status
 
-The next frontier. None started as of 2026-07-06:
+The next frontier. Most of the language gaps have since closed; what is left:
 
-- Condition system + `unwind-protect` (.todo/039)
-- Dynamic/special variable binding (.todo/084, since DONE) -- was the root cause
-  behind the former `.todo/82` (macro-time setf replay) and `.todo/83`
-  (`*package*` load scoping) workarounds, both since resolved.
-- CLOS subset (DONE; `.kb/clos.md`)
-- Pathname layer (`merge-pathnames`, `probe-file`, `*load-pathname*`)
-- Readtables (.todo/041)
+- Condition system + `unwind-protect` -- **mostly DONE**. `.todo/039`'s
+  engineering plan moved to `.todo/116`, whose Phases 1-3 landed (commit
+  `a8b957b`): `unwind-protect`, `define-condition` + condition objects, and
+  `handler-case` / `ignore-errors` on the interpreter, the JVM and wasm-GC.
+  Mechanics: `.kb/error-handling.md`. Only Phase 4 (`handler-bind` /
+  `restart-case`) is open, deferred and gated on Postmodern proper -- the
+  verbatim cl-postgres needs no restarts. `.todo/039` remains as the
+  API-surface catalog.
+- Pathname layer (`merge-pathnames`, `probe-file`, `*load-pathname*`) -- the
+  one wholly-unstarted item; none of the three exists in `LispNames`.
+- Readtables (.todo/041) -- open.
+
+Done since this plan was written: the CLOS subset (`.kb/clos.md`) and
+dynamic/special variable binding (`.todo/084`, since DONE) -- the latter was the
+root cause behind the former `.todo/82` (macro-time setf replay) and `.todo/83`
+(`*package*` load scoping) workarounds, both since resolved.
 
 Only after these does UIOP-lite territory make sense.
 
