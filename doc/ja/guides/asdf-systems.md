@@ -125,7 +125,7 @@ $ rontolisp
 
 ## 実際に何がロードできるか
 
-現在、実世界の 4 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
+現在、実世界の 5 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
 (インタプリタ、JVM、WASM Preview 1、`--component`) で検証済みです:
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
@@ -158,8 +158,20 @@ $ rontolisp
   (コンパイル) 時に読み取るため、`*html-mode*` の実行時 `let` 再束縛は既に
   展開済みのマクロには反映されません (スペシャル変数束縛自体は動作します)。
   既定の `:xml` モードと `:html5` はどちらも正しくレンダリングされます。
+- **[assoc-utils](https://github.com/fukamachi/assoc-utils)**: 深町英太郎に
+  よる alist ユーティリティ。読み取り/変換 API が動作します — `aget`
+  (デフォルト値付き)、`alist-keys`/`alist-values`、
+  `alist-plist`/`plist-alist`、`remove-from-alist` とその場所版
+  `delete-from-alistf`、`alist-hash`/`hash-alist`、`with-keys`、キーパス
+  指定の `alist-get`、`alist=`。2 つの簡易版の制限があります:
+  **`(setf (aget alist key) value)` は使えません** (`define-setf-expander`
+  の 5 値プロトコルが必要ですが、ここではパース済み no-op です) —
+  `cons`/`delete-from-alistf` で alist を組み立ててください。また
+  **`alistp` は alist でない値に対して信頼できません** — `mapl` のラムダ
+  からの早期脱出がここではラムダローカルな return になるため、本物の
+  ASDF ホストなら弾く値に対して `t` を返すことがあります。
 
-最初の 3 ライブラリの実行可能なデモ — バックエンド別の実行コマンドと期待
+5 ライブラリ全ての実行可能なデモ — バックエンド別の実行コマンドと期待
 出力付き — は
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf)
 にあります。

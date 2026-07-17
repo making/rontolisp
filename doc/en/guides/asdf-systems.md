@@ -131,7 +131,7 @@ below.
 
 ## What can I actually load?
 
-Four real-world libraries load unmodified today, verified on all four
+Five real-world libraries load unmodified today, verified on all four
 backends (interpreter, JVM, WASM Preview 1 and `--component`):
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
@@ -167,8 +167,19 @@ backends (interpreter, JVM, WASM Preview 1 and `--component`):
   is not observed by the already-expanded macro (even though special variable
   binding otherwise works). The default `:xml` mode and `:html5` both render
   correctly.
+- **[assoc-utils](https://github.com/fukamachi/assoc-utils)**: Eitaro
+  Fukamachi's alist utilities. The read/convert API works — `aget` (with a
+  default), `alist-keys`/`alist-values`, `alist-plist`/`plist-alist`,
+  `remove-from-alist` and its `delete-from-alistf` place variant,
+  `alist-hash`/`hash-alist`, `with-keys`, the key-path `alist-get` and
+  `alist=`. Two lite limitations: **`(setf (aget alist key) value)` is
+  unavailable** (it needs `define-setf-expander`'s five-value protocol, which
+  is a parsed no-op here), so build the alist with `cons`/`delete-from-alistf`
+  instead; and **`alistp` is unreliable on a non-alist** — its early exit out
+  of a `mapl` lambda is a lambda-local return here, so it can report `t` for a
+  value a real ASDF host would reject.
 
-Runnable demos for the first three — with the per-backend commands and
+Runnable demos for all five — with the per-backend commands and
 expected output — live in
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf).
 
