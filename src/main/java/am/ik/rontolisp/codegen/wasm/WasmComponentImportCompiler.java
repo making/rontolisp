@@ -766,15 +766,20 @@ final class WasmComponentImportCompiler {
 	 * @param ordinal the import's ordinal (shared with the function imports)
 	 * @param allocFuncIndex the function index of {@code __ronto_alloc}
 	 * @param strFromMemFuncIndex the function index of {@code _str_from_mem}
+	 * @param sched the module's scheduler wiring, or {@code null} outside asyncMode --
+	 * with it, a {@code stream.read} the host reports BLOCKED returns a pending
+	 * {@code TYPE_FUTURE} registered with the scheduler instead of parking the whole task
+	 * on a blocking wait
 	 * @return the code entry bytes
 	 */
 	static byte[] buildAsyncBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int ordinal,
-			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex) {
+			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex,
+			WasmFutureRuntimeBuilder.@Nullable Sched sched) {
 		int numParams = lispArity(async);
 		Body probe = emitAsync(ctxBuilder, async, numParams, ordinal, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
-				MAX_SCRATCH, MAX_SCRATCH);
+				sched, MAX_SCRATCH, MAX_SCRATCH);
 		Body body = emitAsync(ctxBuilder, async, numParams, ordinal, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
-				probe.i32Pool(), probe.i64Pool());
+				sched, probe.i32Pool(), probe.i64Pool());
 		return wrapEntry(body);
 	}
 
@@ -786,6 +791,9 @@ final class WasmComponentImportCompiler {
 	static final int SUBTASK_STATUS_RETURNED = 2;
 
 	static final int EVENT_SUBTASK = 1;
+
+	/** The completion event of an async {@code stream.read} (spike-pinned ordering). */
+	static final int EVENT_STREAM_READ = 2;
 
 	static final int SUBTASK_STATE_RETURNED = 2;
 
@@ -886,13 +894,15 @@ final class WasmComponentImportCompiler {
 	}
 
 	private static Body emitAsync(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int numParams, int ordinal,
-			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex, int i32Pool, int i64Pool) {
+			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex,
+			WasmFutureRuntimeBuilder.@Nullable Sched sched, int i32Pool, int i64Pool) {
 		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		Gen gen = new Gen(ctx, async.lispName(), numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool,
 				i64Pool);
 		gen.waitOrdinals = waitOrdinals;
+		gen.sched = sched;
 		gen.emitAsyncBody(async);
 		int eqTemps = ctx.nextLocal - (numParams + 1 + i32Pool + i64Pool);
 		return new Body(bodyStream.toByteArray(), gen.i32High, gen.i64High, eqTemps);
@@ -962,6 +972,11 @@ final class WasmComponentImportCompiler {
 		// The interface's waitable-set builtin ordinals, set for the async built-in
 		// wrappers (the BLOCKED park needs them); null for plain function wrappers.
 		private @Nullable WaitOrdinals waitOrdinals;
+
+		// The module's scheduler wiring, set for the async built-in wrappers of an
+		// asyncMode module (a BLOCKED stream.read becomes a pending future registered
+		// there); null outside asyncMode, where the BLOCKED park stays.
+		private WasmFutureRuntimeBuilder.@Nullable Sched sched;
 
 		Gen(WasmLispCompiler.Ctx ctx, String lispName, int numParams, int ordinal, int allocFuncIndex,
 				int strFromMemFuncIndex, int i32Pool, int i64Pool) {
@@ -1195,24 +1210,125 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.END);
 		}
 
-		// stream.read into a staged chunk: the ASYNC (non-blocking) built-in, parking
-		// on the waitable-set when it reports BLOCKED; one chunk per call, returning
-		// the bytes as a Lisp string, or nil once the stream is dropped (EOF). The
-		// completion value is (count << 4) | status; a read completes with at least
-		// one byte unless the writer is gone, so count 0 = EOF.
+		// stream.read into a staged chunk: the ASYNC (non-blocking) built-in; one chunk
+		// per call, returning the bytes as a Lisp string, or nil once the stream is
+		// dropped (EOF). The completion value is (count << 4) | status; a read
+		// completes with at least one byte unless the writer is gone, so count 0 =
+		// EOF. Outside asyncMode a BLOCKED read parks the whole task on the
+		// waitable-set; in asyncMode it returns a PENDING future instead -- registered
+		// with the scheduler (kind 1) and settled by the EVENT_STREAM_READ dispatch in
+		// _sched_loop -- so other tasks' frames keep running while the chunk is in
+		// flight. The chunk buffer must outlive this call, so it never comes from the
+		// popped staging: it is recycled through the scheduler's free list (bounding
+		// linear-memory growth by the maximum number of concurrent reads).
 		private void emitStreamRead() {
-			emitStagingPrologue();
-			int buf = allocRetArea(ASYNC_READ_CHUNK);
-			int n = allocI32();
+			WasmFutureRuntimeBuilder.Sched wiring = this.sched;
+			if (wiring == null) {
+				emitStagingPrologue();
+				int buf = allocRetArea(ASYNC_READ_CHUNK);
+				int n = allocI32();
+				int handle = allocI32();
+				getLocal(1);
+				WasmEmitHelper.castI31GetS(this.ctx);
+				setLocal(handle);
+				getLocal(handle);
+				getLocal(buf);
+				i32Const(ASYNC_READ_CHUNK);
+				callImport();
+				emitBlockedWait(handle);
+				i32Const(4);
+				this.w.write(Instruction.I32_SHR_U);
+				this.w.write(Instruction.TEE_LOCAL);
+				this.w.writeSignedLeb128(n);
+				this.w.write(Instruction.IF);
+				this.w.write(Type.REFNULL.code());
+				this.w.writeHeapType(Type.EQ.code());
+				getLocal(buf);
+				getLocal(n);
+				this.w.write(Instruction.CALL);
+				this.w.writeSignedLeb128(this.strFromMemFuncIndex);
+				this.w.write(Instruction.ELSE);
+				refNullEq();
+				this.w.write(Instruction.END);
+				int resultTmp = this.ctx.allocTemp();
+				setLocal(resultTmp);
+				emitStagingEpilogue(resultTmp);
+				return;
+			}
+			WaitOrdinals ordinals = Objects.requireNonNull(this.waitOrdinals,
+					"async built-in wrapper emitted without waitable-set ordinals");
 			int handle = allocI32();
+			int buf = allocI32();
+			int ret = allocI32();
+			int n = allocI32();
 			getLocal(1);
 			WasmEmitHelper.castI31GetS(this.ctx);
 			setLocal(handle);
+			// buf = pop the free list, or a fresh (permanent) allocation.
+			globalGet(wiring.readFreeGlobal());
+			this.w.write(Instruction.REF_IS_NULL);
+			this.w.write(Instruction.IF, 0x40);
+			i32Const(ASYNC_READ_CHUNK);
+			this.w.write(Instruction.CALL);
+			this.w.writeSignedLeb128(this.allocFuncIndex);
+			setLocal(buf);
+			this.w.write(Instruction.ELSE);
+			globalGet(wiring.readFreeGlobal());
+			structGet(WasmLispCompiler.TYPE_CONS, 0);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(buf);
+			globalGet(wiring.readFreeGlobal());
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			globalSet(wiring.readFreeGlobal());
+			this.w.write(Instruction.END);
 			getLocal(handle);
 			getLocal(buf);
 			i32Const(ASYNC_READ_CHUNK);
 			callImport();
-			emitBlockedWait(handle);
+			setLocal(ret);
+			getLocal(ret);
+			i32Const(-1);
+			this.w.write(Instruction.I32_EQ);
+			this.w.write(Instruction.IF);
+			this.w.write(Type.REFNULL.code());
+			this.w.writeHeapType(Type.EQ.code());
+			// BLOCKED: a fresh pending future, registered as
+			// (handle . (1 . (future . (buf . nil)))) -- the stream struct is attached
+			// by _wasi_stream_read -- with the handle joined into the task
+			// waitable-set (created lazily).
+			this.w.write(Instruction.CALL);
+			this.w.writeSignedLeb128(this.ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_NEW);
+			int fut = this.ctx.allocTemp();
+			setLocal(fut);
+			getLocal(handle);
+			boxI31();
+			i32Const(1);
+			boxI31();
+			getLocal(fut);
+			getLocal(buf);
+			boxI31();
+			refNullEq();
+			newCons(); // (buf . nil)
+			newCons(); // (future . ...)
+			newCons(); // (kind . ...)
+			newCons(); // (handle . ...)
+			globalGet(wiring.registryGlobal());
+			newCons();
+			globalSet(wiring.registryGlobal());
+			globalGet(wiring.setGlobal());
+			this.w.write(Instruction.I32_EQZ);
+			this.w.write(Instruction.IF, 0x40);
+			callOrdinal(ordinals.setNew());
+			globalSet(wiring.setGlobal());
+			this.w.write(Instruction.END);
+			getLocal(handle);
+			globalGet(wiring.setGlobal());
+			callOrdinal(ordinals.join());
+			getLocal(fut);
+			this.w.write(Instruction.ELSE);
+			// Completed immediately: lift the chunk (count 0 = EOF -> nil) and recycle
+			// the buffer.
+			getLocal(ret);
 			i32Const(4);
 			this.w.write(Instruction.I32_SHR_U);
 			this.w.write(Instruction.TEE_LOCAL);
@@ -1227,9 +1343,13 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.ELSE);
 			refNullEq();
 			this.w.write(Instruction.END);
-			int resultTmp = this.ctx.allocTemp();
-			setLocal(resultTmp);
-			emitStagingEpilogue(resultTmp);
+			getLocal(buf);
+			boxI31();
+			globalGet(wiring.readFreeGlobal());
+			newCons();
+			globalSet(wiring.readFreeGlobal());
+			this.w.write(Instruction.END);
+			this.w.write(Instruction.END);
 		}
 
 		// stream.write of a whole Lisp string: the async built-in plus the BLOCKED
@@ -2455,6 +2575,16 @@ final class WasmComponentImportCompiler {
 		private void getLocal(int slot) {
 			this.w.write(Instruction.GET_LOCAL);
 			this.w.writeSignedLeb128(slot);
+		}
+
+		private void globalGet(int index) {
+			this.w.write(Instruction.GET_GLOBAL);
+			this.w.writeSignedLeb128(index);
+		}
+
+		private void globalSet(int index) {
+			this.w.write(Instruction.SET_GLOBAL);
+			this.w.writeSignedLeb128(index);
 		}
 
 		private void setLocal(int slot) {

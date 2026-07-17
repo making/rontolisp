@@ -701,7 +701,12 @@ the reachable half) over a wit-imported `wasi:http@0.3.0` surface — fetch call
 `wasi:http/client.send` (an async-lowered `async func` member), serve implements
 `wasi:http/handler.handle` (a stackful async lift delivering its result via `canon
 task.return`), and both drive `wasi:http/types`' stream/future bodies through the
-alias-derived built-ins. No WAT http adapter remains on any path (the serve builder
+alias-derived built-ins. In asyncMode the `<alias>-read` of a stream alias answers a
+chunk the host has IN FLIGHT as a **pending future** (registered with the module
+scheduler; `.kb/async-await.md`) — so user code reads a stream inside an async
+function and awaits the result (an immediate chunk passes through `await`); the
+write-side built-ins keep the blocking waitable-set park. No WAT http adapter
+remains on any path (the serve builder
 lowers http.lisp's imports FROM the block and lifts the core's `handle` wasm-export
 directly). That is the **self-hosting proof of the whole IDL bet** — the core HTTP
 built-ins re-implemented over the same WIT pipeline any user interface arrives

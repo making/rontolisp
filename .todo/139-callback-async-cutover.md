@@ -41,17 +41,25 @@ Landed 2026-07-17 (this trim's working tree, after `9376a8f`):
    whose $await_waitable parks are invisible to the core scheduler, so the
    promotion needs either adapter-exposed non-blocking variants surfaced as
    registry entries, or core-side canon-lowered reads (item 2's machinery).
-2. Pending-future stream reads (the async built-in wrappers returning pending
-   TYPE_FUTUREs + EVENT_STREAM_* dispatch in `_sched_loop`) and the REAL serve
-   callback (per-task waitable-sets + context slots + per-task doorbell
-   streams -- spike findings 5/6 in the pre-trim revision). NOTE: wait-for
-   changed the observability premise -- the RUN shape can now hold several
-   suspended tasks in one instance (timer test), so a pending body read
-   overlapping a firing timer IS observable today (e.g. one async body
-   draining a slow fetch body while another awaits wait-for); only the serve
-   callback half stays unobservable until a host reuses instances. The
-   registry needs entries keyed by waitable kind (subtask vs stream handle),
-   and each in-flight read's staged scratch must outlive the wrapper call.
+2. ~~Pending-future stream reads~~ DONE 2026-07-17: `stream.read`'s wrapper
+   returns a pending TYPE_FUTURE when the host reports BLOCKED -- registry
+   entries are now `(waitable . (kind . (future . data)))` (kind 0 = subtask,
+   kind 1 = stream read; the staged 8K chunk buffer rides in `data`, recycled
+   through a new free-list global so linear memory is bounded by CONCURRENT
+   reads, not total reads), the handle joins the task waitable-set, and
+   `_sched_loop` gained the EVENT_STREAM_READ dispatch (lift chunk, EOF close
+   protocol via the TYPE_WASI_STREAM that `_wasi_stream_read` attaches to the
+   entry, settle). http.lisp's read thunk passes the raw result through
+   (chunk / nil / pending future). Overlap pinned by
+   `componentPendingBodyReadOverlapsTimer` (RONTOLISP_HTTP_E2E): a wait-for
+   timer fires WHILE another body drains a slow fetch body. Known limit
+   (documented in `.kb/async-await.md`): a second stream-read before the
+   first settles is a host trap; write-side built-ins keep the blocking park.
+   REMAINING from this item: the REAL serve callback (per-task waitable-sets
+   + context slots + per-task doorbell streams -- spike findings 5/6 in the
+   pre-trim revision), still unobservable until a host reuses instances;
+   `bridge-nogc-print.wat` stays single-task-by-design (see the todo-138
+   feedback below) unless that lands.
 3. One leftover from the cleanup pass, deliberately kept: `_p1_future_await`'s
    kind-1 chain branch is dead emitted code in EVERY wasm module (producer
    deleted). Removing it (and possibly shrinking TYPE_P1_FUTURE to 2 fields)

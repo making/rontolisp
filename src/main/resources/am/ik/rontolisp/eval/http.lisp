@@ -67,10 +67,10 @@
          (stream (car pair))
          (trailers (car (cdr pair))))
     (rontolisp::%wasi-stream-new
-     (lambda ()
-       ;; One blocking chunk per built-in call; nil or "" = EOF.
-       (let ((chunk (%http:body-stream-read stream)))
-         (if (or (null chunk) (= (length chunk) 0)) nil chunk)))
+     ;; One built-in read per call: the next chunk, nil = EOF, or -- when the host
+     ;; reports the read in flight -- a PENDING future the scheduler settles (the
+     ;; stream runtime passes it through, so the task keeps running meanwhile).
+     (lambda () (%http:body-stream-read stream))
      (lambda ()
        (%http:body-stream-drop-readable stream)
        (%http:trailers-future-drop-readable trailers)

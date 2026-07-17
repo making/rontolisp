@@ -66,10 +66,15 @@ final class WasmFutureRuntimeBuilder {
 	/**
 	 * {@code _wasi_stream_read(stream) -> future}: the {@code rontolisp:stream-read} of a
 	 * {@code TYPE_WASI_STREAM}. At EOF the future settles to nil; otherwise the read
-	 * thunk (an arity-0 closure over the wasi byte-stream handle) produces the next chunk
-	 * -- nil flips {@code eof} and runs the close protocol once -- and the chunk (or nil)
-	 * comes back as a settled future. The thunk's underlying built-in blocks the task
-	 * while a chunk is in flight (the pending-future upgrade is future work).
+	 * thunk (an arity-0 closure over the wasi byte-stream handle) issues one built-in
+	 * read. A read that completes immediately comes back as a settled future of the chunk
+	 * (nil = EOF, which flips {@code eof} and runs the close protocol once); a read the
+	 * host reports BLOCKED comes back as the thunk's PENDING future -- the wrapper has
+	 * already registered it (kind 1) and joined the stream handle into the task
+	 * waitable-set, so this helper only attaches the stream struct to the registry entry
+	 * (the scheduler needs it to run the close protocol when the completion event turns
+	 * out to be EOF) and returns the future unwrapped: the task stays runnable while the
+	 * chunk is in flight.
 	 */
 	static final int OFF_WSTREAM_READ = 8;
 
@@ -81,22 +86,37 @@ final class WasmFutureRuntimeBuilder {
 	static final int OFF_WSTREAM_CLOSE = 9;
 
 	/**
-	 * The module-level scheduler wiring {@code _subtask_future} and {@code _sched_loop}
-	 * embed, or {@code null} when the program binds no async-calling interface (their
-	 * bodies are then unreachable stubs -- nothing can produce a host-backed pending
-	 * future).
+	 * The module-level scheduler wiring {@code _subtask_future}, {@code _sched_loop} and
+	 * the pending-read side of {@code _wasi_stream_read} embed, or {@code null} when the
+	 * program binds no async-calling interface (their bodies are then unreachable stubs
+	 * -- nothing can produce a host-backed pending future).
+	 *
+	 * <p>
+	 * A registry entry is {@code (waitable . (kind . (future . data)))}, keyed by the
+	 * waitable index the event loop receives (subtasks and stream/future end handles
+	 * share the instance's one waitable index space, so one key never collides): kind 0 =
+	 * a subtask whose {@code data} is the {@code (lift . token)} pair, kind 1 = an
+	 * in-flight stream read whose {@code data} is {@code (buf . stream)} -- the staged
+	 * chunk buffer (an i31 pointer, alive until the completion event) and the owning
+	 * {@code TYPE_WASI_STREAM} (or nil for a raw read), whose close protocol the
+	 * settlement runs at EOF.
 	 *
 	 * @param ordinals the chosen interface's waitable builtin import-slot ordinals (any
 	 * interface's trio works: they alias the same canonical built-ins)
 	 * @param registryGlobal the global index of the scheduler registry (a cons list of
-	 * {@code (subtask . (future . (lift . token)))} entries)
+	 * entries as above)
 	 * @param setGlobal the global index of the task waitable-set handle (0 = not yet
 	 * created)
+	 * @param readFreeGlobal the global index of the read-buffer free list (a cons list of
+	 * i31 buffer pointers; every completed read returns its buffer here, so the
+	 * linear-memory cost is bounded by the maximum number of CONCURRENT reads)
 	 * @param allocFuncIndex the function index of {@code __ronto_alloc} (the event
 	 * payload scratch)
+	 * @param strFromMemFuncIndex the function index of {@code _str_from_mem} (lifts a
+	 * completed read's chunk bytes onto the GC heap)
 	 */
 	record Sched(WasmComponentImportCompiler.WaitOrdinals ordinals, int registryGlobal, int setGlobal,
-			int allocFuncIndex) {
+			int readFreeGlobal, int allocFuncIndex, int strFromMemFuncIndex) {
 	}
 
 	private WasmFutureRuntimeBuilder() {
@@ -137,8 +157,9 @@ final class WasmFutureRuntimeBuilder {
 			case OFF_WAKE -> buildWake(base, futureType, frameType);
 			case OFF_POLL -> buildPoll(futureType);
 			case OFF_SUBTASK_FUTURE -> sched == null ? buildUnreachableStub() : buildSubtaskFuture(futureType, sched);
-			case OFF_SCHED_LOOP -> sched == null ? buildUnreachableStub() : buildSchedLoop(base, futureType, sched);
-			case OFF_WSTREAM_READ -> buildWasiStreamRead(futureType, streamType);
+			case OFF_SCHED_LOOP ->
+				sched == null ? buildUnreachableStub() : buildSchedLoop(base, futureType, streamType, sched);
+			case OFF_WSTREAM_READ -> buildWasiStreamRead(futureType, streamType, sched);
 			case OFF_WSTREAM_CLOSE -> buildWasiStreamClose(streamType);
 			default -> throw new IllegalArgumentException("unknown future runtime member: " + off);
 		};
@@ -382,15 +403,19 @@ final class WasmFutureRuntimeBuilder {
 		return body.toByteArray();
 	}
 
-	// _wasi_stream_read (stream) -> settled future of the next chunk (nil = EOF; the
-	// first EOF runs the close protocol once).
-	private static byte[] buildWasiStreamRead(int futureType, int streamType) {
+	// _wasi_stream_read (stream) -> future of the next chunk (nil = EOF; the first EOF
+	// runs the close protocol once). A read thunk that completed immediately yields a
+	// settled future; one the host reported BLOCKED yields the thunk's pending future,
+	// whose registry entry (pushed by the read wrapper) gets the stream struct attached
+	// so the scheduler can run the close protocol if the completion turns out to be EOF.
+	private static byte[] buildWasiStreamRead(int futureType, int streamType,
+			@org.jspecify.annotations.Nullable Sched sched) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		final int S = 0, CHUNK = 1;
-		// locals: 1x (ref null eq)
+		final int S = 0, CHUNK = 1, CUR = 2, REST = 3;
+		// locals: 3x (ref null eq)
 		w.write(1);
-		w.writeUnsignedLeb128(1);
+		w.writeUnsignedLeb128(3);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
 		// Drained already: a settled-nil future.
@@ -406,6 +431,54 @@ final class WasmFutureRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE);
 		setLocal(w, CHUNK);
+		if (sched != null) {
+			// A pending read: find the registry entry whose future is CHUNK (the read
+			// wrapper pushed it just before returning) and attach the stream struct as
+			// the entry data's cdr, then hand the pending future straight to the caller.
+			getLocal(w, CHUNK);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(futureType);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			globalGet(w, sched.registryGlobal());
+			setLocal(w, CUR);
+			w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY); // $out
+			w.write(Instruction.LOOP, WasmLispCompiler.BLOCKTYPE_EMPTY); // $walk
+			getLocal(w, CUR);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.BR_IF, 1); // -> $out (not registered: a settled future)
+			// REST = cdr(cdr(car(CUR))) = (future . data)
+			castCons(w, CUR);
+			structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			structGet(w, WasmLispCompiler.TYPE_CONS, 1);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			structGet(w, WasmLispCompiler.TYPE_CONS, 1);
+			setLocal(w, REST);
+			castCons(w, REST);
+			structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+			getLocal(w, CHUNK);
+			w.write(Instruction.REF_EQ);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			// data.cdr = the stream struct ((buf . nil) -> (buf . stream))
+			castCons(w, REST);
+			structGet(w, WasmLispCompiler.TYPE_CONS, 1);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			getLocal(w, S);
+			structSet(w, WasmLispCompiler.TYPE_CONS, 1);
+			getLocal(w, CHUNK);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			castCons(w, CUR);
+			structGet(w, WasmLispCompiler.TYPE_CONS, 1);
+			setLocal(w, CUR);
+			w.write(Instruction.BR, 0); // -> $walk
+			w.write(Instruction.END); // loop $walk
+			w.write(Instruction.END); // block $out
+			w.write(Instruction.END); // if TYPE_FUTURE
+		}
 		// EOF: flip eof, run the close protocol once, settle to nil.
 		getLocal(w, CHUNK);
 		w.write(Instruction.REF_IS_NULL);
@@ -510,8 +583,9 @@ final class WasmFutureRuntimeBuilder {
 		w.writeSignedLeb128(futureType);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// Pending: register (subtask . (future . (lift . token))) and join the subtask
-		// into the task waitable-set (created lazily).
+		// Pending: register (subtask . (0 . (future . (lift . token)))) -- kind 0, a
+		// subtask entry -- and join the subtask into the task waitable-set (created
+		// lazily).
 		getLocal(w, PACKED);
 		i32(w, 4);
 		w.write(Instruction.I32_SHR_U);
@@ -523,14 +597,17 @@ final class WasmFutureRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeSignedLeb128(futureType);
 		setLocal(w, FUT);
-		// registry = ((sub . (fut . (fn . token))) . registry)
+		// registry = ((sub . (0 . (fut . (fn . token)))) . registry)
 		getLocal(w, SUB);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		i32(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		getLocal(w, FUT);
 		getLocal(w, FN);
 		getLocal(w, TOKEN);
 		newCons(w); // (fn . token)
 		newCons(w); // (fut . ...)
+		newCons(w); // (kind . ...)
 		newCons(w); // (sub . ...)
 		globalGet(w, sched.registryGlobal());
 		newCons(w);
@@ -552,21 +629,26 @@ final class WasmFutureRuntimeBuilder {
 	}
 
 	// _sched_loop (future) -> value: block on the task waitable-set until the driven
-	// future settles, settling each RETURNED subtask's registry future on the way (the
-	// waiter cascade may settle the driven one). The exit polls: a settled chain
-	// flattens to the value, a rejection re-signals on $lisp-cond.
-	private static byte[] buildSchedLoop(int base, int futureType, Sched sched) {
+	// future settles, settling each interesting event's registry future on the way (the
+	// waiter cascade may settle the driven one). A subtask that reports RETURNED lifts
+	// its result and drops the subtask (kind 0); a stream-read completion lifts the
+	// chunk out of the staged buffer, recycles the buffer, unjoins the stream handle
+	// (it survives for the next read) and runs the stream's close protocol when the
+	// completion is EOF (kind 1). The exit polls: a settled chain flattens to the
+	// value, a rejection re-signals on $lisp-cond.
+	private static byte[] buildSchedLoop(int base, int futureType, int streamType, Sched sched) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		final int FUT = 0, EVTP = 1, EV = 2, WAITABLE = 3, PREV = 4, CUR = 5, ENTRY = 6, REST = 7, VAL = 8;
-		// locals: 3x i32, 5x (ref null eq)
+		final int FUT = 0, EVTP = 1, EV = 2, WAITABLE = 3, CODE = 4, KIND = 5, PREV = 6, CUR = 7, ENTRY = 8, REST = 9,
+				DATA = 10, VAL = 11;
+		// locals: 5x i32, 6x (ref null eq)
 		w.write(2);
-		w.writeUnsignedLeb128(3);
-		w.write(Type.I32);
 		w.writeUnsignedLeb128(5);
+		w.write(Type.I32);
+		w.writeUnsignedLeb128(6);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
-		// EVTP = __ronto_alloc(8): the (waitable, state) event payload scratch.
+		// EVTP = __ronto_alloc(8): the (waitable, payload) event scratch.
 		i32(w, 8);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(sched.allocFuncIndex());
@@ -588,19 +670,27 @@ final class WasmFutureRuntimeBuilder {
 		getLocal(w, EVTP);
 		callOrdinal(w, sched.ordinals().setWait());
 		setLocal(w, EV);
-		// A subtask that reports RETURNED settles its registry entry; every other
-		// event (a STARTED transition, an unknown waitable) is ignored.
+		load32(w, EVTP, 0);
+		setLocal(w, WAITABLE);
+		// The payload word: a subtask's state, or a read's (amount << 4) | status.
+		load32(w, EVTP, 4);
+		setLocal(w, CODE);
+		// A subtask that reports RETURNED and a stream-read completion settle their
+		// registry entries; every other event (a STARTED transition, an unknown
+		// waitable) is ignored.
 		getLocal(w, EV);
 		i32(w, WasmComponentImportCompiler.EVENT_SUBTASK);
 		w.write(Instruction.I32_EQ);
-		load32(w, EVTP, 4);
+		getLocal(w, CODE);
 		i32(w, WasmComponentImportCompiler.SUBTASK_STATE_RETURNED);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_AND);
+		getLocal(w, EV);
+		i32(w, WasmComponentImportCompiler.EVENT_STREAM_READ);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
-		load32(w, EVTP, 0);
-		setLocal(w, WAITABLE);
-		// Find (and unlink) the registry entry whose subtask == WAITABLE.
+		// Find (and unlink) the registry entry whose waitable == WAITABLE.
 		refNullEq(w);
 		setLocal(w, PREV);
 		globalGet(w, sched.registryGlobal());
@@ -641,26 +731,84 @@ final class WasmFutureRuntimeBuilder {
 		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
 		structSet(w, WasmLispCompiler.TYPE_CONS, 1);
 		w.write(Instruction.END);
-		// REST = cdr(ENTRY) = (future . (lift . token))
+		// cdr(ENTRY) = (kind . (future . data))
 		castCons(w, ENTRY);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
 		setLocal(w, REST);
-		// VAL = dispatch_1(lift, token)
+		castCons(w, REST);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+		unboxI31(w);
+		setLocal(w, KIND);
 		castCons(w, REST);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		setLocal(w, ENTRY); // reuse: the (lift . token) pair
-		castCons(w, ENTRY);
+		setLocal(w, REST); // (future . data)
+		castCons(w, REST);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
+		setLocal(w, DATA);
+		getLocal(w, KIND);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		// kind 0 (subtask): VAL = dispatch_1(lift, token), then release the subtask.
+		castCons(w, DATA);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
-		castCons(w, ENTRY);
+		castCons(w, DATA);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 1);
 		setLocal(w, VAL);
-		// subtask.drop, then settle the entry's future (wakes its waiters).
 		getLocal(w, WAITABLE);
 		callOrdinal(w, sched.ordinals().subtaskDrop());
+		w.write(Instruction.ELSE);
+		// kind 1 (stream read): unjoin the handle, lift the chunk (0 bytes = EOF),
+		// recycle the buffer, and run the close protocol on an EOF of an attached,
+		// not-yet-closed stream.
+		getLocal(w, WAITABLE);
+		i32(w, 0);
+		callOrdinal(w, sched.ordinals().join());
+		getLocal(w, CODE);
+		i32(w, 4);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeSignedLeb128(EV); // reuse: the byte count
+		w.write(Instruction.IF);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		castCons(w, DATA);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+		unboxI31(w);
+		getLocal(w, EV);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(sched.strFromMemFuncIndex());
+		w.write(Instruction.ELSE);
+		refNullEq(w);
+		w.write(Instruction.END);
+		setLocal(w, VAL);
+		// readFree = (buf . readFree)
+		castCons(w, DATA);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+		globalGet(w, sched.readFreeGlobal());
+		newCons(w);
+		globalSet(w, sched.readFreeGlobal());
+		// EOF close protocol: DATA = the attached stream (reuse the local).
+		castCons(w, DATA);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
+		setLocal(w, DATA);
+		getLocal(w, VAL);
+		w.write(Instruction.REF_IS_NULL);
+		getLocal(w, DATA);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		castStream(w, DATA, streamType);
+		structGet(w, streamType, 0);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		emitCloseOnce(w, DATA, streamType);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END); // if kind
+		// Settle the entry's future (wakes its waiters).
 		castCons(w, REST);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
 		getLocal(w, VAL);
@@ -668,7 +816,7 @@ final class WasmFutureRuntimeBuilder {
 		w.writeSignedLeb128(base + OFF_SETTLE);
 		w.write(Instruction.DROP);
 		w.write(Instruction.END); // block $miss
-		w.write(Instruction.END); // if RETURNED
+		w.write(Instruction.END); // if interesting
 		w.write(Instruction.BR, 0); // -> $next
 		w.write(Instruction.END); // loop $next
 		w.write(Instruction.END); // block $done

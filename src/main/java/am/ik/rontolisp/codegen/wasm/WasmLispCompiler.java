@@ -1288,12 +1288,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// EH mode: the handler-depth counter global goes AFTER the user-variable
 		// globals, so their indices are unchanged whether or not EH mode is on.
 		int ehDepthGlobalIndex = ehMode ? GLOBAL_FENV + 1 + globalCount : -1;
-		// asyncMode: the scheduler registry (a cons list of (subtask . (future .
-		// (lift . token))) entries) and the task waitable-set handle, after the EH
-		// depth counter (asyncMode implies ehMode). Every non-async module is
+		// asyncMode: the scheduler registry (a cons list of (waitable . (kind .
+		// (future . data))) entries -- kind 0 = subtask, kind 1 = in-flight stream
+		// read), the task waitable-set handle, and the read-buffer free list, after
+		// the EH depth counter (asyncMode implies ehMode). Every non-async module is
 		// byte-identical to a build that never knew about them.
 		int schedRegistryGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 1 : -1;
 		int schedSetGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 2 : -1;
+		int schedReadFreeGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 3 : -1;
 
 		// Create string table
 		StringTable stringTable = new StringTable(DATA_BASE_OFFSET);
@@ -1725,7 +1727,8 @@ public final class WasmLispCompiler implements LispCompiler {
 									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_JOIN)),
 								Objects.requireNonNull(importSlotIndex
 									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP))),
-						schedRegistryGlobalIndex, schedSetGlobalIndex, allocFuncIndex);
+						schedRegistryGlobalIndex, schedSetGlobalIndex, schedReadFreeGlobalIndex, allocFuncIndex,
+						strFromMemFuncIndex);
 				break;
 			}
 		}
@@ -1766,7 +1769,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						Objects.requireNonNull(importSlotIndex
 							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP)));
 				byte[] body = WasmComponentImportCompiler.buildAsyncBody(ctxBuilder, async, ordinal, asyncWaitOrdinals,
-						allocFuncIndex, strFromMemFuncIndex);
+						allocFuncIndex, strFromMemFuncIndex, sched);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(async.lispName())), body);
 			}
 			for (WasmComponentImportCompiler.AsyncCall call : componentCallStartWrappers.values()) {
@@ -2733,8 +2736,9 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(Instruction.END);
 					});
 				}
-				// asyncMode: the scheduler registry, a (mut (ref null eq)) = null, and
-				// the task waitable-set handle, a (mut i32) = 0 (created lazily).
+				// asyncMode: the scheduler registry, a (mut (ref null eq)) = null, the
+				// task waitable-set handle, a (mut i32) = 0 (created lazily), and the
+				// read-buffer free list, a (mut (ref null eq)) = null.
 				if (this.asyncMode) {
 					gs.add(g -> {
 						g.write(Type.REFNULL.code());
@@ -2749,6 +2753,14 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(am.ik.wasm.Mutability.VAR.code());
 						g.write(Instruction.I32_CONST);
 						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+					gs.add(g -> {
+						g.write(Type.REFNULL.code());
+						g.writeHeapType(Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
 						g.write(Instruction.END);
 					});
 				}

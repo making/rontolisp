@@ -95,11 +95,22 @@ async-defun/async-lambda + await.
   `wasmtime -W exceptions=y`. Component streams: `TYPE_WASI_STREAM
   {eof, readFn, closeFn}` wraps the wasi-backed body streams http.lisp
   produces (`rontolisp::%wasi-stream-new` over two arity-0 Lisp thunks; the
-  close protocol lives in http.lisp, runs once at EOF or stream-close);
-  stream-read returns settled futures (the underlying built-in still blocks
-  the task while a chunk is in flight -- the pending-future upgrade is the
-  remaining true-concurrency item); guest `make-stream`/`stream-write` stay
-  compile errors.
+  close protocol lives in http.lisp, runs once at EOF or stream-close).
+  stream-read of a chunk the host has IN FLIGHT is a PENDING future: the
+  read wrapper registers it on the scheduler registry -- entries are
+  `(waitable . (kind . (future . data)))`, kind 0 = subtask, kind 1 =
+  stream read with its staged buffer (recycled through a free-list global;
+  the linear-memory cost is bounded by the number of CONCURRENT reads) --
+  joins the stream handle into the task waitable-set, and `_sched_loop`'s
+  EVENT_STREAM_READ dispatch lifts the chunk, runs the EOF close protocol
+  and settles it. So a slow body read no longer parks the instance: another
+  body's `wait-for` timer (or fetch) fires in between (the overlap
+  integration test pins delay order). A SECOND read on the same stream
+  before the first settles is a host trap ("read already pending" -- the
+  interpreter/JVM queue instead; exotic, and the old blocking build
+  serialized reads anyway). Guest `make-stream`/`stream-write` stay
+  compile errors, and the write-side built-ins keep the blocking
+  waitable-set park (correct-if-sequential).
 - **--no-gc**: the whole async surface is rejected by name with
   "... is not supported with --no-gc (use the default GC backend)".
 - **wait-for**: interpreter = `AsyncRuntime.timer` and JVM = `_wait_for`, both

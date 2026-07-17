@@ -167,16 +167,18 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
-	// rontolisp:fetch on the --component path is the fetch.lisp library over wit-imported
-	// wasi:http, spliced by FetchLibrary in the CLI front-end. A raw compiler does not
-	// splice
-	// it, so a fetch program is compiled through the same two library passes the CLI runs
-	// (a
-	// no-op for a non-fetch program).
+	// rontolisp:fetch on the --component path is the http.lisp library over wit-imported
+	// wasi:http, spliced by HttpLibrary in the CLI front-end. A raw compiler splices no
+	// library, so a fetch program is compiled through the same passes the CLI runs, in
+	// the CLI's order (each a no-op for a program that references nothing of it):
+	// http, wait-for, then prelude (read-all is a prelude async-defun) and the wit
+	// runtime.
 	private static byte[] compileFetchComponent(String program) {
+		var witBackend = am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT;
 		List<am.ik.rontolisp.LispVal> forms = am.ik.rontolisp.eval.WitLibrary
-			.process(am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString(program),
-					am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false));
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.WaitForLibrary.process(
+					am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString(program), witBackend, false),
+					witBackend)));
 		return new WasmLispCompiler(false, true).compile(forms);
 	}
 
@@ -6217,6 +6219,68 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
+	@Test
+	@org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named = "RONTOLISP_HTTP_E2E", matches = "1")
+	void componentPendingBodyReadOverlapsTimer(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir)
+			throws Exception {
+		// True intra-instance concurrency: a stream-read the host reports in flight is a
+		// PENDING future settled by the scheduler's EVENT_STREAM_READ dispatch, so one
+		// async body draining a slow fetch body no longer parks the whole instance --
+		// another body's wait-for timer fires in between. Delay order, not start order:
+		// the drain starts first but its slow chunk (800 ms) arrives after the timer
+		// (200 ms), and with the old blocking read "timer-fired" could only print after
+		// the drain completed.
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/slow", exchange -> {
+			exchange.sendResponseHeaders(200, 0); // chunked
+			exchange.getResponseBody().write("first-".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			exchange.getResponseBody().flush();
+			try {
+				Thread.sleep(800);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+			exchange.getResponseBody().write("second".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			exchange.close();
+		});
+		server.start();
+		try {
+			String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/slow";
+			String program = """
+					(rontolisp:async-defun drain (url)
+					  (let* ((r (rontolisp:await (rontolisp:fetch url)))
+					         (body (rontolisp:await (rontolisp:read-all (getf r :body)))))
+					    (print (list 'drained body))))
+					(rontolisp:async-defun timer ()
+					  (rontolisp:await (rontolisp:wait-for 200))
+					  (print 'timer-fired))
+					(let ((a (drain "%s"))
+					      (b (timer)))
+					  (rontolisp:await a)
+					  (rontolisp:await b)
+					  (print 'end))
+					""".formatted(url);
+			byte[] componentBytes = compileFetchComponent(program);
+			java.nio.file.Path wasm = tempDir.resolve("overlap.component.wasm");
+			java.nio.file.Files.write(wasm, componentBytes);
+			Process p = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S", "http=y",
+					wasm.toString())
+				.redirectErrorStream(true)
+				.start();
+			String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+			p.waitFor();
+			assertThat(out.trim()).isEqualTo("""
+					timer-fired
+					(drained "first-second")
+					end""");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
 	// Characters and string/number parsing
 
 	@Test
@@ -8770,11 +8834,15 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.3.0" :package http)
 				(rontolisp:wit-import "iface.wit" :interface "wasi:http/client@0.3.0" :package client)
 
-				(defun read-all (stream acc)
-				  (let ((chunk (http:body-stream-read stream)))
+				;; body-stream-read answers the chunk immediately, or -- when the host
+				;; reports the read in flight -- a PENDING future the scheduler settles;
+				;; await passes an immediate chunk through and suspends on the pending
+				;; one, so stream reads belong in an async function.
+				(rontolisp:async-defun read-all (stream acc)
+				  (let ((chunk (rontolisp:await (http:body-stream-read stream))))
 				    (if (or (null chunk) (= (length chunk) 0))
 				        acc
-				        (read-all stream (concatenate 'string acc chunk)))))
+				        (rontolisp:await (read-all stream (concatenate 'string acc chunk))))))
 
 				(rontolisp:async-defun get-url (authority path)
 				  (let* ((trailers (http:trailers-future-new))
@@ -8800,7 +8868,7 @@ class WasmLispCompilerIntegrationTest {
 				             ;; future through which we report our side's outcome.
 				             (pair (http:response-consume-body response (car res)))
 				             (stream (car pair))
-				             (text (read-all stream "")))
+				             (text (rontolisp:await (read-all stream ""))))
 				        (http:body-stream-drop-readable stream)
 				        (http:trailers-future-drop-readable (car (cdr pair)))
 				        (http:transmit-future-write (cdr res) :ok)
@@ -8848,11 +8916,13 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.3.0" :package http)
 				(rontolisp:wit-import "iface.wit" :interface "wasi:http/client@0.3.0" :package client)
 
-				(defun read-all (stream acc)
-				  (let ((chunk (http:body-stream-read stream)))
+				;; a read the host has in flight is a PENDING future: await it (an
+				;; immediate chunk passes through), so read-all is an async function.
+				(rontolisp:async-defun read-all (stream acc)
+				  (let ((chunk (rontolisp:await (http:body-stream-read stream))))
 				    (if (or (null chunk) (= (length chunk) 0))
 				        acc
-				        (read-all stream (concatenate 'string acc chunk)))))
+				        (rontolisp:await (read-all stream (concatenate 'string acc chunk))))))
 
 				(rontolisp:async-defun post-url (authority path body)
 				  ;; content-length goes on with fields.append -- its value (a field-value =
@@ -8882,7 +8952,7 @@ class WasmLispCompilerIntegrationTest {
 				               (res (http:transmit-future-new))
 				               (pair (http:response-consume-body response (car res)))
 				               (stream (car pair))
-				               (text (read-all stream "")))
+				               (text (rontolisp:await (read-all stream ""))))
 				          (http:body-stream-drop-readable stream)
 				          (http:trailers-future-drop-readable (car (cdr pair)))
 				          (http:transmit-future-write (cdr res) :ok)

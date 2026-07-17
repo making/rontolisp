@@ -13,8 +13,9 @@ import am.ik.wasm.Instruction;
  * {@code TYPE_WASI_STREAM} value produced by http.lisp for a fetch/serve body
  * ({@code rontolisp::%wasi-stream-new} over the wasi byte-stream built-ins).
  * {@code stream-read} returns a future settling to the next chunk (nil = EOF, matching
- * the interpreter/JVM contract); the underlying built-in blocks the task while a chunk is
- * in flight, so the future is always settled in this tier. Guest-created streams
+ * the interpreter/JVM contract); a chunk the host has in flight comes back as a PENDING
+ * future settled by the scheduler's {@code EVENT_STREAM_READ} dispatch, so the task keeps
+ * running while it waits (true intra-instance concurrency). Guest-created streams
  * ({@code rontolisp:make-stream}/{@code stream-write}) remain unsupported here.
  */
 final class WasmWasiStreamCompiler {
