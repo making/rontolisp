@@ -330,7 +330,8 @@ examples:
 
   # --- console/--no-gc: compiled to a plain MVP module, invoked by a host -----
   - path: console/mandelbrot-nogc.lisp
-    backends: [no-gc]
+    backends: [no-gc, wasm-component]
+    note: implements mandelbrot_component.wit via rontolisp:wit-export -- the :string-RESULT counterpart of count-vowels' :string parameter, on the console rather than in a page. The no-gc leg pins that the world lowers to the byte-identical core module the memory-reading host has always called; wasm-component pins the wasm-GC lowering of the same world, at exactly the 7-parameter callable limit. Host-invoked (wasmtime run --invoke 'mandelbrot(-2.5, 1.0, -1.2, 1.2, 70, 30, 30)'), so the harness only compiles
   - path: count-vowels/count-vowels.lisp
     backends: [no-gc, wasm-component]
     note: implements count_vowels_component.wit via rontolisp:wit-export -- the world is the export list, so this also pins the contract check on both component paths (the README builds it --no-gc --component; the wasm-component backend here exercises the wasm-GC lowering of the same world). Host-invoked (wasmtime run --invoke 'count-vowels("Hello, World!")' -> 3), so the harness only compiles

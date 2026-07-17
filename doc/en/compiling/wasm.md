@@ -1197,6 +1197,16 @@ $ node -e '(async () => {
 })()'
 ```
 
+The export's type is not written in that Lisp file at all: a checked-in world
+([`mandelbrot_component.wit`](https://github.com/making/rontolisp/blob/develop/examples/console/mandelbrot_component.wit))
+declares `export mandelbrot: func(x0: f64, ..., max-iter: s32) -> string;`, and
+[`rontolisp:wit-export`](#implementing-a-wit-world-wit-export) says the
+program implements it. One directive serves both builds: the core module above is
+byte-identical to the hand-written `wasm-export` it replaced, and the same source
+compiles as a component where
+`wasmtime run --invoke 'mandelbrot(-2.5, 1.0, -1.2, 1.2, 70, 30, 30)'` returns the
+string with no host memory code and no runtime flags.
+
 ### Printing (`print` / `princ` / `terpri`)
 
 An exported function can print: `print` (readable form plus a trailing newline,

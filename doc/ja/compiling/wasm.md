@@ -682,6 +682,8 @@ $ node -e '(async () => {
 })()'
 ```
 
+エクスポートの型は、この Lisp ファイルにはまったく書かれていません: チェックインされた world([`mandelbrot_component.wit`](https://github.com/making/rontolisp/blob/develop/examples/console/mandelbrot_component.wit))が `export mandelbrot: func(x0: f64, ..., max-iter: s32) -> string;` を宣言し、[`rontolisp:wit-export`](#implementing-a-wit-world-wit-export) が「このプログラムはそれを実装する」と言います。1 つのディレクティブが両方のビルドに効きます: 上のコアモジュールは、それが置き換えた手書きの `wasm-export` とバイト単位で同一であり、同じソースがコンポーネントとしてもコンパイルされ、そちらでは `wasmtime run --invoke 'mandelbrot(-2.5, 1.0, -1.2, 1.2, 70, 30, 30)'` がホスト側のメモリ操作コードもランタイムフラグもなしに文字列を返します。
+
 ### 印字(`print` / `princ` / `terpri`)
 
 エクスポートされた関数は印字できます: `print`(読み取り可能な形 + 末尾の改行。文字列は引用符付きで出力)、`princ`(表示形、改行なし)、`terpri`(改行)が対象サブセット内で動作し、出力はインタプリタとバイト単位で一致します:

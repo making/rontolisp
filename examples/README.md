@@ -33,7 +33,7 @@ JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
 | [`sorting.lisp`](console/sorting.lisp) | Quicksort and merge sort over number lists, parameterized by a first-class comparator; cross-checked against the built-in `sort` |
 | [`calc.lisp`](console/calc.lisp) | A tiny prefix-arithmetic interpreter: a recursive evaluator over an alist environment, cross-checked against the built-in `eval` |
 | [`mandelbrot.lisp`](console/mandelbrot.lisp) | ASCII Mandelbrot set: floating-point arithmetic and nested loops (no transcendental functions) |
-| [`mandelbrot-nogc.lisp`](console/mandelbrot-nogc.lisp) | The `--no-gc` companion to `mandelbrot.lisp`: returns the rendered grid as a `:string` from a plain MVP module (no wasm-GC), driven by a memory-writing host |
+| [`mandelbrot-nogc.lisp`](console/mandelbrot-nogc.lisp) | The `--no-gc` companion to `mandelbrot.lisp`: returns the rendered grid as a `:string`, its export typed by a checked-in world ([`mandelbrot_component.wit`](console/mandelbrot_component.wit)) via `rontolisp:wit-export`. One directive, two builds: a plain MVP module (no wasm-GC) whose host reads the string out of linear memory, and a `--component` one where `wasmtime --invoke` just returns it |
 | [`line-numbers.lisp`](console/line-numbers.lisp) | A `cat -n` style file tool: `with-open-file`, `read-line`, `write-line`, `format nil`, line/character counts |
 | [`parse-numbers.lisp`](console/parse-numbers.lisp) | Numeric-column parsing and character classification: `parse-integer`, `char`, `alpha-char-p`, `digit-char-p` over file lines |
 | [`sieve.lisp`](console/sieve.lisp) | Sieve of Eratosthenes: boolean `make-array` as the sieve, `aref`/`(setf (aref ...))`, list accumulation via `push`/`reverse`, and prime factorization with `sqrt`/`ceiling` |

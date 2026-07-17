@@ -365,6 +365,82 @@ read as supported. Making a world's import LIST authoritative the way its export
 needs the component boundary — todo-128 (canon lower, the wasi:keyvalue unblocker) —
 and only then does `--emit-wit` become a two-sided check.
 
+### Decision record: an `:s-expr` export has NO WIT spelling — (a) never (todo 130)
+
+**Decision: (a).** `:s-expr` is a rontolisp-private wire format, not a WIT boundary. The
+two demos that use it — `examples/browser/minesweeper/minesweeper-wasm.lisp:86-92` (SEVEN
+exports, every one taking an `:s-expr` and four returning one: the game state in five of
+them, a host-supplied cell ORDER in `place-mines` and mine LAYOUT in `new-game`, because
+the entropy-free reactor cannot call `random`) and
+`examples/browser/hiragana/recognize.lisp:34` (`recognize(:s-expr) -> :string`, the
+576-pixel bitmap as a list) — stay on hand-written `rontolisp:wasm-export`
+**permanently**, and that directive is the documented escape hatch for this shape. "Not
+supported" is the record; silence was the bug.
+
+`:s-expr` is s-expression TEXT crossing as `(ptr, len)` and parsed by the emitted runtime
+reader. No WIT type lowers to it: `designator()` maps WIT `string` to `:string`, a
+*different* wire format (an ordinary Lisp string; nothing parses it). So a blind retrofit
+does not fail — it **compiles**, and the page breaks at run time.
+
+Worse, the two already collide in the emitted WIT:
+`WasmExportCompiler.componentValType()` (`:645-656`, the `:string`/`:s-expr` arm at
+`:651`) lifts **both** as component `string`, so an `:s-expr` export under
+`--component --emit-wit` prints `export head: func(p0: string) -> string;` — a valid
+world which, fed back through `wit-export`, yields `:string` designators and a silently
+different ABI. Do not "fix" that by teaching the world about `:s-expr`; fix it by not
+putting `:s-expr` in a world.
+
+- **(b) rewrite the data model** remains the honest long-term home (minesweeper's state is
+  a plist of ints, the bitmap is 576 numbers; both are a WIT `record` / `list<u8>` that
+  `WitTypeMapper` already names). It is a **rewrite of the demos, not a retrofit**, and it
+  is NOT unblocked: todo-130 assumed todo-128 was its gate, which is **wrong**. Todo-128
+  and todo-133 landed rich types on the **import** side (`canon lower`). The **export**
+  boundary still accepts exactly `s32`/`s64`/`f64`/`bool`/`string`
+  (`WitExportDirective.designator()`, whose own error says "the component boundary cannot
+  marshal it yet"). A rich-type export LIFT is the real gate and does not exist.
+- **(c) annotate a WIT `string`** as "s-expression text": rejected on sight — it makes our
+  WIT unportable to `wasm-tools` / `wit-bindgen`, which is the whole point of emitting WIT.
+
+Precedent, and why (a) is not a retreat: an earlier round of the import work already
+lowered rich P1 types through `:s-expr` (prin1 out, embedded reader back) and it was
+REVERTED for the same reason (see "Type tiers, restated" below) — a rontolisp-specific
+pseudo-protocol is not a WIT boundary. Rich types need the component boundary; on the
+export side, that boundary is not built yet.
+
+### Decision record: `:as` camelCase vs. the kebab label — `wit-export` is component-facing (todo 130)
+
+**Decision: (ii).** `wit-export` grows **no** alias mechanism. It emits no `:as` —
+`exportForm()` builds the lowered `wasm-export` from the world's label and `LABEL`
+enforces lower-kebab-case, which for a COMPONENT is simply right (jco maps `count-vowels`
+-> `countVowels`). Core-module demos that want camelCase JS names keep hand-writing
+`rontolisp:wasm-export`. `wit-export` is **component-facing**; `:as` is the core-module
+fix-up it replaces, not a gap it must close.
+
+The twelve aliased exports are `webgl-heat3d/heat3d.lisp:242` (`totalHeat`),
+`webgl-robot-arm/robot-arm.lisp:939-940` (`setSolver`, `ikError`) and
+`webgl-platformer/platformer.lisp:928,932-939` (`setKey`, `getCoins`, `coinTotal`,
+`getDeaths`, `getState`, `getTime`, `getPx`, `getPy`, `getPz`).
+
+**The cheap third path was measured, and it works: those demos MAY migrate.** A kebab
+export IS callable from JS as `exports["set-key"](...)`, and the tree already does it —
+`examples/browser/rainbow/rainbow.html:109` is `exports["rainbow-html"](ptr, bytes.length)`.
+So this was never a mechanism gap; it is ~12 lines of `index.html`.
+
+**They are left alone anyway**, deliberately: all three pages call by dot-property
+camelCase (`lisp.totalHeat()` at `webgl-heat3d/index.html:372,393`; `lisp.setKey(...)`,
+`lisp.getPx()`, `lisp.ikError()` &c), and `webgl-platformer/index.html:375` advertises
+`lisp.getPx()` as the DevTools-console handle on the running game. On a raw core module
+loaded with `WebAssembly.instantiate` the export name is literal, so migrating buys the
+contract check and pays for it in `lisp["get-px"]()` at every call site and in that
+affordance. The trade is not worth it while the pages load core modules; if one ever
+becomes a component (the `browser/wit-component` route), the world comes with it and the
+camelCase names come back from jco for free.
+
+**(i) an alias mechanism is rejected**, not deferred: a `:as`-carrying option or a
+WIT-level annotation re-introduces exactly the two-places drift the directive was built to
+kill, on the one field the component model says must be canonical. If it is ever wanted,
+it is its own todo, not a line in this one.
+
 ## `rontolisp:wit-import` — calling a WIT interface (todo 127, 2026-07-14)
 
 Step 3 of todo-124, the mirror of `wit-export`: *this program CALLS this WIT
