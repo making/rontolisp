@@ -1,13 +1,13 @@
 # The `http-handler` request/response plists should be DERIVED from the WIT record
 
-**Status:** open, unstarted. Carved out of `.todo/124` (the WIT-as-universal-IDL anchor)
+**Status:** open, unstarted. Carved out of todo-124 (the WIT-as-universal-IDL anchor)
 when it was closed on 2026-07-17. It is the one bullet of that anchor's "what gets absorbed
 afterwards" list which is **not** actually discharged: 124's table credited it to
-`.todo/135`, but 135 delivered the other half.
+todo-135, but 135 delivered the other half.
 
 ## What 135 did, and what it did not
 
-`.todo/135` put the serve/fetch GLUE through WIT: `http.lisp` rides a wit-imported
+todo-135 put the serve/fetch GLUE through WIT: `http.lisp` rides a wit-imported
 `wasi:http@0.3.0`, and every hand-written WAT HTTP adapter is deleted (`.kb/fetch-http.md`,
 `.kb/wit.md`). That is real and it is done.
 

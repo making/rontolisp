@@ -4,7 +4,7 @@
 > intended message). The real condition system remains below.
 >
 > **Update 2026-07-11:** the concrete engineering plan now lives in
-> `.todo/116-error-handling-foundation.md` (unwind-protect + typed conditions
+> todo-116 (unwind-protect + typed conditions
 > + handler-case, grounded in the current codebase: the CLOS static subset
 > exists now, class-v50 exception tables need only `ByteCodeWriter` emission
 > support, WASM catching is gated out for v1). This file stays as the
@@ -52,7 +52,7 @@ primary form: the restart clauses are dead code, reachable only through an
 `invoke-restart` that does not exist. A signaling primary form signals as usual.
 
 The restart layer is the lowest-priority piece and is deeply intertwined with
-the condition system; `.todo/116-error-handling-foundation.md` records the
+the condition system; todo-116 records the
 Step-0 survey that deferred it (no library-side `invoke-restart` in the
 motivating corpus; the real gate is Postmodern proper).
 

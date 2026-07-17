@@ -60,7 +60,7 @@ train today trainable", not "make today's training faster".
 
 - **JVM / interpreter**: Panama FFM binding to a BLAS (cuBLAS on NVIDIA, Metal
   Performance Shaders / Accelerate on macOS). Native-image needs the same FFM
-  config care as the Vector API did (`.todo/102`: `-H:+VectorAPISupport` vs
+  config care as the Vector API did (todo-102: `-H:+VectorAPISupport` vs
   `-H:+SharedArenaSupport` were mutually exclusive — expect a similar fight).
 - **Browser (wasm-GC)**: WASM cannot reach WebGPU directly. The module would
   declare the compute entry points as host functions (`rontolisp:wasm-import`)

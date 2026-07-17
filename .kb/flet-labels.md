@@ -26,7 +26,7 @@ Both are `LispMacroExpander` expansions (CL_MACROS; no per-backend codegen).
   mutual recursion works in all backends (verified on all four).
 - **Unique variable names** (`__<op><counter>_<name>`, static `FLET_COUNTER`):
   NOT fixed names, because a JVM let-init lambda that captures a same-named
-  outer variable miscompiles (see `.todo/62-jvm-let-init-lambda-same-name-capture.md`);
+  outer variable miscompiles (see todo-062);
   unique names avoid same-name nesting entirely. Counter values differ between
   the analyzers'/interpreter's throwaway expansions and the compile one -- fine,
   every generated name is bound inside its own expansion (macroexpand output

@@ -23,15 +23,19 @@ cl-postgres.asd parses (defparameter env, `#.*string-file*` resolves to
 "strings-ascii", the usocket/sb-bsd-sockets `:feature` clauses drop). Pinned
 by `AsdfSystemsTest.parsesTheClPostgresAsdHeaderShape`.
 
-**Everything after M1 is parked on the `cl-postgres-wip` branch** (adoption
-undecided): the M2 crypto shim systems (md5/ironclad/cl-base64/uax-15 over
-the java: bridge, + cl-ppcre/alexandria reference shims), and the M4 pre-work
-batch (source-file `#.` read-time eval via ReadTimeEvaluator, the
-find-package fold, defgeneric inline `:method`, `with-standard-io-syntax`,
-`encode-universal-time`). With that branch, cl-postgres loads through
-interpret.lisp on the interpreter and stops at the todo-116 Phase 2 gate
-(`defmethod: unknown specializer bad-char-error` -- define-condition classes).
-The `.todo/116` error-handling foundation is being tackled first, on develop.
+**Everything after M1 is parked on the `cl-postgres-wip` branch, which is
+FROZEN -- do not touch or rebase it; adoption is undecided**: the M2 crypto
+shim systems (md5/ironclad/cl-base64/uax-15 over the java: bridge, +
+cl-ppcre/alexandria reference shims), and the M4 pre-work batch (source-file
+`#.` read-time eval via ReadTimeEvaluator, the find-package fold, defgeneric
+inline `:method`, `with-standard-io-syntax`, `encode-universal-time`). With
+that branch, cl-postgres loads through interpret.lisp on the interpreter.
+
+Its last known failure (`defmethod: unknown specializer bad-char-error` --
+define-condition classes) is **stale**: that was the todo-116 Phase 2 gate, and
+it closed on develop (Phases 1-3 shipped, commit a8b957b). The branch has not
+been re-run since, so its real next gate is unknown -- re-run it against
+post-116 develop before planning anything on top of it.
 
 Iterate with the cached copy in
 `~/.rontolisp/quicklisp/software/postmodern-*/cl-postgres/`.
@@ -51,17 +55,32 @@ Iterate with the cached copy in
    error outside `.asd`. Needs a restricted read-time evaluator (literals +
    arithmetic + quoted data would cover most sites) or a documented
    preprocessing step. Survey the actual 46 forms before designing.
-3. **Condition system — the big one** (`.todo/116-error-handling-foundation.md`
-   is the prerequisite engineering plan; `.todo/039` is the API catalog): `define-condition` with slots/`:reader`s (11),
-   `handler-case` (6), `handler-bind` (2), `restart-case` (4) — cl-postgres's
-   error machinery (`errors.lisp`) builds a `database-error` hierarchy and
-   `initiate-connection` retries via `restart-case`. Also **`unwind-protect`**
-   (5 sites; rontolisp has none — the usocket with-* macros dodged it, a
-   driver that must release sockets on error cannot). Interpreter first
-   (Java exceptions carrying the condition object + finally); JVM compile
-   path = real try/catch-finally; WASM = gate or the exception-handling
-   proposal. This dwarfs everything else — consider landing it as its own
-   todo-039 work and keeping this todo blocked on it.
+3. **Condition system — mostly SHIPPED** (todo-116 Phases 1-3, commit
+   a8b957b, 2026-07-12; the durable record is `.kb/error-handling.md`, and
+   `.todo/039` remains the API catalog). `define-condition` with
+   slots/`:reader`s (11), `handler-case` (6) and `unwind-protect` (5) all
+   work on the interpreter + JVM, and wasm-GC catches too since todo-129
+   (only `--no-gc` rejects the catching forms). So cl-postgres's
+   `errors.lisp` `database-error` hierarchy is expressible today. What is
+   left for this todo is small and specific:
+   - **`handler-bind`** — exactly ONE real site: `public.lisp:386`,
+     `wait-for-notification`, catching `postgresql-notification`
+     (LISTEN/NOTIFY only, not on the `exec-query` path). The
+     `errors.lisp:142` grep hit is inside a docstring, not code. Until it
+     exists, the file still LOADS (defun bodies are lazy on the
+     interpreter); only a call to `wait-for-notification` fails, so
+     LISTEN/NOTIFY is simply unsupported for now.
+   - **`cerror`** — 4 sites (protocol.lisp:269/289 auth edge + SCRAM
+     signature checks); needs a lite `cerror` → `error` lowering, an
+     M4/M5-sized item.
+   - **`restart-case`** (4 sites) needs **nothing**. The todo-116 Phase 4
+     survey (see `.kb/error-handling.md`, "The Phase 4 survey") proved the
+     verbatim cl-postgres needs NO restart system at all: all 4 sites are
+     `(restart-case (error X) (clauses...))`, and cl-postgres never invokes
+     a restart itself (zero library-side `invoke-restart`/`find-restart`),
+     so the existing lite primary-form-only `expandRestartCase` is
+     behavior-identical to real CL here. The real restart gate is Postmodern
+     proper, which is out of scope (see the milestones).
 4. **Dependency systems**: `:depends-on ("md5" "split-sequence" "ironclad"
    "cl-base64" "uax-15")`.
    - `split-sequence` already runs (todo-054 verification chain).
@@ -127,7 +146,7 @@ Iterate with the cached copy in
 
 ## Scope decisions to make early
 
-- Interpreter/JVM only first? (WASM lacks TLS, conditions, bignums — a
+- Interpreter/JVM only first? (WASM lacks TLS and bignums — a
   realistic driver target is interpreter + JVM; WASM = document as
   unsupported for now.)
 - Vendor a patched cl-postgres (skip scram/saslprep files via a rontolisp

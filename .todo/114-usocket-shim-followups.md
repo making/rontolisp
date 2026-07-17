@@ -7,17 +7,7 @@ socket-stream) plus listeners, accessors and the with-* macros. See
 `.kb/tcp-sockets.md` for the mechanics. Remaining gaps, none needed by
 Postmodern:
 
-## Tier 1: WASM component address accessors
-
-`rontolisp:tcp-local-address` / `tcp-peer-address` / `tcp-peer-port` return
-nil in component mode (WasmTcpCompiler drops the handle and pushes nil).
-Wiring them for real means extending `adapter-sockets.wat` with
-`wasi:sockets` `local-address`/`remote-address` calls and new fixed import
-indices (renumbering the core seam -- see `.kb/tcp-sockets.md` "The WASM core
-seam"). Deliberately deferred: an unconditional compile error was NOT an
-option (usocket.lisp splices whole, every defun body compiles eagerly).
-
-## Tier 2: wait-for-input (single-socket degenerate form)
+## Tier 1: wait-for-input (single-socket degenerate form)
 
 Many usocket consumers loop `wait-for-input` -> read. A lite version that
 ignores `:timeout` and immediately returns its socket argument (reads block
@@ -27,7 +17,7 @@ select needs a poll primitive on every backend (interpreter:
 semantically-lying no-op is worth shipping (document loudly) or wait for the
 poll primitive.
 
-## Tier 3: socket-server
+## Tier 2: socket-server
 
 A single-threaded accept loop (`socket-server host port handler` with
 `:in-new-thread`/`:multi-threading` ignored) is expressible in usocket.lisp
@@ -39,7 +29,7 @@ Skipped in v1 by scope decision.
 
 UDP (`socket-send`/`socket-receive`, blocked on `.todo/047-udp-sockets.md`)
 and `socket-shutdown` (needs a half-close primitive). The error-path gaps
-were CLOSED by `.todo/116-error-handling-foundation.md` Phases 1-3
+were CLOSED by todo-116 Phases 1-3
 (2026-07-12): the with-* macros close on every exit on interpreter/JVM
 (`unwind-protect`), and `usocket:socket-error` is a real condition type
 catchable under `handler-case` (`usocket::%usock-guard` re-signal; see

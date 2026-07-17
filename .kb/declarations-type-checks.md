@@ -54,7 +54,7 @@ heads accept the same specs as `check-type`:
 - Type-specifier symbols match by their package-STRIPPED name
   (`plainTypeName`): standard type names are not all registered CL symbols,
   so inside a user package the resolver qualifies e.g. `unsigned-byte` to
-  `pkg::unsigned-byte` (found by the split-sequence e2e, `.todo/61`).
+  `pkg::unsigned-byte` (found by the split-sequence e2e, todo-061).
   Complementing that, `PackageRegistry.CL_TYPES` registers the common
   type-only names (float family, unsigned-byte, sequence, satisfies,
   otherwise, ...) so they resolve BARE in the first place -- required where

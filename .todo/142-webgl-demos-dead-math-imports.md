@@ -1,6 +1,6 @@
 # The WebGL demos' `math` imports are (mostly) dead, and their prose still sells them
 
-**Status:** open, unstarted. Found 2026-07-17 while doing `.todo/132` (the WebGL demos'
+**Status:** open, unstarted. Found 2026-07-17 while doing todo-132 (the WebGL demos'
 gl.wit migration), which measured every demo's real import list for the first time in a
 while. Nothing here is caused by that migration -- it is visible in the PRE-migration
 build too -- and fixing it changes the `.wasm`, which is exactly what todo 132 had to hold

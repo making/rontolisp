@@ -1,7 +1,7 @@
 # Fill-pointer / adjustable / displaced arrays (`copy-array` surface)
 
-Split out of `.todo/71-adjustable-arrays-copy-array.md` (itself split from the
-cl-utilities residue `.todo/65`). This is the extended-array surface that
+Split out of todo-071 (itself split from the
+cl-utilities residue todo-065). This is the extended-array surface that
 cl-utilities `copy-array` touches:
 
 - `make-array` options `:fill-pointer`, `:adjustable`, `:displaced-to` /

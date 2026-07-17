@@ -292,6 +292,11 @@ Do not emit `%` in generated method names -- map it to something like `$pct` in 
 compiler's name mangler. Renaming the affected internal method took the failure from
 roughly 2 of 3 runs to 0 of 5, with byte-identical program output.
 
+(This workaround has SHIPPED repo-wide since: `JvmLispCompiler.java:2018` mangles
+`%` to `$pct` for every generated method name, commit 48cf880. It costs this report
+nothing -- every reproducer above is plain Java on a stock JDK, and the upstream
+defect is untouched. Only the filing remains.)
+
 Alternatives that only mask the symptom: set the JVMCI compiler's systemic-failure
 rate to 0 (silences the detector; the method is still never compiled), or disable the
 JVMCI compiler (`-XX:-UseJVMCICompiler`), falling back to C2.

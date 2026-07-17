@@ -1,8 +1,8 @@
 # `am.ik.wit` — the WIT parser/printer library, the settled type mapping, `wit-export` and `wit-import`
 
-Todo 125 (step 1 of the `.todo/124` "WIT as universal IDL" roadmap), 2026-07-13, plus
+Todo 125 (step 1 of the todo-124 "WIT as universal IDL" roadmap), 2026-07-13, plus
 todo 126 (`rontolisp:wit-export`, 2026-07-14) and todo 127 (`rontolisp:wit-import`,
-2026-07-14). Everything downstream (component imports, `.todo/128`) consumes this model;
+2026-07-14). Everything downstream (component imports, todo-128) consumes this model;
 nothing downstream re-parses text.
 
 ## The library (`am.ik.wit`)
@@ -116,7 +116,7 @@ Applied to `WitEmitter.VARIANT_*`, fixture names, ALL blob artifacts
 `WasmServeComponentBuilder`, `buildServe` still name the `wasmtime serve` MODE.
 (HISTORICAL NOTE: the `http-client` variant died when fetch became a Lisp
 library over user imports, and the `http-server-client` variant died with the
-.todo/002 wasi:http@0.3 cutover -- serve and serve+fetch are ONE `http-server`
+todo-002 wasi:http@0.3 cutover -- serve and serve+fetch are ONE `http-server`
 variant now; mode `serve` -> variant `http-server`.)
 
 ## The settled type mapping (`compiler/WitTypeMapper`, todo 124's table)
@@ -131,16 +131,16 @@ list, `flags`=keyword list, `option<T>`=value-or-nil, `tuple`=list,
 
 ### Decision record: `result<T, E>` = option (c) — condition on EVERY backend
 
-Chosen 2026-07-13 (user decision after weighing all three `.todo/124` options):
+Chosen 2026-07-13 (user decision after weighing all three todo-124 options):
 
 - The ok arm is the return value; a payload-less ok arm (`result` / `result<_, E>`)
   returns `nil`. The error arm **signals a condition** carrying the mapped `E`
   payload, catchable with `handler-case` — on every backend, as the contract.
-- The WASM catch mechanism this presupposed landed with `.todo/129`
+- The WASM catch mechanism this presupposed landed with todo-129
   (2026-07-14): the wasm-GC backends compile `handler-case` through the
   exception-handling proposal (`.kb/error-handling.md`, "WASM (todo-129)"), so
   the error arm is catchable on every backend except `--no-gc` and the
-  `.todo/128` prerequisite is SATISFIED. Programs that catch need
+  todo-128 prerequisite is SATISFIED. Programs that catch need
   `wasmtime -W exceptions=y` (37+).
 - Why not (a) multiple values `(values ok err)`: it is implementable today with zero
   new machinery (a `(values ...)` tail in the synthesized stub rides the `%mv-spill`
@@ -169,7 +169,7 @@ before/after (pinned by `WitOracleE2eTest` + the integration suite).
 
 ## `rontolisp:wit-export` — implementing a world (todo 126, 2026-07-14)
 
-Step 2 of `.todo/124`. "This program implements this WIT world": the `.wit` becomes the
+Step 2 of todo-124. "This program implements this WIT world": the `.wit` becomes the
 single source of truth for the export surface, so the `:params`/`:returns` lists stop
 being maintained next to a separately-generated `.wit` that can drift until
 `wasmtime --invoke` fails at run time.
@@ -254,7 +254,7 @@ Every one names the WIT file and line (`WitLocations`), e.g.
   and the message says to declare the interface to call instead
 - a WIT type outside the export boundary's subset (`s32` / `s64` / `f64` / `bool` /
   `string`). The error names the type's SETTLED house representation via
-  `WitTypeMapper.rep` and says the component boundary cannot marshal it yet (`.todo/128`)
+  `WitTypeMapper.rep` and says the component boundary cannot marshal it yet (todo-128)
   — "your `record` is a keyword plist, marshalling it is not built yet", not a bare
   refusal. The message itself carries no `.todo` pointer: a todo file is deleted the
   moment the work lands, so a user-facing string must never name one
@@ -362,16 +362,16 @@ directive naming the interface (next section) — the two directives do not talk
 other. An inline `import name: func(...)` in an implemented world stays an error: it is
 the one import shape `wit-import` cannot bind (it is not an interface), so it must not
 read as supported. Making a world's import LIST authoritative the way its export list is
-needs the component boundary — `.todo/128` (canon lower, the wasi:keyvalue unblocker) —
+needs the component boundary — todo-128 (canon lower, the wasi:keyvalue unblocker) —
 and only then does `--emit-wit` become a two-sided check.
 
 ## `rontolisp:wit-import` — calling a WIT interface (todo 127, 2026-07-14)
 
-Step 3 of `.todo/124`, the mirror of `wit-export`: *this program CALLS this WIT
+Step 3 of todo-124, the mirror of `wit-export`: *this program CALLS this WIT
 interface*. One WIT file, a different implementation behind it per backend, zero source
 changes — a `wasi:keyvalue` program is developed against an in-memory bucket (a Lisp file
 it `require`s, see the provider decision below), swapped onto a real store by binding one
-provider, and (once `.todo/128` lands) compiled to a component that talks to a real host.
+provider, and (once todo-128 lands) compiled to a component that talks to a real host.
 
 ```lisp
 ;; kv.wit: interface store {
@@ -493,7 +493,7 @@ The reasoning, so nobody re-adds one:
 - a built-in store hardcodes ONE third-party spec's interface id, its member names AND its
   version (`wasi:keyvalue/store@0.2.0`) into the core of a Lisp. It is version-pinned and
   name-pinned to something we do not own, and it privileges one spec over every other.
-- it contradicts the bet of `.todo/124`: **a new host interface should cost a `.wit` file,
+- it contradicts the bet of todo-124: **a new host interface should cost a `.wit` file,
   not core code.** An implementation of a WIT interface is ordinary USER code — that is
   what the mechanism is FOR, and shipping one implementation in the core says the opposite.
 - the cost is honest and small: a `wasi:keyvalue` program cannot run bare, it needs one
@@ -610,7 +610,7 @@ a WIT type is judged, and its `wasm` flag is the whole difference:
 
 Say the consequence out loud: `wasi:keyvalue/store` itself does **not** cross the Preview 1
 boundary (`open` returns `result<bucket, error>`, `bucket.get` returns
-`result<option<list<u8>>, error>`). kv is an interpreter/JVM story until `.todo/128` lifts
+`result<option<list<u8>>, error>`). kv is an interpreter/JVM story until todo-128 lifts
 it onto the canonical ABI. The interfaces that DO cross Preview 1 today are the flat,
 host-shaped ones — WebGL, see the spike below.
 
@@ -637,7 +637,7 @@ todo 127 sketched (`.kb/read-load-streams.md`), and **`cl:close` does not apply 
 resource**. A resource is released by its own interface's `drop`, which `wasi:keyvalue`'s
 store does not even expose — there is nothing for `close` to mean here, and a provider's
 handles are its own private numbering, not a slot in a rontolisp table. The shared space
-becomes relevant only when the component ABI needs it (`.todo/128`, where the handles are
+becomes relevant only when the component ABI needs it (todo-128, where the handles are
 the host's anyway).
 
 ### New in `am.ik.wit`: `WitResolver`
@@ -665,7 +665,7 @@ one `ui`-module `fail`) — explicitly NOT a migration. Result:
   boundary **byte-for-byte** (name the interface `gl` and `:from` needs no override;
   `:field-style :camel` regenerates `createShader` and friends exactly), and `--optimize`
   still shakes the imports a demo never calls — so declaring the whole WebGL2 union stays
-  free, which is the entire reason gl.lisp exists. `.todo/124`'s follow-on prize (one WIT
+  free, which is the entire reason gl.lisp exists. todo-124's follow-on prize (one WIT
   describing the browser boundary) is reachable.
 - **All but four of them are an exact kebab -> camel match** (`create-shader` ->
   `createShader`, ... , and `ui`'s `fail`), so they migrate untouched.
@@ -715,7 +715,7 @@ pre-migration builds** (measured; the spike held). Notes the spike did not have:
 
 ## Component imports — `canon lower` (todo 128, 2026-07-14)
 
-Step 4 of `.todo/124`, and the payoff: **a `--component` build is no longer import-locked
+Step 4 of todo-124, and the payoff: **a `--component` build is no longer import-locked
 to the fixed WASI blob surface.** A `rontolisp:wit-import` under `--component` becomes a
 real component-model instance import whose functions are `canon lower`ed into the core
 module — so the provider is the HOST, and the component composes (`wac plug`) with anyone
@@ -787,7 +787,7 @@ are `WitCanonicalAbiTest`. Two things that probe taught, which no document says:
   shifts by the user-import counts. **Zero imports = zero shift = byte-identical**
   (stash-dance proven on base / sockets, with and without a `:string`
   wasm-export — and on both serve variants).
-- **`codegen/wasm/WasmServeComponentBuilder`** (todos 134 + 135 + .todo/002 Phase 2) —
+- **`codegen/wasm/WasmServeComponentBuilder`** (todos 134 + 135 + todo-002 Phase 2) —
   ONE `build` over ONE block (`import-block-http-server.bin`, from the 0.3
   `uni-http-server` world; the NARROW/WIDE `ServeBlock` split died with the
   `http-server-client` variant): serve and serve+fetch are the same shape, http.lisp's
@@ -1036,7 +1036,7 @@ Do not "simplify" either of those.
 
 ## What CANNOT be externalized as a WIT import (so nobody re-proposes it)
 
-The roadmap that produced all of the above (the `.todo/124` anchor, closed 2026-07-17 once
+The roadmap that produced all of the above (the todo-124 anchor, closed 2026-07-17 once
 the WebGL demos adopted `gl.wit`) left one list worth keeping: the blobs that stay
 hand-written WAT on purpose, and why. Everything else the anchor recorded is here already
 -- the type mapping in `compiler/WitTypeMapper` + `WitTypeMapperTest`, the `result<T,E>`

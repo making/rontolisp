@@ -388,7 +388,7 @@ scalar defun. `mean`/`norm` are accelerated transitively (their spliced bodies c
 `--no-gc`). **`--simd` (ctor `this.simd`) is the switch**: with it the vectorizable kernels
 lower to real fixed-width WASM SIMD over the `F64VEC`/`F32VEC` block; WITHOUT it (the
 DEFAULT) to plain scalar linear-memory loops with NO `0xFD` opcode — a v128-free MVP module
-that runs on a runtime lacking the SIMD proposal (`.todo/100`; before todo-100 `--no-gc`
+that runs on a runtime lacking the SIMD proposal (todo-100; before todo-100 `--no-gc`
 ALWAYS emitted v128 and `--simd` was silently JVM-only — this is the behavioral change). The
 `[count][data]` block layout is byte-identical either way, so the two compute the same
 result over the same memory (element-wise bit-for-bit; reductions modulo summation order —
@@ -583,7 +583,7 @@ Mechanics:
   (`gcMap2`/`gcScale`/`gcSum`/`gcDot` over `openGroupLoop`/`closeGroupLoop`).
   `NoGcWasmCompiler` keeps delegating to the linear ones with its locals allocated in the
   original order, so its output stays byte-identical (verified on `--no-gc`,
-  `--no-gc --simd`, `--no-gc --simd --optimize`). This is the seam `.todo/100` carved out.
+  `--no-gc --simd`, `--no-gc --simd --optimize`). This is the seam todo-100 carved out.
 - **Memory**: packed arrays are ordinary GC objects again — measured flat. 700 × 1048576-element
   `vec:add` allocations (5.6 GiB, more than a wasm32 linear memory can even address) complete
   with a peak RSS of ~83 MB; 32000 × 65536-element allocations (16 GiB through the allocator)
@@ -702,7 +702,7 @@ ForSingleFloatVectors` uses `arange 200`, whose squared sum is 2646700). `ci-spe
 
 ## Writing a `--simd` example or benchmark (constraints learned the hard way)
 
-Migrated from `.todo/98` (the "an example that actually shows the `--simd` win" task, closed
+Migrated from todo-098 (the "an example that actually shows the `--simd` win" task, closed
 2026-07-09 once `simd-dot` / `simd-gemv` / `tiny-llm` shipped). Its full measurement log — the
 `convert(F2D)` emulation cliff, the ablations, the two retracted rankings — is
 `git show 3df64eb:.todo/98-simd-showcase-example.md`. **Everything about how a particular JVM behaves
@@ -755,7 +755,7 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
 
 ## Not done / follow-ups
 
-- `linalg:` is now packed-float and **width-polymorphic** (`.todo/97`): double by default,
+- `linalg:` is now packed-float and **width-polymorphic** (todo-097): double by default,
   `#f` opt-in via a trailing constructor `element-type`, and every transform preserves the
   input width (so a `#f` from `vec:` is never force-widened to `#d`). See `.kb/linalg.md`.
 - `linalg:` acceleration is **DONE** (todo-107, 2026-07-10): fifteen `linalg:` members are

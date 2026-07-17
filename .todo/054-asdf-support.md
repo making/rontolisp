@@ -42,7 +42,7 @@ component/dependency order ourselves, drive the existing `load` machinery.
 The next frontier. Most of the language gaps have since closed; what is left:
 
 - Condition system + `unwind-protect` -- **mostly DONE**. `.todo/039`'s
-  engineering plan moved to `.todo/116`, whose Phases 1-3 landed (commit
+  engineering plan moved to todo-116, whose Phases 1-3 landed (commit
   `a8b957b`): `unwind-protect`, `define-condition` + condition objects, and
   `handler-case` / `ignore-errors` on the interpreter, the JVM and wasm-GC.
   Mechanics: `.kb/error-handling.md`. Only Phase 4 (`handler-bind` /
@@ -55,7 +55,7 @@ The next frontier. Most of the language gaps have since closed; what is left:
 
 Done since this plan was written: the CLOS subset (`.kb/clos.md`) and
 dynamic/special variable binding (`.kb/dynamic-special-variables.md`) -- the latter was the
-root cause behind the former `.todo/82` (macro-time setf replay) and `.todo/83`
+root cause behind the former todo-082 (macro-time setf replay) and todo-083
 (`*package*` load scoping) workarounds, both since resolved.
 
 Only after these does UIOP-lite territory make sense.

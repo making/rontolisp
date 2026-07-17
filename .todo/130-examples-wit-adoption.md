@@ -1,6 +1,6 @@
 # Which examples adopt `rontolisp:wit-export` -- and which cannot
 
-**Status:** open, unstarted. Follow-on of `.todo/126` (`wit-export`, DONE 2026-07-14),
+**Status:** open, unstarted. Follow-on of todo-126 (`wit-export`, DONE 2026-07-14),
 raised 2026-07-14 from a survey of every `rontolisp:wasm-export` / `wasm-import` in
 `examples/`. This is not a feature todo: it is the **adoption ledger**, so a future
 agent does not retrofit `wit-export` blindly onto exports whose ABI or whose export
@@ -30,7 +30,7 @@ Aliased exports total **12**, over three demos. `:s-expr` exports total **8**, o
 Every type in `:params '(:float :float :float :float :int :int :int) :returns :string`
 is inside the boundary subset `WitExportDirective.designator()` accepts
 (`WitExportDirective.java:367-390`: `s32`/`s64`/`f64`/`bool`/`string`). Today the
-example is built `--no-gc --optimize` (`examples/examples.yaml:329-330`,
+example is built `--no-gc --optimize` (`examples/examples.yaml:332-333`,
 `backends: [no-gc]`) and driven by the Node host **written into its own header**
 (`examples/console/mandelbrot-nogc.lisp:16-24`, repeated at
 `doc/en/compiling/wasm.md:915-923` / `doc/ja/compiling/wasm.md:525`), which reserves
@@ -118,7 +118,7 @@ designators and a silently different ABI. `.kb/wit.md:314` already notes in pass
 - **(a) Never.** `:s-expr` is a rontolisp-private wire format; these two demos stay on
   hand-written `wasm-export` permanently, and `.kb/wit.md` says so under its own heading
   instead of in a subclause. Cost: two demos outside the WIT story forever.
-- **(b) Rewrite the data model, after `.todo/128`.** Minesweeper's state is a plist of
+- **(b) Rewrite the data model, after todo-128.** Minesweeper's state is a plist of
   ints and its cells are ints; the hiragana bitmap is 576 numbers. Both are expressible
   as a WIT `record` / `list<u8>` once marshalling exists (`WitTypeMapper` already names
   their house representation). That is a **rewrite of the demos**, not a retrofit, and it
@@ -160,7 +160,7 @@ callable from JS** as `exports["set-key"](...)`, and the tree has the precedent 
 that, the "collision" collapses into a ~12-line `index.html` edit and needs no new
 mechanism at all. It is only a blocker if we insist the JS side keep camelCase.
 
-## 5. Deferred to `.todo/127`: the WebGL family is an IMPORT story
+## 5. DONE (todo-132): the WebGL family was an IMPORT story
 
 Verified counts (`rontolisp:wasm-import` / `wasm-export` per file):
 
@@ -177,7 +177,7 @@ Verified counts (`rontolisp:wasm-import` / `wasm-export` per file):
 (Counts re-measured 2026-07-17 with `grep -c "^(rontolisp:wasm-import"`. The earlier
 table's `gl.lisp` **31** and `triangle.lisp` **11** were grep artifacts — the pattern also
 matched a mention of the directive in a header COMMENT. gl.lisp really declared 30: 29
-into module `gl` plus the one `ui`-module `fail`. `.todo/132` migrated all 30 to two
+into module `gl` plus the one `ui`-module `fail`. todo-132 migrated all 30 to two
 `rontolisp:wit-import` directives on 2026-07-17, so the row is now 0.)
 
 Triangle has **zero** exports and a world with no exports is a compile error
@@ -186,7 +186,7 @@ others a world could describe only their 1-3 `frame`/`init` exports -- while the
 interest of these demos is the ~40-import GL surface, which `wit-export` never looks at
 (a world's `import` items are ignored today; `.kb/wit.md`). The artifact worth having is
 `local:webgl/gl.wit` **plus a generated JS import object** -- and that SHIPPED as
-`.todo/132` on 2026-07-17 (`.kb/wit.md`, "The migration"): gl.wit is checked in, gl.lisp
+todo-132 on 2026-07-17 (`.kb/wit.md`, "The migration"): gl.wit is checked in, gl.lisp
 binds it, and `gl-imports.js` is generated from it. Do not duplicate that here, and do not
 migrate these demos' export side ahead of §4 (which blocks three of them anyway).
 
@@ -208,7 +208,7 @@ before.
   the `--no-gc --component` route where the host is `mandelbrot(...)` and nothing else.
   The `--no-gc` core module stays **byte-identical** to today's (assert with `cmp`; it
   already is).
-- `examples/examples.yaml:329-330` gains a `wasm-component` leg next to `no-gc` (the
+- `examples/examples.yaml:332-333` gains a `wasm-component` leg next to `no-gc` (the
   `count-vowels` pattern: the component legs only compile in the harness), and
   `examples/README.md:35`'s row mentions the world. `doc/en|ja/compiling/wasm.md`'s
   mandelbrot snippet **stays** (it documents the `--no-gc` string ABI, which is still the
@@ -221,7 +221,7 @@ before.
   pages can call `exports["set-key"]` (`rainbow.html:109` says they can). If they can, say
   the demos MAY migrate and leave them alone anyway; if we choose an alias mechanism, that
   is its own todo, not a line in this one.
-- The WebGL family's IMPORT side is done (`.todo/132`, 2026-07-17: `gl.wit` + two
+- The WebGL family's IMPORT side is done (todo-132, 2026-07-17: `gl.wit` + two
   `wit-import`s, the counts above corrected). No `gl.lisp` work in this todo. Its EXPORT
   side is still §4's `:as`-vs-kebab question and stays here.
 - `rainbow` / `simd-gemv-nogc` left alone (or migrated with a one-line note); `minesweeper`
@@ -234,6 +234,6 @@ before.
 `.kb/wit.md` (the contract check, the `--emit-wit` fixpoint, the `:as` note at :247 and
 the `:s-expr` note at :314), `.kb/wasi-component.md`, `.kb/wasm-export-no-wasi.md`,
 `.kb/no-gc-scalar-wasm.md`, `examples/count-vowels/README.md` (the model to copy),
-`.kb/wit.md` (the record, now that the `.todo/124` anchor is closed),
-`.todo/128` (marshalling -- the gate on §3 option (b)), `.kb/wasi-component.md` (jco cannot call a
+`.kb/wit.md` (the record, now that the todo-124 anchor is closed),
+todo-128 (marshalling -- the gate on §3 option (b)), `.kb/wasi-component.md` (jco cannot call a
 stackful-async GC export; irrelevant here only because mandelbrot's export is sync).

@@ -7,7 +7,7 @@ runs identically on all backends. 57 exported functions (constructors `zeros`/
 `add`/`sub`/`mul`/`div`/`emap` + named ufuncs, products `dot`/`matmul`/`outer`,
 reductions, calculus `diff`/`gradient`, and floating-point Gaussian-elimination
 `det`/`inv`/`solve`) over the built-in arrays. The library computes in packed float (speed over exactness), **double by
-default** but **width-polymorphic** (`.todo/97`): a constructor opts into packed
+default** but **width-polymorphic** (todo-097): a constructor opts into packed
 single-float (`#f`) with a trailing `element-type` argument, and every transform
 PRESERVES its input width (see "Single-float / width polymorphism" below).
 Elementwise ops, reductions, `reshape`/`flatten` and `array-equal`
@@ -112,7 +112,7 @@ short decimals). See `examples/ml/linear-regression.lisp`,
 `examples/ml/deep-digits.lisp` and `examples/ml/heat3d.lisp` for worked idioms
 (incl. an i31-safe fixed-seed LCG, matrix backpropagation and the rank-3 idioms).
 
-## Single-float / width polymorphism (`.todo/97`)
+## Single-float / width polymorphism (todo-097)
 
 linalg is **double by default** (precision) but accepts and preserves packed
 single-float (`#f`) so a `#f` value flowing in from `vec:` is never silently
@@ -146,7 +146,7 @@ runtime-computed element-type could not. `linalg::%la-etype a` returns the liter
 symbol matching `a`'s width (a general/boxed array reads back as `t`, so it maps to
 `'double-float`), and `%la-like` threads it. **No `#+/#-rontolisp-wasm` reader
 conditional is needed** -- unlike `vec::%make-like`, whose split (double-only on
-wasm) predates the wasm-GC `TYPE_F32ARR` (`.todo/95` Phase 4) and is now vestigial:
+wasm) predates the wasm-GC `TYPE_F32ARR` (todo-095 Phase 4) and is now vestigial:
 `vec:` still renders a `#f` element-wise result as `#d` on wasm-GC while linalg
 renders `#f` on every backend. Because single-float trades precision for speed,
 precision-critical `det`/`inv`/`solve` are best left double (the default); a `#f`

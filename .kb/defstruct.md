@@ -76,7 +76,7 @@ so Pass 1 collects it as an ordinary defun; its early-return guard now also
 fires on a setf-function defun). Non-goal: `symbol-function`/`fboundp` of a
 `(setf ...)` name. Pinning: `LispEvaluatorTest#setfFunction*`,
 `Jvm/WasmLispCompilerIntegrationTest#compileAndRunSetfFunctionDefinition`,
-ci-spec `setf-function-definitions`. Roadmap: `.todo/79`.
+ci-spec `setf-function-definitions`. Roadmap: todo-079.
 
 ## Package-qualified names
 

@@ -1,7 +1,7 @@
 # JVM: a method past 255 locals silently aliases slots (temps are never released)
 
 **Status:** open, unstarted. A **latent correctness bug**, pre-existing. Found
-2026-07-14 while fixing `.todo/131` (the `handler-case` operand-stack spill), by
+2026-07-14 while fixing todo-131 (the `handler-case` operand-stack spill), by
 a guard that was added and then narrowed -- see "How it surfaced".
 
 ## The bug

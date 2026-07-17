@@ -17,7 +17,7 @@ up if exact parity becomes important.
 > `(error "parse-integer: junk in string ~s" ...)` forms, so the message matches
 > by construction; what remains is generic WASM `%error` behavior (traps outside
 > EH mode, throws a catchable `$lisp-cond` inside it), which belongs to
-> `.todo/116-error-handling-foundation.md`.
+> todo-116.
 
 ## Items
 

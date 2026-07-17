@@ -59,7 +59,7 @@ compiled ABI.
 ### C. `cerror` in the decode error paths (mostly closed)
 decode.lisp calls `signal`, `cerror`, and `(error 'bad-base64-character :input ...
 :position ... :code ...)` against `define-condition` classes with slots/`:reader`/
-`:report`. Most of this is no longer a gap -- `.todo/116` Phases 1-3 (DONE, commit
+`:report`. Most of this is no longer a gap -- todo-116 Phases 1-3 (DONE, commit
 a8b957b) landed the condition system, see `.kb/error-handling.md`:
 - `signal` is real on ALL backends: `LispNames.SIGNAL`, lowered by
   `LispMacroExpander.expandSignalMacro` (~line 60, via `expandSignalDesignator`) and

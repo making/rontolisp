@@ -1,6 +1,6 @@
 # Multiple values -- syntactic tier (Phase 3 unit 3)
 
-Origin: `.todo/57-multiple-values.md` (core subset of the
+Origin: todo-057 (core subset of the
 `.todo/032-multiple-value-system.md` wishlist; shipped 2026-07-05). Goal: the
 `multiple-value-bind`-over-`floor`/`gethash` idioms that real CL library code
 uses, WITHOUT paying for a runtime multiple-value representation.
@@ -53,7 +53,7 @@ spreading and no `apply`).
 `expandValues` (ordinary context): 0 args -> nil, 1 -> the form, n ->
 `(prog1 ...)`.
 
-## The %mv-spill runtime channel (added by `.todo/61`, 2026-07-05)
+## The %mv-spill runtime channel (added by todo-061, 2026-07-05)
 
 split-sequence's list splitter consumes a user function's 4 values internally,
 so the syntactic tier alone was not enough. `values` now PUBLISHES its extra
@@ -92,7 +92,7 @@ so PARSE_INTEGER and VALUES_LIST are part of the `injectMvSpillGlobal` scan.
   producers behave identically everywhere.
 - `multiple-value-call` with a builtin `#'name` inherits the wrapper arity.
   The naturally-variadic ops (`+`/`-`/`*`/`/`/`list`/`min`/`max`) now have
-  variadic `&rest` wrappers (a `reduce` fold over the rest list, `.todo/64`
+  variadic `&rest` wrappers (a `reduce` fold over the rest list, todo-064
   fixed), so those take any argument count; every other multi-arg builtin
   keeps a fixed unary/binary wrapper (mismatched funcall still yields nil on
   JVM / traps on WASM). Docs steer to user fns/lambdas for those.
@@ -130,6 +130,6 @@ verbatim; `BuiltinFunctionWrappers` (`values`).
   expectations gained the 4 macro names and 208 (all three backend test
   classes updated too).
 - Test-writing caveats hit while pinning: compiled `print` returns nil
-  (interpreter returns the value -- filed as `.todo/63`), and JVM argument
+  (interpreter returns the value -- filed as todo-063), and JVM argument
   evaluation order inside one call differs (`.todo/014`) -- side-effect
   assertions go through `setq` in separate top-level forms.
