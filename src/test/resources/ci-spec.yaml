@@ -1772,8 +1772,8 @@ cases:
       0.5
 
   # log and tanh are native (Math.log/Math.tanh) on the interpreter/JVM and software
-  # approximations on WASM (todo 109 Phase 2), so only values that are exact on every
-  # backend are asserted: log(1) is 0.0, tanh(0) is 0.0, and tanh saturates to exactly
+  # approximations on WASM, so only values that are exact on every backend are
+  # asserted: log(1) is 0.0, tanh(0) is 0.0, and tanh saturates to exactly
   # +/-1.0 far inside the WASM clamp.
   - name: log-tanh-exact-cross-backend-cases
     source: |
@@ -1788,10 +1788,10 @@ cases:
       -1.0
 
   # sin/cos/tan are native (Math.sin/cos/tan) on the interpreter/JVM and a software
-  # Cody-Waite + Taylor approximation on WASM (todo 109 Phase 2 second release), so only
-  # values that are exact on every backend are asserted: the zero anchors, and the two
-  # quadrant anchors sin(pi/2) = 1.0 / cos(pi) = -1.0 (exact on the f64 pi both in
-  # java.lang.Math and in the WASM reduction).
+  # Cody-Waite + Taylor approximation on WASM, so only values that are exact on
+  # every backend are asserted: the zero anchors, and the two quadrant anchors
+  # sin(pi/2) = 1.0 / cos(pi) = -1.0 (exact on the f64 pi both in java.lang.Math
+  # and in the WASM reduction).
   - name: sin-cos-tan-exact-cross-backend-cases
     source: |
       (print (sin 0))
@@ -1806,7 +1806,7 @@ cases:
       1.0
       -1.0
 
-  # The arc/hyperbolic remainder (todo 109 Phase 2 third release): only the exact
+  # The arc/hyperbolic ufuncs (atan/asin/acos/sinh/cosh): only the exact
   # anchors -- the wasm software approximations agree with Math.* to ~1e-15 (atan
   # family) / ~1e-7 (sinh/cosh), which diverges in printed low digits, so pi/4-class
   # values stay out (documented like exp's low-digit divergence).
@@ -1824,7 +1824,7 @@ cases:
       0.0
       1.0
 
-  # The comparison-select ufuncs (todo 109 Phase 3): every value is a select of an
+  # The comparison-select ufuncs (maximum/minimum/clip/relu): every value is a select of an
   # exact input, so all four backends print identically -- including the -0.0/0.0
   # tie, where the strict comparison keeps the SECOND operand.
   - name: comparison-select-ufuncs-cross-backend-cases
@@ -2064,12 +2064,12 @@ cases:
       #(7 7 7)
       #2A((1 0 0) (0 0 9))
 
-  # Fill-pointer arrays (todo 72/73): make-array :fill-pointer/:adjustable,
+  # Fill-pointer arrays (see .kb/adjustable-arrays.md): make-array :fill-pointer/:adjustable,
   # length/printing clamped to the fill pointer, fill-pointer (+ setf),
   # array-has-fill-pointer-p, adjustable-array-p, array-element-type,
   # vector-push/vector-pop/vector-push-extend, first-class wrappers, and the
   # verbatim cl-utilities copy-array. Side effects are sequenced through let*
-  # bindings (.todo/14: the compilers evaluate list arguments right-to-left).
+  # bindings (the compilers evaluate list arguments right-to-left).
   - name: fill-pointer-arrays-cross-backend
     source: |
       (defun ci-copy-array (array &key
@@ -2382,8 +2382,10 @@ cases:
   # indexing/selection/comparison helpers. All values are exact doubles. Kept
   # lean on purpose: the whole ci-spec corpus compiles into ONE class
   # (JvmClassShakerCorpusTest) whose constant pool is near the 65535
-  # class-format ceiling -- see .todo/118. The wider per-function coverage
-  # lives in the LispEvaluatorTest / compiler / SIMD unit tests.
+  # class-format ceiling (see .kb/library-defun-pruning.md for the library
+  # pruning + constant-pool deduplication that keep it under). The wider
+  # per-function coverage lives in the LispEvaluatorTest / compiler / SIMD
+  # unit tests.
   - name: linalg-axis-rng-indexing-cross-backend
     source: |
       (defun ci-linalg-axis ()
@@ -2420,11 +2422,11 @@ cases:
       #d(4.0 5.0 6.0 2.0 9.0 7.0 1.0 0.0 8.0 3.0)
       #d(284.0 -21.0 221.0 -1653.0)
 
-  # The ch07 CNN additions (todo-117): transpose with an axes list (rank-n
-  # permutation), np.pad's constant-0 mode, and the internal rank-4
-  # %la-im2col / %la-col2im pair (window unfold + scatter-add adjoint)
-  # behind the deep-learning-from-scratch convolution examples. All values
-  # are integer-exact doubles, so the output is byte-identical everywhere.
+  # The ch07 CNN additions: transpose with an axes list (rank-n permutation),
+  # np.pad's constant-0 mode, and the internal rank-4 %la-im2col / %la-col2im
+  # pair (window unfold + scatter-add adjoint) behind the
+  # deep-learning-from-scratch convolution examples. All values are
+  # integer-exact doubles, so the output is byte-identical everywhere.
   - name: linalg-transpose-axes-pad-im2col-cross-backend
     source: |
       (defun ci-linalg-cnn ()
@@ -2482,7 +2484,7 @@ cases:
       3
       0
 
-  # Packed float arrays (.todo/94): #d(...) literals and make-array :element-type
+  # Packed float arrays (see .kb/vec.md): #d(...) literals and make-array :element-type
   # 'double-float are a dedicated rank-n unboxed-double array type on every backend
   # (interpreter double[]/int[]; JVM bare double[] with a dims header; wasm-GC a distinct
   # TYPE_FARRAY struct of an (array (mut f64)); the component path reuses the same core
@@ -2518,7 +2520,7 @@ cases:
       (1.0 2.0 3.0)
       arr
 
-  # The vec: package (.todo/94): portable packed-f64 vector kernels over the packed
+  # The vec: package (see .kb/vec.md): portable packed-f64 vector kernels over the packed
   # double-float array type, implemented once in vec.lisp as the scalar reference and run
   # by the interpreter / JVM / wasm-GC / component over the packed representation (the JVM
   # --simd flag and the --no-gc scalar backend additionally lower the vectorizable kernels
@@ -2565,7 +2567,7 @@ cases:
       #d(17.0 39.0)
       #d(14.0 32.0)
 
-  # Destination-passing vec: kernels (.todo/103): the -into siblings write into a
+  # Destination-passing vec: kernels (see .kb/vec.md): the -into siblings write into a
   # caller-supplied vector and return it, so a loop allocates nothing. Semantics must be
   # identical to the allocating kernels on every backend, including in-place aliasing
   # (out eq a) for the element-wise ops. vec:matvec-into forbids aliasing out with x.
@@ -2602,7 +2604,7 @@ cases:
       #d(17.0 39.0)
       #d(14.0 32.0)
 
-  # Packed single-float arrays (.todo/95): the #f(...) / :element-type 'single-float
+  # Packed single-float arrays (see .kb/vec.md): the #f(...) / :element-type 'single-float
   # counterpart of packed-float-arrays-cross-backend, storing elements unboxed as f32
   # (half the memory, 2x the SIMD lanes) on every backend (interpreter float[]/int[];
   # JVM a bare float[] with a dims header; wasm-GC the shared TYPE_FARRAY struct whose data
@@ -2612,8 +2614,8 @@ cases:
   # (integers / 0.5 / 2.5) because the WASM float printer renders a non-terminating f32
   # decimal differently -- the non-exact narrowing is instead proven by the boolean
   # (= (aref w 0) 0.1) => nil (f32(0.1) widened differs from double 0.1 identically on every
-  # backend). Since todo-97 made vec::%make-like unconditional (width-following on EVERY
-  # backend -- the old wasm-GC double-only branch was vestigial once wasm-GC gained
+  # backend). Since vec::%make-like is unconditional (width-following on EVERY
+  # backend -- the old wasm-GC double-only branch became vestigial once wasm-GC gained
   # TYPE_F32ARR), a vec: element-wise result also prints #f on every backend, so the
   # (vec:add #f #f) line below is a cross-backend regression guard alongside the two
   # reductions (dot/sum -> an f64 scalar).
@@ -2658,7 +2660,7 @@ cases:
       14.0
       12.0
 
-  # linalg single-float (.todo/97): linalg is width-polymorphic -- a constructor opts
+  # linalg single-float (see .kb/linalg.md): linalg is width-polymorphic -- a constructor opts
   # into packed single-float (#f) with a trailing element-type (double stays the default
   # for precision), and every transform PRESERVES the input width, so a #f value flowing
   # in (e.g. from vec:) is never silently widened back to double (which would force a
@@ -2716,7 +2718,7 @@ cases:
       10.0
       14.0
 
-  # Regression for .todo/13: getenv's environ scratch addresses must not overlap the
+  # Regression: getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output
   # deterministic across backends; the bug corrupted the shared newline byte so any newline
   # printed after a getenv came out as NUL. The component backend reuses this expected value.
@@ -2730,7 +2732,7 @@ cases:
       alpha
       beta
 
-  # Regression for .todo/07 + .todo/13: a top-level global special variable
+  # Regression: a top-level global special variable
   # (defvar/defparameter) must be readable and assignable from inside a defun/lambda
   # body, not just at top level. Each global gets its own backing store (a JVM static
   # field / a WASM module-level global), so the reference resolves from any function.
@@ -2848,7 +2850,8 @@ cases:
   # JSON: the Lisp-source library (json.lisp) is spliced by the compile path and
   # loaded lazily by the interpreter, so one implementation runs on all four
   # backends. Integers wider than 9 digits become floats (WASM i31 range); a
-  # float with magnitude >= 2^31 cannot be *printed* on WASM (see .todo/46), so
+  # float with magnitude >= 2^31 cannot be *printed* on WASM (a known limitation of
+  # the emitted WASM float printer), so
   # the wide-integer case asserts floatp instead of printing the value.
   # Hash-table object mode uses single-key objects here because iteration order
   # is backend-specific.
@@ -3757,7 +3760,7 @@ cases:
       (:FOO t)
       5
       (("k" . 42))
-  # IEEE-754 float edge semantics (todo-108): unary minus over float-literal
+  # IEEE-754 float edge semantics: unary minus over float-literal
   # forms, the -0.0 literal and its comparisons, NaN as "unordered" on both the
   # literal and the variable (runtime-helper) comparison paths, and the printing
   # of -0.0 / Infinity / NaN. All four backends must agree on every line.
@@ -3840,7 +3843,7 @@ cases:
     expectedByBackend:
       wasm: |
         1500000000000.0
-  # rontolisp:wasm-export (todo 92): a no-op returning the symbol on the
+  # rontolisp:wasm-export (see .kb/wasm-export-no-wasi.md): a no-op returning the symbol on the
   # interpreter/JVM; on WASM Preview 1 it adds a core export, and under
   # --component it is additionally lifted into a host-callable component-model
   # export (WAVE-invokable). Either way the program's own top level (run) must
@@ -3862,7 +3865,7 @@ cases:
       "ok!"
       7
       7
-  # rontolisp:with-arena (todo 104/110): a reclamation boundary the --no-gc WASM
+  # rontolisp:with-arena (see .kb/no-gc-scalar-wasm.md): a reclamation boundary the --no-gc WASM
   # backend lowers to a bump heap-pointer mark/body/reset; on the four standard
   # backends a real GC already reclaims, so it must be observationally a plain progn
   # (same value, same side effects).
@@ -3875,7 +3878,7 @@ cases:
       3
       "abcd"
       nil
-  # Condition catching (todo 129): handler-case / ignore-errors / unwind-protect
+  # Condition catching (see .kb/error-handling.md): handler-case / ignore-errors / unwind-protect
   # now compile on the wasm-GC backends via the exception-handling proposal (one
   # $lisp-cond tag; try_table/throw). NOTE: once any case below is present, the
   # whole concatenated program is EH mode, so the driver runs wasmtime with

@@ -280,7 +280,7 @@ class AsdfSystemsTest {
 
 	@Test
 	void parsesTheClPostgresAsdHeaderShape() {
-		// The verbatim cl-postgres.asd header shape (todo-115 M1): defpackage +
+		// The verbatim cl-postgres.asd header shape: defpackage +
 		// in-package, #+/#- conditional defparameters feeding #. component names, and
 		// (:feature ...) clauses inside :depends-on. Under rontolisp's feature set
 		// *unicode* is nil, so #.*string-file* resolves to "strings-ascii".

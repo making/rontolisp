@@ -13,7 +13,7 @@ import am.ik.wasm.WasmWriter;
  * Emitted only when a program declares at least one memory-typed export.
  *
  * <p>
- * Under {@code --component} (todo 92 Tier 2) three more helper shapes are appended so a
+ * Under {@code --component} three more helper shapes are appended so a
  * {@code :string}/{@code :s-expr} export can cross the canonical string ABI:
  * {@code cabi_realloc} (the host lowers string arguments through it; it also snapshots
  * the heap pointer + runtime intern count into the {@code CABI_MARK_*} cells on the first

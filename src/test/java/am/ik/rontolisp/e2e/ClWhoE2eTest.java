@@ -4,7 +4,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * The {@code .todo/76}/{@code .todo/81} integration target: Edi Weitz's REAL cl-who
+ * An ASDF subset integration target ({@code .kb/asdf.md}): Edi Weitz's REAL cl-who
  * sources (vendored unmodified under {@code src/test/resources/cl-who}, BSD) load via
  * {@code asdf:load-system} and render (X)HTML. cl-who's
  * {@code with-html-output-to-string} runs a chain of ordinary defuns (and a generic
@@ -18,7 +18,7 @@ import java.util.List;
  * Lite limitations exercised here: the default no-indent {@code :xml} rendering is exact,
  * and {@code (setf (html-mode) :html5)} switches the output mode (a compile-time constant
  * on the compile path); {@code :indent} and dynamic {@code let}-rebinding of the specials
- * are the documented unsupported cases (see {@code .kb/clos.md}/{@code .todo/76}).
+ * are the documented unsupported cases (see {@code .kb/clos.md}/{@code .kb/asdf.md}).
  */
 class ClWhoE2eTest extends AsdfLibraryE2eSupport {
 

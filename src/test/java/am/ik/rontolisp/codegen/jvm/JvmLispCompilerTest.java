@@ -322,7 +322,8 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunHandlerCaseCatchesUsocketSocketError() throws Exception {
-		// The .todo/116 Phase 3 acceptance shape on the JVM backend.
+		// A connection failure is re-signaled as a typed usocket:socket-error, catchable
+		// by type on the JVM backend (.kb/error-handling.md).
 		assertThat(compileAndRunUsocket("""
 				(let* ((l (usocket:socket-listen "127.0.0.1" 0))
 				       (p (usocket:get-local-port l)))
@@ -858,9 +859,9 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (map-into (list 0 0 0) #'+ #(1 2 3) '(10 20 30)))")).isEqualTo("(11 22 33)");
 		assertThat(compileAndRun("(print (map-into (make-array 3) #'+ '(1 2 3) #(10 20 30)))"))
 			.isEqualTo("#(11 22 33)");
-		// Regression guard for todo 75: all-list operands must stay O(n) (20000 elements
-		// is
-		// instant when linear, an O(n^2) hang otherwise).
+		// Regression guard: with all-list operands map-into must stay O(n) rather than
+		// re-walk each list from the head per iteration (20000 elements is instant when
+		// linear, an O(n^2) hang otherwise).
 		assertThat(compileAndRun("(print (length (map-into (make-list 20000) (lambda (x) 1) (make-list 20000))))"))
 			.isEqualTo("20000");
 	}
@@ -1533,7 +1534,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunLetShadowingBoxedOuterVariable() throws Exception {
-		// .todo/62: the boxedVars set tracks names, so an inner let binding a RAW
+		// Regression guard: the boxedVars set tracks names, so an inner let binding a RAW
 		// value under a name whose outer binding was boxed (captured by the init
 		// lambda) must not be cell-read in the body.
 		assertThat(compileAndRun("""
@@ -1974,8 +1975,8 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunVariadicBuiltinWrappers() throws Exception {
-		// Regression for .todo/64: funcall/apply of a variadic builtin wrapper with an
-		// arity other than the old fixed one returned nil silently on the JVM.
+		// Regression guard: funcall/apply of a variadic builtin wrapper with an arity
+		// other than the old fixed one used to return nil silently on the JVM.
 		assertThat(compileAndRun("(print (funcall #'+ 1 2 3))")).isEqualTo("6");
 		assertThat(compileAndRun("(print (funcall #'+))")).isEqualTo("0");
 		assertThat(compileAndRun("(print (apply #'+ (list 1 2 3 4)))")).isEqualTo("10");
@@ -3451,7 +3452,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunMapFamilyErrorsOnNonList() throws Exception {
 		// The map* family operates on lists; a non-list (e.g. a string) signals an error
-		// rather than silently returning nil, matching the interpreter (.todo/26).
+		// rather than silently returning nil, matching the interpreter.
 		assertThatThrownBy(() -> compileAndRun("(mapcar #'identity \"abc\")"))
 			.hasRootCauseMessage("mapcar: argument is not a list (use map for strings/vectors)");
 		assertThatThrownBy(() -> compileAndRun("(mapc #'identity \"abc\")"))
@@ -5109,8 +5110,8 @@ class JvmLispCompilerTest {
 	@Test
 	void compileVectorPushStoresAndReturnsIndexOrNil() throws Exception {
 		// Each push is sequenced through a top-level defparameter: the compilers
-		// evaluate list argument forms right-to-left (.todo/14), so side-effecting
-		// forms must not share one list form.
+		// evaluate list argument forms right-to-left, so side-effecting forms must
+		// not share one list form.
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 3 :fill-pointer 0))
 				(defparameter *a* (vector-push 10 *v*))
@@ -5133,8 +5134,8 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileVectorPop() throws Exception {
-		// The pop is sequenced before the length read (.todo/14: right-to-left
-		// argument evaluation on the compile path).
+		// The pop is sequenced before the length read: the compile path evaluates
+		// argument forms right-to-left.
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 5 :fill-pointer 3 :initial-element 0))
 				(setf (aref *v* 2) 99)
@@ -5173,7 +5174,8 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileFillPointerFirstClassWrappers() throws Exception {
-		// The fill-pointer read is sequenced before the mutating pop (.todo/14).
+		// The fill-pointer read is sequenced before the mutating pop, the compile path
+		// evaluating argument forms right-to-left.
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 3 :fill-pointer 0))
 				(funcall #'vector-push 5 *v*)
@@ -5185,8 +5187,9 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileClUtilitiesCopyArray() throws Exception {
-		// The cl-utilities copy-array definition verbatim (todo 71 headline) on the JVM
-		// backend: array-element-type, make-array :adjustable/:fill-pointer,
+		// The cl-utilities copy-array definition verbatim, the headline adjustable-array
+		// exercise, on the JVM backend: array-element-type, make-array
+		// :adjustable/:fill-pointer,
 		// array-has-fill-pointer-p, fill-pointer, adjustable-array-p, array-total-size
 		// and row-major-aref cooperating.
 		assertThat(compileAndRun("""
@@ -5423,7 +5426,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunLinalgTransposeAxesPadIm2col() throws Exception {
-		// The ch07 CNN additions (todo-117): transpose with an axes list (rank-n
+		// The ch07 CNN additions: transpose with an axes list (rank-n
 		// permutation; the 2-argument call declines the --simd transpose kernel),
 		// np.pad's constant-0 mode, and the internal rank-4 %la-im2col/%la-col2im
 		// pair behind the convolution examples.
@@ -5504,7 +5507,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunLinalgSingleFloatWidthPolymorphism() throws Exception {
-		// todo-97: linalg is width-polymorphic -- a constructor opts into single-float
+		// linalg is width-polymorphic -- a constructor opts into single-float
 		// (#f) with a trailing element-type, and every transform PRESERVES the input
 		// width, so a #f value is never silently widened to double (which would force a
 		// mixed-width --simd error on a following vec:matvec). Double stays the default.
@@ -5968,7 +5971,7 @@ class JvmLispCompilerTest {
 			.hasMessageContaining("progv");
 	}
 
-	// ---- IEEE-754 float edge semantics (.todo/108 groups B and D) ----
+	// ---- IEEE-754 float edge semantics: literal-path and comparison groups ----
 
 	@Test
 	void unaryMinusOfFloatLiteralFormNegates() throws Exception {
@@ -6010,7 +6013,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (max -0.0 0.0))")).isEqualTo("0.0");
 	}
 
-	// ---- Method name mangling (.todo/120) ----
+	// ---- Method name mangling ----
 
 	@Test
 	void percentInAFunctionNameIsMangledAway() throws Exception {

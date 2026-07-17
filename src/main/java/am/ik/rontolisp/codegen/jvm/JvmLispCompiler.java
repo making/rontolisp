@@ -779,7 +779,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<MethodrefConstant> topChunkRefs = new ArrayList<>();
 		// Budget well under 65535 to leave room for the final form pushed past the check
 		// plus the trailing RETURN; a single form larger than this still cannot be split
-		// (a pre-existing per-form limit, see .todo/17).
+		// (a pre-existing per-form limit: chunking happens BETWEEN top-level forms, so
+		// one
+		// form whose bytecode passes the 64 KB per-method cap has no split point).
 		final int chunkCodeBudget = 48000;
 		Ctx chunkCtx = null;
 		for (LispVal expr : topLevelExprs) {

@@ -1308,7 +1308,7 @@ final class WasmArrayCompiler {
 	}
 
 	// Whether a make-array :element-type value designates single-float (packs to an f32
-	// array, not yet supported on the WASM backend -- todo 95 Phase 4). Mirrors the JVM
+	// array, not yet supported on the WASM backend). Mirrors the JVM
 	// JvmArrayCompiler.isSingleFloatElementType.
 	private static boolean isSingleFloatElementType(@Nullable LispVal elementType) {
 		return LispNames.SINGLE_FLOAT.equals(elementTypeLocalName(elementType));

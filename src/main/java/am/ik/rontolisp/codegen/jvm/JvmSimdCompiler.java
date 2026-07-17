@@ -35,7 +35,7 @@ final class JvmSimdCompiler {
 			Map.entry(LispNames.VEC_ADD_INTO, 3), Map.entry(LispNames.VEC_SUB_INTO, 3),
 			Map.entry(LispNames.VEC_MUL_INTO, 3), Map.entry(LispNames.VEC_SCALE_INTO, 3),
 			Map.entry(LispNames.VEC_MATVEC_INTO, 3),
-			// The element-wise unary ufuncs (todo 109). vec:square / vec:square-into are
+			// The element-wise unary ufuncs. vec:square / vec:square-into are
 			// NOT here: their spliced defuns call vec:mul / vec:mul-into, so they are
 			// accelerated transitively, like mean/norm.
 			Map.entry(LispNames.VEC_EXP, 1), Map.entry(LispNames.VEC_LOG, 1), Map.entry(LispNames.VEC_TANH, 1),
@@ -52,7 +52,7 @@ final class JvmSimdCompiler {
 			Map.entry(LispNames.VEC_SQRT_INTO, 2), Map.entry(LispNames.VEC_ABS_INTO, 2),
 			Map.entry(LispNames.VEC_NEGATIVE_INTO, 2), Map.entry(LispNames.VEC_SIGN_INTO, 2),
 			Map.entry(LispNames.VEC_RECIPROCAL_INTO, 2),
-			// The comparison-select ufuncs (todo 109 Phase 3).
+			// The comparison-select ufuncs.
 			Map.entry(LispNames.VEC_MAXIMUM, 2), Map.entry(LispNames.VEC_MINIMUM, 2), Map.entry(LispNames.VEC_RELU, 1),
 			Map.entry(LispNames.VEC_CLIP, 3), Map.entry(LispNames.VEC_MAXIMUM_INTO, 3),
 			Map.entry(LispNames.VEC_MINIMUM_INTO, 3), Map.entry(LispNames.VEC_RELU_INTO, 2),

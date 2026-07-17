@@ -121,7 +121,7 @@ final class WasmVecSimdRuntimeBuilder {
 
 	static final int MATVEC_INTO = 14;
 
-	// The element-wise unary ufuncs (todo 109), each with its -into sibling. sqrt /
+	// The element-wise unary ufuncs, each with its -into sibling. sqrt /
 	// negative / reciprocal / abs run whole lane groups (WasmVecLoops.gcMap1, mirroring
 	// the wasm defun's own scalar semantics -- see the U_* notes there); exp / log /
 	// tanh / sin / cos / tan / asin / acos / atan / sinh / cosh / sign walk elements
@@ -156,9 +156,9 @@ final class WasmVecSimdRuntimeBuilder {
 
 	static final int RECIPROCAL_INTO = 26;
 
-	// The todo-109 Phase 2 transcendental ufuncs (log / tanh / sin / cos / tan): element
-	// loops like exp / sign, mirroring WasmLogCompiler / WasmTanhCompiler /
-	// WasmSinCosCompiler (no lane form exists).
+	// The transcendental ufuncs (log / tanh / sin / cos / tan): element loops like
+	// exp / sign, mirroring WasmLogCompiler / WasmTanhCompiler / WasmSinCosCompiler
+	// (no lane form exists).
 
 	static final int LOG = 27;
 
@@ -180,7 +180,7 @@ final class WasmVecSimdRuntimeBuilder {
 
 	static final int TAN_INTO = 36;
 
-	// The todo-109 Phase 2 third-release ufuncs (asin / acos / atan / sinh / cosh):
+	// The inverse-trigonometric / hyperbolic ufuncs (asin / acos / atan / sinh / cosh):
 	// element loops mirroring WasmAtanCompiler / WasmSinhCoshCompiler.
 
 	static final int ASIN = 37;
@@ -203,7 +203,7 @@ final class WasmVecSimdRuntimeBuilder {
 
 	static final int COSH_INTO = 46;
 
-	// The comparison-select ufuncs (todo 109 Phase 3): maximum / minimum are lane
+	// The comparison-select ufuncs: maximum / minimum are lane
 	// bitselects over a gt/lt mask (bit-identical at both widths -- a select only
 	// copies input bits), relu rides the U_RELU lane form, and clip is an element
 	// loop comparing the widened element against the two FULL f64 bounds (the
@@ -517,7 +517,7 @@ final class WasmVecSimdRuntimeBuilder {
 		return withLocals(b.toByteArray(), 6, 0, 0, 2, 1, 3);
 	}
 
-	// --- comparison-select ufuncs (todo 109 Phase 3) --------------------------------
+	// --- comparison-select ufuncs ---------------------------------------------------
 
 	// (vec:maximum a b) / (vec:minimum a b) and their -into siblings: dst[i] =
 	// (if (> a[i] b[i]) a[i] b[i]) (or <), run whole lane groups at a time through
@@ -656,7 +656,7 @@ final class WasmVecSimdRuntimeBuilder {
 		return withLocals(b.toByteArray(), 6, 1, 0, 2, 2, 2);
 	}
 
-	// --- element-wise unary ufuncs (todo 109) ----------------------------------------
+	// --- element-wise unary ufuncs ---------------------------------------------------
 
 	// (vec:sqrt v) / (vec:abs v) / (vec:negative v) / (vec:reciprocal v) and their
 	// -into siblings: dst[i] = uop(v[i]), run whole lane groups at a time (see the U_*
@@ -1624,7 +1624,7 @@ final class WasmVecSimdRuntimeBuilder {
 	// Pushes the lane group of row element k*lanes: groups[base+k] when the row is group
 	// aligned, else the i8x16.shuffle window over groups[base+k] and groups[base+k+1].
 	// Package-private: the linalg matrix-product kernel reads its B rows through the
-	// same window (todo-107's lane form).
+	// same window.
 	static void emitRowGroup(WasmWriter w, int gw, int base, int k, int off, boolean single) {
 		groupGetOffset(w, gw, base, k, 0);
 		if (off == 0) {

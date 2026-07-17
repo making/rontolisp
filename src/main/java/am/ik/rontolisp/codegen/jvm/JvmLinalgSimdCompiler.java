@@ -65,7 +65,7 @@ final class JvmLinalgSimdCompiler {
 			Map.entry(LispNames.LINALG_ARGMIN, "laArgmin"), Map.entry(LispNames.LINALG_TRACE, "laTrace"),
 			Map.entry(LispNames.LINALG_TRANSPOSE, "laTranspose"), Map.entry(LispNames.LINALG_RESHAPE, "laReshape"),
 			Map.entry(LispNames.LINALG_DOT, "laDot"), Map.entry(LispNames.LINALG_OUTER, "laOuter"),
-			// The element-wise unary ufuncs (todo 109). linalg:square / linalg:reciprocal
+			// The element-wise unary ufuncs. linalg:square / linalg:reciprocal
 			// are not here: their spliced defuns call linalg:mul / linalg:div, so they
 			// are accelerated transitively, like mean/matmul.
 			Map.entry(LispNames.LINALG_EXP, "laExp"), Map.entry(LispNames.LINALG_LOG, "laLog"),
@@ -76,11 +76,11 @@ final class JvmLinalgSimdCompiler {
 			Map.entry(LispNames.LINALG_COSH, "laCosh"), Map.entry(LispNames.LINALG_SQRT, "laSqrt"),
 			Map.entry(LispNames.LINALG_ABS, "laAbs"), Map.entry(LispNames.LINALG_NEGATIVE, "laNegative"),
 			Map.entry(LispNames.LINALG_SIGN, "laSign"),
-			// The comparison-select ufuncs (todo 109 Phase 3). linalg:clip / linalg:relu
+			// The comparison-select ufuncs. linalg:clip / linalg:relu
 			// are not here: their spliced defuns compose linalg:maximum / linalg:minimum,
 			// so they are accelerated transitively, like square/reciprocal.
 			Map.entry(LispNames.LINALG_MAXIMUM, "laMaximum"), Map.entry(LispNames.LINALG_MINIMUM, "laMinimum"),
-			// The internal CNN window unfolding pair (todo 117): pure index arithmetic,
+			// The internal CNN window unfolding pair: pure index arithmetic,
 			// intercepted because the boxed defun dominates the accelerated convolution
 			// runs. %-prefixed members are internal symbols, qualified with the double
 			// colon (see qualifiedName).
@@ -124,12 +124,12 @@ final class JvmLinalgSimdCompiler {
 	}
 
 	/**
-	 * The members whose &optional axis forms have their own bridge kernel (todo 117
-	 * follow-up): transpose takes an axes permutation, sum/amax/amin an axis plus
-	 * keepdims, argmax/argmin an axis. A call supplying MORE arguments than
-	 * {@link #arity} but at most {@code params} routes to this bridge method (missing
-	 * trailing optionals padded with null = nil); on decline the surplus temps are
-	 * packaged into the variadic defun's rest list.
+	 * The members whose &optional axis forms have their own bridge kernel: transpose
+	 * takes an axes permutation, sum/amax/amin an axis plus keepdims, argmax/argmin an
+	 * axis. A call supplying MORE arguments than {@link #arity} but at most
+	 * {@code params} routes to this bridge method (missing trailing optionals padded with
+	 * null = nil); on decline the surplus temps are packaged into the variadic defun's
+	 * rest list.
 	 */
 	record Extended(String bridgeMethod, int params) {
 	}

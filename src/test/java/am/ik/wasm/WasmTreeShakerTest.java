@@ -64,7 +64,7 @@ class WasmTreeShakerTest {
 
 	@Test
 	void shakesEhModeModules() {
-		// EH mode (todo 129): the shaker must walk try_table/throw/throw_ref
+		// EH mode: the shaker must walk try_table/throw/throw_ref
 		// immediates correctly and keep the tag section verbatim, so P1 EH +
 		// --optimize compose.
 		String source = """

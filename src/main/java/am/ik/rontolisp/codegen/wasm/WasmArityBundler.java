@@ -22,8 +22,8 @@ import am.ik.rontolisp.LispVal;
  * arguments into a list" shape the limit's error message suggests -- automatically, so
  * real-library code with wide helper signatures (e.g. split-sequence's 10-parameter
  * {@code split-list}) compiles without source changes. Raising the limit itself would
- * shift the type/function indices the pinned {@code --component} adapter blobs depend on
- * (see {@code .todo/09}), so the transform stays at the AST level:
+ * shift the type/function indices the pinned {@code --component} adapter blobs depend on,
+ * so the transform stays at the AST level:
  *
  * <pre>
  * (defun f (p1 .. p10) body)          -> (defun f (p1 .. p6 %bundle)

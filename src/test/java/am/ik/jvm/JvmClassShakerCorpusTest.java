@@ -82,13 +82,13 @@ class JvmClassShakerCorpusTest {
 
 		byte[] plain = new JvmLispCompiler("Test", false, false).compile(program);
 		// The corpus class is the one that once crossed the JVM 65535 constant-pool
-		// ceiling (todo-118). The LibraryDefunPruner keeps the pool small by dropping
+		// ceiling. The LibraryDefunPruner keeps the pool small by dropping
 		// unreachable spliced library defuns; guard the headroom so a growing corpus
 		// or library fails loudly here, not with a corrupt class in CI.
 		int constantPoolEntries = (((plain[8] & 0xff) << 8) | (plain[9] & 0xff)) - 1;
 		System.out.println("corpus class constant-pool entries: " + constantPoolEntries + " / 65534");
 		assertThat(constantPoolEntries)
-			.as("constant-pool headroom (todo-118: was 65520/65534 before the "
+			.as("constant-pool headroom (was 65520/65534 before the "
 					+ "LibraryDefunPruner and ConstantPool deduplication)")
 			.isLessThanOrEqualTo(52000);
 		// A decoder gap (unrecognized opcode / constant tag) throws here, by design.

@@ -256,7 +256,7 @@ class WasmExportCompilerTest {
 	@Test
 	void componentModeLiftsScalarExport() {
 		// A scalar export is core-exported, aliased and canonically lifted into a
-		// component-model export under its name (todo 92); no memory allocator and none
+		// component-model export under its name; no memory allocator and none
 		// of the string-ABI helpers appear (cabi_realloc exists in every GC component --
 		// the shared mem module exports one -- so absence is pinned on cabi_post_).
 		List<LispVal> program = LispReader
@@ -270,7 +270,7 @@ class WasmExportCompilerTest {
 
 	@Test
 	void componentModeLiftsStringExportThroughCanonicalStringAbi() {
-		// A :string export (todo 92 Tier 2) appends the canonical string ABI helpers to
+		// A :string export appends the canonical string ABI helpers to
 		// the core module: the core's own cabi_realloc and the shared per-signature
 		// post-return (here cabi_post_i32 -- a :string result flattens to a single i32
 		// return pointer, so the shim's flat result and a :int result share one kind).
@@ -305,7 +305,7 @@ class WasmExportCompilerTest {
 
 	@Test
 	void parsesAsyncOption() {
-		// :async t marks the component lift async (todo 92 Tier 3); default is sync.
+		// :async t marks the component lift async; default is sync.
 		assertThat(parse("(rontolisp:wasm-export 'f :params '(:int) :returns :int :async t)").async()).isTrue();
 		assertThat(parse("(rontolisp:wasm-export 'f :params '(:int) :returns :int :async nil)").async()).isFalse();
 		assertThat(parse("(rontolisp:wasm-export 'f :params '(:int) :returns :int)").async()).isFalse();

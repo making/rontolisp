@@ -73,9 +73,9 @@ final class WasmLinalgSimdCompiler {
 			Map.entry(LispNames.LINALG_RESHAPE, WasmLinalgSimdRuntimeBuilder.RESHAPE),
 			Map.entry(LispNames.LINALG_DOT, WasmLinalgSimdRuntimeBuilder.DOT),
 			Map.entry(LispNames.LINALG_OUTER, WasmLinalgSimdRuntimeBuilder.OUTER),
-			// The element-wise unary ufuncs (todo 109). linalg:square / linalg:reciprocal
-			// are not here: their spliced defuns call linalg:mul / linalg:div, so they
-			// are accelerated transitively, like mean/matmul.
+			// The element-wise unary ufuncs. linalg:square / linalg:reciprocal are not
+			// here: their spliced defuns call linalg:mul / linalg:div, so they are
+			// accelerated transitively, like mean/matmul.
 			Map.entry(LispNames.LINALG_EXP, WasmLinalgSimdRuntimeBuilder.EXP),
 			Map.entry(LispNames.LINALG_LOG, WasmLinalgSimdRuntimeBuilder.LOG),
 			Map.entry(LispNames.LINALG_TANH, WasmLinalgSimdRuntimeBuilder.TANH),
@@ -91,14 +91,13 @@ final class WasmLinalgSimdCompiler {
 			Map.entry(LispNames.LINALG_ABS, WasmLinalgSimdRuntimeBuilder.ABS),
 			Map.entry(LispNames.LINALG_NEGATIVE, WasmLinalgSimdRuntimeBuilder.NEGATIVE),
 			Map.entry(LispNames.LINALG_SIGN, WasmLinalgSimdRuntimeBuilder.SIGN),
-			// The comparison-select ufuncs (todo 109 Phase 3). linalg:clip / linalg:relu
-			// are not here: their spliced defuns compose linalg:maximum /
-			// linalg:minimum, so they are accelerated transitively, like
-			// square/reciprocal.
+			// The comparison-select ufuncs. linalg:clip / linalg:relu are not here:
+			// their spliced defuns compose linalg:maximum / linalg:minimum, so they are
+			// accelerated transitively, like square/reciprocal.
 			Map.entry(LispNames.LINALG_MAXIMUM, WasmLinalgSimdRuntimeBuilder.MAXIMUM),
 			Map.entry(LispNames.LINALG_MINIMUM, WasmLinalgSimdRuntimeBuilder.MINIMUM),
-			// The internal CNN window unfolding pair (todo 117): %-prefixed members are
-			// internal symbols, qualified with the double colon (see qualifiedName).
+			// The internal CNN window unfolding pair: %-prefixed members are internal
+			// symbols, qualified with the double colon (see qualifiedName).
 			Map.entry(LispNames.LINALG_IM2COL, WasmLinalgSimdRuntimeBuilder.IM2COL),
 			Map.entry(LispNames.LINALG_COL2IM, WasmLinalgSimdRuntimeBuilder.COL2IM));
 
@@ -139,12 +138,11 @@ final class WasmLinalgSimdCompiler {
 	}
 
 	/**
-	 * The members whose &optional axis forms have their own kernel (todo 117 follow-up):
-	 * transpose takes an axes permutation, sum/amax/amin an axis plus keepdims,
-	 * argmax/argmin an axis. A call supplying MORE arguments than {@link #arity} but at
-	 * most {@code params} routes to this kernel (missing trailing optionals padded with a
-	 * null ref = nil); on decline the surplus locals are linked into the variadic defun's
-	 * rest list.
+	 * The members whose &optional axis forms have their own kernel: transpose takes an
+	 * axes permutation, sum/amax/amin an axis plus keepdims, argmax/argmin an axis. A
+	 * call supplying MORE arguments than {@link #arity} but at most {@code params} routes
+	 * to this kernel (missing trailing optionals padded with a null ref = nil); on
+	 * decline the surplus locals are linked into the variadic defun's rest list.
 	 */
 	private record Extended(int offset, int params) {
 	}

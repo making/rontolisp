@@ -2577,8 +2577,8 @@ class LispEvaluatorTest {
 	void mapFamilySignalsErrorOnNonList() {
 		// The map* family operates on lists; passing a non-list (e.g. a string) signals
 		// an
-		// error rather than silently returning nil, which would hide a caller's mistake
-		// (.todo/26). nil is a valid empty list and must stay accepted.
+		// error rather than silently returning nil, which would hide a caller's mistake.
+		// nil is a valid empty list and must stay accepted.
 		assertThatThrownBy(() -> eval("(mapcar #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("mapcar: argument is not a list: \"abc\"");
 		assertThatThrownBy(() -> eval("(mapc #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
@@ -3058,10 +3058,8 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalMapIntoLargeListStaysLinear() {
-		// Regression guard for todo 75: with all-list operands map-into must stay O(n),
-		// not
-		// re-walk the list from the head each iteration (which would make 20000 elements
-		// an
+		// Regression guard: with all-list operands map-into must stay O(n), not re-walk
+		// the list from the head each iteration (which would make 20000 elements an
 		// O(n^2) hang instead of instant).
 		assertThat(eval("(length (map-into (make-list 20000) (lambda (x) 1) (make-list 20000)))").print())
 			.isEqualTo("20000");
@@ -4520,8 +4518,8 @@ class LispEvaluatorTest {
 
 	@Test
 	void handlerCaseCatchesUsocketSocketErrorOnConnectToClosedPort() {
-		// The .todo/116 Phase 3 acceptance shape: a connection failure is re-signaled
-		// as a typed usocket:socket-error, catchable by type.
+		// A connection failure is re-signaled as a typed usocket:socket-error, catchable
+		// by type (.kb/error-handling.md).
 		assertThat(eval("""
 				(let* ((l (usocket:socket-listen "127.0.0.1" 0))
 				       (p (usocket:get-local-port l)))
@@ -5412,7 +5410,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void linalgSingleFloatWidthPolymorphism() {
-		// todo-97: a linalg constructor opts into single-float (#f) with a trailing
+		// A linalg constructor opts into single-float (#f) with a trailing
 		// element-type (double stays the default), and every transform PRESERVES the
 		// input width, so a #f array is never silently widened back to double.
 		LispVal result = evalMulti("""
@@ -5579,7 +5577,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void linalgTransposeAxesPadIm2col() {
-		// The ch07 CNN additions (todo-117): transpose with an axes list = numpy
+		// The ch07 CNN additions: transpose with an axes list = numpy
 		// x.transpose(1 0 2) (rank-n permutation), pad = np.pad's constant-0 mode,
 		// and the internal rank-4 %la-im2col / %la-col2im pair (window unfold and
 		// its scatter-add adjoint) behind the convolution examples.
@@ -6684,8 +6682,8 @@ class LispEvaluatorTest {
 
 	@Test
 	void clUtilitiesCopyArrayRunsOnInterpreter() {
-		// The cl-utilities copy-array definition verbatim (the headline of todo 71):
-		// verifies array-element-type, make-array
+		// The cl-utilities copy-array definition verbatim, the headline adjustable-array
+		// exercise: verifies array-element-type, make-array
 		// :element-type/:adjustable/:fill-pointer,
 		// array-has-fill-pointer-p, fill-pointer, adjustable-array-p, array-total-size
 		// and
@@ -6988,7 +6986,7 @@ class LispEvaluatorTest {
 		pool.shutdown();
 	}
 
-	// ---- IEEE-754 float edge semantics (.todo/108 group A) ----
+	// ---- IEEE-754 float edge semantics: the interpreter's comparison group ----
 
 	@Test
 	void negativeZeroComparesEqualToPositiveZero() {

@@ -352,7 +352,7 @@
 (defun rontolisp::%json-out-hash (h acc)
   ;; The variables captured by the maphash closure use %-prefixed names:
   ;; compiled closures resolve a captured name against a same-named top-level
-  ;; global when one exists (see .todo/47), so ordinary names like "a" would
+  ;; global when one exists, so ordinary names like "a" would
   ;; break inside programs that (setq a ...) at the top level.
   (let ((%json-hash-acc (cons "{" acc)) (%json-hash-first t))
     (maphash (lambda (k v)

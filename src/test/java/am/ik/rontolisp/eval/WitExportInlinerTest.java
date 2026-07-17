@@ -21,11 +21,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The acceptance test of {@code rontolisp:wit-export} (todo 126): a program that
- * implements a WIT world must compile to the <strong>byte-identical</strong> artifact the
- * equivalent hand-written {@code rontolisp:wasm-export} program produces. The directive
- * is a compile-time front-end for machinery that already exists -- if a single byte
- * moved, it would be a new export path instead.
+ * The acceptance test of {@code rontolisp:wit-export} ({@code .kb/wit.md}): a program
+ * that implements a WIT world must compile to the <strong>byte-identical</strong>
+ * artifact the equivalent hand-written {@code rontolisp:wasm-export} program produces.
+ * The directive is a compile-time front-end for machinery that already exists -- if a
+ * single byte moved, it would be a new export path instead.
  *
  * <p>
  * Both halves of each A/B pair are compiled in the same JVM, from the same source apart

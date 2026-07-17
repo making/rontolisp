@@ -176,7 +176,7 @@ class JvmSimdAccelCompilerTest {
 		assertThat(embedsBridge(compile("(print (+ 1 2))", true))).isFalse();
 	}
 
-	// --- single-float (#f) width-polymorphism (todo 95 Part 1 Phase 3) ---------------
+	// --- single-float (#f) width-polymorphism -----------------------------------------
 
 	@Test
 	void acceleratedSingleFloatKernelsMatchTheScalarReferenceByteForByte() throws Exception {
@@ -246,9 +246,10 @@ class JvmSimdAccelCompilerTest {
 
 	@Test
 	void singleFloatReductionsAccumulateInSinglePrecisionUnderSimd() throws Exception {
-		// The compiled-path half of the todo-106 precision contract (the interpreter half
-		// is eval/VecSimdTest, same probe, same numbers -- the two kernel files are
-		// deliberate duplicates and must not drift).
+		// The compiled-path half of the contract that an #f reduction accumulates in
+		// single precision under --simd on every backend (.kb/vec.md); the interpreter
+		// half is eval/VecSimdTest, same probe, same numbers -- the two kernel files are
+		// deliberate duplicates and must not drift.
 		//
 		// v = #f(4096.0 1.0 ... 1.0), 1024 elements: dot(v,v) = 4096^2 + 1023 = 16778239.
 		// 4096^2 = 2^24, where the f32 spacing is 2, so the pinned lane holding it
@@ -301,7 +302,7 @@ class JvmSimdAccelCompilerTest {
 		assertThat(embedsBridge(compile("(print (vec:sum #f(1.0 2.0 3.0)))", false))).isFalse();
 	}
 
-	// --- matvec (GEMV) f64 + f32 (todo 95 Part 2) ------------------------------------
+	// --- matvec (GEMV) f64 + f32 -----------------------------------------------------
 
 	@Test
 	void acceleratedMatvecMatchesTheScalarReferenceByteForByte() throws Exception {
@@ -393,7 +394,7 @@ class JvmSimdAccelCompilerTest {
 		assertThat(embedsBridge(compile("(print (vec:matvec #d((1 2) (3 4)) #d(5 6)))", false))).isFalse();
 	}
 
-	// --- destination-passing kernels (todo 103) --------------------------------------
+	// --- destination-passing kernels --------------------------------------------------
 
 	@Test
 	void acceleratedIntoKernelsMatchTheirAllocatingSiblingsByteForByte() throws Exception {
@@ -476,7 +477,7 @@ class JvmSimdAccelCompilerTest {
 			.hasStackTraceContaining("share an element type");
 	}
 
-	// --- element-wise unary ufuncs (todo 109) -----------------------------------------
+	// --- element-wise unary ufuncs ----------------------------------------------------
 
 	@Test
 	void unaryUfuncsMatchTheScalarReferenceAtBothSizesAndWidths() throws Exception {
@@ -494,8 +495,8 @@ class JvmSimdAccelCompilerTest {
 		assertMatchesScalarReference(
 				"(print (round (* 1000000 (vec:sum (vec:exp (vec:reciprocal (vec:add (vec:arange 200) (vec:ones 200))))))))");
 		assertMatchesScalarReference("(print (vec:exp #d(0.0 1.0)))");
-		// log over strictly positive inputs, tanh over a sign-mixed range (todo 109
-		// Phase 2 -- Math.log / Math.tanh scalar loops on this backend).
+		// log over strictly positive inputs, tanh over a sign-mixed range (Math.log /
+		// Math.tanh scalar loops on this backend).
 		for (String n : new String[] { "7", "200" }) {
 			assertMatchesScalarReference("(print (vec:log (vec:add (vec:arange %s) (vec:ones %s))))".formatted(n, n));
 			assertMatchesScalarReference(
@@ -505,8 +506,8 @@ class JvmSimdAccelCompilerTest {
 		assertMatchesScalarReference(
 				"(print (vec:log (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float))))");
 		assertMatchesScalarReference("(print (vec:tanh (vec:arange 200 'single-float)))");
-		// sin / cos / tan over a sign-mixed range (todo 109 Phase 2 second release --
-		// Math.sin / Math.cos / Math.tan scalar loops on this backend).
+		// sin / cos / tan over a sign-mixed range (Math.sin / Math.cos / Math.tan
+		// scalar loops on this backend).
 		for (String op : new String[] { "sin", "cos", "tan" }) {
 			for (String n : new String[] { "7", "200" }) {
 				assertMatchesScalarReference(
@@ -516,7 +517,7 @@ class JvmSimdAccelCompilerTest {
 			assertMatchesScalarReference("(print (vec:%s (vec:arange 200 'single-float)))".formatted(op));
 		}
 		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
-		// sign-mixed range (todo 109 Phase 2 third release).
+		// sign-mixed range.
 		for (String op : new String[] { "asin", "acos" }) {
 			assertMatchesScalarReference(
 					"(print (vec:%s (vec:scale (vec:sub (vec:arange 200) (vec:scale (vec:ones 200) 100.0)) 0.005)))"
@@ -569,7 +570,7 @@ class JvmSimdAccelCompilerTest {
 			.hasStackTraceContaining("share an element type");
 	}
 
-	// --- comparison-select ufuncs (todo 109 Phase 3) -----------------------------------
+	// --- comparison-select ufuncs -----------------------------------------------------
 
 	@Test
 	void comparisonSelectsMatchTheScalarReferenceAtBothSizesAndWidths() throws Exception {

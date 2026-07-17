@@ -74,9 +74,9 @@ Two shapes in `fractal.lisp` are dictated by the boundary rather than by the
 mathematics, and both are worth knowing before writing a world of your own:
 
 - **A frame comes back as a string of palette characters, one per pixel.** A
-  component that could return a `list<u8>` would not need the detour, but the WIT
-  type mapping does not carry lists yet (`.todo/128`): `string` is the widest
-  channel a rontolisp component has today. The module exports its own `palette`,
+  component that could return a `list<u8>` would not need the detour, but a
+  rontolisp component's exports carry scalars and strings only: `string` is the
+  widest channel available today. The module exports its own `palette`,
   so the encoding is declared in the world and hard-coded nowhere in the page.
 - **Mandelbrot and Julia are separate exports** although one iteration loop
   serves both: a wasm-GC callable takes at most **seven parameters**, so a single
@@ -99,7 +99,7 @@ stating separately:
   `ReferenceError: FutureReadableEnd is not defined` -- on the import side,
   before any export is even lifted. It reproduces under every `--async-mode` /
   `--instantiation` combination. (This is distinct from the known gap where jco
-  cannot *call* a stackful-async export at all; see `.todo/112`.)
+  cannot *call* a stackful-async export at all.)
 - **`@bytecodealliance/preview3-shim` has no browser build.** Its `exports` map
   has only a `node` condition and its code imports `node:worker_threads`, `net`,
   `fs/promises`, ... -- unlike `preview2-shim`, which ships `dist/browser/`. So a

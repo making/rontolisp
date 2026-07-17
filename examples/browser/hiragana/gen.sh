@@ -17,7 +17,7 @@
 #                                   recognize() for the page.  It READS
 #                                   weights.bin at startup -- nothing is baked in,
 #                                   so the model is not capped by the JVM's
-#                                   baked-constant ceiling (see .todo/17).
+#                                   baked-constant ceiling.
 #
 # The real-handwriting half of the training set is Kuzushiji-49, which
 # tools/k49/prepare-k49.py downloads and converts once (see tools/k49/README.md).

@@ -149,7 +149,8 @@ class CiSpecE2eTest {
 				exec(List.of(bin.toString(), program.toString(), "-o", "test.wasm"));
 				// --dir . preopens the work dir so the file-stream cases can open files;
 				// exceptions=y because the concatenated program contains catching cases
-				// (todo 129), which put the whole module in EH mode (harmless otherwise).
+				// (handler-case &c), which put the whole module in EH mode (harmless
+				// otherwise).
 				yield exec(List.of("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", "--dir", ".", "test.wasm"));
 			}
 			case WASM_COMPONENT -> {

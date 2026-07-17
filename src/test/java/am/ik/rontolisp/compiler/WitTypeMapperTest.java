@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Pins the todo-124 type-mapping table (the {@code .kb/wit.md} decision record) so that a
+ * Pins the WIT type-mapping table (the {@code .kb/wit.md} decision record) so that a
  * change to any settled cell fails loudly — reversing a cell after {@code wit-import} /
  * {@code wit-export} ship would be a breaking change to user programs.
  */

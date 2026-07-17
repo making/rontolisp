@@ -1092,8 +1092,11 @@ public final class LispNames {
 	public static final String DEFTYPE = "deftype";
 
 	/**
-	 * The {@code define-condition} macro. Parsed no-op: there is no condition system (see
-	 * {@code .todo/39}), so the condition type is not registered anywhere.
+	 * The {@code define-condition} macro. Expands into the equivalent {@code defclass}
+	 * over the CLOS static subset, so a condition type is an ordinary class registered in
+	 * the {@code ClosRegistry} (parent defaults to {@code condition}); its
+	 * {@code :report} is registered there too. Lite: single inheritance, and no restart
+	 * layer.
 	 */
 	public static final String DEFINE_CONDITION = "define-condition";
 
@@ -2575,9 +2578,10 @@ public final class LispNames {
 	 */
 	public static final String VEC_MATVEC_INTO = "matvec-into";
 
-	// The element-wise unary ufuncs (todo 109 Phase 1). Each has a fresh-vector form and
-	// a destination-passing -into sibling; out MAY alias the operand (element i depends
-	// only on element i, the add-into rule).
+	// The element-wise unary ufuncs. Each has a fresh-vector form and a
+	// destination-passing -into sibling; out MAY alias the operand (element i depends
+	// only
+	// on element i, the add-into rule).
 
 	/** {@code vec:exp}: element-wise {@code e^x} into a fresh vector. */
 	public static final String VEC_EXP = "exp";
@@ -2630,10 +2634,10 @@ public final class LispNames {
 	/** {@code vec:reciprocal}: element-wise {@code 1 / x} into a fresh vector. */
 	public static final String VEC_RECIPROCAL = "reciprocal";
 
-	// The comparison-select ufuncs (todo 109 Phase 3). All are defined by the strict
-	// comparison the linalg: siblings state ((if (> x y) x y) and its mirrors), so the
-	// second operand / the bound wins whenever the comparison is false -- including
-	// unordered NaN comparisons.
+	// The comparison-select ufuncs. All are defined by the strict comparison the linalg:
+	// siblings state ((if (> x y) x y) and its mirrors), so the second operand / the
+	// bound
+	// wins whenever the comparison is false -- including unordered NaN comparisons.
 
 	/** {@code vec:maximum}: element-wise larger of two vectors into a fresh vector. */
 	public static final String VEC_MAXIMUM = "maximum";

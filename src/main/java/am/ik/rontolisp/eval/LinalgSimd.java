@@ -98,7 +98,7 @@ public final class LinalgSimd {
 				LinalgSimdKernels::divScalar, LinalgSimdKernels::divScalarF, LinalgSimdKernels::divFrom,
 				LinalgSimdKernels::divFromF);
 
-		// The comparison-select ufuncs (todo 109 Phase 3) share the elementwise
+		// The comparison-select ufuncs share the elementwise
 		// dispatch: same three %la-bcast shapes, same decline protocol. linalg:clip
 		// and linalg:relu are accelerated transitively -- their defuns compose
 		// linalg:maximum / linalg:minimum (the square / reciprocal pattern).
@@ -115,7 +115,7 @@ public final class LinalgSimd {
 		define(globalEnv, evaluator, LispNames.LINALG_DIV, 2, args -> elementwise(div, args));
 		define(globalEnv, evaluator, LispNames.LINALG_MAXIMUM, 2, args -> elementwise(maximum, args));
 		define(globalEnv, evaluator, LispNames.LINALG_MINIMUM, 2, args -> elementwise(minimum, args));
-		// The axis forms (todo 117 follow-up): sum/amax/amin also take (a axis
+		// The axis forms: sum/amax/amin also take (a axis
 		// keepdims), argmax/argmin (v axis), transpose (a axes) -- each handled by a
 		// scalar fold/permutation kernel when the axis argument is an exact integer
 		// (a permutation list for transpose), declined to the defun otherwise.
@@ -130,7 +130,7 @@ public final class LinalgSimd {
 		define(globalEnv, evaluator, LispNames.LINALG_RESHAPE, 2, LinalgSimd::reshape);
 		define(globalEnv, evaluator, LispNames.LINALG_DOT, 2, LinalgSimd::dot);
 		define(globalEnv, evaluator, LispNames.LINALG_OUTER, 2, LinalgSimd::outer);
-		// The named element-wise unary ufuncs (todo 109). linalg:square and
+		// The named element-wise unary ufuncs. linalg:square and
 		// linalg:reciprocal are accelerated transitively -- their defuns call
 		// linalg:mul / linalg:div, which resolve to the natives installed above.
 		define(globalEnv, evaluator, LispNames.LINALG_EXP, 1,
@@ -163,7 +163,7 @@ public final class LinalgSimd {
 				args -> unary(args, LinalgSimdKernels::negative, LinalgSimdKernels::negativeF));
 		define(globalEnv, evaluator, LispNames.LINALG_SIGN, 1,
 				args -> unary(args, LinalgSimdKernels::sign, LinalgSimdKernels::signF));
-		// The internal CNN window unfolding pair (todo 117): pure index arithmetic, no
+		// The internal CNN window unfolding pair: pure index arithmetic, no
 		// lanes -- intercepted because the boxed do-loop dominates the accelerated
 		// convolution runs (~97% of ch07 train time under --simd was im2col/col2im).
 		define(globalEnv, evaluator, LispNames.LINALG_IM2COL, 5, LinalgSimd::im2col);
@@ -217,7 +217,7 @@ public final class LinalgSimd {
 		if (a != null && b != null) {
 			if (!Arrays.equals(a.dims(), b.dims())) {
 				// Two same-width arrays of different shapes broadcast by the numpy
-				// rules (todo 117 follow-up); an incompatible pair declines so the
+				// rules; an incompatible pair declines so the
 				// defun signals its own shape-mismatch error.
 				return bcast(op.bop(), a, b);
 			}
@@ -649,7 +649,7 @@ public final class LinalgSimd {
 				: new LispDoubleFloatArray(LinalgSimdKernels.outer(doubles(u), doubles(v)), dims);
 	}
 
-	// --- CNN window unfolding: %la-im2col / %la-col2im (todo 117) ----------------------
+	// --- CNN window unfolding: %la-im2col / %la-col2im ---------------------------------
 
 	/**
 	 * {@code (linalg::%la-im2col x fh fw stride pad)} over a rank-4 packed NCHW operand.

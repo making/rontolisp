@@ -1,9 +1,10 @@
 ;; A rontolisp port of wasmCloud's http-kv-handler template
 ;; (templates/http-kv-handler in the wasmCloud repo): an HTTP handler backed
 ;; by a key-value store. The original stores through wasi:keyvalue with a
-;; pluggable backend; rontolisp has no wasi:keyvalue binding yet
-;; (.todo/52-wasi-keyvalue.md), so this port implements the template's
-;; default "in_memory" backend as a global hash table.
+;; pluggable backend; this port has not been rewritten against the real
+;; wasi:keyvalue interface yet (examples/wit/keyvalue shows how a component
+;; imports it), so it implements the template's default "in_memory" backend as
+;; a global hash table.
 ;;
 ;;   POST /            {"key":"...","value":"..."}  -> stores the pair
 ;;   GET  /?key=<key>                               -> the stored value, or 404

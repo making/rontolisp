@@ -11,8 +11,9 @@
 ;;;; binds no serve member and vice versa). The interpreter and the JVM keep their
 ;;;; java.net.http / JDK HttpServer implementations; Preview 1 has neither.
 ;;;;
-;;;; The whole of it is ordinary Lisp over the WIT bindings -- no core codegen (the
-;;;; .todo/124 stance). The async machinery is the canonical ABI driven through the
+;;;; The whole of it is ordinary Lisp over the WIT bindings -- no core codegen (a host
+;;;; interface costs a .wit file, not compiler cases). The async machinery is the
+;;;; canonical ABI driven through the
 ;;;; general wit-import path:
 ;;;;   - `client.send` is an `async func`, so its binding returns a FIRST-CLASS
 ;;;;     FUTURE (rontolisp::%subtask-future over the async-lowered call): pending

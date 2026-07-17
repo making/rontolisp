@@ -491,7 +491,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoGcAndInvoke(true, program, "sumsquared", "100000", "100000")).isEqualTo("40000000000");
 	}
 
-	// Compiles with --no-gc --component (the compact reactor component, todo 93) and
+	// Compiles with --no-gc --component (the compact reactor component) and
 	// calls an export through the canonical ABI with WAVE syntax. The component carries
 	// the plain MVP core module with NO adapter / import block / mem module, so it runs
 	// with ZERO extra flags: no `-W gc`, no component-model-async flags -- assert that by
@@ -574,7 +574,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcComponentStringExportsLiftThroughTheCanonicalAbi() throws Exception {
-		// :string boundaries under --no-gc --component (todo 93 Tier 2): a string
+		// :string boundaries under --no-gc --component: a string
 		// argument is lowered by the host into the module's own memory via the
 		// cabi_realloc shim, a string result crosses as typed component-model string
 		// through the retptr shim, and the cabi_post_* post-return pops the bump heap
@@ -776,13 +776,13 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcPrintWritesToStdoutMatchingTheInterpreter() throws Exception {
-		// todo 110: print = prin1 text + a trailing newline (strings quoted), princ =
+		// print = prin1 text + a trailing newline (strings quoted), princ =
 		// display text (no quotes, no newline), terpri = a newline -- byte-for-byte the
 		// interpreter's output for every line below. The float lines ride the __ftoa
-		// port of the GC backend's todo-108-hardened printer (NaN / Infinity / -0.0 by
+		// port of the GC backend's IEEE-hardened printer (NaN / Infinity / -0.0 by
 		// sign bit); a magnitude >= 2^63 prints in the WASM backends' E-notation digit
 		// shape (the interpreter's Double.toString shape differs there -- the known
-		// print-shape divergence of .todo/46, same as the GC backend).
+		// large-finite-float print-shape divergence, same as the GC backend).
 		String program = """
 				(defun show ()
 				  (print 42)
@@ -843,8 +843,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcWithArenaKeepsALoopFlatWhereTheBareLoopGrows() throws Exception {
-		// The todo-104 contract: (with-arena () ...) pops everything allocated inside at
-		// the boundary, so 100000 iterations each building an 8KB vector run under a
+		// The with-arena contract: (with-arena () ...) pops everything allocated inside
+		// at the boundary, so 100000 iterations each building an 8KB vector run under a
 		// 2-page cap; the SAME loop without the arena has no reclamation within one
 		// export call (--no-gc bump-allocates with no free) and traps on the cap.
 		String program = """
@@ -949,7 +949,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "5")).isEqualTo("30");
 		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "8")).isEqualTo("140");
 		// vec:ones / vec:arange with no element-type build the default F64VEC (the
-		// double path is byte-identical to before the todo-97 constructor change).
+		// double path is unaffected by the element-type constructor argument).
 		assertThat(compileNoGcAndInvoke(false, true, program, "consd", "0")).isEqualTo("5");
 		assertThat(compileNoGcAndInvoke(false, true, program, "arand", "0")).isEqualTo("6");
 	}
@@ -998,8 +998,8 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileNoGcAndInvoke(false, true, program, "scalesum", "0")).isEqualTo("45");
 		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "5")).isEqualTo("30");
 		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "8")).isEqualTo("140");
-		// vec:ones / vec:arange with a literal 'single-float construct an F32VEC natively
-		// (todo-97 follow-on): sum(ones 5) = 5, sum(arange 4) = 0+1+2+3 = 6.
+		// vec:ones / vec:arange with a literal 'single-float construct an F32VEC
+		// natively: sum(ones 5) = 5, sum(arange 4) = 0+1+2+3 = 6.
 		assertThat(compileNoGcAndInvoke(false, true, program, "consf", "0")).isEqualTo("5");
 		assertThat(compileNoGcAndInvoke(false, true, program, "aranf", "0")).isEqualTo("6");
 		// --optimize (tree-shaken module) still runs the f32x4 kernels identically.
@@ -1048,16 +1048,12 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsDestinationPassingVecKernelsUnderBothLowerings() throws Exception {
-		// The -into kernels (todo 103) write into the caller's [count][data] block
-		// instead
+		// The -into kernels write into the caller's [count][data] block instead
 		// of bump-allocating a fresh one, so a loop over them keeps the (never-freed)
-		// linear
-		// heap flat. Here we prove the emitted loops COMPUTE correctly on both lowerings
-		// and
-		// both widths; the "no __alloc call in the kernel" property is asserted
-		// structurally
-		// in NoGcWasmCompilerTest, and the resulting flat peak RSS is measured in
-		// .kb/vec.md.
+		// linear heap flat. Here we prove the emitted loops COMPUTE correctly on both
+		// lowerings and both widths; the "no __alloc call in the kernel" property is
+		// asserted structurally in NoGcWasmCompilerTest, and the resulting flat peak RSS
+		// is measured in .kb/vec.md.
 		String doubles = """
 				(defun addinto (i)
 				  (let* ((o (vec:zeros 5)) (a #d(1.0 2.0 3.0 4.0 5.0)))
@@ -1106,10 +1102,10 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsUnaryUfuncsUnderBothLowerings() throws Exception {
-		// The arithmetic unary ufuncs (todo 109): sqrt / abs / square / negative /
+		// The arithmetic unary ufuncs: sqrt / abs / square / negative /
 		// reciprocal + -into, both widths, both lowerings (scalar loops by default,
 		// v128 under --simd), matching the interpreter oracle on exact inputs. exp /
-		// sign lower natively too (Phase 1.5) and are covered separately below.
+		// sign lower natively too and are covered separately below.
 		String doubles = """
 				(defun ufuncs (i)
 				  (let* ((v #d(-3.0 4.0 -5.0 12.0 -2.0))
@@ -1152,7 +1148,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsExpAndSignUnderBothLowerings() throws Exception {
-		// todo 109 Phase 1.5: vec:exp / vec:sign (+ -into) reuse the GC backend's
+		// vec:exp / vec:sign (+ -into) reuse the GC backend's
 		// raw-f64 emitters (the WasmExpCompiler software approximation and the
 		// (x>0)-(x<0) sign), so a --no-gc value equals the wasm-GC backend's exactly
 		// at both widths -- the nontrivial exp probes are compared against a wasm-GC
@@ -1196,7 +1192,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsLogAndTanhUnderBothLowerings() throws Exception {
-		// todo 109 Phase 2: vec:log / vec:tanh (+ -into) reuse the GC backend's raw-f64
+		// vec:log / vec:tanh (+ -into) reuse the GC backend's raw-f64
 		// emitters (the WasmLogCompiler atanh series, the WasmTanhCompiler clamped exp
 		// derivation), so a --no-gc value equals the wasm-GC backend's exactly at both
 		// widths -- the nontrivial probes are compared against a wasm-GC run, the exact
@@ -1246,7 +1242,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsSinCosTanUnderBothLowerings() throws Exception {
-		// todo 109 Phase 2 second release: vec:sin / vec:cos / vec:tan (+ -into) reuse
+		// vec:sin / vec:cos / vec:tan (+ -into) reuse
 		// the GC backend's raw-f64 emitter (the WasmSinCosCompiler Cody-Waite
 		// reduction), so a --no-gc value equals the wasm-GC backend's exactly at both
 		// widths -- the nontrivial probes are compared against a wasm-GC run, the exact
@@ -1292,7 +1288,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsArcAndHyperbolicUnderBothLowerings() throws Exception {
-		// todo 109 Phase 2 third release: vec:asin / vec:acos / vec:atan / vec:sinh /
+		// vec:asin / vec:acos / vec:atan / vec:sinh /
 		// vec:cosh (+ -into) reuse the GC backend's raw-f64 emitters
 		// (WasmAtanCompiler's fold-and-series, WasmSinhCoshCompiler's exp derivation),
 		// so a --no-gc value equals the wasm-GC backend's exactly at both widths -- the
@@ -1354,11 +1350,11 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsComparisonSelectsUnderBothLowerings() throws Exception {
-		// todo 109 Phase 3: vec:maximum / vec:minimum / vec:relu / vec:clip (+ -into)
+		// vec:maximum / vec:minimum / vec:relu / vec:clip (+ -into)
 		// are strict-comparison selects ((if (> x y) x y) and its mirrors), so every
 		// probe value is exact and pinned to a literal -- and, unlike exp/sign, the
 		// values agree with every other backend, because a select only copies input
-		// bits and > agrees everywhere since todo-108. maximum/minimum run v128
+		// bits and > agrees on every backend. maximum/minimum run v128
 		// gt/lt+bitselect under --simd and a compare+select scalar loop otherwise;
 		// relu rides the U_RELU map1 form; clip is the same element loop in both
 		// modes.
@@ -1411,7 +1407,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcRunsMatvecGemvOverTheRank2PackedMatrix() throws Exception {
-		// todo 99: vec:matvec (GEMV) over the rank-2 packed matrix layout
+		// vec:matvec (GEMV) over the rank-2 packed matrix layout
 		// [rows][cols][data], built with (make-array (list d n) :element-type ...) +
 		// two-subscript setf aref, under BOTH lowerings (per-row f64x2/f32x4 dot under
 		// --simd, a v128-free scalar loop otherwise). Expected values are hand-computed
@@ -1579,7 +1575,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void mapFamilyTrapsOnNonList() throws Exception {
 		// The map* family operates on lists; a non-list (e.g. a string) traps rather than
-		// silently returning nil, matching the interpreter (.todo/26). WASM error is an
+		// silently returning nil, matching the interpreter. WASM error is an
 		// unreachable trap (it carries no message).
 		for (String form : List.of("(mapcar #'identity \"abc\")", "(mapc #'identity \"abc\")",
 				"(mapcan #'list \"abc\")", "(maplist #'identity \"abc\")", "(mapcon #'list \"abc\")")) {
@@ -1727,7 +1723,7 @@ class WasmLispCompilerIntegrationTest {
 		// lifted synchronously by default, so they must be pure-compute: I/O inside one
 		// (print) hits a blocking stream built-in and traps ("cannot block a synchronous
 		// task"); an I/O-bearing export opts into the stackful-async lift with :async t
-		// (todo 92 Tier 3, componentAsyncExportAllowsIoInside).
+		// (see componentAsyncExportAllowsIoInside).
 		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "sumsquared(2, 3)")).isEqualTo("25");
 		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "half(7.0)")).isEqualTo("3.5");
 		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "bigp(101)")).isEqualTo("true");
@@ -1772,14 +1768,14 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void componentExportStringLiftsThroughTheCanonicalStringAbi() throws Exception {
-		// :string boundaries under --component on the GC backend (todo 92 Tier 2): a
+		// :string boundaries under --component on the GC backend: a
 		// string argument is lowered by the host into the shared linear memory via the
 		// core's appended cabi_realloc, the wrapper copies it onto the GC heap, a string
 		// result crosses as a typed component-model string through the retptr shim, and
 		// the cabi_post_* post-return pops the bump heap back to the per-call snapshot.
 		// Both directions (:string->:int and :string->:string), no-arg and :void
-		// shapes, plus UTF-8 multi-byte content -- the same UX as --no-gc --component
-		// (todo 93 Tier 2), just with the GC flags.
+		// shapes, plus UTF-8 multi-byte content -- the same UX as --no-gc --component,
+		// just with the GC flags.
 		assertThat(compileAndInvokeComponent(COMPONENT_STRING_PROGRAM, "count-a(\"banana\")")).isEqualTo("3");
 		assertThat(compileAndInvokeComponent(COMPONENT_STRING_PROGRAM, "shout(\"hello\")")).isEqualTo("\"hello!!\"");
 		assertThat(compileAndInvokeComponent(COMPONENT_STRING_PROGRAM, "greet(\"世界\")")).isEqualTo("\"Hello, 世界\"");
@@ -1896,24 +1892,21 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void preview1GetenvDoesNotCorruptNewline() throws Exception {
-		// Regression for .todo/13: getenv calls environ_sizes_get with scratch addresses
-		// (ENV_COUNT_ADDR=136 ..) that must NOT overlap the interned-string data segment.
-		// When they did (DATA_BASE_OFFSET=128), the host's count write at 136..139
-		// clobbered
-		// the shared newline byte at offset 137, so every newline after a getenv printed
-		// as a
-		// NUL (0x00) instead of 0x0a. Assert the raw bytes keep real newlines.
+		// getenv calls environ_sizes_get with scratch addresses (ENV_COUNT_ADDR=136 ..)
+		// that must NOT overlap the interned-string data segment. When they did
+		// (DATA_BASE_OFFSET=128), the host's count write at 136..139 clobbered the
+		// shared newline byte at offset 137, so every newline after a getenv printed as
+		// a NUL (0x00) instead of 0x0a. Assert the raw bytes keep real newlines.
 		assertThat(compileAndRunRawWithEnv("(getenv \"RLENV\") (format t \"X~%Y~%\")", "RLENV=hello"))
 			.isEqualTo("X\nY\n");
 	}
 
 	@Test
 	void preview1TimeDoesNotCorruptNilLiteral() throws Exception {
-		// Companion regression for .todo/13: clock_time_get writes 8 bytes at
+		// The companion scratch-overlap guard: clock_time_get writes 8 bytes at
 		// TIME_SCRATCH_ADDR=128, which overlapped the data segment's leading "nil"
-		// literal
-		// when DATA_BASE_OFFSET=128. Reading the clock then printing nil must still print
-		// nil.
+		// literal when DATA_BASE_OFFSET=128. Reading the clock then printing nil must
+		// still print nil.
 		assertThat(compileAndRunRawWithEnv("(get-internal-real-time) (print nil)", "RLENV=hello")).isEqualTo("nil\n");
 	}
 
@@ -2638,7 +2631,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void letShadowingBoxedOuterVariable() throws Exception {
-		// .todo/62: an inner let binding a RAW value under a name whose outer
+		// An inner let binding a RAW value under a name whose outer
 		// binding was boxed (captured by the init lambda) must not be cell-read.
 		assertThat(compileAndRun("""
 				(let ((g (lambda () 1)))
@@ -3092,7 +3085,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void variadicBuiltinWrappers() throws Exception {
-		// Regression for .todo/64: funcall/apply of a variadic builtin wrapper with an
+		// Regression: funcall/apply of a variadic builtin wrapper with an
 		// arity other than the old fixed one trapped (unreachable) on WASM.
 		assertThat(compileAndRun("(print (funcall #'+ 1 2 3))")).isEqualTo("6");
 		assertThat(compileAndRun("(print (funcall #'+))")).isEqualTo("0");
@@ -4434,7 +4427,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (map-into (list 0 0 0) #'+ #(1 2 3) '(10 20 30)))")).isEqualTo("(11 22 33)");
 		assertThat(compileAndRun("(print (map-into (make-array 3) #'+ '(1 2 3) #(10 20 30)))"))
 			.isEqualTo("#(11 22 33)");
-		// Regression guard for todo 75: all-list operands must stay O(n).
+		// Regression guard: all-list operands must stay O(n).
 		assertThat(compileAndRun("(print (length (map-into (make-list 20000) (lambda (x) 1) (make-list 20000))))"))
 			.isEqualTo("20000");
 	}
@@ -5410,7 +5403,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void arcAndHyperbolicSoftwareApproximation() throws Exception {
-		// todo 109 Phase 2 third release: asin/acos/atan/sinh/cosh were the LAST
+		// asin/acos/atan/sinh/cosh were the LAST
 		// members of BuiltinFunctionWrappers.WASM_UNSUPPORTED -- every transcendental
 		// built-in now has a WASM software approximation. atan = odd/reciprocal folds +
 		// two half-angle folds + a 10-term Taylor series (~1e-15 relative); asin/acos
@@ -6912,7 +6905,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void compileVectorPushStoresAndReturnsIndexOrNil() throws Exception {
 		// Each push is sequenced through a top-level defparameter: the compilers
-		// evaluate list argument forms right-to-left (.todo/14), so side-effecting
+		// evaluate list argument forms right-to-left, so side-effecting
 		// forms must not share one list form.
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 3 :fill-pointer 0))
@@ -6936,8 +6929,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileVectorPop() throws Exception {
-		// The pop is sequenced before the length read (.todo/14: right-to-left
-		// argument evaluation on the compile path).
+		// The pop is sequenced before the length read (the compile path evaluates
+		// argument forms right-to-left).
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 5 :fill-pointer 3 :initial-element 0))
 				(setf (aref *v* 2) 99)
@@ -6976,7 +6969,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileFillPointerFirstClassWrappers() throws Exception {
-		// The fill-pointer read is sequenced before the mutating pop (.todo/14).
+		// The fill-pointer read is sequenced before the mutating pop, since the compile
+		// path evaluates argument forms right-to-left.
 		assertThat(compileAndRun("""
 				(defparameter *v* (make-array 3 :fill-pointer 0))
 				(funcall #'vector-push 5 *v*)
@@ -6988,7 +6982,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileClUtilitiesCopyArray() throws Exception {
-		// The cl-utilities copy-array definition verbatim (todo 71 headline) on the
+		// The cl-utilities copy-array definition verbatim on the
 		// WASM backend: array-element-type, make-array :adjustable/:fill-pointer,
 		// array-has-fill-pointer-p, fill-pointer, adjustable-array-p, array-total-size
 		// and row-major-aref cooperating.
@@ -7155,7 +7149,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void linalgTransposeAxesPadIm2colWorkInPreview1Mode() throws Exception {
 		// Same program as the JVM compileAndRunLinalgTransposeAxesPadIm2col case:
-		// the ch07 CNN additions (todo-117) -- transpose with an axes list, np.pad's
+		// the ch07 CNN additions -- transpose with an axes list, np.pad's
 		// constant-0 mode, and the internal rank-4 %la-im2col/%la-col2im pair.
 		assertThat(compileAndRunLinalg("""
 				(defparameter *x* (linalg:reshape (linalg:arange 24) '(2 3 4)))
@@ -7458,7 +7452,7 @@ class WasmLispCompilerIntegrationTest {
 			.hasMessageContaining("progv");
 	}
 
-	// --- wasm-GC --simd (todo-105) ---------------------------------------------------
+	// --- wasm-GC --simd --------------------------------------------------------------
 
 	// Compiles a vec:-using program on the wasm-GC backend, with or without --simd, and
 	// runs it. Splices linalg.lisp then vec.lisp in RontoLispCli's order (the scalar vec:
@@ -7578,7 +7572,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void wasmGcSimdSingleFloatReductionsAccumulateInSinglePrecision() throws Exception {
-		// The wasm leg of the todo-106 precision contract: an #f reduction folds in f32
+		// The wasm leg of the --simd precision contract: an #f reduction folds in f32
 		// lanes and promotes only at the value boundary. wasm-GC has always done this;
 		// the interpreter and JVM kernels now do it too (they used to widen every lane
 		// to f64 first), so all four --simd backends print the same 16777984 here while
@@ -7650,13 +7644,13 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void wasmGcSimdPackedArraysAreCollectedRatherThanAccumulated() throws Exception {
-		// The point of todo-105. Each `vec:add` allocates a fresh 1048576-element packed
-		// array -- 8 MiB -- and drops the previous one; 700 of them is 5.6 GiB, MORE than
-		// the whole 4 GiB address space a wasm32 linear memory can ever reach. So this
-		// can
-		// only complete if the packed arrays are collected GC objects. todo-101's
-		// never-freed linear arena would trap on memory.grow long before the last
-		// iteration. (Peak RSS measured at ~83 MB, flat in the iteration count.)
+		// The point of putting the wasm-GC --simd packed arrays on the GC heap. Each
+		// `vec:add` allocates a fresh 1048576-element packed array -- 8 MiB -- and drops
+		// the previous one; 700 of them is 5.6 GiB, MORE than the whole 4 GiB address
+		// space a wasm32 linear memory can ever reach. So this can only complete if the
+		// packed arrays are collected GC objects; a never-freed linear arena would trap
+		// on memory.grow long before the last iteration. (Peak RSS measured at ~83 MB,
+		// flat in the iteration count.)
 		String source = """
 				(let* ((n 1048576) (b (vec:ones n)) (o (vec:zeros n)))
 				  (dotimes (i 700) (setq o (vec:add o b)))
@@ -7716,7 +7710,7 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(compileAndRunVec(INTO_LONGER_DESTINATION, false));
 	}
 
-	// The element-wise unary ufuncs (todo 109): every op at lengths on both sides of a
+	// The element-wise unary ufuncs: every op at lengths on both sides of a
 	// lane-group boundary, both widths (the signed operand is arange - 2, so the sign
 	// mix hits abs/negative/sign), exp over reciprocal's bounded (0, 1] range, log over
 	// strictly positive inputs, tanh over the sign mix plus its saturation and -0.0 (0.0
@@ -7793,7 +7787,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunVec(UNARY_UFUNCS, true)).isEqualTo(compileAndRunVec(UNARY_UFUNCS, false));
 	}
 
-	// The comparison-select ufuncs (todo 109 Phase 3): maximum/minimum over operands
+	// The comparison-select ufuncs: maximum/minimum over operands
 	// whose winner flips mid-vector, at lengths on both sides of a lane-group boundary
 	// and both widths (integer-valued inputs, exact at either width; the gt/lt lane
 	// mask + bitselect only copies input bits, so f32 lanes are bit-identical too);
@@ -7858,9 +7852,9 @@ class WasmLispCompilerIntegrationTest {
 		// out[row] folds over ALL of x, and the row windows keep reading W while the rows
 		// already computed are written back -- so `out` may alias neither. vec.lisp,
 		// JvmSimdVectorTemplate and VecSimd all signal an error; the emitted kernel
-		// traps.
-		// The v128 kernel REPLACES the vec.lisp defun, so its own guard is the only one
-		// that runs. (The `out` aliases `w` half was missing until todo-105.)
+		// traps. The v128 kernel REPLACES the vec.lisp defun, so its own guard is the
+		// only one that runs, and it must reject an `out` aliasing `w` as well as one
+		// aliasing `x`.
 		String aliasesW = "(let ((m #d((1.0 2.0) (3.0 4.0)))) (print (vec:matvec-into m m #d(5.0 6.0))))";
 		String aliasesX = "(let ((v #d(5.0 6.0))) (print (vec:matvec-into v #d((1.0 2.0) (3.0 4.0)) v)))";
 		for (String source : List.of(aliasesW, aliasesX)) {
@@ -7873,7 +7867,7 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("#d(17.0 39.0)");
 	}
 
-	// --- linalg: kernel interception under --simd (todo-107) ------------------------
+	// --- linalg: kernel interception under --simd ------------------------------------
 
 	/**
 	 * Asserts the accelerated wasm-GC module prints exactly what the scalar one prints.
@@ -7885,12 +7879,10 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void wasmGcSimdLinalgElementWiseAndShapeKernelsAreByteIdenticalToTheScalarPath() throws Exception {
-		// The regression fix (todo-107): before it, --simd switched the packed repr to a
+		// Guards the interception fix: before it, --simd switched the packed repr to a
 		// vblock and every linalg row-major-aref paid _v_get/_v_set for no v128 in
-		// return.
-		// Both widths, rank 1 and rank 2 (the case vec: never had), the scalar broadcast
-		// on
-		// either side, and above/below any lane-group boundary.
+		// return. Both widths, rank 1 and rank 2 (the case vec: never had), the scalar
+		// broadcast on either side, and above/below any lane-group boundary.
 		for (String op : List.of("add", "sub", "mul", "div")) {
 			assertLinalgMatchesTheScalarPath("(print (linalg:%s #d(1.0 2.0 3.0) #d(4.0 5.0 8.0)))".formatted(op));
 			assertLinalgMatchesTheScalarPath("(print (linalg:%s #f(1.0 2.0 3.0) #f(4.0 5.0 8.0)))".formatted(op));
@@ -7923,7 +7915,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void wasmGcSimdLinalgAxisFormsRunTheAxisKernelsAndMatchTheScalarPath() throws Exception {
-		// The axis forms are intercepted since the todo-117 follow-up: an axis call
+		// The axis forms are intercepted call shapes: an axis call
 		// routes to the SUM_AXIS/AMAX_AXIS/ARGMAX_AXIS kernels (a 2-argument call
 		// padded with a null keepdims), whose folds mirror %la-fold-axis /
 		// %la-argfold-axis exactly; a 1-arg call still hits the base kernel whose
@@ -8099,7 +8091,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void wasmGcSimdLinalgIm2colAndCol2imAreByteIdenticalToTheScalarPath() throws Exception {
-		// The internal CNN window unfolding pair (todo 117). Batch > 1, channels > 1,
+		// The internal CNN window unfolding pair. Batch > 1, channels > 1,
 		// stride > 1 and pad > 0 exercise the skipped padding rows and the clipped
 		// filter columns; col2im's overlapping windows (stride < filter) accumulate
 		// through the promoting _v_get / _v_set round trip, exactly the defun's
@@ -8121,7 +8113,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void wasmGcSimdLinalgSingleFloatReductionsAccumulateInSinglePrecision() throws Exception {
-		// The linalg leg of the todo-106 precision contract, and the only test here that
+		// The linalg leg of the --simd precision contract, and the only test here that
 		// proves the KERNEL ran rather than the defun -- a dead interception would print
 		// the scalar 16778239. The same numbers as eval/LinalgSimdTest and
 		// JvmLinalgSimdAccelCompilerTest, so the three --simd backends pin each other.
@@ -8167,7 +8159,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void wasmGcSimdLinalgUnaryUfuncsAreByteIdenticalToTheScalarPath() throws Exception {
-		// The named element-wise unary ufuncs (todo 109): both widths, rank 1 and rank 2,
+		// The named element-wise unary ufuncs: both widths, rank 1 and rank 2,
 		// exp over reciprocal's bounded range, the wasm defun's own signed-zero edges,
 		// and the declined inputs (general boxed arrays, plain numbers) running the
 		// defun. square / reciprocal are accelerated transitively through mul / div.
@@ -8223,7 +8215,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void wasmGcSimdLinalgComparisonSelectsAreByteIdenticalToTheScalarPath() throws Exception {
-		// The comparison-select ufuncs (todo 109 Phase 3): array-array at both widths
+		// The comparison-select ufuncs: array-array at both widths
 		// and rank 2 (lane gt/lt + bitselect), the f64 scalar broadcast on either side
 		// (the lane select), the f32 scalar broadcast against a NOT-f32-representable
 		// bound (the widened element loop), the strict-comparison ties/NaN edges, the
@@ -8268,11 +8260,11 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
-	// --- IEEE-754 float edge semantics (.todo/108 groups B2, C and E) ----------------
+	// --- IEEE-754 float edge semantics -----------------------------------------------
 
 	@Test
 	void unaryMinusOfFloatLiteralFormNegates() throws Exception {
-		// group B2: the double-literal fast path used to compile unary minus as identity
+		// The double-literal fast path used to compile unary minus as identity
 		assertThat(compileAndRun("(print (- 5.0))")).isEqualTo("-5.0");
 		assertThat(compileAndRun("(print (- (* 2.0 3.0)))")).isEqualTo("-6.0");
 		assertThat(compileAndRun("(print (- -1.5))")).isEqualTo("1.5");
@@ -8285,7 +8277,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (list (< (/ 0.0 0.0) 1.0) (<= (/ 0.0 0.0) 1.0) (> (/ 0.0 0.0) 1.0)"
 				+ " (>= (/ 0.0 0.0) 1.0) (= (/ 0.0 0.0) (/ 0.0 0.0))))"))
 			.isEqualTo("(nil nil nil nil nil)");
-		// group E: the no-literal forms used to funnel through the signum _rat_cmp,
+		// The no-literal forms used to funnel through the signum _rat_cmp,
 		// which answered "equal" for NaN; /= binds temps, so it ALWAYS took that path
 		assertThat(compileAndRun("(let ((n (/ 0.0 0.0)) (one 1.0))"
 				+ " (print (list (< n one) (<= n one) (> n one) (>= n one) (= n n) (/= n n))))"))
@@ -8296,7 +8288,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void floatPrinterHandlesSignedZeroInfinityNanAndLargeMagnitudes() throws Exception {
-		// group C (same root as .todo/46): the printer used to trap on |x| >= 2^31,
+		// The printer used to trap on |x| >= 2^31,
 		// on Infinity and on NaN, and dropped -0.0's sign (is_neg was `x < 0.0`)
 		assertThat(compileAndRun("(print -0.0)")).isEqualTo("-0.0");
 		assertThat(compileAndRun("(print (* -1.0 0.0))")).isEqualTo("-0.0");
@@ -8317,7 +8309,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (max -0.0 0.0))")).isEqualTo("0.0");
 	}
 
-	// --- Condition catching (todo 129): the wasm-EH mirrors of the JVM Phase 3 pins.
+	// --- Condition catching: the wasm-EH mirrors of the JVM handler-case pins.
 
 	@Test
 	void ehHandlerCaseCatchesTypedErrorByClass() throws Exception {

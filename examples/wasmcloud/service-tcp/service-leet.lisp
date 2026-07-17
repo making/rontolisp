@@ -6,7 +6,7 @@
 ;; Interpreter / JVM only: rontolisp:http-handler and the tcp built-ins
 ;; cannot be combined in one --component binary, and the wasmCloud v2 service
 ;; model (wasi:cli/run + wasi:sockets 0.2) does not match rontolisp's WASI
-;; 0.3 sockets -- see .todo/53-wasmcloud-template-gaps.md.
+;; 0.3 sockets.
 ;;
 ;; Connections are served one at a time (accept returns to the loop when the
 ;; client closes), which is enough for the per-request open/close pattern of

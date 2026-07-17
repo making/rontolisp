@@ -10,7 +10,7 @@
 ;; - Arrays are packed float arrays, DOUBLE by default: every allocation flows
 ;;   through the one linalg::%la-make funnel (make-array :element-type, an unboxed
 ;;   (array double-float) / (array single-float)), and element reads coerce to
-;;   double. linalg is width-polymorphic (todo-97): a constructor takes an
+;;   double. linalg is width-polymorphic: a constructor takes an
 ;;   optional element-type (default 'double-float; opt in with 'single-float for
 ;;   half the memory / 2x the SIMD lanes), and every transform PRESERVES its input
 ;;   width -- a #f (single-float) array stays #f through add/sub/mul/emap/transpose/
@@ -38,8 +38,8 @@
   ;; (#f); anything else (the nil default) a packed double-float array (#d). Both
   ;; make-array calls take a literal :element-type, so every backend --
   ;; interpreter, JVM AND wasm-GC -- picks the double[]/float[] (TYPE_F64ARR/
-  ;; F32ARR) representation statically; a runtime-computed element-type could not
-  ;; (see .todo/95, .todo/97). init is coerced to the element width.
+  ;; F32ARR) representation statically; a runtime-computed element-type could
+  ;; not. init is coerced to the element width.
   (if (eq element-type 'single-float)
       (make-array dims :element-type 'single-float :initial-element init)
       (make-array dims :element-type 'double-float :initial-element init)))
@@ -615,7 +615,7 @@
   ;; With no axes, the transpose of a matrix; a vector is returned unchanged
   ;; (like numpy). With an axes list (numpy x.transpose(1 0 2)), the rank-n
   ;; axis permutation: out-dims[k] = dims[axes[k]]. Both call forms are
-  ;; --simd-intercepted (the axes form since the todo-117 follow-up); a
+  ;; --simd-intercepted; a
   ;; non-permutation axes argument declines to this defun's error.
   (if axes
       (linalg::%la-transpose-axes a axes)
@@ -709,7 +709,7 @@
         ((>= k n) out)
       (setf (row-major-aref out k) (funcall f (row-major-aref a k))))))
 
-;; --- named elementwise ufuncs (numpy parity, todo 109) ------------------------
+;; --- named elementwise ufuncs (numpy parity) ----------------------------------
 ;; Each is a named emap so the common per-element operations need no boxed
 ;; funcall under --simd (the names are interceptable; emap itself never is).
 ;; square and reciprocal ride the mul/div kernels instead of needing their own.
@@ -782,11 +782,11 @@
   ;; Elementwise 1 / x (numpy np.reciprocal, float semantics).
   (linalg:div 1 a))
 
-;; --- comparison-select ufuncs (numpy parity, todo 109 Phase 3) ----------------
+;; --- comparison-select ufuncs (numpy parity) ----------------------------------
 ;; Defined by the strict comparison select, NOT a min/max primitive: the second
 ;; operand wins whenever the comparison is false -- ties (a -0.0 / 0.0 pair takes
 ;; the second) and unordered NaN comparisons included. Same rule as linalg:amax;
-;; > and < agree bit-for-bit across backends since todo-108.
+;; > and < agree bit-for-bit across backends.
 
 (defun linalg:maximum (a b)
   ;; Elementwise larger of a and b (numpy np.maximum); either may be a scalar.

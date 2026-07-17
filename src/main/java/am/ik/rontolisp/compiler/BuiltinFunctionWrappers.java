@@ -269,9 +269,9 @@ public final class BuiltinFunctionWrappers {
 
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
 			// Arithmetic: +/-/*// are variadic in CL, so their wrappers accept any arity
-			// (fixed-arity wrappers returned nil on JVM / trapped on WASM for a
-			// mismatched
-			// funcall/apply -- see .todo/64). - and / keep their one-argument semantics.
+			// (a fixed-arity wrapper returned nil on the JVM / trapped on WASM when
+			// funcall/apply passed a different argument count). - and / keep their
+			// one-argument semantics.
 			variadicIdentity(LispNames.ADD, new LispInteger(0)), variadicUnaryLeft(LispNames.SUB, new LispInteger(0)),
 			variadicIdentity(LispNames.MUL, new LispInteger(1)), variadicUnaryLeft(LispNames.DIV, new LispInteger(1)),
 			binary(LispNames.MOD), binary(LispNames.REM),

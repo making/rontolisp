@@ -127,7 +127,7 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdScaleInto"), cp.addUtf8(ternaryDesc))));
 		ops.put(LispNames.VEC_MATVEC_INTO,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdMatvecInto"), cp.addUtf8(ternaryDesc))));
-		// The element-wise unary ufuncs (todo 109): one operand (unary), or a
+		// The element-wise unary ufuncs: one operand (unary), or a
 		// destination plus one operand (binary) for the -into siblings.
 		ops.put(LispNames.VEC_EXP,
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdExp"), cp.addUtf8(unaryDesc))));
@@ -193,7 +193,7 @@ final class JvmSimdRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("simdSignInto"), cp.addUtf8(binaryDesc))));
 		ops.put(LispNames.VEC_RECIPROCAL_INTO, cp.addMethodref(bridgeClass,
 				cp.addNameAndType(cp.addUtf8("simdReciprocalInto"), cp.addUtf8(binaryDesc))));
-		// The comparison-select ufuncs (todo 109 Phase 3). vec:clip carries two scalar
+		// The comparison-select ufuncs. vec:clip carries two scalar
 		// bounds, so its -into sibling is the one four-argument bridge entry.
 		String quaternaryDesc = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 		ops.put(LispNames.VEC_MAXIMUM,
@@ -222,8 +222,8 @@ final class JvmSimdRuntimeBuilder {
 					+ ")Ljava/lang/Object;";
 			ops.put(JvmLinalgSimdCompiler.qualifiedName(member), cp.addMethodref(bridgeClass,
 					cp.addNameAndType(cp.addUtf8(JvmLinalgSimdCompiler.bridgeMethod(member)), cp.addUtf8(desc))));
-			// The axis-form kernels (todo 117 follow-up) ride the same bridge under a
-			// distinct ops key, one extra methodref per extended member.
+			// The &optional axis-form kernels ride the same bridge under a distinct
+			// ops key, one extra methodref per extended member.
 			JvmLinalgSimdCompiler.Extended ext = JvmLinalgSimdCompiler.extended(member);
 			if (ext != null) {
 				String extDesc = "(" + "Ljava/lang/Object;".repeat(ext.params()) + ")Ljava/lang/Object;";

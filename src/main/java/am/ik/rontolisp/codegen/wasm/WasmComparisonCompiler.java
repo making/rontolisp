@@ -26,7 +26,7 @@ final class WasmComparisonCompiler {
 		else {
 			// _rat_cmp_bits returns the comparison as a bitmask (1 = lt, 2 = eq,
 			// 4 = gt, 0 = unordered), so a NaN operand fails every operator. The old
-			// signum _rat_cmp against zero answered "equal" for NaN (todo-108 group E).
+			// signum _rat_cmp against zero answered "equal" for NaN.
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
 			ctx.writer.write(am.ik.wasm.Instruction.CALL);

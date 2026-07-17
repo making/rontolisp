@@ -18,12 +18,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The acceptance test of {@code rontolisp:wit-import} (todo 127): a program that declares
- * a WIT interface must compile, on Preview 1 WASM, to the <strong>byte-identical</strong>
- * module the equivalent hand-written {@code rontolisp:wasm-import} block produces. The
- * directive is a compile-time front-end for machinery that already exists -- if a single
- * byte moved, it would be a new import path instead of a typed front-end for the one we
- * have.
+ * The acceptance test of {@code rontolisp:wit-import} ({@code .kb/wit.md}): a program
+ * that declares a WIT interface must compile, on Preview 1 WASM, to the
+ * <strong>byte-identical</strong> module the equivalent hand-written
+ * {@code rontolisp:wasm-import} block produces. The directive is a compile-time front-end
+ * for machinery that already exists -- if a single byte moved, it would be a new import
+ * path instead of a typed front-end for the one we have.
  *
  * <p>
  * Both halves of each A/B pair are compiled in the same JVM, from the same body apart

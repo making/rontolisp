@@ -271,8 +271,7 @@ public final class LoadInliner {
 		// the
 		// duration of load. Files that never change the package (the common case -- a
 		// plain
-		// file of defuns) are spliced verbatim, so their output is unchanged. See
-		// .todo/83.
+		// file of defuns) are spliced verbatim, so their output is unchanged.
 		boolean bracket = selectsAPackage(forms);
 		if (bracket) {
 			out.add(marker(LispNames.PUSH_PACKAGE));

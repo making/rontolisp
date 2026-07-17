@@ -170,7 +170,7 @@ class NoGcWasmCompilerTest {
 	@Test
 	void memoryUsingModuleKeepsTheHeapResetWrapperForALongExport() {
 		// A string literal makes the module use linear memory, so a scalar-return
-		// export must keep its wrapper for the bump-heap reset (todo 88) even when the
+		// export must keep its wrapper for the bump-heap reset even when the
 		// host signature matches the internal one exactly.
 		byte[] module = compile("""
 				(defun withlit (a) (+ a (length "hello")))
@@ -387,9 +387,8 @@ class NoGcWasmCompilerTest {
 	void scalarReturnExportResetsTheBumpHeapAtWrapperExit() {
 		// A :string param copies the host bytes into a fresh internal [len][bytes] header
 		// via __ronto_alloc inside the wrapper; with a scalar return that copy is dead
-		// the
-		// moment the call returns, so the wrapper snapshots and restores heap global 0
-		// (todo 88). Assert both :int and :long returns carry the reset in the wrapper
+		// the moment the call returns, so the wrapper snapshots and restores heap
+		// global 0. Assert both :int and :long returns carry the reset in the wrapper
 		// body.
 		for (String ret : List.of(":int", ":long")) {
 			byte[] module = compile("""
@@ -422,7 +421,7 @@ class NoGcWasmCompilerTest {
 	@Test
 	void pureNumericExportEmitsNoHeapReset() {
 		// A pure-numeric export has no linear memory at all (no global 0 exists), so no
-		// reset is emitted -- the wrapper is byte-for-byte the pre-todo-88 shape.
+		// reset is emitted -- the wrapper carries no snapshot/restore pair at all.
 		byte[] module = compile("""
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
 				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
@@ -437,7 +436,7 @@ class NoGcWasmCompilerTest {
 	@Test
 	void stringModuleExportsTheHostArenaApi() {
 		// A module that uses linear memory exports the two arena functions
-		// (__ronto_alloc_mark / __ronto_alloc_reset, todo 89) alongside memory and
+		// (__ronto_alloc_mark / __ronto_alloc_reset) alongside memory and
 		// __ronto_alloc, so a resident host can bracket its own input allocation.
 		byte[] module = compile("""
 				(defun count-vowels (s)
@@ -452,7 +451,7 @@ class NoGcWasmCompilerTest {
 	@Test
 	void pureNumericModuleOmitsTheHostArenaApi() {
 		// No linear memory (no heap-pointer global exists), so neither arena function is
-		// emitted -- a pure-numeric module stays byte-identical to the pre-todo-89 shape.
+		// emitted -- a pure-numeric module exports neither the mark nor the reset.
 		byte[] module = compile("""
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
 				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
@@ -482,8 +481,7 @@ class NoGcWasmCompilerTest {
 		assertThat(reset).containsExactly(0x00, 0x20, 0x00, 0x24, 0x00, 0x0B);
 	}
 
-	// --- print / stdout (todo 110)
-	// -------------------------------------------------------
+	// --- print / stdout --------------------------------------------------------------
 
 	// The exact import-section payload a printing module must carry: exactly one entry,
 	// (import "wasi_snapshot_preview1" "fd_write" (func (type 0))).
@@ -505,8 +503,8 @@ class NoGcWasmCompilerTest {
 	void printGatesTheFdWriteImportOnAndOff() {
 		// The SAME defun with and without the print: only the printing build gains an
 		// import section, and its bytes are exactly the single fd_write entry. This pins
-		// the todo-110 contract in both directions: a print-free program keeps ZERO
-		// imports (the todo-93 adapter-free-component foundation), a printing program
+		// the contract in both directions: a print-free program keeps ZERO imports
+		// (the foundation of the adapter-free --no-gc component), a printing program
 		// imports exactly wasi_snapshot_preview1.fd_write.
 		byte[] printing = compile("""
 				(defun show (n) (print n) n)
@@ -563,7 +561,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void princToStringOfAFloatNowCompiles() {
-		// todo 110: the __ftoa port lifts the old "no float printer in scalar mode"
+		// The __ftoa port lifts the old "no float printer in scalar mode"
 		// error; a float renders through the same digit-extraction algorithm as the GC
 		// backend. No print op is involved, so the module still has ZERO imports.
 		byte[] module = compile("""
@@ -589,8 +587,7 @@ class NoGcWasmCompilerTest {
 				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("packed float array");
 	}
 
-	// --- with-arena (todo 104 / 110)
-	// -----------------------------------------------------
+	// --- with-arena ------------------------------------------------------------------
 
 	@Test
 	void withArenaCompilesForScalarStringAndPackedResults() {
@@ -782,8 +779,7 @@ class NoGcWasmCompilerTest {
 
 	// True if the body contains both a global.get 0 (0x23 0x00) and a global.set 0
 	// (0x24 0x00) -- the heap snapshot/restore pair. The wrapper never calls the
-	// allocator
-	// inline, so its only global ops are the todo-88 reset.
+	// allocator inline, so its only global ops are the heap reset.
 	private static boolean containsGlobalReset(byte[] body) {
 		boolean getGlobal0 = false;
 		boolean setGlobal0 = false;
@@ -861,7 +857,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void rank3MakeArrayIsAClearCompileError() {
-		// Rank-2 became the packed matrix layout (todo 99); rank >= 3 still has no packed
+		// Rank-2 is the packed matrix layout; rank >= 3 still has no packed
 		// layout on this backend.
 		assertThatThrownBy(() -> compile("""
 				(defun f () (aref (make-array '(2 3 4) :element-type 'double-float) 0))
@@ -873,7 +869,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void rank2MakeArrayCompilesToThePackedMatrixLayout() {
-		// (make-array (list d n)) builds the [rows][cols][data] packed matrix (todo 99):
+		// (make-array (list d n)) builds the [rows][cols][data] packed matrix:
 		// two-subscript aref/setf and a flat row-major-aref compile to a plain scalar
 		// module -- linear memory, scalar func types only, no 0xFD SIMD opcode.
 		byte[] module = compile("""
@@ -1000,7 +996,7 @@ class NoGcWasmCompilerTest {
 			.isTrue();
 	}
 
-	// --- destination-passing kernels (todo 103) --------------------------------------
+	// --- destination-passing kernels -------------------------------------------------
 
 	@Test
 	void intoKernelsCallTheBumpAllocatorOnlyForTheConstructors() {
@@ -1070,7 +1066,7 @@ class NoGcWasmCompilerTest {
 		assertThat(allocCallCount(compile(source))).as("only the two constructors allocate").isEqualTo(2);
 	}
 
-	// --- element-wise unary ufuncs (todo 109) ------------------------------------------
+	// --- element-wise unary ufuncs ---------------------------------------------------
 
 	@Test
 	void unaryUfuncsEmitV128UnderSimdAndScalarLoopsByDefault() {
@@ -1133,7 +1129,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void expAndSignLowerNativelyOnNoGc() {
-		// Decision (a) of todo 109 Phase 1.5: vec:exp / vec:sign (and -into) reuse the
+		// vec:exp / vec:sign (and -into) reuse the
 		// GC backend's raw-f64 emitters (WasmVecSimdRuntimeBuilder.emitExpF64 /
 		// emitSignumF64), so BOTH lowerings drive the same scalar element loop -- no
 		// 0xFD SIMD opcode even under --simd, and the exp argument-reduction constant
@@ -1170,7 +1166,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void logAndTanhLowerNativelyOnNoGc() {
-		// todo 109 Phase 2: vec:log / vec:tanh (and -into) reuse the GC backend's
+		// vec:log / vec:tanh (and -into) reuse the GC backend's
 		// raw-f64 emitters (WasmVecSimdRuntimeBuilder.emitLogF64 / emitTanhF64), so
 		// BOTH lowerings drive the same scalar element loop -- no 0xFD SIMD opcode even
 		// under --simd, and the log mantissa-normalization constant (f64.const sqrt(2),
@@ -1207,7 +1203,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void sinCosTanLowerNativelyOnNoGc() {
-		// todo 109 Phase 2 second release: vec:sin / vec:cos / vec:tan (and -into)
+		// vec:sin / vec:cos / vec:tan (and -into)
 		// reuse the GC backend's raw-f64 emitter (WasmVecSimdRuntimeBuilder
 		// .emitSinCosF64), so BOTH lowerings drive the same scalar element loop -- no
 		// 0xFD SIMD opcode even under --simd, and the Cody-Waite reduction constant
@@ -1244,7 +1240,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void arcAndHyperbolicLowerNativelyOnNoGc() {
-		// todo 109 Phase 2 third release: vec:asin / vec:acos / vec:atan / vec:sinh /
+		// vec:asin / vec:acos / vec:atan / vec:sinh /
 		// vec:cosh (and -into) reuse the GC backend's raw-f64 emitters
 		// (WasmVecSimdRuntimeBuilder.emitAtanFamilyF64 / emitSinhCoshF64), so BOTH
 		// lowerings drive the same scalar element loop -- no 0xFD SIMD opcode even
@@ -1296,7 +1292,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void comparisonSelectsLowerNativelyOnNoGc() {
-		// todo 109 Phase 3: vec:maximum / vec:minimum / vec:relu / vec:clip (and
+		// vec:maximum / vec:minimum / vec:relu / vec:clip (and
 		// -into) are strict-comparison selects. Without --simd they are scalar
 		// compare+select loops -- the f64.gt/f64.lt + select pairs appear and no 0xFD
 		// SIMD opcode does; under --simd, maximum/minimum/relu become gt/lt lane masks
@@ -1348,7 +1344,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void matvecOnARankOneVectorIsAClearCompileError() {
-		// matvec is GEMV over a rank-2 packed matrix (todo 99); passing a rank-1 vector
+		// matvec is GEMV over a rank-2 packed matrix; passing a rank-1 vector
 		// as W is a clear error, for matvec and matvec-into alike.
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (vec:sum (vec:matvec (vec:zeros n) (vec:zeros n))))
@@ -1366,7 +1362,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void matvecEmitsPerRowV128DotUnderSimdAndScalarLoopsByDefault() {
-		// The GEMV kernel (todo 99) runs one dot per matrix row: under --simd the same
+		// The GEMV kernel runs one dot per matrix row: under --simd the same
 		// f64x2 lane loop vec:dot uses (splat accumulator 0xFD 0x14, lane multiply 0xFD
 		// 0xF2 (LEB 0xF2 0x01), horizontal extract_lane 0xFD 0x21); without --simd a
 		// v128-free scalar loop, so the module stays MVP-clean.
@@ -1508,7 +1504,7 @@ class NoGcWasmCompilerTest {
 				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("portable backends only");
 	}
 
-	// --- packed single-float vectors (F32VEC, todo-95 Phase 5) -------------------------
+	// --- packed single-float vectors (F32VEC) ----------------------------------------
 
 	@Test
 	void packedSingleFloatVectorUsesLinearMemoryWithScalarTypesOnly() {
@@ -1659,8 +1655,7 @@ class NoGcWasmCompilerTest {
 				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("incompatible types");
 	}
 
-	// --- --no-gc --component (compact reactor component, todo 93)
-	// -----------------------
+	// --- --no-gc --component (compact reactor component) ------------------------------
 
 	// Compiles in component mode: the same MVP core module wrapped as a reactor-style
 	// component whose scalar exports are typed component-model exports.
@@ -1767,7 +1762,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void componentPrintComposesWithStringExports() {
-		// Print + :string in one component: the canonical string ABI (todo 93 Tier 2)
+		// Print + :string in one component: the canonical string ABI
 		// lifts over the core's own memory, which the print wiring has already aliased
 		// as core memory 0 -- so exactly ONE memory alias exists, and the core module
 		// carries the cabi_* exports next to its fd_write import.
@@ -1804,7 +1799,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void componentStringExportAppendsTheCanonicalStringAbi() {
-		// A :string boundary under --component (todo 93 Tier 2) appends the canonical
+		// A :string boundary under --component appends the canonical
 		// string ABI to the core module: cabi_realloc (the host lowers string arguments
 		// through it), the shared cabi_post_i32 post-return, and a retptr shim exported
 		// under the export name (the canonical ABI caps flat results at one, so a

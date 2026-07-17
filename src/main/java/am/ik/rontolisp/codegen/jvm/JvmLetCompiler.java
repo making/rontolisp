@@ -105,8 +105,8 @@ final class JvmLetCompiler {
 				// The boxed set tracks names, so this binding's boxedness must
 				// REPLACE a shadowed outer binding's: a raw closure stored under a
 				// name whose outer binding was boxed would otherwise be cell-read in
-				// the body (.todo/62). Updated only after the init compiled, so the
-				// init (evaluated in the outer scope, e.g. a lambda capturing the
+				// the body. Updated only after the init compiled, so the init
+				// (evaluated in the outer scope, e.g. a lambda capturing the
 				// same-named outer variable) still sees the outer boxedness.
 				if (capturedInLet.contains(name)) {
 					ctx.boxedVars.add(name);

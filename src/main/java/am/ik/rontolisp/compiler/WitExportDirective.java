@@ -52,10 +52,11 @@ import org.jspecify.annotations.Nullable;
  * </ul>
  *
  * <p>
- * The world's <em>import</em> side is not a contract yet: {@code import} items are
- * ignored (a component's WASI imports come from the fixed adapter surface), and binding a
- * world's imports to host functions is {@code .todo/127} / {@code .todo/128}. An inline
- * {@code import name: func(...)} is rejected rather than silently dropped.
+ * This directive covers the export side only. A world's {@code import} interface items
+ * are ignored here (a component's WASI imports come from the fixed adapter surface); the
+ * interfaces a program calls are declared with {@code rontolisp:wit-import}, which binds
+ * them per backend. An inline {@code import name: func(...)} is rejected rather than
+ * silently dropped.
  *
  * <p>
  * This class does no I/O and no codegen: the caller reads the WIT text (so the browser
@@ -403,7 +404,7 @@ public final class WitExportDirective {
 	}
 
 	// Names the WIT type and its settled house representation, so the error says what the
-	// value WOULD be once .todo/128 lands rather than just refusing.
+	// value WOULD be once the export boundary can marshal it, rather than just refusing.
 	private static String describe(WitType type) {
 		try {
 			return WitTypeMapper.rep(type).name();

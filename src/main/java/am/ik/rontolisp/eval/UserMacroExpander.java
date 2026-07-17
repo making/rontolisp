@@ -368,7 +368,7 @@ public final class UserMacroExpander {
 		// The %push-package/%pop-package markers LoadInliner brackets a loaded file with
 		// are package directives too: the macro evaluator's resolver must track their
 		// save/restore so a defmacro after a load resolves in the caller's package, and
-		// they are kept verbatim for the compilers' own resolution pass (see .todo/83).
+		// they are kept verbatim for the compilers' own resolution pass.
 		return LispNames.IN_PACKAGE.equals(member) || LispNames.DEFPACKAGE.equals(member)
 				|| LispNames.PUSH_PACKAGE.equals(member) || LispNames.POP_PACKAGE.equals(member);
 	}

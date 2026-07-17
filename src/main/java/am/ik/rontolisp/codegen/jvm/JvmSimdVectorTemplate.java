@@ -188,7 +188,7 @@ final class JvmSimdVectorTemplate {
 		return r;
 	}
 
-	// --- comparison-select ufuncs (todo 109 Phase 3) --------------------------------
+	// --- comparison-select ufuncs ---------------------------------------------------
 	// maximum / minimum / relu / clip mirror the vec.lisp comparison selects
 	// ((if (> x y) x y) and its mirrors), never Math.max / Math.min (different NaN /
 	// -0.0 handling: the select keeps the SECOND operand or the bound on any false
@@ -440,10 +440,10 @@ final class JvmSimdVectorTemplate {
 	}
 
 	// --- destination-passing kernels (write into out, allocate nothing) -----------
-	// The -into siblings of the four element-wise kernels and matvec (todo 103). Each
-	// returns the destination it was given, so a hot loop allocates no packed vector at
-	// all. The element-wise ones tolerate out == a and/or out == b: within one lane block
-	// the reads precede the store at the same indices, so in-place accumulation
+	// The -into siblings of the four element-wise kernels and matvec. Each returns the
+	// destination it was given, so a hot loop allocates no packed vector at all. The
+	// element-wise ones tolerate out == a and/or out == b: within one lane block the
+	// reads precede the store at the same indices, so in-place accumulation
 	// (vec:add-into acc acc d) is well-defined. matvec-into cannot: out[row] is a fold
 	// over ALL of x, so a store would clobber an element a later row still reads --
 	// hence the identity guard, mirroring the eq check in the scalar vec.lisp defun
@@ -653,7 +653,7 @@ final class JvmSimdVectorTemplate {
 		return out;
 	}
 
-	// --- element-wise unary ufuncs (todo 109) --------------------------------------
+	// --- element-wise unary ufuncs -------------------------------------------------
 	// exp / sqrt / abs / negative / sign / reciprocal, each with an -into sibling that
 	// writes into the caller's destination (which MAY alias the operand -- element i
 	// depends only on element i, the add-into rule; the guard comment is repeated here
@@ -701,8 +701,7 @@ final class JvmSimdVectorTemplate {
 	private static final int UOP_COSH = 15;
 
 	/**
-	 * {@code (if (> x 0.0) x 0.0)}: the comparison select, not Math.max (todo 109 Phase
-	 * 3).
+	 * {@code (if (> x 0.0) x 0.0)}: the comparison select, not Math.max.
 	 */
 	private static final int UOP_RELU = 16;
 
@@ -1009,10 +1008,10 @@ final class JvmSimdVectorTemplate {
 	// pair declines rather than signalling.
 	//
 	// Precision matches the interpreter's LinalgSimdKernels everywhere:
-	// amax/amin/argmax/argmin compare with the plain IEEE `>`, which since the todo-108
-	// fixes is every backend's `>` on two doubles (interpreter compareNumeric, the
-	// JVM's DCMPG/DCMPL + _cmpb, wasm's f64.gt), so ties, -0.0 and NaN agree with the
-	// scalar defun on all of them.
+	// amax/amin/argmax/argmin compare with the plain IEEE `>`, which is every backend's
+	// `>` on two doubles (interpreter compareNumeric, the JVM's DCMPG/DCMPL + _cmpb,
+	// wasm's f64.gt) -- their edge semantics were reconciled, so ties, -0.0 and NaN
+	// agree with the scalar defun on all of them.
 
 	private static final int OP_ADD = 0;
 
@@ -1022,7 +1021,7 @@ final class JvmSimdVectorTemplate {
 
 	private static final int OP_DIV = 3;
 
-	// The comparison selects (todo 109 Phase 3): scalar loops only -- the lane blocks
+	// The comparison selects: scalar loops only -- the lane blocks
 	// below are gated to op <= OP_DIV, and laApply mirrors the %la-bcast lambdas
 	// ((if (> x y) x y) / (if (< x y) x y)). NOT commutative on ties and NaN (the
 	// second operand wins on a false comparison), so the scalar-on-the-left shape must
@@ -1057,7 +1056,7 @@ final class JvmSimdVectorTemplate {
 		return laElementwise(OP_MIN, a, b);
 	}
 
-	// The named element-wise unary ufuncs (todo 109): the vec: unary loops at the
+	// The named element-wise unary ufuncs: the vec: unary loops at the
 	// operand's own header offset, PARTIAL like every linalg kernel (a general boxed
 	// array or a plain number declines to the defun), and the result keeps the
 	// operand's rank-n header (laNewLike). linalg:square / linalg:reciprocal have no
@@ -1147,8 +1146,8 @@ final class JvmSimdVectorTemplate {
 		if (a instanceof double[] x) {
 			if (b instanceof double[] y) {
 				// Two same-width arrays of different shapes broadcast by the numpy
-				// rules (todo 117 follow-up); an incompatible pair declines so the
-				// defun signals its own shape-mismatch error.
+				// rules; an incompatible pair declines so the defun signals its own
+				// shape-mismatch error.
 				return laSameDims(x, y) ? laEwDD(op, x, y) : laBcastDD(op, x, y);
 			}
 			if (b instanceof float[]) {
@@ -1887,7 +1886,7 @@ final class JvmSimdVectorTemplate {
 		return m;
 	}
 
-	// --- declined-shape follow-up (todo 117): broadcast / axes transpose / axis folds
+	// --- the declined call shapes: broadcast / axes transpose / axis folds ----------
 	// Pure scalar loops mirroring the linalg.lisp defuns element for element -- no
 	// lanes. Every element is read widened to double, the operation runs in double, and
 	// only a store into a single-float result narrows (the oracle's widen-compute-narrow
@@ -2334,7 +2333,7 @@ final class JvmSimdVectorTemplate {
 		return r;
 	}
 
-	// --- CNN window unfolding: %la-im2col / %la-col2im (todo 117) -------------------
+	// --- CNN window unfolding: %la-im2col / %la-col2im ------------------------------
 	// Pure index arithmetic mirroring the linalg.lisp defuns loop for loop -- no lanes,
 	// just compiled loops in place of the boxed defun (im2col dominated the accelerated
 	// convolution runs). im2col only copies elements; col2im accumulates two same-width

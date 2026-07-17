@@ -31,8 +31,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * a type error), a {@code float[]} element widens f32-&gt;f64 on read and narrows
  * f64-&gt;f32 on write, and {@code array-element-type} reports
  * {@code double-float}/{@code
- * single-float}. {@code --simd} acceleration over the same backing arrays is a follow-up
- * (see {@code .todo/95}).
+ * single-float}. {@code --simd} acceleration over the same backing arrays is pinned
+ * separately, by {@link JvmSimdAccelCompilerTest}.
  */
 class JvmFloatArrayTest {
 

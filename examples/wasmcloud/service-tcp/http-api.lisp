@@ -8,7 +8,7 @@
 ;;   unknown path -> 404 "Not found"
 ;;
 ;; Interpreter / JVM only: serving and the tcp built-ins cannot be combined
-;; in one --component binary -- see .todo/53-wasmcloud-template-gaps.md.
+;; in one --component binary.
 ;;
 ;; Run (start service-leet.lisp first; then, interpreter):
 ;;   rontolisp examples/wasmcloud/service-tcp/http-api.lisp

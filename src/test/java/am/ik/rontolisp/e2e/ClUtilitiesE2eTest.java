@@ -4,11 +4,11 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * The {@code .todo/65} integration target: the REAL cl-utilities v1.2.4 sources (vendored
- * unmodified under {@code src/test/resources/cl-utilities}, public domain) load via
- * {@code asdf:load-system} and their whole public API works -- its own split-sequence
- * (which goes through {@code apply #'position} with runtime keywords), the extremum
- * family (nested-backquote {@code once-only}/{@code with-check-length} templates
+ * An ASDF subset integration target ({@code .kb/asdf.md}): the REAL cl-utilities v1.2.4
+ * sources (vendored unmodified under {@code src/test/resources/cl-utilities}, public
+ * domain) load via {@code asdf:load-system} and their whole public API works -- its own
+ * split-sequence (which goes through {@code apply #'position} with runtime keywords), the
+ * extremum family (nested-backquote {@code once-only}/{@code with-check-length} templates
  * referencing package-internal helpers), {@code read-delimited} ({@code read-char} +
  * {@code multiple-value-setq} + {@code (setf (elt ...))}), {@code expt-mod}, the
  * tail-collecting {@code collecting}/{@code with-collectors},

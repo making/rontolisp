@@ -42,7 +42,7 @@ import org.jspecify.annotations.Nullable;
  * ({@code i64}/{@code f64}/linear-memory pointers) rather than GC heap objects; this
  * "scalar" is the <em>value model</em> and is orthogonal to hardware SIMD -- the
  * vectorizable {@code vec:} kernels lower to plain scalar loops by default and to native
- * v128 ({@code f64x2}/{@code f32x4}) under {@code --simd} (see {@code .todo/100}).
+ * v128 ({@code f64x2}/{@code f32x4}) under {@code --simd}.
  *
  * <p>
  * Unlike {@link WasmLispCompiler}, whose value model <em>is</em> wasm-GC (integers are
@@ -131,7 +131,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		 * rank discriminator is needed. Built only by a rank-2 {@code make-array}; read
 		 * by two-subscript {@code aref}/{@code aset}, flat {@code row-major-aref}/
 		 * {@code %row-major-aset} and the {@code vec:matvec} GEMV kernel (the reason
-		 * rank-2 exists here at all -- see {@code .todo/99}).
+		 * rank-2 exists here at all).
 		 */
 		F64MAT,
 		/**
@@ -210,16 +210,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * {@code --no-gc --simd}) they lower to native v128. The {@code [count][data]} block
 	 * layout is byte-identical either way -- only the loop body differs -- so a scalar
 	 * and a v128 module compute the same result over the same memory (element-wise ops
-	 * bit-for-bit; reductions modulo summation order). This SIMD switch is orthogonal to
-	 * the non-GC value model (see {@code .todo/100}).
+	 * bit-for-bit; reductions modulo summation order). This SIMD switch is the one
+	 * orthogonal acceleration flag shared by every backend, independent of the non-GC
+	 * value model. See {@code .kb/vec.md}.
 	 */
 	private final boolean simd;
 
 	/**
 	 * Whether to wrap the finished MVP core module as a reactor-style WASM component (the
-	 * CLI's {@code --no-gc --component}, {@code .todo/93}): every scalar export is
-	 * additionally exposed as a typed component-model export via a synchronous
-	 * {@code canon lift} ({@link NoGcWasmComponentBuilder}), callable with
+	 * CLI's {@code --no-gc --component}): every scalar export is additionally exposed as
+	 * a typed component-model export via a synchronous {@code canon lift}
+	 * ({@link NoGcWasmComponentBuilder}), callable with
 	 * {@code wasmtime run --invoke 'name(args)'} and no extra flags. The wrap is a pure
 	 * post stage -- the core module inside the component is byte-identical to the
 	 * non-component output (a printing program's single {@code fd_write} import is
@@ -254,7 +255,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * native WASM v128 SIMD ({@code f64x2}/{@code f32x4}); when {@code false} they lower
 	 * to scalar linear-memory loops that need no SIMD proposal. This is the
 	 * {@code --simd} switch wired on the {@code --no-gc} backend, orthogonal to the
-	 * memory model ({@code .todo/100}).
+	 * memory model.
 	 */
 	public NoGcWasmCompiler(boolean optimize, boolean simd) {
 		this(optimize, simd, false);
@@ -450,9 +451,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	/**
 	 * Validates an export directive against the {@code --component} constraints: a
 	 * lower-kebab-case export name (the component-model {@code label} grammar).
-	 * {@code :string} lifts through the canonical string ABI (todo 93 Tier 2);
-	 * {@code :s-expr} is already rejected for every {@code --no-gc} output by
-	 * {@link #validateScalarTypes}.
+	 * {@code :string} lifts through the canonical string ABI; {@code :s-expr} is already
+	 * rejected for every {@code --no-gc} output by {@link #validateScalarTypes}.
 	 * @param decl the parsed export directive
 	 */
 	private static void validateComponentExport(WasmExportCompiler.Decl decl) {
@@ -908,8 +908,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * ({@code print}/{@code princ}/{@code terpri}); only then does the module import
 	 * {@code wasi_snapshot_preview1.fd_write} (shifting every function index by
 	 * {@code funcBase} = 1) and emit the {@code __write_stdout} funnel -- a print-free
-	 * program keeps zero imports and stays byte-identical (todo 110, preserving the
-	 * todo-93 adapter-free-component foundation).
+	 * program keeps zero imports and stays byte-identical, so the {@code --component}
+	 * wrap needs no adapter for it.
 	 *
 	 * @param literals string-literal content to its header address in the data segment
 	 * @param data the static data-segment bytes (laid out from {@code dataBase})
@@ -965,10 +965,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		for (String name : reachable) {
 			collectLiterals(progn(Objects.requireNonNull(defuns.get(name)).body()), literals);
 		}
-		// Printing (todo 110): print/princ/terpri gate the fd_write import and the
-		// __write_stdout funnel; a rendered FLOAT (print/princ/princ-to-string of a f64)
-		// additionally gates the __ftoa helper. Both add their fixed text fragments to
-		// the literal pool ONLY when used, so a print-free module keeps its exact bytes.
+		// Printing: print/princ/terpri gate the fd_write import and the __write_stdout
+		// funnel; a rendered FLOAT (print/princ/princ-to-string of a f64) additionally
+		// gates the __ftoa helper. Both add their fixed text fragments to the literal
+		// pool ONLY when used, so a print-free module keeps its exact bytes.
 		boolean printUsed = false;
 		for (String name : reachable) {
 			if (usesPrintOp(progn(Objects.requireNonNull(defuns.get(name)).body()))) {
@@ -1056,19 +1056,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int memcpyIndex = allocIndex + 1;
 		int streqIndex = memcpyIndex + 1;
 		int itoaIndex = streqIndex + 1;
-		// The host arena API (todo 89): two more exported functions over the same
-		// heap-pointer global, appended after the four string helpers. --no-gc has no
-		// fixed-index invariant, so appending is free (nothing renumbers).
+		// The host arena API __ronto_alloc_mark/_reset: two more exported functions over
+		// the same heap-pointer global, appended after the four string helpers. --no-gc
+		// has no fixed-index invariant, so appending is free (nothing renumbers).
 		int markIndex = itoaIndex + 1;
 		int resetIndex = markIndex + 1;
-		// The todo-110 printing helpers append after the arena pair, again gated.
+		// The printing helpers append after the arena pair, again gated.
 		int ftoaIndex = ftoaUsed ? resetIndex + 1 : -1;
 		int writeStdoutIndex = printUsed ? (ftoaUsed ? ftoaIndex + 1 : resetIndex + 1) : -1;
 		return new Mem(offsets, data.toByteArray(), STR_DATA_BASE, heapBase, iovAddr, funcBase, allocIndex, memcpyIndex,
 				streqIndex, itoaIndex, markIndex, resetIndex, ftoaIndex, writeStdoutIndex, used, printUsed, ftoaUsed);
 	}
 
-	/** The printing operators that gate the fd_write import (todo 110). */
+	/** The printing operators that gate the fd_write import. */
 	private static final Set<String> PRINT_OPS = Set.of(LispNames.PRINT, LispNames.PRINC, LispNames.TERPRI);
 
 	private static boolean usesPrintOp(LispVal v) {
@@ -1166,13 +1166,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// The local (non-imported) function count: internals, the emitted wrappers
 		// (pass-through exports have none and name their internal function directly),
 		// then the six memory helpers (when memory is used), then __ftoa /
-		// __write_stdout (when a float is rendered / when printing is used; todo 110).
+		// __write_stdout (when a float is rendered / when printing is used).
 		// A memory-using module emits a wrapper for EVERY export (the heap reset /
 		// marshalling), so the helper indices planned in planMemory over
 		// exportDecls.size() stay correct.
 		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 6 : 0) + (mem.ftoaUsed() ? 1 : 0)
 				+ (mem.printUsed() ? 1 : 0);
-		// Canonical string ABI for --component :string exports (todo 93 Tier 2):
+		// Canonical string ABI for --component :string exports:
 		// cabi_realloc (the host lowers string arguments through it), one retptr shim
 		// per :string-RETURNING export (MAX_FLAT_RESULTS = 1, so the lifted core
 		// function returns a single i32 pointing at an 8-byte (ptr,len) record instead
@@ -1230,7 +1230,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					typeSec.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
 					typeSec.addFunc(new Type[] { Type.I64 }, new Type[] { Type.I32 });
 					// __ronto_alloc_mark () -> i32 and __ronto_alloc_reset (i32) -> ()
-					// (the host arena API; todo 89).
+					// (the host arena API).
 					typeSec.addFunc(new Type[0], new Type[] { Type.I32 });
 					typeSec.addFunc(new Type[] { Type.I32 }, new Type[0]);
 				}
@@ -1256,7 +1256,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 			});
 		// Import section: exactly the one fd_write, and only when the program prints.
-		// A print-free module keeps zero imports (todo 93's adapter-free foundation).
+		// A print-free module keeps zero imports, so its --component wrap needs no
+		// adapter.
 		if (mem.printUsed()) {
 			// Type index 0: the fd_write signature was added first above.
 			w.writeImportSection(
@@ -1296,9 +1297,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				if (mem.used()) {
 					exports.addExport("memory", ExternalKind.MEMORY, 0);
 					exports.addExport("__ronto_alloc", ExternalKind.FUNCTION, mem.allocIndex());
-					// The host arena API (todo 89): snapshot the bump-heap top before the
-					// host allocates its own input buffer, then restore it after the call
-					// so a
+					// The host arena API: snapshot the bump-heap top before the host
+					// allocates its own input buffer, then restore it after the call so a
 					// resident instance stays flat regardless of how many times it is
 					// called.
 					exports.addExport("__ronto_alloc_mark", ExternalKind.FUNCTION, mem.markIndex());
@@ -1582,12 +1582,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return withLocals(b.toByteArray(), List.of(Ty.INT, Ty.STRING, Ty.STRING, Ty.STRING));
 	}
 
-	// __ronto_alloc_mark() -> i32: the host arena API (todo 89). Returns the current
-	// bump-heap top (heap-pointer global 0). A resident host snapshots this BEFORE it
-	// allocates its own input buffer with __ronto_alloc, then pops back to it with
-	// __ronto_alloc_reset after the call, so a repeatedly-called instance stays flat
-	// (todo 88 already reclaims the wrapper's own internal scratch on a scalar return;
-	// this reclaims the host's pre-call buffer too). No locals.
+	// __ronto_alloc_mark() -> i32: the host arena API. Returns the current bump-heap top
+	// (heap-pointer global 0). A resident host snapshots this BEFORE it allocates its own
+	// input buffer with __ronto_alloc, then pops back to it with __ronto_alloc_reset
+	// after the call, so a repeatedly-called instance stays flat (the automatic
+	// scalar-return reset already reclaims the wrapper's own internal scratch; this
+	// reclaims the host's pre-call buffer too). See .kb/wasm-export-no-wasi.md. No
+	// locals.
 	private static byte[] markBody() {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
@@ -1596,8 +1597,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return withLocals(b.toByteArray(), List.of());
 	}
 
-	// __ronto_alloc_reset(mark i32) -> (): the host arena API (todo 89). Restores the
-	// bump-heap top to a value previously returned by __ronto_alloc_mark -- an
+	// __ronto_alloc_reset(mark i32) -> (): the host arena API. Restores the bump-heap
+	// top to a value previously returned by __ronto_alloc_mark -- an
 	// absolute-restore of a stack/arena, not a per-block free. Popping to a mark taken
 	// AFTER live data (or reading a :string result whose bytes sit above the mark) is
 	// caller error; see the --no-gc docs. Param 0 = mark, no locals.
@@ -1610,7 +1611,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return withLocals(b.toByteArray(), List.of());
 	}
 
-	// --- Canonical string ABI helpers for --component :string exports (todo 93 Tier 2)
+	// --- Canonical string ABI helpers for --component :string exports
 
 	// The core parameter type of the shared cabi_post_* post-return function a
 	// string-involving export's lift references: the lifted core function's single flat
@@ -1687,13 +1688,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// __ftoa(v f64) -> i32: render the float as a fresh [len][bytes] string, the exact
-	// digit-extraction algorithm of the GC backend's FUNC_PRINT_F64_NO_NL (hardened by
-	// todo 108: NaN/Infinity/-Infinity return their static literal header directly, the
-	// sign is taken from the sign BIT so -0.0 prints "-0.0", magnitudes >= 2^63 divide
-	// into [1, 10) and append an E<exp> suffix) so print/princ-to-string output matches
-	// the GC backend byte for byte. Integer digits go MSD-first over a descending
-	// power of ten (10^18 covers everything below 2^63); the fractional part prints at
-	// least 1 and at most 6 digits, stopping once the residue drops below 1e-7.
+	// digit-extraction algorithm of the GC backend's FUNC_PRINT_F64_NO_NL (hardened for
+	// the IEEE edges: NaN/Infinity/-Infinity return their static literal header
+	// directly, the sign is taken from the sign BIT so -0.0 prints "-0.0", magnitudes
+	// >= 2^63 divide into [1, 10) and append an E<exp> suffix) so print/princ-to-string
+	// output matches the GC backend byte for byte. Integer digits go MSD-first over a
+	// descending power of ten (10^18 covers everything below 2^63); the fractional part
+	// prints at least 1 and at most 6 digits, stopping once the residue drops below 1e-7.
 	// Param 0=v; locals 1=p (i32 result), 2=c (i32 write cursor), 3=int64 (i64),
 	// 4=pow (i64), 5=digit (i32), 6=started (i32), 7=frac (f64), 8=exp (i32),
 	// 9=digit_count (i32).
@@ -1945,7 +1946,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// __write_stdout(ptr i32, len i32): the ONE funnel through which every printing op
-	// writes -- the sole caller of the imported fd_write (todo 110; the todo-93 seam: a
+	// writes -- the sole caller of the imported fd_write (also the --component seam: a
 	// component variant swaps this implementation, never the print ops). Fills the iov
 	// scratch (iovAddr = ptr/len, iovAddr+8 = nwritten) and writes to fd 1 (stdout).
 	private static byte[] writeStdoutBody(Mem mem) {
@@ -2013,9 +2014,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * cross the host boundary in the internal representation unchanged ({@code :long}
 	 * over an inferred i64, {@code :float} over an inferred f64) and the module has no
 	 * linear memory (a memory-using module's scalar-return wrapper must reset the bump
-	 * heap, todo 88, and its {@code :string} boundaries marshal). Such an export names
-	 * the internal function directly instead of an identity wrapper that would only
-	 * forward its arguments.
+	 * heap, and its {@code :string} boundaries marshal). Such an export names the
+	 * internal function directly instead of an identity wrapper that would only forward
+	 * its arguments.
 	 * @param decl the parsed export directive
 	 * @param types the inferred internal types
 	 * @param mem the memory plan
@@ -2052,8 +2053,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		List<Ty> wrapperLocals = new ArrayList<>();
 		int nextLocal = WasmExportCompiler.paramSlotCount(decl);
 
-		// Auto-reset the bump heap for scalar-return exports (todo 88). Anything the
-		// exported function allocates during the call (the internal :string copy below,
+		// Auto-reset the bump heap for scalar-return exports. Anything the exported
+		// function allocates during the call (the internal :string copy below,
 		// plus any concatenate/subseq/... scratch) is dead the moment a non-memory scalar
 		// is returned -- no heap pointer escapes to the host. Snapshot the heap-pointer
 		// global (index 0) at wrapper entry and restore it at exit so a long-lived,
@@ -2917,9 +2918,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// #d(...) literals and (make-array n :element-type 'double-float) materialize one;
 	// the
 	// generic aref/%aset/length operate on it. A rank-2 make-array builds the separate
-	// F64MAT/F32MAT [rows:i32][cols:i32][data] matrix layout instead (todo 99, for
-	// vec:matvec); rank >= 3 stays a clear compile error, as does a rank-2 literal. The
-	// vectorizable vec: kernels (v128) build on this layer -- see .todo/94 Phase 4B.
+	// F64MAT/F32MAT [rows:i32][cols:i32][data] matrix layout instead (for vec:matvec);
+	// rank >= 3 stays a clear compile error, as does a rank-2 literal. The vectorizable
+	// vec: kernels (v128) build on this layer -- see .kb/vec.md.
 
 	private static void requireArgc(List<LispVal> args, int expected, String op, Fn fn) {
 		if (args.size() != expected) {
@@ -3540,10 +3541,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.VEC_MUL ->
 				compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL, false);
 			case LispNames.VEC_SCALE -> compileSimdScale(args, fn, false);
-			// The destination-passing kernels (todo 103): same loops, but the destination
-			// is
-			// the caller's vector instead of a fresh allocVec block -- so a loop over
-			// them
+			// The destination-passing kernels: same loops, but the destination is the
+			// caller's vector instead of a fresh allocVec block -- so a loop over them
 			// never advances the bump allocator.
 			case LispNames.VEC_ADD_INTO ->
 				compileSimdElementwise(args, fn, Instruction.F64X2_ADD, Instruction.F64_ADD, true);
@@ -3552,11 +3551,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.VEC_MUL_INTO ->
 				compileSimdElementwise(args, fn, Instruction.F64X2_MUL, Instruction.F64_MUL, true);
 			case LispNames.VEC_SCALE_INTO -> compileSimdScale(args, fn, true);
-			// The arithmetic unary ufuncs (todo 109): NATIVE IEEE per-element semantics
-			// (this backend has no vec.lisp defun to mirror; see WasmVecLoops.simdMap1).
-			// exp / log / tanh / sin / cos / tan / asin / acos / atan / sinh / cosh /
-			// sign reuse the GC backend's raw-f64 emitters instead (todo 109 Phases 1.5
-			// and 2; see compileSimdUnaryF64).
+			// The arithmetic unary ufuncs: NATIVE IEEE per-element semantics (this
+			// backend has no vec.lisp defun to mirror; see WasmVecLoops.simdMap1). The
+			// transcendentals -- exp / log / tanh / sin / cos / tan / asin / acos / atan
+			// / sinh / cosh / sign -- reuse the GC backend's raw-f64 emitters instead
+			// (see compileSimdUnaryF64).
 			case LispNames.VEC_SQRT -> compileSimdUnary(args, fn, WasmVecLoops.U_SQRT, false, "vec:sqrt");
 			case LispNames.VEC_ABS -> compileSimdUnary(args, fn, WasmVecLoops.U_ABS, false, "vec:abs");
 			case LispNames.VEC_SQUARE -> compileSimdUnary(args, fn, WasmVecLoops.U_SQUARE, false, "vec:square");
@@ -3618,10 +3617,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_COSH, true, "vec:cosh-into");
 			case LispNames.VEC_SIGN_INTO ->
 				compileSimdUnaryF64(args, fn, WasmVecSimdRuntimeBuilder.SCALAR_OP_SIGN, true, "vec:sign-into");
-			// The comparison-select ufuncs (todo 109 Phase 3): the strict-comparison
-			// selects every other backend's defun states ((if (> x y) x y) and its
-			// mirrors), never the IEEE min/max instructions -- the second operand or the
-			// bound wins any false comparison (NaN and the -0.0/0.0 tie included), so
+			// The comparison-select ufuncs: the strict-comparison selects every other
+			// backend's defun states ((if (> x y) x y) and its mirrors), never the IEEE
+			// min/max instructions -- the second operand or the bound wins any false
+			// comparison (NaN and the -0.0/0.0 tie included), so
 			// this backend agrees with the cross-backend contract. relu rides the U_RELU
 			// map1 form (v128 under --simd, scalar loop otherwise); clip is an element
 			// loop comparing the widened element against the two FULL f64 bounds in both
@@ -3856,8 +3855,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return vecTy;
 	}
 
-	// (vec:maximum a b) / (vec:minimum a b) and their -into siblings (todo 109 Phase
-	// 3): dst[i] = (if (> a[i] b[i]) a[i] b[i]) (or <). Both widths are handled in one
+	// (vec:maximum a b) / (vec:minimum a b) and their -into siblings: dst[i] =
+	// (if (> a[i] b[i]) a[i] b[i]) (or <). Both widths are handled in one
 	// body -- a select only copies input bits and a native-width compare equals the
 	// widened compare, so the f32 path needs no separate widening shape. v128 gt/lt
 	// mask + bitselect under --simd, a scalar compare + select loop otherwise; the two
@@ -3893,8 +3892,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return vecTy;
 	}
 
-	// (vec:clip v lo hi) / (vec:clip-into out v lo hi) (todo 109 Phase 3): each element
-	// is widened to f64 and run through the composition selects the other backends'
+	// (vec:clip v lo hi) / (vec:clip-into out v lo hi): each element is widened to f64
+	// and run through the composition selects the other backends'
 	// defun states -- t = (if (> x lo) x lo), then (if (< t hi) t hi) -- against the
 	// two FULL f64 bounds, then narrowed on store (the emap / array-vs-scalar rule; a
 	// narrowed f32 bound would not widen). BOTH --simd modes drive this same
@@ -3955,8 +3954,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return vecTy;
 	}
 
-	// (vec:exp v) / (vec:sign v) and their -into siblings (todo 109 Phase 1.5): the
-	// operator exists only as an f64 instruction sequence (WasmExpCompiler's software
+	// (vec:exp v) / (vec:sign v) and their -into siblings: the operator exists only as
+	// an f64 instruction sequence (WasmExpCompiler's software
 	// approximation / WasmSignumCompiler's (x>0)-(x<0)), reused via the GC backend's
 	// raw-f64 emitters -- so the values match the wasm-GC backend's exactly, and
 	// diverge from the interpreter/JVM at the same edges the wasm scalar builtins
@@ -4095,13 +4094,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// (vec:matvec w x) / (vec:matvec-into out w x): GEMV -- y[i] = dot(row i of W, x)
-	// over a rank-2 packed matrix (F64MAT/F32MAT, todo 99) into a rank-1 vector of
-	// length d (fresh, or the caller's destination). One dot kernel run per row: the row
+	// over a rank-2 packed matrix (F64MAT/F32MAT) into a rank-1 vector of length d
+	// (fresh, or the caller's destination). One dot kernel run per row: the row
 	// cursor ap restarts at the row pointer rp and the x cursor bp at x's data base each
 	// iteration (the dot emitters clobber their pointer locals), rp advancing by cols
 	// elements per row. Under --simd the per-row dot is the same f64x2/f32x4 lane loop
 	// vec:dot uses (WasmVecLoops.simdDot: an f32 row accumulates in f32 lanes and
-	// promotes once -- the todo-106 single-precision reduction contract); without it the
+	// promotes once -- the --simd single-precision reduction contract); without it the
 	// v128-free scalar loop (WasmVecLoops.scalarDot), so the module stays MVP-clean.
 	// Widths may not mix: x (and out) must be the same width as W, the vec: fail-fast
 	// rule (compileCoerced turns a mismatch into the incompatible-types error). Like the
@@ -4582,8 +4581,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// (princ-to-string x): an integer renders via the __itoa helper, a float via the
-	// __ftoa helper (todo 110; the GC backend's digit-extraction algorithm); a string
-	// passes through unchanged.
+	// __ftoa helper (the GC backend's digit-extraction algorithm); a string passes
+	// through unchanged.
 	private Ty compilePrincToString(List<LispVal> args, Fn fn) {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException(
@@ -4699,8 +4698,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.writeStdoutIndex());
 	}
 
-	// (rontolisp:with-arena () body...): the todo-104 intra-call free. Snapshot the
-	// bump heap pointer, run the body, then pop everything allocated inside. A scalar
+	// (rontolisp:with-arena () body...): the intra-call free. Snapshot the bump heap
+	// pointer, run the body, then pop everything allocated inside. A scalar
 	// result rides the stack across the pop; a reference result (string / packed float
 	// vector / matrix) is copied DOWN to the mark first (dst <= src, so the
 	// byte-forward __memcpy is a safe memmove) and the heap resumes just past the copy.

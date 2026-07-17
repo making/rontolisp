@@ -172,10 +172,10 @@ public final class WasmComponentBuilder {
 	 * lifts it <strong>synchronously</strong> by default (a pure-compute export needs no
 	 * async, unlike the stackful-async {@code run} lift). A scalar export lifts with no
 	 * canonical options; a {@code :string}/{@code :s-expr}-involving one with the
-	 * canonical string options (todo 92 Tier 2). An {@code :async t} export (todo 92 Tier
-	 * 3) instead lifts against an <strong>async</strong> function type &mdash; the same
-	 * stackful-async shape as {@code run}, with an identical flat core signature &mdash;
-	 * so I/O inside it blocks cooperatively instead of trapping.
+	 * canonical string options. An {@code :async t} export instead lifts against an
+	 * <strong>async</strong> function type &mdash; the same stackful-async shape as
+	 * {@code run}, with an identical flat core signature &mdash; so I/O inside it blocks
+	 * cooperatively instead of trapping.
 	 *
 	 * @param name the export name (a valid component-model label; honors {@code :as})
 	 * @param paramNames the parameter labels the function type carries ({@code p0},
@@ -198,12 +198,12 @@ public final class WasmComponentBuilder {
 	 * after the {@code run} wiring, whose next free indices the caller passes in.
 	 *
 	 * <p>
-	 * A {@code :string}/{@code :s-expr} boundary type (todo 92 Tier 2) lifts through the
-	 * canonical string ABI: the alias section additionally projects the core's own
-	 * {@code cabi_realloc} (the host lowers string arguments into linear memory through
-	 * it) and one {@code cabi_post_*} post-return per flat-result signature (it pops the
-	 * core's bump heap back to the per-call snapshot once the host has copied the results
-	 * out, intern-count-guarded), and the string-involving exports are lifted with the
+	 * A {@code :string}/{@code :s-expr} boundary type lifts through the canonical string
+	 * ABI: the alias section additionally projects the core's own {@code cabi_realloc}
+	 * (the host lowers string arguments into linear memory through it) and one
+	 * {@code cabi_post_*} post-return per flat-result signature (it pops the core's bump
+	 * heap back to the per-call snapshot once the host has copied the results out,
+	 * intern-count-guarded), and the string-involving exports are lifted with the
 	 * {@code (memory 0) (realloc ...) string-encoding=utf8 (post-return ...)} options.
 	 * Memory 0 is the shared {@code mem.wasm} memory aliased at build start -- the same
 	 * memory instance the core imports, so the wrapper's {@code (ptr,len)} values and the
@@ -256,8 +256,8 @@ public final class WasmComponentBuilder {
 			aliases.add(ComponentWriter.aliasCoreFunc(rontolispInstance, e.name()));
 			int func = coreFunc++;
 			// One function type per export (params p0, p1, ... unless the directive names
-			// them): synchronous by default; an :async t export (todo 92 Tier 3) gets the
-			// async counterpart (tag 0x43), which turns the lift below into a stackful
+			// them): synchronous by default; an :async t export gets the async
+			// counterpart (tag 0x43), which turns the lift below into a stackful
 			// async export (the run shape) with the same flat core signature -- the ONLY
 			// byte difference an :async export introduces.
 			final List<String> paramNames = e.paramNames();
@@ -311,7 +311,7 @@ public final class WasmComponentBuilder {
 	 * additionally exposing the given {@code rontolisp:wasm-export} functions as
 	 * host-callable component-model exports (synchronous canonical lifts alongside the
 	 * stackful-async {@code wasi:cli/run} export; {@code :string}/{@code :s-expr}
-	 * boundaries lift through the canonical string ABI, todo 92 Tier 2).
+	 * boundaries lift through the canonical string ABI).
 	 * @param coreModule the rontolisp core module compiled in component mode
 	 * @param usesSockets whether the program uses a {@code rontolisp:tcp-*} built-in
 	 * @param funcExports the parsed function export directives (empty for none; an empty

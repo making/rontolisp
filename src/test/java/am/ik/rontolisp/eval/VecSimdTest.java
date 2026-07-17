@@ -94,7 +94,8 @@ class VecSimdTest {
 
 	@Test
 	void singleFloatReductionsAccumulateInSinglePrecisionUnderSimd() {
-		// The precision contract (todo 106), and the ONLY test that pins it.
+		// The contract that an #f reduction accumulates in single precision under --simd
+		// on every backend (.kb/vec.md), and the ONLY test that pins it.
 		//
 		// v = #f(4096.0 1.0 1.0 ... 1.0), 1024 elements. dot(v,v) = 4096^2 + 1023 =
 		// 16778239 exactly. 4096^2 is 2^24, where the f32 spacing is 2, so whichever of
@@ -199,7 +200,7 @@ class VecSimdTest {
 			.hasMessageContaining("expects a rank-2 matrix");
 	}
 
-	// --- destination-passing kernels (todo 103) ----------------------------------
+	// --- destination-passing kernels ----------------------------------------------
 
 	@Test
 	void simdReplacesTheIntoDefunsWithNativeFunctionsToo() {
@@ -314,7 +315,7 @@ class VecSimdTest {
 		assertMatchesScalarOracle(into);
 	}
 
-	// --- element-wise unary ufuncs (todo 109) --------------------------------------
+	// --- element-wise unary ufuncs -------------------------------------------------
 
 	@Test
 	void simdReplacesTheUnaryUfuncDefunsWithNativeFunctions() {
@@ -358,8 +359,8 @@ class VecSimdTest {
 		assertMatchesScalarOracle("(vec:exp (vec:reciprocal (vec:add (vec:arange 7) (vec:ones 7))))");
 		assertMatchesScalarOracle(
 				"(vec:exp (vec:reciprocal (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float))))");
-		// log over strictly positive inputs, tanh over the signed range (todo 109
-		// Phase 2 -- both are Math.log / Math.tanh scalar loops on this backend).
+		// log over strictly positive inputs, tanh over the signed range (both are
+		// Math.log / Math.tanh scalar loops on this backend).
 		for (String n : new String[] { "7", "200" }) {
 			assertMatchesScalarOracle("(vec:log (vec:add (vec:arange %s) (vec:ones %s)))".formatted(n, n));
 			assertMatchesScalarOracle(
@@ -368,8 +369,8 @@ class VecSimdTest {
 		}
 		assertMatchesScalarOracle("(vec:log (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float)))");
 		assertMatchesScalarOracle("(vec:tanh (vec:arange 200 'single-float))");
-		// sin / cos / tan over the signed range (todo 109 Phase 2 second release --
-		// Math.sin / Math.cos / Math.tan scalar loops on this backend).
+		// sin / cos / tan over the signed range (Math.sin / Math.cos / Math.tan
+		// scalar loops on this backend).
 		for (String op : new String[] { "sin", "cos", "tan" }) {
 			for (String n : new String[] { "7", "200" }) {
 				assertMatchesScalarOracle(
@@ -378,8 +379,8 @@ class VecSimdTest {
 			assertMatchesScalarOracle("(vec:%s (vec:arange 200 'single-float))".formatted(op));
 		}
 		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
-		// sign-mixed range (todo 109 Phase 2 third release -- Math.asin / Math.acos /
-		// Math.atan / Math.sinh / Math.cosh scalar loops on this backend).
+		// sign-mixed range (Math.asin / Math.acos / Math.atan / Math.sinh / Math.cosh
+		// scalar loops on this backend).
 		for (String op : new String[] { "asin", "acos" }) {
 			for (String n : new String[] { "7", "200" }) {
 				assertMatchesScalarOracle(
@@ -454,7 +455,7 @@ class VecSimdTest {
 			.hasMessageContaining("must share an element type");
 	}
 
-	// --- comparison-select ufuncs (todo 109 Phase 3) -------------------------------
+	// --- comparison-select ufuncs --------------------------------------------------
 
 	@Test
 	void simdReplacesTheComparisonSelectDefunsWithNativeFunctions() {

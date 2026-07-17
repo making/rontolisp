@@ -47,7 +47,7 @@ final class WasmVecSimdCompiler {
 			Map.entry(LispNames.VEC_MUL_INTO, WasmVecSimdRuntimeBuilder.MUL_INTO),
 			Map.entry(LispNames.VEC_SCALE_INTO, WasmVecSimdRuntimeBuilder.SCALE_INTO),
 			Map.entry(LispNames.VEC_MATVEC_INTO, WasmVecSimdRuntimeBuilder.MATVEC_INTO),
-			// The element-wise unary ufuncs (todo 109). vec:square / vec:square-into are
+			// The element-wise unary ufuncs. vec:square / vec:square-into are
 			// not here: their spliced defuns call vec:mul / vec:mul-into, so they are
 			// accelerated transitively, like mean/norm.
 			Map.entry(LispNames.VEC_EXP, WasmVecSimdRuntimeBuilder.EXP),
@@ -82,7 +82,7 @@ final class WasmVecSimdCompiler {
 			Map.entry(LispNames.VEC_NEGATIVE_INTO, WasmVecSimdRuntimeBuilder.NEGATIVE_INTO),
 			Map.entry(LispNames.VEC_SIGN_INTO, WasmVecSimdRuntimeBuilder.SIGN_INTO),
 			Map.entry(LispNames.VEC_RECIPROCAL_INTO, WasmVecSimdRuntimeBuilder.RECIPROCAL_INTO),
-			// The comparison-select ufuncs (todo 109 Phase 3).
+			// The comparison-select ufuncs.
 			Map.entry(LispNames.VEC_MAXIMUM, WasmVecSimdRuntimeBuilder.MAXIMUM),
 			Map.entry(LispNames.VEC_MINIMUM, WasmVecSimdRuntimeBuilder.MINIMUM),
 			Map.entry(LispNames.VEC_RELU, WasmVecSimdRuntimeBuilder.RELU),

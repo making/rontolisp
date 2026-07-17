@@ -212,7 +212,7 @@ final class VecSimdKernels {
 		return r;
 	}
 
-	// --- element-wise unary ufuncs (todo 109) --------------------------------------
+	// --- element-wise unary ufuncs -------------------------------------------------
 	// Each writes op(x[i]) into r[i]; the allocating wrappers in VecSimd pass a fresh r,
 	// the -into ones the caller's (r MAY alias x -- element i depends only on element i,
 	// the add-into rule). sqrt / abs / neg / 1-over-x have lane forms bit-identical to
@@ -479,7 +479,7 @@ final class VecSimdKernels {
 		}
 	}
 
-	// --- comparison-select ufuncs (todo 109 Phase 3) --------------------------------
+	// --- comparison-select ufuncs ---------------------------------------------------
 	// maximum / minimum / relu / clip mirror the vec.lisp comparison selects
 	// ((if (> x y) x y) and its mirrors), NOT Math.max / Math.min -- whose NaN and
 	// -0.0 handling differ (Math.max propagates a NaN from either side and orders
@@ -572,7 +572,7 @@ final class VecSimdKernels {
 	}
 
 	// --- destination-passing kernels (write into r, allocate nothing) -------------
-	// The -into siblings (todo 103). Lane logic identical to the allocating kernels
+	// The -into siblings. Lane logic identical to the allocating kernels
 	// above, only the destination differs, so results stay bit-identical. r may alias x
 	// and/or y in the element-wise kernels (within one lane block the reads precede the
 	// store at the same indices); matvecInto may not -- VecSimd guards that.

@@ -101,11 +101,11 @@ class JvmLinalgSimdAccelCompilerTest {
 
 	@Test
 	void singleFloatReductionsAccumulateInSinglePrecisionUnderSimd() throws Exception {
-		// The todo-106 precision contract, extended to linalg. This is the only test that
-		// proves the KERNEL ran rather than the defun: a dead interception would print
-		// the
-		// scalar 16778239. Same values as the interpreter's LinalgSimdTest probe, so the
-		// two --simd backends are pinned to each other as well as to the contract.
+		// The single-precision #f-reduction contract (.kb/vec.md), extended to linalg.
+		// This is the only test that proves the KERNEL ran rather than the defun: a dead
+		// interception would print the scalar 16778239. Same values as the interpreter's
+		// LinalgSimdTest probe, so the two --simd backends are pinned to each other as
+		// well as to the contract.
 		// dot(v, v) = 4096^2 + 1023 = 16778239 exactly, with 4096^2 = 2^24 in one lane.
 		String dot = probe32("4096.0", "(linalg:dot *v* *v*)");
 		assertThat(accel(dot)).isEqualTo("16777984");
@@ -214,8 +214,8 @@ class JvmLinalgSimdAccelCompilerTest {
 	@Test
 	void broadcastPairsRunTheBcastKernelAndMatchTheScalarReference() throws Exception {
 		// Two same-width arrays of different-but-broadcastable shapes run the general
-		// numpy odometer kernel since the todo-117 follow-up (laBcastDD/laBcastFF);
-		// a boxed or mixed-width pair still declines to the defun.
+		// numpy odometer kernel (laBcastDD/laBcastFF); a boxed or mixed-width pair
+		// still declines to the defun.
 		assertThat(accel("(print (linalg:mul #2A((1 2) (3 4)) #d(10.0 20.0)))"))
 			.isEqualTo("#d((10.0 40.0) (30.0 80.0))");
 		assertMatchesScalarReference(
@@ -239,7 +239,7 @@ class JvmLinalgSimdAccelCompilerTest {
 
 	@Test
 	void axisFormsRunTheAxisKernelsAndMatchTheScalarReference() throws Exception {
-		// The axis forms are intercepted since the todo-117 follow-up: an axis call
+		// The axis forms are intercepted as call SHAPES: an axis call
 		// routes to the extended bridge kernel (laSumAxis &c, a 2-argument call padded
 		// with null for the missing keepdims), whose folds mirror %la-fold-axis /
 		// %la-argfold-axis exactly; a 1-arg call still hits the base kernel whose
@@ -392,7 +392,7 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertThat(accel("(let ((v #d(1.0 2.0))) (print (eq v (linalg:transpose v))))")).isEqualTo("t");
 	}
 
-	// --- element-wise unary ufuncs (todo 109) ------------------------------------------
+	// --- element-wise unary ufuncs -----------------------------------------------------
 
 	@Test
 	void unaryUfuncsMatchTheScalarReferenceAtBothSizesWidthsAndRanks() throws Exception {
@@ -412,8 +412,8 @@ class JvmLinalgSimdAccelCompilerTest {
 				"(print (round (* 1000000 (linalg:sum (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 200) 1)))))))");
 		assertMatchesScalarReference(
 				"(print (round (* 1000000 (linalg:sum (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 7) 1)))))))");
-		// log over strictly positive inputs, tanh over a sign-mixed range (todo 109
-		// Phase 2 -- Math.log / Math.tanh scalar loops on this backend).
+		// log over strictly positive inputs, tanh over a sign-mixed range (Math.log /
+		// Math.tanh scalar loops on this backend).
 		for (String n : new String[] { "7", "200" }) {
 			assertMatchesScalarReference("(print (linalg:log (linalg:add (linalg:arange " + n + ") 1)))");
 			assertMatchesScalarReference(
@@ -422,8 +422,8 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertMatchesScalarReference("(print (linalg:log (linalg:reshape (linalg:add (linalg:arange 12) 1) '(3 4))))");
 		assertMatchesScalarReference("(print (linalg:log (linalg:add (linalg:arange 0 200 'single-float) 1)))");
 		assertMatchesScalarReference("(print (linalg:tanh (linalg:arange 0 200 'single-float)))");
-		// sin / cos / tan over a sign-mixed range (todo 109 Phase 2 second release --
-		// Math.sin / Math.cos / Math.tan scalar loops on this backend).
+		// sin / cos / tan over a sign-mixed range (Math.sin / Math.cos / Math.tan
+		// scalar loops on this backend).
 		for (String op : new String[] { "sin", "cos", "tan" }) {
 			for (String n : new String[] { "7", "200" }) {
 				assertMatchesScalarReference("(print (linalg:" + op + " (linalg:sub (linalg:arange " + n + ") 100)))");
@@ -432,7 +432,7 @@ class JvmLinalgSimdAccelCompilerTest {
 			assertMatchesScalarReference("(print (linalg:" + op + " (linalg:arange 0 200 'single-float)))");
 		}
 		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
-		// sign-mixed range (todo 109 Phase 2 third release).
+		// sign-mixed range.
 		for (String op : new String[] { "asin", "acos" }) {
 			assertMatchesScalarReference(
 					"(print (linalg:" + op + " (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.005)))");
@@ -466,7 +466,7 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertThat(accel("(print (linalg:square 3))")).isEqualTo("9");
 	}
 
-	// --- comparison-select ufuncs (todo 109 Phase 3) -----------------------------------
+	// --- comparison-select ufuncs ------------------------------------------------------
 
 	@Test
 	void comparisonSelectsMatchTheScalarReferenceAtBothSizesWidthsAndShapes() throws Exception {
@@ -541,7 +541,7 @@ class JvmLinalgSimdAccelCompilerTest {
 				""");
 	}
 
-	// --- CNN window unfolding: %la-im2col / %la-col2im (todo 117) ----------------------
+	// --- CNN window unfolding: %la-im2col / %la-col2im ---------------------------------
 
 	@Test
 	void im2colAndCol2imMatchTheScalarReferenceAtBothWidths() throws Exception {

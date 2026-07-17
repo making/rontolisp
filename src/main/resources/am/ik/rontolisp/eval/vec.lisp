@@ -108,7 +108,7 @@
     (dotimes (i (length v) out)
       (setf (aref out i) (* (aref v i) s)))))
 
-;; --- element-wise unary ufuncs (numpy parity, todo 109) -----------------------
+;; --- element-wise unary ufuncs (numpy parity) ---------------------------------
 
 ;; %vec-op applied element-wise over one vector -> a fresh vector of the same
 ;; width. The element read widens f32 -> f64, the operator runs in f64, and the
@@ -162,7 +162,7 @@
   (vec:mul v v))
 
 (defun vec:negative (v)
-  ;; (- x) is true negation (todo 108), so (vec:negative #d(0.0)) is #d(-0.0).
+  ;; (- x) is true negation, so (vec:negative #d(0.0)) is #d(-0.0).
   (vec::%map1 (lambda (x) (- x)) v))
 
 (defun vec:sign (v)
@@ -171,7 +171,7 @@
 (defun vec:reciprocal (v)
   (vec::%map1 (lambda (x) (/ 1.0 x)) v))
 
-;; --- comparison-select ufuncs (numpy parity, todo 109 Phase 3) ----------------
+;; --- comparison-select ufuncs (numpy parity) ----------------------------------
 ;;
 ;; All four are defined by the strict comparison select (if (> x y) x y) and its
 ;; mirrors -- NOT by a min/max primitive. The second operand (or the bound) wins
@@ -179,7 +179,7 @@
 ;; #d(0.0)) is #d(0.0), the second element) and unordered NaN comparisons
 ;; ((vec:maximum #d(nan) w) takes w's element; (vec:maximum v #d(nan)) keeps the
 ;; NaN). This is the same first-strictly-greater-wins rule linalg:amax uses, and
-;; since todo-108 the scalar > / < agree bit-for-bit on every backend, so the
+;; the scalar > / < agree bit-for-bit on every backend, so the
 ;; --simd kernels mirror the comparison (a lane gt mask + bitselect, never the
 ;; IEEE lane min/max whose NaN/-0.0 semantics differ).
 
@@ -206,7 +206,7 @@
 
 ;; The allocating kernels above return a fresh vector, so a loop over them creates
 ;; one vector per iteration. On the WASM backends that memory is bump-allocated and
-;; never freed (see .todo/103), so the -into siblings below exist to hoist the
+;; never freed, so the -into siblings below exist to hoist the
 ;; allocation out of the loop:
 ;;
 ;;   (let ((acc (vec:zeros n)))

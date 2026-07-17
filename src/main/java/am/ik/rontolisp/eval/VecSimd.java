@@ -116,7 +116,7 @@ public final class VecSimd {
 	}
 
 	/**
-	 * The comparison-select ufuncs (todo 109 Phase 3): {@code maximum}/{@code minimum}/
+	 * The comparison-select ufuncs: {@code maximum}/{@code minimum}/
 	 * {@code relu}/{@code clip} with their {@code -into} siblings. All are defined by the
 	 * strict comparison select the {@code vec.lisp} defuns spell out ({@code (if (>
 	 * x y) x y)} and its mirrors), never {@code Math.max}/{@code Math.min}, so the second
@@ -165,7 +165,7 @@ public final class VecSimd {
 	}
 
 	/**
-	 * The element-wise unary ufuncs (todo 109): {@code exp}/{@code log}/{@code tanh}/
+	 * The element-wise unary ufuncs: {@code exp}/{@code log}/{@code tanh}/
 	 * {@code sin}/{@code cos}/{@code tan}/{@code asin}/{@code acos}/{@code atan}/
 	 * {@code sinh}/{@code cosh}/{@code sqrt}/{@code abs}/{@code negative}/
 	 * {@code sign}/{@code reciprocal}, each with its {@code -into} sibling.
@@ -215,9 +215,9 @@ public final class VecSimd {
 	}
 
 	/**
-	 * The destination-passing kernels (todo 103). Each writes into its first argument and
-	 * returns THAT LispVal unchanged, so {@code (vec:add-into acc acc d)} keeps
-	 * {@code acc} {@code eq} to itself -- wrapping the backing array in a fresh
+	 * The destination-passing kernels. Each writes into its first argument and returns
+	 * THAT LispVal unchanged, so {@code (vec:add-into acc acc d)} keeps {@code acc}
+	 * {@code eq} to itself -- wrapping the backing array in a fresh
 	 * {@link LispDoubleFloatArray} would not.
 	 *
 	 * <p>

@@ -243,7 +243,7 @@ class ComponentWriterTest {
 
 	@Test
 	void asyncFuncTypeScalarsEncoding() {
-		// The async counterpart of funcTypeScalars (todo 92 Tier 3): the sync golden
+		// The async counterpart of funcTypeScalars (the `:async t` lift): the sync golden
 		// bytes with the functype tag flipped 0x40 -> 0x43. Verified against `wasm-tools
 		// print` of a component whose async-typed export was invoked with `wasmtime run
 		// --invoke 'noisy-add(20, 22)'` (I/O inside the export works; text form

@@ -18,7 +18,7 @@
 ;;;; startup from weights.bin, an RLW1 binary file (the same format the book's
 ;;;; pretrained params use).  That is what lifts the old 12.5k-parameter ceiling
 ;;;; -- the JVM backend's class-version-50 verifier caps the number of float
-;;;; constants a class may BAKE (.todo/17), not the number it may read.  The
+;;;; constants a class may BAKE (~12.8k), not the number it may read.  The
 ;;;; browser gets the file through the WASI shim's virtual filesystem
 ;;;; (wasi-shim.js), wasmtime through --dir .
 

@@ -85,7 +85,7 @@ class LinalgSimdTest {
 	@Test
 	void axisFormsRunTheFoldKernelsAndMatchTheScalarOracle() {
 		// The axis forms of sum/amax/amin/argmax/argmin (and transpose's axes form) are
-		// intercepted since the todo-117 follow-up: the natives accept an arity RANGE,
+		// intercepted as call SHAPES: the natives accept an arity RANGE,
 		// and the fold kernels mirror %la-fold-axis / %la-argfold-axis exactly (double
 		// accumulation, the defun's seeds and strict comparisons), so every axis result
 		// is bit-identical to the oracle at both widths.
@@ -214,7 +214,7 @@ class LinalgSimdTest {
 		}
 	}
 
-	// --- element-wise: comparison selects (todo 109 Phase 3) -----------------------
+	// --- element-wise: comparison selects ------------------------------------------
 
 	@Test
 	void simdReplacesTheComparisonSelectDefunsWithNativeFunctions() {
@@ -322,7 +322,7 @@ class LinalgSimdTest {
 	@Test
 	void broadcastPairsRunTheBcastKernelAndMatchTheScalarOracle() {
 		// Two same-width arrays of different-but-broadcastable shapes run the general
-		// numpy odometer kernel since the todo-117 follow-up -- every element computed
+		// numpy odometer kernel -- every element computed
 		// in double and narrowed only into a single-float result, %la-bcast-loop's own
 		// rule, so bit-identical at both widths. A mixed-width broadcast still declines
 		// to the defun.
@@ -405,8 +405,9 @@ class LinalgSimdTest {
 
 	@Test
 	void singleFloatReductionsAccumulateInSinglePrecisionUnderSimd() {
-		// The todo-106 precision contract, extended to linalg, and the ONLY test that
-		// pins it: every other #f input in this file stays under 2^24, where an f32
+		// The single-precision #f-reduction contract (.kb/vec.md), extended to linalg,
+		// and the ONLY test that pins it: every other #f input in this file stays under
+		// 2^24, where an f32
 		// accumulator is exact, so they pass on both contracts.
 		//
 		// v = #f(4096.0 1.0 ... 1.0), 1024 elements. dot(v,v) = 4096^2 + 1023 = 16778239
@@ -512,7 +513,7 @@ class LinalgSimdTest {
 		assertThat(eval("(let ((v (linalg:arange 5))) (eq v (linalg:transpose v)))", false).print()).isEqualTo("t");
 	}
 
-	// --- element-wise unary ufuncs (todo 109) -------------------------------------
+	// --- element-wise unary ufuncs ------------------------------------------------
 
 	@Test
 	void simdReplacesTheUnaryUfuncDefunsWithNativeFunctions() {
@@ -547,8 +548,8 @@ class LinalgSimdTest {
 				"(linalg:exp (linalg:reshape (linalg:reciprocal (linalg:add (linalg:arange 12) 1)) '(3 4)))");
 		assertMatchesScalarOracle(
 				"(linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 0 200 'single-float) 1)))");
-		// log over strictly positive inputs, tanh over a sign-mixed range (todo 109
-		// Phase 2 -- both are Math.log / Math.tanh scalar loops on this backend).
+		// log over strictly positive inputs, tanh over a sign-mixed range (both are
+		// Math.log / Math.tanh scalar loops on this backend).
 		for (String n : new String[] { "7", "200" }) {
 			assertMatchesScalarOracle("(linalg:log (linalg:add (linalg:arange " + n + ") 1))");
 			assertMatchesScalarOracle("(linalg:tanh (linalg:mul (linalg:sub (linalg:arange " + n + ") 100) 0.03))");
@@ -557,8 +558,8 @@ class LinalgSimdTest {
 		assertMatchesScalarOracle("(linalg:log (linalg:add (linalg:arange 0 200 'single-float) 1))");
 		assertMatchesScalarOracle("(linalg:tanh (linalg:reshape (linalg:arange 12) '(3 4)))");
 		assertMatchesScalarOracle("(linalg:tanh (linalg:arange 0 200 'single-float))");
-		// sin / cos / tan over a sign-mixed range (todo 109 Phase 2 second release --
-		// Math.sin / Math.cos / Math.tan scalar loops on this backend).
+		// sin / cos / tan over a sign-mixed range (Math.sin / Math.cos / Math.tan
+		// scalar loops on this backend).
 		for (String op : new String[] { "sin", "cos", "tan" }) {
 			for (String n : new String[] { "7", "200" }) {
 				assertMatchesScalarOracle("(linalg:" + op + " (linalg:sub (linalg:arange " + n + ") 100))");
@@ -567,7 +568,7 @@ class LinalgSimdTest {
 			assertMatchesScalarOracle("(linalg:" + op + " (linalg:arange 0 200 'single-float))");
 		}
 		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
-		// sign-mixed range (todo 109 Phase 2 third release).
+		// sign-mixed range.
 		for (String op : new String[] { "asin", "acos" }) {
 			for (String n : new String[] { "7", "200" }) {
 				assertMatchesScalarOracle(
@@ -626,12 +627,13 @@ class LinalgSimdTest {
 			.isInstanceOf(RuntimeException.class);
 	}
 
-	// --- CNN window unfolding: %la-im2col / %la-col2im (todo 117) ------------------
+	// --- CNN window unfolding: %la-im2col / %la-col2im -----------------------------
 
 	@Test
 	void im2colAndCol2imAreInterceptedUnderSimd() {
-		// The internal pair is intercepted too (the dead-flag guard for todo 117): the
-		// installed kernel is a native LispFunction, the default a linalg.lisp lambda.
+		// The internal pair is intercepted too (the dead-flag guard: a --simd run that
+		// silently fell back would still pass every value test): the installed kernel
+		// is a native LispFunction, the default a linalg.lisp lambda.
 		for (String member : new String[] { "%la-im2col", "%la-col2im" }) {
 			String form = "(linalg:zeros 1) #'linalg::" + member;
 			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function linalg::" + member + ">");

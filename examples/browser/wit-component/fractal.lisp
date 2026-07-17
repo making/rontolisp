@@ -42,9 +42,9 @@
 ;;;;     backend, which is what examples.yaml pins.
 ;;;;
 ;;;;   * A frame comes back as a string of palette characters, one per pixel. A
-;;;;     component that could return a list<u8> would not need the detour, but the
-;;;;     WIT type mapping does not carry lists yet (.todo/128): string is the
-;;;;     widest channel a rontolisp component has today.
+;;;;     component that could return a list<u8> would not need the detour, but a
+;;;;     rontolisp component's exports carry scalars and strings only: string is
+;;;;     the widest channel available today.
 ;;;;
 ;;;; Everything stays inside the --no-gc subset -- floats, integers, string
 ;;;; literals, (concatenate 'string ...) and (subseq ...); no cons, list, hash or

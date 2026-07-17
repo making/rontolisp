@@ -4,7 +4,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * The Phase 3 integration target ({@code .todo/54}): the REAL split-sequence v2.0.1
+ * An ASDF subset integration target ({@code .kb/asdf.md}): the REAL split-sequence v2.0.1
  * sources (vendored unmodified under {@code src/test/resources/split-sequence}, MIT) load
  * via {@code asdf:load-system} and work on strings and lists -- including the second
  * return value, which crosses a user-function boundary through the {@code %mv-spill}

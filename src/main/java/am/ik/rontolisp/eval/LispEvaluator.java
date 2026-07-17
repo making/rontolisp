@@ -820,7 +820,7 @@ public final class LispEvaluator {
 		this.loadDirStack.addLast(childDir == null ? "" : childDir);
 		// Bind the current package around the loaded file so an internal (in-package ...)
 		// is scoped to the load and does not leak to the caller, like Common Lisp binding
-		// *package* for the duration of load (see .todo/83).
+		// *package* for the duration of load.
 		this.packageResolver.pushPackage();
 		try {
 			for (LispVal form : LispReader.readAllFromString(source)) {

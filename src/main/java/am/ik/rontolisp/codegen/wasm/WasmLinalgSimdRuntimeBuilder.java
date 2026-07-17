@@ -21,21 +21,21 @@ import static am.ik.rontolisp.codegen.wasm.WasmVecSimdRuntimeBuilder.vblockGroup
 import static am.ik.rontolisp.codegen.wasm.WasmVecSimdRuntimeBuilder.withLocals;
 
 /**
- * The wasm-GC {@code --simd} runtime for the {@code linalg:} kernels (todo-107), the
- * sibling of {@link WasmVecSimdRuntimeBuilder}. Forty-one hand-assembled functions that
+ * The wasm-GC {@code --simd} runtime for the {@code linalg:} kernels, the sibling of
+ * {@link WasmVecSimdRuntimeBuilder}. Forty-one hand-assembled functions that
  * {@link WasmLinalgSimdCompiler} calls at an intercepted {@code linalg:} call site (the
- * last seven are the todo-117 declined-shape follow-up: the general numpy broadcast, the
- * axes transpose and the axis folds).
+ * last seven cover the declined call shapes: the general numpy broadcast, the axes
+ * transpose and the axis folds).
  *
  * <h2>Why this exists: {@code --simd} used to make {@code linalg:} SLOWER here</h2>
  *
  * {@code --simd} switches the packed float-array representation to a {@code $vblock} over
- * an {@code (array (mut v128))} of lane groups (todo-105). Every scalar element access
- * then goes through {@code _v_get} / {@code _v_set} -- an {@code array.get} plus an
- * immediate-lane {@code if}-chain, and for a write a whole-group read-modify-write. The
- * {@code vec:} kernels are intercepted at their call sites and never pay it; not one
- * {@code linalg:} function was, so linalg paid the new representation's cost and got
- * nothing back (measured: {@code linalg:add} 205 ms scalar, 230 ms under {@code --simd}).
+ * an {@code (array (mut v128))} of lane groups. Every scalar element access then goes
+ * through {@code _v_get} / {@code _v_set} -- an {@code array.get} plus an immediate-lane
+ * {@code if}-chain, and for a write a whole-group read-modify-write. The {@code vec:}
+ * kernels are intercepted at their call sites and never pay it; not one {@code linalg:}
+ * function was, so linalg paid the new representation's cost and got nothing back
+ * (measured: {@code linalg:add} 205 ms scalar, 230 ms under {@code --simd}).
  *
  * <h2>The declined-input protocol</h2>
  *
@@ -131,7 +131,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int OUTER = 14;
 
-	// The element-wise unary ufuncs (todo 109): named emaps, so the kernels are the
+	// The element-wise unary ufuncs: named emaps, so the kernels are the
 	// vec: unary loops with the linalg decline protocol and a copied rank-n dims.
 	// linalg:square / linalg:reciprocal need no kernel -- their spliced defuns call
 	// linalg:mul / linalg:div, which are already intercepted.
@@ -146,8 +146,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int SIGN = 19;
 
-	// The todo-109 Phase 2 transcendental ufuncs (log / tanh / sin / cos / tan / asin /
-	// acos / atan / sinh / cosh): element loops like exp / sign, mirroring
+	// The transcendental ufuncs (log / tanh / sin / cos / tan / asin / acos / atan /
+	// sinh / cosh): element loops like exp / sign, mirroring
 	// WasmLogCompiler / WasmTanhCompiler / WasmSinCosCompiler / WasmAtanCompiler /
 	// WasmSinhCoshCompiler (no lane form exists).
 
@@ -161,7 +161,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int TAN = 24;
 
-	// The todo-109 Phase 2 third-release ufuncs (asin / acos / atan / sinh / cosh):
+	// The inverse-trigonometric / hyperbolic ufuncs (asin / acos / atan / sinh / cosh):
 	// element loops mirroring WasmAtanCompiler / WasmSinhCoshCompiler.
 
 	static final int ASIN = 25;
@@ -174,7 +174,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int COSH = 29;
 
-	// The comparison-select ufuncs (todo 109 Phase 3): the elementwise shape with the
+	// The comparison-select ufuncs: the elementwise shape with the
 	// arithmetic lane op replaced by a gt/lt mask + bitselect (array-array and the f64
 	// scalar broadcast) or a scalar select (the widened f32-vs-scalar element loop).
 	// linalg:clip / linalg:relu need no kernel -- their spliced defuns compose
@@ -185,7 +185,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int MINIMUM = 31;
 
-	// The internal CNN window unfolding pair (todo 117): pure index arithmetic through
+	// The internal CNN window unfolding pair: pure index arithmetic through
 	// _v_get / _v_set element loops -- no lanes, but no boxing and no generic numeric
 	// dispatch either, which is what dominated the accelerated convolution runs.
 
@@ -193,7 +193,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int COL2IM = 33;
 
-	// The declined-shape follow-up (todo 117): the general numpy broadcast behind the
+	// The declined call shapes: the general numpy broadcast behind the
 	// element-wise kernels' unequal-dims branch, the rank-n axes transpose, and the
 	// axis folds of sum/amax/amin/argmax/argmin. All _v_get / _v_set element loops --
 	// every element is read widened to f64, computed in f64 and narrowed only by a
@@ -354,7 +354,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, ok);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
-		// Unequal shapes: the general numpy broadcast (todo 117 follow-up). BCAST
+		// Unequal shapes: the general numpy broadcast. BCAST
 		// answers null for an incompatible pair, and B0 hands that straight to the
 		// call site's decline branch -- the defun then signals its own error.
 		get(w, a);
@@ -460,8 +460,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, ok);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
-		// Unequal shapes: the general numpy broadcast (todo 117 follow-up), with the
-		// strict select as the op; null (incompatible) flows to the decline exit.
+		// Unequal shapes: the general numpy broadcast, with the strict select as the
+		// op; null (incompatible) flows to the decline exit.
 		get(w, a);
 		get(w, bArg);
 		i32Const(w, greater ? BOP_MAX : BOP_MIN);
@@ -610,7 +610,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		makeFarrayWithDims(w, nd, vbD);
 	}
 
-	// --- element-wise unary ufuncs (todo 109)
+	// --- element-wise unary ufuncs
 	// --------------------------------------------
 
 	// (linalg:exp a) / (linalg:log a) / (linalg:tanh a) / (linalg:sqrt a) /
@@ -742,8 +742,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// is
 	// the same IEEE comparison the compiled `>` lowers to, so ties, -0.0 and NaN all
 	// agree
-	// with the defun -- and, since the todo-108 fixes, with the interpreter's and the
-	// JVM's `>` as well (all three backends compare IEEE now).
+	// with the defun -- and with the interpreter's and the JVM's `>` as well (all three
+	// backends compare IEEE now).
 	//
 	// params: 0 = a. i32: count 1, i 2, bi 3. f64: best 4, x 5. eq: res 6, vbA 7.
 	private static byte[] buildExtremum(boolean max, boolean index, int vecBase) {
@@ -1297,7 +1297,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// which is then written out element-wise through _v_set -- O(n*p) writes against
 	// O(n*m*p) flops. The f64 accumulator is NOT optional at #f width: the lanes of a
 	// matrix product run across the output row, not along the summation axis, so the
-	// todo-106 single-precision-reduction contract does not apply, and accumulating in
+	// single-precision `#f` reduction contract does not apply, and accumulating in
 	// f64 in k-ascending order (the defun's own ijk summation order per output cell)
 	// keeps the result bit-identical to the oracle at BOTH widths -- see
 	// JvmSimdVectorTemplate.laMatmulF, which keeps a double[] accumulator row for the
@@ -1732,7 +1732,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.I32_SUB);
 	}
 
-	// --- %la-im2col / %la-col2im (todo 117) --------------------------------------------
+	// --- %la-im2col / %la-col2im -------------------------------------------------------
 
 	// (linalg::%la-im2col x fh fw stride pad): unfolds a rank-4 packed NCHW array into
 	// the (n*oh*ow, c*fh*fw) window matrix, mirroring the linalg.lisp defun loop for
@@ -2081,7 +2081,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	// --- shared emit helpers --------------------------------------------------------
 
-	// --- the declined-shape follow-up kernels (todo 117): bcast / axes / axis folds ---
+	// --- the declined call-shape kernels: bcast / axes / axis folds ------------------
 
 	// (linalg::%la-bcast-loop op a b), reached from the element-wise kernels'
 	// unequal-dims branch with the op as an i31: the general numpy broadcast walk. The

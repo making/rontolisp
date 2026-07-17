@@ -4,10 +4,10 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * The {@code .todo/86} integration target: Eitaro Fukamachi's REAL assoc-utils source
- * (vendored unmodified under {@code src/test/resources/assoc-utils}, Public Domain) loads
- * via {@code asdf:load-system} and exercises the alist read/convert API on all four
- * backends via {@link AsdfLibraryE2eSupport}.
+ * An ASDF subset integration target ({@code .kb/asdf.md}): Eitaro Fukamachi's REAL
+ * assoc-utils source (vendored unmodified under {@code src/test/resources/assoc-utils},
+ * Public Domain) loads via {@code asdf:load-system} and exercises the alist read/convert
+ * API on all four backends via {@link AsdfLibraryE2eSupport}.
  *
  * <p>
  * The integration added several general features the library depends on: {@code mapl},

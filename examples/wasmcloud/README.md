@@ -14,12 +14,16 @@ Each port keeps the routes and response bodies of the original template.
 | service-tcp | [`service-tcp/`](service-tcp/) | yes | yes | no (serve + tcp) | no (service model) |
 | http-api-with-distributed-workloads | not ported | - | - | - | - |
 
-The gaps in the last three rows are recorded in
-`.todo/53-wasmcloud-template-gaps.md`. The `wasi:keyvalue` one is no longer a
-missing capability -- a served component can import the interface, and
+The `wasi:keyvalue` gap is not a missing capability: a served component can
+import the interface, and
 [`examples/wit/keyvalue/page-hits-server.lisp`](../wit/keyvalue/page-hits-server.lisp)
-is a page-hit counter that does, keeping its counts on wasmCloud across requests.
-This port has simply not been rewritten against it yet.
+is a page-hit counter that does, keeping its counts on wasmCloud across
+requests. This port has simply not been rewritten against it yet.
+
+`service-tcp` has no WASM path for either half: serving and the tcp built-ins
+cannot be combined in one `--component` binary, and the wasmCloud v2 service
+model (`wasi:cli/run` + `wasi:sockets` 0.2) does not match rontolisp's WASI 0.3
+sockets.
 
 ## Running
 

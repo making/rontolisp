@@ -50,7 +50,7 @@ class WasmLispCompilerTest {
 
 	@Test
 	void unwindProtectCompilesInEhMode() {
-		// The wasm exception-handling proposal (todo 129): unwind-protect compiles into
+		// The wasm exception-handling proposal: unwind-protect compiles into
 		// a try_table (catch_all_ref) whose landing runs the cleanups and rethrows.
 		// Running the output needs `wasmtime -W exceptions=y` (37+).
 		assertThat(compile("(unwind-protect 1 2)")).isNotEmpty();
@@ -68,8 +68,7 @@ class WasmLispCompilerTest {
 	void ehModeEmitsTagSectionAndPlainModuleDoesNot() {
 		// The EH machinery (tag section id 13) is emitted ONLY when the program uses a
 		// catching/cleanup form; a program without them stays byte-identical to a
-		// build that never knew about EH (proven by the todo-129 stash-dance) and in
-		// particular carries no tag section.
+		// build that never knew about EH and in particular carries no tag section.
 		byte[] plain = compile("(print 1)");
 		byte[] eh = compile("(print (ignore-errors 1))");
 		assertThat(containsSection(plain, 13)).isFalse();
@@ -78,8 +77,8 @@ class WasmLispCompilerTest {
 
 	@Test
 	void withStarFormsRideUnwindProtectAndFlipEhMode() {
-		// The todo-129 step-7 retrofit: the with-* expansions ride unwind-protect on
-		// WASM too (close on EVERY exit, interpreter/JVM parity), so a with-* program
+		// The with-* expansions ride unwind-protect on WASM too (close on EVERY exit,
+		// interpreter/JVM parity), so a with-* program
 		// flips into EH mode (tag section present) and needs `wasmtime -W
 		// exceptions=y` to run.
 		byte[] wof = compile("(with-open-file (s \"f.txt\") (read-line s))");
@@ -535,7 +534,7 @@ class WasmLispCompilerTest {
 
 	@Test
 	void linalgSingleFloatCompilesInEveryMode() {
-		// todo-97: single-float (#f) linalg output compiles in Preview 1 and component
+		// Single-float (#f) linalg output compiles in Preview 1 and component
 		// modes. Both linalg::%la-make branches take a literal :element-type, so the
 		// wasm-GC backend picks the TYPE_F32ARR/F64ARR repr statically (no reader
 		// conditional needed -- unlike the earlier vec::%make-like assumption, wasm-GC
@@ -559,7 +558,7 @@ class WasmLispCompilerTest {
 		assertThat(new WasmLispCompiler(false, true).compile(program)).isNotEmpty();
 	}
 
-	// --- --simd (todo-105): v128 kernels over GC (array (mut v128)) packed arrays ------
+	// --- --simd: v128 kernels over GC (array (mut v128)) packed arrays ----------------
 
 	private static byte[] compileVec(String source, boolean simd) {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
@@ -610,8 +609,8 @@ class WasmLispCompilerTest {
 				0x60, 0x02, 0x63, 0x6D, 0x7F, 0x01, 0x7C,
 				// TYPE_V_SET: (func (param (ref null eq) i32 f64) (result f64))
 				0x60, 0x03, 0x63, 0x6D, 0x7F, 0x7C, 0x01, 0x7C });
-		// --simd emits TWO function blocks: the vec: kernels, then the linalg: ones
-		// (todo-107). Both are absent from a default module -- this delta is the only
+		// --simd emits TWO function blocks: the vec: kernels, then the linalg: ones.
+		// Both are absent from a default module -- this delta is the only
 		// structural guard that a build without the flag stays byte-identical to one that
 		// never knew about it, so it must count BOTH blocks rather than be relaxed.
 		assertThat(functionCount(simd) - functionCount(scalar)).as("the vec: block plus the linalg: block")

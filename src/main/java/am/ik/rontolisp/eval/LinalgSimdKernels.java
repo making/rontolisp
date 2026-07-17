@@ -35,18 +35,20 @@ import jdk.incubator.vector.VectorSpecies;
  * <li>{@code array (+) scalar} at single width does NOT enjoy that bound (the scalar is a
  * full {@code double}), so those kernels compute in {@code double} and narrow once, like
  * {@link VecSimdKernels#scaleF}. They stay scalar loops: widening a {@code float} lane
- * would need {@code FloatVector.convert(F2D)}, the one operation todo-106 removed.</li>
+ * would need {@code FloatVector.convert(F2D)}, the one operation these kernels avoid
+ * everywhere (it is the widening a JIT is least likely to intrinsify, and it costs more
+ * than the lanes it feeds).</li>
  * </ul>
  *
- * The REDUCTIONS follow the todo-106 contract shared by every {@code --simd} backend: a
+ * The REDUCTIONS follow the contract shared by every {@code --simd} backend: a
  * single-float reduction accumulates in single precision and promotes to {@code f64}
  * once, at the value boundary; a double-float reduction differs from the oracle only by
  * summation associativity. {@link #trace} is the exception -- it reads elements widened
  * to {@code double} and accumulates in {@code double} at both widths, exactly as the
  * oracle does, so it is bit-identical. {@link #amax} / {@link #amin} / {@link #argmax} /
- * {@link #argmin} are plain scalar loops over Java's IEEE {@code >} / {@code <}, the
- * oracle's own comparison since the todo-108 group-A fix, so they agree on ties, on
- * {@code -0.0} and on {@code NaN} as well.
+ * {@link #argmin} are plain scalar loops over Java's IEEE {@code >} / {@code <}, which is
+ * the oracle's own comparison now that the interpreter no longer compares floats in a
+ * total order, so they agree on ties, on {@code -0.0} and on {@code NaN} as well.
  *
  * <p>
  * {@link LinalgSimd} is this class's only caller. Keep it free of any other rontolisp
@@ -270,7 +272,7 @@ final class LinalgSimdKernels {
 		return r;
 	}
 
-	// --- element-wise comparison selects: maximum / minimum (todo 109 Phase 3) ------
+	// --- element-wise comparison selects: maximum / minimum -------------------------
 	// linalg:maximum / linalg:minimum are %la-bcast over (if (> x y) x y) and its
 	// mirror, so the kernels mirror the comparison select, never Math.max/Math.min
 	// (different NaN / -0.0 handling). The array-array loops are vec:'s; the scalar
@@ -368,7 +370,7 @@ final class LinalgSimdKernels {
 		return r;
 	}
 
-	// --- element-wise unary ufuncs (todo 109) ----------------------------------------
+	// --- element-wise unary ufuncs ---------------------------------------------------
 	// linalg:exp / log / tanh / sin / cos / tan / asin / acos / atan / sinh / cosh /
 	// sqrt / abs / negative / sign are named
 	// emaps, so their oracle is the emap rule: read widened to double, apply the
@@ -581,12 +583,12 @@ final class LinalgSimdKernels {
 
 	/**
 	 * The oracle's {@code best = a[0]; when (> x best) best = x} loop, verbatim --
-	 * including its comparison semantics. Since the todo-108 group-A fix, rontolisp's
-	 * {@code >} on two floats IS the IEEE {@code >} (a {@code 0.0}/{@code -0.0} tie keeps
-	 * the earlier element, {@code NaN} never wins), so plain Java {@code >} is the
-	 * defun's own comparison. A lane {@code MAX} reduce would diverge on those edges (and
-	 * would have to work around the zero padding of a partial lane group) -- these stay
-	 * scalar loops.
+	 * including its comparison semantics. rontolisp's {@code >} on two floats IS the IEEE
+	 * {@code >}, not a total order (a {@code 0.0}/{@code -0.0} tie keeps the earlier
+	 * element, {@code NaN} never wins), so plain Java {@code >} is the defun's own
+	 * comparison. A lane {@code MAX} reduce would diverge on those edges (and would have
+	 * to work around the zero padding of a partial lane group) -- these stay scalar
+	 * loops.
 	 */
 	static double amax(double[] x) {
 		double best = x[0];
@@ -767,8 +769,9 @@ final class LinalgSimdKernels {
 	 * summation axis ({@code dot}, {@code sum}, and GEMV's per-row dot). Here the lanes
 	 * run across the output row (the {@code j} axis of {@code ikj}), which carries no
 	 * summation, so the accumulator's width is free -- and the oracle's {@code double} is
-	 * both more accurate and free of the {@code convert(F2D)} todo-106 removed. Only the
-	 * accumulator row is {@code double}; the operands and the result stay {@code float}.
+	 * both more accurate and free of the {@code convert(F2D)} widening these kernels
+	 * otherwise avoid. Only the accumulator row is {@code double}; the operands and the
+	 * result stay {@code float}.
 	 */
 	static float[] matmulF(float[] a, float[] b, int n, int m, int p) {
 		float[] r = new float[n * p];
@@ -869,7 +872,7 @@ final class LinalgSimdKernels {
 		return a.clone();
 	}
 
-	// --- CNN window unfolding: %la-im2col / %la-col2im (todo 117) --------------------
+	// --- CNN window unfolding: %la-im2col / %la-col2im -------------------------------
 	// Pure index arithmetic mirroring the linalg.lisp defuns loop for loop -- no lanes,
 	// just compiled loops in place of the interpreter's boxed do-loop tree walk (im2col
 	// dominated the accelerated CNN runs: ~97% of ch07 train time under --simd). im2col
@@ -1014,7 +1017,7 @@ final class LinalgSimdKernels {
 		return img;
 	}
 
-	// --- declined-shape follow-up (todo 117): broadcast / axes transpose / axis folds
+	// --- declined shapes: broadcast / axes transpose / axis folds --------------------
 	// Pure scalar loops mirroring the linalg.lisp defuns element for element -- no
 	// lanes. Every element is read widened to double, the operation runs in double,
 	// and only a store into a single-float result narrows -- the oracle's own

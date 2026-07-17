@@ -20,11 +20,12 @@ import org.jspecify.annotations.Nullable;
 /**
  * The JSON library ({@code rontolisp:json-parse} / {@code rontolisp:json-stringify}),
  * implemented once in rontolisp itself ({@code json.lisp} on the classpath) so a single
- * hand-written parser/serializer runs on every backend. The public functions cannot be
- * plain {@code defun}s because user lambda lists have no {@code &optional} yet
- * ({@code .todo/31}): the fixed-arity entry points are the internal (double-colon)
- * symbols {@code rontolisp::%json-parse} (two arguments) and
- * {@code rontolisp::%json-stringify} (one argument).
+ * hand-written parser/serializer runs on every backend. The public functions are not
+ * plain {@code defun}s: the library defines the fixed-arity internal (double-colon) entry
+ * points {@code rontolisp::%json-parse} (two arguments) and
+ * {@code rontolisp::%json-stringify} (one argument), and the optional-argument public
+ * surface is supplied around them by a dispatcher (interpreter) / call-site rewrite
+ * (compile path) -- see {@code .kb/json.md}.
  *
  * <p>
  * Consumers:

@@ -100,12 +100,11 @@ final class WasmExportCompiler {
 	 * implemented world round-trips with its own parameter names intact
 	 * @param returnType the declared return type designator
 	 * @param async whether the {@code --component} lift uses an <strong>async</strong>
-	 * function type ({@code :async t}, todo 92 Tier 3): the export runs as a stackful
-	 * async task, so I/O inside it (print, fetch, ...) blocks cooperatively instead of
-	 * trapping. Only meaningful on the GC {@code --component} (non-serve) path; ignored
-	 * on Preview 1 / {@code --no-wasi} (core exports whose I/O the host provides
-	 * directly) and rejected under {@code --no-gc --component} (the adapter-free reactor
-	 * has no async machinery)
+	 * function type ({@code :async t}): the export runs as a stackful async task, so I/O
+	 * inside it (print, fetch, ...) blocks cooperatively instead of trapping. Only
+	 * meaningful on the GC {@code --component} (non-serve) path; ignored on Preview 1 /
+	 * {@code --no-wasi} (core exports whose I/O the host provides directly) and rejected
+	 * under {@code --no-gc --component} (the adapter-free reactor has no async machinery)
 	 */
 	record Decl(String name, String exportName, List<String> paramTypes, List<String> paramNames, String returnType,
 			boolean async) {
@@ -636,8 +635,8 @@ final class WasmExportCompiler {
 
 	/**
 	 * The canonical-ABI reallocation function's core export name on the GC
-	 * {@code --component} path (todo 92 Tier 2; mirrors
-	 * {@code NoGcWasmComponentBuilder.CABI_REALLOC} on the {@code --no-gc} path).
+	 * {@code --component} path (mirrors {@code NoGcWasmComponentBuilder.CABI_REALLOC} on
+	 * the {@code --no-gc} path).
 	 */
 	static final String CABI_REALLOC = "cabi_realloc";
 
@@ -658,8 +657,8 @@ final class WasmExportCompiler {
 	 * {@code --component} path, naming which shared {@code cabi_post_*} post-return
 	 * function its lift uses: a {@code :string}/{@code :s-expr} result flattens to a
 	 * single i32 return pointer, every scalar result keeps its own flat type. Mirrors
-	 * {@code NoGcWasmComponentBuilder.postReturnKind} (todo 93), plus {@code :s-expr}
-	 * which only the GC backend supports.
+	 * {@code NoGcWasmComponentBuilder.postReturnKind} on the {@code --no-gc} path, plus
+	 * {@code :s-expr} which only the GC backend supports.
 	 * @param decl the parsed export directive
 	 * @return the signature key ({@code "i32"}/{@code "f64"}/{@code "void"})
 	 */
