@@ -37,6 +37,12 @@
 ;; status, not the future). wasi:cli and wasi:filesystem expose DISTINCT error-code enums,
 ;; so their future<result<_, error-code>> are distinct types needing separate built-ins
 ;; (suffix -cli vs -fs); stream<u8> is structural and shared.
+;;
+;; SINGLE-TASK BY DESIGN: this adapter keeps ONE cached waitable-set and fixed per-call
+;; scratch cells. Its ops run only from synchronous boundaries (the run task, blocking
+;; export wrappers), and $await_waitable's park is legal from a callback task too, so do
+;; NOT generalize it to the core's per-task waitable-sets / context slots / doorbells --
+;; that machinery lives in the generated core module (WasmFutureRuntimeBuilder).
 (module
   (import "mem" "memory" (memory (;0;) 6))
   ;; lowered WASI 0.3 functions

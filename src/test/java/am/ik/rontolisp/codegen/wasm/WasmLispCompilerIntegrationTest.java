@@ -8974,4 +8974,413 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(result.getStdout().trim()).isEqualTo("200\n\"echo hello from a lisp POST\"");
 	}
 
+	// --- the intra-instance multi-task probe: two tasks in ONE component instance ---
+	//
+	// Real hosts never exercise the callback driver's cross-task half today (wasmtime
+	// serve re-instantiates per request), so this probe drives it directly, in the
+	// spike's driver style but through the GENERATED machinery: a rontolisp core with
+	// a test-designated CALLBACK-lifted export is wrapped into a self-contained
+	// component together with a hand-assembled driver core module. The driver
+	// async-lowers a call to `begin`, which suspends on an internal pending future --
+	// a live callback task parked on WAIT | (set << 4) with its context slot and
+	// doorbell armed -- then calls `poke` (a SECOND task in the same instance), whose
+	// settle finds a waiter owned by another task, defers it to begin's ready list and
+	// rings begin's doorbell. The host delivers the doorbell event to the core's
+	// async_cb (task identity restored from context slot 0), the drained waiter
+	// resumes begin's frame ON ITS OWN TASK, begin delivers 42 through task.return and
+	// EXITs, and the driver observes the subtask RETURNED event with the result. Any
+	// deviation traps (non-zero exit).
+	@Test
+	void callbackProbeInterleavesTwoTasksInOneInstance() throws Exception {
+		byte[] component = buildCallbackProbeComponent();
+		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/cb-probe.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+				"/tmp/cb-probe.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+	}
+
+	// Fixed scratch of the probe driver, in its own copy of the shared memory module
+	// (page 5 is free there: the driver component has no WAT adapter).
+	private static final int PROBE_RETPTR = 0x50100;
+
+	private static final int PROBE_EVTP = 0x50110;
+
+	// A component may not re-enter itself (a lowered call of its own lifted export
+	// traps with "cannot enter component instance"), so the probe nests TWO components:
+	// A (the rontolisp core with the callback-lifted `begin` + sync `poke`) and B (the
+	// hand-assembled driver importing them), the multi-task interleaving happening
+	// inside A's ONE instance.
+	private static byte[] buildCallbackProbeComponent() throws Exception {
+		byte[] mem;
+		try (java.io.InputStream in = WasmLispCompilerIntegrationTest.class.getResourceAsStream("component/mem.wasm")) {
+			mem = java.util.Objects.requireNonNull(in, "component/mem.wasm").readAllBytes();
+		}
+		final am.ik.wasm.ComponentWriter c = new am.ik.wasm.ComponentWriter();
+		// Nested components 0 = A (probe), 1 = B (driver).
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_COMPONENT, probeInnerComponent(mem));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_COMPONENT, probeDriverComponent(mem));
+		// Instantiate A (component instance 0), project begin/poke (component funcs
+		// 0/1), instantiate B with them (instance 1), project its run (func 2) and
+		// export it as wasi:cli/run so `wasmtime run` drives the probe.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_INSTANCE, am.ik.wasm.ComponentWriter
+			.vec(List.of(am.ik.wasm.ComponentWriter.componentInstantiate(0, List.of(), List.of()))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_ALIAS,
+				am.ik.wasm.ComponentWriter.vec(List.of(am.ik.wasm.ComponentWriter.aliasInstanceFunc(0, "begin"),
+						am.ik.wasm.ComponentWriter.aliasInstanceFunc(0, "poke"))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_INSTANCE, am.ik.wasm.ComponentWriter
+			.vec(List.of(am.ik.wasm.ComponentWriter.componentInstantiate(1, List.of("begin", "poke"), List.of(0, 1)))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_ALIAS,
+				am.ik.wasm.ComponentWriter.vec(List.of(am.ik.wasm.ComponentWriter.aliasInstanceFunc(1, "run"))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_INSTANCE, am.ik.wasm.ComponentWriter
+			.vec(List.of(am.ik.wasm.ComponentWriter.componentInstanceFromFunc("run", 2))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_EXPORT, am.ik.wasm.ComponentWriter
+			.vec(List.of(am.ik.wasm.ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 2))));
+		return c.toByteArray();
+	}
+
+	// Component A: the probe core -- `begin` (the callback export) suspends on an
+	// internal pending future; `poke` settles it from another task. The wit-imported
+	// support interface exists purely for its type alias, whose derived task-return
+	// built-in is how `begin` delivers its result mid-task.
+	private static byte[] probeInnerComponent(byte[] mem) throws Exception {
+		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("cb-probe");
+		java.nio.file.Files.writeString(dir.resolve("support.wit"), """
+				package test:probe;
+
+				interface support {
+				  type done = s32;
+				  // never bound (the resolver wants at least one function); the probe
+				  // uses only the alias's derived task-return built-in
+				  ping: func();
+				}
+				""");
+		String lisp = """
+				(rontolisp:wit-import "support.wit" :interface "test:probe/support" :package sup)
+				(defvar *fut* nil)
+				(rontolisp:async-defun begin (x)
+				  (setq *fut* (rontolisp::%future-new))
+				  (let ((v (rontolisp:await *fut*)))
+				    (sup:done-task-return (+ x v)))
+				  nil)
+				(defun poke (v)
+				  (rontolisp::%future-settle *fut* v)
+				  v)
+				(rontolisp:wasm-export 'begin :params '(:int))
+				(rontolisp:wasm-export 'poke :params '(:int) :returns :int)
+				""";
+		List<LispVal> program = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(lisp),
+				dir.toString(), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
+				am.ik.rontolisp.eval.SourceLoader.fileSystem());
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		compiler.callbackExportsForTest = java.util.Set.of("begin");
+		compiler.rawCoreForTest = true;
+		byte[] core = compiler.compile(am.ik.rontolisp.eval.WitLibrary.process(program));
+		final am.ik.wasm.ComponentWriter c = new am.ik.wasm.ComponentWriter();
+		// Component types: 0 = the task-return result (s32), 1 = the doorbell
+		// stream<u64>, 2/3 = the lifted function types.
+		final int tDone = 0, tU64Stream = 1, tBegin = 2, tPoke = 3;
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_TYPE,
+				am.ik.wasm.ComponentWriter
+					.vec(List.of(am.ik.wasm.ComponentWriter.definedPrim(am.ik.wasm.ComponentWriter.VT_S32),
+							am.ik.wasm.ComponentWriter.definedStream(am.ik.wasm.ComponentWriter.VT_U64),
+							am.ik.wasm.ComponentWriter.asyncFuncTypeScalars(List.of("x"),
+									List.of(am.ik.wasm.ComponentWriter.VT_S32), am.ik.wasm.ComponentWriter.VT_S32),
+							am.ik.wasm.ComponentWriter.funcTypeScalars(List.of("v"),
+									List.of(am.ik.wasm.ComponentWriter.VT_S32), am.ik.wasm.ComponentWriter.VT_S32))));
+		// Core modules: 0 = shared memory, 1 = preview1 trap stubs, 2 = probe core.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_MODULE, mem);
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_MODULE, probePreview1Stub());
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_MODULE, core);
+		// Core instance 0 = memory, 1 = the preview1 stubs.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_INSTANCE, am.ik.wasm.ComponentWriter
+			.vec(List.of(am.ik.wasm.ComponentWriter.coreInstanceInstantiate(0, List.of(), List.of()))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_ALIAS,
+				am.ik.wasm.ComponentWriter.vec(List.of(am.ik.wasm.ComponentWriter.aliasCoreMemory(0, "memory"),
+						am.ik.wasm.ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_INSTANCE, am.ik.wasm.ComponentWriter
+			.vec(List.of(am.ik.wasm.ComponentWriter.coreInstanceInstantiate(1, List.of(), List.of()))));
+		// Canon built-ins (core funcs 1-8): the support task-return, then the $sched
+		// seven exactly as the serve builder defines them.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CANON,
+				am.ik.wasm.ComponentWriter
+					.vec(List.of(am.ik.wasm.ComponentWriter.canonTaskReturnTypeMemoryUtf8(tDone, 0), // 1
+							am.ik.wasm.ComponentWriter.canonContextGet(0), // 2
+							am.ik.wasm.ComponentWriter.canonContextSet(0), // 3
+							am.ik.wasm.ComponentWriter.canonStreamNew(tU64Stream), // 4
+							am.ik.wasm.ComponentWriter.canonStreamReadAsync(tU64Stream, 0), // 5
+							am.ik.wasm.ComponentWriter.canonStreamWriteAsync(tU64Stream, 0), // 6
+							am.ik.wasm.ComponentWriter.canonWaitableSetNew(), // 7
+							am.ik.wasm.ComponentWriter.canonWaitableJoin()))); // 8
+		// Core instance 2 = the support interface's task-return, 3 = $sched.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_INSTANCE,
+				am.ik.wasm.ComponentWriter.vec(List.of(
+						am.ik.wasm.ComponentWriter.coreInstanceFromFuncs(List.of("[task-return]done"), List.of(1)),
+						am.ik.wasm.ComponentWriter.coreInstanceFromFuncs(WasmComponentImportCompiler.SCHED_FIELDS,
+								List.of(2, 3, 4, 5, 6, 7, 8)))));
+		// Core instance 4 = the probe core.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_INSTANCE,
+				am.ik.wasm.ComponentWriter.vec(List
+					.of(am.ik.wasm.ComponentWriter.coreInstanceInstantiate(2, List.of("mem", "wasi_snapshot_preview1",
+							"test:probe/support", WasmComponentImportCompiler.SCHED_MODULE), List.of(0, 1, 2, 3)))));
+		// Core funcs 9-11: the core's exports; component funcs 0/1: begin
+		// CALLBACK-lifted against the core's async_cb (the serve handle shape), poke
+		// sync-lifted. Nothing calls the core's `run` -- the probe's top level only
+		// re-initializes wasm globals that start null anyway.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_ALIAS,
+				am.ik.wasm.ComponentWriter.vec(List.of(am.ik.wasm.ComponentWriter.aliasCoreFunc(4, "begin"),
+						am.ik.wasm.ComponentWriter.aliasCoreFunc(4, "poke"),
+						am.ik.wasm.ComponentWriter.aliasCoreFunc(4, "async_cb"))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CANON,
+				am.ik.wasm.ComponentWriter
+					.vec(List.of(am.ik.wasm.ComponentWriter.canonLiftMemoryUtf8AsyncCallback(9, tBegin, 0, 11),
+							am.ik.wasm.ComponentWriter.canonLift(10, tPoke))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_EXPORT, am.ik.wasm.ComponentWriter.vec(List
+			.of(am.ik.wasm.ComponentWriter.exportFunc("begin", 0), am.ik.wasm.ComponentWriter.exportFunc("poke", 1))));
+		return c.toByteArray();
+	}
+
+	// Component B: the hand-assembled driver. Imports A's begin/poke as component
+	// functions, async-lowers begin (its own memory module carries the return area),
+	// and exports its lifted `run`.
+	private static byte[] probeDriverComponent(byte[] mem) {
+		final am.ik.wasm.ComponentWriter c = new am.ik.wasm.ComponentWriter();
+		final int tBegin = 0, tPoke = 1, tRunResult = 2, tRun = 3;
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_TYPE,
+				am.ik.wasm.ComponentWriter.vec(List.of(
+						am.ik.wasm.ComponentWriter.asyncFuncTypeScalars(List.of("x"),
+								List.of(am.ik.wasm.ComponentWriter.VT_S32), am.ik.wasm.ComponentWriter.VT_S32),
+						am.ik.wasm.ComponentWriter.funcTypeScalars(List.of("v"),
+								List.of(am.ik.wasm.ComponentWriter.VT_S32), am.ik.wasm.ComponentWriter.VT_S32),
+						am.ik.wasm.ComponentWriter.definedResultVoid(),
+						am.ik.wasm.ComponentWriter.asyncFuncTypeResultType(2))));
+		// Component funcs 0/1: the imported begin/poke.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_IMPORT,
+				am.ik.wasm.ComponentWriter.vec(List.of(am.ik.wasm.ComponentWriter.importFunc("begin", tBegin),
+						am.ik.wasm.ComponentWriter.importFunc("poke", tPoke))));
+		// Core modules: 0 = the driver's own memory, 1 = the driver.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_MODULE, mem);
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_MODULE, probeDriverModule());
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_INSTANCE, am.ik.wasm.ComponentWriter
+			.vec(List.of(am.ik.wasm.ComponentWriter.coreInstanceInstantiate(0, List.of(), List.of()))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_ALIAS,
+				am.ik.wasm.ComponentWriter.vec(List.of(am.ik.wasm.ComponentWriter.aliasCoreMemory(0, "memory"),
+						am.ik.wasm.ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
+		// Core funcs 1-5: begin async-lowered (a subtask + RETURNED event), poke
+		// sync-lowered, and the driver's own waitable trio.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CANON,
+				am.ik.wasm.ComponentWriter
+					.vec(List.of(am.ik.wasm.ComponentWriter.canonLowerAsyncMemoryReallocUtf8(0, 0, 0), // 1
+							am.ik.wasm.ComponentWriter.canonLower(1), // 2
+							am.ik.wasm.ComponentWriter.canonWaitableSetNew(), // 3
+							am.ik.wasm.ComponentWriter.canonWaitableJoin(), // 4
+							am.ik.wasm.ComponentWriter.canonWaitableSetWait(0)))); // 5
+		// Core instance 1 = the driver's import surface, 2 = the driver.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_INSTANCE,
+				am.ik.wasm.ComponentWriter.vec(List.of(am.ik.wasm.ComponentWriter.coreInstanceFromFuncs(
+						List.of("begin-start", "poke", "ws-new", "w-join", "ws-wait"), List.of(1, 2, 3, 4, 5)))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_INSTANCE, am.ik.wasm.ComponentWriter
+			.vec(List.of(am.ik.wasm.ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "p"), List.of(0, 1)))));
+		// Core func 6 = the driver's run; lift it like rontolisp's own run export
+		// (async-typed sync-ABI, so its blocking waits are legal).
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_ALIAS,
+				am.ik.wasm.ComponentWriter.vec(List.of(am.ik.wasm.ComponentWriter.aliasCoreFunc(2, "run"))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CANON,
+				am.ik.wasm.ComponentWriter.vec(List.of(am.ik.wasm.ComponentWriter.canonLift(6, tRun))));
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_EXPORT,
+				am.ik.wasm.ComponentWriter.vec(List.of(am.ik.wasm.ComponentWriter.exportFunc("run", 2))));
+		return c.toByteArray();
+	}
+
+	// The eight wasi_snapshot_preview1 imports of a component-mode core, as trap stubs:
+	// the probe never does I/O, so reaching one is a probe bug worth trapping on.
+	private static byte[] probePreview1Stub() {
+		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+		am.ik.wasm.WasmWriter w = new am.ik.wasm.WasmWriter(out);
+		w.write("\0asm").writeLittleEndian4(1);
+		w.writeTypeSection(types -> {
+			types.addFunc(new am.ik.wasm.Type[] { am.ik.wasm.Type.I32, am.ik.wasm.Type.I32, am.ik.wasm.Type.I32,
+					am.ik.wasm.Type.I32 }, new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 0
+			types
+				.addFunc(
+						new am.ik.wasm.Type[] { am.ik.wasm.Type.I32, am.ik.wasm.Type.I32, am.ik.wasm.Type.I32,
+								am.ik.wasm.Type.I32, am.ik.wasm.Type.I32, am.ik.wasm.Type.I64, am.ik.wasm.Type.I64,
+								am.ik.wasm.Type.I32, am.ik.wasm.Type.I32 },
+						new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 1
+			types.addFunc(new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }, new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 2
+			types.addFunc(new am.ik.wasm.Type[] { am.ik.wasm.Type.I32, am.ik.wasm.Type.I32 },
+					new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 3
+			types.addFunc(new am.ik.wasm.Type[] { am.ik.wasm.Type.I32, am.ik.wasm.Type.I64, am.ik.wasm.Type.I32 },
+					new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 4
+		});
+		w.writeFunction(f -> f.addFunction(0) // fd_write
+			.addFunction(0) // fd_read
+			.addFunction(1) // path_open
+			.addFunction(2) // fd_close
+			.addFunction(3) // random_get
+			.addFunction(4) // clock_time_get
+			.addFunction(3) // environ_sizes_get
+			.addFunction(3)); // environ_get
+		w.writeExport(e -> e.addExport("fd_write", am.ik.wasm.ExternalKind.FUNCTION, 0)
+			.addExport("fd_read", am.ik.wasm.ExternalKind.FUNCTION, 1)
+			.addExport("path_open", am.ik.wasm.ExternalKind.FUNCTION, 2)
+			.addExport("fd_close", am.ik.wasm.ExternalKind.FUNCTION, 3)
+			.addExport("random_get", am.ik.wasm.ExternalKind.FUNCTION, 4)
+			.addExport("clock_time_get", am.ik.wasm.ExternalKind.FUNCTION, 5)
+			.addExport("environ_sizes_get", am.ik.wasm.ExternalKind.FUNCTION, 6)
+			.addExport("environ_get", am.ik.wasm.ExternalKind.FUNCTION, 7));
+		w.writeCode(codes -> {
+			for (int i = 0; i < 8; i++) {
+				codes.addFunction(new byte[] { 0x00, 0x00, 0x0b }); // unreachable
+			}
+		});
+		return out.toByteArray();
+	}
+
+	// The hand-assembled driver: run the core's top level, async-call begin(41) --
+	// which MUST suspend -- join its subtask into an own waitable-set, poke(1) --
+	// the second task, whose settle rings begin's doorbell -- then wait for begin's
+	// RETURNED event and check the task-returned 42 in the return area.
+	private static byte[] probeDriverModule() {
+		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+		am.ik.wasm.WasmWriter w = new am.ik.wasm.WasmWriter(out);
+		w.write("\0asm").writeLittleEndian4(1);
+		w.writeTypeSection(types -> {
+			types.addFunc(new am.ik.wasm.Type[] { am.ik.wasm.Type.I32, am.ik.wasm.Type.I32 },
+					new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 0: begin-start /
+																	// ws-wait
+			types.addFunc(new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }, new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 1:
+																															// poke
+			types.addFunc(new am.ik.wasm.Type[] {}, new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 2:
+																									// ws-new
+																									// /
+																									// run
+			types.addFunc(new am.ik.wasm.Type[] { am.ik.wasm.Type.I32, am.ik.wasm.Type.I32 }, new am.ik.wasm.Type[] {}); // 3:
+																															// w-join
+		});
+		w.writeImportSection(imports -> {
+			imports.add(iw -> {
+				iw.write("mem".length(), "mem", "memory".length(), "memory");
+				iw.write(am.ik.wasm.ExternalKind.MEMORY);
+				iw.write(0x00);
+				iw.writeUnsignedLeb128(4);
+			});
+			imports.addImport("p", "begin-start", am.ik.wasm.ExternalKind.FUNCTION, 0);
+			imports.addImport("p", "poke", am.ik.wasm.ExternalKind.FUNCTION, 1);
+			imports.addImport("p", "ws-new", am.ik.wasm.ExternalKind.FUNCTION, 2);
+			imports.addImport("p", "w-join", am.ik.wasm.ExternalKind.FUNCTION, 3);
+			imports.addImport("p", "ws-wait", am.ik.wasm.ExternalKind.FUNCTION, 0);
+		});
+		w.writeFunction(f -> f.addFunction(2));
+		w.writeExport(e -> e.addExport("run", am.ik.wasm.ExternalKind.FUNCTION, 5));
+		w.writeCode(codes -> codes.addFunction(probeDriverBody()));
+		return out.toByteArray();
+	}
+
+	private static byte[] probeDriverBody() {
+		java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+		am.ik.wasm.WasmWriter w = new am.ik.wasm.WasmWriter(body);
+		final int PACKED = 0, SUB = 1, SET = 2, EV = 3;
+		w.write(1);
+		w.writeUnsignedLeb128(4);
+		w.write(am.ik.wasm.Type.I32);
+		// packed = begin-start(41, RETPTR); a RETURNED (2) status means begin never
+		// suspended -- the probe would observe nothing, so trap.
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(41);
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(PROBE_RETPTR);
+		w.write(am.ik.wasm.Instruction.CALL);
+		w.writeSignedLeb128(0);
+		w.write(am.ik.wasm.Instruction.SET_LOCAL);
+		w.writeSignedLeb128(PACKED);
+		w.write(am.ik.wasm.Instruction.GET_LOCAL);
+		w.writeSignedLeb128(PACKED);
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(0xF);
+		w.write(am.ik.wasm.Instruction.I32_AND);
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(am.ik.wasm.Instruction.I32_EQ);
+		w.write(am.ik.wasm.Instruction.IF, 0x40);
+		w.write(am.ik.wasm.Instruction.UNREACHABLE);
+		w.write(am.ik.wasm.Instruction.END);
+		w.write(am.ik.wasm.Instruction.GET_LOCAL);
+		w.writeSignedLeb128(PACKED);
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(4);
+		w.write(am.ik.wasm.Instruction.I32_SHR_U);
+		w.write(am.ik.wasm.Instruction.SET_LOCAL);
+		w.writeSignedLeb128(SUB);
+		w.write(am.ik.wasm.Instruction.CALL);
+		w.writeSignedLeb128(2);
+		w.write(am.ik.wasm.Instruction.SET_LOCAL);
+		w.writeSignedLeb128(SET);
+		w.write(am.ik.wasm.Instruction.GET_LOCAL);
+		w.writeSignedLeb128(SUB);
+		w.write(am.ik.wasm.Instruction.GET_LOCAL);
+		w.writeSignedLeb128(SET);
+		w.write(am.ik.wasm.Instruction.CALL);
+		w.writeSignedLeb128(3);
+		// poke(1) -> 1: the second task settles begin's future and rings its doorbell.
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(am.ik.wasm.Instruction.CALL);
+		w.writeSignedLeb128(1);
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(am.ik.wasm.Instruction.I32_NE);
+		w.write(am.ik.wasm.Instruction.IF, 0x40);
+		w.write(am.ik.wasm.Instruction.UNREACHABLE);
+		w.write(am.ik.wasm.Instruction.END);
+		// Wait for begin's subtask RETURNED event.
+		w.write(am.ik.wasm.Instruction.BLOCK, 0x40);
+		w.write(am.ik.wasm.Instruction.LOOP, 0x40);
+		w.write(am.ik.wasm.Instruction.GET_LOCAL);
+		w.writeSignedLeb128(SET);
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(PROBE_EVTP);
+		w.write(am.ik.wasm.Instruction.CALL);
+		w.writeSignedLeb128(4);
+		w.write(am.ik.wasm.Instruction.SET_LOCAL);
+		w.writeSignedLeb128(EV);
+		w.write(am.ik.wasm.Instruction.GET_LOCAL);
+		w.writeSignedLeb128(EV);
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(1); // EVENT_SUBTASK
+		w.write(am.ik.wasm.Instruction.I32_EQ);
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(PROBE_EVTP);
+		w.write(am.ik.wasm.Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(am.ik.wasm.Instruction.GET_LOCAL);
+		w.writeSignedLeb128(SUB);
+		w.write(am.ik.wasm.Instruction.I32_EQ);
+		w.write(am.ik.wasm.Instruction.I32_AND);
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(PROBE_EVTP);
+		w.write(am.ik.wasm.Instruction.I32_LOAD, 0x02, 0x04);
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(2); // RETURNED
+		w.write(am.ik.wasm.Instruction.I32_EQ);
+		w.write(am.ik.wasm.Instruction.I32_AND);
+		w.write(am.ik.wasm.Instruction.BR_IF, 1);
+		w.write(am.ik.wasm.Instruction.BR, 0);
+		w.write(am.ik.wasm.Instruction.END); // loop
+		w.write(am.ik.wasm.Instruction.END); // block
+		// The task-returned result must be 41 + 1.
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(PROBE_RETPTR);
+		w.write(am.ik.wasm.Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(42);
+		w.write(am.ik.wasm.Instruction.I32_NE);
+		w.write(am.ik.wasm.Instruction.IF, 0x40);
+		w.write(am.ik.wasm.Instruction.UNREACHABLE);
+		w.write(am.ik.wasm.Instruction.END);
+		// run's result: the ok discriminant of result<_,_>.
+		w.write(am.ik.wasm.Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(am.ik.wasm.Instruction.END);
+		return body.toByteArray();
+	}
+
 }

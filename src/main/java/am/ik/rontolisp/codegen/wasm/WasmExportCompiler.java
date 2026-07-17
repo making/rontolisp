@@ -325,6 +325,20 @@ final class WasmExportCompiler {
 	}
 
 	/**
+	 * Whether the export is CALLBACK-lifted: the serve-mode {@code handle}, or a
+	 * test-designated export. Its wrapper returns the packed callback code (EXIT when the
+	 * target completed -- the result went out through {@code task.return} -- or
+	 * {@code WAIT | (set << 4)} when it suspended, turning the call into a live callback
+	 * task whose events arrive through {@code _async_cb}).
+	 * @param ctx the compilation context
+	 * @param decl the parsed declaration
+	 * @return true for a callback-lifted export wrapper
+	 */
+	static boolean isCallbackExport(WasmLispCompiler.Ctx ctx, Decl decl) {
+		return isServeHandle(ctx.serve, decl) || ctx.callbackExports.contains(decl.exportName());
+	}
+
+	/**
 	 * Emits the wrapper body (terminated by {@code end}) into {@code ctx.writer}. The
 	 * body boxes each parameter, calls the target function and unboxes the result.
 	 * @param ctx the compilation context (its writer receives the instructions)
@@ -361,6 +375,26 @@ final class WasmExportCompiler {
 		if (ctx.ehMode) {
 			WasmEmitHelper.emitCatchAllPrologue(ctx);
 		}
+		final boolean asyncTarget = ctx.asyncFuncBase >= 0 && ctx.asyncDefunNames.contains(decl.name());
+		final boolean callbackDriven = asyncTarget && isCallbackExport(ctx, decl);
+		// asyncMode: every host entry re-establishes the CURRENT task. A callback
+		// export begins a fresh task record (frames created while the target runs
+		// eagerly are owned by it, and its waitable-set starts empty); every other
+		// wrapper runs as a synchronous boundary, so a stale record from an earlier
+		// task on a reused instance must not leak in.
+		if (ctx.asyncFuncBase >= 0 && ctx.currentTaskGlobalIndex >= 0) {
+			if (callbackDriven) {
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_TASK_BEGIN);
+				ctx.writer.write(Instruction.DROP);
+			}
+			else {
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+				ctx.writer.write(Instruction.SET_GLOBAL);
+				ctx.writer.writeSignedLeb128(ctx.currentTaskGlobalIndex);
+			}
+		}
 		// env (defuns ignore it)
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
@@ -372,14 +406,52 @@ final class WasmExportCompiler {
 		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(targetFuncIndex);
+		if (callbackDriven) {
+			// The CALLBACK driver: a settled target already delivered its result
+			// through task.return, so the wrapper answers EXIT; a still-pending one
+			// turns this call into a live callback task -- _task_suspend arms the
+			// doorbell, registers the record and the context slots, and returns the
+			// packed WAIT code the host parks the task on (events then arrive through
+			// _async_cb). A rejected future's re-signal (the poll) reaches the
+			// catch-all above -- the trap an error in an exported function produces.
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_POLL);
+			int polled = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(ctx.futureTypeIndex);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.write(0x7f); // blocktype: one i32 result
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_TASK_SUSPEND);
+			ctx.writer.write(Instruction.ELSE);
+			// Completed synchronously: the record was never registered; just clear
+			// the CURRENT task and answer EXIT.
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.write(Instruction.SET_GLOBAL);
+			ctx.writer.writeSignedLeb128(ctx.currentTaskGlobalIndex);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.write(Instruction.END);
+			if (ctx.ehMode) {
+				WasmEmitHelper.emitCatchAllEpilogue(ctx);
+			}
+			ctx.writer.write(Instruction.END);
+			return;
+		}
 		// asyncMode: an async-defun target returns a TYPE_FUTURE; poll it so the host
 		// sees the settled value, and drive a still-pending one through the blocking
 		// event loop (_sched_loop) -- an async target that awaited a host-backed
-		// future (a fetch inside a served handler) suspended, and the export boundary
-		// is synchronous, so the loop runs it to completion here. A rejected future's
-		// re-signal reaches the catch-all above (the trap an error in an exported
-		// function produces today).
-		if (ctx.asyncFuncBase >= 0 && ctx.asyncDefunNames.contains(decl.name())) {
+		// future suspended, and this export boundary is synchronous, so the loop runs
+		// it to completion here. A rejected future's re-signal reaches the catch-all
+		// above (the trap an error in an exported function produces today).
+		if (asyncTarget) {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_POLL);
 			int polled = ctx.allocTemp();
@@ -401,9 +473,10 @@ final class WasmExportCompiler {
 			ctx.writer.writeSignedLeb128(polled);
 		}
 		emitUnboxResult(ctx, decl.returnType());
-		if (isServeHandle(ctx.serve, decl)) {
-			// the callback-lifted handle returns the packed EXIT code; the response
-			// went out through task.return inside %serve-handle
+		if (isCallbackExport(ctx, decl)) {
+			// a callback-lifted export whose target is not an async-defun completed
+			// within the call: the packed EXIT code (the response went out through
+			// task.return inside the target)
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(0);
 		}

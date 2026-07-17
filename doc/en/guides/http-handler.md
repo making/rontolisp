@@ -72,12 +72,12 @@ world) and the host owns the socket, so the `port` argument is ignored. The
 flags enable what the component actually uses: the WebAssembly GC proposal
 (`-W gc=y`) and the exception-handling proposal (`-W exceptions=y`, which the
 Lisp-written HTTP glue uses to detect end-of-body). The handler is lifted as a
-**callback async** export, and the `stream<u8>`/`future<T>` body built-ins are
-the asynchronous variants that park on a blocking wait when a read or write
-reports BLOCKED — all of it part of the base component-model async ABI, which
-is default-on in wasmtime 46+, so no gated feature flags are needed. The
-response is still delivered mid-task through `canon task.return`, and the body
-streams after it.
+**callback async** export: a handler that suspends (awaiting a timer, a fetch
+or a body read) hands control back to the host, which delivers each completion
+event through the component's callback — all of it part of the base
+component-model async ABI, which is default-on in wasmtime 46+, so no gated
+feature flags are needed. The response is still delivered mid-task through
+`canon task.return`, and the body streams after it.
 
 ## Other WASI HTTP runtimes
 

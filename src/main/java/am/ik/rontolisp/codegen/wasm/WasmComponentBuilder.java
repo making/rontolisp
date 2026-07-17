@@ -997,12 +997,14 @@ public final class WasmComponentBuilder {
 	/**
 	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program:
 	 * wrap the rontolisp core (compiled in serve mode, exporting http.lisp's
-	 * {@code handle}) with the preview1 bridge ({@code adapter-http-server-p1.wasm}:
-	 * random / clocks / stdout-stderr over the 0.3 service-world interfaces) and lift
-	 * {@code handle} as the callback-async {@code wasi:http/handler@0.3.0} export. The
-	 * HTTP glue is Lisp (http.lisp), so there is no hand-written serve adapter. Runs
-	 * under {@code wasmtime serve -W gc=y -W exceptions=y} (wasmtime 46+; everything is
-	 * base component-model-async).
+	 * {@code handle} and its real callback {@code async_cb}) with the preview1 bridge
+	 * ({@code adapter-http-server-p1.wasm}: random / clocks / stdout-stderr over the 0.3
+	 * service-world interfaces) and lift {@code handle} as the callback-async
+	 * {@code wasi:http/handler@0.3.0} export -- a pending handler returns the packed WAIT
+	 * code and the host drives it through the callback. The HTTP glue is Lisp
+	 * (http.lisp), so there is no hand-written serve adapter. Runs under
+	 * {@code wasmtime serve -W gc=y -W exceptions=y} (wasmtime 46+; everything is base
+	 * component-model-async).
 	 * @param coreModule the rontolisp core module compiled in serve mode
 	 * @return the wasi:http@0.3.0 handler component binary
 	 */

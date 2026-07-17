@@ -15,6 +15,11 @@
 ;; the shim/fixup pair (shim-nogc-print.wat / fixup-nogc-print.wat) breaks the resulting
 ;; instantiation cycle, so this module is instantiated AFTER the core.
 ;;
+;; SINGLE-TASK BY DESIGN: like the GC adapters, this bridge keeps ONE cached
+;; waitable-set (a module global here) and a fixed per-call scratch. The --no-gc reactor
+;; runs one export invocation at a time, so do NOT generalize it to per-task
+;; waitable-sets / context slots / doorbells.
+;;
 ;; Contract with the sole caller, the core's __write_stdout funnel:
 ;;   fd_write(1, iovAddr, 1, iovAddr + 8) -- fd 1, ONE iovec, inside the core's reserved
 ;;   16-byte fd_write scratch. This lets the bridge reuse the scratch itself once ptr/len

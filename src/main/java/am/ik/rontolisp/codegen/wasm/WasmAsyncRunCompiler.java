@@ -32,8 +32,6 @@ final class WasmAsyncRunCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE);
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(am.ik.wasm.Type.EQ.code());
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
 	}

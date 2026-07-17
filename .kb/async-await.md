@@ -74,23 +74,53 @@ async-defun/async-lambda + await.
   (CompletableFuture or read token), `#<STREAM>`.
 - **Preview-1 wasm-GC**: degenerate synchronous. `%async-run`
   (`WasmAsyncRunCompiler`) calls the thunk through dispatch-0 and wraps the
-  value in a settled kind-2 `TYPE_P1_FUTURE` -- the struct is KEPT as P1's
-  internal degenerate-future representation (its former producer,
-  `rontolisp:then`, is gone); `_p1_future_await` (`FUNC_P1_FUTURE_AWAIT`) is P1's
-  await resolver, and `futurep` ref.tests it. Streams are a compile error.
-  CAVEAT: an async body's ERROR signals at the CALL, not at await (eager
-  run-to-completion) -- observably identical when the await is adjacent.
+  value in a settled kind-2 `TYPE_P1_FUTURE {mut i32 kind, mut value}` -- the
+  struct is KEPT as P1's internal degenerate-future representation (its former
+  producer, `rontolisp:then`, is gone; the then-chain kind-1 branch and third
+  field were deleted with it -- the kind field survives only so the shape does
+  not structurally canonicalize into the one-field `TYPE_CELL`);
+  `_p1_future_await` (`FUNC_P1_FUTURE_AWAIT`) is P1's await resolver
+  (pass-through for non-futures, recursive flatten of the memoized value), and
+  `futurep` ref.tests it. Streams are a compile error. CAVEAT: an async body's
+  ERROR signals at the CALL, not at await (eager run-to-completion) --
+  observably identical when the await is adjacent.
 - **--component (asyncMode)**: async-defun/async-lambda (and a top level with
   awaits) compile as ENTRY+RESUME state machines over first-class
-  `TYPE_FUTURE`s (`WasmAsyncEmit`, `.todo/139` Phase 7). The import layer is a
-  real scheduler (Phase 8): an `async func` wit-import member returns a
-  pending `TYPE_FUTURE` through `rontolisp::%subtask-future` (registry +
-  per-task waitable-set), and the blocking event loop `_sched_loop`
-  (`WasmFutureRuntimeBuilder`) drives suspensions from the synchronous
-  boundaries (the top-level `_start` entry, and a wasm-export wrapper whose
-  async target suspended -- the fetch-inside-serve case). Tasks are
-  cooperative and single-threaded; blocking `waitable-set.wait` is base
-  component-model-async (wasmCloud-legal, see `.kb/wasi-component.md`).
+  `TYPE_FUTURE`s (`WasmAsyncEmit`). The import layer is a real scheduler: an
+  `async func` wit-import member returns a pending `TYPE_FUTURE` through
+  `rontolisp::%subtask-future` (registry + the CURRENT task's waitable-set),
+  and the events are dispatched by the shared core `_sched_dispatch`
+  (`WasmFutureRuntimeBuilder`) under one of TWO drivers. The BLOCKING driver
+  `_sched_loop` (a `waitable-set.wait` loop, base component-model-async and
+  wasmCloud-legal) runs suspensions to completion at the synchronous
+  boundaries: the top-level `_start` entry and a non-serve wasm-export
+  wrapper whose async target suspended. Serve's `handle` boundary instead
+  runs the CALLBACK driver: the wrapper begins a task record
+  (`_task_begin`; frames created while it runs carry it as their OWNER, the
+  5th `TYPE_ASYNC_FRAME` field), and a pending handler does NOT block --
+  `_task_suspend` arms the task's doorbell, registers the record, stores the
+  task id in context slot 0 (wasmtime 46 validates the `context.get/set`
+  immediate to 0, so the ONE slot holds the id and the waitable-set handle
+  rides the record) and returns the packed `WAIT | (set << 4)` code; the
+  host then feeds each event of the task's set to the core-exported
+  `_async_cb` (`async_cb`), which restores the task identity, dispatches,
+  drains and answers WAIT again or EXIT (`task.return` delivered the
+  response mid-task). Cross-task wakeup is a per-task DOORBELL: every
+  callback task owns an intra-component `stream<u64>` with a standing
+  pending read joined into its set (the `$sched` canon built-ins the serve
+  builder synthesizes); `_wake_list` resumes a waiter directly only when its
+  frame's owner IS the current task (or null -- a synchronous boundary's
+  frame, which never task-returns), and otherwise appends it to the owner's
+  ready list, ringing the doorbell on the empty-to-nonempty transition (the
+  write completes immediately against the standing read). The owner's
+  callback re-arms the read BEFORE draining, so no wakeup is lost. Tasks are
+  cooperative and single-threaded; two requests can interleave in ONE
+  instance (current hosts re-instantiate per request, so this is pinned by
+  the hand-assembled callback-probe component in
+  `WasmLispCompilerIntegrationTest`, which runs `begin`/`poke` as two tasks
+  of one instance and observes the doorbell + context round trip). A
+  completed task's doorbell ends and waitable-set are LEAKED (bounded by
+  requests served on a reused instance; hosts today re-instantiate).
   asyncMode FORCES EH mode, so an async component needs
   `wasmtime -W exceptions=y`. Component streams: `TYPE_WASI_STREAM
   {eof, readFn, closeFn}` wraps the wasi-backed body streams http.lisp

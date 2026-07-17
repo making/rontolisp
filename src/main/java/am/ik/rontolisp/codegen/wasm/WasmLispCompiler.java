@@ -244,6 +244,24 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	private boolean asyncMode;
 
+	/**
+	 * Test hook: export names (beyond serve's {@code handle}) given the CALLBACK-lift
+	 * treatment -- the wrapper's core signature gains the trailing packed-code i32, a
+	 * pending target future turns the call into a live callback task instead of driving
+	 * the blocking event loop, and the module imports the {@code $sched} built-ins and
+	 * core-exports {@code async_cb}. Lets the integration test hand-assemble a component
+	 * that runs the doorbell/context machinery with plain scalar exports (no wasi:http
+	 * host needed). Never set on a CLI path.
+	 */
+	Set<String> callbackExportsForTest = Set.of();
+
+	/**
+	 * Test hook: when {@code true}, {@link #compile} returns the raw (import-injected)
+	 * core module instead of wrapping it into a component -- the caller assembles its own
+	 * component around it (the callback-probe integration test).
+	 */
+	boolean rawCoreForTest = false;
+
 	// Function indices (imports come first). Defined functions are indexed relative to
 	// IMPORT_FUNC_COUNT so adding an imported function only requires adding its constant
 	// and bumping the count -- every defined function shifts automatically.
@@ -614,12 +632,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// bucket array can be stored in a cons/cell field and compared with ref.eq.
 	static final int TYPE_HASH_BUCKETS = TYPE_CHAR + 1; // 32
 
-	// Degenerate-future struct {mut i32 kind, mut (ref null eq) base, mut (ref null eq)
-	// fn}: the non-asyncMode runtime representation of a future, distinct from every
-	// other value so futurep and _p1_future_await dispatch on it via ref.test. kind 2 =
-	// settled (base = the memoized result); kind 1 (a base + callback chain) has no
-	// producer since the promise-era rontolisp:then was deleted, but the layout is kept
-	// so the always-emitted runtime bytes stay put.
+	// Degenerate-future struct {mut i32 kind, mut (ref null eq) value}: the
+	// non-asyncMode runtime representation of a future, distinct from every other value
+	// so futurep and _p1_future_await dispatch on it via ref.test. Its only producer,
+	// %async-run, runs the body to completion and wraps the value as kind 2 (settled);
+	// the kind field stays so the struct's shape cannot structurally canonicalize into
+	// the one-field TYPE_CELL (ref.test could no longer tell them apart).
 	static final int TYPE_P1_FUTURE = TYPE_HASH_BUCKETS + 1; // 33
 
 	// String byte array: array (mut i8) -- the GC-managed byte storage for a
@@ -708,13 +726,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// --- the async block (asyncMode only; see WasmAsyncEmit) ----------------------
 	//
-	// Two struct types in ONE rec group (they are structurally identical, and rec-group
-	// membership is what keeps them distinct under wasm-GC's structural type
-	// canonicalization): TYPE_FUTURE {mut i32 state, mut value, mut waiters, mut source}
-	// at asyncTypeBase(), TYPE_ASYNC_FRAME {mut i32 state, mut spill, mut future,
-	// mut env} right after it. Appended before the export/import wrapper signatures
-	// (which shift past them via fixedTypeCount()).
-	static final int ASYNC_TYPE_COUNT = 3;
+	// Three struct types in ONE rec group (the first two are structurally identical,
+	// and rec-group membership is what keeps them distinct under wasm-GC's structural
+	// type canonicalization): TYPE_FUTURE {mut i32 state, mut value, mut waiters,
+	// mut source} at asyncTypeBase(), TYPE_ASYNC_FRAME {mut i32 state, mut spill,
+	// mut future, mut env, mut owner} right after it, then TYPE_WASI_STREAM -- plus the
+	// callback function type (i32 event, i32 waitable, i32 code) -> i32 packed code
+	// used by _sched_dispatch and the serve callback export _async_cb. Appended before
+	// the export/import wrapper signatures (which shift past them via
+	// fixedTypeCount()).
+	static final int ASYNC_TYPE_COUNT = 4;
 
 	// The exception tag index of the one Lisp condition tag ($lisp-cond), emitted only
 	// in EH mode (the program uses handler-case/ignore-errors/unwind-protect). Its
@@ -833,6 +854,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// max(mark, high-water) pop wants.
 	static final int RT_INTERN_HEAP_ADDR = 172;
 
+	// Doorbell scratch of the callback-task runtime (asyncMode with a callback-lifted
+	// export): the standing doorbell reads of EVERY task share one 8-byte cell (the
+	// payload is discarded -- overlapping host writes are harmless), and doorbell
+	// writes read a throwaway u64 element out of a second one. Both 8-aligned, below
+	// the DATA_BASE_OFFSET=256 headroom.
+	static final int DB_READ_SCRATCH_ADDR = 176;
+
+	static final int DB_WRITE_SCRATCH_ADDR = 184;
+
 	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
 	// and
 	// the allocation base just above its 8 bytes. cabi_realloc keeps its pointer in this
@@ -935,6 +965,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.AWAIT_QUALIFIED)
 				|| programUsesSymbol(program, LispNames.SUBTASK_FUTURE_INTERNAL_QUALIFIED);
 		this.asyncMode = this.component && usesAsync;
+		// The callback-task runtime (per-task waitable-sets over context slots +
+		// doorbell streams) exists exactly when the module has a CALLBACK-lifted export:
+		// serve's `handle` (its %serve-handle target is an async-defun, so serve implies
+		// asyncMode), or a test-designated export.
+		boolean cbMode = this.asyncMode && (this.serve || !this.callbackExportsForTest.isEmpty());
 		Set<String> asyncDefunNames = new HashSet<>();
 		if (this.asyncMode) {
 			program = rewriteTopLevelAsyncDefuns(program, asyncDefunNames);
@@ -1290,12 +1325,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		int ehDepthGlobalIndex = ehMode ? GLOBAL_FENV + 1 + globalCount : -1;
 		// asyncMode: the scheduler registry (a cons list of (waitable . (kind .
 		// (future . data))) entries -- kind 0 = subtask, kind 1 = in-flight stream
-		// read), the task waitable-set handle, and the read-buffer free list, after
-		// the EH depth counter (asyncMode implies ehMode). Every non-async module is
-		// byte-identical to a build that never knew about them.
+		// read), the CURRENT task's waitable-set handle, the read-buffer free list,
+		// the CURRENT task record (null at a synchronous boundary), the task-record
+		// list of the callback driver and its id counter, after the EH depth counter
+		// (asyncMode implies ehMode). Every non-async module is byte-identical to a
+		// build that never knew about them.
 		int schedRegistryGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 1 : -1;
 		int schedSetGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 2 : -1;
 		int schedReadFreeGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 3 : -1;
+		int currentTaskGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 4 : -1;
+		int tasksGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 5 : -1;
+		int taskSeqGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 6 : -1;
 
 		// Create string table
 		StringTable stringTable = new StringTable(DATA_BASE_OFFSET);
@@ -1370,7 +1410,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			.frameTypeIndex(this.asyncMode ? asyncTypeBase() + 1 : -1)
 			.wasiStreamTypeIndex(this.asyncMode ? asyncTypeBase() + 2 : -1)
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
-			.asyncDefunNames(Set.copyOf(asyncDefunNames));
+			.asyncDefunNames(Set.copyOf(asyncDefunNames))
+			.currentTaskGlobalIndex(currentTaskGlobalIndex)
+			.callbackExports(cbMode ? this.callbackExportsForTest : Set.of());
 
 		// Pass 2a: Compile each defun body (with env param at slot 0)
 		List<byte[]> userFunctionBodies = new ArrayList<>();
@@ -1733,6 +1775,31 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		final WasmFutureRuntimeBuilder.Sched sched = schedWiring;
+		// The callback-task built-ins ($sched): context slots, the doorbell stream and
+		// the scheduler's own waitable-set new/join pair, imported exactly when the
+		// module has a callback-lifted export (serve's handle; the component builder
+		// canon-defines them into a synthesized "$sched" core instance).
+		WasmFutureRuntimeBuilder.Cb cbWiring = null;
+		if (cbMode) {
+			for (String field : WasmComponentImportCompiler.SCHED_FIELDS) {
+				if (importSlotIndex.putIfAbsent(WasmComponentImportCompiler.SCHED_MODULE + "\0" + field,
+						importSlots.size()) == null) {
+					importSlots.add(new ImportSlot(WasmComponentImportCompiler.SCHED_MODULE, field,
+							WasmComponentImportCompiler.schedParamTypes(field),
+							WasmComponentImportCompiler.schedResultTypes(field)));
+				}
+			}
+			cbWiring = new WasmFutureRuntimeBuilder.Cb(
+					schedOrdinal(importSlotIndex, WasmComponentImportCompiler.FIELD_CONTEXT_GET_0),
+					schedOrdinal(importSlotIndex, WasmComponentImportCompiler.FIELD_CONTEXT_SET_0),
+					schedOrdinal(importSlotIndex, WasmComponentImportCompiler.FIELD_DOORBELL_NEW),
+					schedOrdinal(importSlotIndex, WasmComponentImportCompiler.FIELD_DOORBELL_READ),
+					schedOrdinal(importSlotIndex, WasmComponentImportCompiler.FIELD_DOORBELL_WRITE),
+					schedOrdinal(importSlotIndex, WasmComponentImportCompiler.FIELD_SCHED_SET_NEW),
+					schedOrdinal(importSlotIndex, WasmComponentImportCompiler.FIELD_SCHED_JOIN), schedSetGlobalIndex,
+					tasksGlobalIndex, taskSeqGlobalIndex);
+		}
+		final WasmFutureRuntimeBuilder.Cb cb = cbWiring;
 		// Fill in the deferred import wrapper bodies now that the helper indices are
 		// known (their positions in userFunctionBodies were reserved in Pass 2a). Each
 		// wrapper calls its (module, field) slot's ordinal, so duplicate bindings
@@ -2249,11 +2316,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(am.ik.wasm.Mutability.VAR);
 				});
 				// type 33 (TYPE_P1_FUTURE): degenerate-future struct {mut i32 kind, mut
-				// (ref null eq) base, mut (ref null eq) fn} -- all fields mutable so
-				// _p1_future_await can rewrite a future to its settled state in place.
+				// (ref null eq) value} -- always created settled (kind 2) by %async-run.
 				types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
 					fields.addField(true, w -> w.write(Type.I32));
-					fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 					fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 				}));
 				// type 34 (TYPE_STR_BYTES): array (mut i8) -- a string's byte storage.
@@ -2370,9 +2435,13 @@ public final class WasmLispCompiler implements LispCompiler {
 							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 						});
 						// TYPE_ASYNC_FRAME {mut i32 state, mut spill, mut future,
-						// mut env}
+						// mut env, mut owner} -- owner is the task record of the
+						// callback task the frame belongs to (null for a synchronous
+						// boundary's frame), the routing key of _wake_list's
+						// cross-task doorbell deferral.
 						rec.addSubFinalStruct(fields -> {
 							fields.addField(true, w -> w.write(Type.I32));
+							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
@@ -2388,16 +2457,29 @@ public final class WasmLispCompiler implements LispCompiler {
 							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 						});
 					});
+					// The callback type (i32 event, i32 waitable, i32 code) -> i32
+					// packed code: _sched_dispatch and the serve callback _async_cb.
+					types.add(w -> {
+						w.write(Type.FUNC);
+						w.write(3);
+						w.write(Type.I32);
+						w.write(Type.I32);
+						w.write(Type.I32);
+						w.write(1);
+						w.write(Type.I32);
+					});
 				}
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed type (TYPE_F32ARR, or the --simd block's TYPE_V_SET). One per
 				// (rontolisp:wasm-export ...) directive.
 				for (ExportPlan p : exportPlans) {
-					// the serve-mode handle is CALLBACK-lifted: its core signature
-					// carries the trailing i32 packed callback code
+					// a CALLBACK-lifted export (the serve-mode handle, or a
+					// test-designated one): its core signature carries the trailing
+					// i32 packed callback code
 					types.addFunc(WasmExportCompiler.paramWasmTypes(p.decl()),
-							WasmExportCompiler.isServeHandle(this.serve, p.decl()) ? new Type[] { Type.I32 }
-									: WasmExportCompiler.resultWasmTypes(p.decl()));
+							WasmExportCompiler.isServeHandle(this.serve, p.decl())
+									|| this.callbackExportsForTest.contains(p.decl().exportName())
+											? new Type[] { Type.I32 } : WasmExportCompiler.resultWasmTypes(p.decl()));
 				}
 				// Host-ABI signatures of the imported functions, one per unique (module,
 				// field) slot, in the same order as the hostImports entries above -- a
@@ -2633,7 +2715,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// Async future runtime (asyncMode only), right after the --simd block.
 				if (this.asyncMode) {
 					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
-						fnDef.addFunction(WasmFutureRuntimeBuilder.typeIndexOf(i));
+						fnDef.addFunction(WasmFutureRuntimeBuilder.typeIndexOf(i, asyncTypeBase() + 3));
 					}
 				}
 				// User defun functions
@@ -2737,8 +2819,11 @@ public final class WasmLispCompiler implements LispCompiler {
 					});
 				}
 				// asyncMode: the scheduler registry, a (mut (ref null eq)) = null, the
-				// task waitable-set handle, a (mut i32) = 0 (created lazily), and the
-				// read-buffer free list, a (mut (ref null eq)) = null.
+				// CURRENT task's waitable-set handle, a (mut i32) = 0 (created lazily),
+				// the read-buffer free list, a (mut (ref null eq)) = null, then the
+				// callback-task runtime's three: the CURRENT task record and the
+				// task-record list (both (mut (ref null eq)) = null) and the task-id
+				// counter, a (mut i32) = 0.
 				if (this.asyncMode) {
 					gs.add(g -> {
 						g.write(Type.REFNULL.code());
@@ -2763,6 +2848,29 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.writeHeapType(Type.EQ.code());
 						g.write(Instruction.END);
 					});
+					gs.add(g -> {
+						g.write(Type.REFNULL.code());
+						g.writeHeapType(Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
+						g.write(Instruction.END);
+					});
+					gs.add(g -> {
+						g.write(Type.REFNULL.code());
+						g.writeHeapType(Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
+						g.write(Instruction.END);
+					});
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
 				}
 			})
 			// Export section -- component mode exports `run` (the i32-returning _start)
@@ -2771,6 +2879,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			.writeExport(exports -> {
 				if (this.component) {
 					exports.addExport("run", ExternalKind.FUNCTION, FUNC_START);
+					// The REAL callback of a callback-lifted export (serve's handle):
+					// the component builder aliases it as the `callback` canonical
+					// option, and the host invokes it with each event of the waiting
+					// task's waitable-set.
+					if (cbMode) {
+						exports.addExport("async_cb", ExternalKind.FUNCTION,
+								asyncFuncBase() + WasmFutureRuntimeBuilder.OFF_ASYNC_CB);
+					}
 					// Serve mode: the serve adapter calls the core's %http-dispatch (the
 					// wasm-export wrapper) per request and __ronto_alloc for its scratch,
 					// so
@@ -2963,7 +3079,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.asyncMode) {
 					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
 						code.addFunction(WasmFutureRuntimeBuilder.build(i, asyncFuncBase(), asyncTypeBase(),
-								asyncTypeBase() + 1, asyncTypeBase() + 2, sched));
+								asyncTypeBase() + 1, asyncTypeBase() + 2, currentTaskGlobalIndex, sched, cb));
 					}
 				}
 				// User defun function bodies
@@ -3030,6 +3146,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			coreModule = am.ik.wasm.WasmImportInjector.inject(coreModule, hostImports,
 					WasmImportCompiler.PLACEHOLDER_FUNC_BASE);
 		}
+		if (this.rawCoreForTest) {
+			// The callback-probe integration test assembles its own component around
+			// the raw core module.
+			return coreModule;
+		}
 		if (this.component) {
 			// The WASI 0.3 adapter binds the core's imports/exports by their fixed
 			// layout,
@@ -3078,6 +3199,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			return WasmComponentBuilder.build(coreModule, emitSockImport, componentExportDecls, componentImports);
 		}
 		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
+	}
+
+	// The import-slot ordinal of a $sched builtin field.
+	private static int schedOrdinal(Map<String, Integer> importSlotIndex, String field) {
+		return Objects.requireNonNull(importSlotIndex.get(WasmComponentImportCompiler.SCHED_MODULE + "\0" + field));
 	}
 
 	static boolean hasDoubleLiteral(List<LispVal> args) {
@@ -3571,6 +3697,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> asyncDefunNames = Set.of();
 
 		/**
+		 * The global index of the CURRENT task record (asyncMode), or -1. Frames store it
+		 * as their owner at creation; the callback-task runtime swaps it at every host
+		 * entry.
+		 */
+		int currentTaskGlobalIndex = -1;
+
+		/**
+		 * Export names (beyond serve's {@code handle}) given the CALLBACK-lift treatment
+		 * (the test hook); empty on every CLI path.
+		 */
+		Set<String> callbackExports = Set.of();
+
+		/**
 		 * Non-null while compiling an async resume body (asyncMode): the state-machine
 		 * emission mode of the form compilers.
 		 */
@@ -3632,6 +3771,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.wasiStreamTypeIndex = builder.wasiStreamTypeIndex;
 			this.asyncFuncBase = builder.asyncFuncBase;
 			this.asyncDefunNames = builder.asyncDefunNames;
+			this.currentTaskGlobalIndex = builder.currentTaskGlobalIndex;
+			this.callbackExports = builder.callbackExports;
 		}
 
 		static Builder builder() {
@@ -3689,6 +3830,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int asyncFuncBase = -1;
 
 			private Set<String> asyncDefunNames = Set.of();
+
+			private int currentTaskGlobalIndex = -1;
+
+			private Set<String> callbackExports = Set.of();
 
 			Builder writer(WasmWriter writer) {
 				this.writer = writer;
@@ -3812,6 +3957,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder asyncDefunNames(Set<String> asyncDefunNames) {
 				this.asyncDefunNames = asyncDefunNames;
+				return this;
+			}
+
+			Builder currentTaskGlobalIndex(int currentTaskGlobalIndex) {
+				this.currentTaskGlobalIndex = currentTaskGlobalIndex;
+				return this;
+			}
+
+			Builder callbackExports(Set<String> callbackExports) {
+				this.callbackExports = callbackExports;
 				return this;
 			}
 

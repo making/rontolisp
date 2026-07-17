@@ -255,6 +255,55 @@ final class WasmComponentImportCompiler {
 		};
 	}
 
+	// The task/callback scheduler built-ins a module with a CALLBACK-lifted export
+	// (serve's handle) imports under its own pseudo-module: the per-task context slot
+	// (slot 0 = the task id; wasmtime 46 validates the context immediate to 0, so the
+	// waitable-set handle lives in the task record instead of a second slot), the
+	// intra-component u64 doorbell stream (the cross-task wakeup primitive) and its
+	// own waitable-set new/join pair (independent of any WIT interface's trio, so a
+	// module whose only interface binds no async calls can still run callback tasks).
+	static final String SCHED_MODULE = "$sched";
+
+	static final String FIELD_CONTEXT_GET_0 = "[context-get-0]";
+
+	static final String FIELD_CONTEXT_SET_0 = "[context-set-0]";
+
+	static final String FIELD_DOORBELL_NEW = "[doorbell-new]";
+
+	static final String FIELD_DOORBELL_READ = "[doorbell-read]";
+
+	static final String FIELD_DOORBELL_WRITE = "[doorbell-write]";
+
+	static final String FIELD_SCHED_SET_NEW = "[sched-set-new]";
+
+	static final String FIELD_SCHED_JOIN = "[sched-join]";
+
+	/** The scheduler builtin fields, in emission order. */
+	static final List<String> SCHED_FIELDS = List.of(FIELD_CONTEXT_GET_0, FIELD_CONTEXT_SET_0, FIELD_DOORBELL_NEW,
+			FIELD_DOORBELL_READ, FIELD_DOORBELL_WRITE, FIELD_SCHED_SET_NEW, FIELD_SCHED_JOIN);
+
+	/** The core signature of a scheduler builtin (host-verified on wasmtime 46). */
+	static Type[] schedParamTypes(String field) {
+		return switch (field) {
+			case FIELD_CONTEXT_GET_0, FIELD_DOORBELL_NEW, FIELD_SCHED_SET_NEW -> new Type[0];
+			case FIELD_CONTEXT_SET_0 -> new Type[] { Type.I32 };
+			case FIELD_DOORBELL_READ, FIELD_DOORBELL_WRITE -> new Type[] { Type.I32, Type.I32, Type.I32 };
+			case FIELD_SCHED_JOIN -> new Type[] { Type.I32, Type.I32 };
+			default -> throw new IllegalStateException("not a scheduler builtin field: " + field);
+		};
+	}
+
+	/** The core result types of a scheduler builtin. */
+	static Type[] schedResultTypes(String field) {
+		return switch (field) {
+			case FIELD_CONTEXT_GET_0, FIELD_DOORBELL_READ, FIELD_DOORBELL_WRITE, FIELD_SCHED_SET_NEW ->
+				new Type[] { Type.I32 };
+			case FIELD_CONTEXT_SET_0, FIELD_SCHED_JOIN -> new Type[0];
+			case FIELD_DOORBELL_NEW -> new Type[] { Type.I64 };
+			default -> throw new IllegalStateException("not a scheduler builtin field: " + field);
+		};
+	}
+
 	/**
 	 * The waitable builtin ordinals an await wrapper calls, resolved by the caller from
 	 * the shared import-slot table.
@@ -796,6 +845,13 @@ final class WasmComponentImportCompiler {
 	static final int EVENT_STREAM_READ = 2;
 
 	static final int SUBTASK_STATE_RETURNED = 2;
+
+	/**
+	 * The packed callback code a callback-lifted export (or its callback) returns to keep
+	 * the task alive: {@code 2 | (waitable-set << 4)} -- deliver the set's next event to
+	 * the callback. {@code 0} (EXIT) ends the task.
+	 */
+	static final int CALLBACK_CODE_WAIT = 2;
 
 	/**
 	 * Builds the code entry of an async call's START wrapper: lower the arguments,

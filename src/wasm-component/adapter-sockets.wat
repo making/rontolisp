@@ -59,6 +59,11 @@
 ;; status, not the future). wasi:cli, wasi:filesystem and wasi:sockets expose DISTINCT
 ;; error-code enums, so their future<result<_, error-code>> are distinct types needing
 ;; separate built-ins (suffix -cli / -fs / -sock); stream<u8> is structural and shared.
+;;
+;; SINGLE-TASK BY DESIGN: this adapter keeps ONE cached waitable-set and fixed per-call
+;; scratch cells, and stays that way -- do NOT generalize it to the core's per-task
+;; waitable-sets / context slots / doorbells (that machinery lives in the generated core
+;; module). The sockets/stdin canon-lower migration deletes this file outright.
 (module
   (import "mem" "memory" (memory (;0;) 6))
   ;; lowered WASI 0.3 functions

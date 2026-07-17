@@ -19,10 +19,12 @@ import am.ik.wasm.ComponentWriter;
  * by {@code eval/HttpLibrary}) over a wit-imported {@code wasi:http@0.3.0} surface -- so
  * there is no hand-written serve adapter. The core module (compiled in serve mode)
  * exports http.lisp's {@code %serve-handle} as {@code handle}; {@link #build} lifts it as
- * a <strong>stackful async</strong> export of {@code wasi:http/handler@0.3.0}
- * ({@code handle: async func(request) -> result<response, error-code>}), whose result is
- * delivered mid-task through the {@code task-return} built-in http.lisp binds (0.3's
- * replacement for 0.2's {@code response-outparam.set}).
+ * a <strong>callback async</strong> export of {@code wasi:http/handler@0.3.0}
+ * ({@code handle: async func(request) -> result<response, error-code>}) against the
+ * core's REAL callback {@code async_cb}: a pending handler returns the packed
+ * {@code WAIT | (set << 4)} code and the host delivers the task's events through the
+ * callback, while the result is delivered mid-task through the {@code task-return}
+ * built-in http.lisp binds (0.3's replacement for 0.2's {@code response-outparam.set}).
  *
  * <p>
  * ONE shape serves plain serve AND serve+fetch: the 0.3 {@code service} world always
@@ -47,9 +49,10 @@ import am.ik.wasm.ComponentWriter;
  * FROM the block ({@link WasmComponentBuilder#lowerFixedFromBlock}); anything else in the
  * import list is a genuine {@code rontolisp:wit-import} (e.g. {@code wasi:keyvalue}) and
  * rides {@link WasmComponentBuilder#appendUserImports}. Run under {@code wasmtime serve
- * -W gc=y -W exceptions=y} -- the handle export is a CALLBACK async lift and every
- * stream/future built-in is the asynchronous variant with a blocking waitable-set park,
- * all base component-model-async.
+ * -W gc=y -W exceptions=y} -- the handle export is a CALLBACK async lift over the
+ * {@code $sched} built-ins this builder synthesizes (context slot 0, the u64 doorbell
+ * stream, a waitable-set new/join pair), and every stream/future built-in is the
+ * asynchronous variant, all base component-model-async.
  */
 final class WasmServeComponentBuilder {
 
@@ -223,18 +226,44 @@ final class WasmServeComponentBuilder {
 		// the fixed serve surface. Emits nothing when there are none.
 		final WasmComponentBuilder.Appended user = WasmComponentBuilder.appendUserImports(c, userImports, io.nextType(),
 				FIRST_IMPORT_INSTANCE, io.nextComponentFunc(), io.nextCoreFunc());
+		// --- the $sched core instance: the callback-task built-ins the core imports
+		// (the context slot, the u64 doorbell stream, its own waitable-set new/join).
+		// One defined type (stream<u64>) + seven canon-built core funcs, grouped into
+		// one synthesized core instance passed to the core as "$sched". ---
+		int typeIdx = io.nextType() + user.types();
+		final int tU64Stream = typeIdx++;
+		c.rawSection(ComponentWriter.SEC_TYPE,
+				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U64))));
+		final int schedFn = io.nextCoreFunc() + user.coreFuncs();
+		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonContextGet(0), // schedFn
+				ComponentWriter.canonContextSet(0), // +1
+				ComponentWriter.canonStreamNew(tU64Stream), // +2
+				ComponentWriter.canonStreamReadAsync(tU64Stream, 0), // +3
+				ComponentWriter.canonStreamWriteAsync(tU64Stream, 0), // +4
+				ComponentWriter.canonWaitableSetNew(), // +5
+				ComponentWriter.canonWaitableJoin()))); // +6
+		final List<Integer> schedIndices = new ArrayList<>();
+		for (int i = 0; i < WasmComponentImportCompiler.SCHED_FIELDS.size(); i++) {
+			schedIndices.add(schedFn + i);
+		}
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List
+			.of(ComponentWriter.coreInstanceFromFuncs(WasmComponentImportCompiler.SCHED_FIELDS, schedIndices))));
+		final int schedInst = io.nextCoreInstance() + userIfaces;
 		// Instantiate the rontolisp core: mem = 0, wasi_snapshot_preview1 = the bridge
 		// (instance 2), then one argument per fixed serve interface, then each user
-		// interface's canon-lowered core instance. The core exports handle.
+		// interface's canon-lowered core instance, then $sched. The core exports handle
+		// and its real callback async_cb.
 		final List<String> coreNames = new ArrayList<>(List.of("mem", "wasi_snapshot_preview1"));
 		final List<Integer> coreInstances = new ArrayList<>(List.of(0, 2));
 		io.coreInstanceOf().forEach((ifaceId, instance) -> {
 			coreNames.add(ifaceId);
 			coreInstances.add(instance);
 		});
+		coreNames.add(WasmComponentImportCompiler.SCHED_MODULE);
+		coreInstances.add(schedInst);
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(List.of(WasmComponentBuilder
 			.rontolispInstantiate(2, coreNames, coreInstances, userImports, io.nextCoreInstance()))));
-		final int coreInst = io.nextCoreInstance() + userIfaces;
+		final int coreInst = schedInst + 1;
 		// --- the handler export ---
 		// handle: async func(request: own<request>) -> result<own<response>, error-code>.
 		// Every non-structural type the EXPORTED function type references must be a
@@ -242,7 +271,6 @@ final class WasmServeComponentBuilder {
 		// pre-declared request / response / error-code aliases -- named through the
 		// wasi:http/types import -- never over the structurally re-declared shapes the
 		// internal task-return canon uses (structurally equal, but anonymous).
-		int typeIdx = io.nextType() + user.types();
 		final int tOwnRequest = typeIdx++;
 		final int tOwnResponse = typeIdx++;
 		final int tHandleResult = typeIdx++;
@@ -253,18 +281,19 @@ final class WasmServeComponentBuilder {
 						ComponentWriter.valTypeIndex(T_HTTP_ERRCODE)),
 				ComponentWriter.asyncFuncTypeOf(List.of("request"), List.of(ComponentWriter.valTypeIndex(tOwnRequest)),
 						ComponentWriter.valTypeIndex(tHandleResult)))));
-		// Alias the core's `handle` wasm-export plus the bridge's stub callback, and
-		// lift handle with the CALLBACK async ABI (base component-model-async; no
-		// stackful-lift feature): the core signature is [i32 request] -> [i32 code],
-		// the result arrives via task.return, and the task's blocking is the parked
-		// waitable-set.wait inside the wrappers -- so the callback is never invoked
-		// and stays a stub.
-		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
-			.of(ComponentWriter.aliasCoreFunc(coreInst, "handle"), ComponentWriter.aliasCoreFunc(2, "async_cb"))));
-		c.rawSection(ComponentWriter.SEC_CANON,
-				ComponentWriter
-					.vec(List.of(ComponentWriter.canonLiftMemoryUtf8AsyncCallback(io.nextCoreFunc() + user.coreFuncs(),
-							tHandleFunc, 0, io.nextCoreFunc() + user.coreFuncs() + 1))));
+		// Alias the core's `handle` wasm-export plus its REAL callback (async_cb, the
+		// _async_cb runtime function), and lift handle with the CALLBACK async ABI
+		// (base component-model-async; no stackful-lift feature): the core signature
+		// is [i32 request] -> [i32 code], the result arrives via task.return, and a
+		// pending handler returns WAIT | (set << 4) -- the host then delivers each of
+		// the task's events through the callback instead of the task blocking inside
+		// the export call.
+		final int handleFn = schedFn + WasmComponentImportCompiler.SCHED_FIELDS.size();
+		c.rawSection(ComponentWriter.SEC_ALIAS,
+				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(coreInst, "handle"),
+						ComponentWriter.aliasCoreFunc(coreInst, "async_cb"))));
+		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter
+			.vec(List.of(ComponentWriter.canonLiftMemoryUtf8AsyncCallback(handleFn, tHandleFunc, 0, handleFn + 1))));
 		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(List
 			.of(ComponentWriter.componentInstanceFromFunc("handle", io.nextComponentFunc() + user.componentFuncs()))));
 		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter.vec(List

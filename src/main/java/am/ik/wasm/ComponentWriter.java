@@ -262,6 +262,39 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode a component import of a function.
+	 * @param importName the import name
+	 * @param funcTypeIndex the component type index of the imported function's type
+	 * @return the encoded import entry
+	 */
+	public static byte[] importFunc(String importName, int funcTypeIndex) {
+		return enc(w -> {
+			declName(w, importName);
+			w.write(0x01).writeUnsignedLeb128(funcTypeIndex); // externdesc: func
+		});
+	}
+
+	/**
+	 * Encode a component instance produced by instantiating a nested component, supplying
+	 * named component-function arguments.
+	 * @param componentIndex the nested component index
+	 * @param argNames the import names to satisfy (in order)
+	 * @param argFuncIndices the component function index supplied for each argument
+	 * @return the encoded instance entry
+	 */
+	public static byte[] componentInstantiate(int componentIndex, List<String> argNames, List<Integer> argFuncIndices) {
+		return enc(w -> {
+			w.write(0x00); // instantiate
+			w.writeUnsignedLeb128(componentIndex);
+			w.writeUnsignedLeb128(argNames.size());
+			for (int i = 0; i < argNames.size(); i++) {
+				plainName(w, argNames.get(i));
+				w.write(0x01).writeUnsignedLeb128(argFuncIndices.get(i)); // sortidx: func
+			}
+		});
+	}
+
+	/**
 	 * Encode an alias that projects a function export out of an imported component
 	 * instance into the component function index space.
 	 * @param instanceIndex the component instance index

@@ -73,9 +73,15 @@
       (then (local.set $ret (call $await_waitable (local.get $f)))))
     (local.get $ret))
 
-  ;; The stub callback of the callback-lifted handle export: the handle task never
-  ;; returns WAIT (its blocking is the parked waitable-set.wait above), so the host
-  ;; never invokes this.
+  ;; UNUSED since the real serve callback landed: the handle export is now lifted
+  ;; against the CORE's own async_cb (the generated _async_cb runtime function), and a
+  ;; pending handler returns WAIT to the host instead of blocking. This stub export
+  ;; stays only so the compiled blob does not need regenerating; nothing aliases it.
+  ;;
+  ;; SINGLE-TASK BY DESIGN otherwise: this bridge keeps ONE cached waitable-set and
+  ;; fixed scratch cells; $await_waitable's park is legal from the callback task
+  ;; (base component-model-async), so do NOT generalize it to the core's per-task
+  ;; waitable-sets / context slots / doorbells.
   (func $async_cb (export "async_cb") (param i32 i32 i32) (result i32)
     unreachable)
 

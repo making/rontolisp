@@ -247,6 +247,10 @@ final class WasmAsyncEmit {
 			w.write(Instruction.REF_NULL);
 			w.writeHeapType(Type.EQ.code());
 		}
+		// owner = the CURRENT task record (null at a synchronous boundary): the
+		// routing key of _wake_list's cross-task doorbell deferral.
+		w.write(Instruction.GET_GLOBAL);
+		w.writeSignedLeb128(proto.currentTaskGlobalIndex);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeSignedLeb128(proto.frameTypeIndex);
 		w.write(Instruction.SET_LOCAL);
@@ -340,6 +344,9 @@ final class WasmAsyncEmit {
 		w.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_NEW);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
+		// owner: _start is a synchronous boundary, and CURRENT is null there.
+		w.write(Instruction.GET_GLOBAL);
+		w.writeSignedLeb128(ctx.currentTaskGlobalIndex);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeSignedLeb128(ctx.frameTypeIndex);
 		w.write(Instruction.SET_LOCAL);
@@ -815,6 +822,8 @@ final class WasmAsyncEmit {
 			.wasiStreamTypeIndex(proto.wasiStreamTypeIndex)
 			.asyncFuncBase(proto.asyncFuncBase)
 			.asyncDefunNames(proto.asyncDefunNames)
+			.currentTaskGlobalIndex(proto.currentTaskGlobalIndex)
+			.callbackExports(proto.callbackExports)
 			.build();
 	}
 

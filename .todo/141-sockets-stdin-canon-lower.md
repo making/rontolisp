@@ -81,10 +81,15 @@ wasi:sockets@0.3 API shape maps directly onto the machinery item 2 of
 
 - The usocket shim rides `tcp-*`, so it follows automatically; re-run its
   suite + the address-accessor expectations.
-- `.todo/139` item 2 (per-task waitable-sets, real serve callback) touches the
-  same adapters IF they still exist when it lands. The user chose (2026-07-17)
-  to do 139 items 2+3 FIRST -- so there, exempt `adapter-sockets.wat` as
-  single-task-by-design rather than generalizing it; this todo deletes it.
+- The `.todo/139` items 2+3 (per-task waitable-sets, real serve callback, the
+  P1 kind-1 deletion) landed FIRST, 2026-07-17 (139 deleted on completion; the
+  mechanics live in `.kb/async-await.md`, the full history in
+  `git show dbe4e2b:.todo/139-callback-async-cutover.md`). The adapters were
+  exempted as single-task-by-design (headers say so) rather than generalized;
+  this todo deletes `adapter-sockets.wat`. NOTE for the stdin/sockets
+  promotion: the pending reads this todo creates register with the scheduler
+  registry and join the CURRENT task's waitable-set, so they work under BOTH
+  drivers (the blocking `_sched_loop` and the serve callback) for free.
 - Gates (the 139 item-1 recipe): full suite, `-Pweb` compile, native build +
   CiSpecE2eTest, wasmCloud `wash dev` via PATH shim, opt-in
   RONTOLISP_HTTP_E2E (incl. the overlap pin), plus manual 4-backend runs of a
