@@ -45,9 +45,9 @@ import am.ik.jvm.StackMapAugmenter;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Compiles Lisp expressions to JVM .class bytecode. Uses class file version 50 (Java 6)
- * to avoid mandatory StackMapTable. Supports first-class functions, closures, and
- * capture-by-reference semantics.
+ * Compiles Lisp expressions to JVM .class bytecode, stamped class file version 61 (Java
+ * 17) after {@link StackMapAugmenter} computes the mandatory StackMapTable offline.
+ * Supports first-class functions, closures, and capture-by-reference semantics.
  */
 public final class JvmLispCompiler implements LispCompiler {
 

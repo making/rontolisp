@@ -177,11 +177,10 @@ lives in the URL library (`.kb/url.md`), not here.
   cells in the shared runtime value rep (quote-wrapped strings, like
   `JvmFetchRuntimeBuilder`), applies the handler via the `_invoke_1` dispatcher
   (arity 1 is force-registered like the fetch runtime does), reads
-  `:status`/`:body` back with a plist-get loop and returns
-  `new Response(status, Collections.emptyList(), body)` (`List.of()` needs an
-  interface-static invokestatic, which was illegal in the class-version-50 era;
-  legal at version 61, so the workaround could be simplified — `.todo/145`).
-  CONSEQUENCE:
+  `:status`/`:headers`/`:body` back with plist-get loops (the `:headers` alist
+  of `(name . value)` string pairs is marshalled into an `ArrayList` of
+  `Header`, skipping malformed entries like the interpreter does) and returns
+  `new Response(status, hdrs, body)`. CONSEQUENCE:
   the compiled class is NOT standalone -- it needs the rontolisp jar on the
   runtime classpath (`java -cp rontolisp.jar:. App`), unlike every other JVM
   program. Tests: `HttpHandlerJvmTest` (eval pkg for the shutdown seam;

@@ -71,8 +71,16 @@ implemented.
 - `invokedynamic` (v51+): could replace the `_invoke_N` linear if-else id
   dispatch. Not started; needs its own todo first (the emitters/shaker/
   augmenter also do not model `tableswitch` yet).
-- Interface-static `invokestatic` (v52+): lifts the `List.of()` ban that forced
-  `Collections.emptyList()` in the http-handler runtime -- `.todo/145`.
+- Interface-static `invokestatic` (v52+): legal now, and the assembler side is
+  ready (emit `INVOKESTATIC` on a `ConstantPool.addInterfaceMethodref` tag-11
+  constant; `OperandStack`, the augmenter, and `JvmClassShaker` parse
+  Methodref/InterfaceMethodref bodies identically, so no other change is
+  needed). The one workaround the old ban had forced --
+  `Collections.emptyList()` where `List.of()` was unusable, in the http-handler
+  runtime -- was already gone before the bump: response-header marshalling
+  replaced it with a genuinely mutable `ArrayList`, and a survey of every
+  `Jvm*RuntimeBuilder` found no other avoidance site. Nothing to simplify;
+  future emitters may just use interface statics.
 - `wide` loads/stores would fix `.todo/137`'s silent local-slot aliasing; the
   augmenter/shaker would need `wide` decoding.
 
