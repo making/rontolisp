@@ -252,39 +252,42 @@
         nil)))
 
 ;;; --- the %io-* dispatch defuns (the compiler rewrite's targets; the %...-raw
-;;; names compile to the NATIVE built-ins, so there is no rewrite recursion) ---
+;;; names compile to the NATIVE built-ins, so there is no rewrite recursion).
+;;; A non-socket handle falls through to the %stdin-*-or-raw-f helpers -- the
+;;; real stdin.lisp machinery, or its serve-mode raw-passthrough stub; both are
+;;; spliced by StdinLibrary whenever this file is. ---
 
 (rontolisp:async-defun rontolisp::%read-line-future (&optional s)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
         (rontolisp:await (rontolisp::%sock-read-line-f e))
-        (rontolisp::%read-line-raw s))))
+        (rontolisp:await (rontolisp::%stdin-read-line-or-raw-f s)))))
 
 (rontolisp:async-defun rontolisp::%read-char-future (&optional s)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
         (rontolisp:await (rontolisp::%sock-read-char-f e))
-        (rontolisp::%read-char-raw s))))
+        (rontolisp:await (rontolisp::%stdin-read-char-or-raw-f s)))))
 
 (rontolisp:async-defun rontolisp::%read-byte-future (&optional s)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
         (let ((c (rontolisp:await (rontolisp::%sock-read-char-f e))))
           (if c (char-code c) nil))
-        (rontolisp::%read-byte-raw s))))
+        (rontolisp:await (rontolisp::%stdin-read-byte-or-raw-f s)))))
 
 (defun rontolisp::%io-read-line (&optional s)
-  (if (rontolisp::%sock-entry s)
+  (if (or (rontolisp::%sock-entry s) (null s))
       (rontolisp::%future-force (rontolisp::%read-line-future s))
       (rontolisp::%read-line-raw s)))
 
 (defun rontolisp::%io-read-char (&optional s)
-  (if (rontolisp::%sock-entry s)
+  (if (or (rontolisp::%sock-entry s) (null s))
       (rontolisp::%future-force (rontolisp::%read-char-future s))
       (rontolisp::%read-char-raw s)))
 
 (defun rontolisp::%io-read-byte (&optional s)
-  (if (rontolisp::%sock-entry s)
+  (if (or (rontolisp::%sock-entry s) (null s))
       (rontolisp::%future-force (rontolisp::%read-byte-future s))
       (rontolisp::%read-byte-raw s)))
 

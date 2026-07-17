@@ -108,6 +108,30 @@
           "typeReachable": "am.ik.rontolisp.eval.SocketsLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/sockets\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.StdinLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/stdin\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.StdinLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/stdin-stub\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.StdinLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/stdin-dispatch\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.StdinLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/stdin\\.wit"
       }
     ]
   }

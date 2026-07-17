@@ -404,7 +404,10 @@ What works inside a component, and what each feature needs at run time:
 
 - `print`/stdout, stdin (`read`, 0-argument `read-line`, over
   `wasi:cli/stdin@0.3.0`), and file I/O (`open`, `close`, `write-line`, stream
-  `read-line`, `load`, `with-open-file`) all work. File access requires `--dir`
+  `read-line`, `load`, `with-open-file`) all work. In an async body a pending
+  stdin `read-line`/`read-char` suspends only its own task, like a socket
+  read — a concurrent `rontolisp:wait-for` timer keeps running while the
+  program waits for input. File access requires `--dir`
   (paths resolve against the first preopened directory):
 
 ```bash

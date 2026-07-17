@@ -175,11 +175,12 @@ class WasmLispCompilerIntegrationTest {
 	// runtime.
 	private static byte[] compileFetchComponent(String program) {
 		var witBackend = am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT;
-		List<am.ik.rontolisp.LispVal> forms = am.ik.rontolisp.eval.WitLibrary.process(
-				am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.SocketsLibrary.process(
+		List<am.ik.rontolisp.LispVal> forms = am.ik.rontolisp.eval.WitLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary
+				.process(am.ik.rontolisp.eval.StdinLibrary.process(am.ik.rontolisp.eval.SocketsLibrary.process(
 						am.ik.rontolisp.eval.WaitForLibrary.process(am.ik.rontolisp.eval.HttpLibrary
 							.process(LispReader.readAllFromString(program), witBackend, false), witBackend),
-						witBackend)));
+						witBackend), witBackend, false)));
 		return new WasmLispCompiler(false, true).compile(forms);
 	}
 
@@ -6012,15 +6013,106 @@ class WasmLispCompilerIntegrationTest {
 				    (usocket:socket-close client)
 				    (usocket:socket-close listener)))
 				""";
-		List<LispVal> spliced = am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.SocketsLibrary.process(
-				am.ik.rontolisp.eval.UsocketLibrary.process(LispReader.readAllFromString(program)),
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT));
+		List<LispVal> spliced = am.ik.rontolisp.eval.WitLibrary
+			.process(
+					am.ik.rontolisp.eval.StdinLibrary
+						.process(
+								am.ik.rontolisp.eval.SocketsLibrary.process(
+										am.ik.rontolisp.eval.UsocketLibrary
+											.process(LispReader.readAllFromString(program)),
+										am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
+								am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false));
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(spliced);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/usocket-echo.component.wasm");
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
 				"tcp=y", "-S", "inherit-network=y", "/tmp/usocket-echo.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("\"hello\"\n\"127.0.0.1\"");
+	}
+
+	@Test
+	void componentAsyncStdinReadDoesNotStallTheInstance() throws Exception {
+		// The stdin migration's promotion goal: a pending stdin read in an async body
+		// suspends the task, so a concurrent 100ms timer fires BEFORE the line the
+		// pipe delivers 500ms later. The preview1 adapter's blocking stdin branch
+		// could never do this -- it parks the whole instance.
+		String program = """
+				(rontolisp:async-defun reader ()
+				  (print (read-line)))
+				(rontolisp:async-defun timer ()
+				  (rontolisp:await (rontolisp:wait-for 100))
+				  (print "timer fired"))
+				(let ((r (reader)) (tm (timer)))
+				  (rontolisp:await tm)
+				  (rontolisp:await r))
+				""";
+		byte[] componentBytes = compileFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/stdin-async.component.wasm");
+		ExecResult result = wasmtime.execInContainer("sh", "-c",
+				"(sleep 0.5; echo hello) | wasmtime run -W gc=y -W exceptions=y /tmp/stdin-async.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("\"timer fired\"\n\"hello\"");
+	}
+
+	@Test
+	void componentAsyncStdinEchoesLinesUntilEof() throws Exception {
+		// The chunk-buffered stdin machinery preserves line semantics and the
+		// nil-at-EOF contract across a multi-line pipe, matching the interpreter.
+		String program = """
+				(rontolisp:async-defun main ()
+				  (let ((done nil))
+				    (while (not done)
+				      (let ((line (read-line)))
+				        (if line (print line) (setq done t))))))
+				(rontolisp:await (main))
+				""";
+		byte[] componentBytes = compileFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/stdin-echo.component.wasm");
+		ExecResult result = wasmtime.execInContainer("sh", "-c",
+				"printf 'alpha\\nbeta\\ngamma\\n' | wasmtime run -W gc=y -W exceptions=y /tmp/stdin-echo.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("\"alpha\"\n\"beta\"\n\"gamma\"");
+	}
+
+	@Test
+	void componentNonAsyncStdinKeepsTheAdapterPathAndItsFlags() throws Exception {
+		// The byte-stability contract at run level: a synchronous stdin program is
+		// NOT migrated -- it keeps the preview1 adapter's stdin branch, so it still
+		// runs WITHOUT -W exceptions=y.
+		String program = "(print (read-line))";
+		byte[] componentBytes = compileFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/stdin-sync.component.wasm");
+		ExecResult result = wasmtime.execInContainer("sh", "-c",
+				"echo plain | wasmtime run -W gc=y /tmp/stdin-sync.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("\"plain\"");
+	}
+
+	@Test
+	void componentTcpProgramReadsStdinThroughTheSameDispatch() throws Exception {
+		// sockets.lisp + stdin.lisp in one component: a socket read and a stdin read
+		// flow through the same %io dispatch, each reaching its own wit-imported
+		// stream.
+		String program = """
+				(rontolisp:async-defun main ()
+				  (let* ((listener (rontolisp:tcp-listen 0))
+				         (port (rontolisp:tcp-local-port listener))
+				         (client (rontolisp:tcp-connect "127.0.0.1" port))
+				         (server (rontolisp:tcp-accept listener)))
+				    (write-line "from-socket" client)
+				    (close client)
+				    (print (read-line server))
+				    (print (read-line))
+				    (close server)
+				    (close listener)))
+				(rontolisp:await (main))
+				""";
+		byte[] componentBytes = compileFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-stdin.component.wasm");
+		ExecResult result = wasmtime.execInContainer("sh", "-c", "echo from-stdin | wasmtime run -W gc=y "
+				+ "-W exceptions=y -S tcp=y -S inherit-network=y /tmp/tcp-stdin.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("\"from-socket\"\n\"from-stdin\"");
 	}
 
 	@Test

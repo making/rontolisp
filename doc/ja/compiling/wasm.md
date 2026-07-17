@@ -239,7 +239,7 @@ wasmtime の起動方法が出力の種類を選ぶわけでは**ありません
 
 コンポーネント内で動くもの、そして各機能が実行時に必要とするもの:
 
-- `print`/標準出力、標準入力(`read`、0 引数の `read-line`、`wasi:cli/stdin@0.3.0` 経由)、ファイル I/O(`open`、`close`、`write-line`、ストリーム `read-line`、`load`、`with-open-file`)はすべて動作します。ファイルアクセスには `--dir` が必要です(パスは最初にプリオープンされたディレクトリに対して解決されます):
+- `print`/標準出力、標準入力(`read`、0 引数の `read-line`、`wasi:cli/stdin@0.3.0` 経由)、ファイル I/O(`open`、`close`、`write-line`、ストリーム `read-line`、`load`、`with-open-file`)はすべて動作します。async ボディ内では、保留中の標準入力の `read-line`/`read-char` はソケット読み取りと同様に自分のタスクだけをサスペンドします — 入力を待っている間も、並行する `rontolisp:wait-for` タイマーは動き続けます。ファイルアクセスには `--dir` が必要です(パスは最初にプリオープンされたディレクトリに対して解決されます):
 
 ```bash
 cat > fileio.lisp <<'EOF'

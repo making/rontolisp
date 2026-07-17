@@ -38,6 +38,7 @@ import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UsocketLibrary;
 import am.ik.rontolisp.eval.UserMacroExpander;
 import am.ik.rontolisp.eval.SocketsLibrary;
+import am.ik.rontolisp.eval.StdinLibrary;
 import am.ik.rontolisp.eval.WaitForLibrary;
 import am.ik.rontolisp.eval.WitExportInliner;
 import am.ik.rontolisp.eval.WitImportInliner;
@@ -301,6 +302,15 @@ public final class RontoLispCli {
 		// error). The trigger includes any usocket: reference: the usocket shim rides
 		// tcp-*, and its own splice runs later in this pipeline.
 		loaded = SocketsLibrary.process(loaded, witBackend);
+		// Component stdin over wit-imported wasi:cli/stdin@0.3.0 (stdin.lisp), bound
+		// FROM the fixed import block. Two shapes: the %stdin-*-or-raw-f helpers
+		// sockets.lisp's dispatchers fall through to (a serve program gets the
+		// raw-passthrough stub -- its service world has no stdin), and the full
+		// dispatch splice for an ASYNC stdin-reading program, whose async-context
+		// reads then promote to awaits. A non-async stdin program is left on the
+		// preview1 adapter's stdin branch, byte-identical. Must run AFTER
+		// SocketsLibrary (it keys on sockets.lisp's dispatchers being present).
+		loaded = StdinLibrary.process(loaded, witBackend, serve);
 		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
 		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
 		// any

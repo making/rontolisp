@@ -198,7 +198,11 @@ serve+tcp now compose in one component (the old compile errors are gone).
   context the same calls are rewritten onto the `%io-*` dispatch defuns
   (`read-line`/`read-char`/`read-byte`/`write-line`/`write-byte`/
   `write-string`/`close`), which branch: socket handle -> the Lisp entry's
-  chunked stream reads / blocking `sock-stream-write`; anything else -> the
+  chunked stream reads / blocking `sock-stream-write`; a nil (stdin) READ
+  designator -> the `%stdin-*-or-raw-f` helpers (stdin.lisp's wit-imported
+  stdin machinery, or its serve-mode raw-passthrough stub -- `StdinLibrary`
+  splices one of the two whenever sockets.lisp is spliced; the stdin
+  mechanics live in `.kb/read-load-streams.md`); anything else -> the
   `%...-raw` internal aliases of the NATIVE built-ins (no rewrite recursion).
   A wrong-arity call is left unrewritten so it errors under its public name.
 - **EH/async run flags**: sockets.lisp carries async-defuns and handler-case,
@@ -313,8 +317,7 @@ touches `LispEvaluatorTest`, `JvmLispCompilerTest`,
 ## Not supported
 
 UDP (`.todo/047-udp-sockets.md`), hostname resolution on WASM
-(`.todo/048-wasm-tcp-hostname-lookup.md`), fetch+tcp in one component
-(`.todo/049-combine-fetch-and-sockets-component.md`), TLS servers /
+(`.todo/048-wasm-tcp-hostname-lookup.md`), TLS servers /
 insecure-mode / WASM TLS (`.todo/050-tls-server-and-extensions.md`), timeouts,
 `--no-gc`, the browser playground, and `(do () ...)`-style empty do bindings
 in examples (pre-existing `expandDo` limitation — the echo examples use a

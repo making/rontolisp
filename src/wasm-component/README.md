@@ -98,6 +98,9 @@ instance indices `WasmComponentBuilder.build` assumes):
 ```
 import wasi:cli/stdout@0.3.0;          // write-via-stream(stream<u8>) -> future<result>
 import wasi:cli/stdin@0.3.0;           // read-via-stream() -> (stream<u8>, future<result>)
+                                       // (an ASYNC program's stdin reads bind it AGAIN from
+                                       // this block instance via stdin.lisp; sync programs
+                                       // keep the adapter's fd_read branch)
 import wasi:cli/environment@0.3.0;     // get-environment -> list<tuple<string,string>>
 import wasi:clocks/system-clock@0.3.0; // now -> instant{seconds s64, nanoseconds u32}
 import wasi:clocks/monotonic-clock@0.3.0; // now -> u64; wait-for (async, rontolisp:wait-for's host timer)

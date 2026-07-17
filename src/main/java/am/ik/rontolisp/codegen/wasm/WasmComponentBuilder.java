@@ -139,8 +139,9 @@ public final class WasmComponentBuilder {
 	 * Maps each interface to the member fields the block actually declares -- binding
 	 * anything else would only fail component validation with a byte offset.
 	 */
-	private static final java.util.Map<String, java.util.Set<String>> FIXED_BLOCK_IFACES = java.util.Map
-		.of("wasi:clocks/monotonic-clock@0.3.0", java.util.Set.of("now", "wait-for"));
+	private static final java.util.Map<String, java.util.Set<String>> FIXED_BLOCK_IFACES = java.util.Map.of(
+			"wasi:clocks/monotonic-clock@0.3.0", java.util.Set.of("now", "wait-for"), "wasi:cli/stdin@0.3.0",
+			java.util.Set.of("read-via-stream"));
 
 	private WasmComponentBuilder() {
 	}
@@ -370,10 +371,15 @@ public final class WasmComponentBuilder {
 			final List<String> bound = new java.util.ArrayList<>();
 			imported.decls().forEach(d -> bound.add(d.field()));
 			imported.calls().forEach(call -> bound.add(call.field()));
-			if (!imported.drops().isEmpty() || !imported.asyncs().isEmpty() || !imported.taskReturns().isEmpty()) {
+			// Async ALIAS built-ins (stdin.lisp's stdin-stream-read &c) are fine on a
+			// block-bound interface: each is typed by a component-level stream/future
+			// type derived from the WIT and aliases nothing out of the block instance.
+			// Drops and task-returns would project the block instance's own types, so
+			// they stay rejected.
+			if (!imported.drops().isEmpty() || !imported.taskReturns().isEmpty()) {
 				throw new UnsupportedOperationException("rontolisp:wit-import of '" + imported.ifaceId()
-						+ "': this interface is part of the component's fixed WASI surface and only its plain "
-						+ "functions " + allowed + " can be bound from it");
+						+ "': this interface is part of the component's fixed WASI surface and only its functions "
+						+ allowed + " (and async type-alias built-ins) can be bound from it");
 			}
 			for (String field : bound) {
 				if (!allowed.contains(field)) {
@@ -1130,12 +1136,13 @@ public final class WasmComponentBuilder {
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
-		// Block-declared interfaces the program binds (wait.lisp's monotonic-clock):
-		// lowered FROM the block's own import instances (component funcs 11.., core
-		// funcs 25.., core instances 3..). Emits nothing when there are none.
-		final FixedIo io = lowerFixedFromBlock(c, fixed,
-				java.util.Map.of("wasi:clocks/monotonic-clock@0.3.0", INST_MONO_CLOCK), new java.util.LinkedHashMap<>(),
-				11, 25, T_RUN_FUNC + 1, 3);
+		// Block-declared interfaces the program binds (wait.lisp's monotonic-clock,
+		// stdin.lisp's wasi:cli/stdin): lowered FROM the block's own import instances
+		// (component funcs 11.., core funcs 25.., core instances 3..). Emits nothing
+		// when there are none.
+		final FixedIo io = lowerFixedFromBlock(c, fixed, java.util.Map.of("wasi:clocks/monotonic-clock@0.3.0",
+				INST_MONO_CLOCK, "wasi:cli/stdin@0.3.0", INST_STDIN), new java.util.LinkedHashMap<>(), 11, 25,
+				T_RUN_FUNC + 1, 3);
 		// User WIT-interface imports (rontolisp:wit-import): instance types, import
 		// instances (from 11, right after the block's 0-10), function aliases and
 		// lowered core funcs continue after the fixed surface. Emits nothing when there

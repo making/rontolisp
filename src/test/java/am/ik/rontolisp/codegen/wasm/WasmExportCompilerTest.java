@@ -552,10 +552,17 @@ class WasmExportCompilerTest {
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
 		assertThat(http.componentWit()).contains("  import wasi:http/client@0.3.0;");
 		WasmLispCompiler sock = new WasmLispCompiler(false, true);
-		sock.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.SocketsLibrary.process(
-				LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"),
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT)));
-		assertThat(sock.componentWit()).contains("  import wasi:sockets/types@0.3.0;");
+		sock.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.StdinLibrary.process(
+				am.ik.rontolisp.eval.SocketsLibrary.process(
+						LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"),
+						am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
+		String sockWit = java.util.Objects.requireNonNull(sock.componentWit());
+		assertThat(sockWit).contains("  import wasi:sockets/types@0.3.0;");
+		// stdin.lisp rides the FIXED import block (wasi:cli/stdin is already one of the
+		// base world's fixed imports), so splicing it adds no import line: exactly one
+		// mention, the fixed one.
+		assertThat(sockWit.split("import wasi:cli/stdin@0.3.0;", -1)).hasSize(2);
 	}
 
 	@Test

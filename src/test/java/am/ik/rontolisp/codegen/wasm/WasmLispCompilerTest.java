@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.SocketsLibrary;
+import am.ik.rontolisp.eval.StdinLibrary;
 import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -31,8 +32,10 @@ class WasmLispCompilerTest {
 		List<LispVal> program = HttpLibrary.process(LispReader.readAllFromString(lispCode),
 				WitExportDirective.Backend.WASM_COMPONENT, false);
 		// The tcp built-ins are the sockets.lisp library over wit-imported
-		// wasi:sockets the same way (a no-op for every non-socket program).
+		// wasi:sockets the same way (a no-op for every non-socket program), followed
+		// by the stdin machinery its dispatchers fall through to.
 		program = SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
+		program = StdinLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
 		// fetch.lisp's result wrappers call rontolisp::%wit-result, backed by wit.lisp --
 		// spliced by WitLibrary, the same order the CLI runs them in.
 		program = WitLibrary.process(program);
@@ -275,7 +278,44 @@ class WasmLispCompilerTest {
 	private static List<LispVal> compileChainForUsocket(String source) {
 		List<LispVal> program = am.ik.rontolisp.eval.UsocketLibrary.process(LispReader.readAllFromString(source));
 		program = SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
+		program = StdinLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
 		return WitLibrary.process(program);
+	}
+
+	@Test
+	void asyncStdinReadCompilesAsComponent() {
+		// The stdin.lisp + stdin-dispatch.lisp splice: read-line in an async body
+		// promotes to an await over the wit-imported wasi:cli/stdin stream, bound
+		// FROM the fixed import block.
+		assertThat(compileComponent("""
+				(rontolisp:async-defun main () (print (read-line)))
+				(rontolisp:await (main))
+				""")).isNotEmpty();
+	}
+
+	@Test
+	void nonAsyncStdinComponentIsByteIdenticalWithTheStdinLibraryInTheChain() {
+		// The byte-stability contract end-to-end: a synchronous stdin program's
+		// component must not move a byte because of the stdin machinery's existence
+		// (it keeps the preview1 adapter's stdin branch and its wasmtime flags).
+		String source = "(print (read-line))";
+		byte[] without = new WasmLispCompiler(false, true)
+			.compile(WitLibrary.process(LispReader.readAllFromString(source)));
+		assertThat(compileComponent(source)).isEqualTo(without);
+	}
+
+	@Test
+	void tcpProgramReadingStdinCompilesAsComponent() {
+		// sockets.lisp's dispatchers fall through to the real stdin machinery, so a
+		// socket program reading stdin compiles with BOTH splices present (one
+		// %io-read-line definition).
+		assertThat(compileComponent("""
+				(rontolisp:async-defun main ()
+				  (let ((l (rontolisp:tcp-listen 7777)))
+				    (print (read-line))
+				    (close l)))
+				(rontolisp:await (main))
+				""")).isNotEmpty();
 	}
 
 	@Test
@@ -324,6 +364,7 @@ class WasmLispCompilerTest {
 		List<LispVal> loaded = am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString(source),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		loaded = SocketsLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT);
+		loaded = StdinLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT, true);
 		return am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
 	}
 

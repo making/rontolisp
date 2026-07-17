@@ -1,0 +1,53 @@
+package root:stdin;
+
+// The wasi:cli@0.3.0 stdin surface stdin.lisp binds (vendored from
+// src/wasm-component/deps/cli/stdio.wit, trimmed to the bound interface plus the
+// error-code enum its future carries), plus rontolisp's transparent async type
+// aliases at the end of the `stdin` interface. Keep in lockstep with the vendored
+// file. The member set here must stay a subset of what the fixed import block
+// declares, because the component binds the interface FROM the block's
+// already-declared instance (like wait.lisp's monotonic-clock), never as a second
+// import of the same name.
+
+package wasi:cli@0.3.0 {
+  @since(version = 0.3.0)
+  interface types {
+    @since(version = 0.3.0)
+    enum error-code {
+      /// Input/output error
+      io,
+      /// Invalid or incomplete multibyte or wide character
+      illegal-byte-sequence,
+      /// Broken pipe
+      pipe,
+    }
+  }
+
+  @since(version = 0.3.0)
+  interface stdin {
+    use types.{error-code};
+
+    /// Return a stream for reading from stdin.
+    ///
+    /// This function returns a stream which provides data read from stdin,
+    /// and a future to signal read results.
+    ///
+    /// If the stream's readable end is dropped the future will resolve to success.
+    ///
+    /// If the stream's writable end is dropped the future will either resolve to
+    /// success if stdin was closed by the writer or to an error-code if reading
+    /// failed for some other reason.
+    ///
+    /// Multiple streams may be active at the same time. The behavior of concurrent
+    /// reads is implementation-specific.
+    @since(version = 0.3.0)
+    read-via-stream: func() -> tuple<stream<u8>, future<result<_, error-code>>>;
+
+    /// rontolisp-only TRANSPARENT type aliases: each drives a derived binding of
+    /// the async canonical ABI (the <alias>-read/-drop-* built-ins). They change no
+    /// instance type and no host contract -- an alias is structural and these are
+    /// referenced by no function.
+    type stdin-stream = stream<u8>;
+    type stdin-future = future<result<_, error-code>>;
+  }
+}

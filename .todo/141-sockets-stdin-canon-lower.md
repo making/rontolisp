@@ -225,54 +225,113 @@ regen; (6) stdin (phase 2); gates last.
   nil-accessor claims removed, combine restriction removed, write-string
   added to the socket surface docs); manual 4-backend echo: interpreter =
   JVM = component byte-identical output, P1 = clear compile error.
-- Phase 1 (sockets) is FUNCTIONALLY COMPLETE on this working tree.
-- REMAINING:
-  1. **Phase 2 -- stdin**: stdin off adapter.wat's cached-stream `fd_read`
-     branch onto the same machinery (a stdin.lisp over the block-imported
-     `wasi:cli/stdin@0.3.0` read-via-stream, base variant; `read-line` on
-     stdin promotes in async bodies via the SAME rewrite). Design notes from
-     the phase-1 work:
-     - `wasi:cli/stdin` is in the FIXED import block, so the directive must
-       bind FROM the block (`FIXED_BLOCK_IFACES` needs the entry, member
-       `read-via-stream`). `validateFixedMembers` currently REJECTS async
-       alias built-ins on block-bound interfaces -- relax it: an alias
-       built-in is typed by a COMPONENT-LEVEL stream/future type
-       (`definedStream(u8)`), it aliases nothing out of the block instance,
-       so it is safe there (the serve builder's `lowerServeIoFromBlock`
-       already emits async kinds against block instances).
-     - The `%io-*`/`%*-future` dispatch defuns are defined by sockets.lisp
-       TODAY; a stdin-only program needs them too, and a program using BOTH
-       must not define them twice. Split them into their own spliced library
-       (io-dispatch.lisp with a stdin branch + a socket branch that
-       gracefully no-ops when the sock table is absent), or make stdin.lisp
-       define them only when sockets.lisp is not spliced -- decide there.
-     - The stdin entry is one cached raw stream handle + chunk buffer in
-       defvars (the adapter's 0x50080 cache in Lisp); the read future from
-       read-via-stream is dropped immediately (EOF = stream status), the
-       old adapter's pattern.
-     - WasmSocketsRewrite's gate (spliced %io-read-line) already covers any
-       future splicer of that defun; only the SocketsLibrary-style trigger
-       (program reads stdin at all? read-line/read-char/read-byte referenced
-       + component + asyncMode?) needs deciding -- a NON-async stdin program
-       gains nothing from the migration, but moving it anyway kills the
-       adapter's stdin branch; weigh byte-stability of non-async programs.
-     Non-goals unchanged (file reads, write side, env/clock/random stay on
-     adapter.wat).
-  2. **`adapter.wat`'s remaining surface -- evaluation only, inherited from the
-     closed `.todo/002` (its optional Phase 4, second bullet).** Once stdin is
-     off the adapter, what is left there is file reads, the write side, and
-     env/clock/random. Whether those move to Lisp over `wasi:cli`/`wasi:filesystem`
+- Phase 1 (sockets) is FUNCTIONALLY COMPLETE on this working tree (and was
+  committed as c84708c).
+
+## Phase 2 (stdin) implementation log (2026-07-17, this working tree)
+
+Design decisions, settling the phase-1 notes:
+
+1. **Async-gated migration, byte-stable otherwise**: `eval/StdinLibrary`
+   (runs right after SocketsLibrary in the CLI + every mirrored test helper;
+   takes a `serve` boolean from the caller -- `HttpHandlerInliner` lives in
+   `cli`, which eval cannot depend on) splices only when the program
+   references an async form (async-defun/async-lambda/await/async/
+   %subtask-future, via splitQualified) AND a stdin-capable read
+   (read-line/read-char/read-byte, bare or cl-qualified) AND is not serve.
+   A NON-async stdin program is untouched: byte-identical component, still
+   runs without `-W exceptions=y` -- so the adapter's fd_read stdin branch
+   STAYS (adapter.wat untouched; killing the branch was not worth flipping
+   every sync stdin program into async+EH). An async program already needed
+   `-W exceptions=y`, so the migration changes no flags anywhere.
+2. **Dispatch-defun sharing** (the phase-1 open question): neither sketched
+   option. sockets.lisp KEEPS the `%io-*`/`%*-future` names; their
+   non-socket fallthrough now awaits new `%stdin-*-or-raw-f` helpers (nil
+   designator -> stdin, else `%...-raw`), and StdinLibrary supplies the
+   helpers' backing whenever sockets.lisp is spliced: the real `stdin.lisp`,
+   or `stdin-stub.lisp` (raw passthroughs) under serve -- the wasi:http
+   service world has NO stdin (verified: uni-http-server.wit) and the
+   bridge's fd_read is EOF by construction. A stdin-only program gets
+   `stdin.lisp` + `stdin-dispatch.lisp` (the same %io-*/%*-future names,
+   stdin-or-raw only; write/close entries are raw passthroughs because the
+   rewrite substitutes them whenever it is gated on). WasmSocketsRewrite
+   needed ZERO changes -- its gate (a spliced %io-read-line defun) covers
+   both splicers, as the phase-1 note predicted.
+3. **Fixed-block binding**: stdin.wit = the vendored cli stdio.wit trimmed
+   to `types` (the error-code enum) + `stdin`, plus transparent aliases
+   `stdin-stream`/`stdin-future` at the end of `stdin` (the sockets.wit
+   pattern). `FIXED_BLOCK_IFACES` gained `wasi:cli/stdin@0.3.0` ->
+   {read-via-stream}; buildBase's lowerFixedFromBlock instance map gained
+   INST_STDIN; `validateFixedMembers` RELAXED exactly as argued: async alias
+   built-ins admitted (component-level structural stream/future types alias
+   nothing out of the block instance -- stdin has NO resources, so no
+   projections either), drops/task-returns stay rejected. additionalImports
+   already filters fixed ifaces, so the emitted WIT world is UNCHANGED
+   (pinned: exactly one wasi:cli/stdin mention, the block's own import
+   line). Side effect: a user wit-import of wasi:cli/stdin now binds from
+   the block instead of being rejected (the monotonic-clock precedent).
+4. **stdin.lisp mechanics** = the adapter's 0x50080 cache in Lisp, as
+   sketched: one read-via-stream stream cached in a defvar (its result
+   future dropped immediately, EOF = stream status), chunk buffer / cursor /
+   eof defvars, %stdin-read-line-f/-read-char-f async-defuns (chunked reads;
+   the sockets.lisp buffering divergence applies). EOF parity checked
+   against the interpreter: read-line -> nil; the 0/1-arg read-char SIGNALS
+   "read-char: end of file" (native default eof-error-p = t); read-byte on a
+   nil stream errors ("read-byte expects an input stream" -- a stream arg is
+   mandatory everywhere), so it never opens the stdin stream and cannot
+   overlap the adapter's cache.
+5. **Known limit (documented in .kb/read-load-streams.md)**: a migrated
+   async program that ALSO consumes stdin through forms the rewrite leaves
+   native (`read`, the 2/3-arg eof-parameter read-char/read-byte forms)
+   holds TWO host stdin streams (adapter cache + stdin.lisp) with
+   implementation-specific interleaving. Don't mix them on stdin in one
+   async program.
+
+VERIFIED on wasmtime 46 (local): the PROMOTION GOAL -- an async body's
+pending `read-line` no longer stalls the instance (a 100ms wait-for timer
+fires before a 400ms-delayed piped line: "timer fired" -> "hello"); an echo
+loop until EOF is byte-identical to the interpreter; sockets+stdin compose
+in ONE component (a socket read and a stdin read through the same %io
+dispatch); a non-async `(print (read-line))` still runs with `-W gc=y`
+alone (no exceptions flag). New tests: StdinLibraryTest (9: gating, dedup,
+serve stub, nickname spellings), WasmLispCompilerTest (async-stdin
+compiles; non-async byte-identity end-to-end; tcp+stdin compiles),
+integration componentAsyncStdinReadDoesNotStallTheInstance /
+componentAsyncStdinEchoesLinesUntilEof /
+componentNonAsyncStdinKeepsTheAdapterPathAndItsFlags /
+componentTcpProgramReadsStdinThroughTheSameDispatch (Docker, green).
+Full suite after the change: 3795/0.
+
+- FOUND, pre-existing (NOT a phase-2 regression -- reproduced on the
+  committed phase-1 state): `wasmtime serve` cannot INSTANTIATE a serve+tcp
+  component ("instance export `tcp-socket` has the wrong type: resource
+  implementation is missing") -- wasmtime's serve linker does not wire the
+  wasi:sockets tcp-socket resource for service worlds, `-S tcp=y`
+  notwithstanding. Phase 1 verified serve+tcp at compile level only
+  (httpHandlerWithTcpCompilesInServeMode). Tracked below.
+
+## REMAINING
+
+  1. **`adapter.wat`'s remaining surface -- evaluation only, inherited from the
+     closed `.todo/002` (its optional Phase 4, second bullet).** With stdin's
+     ASYNC half off the adapter, what is left there is the sync stdin branch,
+     file reads, the write side, and env/clock/random. Whether those move to
+     Lisp over `wasi:cli`/`wasi:filesystem`
      /`wasi:clocks`/`wasi:random` -- and thus whether `adapter.wat` can be deleted
      outright -- is an OPEN evaluation, deliberately a non-goal of the phases
      above. `.kb/wit.md` records why the base adapter was long considered
      un-externalizable, and the sockets migration is the precedent that a wall
      there meant a missing language feature, not a fixed constraint.
-  3. **FUNC_START 12 -> 8 stub collapse** (mechanical byte shift; the four
+  2. **FUNC_START 12 -> 8 stub collapse** (mechanical byte shift; the four
      retired tcp trap stubs at indices 8-11 are kept for byte stability
      today -- see the WasmLispCompiler comment).
-  4. Pre-existing doc inconsistency the doc sweep flagged (NOT this todo's):
+  3. Pre-existing doc inconsistency the doc sweep flagged (NOT this todo's):
      usocket-socket-connect.md's "no condition handling" prose contradicts
      the todo-116 error-handling foundation; fix separately.
+  4. The serve+tcp `wasmtime serve` instantiation failure above (host-side,
+     pre-existing): decide whether to document as a limitation in
+     doc/tcp-sockets or wait for a wasmtime release that wires the resource;
+     re-test wasmCloud `wash dev` for the same shape.
 
 ## Interactions / ordering
 

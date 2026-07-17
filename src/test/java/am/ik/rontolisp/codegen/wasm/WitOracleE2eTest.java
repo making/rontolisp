@@ -79,9 +79,11 @@ class WitOracleE2eTest {
 		// emitter and checked structurally + by re-parsing rather than byte-for-byte
 		// against wasm-tools (see the fetch test's rationale).
 		WasmLispCompiler sock = new WasmLispCompiler(false, true);
-		sock.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.SocketsLibrary.process(
-				LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"),
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT)));
+		sock.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.StdinLibrary.process(
+				am.ik.rontolisp.eval.SocketsLibrary.process(
+						LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"),
+						am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
 		String wit = Objects.requireNonNull(sock.componentWit());
 		assertThat(wit).contains("import wasi:sockets/types@0.3.0;");
 		assertThat(am.ik.wit.WitParser.parse(wit)).isNotNull();

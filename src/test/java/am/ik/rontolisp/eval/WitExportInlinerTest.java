@@ -160,8 +160,9 @@ class WitExportInlinerTest {
 		// both programs get the identical splice, so the wit-export byte-identity
 		// property holds on a socket-importing component too.
 		assertByteIdentical("(defun listen () (rontolisp:tcp-listen 7777))\n",
-				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(
-						WitLibrary.process(SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT))),
+				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(WitLibrary.process(
+						StdinLibrary.process(SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT),
+								WitExportDirective.Backend.WASM_COMPONENT, false))),
 				WitExportDirective.Backend.WASM_GC);
 	}
 

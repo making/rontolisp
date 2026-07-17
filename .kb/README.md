@@ -16,7 +16,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [clos.md](clos.md) -- static CLOS subset (`defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value`): shared registry, dispatcher generation, cl-who expansion-time dispatch
 - [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system
 - [reader-features.md](reader-features.md) -- `#+`/`#-` feature conditionals, `*features*`, `#|...|#` block comments, `#.` handling
-- [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams runtime
+- [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams runtime; component stdin (stdin.lisp)
 - [load-inliner.md](load-inliner.md) -- compile-time `load` inlining (`LoadInliner`)
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
 - [wasi-component.md](wasi-component.md) -- `--component` WASI 0.3 component output
