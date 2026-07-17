@@ -69,10 +69,16 @@ Inside a `when`/`if`/`unless`, the anaphoric `it` names the value the test produ
       finally (return (length xs))) ; => 3
 ```
 
-A `for`/`with` variable may be a destructuring pattern — a proper list of variables (nested patterns allowed, `nil` ignores a position):
+A `for`/`with` variable may be a destructuring pattern — a list of variables (nested patterns allowed, `nil` ignores a position):
 
 ```lisp
 (loop for (a b) in '((1 2) (3 4) (5 6)) collect (+ a b)) ; => (3 7 11)
+```
+
+A dotted pattern binds the rest of the list, so it walks an alist directly:
+
+```lisp
+(loop for (k . v) in '((a . 1) (b . 2)) collect (list k v)) ; => ((a 1) (b 2))
 ```
 
 `for ... across` walks a string character by character, or a vector element by element:
@@ -85,10 +91,20 @@ A `for`/`with` variable may be a destructuring pattern — a proper list of vari
 (loop for x across #(1 2 3 4 5) collect (* x x)) ; => (1 4 9 16 25)
 ```
 
+`for VAR being {the|each} {hash-keys|hash-key|hash-values|hash-value} {of|in} TABLE` drives the loop over a hash table, with an optional `using (hash-value V)` (or `using (hash-key K)`) to bind the other half:
+
+```lisp
+(let ((h (make-hash-table)))
+  (setf (gethash 'a h) 1)
+  (loop for k being the hash-keys of h using (hash-value v) collect (list k v))) ; => ((a 1))
+```
+
+The clause snapshots the table and walks the snapshot, so the iteration order is the table's, and mutating the table inside the body does not affect the walk in progress.
+
 The package form of `being` — `for VAR being {the|each} {symbols|present-symbols|external-symbols} {of|in} PACKAGE` — is accepted but **lite**: rontolisp has no runtime intern table, so the clause parses and iterates the *empty* sequence. The body never runs and accumulation yields `nil`. It exists so libraries whose load-time code walks a package (such as cl-who's hyperdoc table) load without error:
 
 ```lisp
 (loop for s being the external-symbols of :cl collect s) ; => nil
 ```
 
-Limitations: the `being` hash-table iteration (`hash-key`/`hash-value`) and `named`/`return-from` are not supported. Destructuring patterns are proper lists of variables — dotted patterns like `(a . b)` are unavailable because the reader rejects dotted-pair syntax, and lambda-list keywords are not recognized. `(loop-finish)` must appear in statement position (not mid-expression) and not inside a nested iteration form. `thereis`/`always`/`never` cannot be combined with accumulation into the default result (use `into`). Accumulation clauses without `into` must all be of the same kind; collecting clauses build the result list in source order.
+Limitations: `named`/`return-from` is not supported. Destructuring patterns do not recognize lambda-list keywords (`&optional` and friends bind as ordinary variables rather than signalling). `(loop-finish)` must appear in statement position (not mid-expression) and not inside a nested iteration form. `thereis`/`always`/`never` cannot be combined with accumulation into the default result (use `into`). Accumulation clauses without `into` must all be of the same kind; collecting clauses build the result list in source order.

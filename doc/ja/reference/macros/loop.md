@@ -69,10 +69,16 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
       finally (return (length xs))) ; => 3
 ```
 
-`for`/`with` の変数には分配束縛パターン — 変数の真リスト (ネスト可能。`nil` はその位置を無視) — を指定できます。
+`for`/`with` の変数には分配束縛パターン — 変数のリスト (ネスト可能。`nil` はその位置を無視) — を指定できます。
 
 ```lisp
 (loop for (a b) in '((1 2) (3 4) (5 6)) collect (+ a b)) ; => (3 7 11)
+```
+
+ドットパターンはリストの残りを束縛するため、連想リストをそのまま走査できます。
+
+```lisp
+(loop for (k . v) in '((a . 1) (b . 2)) collect (list k v)) ; => ((a 1) (b 2))
 ```
 
 `for ... across` は文字列を 1 文字ずつ、またはベクタを 1 要素ずつ走査します。
@@ -85,10 +91,20 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 (loop for x across #(1 2 3 4 5) collect (* x x)) ; => (1 4 9 16 25)
 ```
 
+`for VAR being {the|each} {hash-keys|hash-key|hash-values|hash-value} {of|in} TABLE` はハッシュテーブルを反復します。`using (hash-value V)` (または `using (hash-key K)`) でもう一方を束縛できます。
+
+```lisp
+(let ((h (make-hash-table)))
+  (setf (gethash 'a h) 1)
+  (loop for k being the hash-keys of h using (hash-value v) collect (list k v))) ; => ((a 1))
+```
+
+この節はテーブルのスナップショットを取ってそれを走査するため、反復順序はテーブルのものになり、本体でテーブルを変更しても進行中の走査には影響しません。
+
 `being` のパッケージ形式 — `for VAR being {the|each} {symbols|present-symbols|external-symbols} {of|in} PACKAGE` — は受け付けますが **簡易版** です: rontolisp には実行時のインターンテーブルがないため、この節は解析され *空* のシーケンスを反復します。本体は実行されず、集約結果は `nil` になります。ロード時にパッケージを走査するライブラリ (cl-who の hyperdoc テーブルなど) がエラーなくロードできるようにするためのものです:
 
 ```lisp
 (loop for s being the external-symbols of :cl collect s) ; => nil
 ```
 
-制限事項: `being` のハッシュテーブル反復 (`hash-key`/`hash-value`) と `named`/`return-from` は未対応です。分配束縛パターンは変数の真リストに限られます — リーダーがドット対構文を受け付けないため `(a . b)` のようなドットパターンは使えず、ラムダリストキーワードも認識されません。`(loop-finish)` は文の位置 (式の途中は不可) に置く必要があり、ネストした反復形式の内側では使えません。`thereis`/`always`/`never` はデフォルト結果への集約とは併用できません (`into` を使ってください)。`into` を伴わない集約節はすべて同種でなければならず、収集系の節は結果リストをソース順に構築します。
+制限事項: `named`/`return-from` は未対応です。分配束縛パターンはラムダリストキーワードを認識しません (`&optional` などはエラーにはならず、通常の変数として束縛されます)。`(loop-finish)` は文の位置 (式の途中は不可) に置く必要があり、ネストした反復形式の内側では使えません。`thereis`/`always`/`never` はデフォルト結果への集約とは併用できません (`into` を使ってください)。`into` を伴わない集約節はすべて同種でなければならず、収集系の節は結果リストをソース順に構築します。
