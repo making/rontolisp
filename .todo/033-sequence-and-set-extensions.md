@@ -1,6 +1,6 @@
 > **Update 2026-07-05:** `position-if-not` and (unary-lite) `complement`
-> shipped with the split-sequence e2e (.todo/54 Phase 3); the position family
-> also gained `:start`/`:end`/`:from-end`/`:test-not` (see .todo/06 note).
+> shipped with the split-sequence e2e (.todo/054 Phase 3); the position family
+> also gained `:start`/`:end`/`:from-end`/`:test-not` (see .todo/006 note).
 > The rest below remains open.
 
 # Sequence and set operation extensions

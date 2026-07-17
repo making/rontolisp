@@ -219,5 +219,5 @@ preserve that foundation and leave 93 easier, not harder:
 
 - `.todo/104` (with-arena design — the `--no-gc` half is executed by this todo),
   `.todo/93` (compact `--no-gc --component`; keep the 0-import property conditional),
-  `.todo/46`/`108` (float printer provenance), `.kb/no-gc-scalar-wasm.md`,
+  `.todo/046`/`108` (float printer provenance), `.kb/no-gc-scalar-wasm.md`,
   `.kb/wasm-gc-strings.md`.

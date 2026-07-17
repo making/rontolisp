@@ -103,7 +103,7 @@ options...)`) work on the compile path.
 
 Interpreter/JVM errors carry `fn: message` text (e.g. "vector-pop: empty
 vector"); WASM traps (`unreachable`) on the same conditions. Compiled `list`
-argument evaluation is right-to-left (.todo/14), so tests/ci-spec sequence
+argument evaluation is right-to-left (.todo/014), so tests/ci-spec sequence
 side-effecting pushes/pops through separate bindings.
 
 ## Representation

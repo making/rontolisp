@@ -83,7 +83,7 @@ required params for a variadic function.
   a compile error — the rest list is a cons, which the scalar lowering lacks.
 - `BuiltinFunctionWrappers` still pin one arity per builtin (e.g. `#'+` is
   binary); they could now be widened with `&rest` but that shifts every wrapper's
-  dispatch-arity membership (see `.todo/31-lambda-list-extensions.md` follow-ups).
+  dispatch-arity membership (see `.todo/031-lambda-list-extensions.md` follow-ups).
 
 Pinning tests: `LispEvaluatorTest#defun{Rest,Optional,Keyword,Aux,...}`,
 `JvmLispCompilerTest#compileAndRunDefun{Rest,Optional,KeywordArguments,...}`,

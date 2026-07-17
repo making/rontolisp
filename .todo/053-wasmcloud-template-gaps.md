@@ -5,7 +5,7 @@
 Three templates could not be ported fully; this note records why and what
 would unblock each.
 
-## http-kv-handler: WASM/wasmCloud need wasi:keyvalue (.todo/52)
+## http-kv-handler: WASM/wasmCloud need wasi:keyvalue (.todo/052)
 
 The original stores through `wasi:keyvalue` with a pluggable backend
 (in_memory / filesystem / NATS / Redis selected by `.wash/config.yaml`).
@@ -43,7 +43,7 @@ processes only:
   component: serve + `rontolisp:tcp-*` in one `--component` binary is a
   compile error (the serve bridge and the sockets adapter both claim the
   same import surface; see `.kb/tcp-sockets.md` and
-  `.todo/49-combine-fetch-and-sockets-component.md` for the same-shape
+  `.todo/049-combine-fetch-and-sockets-component.md` for the same-shape
   fetch+tcp limitation).
 - `service-leet.lisp` compiles to a `wasmtime run` component (tcp works
   there), but wasmCloud's v2 service model expects `wasi:sockets` 0.2 from a

@@ -327,6 +327,6 @@ incoming and outgoing.
   guide section; `.kb/` page (or extend `.kb/fetch-http.md`).
 - Native E2E only if introspection/ci-spec changes.
 
-Related: `.todo/52-wasi-keyvalue.md` (the next component to add; pairs with the
+Related: `.todo/052-wasi-keyvalue.md` (the next component to add; pairs with the
 kv-server example). Both came out of the 2026-07 "interesting wasmtime
 components" discussion.

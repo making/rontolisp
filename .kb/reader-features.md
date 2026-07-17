@@ -1,6 +1,6 @@
 # Reader features (`#+`/`#-`, `*features*`, block comments, `#.`)
 
-The `.todo/54` Phase-2 read-layer additions, implemented entirely in the frontend (`reader` package) — no evaluator/compiler changes, no per-backend codegen. The **runtime** readers emitted into compiled output (`JvmReadRuntimeBuilder` / the WASM runtime reader) do NOT know any of this, like backquote (documented in `read-load-limitations.md`).
+The `.todo/054` Phase-2 read-layer additions, implemented entirely in the frontend (`reader` package) — no evaluator/compiler changes, no per-backend codegen. The **runtime** readers emitted into compiled output (`JvmReadRuntimeBuilder` / the WASM runtime reader) do NOT know any of this, like backquote (documented in `read-load-limitations.md`).
 
 **`Features` (reader pkg)**: the active feature set. Constants `INTERPRETER`/`JVM`/`WASM` = `rontolisp` + one backend feature (`rontolisp-interpreter`/`rontolisp-jvm`/`rontolisp-wasm`); `of(...)` for tests. `contains()` is case-insensitive and strips `:`/`#:`; `isEnabled(LispVal)` evaluates a feature expression (`and`/`or`/`not`, bare or keyword spelling; `LispNil` = false, preserving the `#+nil` comment idiom). Deliberately NO `:common-lisp` (do not lie) and no `(setq *features*)`.
 

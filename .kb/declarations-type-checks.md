@@ -1,7 +1,7 @@
 # Declarations as no-ops, eval-when, check-type/assert (Phase 3 unit 1)
 
 Origin: the first unit of the ASDF Phase 3 split in
-`.todo/54-asdf-support.md` (shipped 2026-07-05). Goal: real CL library sources
+`.todo/054-asdf-support.md` (shipped 2026-07-05). Goal: real CL library sources
 parse and load -- nearly every library body contains `declare`/`declaim`, and
 macro-exporting libraries wrap `defmacro` in `eval-when`.
 

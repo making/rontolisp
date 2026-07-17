@@ -4,7 +4,7 @@
 the `setf` place), `array-dimensions` (backend primitive), `array-rank`,
 `array-dimension`, `array-total-size` (macro expansions over
 `array-dimensions`), `coerce` for the literal `'list`/`'vector`/`'string`
-result types, and — with rank-n arrays (2026-07-03, `.todo/48`) —
+result types, and — with rank-n arrays (2026-07-03, `.todo/048`) —
 `row-major-aref` (backend primitive, incl. the `setf` place via
 `%row-major-aset`) and `array-row-major-index` (macro expansion, Horner fold
 over `array-dimensions`). `make-array`/`aref` now support any rank >= 1. See

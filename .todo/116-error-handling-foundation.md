@@ -43,7 +43,7 @@ on a non-local exit (`unwind-protect` is absent) and cannot CATCH by type
   caught, so any portable CL code with `(handler-case (socket-connect ...)
   (usocket:socket-error ...))` dies;
 - `define-condition` is a parsed no-op and `make-condition` collapses to its
-  format string (the todo-39 stopgap) -- libraries that build error
+  format string (the todo-039 stopgap) -- libraries that build error
   hierarchies (cl-postgres `errors.lisp`) load but their semantics are gone;
 - the compile path's documented lite limit "a `return`/`return-from`
   unwinding across a special-`let` boundary does not restore the dynamic
@@ -51,7 +51,7 @@ on a non-local exit (`unwind-protect` is absent) and cannot CATCH by type
   machinery: there is no way to attach an on-unwind action to a scope.
 
 Prerequisite for `.todo/115-cl-postgres-support.md` (M3). Supersedes the
-"Implementation approach" sketch in `.todo/39-condition-system.md` (kept as
+"Implementation approach" sketch in `.todo/039-condition-system.md` (kept as
 the API-surface catalog); written against the 2026-07-11 codebase.
 
 ## Substrate facts (verified)
@@ -77,8 +77,8 @@ the API-surface catalog); written against the 2026-07-11 codebase.
   **Decision: WASM is out of scope for catching in v1** -- `handler-case` /
   `unwind-protect` = compile error on the WASM path (the TLS gating
   precedent), revisit as its own todo once wasmtime's EH is on by default.
-- **Condition types**: the CLOS static subset (todo-40, `.kb/clos.md`)
-  exists NOW (it did not when todo-39 was sketched) -- `defclass` single
+- **Condition types**: the CLOS static subset (todo-040, `.kb/clos.md`)
+  exists NOW (it did not when todo-039 was sketched) -- `defclass` single
   inheritance over tagged lists + `generateDispatcher` type tests +
   `makeTypeTest` (`typep`/`typecase`) are exactly the pieces a condition
   hierarchy needs; `define-condition` can become a `LispMacroExpander`

@@ -50,4 +50,4 @@ Both are `LispMacroExpander` expansions (CL_MACROS; no per-backend codegen).
   argument forms; a macro that treats an argument as *data* (quotes it) sees
   `(funcall __flet0_f ...)` instead of `(f ...)`. The compile path is unaffected
   (UserMacroExpander runs first). `macrolet`/`symbol-macrolet` stay in
-  `.todo/34-local-function-definition.md`.
+  `.todo/034-local-function-definition.md`.

@@ -30,7 +30,7 @@ none of the three know about each other:
 
 A component compiled today therefore **cannot import anything but the fixed WASI
 blob surface** (`src/wasm-component/uni.wit`), which is the single biggest hole in
-the component story — it is why `.todo/52` (wasi:keyvalue) and `.todo/53`
+the component story — it is why `.todo/052` (wasi:keyvalue) and `.todo/053`
 (wasmCloud) are both blocked on plumbing rather than on ideas.
 
 ## Why this is not a new concept — the seams already exist
@@ -133,7 +133,7 @@ no external dependencies.
 | 4 | ~~`.todo/128`~~ **DONE 2026-07-14** — component imports (`canon lower`): instance import + per-function lower, rich results, member pruning, `--emit-wit` import side | **large** | wasi:keyvalue against wasmtime's REAL host, component composition |
 
 **THE ROADMAP IS COMPLETE (2026-07-14).** All four steps shipped; `.kb/wit.md` is the
-record. `.todo/52` (wasi:keyvalue) was the designated proof of step 4 and it landed —
+record. `.todo/052` (wasi:keyvalue) was the designated proof of step 4 and it landed —
 `examples/wit/keyvalue` runs one source against a Lisp store (interpreter), a Java map
 (JVM) and **wasmtime's own `wasi:keyvalue` implementation** (component), with identical
 output.
@@ -151,7 +151,7 @@ frontier has since shipped; only the WebGL adoption is still open:
 
 The three DONE todo files were deleted on completion; `.kb/wit.md` + `.kb/fetch-http.md`
 are the record. fetch and serve are now ONE Lisp library (`http.lisp`) over a wit-imported
-`wasi:http`, which is where 135 and 136 landed after the 0.2 -> 0.3 cutover (`.todo/02`).
+`wasi:http`, which is where 135 and 136 landed after the 0.2 -> 0.3 cutover (`.todo/002`).
 
 The blobs that CANNOT be externalized, so nobody re-proposes it: the **base adapter**
 (the core's Preview-1-identical `wasi_snapshot_preview1` import layout is what every
@@ -187,5 +187,5 @@ feature, and the language moved.
 `.kb/wasm-import.md`, `.kb/wasi-component.md` (the `--wit` section — `WitEmitter`,
 `WitOracleE2eTest`), `.kb/java-interop.md`, `.kb/error-handling.md` (the WASM
 catch prohibition that shapes `result<T,E>`), `.kb/fetch-http.md`,
-`.todo/52` (wasi:keyvalue), `.todo/53` (wasmCloud gaps), `.todo/02`
+`.todo/052` (wasi:keyvalue), `.todo/053` (wasmCloud gaps), `.todo/002`
 (the `wasi:http@0.2` island — a precedent for a temporary mixed-version import).

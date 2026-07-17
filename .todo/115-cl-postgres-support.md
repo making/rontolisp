@@ -52,7 +52,7 @@ Iterate with the cached copy in
    arithmetic + quoted data would cover most sites) or a documented
    preprocessing step. Survey the actual 46 forms before designing.
 3. **Condition system — the big one** (`.todo/116-error-handling-foundation.md`
-   is the prerequisite engineering plan; `.todo/39` is the API catalog): `define-condition` with slots/`:reader`s (11),
+   is the prerequisite engineering plan; `.todo/039` is the API catalog): `define-condition` with slots/`:reader`s (11),
    `handler-case` (6), `handler-bind` (2), `restart-case` (4) — cl-postgres's
    error machinery (`errors.lisp`) builds a `database-error` hierarchy and
    `initiate-connection` retries via `restart-case`. Also **`unwind-protect`**
@@ -61,10 +61,10 @@ Iterate with the cached copy in
    (Java exceptions carrying the condition object + finally); JVM compile
    path = real try/catch-finally; WASM = gate or the exception-handling
    proposal. This dwarfs everything else — consider landing it as its own
-   todo-39 work and keeping this todo blocked on it.
+   todo-039 work and keeping this todo blocked on it.
 4. **Dependency systems**: `:depends-on ("md5" "split-sequence" "ironclad"
    "cl-base64" "uax-15")`.
-   - `split-sequence` already runs (todo-54 verification chain).
+   - `split-sequence` already runs (todo-054 verification chain).
    - `md5`: only used for `AuthenticationMD5Password` (`md5:md5sum-sequence`,
      one call site in messages.lisp). Port or shim.
    - `ironclad`/`cl-base64`/`uax-15`: reached ONLY from `scram.lisp` /
@@ -131,6 +131,6 @@ Iterate with the cached copy in
   realistic driver target is interpreter + JVM; WASM = document as
   unsupported for now.)
 - Vendor a patched cl-postgres (skip scram/saslprep files via a rontolisp
-  feature) vs. running the verbatim upstream source. Verbatim is the todo-54
+  feature) vs. running the verbatim upstream source. Verbatim is the todo-054
   tradition (split-sequence/cl-who run unmodified) and should stay the goal;
   a temporary vendored subset is acceptable as an M4 stepping stone.

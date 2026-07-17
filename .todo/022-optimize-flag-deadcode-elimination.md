@@ -46,7 +46,7 @@ unrecognized (opcode, constant tag, non-`Code` attribute). Measured: `fact`
 `JvmLispCompiler(className, dynamic, optimize)`). Tests: `JvmClassShakerTest`
 (structural + behavior) and `JvmClassShakerCorpusTest` (whole `ci-spec.yaml`
 corpus: shrink + identical run output). Docs: `doc/{en,ja}/compiling/jvm.md`
-"Optimize" + CLAUDE.md. The `.todo/17` ceiling is relieved in practice (dead
+"Optimize" + CLAUDE.md. The `.todo/017` ceiling is relieved in practice (dead
 wrapper methods and their constants no longer ship), though a single oversized
 form is still a per-form limit.
 
@@ -116,7 +116,7 @@ stability") is what makes naive removal shift every index and break every call.
 2. **JVM side.** The class embeds every runtime helper method + thousands of baked
    constants. DCE here = drop unreferenced methods (reachability over the constant
    pool / method-ref edges) before writing the class. Interacts with
-   `.todo/17-jvm-baked-constant-limit.md` (the v50 verifier ceiling) — fewer
+   `.todo/017-jvm-baked-constant-limit.md` (the v50 verifier ceiling) — fewer
    methods/constants also relieves that ceiling, so consider co-designing. Method
    removal is simpler than WASM renumbering (methods are referenced by name, not by
    positional index), so the JVM DCE may land first.
@@ -148,7 +148,7 @@ stability") is what makes naive removal shift every index and break every call.
   confirm `usesEval`/`load`/`apply` programs still resolve dynamically (conservative
   reachability did not drop a dispatch target).
 - For JVM: load + run the optimized class; confirm a large baked program still loads
-  (and ideally that DCE raises the `.todo/17` ceiling in practice).
+  (and ideally that DCE raises the `.todo/017` ceiling in practice).
 
 ## Touch points
 
@@ -159,8 +159,8 @@ stability") is what makes naive removal shift every index and break every call.
 - `cli/CliOptions.java`, `cli/RontoLispCli.java` (the `--optimize` flag).
 - README (document the flag + the size win) and CLAUDE.md "Index stability" /
   "JVM Class Version 50" notes (how DCE interacts with the fixed-index invariant).
-- Related: `.todo/17-jvm-baked-constant-limit.md` (JVM DCE relieves the ceiling),
-  `.todo/21-wasm-export-memory-abi-ci-coverage.md` (reuse its host harness to verify
+- Related: `.todo/017-jvm-baked-constant-limit.md` (JVM DCE relieves the ceiling),
+  `.todo/021-wasm-export-memory-abi-ci-coverage.md` (reuse its host harness to verify
   optimized memory exports).
 
 ## Remaining follow-ups (WASM + JVM core DONE; these are optional further wins)

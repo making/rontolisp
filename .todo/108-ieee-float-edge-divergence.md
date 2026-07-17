@@ -96,7 +96,7 @@ The integer/ratio/bignum branches are exact and stay untouched.
   data. The wasm literal is fine (`F64_CONST` writes raw bits); only its printer hides the
   sign (group C).
 
-## Group C — the wasm float printer (same root as `.todo/46`)
+## Group C — the wasm float printer (same root as `.todo/046`)
 
 `WasmRuntimeBuilder.buildPrintF64Core` (WasmRuntimeBuilder.java:2820):
 
@@ -104,12 +104,12 @@ The integer/ratio/bignum branches are exact and stay untouched.
   printing (the VALUE is right: `(* -1.0 0.0)` exported under `--no-gc` prints `-0`).
   Fix = test the sign bit (`i64.reinterpret_f64` < 0).
 - integer part: `f64.floor` + `i32.trunc_s/f64` — traps on |x| >= 2^31 (that is
-  **`.todo/46`** verbatim), on ±Infinity ("integer overflow") and on NaN ("invalid
+  **`.todo/046`** verbatim), on ±Infinity ("integer overflow") and on NaN ("invalid
   conversion to integer"). Infinity/NaN need explicit textual output; digit extraction
   cannot represent them at any width.
 
 Division is NOT broken: `(> (/ 1.0 0.0) 1.0e9)` → t on wasm. Fix C together with
-`.todo/46` (i64 or exponent normalization + Infinity/NaN text + sign bit). Note:
+`.todo/046` (i64 or exponent normalization + Infinity/NaN text + sign bit). Note:
 `WasmLispCompilerIntegrationTest.java:5927` prints an `:initial-element -0.0` array — its
 expected output may pin today's sign loss; recheck when fixing.
 
@@ -198,7 +198,7 @@ Nothing pins the wrong values; three places to keep in mind:
   lt→1 / gt→4 / eq→2 / else 0, exact branch maps `_rat_cmp` via `i32.shl`.
   `WasmComparisonCompiler`'s no-literal path masks it. The eval runtime inherits the
   fix (its builtin dispatch compiles through the same comparison compiler).
-- **C** (with `.todo/46`): `buildPrintF64Core` rewritten — NaN/Infinity print as text
+- **C** (with `.todo/046`): `buildPrintF64Core` rewritten — NaN/Infinity print as text
   (early return), the sign comes from `i64.reinterpret_f64` (so `-0.0` keeps it), the
   integer part uses the historical i32 path below 2^31 and an i64 MSD digit loop up to
   2^63 (pow built as `1e9 * 1e9`; the writer's LEB is 32-bit), and >= 2^63 normalizes
@@ -221,7 +221,7 @@ runtime readers preserve the sign, no fix needed there.
 
 - **Large-float print SHAPE** stays split: 10^7..2^63 wasm prints all digits where
   interpreter/JVM print `1.5E12`; >= 2^63 wasm is approximate (`/10` rounds). Full
-  shortest-round-trip E-notation parity is what remains of `.todo/46`.
+  shortest-round-trip E-notation parity is what remains of `.todo/046`.
 - **Variable-path `min`/`max`** off the double-literal fast path: JVM `_min`/`_max` are
   `buildSelect` over `_cmp` (not Math.min) and wasm's are a `_rat_cmp` select — NaN does
   not propagate and a ±0.0 tie picks by position there. CLHS allows either; keep such

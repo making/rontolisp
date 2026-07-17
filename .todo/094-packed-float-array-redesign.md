@@ -439,7 +439,7 @@ other backends — NO general-array fallback anywhere (rank-n packed is decision
   Reuse refs: `git show 5b1b065:<path>` (JvmSimd*, NoGcWasmCompiler), `git show 21fb03e:<path>`
   (simd.lisp, .kb/simd.md).
 - **New files:** `LispFloatArray.java`, `codegen/jvm/JvmFloatArrayRuntimeBuilder.java`, tests
-  `CliOptionsTest`/`LispFloatArrayTest`/`JvmFloatArrayTest`, this `.todo/94`. **Modified:**
+  `CliOptionsTest`/`LispFloatArrayTest`/`JvmFloatArrayTest`, this `.todo/094`. **Modified:**
   `LispNames`, `LispVal` (seal += LispFloatArray), `CliOptions`, `reader/{Token,LispLexer,LispReader}`,
   `eval/{Environment,LispEvaluator}`, `codegen/jvm/{JvmAsm,JvmArrayCompiler,JvmArraypCompiler,
   JvmLengthCompiler,JvmExprCompiler,JvmQuoteCompiler,JvmRuntimeBuilder,JvmLispCompiler}`,

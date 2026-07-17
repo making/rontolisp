@@ -110,7 +110,7 @@ handshake failure surface at first-I/O time, not accept time).
   interface is **client-only** (no server API, so `tls-listen`/`tls-listen-pem`
   can never work on WASM) and explicitly experimental/non-semver (WIT churn
   between wasmtime releases, no cert/insecure knobs). Deferred pending a stable
-  interface; see `.todo/50-tls-server-and-extensions.md`.
+  interface; see `.todo/050-tls-server-and-extensions.md`.
 - **Tests**: `TlsTestSupport` (shared, package `am.ik.rontolisp`) generates
   one self-signed PKCS12 keystore per JVM with the JDK `keytool`
   (CN=localhost, SAN ip:127.0.0.1 + dns:localhost so endpoint identification
@@ -284,10 +284,10 @@ touches `LispEvaluatorTest`, `JvmLispCompilerTest`,
 
 ## Not supported
 
-UDP (`.todo/47-udp-sockets.md`), hostname resolution on WASM
-(`.todo/48-wasm-tcp-hostname-lookup.md`), fetch+tcp in one component
-(`.todo/49-combine-fetch-and-sockets-component.md`), TLS servers /
-insecure-mode / WASM TLS (`.todo/50-tls-server-and-extensions.md`), timeouts,
+UDP (`.todo/047-udp-sockets.md`), hostname resolution on WASM
+(`.todo/048-wasm-tcp-hostname-lookup.md`), fetch+tcp in one component
+(`.todo/049-combine-fetch-and-sockets-component.md`), TLS servers /
+insecure-mode / WASM TLS (`.todo/050-tls-server-and-extensions.md`), timeouts,
 `--no-gc`, the browser playground, and `(do () ...)`-style empty do bindings
 in examples (pre-existing `expandDo` limitation — the echo examples use a
 dummy binding).

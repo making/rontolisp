@@ -37,7 +37,7 @@ Skipped in v1 by scope decision.
 
 ## Non-goals here (tracked elsewhere)
 
-UDP (`socket-send`/`socket-receive`, blocked on `.todo/47-udp-sockets.md`)
+UDP (`socket-send`/`socket-receive`, blocked on `.todo/047-udp-sockets.md`)
 and `socket-shutdown` (needs a half-close primitive). The error-path gaps
 were CLOSED by `.todo/116-error-handling-foundation.md` Phases 1-3
 (2026-07-12): the with-* macros close on every exit on interpreter/JVM

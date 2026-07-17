@@ -47,10 +47,10 @@ blocking is a property of the TASK (an async canonical built-in suspends it),
 not of a host function. So on a pure-0.3 import surface, "print inside a sync
 export" is impossible **permanently**.
 
-This is the decisive difference from the `wasi:http@0.2` island in `.todo/02`:
+This is the decisive difference from the `wasi:http@0.2` island in `.todo/002`:
 that one disappears the day async `wasi:http@0.3` ships upstream. A `wasi:io@0.2`
 + `wasi:cli/stdout@0.2` island imported for fd_write would never disappear.
-Since the goal is a uniformly-0.3 component (the `.todo/02` lineage, and the
+Since the goal is a uniformly-0.3 component (the `.todo/002` lineage, and the
 stepping stone toward language-level async), taking this island contradicts the
 goal -- and the eventual cleanup would mean regenerating the three worlds and
 churning every component's bytes a SECOND time.
@@ -100,7 +100,7 @@ callback ABI, which everyone else implements?". No:
   (stdout/stdin/file/fetch/socket).
 
 The one world where this flips: **if rontolisp ever gains language-level async**
-(future/stream as rontolisp values -- the `.todo/02` lineage). That is NOT ruled
+(future/stream as rontolisp values -- the `.todo/002` lineage). That is NOT ruled
 out. There the source itself carries the suspension points, so only async-marked
 functions pay the state-machine cost, and a callback lift becomes cheap and
 natural (the Rust shape). If that work is ever picked up, revisit the lift choice
@@ -139,7 +139,7 @@ existing output):
 
 - jco implementing **stackful async export calls** (the actual blocker; a minimal
   repro is already written up in todo-92 -- worth filing upstream).
-- async `wasi:http@0.3` shipping (`.todo/02`) -- removes the fetch 0.2 island.
+- async `wasi:http@0.3` shipping (`.todo/002`) -- removes the fetch 0.2 island.
 - wasmtime enabling the sync stream/future built-ins by default (drops
   `-W component-model-more-async-builtins=y`).
 
@@ -211,7 +211,7 @@ two to fix. Full record: `.kb/wasi-component.md` ("Components in a browser
 
 - `.todo/92` (`:async t` stackful lift; the jco gap + minimal repro)
 - `.todo/93` (the `--no-gc` print micro-adapter -- the 0.2 half, DONE)
-- `.todo/02` (the fetch 0.2 island; temporary, unlike this one)
+- `.todo/002` (the fetch 0.2 island; temporary, unlike this one)
 - `.kb/wasi-component.md`, `.kb/no-gc-scalar-wasm.md`
 - `src/wasm-component/adapter-http-server-p1.wat` (the 0.2 sync-write precedent that
   made this look easy -- it is easy; it is just not right)

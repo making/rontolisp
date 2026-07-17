@@ -14,5 +14,5 @@ socket table/exports from adapter-sockets.wat, replacing the four errno stubs), 
 constants are re-derived from `wasm-tools dump`. The core seam already supports it
 (fixed slots: sock at 8-11, http at 12-13, both imported). Deferred because the
 combination is niche and the interpreter/JVM support both together already; if
-async `wasi:http@0.3` ships first (`.todo/02-upgrade-fetch-to-wasi-http-0.3.md`),
+async `wasi:http@0.3` ships first (`.todo/002-upgrade-fetch-to-wasi-http-0.3.md`),
 doing that upgrade first shrinks this to one 0.3-only world.

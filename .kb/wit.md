@@ -116,7 +116,7 @@ Applied to `WitEmitter.VARIANT_*`, fixture names, ALL blob artifacts
 `WasmServeComponentBuilder`, `buildServe` still name the `wasmtime serve` MODE.
 (HISTORICAL NOTE: the `http-client` variant died when fetch became a Lisp
 library over user imports, and the `http-server-client` variant died with the
-.todo/02 wasi:http@0.3 cutover -- serve and serve+fetch are ONE `http-server`
+.todo/002 wasi:http@0.3 cutover -- serve and serve+fetch are ONE `http-server`
 variant now; mode `serve` -> variant `http-server`.)
 
 ## The settled type mapping (`compiler/WitTypeMapper`, todo 124's table)
@@ -759,7 +759,7 @@ are `WitCanonicalAbiTest`. Two things that probe taught, which no document says:
   shifts by the user-import counts. **Zero imports = zero shift = byte-identical**
   (stash-dance proven on base / sockets, with and without a `:string`
   wasm-export — and on both serve variants).
-- **`codegen/wasm/WasmServeComponentBuilder`** (todos 134 + 135 + .todo/02 Phase 2) —
+- **`codegen/wasm/WasmServeComponentBuilder`** (todos 134 + 135 + .todo/002 Phase 2) —
   ONE `build` over ONE block (`import-block-http-server.bin`, from the 0.3
   `uni-http-server` world; the NARROW/WIDE `ServeBlock` split died with the
   `http-server-client` variant): serve and serve+fetch are the same shape, http.lisp's

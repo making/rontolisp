@@ -1,7 +1,7 @@
 # Multiple values -- syntactic tier (Phase 3 unit 3)
 
 Origin: `.todo/57-multiple-values.md` (core subset of the
-`.todo/32-multiple-value-system.md` wishlist; shipped 2026-07-05). Goal: the
+`.todo/032-multiple-value-system.md` wishlist; shipped 2026-07-05). Goal: the
 `multiple-value-bind`-over-`floor`/`gethash` idioms that real CL library code
 uses, WITHOUT paying for a runtime multiple-value representation.
 
@@ -131,5 +131,5 @@ verbatim; `BuiltinFunctionWrappers` (`values`).
   classes updated too).
 - Test-writing caveats hit while pinning: compiled `print` returns nil
   (interpreter returns the value -- filed as `.todo/63`), and JVM argument
-  evaluation order inside one call differs (`.todo/14`) -- side-effect
+  evaluation order inside one call differs (`.todo/014`) -- side-effect
   assertions go through `setq` in separate top-level forms.

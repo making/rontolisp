@@ -33,7 +33,7 @@ Interpreter (`eval/HttpSupport.requestAsync`, via `HttpClient.sendAsync` -- requ
 building failures fail the future; the per-request client is deliberately never closed)
 and JVM (`JvmFetchRuntimeBuilder`) use the JDK `java.net.http.HttpClient`.
 
-**Uniformly WASI 0.3, one `http.lisp` for fetch AND serve (the .todo/02 cutover,
+**Uniformly WASI 0.3, one `http.lisp` for fetch AND serve (the .todo/002 cutover,
 committed `bef8c1b`).** fetch and serve are ONE Lisp-source library
 (`src/main/resources/am/ik/rontolisp/eval/http.lisp` + its embedded `http.wit`, the
 vendored `wasi:http@0.3.0` types/handler/client plus a clocks/types shim and four

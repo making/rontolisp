@@ -49,7 +49,7 @@ only ASCII structural characters are compared via `char-code`; any unit >= 128
 everywhere (WASM i31 range); WASM *prints* them since todo-108 group C fixed
 the float printer (exact integer part up to 2^63), but between 10^7 and 2^63
 the SHAPE differs: WASM emits all digits (`1500000000000.0`) where the
-interpreter/JVM use `1.5E12` (residual of `.todo/46`). plist keywords are
+interpreter/JVM use `1.5E12` (residual of `.todo/046`). plist keywords are
 interned via `read-from-string` (round-trip
 guarded, so non-symbol-friendly keys error toward `:hash-table`), which pulls
 the runtime reader into compiled output. The one closure (maphash callback in

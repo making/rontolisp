@@ -2,7 +2,7 @@
 
 The `vec:` package is a set of portable packed-`f64` vector kernels layered on the
 dedicated **packed float-array type** (see the packed float-array constraint in
-`CLAUDE.md` and `.todo/94`). This file covers the `vec:` package and the two
+`CLAUDE.md` and `.todo/094`). This file covers the `vec:` package and the two
 acceleration layers; the packed representation itself lives in `LispFloatArray`,
 `JvmFloatArrayRuntimeBuilder`, `WasmArrayCompiler` (the `$farray` struct) and
 `NoGcWasmCompiler` (`F64VEC`).
@@ -66,7 +66,7 @@ composition, so NaN -> lo and inverted bounds -> hi), `sum`/
 vector → a fresh rank-1 vector, todo-95 Part 2; the scalar defun reads `(aref w i j)` over
 `(array-dimensions w)` and allocates via `vec::%make-like`). `from-list`/`to-list` need cons
 lists, so they are portable-backends-only (a `--no-gc` compile error); `matvec` runs on
-`--no-gc` too since todo-99, over the rank-2 packed matrix block (see layer 2 below).
+`--no-gc` too since todo-099, over the rank-2 packed matrix block (see layer 2 below).
 `(setf (vec:aref v i) x)` →
 `(vec:aset v i x)` via `LispMacroExpander.expandSetf` (`VEC_QUALIFIED_AREF`).
 
@@ -119,7 +119,7 @@ not compile under `--no-gc` at all).
   `boolean into` through `compileSimd/ScalarElementwise{,F32}` and
   `compileSimd/ScalarScale{,F32}`: `-into` skips `allocVec` and uses the caller's block as
   `dp` (via the new `compileVecArg`/`loadVecCount` helpers), so the loop bodies are literally
-  unchanged. `matvec-into` works on `--no-gc` since todo-99 (`compileSimdMatvec` with
+  unchanged. `matvec-into` works on `--no-gc` since todo-099 (`compileSimdMatvec` with
   `into`); its out-aliases-x/w guard there is a runtime pointer-equality `unreachable` trap
   (no error channel on the scalar backend), the analog of wasm-GC's `ref.eq` trap.
 - **Measured** (`--no-gc --simd`, 12000 accumulations over a 65536-element vector, macOS
@@ -405,7 +405,7 @@ passes: `collectCalls` (eligibility: `requireKnownSimd` + walk-args), `typeOf`/`
 `INT`, else `FLOAT`; UNCHANGED by `--simd`, so inference matches either lowering), and
 `compileCall`/`compileSimd`. In v128 mode each kernel branches on the operand's inferred
 width (`packedVecType`): `F64VEC` → the byte-identical `f64x2` path, `F32VEC` → the `f32x4`
-sibling. **`matvec`/`matvec-into` (GEMV) run here too since todo-99**, over a rank-2 packed
+sibling. **`matvec`/`matvec-into` (GEMV) run here too since todo-099**, over a rank-2 packed
 matrix block: `Ty.F64MAT`/`F32MAT` is a distinct pointer kind to a
 `[rows:i32][cols:i32][rows*cols f... row-major]` header (the dims live in the block because
 this backend has no GC struct to carry them; the rank-1 `[count][data]` layout is untouched,
@@ -551,7 +551,7 @@ Mechanics:
   index exactly at the sentinel), and the last row group's lanes that OVERHANG into the next
   row are multiplied by `x`'s **zero padding**, so they contribute nothing — the same zero
   invariant that removes the tail everywhere else. (`--no-gc` needs none of this: since
-  todo-99 its `matvec` walks a raw row pointer over the rank-2 packed block and keeps its
+  todo-099 its `matvec` walks a raw row pointer over the rank-2 packed block and keeps its
   scalar tail — see layer 2.) `matvec-into`'s destination may alias NEITHER `x` (each output
   element folds over all of it) NOR `W` (the row windows keep reading it), so the kernel
   `ref.eq`-traps against both -- matching `vec.lisp`, `JvmSimdVectorTemplate` and `VecSimd`, all
@@ -769,7 +769,7 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
   `ijk` triple loop as **`ikj`** makes `b`'s rows contiguous AND preserves the summation order, so
   the result is bit-identical rather than merely close. See `.kb/linalg-simd.md`. `vec:matvec`
   (GEMV) is still the mat×vec case llama2's single-token decode needs.
-- `--no-gc` GEMV is **DONE** (`.todo/99`, 2026-07-10): the rank-2 packed matrix block
+- `--no-gc` GEMV is **DONE** (`.todo/099`, 2026-07-10): the rank-2 packed matrix block
   (`F64MAT`/`F32MAT`, `[rows][cols][data]`) + `compileSimdMatvec` driving
   `WasmVecLoops.simdDot`/`scalarDot` once per row — see layer 2 above. Still out of scope
   there: rank-2 `#d`/`#f` literals, rank >= 3, `array-dimensions`/`array-dimension` on the

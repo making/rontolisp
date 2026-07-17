@@ -192,8 +192,8 @@ non-GC output can be numerically *better*, not just smaller.
 - `am.ik.wasm.WasmTreeShaker` corpus/test additions for the non-GC shape.
 - README ("No-WASI (reactor) mode" / "Optimize" neighbourhood) + CLAUDE.md (a new
   design-constraint bullet describing the non-GC scalar backend and its eligibility rule).
-- Related: `.todo/22` (`--optimize`, composes), `.todo/21` (`--no-wasi` memory ABI, the
-  Phase-2 string path reuses its host harness), `.todo/09` (function arity cap).
+- Related: `.todo/022` (`--optimize`, composes), `.todo/021` (`--no-wasi` memory ABI, the
+  Phase-2 string path reuses its host harness), `.todo/009` (function arity cap).
 
 ## Recommendation
 Land **Phase 1 (scalar int/float/bool) only** first as a self-contained backend behind

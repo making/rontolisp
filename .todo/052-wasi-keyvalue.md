@@ -1,6 +1,6 @@
 # wasi:keyvalue — host-backed persistent key-value store
 
-Status: PLANNED (do AFTER `.todo/51-wasi-http-incoming-handler-spin.md`).
+Status: PLANNED (do AFTER `.todo/051-wasi-http-incoming-handler-spin.md`).
 Created 2026-07-04.
 
 **LARGELY DELIVERED 2026-07-14 — read this before doing anything below.** The
@@ -80,7 +80,7 @@ fetch + wasi:http (0.2), NOT with the 0.3 sockets component (same mixing rule
   backend (`wasmtime` with `-S keyvalue`? check the flag/availability;
   Spin provides `spin-keyvalue`). VERIFY the wasmtime host support level first —
   keyvalue may only be hosted by Spin/other runtimes, not bare wasmtime. If bare
-  wasmtime does not host it, target Spin (ties in with `.todo/51`).
+  wasmtime does not host it, target Spin (ties in with `.todo/051`).
 - **Interpreter / JVM**: no host kv — back it with either (a) an in-memory
   `HashMap` per bucket name (simple, matches kv-server's current semantics but
   non-persistent), or (b) a small file-backed store under a temp/dir. Pick (a)
@@ -107,6 +107,6 @@ Four-backend + native E2E workflow. Demo: a `kv-server`-style example (or
 extend it) that persists across connections/restarts via `kv-*`; header carries
 the `spin up` / wasmtime run command. Docs mirrored en/ja.
 
-Related: `.todo/51-wasi-http-incoming-handler-spin.md`. Both from the 2026-07
+Related: `.todo/051-wasi-http-incoming-handler-spin.md`. Both from the 2026-07
 "interesting wasmtime components" discussion; #51 (wasi:http incoming) is the
 higher-priority headline, this is the follow-on.

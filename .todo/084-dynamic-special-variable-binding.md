@@ -1,10 +1,10 @@
 # 84: Dynamic (special) variable binding
 
 Status: **DONE (2026-07-06)** for the core feature; two compile-path lite limits
-deferred (see "Shipped" below). Elevated from `.todo/54` Phase 4's one-line
+deferred (see "Shipped" below). Elevated from `.todo/054` Phase 4's one-line
 "Dynamic/special variable binding" bullet into its own tracked item, because it is
 the shared root cause behind two workarounds (`.todo/82`, `.todo/83`, both since
-resolved) and a hard prerequisite for the condition system (`.todo/39`).
+resolved) and a hard prerequisite for the condition system (`.todo/039`).
 
 ## Shipped (2026-07-06)
 
@@ -60,7 +60,7 @@ Consequences already felt:
   save/restore stack on `PackageResolver` (`pushPackage`/`popPackage`) plus
   `%push-package`/`%pop-package` markers on the compile path. That IS dynamic
   binding of one specific variable, done by hand -- see "Improvement room" below.
-- **`.todo/39` (conditions/restarts)**: `handler-bind`/`restart-bind` and
+- **`.todo/039` (conditions/restarts)**: `handler-bind`/`restart-bind` and
   `unwind-protect` are inherently dynamic-extent constructs; a real condition
   system wants special binding underneath.
 
@@ -154,6 +154,6 @@ save/restore facility replacing the per-variable hand-rolled pair.
   (`UserMacroExpander.isPureConfigSetf`, auto-detects a pure config setter). See
   `.kb/asdf.md` (cl-who paragraph).
 
-Related: `.todo/54` Phase 4, `.todo/39` (conditions), `.todo/82` (setf replay --
-resolved), `.todo/83` (load/`*package*`), `.todo/41` (readtables), `.kb/packages.md`
+Related: `.todo/054` Phase 4, `.todo/039` (conditions), `.todo/82` (setf replay --
+resolved), `.todo/83` (load/`*package*`), `.todo/041` (readtables), `.kb/packages.md`
 (load/`*package*` scoping), `.kb/symbol-runtime-api.md` (globals-only `boundp`).

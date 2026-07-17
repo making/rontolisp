@@ -55,7 +55,7 @@
 
 ### Implementation approach
 
-**Note (2026-07):** `defmacro` (user macros), `macroexpand-1`/`macroexpand` and `gensym` are now implemented (interpreter-native + compile-path pre-pass `eval.UserMacroExpander`; see `.todo/44-defmacro-followups.md`).
+**Note (2026-07):** `defmacro` (user macros), `macroexpand-1`/`macroexpand` and `gensym` are now implemented (interpreter-native + compile-path pre-pass `eval.UserMacroExpander`; see `.todo/044-defmacro-followups.md`).
 
 **Macro introspection** — done:
 1. `macroexpand-1` — single-step expansion (`LispEvaluator.macroexpand1`).

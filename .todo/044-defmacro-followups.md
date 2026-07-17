@@ -32,7 +32,7 @@ those can be written with explicit `list`/`quote` today.
 Destructuring parameter lists, `&optional` (with defaults), `&key`, and `&aux`
 landed 2026-07-05 via the `destructuring-bind` wrapping in
 `LispEvaluator.evalDefmacro` (details: `.kb/defmacro-backquote.md`; see also
-`.todo/31-lambda-list-extensions.md`). Remaining gaps: `&whole` and
+`.todo/031-lambda-list-extensions.md`). Remaining gaps: `&whole` and
 `&environment` are rejected with an error, and an extended lambda list has lite
 no-mismatch semantics (missing positions bind nil, surplus forms ignored) —
 only a plain "required + `&rest`/`&body`" list keeps the strict

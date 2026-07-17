@@ -64,7 +64,7 @@ decode.lisp calls `signal`, `cerror`, and `(error 'bad-base64-character :input .
 the **compile path must still compile these defun bodies**, so lite stubs are
 needed at minimum: `signal`/`cerror` as `%`-primitives (or macro lowerings) and
 `(error 'symbol :initargs)` routed through the existing `make-condition`
-`:format-control` path. Full condition system is `.todo/39`.
+`:format-control` path. Full condition system is `.todo/039`.
 
 ### D. (lower priority, verify after A-C) `locally`, `let/typed`+declare, `etypecase/unroll`
 `#-sbcl` branch of `etypecase/unroll` expands to `(locally (declare (type ...)) body)`
