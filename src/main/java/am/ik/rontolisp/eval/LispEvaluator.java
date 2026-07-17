@@ -32,6 +32,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SpecialVarCollector;
+import am.ik.rontolisp.compiler.HttpPlistShape;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.Features;
@@ -2905,44 +2906,73 @@ public final class LispEvaluator {
 		else {
 			requestBody = LispStream.settled(new LispString(request.body()));
 		}
-		LispVal requestPlist = plist(new LispSymbol(":method"), new LispString(request.method()),
-				new LispSymbol(":path"), new LispString(request.path()), new LispSymbol(":query"), query,
-				new LispSymbol(":headers"), headers, new LispSymbol(":body"), requestBody);
+		// The plist shape (keys, order) is derived from the http-plist WIT request
+		// record; only the per-field value extraction is this backend's, so an unmapped
+		// record field fails loudly here.
+		List<LispVal> requestEntries = new ArrayList<>();
+		for (HttpPlistShape.Field field : HttpPlistShape.requestFields()) {
+			requestEntries.add(new LispSymbol(field.keyword()));
+			requestEntries.add(switch (field.name()) {
+				case "method" -> new LispString(request.method());
+				case "path" -> new LispString(request.path());
+				case "query" -> query;
+				case "headers" -> headers;
+				case "body" -> requestBody;
+				default -> throw new LispEvalException(
+						LispNames.HTTP_HANDLER + " has no extraction for request field " + field.name());
+			});
+		}
+		LispVal requestPlist = plist(requestEntries.toArray(new LispVal[0]));
 		// An async-defun handler returns a future; each request runs on its own virtual
 		// thread, so awaiting it here is the natural per-request suspension.
 		LispVal result = awaitValue(apply(handler, List.of(requestPlist), this.globalEnv));
-		int status = 200;
-		if (httpPlistGet(result, ":status") instanceof LispInteger statusVal) {
-			status = (int) statusVal.value();
-		}
-		String body = "";
-		LispVal bodyVal = httpPlistGet(result, ":body");
-		if (bodyVal instanceof LispString bodyStr) {
-			body = bodyStr.value();
-		}
-		else if (bodyVal instanceof LispStream bodyStream) {
-			// A streaming response body is drained here (buffered send); true chunked
-			// transfer follows with the JVM handler-interface rework.
-			StringBuilder drained = new StringBuilder();
-			LispVal chunk = awaitValue(LispFuture.of(bodyStream.read()));
-			while (!(chunk instanceof LispNil)) {
-				if (!(chunk instanceof LispString chunkStr)) {
-					throw new LispEvalException(LispNames.HTTP_HANDLER
-							+ ": a response body stream must carry string chunks, got: " + chunk.print());
-				}
-				drained.append(chunkStr.value());
-				chunk = awaitValue(LispFuture.of(bodyStream.read()));
-			}
-			body = drained.toString();
-		}
+		// The response plist is read back per the same WIT record (its response half),
+		// with the shape's declared defaults for missing keys.
+		int status = HttpPlistShape.RESPONSE_STATUS_DEFAULT;
+		String body = HttpPlistShape.RESPONSE_BODY_DEFAULT;
 		List<HttpHandlerSupport.Header> responseHeaders = new ArrayList<>();
-		LispVal headerAlist = httpPlistGet(result, ":headers");
-		while (headerAlist instanceof LispCons cons) {
-			if (cons.car() instanceof LispCons pair && pair.car() instanceof LispString name
-					&& pair.cdr() instanceof LispString value) {
-				responseHeaders.add(new HttpHandlerSupport.Header(name.value(), value.value()));
+		for (HttpPlistShape.Field field : HttpPlistShape.responseFields()) {
+			LispVal value = httpPlistGet(result, field.keyword());
+			switch (field.name()) {
+				case "status" -> {
+					if (value instanceof LispInteger statusVal) {
+						status = (int) statusVal.value();
+					}
+				}
+				case "body" -> {
+					if (value instanceof LispString bodyStr) {
+						body = bodyStr.value();
+					}
+					else if (value instanceof LispStream bodyStream) {
+						// A streaming response body is drained here (buffered send);
+						// true chunked transfer follows with the JVM handler-interface
+						// rework.
+						StringBuilder drained = new StringBuilder();
+						LispVal chunk = awaitValue(LispFuture.of(bodyStream.read()));
+						while (!(chunk instanceof LispNil)) {
+							if (!(chunk instanceof LispString chunkStr)) {
+								throw new LispEvalException(LispNames.HTTP_HANDLER
+										+ ": a response body stream must carry string chunks, got: " + chunk.print());
+							}
+							drained.append(chunkStr.value());
+							chunk = awaitValue(LispFuture.of(bodyStream.read()));
+						}
+						body = drained.toString();
+					}
+				}
+				case "headers" -> {
+					LispVal headerAlist = value;
+					while (headerAlist instanceof LispCons cons) {
+						if (cons.car() instanceof LispCons pair && pair.car() instanceof LispString name
+								&& pair.cdr() instanceof LispString headerValue) {
+							responseHeaders.add(new HttpHandlerSupport.Header(name.value(), headerValue.value()));
+						}
+						headerAlist = cons.cdr();
+					}
+				}
+				default -> throw new LispEvalException(
+						LispNames.HTTP_HANDLER + " has no extraction for response field " + field.name());
 			}
-			headerAlist = cons.cdr();
 		}
 		return new HttpHandlerSupport.Response(status, responseHeaders, body);
 	}

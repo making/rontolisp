@@ -144,9 +144,10 @@
           future)))))
 
 (defun %fetch-read-response (response)
-  ;; The send future settled to the response resource; build the
-  ;; (:status :body :headers) plist -- :body is a first-class stream (drain it with
-  ;; (rontolisp:await (rontolisp:read-all body)), matching the interpreter/JVM).
+  ;; The send future settled to the response resource; build the response plist
+  ;; through %http-response-plist (generated from the http-plist WIT record, so the
+  ;; shape matches the interpreter/JVM by construction) -- :body is a first-class
+  ;; stream (drain it with (rontolisp:await (rontolisp:read-all body))).
   ;; consume-body moves the response, so the headers are read first (the WIT
   ;; guarantees previously acquired headers stay valid).
   (let* ((status (%http:response-get-status-code response))
@@ -154,7 +155,7 @@
          (headers (%http-header-alist rheaders))
          (body (%http-body-value (function %http:response-consume-body) response)))
     (%http:fields-drop rheaders)
-    (list :status status :body body :headers headers)))
+    (%http-response-plist status headers body)))
 
 (rontolisp:async-defun %fetch-run (send-future)
   ;; Awaits the in-flight send -- a REAL suspension when the response has not
@@ -204,10 +205,11 @@
         (t "GET")))
 
 (defun %serve-read-request (request)
-  ;; Build the (:method :path :query :headers :body) request plist, splitting
-  ;; path-with-query at the first ? into :path / :query (nil when there is none),
-  ;; matching the interpreter and JVM backends -- :body is a first-class stream
-  ;; there too. consume-body moves the request, so everything else is read first.
+  ;; Build the request plist through %http-request-plist (generated from the
+  ;; http-plist WIT record, so the shape matches the interpreter and JVM backends by
+  ;; construction), splitting path-with-query at the first ? into :path / :query
+  ;; (nil when there is none) -- :body is a first-class stream on those backends
+  ;; too. consume-body moves the request, so everything else is read first.
   (let* ((method (%serve-method-string (%http:request-get-method request)))
          (pq (or (%http:request-get-path-with-query request) "/"))
          (q (position #\? pq))
@@ -217,7 +219,7 @@
          (headers (%http-header-alist rheaders))
          (body (%http-body-value (function %http:request-consume-body) request)))
     (%http:fields-drop rheaders)
-    (list :method method :path path :query query :headers headers :body body)))
+    (%http-request-plist method path query headers body)))
 
 (rontolisp:async-defun %serve-handle (request)
   ;; The handler.handle export body (an asynchronous task). Read the request (its
@@ -230,14 +232,14 @@
   ;; protocol runs even when the handler never read it (stream-close is idempotent).
   (let* ((req (%serve-read-request request))
          (resp (rontolisp:await (%serve-dispatch req)))
-         (status (or (getf resp :status) 200))
-         (body-val (or (getf resp :body) ""))
+         (status (%http-response-status resp))
+         (body-val (%http-response-body resp))
          (body (if (rontolisp:streamp body-val)
                    (rontolisp:await (%http-drain body-val))
                    body-val))
          (fields (%http:fields-new)))
-    (%http-add-headers fields (getf resp :headers))
-    (rontolisp:stream-close (getf req :body))
+    (%http-add-headers fields (%http-response-headers resp))
+    (rontolisp:stream-close (%http-request-body req))
     (let* ((bodypair (%http:body-stream-new))
            (trailers (%http:trailers-future-new))
            (rpair (%http:response-new fields (car bodypair) (car trailers)))

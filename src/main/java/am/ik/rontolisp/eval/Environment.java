@@ -55,6 +55,7 @@ import am.ik.rontolisp.PackageIntrospection;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.Scope;
 import am.ik.rontolisp.VersionInfo;
+import am.ik.rontolisp.compiler.HttpPlistShape;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -799,9 +800,7 @@ public final class Environment implements Scope {
 			List<HttpSupport.Header> requestHeaders = parseHeaderAlist(plistGet(options, ":headers"));
 			String body = fetchBody(options);
 			return LispFuture.of(HttpSupport.requestAsync(method, url.value(), requestHeaders, body)
-				.thenApply(start -> fetchList(new LispSymbol(":status"), new LispInteger(start.status()),
-						new LispSymbol(":headers"), buildHeaderAlist(start.headers()), new LispSymbol(":body"),
-						start.body())));
+				.thenApply(Environment::fetchResponsePlist));
 		}));
 		// futurep tests whether a value is a future (calling an async-defun function,
 		// rontolisp:fetch, rontolisp:stream-read, ...).
@@ -883,6 +882,24 @@ public final class Environment implements Scope {
 			throw new LispEvalException(name + " expects a stream, got: " + args.get(0).print());
 		}
 		return stream;
+	}
+
+	// The fetch result plist. The shape (keys, order) is derived from the http-plist
+	// WIT response record; only the per-field value extraction is this backend's, so an
+	// unmapped record field fails loudly here.
+	private static LispVal fetchResponsePlist(HttpSupport.Start start) {
+		List<LispVal> entries = new ArrayList<>();
+		for (HttpPlistShape.Field field : HttpPlistShape.responseFields()) {
+			entries.add(new LispSymbol(field.keyword()));
+			entries.add(switch (field.name()) {
+				case "status" -> new LispInteger(start.status());
+				case "headers" -> buildHeaderAlist(start.headers());
+				case "body" -> start.body();
+				default -> throw new LispEvalException(
+						LispNames.FETCH + " has no extraction for response field " + field.name());
+			});
+		}
+		return fetchList(entries.toArray(new LispVal[0]));
 	}
 
 	private static LispVal fetchList(LispVal... elements) {

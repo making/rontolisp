@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
@@ -11,6 +12,7 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.compiler.HttpPlistShape;
 
 /**
  * Builds the JVM-backend runtime for the {@code rontolisp:http-handler} directive. The
@@ -21,12 +23,13 @@ import am.ik.jvm.Opcode;
  * handler funcref in the {@code _httpHandlerFn} static field and calls
  * {@code HttpHandlerSupport.serve(port, new Prog())}, and the injected public
  * {@code handle(Request)} method adapts each incoming request: it builds the request
- * property list {@code (:method m :path p :query q :headers <alist> :body b)} in the
- * shared runtime value representation (quote-wrapped strings, cons cells as
- * {@code Object[2]}), applies the handler through the {@code _invoke_1} dispatcher, and
- * reads {@code :status} (default 200), {@code :headers} (an alist of
- * {@code (name . value)} string pairs; malformed entries are skipped like the
- * interpreter's) and {@code :body} (default empty) back from the response property list.
+ * property list (its shape — keys, order, defaults — derived from the
+ * {@code HttpPlistShape} WIT records, like every backend's) in the shared runtime value
+ * representation (quote-wrapped strings, cons cells as {@code Object[2]}), applies the
+ * handler through the {@code _invoke_1} dispatcher, and reads {@code :status},
+ * {@code :headers} (an alist of {@code (name . value)} string pairs; malformed entries
+ * are skipped like the interpreter's) and {@code :body} back from the response property
+ * list.
  */
 final class JvmHttpHandlerRuntimeBuilder {
 
@@ -132,13 +135,16 @@ final class JvmHttpHandlerRuntimeBuilder {
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
 
 		ConstantPool.StringConstant quote = cp.addString("\"");
-		ConstantPool.StringConstant emptyStr = cp.addString("");
-		ConstantPool.StringConstant methodKey = cp.addString(":method");
-		ConstantPool.StringConstant pathKey = cp.addString(":path");
-		ConstantPool.StringConstant queryKey = cp.addString(":query");
-		ConstantPool.StringConstant headersKey = cp.addString(":headers");
-		ConstantPool.StringConstant bodyKey = cp.addString(":body");
-		ConstantPool.StringConstant statusKey = cp.addString(":status");
+		// Every plist keyword and response default comes from the http-plist WIT
+		// records. The by-key response reads below cannot loop (each field's code is
+		// structurally different), so the handled set is asserted against the record —
+		// a record change fails the compile loudly.
+		HttpPlistShape.requireResponseHandled(Set.of("status", "headers", "body"));
+		ConstantPool.StringConstant bodyDefault = cp.addString(HttpPlistShape.RESPONSE_BODY_DEFAULT);
+		ConstantPool.StringConstant statusKey = cp.addString(HttpPlistShape.responseField("status").keyword());
+		ConstantPool.StringConstant responseHeadersKey = cp
+			.addString(HttpPlistShape.responseField("headers").keyword());
+		ConstantPool.StringConstant responseBodyKey = cp.addString(HttpPlistShape.responseField("body").keyword());
 		MethodrefConstant stringEquals = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
 
@@ -254,30 +260,25 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.branch(Opcode.GOTO, hLoop);
 		a.bind(hEnd);
 
-		// plist = (:method m :path p :query q :headers alist :body b), built tail-first
-		// in slot 5.
+		// The request plist, built tail-first in slot 5. The shape (keys, order) is
+		// derived from the http-plist WIT request record; only the per-field value slot
+		// is this backend's, so an unmapped record field fails the compile loudly.
+		Map<String, Integer> requestValueSlot = Map.of("method", 2, "path", 3, "query", 17, "headers", 14, "body", 4);
 		a.aconstNull();
 		a.astore(5);
-		consSlots(a, objectClass, 4, 5); // (b)
-		a.astore(5);
-		consLdcCdr(a, objectClass, bodyKey, 5); // (:body b)
-		a.astore(5);
-		consSlots(a, objectClass, 14, 5); // (alist :body b)
-		a.astore(5);
-		consLdcCdr(a, objectClass, headersKey, 5); // (:headers nil ...)
-		a.astore(5);
-		consSlots(a, objectClass, 17, 5); // (q :headers ...)
-		a.astore(5);
-		consLdcCdr(a, objectClass, queryKey, 5); // (:query q ...)
-		a.astore(5);
-		consSlots(a, objectClass, 3, 5); // (p :query ...)
-		a.astore(5);
-		consLdcCdr(a, objectClass, pathKey, 5); // (:path p ...)
-		a.astore(5);
-		consSlots(a, objectClass, 2, 5); // (m :path ...)
-		a.astore(5);
-		consLdcCdr(a, objectClass, methodKey, 5); // (:method m ...)
-		a.astore(5);
+		List<HttpPlistShape.Field> requestFields = HttpPlistShape.requestFields();
+		for (int i = requestFields.size() - 1; i >= 0; i--) {
+			HttpPlistShape.Field field = requestFields.get(i);
+			Integer valueSlot = requestValueSlot.get(field.name());
+			if (valueSlot == null) {
+				throw new IllegalStateException(
+						"The http-handler JVM runtime has no value slot for request field " + field.name());
+			}
+			consSlots(a, objectClass, valueSlot, 5);
+			a.astore(5);
+			consLdcCdr(a, objectClass, cp.addString(field.keyword()), 5);
+			a.astore(5);
+		}
 
 		// result = _await(_invoke_1(_httpHandlerFn, plist)) -- an async-defun handler
 		// returns a future; each request runs on its own virtual thread, so awaiting
@@ -291,9 +292,9 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.u2(awaitHelper.index());
 		a.astore(6);
 
-		// status = (:status is a Long) ? (int) it : 200
+		// status = (:status is a Long) ? (int) it : the shape's default
 		emitPlistGet(a, statusKey, 6, 7, 8, objectArrayClass, stringEquals);
-		a.iconst(200);
+		a.iconst(HttpPlistShape.RESPONSE_STATUS_DEFAULT);
 		a.istore(9);
 		int statusDone = a.label();
 		a.aload(8);
@@ -308,14 +309,14 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.istore(9);
 		a.bind(statusDone);
 
-		// body = (:body is a quoted String) ? stripQuotes(it) : "" -- a stream body
-		// drains to its quoted concatenation first (buffered send)
-		emitPlistGet(a, bodyKey, 6, 7, 8, objectArrayClass, stringEquals);
+		// body = (:body is a quoted String) ? stripQuotes(it) : the shape's default --
+		// a stream body drains to its quoted concatenation first (buffered send)
+		emitPlistGet(a, responseBodyKey, 6, 7, 8, objectArrayClass, stringEquals);
 		a.aload(8);
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(drainBody.index());
 		a.astore(8);
-		a.ldc(emptyStr.index());
+		a.ldc(bodyDefault.index());
 		a.astore(10);
 		int bodyDone = a.label();
 		a.aload(8);
@@ -336,7 +337,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.op(Opcode.INVOKESPECIAL);
 		a.u2(arrayListInit.index());
 		a.astore(15);
-		emitPlistGet(a, headersKey, 6, 7, 8, objectArrayClass, stringEquals);
+		emitPlistGet(a, responseHeadersKey, 6, 7, 8, objectArrayClass, stringEquals);
 		a.aload(8);
 		a.astore(16);
 		int rLoop = a.label();

@@ -18,6 +18,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.HttpPlistShape;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.LispReader;
@@ -285,7 +286,13 @@ public final class HttpLibrary {
 			synchronized (HttpLibrary.class) {
 				cached = forms;
 				if (cached == null) {
-					cached = LispReader.readAllFromString(readResource("http.lisp"));
+					// http.lisp plus the plist builder/accessor defuns generated from
+					// the http-plist WIT records (the plist shape is derived, not
+					// hand-written, on this backend too); the reachability walk drops
+					// whichever generated helpers the active half never calls.
+					List<LispVal> all = new ArrayList<>(LispReader.readAllFromString(readResource("http.lisp")));
+					all.addAll(LispReader.readAllFromString(HttpPlistShape.lispHelpersSource()));
+					cached = List.copyOf(all);
 					forms = cached;
 				}
 			}

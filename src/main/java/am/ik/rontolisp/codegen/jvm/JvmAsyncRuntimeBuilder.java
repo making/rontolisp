@@ -10,6 +10,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.compiler.HttpPlistShape;
 
 /**
  * Builds the JVM bytecode of the async/await runtime: the {@code %async-run} primitive
@@ -814,9 +815,6 @@ final class JvmAsyncRuntimeBuilder {
 		MethodrefConstant stringJoin = cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("join"),
 				cp.addUtf8("(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;")));
 		ConstantPool.StringConstant comma = cp.addString(", ");
-		ConstantPool.StringConstant statusKey = cp.addString(":status");
-		ConstantPool.StringConstant headersKey = cp.addString(":headers");
-		ConstantPool.StringConstant bodyKey = cp.addString(":body");
 
 		int notHttp = b.label();
 		b.aload(4);
@@ -973,20 +971,26 @@ final class JvmAsyncRuntimeBuilder {
 		b.branch(Opcode.GOTO, eLoop);
 		b.bind(eEnd);
 
-		// (:status status :headers alist :body stream), built tail-first in slot 14
+		// The fetch result plist, built tail-first in slot 14. The shape (keys, order)
+		// is derived from the http-plist WIT response record; only the per-field value
+		// slot is this backend's, so an unmapped record field fails the compile loudly.
+		Map<String, Integer> responseValueSlot = Map.of("status", 7, "headers", 10, "body", 8);
 		b.aconstNull();
 		b.astore(14);
-		consSlot(b, objectClass, 8, 14);
-		b.astore(14);
-		consLdc(b, objectClass, bodyKey, 14);
-		b.astore(14);
-		consSlot(b, objectClass, 10, 14);
-		b.astore(14);
-		consLdc(b, objectClass, headersKey, 14);
-		b.astore(14);
-		consSlot(b, objectClass, 7, 14);
-		b.astore(14);
-		consLdc(b, objectClass, statusKey, 14);
+		List<HttpPlistShape.Field> responseFields = HttpPlistShape.responseFields();
+		for (int i = responseFields.size() - 1; i >= 0; i--) {
+			HttpPlistShape.Field field = responseFields.get(i);
+			Integer valueSlot = responseValueSlot.get(field.name());
+			if (valueSlot == null) {
+				throw new IllegalStateException(
+						"The fetch JVM runtime has no value slot for response field " + field.name());
+			}
+			consSlot(b, objectClass, valueSlot, 14);
+			b.astore(14);
+			consLdc(b, objectClass, cp.addString(field.keyword()), 14);
+			b.astore(14);
+		}
+		b.aload(14);
 		b.areturn();
 		b.bind(notHttp);
 	}

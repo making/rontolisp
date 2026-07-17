@@ -21,7 +21,10 @@ the internal degenerate `TYPE_P1_FUTURE` struct (settled at creation;
 
 **The result plist is `(:status <int> :headers <alist> :body <stream>)` on every
 backend** -- `:body` is an asynchronous stream drained with
-`(rontolisp:await (rontolisp:read-all ...))`.
+`(rontolisp:await (rontolisp:read-all ...))`. It is the response half of the
+one-place plist shape, `compiler/HttpPlistShape` (see the `http-handler`
+section below), so its keys and order are derived, not hand-written, in each
+backend's fetch runtime.
 
 **Error timing** is JS-like: options are validated at `fetch` time; request/transport
 failures surface at `await` -- EVERY backend signals there (on WASM the send result's
@@ -122,12 +125,31 @@ The incoming counterpart of `fetch`, sharing the HTTP value model: the handler
 (a quoted defun name, like `wasm-export`) takes a request plist
 `(:method :path :query :headers :body)` and returns a response plist
 `(:status :headers :body)`; missing keys default to `:status 200` / empty body.
+
+**The plist SHAPE is written once — `compiler/HttpPlistShape`**, a WIT `record`
+pair (the house `record` = keyword plist convention, `WitTypeMapper.Rep.PLIST`)
+parsed at class load; `HttpPlistShapeTest` pins it. Every backend derives its
+builders and readers from the parsed fields: the interpreter
+(`LispEvaluator.invokeHttpHandler`, `Environment`'s fetch result) and the JVM
+(`JvmHttpHandlerRuntimeBuilder`, `JvmAsyncRuntimeBuilder`'s fetch result) loop
+over the fields in Java, and the WASM component path calls generated Lisp
+helper defuns (`%http-request-plist` / `%http-response-plist` builders +
+`%http-response-status`-style accessors, `HttpPlistShape.lispHelpersSource()`
+spliced by `HttpLibrary` next to `http.lisp`). The response defaults
+(`:status 200`, empty body) are shape constants consumed the same three ways.
+A record field with no per-backend value extraction — the one part that cannot
+be derived — fails that backend loudly at build/compile time (a switch default
+or `requireResponseHandled`), so a field change is one record edit plus the
+extraction it demands, never a silent per-backend drift. Shape deviations from
+the settled WIT mapping (dotted-pair `:headers` alist, the response defaults, a
+string response body) are documented on the class.
+
 `:path` is the path only and `:query` the raw query string without the `?`
-(nil when the request has none; `""` for a bare trailing `?`): the split at
-the first `?` happens once in `HttpHandlerSupport.Request.of` (interpreter and
-JVM inherit it) and in the synthesized `%http-request` Lisp helper on the WASM
-component path. Decoding policy lives in the URL library (`.kb/url.md`), not
-here.
+(nil when the request has none; `""` for a bare trailing `?`). The split at
+the first `?` is VALUE EXTRACTION, not shape, so it remains per-backend code:
+`HttpHandlerSupport.Request.of` (interpreter and JVM inherit it) and
+`%serve-read-request` in `http.lisp` on the component path. Decoding policy
+lives in the URL library (`.kb/url.md`), not here.
 
 - **Interpreter (implemented)** -- `HttpHandlerSupport` (eval pkg, `public` for
   the future web substitution): a blocking JDK `com.sun.net.httpserver.HttpServer`,
