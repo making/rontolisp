@@ -54,7 +54,7 @@ The next frontier. Most of the language gaps have since closed; what is left:
 - Readtables (.todo/041) -- open.
 
 Done since this plan was written: the CLOS subset (`.kb/clos.md`) and
-dynamic/special variable binding (`.todo/084`, since DONE) -- the latter was the
+dynamic/special variable binding (`.kb/dynamic-special-variables.md`) -- the latter was the
 root cause behind the former `.todo/82` (macro-time setf replay) and `.todo/83`
 (`*package*` load scoping) workarounds, both since resolved.
 

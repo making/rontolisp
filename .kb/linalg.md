@@ -157,7 +157,7 @@ prints differently on WASM, so a cross-backend `#f` pin must use f32-EXACT value
 (integers / halves) -- see the `linalg-single-float-cross-backend` ci-spec case,
 which is byte-identical on all four backends.
 
-## `--simd` acceleration (`.todo/107`)
+## `--simd` acceleration (todo-107)
 
 Twenty members -- `add` `sub` `mul` `div` `sum` `norm` `amax` `amin` `argmax` `argmin`
 `trace` `transpose` `reshape` `dot` `outer` plus the unary ufuncs `exp` `sqrt` `abs`

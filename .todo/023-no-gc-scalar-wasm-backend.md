@@ -79,8 +79,8 @@ Several claims in the original design below were overtaken and are corrected her
   `print`/`princ`/`terpri` via an `fd_write` import plus a WASI 0.3 print
   micro-adapter, so the "pure-compute reactor that cannot print" framing (and the
   rationale it implied for the mandelbrot string-return shape) no longer holds. See
-  `.todo/110-nogc-print-io-and-with-arena.md`.
-- **`princ-to-string` on a FLOAT is no longer a compile error.** `.todo/110` shipped
+  the "Print / stdout" section of `.kb/no-gc-scalar-wasm.md` (todo-110).
+- **`princ-to-string` on a FLOAT is no longer a compile error.** todo-110 shipped
   the `__ftoa` helper.
 
 ## Remaining follow-ups
@@ -91,12 +91,12 @@ as builtins only if demand warrants.
 
 ## See also
 
-The backend's later growth is owned by its successor todos, not by this file:
-`.todo/094` (packed float arrays), `.todo/099` (rank-2 matvec), `.todo/104` (linear-memory
-arena and free), `.todo/107` (linalg kernel interception), `.todo/109` (elementwise
-ufuncs), `.todo/110` (print I/O and `with-arena`), `.todo/111` (start/command module),
-`.todo/113` (diff/gradient/SIMD stencil kernels), `.todo/121` (linalg `--simd` comparison
-and indexing members).
+The backend's later growth is NOT owned by this file. Most of it has shipped and its
+record is `.kb/no-gc-scalar-wasm.md` (print I/O + `with-arena`, the rank-2 `F64MAT`/
+`F32MAT` layout and its GEMV, the linear-memory arena) plus `.kb/vec.md` (packed float
+arrays, the acceleration layers). What is still open lives in `.todo/109` (elementwise
+ufuncs), `.todo/111` (start/command module), `.todo/113` (diff/gradient/SIMD stencil
+kernels) and `.todo/121` (linalg `--simd` comparison and indexing members).
 
 ## Original design (2026-06-28, historical)
 
@@ -166,7 +166,7 @@ non-GC output can be numerically *better*, not just smaller.
   locals are `i32`/`i64`/`f64` only.
 - No `wasi_snapshot_preview1` imports (this mode pairs with / implies `--no-wasi`; it is a
   pure-compute reactor). Import-free: instantiate with no import object. (Superseded: a
-  printing program now imports `fd_write` — see `.todo/110`.)
+  printing program now imports `fd_write` — see `.kb/no-gc-scalar-wasm.md`.)
 - Reactor init entry exported as `_initialize` (same convention as `--no-wasi`, see
   CLAUDE.md). For pure-scalar exports there is usually no top-level init at all, so it can
   often be dropped by `--optimize`.

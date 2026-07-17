@@ -54,7 +54,6 @@ reactor.
 
 ## Related
 
-- `.todo/110-nogc-print-io-and-with-arena.md` (done; the print/arena base),
-  `.todo/93-nogc-component-compact-export.md` (component wrap; unaffected —
-  a command module is for `wasmtime run`, the component wrap is for reactors),
-  `.kb/no-gc-scalar-wasm.md`.
+- `.kb/no-gc-scalar-wasm.md` -- the print/arena base this builds on (todo-110,
+  done), and the `--no-gc --component` wrap, which is unaffected: a command
+  module is for `wasmtime run`, the component wrap is for reactors.

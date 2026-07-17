@@ -312,7 +312,7 @@ as well as the contract.
 two floats was three different operations (interpreter `Double.compare`, a total order;
 JVM `DCMPL` for every operator; wasm literal `f64.gt` but a signum `_rat_cmp` through
 variables), so each kernel mirrored ITS OWN backend and `(linalg:amax #d(-0.0 0.0))`
-differed per backend. **`.todo/108` fixed the scalar comparisons on all three backends**
+differed per backend. **todo-108 fixed the scalar comparisons on all three backends**
 (interpreter `compareNumeric` gained an UNORDERED state; the JVM literal path picks
 DCMPG/DCMPL per operator and the runtime path uses the `_cmpb` bitmask; wasm's variable
 path funnels through `_rat_cmp_bits`), and `LinalgSimdKernels` switched from
@@ -322,6 +322,17 @@ scalar defun (pinned by `LinalgSimdTest`'s `-0.0` oracle-match cases), and the d
 match each other: `(linalg:amax #d(-0.0 0.0))` is `-0.0` everywhere (first-element tie
 win, since IEEE `>` is false on a `0.0`/`-0.0` tie). `-0.0` / NaN comparison cases are
 allowed in `ci-spec.yaml` now; the float-edge cases there pin the convergence.
+
+Two edges were deliberately left diverging there (CL permits either, and no kernel reads
+them), so they are the exception to the sentence above -- keep such forms out of
+`ci-spec.yaml`:
+
+- **Variable-path `min`/`max`**, off the double-literal fast path: the JVM `_min`/`_max`
+  are a `buildSelect` over `_cmp` (not `Math.min`) and wasm's are a `_rat_cmp` select, so
+  NaN does not propagate and a +/-0.0 tie picks by position -- unlike the literal path,
+  which is `Math.min`/`Math.max`.
+- **`eql`/`equal` on `-0.0` vs `0.0`** is unaudited across backends (CLHS makes them `=`
+  but not `eql`).
 
 ## Per-backend mechanics
 

@@ -56,15 +56,32 @@ real in-place mutation ABI is needed (the residue that kept cl-base64 blocked
 before). Interpreter-only is enough to *run* encode; all 4 backends need the
 compiled ABI.
 
-### C. Condition system in decode error paths
+### C. `cerror` in the decode error paths (mostly closed)
 decode.lisp calls `signal`, `cerror`, and `(error 'bad-base64-character :input ...
 :position ... :code ...)` against `define-condition` classes with slots/`:reader`/
-`:report`. `signal`/`cerror` are undefined (`fboundp` => nil) and
-`define-condition` is a lite no-op. Happy-path encode/decode never signals, BUT
-the **compile path must still compile these defun bodies**, so lite stubs are
-needed at minimum: `signal`/`cerror` as `%`-primitives (or macro lowerings) and
-`(error 'symbol :initargs)` routed through the existing `make-condition`
-`:format-control` path. Full condition system is `.todo/039`.
+`:report`. Most of this is no longer a gap -- `.todo/116` Phases 1-3 (DONE, commit
+a8b957b) landed the condition system, see `.kb/error-handling.md`:
+- `signal` is real on ALL backends: `LispNames.SIGNAL`, lowered by
+  `LispMacroExpander.expandSignalMacro` (~line 60, via `expandSignalDesignator`) and
+  dispatched in `LispEvaluator` (~1209) / `JvmExprCompiler` (~656) /
+  `WasmExprCompiler` (~747); exported in `PackageRegistry` (~47).
+- `define-condition` is NOT a no-op: `defineConditionToDefclass` rewrites it into a
+  CLOS-subset `defclass` with `:initarg`/`:initform`/`:reader`/`:accessor` slots and a
+  registered `(:report ...)`, over the built-in condition hierarchy seeded in
+  `ClosRegistry`. (`expandDefineCondition` -> nil survives only as the registry-less
+  fallback for `macroexpand-1` and `--no-gc`.)
+
+What remains:
+- **`cerror` is still undefined** (verified: zero hits in `src/main/java`). It needs a
+  lowering -- the `signal`/`warn` designator machinery is the template.
+- **Verify the initarg route**: confirm `(error 'bad-base64-character :input ...
+  :position ... :code ...)` reaches `expandTypedSignal` ->  `buildTypedConstruct`'s real
+  registry slot-layout path (which needs the class known in the `ClosRegistry` at
+  expansion time and the arguments as keyword pairs) rather than degrading to the old
+  `:format-control` stopgap or a raw tagged list.
+
+Happy-path encode/decode never signals, but the **compile path must still compile these
+defun bodies**, so `cerror` blocks compiling decode.lisp regardless.
 
 ### D. (lower priority, verify after A-C) `locally`, `let/typed`+declare, `etypecase/unroll`
 `#-sbcl` branch of `etypecase/unroll` expands to `(locally (declare (type ...)) body)`
@@ -76,8 +93,9 @@ doesn't break. Only exercised by the `:string`-hose decoders. `make-array
 on that array (needed for `+decode-table+`, hit at load time via `defconstant`).
 
 ## Suggested order
-A (keystone, unlocks names) -> B interpreter (run encode) -> C lite stubs (compile
-decode) -> D -> then JVM, then compile-path B (string setf ABI) for WASM/component.
+A (keystone, unlocks names) -> B interpreter (run encode) -> C (`cerror` only; the
+rest of the condition system is done) -> D -> then JVM, then compile-path B (string
+setf ABI) for WASM/component.
 Verify on all 4 backends; vendor under `src/test/resources/cl-base64/` (BSD, keep
 COPYING), add `ClBase64E2eTest` + a ci-spec residue case for the new features.
 

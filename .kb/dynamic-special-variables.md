@@ -5,7 +5,7 @@ Common Lisp's second binding discipline (alongside lexical): a variable proclaim
 is visible to every function called during the body (not just lexically nested
 code) and restored on exit. rontolisp implements this via **shallow binding**: a
 special's value lives in its ordinary global cell, and a dynamic binding is a
-save/set/restore over that cell. Landed 2026-07-06 (`.todo/084`). Reference doc:
+save/set/restore over that cell. Landed 2026-07-06 (todo-084). Reference doc:
 `doc/en/guides/missing-features.md` ("Dynamic (special) variable binding"),
 `doc/en/reference/special-forms/{progv,let,defvar,defparameter}.md`.
 

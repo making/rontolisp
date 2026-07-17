@@ -41,8 +41,8 @@ operand) load**:
   lane-form GEMM notes). The trailing zero-sentinel group means the shifted window
   never reads out of bounds — same invariant matvec relies on.
 - **Precision**: element-wise only, NO reductions — bit-identical to the scalar
-  defun at both widths is achievable and REQUIRED (the todo-106 f32-reduction
-  contract is irrelevant here; nothing accumulates). This also holds for the
+  defun at both widths is achievable and REQUIRED (the f32-reduction contract in
+  `.kb/linalg-simd.md` is irrelevant here; nothing accumulates). This also holds for the
   non-uniform gradient interior formula (per-element independent float ops).
 
 Scope order if picked up:

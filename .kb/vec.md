@@ -2,7 +2,7 @@
 
 The `vec:` package is a set of portable packed-`f64` vector kernels layered on the
 dedicated **packed float-array type** (see the packed float-array constraint in
-`CLAUDE.md` and `.todo/094`). This file covers the `vec:` package and the two
+`CLAUDE.md` and todo-094). This file covers the `vec:` package and the two
 acceleration layers; the packed representation itself lives in `LispFloatArray`,
 `JvmFloatArrayRuntimeBuilder`, `WasmArrayCompiler` (the `$farray` struct) and
 `NoGcWasmCompiler` (`F64VEC`).
@@ -94,7 +94,7 @@ popping the whole arena at an export boundary (todo-88 auto-reset on a scalar re
 todo-89 `__ronto_alloc_mark`/`_reset` for a host) — nothing is freed *within* one call.
 `-into` makes the bump high-water equal the live set, which is all a GC would have kept
 anyway, so freeing becomes an optimization rather than a correctness requirement
-(`.todo/104` — `with-arena`, a mark/reset of `--no-gc`'s one bump word). On the three GC'd
+(todo-104 — `with-arena`, a mark/reset of `--no-gc`'s one bump word). On the three GC'd
 backends — including wasm-GC `--simd` since todo-105 — `-into` is purely an allocation-rate
 optimization. `linalg` arrays are the same packed type and behave identically (`linalg` does
 not compile under `--no-gc` at all).
@@ -606,7 +606,7 @@ Mechanics:
   **They are NOT invisible behind a bare element loop** (corrected 2026-07-09): before todo-107,
   `linalg:add` — a flat `row-major-aref` loop that `--simd` did not intercept — went from 205 ms to
   230 ms on wasm-GC when `--simd` switched the repr to a vblock (9 samples each, non-overlapping),
-  i.e. `--simd` was a 12% PESSIMIZATION for a linalg-only program there. **Fixed by `.todo/107`**
+  i.e. `--simd` was a 12% PESSIMIZATION for a linalg-only program there. **Fixed by todo-107**
   (2026-07-10): the fifteen accelerated `linalg:` members are intercepted too, and `linalg:add` /
   `linalg:dot` now land on 1 ms, exactly where `vec:add` / `vec:dot` are. The cost is still real for
   what stays un-intercepted (`emap`, `inv` on wasm-GC): see `.kb/linalg-simd.md`.
@@ -758,7 +758,7 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
 - `linalg:` is now packed-float and **width-polymorphic** (`.todo/97`): double by default,
   `#f` opt-in via a trailing constructor `element-type`, and every transform preserves the
   input width (so a `#f` from `vec:` is never force-widened to `#d`). See `.kb/linalg.md`.
-- `linalg:` acceleration is **DONE** (`.todo/107`, 2026-07-10): fifteen `linalg:` members are
+- `linalg:` acceleration is **DONE** (todo-107, 2026-07-10): fifteen `linalg:` members are
   intercepted on the interpreter, the JVM and wasm-GC, reusing these lane loops. It is a separate
   layer with one structural difference -- a linalg kernel is PARTIAL (it declines general arrays,
   mixed widths, plain numbers and shape errors by returning null, and the call site then runs the
@@ -769,7 +769,7 @@ image: `resource-config.json` registers `vec.lisp` (VecLibrary) and
   `ijk` triple loop as **`ikj`** makes `b`'s rows contiguous AND preserves the summation order, so
   the result is bit-identical rather than merely close. See `.kb/linalg-simd.md`. `vec:matvec`
   (GEMV) is still the mat×vec case llama2's single-token decode needs.
-- `--no-gc` GEMV is **DONE** (`.todo/099`, 2026-07-10): the rank-2 packed matrix block
+- `--no-gc` GEMV is **DONE** (todo-099, 2026-07-10): the rank-2 packed matrix block
   (`F64MAT`/`F32MAT`, `[rows][cols][data]`) + `compileSimdMatvec` driving
   `WasmVecLoops.simdDot`/`scalarDot` once per row — see layer 2 above. Still out of scope
   there: rank-2 `#d`/`#f` literals, rank >= 3, `array-dimensions`/`array-dimension` on the

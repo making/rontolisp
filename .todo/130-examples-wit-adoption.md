@@ -61,7 +61,7 @@ jar = `./mvnw -q -Dmaven.test.skip=true package`, wasmtime 46.0.1):
   Node: the `Uint8Array`/`ptr`/`len` dance above **disappears from the host**;
 - the wasm-GC `--component` leg also compiles and runs (110,806 bytes,
   `-W gc=y`; the export is sync-lifted because it returns a string rather than
-  printing, so no `:async t` and no jco stackful-async gap -- `.todo/112`).
+  printing, so no `:async t` and no jco stackful-async gap -- `.kb/wasi-component.md`).
 
 Copy `examples/count-vowels/` verbatim as the model (a checked-in `.wit`, a README with
 the two-build table, `backends: [no-gc, wasm-component]`). One naming detail: if the
@@ -235,5 +235,5 @@ before.
 the `:s-expr` note at :314), `.kb/wasi-component.md`, `.kb/wasm-export-no-wasi.md`,
 `.kb/no-gc-scalar-wasm.md`, `examples/count-vowels/README.md` (the model to copy),
 `.kb/wit.md` (the record, now that the `.todo/124` anchor is closed),
-`.todo/128` (marshalling -- the gate on §3 option (b)), `.todo/112` (jco cannot call a
+`.todo/128` (marshalling -- the gate on §3 option (b)), `.kb/wasi-component.md` (jco cannot call a
 stackful-async GC export; irrelevant here only because mandelbrot's export is sync).
