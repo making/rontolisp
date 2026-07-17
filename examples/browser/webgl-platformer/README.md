@@ -31,7 +31,8 @@ ahead of time to WebAssembly:
   frame after them in the same vertex buffer.
 
 The JavaScript side is the same one-line WebGL2 host boundary as the other
-`webgl-*` demos (see [`../webgl-common/`](../webgl-common)), plus keyboard
+`webgl-*` demos — bindings generated from the shared `gl.wit` (see
+[`../webgl-common/`](../webgl-common)) — plus keyboard
 forwarding — the page only maps key events to small integers; held state,
 buffering and coyote time are Lisp's business — and the HUD.
 
@@ -43,14 +44,18 @@ directory is published as a subpath of the GitHub Pages site by
 
 ```bash
 ./build.sh          # platformer.lisp -> platformer.wasm (--no-wasi --optimize)
-jwebserver -p 8000 --directory .
-# open http://localhost:8000/
+# the page imports the generated ../webgl-common/gl-imports.js, so serve
+# examples/browser rather than this directory:
+jwebserver -p 8000 --directory ..
+# open http://localhost:8000/webgl-platformer/
 ```
 
-`--no-wasi` makes the module a reactor whose only imports are the host
-functions declared with `rontolisp:wasm-import` (`gl`, `canvas`, `math`);
-`--optimize` tree-shakes the runtime and the unused entries of the shared
-`gl` package. The page instantiates the module, calls `_initialize()` (which
+`--no-wasi` makes the module a reactor whose only imports are host functions
+(`gl`, `ui`, `canvas`, `math`) — the ones `platformer.lisp` declares with
+`rontolisp:wasm-import` plus the WebGL2 entries the shared `gl` package binds
+from `../webgl-common/gl.wit`; `--optimize` tree-shakes the runtime and most
+unused entries of that package, leaving `platformer.wasm` importing 34
+functions. The page instantiates the module, calls `_initialize()` (which
 compiles the shaders, parses the stage and bakes its mesh — from Lisp), then
 calls the exported `frame` once per animation tick.
 

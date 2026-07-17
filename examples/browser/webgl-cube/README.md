@@ -19,10 +19,12 @@ directory is published as a subpath of the GitHub Pages site by
 | `cube.wasm`  | The compiled `--no-wasi` reactor (checked in, ~9 KB).             |
 | `build.sh`   | Recompiles `cube.lisp` to `cube.wasm`.                            |
 
-The WebGL2 API boundary itself (the imports, the enum constants and the
+The WebGL2 API boundary itself (the WIT interface, the enum constants and the
 shader helpers) lives in the shared `gl` package,
 [`../webgl-common/gl.lisp`](../webgl-common), spliced in at compile time by
-`(require :gl "../webgl-common/gl.lisp")`.
+`(require :gl "../webgl-common/gl.lisp")`. The page's matching WebGL2 bindings
+are generated from the same `gl.wit`, imported from
+`../webgl-common/gl-imports.js`.
 
 ## How it works
 
@@ -57,8 +59,8 @@ The Lisp side owns everything that means anything:
   (position + color) through `set-float`, uploaded once at setup.
 - **Matrix math.** `mat4-mul`, `mat4-perspective`, `mat4-rotation-x/y` and
   `mat4-translation` operate on 16-element arrays in column-major order (the
-  OpenGL convention). `tan` for the projection is `sin`/`cos` — both borrowed
-  from JavaScript's `Math` via `wasm-import`.
+  OpenGL convention). `tan` for the projection is `sin`/`cos`, computed in Lisp
+  by the built-ins — `cube.wasm` imports no `math` module at all.
 - **The frame.** Every tick, `frame` multiplies
   `projection * translation * rotation-y * rotation-x`, writes the result
   through `set-float`, points the `uMvp` uniform at it, clears color + depth
@@ -77,9 +79,10 @@ so the page only instantiates the module, calls `_initialize()`, and drives
 # recompile the .wasm after editing cube.lisp:
 examples/browser/webgl-cube/build.sh
 
-# serve and open (any static file server works):
-jwebserver -p 8000 --directory "$PWD/examples/browser/webgl-cube"
-open http://localhost:8000/
+# serve and open (any static file server works). The page imports the generated
+# ../webgl-common/gl-imports.js, so serve examples/browser, not this directory:
+jwebserver -p 8000 --directory "$PWD/examples/browser"
+open http://localhost:8000/webgl-cube/
 ```
 
 The page needs a browser with WebAssembly GC support (Chrome 119+,
@@ -89,12 +92,17 @@ Firefox 120+, Safari 18.2+, Edge 119+).
 
 - The module is compiled with `--no-wasi`, so its *only* imports are the
   host functions the program reaches — the import object is the whole
-  embedding API. With `--optimize` the shipped `cube.wasm` is about 9 KB
-  (entries of the shared `gl` package the cube never calls are tree-shaken
-  away).
+  embedding API. With `--optimize` the shipped `cube.wasm` is about 9 KB and
+  imports 26 functions: 20 of the shared `gl` package's 29 WebGL2 entries, its
+  `ui.fail`, the three staging entries above and two canvas metrics. The nine
+  `gl` entries the cube never calls (`uniform3f`, the VAO pair, `viewport`, ...)
+  are tree-shaken away.
 - Shader compile/link errors are reported by the shared `gl:build-program`
-  (`getShaderParameter` / `getShaderInfoLog` as a `:string` result, shown
-  through the page's `ui.fail` binding).
+  (`gl:get-shader-parameter` / `gl:get-shader-info-log`, whose info log crosses
+  back as a `string` result, shown through the `fail` entry of `gl.wit`'s `ui`
+  interface).
 - On the interpreter and JVM backends the `rontolisp:wasm-import` directives
-  define stubs that signal an error when called, so this program is
-  WASM-only by nature (there is no host to draw with elsewhere).
+  define stubs that signal an error when called, and the shared `gl` package's
+  WIT-imported entries dispatch through a provider nothing binds (signaling
+  `rontolisp:wit-error`), so this program is WASM-only by nature (there is no
+  host to draw with elsewhere).

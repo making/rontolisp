@@ -1,38 +1,45 @@
 ;;;; gl.lisp -- the shared WebGL2 host boundary for the examples/webgl-* demos.
 ;;;;
-;;;; Every browser demo used to repeat the same block of rontolisp:wasm-import
-;;;; directives, WebGL enum constants and shader-compilation helpers. This file
-;;;; factors that block into a `gl` package: a demo splices it in at compile
-;;;; time with
+;;;; Every browser demo used to repeat the same block of host-import directives,
+;;;; WebGL enum constants and shader-compilation helpers. This file factors that
+;;;; block into a `gl` package: a demo splices it in at compile time with
 ;;;;
 ;;;;   (require :gl "../webgl-common/gl.lisp")
 ;;;;
 ;;;; and then calls (gl:create-shader ...), reads gl:+float+, or just builds a
-;;;; whole pipeline with (gl:build-program vs fs). Imports the demo never calls
-;;;; are dropped by --optimize (the tree-shaker removes unused host imports),
-;;;; so requiring the full union below does not grow any page's import object:
-;;;; each page only has to provide the entries its own demo actually reaches.
+;;;; whole pipeline with (gl:build-program vs fs).
 ;;;;
-;;;; The boundary convention (see the demos' index.html): GL objects (shaders,
-;;;; programs, buffers, VAOs, uniform locations) cross as :int handles into a
-;;;; table the page keeps; strings (GLSL source, uniform names, info logs)
-;;;; cross as :string. Only the literal WebGL2 API entries live here -- each
-;;;; demo keeps its own staging imports (setVertex, setFloat, ...), which are
-;;;; page-specific by design.
+;;;; The boundary itself is not written here: it is `gl.wit`, and the two
+;;;; rontolisp:wit-import directives below bind it. Each WIT function lowers into
+;;;; exactly the host import a hand-written rontolisp:wasm-import would have
+;;;; declared, so the compiled module is unchanged -- but the page's import
+;;;; object is GENERATED from the same file (gl-imports.js), so the Lisp side and
+;;;; the JavaScript side can no longer drift apart. See gl.wit for the type
+;;;; conventions (GL objects cross as s32 handles into a table the page keeps;
+;;;; GLSL sources, uniform names and info logs cross as strings).
 ;;;;
-;;;; The quoted name of a wasm-import directive resolves in the current
-;;;; package like a defun name, so the names below are written unqualified:
-;;;; under (in-package gl) each one canonicalizes to gl:name (or gl::name for
-;;;; the unexported fail helper), which is what call sites resolve to.
+;;;; Imports the demo never calls are dropped by --optimize (the tree-shaker
+;;;; removes unused host imports), so binding the full WebGL2 union below does
+;;;; not grow any page's module: each page only imports what its own demo
+;;;; actually reaches. Each demo still declares its own staging imports
+;;;; (setVertex, setFloat, ...) with rontolisp:wasm-import next to its own code --
+;;;; those are page-specific by design and deliberately stay off the WIT.
+;;;;
+;;;; The directives bind into the CURRENT package rather than naming one, so the
+;;;; bindings land in `gl` beside the constants and helpers below: under
+;;;; (in-package gl) each WIT label canonicalizes to gl:label (or gl::fail for
+;;;; the unexported fail helper), which is what call sites resolve to. The
+;;;; defpackage stays hand-written for the same reason -- it has to export the
+;;;; constants and helpers too, which no directive knows about.
 
 (provide :gl)
 
 (defpackage gl
   (:use cl)
   (:export create-shader shader-source compile-shader
-           shader-compiled-p shader-info-log
+           get-shader-parameter get-shader-info-log
            create-program attach-shader link-program
-           program-linked-p program-info-log use-program
+           get-program-parameter get-program-info-log use-program
            get-uniform-location uniform1f uniform3f
            enable disable depth-mask blend-func
            create-buffer bind-buffer buffer-data
@@ -49,72 +56,13 @@
 
 (in-package gl)
 
-;; --- the WebGL2 API, one entry point at a time --------------------------------
-
-(rontolisp:wasm-import 'create-shader :from "gl" :as "createShader"
-                       :params '(:int) :returns :int)
-(rontolisp:wasm-import 'shader-source :from "gl" :as "shaderSource"
-                       :params '(:int :string) :returns :void)
-(rontolisp:wasm-import 'compile-shader :from "gl" :as "compileShader"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'shader-compiled-p :from "gl" :as "getShaderParameter"
-                       :params '(:int :int) :returns :bool)
-(rontolisp:wasm-import 'shader-info-log :from "gl" :as "getShaderInfoLog"
-                       :params '(:int) :returns :string)
-(rontolisp:wasm-import 'create-program :from "gl" :as "createProgram"
-                       :params '() :returns :int)
-(rontolisp:wasm-import 'attach-shader :from "gl" :as "attachShader"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'link-program :from "gl" :as "linkProgram"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'program-linked-p :from "gl" :as "getProgramParameter"
-                       :params '(:int :int) :returns :bool)
-(rontolisp:wasm-import 'program-info-log :from "gl" :as "getProgramInfoLog"
-                       :params '(:int) :returns :string)
-(rontolisp:wasm-import 'use-program :from "gl" :as "useProgram"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'get-uniform-location :from "gl" :as "getUniformLocation"
-                       :params '(:int :string) :returns :int)
-(rontolisp:wasm-import 'uniform1f :from "gl" :as "uniform1f"
-                       :params '(:int :float) :returns :void)
-(rontolisp:wasm-import 'uniform3f :from "gl" :as "uniform3f"
-                       :params '(:int :float :float :float) :returns :void)
-(rontolisp:wasm-import 'enable :from "gl" :as "enable"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'disable :from "gl" :as "disable"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'depth-mask :from "gl" :as "depthMask"
-                       :params '(:bool) :returns :void)
-(rontolisp:wasm-import 'blend-func :from "gl" :as "blendFunc"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'create-buffer :from "gl" :as "createBuffer"
-                       :params '() :returns :int)
-(rontolisp:wasm-import 'bind-buffer :from "gl" :as "bindBuffer"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'buffer-data :from "gl" :as "bufferData"
-                       :params '(:int :int :int) :returns :void)
-(rontolisp:wasm-import 'create-vertex-array :from "gl" :as "createVertexArray"
-                       :params '() :returns :int)
-(rontolisp:wasm-import 'bind-vertex-array :from "gl" :as "bindVertexArray"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'enable-vertex-attrib-array :from "gl" :as "enableVertexAttribArray"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'vertex-attrib-pointer :from "gl" :as "vertexAttribPointer"
-                       :params '(:int :int :int :bool :int :int) :returns :void)
-(rontolisp:wasm-import 'viewport :from "gl" :as "viewport"
-                       :params '(:int :int :int :int) :returns :void)
-(rontolisp:wasm-import 'clear-color :from "gl" :as "clearColor"
-                       :params '(:float :float :float :float) :returns :void)
-(rontolisp:wasm-import 'clear :from "gl" :as "clear"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'draw-arrays :from "gl" :as "drawArrays"
-                       :params '(:int :int :int) :returns :void)
-
-;; Fatal-error reporting for the shader helpers below: shows the page's error
-;; box (and stops the program by throwing on the JavaScript side). Internal to
+;; --- the WebGL2 API, and the page's fatal-error reporting ----------------------
+;; Fatal-error reporting for the shader helpers below shows the page's error box
+;; (and stops the program by throwing on the JavaScript side). It is internal to
 ;; this package -- demos report their own errors through their own imports.
-(rontolisp:wasm-import 'fail :from "ui"
-                       :params '(:string) :returns :void)
+
+(rontolisp:wit-import "gl.wit" :interface "local:webgl/gl")
+(rontolisp:wit-import "gl.wit" :interface "local:webgl/ui")
 
 ;; --- WebGL constants -----------------------------------------------------------
 ;; The numeric enum values from the WebGL specification.
@@ -142,8 +90,8 @@
   (let ((shader (create-shader type)))
     (shader-source shader source)
     (compile-shader shader)
-    (unless (shader-compiled-p shader +compile-status+)
-      (fail (shader-info-log shader)))
+    (unless (get-shader-parameter shader +compile-status+)
+      (fail (get-shader-info-log shader)))
     shader))
 
 (defun build-program (vs-source fs-source)
@@ -152,8 +100,8 @@
     (attach-shader program (make-shader +vertex-shader+ vs-source))
     (attach-shader program (make-shader +fragment-shader+ fs-source))
     (link-program program)
-    (unless (program-linked-p program +link-status+)
-      (fail (program-info-log program)))
+    (unless (get-program-parameter program +link-status+)
+      (fail (get-program-info-log program)))
     program))
 
 (in-package cl-user)

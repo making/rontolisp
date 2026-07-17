@@ -85,10 +85,12 @@ literal top-level `(load "ik-....lisp")` forms, which the compiler splices
 in **at compile time** (paths resolve relative to the loading file), so the
 `.wasm` sees the definitions natively — the same mechanism the
 [Minesweeper example](../minesweeper) uses to share its core between the
-browser and Swing builds. The WebGL2 API boundary itself (the imports, the
-enum constants and the shader helpers) is spliced in the same way from the
+browser and Swing builds. The WebGL2 API boundary itself (the WIT interface,
+the enum constants and the shader helpers) is spliced in the same way from the
 shared `gl` package, [`../webgl-common/gl.lisp`](../webgl-common), by
-`(require :gl "../webgl-common/gl.lisp")`.
+`(require :gl "../webgl-common/gl.lisp")`; the page's matching WebGL2 bindings
+are generated from the same `gl.wit`, imported from
+`../webgl-common/gl-imports.js`.
 
 ## The controller is three small functions
 
@@ -126,9 +128,10 @@ down to 0.000 as each move completes).
 # recompile the .wasm after editing robot-arm.lisp:
 examples/browser/webgl-robot-arm/build.sh
 
-# serve and open (any static file server works):
-jwebserver -p 8000 --directory "$PWD/examples/browser/webgl-robot-arm"
-open http://localhost:8000/
+# serve and open (any static file server works). The page imports the generated
+# ../webgl-common/gl-imports.js, so serve examples/browser, not this directory:
+jwebserver -p 8000 --directory "$PWD/examples/browser"
+open http://localhost:8000/webgl-robot-arm/
 ```
 
 The page needs a browser with WebAssembly GC support (Chrome 119+,
@@ -140,7 +143,9 @@ Firefox 120+, Safari 18.2+, Edge 119+).
   functions declared in `robot-arm.lisp` and the shared `gl` package — the
   import object is the whole embedding API. `--optimize` tree-shakes the
   runtime down to what the program reaches (the array runtime and the
-  reachable `linalg` definitions ship with it, as in `webgl-heat3d`).
+  reachable `linalg` definitions ship with it, as in `webgl-heat3d`); the
+  shipped `robot-arm.wasm` imports 44 functions, the most of any of these
+  demos.
 - Input is delivered through exported functions (`pointer`, `orbit`, `zoom`),
   not imports: the page classifies the gesture (a sub-4-pixel press is a
   click, anything longer is an orbit drag) and pushes it in; the camera
@@ -153,5 +158,7 @@ Firefox 120+, Safari 18.2+, Edge 119+).
   into the front of the vertex buffer at `init`; each frame re-uploads only
   the arm's vertices behind them.
 - On the interpreter and JVM backends the `rontolisp:wasm-import` directives
-  define stubs that signal an error when called, so this program is
-  WASM-only by nature (there is no host to draw with elsewhere).
+  define stubs that signal an error when called, and the shared `gl` package's
+  WIT-imported entries dispatch through a provider nothing binds (signaling
+  `rontolisp:wit-error`), so this program is WASM-only by nature (there is no
+  host to draw with elsewhere).

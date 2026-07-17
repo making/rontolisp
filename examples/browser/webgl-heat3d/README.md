@@ -29,10 +29,12 @@ directory is published as a subpath of the GitHub Pages site by
 | `heat3d.wasm` | The compiled `--no-wasi` reactor (checked in).                           |
 | `build.sh`    | Recompiles `heat3d.lisp` to `heat3d.wasm`.                               |
 
-The WebGL2 API boundary itself (the imports, the enum constants and the
+The WebGL2 API boundary itself (the WIT interface, the enum constants and the
 shader helpers) lives in the shared `gl` package,
 [`../webgl-common/gl.lisp`](../webgl-common), spliced in at compile time by
-`(require :gl "../webgl-common/gl.lisp")`.
+`(require :gl "../webgl-common/gl.lisp")`. The page's matching WebGL2 bindings
+are generated from the same `gl.wit`, imported from
+`../webgl-common/gl-imports.js`.
 
 ## The rank-3 array is the program
 
@@ -72,9 +74,10 @@ simulated and projected in Lisp per frame.
 # recompile the .wasm after editing heat3d.lisp:
 examples/browser/webgl-heat3d/build.sh
 
-# serve and open (any static file server works):
-jwebserver -p 8000 --directory "$PWD/examples/browser/webgl-heat3d"
-open http://localhost:8000/
+# serve and open (any static file server works). The page imports the generated
+# ../webgl-common/gl-imports.js, so serve examples/browser, not this directory:
+jwebserver -p 8000 --directory "$PWD/examples/browser"
+open http://localhost:8000/webgl-heat3d/
 ```
 
 The page needs a browser with WebAssembly GC support (Chrome 119+,
@@ -85,12 +88,19 @@ Firefox 120+, Safari 18.2+, Edge 119+).
 - The module is compiled with `--no-wasi`, so its *only* imports are the host
   functions declared in `heat3d.lisp` and the shared `gl` package — the
   import object is the whole embedding API. `--optimize` tree-shakes the
-  runtime, including the unused parts of the spliced `linalg` library and
-  the `gl` entries this demo never calls.
+  runtime, including the unused parts of the spliced `linalg` library and most
+  `gl` entries this demo never calls; the shipped `heat3d.wasm` imports 36
+  functions. Two of them are entries `heat3d.lisp` never calls: because this
+  program takes functions as values (through the spliced `linalg` library), the
+  `funcall` dispatcher keeps the same-arity import wrappers reachable, so
+  `disable` and `depthMask` survive the shake. The page provides them either
+  way — it spreads the whole generated `glImports` union.
 - The `.wasm` is larger than the galaxy's (~60 KB vs ~10 KB) because the
   array runtime and the reachable `linalg` definitions ship with it.
 - On the interpreter and JVM backends the `rontolisp:wasm-import` directives
-  define stubs that signal an error when called, so this program is
-  WASM-only by nature (there is no host to draw with elsewhere) — run
+  define stubs that signal an error when called, and the shared `gl` package's
+  WIT-imported entries dispatch through a provider nothing binds (signaling
+  `rontolisp:wit-error`), so this program is WASM-only by nature (there is no
+  host to draw with elsewhere) — run
   [`examples/ml/heat3d.lisp`](../../ml/heat3d.lisp) for the cross-backend console
   version.

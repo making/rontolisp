@@ -80,9 +80,9 @@
         Hello 3D: this cube is drawn by a Lisp program compiled to WebAssembly.
         The perspective projection and the rotation matrices are computed
         <em>in Lisp</em> every frame (4×4 matrix multiplication and all) and cross
-        into WebGL through <em>rontolisp:wasm-import</em> host functions — one line
-        of JavaScript each. Even <em>sin</em> and <em>cos</em> are borrowed from
-        JavaScript's <em>Math</em>.
+        into WebGL across a boundary declared once in <em>WIT</em> — from which
+        both the Lisp bindings and this page's one-line JavaScript ones are
+        generated.
       </p>
       <canvas id="stage" width="640" height="480"
               aria-label="A slowly rotating cube with a differently colored face on each side"></canvas>
@@ -95,6 +95,13 @@
     </main>
 
     <script type="module">
+      // The WebGL2 half of the import object is GENERATED from the same
+      // ../webgl-common/gl.wit that cube.lisp binds, so this page cannot drift
+      // out of step with what the module imports. Only the staging entries
+      // below -- which are this demo's own, and not part of WebGL2 -- are
+      // written by hand.
+      import { glImports, uiImports } from "../webgl-common/gl-imports.js";
+
       const canvas = document.getElementById("stage");
       const errorBox = document.getElementById("error");
 
@@ -109,15 +116,15 @@
         throw new Error("no webgl2");
       }
 
-      // The entire host side: GL objects cross the boundary as indices into
-      // `handles`; a :string parameter arrives as (ptr, len) into the module's
-      // exported linear memory; a :string result is written back through the
-      // module's exported __ronto_alloc bump allocator and returned as
-      // [ptr, len]; bulk floats (vertex data, the mat4 uniform) travel through
-      // the `staging` array one setFloat at a time.
+      // The host plumbing the generated bindings are built on: GL objects cross
+      // the boundary as indices into `handles`; a :string parameter arrives as
+      // (ptr, len) into the module's exported linear memory; a :string result is
+      // written back through the module's exported __ronto_alloc bump allocator
+      // and returned as [ptr, len]; bulk floats (vertex data, the mat4 uniform)
+      // travel through the `staging` array one setFloat at a time.
       let lisp;
       const handles = [];
-      const H = (obj) => handles.push(obj) - 1;
+      const addHandle = (obj) => handles.push(obj) - 1;
       const str = (ptr, len) =>
         new TextDecoder().decode(new Uint8Array(lisp.memory.buffer, ptr, len));
       const retStr = (s) => {
@@ -128,29 +135,20 @@
       };
       const staging = new Float32Array(256);
 
+      // What gl.lisp's shader helpers report a compile or link failure through:
+      // show the box, and stop the program (the call must not return).
+      const ui = {
+        fail: (message) => {
+          fail(message);
+          throw new Error("cube.lisp failed");
+        },
+      };
+
       const imports = {
         gl: {
-          createShader: (type) => H(gl.createShader(type)),
-          shaderSource: (sh, p, n) => gl.shaderSource(handles[sh], str(p, n)),
-          compileShader: (sh) => gl.compileShader(handles[sh]),
-          getShaderParameter: (sh, pname) => gl.getShaderParameter(handles[sh], pname),
-          getShaderInfoLog: (sh) => retStr(gl.getShaderInfoLog(handles[sh]) ?? ""),
-          createProgram: () => H(gl.createProgram()),
-          attachShader: (pr, sh) => gl.attachShader(handles[pr], handles[sh]),
-          linkProgram: (pr) => gl.linkProgram(handles[pr]),
-          getProgramParameter: (pr, pname) => gl.getProgramParameter(handles[pr], pname),
-          getProgramInfoLog: (pr) => retStr(gl.getProgramInfoLog(handles[pr]) ?? ""),
-          useProgram: (pr) => gl.useProgram(handles[pr]),
-          getUniformLocation: (pr, p, n) => H(gl.getUniformLocation(handles[pr], str(p, n))),
-          enable: (cap) => gl.enable(cap),
-          createBuffer: () => H(gl.createBuffer()),
-          bindBuffer: (target, buf) => gl.bindBuffer(target, handles[buf]),
-          enableVertexAttribArray: (i) => gl.enableVertexAttribArray(i),
-          vertexAttribPointer: (i, sz, ty, norm, stride, off) =>
-            gl.vertexAttribPointer(i, sz, ty, norm, stride, off),
-          clearColor: (r, g, b, a) => gl.clearColor(r, g, b, a),
-          clear: (mask) => gl.clear(mask),
-          drawArrays: (mode, first, count) => gl.drawArrays(mode, first, count),
+          ...glImports({ gl, handles, addHandle, str, retStr }),
+          // cube.lisp's own staging imports: bulk floats travel one setFloat at
+          // a time, then cross in one call.
           setFloat: (i, v) => { staging[i] = v; },
           bufferDataFloats: (target, count, usage) =>
             gl.bufferData(target, staging.subarray(0, count), usage),
@@ -162,12 +160,7 @@
           height: () => canvas.height,
         },
         math: { sin: Math.sin, cos: Math.cos },
-        ui: {
-          fail: (p, n) => {
-            fail(str(p, n));
-            throw new Error("cube.lisp failed");
-          },
-        },
+        ui: uiImports({ ui, str }),
       };
 
       try {

@@ -15,6 +15,7 @@ on:
     - examples/browser/wasm-browser/**
     - examples/browser/hiragana/**
     - examples/browser/minesweeper/**
+    - examples/browser/webgl-common/**
     - examples/browser/webgl-galaxy/**
     - examples/browser/webgl-heat3d/**
     - examples/browser/webgl-robot-arm/**

@@ -1,6 +1,7 @@
 package am.ik.rontolisp.cli;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -8,6 +9,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
@@ -17,6 +19,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.BuiltinSystems;
 import am.ik.rontolisp.eval.QuicklispClient;
@@ -159,7 +162,8 @@ public final class LoadInliner {
 			List<String> systemPath, Features features, QuicklispClient quicklisp) {
 		List<LispVal> result = new ArrayList<>();
 		expandInto(program, result, new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new HashMap<>(),
-				new HashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, quicklisp), baseDir);
+				new HashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, quicklisp, baseDir),
+				baseDir);
 		return result;
 	}
 
@@ -168,16 +172,30 @@ public final class LoadInliner {
 	 * stack (cycle guard), the provided modules, the ASDF side -- the registered systems,
 	 * the already-loaded systems, the in-progress system stack (cycle guard) and the
 	 * (mutable) {@code .asd} search path, which {@code ql:quickload} extends with the
-	 * downloaded cache directories -- the reader features for loaded files, and the
-	 * Quicklisp downloader.
+	 * downloaded cache directories -- the reader features for loaded files, the Quicklisp
+	 * downloader, and the entry source's directory (the base every path in the spliced
+	 * program is resolved against once this pass has flattened it).
 	 */
 	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
 			Map<String, AsdfSystems.LispSystem> systems, Set<String> loadedSystems, Deque<String> loadingSystems,
-			List<String> systemPath, Features features, QuicklispClient quicklisp) {
+			List<String> systemPath, Features features, QuicklispClient quicklisp, @Nullable String entryBaseDir) {
 	}
 
 	private static void expandInto(List<LispVal> forms, List<LispVal> out, Ctx ctx, @Nullable String baseDir) {
 		for (LispVal form : forms) {
+			if (WitImportDirective.isDirective(form)) {
+				// A wit-import names its .wit relative to the file that WRITES it, like
+				// load. Splicing flattens every file into one program, though, so by the
+				// time WitImportInliner resolves the path the only base directory left is
+				// the ENTRY file's -- and a directive that came from a loaded library
+				// would
+				// look for its .wit beside the entry instead of beside itself. This is
+				// the
+				// one place that still knows which file the form came from, so rebase it
+				// here, onto the entry's directory.
+				out.add(rebaseWitImport((LispCons) form, ctx, baseDir));
+				continue;
+			}
 			if (AsdfSystems.isDefsystemForm(form)) {
 				// Register the system for a later load-system and consume the directive
 				// (like provide). Component paths resolve against this file's directory.
@@ -503,6 +521,50 @@ public final class LoadInliner {
 		}
 		throw new IllegalStateException(
 				operator + " expects a literal module name (keyword, quoted symbol or string), got " + form.print());
+	}
+
+	/**
+	 * Rewrites a {@code rontolisp:wit-import} path so that resolving it against the ENTRY
+	 * source's directory -- the only base left once this pass has flattened every loaded
+	 * file into one program -- still names the {@code .wit} the writing file meant. A
+	 * directive in the entry source is already in that frame and is returned untouched,
+	 * so the path it reports on an error stays the one its author typed.
+	 * @param form the directive form
+	 * @param ctx the inline state (for the entry source's directory)
+	 * @param baseDir the directory of the file that wrote the directive
+	 * @return the directive, rebased if it came from a loaded file
+	 */
+	private static LispVal rebaseWitImport(LispCons form, Ctx ctx, @Nullable String baseDir) {
+		List<LispVal> items = form.toList();
+		if (Objects.equals(baseDir, ctx.entryBaseDir()) || items.size() < 2
+				|| !(items.get(1) instanceof LispString path)) {
+			// Not from a loaded file, or not a shape this pass can rewrite -- either way
+			// WitImportDirective sees exactly what the author wrote (and reports it).
+			return form;
+		}
+		List<LispVal> out = new ArrayList<>(items);
+		out.set(1, new LispString(againstEntry(ctx.entryBaseDir(), SourceLoader.resolve(baseDir, path.value()))));
+		LispVal result = LispNil.INSTANCE;
+		for (int i = out.size() - 1; i >= 0; i--) {
+			result = new LispCons(out.get(i), result);
+		}
+		return result;
+	}
+
+	// The spelling of an already-resolved path that survives one more
+	// SourceLoader.resolve against the entry's directory: unchanged where that resolve is
+	// the identity (no entry directory at all), and otherwise written relative to the
+	// entry, so a library's .wit is still quoted as a short path rather than a machine
+	// one. The frames only ever disagree when a load path was absolute; there, absolute
+	// is what passes through untouched.
+	private static String againstEntry(@Nullable String entryBaseDir, String resolved) {
+		if (entryBaseDir == null || entryBaseDir.isEmpty()) {
+			return resolved;
+		}
+		Path from = Path.of(entryBaseDir);
+		Path to = Path.of(resolved);
+		return from.isAbsolute() == to.isAbsolute() ? from.relativize(to).toString()
+				: to.toAbsolutePath().normalize().toString();
 	}
 
 	private static LispVal quotedSymbol(String name) {

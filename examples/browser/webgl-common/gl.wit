@@ -1,0 +1,104 @@
+// The WebGL2 boundary the examples/browser/webgl-* demos are written against.
+//
+// This file is the contract. gl.lisp binds it with rontolisp:wit-import, which
+// lowers each function into the Preview 1 host import the page provides, and
+// gl-imports.js -- the page's import object -- is GENERATED from it. So the two
+// sides of the boundary are spelled once, here, instead of once in Lisp and
+// again in every index.html.
+//
+// A WIT label is ONE name: it becomes the Lisp name verbatim (create-shader ->
+// gl:create-shader) and, camelCased, the host import field (createShader) --
+// which is what the WebGL2 API already calls itself. That is why the names here
+// are the WebGL ones rather than Lisp-idiomatic predicates: get-shader-parameter
+// cannot also be spelled shader-compiled-p without giving the boundary two names
+// to keep in sync.
+//
+// Everything crosses inside the Preview 1 import boundary: s32, f32, bool and
+// string. A GL object (shader, program, buffer, VAO, uniform location) crosses
+// as an s32 handle into a table the page keeps -- named through the aliases
+// below, which are plain aliases of s32 and lower identically, but tell a reader
+// (and the JS generator) which integers are handles and which are values.
+package local:webgl;
+
+/// The subset of the WebGL2 rendering context the demos drive from Lisp. A page
+/// implements it in one line per function over its own WebGL2 context.
+interface gl {
+  /// A compiled shader, held in the page's object table.
+  type shader = s32;
+  /// A linked shader program, held in the page's object table.
+  type program = s32;
+  /// A buffer object, held in the page's object table.
+  type buffer = s32;
+  /// A vertex array object, held in the page's object table.
+  type vertex-array = s32;
+  /// A uniform's location within a program, held in the page's object table.
+  type uniform-location = s32;
+
+  /// Create an empty shader of the given kind (gl:+vertex-shader+ or
+  /// gl:+fragment-shader+).
+  create-shader: func(kind: s32) -> shader;
+  /// Replace the shader's GLSL source.
+  shader-source: func(shader: shader, source: string);
+  /// Compile the shader's current source.
+  compile-shader: func(shader: shader);
+  /// Read one compile-time parameter of the shader (gl:+compile-status+).
+  get-shader-parameter: func(shader: shader, pname: s32) -> bool;
+  /// The shader's compile log, empty when it compiled cleanly.
+  get-shader-info-log: func(shader: shader) -> string;
+  /// Create an empty program.
+  create-program: func() -> program;
+  /// Add a compiled shader to the program.
+  attach-shader: func(program: program, shader: shader);
+  /// Link the program's attached shaders.
+  link-program: func(program: program);
+  /// Read one link-time parameter of the program (gl:+link-status+).
+  get-program-parameter: func(program: program, pname: s32) -> bool;
+  /// The program's link log, empty when it linked cleanly.
+  get-program-info-log: func(program: program) -> string;
+  /// Make the program current for subsequent draw calls.
+  use-program: func(program: program);
+  /// Look one of the program's uniforms up by name.
+  get-uniform-location: func(program: program, name: string) -> uniform-location;
+  /// Set a float uniform.
+  uniform1f: func(location: uniform-location, x: f32);
+  /// Set a vec3 uniform.
+  uniform3f: func(location: uniform-location, x: f32, y: f32, z: f32);
+  /// Turn a capability on (gl:+depth-test+, gl:+blend+).
+  enable: func(cap: s32);
+  /// Turn a capability off.
+  disable: func(cap: s32);
+  /// Enable or disable writing to the depth buffer.
+  depth-mask: func(flag: bool);
+  /// Set the source and destination blend factors.
+  blend-func: func(src: s32, dst: s32);
+  /// Create an empty buffer.
+  create-buffer: func() -> buffer;
+  /// Bind a buffer to a target (gl:+array-buffer+).
+  bind-buffer: func(target: s32, buffer: buffer);
+  /// Size the bound buffer's store, without initialising it.
+  buffer-data: func(target: s32, size: s32, usage: s32);
+  /// Create an empty vertex array object.
+  create-vertex-array: func() -> vertex-array;
+  /// Bind a vertex array object.
+  bind-vertex-array: func(array: vertex-array);
+  /// Enable a vertex attribute slot.
+  enable-vertex-attrib-array: func(index: s32);
+  /// Describe how the bound buffer feeds a vertex attribute slot.
+  vertex-attrib-pointer: func(index: s32, size: s32, kind: s32, normalized: bool, stride: s32, offset: s32);
+  /// Set the viewport, in device pixels.
+  viewport: func(x: s32, y: s32, width: s32, height: s32);
+  /// Set the colour the next clear writes.
+  clear-color: func(red: f32, green: f32, blue: f32, alpha: f32);
+  /// Clear the named buffers (gl:+color-buffer-bit+, gl:+depth-buffer-bit+).
+  clear: func(mask: s32);
+  /// Draw the bound vertex array.
+  draw-arrays: func(mode: s32, first: s32, count: s32);
+}
+
+/// The page's error reporting. Not part of WebGL: this is how gl.lisp's shader
+/// helpers surface a compile or link failure, which is fatal to the demo.
+interface ui {
+  /// Show the message in the page's error box and stop the program. A page
+  /// implements this by throwing, so the call never returns.
+  fail: func(message: string);
+}

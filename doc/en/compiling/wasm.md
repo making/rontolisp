@@ -306,9 +306,10 @@ frame. The
 [WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy)
 is the same idea grown into a complete browser program: the entire WebGL
 pipeline is driven from Lisp — the GLSL shaders live in the Lisp source, and
-Lisp compiles, links, buffers and issues every draw call through 34 imported
+Lisp compiles, links, buffers and issues every draw call through 32 imported
 host functions, while JavaScript supplies only one-line bindings over a handle
-table.
+table -- generated from the [WIT](#rontolisp-wit-import) that declares the
+boundary.
 
 Boundary details beyond the scalar types:
 
@@ -831,7 +832,7 @@ The module is **byte-identical** to the one the hand-written
 `(rontolisp:wasm-import 'add-ints :from "math" :as "addInts" :params '(:int :int) :returns :int)`
 produces — the directive is a typed front-end for that machinery, not a second
 import path — and [`--optimize`](#optimize-tree-shaking) still shakes out the
-imports the program never calls, so binding a 34-function interface and using
+imports the program never calls, so binding a 29-function interface and using
 three of them costs nothing.
 
 ### Providers: the same source on the interpreter and the JVM

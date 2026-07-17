@@ -26,7 +26,10 @@ none of the three know about each other:
   outright with an `UnsupportedOperationException` (`.kb/wasm-import.md`).
 - Hand-written per-feature surfaces: `rontolisp:http-handler`'s request/response
   plists, `rontolisp:fetch`, `rontolisp:tcp-*`, `examples/browser/webgl-common/gl.lisp`'s
-  31 hand-declared imports.
+  30 hand-declared imports (29 into module `gl` plus the one `ui`-module `fail`; a
+  `grep -c` of the file says 31 because a header comment names the directive too).
+  gl.lisp's are gone -- `.todo/132` replaced them with two `rontolisp:wit-import`s on
+  2026-07-17.
 
 A component compiled today therefore **cannot import anything but the fixed WASI
 blob surface** (`src/wasm-component/uni.wit`), which is the single biggest hole in
@@ -174,10 +177,13 @@ feature, and the language moved.
 - `rontolisp:http-handler` becomes "a program implementing the
   `wasi:http/incoming-handler` world", with the request plist **derived** from the
   WIT `record` instead of hand-shaped differently per backend.
-- `gl.lisp`'s 31 `wasm-import` directives become a `local:webgl/gl.wit`, from which
+- ~~`gl.lisp`'s 30 `wasm-import` directives become a `local:webgl/gl.wit`, from which
   the demos' **JS import object can also be generated** — today the handle-table
   bindings in each `index.html` are hand-written against a Lisp-side declaration
-  with nothing checking the two agree.
+  with nothing checking the two agree.~~ **DONE 2026-07-17 (`.todo/132`)**: gl.wit is
+  checked in, gl.lisp binds it with two `wit-import`s, every demo's module is
+  byte-identical to its pre-migration build, and `gl-imports.js` is generated from the
+  same file and imported by each page — `GlImportObjectTest` fails if the two drift.
 - `wasm-import`/`wasm-export` stay as the low-level, WIT-free escape hatch (a JS
   import object is not a component and never has a `.wit`), exactly as
   `LoadInliner` coexists with ASDF.

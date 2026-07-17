@@ -244,6 +244,8 @@
     <div id="error" role="alert"></div>
 
     <script type="module">
+      import { glImports, uiImports } from "../webgl-common/gl-imports.js";
+
       const canvas = document.getElementById("stage");
       const errorBox = document.getElementById("error");
       const mCoins = document.getElementById("m-coins");
@@ -271,14 +273,18 @@
       // ---- the import object: everything Lisp asked for --------------------
       //
       // platformer.lisp declares the same host boundary as the other webgl-*
-      // demos: GL objects cross as integer handles into `handles`, the
-      // bindings are one line each, and the game itself — physics, collision,
-      // enemies, camera, every triangle — lives in the Lisp source.
+      // demos: GL objects cross as integer handles into `handles`, and the
+      // game itself — physics, collision, enemies, camera, every triangle —
+      // lives in the Lisp source. The WebGL2 entries are GENERATED below from
+      // the same ../webgl-common/gl.wit that the shared gl package
+      // (../webgl-common/gl.lisp) binds, so this page cannot disagree with the
+      // module about them; the handful platformer.lisp declares itself are
+      // written by hand beside them.
 
       let lisp; // the module's exports, assigned after instantiation below
 
       const handles = [];
-      const H = (obj) => handles.push(obj) - 1;
+      const addHandle = (obj) => handles.push(obj) - 1;
 
       // A :string parameter arrives as (ptr, len) into the module's exported
       // linear memory; a :string result is written back through the module's
@@ -299,37 +305,22 @@
       const floats = new Float32Array(16);
       const curColor = [1, 1, 1]; // latched by setColor, stamped by setVertex
 
+      // What gl.lisp's shader helpers report a compile or link failure through:
+      // show the box, and stop the program (the call must not return).
+      const ui = {
+        fail: (message) => {
+          fail(message);
+          throw new Error("platformer.lisp failed");
+        },
+      };
+
       const imports = {
         gl: {
-          createShader: (type) => H(gl2.createShader(type)),
-          shaderSource: (sh, p, n) => gl2.shaderSource(handles[sh], str(p, n)),
-          compileShader: (sh) => gl2.compileShader(handles[sh]),
-          getShaderParameter: (sh, pname) => gl2.getShaderParameter(handles[sh], pname),
-          getShaderInfoLog: (sh) => retStr(gl2.getShaderInfoLog(handles[sh]) ?? ""),
-          createProgram: () => H(gl2.createProgram()),
-          attachShader: (pr, sh) => gl2.attachShader(handles[pr], handles[sh]),
-          linkProgram: (pr) => gl2.linkProgram(handles[pr]),
-          getProgramParameter: (pr, pname) => gl2.getProgramParameter(handles[pr], pname),
-          getProgramInfoLog: (pr) => retStr(gl2.getProgramInfoLog(handles[pr]) ?? ""),
-          useProgram: (pr) => gl2.useProgram(handles[pr]),
-          getUniformLocation: (pr, p, n) => H(gl2.getUniformLocation(handles[pr], str(p, n))),
-          uniform3f: (loc, x, y, z) => gl2.uniform3f(handles[loc], x, y, z),
+          ...glImports({ gl: gl2, handles, addHandle, str, retStr }),
+          // platformer.lisp's own staging imports.
           uniformMatrix4fv: (loc) => gl2.uniformMatrix4fv(handles[loc], false, floats),
-          enable: (cap) => gl2.enable(cap),
-          createBuffer: () => H(gl2.createBuffer()),
-          bindBuffer: (target, buf) => gl2.bindBuffer(target, handles[buf]),
-          bufferData: (target, size, usage) => gl2.bufferData(target, size, usage),
           uploadVertices: (off, count) =>
             gl2.bufferSubData(gl2.ARRAY_BUFFER, off * 4, solidStaging, off, count),
-          createVertexArray: () => H(gl2.createVertexArray()),
-          bindVertexArray: (vao) => gl2.bindVertexArray(handles[vao]),
-          enableVertexAttribArray: (i) => gl2.enableVertexAttribArray(i),
-          vertexAttribPointer: (i, sz, ty, norm, stride, off) =>
-            gl2.vertexAttribPointer(i, sz, ty, norm, stride, off),
-          viewport: (x, y, w, h) => gl2.viewport(x, y, w, h),
-          clearColor: (r, g, b, a) => gl2.clearColor(r, g, b, a),
-          clear: (mask) => gl2.clear(mask),
-          drawArrays: (mode, first, count) => gl2.drawArrays(mode, first, count),
           setColor: (r, g, b) => { curColor[0] = r; curColor[1] = g; curColor[2] = b; },
           setVertex: (i, x, y, z, nx, ny, nz) => {
             const o = i * 9;
@@ -350,12 +341,7 @@
           height: () => canvas.height,
         },
         math: { sin: Math.sin, cos: Math.cos, atan2: Math.atan2 },
-        ui: {
-          fail: (p, n) => {
-            fail(str(p, n));
-            throw new Error("platformer.lisp failed");
-          },
-        },
+        ui: uiImports({ ui, str }),
       };
 
       // ---- UI: canvas sizing ------------------------------------------------

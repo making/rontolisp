@@ -7,7 +7,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-repo_root="$(cd "$here/../.." && pwd)"
+repo_root="$(cd "$here/../../.." && pwd)"
 
 jar="$repo_root/target/rontolisp-0.1.0-SNAPSHOT-exec.jar"
 if [[ ! -f "$jar" ]]; then
@@ -19,6 +19,8 @@ fi
 echo "compiling robot-arm.lisp -> robot-arm.wasm"
 java -jar "$jar" "$here/robot-arm.lisp" -o "$here/robot-arm.wasm" --no-wasi --optimize
 
-echo "done. Serve this directory over http, e.g.:"
-echo "  jwebserver -p 8000 --directory \"$here\""
-echo "then open http://localhost:8000/"
+# The page imports the generated ../webgl-common/gl-imports.js, so the served
+# root is examples/browser rather than this directory.
+echo "done. Serve the examples/browser directory over http, e.g.:"
+echo "  jwebserver -p 8000 --directory \"$(dirname "$here")\""
+echo "then open http://localhost:8000/webgl-robot-arm/"

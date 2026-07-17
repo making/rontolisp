@@ -64,6 +64,33 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void rebasesAWitImportPathWrittenInALoadedFile() {
+		// A wit-import names its .wit relative to the file that WRITES it, like load. The
+		// splice flattens both files into one program, though, and the later
+		// WitImportInliner has only the ENTRY's directory left to resolve against -- so
+		// the path a loaded library wrote is rewritten into that frame here. Without
+		// this,
+		// a library one directory over (examples/browser/webgl-common/gl.lisp naming its
+		// own gl.wit) would send every consumer looking for the .wit beside ITSELF.
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString("(require :gl \"../common/gl.lisp\")"),
+				loaderOf(Map.of("common/gl.lisp", "(provide :gl) (rontolisp:wit-import \"gl.wit\" :interface gl)")),
+				"demo");
+		assertThat(result.stream().map(LispVal::print))
+			.contains("(rontolisp:wit-import \"../common/gl.wit\" :interface gl)");
+	}
+
+	@Test
+	void leavesAWitImportInTheEntrySourceExactlyAsWritten() {
+		// The entry is already in the frame the path is resolved against, so it is passed
+		// through untouched -- an error still quotes the path its author typed.
+		List<LispVal> result = LoadInliner.inline(
+				LispReader.readAllFromString("(rontolisp:wit-import \"wit/gl.wit\" :interface gl)"), loaderOf(Map.of()),
+				"demo");
+		assertThat(result.stream().map(LispVal::print))
+			.containsExactly("(rontolisp:wit-import \"wit/gl.wit\" :interface gl)");
+	}
+
+	@Test
 	void leavesNonLiteralLoadUntouched() {
 		// A load with a computed argument is not a compile-time include.
 		List<LispVal> result = inline("(load (concatenate 'string \"a\" \".lisp\"))", Map.of());

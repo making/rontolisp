@@ -6,7 +6,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-repo_root="$(cd "$here/../.." && pwd)"
+repo_root="$(cd "$here/../../.." && pwd)"
 
 jar="$repo_root/target/rontolisp-0.1.0-SNAPSHOT-exec.jar"
 if [[ ! -f "$jar" ]]; then

@@ -681,9 +681,37 @@ one `ui`-module `fail`) — explicitly NOT a migration. Result:
 per-function alias option.** An alias would restore exactly the two-places-to-maintain
 drift the directive exists to kill — the same argument that makes a `wit-export` world the
 authoritative export list. So the four call sites get renamed instead
-(`get-shader-parameter` &c). That migration is `.todo/132`; the smaller second item there is
-the module split, since one directive binds one interface into one module, so `ui:fail`
-needs its own interface (or its own directive with `:from "ui"`).
+(`get-shader-parameter` &c).
+
+### The migration (todo 132, done 2026-07-17)
+
+`examples/browser/webgl-common/gl.wit` is checked in and gl.lisp binds it with TWO
+directives — `local:webgl/gl` (the 29 WebGL2 entries) and `local:webgl/ui` (`fail`), the
+module split the spike predicted, since one directive binds one interface into one module.
+Neither names `:package`: they bind into the CURRENT package, so the bindings land in the
+hand-written `(defpackage gl ...)` beside the enum constants and the two shader helpers,
+which no directive knows about. **All six demos' modules are byte-identical to their
+pre-migration builds** (measured; the spike held). Notes the spike did not have:
+
+- **A `type shader = s32` alias is free and worth it.** GL objects cross as named aliases
+  (`shader`, `program`, `buffer`, `vertex-array`, `uniform-location`) that resolve to plain
+  s32, so the lowering is untouched — but the NAME is the only thing that distinguishes a
+  table handle from an integer value, which is what lets the JS import object be generated
+  rather than hand-written.
+- **The prize landed: `gl-imports.js` is GENERATED from gl.wit** and each page imports it
+  instead of hand-writing the WebGL2 half of its import object.
+  `GlImportObjectTest` regenerates + pins it, and reuses
+  `WitImportDirective.FieldStyle.CAMEL`, so a page can only be handed the field names the
+  lowering actually imports. This is the only part of the migration that buys something a
+  WIT-free build cannot have; the rest is a byte-identical rewrite.
+- **`load` lost the base directory, and that was a real bug.** A `wit-import` inside a
+  library resolves its `.wit` against the file that WROTE it, like `load` — but the splice
+  flattens the program, so `WitImportInliner` had only the ENTRY's directory left and
+  looked for gl.wit beside each demo. `LoadInliner` now rebases a spliced directive's path
+  (`rebaseWitImport`, pinned in `LoadInlinerTest`); a directive in the entry source is
+  passed through untouched. gl.lisp is the first user library to carry a `wit-import`, so
+  it was the first to hit this; `http.lisp` never did because `HttpLibrary` lowers its
+  directives itself off the classpath.
 
 ## Component imports — `canon lower` (todo 128, 2026-07-14)
 

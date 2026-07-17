@@ -5,9 +5,9 @@ This example is the `rontolisp:wasm-import` showcase: a Lisp program that
 runs from Lisp compiled to WebAssembly. The GLSL shader sources live in the
 Lisp file as string constants; Lisp compiles and links them, sets up the
 vertex buffer, attributes and blending, and issues every clear and draw call.
-JavaScript supplies the WebGL2 API as a table of one-line bindings (a handle
-table maps `:int` handles to GL objects) plus the page UI — it contains no
-rendering logic of its own.
+JavaScript supplies the WebGL2 API as a table of one-line bindings generated
+from the shared `gl.wit` (a handle table maps `s32` handles to GL objects) plus
+the page UI — it contains no rendering logic of its own.
 
 **Live demo:** <https://making.github.io/rontolisp/webgl-galaxy/> (this
 directory is published as a subpath of the GitHub Pages site by
@@ -22,44 +22,48 @@ directory is published as a subpath of the GitHub Pages site by
 | `galaxy.wasm` | The compiled `--no-wasi` reactor (checked in, ~10 KB).             |
 | `build.sh`    | Recompiles `galaxy.lisp` to `galaxy.wasm`.                         |
 
-The WebGL2 API boundary itself (the imports, the enum constants and the
+The WebGL2 API boundary itself (the WIT interface, the enum constants and the
 shader helpers) lives in the shared `gl` package,
 [`../webgl-common/gl.lisp`](../webgl-common), spliced in at compile time by
 `(require :gl "../webgl-common/gl.lisp")`.
 
 ## How the boundary works
 
-`galaxy.lisp` declares 34 host functions. Most are literal WebGL2 API
-entries, imported one at a time in the shared `gl` package:
+`galaxy.lisp` declares 7 host functions of its own — the staging pair, the
+canvas metrics, and two `math` entries that no longer reach the module (see the
+notes):
 
 ```lisp
-(rontolisp:wasm-import 'create-shader :from "gl" :as "createShader"
-                       :params '(:int) :returns :int)
-(rontolisp:wasm-import 'shader-source :from "gl" :as "shaderSource"
-                       :params '(:int :string) :returns :void)
-(rontolisp:wasm-import 'draw-arrays :from "gl" :as "drawArrays"
-                       :params '(:int :int :int) :returns :void)
-;; ... plus canvas metrics, Math.sin / Math.cos, and an error reporter
+(rontolisp:wasm-import 'set-vertex :from "gl" :as "setVertex"
+                       :params '(:int :float :float :float :float) :returns :void)
+(rontolisp:wasm-import 'canvas-width :from "canvas" :as "width"
+                       :params '() :returns :float)
+;; ... bufferSubData, canvas height, devicePixelRatio, sin, cos
 ```
 
-and the JavaScript side is nothing but one-liners over a handle table:
+The literal WebGL2 entries are not declared here at all: they come from the
+shared `gl` package, which binds them (and the `fail` error reporter) from
+`../webgl-common/gl.wit` with two `rontolisp:wit-import` directives. The page's
+matching import object is generated from that same file, so the JavaScript side
+is a spread plus this demo's own staging one-liners over a handle table:
 
 ```js
-const handles = [];
-const H = (obj) => handles.push(obj) - 1;
+import { glImports, uiImports } from "../webgl-common/gl-imports.js";
 
 const imports = {
   gl: {
-    createShader: (type) => H(gl2.createShader(type)),
-    shaderSource: (sh, p, n) => gl2.shaderSource(handles[sh], str(p, n)),
-    drawArrays: (mode, first, count) => gl2.drawArrays(mode, first, count),
-    // ...
+    ...glImports({ gl: gl2, handles, addHandle, str, retStr }),
+    bufferSubData: (target, off, count) => gl2.bufferSubData(target, off, staging, 0, count),
+    setVertex: (i, x, y, hue, size) => { /* fill the staging array */ },
   },
-  math: { sin: Math.sin, cos: Math.cos },
+  ui: uiImports({ ui, str }),
+  canvas: { width: () => canvas.width, /* ... */ },
 };
 ```
 
-Every type designator crosses the boundary somewhere in this example:
+Every type crosses the boundary somewhere in this example — spelled with the
+`:int`/`:float`/`:bool`/`:string` designators in this demo's own directives, and
+as `s32`/`f32`/`bool`/`string` in `gl.wit` for the shared entries:
 
 - `:int` — GL enums, sizes, and the handles for shaders/programs/buffers.
 - `:float` — star positions, uniforms, canvas metrics.
@@ -103,9 +107,10 @@ would land on a single curve.
 # recompile the .wasm after editing galaxy.lisp:
 examples/browser/webgl-galaxy/build.sh
 
-# serve and open (any static file server works):
-jwebserver -p 8000 --directory "$PWD/examples/browser/webgl-galaxy"
-open http://localhost:8000/
+# serve and open (any static file server works). The page imports the generated
+# ../webgl-common/gl-imports.js, so serve examples/browser, not this directory:
+jwebserver -p 8000 --directory "$PWD/examples/browser"
+open http://localhost:8000/webgl-galaxy/
 ```
 
 The page needs a browser with WebAssembly GC support (Chrome 119+,
@@ -113,10 +118,17 @@ Firefox 120+, Safari 18.2+, Edge 119+).
 
 ## Notes
 
-- The module is compiled with `--no-wasi`, so its *only* imports are the 34
-  functions above — the import object is the whole embedding API.
+- The module is compiled with `--no-wasi`, so its *only* imports are host
+  functions — the import object is the whole embedding API. The shipped
+  `galaxy.wasm` imports 32 of them: 26 of the shared `gl` package's 29 WebGL2
+  entries, its `ui.fail`, and 5 of the 7 `galaxy.lisp` declares. (`math.sin` and
+  `math.cos` are not among them — the WASM backend compiles `sin`/`cos`
+  natively, so those two declarations are unreferenced and `--optimize` drops
+  them.)
 - `--optimize` tree-shakes the runtime: the shipped `galaxy.wasm` is about
   10 KB (the GLSL sources account for a third of it).
 - On the interpreter and JVM backends the `rontolisp:wasm-import` directives
-  define stubs that signal an error when called, so this program is
-  WASM-only by nature (there is no host to draw with elsewhere).
+  define stubs that signal an error when called, and the shared `gl` package's
+  WIT-imported entries dispatch through a provider nothing binds (signaling
+  `rontolisp:wit-error`), so this program is WASM-only by nature (there is no
+  host to draw with elsewhere).

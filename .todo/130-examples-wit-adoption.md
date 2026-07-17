@@ -166,16 +166,19 @@ Verified counts (`rontolisp:wasm-import` / `wasm-export` per file):
 
 | File | imports | exports |
 |---|---|---|
-| `browser/webgl-common/gl.lisp` | **31** | 0 |
-| `webgl-triangle/triangle.lisp` | 11 | **0** |
+| `browser/webgl-common/gl.lisp` | **0** (2 `wit-import`s; was 30) | 0 |
+| `webgl-triangle/triangle.lisp` | 10 | **0** |
 | `webgl-cube/cube.lisp` | 7 | 1 |
-| `webgl-galaxy/galaxy.lisp` | 8 | 2 |
+| `webgl-galaxy/galaxy.lisp` | 7 | 2 |
 | `webgl-heat3d/heat3d.lisp` | 7 | 3 |
 | `webgl-robot-arm/robot-arm.lisp` | 14 | 7 |
 | `webgl-platformer/platformer.lisp` | 10 | 13 |
 
-(`.todo/124:26` and `.todo/127:81-84` both say "34 hand-declared imports" for `gl.lisp`;
-the file declares **31** today. Fix the number when the spike happens.)
+(Counts re-measured 2026-07-17 with `grep -c "^(rontolisp:wasm-import"`. The earlier
+table's `gl.lisp` **31** and `triangle.lisp` **11** were grep artifacts — the pattern also
+matched a mention of the directive in a header COMMENT. gl.lisp really declared 30: 29
+into module `gl` plus the one `ui`-module `fail`. `.todo/132` migrated all 30 to two
+`rontolisp:wit-import` directives on 2026-07-17, so the row is now 0.)
 
 Triangle has **zero** exports and a world with no exports is a compile error
 (`WitExportDirective.java:252-254`), so `wit-export` is not even applicable to it. For the
@@ -218,8 +221,9 @@ list -- not before.
   pages can call `exports["set-key"]` (`rainbow.html:109` says they can). If they can, say
   the demos MAY migrate and leave them alone anyway; if we choose an alias mechanism, that
   is its own todo, not a line in this one.
-- The WebGL family is explicitly deferred to `.todo/127` (and its `gl.lisp` import count
-  corrected there). No `gl.lisp` work in this todo.
+- The WebGL family's IMPORT side is done (`.todo/132`, 2026-07-17: `gl.wit` + two
+  `wit-import`s, the counts above corrected). No `gl.lisp` work in this todo. Its EXPORT
+  side is still §4's `:as`-vs-kebab question and stays here.
 - `rainbow` / `simd-gemv-nogc` left alone (or migrated with a one-line note); `minesweeper`
   / `hiragana` NOT migrated.
 - `./mvnw test` + `ExamplesE2eTest` for the new leg; native `CiSpecE2eTest` only if

@@ -188,20 +188,20 @@
       <p class="tagline">
         The whole WebGL pipeline runs <em>in Lisp</em>, compiled to WebAssembly:
         the GLSL shaders live in the Lisp source, and Lisp compiles, links, buffers
-        and issues every draw call through <em>rontolisp:wasm-import</em> — even
-        <em>sin</em> and <em>cos</em> are borrowed from JavaScript's <em>Math</em>.
-        JavaScript is just one-line bindings and this HUD.
+        and issues every draw call across a boundary declared once in <em>WIT</em>.
+        JavaScript is just one-line bindings — generated from that WIT — and this HUD.
       </p>
     </header>
 
     <aside class="hud bottom-left" aria-label="The Lisp import directives driving this page">
-      <div class="repl" id="repl"><span class="cm">; the Lisp side of the boundary (the shared gl package)</span>
-(<span class="kw">rontolisp:wasm-import</span> 'shader-source :from <span class="str">"gl"</span> :as <span class="str">"shaderSource"</span>
-                       :params '(:int :string) :returns :void)
-(<span class="kw">rontolisp:wasm-import</span> 'draw-arrays :from <span class="str">"gl"</span> :as <span class="str">"drawArrays"</span>
+      <div class="repl" id="repl"><span class="cm">; the boundary: one WIT for WebGL2, bound by the shared gl package</span>
+(<span class="kw">rontolisp:wit-import</span> <span class="str">"gl.wit"</span> :interface <span class="str">"local:webgl/gl"</span>)
+<span class="cm">; ...and galaxy's own staging imports beside it</span>
+(<span class="kw">rontolisp:wasm-import</span> 'set-vertex :from <span class="str">"gl"</span> :as <span class="str">"setVertex"</span>
+                       :params '(:int :float :float :float :float) :returns :void)
+(<span class="kw">rontolisp:wasm-import</span> 'gl-buffer-sub-data :from <span class="str">"gl"</span> :as <span class="str">"bufferSubData"</span>
                        :params '(:int :int :int) :returns :void)
-(<span class="kw">rontolisp:wasm-import</span> 'sin :from <span class="str">"math"</span> :params '(:float) :returns :float)
-<span class="cm">; ...31 more · <a href="https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy">source</a> · rendered by your GPU</span> <span class="cursor"></span></div>
+<span class="cm">; 32 host functions in all · <a href="https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy">source</a> · rendered by your GPU</span> <span class="cursor"></span></div>
     </aside>
 
     <aside class="hud bottom-right">
@@ -224,6 +224,8 @@
     <div id="error" role="alert"></div>
 
     <script type="module">
+      import { glImports, uiImports } from "../webgl-common/gl-imports.js";
+
       const canvas = document.getElementById("stage");
       const errorBox = document.getElementById("error");
       const mStars = document.getElementById("m-stars");
@@ -246,17 +248,20 @@
 
       // ---- the import object: everything Lisp asked for --------------------
       //
-      // galaxy.lisp declares 34 (rontolisp:wasm-import ...) directives (most
-      // through the shared gl package in ../webgl-common/gl.lisp); this
-      // object is their entire JavaScript implementation. GL objects cross the
-      // boundary as integer handles into `handles`; the bindings are one line
-      // each and contain no rendering logic — the shaders, the pipeline setup
-      // and every draw call live in the Lisp source.
+      // The module imports 32 host functions, and this object is their entire
+      // JavaScript implementation — it contains no rendering logic: the
+      // shaders, the pipeline setup and every draw call live in the Lisp
+      // source. Most of the functions are the WebGL2 API, which galaxy.lisp
+      // reaches through the shared gl package (../webgl-common/gl.lisp); those
+      // are GENERATED below from the same ../webgl-common/gl.wit that package
+      // binds, so this page cannot disagree with the module about them. The
+      // handful galaxy.lisp declares itself are written by hand beside them.
+      // GL objects cross the boundary as integer handles into `handles`.
 
       let lisp; // the module's exports, assigned after instantiation below
 
       const handles = [];
-      const H = (obj) => handles.push(obj) - 1;
+      const addHandle = (obj) => handles.push(obj) - 1;
 
       // A :string parameter arrives as (ptr, len) into the module's exported
       // linear memory; a :string result is written back through the module's
@@ -272,42 +277,29 @@
 
       // The vertex staging array: Lisp fills it one star at a time through
       // setVertex and uploads it with bufferSubData; bufferData (re)sizes it
-      // alongside the GPU buffer. These two lines are the only host state.
+      // alongside the GPU buffer.
       let staging = new Float32Array(0);
+
+      // What gl.lisp's shader helpers report a compile or link failure through:
+      // show the box, and stop the program (the call must not return).
+      const ui = {
+        fail: (message) => {
+          fail(message);
+          throw new Error("galaxy.lisp failed");
+        },
+      };
 
       const imports = {
         gl: {
-          createShader: (type) => H(gl2.createShader(type)),
-          shaderSource: (sh, p, n) => gl2.shaderSource(handles[sh], str(p, n)),
-          compileShader: (sh) => gl2.compileShader(handles[sh]),
-          getShaderParameter: (sh, pname) => gl2.getShaderParameter(handles[sh], pname),
-          getShaderInfoLog: (sh) => retStr(gl2.getShaderInfoLog(handles[sh]) ?? ""),
-          createProgram: () => H(gl2.createProgram()),
-          attachShader: (pr, sh) => gl2.attachShader(handles[pr], handles[sh]),
-          linkProgram: (pr) => gl2.linkProgram(handles[pr]),
-          getProgramParameter: (pr, pname) => gl2.getProgramParameter(handles[pr], pname),
-          getProgramInfoLog: (pr) => retStr(gl2.getProgramInfoLog(handles[pr]) ?? ""),
-          useProgram: (pr) => gl2.useProgram(handles[pr]),
-          getUniformLocation: (pr, p, n) => H(gl2.getUniformLocation(handles[pr], str(p, n))),
-          uniform1f: (loc, x) => gl2.uniform1f(handles[loc], x),
-          enable: (cap) => gl2.enable(cap),
-          blendFunc: (src, dst) => gl2.blendFunc(src, dst),
-          createBuffer: () => H(gl2.createBuffer()),
-          bindBuffer: (target, buf) => gl2.bindBuffer(target, handles[buf]),
+          ...glImports({ gl: gl2, handles, addHandle, str, retStr }),
+          // galaxy.lisp's own staging imports. bufferData restates the generated
+          // entry (a later property wins): sizing the buffer is also where this
+          // demo learns how big to make its staging array.
           bufferData: (target, size, usage) => {
             gl2.bufferData(target, size, usage);
             staging = new Float32Array(size / 4);
           },
           bufferSubData: (target, off, count) => gl2.bufferSubData(target, off, staging, 0, count),
-          createVertexArray: () => H(gl2.createVertexArray()),
-          bindVertexArray: (vao) => gl2.bindVertexArray(handles[vao]),
-          enableVertexAttribArray: (i) => gl2.enableVertexAttribArray(i),
-          vertexAttribPointer: (i, sz, ty, norm, stride, off) =>
-            gl2.vertexAttribPointer(i, sz, ty, norm, stride, off),
-          viewport: (x, y, w, h) => gl2.viewport(x, y, w, h),
-          clearColor: (r, g, b, a) => gl2.clearColor(r, g, b, a),
-          clear: (mask) => gl2.clear(mask),
-          drawArrays: (mode, first, count) => gl2.drawArrays(mode, first, count),
           setVertex: (i, x, y, hue, size) => {
             const o = i * 4;
             staging[o] = x;
@@ -322,12 +314,7 @@
           devicePixelRatio: () => Math.min(window.devicePixelRatio || 1, 2),
         },
         math: { sin: Math.sin, cos: Math.cos },
-        ui: {
-          fail: (p, n) => {
-            fail(str(p, n));
-            throw new Error("galaxy.lisp failed");
-          },
-        },
+        ui: uiImports({ ui, str }),
       };
 
       // Count every Lisp -> JavaScript call for the HUD meter.

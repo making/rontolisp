@@ -471,6 +471,16 @@ public final class Version {
 												<include name="weights.bin"/>
 											</fileset>
 										</copy>
+										<!-- Stage the host bindings the WebGL pages import (/webgl-common/).
+											 Generated from gl.wit and shared by every webgl-* demo below
+											 except the deliberately self-contained triangle, which imports
+											 nothing. Each page reaches it as ../webgl-common/gl-imports.js,
+											 so it must sit beside the demo subpaths, not inside one. -->
+										<copy todir="${web.dist}/webgl-common">
+											<fileset dir="${project.basedir}/examples/browser/webgl-common">
+												<include name="gl-imports.js"/>
+											</fileset>
+										</copy>
 										<!-- Stage the WebGL galaxy demo as another subpath (/webgl-galaxy/).
 											 Its .wasm is checked in, so no compilation is needed here. Only
 											 the two runtime files the browser loads are copied; the demo's

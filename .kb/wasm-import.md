@@ -51,14 +51,18 @@ name argument is special: the `:params` keyword list and a lenient quoted-symbol
 alias stay untouched under the quote exemption. The host-facing default (`:as` omitted:
 import field / export name) is the bare member name, never the qualified spelling
 (`WasmImportDirective`/`WasmExportCompiler.unqualifiedMember`).
-`examples/browser/webgl-common/gl.lisp` is the showcase: one `defpackage gl` holding the
-WebGL2 API union + enum constants + `gl:make-shader`/`gl:build-program`, spliced into
-each webgl demo by a compile-time `(require :gl "../webgl-common/gl.lisp")`; `--optimize`
-shakes the entries a demo never calls, so declaring the union is free. Caveat: a program
-that takes functions as values (e.g. via the spliced linalg library) keeps same-arity
-import wrappers reachable through the funcall dispatcher — webgl-heat3d ends up
-importing `disable`/`depthMask` it never calls, and its page provides those two
-bindings for that reason.
+`examples/browser/webgl-common/gl.lisp` used to be the showcase for a hand-written
+block; **it is now a wit-import consumer** (todo 132, below), so the showcase for the
+hand-written form is `webgl-triangle` and each demo's own staging imports. gl.lisp still
+holds the hand-written `defpackage gl` (the enum constants and
+`gl:make-shader`/`gl:build-program` need one, and the directives bind into the current
+package rather than naming one), spliced into each webgl demo by a compile-time
+`(require :gl "../webgl-common/gl.lisp")`; `--optimize` shakes the entries a demo never
+calls, so declaring the union is free. Caveat: a program that takes functions as values
+(e.g. via the spliced linalg library) keeps same-arity import wrappers reachable through
+the funcall dispatcher — webgl-heat3d's module still imports `disable`/`depthMask` it
+never calls. That used to leak onto the page, which had to know to provide exactly those
+two; since the pages spread the whole generated union it no longer does.
 
 **It is now also a LOWERING TARGET** (todo 127, `.kb/wit.md`): on the Preview 1 backend a
 `(rontolisp:wit-import "gl.wit" :interface "local:webgl/gl" :package gl)` expands to
@@ -70,13 +74,24 @@ field camelCased (`:field-style :camel`, the default) or verbatim (`:kebab`). On
 `:int`/`:float`/`:bool`/`:string` are reachable from a WIT type (nothing maps to
 `:s-expr`), so a WIT type outside that flat set is a compile error naming the WIT file and
 line — the interpreter/JVM lowering has no such limit, because there a `wit-import` lowers
-to a provider call, not to an import. The `gl.lisp` block above is precisely the shape that
-crosses (handles, scalars, strings): a hand-written `local:webgl/gl.wit` was measured to
-reproduce it byte-for-byte, and all but four of its imports are an exact kebab -> camel
-match. The four that are not are places gl.lisp gave the Lisp side DIFFERENT WORDS from the
-host field (`shader-compiled-p` / `getShaderParameter`, ...), which a WIT label — one name
-serving as both — cannot express; the decision is that the WIT names win, so migrating the
-demos means renaming those four call sites (`.todo/132`).
+to a provider call, not to an import.
+
+**The WebGL demos took that path** (todo 132, done): `examples/browser/webgl-common/gl.wit`
+is a `local:webgl` package with `interface gl` (the 29 WebGL2 entries) and `interface ui`
+(the one `fail` gl.lisp's shader helpers report through — one directive binds one interface
+into one module, so the `ui`-module import needs its own interface), and gl.lisp's 30
+hand-written directives are now two `rontolisp:wit-import`s. **Every demo's module is
+byte-identical to its pre-migration build** (measured, all six). The four functions whose
+Lisp name used DIFFERENT WORDS from the host field were renamed to the WIT label — a label
+is one name serving as both, so `shader-compiled-p`/`getShaderParameter` cannot both
+survive: they are now `get-shader-parameter`, `get-shader-info-log`,
+`get-program-parameter`, `get-program-info-log`. GL objects cross as `type shader = s32`
+handle ALIASES: structurally plain s32 (so the lowering is unchanged), but the name is what
+tells a reader — and the JS generator — which integers are table handles. The pages'
+import object is GENERATED from the same gl.wit (`gl-imports.js`, pinned by
+`GlImportObjectTest`, which reuses `WitImportDirective.FieldStyle.CAMEL` so the JS field
+names cannot drift from the lowering); that, not the byte-identity, is what the migration
+bought.
 
 Tests: `WasmImportCompilerTest` (structural: import-section order, index shift,
 allocator gating, mode rejection), preload-based E2E in
@@ -87,10 +102,11 @@ world: 10 imports, no exports, whole program in top-level forms run by `_initial
 deliberately self-contained, does not use the shared package),
 `examples/browser/webgl-cube/` (3D: mat4 math in Lisp, bulk floats via a `setFloat` staging
 array) and `examples/browser/webgl-galaxy/` (browser
-host; the whole WebGL pipeline is driven from Lisp through 34 imports -- GLSL sources as
+host; the whole WebGL pipeline is driven from Lisp through 32 imports -- GLSL sources as
 Lisp strings via `:string` params, handle-table one-liner JS bindings, `:string` results
-for shader info logs, Math.sin/cos -- staged to Pages via pom.xml); cube, galaxy,
-heat3d and robot-arm all pull the WebGL2 boundary from `examples/browser/webgl-common/gl.lisp`.
+for shader info logs -- staged to Pages via pom.xml); cube, galaxy,
+heat3d and robot-arm all pull the WebGL2 boundary from `examples/browser/webgl-common/gl.lisp`,
+and `webgl-common/gl-imports.js` is staged beside them because their pages import it.
 
 **The component path does NOT go through this compiler** (todo 128): `rontolisp:wasm-import`
 is still a Preview-1-only directive (`--component` throws). A `rontolisp:wit-import` under

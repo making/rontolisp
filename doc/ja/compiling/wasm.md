@@ -190,7 +190,7 @@ const imports = { math: { sin: Math.sin, cos: Math.cos } };
 const { instance } = await WebAssembly.instantiate(bytes, imports);
 ```
 
-[WebGL トライアングルの例](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-triangle)はこのパターンの hello world です: 10 個のインポート関数、エクスポートなしで、色付きの三角形をすべて Lisp から描画します。[WebGL キューブの例](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-cube)は 3D を加えます: 透視投影と回転の行列を毎フレーム Lisp で計算します。[WebGL ギャラクシーの例](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy)は同じ発想を完全なブラウザプログラムに育てたものです: WebGL パイプライン全体が Lisp から駆動されます — GLSL シェーダは Lisp ソース内にあり、Lisp が 34 個のインポートされたホスト関数を通じてコンパイル・リンク・バッファ確保とすべてのドローコールを発行し、JavaScript はハンドルテーブル上の 1 行バインディングだけを提供します。
+[WebGL トライアングルの例](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-triangle)はこのパターンの hello world です: 10 個のインポート関数、エクスポートなしで、色付きの三角形をすべて Lisp から描画します。[WebGL キューブの例](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-cube)は 3D を加えます: 透視投影と回転の行列を毎フレーム Lisp で計算します。[WebGL ギャラクシーの例](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy)は同じ発想を完全なブラウザプログラムに育てたものです: WebGL パイプライン全体が Lisp から駆動されます — GLSL シェーダは Lisp ソース内にあり、Lisp が 32 個のインポートされたホスト関数を通じてコンパイル・リンク・バッファ確保とすべてのドローコールを発行し、JavaScript はハンドルテーブル上の 1 行バインディングだけを提供します — そのバインディングは境界を宣言する [WIT](#rontolisp-wit-import) から生成されています。
 
 スカラー型以外の境界の詳細:
 
@@ -489,7 +489,7 @@ wasmtime run -W gc --preload math=host.wasm --invoke add10 main.wasm 32
 
 生成されるモジュールは、手書きの
 `(rontolisp:wasm-import 'add-ints :from "math" :as "addInts" :params '(:int :int) :returns :int)`
-が生成するものと**バイト単位で同一**です — このディレクティブは第 2 のインポート経路ではなく、その機構への型付きフロントエンドです。また [`--optimize`](#optimize-tree-shaking) はプログラムが呼び出さないインポートを従来どおり削ぎ落とすため、34 関数のインターフェースを束縛して 3 つだけ使ってもコストはかかりません。
+が生成するものと**バイト単位で同一**です — このディレクティブは第 2 のインポート経路ではなく、その機構への型付きフロントエンドです。また [`--optimize`](#optimize-tree-shaking) はプログラムが呼び出さないインポートを従来どおり削ぎ落とすため、29 関数のインターフェースを束縛して 3 つだけ使ってもコストはかかりません。
 
 ### プロバイダ: インタプリタと JVM でも同じソース
 

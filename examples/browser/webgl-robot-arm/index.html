@@ -236,6 +236,8 @@
     <div id="error" role="alert"></div>
 
     <script type="module">
+      import { glImports, uiImports } from "../webgl-common/gl-imports.js";
+
       const canvas = document.getElementById("stage");
       const errorBox = document.getElementById("error");
       const mError = document.getElementById("m-error");
@@ -261,14 +263,18 @@
       // ---- the import object: everything Lisp asked for --------------------
       //
       // robot-arm.lisp declares the same host boundary as webgl-galaxy and
-      // webgl-heat3d: GL objects cross as integer handles into `handles`, the
-      // bindings are one line each, and the kinematics, the camera matrices
-      // and every triangle live in the Lisp source.
+      // webgl-heat3d: GL objects cross as integer handles into `handles`, and
+      // the kinematics, the camera matrices and every triangle live in the
+      // Lisp source. The WebGL2 entries are GENERATED below from the same
+      // ../webgl-common/gl.wit that the shared gl package
+      // (../webgl-common/gl.lisp) binds, so this page cannot disagree with the
+      // module about them; the handful robot-arm.lisp declares itself are
+      // written by hand beside them.
 
       let lisp; // the module's exports, assigned after instantiation below
 
       const handles = [];
-      const H = (obj) => handles.push(obj) - 1;
+      const addHandle = (obj) => handles.push(obj) - 1;
 
       // A :string parameter arrives as (ptr, len) into the module's exported
       // linear memory; a :string result is written back through the module's
@@ -292,43 +298,24 @@
       const floats = new Float32Array(16);
       const curColor = [1, 1, 1]; // latched by setColor, stamped by setVertex
 
+      // What gl.lisp's shader helpers report a compile or link failure through:
+      // show the box, and stop the program (the call must not return).
+      const ui = {
+        fail: (message) => {
+          fail(message);
+          throw new Error("robot-arm.lisp failed");
+        },
+      };
+
       const imports = {
         gl: {
-          createShader: (type) => H(gl2.createShader(type)),
-          shaderSource: (sh, p, n) => gl2.shaderSource(handles[sh], str(p, n)),
-          compileShader: (sh) => gl2.compileShader(handles[sh]),
-          getShaderParameter: (sh, pname) => gl2.getShaderParameter(handles[sh], pname),
-          getShaderInfoLog: (sh) => retStr(gl2.getShaderInfoLog(handles[sh]) ?? ""),
-          createProgram: () => H(gl2.createProgram()),
-          attachShader: (pr, sh) => gl2.attachShader(handles[pr], handles[sh]),
-          linkProgram: (pr) => gl2.linkProgram(handles[pr]),
-          getProgramParameter: (pr, pname) => gl2.getProgramParameter(handles[pr], pname),
-          getProgramInfoLog: (pr) => retStr(gl2.getProgramInfoLog(handles[pr]) ?? ""),
-          useProgram: (pr) => gl2.useProgram(handles[pr]),
-          getUniformLocation: (pr, p, n) => H(gl2.getUniformLocation(handles[pr], str(p, n))),
-          uniform1f: (loc, x) => gl2.uniform1f(handles[loc], x),
-          uniform3f: (loc, x, y, z) => gl2.uniform3f(handles[loc], x, y, z),
+          ...glImports({ gl: gl2, handles, addHandle, str, retStr }),
+          // robot-arm.lisp's own staging imports.
           uniformMatrix4fv: (loc) => gl2.uniformMatrix4fv(handles[loc], false, floats),
-          enable: (cap) => gl2.enable(cap),
-          disable: (cap) => gl2.disable(cap),
-          depthMask: (flag) => gl2.depthMask(!!flag),
-          blendFunc: (src, dst) => gl2.blendFunc(src, dst),
-          createBuffer: () => H(gl2.createBuffer()),
-          bindBuffer: (target, buf) => gl2.bindBuffer(target, handles[buf]),
-          bufferData: (target, size, usage) => gl2.bufferData(target, size, usage),
           uploadVertices: (off, count) =>
             gl2.bufferSubData(gl2.ARRAY_BUFFER, off * 4, solidStaging, off, count),
           uploadSprites: (count) =>
             gl2.bufferSubData(gl2.ARRAY_BUFFER, 0, spriteStaging, 0, count),
-          createVertexArray: () => H(gl2.createVertexArray()),
-          bindVertexArray: (vao) => gl2.bindVertexArray(handles[vao]),
-          enableVertexAttribArray: (i) => gl2.enableVertexAttribArray(i),
-          vertexAttribPointer: (i, sz, ty, norm, stride, off) =>
-            gl2.vertexAttribPointer(i, sz, ty, norm, stride, off),
-          viewport: (x, y, w, h) => gl2.viewport(x, y, w, h),
-          clearColor: (r, g, b, a) => gl2.clearColor(r, g, b, a),
-          clear: (mask) => gl2.clear(mask),
-          drawArrays: (mode, first, count) => gl2.drawArrays(mode, first, count),
           setColor: (r, g, b) => { curColor[0] = r; curColor[1] = g; curColor[2] = b; },
           setVertex: (i, x, y, z, nx, ny, nz) => {
             const o = i * 9;
@@ -358,12 +345,7 @@
           devicePixelRatio: () => Math.min(window.devicePixelRatio || 1, 2),
         },
         math: { sin: Math.sin, cos: Math.cos, atan2: Math.atan2, acos: Math.acos },
-        ui: {
-          fail: (p, n) => {
-            fail(str(p, n));
-            throw new Error("robot-arm.lisp failed");
-          },
-        },
+        ui: uiImports({ ui, str }),
       };
 
       // Count every Lisp -> JavaScript call for the HUD meter.

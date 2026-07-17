@@ -100,3 +100,9 @@ Firefox 120+, Safari 18.2+, Edge 119+).
 - On the interpreter and JVM backends the `rontolisp:wasm-import` directives
   define stubs that signal an error when called, so this program is
   WASM-only by nature (there is no host to draw with elsewhere).
+- This demo deliberately stays on `rontolisp:wasm-import` and does *not* use
+  the shared `gl` package or its `gl.wit`
+  ([`../webgl-common/`](../webgl-common)), which every other `webgl-*` demo
+  binds. Being one self-contained file — the program, its ten imports and the
+  page — is the point here: a reader should see the whole boundary without
+  following a `require` into another directory. Please do not retrofit it.
