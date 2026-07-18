@@ -453,6 +453,8 @@ final class WasmExprCompiler {
 				case LispNames.MAKE_STRING ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeString(cons), ctx);
 				case LispNames.REPLACE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons), ctx);
+				case LispNames.SCHAR_SET ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx);
 				case LispNames.LOWER_CASE_P ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandLowerCaseP(cons), ctx);
 				case LispNames.UPPER_CASE_P ->
@@ -735,6 +737,8 @@ final class WasmExprCompiler {
 				case LispNames.CCASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCcase(cons), ctx);
 				case LispNames.ERROR ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandError(cons, ctx.closRegistry), ctx);
+				case LispNames.CERROR ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandCerror(cons, ctx.closRegistry), ctx);
 				case LispNames.ERROR_INTERNAL -> WasmErrorCompiler.compile(cons, ctx);
 				case LispNames.ERROR_COND_INTERNAL ->
 					// Outside EH mode the condition-carrying variant traps like %error (a
@@ -847,6 +851,8 @@ final class WasmExprCompiler {
 				case LispNames.PROCLAIM -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProclaim(cons), ctx);
 				case LispNames.THE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandThe(cons), ctx);
 				case LispNames.EVAL_WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx);
+				case LispNames.LOCALLY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLocally(cons), ctx);
+				case LispNames.WRITE_CHAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWriteChar(cons), ctx);
 				case LispNames.FLET -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFlet(cons), ctx);
 				case LispNames.LABELS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLabels(cons), ctx);
 				case LispNames.VALUES -> WasmExprCompiler.compileExpr(LispMacroExpander.expandValues(cons), ctx);

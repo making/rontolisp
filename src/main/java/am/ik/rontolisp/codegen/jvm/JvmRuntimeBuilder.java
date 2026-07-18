@@ -577,8 +577,63 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, stringSubstring.index());
 		code.add(Opcode.ARETURN);
-		// Not a quoted string, return as-is
+		// Not a quoted string: a symbol. Its display spelling drops the package
+		// marker — a gensym's "#:" and a keyword's ':' (prin1 keeps them).
+		// if (charAt(0)=='#' && length()>=2 && charAt(1)==':') return substring(2);
 		patchBranch(code, ifNotQuotePos, code.size());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringCharAt.index());
+		emitIntConstStatic(code, '#');
+		int ifNotHashPos = code.size();
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringLength.index());
+		code.add(Opcode.ICONST_2);
+		int ifTooShortPos = code.size();
+		code.add(Opcode.IF_ICMPLT);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringCharAt.index());
+		emitIntConstStatic(code, ':');
+		int ifNotHashColonPos = code.size();
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_2);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringLength.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringSubstring.index());
+		code.add(Opcode.ARETURN);
+		// if (charAt(0)==':') return substring(1);
+		patchBranch(code, ifNotHashPos, code.size());
+		patchBranch(code, ifTooShortPos, code.size());
+		patchBranch(code, ifNotHashColonPos, code.size());
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringCharAt.index());
+		emitIntConstStatic(code, ':');
+		int ifNotColonPos = code.size();
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringLength.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringSubstring.index());
+		code.add(Opcode.ARETURN);
+		// Plain symbol, return as-is
+		patchBranch(code, ifNotColonPos, code.size());
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.ARETURN);
 

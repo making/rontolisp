@@ -518,7 +518,7 @@ public final class LambdaLists {
 		LispVal ok = list(new LispSymbol(LispNames.MEMBER), call(LispNames.CAR, cur), knownList);
 		LispVal callerOverride = list(new LispSymbol(LispNames.GETF), source,
 				new LispSymbol(LispNames.ALLOW_OTHER_KEYS_KEYWORD));
-		LispVal signal = list(new LispSymbol(LispNames.ERROR), new LispString("Unknown keyword argument: ~a"),
+		LispVal signal = list(new LispSymbol(LispNames.ERROR), new LispString("Unknown keyword argument: ~s"),
 				call(LispNames.CAR, cur));
 		LispVal body = list(new LispSymbol(LispNames.IF), ok, LispNil.INSTANCE,
 				list(new LispSymbol(LispNames.IF), callerOverride, LispNil.INSTANCE, signal));

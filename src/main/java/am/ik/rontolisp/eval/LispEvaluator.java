@@ -399,6 +399,46 @@ public final class LispEvaluator {
 					|| this.globalEnv.lookupOrNull(name) != null;
 			return known ? new LispSymbol(name) : LispNil.INSTANCE;
 		}));
+		// intern overrides the package-blind Environment converter: a bare name is
+		// interned into the CURRENT package (the resolver's in-package state), so a
+		// macro-time (intern (concatenate ...)) under (in-package p) names the same
+		// function as a literal defun in that file. The (intern name :keyword) form
+		// keeps the Environment behavior.
+		this.globalEnv.defineFunction(LispNames.INTERN, new LispFunction(LispNames.INTERN, args -> {
+			if (args.size() == 2) {
+				if (LispMacroExpander.isKeywordPackageDesignator(args.get(1))) {
+					if (!(args.get(0) instanceof LispString str)) {
+						throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
+					}
+					return new LispSymbol(":" + str.value());
+				}
+				throw new LispEvalException(LispNames.INTERN + " with a non-keyword package argument is not supported");
+			}
+			requireSingleArg(LispNames.INTERN, args);
+			if (!(args.get(0) instanceof LispString str)) {
+				throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
+			}
+			return new LispSymbol(this.packageResolver.internSpelling(str.value()));
+		}));
+		// error / signal / warn are real CL functions (cl-base64 signals via
+		// (apply #'error args)), so they get function values that rebuild the literal
+		// call from the evaluated arguments and re-enter the evaluator -- identical
+		// semantics to the lowered form, condition-designator protocol included. A
+		// keyword, string, or other self-evaluating argument stays literal (the
+		// designator matchers read them from the form); symbols and lists are quoted.
+		for (String opName : List.of(LispNames.ERROR, LispNames.SIGNAL, LispNames.WARN)) {
+			this.globalEnv.defineFunction(opName,
+					new LispFunction(opName, args -> eval(rebuildSignalForm(opName, args), this.globalEnv)));
+		}
+		// cerror (lite): no restart machinery exists, so the "continuable" part is
+		// dropped -- (cerror continue-format datum args...) signals like
+		// (error datum args...).
+		this.globalEnv.defineFunction(LispNames.CERROR, new LispFunction(LispNames.CERROR, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.CERROR + " expects a continue format control and a datum");
+			}
+			return eval(rebuildSignalForm(LispNames.ERROR, args.subList(1, args.size())), this.globalEnv);
+		}));
 		this.globalEnv.defineFunction(LispNames.FUNCALL, new LispFunction(LispNames.FUNCALL, args -> {
 			if (args.isEmpty()) {
 				throw new LispEvalException(LispNames.FUNCALL + " expects at least 1 argument");
@@ -1204,6 +1244,8 @@ public final class LispEvaluator {
 				case LispNames.ERROR:
 					ensureWitLoadedForConditionClass(cons);
 					return eval(LispMacroExpander.expandError(cons, this.closRegistry), env);
+				case LispNames.CERROR:
+					return eval(LispMacroExpander.expandCerror(cons, this.closRegistry), env);
 				case LispNames.WARN:
 					ensureWitLoadedForConditionClass(cons);
 					return eval(LispMacroExpander.expandWarn(cons, this.closRegistry), env);
@@ -1391,6 +1433,10 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandThe(cons), env);
 				case LispNames.EVAL_WHEN:
 					return eval(LispMacroExpander.expandEvalWhen(cons), env);
+				case LispNames.WRITE_CHAR:
+					return eval(LispMacroExpander.expandWriteChar(cons), env);
+				case LispNames.LOCALLY:
+					return eval(LispMacroExpander.expandLocally(cons), env);
 				case LispNames.FLET:
 					return eval(LispMacroExpander.expandFlet(cons), env);
 				case LispNames.LABELS:
@@ -2025,18 +2071,44 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Rebuilds a literal {@code (error ...)}/{@code (signal ...)}/{@code (warn ...)} call
+	 * from already-evaluated arguments, for the function values of those operators.
+	 * Self-evaluating values (strings, numbers, keywords, characters) stay literal so the
+	 * designator matchers see the same shape a source-level call has; anything else is
+	 * quoted to survive re-evaluation.
+	 */
+	private static LispVal rebuildSignalForm(String opName, List<LispVal> args) {
+		LispVal form = LispNil.INSTANCE;
+		for (int i = args.size() - 1; i >= 0; i--) {
+			LispVal a = args.get(i);
+			boolean selfEvaluating = a instanceof LispString || a instanceof LispInteger || a instanceof LispBigInteger
+					|| a instanceof LispRatio || a instanceof LispDouble || a instanceof LispChar
+					|| a instanceof LispNil || a instanceof LispTrue
+					|| (a instanceof LispSymbol sym && sym.isKeyword());
+			LispVal wrapped = selfEvaluating ? a
+					: new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(a, LispNil.INSTANCE));
+			form = new LispCons(wrapped, form);
+		}
+		return new LispCons(new LispSymbol(opName), form);
+	}
+
+	/**
 	 * Resolves a function designator name against the global function namespace.
 	 * @param name the function name
 	 * @return the function value
 	 * @throws LispEvalException if the name is a special operator or macro, or undefined
 	 */
 	private LispVal resolveFunction(String name) {
-		if (SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)) {
-			throw new LispEvalException(name + " is a macro or special operator, not a function");
-		}
+		// A registered function value wins over the macro/special-operator guard:
+		// some standard operators are BOTH lowered specially in call position and
+		// real functions (error/signal/warn -- CL functions that cl-base64 reaches
+		// via (apply #'error ...)).
 		LispVal fn = this.globalEnv.lookupFunctionOrNull(name);
 		if (fn != null) {
 			return fn;
+		}
+		if (SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)) {
+			throw new LispEvalException(name + " is a macro or special operator, not a function");
 		}
 		// The linalg package is a Lisp-source library (linalg.lisp): evaluate its
 		// definitions into the global environment the first time a linalg:-qualified

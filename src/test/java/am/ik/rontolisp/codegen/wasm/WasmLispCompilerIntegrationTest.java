@@ -5558,7 +5558,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf signal slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string with-slots)");
+				"(and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* locally loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf signal slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
 	}
 
 	@Test
@@ -5587,11 +5587,11 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void symbolNameReturnsTheStoredNameVerbatim() throws Exception {
+	void symbolNameStripsThePackageMarker() throws Exception {
 		assertThat(compileAndRun("(print (symbol-name 'foo)) (print (symbol-name :bar))"
 				+ "(print (symbol-name (gensym))) (print (symbol-name nil))"
 				+ "(print (funcall #'symbol-name 'xyz)) (print (mapcar #'symbol-name '(a b)))"))
-			.isEqualTo("\"foo\"\n\":bar\"\n\"#:g1\"\n\"nil\"\n\"xyz\"\n(\"a\" \"b\")");
+			.isEqualTo("\"foo\"\n\"bar\"\n\"g1\"\n\"nil\"\n\"xyz\"\n(\"a\" \"b\")");
 	}
 
 	@Test

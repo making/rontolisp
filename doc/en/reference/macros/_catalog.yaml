@@ -21,6 +21,7 @@ categories:
       - { slug: typecase, name: typecase }
       - { slug: etypecase, name: etypecase }
       - { slug: error, name: error }
+      - { slug: cerror, name: cerror }
       - { slug: warn, name: warn }
       - { slug: return-from, name: return-from }
       - { slug: setf, name: setf }
@@ -43,6 +44,8 @@ categories:
       - { slug: proclaim, name: proclaim }
       - { slug: the, name: the }
       - { slug: eval-when, name: eval-when }
+      - { slug: locally, name: locally }
+      - { slug: write-char, name: write-char }
       - { slug: flet, name: flet }
       - { slug: labels, name: labels }
       - { slug: macrolet, name: macrolet }

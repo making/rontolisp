@@ -66,6 +66,37 @@ public final class BuiltinFunctionWrappers {
 			LispNames.ARRAY_DISPLACEMENT, LispNames.MAKE_ARRAY);
 
 	/**
+	 * Signal-operator wrappers ({@code #'error}/{@code #'cerror}/{@code #'signal}/
+	 * {@code #'warn}), injected only when the program takes the operator as a first-class
+	 * value (see {@link #referencesFunctionValue}) so ordinary programs stay
+	 * byte-identical. Lite semantics: the wrapper forwards the datum only -- initargs and
+	 * format arguments after it are dropped, so a symbol datum signals a plain condition
+	 * naming the class rather than a typed instance with slots (the interpreter keeps the
+	 * full designator protocol).
+	 */
+	public static final Set<String> SIGNAL_FUNCTIONS = Set.of(LispNames.ERROR, LispNames.CERROR, LispNames.SIGNAL,
+			LispNames.WARN);
+
+	/**
+	 * Whether the expression takes the named operator as a first-class function value --
+	 * a {@code (function name)} form (the {@code #'name} reader shape).
+	 * @param expr the expression to scan
+	 * @param name the operator name
+	 * @return {@code true} when a {@code (function name)} reference occurs
+	 */
+	public static boolean referencesFunctionValue(LispVal expr, String name) {
+		if (!(expr instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
+				&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
+				&& name.equals(sym.name())) {
+			return true;
+		}
+		return referencesFunctionValue(cons.car(), name) || referencesFunctionValue(cons.cdr(), name);
+	}
+
+	/**
 	 * Generates wrapper defuns for built-in operators that are not already defined by the
 	 * user.
 	 * @param userDefinedNames names already defined by user defuns
@@ -267,7 +298,22 @@ public final class BuiltinFunctionWrappers {
 				List.of(body));
 	}
 
+	// Signal-operator wrapper: (lambda (datum &rest r) (op datum)) -- the datum-only
+	// lite forwarding described on SIGNAL_FUNCTIONS.
+	private static WrapperDef signalDatum(String name, String delegate) {
+		return new WrapperDef(name, List.of("datum", LispNames.LAMBDA_REST, "r"), List.of(call(delegate, "datum")));
+	}
+
+	// cerror's wrapper additionally drops the leading continue format control.
+	private static WrapperDef cerrorWrapper() {
+		return new WrapperDef(LispNames.CERROR, List.of("cfc", "datum", LispNames.LAMBDA_REST, "r"),
+				List.of(call(LispNames.ERROR, "datum")));
+	}
+
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
+			// Signal operators (gated by SIGNAL_FUNCTIONS in the backend compilers)
+			signalDatum(LispNames.ERROR, LispNames.ERROR), signalDatum(LispNames.SIGNAL, LispNames.SIGNAL),
+			signalDatum(LispNames.WARN, LispNames.WARN), cerrorWrapper(),
 			// Arithmetic: +/-/*// are variadic in CL, so their wrappers accept any arity
 			// (a fixed-arity wrapper returned nil on the JVM / trapped on WASM when
 			// funcall/apply passed a different argument count). - and / keep their

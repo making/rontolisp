@@ -125,7 +125,7 @@ $ rontolisp
 
 ## 実際に何がロードできるか
 
-現在、実世界の 5 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
+現在、実世界の 6 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
 (インタプリタ、JVM、WASM Preview 1、`--component`) で検証済みです:
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
@@ -170,8 +170,20 @@ $ rontolisp
   **`alistp` は alist でない値に対して信頼できません** — `mapl` のラムダ
   からの早期脱出がここではラムダローカルな return になるため、本物の
   ASDF ホストなら弾く値に対して `t` を返すことがあります。
+- **[cl-base64](https://github.com/darabi/cl-base64) v3.4**: Kevin Rosenberg
+  による Base64 エンコーダ/デコーダ。
+  `string-to-base64-string`/`base64-string-to-string`(`:columns` の折り返しと
+  `:uri` アルファベット付き)、`(unsigned-byte 8)` 配列ペア
+  (`usb8-array-to-base64-string` とその逆)、整数ペアがすべて動作します。
+  不正な入力文字は `bad-base64-character` を通知し、その
+  `:input`/`:position`/`:code` スロットはインタプリタで読み取れます
+  (コンパイル系バックエンドは簡易版の `#'error` ラッパを通して素の
+  コンディションを通知しますが、同じ `handler-case` で捕捉できます)。
+  数値の制限が 1 つ: WASM バックエンドは `i31` 範囲(約 2^30)を超える
+  整数を浮動小数点で表現するため、大きな整数の `integer-to-base64-string`
+  はそこで結果が変わります。
 
-5 ライブラリ全ての実行可能なデモ — バックエンド別の実行コマンドと期待
+6 ライブラリ全ての実行可能なデモ — バックエンド別の実行コマンドと期待
 出力付き — は
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf)
 にあります。

@@ -51,6 +51,24 @@ public final class LispString implements LispVal {
 		}
 	}
 
+	/**
+	 * Returns the number of characters in the string.
+	 * @return the string length
+	 */
+	public int length() {
+		return this.chars.length;
+	}
+
+	/**
+	 * Destructively replaces the character at {@code index}, like the effect of
+	 * {@code (setf (schar s index) c)}. The caller checks bounds.
+	 * @param index the index to write at
+	 * @param c the replacement character
+	 */
+	public void setCharAt(int index, char c) {
+		this.chars[index] = c;
+	}
+
 	@Override
 	public String print() {
 		return "\"" + this.value() + "\"";

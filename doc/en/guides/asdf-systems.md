@@ -131,7 +131,7 @@ below.
 
 ## What can I actually load?
 
-Five real-world libraries load unmodified today, verified on all four
+Six real-world libraries load unmodified today, verified on all four
 backends (interpreter, JVM, WASM Preview 1 and `--component`):
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
@@ -178,8 +178,19 @@ backends (interpreter, JVM, WASM Preview 1 and `--component`):
   instead; and **`alistp` is unreliable on a non-alist** — its early exit out
   of a `mapl` lambda is a lambda-local return here, so it can report `t` for a
   value a real ASDF host would reject.
+- **[cl-base64](https://github.com/darabi/cl-base64) v3.4**: Kevin Rosenberg's
+  Base64 encoder/decoder. `string-to-base64-string`/`base64-string-to-string`
+  (with `:columns` line wrapping and the `:uri` alphabet), the
+  `(unsigned-byte 8)` array pair (`usb8-array-to-base64-string` and back) and
+  the integer pair all work; a bad input character signals
+  `bad-base64-character`, whose `:input`/`:position`/`:code` slots are readable
+  on the interpreter (the compiled backends signal a plain condition through
+  the lite `#'error` wrapper — still caught by the same `handler-case`). One
+  numeric limitation: the WASM backends represent an integer beyond the `i31`
+  range (about 2^30) as a float, so `integer-to-base64-string` of a large
+  integer diverges there.
 
-Runnable demos for all five — with the per-backend commands and
+Runnable demos for all six — with the per-backend commands and
 expected output — live in
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf).
 

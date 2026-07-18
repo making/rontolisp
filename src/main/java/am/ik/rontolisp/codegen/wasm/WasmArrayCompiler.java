@@ -72,6 +72,18 @@ final class WasmArrayCompiler {
 		if (findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD) != null) {
 			throw new UnsupportedOperationException("make-array: :displaced-index-offset requires :displaced-to");
 		}
+		LispVal contentsLowering = am.ik.rontolisp.LispMacroExpander.lowerInitialContentsMakeArray(cons);
+		if (contentsLowering != null) {
+			// :initial-contents lowers to the allocation plus an element-wise fill.
+			WasmExprCompiler.compileExpr(contentsLowering, ctx);
+			return;
+		}
+		LispVal characterString = am.ik.rontolisp.LispMacroExpander.lowerCharacterMakeArray(cons);
+		if (characterString != null) {
+			// A rank-1 :element-type 'character array is a string: make-string.
+			WasmExprCompiler.compileExpr(characterString, ctx);
+			return;
+		}
 		boolean singleFloat = isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
 		boolean doubleFloat = isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
 		LispVal fpArg = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
@@ -570,6 +582,25 @@ final class WasmArrayCompiler {
 		// general array resolves the displacement chain into its buckets.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		if (rank == 1) {
+			// A string is a rank-1 character array in CL: (aref s i) reads like
+			// (char s i) (bytes[1 + i] skips the opening quote byte).
+			getLocal(ctx, arrSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+			emitIfEq(ctx);
+			getLocal(ctx, arrSlot);
+			WasmEmitHelper.emitStrBytesArray(ctx);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(1);
+			WasmExprCompiler.compileExpr(args.get(2), ctx);
+			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.I32_ADD);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+			WasmCharCompiler.makeChar(ctx);
+			ctx.writer.write(Instruction.ELSE);
+		}
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
 		// packed: box(data[Horner(subscripts)]), reading the f64/f32 store per width.
@@ -590,6 +621,9 @@ final class WasmArrayCompiler {
 		emitResolveDataAndIndex(ctx, headerSlot);
 		arrayGet(ctx);
 		ctx.writer.write(Instruction.END);
+		if (rank == 1) {
+			ctx.writer.write(Instruction.END);
+		}
 	}
 
 	static void compileRowMajorAref(LispCons cons, WasmLispCompiler.Ctx ctx) {

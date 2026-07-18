@@ -23,6 +23,7 @@
 | `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | `x` の型によるディスパッチ。サポートされる型名: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom`, `character`, `hash-table`, `boolean`(および `t`/`otherwise`)と、複合指定子 `(or ...)`/`(and ...)`/`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` および `(integer 0 9)` のような範囲付き数値型。何もマッチしなければnilを返します |
 | `etypecase` | `(etypecase x (integer body...) (string body...))` | 網羅的な `typecase`。デフォルト節はなく、どの節にも型がマッチしないオブジェクトは `error` を通知します |
 | `error` | `(error "bad value: ~a" x)`, `(error 'my-error :v x)`, `(error obj)` | エラーを通知し、[`handler-case`](macros/handler-case.md) に捕捉されなければ実行を中止します。designator: リテラルの制御文字列(`format` と同じディレクティブ)、initarg 付きのクォートされたコンディション型シンボル(型付きコンディションを構築。`define-condition` の `:report` がメッセージになります)、またはコンディションオブジェクト。インタプリタとJVMはメッセージとコンディションを保持する例外をスローし、wasm-GC は捕捉フォームを含むプログラムでは WebAssembly 例外をスローし、含まなければトラップします。`format` と同様に関数値を持たないマクロです(`#'error` はサポートされません) |
+| `cerror` | `(cerror continue-format datum args...)` | `error` と同じ条件指定子の形でエラーを通知します。lite: リスタート機構がないためエラーは継続できず、continue フォーマット制御は受理された上で捨てられます |
 | `signal` | `(signal 'my-condition :v x)` | **非致命的**なコンディションを通知します(designator は `error` と同じ): 確立済みの `handler-case` に送出され、なければ nil を返して継続します(`--no-gc` では常に nil) |
 | `handler-case` | `(handler-case expr (type (var) body...)... (:no-error (v) body...))` | `expr` を評価し、通知されたエラーをコンディション型がマッチする最初の節にディスパッチします(マッチしなければ再送出)。`:no-error` は正常終了時に実行。wasm-GC では `wasmtime -W exceptions=y` が必要。`--no-gc` ではコンパイルエラー |
 | `ignore-errors` | `(ignore-errors form...)` | フォームの値、エラー通知時は nil。`handler-case` の糖衣。wasm-GC では `wasmtime -W exceptions=y` が必要。`--no-gc` ではコンパイルエラー |
@@ -43,6 +44,8 @@
 | `proclaim` | `(proclaim declaration)` | `declaim` と同様の no-op（CL からの逸脱: マクロとして分類され、引数は評価されません） |
 | `the` | `(the type form)` | `form` の値をそのまま返します。型はチェックされません |
 | `eval-when` | `(eval-when (situation...) body...)` | 本体を `progn` として評価します。すべての状況指定は「今評価する」として扱われます。トップレベルの本体はスプライスされ、ネストした `defun`/`defmacro` 定義も収集されます |
+| `locally` | `(locally declaration... form...)` | 本体を `progn` として評価します。先頭の `declare` フォームは取り除かれます(宣言はパースされるだけの no-op) |
+| `write-char` | `(write-char char [stream])` | 1 文字を書き出してその文字を返します。1 文字の文字列の `write-string` に展開されるため、ファイル/文字列ストリームでも動きます |
 | `flet` | `(flet ((name lambda-list body...)...) body...)` | 局所的な非再帰の関数束縛（Lisp-2: 呼び出し位置と `#'name`）。定義本体は同名の外側の関数を参照し、兄弟定義は見えません。ラムダリストは `defun` の拡張をサポートします |
 | `labels` | `(labels ((name lambda-list body...)...) body...)` | `flet` と同様ですが定義同士が互いに見えます（再帰と相互再帰） |
 | `multiple-value-bind` | `(multiple-value-bind (var...) values-form body...)` | 変数をプロデューサフォームの値に束縛します。リテラルの `(values ...)` 呼び出し、多値の組み込み関数（`floor` ファミリ、`gethash`、`parse-integer`）、`(values ...)` を返すユーザ関数は全ての値を供給します。余った変数は nil に束縛されます |

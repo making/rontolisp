@@ -236,7 +236,7 @@ final class WasmCharCompiler {
 	}
 
 	// Boxes the i32 on the stack into a TYPE_CHAR struct.
-	private static void makeChar(WasmLispCompiler.Ctx ctx) {
+	static void makeChar(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
 	}

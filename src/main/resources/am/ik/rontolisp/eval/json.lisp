@@ -202,7 +202,7 @@
   ;; read as a single keyword (spaces, parentheses, ...) are rejected.
   (let ((colon-key (concatenate 'string ":" key)))
     (let ((sym (read-from-string colon-key)))
-      (if (and (keywordp sym) (string= (princ-to-string sym) colon-key))
+      (if (and (keywordp sym) (string= (symbol-name sym) key))
           sym
           (error "json-parse: object key is not usable as a keyword (parse with :hash-table)")))))
 
@@ -317,7 +317,7 @@
 
 (defun rontolisp::%json-key-name (k)
   (cond ((stringp k) k)
-        ((keywordp k) (subseq (princ-to-string k) 1))
+        ((keywordp k) (symbol-name k))
         ((symbolp k) (princ-to-string k))
         ((integerp k) (princ-to-string k))
         ((floatp k) (princ-to-string k))
@@ -335,7 +335,7 @@
     (do ((x v (cdr (cdr x))))
         ((null x))
       (if firstp (setq firstp nil) (setq a (cons "," a)))
-      (setq a (rontolisp::%json-out-string (subseq (princ-to-string (car x)) 1) a))
+      (setq a (rontolisp::%json-out-string (symbol-name (car x)) a))
       (setq a (cons ":" a))
       (setq a (rontolisp::%json-out (car (cdr x)) a)))
     (cons "}" a)))
@@ -373,7 +373,7 @@
         ((floatp v) (cons (princ-to-string v) acc))
         ((rationalp v) (cons (princ-to-string (float v)) acc))
         ((stringp v) (rontolisp::%json-out-string v acc))
-        ((keywordp v) (rontolisp::%json-out-string (subseq (princ-to-string v) 1) acc))
+        ((keywordp v) (rontolisp::%json-out-string (symbol-name v) acc))
         ((symbolp v) (rontolisp::%json-out-string (princ-to-string v) acc))
         ((characterp v) (rontolisp::%json-out-string (princ-to-string v) acc))
         ((hash-table-p v) (rontolisp::%json-out-hash v acc))

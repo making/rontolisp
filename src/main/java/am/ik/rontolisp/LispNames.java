@@ -633,6 +633,9 @@ public final class LispNames {
 	/** The {@code :initial-element} keyword accepted by {@code make-array}. */
 	public static final String INITIAL_ELEMENT_KEYWORD = ":initial-element";
 
+	/** The {@code :initial-contents} keyword of {@code make-array}. */
+	public static final String INITIAL_CONTENTS_KEYWORD = ":initial-contents";
+
 	/** The {@code :fill-pointer} keyword accepted by {@code make-array}. */
 	public static final String FILL_POINTER_KEYWORD = ":fill-pointer";
 
@@ -1171,6 +1174,12 @@ public final class LispNames {
 	public static final String EVAL_WHEN = "eval-when";
 
 	/**
+	 * The {@code locally} operator. Expands to {@code progn} of its body with the leading
+	 * declarations dropped (declarations are parsed no-ops).
+	 */
+	public static final String LOCALLY = "locally";
+
+	/**
 	 * The {@code flet} macro (local, non-recursive function bindings). Expands to
 	 * let-bound lambdas plus a body rewrite of call position and {@code #'name} (see
 	 * {@code LispMacroExpander.expandFlet}).
@@ -1253,6 +1262,13 @@ public final class LispNames {
 	 * {@code format} it has no function value (classified as a macro).
 	 */
 	public static final String ERROR = "error";
+
+	/**
+	 * The {@code cerror} operator (lite): without restarts the error is not continuable,
+	 * so {@code (cerror continue-format datum args...)} lowers to
+	 * {@code (error datum args...)}.
+	 */
+	public static final String CERROR = "cerror";
 
 	/**
 	 * Internal single-argument primitive that throws/traps with a pre-built message
@@ -1664,6 +1680,13 @@ public final class LispNames {
 	/** The {@code schar} built-in function (a synonym for {@code char}). */
 	public static final String SCHAR = "schar";
 
+	/**
+	 * The {@code %schar-set} internal helper: the {@code (setf (schar s i) c)} /
+	 * {@code (setf (char s i) c)} lowering, mutating the string in place and returning
+	 * the stored character.
+	 */
+	public static final String SCHAR_SET = "%schar-set";
+
 	/** The {@code char-code} built-in function (the code point of a character). */
 	public static final String CHAR_CODE = "char-code";
 
@@ -1865,6 +1888,12 @@ public final class LispNames {
 
 	/** The {@code write-string} built-in function (a string to a stream, no newline). */
 	public static final String WRITE_STRING = "write-string";
+
+	/**
+	 * The {@code write-char} operator: writes a single character, expanding to
+	 * {@code write-string} of its one-character string on every backend.
+	 */
+	public static final String WRITE_CHAR = "write-char";
 
 	/**
 	 * The {@code write-to-string} built-in function (a {@code prin1-to-string} alias).

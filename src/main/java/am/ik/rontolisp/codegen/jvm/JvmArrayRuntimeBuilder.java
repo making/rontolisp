@@ -269,8 +269,32 @@ final class JvmArrayRuntimeBuilder {
 		methods.add(new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), 5, 12, m.finish()));
 
 		// _aref1(arr, i): return _rmGet(arr, 1 + ((Long) i).intValue()) -- _rmGet
-		// follows the displacement chain, so every accessor goes through it.
+		// follows the displacement chain, so every accessor goes through it. A string
+		// is a rank-1 character array in CL, so a runtime String (its representation
+		// carries surrounding quotes, hence the same 1 + i offset) yields the
+		// character at the index instead.
+		ClassConstant strClass = cp.addClass(cp.addUtf8("java/lang/String"));
+		MethodrefConstant strCharAt = cp.addMethodref(strClass,
+				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
+		ClassConstant charClass = cp.addClass(cp.addUtf8("java/lang/Character"));
+		MethodrefConstant charValueOf = cp.addMethodref(charClass,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(C)Ljava/lang/Character;")));
 		JvmAsm a1 = new JvmAsm();
+		a1.aload(0);
+		a1.instanceOf(strClass);
+		int a1NotString = a1.label();
+		a1.branch(Opcode.IFEQ, a1NotString);
+		a1.aload(0);
+		a1.checkcast(strClass);
+		a1.iconst(1);
+		a1.aload(1);
+		a1.checkcast(longClass);
+		a1.invokevirtual(longIntValue);
+		a1.op(Opcode.IADD);
+		a1.invokevirtual(strCharAt);
+		a1.invokestatic(charValueOf);
+		a1.areturn();
+		a1.bind(a1NotString);
 		a1.aload(0);
 		a1.iconst(1);
 		a1.aload(1);

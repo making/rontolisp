@@ -524,6 +524,29 @@ public final class PackageResolver {
 		return new LispSymbol(PackageRegistry.qualifyInternal(pkg, name));
 	}
 
+	/**
+	 * The spelling {@code intern} gives a bare name in the current package (CL's
+	 * {@code *package*} semantics): an accessible symbol keeps its canonical home
+	 * spelling (bare for {@code cl}/{@code cl-user} symbols, qualified otherwise); an
+	 * unknown name is interned into the current package. This is what makes a macro-time
+	 * {@code (intern (concatenate ...))} under {@code (in-package p)} name the same
+	 * function as a literal {@code defun} in that file.
+	 * @param name the bare name to intern
+	 * @return the canonical spelling for the current package
+	 */
+	public String internSpelling(String name) {
+		try {
+			if (resolveUnqualified(name) instanceof LispSymbol sym) {
+				return sym.name();
+			}
+		}
+		catch (LispPackageException ignored) {
+			// An inaccessible cl symbol in a non-cl-using package: intern it into the
+			// current package like CL would.
+		}
+		return canonical(this.currentPackage, name).name();
+	}
+
 	private static String operatorMember(LispSymbol op) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 		return qn == null ? op.name() : qn.member();

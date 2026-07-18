@@ -74,7 +74,7 @@
 | `provide` | `(provide :util)` | モジュールをロード済みとして登録し、以後の `require` を no-op にします。モジュール名を返します。コンパイルパスではリテラルなトップレベルフォームである必要があります |
 | `gensym` | `(gensym)`, `(gensym "tmp")` | `#:g1`, `#:tmp2` -- マクロの一時変数のための新しいシンボル(カウンタはプログラム全体で共有) |
 | `make-symbol` | `(make-symbol "temp")` | `#:temp` -- 新しいアンインターンドシンボル(gensym の `#:` 規約、カウンタなし) |
-| `intern` | `(intern "foo")` | シンボル `foo`(名前はそのまま使用。カレントパッケージは無視され、パッケージ引数はエラー) |
+| `intern` | `(intern "foo")` | シンボル `foo`。インタプリタでは名前はカレントパッケージ(`in-package` の状態)にインターンされます。`(intern name :keyword)` はキーワードを作り、それ以外のパッケージ引数はエラー |
 | `find-symbol` | `(find-symbol "car")` | 名前が既知(cl シンボル・キーワード・ユーザー定義)なら `car`、なければ `nil`(コンパイラ: リテラル文字列のみ) |
 | `symbol-name` | `(symbol-name 'foo)` | `"foo"` -- 格納された名前そのまま(ケース保存。CL のように大文字化されない) |
 | `symbol-value` | `(symbol-value '*level*)` | グローバル変数の値。未束縛の名前はエラー(レキシカルな束縛は見えない) |

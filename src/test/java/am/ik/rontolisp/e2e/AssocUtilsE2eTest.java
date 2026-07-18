@@ -52,7 +52,7 @@ class AssocUtilsE2eTest extends AsdfLibraryE2eSupport {
 			""";
 
 	private static final List<String> EXPECTED = List.of("eitaro", "none", "(name loc)", "(eitaro vienna)",
-			"(:NAME eitaro :LOC vienna)", "((name . eitaro) (loc . vienna))", "((name . eitaro))", "eitaro@vienna",
+			"(NAME eitaro LOC vienna)", "((name . eitaro) (loc . vienna))", "((name . eitaro))", "eitaro@vienna",
 			"((y . 2))", "((k . v))", "42", "eq");
 
 	@Override

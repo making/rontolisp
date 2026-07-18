@@ -37,16 +37,16 @@ public final class PackageRegistry {
 			LispNames.REMF, LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF, LispNames.FORMAT,
 			LispNames.WITH_OPEN_FILE, LispNames.PROG1, LispNames.DO, LispNames.DO_STAR, LispNames.PROG2,
 			LispNames.PSETQ, LispNames.TYPECASE, LispNames.ECASE, LispNames.ETYPECASE, LispNames.CCASE, LispNames.ERROR,
-			LispNames.TIME, LispNames.LOOP, LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.DECLARE,
-			LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.THE, LispNames.EVAL_WHEN, LispNames.FLET, LispNames.LABELS,
-			LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST, LispNames.MULTIPLE_VALUE_CALL,
-			LispNames.NTH_VALUE, LispNames.MULTIPLE_VALUE_SETQ, LispNames.ROTATEF, LispNames.DESTRUCTURING_BIND,
-			LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING, LispNames.PUSHNEW, LispNames.DEFTYPE,
-			LispNames.DEFINE_CONDITION, LispNames.DEFINE_MODIFY_MACRO, LispNames.DEFINE_SETF_EXPANDER,
-			LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET, LispNames.MAKE_CONDITION,
-			LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN, LispNames.SIGNAL,
-			LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE, LispNames.WITH_SLOTS,
-			LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS);
+			LispNames.CERROR, LispNames.TIME, LispNames.LOOP, LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.DECLARE,
+			LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.THE, LispNames.EVAL_WHEN, LispNames.LOCALLY,
+			LispNames.FLET, LispNames.LABELS, LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST,
+			LispNames.MULTIPLE_VALUE_CALL, LispNames.NTH_VALUE, LispNames.MULTIPLE_VALUE_SETQ, LispNames.ROTATEF,
+			LispNames.DESTRUCTURING_BIND, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
+			LispNames.PUSHNEW, LispNames.DEFTYPE, LispNames.DEFINE_CONDITION, LispNames.DEFINE_MODIFY_MACRO,
+			LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET,
+			LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN,
+			LispNames.SIGNAL, LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE,
+			LispNames.WITH_SLOTS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.WRITE_CHAR);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -129,7 +129,8 @@ public final class PackageRegistry {
 			LispNames.BLOCK_INTERNAL, LispNames.ERROR_INTERNAL, LispNames.PUTHASH, LispNames.ASET,
 			LispNames.ROW_MAJOR_ASET, LispNames.MAKE_STRING_OUTPUT_STREAM, LispNames.MAKE_STRING_INPUT_STREAM,
 			LispNames.STRING_STREAM_CONTENTS, LispNames.ARRAYP_INTERNAL, LispNames.MV_SPILL, LispNames.SET_FILL_POINTER,
-			LispNames.ARRAY_BECOME, LispNames.ARRAY_DISP_TARGET, LispNames.ARRAY_DISP_OFFSET, LispNames.WARN_INTERNAL);
+			LispNames.ARRAY_BECOME, LispNames.ARRAY_DISP_TARGET, LispNames.ARRAY_DISP_OFFSET, LispNames.WARN_INTERNAL,
+			LispNames.SCHAR_SET);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

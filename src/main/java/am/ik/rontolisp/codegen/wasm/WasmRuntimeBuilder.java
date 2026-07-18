@@ -2060,14 +2060,50 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_SUB);
 		WasmEmitHelper.emitWriteStrGcCall(w);
 		w.write(Instruction.ELSE);
-		// Bare symbol name: _write_str_gc(str, 0, len)
+		// Bare symbol name: the display spelling drops the package marker — a
+		// keyword's leading ':' and a gensym's "#:" are markers, not name bytes
+		// (the readable _print_val form keeps them).
+		// if (bytes[0] == ':') _write_str_gc(str, 1, len) -- the third argument is
+		// the exclusive end position, not a count.
+		emitSymbolByteEquals(w, 0, ':');
+		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
+		w.writeSignedLeb128(1);
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(3);
 		WasmEmitHelper.emitWriteStrGcCall(w);
+		w.write(Instruction.ELSE);
+		// else if (len >= 2 && bytes[0] == '#' && bytes[1] == ':')
+		// _write_str_gc(str, 2, len)
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		emitSymbolByteEquals(w, 0, '#');
+		w.write(Instruction.IF, 0x40);
+		emitSymbolByteEquals(w, 1, ':');
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		WasmEmitHelper.emitWriteStrGcCall(w);
+		w.write(Instruction.ELSE);
+		emitWriteWholeSymbol(w);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		emitWriteWholeSymbol(w);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		emitWriteWholeSymbol(w);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -2202,6 +2238,33 @@ final class WasmRuntimeBuilder {
 
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	// Pushes bytes[index] == expected for the symbol string in param 0 (used by the
+	// _princ_val package-marker strip).
+	private static void emitSymbolByteEquals(WasmWriter w, int index, char expected) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		WasmEmitHelper.emitStrBytesArray(w);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(index);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(expected);
+		w.write(Instruction.I32_EQ);
+	}
+
+	// Emits _write_str_gc(str, 0, len) for the marker-free symbol case of _princ_val
+	// (param 0 = the string, local 3 = its length).
+	private static void emitWriteWholeSymbol(WasmWriter w) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		WasmEmitHelper.emitWriteStrGcCall(w);
 	}
 
 	// Emits the character branch shared by _print_val (readable = true, prints the

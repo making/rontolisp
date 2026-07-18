@@ -1119,7 +1119,7 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf signal slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string with-slots)
+      (and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* locally loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf signal slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)
       (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq unwind-protect while)
       252
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
@@ -3543,7 +3543,7 @@ cases:
       (print (mapcar #'string '(a b)))
     expected: |
       "foo"
-      ":bar"
+      "bar"
       sym-api-hello
       t
       sym-api-round-trip
@@ -3968,3 +3968,37 @@ cases:
       ((1 1) (2 :err) (3 3))
       ("seen" 1)
       ("outer" :caught)
+  # The cl-base64 integration residue: the language features the library forced --
+  # locally, cerror (lite, not continuable), in-place string setf via schar/char
+  # (setq-rebuild lowering on the compiled backends), a string as a rank-1
+  # character array (make-array :element-type 'character = make-string; aref reads
+  # a character), write-char, make-array :initial-contents, and the marker-free
+  # symbol-name/princ spelling of keywords.
+  - name: cl-base64-residue-features
+    source: |
+      (print (locally (declare (optimize (speed 3))) (+ 40 2)))
+      (print (handler-case (cerror "Continue." "cb64 bad ~a" 7) (error (e) :cerror-caught)))
+      (let ((cb64-s (make-string 3 :initial-element #\a)))
+        (setf (schar cb64-s 1) #\b)
+        (print cb64-s))
+      (let ((cb64-t (make-array 2 :element-type 'character :initial-element #\x)))
+        (setf (char cb64-t 0) #\y)
+        (print cb64-t))
+      (print (aref "abc" 1))
+      (write-char #\o)
+      (write-char #\k)
+      (terpri)
+      (let ((cb64-a (make-array 3 :initial-contents '(10 20 30))))
+        (print (aref cb64-a 2)))
+      (print (symbol-name :cb64-kw))
+      (print (princ-to-string :cb64-kw))
+    expected: |
+      42
+      :cerror-caught
+      "aba"
+      "yx"
+      #\b
+      ok
+      30
+      "cb64-kw"
+      "cb64-kw"

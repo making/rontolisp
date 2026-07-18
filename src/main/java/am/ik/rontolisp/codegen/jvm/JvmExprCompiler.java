@@ -321,6 +321,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeString(cons), ctx, className);
 				case LispNames.REPLACE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons), ctx, className);
+				case LispNames.SCHAR_SET ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx, className);
 				case LispNames.LOWER_CASE_P ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandLowerCaseP(cons), ctx, className);
 				case LispNames.UPPER_CASE_P ->
@@ -648,6 +650,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCcase(cons), ctx, className);
 				case LispNames.ERROR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandError(cons, ctx.closRegistry), ctx, className);
+				case LispNames.CERROR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCerror(cons, ctx.closRegistry), ctx, className);
 				case LispNames.ERROR_INTERNAL -> JvmErrorCompiler.compile(cons, ctx, className);
 				case LispNames.ERROR_COND_INTERNAL -> JvmErrorCondCompiler.compile(cons, ctx, className);
 				case LispNames.WARN ->
@@ -801,6 +805,10 @@ final class JvmExprCompiler {
 				case LispNames.THE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandThe(cons), ctx, className);
 				case LispNames.EVAL_WHEN ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx, className);
+				case LispNames.LOCALLY ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandLocally(cons), ctx, className);
+				case LispNames.WRITE_CHAR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWriteChar(cons), ctx, className);
 				case LispNames.FLET -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFlet(cons), ctx, className);
 				case LispNames.LABELS ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandLabels(cons), ctx, className);

@@ -8,6 +8,7 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
@@ -64,6 +65,18 @@ final class JvmArrayCompiler {
 		LispVal fillPointer = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
 		LispVal adjustable = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
 		LispVal initValue = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
+		LispVal contentsLowering = LispMacroExpander.lowerInitialContentsMakeArray(cons);
+		if (contentsLowering != null) {
+			// :initial-contents lowers to the allocation plus an element-wise fill.
+			JvmExprCompiler.compileExpr(contentsLowering, ctx, className);
+			return;
+		}
+		LispVal characterString = LispMacroExpander.lowerCharacterMakeArray(cons);
+		if (characterString != null) {
+			// A rank-1 :element-type 'character array is a string: make-string.
+			JvmExprCompiler.compileExpr(characterString, ctx, className);
+			return;
+		}
 		if (ctx.usesFloatArray && isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
 				&& fillPointer == null && adjustable == null) {
 			// A plain :element-type 'single-float array (no fill pointer / adjustable /

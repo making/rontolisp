@@ -311,6 +311,7 @@ public final class Environment implements Scope {
 			}
 			LispVal init = LispNil.INSTANCE;
 			boolean initGiven = false;
+			LispVal initialContents = null;
 			LispVal fillPointerArg = null;
 			boolean adjustable = false;
 			LispVal displacedToArg = null;
@@ -323,6 +324,7 @@ public final class Environment implements Scope {
 							init = args.get(i + 1);
 							initGiven = true;
 						}
+						case LispNames.INITIAL_CONTENTS_KEYWORD -> initialContents = args.get(i + 1);
 						case LispNames.FILL_POINTER_KEYWORD -> fillPointerArg = args.get(i + 1);
 						case LispNames.ADJUSTABLE_KEYWORD -> adjustable = !(args.get(i + 1) instanceof LispNil);
 						case LispNames.DISPLACED_TO_KEYWORD -> displacedToArg = args.get(i + 1);
@@ -380,9 +382,33 @@ public final class Environment implements Scope {
 				}
 				return new LispDoubleFloatArray(fdata, dims);
 			}
+			// A rank-1 :element-type 'character array with no fill pointer /
+			// adjustability is a string in CL, so build a mutable LispString (the
+			// make-string result shape; space-filled unless :initial-element says
+			// otherwise).
+			if (isCharacterElementType(elementTypeArg) && dims.length == 1 && !hasFillPointer && !adjustable) {
+				StringBuilder sb = new StringBuilder();
+				if (initialContents != null) {
+					LispVal[] chars = new LispVal[total];
+					fillInitialContents(initialContents, dims, 0, chars, 0);
+					for (LispVal c : chars) {
+						sb.appendCodePoint(requireChar(LispNames.MAKE_ARRAY, c).codePoint());
+					}
+				}
+				else {
+					int fillChar = initGiven ? requireChar(LispNames.MAKE_ARRAY, init).codePoint() : ' ';
+					for (int i = 0; i < total; i++) {
+						sb.appendCodePoint(fillChar);
+					}
+				}
+				return new LispString(sb.toString());
+			}
 			LispVal[] data = new LispVal[total];
 			for (int i = 0; i < total; i++) {
 				data[i] = init;
+			}
+			if (initialContents != null) {
+				fillInitialContents(initialContents, dims, 0, data, 0);
 			}
 			int fillPointer = -1;
 			if (fillPointerArg != null && !(fillPointerArg instanceof LispNil)) {
@@ -406,6 +432,11 @@ public final class Environment implements Scope {
 			}
 			if (args.get(0) instanceof LispFloatArray fa) {
 				return fa.aref(subs);
+			}
+			// A string is a rank-1 array of characters in CL, so (aref s i) reads like
+			// (char s i). Writing still goes through %schar-set (the schar setf place).
+			if (args.get(0) instanceof LispString && subs.length == 1) {
+				return charRef(LispNames.AREF, args);
 			}
 			LispArray array = requireArray(LispNames.AREF, args.get(0));
 			return array.aref(subs);
@@ -726,6 +757,47 @@ public final class Environment implements Scope {
 			}
 		}
 		return null;
+	}
+
+	// Fills array storage row-major from a make-array :initial-contents argument: a
+	// (possibly nested) list whose nesting depth matches the rank, each level's length
+	// matching the corresponding dimension.
+	private static void fillInitialContents(LispVal contents, int[] dims, int dimIndex, LispVal[] data, int offset) {
+		List<LispVal> items = switch (contents) {
+			case LispNil ignored -> List.of();
+			case LispCons cons -> cons.toList();
+			default -> throw new LispEvalException(
+					LispNames.MAKE_ARRAY + " :initial-contents expects a list, got " + contents.print());
+		};
+		if (items.size() != dims[dimIndex]) {
+			throw new LispEvalException(LispNames.MAKE_ARRAY + " :initial-contents dimension " + dimIndex + " has "
+					+ items.size() + " elements, expected " + dims[dimIndex]);
+		}
+		int stride = 1;
+		for (int d = dimIndex + 1; d < dims.length; d++) {
+			stride *= dims[d];
+		}
+		for (int k = 0; k < items.size(); k++) {
+			if (dimIndex == dims.length - 1) {
+				data[offset + k] = items.get(k);
+			}
+			else {
+				fillInitialContents(items.get(k), dims, dimIndex + 1, data, offset + k * stride);
+			}
+		}
+	}
+
+	// Whether a make-array :element-type argument designates a character type
+	// ("character"/"base-char"/"standard-char"), selecting the string representation.
+	// The symbol name is matched ignoring any package qualifier.
+	private static boolean isCharacterElementType(@Nullable LispVal elementType) {
+		if (elementType instanceof LispSymbol sym) {
+			String name = sym.name();
+			int colon = name.lastIndexOf(':');
+			String local = colon >= 0 ? name.substring(colon + 1) : name;
+			return local.equals("character") || local.equals("base-char") || local.equals("standard-char");
+		}
+		return false;
 	}
 
 	private static LispHashTable requireHashTable(String fn, LispVal val) {
@@ -1928,13 +2000,14 @@ public final class Environment implements Scope {
 			}
 			return new LispSymbol("#:" + prefix + gensymCounter.incrementAndGet());
 		}));
-		// symbol-name returns the stored name verbatim (the same spelling princ prints):
-		// rontolisp symbols are case-preserving lowercase (no CL upcase), keywords keep
-		// their leading ':' and gensyms their "#:" prefix.
+		// symbol-name returns the name without the package marker (the same spelling
+		// princ prints): rontolisp symbols are case-preserving lowercase (no CL
+		// upcase); a keyword's leading ':' and a gensym's "#:" are markers, not part
+		// of the name.
 		env.defineFunction(LispNames.SYMBOL_NAME, new LispFunction(LispNames.SYMBOL_NAME, args -> {
 			requireArgCount(LispNames.SYMBOL_NAME, args, 1);
 			return switch (args.get(0)) {
-				case LispSymbol sym -> new LispString(sym.name());
+				case LispSymbol sym -> new LispString(sym.display());
 				case LispTrue ignored -> new LispString("t");
 				case LispNil ignored -> new LispString("nil");
 				default -> throw new LispEvalException(
@@ -1948,11 +2021,11 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.STRING, args, 1);
 			return switch (args.get(0)) {
 				case LispString s -> s;
-				// Coercing a symbol yields its name; a keyword's package colon is a
-				// marker,
-				// not part of the name, so (string :html) is "html" (matches CL, and is
-				// what cl-who's maybe-downcase relies on to emit <html> not <:html>).
-				case LispSymbol sym -> new LispString(sym.isKeyword() ? sym.name().substring(1) : sym.name());
+				// Coercing a symbol yields its name; a keyword's ':' and a gensym's
+				// "#:" are markers, not part of the name, so (string :html) is "html"
+				// (matches CL, and is what cl-who's maybe-downcase relies on to emit
+				// <html> not <:html>). Same spelling as symbol-name.
+				case LispSymbol sym -> new LispString(sym.display());
 				case LispChar c -> new LispString(new String(Character.toChars(c.codePoint())));
 				case LispTrue ignored -> new LispString("t");
 				case LispNil ignored -> new LispString("nil");
@@ -2217,7 +2290,9 @@ public final class Environment implements Scope {
 	private static String stringDesignator(String name, LispVal val) {
 		return switch (val) {
 			case LispString str -> str.value();
-			case LispSymbol sym -> sym.isKeyword() ? sym.name().substring(1) : sym.name();
+			// The symbol-name spelling: a keyword's ':' and a gensym's "#:" are
+			// package markers, not part of the name.
+			case LispSymbol sym -> sym.display();
 			case LispChar c -> new String(Character.toChars(c.codePoint()));
 			default -> throw new LispEvalException(name + " expects a string designator, got: " + val.print());
 		};
@@ -2989,6 +3064,25 @@ public final class Environment implements Scope {
 	private static void registerCharacters(Environment env) {
 		env.defineFunction(LispNames.CHAR, new LispFunction(LispNames.CHAR, args -> charRef(LispNames.CHAR, args)));
 		env.defineFunction(LispNames.SCHAR, new LispFunction(LispNames.SCHAR, args -> charRef(LispNames.SCHAR, args)));
+		// %schar-set: the (setf (schar s i) c) lowering -- mutate in place, return c.
+		env.defineFunction(LispNames.SCHAR_SET, new LispFunction(LispNames.SCHAR_SET, args -> {
+			requireArgCount(LispNames.SCHAR_SET, args, 3);
+			if (!(args.get(0) instanceof LispString str)) {
+				throw new LispEvalException(LispNames.SCHAR_SET + " expects a string, got " + args.get(0).print());
+			}
+			int index = requireIndex(LispNames.SCHAR_SET, args.get(1));
+			if (index < 0 || index >= str.length()) {
+				throw new LispEvalException(LispNames.SCHAR_SET + ": index " + index
+						+ " out of bounds for string of length " + str.length());
+			}
+			LispChar c = requireChar(LispNames.SCHAR_SET, args.get(2));
+			if (!Character.isBmpCodePoint(c.codePoint())) {
+				throw new LispEvalException(
+						LispNames.SCHAR_SET + " cannot store a supplementary character: " + c.print());
+			}
+			str.setCharAt(index, (char) c.codePoint());
+			return c;
+		}));
 		env.defineFunction(LispNames.CHAR_CODE, new LispFunction(LispNames.CHAR_CODE, args -> {
 			requireArgCount(LispNames.CHAR_CODE, args, 1);
 			return new LispInteger(requireChar(LispNames.CHAR_CODE, args.get(0)).codePoint());

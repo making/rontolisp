@@ -239,6 +239,32 @@ everywhere except `--no-gc`.
   + JVM. The re-signal always uses `socket-error` (subtypes defined but not
   auto-selected).
 
+## cerror + signal-operator function values (todo-085, cl-base64)
+
+`cerror` exists as a lite lowering: `(cerror continue-format datum args...)` ->
+`(error datum args...)` (`LispMacroExpander.expandCerror`; no restarts, so the error is
+not continuable and the continue format control is dropped). Dispatched in the evaluator
+and both compilers like `error`; in `PackageRegistry.CL_MACROS` (pinned list-macros
+updated).
+
+`error`/`signal`/`warn` (and `cerror`) also have FUNCTION values, because cl-base64
+signals via `(apply #'error (list 'bad-base64-character :input ...))`:
+
+- **Interpreter**: `LispEvaluator.registerEval` defines real functions that rebuild the
+  literal call from the evaluated arguments (`rebuildSignalForm`: self-evaluating values
+  stay literal, symbols/conses are quoted) and re-enter `eval` -- identical semantics to
+  the lowered form, typed conditions with slots included. `resolveFunction` now checks
+  the function namespace BEFORE the macro/special-operator guard so these resolve.
+- **Compiled backends**: `BuiltinFunctionWrappers.SIGNAL_FUNCTIONS` wrappers, injected
+  ONLY when the program contains a literal `(function op)` reference
+  (`referencesFunctionValue` gate in `JvmLispCompiler`) so every other program stays
+  byte-identical. LITE: the wrapper forwards the datum only -- a symbol datum signals a
+  plain condition naming the class (the new symbol case in
+  `LispMacroExpander.expandObjectSignal`), still caught by a `handler-case` `error`
+  clause, but initargs/slots are dropped. Both compiled backends inject through
+  `BuiltinFunctionWrappers.generate` (`JvmLispCompiler` + `WasmLispCompiler`), with the
+  same `(function op)` gate in each.
+
 ## Pinned lists and tests
 
 Adding operators changes `rontolisp:list-special-forms` (`unwind-protect`) and

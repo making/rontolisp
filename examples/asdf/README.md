@@ -5,7 +5,7 @@ upstream sources -- through `asdf:load-system` and exercise their public API.
 All run identically on all four backends (interpreter, JVM, WASM Preview 1
 and `--component`); they are the programs the cross-backend E2E tests pin
 (`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest` /
-`ClWhoE2eTest` / `AssocUtilsE2eTest`).
+`ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest`).
 
 | Demo | Library | Upstream |
 | --- | --- | --- |
@@ -14,6 +14,7 @@ and `--component`); they are the programs the cross-backend E2E tests pin
 | [`cl-utilities-demo.lisp`](cl-utilities-demo.lisp) | cl-utilities v1.2.4 (public domain) | <https://common-lisp.net/project/cl-utilities/> |
 | [`cl-who-demo.lisp`](cl-who-demo.lisp) | cl-who v1.1.5 (BSD 2-Clause) | <https://github.com/edicl/cl-who> |
 | [`assoc-utils-demo.lisp`](assoc-utils-demo.lisp) | assoc-utils (public domain) | <https://github.com/fukamachi/assoc-utils> |
+| [`cl-base64-demo.lisp`](cl-base64-demo.lisp) | cl-base64 v3.4 (BSD-style) | <https://github.com/darabi/cl-base64> |
 
 ## Where the libraries come from
 
@@ -25,6 +26,7 @@ the demos run out of the box from the repository root:
 - `src/test/resources/cl-utilities/`
 - `src/test/resources/cl-who/`
 - `src/test/resources/assoc-utils/`
+- `src/test/resources/cl-base64/`
 
 Alternatively, download the same versions from upstream and point
 `--system-path` (or the `RONTOLISP_SOURCE_REGISTRY` environment variable) at

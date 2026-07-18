@@ -3898,7 +3898,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf signal slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string with-slots)");
+				"(and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* locally loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf signal slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
 	}
 
 	@Test
@@ -5861,10 +5861,10 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void symbolNameReturnsTheStoredNameVerbatim() {
+	void symbolNameStripsThePackageMarker() {
 		assertThat(evalMulti("(symbol-name 'foo)").print()).isEqualTo("\"foo\"");
-		assertThat(evalMulti("(symbol-name :bar)").print()).isEqualTo("\":bar\"");
-		assertThat(evalMulti("(symbol-name (gensym))").print()).isEqualTo("\"#:g1\"");
+		assertThat(evalMulti("(symbol-name :bar)").print()).isEqualTo("\"bar\"");
+		assertThat(evalMulti("(symbol-name (gensym))").print()).isEqualTo("\"g1\"");
 		assertThat(evalMulti("(symbol-name t)").print()).isEqualTo("\"t\"");
 		assertThat(evalMulti("(symbol-name nil)").print()).isEqualTo("\"nil\"");
 	}

@@ -57,6 +57,7 @@ public final class LispMacroExpander {
 			case LispNames.PROG2 -> expandProg2(cons);
 			case LispNames.PSETQ -> expandPsetq(cons);
 			case LispNames.ERROR -> expandError(cons);
+			case LispNames.CERROR -> expandCerror(cons, EMPTY_CLOS_REGISTRY);
 			case LispNames.SIGNAL -> expandSignalMacro(cons);
 			case LispNames.TIME -> expandTime(cons);
 			case LispNames.LOOP -> expandLoop(cons);
@@ -67,6 +68,8 @@ public final class LispMacroExpander {
 			case LispNames.PROCLAIM -> expandProclaim(cons);
 			case LispNames.THE -> expandThe(cons);
 			case LispNames.EVAL_WHEN -> expandEvalWhen(cons);
+			case LispNames.WRITE_CHAR -> expandWriteChar(cons);
+			case LispNames.LOCALLY -> expandLocally(cons);
 			case LispNames.FLET -> expandFlet(cons);
 			case LispNames.LABELS -> expandLabels(cons);
 			case LispNames.MULTIPLE_VALUE_BIND -> expandMultipleValueBind(cons);
@@ -2713,6 +2716,11 @@ public final class LispMacroExpander {
 				case LispNames.FILL_POINTER ->
 					// (setf (fill-pointer vector) val) -> (%set-fill-pointer vector val).
 					listToCons(List.of(new LispSymbol(LispNames.SET_FILL_POINTER), placeParts.get(1), value));
+				case LispNames.SCHAR, LispNames.CHAR ->
+					// (setf (schar s i) c) / (setf (char s i) c) -> (%schar-set s i c):
+					// in-place string mutation returning the stored character.
+					listToCons(
+							List.of(new LispSymbol(LispNames.SCHAR_SET), placeParts.get(1), placeParts.get(2), value));
 				case LispNames.SLOT_VALUE -> {
 					// (setf (slot-value obj 'slot) val) -> (setf (nth <position> obj)
 					// val): the position comes from the CLOS class registry.
@@ -5593,6 +5601,10 @@ public final class LispMacroExpander {
 					case ":documentation" -> {
 						// Accepted and dropped (docstrings are not stored anywhere).
 					}
+					case ":type" -> {
+						// Accepted and dropped: type declarations are no-ops everywhere
+						// (declare/the), so a slot :type is too.
+					}
 					default -> throw new UnsupportedOperationException(LispNames.DEFCLASS + " slot option "
 							+ keySym.name() + " is not supported: " + spec.print());
 				}
@@ -7944,6 +7956,26 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (cerror continue-format-control datum args...)} to the equivalent
+	 * {@code (error datum args...)}: there is no restart machinery, so the error is not
+	 * continuable and the continue format control is dropped (lite semantics).
+	 * @param cons the cerror expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCerror(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(
+					LispNames.CERROR + " expects a continue format control and a datum: " + cons.print());
+		}
+		List<LispVal> errorParts = new java.util.ArrayList<>();
+		errorParts.add(new LispSymbol(LispNames.ERROR));
+		errorParts.addAll(parts.subList(2, parts.size()));
+		return expandError((LispCons) listToCons(errorParts), closRegistry);
+	}
+
+	/**
 	 * Expands {@code (warn datum args...)} with the same designator surface as
 	 * {@link #expandError}, delegating to {@code (%warn message)} which writes
 	 * {@code WARNING: message} to standard error and returns nil. Nothing can handle or
@@ -8250,8 +8282,26 @@ public final class LispMacroExpander {
 			stringCase = listToCons(List.of(new LispSymbol(LispNames.ERROR_INTERNAL), condVar));
 			conditionCase = listToCons(List.of(new LispSymbol(LispNames.ERROR_COND_INTERNAL), condVar, message));
 		}
-		return makeLet(SIGNAL_COND_VAR, datumExpr,
-				makeIf(callOf(LispNames.STRINGP, condVar), stringCase, conditionCase));
+		// A runtime SYMBOL datum (the compiled #'error/#'signal/#'warn wrappers forward
+		// the datum only) signals its name as a plain message rather than casting the
+		// symbol as a condition instance.
+		LispVal symbolMessage = callOf(LispNames.PRINC_TO_STRING, condVar);
+		LispVal symbolCase;
+		if (warn) {
+			symbolCase = listToCons(List.of(new LispSymbol(internalName), listToCons(
+					List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), symbolMessage))));
+		}
+		else if (LispNames.SIGNAL_COND_INTERNAL.equals(internalName)) {
+			LispVal instance = listToCons(List.of(new LispSymbol(LispNames.LIST),
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-simple-condition"))),
+					symbolMessage, LispNil.INSTANCE));
+			symbolCase = listToCons(List.of(new LispSymbol(internalName), instance, symbolMessage));
+		}
+		else {
+			symbolCase = listToCons(List.of(new LispSymbol(LispNames.ERROR_INTERNAL), symbolMessage));
+		}
+		return makeLet(SIGNAL_COND_VAR, datumExpr, makeIf(callOf(LispNames.STRINGP, condVar), stringCase,
+				makeIf(callOf(LispNames.SYMBOLP, condVar), symbolCase, conditionCase)));
 	}
 
 	/**
@@ -10150,6 +10200,183 @@ public final class LispMacroExpander {
 	 * @param cons the eval-when expression
 	 * @return the expanded expression
 	 */
+	/**
+	 * Lowers {@code (make-array dims ... :initial-contents list)} for the compiled
+	 * backends to the equivalent allocation plus an element-wise fill: the inner
+	 * {@code make-array} keeps every other keyword, and the contents list is walked with
+	 * {@code %aset} (rank-1; a literal multi-dimension list is rejected -- the
+	 * interpreter fills nested contents natively). Returns {@code null} when the form has
+	 * no {@code :initial-contents}.
+	 * @param cons the make-array expression
+	 * @return the lowering, or null
+	 */
+	@org.jspecify.annotations.Nullable
+	public static LispVal lowerInitialContentsMakeArray(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal contents = null;
+		List<LispVal> inner = new java.util.ArrayList<>();
+		inner.add(new LispSymbol(LispNames.MAKE_ARRAY));
+		if (parts.size() >= 2) {
+			inner.add(parts.get(1));
+		}
+		for (int i = 2; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol kw && LispNames.INITIAL_CONTENTS_KEYWORD.equals(kw.name())) {
+				contents = parts.get(i + 1);
+			}
+			else {
+				inner.add(parts.get(i));
+				inner.add(parts.get(i + 1));
+			}
+		}
+		if (contents == null) {
+			return null;
+		}
+		if (parts.get(1) instanceof LispCons dims && dims.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && dims.cdr() instanceof LispCons dimList
+				&& dimList.car() instanceof LispCons literalDims && literalDims.cdr() instanceof LispCons) {
+			throw new UnsupportedOperationException(
+					"make-array :initial-contents supports rank-1 arrays only on the compiled backends");
+		}
+		LispSymbol arrVar = new LispSymbol("__mk_arr");
+		LispSymbol idxVar = new LispSymbol("__mk_i");
+		LispSymbol elemVar = new LispSymbol("__mk_x");
+		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.DOLIST), listToCons(List.of(elemVar, contents)),
+				listToCons(List.of(new LispSymbol(LispNames.ASET), arrVar, idxVar, elemVar)), listToCons(List
+					.of(new LispSymbol(LispNames.SETQ), idxVar, fmtCall(LispNames.ADD, idxVar, new LispInteger(1))))));
+		return makeLet(arrVar.name(), listToCons(inner),
+				makeLet(idxVar.name(), new LispInteger(0), makeProgn(List.of(fill, arrVar))));
+	}
+
+	/**
+	 * Lowers {@code (make-array n :element-type 'character [:initial-element c])} to the
+	 * equivalent {@code make-string} call for the compiled backends -- a rank-1 character
+	 * array IS a string in CL (the interpreter builds the string natively in
+	 * {@code make-array}). Returns {@code null} when the form is not that shape
+	 * (different element type, or a fill pointer / adjustability / displacement / initial
+	 * contents, which keep the general-array path).
+	 * @param cons the make-array expression
+	 * @return the make-string lowering, or null
+	 */
+	@org.jspecify.annotations.Nullable
+	public static LispVal lowerCharacterMakeArray(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			return null;
+		}
+		LispVal elementType = null;
+		LispVal initialElement = null;
+		for (int i = 2; i + 1 < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol kw)) {
+				return null;
+			}
+			switch (kw.name()) {
+				case LispNames.ELEMENT_TYPE_KEYWORD -> elementType = parts.get(i + 1);
+				case LispNames.INITIAL_ELEMENT_KEYWORD -> initialElement = parts.get(i + 1);
+				default -> {
+					return null;
+				}
+			}
+		}
+		LispVal sym = elementType;
+		if (sym instanceof LispCons quoteCons && quoteCons.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoteCons.cdr() instanceof LispCons rest
+				&& rest.cdr() instanceof LispNil) {
+			sym = rest.car();
+		}
+		if (!(sym instanceof LispSymbol typeSym)) {
+			return null;
+		}
+		String name = typeSym.name();
+		int colon = name.lastIndexOf(':');
+		String local = colon >= 0 ? name.substring(colon + 1) : name;
+		if (!local.equals("character") && !local.equals("base-char") && !local.equals("standard-char")) {
+			return null;
+		}
+		List<LispVal> makeString = new java.util.ArrayList<>(
+				List.of(new LispSymbol(LispNames.MAKE_STRING), parts.get(1)));
+		if (initialElement != null) {
+			makeString.add(new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD));
+			makeString.add(initialElement);
+		}
+		return listToCons(makeString);
+	}
+
+	/**
+	 * Expands {@code (write-char char [stream])} to {@code write-string} of the
+	 * one-character string, returning the character -- so every backend's existing
+	 * stream-aware string output covers it.
+	 * @param cons the write-char expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWriteChar(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			throw new IllegalArgumentException(LispNames.WRITE_CHAR + " expects a character and an optional stream");
+		}
+		LispSymbol chVar = new LispSymbol("__write_char");
+		List<LispVal> write = new java.util.ArrayList<>(
+				List.of(new LispSymbol(LispNames.WRITE_STRING), fmtCall(LispNames.STRING, chVar)));
+		if (parts.size() == 3) {
+			write.add(parts.get(2));
+		}
+		return makeLet(chVar.name(), parts.get(1), makeProgn(List.of(listToCons(write), chVar)));
+	}
+
+	/**
+	 * Rewrites {@code (%schar-set var index char)} for the compiled backends, which have
+	 * no in-place string mutation: the string is rebuilt with the character replaced and
+	 * {@code setq}-bound back to the variable, and the stored character is the value.
+	 * Lite semantics: the string place must be a variable (any other expression has
+	 * nowhere to store the rebuilt string), and the update is visible through that
+	 * variable only -- an alias made before the write still sees the old content (the
+	 * interpreter mutates in place).
+	 * @param cons the %schar-set call
+	 * @return the expanded expression
+	 */
+	public static LispVal expandScharSetFunctional(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 4) {
+			throw new IllegalArgumentException(LispNames.SCHAR_SET + " expects a string, an index and a character");
+		}
+		if (!(parts.get(1) instanceof LispSymbol var)) {
+			throw new UnsupportedOperationException("setf on " + LispNames.SCHAR + "/" + LispNames.CHAR
+					+ " requires a variable string place on the compiled backends, got " + parts.get(1).print());
+		}
+		LispSymbol idxVar = new LispSymbol("__schar_i");
+		LispSymbol chVar = new LispSymbol("__schar_c");
+		LispVal head = fmtCall(LispNames.SUBSEQ, var, new LispInteger(0), idxVar);
+		LispVal mid = fmtCall(LispNames.STRING, chVar);
+		LispVal tail = fmtCall(LispNames.SUBSEQ, var, fmtCall(LispNames.ADD, idxVar, new LispInteger(1)));
+		LispVal rebuilt = fmtCall(LispNames.STRING_CONCAT, fmtCall(LispNames.STRING_CONCAT, head, mid), tail);
+		LispVal assign = listToCons(List.of(new LispSymbol(LispNames.SETQ), var, rebuilt));
+		return makeLet(idxVar.name(), parts.get(2),
+				makeLet(chVar.name(), parts.get(3), makeProgn(List.of(assign, chVar))));
+	}
+
+	/**
+	 * Expands {@code (locally (declare ...) body...)} to {@code (progn body...)}:
+	 * declarations are parsed no-ops everywhere, so {@code locally} is {@code progn} with
+	 * its leading {@code declare} forms dropped.
+	 * @param cons the locally expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandLocally(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		int start = 1;
+		while (start < parts.size() && parts.get(start) instanceof LispCons declCons
+				&& declCons.car() instanceof LispSymbol op && LispNames.DECLARE.equals(op.name())) {
+			start++;
+		}
+		List<LispVal> body = parts.subList(start, parts.size());
+		if (body.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		if (body.size() == 1) {
+			return body.get(0);
+		}
+		return makeProgn(body);
+	}
+
 	public static LispVal expandEvalWhen(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
