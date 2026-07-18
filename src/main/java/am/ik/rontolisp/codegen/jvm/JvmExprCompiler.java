@@ -370,6 +370,12 @@ final class JvmExprCompiler {
 					throw new UnsupportedOperationException(
 							LispNames.PROGV + " is not supported on the JVM backend (interpreter only)");
 				case LispNames.PROGN -> JvmPrognCompiler.compile(cons, ctx, className);
+				case LispNames.TAGBODY -> JvmTagbodyCompiler.compile(cons, ctx, className);
+				case LispNames.GO -> JvmGoCompiler.compile(cons, ctx, className);
+				case LispNames.PROG ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, false), ctx, className);
+				case LispNames.PROG_STAR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, true), ctx, className);
 				case LispNames.SETQ -> JvmSetqCompiler.compile(cons, ctx, className);
 				case LispNames.LAMBDA -> JvmLambdaCompiler.compileValue(cons, ctx, className);
 				case LispNames.DEFUN ->
@@ -792,6 +798,10 @@ final class JvmExprCompiler {
 					.compileExpr(LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx, className);
 				case LispNames.ETYPECASE -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx, className);
+				case LispNames.TYPEP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandTypep(cons, ctx.closRegistry), ctx, className);
+				case LispNames.SUBTYPEP -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandSubtypep(cons, ctx.closRegistry), ctx, className);
 				case LispNames.CHECK_TYPE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCheckType(cons), ctx, className);
 				case LispNames.ASSERT ->
@@ -826,6 +836,10 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueSetq(cons), ctx, className);
 				case LispNames.ROTATEF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRotatef(cons), ctx, className);
+				case LispNames.SHIFTF ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandShiftf(cons), ctx, className);
+				case LispNames.LOAD_TIME_VALUE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandLoadTimeValue(cons), ctx, className);
 				case LispNames.BYTE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandByte(cons), ctx, className);
 				case LispNames.BYTE_SIZE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandByteSize(cons), ctx, className);

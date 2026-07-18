@@ -2077,6 +2077,22 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
+	 * An active {@code tagbody} during compilation. {@code labelPositions} maps each
+	 * label already emitted to its code position (a {@code go} to it is a backward jump
+	 * patched immediately); {@code pendingGos} holds, per label, the {@code goto}
+	 * positions of forward {@code go}s awaiting the label (its key set is the tagbody's
+	 * full label set, registered up front so {@code JvmGoCompiler} can resolve the
+	 * innermost tagbody declaring a tag). {@code entryStack} is the operand stack at
+	 * tagbody entry -- every label is reached with exactly that shape ({@code go}
+	 * discards anything above it); {@code unwindDepth}/{@code spillDepth} are the
+	 * scope-stack sizes at entry, so a {@code go} can tell which
+	 * {@code unwind-protect}/{@code handler-case} scopes it escapes.
+	 */
+	record TagbodyScope(List<OperandStack.Slot> entryStack, int unwindDepth, int spillDepth,
+			java.util.Map<String, Integer> labelPositions, java.util.Map<String, List<Integer>> pendingGos) {
+	}
+
+	/**
 	 * The shared condition-channel state of one compilation: the constants of the
 	 * {@code private static ThreadLocal _condTl} field that carries a condition object (a
 	 * tagged-list instance) from a {@code %error-cond} throw site to a
@@ -2445,6 +2461,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * inline before jumping (see {@link JvmReturnCompiler}).
 		 */
 		final Deque<UnwindScope> unwindScopes = new ArrayDeque<>();
+
+		/**
+		 * Stack of active {@code tagbody} label scopes, innermost on top. A {@code go}
+		 * resolves its tag against these lexically -- the compilers do not support the
+		 * interpreter's dynamic {@code go} across function boundaries.
+		 */
+		final Deque<TagbodyScope> tagbodyScopes = new ArrayDeque<>();
 
 		/**
 		 * Stack of active {@code handler-case} operand-stack spills, innermost on top.

@@ -984,72 +984,12 @@ public final class LispEvaluator {
 	 * form just before it is evaluated, so a marker sees all preceding definitions of the
 	 * same file.
 	 */
-	/** The immediate supertypes of each built-in type name ({@code subtypep} lattice). */
-	private static final java.util.Map<String, List<String>> TYPE_PARENTS = java.util.Map.ofEntries(
-			java.util.Map.entry("fixnum", List.of("integer")), java.util.Map.entry("bignum", List.of("integer")),
-			java.util.Map.entry("bit", List.of("integer")), java.util.Map.entry("unsigned-byte", List.of("integer")),
-			java.util.Map.entry("signed-byte", List.of("integer")), java.util.Map.entry("integer", List.of("rational")),
-			java.util.Map.entry("ratio", List.of("rational")), java.util.Map.entry("rational", List.of("real")),
-			java.util.Map.entry("float", List.of("real")), java.util.Map.entry("real", List.of("number")),
-			java.util.Map.entry("keyword", List.of("symbol")), java.util.Map.entry("boolean", List.of("symbol")),
-			java.util.Map.entry("null", List.of("symbol", "list")), java.util.Map.entry("cons", List.of("list")),
-			java.util.Map.entry("list", List.of("sequence")), java.util.Map.entry("string", List.of("vector")),
-			java.util.Map.entry("vector", List.of("array", "sequence")));
-
-	/** Collapses the type-name aliases the one runtime representation makes equal. */
-	private static String canonicalTypeName(String plain) {
-		return switch (plain) {
-			case "single-float", "double-float", "short-float", "long-float" -> "float";
-			case "base-char", "standard-char", "extended-char" -> "character";
-			case "simple-string", "base-string", "simple-base-string" -> "string";
-			case "simple-vector" -> "vector";
-			case "simple-array" -> "array";
-			default -> plain;
-		};
-	}
-
 	/**
-	 * Whether {@code sub} names a subtype of {@code super}: exact/alias equality, the
-	 * built-in lattice, or the CLOS class registry's ancestor sets. Unknown pairs answer
-	 * false (the lite single-value {@code subtypep}).
+	 * Whether {@code sub} names a subtype of {@code super} -- delegates to the shared
+	 * lattice + class-registry walk the compilers fold at compile time.
 	 */
 	private boolean subtypep(LispVal subV, LispVal superV) {
-		if (superV instanceof LispTrue) {
-			return true;
-		}
-		if (subV instanceof LispNil) {
-			return true;
-		}
-		if (!(subV instanceof LispSymbol subSym) || !(superV instanceof LispSymbol superSym)) {
-			return false;
-		}
-		String sub = canonicalTypeName(plainName(subSym.name()));
-		String sup = canonicalTypeName(plainName(superSym.name()));
-		if ("t".equals(sup) || sub.equals(sup)) {
-			return true;
-		}
-		ClosRegistry.ClassInfo subClass = this.closRegistry.findClass(subSym.name());
-		if (subClass != null) {
-			ClosRegistry.ClassInfo superClass = this.closRegistry.findClass(superSym.name());
-			if (superClass != null) {
-				return subClass.ancestors().contains(ClosRegistry.normalize(superClass.name()));
-			}
-			return "standard-object".equals(sup);
-		}
-		// Walk the built-in lattice upward from sub.
-		java.util.ArrayDeque<String> queue = new java.util.ArrayDeque<>();
-		queue.add(sub);
-		java.util.Set<String> seen = new java.util.HashSet<>();
-		while (!queue.isEmpty()) {
-			String current = queue.poll();
-			if (current.equals(sup)) {
-				return true;
-			}
-			if (seen.add(current)) {
-				queue.addAll(TYPE_PARENTS.getOrDefault(current, List.of()));
-			}
-		}
-		return false;
+		return LispMacroExpander.subtypep(subV, superV, this.closRegistry);
 	}
 
 	/** The package-stripped member name of a possibly qualified symbol name. */
@@ -1111,7 +1051,8 @@ public final class LispEvaluator {
 	 * Evaluates {@code (tagbody {tag | form}...)}: symbols and integers are go-tag
 	 * labels, everything else evaluates in order for effect. A {@code (go tag)} thrown
 	 * anywhere inside (dynamically) resumes at that label; falling off the end returns
-	 * nil. Interpreter-only for now -- the compilers reject {@code tagbody}/{@code go}.
+	 * nil. The compilers support the lexical subset only: a compiled {@code go} must
+	 * target a lexically enclosing tagbody in the same function.
 	 */
 	private LispVal evalTagbody(LispCons cons, Environment env) {
 		List<LispVal> body = cons.toList().subList(1, cons.toList().size());

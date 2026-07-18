@@ -236,7 +236,7 @@ page.
 | `vector-push` | `(vector-push x v)` | Store `x` at the fill pointer and return the index, or `nil` when full |
 | `vector-pop` | `(vector-pop v)` | Decrement the fill pointer and return the element it passed |
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | Like `vector-push` but grows the vector when full |
-| `subtypep` | `(subtypep 'integer 'number)` | `t` -- the built-in type lattice plus `defclass`/condition hierarchies; a single value, unknown pairs answer `nil` (interpreter only for now) |
+| `subtypep` | `(subtypep 'integer 'number)` | `t` -- the built-in type lattice plus `defclass`/condition hierarchies; a single value, unknown pairs answer `nil`; the compilers fold literal specifiers at compile time |
 | `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- the `ldb` field left in its original position (interpreter only for now) |
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- `float × 2^n` with IEEE semantics (interpreter only for now) |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters (interpreter only for now) |

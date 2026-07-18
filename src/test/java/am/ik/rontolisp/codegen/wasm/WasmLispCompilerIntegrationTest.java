@@ -4357,6 +4357,53 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void shiftfAndLoadTimeValue() throws Exception {
+		assertThat(compileAndRun("(let ((x 1) (y 2) (z 3)) (print (shiftf x y z 4)) (print (list x y z)))"
+				+ " (let ((c (cons 1 2))) (print (shiftf (car c) 9)) (print c))"
+				+ " (print (+ (load-time-value (* 2 3)) 4))" + " (print (load-time-value 7 t))"))
+			.isEqualTo("1\n(2 3 4)\n1\n(9 . 2)\n10\n7");
+	}
+
+	@Test
+	void typepAndSubtypep() throws Exception {
+		assertThat(compileAndRun("(print (typep 1 'integer))" + " (print (typep \"s\" 'string))"
+				+ " (print (typep 1 'string))" + " (print (typep 1.5 'number))" + " (print (typep nil 'null))"
+				+ " (defclass pt () ((x :initarg :x))) (print (typep (make-instance 'pt :x 1) 'pt))"
+				+ " (print (typep 1 'pt))" + " (print (subtypep 'cons 'list))" + " (print (subtypep 'integer 'number))"
+				+ " (print (subtypep 'string 'number))" + " (print (subtypep 'single-float 'float))"
+				+ " (defclass base () ()) (defclass derived (base) ()) (print (subtypep 'derived 'base))"))
+			.isEqualTo("t\nt\nnil\nt\nt\nt\nnil\nt\nt\nnil\nt\nt");
+	}
+
+	@Test
+	void setfValuesAndSetfThroughTheAndSymbolp() throws Exception {
+		assertThat(compileAndRun("(let ((a 0) (b 0)) (setf (values a b) (values 1 2)) (print (list a b)))"
+				+ " (let ((x 0)) (setf (the integer x) 5) (print x))"
+				+ " (print (list (symbolp nil) (symbolp t) (symbolp 'foo) (symbolp \"s\") (symbolp 1)))"))
+			.isEqualTo("(1 2)\n5\n(t t t nil nil)");
+	}
+
+	@Test
+	void tagbodyGoAndProg() throws Exception {
+		assertThat(compileAndRun("(let ((i 0)) (tagbody top (setq i (+ i 1)) (if (< i 3) (go top))) (print i))"
+				+ " (tagbody (print 1) (go skip) (print 2) skip (print 3))"
+				+ " (let ((n 0) (acc nil)) (tagbody loop (setq n (+ n 1)) (push n acc)"
+				+ " (if (< n 4) (go loop)) done) (print acc))" + " (let ((x 0)) (tagbody outer (setq x (+ x 10))"
+				+ " (tagbody (if (> x 10) (go end)) (go outer)) end) (print x))" + " (print (tagbody (print 1)))"
+				+ " (let ((i 0)) (tagbody top (setq i (+ i 1)) (print (+ 100 (if (< i 3) (go top) i)))))"
+				+ " (print (prog ((i 0)) top (setq i (+ i 1)) (if (< i 3) (go top)) (return i)))"
+				+ " (print (prog* ((x 2) (y (* x 3))) (return (+ x y))))" + " (print (prog ((x 1)) (print x)))"))
+			.isEqualTo("3\n1\n3\n(4 3 2 1)\n20\n1\nnil\n103\n3\n8\n1\nnil");
+	}
+
+	@Test
+	void goEscapesUnwindProtect() throws Exception {
+		assertThat(compileAndRunEh("(let ((i 0)) (tagbody top (setq i (+ i 1))"
+				+ " (unwind-protect (if (< i 3) (go top)) (print (list :cleanup i)))) (print i))"))
+			.isEqualTo("(:cleanup 1)\n(:cleanup 2)\n(:cleanup 3)\n3");
+	}
+
+	@Test
 	void destructuringBindForms() throws Exception {
 		assertThat(compileAndRun("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (print (+ a b c d)))"
 				+ " (destructuring-bind (a &optional (b 10) c) '(1) (print (list a b c)))"

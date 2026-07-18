@@ -56,11 +56,11 @@
 | `slot-value` | `(slot-value object 'slot-name)` | [`defclass`](special-forms/defclass.md) インスタンスのスロットを読み取ります。`setf` 可能な place です。スロット名はリテラルのクォートされたシンボルでなければなりません |
 | `with-slots` | `(with-slots (x (v y)) instance body...)` | スロット名を本体のシンボルマクロ的な場所として束縛します。読み取りはスロットを参照し、束縛名への `setf`/`push`/`incf` はスロットへ書き戻されます |
 | `rontolisp:with-arena` | `(rontolisp:with-arena () body...)` | ボディを実行してその値を返し、非 GC WASM バックエンド(`--no-gc`)のメモリ再利用境界を名付けます。内部で確保されたものは終端でポップされ、ボディの値だけが残ります。他のバックエンドでは実際の GC が回収するため、単なる `progn` です |
-| `prog` | `(prog ((v init)...) tag-or-form...)` | ブロック内の `let` + `tagbody`: `go` が本体のタグ間をジャンプし、`(return x)` が `x` を返して抜けます(現時点ではインタープリタのみ) |
-| `prog*` | `(prog* ((v init)...) tag-or-form...)` | `prog` と同様で束縛が逐次的(`let*` 方式)(現時点ではインタープリタのみ) |
-| `shiftf` | `(shiftf a b 9)` | 場所の値を左へシフトし、最後の場所に新しい値を格納し、最初の場所の古い値を返します(現時点ではインタープリタのみ) |
-| `load-time-value` | `(load-time-value form)` | lite 版: `form` に展開されるため、ロード時一度ではなく使用のたびに再評価されます(現時点ではインタープリタのみ) |
-| `typep` | `(typep x '(unsigned-byte 8))` | `typecase` の指定子集合に対する型判定。指定子はリテラル(クオートされた)型に限られます(現時点ではインタープリタのみ) |
+| `prog` | `(prog ((v init)...) tag-or-form...)` | ブロック内の `let` + `tagbody`: `go` が本体のタグ間をジャンプし、`(return x)` が `x` を返して抜けます |
+| `prog*` | `(prog* ((v init)...) tag-or-form...)` | `prog` と同様で束縛が逐次的(`let*` 方式) |
+| `shiftf` | `(shiftf a b 9)` | 場所の値を左へシフトし、最後の場所に新しい値を格納し、最初の場所の古い値を返します |
+| `load-time-value` | `(load-time-value form)` | lite 版: `form` に展開されるため、ロード時一度ではなく使用のたびに再評価されます |
+| `typep` | `(typep x '(unsigned-byte 8))` | `typecase` の指定子集合に対する型判定。指定子はリテラル(クオートされた)型に限られます |
 | `slot-boundp` | `(slot-boundp obj 'slot)` | インスタンスのクラスが定義するすべてのスロットに `t`(lite: スロットは常に初期化され unbound 状態なし)(現時点ではインタープリタのみ) |
 | `slot-makunbound` | `(slot-makunbound obj 'slot)` | lite 版: スロットに nil を格納し、インスタンスを返します(現時点ではインタープリタのみ) |
 

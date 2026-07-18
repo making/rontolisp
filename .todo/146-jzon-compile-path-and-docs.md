@@ -16,7 +16,32 @@ need it -- wire those to BOTH compiled backends, and for jzon itself
 consider a wasm-GC mode where float parse/print take a degraded path (or a
 clear error) while integer/string/structure JSON works.
 
-## Compile-path gaps (in rough dependency order)
+## DONE 2026-07-18 (compile path, both JVM + WASM, tests + docs swept)
+
+- `shiftf`, `load-time-value`, `typep` (`expandTypep(cons, ctx.closRegistry)`),
+  `(setf (values ...))` + setf-through-`the` (were already inherited via the
+  SETF dispatch -- now pinned by tests), `prog`/`prog*`.
+- `tagbody`/`go`: LEXICAL subset on the compilers (same-function, lexically
+  enclosing tagbody; the interpreter keeps dynamic `go`). JVM =
+  `JvmTagbodyCompiler`/`JvmGoCompiler` (goto + patch; labels are
+  `OperandStack.joinShape` join points at the entry stack shape; go mirrors
+  `return`'s escaped-cleanup/spill unwind incl. hole recording). WASM =
+  `WasmTagbodyCompiler` (dispatch loop + `br_table` over segment blocks,
+  i31-boxed pc; go inlines escaped unwind-protect cleanups -- lite: a throw
+  from such an inlined cleanup can re-enter its own handler, unlike the
+  trampolined return path; `tagbody` containing `await` = compile error).
+- `subtypep`: shared `LispMacroExpander.subtypep` (lattice moved out of
+  `LispEvaluator`, which now delegates); compilers constant-fold literal
+  (quoted) specifiers via `expandSubtypep`, non-literal = compile error.
+- `(symbolp nil)`/`(symbolp t)` = t on JVM + WASM (nil branch added to both
+  symbolp emitters; t was already a plain string).
+- ci-spec `jzon-residue-features` case appended (interpreter-verified;
+  native E2E: see below).
+- Docs: interpreter-only notes removed/replaced on the en+ja pages + curated
+  table rows for tagbody/go/prog/prog*/shiftf/load-time-value/typep/subtypep;
+  CLAUDE.md invariants updated. DocExamplesTest green.
+
+## Remaining compile-path gaps (in rough dependency order)
 
 - `#.` read-time eval: the marker read
   (`LispReader.readAllWithReadEvalMarkers`) + substitution walk live in
@@ -25,19 +50,11 @@ clear error) while integer/string/structure JSON works.
   form. The backquote-split marker also relies on the `%read-eval` identity
   function (Environment) -- the compilers need an equivalent (a 1-arg
   identity emit).
-- `tagbody`/`go`/`prog`/`prog*`: interpreter-only special forms
-  (`GoSignal` + `evalTagbody`). JVM = real jumps (OperandStack model
-  interplay for `go` in argument position); WASM = block/br or a state
-  machine.
 - Multi-parameter method dispatch + variadic generic lambda lists +
   defgeneric `(:method ...)` clauses: `LispMacroExpander` work is
   backend-free (expansions), so the compilers mostly inherit it, BUT
   `expandTopLevelDefinitions` inline-method splicing and the `apply`-based
   variadic dispatcher forwarding need corpus coverage on JVM/WASM.
-- `typep`/`subtypep`: `typep` expands statically (backend-free);
-  `subtypep` is an evaluator-registered function -- compilers reject it.
-  Needs a compile-time constant fold (both args quoted) + runtime fallback
-  decision.
 - New Environment built-ins absent from the compilers: `mask-field`,
   `scale-float`, `%ieee754-*` (JVM: Double.doubleToRawLongBits etc.; WASM:
   i64.reinterpret_f64 -- but bits > i31 need the WASM bignum story, see
@@ -52,9 +69,6 @@ clear error) while integer/string/structure JSON works.
 - `with-slots` write-through substitution + let-fallback: expansion is
   backend-free; verify on JVM (the let fallback relies on nothing
   interpreter-specific).
-- `(setf (values ...))`, `shiftf`, `load-time-value`, setf-through-`the`:
-  backend-free expansions; wire the evalCons-equivalent cases into
-  `Jvm/WasmExprCompiler.compileCons` and add unit tests.
 - Gray streams: `GrayStreamsLibrary` (rontolisp's own protocol) needs a
   compile-path pre-pass (the usocket `process()` pattern) + the
   write-string instance dispatch in the compiled runtimes.
@@ -65,9 +79,6 @@ clear error) while integer/string/structure JSON works.
   read time (`Features.substituteFeaturesVar()`); a program compiled from a
   file whose lambda list binds `*features*` will still break there --
   acceptable (document) or fix like the interpreter.
-- `(symbolp nil)`/`(symbolp t)` now t on the interpreter (CL semantics,
-  matches the doc prose); the COMPILED backends still answer nil --
-  cross-backend divergence to align (JVM/WASM symbolp emitters).
 - `case`/`ecase` package-qualified key vs quoted data: `makeCaseEq` now
   emits a both-spellings test (backend-free expansion, so compiled output
   changed shape); run the native ci-spec E2E to confirm no output shift.

@@ -513,6 +513,10 @@ final class WasmExprCompiler {
 				case LispNames.IGNORE_ERRORS ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandIgnoreErrors(cons), ctx);
 				case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx);
+				case LispNames.TAGBODY -> WasmTagbodyCompiler.compile(cons, ctx);
+				case LispNames.GO -> WasmTagbodyCompiler.compileGo(cons, ctx);
+				case LispNames.PROG -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, false), ctx);
+				case LispNames.PROG_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, true), ctx);
 				case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);
 				case LispNames.LAMBDA -> WasmLambdaCompiler.compileValue(cons, ctx);
 				case LispNames.DEFUN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDefun(cons), ctx);
@@ -844,6 +848,10 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx);
 				case LispNames.ETYPECASE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx);
+				case LispNames.TYPEP ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandTypep(cons, ctx.closRegistry), ctx);
+				case LispNames.SUBTYPEP ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSubtypep(cons, ctx.closRegistry), ctx);
 				case LispNames.CHECK_TYPE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCheckType(cons), ctx);
 				case LispNames.ASSERT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAssert(cons), ctx);
 				case LispNames.DECLARE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeclare(cons), ctx);
@@ -866,6 +874,9 @@ final class WasmExprCompiler {
 				case LispNames.MULTIPLE_VALUE_SETQ ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueSetq(cons), ctx);
 				case LispNames.ROTATEF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRotatef(cons), ctx);
+				case LispNames.SHIFTF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandShiftf(cons), ctx);
+				case LispNames.LOAD_TIME_VALUE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandLoadTimeValue(cons), ctx);
 				case LispNames.BYTE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandByte(cons), ctx);
 				case LispNames.BYTE_SIZE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandByteSize(cons), ctx);
 				case LispNames.BYTE_POSITION ->

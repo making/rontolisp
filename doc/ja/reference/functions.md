@@ -233,7 +233,7 @@
 | `vector-push` | `(vector-push x v)` | フィルポインタの位置に `x` を格納しインデックスを返す。満杯なら `nil` |
 | `vector-pop` | `(vector-pop v)` | フィルポインタをデクリメントし、通過した要素を返す |
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | `vector-push` と同様だが満杯時にベクタを拡張する |
-| `subtypep` | `(subtypep 'integer 'number)` | `t` -- 組み込み型の束と `defclass`/コンディション階層に対して判定。主値のみで、未知の組は `nil`(現時点ではインタープリタのみ) |
+| `subtypep` | `(subtypep 'integer 'number)` | `t` -- 組み込み型の束と `defclass`/コンディション階層に対して判定。主値のみで、未知の組は `nil`。コンパイラはリテラル指定子をコンパイル時に畳み込みます |
 | `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- `ldb` のフィールドを元の位置のまま返します(現時点ではインタープリタのみ) |
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- IEEE の意味論で `float × 2^n`(現時点ではインタープリタのみ) |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil`(現時点ではインタープリタのみ) |

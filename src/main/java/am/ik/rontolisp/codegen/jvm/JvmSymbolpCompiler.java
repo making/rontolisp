@@ -20,6 +20,12 @@ final class JvmSymbolpCompiler {
 		int tempSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(tempSlot);
+		// nil (and t, a plain string) are symbols in CL.
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		int ifNullPos = ctx.code.size();
+		ctx.emit(Opcode.IFNULL);
+		ctx.emitU2(0);
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(tempSlot);
 		ctx.emit(Opcode.INSTANCEOF);
@@ -38,6 +44,7 @@ final class JvmSymbolpCompiler {
 		int ifQuotePos = ctx.code.size();
 		ctx.emit(Opcode.IF_ICMPEQ);
 		ctx.emitU2(0);
+		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
 		JvmEmitHelper.compileTrue(ctx);
 		int gotoEndPos = ctx.code.size();
 		ctx.emit(Opcode.GOTO);

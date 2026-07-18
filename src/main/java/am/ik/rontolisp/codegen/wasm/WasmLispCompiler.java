@@ -3631,6 +3631,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		final Deque<Integer> blockMarkers = new ArrayDeque<>();
 
 		/**
+		 * Stack of active {@code tagbody} label scopes, innermost on top. A {@code go}
+		 * resolves its tag against these lexically -- the compilers do not support the
+		 * interpreter's dynamic {@code go} across function boundaries.
+		 */
+		final Deque<WasmTagbodyCompiler.TagbodyScope> tagbodyScopes = new ArrayDeque<>();
+
+		/**
 		 * The {@code TYPE_FUTURE} type index, or -1 outside asyncMode.
 		 */
 		int futureTypeIndex = -1;

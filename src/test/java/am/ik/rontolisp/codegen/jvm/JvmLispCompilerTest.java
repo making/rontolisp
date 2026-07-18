@@ -3385,6 +3385,95 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunShiftf() throws Exception {
+		assertThat(compileAndRun("(let ((x 1) (y 2) (z 3)) (print (shiftf x y z 4)) (print (list x y z)))"))
+			.isEqualTo("1\n(2 3 4)");
+		assertThat(compileAndRun("(let ((c (cons 1 2))) (print (shiftf (car c) 9)) (print c))"))
+			.isEqualTo("1\n(9 . 2)");
+	}
+
+	@Test
+	void compileAndRunLoadTimeValue() throws Exception {
+		assertThat(compileAndRun("(print (+ (load-time-value (* 2 3)) 4))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (load-time-value 7 t))")).isEqualTo("7");
+	}
+
+	@Test
+	void compileAndRunTypep() throws Exception {
+		assertThat(compileAndRun("(print (typep 1 'integer))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (typep \"s\" 'string))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (typep 1 'string))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (typep 1.5 'number))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (typep nil 'null))")).isEqualTo("t");
+		assertThat(compileAndRun(
+				"(defclass pt () ((x :initarg :x))) (print (typep (make-instance 'pt :x 1) 'pt)) (print (typep 1 'pt))"))
+			.isEqualTo("t\nnil");
+	}
+
+	@Test
+	void compileAndRunSubtypep() throws Exception {
+		assertThat(compileAndRun("(print (subtypep 'cons 'list))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (subtypep 'integer 'number))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (subtypep 'string 'number))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (subtypep 'single-float 'float))")).isEqualTo("t");
+		assertThat(
+				compileAndRun("(defclass base () ()) (defclass derived (base) ()) (print (subtypep 'derived 'base))"))
+			.isEqualTo("t");
+	}
+
+	@Test
+	void compileAndRunSetfValuesAndSetfThroughThe() throws Exception {
+		assertThat(compileAndRun("(let ((a 0) (b 0)) (setf (values a b) (values 1 2)) (print (list a b)))"))
+			.isEqualTo("(1 2)");
+		assertThat(compileAndRun("(let ((x 0)) (setf (the integer x) 5) (print x))")).isEqualTo("5");
+	}
+
+	@Test
+	void compileAndRunSymbolpNilAndT() throws Exception {
+		assertThat(compileAndRun("(print (list (symbolp nil) (symbolp t) (symbolp 'foo) (symbolp \"s\") (symbolp 1)))"))
+			.isEqualTo("(t t t nil nil)");
+	}
+
+	@Test
+	void compileAndRunTagbodyGo() throws Exception {
+		// Backward go: a plain counting loop.
+		assertThat(compileAndRun("(let ((i 0)) (tagbody top (setq i (+ i 1)) (if (< i 3) (go top))) (print i))"))
+			.isEqualTo("3");
+		// Forward go skips a form.
+		assertThat(compileAndRun("(tagbody (print 1) (go skip) (print 2) skip (print 3))")).isEqualTo("1\n3");
+		// go from a nested if arm, plus fall-through over a label.
+		assertThat(compileAndRun("(let ((n 0) (acc nil)) (tagbody loop (setq n (+ n 1)) (push n acc)"
+				+ " (if (< n 4) (go loop)) done) (print acc))"))
+			.isEqualTo("(4 3 2 1)");
+		// Nested tagbody: the inner go resolves innermost-first, the outer tag is
+		// reachable from the inner body.
+		assertThat(compileAndRun("(let ((x 0)) (tagbody outer (setq x (+ x 10))"
+				+ " (tagbody (if (> x 10) (go end)) (go outer)) end) (print x))"))
+			.isEqualTo("20");
+		// tagbody value is nil.
+		assertThat(compileAndRun("(print (tagbody (print 1)))")).isEqualTo("1\nnil");
+		// go in an argument position abandons the outer call.
+		assertThat(
+				compileAndRun("(let ((i 0)) (tagbody top (setq i (+ i 1)) (print (+ 100 (if (< i 3) (go top) i)))))"))
+			.isEqualTo("103");
+	}
+
+	@Test
+	void compileAndRunProgAndProgStar() throws Exception {
+		assertThat(compileAndRun("(print (prog ((i 0)) top (setq i (+ i 1)) (if (< i 3) (go top)) (return i)))"))
+			.isEqualTo("3");
+		assertThat(compileAndRun("(print (prog* ((x 2) (y (* x 3))) (return (+ x y))))")).isEqualTo("8");
+		assertThat(compileAndRun("(print (prog ((x 1)) (print x)))")).isEqualTo("1\nnil");
+	}
+
+	@Test
+	void compileAndRunGoEscapesUnwindProtect() throws Exception {
+		assertThat(compileAndRun("(let ((i 0)) (tagbody top (setq i (+ i 1))"
+				+ " (unwind-protect (if (< i 3) (go top)) (print (list :cleanup i)))) (print i))"))
+			.isEqualTo("(:cleanup 1)\n(:cleanup 2)\n(:cleanup 3)\n3");
+	}
+
+	@Test
 	void compileAndRunDestructuringBind() throws Exception {
 		assertThat(compileAndRun("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (print (+ a b c d)))")).isEqualTo("10");
 		assertThat(compileAndRun("(destructuring-bind (a &optional (b 10) c) '(1) (print (list a b c)))"))

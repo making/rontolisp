@@ -224,6 +224,27 @@ public final class OperandStack {
 		}
 	}
 
+	/**
+	 * Marks the position about to be emitted as a join point the code generator knows is
+	 * reached with the given operand-stack shape -- a label targeted by branches that may
+	 * be emitted before or after this point (a backward jump's target has no recorded
+	 * branch shape for {@link #reconcile} to establish). When the position is also
+	 * reachable by fall-through, the two shapes must agree.
+	 * @param shape the operand-stack shape every path reaches this position with
+	 * @throws IllegalStateException when the fall-through shape disagrees -- a
+	 * code-generator bug that would produce a class the verifier rejects
+	 */
+	public void joinShape(List<Slot> shape) {
+		if (this.reachable && !this.stack.equals(shape)) {
+			throw new IllegalStateException(
+					"operand stack mismatch at join point: fall-through " + this.stack + " vs declared " + shape);
+		}
+		this.stack.clear();
+		this.stack.addAll(shape);
+		this.reachable = true;
+		this.record();
+	}
+
 	private void apply() {
 		int op = this.opcode;
 		if (!this.reachable) {

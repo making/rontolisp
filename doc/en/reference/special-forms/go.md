@@ -4,7 +4,7 @@
 
 Transfers control to the given go tag of the (dynamically) enclosing [`tagbody`](tagbody.md); the forms after the jump point continue executing. It is an error when no enclosing `tagbody` has the tag.
 
-Supported on the **interpreter only** for now; the JVM and WASM compilers do not support it yet.
+On the JVM and WASM compilers `go` is lexical: it must target a tag of a lexically enclosing `tagbody` in the same function (the interpreter additionally supports dynamic `go` across function boundaries).
 
 ```lisp
 (let ((acc nil))

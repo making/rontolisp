@@ -4,8 +4,6 @@
 
 [`let`](../special-forms/let.md) と同様に変数を束縛し、本体をブロック内の [`tagbody`](../special-forms/tagbody.md) として実行します。[`go`](../special-forms/go.md) が本体のタグ間をジャンプし、`(return value)` が `value` を返して `prog` を抜けます。末尾に到達すると nil を返します。
 
-現時点では**インタープリタのみ**でサポートされます。JVM / WASM コンパイラは未対応です。
-
 ```lisp
 (prog ((n 5) (acc 1))
  top

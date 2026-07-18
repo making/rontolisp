@@ -11855,6 +11855,113 @@ public final class LispMacroExpander {
 		return makeLet(temp.name(), parts.get(1), makeIf(test, LispTrue.INSTANCE, LispNil.INSTANCE));
 	}
 
+	/** The immediate supertypes of each built-in type name ({@code subtypep} lattice). */
+	private static final java.util.Map<String, List<String>> SUBTYPEP_PARENTS = java.util.Map.ofEntries(
+			java.util.Map.entry("fixnum", List.of("integer")), java.util.Map.entry("bignum", List.of("integer")),
+			java.util.Map.entry("bit", List.of("integer")), java.util.Map.entry("unsigned-byte", List.of("integer")),
+			java.util.Map.entry("signed-byte", List.of("integer")), java.util.Map.entry("integer", List.of("rational")),
+			java.util.Map.entry("ratio", List.of("rational")), java.util.Map.entry("rational", List.of("real")),
+			java.util.Map.entry("float", List.of("real")), java.util.Map.entry("real", List.of("number")),
+			java.util.Map.entry("keyword", List.of("symbol")), java.util.Map.entry("boolean", List.of("symbol")),
+			java.util.Map.entry("null", List.of("symbol", "list")), java.util.Map.entry("cons", List.of("list")),
+			java.util.Map.entry("list", List.of("sequence")), java.util.Map.entry("string", List.of("vector")),
+			java.util.Map.entry("vector", List.of("array", "sequence")));
+
+	/** Collapses the type-name aliases the one runtime representation makes equal. */
+	private static String canonicalSubtypeName(String plain) {
+		return switch (plain) {
+			case "single-float", "double-float", "short-float", "long-float" -> "float";
+			case "base-char", "standard-char", "extended-char" -> "character";
+			case "simple-string", "base-string", "simple-base-string" -> "string";
+			case "simple-vector" -> "vector";
+			case "simple-array" -> "array";
+			default -> plain;
+		};
+	}
+
+	/**
+	 * Whether {@code sub} names a subtype of {@code super}: exact/alias equality, the
+	 * built-in lattice, or the CLOS class registry's ancestor sets. Unknown pairs answer
+	 * false (the lite single-value {@code subtypep}).
+	 * @param subV the sub type designator (a symbol, {@code t} or {@code nil})
+	 * @param superV the super type designator
+	 * @param closRegistry the class registry for class-name type specifiers
+	 * @return whether {@code sub} is a subtype of {@code super}
+	 */
+	public static boolean subtypep(LispVal subV, LispVal superV, ClosRegistry closRegistry) {
+		if (superV instanceof LispTrue) {
+			return true;
+		}
+		if (subV instanceof LispNil) {
+			return true;
+		}
+		if (!(subV instanceof LispSymbol subSym) || !(superV instanceof LispSymbol superSym)) {
+			return false;
+		}
+		String sub = canonicalSubtypeName(plainTypeName(subSym));
+		String sup = canonicalSubtypeName(plainTypeName(superSym));
+		if ("t".equals(sup) || sub.equals(sup)) {
+			return true;
+		}
+		ClosRegistry.ClassInfo subClass = closRegistry.findClass(subSym.name());
+		if (subClass != null) {
+			ClosRegistry.ClassInfo superClass = closRegistry.findClass(superSym.name());
+			if (superClass != null) {
+				return subClass.ancestors().contains(ClosRegistry.normalize(superClass.name()));
+			}
+			return "standard-object".equals(sup);
+		}
+		// Walk the built-in lattice upward from sub.
+		java.util.ArrayDeque<String> queue = new java.util.ArrayDeque<>();
+		queue.add(sub);
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		while (!queue.isEmpty()) {
+			String current = queue.poll();
+			if (current.equals(sup)) {
+				return true;
+			}
+			if (seen.add(current)) {
+				queue.addAll(SUBTYPEP_PARENTS.getOrDefault(current, List.of()));
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Expands {@code (subtypep 'sub 'super)} into its constant answer through the shared
+	 * lattice + class registry -- the compile-time fold of the evaluator's registered
+	 * function. Lite: both type specifiers must be literal (quoted symbols, keywords,
+	 * {@code t} or {@code nil}); a non-literal specifier is rejected at expansion time.
+	 * @param cons the subtypep expression
+	 * @param closRegistry the class registry for class-name type specifiers
+	 * @return {@code t} or {@code nil}
+	 */
+	public static LispVal expandSubtypep(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException(LispNames.SUBTYPEP + " expects two type specifiers");
+		}
+		LispVal sub = literalTypeSpecifier(parts.get(1), cons);
+		LispVal sup = literalTypeSpecifier(parts.get(2), cons);
+		return subtypep(sub, sup, closRegistry) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+	}
+
+	/** The literal type specifier an argument form denotes, or rejects the form. */
+	private static LispVal literalTypeSpecifier(LispVal arg, LispCons cons) {
+		if (arg instanceof LispCons quoted && quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quoted.cdr() instanceof LispCons rest) {
+			return rest.car();
+		}
+		if (arg instanceof LispSymbol sym && sym.name().startsWith(":")) {
+			return arg;
+		}
+		if (arg instanceof LispTrue || arg instanceof LispNil) {
+			return arg;
+		}
+		throw new UnsupportedOperationException(
+				LispNames.SUBTYPEP + " supports literal (quoted) type specifiers only: " + cons.print());
+	}
+
 	/**
 	 * Expands {@code (prog bindings tag-or-form...)} into {@code (%block (let bindings
 	 * (tagbody ...)))} -- the CL block-nil + let + tagbody sandwich, so {@code (return
