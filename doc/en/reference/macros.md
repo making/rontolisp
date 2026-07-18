@@ -55,8 +55,15 @@ description and a runnable example you can evaluate in your browser.
 | `nth-value` | `(nth-value n values-form)` | The n-th (0-based) value of the producer, or nil; expands to `nth` over `multiple-value-list` |
 | `make-instance` | `(make-instance 'class-name :initarg value ...)` | Create an instance of a [`defclass`](special-forms/defclass.md) class (static CLOS subset). The class name must be a literal quoted symbol |
 | `slot-value` | `(slot-value object 'slot-name)` | Read a slot of a [`defclass`](special-forms/defclass.md) instance; a `setf`-able place. The slot name must be a literal quoted symbol |
-| `with-slots` | `(with-slots (x (v y)) instance body...)` | Bind variables to the slot values of an instance for the body (read-only lite: plain `let` bindings over `slot-value`, no write-back) |
+| `with-slots` | `(with-slots (x (v y)) instance body...)` | Bind slot names as symbol-macro-style places for the body: reads see the slots, and `setf`/`push`/`incf` of a bound name writes back to the slot |
 | `rontolisp:with-arena` | `(rontolisp:with-arena () body...)` | Run the body and return its value, naming a memory-reclamation boundary for the non-GC WASM backend (`--no-gc`): everything allocated inside is popped at the end, keeping only the body's value. A plain `progn` on the other backends (a real GC already reclaims) |
+| `prog` | `(prog ((v init)...) tag-or-form...)` | `let` + `tagbody` inside a block: `go` jumps between the body's tags and `(return x)` exits with `x` (interpreter only for now) |
+| `prog*` | `(prog* ((v init)...) tag-or-form...)` | Like `prog` with sequential (`let*`-style) bindings (interpreter only for now) |
+| `shiftf` | `(shiftf a b 9)` | Shift place values left, store the last value into the last place, return the first place's old value (interpreter only for now) |
+| `load-time-value` | `(load-time-value form)` | Lite: expands to `form`, so it re-evaluates at each use instead of once at load time (interpreter only for now) |
+| `typep` | `(typep x '(unsigned-byte 8))` | Type test over the `typecase` specifier set; the specifier must be a literal (quoted) type (interpreter only for now) |
+| `slot-boundp` | `(slot-boundp obj 'slot)` | `t` for every slot the instance's class defines (lite: slots are always initialized, no unbound state) (interpreter only for now) |
+| `slot-makunbound` | `(slot-makunbound obj 'slot)` | Lite: stores nil into the slot and returns the instance (interpreter only for now) |
 
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
 accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,

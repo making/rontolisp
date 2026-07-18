@@ -1,0 +1,14 @@
+# slot-makunbound
+
+`(slot-makunbound instance 'slot-name)`
+
+lite 版: スロットに nil を格納し (rontolisp に独立した unbound 状態はありません)、インスタンスを返します。
+
+現時点では**インタープリタのみ**でサポートされます。JVM / WASM コンパイラは未対応です。
+
+```lisp
+(defclass point () ((x :initarg :x)))
+(let ((p (make-instance 'point :x 1)))
+  (slot-makunbound p 'x)
+  (slot-value p 'x)) ; => nil
+```

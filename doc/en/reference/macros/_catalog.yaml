@@ -74,3 +74,10 @@ categories:
       - { slug: documentation, name: documentation }
       - { slug: rontolisp-with-arena, name: "rontolisp:with-arena" }
       - { slug: usocket-with-macros, name: "usocket:with-client-socket usocket:with-connected-socket usocket:with-server-socket usocket:with-socket-listener" }
+      - { slug: prog, name: prog }
+      - { slug: prog-star, name: "prog*" }
+      - { slug: shiftf, name: shiftf }
+      - { slug: load-time-value, name: load-time-value }
+      - { slug: typep, name: typep }
+      - { slug: slot-boundp, name: slot-boundp }
+      - { slug: slot-makunbound, name: slot-makunbound }

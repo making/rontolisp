@@ -25,7 +25,7 @@ public final class PackageRegistry {
 			LispNames.PROGN, LispNames.SETQ, LispNames.LAMBDA, LispNames.WHILE, LispNames.FUNCTION, LispNames.DEFUN,
 			LispNames.DEFMACRO, LispNames.DEFSTRUCT, LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFMETHOD,
 			LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT, LispNames.RETURN, LispNames.IN_PACKAGE,
-			LispNames.DEFPACKAGE, LispNames.PROGV, LispNames.UNWIND_PROTECT);
+			LispNames.DEFPACKAGE, LispNames.PROGV, LispNames.UNWIND_PROTECT, LispNames.TAGBODY, LispNames.GO);
 
 	/**
 	 * The {@code cl} macros: operators expanded by {@link LispMacroExpander} that have no
@@ -46,7 +46,9 @@ public final class PackageRegistry {
 			LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET,
 			LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN,
 			LispNames.SIGNAL, LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE,
-			LispNames.WITH_SLOTS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.WRITE_CHAR);
+			LispNames.WITH_SLOTS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.WRITE_CHAR, LispNames.PROG,
+			LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP,
+			LispNames.SLOT_MAKUNBOUND);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -104,10 +106,16 @@ public final class PackageRegistry {
 			LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ARRAY_ELEMENT_TYPE,
 			LispNames.ADJUST_ARRAY, LispNames.ARRAY_DISPLACEMENT, LispNames.STABLE_SORT, LispNames.COPY_SEQ,
 			LispNames.READ_CHAR, LispNames.VECTORP, LispNames.MAKE_STRING, LispNames.REPLACE, LispNames.LOWER_CASE_P,
-			LispNames.UPPER_CASE_P, LispNames.CONSTANTP, LispNames.STREAMP);
+			LispNames.UPPER_CASE_P, LispNames.CONSTANTP, LispNames.STREAMP, LispNames.MASK_FIELD, LispNames.SCALE_FLOAT,
+			LispNames.SUBTYPEP, LispNames.CHAR_NAME, LispNames.FDEFINITION, LispNames.FILE_POSITION,
+			LispNames.FILE_LENGTH, LispNames.MAKE_BROADCAST_STREAM, LispNames.PATHNAMEP, LispNames.INPUT_STREAM_P,
+			LispNames.OUTPUT_STREAM_P, LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF,
+			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS);
 
 	/** The {@code cl} variables. */
-	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT);
+	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
+			LispNames.ARRAY_DIMENSION_LIMIT, LispNames.PRINT_CIRCLE_VAR, LispNames.FEATURES_VAR,
+			LispNames.STANDARD_OUTPUT_VAR, LispNames.ERROR_OUTPUT_VAR);
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also
@@ -130,7 +138,8 @@ public final class PackageRegistry {
 			LispNames.ROW_MAJOR_ASET, LispNames.MAKE_STRING_OUTPUT_STREAM, LispNames.MAKE_STRING_INPUT_STREAM,
 			LispNames.STRING_STREAM_CONTENTS, LispNames.ARRAYP_INTERNAL, LispNames.MV_SPILL, LispNames.SET_FILL_POINTER,
 			LispNames.ARRAY_BECOME, LispNames.ARRAY_DISP_TARGET, LispNames.ARRAY_DISP_OFFSET, LispNames.WARN_INTERNAL,
-			LispNames.SCHAR_SET);
+			LispNames.SCHAR_SET, LispNames.IEEE754_DOUBLE_BITS, LispNames.IEEE754_DOUBLE_FROM_BITS,
+			LispNames.IEEE754_SINGLE_BITS, LispNames.IEEE754_SINGLE_FROM_BITS, LispNames.READ_EVAL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
@@ -247,7 +256,8 @@ public final class PackageRegistry {
 	 */
 	private static final Map<String, String> BUILTIN_NICKNAMES = Map.of("common-lisp", LispNames.CL_PKG,
 			"common-lisp-user", LispNames.CL_USER_PKG, "rl", LispNames.RONTOLISP_PKG, "la", LispNames.LINALG_PKG,
-			"quicklisp", LispNames.QL_PKG);
+			"quicklisp", LispNames.QL_PKG, "c2mop", LispNames.CLOSER_MOP_PKG, "c2cl", LispNames.CLOSER_MOP_PKG,
+			"float-features", LispNames.FLOAT_FEATURES_PKG);
 
 	/**
 	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
@@ -264,18 +274,23 @@ public final class PackageRegistry {
 		// symbols are reachable as cl-user::name, never cl-user:name.
 		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>(), Set.of()));
 		// Its canonical spelling is rontolisp; rl is a built-in nickname.
-		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(), new HashSet<>(Set.of(LispNames.VERSION,
-				LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS, LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH,
-				LispNames.AWAIT, LispNames.ASYNC, LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.FUTUREP,
-				LispNames.ASYNC_STREAMP, LispNames.MAKE_STREAM, LispNames.STREAM_READ, LispNames.STREAM_WRITE,
-				LispNames.STREAM_CLOSE, LispNames.READ_ALL, LispNames.WAIT_FOR, LispNames.JSON_PARSE,
-				LispNames.JSON_STRINGIFY, LispNames.URL_DECODE, LispNames.URL_ENCODE, LispNames.QUERY_PARAMS,
-				LispNames.QUERY_PARAM, LispNames.URL_PATH, LispNames.URL_QUERY, LispNames.WASM_EXPORT,
-				LispNames.WASM_IMPORT, LispNames.WIT_EXPORT, LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE,
-				LispNames.WIT_ERROR, LispNames.WIT_ERROR_PAYLOAD, LispNames.WITH_ARENA, LispNames.HTTP_HANDLER,
-				LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT,
-				LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT,
-				LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12))));
+		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.VERSION, LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
+						LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.AWAIT, LispNames.ASYNC,
+						LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.FUTUREP, LispNames.ASYNC_STREAMP,
+						LispNames.MAKE_STREAM, LispNames.STREAM_READ, LispNames.STREAM_WRITE, LispNames.STREAM_CLOSE,
+						LispNames.READ_ALL, LispNames.WAIT_FOR, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY,
+						LispNames.URL_DECODE, LispNames.URL_ENCODE, LispNames.QUERY_PARAMS, LispNames.QUERY_PARAM,
+						LispNames.URL_PATH, LispNames.URL_QUERY, LispNames.WASM_EXPORT, LispNames.WASM_IMPORT,
+						LispNames.WIT_EXPORT, LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE, LispNames.WIT_ERROR,
+						LispNames.WIT_ERROR_PAYLOAD, LispNames.WITH_ARENA, LispNames.HTTP_HANDLER,
+						LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT,
+						LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT,
+						LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12,
+						// rontolisp's own Gray-stream extension
+						// (eval.GrayStreamsLibrary).
+						LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
+						LispNames.GRAY_STREAM_WRITE_CHAR, LispNames.GRAY_STREAM_WRITE_STRING))));
 		// numpy-style vector/matrix operations, implemented once in linalg.lisp and
 		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
 		// is external. Its canonical spelling is linalg; la is a built-in nickname.
@@ -307,6 +322,28 @@ public final class PackageRegistry {
 		// spelling is ql; quicklisp is a built-in nickname. Does not use cl; the symbol
 		// is external.
 		define(new LispPackage(LispNames.QL_PKG, List.of(), new HashSet<>(Set.of(LispNames.QUICKLOAD))));
+		// A stub of ASDF's uiop utility package: real libraries name it in
+		// (:import-from #:uiop) clauses and call it on platform-only paths (e.g.
+		// uiop:native-namestring on a pathname branch). add-package-local-nickname is
+		// the one function with a real definition (LispEvaluator, lite: a GLOBAL
+		// nickname); the rest resolve but are undefined-function errors when called.
+		define(new LispPackage(LispNames.UIOP_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING, LispNames.GETENV,
+						LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME))));
+		// The dependency-shim packages behind the built-in ASDF systems of the same
+		// names (see eval.ShimLibraries): closer-mop (nicknames c2mop/c2cl),
+		// flexi-streams, org.shirakumo.float-features (nickname float-features) and
+		// trivial-gray-streams.
+		define(new LispPackage(LispNames.CLOSER_MOP_PKG, List.of(), new HashSet<>(Set.of(LispNames.CLASS_SLOTS,
+				LispNames.ENSURE_FINALIZED, LispNames.SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_TYPE))));
+		define(new LispPackage(LispNames.FLEXI_STREAMS_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.MAKE_FLEXI_STREAM))));
+		define(new LispPackage(LispNames.FLOAT_FEATURES_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.BITS_DOUBLE_FLOAT, LispNames.DOUBLE_FLOAT_BITS,
+						LispNames.SINGLE_FLOAT_BITS, LispNames.BITS_SINGLE_FLOAT))));
+		define(new LispPackage(LispNames.TRIVIAL_GRAY_STREAMS_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
+						LispNames.GRAY_STREAM_WRITE_CHAR, LispNames.GRAY_STREAM_WRITE_STRING))));
 	}
 
 	/**

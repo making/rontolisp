@@ -236,6 +236,21 @@ page.
 | `vector-push` | `(vector-push x v)` | Store `x` at the fill pointer and return the index, or `nil` when full |
 | `vector-pop` | `(vector-pop v)` | Decrement the fill pointer and return the element it passed |
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | Like `vector-push` but grows the vector when full |
+| `subtypep` | `(subtypep 'integer 'number)` | `t` -- the built-in type lattice plus `defclass`/condition hierarchies; a single value, unknown pairs answer `nil` (interpreter only for now) |
+| `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- the `ldb` field left in its original position (interpreter only for now) |
+| `scale-float` | `(scale-float 1.5 3)` | `12.0` -- `float × 2^n` with IEEE semantics (interpreter only for now) |
+| `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters (interpreter only for now) |
+| `fdefinition` | `(fdefinition 'car)` | the function value, like `symbol-function` (interpreter only for now) |
+| `file-position` | `(file-position s)` | always `nil` (lite: streams do not support repositioning; interpreter only for now) |
+| `file-length` | `(file-length s)` | always `nil` (lite; interpreter only for now) |
+| `make-broadcast-stream` | `(make-broadcast-stream)` | a discarding sink stream (no component streams; interpreter only for now) |
+| `pathnamep` | `(pathnamep "/tmp/x")` | always `nil` -- rontolisp has no pathname type (interpreter only for now) |
+| `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle (interpreter only for now) |
+| `output-stream-p` | `(output-stream-p s)` | `t` for any stream handle (interpreter only for now) |
+| `stream-element-type` | `(stream-element-type s)` | always `character` -- every stream is a character stream (interpreter only for now) |
+| `class-of` | `(class-of 42)` | `integer` -- a type/class NAME symbol, not a metaobject (interpreter only for now) |
+| `simple-condition-format-control` | `(simple-condition-format-control c)` | the condition's `:format-control` slot, or `nil` (interpreter only for now) |
+| `simple-condition-format-arguments` | `(simple-condition-format-arguments c)` | the condition's `:format-arguments` slot, or `nil` (interpreter only for now) |
 
 ## rontolisp Package Functions
 

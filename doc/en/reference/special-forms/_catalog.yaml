@@ -27,3 +27,5 @@ categories:
       - { slug: rontolisp-async-defun, name: "rontolisp:async-defun" }
       - { slug: rontolisp-async-lambda, name: "rontolisp:async-lambda" }
       - { slug: rontolisp-await, name: "rontolisp:await" }
+      - { slug: tagbody, name: tagbody }
+      - { slug: go, name: go }

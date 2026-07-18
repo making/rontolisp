@@ -539,8 +539,11 @@ class LispReaderTest {
 
 	@Test
 	void readFeaturesVariable() {
+		// The interpreter keeps *features* a symbol (a real global variable binds it;
+		// the substitution would corrupt binding positions); the compile backends
+		// substitute the quoted list so a compiled program's feature set is fixed.
 		LispVal result = LispReader.readFromString("*features*");
-		assertThat(result.print()).isEqualTo("(quote (:rontolisp :rontolisp-interpreter))");
+		assertThat(result.print()).isEqualTo("*features*");
 		List<LispVal> jvm = LispReader.readAllFromString("*features*", Features.JVM);
 		assertThat(jvm.get(0).print()).isEqualTo("(quote (:rontolisp :rontolisp-jvm))");
 	}

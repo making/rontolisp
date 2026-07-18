@@ -23,11 +23,29 @@ import org.jspecify.annotations.Nullable;
  */
 public final class LispLexer {
 
+	/** How a {@code #.} read-time-eval form is handled. */
+	public enum ReadEvalMode {
+
+		/** {@code #.} is a read error (the default). */
+		ERROR,
+		/**
+		 * The datum is wrapped in a {@code (%read-eval datum)} marker; an unreadable
+		 * datum is skipped with a warning ({@code .asd} files).
+		 */
+		SKIP_UNREADABLE,
+		/**
+		 * The datum is wrapped in a {@code (%read-eval datum)} marker; an unreadable
+		 * datum is a read error (source files, resolved by the evaluator).
+		 */
+		MARKER
+
+	}
+
 	private final String input;
 
 	private final Features features;
 
-	private final boolean tolerateReadEval;
+	private final ReadEvalMode readEvalMode;
 
 	private int pos;
 
@@ -47,9 +65,19 @@ public final class LispLexer {
 	 * of being an error (used for {@code .asd} files)
 	 */
 	public LispLexer(String input, Features features, boolean tolerateReadEval) {
+		this(input, features, tolerateReadEval ? ReadEvalMode.SKIP_UNREADABLE : ReadEvalMode.ERROR);
+	}
+
+	/**
+	 * Create a new lexer for the given input.
+	 * @param input the source code string
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @param readEvalMode how a {@code #.} read-time-eval form is handled
+	 */
+	public LispLexer(String input, Features features, ReadEvalMode readEvalMode) {
 		this.input = input;
 		this.features = features;
-		this.tolerateReadEval = tolerateReadEval;
+		this.readEvalMode = readEvalMode;
 		this.pos = 0;
 	}
 
@@ -108,20 +136,25 @@ public final class LispLexer {
 				readFeatureConditional();
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '.') {
-				if (!this.tolerateReadEval) {
+				if (this.readEvalMode == ReadEvalMode.ERROR) {
 					throw new LispReadException("#. read-time evaluation is not supported");
 				}
 				this.pos += 2;
 				int datumStart = this.pos;
 				skipDatum();
-				// Re-lex the skipped datum and wrap it in a (%read-eval datum) marker so
-				// the .asd consumer (AsdfSystems) can resolve it against the file's
-				// defparameter bindings (the (:file #.*string-file*) idiom). A datum
-				// using syntax the lexer does not support falls back to a nil
-				// placeholder, preserving the surrounding structure (a skipped #. inside
-				// a plist/alist must not shift the remaining key/value pairing).
+				// Re-lex the skipped datum and wrap it in a (%read-eval datum) marker for
+				// the consumer to resolve: AsdfSystems against a .asd file's defparameter
+				// bindings, the evaluator's load against the global environment. In
+				// SKIP_UNREADABLE mode a datum using syntax the lexer does not support
+				// falls back to a nil placeholder, preserving the surrounding structure
+				// (a skipped #. inside a plist/alist must not shift the remaining
+				// key/value pairing).
 				List<Token> datumTokens = tryTokenizeReadEvalDatum(this.input.substring(datumStart, this.pos));
 				if (datumTokens == null) {
+					if (this.readEvalMode == ReadEvalMode.MARKER) {
+						throw new LispReadException(
+								"#. datum could not be read: " + this.input.substring(datumStart, this.pos));
+					}
 					System.err.println("warning: skipping unsupported #. read-time-eval form");
 					tokens.add(new Token.SymbolToken("nil"));
 				}
@@ -181,6 +214,19 @@ public final class LispLexer {
 					tokens.add(new Token.ArrayOpen(rank));
 					this.pos = probe + 2;
 				}
+				else if (probe < this.input.length()
+						&& (this.input.charAt(probe) == '=' || this.input.charAt(probe) == '#')) {
+					// #n= labels the next datum, #n# references it.
+					int label;
+					try {
+						label = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+					}
+					catch (NumberFormatException overflow) {
+						throw new LispReadException("Invalid reader label: " + this.input.substring(this.pos, probe));
+					}
+					tokens.add(this.input.charAt(probe) == '=' ? new Token.LabelDef(label) : new Token.LabelRef(label));
+					this.pos = probe + 1;
+				}
 				else {
 					tokens.add(readSymbol());
 				}
@@ -204,6 +250,13 @@ public final class LispLexer {
 				tokens.add(readNumber());
 			}
 			else if (c == '-' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+				tokens.add(readNumber());
+			}
+			else if (c == '+' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+				// An explicitly positive number literal (+347): the sign is consumed and
+				// the digits parse as usual. A '+' followed by anything else (a symbol
+				// like +limit+ or the function +) stays a symbol.
+				this.pos++;
 				tokens.add(readNumber());
 			}
 			else {
@@ -575,7 +628,7 @@ public final class LispLexer {
 	// placeholder) or lexes to nothing (a fully #+/#- suppressed datum).
 	@Nullable private List<Token> tryTokenizeReadEvalDatum(String datum) {
 		try {
-			List<Token> datumTokens = new LispLexer(datum, this.features, this.tolerateReadEval).tokenize();
+			List<Token> datumTokens = new LispLexer(datum, this.features, this.readEvalMode).tokenize();
 			if (datumTokens.isEmpty() || !LispReader.parsesAsExpressions(datumTokens, this.features)) {
 				return null;
 			}

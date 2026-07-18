@@ -3898,13 +3898,13 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* locally loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf signal slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
+				"(and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog prog* prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
 	}
 
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
 		assertThat(eval("(rontolisp:list-special-forms)").print()).isEqualTo(
-				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq unwind-protect while)");
+				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function go if in-package lambda let progn progv quote return setq tagbody unwind-protect while)");
 	}
 
 	@Test
@@ -3938,7 +3938,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer")
 			.isSorted()
-			.hasSize(252);
+			.hasSize(267);
 	}
 
 	@Test
@@ -6382,10 +6382,28 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void defstructOptionsAreNotSupported() {
-		assertThatThrownBy(() -> eval("(defstruct (point (:conc-name pt-)) x y)"))
+	void defstructOptionsRenameAndSuppressGeneratedDefuns() {
+		assertThat(evalMulti("""
+				(defstruct (point (:constructor %mk-point) (:conc-name pt-) (:copier nil) (:predicate nil))
+				  (x 0 :type integer) y)
+				(let ((p (%mk-point :x 3 :y 4)))
+				  (list (pt-x p) (pt-y p) (fboundp 'point-p) (fboundp 'copy-point)))
+				""").print()).isEqualTo("(3 4 nil nil)");
+	}
+
+	@Test
+	void defstructConcNameNilUsesBareSlotNamesAsAccessors() {
+		assertThat(evalMulti("""
+				(defstruct (st (:constructor %make-st) (:conc-name nil)) (sst 'toplevel :type symbol))
+				(sst (%make-st))
+				""").print()).isEqualTo("toplevel");
+	}
+
+	@Test
+	void defstructIncludeIsNotSupported() {
+		assertThatThrownBy(() -> eval("(defstruct (point (:include base)) x y)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("defstruct options are not supported");
+			.hasMessageContaining("defstruct option is not supported");
 	}
 
 	@Test
@@ -6554,10 +6572,33 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void defmethodSpecializerOnLaterParameterIsNotSupported() {
-		assertThatThrownBy(() -> eval("(defmethod g (a (b integer)) b)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("specializer on the first parameter only");
+	void defmethodDispatchesOnALaterParameterSpecializer() {
+		assertThat(evalMulti("""
+				(defmethod g (a (b integer)) :int)
+				(defmethod g (a (b string)) :str)
+				(defmethod g (a b) :default)
+				(list (g 1 2) (g 1 "x") (g 1 'sym))
+				""").print()).isEqualTo("(:int :str :default)");
+	}
+
+	@Test
+	void defmethodOrdersMultiParameterSpecializersLeftmostFirst() {
+		// CL's method ordering: the leftmost parameter's specificity dominates.
+		assertThat(evalMulti("""
+				(defmethod h ((a integer) b) :int-any)
+				(defmethod h (a (b integer)) :any-int)
+				(h 1 2)
+				""").print()).isEqualTo(":int-any");
+	}
+
+	@Test
+	void defgenericInlineMethodsAndVariadicLambdaListDispatch() {
+		assertThat(evalMulti("""
+				(defgeneric wri (x &optional suffix)
+				  (:method ((x integer) &optional suffix) (list :int suffix))
+				  (:method ((x string) &optional (suffix :none)) (list :str suffix)))
+				(list (wri 1 'a) (wri "s"))
+				""").print()).isEqualTo("((:int a) (:str :none))");
 	}
 
 	@Test
@@ -7271,6 +7312,152 @@ class LispEvaluatorTest {
 				(handler-case (gl:create-shader 35633)
 				  (rontolisp:wit-error (e) (rontolisp:wit-error-payload e)))
 				""").print()).isEqualTo("\"local:webgl/gl\"");
+	}
+
+	@Test
+	void evaluatesTagbodyGoAndProg() {
+		assertThat(evalMulti("""
+				(prog ((n 5) (acc 1))
+				 top
+				  (when (<= n 1) (return acc))
+				  (setq acc (* acc n))
+				  (setq n (- n 1))
+				  (go top))
+				""").print()).isEqualTo("120");
+	}
+
+	@Test
+	void expandsShiftfReturningTheFirstPlacesOldValue() {
+		assertThat(evalMulti("""
+				(defvar *a* 1)
+				(defvar *b* 2)
+				(list (shiftf *a* *b* 9) *a* *b*)
+				""").print()).isEqualTo("(1 2 9)");
+	}
+
+	@Test
+	void typepTestsLiteralCompoundTypeSpecifiers() {
+		assertThat(
+				eval("(list (typep 5 '(unsigned-byte 8)) (typep 500 '(unsigned-byte 8)) (typep -1 'integer))").print())
+			.isEqualTo("(t nil t)");
+	}
+
+	@Test
+	void subtypepAnswersTheBuiltinLatticeAndConditionClasses() {
+		assertThat(eval("(list (subtypep 'integer 'number) (subtypep 'number 'integer)"
+				+ " (subtypep 'type-error 'error) (subtypep 'short-float 'single-float))")
+			.print()).isEqualTo("(t nil t t)");
+	}
+
+	@Test
+	void setfValuesAssignsEachPlaceFromTheProducer() {
+		assertThat(evalMulti("""
+				(defvar *x* nil)
+				(defvar *y* nil)
+				(setf (values *x* *y*) (floor 7 2))
+				(list *x* *y*)
+				""").print()).isEqualTo("(3 1)");
+	}
+
+	@Test
+	void withSlotsWritesThroughToTheSlot() {
+		assertThat(evalMulti("""
+				(defclass box () ((items :initform nil)))
+				(let ((b (make-instance 'box)))
+				  (with-slots (items) b
+				    (push 1 items)
+				    (push 2 items))
+				  (slot-value b 'items))
+				""").print()).isEqualTo("(2 1)");
+	}
+
+	@Test
+	void makeArrayCharacterWithFillPointerBuildsAGrowableString() {
+		assertThat(evalMulti("""
+				(let ((s (make-array 2 :element-type 'character :adjustable t :fill-pointer 0)))
+				  (vector-push-extend #\\a s)
+				  (vector-push-extend #\\b s)
+				  (vector-push-extend #\\c s)
+				  (list s (length s) (array-dimension s 0) (adjustable-array-p s) (array-has-fill-pointer-p s)))
+				""").print()).isEqualTo("(\"abc\" 3 4 t t)");
+	}
+
+	@Test
+	void setfOfATheWrappedPlaceIgnoresTheDeclaration() {
+		assertThat(evalMulti("""
+				(let ((cell (list 1 2)))
+				  (incf (the integer (car cell)))
+				  cell)
+				""").print()).isEqualTo("(2 2)");
+	}
+
+	@Test
+	void loadTimeValueEvaluatesItsForm() {
+		assertThat(eval("(load-time-value (+ 1 2))").print()).isEqualTo("3");
+	}
+
+	@Test
+	void ieee754BitsRoundTripDoublesAsUnsignedIntegers() {
+		assertThat(eval("(list (%ieee754-double-bits 1.0d0) (%ieee754-double-from-bits 4607182418800017408))").print())
+			.isEqualTo("(4607182418800017408 1.0)");
+		// The sign bit makes the unsigned bits a bignum beyond Long.MAX_VALUE.
+		assertThat(eval("(%ieee754-double-bits -2.0d0)").print()).isEqualTo("13835058055282163712");
+	}
+
+	@Test
+	void ecaseMatchesAPackageQualifiedClauseKeyAgainstQuotedData() {
+		assertThat(evalMulti("""
+				(defpackage #:casepkg (:use #:cl))
+				(in-package #:casepkg)
+				(ecase 'toplevel (toplevel :matched) (:other :no))
+				""").print()).isEqualTo(":matched");
+	}
+
+	@Test
+	void symbolpAnswersTrueForNilAndT() {
+		assertThat(eval("(list (symbolp nil) (symbolp t) (symbolp 'x) (symbolp \"s\"))").print())
+			.isEqualTo("(t t t nil)");
+	}
+
+	@Test
+	void uiopAddPackageLocalNicknameShortensAPackageName() {
+		assertThat(evalMulti("""
+				(defpackage #:com.example.deeply.nested (:use #:cl) (:export #:answer))
+				(in-package #:com.example.deeply.nested)
+				(defun answer () 42)
+				(in-package #:cl-user)
+				(uiop:add-package-local-nickname '#:nick '#:com.example.deeply.nested)
+				(nick:answer)
+				""").print()).isEqualTo("42");
+	}
+
+	@Test
+	void grayStreamInstanceReceivesWriteCharAndWriteString() {
+		assertThat(evalMulti("""
+				(asdf:load-system "trivial-gray-streams")
+				(defclass sink (trivial-gray-streams:fundamental-character-output-stream)
+				  ((buf :initform (make-array 0 :element-type 'character :adjustable t :fill-pointer 0))))
+				(defmethod trivial-gray-streams:stream-write-char ((stream sink) character)
+				  (vector-push-extend character (slot-value stream 'buf)))
+				(defmethod trivial-gray-streams:stream-write-string ((stream sink) string &optional start end)
+				  (let ((s (subseq string (or start 0) end)))
+				    (dotimes (i (length s)) (vector-push-extend (char s i) (slot-value stream 'buf)))))
+				(let ((sink (make-instance 'sink)))
+				  (write-string "he" sink)
+				  (write-char #\\y sink)
+				  (slot-value sink 'buf))
+				""").print()).isEqualTo("\"hey\"");
+	}
+
+	@Test
+	void loadResolvesReadTimeEvalAgainstEarlierTopLevelForms(@TempDir Path dir) throws Exception {
+		Path file = dir.resolve("rt.lisp");
+		Files.writeString(file, """
+				(defconstant +base+ 40)
+				(defvar *result* (list #.(+ 1 2) #.+base+ #.(char-code #\\0)))
+				""");
+		assertThat(evalMulti("(load \"" + file.toString().replace("\\", "\\\\") + "\") *result*").print())
+			.isEqualTo("(3 40 48)");
 	}
 
 	@Test

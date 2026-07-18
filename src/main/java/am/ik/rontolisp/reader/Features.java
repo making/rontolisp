@@ -21,18 +21,34 @@ import am.ik.rontolisp.LispVal;
 public final class Features {
 
 	/** The features active when interpreting (and in the REPL). */
-	public static final Features INTERPRETER = new Features(List.of("rontolisp", "rontolisp-interpreter"));
+	public static final Features INTERPRETER = new Features(List.of("rontolisp", "rontolisp-interpreter"), false);
 
 	/** The features active when compiling to JVM bytecode. */
-	public static final Features JVM = new Features(List.of("rontolisp", "rontolisp-jvm"));
+	public static final Features JVM = new Features(List.of("rontolisp", "rontolisp-jvm"), true);
 
 	/** The features active when compiling to WASM (Preview 1, component and no-gc). */
-	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm"));
+	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm"), true);
 
 	private final List<String> names;
 
-	private Features(List<String> names) {
+	private final boolean substituteFeaturesVar;
+
+	private Features(List<String> names, boolean substituteFeaturesVar) {
 		this.names = names;
+		this.substituteFeaturesVar = substituteFeaturesVar;
+	}
+
+	/**
+	 * Whether the reader substitutes the {@code *features*} symbol with the quoted
+	 * feature list. The compile backends do (a compiled program's feature set is fixed at
+	 * compile time); the interpreter does not -- it binds {@code *features*} as a global
+	 * variable instead, so the symbol survives in binding positions (a
+	 * {@code (&optional (*features* *features*))} rebinding idiom must not lose the
+	 * parameter name to the substitution).
+	 * @return {@code true} when the reader substitutes the symbol
+	 */
+	public boolean substituteFeaturesVar() {
+		return this.substituteFeaturesVar;
 	}
 
 	/**
@@ -41,7 +57,7 @@ public final class Features {
 	 * @return the feature set
 	 */
 	public static Features of(String... names) {
-		return new Features(List.of(names));
+		return new Features(List.of(names), true);
 	}
 
 	/**

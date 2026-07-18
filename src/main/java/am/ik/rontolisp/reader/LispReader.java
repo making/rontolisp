@@ -69,7 +69,7 @@ public final class LispReader {
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllFromString(String input, Features features) {
-		return readAll(input, features, false);
+		return readAll(input, features, LispLexer.ReadEvalMode.ERROR);
 	}
 
 	/**
@@ -81,11 +81,26 @@ public final class LispReader {
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllSkippingReadEval(String input, Features features) {
-		return readAll(input, features, true);
+		return readAll(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE);
 	}
 
-	private static List<LispVal> readAll(String input, Features features, boolean tolerateReadEval) {
-		List<Token> tokens = new LispLexer(input, features, tolerateReadEval).tokenize();
+	/**
+	 * Read all expressions from the input string, wrapping each {@code #.} read-time-eval
+	 * datum in a {@code (%read-eval datum)} marker instead of erroring. The consumer (the
+	 * evaluator's {@code load}) resolves each marker by evaluating the datum just before
+	 * the top-level form containing it is evaluated, so a marker sees the definitions of
+	 * every preceding top-level form -- CL's read-eval timing for a form-at-a-time load.
+	 * An unreadable datum is a read error.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllWithReadEvalMarkers(String input, Features features) {
+		return readAll(input, features, LispLexer.ReadEvalMode.MARKER);
+	}
+
+	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode) {
+		List<Token> tokens = new LispLexer(input, features, readEvalMode).tokenize();
 		LispReader reader = new LispReader(tokens, features);
 		List<LispVal> result = new ArrayList<>();
 		while (reader.pos < reader.tokens.size()) {
@@ -143,8 +158,26 @@ public final class LispReader {
 			case Token.RightParen ignored -> throw new LispReadException("Unexpected ')'");
 			case Token.Dot ignored -> throw new LispReadException("Unexpected '.'");
 			case Token.Eof ignored -> throw new LispReadException("Unexpected end of input");
+			case Token.LabelDef def -> {
+				// #n=: record the next datum under the label. Lite: no circular
+				// structures -- a #n# inside the labeled datum itself is unresolvable.
+				LispVal datum = readExpr();
+				this.labels.put(def.label(), datum);
+				yield datum;
+			}
+			case Token.LabelRef ref -> {
+				LispVal datum = this.labels.get(ref.label());
+				if (datum == null) {
+					throw new LispReadException(
+							"#" + ref.label() + "# references an undefined (or circular) reader label");
+				}
+				yield datum;
+			}
 		};
 	}
+
+	/** The datums recorded by {@code #n=} reader labels, shared across the read. */
+	private final java.util.Map<Integer, LispVal> labels = new java.util.HashMap<>();
 
 	private static LispVal readRatio(Token.RatioToken ratio) {
 		if (ratio.denominator().signum() == 0) {
@@ -177,10 +210,12 @@ public final class LispReader {
 					: (wasm ? -(1L << 30) : Long.MIN_VALUE);
 			return new LispInteger(value);
 		}
-		if (LispNames.FEATURES_VAR.equals(name)) {
+		if (LispNames.FEATURES_VAR.equals(name) && this.features.substituteFeaturesVar()) {
 			// The active feature list, substituted at read time like pi: a quoted
-			// list of keywords, so all three backends get parity for free. The list
-			// is fixed at read time -- (setq *features* ...) is not supported.
+			// list of keywords, so a compiled program's feature set is fixed at compile
+			// time -- (setq *features* ...) is not supported there. The interpreter
+			// skips the substitution and binds *features* as a global variable instead
+			// (see Features.substituteFeaturesVar).
 			LispVal list = LispNil.INSTANCE;
 			List<String> names = this.features.names();
 			for (int i = names.size() - 1; i >= 0; i--) {
@@ -443,6 +478,14 @@ public final class LispReader {
 			}
 			case Token.Backquote ignored -> throw new LispReadException("Nested backquote is not supported");
 			case Token.LeftParen ignored -> {
+				// A (%read-eval datum) marker (the #. wrapping in marker read mode) must
+				// not be split into template list-construction code: keep it whole as a
+				// call, so instantiating the template evaluates the datum -- read-time
+				// evaluation deferred to macro-expansion time.
+				if (this.pos + 1 < this.tokens.size() && this.tokens.get(this.pos + 1) instanceof Token.SymbolToken sym
+						&& LispNames.READ_EVAL.equals(sym.name())) {
+					yield new TemplateElement(readExpr(), false);
+				}
 				this.pos++;
 				yield new TemplateElement(readTemplateList(), false);
 			}

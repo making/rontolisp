@@ -47,6 +47,24 @@ public sealed interface Token {
 	}
 
 	/**
+	 * Reader-label definition ({@code #n=}) token: the next datum is recorded under the
+	 * label. Lite: forward/circular references are not supported.
+	 *
+	 * @param label the label number
+	 */
+	record LabelDef(int label) implements Token {
+	}
+
+	/**
+	 * Reader-label reference ({@code #n#}) token: stands for the datum recorded by the
+	 * matching {@link LabelDef}.
+	 *
+	 * @param label the label number
+	 */
+	record LabelRef(int label) implements Token {
+	}
+
+	/**
 	 * Packed float-array literal open token: {@code #f(} for the single-float width
 	 * ({@code single}) and {@code #d(} for the double-float width; closed by the
 	 * {@link RightParen} matching the opening parenthesis. The rank is inferred from the

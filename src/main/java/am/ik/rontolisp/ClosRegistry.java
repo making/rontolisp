@@ -103,7 +103,7 @@ public final class ClosRegistry {
 	public record ClassInfo(String name, @Nullable String superclass, List<SlotSpec> slots, Set<String> ancestors) {
 	}
 
-	/** The kind of the (first-parameter) specializer of a method. */
+	/** The kind of one parameter specializer of a method. */
 	public enum SpecializerKind {
 
 		/** No specializer (or {@code t}): the default method. */
@@ -118,19 +118,42 @@ public final class ClosRegistry {
 	}
 
 	/**
-	 * One method of a generic function.
+	 * The specializer of one required parameter of a method.
 	 *
 	 * @param kind the specializer kind
 	 * @param eqlValue the literal compared against for {@link SpecializerKind#EQL}
-	 * @param specializerName the normalized class/type name for CLASS/TYPE
+	 * @param name the normalized class/type name for CLASS/TYPE
+	 */
+	public record Specializer(SpecializerKind kind, @Nullable LispVal eqlValue, @Nullable String name) {
+
+		/** The unspecialized ({@code t}) parameter specializer. */
+		public static final Specializer DEFAULT = new Specializer(SpecializerKind.DEFAULT, null, null);
+
+		/**
+		 * The canonical key text of this specializer (used to build the method key).
+		 * @return the key text
+		 */
+		public String keyText() {
+			return switch (this.kind) {
+				case DEFAULT -> "t";
+				case EQL -> "eql " + java.util.Objects.requireNonNull(this.eqlValue).print();
+				case CLASS -> "class " + this.name;
+				case TYPE -> "type " + this.name;
+			};
+		}
+	}
+
+	/**
+	 * One method of a generic function.
+	 *
+	 * @param specializers one specializer per required parameter (in parameter order)
 	 * @param functionName the name of the generated method-body defun
 	 * @param qualifier the method qualifier ({@code ""} for a primary method, or
 	 * {@code ":before"}/{@code ":after"}/{@code ":around"})
 	 * @param usesNext whether the method body calls {@code call-next-method} or
 	 * {@code next-method-p} (forces the combined dispatcher even without a qualifier)
 	 */
-	public record MethodInfo(SpecializerKind kind, @Nullable LispVal eqlValue, @Nullable String specializerName,
-			String functionName, String qualifier, boolean usesNext) {
+	public record MethodInfo(List<Specializer> specializers, String functionName, String qualifier, boolean usesNext) {
 
 		/**
 		 * Whether this is a primary (unqualified) method.
@@ -138,6 +161,14 @@ public final class ClosRegistry {
 		 */
 		public boolean isPrimary() {
 			return this.qualifier.isEmpty();
+		}
+
+		/**
+		 * Whether every parameter is unspecialized (the default method).
+		 * @return true when no parameter carries a specializer
+		 */
+		public boolean isDefault() {
+			return this.specializers.stream().allMatch(s -> s.kind() == SpecializerKind.DEFAULT);
 		}
 	}
 
@@ -152,6 +183,8 @@ public final class ClosRegistry {
 		private final String name;
 
 		private List<String> paramNames;
+
+		private boolean variadic;
 
 		@Nullable private String documentation;
 
@@ -185,6 +218,21 @@ public final class ClosRegistry {
 		}
 
 		/**
+		 * Whether the generic's or any method's lambda list continues past the required
+		 * parameters ({@code &optional}/{@code &rest}/{@code &key}). A variadic
+		 * dispatcher takes a {@code &rest} tail and forwards it to the method-body defuns
+		 * with {@code apply}, so each method's own defaults apply.
+		 * @return true when the dispatcher must forward a rest tail
+		 */
+		public boolean variadic() {
+			return this.variadic;
+		}
+
+		void markVariadic() {
+			this.variadic = true;
+		}
+
+		/**
 		 * The {@code :documentation} string, or null.
 		 * @return the documentation
 		 */
@@ -214,7 +262,9 @@ public final class ClosRegistry {
 		 * @return true when a CLASS-specialized method exists
 		 */
 		public boolean hasClassMethod() {
-			return this.methods.values().stream().anyMatch(m -> m.kind() == SpecializerKind.CLASS);
+			return this.methods.values()
+				.stream()
+				.anyMatch(m -> m.specializers().stream().anyMatch(s -> s.kind() == SpecializerKind.CLASS));
 		}
 
 	}

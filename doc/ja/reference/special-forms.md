@@ -28,6 +28,8 @@
 | `rontolisp:async-defun` | `(rontolisp:async-defun name (params...) body...)` | 非同期関数を定義します: 呼び出すと本体が eager に開始され、本体の値 (またはエラー) で確定する future を返します |
 | `rontolisp:async-lambda` | `(rontolisp:async-lambda (params...) body...)` | 無名の非同期関数。呼び出しごとに future を返します |
 | `rontolisp:await` | `(rontolisp:await value)` | future が確定するまで現在の非同期関数をサスペンドし、確定値を返します。future 以外はそのまま通過します。`async-defun`/`async-lambda` の本体内とトップレベルでのみ使えます |
+| `tagbody` | `(tagbody tag-or-form...)` | go タグ付きの本体フォーム: `go` がタグへ(前方・後方を問わず)ジャンプし、末尾到達で nil を返します(インタープリタのみ) |
+| `go` | `(go tag)` | 囲んでいる `tagbody` のタグへ制御を移します(インタープリタのみ) |
 
 rontolispはCommon Lispのような **Lisp-2** です。関数と変数は別々の名前空間に存在します。裸のシンボルは変数として評価され(`car`
 単独は未束縛変数エラー)、呼び出し位置のシンボルは関数名前空間のみで解決され(`car`

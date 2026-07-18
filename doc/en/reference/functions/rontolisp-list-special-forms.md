@@ -9,5 +9,5 @@ symbol, or a string. An unknown package is an error. See
 [Package introspection](../packages.md#package-introspection) for details.
 
 ```lisp
-(rontolisp:list-special-forms) ; => (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq unwind-protect while)
+(rontolisp:list-special-forms) ; => (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function go if in-package lambda let progn progv quote return setq tagbody unwind-protect while)
 ```

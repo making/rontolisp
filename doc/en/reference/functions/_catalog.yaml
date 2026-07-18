@@ -49,6 +49,7 @@ categories:
       - { slug: asin-acos-atan, name: "asin acos atan" }
       - { slug: sinh-cosh-tanh, name: "sinh cosh tanh" }
       - { slug: random, name: "random" }
+      - { slug: scale-float, name: "scale-float" }
   - title: "Bitwise Operations"
     functions:
       - { slug: logand, name: "logand" }
@@ -63,6 +64,7 @@ categories:
       - { slug: byte-position, name: "byte-position" }
       - { slug: ldb, name: "ldb" }
       - { slug: dpb, name: "dpb" }
+      - { slug: mask-field, name: "mask-field" }
   - title: "Equality & Type Predicates"
     functions:
       - { slug: eq, name: "eq" }
@@ -86,6 +88,9 @@ categories:
       - { slug: vectorp, name: "vectorp" }
       - { slug: constantp, name: "constantp" }
       - { slug: streamp, name: "streamp" }
+      - { slug: subtypep, name: "subtypep" }
+      - { slug: class-of, name: "class-of" }
+      - { slug: pathnamep, name: "pathnamep" }
   - title: "Output"
     functions:
       - { slug: print, name: "print" }
@@ -122,6 +127,7 @@ categories:
       - { slug: alpha-char-p, name: "alpha-char-p" }
       - { slug: case-char-p, name: "lower-case-p upper-case-p" }
       - { slug: digit-char-p, name: "digit-char-p" }
+      - { slug: char-name, name: "char-name" }
   - title: "Cons & List Construction"
     functions:
       - { slug: cons, name: "cons" }
@@ -267,6 +273,7 @@ categories:
       - { slug: fboundp, name: "fboundp" }
       - { slug: macroexpand-1, name: "macroexpand-1" }
       - { slug: macroexpand, name: "macroexpand" }
+      - { slug: fdefinition, name: "fdefinition" }
   - title: "Streams & Files"
     functions:
       - { slug: open, name: "open" }
@@ -277,6 +284,12 @@ categories:
       - { slug: write-byte, name: "write-byte" }
       - { slug: read-sequence, name: "read-sequence" }
       - { slug: write-sequence, name: "write-sequence" }
+      - { slug: file-position, name: "file-position" }
+      - { slug: file-length, name: "file-length" }
+      - { slug: make-broadcast-stream, name: "make-broadcast-stream" }
+      - { slug: input-stream-p, name: "input-stream-p" }
+      - { slug: output-stream-p, name: "output-stream-p" }
+      - { slug: stream-element-type, name: "stream-element-type" }
   - title: "System & Time"
     functions:
       - { slug: get-universal-time, name: "get-universal-time" }
@@ -417,3 +430,7 @@ categories:
       - { slug: usocket-socket-accept, name: "usocket:socket-accept" }
       - { slug: usocket-socket-stream, name: "usocket:socket-stream usocket:socket-close" }
       - { slug: usocket-accessors, name: "usocket:get-local-port usocket:get-local-address usocket:get-local-name usocket:get-peer-address usocket:get-peer-port usocket:get-peer-name" }
+  - title: "Conditions"
+    functions:
+      - { slug: simple-condition-format-control, name: "simple-condition-format-control" }
+      - { slug: simple-condition-format-arguments, name: "simple-condition-format-arguments" }

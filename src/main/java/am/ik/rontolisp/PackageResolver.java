@@ -205,6 +205,20 @@ public final class PackageResolver {
 						nicknames.add(nickname);
 					}
 				}
+				case LispNames.LOCAL_NICKNAMES_KEYWORD -> {
+					// (:local-nicknames (nickname actual-package)...) -- lite: registered
+					// as a GLOBAL nickname (no per-package scoping), like
+					// uiop:add-package-local-nickname. The target must already exist.
+					for (LispVal arg : args.subList(1, args.size())) {
+						if (!(arg instanceof LispCons pair) || pair.toList().size() != 2) {
+							throw new LispPackageException(LispNames.LOCAL_NICKNAMES_KEYWORD
+									+ " expects (nickname actual-package) pairs, got " + arg.print());
+						}
+						registerLocalNickname(
+								designator(LispNames.LOCAL_NICKNAMES_KEYWORD, "a package name", pair.toList().get(0)),
+								designator(LispNames.LOCAL_NICKNAMES_KEYWORD, "a package name", pair.toList().get(1)));
+					}
+				}
 				case LispNames.IMPORT_FROM_KEYWORD -> {
 					if (args.size() < 2) {
 						throw new LispPackageException(LispNames.IMPORT_FROM_KEYWORD + " expects a package name");
@@ -237,6 +251,31 @@ public final class PackageResolver {
 
 	private static String packageDesignator(String context, LispVal designator) {
 		return designator(context, "a package name", designator);
+	}
+
+	/**
+	 * Registers a package nickname -- the shared machinery behind the {@code defpackage}
+	 * {@code :local-nicknames} clause and {@code uiop:add-package-local-nickname}. Lite:
+	 * the nickname is GLOBAL (rontolisp has no per-package nickname scoping), so a
+	 * nickname that names an existing package (or one already taken for a different
+	 * target) is rejected.
+	 * @param nickname the nickname as written (prefix already stripped)
+	 * @param actual the target package name as written
+	 */
+	public void registerLocalNickname(String nickname, String actual) {
+		String target = this.registry.canonicalName(actual);
+		if (!this.registry.contains(target)) {
+			throw new LispPackageException("No such package: " + actual);
+		}
+		String existing = this.registry.canonicalName(nickname);
+		if (this.registry.contains(nickname)) {
+			throw new LispPackageException("Package already exists: " + nickname);
+		}
+		if (!existing.equals(nickname) && !existing.equals(target)) {
+			throw new LispPackageException(
+					"Nickname " + nickname + " already names " + existing + "; cannot repoint it to " + target);
+		}
+		this.registry.defineNickname(nickname, target);
 	}
 
 	private static String designator(String context, String kind, LispVal designator) {

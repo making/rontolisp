@@ -4267,23 +4267,23 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* locally loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf signal slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
+				"(and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog prog* prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
 	}
 
 	@Test
 	void compileAndRunListSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn progv quote return setq unwind-protect while)");
+				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function go if in-package lambda let progn progv quote return setq tagbody unwind-protect while)");
 	}
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("252");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("267");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("252");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("267");
 	}
 
 	@Test

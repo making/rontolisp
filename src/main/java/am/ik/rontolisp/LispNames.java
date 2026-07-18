@@ -3127,6 +3127,228 @@ public final class LispNames {
 	/** The canonical qualified spelling of {@code ql:quickload}. */
 	public static final String QL_QUICKLOAD = QL_PKG + ":" + QUICKLOAD;
 
+	/**
+	 * The {@code tagbody} special form: body forms interleaved with go-tag labels
+	 * (symbols/integers); {@code go} transfers control to a label. Interpreter-only for
+	 * now (the compile path rejects it).
+	 */
+	public static final String TAGBODY = "tagbody";
+
+	/** The {@code go} special form: transfers control to a {@code tagbody} label. */
+	public static final String GO = "go";
+
+	/** The {@code prog} macro: {@code (block nil (let bindings (tagbody body...)))}. */
+	public static final String PROG = "prog";
+
+	/** The {@code prog*} macro: like {@link #PROG} with sequential bindings. */
+	public static final String PROG_STAR = "prog*";
+
+	/**
+	 * The {@code shiftf} macro: shifts place values left, stores the last value, and
+	 * returns the first place's old value.
+	 */
+	public static final String SHIFTF = "shiftf";
+
+	/**
+	 * The {@code load-time-value} macro -- lite: expands to its form (re-evaluated at
+	 * each use instead of once at load time).
+	 */
+	public static final String LOAD_TIME_VALUE = "load-time-value";
+
+	/** The {@code mask-field} built-in function (ldb shifted back into position). */
+	public static final String MASK_FIELD = "mask-field";
+
+	/** The {@code scale-float} built-in function ({@code f * 2^n}). */
+	public static final String SCALE_FLOAT = "scale-float";
+
+	/**
+	 * The {@code typep} macro -- lite: the type specifier must be a literal (quoted)
+	 * type; it lowers through the shared static type-test builder.
+	 */
+	public static final String TYPEP = "typep";
+
+	/**
+	 * The {@code subtypep} built-in function -- registered on the evaluator (it needs the
+	 * CLOS class registry) over the built-in type lattice; a single primary value.
+	 */
+	public static final String SUBTYPEP = "subtypep";
+
+	/** The {@code char-name} built-in function. */
+	public static final String CHAR_NAME = "char-name";
+
+	/** The {@code fdefinition} built-in function (alias of {@code symbol-function}). */
+	public static final String FDEFINITION = "fdefinition";
+
+	/**
+	 * The {@code file-position} built-in function -- lite: always {@code nil} (streams do
+	 * not support repositioning), so callers take their non-seeking fallback.
+	 */
+	public static final String FILE_POSITION = "file-position";
+
+	/** The {@code file-length} built-in function -- lite: always {@code nil}. */
+	public static final String FILE_LENGTH = "file-length";
+
+	/**
+	 * The {@code make-broadcast-stream} built-in function -- lite: with no component
+	 * streams it returns a discarding sink (a fresh string output stream nobody reads).
+	 */
+	public static final String MAKE_BROADCAST_STREAM = "make-broadcast-stream";
+
+	/** The {@code pathnamep} built-in function -- no pathname type exists: always nil. */
+	public static final String PATHNAMEP = "pathnamep";
+
+	/** The {@code input-stream-p} built-in function -- lite: any stream handle. */
+	public static final String INPUT_STREAM_P = "input-stream-p";
+
+	/** The {@code output-stream-p} built-in function -- lite: any stream handle. */
+	public static final String OUTPUT_STREAM_P = "output-stream-p";
+
+	/** The {@code stream-element-type} built-in function -- always {@code character}. */
+	public static final String STREAM_ELEMENT_TYPE = "stream-element-type";
+
+	/**
+	 * The {@code slot-boundp} built-in -- lite: true when the instance's class has the
+	 * slot (slots are always initialized; see {@link #SLOT_MAKUNBOUND}).
+	 */
+	public static final String SLOT_BOUNDP = "slot-boundp";
+
+	/** The {@code slot-makunbound} built-in -- lite: stores {@code nil} into the slot. */
+	public static final String SLOT_MAKUNBOUND = "slot-makunbound";
+
+	/**
+	 * The {@code class-of} built-in function -- lite: the class-tag symbol of a CLOS
+	 * instance, or the type name symbol of a built-in value.
+	 */
+	public static final String CLASS_OF = "class-of";
+
+	/** The {@code simple-condition-format-control} condition reader. */
+	public static final String SIMPLE_CONDITION_FORMAT_CONTROL = "simple-condition-format-control";
+
+	/** The {@code simple-condition-format-arguments} condition reader. */
+	public static final String SIMPLE_CONDITION_FORMAT_ARGUMENTS = "simple-condition-format-arguments";
+
+	/** The {@code array-dimension-limit} constant variable. */
+	public static final String ARRAY_DIMENSION_LIMIT = "array-dimension-limit";
+
+	/** The {@code *print-circle*} variable (accepted and ignored by the printer). */
+	public static final String PRINT_CIRCLE_VAR = "*print-circle*";
+
+	/**
+	 * {@code %ieee754-double-bits} -- the IEEE 754 bits of a double as an unsigned 64-bit
+	 * integer. The float-features shim library is built over these four.
+	 */
+	public static final String IEEE754_DOUBLE_BITS = "%ieee754-double-bits";
+
+	/** {@code %ieee754-double-from-bits} -- the double of unsigned 64-bit IEEE bits. */
+	public static final String IEEE754_DOUBLE_FROM_BITS = "%ieee754-double-from-bits";
+
+	/**
+	 * {@code %ieee754-single-bits} -- the IEEE 754 single-precision bits (unsigned
+	 * 32-bit) of a float rounded to single precision.
+	 */
+	public static final String IEEE754_SINGLE_BITS = "%ieee754-single-bits";
+
+	/** {@code %ieee754-single-from-bits} -- the float of unsigned 32-bit IEEE bits. */
+	public static final String IEEE754_SINGLE_FROM_BITS = "%ieee754-single-from-bits";
+
+	/** The {@code closer-mop} shim package (and built-in ASDF system) name. */
+	public static final String CLOSER_MOP_PKG = "closer-mop";
+
+	/** {@code closer-mop:class-slots} -- lite: always nil (no slot metaobjects). */
+	public static final String CLASS_SLOTS = "class-slots";
+
+	/** {@code closer-mop:ensure-finalized} -- lite: identity. */
+	public static final String ENSURE_FINALIZED = "ensure-finalized";
+
+	/** {@code closer-mop:slot-definition-name}. */
+	public static final String SLOT_DEFINITION_NAME = "slot-definition-name";
+
+	/** {@code closer-mop:slot-definition-type}. */
+	public static final String SLOT_DEFINITION_TYPE = "slot-definition-type";
+
+	/** The {@code flexi-streams} shim package (and built-in ASDF system) name. */
+	public static final String FLEXI_STREAMS_PKG = "flexi-streams";
+
+	/** {@code flexi-streams:make-flexi-stream} -- lite: the underlying stream. */
+	public static final String MAKE_FLEXI_STREAM = "make-flexi-stream";
+
+	/**
+	 * The {@code org.shirakumo.float-features} shim package name ({@code float-features}
+	 * is its built-in nickname and the built-in ASDF system name).
+	 */
+	public static final String FLOAT_FEATURES_PKG = "org.shirakumo.float-features";
+
+	/** {@code float-features:bits-double-float}. */
+	public static final String BITS_DOUBLE_FLOAT = "bits-double-float";
+
+	/** {@code float-features:double-float-bits}. */
+	public static final String DOUBLE_FLOAT_BITS = "double-float-bits";
+
+	/** {@code float-features:single-float-bits}. */
+	public static final String SINGLE_FLOAT_BITS = "single-float-bits";
+
+	/** {@code float-features:bits-single-float}. */
+	public static final String BITS_SINGLE_FLOAT = "bits-single-float";
+
+	/** The {@code trivial-gray-streams} shim package (and built-in ASDF system) name. */
+	public static final String TRIVIAL_GRAY_STREAMS_PKG = "trivial-gray-streams";
+
+	/** The {@code uiop} stub package (and built-in ASDF system) name. */
+	public static final String UIOP_PKG = "uiop";
+
+	/** {@code uiop:native-namestring} (stub: resolves, undefined when called). */
+	public static final String NATIVE_NAMESTRING = "native-namestring";
+
+	/** {@code uiop:namestring} (stub). */
+	public static final String NAMESTRING = "namestring";
+
+	/** {@code uiop:os-unix-p} (stub). */
+	public static final String OS_UNIX_P = "os-unix-p";
+
+	/** {@code uiop:os-macosx-p} (stub). */
+	public static final String OS_MACOSX_P = "os-macosx-p";
+
+	/**
+	 * {@code uiop:add-package-local-nickname} -- lite: registers a GLOBAL nickname (no
+	 * per-package scoping), the mechanism jzon's README recommends for shortening
+	 * {@code com.inuoe.jzon} to {@code jzon}.
+	 */
+	public static final String ADD_PACKAGE_LOCAL_NICKNAME = "add-package-local-nickname";
+
+	/**
+	 * The {@code defpackage} {@code :local-nicknames} clause keyword -- lite: each
+	 * {@code (nickname actual-package)} pair registers a GLOBAL nickname.
+	 */
+	public static final String LOCAL_NICKNAMES_KEYWORD = ":local-nicknames";
+
+	/**
+	 * {@code rontolisp:fundamental-character-output-stream} -- the base class of
+	 * rontolisp's own Gray-stream extension (eval.GrayStreamsLibrary).
+	 */
+	public static final String GRAY_CHAR_OUTPUT_STREAM = "fundamental-character-output-stream";
+
+	/** {@code rontolisp:fundamental-character-input-stream}. */
+	public static final String GRAY_CHAR_INPUT_STREAM = "fundamental-character-input-stream";
+
+	/** {@code rontolisp:stream-write-char} -- the Gray per-character write generic. */
+	public static final String GRAY_STREAM_WRITE_CHAR = "stream-write-char";
+
+	/**
+	 * {@code rontolisp:stream-write-string} -- the Gray write generic the
+	 * {@code write-string}/{@code write-char} built-ins dispatch to for CLOS-instance
+	 * streams.
+	 */
+	public static final String GRAY_STREAM_WRITE_STRING = "stream-write-string";
+
+	/**
+	 * The {@code *standard-output*} variable -- bound to the stream designator {@code t}
+	 * (standard output), which every print-family function accepts.
+	 */
+	public static final String STANDARD_OUTPUT_VAR = "*standard-output*";
+
+	/** The {@code *error-output*} variable -- also the {@code t} designator (lite). */
+	public static final String ERROR_OUTPUT_VAR = "*error-output*";
+
 	private LispNames() {
 	}
 

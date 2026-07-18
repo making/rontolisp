@@ -331,6 +331,97 @@ public final class LispEvaluator {
 			}
 			return resolveFunction(sym.name());
 		}));
+		// fdefinition = symbol-function for symbol designators (no setf-function names).
+		this.globalEnv.defineFunction(LispNames.FDEFINITION, new LispFunction(LispNames.FDEFINITION, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.FDEFINITION + " expects 1 argument, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispSymbol sym)) {
+				throw new LispEvalException(LispNames.FDEFINITION + " expects a symbol, got " + args.get(0).print());
+			}
+			return resolveFunction(sym.name());
+		}));
+		// subtypep over the built-in type lattice + the CLOS class registry. A single
+		// primary value: t when sub is known to be a subtype of super, nil otherwise.
+		this.globalEnv.defineFunction(LispNames.SUBTYPEP, new LispFunction(LispNames.SUBTYPEP, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.SUBTYPEP + " expects 2 arguments, got " + args.size());
+			}
+			return subtypep(args.get(0), args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.CLASS_OF, new LispFunction(LispNames.CLASS_OF, args -> {
+			requireSingleArg(LispNames.CLASS_OF, args);
+			// Lite: the class-tag symbol of a CLOS instance, or a built-in type name.
+			LispVal v = args.get(0);
+			if (v instanceof LispCons cons && cons.car() instanceof LispSymbol tag
+					&& tag.name().startsWith("%class-")) {
+				return tag;
+			}
+			return new LispSymbol(builtinTypeName(v));
+		}));
+		this.globalEnv.defineFunction(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL,
+				new LispFunction(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, args -> {
+					requireSingleArg(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, args);
+					return conditionSlotValue(args.get(0), "format-control");
+				}));
+		this.globalEnv.defineFunction(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
+				new LispFunction(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, args -> {
+					requireSingleArg(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, args);
+					return conditionSlotValue(args.get(0), "format-arguments");
+				}));
+		this.globalEnv.defineFunction(LispNames.SLOT_BOUNDP, new LispFunction(LispNames.SLOT_BOUNDP, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.SLOT_BOUNDP + " expects 2 arguments, got " + args.size());
+			}
+			// Lite: slots are always initialized (nil default), so a slot the class has
+			// is bound; see slot-makunbound.
+			return instanceSlotCell(args.get(0), args.get(1)) != null ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// Gray-stream dispatch: write-string (and write-char, which lowers to it)
+		// handed a CLOS instance as its stream calls rontolisp's own Gray protocol
+		// (eval.GrayStreamsLibrary) instead of the handle-based built-in, so a user
+		// output-stream class receives the writes. Portability layers
+		// (trivial-gray-streams) adapt onto that protocol through their shim system;
+		// the core knows no third-party name.
+		LispVal baseWriteString = this.globalEnv.lookupFunction(LispNames.WRITE_STRING);
+		this.globalEnv.defineFunction(LispNames.WRITE_STRING, new LispFunction(LispNames.WRITE_STRING, args -> {
+			if (args.size() >= 2 && args.get(1) instanceof LispCons instance && instance.car() instanceof LispSymbol tag
+					&& tag.name().startsWith("%class-")) {
+				ensureGrayStreamsLoaded();
+				LispVal generic = resolveFunction(
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.GRAY_STREAM_WRITE_STRING));
+				return apply(generic, List.of(args.get(1), args.get(0)), this.globalEnv);
+			}
+			return apply(baseWriteString, args, this.globalEnv);
+		}));
+		// uiop:add-package-local-nickname -- lite: registers a GLOBAL nickname (no
+		// per-package scoping); the mechanism libraries recommend for shortening long
+		// package names (jzon's README: (uiop:add-package-local-nickname '#:jzon
+		// '#:com.inuoe.jzon)). The optional third argument (the package to scope the
+		// nickname to) is accepted and ignored.
+		String addNicknameName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.ADD_PACKAGE_LOCAL_NICKNAME);
+		this.globalEnv.defineFunction(addNicknameName, new LispFunction(addNicknameName, args -> {
+			if (args.size() < 2 || args.size() > 3) {
+				throw new LispEvalException(
+						LispNames.ADD_PACKAGE_LOCAL_NICKNAME + " expects a nickname and a package, got " + args.size());
+			}
+			String nickname = packageNameDesignator(LispNames.ADD_PACKAGE_LOCAL_NICKNAME, args.get(0));
+			String actual = packageNameDesignator(LispNames.ADD_PACKAGE_LOCAL_NICKNAME, args.get(1));
+			this.packageResolver.registerLocalNickname(nickname, actual);
+			return new LispSymbol(actual);
+		}));
+		this.globalEnv.defineFunction(LispNames.SLOT_MAKUNBOUND, new LispFunction(LispNames.SLOT_MAKUNBOUND, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.SLOT_MAKUNBOUND + " expects 2 arguments, got " + args.size());
+			}
+			// Lite: stores nil into the slot (there is no distinct unbound state).
+			LispCons cell = instanceSlotCell(args.get(0), args.get(1));
+			if (cell == null) {
+				throw new LispEvalException(LispNames.SLOT_MAKUNBOUND + ": no such slot " + args.get(1).print());
+			}
+			cell.setCar(LispNil.INSTANCE);
+			return args.get(0);
+		}));
 		// boundp/symbol-value read the GLOBAL variable namespace only (like CL, where
 		// symbol-value never sees lexical bindings); they live on the evaluator because
 		// they capture the global environment. fboundp and find-symbol additionally need
@@ -864,14 +955,250 @@ public final class LispEvaluator {
 		// *package* for the duration of load.
 		this.packageResolver.pushPackage();
 		try {
-			for (LispVal form : LispReader.readAllFromString(source)) {
-				eval(form);
+			// Only a file that textually contains #. pays for the marker read + the
+			// per-form substitution walk; every other file keeps the plain read.
+			if (source.contains("#.")) {
+				for (LispVal form : LispReader.readAllWithReadEvalMarkers(source, Features.INTERPRETER)) {
+					eval(resolveReadTimeEval(form));
+				}
+			}
+			else {
+				for (LispVal form : LispReader.readAllFromString(source)) {
+					eval(form);
+				}
 			}
 		}
 		finally {
 			this.packageResolver.popPackage();
 			this.loadDirStack.removeLast();
 		}
+	}
+
+	/**
+	 * Replaces every {@code (%read-eval datum)} marker in a form with the value of
+	 * evaluating the datum in the global environment -- the {@code #.} read-time-eval
+	 * semantics. The value is substituted raw (not quoted), matching CL: a
+	 * self-evaluating value (number, character, string, array) is a literal in any
+	 * context, while a symbol/list value placed in code position is evaluated as code,
+	 * exactly as a real read-time substitution would behave. Called on each top-level
+	 * form just before it is evaluated, so a marker sees all preceding definitions of the
+	 * same file.
+	 */
+	/** The immediate supertypes of each built-in type name ({@code subtypep} lattice). */
+	private static final java.util.Map<String, List<String>> TYPE_PARENTS = java.util.Map.ofEntries(
+			java.util.Map.entry("fixnum", List.of("integer")), java.util.Map.entry("bignum", List.of("integer")),
+			java.util.Map.entry("bit", List.of("integer")), java.util.Map.entry("unsigned-byte", List.of("integer")),
+			java.util.Map.entry("signed-byte", List.of("integer")), java.util.Map.entry("integer", List.of("rational")),
+			java.util.Map.entry("ratio", List.of("rational")), java.util.Map.entry("rational", List.of("real")),
+			java.util.Map.entry("float", List.of("real")), java.util.Map.entry("real", List.of("number")),
+			java.util.Map.entry("keyword", List.of("symbol")), java.util.Map.entry("boolean", List.of("symbol")),
+			java.util.Map.entry("null", List.of("symbol", "list")), java.util.Map.entry("cons", List.of("list")),
+			java.util.Map.entry("list", List.of("sequence")), java.util.Map.entry("string", List.of("vector")),
+			java.util.Map.entry("vector", List.of("array", "sequence")));
+
+	/** Collapses the type-name aliases the one runtime representation makes equal. */
+	private static String canonicalTypeName(String plain) {
+		return switch (plain) {
+			case "single-float", "double-float", "short-float", "long-float" -> "float";
+			case "base-char", "standard-char", "extended-char" -> "character";
+			case "simple-string", "base-string", "simple-base-string" -> "string";
+			case "simple-vector" -> "vector";
+			case "simple-array" -> "array";
+			default -> plain;
+		};
+	}
+
+	/**
+	 * Whether {@code sub} names a subtype of {@code super}: exact/alias equality, the
+	 * built-in lattice, or the CLOS class registry's ancestor sets. Unknown pairs answer
+	 * false (the lite single-value {@code subtypep}).
+	 */
+	private boolean subtypep(LispVal subV, LispVal superV) {
+		if (superV instanceof LispTrue) {
+			return true;
+		}
+		if (subV instanceof LispNil) {
+			return true;
+		}
+		if (!(subV instanceof LispSymbol subSym) || !(superV instanceof LispSymbol superSym)) {
+			return false;
+		}
+		String sub = canonicalTypeName(plainName(subSym.name()));
+		String sup = canonicalTypeName(plainName(superSym.name()));
+		if ("t".equals(sup) || sub.equals(sup)) {
+			return true;
+		}
+		ClosRegistry.ClassInfo subClass = this.closRegistry.findClass(subSym.name());
+		if (subClass != null) {
+			ClosRegistry.ClassInfo superClass = this.closRegistry.findClass(superSym.name());
+			if (superClass != null) {
+				return subClass.ancestors().contains(ClosRegistry.normalize(superClass.name()));
+			}
+			return "standard-object".equals(sup);
+		}
+		// Walk the built-in lattice upward from sub.
+		java.util.ArrayDeque<String> queue = new java.util.ArrayDeque<>();
+		queue.add(sub);
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		while (!queue.isEmpty()) {
+			String current = queue.poll();
+			if (current.equals(sup)) {
+				return true;
+			}
+			if (seen.add(current)) {
+				queue.addAll(TYPE_PARENTS.getOrDefault(current, List.of()));
+			}
+		}
+		return false;
+	}
+
+	/** The package-stripped member name of a possibly qualified symbol name. */
+	private static String plainName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	/**
+	 * The package name a runtime designator value denotes: a string, or a symbol whose
+	 * {@code #:}/{@code :} prefix is stripped ({@code '#:jzon} and {@code :jzon} both
+	 * name the package {@code jzon}).
+	 */
+	private static String packageNameDesignator(String operator, LispVal designator) {
+		return switch (designator) {
+			case LispString str -> str.value();
+			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2)
+					: sym.name().startsWith(":") ? sym.name().substring(1) : sym.name();
+			default ->
+				throw new LispEvalException(operator + " expects a package designator, got " + designator.print());
+		};
+	}
+
+	/** The built-in type name of a runtime value ({@code class-of} lite). */
+	private static String builtinTypeName(LispVal v) {
+		return switch (v) {
+			case LispInteger ignored -> "integer";
+			case LispBigInteger ignored -> "integer";
+			case LispRatio ignored -> "ratio";
+			case LispDouble ignored -> "float";
+			case LispString ignored -> "string";
+			case LispChar ignored -> "character";
+			case LispTrue ignored -> "boolean";
+			case LispNil ignored -> "null";
+			case LispSymbol s -> s.isKeyword() ? "keyword" : "symbol";
+			case LispCons ignored -> "cons";
+			case LispHashTable ignored -> "hash-table";
+			case LispFunction ignored -> "function";
+			default -> "t";
+		};
+	}
+
+	/**
+	 * The non-local transfer a {@code (go tag)} throws; the enclosing {@code tagbody}
+	 * whose label set contains the tag catches it and resumes at that label.
+	 */
+	private static final class GoSignal extends RuntimeException {
+
+		private final String tag;
+
+		GoSignal(String tag) {
+			super(null, null, false, false);
+			this.tag = tag;
+		}
+
+	}
+
+	/**
+	 * Evaluates {@code (tagbody {tag | form}...)}: symbols and integers are go-tag
+	 * labels, everything else evaluates in order for effect. A {@code (go tag)} thrown
+	 * anywhere inside (dynamically) resumes at that label; falling off the end returns
+	 * nil. Interpreter-only for now -- the compilers reject {@code tagbody}/{@code go}.
+	 */
+	private LispVal evalTagbody(LispCons cons, Environment env) {
+		List<LispVal> body = cons.toList().subList(1, cons.toList().size());
+		java.util.Map<String, Integer> labels = new java.util.HashMap<>();
+		for (int i = 0; i < body.size(); i++) {
+			if (body.get(i) instanceof LispSymbol label) {
+				labels.put(plainName(label.name()), i);
+			}
+			else if (body.get(i) instanceof LispInteger label) {
+				labels.put(String.valueOf(label.value()), i);
+			}
+		}
+		int pc = 0;
+		while (pc < body.size()) {
+			LispVal form = body.get(pc);
+			if (form instanceof LispSymbol || form instanceof LispInteger) {
+				pc++;
+				continue;
+			}
+			try {
+				eval(form, env);
+				pc++;
+			}
+			catch (GoSignal go) {
+				Integer target = labels.get(go.tag);
+				if (target == null) {
+					// Not one of ours: an outer tagbody owns the tag.
+					throw go;
+				}
+				pc = target + 1;
+			}
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/** The value of a condition instance's slot by base name ({@code nil} if absent). */
+	private LispVal conditionSlotValue(LispVal instance, String baseName) {
+		LispCons cell = instanceSlotCell(instance, new LispSymbol(baseName));
+		return cell == null ? LispNil.INSTANCE : cell.car();
+	}
+
+	/**
+	 * The cons cell holding the given slot of a CLOS-subset instance, or null when the
+	 * value is not an instance or its class has no slot of that name.
+	 */
+	private @Nullable LispCons instanceSlotCell(LispVal instance, LispVal slotName) {
+		if (!(instance instanceof LispCons cons) || !(cons.car() instanceof LispSymbol tag)
+				|| !tag.name().startsWith("%class-")) {
+			return null;
+		}
+		if (!(slotName instanceof LispSymbol slotSym)) {
+			return null;
+		}
+		ClosRegistry.ClassInfo info = this.closRegistry.findClass(tag.name().substring("%class-".length()));
+		if (info == null) {
+			return null;
+		}
+		String base = plainName(slotSym.name());
+		for (int i = 0; i < info.slots().size(); i++) {
+			if (info.slots().get(i).baseName().equals(base)) {
+				LispVal cell = cons;
+				for (int j = 0; j <= i; j++) {
+					if (!(cell instanceof LispCons c) || !(c.cdr() instanceof LispCons next)) {
+						return null;
+					}
+					cell = next;
+				}
+				return (LispCons) cell;
+			}
+		}
+		return null;
+	}
+
+	private LispVal resolveReadTimeEval(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.READ_EVAL.equals(head.name())
+				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
+			return eval(resolveReadTimeEval(datumCons.car()));
+		}
+		LispVal car = resolveReadTimeEval(cons.car());
+		LispVal cdr = resolveReadTimeEval(cons.cdr());
+		if (car == cons.car() && cdr == cons.cdr()) {
+			return form;
+		}
+		return new LispCons(car, cdr);
 	}
 
 	/**
@@ -925,10 +1252,15 @@ public final class LispEvaluator {
 					+ String.join(" -> ", this.loadingSystems) + " -> " + name);
 		}
 		if (BuiltinSystems.isBuiltin(name)) {
-			// A system rontolisp provides itself (e.g. "usocket"): evaluate the embedded
-			// library through its lazy-load path instead of locating a NAME.asd.
+			// A system rontolisp provides itself (e.g. "usocket" or a dependency shim):
+			// evaluate the embedded library instead of locating a NAME.asd.
 			if (LispNames.USOCKET_PKG.equals(name)) {
 				ensureUsocketLoaded();
+			}
+			else if (!this.loadedSystems.contains(name)) {
+				for (LispVal form : BuiltinSystems.forms(name)) {
+					eval(form, this.globalEnv);
+				}
 			}
 			this.loadedSystems.add(name);
 			return;
@@ -1139,6 +1471,23 @@ public final class LispEvaluator {
 		}
 	}
 
+	private boolean grayStreamsLoaded;
+
+	/**
+	 * Evaluates rontolisp's Gray-stream protocol ({@code gray.lisp}) once, on the first
+	 * write to a CLOS-instance stream (or before the trivial-gray-streams shim system's
+	 * adapter, which subclasses it).
+	 */
+	private void ensureGrayStreamsLoaded() {
+		if (this.grayStreamsLoaded) {
+			return;
+		}
+		this.grayStreamsLoaded = true;
+		for (LispVal form : GrayStreamsLibrary.forms()) {
+			eval(form, this.globalEnv);
+		}
+	}
+
 	/**
 	 * Evaluates the WIT runtime ({@code wit.lisp}: the provider registry,
 	 * {@code rontolisp:wit-provide} and the {@code rontolisp:wit-error} condition -- the
@@ -1243,7 +1592,7 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandCcase(cons), env);
 				case LispNames.ERROR:
 					ensureWitLoadedForConditionClass(cons);
-					return eval(LispMacroExpander.expandError(cons, this.closRegistry), env);
+					return eval(LispMacroExpander.expandError(cons, this.closRegistry, true), env);
 				case LispNames.CERROR:
 					return eval(LispMacroExpander.expandCerror(cons, this.closRegistry), env);
 				case LispNames.WARN:
@@ -1453,6 +1802,24 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandMultipleValueSetq(cons), env);
 				case LispNames.ROTATEF:
 					return eval(LispMacroExpander.expandRotatef(cons), env);
+				case LispNames.SHIFTF:
+					return eval(LispMacroExpander.expandShiftf(cons), env);
+				case LispNames.LOAD_TIME_VALUE:
+					return eval(LispMacroExpander.expandLoadTimeValue(cons), env);
+				case LispNames.TYPEP:
+					return eval(LispMacroExpander.expandTypep(cons, this.closRegistry), env);
+				case LispNames.PROG:
+					return eval(LispMacroExpander.expandProg(cons, false), env);
+				case LispNames.PROG_STAR:
+					return eval(LispMacroExpander.expandProg(cons, true), env);
+				case LispNames.TAGBODY:
+					return evalTagbody(cons, env);
+				case LispNames.GO: {
+					if (!(cons.cdr() instanceof LispCons tagCons) || !(tagCons.car() instanceof LispSymbol tagSym)) {
+						throw new LispEvalException(LispNames.GO + " expects a tag: " + cons.print());
+					}
+					throw new GoSignal(plainName(tagSym.name()));
+				}
 				case LispNames.BYTE:
 					return eval(LispMacroExpander.expandByte(cons), env);
 				case LispNames.BYTE_SIZE:
@@ -1730,7 +2097,11 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefgeneric(LispCons cons, Environment env) {
-		String generic = LispMacroExpander.registerDefgeneric(cons, this.closRegistry);
+		java.util.List<LispVal> methodDefuns = new java.util.ArrayList<>();
+		String generic = LispMacroExpander.registerDefgeneric(cons, this.closRegistry, methodDefuns);
+		for (LispVal defun : methodDefuns) {
+			eval(defun, env);
+		}
 		eval(LispMacroExpander.generateDispatcher(generic, this.closRegistry), env);
 		return cons.toList().get(1);
 	}

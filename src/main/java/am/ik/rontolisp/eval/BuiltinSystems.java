@@ -20,7 +20,13 @@ import am.ik.rontolisp.LispVal;
 public final class BuiltinSystems {
 
 	private static final Map<String, Supplier<List<LispVal>>> SYSTEMS = Map.of(LispNames.USOCKET_PKG,
-			UsocketLibrary::forms);
+			UsocketLibrary::forms, LispNames.CLOSER_MOP_PKG, () -> ShimLibraries.forms(LispNames.CLOSER_MOP_PKG),
+			LispNames.FLEXI_STREAMS_PKG, () -> ShimLibraries.forms(LispNames.FLEXI_STREAMS_PKG), "float-features",
+			() -> ShimLibraries.forms("float-features"), LispNames.TRIVIAL_GRAY_STREAMS_PKG,
+			() -> ShimLibraries.forms(LispNames.TRIVIAL_GRAY_STREAMS_PKG),
+			// The uiop package stub is seeded in PackageRegistry; the system contributes
+			// no forms (real libraries only name it so its symbols resolve).
+			LispNames.UIOP_PKG, List::of);
 
 	private BuiltinSystems() {
 	}

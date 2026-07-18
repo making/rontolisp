@@ -531,6 +531,25 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void defpackageLocalNicknamesRegistersGlobalNicknames() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage #:com.example.long-name (:use #:cl) (:export #:run))");
+		resolve(resolver, "(defpackage #:my-app (:use #:cl) (:local-nicknames (#:short #:com.example.long-name)))");
+		resolve(resolver, "(in-package #:my-app)");
+		// Lite: the nickname is global, so the qualified call resolves through it.
+		assertThat(resolve(resolver, "(short:run)")).isEqualTo("(com.example.long-name:run)");
+	}
+
+	@Test
+	void defpackageLocalNicknamesRequiresAnExistingTarget() {
+		PackageResolver resolver = new PackageResolver();
+		assertThatThrownBy(() -> resolve(resolver,
+				"(defpackage #:my-app (:use #:cl) (:local-nicknames (#:short #:no-such-package)))"))
+			.isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("No such package");
+	}
+
+	@Test
 	void newPackageInRegistryResolvesViaUseListAndQualifiesOwnSymbols() {
 		// Extensibility: registering a package that uses rontolisp makes its symbols
 		// (version) visible unqualified, and the resolution logic is unchanged.
