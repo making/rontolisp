@@ -19,7 +19,10 @@ final class WasmSubseqCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
+		// A mutable character vector normalizes to a string first, so subseq of one
+		// yields a fresh immutable string of its active content.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		if (args.size() >= 4) {
 			WasmExprCompiler.compileExpr(args.get(3), ctx);

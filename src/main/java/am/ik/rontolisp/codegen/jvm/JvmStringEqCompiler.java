@@ -20,9 +20,11 @@ final class JvmStringEqCompiler {
 	static void compileEq(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.stringClass.index());
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.INVOKEVIRTUAL);
 		ctx.emitU2(ctx.objectEquals.index());
 		JvmEmitHelper.emitBoolFromInt(ctx);
@@ -32,9 +34,11 @@ final class JvmStringEqCompiler {
 		List<LispVal> args = cons.toList();
 		int equalsIgnoreCase = JvmEmitHelper.stringMethod(ctx, "equalsIgnoreCase", "(Ljava/lang/String;)Z").index();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.stringClass.index());
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.stringClass.index());
 		ctx.emit(Opcode.INVOKEVIRTUAL);

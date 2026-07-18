@@ -47,6 +47,7 @@ final class JvmStringTrimCompiler {
 
 		// bagRaw = (String) char-bag
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(strClass);
 		ctx.emit(Opcode.ASTORE);
@@ -67,6 +68,7 @@ final class JvmStringTrimCompiler {
 		ctx.emit(bagSlot);
 		// s = (String) string
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(strClass);
 		ctx.emit(Opcode.ASTORE);

@@ -210,10 +210,13 @@ API は提供しません。
   `jzon:writer`、`closer-mop` シムの実スロットリストによる CLOS
   インスタンスの文字列化。依存システム (`closer-mop`、`flexi-streams`、
   `float-features`、`trivial-gray-streams`、`uiop`) は下記の組み込みシムシステムに解決されます。JVM
-  / WASM コンパイルパスではまだ完全なライブラリは動きません (float プリンタが
-  WASM の数値モデルを超える 64 ビット/bignum ビット演算を行い、可変文字列バッファはインタープリタのみのため)。jzon
-  が要求した個々の言語機能はすべてのバックエンドでコンパイルされ、ci-spec の
-  `jzon-residue-features` ケースで追跡されています。
+  / WASM コンパイルパスではまだ完全なライブラリは動きません (float
+  リーダ/プリンタのテーブルが WASM の数値モデルを超える 64 ビット/bignum
+  ビット演算を行い、読み込み時にロード時状態を参照するため)。jzon
+  が要求した個々の言語機能は — 蓄積先の可変フィルポインタ付き文字列バッファを
+  含めて — すべてのバックエンドでコンパイルされ、ci-spec の
+  `jzon-residue-features` と `mutable-strings-cross-backend`
+  ケースで追跡されています。
 
 6 ライブラリ全ての実行可能なデモ — バックエンド別の実行コマンドと期待
 出力付き — は

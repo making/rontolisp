@@ -43,6 +43,7 @@ final class JvmStringStreamCompiler {
 			throw new UnsupportedOperationException("write-string expects 1 or 2 arguments, got " + (parts.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		if (parts.size() == 3) {
 			JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
 		}

@@ -26,8 +26,11 @@ final class WasmStringEqCompiler {
 
 	private static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, int func) {
 		List<LispVal> args = cons.toList();
+		// Mutable character vectors normalize to strings first (both operands).
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(func);
 	}

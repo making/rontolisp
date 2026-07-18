@@ -23,8 +23,10 @@ final class WasmCharCompiler {
 	/** {@code (char string index)} / {@code (schar string index)}. */
 	static void compileChar(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		// the string's byte array
+		// the string's byte array (a mutable character vector normalizes to a string
+		// first)
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		WasmEmitHelper.emitStrBytesArray(ctx);
 		// array index = 1 (skip the opening quote at index 0) + the Lisp index
 		ctx.writer.write(Instruction.I32_CONST);

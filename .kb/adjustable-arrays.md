@@ -26,17 +26,60 @@ backend: `--no-gc: unsupported operation 'vector-push' ...`; the new names go
 through the same default path), satisfying the todo-71 "gate explicitly"
 acceptance without a dedicated gate.
 
-**Fill-pointered STRINGS diverge (2026-07-18)**: on the interpreter,
-`make-array :element-type 'character` WITH `:fill-pointer`/`:adjustable`
-builds a mutable `LispString` (char[] buffer + fill pointer + adjustable
-flag; `vectorPushExtend` grows it, prints/compares as a string). The compiled
-backends build a GENERAL character vector instead — the fill-pointer surface
-works but `stringp` is nil, it prints `#(...)`, and string functions reject
-it. Closing that gap needs a mutable-string runtime representation on both
-backends (JVM strings are immutable `java.lang.String` literals; wasm-GC's
-`TYPE_STRING` struct has an immutable len + `$str_bytes` data) — every
-string-consuming helper would have to accept the new representation, which is
-why it stayed interpreter-only (documented on the make-array page).
+**Fill-pointered STRINGS (mutable character vectors, ALL backends
+2026-07-18)**: `make-array :element-type 'character` WITH
+`:fill-pointer`/`:adjustable` builds a mutable string everywhere. On the
+interpreter it is a mutable `LispString` (char[] buffer + fill pointer +
+adjustable flag). On the COMPILED backends it is the GENERAL array
+representation holding character elements, marked "character vector" —
+JVM: a **length-4** slot-0 header `Object[]{dims, fp, adj, null}` built by
+`_charVecMake` (displacement detection tightened to `header.length > 4`,
+i.e. displaced ⇔ length 5, at `emitResolveDisplacement` /
+`_arrayDispTarget` / `_arrayDispOffset`); WASM: the **meta offset i31 == 1**
+(an ordinary array's is 0; a displaced array's data slot is a cell, so the
+marker is unambiguous, and `%array-disp-offset` now reports the offset only
+when the data slot IS a cell). The whole fill-pointer surface
+(push/pop/push-extend, setf fill-pointer, `%array-become`, `_rmGet/_rmSet`)
+runs on it unchanged, and the marker survives `adjust-array` because become
+mutates the existing header in place.
+
+String behavior comes from ON-DEMAND NORMALIZATION into the immutable
+runtime string: JVM `_strv(Object)` (JvmArrayRuntimeBuilder, emitted under
+the same array gate) renders the active prefix quote-framed; WASM
+`_charvec_to_str` (a fixed always-emitted function right after
+`FUNC_WRITE_STR_GC` — `FUNC_VEC_BASE`/`FUNC_USER_BASE` shifted by one,
+reusing the unary `TYPE_CALLABLE_BASE + 0` signature, capture-aware scratch
+so mid-capture normalization cannot clobber `*-to-string` output). Insert
+points: the string-op compile sites (char/schar, subseq, string=/-equal,
+case/trim/concat, write-string, string designator, WASM also
+read-from-string / make-string-input-stream / intern / make-symbol), plus
+the shared runtime bodies — JVM `emitArrayBranch` of
+`_lispToString`/`_lispToDisplayString` (which also covers equal-hash-table
+keys, keyed by rendered string) and `_eqv`'s equals fallback; WASM the
+entries of `_equal`, `_hash`, `_print_val`, `_princ_val` plus `stringp`.
+On the JVM everything is gated on `programUsesAnyArrayOp || usesFloatArray`
+(`Ctx.usesArrays`), so array-free programs stay byte-identical; on WASM the
+helper is always emitted (all module bytes shifted once, flag-dimension
+byte-identity contracts unaffected).
+
+Mutation flows through SHARED expansions (`LispMacroExpander`):
+`expandReplace` and `expandScharSetFunctional` branch at runtime on
+`(%arrayp seq)` — a vector (char vector included) is written in place via
+`%row-major-aset` + `elt` and returned; an immutable string keeps the
+functional rebuild (fresh string; the setf form still requires a variable
+place). `lowerCharacterInitialContentsMakeArray` lowers rank-1 character
+`:initial-contents` to a fresh string copy (`subseq` of a stringp contents,
+else `coerce 'string`) — both compilers try it BEFORE the general
+`:initial-contents` lowering. Default `:initial-element` for a char vector
+is `#\Space`. Lite residue: `adjust-array` on a NON-adjustable char vector
+returns a general (unmarked) vector; `#'make-array`'s variadic wrapper
+(`apply` path) has no `:element-type` cue, so it builds an unmarked vector;
+char reads past the fill pointer see the rendered (fp-bounded) content;
+`eq`/`eql` of a char vector vs an equal-content string is content-true on
+the JVM (`_eqv` normalizes) but nil on WASM (string identity = id field).
+E2E: ci-spec `mutable-strings-cross-backend`; unit: the
+`compileCharVector*` / `compileScharSetfMutatesCharVectorInPlace` /
+`compileJzonAccumulatorPattern` sets in both compiler tests.
 
 ## adjust-array
 

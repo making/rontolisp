@@ -155,9 +155,14 @@ final class JvmNumericRuntimeBuilder {
 	 * Builds all numeric helper methods and registers their constant-pool entries.
 	 * @param cp the constant pool to populate
 	 * @param thisClass the generated class
+	 * @param strvMethod the {@code _strv} character-vector normalizer emitted with the
+	 * array runtime helpers, or null when the program uses no arrays; when present,
+	 * {@code _eqv}'s final fallback normalizes both operands through it so a mutable
+	 * character vector compares equal to the string with the same content
 	 * @return the helper methods and the invokable references compiled code calls
 	 */
-	static NumericRuntime build(ConstantPool cp, ClassConstant thisClass) {
+	static NumericRuntime build(ConstantPool cp, ClassConstant thisClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod) {
 		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 		ClassConstant bigClass = cp.addClass(cp.addUtf8("java/math/BigInteger"));
 		ClassConstant arithEx = cp.addClass(cp.addUtf8("java/lang/ArithmeticException"));
@@ -366,7 +371,7 @@ final class JvmNumericRuntimeBuilder {
 				mcDecimal64, doubleValueOf, numDoubleValue, rRatNum, rRatDen));
 		methods.add(buildPow(nPow, dPow, rRatNum, rRatDen, rRat, biPow, doubleClass, numberClass, numDoubleValue,
 				doubleValueOf, mathPow));
-		methods.add(buildEqv(nEqv, dCmp, ratArrClass, objEquals));
+		methods.add(buildEqv(nEqv, dCmp, ratArrClass, objEquals, strvMethod));
 		methods.add(buildEqStrict(nEqStrict, dCmp, doubleClass, ratArrClass, rEqv));
 		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual));
 		methods.add(buildRatTrunc(nRatTrunc, dUnary, rRatNum, rRatDen, rNorm, biDiv));
@@ -1279,9 +1284,12 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _eqv(Object a, Object b): value equality used by eq; ratios compare element-wise
-	// (Object[].equals is reference equality), everything else uses a.equals(b).
+	// (Object[].equals is reference equality), everything else uses a.equals(b). When
+	// the array helpers are emitted (strvMethod non-null) the fallback first
+	// normalizes both operands through _strv so a mutable character vector compares
+	// equal to a string with the same content.
 	private static NumericMethod buildEqv(Utf8Constant name, Utf8Constant desc, ClassConstant ratArrClass,
-			MethodrefConstant objEquals) {
+			MethodrefConstant objEquals, @org.jspecify.annotations.Nullable MethodrefConstant strvMethod) {
 		List<Integer> c = new ArrayList<>();
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
@@ -1318,7 +1326,15 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(c, ifObj1, c.size());
 		JvmRuntimeBuilder.patchBranch(c, ifObj2, c.size());
 		c.add(Opcode.ALOAD_0);
+		if (strvMethod != null) {
+			c.add(Opcode.INVOKESTATIC);
+			JvmRuntimeBuilder.emitU2(c, strvMethod.index());
+		}
 		c.add(Opcode.ALOAD_1);
+		if (strvMethod != null) {
+			c.add(Opcode.INVOKESTATIC);
+			JvmRuntimeBuilder.emitU2(c, strvMethod.index());
+		}
 		c.add(Opcode.INVOKEVIRTUAL);
 		JvmRuntimeBuilder.emitU2(c, objEquals.index());
 		c.add(Opcode.IRETURN);

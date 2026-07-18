@@ -2179,6 +2179,57 @@ cases:
       (nil 0)
       55
 
+  - name: mutable-strings-cross-backend
+    source: |
+      (defun ci-mutable-strings ()
+        (let ((s (make-array 4 :element-type 'character :fill-pointer 0 :adjustable t)))
+          (vector-push-extend #\a s)
+          (vector-push-extend #\b s)
+          (print (list (stringp s) (length s)))
+          (print s)
+          (princ s)
+          (terpri)
+          (print (list (string= s "ab") (string-upcase s)))
+          (setf (fill-pointer s) 1)
+          (print s)
+          (setf (fill-pointer s) 2)
+          (adjust-array s 8)
+          (vector-push-extend #\c s)
+          (print (subseq s 0))
+          (replace s "XY" :start1 1)
+          (print s)
+          (let ((copy (make-array (fill-pointer s) :element-type 'character :initial-contents s))
+                (h (make-hash-table :test 'equal)))
+            (vector-push-extend #\z s)
+            (print copy)
+            (print (equal s "aXYz"))
+            (setf (gethash "aXY" h) 42)
+            (print (gethash copy h)))
+          (print (concatenate 'string s "!"))
+          (print (list (elt s 1) (coerce s 'list)))
+          (setf (char s 0) #\Q)
+          (print s)
+          (format t "~a|~s~%" s s)
+          (write-string s)
+          (terpri)))
+      (ci-mutable-strings)
+    expected: |
+      (t 2)
+      "ab"
+      ab
+      (t "AB")
+      "a"
+      "abc"
+      "aXY"
+      "aXY"
+      t
+      42
+      "aXYz!"
+      (#\X (#\a #\X #\Y #\z))
+      "QXYz"
+      QXYz|"QXYz"
+      QXYz
+
   - name: array-literals-cross-backend
     source: |
       (defun ci-array-literals ()

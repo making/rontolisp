@@ -6,6 +6,7 @@ import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispMacroExpander;
@@ -65,6 +66,14 @@ final class JvmArrayCompiler {
 		LispVal fillPointer = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
 		LispVal adjustable = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
 		LispVal initValue = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
+		LispVal charContentsLowering = LispMacroExpander.lowerCharacterInitialContentsMakeArray(cons);
+		if (charContentsLowering != null) {
+			// A rank-1 character array built from :initial-contents is a fresh string
+			// copy of the contents (a mutable character vector normalizes through the
+			// lowering's subseq).
+			JvmExprCompiler.compileExpr(charContentsLowering, ctx, className);
+			return;
+		}
 		LispVal contentsLowering = LispMacroExpander.lowerInitialContentsMakeArray(cons);
 		if (contentsLowering != null) {
 			// :initial-contents lowers to the allocation plus an element-wise fill.
@@ -75,6 +84,18 @@ final class JvmArrayCompiler {
 		if (characterString != null) {
 			// A rank-1 :element-type 'character array is a string: make-string.
 			JvmExprCompiler.compileExpr(characterString, ctx, className);
+			return;
+		}
+		if (LispMacroExpander.isCharacterElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
+				&& (fillPointer != null || adjustable != null)) {
+			// A fill-pointered/adjustable character vector: the general array shape,
+			// marked mutable-character by _charVecMake's length-4 header. Elements
+			// default to spaces so unfilled slots read back as characters.
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			compileKeywordValueOrNull(initValue != null ? initValue : new LispChar(' '), ctx, className);
+			compileKeywordValueOrNull(fillPointer, ctx, className);
+			compileKeywordValueOrNull(adjustable, ctx, className);
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.CHAR_VEC_MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
 			return;
 		}
 		if (ctx.usesFloatArray && isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
@@ -377,6 +398,22 @@ final class JvmArrayCompiler {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Emits an {@code invokestatic _strv} call normalizing a mutable character vector on
+	 * the operand stack into the quote-framed runtime string (any other value passes
+	 * through unchanged). A no-op unless the array runtime helpers are emitted -- a
+	 * character vector can only be created by {@code make-array}, which raises the same
+	 * gate -- so array-free programs stay byte-identical.
+	 * @param ctx the compilation context
+	 * @param className the generated class name
+	 */
+	static void emitStrvNormalize(JvmLispCompiler.Ctx ctx, String className) {
+		if (!ctx.usesArrays) {
+			return;
+		}
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.STRV, JvmArrayRuntimeBuilder.STRV_DESC);
 	}
 
 	private static void invokeHelper(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {

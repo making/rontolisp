@@ -545,6 +545,31 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Emits {@code call FUNC_CHARVEC_TO_STR}: replaces a mutable character vector on the
+	 * stack with the equivalent quote-framed runtime string; any other value passes
+	 * through unchanged. Inserted after the string operand of every string consumer
+	 * (char, subseq, string=/-equal, case/trim/concat, write-string, read-from-string,
+	 * intern, make-symbol) so a fill-pointered/adjustable character vector behaves as a
+	 * string there. See {@link WasmStringRuntimeBuilder#buildCharvecToStrBody()}.
+	 * @param ctx the compilation context (its writer receives the instructions)
+	 */
+	static void emitCharvecToStrCall(WasmLispCompiler.Ctx ctx) {
+		emitCharvecToStrCall(ctx.writer);
+	}
+
+	/**
+	 * The raw-{@link WasmWriter} counterpart of
+	 * {@link #emitCharvecToStrCall(WasmLispCompiler.Ctx)}, for the runtime builders
+	 * ({@code _equal}/{@code _hash}/{@code _print_val}/{@code _princ_val} normalize their
+	 * argument at entry through it).
+	 * @param w the writer for the function body being emitted
+	 */
+	static void emitCharvecToStrCall(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_CHARVEC_TO_STR);
+	}
+
+	/**
 	 * Given a value on the stack that is a {@code TYPE_STRING}, replaces it with its
 	 * {@code $str_bytes} data array (field 2), cast to the concrete array type so callers
 	 * can {@code array.get_u} / {@code array.len} it. The array holds the same

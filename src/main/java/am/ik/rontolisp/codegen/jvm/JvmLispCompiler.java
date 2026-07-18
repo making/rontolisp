@@ -642,14 +642,25 @@ public final class JvmLispCompiler implements LispCompiler {
 			indirectCallArities.add(1);
 		}
 
-		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
-		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass);
-
 		// Whether the program can produce a packed float array (a #d(...) literal or
 		// make-array :element-type 'double-float). When true, the array op compilers
 		// route through the _fv* dispatch helpers so a packed double[] and a general
 		// ArrayList are both handled; when false the default build is byte-identical.
 		boolean usesFloatArray = programUsesFloatArray(program);
+
+		// Whether the array runtime helper group is emitted (the same test that gates
+		// its emission below). The mutable-character-vector consumers -- the _eqv
+		// normalization, the stringp extension, the per-site _strv calls and the print
+		// branch -- all key off this one gate, so an array-free program compiles
+		// byte-identically to a build that never knew character vectors.
+		boolean usesArrays = programUsesAnyArrayOp(program) || usesFloatArray;
+		MethodrefConstant strvMethod = usesArrays ? cp.addMethodref(thisClass, cp
+			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
+				: null;
+
+		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
+		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass,
+				strvMethod);
 
 		// --vec: emit the Vector API acceleration bridge only when the program actually
 		// references one of the six accelerated vec: kernels (directly or via a spliced
@@ -727,6 +738,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
 			.usesFloatArray(usesFloatArray)
+			.usesArrays(usesArrays)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
@@ -993,7 +1005,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		// two array-printing helpers (_arrayToString / _arrayToDisplayString) so a
 		// literal
 		// or make-array result prints as #(...) / #2A(...).
-		boolean usesArrays = programUsesAnyArrayOp(program) || usesFloatArray;
 		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods;
 		if (usesArrays) {
 			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(
@@ -1069,7 +1080,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
 				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, characterClass, charValue, charPrin1Method,
-				arrayListClassForPrint, arrayToStringMethod, javaPrint, futurePrint, packedPrint);
+				arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, futurePrint, packedPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
@@ -1077,7 +1088,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
 				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
 				characterClass, charValue, stringValueOfChar, arrayListClassForPrint, arrayToDisplayStringMethod,
-				javaPrint, futurePrint, packedPrint);
+				strvMethod, javaPrint, futurePrint, packedPrint);
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, stringValueOfChar);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
@@ -2387,6 +2398,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesFloatArray = false;
 
 		/**
+		 * True when the array runtime helper group ({@link JvmArrayRuntimeBuilder}) is
+		 * emitted for this program. Gates the mutable-character-vector consumers (the
+		 * {@code stringp} extension and the per-site {@code _strv} normalization), so an
+		 * array-free program compiles byte-identically. Shared across every context.
+		 */
+		boolean usesArrays = false;
+
+		/**
 		 * True for the single context that compiles top-level forms (the {@code main}
 		 * body), false for defun/lambda bodies. When the embedded {@code eval} runtime is
 		 * present, a top-level global variable binding is mirrored into the runtime's
@@ -2494,6 +2513,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.conditionChannel = builder.conditionChannel;
 			this.dynamic = builder.dynamic;
 			this.usesFloatArray = builder.usesFloatArray;
+			this.usesArrays = builder.usesArrays;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
 			this.structAccessors = builder.structAccessors;
@@ -2705,6 +2725,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean dynamic = false;
 
 			private boolean usesFloatArray = false;
+
+			private boolean usesArrays = false;
 
 			private String className = "";
 
@@ -3038,6 +3060,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesFloatArray(boolean usesFloatArray) {
 				this.usesFloatArray = usesFloatArray;
+				return this;
+			}
+
+			Builder usesArrays(boolean usesArrays) {
+				this.usesArrays = usesArrays;
 				return this;
 			}
 

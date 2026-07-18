@@ -219,10 +219,12 @@ backends (interpreter, JVM, WASM Preview 1 and `--component`), and a seventh
   shim's real slot list. Its dependencies (`closer-mop`, `flexi-streams`,
   `float-features`, `trivial-gray-streams`, `uiop`) resolve to the built-in
   shim systems below. The JVM/WASM compile path cannot run the full library
-  yet (its float printer does 64-bit/bignum bit arithmetic beyond the WASM
-  numeric model, and its adjustable-string buffers are interpreter-only);
-  the isolated language features it forced are compiled everywhere, tracked
-  by the `jzon-residue-features` ci-spec case.
+  yet (its float reader/printer tables do 64-bit/bignum bit arithmetic beyond
+  the WASM numeric model and reference load-time state at read time);
+  the isolated language features it forced -- including the adjustable
+  fill-pointered string buffers it accumulates into -- are compiled
+  everywhere, tracked by the `jzon-residue-features` and
+  `mutable-strings-cross-backend` ci-spec cases.
 
 Runnable demos for all six — with the per-backend commands and
 expected output — live in

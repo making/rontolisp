@@ -60,11 +60,11 @@ final class WasmSymbolApiCompiler {
 			throw new UnsupportedOperationException(
 					LispNames.INTERN + " with a non-keyword package argument is not supported");
 		}
-		compileUnaryCall(cons, LispNames.INTERN, WasmLispCompiler.FUNC_INTERN_SYM, ctx);
+		compileUnaryCall(cons, LispNames.INTERN, WasmLispCompiler.FUNC_INTERN_SYM, ctx, true);
 	}
 
 	static void compileMakeSymbol(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileUnaryCall(cons, LispNames.MAKE_SYMBOL, WasmLispCompiler.FUNC_MAKE_SYMBOL, ctx);
+		compileUnaryCall(cons, LispNames.MAKE_SYMBOL, WasmLispCompiler.FUNC_MAKE_SYMBOL, ctx, true);
 	}
 
 	static void compileBoundp(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -125,8 +125,19 @@ final class WasmSymbolApiCompiler {
 	}
 
 	private static void compileUnaryCall(LispCons cons, String name, int funcIndex, WasmLispCompiler.Ctx ctx) {
+		compileUnaryCall(cons, name, funcIndex, ctx, false);
+	}
+
+	// normalizeCharVector: intern/make-symbol expect a STRING argument, so a mutable
+	// character vector normalizes through _charvec_to_str first; symbol-name/string go
+	// through _princ_to_str, whose print path already normalizes.
+	private static void compileUnaryCall(LispCons cons, String name, int funcIndex, WasmLispCompiler.Ctx ctx,
+			boolean normalizeCharVector) {
 		List<LispVal> parts = requireArgs(cons, name);
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		if (normalizeCharVector) {
+			WasmEmitHelper.emitCharvecToStrCall(ctx);
+		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(funcIndex);
 	}

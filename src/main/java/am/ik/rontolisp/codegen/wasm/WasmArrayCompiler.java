@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispNames;
@@ -72,6 +73,14 @@ final class WasmArrayCompiler {
 		if (findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD) != null) {
 			throw new UnsupportedOperationException("make-array: :displaced-index-offset requires :displaced-to");
 		}
+		LispVal charContentsLowering = am.ik.rontolisp.LispMacroExpander.lowerCharacterInitialContentsMakeArray(cons);
+		if (charContentsLowering != null) {
+			// A rank-1 character array built from :initial-contents is a fresh string
+			// copy of the contents (a mutable character vector normalizes through the
+			// lowering's subseq).
+			WasmExprCompiler.compileExpr(charContentsLowering, ctx);
+			return;
+		}
 		LispVal contentsLowering = am.ik.rontolisp.LispMacroExpander.lowerInitialContentsMakeArray(cons);
 		if (contentsLowering != null) {
 			// :initial-contents lowers to the allocation plus an element-wise fill.
@@ -88,6 +97,12 @@ final class WasmArrayCompiler {
 		boolean doubleFloat = isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
 		LispVal fpArg = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
 		LispVal adjArg = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
+		// A fill-pointered/adjustable character vector: the general array shape holding
+		// TYPE_CHAR elements, marked mutable-character by a meta offset of 1 (an
+		// ordinary array's offset is 0; a displaced array holds a cell in its data
+		// slot). _charvec_to_str renders it as a string on demand.
+		boolean charVector = am.ik.rontolisp.LispMacroExpander.isCharacterElementType(
+				findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD)) && (fpArg != null || adjArg != null);
 		if ((doubleFloat || singleFloat) && fpArg == null && adjArg == null) {
 			// A plain :element-type 'double-float / 'single-float array (no fill pointer
 			// /
@@ -101,6 +116,10 @@ final class WasmArrayCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int dimsSlot = setTemp(ctx);
 		LispVal init = findInitialElement(args);
+		if (init == null && charVector) {
+			// Elements default to spaces so unfilled slots read back as characters.
+			init = new LispChar(' ');
+		}
 		if (init == null && (doubleFloat || singleFloat)) {
 			// An :element-type 'double-float / 'single-float array with a fill pointer /
 			// adjustable falls back to a general (boxed) array; default its elements to
@@ -192,7 +211,8 @@ final class WasmArrayCompiler {
 			adjValSlot = setTemp(ctx);
 		}
 
-		// header = cons(dimsArr, cons(cons(fp, cons(adj, 0)), data));
+		// header = cons(dimsArr, cons(cons(fp, cons(adj, offset)), data)); the offset
+		// is 1 for a mutable character vector (the marker), else 0.
 		// cell = struct.new TYPE_CELL(header)
 		getLocal(ctx, dimsArrSlot);
 		if (fpValSlot >= 0) {
@@ -207,7 +227,7 @@ final class WasmArrayCompiler {
 		else {
 			refNull(ctx);
 		}
-		i32Const(ctx, 0);
+		i32Const(ctx, charVector ? 1 : 0);
 		boxI31(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
@@ -1070,15 +1090,31 @@ final class WasmArrayCompiler {
 	}
 
 	static void compileDispOffset(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		// (%array-disp-offset array): the displacement offset i31 (meta.cdr.cdr; 0 for
-		// an ordinary array).
+		// (%array-disp-offset array): the displacement offset i31 (meta.cdr.cdr), but
+		// only when the array IS displaced (its data slot holds a target cell) -- a
+		// non-displaced array reports i31 0 even when the offset word carries the
+		// mutable-character-vector marker (1).
 		requireArgs(cons, 2, "%array-disp-offset expects 1 argument");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		castCellGet0(ctx);
+		int headerSlot = setTemp(ctx);
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		getLocal(ctx, headerSlot);
 		getMeta(ctx);
 		castConsGet(ctx, 1);
 		castConsGet(ctx, 1);
+		ctx.writer.write(Instruction.ELSE);
+		i32Const(ctx, 0);
+		boxI31(ctx);
+		ctx.writer.write(Instruction.END);
 	}
 
 	static void compileVectorPush(LispCons cons, WasmLispCompiler.Ctx ctx) {

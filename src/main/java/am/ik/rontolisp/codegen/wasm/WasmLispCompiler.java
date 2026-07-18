@@ -521,20 +521,32 @@ public final class WasmLispCompiler implements LispCompiler {
 	// of a string value straight from its GC array. See the type comment.
 	static final int FUNC_WRITE_STR_GC = FUNC_STR_TO_MEM + 1;
 
+	// _charvec_to_str (v) -> (ref null eq): normalizes a mutable character vector (the
+	// general array shape holding TYPE_CHAR elements, marked by meta offset i31 == 1)
+	// into the equivalent quote-framed runtime string (built via _str_fresh); any other
+	// value passes through unchanged. Called by the string consumers (stringp, char,
+	// subseq, string=/-equal, case/trim/concat, write-string, read-from-string, intern,
+	// make-symbol) and at the entry of _equal/_hash/_print_val/_princ_val so a character
+	// vector behaves as a string everywhere. Reuses the unary TYPE_CALLABLE_BASE + 0
+	// signature, so no new type entry.
+	static final int FUNC_CHARVEC_TO_STR = FUNC_WRITE_STR_GC + 1;
+
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
-	// under --simd. Fixed indices relative to FUNC_WRITE_STR_GC, so every constant above
+	// under --simd. Fixed indices relative to FUNC_CHARVEC_TO_STR, so every constant
+	// above
 	// keeps
 	// its value; the user defuns below shift by WasmVecSimdRuntimeBuilder.FUNC_COUNT when
 	// the block is present. Read the base through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_WRITE_STR_GC + 1;
+	static final int FUNC_VEC_BASE = FUNC_CHARVEC_TO_STR + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
 	// p1-future-await helper, the two binary stream helpers, the four string-stream
-	// helpers, the five symbol-API helpers, the read-char helper, and the four string
-	// GC helpers (_str_build, _str_fresh, _str_to_mem, _write_str_gc) -- plus, under
+	// helpers, the five symbol-API helpers, the read-char helper, the four string
+	// GC helpers (_str_build, _str_fresh, _str_to_mem, _write_str_gc), and the
+	// character-vector normalizer (_charvec_to_str) -- plus, under
 	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_WRITE_STR_GC + 1;
+	static final int FUNC_USER_BASE = FUNC_CHARVEC_TO_STR + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -2661,6 +2673,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_RAT_NEW); // _str_fresh (FUNC_STR_FRESH)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_to_mem (FUNC_STR_TO_MEM)
 				fnDef.addFunction(TYPE_WRITE_STR_GC); // _write_str_gc (FUNC_WRITE_STR_GC)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _charvec_to_str
+															// (FUNC_CHARVEC_TO_STR)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -3028,6 +3042,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				// _write_str_gc (FUNC_WRITE_STR_GC): print a string value from its GC
 				// array.
 				code.addFunction(WasmStringRuntimeBuilder.buildWriteStrGcBody());
+				// _charvec_to_str (FUNC_CHARVEC_TO_STR): normalize a mutable character
+				// vector into the equivalent runtime string.
+				code.addFunction(WasmStringRuntimeBuilder.buildCharvecToStrBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

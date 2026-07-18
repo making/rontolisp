@@ -21,7 +21,9 @@ final class WasmReadFromStringCompiler {
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		int val = ctx.allocTemp();
+		// A mutable character vector normalizes to a string first.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(val);
 		// The string's bytes live on the GC heap, so copy them into the reader input

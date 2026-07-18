@@ -5129,21 +5129,27 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (replace seq1 seq2 &key start1 end1 start2 end2)} into a
-	 * {@code concatenate} of the untouched head/tail of {@code seq1} around the copied
-	 * region of {@code seq2}. String-aware; since strings are immutable values this
-	 * returns a fresh string rather than mutating {@code seq1} in place. The keywords
-	 * must be literal.
+	 * Expands {@code (replace seq1 seq2 &key start1 end1 start2 end2)}. A mutable
+	 * {@code seq1} (a general vector, including a fill-pointered character vector) is
+	 * updated IN PLACE by an element-copy loop and returned, as in CL; an immutable
+	 * string {@code seq1} instead rebuilds a fresh string with {@code concatenate} of the
+	 * untouched head/tail around the copied region of {@code seq2}. The branch is chosen
+	 * at runtime on {@code %arrayp}; the keywords must be literal.
 	 *
 	 * <pre>
 	 * (replace s1 s2 :start1 a) ->
 	 * (let* ((__rpl_1 s1) (__rpl_2 s2)
 	 *        (__rpl_s1 a) (__rpl_e1 (length __rpl_1)) (__rpl_s2 0) (__rpl_e2 (length __rpl_2))
 	 *        (__rpl_n (min (- __rpl_e1 __rpl_s1) (- __rpl_e2 __rpl_s2))))
-	 *   (concatenate 'string
-	 *     (subseq __rpl_1 0 __rpl_s1)
-	 *     (subseq __rpl_2 __rpl_s2 (+ __rpl_s2 __rpl_n))
-	 *     (subseq __rpl_1 (+ __rpl_s1 __rpl_n) (length __rpl_1))))
+	 *   (if (%arrayp __rpl_1)
+	 *       (progn (dotimes (__rpl_k __rpl_n)
+	 *                (%row-major-aset __rpl_1 (+ __rpl_s1 __rpl_k)
+	 *                                 (elt __rpl_2 (+ __rpl_s2 __rpl_k))))
+	 *              __rpl_1)
+	 *       (concatenate 'string
+	 *         (subseq __rpl_1 0 __rpl_s1)
+	 *         (subseq __rpl_2 __rpl_s2 (+ __rpl_s2 __rpl_n))
+	 *         (subseq __rpl_1 (+ __rpl_s1 __rpl_n) (length __rpl_1)))))
 	 * </pre>
 	 * @param cons the replace expression
 	 * @return the expanded expression
@@ -5187,7 +5193,13 @@ public final class LispMacroExpander {
 		LispVal head = fmtCall(LispNames.SUBSEQ, r1, new LispInteger(0), vs1);
 		LispVal mid = fmtCall(LispNames.SUBSEQ, r2, vs2, fmtCall(LispNames.ADD, vs2, n));
 		LispVal tail = fmtCall(LispNames.SUBSEQ, r1, fmtCall(LispNames.ADD, vs1, n), fmtCall(LispNames.LENGTH, r1));
-		LispVal body = fmtCall(LispNames.CONCATENATE, quoteOf("string"), head, mid, tail);
+		LispVal functional = fmtCall(LispNames.CONCATENATE, quoteOf("string"), head, mid, tail);
+		LispSymbol k = new LispSymbol("__rpl_k");
+		LispVal copyLoop = listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(k, n)),
+				fmtCall(LispNames.ROW_MAJOR_ASET, r1, fmtCall(LispNames.ADD, vs1, k),
+						fmtCall(LispNames.ELT, r2, fmtCall(LispNames.ADD, vs2, k)))));
+		LispVal mutating = makeProgn(List.of(copyLoop, r1));
+		LispVal body = makeIf(callOf(LispNames.ARRAYP_INTERNAL, r1), mutating, functional);
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
 	}
 
@@ -11068,19 +11080,7 @@ public final class LispMacroExpander {
 				}
 			}
 		}
-		LispVal sym = elementType;
-		if (sym instanceof LispCons quoteCons && quoteCons.car() instanceof LispSymbol q
-				&& LispNames.QUOTE.equals(q.name()) && quoteCons.cdr() instanceof LispCons rest
-				&& rest.cdr() instanceof LispNil) {
-			sym = rest.car();
-		}
-		if (!(sym instanceof LispSymbol typeSym)) {
-			return null;
-		}
-		String name = typeSym.name();
-		int colon = name.lastIndexOf(':');
-		String local = colon >= 0 ? name.substring(colon + 1) : name;
-		if (!local.equals("character") && !local.equals("base-char") && !local.equals("standard-char")) {
+		if (!isCharacterElementType(elementType)) {
 			return null;
 		}
 		List<LispVal> makeString = new java.util.ArrayList<>(
@@ -11090,6 +11090,73 @@ public final class LispMacroExpander {
 			makeString.add(initialElement);
 		}
 		return listToCons(makeString);
+	}
+
+	/**
+	 * Whether a literal {@code make-array :element-type} value designates a character
+	 * type ({@code character}/{@code base-char}/{@code standard-char}, quoted or bare,
+	 * package-qualified or plain).
+	 * @param elementType the {@code :element-type} value expression, or null
+	 * @return true when it designates a character type
+	 */
+	public static boolean isCharacterElementType(@Nullable LispVal elementType) {
+		LispVal sym = elementType;
+		if (sym instanceof LispCons quoteCons && quoteCons.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoteCons.cdr() instanceof LispCons rest
+				&& rest.cdr() instanceof LispNil) {
+			sym = rest.car();
+		}
+		if (!(sym instanceof LispSymbol typeSym)) {
+			return false;
+		}
+		String name = typeSym.name();
+		int colon = name.lastIndexOf(':');
+		String local = colon >= 0 ? name.substring(colon + 1) : name;
+		return local.equals("character") || local.equals("base-char") || local.equals("standard-char");
+	}
+
+	/**
+	 * Lowers a rank-1 {@code (make-array n :element-type 'character :initial-contents
+	 * c)} to a string copy of the contents: a string (or fill-pointered character vector)
+	 * contents yields a fresh {@code subseq} copy of its active content, any other
+	 * sequence goes through {@code (coerce c 'string)}. Returns null when the call has
+	 * other keywords (fill pointer / adjustable / displacement fall to the general paths)
+	 * or a non-character element type.
+	 * @param cons the make-array expression
+	 * @return the lowered expression, or null when not applicable
+	 */
+	public static @Nullable LispVal lowerCharacterInitialContentsMakeArray(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			return null;
+		}
+		LispVal elementType = null;
+		LispVal contents = null;
+		for (int i = 2; i + 1 < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol kw)) {
+				return null;
+			}
+			switch (kw.name()) {
+				case LispNames.ELEMENT_TYPE_KEYWORD -> elementType = parts.get(i + 1);
+				case LispNames.INITIAL_CONTENTS_KEYWORD -> contents = parts.get(i + 1);
+				default -> {
+					return null;
+				}
+			}
+		}
+		if (contents == null || !isCharacterElementType(elementType)) {
+			return null;
+		}
+		// (let* ((__mca_n n) (__mca_c c))
+		// (if (stringp __mca_c) (subseq __mca_c 0) (coerce __mca_c 'string)))
+		LispSymbol nVar = new LispSymbol("__mca_n");
+		LispSymbol cVar = new LispSymbol("__mca_c");
+		LispVal copy = fmtCall(LispNames.SUBSEQ, cVar, new LispInteger(0));
+		LispVal convert = fmtCall(LispNames.COERCE, cVar, quoteOf("string"));
+		LispVal body = makeIf(callOf(LispNames.STRINGP, cVar), copy, convert);
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(nVar, parts.get(1))), listToCons(List.of(cVar, contents))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
 	}
 
 	/**
@@ -11114,13 +11181,16 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Rewrites {@code (%schar-set var index char)} for the compiled backends, which have
-	 * no in-place string mutation: the string is rebuilt with the character replaced and
-	 * {@code setq}-bound back to the variable, and the stored character is the value.
-	 * Lite semantics: the string place must be a variable (any other expression has
-	 * nowhere to store the rebuilt string), and the update is visible through that
-	 * variable only -- an alias made before the write still sees the old content (the
-	 * interpreter mutates in place).
+	 * Rewrites {@code (%schar-set var index char)} for the compiled backends. A mutable
+	 * character vector (a fill-pointered {@code make-array :element-type 'character}
+	 * result, represented as a general vector) is written IN PLACE through
+	 * {@code %row-major-aset}; an immutable string is rebuilt with the character replaced
+	 * and {@code setq}-bound back to the variable. The branch is chosen at runtime on
+	 * {@code %arrayp}; the stored character is the value. Lite semantics: the string
+	 * place must be a variable (an immutable string has nowhere else to store the rebuilt
+	 * result), and for an immutable string the update is visible through that variable
+	 * only -- an alias made before the write still sees the old content (the interpreter
+	 * mutates in place).
 	 * @param cons the %schar-set call
 	 * @return the expanded expression
 	 */
@@ -11140,8 +11210,10 @@ public final class LispMacroExpander {
 		LispVal tail = fmtCall(LispNames.SUBSEQ, var, fmtCall(LispNames.ADD, idxVar, new LispInteger(1)));
 		LispVal rebuilt = fmtCall(LispNames.STRING_CONCAT, fmtCall(LispNames.STRING_CONCAT, head, mid), tail);
 		LispVal assign = listToCons(List.of(new LispSymbol(LispNames.SETQ), var, rebuilt));
-		return makeLet(idxVar.name(), parts.get(2),
-				makeLet(chVar.name(), parts.get(3), makeProgn(List.of(assign, chVar))));
+		LispVal functional = makeProgn(List.of(assign, chVar));
+		LispVal mutating = makeProgn(List.of(fmtCall(LispNames.ROW_MAJOR_ASET, var, idxVar, chVar), chVar));
+		LispVal body = makeIf(callOf(LispNames.ARRAYP_INTERNAL, var), mutating, functional);
+		return makeLet(idxVar.name(), parts.get(2), makeLet(chVar.name(), parts.get(3), body));
 	}
 
 	/**

@@ -30,8 +30,9 @@ final class JvmStringDesignatorHelper {
 		StringConstant quote = ctx.cp.addString("\"");
 		StringConstant colon = ctx.cp.addString(":");
 
-		// s = (String) arg
+		// s = (String) arg (a mutable character vector normalizes to a string first)
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.stringClass.index());
 		int sSlot = ctx.allocTemp();

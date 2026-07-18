@@ -21,12 +21,22 @@ import am.ik.jvm.Opcode;
  * element {@code (i)} at {@code 1 + i}.
  *
  * <p>
+ * A MUTABLE CHARACTER VECTOR ({@code make-array :element-type 'character} with
+ * {@code :fill-pointer}/{@code :adjustable}) is the same representation holding
+ * {@code java.lang.Character} elements, marked by a LENGTH-4 header {@code Object[]{dims,
+ * fillPointer, adjustable, null}} ({@code _charVecMake}). The {@code _strv} normalizer
+ * renders it into the quote-framed runtime string on demand so the string consumers
+ * ({@code stringp}, {@code char}, {@code string=}, {@code subseq}, printing,
+ * {@code _eqv}) treat it as a string.
+ *
+ * <p>
  * A displaced array ({@code make-array :displaced-to}) instead carries a 5-element header
  * {@code Object[]{dims, null, null, target, offset}} and holds NO data slots: every data
  * access goes through {@code _rmGet}/{@code _rmSet}, which follow the target chain adding
- * each hop's offset to the 1-based list index (so writes alias the target's storage). A
- * displaced array never has a fill pointer and is never adjustable (lite semantics,
- * enforced at compile time).
+ * each hop's offset to the 1-based list index (so writes alias the target's storage) --
+ * displacement is header length 5 exactly, so the character-vector marker never reads as
+ * a displacement. A displaced array never has a fill pointer and is never adjustable
+ * (lite semantics, enforced at compile time).
  *
  * <p>
  * The generated static helpers (gated on the program actually using arrays):
@@ -137,6 +147,12 @@ final class JvmArrayRuntimeBuilder {
 	static final String DISP_OFFSET = "_arrayDispOffset";
 
 	static final String DISP_OFFSET_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String CHAR_VEC_MAKE = "_charVecMake";
+
+	static final String STRV = "_strv";
+
+	static final String STRV_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -792,7 +808,7 @@ final class JvmArrayRuntimeBuilder {
 		int dtNil = dt.label();
 		dt.aload(1);
 		dt.arraylength();
-		dt.iconst(3);
+		dt.iconst(4);
 		dt.branch(Opcode.IF_ICMPLE, dtNil);
 		dt.aload(1);
 		dt.iconst(3);
@@ -811,7 +827,7 @@ final class JvmArrayRuntimeBuilder {
 		int dofsNone = dofs.label();
 		dofs.aload(1);
 		dofs.arraylength();
-		dofs.iconst(3);
+		dofs.iconst(4);
 		dofs.branch(Opcode.IF_ICMPLE, dofsNone);
 		dofs.aload(1);
 		dofs.iconst(4);
@@ -823,12 +839,148 @@ final class JvmArrayRuntimeBuilder {
 		dofs.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(DISP_OFFSET), cp.addUtf8(DISP_OFFSET_DESC), 3, 2, dofs.finish()));
 
+		// _charVecMake(dims, init, fp, adj): _arrayMake with the returned list's slot-0
+		// header replaced by a length-4 copy {dims, fp, adj, null} -- the mutable
+		// character vector marker. Locals: 0..3 = params, 4 = list, 5 = header,
+		// 6 = newHeader.
+		MethodrefConstant selfArrayMake = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC)));
+		JvmAsm cv = new JvmAsm();
+		cv.aload(0);
+		cv.aload(1);
+		cv.aload(2);
+		cv.aload(3);
+		cv.invokestatic(selfArrayMake);
+		cv.checkcast(arrayListClass);
+		cv.astore(4);
+		emitLoadHeader(cv, arrayListClass, objectArrayClass, alGet, 4);
+		cv.astore(5);
+		cv.iconst(4);
+		cv.anewarray(objectClass);
+		cv.astore(6);
+		for (int slot = 0; slot < 3; slot++) {
+			cv.aload(6);
+			cv.iconst(slot);
+			cv.aload(5);
+			cv.iconst(slot);
+			cv.aaload();
+			cv.aastore();
+		}
+		cv.aload(4);
+		cv.iconst(0);
+		cv.aload(6);
+		cv.invokevirtual(alSet);
+		cv.pop();
+		cv.aload(4);
+		cv.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(CHAR_VEC_MAKE), cp.addUtf8(MAKE_DESC), 4, 7, cv.finish()));
+
+		// _strv(o): normalizes a mutable character vector (a length-4-header array of
+		// Character elements) into the quote-framed runtime string, reading up to the
+		// fill pointer (or dims[0] when the fill pointer is nil); any other value is
+		// returned unchanged. Locals: 0 = o, 1 = list, 2 = header, 3 = n (int), 4 = sb,
+		// 5 = i (int).
+		ClassConstant sbClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
+		MethodrefConstant sbInit = cp.addMethodref(sbClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		MethodrefConstant sbAppendChar = cp.addMethodref(sbClass,
+				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(C)Ljava/lang/StringBuilder;")));
+		MethodrefConstant sbAppendStr = cp.addMethodref(sbClass,
+				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
+		MethodrefConstant sbToString = cp.addMethodref(sbClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		MethodrefConstant charCharValue = cp.addMethodref(charClass,
+				cp.addNameAndType(cp.addUtf8("charValue"), cp.addUtf8("()C")));
+		am.ik.jvm.ConstantPool.StringConstant quoteStr = cp.addString("\"");
+		JvmAsm sv = new JvmAsm();
+		int svNotCv = sv.label();
+		sv.aload(0);
+		sv.instanceOf(arrayListClass);
+		sv.branch(Opcode.IFEQ, svNotCv);
+		sv.aload(0);
+		sv.checkcast(arrayListClass);
+		sv.astore(1);
+		sv.aload(1);
+		sv.invokevirtual(alSize);
+		sv.branch(Opcode.IFEQ, svNotCv);
+		sv.aload(1);
+		sv.iconst(0);
+		sv.invokevirtual(alGet);
+		sv.instanceOf(objectArrayClass);
+		sv.branch(Opcode.IFEQ, svNotCv);
+		sv.aload(1);
+		sv.iconst(0);
+		sv.invokevirtual(alGet);
+		sv.checkcast(objectArrayClass);
+		sv.astore(2);
+		sv.aload(2);
+		sv.arraylength();
+		sv.iconst(4);
+		sv.branch(Opcode.IF_ICMPNE, svNotCv);
+		// n = header[1] != null ? fill pointer : dims[0]
+		int svUseDim = sv.label();
+		int svHaveN = sv.label();
+		sv.aload(2);
+		sv.iconst(1);
+		sv.aaload();
+		sv.branch(Opcode.IFNULL, svUseDim);
+		sv.aload(2);
+		sv.iconst(1);
+		sv.aaload();
+		sv.checkcast(longClass);
+		sv.invokevirtual(longIntValue);
+		sv.istore(3);
+		sv.branch(Opcode.GOTO, svHaveN);
+		sv.bind(svUseDim);
+		emitLoadDim0(sv, longClass, objectArrayClass, longIntValue, 2);
+		sv.istore(3);
+		sv.bind(svHaveN);
+		// sb = new StringBuilder("\""); for i in 0..n-1: sb.append(char at 1 + i)
+		sv.anew(sbClass);
+		sv.dup();
+		sv.ldcString(quoteStr);
+		sv.invokespecial(sbInit);
+		sv.astore(4);
+		sv.iconst(0);
+		sv.istore(5);
+		int svLoop = sv.label();
+		int svDone = sv.label();
+		sv.bind(svLoop);
+		sv.iload(5);
+		sv.iload(3);
+		sv.branch(Opcode.IF_ICMPGE, svDone);
+		sv.aload(4);
+		sv.aload(1);
+		sv.iconst(1);
+		sv.iload(5);
+		sv.op(Opcode.IADD);
+		sv.invokevirtual(alGet);
+		sv.checkcast(charClass);
+		sv.invokevirtual(charCharValue);
+		sv.invokevirtual(sbAppendChar);
+		sv.pop();
+		sv.iinc(5, 1);
+		sv.branch(Opcode.GOTO, svLoop);
+		sv.bind(svDone);
+		sv.aload(4);
+		sv.ldcString(quoteStr);
+		sv.invokevirtual(sbAppendStr);
+		sv.pop();
+		sv.aload(4);
+		sv.invokevirtual(sbToString);
+		sv.areturn();
+		sv.bind(svNotCv);
+		sv.aload(0);
+		sv.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(STRV), cp.addUtf8(STRV_DESC), 5, 6, sv.finish()));
+
 		return methods;
 	}
 
 	// Follows the displacement chain of the array list in listSlot: while its header is
 	// a 5-element {dims, fp, adj, target, offset} with a non-null target, add the
-	// offset to the 1-based list index in idxSlot and hop listSlot to the target.
+	// offset to the 1-based list index in idxSlot and hop listSlot to the target. A
+	// length-4 header (a mutable character vector) is NOT a displacement.
 	private static void emitResolveDisplacement(JvmAsm a, ClassConstant arrayListClass, ClassConstant longClass,
 			ClassConstant objectArrayClass, MethodrefConstant alGet, MethodrefConstant longIntValue, int listSlot,
 			int idxSlot, int headerSlot) {
@@ -839,7 +991,7 @@ final class JvmArrayRuntimeBuilder {
 		a.astore(headerSlot);
 		a.aload(headerSlot);
 		a.arraylength();
-		a.iconst(3);
+		a.iconst(4);
 		a.branch(Opcode.IF_ICMPLE, done);
 		a.aload(headerSlot);
 		a.iconst(3);

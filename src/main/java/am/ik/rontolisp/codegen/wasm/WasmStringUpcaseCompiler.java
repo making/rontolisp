@@ -25,7 +25,9 @@ final class WasmStringUpcaseCompiler {
 
 	private static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, int func) {
 		List<LispVal> args = cons.toList();
+		// A mutable character vector normalizes to a string first.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(func);
 	}

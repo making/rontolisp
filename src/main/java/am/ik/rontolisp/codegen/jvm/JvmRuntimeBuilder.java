@@ -186,6 +186,7 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
 			MethodrefConstant charPrin1Method, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
+			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint) {
@@ -206,8 +207,9 @@ final class JvmRuntimeBuilder {
 		// if (val instanceof double[]) return
 		// _arrayToString(_fvToGeneral(val)).replaceFirst(...#d...); and
 		// if (val instanceof ArrayList) return _arrayToString(val); (only when arrays
-		// used)
-		emitArrayBranch(code, arrayListClass, arrayToStringMethod, packedPrint);
+		// used; a mutable character vector instead renders via _strv, quote-framed like
+		// the String branch)
+		emitArrayBranch(code, arrayListClass, arrayToStringMethod, packedPrint, strvMethod, stringClass, null, null);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -497,6 +499,7 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
 			MethodrefConstant stringValueOfChar, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod,
+			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint) {
@@ -515,8 +518,11 @@ final class JvmRuntimeBuilder {
 		emitFutureBranch(code, futurePrint);
 		// if (val instanceof double[]) return
 		// _arrayToDisplayString(_fvToGeneral(val)).replaceFirst(...#d...); and
-		// if (val instanceof ArrayList) return _arrayToDisplayString(val); (arrays only)
-		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, packedPrint);
+		// if (val instanceof ArrayList) return _arrayToDisplayString(val); (arrays only;
+		// a mutable character vector instead renders via _strv with the surrounding
+		// quotes stripped, like the String branch)
+		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, packedPrint, strvMethod, stringClass,
+				stringLength, stringSubstring);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -1017,11 +1023,18 @@ final class JvmRuntimeBuilder {
 	// packed double[] through the #d(...) syntax (so it round-trips to a packed array):
 	// the
 	// element data is rendered exactly as the general counterpart, then the leading
-	// #/#nA prefix is rewritten to #d.
+	// #/#nA prefix is rewritten to #d. A mutable CHARACTER VECTOR (an ArrayList that
+	// _strv normalizes to a String) renders like a string instead of #(...): the prin1
+	// body (stringLength/stringSubstring null) returns the quote-framed _strv result
+	// verbatim, the princ body strips the surrounding quotes with substring like its
+	// String branch.
 	private static void emitArrayBranch(List<Integer> code,
 			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
-			@org.jspecify.annotations.Nullable PackedPrint packedPrint) {
+			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
+			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod, ClassConstant stringClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant stringLength,
+			@org.jspecify.annotations.Nullable MethodrefConstant stringSubstring) {
 		if (arrayListClass == null || arrayToStringMethod == null) {
 			return;
 		}
@@ -1039,6 +1052,41 @@ final class JvmRuntimeBuilder {
 		int ifNotArrayPos = code.size();
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
+		if (strvMethod != null) {
+			// Object s = _strv(val); if (s instanceof String) -> character vector
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, strvMethod.index());
+			code.add(Opcode.ASTORE_1);
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, stringClass.index());
+			int ifPlainArrayPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, stringClass.index());
+			if (stringLength == null || stringSubstring == null) {
+				// prin1: the quote-framed string, exactly what the String branch returns
+				code.add(Opcode.ARETURN);
+			}
+			else {
+				// princ: return s.substring(1, s.length() - 1)
+				code.add(Opcode.ASTORE_1);
+				code.add(Opcode.ALOAD_1);
+				code.add(Opcode.ICONST_1);
+				code.add(Opcode.ALOAD_1);
+				code.add(Opcode.INVOKEVIRTUAL);
+				emitU2(code, stringLength.index());
+				code.add(Opcode.ICONST_1);
+				code.add(Opcode.ISUB);
+				code.add(Opcode.INVOKEVIRTUAL);
+				emitU2(code, stringSubstring.index());
+				code.add(Opcode.ARETURN);
+			}
+			patchBranch(code, ifPlainArrayPos, code.size());
+		}
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, arrayToStringMethod.index());

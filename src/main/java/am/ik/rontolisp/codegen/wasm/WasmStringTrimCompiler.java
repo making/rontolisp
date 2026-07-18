@@ -36,8 +36,11 @@ final class WasmStringTrimCompiler {
 
 	private static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, int mode) {
 		List<LispVal> args = cons.toList();
+		// Mutable character vectors normalize to strings first (bag and string).
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		// mode selector as an i31 integer
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(mode);

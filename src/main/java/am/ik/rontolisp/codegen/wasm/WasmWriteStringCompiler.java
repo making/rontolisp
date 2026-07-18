@@ -24,7 +24,9 @@ final class WasmWriteStringCompiler {
 		if (parts.size() != 2 && parts.size() != 3) {
 			throw new UnsupportedOperationException("write-string expects 1 or 2 arguments, got " + (parts.size() - 1));
 		}
+		// A mutable character vector normalizes to a string first.
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		if (parts.size() == 3) {
 			WasmExprCompiler.compileExpr(parts.get(2), ctx);
 		}
@@ -43,7 +45,9 @@ final class WasmWriteStringCompiler {
 
 	static void compileMakeInputStream(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
+		// A mutable character vector normalizes to a string first.
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_MAKE_STR_ISTREAM);
 	}

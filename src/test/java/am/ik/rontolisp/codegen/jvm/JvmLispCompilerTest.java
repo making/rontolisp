@@ -5442,6 +5442,150 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileCharVectorAccumulator() throws Exception {
+		// A fill-pointered/adjustable character vector is a mutable string on the JVM
+		// backend: stringp, length, string=, princ (bare content) and prin1 (quoted)
+		// all treat it as a string.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 4 :element-type 'character :fill-pointer 0 :adjustable t))
+				(vector-push-extend #\\a *s*)
+				(vector-push-extend #\\b *s*)
+				(print (list (stringp *s*) (length *s*) (string= *s* "ab")))
+				(princ *s*)
+				(terpri)
+				(prin1 *s*)
+				""")).isEqualTo("(t 2 t)\nab\n\"ab\"");
+	}
+
+	@Test
+	void compileCharVectorReplaceMutatesInPlace() throws Exception {
+		// replace on a character vector mutates IN PLACE (visible through an alias
+		// made before the write), unlike the functional rebuild on an immutable string.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 8 :element-type 'character :fill-pointer 0 :adjustable t))
+				(vector-push-extend #\\h *s*)
+				(vector-push-extend #\\e *s*)
+				(vector-push-extend #\\l *s*)
+				(vector-push-extend #\\l *s*)
+				(vector-push-extend #\\o *s*)
+				(setf (fill-pointer *s*) 5)
+				(defparameter *alias* *s*)
+				(replace *s* "xyz" :start1 1 :start2 0 :end2 2)
+				(print (list (string= *alias* "hxylo") (subseq *alias* 0)))
+				""")).isEqualTo("(t \"hxylo\")");
+	}
+
+	@Test
+	void compileCharVectorAdjustArrayGrows() throws Exception {
+		// adjust-array on an adjustable character vector grows it in place: the
+		// mutable-string marker survives, the fill pointer carries over, and pushes
+		// beyond the old capacity land after the kept content.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 2 :element-type 'character :fill-pointer 0 :adjustable t))
+				(vector-push-extend #\\a *s*)
+				(vector-push-extend #\\b *s*)
+				(adjust-array *s* 6)
+				(vector-push-extend #\\c *s*)
+				(print (list (stringp *s*) (string= (subseq *s* 0) "abc") (length *s*)))
+				""")).isEqualTo("(t t 3)");
+	}
+
+	@Test
+	void compileCharVectorInitialContentsCopies() throws Exception {
+		// (make-array n :element-type 'character :initial-contents charvec) yields a
+		// fresh simple string of the ACTIVE content, unaffected by later pushes.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 4 :element-type 'character :fill-pointer 0 :adjustable t))
+				(vector-push-extend #\\a *s*)
+				(vector-push-extend #\\b *s*)
+				(defparameter *copy* (make-array (fill-pointer *s*) :element-type 'character :initial-contents *s*))
+				(vector-push-extend #\\c *s*)
+				(print (list *copy* (stringp *copy*) (string= *copy* "ab") (string= *s* "abc")))
+				""")).isEqualTo("(\"ab\" t t t)");
+	}
+
+	@Test
+	void compileCharVectorEqualAndHashKey() throws Exception {
+		// equal compares a character vector to a string by content, and an
+		// equal-test hash table finds a string-keyed entry through it.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 2 :element-type 'character :fill-pointer 0))
+				(vector-push #\\a *s*)
+				(vector-push #\\b *s*)
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "ab" *h*) 1)
+				(print (list (equal *s* "ab") (gethash *s* *h*)))
+				""")).isEqualTo("(t 1)");
+	}
+
+	@Test
+	void compileScharSetfMutatesCharVectorInPlace() throws Exception {
+		// (setf (schar cv i) ch) writes the character vector IN PLACE, so an alias
+		// made before the write sees the update (an immutable string place only
+		// rebinds the variable).
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 3 :element-type 'character :fill-pointer 3 :initial-element #\\a))
+				(defparameter *alias* *s*)
+				(setf (schar *s* 1) #\\z)
+				(print (list (string= *alias* "aza") (schar *s* 1)))
+				""")).isEqualTo("(t #\\z)");
+	}
+
+	@Test
+	void compileCharVectorEltAndCoerce() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 3 :element-type 'character :fill-pointer 0))
+				(vector-push #\\x *s*)
+				(vector-push #\\y *s*)
+				(vector-push #\\z *s*)
+				(print (list (elt *s* 1) (coerce *s* 'list)))
+				""")).isEqualTo("(#\\y (#\\x #\\y #\\z))");
+	}
+
+	@Test
+	void compileJzonAccumulatorPattern() throws Exception {
+		// The jzon writer shape: a reusable adjustable accumulator filled with
+		// vector-push-extend, snapshotted via make-array :initial-contents, and reset
+		// with (setf (fill-pointer a) 0) between uses.
+		assertThat(compileAndRun("""
+				(defun make-adjustable-string ()
+				  (make-array 256 :element-type 'character :fill-pointer 0 :adjustable t))
+				(defparameter *acc* (make-adjustable-string))
+				(dolist (ch (coerce "hello" 'list))
+				  (vector-push-extend ch *acc*))
+				(defparameter *out1* (make-array (fill-pointer *acc*) :element-type 'character :initial-contents *acc*))
+				(setf (fill-pointer *acc*) 0)
+				(dolist (ch (coerce "world" 'list))
+				  (vector-push-extend ch *acc*))
+				(defparameter *out2* (make-array (fill-pointer *acc*) :element-type 'character :initial-contents *acc*))
+				(print (list *out1* *out2*))
+				""")).isEqualTo("(\"hello\" \"world\")");
+	}
+
+	@Test
+	void compileReplaceOnImmutableStringStaysFunctional() throws Exception {
+		// replace on an immutable string keeps returning a fresh rebuilt string; the
+		// original is untouched. The make-array keeps the array gate (and thus the
+		// runtime %arrayp branch) in this program.
+		assertThat(compileAndRun("""
+				(defparameter *pad* (make-array 1 :initial-element 0))
+				(defparameter *orig* "abc")
+				(defparameter *r* (replace *orig* "xy"))
+				(print (list *r* *orig*))
+				""")).isEqualTo("(\"xyc\" \"abc\")");
+	}
+
+	@Test
+	void compilePlainCharacterMakeArrayIsStillAString() throws Exception {
+		// Without :fill-pointer/:adjustable a rank-1 character array keeps the
+		// make-string lowering: an immutable simple string.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 3 :element-type 'character :initial-element #\\x))
+				(print (list *s* (stringp *s*)))
+				""")).isEqualTo("(\"xxx\" t)");
+	}
+
+	@Test
 	void compileAdjustArray() throws Exception {
 		// Non-adjustable -> fresh array; :adjustable -> adjusted in place (eq);
 		// rank-2 keeps the elements at their subscripts; the fill pointer carries

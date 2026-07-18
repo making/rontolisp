@@ -47,8 +47,9 @@ final class JvmSubseqCompiler {
 
 		// Pre-compile the argument expressions into slots (compileExpr writes to
 		// ctx.code; the dispatch assembly below is self-contained and appended after).
-		// seq = arg
+		// seq = arg (a mutable character vector normalizes to a string first)
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(seqSlot);
 		// start = (int) arg

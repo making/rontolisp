@@ -8,7 +8,9 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
 /**
- * Compiles the {@code stringp} predicate.
+ * Compiles the {@code stringp} predicate. A mutable character vector is normalized
+ * through {@code _charvec_to_str} first, so it satisfies the existing quote-framed
+ * {@code TYPE_STRING} test like the string it renders as.
  */
 final class WasmStringpCompiler {
 
@@ -18,6 +20,7 @@ final class WasmStringpCompiler {
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		int tmpSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(tmpSlot);

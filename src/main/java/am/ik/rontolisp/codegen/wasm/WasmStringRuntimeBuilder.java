@@ -333,6 +333,268 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	/**
+	 * Builds {@code _charvec_to_str} (FUNC_CHARVEC_TO_STR): normalizes a mutable
+	 * character vector into the equivalent quote-framed runtime string; any other value
+	 * is returned unchanged. A mutable character vector is the general array
+	 * representation ({@code TYPE_CELL} box, header {@code (dims . (meta . data))} with
+	 * {@code dims}/{@code data} both {@code TYPE_HASH_BUCKETS} arrays) whose meta offset
+	 * ({@code meta.cdr.cdr}) is the i31 {@code 1} -- unambiguous, because an ordinary
+	 * array's offset is 0 and a displaced array (which can carry a real offset) holds a
+	 * {@code TYPE_CELL} target in its data slot, not a buckets array. The rendered length
+	 * is the fill pointer when present, else {@code dims[0]}; each element is
+	 * {@code ref.cast TYPE_CHAR} and its code truncated to one byte (the backend's
+	 * byte/ASCII string model). The bytes are assembled in transient scratch --
+	 * {@code CAPTURE_CUR} in capture mode (so a character vector printing inside a
+	 * {@code *-to-string} capture cannot clobber the capture buffer, whose base is
+	 * {@code HEAP_PTR}), else {@code HEAP_PTR} -- and finalized via {@code _str_fresh}
+	 * without advancing either pointer.
+	 * @return the function body (signature {@code ((ref null eq))->(ref null eq)},
+	 * TYPE_CALLABLE_BASE + 0)
+	 */
+	static byte[] buildCharvecToStrBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: v = 0. locals: header = 1, meta = 2, data = 3 (ref null eq);
+		// n = 4, start = 5, i = 6 (i32).
+		w.write(2);
+		w.write(3);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		w.write(3);
+		w.write(Type.I32);
+		int v = 0, header = 1, meta = 2, data = 3, n = 4, start = 5, i = 6;
+		// Result block: the normalized string, or v unchanged.
+		w.write(Instruction.BLOCK);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		// if (!(v is TYPE_CELL)) return v
+		get(w, v);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		// header = cell.field0; if (!(header is TYPE_CONS)) return v (a plain value box)
+		get(w, v);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeSignedLeb128(0);
+		set(w, header);
+		get(w, header);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		// if (!(header.car is TYPE_HASH_BUCKETS)) return v (a hash table's car is an
+		// i31 count; anything else is not an array)
+		emitConsField(w, header, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		// if (!(header.cdr is TYPE_CONS)) return v
+		emitConsField(w, header, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		// data = header.cdr.cdr; if (!(data is TYPE_HASH_BUCKETS)) return v (a displaced
+		// array's data slot holds the target TYPE_CELL)
+		emitConsField(w, header, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		set(w, data);
+		get(w, data);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		// meta = header.cdr.car; if (!(meta is TYPE_CONS && meta.cdr is TYPE_CONS))
+		// return v
+		emitConsField(w, header, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(0);
+		set(w, meta);
+		get(w, meta);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		emitConsField(w, meta, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		// if (!(meta.cdr.cdr is i31 && i31 == 1)) return v (the marker)
+		emitMetaOffset(w, meta);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		emitMetaOffset(w, meta);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		i32(w, 1);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		// n = fill pointer (meta.car) when present, else dims[0]
+		emitConsField(w, meta, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		emitConsField(w, meta, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		emitConsField(w, header, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		i32(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.END);
+		set(w, n);
+		// start = CAPTURE_FLAG ? CAPTURE_CUR : HEAP_PTR -- the transient assembly
+		// scratch. In capture mode the capture buffer's base IS HEAP_PTR, so the
+		// scratch sits at the capture cursor instead (still above every captured
+		// byte); _str_fresh copies the assembled bytes out before anything appends
+		// there, and neither pointer is advanced.
+		i32(w, WasmLispCompiler.CAPTURE_FLAG_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.CAPTURE_CUR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		set(w, start);
+		w.write(Instruction.ELSE);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		set(w, start);
+		w.write(Instruction.END);
+		// Ensure the whole output [start, start + n + 2) fits before writing.
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			get(w, start);
+			get(w, n);
+			w.write(Instruction.I32_ADD);
+			i32(w, 2);
+			w.write(Instruction.I32_ADD);
+		});
+		// mem[start] = '"'
+		get(w, start);
+		i32(w, QUOTE);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		// for i in 0..n: mem[start + 1 + i] = char code of data[i] (one byte)
+		i32(w, 0);
+		set(w, i);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		get(w, n);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		get(w, start);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		get(w, i);
+		w.write(Instruction.I32_ADD);
+		get(w, data);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		get(w, i);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		get(w, i);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// mem[start + 1 + n] = '"'
+		get(w, start);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		get(w, n);
+		w.write(Instruction.I32_ADD);
+		i32(w, QUOTE);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		// _str_fresh(start, n + 2): a runtime string with a fresh counter id
+		get(w, start);
+		get(w, n);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrFreshCall(w);
+		w.write(Instruction.END); // result block
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
+	// Pushes the meta offset (meta.cdr.cdr) of the meta cons held in the given local.
+	private static void emitMetaOffset(WasmWriter w, int metaLocal) {
+		emitConsField(w, metaLocal, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+	}
+
+	// Pushes field (0 = car, 1 = cdr) of the TYPE_CONS held in the given local.
+	private static void emitConsField(WasmWriter w, int local, int field) {
+		get(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(field);
+	}
+
+	/**
 	 * Builds {@code _string_upcase} (when {@code upcase} is true) or
 	 * {@code _string_downcase} (param 0 = string).
 	 * @param upcase whether to upcase (otherwise downcase)

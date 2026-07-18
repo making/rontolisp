@@ -24,6 +24,7 @@ final class JvmStringConcatCompiler {
 		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
 		// a.substring(0, a.length() - 1)
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.stringClass.index());
 		ctx.emit(Opcode.DUP);
@@ -37,6 +38,7 @@ final class JvmStringConcatCompiler {
 		ctx.emitU2(substring);
 		// b.substring(1, b.length())
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.stringClass.index());
 		ctx.emit(Opcode.DUP);

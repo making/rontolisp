@@ -87,6 +87,19 @@ final class WasmRuntimeBuilder {
 
 		w.write(0); // 0 extra locals; params (local 0 = a, local 1 = b) suffice
 
+		// Normalize mutable character vectors into strings up front (before the ref.eq
+		// fast path, so one code path serves all four combinations): two character
+		// vectors with equal content compare true, and a character vector compares true
+		// to a string with the same content.
+		getLocal(w, 0);
+		WasmEmitHelper.emitCharvecToStrCall(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(0);
+		getLocal(w, 1);
+		WasmEmitHelper.emitCharvecToStrCall(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(1);
+
 		// if (ref.eq a b) -> 1
 		getLocal(w, 0);
 		getLocal(w, 1);
@@ -194,6 +207,15 @@ final class WasmRuntimeBuilder {
 		w.write(1); // 1 local
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+
+		// Normalize a mutable character vector into a string up front, so a character
+		// vector key hashes exactly like the string with the same content (agreeing
+		// with _equal's entry normalization -- equal-table gethash/sethash with mixed
+		// string/character-vector keys interoperate).
+		getLocal(w, 0);
+		WasmEmitHelper.emitCharvecToStrCall(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(0);
 
 		// if v is null -> 0
 		getLocal(w, 0);
@@ -1726,6 +1748,15 @@ final class WasmRuntimeBuilder {
 		w.write(9);
 		w.write(Type.I32);
 
+		// Normalize a mutable character vector into a string up front: it then falls
+		// into the string branch below (the readable form keeps the quotes), and the
+		// recursive cons/array element prints route back through this entry.
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		WasmEmitHelper.emitCharvecToStrCall(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(0);
+
 		// Check null (nil)
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
@@ -1961,6 +1992,15 @@ final class WasmRuntimeBuilder {
 		w.writeHeapType(Type.EQ.code());
 		w.write(9);
 		w.write(Type.I32);
+
+		// Normalize a mutable character vector into a string up front: it then falls
+		// into the string branch below (princ strips the quotes), and the recursive
+		// cons/array element prints route back through this entry.
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		WasmEmitHelper.emitCharvecToStrCall(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(0);
 
 		// Check null (nil)
 		w.write(Instruction.GET_LOCAL);
