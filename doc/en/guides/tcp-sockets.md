@@ -47,6 +47,12 @@ returns `nil` once the peer has closed the connection.
 > [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md))
 > are interpreter/JVM only (a compile error on the WASM backend).
 
+The programs in this guide are complete and self-contained: copy each one into
+a file and run it with any backend. They use only the `rontolisp:tcp-*`
+primitives; the [usocket-compatible shim](#the-usocket-compatible-shim) at the
+end shows how the same programs look through the portability API that existing
+Common Lisp code expects.
+
 ## A first round trip
 
 The snippet below is self-contained: it listens on an ephemeral port, connects
@@ -71,10 +77,9 @@ accepted handle:
 ## An echo server
 
 A real server binds a fixed port and serves connections in an accept loop.
-Save the following as `echo-server.lisp` (also shipped as
-[`examples/net/echo-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/echo-server.lisp)).
-Each accepted handle is read line by line until `read-line` returns `nil`
-(the client closed), and every line is written straight back:
+Save the following as `echo-server.lisp`. Each accepted handle is read line by
+line until `read-line` returns `nil` (the client closed), and every line is
+written straight back:
 
 ```console
 (let ((listener (rontolisp:tcp-listen 7777)))
@@ -129,6 +134,264 @@ world
 world
 ```
 
+## An echo client
+
+The matching client connects to the server, sends every line read from
+standard input, and prints each reply until stdin ends. Save it as
+`echo-client.lisp`:
+
+```console
+(let ((sock (rontolisp:tcp-connect "127.0.0.1" 7777)))
+  (if sock
+      (do ((line (read-line) (read-line)))
+          ((null line) (close sock))
+        (write-line line sock)
+        (write-line (read-line sock)))
+      (write-line "cannot connect to 127.0.0.1:7777 (is echo-server.lisp running?)")))
+```
+
+Start `echo-server.lisp` first (any backend), then pipe input to the client —
+the server and the client can each run on a *different* backend:
+
+```bash
+echo hello | rontolisp echo-client.lisp
+```
+
+## An HTTP server
+
+Because a socket handle is a line stream and `read-line` strips one trailing
+carriage return, HTTP's CRLF-terminated request line and headers read as plain
+lines (the blank line ending the headers reads as `""`); response header lines
+get their carriage return back via `code-char 13` before `write-line` appends
+the newline. That is enough to answer `curl` and browsers. Save the following
+as `http-hello.lisp` — it serves a small HTML page showing the request line and
+a running request counter, one connection per request:
+
+```console
+;; Appends the carriage return of an HTTP CRLF line ending (write-line then
+;; appends the newline).
+(defun crlf (s)
+  (concatenate 'string s (format nil "~a" (code-char 13))))
+
+;; Consumes the request headers up to the blank line that ends them.
+(defun drain-headers (sock)
+  (do ((line (read-line sock) (read-line sock)))
+      ((or (null line) (string= line "")))))
+
+(let ((listener (rontolisp:tcp-listen 8080)))
+  (if listener
+      (progn
+        (write-line "http server listening on http://127.0.0.1:8080/")
+        (do ((n 1 (+ n 1))) (nil)
+          (let* ((sock (rontolisp:tcp-accept listener))
+                 (request (read-line sock)))
+            (if request
+                (let ((body (format nil "<h1>hello from rontolisp</h1><p>request ~a: ~a</p>" n request)))
+                  (drain-headers sock)
+                  (write-line (crlf "HTTP/1.1 200 OK") sock)
+                  (write-line (crlf "Content-Type: text/html") sock)
+                  ;; + 1: write-line terminates the body with a newline
+                  (write-line (crlf (format nil "Content-Length: ~a" (+ (length body) 1))) sock)
+                  (write-line (crlf "Connection: close") sock)
+                  (write-line (crlf "") sock)
+                  (write-line body sock)
+                  (write-line (format nil "served request ~a: ~a" n request))))
+            (close sock))))
+      (write-line "tcp-listen failed (is port 8080 already in use?)")))
+```
+
+Run it on any backend and open <http://127.0.0.1:8080/> in a browser or with
+`curl http://127.0.0.1:8080/`.
+
+> For real HTTP work there is no need to hand-roll the protocol over a socket:
+> the *client* side is `rontolisp:fetch` (see the
+> [HTTP Requests guide](http-fetch.md)), and the *server* side
+> `rontolisp:http-handler` parses requests and adapts responses for you (see
+> the [Serving HTTP guide](http-handler.md)). The hand-rolled server above is
+> here to show the socket primitives, not as the recommended way to serve HTTP.
+
+## A miniature Redis server
+
+A larger example: an in-memory key-value server that speaks enough of RESP2
+(the Redis serialization protocol) that the real `redis-cli` connects and
+works, and — like real Redis — also accepts "inline commands" (a plain
+space-separated line), so `telnet 127.0.0.1 6379` or `nc 127.0.0.1 6379` work
+too. Both framings arrive as CRLF-terminated lines, which `read-line` reads as
+plain lines. The store is a hash table with string keys that survives across
+connections. It supports (case-insensitive) `PING`, `SET`, `GET`, `DEL`,
+`EXISTS`, `INCR`, `KEYS`, `DBSIZE` and `QUIT`. Save it as `kv-server.lisp`:
+
+```console
+;; --- small string helpers ---------------------------------------------------
+
+;; Appends the carriage return of a RESP CRLF line ending (write-line then
+;; appends the newline).
+(defun crlf (s)
+  (concatenate 'string s (format nil "~a" (code-char 13))))
+
+;; "SET key value" -> ("SET" "key" "value")
+(defun split-words (s)
+  (cond ((string= s "") nil)
+        (t (let ((p (position #\space s)))
+             (if p
+                 (cons (subseq s 0 p) (split-words (subseq s (+ p 1))))
+                 (list s))))))
+
+;; ("hello" "world") -> "hello world"
+(defun join-words (ws)
+  (cond ((null ws) "")
+        ((null (cdr ws)) (car ws))
+        (t (concatenate 'string (car ws) " " (join-words (cdr ws))))))
+
+;; t when s is a non-empty run of decimal digits (with an optional leading -).
+(defun integer-string-p (s)
+  (let* ((n (length s))
+         (start (if (and (> n 0) (char= (char s 0) #\-)) 1 0)))
+    (and (> n start)
+         (do ((i start (+ i 1)))
+             ((or (>= i n) (not (digit-char-p (char s i))))
+              (>= i n))))))
+
+;; --- RESP replies -----------------------------------------------------------
+
+(defun reply-simple (s sock)
+  (write-line (crlf (concatenate 'string "+" s)) sock))
+
+(defun reply-error (s sock)
+  (write-line (crlf (concatenate 'string "-ERR " s)) sock))
+
+(defun reply-int (n sock)
+  (write-line (crlf (format nil ":~a" n)) sock))
+
+(defun reply-bulk (s sock)
+  (if s
+      (progn
+        (write-line (crlf (format nil "$~a" (length s))) sock)
+        (write-line (crlf s) sock))
+      (write-line (crlf "$-1") sock)))
+
+(defun reply-array-header (n sock)
+  (write-line (crlf (format nil "*~a" n)) sock))
+
+;; --- request framing --------------------------------------------------------
+
+;; Reads one RESP bulk-string element: the "$<len>" header line, then the
+;; payload line (the payload must not contain a newline).
+(defun read-bulk (sock)
+  (let ((header (read-line sock)))
+    (if header (read-line sock) nil)))
+
+(defun read-resp-array (count sock acc)
+  (if (<= count 0)
+      (reverse acc)
+      (let ((arg (read-bulk sock)))
+        (if arg
+            (read-resp-array (- count 1) sock (cons arg acc))
+            nil))))
+
+;; Reads one command as a list of argument strings: a "*<n>" line starts a
+;; RESP2 array (what redis-cli sends); anything else is an inline command
+;; (what telnet/nc users type). nil at connection close.
+(defun read-command (sock)
+  (let ((line (read-line sock)))
+    (cond ((null line) nil)
+          ((string= line "") (read-command sock))
+          ((char= (char line 0) #\*)
+           (let ((count (subseq line 1)))
+             (if (integer-string-p count)
+                 (read-resp-array (parse-integer count) sock nil)
+                 (list "!bad-frame"))))
+          (t (split-words line)))))
+
+;; --- commands ---------------------------------------------------------------
+
+;; Handles one command; returns nil after QUIT (closing the session).
+(defun handle-command (args store sock)
+  (let ((cmd (string-upcase (car args)))
+        (key (cadr args)))
+    (cond ((string= cmd "PING")
+           (if key (reply-bulk key sock) (reply-simple "PONG" sock))
+           t)
+          ((string= cmd "SET")
+           (if (and key (cddr args))
+               (progn
+                 (setf (gethash key store) (join-words (cddr args)))
+                 (reply-simple "OK" sock))
+               (reply-error "wrong number of arguments for 'set' command" sock))
+           t)
+          ((string= cmd "GET")
+           (if key
+               (reply-bulk (gethash key store) sock)
+               (reply-error "wrong number of arguments for 'get' command" sock))
+           t)
+          ((string= cmd "DEL")
+           (let ((removed 0))
+             (dolist (k (cdr args))
+               (when (gethash k store)
+                 (remhash k store)
+                 (incf removed)))
+             (reply-int removed sock))
+           t)
+          ((string= cmd "EXISTS")
+           (reply-int (if (and key (gethash key store)) 1 0) sock)
+           t)
+          ((string= cmd "INCR")
+           (let ((current (if key (or (gethash key store) "0") "0")))
+             (cond ((null key)
+                    (reply-error "wrong number of arguments for 'incr' command" sock))
+                   ((integer-string-p current)
+                    (let ((n (+ (parse-integer current) 1)))
+                      (setf (gethash key store) (format nil "~a" n))
+                      (reply-int n sock)))
+                   (t (reply-error "value is not an integer or out of range" sock))))
+           t)
+          ((string= cmd "KEYS")
+           (let ((pattern (or key "*"))
+                 (keys nil))
+             (maphash (lambda (k v)
+                        (if (or (string= pattern "*") (string= pattern k))
+                            (push k keys)))
+                      store)
+             (reply-array-header (length keys) sock)
+             (dolist (k keys)
+               (reply-bulk k sock)))
+           t)
+          ((string= cmd "DBSIZE")
+           (reply-int (hash-table-count store) sock)
+           t)
+          ((string= cmd "COMMAND")
+           ;; redis-cli asks COMMAND DOCS on connect; an empty array satisfies it.
+           (reply-array-header 0 sock)
+           t)
+          ((string= cmd "QUIT")
+           (reply-simple "OK" sock)
+           nil)
+          (t (reply-error (format nil "unknown command '~a'" (car args)) sock)
+             t))))
+
+;; --- server loop ------------------------------------------------------------
+
+(let ((store (make-hash-table))
+      (listener (rontolisp:tcp-listen 6379)))
+  (if listener
+      (progn
+        (write-line "mini-redis listening on 127.0.0.1:6379 (try: redis-cli -p 6379 ping)")
+        (do ((n 1 (+ n 1))) (nil)
+          (let ((sock (rontolisp:tcp-accept listener)))
+            (do ((args (read-command sock) (read-command sock)))
+                ((or (null args) (not (handle-command args store sock)))
+                 (close sock))))))
+      (write-line "tcp-listen failed (is port 6379 already in use? a real redis, perhaps)")))
+```
+
+Run it on any backend, then talk to it with the real `redis-cli`:
+
+```bash
+redis-cli -p 6379 set greeting hello
+redis-cli -p 6379 get greeting
+redis-cli -p 6379 incr counter
+```
+
 ## TLS connections
 
 [`rontolisp:tls-connect`](../reference/functions/rontolisp-tls-connect.md) is
@@ -149,24 +412,244 @@ details and an HTTPS-by-hand example:
 
 The *server* side is
 [`rontolisp:tls-listen`](../reference/functions/rontolisp-tls-listen.md): it
-takes a PKCS12 keystore file (its reference page shows the one-line `keytool`
-command that generates a self-signed one) and returns a listener that the
-plain `rontolisp:tcp-accept` / `rontolisp:tcp-local-port` / `close` work on;
-each accepted connection completes its handshake on the first read. To serve
+takes a PKCS12 keystore file and returns a listener that the plain
+`rontolisp:tcp-accept` / `rontolisp:tcp-local-port` / `close` work on; each
+accepted connection completes its handshake on the first read. To serve
 straight from PEM files (certbot / OpenSSL output) instead of a PKCS12
 keystore, use
 [`rontolisp:tls-listen-pem`](../reference/functions/rontolisp-tls-listen-pem.md).
-The TLS variants of the servers below are in the `examples/` directory —
-[`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/https-hello.lisp)
-and
-[`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/kv-server-tls.lisp):
+The TLS variants are interpreter/JVM only (a compile error on the WASM
+backend).
+
+Both server programs below need a PKCS12 keystore holding the server key and
+certificate. Generate a self-signed one for localhost with the JDK `keytool`
+(or export one from OpenSSL with `openssl pkcs12 -export`):
+
+```bash
+keytool -genkeypair -alias rontolisp-tls -keyalg EC -dname CN=localhost \
+  -validity 365 -ext SAN=ip:127.0.0.1,dns:localhost \
+  -storetype PKCS12 -keystore tls-server.p12 \
+  -storepass changeit -keypass changeit
+```
+
+### An HTTPS server
+
+This is the TLS twin of the HTTP server above: identical once the listener
+exists, because a `tls-listen` listener hands `tcp-accept` the same kind of
+stream handle. `tls-listen` never returns `nil` — a missing keystore, a wrong
+password or a busy port signals an error instead — so there is no `nil` check.
+Save it as `https-hello.lisp`:
 
 ```console
-(let* ((listener (rontolisp:tls-listen "tls-server.p12" "changeit" 8443))
-       (sock (rontolisp:tcp-accept listener)))
-  ...  ; serve the connection with the standard stream functions
-  (close sock)
-  (close listener))
+;; Appends the carriage return of an HTTP CRLF line ending (write-line then
+;; appends the newline).
+(defun crlf (s)
+  (concatenate 'string s (format nil "~a" (code-char 13))))
+
+;; Consumes the request headers up to the blank line that ends them.
+(defun drain-headers (sock)
+  (do ((line (read-line sock) (read-line sock)))
+      ((or (null line) (string= line "")))))
+
+(let ((listener (rontolisp:tls-listen "tls-server.p12" "changeit" 8443)))
+  (write-line "https server listening on https://127.0.0.1:8443/")
+  (do ((n 1 (+ n 1))) (nil)
+    (let* ((sock (rontolisp:tcp-accept listener))
+           (request (read-line sock)))
+      (if request
+          (let ((body (format nil "<h1>hello from rontolisp over TLS</h1><p>request ~a: ~a</p>" n request)))
+            (drain-headers sock)
+            (write-line (crlf "HTTP/1.1 200 OK") sock)
+            (write-line (crlf "Content-Type: text/html") sock)
+            ;; + 1: write-line terminates the body with a newline
+            (write-line (crlf (format nil "Content-Length: ~a" (+ (length body) 1))) sock)
+            (write-line (crlf "Connection: close") sock)
+            (write-line (crlf "") sock)
+            (write-line body sock)
+            (write-line (format nil "served request ~a: ~a" n request))))
+      (close sock))))
+```
+
+Run it on the interpreter or the JVM, then (using `-k` because the certificate
+is self-signed):
+
+```bash
+curl -k https://127.0.0.1:8443/
+```
+
+### A TLS Redis server
+
+The same is true of the key-value server: swap `tcp-listen` for `tls-listen`
+and everything else is unchanged. This serves the RESP2 protocol over TLS on
+port 6380 (like a real Redis with `--tls-port`). Save it as
+`kv-server-tls.lisp`:
+
+```console
+;; --- small string helpers ---------------------------------------------------
+
+;; Appends the carriage return of a RESP CRLF line ending (write-line then
+;; appends the newline).
+(defun crlf (s)
+  (concatenate 'string s (format nil "~a" (code-char 13))))
+
+;; "SET key value" -> ("SET" "key" "value")
+(defun split-words (s)
+  (cond ((string= s "") nil)
+        (t (let ((p (position #\space s)))
+             (if p
+                 (cons (subseq s 0 p) (split-words (subseq s (+ p 1))))
+                 (list s))))))
+
+;; ("hello" "world") -> "hello world"
+(defun join-words (ws)
+  (cond ((null ws) "")
+        ((null (cdr ws)) (car ws))
+        (t (concatenate 'string (car ws) " " (join-words (cdr ws))))))
+
+;; t when s is a non-empty run of decimal digits (with an optional leading -).
+(defun integer-string-p (s)
+  (let* ((n (length s))
+         (start (if (and (> n 0) (char= (char s 0) #\-)) 1 0)))
+    (and (> n start)
+         (do ((i start (+ i 1)))
+             ((or (>= i n) (not (digit-char-p (char s i))))
+              (>= i n))))))
+
+;; --- RESP replies -----------------------------------------------------------
+
+(defun reply-simple (s sock)
+  (write-line (crlf (concatenate 'string "+" s)) sock))
+
+(defun reply-error (s sock)
+  (write-line (crlf (concatenate 'string "-ERR " s)) sock))
+
+(defun reply-int (n sock)
+  (write-line (crlf (format nil ":~a" n)) sock))
+
+(defun reply-bulk (s sock)
+  (if s
+      (progn
+        (write-line (crlf (format nil "$~a" (length s))) sock)
+        (write-line (crlf s) sock))
+      (write-line (crlf "$-1") sock)))
+
+(defun reply-array-header (n sock)
+  (write-line (crlf (format nil "*~a" n)) sock))
+
+;; --- request framing --------------------------------------------------------
+
+;; Reads one RESP bulk-string element: the "$<len>" header line, then the
+;; payload line (the payload must not contain a newline).
+(defun read-bulk (sock)
+  (let ((header (read-line sock)))
+    (if header (read-line sock) nil)))
+
+(defun read-resp-array (count sock acc)
+  (if (<= count 0)
+      (reverse acc)
+      (let ((arg (read-bulk sock)))
+        (if arg
+            (read-resp-array (- count 1) sock (cons arg acc))
+            nil))))
+
+;; Reads one command as a list of argument strings: a "*<n>" line starts a
+;; RESP2 array (what redis-cli sends); anything else is an inline command
+;; (what telnet/nc users type). nil at connection close.
+(defun read-command (sock)
+  (let ((line (read-line sock)))
+    (cond ((null line) nil)
+          ((string= line "") (read-command sock))
+          ((char= (char line 0) #\*)
+           (let ((count (subseq line 1)))
+             (if (integer-string-p count)
+                 (read-resp-array (parse-integer count) sock nil)
+                 (list "!bad-frame"))))
+          (t (split-words line)))))
+
+;; --- commands ---------------------------------------------------------------
+
+;; Handles one command; returns nil after QUIT (closing the session).
+(defun handle-command (args store sock)
+  (let ((cmd (string-upcase (car args)))
+        (key (cadr args)))
+    (cond ((string= cmd "PING")
+           (if key (reply-bulk key sock) (reply-simple "PONG" sock))
+           t)
+          ((string= cmd "SET")
+           (if (and key (cddr args))
+               (progn
+                 (setf (gethash key store) (join-words (cddr args)))
+                 (reply-simple "OK" sock))
+               (reply-error "wrong number of arguments for 'set' command" sock))
+           t)
+          ((string= cmd "GET")
+           (if key
+               (reply-bulk (gethash key store) sock)
+               (reply-error "wrong number of arguments for 'get' command" sock))
+           t)
+          ((string= cmd "DEL")
+           (let ((removed 0))
+             (dolist (k (cdr args))
+               (when (gethash k store)
+                 (remhash k store)
+                 (incf removed)))
+             (reply-int removed sock))
+           t)
+          ((string= cmd "EXISTS")
+           (reply-int (if (and key (gethash key store)) 1 0) sock)
+           t)
+          ((string= cmd "INCR")
+           (let ((current (if key (or (gethash key store) "0") "0")))
+             (cond ((null key)
+                    (reply-error "wrong number of arguments for 'incr' command" sock))
+                   ((integer-string-p current)
+                    (let ((n (+ (parse-integer current) 1)))
+                      (setf (gethash key store) (format nil "~a" n))
+                      (reply-int n sock)))
+                   (t (reply-error "value is not an integer or out of range" sock))))
+           t)
+          ((string= cmd "KEYS")
+           (let ((pattern (or key "*"))
+                 (keys nil))
+             (maphash (lambda (k v)
+                        (if (or (string= pattern "*") (string= pattern k))
+                            (push k keys)))
+                      store)
+             (reply-array-header (length keys) sock)
+             (dolist (k keys)
+               (reply-bulk k sock)))
+           t)
+          ((string= cmd "DBSIZE")
+           (reply-int (hash-table-count store) sock)
+           t)
+          ((string= cmd "COMMAND")
+           ;; redis-cli asks COMMAND DOCS on connect; an empty array satisfies it.
+           (reply-array-header 0 sock)
+           t)
+          ((string= cmd "QUIT")
+           (reply-simple "OK" sock)
+           nil)
+          (t (reply-error (format nil "unknown command '~a'" (car args)) sock)
+             t))))
+
+;; --- server loop ------------------------------------------------------------
+
+(let ((store (make-hash-table))
+      (listener (rontolisp:tls-listen "tls-server.p12" "changeit" 6380)))
+  (write-line "mini-redis (TLS) listening on 127.0.0.1:6380 (try: redis-cli --tls --insecure -p 6380 ping)")
+  (do ((n 1 (+ n 1))) (nil)
+    (let ((sock (rontolisp:tcp-accept listener)))
+      (do ((args (read-command sock) (read-command sock)))
+          ((or (null args) (not (handle-command args store sock)))
+           (close sock))))))
+```
+
+Run it on the interpreter or the JVM, then talk to it over TLS (`--insecure`
+because the certificate is self-signed):
+
+```bash
+redis-cli --tls --insecure -p 6380 set greeting hello
+redis-cli --tls --insecure -p 6380 get greeting
 ```
 
 ## The usocket-compatible shim
@@ -206,6 +689,26 @@ the built-in ASDF system `"usocket"`: `(asdf:load-system "usocket")`,
 `(ql:quickload :usocket)` and a third-party `.asd`'s
 `:depends-on ("usocket")` all resolve to it without touching the network.
 
+The servers earlier in this guide, rewritten against this shim, wrap the
+accept loop in `with-server-socket` (which closes each connection on every
+exit) and take the listen failure as a typed `usocket:socket-error`:
+
+```console
+(handler-case
+    (let ((listener (usocket:socket-listen "127.0.0.1" 7777 :reuse-address t)))
+      (write-line "echo server listening on 127.0.0.1:7777")
+      (do ((n 1 (+ n 1))) (nil)
+        (usocket:with-server-socket (sock (usocket:socket-accept listener))
+          (let ((stream (usocket:socket-stream sock)))
+            (write-line (format nil "client ~a connected" n))
+            (do ((line (read-line stream) (read-line stream)))
+                ((null line) (write-line "client disconnected"))
+              (write-line line stream))))))
+  (usocket:socket-error (e)
+    (declare (ignore e))
+    (write-line "socket-listen failed (is port 7777 already in use?)")))
+```
+
 Limitations of the shim (deliberate -- rontolisp's socket model is lite):
 
 - **TCP only.** `:protocol :datagram` (UDP) signals an error, and
@@ -233,32 +736,13 @@ Limitations of the shim (deliberate -- rontolisp's socket model is lite):
   tcp built-ins, and the address/peer accessors return real addresses and
   ports there (a failure returns `nil` instead of signaling).
 
-## More examples
+## See also
 
-The [`examples/` directory](https://github.com/making/rontolisp/tree/develop/examples)
-contains further socket programs, each with per-backend run instructions in
-its header comment:
-
-- [`echo-client.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/echo-client.lisp)
-  — the matching client for the echo server: pipes standard-input lines to
-  the server and prints each reply. Server and client can each run on a
-  *different* backend.
-- [`http-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/http-hello.lisp)
-  — a minimal HTTP/1.1 server that `curl` and browsers understand, built from
-  `read-line`/`write-line` over the socket handle (CRLF request lines read as
-  plain lines on every backend). Its TLS twin
-  [`https-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/https-hello.lisp)
-  serves the same page over HTTPS (`curl -k https://127.0.0.1:8443/`).
-- [`kv-server.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/kv-server.lisp)
-  — a miniature **Redis-compatible** in-memory key-value server: speaks
-  enough RESP2 that the real `redis-cli` works (`PING`/`SET`/`GET`/`DEL`/
-  `INCR`/...), with hash-table state surviving across connections. Its TLS
-  twin
-  [`kv-server-tls.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/kv-server-tls.lisp)
-  serves the same protocol over TLS (`redis-cli --tls --insecure -p 6380`).
-
-For HTTP there is no need to hand-roll the protocol over a socket in either
-direction: the *client* side is `rontolisp:fetch` (see the
+The [`examples/net/` directory](https://github.com/making/rontolisp/tree/develop/examples/net)
+ships these programs as ready-to-run files (written against the usocket shim),
+each with per-backend run instructions in its header comment. For HTTP there is
+no need to hand-roll the protocol over a socket in either direction: the
+*client* side is `rontolisp:fetch` (see the
 [HTTP Requests guide](http-fetch.md)), and for the *server* side
 `rontolisp:http-handler` parses requests and adapts responses for you (see the
 [Serving HTTP guide](http-handler.md)).
