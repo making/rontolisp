@@ -4379,6 +4379,135 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void liteBuiltinsResidue() throws Exception {
+		assertThat(compileAndRun("(print (mask-field (byte 4 4) 255))" + " (print (mask-field (byte 8 0) 300))"
+				+ " (print (scale-float 1.5 3))" + " (print (scale-float 1.0 -100000))"
+				+ " (defun fd-doubler (x) (* x 2)) (print (funcall (fdefinition 'fd-doubler) 21))"
+				+ " (print (file-position t)) (print (file-length t)) (print (pathnamep \"/tmp/x\"))"
+				+ " (print (stream-element-type t))" + " (print (input-stream-p t))"
+				+ " (print (output-stream-p (make-broadcast-stream)))" + " (print (input-stream-p \"s\"))"))
+			.isEqualTo("240\n44\n12.0\n0.0\n42\nnil\nnil\nnil\ncharacter\nt\nt\nnil");
+	}
+
+	@Test
+	void charNamePrelude() throws Exception {
+		// The prelude splice mirrors the CLI pipeline (char-name is a prelude defun).
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (char-name #\\Space))
+				(print (char-name #\\a))
+				(print (char-name (code-char 1)))
+				(print (char-name (code-char 128)))
+				""")))).isEqualTo("\"Space\"\nnil\n\"U+0001\"\n\"U+0080\"");
+	}
+
+	@Test
+	void classOfAndSlotAccessors() throws Exception {
+		assertThat(compileAndRun("(print (class-of 42)) (print (class-of \"s\")) (print (class-of 'foo))"
+				+ " (print (class-of :k)) (print (class-of 1.5)) (print (class-of (cons 1 2)))"
+				+ " (print (class-of nil)) (print (class-of t)) (print (class-of (make-hash-table)))"
+				+ " (print (class-of #'car))"
+				+ " (defclass co-pt () ((x :initarg :x))) (print (class-of (make-instance 'co-pt :x 1)))"))
+			.isEqualTo(
+					"integer\nstring\nsymbol\nkeyword\nfloat\ncons\nnull\nboolean\nhash-table\nfunction\n%class-co-pt");
+		assertThat(compileAndRun(
+				"(defclass sb-pt () ((x :initarg :x) (y :initarg :y)))" + " (let ((p (make-instance 'sb-pt :x 1 :y 2)))"
+						+ " (print (slot-boundp p 'x)) (print (slot-boundp p 'z))"
+						+ " (slot-makunbound p 'x) (print (slot-value p 'x)) (print (slot-boundp p 'x)))"))
+			.isEqualTo("t\nnil\nnil\nt");
+	}
+
+	@Test
+	void simpleConditionFormatAccessors() throws Exception {
+		assertThat(compileAndRun(
+				"(handler-case (error \"boom ~a\" 1)" + " (error (c) (print (simple-condition-format-control c))"
+						+ " (print (simple-condition-format-arguments c))))"))
+			.isEqualTo("\"boom 1\"\nnil");
+		assertThat(compileAndRun("(define-condition sc-err (error)"
+				+ " ((format-control :initarg :format-control) (format-arguments :initarg :format-arguments)))"
+				+ " (handler-case (error 'sc-err :format-control \"ctl\" :format-arguments '(1 2))"
+				+ " (error (c) (print (simple-condition-format-control c))"
+				+ " (print (simple-condition-format-arguments c))))"))
+			.isEqualTo("\"ctl\"\n(1 2)");
+	}
+
+	@Test
+	void multiParameterDispatchVariadicGenericsAndDefaultInitargs() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass mp-animal () ())
+				(defclass mp-dog (mp-animal) ())
+				(defclass mp-cat (mp-animal) ())
+				(defgeneric mp-meets (a b))
+				(defmethod mp-meets ((a mp-dog) (b mp-cat)) :chase)
+				(defmethod mp-meets ((a mp-cat) (b mp-dog)) :flee)
+				(defmethod mp-meets ((a mp-animal) (b mp-animal)) :ignore)
+				(let ((d (make-instance 'mp-dog)) (c (make-instance 'mp-cat)))
+				  (print (list (mp-meets d c) (mp-meets c d) (mp-meets d d))))
+				(defgeneric vg-desc (x &rest extras))
+				(defmethod vg-desc ((x mp-dog) &rest extras) (list :dog extras))
+				(defmethod vg-desc ((x mp-animal) &rest extras) (list :animal extras))
+				(print (vg-desc (make-instance 'mp-dog) 1 2))
+				(defclass di-conf () ((host :initarg :host) (port :initarg :port))
+				  (:default-initargs :host "localhost" :port 8080))
+				(let ((c1 (make-instance 'di-conf)) (c2 (make-instance 'di-conf :port 9090)))
+				  (print (list (slot-value c1 'host) (slot-value c1 'port) (slot-value c2 'port))))
+				(defclass ws-pt () ((x :initarg :x) (y :initarg :y)))
+				(let ((p (make-instance 'ws-pt :x 1 :y 2)))
+				  (with-slots (x (why y)) p (setf x (+ x 10)) (print (list x why)))
+				  (print (slot-value p 'x)))
+				(defstruct (so-kv (:constructor make-so-pair) (:conc-name so-get-)
+				                  (:predicate so-kv?) (:copier so-clone))
+				  key val)
+				(let ((k (make-so-pair :key 'a :val 1)))
+				  (print (list (so-get-key k) (so-kv? k) (so-kv? 5)))
+				  (let ((k2 (so-clone k)))
+				    (setf (so-get-val k2) 99)
+				    (print (list (so-get-val k) (so-get-val k2)))))
+				""")).isEqualTo(
+				"(:chase :flee :ignore)\n(:dog (1 2))\n(\"localhost\" 8080 9090)\n(11 2)\n11\n" + "(a t nil)\n(1 99)");
+	}
+
+	@Test
+	void grayStreamInstanceDispatch() throws Exception {
+		// The GrayStreamsLibrary pre-pass splices gray.lisp and rewrites the
+		// write-string/write-char call sites onto the dispatch helpers, mirroring the
+		// CLI pipeline.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
+				(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
+				  ((acc :initform "")))
+				(defmethod rontolisp:stream-write-string ((s gs-upcase) str)
+				  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase str)))
+				  str)
+				(let ((s (make-instance 'gs-upcase)))
+				  (write-string "hello" s)
+				  (write-char #\\! s)
+				  (print (slot-value s 'acc)))
+				(write-string "still-works" t)
+				(terpri)
+				""")))).isEqualTo("\"HELLO!\"\nstill-works");
+	}
+
+	@Test
+	void readTimeEvalMarkers() throws Exception {
+		// The CLI pipeline: marker read -> UserMacroExpander resolves each marker
+		// against the macro-time evaluator -> the compilers see plain forms.
+		assertThat(compileAndRunProgram(
+				am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllWithReadEvalMarkers(
+						"(defvar +re-six+ #.(* 2 3)) (print +re-six+)" + " (print #.(+ 40 2)) (print '(a #.(+ 1 2) c))"
+								+ " (defmacro re-stamp (&rest body) `(list #.(* 7 6) ,@body)) (print (re-stamp 1 2))",
+						am.ik.rontolisp.reader.Features.WASM))))
+			.isEqualTo("6\n42\n(a 3 c)\n(42 1 2)");
+	}
+
+	@Test
+	void writeStringBoundsAndReplaceNilBounds() throws Exception {
+		assertThat(compileAndRun("(write-string \"hello\" t :start 1 :end 3) (terpri)"
+				+ " (write-string \"hello\" t :start 1 :end nil) (terpri) (print (write-string \"xy\"))"))
+			.isEqualTo("el\nello\nxy\"xy\"");
+		assertThat(compileAndRun("(let ((s \"abcdef\")) (print (replace s \"XYZ\" :start1 1 :end1 nil)))"))
+			.isEqualTo("\"aXYZef\"");
+	}
+
+	@Test
 	void setfValuesAndSetfThroughTheAndSymbolp() throws Exception {
 		assertThat(compileAndRun("(let ((a 0) (b 0)) (setf (values a b) (values 1 2)) (print (list a b)))"
 				+ " (let ((x 0)) (setf (the integer x) 5) (print x))"

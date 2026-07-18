@@ -130,12 +130,12 @@ abstract class AsdfLibraryE2eSupport {
 
 	// The CLI compile pipeline for the given feature set: inline the system's component
 	// files, expand the user macros they define, then splice the rontolisp-source prelude
-	// (equalp/string<) and the usocket shim when referenced -- mirroring RontoLispCli --
-	// before the backend compiler runs.
+	// (equalp/string<), the Gray-stream dispatch and the usocket shim when referenced --
+	// mirroring RontoLispCli -- before the backend compiler runs.
 	private List<LispVal> compileProgram(Features features) {
-		return UsocketLibrary.process(LispPreludeLibrary
+		return UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispPreludeLibrary
 			.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(exercise(), features),
-					SourceLoader.fileSystem(), null, List.of(systemDir()), features))));
+					SourceLoader.fileSystem(), null, List.of(systemDir()), features)))));
 	}
 
 	// Defines the compiled class from its bytes and runs main, capturing UTF-8 stdout.

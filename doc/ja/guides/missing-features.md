@@ -16,24 +16,24 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `&optional` / `&rest` / `&key` / `&aux` | `defun`/`lambda` で利用可能（[`defun`](../reference/special-forms/defun.md) を参照）。`defmacro` は `&rest`/`&body` のみ |
 | `&whole` | 利用不可 |
 | `values` / `multiple-value-bind` | 利用可能。ユーザ関数の多値も含む（[`multiple-value-bind`](../reference/macros/multiple-value-bind.md) を参照） |
-| `block` / `return-from` / `tagbody` / `go` | 利用不可 |
+| `block` / `return-from` / `tagbody` / `go` | 部分的（[`tagbody`](../reference/special-forms/tagbody.md)/[`go`](../reference/special-forms/go.md) は利用可能 — コンパイラはレキシカルサブセットをサポート。[`return-from`](../reference/macros/return-from.md) はライト版（関数スコープ、名前付きブロックなし）。`block` 自体は利用不可） |
 | `catch` / `throw` | 利用不可 |
 | `unwind-protect` | 利用可能（[`unwind-protect`](../reference/special-forms/unwind-protect.md) 参照）。wasm-GC では exception-handling プロポーザル経由（`wasmtime -W exceptions=y`）。`--no-gc` ではコンパイルエラー |
 | 条件（`define-condition`、`handler-case`、`ignore-errors`、`signal`） | 利用可能（[`handler-case`](../reference/macros/handler-case.md) 参照）。wasm-GC では捕捉に `wasmtime -W exceptions=y` が必要で、ランタイムトラップはそこでは捕捉不能のまま。`--no-gc` ではコンパイルエラー。リスタート（`handler-bind`/`restart-case`）は利用不可 |
 | `flet` / `labels` | 利用可能（[`flet`](../reference/macros/flet.md)、[`labels`](../reference/macros/labels.md) 参照） |
-| `macrolet` | 利用不可 |
+| `macrolet` | 利用可能（[`macrolet`](../reference/macros/macrolet.md) を参照）。`symbol-macrolet` は利用不可 |
 | `loop`（拡張版） | 一部対応（単純ループのサブセット） |
-| `defstruct` | 利用可能（[`defstruct`](../reference/special-forms/defstruct.md) 参照）。オプション/`:include` は利用不可 |
+| `defstruct` | 利用可能。`:constructor`/`:conc-name`/`:predicate`/`:copier` オプションを含む（[`defstruct`](../reference/special-forms/defstruct.md) 参照）。`:include`/BOA コンストラクタは利用不可 |
 | CLOS | 一部対応（静的サブセット: [`defclass`](../reference/special-forms/defclass.md)、[`defgeneric`](../reference/special-forms/defgeneric.md)、[`defmethod`](../reference/special-forms/defmethod.md)、[`make-instance`](../reference/macros/make-instance.md)、[`slot-value`](../reference/macros/slot-value.md)） |
 | `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op として利用可能（[`declare`](../reference/macros/declare.md) 参照） |
 | `check-type` / `assert` | 利用可能（ライト版、リスタートなし。[`check-type`](../reference/macros/check-type.md) 参照） |
 | `eval-when` | 利用可能（`progn` として扱う。[`eval-when`](../reference/macros/eval-when.md) 参照） |
-| `typep` | 利用不可 |
+| `typep` | リテラル（クオートされた）型指定子で利用可能（[`typep`](../reference/macros/typep.md) を参照）。[`subtypep`](../reference/functions/subtypep.md) も同様 |
 | `coerce` | 部分対応(リテラルの `'list` / `'vector` / `'string` 結果型。[`coerce`](../reference/functions/coerce.md) を参照) |
 | `defpackage`（ユーザーパッケージ） | 一部対応（`:use`/`:export`/`:nicknames`/`:import-from`。[`defpackage`](../reference/special-forms/defpackage.md) 参照） |
 | `make-package` / `export` / `use-package`（ランタイム） | 利用不可 |
 | `#+` / `#-` / `*features*` / `#\| ... \|#` | 利用可能（[データ型](../reference/data-types.md#コメントフィーチャー条件features)参照） |
-| `#.` read 時評価 / `#:` の新規 uninterned シンボル | 利用不可（`#.` は read エラー、`.asd` ファイル内でのみ許容。`#:name` は普通のシンボルとして読まれ、designator として受理される） |
+| `#.` read 時評価 / `#:` の新規 uninterned シンボル | 部分的（`#.` は利用可能 — 各データはそのトップレベルフォームの直前に評価され、コンパイルパスではコンパイル時評価器に対して評価される。`.asd` ファイル内では警告付きでスキップ。`#:name` は普通のシンボルとして読まれ、designator として受理されるが、gensym 的な新規性はない） |
 | `require` / `provide` | 利用可能（[`require`](../reference/functions/require.md) 参照）。`*modules*` 変数は利用不可 |
 | `let` による動的（special）束縛 | 利用可能（`defvar`/`defparameter`/`declaim special` が名前を special 宣言する。`progv` はインタプリタのみ） |
 | 複素数 | 利用不可 |
@@ -94,12 +94,19 @@ Common Lisp からの残る相違点は次のとおりです:
 
 ## 非局所脱出と制御フロー
 
-名前付きブロックや任意のジャンプは利用できません。
+名前付きブロックは利用できませんが、ラベルとジャンプによる制御フローは利用できます。
 
-- `block` / `return-from` — 名前付きブロックはありません。唯一の非局所脱出は
-  `return` で、これは `do` / `do*` / `dolist` / `dotimes` によって確立された
-  **最も内側**の反復ブロックから抜けます。
-- `tagbody` / `go` — ラベルとジャンプによる制御フローはありません。
+- `block` — 名前付きブロックはありません。[`return`](../reference/macros/return.md) は
+  `do` / `do*` / `dolist` / `dotimes` によって確立された
+  **最も内側**の反復ブロックから抜け、
+  [`return-from`](../reference/macros/return-from.md) はライト版で、ブロック名を無視して
+  囲んでいる**関数**から抜けます。
+- [`tagbody`](../reference/special-forms/tagbody.md) /
+  [`go`](../reference/special-forms/go.md) — [`prog`](../reference/macros/prog.md) /
+  [`prog*`](../reference/macros/prog-star.md) とともに**利用可能**です。JVM / WASM
+  コンパイラはレキシカルサブセット（`go` は同一関数内のレキシカルに囲む `tagbody`
+  のタグのみを対象にできる）をサポートし、インタープリタはさらに関数境界を越える
+  動的 `go` をサポートします。
 - `catch` / `throw` — 動的スコープの脱出はありません。
 
 ```console
@@ -141,8 +148,9 @@ wasm-GC バックエンドでの捕捉は WebAssembly の exception-handling プ
 
 局所関数は**利用可能**です -- [`flet`](../reference/macros/flet.md) と
 [`labels`](../reference/macros/labels.md) を参照してください。局所マクロ
-（`macrolet`）は利用できません。マクロは `defmacro` によってトップレベルで
-のみ存在します。
+（[`macrolet`](../reference/macros/macrolet.md)）も**利用可能**です --
+コンパイルパスではコンパイラが走る前に展開しきり、インタープリタはネイティブに
+展開します。`symbol-macrolet` は利用できません。
 
 ## `loop` マクロ
 
@@ -157,9 +165,10 @@ wasm-GC バックエンドでの捕捉は WebAssembly の exception-handling プ
 ## 構造体とオブジェクト（`defstruct`、CLOS）
 
 構造体は [`defstruct`](../reference/special-forms/defstruct.md) で **利用可能**
-です。キーワードコンストラクタ、述語、コピー関数、`setf` 可能なアクセサを
-生成します。`defstruct` のオプション構文（`:conc-name`、`:constructor` など）、
-`:include` による継承、`#S(...)` の印字/読み取り構文はサポートされません。
+です。キーワードコンストラクタ、述語、コピー関数、`setf` 可能なアクセサを生成し、
+`:constructor`/`:conc-name`/`:predicate`/`:copier` オプションをサポートします。
+`:include` による継承、BOA コンストラクタ、`#S(...)`
+の印字/読み取り構文はサポートされません。
 
 **静的な CLOS サブセット**が利用可能です:
 [`defclass`](../reference/special-forms/defclass.md)（単一継承、
@@ -186,7 +195,9 @@ MOP / 実行時クラス操作（`find-class`、`change-class`、`add-method`、
 型注釈付きのソースを変更なしにロードできます。
 [`check-type`](../reference/macros/check-type.md) と
 [`assert`](../reference/macros/assert.md) は実際のランタイム検査を提供します
-（ライト版、リスタートなし）。ランタイムヘルパーの `typep` は利用できません。
+（ライト版、リスタートなし）。ランタイムヘルパーの
+[`typep`](../reference/macros/typep.md) はリテラル（クオートされた）型指定子で
+**利用可能**で、[`subtypep`](../reference/functions/subtypep.md) も同様です。
 [`coerce`](../reference/functions/coerce.md) はリテラルの結果型 `'list`、`'vector`、
 `'string` に限り **利用できます**(結果型は `map` と同様、クォートされたリテラルで
 なければなりません)。その他の結果型はサポートされません。

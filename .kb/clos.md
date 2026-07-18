@@ -33,11 +33,20 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
   introspection churn) and are rewritten away before any backend sees them.
   `MethodInfo.usesNext` records whether a body mentions them.
 - `generateDispatcher(name, registry)` — ONE dispatcher defun per generic: a
-  nested-if chain testing arg 1, most specific first (`specializerRank`: eql 0,
-  classes 10..99 by descending ancestor-set size = subclass first, built-in
-  types 200s with subtypes like `null`/`keyword`/`integer` before
-  `symbol`/`number`/`list`, default 1000; stable sort keeps definition order
-  within a rank). Falls back to the default method or
+  nested-if chain over the methods, most specific first. Specializers may sit on
+  ANY required parameter; methods order by comparing parameters leftmost-first
+  with `specializerRank` per parameter (eql 0, classes 10..99 by descending
+  ancestor-set size = subclass first, built-in types 200s with subtypes like
+  `null`/`keyword`/`integer` before `symbol`/`number`/`list`, default 1000;
+  stable sort keeps definition order within a rank), and a branch tests every
+  specialized parameter. A generic whose lambda list continues past the
+  required params (`&optional`/`&rest`) gets a variadic dispatcher that
+  forwards the tail to the selected method via `apply` (`call-next-method`
+  there forwards the required args only). `defgeneric` inline
+  `(:method [qualifier] (params) body...)` clauses register like separate
+  defmethods (`registerDefgeneric` collects their method defuns;
+  `expandTopLevelDefinitions` splices them on the compile path). Falls back to
+  the default method or
   `(error "No applicable method: <name>")`. eql/built-in tests reuse
   `makeTypeTest`-family helpers (`makeEqlSpecializerTest`: symbols/keywords
   compare with `equal` — content-safe on WASM — numbers/characters with `eql`);

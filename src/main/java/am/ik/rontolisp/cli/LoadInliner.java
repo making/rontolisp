@@ -279,7 +279,10 @@ public final class LoadInliner {
 			throw new IllegalStateException(operator + ": cannot read file " + path + ": " + ex.getMessage(), ex);
 		}
 		ctx.loading().addLast(path);
-		List<LispVal> forms = LispReader.readAllFromString(source, ctx.features());
+		// #. in a loaded file rides the same marker read as the main source; the markers
+		// resolve later in UserMacroExpander against the macro-time evaluator.
+		List<LispVal> forms = source.contains("#.") ? LispReader.readAllWithReadEvalMarkers(source, ctx.features())
+				: LispReader.readAllFromString(source, ctx.features());
 		// A file that selects a package with a top-level (in-package ...) must not leak
 		// it
 		// past the load: bracket the spliced forms with package save/restore markers so

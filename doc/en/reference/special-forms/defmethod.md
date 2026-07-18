@@ -2,14 +2,14 @@
 
 `(defmethod name [qualifier] (param... ) body...)`
 
-Adds a method to the generic function `name` (creating it when no [`defgeneric`](defgeneric.md) preceded it) and returns the name symbol. Only the **first** parameter may carry a specializer, written `(var specializer)`:
+Adds a method to the generic function `name` (creating it when no [`defgeneric`](defgeneric.md) preceded it) and returns the name symbol. **Any** required parameter may carry a specializer, written `(var specializer)`:
 
 - `(var (eql literal))` — matches when the first argument is the literal (a keyword, quoted symbol, number, or character)
 - `(var class-name)` — matches instances of a [`defclass`](defclass.md) class and its subclasses
 - `(var type-name)` — matches a built-in type (`integer`, `float`, `number`, `string`, `symbol`, `keyword`, `character`, `cons`, `list`, `null`, `hash-table`, `function`, ...)
 - `(var t)` or a plain `var` — the default method
 
-A call runs the most specific matching method: `eql` methods first, then class methods (subclass before superclass), then built-in types (subtypes such as `integer` before their supertypes such as `number`), then the default method; with no match the call signals an error. Defining the same specializer again replaces the previous method. The body may start with a docstring and `(declare ...)` (both are ignored).
+A call runs the most specific matching method: parameters are ranked leftmost-first, and per parameter `eql` methods win over class methods (subclass before superclass), then built-in types (subtypes such as `integer` before their supertypes such as `number`), then the default; with no match the call signals an error. Defining the same specializer combination again replaces the previous method. The lambda list may continue past the required parameters with `&optional`/`&rest` (the dispatcher forwards the tail via `apply`). The body may start with a docstring and `(declare ...)` (both are ignored).
 
 ```lisp
 (defclass animal () ())
@@ -45,4 +45,4 @@ Inside a primary or `:around` method, `(call-next-method)` invokes the next less
 (describe-point (make-instance 'point3d :x 1 :z 3)) ; => (:point (:x 1 :z 3))
 ```
 
-Lite subset: required parameters only, specializers on later parameters are errors, and standard method combination is supported for class and default methods (an `:around`/`:before`/`:after` with an `eql` or built-in-type specializer combines only with primaries of the same specializer plus the default method). On the compilation path `defmethod` is only supported as a top-level form; the dispatched method set of a compiled program is fixed at compile time.
+Lite subset: `&key` is an error, `call-next-method` on a variadic generic forwards the required arguments only, and standard method combination is supported for class and default methods (an `:around`/`:before`/`:after` with an `eql` or built-in-type specializer combines only with primaries of the same specializer plus the default method). On the compilation path `defmethod` is only supported as a top-level form; the dispatched method set of a compiled program is fixed at compile time.

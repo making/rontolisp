@@ -91,8 +91,10 @@ keywords, case-insensitive). The active features are `:rontolisp` on every
 backend plus one backend-identifying feature — `:rontolisp-interpreter`,
 `:rontolisp-jvm` or `:rontolisp-wasm` — so one source file can select
 per-backend code. The variable `*features*` reads as the active feature list
-(a quoted list of keywords, fixed at read time like `pi`; it cannot be
-assigned).
+(a quoted list of keywords; it cannot be assigned). On the interpreter it is a
+real global variable; on the JVM/WASM compile path it is substituted at read
+time like `pi` -- a constant, so binding the name (e.g. a lambda parameter
+named `*features*`) is not supported there.
 
 ```lisp
 #| a block comment
@@ -114,9 +116,13 @@ Notes:
 - A form skipped by a failing `#+`/`#-` guard is skipped at the raw character
   level without being parsed, so it may use syntax rontolisp does not support
   (that is the point of guarding it).
-- `#.` read-time evaluation is **not** supported and is a clear read error;
-  the one exception is `.asd` files, where a `#.` form is skipped with a
-  warning (see the [Systems guide](../guides/asdf-systems.md)).
+- `#.` read-time evaluation **is** supported: each `#.` datum is evaluated
+  just before its top-level form runs — against the global environment on the
+  interpreter, and against the compile-time (macro-time) evaluator on the
+  JVM/WASM compile path — and the value is substituted into the form. In
+  `.asd` files a `#.` form is instead skipped with a warning (see the
+  [Systems guide](../guides/asdf-systems.md)); the browser playground's
+  Compile buttons do not support `#.`.
 - The runtime reader of compiled programs (`read`, `read-from-string`, runtime
   `load`) does not know block comments or feature conditionals, like backquote
   — see [Compiled read/load Limitations](../guides/read-load-limitations.md).

@@ -49,6 +49,8 @@ sections:
         title: HTTPサーバ（http-handler）
       - file: guides/tcp-sockets.md
         title: TCPソケット
+      - file: guides/gray-streams.md
+        title: Gray ストリーム
       - file: guides/asdf-systems.md
         title: システム（asdf）
       - file: guides/math-backends.md

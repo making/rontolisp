@@ -4,7 +4,7 @@
 
 Lite: stores nil into the slot (rontolisp has no distinct unbound slot state) and returns the instance.
 
-Supported on the **interpreter only** for now; the JVM and WASM compilers do not support it yet.
+On the JVM and WASM compilers the slot name must be a literal quoted symbol, like [`slot-value`](slot-value.md); a runtime-computed slot name works on the interpreter only.
 
 ```lisp
 (defclass point () ((x :initarg :x)))

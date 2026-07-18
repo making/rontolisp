@@ -3474,6 +3474,143 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunMaskFieldAndScaleFloat() throws Exception {
+		assertThat(compileAndRun("(print (mask-field (byte 4 4) 255))")).isEqualTo("240");
+		assertThat(compileAndRun("(print (mask-field (byte 8 0) 300))")).isEqualTo("44");
+		assertThat(compileAndRun("(print (scale-float 1.5 3))")).isEqualTo("12.0");
+		// The subnormal-to-max edge: 2^-1074 scaled by 2097 is exactly 2^1023.
+		assertThat(compileAndRun("(print (scale-float 4.9406564584124654d-324 2097))"))
+			.isEqualTo("8.98846567431158E307");
+		assertThat(compileAndRun("(print (scale-float 1.0 -100000))")).isEqualTo("0.0");
+	}
+
+	@Test
+	void compileAndRunCharName() throws Exception {
+		assertThat(compileAndRun("(print (char-name #\\Space))")).isEqualTo("\"Space\"");
+		assertThat(compileAndRun("(print (char-name #\\a))")).isEqualTo("nil");
+		assertThat(compileAndRun("(print (char-name (code-char 1)))")).isEqualTo("\"U+0001\"");
+		assertThat(compileAndRun("(print (char-name (code-char 128)))")).isEqualTo("\"U+0080\"");
+	}
+
+	@Test
+	void compileAndRunFdefinition() throws Exception {
+		assertThat(compileAndRun("(defun fd-doubler (x) (* x 2)) (print (funcall (fdefinition 'fd-doubler) 21))"))
+			.isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunLiteStreamBuiltins() throws Exception {
+		assertThat(compileAndRun("(print (file-position t)) (print (file-length t)) (print (pathnamep \"/tmp/x\"))"
+				+ " (print (stream-element-type t))"))
+			.isEqualTo("nil\nnil\nnil\ncharacter");
+		assertThat(compileAndRun("(print (input-stream-p t)) (print (output-stream-p (make-broadcast-stream)))"
+				+ " (print (input-stream-p \"s\"))"))
+			.isEqualTo("t\nt\nnil");
+	}
+
+	@Test
+	void compileAndRunClassOf() throws Exception {
+		assertThat(compileAndRun("(print (class-of 42)) (print (class-of \"s\")) (print (class-of 'foo))"
+				+ " (print (class-of :k)) (print (class-of 1.5)) (print (class-of (cons 1 2)))"
+				+ " (print (class-of nil)) (print (class-of t)) (print (class-of (make-hash-table)))"
+				+ " (print (class-of #'car))"))
+			.isEqualTo("integer\nstring\nsymbol\nkeyword\nfloat\ncons\nnull\nboolean\nhash-table\nfunction");
+		assertThat(
+				compileAndRun("(defclass co-pt () ((x :initarg :x))) (print (class-of (make-instance 'co-pt :x 1)))"))
+			.isEqualTo("%class-co-pt");
+	}
+
+	@Test
+	void compileAndRunSlotBoundpAndSlotMakunbound() throws Exception {
+		assertThat(compileAndRun(
+				"(defclass sb-pt () ((x :initarg :x) (y :initarg :y)))" + " (let ((p (make-instance 'sb-pt :x 1 :y 2)))"
+						+ " (print (slot-boundp p 'x)) (print (slot-boundp p 'z))"
+						+ " (slot-makunbound p 'x) (print (slot-value p 'x)) (print (slot-boundp p 'x)))"))
+			.isEqualTo("t\nnil\nnil\nt");
+	}
+
+	@Test
+	void compileAndRunSimpleConditionFormatAccessors() throws Exception {
+		// The built-in simple-* condition tags carry the rendered message at slot 1.
+		assertThat(compileAndRun(
+				"(handler-case (error \"boom ~a\" 1)" + " (error (c) (print (simple-condition-format-control c))"
+						+ " (print (simple-condition-format-arguments c))))"))
+			.isEqualTo("\"boom 1\"\nnil");
+		// A user condition class reads its declared slots.
+		assertThat(compileAndRun("(define-condition sc-err (error)"
+				+ " ((format-control :initarg :format-control) (format-arguments :initarg :format-arguments)))"
+				+ " (handler-case (error 'sc-err :format-control \"ctl\" :format-arguments '(1 2))"
+				+ " (error (c) (print (simple-condition-format-control c))"
+				+ " (print (simple-condition-format-arguments c))))"))
+			.isEqualTo("\"ctl\"\n(1 2)");
+	}
+
+	@Test
+	void compileAndRunWriteStringBoundsAndReplaceNilBounds() throws Exception {
+		assertThat(compileAndRun("(write-string \"hello\" t :start 1 :end 3) (terpri)"
+				+ " (write-string \"hello\" t :start 1 :end nil) (terpri) (print (write-string \"xy\"))"))
+			.isEqualTo("el\nello\nxy\"xy\"");
+		assertThat(compileAndRun("(let ((s \"abcdef\")) (print (replace s \"XYZ\" :start1 1 :end1 nil)))"))
+			.isEqualTo("\"aXYZef\"");
+	}
+
+	@Test
+	void compileAndRunUiopAddPackageLocalNickname() throws Exception {
+		// The literal top-level call is consumed by the PackageResolver like a
+		// defpackage clause, so the nickname works on the compiled backends too.
+		assertThat(compileAndRun("""
+				(defpackage #:com.example.deeply.nested (:use #:cl) (:export #:apn-answer))
+				(in-package #:com.example.deeply.nested)
+				(defun apn-answer () 42)
+				(in-package #:cl-user)
+				(uiop:add-package-local-nickname '#:apn-nick '#:com.example.deeply.nested)
+				(print (apn-nick:apn-answer))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunGrayStreamInstanceDispatch() throws Exception {
+		// The GrayStreamsLibrary pre-pass splices gray.lisp and rewrites the
+		// write-string/write-char call sites onto the dispatch helpers, mirroring the
+		// CLI pipeline.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
+				(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
+				  ((acc :initform "")))
+				(defmethod rontolisp:stream-write-string ((s gs-upcase) str)
+				  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase str)))
+				  str)
+				(let ((s (make-instance 'gs-upcase)))
+				  (write-string "hello" s)
+				  (write-char #\\! s)
+				  (print (slot-value s 'acc)))
+				(write-string "still-works" t)
+				(terpri)
+				""")))).isEqualTo("\"HELLO!\"\nstill-works");
+	}
+
+	@Test
+	void compileAndRunReadTimeEval() throws Exception {
+		// The CLI pipeline: marker read -> UserMacroExpander resolves each marker
+		// against the macro-time evaluator -> the compilers see plain forms.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllWithReadEvalMarkers(
+				"(defvar +re-six+ #.(* 2 3)) (print +re-six+)" + " (print #.(+ 40 2)) (print '(a #.(+ 1 2) c))"
+						+ " (defmacro re-stamp (&rest body) `(list #.(* 7 6) ,@body)) (print (re-stamp 1 2))",
+				am.ik.rontolisp.reader.Features.JVM))))
+			.isEqualTo("6\n42\n(a 3 c)\n(42 1 2)");
+	}
+
+	@Test
+	void compileAndRunIeee754Bits() throws Exception {
+		assertThat(compileAndRun("(print (%ieee754-double-bits 1.0)) (print (%ieee754-double-bits -2.5))"
+				+ " (print (%ieee754-double-from-bits 4607182418800017408))"
+				+ " (print (%ieee754-single-bits 1.0)) (print (%ieee754-single-bits -2.5))"
+				+ " (print (%ieee754-single-from-bits 1065353216))"
+				+ " (print (%ieee754-double-from-bits (%ieee754-double-bits -0.5)))"
+				+ " (print (%ieee754-single-from-bits (%ieee754-single-bits -0.5)))"))
+			.isEqualTo("4607182418800017408\n13836183955189006336\n1.0\n1065353216\n3223322624\n1.0\n-0.5\n-0.5");
+	}
+
+	@Test
 	void compileAndRunDestructuringBind() throws Exception {
 		assertThat(compileAndRun("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (print (+ a b c d)))")).isEqualTo("10");
 		assertThat(compileAndRun("(destructuring-bind (a &optional (b 10) c) '(1) (print (list a b c)))"))
@@ -5903,6 +6040,71 @@ class JvmLispCompilerTest {
 				(setf (slot-value d 'name) (concatenate 'string (slot-value d 'name) "!"))
 				(print (animal-name d))
 				""")).isEqualTo("(\"woof\" \"...\" \"number\" \"?\")\n(\"Rex\" \"mixed\" \"Rex\")\n\"Max!\"");
+	}
+
+	@Test
+	void compileAndRunMultiParameterMethodDispatch() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass mp-animal () ())
+				(defclass mp-dog (mp-animal) ())
+				(defclass mp-cat (mp-animal) ())
+				(defgeneric mp-meets (a b))
+				(defmethod mp-meets ((a mp-dog) (b mp-cat)) :chase)
+				(defmethod mp-meets ((a mp-cat) (b mp-dog)) :flee)
+				(defmethod mp-meets ((a mp-animal) (b mp-animal)) :ignore)
+				(let ((d (make-instance 'mp-dog)) (c (make-instance 'mp-cat)))
+				  (print (list (mp-meets d c) (mp-meets c d) (mp-meets d d))))
+				""")).isEqualTo("(:chase :flee :ignore)");
+	}
+
+	@Test
+	void compileAndRunVariadicGenericForwardsRestTail() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass vg-base () ())
+				(defclass vg-sub (vg-base) ())
+				(defgeneric vg-desc (x &rest extras))
+				(defmethod vg-desc ((x vg-sub) &rest extras) (list :sub extras))
+				(defmethod vg-desc ((x vg-base) &rest extras) (list :base extras))
+				(print (vg-desc (make-instance 'vg-sub) 1 2))
+				(print (vg-desc (make-instance 'vg-base) 3))
+				""")).isEqualTo("(:sub (1 2))\n(:base (3))");
+	}
+
+	@Test
+	void compileAndRunDefclassDefaultInitargs() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass di-conf () ((host :initarg :host) (port :initarg :port))
+				  (:default-initargs :host "localhost" :port 8080))
+				(let ((c1 (make-instance 'di-conf)) (c2 (make-instance 'di-conf :port 9090)))
+				  (print (list (slot-value c1 'host) (slot-value c1 'port)))
+				  (print (slot-value c2 'port)))
+				""")).isEqualTo("(\"localhost\" 8080)\n9090");
+	}
+
+	@Test
+	void compileAndRunWithSlotsWriteThrough() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass ws-pt () ((x :initarg :x) (y :initarg :y)))
+				(let ((p (make-instance 'ws-pt :x 1 :y 2)))
+				  (with-slots (x (why y)) p
+				    (setf x (+ x 10))
+				    (print (list x why)))
+				  (print (slot-value p 'x)))
+				""")).isEqualTo("(11 2)\n11");
+	}
+
+	@Test
+	void compileAndRunDefstructOptions() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct (so-kv (:constructor make-so-pair) (:conc-name so-get-)
+				                  (:predicate so-kv?) (:copier so-clone))
+				  key val)
+				(let ((k (make-so-pair :key 'a :val 1)))
+				  (print (list (so-get-key k) (so-kv? k) (so-kv? 5)))
+				  (let ((k2 (so-clone k)))
+				    (setf (so-get-val k2) 99)
+				    (print (list (so-get-val k) (so-get-val k2)))))
+				""")).isEqualTo("(a t nil)\n(1 99)");
 	}
 
 	@Test

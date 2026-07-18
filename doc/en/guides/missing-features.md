@@ -16,24 +16,24 @@ This page lists the most notable omissions. For what **is** available, see the
 | `&optional` / `&rest` / `&key` / `&aux` | available in `defun`/`lambda` (see [`defun`](../reference/special-forms/defun.md)); `defmacro` takes `&rest`/`&body` only |
 | `&whole` | not available |
 | `values` / `multiple-value-bind` | available, including user-function values (see [`multiple-value-bind`](../reference/macros/multiple-value-bind.md)) |
-| `block` / `return-from` / `tagbody` / `go` | not available |
+| `block` / `return-from` / `tagbody` / `go` | partial ([`tagbody`](../reference/special-forms/tagbody.md)/[`go`](../reference/special-forms/go.md) are available — the compilers support the lexical subset; [`return-from`](../reference/macros/return-from.md) is lite (function-scoped, no named blocks); `block` itself is not available) |
 | `catch` / `throw` | not available |
 | `unwind-protect` | available (see [`unwind-protect`](../reference/special-forms/unwind-protect.md)); on wasm-GC via the exception-handling proposal (`wasmtime -W exceptions=y`); compile error under `--no-gc` |
 | conditions (`define-condition`, `handler-case`, `ignore-errors`, `signal`) | available (see [`handler-case`](../reference/macros/handler-case.md)); on wasm-GC catching needs `wasmtime -W exceptions=y`, and runtime traps stay uncatchable there; compile error under `--no-gc`. Restarts (`handler-bind`/`restart-case`) are not available |
 | `flet` / `labels` | available (see [`flet`](../reference/macros/flet.md), [`labels`](../reference/macros/labels.md)) |
-| `macrolet` | not available |
+| `macrolet` | available (see [`macrolet`](../reference/macros/macrolet.md)); `symbol-macrolet` is not available |
 | `loop` (extended) | partial (simple-loop subset) |
-| `defstruct` | available (see [`defstruct`](../reference/special-forms/defstruct.md)); options/`:include` are not |
+| `defstruct` | available, including the `:constructor`/`:conc-name`/`:predicate`/`:copier` options (see [`defstruct`](../reference/special-forms/defstruct.md)); `:include`/BOA constructors are not |
 | CLOS | partial (static subset: [`defclass`](../reference/special-forms/defclass.md), [`defgeneric`](../reference/special-forms/defgeneric.md), [`defmethod`](../reference/special-forms/defmethod.md), [`make-instance`](../reference/macros/make-instance.md), [`slot-value`](../reference/macros/slot-value.md)) |
 | `declare` / `declaim` / `proclaim` / `the` | available as parsed no-ops (see [`declare`](../reference/macros/declare.md)) |
 | `check-type` / `assert` | available (lite, no restarts; see [`check-type`](../reference/macros/check-type.md)) |
 | `eval-when` | available (treated as `progn`; see [`eval-when`](../reference/macros/eval-when.md)) |
-| `typep` | not available |
+| `typep` | available with literal (quoted) type specifiers (see [`typep`](../reference/macros/typep.md)); [`subtypep`](../reference/functions/subtypep.md) too |
 | `coerce` | partial (literal `'list` / `'vector` / `'string` result types; see [`coerce`](../reference/functions/coerce.md)) |
 | `defpackage` (user packages) | partial (`:use`/`:export`/`:nicknames`/`:import-from`; see [`defpackage`](../reference/special-forms/defpackage.md)) |
 | `make-package` / `export` / `use-package` (runtime) | not available |
 | `#+` / `#-` / `*features*` / `#\| ... \|#` | available (see [Data Types](../reference/data-types.md#comments-feature-conditionals-and-features)) |
-| `#.` read-time eval / `#:` fresh uninterned symbols | not available (`#.` is a read error, tolerated in `.asd` files; `#:name` reads as a plain symbol, accepted as a designator) |
+| `#.` read-time eval / `#:` fresh uninterned symbols | partial (`#.` is available — each datum evaluates just before its top-level form, against the compile-time evaluator on the compile path; skipped with a warning in `.asd` files; `#:name` reads as a plain symbol, accepted as a designator, without gensym-style freshness) |
 | `require` / `provide` | available (see [`require`](../reference/functions/require.md)); the `*modules*` variable is not available |
 | dynamic (special) binding via `let` | available (`defvar`/`defparameter`/`declaim special` proclaim a name special; `progv` is interpreter only) |
 | complex numbers | not available |
@@ -92,12 +92,20 @@ The remaining deviations from Common Lisp:
 
 ## Non-local exit and control flow
 
-Named blocks and arbitrary jumps are not available:
+Named blocks are not available, but label-and-jump control flow is:
 
-- `block` / `return-from` — there are no named blocks. The only non-local exit is
-  `return`, which exits the **nearest** enclosing iteration block established by
-  `do` / `do*` / `dolist` / `dotimes`.
-- `tagbody` / `go` — no label-and-jump control flow.
+- `block` — there are no named blocks. [`return`](../reference/macros/return.md)
+  exits the **nearest** enclosing iteration block established by
+  `do` / `do*` / `dolist` / `dotimes`, and
+  [`return-from`](../reference/macros/return-from.md) is lite: it exits the
+  enclosing **function**, ignoring the block name.
+- [`tagbody`](../reference/special-forms/tagbody.md) /
+  [`go`](../reference/special-forms/go.md) — **available**, along with
+  [`prog`](../reference/macros/prog.md) /
+  [`prog*`](../reference/macros/prog-star.md). The JVM/WASM compilers support
+  the lexical subset (a `go` must target a tag of a lexically enclosing
+  `tagbody` in the same function); the interpreter additionally supports
+  dynamic `go` across function boundaries.
 - `catch` / `throw` — no dynamically scoped exits.
 
 ```console
@@ -140,8 +148,10 @@ re-store restart.
 ## Local macros (`macrolet`)
 
 Local functions **are** available -- see [`flet`](../reference/macros/flet.md)
-and [`labels`](../reference/macros/labels.md). Local macros (`macrolet`) are
-not; macros exist only at top level via `defmacro`.
+and [`labels`](../reference/macros/labels.md). Local macros
+([`macrolet`](../reference/macros/macrolet.md)) **are** available too -- the
+compile path expands them away before the compilers run, and the interpreter
+expands them natively; `symbol-macrolet` is not available.
 
 ## The `loop` macro
 
@@ -158,9 +168,10 @@ anaphoric `it`, `named`/`loop-finish`, and `thereis`/`always`/`never`. The other
 
 Structures **are** available with
 [`defstruct`](../reference/special-forms/defstruct.md), which generates a
-keyword constructor, a predicate, a copier and `setf`-able accessors. The
-`defstruct` options syntax (`:conc-name`, `:constructor`, ...), `:include`
-inheritance, and the `#S(...)` print/read syntax are not supported.
+keyword constructor, a predicate, a copier and `setf`-able accessors, and
+supports the `:constructor`/`:conc-name`/`:predicate`/`:copier` options.
+`:include` inheritance, BOA constructors, and the `#S(...)` print/read
+syntax are not supported.
 
 A **static CLOS subset** is available:
 [`defclass`](../reference/special-forms/defclass.md) (single inheritance,
@@ -186,7 +197,9 @@ Type declarations **are** accepted as parsed no-ops:
 [`the`](../reference/macros/the.md) all parse and have no effect, so annotated
 sources load unchanged. [`check-type`](../reference/macros/check-type.md) and
 [`assert`](../reference/macros/assert.md) provide actual runtime checks (lite,
-without restarts). The runtime helper `typep` is not available.
+without restarts). The runtime helper [`typep`](../reference/macros/typep.md)
+**is** available with a literal (quoted) type specifier, as is
+[`subtypep`](../reference/functions/subtypep.md).
 [`coerce`](../reference/functions/coerce.md) **is** available for the literal
 result types `'list`, `'vector` and `'string` (the result type must be a quoted
 literal, like `map`'s); other result types are not supported.

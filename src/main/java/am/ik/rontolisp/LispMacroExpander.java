@@ -5164,11 +5164,13 @@ public final class LispMacroExpander {
 			if (!(parts.get(k) instanceof LispSymbol key)) {
 				throw new UnsupportedOperationException("replace supports only literal keyword arguments");
 			}
+			// A nil bound keeps its default (a runtime nil through the or-wrapper), as in
+			// the interpreter.
 			switch (key.name()) {
-				case LispNames.START1_KEYWORD -> s1 = parts.get(k + 1);
-				case LispNames.END1_KEYWORD -> e1 = parts.get(k + 1);
-				case LispNames.START2_KEYWORD -> s2 = parts.get(k + 1);
-				case LispNames.END2_KEYWORD -> e2 = parts.get(k + 1);
+				case LispNames.START1_KEYWORD -> s1 = boundOrDefault(parts.get(k + 1), s1);
+				case LispNames.END1_KEYWORD -> e1 = boundOrDefault(parts.get(k + 1), e1);
+				case LispNames.START2_KEYWORD -> s2 = boundOrDefault(parts.get(k + 1), s2);
+				case LispNames.END2_KEYWORD -> e2 = boundOrDefault(parts.get(k + 1), e2);
 				default -> throw new UnsupportedOperationException(
 						"replace supports only the literal :start1/:end1/:start2/:end2 keywords");
 			}
@@ -5187,6 +5189,21 @@ public final class LispMacroExpander {
 		LispVal tail = fmtCall(LispNames.SUBSEQ, r1, fmtCall(LispNames.ADD, vs1, n), fmtCall(LispNames.LENGTH, r1));
 		LispVal body = fmtCall(LispNames.CONCATENATE, quoteOf("string"), head, mid, tail);
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
+	}
+
+	/**
+	 * A replace/sequence bound expression: a literal nil keeps the default, a literal
+	 * integer passes through, and anything else is wrapped in {@code (or expr default)}
+	 * so a runtime nil falls back to the default.
+	 */
+	private static LispVal boundOrDefault(LispVal expr, LispVal defaultExpr) {
+		if (expr instanceof LispNil) {
+			return defaultExpr;
+		}
+		if (expr instanceof LispInteger) {
+			return expr;
+		}
+		return fmtCall(LispNames.OR, expr, defaultExpr);
 	}
 
 	/**
@@ -5266,6 +5283,130 @@ public final class LispMacroExpander {
 	/** Builds a {@code (quote name)} form for the given symbol name. */
 	private static LispVal quoteOf(String name) {
 		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(name)));
+	}
+
+	/**
+	 * The {@code (quote character)} constant of the lite {@code stream-element-type}
+	 * (every stream is a character stream).
+	 * @return the quoted type name
+	 */
+	public static LispVal quotedCharacterTypeName() {
+		return quoteOf("character");
+	}
+
+	/**
+	 * Expands {@code (input-stream-p x)} / {@code (output-stream-p x)} into
+	 * {@code (streamp x)}: every stream handle is bidirectional-lite, so both predicates
+	 * coincide with {@code streamp} (including the {@code t} designator).
+	 * @param cons the input-stream-p / output-stream-p expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandStreamDirectionP(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(
+					((LispSymbol) cons.car()).name() + " expects exactly one argument: " + cons.print());
+		}
+		return expandStreamp((LispCons) fmtCall(LispNames.STREAMP, parts.get(1)));
+	}
+
+	/**
+	 * Expands a lite always-constant operator ({@code file-position},
+	 * {@code file-length}, {@code pathnamep}, {@code stream-element-type}) into a
+	 * {@code progn} evaluating the arguments for effect and yielding the fixed result.
+	 * @param cons the expression
+	 * @param result the constant result form
+	 * @return the expanded expression
+	 */
+	public static LispVal expandConstantResult(LispCons cons, LispVal result) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> body = new java.util.ArrayList<>();
+		body.add(new LispSymbol(LispNames.PROGN));
+		body.addAll(parts.subList(1, parts.size()));
+		body.add(result);
+		return listToCons(body);
+	}
+
+	/**
+	 * Expands {@code (make-broadcast-stream)} into {@code (make-string-output-stream)}: a
+	 * discarding sink stream, exactly what the interpreter allocates (component streams
+	 * are unsupported everywhere).
+	 * @param cons the make-broadcast-stream expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMakeBroadcastStream(LispCons cons) {
+		if (!(cons.cdr() instanceof LispNil)) {
+			throw new UnsupportedOperationException(
+					LispNames.MAKE_BROADCAST_STREAM + " with component streams is not supported: " + cons.print());
+		}
+		return fmtCall(LispNames.MAKE_STRING_OUTPUT_STREAM);
+	}
+
+	/**
+	 * Expands {@code (fdefinition x)} into {@code (symbol-function x)}: fdefinition is
+	 * the symbol-function alias for symbol designators (no setf-function names).
+	 * @param cons the fdefinition expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandFdefinition(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(
+					LispNames.FDEFINITION + " expects exactly one argument: " + cons.print());
+		}
+		return fmtCall(LispNames.SYMBOL_FUNCTION, parts.get(1));
+	}
+
+	/**
+	 * Lowers a {@code (write-string str [stream] :start s :end e)} call carrying literal
+	 * bounding keywords into {@code (write-string (subseq str start end) [stream])} over
+	 * once-evaluated temps, with a runtime {@code nil} {@code :end} defaulting to the
+	 * string's length; yields the full string like the interpreter. Returns null for the
+	 * plain keyword-free shape, which keeps its dedicated code path.
+	 * @param cons the write-string expression
+	 * @return the lowered expression, or null when no bounding keywords are present
+	 */
+	public static @Nullable LispVal lowerWriteStringBounds(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		int i = 2;
+		if (parts.size() > 2 && !(parts.get(2) instanceof LispSymbol kw && kw.name().startsWith(":"))) {
+			i = 3;
+		}
+		if (parts.size() <= i) {
+			return null;
+		}
+		LispVal startExpr = null;
+		LispVal endExpr = null;
+		for (; i + 1 < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol key)) {
+				throw new UnsupportedOperationException(
+						LispNames.WRITE_STRING + " supports only literal keyword arguments: " + cons.print());
+			}
+			switch (key.name()) {
+				case ":start" -> startExpr = parts.get(i + 1);
+				case ":end" -> endExpr = parts.get(i + 1);
+				default -> throw new UnsupportedOperationException(
+						LispNames.WRITE_STRING + ": unsupported keyword " + key.name());
+			}
+		}
+		String prefix = "__ws" + MV_COUNTER.getAndIncrement();
+		LispSymbol s = new LispSymbol(prefix + "_s");
+		LispSymbol st = new LispSymbol(prefix + "_b");
+		LispSymbol e = new LispSymbol(prefix + "_e");
+		LispVal startInit = startExpr == null ? new LispInteger(0)
+				: fmtCall(LispNames.OR, startExpr, new LispInteger(0));
+		LispVal endInit = endExpr == null || endExpr instanceof LispNil ? fmtCall(LispNames.LENGTH, s)
+				: fmtCall(LispNames.OR, endExpr, fmtCall(LispNames.LENGTH, s));
+		List<LispVal> inner = new java.util.ArrayList<>();
+		inner.add(new LispSymbol(LispNames.WRITE_STRING));
+		inner.add(fmtCall(LispNames.SUBSEQ, s, st, e));
+		boolean hasStream = parts.size() > 2 && !(parts.get(2) instanceof LispSymbol k2 && k2.name().startsWith(":"));
+		if (hasStream) {
+			inner.add(parts.get(2));
+		}
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.PROGN), listToCons(inner), s));
+		return nestMvBindings(
+				List.of(new MvBinding(s, parts.get(1)), new MvBinding(st, startInit), new MvBinding(e, endInit)), body);
 	}
 
 	/**
@@ -5847,6 +5988,179 @@ public final class LispMacroExpander {
 					+ " has different positions in unrelated classes; use the accessor");
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(position), parts.get(1)));
+	}
+
+	/**
+	 * Expands {@code (class-of x)} into a runtime type dispatch mirroring the
+	 * interpreter's lite semantics: the class-tag symbol of a CLOS-subset instance
+	 * (matched against every class the program declares plus the built-in simple-*
+	 * condition tags), else a built-in type NAME symbol ({@code integer}, {@code string},
+	 * ...), with {@code t} for anything else (arrays included).
+	 * @param cons the class-of expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandClassOf(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.CLASS_OF + " expects exactly one argument: " + cons.print());
+		}
+		String prefix = "__co" + MV_COUNTER.getAndIncrement();
+		LispSymbol v = new LispSymbol(prefix + "_v");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		java.util.LinkedHashSet<String> tags = new java.util.LinkedHashSet<>(SIMPLE_CONDITION_TAGS);
+		for (String className : closRegistry.classes().keySet()) {
+			tags.add("%class-" + className);
+		}
+		clauses.add(listToCons(List.of(instanceTagTest(v, List.copyOf(tags)), mvCall(LispNames.CAR, v))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.NULL, v), quoteOf("null"))));
+		clauses.add(listToCons(List.of(fmtCall(LispNames.EQ_GENERAL, v, LispTrue.INSTANCE), quoteOf("boolean"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.INTEGERP, v), quoteOf("integer"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.RATIONALP, v), quoteOf("ratio"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.FLOATP, v), quoteOf("float"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.STRINGP, v), quoteOf("string"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.CHARACTERP, v), quoteOf("character"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.KEYWORDP, v), quoteOf("keyword"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.SYMBOLP, v), quoteOf("symbol"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.HASH_TABLE_P, v), quoteOf("hash-table"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.FUNCTIONP, v), quoteOf("function"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.CONSP, v), quoteOf("cons"))));
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, quoteOf("t"))));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))), listToCons(condParts));
+	}
+
+	/**
+	 * Expands {@code (slot-boundp obj 'slot)} (literal slot name) into a membership test
+	 * of the instance's class tag against the classes declaring that slot -- the lite
+	 * semantics: slots are always initialized, so a slot the class has is bound.
+	 * @param cons the slot-boundp expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSlotBoundp(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException(
+					LispNames.SLOT_BOUNDP + " expects (slot-boundp obj 'slot): " + cons.print());
+		}
+		LispSymbol slotSym = quotedSymbol(parts.get(2));
+		if (slotSym == null) {
+			throw new UnsupportedOperationException(
+					LispNames.SLOT_BOUNDP + " requires a literal quoted slot name: " + cons.print());
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
+		String baseName = qn == null ? slotSym.name() : qn.member();
+		List<String> tags = new java.util.ArrayList<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			if (info.slots().stream().anyMatch(s -> s.baseName().equals(baseName))) {
+				tags.add("%class-" + info.name());
+			}
+		}
+		if (tags.isEmpty()) {
+			return expandConstantResult((LispCons) fmtCall(LispNames.SLOT_BOUNDP, parts.get(1)), LispNil.INSTANCE);
+		}
+		String prefix = "__sb" + MV_COUNTER.getAndIncrement();
+		LispSymbol v = new LispSymbol(prefix + "_v");
+		LispVal test = makeIf(instanceTagTest(v, tags), LispTrue.INSTANCE, LispNil.INSTANCE);
+		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))), test);
+	}
+
+	/**
+	 * Expands {@code (slot-makunbound obj 'slot)} (literal slot name) into a nil store
+	 * through the slot's {@code setf slot-value} place, yielding the instance -- the lite
+	 * semantics: there is no distinct unbound state.
+	 * @param cons the slot-makunbound expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSlotMakunbound(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException(
+					LispNames.SLOT_MAKUNBOUND + " expects (slot-makunbound obj 'slot): " + cons.print());
+		}
+		String prefix = "__sm" + MV_COUNTER.getAndIncrement();
+		LispSymbol v = new LispSymbol(prefix + "_v");
+		LispVal write = fmtCall(LispNames.SETF, fmtCall(LispNames.SLOT_VALUE, v, parts.get(2)), LispNil.INSTANCE);
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.PROGN), write, v));
+		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))), body);
+	}
+
+	/**
+	 * Expands {@code (simple-condition-format-control c)} into a class-tag dispatch over
+	 * the condition instance: the built-in simple-* tags carry the rendered message at
+	 * slot 1, user condition classes read their declared {@code format-control} slot, and
+	 * anything else yields nil -- the interpreter's {@code conditionSlotValue} semantics.
+	 * @param cons the simple-condition-format-control expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSimpleConditionFormatControl(LispCons cons, ClosRegistry closRegistry) {
+		return expandConditionSlotReader(cons, closRegistry, "format-control", true);
+	}
+
+	/**
+	 * Expands {@code (simple-condition-format-arguments c)} like
+	 * {@link #expandSimpleConditionFormatControl(LispCons, ClosRegistry)} over the
+	 * {@code format-arguments} slot; the built-in simple-* tags carry no argument list,
+	 * so they yield nil.
+	 * @param cons the simple-condition-format-arguments expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSimpleConditionFormatArguments(LispCons cons, ClosRegistry closRegistry) {
+		return expandConditionSlotReader(cons, closRegistry, "format-arguments", false);
+	}
+
+	private static LispVal expandConditionSlotReader(LispCons cons, ClosRegistry closRegistry, String baseName,
+			boolean simpleTagsCarrySlot1) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(
+					((LispSymbol) cons.car()).name() + " expects exactly one argument: " + cons.print());
+		}
+		String prefix = "__cs" + MV_COUNTER.getAndIncrement();
+		LispSymbol v = new LispSymbol(prefix + "_v");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		if (simpleTagsCarrySlot1) {
+			clauses.add(listToCons(
+					List.of(instanceTagTest(v, SIMPLE_CONDITION_TAGS), mvCall(LispNames.NTH, new LispInteger(1), v))));
+		}
+		// Group the classes declaring the slot by its instance position so one membership
+		// test covers each layout.
+		java.util.Map<Integer, List<String>> byPosition = new java.util.LinkedHashMap<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			for (int i = 0; i < info.slots().size(); i++) {
+				if (info.slots().get(i).baseName().equals(baseName)) {
+					byPosition.computeIfAbsent(i + 1, k -> new java.util.ArrayList<>()).add("%class-" + info.name());
+					break;
+				}
+			}
+		}
+		for (java.util.Map.Entry<Integer, List<String>> entry : byPosition.entrySet()) {
+			clauses.add(listToCons(List.of(instanceTagTest(v, entry.getValue()),
+					mvCall(LispNames.NTH, new LispInteger(entry.getKey()), v))));
+		}
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))), listToCons(condParts));
+	}
+
+	/** Builds {@code (if (consp v) (if (member (car v) '(tags...)) t nil) nil)}. */
+	private static LispVal instanceTagTest(LispSymbol v, List<String> tags) {
+		List<LispVal> tagSyms = new java.util.ArrayList<>();
+		for (String tag : tags) {
+			tagSyms.add(new LispSymbol(tag));
+		}
+		LispVal quotedTags = listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(tagSyms)));
+		LispVal member = mvCall(LispNames.MEMBER, mvCall(LispNames.CAR, v), quotedTags);
+		return makeIf(mvCall(LispNames.CONSP, v), makeIf(member, LispTrue.INSTANCE, LispNil.INSTANCE),
+				LispNil.INSTANCE);
 	}
 
 	private static final String WITH_SLOTS_OBJ_VAR = "__with_slots_obj";
@@ -11598,6 +11912,75 @@ public final class LispMacroExpander {
 		LispVal body = mvCall(LispNames.LOGIOR, cleared, newBits);
 		return nestMvBindings(List.of(new MvBinding(nb, parts.get(1)), new MvBinding(s, parts.get(2)),
 				new MvBinding(n, parts.get(3)), new MvBinding(m, maskInit)), body);
+	}
+
+	/**
+	 * Expands {@code (mask-field bytespec integer)} over the bit primitives: the
+	 * {@code ldb} field left in its original position.
+	 *
+	 * <pre>
+	 * (mask-field bs n) ->
+	 *   (let* ((__mfN_s bs) (__mfN_n n))
+	 *     (logand __mfN_n (ash (- (ash 1 (car __mfN_s)) 1) (car (cdr __mfN_s)))))
+	 * </pre>
+	 * @param cons the mask-field expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMaskField(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException("mask-field expects 2 arguments (bytespec integer): " + cons.print());
+		}
+		String prefix = "__mf" + MV_COUNTER.getAndIncrement();
+		LispSymbol s = new LispSymbol(prefix + "_s");
+		LispSymbol n = new LispSymbol(prefix + "_n");
+		LispVal size = mvCall(LispNames.CAR, s);
+		LispVal position = mvCall(LispNames.CAR, mvCall(LispNames.CDR, s));
+		LispVal ones = mvCall(LispNames.SUB, mvCall(LispNames.ASH, new LispInteger(1), size), new LispInteger(1));
+		LispVal mask = mvCall(LispNames.ASH, ones, position);
+		LispVal body = mvCall(LispNames.LOGAND, n, mask);
+		return nestMvBindings(List.of(new MvBinding(s, parts.get(1)), new MvBinding(n, parts.get(2))), body);
+	}
+
+	/**
+	 * Expands {@code (scale-float f n)} ({@code f * 2^n} with IEEE semantics) into a
+	 * chunked power-of-two product: the exponent is clamped to ±2200 (beyond which every
+	 * finite double has saturated to 0/infinity anyway) and split into three chunks of at
+	 * most ±1000 so each {@code (expt 2.0 chunk)} factor stays finite and nonzero --
+	 * multiplying by such a factor is exact until the final step over/underflows, which
+	 * reproduces {@code Math.scalb} including the subnormal range.
+	 * @param cons the scale-float expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandScaleFloat(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException("scale-float expects 2 arguments (float n): " + cons.print());
+		}
+		String prefix = "__sf" + MV_COUNTER.getAndIncrement();
+		LispSymbol f = new LispSymbol(prefix + "_f");
+		LispSymbol nc = new LispSymbol(prefix + "_n");
+		LispSymbol a = new LispSymbol(prefix + "_a");
+		LispSymbol b = new LispSymbol(prefix + "_b");
+		LispSymbol c = new LispSymbol(prefix + "_c");
+		LispVal ncInit = clampInt(parts.get(2), 2200);
+		LispVal aInit = clampInt(nc, 1000);
+		LispVal bInit = clampInt(mvCall(LispNames.SUB, nc, a), 1000);
+		LispVal cInit = mvCall(LispNames.SUB, nc, a, b);
+		LispVal product = mvCall(LispNames.MUL, mvCall(LispNames.MUL, mvCall(LispNames.MUL, f, pow2(a)), pow2(b)),
+				pow2(c));
+		return nestMvBindings(List.of(new MvBinding(f, parts.get(1)), new MvBinding(nc, ncInit),
+				new MvBinding(a, aInit), new MvBinding(b, bInit), new MvBinding(c, cInit)), product);
+	}
+
+	/** Builds {@code (max -limit (min limit x))}. */
+	private static LispVal clampInt(LispVal x, long limit) {
+		return mvCall(LispNames.MAX, new LispInteger(-limit), mvCall(LispNames.MIN, new LispInteger(limit), x));
+	}
+
+	/** Builds {@code (expt 2.0 e)}. */
+	private static LispVal pow2(LispVal e) {
+		return mvCall(LispNames.EXPT, new LispDouble(2.0), e);
 	}
 
 	/**

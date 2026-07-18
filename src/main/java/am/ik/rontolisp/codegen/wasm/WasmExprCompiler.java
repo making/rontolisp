@@ -409,7 +409,15 @@ final class WasmExprCompiler {
 				case LispNames.OPEN -> WasmOpenCompiler.compile(cons, ctx);
 				case LispNames.CLOSE -> WasmCloseCompiler.compile(cons, ctx);
 				case LispNames.WRITE_LINE -> WasmWriteLineCompiler.compile(cons, ctx);
-				case LispNames.WRITE_STRING -> WasmWriteStringCompiler.compileWriteString(cons, ctx);
+				case LispNames.WRITE_STRING -> {
+					LispVal bounded = LispMacroExpander.lowerWriteStringBounds(cons);
+					if (bounded != null) {
+						WasmExprCompiler.compileExpr(bounded, ctx);
+					}
+					else {
+						WasmWriteStringCompiler.compileWriteString(cons, ctx);
+					}
+				}
 				case LispNames.WRITE_TO_STRING -> WasmPrin1ToStringCompiler.compile(cons, ctx);
 				case LispNames.MAKE_STRING_OUTPUT_STREAM -> WasmWriteStringCompiler.compileMakeOutputStream(cons, ctx);
 				case LispNames.MAKE_STRING_INPUT_STREAM -> WasmWriteStringCompiler.compileMakeInputStream(cons, ctx);
@@ -461,6 +469,34 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx);
 				case LispNames.CONSTANTP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx);
 				case LispNames.STREAMP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons), ctx);
+				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons), ctx);
+				case LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.PATHNAMEP ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx);
+				case LispNames.STREAM_ELEMENT_TYPE -> WasmExprCompiler.compileExpr(
+						LispMacroExpander.expandConstantResult(cons, LispMacroExpander.quotedCharacterTypeName()), ctx);
+				case LispNames.MAKE_BROADCAST_STREAM ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeBroadcastStream(cons), ctx);
+				case LispNames.FDEFINITION ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandFdefinition(cons), ctx);
+				case LispNames.MASK_FIELD -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMaskField(cons), ctx);
+				case LispNames.SCALE_FLOAT ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandScaleFloat(cons), ctx);
+				case LispNames.CLASS_OF ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandClassOf(cons, ctx.closRegistry), ctx);
+				case LispNames.SLOT_BOUNDP ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotBoundp(cons, ctx.closRegistry), ctx);
+				case LispNames.SLOT_MAKUNBOUND ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotMakunbound(cons, ctx.closRegistry), ctx);
+				case LispNames.SIMPLE_CONDITION_FORMAT_CONTROL -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandSimpleConditionFormatControl(cons, ctx.closRegistry), ctx);
+				case LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandSimpleConditionFormatArguments(cons, ctx.closRegistry), ctx);
+				case LispNames.READ_EVAL ->
+					// Identity: a #. marker split into code position by a backquote
+					// template
+					// arrives here with its (already evaluated) argument.
+					WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
 				case LispNames.STRING_UPCASE -> WasmStringUpcaseCompiler.compileUpcase(cons, ctx);
 				case LispNames.STRING_DOWNCASE -> WasmStringUpcaseCompiler.compileDowncase(cons, ctx);
 				case LispNames.STRING_CAPITALIZE -> WasmStringCapitalizeCompiler.compile(cons, ctx);

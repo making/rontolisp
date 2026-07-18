@@ -26,6 +26,18 @@ backend: `--no-gc: unsupported operation 'vector-push' ...`; the new names go
 through the same default path), satisfying the todo-71 "gate explicitly"
 acceptance without a dedicated gate.
 
+**Fill-pointered STRINGS diverge (2026-07-18)**: on the interpreter,
+`make-array :element-type 'character` WITH `:fill-pointer`/`:adjustable`
+builds a mutable `LispString` (char[] buffer + fill pointer + adjustable
+flag; `vectorPushExtend` grows it, prints/compares as a string). The compiled
+backends build a GENERAL character vector instead — the fill-pointer surface
+works but `stringp` is nil, it prints `#(...)`, and string functions reject
+it. Closing that gap needs a mutable-string runtime representation on both
+backends (JVM strings are immutable `java.lang.String` literals; wasm-GC's
+`TYPE_STRING` struct has an immutable len + `$str_bytes` data) — every
+string-consuming helper would have to accept the new representation, which is
+why it stayed interpreter-only (documented on the make-array page).
+
 ## adjust-array
 
 `(adjust-array array new-dims &key initial-element fill-pointer)` on every

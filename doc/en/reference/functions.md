@@ -237,20 +237,21 @@ page.
 | `vector-pop` | `(vector-pop v)` | Decrement the fill pointer and return the element it passed |
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | Like `vector-push` but grows the vector when full |
 | `subtypep` | `(subtypep 'integer 'number)` | `t` -- the built-in type lattice plus `defclass`/condition hierarchies; a single value, unknown pairs answer `nil`; the compilers fold literal specifiers at compile time |
-| `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- the `ldb` field left in its original position (interpreter only for now) |
-| `scale-float` | `(scale-float 1.5 3)` | `12.0` -- `float × 2^n` with IEEE semantics (interpreter only for now) |
-| `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters (interpreter only for now) |
-| `fdefinition` | `(fdefinition 'car)` | the function value, like `symbol-function` (interpreter only for now) |
-| `file-position` | `(file-position s)` | always `nil` (lite: streams do not support repositioning; interpreter only for now) |
-| `file-length` | `(file-length s)` | always `nil` (lite; interpreter only for now) |
-| `make-broadcast-stream` | `(make-broadcast-stream)` | a discarding sink stream (no component streams; interpreter only for now) |
-| `pathnamep` | `(pathnamep "/tmp/x")` | always `nil` -- rontolisp has no pathname type (interpreter only for now) |
-| `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle (interpreter only for now) |
-| `output-stream-p` | `(output-stream-p s)` | `t` for any stream handle (interpreter only for now) |
-| `stream-element-type` | `(stream-element-type s)` | always `character` -- every stream is a character stream (interpreter only for now) |
-| `class-of` | `(class-of 42)` | `integer` -- a type/class NAME symbol, not a metaobject (interpreter only for now) |
-| `simple-condition-format-control` | `(simple-condition-format-control c)` | the condition's `:format-control` slot, or `nil` (interpreter only for now) |
-| `simple-condition-format-arguments` | `(simple-condition-format-arguments c)` | the condition's `:format-arguments` slot, or `nil` (interpreter only for now) |
+| `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- the `ldb` field left in its original position |
+| `scale-float` | `(scale-float 1.5 3)` | `12.0` -- `float × 2^n` with IEEE semantics |
+| `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters |
+| `fdefinition` | `(fdefinition 'car)` | the function value, like `symbol-function` |
+| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping) |
+| `file-position` | `(file-position s)` | always `nil` (lite: streams do not support repositioning) |
+| `file-length` | `(file-length s)` | always `nil` (lite) |
+| `make-broadcast-stream` | `(make-broadcast-stream)` | a discarding sink stream (no component streams) |
+| `pathnamep` | `(pathnamep "/tmp/x")` | always `nil` -- rontolisp has no pathname type |
+| `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle |
+| `output-stream-p` | `(output-stream-p s)` | `t` for any stream handle |
+| `stream-element-type` | `(stream-element-type s)` | always `character` -- every stream is a character stream |
+| `class-of` | `(class-of 42)` | `integer` -- a type/class NAME symbol, not a metaobject |
+| `simple-condition-format-control` | `(simple-condition-format-control c)` | the condition's `:format-control` slot, or `nil` |
+| `simple-condition-format-arguments` | `(simple-condition-format-arguments c)` | the condition's `:format-arguments` slot, or `nil` |
 
 ## rontolisp Package Functions
 

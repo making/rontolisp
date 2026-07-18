@@ -27,8 +27,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * ({@code #1=}/{@code #1#}), {@code shiftf}, {@code (setf (values ...))}, fill-pointered
  * adjustable strings, the eisel-lemire/schubfach float reader/printer over IEEE 754 bit
  * primitives, and rontolisp's Gray-stream protocol (stringify into a user-supplied
- * adjustable string). Compiled-backend coverage is future work (the compile path lacks
- * these features; see {@code .todo}).
+ * adjustable string). Deliberately NOT migrated onto {@code AsdfLibraryE2eSupport}: the
+ * compiled backends cannot run the full library -- its float reader/printer does
+ * 64-bit/bignum bit arithmetic beyond the WASM numeric model, and its buffers need the
+ * interpreter's mutable fill-pointered strings. The isolated language features it forced
+ * are compiled everywhere and pinned by the {@code jzon-residue-features} /
+ * {@code lite-builtins-residue} ci-spec cases instead.
  */
 class JzonE2eTest {
 

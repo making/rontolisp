@@ -11,7 +11,7 @@ Defines a structure type named `name` and returns the name symbol. Each `slot` i
 
 Because the generated names are plain functions they are first-class (`#'point-x`, `mapcar`, `funcall`). On the compilation path `defstruct` is only supported as a top-level form; the interpreter also accepts it in the REPL and via `load`. Under a [user-defined package](../packages.md#user-defined-packages-defpackage) the generated names are interned as internal symbols of that package (`geo::make-pt`); listing them in a `defpackage` `:export` clause is not supported.
 
-An instance is represented as a tagged list, so `print` shows that representation (not the standard `#S(...)` syntax, which is also not read), `consp`/`listp` are `t` on instances, and `equal` compares instances slot-wise. The `defstruct` options syntax (`(defstruct (name (:conc-name ...) ...) ...)`), `:include` inheritance, and BOA constructors are not supported, and the runtime `eval` of a compiled program knows neither `defstruct` nor accessor `setf` places (calling the generated functions from `eval` works).
+An instance is represented as a tagged list, so `print` shows that representation (not the standard `#S(...)` syntax, which is also not read), `consp`/`listp` are `t` on instances, and `equal` compares instances slot-wise. The options syntax `(defstruct (name option...) slot...)` supports `(:constructor name)`, `(:conc-name prefix)`, `(:predicate name)` and `(:copier name)` on every backend; `:include` inheritance and BOA constructors (a `:constructor` with its own lambda list) are not supported, and the runtime `eval` of a compiled program knows neither `defstruct` nor accessor `setf` places (calling the generated functions from `eval` works).
 
 ```lisp
 (defstruct point x (y 10))

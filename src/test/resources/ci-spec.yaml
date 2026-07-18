@@ -4028,6 +4028,117 @@ cases:
       (7 8)
       5
       (t t)
+  - name: lite-builtins-residue
+    source: |
+      (print (mask-field (byte 4 4) 255))
+      (print (scale-float 1.5 3))
+      (print (char-name #\Space))
+      (print (char-name (code-char 1)))
+      (defun lbr-double (x) (* x 2))
+      (print (funcall (fdefinition 'lbr-double) 21))
+      (print (list (file-position t) (file-length t) (pathnamep "/tmp/x")))
+      (print (list (input-stream-p t) (output-stream-p (make-broadcast-stream)) (input-stream-p "s")))
+      (print (stream-element-type t))
+      (print (list (class-of 42) (class-of "s") (class-of nil) (class-of t)))
+      (defclass lbr-pt () ((lbr-x :initarg :lbr-x)))
+      (let ((lbr-p (make-instance 'lbr-pt :lbr-x 1)))
+        (print (class-of lbr-p))
+        (print (list (slot-boundp lbr-p 'lbr-x) (slot-boundp lbr-p 'lbr-z)))
+        (slot-makunbound lbr-p 'lbr-x)
+        (print (slot-value lbr-p 'lbr-x)))
+      (handler-case (error "lbr ~a" 7)
+        (error (lbr-c) (print (simple-condition-format-control lbr-c))
+                       (print (simple-condition-format-arguments lbr-c))))
+      (let ((lbr-s "abcdef")) (print (replace lbr-s "XYZ" :start1 1 :end1 nil)))
+      (write-string "hello" t :start 1 :end 3)
+      (terpri)
+    expected: |
+      240
+      12.0
+      "Space"
+      "U+0001"
+      42
+      (nil nil nil)
+      (t t nil)
+      character
+      (integer string null boolean)
+      %class-lbr-pt
+      (t nil)
+      nil
+      "lbr 7"
+      nil
+      "aXYZef"
+      el
+  - name: read-time-eval-residue
+    source: |
+      (defvar +rte-six+ #.(* 2 3))
+      (print +rte-six+)
+      (print #.(+ 40 2))
+      (print '(rte-a #.(+ 1 2) rte-c))
+      (defmacro rte-stamp (&rest rte-body) `(list #.(* 7 6) ,@rte-body))
+      (print (rte-stamp 1 2))
+    expected: |
+      6
+      42
+      (rte-a 3 rte-c)
+      (42 1 2)
+  - name: clos-multi-dispatch-and-defstruct-options
+    source: |
+      (defclass cmd-animal () ())
+      (defclass cmd-dog (cmd-animal) ())
+      (defclass cmd-cat (cmd-animal) ())
+      (defgeneric cmd-meets (cmd-a cmd-b))
+      (defmethod cmd-meets ((cmd-a cmd-dog) (cmd-b cmd-cat)) :chase)
+      (defmethod cmd-meets ((cmd-a cmd-cat) (cmd-b cmd-dog)) :flee)
+      (defmethod cmd-meets ((cmd-a cmd-animal) (cmd-b cmd-animal)) :ignore)
+      (let ((cmd-d (make-instance 'cmd-dog)) (cmd-c (make-instance 'cmd-cat)))
+        (print (list (cmd-meets cmd-d cmd-c) (cmd-meets cmd-c cmd-d) (cmd-meets cmd-d cmd-d))))
+      (defgeneric cmd-desc (cmd-x &rest cmd-extras)
+        (:method ((cmd-x cmd-dog) &rest cmd-extras) (list :dog cmd-extras))
+        (:method ((cmd-x cmd-animal) &rest cmd-extras) (list :animal cmd-extras)))
+      (print (cmd-desc (make-instance 'cmd-dog) 1 2))
+      (defclass cmd-conf () ((cmd-host :initarg :cmd-host) (cmd-port :initarg :cmd-port))
+        (:default-initargs :cmd-host "localhost" :cmd-port 8080))
+      (let ((cmd-c1 (make-instance 'cmd-conf)))
+        (print (list (slot-value cmd-c1 'cmd-host) (slot-value cmd-c1 'cmd-port))))
+      (defstruct (cmd-kv (:constructor make-cmd-pair) (:conc-name cmd-get-)
+                         (:predicate cmd-kv?) (:copier cmd-clone))
+        cmd-key cmd-val)
+      (let ((cmd-k (make-cmd-pair :cmd-key 'a :cmd-val 1)))
+        (print (list (cmd-get-cmd-key cmd-k) (cmd-kv? cmd-k) (cmd-kv? 5)))
+        (let ((cmd-k2 (cmd-clone cmd-k)))
+          (setf (cmd-get-cmd-val cmd-k2) 99)
+          (print (list (cmd-get-cmd-val cmd-k) (cmd-get-cmd-val cmd-k2)))))
+    expected: |
+      (:chase :flee :ignore)
+      (:dog (1 2))
+      ("localhost" 8080)
+      (a t nil)
+      (1 99)
+  - name: gray-stream-instance-dispatch
+    source: |
+      (defclass gsd-upcase (rontolisp:fundamental-character-output-stream)
+        ((gsd-acc :initform "")))
+      (defmethod rontolisp:stream-write-string ((gsd-s gsd-upcase) gsd-str)
+        (setf (slot-value gsd-s 'gsd-acc)
+              (concatenate 'string (slot-value gsd-s 'gsd-acc) (string-upcase gsd-str)))
+        gsd-str)
+      (let ((gsd-s (make-instance 'gsd-upcase)))
+        (write-string "hello" gsd-s)
+        (write-char #\! gsd-s)
+        (print (slot-value gsd-s 'gsd-acc)))
+    expected: |
+      "HELLO!"
+  - name: uiop-add-package-local-nickname
+    source: |
+      (defpackage #:com.example.apn.deep (:use #:cl) (:export #:apn-answer))
+      (in-package #:com.example.apn.deep)
+      (defun apn-answer () 42)
+      (in-package #:cl-user)
+      (uiop:add-package-local-nickname '#:apn '#:com.example.apn.deep)
+      (print (apn:apn-answer))
+    expected: |
+      42
   - name: equalp-arrays-elementwise
     source: |
       (print (equalp #(1 "A" (2 3)) #(1 "a" (2 3.0))))

@@ -9,7 +9,7 @@ Defines a class and returns the name symbol. This is a **static CLOS subset**: a
 - `:reader fn` — defines `fn` as a reader function
 - `:accessor fn` — like `:reader`, and additionally a `setf`-able place
 
-A subclass inherits every slot of its superclass (redefining an inherited slot is an error) and its instances match the superclass's [`defmethod`](defmethod.md) class specializers. Reader/accessor functions are ordinary defuns, so they are first-class. The class option `(:documentation "...")` is accepted and ignored; other class options, other slot options (`:allocation`, `:writer`, `:type`, ...), and multiple inheritance are errors. On the compilation path `defclass` is only supported as a top-level form; there are no runtime class operations (`find-class`, `change-class`, class redefinition).
+A subclass inherits every slot of its superclass (redefining an inherited slot is an error) and its instances match the superclass's [`defmethod`](defmethod.md) class specializers. Reader/accessor functions are ordinary defuns, so they are first-class. The class options `(:documentation "...")` (accepted and ignored) and `(:default-initargs :initarg value ...)` (defaults applied by [`make-instance`](../macros/make-instance.md) for initargs not supplied) are supported, and the slot option `:type` is recorded (no checking); other class options, other slot options (`:allocation`, `:writer`, ...), and multiple inheritance are errors. On the compilation path `defclass` is only supported as a top-level form; there are no runtime class operations (`find-class`, `change-class`, class redefinition).
 
 ```lisp
 (defclass animal () ((name :initarg :name :accessor animal-name)))

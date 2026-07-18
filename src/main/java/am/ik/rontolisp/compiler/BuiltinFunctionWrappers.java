@@ -411,7 +411,14 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.ASH), unary(LispNames.INTEGER_LENGTH), binary(LispNames.LOGBITP),
 			// Byte-field operations (macro-lowered to list/car/ash/logand/logior/lognot)
 			binary(LispNames.BYTE), unary(LispNames.BYTE_SIZE), unary(LispNames.BYTE_POSITION), binary(LispNames.LDB),
-			ternary(LispNames.DPB),
+			ternary(LispNames.DPB), binary(LispNames.MASK_FIELD), binary(LispNames.SCALE_FLOAT),
+			// Lite stream/type introspection stubs (macro-lowered; slot-boundp and
+			// slot-makunbound are omitted -- their expansions need a literal slot name)
+			unary(LispNames.FILE_POSITION), unary(LispNames.FILE_LENGTH), unary(LispNames.PATHNAMEP),
+			unary(LispNames.INPUT_STREAM_P), unary(LispNames.OUTPUT_STREAM_P), unary(LispNames.STREAM_ELEMENT_TYPE),
+			unary(LispNames.CLASS_OF), unary(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL),
+			unary(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS),
+			new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(), List.of(call(LispNames.MAKE_BROADCAST_STREAM))),
 			// 1+ and 1-: body is (+ a 1) and (- a 1)
 			new WrapperDef(LispNames.ONE_PLUS, List.of("a"),
 					List.of(callV(LispNames.ADD, new LispSymbol("a"), new LispInteger(1)))),

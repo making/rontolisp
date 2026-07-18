@@ -129,10 +129,30 @@ below.
 - The compile path requires a literal, top-level `(asdf:load-system NAME)`;
   the interpreter also accepts a computed name at runtime.
 
+## Built-in shim systems
+
+Some Quicklisp libraries depend on per-implementation portability layers that
+cannot know rontolisp from their side. rontolisp ships those as **built-in
+ASDF systems**: `asdf:load-system`/`ql:quickload` (and a `:depends-on` from a
+real library) resolve the name to a bundled shim instead of downloading it.
+
+| System | What the shim provides |
+|--------|------------------------|
+| `usocket` | the socket API over `rontolisp:tcp-*` (see the [TCP guide](tcp-sockets.md#the-usocket-compatible-shim)) |
+| `trivial-gray-streams` | the portable Gray-stream classes/generics, adapting onto rontolisp's own protocol (`rontolisp:fundamental-character-output-stream`, `rontolisp:stream-write-char`/`-string` — what `write-string`/`write-char` dispatch to for a CLOS instance stream) |
+| `closer-mop` | `class-slots` returning real slot metadata (`(name declared-type)` pairs from the class registry; a "slot metaobject" is that pair, `slot-definition-name`/`-type` read it) |
+| `flexi-streams` | pass-through streams (a flexi stream IS the underlying stream) |
+| `float-features` | `single-float-bits`/`bits-single-float` and the double variants over the IEEE 754 bit primitives (interpreter + JVM; the WASM numeric model cannot carry 64-bit bit patterns) |
+| `uiop` | a package stub plus [`uiop:add-package-local-nickname`](../reference/functions/add-package-local-nickname.md) |
+
+The shims are deliberately thin: they satisfy what the loadable libraries
+actually call, not the full upstream APIs.
+
 ## What can I actually load?
 
 Six real-world libraries load unmodified today, verified on all four
-backends (interpreter, JVM, WASM Preview 1 and `--component`):
+backends (interpreter, JVM, WASM Preview 1 and `--component`), and a seventh
+(jzon) loads on the interpreter:
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
   `split-sequence`/`split-sequence-if`/`split-sequence-if-not` work on
@@ -189,6 +209,20 @@ backends (interpreter, JVM, WASM Preview 1 and `--component`):
   numeric limitation: the WASM backends represent an integer beyond the `i31`
   range (about 2^30) as a float, so `integer-to-base64-string` of a large
   integer diverges there.
+
+- **[com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4** (the real
+  library via `(ql:quickload '#:com.inuoe.jzon)`, **interpreter only**): JSON
+  parsing and stringification including the README walkthrough — hash-table /
+  vector round-trips, `:key-fn`/`jzon:coerce-key`, the `:stream` writer API
+  over a Gray-stream class writing into an adjustable string, incremental
+  `jzon:writer`, and CLOS-instance stringification through the `closer-mop`
+  shim's real slot list. Its dependencies (`closer-mop`, `flexi-streams`,
+  `float-features`, `trivial-gray-streams`, `uiop`) resolve to the built-in
+  shim systems below. The JVM/WASM compile path cannot run the full library
+  yet (its float printer does 64-bit/bignum bit arithmetic beyond the WASM
+  numeric model, and its adjustable-string buffers are interpreter-only);
+  the isolated language features it forced are compiled everywhere, tracked
+  by the `jzon-residue-features` ci-spec case.
 
 Runnable demos for all six — with the per-backend commands and
 expected output — live in

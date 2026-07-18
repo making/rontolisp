@@ -234,20 +234,21 @@
 | `vector-pop` | `(vector-pop v)` | フィルポインタをデクリメントし、通過した要素を返す |
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | `vector-push` と同様だが満杯時にベクタを拡張する |
 | `subtypep` | `(subtypep 'integer 'number)` | `t` -- 組み込み型の束と `defclass`/コンディション階層に対して判定。主値のみで、未知の組は `nil`。コンパイラはリテラル指定子をコンパイル時に畳み込みます |
-| `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- `ldb` のフィールドを元の位置のまま返します(現時点ではインタープリタのみ) |
-| `scale-float` | `(scale-float 1.5 3)` | `12.0` -- IEEE の意味論で `float × 2^n`(現時点ではインタープリタのみ) |
-| `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil`(現時点ではインタープリタのみ) |
-| `fdefinition` | `(fdefinition 'car)` | 関数値を返します。`symbol-function` と同じ(現時点ではインタープリタのみ) |
-| `file-position` | `(file-position s)` | 常に `nil`(lite: ストリームはシーク非対応。現時点ではインタープリタのみ) |
-| `file-length` | `(file-length s)` | 常に `nil`(lite。現時点ではインタープリタのみ) |
-| `make-broadcast-stream` | `(make-broadcast-stream)` | 書き込みを捨てるシンクストリーム(コンポーネントストリーム非対応。現時点ではインタープリタのみ) |
-| `pathnamep` | `(pathnamep "/tmp/x")` | 常に `nil` -- rontolisp に pathname 型はありません(現時点ではインタープリタのみ) |
-| `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t`(現時点ではインタープリタのみ) |
-| `output-stream-p` | `(output-stream-p s)` | 任意のストリームハンドルに `t`(現時点ではインタープリタのみ) |
-| `stream-element-type` | `(stream-element-type s)` | 常に `character` -- すべてのストリームは文字ストリーム(現時点ではインタープリタのみ) |
-| `class-of` | `(class-of 42)` | `integer` -- 型/クラス「名」のシンボルで、メタオブジェクトではありません(現時点ではインタープリタのみ) |
-| `simple-condition-format-control` | `(simple-condition-format-control c)` | コンディションの `:format-control` スロット、なければ `nil`(現時点ではインタープリタのみ) |
-| `simple-condition-format-arguments` | `(simple-condition-format-arguments c)` | コンディションの `:format-arguments` スロット、なければ `nil`(現時点ではインタープリタのみ) |
+| `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- `ldb` のフィールドを元の位置のまま返します |
+| `scale-float` | `(scale-float 1.5 3)` | `12.0` -- IEEE の意味論で `float × 2^n` |
+| `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil` |
+| `fdefinition` | `(fdefinition 'car)` | 関数値を返します。`symbol-function` と同じ |
+| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録（lite: グローバル、パッケージごとのスコープなし） |
+| `file-position` | `(file-position s)` | 常に `nil`(lite: ストリームはシーク非対応) |
+| `file-length` | `(file-length s)` | 常に `nil`(lite) |
+| `make-broadcast-stream` | `(make-broadcast-stream)` | 書き込みを捨てるシンクストリーム(コンポーネントストリーム非対応) |
+| `pathnamep` | `(pathnamep "/tmp/x")` | 常に `nil` -- rontolisp に pathname 型はありません |
+| `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t` |
+| `output-stream-p` | `(output-stream-p s)` | 任意のストリームハンドルに `t` |
+| `stream-element-type` | `(stream-element-type s)` | 常に `character` -- すべてのストリームは文字ストリーム |
+| `class-of` | `(class-of 42)` | `integer` -- 型/クラス「名」のシンボルで、メタオブジェクトではありません |
+| `simple-condition-format-control` | `(simple-condition-format-control c)` | コンディションの `:format-control` スロット、なければ `nil` |
+| `simple-condition-format-arguments` | `(simple-condition-format-arguments c)` | コンディションの `:format-arguments` スロット、なければ `nil` |
 
 ## rontolisp パッケージの関数
 

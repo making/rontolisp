@@ -1184,7 +1184,17 @@ public final class LispEvaluator {
 		return null;
 	}
 
-	private LispVal resolveReadTimeEval(LispVal form) {
+	/**
+	 * Resolves every {@code (%read-eval datum)} marker in the form (the shape
+	 * {@link am.ik.rontolisp.reader.LispReader#readAllWithReadEvalMarkers} wraps a
+	 * {@code #.} datum in): each datum is evaluated against the global environment and
+	 * its value substituted in place, recursively. Unchanged subtrees keep their
+	 * identity. Also used by the compile path ({@code UserMacroExpander}), where this
+	 * evaluator is the macro-time interpreter.
+	 * @param form a top-level form possibly carrying read-eval markers
+	 * @return the form with every marker replaced by its datum's value
+	 */
+	public LispVal resolveReadTimeEval(LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
@@ -1477,6 +1487,25 @@ public final class LispEvaluator {
 	 * write to a CLOS-instance stream (or before the trivial-gray-streams shim system's
 	 * adapter, which subclasses it).
 	 */
+	/** Whether the defclass form names a rontolisp Gray base class as a superclass. */
+	private static boolean referencesGrayBaseClass(LispCons cons) {
+		java.util.List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(2) instanceof LispCons supers)) {
+			return false;
+		}
+		for (LispVal sup : supers.toList()) {
+			if (sup instanceof LispSymbol sym) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+				if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())
+						&& (qn.member().equals("fundamental-character-output-stream")
+								|| qn.member().equals("fundamental-character-input-stream"))) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	private void ensureGrayStreamsLoaded() {
 		if (this.grayStreamsLoaded) {
 			return;
@@ -2081,6 +2110,13 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefclass(LispCons cons, Environment env) {
+		// A defclass extending rontolisp's Gray base classes pulls gray.lisp in
+		// eagerly: the superclass must be registered before the expansion checks it
+		// (the write-string dispatch alone loads too late for a bare-protocol user
+		// class that never went through the trivial-gray-streams shim).
+		if (!this.grayStreamsLoaded && referencesGrayBaseClass(cons)) {
+			ensureGrayStreamsLoaded();
+		}
 		// Expand into the generated defuns (constructor, readers/accessors) and
 		// evaluate each, then regenerate the dispatchers that test class specializers:
 		// the new class may extend one of their descendant tag sets.

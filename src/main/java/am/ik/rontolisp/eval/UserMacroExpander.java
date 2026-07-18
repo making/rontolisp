@@ -44,15 +44,24 @@ public final class UserMacroExpander {
 		program = LispMacroExpander.flattenTopLevel(program);
 		// Also activate for macroexpand/macroexpand-1 calls: their literal quoted
 		// arguments are folded to the expansion here, even when no macro is defined.
+		// Read-eval markers ((%read-eval datum), the shape the marker-mode reader wraps
+		// #. in) also activate the pass: they resolve against the macro-time evaluator
+		// per top-level form, mirroring the interpreter's loadFile timing.
 		if (program.stream().noneMatch(form -> isOperator(form, LispNames.DEFMACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_MODIFY_MACRO))
 				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)
-				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)) {
+				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)
+				&& program.stream().noneMatch(UserMacroExpander::usesReadEvalMarker)) {
 			return program;
 		}
 		LispEvaluator macroEval = new LispEvaluator(new PrintStream(OutputStream.nullOutputStream()));
 		List<LispVal> result = new ArrayList<>();
-		for (LispVal form : program) {
+		for (LispVal rawForm : program) {
+			// Resolve #. markers first (before package resolution, like the interpreter
+			// resolves them just before its top-level form evaluates): each datum runs in
+			// the macro-time evaluator, so it sees the defuns/defvars registered by the
+			// preceding forms.
+			LispVal form = usesReadEvalMarker(rawForm) ? macroEval.resolveReadTimeEval(rawForm) : rawForm;
 			// A package directive updates the macro evaluator's resolver state (so a
 			// defmacro under (in-package P) registers its canonical qualified name and
 			// its template symbols resolve against P) and is kept verbatim for the
@@ -136,6 +145,15 @@ public final class UserMacroExpander {
 
 	private static boolean isOperator(LispVal form, String name) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && name.equals(sym.name());
+	}
+
+	/** Whether the form contains a {@code %read-eval} marker symbol anywhere. */
+	private static boolean usesReadEvalMarker(LispVal form) {
+		return switch (form) {
+			case LispSymbol sym -> LispNames.READ_EVAL.equals(sym.name());
+			case LispCons cons -> usesReadEvalMarker(cons.car()) || usesReadEvalMarker(cons.cdr());
+			default -> false;
+		};
 	}
 
 	// --- Pure-config-setter detection ------------------------------------------------

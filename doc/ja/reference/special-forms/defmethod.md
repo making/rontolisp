@@ -2,9 +2,9 @@
 
 `(defmethod name [qualifier] (param... ) body...)`
 
-総称関数 `name` にメソッドを追加し、名前シンボルを返します（先行する [`defgeneric`](defgeneric.md) がなければ総称関数を暗黙に作ります）。specializer を付けられるのは **第 1 引数のみ**で、`(var specializer)` と書きます:
+総称関数 `name` にメソッドを追加し、名前シンボルを返します（先行する [`defgeneric`](defgeneric.md) がなければ総称関数を暗黙に作ります）。specializer は**任意の**必須引数に付けられ、`(var specializer)` と書きます:
 
-- `(var (eql literal))` — 第 1 引数がそのリテラル（キーワード、クォートされたシンボル、数値、文字）のときにマッチ
+- `(var (eql literal))` — 引数がそのリテラル（キーワード、クォートされたシンボル、数値、文字）のときにマッチ
 - `(var class-name)` — [`defclass`](defclass.md) クラスとそのサブクラスのインスタンスにマッチ
 - `(var type-name)` — 組み込み型（`integer`、`float`、`number`、`string`、`symbol`、`keyword`、`character`、`cons`、`list`、`null`、`hash-table`、`function` など）にマッチ
 - `(var t)` または素の `var` — デフォルトメソッド
@@ -45,4 +45,4 @@
 (describe-point (make-instance 'point3d :x 1 :z 3)) ; => (:point (:x 1 :z 3))
 ```
 
-ライトサブセット: 必須引数のみで、第 2 引数以降の specializer はエラー、標準メソッド結合はクラスメソッドとデフォルトメソッドについてサポートされます（`eql` や組み込み型の specializer を持つ `:around`/`:before`/`:after` は、同じ specializer の基本メソッドとデフォルトメソッドのみと結合します）。コンパイルパスでは `defmethod` はトップレベルフォームとしてのみサポートされ、コンパイルされたプログラムのメソッド集合はコンパイル時に固定されます。
+ライトサブセット: `&key` はエラー、可変長総称関数の `call-next-method` は必須引数のみを転送し、標準メソッド結合はクラスメソッドとデフォルトメソッドについてサポートされます（`eql` や組み込み型の specializer を持つ `:around`/`:before`/`:after` は、同じ specializer の基本メソッドとデフォルトメソッドのみと結合します）。コンパイルパスでは `defmethod` はトップレベルフォームとしてのみサポートされ、コンパイルされたプログラムのメソッド集合はコンパイル時に固定されます。

@@ -4,7 +4,7 @@
 
 lite 版: スロットに nil を格納し (rontolisp に独立した unbound 状態はありません)、インスタンスを返します。
 
-現時点では**インタープリタのみ**でサポートされます。JVM / WASM コンパイラは未対応です。
+JVM / WASM コンパイラではスロット名はクオートされたシンボルリテラルである必要があります ([`slot-value`](slot-value.md) と同様)。実行時に計算されるスロット名はインタープリタのみで動作します。
 
 ```lisp
 (defclass point () ((x :initarg :x)))

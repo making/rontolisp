@@ -151,8 +151,9 @@ public final class RontoPlayground {
 	private static List<LispVal> frontend(String source, Features features, WitExportDirective.Backend backend) {
 		List<LispVal> read = WitImportInliner.inline(LispReader.readAllFromString(source, features), null, backend,
 				uploads);
-		List<LispVal> program = WitLibrary.process(UsocketLibrary.process(VecLibrary.process(LispPreludeLibrary
-			.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(read)))))));
+		List<LispVal> program = WitLibrary
+			.process(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(VecLibrary.process(
+					LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(read))))))));
 		return LibraryDefunPruner.prune(WitExportInliner.inline(program, null, backend, uploads));
 	}
 

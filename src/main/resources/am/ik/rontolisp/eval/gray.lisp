@@ -13,3 +13,17 @@
 (defgeneric rontolisp:stream-write-char (stream character))
 
 (defgeneric rontolisp:stream-write-string (stream string &optional start end))
+
+;; The write-string/write-char dispatch helpers the compile path rewrites call
+;; sites onto (GrayStreamsLibrary.process): a CLOS instance stream goes to the
+;; Gray generic, anything else falls back to the built-in. The interpreter
+;; needs no rewrite -- its write-string wrapper dispatches natively.
+
+(defun rontolisp::%gray-write-string-dispatch (s stream)
+  (if (consp stream)
+      (rontolisp:stream-write-string stream s)
+      (write-string s stream)))
+
+(defun rontolisp::%gray-write-char-dispatch (c stream)
+  ;; write-char lowers to write-string everywhere, so the dispatch does too.
+  (rontolisp::%gray-write-string-dispatch (string c) stream))

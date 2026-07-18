@@ -6,6 +6,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -55,6 +56,107 @@ public final class GrayStreamsLibrary {
 		catch (IOException ex) {
 			throw new UncheckedIOException(ex);
 		}
+	}
+
+	/** The protocol names whose presence activates the compile-path pre-pass. */
+	private static final java.util.Set<String> PROTOCOL_NAMES = java.util.Set.of(LispNames.GRAY_STREAM_WRITE_CHAR,
+			LispNames.GRAY_STREAM_WRITE_STRING, "fundamental-character-output-stream",
+			"fundamental-character-input-stream");
+
+	private static final String WRITE_STRING_DISPATCH = "%gray-write-string-dispatch";
+
+	private static final String WRITE_CHAR_DISPATCH = "%gray-write-char-dispatch";
+
+	/**
+	 * The compile-path pre-pass (the usocket {@code process()} pattern): when the program
+	 * uses the Gray protocol, splices {@code gray.lisp} unless a load already did, and
+	 * rewrites every {@code (write-string s stream)} / {@code (write-char c
+	 * stream)} call with an explicit non-literal stream onto the
+	 * {@code rontolisp::%gray-write-*-dispatch} helpers, so a CLOS instance stream
+	 * reaches the Gray generics in compiled programs like it does on the interpreter. A
+	 * program that never mentions the protocol is returned unchanged.
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @return the program with the Gray dispatch spliced and call sites rewritten
+	 */
+	public static List<LispVal> process(List<LispVal> program) {
+		if (program.stream().noneMatch(GrayStreamsLibrary::referencesProtocol)) {
+			return program;
+		}
+		java.util.List<LispVal> out = new java.util.ArrayList<>();
+		if (program.stream().noneMatch(GrayStreamsLibrary::definesProtocol)) {
+			out.addAll(forms());
+		}
+		for (LispVal form : program) {
+			out.add(rewrite(form));
+		}
+		return out;
+	}
+
+	private static boolean referencesProtocol(LispVal form) {
+		return switch (form) {
+			case am.ik.rontolisp.LispSymbol sym -> PROTOCOL_NAMES.contains(member(sym.name()));
+			case am.ik.rontolisp.LispCons cons -> referencesProtocol(cons.car()) || referencesProtocol(cons.cdr());
+			default -> false;
+		};
+	}
+
+	/** Whether the form is gray.lisp's own base-class defclass (already spliced). */
+	private static boolean definesProtocol(LispVal form) {
+		if (!(form instanceof am.ik.rontolisp.LispCons cons) || !(cons.car() instanceof am.ik.rontolisp.LispSymbol op)
+				|| !LispNames.DEFCLASS.equals(member(op.name()))
+				|| !(cons.cdr() instanceof am.ik.rontolisp.LispCons rest)
+				|| !(rest.car() instanceof am.ik.rontolisp.LispSymbol name)) {
+			return false;
+		}
+		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(name.name());
+		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())
+				&& "fundamental-character-output-stream".equals(qn.member());
+	}
+
+	private static LispVal rewrite(LispVal form) {
+		if (!(form instanceof am.ik.rontolisp.LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof am.ik.rontolisp.LispSymbol op) {
+			String opName = member(op.name());
+			// Quoted data is data; the dispatch defuns' own fallback calls must not
+			// rewrite into themselves.
+			if (LispNames.QUOTE.equals(opName)) {
+				return form;
+			}
+			if (LispNames.DEFUN.equals(opName) && cons.cdr() instanceof am.ik.rontolisp.LispCons rest
+					&& rest.car() instanceof am.ik.rontolisp.LispSymbol defName
+					&& (WRITE_STRING_DISPATCH.equals(member(defName.name()))
+							|| WRITE_CHAR_DISPATCH.equals(member(defName.name())))) {
+				return form;
+			}
+			List<LispVal> parts = cons.toList();
+			if (parts.size() == 3 && (LispNames.WRITE_STRING.equals(opName) || LispNames.WRITE_CHAR.equals(opName))
+					&& streamArgMayBeInstance(parts.get(2))) {
+				String helper = LispNames.RONTOLISP_PKG + "::"
+						+ (LispNames.WRITE_STRING.equals(opName) ? WRITE_STRING_DISPATCH : WRITE_CHAR_DISPATCH);
+				return new am.ik.rontolisp.LispCons(new am.ik.rontolisp.LispSymbol(helper),
+						new am.ik.rontolisp.LispCons(rewrite(parts.get(1)),
+								new am.ik.rontolisp.LispCons(rewrite(parts.get(2)), am.ik.rontolisp.LispNil.INSTANCE)));
+			}
+		}
+		LispVal car = rewrite(cons.car());
+		LispVal cdr = rewrite(cons.cdr());
+		if (car == cons.car() && cdr == cons.cdr()) {
+			return form;
+		}
+		return new am.ik.rontolisp.LispCons(car, cdr);
+	}
+
+	/** A literal t/nil/string stream argument can never be a CLOS instance. */
+	private static boolean streamArgMayBeInstance(LispVal streamArg) {
+		return !(streamArg instanceof am.ik.rontolisp.LispTrue) && !(streamArg instanceof am.ik.rontolisp.LispNil)
+				&& !(streamArg instanceof am.ik.rontolisp.LispString);
+	}
+
+	private static String member(String name) {
+		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
 	}
 
 }

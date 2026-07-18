@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * Resolves package-qualified and unqualified symbols against a {@link PackageRegistry}
  * and enforces the package discipline, as a read/compile-time pass that runs before the
@@ -107,8 +109,59 @@ public final class PackageResolver {
 				popPackage();
 				return quotedSymbol(this.currentPackage);
 			}
+			// A literal top-level (uiop:add-package-local-nickname 'nick 'pkg) is
+			// consumed like a defpackage clause: the nickname registers here (so it
+			// works on every backend -- the compiled runtimes have no uiop function)
+			// and the call is replaced by its return value. A non-literal call stays a
+			// runtime call, which only the interpreter can serve.
+			if (LispNames.ADD_PACKAGE_LOCAL_NICKNAME.equals(member) && isUiopOperator(op)) {
+				LispVal consumed = tryConsumeAddLocalNickname(cons);
+				if (consumed != null) {
+					return consumed;
+				}
+			}
 		}
 		return resolveForm(form);
+	}
+
+	private boolean isUiopOperator(LispSymbol op) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		return qn != null && LispNames.UIOP_PKG.equals(this.registry.canonicalName(qn.pkg()));
+	}
+
+	/**
+	 * Consumes a literal {@code (uiop:add-package-local-nickname 'nick 'pkg)} call:
+	 * registers the (global, lite) nickname and returns the quoted target name -- the
+	 * runtime function's return value. Returns null when an argument is not a literal
+	 * designator (a runtime call the interpreter serves).
+	 */
+	private @Nullable LispVal tryConsumeAddLocalNickname(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || parts.size() > 4) {
+			return null;
+		}
+		String nickname = literalDesignator(parts.get(1));
+		String actual = literalDesignator(parts.get(2));
+		if (nickname == null || actual == null) {
+			return null;
+		}
+		registerLocalNickname(nickname, actual);
+		return quotedSymbol(this.registry.canonicalName(actual));
+	}
+
+	/** A literal package designator: a string, keyword/#: symbol, or quoted symbol. */
+	private static @Nullable String literalDesignator(LispVal arg) {
+		LispVal datum = arg;
+		if (arg instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
+			datum = rest.car();
+		}
+		return switch (datum) {
+			case LispString str -> str.value();
+			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2)
+					: sym.name().startsWith(":") ? sym.name().substring(1) : datum == arg ? null : sym.name();
+			default -> null;
+		};
 	}
 
 	/**

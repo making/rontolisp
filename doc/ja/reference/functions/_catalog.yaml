@@ -274,6 +274,7 @@ categories:
       - { slug: macroexpand-1, name: "macroexpand-1" }
       - { slug: macroexpand, name: "macroexpand" }
       - { slug: fdefinition, name: "fdefinition" }
+      - { slug: add-package-local-nickname, name: "uiop:add-package-local-nickname" }
   - title: "ストリームとファイル"
     functions:
       - { slug: open, name: "open" }

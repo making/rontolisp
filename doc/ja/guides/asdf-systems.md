@@ -123,10 +123,29 @@ $ rontolisp
 - コンパイルパスはリテラルなトップレベルの `(asdf:load-system NAME)` を要求します。
   インタプリタは実行時に計算された名前も受け付けます。
 
+## 組み込みシムシステム
+
+Quicklisp ライブラリの中には、rontolisp 側を知り得ない実装ごとのポータビリティレイヤに依存するものがあります。rontolisp
+はそれらを**組み込み ASDF システム**として同梱します: `asdf:load-system`/`ql:quickload`
+(および実ライブラリの `:depends-on`) は、その名前をダウンロードせずバンドルされたシムに解決します。
+
+| システム | シムが提供するもの |
+|--------|------------------------|
+| `usocket` | `rontolisp:tcp-*` 上のソケット API ([TCP ガイド](tcp-sockets.md#the-usocket-compatible-shim)を参照) |
+| `trivial-gray-streams` | ポータブルな Gray ストリームのクラス/総称関数。rontolisp 自身のプロトコル (`rontolisp:fundamental-character-output-stream`、`rontolisp:stream-write-char`/`-string` — CLOS インスタンスストリームに対して `write-string`/`write-char` がディスパッチする先) へのアダプタ |
+| `closer-mop` | 実スロットメタデータを返す `class-slots` (クラスレジストリからの `(name declared-type)` ペア。「スロットメタオブジェクト」はこのペアで、`slot-definition-name`/`-type` がそれを読む) |
+| `flexi-streams` | パススルーのストリーム (flexi ストリームは基底ストリームそのもの) |
+| `float-features` | IEEE 754 ビットプリミティブ上の `single-float-bits`/`bits-single-float` と double 版 (インタープリタ + JVM。WASM の数値モデルは 64 ビットのビットパターンを保持できない) |
+| `uiop` | パッケージスタブと [`uiop:add-package-local-nickname`](../reference/functions/add-package-local-nickname.md) |
+
+シムは意図的に薄く作られています: ロード可能なライブラリが実際に呼ぶものだけを満たし、上流の完全な
+API は提供しません。
+
 ## 実際に何がロードできるか
 
 現在、実世界の 6 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
-(インタプリタ、JVM、WASM Preview 1、`--component`) で検証済みです:
+(インタプリタ、JVM、WASM Preview 1、`--component`) で検証済みです。7
+つ目 (jzon) はインタープリタでロードできます:
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
   `split-sequence`/`split-sequence-if`/`split-sequence-if-not` が文字列と
@@ -182,6 +201,19 @@ $ rontolisp
   数値の制限が 1 つ: WASM バックエンドは `i31` 範囲(約 2^30)を超える
   整数を浮動小数点で表現するため、大きな整数の `integer-to-base64-string`
   はそこで結果が変わります。
+
+- **[com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4** (`(ql:quickload
+  '#:com.inuoe.jzon)` による本物のライブラリ、**インタープリタのみ**): README
+  のウォークスルーを含む JSON のパースと文字列化 — ハッシュテーブル /
+  ベクタのラウンドトリップ、`:key-fn`/`jzon:coerce-key`、可変文字列へ書き込む
+  Gray ストリームクラス経由の `:stream` ライタ API、インクリメンタルな
+  `jzon:writer`、`closer-mop` シムの実スロットリストによる CLOS
+  インスタンスの文字列化。依存システム (`closer-mop`、`flexi-streams`、
+  `float-features`、`trivial-gray-streams`、`uiop`) は下記の組み込みシムシステムに解決されます。JVM
+  / WASM コンパイルパスではまだ完全なライブラリは動きません (float プリンタが
+  WASM の数値モデルを超える 64 ビット/bignum ビット演算を行い、可変文字列バッファはインタープリタのみのため)。jzon
+  が要求した個々の言語機能はすべてのバックエンドでコンパイルされ、ci-spec の
+  `jzon-residue-features` ケースで追跡されています。
 
 6 ライブラリ全ての実行可能なデモ — バックエンド別の実行コマンドと期待
 出力付き — は

@@ -255,6 +255,11 @@ signals via `(apply #'error (list 'bad-base64-character :input ...))`:
   stay literal, symbols/conses are quoted) and re-enter `eval` -- identical semantics to
   the lowered form, typed conditions with slots included. `resolveFunction` now checks
   the function namespace BEFORE the macro/special-operator guard so these resolve.
+  Additionally, a NON-literal `error` datum that evaluates to a SYMBOL at runtime
+  re-dispatches as a condition-type designator (`expandError`'s
+  `runtimeTypeDispatch` flag re-enters through the `error` function value, so the
+  type resolves against the class registry at signal time) -- interpreter only;
+  the compiled backends keep the plain object-designator expansion.
 - **Compiled backends**: `BuiltinFunctionWrappers.SIGNAL_FUNCTIONS` wrappers, injected
   ONLY when the program contains a literal `(function op)` reference
   (`referencesFunctionValue` gate in `JvmLispCompiler`) so every other program stays

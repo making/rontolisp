@@ -61,8 +61,8 @@
 | `shiftf` | `(shiftf a b 9)` | 場所の値を左へシフトし、最後の場所に新しい値を格納し、最初の場所の古い値を返します |
 | `load-time-value` | `(load-time-value form)` | lite 版: `form` に展開されるため、ロード時一度ではなく使用のたびに再評価されます |
 | `typep` | `(typep x '(unsigned-byte 8))` | `typecase` の指定子集合に対する型判定。指定子はリテラル(クオートされた)型に限られます |
-| `slot-boundp` | `(slot-boundp obj 'slot)` | インスタンスのクラスが定義するすべてのスロットに `t`(lite: スロットは常に初期化され unbound 状態なし)(現時点ではインタープリタのみ) |
-| `slot-makunbound` | `(slot-makunbound obj 'slot)` | lite 版: スロットに nil を格納し、インスタンスを返します(現時点ではインタープリタのみ) |
+| `slot-boundp` | `(slot-boundp obj 'slot)` | インスタンスのクラスが定義するすべてのスロットに `t`(lite: スロットは常に初期化され unbound 状態なし) |
+| `slot-makunbound` | `(slot-makunbound obj 'slot)` | lite 版: スロットに nil を格納し、インスタンスを返します |
 
 マクロは関数値を持ちません。`#'cond` や `(funcall 'setf ...)`
 はエラーです。呼び出し位置でインライン展開される便利なアクセサや述語(`first`, `rest`, `nth`,

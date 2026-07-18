@@ -7533,6 +7533,24 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void grayBaseClassSuperclassLoadsGrayStreamsEagerly() {
+		// A user class extending rontolisp's own Gray base class without going
+		// through the trivial-gray-streams shim must find the superclass: the
+		// defclass pulls gray.lisp in eagerly.
+		assertThat(evalMulti("""
+				(defclass gs-count (rontolisp:fundamental-character-output-stream)
+				  ((n :initform 0)))
+				(defmethod rontolisp:stream-write-string ((s gs-count) str)
+				  (setf (slot-value s 'n) (+ (slot-value s 'n) (length str)))
+				  str)
+				(let ((s (make-instance 'gs-count)))
+				  (write-string "hello" s)
+				  (write-char #\\! s)
+				  (slot-value s 'n))
+				""").print()).isEqualTo("6");
+	}
+
+	@Test
 	void loadResolvesReadTimeEvalAgainstEarlierTopLevelForms(@TempDir Path dir) throws Exception {
 		Path file = dir.resolve("rt.lisp");
 		Files.writeString(file, """

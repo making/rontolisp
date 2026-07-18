@@ -25,6 +25,7 @@ import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
@@ -232,6 +233,15 @@ public final class RontoLispCli {
 		if (simd) {
 			enableSimd(evaluator);
 		}
+		// #. read-time eval: only sources textually containing #. pay for the marker
+		// read; each top-level form's markers resolve just before it evaluates, the
+		// same timing the runtime loadFile uses.
+		if (source.contains("#.")) {
+			for (LispVal expr : LispReader.readAllWithReadEvalMarkers(source, Features.INTERPRETER)) {
+				evaluator.eval(evaluator.resolveReadTimeEval(expr));
+			}
+			return;
+		}
 		List<LispVal> exprs = LispReader.readAllFromString(source);
 		for (LispVal expr : exprs) {
 			evaluator.eval(expr);
@@ -275,8 +285,12 @@ public final class RontoLispCli {
 		// It
 		// needs nothing macro expansion produces: a wit-import is checked against a WIT
 		// file, not against the program.
-		List<LispVal> loaded = LoadInliner.inline(LispReader.readAllFromString(source, features),
-				SourceLoader.fileSystem(), baseDir, systemPath, features);
+		// #. read-time eval on the compile path: the marker read wraps each datum in a
+		// (%read-eval datum) marker that UserMacroExpander later resolves against the
+		// macro-time evaluator, per top-level form (the interpreter's loadFile timing).
+		List<LispVal> read = source.contains("#.") ? LispReader.readAllWithReadEvalMarkers(source, features)
+				: LispReader.readAllFromString(source, features);
+		List<LispVal> loaded = LoadInliner.inline(read, SourceLoader.fileSystem(), baseDir, systemPath, features);
 		// Expand the (rontolisp:async (defun ...)) wrapper before anything scans for
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
 		// checks and the library pruner all recognize async-defun, never the sugar.
@@ -331,8 +345,13 @@ public final class RontoLispCli {
 		// the interpreter/JVM boundary. On the WASM backends it splices nothing: there
 		// the
 		// bindings ARE rontolisp:wasm-import directives and the host is the provider.
-		List<LispVal> program = WitLibrary.process(UsocketLibrary.process(LispPreludeLibrary.process(
-				UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded)))))));
+		// GrayStreamsLibrary.process rewrites write-string/write-char call sites onto
+		// the Gray dispatch helpers when the program uses the protocol (and splices
+		// gray.lisp if no load already did), so a CLOS instance stream reaches the
+		// generics in compiled programs like it does on the interpreter.
+		List<LispVal> program = WitLibrary
+			.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(UrlLibrary
+				.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))))))));
 		// Splice the Lisp-source vec library (the scalar reference over the packed
 		// double-float array type) when the program references the vec package. The
 		// --no-gc scalar WASM backend is the exception: it has no general array type and

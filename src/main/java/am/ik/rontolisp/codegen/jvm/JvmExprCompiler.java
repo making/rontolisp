@@ -278,7 +278,15 @@ final class JvmExprCompiler {
 				case LispNames.OPEN -> JvmOpenCompiler.compile(cons, ctx, className);
 				case LispNames.CLOSE -> JvmCloseCompiler.compile(cons, ctx, className);
 				case LispNames.WRITE_LINE -> JvmWriteLineCompiler.compile(cons, ctx, className);
-				case LispNames.WRITE_STRING -> JvmStringStreamCompiler.compileWriteString(cons, ctx, className);
+				case LispNames.WRITE_STRING -> {
+					LispVal bounded = LispMacroExpander.lowerWriteStringBounds(cons);
+					if (bounded != null) {
+						JvmExprCompiler.compileExpr(bounded, ctx, className);
+					}
+					else {
+						JvmStringStreamCompiler.compileWriteString(cons, ctx, className);
+					}
+				}
 				case LispNames.WRITE_TO_STRING -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
 				case LispNames.MAKE_STRING_OUTPUT_STREAM ->
 					JvmStringStreamCompiler.compileMakeOutputStream(cons, ctx, className);
@@ -331,6 +339,42 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx, className);
 				case LispNames.STREAMP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons), ctx, className);
+				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons), ctx, className);
+				case LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.PATHNAMEP -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, className);
+				case LispNames.STREAM_ELEMENT_TYPE -> JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandConstantResult(cons, LispMacroExpander.quotedCharacterTypeName()), ctx,
+						className);
+				case LispNames.MAKE_BROADCAST_STREAM ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeBroadcastStream(cons), ctx, className);
+				case LispNames.FDEFINITION ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandFdefinition(cons), ctx, className);
+				case LispNames.MASK_FIELD ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMaskField(cons), ctx, className);
+				case LispNames.SCALE_FLOAT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandScaleFloat(cons), ctx, className);
+				case LispNames.CLASS_OF -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandClassOf(cons, ctx.closRegistry), ctx, className);
+				case LispNames.SLOT_BOUNDP -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandSlotBoundp(cons, ctx.closRegistry), ctx, className);
+				case LispNames.SLOT_MAKUNBOUND -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandSlotMakunbound(cons, ctx.closRegistry), ctx, className);
+				case LispNames.SIMPLE_CONDITION_FORMAT_CONTROL -> JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandSimpleConditionFormatControl(cons, ctx.closRegistry), ctx, className);
+				case LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS -> JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandSimpleConditionFormatArguments(cons, ctx.closRegistry), ctx, className);
+				case LispNames.IEEE754_DOUBLE_BITS -> JvmIeee754Compiler.compileDoubleBits(cons, ctx, className);
+				case LispNames.IEEE754_DOUBLE_FROM_BITS ->
+					JvmIeee754Compiler.compileDoubleFromBits(cons, ctx, className);
+				case LispNames.IEEE754_SINGLE_BITS -> JvmIeee754Compiler.compileSingleBits(cons, ctx, className);
+				case LispNames.IEEE754_SINGLE_FROM_BITS ->
+					JvmIeee754Compiler.compileSingleFromBits(cons, ctx, className);
+				case LispNames.READ_EVAL ->
+					// Identity: a #. marker split into code position by a backquote
+					// template
+					// arrives here with its (already evaluated) argument.
+					JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
 				case LispNames.STRING_UPCASE -> JvmStringUpcaseCompiler.compileUpcase(cons, ctx, className);
 				case LispNames.STRING_DOWNCASE -> JvmStringUpcaseCompiler.compileDowncase(cons, ctx, className);
 				case LispNames.STRING_CAPITALIZE -> JvmStringCapitalizeCompiler.compile(cons, ctx, className);

@@ -423,6 +423,18 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void loadedFileWithReadEvalCompilesAndRunsOnJvm() throws Exception {
+		// #. in a loaded file rides the marker read; the markers resolve in
+		// UserMacroExpander against the macro-time evaluator, mirroring the runtime
+		// loadFile.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander
+			.expand(inline("(load \"lib.lisp\") (print (lib-get))",
+					Map.of("lib.lisp", "(defvar +lib-val+ #.(+ 100 20 3)) (defun lib-get () +lib-val+)")));
+		byte[] classBytes = new JvmLispCompiler("TestReadEval").compile(program);
+		assertThat(runMain(classBytes, "TestReadEval")).isEqualTo("123");
+	}
+
+	@Test
 	void splitProgramCompilesAndRunsOnJvm() throws Exception {
 		// This is the regression: before compile-time inlining, a console driver that
 		// (load "core.lisp")s its functions failed to compile on the JVM backend because

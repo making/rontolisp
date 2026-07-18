@@ -9,7 +9,7 @@
 - `:reader fn` — `fn` を読み取り関数として定義
 - `:accessor fn` — `:reader` と同様で、さらに `setf` 可能な place になります
 
-サブクラスはスーパークラスの全スロットを継承し（継承したスロットの再定義はエラー）、そのインスタンスはスーパークラスに対する [`defmethod`](defmethod.md) のクラス specializer にマッチします。reader/accessor は通常の defun なので第一級関数です。クラスオプション `(:documentation "...")` は受理して無視されます。その他のクラスオプション、その他のスロットオプション（`:allocation`、`:writer`、`:type` など）、多重継承はエラーです。コンパイルパスでは `defclass` はトップレベルフォームとしてのみサポートされ、実行時のクラス操作（`find-class`、`change-class`、クラス再定義）はありません。
+サブクラスはスーパークラスの全スロットを継承し（継承したスロットの再定義はエラー）、そのインスタンスはスーパークラスに対する [`defmethod`](defmethod.md) のクラス specializer にマッチします。reader/accessor は通常の defun なので第一級関数です。クラスオプションは `(:documentation "...")`（受理して無視）と `(:default-initargs :initarg value ...)`（[`make-instance`](../macros/make-instance.md) が未指定の initarg に適用するデフォルト）をサポートし、スロットオプション `:type` は記録されます（チェックはなし）。その他のクラスオプション、その他のスロットオプション（`:allocation`、`:writer` など）、多重継承はエラーです。コンパイルパスでは `defclass` はトップレベルフォームとしてのみサポートされ、実行時のクラス操作（`find-class`、`change-class`、クラス再定義）はありません。
 
 ```lisp
 (defclass animal () ((name :initarg :name :accessor animal-name)))

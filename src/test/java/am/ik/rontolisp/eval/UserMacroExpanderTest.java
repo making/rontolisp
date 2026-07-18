@@ -26,6 +26,29 @@ class UserMacroExpanderTest {
 	}
 
 	@Test
+	void readEvalMarkersResolveAgainstTheMacroTimeEvaluator() {
+		// The marker read wraps #. datums; expand() resolves them per top-level form.
+		String expanded = UserMacroExpander
+			.expand(LispReader.readAllWithReadEvalMarkers("(print #.(+ 40 2)) (print '(a #.(* 2 3) c))",
+					am.ik.rontolisp.reader.Features.JVM))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(expanded).isEqualTo("(print 42)\n(print (quote (a 6 c)))");
+	}
+
+	@Test
+	void readEvalMarkerDatumSeesPrecedingDefuns() {
+		String expanded = UserMacroExpander
+			.expand(LispReader.readAllWithReadEvalMarkers("(defun re-h (x) (* x 10)) (print #.(re-h 5))",
+					am.ik.rontolisp.reader.Features.JVM))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(expanded).isEqualTo("(defun re-h (x) (* x 10))\n(print 50)");
+	}
+
+	@Test
 	void defmacroIsConsumedAndCallSitesExpanded() {
 		assertThat(expand("""
 				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))

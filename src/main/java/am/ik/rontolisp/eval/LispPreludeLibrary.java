@@ -30,6 +30,9 @@ import am.ik.rontolisp.reader.LispReader;
  * {@code eql}).</li>
  * <li>{@code string<} -- case-sensitive lexicographic less-than, returning the mismatch
  * index or nil.</li>
+ * <li>{@code char-name} -- the standard character names ({@code Space}, {@code Newline},
+ * ...), a {@code U+XXXX} label for other non-printing code points, nil for graphic
+ * characters; mirrors the interpreter's Java primitive.</li>
  * <li>{@code rontolisp:read-all} -- an {@code rontolisp:async-defun} draining an
  * asynchronous stream's string chunks into one string.</li>
  * </ul>
@@ -59,6 +62,29 @@ public final class LispPreludeLibrary {
 				                                 (t nil))))
 				                  (cmp 0)))))
 				        (t (eql a b))))
+				""");
+		SOURCES.put(LispNames.CHAR_NAME, """
+				(defun char-name (c)
+				  (let ((cp (char-code c)))
+				    (cond ((= cp 32) "Space")
+				          ((= cp 10) "Newline")
+				          ((= cp 9) "Tab")
+				          ((= cp 13) "Return")
+				          ((= cp 12) "Page")
+				          ((= cp 8) "Backspace")
+				          ((= cp 0) "Null")
+				          ((= cp 127) "Rubout")
+				          ((or (< cp 32) (> cp 126))
+				           (let ((digits "0123456789ABCDEF"))
+				             (labels ((hex (n acc)
+				                        (if (and (= n 0) (>= (length acc) 4))
+				                            (concatenate 'string "U+" acc)
+				                            (hex (floor n 16)
+				                                 (concatenate 'string
+				                                              (subseq digits (mod n 16) (+ (mod n 16) 1))
+				                                              acc)))))
+				               (hex cp ""))))
+				          (t nil))))
 				""");
 		SOURCES.put(LispNames.READ_ALL, """
 				(rontolisp:async-defun rontolisp:read-all (s)
