@@ -2,8 +2,9 @@
 ;; in-memory key-value server, but serving TLS on port 6380 (like a real
 ;; Redis with --tls-port). The RESP2 protocol handling is identical -- only
 ;; the listen call differs: rontolisp:tls-listen wraps the listener in TLS,
-;; the plain rontolisp:tcp-accept accepts connections, and each accepted
-;; socket completes its handshake on the first read.
+;; the portable usocket:socket-accept accepts connections (usocket has no TLS
+;; listener of its own, so the listen call stays rontolisp:tls-listen), and
+;; each accepted socket completes its handshake on the first read.
 ;;
 ;; See kv-server.lisp for the supported commands and protocol notes.
 ;;
@@ -181,7 +182,8 @@
       (listener (rontolisp:tls-listen "tls-server.p12" "changeit" 6380)))
   (write-line "mini-redis (TLS) listening on 127.0.0.1:6380 (try: redis-cli --tls --insecure -p 6380 ping)")
   (do ((n 1 (+ n 1))) (nil)
-    (let ((sock (rontolisp:tcp-accept listener)))
-      (do ((args (read-command sock) (read-command sock)))
-          ((or (null args) (not (handle-command args store sock)))
-           (close sock))))))
+    ;; with-server-socket closes the accepted socket on every exit.
+    (usocket:with-server-socket (sock (usocket:socket-accept listener))
+      (let ((stream (usocket:socket-stream sock)))
+        (do ((args (read-command stream) (read-command stream)))
+            ((or (null args) (not (handle-command args store stream)))))))))

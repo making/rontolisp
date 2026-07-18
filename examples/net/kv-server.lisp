@@ -21,6 +21,11 @@
 ;; Values are treated as ASCII (bulk-string lengths count characters, and a
 ;; value must not contain a newline). Stop the server with Ctrl-C.
 ;;
+;; Networking goes through the portable usocket API (socket-listen /
+;; socket-accept / socket-stream and the with-server-socket macro), which is a
+;; shim over the built-in rontolisp:tcp-* functions, so the same source runs on
+;; the interpreter, the JVM, and a WASM component.
+;;
 ;; Run (interpreter):        java -jar $JAR examples/net/kv-server.lisp
 ;; Run (JVM):                java -jar $JAR examples/net/kv-server.lisp -o KvServer.class && java KvServer
 ;; Run (WASM component):     java -jar $JAR examples/net/kv-server.lisp -o kv-server.wasm --component && \
@@ -179,14 +184,19 @@
 
 ;; --- server loop ------------------------------------------------------------
 
-(let ((store (make-hash-table))
-      (listener (rontolisp:tcp-listen 6379)))
-  (if listener
-      (progn
+(let ((store (make-hash-table)))
+  (handler-case
+      ;; usocket:socket-listen takes host first, then port (the reverse of
+      ;; rontolisp:tcp-listen); on failure it signals usocket:socket-error
+      ;; rather than returning nil.
+      (let ((listener (usocket:socket-listen "127.0.0.1" 6379 :reuse-address t)))
         (write-line "mini-redis listening on 127.0.0.1:6379 (try: redis-cli -p 6379 ping)")
         (do ((n 1 (+ n 1))) (nil)
-          (let ((sock (rontolisp:tcp-accept listener)))
-            (do ((args (read-command sock) (read-command sock)))
-                ((or (null args) (not (handle-command args store sock)))
-                 (close sock))))))
-      (write-line "tcp-listen failed (is port 6379 already in use? a real redis, perhaps)")))
+          ;; with-server-socket closes the accepted socket on every exit.
+          (usocket:with-server-socket (sock (usocket:socket-accept listener))
+            (let ((stream (usocket:socket-stream sock)))
+              (do ((args (read-command stream) (read-command stream)))
+                  ((or (null args) (not (handle-command args store stream)))))))))
+    (usocket:socket-error (e)
+      (declare (ignore e))
+      (write-line "socket-listen failed (is port 6379 already in use? a real redis, perhaps)"))))

@@ -13,9 +13,11 @@
 ;;     -storetype PKCS12 -keystore tls-server.p12 \
 ;;     -storepass changeit -keypass changeit
 ;;
-;; The listener handle works with the plain rontolisp:tcp-accept, and each
-;; accepted socket completes its TLS handshake on the first read -- everything
-;; after tls-listen is identical to the plain-TCP http-hello.lisp.
+;; The listener handle works with the portable usocket:socket-accept (usocket
+;; is a shim over the built-in rontolisp:tcp-* functions), and each accepted
+;; socket completes its TLS handshake on the first read -- everything after
+;; tls-listen is identical to the plain-TCP http-hello.lisp. usocket has no TLS
+;; listener of its own, so the listen call stays rontolisp:tls-listen.
 ;;
 ;; TLS is interpreter/JVM only (a compile error on the WASM backend).
 ;;
@@ -41,17 +43,18 @@
 (let ((listener (rontolisp:tls-listen "tls-server.p12" "changeit" 8443)))
   (write-line "https server listening on https://127.0.0.1:8443/")
   (do ((n 1 (+ n 1))) (nil)
-    (let* ((sock (rontolisp:tcp-accept listener))
-           (request (read-line sock)))
-      (if request
-          (let ((body (format nil "<h1>hello from rontolisp over TLS</h1><p>request ~a: ~a</p>" n request)))
-            (drain-headers sock)
-            (write-line (crlf "HTTP/1.1 200 OK") sock)
-            (write-line (crlf "Content-Type: text/html") sock)
-            ;; + 1: write-line terminates the body with a newline
-            (write-line (crlf (format nil "Content-Length: ~a" (+ (length body) 1))) sock)
-            (write-line (crlf "Connection: close") sock)
-            (write-line (crlf "") sock)
-            (write-line body sock)
-            (write-line (format nil "served request ~a: ~a" n request))))
-      (close sock))))
+    ;; with-server-socket closes the accepted socket on every exit.
+    (usocket:with-server-socket (sock (usocket:socket-accept listener))
+      (let* ((stream (usocket:socket-stream sock))
+             (request (read-line stream)))
+        (if request
+            (let ((body (format nil "<h1>hello from rontolisp over TLS</h1><p>request ~a: ~a</p>" n request)))
+              (drain-headers stream)
+              (write-line (crlf "HTTP/1.1 200 OK") stream)
+              (write-line (crlf "Content-Type: text/html") stream)
+              ;; + 1: write-line terminates the body with a newline
+              (write-line (crlf (format nil "Content-Length: ~a" (+ (length body) 1))) stream)
+              (write-line (crlf "Connection: close") stream)
+              (write-line (crlf "") stream)
+              (write-line body stream)
+              (write-line (format nil "served request ~a: ~a" n request))))))))

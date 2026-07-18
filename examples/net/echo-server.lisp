@@ -2,10 +2,12 @@
 ;; the client, one connection at a time, until the client closes (read-line
 ;; returns nil at peer close). Serves connections forever -- stop it with Ctrl-C.
 ;;
-;; A socket handle returned by rontolisp:tcp-accept works with the standard
-;; stream functions: read-line / write-line / close. On the WASM component
-;; backend a failed tcp-listen returns nil instead of signaling, so the result
-;; is checked before entering the accept loop.
+;; Networking goes through the portable usocket API (socket-listen /
+;; socket-accept / socket-stream and the with-server-socket macro), a shim over
+;; the built-in rontolisp:tcp-* functions, so the same source runs on the
+;; interpreter, the JVM, and a WASM component. A socket's stream works with the
+;; standard functions: read-line / write-line / close. usocket:socket-listen
+;; signals usocket:socket-error on failure (a busy port), caught below.
 ;;
 ;; Run (interpreter):        java -jar $JAR examples/net/echo-server.lisp
 ;; Run (JVM):                java -jar $JAR examples/net/echo-server.lisp -o EchoServer.class && java EchoServer
@@ -13,14 +15,17 @@
 ;;                           wasmtime run -W gc=y -W exceptions=y \
 ;;                             -S tcp=y -S inherit-network=y echo-server.wasm
 ;; Talk to it with:          nc 127.0.0.1 7777   (or examples/net/echo-client.lisp)
-(let ((listener (rontolisp:tcp-listen 7777)))
-  (if listener
-      (progn
-        (write-line "echo server listening on 127.0.0.1:7777")
-        (do ((n 1 (+ n 1))) (nil)
-          (let ((sock (rontolisp:tcp-accept listener)))
+(handler-case
+    (let ((listener (usocket:socket-listen "127.0.0.1" 7777 :reuse-address t)))
+      (write-line "echo server listening on 127.0.0.1:7777")
+      (do ((n 1 (+ n 1))) (nil)
+        ;; with-server-socket closes the accepted socket on every exit.
+        (usocket:with-server-socket (sock (usocket:socket-accept listener))
+          (let ((stream (usocket:socket-stream sock)))
             (write-line (format nil "client ~a connected" n))
-            (do ((line (read-line sock) (read-line sock)))
-                ((null line) (close sock) (write-line "client disconnected"))
-              (write-line line sock)))))
-      (write-line "tcp-listen failed (is port 7777 already in use?)")))
+            (do ((line (read-line stream) (read-line stream)))
+                ((null line) (write-line "client disconnected"))
+              (write-line line stream))))))
+  (usocket:socket-error (e)
+    (declare (ignore e))
+    (write-line "socket-listen failed (is port 7777 already in use?)")))
