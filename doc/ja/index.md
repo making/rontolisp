@@ -4,7 +4,7 @@ Java で実装された最小限の Common Lisp サブセットです。3 つの
 
 - **インタプリタ** -- REPL をサポートするツリーウォーク評価
 - **JVM コンパイラ** -- Lisp を任意の JRE 上で実行できる `.class` バイトコードにコンパイル
-- **WASM コンパイラ** -- wasm-GC と WASI Preview 1 を使って Lisp を `.wasm` バイナリにコンパイル
+- **WASM コンパイラ** -- wasm-GC を使って Lisp を `.wasm` にコンパイル。WASI Preview 1 のコアモジュール、または WASI 0.3（コンポーネントモデル）のコンポーネントを出力可能
 
 ここで今すぐ試せます。このページの例は、[playground](../../playground.html) と同じ
 WebAssembly ビルドを使ってブラウザ上で実行されます。
