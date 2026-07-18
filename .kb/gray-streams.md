@@ -41,13 +41,28 @@ subclasses the rontolisp base classes and delegates the rontolisp generics to
 `trivial-gray-streams:stream-write-char`/`-string`, so libraries written
 against the portable API (jzon) run unchanged.
 
+**format rewrite (todo-146, jzon's `(format %stream "~D" value)`)**: the
+pre-pass also rewrites `(format STREAM ctrl args...)` with a possibly-instance
+destination into `(let ((__gray_fmt_stream STREAM))
+(%gray-write-string-dispatch (format nil ctrl args...) __gray_fmt_stream) nil)`
+— render to a string, route through the write-string dispatch (whose fallback
+handles handles and the `t` designator), destination bound first to keep CL's
+evaluation order, nil like format-to-stream. TWO walker rules exist because the
+walk has no position awareness: (1) a lambda-list keyword is never a stream arg
+(`streamArgMayBeInstance` rejects `&`-prefixed symbols — jzon's `(defun %raise
+(type pos format &rest args) ...)` parameter tail read as a format call), and
+(2) the generic recursion rewrites list ELEMENTS, never re-checking a cdr TAIL
+as a call (`rewriteTail` — `(error 'ty :format-control format
+:format-arguments args)` has a tail whose car is `format`).
+
 **Limits**: output side only (`stream-write-char`/`-string`); the input
 generics of full Gray (stream-read-char, ...) do not exist. The interpreter
 dispatch keys on the `%class-` tag, the compiled dispatch on `consp` — a plain
 cons handed as a stream errors either way, just differently. A bounded
 `(write-string s instance :start ...)` is NOT rewritten (interpreter ignores
-the bounds for instances; both are edge behavior). `format` to a Gray instance
-does not dispatch anywhere.
+the bounds for instances; both are edge behavior). A runtime-nil `format`
+destination reached through the rewrite writes like a designator instead of
+returning the string (jzon never does; scope is Gray-activated programs only).
 
 Pinning tests: `LispEvaluatorTest#grayStreamInstanceReceivesWriteCharAndWriteString`
 (shim), `#grayBaseClassSuperclassLoadsGrayStreamsEagerly` (bare protocol),

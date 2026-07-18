@@ -1280,9 +1280,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		// #'error/#'cerror/#'signal/#'warn wrappers forward the datum only (lite), and
 		// #'format renders via the runtime control renderer; inject each only when the
 		// program takes the operator as a first-class value, so every other program
-		// stays byte-identical (JVM gate mirrored).
+		// stays byte-identical (JVM gate mirrored). Condition :report lambdas live only
+		// in the class registry (define-condition is rewritten out of the program) but
+		// are re-injected by the error/signal expansions, so they count as references
+		// too.
 		for (String op : BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS) {
-			if (program.stream().noneMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, op))) {
+			if (program.stream().noneMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, op))
+					&& closRegistry.conditionReports()
+						.values()
+						.stream()
+						.noneMatch(report -> BuiltinFunctionWrappers.referencesFunctionValue(report, op))) {
 				wrapperExcludes.add(op);
 			}
 		}
@@ -1603,6 +1610,11 @@ public final class WasmLispCompiler implements LispCompiler {
 					lambdaWriter.write(Instruction.DROP);
 				}
 				WasmExprCompiler.compileExpr(lambda.bodyExprs.get(i), lambdaCtx);
+			}
+			if (lambda.bodyExprs.isEmpty()) {
+				// An empty-body (lambda ()) returns nil.
+				lambdaWriter.write(Instruction.REF_NULL);
+				lambdaWriter.writeHeapType(Type.EQ.code());
 			}
 			lambdaWriter.write(Instruction.END);
 

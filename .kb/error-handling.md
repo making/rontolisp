@@ -258,8 +258,7 @@ signals via `(apply #'error (list 'bad-base64-character :input ...))`:
   Additionally, a NON-literal `error` datum that evaluates to a SYMBOL at runtime
   re-dispatches as a condition-type designator (`expandError`'s
   `runtimeTypeDispatch` flag re-enters through the `error` function value, so the
-  type resolves against the class registry at signal time) -- interpreter only;
-  the compiled backends keep the plain object-designator expansion.
+  type resolves against the class registry at signal time).
 - **Compiled backends**: `BuiltinFunctionWrappers.SIGNAL_FUNCTIONS` wrappers, injected
   ONLY when the program contains a literal `(function op)` reference
   (`referencesFunctionValue` gate in `JvmLispCompiler`) so every other program stays
@@ -269,6 +268,26 @@ signals via `(apply #'error (list 'bad-base64-character :input ...))`:
   clause, but initargs/slots are dropped. Both compiled backends inject through
   `BuiltinFunctionWrappers.generate` (`JvmLispCompiler` + `WasmLispCompiler`), with the
   same `(function op)` gate in each.
+
+## Compiled runtime condition-type dispatch (todo-146, jzon %raise)
+
+A NON-literal `(error TYPE args...)` datum WITH initargs now dispatches on the
+COMPILED backends too (jzon's `(defun %raise (type pos format &rest args)
+(error type :format-control ...))` helper): `expandSignalDesignator` generates a
+`member` cond over every registered class -- each branch is the same
+`expandTypedSignal` a literal call would get (instance construction + :report
+rendering + catchable class tag), matched against both the qualified and (when
+unambiguous) plain spelling of the class name. Argument VALUE expressions are
+bound to temps once (left to right); keyword LITERALS stay in place, because
+`buildTypedConstruct`'s keyword-pair detection must see them (binding them broke
+the slot layout and made jzon's :report read garbage -- a WASM-only trap, since
+the JVM's bad `apply` was itself catchable while a wasm cast failure is not).
+A DATUM-ONLY non-literal call keeps the object-designator path: it is the lite
+`#'error` wrapper (datum forwarded without initargs -- constructing a slot-less
+instance would run its :report over nil slots, cl-base64's
+`bad-base64-character` regression) and the condition-object re-signal shape.
+The `t` fallback arm is `expandObjectSignal` over the datum temp. Pinned by the
+`runtime-type-dispatch-residue` ci-spec case and `JzonE2eTest`.
 
 ## Pinned lists and tests
 

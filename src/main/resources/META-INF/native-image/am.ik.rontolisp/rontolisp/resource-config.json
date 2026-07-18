@@ -159,6 +159,24 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/jzon-eisel-lemire\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/jzon-ratio-to-double\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/jzon-schubfach\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.GrayStreamsLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/gray\\.lisp"

@@ -110,6 +110,28 @@ threaded through `Ctx.Builder` beside `structAccessors`).
   and defclass names/options verbatim; only defmethod bodies and defclass
   `:initform` values are walked.
 
+## Runtime slot names + class introspection on the compiled backends (todo-146)
+
+jzon's `coerced-fields` walk (`(slot-value obj (c2mop:slot-definition-name s))`
+over `(c2mop:class-slots (class-of obj))`) forced compile-path support for a
+RUNTIME (non-literal) slot name and for `%class-slot-defs`:
+
+- `expandClassSlotDefs` (both compilers dispatch `%class-slot-defs` through it):
+  a `member` cond over every registered class -- designators are the class-tag
+  (`%class-NAME`, what `class-of` yields) and the plain name -- yielding the
+  quoted `((slot-name declared-type) ...)` list. Anything else (builtin type
+  names included) is nil, the interpreter's semantics.
+- `expandSlotValue` with a non-literal name falls to `expandRuntimeSlotValue`:
+  a position dispatch grouping every slot base name with a globally consistent
+  `slotPosition` (the same layout rule the literal expansion enforces); an
+  unknown/ambiguous runtime name signals at run time.
+- `expandSlotBoundp` with a non-literal name falls to `expandRuntimeSlotBoundp`:
+  class-tag dispatch, each arm a `member` of the runtime name over that class's
+  declared slot names (the lite always-initialized semantics).
+
+Pinned by `runtime-type-dispatch-residue` (ci-spec) and `JzonE2eTest`'s CLOS
+stringification case.
+
 ## Name resolution gotcha
 
 `defclass`/specializer class names are package-resolved (canonical, e.g.

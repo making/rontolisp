@@ -23,6 +23,7 @@ final class WasmOpenCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		cons = OpenModes.normalizeKeywordForm(cons);
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || parts.size() > 4) {
 			throw new UnsupportedOperationException("open expects 1 to 3 arguments, got " + (parts.size() - 1));

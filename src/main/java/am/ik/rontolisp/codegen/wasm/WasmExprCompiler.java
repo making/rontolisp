@@ -118,6 +118,12 @@ final class WasmExprCompiler {
 			WasmDynamicCallCompiler.compileVarRef(name, ctx);
 			return;
 		}
+		if (LispNames.STANDARD_OUTPUT_VAR.equals(name) || LispNames.ERROR_OUTPUT_VAR.equals(name)) {
+			// The standard stream variables hold the designator t (the interpreter's
+			// permanent value; print-family redirection through them does not exist).
+			compileExpr(LispTrue.INSTANCE, ctx);
+			return;
+		}
 		// Lisp-2: a bare symbol is a variable reference only; functions must be
 		// referenced via (function name) / #'name.
 		throw new UnsupportedOperationException("Cannot compile symbol: " + name);
@@ -484,6 +490,8 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandScaleFloat(cons), ctx);
 				case LispNames.CLASS_OF ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandClassOf(cons, ctx.closRegistry), ctx);
+				case LispNames.CLASS_SLOT_DEFS_INTERNAL ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandClassSlotDefs(cons, ctx.closRegistry), ctx);
 				case LispNames.SLOT_BOUNDP ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotBoundp(cons, ctx.closRegistry), ctx);
 				case LispNames.SLOT_MAKUNBOUND ->
@@ -492,6 +500,15 @@ final class WasmExprCompiler {
 					.compileExpr(LispMacroExpander.expandSimpleConditionFormatControl(cons, ctx.closRegistry), ctx);
 				case LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS -> WasmExprCompiler
 					.compileExpr(LispMacroExpander.expandSimpleConditionFormatArguments(cons, ctx.closRegistry), ctx);
+				case LispNames.IEEE754_DOUBLE_BITS, LispNames.IEEE754_DOUBLE_FROM_BITS, LispNames.IEEE754_SINGLE_BITS,
+						LispNames.IEEE754_SINGLE_FROM_BITS ->
+					// The IEEE 754 bit primitives need the 64-bit unsigned model the WASM
+					// numeric model lacks: cold-path runtime signal so a library carrying
+					// them (the float-features shim) still compiles.
+					WasmExprCompiler.compileExpr(
+							LispMacroExpander.expandUnsupportedCall(cons,
+									((LispSymbol) cons.car()).name() + " is unsupported on the WASM numeric model"),
+							ctx);
 				case LispNames.READ_EVAL ->
 					// Identity: a #. marker split into code position by a backquote
 					// template

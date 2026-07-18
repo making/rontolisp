@@ -5,6 +5,7 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
@@ -25,6 +26,51 @@ public final class OpenModes {
 	public static final int BINARY_BIT = 2;
 
 	private OpenModes() {
+	}
+
+	/**
+	 * Normalizes the CL keyword-argument {@code open} shape ({@code (open path :direction
+	 * :input :element-type 'character ...)}) into the positional form the backends
+	 * compile. {@code :external-format} (UTF-8 is the native format), {@code :if-exists}
+	 * and {@code :if-does-not-exist} (the create/supersede defaults already match) are
+	 * accepted and dropped; any other option is rejected. A form already in positional
+	 * shape passes through unchanged.
+	 * @param cons the open form as written
+	 * @return the positional open form
+	 */
+	public static LispCons normalizeKeywordForm(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(2) instanceof LispSymbol first) || !first.name().startsWith(":")
+				|| LispNames.INPUT_KEYWORD.equals(first.name()) || LispNames.OUTPUT_KEYWORD.equals(first.name())) {
+			return cons;
+		}
+		LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
+		LispVal elementType = null;
+		for (int i = 2; i < parts.size(); i += 2) {
+			if (i + 1 >= parts.size() || !(parts.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
+				throw new UnsupportedOperationException("open expects :option value pairs: " + cons.print());
+			}
+			switch (key.name()) {
+				case ":direction" -> direction = parts.get(i + 1);
+				case ":element-type" -> elementType = parts.get(i + 1);
+				case ":external-format", ":if-exists", ":if-does-not-exist" -> {
+					if (!am.ik.rontolisp.LispMacroExpander.ignorableOpenOptionValue(key.name(), parts.get(i + 1))) {
+						throw new UnsupportedOperationException(
+								"open: " + key.name() + " supports only the native default value");
+					}
+				}
+				default -> throw new UnsupportedOperationException("open: unsupported option " + key.name());
+			}
+		}
+		List<LispVal> positional = new java.util.ArrayList<>(List.of(parts.get(0), parts.get(1), direction));
+		if (elementType != null) {
+			positional.add(elementType);
+		}
+		LispVal rebuilt = LispNil.INSTANCE;
+		for (int i = positional.size() - 1; i >= 0; i--) {
+			rebuilt = new LispCons(positional.get(i), rebuilt);
+		}
+		return (LispCons) rebuilt;
 	}
 
 	/**

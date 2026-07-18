@@ -320,6 +320,17 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * The registered condition {@code :report} forms by normalized class name. The report
+	 * ASTs live only here after {@code define-condition} is rewritten out of the program,
+	 * so a scan for first-class function references (e.g. a report lambda applying
+	 * {@code #'format}) must include them.
+	 * @return the condition report registry
+	 */
+	public Map<String, LispVal> conditionReports() {
+		return this.conditionReports;
+	}
+
+	/**
 	 * The generic functions by normalized name, in definition order.
 	 * @return the generic-function registry
 	 */

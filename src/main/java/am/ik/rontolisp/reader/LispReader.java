@@ -210,6 +210,13 @@ public final class LispReader {
 					: (wasm ? -(1L << 30) : Long.MIN_VALUE);
 			return new LispInteger(value);
 		}
+		if (LispNames.ARRAY_DIMENSION_LIMIT.equals(name)) {
+			// The array-dimension-limit constant, read like most-positive-fixnum: the
+			// interpreter/JVM value matches the interpreter's global binding, WASM stays
+			// inside the i31 fixnum range.
+			boolean wasm = this.features.contains("rontolisp-wasm");
+			return new LispInteger(wasm ? (1L << 30) - 1 : 2147483639L);
+		}
 		if (LispNames.FEATURES_VAR.equals(name) && this.features.substituteFeaturesVar()) {
 			// The active feature list, substituted at read time like pi: a quoted
 			// list of keywords, so a compiled program's feature set is fixed at compile

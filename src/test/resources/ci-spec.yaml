@@ -4120,6 +4120,31 @@ cases:
       nil
       "aXYZef"
       el
+  - name: runtime-type-dispatch-residue
+    source: |
+      (define-condition rtd-parse-error (simple-error)
+        ((rtd-line :initarg :rtd-line))
+        (:report (lambda (rtd-c rtd-s) (format rtd-s "rtd at ~a" (slot-value rtd-c 'rtd-line)))))
+      (defun rtd-raise (rtd-type rtd-fmt &rest rtd-args)
+        (if (subtypep rtd-type 'rtd-parse-error)
+            (error rtd-type :format-control rtd-fmt :format-arguments rtd-args :rtd-line 7)
+            (error rtd-type :format-control rtd-fmt :format-arguments rtd-args)))
+      (print (handler-case (rtd-raise 'rtd-parse-error "boom")
+               (rtd-parse-error (rtd-e) :rtd-caught)))
+      (defun rtd-st (rtd-a rtd-b) (subtypep rtd-a rtd-b))
+      (print (list (rtd-st 'integer 'number) (rtd-st 'string 'integer) (rtd-st 'rtd-parse-error 'error)))
+      (defclass rtd-pt () ((rtd-x :initarg :rtd-x :type integer) (rtd-y :initarg :rtd-y :type list)))
+      (let ((rtd-p (make-instance 'rtd-pt :rtd-x 5 :rtd-y nil)))
+        (let ((rtd-defs (%class-slot-defs (class-of rtd-p))))
+          (dolist (rtd-pair rtd-defs)
+            (print (list (car rtd-pair) (car (cdr rtd-pair))
+                         (slot-value rtd-p (car rtd-pair))
+                         (slot-boundp rtd-p (car rtd-pair)))))))
+    expected: |
+      :rtd-caught
+      (t nil t)
+      (rtd-x integer 5 t)
+      (rtd-y list nil t)
   - name: read-time-eval-residue
     source: |
       (defvar +rte-six+ #.(* 2 3))

@@ -98,27 +98,7 @@ public final class UserMacroExpander {
 				macroEval.eval(expanded);
 				continue;
 			}
-			if (isOperator(expanded, LispNames.DEFUN)) {
-				// Register (no body execution) so later macro bodies can call it.
-				macroEval.eval(expanded);
-			}
-			if (isOperator(expanded, LispNames.DEFCLASS) || isOperator(expanded, LispNames.DEFGENERIC)
-					|| isOperator(expanded, LispNames.DEFMETHOD) || isOperator(expanded, LispNames.DEFINE_CONDITION)) {
-				// Register the CLOS definitions too (constructor/accessor/method defuns
-				// plus the generic's dispatcher) so a macro body can call a generic
-				// function at expansion time -- cl-who's process-tag chain does. The
-				// form stays in the program for the compilers' own splice.
-				macroEval.eval(expanded);
-			}
-			if (isOperator(expanded, LispNames.DEFVAR) || isOperator(expanded, LispNames.DEFPARAMETER)
-					|| isOperator(expanded, LispNames.DEFCONSTANT)) {
-				// Establish global special variables at macro-expansion time so an
-				// expansion-time function can READ them -- cl-who's tree-to-commands
-				// chain
-				// reads *html-mode*/*downcase-tokens-p*/*html-empty-tags*/... The form
-				// stays in the program so the compilers emit it for runtime as well.
-				macroEval.eval(expanded);
-			}
+			registerMacroTimeDefinitions(expanded, macroEval);
 			if (isPureConfigSetf(expanded, macroEval)) {
 				// A top-level (setf (PLACE ...) V) whose (defun (setf PLACE) ...) writer
 				// is
@@ -145,6 +125,48 @@ public final class UserMacroExpander {
 
 	private static boolean isOperator(LispVal form, String name) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && name.equals(sym.name());
+	}
+
+	/**
+	 * Registers a top-level definition into the macro-time evaluator so later macro
+	 * bodies (and later defparameter value expressions) can use it: a {@code defun} (no
+	 * body execution), the CLOS definitions (constructor/accessor/method defuns plus the
+	 * generic's dispatcher -- cl-who's process-tag chain calls a generic at expansion
+	 * time), and {@code defvar}/{@code defparameter}/{@code defconstant} (so an
+	 * expansion-time function can READ the global -- cl-who's tree-to-commands chain
+	 * reads {@code *html-mode*} and friends). A top-level {@code progn} is walked member
+	 * by member (a macrolet whose body defines defuns expands into one, and the compilers
+	 * flatten it the same way), evaluating ONLY the definition members. Every form stays
+	 * in the program for the compilers' own splice; a defvar/defparameter whose value
+	 * expression cannot evaluate at macro time (e.g. it needs runtime-only state) is
+	 * skipped with a warning instead of failing the compile -- macros reading that global
+	 * would fail later, plain runtime uses are unaffected.
+	 */
+	private static void registerMacroTimeDefinitions(LispVal form, LispEvaluator macroEval) {
+		if (isOperator(form, LispNames.PROGN) && form instanceof LispCons progn && progn.isProperList()) {
+			for (LispVal member : progn.toList().subList(1, progn.toList().size())) {
+				registerMacroTimeDefinitions(member, macroEval);
+			}
+			return;
+		}
+		if (isOperator(form, LispNames.DEFUN) || isOperator(form, LispNames.DEFCLASS)
+				|| isOperator(form, LispNames.DEFGENERIC) || isOperator(form, LispNames.DEFMETHOD)
+				|| isOperator(form, LispNames.DEFINE_CONDITION) || isOperator(form, LispNames.DEFSTRUCT)) {
+			macroEval.eval(form);
+			return;
+		}
+		if (isOperator(form, LispNames.DEFVAR) || isOperator(form, LispNames.DEFPARAMETER)
+				|| isOperator(form, LispNames.DEFCONSTANT)) {
+			try {
+				macroEval.eval(form);
+			}
+			catch (RuntimeException ex) {
+				System.err.println("warning: skipping macro-time evaluation of "
+						+ (form instanceof LispCons cons && cons.cdr() instanceof LispCons nameCell
+								? cons.car().print() + " " + nameCell.car().print() : form.print())
+						+ ": " + ex.getMessage());
+			}
+		}
 	}
 
 	/** Whether the form contains a {@code %read-eval} marker symbol anywhere. */

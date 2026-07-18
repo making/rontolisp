@@ -150,9 +150,8 @@ actually call, not the full upstream APIs.
 
 ## What can I actually load?
 
-Six real-world libraries load unmodified today, verified on all four
-backends (interpreter, JVM, WASM Preview 1 and `--component`), and a seventh
-(jzon) loads on the interpreter:
+Seven real-world libraries load unmodified today, verified on all four
+backends (interpreter, JVM, WASM Preview 1 and `--component`):
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
   `split-sequence`/`split-sequence-if`/`split-sequence-if-not` work on
@@ -211,22 +210,26 @@ backends (interpreter, JVM, WASM Preview 1 and `--component`), and a seventh
   integer diverges there.
 
 - **[com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4** (the real
-  library via `(ql:quickload '#:com.inuoe.jzon)`, **interpreter only**): JSON
-  parsing and stringification including the README walkthrough — hash-table /
-  vector round-trips, `:key-fn`/`jzon:coerce-key`, the `:stream` writer API
-  over a Gray-stream class writing into an adjustable string, incremental
+  library via `(ql:quickload '#:com.inuoe.jzon)`): JSON parsing and
+  stringification including the README walkthrough — hash-table / vector
+  round-trips, `:key-fn`/`jzon:coerce-key`, the `:stream` writer API over a
+  Gray-stream class writing into an adjustable string, incremental
   `jzon:writer`, and CLOS-instance stringification through the `closer-mop`
   shim's real slot list. Its dependencies (`closer-mop`, `flexi-streams`,
   `float-features`, `trivial-gray-streams`, `uiop`) resolve to the built-in
-  shim systems below. The JVM/WASM compile path cannot run the full library
-  yet (its float reader/printer tables do 64-bit/bignum bit arithmetic beyond
-  the WASM numeric model and reference load-time state at read time);
-  the isolated language features it forced -- including the adjustable
-  fill-pointered string buffers it accumulates into -- are compiled
-  everywhere, tracked by the `jzon-residue-features` and
-  `mutable-strings-cross-backend` ci-spec cases.
+  shim systems below, and its three numeric leaf components
+  (`eisel-lemire.lisp`/`ratio-to-double.lisp`/`schubfach.lisp` — the
+  eisel-lemire float reader and Schubfach float printer, whose u64/u128 bit
+  algorithms are beyond the WASM numeric model) are replaced at load time by
+  built-in shims over rontolisp's native float arithmetic and printer. The
+  tradeoff: float text takes rontolisp's cross-backend-identical shape rather
+  than Schubfach's shortest-round-trip string, and parsing an extreme exponent
+  can be a few ulps off exact rounding (`|exp10| <= 22` — the common range —
+  rounds exactly once). The usual WASM caveats apply on the WASM backends:
+  large-float print shape, hash-table iteration order and non-ASCII
+  `\u` escapes (`code-char` is byte-oriented there).
 
-Runnable demos for all six — with the per-backend commands and
+Runnable demos for all seven — with the per-backend commands and
 expected output — live in
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf).
 

@@ -2,12 +2,15 @@
 
 These demos load REAL third-party Common Lisp libraries -- unmodified
 upstream sources -- through `asdf:load-system` and exercise their public API.
-All but the jzon demo run identically on all four backends (interpreter, JVM,
+All of them run identically on all four backends (interpreter, JVM,
 WASM Preview 1 and `--component`); they are the programs the cross-backend E2E
 tests pin (`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest`
-/ `ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest`). The jzon demo runs
-on the **interpreter only** (its float printer and adjustable-string buffers
-are beyond the compiled backends; `JzonE2eTest` pins it):
+/ `ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest` / `JzonE2eTest`).
+jzon's three numeric leaf components (the eisel-lemire float reader and
+Schubfach float printer) are replaced at load time by built-in shims over
+rontolisp's native float arithmetic, so float text takes rontolisp's
+cross-backend-identical shape rather than Schubfach's shortest-round-trip
+string:
 
 ```console
 rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src
@@ -21,7 +24,7 @@ rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src
 | [`cl-who-demo.lisp`](cl-who-demo.lisp) | cl-who v1.1.5 (BSD 2-Clause) | <https://github.com/edicl/cl-who> |
 | [`assoc-utils-demo.lisp`](assoc-utils-demo.lisp) | assoc-utils (public domain) | <https://github.com/fukamachi/assoc-utils> |
 | [`cl-base64-demo.lisp`](cl-base64-demo.lisp) | cl-base64 v3.4 (BSD-style) | <https://github.com/darabi/cl-base64> |
-| [`jzon-demo.lisp`](jzon-demo.lisp) | com.inuoe.jzon v1.1.4 (MIT), **interpreter only** | <https://github.com/Zulu-Inuoe/jzon> |
+| [`jzon-demo.lisp`](jzon-demo.lisp) | com.inuoe.jzon v1.1.4 (MIT) | <https://github.com/Zulu-Inuoe/jzon> |
 
 ## Where the libraries come from
 
@@ -174,7 +177,7 @@ is self-contained -- running it needs no library files.
 "equal"
 ```
 
-`jzon-demo.lisp` (interpreter only):
+`jzon-demo.lisp`:
 
 ```console
 42
@@ -197,8 +200,8 @@ A library qualifies when it stays inside plain
 `check-type`/`etypecase` with the supported type specifiers, declarations
 (parsed no-ops) and the lite `define-condition`/`make-condition`/`warn`/
 `restart-case`/`return-from` idioms. Libraries built on the CLOS static subset, the lite condition system,
-dynamic (special) variable binding and Gray output streams load too (jzon,
-on the interpreter); restarts and mutable strings remain out of reach for
-the compiled backends -- see the
+dynamic (special) variable binding, Gray output streams and adjustable
+fill-pointered string buffers load too (jzon exercises all of these on
+every backend); restarts remain out of reach -- see the
 [ASDF systems guide](../../doc/en/guides/asdf-systems.md) for the supported
 subset.

@@ -63,7 +63,7 @@ public final class BuiltinFunctionWrappers {
 	public static final Set<String> ARRAY_FILL_POINTER_FUNCTIONS = Set.of(LispNames.FILL_POINTER,
 			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE,
 			LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
-			LispNames.ARRAY_DISPLACEMENT, LispNames.MAKE_ARRAY);
+			LispNames.ARRAY_DISPLACEMENT, LispNames.MAKE_ARRAY, LispNames.AREF);
 
 	/**
 	 * Signal-operator wrappers ({@code #'error}/{@code #'cerror}/{@code #'signal}/
@@ -174,6 +174,23 @@ public final class BuiltinFunctionWrappers {
 			parts.add(arg);
 		}
 		return listToCons(parts);
+	}
+
+	// The #'aref wrapper body: fold the subscript list into the row-major index.
+	// (do ((rm 0) (ds (array-dimensions a)) (is idx))
+	// ((null is) (row-major-aref a rm))
+	// (setq rm (+ (* rm (car ds)) (car is)))
+	// (setq ds (cdr ds))
+	// (setq is (cdr is)))
+	private static LispVal arefFoldBody() {
+		LispVal bindings = listToCons(List.of(callV("rm", new LispInteger(0)),
+				callV("ds", call(LispNames.ARRAY_DIMENSIONS, "a")), callV("is", new LispSymbol("idx"))));
+		LispVal exit = listToCons(List.of(call(LispNames.NULL, "is"), call(LispNames.ROW_MAJOR_AREF, "a", "rm")));
+		LispVal step = callV(LispNames.SETQ, new LispSymbol("rm"), callV(LispNames.ADD,
+				callV(LispNames.MUL, new LispSymbol("rm"), call(LispNames.CAR, "ds")), call(LispNames.CAR, "is")));
+		LispVal stepDs = callV(LispNames.SETQ, new LispSymbol("ds"), call(LispNames.CDR, "ds"));
+		LispVal stepIs = callV(LispNames.SETQ, new LispSymbol("is"), call(LispNames.CDR, "is"));
+		return listToCons(List.of(new LispSymbol(LispNames.DO), bindings, exit, step, stepDs, stepIs));
 	}
 
 	private static WrapperDef unary(String name) {
@@ -466,6 +483,11 @@ public final class BuiltinFunctionWrappers {
 			new WrapperDef(LispNames.MAKE_HASH_TABLE, List.of(), List.of(call(LispNames.MAKE_HASH_TABLE))),
 			binary(LispNames.GETHASH), binary(LispNames.REMHASH), unary(LispNames.CLRHASH),
 			unary(LispNames.HASH_TABLE_COUNT), unary(LispNames.HASH_TABLE_P), binary(LispNames.MAPHASH),
+			// #'aref: variadic (CL aref takes one subscript per dimension) -- fold the
+			// subscripts into the row-major index over the array's dimensions. Gated
+			// with the fill-pointer array group so array-free programs stay
+			// byte-identical.
+			new WrapperDef(LispNames.AREF, List.of("a", LispNames.LAMBDA_REST, "idx"), List.of(arefFoldBody())),
 			// Fill-pointer array operators: gated like the hash-table group (see
 			// ARRAY_FILL_POINTER_FUNCTIONS). vector-push-extend is the 2-arg form;
 			// %set-fill-pointer is internal and omitted.

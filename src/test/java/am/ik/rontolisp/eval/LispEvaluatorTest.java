@@ -3662,9 +3662,11 @@ class LispEvaluatorTest {
 	@Test
 	void withOpenFileUnsupportedOptionThrows(@TempDir Path tempDir) {
 		String file = tempDir.resolve("opt.txt").toString().replace("\\", "\\\\");
+		// :if-exists is accepted only with the value the native behavior already
+		// implements (:supersede); :append must not be silently reinterpreted.
 		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :if-exists :append) s)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("supports only the :direction and :element-type options");
+			.hasMessageContaining(":if-exists supports only the native default value");
 	}
 
 	@Test

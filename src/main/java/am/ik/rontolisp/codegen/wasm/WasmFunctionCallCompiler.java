@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.wasm.Instruction;
@@ -97,6 +98,11 @@ final class WasmFunctionCallCompiler {
 			WasmDynamicCallCompiler.compileCall(name, cons, ctx);
 		}
 		else {
+			LispVal uiopStub = LispMacroExpander.expandUiopStubCall(cons);
+			if (uiopStub != null) {
+				WasmExprCompiler.compileExpr(uiopStub, ctx);
+				return;
+			}
 			throw new UnsupportedOperationException("Cannot compile: " + name);
 		}
 	}

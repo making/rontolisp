@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The lite dependency-shim libraries behind the built-in ASDF systems that real
@@ -21,6 +22,23 @@ import am.ik.rontolisp.reader.LispReader;
  * {@code write-string} built-in dispatches to for CLOS-instance streams). Each is a small
  * canonical-shape {@code .lisp} resource next to this class (the {@code usocket.lisp}
  * pattern); the packages are seeded in {@code PackageRegistry}.
+ *
+ * <p>
+ * Besides whole shim systems, this class also substitutes LEAF MODULES -- individual
+ * component files INSIDE a real third-party system whose contract with the rest of that
+ * system is a few package-qualified functions. The jzon numeric leaves
+ * ({@code eisel-lemire.lisp}/{@code ratio-to-double.lisp}/{@code schubfach.lisp}) are
+ * replaced with shims over rontolisp's native float arithmetic and printer: the
+ * originals' {@code #.}-generated power-of-ten tables reference a load-time special the
+ * macro-time evaluator cannot see, and their u64/u128 bit algorithms are beyond the WASM
+ * numeric model, so the real files are interpreter-only while the shims run on every
+ * backend. Each shim carries the replaced file's {@code defpackage} (so the package
+ * registers exactly as the original would) followed by canonical-shape qualified defuns;
+ * both system loaders ({@code LispEvaluator.loadSystem} and
+ * {@code cli.LoadInliner.spliceSystem}) consult {@link #leafModuleForms} before reading a
+ * component file. Tradeoff: float text is rontolisp's cross-backend-identical shape, not
+ * schubfach's shortest-round-trip string, and parsing extreme exponents is a few ulps off
+ * eisel-lemire's exact rounding.
  */
 public final class ShimLibraries {
 
@@ -28,6 +46,14 @@ public final class ShimLibraries {
 	private static final Map<String, String> RESOURCES = Map.of(LispNames.CLOSER_MOP_PKG, "closer-mop.lisp",
 			LispNames.FLEXI_STREAMS_PKG, "flexi-streams.lisp", "float-features", "float-features.lisp",
 			LispNames.TRIVIAL_GRAY_STREAMS_PKG, "trivial-gray-streams.lisp");
+
+	/**
+	 * Leaf-module substitutions: system name to (component file relative to the system's
+	 * base directory, shim classpath resource).
+	 */
+	private static final Map<String, Map<String, String>> LEAF_MODULES = Map.of("com.inuoe.jzon",
+			Map.of("eisel-lemire.lisp", "jzon-eisel-lemire.lisp", "ratio-to-double.lisp", "jzon-ratio-to-double.lisp",
+					"schubfach.lisp", "jzon-schubfach.lisp"));
 
 	private static final Map<String, List<LispVal>> CACHE = new ConcurrentHashMap<>();
 
@@ -66,6 +92,26 @@ public final class ShimLibraries {
 			}
 			return parsed;
 		});
+	}
+
+	/**
+	 * Returns the parsed shim forms replacing the given component file of the named
+	 * system, or {@code null} when the component is not substituted. The forms start with
+	 * the replaced file's {@code defpackage} and must be resolved through the package
+	 * resolver in order (like any loaded source), so the package registers before the
+	 * dependent components resolve against it.
+	 * @param systemName the ASDF system name (canonical lower-case)
+	 * @param componentFile the component source file, relative to the system's base
+	 * directory
+	 * @return the shim forms, or {@code null} when the real file should be loaded
+	 */
+	@Nullable public static List<LispVal> leafModuleForms(String systemName, String componentFile) {
+		Map<String, String> modules = LEAF_MODULES.get(systemName);
+		String resource = modules == null ? null : modules.get(componentFile);
+		if (resource == null) {
+			return null;
+		}
+		return CACHE.computeIfAbsent(resource, key -> LispReader.readAllFromString(readSource(key)));
 	}
 
 	private static String readSource(String resource) {

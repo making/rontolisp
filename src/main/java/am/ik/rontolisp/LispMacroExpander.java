@@ -4557,6 +4557,19 @@ public final class LispMacroExpander {
 				}
 				binary = isBinaryElementTypeLiteral(specParts.get(i + 1));
 			}
+			else if (specParts.get(i) instanceof LispSymbol key && (":external-format".equals(key.name())
+					|| ":if-exists".equals(key.name()) || ":if-does-not-exist".equals(key.name()))) {
+				// Accepted and dropped like open's keyword normalization -- but only
+				// with the value the native behavior already implements (UTF-8, the
+				// create/supersede defaults); any other value must not be silently
+				// reinterpreted.
+				if (i + 1 >= specParts.size() || !ignorableOpenOptionValue(key.name(), specParts.get(i + 1))) {
+					throw new UnsupportedOperationException(LispNames.WITH_OPEN_FILE + " " + key.name()
+							+ " supports only the native default value (" + (":external-format".equals(key.name())
+									? ":utf-8" : ":if-exists".equals(key.name()) ? ":supersede" : ":create or :error")
+							+ ")");
+				}
+			}
 			else {
 				throw new UnsupportedOperationException(
 						LispNames.WITH_OPEN_FILE + " supports only the :direction and :element-type options");
@@ -4565,6 +4578,32 @@ public final class LispMacroExpander {
 		List<LispVal> body = parts.subList(2, parts.size());
 		List<LispVal> openParts = new java.util.ArrayList<>(
 				List.of(new LispSymbol(LispNames.OPEN), filename, new LispSymbol(direction)));
+		return buildWithOpenFile(var, openParts, binary, body, unwindProtect);
+	}
+
+	/**
+	 * Whether an ignorable {@code open}/{@code with-open-file} option carries the value
+	 * the native file behavior already implements: {@code :external-format :utf-8},
+	 * {@code :if-exists :supersede} (output truncates), {@code :if-does-not-exist}
+	 * {@code :create} (output) or {@code :error} (input).
+	 * @param option the option keyword name
+	 * @param value the option value form
+	 * @return {@code true} when dropping the pair preserves behavior
+	 */
+	public static boolean ignorableOpenOptionValue(String option, LispVal value) {
+		if (!(value instanceof LispSymbol sym)) {
+			return false;
+		}
+		return switch (option) {
+			case ":external-format" -> ":utf-8".equals(sym.name()) || ":default".equals(sym.name());
+			case ":if-exists" -> ":supersede".equals(sym.name());
+			case ":if-does-not-exist" -> ":create".equals(sym.name()) || ":error".equals(sym.name());
+			default -> false;
+		};
+	}
+
+	private static LispVal buildWithOpenFile(LispVal var, List<LispVal> openParts, boolean binary, List<LispVal> body,
+			boolean unwindProtect) {
 		if (binary) {
 			openParts.add(unsignedByte8Literal());
 		}
@@ -5370,6 +5409,73 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Lowers a {@code (symbol-function EXPR)} whose designator is NOT a quoted symbol
+	 * literal into an evaluate-then-signal form: compiled programs have no runtime
+	 * name-to-function table (that is {@code --dynamic}'s job), so the branch errors only
+	 * if it actually runs -- which lets a library carrying such a branch (e.g. a
+	 * symbol-valued {@code :key-fn}) compile as long as the branch stays cold. The
+	 * interpreter keeps the real runtime lookup.
+	 * @param cons the symbol-function expression
+	 * @return the lowered expression
+	 */
+	/**
+	 * If {@code cons} calls a {@code uiop:} member (the package stub: names resolve, but
+	 * only {@code add-package-local-nickname} has a real definition), lowers the call
+	 * into an evaluate-args-then-signal form mirroring the interpreter's
+	 * undefined-function error at call time -- so a library carrying such a call on a
+	 * cold branch (jzon's pathname handling) still compiles. Returns null for any other
+	 * operator.
+	 * @param cons the call expression
+	 * @return the lowered expression, or null when the operator is not a uiop member
+	 */
+	@Nullable public static LispVal expandUiopStubCall(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		if (qn == null || !LispNames.UIOP_PKG.equals(qn.pkg())) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		List<LispVal> progn = new java.util.ArrayList<>();
+		progn.add(new LispSymbol(LispNames.PROGN));
+		progn.addAll(parts.subList(1, parts.size()));
+		progn.add(listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString("The function " + op.name() + " is undefined"))));
+		return listToCons(progn);
+	}
+
+	/**
+	 * Lowers a call the current backend cannot execute into an evaluate-args-then-signal
+	 * form, so a library carrying it on a cold branch still compiles and the error names
+	 * the operator only when the branch actually runs (the WASM backends' route for the
+	 * {@code %ieee754-*} primitives, whose 64-bit unsigned bit model does not exist
+	 * there).
+	 * @param cons the call expression
+	 * @param message the runtime error message
+	 * @return the lowered expression
+	 */
+	public static LispVal expandUnsupportedCall(LispCons cons, String message) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> progn = new java.util.ArrayList<>();
+		progn.add(new LispSymbol(LispNames.PROGN));
+		progn.addAll(parts.subList(1, parts.size()));
+		progn.add(listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(message))));
+		return listToCons(progn);
+	}
+
+	public static LispVal expandRuntimeSymbolFunctionError(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(
+					LispNames.SYMBOL_FUNCTION + " expects exactly one argument: " + cons.print());
+		}
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(LispNames.SYMBOL_FUNCTION
+				+ ": a runtime (non-literal) function name is not supported in compiled code")));
+		return listToCons(List.of(new LispSymbol(LispNames.PROGN), parts.get(1), signal));
+	}
+
+	/**
 	 * Lowers a {@code (write-string str [stream] :start s :end e)} call carrying literal
 	 * bounding keywords into {@code (write-string (subseq str start end) [stream])} over
 	 * once-evaluated temps, with a runtime {@code nil} {@code :end} defaulting to the
@@ -5986,8 +6092,9 @@ public final class LispMacroExpander {
 		}
 		LispSymbol slotSym = quotedSymbol(parts.get(2));
 		if (slotSym == null) {
-			throw new UnsupportedOperationException(
-					LispNames.SLOT_VALUE + " requires a literal quoted slot name: " + cons.print());
+			// A runtime slot name (jzon's class-slots-driven serialization): dispatch
+			// over every unambiguously positioned slot the registry knows.
+			return expandRuntimeSlotValue(parts.get(1), parts.get(2), closRegistry);
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
 		String baseName = qn == null ? slotSym.name() : qn.member();
@@ -6000,6 +6107,42 @@ public final class LispMacroExpander {
 					+ " has different positions in unrelated classes; use the accessor");
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(position), parts.get(1)));
+	}
+
+	/**
+	 * Expands a {@code slot-value} whose slot name is a runtime value into a position
+	 * dispatch over every slot base name the registry knows with a globally consistent
+	 * position -- the same layout rule the literal expansion enforces. An unknown (or
+	 * position-ambiguous) runtime name signals at run time.
+	 */
+	private static LispVal expandRuntimeSlotValue(LispVal objExpr, LispVal nameExpr, ClosRegistry closRegistry) {
+		String prefix = "__sv" + MV_COUNTER.getAndIncrement();
+		LispSymbol v = new LispSymbol(prefix + "_v");
+		LispSymbol n = new LispSymbol(prefix + "_n");
+		java.util.Map<Integer, List<String>> namesByPosition = new java.util.LinkedHashMap<>();
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				if (seen.add(slot.baseName())) {
+					Integer position = closRegistry.slotPosition(slot.baseName());
+					if (position != null && position > 0) {
+						namesByPosition.computeIfAbsent(position, k -> new java.util.ArrayList<>())
+							.add(slot.baseName());
+					}
+				}
+			}
+		}
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		for (java.util.Map.Entry<Integer, List<String>> entry : namesByPosition.entrySet()) {
+			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, n, quotedSymbolList(entry.getValue())),
+					listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(entry.getKey()), v)))));
+		}
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString(LispNames.SLOT_VALUE + ": unknown or ambiguous runtime slot name"))))));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return makeLet(v.name(), objExpr, makeLet(n.name(), nameExpr, listToCons(condParts)));
 	}
 
 	/**
@@ -6060,8 +6203,10 @@ public final class LispMacroExpander {
 		}
 		LispSymbol slotSym = quotedSymbol(parts.get(2));
 		if (slotSym == null) {
-			throw new UnsupportedOperationException(
-					LispNames.SLOT_BOUNDP + " requires a literal quoted slot name: " + cons.print());
+			// A runtime slot name: the lite semantics (a slot the instance's class
+			// declares is bound) become a class-tag dispatch over a per-class slot-name
+			// membership test.
+			return expandRuntimeSlotBoundp(parts.get(1), parts.get(2), closRegistry);
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
 		String baseName = qn == null ? slotSym.name() : qn.member();
@@ -6078,6 +6223,36 @@ public final class LispMacroExpander {
 		LispSymbol v = new LispSymbol(prefix + "_v");
 		LispVal test = makeIf(instanceTagTest(v, tags), LispTrue.INSTANCE, LispNil.INSTANCE);
 		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))), test);
+	}
+
+	/**
+	 * Expands a {@code slot-boundp} whose slot name is a runtime value: a class-tag
+	 * dispatch over the registered classes, each testing the runtime name against the
+	 * class's declared slot names -- the lite always-initialized semantics of the literal
+	 * expansion.
+	 */
+	private static LispVal expandRuntimeSlotBoundp(LispVal objExpr, LispVal nameExpr, ClosRegistry closRegistry) {
+		String prefix = "__sbn" + MV_COUNTER.getAndIncrement();
+		LispSymbol v = new LispSymbol(prefix + "_v");
+		LispSymbol n = new LispSymbol(prefix + "_n");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			if (info.slots().isEmpty()) {
+				continue;
+			}
+			List<String> slotNames = new java.util.ArrayList<>();
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				slotNames.add(slot.baseName());
+			}
+			LispVal nameTest = makeIf(mvCall(LispNames.MEMBER, n, quotedSymbolList(slotNames)), LispTrue.INSTANCE,
+					LispNil.INSTANCE);
+			clauses.add(listToCons(List.of(instanceTagTest(v, List.of("%class-" + info.name())), nameTest)));
+		}
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return makeLet(v.name(), objExpr, makeLet(n.name(), nameExpr, listToCons(condParts)));
 	}
 
 	/**
@@ -6155,6 +6330,43 @@ public final class LispMacroExpander {
 		for (java.util.Map.Entry<Integer, List<String>> entry : byPosition.entrySet()) {
 			clauses.add(listToCons(List.of(instanceTagTest(v, entry.getValue()),
 					mvCall(LispNames.NTH, new LispInteger(entry.getKey()), v))));
+		}
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))), listToCons(condParts));
+	}
+
+	/**
+	 * Expands {@code (%class-slot-defs designator)} into a membership dispatch over every
+	 * registered class, yielding the class's quoted {@code ((slot-name declared-type)
+	 * ...)} list -- the interpreter's semantics: the designator is a class-tag symbol
+	 * ({@code %class-NAME}, what {@code class-of} yields for an instance) or the plain
+	 * class name, and anything else (built-in type names included) yields nil.
+	 * @param cons the %class-slot-defs expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandClassSlotDefs(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(
+					LispNames.CLASS_SLOT_DEFS_INTERNAL + " expects exactly one argument: " + cons.print());
+		}
+		String prefix = "__csd" + MV_COUNTER.getAndIncrement();
+		LispSymbol v = new LispSymbol(prefix + "_v");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			List<LispVal> pairs = new java.util.ArrayList<>();
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				pairs.add(listToCons(List.of(new LispSymbol(slot.baseName()), new LispSymbol(slot.type()))));
+			}
+			LispVal quotedPairs = pairs.isEmpty() ? LispNil.INSTANCE
+					: listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(pairs)));
+			LispVal designators = listToCons(List.of(new LispSymbol(LispNames.QUOTE),
+					listToCons(List.of(new LispSymbol("%class-" + info.name()), new LispSymbol(info.name())))));
+			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, v, designators), quotedPairs)));
 		}
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
 		List<LispVal> condParts = new java.util.ArrayList<>();
@@ -7064,7 +7276,9 @@ public final class LispMacroExpander {
 	 */
 	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry) {
-		if (program.stream().noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f))) {
+		boolean runtimeSubtypep = needsRuntimeSubtypep(program);
+		if (!runtimeSubtypep && program.stream()
+			.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f))) {
 			return program;
 		}
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
@@ -7113,6 +7327,11 @@ public final class LispMacroExpander {
 		}
 		for (java.util.Map.Entry<Integer, String> slot : dispatcherSlots.entrySet()) {
 			out.set(slot.getKey(), generateDispatcher(slot.getValue(), closRegistry));
+		}
+		if (runtimeSubtypep) {
+			// Injected once the registry is complete; defuns are collected in a
+			// position-independent pass, so appending is safe.
+			out.add(runtimeSubtypepDefun(closRegistry));
 		}
 		return out;
 	}
@@ -8763,6 +8982,54 @@ public final class LispMacroExpander {
 			LispVal symbolTest = listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.SYMBOLP, datumVar),
 					callOf(LispNames.NOT, callOf(LispNames.NULL, datumVar))));
 			return makeLet(datumVar.name(), datum, makeIf(symbolTest, symbolCase, objectCase));
+		}
+		if (LispNames.ERROR_INTERNAL.equals(internalName) && !closRegistry.classes().isEmpty() && parts.size() > 2) {
+			// Compiled backends: a runtime SYMBOL datum WITH initargs (jzon's (error
+			// type :format-control ...) helper) dispatches over the compile-time class
+			// registry -- each registered class gets the same typed expansion a literal
+			// call would, over once-evaluated argument temps; anything else keeps the
+			// object-designator path. A datum-only call (the lite #'error wrapper, a
+			// condition-object re-signal) stays on the object path: constructing a
+			// slot-less instance would run its :report over nil slots at signal time.
+			String prefix = "__sig" + MV_COUNTER.getAndIncrement();
+			LispSymbol datumVar = new LispSymbol(prefix + "_datum");
+			List<LispVal> args = parts.subList(2, parts.size());
+			// Keyword literals stay in place (the typed expansion's keyword-pair
+			// detection must see them); only value expressions are bound to temps.
+			List<LispVal> argVars = new java.util.ArrayList<>();
+			List<Integer> tempIndexes = new java.util.ArrayList<>();
+			for (int i = 0; i < args.size(); i++) {
+				if (args.get(i) instanceof LispSymbol kw && kw.name().startsWith(":")) {
+					argVars.add(args.get(i));
+				}
+				else {
+					argVars.add(new LispSymbol(prefix + "_arg" + i));
+					tempIndexes.add(i);
+				}
+			}
+			List<LispVal> clauses = new java.util.ArrayList<>();
+			for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+				List<String> spellings = new java.util.ArrayList<>();
+				spellings.add(info.name());
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
+				if (qn != null && closRegistry.findClass(qn.member()) == info) {
+					spellings.add(qn.member());
+				}
+				LispVal typed = expandTypedSignal(opName, internalName, new LispSymbol(info.name()), argVars,
+						closRegistry);
+				clauses
+					.add(listToCons(List.of(mvCall(LispNames.MEMBER, datumVar, quotedSymbolList(spellings)), typed)));
+			}
+			clauses.add(listToCons(List.of(LispTrue.INSTANCE, expandObjectSignal(internalName, datumVar))));
+			List<LispVal> condParts = new java.util.ArrayList<>();
+			condParts.add(new LispSymbol(LispNames.COND));
+			condParts.addAll(clauses);
+			LispVal body = listToCons(condParts);
+			for (int j = tempIndexes.size() - 1; j >= 0; j--) {
+				int i = tempIndexes.get(j);
+				body = makeLet(((LispSymbol) argVars.get(i)).name(), args.get(i), body);
+			}
+			return makeLet(datumVar.name(), datum, body);
 		}
 		return expandObjectSignal(internalName, datum);
 	}
@@ -12434,13 +12701,64 @@ public final class LispMacroExpander {
 		if (parts.size() != 3) {
 			throw new IllegalArgumentException(LispNames.SUBTYPEP + " expects two type specifiers");
 		}
-		LispVal sub = literalTypeSpecifier(parts.get(1), cons);
-		LispVal sup = literalTypeSpecifier(parts.get(2), cons);
-		return subtypep(sub, sup, closRegistry) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		LispVal sub = literalTypeSpecifier(parts.get(1));
+		LispVal sup = literalTypeSpecifier(parts.get(2));
+		if (sub != null && sup != null) {
+			return subtypep(sub, sup, closRegistry) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}
+		// A runtime specifier: call the shared dispatch defun
+		// (expandTopLevelDefinitions injects it once per program -- inlining the
+		// dispatch at every call site overflows the 16-bit branch range of a large
+		// method).
+		return listToCons(List.of(new LispSymbol(LispNames.SUBTYPEP_RUNTIME), parts.get(1), parts.get(2)));
 	}
 
-	/** The literal type specifier an argument form denotes, or rejects the form. */
-	private static LispVal literalTypeSpecifier(LispVal arg, LispCons cons) {
+	/**
+	 * Whether the program contains a {@code subtypep} call with a non-literal type
+	 * specifier -- the condition under which {@link #expandSubtypep} emits a call to the
+	 * shared {@code %subtypep-runtime} dispatch defun, which
+	 * {@link #expandTopLevelDefinitions} must then inject. Quoted data is skipped.
+	 * @param program the top-level forms
+	 * @return {@code true} when the shared dispatch defun is needed
+	 */
+	public static boolean needsRuntimeSubtypep(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::containsRuntimeSubtypep);
+	}
+
+	private static boolean containsRuntimeSubtypep(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			if (LispNames.QUOTE.equals(op.name())) {
+				return false;
+			}
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+			String member = qn == null ? op.name() : qn.member();
+			if (LispNames.SUBTYPEP.equals(member) && cons.isProperList()) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() == 3
+						&& (literalTypeSpecifier(parts.get(1)) == null || literalTypeSpecifier(parts.get(2)) == null)) {
+					return true;
+				}
+			}
+		}
+		return containsRuntimeSubtypep(cons.car()) || containsRuntimeSubtypep(cons.cdr());
+	}
+
+	/**
+	 * Builds the shared {@code (defun %subtypep-runtime (a b) ...)} dispatch defun; see
+	 * {@link #expandRuntimeSubtypep}.
+	 */
+	private static LispVal runtimeSubtypepDefun(ClosRegistry closRegistry) {
+		LispSymbol a = new LispSymbol("%st_ra");
+		LispSymbol b = new LispSymbol("%st_rb");
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SUBTYPEP_RUNTIME),
+				listToCons(List.of(a, b)), expandRuntimeSubtypep(a, b, closRegistry)));
+	}
+
+	/** The literal type specifier an argument form denotes, or null for a runtime one. */
+	@Nullable private static LispVal literalTypeSpecifier(LispVal arg) {
 		if (arg instanceof LispCons quoted && quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
 				&& quoted.cdr() instanceof LispCons rest) {
 			return rest.car();
@@ -12451,8 +12769,83 @@ public final class LispMacroExpander {
 		if (arg instanceof LispTrue || arg instanceof LispNil) {
 			return arg;
 		}
-		throw new UnsupportedOperationException(
-				LispNames.SUBTYPEP + " supports literal (quoted) type specifiers only: " + cons.print());
+		return null;
+	}
+
+	/**
+	 * Expands a {@code subtypep} whose specifiers are not both literal into a runtime
+	 * dispatch over the compile-time type universe -- the built-in lattice (aliases
+	 * included) plus every registered class under both its qualified and plain spelling.
+	 * The generated form evaluates both specifiers once, answers the constant edges (a
+	 * nil sub or a {@code t} super), and otherwise tests the super against the sub's
+	 * precomputed ancestor list; each pair's answer comes from the same shared
+	 * {@link #subtypep} the literal fold uses, so a runtime name answers exactly like the
+	 * quoted spelling. Symbols outside the universe (and non-symbols) answer nil.
+	 */
+	private static LispVal expandRuntimeSubtypep(LispVal subExpr, LispVal supExpr, ClosRegistry closRegistry) {
+		String prefix = "__st" + MV_COUNTER.getAndIncrement();
+		LispSymbol a = new LispSymbol(prefix + "_a");
+		LispSymbol b = new LispSymbol(prefix + "_b");
+		// Group the universe's names by ancestor set so aliases share one clause.
+		List<String> universe = subtypepUniverse(closRegistry);
+		java.util.Map<List<String>, List<String>> subsByAncestors = new java.util.LinkedHashMap<>();
+		for (String name : universe) {
+			List<String> ancestors = new java.util.ArrayList<>();
+			for (String candidate : universe) {
+				if (subtypep(new LispSymbol(name), new LispSymbol(candidate), closRegistry)) {
+					ancestors.add(candidate);
+				}
+			}
+			subsByAncestors.computeIfAbsent(ancestors, k -> new java.util.ArrayList<>()).add(name);
+		}
+		List<LispVal> ancestorClauses = new java.util.ArrayList<>();
+		for (java.util.Map.Entry<List<String>, List<String>> entry : subsByAncestors.entrySet()) {
+			ancestorClauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, a, quotedSymbolList(entry.getValue())),
+					quotedSymbolList(entry.getKey()))));
+		}
+		ancestorClauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
+		List<LispVal> ancestorCond = new java.util.ArrayList<>();
+		ancestorCond.add(new LispSymbol(LispNames.COND));
+		ancestorCond.addAll(ancestorClauses);
+		LispVal memberTest = makeIf(mvCall(LispNames.MEMBER, b, listToCons(ancestorCond)), LispTrue.INSTANCE,
+				LispNil.INSTANCE);
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		clauses.add(listToCons(List.of(mvCall(LispNames.NULL, a), LispTrue.INSTANCE)));
+		clauses.add(listToCons(List.of(fmtCall(LispNames.EQ_GENERAL, b, LispTrue.INSTANCE), LispTrue.INSTANCE)));
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, memberTest)));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return makeLet(a.name(), subExpr, makeLet(b.name(), supExpr, listToCons(condParts)));
+	}
+
+	/** The runtime-subtypep type universe; see {@link #expandRuntimeSubtypep}. */
+	private static List<String> subtypepUniverse(ClosRegistry closRegistry) {
+		java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+		for (java.util.Map.Entry<String, List<String>> entry : SUBTYPEP_PARENTS.entrySet()) {
+			names.add(entry.getKey());
+			names.addAll(entry.getValue());
+		}
+		names.addAll(List.of("single-float", "double-float", "short-float", "long-float", "base-char", "standard-char",
+				"extended-char", "simple-string", "base-string", "simple-base-string", "simple-vector", "simple-array",
+				"character", "standard-object", "condition", "error", "simple-error", "simple-condition"));
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			names.add(info.name());
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
+			if (qn != null) {
+				names.add(qn.member());
+			}
+		}
+		return List.copyOf(names);
+	}
+
+	/** Builds {@code '(name...)} from name strings. */
+	private static LispVal quotedSymbolList(List<String> names) {
+		List<LispVal> syms = new java.util.ArrayList<>();
+		for (String name : names) {
+			syms.add(new LispSymbol(name));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(syms)));
 	}
 
 	/**

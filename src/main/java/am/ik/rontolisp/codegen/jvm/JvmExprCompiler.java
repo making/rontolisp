@@ -98,6 +98,11 @@ final class JvmExprCompiler {
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileVarRef(name, ctx);
 		}
+		else if (LispNames.STANDARD_OUTPUT_VAR.equals(name) || LispNames.ERROR_OUTPUT_VAR.equals(name)) {
+			// The standard stream variables hold the designator t (the interpreter's
+			// permanent value; print-family redirection through them does not exist).
+			JvmEmitHelper.compileTrue(ctx);
+		}
 		else {
 			// Lisp-2: a bare symbol is a variable reference only; functions must be
 			// referenced via (function name) / #'name.
@@ -356,6 +361,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandScaleFloat(cons), ctx, className);
 				case LispNames.CLASS_OF -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandClassOf(cons, ctx.closRegistry), ctx, className);
+				case LispNames.CLASS_SLOT_DEFS_INTERNAL -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandClassSlotDefs(cons, ctx.closRegistry), ctx, className);
 				case LispNames.SLOT_BOUNDP -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandSlotBoundp(cons, ctx.closRegistry), ctx, className);
 				case LispNames.SLOT_MAKUNBOUND -> JvmExprCompiler

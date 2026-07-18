@@ -23,6 +23,7 @@ import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.BuiltinSystems;
 import am.ik.rontolisp.eval.QuicklispClient;
+import am.ik.rontolisp.eval.ShimLibraries;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -371,6 +372,14 @@ public final class LoadInliner {
 				spliceSystem(dependency, out, ctx, system.baseDir());
 			}
 			for (String file : system.files()) {
+				List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file);
+				if (leafShim != null) {
+					// A substituted leaf module: splice the shim forms in the file's
+					// place (they carry the replaced file's defpackage, no in-package,
+					// so no package bracketing is needed).
+					out.addAll(leafShim);
+					continue;
+				}
 				spliceFile(LispNames.ASDF_LOAD_SYSTEM, SourceLoader.resolve(system.baseDir(), file), out, ctx);
 			}
 		}

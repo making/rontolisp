@@ -143,9 +143,8 @@ API は提供しません。
 
 ## 実際に何がロードできるか
 
-現在、実世界の 6 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
-(インタプリタ、JVM、WASM Preview 1、`--component`) で検証済みです。7
-つ目 (jzon) はインタープリタでロードできます:
+現在、実世界の 7 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
+(インタプリタ、JVM、WASM Preview 1、`--component`) で検証済みです:
 
 - **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
   `split-sequence`/`split-sequence-if`/`split-sequence-if-not` が文字列と
@@ -203,22 +202,26 @@ API は提供しません。
   はそこで結果が変わります。
 
 - **[com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4** (`(ql:quickload
-  '#:com.inuoe.jzon)` による本物のライブラリ、**インタープリタのみ**): README
+  '#:com.inuoe.jzon)` による本物のライブラリ): README
   のウォークスルーを含む JSON のパースと文字列化 — ハッシュテーブル /
   ベクタのラウンドトリップ、`:key-fn`/`jzon:coerce-key`、可変文字列へ書き込む
   Gray ストリームクラス経由の `:stream` ライタ API、インクリメンタルな
   `jzon:writer`、`closer-mop` シムの実スロットリストによる CLOS
   インスタンスの文字列化。依存システム (`closer-mop`、`flexi-streams`、
-  `float-features`、`trivial-gray-streams`、`uiop`) は下記の組み込みシムシステムに解決されます。JVM
-  / WASM コンパイルパスではまだ完全なライブラリは動きません (float
-  リーダ/プリンタのテーブルが WASM の数値モデルを超える 64 ビット/bignum
-  ビット演算を行い、読み込み時にロード時状態を参照するため)。jzon
-  が要求した個々の言語機能は — 蓄積先の可変フィルポインタ付き文字列バッファを
-  含めて — すべてのバックエンドでコンパイルされ、ci-spec の
-  `jzon-residue-features` と `mutable-strings-cross-backend`
-  ケースで追跡されています。
+  `float-features`、`trivial-gray-streams`、`uiop`)
+  は下記の組み込みシムシステムに解決され、3 つの数値リーフコンポーネント
+  (`eisel-lemire.lisp`/`ratio-to-double.lisp`/`schubfach.lisp` —
+  eisel-lemire の float リーダと Schubfach の float プリンタ。u64/u128
+  ビット演算が WASM の数値モデルを超えます) はロード時に rontolisp
+  ネイティブの float 演算・プリンタによる組み込みシムに置き換えられます。
+  トレードオフ: float のテキストは Schubfach の最短ラウンドトリップ文字列では
+  なく rontolisp のバックエンド間で同一な形になり、極端な指数のパースは正確な
+  丸めから数 ulp ずれることがあります (よく使う範囲の `|exp10| <= 22`
+  はちょうど 1 回の丸めです)。WASM バックエンドでは通常の WASM の注意点
+  (巨大 float の印字形、ハッシュテーブルの巡回順、非 ASCII `\u`
+  エスケープ — `code-char` がバイト単位) が適用されます。
 
-6 ライブラリ全ての実行可能なデモ — バックエンド別の実行コマンドと期待
+7 ライブラリ全ての実行可能なデモ — バックエンド別の実行コマンドと期待
 出力付き — は
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf)
 にあります。

@@ -7,6 +7,7 @@ import org.jspecify.annotations.Nullable;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
@@ -596,6 +597,12 @@ final class WasmArrayCompiler {
 
 	static void compileAref(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
+		if (args.size() == 2) {
+			// (aref a): a rank-0 array holds its one element at row-major index 0.
+			compileAref(new LispCons(args.get(0),
+					new LispCons(args.get(1), new LispCons(new LispInteger(0), LispNil.INSTANCE))), ctx);
+			return;
+		}
 		int rank = args.size() - 2;
 		// Evaluate the array once; a packed farray reads its unboxed f64 store directly,
 		// a

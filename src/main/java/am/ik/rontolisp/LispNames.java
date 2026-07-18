@@ -3173,6 +3173,12 @@ public final class LispNames {
 	 */
 	public static final String SUBTYPEP = "subtypep";
 
+	/**
+	 * The shared runtime-{@code subtypep} dispatch defun the compilers inject once per
+	 * program when a {@code subtypep} call carries a non-literal type specifier.
+	 */
+	public static final String SUBTYPEP_RUNTIME = "%subtypep-runtime";
+
 	/** The {@code char-name} built-in function. */
 	public static final String CHAR_NAME = "char-name";
 

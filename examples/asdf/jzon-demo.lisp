@@ -3,9 +3,10 @@
 ;;;; JSON parsing and stringification: scalars, nested structures and a
 ;;;; round-trip. Its dependencies (closer-mop, flexi-streams,
 ;;;; float-features, trivial-gray-streams, uiop) resolve to rontolisp's
-;;;; built-in shim systems. INTERPRETER ONLY for now: the compiled backends
-;;;; cannot run jzon's float printer (64-bit/bignum bit arithmetic) or its
-;;;; adjustable-string buffers; see the systems guide.
+;;;; built-in shim systems, and its numeric leaf components (the
+;;;; eisel-lemire float reader / Schubfach float printer) are replaced at
+;;;; load time by shims over rontolisp's native float arithmetic -- so the
+;;;; same program runs on all four backends; see the systems guide.
 ;;;;
 ;;;; Run (library vendored in this repository):
 ;;;;   rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src

@@ -2721,6 +2721,38 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispString path)) {
 				throw new LispEvalException(LispNames.OPEN + " expects a string filename");
 			}
+			// The CL keyword-argument shape ((open path :direction :input :element-type
+			// 'character ...)) is normalized to the positional one; :external-format
+			// (UTF-8 is the native format), :if-exists and :if-does-not-exist (the
+			// create/supersede defaults already match) are accepted and dropped.
+			if (args.size() > 2 && args.get(1) instanceof LispSymbol first && first.name().startsWith(":")
+					&& !LispNames.INPUT_KEYWORD.equals(first.name())
+					&& !LispNames.OUTPUT_KEYWORD.equals(first.name())) {
+				LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
+				LispVal elementType = null;
+				for (int i = 1; i < args.size(); i += 2) {
+					if (i + 1 >= args.size() || !(args.get(i) instanceof LispSymbol key)
+							|| !key.name().startsWith(":")) {
+						throw new LispEvalException(LispNames.OPEN + " expects :option value pairs");
+					}
+					switch (key.name()) {
+						case ":direction" -> direction = args.get(i + 1);
+						case ":element-type" -> elementType = args.get(i + 1);
+						case ":external-format", ":if-exists", ":if-does-not-exist" -> {
+							if (!LispMacroExpander.ignorableOpenOptionValue(key.name(), args.get(i + 1))) {
+								throw new LispEvalException(
+										LispNames.OPEN + ": " + key.name() + " supports only the native default value");
+							}
+						}
+						default -> throw new LispEvalException(LispNames.OPEN + ": unsupported option " + key.name());
+					}
+				}
+				List<LispVal> positional = new ArrayList<>(List.of(args.get(0), direction));
+				if (elementType != null) {
+					positional.add(elementType);
+				}
+				args = positional;
+			}
 			boolean output = false;
 			if (args.size() > 1) {
 				if (!(args.get(1) instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())

@@ -56,8 +56,9 @@ final class WasmFunctionFormCompiler {
 			compileNamed(sym.name(), ctx);
 			return;
 		}
-		throw new UnsupportedOperationException("Cannot compile: " + cons.print()
-				+ " (symbol-function requires a quoted symbol literal in compiled mode)");
+		// A non-literal designator becomes a cold-path runtime signal (no runtime
+		// name-to-function table without --dynamic).
+		WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeSymbolFunctionError(cons), ctx);
 	}
 
 	static void compileNamed(String name, WasmLispCompiler.Ctx ctx) {

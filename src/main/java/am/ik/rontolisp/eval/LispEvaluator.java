@@ -1299,6 +1299,16 @@ public final class LispEvaluator {
 				loadSystem(dependency);
 			}
 			for (String file : system.files()) {
+				List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file);
+				if (leafShim != null) {
+					// A substituted leaf module: evaluate the shim forms through the
+					// package resolver (the defpackage must register before the
+					// dependent components resolve), like the replaced file would.
+					for (LispVal form : leafShim) {
+						eval(form);
+					}
+					continue;
+				}
 				loadFile(LispNames.ASDF_LOAD_SYSTEM, file);
 			}
 		}
