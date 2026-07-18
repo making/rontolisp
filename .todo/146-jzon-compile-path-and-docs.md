@@ -63,6 +63,47 @@ that keeps the FULL library interpreter-only, after the 2026-07-18 sweep.
   `(ash 1 128)` wraps today). The JVM backend has bignums, so a JVM-only
   jzon run would need just the mutable strings above plus
   `AsdfLibraryE2eSupport` wiring.
+
+## Realization route for JVM/WASM (numeric shim + mutable strings)
+
+Investigated 2026-07-18. Compiling the real jzon today dies at compile time
+(not runtime): a `#.` marker in the eisel-lemire/schubfach power-of-ten tables
+references a load-time special (`*%detailed-powers-of-ten-max*`) that is unbound
+in the macro-time evaluator, so `RontoLispCli.compileToFile` throws
+`... is unbound` before any code runs. Three blockers, split by shim-ability:
+
+1. **Compile-time `#.` table crash** + 3. **wasm-GC bignum** -- BOTH are
+   SHIMMABLE, cleanly, without touching jzon.lisp. jzon's contract with its
+   numeric leaf modules is exactly 4 package-qualified functions:
+   `com.inuoe.jzon/eisel-lemire:make-double` (mantissa exp10 sign -> double,
+   float parse), `com.inuoe.jzon/ratio-to-double:ratio-to-double`,
+   `com.inuoe.jzon/schubfach:write-float` / `:write-double` (float print).
+   Replace `eisel-lemire.lisp`/`schubfach.lisp`/`ratio-to-double.lisp` with
+   shim files backed by rontolisp-native float read/print (`%ieee754-*` + the
+   standard reader/printer): the `#.` tables vanish (they live in those files)
+   AND the u64/u128 arithmetic is no longer needed, so wasm-GC loses its extra
+   handicap vs the JVM. Fits the existing `ShimLibraries` "leaf-module
+   replacement" pattern. TRADEOFF: shimmed float output is NOT bit-identical to
+   schubfach's shortest-round-trip string (`.todo/46` print-shape), so the
+   stringify exact-match assertions must relax. (Bit-exact instead = implement
+   real wasm-GC bignum, the heavy path -- deferred.)
+2. **Mutable strings** -- NOT shimmable. It lives INSIDE jzon.lisp
+   (`read-string` accumulator ~299-309/416+, string-output stream ~1220-1315),
+   not in a swappable dependency, so avoiding it means either editing the target
+   library (defeats "run the REAL jzon", the point of `JzonE2eTest`) or building
+   the mutable-string runtime above. Confirmed empirically: on the JVM compile
+   path `make-array :element-type 'character` is an immutable `String`, and the
+   adjustable+fill-pointer accumulator pattern crashes at runtime
+   (`ClassCastException: String cannot be cast to ArrayList` in `_rmSet`).
+
+Plan: (a) numeric shim first -- low cost, kills blockers 1+3 at once and levels
+WASM with the JVM; (b) THEN implement the mutable-string type (the single
+biggest item -- both codegens + every string-consuming helper); (c) run the full
+library on all 4 backends to flush any RESIDUAL compile-path gap not caught by
+the phase-1/2 sweeps. Sufficiency of (a)+(b) is UNPROVEN until (c) passes -- the
+two are the only KNOWN blockers, not a guarantee. **Next session: start on the
+mutable-string runtime.**
+
 - **Playground `#.`**: the browser frontend has no `UserMacroExpander`-style
   macro-time evaluator wiring for markers; Compile buttons keep the read
   error (documented in data-types.md).
