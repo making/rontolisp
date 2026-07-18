@@ -20,6 +20,7 @@ on:
     - examples/browser/webgl-heat3d/**
     - examples/browser/webgl-robot-arm/**
     - examples/browser/webgl-platformer/**
+    - examples/browser/webgl-battlefront/**
     - examples/browser/webgl-triangle/**
     - examples/browser/webgl-cube/**
     - src/**

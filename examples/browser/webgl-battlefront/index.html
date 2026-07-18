@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>battlefront.lisp — a one-arena snow-battle skirmish, in Lisp</title>
+    <style>
+      :root {
+        --void: #05070d;
+        --ink: #ffffff;
+        --muted: #b9c6dc;
+        --accent: #ffe81f;          /* the crawl yellow */
+        --saber: #63b4ff;
+        --blaster: #57ff7a;
+        --sith: #ff3b30;
+        --panel: #0a1626cc;
+        --line: #ffffff2b;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--void);
+        color: var(--ink);
+        font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      }
+
+      #stage {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        cursor: crosshair;
+        touch-action: none;
+      }
+
+      .hud {
+        position: fixed;
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+        padding: 1rem 1.15rem;
+        pointer-events: none;
+        z-index: 2;
+      }
+
+      .hud > * { pointer-events: auto; }
+
+      .hud.top-left { top: 0; left: 0; max-width: 34rem; }
+
+      h1 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-shadow: 0 1px 4px #000a;
+      }
+
+      h1 .lisp { color: var(--accent); }
+
+      .tagline {
+        margin: 0;
+        font-size: 0.73rem;
+        line-height: 1.55;
+        color: var(--muted);
+        text-shadow: 0 1px 2px #0008;
+      }
+
+      .tagline em { font-style: normal; color: var(--ink); }
+
+      /* top-right meters */
+      .hud.top-right { top: 0; right: 0; align-items: flex-end; }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        backdrop-filter: blur(6px);
+      }
+
+      .stats {
+        display: flex;
+        gap: 1.2rem;
+        padding: 0.55rem 0.95rem;
+      }
+
+      .stat { text-align: right; }
+
+      .stat b {
+        display: block;
+        font-size: 1rem;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .stat span {
+        font-size: 0.58rem;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      /* the vitals: an HP bar and the weapon chip, raised clear above the
+         controls strip at the bottom */
+      .hud.bottom-centre {
+        left: 50%;
+        bottom: 3.6rem;
+        transform: translateX(-50%);
+        align-items: center;
+        gap: 0.5rem;
+        z-index: 3;
+      }
+
+      .vitals {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 0.55rem 1rem;
+      }
+
+      .bar {
+        position: relative;
+        width: 16rem;
+        height: 0.95rem;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        overflow: hidden;
+        background: #ffffff14;
+      }
+
+      .bar > i {
+        position: absolute;
+        inset: 0;
+        transform-origin: left center;
+        transform: scaleX(1);
+        transition: transform 0.12s linear, background 0.2s;
+      }
+
+      #hp-fill { background: linear-gradient(90deg, #ff5a4d, var(--accent) 55%, #7bffa0); }
+
+      /* the HP number sits over the bar, and the whole chip pulses red when low */
+      .bar b {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        font-size: 0.62rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: #06121f;
+        text-shadow: 0 1px 1px #ffffff66;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .hp-wrap { display: flex; flex-direction: column; gap: 0.26rem; }
+      .hp-wrap span {
+        font-size: 0.58rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
+      }
+
+      .hp-wrap.low span { color: var(--sith); }
+      .hp-wrap.low .bar { animation: hp-pulse 0.6s ease-in-out infinite; }
+      @keyframes hp-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 #ff3b3000; }
+        50%      { box-shadow: 0 0 12px 2px #ff3b30cc; }
+      }
+
+      .weapon {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        min-width: 8.6rem;
+      }
+
+      .weapon .dot {
+        width: 0.7rem; height: 0.7rem; border-radius: 50%;
+        box-shadow: 0 0 8px 1px currentColor;
+      }
+
+      .weapon.saber { color: var(--saber); }
+      .weapon.blaster { color: var(--blaster); }
+
+      /* the boss bar, shown only while Vader is engaged */
+      .hud.boss {
+        top: 3.4rem;
+        left: 50%;
+        transform: translateX(-50%);
+        align-items: center;
+        display: none;
+      }
+
+      .hud.boss.on { display: flex; }
+
+      .boss-label {
+        font-size: 0.7rem; letter-spacing: 0.24em; text-transform: uppercase;
+        color: var(--sith); text-shadow: 0 0 10px #ff3b3080;
+      }
+
+      .boss-bar { width: 22rem; height: 0.6rem; }
+      #boss-fill { background: linear-gradient(90deg, #7a0000, var(--sith)); }
+
+      .boss-hint {
+        margin-top: 0.28rem;
+        font-size: 0.6rem; letter-spacing: 0.09em; text-transform: uppercase;
+        color: var(--muted); text-shadow: 0 1px 2px #0008;
+      }
+      /* nudge harder while the player is firing the (deflected) blaster at him */
+      .boss-hint.warn { color: var(--sith); animation: hint-pulse 0.7s ease-in-out infinite; }
+      @keyframes hint-pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+      /* the aim reticle */
+      #reticle {
+        position: fixed;
+        left: 50%; top: 50%;
+        width: 22px; height: 22px;
+        transform: translate(-50%, -50%);
+        z-index: 1;
+        pointer-events: none;
+        opacity: 0.85;
+      }
+      #reticle::before, #reticle::after {
+        content: ""; position: absolute; background: var(--accent);
+        box-shadow: 0 0 4px #000;
+      }
+      #reticle::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
+      #reticle::after  { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
+
+      /* the keys hint */
+      .hud.bottom-left { bottom: 0; left: 0; }
+      .keys {
+        padding: 0.55rem 0.9rem;
+        font-size: 0.7rem;
+        line-height: 1.7;
+        color: var(--muted);
+      }
+      .keys kbd {
+        display: inline-block;
+        min-width: 1.4em;
+        padding: 0 0.3em;
+        border: 1px solid var(--line);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        text-align: center;
+        font: inherit;
+        color: var(--ink);
+      }
+      .keys a { color: var(--accent); }
+
+      /* the hurt vignette */
+      #hurt {
+        position: fixed; inset: 0; z-index: 1; pointer-events: none; opacity: 0;
+        box-shadow: inset 0 0 12rem 3rem #ff2a1eaa;
+        transition: opacity 0.1s linear;
+      }
+
+      /* centre overlays: click-to-play, victory, defeat */
+      .overlay {
+        position: fixed; inset: 0; display: none; place-items: center;
+        text-align: center; z-index: 3; pointer-events: none;
+      }
+      .overlay.on { display: grid; }
+      .overlay .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 1.5rem 2.4rem;
+        backdrop-filter: blur(8px);
+      }
+      .overlay h2 { margin: 0 0 0.5rem; font-size: 1.7rem; letter-spacing: 0.16em; }
+      #win-card h2 { color: var(--accent); text-shadow: 0 0 16px #ffe81f66; }
+      #lose-card h2 { color: var(--sith); text-shadow: 0 0 16px #ff3b3066; }
+      #start-card h2 { color: var(--saber); text-shadow: 0 0 16px #63b4ff66; }
+      .overlay p { margin: 0; font-size: 0.82rem; color: var(--muted); line-height: 1.7; }
+      .overlay button {
+        pointer-events: auto;
+        margin-top: 1rem;
+        font: inherit; font-size: 0.82rem; font-weight: 700; letter-spacing: 0.05em;
+        color: var(--void); background: var(--accent);
+        border: 0; border-radius: 7px; padding: 0.55rem 1.4rem; cursor: pointer;
+      }
+      .overlay button:hover:not(:disabled) { filter: brightness(1.08); }
+      .overlay button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+      .overlay button:disabled { opacity: 0.4; cursor: default; }
+
+      #error {
+        position: fixed; inset: 0; display: none; place-items: center; padding: 2rem;
+        text-align: center; font-size: 0.85rem; line-height: 1.7;
+        background: var(--void); z-index: 5; white-space: pre-wrap;
+      }
+
+      @media (max-width: 640px) {
+        .hud.top-left { max-width: 62vw; }
+        .tagline { display: none; }
+        .bar { width: 10rem; }
+        .boss-bar { width: 14rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage" aria-label="A snow-battle arena: You on Hoth against stormtroopers, AT-AT walkers and Vader"></canvas>
+
+    <div id="reticle"></div>
+    <div id="hurt"></div>
+
+    <aside class="hud top-right">
+      <div class="panel stats" role="status">
+        <div class="stat"><b id="m-troopers">0</b><span>troopers</span></div>
+        <div class="stat"><b id="m-walkers">0</b><span>walkers</span></div>
+        <div class="stat"><b id="m-fps">—</b><span>fps</span></div>
+      </div>
+    </aside>
+
+    <div class="hud boss" id="boss">
+      <div class="boss-label">Vader</div>
+      <div class="panel bar boss-bar"><i id="boss-fill"></i></div>
+      <div class="boss-hint" id="boss-hint">deflects blaster fire — use the lightsaber (F)</div>
+    </div>
+
+    <div class="hud bottom-centre">
+      <div class="panel vitals">
+        <div class="hp-wrap" id="hp-wrap">
+          <span id="hp-label">You · HP</span>
+          <div class="bar"><i id="hp-fill"></i><b id="hp-num">100%</b></div>
+        </div>
+        <div class="weapon blaster" id="weapon">
+          <span class="dot"></span><span id="weapon-name">BLASTER</span>
+        </div>
+      </div>
+    </div>
+
+    <aside class="hud bottom-left">
+      <p class="panel keys">
+        <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move ·
+        <kbd>Space</kbd> jump ·
+        mouse aims ·
+        <kbd>click</kbd> attack ·
+        <kbd>F</kbd> swap weapon ·
+        <kbd>R</kbd> restart —
+        blast the troopers &amp; walkers, then finish Vader with the saber ·
+        <a href="https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-battlefront">source</a>
+      </p>
+    </aside>
+
+    <div class="overlay on" id="start">
+      <div class="card" id="start-card">
+        <h2>HOTH</h2>
+        <p>
+          Move with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, aim with the mouse,
+          click to attack.<br />
+          <kbd>F</kbd> swaps the lightsaber and the blaster — Vader's blade deflects
+          blaster bolts,<br />so cut the boss down with your own.
+        </p>
+        <button id="start-btn" type="button">click to deploy</button>
+      </div>
+    </div>
+
+    <div class="overlay" id="win">
+      <div class="card" id="win-card">
+        <h2>THE EMPIRE FALLS</h2>
+        <p id="win-text"></p>
+        <button id="win-btn" type="button">redeploy (R)</button>
+      </div>
+    </div>
+
+    <div class="overlay" id="lose">
+      <div class="card" id="lose-card">
+        <h2>GAME OVER</h2>
+        <p>Your HP hit zero — the garrison holds the field.<br />Regroup and try again.</p>
+        <button id="lose-btn" type="button">redeploy (R)</button>
+      </div>
+    </div>
+
+    <div id="error" role="alert"></div>
+
+    <script type="module">
+      import { glImports, uiImports } from "../webgl-common/gl-imports.js";
+
+      const canvas = document.getElementById("stage");
+      const errorBox = document.getElementById("error");
+      const mTroopers = document.getElementById("m-troopers");
+      const mWalkers = document.getElementById("m-walkers");
+      const mFps = document.getElementById("m-fps");
+      const hpFill = document.getElementById("hp-fill");
+      const hpNum = document.getElementById("hp-num");
+      const hpWrap = document.getElementById("hp-wrap");
+      const weaponEl = document.getElementById("weapon");
+      const weaponName = document.getElementById("weapon-name");
+      const bossEl = document.getElementById("boss");
+      const bossFill = document.getElementById("boss-fill");
+      const bossHint = document.getElementById("boss-hint");
+      const hurtEl = document.getElementById("hurt");
+      const startOv = document.getElementById("start");
+      const winOv = document.getElementById("win");
+      const winText = document.getElementById("win-text");
+      const loseOv = document.getElementById("lose");
+
+      function fail(message) {
+        errorBox.textContent = message;
+        errorBox.style.display = "grid";
+      }
+
+      // ---- the WebGL2 context: created here, driven entirely from Lisp -----
+
+      const gl2 = canvas.getContext("webgl2", { antialias: true });
+      if (!gl2) {
+        fail("This page needs WebGL2. Any current Chrome, Firefox, Safari or Edge has it.");
+        throw new Error("no webgl2");
+      }
+
+      // ---- the import object: everything Lisp asked for --------------------
+      //
+      // battlefront.lisp declares the same host boundary as the other webgl-*
+      // demos, plus one extra staging entry (setEmissive) so a vertex can glow.
+      // The WebGL2 entries are GENERATED from the shared ../webgl-common/gl.wit;
+      // the handful battlefront.lisp declares itself are written by hand beside
+      // them.
+
+      let lisp; // the module's exports, assigned after instantiation below
+
+      const handles = [];
+      const addHandle = (obj) => handles.push(obj) - 1;
+
+      const utf8 = new TextDecoder();
+      const str = (ptr, len) => utf8.decode(new Uint8Array(lisp.memory.buffer, ptr, len));
+      const retStr = (s) => {
+        const bytes = new TextEncoder().encode(s);
+        const ptr = lisp.__ronto_alloc(bytes.length);
+        new Uint8Array(lisp.memory.buffer).set(bytes, ptr);
+        return [ptr, bytes.length];
+      };
+
+      // Staging: Lisp fills one 10-float vertex (position, normal, color,
+      // emissive) at a time and uploads slices with uploadVertices; `floats`
+      // carries the mat4 uniform.
+      const FLOATS_PER_VERT = 10;
+      const MAX_VERTS = 16384;
+      const staging = new Float32Array(FLOATS_PER_VERT * MAX_VERTS);
+      const floats = new Float32Array(16);
+      const curColor = [1, 1, 1];  // latched by setColor
+      let curEmit = 0;             // latched by setEmissive
+
+      const ui = {
+        fail: (message) => {
+          fail(message);
+          throw new Error("battlefront.lisp failed");
+        },
+      };
+
+      const imports = {
+        gl: {
+          ...glImports({ gl: gl2, handles, addHandle, str, retStr }),
+          // battlefront.lisp's own staging imports.
+          uniformMatrix4fv: (loc) => gl2.uniformMatrix4fv(handles[loc], false, floats),
+          uploadVertices: (off, count) =>
+            gl2.bufferSubData(gl2.ARRAY_BUFFER, off * 4, staging, off, count),
+          setColor: (r, g, b) => { curColor[0] = r; curColor[1] = g; curColor[2] = b; },
+          setEmissive: (e) => { curEmit = e; },
+          setVertex: (i, x, y, z, nx, ny, nz) => {
+            const o = i * FLOATS_PER_VERT;
+            staging[o] = x;
+            staging[o + 1] = y;
+            staging[o + 2] = z;
+            staging[o + 3] = nx;
+            staging[o + 4] = ny;
+            staging[o + 5] = nz;
+            staging[o + 6] = curColor[0];
+            staging[o + 7] = curColor[1];
+            staging[o + 8] = curColor[2];
+            staging[o + 9] = curEmit;
+          },
+          setFloat: (i, v) => { floats[i] = v; },
+        },
+        canvas: {
+          width: () => canvas.width,
+          height: () => canvas.height,
+        },
+        math: { sin: Math.sin, cos: Math.cos, atan2: Math.atan2, random: Math.random },
+        ui: uiImports({ ui, str }),
+      };
+
+      // ---- UI: canvas sizing ------------------------------------------------
+
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.round(canvas.clientWidth * dpr);
+        canvas.height = Math.round(canvas.clientHeight * dpr);
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      // ---- load the reactor -------------------------------------------------
+
+      try {
+        const bytes = await (await fetch("./battlefront.wasm")).arrayBuffer();
+        ({ instance: { exports: lisp } } = await WebAssembly.instantiate(bytes, imports));
+      }
+      catch (e) {
+        fail(
+          "Could not instantiate battlefront.wasm — this page needs WebAssembly GC support " +
+          "(Chrome 119+, Firefox 120+, Safari 18.2+, Edge 119+).\n" + e
+        );
+        throw e;
+      }
+      lisp._initialize();          // builds the pipeline and bakes the snow field
+      window.lisp = lisp;          // poke it from the console: lisp.getHp(), ...
+
+      // ---- input: Minecraft-style mouse-look via Pointer Lock ---------------
+      //
+      // The page only measures gestures and maps keys to small integers; held
+      // state, the aim, the weapon and every rule are Lisp's business.
+
+      const keyCodes = new Map([
+        ["KeyA", 0], ["ArrowLeft", 0],
+        ["KeyD", 1], ["ArrowRight", 1],
+        ["KeyW", 2], ["ArrowUp", 2],
+        ["KeyS", 3], ["ArrowDown", 3],
+        ["Space", 4],
+      ]);
+
+      const locked = () => document.pointerLockElement === canvas;
+
+      function requestPlay() {
+        canvas.requestPointerLock?.();
+      }
+      document.getElementById("start-btn").addEventListener("click", requestPlay);
+      // Only (re)lock to play from a live/menu state -- never while a win/lose
+      // banner is up, so a stray attack click can't grab the pointer back and
+      // the cursor stays free to reach the redeploy button.
+      canvas.addEventListener("click", () => {
+        if (lisp.getState() === 0 && !locked()) requestPlay();
+      });
+
+      document.addEventListener("pointerlockchange", () => {
+        if (locked()) {
+          startOv.classList.remove("on");
+        } else {
+          // dropped lock: release keys and show the prompt again (unless the
+          // round is over, when its own banner is up)
+          for (const c of new Set(keyCodes.values())) lisp.setKey(c, 0);
+          lisp.setAttack(0);
+          if (lisp.getState() === 0) startOv.classList.add("on");
+        }
+      });
+
+      // aim: relative mouse deltas while locked
+      window.addEventListener("mousemove", (e) => {
+        if (!locked()) return;
+        lisp.orbit(e.movementX / canvas.clientHeight,
+                   e.movementY / canvas.clientHeight);
+      });
+
+      // attack: left mouse button
+      canvas.addEventListener("mousedown", (e) => {
+        if (!locked() || e.button !== 0) return;
+        lisp.setAttack(1);
+      });
+      window.addEventListener("mouseup", (e) => {
+        if (e.button === 0) lisp.setAttack(0);
+      });
+
+      canvas.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        lisp.zoom(e.deltaY * 0.003);
+      }, { passive: false });
+
+      window.addEventListener("keydown", (e) => {
+        if (e.code === "KeyR" && !e.repeat) {
+          restartRound();
+          return;
+        }
+        if (e.code === "KeyF" && !e.repeat) {
+          e.preventDefault();
+          lisp.switchWeapon();
+          return;
+        }
+        const code = keyCodes.get(e.code);
+        if (code === undefined) return;
+        e.preventDefault();
+        if (!e.repeat) lisp.setKey(code, 1);
+      });
+
+      window.addEventListener("keyup", (e) => {
+        const code = keyCodes.get(e.code);
+        if (code === undefined) return;
+        e.preventDefault();
+        lisp.setKey(code, 0);
+      });
+
+      window.addEventListener("blur", () => {
+        for (const c of new Set(keyCodes.values())) lisp.setKey(c, 0);
+        lisp.setAttack(0);
+      });
+
+      // A short cooldown after a round ends before a restart is accepted, so
+      // click-spamming through the final blow doesn't instantly redeploy. The
+      // redeploy buttons are disabled for the same window.
+      const winBtn = document.getElementById("win-btn");
+      const loseBtn = document.getElementById("lose-btn");
+      const RESTART_DELAY = 1400;
+      let restartAllowedAt = 0;
+
+      function armRestartCooldown(now) {
+        restartAllowedAt = now + RESTART_DELAY;
+        for (const b of [winBtn, loseBtn]) b.disabled = true;
+        setTimeout(() => { for (const b of [winBtn, loseBtn]) b.disabled = false; },
+                   RESTART_DELAY);
+      }
+
+      function restartRound() {
+        if (performance.now() < restartAllowedAt) return;   // still in cooldown
+        lisp.restart();
+        winOv.classList.remove("on");
+        loseOv.classList.remove("on");
+        if (!locked()) requestPlay();
+      }
+      winBtn.addEventListener("click", restartRound);
+      loseBtn.addEventListener("click", restartRound);
+
+      // ---- HUD + the frame loop ---------------------------------------------
+
+      let shownState = 0;
+      let lastFpsUpdate = 0, framesSince = 0;
+      // The world's clock only advances while the player is deployed (pointer
+      // locked) and the round is live, so the opening scene is a frozen diorama
+      // and pressing Esc pauses the battle rather than letting you die on the
+      // menu.
+      let simTime = 0;
+      let lastNow = performance.now();
+
+      function updateHud(now) {
+        mTroopers.textContent = lisp.getTroopers();
+        mWalkers.textContent = lisp.getWalkers();
+
+        const hp = Math.max(0, lisp.getHp());
+        hpFill.style.transform = `scaleX(${hp / 100})`;
+        hpNum.textContent = `${hp}%`;
+        hpWrap.classList.toggle("low", hp > 0 && hp <= 30);
+
+        const weapon = lisp.getWeapon();
+        if (weapon === 0) {
+          weaponEl.className = "weapon saber";
+          weaponName.textContent = "LIGHTSABER";
+        } else {
+          weaponEl.className = "weapon blaster";
+          weaponName.textContent = "BLASTER";
+        }
+
+        if (lisp.bossActive() === 1) {
+          bossEl.classList.add("on");
+          bossFill.style.transform = `scaleX(${Math.max(0, lisp.bossHp()) / 100})`;
+          // flag the "use the saber" hint hard while the blaster is out
+          bossHint.classList.toggle("warn", weapon === 1);
+        } else {
+          bossEl.classList.remove("on");
+        }
+
+        hurtEl.style.opacity = Math.min(1, lisp.getHurt() * 2.6);
+
+        if (now - lastFpsUpdate > 500) {
+          mFps.textContent = Math.round((framesSince * 1000) / (now - lastFpsUpdate));
+          lastFpsUpdate = now;
+          framesSince = 0;
+        }
+
+        const state = lisp.getState();
+        if (state !== shownState) {
+          shownState = state;
+          if (state === 1) {
+            winText.textContent =
+              `${lisp.getTroopers()} troopers still standing · Vader is no more.`;
+            winOv.classList.add("on");
+            armRestartCooldown(now);
+            document.exitPointerLock?.();
+          } else if (state === 2) {
+            loseOv.classList.add("on");
+            armRestartCooldown(now);
+            document.exitPointerLock?.();
+          } else {
+            winOv.classList.remove("on");
+            loseOv.classList.remove("on");
+          }
+        }
+      }
+
+      function tick(now) {
+        const real = (now - lastNow) / 1000;
+        lastNow = now;
+        // Advance the world clock while playing (locked) OR whenever a round has
+        // ended (state !== 0), so the victory fireworks and the aftermath keep
+        // animating even though the pointer is released. Only the opening/paused
+        // menu (state 0, unlocked) stays a frozen diorama.
+        if (lisp.getState() !== 0 || locked()) simTime += real;
+        lisp.frame(simTime);               // Lisp steps the world and draws
+        framesSince++;
+        updateHud(now);
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    </script>
+  </body>
+</html>
