@@ -18,9 +18,22 @@ names: `defvar`/`defparameter`/`defconstant`, plus `(declaim (special ...))` /
 identifier (NOT registered as a cl symbol -- it only appears inside a declaration
 specifier, and registering it would perturb the pinned introspection counts). The
 earmuffs (`*x*`) are a style hint, not the mechanism. Local `(declare (special
-x))` is NOT honored (rare). A special is always ALSO a global (its default value
-when unbound); on the compile path specials are unioned into the
-`GlobalVarCollector` set so each gets a backing store.
+x))` IS honored, PESSIMISTICALLY: `SpecialVarCollector.collectForm` recurses
+into every form (skipping `quote`) and a name declared special anywhere becomes
+special program-wide -- the same treatment a `declaim` would give it (cl-ppcre's
+convert phase threads its whole state through let-bound locally-declared
+specials). The `declare` head and the `special` clause head are matched
+package-insensitively (`splitQualified`): neither is a registered cl symbol, so
+under `(in-package p)` the resolver spells them `p::declare`/`p::special`. The
+interpreter collects at the top-level `eval(expr)` entry, BEFORE evaluating, so
+a defun's local declares take effect for everything defined after it. Because
+symbol reads consult the dynamic store BEFORE the lexical chain, a lambda or
+macro parameter whose name is special must ALSO bind dynamically
+(`LispEvaluator.apply`/`expandUserMacro` push/pop `DynamicBindings` for such
+params) -- otherwise an active outer dynamic binding shadows the parameter. A
+special is always ALSO a global (its default value when unbound); on the
+compile path specials are unioned into the `GlobalVarCollector` set so each
+gets a backing store.
 
 ## Interpreter (`LispEvaluator`) -- full fidelity, thread-scoped
 

@@ -344,6 +344,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx, className);
 				case LispNames.STREAMP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons), ctx, className);
+				case LispNames.SIMPLE_STRING_P ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx, className);
 				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons), ctx, className);
 				case LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.PATHNAMEP -> JvmExprCompiler
@@ -397,6 +399,14 @@ final class JvmExprCompiler {
 				case LispNames.CHAR_EQ -> JvmCharCompiler.compileEq(cons, ctx, className);
 				case LispNames.CHAR_LT -> JvmCharCompiler.compileLt(cons, ctx, className);
 				case LispNames.CHAR_LE -> JvmCharCompiler.compileLe(cons, ctx, className);
+				case LispNames.CHAR_GT -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandCharDescending(cons, LispNames.CHAR_LT), ctx, className);
+				case LispNames.CHAR_GE -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandCharDescending(cons, LispNames.CHAR_LE), ctx, className);
+				case LispNames.CHAR_NE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCharNe(cons), ctx, className);
+				case LispNames.CHAR_EQUAL ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCharEqual(cons), ctx, className);
 				case LispNames.PARSE_INTEGER ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandParseInteger(cons), ctx, className);
 				case LispNames.VALUES_LIST ->
@@ -469,6 +479,10 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDoStar(cons), ctx, className);
 				case LispNames.LOOP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLoop(cons), ctx, className);
 				case LispNames.BLOCK_INTERNAL -> JvmBlockCompiler.compile(cons, ctx, className);
+				case LispNames.BLOCK ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandBlock(cons), ctx, className);
+				case LispNames.RETURN_FROM ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReturnFromLite(cons), ctx, className);
 				case LispNames.UNWIND_PROTECT -> JvmUnwindProtectCompiler.compile(cons, ctx, className);
 				case LispNames.RETURN -> JvmReturnCompiler.compile(cons, ctx, className);
 				case LispNames.INCF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx, className);
@@ -846,6 +860,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandProg2(cons), ctx, className);
 				case LispNames.PSETQ ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPsetq(cons), ctx, className);
+				case LispNames.PSETF ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPsetf(cons), ctx, className);
 				case LispNames.TYPECASE -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx, className);
 				case LispNames.ETYPECASE -> JvmExprCompiler

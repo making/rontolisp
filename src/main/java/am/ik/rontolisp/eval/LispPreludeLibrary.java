@@ -30,6 +30,9 @@ import am.ik.rontolisp.reader.LispReader;
  * {@code eql}).</li>
  * <li>{@code string<} -- case-sensitive lexicographic less-than, returning the mismatch
  * index or nil.</li>
+ * <li>{@code get-setf-expansion} -- the five setf-expansion values (lite: variable and
+ * accessor-cons places, environment ignored), consumed through the ordinary
+ * {@code %mv-spill} channel by a {@code multiple-value-bind} caller.</li>
  * <li>{@code char-name} -- the standard character names ({@code Space}, {@code Newline},
  * ...), a {@code U+XXXX} label for other non-printing code points, nil for graphic
  * characters; mirrors the interpreter's Java primitive.</li>
@@ -94,6 +97,53 @@ public final class LispPreludeLibrary {
 				      (setq acc (concatenate 'string acc chunk))
 				      (setq chunk (rontolisp:await (rontolisp:stream-read s))))
 				    acc))
+				""");
+		SOURCES.put(LispNames.GET_SETF_EXPANSION, """
+				(defun get-setf-expansion (place &optional env)
+				  (if (consp place)
+				      (let ((temps (mapcar (lambda (a) (gensym)) (cdr place)))
+				            (store (gensym)))
+				        (values temps
+				                (cdr place)
+				                (list store)
+				                (list 'setf (cons (car place) temps) store)
+				                (cons (car place) temps)))
+				      (let ((store (gensym)))
+				        (values nil nil (list store) (list 'setq place store) place))))
+				""");
+		SOURCES.put(LispNames.SUBST, """
+				(defun subst (new old tree &key (test #'eql) key)
+				  (labels ((walk (x)
+				             (cond ((funcall test old (if key (funcall key x) x)) new)
+				                   ((consp x)
+				                    (let ((a (walk (car x))) (d (walk (cdr x))))
+				                      (if (and (eq a (car x)) (eq d (cdr x))) x (cons a d))))
+				                   (t x))))
+				    (walk tree)))
+				""");
+		SOURCES.put(LispNames.COPY_TREE, """
+				(defun copy-tree (tree)
+				  (if (consp tree)
+				      (cons (copy-tree (car tree)) (copy-tree (cdr tree)))
+				      tree))
+				""");
+		SOURCES.put(LispNames.SEARCH, """
+				(defun search (seq1 seq2 &key (start1 0) end1 (start2 0) end2 (test #'eql) key from-end)
+				  (let* ((e1 (or end1 (length seq1)))
+				         (e2 (or end2 (length seq2)))
+				         (w (- e1 start1))
+				         (result nil))
+				    (do ((pos start2 (+ pos 1)))
+				        ((or (> (+ pos w) e2) (and result (not from-end))) result)
+				      (let ((ok t))
+				        (do ((i 0 (+ i 1)))
+				            ((or (>= i w) (not ok)))
+				          (let ((a (elt seq1 (+ start1 i)))
+				                (b (elt seq2 (+ pos i))))
+				            (unless (funcall test (if key (funcall key a) a)
+				                             (if key (funcall key b) b))
+				              (setq ok nil))))
+				        (when ok (setq result pos))))))
 				""");
 		SOURCES.put(LispNames.STRING_LT, """
 				(defun string< (a b)

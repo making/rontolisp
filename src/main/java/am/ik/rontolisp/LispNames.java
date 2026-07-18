@@ -422,6 +422,28 @@ public final class LispNames {
 	public static final String NSUBSTITUTE = "nsubstitute";
 
 	/**
+	 * The {@code subst} function (a prelude defun): non-destructive tree substitution of
+	 * {@code new} for every subtree/leaf matching {@code old} under {@code :test}
+	 * (default {@code eql}) and {@code :key}. Unchanged subtrees are shared, not copied.
+	 */
+	public static final String SUBST = "subst";
+
+	/**
+	 * The {@code copy-tree} function (a prelude defun): a deep copy of a cons tree (every
+	 * cons is fresh; non-cons leaves are shared).
+	 */
+	public static final String COPY_TREE = "copy-tree";
+
+	/**
+	 * The {@code search} function (a prelude defun): the position of the first (or with
+	 * {@code :from-end} the last) occurrence of one sequence inside another, or nil.
+	 * Supports {@code :start1}/{@code :end1}/{@code :start2}/{@code :end2}/{@code :test}
+	 * (default {@code eql})/{@code :key}/{@code :from-end}; a simple O(n*m) scan over
+	 * {@code elt}.
+	 */
+	public static final String SEARCH = "search";
+
+	/**
 	 * The {@code nconc} built-in function (destructively concatenate two lists).
 	 */
 	public static final String NCONC = "nconc";
@@ -961,6 +983,15 @@ public final class LispNames {
 	/** The {@code &allow-other-keys} lambda-list keyword. */
 	public static final String LAMBDA_ALLOW_OTHER_KEYS = "&allow-other-keys";
 
+	/**
+	 * The {@code &environment} lambda-list keyword, accepted in macro lambda lists only
+	 * (defmacro/macrolet). Lite: rontolisp macro expansion has no environment object, so
+	 * the parameter is stripped from the lambda list and bound to nil around the body --
+	 * enough for the portable idiom of threading it into {@code get-setf-expansion} /
+	 * {@code constantp}, which ignore a nil environment.
+	 */
+	public static final String LAMBDA_ENVIRONMENT = "&environment";
+
 	/** The {@code :allow-other-keys} call-site keyword argument. */
 	public static final String ALLOW_OTHER_KEYS_KEYWORD = ":allow-other-keys";
 
@@ -1401,6 +1432,14 @@ public final class LispNames {
 	public static final String PSETQ = "psetq";
 
 	/**
+	 * The {@code psetf} macro ({@code psetq} generalized to setf places): every place
+	 * subform and every right-hand side is evaluated into a temporary before any
+	 * assignment happens, so a later place reading a variable assigned by an earlier pair
+	 * still sees the old value.
+	 */
+	public static final String PSETF = "psetf";
+
+	/**
 	 * The {@code typecase} macro (dispatch on the type of an object using the built-in
 	 * type predicates).
 	 */
@@ -1425,19 +1464,35 @@ public final class LispNames {
 	public static final String RETURN = "return";
 
 	/**
-	 * The {@code return-from} macro. Lite: the block name is ignored (there are no named
-	 * blocks) -- inside a defun/lambda body it is rewritten to {@code (return value)} and
-	 * the body is wrapped in the internal {@code %block}, so it returns from the
-	 * function; a {@code return-from} nested inside a {@code do}/{@code loop} exits that
-	 * loop's block instead (correct only when the loop is the function's final form). See
+	 * The {@code return-from} macro. INTERPRETER: a real named non-local exit -- throws a
+	 * name-carrying signal caught by the matching {@code block} (a {@code defun} body is
+	 * wrapped in a block named after the function, a {@code defmethod} body in one named
+	 * after the generic), so it crosses intervening {@code do}/{@code loop} blocks and
+	 * closure calls within the exit's dynamic extent, as in CL; {@code (return-from nil
+	 * v)} is plain {@code return}. COMPILE PATH lite: the block name is ignored -- inside
+	 * a defun/lambda body it is rewritten to {@code (return value)} and the body is
+	 * wrapped in the internal {@code %block}, so it returns from the function; a
+	 * {@code return-from} nested inside a {@code do}/{@code loop} exits that loop's block
+	 * instead (correct only when the loop is the function's final form). See
 	 * {@link am.ik.rontolisp.LambdaLists}.
 	 */
 	public static final String RETURN_FROM = "return-from";
 
 	/**
+	 * The {@code block} operator. INTERPRETER: a real named block -- catches the
+	 * {@code return-from} signal carrying its name ({@code (block nil ...)} additionally
+	 * catches plain {@code return}, like the loop macros' implicit block). COMPILE PATH
+	 * lite: lowers to {@code %block} with the name dropped, so a {@code return-from}
+	 * inside targets the nearest block.
+	 */
+	public static final String BLOCK = "block";
+
+	/**
 	 * The internal {@code %block} special form establishing the {@code return} boundary
 	 * that the loop macros ({@code do}/{@code dolist}/{@code dotimes}/{@code loop}) wrap
-	 * their expansion in. Not part of the public Lisp API.
+	 * their expansion in. Not part of the public Lisp API. The named {@code return-from}
+	 * signal passes THROUGH it uncaught on the interpreter -- that transparency is what
+	 * lets a named return cross an intervening loop.
 	 */
 	public static final String BLOCK_INTERNAL = "%block";
 
@@ -1658,11 +1713,28 @@ public final class LispNames {
 	public static final String CONSTANTP = "constantp";
 
 	/**
+	 * The {@code get-setf-expansion} function (a prelude defun). Lite: returns the five
+	 * setf-expansion values for a variable place ({@code setq} writer) or an accessor
+	 * cons ({@code setf} writer over one temp per argument); the optional environment
+	 * argument is accepted and ignored. The consumer destructures the values through the
+	 * ordinary {@code %mv-spill} channel, so a portable {@code define-modify-macro}-style
+	 * macro body ({@code multiple-value-bind} over this call) works unchanged.
+	 */
+	public static final String GET_SETF_EXPANSION = "get-setf-expansion";
+
+	/**
 	 * The {@code streamp} built-in function (true if the argument is a stream). Streams
 	 * are opaque integer handles across all backends, so this is lowered to
 	 * {@code integerp} (lite).
 	 */
 	public static final String STREAMP = "streamp";
+
+	/**
+	 * The {@code simple-string-p} function, lowered to {@code stringp} (lite): every
+	 * rontolisp string answers true, so the portable "coerce unless simple" idiom keeps
+	 * the string unchanged instead of copying.
+	 */
+	public static final String SIMPLE_STRING_P = "simple-string-p";
 
 	/**
 	 * The internal {@code %arrayp} predicate (is the value an array?). Used by the
@@ -1723,6 +1795,20 @@ public final class LispNames {
 	 * The {@code char<=} built-in function (character less-than-or-equal by code point).
 	 */
 	public static final String CHAR_LE = "char<=";
+
+	/** The {@code char>} built-in function (monotonically decreasing chain). */
+	public static final String CHAR_GT = "char>";
+
+	/** The {@code char>=} built-in function (monotonically non-increasing chain). */
+	public static final String CHAR_GE = "char>=";
+
+	/** The {@code char/=} built-in function (all arguments pairwise distinct). */
+	public static final String CHAR_NE = "char/=";
+
+	/**
+	 * The {@code char-equal} built-in function (case-insensitive {@code char=} chain).
+	 */
+	public static final String CHAR_EQUAL = "char-equal";
 
 	/** The {@code char-upcase} built-in function (the uppercase form of a character). */
 	public static final String CHAR_UPCASE = "char-upcase";

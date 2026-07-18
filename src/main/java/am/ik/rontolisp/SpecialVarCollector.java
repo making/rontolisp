@@ -10,10 +10,13 @@ import java.util.Set;
  * dynamic-extent binding under {@code let}/{@code let*} instead of a fresh lexical slot.
  *
  * <p>
- * A name becomes special exactly when Common Lisp would proclaim it special: it is the
- * name of a top-level {@code defvar}/{@code defparameter}/{@code defconstant}, or it
- * appears in a {@code (special ...)} clause of a top-level {@code declaim} or
- * {@code proclaim}. (Local {@code (declare (special x))} is not honored -- rare.) The
+ * A name becomes special when Common Lisp would proclaim it special: it is the name of a
+ * top-level {@code defvar}/{@code defparameter}/{@code defconstant}, or it appears in a
+ * {@code (special ...)} clause of a top-level {@code declaim} or {@code proclaim}. A
+ * local {@code (declare (special x))} anywhere inside a form is honored PESSIMISTICALLY:
+ * the name becomes special program-wide, not just for that binding form -- the same
+ * global treatment a declaim would give it (cl-ppcre's convert phase threads its state
+ * through let-bound locally-declared specials, so the lite reading must cover it). The
  * earmuffs convention ({@code *x*}) is a style hint, not the mechanism: a variable is
  * special because it was declared, not because of its name.
  *
@@ -79,12 +82,49 @@ public final class SpecialVarCollector {
 			default -> {
 			}
 		}
+		collectLocalDeclares(form, out);
 	}
 
-	/** Adds the names in a {@code (special a b ...)} declaration specifier to the set. */
+	/**
+	 * Walks the form for local {@code (declare (special ...))} clauses (skipping quoted
+	 * data) and records their names -- pessimistically program-wide, see the class
+	 * comment.
+	 */
+	private static void collectLocalDeclares(LispVal form, Set<String> out) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.QUOTE.equals(head.name())) {
+				return;
+			}
+			if (LispNames.DECLARE.equals(member(head.name()))) {
+				List<LispVal> parts = cons.toList();
+				for (int i = 1; i < parts.size(); i++) {
+					addSpecialClause(parts.get(i), out);
+				}
+				return;
+			}
+		}
+		collectLocalDeclares(cons.car(), out);
+		collectLocalDeclares(cons.cdr(), out);
+	}
+
+	/** Strips a package qualifier: {@code pkg::special} matches like {@code special}. */
+	private static String member(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	/**
+	 * Adds the names in a {@code (special a b ...)} declaration specifier to the set. The
+	 * clause head is matched package-insensitively: {@code special} is not a registered
+	 * {@code cl} symbol, so under {@code (in-package p)} the resolver spells it
+	 * {@code p::special}.
+	 */
 	private static void addSpecialClause(LispVal spec, Set<String> out) {
 		if (spec instanceof LispCons clause && clause.car() instanceof LispSymbol op
-				&& LispNames.SPECIAL.equals(op.name())) {
+				&& LispNames.SPECIAL.equals(member(op.name()))) {
 			List<LispVal> names = clause.toList();
 			for (int i = 1; i < names.size(); i++) {
 				if (names.get(i) instanceof LispSymbol name) {

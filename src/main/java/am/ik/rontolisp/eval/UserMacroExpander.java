@@ -249,6 +249,20 @@ public final class UserMacroExpander {
 		List<LispVal> parts = cons.toList();
 		return switch (member(op.name())) {
 			case LispNames.QUOTE -> true; // quoted literal data
+			case LispNames.BLOCK -> {
+				// (block name body...): the name is data, the body is expressions --
+				// every defun body is now block-wrapped (named return-from), so the
+				// purity walk must see through the wrapper.
+				if (parts.size() < 2) {
+					yield false;
+				}
+				for (int i = 2; i < parts.size(); i++) {
+					if (!isPure(parts.get(i), allowSpecialMutation, macroEval)) {
+						yield false;
+					}
+				}
+				yield true;
+			}
 			case LispNames.SETQ -> allowSpecialMutation && isPureAssignment(parts, macroEval);
 			case LispNames.SETF -> allowSpecialMutation && isPureAssignment(parts, macroEval);
 			case LispNames.LET, LispNames.LET_STAR -> isPureLet(parts, allowSpecialMutation, macroEval);

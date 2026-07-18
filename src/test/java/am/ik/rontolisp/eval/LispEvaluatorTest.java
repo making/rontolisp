@@ -366,7 +366,9 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalMapRejectsUnsupportedResultType() {
-		assertThatThrownBy(() -> eval("(map 'vector #'1+ '(1 2 3))")).isInstanceOf(UnsupportedOperationException.class);
+		assertThat(eval("(map 'vector #'1+ '(1 2 3))").print()).isEqualTo("#(2 3 4)");
+		assertThatThrownBy(() -> eval("(map 'hash-table #'1+ '(1 2 3))"))
+			.isInstanceOf(UnsupportedOperationException.class);
 	}
 
 	@Test
@@ -2646,6 +2648,183 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalNamedBlockAndReturnFrom() {
+		// A named return-from crosses an intervening loop: the after-loop code (an
+		// error in cl-ppcre's collect-char-class) must NOT run.
+		assertThat(evalMulti("""
+				(defun collect-demo (limit)
+				  (let ((acc nil))
+				    (loop for i from 0
+				          do (progn
+				               (when (>= i limit)
+				                 (return-from collect-demo (nreverse acc)))
+				               (push i acc))))
+				  (error "unreachable after loop"))
+				(collect-demo 3)
+				""").print()).isEqualTo("(0 1 2)");
+		// A non-function named block with a return-from inside a loop.
+		assertThat(eval("""
+				(block scan
+				  (dotimes (i 10)
+				    (when (= i 4) (return-from scan (* i 100))))
+				  :fell-through)
+				""").print()).isEqualTo("400");
+		// (block nil ...) catches plain return; nested blocks match by name.
+		assertThat(eval("(block nil (return 7) 9)").print()).isEqualTo("7");
+		assertThat(eval("(block a (block b (return-from a 1) 2) 3)").print()).isEqualTo("1");
+		// A return-from inside a lambda called within the function's dynamic extent
+		// exits the FUNCTION, as in CL.
+		assertThat(evalMulti("""
+				(defun outer-exit ()
+				  (mapcar (lambda (x) (when (= x 2) (return-from outer-exit :found))) '(1 2 3))
+				  :not-found)
+				(outer-exit)
+				""").print()).isEqualTo(":found");
+		// A defmethod body is a block named after the generic.
+		assertThat(evalMulti("""
+				(defgeneric probe-rf (x))
+				(defmethod probe-rf ((x integer))
+				  (dotimes (i 10)
+				    (when (= i x) (return-from probe-rf (* i 2))))
+				  :none)
+				(probe-rf 3)
+				""").print()).isEqualTo("6");
+	}
+
+	@Test
+	void evalCharComparisonExtensions() {
+		assertThat(eval("(char> #\\c #\\b #\\a)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(char> #\\a #\\b)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(char>= #\\b #\\b #\\a)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(char/= #\\a #\\b #\\c)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(char/= #\\a #\\b #\\a)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(char-equal #\\A #\\a)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(char-equal #\\A #\\b)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalCopyTreeAndSearch() {
+		assertThat(evalMulti("""
+				(let* ((orig (list (list 1 2)))
+				       (copy (copy-tree orig)))
+				  (setf (car (car copy)) 99)
+				  (list orig copy))
+				""").print()).isEqualTo("(((1 2)) ((99 2)))");
+		assertThat(eval("(search \"bc\" \"abcd\")").print()).isEqualTo("1");
+		assertThat(eval("(search \"x\" \"abcd\")").print()).isEqualTo("nil");
+		assertThat(eval("(search \"ab\" \"ab-ab\" :from-end t)").print()).isEqualTo("3");
+		assertThat(eval("(search \"BC\" \"abcd\" :test #'char-equal)").print()).isEqualTo("1");
+	}
+
+	@Test
+	void evalSetfSubseqReplacesInPlace() {
+		assertThat(evalMulti("""
+				(defvar *ss* (make-array 5 :element-type 'character :fill-pointer t :adjustable t))
+				(replace *ss* "abcde")
+				(setf (subseq *ss* 1 3) "XY")
+				*ss*
+				""").print()).isEqualTo("\"aXYde\"");
+	}
+
+	@Test
+	void evalPsetf() {
+		assertThat(eval("(let ((a 1) (b 2)) (psetf a b b a) (list a b))").print()).isEqualTo("(2 1)");
+		// Place subforms are evaluated BEFORE any assignment: (cdr last-cdr) reads the
+		// OLD last-cdr even though the first pair reassigns it (cl-ppcre's parser merge).
+		assertThat(eval("""
+				(let* ((tail (list 2))
+				       (last-cdr tail)
+				       (fresh (list 3)))
+				  (psetf last-cdr fresh
+				         (cdr last-cdr) fresh)
+				  (list tail last-cdr))
+				""").print()).isEqualTo("((2 3) (3))");
+	}
+
+	@Test
+	void evalSubst() {
+		assertThat(eval("(subst 'x 'a '(a (b a) c))").print()).isEqualTo("(x (b x) c)");
+		assertThat(eval("(subst 9 '(char-class-test) '(f (char-class-test) g) :test #'equal)").print())
+			.isEqualTo("(f 9 g)");
+	}
+
+	@Test
+	void evalSimpleStringP() {
+		assertThat(eval("(simple-string-p \"abc\")")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(simple-string-p 42)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'simple-string-p \"abc\")")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalGetSetfExpansionThroughMultipleValueBind() {
+		// The incf-after idiom: destructure the five setf-expansion values via mvb and
+		// build a writer form for a variable place.
+		LispVal result = evalMulti("""
+				(defmacro incr-place (place &environment env)
+				  (multiple-value-bind (vars vals store-vars writer-form reader-form)
+				      (get-setf-expansion place env)
+				    `(let* (,@(mapcar #'list vars vals)
+				            (,(car store-vars) (+ ,reader-form 1)))
+				       ,writer-form)))
+				(defvar *gsx* 5)
+				(incr-place *gsx*)
+				*gsx*
+				""");
+		assertThat(result.print()).isEqualTo("6");
+	}
+
+	@Test
+	void evalConstantpAcceptsEnvironmentArgument() {
+		assertThat(eval("(constantp \"abc\" nil)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(constantp 'x nil)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalLocalDeclareSpecialThreadsDynamically() {
+		// A local (declare (special x)) makes the let binding dynamic, so a callee
+		// redeclaring it reads the caller's binding (cl-ppcre's convert phase).
+		LispVal result = evalMulti("""
+				(defun read-shared () (declare (special shared)) (car shared))
+				(defun with-shared ()
+				  (let ((shared (list 42)))
+				    (declare (special shared))
+				    (read-shared)))
+				(with-shared)
+				""");
+		assertThat(result.print()).isEqualTo("42");
+	}
+
+	@Test
+	void evalClosReaderMethodsDispatchPerClass() {
+		// The same reader name over DIFFERENT slot positions in unrelated classes, plus
+		// a plain defmethod on a third class, all merge into one generic (cl-ppcre's
+		// len).
+		LispVal result = evalMulti("""
+				(defclass w1 () ((pad :initarg :pad) (size :initarg :size :accessor size)))
+				(defclass w2 () ((size :initarg :size :accessor size)))
+				(defclass w3 () ())
+				(defmethod size ((w w3)) 0)
+				(defvar *w1* (make-instance 'w1 :pad 9 :size 11))
+				(defvar *w2* (make-instance 'w2 :size 22))
+				(setf (size *w2*) 23)
+				(list (size *w1*) (size *w2*) (size (make-instance 'w3)))
+				""");
+		assertThat(result.print()).isEqualTo("(11 23 0)");
+	}
+
+	@Test
+	void evalInitializeInstanceAfterMethodRunsOnMakeInstance() {
+		LispVal result = evalMulti("""
+				(defclass counted () ((n :initarg :n :accessor n)))
+				(defmethod initialize-instance :after ((c counted) &rest init-args)
+				  (setf (n c) (* 10 (n c))))
+				(list (n (make-instance 'counted :n 4))
+				      (n (make-instance 'counted :n 5)))
+				""");
+		assertThat(result.print()).isEqualTo("(40 50)");
+	}
+
+	@Test
 	void evalTypecase() {
 		assertThat(eval("(typecase 42 (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"i\"");
 		assertThat(eval("(typecase \"x\" (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"s\"");
@@ -3934,7 +4113,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog prog* prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
+				"(and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
 	}
 
 	@Test
@@ -3974,7 +4153,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer")
 			.isSorted()
-			.hasSize(271);
+			.hasSize(280);
 	}
 
 	@Test
@@ -5845,12 +6024,18 @@ class LispEvaluatorTest {
 
 	@Test
 	void defmacroRejectsUnsupportedLambdaListKeywords() {
-		// &whole/&environment stay unsupported and signal at definition time.
+		// &whole stays unsupported and signals at definition time.
 		assertThatThrownBy(() -> evalMulti("(defmacro my-mac (&whole w a) a)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("Unsupported lambda-list keyword");
-		assertThatThrownBy(() -> evalMulti("(defmacro my-mac (a &environment e) a)"))
+		// &environment is accepted (lite): the parameter binds to nil, so threading it
+		// into constantp/get-setf-expansion works.
+		assertThat(evalMulti("""
+				(defmacro my-env-mac (a &environment e) `(list ,a ',e))
+				(my-env-mac 7)
+				""").print()).isEqualTo("(7 nil)");
+		assertThatThrownBy(() -> evalMulti("(defmacro my-mac2 (a &environment) a)"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("Unsupported lambda-list keyword");
+			.hasMessageContaining("&environment must be followed by exactly one parameter symbol");
 	}
 
 	@Test

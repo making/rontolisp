@@ -20,6 +20,8 @@
 | `prog2` | `(prog2 first second body...)` | すべてのフォームを順に評価し、`second` の値を返します |
 | `time` | `(time form)` | `form` を評価し、経過実時間を標準出力に印字し(`; Elapsed real time: N ms`)、formの値を返します。`N` はインタプリタ/JVMではミリ秒の整数、WASMではミリ秒の浮動小数点です |
 | `psetq` | `(psetq v1 e1 v2 e2 ...)` | 並列代入。いずれかの変数に代入する前にすべての右辺が評価されます。nilを返します |
+| `psetf` | `(psetf place1 e1 place2 e2 ...)` | `psetq` を `setf` プレースへ一般化したもの。プレースの部分式と値はすべて代入前に評価されます。nilを返します |
+| `block` | `(block name body...)` | 名前付きブロック。最後のフォームの値、またはマッチする `(return-from name v)` の値を返します。インタープリタでは名前は本物、コンパイラは名前を落とします(最近接ブロックの lite) |
 | `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | `x` の型によるディスパッチ。サポートされる型名: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom`, `character`, `hash-table`, `boolean`(および `t`/`otherwise`)と、複合指定子 `(or ...)`/`(and ...)`/`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` および `(integer 0 9)` のような範囲付き数値型。何もマッチしなければnilを返します |
 | `etypecase` | `(etypecase x (integer body...) (string body...))` | 網羅的な `typecase`。デフォルト節はなく、どの節にも型がマッチしないオブジェクトは `error` を通知します |
 | `error` | `(error "bad value: ~a" x)`, `(error 'my-error :v x)`, `(error obj)` | エラーを通知し、[`handler-case`](macros/handler-case.md) に捕捉されなければ実行を中止します。designator: リテラルの制御文字列(`format` と同じディレクティブ)、initarg 付きのクォートされたコンディション型シンボル(型付きコンディションを構築。`define-condition` の `:report` がメッセージになります)、またはコンディションオブジェクト。インタプリタとJVMはメッセージとコンディションを保持する例外をスローし、wasm-GC は捕捉フォームを含むプログラムでは WebAssembly 例外をスローし、含まなければトラップします。`format` と同様に関数値を持たないマクロです(`#'error` はサポートされません) |

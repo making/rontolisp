@@ -46,6 +46,7 @@ With destination `nil` the result is returned as a string instead of printed:
 | `~(str~)` | Case conversion of the processed `str`: downcase; `~:(` capitalizes every word, `~@(` capitalizes only the first word, `~:@(` upcases |
 | `~[str0~;str1~:;default~]` | Conditional: the argument (an integer) selects a clause; `~:;` introduces the default. `~N[` / `~#[` select by a literal / by the number of remaining arguments; `~:[false~;true~]` tests nil; `~@[str~]` processes `str` (re-using the tested argument) only when it is non-nil |
 | `~{str~}` | Iteration: applies `str` repeatedly to the elements of the list argument. `~N{` caps the passes at `N`; `~:{` iterates over a list of sublists; `~@{` iterates over the remaining arguments; `~:@{` treats each remaining argument as a sublist |
+| `~?` | Recursive format: consumes a control string and a list of its arguments, rendered through the runtime renderer (its directive subset applies); `~@?` is not supported |
 | `~*` | Argument jump: `~N*` skips `N` arguments (default 1), `~N:*` moves back `N`, `~N@*` jumps to argument `N` (default 0) |
 
 Directives accept prefix parameters (written after the `~`, comma-separated) and

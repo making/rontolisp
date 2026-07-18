@@ -81,7 +81,24 @@ public final class LambdaLists {
 	 * @return the native-shape lambda list and body
 	 */
 	public static Expanded expand(LispVal paramList, List<LispVal> body) {
-		body = rewriteReturnFrom(body);
+		return expand(paramList, body, true);
+	}
+
+	/**
+	 * Like {@link #expand(LispVal, List)}, with the lite {@code return-from} rewrite
+	 * optional: the interpreter passes {@code false} because it implements
+	 * {@code block}/{@code return-from} natively (a named signal caught by the matching
+	 * block), so the name-dropping rewrite must not run there; the compilers keep the
+	 * rewrite.
+	 * @param paramList the raw parameter list AST
+	 * @param body the body forms
+	 * @param rewriteReturnFrom whether to apply the lite return-from rewrite
+	 * @return the native-shape lambda list and body
+	 */
+	public static Expanded expand(LispVal paramList, List<LispVal> body, boolean rewriteReturnFrom) {
+		if (rewriteReturnFrom) {
+			body = rewriteReturnFrom(body);
+		}
 		List<LispVal> params = paramList instanceof LispCons cons ? cons.toList() : List.of();
 		if (!usesLambdaListKeywords(paramList)) {
 			List<LispSymbol> required = new ArrayList<>(params.size());

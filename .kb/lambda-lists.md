@@ -76,7 +76,7 @@ required params for a variadic function.
   patterns, `&optional`, `&key`, ...) are supported via the `destructuring-bind`
   wrapping in `LispEvaluator.evalDefmacro` (see `.kb/defmacro-backquote.md`),
   which reuses this class's tail machinery through
-  `LambdaLists.appendTailBindings`; `&whole`/`&environment` stay errors.
+  `LambdaLists.appendTailBindings`; `&whole` stays an error. `&environment` is legal in MACRO lambda lists only: `LispEvaluator.makeUserMacro` strips the pair and binds the parameter to nil around the body BEFORE the destructuring wrap (there is no environment object; nil suffices for the constantp/get-setf-expansion threading idiom), so `LambdaLists.parse` itself still rejects it in function lambda lists.
 - The runtime `eval`'s own `lambda` (interpreted closures, funcId == -1) binds
   positionally and does not parse `&` keywords.
 - `--no-gc` (`NoGcWasmCompiler.extractDefun`) rejects lambda-list keywords with

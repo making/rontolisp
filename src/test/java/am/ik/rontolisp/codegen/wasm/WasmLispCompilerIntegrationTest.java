@@ -4166,6 +4166,78 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void blockLowersToNearestBlock() throws Exception {
+		// Compile-path lite DEVIATION (pinned): the name is dropped, so the
+		// return-from exits the nearest block (the dotimes loop) and execution
+		// falls through (the interpreter returns 400 here).
+		assertThat(compileAndRun("""
+				(print (block scan
+				         (dotimes (i 10)
+				           (when (= i 4) (return-from scan (* i 100))))
+				         :fell-through))
+				(print (block nil (return 7) 9))
+				(print (block direct (return-from direct 42) 9))
+				""")).isEqualTo(":fell-through\n7\n42");
+	}
+
+	@Test
+	void charComparisonExtensions() throws Exception {
+		assertThat(compileAndRun("""
+				(print (char> #\\c #\\b #\\a))
+				(print (char>= #\\b #\\b #\\a))
+				(print (char/= #\\a #\\b #\\a))
+				(print (char-equal #\\A #\\a))
+				""")).isEqualTo("t\nt\nnil\nt");
+	}
+
+	@Test
+	void psetfParallelPlaces() throws Exception {
+		assertThat(compileAndRun("""
+				(print (let ((a 1) (b 2)) (psetf a b b a) (list a b)))
+				(print (let* ((tail (list 2))
+				              (last-cdr tail)
+				              (fresh (list 3)))
+				         (psetf last-cdr fresh
+				                (cdr last-cdr) fresh)
+				         (list tail last-cdr)))
+				""")).isEqualTo("(2 1)\n((2 3) (3))");
+	}
+
+	@Test
+	void substAndSimpleStringP() throws Exception {
+		// The prelude splice mirrors the CLI pipeline (subst is a prelude defun).
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (subst 'x 'a '(a (b a) c)))
+				(print (subst 9 '(m) '(f (m) g) :test #'equal))
+				(print (simple-string-p "abc"))
+				(print (simple-string-p 42))
+				""")))).isEqualTo("(x (b x) c)\n(f 9 g)\nt\nnil");
+	}
+
+	@Test
+	void closReaderMethodsDispatchPerClass() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass w1 () ((pad :initarg :pad) (size :initarg :size :accessor size)))
+				(defclass w2 () ((size :initarg :size :accessor size)))
+				(defclass w3 () ())
+				(defmethod size ((w w3)) 0)
+				(defvar *w2* (make-instance 'w2 :size 22))
+				(setf (size *w2*) 23)
+				(print (list (size (make-instance 'w1 :pad 9 :size 11)) (size *w2*) (size (make-instance 'w3))))
+				""")).isEqualTo("(11 23 0)");
+	}
+
+	@Test
+	void initializeInstanceAfterMethod() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass counted () ((n :initarg :n :accessor n)))
+				(defmethod initialize-instance :after ((c counted) &rest init-args)
+				  (setf (n c) (* 10 (n c))))
+				(print (list (n (make-instance 'counted :n 4)) (n (make-instance 'counted :n 5))))
+				""")).isEqualTo("(40 50)");
+	}
+
+	@Test
 	void typecaseForm() throws Exception {
 		assertThat(compileAndRun(
 				"(print (typecase 42 (string \"s\") (integer \"i\") (t \"?\"))) (print (typecase \"x\" (string \"s\") (integer \"i\") (t \"?\"))) (print (typecase 'sym (string \"s\") (integer \"i\") (t \"?\")))"))
@@ -5737,7 +5809,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog prog* prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
+				"(and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
 	}
 
 	@Test
@@ -5748,7 +5820,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("271");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("280");
 	}
 
 	@Test

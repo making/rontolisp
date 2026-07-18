@@ -13,9 +13,26 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
 - `expandDefclass(cons, closRegistry, structAccessors)` — registers a
   `ClosRegistry.ClassInfo` and generates the internal keyword constructor
   `%make-<name>` (`&key ((:initarg slot) initform)...` over the FULL slot list)
-  plus one defun per `:reader`/`:accessor`; `:accessor` names also go into the
-  existing `structAccessors` map, so setf/incf/push places work with zero new
-  setf code. An instance is `(%class-<name> v1 v2 ...)`; layout = superclass
+  plus one synthesized `(defmethod R ((__obj C)) (nth pos __obj))` per
+  `:reader`/`:accessor` — a METHOD, not a plain defun, because several classes
+  may declare the same reader name over DIFFERENT slot positions (cl-ppcre's
+  `len` in str/repetition/lookbehind/filter) and a user `defmethod` on the same
+  name must merge instead of shadowing. The write side of an `:accessor` is a
+  `%setf-<name>` writer GENERIC (`(defmethod %setf-A (__new (__obj C)) ...)`,
+  new value first) registered in `structAccessors` under
+  `SETF_FUNCTION_MARKER`, so `(setf (A x) v)` funcalls the writer dispatcher.
+  The interpreter's `evalDefclass` just evals the returned forms (a defmethod
+  routes through `evalDefmethod`); the compile path's
+  `expandTopLevelDefinitions` sends them through `addExpandedDefinition` (same
+  expansion + dispatcher-slot placement as a top-level defmethod). A
+  position-ambiguous `slot-value`/`with-slots` name falls back to the reader
+  generic (`expandSlotValue`); its setf re-dispatches through the writer.
+  `initialize-instance` is supported in the `:after` shape: the FIRST user
+  method on it also synthesizes an identity default primary (no system primary
+  exists), and `expandMakeInstance` — when any generic plainly named
+  `initialize-instance` is registered — hoists the initargs into let* temps,
+  calls the constructor, then the generic, and returns the instance. An
+  instance is `(%class-<name> v1 v2 ...)`; layout = superclass
   slots (inheritance order) + own slots, so single inheritance keeps positions
   stable in all descendants.
 - `registerDefgeneric` / `expandDefmethod` — record into

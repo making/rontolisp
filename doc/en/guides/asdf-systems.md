@@ -218,6 +218,21 @@ backends (interpreter, JVM, WASM Preview 1 and `--component`):
   cannot run it: the MD5 working state is unsigned 32-bit arithmetic, which
   does not fit the WASM `i31` fixnum range.
 
+- **[cl-ppcre](https://github.com/edicl/cl-ppcre) v2.1.2**: Dr. Edmund
+  Weitz's Perl-compatible regular expression library, loaded from its real
+  unmodified sources. `scan` (with register bounds), `scan-to-strings`,
+  `split`, `regex-replace`/`regex-replace-all`, `all-matches`(-as-strings),
+  `count-matches`, the `do-scans`/`do-matches`(-as-strings) iteration macros,
+  `register-groups-bind`, `quote-meta-chars`, parse-tree regexes and inline
+  modifiers like `(?i)` all work. Interpreter ONLY for now: the generated
+  scanner closures rely on named `block`/`return-from` crossing loops, which
+  the compile backends still treat with the lite name-dropping rewrite. Its
+  load drove the widest feature batch so far -- local
+  `(declare (special ...))`, CLOS slot accessors as generics,
+  `initialize-instance :after`, `&environment` + `get-setf-expansion`,
+  `psetf`, `(setf (subseq ...))`, `subst`/`search`/`copy-tree` and the
+  descending/case-insensitive character comparisons.
+
 - **[com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4** (the real
   library via `(ql:quickload '#:com.inuoe.jzon)`): JSON parsing and
   stringification including the README walkthrough — hash-table / vector

@@ -20,19 +20,49 @@ chain, plus the transitive `cl-ppcre` (via uax-15; cl-postgres itself has one
   (real resolver support), `make-sequence`, `array-total-size-limit`,
   `define-condition :default-initargs`, defstruct docstrings + lite BOA
   constructors + struct names as defmethod specializers, defgeneric
-  `(declare ...)` options. **Next gate (where the load now stops)**:
-  `&environment` in a defmacro lambda list (`repetition-closures.lisp`
-  `incf-after`, `api.lisp` `do-scans`). Lite plan: accept and bind the env
-  var to nil. Immediately behind it: `get-setf-expansion` (incf-after
-  destructures its 5 values via `multiple-value-bind`, so it must join the
-  SYNTACTIC multiple-value producer set -- the mvb lowering needs to
-  recognize it and destructure a compile-time 5-list; a lite expansion
-  covering variable places + registered accessor conses should satisfy
-  cl-ppcre) and 2-arg `(constantp form env)`. After those, resume the
-  file-by-file iteration (`ql:quickload "cl-ppcre"`); 15 files / 7.4k lines,
-  closures.lisp / convert.lisp / api.lisp are the heavy tail. Note
-  `*standard-optimize-settings*` is read via `#.` in declares (works), and
-  the library defines its own `defconstant`/`digit-char-p` through `:shadow`.
+  `(declare ...)` options. Cleared 2026-07-18 (second session): `&environment`
+  in macro lambda lists (stripped, bound to nil), `get-setf-expansion` (a
+  prelude defun with a `values` tail -- the mvb spill channel destructures it,
+  no new syntactic producer needed), 2-arg `constantp`, `simple-string-p`
+  (lowered to `stringp`), `psetf` (parallel, place subforms hoisted to temps),
+  `(setf (aref s i) c)` on mutable strings (interpreter `%aset`/
+  `%row-major-aset` accept a LispString cell), local `(declare (special x))`
+  (collected PESSIMISTICALLY program-wide by `SpecialVarCollector`, which now
+  recurses; `special` clause head matched package-insensitively -- the
+  convert.lisp state-threading idiom; lambda AND macro parameters named like
+  specials now bind dynamically in the interpreter, since symbol reads consult
+  the dynamic store first), CLOS slot readers/accessors are now METHODS of a
+  generic (same reader name over different slot positions in unrelated
+  classes -- `len` in str/repetition/lookbehind/filter -- plus merging with a
+  plain `defmethod len (void)`; write side = a `%setf-` writer generic under
+  the SETF_FUNCTION_MARKER convention), `initialize-instance :after` (the
+  first user method synthesizes an identity default primary; make-instance
+  hoists initargs to temps and calls the generic), position-ambiguous
+  `slot-value`/`with-slots` falls back to the reader generic, `subst`
+  (prelude defun), format `~?` (recursive format via the runtime renderer).
+  **DONE 2026-07-18 (third session): cl-ppcre v2.1.2 RUNS ON THE INTERPRETER**
+  (`ClPpcreE2eTest`, vendored `src/test/resources/cl-ppcre`,
+  `examples/asdf/cl-ppcre-demo.lisp`): scan (register bounds), scan-to-strings,
+  split, regex-replace(-all), all-matches(-as-strings), count-matches,
+  do-scans/do-matches macros, register-groups-bind, quote-meta-chars,
+  parse-tree regexes, `(?i)`. The final gates: NAMED `block`/`return-from`
+  (interpreter-native BlockReturnSignal caught by the matching block; defun
+  bodies = a block named after the function, defmethod bodies = the generic's
+  name; `%block` is transparent to the named signal so returns cross loops;
+  compilers keep the lite name-dropping rewrite, `block` lowers to `%block` —
+  which is why the compile backends are still EXCLUDED for cl-ppcre),
+  `char>`/`char>=`/`char/=`/`char-equal`, `copy-tree`/`search` (prelude),
+  `(map 'vector ...)`, `coerce 'simple-string`, `(setf (subseq ...))`,
+  typep with a bare-spelled class name in-package (descendantTags needed the
+  REGISTERED class name), special-named params/let dual-bind (dynamic push +
+  lexical define, so closures capture — reg-num/end-string), and the
+  pure-config-setter walk seeing through the new block wrapper (cl-who
+  regression). `loop named` remains unsupported (unneeded:
+  `*use-bmh-matchers*` defaults nil → the search path).
+  **Remaining for cl-ppcre**: the compile backends (JVM/WASM) need real named
+  blocks — the JVM/WASM `%block` goto/br machinery keyed by name — before
+  `ClPpcreE2eTest` can un-disable them; `cl-ppcre:split` unblocks uax-15
+  next (its OWN extra gates listed below).
 - `uax-15` -- blocked on cl-ppcre (`cl-ppcre:split` at load time), then
   needs: `asdf:find-system` + `asdf:system-source-directory` +
   `uiop:merge-pathnames*` + `make-pathname` (load-time data-file path

@@ -470,8 +470,10 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.CHAR), binary(LispNames.SCHAR), unary(LispNames.CHAR_CODE), unary(LispNames.CODE_CHAR),
 			unary(LispNames.CHAR_UPCASE), unary(LispNames.CHAR_DOWNCASE), unary(LispNames.CHARACTERP),
 			unary(LispNames.ALPHA_CHAR_P), unary(LispNames.LOWER_CASE_P), unary(LispNames.UPPER_CASE_P),
-			unary(LispNames.CONSTANTP), unary(LispNames.STREAMP), unary(LispNames.DIGIT_CHAR_P),
-			binary(LispNames.CHAR_EQ), binary(LispNames.CHAR_LT), binary(LispNames.CHAR_LE),
+			unary(LispNames.CONSTANTP), unary(LispNames.STREAMP), unary(LispNames.SIMPLE_STRING_P),
+			unary(LispNames.DIGIT_CHAR_P), binary(LispNames.CHAR_EQ), binary(LispNames.CHAR_LT),
+			binary(LispNames.CHAR_LE), binary(LispNames.CHAR_GT), binary(LispNames.CHAR_GE), binary(LispNames.CHAR_NE),
+			binary(LispNames.CHAR_EQUAL),
 			// parse-integer / read-from-string: their compiled bodies pull in runtime
 			// helpers emitted only when the program uses the operator, so each backend
 			// excludes these wrappers (via excludedNames) unless the program references

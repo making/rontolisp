@@ -2364,6 +2364,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.SETQ -> compileSetq(args, fn);
 			case LispNames.WHILE -> compileWhile(args, fn);
 			case LispNames.BLOCK_INTERNAL -> compileBlock(cons, args, fn);
+			case LispNames.BLOCK -> compileExpr(LispMacroExpander.expandBlock(cons), fn);
 			case LispNames.RETURN -> compileReturn(args, fn);
 			case LispNames.UNWIND_PROTECT ->
 				// The wasm-GC backends catch via the exception-handling proposal (todo

@@ -1401,7 +1401,19 @@ public final class LispEvaluator {
 	public LispVal eval(LispVal expr) {
 		// Resolve packages at the top-level entry only; nested evaluation and macro
 		// expansion operate on the already-resolved canonical form.
-		return eval(this.packageResolver.resolve(expr), this.globalEnv);
+		LispVal resolved = this.packageResolver.resolve(expr);
+		// Register special declarations BEFORE evaluating, so a defun body's local
+		// (declare (special x)) makes later let bindings of x dynamic (the same
+		// pessimistic program-wide reading the compilers get from SpecialVarCollector).
+		SpecialVarCollector.collectForm(resolved, this.specialVars);
+		try {
+			return eval(resolved, this.globalEnv);
+		}
+		catch (BlockReturnSignal signal) {
+			// A named return-from whose block was never established (or whose exit
+			// extent already ended) surfaces as an ordinary error, not a raw signal.
+			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
+		}
 	}
 
 	/**
@@ -1666,6 +1678,10 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandLoop(cons), env);
 				case LispNames.BLOCK_INTERNAL:
 					return evalBlock(cons, env);
+				case LispNames.BLOCK:
+					return evalNamedBlock(cons, env);
+				case LispNames.RETURN_FROM:
+					return evalReturnFrom(cons, env);
 				case LispNames.UNWIND_PROTECT:
 					return evalUnwindProtect(cons, env);
 				case LispNames.RETURN:
@@ -1795,10 +1811,14 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandConstantp(cons), env);
 				case LispNames.STREAMP:
 					return eval(LispMacroExpander.expandStreamp(cons), env);
+				case LispNames.SIMPLE_STRING_P:
+					return eval(LispMacroExpander.expandSimpleStringP(cons), env);
 				case LispNames.PROG2:
 					return eval(LispMacroExpander.expandProg2(cons), env);
 				case LispNames.PSETQ:
 					return eval(LispMacroExpander.expandPsetq(cons), env);
+				case LispNames.PSETF:
+					return eval(LispMacroExpander.expandPsetf(cons), env);
 				case LispNames.TYPECASE:
 					return eval(LispMacroExpander.expandTypecase(cons, this.closRegistry), env);
 				case LispNames.ETYPECASE:
@@ -2104,11 +2124,24 @@ public final class LispEvaluator {
 		else {
 			funcName = ((LispSymbol) nameForm).name();
 		}
-		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(2), parts.subList(3, parts.size()));
+		// Native block/return-from: skip the lite name-dropping rewrite and instead
+		// wrap the body in a block named after the function, so (return-from name v)
+		// exits the function even from inside a do/loop (whose %block does not catch
+		// the named signal).
+		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(2), parts.subList(3, parts.size()), false);
+		LispSymbol blockNameSym = setfPlace != null ? setfPlace : (LispSymbol) nameForm;
+		List<LispVal> blockParts = new ArrayList<>();
+		blockParts.add(new LispSymbol(LispNames.BLOCK));
+		blockParts.add(blockNameSym);
+		blockParts.addAll(expanded.body());
+		LispVal blockForm = LispNil.INSTANCE;
+		for (int i = blockParts.size() - 1; i >= 0; i--) {
+			blockForm = new LispCons(blockParts.get(i), blockForm);
+		}
 		// defun installs into the global function namespace, capturing the current
 		// lexical environment, and returns the function name like Common Lisp.
 		this.globalEnv.defineFunction(funcName,
-				new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env));
+				new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm), env));
 		return nameForm;
 	}
 
@@ -2189,11 +2222,44 @@ public final class LispEvaluator {
 	 * "required + &rest/&body" lambda list is stored directly; any extended shape is
 	 * wrapped in a {@code destructuring-bind} over an internal rest parameter (validated
 	 * eagerly by a dry-run expansion) so both macro-expansion consumers destructure
-	 * identically.
+	 * identically. An {@code &environment} parameter (legal anywhere at the top level of
+	 * a macro lambda list) is stripped first and bound to nil around the body -- there is
+	 * no environment object (see {@link LispNames#LAMBDA_ENVIRONMENT}).
 	 */
 	private UserMacro makeUserMacro(String op, LispSymbol name, LispVal paramForm, List<LispVal> body,
 			Environment env) {
 		List<LispVal> paramList = paramForm instanceof LispCons paramCons ? paramCons.toList() : List.of();
+		int envIndex = -1;
+		for (int i = 0; i < paramList.size(); i++) {
+			if (paramList.get(i) instanceof LispSymbol sym && LispNames.LAMBDA_ENVIRONMENT.equals(sym.name())) {
+				envIndex = i;
+				break;
+			}
+		}
+		if (envIndex >= 0) {
+			if (envIndex + 1 >= paramList.size() || !(paramList.get(envIndex + 1) instanceof LispSymbol envVar)
+					|| envVar.name().startsWith("&")) {
+				throw new LispEvalException(op + " " + name.name() + ": " + LispNames.LAMBDA_ENVIRONMENT
+						+ " must be followed by exactly one parameter symbol");
+			}
+			List<LispVal> stripped = new ArrayList<>(paramList);
+			stripped.remove(envIndex + 1);
+			stripped.remove(envIndex);
+			LispVal strippedForm = LispNil.INSTANCE;
+			for (int i = stripped.size() - 1; i >= 0; i--) {
+				strippedForm = new LispCons(stripped.get(i), strippedForm);
+			}
+			List<LispVal> letParts = new ArrayList<>();
+			letParts.add(new LispSymbol(LispNames.LET));
+			letParts.add(new LispCons(new LispCons(envVar, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)),
+					LispNil.INSTANCE));
+			letParts.addAll(body);
+			LispVal wrappedBody = LispNil.INSTANCE;
+			for (int i = letParts.size() - 1; i >= 0; i--) {
+				wrappedBody = new LispCons(letParts.get(i), wrappedBody);
+			}
+			return makeUserMacro(op, name, strippedForm, List.of(wrappedBody), env);
+		}
 		if (!isSimpleMacroLambdaList(paramList)) {
 			LispSymbol argsVar = new LispSymbol(MACRO_ARGS_VAR);
 			List<LispVal> dbParts = new ArrayList<>();
@@ -2426,21 +2492,49 @@ public final class LispEvaluator {
 							: "at least " + macro.required().size()) + " arguments, got " + args.size());
 		}
 		Environment macroEnv = new Environment(macro.env());
+		// A macro parameter named like a proclaimed special must also bind DYNAMICALLY:
+		// symbol reads consult the dynamic store first, so a lexical binding would be
+		// shadowed by an active dynamic binding of the same name and the macro body
+		// would read that value instead of the argument form (cl-ppcre's
+		// case-insensitive-mode-p has a parameter named flags, expanded while flags is
+		// dynamically bound).
+		List<String> dynamicParams = null;
 		for (int i = 0; i < macro.required().size(); i++) {
-			macroEnv.define(macro.required().get(i).name(), args.get(i));
+			String paramName = macro.required().get(i).name();
+			macroEnv.define(paramName, args.get(i));
+			if (!this.specialVars.isEmpty() && this.specialVars.contains(paramName)) {
+				this.dynamicBindings.push(paramName, args.get(i));
+				dynamicParams = dynamicParams == null ? new ArrayList<>(2) : dynamicParams;
+				dynamicParams.add(paramName);
+			}
 		}
 		if (macro.rest() != null) {
 			LispVal restList = LispNil.INSTANCE;
 			for (int i = args.size() - 1; i >= macro.required().size(); i--) {
 				restList = new LispCons(args.get(i), restList);
 			}
-			macroEnv.define(macro.rest().name(), restList);
+			String restName = macro.rest().name();
+			macroEnv.define(restName, restList);
+			if (!this.specialVars.isEmpty() && this.specialVars.contains(restName)) {
+				this.dynamicBindings.push(restName, restList);
+				dynamicParams = dynamicParams == null ? new ArrayList<>(2) : dynamicParams;
+				dynamicParams.add(restName);
+			}
 		}
-		LispVal expansion = LispNil.INSTANCE;
-		for (LispVal bodyExpr : macro.body()) {
-			expansion = eval(bodyExpr, macroEnv);
+		try {
+			LispVal expansion = LispNil.INSTANCE;
+			for (LispVal bodyExpr : macro.body()) {
+				expansion = eval(bodyExpr, macroEnv);
+			}
+			return expansion;
 		}
-		return expansion;
+		finally {
+			if (dynamicParams != null) {
+				for (int i = dynamicParams.size() - 1; i >= 0; i--) {
+					this.dynamicBindings.pop(dynamicParams.get(i));
+				}
+			}
+		}
 	}
 
 	/**
@@ -2710,15 +2804,22 @@ public final class LispEvaluator {
 					vals[i] = eval(pair.get(1), env);
 				}
 				for (int i = 0; i < n; i++) {
+					// A special name is ALSO defined lexically with the same value (dual
+					// binding): a closure built in the body and called after the dynamic
+					// extent pops must still see the bound value -- CL gets this via a
+					// lexical rebinding shadowing the special (a free (declare (special
+					// x)) does not affect an inner LET binding of x), which the
+					// pessimistic program-wide special set cannot distinguish
+					// (cl-ppcre's matcher closures capture end-string this way). The
+					// dual binding diverges only under setq, which updates the dynamic
+					// side alone.
+					letEnv.define(names[i], vals[i]);
 					if (this.specialVars.contains(names[i])) {
 						if (dynamicNames == null) {
 							dynamicNames = new java.util.ArrayList<>(2);
 						}
 						this.dynamicBindings.push(names[i], vals[i]);
 						dynamicNames.add(names[i]);
-					}
-					else {
-						letEnv.define(names[i], vals[i]);
 					}
 				}
 			}
@@ -2853,6 +2954,71 @@ public final class LispEvaluator {
 		catch (LispReturnSignal signal) {
 			return signal.value();
 		}
+	}
+
+	/**
+	 * Evaluates a user {@code (block name body...)}: runs the body and yields the value
+	 * of a matching {@code (return-from name value)} fired inside its dynamic extent. A
+	 * non-matching named signal propagates (an outer block catches it); {@code (block
+	 * nil ...)} additionally catches plain {@code return}, mirroring the implicit
+	 * {@code nil} block the loop macros establish.
+	 */
+	private LispVal evalNamedBlock(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new LispEvalException(LispNames.BLOCK + " expects a block name");
+		}
+		String name = blockName(parts.get(1));
+		try {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = 2; i < parts.size(); i++) {
+				result = eval(parts.get(i), env);
+			}
+			return result;
+		}
+		catch (BlockReturnSignal signal) {
+			if (signal.name().equals(name)) {
+				return signal.value();
+			}
+			throw signal;
+		}
+		catch (LispReturnSignal signal) {
+			if (name == null) {
+				return signal.value();
+			}
+			throw signal;
+		}
+	}
+
+	/**
+	 * Evaluates {@code (return-from name [value])}: throws the named non-local exit
+	 * caught by the matching {@code block}. {@code (return-from nil v)} is plain
+	 * {@code return} (the loop macros' implicit block), so it throws the unnamed signal
+	 * the {@code %block} boundaries catch.
+	 */
+	private LispVal evalReturnFrom(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			throw new LispEvalException(LispNames.RETURN_FROM + " expects (return-from name [value])");
+		}
+		LispVal value = parts.size() == 3 ? eval(parts.get(2), env) : LispNil.INSTANCE;
+		String name = blockName(parts.get(1));
+		if (name == null) {
+			throw new LispReturnSignal(value);
+		}
+		throw new BlockReturnSignal(name, value);
+	}
+
+	/** The block name a designator form denotes: null for the {@code nil} block. */
+	@org.jspecify.annotations.Nullable
+	private static String blockName(LispVal designator) {
+		if (designator instanceof LispNil) {
+			return null;
+		}
+		if (designator instanceof LispSymbol sym && !sym.isKeyword()) {
+			return "nil".equals(sym.name()) ? null : sym.name();
+		}
+		throw new LispEvalException(LispNames.BLOCK + ": block name must be a symbol, got " + designator.print());
 	}
 
 	/**
@@ -3003,7 +3169,10 @@ public final class LispEvaluator {
 	private LispVal evalLambdaForm(LispCons cons, Environment env) {
 		checkAwaitPlacement(cons);
 		List<LispVal> parts = cons.toList();
-		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), parts.subList(2, parts.size()));
+		// No lite return-from rewrite (and no block wrap): CL lambdas establish no
+		// block, so a (return-from f v) inside a lambda called within f's dynamic
+		// extent exits F -- the named signal propagates through the call.
+		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), parts.subList(2, parts.size()), false);
 		return new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env);
 	}
 
@@ -3568,21 +3737,54 @@ public final class LispEvaluator {
 						+ ", got " + args.size());
 			}
 			Environment lambdaEnv = new Environment((Environment) lambda.closure());
+			// A parameter whose name is proclaimed special binds DYNAMICALLY, as in CL:
+			// symbol reads consult the dynamic store before the lexical chain, so a
+			// lexical binding of a special name would be shadowed by any active outer
+			// dynamic binding instead of holding the argument (cl-ppcre's convert
+			// phase passes such names around while they are dynamically bound). It is
+			// ALSO defined lexically with the same value: a closure built in this body
+			// and called after the extent pops must still see the argument (cl-ppcre's
+			// create-scanner-aux parameter reg-num, special only because convert.lisp
+			// pessimistically proclaimed the name, is captured by the scanner closure)
+			// -- the dual binding diverges only if the parameter is setq'd, which
+			// updates the dynamic side alone.
+			List<String> dynamicParams = null;
 			for (int i = 0; i < required; i++) {
-				lambdaEnv.define(lambda.params().get(i).name(), args.get(i));
+				String paramName = lambda.params().get(i).name();
+				lambdaEnv.define(paramName, args.get(i));
+				if (!this.specialVars.isEmpty() && this.specialVars.contains(paramName)) {
+					this.dynamicBindings.push(paramName, args.get(i));
+					dynamicParams = dynamicParams == null ? new ArrayList<>(2) : dynamicParams;
+					dynamicParams.add(paramName);
+				}
 			}
 			if (lambda.rest() != null) {
 				LispVal restList = LispNil.INSTANCE;
 				for (int i = args.size() - 1; i >= required; i--) {
 					restList = new LispCons(args.get(i), restList);
 				}
-				lambdaEnv.define(lambda.rest().name(), restList);
+				String restName = lambda.rest().name();
+				lambdaEnv.define(restName, restList);
+				if (!this.specialVars.isEmpty() && this.specialVars.contains(restName)) {
+					this.dynamicBindings.push(restName, restList);
+					dynamicParams = dynamicParams == null ? new ArrayList<>(2) : dynamicParams;
+					dynamicParams.add(restName);
+				}
 			}
-			LispVal result = LispNil.INSTANCE;
-			for (LispVal bodyExpr : lambda.body()) {
-				result = eval(bodyExpr, lambdaEnv);
+			try {
+				LispVal result = LispNil.INSTANCE;
+				for (LispVal bodyExpr : lambda.body()) {
+					result = eval(bodyExpr, lambdaEnv);
+				}
+				return result;
 			}
-			return result;
+			finally {
+				if (dynamicParams != null) {
+					for (int i = dynamicParams.size() - 1; i >= 0; i--) {
+						this.dynamicBindings.pop(dynamicParams.get(i));
+					}
+				}
+			}
 		}
 		throw new LispEvalException("Not a function: " + function.print());
 	}

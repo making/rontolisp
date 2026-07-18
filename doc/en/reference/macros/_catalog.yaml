@@ -18,11 +18,13 @@ categories:
       - { slug: prog2, name: prog2 }
       - { slug: time, name: time }
       - { slug: psetq, name: psetq }
+      - { slug: psetf, name: psetf }
       - { slug: typecase, name: typecase }
       - { slug: etypecase, name: etypecase }
       - { slug: error, name: error }
       - { slug: cerror, name: cerror }
       - { slug: warn, name: warn }
+      - { slug: block, name: block }
       - { slug: return-from, name: return-from }
       - { slug: setf, name: setf }
       - { slug: push, name: push }

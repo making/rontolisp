@@ -509,6 +509,12 @@ public final class Environment implements Scope {
 				fa.aset(asDouble(value), subs);
 				return fa.aref(subs);
 			}
+			// A string is a rank-1 character array: (setf (aref s i) c) mutates in
+			// place like the schar setf place (cl-ppcre builds two-char strings with
+			// make-array + aset).
+			if (args.get(0) instanceof LispString str && subs.length == 1) {
+				return storeStringChar(LispNames.ASET, str, subs[0], value);
+			}
 			LispArray array = requireArray(LispNames.ASET, args.get(0));
 			array.aset(value, subs);
 			return value;
@@ -531,6 +537,9 @@ public final class Environment implements Scope {
 				// returned value matches what is stored across widths and backends.
 				fa.setElement(flat, asDouble(value));
 				return fa.readFlat(flat);
+			}
+			if (args.get(0) instanceof LispString str) {
+				return storeStringChar(LispNames.ROW_MAJOR_ASET, str, (int) asLong(args.get(1)), value);
 			}
 			LispArray array = requireArray(LispNames.ROW_MAJOR_ASET, args.get(0));
 			array.writeFlat(rowMajorIndex(LispNames.ROW_MAJOR_ASET, array.totalSize(), args.get(1)), value);
@@ -3314,6 +3323,25 @@ public final class Environment implements Scope {
 		return new LispVal[] { normalizeBig(acc.multiply(java.math.BigInteger.valueOf(sign))), new LispInteger(i) };
 	}
 
+	/**
+	 * Stores a character into a mutable string cell ({@code (setf (aref s i) c)} and the
+	 * row-major variant): bounds-checked against the capacity (the fill pointer only
+	 * limits the effective length, so a write between them is legal, as in CL), BMP only
+	 * like {@code %schar-set}.
+	 */
+	private static LispVal storeStringChar(String op, LispString str, int index, LispVal value) {
+		if (index < 0 || index >= str.capacity()) {
+			throw new LispEvalException(
+					op + ": index " + index + " out of bounds for string of capacity " + str.capacity());
+		}
+		LispChar c = requireChar(op, value);
+		if (!Character.isBmpCodePoint(c.codePoint())) {
+			throw new LispEvalException(op + " cannot store a supplementary character: " + c.print());
+		}
+		str.setCharAt(index, (char) c.codePoint());
+		return c;
+	}
+
 	private static void registerCharacters(Environment env) {
 		env.defineFunction(LispNames.CHAR, new LispFunction(LispNames.CHAR, args -> charRef(LispNames.CHAR, args)));
 		env.defineFunction(LispNames.SCHAR, new LispFunction(LispNames.SCHAR, args -> charRef(LispNames.SCHAR, args)));
@@ -3350,6 +3378,35 @@ public final class Environment implements Scope {
 				new LispFunction(LispNames.CHAR_LT, args -> charCompareChain(LispNames.CHAR_LT, args, -1, -1)));
 		env.defineFunction(LispNames.CHAR_LE,
 				new LispFunction(LispNames.CHAR_LE, args -> charCompareChain(LispNames.CHAR_LE, args, -1, 0)));
+		env.defineFunction(LispNames.CHAR_GT,
+				new LispFunction(LispNames.CHAR_GT, args -> charCompareChain(LispNames.CHAR_GT, args, 1, 1)));
+		env.defineFunction(LispNames.CHAR_GE,
+				new LispFunction(LispNames.CHAR_GE, args -> charCompareChain(LispNames.CHAR_GE, args, 0, 1)));
+		env.defineFunction(LispNames.CHAR_EQUAL, new LispFunction(LispNames.CHAR_EQUAL, args -> {
+			requireMinArgCount(LispNames.CHAR_EQUAL, args, 1);
+			for (int i = 0; i + 1 < args.size(); i++) {
+				int a = Character.toLowerCase(requireChar(LispNames.CHAR_EQUAL, args.get(i)).codePoint());
+				int b = Character.toLowerCase(requireChar(LispNames.CHAR_EQUAL, args.get(i + 1)).codePoint());
+				if (a != b) {
+					return LispNil.INSTANCE;
+				}
+			}
+			return LispTrue.INSTANCE;
+		}));
+		env.defineFunction(LispNames.CHAR_NE, new LispFunction(LispNames.CHAR_NE, args -> {
+			requireMinArgCount(LispNames.CHAR_NE, args, 1);
+			// char/= is true when ALL arguments are pairwise distinct (not just
+			// adjacent pairs), per CL.
+			for (int i = 0; i < args.size(); i++) {
+				for (int j = i + 1; j < args.size(); j++) {
+					if (requireChar(LispNames.CHAR_NE, args.get(i))
+						.codePoint() == requireChar(LispNames.CHAR_NE, args.get(j)).codePoint()) {
+						return LispNil.INSTANCE;
+					}
+				}
+			}
+			return LispTrue.INSTANCE;
+		}));
 		env.defineFunction(LispNames.CHAR_UPCASE, new LispFunction(LispNames.CHAR_UPCASE, args -> {
 			requireArgCount(LispNames.CHAR_UPCASE, args, 1);
 			return new LispChar(Character.toUpperCase(requireChar(LispNames.CHAR_UPCASE, args.get(0)).codePoint()));
@@ -3392,6 +3449,12 @@ public final class Environment implements Scope {
 			LispVal v = args.get(0);
 			return (v instanceof LispInteger || v instanceof LispBigInteger || v instanceof LispTrue)
 					? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		env.defineFunction(LispNames.SIMPLE_STRING_P, new LispFunction(LispNames.SIMPLE_STRING_P, args -> {
+			requireArgCount(LispNames.SIMPLE_STRING_P, args, 1);
+			// Every rontolisp string is "simple" (lite), so the portable
+			// "coerce unless simple" idiom keeps the string unchanged.
+			return args.get(0) instanceof LispString ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.PATHNAMEP, new LispFunction(LispNames.PATHNAMEP, args -> {
 			requireArgCount(LispNames.PATHNAMEP, args, 1);

@@ -94,10 +94,11 @@
 | `denominator` | `(denominator 3/4)` | `4`(整数では `1`) |
 | `symbolp` | `(symbolp 'foo)` | `t` |
 | `stringp` | `(stringp "hello")` | `t` |
+| `simple-string-p` | `(simple-string-p "hello")` | `t` -- rontolisp のすべての文字列は「simple」です(lite) |
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |
-| `constantp` | `(constantp 5)`, `(constantp 'x)` | `t`, `nil` -- 自己評価オブジェクト（数値、文字列、文字、キーワード、`t`/`nil`）と `(quote x)` 形式で真（lite） |
+| `constantp` | `(constantp 5)`, `(constantp 'x)` | `t`, `nil` -- 自己評価オブジェクト（数値、文字列、文字、キーワード、`t`/`nil`）と `(quote x)` 形式で真（lite）。省略可能な環境引数は受け付けて無視します |
 | `streamp` | `(streamp s)` | `s` がストリームなら `t`、そうでなければ `nil`（lite: ストリームは整数ハンドルなので `integerp` に相当。`stream` 型指定子の裏付けでもある） |
 | `cons` | `(cons 1 2)` | `(1 . 2)` |
 | `car` | `(car (cons 1 2))` | `1`(`(car nil)` は `nil`) |
@@ -132,8 +133,11 @@
 | `delete` | `(delete 2 '(1 2 3 2))` | `(1 3)`(破壊的な `remove`。マッチするセルをその場で切り出します。省略可能な `:test`/`:key` キーワードを取ります。先頭が変わる場合があるので戻り値を使ってください) |
 | `delete-if` | `(delete-if #'evenp '(1 2 3 4))` | `(1 3)`(破壊的な `remove-if`) |
 | `delete-if-not` | `(delete-if-not #'evenp '(1 2 3 4))` | `(2 4)`(破壊的な `remove-if-not`) |
+| `subst` | `(subst 'x 'a '(a (b a) c))` | `(x (b x) c)`(非破壊的な木の置換。省略可能な `:test`/`:key` キーワードを取ります) |
+| `search` | `(search "bc" "abcd")` | `1`（あるシーケンスが別のシーケンス内に現れる位置、なければ nil。`:start1`/`:end1`/`:start2`/`:end2`/`:test`/`:key`/`:from-end`） |
 | `substitute` | `(substitute 0 2 '(1 2 3 2))` | `(1 0 3 0)`(旧要素と `eql` になるすべての要素を新要素に置き換えたコピー。省略可能な `:test`/`:key` キーワードを取ります) |
 | `nsubstitute` | `(nsubstitute 0 2 '(1 2 3 2))` | `(1 0 3 0)`(破壊的な `substitute`。マッチするcarをその場で書き換えます。省略可能な `:test`/`:key` キーワードを取ります) |
+| `get-setf-expansion` | `(get-setf-expansion 'x)` | setf 展開の 5 値。`multiple-value-bind` で受け取ります(lite: 変数プレースとアクセサプレース) |
 | `nconc` | `(nconc (list 1 2) (list 3 4) (list 5))` | `(1 2 3 4 5)`(任意個数のリストを破壊的に連結し、最初の非 `nil` 引数を返します) |
 | `copy-list` | `(copy-list '(1 2 3))` | `(1 2 3)`(リストの浅いコピー) |
 | `nreverse` | `(nreverse '(1 2 3))` | `(3 2 1)`(各 `cdr` を繋ぎ替えてリストを破壊的に反転します。戻り値を使ってください) |

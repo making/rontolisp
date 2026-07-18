@@ -210,6 +210,21 @@ API は提供しません。
   バックエンドでは実行できません: MD5 の作業状態は符号なし 32 ビット演算で、
   WASM の `i31` fixnum 範囲に収まりません。
 
+- **[cl-ppcre](https://github.com/edicl/cl-ppcre) v2.1.2**: Dr. Edmund Weitz
+  による Perl 互換正規表現ライブラリを、実物の未改変ソースからロードします。
+  `scan`(レジスタ境界付き)、`scan-to-strings`、`split`、
+  `regex-replace`/`regex-replace-all`、`all-matches`(-as-strings)、
+  `count-matches`、`do-scans`/`do-matches`(-as-strings) 系の反復マクロ、
+  `register-groups-bind`、`quote-meta-chars`、パースツリー正規表現、`(?i)`
+  などのインラインモディファイアがすべて動作します。現時点ではインタープリタ
+  専用です: 生成されるスキャナクロージャはループを横断する名前付き
+  `block`/`return-from` に依存しており、コンパイルバックエンドは名前を落とす
+  lite 書き換えのままです。このロードはこれまでで最大の機能バッチ -- ローカル
+  `(declare (special ...))`、ジェネリック化された CLOS スロットアクセサ、
+  `initialize-instance :after`、`&environment` + `get-setf-expansion`、
+  `psetf`、`(setf (subseq ...))`、`subst`/`search`/`copy-tree`、降順・大文字
+  小文字非区別の文字比較 -- を牽引しました。
+
 - **[com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4** (`(ql:quickload
   '#:com.inuoe.jzon)` による本物のライブラリ): README
   のウォークスルーを含む JSON のパースと文字列化 — ハッシュテーブル /
