@@ -1,8 +1,19 @@
 # `defstruct` — expansion into plain defuns, tagged-list representation
 
 User-facing behavior: `doc/en/reference/special-forms/defstruct.md` (and the
-missing-features guide for what is out of scope: options syntax, `:include`,
-BOA constructors, `#S(...)` print/read, CLOS).
+missing-features guide for what is out of scope: `:include`, `#S(...)`
+print/read, CLOS). The options syntax IS supported: `(:constructor name)` /
+`(:conc-name prefix)` / `(:predicate name)` / `(:copier name)`, a dropped
+docstring before the slots, slot options `:type`/`:read-only` (parsed,
+ignored), and lite BOA constructors — `(:constructor name (lambda-list))`
+passes the lambda list to the generated defun verbatim; a slot whose plain
+name matches a lambda-list parameter (collected by `boaParameterSymbols`,
+markers skipped, `(name default)` binds `name`) reads that parameter, every
+other slot evaluates its initform inline in the constructor body. A struct
+name is also usable as a `defmethod` parameter specializer: `expandDefstruct`
+registers the type in the `ClosRegistry` (`registerStruct` →
+`findStructTag`), and the dispatcher emits the same tag test as the
+predicate.
 
 ## Design: expand to existing primitives, no backend codegen
 

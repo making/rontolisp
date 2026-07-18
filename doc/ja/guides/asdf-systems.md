@@ -201,6 +201,15 @@ API は提供しません。
   整数を浮動小数点で表現するため、大きな整数の `integer-to-base64-string`
   はそこで結果が変わります。
 
+- **[md5](https://github.com/pmai/md5) v2.0.4**: Pierre Mai による MD5
+  メッセージダイジェスト実装 (RFC 1321) です。文字列と `(unsigned-byte 8)`
+  ベクタに対する `md5sum-sequence`、`md5sum-string`(flexi-streams シムの
+  `string-to-octets` による UTF-8)、インクリメンタルな
+  `make-md5-state`/`update-md5-state`/`finalize-md5-state` API のすべてが、
+  インタプリタと JVM バックエンドで RFC のテストベクタと一致します。WASM
+  バックエンドでは実行できません: MD5 の作業状態は符号なし 32 ビット演算で、
+  WASM の `i31` fixnum 範囲に収まりません。
+
 - **[com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4** (`(ql:quickload
   '#:com.inuoe.jzon)` による本物のライブラリ): README
   のウォークスルーを含む JSON のパースと文字列化 — ハッシュテーブル /

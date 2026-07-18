@@ -5608,6 +5608,20 @@ public final class LispMacroExpander {
 	 * @return the generated top-level forms, in definition order
 	 */
 	public static List<LispVal> expandDefstruct(LispCons cons, java.util.Map<String, Integer> structAccessors) {
+		return expandDefstruct(cons, structAccessors, null);
+	}
+
+	/**
+	 * Like {@link #expandDefstruct(LispCons, java.util.Map)}, additionally registering
+	 * the struct type in the given {@link ClosRegistry} so the struct name is usable as a
+	 * {@code defmethod} parameter specializer.
+	 * @param cons the defstruct expression
+	 * @param structAccessors mutated: accessor name to 1-based slot position
+	 * @param closRegistry mutated when non-null: the struct type is registered
+	 * @return the generated defuns
+	 */
+	public static List<LispVal> expandDefstruct(LispCons cons, java.util.Map<String, Integer> structAccessors,
+			@org.jspecify.annotations.Nullable ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(LispNames.DEFSTRUCT + " expects a struct name: " + cons.print());
@@ -5618,6 +5632,7 @@ public final class LispMacroExpander {
 		// hard error naming the clause.
 		LispSymbol nameSym;
 		String customConstructor = null;
+		LispVal boaLambdaList = null;
 		boolean suppressConstructor = false;
 		String concNameOverride = null;
 		boolean concNameGiven = false;
@@ -5640,12 +5655,18 @@ public final class LispMacroExpander {
 				LispVal optValue = optParts.size() > 1 ? optParts.get(1) : LispNil.INSTANCE;
 				switch (optName) {
 					case ":constructor" -> {
-						if (optParts.size() > 2) {
+						if (optParts.size() > 3) {
 							throw new UnsupportedOperationException(
-									LispNames.DEFSTRUCT + " BOA constructors are not supported: " + option.print());
+									LispNames.DEFSTRUCT + " option is not supported: " + option.print());
 						}
 						if (optValue instanceof LispSymbol s) {
 							customConstructor = s.name();
+							if (optParts.size() == 3) {
+								// A BOA constructor: the explicit lambda list is used
+								// verbatim; a slot it binds reads the parameter, any
+								// other slot falls back to its initform.
+								boaLambdaList = optParts.get(2);
+							}
 						}
 						else {
 							suppressConstructor = true;
@@ -5690,6 +5711,9 @@ public final class LispMacroExpander {
 					LispNames.DEFSTRUCT + " options are not supported: " + parts.get(1).print());
 		}
 		String structName = nameSym.name();
+		if (closRegistry != null) {
+			closRegistry.registerStruct(structName);
+		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(structName);
 		// Generated names of a qualified struct are interned as internal symbols
 		// (double colon), matching how the resolver canonicalizes their call sites.
@@ -5701,7 +5725,12 @@ public final class LispMacroExpander {
 		List<LispSymbol> slotSyms = new java.util.ArrayList<>();
 		List<String> slotBases = new java.util.ArrayList<>();
 		List<LispVal> slotDefaults = new java.util.ArrayList<>();
-		for (LispVal spec : parts.subList(2, parts.size())) {
+		List<LispVal> slotSpecs = parts.subList(2, parts.size());
+		if (!slotSpecs.isEmpty() && slotSpecs.get(0) instanceof LispString) {
+			// (defstruct name "docstring" slot...): the documentation string is dropped.
+			slotSpecs = slotSpecs.subList(1, slotSpecs.size());
+		}
+		for (LispVal spec : slotSpecs) {
 			LispSymbol slot;
 			LispVal dflt = LispNil.INSTANCE;
 			if (spec instanceof LispSymbol s) {
@@ -5749,8 +5778,25 @@ public final class LispMacroExpander {
 		listCall.addAll(slotSyms);
 		if (!suppressConstructor) {
 			String constructorName = customConstructor != null ? customConstructor : prefix + "make-" + base;
-			forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(constructorName),
-					listToCons(lambdaList), listToCons(listCall))));
+			if (boaLambdaList != null) {
+				// (defun name (<boa lambda list>) (list '%struct-<name> value...)):
+				// a slot bound by the lambda list reads that parameter, the rest
+				// evaluate their initforms in the constructor body.
+				java.util.Map<String, LispSymbol> boaParams = boaParameterSymbols(boaLambdaList);
+				List<LispVal> boaCall = new java.util.ArrayList<>();
+				boaCall.add(new LispSymbol(LispNames.LIST));
+				boaCall.add(quotedTag);
+				for (int i = 0; i < slotSyms.size(); i++) {
+					LispSymbol param = boaParams.get(slotBases.get(i));
+					boaCall.add(param != null ? param : slotDefaults.get(i));
+				}
+				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(constructorName),
+						boaLambdaList, listToCons(boaCall))));
+			}
+			else {
+				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(constructorName),
+						listToCons(lambdaList), listToCons(listCall))));
+			}
 		}
 		// (defun <base>-p (__struct) (if (consp __struct) (equal (car __struct)
 		// '%struct-<name>) nil))
@@ -5781,6 +5827,36 @@ public final class LispMacroExpander {
 	}
 
 	private static final String STRUCT_VAR = "__struct";
+
+	/**
+	 * Collects the parameter symbols a BOA constructor lambda list binds, keyed by their
+	 * plain (package-stripped) name so they can be matched against slot names.
+	 * Lambda-list markers ({@code &optional}/{@code &rest}/{@code &key}/{@code &aux}/
+	 * {@code &allow-other-keys}) are skipped; {@code (name default)} entries bind
+	 * {@code name}.
+	 * @param lambdaList the BOA lambda list (possibly nil)
+	 * @return plain parameter name to the symbol as written
+	 */
+	private static java.util.Map<String, LispSymbol> boaParameterSymbols(LispVal lambdaList) {
+		java.util.Map<String, LispSymbol> bound = new java.util.LinkedHashMap<>();
+		LispVal cur = lambdaList;
+		while (cur instanceof LispCons c) {
+			LispVal item = c.car();
+			LispSymbol var = null;
+			if (item instanceof LispSymbol s && !s.name().startsWith("&")) {
+				var = s;
+			}
+			else if (item instanceof LispCons pc && pc.car() instanceof LispSymbol s) {
+				var = s;
+			}
+			if (var != null) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(var.name());
+				bound.put(qn == null ? var.name() : qn.member(), var);
+			}
+			cur = c.cdr();
+		}
+		return bound;
+	}
 
 	/**
 	 * Splices every top-level {@code (defstruct ...)} of a program into its generated
@@ -6540,6 +6616,16 @@ public final class LispMacroExpander {
 				inlineMethods.add((LispCons) listToCons(method));
 				continue;
 			}
+			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
+					&& (LispNames.DECLARE.equals(plainTypeName(optSym))
+							|| ":argument-precedence-order".equals(plainTypeName(optSym))
+							|| ":generic-function-class".equals(plainTypeName(optSym))
+							|| ":method-class".equals(plainTypeName(optSym)))) {
+				// (declare (optimize ...)) is a no-op like every declaration;
+				// :argument-precedence-order and the metaclass options are accepted and
+				// ignored (lite: leftmost-first ordering, no MOP).
+				continue;
+			}
 			throw new UnsupportedOperationException(
 					LispNames.DEFGENERIC + " option is not supported: " + parts.get(i).print());
 		}
@@ -6732,6 +6818,11 @@ public final class LispMacroExpander {
 			if (specClass != null) {
 				return new ClosRegistry.Specializer(ClosRegistry.SpecializerKind.CLASS, null,
 						ClosRegistry.normalize(specClass.name()));
+			}
+			if (closRegistry.findStructTag(specSym.name()) != null) {
+				// A defstruct type as a specializer: a TYPE specializer carrying the
+				// struct name; the dispatcher tests the struct instance tag.
+				return new ClosRegistry.Specializer(ClosRegistry.SpecializerKind.TYPE, null, specSym.name());
 			}
 			if (isSupportedTypeSpecializer(plainName)) {
 				return new ClosRegistry.Specializer(ClosRegistry.SpecializerKind.TYPE, null, plainName);
@@ -7167,7 +7258,16 @@ public final class LispMacroExpander {
 				// content-safe on WASM, like the defstruct predicate.
 				makeClassInstanceTest(arg, java.util.Objects.requireNonNull(spec.name()), closRegistry);
 			case TYPE -> {
-				String plain = plainTypeName(new LispSymbol(java.util.Objects.requireNonNull(spec.name())));
+				String structTag = closRegistry.findStructTag(java.util.Objects.requireNonNull(spec.name()));
+				if (structTag != null) {
+					// A defstruct type: test the instance tag, exactly like the struct
+					// predicate ((if (consp arg) (equal (car arg) '%struct-X) nil)).
+					yield makeIf(callOf(LispNames.CONSP, arg),
+							listToCons(List.of(new LispSymbol(LispNames.EQUAL), callOf(LispNames.CAR, arg),
+									listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(structTag))))),
+							LispNil.INSTANCE);
+				}
+				String plain = plainTypeName(new LispSymbol(spec.name()));
 				LispVal test = makeTypeTest(arg, new LispSymbol(spec.name()), closRegistry);
 				// A CLOS instance is a tagged cons internally, so it would satisfy a
 				// cons-shaped built-in specializer and never reach the default method
@@ -7292,7 +7392,7 @@ public final class LispMacroExpander {
 				out.add(rewriteSetfFunctionDefun((LispCons) form, structAccessors));
 			}
 			else if (isDefstructForm(form)) {
-				out.addAll(expandDefstruct((LispCons) form, structAccessors));
+				out.addAll(expandDefstruct((LispCons) form, structAccessors, closRegistry));
 			}
 			else if (isNamedForm(form, LispNames.DEFCLASS)) {
 				out.addAll(expandDefclass((LispCons) form, closRegistry, structAccessors));
@@ -11002,6 +11102,7 @@ public final class LispMacroExpander {
 			parentList = listToCons(List.of(new LispSymbol("condition")));
 		}
 		LispVal slots = parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE;
+		LispVal defaultInitargs = null;
 		for (int i = 4; i < parts.size(); i++) {
 			if (parts.get(i) instanceof LispCons opt && opt.car() instanceof LispSymbol optSym) {
 				switch (optSym.name()) {
@@ -11011,6 +11112,12 @@ public final class LispMacroExpander {
 									LispNames.DEFINE_CONDITION + " :report expects a value: " + cons.print());
 						}
 						closRegistry.registerConditionReport(nameSym.name(), reportCell.car());
+					}
+					case ":default-initargs" -> {
+						// Forwarded verbatim to the generated defclass, which supports
+						// the
+						// option.
+						defaultInitargs = opt;
 					}
 					case ":documentation" -> {
 						// Accepted and dropped, like the defclass class option.
@@ -11023,6 +11130,9 @@ public final class LispMacroExpander {
 				throw new IllegalArgumentException(
 						LispNames.DEFINE_CONDITION + " expects (option value...) options: " + cons.print());
 			}
+		}
+		if (defaultInitargs != null) {
+			return listToCons(List.of(new LispSymbol(LispNames.DEFCLASS), nameSym, parentList, slots, defaultInitargs));
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.DEFCLASS), nameSym, parentList, slots));
 	}
@@ -12189,6 +12299,82 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (make-sequence 'TYPE size &key initial-element)} onto the native
+	 * constructors: a string type becomes {@code make-string}, {@code list} becomes
+	 * {@code make-list}, and a vector type becomes {@code make-array}. Lite: the result
+	 * type must be a literal quoted specifier (every real-library call site is).
+	 * @param cons the make-sequence expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMakeSequence(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispCons quoted)
+				|| !(quoted.car() instanceof LispSymbol quoteOp) || !LispNames.QUOTE.equals(plainTypeName(quoteOp))
+				|| !(quoted.cdr() instanceof LispCons datumCell)) {
+			throw new IllegalArgumentException("make-sequence expects a literal quoted result type: " + cons.print());
+		}
+		LispVal typeSpec = datumCell.car();
+		String typeName = switch (typeSpec) {
+			case LispSymbol s -> plainTypeName(s);
+			case LispCons c when c.car() instanceof LispSymbol s -> plainTypeName(s);
+			default -> "";
+		};
+		String constructor = switch (typeName) {
+			case "string", "simple-string", "base-string", "simple-base-string" -> LispNames.MAKE_STRING;
+			case "list" -> LispNames.MAKE_LIST;
+			case "vector", "simple-vector", "array", "simple-array" -> LispNames.MAKE_ARRAY;
+			default -> throw new IllegalArgumentException("make-sequence: unsupported result type " + typeSpec.print());
+		};
+		List<LispVal> call = new java.util.ArrayList<>();
+		call.add(new LispSymbol(constructor));
+		call.addAll(parts.subList(2, parts.size()));
+		return listToCons(call);
+	}
+
+	/**
+	 * Expands the {@code logandc1}/{@code logandc2}/{@code logorc1}/{@code logorc2}
+	 * complement-operand bit functions over {@code logand}/{@code logior}/{@code lognot}.
+	 * Each operand appears exactly once in the expansion, so evaluation order and count
+	 * match the function-call semantics.
+	 * @param cons the two-argument call expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandLogComplement(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3 || !(parts.get(0) instanceof LispSymbol op)) {
+			throw new IllegalArgumentException("log complement functions expect 2 arguments: " + cons.print());
+		}
+		String name = plainTypeName(op);
+		LispVal x = parts.get(1);
+		LispVal y = parts.get(2);
+		return switch (name) {
+			case LispNames.LOGANDC1 -> mvCall(LispNames.LOGAND, mvCall(LispNames.LOGNOT, x), y);
+			case LispNames.LOGANDC2 -> mvCall(LispNames.LOGAND, x, mvCall(LispNames.LOGNOT, y));
+			case LispNames.LOGORC1 -> mvCall(LispNames.LOGIOR, mvCall(LispNames.LOGNOT, x), y);
+			case LispNames.LOGORC2 -> mvCall(LispNames.LOGIOR, x, mvCall(LispNames.LOGNOT, y));
+			default -> throw new IllegalArgumentException("Unknown log complement function: " + cons.print());
+		};
+	}
+
+	/**
+	 * Normalizes a two-argument {@code (float x prototype)} call to the one-argument
+	 * shape the backends compile: {@code (float (prog1 x prototype))}. The prototype only
+	 * selects the float subtype in CL, and the runtime has a single float representation,
+	 * so its value is evaluated (in order, after {@code x}) and discarded. A one-argument
+	 * call is returned unchanged.
+	 * @param cons the float expression
+	 * @return the normalized float expression
+	 */
+	public static LispCons normalizeFloatCall(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			return cons;
+		}
+		LispVal prog1 = listToCons(List.of(new LispSymbol(LispNames.PROG1), parts.get(1), parts.get(2)));
+		return new LispCons(parts.get(0), new LispCons(prog1, LispNil.INSTANCE));
+	}
+
+	/**
 	 * Expands {@code (ldb bytespec integer)} (load byte) over the bit primitives: the
 	 * {@code size}-bit field at {@code position} of the integer, right-justified.
 	 *
@@ -13278,13 +13464,15 @@ public final class LispMacroExpander {
 
 	private static boolean isTopLevelSpliceForm(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()
-				&& (LispNames.PROGN.equals(sym.name())
+				&& (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
 						|| (LispNames.EVAL_WHEN.equals(sym.name()) && cons.toList().size() >= 2));
 	}
 
 	private static void flattenTopLevelInto(LispVal form, List<LispVal> out) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()) {
-			if (LispNames.PROGN.equals(sym.name())) {
+			// locally splices like progn: its declarations are no-ops downstream, and
+			// libraries wrap top-level defstruct/defun groups in (locally (declare ...)).
+			if (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())) {
 				List<LispVal> parts = cons.toList();
 				for (int i = 1; i < parts.size(); i++) {
 					flattenTopLevelInto(parts.get(i), out);

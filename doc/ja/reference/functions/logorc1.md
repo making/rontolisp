@@ -1,0 +1,9 @@
+# logorc1
+
+`(logorc1 integer1 integer2)`
+
+`integer1` の補数と `integer2` のビット単位 OR、すなわち `(logior (lognot integer1) integer2)` です。インタプリタと JVM では任意の大きさの整数に対して正確に演算します。WASM ではオペランドは 31 ビットの `i31` 値です。
+
+```lisp
+(logorc1 12 10) ; => -5
+```

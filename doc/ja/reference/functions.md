@@ -41,6 +41,7 @@
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"`(各単語の最初の文字) |
 | `subseq` | `(subseq "hello" 1 3)` | `"el"`(文字列とリストで機能します。例: `(subseq '(1 2 3 4) 1 3)` => `(2 3)`。`end` 引数は省略可能) |
 | `make-string` | `(make-string 3 :initial-element #\x)` | `"xxx"` -- `:initial-element`（デフォルトは空白）を `n` 個並べた新しい文字列。`:element-type` は受け付けるが無視 |
+| `make-sequence` | `(make-sequence 'list 3)` | `(nil nil nil)` -- リテラルのクォートされた結果型のシーケンス（文字列型は `make-string`、`list` は `make-list`、ベクタ型は `make-array` 経由） |
 | `replace` | `(replace (make-string 5 :initial-element #\a) "XY" :start1 1)` | `"aXYaa"` -- `sequence-2` を `sequence-1` にコピー（`:start1`/`:end1`/`:start2`/`:end2`）。文字列対応で、新しい文字列を返す（文字列は不変） |
 | `string=` | `(string= "abc" "abc")` | `t`(大小文字を区別する文字列等価) |
 | `string<` | `(string< "abc" "abd")` | `2`(大小文字を区別する辞書順の less-than: 不一致のインデックス、なければ nil) |
@@ -191,6 +192,10 @@
 | `logior` | `(logior 12 10)`, `(logior 1 2 4 8)` | `14`, `15`(可変長引数のビット単位OR。`(logior)` は `0`) |
 | `logxor` | `(logxor 12 10)` | `6`(可変長引数のビット単位XOR。`(logxor)` は `0`) |
 | `lognot` | `(lognot 5)` | `-6`(ビット単位NOT、すなわち1の補数) |
+| `logandc1` | `(logandc1 12 10)` | `2`(第1引数の補数と第2引数のAND) |
+| `logandc2` | `(logandc2 12 10)` | `4`(第1引数と第2引数の補数のAND) |
+| `logorc1` | `(logorc1 12 10)` | `-5`(第1引数の補数と第2引数のOR) |
+| `logorc2` | `(logorc2 12 10)` | `-3`(第1引数と第2引数の補数のOR) |
 | `ash` | `(ash 1 4)`, `(ash 255 -4)` | `16`, `15`(算術シフト。非負のカウントなら左、それ以外は右) |
 | `funcall` | `(funcall #'+ 3 4)` | 関数を引数に適用します。関数値(`#'f`、ラムダ)または関数を指すシンボル(`(funcall 'car ...)`)を受け付けます |
 | `mapcar` | `(mapcar #'car '((1 2) (3 4)))` | 各要素に関数を適用し、新しいリストを返します |

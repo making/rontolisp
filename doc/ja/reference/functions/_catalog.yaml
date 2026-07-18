@@ -56,6 +56,10 @@ categories:
       - { slug: logior, name: "logior" }
       - { slug: logxor, name: "logxor" }
       - { slug: lognot, name: "lognot" }
+      - { slug: logandc1, name: "logandc1" }
+      - { slug: logandc2, name: "logandc2" }
+      - { slug: logorc1, name: "logorc1" }
+      - { slug: logorc2, name: "logorc2" }
       - { slug: ash, name: "ash" }
       - { slug: integer-length, name: "integer-length" }
       - { slug: logbitp, name: "logbitp" }
@@ -106,6 +110,7 @@ categories:
       - { slug: concatenate, name: "concatenate" }
       - { slug: string, name: "string" }
       - { slug: make-string, name: "make-string" }
+      - { slug: make-sequence, name: "make-sequence" }
       - { slug: replace, name: "replace" }
       - { slug: string-upcase, name: "string-upcase" }
       - { slug: string-downcase, name: "string-downcase" }

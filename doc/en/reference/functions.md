@@ -44,6 +44,7 @@ page.
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"` (first letter of each word) |
 | `subseq` | `(subseq "hello" 1 3)` | `"el"` (works on strings and lists, e.g. `(subseq '(1 2 3 4) 1 3)` => `(2 3)`; the `end` argument is optional) |
 | `make-string` | `(make-string 3 :initial-element #\x)` | `"xxx"` -- a fresh string of `n` copies of `:initial-element` (default space); `:element-type` is accepted and ignored |
+| `make-sequence` | `(make-sequence 'list 3)` | `(nil nil nil)` -- a sequence of the literal quoted result type (string types via `make-string`, `list` via `make-list`, vector types via `make-array`) |
 | `replace` | `(replace (make-string 5 :initial-element #\a) "XY" :start1 1)` | `"aXYaa"` -- copy `sequence-2` into `sequence-1` (`:start1`/`:end1`/`:start2`/`:end2`); string-aware, returns a fresh string (strings are immutable) |
 | `string=` | `(string= "abc" "abc")` | `t` (case-sensitive string equality) |
 | `string<` | `(string< "abc" "abd")` | `2` (case-sensitive lexicographic less-than: the mismatch index, or nil) |
@@ -194,6 +195,10 @@ page.
 | `logior` | `(logior 12 10)`, `(logior 1 2 4 8)` | `14`, `15` (variadic bitwise inclusive OR; `(logior)` is `0`) |
 | `logxor` | `(logxor 12 10)` | `6` (variadic bitwise exclusive OR; `(logxor)` is `0`) |
 | `lognot` | `(lognot 5)` | `-6` (bitwise NOT, i.e. ones' complement) |
+| `logandc1` | `(logandc1 12 10)` | `2` (AND of the complement of the first argument with the second) |
+| `logandc2` | `(logandc2 12 10)` | `4` (AND of the first argument with the complement of the second) |
+| `logorc1` | `(logorc1 12 10)` | `-5` (OR of the complement of the first argument with the second) |
+| `logorc2` | `(logorc2 12 10)` | `-3` (OR of the first argument with the complement of the second) |
 | `ash` | `(ash 1 4)`, `(ash 255 -4)` | `16`, `15` (arithmetic shift: left for a non-negative count, right otherwise) |
 | `funcall` | `(funcall #'+ 3 4)` | Apply a function to args. Accepts a function value (`#'f`, a lambda) or a symbol naming a function (`(funcall 'car ...)`) |
 | `mapcar` | `(mapcar #'car '((1 2) (3 4)))` | Apply a function to each element, return new list |

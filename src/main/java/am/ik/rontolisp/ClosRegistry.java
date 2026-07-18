@@ -312,11 +312,44 @@ public final class ClosRegistry {
 	private final Map<String, Set<String>> pendingExtraAncestors = new LinkedHashMap<>();
 
 	/**
+	 * Struct type name (normalized) to its instance tag ({@code %struct-<name>}) --
+	 * registered by {@code defstruct} so a struct name is usable as a {@code defmethod}
+	 * parameter specializer (the dispatcher tests the tag, exactly like the struct
+	 * predicate).
+	 */
+	private final Map<String, String> structTags = new LinkedHashMap<>();
+
+	/**
 	 * The classes by normalized name, in definition order.
 	 * @return the class registry
 	 */
 	public Map<String, ClassInfo> classes() {
 		return this.classes;
+	}
+
+	/**
+	 * Registers a {@code defstruct} type so its name is usable as a method specializer.
+	 * @param structName the struct name as spelled in the defstruct
+	 */
+	public void registerStruct(String structName) {
+		this.structTags.put(normalize(structName), "%struct-" + structName);
+	}
+
+	/**
+	 * The instance tag of a registered struct type, or null. Single- and double-colon
+	 * spellings match, like {@link #findClass}.
+	 * @param name the specializer name as spelled
+	 * @return the {@code %struct-<name>} tag, or null when no such struct is registered
+	 */
+	@Nullable public String findStructTag(String name) {
+		String exact = this.structTags.get(normalize(name));
+		if (exact != null) {
+			return exact;
+		}
+		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
+			return this.structTags.get(qn.member());
+		}
+		return null;
 	}
 
 	/**

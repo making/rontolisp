@@ -46,9 +46,9 @@ public final class PackageRegistry {
 			LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET,
 			LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN,
 			LispNames.SIGNAL, LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE,
-			LispNames.WITH_SLOTS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.WRITE_CHAR, LispNames.PROG,
-			LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP,
-			LispNames.SLOT_MAKUNBOUND);
+			LispNames.WITH_SLOTS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.WRITE_CHAR,
+			LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE,
+			LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -85,12 +85,13 @@ public final class PackageRegistry {
 			LispNames.WRITE_BYTE, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.IDENTITY,
 			LispNames.COPY_LIST, LispNames.NREVERSE, LispNames.MAKE_LIST, LispNames.UNION, LispNames.INTERSECTION,
 			LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR,
-			LispNames.LOGNOT, LispNames.ASH, LispNames.INTEGER_LENGTH, LispNames.LOGBITP, LispNames.BYTE,
-			LispNames.BYTE_SIZE, LispNames.BYTE_POSITION, LispNames.LDB, LispNames.DPB, LispNames.LIST_STAR,
-			LispNames.ACONS, LispNames.ENDP, LispNames.ELT, LispNames.RASSOC, LispNames.PAIRLIS, LispNames.COPY_ALIST,
-			LispNames.REVAPPEND, LispNames.NRECONC, LispNames.MAPLIST, LispNames.MAPCON, LispNames.MAPL,
-			LispNames.NOTANY, LispNames.NOTEVERY, LispNames.DELETE, LispNames.DELETE_IF, LispNames.DELETE_IF_NOT,
-			LispNames.SUBSTITUTE, LispNames.NSUBSTITUTE, LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME,
+			LispNames.LOGNOT, LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2,
+			LispNames.ASH, LispNames.INTEGER_LENGTH, LispNames.LOGBITP, LispNames.BYTE, LispNames.BYTE_SIZE,
+			LispNames.BYTE_POSITION, LispNames.LDB, LispNames.DPB, LispNames.LIST_STAR, LispNames.ACONS, LispNames.ENDP,
+			LispNames.ELT, LispNames.RASSOC, LispNames.PAIRLIS, LispNames.COPY_ALIST, LispNames.REVAPPEND,
+			LispNames.NRECONC, LispNames.MAPLIST, LispNames.MAPCON, LispNames.MAPL, LispNames.NOTANY,
+			LispNames.NOTEVERY, LispNames.DELETE, LispNames.DELETE_IF, LispNames.DELETE_IF_NOT, LispNames.SUBSTITUTE,
+			LispNames.NSUBSTITUTE, LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME,
 			LispNames.GET_INTERNAL_RUN_TIME, LispNames.GETENV, LispNames.READ_FROM_STRING, LispNames.PARSE_INTEGER,
 			LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.CHAR_EQ,
 			LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP,
@@ -114,8 +115,9 @@ public final class PackageRegistry {
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
-			LispNames.ARRAY_DIMENSION_LIMIT, LispNames.PRINT_CIRCLE_VAR, LispNames.FEATURES_VAR,
-			LispNames.STANDARD_OUTPUT_VAR, LispNames.ERROR_OUTPUT_VAR);
+			LispNames.ARRAY_DIMENSION_LIMIT, LispNames.ARRAY_TOTAL_SIZE_LIMIT, LispNames.CHAR_CODE_LIMIT,
+			LispNames.PRINT_CIRCLE_VAR, LispNames.FEATURES_VAR, LispNames.STANDARD_OUTPUT_VAR,
+			LispNames.ERROR_OUTPUT_VAR);
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also
@@ -336,8 +338,8 @@ public final class PackageRegistry {
 		// trivial-gray-streams.
 		define(new LispPackage(LispNames.CLOSER_MOP_PKG, List.of(), new HashSet<>(Set.of(LispNames.CLASS_SLOTS,
 				LispNames.ENSURE_FINALIZED, LispNames.SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_TYPE))));
-		define(new LispPackage(LispNames.FLEXI_STREAMS_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.MAKE_FLEXI_STREAM))));
+		define(new LispPackage(LispNames.FLEXI_STREAMS_PKG, List.of(), new HashSet<>(
+				Set.of(LispNames.MAKE_FLEXI_STREAM, LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING))));
 		define(new LispPackage(LispNames.FLOAT_FEATURES_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.BITS_DOUBLE_FLOAT, LispNames.DOUBLE_FLOAT_BITS,
 						LispNames.SINGLE_FLOAT_BITS, LispNames.BITS_SINGLE_FLOAT))));

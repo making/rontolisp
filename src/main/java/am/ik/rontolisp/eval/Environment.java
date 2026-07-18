@@ -1629,6 +1629,22 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.LOGNOT, args, 1);
 			return normalizeBig(asBigInteger(args.get(0)).not());
 		}));
+		env.defineFunction(LispNames.LOGANDC1, new LispFunction(LispNames.LOGANDC1, args -> {
+			requireArgCount(LispNames.LOGANDC1, args, 2);
+			return normalizeBig(asBigInteger(args.get(1)).andNot(asBigInteger(args.get(0))));
+		}));
+		env.defineFunction(LispNames.LOGANDC2, new LispFunction(LispNames.LOGANDC2, args -> {
+			requireArgCount(LispNames.LOGANDC2, args, 2);
+			return normalizeBig(asBigInteger(args.get(0)).andNot(asBigInteger(args.get(1))));
+		}));
+		env.defineFunction(LispNames.LOGORC1, new LispFunction(LispNames.LOGORC1, args -> {
+			requireArgCount(LispNames.LOGORC1, args, 2);
+			return normalizeBig(asBigInteger(args.get(0)).not().or(asBigInteger(args.get(1))));
+		}));
+		env.defineFunction(LispNames.LOGORC2, new LispFunction(LispNames.LOGORC2, args -> {
+			requireArgCount(LispNames.LOGORC2, args, 2);
+			return normalizeBig(asBigInteger(args.get(0)).or(asBigInteger(args.get(1)).not()));
+		}));
 		// ash: shift left for a non-negative count, arithmetic right shift otherwise.
 		env.defineFunction(LispNames.ASH, new LispFunction(LispNames.ASH, args -> {
 			requireArgCount(LispNames.ASH, args, 2);
@@ -3806,7 +3822,9 @@ public final class Environment implements Scope {
 
 	private static void registerTypeConversion(Environment env) {
 		env.defineFunction(LispNames.FLOAT, new LispFunction(LispNames.FLOAT, args -> {
-			requireArgCount(LispNames.FLOAT, args, 1);
+			// The optional second argument is a CL prototype selecting the float
+			// subtype; the runtime has a single float representation, so it is ignored.
+			requireArgCountBetween(LispNames.FLOAT, args, 1, 2);
 			LispVal arg = args.get(0);
 			if (arg instanceof LispDouble) {
 				return arg;

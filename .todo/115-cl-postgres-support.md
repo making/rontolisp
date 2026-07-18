@@ -82,23 +82,22 @@ Iterate with the cached copy in
      behavior-identical to real CL here. The real restart gate is Postmodern
      proper, which is out of scope (see the milestones).
 4. **Dependency systems**: `:depends-on ("md5" "split-sequence" "ironclad"
-   "cl-base64" "uax-15")`.
-   - `split-sequence` already runs (todo-054 verification chain).
-   - `md5`: only used for `AuthenticationMD5Password` (`md5:md5sum-sequence`,
-     one call site in messages.lisp). Port or shim.
-   - `ironclad`/`cl-base64`/`uax-15`: reached ONLY from `scram.lisp` /
-     `saslprep.lisp` (SCRAM-SHA-256 auth: sha256/hmac/pbkdf2 digests, base64,
-     unicode normalization). Porting ironclad/uax-15 wholesale is
-     unrealistic. **Strategy: extend the todo-114 `BuiltinSystems` precedent —
-     ship mini shim packages backed by JDK primitives** (`MessageDigest`
-     SHA-256, `javax.crypto.Mac` HmacSHA256, `SecretKeyFactory`
-     PBKDF2WithHmacSHA256, `java.util.Base64`, `java.text.Normalizer` for
-     NFKC) registered as built-in systems "ironclad"/"cl-base64"/"uax-15"/
-     "md5" exporting exactly the names cl-postgres calls (~12 functions
-     total, enumerated in scram.lisp lines 205-320). Interpreter/JVM real;
-     WASM component = error or nil per op. cl-base64's real source stays
-     blocked on compiled string setf anyway (see asdf-library-candidates
-     memory).
+   "cl-base64" "uax-15")`. **Status + remaining grind: `.todo/154`** (the
+   REAL-source policy of `.todo/147` supersedes the original shim-everything
+   strategy below).
+   - `split-sequence` already runs REAL (todo-054 verification chain).
+   - `cl-base64` runs REAL (todo-085, all 4 backends).
+   - `md5` runs REAL (2026-07-18, interpreter + JVM, `Md5E2eTest`; WASM
+     excluded -- unsigned 32-bit arithmetic beyond `i31`).
+   - `uax-15`: blocked on real `cl-ppcre` (in progress, `.todo/154`) plus
+     asdf source-directory introspection for its Unicode data files.
+   - `ironclad`: reached ONLY from `scram.lisp` (SCRAM-SHA-256:
+     sha256/hmac/pbkdf2). Real loading judged infeasible (its `.asd` is
+     executable CLOS/macro code, against the mini-ASDF plain-data
+     invariant); the JDK-backed shim strategy (frozen `cl-postgres-wip`
+     M2: `MessageDigest` SHA-256, `javax.crypto.Mac` HmacSHA256,
+     `SecretKeyFactory` PBKDF2WithHmacSHA256, `java.text.Normalizer`)
+     remains the route for the ironclad piece specifically.
 5. **Stream/socket gaps**: `force-output` (16 — no-op shim is correct, socket
    writes are unbuffered), `(listen socket)` (1, the MITM check — needs an
    `InputStream.available()`-style primitive or a documented stub),

@@ -209,6 +209,15 @@ backends (interpreter, JVM, WASM Preview 1 and `--component`):
   range (about 2^30) as a float, so `integer-to-base64-string` of a large
   integer diverges there.
 
+- **[md5](https://github.com/pmai/md5) v2.0.4**: Pierre Mai's MD5
+  message-digest implementation (RFC 1321). `md5sum-sequence` on strings and
+  `(unsigned-byte 8)` vectors, `md5sum-string` (UTF-8 through the
+  flexi-streams shim's `string-to-octets`), and the incremental
+  `make-md5-state`/`update-md5-state`/`finalize-md5-state` API all match the
+  RFC test vectors on the interpreter and the JVM backend. The WASM backends
+  cannot run it: the MD5 working state is unsigned 32-bit arithmetic, which
+  does not fit the WASM `i31` fixnum range.
+
 - **[com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4** (the real
   library via `(ql:quickload '#:com.inuoe.jzon)`): JSON parsing and
   stringification including the README walkthrough — hash-table / vector

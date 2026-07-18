@@ -24,9 +24,26 @@ import java.util.Set;
  * {@code :import-from} clause, mapping each imported name to its source package (symbol
  * resolution is textual, so an imported name simply resolves to the source package's
  * canonical spelling)
+ * @param shadows the symbol names shadowed via the {@code defpackage} {@code :shadow}
+ * clause: inside this package an unqualified use of such a name always resolves to this
+ * package's own symbol, never to the {@code cl} (or any used package's) symbol of the
+ * same name
  */
 public record LispPackage(String name, List<String> useList, Set<String> symbols, Set<String> externals,
-		Map<String, String> imports) {
+		Map<String, String> imports, Set<String> shadows) {
+
+	/**
+	 * Creates a package with no shadowed symbols.
+	 * @param name the package name
+	 * @param useList the names of packages this package uses
+	 * @param symbols the names of symbols owned by this package
+	 * @param externals the names of the exported (external) symbols
+	 * @param imports the imported symbol names mapped to their source packages
+	 */
+	public LispPackage(String name, List<String> useList, Set<String> symbols, Set<String> externals,
+			Map<String, String> imports) {
+		this(name, useList, symbols, externals, imports, Set.of());
+	}
 
 	/**
 	 * Creates a package with no imported symbols.
@@ -75,6 +92,16 @@ public record LispPackage(String name, List<String> useList, Set<String> symbols
 	 */
 	public boolean exports(String symbolName) {
 		return this.externals.contains(symbolName);
+	}
+
+	/**
+	 * Returns whether this package shadows a symbol with the given name (the
+	 * {@code defpackage} {@code :shadow} clause).
+	 * @param symbolName the symbol name to check
+	 * @return {@code true} if the symbol is shadowed
+	 */
+	public boolean shadows(String symbolName) {
+		return this.shadows.contains(symbolName);
 	}
 
 }

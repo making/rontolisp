@@ -23,7 +23,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `flet` / `labels` | 利用可能（[`flet`](../reference/macros/flet.md)、[`labels`](../reference/macros/labels.md) 参照） |
 | `macrolet` | 利用可能（[`macrolet`](../reference/macros/macrolet.md) を参照）。`symbol-macrolet` は利用不可 |
 | `loop`（拡張版） | 一部対応（単純ループのサブセット） |
-| `defstruct` | 利用可能。`:constructor`/`:conc-name`/`:predicate`/`:copier` オプションを含む（[`defstruct`](../reference/special-forms/defstruct.md) 参照）。`:include`/BOA コンストラクタは利用不可 |
+| `defstruct` | 利用可能。`:constructor`/`:conc-name`/`:predicate`/`:copier` オプションとライト形式の BOA コンストラクタを含む（[`defstruct`](../reference/special-forms/defstruct.md) 参照）。`:include` は利用不可 |
 | CLOS | 一部対応（静的サブセット: [`defclass`](../reference/special-forms/defclass.md)、[`defgeneric`](../reference/special-forms/defgeneric.md)、[`defmethod`](../reference/special-forms/defmethod.md)、[`make-instance`](../reference/macros/make-instance.md)、[`slot-value`](../reference/macros/slot-value.md)） |
 | `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op として利用可能（[`declare`](../reference/macros/declare.md) 参照） |
 | `check-type` / `assert` | 利用可能（ライト版、リスタートなし。[`check-type`](../reference/macros/check-type.md) 参照） |
@@ -166,9 +166,10 @@ wasm-GC バックエンドでの捕捉は WebAssembly の exception-handling プ
 
 構造体は [`defstruct`](../reference/special-forms/defstruct.md) で **利用可能**
 です。キーワードコンストラクタ、述語、コピー関数、`setf` 可能なアクセサを生成し、
-`:constructor`/`:conc-name`/`:predicate`/`:copier` オプションをサポートします。
-`:include` による継承、BOA コンストラクタ、`#S(...)`
-の印字/読み取り構文はサポートされません。
+`:constructor`/`:conc-name`/`:predicate`/`:copier` オプションとライト形式の
+BOA コンストラクタ（ラムダリストに名前があるスロットはそのパラメータを読み、
+残りは initform を評価する）をサポートします。`:include` による継承と
+`#S(...)` の印字/読み取り構文はサポートされません。
 
 **静的な CLOS サブセット**が利用可能です:
 [`defclass`](../reference/special-forms/defclass.md)（単一継承、

@@ -96,12 +96,15 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
 トップレベルディレクティブ** であり、パッケージは使用より前に、ソース順に
 定義されます。サポートされる clause は `(:use package...)`、
 `(:export symbol...)`、`(:nicknames name...)`、
-`(:import-from package symbol...)`、および受理されるが無視される
-`(:documentation "...")`/`(:size n)` です。名前と clause の引数はキーワード、
-裸のシンボル、文字列、または uninterned シンボル(`#:name`、ポータブルな
-defpackage の慣用形)です。`:shadow` と `:shadowing-import-from` はエラーで
-(rontolisp にシンボルのシャドウイングはありません)、それ以外の clause、
-既存パッケージの再定義、まだ存在しないパッケージの使用もエラーです。
+`(:import-from package symbol...)`、`(:shadow symbol...)`、および受理されるが
+無視される `(:documentation "...")`/`(:size n)` です。名前と clause の引数は
+キーワード、裸のシンボル、文字列、または uninterned シンボル(`#:name`、
+ポータブルな defpackage の慣用形)です。`:shadow` された名前はパッケージ内では
+常にそのパッケージ自身のシンボルに解決され、`cl`(や使用パッケージ)の同名
+シンボルには決して解決されません — これによりライブラリは独自の
+`digit-char-p` や `defconstant` を定義できます。`:shadowing-import-from` は
+エラーで、それ以外の clause、既存パッケージの再定義、まだ存在しないパッケージの
+使用もエラーです。
 
 - `:use` は、使用するパッケージの **external** シンボルを修飾なしで見えるように
   します(Common Lisp と同様) — 使用先パッケージの internal シンボルには
@@ -136,7 +139,7 @@ defpackage の慣用形)です。`:shadow` と `:shadowing-import-from` はエ�
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* locally loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string write-char)
+; => (and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string write-char)
 (print (rontolisp:list-special-forms))
 ; => (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))

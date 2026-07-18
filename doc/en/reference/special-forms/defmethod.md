@@ -6,6 +6,7 @@ Adds a method to the generic function `name` (creating it when no [`defgeneric`]
 
 - `(var (eql literal))` — matches when the first argument is the literal (a keyword, quoted symbol, number, or character)
 - `(var class-name)` — matches instances of a [`defclass`](defclass.md) class and its subclasses
+- `(var struct-name)` — matches instances of a [`defstruct`](defstruct.md) type (the dispatcher tests the instance tag, like the struct predicate)
 - `(var type-name)` — matches a built-in type (`integer`, `float`, `number`, `string`, `symbol`, `keyword`, `character`, `cons`, `list`, `null`, `hash-table`, `function`, ...)
 - `(var t)` or a plain `var` — the default method
 

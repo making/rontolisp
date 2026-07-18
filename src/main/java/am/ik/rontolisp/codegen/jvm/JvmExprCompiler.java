@@ -682,7 +682,8 @@ final class JvmExprCompiler {
 				case LispNames.FUNCTIONP -> JvmFunctionpCompiler.compile(cons, ctx, className);
 				case LispNames.ARRAYP_INTERNAL -> JvmArraypCompiler.compile(cons, ctx, className);
 				case LispNames.KEYWORDP -> JvmKeywordpCompiler.compile(cons, ctx, className);
-				case LispNames.FLOAT -> JvmFloatConvCompiler.compile(cons, ctx, className);
+				case LispNames.FLOAT ->
+					JvmFloatConvCompiler.compile(LispMacroExpander.normalizeFloatCall(cons), ctx, className);
 				case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND -> {
 					// (floor a b) -> (floor (/ a b)); the one-argument form compiles
 					// natively.
@@ -898,6 +899,10 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandBytePosition(cons), ctx, className);
 				case LispNames.LDB -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLdb(cons), ctx, className);
 				case LispNames.DPB -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDpb(cons), ctx, className);
+				case LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2 ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandLogComplement(cons), ctx, className);
+				case LispNames.MAKE_SEQUENCE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeSequence(cons), ctx, className);
 				case LispNames.DESTRUCTURING_BIND ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDestructuringBind(cons), ctx, className);
 				case LispNames.FIRST ->

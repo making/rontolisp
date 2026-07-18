@@ -86,13 +86,15 @@ New packages are defined with [`defpackage`](special-forms/defpackage.md):
 Like `in-package`, `defpackage` is a **literal, top-level directive consumed at
 read/compile time**, so packages are defined in source order, before any use.
 The supported clauses are `(:use package...)`, `(:export symbol...)`,
-`(:nicknames name...)` and `(:import-from package symbol...)`, plus
-`(:documentation "...")`/`(:size n)` which are accepted and ignored; the name
-and the clause arguments are keywords, bare symbols, strings, or uninterned
-symbols (`#:name`, the portable defpackage idiom). `:shadow` and
-`:shadowing-import-from` are errors (rontolisp has no symbol shadowing), and so
-is any other clause, redefining an existing package, or using a package that
-does not exist yet.
+`(:nicknames name...)`, `(:import-from package symbol...)` and
+`(:shadow symbol...)`, plus `(:documentation "...")`/`(:size n)` which are
+accepted and ignored; the name and the clause arguments are keywords, bare
+symbols, strings, or uninterned symbols (`#:name`, the portable defpackage
+idiom). A `:shadow`ed name always resolves to the package's own symbol inside
+the package -- never to the `cl` (or any used package's) symbol of the same
+name -- so a library can define its own `digit-char-p` or `defconstant`.
+`:shadowing-import-from` is an error, and so is any other clause, redefining
+an existing package, or using a package that does not exist yet.
 
 - `:use` makes the **external** symbols of the used packages visible
   unqualified, as in Common Lisp — internal symbols of a used package still
@@ -124,7 +126,7 @@ inside another form (not top-level) is an error.
 
 ```lisp
 (print (rontolisp:list-macros))
-; => (and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* locally loop macrolet make-condition make-instance multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string write-char)
+; => (and assert case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format incf labels let* locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog1 prog2 psetq push pushnew remf restart-case return-from rotatef setf slot-value the time typecase unless warn when with-input-from-string with-open-file with-output-to-string write-char)
 (print (rontolisp:list-special-forms))
 ; => (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))

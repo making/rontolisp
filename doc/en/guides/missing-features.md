@@ -23,7 +23,7 @@ This page lists the most notable omissions. For what **is** available, see the
 | `flet` / `labels` | available (see [`flet`](../reference/macros/flet.md), [`labels`](../reference/macros/labels.md)) |
 | `macrolet` | available (see [`macrolet`](../reference/macros/macrolet.md)); `symbol-macrolet` is not available |
 | `loop` (extended) | partial (simple-loop subset) |
-| `defstruct` | available, including the `:constructor`/`:conc-name`/`:predicate`/`:copier` options (see [`defstruct`](../reference/special-forms/defstruct.md)); `:include`/BOA constructors are not |
+| `defstruct` | available, including the `:constructor`/`:conc-name`/`:predicate`/`:copier` options and lite BOA constructors (see [`defstruct`](../reference/special-forms/defstruct.md)); `:include` is not |
 | CLOS | partial (static subset: [`defclass`](../reference/special-forms/defclass.md), [`defgeneric`](../reference/special-forms/defgeneric.md), [`defmethod`](../reference/special-forms/defmethod.md), [`make-instance`](../reference/macros/make-instance.md), [`slot-value`](../reference/macros/slot-value.md)) |
 | `declare` / `declaim` / `proclaim` / `the` | available as parsed no-ops (see [`declare`](../reference/macros/declare.md)) |
 | `check-type` / `assert` | available (lite, no restarts; see [`check-type`](../reference/macros/check-type.md)) |
@@ -169,9 +169,10 @@ anaphoric `it`, `named`/`loop-finish`, and `thereis`/`always`/`never`. The other
 Structures **are** available with
 [`defstruct`](../reference/special-forms/defstruct.md), which generates a
 keyword constructor, a predicate, a copier and `setf`-able accessors, and
-supports the `:constructor`/`:conc-name`/`:predicate`/`:copier` options.
-`:include` inheritance, BOA constructors, and the `#S(...)` print/read
-syntax are not supported.
+supports the `:constructor`/`:conc-name`/`:predicate`/`:copier` options and
+lite BOA constructors (a slot named by the lambda list reads that parameter,
+the rest evaluate their initforms). `:include` inheritance and the `#S(...)`
+print/read syntax are not supported.
 
 A **static CLOS subset** is available:
 [`defclass`](../reference/special-forms/defclass.md) (single inheritance,

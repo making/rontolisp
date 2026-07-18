@@ -398,8 +398,6 @@ class PackageResolverTest {
 
 	@Test
 	void defpackageUnsupportedClauseIsRejected() {
-		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:shadow :car))")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining(":shadow is not supported");
 		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:shadowing-import-from :other :f))"))
 			.isInstanceOf(LispPackageException.class)
 			.hasMessageContaining(":shadowing-import-from is not supported");

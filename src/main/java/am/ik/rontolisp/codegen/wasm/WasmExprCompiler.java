@@ -771,7 +771,7 @@ final class WasmExprCompiler {
 				case LispNames.FUNCTIONP -> WasmFunctionpCompiler.compile(cons, ctx);
 				case LispNames.ARRAYP_INTERNAL -> WasmArraypCompiler.compile(cons, ctx);
 				case LispNames.KEYWORDP -> WasmKeywordpCompiler.compile(cons, ctx);
-				case LispNames.FLOAT -> WasmFloatConvCompiler.compile(cons, ctx);
+				case LispNames.FLOAT -> WasmFloatConvCompiler.compile(LispMacroExpander.normalizeFloatCall(cons), ctx);
 				case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND -> {
 					// (floor a b) -> (floor (/ a b)); the one-argument form compiles
 					// natively.
@@ -936,6 +936,10 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandBytePosition(cons), ctx);
 				case LispNames.LDB -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLdb(cons), ctx);
 				case LispNames.DPB -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDpb(cons), ctx);
+				case LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2 ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandLogComplement(cons), ctx);
+				case LispNames.MAKE_SEQUENCE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeSequence(cons), ctx);
 				case LispNames.DESTRUCTURING_BIND ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandDestructuringBind(cons), ctx);
 				case LispNames.GCD -> {

@@ -156,6 +156,18 @@ public final class LispNames {
 	/** The {@code lognot} built-in function (bitwise NOT, i.e. ones' complement). */
 	public static final String LOGNOT = "lognot";
 
+	/** The {@code logandc1} built-in function ({@code (logand (lognot x) y)}). */
+	public static final String LOGANDC1 = "logandc1";
+
+	/** The {@code logandc2} built-in function ({@code (logand x (lognot y))}). */
+	public static final String LOGANDC2 = "logandc2";
+
+	/** The {@code logorc1} built-in function ({@code (logior (lognot x) y)}). */
+	public static final String LOGORC1 = "logorc1";
+
+	/** The {@code logorc2} built-in function ({@code (logior x (lognot y))}). */
+	public static final String LOGORC2 = "logorc2";
+
 	/**
 	 * The {@code ash} built-in function (arithmetic shift; left when the count is
 	 * non-negative, right otherwise).
@@ -452,6 +464,12 @@ public final class LispNames {
 	 * {@code :initial-element} keyword is not supported).
 	 */
 	public static final String MAKE_LIST = "make-list";
+
+	/**
+	 * The {@code make-sequence} macro (lowered onto {@code make-string}/
+	 * {@code make-list}/{@code make-array} by a literal-type expansion).
+	 */
+	public static final String MAKE_SEQUENCE = "make-sequence";
 
 	/**
 	 * The {@code union} built-in function (set union of two lists, compared with
@@ -3245,6 +3263,12 @@ public final class LispNames {
 	/** The {@code array-dimension-limit} constant variable. */
 	public static final String ARRAY_DIMENSION_LIMIT = "array-dimension-limit";
 
+	/** The {@code char-code-limit} constant variable. */
+	public static final String CHAR_CODE_LIMIT = "char-code-limit";
+
+	/** The {@code array-total-size-limit} constant variable. */
+	public static final String ARRAY_TOTAL_SIZE_LIMIT = "array-total-size-limit";
+
 	/** The {@code *print-circle*} variable (accepted and ignored by the printer). */
 	public static final String PRINT_CIRCLE_VAR = "*print-circle*";
 
@@ -3286,6 +3310,12 @@ public final class LispNames {
 
 	/** {@code flexi-streams:make-flexi-stream} -- lite: the underlying stream. */
 	public static final String MAKE_FLEXI_STREAM = "make-flexi-stream";
+
+	/** {@code string-to-octets} -- the flexi-streams shim's UTF-8 encoder. */
+	public static final String STRING_TO_OCTETS = "string-to-octets";
+
+	/** {@code octets-to-string} -- the flexi-streams shim's UTF-8 decoder. */
+	public static final String OCTETS_TO_STRING = "octets-to-string";
 
 	/**
 	 * The {@code org.shirakumo.float-features} shim package name ({@code float-features}

@@ -13,6 +13,7 @@
 | T | `t` | True |
 | Pi | `pi` | The constant π, read as the double `3.141592653589793` |
 | Fixnum range | `most-positive-fixnum`, `most-negative-fixnum` | Read as self-evaluating integers like `pi`; the value is backend-dependent (a WASM fixnum is an unboxed 31-bit reference, the interpreter and the JVM backend use 64-bit longs) |
+| Other limits | `char-code-limit`, `array-total-size-limit`, `array-dimension-limit` | Read as self-evaluating integers like the fixnum range; `char-code-limit` is `1114112` (full Unicode code points) on every backend, the array limits are backend-dependent |
 | Cons | `(1 2 3)`, `(a . 1)` | Linked list built from cons cells; `(a . b)` is dotted-pair notation for a single cell |
 | Function | `#'car`, `(lambda (x) x)` | Function object obtained via `#'`/`function`/`lambda` |
 | Array | `#(1 2 3)`, `#2A((1 2) (3 4))` | Fixed-size array of any rank (rank 1 = vector); `#(...)` and `#nA(...)` are self-evaluating array literals |

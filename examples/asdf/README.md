@@ -3,9 +3,12 @@
 These demos load REAL third-party Common Lisp libraries -- unmodified
 upstream sources -- through `asdf:load-system` and exercise their public API.
 All of them run identically on all four backends (interpreter, JVM,
-WASM Preview 1 and `--component`); they are the programs the cross-backend E2E
-tests pin (`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest`
-/ `ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest` / `JzonE2eTest`).
+WASM Preview 1 and `--component`), except md5, which runs on the interpreter
+and the JVM only (its unsigned 32-bit arithmetic exceeds the WASM `i31`
+fixnum range); they are the programs the cross-backend E2E tests pin
+(`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest`
+/ `ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest` / `JzonE2eTest`
+/ `Md5E2eTest`).
 jzon's three numeric leaf components (the eisel-lemire float reader and
 Schubfach float printer) are replaced at load time by built-in shims over
 rontolisp's native float arithmetic, so float text takes rontolisp's
@@ -25,6 +28,7 @@ rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src
 | [`assoc-utils-demo.lisp`](assoc-utils-demo.lisp) | assoc-utils (public domain) | <https://github.com/fukamachi/assoc-utils> |
 | [`cl-base64-demo.lisp`](cl-base64-demo.lisp) | cl-base64 v3.4 (BSD-style) | <https://github.com/darabi/cl-base64> |
 | [`jzon-demo.lisp`](jzon-demo.lisp) | com.inuoe.jzon v1.1.4 (MIT) | <https://github.com/Zulu-Inuoe/jzon> |
+| [`md5-demo.lisp`](md5-demo.lisp) | md5 v2.0.4 (public domain) | <https://github.com/pmai/md5> |
 
 ## Where the libraries come from
 
@@ -38,6 +42,8 @@ the demos run out of the box from the repository root:
 - `src/test/resources/assoc-utils/`
 - `src/test/resources/cl-base64/`
 - `src/test/resources/jzon/` (the `.asd` lives in its `src/` subdirectory)
+- `src/test/resources/md5/` (interpreter and JVM backends only: the MD5
+  working state needs unsigned 32-bit arithmetic beyond the WASM `i31` range)
 
 Alternatively, download the same versions from upstream and point
 `--system-path` (or the `RONTOLISP_SOURCE_REGISTRY` environment variable) at

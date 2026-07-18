@@ -208,8 +208,9 @@ public final class PackageResolver {
 	 * package names, {@code :import-from} maps the named symbols to their source package
 	 * (resolution is textual, so an imported name simply resolves to the source package's
 	 * canonical spelling), and {@code :documentation}/{@code :size} are accepted and
-	 * ignored. {@code :shadow}/{@code :shadowing-import-from} (and any other clause) are
-	 * an error.
+	 * ignored. {@code :shadow} records the named symbols so their unqualified uses inside
+	 * the package resolve package-locally (see {@link #resolveUnqualified}).
+	 * {@code :shadowing-import-from} (and any other clause) is an error.
 	 */
 	private LispVal resolveDefpackage(LispCons cons) {
 		List<LispVal> parts = cons.toList();
@@ -224,6 +225,7 @@ public final class PackageResolver {
 		Set<String> exports = new HashSet<>();
 		List<String> nicknames = new ArrayList<>();
 		Map<String, String> imports = new HashMap<>();
+		Set<String> shadows = new HashSet<>();
 		for (LispVal clause : parts.subList(2, parts.size())) {
 			if (!(clause instanceof LispCons clauseCons) || !(clauseCons.car() instanceof LispSymbol keyword)
 					|| !keyword.isKeyword()) {
@@ -288,14 +290,24 @@ public final class PackageResolver {
 				// Metadata: accepted for portability, not recorded anywhere.
 				case ":documentation", ":size" -> {
 				}
-				case ":shadow", ":shadowing-import-from" -> throw new LispPackageException(LispNames.DEFPACKAGE + " "
-						+ keyword.name() + " is not supported (rontolisp has no symbol shadowing)");
+				case ":shadow" -> {
+					// (:shadow name...): inside this package the names always resolve to
+					// the package's own symbols, so a library can redefine a cl name
+					// (cl-ppcre shadows digit-char-p and defconstant).
+					for (LispVal arg : args.subList(1, args.size())) {
+						shadows.add(designator(":shadow", "a symbol name", arg));
+					}
+				}
+				case ":shadowing-import-from" -> throw new LispPackageException(LispNames.DEFPACKAGE + " "
+						+ keyword.name() + " is not supported (rontolisp has no symbol shadowing import)");
 				default -> throw new LispPackageException(
 						"Unsupported " + LispNames.DEFPACKAGE + " clause: " + keyword.name());
 			}
 		}
-		this.registry.define(new LispPackage(name, List.copyOf(useList), Set.copyOf(exports), Set.copyOf(exports),
-				Map.copyOf(imports)));
+		Set<String> owned = new HashSet<>(exports);
+		owned.addAll(shadows);
+		this.registry.define(new LispPackage(name, List.copyOf(useList), Set.copyOf(owned), Set.copyOf(exports),
+				Map.copyOf(imports), Set.copyOf(shadows)));
 		for (String nickname : nicknames) {
 			this.registry.defineNickname(nickname, name);
 		}
@@ -568,6 +580,12 @@ public final class PackageResolver {
 				return new LispSymbol(name);
 			}
 			return canonical(importSource, name);
+		}
+		// A shadowed name always resolves to the current package's own symbol, never to
+		// the cl (or any used package's) symbol of the same name. Checked before the cl
+		// branch: shadowing a cl name is the whole point of the :shadow clause.
+		if (current.shadows(name)) {
+			return canonical(this.currentPackage, name);
 		}
 		if (PackageRegistry.isClSymbol(name)) {
 			if (currentUsesCl()) {

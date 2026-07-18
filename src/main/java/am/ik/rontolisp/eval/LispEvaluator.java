@@ -1703,7 +1703,8 @@ public final class LispEvaluator {
 				case LispNames.FOURTH:
 					return eval(LispMacroExpander.expandFourth(cons), env);
 				case LispNames.SETF:
-					return eval(LispMacroExpander.expandSetf(cons, this.structAccessors, this.closRegistry), env);
+					return eval(LispMacroExpander.expandSetf(expandUserMacroPlaces(cons), this.structAccessors,
+							this.closRegistry), env);
 				case LispNames.PUSH:
 					return eval(LispMacroExpander.expandPush(cons), env);
 				case LispNames.POP:
@@ -1866,6 +1867,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandBytePosition(cons), env);
 				case LispNames.LDB:
 					return eval(LispMacroExpander.expandLdb(cons), env);
+				case LispNames.MAKE_SEQUENCE:
+					return eval(LispMacroExpander.expandMakeSequence(cons), env);
 				case LispNames.DPB:
 					return eval(LispMacroExpander.expandDpb(cons), env);
 				case LispNames.DESTRUCTURING_BIND:
@@ -2112,7 +2115,7 @@ public final class LispEvaluator {
 	private LispVal evalDefstruct(LispCons cons, Environment env) {
 		// Expand into the generated defuns (constructor, predicate, copier, accessors)
 		// and evaluate each; the accessor registry makes them setf-able places.
-		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors)) {
+		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors, this.closRegistry)) {
 			eval(form, env);
 		}
 		// defstruct returns the structure name, like Common Lisp.
@@ -2371,6 +2374,37 @@ public final class LispEvaluator {
 		else {
 			this.userMacros.remove(name);
 		}
+	}
+
+	/**
+	 * Expands user-macro calls sitting in the place positions of a {@code setf} form
+	 * (arguments 1, 3, 5, ...) until each place is no longer a user-macro call, so a
+	 * {@code defmacro}-defined accessor is a valid setf place (CL's macroexpanding setf,
+	 * limited to user macros; the compile path gets this for free from
+	 * {@link UserMacroExpander} expanding the whole tree first).
+	 * @param cons the setf form
+	 * @return the setf form with macro places expanded
+	 */
+	private LispCons expandUserMacroPlaces(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		boolean changed = false;
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			LispVal place = parts.get(i);
+			while (place instanceof LispCons placeCons && placeCons.car() instanceof LispSymbol placeSym
+					&& this.userMacros.containsKey(placeSym.name())) {
+				place = expandUserMacro(placeCons);
+				changed = true;
+			}
+			parts.set(i, place);
+		}
+		if (!changed) {
+			return cons;
+		}
+		LispVal rebuilt = LispNil.INSTANCE;
+		for (int i = parts.size() - 1; i >= 0; i--) {
+			rebuilt = new LispCons(parts.get(i), rebuilt);
+		}
+		return (LispCons) rebuilt;
 	}
 
 	/**
