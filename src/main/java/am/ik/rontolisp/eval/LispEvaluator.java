@@ -359,6 +359,29 @@ public final class LispEvaluator {
 			}
 			return new LispSymbol(builtinTypeName(v));
 		}));
+		this.globalEnv.defineFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL,
+				new LispFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL, args -> {
+					requireSingleArg(LispNames.CLASS_SLOT_DEFS_INTERNAL, args);
+					// ((slot-name declared-type) ...) for the class's full slot list;
+					// nil for anything that is not a registered class designator.
+					if (!(args.get(0) instanceof LispSymbol sym)) {
+						return LispNil.INSTANCE;
+					}
+					String name = sym.name().startsWith("%class-") ? sym.name().substring("%class-".length())
+							: sym.name();
+					ClosRegistry.ClassInfo info = this.closRegistry.findClass(name);
+					if (info == null) {
+						return LispNil.INSTANCE;
+					}
+					LispVal result = LispNil.INSTANCE;
+					for (int i = info.slots().size() - 1; i >= 0; i--) {
+						ClosRegistry.SlotSpec slot = info.slots().get(i);
+						LispVal pair = new LispCons(new LispSymbol(slot.baseName()),
+								new LispCons(new LispSymbol(slot.type()), LispNil.INSTANCE));
+						result = new LispCons(pair, result);
+					}
+					return result;
+				}));
 		this.globalEnv.defineFunction(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL,
 				new LispFunction(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, args -> {
 					requireSingleArg(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, args);
@@ -521,6 +544,17 @@ public final class LispEvaluator {
 			this.globalEnv.defineFunction(opName,
 					new LispFunction(opName, args -> eval(rebuildSignalForm(opName, args), this.globalEnv)));
 		}
+		// format is a lowered operator in call position, but also a real CL function
+		// (jzon's condition reports run (apply #'format stream control args)). The
+		// function value rebuilds the literal call from the evaluated arguments and
+		// re-enters the evaluator: the control string is a literal there, so the full
+		// compile-time directive parser handles it.
+		this.globalEnv.defineFunction(LispNames.FORMAT, new LispFunction(LispNames.FORMAT, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.FORMAT + " expects a destination and a control string");
+			}
+			return eval(rebuildSignalForm(LispNames.FORMAT, args), this.globalEnv);
+		}));
 		// cerror (lite): no restart machinery exists, so the "continuable" part is
 		// dropped -- (cerror continue-format datum args...) signals like
 		// (error datum args...).
@@ -1088,6 +1122,30 @@ public final class LispEvaluator {
 		return LispNil.INSTANCE;
 	}
 
+	/**
+	 * Evaluates {@code (slot-value obj slot)}. A literal quoted slot name goes through
+	 * the shared macro expansion (positional {@code nth}, compile-path parity); a
+	 * computed name -- a variable or expression, e.g. a serializer walking
+	 * {@code %class-slot-defs} results as data -- resolves the slot cell at runtime by
+	 * base name (interpreter only).
+	 */
+	private LispVal evalSlotValue(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		boolean literalName = parts.size() == 3 && parts.get(2) instanceof LispCons q
+				&& q.car() instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name());
+		if (parts.size() == 3 && !literalName) {
+			LispVal instance = eval(parts.get(1), env);
+			LispVal slotName = eval(parts.get(2), env);
+			LispCons cell = instanceSlotCell(instance, slotName);
+			if (cell == null) {
+				throw new LispEvalException(
+						LispNames.SLOT_VALUE + ": unknown slot " + slotName.print() + " on " + instance.print());
+			}
+			return cell.car();
+		}
+		return eval(LispMacroExpander.expandSlotValue(cons, this.closRegistry), env);
+	}
+
 	/** The value of a condition instance's slot by base name ({@code nil} if absent). */
 	private LispVal conditionSlotValue(LispVal instance, String baseName) {
 		LispCons cell = instanceSlotCell(instance, new LispSymbol(baseName));
@@ -1494,7 +1552,7 @@ public final class LispEvaluator {
 				case LispNames.MAKE_INSTANCE:
 					return eval(LispMacroExpander.expandMakeInstance(cons, this.closRegistry), env);
 				case LispNames.SLOT_VALUE:
-					return eval(LispMacroExpander.expandSlotValue(cons, this.closRegistry), env);
+					return evalSlotValue(cons, env);
 				case LispNames.WITH_SLOTS:
 					return eval(LispMacroExpander.expandWithSlots(cons), env);
 				case LispNames.DEFVAR:
@@ -2159,7 +2217,12 @@ public final class LispEvaluator {
 		try {
 			LispVal result = LispNil.INSTANCE;
 			for (LispVal bodyForm : parts.subList(2, parts.size())) {
-				result = eval(bodyForm, env);
+				// Pre-expand with the local macros active BEFORE evaluating: a body form
+				// that only CAPTURES code (a defun/defgeneric method body) must bake the
+				// expansion in now -- by the time the captured body runs, the local
+				// macros are gone and the call would resolve as an undefined function
+				// (jzon's %coerced-fields-slots inside its coerced-fields defgeneric).
+				result = eval(UserMacroExpander.expandAll(bodyForm, this), env);
 			}
 			return result;
 		}
@@ -2383,11 +2446,11 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Rebuilds a literal {@code (error ...)}/{@code (signal ...)}/{@code (warn ...)} call
-	 * from already-evaluated arguments, for the function values of those operators.
-	 * Self-evaluating values (strings, numbers, keywords, characters) stay literal so the
-	 * designator matchers see the same shape a source-level call has; anything else is
-	 * quoted to survive re-evaluation.
+	 * Rebuilds a literal {@code (error ...)}/{@code (signal ...)}/{@code (warn ...)}/
+	 * {@code (format ...)} call from already-evaluated arguments, for the function values
+	 * of those operators. Self-evaluating values (strings, numbers, keywords, characters)
+	 * stay literal so the designator matchers see the same shape a source-level call has;
+	 * anything else is quoted to survive re-evaluation.
 	 */
 	private static LispVal rebuildSignalForm(String opName, List<LispVal> args) {
 		LispVal form = LispNil.INSTANCE;

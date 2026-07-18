@@ -5243,8 +5243,11 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (streamp x)} into {@code (integerp x)}: streams are opaque integer
-	 * handles across all backends (lite).
+	 * Expands {@code (streamp x)} into {@code (let ((__s x)) (if (eq __s t) t (integerp
+	 * __s)))}: streams are opaque integer handles across all backends, and the standard
+	 * output designator {@code t} counts as a stream so it survives the
+	 * {@code check-type}/{@code streamp} guards of libraries handed
+	 * {@code *standard-output*} (lite).
 	 * @param cons the streamp expression
 	 * @return the expanded expression
 	 */
@@ -5253,7 +5256,11 @@ public final class LispMacroExpander {
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException("streamp expects exactly one argument");
 		}
-		return callOf(LispNames.INTEGERP, parts.get(1));
+		LispSymbol temp = new LispSymbol("__s");
+		LispVal test = listToCons(
+				List.of(new LispSymbol(LispNames.IF), fmtCall(LispNames.EQ_GENERAL, temp, LispTrue.INSTANCE),
+						LispTrue.INSTANCE, callOf(LispNames.INTEGERP, temp)));
+		return makeLet("__s", parts.get(1), test);
 	}
 
 	/** Builds a {@code (quote name)} form for the given symbol name. */
@@ -5712,6 +5719,7 @@ public final class LispMacroExpander {
 		LispSymbol slotSym;
 		LispVal initform = LispNil.INSTANCE;
 		String initarg = null;
+		String type = "t";
 		List<String> readers = new java.util.ArrayList<>();
 		List<String> accessors = new java.util.ArrayList<>();
 		if (spec instanceof LispSymbol s) {
@@ -5745,8 +5753,13 @@ public final class LispMacroExpander {
 						// Accepted and dropped (docstrings are not stored anywhere).
 					}
 					case ":type" -> {
-						// Accepted and dropped: type declarations are no-ops everywhere
-						// (declare/the), so a slot :type is too.
+						// Recorded for introspection only (%class-slot-defs; JSON
+						// serializers disambiguate a nil value by declared type); still a
+						// no-op for checking, like declare/the. A compound specifier is
+						// kept as t (lite).
+						if (optValue instanceof LispSymbol typeSym) {
+							type = plainTypeName(typeSym);
+						}
 					}
 					default -> throw new UnsupportedOperationException(LispNames.DEFCLASS + " slot option "
 							+ keySym.name() + " is not supported: " + spec.print());
@@ -5760,7 +5773,7 @@ public final class LispMacroExpander {
 		PackageRegistry.QualifiedName slotQn = PackageRegistry.splitQualified(slotSym.name());
 		String baseName = slotQn == null ? slotSym.name() : slotQn.member();
 		return new ClosRegistry.SlotSpec(slotSym.name(), baseName, initform, initarg == null ? ":" + baseName : initarg,
-				List.copyOf(readers), List.copyOf(accessors));
+				List.copyOf(readers), List.copyOf(accessors), type);
 	}
 
 	private static String requireSlotFunctionName(LispVal value, LispVal spec) {
@@ -6615,7 +6628,19 @@ public final class LispMacroExpander {
 				// set of the class and its (statically known) descendants; equal is
 				// content-safe on WASM, like the defstruct predicate.
 				makeClassInstanceTest(arg, java.util.Objects.requireNonNull(spec.name()), closRegistry);
-			case TYPE -> makeTypeTest(arg, new LispSymbol(java.util.Objects.requireNonNull(spec.name())), closRegistry);
+			case TYPE -> {
+				String plain = plainTypeName(new LispSymbol(java.util.Objects.requireNonNull(spec.name())));
+				LispVal test = makeTypeTest(arg, new LispSymbol(spec.name()), closRegistry);
+				// A CLOS instance is a tagged cons internally, so it would satisfy a
+				// cons-shaped built-in specializer and never reach the default method
+				// (where e.g. jzon's coerced-fields object serialization lives). Guard
+				// those specializers to fail for any registered class instance.
+				if (("cons".equals(plain) || "list".equals(plain) || "sequence".equals(plain))
+						&& !closRegistry.classes().isEmpty()) {
+					yield makeIf(makeAnyClassInstanceTest(arg, closRegistry), LispNil.INSTANCE, test);
+				}
+				yield test;
+			}
 			case DEFAULT -> LispTrue.INSTANCE;
 		};
 	}
@@ -6931,11 +6956,16 @@ public final class LispMacroExpander {
 
 	@Nullable private static volatile LispVal formatRuntimeLambda;
 
-	// A self-contained (lambda (ctrl args) ...) that renders a format control string at
-	// runtime, used when the control is not a literal (see expandFormat). Built as AST
-	// because this package must not depend on the reader. Handles ~~ ~% ~a ~s ~d ~x ~c;
-	// an unknown directive is emitted verbatim. Cached after first construction.
-	private static LispVal formatRuntimeLambda() {
+	/**
+	 * A self-contained {@code (lambda (ctrl args) ...)} that renders a format control
+	 * string at runtime, used when the control is not a literal (see
+	 * {@link #expandFormat}) and by the first-class {@code #'format} wrapper
+	 * ({@code BuiltinFunctionWrappers}). Built as AST because this package must not
+	 * depend on the reader. Handles {@code ~~ ~% ~a ~s ~d ~x ~c}; an unknown directive is
+	 * emitted verbatim. Cached after first construction.
+	 * @return the renderer lambda expression
+	 */
+	public static LispVal formatRuntimeLambda() {
 		LispVal cached = formatRuntimeLambda;
 		if (cached != null) {
 			return cached;
@@ -9973,22 +10003,8 @@ public final class LispMacroExpander {
 			case "signed-byte":
 				// signed-byte with no width = integer.
 				return callOf(LispNames.INTEGERP, value);
-			case "standard-object": {
-				// An instance of ANY registered class (conditions included): the union of
-				// every class's own tag. Dispatchers with class-testing methods are
-				// regenerated when a new class appears, so the enumeration stays fresh.
-				List<LispVal> tests = new java.util.ArrayList<>();
-				LispVal carArg = callOf(LispNames.CAR, value);
-				for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
-					tests.add(listToCons(List.of(new LispSymbol(LispNames.EQUAL), carArg, listToCons(
-							List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-" + info.name()))))));
-				}
-				if (tests.isEmpty()) {
-					return LispNil.INSTANCE;
-				}
-				LispVal tagTest = tests.size() == 1 ? tests.get(0) : orOf(tests);
-				return makeIf(callOf(LispNames.CONSP, value), tagTest, LispNil.INSTANCE);
-			}
+			case "standard-object":
+				return makeAnyClassInstanceTest(value, closRegistry);
 			case "pathname":
 				// No pathname type exists in rontolisp: nothing is a pathname.
 				return LispNil.INSTANCE;
@@ -10013,6 +10029,28 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException("Unsupported type specifier: " + sym.name());
 		}
 		return callOf(pred, value);
+	}
+
+	/**
+	 * Builds the test for an instance of ANY registered class (conditions included): the
+	 * union of every class's own tag. Dispatchers with class-testing methods are
+	 * regenerated when a new class appears, so the enumeration stays fresh. Used by the
+	 * {@code standard-object} type test and to exclude class instances from the
+	 * {@code cons}/{@code list}/{@code sequence} method specializers (an instance is a
+	 * tagged cons internally, but must not dispatch as a list).
+	 */
+	private static LispVal makeAnyClassInstanceTest(LispVal value, ClosRegistry closRegistry) {
+		List<LispVal> tests = new java.util.ArrayList<>();
+		LispVal carArg = callOf(LispNames.CAR, value);
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			tests.add(listToCons(List.of(new LispSymbol(LispNames.EQUAL), carArg,
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-" + info.name()))))));
+		}
+		if (tests.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		LispVal tagTest = tests.size() == 1 ? tests.get(0) : orOf(tests);
+		return makeIf(callOf(LispNames.CONSP, value), tagTest, LispNil.INSTANCE);
 	}
 
 	/**

@@ -454,9 +454,29 @@ public final class UserMacroExpander {
 					}
 					return rebuild(parts, llIndex + 1, macroEval, kept);
 				}
-				case LispNames.DEFGENERIC:
-					// (defgeneric name (params...) options...): everything is data.
-					return form;
+				case LispNames.DEFGENERIC: {
+					// (defgeneric name (params...) options...): names, lambda lists, and
+					// options are data, EXCEPT an inline (:method ...) clause's body,
+					// which is expressions -- a macrolet-local macro called there (jzon's
+					// %coerced-fields-slots) must expand away like a defmethod body.
+					List<LispVal> newParts = new ArrayList<>(parts);
+					for (int i = 3; i < parts.size(); i++) {
+						if (parts.get(i) instanceof LispCons opt && opt.isProperList()
+								&& opt.car() instanceof LispSymbol key && ":method".equals(key.name())) {
+							List<LispVal> mp = opt.toList();
+							// (:method [qualifier] (lambda-list) body...)
+							int llIndex = mp.size() > 1 && mp.get(1) instanceof LispSymbol ? 2 : 1;
+							if (mp.size() > llIndex + 1) {
+								List<LispVal> newMethod = new ArrayList<>(mp.subList(0, llIndex + 1));
+								for (int j = llIndex + 1; j < mp.size(); j++) {
+									newMethod.add(expandAll(mp.get(j), macroEval));
+								}
+								newParts.set(i, properList(newMethod));
+							}
+						}
+					}
+					return properList(newParts);
+				}
 				case LispNames.DEFCLASS: {
 					// (defclass name (super) ((slot options...)...) options...): names
 					// and options stay, only :initform values are expressions.

@@ -78,6 +78,23 @@ public final class BuiltinFunctionWrappers {
 			LispNames.WARN);
 
 	/**
+	 * Wrappers injected only when the program takes the operator as a first-class value
+	 * (see {@link #referencesFunctionValue}), so ordinary programs stay byte-identical:
+	 * the signal operators plus {@code format}. The {@code #'format} wrapper renders
+	 * through the shared runtime control renderer (the same fallback {@code expandFormat}
+	 * uses for computed control strings, so the runtime directive subset applies); a nil
+	 * destination returns the string, any other destination is written to with one
+	 * {@code write-string} call and yields nil ({@code t} designates standard output
+	 * there).
+	 */
+	public static final Set<String> REFERENCE_GATED_FUNCTIONS;
+	static {
+		Set<String> gated = new java.util.HashSet<>(SIGNAL_FUNCTIONS);
+		gated.add(LispNames.FORMAT);
+		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
+	}
+
+	/**
 	 * Whether the expression takes the named operator as a first-class function value --
 	 * a {@code (function name)} form (the {@code #'name} reader shape).
 	 * @param expr the expression to scan
@@ -310,10 +327,28 @@ public final class BuiltinFunctionWrappers {
 				List.of(call(LispNames.ERROR, "datum")));
 	}
 
+	// #'format wrapper (gated by REFERENCE_GATED_FUNCTIONS): renders through the shared
+	// runtime control renderer, then dispatches on the destination -- nil returns the
+	// string, anything else (the t designator or a stream handle) gets one write-string
+	// call and nil.
+	private static WrapperDef formatWrapper() {
+		LispSymbol strVar = new LispSymbol("__fmt_str");
+		LispVal rendered = listToCons(List.of(new LispSymbol(LispNames.FUNCALL),
+				am.ik.rontolisp.LispMacroExpander.formatRuntimeLambda(), new LispSymbol("ctrl"), new LispSymbol("r")));
+		LispVal bindings = listToCons(List.of((LispVal) listToCons(List.of(strVar, rendered))));
+		LispVal writeForm = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+				callV(LispNames.WRITE_STRING, strVar, new LispSymbol("dest")), LispNil.INSTANCE));
+		LispVal ifForm = listToCons(
+				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "dest"), strVar, writeForm));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, ifForm));
+		return new WrapperDef(LispNames.FORMAT, List.of("dest", "ctrl", LispNames.LAMBDA_REST, "r"), List.of(body));
+	}
+
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
-			// Signal operators (gated by SIGNAL_FUNCTIONS in the backend compilers)
+			// Signal operators and format (gated by REFERENCE_GATED_FUNCTIONS in the
+			// backend compilers)
 			signalDatum(LispNames.ERROR, LispNames.ERROR), signalDatum(LispNames.SIGNAL, LispNames.SIGNAL),
-			signalDatum(LispNames.WARN, LispNames.WARN), cerrorWrapper(),
+			signalDatum(LispNames.WARN, LispNames.WARN), cerrorWrapper(), formatWrapper(),
 			// Arithmetic: +/-/*// are variadic in CL, so their wrappers accept any arity
 			// (a fixed-arity wrapper returned nil on the JVM / trapped on WASM when
 			// funcall/apply passed a different argument count). - and / keep their

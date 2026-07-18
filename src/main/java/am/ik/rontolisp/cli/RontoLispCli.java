@@ -189,12 +189,25 @@ public final class RontoLispCli {
 			for (LispVal expr : exprs) {
 				result = evaluator.eval(expr);
 			}
+			freshLine(evaluator);
 			out.println(result.print());
 		}
 		catch (RuntimeException ex) {
+			freshLine(evaluator);
 			out.println("Error: " + ex.getMessage());
 		}
 		buffer.setLength(0);
+	}
+
+	// The echoed result starts on its own line even when the evaluated form left
+	// standard output mid-line (e.g. a print-family call without a trailing newline).
+	private static void freshLine(LispEvaluator evaluator) {
+		try {
+			evaluator.eval(LispReader.readAllFromString("(fresh-line)").get(0));
+		}
+		catch (RuntimeException ignored) {
+			// Echo the result anyway; fresh-line is cosmetic.
+		}
 	}
 
 	// --simd on the interpreter (file or REPL) routes the vec: and linalg: kernels to

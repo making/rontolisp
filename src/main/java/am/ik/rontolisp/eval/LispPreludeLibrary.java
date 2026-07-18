@@ -25,7 +25,8 @@ import am.ik.rontolisp.reader.LispReader;
  * Current members:
  * <ul>
  * <li>{@code equalp} -- like {@code equal} but strings/characters compare case
- * insensitively and numbers by value; lite (arrays/hash-tables/structures fall back to
+ * insensitively, numbers by value, and arrays element-wise (same dimensions, elements
+ * compared with {@code equalp}); lite (hash-tables/structures fall back to
  * {@code eql}).</li>
  * <li>{@code string<} -- case-sensitive lexicographic less-than, returning the mismatch
  * index or nil.</li>
@@ -48,6 +49,15 @@ public final class LispPreludeLibrary {
 				         (char= (char-downcase a) (char-downcase b)))
 				        ((and (consp a) (consp b))
 				         (and (equalp (car a) (car b)) (equalp (cdr a) (cdr b))))
+				        ((and (%arrayp a) (%arrayp b))
+				         (and (equal (array-dimensions a) (array-dimensions b))
+				              (let ((n (array-total-size a)))
+				                (labels ((cmp (i)
+				                           (cond ((>= i n) t)
+				                                 ((equalp (row-major-aref a i) (row-major-aref b i))
+				                                  (cmp (+ i 1)))
+				                                 (t nil))))
+				                  (cmp 0)))))
 				        (t (eql a b))))
 				""");
 		SOURCES.put(LispNames.READ_ALL, """

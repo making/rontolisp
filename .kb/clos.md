@@ -121,9 +121,12 @@ FOUND class's canonical name (not the spelling at the method site).
 - MOP / runtime class ops (`find-class`, `change-class`, `add-method`,
   `compute-applicable-methods`, class redefinition, `update-instance-for-*`):
   permanently out (contradicts the static compile model + `--optimize`).
-- Multiple inheritance, specializers on later parameters, `&optional`/`&key` in
-  generic lambda lists, `slot-boundp`/`slot-makunbound`, `:allocation`/
-  `:writer`/`:type` slot options, eql specializers on strings.
+- Multiple inheritance, `:allocation`/`:writer` slot options, eql specializers
+  on strings. `slot-boundp`/`slot-makunbound` exist as LITE interpreter
+  built-ins (slots are always initialized -- nil default, no unbound state).
+  The `:type` slot option is RECORDED since 2026-07-18 (`SlotSpec.type`, plain
+  name, `"t"` when omitted; still a checking no-op) so introspection can
+  report it.
 - Compiled runtime `eval`: generated functions are callable; defining
   classes/methods or using `make-instance`/`slot-value` inside `eval` is not
   (doc/en/guides/eval-limitations.md).

@@ -37,6 +37,42 @@ class LispReaderTest {
 	}
 
 	@Test
+	void readPipeEscapedSymbol() {
+		// CL multiple escape: the pipes are dropped, the case is preserved verbatim.
+		assertThat(LispReader.readFromString("|noChange|")).isEqualTo(new LispSymbol("noChange"));
+	}
+
+	@Test
+	void readPipeEscapedSymbolWithWhitespaceAndTerminatingChars() {
+		assertThat(LispReader.readFromString("|when used|")).isEqualTo(new LispSymbol("when used"));
+		assertThat(LispReader.readFromString("|a(b)'c;d|")).isEqualTo(new LispSymbol("a(b)'c;d"));
+	}
+
+	@Test
+	void readPipeEscapeTogglesMidToken() {
+		assertThat(LispReader.readFromString("foo|bar baz|qux")).isEqualTo(new LispSymbol("foobar bazqux"));
+	}
+
+	@Test
+	void readPipeEscapedSymbolInsideAList() {
+		LispVal result = LispReader.readFromString("(quote |when used|)");
+		List<LispVal> list = ((LispCons) result).toList();
+		assertThat(list).hasSize(2);
+		assertThat(list.get(1)).isEqualTo(new LispSymbol("when used"));
+	}
+
+	@Test
+	void readPipeEscapedSymbolWithBackslashEscapeInside() {
+		assertThat(LispReader.readFromString("|a\\|b|")).isEqualTo(new LispSymbol("a|b"));
+	}
+
+	@Test
+	void readUnterminatedPipeEscapeFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("|never closed"))
+			.hasMessageContaining("Unterminated |...| symbol escape");
+	}
+
+	@Test
 	void readNil() {
 		LispVal result = LispReader.readFromString("nil");
 		assertThat(result).isSameAs(LispNil.INSTANCE);

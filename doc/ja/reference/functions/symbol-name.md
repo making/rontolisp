@@ -6,6 +6,8 @@
 
 コンパイルバックエンド(JVM/WASM)では `symbol-name` は `princ-to-string` の機構を共有するため、シンボル以外の引数はエラーにならずその表示テキストを返します(インタプリタはエラーを通知します)。
 
+リーダーはシンボル名の Common Lisp エスケープ構文をサポートします: バックスラッシュは次の 1 文字をそのまま名前の一部にし、`|...|` の複数エスケープはパイプの間のすべて — 空白や終端文字を含む — を名前の一部にします。`'|when used|` は `"when used"` という名前の 1 つのシンボルです。rontolisp のシンボルはもともと大文字小文字を保存するため、`|Foo|` とエスケープなしの `Foo` は同じシンボルを指します。
+
 ```lisp
 (symbol-name 'foo) ; => "foo"
 ```
@@ -16,4 +18,8 @@
 
 ```lisp
 (intern (symbol-name 'round-trip)) ; => round-trip
+```
+
+```lisp
+(symbol-name '|when used|) ; => "when used"
 ```

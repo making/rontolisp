@@ -479,12 +479,33 @@ public final class LispLexer {
 		// CL single escape: a backslash makes the NEXT character part of the symbol
 		// name verbatim, even a terminating one -- real libraries name locals like
 		// \(-pos (parse-number). The backslash itself is dropped from the name.
+		// CL multiple escape: |...| makes every enclosed character part of the name
+		// verbatim, whitespace and terminating characters included (|when used|);
+		// the pipes themselves are dropped and a backslash still escapes inside.
 		StringBuilder sb = new StringBuilder();
 		while (this.pos < this.input.length()) {
 			char c = this.input.charAt(this.pos);
 			if (c == '\\' && this.pos + 1 < this.input.length()) {
 				sb.append(this.input.charAt(this.pos + 1));
 				this.pos += 2;
+				continue;
+			}
+			if (c == '|') {
+				this.pos++;
+				while (this.pos < this.input.length() && this.input.charAt(this.pos) != '|') {
+					char e = this.input.charAt(this.pos);
+					if (e == '\\' && this.pos + 1 < this.input.length()) {
+						sb.append(this.input.charAt(this.pos + 1));
+						this.pos += 2;
+						continue;
+					}
+					sb.append(e);
+					this.pos++;
+				}
+				if (this.pos >= this.input.length()) {
+					throw new LispReadException("Unterminated |...| symbol escape");
+				}
+				this.pos++; // closing |
 				continue;
 			}
 			if (!isSymbolChar(c)) {

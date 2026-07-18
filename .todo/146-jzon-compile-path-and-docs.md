@@ -41,6 +41,49 @@ clear error) while integer/string/structure JSON works.
   table rows for tagbody/go/prog/prog*/shiftf/load-time-value/typep/subtypep;
   CLAUDE.md invariants updated. DocExamplesTest green.
 
+## DONE 2026-07-18 (jzon README walkthrough fixes; JzonE2eTest#readmeWalkthroughRunsOnTheInterpreter pins it)
+
+Core fixes (ALL-BACKEND, each with interpreter+JVM+WASM unit tests and a
+ci-spec case): `equalp` compares arrays element-wise (prelude defun);
+`streamp`/`(typep x 'stream)` accept the `t` designator (what
+`*standard-output*` is bound to -- jzon's schubfach `write-double` does
+`(check-type stream stream)`); `#'format` is a first-class function
+(interpreter = rebuild-literal-call like `#'error`, compilers = a
+`REFERENCE_GATED_FUNCTIONS` wrapper over the runtime control renderer, so
+non-referencing programs stay byte-identical); the reader supports
+`|pipe-escaped|` symbols (whitespace/terminating chars inside, case
+verbatim, backslash still escapes); CLOS `list`/`cons`/`sequence` method
+specializers no longer capture class instances (dispatcher-scoped tag
+exclusion; `hasClassMethod` regeneration now also triggers for
+`standard-object`/`cons`/`list`/`sequence` TYPE specializers).
+
+Interpreter-only additions: defclass slot `:type` is RECORDED
+(`SlotSpec.type`, plain name, still no checking); `%class-slot-defs`
+builtin (class designator -> `(name type)` pairs) now backs the closer-mop
+shim's `class-slots`, so slot-walking serializers see real fields;
+`slot-value` accepts a COMPUTED slot name (runtime cell lookup by base
+name; literal names keep the positional expansion); `macrolet` bodies are
+pre-expanded before evaluation (a captured defun/defgeneric method body
+bakes local macros in); defgeneric inline `(:method ...)` bodies are
+walked by `UserMacroExpander` (local macros expand there too). REPL echoes
+the result after a fresh-line. Native-image: the shim resources
+(closer-mop/flexi-streams/float-features/trivial-gray-streams/gray.lisp)
+are registered in resource-config.json.
+
+Known deviations from the README's printed output (not bugs to fix here):
+the README's `(gethash "licence" ...)` line is an UPSTREAM typo (missing
+key -> nil in real CL too); symbol values print in rontolisp's verbatim
+case ("are-affected"/"when used" vs CL's "ARE-AFFECTED"/"when Used"); a
+never-initialized slot serializes as null instead of being omitted (slots
+have no unbound state -- `alias` is nil-bound; would need an unbound
+marker + slot-boundp/slot-value/accessor semantics to match CL).
+
+Doc-site follow-ups for these (en+ja): `equalp` page (arrays), `format`
+page (function value + runtime directive subset), `streamp` /
+`input-stream-p` / `output-stream-p` pages (t designator), reader guide
+(`|...|` escape), `slot-value` (computed names, interpreter), closer-mop
+row in the asdf-systems guide (real slots now).
+
 ## Remaining compile-path gaps (in rough dependency order)
 
 - `#.` read-time eval: the marker read

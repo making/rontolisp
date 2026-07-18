@@ -4028,3 +4028,47 @@ cases:
       (7 8)
       5
       (t t)
+  - name: equalp-arrays-elementwise
+    source: |
+      (print (equalp #(1 "A" (2 3)) #(1 "a" (2 3.0))))
+      (print (equalp #(1) #(1 2)))
+      (print (equalp #(1) "x"))
+    expected: |
+      t
+      nil
+      nil
+  - name: streamp-standard-output-designator
+    source: |
+      (print (streamp t))
+      (print (streamp "x"))
+      (let ((sod-s t)) (check-type sod-s stream) (print :ok))
+    expected: |
+      t
+      nil
+      :ok
+  - name: format-as-first-class-function
+    source: |
+      (print (apply #'format nil "x=~a y=~d" (list 5 7)))
+      (funcall #'format t "to-stdout ~a~%" "ok")
+      (print (funcall #'format nil "~s" "q"))
+    expected: |
+      "x=5 y=7"
+      to-stdout ok
+      ""q""
+  - name: reader-pipe-escaped-symbols
+    source: |
+      (print (symbol-name '|when used|))
+      (print '|noChange|)
+    expected: |
+      "when used"
+      noChange
+  - name: clos-list-specializer-excludes-instances
+    source: |
+      (defgeneric spx-kind (x)
+        (:method (x) :object)
+        (:method ((x list)) :list)
+        (:method ((x standard-object)) :instance))
+      (defclass spx-thing () ((spx-v :initarg :spx-v)))
+      (print (list (spx-kind (make-instance 'spx-thing :spx-v 1)) (spx-kind (list 1 2)) (spx-kind 5)))
+    expected: |
+      (:instance :list :object)

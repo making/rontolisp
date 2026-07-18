@@ -1022,6 +1022,40 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalStreampAcceptsTheStandardOutputDesignator() {
+		// *standard-output* is bound to the designator t, which counts as a stream so
+		// it survives a library's (check-type stream stream) guard (jzon's schubfach
+		// write-double handed :stream t).
+		assertThat(eval("(streamp t)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(streamp *standard-output*)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(output-stream-p t)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(input-stream-p t)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(let ((s *standard-output*)) (check-type s stream) :ok)")).isEqualTo(new LispSymbol(":ok"));
+	}
+
+	@Test
+	void equalpComparesArraysElementwise() {
+		assertThat(eval("(equalp #(1 \"A\" (2 3)) #(1 \"a\" (2 3.0)))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(equalp #(1) #(1 2))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(equalp #(1) \"x\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(equalp (make-array '(2 2) :initial-contents '((1 2) (3 4)))"
+				+ " (make-array '(2 2) :initial-contents '((1.0 2) (3 4))))"))
+			.isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(equalp (make-array '(2 2) :initial-contents '((1 2) (3 4)))"
+				+ " (make-array '(4) :initial-contents '(1 2 3 4)))"))
+			.isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void formatIsAFirstClassFunction() {
+		// jzon's condition reports run (apply #'format stream control args).
+		assertThat(eval("(apply #'format nil \"x=~a y=~d\" '(5 7))")).isEqualTo(new LispString("x=5 y=7"));
+		assertThat(eval("(funcall #'format nil \"~s\" \"q\")")).isEqualTo(new LispString("\"q\""));
+		assertThat(eval("(with-output-to-string (s) (funcall #'format s \"v=~a\" 1))"))
+			.isEqualTo(new LispString("v=1"));
+	}
+
+	@Test
 	void evalStringEquality() {
 		assertThat(eval("(string= \"abc\" \"abc\")")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(string= \"abc\" \"abd\")")).isEqualTo(LispNil.INSTANCE);
@@ -6457,6 +6491,55 @@ class LispEvaluatorTest {
 				(list (speak d) (speak (make-instance 'animal :name "A")) (speak 1) (speak "s")
 				      (animal-name d) (dog-breed d) (slot-value d 'name))
 				""").print()).isEqualTo("(\"woof\" \"...\" \"number\" \"?\" \"Rex\" \"mixed\" \"Rex\")");
+	}
+
+	@Test
+	void listSpecializedMethodDoesNotCaptureClassInstances() {
+		// An instance is a tagged cons internally, but must dispatch to the
+		// standard-object/default method, not a list/cons/sequence-specialized one --
+		// even when the class is defined AFTER the generic (jzon's write-value).
+		assertThat(evalMulti("""
+				(defgeneric spx-kind (x)
+				  (:method (x) :object)
+				  (:method ((x list)) :list)
+				  (:method ((x standard-object)) :instance))
+				(defclass spx-thing () ((v :initarg :v)))
+				(list (spx-kind (make-instance 'spx-thing :v 1)) (spx-kind '(1 2)) (spx-kind 5))
+				""").print()).isEqualTo("(:instance :list :object)");
+	}
+
+	@Test
+	void slotValueAcceptsAComputedSlotName() {
+		// A serializer walking slot names as data (jzon's coerced-fields) reads
+		// (slot-value obj name-variable); the literal-name path stays positional.
+		assertThat(evalMulti("""
+				(defclass svx-p () ((name :initarg :name) (age :initarg :age)))
+				(setq svx (make-instance 'svx-p :name "Anya" :age 6))
+				(list (slot-value svx 'name) (let ((n 'age)) (slot-value svx n)))
+				""").print()).isEqualTo("(\"Anya\" 6)");
+	}
+
+	@Test
+	void classSlotDefsReturnsSlotNamesAndDeclaredTypes() {
+		// %class-slot-defs feeds the closer-mop shim's class-slots: (name type) pairs,
+		// :type recorded (t when omitted), keyed by the class-of tag symbol.
+		assertThat(evalMulti("""
+				(defclass csd-p () ((name :initarg :name) (married :initarg :married :type boolean)))
+				(%class-slot-defs (class-of (make-instance 'csd-p)))
+				""").print()).isEqualTo("((name t) (married boolean))");
+	}
+
+	@Test
+	void macroletLocalMacroExpandsInsideCapturedDefgenericMethodBody() {
+		// The macrolet body is pre-expanded before evaluation, so a method body that
+		// only CAPTURES code still bakes the local macro in (jzon defines its
+		// %coerced-fields-slots template this way).
+		assertThat(evalMulti("""
+				(macrolet ((mlx-double (x) (list '* 2 x)))
+				  (defgeneric mlx-f (a)
+				    (:method (a) (mlx-double a))))
+				(mlx-f 21)
+				""").print()).isEqualTo("42");
 	}
 
 	@Test

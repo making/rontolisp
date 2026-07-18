@@ -132,6 +132,36 @@
           "typeReachable": "am.ik.rontolisp.eval.StdinLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/stdin\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/closer-mop\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/flexi-streams\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/float-features\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/trivial-gray-streams\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.GrayStreamsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/gray\\.lisp"
       }
     ]
   }

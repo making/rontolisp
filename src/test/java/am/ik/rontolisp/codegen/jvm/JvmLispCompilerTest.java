@@ -5906,6 +5906,55 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunListSpecializedMethodExcludesClassInstances() throws Exception {
+		// An instance is a tagged cons internally, but must dispatch to the
+		// standard-object/default method, not a list/cons/sequence-specialized one.
+		assertThat(compileAndRun("""
+				(defgeneric spx-kind (x)
+				  (:method (x) :object)
+				  (:method ((x list)) :list)
+				  (:method ((x standard-object)) :instance))
+				(defclass spx-thing () ((v :initarg :v)))
+				(print (list (spx-kind (make-instance 'spx-thing :v 1)) (spx-kind '(1 2)) (spx-kind 5)))
+				""")).isEqualTo("(:instance :list :object)");
+	}
+
+	@Test
+	void compileAndRunEqualpComparesArraysElementwise() throws Exception {
+		assertThat(compileAndRun("""
+				(print (equalp #(1 "A" (2 3)) #(1 "a" (2 3.0))))
+				(print (equalp #(1) #(1 2)))
+				(print (equalp #(1) "x"))
+				""")).isEqualTo("t\nnil\nnil");
+	}
+
+	@Test
+	void compileAndRunStreampAcceptsTheStandardOutputDesignator() throws Exception {
+		assertThat(compileAndRun("""
+				(print (streamp t))
+				(print (streamp "x"))
+				(let ((s t)) (check-type s stream) (print :ok))
+				""")).isEqualTo("t\nnil\n:ok");
+	}
+
+	@Test
+	void compileAndRunFormatAsFirstClassFunction() throws Exception {
+		assertThat(compileAndRun("""
+				(print (apply #'format nil "x=~a y=~d" '(5 7)))
+				(funcall #'format t "to-stdout ~a~%" "ok")
+				(print (funcall #'format nil "~s" "q"))
+				""")).isEqualTo("\"x=5 y=7\"\nto-stdout ok\n\"\"q\"\"");
+	}
+
+	@Test
+	void compileAndRunPipeEscapedSymbols() throws Exception {
+		assertThat(compileAndRun("""
+				(print (symbol-name '|when used|))
+				(print '|noChange|)
+				""")).isEqualTo("\"when used\"\nnoChange");
+	}
+
+	@Test
 	void compileAndRunDefmethodBeforeDefclassSubclassStillDispatches() throws Exception {
 		// The pre-pass collects the whole program before generating dispatchers, so a
 		// subclass defined AFTER the method still matches its class specializer.

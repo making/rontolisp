@@ -6,6 +6,8 @@ Returns the symbol's name as a string. rontolisp symbols are case-preserving (a 
 
 On the compiled backends (JVM/WASM) `symbol-name` shares the `princ-to-string` machinery, so a non-symbol argument yields its display text instead of signaling an error (the interpreter signals).
 
+The reader supports the Common Lisp escape syntaxes for symbol names: a backslash makes the next character part of the name verbatim, and a `|...|` multiple escape makes everything between the pipes part of the name — whitespace and terminating characters included — so `'|when used|` is one symbol named `"when used"`. Since rontolisp symbols are case-preserving anyway, `|Foo|` and an unescaped `Foo` name the same symbol.
+
 ```lisp
 (symbol-name 'foo) ; => "foo"
 ```
@@ -16,4 +18,8 @@ On the compiled backends (JVM/WASM) `symbol-name` shares the `princ-to-string` m
 
 ```lisp
 (intern (symbol-name 'round-trip)) ; => round-trip
+```
+
+```lisp
+(symbol-name '|when used|) ; => "when used"
 ```

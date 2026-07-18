@@ -71,4 +71,87 @@ class JzonE2eTest {
 			.containsExactlyElementsOf(EXPECTED);
 	}
 
+	// The jzon README walkthrough: parse into a hash table with equalp-verifiable
+	// values (vectors included), :stream t as a destination (doubles take schubfach's
+	// check-type'd write path), :allow-multiple-content signalling a json-parse-error
+	// (whose report applies #'format), a multi-valued :replacer, |...|-escaped symbol
+	// hash keys, and CLOS instances serialized as objects via coerced-fields over the
+	// closer-mop shim. Known deviations from the README's output: symbol values keep
+	// rontolisp's verbatim case ("are-affected", "when used"), and the never-initialized
+	// alias slot appears as null (slots have no unbound state -- they default to nil).
+	private static final String README_EXERCISE = """
+			(asdf:load-system :com.inuoe.jzon)
+			(defparameter *readme-ht* (com.inuoe.jzon:parse "{
+			  \\"license\\": null,
+			  \\"active\\": false,
+			  \\"important\\": true,
+			  \\"id\\": 1,
+			  \\"xp\\": 3.2,
+			  \\"name\\": \\"Rock\\",
+			  \\"tags\\":  [
+			    \\"alone\\"
+			  ]
+			}"))
+			(print (equalp 'null       (gethash "license" *readme-ht*)))
+			(print (equalp nil         (gethash "active" *readme-ht*)))
+			(print (equalp t           (gethash "important" *readme-ht*)))
+			(print (equalp 1           (gethash "id" *readme-ht*)))
+			(print (equalp 3.2d0       (gethash "xp" *readme-ht*)))
+			(print (equalp "Rock"      (gethash "name" *readme-ht*)))
+			(print (equalp #("alone")  (gethash "tags" *readme-ht*)))
+			(com.inuoe.jzon:stringify #(null nil t 42 3.14 "Hello, world!") :stream t :pretty t)
+			(terpri)
+			(print (handler-case (com.inuoe.jzon:parse "123[1, 2, 3]" :allow-multiple-content t)
+			         (com.inuoe.jzon:json-parse-error (e) :caught-multiple-content)))
+			(print (com.inuoe.jzon:stringify #("first" "second" "third")
+			                :pretty t
+			                :replacer (lambda (key value)
+			                            (case key
+			                              ((nil) t)
+			                              (0 nil)
+			                              (1 t)
+			                              (2 (values t (format nil "Lupin the ~A" value)))))))
+			(let ((ht (make-hash-table :test 'equal)))
+			  (setf (gethash 'only-keys ht) 'are-affected)
+			  (setf (gethash '|noChange| ht) '|when used|)
+			  (setf (gethash "AS A" ht) '|value|)
+			  (com.inuoe.jzon:stringify ht :pretty t :stream t))
+			(terpri)
+			(defclass readme-person ()
+			  ((name :initarg :name :reader name)
+			   (alias :initarg :alias)
+			   (job :initarg :job :reader job)
+			   (married :initarg :married :type boolean)
+			   (children :initarg :children :type list)))
+			(com.inuoe.jzon:stringify (make-instance 'readme-person :name "Anya" :job nil
+			                               :married nil :children nil)
+			                :pretty t :stream t)
+			(terpri)
+			""";
+
+	private static final List<String> README_EXPECTED = List.of("t", "t", "t", "t", "t", "t", "t",
+			// stringify #(null nil t 42 3.14 "Hello, world!") :stream t :pretty t
+			"[", "null,", "false,", "true,", "42,", "3.14,", "\"Hello, world!\"", "]",
+			// allow-multiple-content signals json-parse-error
+			":caught-multiple-content",
+			// :replacer (returned string, echoed via print)
+			"\"[", "\"second\",", "\"Lupin the third\"", "]\"",
+			// symbol/string hash keys (verbatim case; |...| escapes)
+			"{", "\"only-keys\": \"are-affected\",", "\"noChange\": \"when used\",", "\"AS A\": \"value\"", "}",
+			// CLOS instance serialized as an object (alias is nil-bound, so null)
+			"{", "\"name\": \"Anya\",", "\"alias\": null,", "\"job\": null,", "\"married\": false,", "\"children\": []",
+			"}");
+
+	@Test
+	void readmeWalkthroughRunsOnTheInterpreter() {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		evaluator.setSystemPath(List.of(SYSTEM_DIR));
+		for (LispVal expr : LispReader.readAllFromString(README_EXERCISE)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).trim().lines().map(String::trim))
+			.containsExactlyElementsOf(README_EXPECTED);
+	}
+
 }

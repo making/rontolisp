@@ -1265,10 +1265,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (!programUsesAnyArrayOp(program)) {
 			wrapperExcludes.addAll(BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS);
 		}
-		// #'error/#'cerror/#'signal/#'warn wrappers forward the datum only (lite);
-		// inject each only when the program takes the operator as a first-class value,
-		// so every other program stays byte-identical (JVM gate mirrored).
-		for (String op : BuiltinFunctionWrappers.SIGNAL_FUNCTIONS) {
+		// #'error/#'cerror/#'signal/#'warn wrappers forward the datum only (lite), and
+		// #'format renders via the runtime control renderer; inject each only when the
+		// program takes the operator as a first-class value, so every other program
+		// stays byte-identical (JVM gate mirrored).
+		for (String op : BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS) {
 			if (program.stream().noneMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, op))) {
 				wrapperExcludes.add(op);
 			}

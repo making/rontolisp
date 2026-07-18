@@ -89,10 +89,14 @@ one yes x=42
 
 ## Limitations
 
-Other destinations (streams, strings with fill pointers) are not supported, the
-control string cannot be a runtime value, and the column-control directives
-(`~t`, `~<...~>`), the loop escape `~^`, and `~r` without a radix parameter are
-not implemented. Further notes:
+Other destinations (strings with fill pointers) are not supported, and the
+column-control directives (`~t`, `~<...~>`), the loop escape `~^`, and `~r`
+without a radix parameter are not implemented. A control string that is a
+runtime value -- a computed control expression, or a call through the function
+value `#'format` (`funcall`/`apply`) -- renders through a runtime fallback that
+supports only the basic directives `~a ~s ~d ~x ~c ~%` and `~~` (an unknown
+directive is emitted verbatim); with a nil destination it returns the string,
+any other destination is written with one `write-string` call. Further notes:
 
 - A `~f` (and the fixed branch of `~g`) without a digit count falls back to each
   backend's native float printing, so its exact form is backend-specific; supply

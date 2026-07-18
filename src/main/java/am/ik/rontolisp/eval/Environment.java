@@ -2625,12 +2625,15 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.FILE_LENGTH, new LispFunction(LispNames.FILE_LENGTH, args -> LispNil.INSTANCE));
 		env.defineFunction(LispNames.INPUT_STREAM_P, new LispFunction(LispNames.INPUT_STREAM_P, args -> {
 			requireArgCount(LispNames.INPUT_STREAM_P, args, 1);
-			// Lite: any stream handle answers t for both directions.
-			return args.get(0) instanceof LispInteger ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			// Lite: any stream handle answers t for both directions; the t designator
+			// (standard output, what *standard-output* is bound to) also passes.
+			LispVal inArg = args.get(0);
+			return (inArg instanceof LispInteger || inArg instanceof LispTrue) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.OUTPUT_STREAM_P, new LispFunction(LispNames.OUTPUT_STREAM_P, args -> {
 			requireArgCount(LispNames.OUTPUT_STREAM_P, args, 1);
-			return args.get(0) instanceof LispInteger ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			LispVal out2 = args.get(0);
+			return (out2 instanceof LispInteger || out2 instanceof LispTrue) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.STREAM_ELEMENT_TYPE, new LispFunction(LispNames.STREAM_ELEMENT_TYPE, args -> {
 			requireArgCount(LispNames.STREAM_ELEMENT_TYPE, args, 1);
@@ -3336,9 +3339,11 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.STREAMP, new LispFunction(LispNames.STREAMP, args -> {
 			requireArgCount(LispNames.STREAMP, args, 1);
-			// Streams are opaque integer handles (lite: equivalent to integerp).
+			// Streams are opaque integer handles, and the standard-output designator t
+			// counts as a stream too (lite) -- *standard-output* is bound to t.
 			LispVal v = args.get(0);
-			return (v instanceof LispInteger || v instanceof LispBigInteger) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return (v instanceof LispInteger || v instanceof LispBigInteger || v instanceof LispTrue)
+					? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.PATHNAMEP, new LispFunction(LispNames.PATHNAMEP, args -> {
 			requireArgCount(LispNames.PATHNAMEP, args, 1);

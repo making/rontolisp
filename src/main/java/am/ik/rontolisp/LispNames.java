@@ -3221,6 +3221,15 @@ public final class LispNames {
 	 */
 	public static final String CLASS_OF = "class-of";
 
+	/**
+	 * The internal {@code %class-slot-defs} introspection helper: takes a class
+	 * designator (the {@code %class-<name>} tag symbol {@code class-of} returns, or the
+	 * class name) and returns a list of {@code (slot-name declared-type)} pairs for the
+	 * class's full slot list. The closer-mop shim's {@code class-slots} is built on it,
+	 * so slot-walking serializers (jzon) see real fields. Not a public function.
+	 */
+	public static final String CLASS_SLOT_DEFS_INTERNAL = "%class-slot-defs";
+
 	/** The {@code simple-condition-format-control} condition reader. */
 	public static final String SIMPLE_CONDITION_FORMAT_CONTROL = "simple-condition-format-control";
 

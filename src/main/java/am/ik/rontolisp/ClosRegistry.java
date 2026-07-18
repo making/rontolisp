@@ -61,7 +61,7 @@ public final class ClosRegistry {
 		ClassInfo parentInfo = parent == null ? null : this.classes.get(parent);
 		java.util.List<SlotSpec> slots = new java.util.ArrayList<>(parentInfo == null ? List.of() : parentInfo.slots());
 		for (String slotName : slotNames) {
-			slots.add(new SlotSpec(slotName, slotName, LispNil.INSTANCE, ":" + slotName, List.of(), List.of()));
+			slots.add(new SlotSpec(slotName, slotName, LispNil.INSTANCE, ":" + slotName, List.of(), List.of(), "t"));
 		}
 		java.util.Set<String> ancestors = new java.util.LinkedHashSet<>();
 		if (parentInfo != null) {
@@ -77,8 +77,10 @@ public final class ClosRegistry {
 	/**
 	 * One slot of a class: the canonical (package-resolved) slot symbol name, its
 	 * package-stripped base name, the {@code :initform} expression AST, the
-	 * {@code :initarg} keyword (defaults to the slot-name keyword), and the
-	 * {@code :reader}/{@code :accessor} function names declared on it.
+	 * {@code :initarg} keyword (defaults to the slot-name keyword), the
+	 * {@code :reader}/{@code :accessor} function names declared on it, and the declared
+	 * {@code :type} (plain name; {@code "t"} when omitted -- still a no-op for checking,
+	 * but introspectable so serializers can disambiguate a nil value by declared type).
 	 *
 	 * @param name the canonical slot symbol name
 	 * @param baseName the package-stripped slot name (constructor keywords use it)
@@ -86,9 +88,10 @@ public final class ClosRegistry {
 	 * @param initargKeyword the keyword accepted by the constructor, with the colon
 	 * @param readers the {@code :reader} function names
 	 * @param accessors the {@code :accessor} function names (also setf places)
+	 * @param type the package-stripped {@code :type} option name ({@code "t"} if none)
 	 */
 	public record SlotSpec(String name, String baseName, LispVal initform, String initargKeyword, List<String> readers,
-			List<String> accessors) {
+			List<String> accessors, String type) {
 	}
 
 	/**
@@ -257,14 +260,25 @@ public final class ClosRegistry {
 		}
 
 		/**
-		 * Whether any method dispatches on a {@code defclass} class (such dispatchers
-		 * must be regenerated when a new subclass appears).
-		 * @return true when a CLASS-specialized method exists
+		 * Whether any method's dispatch test enumerates class tags, so the dispatcher
+		 * must be regenerated when a new class appears: a CLASS specializer (the new
+		 * class may extend its descendant set) or a TYPE specializer whose test carries
+		 * the any-class-instance enumeration ({@code standard-object} matches it,
+		 * {@code cons}/{@code list}/{@code sequence} exclude it).
+		 * @return true when such a method exists
 		 */
 		public boolean hasClassMethod() {
-			return this.methods.values()
-				.stream()
-				.anyMatch(m -> m.specializers().stream().anyMatch(s -> s.kind() == SpecializerKind.CLASS));
+			return this.methods.values().stream().anyMatch(m -> m.specializers().stream().anyMatch(s -> {
+				if (s.kind() == SpecializerKind.CLASS) {
+					return true;
+				}
+				if (s.kind() != SpecializerKind.TYPE || s.name() == null) {
+					return false;
+				}
+				String plain = plainNameOf(s.name());
+				return "standard-object".equals(plain) || "cons".equals(plain) || "list".equals(plain)
+						|| "sequence".equals(plain);
+			}));
 		}
 
 	}
@@ -457,6 +471,12 @@ public final class ClosRegistry {
 	public static String normalize(String name) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 		return qn == null ? name : qn.pkg() + "::" + qn.member();
+	}
+
+	/** The package-stripped member of a possibly qualified name. */
+	private static String plainNameOf(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
 	}
 
 }
