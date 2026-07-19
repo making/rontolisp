@@ -1429,6 +1429,39 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Returns whether the resolver's CURRENT package shadows the given bare name (see
+	 * {@link PackageResolver#currentPackageShadows}).
+	 * @param name the bare symbol name
+	 * @return {@code true} when the current package shadows the name
+	 */
+	public boolean currentPackageShadows(String name) {
+		return this.packageResolver.currentPackageShadows(name);
+	}
+
+	/**
+	 * Evaluates a top-level form that was ALREADY resolved through
+	 * {@link #resolvePackages} -- the {@code UserMacroExpander} pipeline, which resolves
+	 * each form itself so macro call sites match the canonical registered names. Skipping
+	 * the second resolution that {@link #eval(LispVal)} would apply matters: resolution
+	 * is not idempotent under a {@code :shadow} package, where a shadowed CL name's
+	 * canonical BARE spelling re-resolves to the shadowing package's own symbol
+	 * (re-resolving cl-ppcre's {@code defconstant} macro turned its {@code
+	 * cl:defconstant} template head back into the shadowed macro's name -- a
+	 * self-recursive macro that expanded forever).
+	 * @param expr the resolved top-level form
+	 * @return the result
+	 */
+	public LispVal evalResolved(LispVal expr) {
+		SpecialVarCollector.collectForm(expr, this.specialVars);
+		try {
+			return eval(expr, this.globalEnv);
+		}
+		catch (BlockReturnSignal signal) {
+			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
+		}
+	}
+
+	/**
 	 * Evaluate an expression in the given environment.
 	 * @param expr the expression to evaluate
 	 * @param env the lexical environment
@@ -1719,6 +1752,11 @@ public final class LispEvaluator {
 				case LispNames.FOURTH:
 					return eval(LispMacroExpander.expandFourth(cons), env);
 				case LispNames.SETF:
+					// A prelude-provided (setf PLACE) writer (the (defun (setf get) ...)
+					// beside the get defun) registers its place only when the prelude
+					// entry loads; a setf place reference must trigger that load the same
+					// way a function call would.
+					ensurePreludeSetfPlacesLoaded(cons);
 					return eval(LispMacroExpander.expandSetf(expandUserMacroPlaces(cons), this.structAccessors,
 							this.closRegistry), env);
 				case LispNames.PUSH:
@@ -1867,6 +1905,10 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandLoadTimeValue(cons), env);
 				case LispNames.TYPEP:
 					return eval(LispMacroExpander.expandTypep(cons, this.closRegistry), env);
+				case LispNames.PRINT_UNREADABLE_OBJECT:
+					return eval(LispMacroExpander.expandPrintUnreadableObject(cons), env);
+				case LispNames.WITH_PACKAGE_ITERATOR:
+					return eval(LispMacroExpander.expandWithPackageIterator(cons), env);
 				case LispNames.PROG:
 					return eval(LispMacroExpander.expandProg(cons, false), env);
 				case LispNames.PROG_STAR:
@@ -2754,6 +2796,24 @@ public final class LispEvaluator {
 	private LispVal evalQuote(LispCons cons) {
 		LispCons rest = (LispCons) cons.cdr();
 		return rest.car();
+	}
+
+	/**
+	 * Loads the prelude entry of every {@code (setf (PLACE ...) v)} place head that is a
+	 * prelude function not yet loaded, so a prelude-provided {@code (defun (setf PLACE)
+	 * ...)} writer (the {@code get} entry) registers its place before the setf expansion
+	 * resolves it.
+	 */
+	private void ensurePreludeSetfPlacesLoaded(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispCons placeCons && placeCons.car() instanceof LispSymbol head
+					&& LispPreludeLibrary.isPreludeFunction(head.name()) && this.loadedPreludeNames.add(head.name())) {
+				for (LispVal form : LispPreludeLibrary.formsFor(head.name())) {
+					eval(form, this.globalEnv);
+				}
+			}
+		}
 	}
 
 	private LispVal evalIf(LispCons cons, Environment env) {

@@ -16,7 +16,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `&optional` / `&rest` / `&key` / `&aux` | `defun`/`lambda` で利用可能（[`defun`](../reference/special-forms/defun.md) を参照）。`defmacro` は `&rest`/`&body` のみ |
 | `&whole` | 利用不可 |
 | `values` / `multiple-value-bind` | 利用可能。ユーザ関数の多値も含む（[`multiple-value-bind`](../reference/macros/multiple-value-bind.md) を参照） |
-| `block` / `return-from` / `tagbody` / `go` | 部分的（[`tagbody`](../reference/special-forms/tagbody.md)/[`go`](../reference/special-forms/go.md) は利用可能 — コンパイラはレキシカルサブセットをサポート。[`return-from`](../reference/macros/return-from.md) はライト版（関数スコープ、名前付きブロックなし）。`block` 自体は利用不可） |
+| `block` / `return-from` / `tagbody` / `go` | 利用可能（[`block`](../reference/macros/block.md)/[`return-from`](../reference/macros/return-from.md) はすべてのバックエンドで名前付き脱出 — インタープリタはダイナミックエクステント、コンパイラはレキシカル（同一関数内）。[`tagbody`](../reference/special-forms/tagbody.md)/[`go`](../reference/special-forms/go.md) も同様で、コンパイラはレキシカルサブセットをサポート） |
 | `catch` / `throw` | 利用不可 |
 | `unwind-protect` | 利用可能（[`unwind-protect`](../reference/special-forms/unwind-protect.md) 参照）。wasm-GC では exception-handling プロポーザル経由（`wasmtime -W exceptions=y`）。`--no-gc` ではコンパイルエラー |
 | 条件（`define-condition`、`handler-case`、`ignore-errors`、`signal`） | 利用可能（[`handler-case`](../reference/macros/handler-case.md) 参照）。wasm-GC では捕捉に `wasmtime -W exceptions=y` が必要で、ランタイムトラップはそこでは捕捉不能のまま。`--no-gc` ではコンパイルエラー。リスタート（`handler-bind`/`restart-case`）は利用不可 |
@@ -94,13 +94,19 @@ Common Lisp からの残る相違点は次のとおりです:
 
 ## 非局所脱出と制御フロー
 
-名前付きブロックは利用できませんが、ラベルとジャンプによる制御フローは利用できます。
+名前付きブロックとラベル・ジャンプによる制御フローは利用できます。利用できないのは動的スコープの `catch`/`throw` だけです。
 
-- `block` — 名前付きブロックはありません。[`return`](../reference/macros/return.md) は
+- [`block`](../reference/macros/block.md) /
+  [`return-from`](../reference/macros/return-from.md) — **利用可能**です。
+  `defun`/`defmethod` 本体は関数名/ジェネリック名の暗黙ブロックになり、
+  [`return`](../reference/macros/return.md) は
   `do` / `do*` / `dolist` / `dotimes` によって確立された
-  **最も内側**の反復ブロックから抜け、
-  [`return-from`](../reference/macros/return-from.md) はライト版で、ブロック名を無視して
-  囲んでいる**関数**から抜けます。
+  **最も内側**の反復ブロックから抜けます。インタープリタでは名前付き脱出は
+  動的（ブロックのエクステント内で呼ばれたクロージャも越える）で、JVM / WASM
+  コンパイラはレキシカルサブセットをサポートします — ターゲットのブロックは
+  同一関数内で `return-from` をレキシカルに囲んでいる必要があり、名前がどの
+  囲みブロックにもマッチしない lambda 内の `return-from` はその lambda から
+  抜けます。
 - [`tagbody`](../reference/special-forms/tagbody.md) /
   [`go`](../reference/special-forms/go.md) — [`prog`](../reference/macros/prog.md) /
   [`prog*`](../reference/macros/prog-star.md) とともに**利用可能**です。JVM / WASM
@@ -109,9 +115,8 @@ Common Lisp からの残る相違点は次のとおりです:
   動的 `go` をサポートします。
 - `catch` / `throw` — 動的スコープの脱出はありません。
 
-```console
-> (block done (return-from done 1) 2)
-The function block is undefined
+```lisp
+(block done (return-from done 1) 2) ; => 1
 ```
 
 [`unwind-protect`](../reference/special-forms/unwind-protect.md)(あらゆる

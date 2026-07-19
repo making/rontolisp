@@ -3151,11 +3151,10 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunBlockLowersToNearestBlock() throws Exception {
-		// Compile-path lite DEVIATION (pinned): the name is dropped (block ->
-		// %block), so the return-from exits the nearest block -- the dotimes loop,
-		// not the named block -- and execution falls through (the interpreter
-		// returns 400 here).
+	void compileAndRunNamedBlockReturnFrom() throws Exception {
+		// Lexical named blocks: the return-from crosses the dotimes loop's %block
+		// (which does not catch the named exit) straight to the named block, so the
+		// after-loop code never runs -- matching the interpreter.
 		assertThat(compileAndRun("""
 				(print (block scan
 				         (dotimes (i 10)
@@ -3163,7 +3162,40 @@ class JvmLispCompilerTest {
 				         :fell-through))
 				(print (block nil (return 7) 9))
 				(print (block direct (return-from direct 42) 9))
-				""")).isEqualTo(":fell-through\n7\n42");
+				""")).isEqualTo("400\n7\n42");
+	}
+
+	@Test
+	void compileAndRunReturnFromExitsDefunAcrossLoop() throws Exception {
+		// The %fn-block function boundary: a return-from naming the defun exits the
+		// function from inside a loop whose after-loop code must not run.
+		assertThat(compileAndRun("""
+				(defun find-first-even (xs)
+				  (dolist (x xs)
+				    (when (evenp x) (return-from find-first-even x)))
+				  :none)
+				(print (find-first-even '(1 3 6 7)))
+				(print (find-first-even '(1 3 5)))
+				(defun nested-blocks ()
+				  (block outer
+				    (block inner
+				      (return-from outer :from-inner))
+				    :unreachable))
+				(print (nested-blocks))
+				""")).isEqualTo("6\n:none\n:from-inner");
+	}
+
+	@Test
+	void compileAndRunReturnFromInsideLambdaStaysLambdaLocal() throws Exception {
+		// Compile-path DEVIATION (pinned): a return-from inside a lambda whose name
+		// matches no lexically enclosing block exits the lambda (the %fn-block
+		// fallback), not the outer defun -- the interpreter's dynamic-extent
+		// crossing cannot span a separately compiled method.
+		assertThat(compileAndRun("""
+				(defun probe (xs)
+				  (mapcar #'(lambda (x) (if (evenp x) (return-from probe :even) x)) xs))
+				(print (probe '(1 2 3)))
+				""")).isEqualTo("(1 :even 3)");
 	}
 
 	@Test
@@ -4572,7 +4604,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
+				"(and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop print-unreadable-object proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-package-iterator with-slots write-char)");
 	}
 
 	@Test
@@ -4583,12 +4615,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("280");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("292");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("280");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("292");
 	}
 
 	@Test

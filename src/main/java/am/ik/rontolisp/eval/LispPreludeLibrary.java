@@ -66,6 +66,79 @@ public final class LispPreludeLibrary {
 				                  (cmp 0)))))
 				        (t (eql a b))))
 				""");
+		SOURCES.put(LispNames.ALPHANUMERICP, """
+				(defun alphanumericp (c)
+				  (or (alpha-char-p c) (digit-char-p c)))
+				""");
+		SOURCES.put(LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, """
+				(defun make-load-form-saving-slots (object &key slot-names environment)
+				  (error "make-load-form-saving-slots is not supported (no fasl dumper)"))
+				""");
+		SOURCES.put(LispNames.SXHASH, """
+				(defun sxhash (obj)
+				  (cond ((integerp obj) (logand obj most-positive-fixnum))
+				        ((characterp obj) (char-code obj))
+				        ((stringp obj)
+				         (let ((h 0))
+				           (dotimes (i (length obj))
+				             (setq h (logand (+ (* h 31) (char-code (char obj i))) most-positive-fixnum)))
+				           h))
+				        ((symbolp obj) (sxhash (symbol-name obj)))
+				        ((consp obj)
+				         (logand (+ (* 31 (sxhash (car obj))) (sxhash (cdr obj))) most-positive-fixnum))
+				        (t 0)))
+				""");
+		SOURCES.put(LispNames.SBIT, """
+				(defun sbit (bit-array index)
+				  (aref bit-array index))
+				(defun (setf sbit) (new-value bit-array index)
+				  (setf (aref bit-array index) new-value))
+				""");
+		SOURCES.put(LispNames.BOTH_CASE_P, """
+				(defun both-case-p (c)
+				  (or (lower-case-p c) (upper-case-p c)))
+				""");
+		SOURCES.put(LispNames.SPECIAL_OPERATOR_P, """
+				(defun special-operator-p (symbol) nil)
+				""");
+		SOURCES.put(LispNames.MACRO_FUNCTION, """
+				(defun macro-function (symbol &optional environment) nil)
+				""");
+		SOURCES.put(LispNames.COMPILED_FUNCTION_P, """
+				(defun compiled-function-p (object) nil)
+				""");
+		SOURCES.put(LispNames.FUNCTION_LAMBDA_EXPRESSION, """
+				(defun function-lambda-expression (function) (values nil t nil))
+				""");
+		SOURCES.put(LispNames.LIST_ALL_PACKAGES, """
+				(defun list-all-packages () nil)
+				""");
+		SOURCES.put(LispNames.FIND_CLASS, """
+				(defun find-class (symbol &optional errorp environment) nil)
+				""");
+		SOURCES.put(LispNames.GET, """
+				(defvar %symbol-plists nil)
+				(defun get (symbol indicator &optional default)
+				  (let ((entry (assoc symbol %symbol-plists)))
+				    (if entry
+				        (do ((tail (cdr entry) (cddr tail)))
+				            ((null tail) default)
+				          (when (eq (car tail) indicator)
+				            (return (car (cdr tail)))))
+				        default)))
+				(defun (setf get) (new-value symbol indicator)
+				  (let ((entry (assoc symbol %symbol-plists)))
+				    (unless entry
+				      (setq entry (cons symbol nil))
+				      (setq %symbol-plists (cons entry %symbol-plists)))
+				    (do ((tail (cdr entry) (cddr tail)))
+				        ((null tail)
+				         (rplacd entry (cons indicator (cons new-value (cdr entry))))
+				         new-value)
+				      (when (eq (car tail) indicator)
+				        (rplaca (cdr tail) new-value)
+				        (return new-value)))))
+				""");
 		SOURCES.put(LispNames.CHAR_NAME, """
 				(defun char-name (c)
 				  (let ((cp (char-code c)))

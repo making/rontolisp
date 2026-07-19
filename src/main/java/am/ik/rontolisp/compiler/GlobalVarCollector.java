@@ -53,11 +53,32 @@ public final class GlobalVarCollector {
 						}
 					}
 				}
-				default -> {
-				}
+				default ->
+					// A defun nested inside a top-level non-defun form (the CL
+					// closure-over-let idiom) compiles to (setq name (lambda ...)), so
+					// the name needs the same global backing store; call sites then
+					// dispatch through the variable (expandCallThroughVariable).
+					collectNestedDefunNames(cons, globals);
 			}
 		}
 		return globals;
+	}
+
+	private static void collectNestedDefunNames(LispVal form, Set<String> globals) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.QUOTE.equals(head.name())) {
+				return;
+			}
+			if (LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons nameCell
+					&& nameCell.car() instanceof LispSymbol name) {
+				globals.add(name.name());
+			}
+		}
+		collectNestedDefunNames(cons.car(), globals);
+		collectNestedDefunNames(cons.cdr(), globals);
 	}
 
 }

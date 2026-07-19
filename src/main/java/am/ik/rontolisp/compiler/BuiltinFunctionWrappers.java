@@ -205,6 +205,14 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(name, List.of("a", "b", "c"), List.of(call(name, "a", "b", "c")));
 	}
 
+	// (name a b &optional c) dispatching on c's presence -- the CL subseq shape, whose
+	// wrapper must accept the optional end (cl-ppcre funcalls #'subseq with 3 args).
+	private static WrapperDef binaryOptionalThird(String name) {
+		LispVal dispatch = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("c"),
+				call(name, "a", "b", "c"), call(name, "a", "b")));
+		return new WrapperDef(name, List.of("a", "b", LispNames.LAMBDA_OPTIONAL, "c"), List.of(dispatch));
+	}
+
 	// Builds the inner two-argument fold lambda (lambda (a x) (op a x)). The op sits in
 	// call position, so the compilers inline the primitive (the surrounding (setq op
 	// (lambda ...)) wrapper only rebinds the variable namespace, not the function one).
@@ -464,7 +472,7 @@ public final class BuiltinFunctionWrappers {
 			// String operations
 			unary(LispNames.STRING), unary(LispNames.STRING_UPCASE), unary(LispNames.STRING_DOWNCASE),
 			unary(LispNames.STRING_CAPITALIZE), unary(LispNames.MAKE_STRING), binary(LispNames.REPLACE),
-			binary(LispNames.SUBSEQ), binary(LispNames.STRING_EQ), binary(LispNames.STRING_EQUAL),
+			binaryOptionalThird(LispNames.SUBSEQ), binary(LispNames.STRING_EQ), binary(LispNames.STRING_EQUAL),
 			binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM), binary(LispNames.STRING_RIGHT_TRIM),
 			// Character operations
 			binary(LispNames.CHAR), binary(LispNames.SCHAR), unary(LispNames.CHAR_CODE), unary(LispNames.CODE_CHAR),

@@ -23,7 +23,52 @@ must NOT run. `evalDefun` wraps the (LambdaLists-expanded, rewrite SKIPPED via t
 in `(block <generic-name> ...)`; lambdas get NO block, so a `return-from` inside a
 lambda called within the extent exits the named function, as in CL. An unmatched
 named signal surfaces as "no enclosing block named X" at the top-level eval entry.
-`loop named` is still unsupported (cl-ppcre's bmh path avoids it because
-`*use-bmh-matchers*` defaults nil).
+`(loop named foo ...)` wraps the loop expansion in `(block foo ...)`
+(`LispMacroExpander.LoopExpander`, all backends), so `(return-from foo v)` exits it
+-- lite: the implicit `%block` stays inside, so plain `return` still exits the loop
+(CL says a named loop has no nil block).
 
-**`return-from` on the COMPILE PATH (lite, name dropped)**: `LambdaLists.rewriteReturnFrom` — shared by the interpreter's lazy `expand()` and the compilers' `desugarProgram` (which now also rebuilds a plain-lambda-list defun/lambda whose body contains `return-from`) — rewrites every `(return-from name value)` in a defun/lambda body to `(return value)` and wraps the whole body in `(%block (progn ...))`, so it returns from the function. The block NAME is ignored; a `return-from` nested inside a `do`/`loop` therefore exits that loop's (nearer) block instead, which is only equivalent when the loop is the function's final form (the read-delimited/loop-`finally` idiom). Quoted data is exempt. `block` itself is not supported. Classified as a `CL_MACROS` entry; needed by cl-utilities' `rotate-byte` (early return) and `read-delimited` (`finally (return-from ...)`). **The rewrite stops at a nested `lambda`/`defun` boundary** (`containsReturnFrom`/`stripReturnFrom` do not descend into them): a `return-from` is scoped to its **nearest enclosing function**, so a `return-from` inside a lambda passed to `mapl`/`reduce`/etc. exits *that lambda* (the lambda's own `expand()` wraps it in its own `%block`), NOT the outer defun. This is a deviation from CL's true non-local exit (which the compilers cannot do across the lambda's separately compiled method — the stripped `return` would land in the lambda with no enclosing block) but keeps all four backends consistent (assoc-utils todo-086's `alistp` does `(return-from alistp nil)` inside a `mapl` lambda; as a lite lambda-local exit `alistp` returns t for any cons).
+**Named `block`/`return-from` on the COMPILE PATH (JVM + wasm-GC, LEXICAL)**: the
+compilers implement named blocks as real goto/br targets keyed by name, within one
+compiled function. Machinery:
+
+- **`%fn-block` function boundary** (`LispNames.FN_BLOCK_INTERNAL`, a `CL_INTERNALS`
+  symbol): `LambdaLists.wrapReturnFrom` — run from `expand()` (the lambda compilers'
+  `toNative` path, block name nil, idempotent re-entry check) and from
+  `desugarProgram`'s defun rebuild (block name = the defun's name; setf-functions use
+  the PLACE name via `setfFunctionPlaceName`, mirroring `evalDefun`) — wraps a
+  `return-from`-containing body in `(%fn-block name body...)`. The scan still stops at
+  nested `lambda`/`defun` boundaries (`containsReturnFrom`). The interpreter passes
+  `expand(..., false)` and keeps its native dynamic blocks.
+- **Target resolution**: `JvmLispCompiler.BlockTarget` / `WasmLispCompiler.BlockMarker`
+  carry `(name, catchesPlain, functionBoundary)`. Plain `return` targets the nearest
+  `catchesPlain` block (`%block` or `(block nil ...)`), SKIPPING named blocks — the
+  goto/br analog of the interpreter's signal transparency. `(return-from name v)`
+  (`JvmReturnFromCompiler`/`WasmReturnFromCompiler`) targets the nearest block whose
+  name matches — a user `(block name ...)` (`compileNamed`) or the `%fn-block`
+  (`compileFnBlock`) — falling back to the nearest `functionBoundary` when no name
+  matches, so an unmatched `return-from` exits the current function. `(return-from nil
+  v)` compiles as plain `return`. `(block nil ...)` compiles exactly like `%block`.
+  `LispMacroExpander.blockName` mirrors the interpreter's designator handling
+  (nil/`"nil"` → the nil block).
+- **Unwind interplay**: on the JVM, `JvmReturnCompiler.emitExit` is the shared exit
+  sequence generalized to any target depth (escaped `unwind-protect` cleanups inline
+  with hole recording, `handler-case` spill restore, operand-stack unwind — the
+  comparisons use the target's 1-based block-stack depth instead of the stack size).
+  On WASM, plain `return` keeps the pre-built trampoline cascade (its continuation now
+  computed against the nearest `catchesPlain` marker), while `return-from` INLINES the
+  escaped scopes' cleanups at the exit site and brs straight to the target — the same
+  strategy and lite limit as `go` (a throw from an inlined cleanup can re-enter its own
+  handler).
+- **The remaining deviation from CL** (pinned by
+  `compileAndRunReturnFromInsideLambdaStaysLambdaLocal` and assoc-utils todo-086's
+  `alistp`): a `return-from` inside a lambda whose name only matches a block in the
+  lexically enclosing function exits *that lambda* (the `%fn-block` fallback), NOT the
+  outer defun — a goto cannot cross into a separately compiled method. The interpreter's
+  dynamic-extent crossing still differs there. `--no-gc` keeps the old name-dropping
+  `expandBlock` lowering and has no `return-from` at all (it never ran
+  `desugarProgram`).
+
+Needed by cl-utilities' `rotate-byte`/`read-delimited` (function-scoped early returns,
+now exact) and cl-ppcre (`ClPpcreE2eTest`, all four backends: `(block scan ...)` in the
+generated scanner closures, `collect-char-class` returning across a `loop`).

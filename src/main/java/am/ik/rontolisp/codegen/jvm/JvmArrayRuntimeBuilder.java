@@ -1160,13 +1160,18 @@ final class JvmArrayRuntimeBuilder {
 	}
 
 	// Emits a full helper body returning "t" when header[slot] of the array in local 0
-	// is non-null, else null (nil).
+	// is non-null, else null (nil). A non-array argument (a plain string handed to
+	// adjustable-array-p, cl-ppcre's gather-strings collector) is nil, not a cast
+	// error.
 	private static void emitHeaderSlotToBool(JvmAsm a, ClassConstant arrayListClass, ClassConstant objectArrayClass,
 			MethodrefConstant alGet, ConstantPool cp, int slot) {
+		int isNil = a.label();
+		a.aload(0);
+		a.instanceOf(arrayListClass);
+		a.branch(Opcode.IFEQ, isNil);
 		emitLoadHeader(a, arrayListClass, objectArrayClass, alGet, 0);
 		a.iconst(slot);
 		a.aaload();
-		int isNil = a.label();
 		a.branch(Opcode.IFNULL, isNil);
 		a.ldcString(cp.addString("t"));
 		a.areturn();

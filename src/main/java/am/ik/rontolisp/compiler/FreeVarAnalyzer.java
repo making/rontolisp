@@ -159,6 +159,12 @@ public final class FreeVarAnalyzer {
 						}
 						case LispNames.LET_STAR -> collectFreeVars(LispMacroExpander.expandLetStar(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
+						// Expand before walking: a cond clause whose test is a bare
+						// symbol would otherwise be misread as a call form, dropping
+						// the variable reference (cl-ppcre's (cond (start-anchored-p
+						// ...)) inside the scan closures).
+						case LispNames.COND -> collectFreeVars(LispMacroExpander.expandCond(cons), boundVars,
+								knownFunctions, globals, specialNames, freeVars);
 						// Expand before walking: with-slots binds its slot variables,
 						// which
 						// the default walk would misread as free references.
@@ -280,6 +286,30 @@ public final class FreeVarAnalyzer {
 										freeVars);
 							}
 						}
+						case LispNames.BLOCK, LispNames.FN_BLOCK_INTERNAL, LispNames.RETURN_FROM -> {
+							// The first argument is a block NAME, not a variable
+							// reference; only the body/value forms can reference
+							// variables.
+							List<LispVal> parts = cons.toList();
+							for (int i = 2; i < parts.size(); i++) {
+								collectFreeVars(parts.get(i), boundVars, knownFunctions, globals, specialNames,
+										freeVars);
+							}
+						}
+						case LispNames.TAGBODY -> {
+							// Body atoms are labels, not variable references; only the
+							// cons statements can reference variables.
+							List<LispVal> parts = cons.toList();
+							for (int i = 1; i < parts.size(); i++) {
+								if (parts.get(i) instanceof LispCons) {
+									collectFreeVars(parts.get(i), boundVars, knownFunctions, globals, specialNames,
+											freeVars);
+								}
+							}
+						}
+						case LispNames.GO -> {
+							// (go tag): the tag is a label, not a variable reference.
+						}
 						default -> {
 							// Function call or special form: the operator resolves in
 							// the function namespace (Lisp-2), so only the argument
@@ -354,6 +384,9 @@ public final class FreeVarAnalyzer {
 						}
 						case LispNames.LET_STAR -> collectCapturedVars(LispMacroExpander.expandLetStar(cons), localVars,
 								knownFunctions, captured, insideLambda);
+						// Expand before walking (same reason as collectFreeVars).
+						case LispNames.COND -> collectCapturedVars(LispMacroExpander.expandCond(cons), localVars,
+								knownFunctions, captured, insideLambda);
 						case LispNames.DOTIMES -> collectCapturedVars(LispMacroExpander.expandDotimes(cons), localVars,
 								knownFunctions, captured, insideLambda);
 						case LispNames.DO_STAR -> collectCapturedVars(LispMacroExpander.expandDoStar(cons), localVars,
@@ -424,6 +457,27 @@ public final class FreeVarAnalyzer {
 							if (parts.size() > 2) {
 								collectCapturedVars(parts.get(2), localVars, knownFunctions, captured, insideLambda);
 							}
+						}
+						case LispNames.BLOCK, LispNames.FN_BLOCK_INTERNAL, LispNames.RETURN_FROM -> {
+							// The first argument is a block NAME, not a variable
+							// reference.
+							List<LispVal> parts = cons.toList();
+							for (int i = 2; i < parts.size(); i++) {
+								collectCapturedVars(parts.get(i), localVars, knownFunctions, captured, insideLambda);
+							}
+						}
+						case LispNames.TAGBODY -> {
+							// Body atoms are labels, not variable references.
+							List<LispVal> parts = cons.toList();
+							for (int i = 1; i < parts.size(); i++) {
+								if (parts.get(i) instanceof LispCons) {
+									collectCapturedVars(parts.get(i), localVars, knownFunctions, captured,
+											insideLambda);
+								}
+							}
+						}
+						case LispNames.GO -> {
+							// (go tag): the tag is a label, not a variable reference.
 						}
 						default -> {
 							// Lisp-2: the operator symbol is not a variable reference

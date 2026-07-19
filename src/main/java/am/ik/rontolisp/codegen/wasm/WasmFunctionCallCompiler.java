@@ -103,6 +103,13 @@ final class WasmFunctionCallCompiler {
 				WasmExprCompiler.compileExpr(uiopStub, ctx);
 				return;
 			}
+			if (ctx.globalIndices.containsKey(name)) {
+				// A defun nested inside a top-level let compiles to (setq name
+				// (lambda ...)) and the assigned name is a global variable holding the
+				// closure: dispatch the call through it.
+				WasmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx);
+				return;
+			}
 			throw new UnsupportedOperationException("Cannot compile: " + name);
 		}
 	}

@@ -365,6 +365,14 @@ public final class LispNames {
 	public static final String GETF = "getf";
 
 	/**
+	 * The {@code get} standard function (+ its {@code (setf get)} writer): symbol
+	 * property lists as prelude defuns over one global name-keyed alist store
+	 * ({@code %symbol-plists}) -- symbols have no identity cells to hang plists on
+	 * ({@code .kb/symbol-runtime-api.md}), so the store is program-global.
+	 */
+	public static final String GET = "get";
+
+	/**
 	 * The {@code remove} built-in function (return a copy without items eql to the given
 	 * one).
 	 */
@@ -1469,12 +1477,13 @@ public final class LispNames {
 	 * wrapped in a block named after the function, a {@code defmethod} body in one named
 	 * after the generic), so it crosses intervening {@code do}/{@code loop} blocks and
 	 * closure calls within the exit's dynamic extent, as in CL; {@code (return-from nil
-	 * v)} is plain {@code return}. COMPILE PATH lite: the block name is ignored -- inside
-	 * a defun/lambda body it is rewritten to {@code (return value)} and the body is
-	 * wrapped in the internal {@code %block}, so it returns from the function; a
-	 * {@code return-from} nested inside a {@code do}/{@code loop} exits that loop's block
-	 * instead (correct only when the loop is the function's final form). See
-	 * {@link am.ik.rontolisp.LambdaLists}.
+	 * v)} is plain {@code return}. COMPILE PATH (JVM / wasm-GC): a LEXICAL named exit --
+	 * the jump targets the nearest lexically enclosing {@code block} with a matching name
+	 * in the same compiled function, crossing intervening {@code do}/{@code loop}
+	 * {@code %block}s; a {@code return-from} whose name matches no enclosing block exits
+	 * the current function (the {@code %fn-block} function boundary), so a
+	 * {@code return-from} inside a lambda cannot cross into its lexically enclosing
+	 * function. See {@link am.ik.rontolisp.LambdaLists}.
 	 */
 	public static final String RETURN_FROM = "return-from";
 
@@ -1482,8 +1491,8 @@ public final class LispNames {
 	 * The {@code block} operator. INTERPRETER: a real named block -- catches the
 	 * {@code return-from} signal carrying its name ({@code (block nil ...)} additionally
 	 * catches plain {@code return}, like the loop macros' implicit block). COMPILE PATH
-	 * lite: lowers to {@code %block} with the name dropped, so a {@code return-from}
-	 * inside targets the nearest block.
+	 * (JVM / wasm-GC): a lexical named block target compiled like {@code %block} but
+	 * keyed by name ({@code (block nil ...)} behaves exactly like {@code %block}).
 	 */
 	public static final String BLOCK = "block";
 
@@ -1495,6 +1504,19 @@ public final class LispNames {
 	 * lets a named return cross an intervening loop.
 	 */
 	public static final String BLOCK_INTERNAL = "%block";
+
+	/**
+	 * The internal {@code (%fn-block name body...)} function-boundary block the compilers
+	 * wrap a {@code return-from}-containing defun/lambda body in ({@code name} is the
+	 * defun's name, {@code nil} for a lambda). It is a named block target (a
+	 * {@code return-from} with the matching name exits the function) and ALSO the
+	 * fallback target for a {@code return-from} whose name matches no lexically enclosing
+	 * block -- the compile-path deviation that keeps a {@code return-from} inside a
+	 * lambda a lambda-local exit (the interpreter's dynamic-extent crossing cannot span a
+	 * separately compiled method). It does NOT catch plain {@code return}. Not part of
+	 * the public Lisp API.
+	 */
+	public static final String FN_BLOCK_INTERNAL = "%fn-block";
 
 	// Type predicates
 
@@ -1825,6 +1847,93 @@ public final class LispNames {
 	 * The {@code alpha-char-p} built-in function (true if the character is alphabetic).
 	 */
 	public static final String ALPHA_CHAR_P = "alpha-char-p";
+
+	/**
+	 * The {@code alphanumericp} built-in function (true if the character is a letter or a
+	 * decimal digit). A prelude defun over {@code alpha-char-p}/{@code digit-char-p}.
+	 */
+	public static final String ALPHANUMERICP = "alphanumericp";
+
+	/**
+	 * The {@code make-load-form-saving-slots} standard function. A prelude STUB that
+	 * signals when called: rontolisp has no fasl dumper, but a library's
+	 * {@code make-load-form} methods (cl-ppcre's charmap/charset) must still compile --
+	 * the call sites are dead at run time.
+	 */
+	public static final String MAKE_LOAD_FORM_SAVING_SLOTS = "make-load-form-saving-slots";
+
+	/**
+	 * The {@code sxhash} built-in function: a prelude defun hashing by structural content
+	 * (integers/characters/strings/symbols/conses; anything else hashes to 0). Values are
+	 * stable within a run but NOT specified across backends.
+	 */
+	public static final String SXHASH = "sxhash";
+
+	/**
+	 * The {@code sbit} built-in function (+ its {@code (setf sbit)} writer): prelude
+	 * defuns over {@code aref}, since a "bit vector" is the general array holding 0/1.
+	 */
+	public static final String SBIT = "sbit";
+
+	/**
+	 * The {@code both-case-p} built-in function: a prelude defun -- {@code lower-case-p}
+	 * or {@code upper-case-p}.
+	 */
+	public static final String BOTH_CASE_P = "both-case-p";
+
+	/**
+	 * The {@code special-operator-p} standard function: a lite prelude stub returning nil
+	 * (compiled programs have no operator table; the interpreter's evaluator dispatch is
+	 * not reified).
+	 */
+	public static final String SPECIAL_OPERATOR_P = "special-operator-p";
+
+	/**
+	 * The {@code macro-function} standard function: a lite prelude stub returning nil
+	 * (macros are fully expanded at compile time; no runtime macro table exists).
+	 */
+	public static final String MACRO_FUNCTION = "macro-function";
+
+	/**
+	 * The {@code compiled-function-p} standard function: a lite prelude stub returning
+	 * nil.
+	 */
+	public static final String COMPILED_FUNCTION_P = "compiled-function-p";
+
+	/**
+	 * The {@code function-lambda-expression} standard function: a lite prelude stub
+	 * returning {@code (values nil t nil)} (no source is recorded).
+	 */
+	public static final String FUNCTION_LAMBDA_EXPRESSION = "function-lambda-expression";
+
+	/**
+	 * The {@code list-all-packages} standard function: a lite prelude stub returning nil
+	 * (symbols are not interned into enumerable package tables; see
+	 * {@code .kb/symbol-runtime-api.md}).
+	 */
+	public static final String LIST_ALL_PACKAGES = "list-all-packages";
+
+	/**
+	 * The {@code find-class} standard function: a lite prelude stub returning nil (no
+	 * class metaobjects exist -- {@code class-of} is a name stub), regardless of
+	 * {@code errorp}.
+	 */
+	public static final String FIND_CLASS = "find-class";
+
+	/**
+	 * The {@code print-unreadable-object} macro: a lite expansion writing
+	 * {@code #<[class ]...>} around the body ({@code :type} prints the {@code class-of}
+	 * designator, {@code :identity} is ignored), returning nil.
+	 */
+	public static final String PRINT_UNREADABLE_OBJECT = "print-unreadable-object";
+
+	/**
+	 * The {@code with-package-iterator} macro: a lite expansion binding the iterator name
+	 * to a LOCAL FUNCTION (an {@code flet}, not CL's {@code macrolet}) that always
+	 * reports no more symbols -- there is no intern table to iterate, so the loop body
+	 * runs zero times (cl-ppcre's regex-apropos).
+	 */
+	public static final String WITH_PACKAGE_ITERATOR = "with-package-iterator";
 
 	/**
 	 * The {@code lower-case-p} built-in function (true if the character is a lowercase

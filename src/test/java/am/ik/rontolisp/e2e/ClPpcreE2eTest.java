@@ -3,8 +3,6 @@ package am.ik.rontolisp.e2e;
 import java.nio.file.Path;
 import java.util.List;
 
-import org.junit.jupiter.api.Disabled;
-
 /**
  * An ASDF subset integration target ({@code .kb/asdf.md}): the REAL cl-ppcre v2.1.2
  * sources (vendored unmodified under {@code src/test/resources/cl-ppcre}, BSD-2-Clause --
@@ -22,9 +20,10 @@ import org.junit.jupiter.api.Disabled;
  * descending/case-insensitive character comparisons.
  *
  * <p>
- * The three compile backends are excluded for now: the compilers keep the LITE
- * name-dropping {@code return-from} rewrite (a named return inside a loop exits the
- * loop), which the scanner closures rely on crossing.
+ * All four backends run: the compilers implement named {@code block}/{@code return-from}
+ * as LEXICAL exits ({@code %fn-block} function boundaries plus name-keyed goto/br
+ * targets), which covers the scanner closures' {@code (block scan ...)} and the
+ * {@code collect-char-class} loop-crossing returns.
  */
 class ClPpcreE2eTest extends AsdfLibraryE2eSupport {
 
@@ -81,21 +80,6 @@ class ClPpcreE2eTest extends AsdfLibraryE2eSupport {
 	@Override
 	protected String artifactName() {
 		return "ClPpcreE2e";
-	}
-
-	@Override
-	@Disabled("cl-ppcre needs interpreter-native named block/return-from; the compile path keeps the lite rewrite")
-	void compilesAndRunsOnJvm() {
-	}
-
-	@Override
-	@Disabled("cl-ppcre needs interpreter-native named block/return-from; the compile path keeps the lite rewrite")
-	void compilesAndRunsOnWasmPreview1() {
-	}
-
-	@Override
-	@Disabled("cl-ppcre needs interpreter-native named block/return-from; the compile path keeps the lite rewrite")
-	void compilesAndRunsOnWasmComponent() {
 	}
 
 }

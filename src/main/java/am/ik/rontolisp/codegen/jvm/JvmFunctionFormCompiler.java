@@ -81,6 +81,11 @@ final class JvmFunctionFormCompiler {
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileFunctionRef(name, ctx, className);
 		}
+		else if (ctx.globals.contains(name)) {
+			// A defun nested inside a top-level let compiles to (setq name
+			// (lambda ...)): the global variable already HOLDS the function value.
+			JvmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx, className);
+		}
 		else {
 			throw new UnsupportedOperationException("Cannot compile: " + name);
 		}

@@ -62,6 +62,18 @@ final class JvmExprCompiler {
 
 	static void compileSymbolRef(LispSymbol sym, JvmLispCompiler.Ctx ctx) {
 		String name = sym.name();
+		// DYNAMIC-FIRST read of a dual-bound special (see JvmLetCompiler): in the
+		// binding method the lexical slot exists only so nested lambdas can capture
+		// it -- reads go to the global static field, so a called function's dynamic
+		// rebinding or setq is visible (cl-ppcre's starts-with accumulation). Inside a
+		// closure, the CAPTURE wins: the closure may run after the extent ended and
+		// restored the global (cl-ppcre's end-string).
+		if (ctx.specialVars.contains(name) && !ctx.captures.containsKey(name) && ctx.locals.containsKey(name)
+				&& ctx.globals.contains(name)) {
+			ctx.emit(Opcode.GETSTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
+			return;
+		}
 		Integer slot = ctx.locals.get(name);
 		if (slot != null) {
 			if (ctx.boxedVars.contains(name)) {
@@ -433,6 +445,10 @@ final class JvmExprCompiler {
 				case LispNames.PROGN -> JvmPrognCompiler.compile(cons, ctx, className);
 				case LispNames.TAGBODY -> JvmTagbodyCompiler.compile(cons, ctx, className);
 				case LispNames.GO -> JvmGoCompiler.compile(cons, ctx, className);
+				case LispNames.PRINT_UNREADABLE_OBJECT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintUnreadableObject(cons), ctx, className);
+				case LispNames.WITH_PACKAGE_ITERATOR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithPackageIterator(cons), ctx, className);
 				case LispNames.PROG ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, false), ctx, className);
 				case LispNames.PROG_STAR ->
@@ -479,10 +495,9 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDoStar(cons), ctx, className);
 				case LispNames.LOOP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLoop(cons), ctx, className);
 				case LispNames.BLOCK_INTERNAL -> JvmBlockCompiler.compile(cons, ctx, className);
-				case LispNames.BLOCK ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandBlock(cons), ctx, className);
-				case LispNames.RETURN_FROM ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandReturnFromLite(cons), ctx, className);
+				case LispNames.BLOCK -> JvmBlockCompiler.compileNamed(cons, ctx, className);
+				case LispNames.FN_BLOCK_INTERNAL -> JvmBlockCompiler.compileFnBlock(cons, ctx, className);
+				case LispNames.RETURN_FROM -> JvmReturnFromCompiler.compile(cons, ctx, className);
 				case LispNames.UNWIND_PROTECT -> JvmUnwindProtectCompiler.compile(cons, ctx, className);
 				case LispNames.RETURN -> JvmReturnCompiler.compile(cons, ctx, className);
 				case LispNames.INCF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx, className);

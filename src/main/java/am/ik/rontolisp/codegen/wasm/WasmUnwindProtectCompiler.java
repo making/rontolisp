@@ -64,8 +64,9 @@ final class WasmUnwindProtectCompiler {
 		ctx.wasmCtrlDepth++;
 		int doneDepth = ctx.wasmCtrlDepth;
 		// block $tramp (result (ref null eq)) -- the return-exit trampoline, only when
-		// an enclosing %block exists (otherwise no return can escape this scope).
-		boolean needTrampoline = !ctx.blockMarkers.isEmpty();
+		// an enclosing plain-return boundary exists (otherwise no return can escape
+		// this scope; a named return-from inlines its escaped cleanups instead).
+		boolean needTrampoline = WasmReturnCompiler.findPlainTarget(ctx) != null;
 		int trampolineDepth = -1;
 		int continueDepth = -1;
 		if (needTrampoline) {
@@ -129,17 +130,20 @@ final class WasmUnwindProtectCompiler {
 	 * Computes the {@code wasmCtrlDepth} marker the exit trampoline continues to once its
 	 * own cleanups have run: the enclosing unwind scope's trampoline when that scope is
 	 * also escaped by the same {@code return} (it was entered inside the return's target
-	 * block), otherwise the target {@code %block} itself. Must be called BEFORE this
-	 * scope pushes itself.
+	 * block), otherwise the return's target block itself -- the nearest enclosing
+	 * plain-{@code return} boundary, skipping named blocks the plain signal passes
+	 * through. Must be called BEFORE this scope pushes itself, and only when a
+	 * plain-return boundary encloses (the {@code needTrampoline} guard).
 	 * @param ctx the compilation context
 	 * @return the continuation label's depth marker
 	 */
 	static int continueTargetDepth(WasmLispCompiler.Ctx ctx) {
+		WasmLispCompiler.BlockMarker plain = java.util.Objects.requireNonNull(WasmReturnCompiler.findPlainTarget(ctx));
 		WasmLispCompiler.UnwindScope enclosing = ctx.unwindScopes.peek();
-		if (enclosing != null && enclosing.blockDepth() >= ctx.blockMarkers.size()) {
+		if (enclosing != null && enclosing.blockDepth() >= WasmReturnCompiler.blockStackDepthOf(ctx, plain)) {
 			return enclosing.trampolineDepth();
 		}
-		return java.util.Objects.requireNonNull(ctx.blockMarkers.peek());
+		return plain.depth();
 	}
 
 	/**

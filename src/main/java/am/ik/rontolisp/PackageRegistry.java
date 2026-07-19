@@ -49,7 +49,8 @@ public final class PackageRegistry {
 			LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE, LispNames.WITH_SLOTS,
 			LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE,
 			LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP,
-			LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND);
+			LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.PRINT_UNREADABLE_OBJECT,
+			LispNames.WITH_PACKAGE_ITERATOR);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -97,8 +98,11 @@ public final class PackageRegistry {
 			LispNames.GETENV, LispNames.READ_FROM_STRING, LispNames.PARSE_INTEGER, LispNames.CHAR, LispNames.SCHAR,
 			LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE,
 			LispNames.CHAR_GT, LispNames.CHAR_GE, LispNames.CHAR_NE, LispNames.CHAR_EQUAL, LispNames.CHAR_UPCASE,
-			LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P, LispNames.DIGIT_CHAR_P,
-			LispNames.MAKE_HASH_TABLE, LispNames.GETHASH, LispNames.REMHASH, LispNames.CLRHASH,
+			LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P, LispNames.ALPHANUMERICP,
+			LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT, LispNames.BOTH_CASE_P,
+			LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION, LispNames.COMPILED_FUNCTION_P,
+			LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.LIST_ALL_PACKAGES, LispNames.FIND_CLASS, LispNames.GET,
+			LispNames.DIGIT_CHAR_P, LispNames.MAKE_HASH_TABLE, LispNames.GETHASH, LispNames.REMHASH, LispNames.CLRHASH,
 			LispNames.HASH_TABLE_COUNT, LispNames.HASH_TABLE_P, LispNames.MAPHASH, LispNames.MAKE_ARRAY, LispNames.AREF,
 			LispNames.VECTOR, LispNames.SVREF, LispNames.ARRAY_DIMENSIONS, LispNames.ARRAY_DIMENSION,
 			LispNames.ARRAY_RANK, LispNames.ARRAY_TOTAL_SIZE, LispNames.ROW_MAJOR_AREF, LispNames.ARRAY_ROW_MAJOR_INDEX,
@@ -139,12 +143,13 @@ public final class PackageRegistry {
 	 * introspection listings.
 	 */
 	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL, LispNames.STRING_CONCAT,
-			LispNames.BLOCK_INTERNAL, LispNames.ERROR_INTERNAL, LispNames.PUTHASH, LispNames.ASET,
-			LispNames.ROW_MAJOR_ASET, LispNames.MAKE_STRING_OUTPUT_STREAM, LispNames.MAKE_STRING_INPUT_STREAM,
-			LispNames.STRING_STREAM_CONTENTS, LispNames.ARRAYP_INTERNAL, LispNames.MV_SPILL, LispNames.SET_FILL_POINTER,
-			LispNames.ARRAY_BECOME, LispNames.ARRAY_DISP_TARGET, LispNames.ARRAY_DISP_OFFSET, LispNames.WARN_INTERNAL,
-			LispNames.SCHAR_SET, LispNames.IEEE754_DOUBLE_BITS, LispNames.IEEE754_DOUBLE_FROM_BITS,
-			LispNames.IEEE754_SINGLE_BITS, LispNames.IEEE754_SINGLE_FROM_BITS, LispNames.READ_EVAL);
+			LispNames.BLOCK_INTERNAL, LispNames.FN_BLOCK_INTERNAL, LispNames.ERROR_INTERNAL, LispNames.PUTHASH,
+			LispNames.ASET, LispNames.ROW_MAJOR_ASET, LispNames.MAKE_STRING_OUTPUT_STREAM,
+			LispNames.MAKE_STRING_INPUT_STREAM, LispNames.STRING_STREAM_CONTENTS, LispNames.ARRAYP_INTERNAL,
+			LispNames.MV_SPILL, LispNames.SET_FILL_POINTER, LispNames.ARRAY_BECOME, LispNames.ARRAY_DISP_TARGET,
+			LispNames.ARRAY_DISP_OFFSET, LispNames.WARN_INTERNAL, LispNames.SCHAR_SET, LispNames.IEEE754_DOUBLE_BITS,
+			LispNames.IEEE754_DOUBLE_FROM_BITS, LispNames.IEEE754_SINGLE_BITS, LispNames.IEEE754_SINGLE_FROM_BITS,
+			LispNames.READ_EVAL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

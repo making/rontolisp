@@ -588,8 +588,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Special (dynamically bound) variables. Each needs the same global backing store
 		// (a let of a special save/restores over it), so union them into the globals set
 		// before fields are minted; a let/let* of one of these names becomes a dynamic
-		// binding rather than a lexical slot (JvmLetCompiler).
-		Set<String> specialVars = SpecialVarCollector.collect(topLevelExprs);
+		// binding rather than a lexical slot (JvmLetCompiler). Collected over the WHOLE
+		// program: a local (declare (special x)) inside a defun body (cl-ppcre's
+		// remove-registers-p) must make x a global cell for its free readers too.
+		Set<String> specialVars = SpecialVarCollector.collect(program);
 		globals.addAll(specialVars);
 		Map<String, FieldrefConstant> globalFields = new HashMap<>();
 		List<Utf8Constant> globalFieldNameUtfs = new ArrayList<>();
@@ -2088,15 +2090,22 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * An active {@code %block} return boundary during compilation. {@code rvSlot} is the
+	 * An active block return boundary during compilation ({@code %block}, a named
+	 * {@code block} or the {@code %fn-block} function boundary). {@code rvSlot} is the
 	 * local that holds the block's value; {@code exitPatches} collects the positions of
-	 * the {@code goto} instructions emitted by {@code return} forms, all back-patched to
-	 * the block's exit once its body has been compiled; {@code entryStack} is the operand
-	 * stack the block was entered with, which is the shape its exit is reached with on
-	 * every path -- a {@code return} discards whatever the body had pushed on top of it
-	 * (see {@link JvmReturnCompiler}).
+	 * the {@code goto} instructions emitted by {@code return}/{@code return-from} forms,
+	 * all back-patched to the block's exit once its body has been compiled;
+	 * {@code entryStack} is the operand stack the block was entered with, which is the
+	 * shape its exit is reached with on every path -- an exit discards whatever the body
+	 * had pushed on top of it (see {@link JvmReturnCompiler}). {@code name} is the block
+	 * name a {@code return-from} matches against ({@code null} for {@code %block} and the
+	 * {@code nil} block); {@code catchesPlain} marks the targets a plain {@code return}
+	 * exits ({@code %block} and {@code (block nil ...)}); {@code functionBoundary} marks
+	 * the {@code %fn-block} wrap -- the fallback target for a {@code return-from} whose
+	 * name matches no enclosing block.
 	 */
-	record BlockTarget(int rvSlot, List<Integer> exitPatches, List<OperandStack.Slot> entryStack) {
+	record BlockTarget(int rvSlot, List<Integer> exitPatches, List<OperandStack.Slot> entryStack, @Nullable String name,
+			boolean catchesPlain, boolean functionBoundary) {
 	}
 
 	/**
@@ -2505,6 +2514,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * Only a catching form compiled with operands live pushes one.
 		 */
 		final Deque<SpillScope> spillScopes = new ArrayDeque<>();
+
+		/**
+		 * Active special-variable dynamic bindings, innermost on top:
+		 * {@code {globalFieldIndex, saveSlot, blockDepth}} per binding (see
+		 * JvmLetCompiler). A {@code return}/{@code return-from} that exits a block
+		 * entered before the binding ({@code blockDepth >=} the target's depth) restores
+		 * the saved value on its way out, so a named exit from a scan closure does not
+		 * leak the bound value into the global (cl-ppcre's *reg-starts*).
+		 */
+		final Deque<int[]> specialBindScopes = new ArrayDeque<>();
 
 		/**
 		 * This method's {@code Code} attribute exception table, in dispatch order.

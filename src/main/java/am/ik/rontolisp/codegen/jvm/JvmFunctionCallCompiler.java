@@ -116,6 +116,13 @@ final class JvmFunctionCallCompiler {
 				JvmExprCompiler.compileExpr(uiopStub, ctx, className);
 				return;
 			}
+			if (ctx.globals.contains(name)) {
+				// A defun nested inside a top-level let compiles to (setq name
+				// (lambda ...)) and the assigned name is a global variable holding the
+				// closure: dispatch the call through it.
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx, className);
+				return;
+			}
 			throw new UnsupportedOperationException("Cannot compile: " + name);
 		}
 	}

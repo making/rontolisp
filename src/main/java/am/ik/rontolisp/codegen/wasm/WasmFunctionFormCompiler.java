@@ -80,6 +80,11 @@ final class WasmFunctionFormCompiler {
 		else if (ctx.dynamic) {
 			WasmDynamicCallCompiler.compileFunctionRef(name, ctx);
 		}
+		else if (ctx.globalIndices.containsKey(name)) {
+			// A defun nested inside a top-level let compiles to (setq name
+			// (lambda ...)): the global variable already HOLDS the function value.
+			WasmExprCompiler.compileExpr(new am.ik.rontolisp.LispSymbol(name), ctx);
+		}
 		else {
 			throw new UnsupportedOperationException("Cannot compile: " + name);
 		}

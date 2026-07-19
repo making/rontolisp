@@ -84,6 +84,17 @@ final class WasmExprCompiler {
 
 	static void compileSymbolRef(LispSymbol sym, WasmLispCompiler.Ctx ctx) {
 		String name = sym.name();
+		// DYNAMIC-FIRST read of a dual-bound special (see WasmLetCompiler): in the
+		// binding function the lexical slot exists only so nested lambdas can capture
+		// it -- reads go to the module global, so a called function's dynamic
+		// rebinding or setq is visible. Inside a closure, the CAPTURE wins: the
+		// closure may run after the extent ended and restored the global.
+		if (ctx.specialVars.contains(name) && !ctx.captures.containsKey(name) && ctx.locals.containsKey(name)
+				&& ctx.globalIndices.containsKey(name)) {
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
+			return;
+		}
 		// Check local variables
 		Integer slot = ctx.locals.get(name);
 		if (slot != null) {
@@ -576,6 +587,10 @@ final class WasmExprCompiler {
 				case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx);
 				case LispNames.TAGBODY -> WasmTagbodyCompiler.compile(cons, ctx);
 				case LispNames.GO -> WasmTagbodyCompiler.compileGo(cons, ctx);
+				case LispNames.PRINT_UNREADABLE_OBJECT ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandPrintUnreadableObject(cons), ctx);
+				case LispNames.WITH_PACKAGE_ITERATOR ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithPackageIterator(cons), ctx);
 				case LispNames.PROG -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, false), ctx);
 				case LispNames.PROG_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, true), ctx);
 				case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);
@@ -614,9 +629,9 @@ final class WasmExprCompiler {
 				case LispNames.DO_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDoStar(cons), ctx);
 				case LispNames.LOOP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLoop(cons), ctx);
 				case LispNames.BLOCK_INTERNAL -> WasmBlockCompiler.compile(cons, ctx);
-				case LispNames.BLOCK -> WasmExprCompiler.compileExpr(LispMacroExpander.expandBlock(cons), ctx);
-				case LispNames.RETURN_FROM ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandReturnFromLite(cons), ctx);
+				case LispNames.BLOCK -> WasmBlockCompiler.compileNamed(cons, ctx);
+				case LispNames.FN_BLOCK_INTERNAL -> WasmBlockCompiler.compileFnBlock(cons, ctx);
+				case LispNames.RETURN_FROM -> WasmReturnFromCompiler.compile(cons, ctx);
 				case LispNames.RETURN -> WasmReturnCompiler.compile(cons, ctx);
 				case LispNames.INCF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx);
 				case LispNames.DECF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDecf(cons), ctx);

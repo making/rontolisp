@@ -62,21 +62,38 @@ gets a backing store.
 
 - `Ctx.specialVars` threaded from `SpecialVarCollector.collect` (unioned into
   `globals` in `JvmLispCompiler` so each special has a `_g$*` static field).
-- A special binding in `let`: compile init, `GETSTATIC` old into a temp,
-  `PUTSTATIC` the init; after the body (result on stack), restore is `ALOAD temp;
-  PUTSTATIC field` (stack-neutral). No lexical slot is allocated and the name is
-  removed from `ctx.locals`, so body reads resolve to the static field
-  (`getstatic`) -- visible to called functions (dynamic extent).
-- Reads/`setq`/`defvar` of a special are unchanged (they already hit the static
-  field). `let*` -> nested lets. Non-special globals stay lexical under `let`
-  (`JvmLispCompilerTest.lexicalGlobalLetStaysLexical`).
+- A special binding in `let` is a **DUAL-BIND** (2026-07-19, the cl-ppcre
+  compile-path work): compile init, `DUP`, `GETSTATIC` old into a temp,
+  `PUTSTATIC` the init (the dynamic set a called function reads), AND store the
+  same value into a lexical slot (boxed when captured). The lexical slot exists
+  ONLY so a closure built in the body CAPTURES the entry value and can read it
+  after the extent ended (cl-ppcre's `end-string`, read by matcher closures at
+  match time).
+- **Read rule (dynamic-first)**: in the binding method, a read of the special
+  resolves to the static FIELD, not the slot (`JvmExprCompiler.compileSymbolRef`
+  special-cases it) -- so a callee's rebinding/`setq` is visible (cl-ppcre's
+  `starts-with` accumulation threads state through callees). Inside a closure the
+  CAPTURE wins. A `setq` of a dual-bound name writes BOTH the slot/capture and
+  the field (`JvmSetqCompiler`).
+- Restore after the body is `ALOAD temp; PUTSTATIC field` (stack-neutral), and
+  each binding is pushed on `Ctx.specialBindScopes` (`{field, saveSlot,
+  blockDepth}`) so a `return`/`return-from` exiting an enclosing block ALSO
+  restores it (`JvmReturnCompiler.emitExit`) -- without this the scan closure's
+  named exit leaked `*reg-starts*` into the global and the next scan saw stale
+  registers.
+- `defvar` of a special is unchanged. `let*` -> nested lets. Non-special globals
+  stay lexical under `let` (`JvmLispCompilerTest.lexicalGlobalLetStaysLexical`).
 
 ## WASM (`WasmLetCompiler`) -- shallow binding over the module global
 
 Same shape: `Ctx.specialVars`, specials unioned into `globals` (module-level
 `(mut (ref null eq))`). A special binding saves the global into a temp local
-(`global.get; local.set`), sets it, and restores after the body (`local.get;
-global.set`). Same for the `--component` path (shared core module). `--no-gc`
+(`global.get; local.set`), sets it, dual-binds a lexical slot (cell-boxed when
+captured), and restores after the body (`local.get; global.set`); the same
+dynamic-first read rule, dual `setq` (`WasmSetqCompiler`) and
+`Ctx.specialBindScopes` exit restores (`WasmReturnCompiler` direct-br path and
+`WasmReturnFromCompiler`) apply. Same for the `--component` path (shared core
+module). `--no-gc`
 `NoGcWasmCompiler` has no globals and rejects `defvar`/`declaim` at top level
 outright, so a special can never be declared there
 (`NoGcWasmCompilerTest.rejectsSpecialVariableDeclaration`).
@@ -88,14 +105,12 @@ outright, so a special can never be declared there
    runtime-computed, so the compiler cannot name the static fields / wasm globals
    to save/restore. Would need the name-indexable `_genv`/`GLOBAL_ENV` runtime
    store.
-2. **Non-local exit across a special-`let` boundary does not restore** on the
-   compile path. Restore is emitted inline after the body, so it fires on normal
-   exit; error is a trap/exception that aborts the program (moot); but a
-   `return`/`return-from` whose `br`/`goto` jumps past the `let` skips the inline
-   restore, leaving the global at the dynamic value. Covering it would mean
-   threading pending-restores through the `%block`/`return` machinery
-   (`JvmReturnCompiler`/`WasmReturnCompiler`) -- deferred. The interpreter's
-   `finally` covers it.
+2. **Exit restores are covered for `return`/`return-from`** since 2026-07-19
+   (`Ctx.specialBindScopes`, see above). Remaining holes: a WASM plain `return`
+   that ALSO crosses an `unwind-protect`/`handler-case` region goes through the
+   trampoline cascade, which does not know the save slots and skips the
+   restores; `go` across a special `let` does not restore either. The
+   interpreter's `finally` covers every exit.
 3. **`symbol-value`/`boundp`/`eval` see the global default, not a dynamic binding,
    on the compile path.** Those read the `_genv`/`GLOBAL_ENV` eval mirror, which
    the shallow save/restore does not update (it touches only the static field /

@@ -59,10 +59,24 @@ chain, plus the transitive `cl-ppcre` (via uax-15; cl-postgres itself has one
   pure-config-setter walk seeing through the new block wrapper (cl-who
   regression). `loop named` remains unsupported (unneeded:
   `*use-bmh-matchers*` defaults nil → the search path).
-  **Remaining for cl-ppcre**: the compile backends (JVM/WASM) need real named
-  blocks — the JVM/WASM `%block` goto/br machinery keyed by name — before
-  `ClPpcreE2eTest` can un-disable them; `cl-ppcre:split` unblocks uax-15
-  next (its OWN extra gates listed below).
+  **DONE 2026-07-19 (fourth session): cl-ppcre v2.1.2 RUNS ON ALL FOUR
+  BACKENDS** (`ClPpcreE2eTest` fully enabled). The compile-path gates cleared:
+  LEXICAL named `block`/`return-from` (`%fn-block` function boundary +
+  name-keyed goto/br targets, `.kb/do-return-block.md`), `loop named`,
+  flet/labels locals get their CL block, special-let DUAL-BIND (dynamic set +
+  captured lexical; dynamic-first reads; setq writes both) + exit restores
+  (`.kb/dynamic-special-variables.md`), the `UserMacroExpander` double-resolution
+  fix (`evalResolved`) + shadowed-CL-name requalify (the `:shadow defconstant`
+  infinite expansion), `apply #'f` physical direct calls past
+  `MAX_CALLABLE_ARITY`, closure-over-let defuns/defmethods (global-closure
+  `setq` + call-through-variable), `#*` bit-vector literals, sequence-general
+  `make-array :initial-contents`, `nthcdr` past-end nil, cold-path lowering for
+  cross-function `go` and unsupported format directives, `adjustable-array-p`
+  non-array nil, and the new prelude entries (`alphanumericp`, `sxhash`, `sbit`,
+  `both-case-p`, `get`, `find-class`, the introspection stubs,
+  `make-load-form-saving-slots`) + `print-unreadable-object` /
+  `with-package-iterator` macros. `cl-ppcre:split` now unblocks uax-15
+  (its OWN extra gates listed below).
 - `uax-15` -- blocked on cl-ppcre (`cl-ppcre:split` at load time), then
   needs: `asdf:find-system` + `asdf:system-source-directory` +
   `uiop:merge-pathnames*` + `make-pathname` (load-time data-file path

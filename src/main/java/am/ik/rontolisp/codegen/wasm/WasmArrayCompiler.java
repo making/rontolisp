@@ -1018,16 +1018,37 @@ final class WasmArrayCompiler {
 
 	static void compileAdjustableArrayP(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		// (adjustable-array-p array): meta.cdr.car holds the raw :adjustable argument
-		// (null = nil), so non-null means adjustable.
+		// (null = nil), so non-null means adjustable. A non-array argument (a plain
+		// string handed by cl-ppcre's gather-strings collector) is nil, not a cast
+		// trap: the general-array shape is guarded by ref.test first.
 		requireArgs(cons, 2, "adjustable-array-p expects 1 argument");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int valueSlot = setTemp(ctx);
+		getLocal(ctx, valueSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.IF, 0x7F); // (result i32)
+		getLocal(ctx, valueSlot);
+		castCellGet0(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.IF, 0x7F); // (result i32)
+		getLocal(ctx, valueSlot);
 		castCellGet0(ctx);
 		getMeta(ctx);
 		castConsGet(ctx, 1);
 		castConsGet(ctx, 0);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.END);
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 

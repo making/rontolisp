@@ -16,7 +16,7 @@ This page lists the most notable omissions. For what **is** available, see the
 | `&optional` / `&rest` / `&key` / `&aux` | available in `defun`/`lambda` (see [`defun`](../reference/special-forms/defun.md)); `defmacro` takes `&rest`/`&body` only |
 | `&whole` | not available |
 | `values` / `multiple-value-bind` | available, including user-function values (see [`multiple-value-bind`](../reference/macros/multiple-value-bind.md)) |
-| `block` / `return-from` / `tagbody` / `go` | partial ([`tagbody`](../reference/special-forms/tagbody.md)/[`go`](../reference/special-forms/go.md) are available — the compilers support the lexical subset; [`return-from`](../reference/macros/return-from.md) is lite (function-scoped, no named blocks); `block` itself is not available) |
+| `block` / `return-from` / `tagbody` / `go` | available ([`block`](../reference/macros/block.md)/[`return-from`](../reference/macros/return-from.md) are named exits on every backend — dynamic extent on the interpreter, lexical (same-function) on the compilers; [`tagbody`](../reference/special-forms/tagbody.md)/[`go`](../reference/special-forms/go.md) likewise, with the compilers supporting the lexical subset) |
 | `catch` / `throw` | not available |
 | `unwind-protect` | available (see [`unwind-protect`](../reference/special-forms/unwind-protect.md)); on wasm-GC via the exception-handling proposal (`wasmtime -W exceptions=y`); compile error under `--no-gc` |
 | conditions (`define-condition`, `handler-case`, `ignore-errors`, `signal`) | available (see [`handler-case`](../reference/macros/handler-case.md)); on wasm-GC catching needs `wasmtime -W exceptions=y`, and runtime traps stay uncatchable there; compile error under `--no-gc`. Restarts (`handler-bind`/`restart-case`) are not available |
@@ -92,13 +92,20 @@ The remaining deviations from Common Lisp:
 
 ## Non-local exit and control flow
 
-Named blocks are not available, but label-and-jump control flow is:
+Named-block and label-and-jump control flow is available; only dynamically
+scoped `catch`/`throw` is not:
 
-- `block` — there are no named blocks. [`return`](../reference/macros/return.md)
-  exits the **nearest** enclosing iteration block established by
-  `do` / `do*` / `dolist` / `dotimes`, and
-  [`return-from`](../reference/macros/return-from.md) is lite: it exits the
-  enclosing **function**, ignoring the block name.
+- [`block`](../reference/macros/block.md) /
+  [`return-from`](../reference/macros/return-from.md) — **available**. A
+  `defun`/`defmethod` body is an implicit block named after the
+  function/generic, and [`return`](../reference/macros/return.md) exits the
+  **nearest** enclosing iteration block established by
+  `do` / `do*` / `dolist` / `dotimes`. On the interpreter the named exit is
+  dynamic (it crosses closures called within the block's extent); the
+  JVM/WASM compilers support the lexical subset — the target block must
+  lexically enclose the `return-from` in the same function, so a
+  `return-from` inside a lambda whose name matches no enclosing block exits
+  that lambda instead.
 - [`tagbody`](../reference/special-forms/tagbody.md) /
   [`go`](../reference/special-forms/go.md) — **available**, along with
   [`prog`](../reference/macros/prog.md) /
@@ -108,9 +115,8 @@ Named blocks are not available, but label-and-jump control flow is:
   dynamic `go` across function boundaries.
 - `catch` / `throw` — no dynamically scoped exits.
 
-```console
-> (block done (return-from done 1) 2)
-The function block is undefined
+```lisp
+(block done (return-from done 1) 2) ; => 1
 ```
 
 [`unwind-protect`](../reference/special-forms/unwind-protect.md) (cleanup on

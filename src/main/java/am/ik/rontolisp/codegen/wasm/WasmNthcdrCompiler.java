@@ -40,6 +40,11 @@ final class WasmNthcdrCompiler {
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.I32_LE_S);
 		ctx.writer.write(Instruction.BR_IF, 1);
+		// nil short-circuits: (nthcdr n lst) past the end is nil, like CL.
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(listSlot);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.BR_IF, 1);
 		// list = cdr(list)
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(listSlot);

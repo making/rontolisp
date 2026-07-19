@@ -216,10 +216,10 @@ API は提供しません。
   `regex-replace`/`regex-replace-all`、`all-matches`(-as-strings)、
   `count-matches`、`do-scans`/`do-matches`(-as-strings) 系の反復マクロ、
   `register-groups-bind`、`quote-meta-chars`、パースツリー正規表現、`(?i)`
-  などのインラインモディファイアがすべて動作します。現時点ではインタープリタ
-  専用です: 生成されるスキャナクロージャはループを横断する名前付き
-  `block`/`return-from` に依存しており、コンパイルバックエンドは名前を落とす
-  lite 書き換えのままです。このロードはこれまでで最大の機能バッチ -- ローカル
+  などのインラインモディファイアがすべて 4 バックエンドで動作します。
+  生成されるスキャナクロージャが依存する、ループを横断する名前付き
+  `block`/`return-from` を、コンパイルバックエンドはレキシカルな名前付き
+  脱出として実装しています。このロードはこれまでで最大の機能バッチ -- ローカル
   `(declare (special ...))`、ジェネリック化された CLOS スロットアクセサ、
   `initialize-instance :after`、`&environment` + `get-setf-expansion`、
   `psetf`、`(setf (subseq ...))`、`subst`/`search`/`copy-tree`、降順・大文字

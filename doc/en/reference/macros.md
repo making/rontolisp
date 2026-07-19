@@ -22,7 +22,7 @@ description and a runnable example you can evaluate in your browser.
 | `time` | `(time form)` | Evaluate `form`, print the elapsed real time to standard output (`; Elapsed real time: N ms`), and return the form's value. `N` is an integer of milliseconds on the interpreter/JVM and a float of milliseconds on WASM |
 | `psetq` | `(psetq v1 e1 v2 e2 ...)` | Parallel assignment: every right-hand side is evaluated before any variable is assigned. Returns nil |
 | `psetf` | `(psetf place1 e1 place2 e2 ...)` | `psetq` generalized to `setf` places: place subforms and values are all evaluated before any assignment. Returns nil |
-| `block` | `(block name body...)` | Named block: returns the last form's value or the value of a matching `(return-from name v)`. Real names on the interpreter; the compilers drop the name (nearest-block lite) |
+| `block` | `(block name body...)` | Named block: returns the last form's value or the value of a matching `(return-from name v)`. Dynamic-extent matching on the interpreter; lexical (same-function) matching on the compilers |
 | `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | Dispatch on the type of `x`. Supported type names: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom`, `character`, `hash-table`, `boolean` (plus `t`/`otherwise`), and the compound specifiers `(or ...)`/`(and ...)`/`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` and ranged numeric types like `(integer 0 9)`. Returns nil if nothing matches |
 | `etypecase` | `(etypecase x (integer body...) (string body...))` | Exhaustive `typecase`: no default clause, and an object whose type matches no clause signals an `error` |
 | `error` | `(error "bad value: ~a" x)`, `(error 'my-error :v x)`, `(error obj)` | Signal an error, aborting execution unless a [`handler-case`](macros/handler-case.md) catches it. Designators: a literal control string (same directives as `format`), a quoted condition-type symbol with initargs (constructs a typed condition; the `define-condition` `:report` becomes the message), or a condition object. The interpreter and JVM throw an exception carrying the message and the condition; wasm-GC throws a WebAssembly exception when the program contains a catching form, and traps otherwise. Like `format`, it is a macro with no function value (`#'error` is unsupported) |
@@ -66,6 +66,8 @@ description and a runnable example you can evaluate in your browser.
 | `typep` | `(typep x '(unsigned-byte 8))` | Type test over the `typecase` specifier set; the specifier must be a literal (quoted) type |
 | `slot-boundp` | `(slot-boundp obj 'slot)` | `t` for every slot the instance's class defines (lite: slots are always initialized, no unbound state) |
 | `slot-makunbound` | `(slot-makunbound obj 'slot)` | Lite: stores nil into the slot and returns the instance |
+| `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | Writes `#<[class ]...>` around the body's output; returns nil (`:identity` accepted, not printed) |
+| `with-package-iterator` | `(with-package-iterator (next pkgs :external) body...)` | Lite: binds the iterator name to a local FUNCTION always reporting no more symbols (no intern table) |
 
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
 accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,

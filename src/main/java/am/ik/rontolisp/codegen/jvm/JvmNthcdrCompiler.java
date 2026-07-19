@@ -36,6 +36,12 @@ final class JvmNthcdrCompiler {
 		int ifLePos = ctx.code.size();
 		ctx.emit(Opcode.IFLE);
 		ctx.emitU2(0);
+		// nil short-circuits: (nthcdr n lst) past the end is nil, like CL.
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(listSlot);
+		int ifNullPos = ctx.code.size();
+		ctx.emit(Opcode.IFNULL);
+		ctx.emitU2(0);
 		// list = ((Object[]) list)[1] (cdr)
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(listSlot);
@@ -56,6 +62,7 @@ final class JvmNthcdrCompiler {
 		ctx.emitU2(offset & 0xFFFF);
 		// exit: load list
 		JvmEmitHelper.patchBranch(ctx, ifLePos, ctx.code.size());
+		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(listSlot);
 	}

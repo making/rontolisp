@@ -74,6 +74,20 @@ public final class PackageResolver {
 	}
 
 	/**
+	 * Returns whether the CURRENT package (as tracked across the forms resolved so far)
+	 * declares the given name in its {@code :shadow} clause. Used by
+	 * {@code UserMacroExpander} to spell a bare canonical CL name explicitly
+	 * {@code cl:}-qualified in emitted expansions, so the compilers' own resolution pass
+	 * does not re-capture it as the shadowing package's symbol.
+	 * @param name the bare symbol name
+	 * @return {@code true} when the current package shadows the name
+	 */
+	public boolean currentPackageShadows(String name) {
+		LispPackage current = this.registry.get(this.currentPackage);
+		return current != null && current.shadows(name);
+	}
+
+	/**
 	 * Resolves every form of a program in order, keeping {@code in-package} state across
 	 * forms.
 	 * @param program the top-level forms

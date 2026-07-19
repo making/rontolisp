@@ -83,3 +83,5 @@ categories:
       - { slug: typep, name: typep }
       - { slug: slot-boundp, name: slot-boundp }
       - { slug: slot-makunbound, name: slot-makunbound }
+      - { slug: print-unreadable-object, name: "print-unreadable-object" }
+      - { slug: with-package-iterator, name: "with-package-iterator" }

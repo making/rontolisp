@@ -132,6 +132,18 @@ categories:
       - { slug: char-compare, name: "char= char< char<= char> char>= char/= char-equal" }
       - { slug: char-case, name: "char-upcase char-downcase" }
       - { slug: alpha-char-p, name: "alpha-char-p" }
+      - { slug: alphanumericp, name: "alphanumericp" }
+      - { slug: make-load-form-saving-slots, name: "make-load-form-saving-slots" }
+      - { slug: sxhash, name: "sxhash" }
+      - { slug: sbit, name: "sbit" }
+      - { slug: both-case-p, name: "both-case-p" }
+      - { slug: special-operator-p, name: "special-operator-p" }
+      - { slug: macro-function, name: "macro-function" }
+      - { slug: compiled-function-p, name: "compiled-function-p" }
+      - { slug: function-lambda-expression, name: "function-lambda-expression" }
+      - { slug: list-all-packages, name: "list-all-packages" }
+      - { slug: find-class, name: "find-class" }
+      - { slug: get, name: "get" }
       - { slug: case-char-p, name: "lower-case-p upper-case-p" }
       - { slug: digit-char-p, name: "digit-char-p" }
       - { slug: char-name, name: "char-name" }

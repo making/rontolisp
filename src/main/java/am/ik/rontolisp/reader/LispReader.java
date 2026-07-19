@@ -148,6 +148,7 @@ public final class LispReader {
 			case Token.SymbolToken sym -> readSymbol(sym);
 			case Token.LeftParen ignored -> readList();
 			case Token.VectorOpen ignored -> readVector();
+			case Token.BitVectorToken bits -> readBitVector(bits.bits());
 			case Token.ArrayOpen array -> readArray(array.rank());
 			case Token.FloatArrayOpen open -> readFloatArray(open.single());
 			case Token.Quote ignored -> readQuote();
@@ -281,6 +282,16 @@ public final class LispReader {
 	private LispVal readVector() {
 		List<LispVal> elements = readGroupedElements();
 		return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]));
+	}
+
+	// Builds a #*1010 bit-vector literal: the general vector holding the integers 0/1
+	// (rontolisp has no packed bit representation, so sbit/aref read it uniformly).
+	private LispVal readBitVector(String bits) {
+		LispVal[] elements = new LispVal[bits.length()];
+		for (int i = 0; i < bits.length(); i++) {
+			elements[i] = new LispInteger(bits.charAt(i) - '0');
+		}
+		return new LispArray(new int[] { elements.length }, elements);
 	}
 
 	// Reads a rank-n array literal #nA((...) ...) into a self-evaluating LispArray.

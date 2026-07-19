@@ -51,10 +51,7 @@ final class WasmLetCompiler {
 		Set<String> letVarNames = new HashSet<>();
 		if (bindings instanceof LispCons bindingsCons) {
 			for (LispVal binding : bindingsCons.toList()) {
-				String name = ((LispSymbol) ((LispCons) binding).toList().get(0)).name();
-				if (!ctx.specialVars.contains(name)) {
-					letVarNames.add(name);
-				}
+				letVarNames.add(((LispSymbol) ((LispCons) binding).toList().get(0)).name());
 			}
 		}
 		Set<String> capturedInLet = FreeVarAnalyzer.findCapturedVars(bodyExprs, letVarNames, ctx.functions.keySet());
@@ -78,11 +75,17 @@ final class WasmLetCompiler {
 					continue;
 				}
 				if (ctx.specialVars.contains(name)) {
-					// Dynamic binding: [init] on stack; save the global into a temp
-					// local,
-					// then overwrite it with the init. Body reads via global.get.
+					// DUAL-BIND (interpreter parity, see JvmLetCompiler): the global is
+					// saved and overwritten with the init (the dynamic binding a called
+					// function reads), AND the same value gets a lexical slot so a
+					// closure built in the body captures it -- the closure may run
+					// after this extent ended and restored the global (cl-ppcre's
+					// end-string). A setq of the name writes BOTH (WasmSetqCompiler).
 					int globalIndex = Objects.requireNonNull(ctx.globalIndices.get(name));
 					WasmExprCompiler.compileExpr(pairList.get(1), ctx);
+					int dupSlot = ctx.allocTemp();
+					ctx.writer.write(Instruction.TEE_LOCAL);
+					ctx.writer.writeSignedLeb128(dupSlot);
 					ctx.writer.write(Instruction.GET_GLOBAL);
 					ctx.writer.writeUnsignedLeb128(globalIndex);
 					int saveSlot = ctx.allocTemp();
@@ -94,9 +97,16 @@ final class WasmLetCompiler {
 						dynamicRestores = new ArrayList<>();
 					}
 					dynamicRestores.add(new int[] { globalIndex, saveSlot });
-					// Ensure a read in the body resolves to the global, not a stale outer
-					// lexical of the same name (specials are never lexical).
-					ctx.locals.remove(name);
+					ctx.specialBindScopes.push(new int[] { globalIndex, saveSlot, ctx.blockMarkers.size() });
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeSignedLeb128(dupSlot);
+					if (capturedInLet.contains(name)) {
+						ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+						ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+					}
+					int lexSlot = ctx.allocLocal(name);
+					ctx.writer.write(Instruction.SET_LOCAL);
+					ctx.writer.writeSignedLeb128(lexSlot);
 					continue;
 				}
 				WasmExprCompiler.compileExpr(pairList.get(1), ctx);
@@ -143,6 +153,7 @@ final class WasmLetCompiler {
 				ctx.writer.writeSignedLeb128(restore[1]);
 				ctx.writer.write(Instruction.SET_GLOBAL);
 				ctx.writer.writeUnsignedLeb128(restore[0]);
+				ctx.specialBindScopes.pop();
 			}
 		}
 

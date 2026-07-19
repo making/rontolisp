@@ -91,6 +91,15 @@ final class JvmSetqCompiler {
 			ctx.emit(slot);
 			mirrorTopLevelGlobal(name, ctx);
 		}
+		// A special that is dual-bound here (a lexical slot/capture established by a
+		// special-named let, see JvmLetCompiler): the assignment must reach the DYNAMIC
+		// binding too, so a called function reading the special sees it.
+		if (ctx.specialVars.contains(name) && (ctx.locals.containsKey(name) || ctx.captures.containsKey(name))
+				&& ctx.globalFields.containsKey(name)) {
+			ctx.emit(Opcode.DUP);
+			ctx.emit(Opcode.PUTSTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
+		}
 	}
 
 	/**

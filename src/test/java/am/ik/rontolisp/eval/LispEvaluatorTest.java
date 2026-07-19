@@ -891,10 +891,13 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalFormatConditionalUnequalConsumptionRejected() {
-		assertThatThrownBy(() -> eval("(format nil \"~[~a~;~a ~a~]\" 0 1 2)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("clause");
+	void evalFormatConditionalUnequalConsumptionFallsBackToRuntimeRenderer() {
+		// A ~[ whose clauses consume different argument counts cannot be lowered
+		// statically; the call falls back to the runtime renderer (its directive
+		// subset applies -- unknown directives are emitted verbatim) instead of
+		// failing the compile, so a library carrying it on a cold branch still
+		// compiles (cl-ppcre's print-symbol-info).
+		assertThat(eval("(stringp (format nil \"~[~a~;~a ~a~]\" 0 1 2))")).isEqualTo(LispTrue.INSTANCE);
 	}
 
 	@Test
@@ -1092,9 +1095,13 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalFormatUnsupportedDirective() {
-		assertThatThrownBy(() -> eval("(format t \"~<~>\" 65)")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("unsupported directive");
+	void evalFormatUnsupportedDirectiveFallsBackToRuntimeRenderer() {
+		// Same fallback as the uneven-~[ case: the runtime renderer emits an unknown
+		// directive verbatim rather than failing the whole compile.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(format t \"~<~>\" 65)"));
+		assertThat(baos.toString()).isEqualTo("~<~>");
 	}
 
 	@Test
@@ -4113,7 +4120,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-slots write-char)");
+				"(and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop print-unreadable-object proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-package-iterator with-slots write-char)");
 	}
 
 	@Test
@@ -4153,7 +4160,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer")
 			.isSorted()
-			.hasSize(280);
+			.hasSize(292);
 	}
 
 	@Test

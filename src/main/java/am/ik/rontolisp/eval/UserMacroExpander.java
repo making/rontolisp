@@ -76,7 +76,7 @@ public final class UserMacroExpander {
 			// P-qualified).
 			LispVal resolved = macroEval.resolvePackages(form);
 			if (isOperator(resolved, LispNames.DEFMACRO)) {
-				macroEval.eval(resolved);
+				macroEval.evalResolved(resolved);
 				continue;
 			}
 			if (isOperator(resolved, LispNames.DEFINE_MODIFY_MACRO)) {
@@ -84,7 +84,7 @@ public final class UserMacroExpander {
 				// the
 				// form: the generated macro is expanded at its call sites like any other
 				// user macro (the compilers never see define-modify-macro).
-				macroEval.eval(LispMacroExpander.expandDefineModifyMacro((LispCons) resolved));
+				macroEval.evalResolved(LispMacroExpander.expandDefineModifyMacro((LispCons) resolved));
 				continue;
 			}
 			LispVal expanded = expandAll(resolved, macroEval);
@@ -95,7 +95,7 @@ public final class UserMacroExpander {
 			expanded = LispMacroExpander.rewriteAsyncSugarForm(expanded);
 			if (isOperator(expanded, LispNames.DEFMACRO)) {
 				// A macro expanded into a macro definition: consume it as well.
-				macroEval.eval(expanded);
+				macroEval.evalResolved(expanded);
 				continue;
 			}
 			registerMacroTimeDefinitions(expanded, macroEval);
@@ -112,15 +112,44 @@ public final class UserMacroExpander {
 				// form stays in the program so the runtime global tracks it too. The
 				// purity walk is conservative (deny by default), so an impure writer or
 				// value is never double-run at compile time.
-				macroEval.eval(expanded);
+				macroEval.evalResolved(expanded);
 			}
 			// A form the walk did not touch keeps its ORIGINAL spelling: the resolved
 			// canonical form is not always re-resolvable by the compilers' own pass
 			// (a cl: symbol canonicalizes to a bare name, which is an error to spell
-			// under a package that does not use cl).
-			result.add(expanded.print().equals(resolved.print()) ? form : expanded);
+			// under a package that does not use cl). An emitted expansion conversely
+			// must survive that pass: a bare canonical CL name the current package
+			// SHADOWS would re-resolve to the shadowing package's own symbol, so it is
+			// re-spelled explicitly cl:-qualified (cl-ppcre's defconstant macro expands
+			// to cl:defconstant under a package shadowing defconstant).
+			result
+				.add(expanded.print().equals(resolved.print()) ? form : requalifyShadowedClNames(expanded, macroEval));
 		}
 		return result;
+	}
+
+	/**
+	 * Re-spells every bare CL-symbol name that the resolver's current package shadows as
+	 * the explicit {@code cl:}-qualified form, recursively through the expansion. Quoted
+	 * data is exempt (the compilers' resolution pass leaves it untouched, and rewriting
+	 * it would change the datum). Only code positions resolved from an explicit
+	 * {@code cl:} template spelling can contain such a bare name -- an unqualified use
+	 * under the shadowing package resolved to the package's own qualified symbol.
+	 */
+	private static LispVal requalifyShadowedClNames(LispVal form, LispEvaluator macroEval) {
+		return switch (form) {
+			case LispSymbol sym -> PackageRegistry.splitQualified(sym.name()) == null
+					&& PackageRegistry.isClSymbol(sym.name()) && macroEval.currentPackageShadows(sym.name())
+							? new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, sym.name())) : sym;
+			case LispCons cons -> {
+				if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())) {
+					yield cons;
+				}
+				yield new LispCons(requalifyShadowedClNames(cons.car(), macroEval),
+						requalifyShadowedClNames(cons.cdr(), macroEval));
+			}
+			default -> form;
+		};
 	}
 
 	private static boolean isOperator(LispVal form, String name) {
@@ -152,13 +181,13 @@ public final class UserMacroExpander {
 		if (isOperator(form, LispNames.DEFUN) || isOperator(form, LispNames.DEFCLASS)
 				|| isOperator(form, LispNames.DEFGENERIC) || isOperator(form, LispNames.DEFMETHOD)
 				|| isOperator(form, LispNames.DEFINE_CONDITION) || isOperator(form, LispNames.DEFSTRUCT)) {
-			macroEval.eval(form);
+			macroEval.evalResolved(form);
 			return;
 		}
 		if (isOperator(form, LispNames.DEFVAR) || isOperator(form, LispNames.DEFPARAMETER)
 				|| isOperator(form, LispNames.DEFCONSTANT)) {
 			try {
-				macroEval.eval(form);
+				macroEval.evalResolved(form);
 			}
 			catch (RuntimeException ex) {
 				System.err.println("warning: skipping macro-time evaluation of "

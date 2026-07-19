@@ -38,8 +38,16 @@ final class JvmGoCompiler {
 			}
 		}
 		if (scope == null) {
-			throw new UnsupportedOperationException(LispNames.GO + " tag " + tag
-					+ " has no lexically enclosing tagbody: the compilers support go within the same function only");
+			// The interpreter's dynamic go can cross a function boundary (a go inside
+			// an flet local targeting the enclosing function's tagbody -- cl-ppcre's
+			// charset rehash); the compilers cannot, so the jump becomes a cold-path
+			// runtime signal and the library still compiles.
+			JvmExprCompiler.compileExpr(new LispCons(new LispSymbol(LispNames.ERROR),
+					new LispCons(new am.ik.rontolisp.LispString(LispNames.GO + " tag " + tag
+							+ " has no lexically enclosing tagbody: the compilers support go within the same function only"),
+							am.ik.rontolisp.LispNil.INSTANCE)),
+					ctx, className);
+			return;
 		}
 		compileEscapedCleanups(ctx, className, scope);
 		emitStackUnwind(ctx, scope);

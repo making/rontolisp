@@ -224,9 +224,9 @@ backends (interpreter, JVM, WASM Preview 1 and `--component`):
   `split`, `regex-replace`/`regex-replace-all`, `all-matches`(-as-strings),
   `count-matches`, the `do-scans`/`do-matches`(-as-strings) iteration macros,
   `register-groups-bind`, `quote-meta-chars`, parse-tree regexes and inline
-  modifiers like `(?i)` all work. Interpreter ONLY for now: the generated
+  modifiers like `(?i)` all work, on all four backends -- the generated
   scanner closures rely on named `block`/`return-from` crossing loops, which
-  the compile backends still treat with the lite name-dropping rewrite. Its
+  the compile backends implement as lexical named exits. Its
   load drove the widest feature batch so far -- local
   `(declare (special ...))`, CLOS slot accessors as generics,
   `initialize-instance :after`, `&environment` + `get-setf-expansion`,

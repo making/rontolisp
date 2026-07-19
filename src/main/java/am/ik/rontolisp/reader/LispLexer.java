@@ -172,6 +172,17 @@ public final class LispLexer {
 				tokens.add(new Token.VectorOpen());
 				this.pos += 2;
 			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '*') {
+				// #*1010 is a bit-vector literal; #* alone is the empty bit vector
+				// (cl-ppcre's charmap slot default #*0).
+				int probe = this.pos + 2;
+				while (probe < this.input.length()
+						&& (this.input.charAt(probe) == '0' || this.input.charAt(probe) == '1')) {
+					probe++;
+				}
+				tokens.add(new Token.BitVectorToken(this.input.substring(this.pos + 2, probe)));
+				this.pos = probe;
+			}
 			else if (c == '#' && this.pos + 2 < this.input.length()
 					&& (this.input.charAt(this.pos + 1) == 'f' || this.input.charAt(this.pos + 1) == 'F')
 					&& this.input.charAt(this.pos + 2) == '(') {

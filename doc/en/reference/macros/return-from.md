@@ -2,7 +2,7 @@
 
 `(return-from name [value])`
 
-Returns `value` (default `nil`) from the enclosing block named `name`. On the interpreter this is a REAL named non-local exit: a `defun` body is a block named after the function and a `defmethod` body one named after its generic, so a `return-from` exits the function even from inside a `do`/`loop` (whose implicit block is named nil) or from a closure called within the exit's dynamic extent; `(return-from nil v)` is `(return v)`. Compile-path lite deviation: the compilers drop the name and rewrite to `(return value)`, so there a `return-from` nested inside a `do`/`loop` exits that loop (the nearest block) instead — equivalent only when the loop is the function's final form.
+Returns `value` (default `nil`) from the enclosing block named `name`. A `defun` body is a block named after the function and a `defmethod` body one named after its generic, so a `return-from` exits the function even from inside a `do`/`loop` (whose implicit block is named nil); `(return-from nil v)` is `(return v)`. On the interpreter the exit is dynamic (a named signal), so it also crosses a closure called within the exit's dynamic extent. The compilers implement the exit lexically instead: the target must be a lexically enclosing block in the same function, so a `return-from` inside a lambda whose name matches no enclosing block exits that lambda, not the outer function.
 
 ```lisp
 (defun classify (n)

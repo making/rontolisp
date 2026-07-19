@@ -855,9 +855,12 @@ public final class LispMacroExpander {
 			"else", "end", "finally", "initially", "return", "with", "and", "into", "thereis", "always", "never",
 			// Parsed and discarded: type declarations carry no information here.
 			"of-type",
-			// Recognized so their use fails with a clear "unsupported" error instead of
+			// The loop's named block: (loop named foo ...) wraps the expansion in
+			// (block foo ...), so (return-from foo v) exits it on every backend.
+			"named",
+			// Recognized so its use fails with a clear "unsupported" error instead of
 			// being misparsed as a simple-loop body or a missing for sub-clause.
-			"named", "being");
+			"being");
 
 	/**
 	 * Expands the {@code loop} macro into the existing core ({@code %block}/{@code let*}/
@@ -986,6 +989,10 @@ public final class LispMacroExpander {
 
 		private final List<LispVal> endTests = new java.util.ArrayList<>();
 
+		// The (loop named foo ...) block name: the whole expansion is additionally
+		// wrapped in (block foo ...), a named return-from target on every backend.
+		@Nullable private LispVal blockName;
+
 		// The termination tests contributed by driver clauses (for/repeat) only, in
 		// clause order. A later driver's steps are guarded by the earlier drivers'
 		// tests so that, as in CL, stepping stops at the first exhausted driver
@@ -1064,7 +1071,11 @@ public final class LispMacroExpander {
 			letParts.add(new LispSymbol(LispNames.LET_STAR));
 			letParts.add(bindings.isEmpty() ? LispNil.INSTANCE : listToCons(bindings));
 			letParts.addAll(letBody);
-			return makeBlock(listToCons(letParts));
+			LispVal expansion = makeBlock(listToCons(letParts));
+			if (this.blockName != null) {
+				expansion = listToCons(List.of(new LispSymbol(LispNames.BLOCK), this.blockName, expansion));
+			}
+			return expansion;
 		}
 
 		private void parse() {
@@ -1098,6 +1109,7 @@ public final class LispMacroExpander {
 				case "collect", "collecting", "append", "appending", "nconc", "nconcing", "sum", "summing", "count",
 						"counting", "maximize", "maximizing", "minimize", "minimizing" ->
 					mainBody.add(parseAccumulation(kw));
+				case "named" -> this.blockName = nextForm();
 				default -> throw new UnsupportedOperationException("loop: unsupported clause: " + kw);
 			}
 		}
@@ -5487,6 +5499,62 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Lowers a call to a name that is not a compiled FUNCTION but IS a known global
+	 * VARIABLE into {@code (funcall name args...)} -- the function value is read from the
+	 * variable at run time. This is how a defun nested inside a top-level {@code let}
+	 * (the CL closure-over-let idiom, e.g. cl-ppcre's {@code quote-meta-chars}) is
+	 * called: the nested defun compiles to {@code (setq name (lambda ...))} (a lambda
+	 * capturing the let variables) and the setq-assigned name is promoted to a global, so
+	 * call sites dispatch through it.
+	 * @param cons the call expression
+	 * @return the funcall lowering
+	 */
+	public static LispVal expandCallThroughVariable(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> out = new java.util.ArrayList<>(parts.size() + 1);
+		out.add(new LispSymbol(LispNames.FUNCALL));
+		out.addAll(parts);
+		return listToCons(out);
+	}
+
+	/**
+	 * The runtime argument-list expression of {@code (apply f a1 ... ak lst)}:
+	 * {@code (list* a1 ... ak lst)}, or {@code lst} alone when no leading arguments are
+	 * given. Used by the backends' apply fast path (a literal {@code #'f} target compiles
+	 * to a PHYSICAL direct call binding f's parameters from this list, bypassing the
+	 * runtime {@code _apply} dispatch whose per-arity tables stop at
+	 * {@code MAX_CALLABLE_ARITY} -- a variadic CLOS dispatcher forwarding 8+ apply
+	 * arguments silently yielded nil there, cl-ppcre's create-scanner keyword recursion).
+	 * @param cons the apply expression
+	 * @return the argument-list expression
+	 */
+	public static LispVal applyArgumentListExpr(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 3) {
+			return parts.get(2);
+		}
+		List<LispVal> listStar = new java.util.ArrayList<>();
+		listStar.add(new LispSymbol(LispNames.LIST_STAR));
+		listStar.addAll(parts.subList(2, parts.size()));
+		return listToCons(listStar);
+	}
+
+	/**
+	 * The literal function name of an {@code apply} designator ({@code #'f} or
+	 * {@code 'f}), or null when the designator is a computed expression.
+	 * @param designator the first apply argument
+	 * @return the literal name, or null
+	 */
+	public static @Nullable String applyLiteralTargetName(LispVal designator) {
+		if (designator instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& (LispNames.FUNCTION.equals(op.name()) || LispNames.QUOTE.equals(op.name()))
+				&& cons.cdr() instanceof LispCons cell && cell.car() instanceof LispSymbol sym) {
+			return sym.name();
+		}
+		return null;
+	}
+
+	/**
 	 * Lowers a call the current backend cannot execute into an evaluate-args-then-signal
 	 * form, so a library carrying it on a cold branch still compiles and the error names
 	 * the operator only when the branch actually runs (the WASM backends' route for the
@@ -6667,6 +6735,26 @@ public final class LispMacroExpander {
 		if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
 			return form;
 		}
+		// A (setq slot-var value ...) whose target substitutes into a slot-value PLACE
+		// is no longer a legal setq; rewrite the operator to setf, which accepts both
+		// symbol and place targets (cl-ppcre's flatten setqs inside with-slots).
+		if (cons.car() instanceof LispSymbol head && LispNames.SETQ.equals(head.name()) && cons.isProperList()) {
+			List<LispVal> parts = cons.toList();
+			boolean placeTarget = false;
+			List<LispVal> out = new java.util.ArrayList<>(parts.size());
+			out.add(parts.get(0));
+			for (int i = 1; i < parts.size(); i++) {
+				LispVal substituted = substituteSymbols(parts.get(i), substitutions);
+				if (i % 2 == 1 && substituted instanceof LispCons) {
+					placeTarget = true;
+				}
+				out.add(substituted);
+			}
+			if (placeTarget) {
+				out.set(0, new LispSymbol(LispNames.SETF));
+			}
+			return listToCons(out);
+		}
 		LispVal car = substituteSymbols(cons.car(), substitutions);
 		LispVal cdr = substituteSymbols(cons.cdr(), substitutions);
 		if (car == cons.car() && cdr == cons.cdr()) {
@@ -7526,7 +7614,8 @@ public final class LispMacroExpander {
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry) {
 		boolean runtimeSubtypep = needsRuntimeSubtypep(program);
 		if (!runtimeSubtypep && program.stream()
-			.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f))) {
+			.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
+					|| isLetWithNestedDefmethod(f))) {
 			return program;
 		}
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
@@ -7571,6 +7660,16 @@ public final class LispMacroExpander {
 			}
 			else if (isNamedForm(form, LispNames.DEFMETHOD)) {
 				addExpandedDefinition(form, out, closRegistry, dispatcherSlots, placedDispatchers);
+			}
+			else if (isLetWithNestedDefmethod(form)) {
+				// The closure-over-let method idiom (cl-ppcre's
+				// build-replacement-template capturing reg-scanner): each defmethod in
+				// the let's body is registered and expanded in place, so its
+				// method-body defun stays INSIDE the let and compiles to (setq name
+				// (lambda ...)) -- a global closure the dispatcher (placed at top
+				// level, after the let) reaches through the call-through-variable
+				// fallback.
+				expandLetNestedDefmethods((LispCons) form, closRegistry, out, dispatcherSlots, placedDispatchers);
 			}
 			else {
 				out.add(form);
@@ -7619,6 +7718,61 @@ public final class LispMacroExpander {
 	private static boolean isSetfFunctionDefun(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
 				&& cons.cdr() instanceof LispCons rest && setfFunctionPlaceName(rest.car()) != null;
+	}
+
+	/**
+	 * Whether the form is a top-level {@code let}/{@code let*} carrying a
+	 * {@code defmethod} directly in its body -- the closure-over-let method idiom.
+	 */
+	private static boolean isLetWithNestedDefmethod(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| (!LispNames.LET.equals(op.name()) && !LispNames.LET_STAR.equals(op.name()))
+				|| !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		for (int i = 2; i < parts.size(); i++) {
+			if (isNamedForm(parts.get(i), LispNames.DEFMETHOD)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Expands the {@code defmethod} forms in a top-level {@code let}/{@code let*} body in
+	 * place: each is registered with the registry and replaced by its method-body defun
+	 * (which, being nested, compiles to a global-closure {@code setq}); the rebuilt let
+	 * is added to {@code out} and each generic's dispatcher slot is reserved at top level
+	 * after it.
+	 */
+	private static void expandLetNestedDefmethods(LispCons letForm, ClosRegistry closRegistry, List<LispVal> out,
+			java.util.Map<Integer, String> dispatcherSlots, java.util.Set<String> placedDispatchers) {
+		List<LispVal> parts = letForm.toList();
+		List<LispVal> rebuilt = new java.util.ArrayList<>(parts.subList(0, 2));
+		List<String> generics = new java.util.ArrayList<>();
+		for (LispVal bodyForm : parts.subList(2, parts.size())) {
+			if (!isNamedForm(bodyForm, LispNames.DEFMETHOD)) {
+				rebuilt.add(bodyForm);
+				continue;
+			}
+			LispVal expandedMethod = expandDefmethod((LispCons) bodyForm, closRegistry);
+			if (isNamedForm(expandedMethod, LispNames.PROGN) && expandedMethod instanceof LispCons prognCons) {
+				List<LispVal> members = prognCons.toList();
+				rebuilt.addAll(members.subList(1, members.size()));
+			}
+			else {
+				rebuilt.add(expandedMethod);
+			}
+			generics.add(ClosRegistry.normalize(((LispSymbol) ((LispCons) bodyForm).toList().get(1)).name()));
+		}
+		out.add(listToCons(rebuilt));
+		for (String generic : generics) {
+			if (placedDispatchers.add(generic)) {
+				dispatcherSlots.put(out.size(), generic);
+				out.add(LispNil.INSTANCE);
+			}
+		}
 	}
 
 	private static LispVal rewriteSetfFunctionDefun(LispCons cons, java.util.Map<String, Integer> structAccessors) {
@@ -7706,26 +7860,8 @@ public final class LispMacroExpander {
 		}
 		if (!(parts.get(2) instanceof LispString control)) {
 			// A computed (non-literal) control string cannot be lowered to string pieces
-			// at
-			// compile time. Fall back to an inline runtime renderer (cl-who's
-			// escape-string
-			// binds its control to a local variable). Supports the common directives
-			// ~~ ~% ~a ~s ~d ~x ~c; an unknown directive is emitted verbatim.
-			List<LispVal> fargs = parts.subList(3, parts.size());
-			List<LispVal> listCall = new java.util.ArrayList<>();
-			listCall.add(new LispSymbol(LispNames.LIST));
-			listCall.addAll(fargs);
-			LispVal rendered = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), formatRuntimeLambda(),
-					parts.get(2), fargs.isEmpty() ? LispNil.INSTANCE : listToCons(listCall)));
-			if (streamDest != null) {
-				return makeProgn(
-						List.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), rendered, streamDest)),
-								LispNil.INSTANCE));
-			}
-			if (toString) {
-				return rendered;
-			}
-			return makeProgn(List.of(callOf(LispNames.PRINC, rendered), LispNil.INSTANCE));
+			// at compile time; fall back to the inline runtime renderer.
+			return runtimeRenderFallback(parts, toString, streamDest);
 		}
 		List<LispVal> args = parts.subList(3, parts.size());
 		List<LispVal> bindings = new java.util.ArrayList<>();
@@ -7735,7 +7871,17 @@ public final class LispMacroExpander {
 			argSyms.add(g);
 			bindings.add(listToCons(List.of(g, args.get(i))));
 		}
-		List<FmtOp> parsed = new FmtParser(control.value()).parseTop(FmtArgs.forTemps(argSyms));
+		List<FmtOp> parsed;
+		try {
+			parsed = new FmtParser(control.value()).parseTop(FmtArgs.forTemps(argSyms));
+		}
+		catch (UnsupportedOperationException unsupportedDirective) {
+			// A directive shape the static expansion cannot lower (an uneven ~[
+			// conditional, ~@? ...) falls back to the runtime renderer like a computed
+			// control, so a library carrying it on a cold branch still compiles
+			// (cl-ppcre's print-symbol-info); the renderer's directive subset applies.
+			return runtimeRenderFallback(parts, toString, streamDest);
+		}
 		List<LispVal> forms = toString ? opsToPieces(parsed) : formatOutputForms(parsed);
 		if (toString) {
 			// Fold the pieces into nested %string-concat calls (left-associative).
@@ -7769,6 +7915,28 @@ public final class LispMacroExpander {
 		letParts.add(listToCons(bindings));
 		letParts.addAll(forms);
 		return listToCons(letParts);
+	}
+
+	// The inline runtime-renderer fallback for a control the static expansion cannot
+	// lower: a computed (non-literal) control string (cl-who's escape-string binds its
+	// control to a local variable) or a literal one using a directive shape outside the
+	// static subset. Supports the common directives ~~ ~% ~a ~s ~d ~x ~c; an unknown
+	// directive is emitted verbatim.
+	private static LispVal runtimeRenderFallback(List<LispVal> parts, boolean toString, @Nullable LispVal streamDest) {
+		List<LispVal> fargs = parts.subList(3, parts.size());
+		List<LispVal> listCall = new java.util.ArrayList<>();
+		listCall.add(new LispSymbol(LispNames.LIST));
+		listCall.addAll(fargs);
+		LispVal rendered = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), formatRuntimeLambda(), parts.get(2),
+				fargs.isEmpty() ? LispNil.INSTANCE : listToCons(listCall)));
+		if (streamDest != null) {
+			return makeProgn(List.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), rendered, streamDest)),
+					LispNil.INSTANCE));
+		}
+		if (toString) {
+			return rendered;
+		}
+		return makeProgn(List.of(callOf(LispNames.PRINC, rendered), LispNil.INSTANCE));
 	}
 
 	// Rebuilds a (format dest control args...) call with a different control expression,
@@ -10910,11 +11078,10 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Compile-path lowering of a user {@code (block name body...)}: the name is dropped
-	 * and the body wrapped in the internal {@code %block}, so a {@code return-from}
-	 * inside (rewritten to {@code return} by the lite {@link LambdaLists} pass) targets
-	 * the nearest block. The interpreter does NOT use this -- it evaluates named blocks
-	 * natively (real name matching).
+	 * {@code --no-gc} lowering of a user {@code (block name body...)}: the name is
+	 * dropped and the body wrapped in the internal {@code %block}. The interpreter and
+	 * the JVM / wasm-GC compilers do NOT use this -- they implement named blocks (real
+	 * name matching; lexical on the compilers).
 	 * @param cons the block expression
 	 * @return the expanded expression
 	 */
@@ -10929,20 +11096,96 @@ public final class LispMacroExpander {
 		return listToCons(out);
 	}
 
+	private static final String PUO_OBJ_VAR = "__puo_obj";
+
+	private static final String PUO_STREAM_VAR = "__puo_stream";
+
 	/**
-	 * Compile-path lowering of {@code (return-from name [value])} outside a defun/lambda
-	 * body (where the {@link LambdaLists} rewrite already ran): the name is dropped and
-	 * the exit becomes a plain {@code return} to the nearest block.
-	 * @param cons the return-from expression
+	 * Expands {@code (print-unreadable-object (object stream &key type identity)
+	 * body...)} into writes of {@code #<}...{@code >} around the body over once-evaluated
+	 * temps: a literal truthy {@code :type} prints the {@code class-of} designator (+ a
+	 * space) first, {@code :identity} is evaluated for effect but not printed (there is
+	 * no printable address), and the whole form yields nil, like CL.
+	 * @param cons the print-unreadable-object expression
 	 * @return the expanded expression
 	 */
-	public static LispVal expandReturnFromLite(LispCons cons) {
+	public static LispVal expandPrintUnreadableObject(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2 || parts.size() > 3) {
-			throw new IllegalArgumentException(LispNames.RETURN_FROM + " expects (return-from name [value])");
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons specCons)) {
+			throw new IllegalArgumentException(
+					LispNames.PRINT_UNREADABLE_OBJECT + " expects (object stream &key type identity): " + cons.print());
 		}
-		return listToCons(parts.size() == 3 ? List.of(new LispSymbol(LispNames.RETURN), parts.get(2))
-				: List.of(new LispSymbol(LispNames.RETURN)));
+		List<LispVal> spec = specCons.toList();
+		if (spec.size() < 2) {
+			throw new IllegalArgumentException(
+					LispNames.PRINT_UNREADABLE_OBJECT + " expects (object stream &key type identity): " + cons.print());
+		}
+		LispVal typeArg = LispNil.INSTANCE;
+		for (int i = 2; i + 1 < spec.size(); i += 2) {
+			if (spec.get(i) instanceof LispSymbol kw && ":type".equals(kw.name())) {
+				typeArg = spec.get(i + 1);
+			}
+		}
+		LispSymbol obj = new LispSymbol(PUO_OBJ_VAR);
+		LispSymbol stream = new LispSymbol(PUO_STREAM_VAR);
+		List<LispVal> body = new java.util.ArrayList<>();
+		body.add(new LispSymbol(LispNames.LET_STAR));
+		body.add(listToCons(List.of(listToCons(List.of(obj, spec.get(0))), listToCons(List.of(stream, spec.get(1))))));
+		body.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), new LispString("#<"), stream)));
+		if (!(typeArg instanceof LispNil)) {
+			body.add(listToCons(List.of(new LispSymbol(LispNames.PRINC),
+					listToCons(List.of(new LispSymbol(LispNames.CLASS_OF), obj)), stream)));
+			body.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), new LispString(" "), stream)));
+		}
+		body.addAll(parts.subList(2, parts.size()));
+		body.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), new LispString(">"), stream)));
+		body.add(LispNil.INSTANCE);
+		return listToCons(body);
+	}
+
+	/**
+	 * Expands {@code (with-package-iterator (name package-list-form symbol-type...)
+	 * body...)} into the package-list form (evaluated once, for effect) and an
+	 * {@code flet} binding {@code name} to a LOCAL FUNCTION -- not CL's {@code macrolet}
+	 * -- that always returns {@code (values nil nil)}: symbols are not interned into
+	 * enumerable package tables, so the iteration body runs zero times (cl-ppcre's
+	 * regex-apropos loop exits on the first call).
+	 * @param cons the with-package-iterator expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithPackageIterator(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons specCons) || specCons.toList().size() < 2) {
+			throw new IllegalArgumentException(
+					LispNames.WITH_PACKAGE_ITERATOR + " expects (name package-list symbol-type...): " + cons.print());
+		}
+		List<LispVal> spec = specCons.toList();
+		LispVal iterator = listToCons(List.of(spec.get(0), LispNil.INSTANCE,
+				listToCons(List.of(new LispSymbol(LispNames.VALUES), LispNil.INSTANCE, LispNil.INSTANCE))));
+		List<LispVal> flet = new java.util.ArrayList<>();
+		flet.add(new LispSymbol(LispNames.FLET));
+		flet.add(listToCons(List.of(iterator)));
+		flet.addAll(parts.subList(2, parts.size()));
+		return listToCons(List.of(new LispSymbol(LispNames.PROGN), spec.get(1), listToCons(flet)));
+	}
+
+	/**
+	 * The block name a {@code block}/{@code %fn-block}/{@code return-from} name
+	 * designator denotes on the compile path: {@code null} for the {@code nil} block
+	 * (which behaves as the plain {@code return} boundary), otherwise the symbol's
+	 * resolved name verbatim -- mirroring the interpreter's name matching.
+	 * @param designator the name designator form (a symbol or nil)
+	 * @return the block name, or {@code null} for the nil block
+	 */
+	public static @org.jspecify.annotations.Nullable String blockName(LispVal designator) {
+		if (designator instanceof LispNil) {
+			return null;
+		}
+		if (designator instanceof LispSymbol sym && !sym.isKeyword()) {
+			return "nil".equals(sym.name()) ? null : sym.name();
+		}
+		throw new IllegalArgumentException(
+				LispNames.BLOCK + ": block name must be a symbol, got " + designator.print());
 	}
 
 	private static final String TYPECASE_VAR = "__typecase";
@@ -11817,12 +12060,17 @@ public final class LispMacroExpander {
 		}
 		LispSymbol arrVar = new LispSymbol("__mk_arr");
 		LispSymbol idxVar = new LispSymbol("__mk_i");
-		LispSymbol elemVar = new LispSymbol("__mk_x");
-		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.DOLIST), listToCons(List.of(elemVar, contents)),
-				listToCons(List.of(new LispSymbol(LispNames.ASET), arrVar, idxVar, elemVar)), listToCons(List
-					.of(new LispSymbol(LispNames.SETQ), idxVar, fmtCall(LispNames.ADD, idxVar, new LispInteger(1))))));
-		return makeLet(arrVar.name(), listToCons(inner),
-				makeLet(idxVar.name(), new LispInteger(0), makeProgn(List.of(fill, arrVar))));
+		LispSymbol contentsVar = new LispSymbol("__mk_c");
+		LispSymbol lenVar = new LispSymbol("__mk_n");
+		// The contents can be ANY sequence (cl-ppcre passes a string), so the fill
+		// indexes it with elt instead of walking it as a list.
+		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(listToCons(
+						List.of(idxVar, new LispInteger(0), fmtCall(LispNames.ADD, idxVar, new LispInteger(1)))))),
+				listToCons(List.of(fmtCall(LispNames.GE, idxVar, lenVar), arrVar)), listToCons(List
+					.of(new LispSymbol(LispNames.ASET), arrVar, idxVar, fmtCall(LispNames.ELT, contentsVar, idxVar)))));
+		return makeLet(arrVar.name(), listToCons(inner), makeLet(contentsVar.name(), contents,
+				makeLet(lenVar.name(), callOf(LispNames.LENGTH, contentsVar), fill)));
 	}
 
 	/**
@@ -12114,7 +12362,11 @@ public final class LispMacroExpander {
 			// flet definition lists, and moving the defaults into the let* prologue
 			// also puts them in expression position for the body rewrite below.
 			List<LispVal> defBody = dp.size() == 2 ? List.of((LispVal) LispNil.INSTANCE) : dp.subList(2, dp.size());
-			LambdaLists.Expanded e = LambdaLists.expand(dp.get(1), defBody);
+			// No %fn-block wrap here (the interpreter shares this expansion); instead
+			// the body gets the REAL block CL mandates: an flet/labels local
+			// establishes a block named after it, so (return-from name v) exits the
+			// local function on every backend (cl-ppcre's advance-fn).
+			LambdaLists.Expanded e = LambdaLists.expand(dp.get(1), defBody, false);
 			List<LispVal> paramParts = new java.util.ArrayList<LispVal>(e.required());
 			if (e.rest() != null) {
 				paramParts.add(new LispSymbol(LispNames.LAMBDA_REST));
@@ -12123,7 +12375,11 @@ public final class LispMacroExpander {
 			List<LispVal> lambdaParts = new java.util.ArrayList<>();
 			lambdaParts.add(new LispSymbol(LispNames.LAMBDA));
 			lambdaParts.add(paramParts.isEmpty() ? LispNil.INSTANCE : listToCons(paramParts));
-			lambdaParts.addAll(e.body());
+			List<LispVal> blockParts = new java.util.ArrayList<>();
+			blockParts.add(new LispSymbol(LispNames.BLOCK));
+			blockParts.add(new LispSymbol(entry.getKey()));
+			blockParts.addAll(e.body());
+			lambdaParts.add(listToCons(blockParts));
 			LispVal lambda = listToCons(lambdaParts);
 			if (recursive) {
 				// labels: the lambdas see every sibling; bind nil first, setq after.

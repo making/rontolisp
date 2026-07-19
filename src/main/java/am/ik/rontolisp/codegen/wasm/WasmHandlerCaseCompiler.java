@@ -81,8 +81,9 @@ final class WasmHandlerCaseCompiler {
 		int doneDepth = ctx.wasmCtrlDepth;
 		// block $tramp (result (ref null eq)) -- the return-exit trampoline (see
 		// WasmUnwindProtectCompiler), whose only cleanup is the depth decrement; emitted
-		// only when an enclosing %block exists, i.e. a return could escape the region.
-		boolean needTrampoline = !ctx.blockMarkers.isEmpty();
+		// only when an enclosing plain-return boundary exists, i.e. a return could
+		// escape the region (a named return-from inlines the decrement instead).
+		boolean needTrampoline = WasmReturnCompiler.findPlainTarget(ctx) != null;
 		int trampolineDepth = -1;
 		int continueDepth = -1;
 		if (needTrampoline) {

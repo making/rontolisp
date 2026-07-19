@@ -1306,8 +1306,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (a
 		// let of a special save/restores over it), so union them in before indices are
 		// assigned; a let/let* of one of these names becomes a dynamic binding
-		// (WasmLetCompiler).
-		Set<String> specialVars = SpecialVarCollector.collect(topLevelExprs);
+		// (WasmLetCompiler). Collected over the WHOLE program: a local (declare
+		// (special x)) inside a defun body (cl-ppcre's remove-registers-p) must make x
+		// a global cell for its free readers too.
+		Set<String> specialVars = SpecialVarCollector.collect(program);
 		globals.addAll(specialVars);
 		Map<String, Integer> globalIndices = new HashMap<>();
 		int nextGlobalIndex = GLOBAL_FENV + 1;
@@ -3509,20 +3511,40 @@ public final class WasmLispCompiler implements LispCompiler {
 	/**
 	 * An active unwind scope (EH mode): the protected region of an {@code unwind-protect}
 	 * (cleanup forms) or a {@code handler-case} (the {@code %hc-depth-dec} form).
-	 * {@code blockDepth} is the {@code %block}-stack size when the scope was entered -- a
-	 * {@code return} escapes the scope when {@code blockDepth >= blockMarkers.size()} at
-	 * the return site (the scope was entered inside the return's target block).
+	 * {@code blockDepth} is the block-stack size when the scope was entered -- an exit
+	 * escapes the scope when {@code blockDepth >=} the target block's 1-based depth at
+	 * the exit site (the scope was entered inside the exit's target block).
 	 * {@code trampolineDepth} is the {@code wasmCtrlDepth} marker of the scope's
 	 * exit-trampoline block, lexically outside its try_table (so a throw from a cleanup
 	 * cannot re-enter the scope's own handler); -1 when the scope has no trampoline (no
-	 * enclosing {@code %block}, so no {@code return} can escape it).
+	 * enclosing plain-{@code return} boundary, so no {@code return} can escape it). A
+	 * named {@code return-from} does not use the trampolines: it inlines the escaped
+	 * cleanups at the exit site like {@code go} (see {@link WasmReturnFromCompiler}).
 	 *
 	 * @param cleanupForms the cleanup forms to run when a {@code return} exits the scope
-	 * @param blockDepth the {@code %block}-stack size at scope entry
+	 * @param blockDepth the block-stack size at scope entry
 	 * @param trampolineDepth the {@code wasmCtrlDepth} marker of the exit trampoline, or
 	 * -1
 	 */
 	record UnwindScope(List<LispVal> cleanupForms, int blockDepth, int trampolineDepth) {
+	}
+
+	/**
+	 * An active block return boundary during compilation ({@code %block}, a named
+	 * {@code block} or the {@code %fn-block} function boundary): the {@code
+	 * wasmCtrlDepth} at which the WASM block sits (an exit branches out {@code
+	 * wasmCtrlDepth - depth} levels to reach it), the block name a {@code return-from}
+	 * matches against ({@code null} for {@code %block} and the {@code nil} block),
+	 * whether a plain {@code return} exits it ({@code %block} and {@code (block nil
+	 * ...)}), and whether it is the {@code %fn-block} function boundary -- the fallback
+	 * target for a {@code return-from} whose name matches no enclosing block.
+	 *
+	 * @param depth the {@code wasmCtrlDepth} marker of the block
+	 * @param name the block name, or {@code null} for the unnamed/nil block
+	 * @param catchesPlain whether a plain {@code return} exits this block
+	 * @param functionBoundary whether this is the {@code %fn-block} function boundary
+	 */
+	record BlockMarker(int depth, @Nullable String name, boolean catchesPlain, boolean functionBoundary) {
 	}
 
 	static final class Ctx {
@@ -3654,11 +3676,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		int wasmCtrlDepth = 0;
 
 		/**
-		 * Stack of {@code wasmCtrlDepth} values, one per active {@code %block}. The top
-		 * is the depth at which the innermost block sits; {@code return} branches out
-		 * {@code wasmCtrlDepth - marker} levels to reach it.
+		 * Stack of active block boundaries ({@code %block}/named {@code block}/
+		 * {@code %fn-block}), innermost on top. {@code return} branches out
+		 * {@code wasmCtrlDepth - marker.depth()} levels to reach the nearest
+		 * plain-catching one; {@code return-from} resolves its name against the stack
+		 * lexically.
 		 */
-		final Deque<Integer> blockMarkers = new ArrayDeque<>();
+		final Deque<BlockMarker> blockMarkers = new ArrayDeque<>();
+
+		/**
+		 * Active special-variable dynamic bindings, innermost on top:
+		 * {@code {globalIndex, saveSlot, blockDepth}} per binding (see WasmLetCompiler).
+		 * A {@code return}/{@code return-from} exiting a block entered before the binding
+		 * restores the saved value on its way out.
+		 */
+		final Deque<int[]> specialBindScopes = new ArrayDeque<>();
 
 		/**
 		 * Stack of active {@code tagbody} label scopes, innermost on top. A {@code go}

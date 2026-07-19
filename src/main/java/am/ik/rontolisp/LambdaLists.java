@@ -85,19 +85,25 @@ public final class LambdaLists {
 	}
 
 	/**
-	 * Like {@link #expand(LispVal, List)}, with the lite {@code return-from} rewrite
-	 * optional: the interpreter passes {@code false} because it implements
+	 * Like {@link #expand(LispVal, List)}, with the {@code %fn-block} function-boundary
+	 * wrap optional: the interpreter passes {@code false} because it implements
 	 * {@code block}/{@code return-from} natively (a named signal caught by the matching
-	 * block), so the name-dropping rewrite must not run there; the compilers keep the
-	 * rewrite.
+	 * block), so the wrap must not run there; the compilers keep it (with a {@code nil}
+	 * block name -- the lambda shape; {@link #desugarProgram} passes the defun's name for
+	 * defuns).
 	 * @param paramList the raw parameter list AST
 	 * @param body the body forms
-	 * @param rewriteReturnFrom whether to apply the lite return-from rewrite
+	 * @param wrapReturnFrom whether to wrap a return-from-containing body in %fn-block
 	 * @return the native-shape lambda list and body
 	 */
-	public static Expanded expand(LispVal paramList, List<LispVal> body, boolean rewriteReturnFrom) {
-		if (rewriteReturnFrom) {
-			body = rewriteReturnFrom(body);
+	public static Expanded expand(LispVal paramList, List<LispVal> body, boolean wrapReturnFrom) {
+		return expand(paramList, body, wrapReturnFrom, null);
+	}
+
+	private static Expanded expand(LispVal paramList, List<LispVal> body, boolean wrapReturnFrom,
+			@Nullable LispVal blockNameSym) {
+		if (wrapReturnFrom) {
+			body = wrapReturnFrom(blockNameSym, body);
 		}
 		List<LispVal> params = paramList instanceof LispCons cons ? cons.toList() : List.of();
 		if (!usesLambdaListKeywords(paramList)) {
@@ -187,8 +193,8 @@ public final class LambdaLists {
 			}
 			List<LispVal> parts = cons.toList();
 			// A defun/lambda is rebuilt through expand() when its parameter list uses
-			// lambda-list keywords OR its body uses return-from (the return-from
-			// rewrite lives in expand so the interpreter's lazy path shares it).
+			// lambda-list keywords OR its body uses return-from (the %fn-block wrap
+			// lives in expand so the lambda compilers' toNative path shares it).
 			if (LispNames.LAMBDA.equals(name) && parts.size() >= 2 && (usesLambdaListKeywords(parts.get(1))
 					|| anyContainsReturnFrom(parts.subList(2, parts.size())))) {
 				Expanded e = expand(parts.get(1), parts.subList(2, parts.size()));
@@ -196,7 +202,7 @@ public final class LambdaLists {
 			}
 			if (LispNames.DEFUN.equals(name) && parts.size() >= 3 && (usesLambdaListKeywords(parts.get(2))
 					|| anyContainsReturnFrom(parts.subList(3, parts.size())))) {
-				Expanded e = expand(parts.get(2), parts.subList(3, parts.size()));
+				Expanded e = expand(parts.get(2), parts.subList(3, parts.size()), true, defunBlockName(parts.get(1)));
 				return rebuildFunction(sym, parts.get(1), e);
 			}
 		}
@@ -204,26 +210,47 @@ public final class LambdaLists {
 	}
 
 	/**
-	 * Lite {@code return-from} support: when the body contains a
-	 * {@code (return-from name value)} form, every occurrence is rewritten to
-	 * {@code (return value)} (the block NAME is ignored -- there are no named blocks) and
-	 * the whole body is wrapped in the internal {@code %block} so the return exits the
-	 * function. Deviation: a {@code return-from} nested inside a {@code do}/ {@code loop}
-	 * exits that loop's (nearer) block instead, which is only equivalent when the loop is
-	 * the function's final form.
+	 * Compile-path {@code return-from} support: when the body contains a
+	 * {@code (return-from name value)} form, the whole body is wrapped in the internal
+	 * {@code (%fn-block name body...)} function boundary ({@code name} is the defun's
+	 * name, {@code nil} for a lambda). The backends compile it as a named block target
+	 * that is ALSO the fallback for a {@code return-from} whose name matches no lexically
+	 * enclosing block, so an unmatched named return exits the current function -- which
+	 * keeps a {@code return-from} inside a lambda a lambda-local exit (the interpreter's
+	 * dynamic-extent crossing cannot span a separately compiled method). The wrap is
+	 * idempotent: a body already consisting of a single {@code %fn-block} form (a lambda
+	 * rebuilt by {@link #desugarProgram} re-entering through {@code toNative}) is
+	 * returned unchanged.
+	 * @param blockNameSym the block name symbol, or {@code null} for a lambda
 	 * @param body the defun/lambda body forms
-	 * @return the body, rewritten and block-wrapped when return-from is present
+	 * @return the body, block-wrapped when return-from is present
 	 */
-	private static List<LispVal> rewriteReturnFrom(List<LispVal> body) {
+	private static List<LispVal> wrapReturnFrom(@Nullable LispVal blockNameSym, List<LispVal> body) {
 		if (!anyContainsReturnFrom(body)) {
 			return body;
 		}
-		List<LispVal> rewritten = new ArrayList<>(body.size() + 1);
-		rewritten.add(new LispSymbol(LispNames.PROGN));
-		for (LispVal form : body) {
-			rewritten.add(stripReturnFrom(form));
+		if (body.size() == 1 && body.get(0) instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.FN_BLOCK_INTERNAL.equals(op.name())) {
+			return body;
 		}
-		return List.of(list(new LispSymbol(LispNames.BLOCK_INTERNAL), list(rewritten.toArray(LispVal[]::new))));
+		List<LispVal> parts = new ArrayList<>(body.size() + 2);
+		parts.add(new LispSymbol(LispNames.FN_BLOCK_INTERNAL));
+		parts.add(blockNameSym != null ? blockNameSym : LispNil.INSTANCE);
+		parts.addAll(body);
+		return List.of(list(parts.toArray(LispVal[]::new)));
+	}
+
+	/**
+	 * The block name a defun body's {@code %fn-block} wrap carries: the function name, or
+	 * the PLACE name for a {@code (defun (setf name) ...)} setf-function -- mirroring the
+	 * interpreter's {@code evalDefun} block naming.
+	 */
+	private static @Nullable LispVal defunBlockName(LispVal nameForm) {
+		LispSymbol setfPlace = LispMacroExpander.setfFunctionPlaceName(nameForm);
+		if (setfPlace != null) {
+			return setfPlace;
+		}
+		return nameForm instanceof LispSymbol sym ? sym : null;
 	}
 
 	private static boolean anyContainsReturnFrom(List<LispVal> forms) {
@@ -236,13 +263,10 @@ public final class LambdaLists {
 	}
 
 	// Quoted data is exempt, like the rest of the desugaring. A nested lambda/defun is
-	// its
-	// own return-from scope: the rewrite stops at the boundary so the inner function
-	// wraps
-	// its own body in %block (lite: a return-from is scoped to the nearest enclosing
-	// function, so a return-from inside a lambda passed to map*/reduce exits the lambda,
-	// not the outer defun -- otherwise the stripped `return` would land in the lambda's
-	// separately compiled method with no enclosing block).
+	// its own return-from scope: the scan stops at the boundary so the inner function
+	// wraps its own body in its own %fn-block (a return-from inside a lambda passed to
+	// map*/reduce exits the lambda, not the outer defun -- a goto cannot cross into the
+	// lambda's separately compiled method).
 	private static boolean containsReturnFrom(LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return false;
@@ -256,26 +280,6 @@ public final class LambdaLists {
 			}
 		}
 		return containsReturnFrom(cons.car()) || containsReturnFrom(cons.cdr());
-	}
-
-	private static LispVal stripReturnFrom(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return form;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name()) || isNestedFunction(op.name())) {
-				// Leave the nested function intact; desugar() reaches it later and
-				// expand()
-				// rewrites its own return-from against its own %block.
-				return form;
-			}
-			if (LispNames.RETURN_FROM.equals(op.name())) {
-				List<LispVal> parts = cons.toList();
-				LispVal value = parts.size() > 2 ? stripReturnFrom(parts.get(2)) : LispNil.INSTANCE;
-				return list(new LispSymbol(LispNames.RETURN), value);
-			}
-		}
-		return new LispCons(stripReturnFrom(cons.car()), stripReturnFrom(cons.cdr()));
 	}
 
 	private static boolean isNestedFunction(String op) {

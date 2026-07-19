@@ -40,15 +40,14 @@ final class JvmLetCompiler {
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
 		Set<String> savedBoxedVars = new HashSet<>(ctx.boxedVars);
 		int savedNextLocal = ctx.nextLocal;
-		// Only lexical binding names take part in capture analysis; a special is a global
-		// (static field) reachable from any method, never a captured lexical.
+		// Every binding name takes part in capture analysis: a special-named binding is
+		// DUAL-BOUND (dynamic set + a lexical slot, mirroring the interpreter), so a
+		// closure built in the body captures the entry value and can read it after the
+		// dynamic extent ended (cl-ppcre's end-string).
 		Set<String> letVarNames = new HashSet<>();
 		if (bindings instanceof LispCons bindingsCons) {
 			for (LispVal binding : bindingsCons.toList()) {
-				String name = ((LispSymbol) ((LispCons) binding).toList().get(0)).name();
-				if (!ctx.specialVars.contains(name)) {
-					letVarNames.add(name);
-				}
+				letVarNames.add(((LispSymbol) ((LispCons) binding).toList().get(0)).name());
 			}
 		}
 		Set<String> capturedInLet = FreeVarAnalyzer.findCapturedVars(parts.subList(2, parts.size()), letVarNames,
@@ -63,12 +62,17 @@ final class JvmLetCompiler {
 				List<LispVal> pairList = pair.toList();
 				String name = ((LispSymbol) pairList.get(0)).name();
 				if (ctx.specialVars.contains(name)) {
-					// Dynamic binding: [init] on stack, save the field into a temp, then
-					// overwrite it with the init. The body reads the special via
-					// getstatic,
-					// so it sees this value; a called function does too (dynamic extent).
+					// DUAL-BIND (interpreter parity): the global static field is saved
+					// and overwritten with the init (the dynamic binding a called
+					// function reads), AND the same value gets a lexical slot so a
+					// closure built in the body captures it -- the closure may run
+					// after this extent ended and restored the global (cl-ppcre's
+					// end-string). Body reads resolve to the local, which equals the
+					// global within the extent; a setq of the name writes BOTH
+					// (JvmSetqCompiler).
 					int fieldIndex = Objects.requireNonNull(ctx.globalFields.get(name)).index();
 					JvmExprCompiler.compileExpr(pairList.get(1), ctx, className);
+					ctx.emit(Opcode.DUP);
 					ctx.emit(Opcode.GETSTATIC);
 					ctx.emitU2(fieldIndex);
 					int saveSlot = ctx.allocTemp();
@@ -80,11 +84,29 @@ final class JvmLetCompiler {
 						dynamicRestores = new ArrayList<>();
 					}
 					dynamicRestores.add(new int[] { fieldIndex, saveSlot });
-					// Ensure a read in the body resolves to the global static field, not
-					// a
-					// stale outer lexical of the same name (specials are never lexical).
-					ctx.locals.remove(name);
-					ctx.boxedVars.remove(name);
+					ctx.specialBindScopes.push(new int[] { fieldIndex, saveSlot, ctx.blockTargets.size() });
+					if (capturedInLet.contains(name)) {
+						int tmpSlot = ctx.allocTemp();
+						ctx.emit(Opcode.ASTORE);
+						ctx.emit(tmpSlot);
+						ctx.emit(Opcode.ICONST_1);
+						ctx.emit(Opcode.ANEWARRAY);
+						ctx.emitU2(ctx.objectClass.index());
+						ctx.emit(Opcode.DUP);
+						ctx.emit(Opcode.ICONST_0);
+						ctx.emit(Opcode.ALOAD);
+						ctx.emit(tmpSlot);
+						ctx.emit(Opcode.AASTORE);
+					}
+					int lexSlot = ctx.allocLocal(name);
+					ctx.emit(Opcode.ASTORE);
+					ctx.emit(lexSlot);
+					if (capturedInLet.contains(name)) {
+						ctx.boxedVars.add(name);
+					}
+					else {
+						ctx.boxedVars.remove(name);
+					}
 					continue;
 				}
 				if (capturedInLet.contains(name)) {
@@ -133,6 +155,7 @@ final class JvmLetCompiler {
 				ctx.emit(restore[1]);
 				ctx.emit(Opcode.PUTSTATIC);
 				ctx.emitU2(restore[0]);
+				ctx.specialBindScopes.pop();
 			}
 		}
 		ctx.locals = savedLocals;

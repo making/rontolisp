@@ -65,6 +65,16 @@ public sealed interface Token {
 	}
 
 	/**
+	 * Bit-vector literal token ({@code #*1010}): the bits follow {@code #*} directly,
+	 * {@code #*} alone is the empty bit vector. Read into the general vector holding the
+	 * integers 0/1 (rontolisp has no packed bit representation).
+	 *
+	 * @param bits the literal's 0/1 digits, in order
+	 */
+	record BitVectorToken(String bits) implements Token {
+	}
+
+	/**
 	 * Packed float-array literal open token: {@code #f(} for the single-float width
 	 * ({@code single}) and {@code #d(} for the double-float width; closed by the
 	 * {@link RightParen} matching the opening parenthesis. The rank is inferred from the
