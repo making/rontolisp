@@ -11,4 +11,4 @@ dev:
 # wash denies all outgoing HTTP unless the upstream is allowlisted.
 workload:
   allowedHosts:
-    - httpbin.org
+    - httpbin.ik.am

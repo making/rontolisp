@@ -39,7 +39,7 @@
 で読み尽くします:
 
 ```lisp
-(let ((p (rontolisp:fetch "https://httpbin.org/get")))
+(let ((p (rontolisp:fetch "https://httpbin.ik.am/get")))
   (getf (rontolisp:await p) :status))   ; => 200
 ```
 
@@ -100,7 +100,7 @@ alist)、`:body` (文字列) を指定できます:
 (rontolisp:async-defun fetch-status (url)
   (getf (rontolisp:await (rontolisp:fetch url)) :status))
 
-(rontolisp:await (fetch-status "https://httpbin.org/get"))   ; => 200
+(rontolisp:await (fetch-status "https://httpbin.ik.am/get"))   ; => 200
 ```
 
 `await` は汎用です: future 以外の値はそのまま通り、確定した future は
@@ -113,7 +113,7 @@ future と通常の値を見分けられます:
 ```
 
 ```lisp
-(rontolisp:futurep (rontolisp:fetch "https://httpbin.org/get"))   ; => t
+(rontolisp:futurep (rontolisp:fetch "https://httpbin.ik.am/get"))   ; => t
 ```
 
 ## JSONの扱い
@@ -166,7 +166,7 @@ future と通常の値を見分けられます:
   (setf (gethash "stars" req) 1)
   (let* ((payload (rontolisp:json-stringify req))
          (res (rontolisp:await
-               (rontolisp:fetch "https://httpbin.org/post"
+               (rontolisp:fetch "https://httpbin.ik.am/post"
                                 (list :method "POST"
                                       :headers (list (cons "Content-Type" "application/json"))
                                       :body payload))))

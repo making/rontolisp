@@ -307,7 +307,7 @@ wasmtime run -W gc=y --invoke 'greet("世界")' greet.wasm
 ```bash
 rontolisp status.lisp --component -o status.wasm
 wasmtime run -W gc=y -W exceptions=y -S http=y \
-  --invoke 'fetch-status("https://httpbin.org/status/204")' status.wasm
+  --invoke 'fetch-status("https://httpbin.ik.am/status/204")' status.wasm
 # "fetching"
 # 204
 ```

@@ -1,4 +1,4 @@
-;; A miniature httpbin (https://httpbin.org) built on rontolisp:http-handler --
+;; A miniature httpbin (https://httpbin.ik.am) built on rontolisp:http-handler --
 ;; the advanced companion of http-handler.lisp. Five echo endpoints respond
 ;; with a JSON document describing the request, built with
 ;; rontolisp:json-stringify (and rontolisp:json-parse for the request body):

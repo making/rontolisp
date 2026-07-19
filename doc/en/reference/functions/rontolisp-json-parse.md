@@ -83,7 +83,7 @@ response body:
 ```console
 (print (gethash "url"
                 (rontolisp:json-parse
-                 (getf (rontolisp:await (rontolisp:fetch "https://httpbin.org/get")) :body))))   ; "https://httpbin.org/get"
+                 (getf (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get")) :body))))   ; "https://httpbin.ik.am/get"
 ```
 
 The inverse operation is [`rontolisp:json-stringify`](rontolisp-json-stringify.md).

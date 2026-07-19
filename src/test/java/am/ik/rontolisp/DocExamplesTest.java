@@ -66,7 +66,7 @@ class DocExamplesTest {
 
 	private static final String ARROW = "; =>";
 
-	// The rontolisp:fetch examples document a public URL (e.g. https://httpbin.org/get),
+	// The rontolisp:fetch examples document a public URL (e.g. https://httpbin.ik.am/get),
 	// but the test must not reach the network: it serves the requests from a local JDK
 	// HttpServer and rewrites the URL in the example to point at it before evaluating.
 	// The

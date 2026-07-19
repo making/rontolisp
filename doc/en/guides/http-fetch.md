@@ -37,7 +37,7 @@ every backend `:body` is an asynchronous stream, drained with
 [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md):
 
 ```lisp
-(let ((p (rontolisp:fetch "https://httpbin.org/get")))
+(let ((p (rontolisp:fetch "https://httpbin.ik.am/get")))
   (getf (rontolisp:await p) :status))   ; => 200
 ```
 
@@ -95,7 +95,7 @@ future for the rest:
 (rontolisp:async-defun fetch-status (url)
   (getf (rontolisp:await (rontolisp:fetch url)) :status))
 
-(rontolisp:await (fetch-status "https://httpbin.org/get"))   ; => 200
+(rontolisp:await (fetch-status "https://httpbin.ik.am/get"))   ; => 200
 ```
 
 `await` is generic: a non-future value passes through unchanged, and a settled
@@ -108,7 +108,7 @@ futures apart from plain values:
 ```
 
 ```lisp
-(rontolisp:futurep (rontolisp:fetch "https://httpbin.org/get"))   ; => t
+(rontolisp:futurep (rontolisp:fetch "https://httpbin.ik.am/get"))   ; => t
 ```
 
 ## Working with JSON
@@ -160,7 +160,7 @@ with `json-parse`. Save the following as `fetch-post.lisp`:
   (setf (gethash "stars" req) 1)
   (let* ((payload (rontolisp:json-stringify req))
          (res (rontolisp:await
-               (rontolisp:fetch "https://httpbin.org/post"
+               (rontolisp:fetch "https://httpbin.ik.am/post"
                                 (list :method "POST"
                                       :headers (list (cons "Content-Type" "application/json"))
                                       :body payload))))

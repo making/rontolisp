@@ -17,8 +17,8 @@
 [`rontolisp:fetch`](rontolisp-fetch.md) の URL を組み立てることです:
 
 ```lisp
-(concatenate 'string "https://httpbin.org/get?q=" (rontolisp:url-encode "ronto lisp"))
-; => "https://httpbin.org/get?q=ronto%20lisp"
+(concatenate 'string "https://httpbin.ik.am/get?q=" (rontolisp:url-encode "ronto lisp"))
+; => "https://httpbin.ik.am/get?q=ronto%20lisp"
 ```
 
 ## バックエンドサポート

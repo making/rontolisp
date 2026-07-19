@@ -11,7 +11,7 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
 `:body` ストリームは [`rontolisp:read-all`](rontolisp-read-all.md) で読み尽くします。
 
 ```lisp
-(let ((p (rontolisp:fetch "https://httpbin.org/get")))
+(let ((p (rontolisp:fetch "https://httpbin.ik.am/get")))
   (getf (rontolisp:await p) :status))   ; => 200
 ```
 

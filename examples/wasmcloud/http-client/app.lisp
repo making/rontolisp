@@ -1,7 +1,7 @@
 ;; A rontolisp port of wasmCloud's http-client template
 ;; (templates/http-client in the wasmCloud repo): a served handler that makes
 ;; an outgoing HTTP request, i.e. rontolisp:fetch inside rontolisp:http-handler.
-;; Every request is answered by proxying https://httpbin.org/get -- the
+;; Every request is answered by proxying https://httpbin.ik.am/get -- the
 ;; upstream status and body are forwarded as-is, and a failed upstream
 ;; request maps to 502.
 ;;
@@ -19,7 +19,7 @@
 ;;   curl http://127.0.0.1:8080/
 
 ;; The upstream to proxy, as in the original template.
-(defun upstream-url () "https://httpbin.org/get")
+(defun upstream-url () "https://httpbin.ik.am/get")
 
 ;; A failed fetch surfaces as a nil/non-integer :status, mapped to 502 --
 ;; anything else (including upstream 4xx/5xx) is forwarded unchanged.

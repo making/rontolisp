@@ -84,7 +84,7 @@ Error: json-parse: unexpected trailing characters
 ```console
 (print (gethash "url"
                 (rontolisp:json-parse
-                 (getf (rontolisp:await (rontolisp:fetch "https://httpbin.org/get")) :body))))   ; "https://httpbin.org/get"
+                 (getf (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get")) :body))))   ; "https://httpbin.ik.am/get"
 ```
 
 逆の操作は [`rontolisp:json-stringify`](rontolisp-json-stringify.md) です。

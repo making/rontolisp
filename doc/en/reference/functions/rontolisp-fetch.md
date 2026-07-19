@@ -12,7 +12,7 @@ response arrives and obtain the result property list
 drained with [`rontolisp:read-all`](rontolisp-read-all.md).
 
 ```lisp
-(let ((p (rontolisp:fetch "https://httpbin.org/get")))
+(let ((p (rontolisp:fetch "https://httpbin.ik.am/get")))
   (getf (rontolisp:await p) :status))   ; => 200
 ```
 
