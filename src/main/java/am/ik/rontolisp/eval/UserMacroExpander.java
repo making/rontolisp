@@ -49,6 +49,8 @@ public final class UserMacroExpander {
 		// per top-level form, mirroring the interpreter's loadFile timing.
 		if (program.stream().noneMatch(form -> isOperator(form, LispNames.DEFMACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_MODIFY_MACRO))
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_SETF_EXPANDER))
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFSETF))
 				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)
 				&& program.stream().noneMatch(UserMacroExpander::usesReadEvalMarker)) {
@@ -85,6 +87,14 @@ public final class UserMacroExpander {
 				// form: the generated macro is expanded at its call sites like any other
 				// user macro (the compilers never see define-modify-macro).
 				macroEval.evalResolved(LispMacroExpander.expandDefineModifyMacro((LispCons) resolved));
+				continue;
+			}
+			if (isOperator(resolved, LispNames.DEFINE_SETF_EXPANDER) || isOperator(resolved, LispNames.DEFSETF)) {
+				// Register the user setf expansion in the macro evaluator, then drop the
+				// form: a (setf (place ...) v) call site is rewritten through it below
+				// (the compilers cannot run the expander, and treat the definition as a
+				// no-op anyway).
+				macroEval.evalResolved(resolved);
 				continue;
 			}
 			LispVal expanded = expandAll(resolved, macroEval);
@@ -154,6 +164,20 @@ public final class UserMacroExpander {
 
 	private static boolean isOperator(LispVal form, String name) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && name.equals(sym.name());
+	}
+
+	/**
+	 * Whether any place of a {@code setf} form is a registered user setf-expander place.
+	 */
+	private static boolean hasUserSetfPlace(LispCons setf, LispEvaluator macroEval) {
+		List<LispVal> parts = setf.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispCons place && place.car() instanceof LispSymbol acc
+					&& macroEval.hasSetfExpander(acc.name())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -729,6 +753,28 @@ public final class UserMacroExpander {
 						}
 					}
 					return properList(newParts);
+				}
+				case LispNames.SETF: {
+					// Walk the subforms first, then, if any place is a registered user
+					// setf-expander place, rewrite the whole setf through the macro-time
+					// evaluator (the compilers cannot run the expander themselves).
+					LispVal walked = rebuild(parts, 1, macroEval);
+					if (walked instanceof LispCons wc && hasUserSetfPlace(wc, macroEval)) {
+						return macroEval.expandSetfMaybeUserExpander(wc);
+					}
+					return walked;
+				}
+				case LispNames.INCF, LispNames.DECF: {
+					// incf/decf on a user setf-expander place: expand to setf here so the
+					// place rewrite above applies; an ordinary place is left for the
+					// compiler's own expansion.
+					if (parts.size() >= 2 && parts.get(1) instanceof LispCons place
+							&& place.car() instanceof LispSymbol acc && macroEval.hasSetfExpander(acc.name())) {
+						LispVal setfForm = LispNames.INCF.equals(sym.name()) ? LispMacroExpander.expandIncf(cons)
+								: LispMacroExpander.expandDecf(cons);
+						return expandAll(setfForm, macroEval);
+					}
+					return rebuild(parts, 1, macroEval);
 				}
 				default:
 					// Every other operator: the head stays, all arguments are walked.

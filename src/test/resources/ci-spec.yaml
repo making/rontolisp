@@ -1119,7 +1119,7 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop print-unreadable-object proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-package-iterator with-slots write-char)
+      (and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander defsetf deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop print-unreadable-object proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-package-iterator with-slots write-char)
       (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function go if in-package lambda let progn progv quote return setq tagbody unwind-protect while)
       292
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
@@ -3398,6 +3398,46 @@ cases:
       :checked2
       :digit
       :abc
+  - name: user-deftype-typep-satisfies
+    source: |
+      (deftype ci-even () '(satisfies evenp))
+      (defun ci-alistp (x) (and (listp x) (every #'consp x)))
+      (deftype ci-alist () '(satisfies ci-alistp))
+      (deftype ci-int () 'integer)
+      (print (typep 4 'ci-even))
+      (print (typep 3 'ci-even))
+      (print (typep '((a . 1) (b . 2)) 'ci-alist))
+      (print (typep '(a b) 'ci-alist))
+      (print (typecase 6 (ci-even :even) (t :other)))
+      (print (typep 9 'ci-int))
+    expected: |
+      t
+      nil
+      t
+      nil
+      :even
+      t
+  - name: user-setf-expander-and-defsetf
+    source: |
+      (defun ci-aget (alist key) (cdr (assoc key alist :test #'equal)))
+      (defun ci-aput (alist key value)
+        (let ((kv (assoc key alist :test #'equal)))
+          (if kv (progn (rplacd kv value) alist) (cons (cons key value) alist))))
+      (define-setf-expander ci-aget (alist key &environment env)
+        (multiple-value-bind (d v n setter getter) (get-setf-expansion alist env)
+          (let ((nv (first n)))
+            (values d v n `(let ((,nv (ci-aput ,alist ,key ,nv))) ,setter ,nv) `(ci-aget ,getter ,key)))))
+      (defun ci-ref (box) (car box))
+      (defsetf ci-ref rplaca)
+      (let ((d (list (cons :a 1))))
+        (setf (ci-aget d :a) 100)
+        (setf (ci-aget d :b) 2)
+        (incf (ci-aget d :a) 5)
+        (print (list (ci-aget d :a) (ci-aget d :b))))
+      (print (let ((b (list 1))) (setf (ci-ref b) 9) b))
+    expected: |
+      (105 2)
+      (9)
   - name: flet-and-labels-local-functions
     source: |
       (flet ((ci-sq (x) (* x x))

@@ -7615,7 +7615,7 @@ public final class LispMacroExpander {
 		boolean runtimeSubtypep = needsRuntimeSubtypep(program);
 		if (!runtimeSubtypep && program.stream()
 			.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
-					|| isLetWithNestedDefmethod(f))) {
+					|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
 			return program;
 		}
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
@@ -7660,6 +7660,11 @@ public final class LispMacroExpander {
 			}
 			else if (isNamedForm(form, LispNames.DEFMETHOD)) {
 				addExpandedDefinition(form, out, closRegistry, dispatcherSlots, placedDispatchers);
+			}
+			else if (isNamedForm(form, LispNames.DEFTYPE)) {
+				// Register a zero-parameter deftype so a later typep/typecase resolves
+				// its name; the form itself is a runtime no-op (replaced by nil).
+				out.add(expandDeftype((LispCons) form, closRegistry));
 			}
 			else if (isLetWithNestedDefmethod(form)) {
 				// The closure-over-let method idiom (cl-ppcre's
@@ -11360,6 +11365,12 @@ public final class LispMacroExpander {
 			if (classInfo != null) {
 				return makeClassInstanceTest(value, classInfo.name(), closRegistry);
 			}
+			// A user deftype: resolve its registered expansion and test against that
+			// (a zero-parameter (deftype name () 'spec), typically an (satisfies pred)).
+			LispVal deftypeExpansion = closRegistry.findDeftype(sym.name());
+			if (deftypeExpansion != null) {
+				return makeTypeTest(value, deftypeExpansion, closRegistry);
+			}
 			throw new IllegalArgumentException("Unsupported type specifier: " + sym.name());
 		}
 		return callOf(pred, value);
@@ -11683,6 +11694,46 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandDeftype(LispCons cons) {
 		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Like {@link #expandDeftype(LispCons)}, but additionally registers a zero-parameter
+	 * {@code (deftype name () 'spec)} in the class registry so its name resolves as a
+	 * type specifier in {@code typep}/{@code typecase}. Only the literal-expansion shape
+	 * is registered (an empty lambda list and a quoted-literal body, e.g.
+	 * {@code (satisfies alistp)}); a parameterized or computed deftype stays an
+	 * unresolved specifier, exactly as before.
+	 * @param cons the deftype expression
+	 * @param closRegistry mutated: the deftype expansion is registered
+	 * @return nil
+	 */
+	public static LispVal expandDeftype(LispCons cons, ClosRegistry closRegistry) {
+		LispVal expansion = literalDeftypeExpansion(cons);
+		if (expansion != null && cons.toList().get(1) instanceof LispSymbol nameSym) {
+			closRegistry.registerDeftype(nameSym.name(), expansion);
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * The literal type specifier a {@code (deftype name () [doc] 'spec)} expands to, or
+	 * null when the deftype has a non-empty lambda list or a non-literal body (which
+	 * stays an unresolved specifier). The last body form's single {@code (quote spec)} is
+	 * unwrapped; an optional leading docstring is skipped.
+	 */
+	@Nullable private static LispVal literalDeftypeExpansion(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		// (deftype name () [doc] body): a name symbol, an empty lambda list, a literal
+		// body. A parameterized lambda list would need the body evaluated per call.
+		if (parts.size() < 4 || !(parts.get(1) instanceof LispSymbol) || !(parts.get(2) instanceof LispNil)) {
+			return null;
+		}
+		LispVal body = parts.get(parts.size() - 1);
+		if (body instanceof LispCons quoted && quoted.car() instanceof LispSymbol op
+				&& LispNames.QUOTE.equals(op.name()) && quoted.cdr() instanceof LispCons rest) {
+			return rest.car();
+		}
+		return null;
 	}
 
 	/**

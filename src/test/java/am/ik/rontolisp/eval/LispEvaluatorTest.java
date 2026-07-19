@@ -4120,7 +4120,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop print-unreadable-object proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-package-iterator with-slots write-char)");
+				"(and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander defsetf deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop print-unreadable-object proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-package-iterator with-slots write-char)");
 	}
 
 	@Test
@@ -7667,10 +7667,69 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void typepResolvesUserDeftypeThroughSatisfies() {
+		assertThat(evalMulti("""
+				(deftype my-even () '(satisfies evenp))
+				(list (typep 4 'my-even) (typep 3 'my-even))
+				""").print()).isEqualTo("(t nil)");
+	}
+
+	@Test
+	void typepResolvesUserDeftypeOverAUserPredicateAndChainedNames() {
+		assertThat(evalMulti("""
+				(defun my-alistp (x) (and (listp x) (every #'consp x)))
+				(deftype my-alist () '(satisfies my-alistp))
+				(deftype my-int () 'integer)
+				(list (typep '((a . 1) (b . 2)) 'my-alist) (typep '(a b) 'my-alist)
+				      (typep 7 'my-int) (typep 'x 'my-int))
+				""").print()).isEqualTo("(t nil t nil)");
+	}
+
+	@Test
+	void typecaseResolvesAUserDeftype() {
+		assertThat(evalMulti("""
+				(deftype my-even () '(satisfies evenp))
+				(defun classify (n) (typecase n (my-even :even) (t :other)))
+				(list (classify 4) (classify 5))
+				""").print()).isEqualTo("(:even :other)");
+	}
+
+	@Test
 	void subtypepAnswersTheBuiltinLatticeAndConditionClasses() {
 		assertThat(eval("(list (subtypep 'integer 'number) (subtypep 'number 'integer)"
 				+ " (subtypep 'type-error 'error) (subtypep 'short-float 'single-float))")
 			.print()).isEqualTo("(t nil t t)");
+	}
+
+	@Test
+	void defineSetfExpanderMakesAUserPlaceSettable() {
+		assertThat(evalMulti("""
+				(defun aget (alist key) (cdr (assoc key alist :test #'equal)))
+				(defun %aput (alist key value)
+				  (let ((kv (assoc key alist :test #'equal)))
+				    (if kv (progn (rplacd kv value) alist) (cons (cons key value) alist))))
+				(define-setf-expander aget (alist key &environment env)
+				  (multiple-value-bind (d v n setter getter) (get-setf-expansion alist env)
+				    (let ((nv (first n)))
+				      (values d v n `(let ((,nv (%aput ,alist ,key ,nv))) ,setter ,nv) `(aget ,getter ,key)))))
+				(let ((d (list (cons :a 1))))
+				  (setf (aget d :a) 100)
+				  (setf (aget d :b) 2)
+				  (incf (aget d :a) 5)
+				  (list (aget d :a) (aget d :b)))
+				""").print()).isEqualTo("(105 2)");
+	}
+
+	@Test
+	void defsetfShortAndLongForms() {
+		assertThat(evalMulti("""
+				(defun ref (box) (car box))
+				(defsetf ref rplaca)
+				(defun head (x) (car x))
+				(defsetf head (lst) (v) `(progn (rplaca ,lst ,v) ,v))
+				(list (let ((b (list 1))) (setf (ref b) 9) b)
+				      (let ((l (list 7 8))) (setf (head l) 70) l))
+				""").print()).isEqualTo("((9) (70 8))");
 	}
 
 	@Test

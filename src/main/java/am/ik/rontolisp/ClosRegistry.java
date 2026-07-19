@@ -320,11 +320,47 @@ public final class ClosRegistry {
 	private final Map<String, String> structTags = new LinkedHashMap<>();
 
 	/**
+	 * User {@code deftype} name (normalized) to its expansion -- the literal type
+	 * specifier a zero-parameter {@code (deftype name () 'spec)} defines. Consulted by
+	 * the shared type-test builder so {@code typep}/{@code typecase} resolve a
+	 * user-defined type name (single- and double-colon spellings match, like
+	 * {@link #findStructTag}).
+	 */
+	private final Map<String, LispVal> deftypes = new LinkedHashMap<>();
+
+	/**
 	 * The classes by normalized name, in definition order.
 	 * @return the class registry
 	 */
 	public Map<String, ClassInfo> classes() {
 		return this.classes;
+	}
+
+	/**
+	 * Registers a zero-parameter {@code deftype} expansion so its name resolves as a type
+	 * specifier in {@code typep}/{@code typecase}/{@code check-type}.
+	 * @param name the type name as spelled in the deftype
+	 * @param expansion the literal type specifier the name expands to
+	 */
+	public void registerDeftype(String name, LispVal expansion) {
+		this.deftypes.put(normalize(name), expansion);
+	}
+
+	/**
+	 * The registered expansion of a user {@code deftype} name, or null. Single- and
+	 * double-colon spellings match, like {@link #findStructTag}.
+	 * @param name the type name as spelled
+	 * @return the literal type specifier the name expands to, or null
+	 */
+	@Nullable public LispVal findDeftype(String name) {
+		LispVal exact = this.deftypes.get(normalize(name));
+		if (exact != null) {
+			return exact;
+		}
+		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
+			return this.deftypes.get(qn.member());
+		}
+		return null;
 	}
 
 	/**

@@ -1177,6 +1177,16 @@ public final class LispNames {
 	public static final String DEFINE_SETF_EXPANDER = "define-setf-expander";
 
 	/**
+	 * The {@code defsetf} macro (short and long forms). Registers a setf expansion for an
+	 * accessor: the short form {@code (defsetf access update)} makes
+	 * {@code (setf (access args...) v)} call {@code (update args... v)}; the long form
+	 * {@code (defsetf access (lambda-list) (store-vars) body...)} evaluates its body at
+	 * expansion time to produce the store form. Complements
+	 * {@link #DEFINE_SETF_EXPANDER}.
+	 */
+	public static final String DEFSETF = "defsetf";
+
+	/**
 	 * The {@code define-compiler-macro} macro. Parsed no-op returning nil, like
 	 * {@link #DECLAIM}/{@link #DEFTYPE}: a compiler macro is only an optimization hint,
 	 * so dropping it leaves the ordinary function definition authoritative (the

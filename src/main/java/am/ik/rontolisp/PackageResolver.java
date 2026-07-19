@@ -395,8 +395,13 @@ public final class PackageResolver {
 			// top-level directive), so a defpackage here is out of place.
 			throw new LispPackageException(LispNames.DEFPACKAGE + " is only supported as a literal top-level form");
 		}
-		if (cons.car() instanceof LispSymbol macroOp && LispNames.DEFMACRO.equals(operatorMember(macroOp))) {
-			// The whole definition is template context (see the quote case above).
+		if (cons.car() instanceof LispSymbol macroOp && (LispNames.DEFMACRO.equals(operatorMember(macroOp))
+				|| LispNames.DEFINE_SETF_EXPANDER.equals(operatorMember(macroOp))
+				|| LispNames.DEFSETF.equals(operatorMember(macroOp)))) {
+			// The whole definition is template context (see the quote case above): a
+			// define-setf-expander / defsetf body builds forms with backquote just like a
+			// defmacro, so its template symbols (an internal helper the store form calls)
+			// belong to the defining package, not the call site's.
 			boolean saved = this.inMacroDefinition;
 			this.inMacroDefinition = true;
 			try {

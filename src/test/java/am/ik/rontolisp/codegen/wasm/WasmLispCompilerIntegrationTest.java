@@ -4469,6 +4469,37 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("t\nt\nnil\nt\nt\nt\nnil\nt\nt\nnil\nt\nt");
 	}
 
+	// define-setf-expander / defsetf are consumed by the compile-path pass
+	// (eval.UserMacroExpander) and the setf call sites rewritten before the WASM
+	// compiler.
+	@Test
+	void defineSetfExpanderAndDefsetf() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.UserMacroExpander
+			.expand(LispReader.readAllFromString("(defun aget (alist key) (cdr (assoc key alist :test #'equal)))"
+					+ " (defun %aput (alist key value)" + "   (let ((kv (assoc key alist :test #'equal)))"
+					+ "     (if kv (progn (rplacd kv value) alist) (cons (cons key value) alist))))"
+					+ " (define-setf-expander aget (alist key &environment env)"
+					+ "   (multiple-value-bind (d v n setter getter) (get-setf-expansion alist env)"
+					+ "     (let ((nv (first n)))"
+					+ "       (values d v n `(let ((,nv (%aput ,alist ,key ,nv))) ,setter ,nv) `(aget ,getter ,key)))))"
+					+ " (defun ref (box) (car box)) (defsetf ref rplaca)"
+					+ " (let ((d (list (cons :a 1)))) (setf (aget d :a) 100) (setf (aget d :b) 2) (incf (aget d :a) 5)"
+					+ "   (print (list (aget d :a) (aget d :b))))"
+					+ " (print (let ((b (list 1))) (setf (ref b) 9) b))")));
+		assertThat(compileAndRunProgram(program)).isEqualTo("(105 2)\n(9)");
+	}
+
+	@Test
+	void typepResolvesUserDeftype() throws Exception {
+		assertThat(compileAndRun(
+				"(deftype my-even () '(satisfies evenp))" + " (defun my-alistp (x) (and (listp x) (every #'consp x)))"
+						+ " (deftype my-alist () '(satisfies my-alistp))" + " (deftype my-int () 'integer)"
+						+ " (print (typep 4 'my-even)) (print (typep 3 'my-even))"
+						+ " (print (typep '((a . 1)) 'my-alist)) (print (typep '(a b) 'my-alist))"
+						+ " (print (typep 7 'my-int)) (print (typep 'x 'my-int))"))
+			.isEqualTo("t\nnil\nt\nnil\nt\nnil");
+	}
+
 	@Test
 	void liteBuiltinsResidue() throws Exception {
 		assertThat(compileAndRun("(print (mask-field (byte 4 4) 255))" + " (print (mask-field (byte 8 0) 300))"
@@ -5828,7 +5859,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop print-unreadable-object proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-package-iterator with-slots write-char)");
+				"(and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander defsetf deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop print-unreadable-object proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-package-iterator with-slots write-char)");
 	}
 
 	@Test
