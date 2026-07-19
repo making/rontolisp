@@ -6012,13 +6012,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunJsonParseReturnsPlistByDefault() throws Exception {
-		assertThat(
-				compileAndRunJson("(print (rontolisp:json-parse \"{\\\"name\\\": \\\"rontolisp\\\", \\\"n\\\": 2}\"))"))
-			.isEqualTo("(:name \"rontolisp\" :n 2)");
+	void compileAndRunJsonParseReturnsHashTablesAndVectors() throws Exception {
+		assertThat(compileAndRunJson("""
+				(let ((h (rontolisp:json-parse "{\\"name\\": \\"rontolisp\\", \\"n\\": 2}")))
+				  (print (list (gethash "name" h) (gethash "n" h))))
+				""")).isEqualTo("(\"rontolisp\" 2)");
 		assertThat(compileAndRunJson(
-				"(print (getf (rontolisp:json-parse \"{\\\"a\\\": {\\\"b\\\": [1, true, null]}}\") :a))"))
-			.isEqualTo("(:b (1 t nil))");
+				"(print (gethash \"b\" (gethash \"a\" (rontolisp:json-parse \"{\\\"a\\\": {\\\"b\\\": [1, true, null]}}\"))))"))
+			.isEqualTo("#(1 t null)");
 	}
 
 	@Test
@@ -6026,7 +6027,7 @@ class JvmLispCompilerTest {
 		// rl:/la: are built-in nicknames for rontolisp/linalg; the library pre-passes
 		// scan the program before package resolution, so they must recognize the
 		// nickname spellings or the splice never fires and compilation fails.
-		assertThat(compileAndRunJson("(print (getf (rl:json-parse \"{\\\"a\\\": 7}\") :a))")).isEqualTo("7");
+		assertThat(compileAndRunJson("(print (gethash \"a\" (rl:json-parse \"{\\\"a\\\": 7}\")))")).isEqualTo("7");
 		assertThat(compileAndRunLinalg("(print (la:to-list (la:from-list '(1 2 3))))")).isEqualTo("(1.0 2.0 3.0)");
 	}
 
@@ -6039,28 +6040,27 @@ class JvmLispCompilerTest {
 				(print (floatp (rontolisp:json-parse "1234567890123")))
 				(print (rontolisp:json-parse "[1, [2, \\"x\\"], null]"))
 				(print (rontolisp:json-parse "\\"\\\\u0041\\\\u3042\\""))
-				""")).isEqualTo("42\n-3.5\n1000.0\nt\n(1 (2 \"x\") nil)\n\"A\u3042\"");
+				""")).isEqualTo("42\n-3.5\n1000.0\nt\n#(1 #(2 \"x\") null)\n\"A\u3042\"");
 	}
 
 	@Test
-	void compileAndRunJsonParseHashTableMode() throws Exception {
+	void compileAndRunJsonParseObjectsAreHashTables() throws Exception {
 		assertThat(compileAndRunJson("""
-				(let ((h (rontolisp:json-parse "{\\"content-type\\": \\"text/html\\"}" :hash-table)))
-				  (print (gethash "content-type" h)))
+				(print (gethash "content-type"
+				                (rontolisp:json-parse "{\\"content-type\\": \\"text/html\\"}")))
 				""")).isEqualTo("\"text/html\"");
 	}
 
 	@Test
 	void compileAndRunJsonStringify() throws Exception {
 		assertThat(compileAndRunJson("""
-				(print (rontolisp:json-stringify (list :name "rontolisp" :ok t :ver 1.5)))
 				(print (rontolisp:json-stringify (list 1 (list 2 3) nil)))
+				(print (rontolisp:json-stringify (vector t 'null 1.5)))
 				(print (rontolisp:json-stringify 3/2))
-				(let ((h (make-hash-table)))
+				(let ((h (make-hash-table :test 'equal)))
 				  (setf (gethash "x" h) (list 1 2))
 				  (print (rontolisp:json-stringify h)))
-				""")).isEqualTo(
-				"\"{\"name\":\"rontolisp\",\"ok\":true,\"ver\":1.5}\"\n\"[1,[2,3],null]\"\n\"1.5\"\n\"{\"x\":[1,2]}\"");
+				""")).isEqualTo("\"[1,[2,3],false]\"\n\"[true,null,1.5]\"\n\"1.5\"\n\"{\"x\":[1,2]}\"");
 	}
 
 	@Test
@@ -6075,14 +6075,14 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRunJson("""
 				(print (funcall #'rontolisp:json-stringify (list 1 2)))
 				(print (funcall #'rontolisp:json-parse "[7]"))
-				""")).isEqualTo("\"[1,2]\"\n(7)");
+				""")).isEqualTo("\"[1,2]\"\n#(7)");
 	}
 
 	@Test
 	void compileAndRunJsonDoubleColonQualifierNamesTheSameFunctions() throws Exception {
 		assertThat(compileAndRunJson("""
 				(print (rontolisp::json-stringify (list 1 2 3)))
-				(print (getf (rontolisp::json-parse "{\\"n\\": 5}") :n))
+				(print (gethash "n" (rontolisp::json-parse "{\\"n\\": 5}")))
 				""")).isEqualTo("\"[1,2,3]\"\n5");
 	}
 
@@ -6093,6 +6093,34 @@ class JvmLispCompilerTest {
 				(print (rontolisp:json-parse "1"))
 				(print (rontolisp:list-functions :cl-user))
 				""")).isEqualTo("1\n(my-fn)");
+	}
+
+	@Test
+	void compileAndRunPlistAndAlistHashTable() throws Exception {
+		// single-key objects: hash-table iteration order is backend-specific
+		List<LispVal> program = am.ik.rontolisp.eval.JsonLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(print (rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "x"))))
+					(print (rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 5))))
+					(print (rontolisp:json-stringify (rontolisp:alist-hash-table (list (cons "msg" "hi")))))
+					(print (rontolisp:hash-table-alist (rontolisp:alist-hash-table (list (cons "k" 7)))))
+					""")));
+		assertThat(compileAndRun(program))
+			.isEqualTo("\"{\"name\":\"x\"}\"\n(:a 5)\n\"{\"msg\":\"hi\"}\"\n((\"k\" . 7))");
+	}
+
+	@Test
+	void compileAndRunJsonStringifyClosInstance() throws Exception {
+		// CLOS instance -> object (slots in definition order), a hash-table slot
+		// nests as an object, a list slot as an array -- matching jzon
+		assertThat(compileAndRunJson("""
+				(defclass json-resp () ((status :initarg :status) (headers :initarg :headers) (items :initarg :items)))
+				(let ((h (make-hash-table :test 'equal)))
+				  (setf (gethash "content-type" h) "application/json")
+				  (print (rontolisp:json-stringify
+				          (make-instance 'json-resp :status 200 :headers h :items (list 1 2 3)))))
+				"""))
+			.isEqualTo("\"{\"status\":200,\"headers\":{\"content-type\":\"application/json\"},\"items\":[1,2,3]}\"");
 	}
 
 	@Test

@@ -2427,20 +2427,53 @@ public final class LispNames {
 
 	/**
 	 * The {@code json-parse} function provided by the {@code rontolisp} package. Parses a
-	 * JSON document string into Lisp values (JavaScript {@code JSON.parse}-style). The
-	 * optional second argument selects the object representation: {@code :plist} (the
-	 * default; object keys become keywords) or {@code :hash-table} (object keys stay
-	 * strings).
+	 * JSON document string into Lisp values following {@code com.inuoe.jzon}'s defaults:
+	 * a JSON object becomes a hash table with string keys, an array a simple vector, and
+	 * {@code true}/{@code false}/{@code null} become {@code t}/{@code nil}/the symbol
+	 * {@code null} -- so it is a lightweight, forward-compatible subset of jzon.
 	 */
 	public static final String JSON_PARSE = "json-parse";
 
 	/**
 	 * The {@code json-stringify} function provided by the {@code rontolisp} package.
-	 * Serializes a Lisp value into a JSON document string (JavaScript
-	 * {@code JSON.stringify}-style); accepts both the plist and the hash-table object
-	 * representations produced by {@code rontolisp:json-parse}.
+	 * Serializes a Lisp value into a JSON document string following
+	 * {@code com.inuoe.jzon}'s defaults: {@code nil} is {@code false}, the symbol
+	 * {@code null} is {@code null}, a vector or list is an array, and a hash table is an
+	 * object -- the inverse of {@code rontolisp:json-parse}.
 	 */
 	public static final String JSON_STRINGIFY = "json-stringify";
+
+	/**
+	 * The {@code plist-hash-table} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:plist-hash-table}: builds a hash table from
+	 * a property list (odd elements keys, even elements values), passing any trailing
+	 * arguments on to {@code make-hash-table}. Pairs naturally with
+	 * {@code rontolisp:json-stringify} for building JSON objects.
+	 */
+	public static final String PLIST_HASH_TABLE = "plist-hash-table";
+
+	/**
+	 * The {@code hash-table-plist} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:hash-table-plist}: returns a property list
+	 * of the hash table's key/value pairs (the inverse of {@link #PLIST_HASH_TABLE}).
+	 */
+	public static final String HASH_TABLE_PLIST = "hash-table-plist";
+
+	/**
+	 * The {@code alist-hash-table} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:alist-hash-table}: builds a hash table from
+	 * an association list (first occurrence of a key wins), passing any trailing
+	 * arguments on to {@code make-hash-table}.
+	 */
+	public static final String ALIST_HASH_TABLE = "alist-hash-table";
+
+	/**
+	 * The {@code hash-table-alist} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:hash-table-alist}: returns an association
+	 * list of the hash table's key/value pairs (the inverse of
+	 * {@link #ALIST_HASH_TABLE}).
+	 */
+	public static final String HASH_TABLE_ALIST = "hash-table-alist";
 
 	/**
 	 * The {@code url-decode} function provided by the {@code rontolisp} package. Decodes

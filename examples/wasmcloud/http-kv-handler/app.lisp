@@ -47,8 +47,8 @@
   (let ((body (getf request :body)))
     (if (json-object-p body)
         (let* ((payload (rontolisp:json-parse body))
-               (key (getf payload :key))
-               (value (getf payload :value)))
+               (key (gethash "key" payload))
+               (value (gethash "value" payload)))
           (if (and (stringp key) (stringp value))
               (progn
                 (setf (gethash key *store*) value)

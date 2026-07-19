@@ -36,16 +36,20 @@
          (status (getf res :status))
          (body (rontolisp:await (rontolisp:read-all (getf res :body)))))
     (if (and (integerp status) (= status 200))
-        (getf (rontolisp:json-parse body) :message)
+        (gethash "message" (rontolisp:json-parse body))
         nil)))
 
 (rontolisp:async-defun handle (request)
   (if (string= (getf request :path) "/")
       (let ((dog (rontolisp:await (fetch-dog))))
         (if dog
-            (json-response 200 (list :dog dog))
-            (json-response 502 (list :error "the dog API did not answer"))))
-      (json-response 404 (list :error "not found"))))
+            (json-response 200
+                           (rontolisp:plist-hash-table (list :dog dog)))
+            (json-response 502
+                           (rontolisp:plist-hash-table
+                            (list :error "the dog API did not answer")))))
+      (json-response 404
+                     (rontolisp:plist-hash-table (list :error "not found")))))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

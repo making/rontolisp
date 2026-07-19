@@ -113,41 +113,37 @@ futures apart from plain values:
 
 ## Working with JSON
 
-`rontolisp:json-parse` turns a JSON document into Lisp values. By default a
-JSON object becomes a property list with keyword keys, so the result reads
-with `getf`; arrays become lists, `true`/`false`/`null` become `t`/`nil`:
+`rontolisp:json-parse` turns a JSON document into Lisp values following
+[`com.inuoe.jzon`](asdf-systems.md)'s defaults: a JSON object becomes a hash
+table with string keys, an array a vector, and `true`/`false`/`null` become
+`t`/`nil`/the symbol `null`:
 
 ```lisp
-(rontolisp:json-parse "{\"name\": \"rontolisp\", \"n\": 2}")   ; => (:name "rontolisp" :n 2)
+(gethash "name" (rontolisp:json-parse "{\"name\": \"rontolisp\", \"n\": 2}"))   ; => "rontolisp"
 ```
 
 ```lisp
-(getf (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}") :a)   ; => (:b (1 t nil))
+(gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}")))   ; => #(1 t null)
 ```
 
-Passing `:hash-table` returns hash tables with string keys instead — use it
-when keys are arbitrary strings or when an empty object must stay
-distinguishable from `nil`:
+`rontolisp:json-stringify` is the inverse: a hash table becomes an object, a
+vector or list an array, and `nil`/`t`/the symbol `null` become
+`false`/`true`/`null`:
 
 ```lisp
-(let ((h (rontolisp:json-parse "{\"content-type\": \"text/html\"}" :hash-table)))
-  (gethash "content-type" h))   ; => "text/html"
-```
-
-`rontolisp:json-stringify` is the inverse: keyword property lists and hash
-tables serialize to objects, other lists to arrays:
-
-```lisp
-(rontolisp:json-stringify (list :name "rontolisp" :ok t :ver 1.5))   ; => "{\"name\":\"rontolisp\",\"ok\":true,\"ver\":1.5}"
+(let ((h (make-hash-table :test 'equal)))
+  (setf (gethash "name" h) "rontolisp")
+  (rontolisp:json-stringify h))   ; => "{"name":"rontolisp"}"
 ```
 
 ```lisp
-(rontolisp:json-stringify (list 1 (list 2 3) nil))   ; => "[1,[2,3],null]"
+(rontolisp:json-stringify (list 1 (list 2 3) nil))   ; => "[1,[2,3],false]"
 ```
 
 Both functions are written in rontolisp itself and compile into the program
-on every backend; the full value mappings and the edge cases (integer width,
-`nil` ambiguity, key order) are on the
+on every backend, and are a lightweight subset of jzon — a program can switch
+to it unchanged. The full value mappings and the edge cases (integer width,
+key order) are on the
 [json-parse](../reference/functions/rontolisp-json-parse.md) and
 [json-stringify](../reference/functions/rontolisp-json-stringify.md)
 reference pages.
@@ -159,16 +155,19 @@ body with `json-stringify`, POST it, await the response and parse the body
 with `json-parse`. Save the following as `fetch-post.lisp`:
 
 ```console
-(let* ((payload (rontolisp:json-stringify (list :name "rontolisp" :stars 1)))
-       (res (rontolisp:await
-             (rontolisp:fetch "https://httpbin.org/post"
-                              (list :method "POST"
-                                    :headers (list (cons "Content-Type" "application/json"))
-                                    :body payload))))
-       (body (rontolisp:await (rontolisp:read-all (getf res :body))))
-       (json (rontolisp:json-parse body)))
-  (print (getf res :status))
-  (write-line (getf json :data)))
+(let ((req (make-hash-table :test 'equal)))
+  (setf (gethash "name" req) "rontolisp")
+  (setf (gethash "stars" req) 1)
+  (let* ((payload (rontolisp:json-stringify req))
+         (res (rontolisp:await
+               (rontolisp:fetch "https://httpbin.org/post"
+                                (list :method "POST"
+                                      :headers (list (cons "Content-Type" "application/json"))
+                                      :body payload))))
+         (body (rontolisp:await (rontolisp:read-all (getf res :body))))
+         (json (rontolisp:json-parse body)))
+    (print (getf res :status))
+    (write-line (gethash "data" json))))
 ```
 
 ```

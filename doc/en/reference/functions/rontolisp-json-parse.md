@@ -1,42 +1,52 @@
 # rontolisp:json-parse
 
-`(rontolisp:json-parse string &optional representation)`
+`(rontolisp:json-parse string)`
 
-Parses a JSON document string into Lisp values, modeled on JavaScript's
-`JSON.parse`. By default a JSON object becomes a property list whose keys are
-keywords, so the result reads with `getf` — the same shape as a
-[`rontolisp:fetch`](rontolisp-fetch.md) result. Passing `:hash-table` as the
-second argument returns hash tables instead, with the object keys kept as
-strings (the representation applies to nested objects too).
+Parses a JSON document string into Lisp values, following the defaults of the
+[`com.inuoe.jzon`](../../guides/asdf-systems.md) library: a JSON object becomes a
+hash table with string keys, an array a vector, and `true`/`false`/`null` become
+`t`, `nil` and the symbol `null`. `rontolisp:json-parse` is a lightweight subset
+of jzon, so a program can start here and later switch to jzon without changing
+shape — with a single deliberate exception, the wide-integer rule
+[noted below](#the-one-incompatibility-with-jzon).
+
+Switch to `com.inuoe.jzon` when you outgrow the subset: for its richer features
+(pretty-printing, a streaming writer, a `:replacer`, custom serialization), or
+to make the JSON code portable to other Common Lisp implementations —
+`com.inuoe.jzon` is a standard library, while `rontolisp:json-*` runs only on
+rontolisp.
 
 ```lisp
-(rontolisp:json-parse "{\"name\": \"rontolisp\", \"n\": 2}")   ; => (:name "rontolisp" :n 2)
-(getf (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}") :a)   ; => (:b (1 t nil))
-(let ((h (rontolisp:json-parse "{\"content-type\": \"text/html\"}" :hash-table)))
-  (gethash "content-type" h))   ; => "text/html"
+(gethash "name" (rontolisp:json-parse "{\"name\": \"rontolisp\", \"n\": 2}"))   ; => "rontolisp"
+(gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}")))   ; => #(1 t null)
 ```
 
 ## Value mapping
 
 | JSON | Lisp |
 |------|------|
-| object | plist with keyword keys (default) or hash table with string keys (`:hash-table`) |
-| array | list |
+| object | hash table with string keys (`equal` test) |
+| array | vector |
 | string | string (`\uXXXX` escapes and surrogate pairs are decoded) |
 | number | integer, or float when it has a fraction, an exponent or more than 9 digits |
 | `true` | `t` |
 | `false` | `nil` |
-| `null` | `nil` |
+| `null` | the symbol `null` |
 
 ```lisp
-(rontolisp:json-parse "[1, 2.5, \"x\", false, null]")   ; => (1 2.5 "x" nil nil)
+(rontolisp:json-parse "[1, 2.5, \"x\", false, null]")   ; => #(1 2.5 "x" nil null)
 (rontolisp:json-parse "1e3")   ; => 1000.0
 (rontolisp:json-parse "\"a\\u3042b\"")   ; => "aあb"
 ```
 
+### The one incompatibility with jzon
+
 Integers wider than 9 digits become floats on every backend, keeping the value
-inside the WASM backend's `i31` integer range (a 13-digit millisecond
-timestamp parses as `1.234567890123E12` everywhere):
+inside the WASM backend's `i31` integer range and identical across all
+backends. jzon instead keeps them as exact integers, so this is the single
+point where `rontolisp:json-parse` and `jzon:parse` disagree — a 13-digit
+millisecond timestamp parses as `1.234567890123E12` here but as
+`1234567890123` under jzon. Everything else round-trips identically.
 
 ```lisp
 (floatp (rontolisp:json-parse "1234567890123"))   ; => t
@@ -44,33 +54,21 @@ timestamp parses as `1.234567890123E12` everywhere):
 
 ## Errors
 
-Invalid JSON, trailing characters after the value, and an unknown
-representation argument signal an error when `json-parse` is called:
+Invalid JSON and trailing characters after the value signal an error when
+`json-parse` is called:
 
 ```console
 > (rontolisp:json-parse "{\"a\": ")
 Error: json-parse: unexpected end of input
-> (rontolisp:json-parse "1" :alist)
-Error: json-parse: the object representation must be :plist or :hash-table
-```
-
-In the plist representation an object key must read back as a single keyword;
-a key containing spaces or other symbol-breaking characters signals an error
-suggesting `:hash-table`, where any key string works:
-
-```lisp
-(let ((h (rontolisp:json-parse "{\"a b\": 1}" :hash-table)))
-  (gethash "a b" h))   ; => 1
+> (rontolisp:json-parse "1 2")
+Error: json-parse: unexpected trailing characters
 ```
 
 ## Limitations
 
-- `{}`, `false` and `null` all parse to `nil` in the plist representation (an
-  empty JSON array `[]` is the empty list, which is also `nil`). Use
-  `:hash-table` when an empty object must stay distinguishable.
-- `nil`, `t` and keywords are also valid plist values, so a parsed plist is
-  unambiguous only as long as the document's shape is known — like
-  JavaScript objects, JSON round-trips by shape, not by type.
+- A JSON object always parses to a hash table, so `{}` (an empty hash table) is
+  distinct from `false`/`nil`, from an empty array `#()`, and from the `null`
+  symbol — unlike JavaScript, the four are never conflated.
 - On the WASM backends a float with magnitude 2³¹ or larger parses correctly
   but cannot be *printed* (`print`/`princ-to-string` trap); see the
   [WASM guide](../../compiling/wasm.md).
@@ -83,9 +81,9 @@ used. The typical use is parsing a [`rontolisp:fetch`](rontolisp-fetch.md)
 response body:
 
 ```console
-(print (getf (rontolisp:json-parse
-              (getf (rontolisp:await (rontolisp:fetch "https://httpbin.org/get")) :body))
-             :url))   ; "https://httpbin.org/get"
+(print (gethash "url"
+                (rontolisp:json-parse
+                 (getf (rontolisp:await (rontolisp:fetch "https://httpbin.org/get")) :body))))   ; "https://httpbin.org/get"
 ```
 
 The inverse operation is [`rontolisp:json-stringify`](rontolisp-json-stringify.md).

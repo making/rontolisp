@@ -58,7 +58,7 @@
 (defun handle-task (request)
   (let ((body (getf request :body)))
     (if (json-object-p body)
-        (let ((payload (getf (rontolisp:json-parse body) :payload)))
+        (let ((payload (gethash "payload" (rontolisp:json-parse body))))
           (if (stringp payload)
               (let ((reply (leet-request payload)))
                 (if reply

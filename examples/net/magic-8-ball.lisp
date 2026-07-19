@@ -46,7 +46,7 @@
         (body (getf request :body)))
     (cond ((and q (> (length q) 0)) q)
           ((and (stringp body) (> (length body) 0) (eql (char body 0) #\{))
-           (getf (rontolisp:json-parse body) :question))
+           (gethash "question" (rontolisp:json-parse body)))
           ((and (stringp body) (> (length body) 0)) body)
           (t nil))))
 
@@ -64,12 +64,16 @@
     (if (or (string= path "/") (string= path "/magic-8"))
         (let ((question (question-of request)))
           (if question
-              (json-response 200 (list :question question
-                                       :answer (consult)))
+              (json-response 200
+                             (rontolisp:plist-hash-table
+                              (list :question question :answer (consult))))
               (json-response 400
-                             (list :error "ask the ball a question"
-                                   :usage "GET /?question=... or POST a question body"))))
-        (json-response 404 (list :error "not found" :path path)))))
+                             (rontolisp:plist-hash-table
+                              (list :error "ask the ball a question"
+                                    :usage "GET /?question=... or POST a question body")))))
+        (json-response 404
+                       (rontolisp:plist-hash-table
+                        (list :error "not found" :path path))))))
 
 ;; The request :body is an asynchronous stream on every backend; drain it once
 ;; here and hand the helpers a request whose :body is the whole string (getf

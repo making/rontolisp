@@ -16,7 +16,7 @@ A symbol can be referenced with a package qualifier: `package:symbol` (e.g. `cl:
 ```lisp
 (print *package*)              ; => cl-user
 (print (rontolisp:version))    ; => (:version "0.1.0-SNAPSHOT" :build-timestamp "..." :git-commit "..." :git-branch "...")
-(print (getf (rl:json-parse "{\"n\": 41}") :n))     ; => 41
+(print (gethash "n" (rl:json-parse "{\"n\": 41}")))  ; => 41
 (print (la:to-list (la:from-list '(1 2 3))))        ; => (1.0 2.0 3.0)
 ```
 
@@ -57,7 +57,7 @@ A single-colon reference to a non-external symbol is an error at read/compile
 time:
 
 ```console
-> (rontolisp:%json-parse "1" nil)
+> (rontolisp:%json-parse "1")
 Error: The symbol %json-parse is not external in the rontolisp package (use rontolisp::%json-parse)
 ```
 

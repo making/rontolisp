@@ -22,10 +22,10 @@ import org.jspecify.annotations.Nullable;
  * implemented once in rontolisp itself ({@code json.lisp} on the classpath) so a single
  * hand-written parser/serializer runs on every backend. The public functions are not
  * plain {@code defun}s: the library defines the fixed-arity internal (double-colon) entry
- * points {@code rontolisp::%json-parse} (two arguments) and
- * {@code rontolisp::%json-stringify} (one argument), and the optional-argument public
- * surface is supplied around them by a dispatcher (interpreter) / call-site rewrite
- * (compile path) -- see {@code .kb/json.md}.
+ * points {@code rontolisp::%json-parse} (one argument) and
+ * {@code rontolisp::%json-stringify} (one argument), and the public surface is supplied
+ * around them by a dispatcher (interpreter) / call-site rewrite (compile path) -- see
+ * {@code .kb/json.md}.
  *
  * <p>
  * Consumers:
@@ -35,9 +35,8 @@ import org.jspecify.annotations.Nullable;
  * <li>the compile path ({@code RontoLispCli}, the web playground, and tests that drive
  * the compilers directly) calls {@link #process(List)} after user-macro expansion: when
  * the program references the public functions, call sites are rewritten to the
- * fixed-arity helpers (a one-argument {@code json-parse} call gets {@code nil} appended)
- * and the library definitions plus one-argument {@code #'}-wrapper defuns are
- * prepended.</li>
+ * fixed-arity helpers and the library definitions plus one-argument {@code #'}-wrapper
+ * defuns are prepended.</li>
  * </ul>
  */
 public final class JsonLibrary {
@@ -61,7 +60,7 @@ public final class JsonLibrary {
 	// reached through (function ...) / symbol-function / funcall). Single arity,
 	// like the BuiltinFunctionWrappers entries for optional-argument built-ins.
 	private static final String WRAPPER_SOURCE = """
-			(defun rontolisp:json-parse (s) (rontolisp::%json-parse s nil))
+			(defun rontolisp:json-parse (s) (rontolisp::%json-parse s))
 			(defun rontolisp:json-stringify (v) (rontolisp::%json-stringify v))
 			""";
 
@@ -198,7 +197,7 @@ public final class JsonLibrary {
 			if (cons.car() instanceof LispSymbol op) {
 				if (matches(op.name(), LispNames.JSON_PARSE)) {
 					this.found = true;
-					return rewriteCall(cons, QUALIFIED_PARSE, HELPER_PARSE, 1, 2, true);
+					return rewriteCall(cons, QUALIFIED_PARSE, HELPER_PARSE, 1, 1, false);
 				}
 				if (matches(op.name(), LispNames.JSON_STRINGIFY)) {
 					this.found = true;

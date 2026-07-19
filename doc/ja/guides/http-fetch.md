@@ -118,43 +118,37 @@ future と通常の値を見分けられます:
 
 ## JSONの扱い
 
-`rontolisp:json-parse` はJSONドキュメントをLispの値に変換します。デフォルト
-ではJSONオブジェクトはキーワードをキーとするプロパティリストになるので、
-結果は `getf` で読めます。配列はリストに、`true`/`false`/`null` は
-`t`/`nil` になります:
+`rontolisp:json-parse` はJSONドキュメントをLispの値に変換します。挙動は
+[`com.inuoe.jzon`](asdf-systems.md) のデフォルトに従います: JSONオブジェクトは
+文字列をキーとするハッシュテーブルに、配列はベクタになり、`true`/`false`/`null`
+はそれぞれ `t`/`nil`/シンボル `null` になります:
 
 ```lisp
-(rontolisp:json-parse "{\"name\": \"rontolisp\", \"n\": 2}")   ; => (:name "rontolisp" :n 2)
+(gethash "name" (rontolisp:json-parse "{\"name\": \"rontolisp\", \"n\": 2}"))   ; => "rontolisp"
 ```
 
 ```lisp
-(getf (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}") :a)   ; => (:b (1 t nil))
+(gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}")))   ; => #(1 t null)
 ```
 
-`:hash-table` を渡すと、代わりに文字列キーのハッシュテーブルが返ります —
-キーが任意の文字列のときや、空オブジェクトを `nil` と区別し続けたいときに
-使ってください:
+`rontolisp:json-stringify` はその逆です: ハッシュテーブルはオブジェクトに、
+ベクタまたはリストは配列になり、`nil`/`t`/シンボル `null` はそれぞれ
+`false`/`true`/`null` になります:
 
 ```lisp
-(let ((h (rontolisp:json-parse "{\"content-type\": \"text/html\"}" :hash-table)))
-  (gethash "content-type" h))   ; => "text/html"
-```
-
-`rontolisp:json-stringify` はその逆です: キーワードのプロパティリストと
-ハッシュテーブルはオブジェクトに、その他のリストは配列にシリアライズ
-されます:
-
-```lisp
-(rontolisp:json-stringify (list :name "rontolisp" :ok t :ver 1.5))   ; => "{\"name\":\"rontolisp\",\"ok\":true,\"ver\":1.5}"
+(let ((h (make-hash-table :test 'equal)))
+  (setf (gethash "name" h) "rontolisp")
+  (rontolisp:json-stringify h))   ; => "{"name":"rontolisp"}"
 ```
 
 ```lisp
-(rontolisp:json-stringify (list 1 (list 2 3) nil))   ; => "[1,[2,3],null]"
+(rontolisp:json-stringify (list 1 (list 2 3) nil))   ; => "[1,[2,3],false]"
 ```
 
-どちらの関数もrontolisp自身で書かれていて、使われたときにプログラムに
-コンパイルされ、すべてのバックエンドで動作します。値の対応表と
-エッジケース (整数の桁数、`nil` の曖昧さ、キーの順序) の全体は
+どちらの関数もrontolisp自身で書かれていて、すべてのバックエンドで使われた
+ときにプログラムへコンパイルされます。またjzonの軽量なサブセットなので —
+プログラムはそのままjzonへ切り替えられます。値の対応表の全体とエッジケース
+(整数の桁数、キーの順序) は
 [json-parse](../reference/functions/rontolisp-json-parse.md) と
 [json-stringify](../reference/functions/rontolisp-json-stringify.md)
 のリファレンスページにあります。
@@ -167,16 +161,19 @@ future と通常の値を見分けられます:
 してください:
 
 ```console
-(let* ((payload (rontolisp:json-stringify (list :name "rontolisp" :stars 1)))
-       (res (rontolisp:await
-             (rontolisp:fetch "https://httpbin.org/post"
-                              (list :method "POST"
-                                    :headers (list (cons "Content-Type" "application/json"))
-                                    :body payload))))
-       (body (rontolisp:await (rontolisp:read-all (getf res :body))))
-       (json (rontolisp:json-parse body)))
-  (print (getf res :status))
-  (write-line (getf json :data)))
+(let ((req (make-hash-table :test 'equal)))
+  (setf (gethash "name" req) "rontolisp")
+  (setf (gethash "stars" req) 1)
+  (let* ((payload (rontolisp:json-stringify req))
+         (res (rontolisp:await
+               (rontolisp:fetch "https://httpbin.org/post"
+                                (list :method "POST"
+                                      :headers (list (cons "Content-Type" "application/json"))
+                                      :body payload))))
+         (body (rontolisp:await (rontolisp:read-all (getf res :body))))
+         (json (rontolisp:json-parse body)))
+    (print (getf res :status))
+    (write-line (gethash "data" json))))
 ```
 
 ```

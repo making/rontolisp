@@ -7797,31 +7797,54 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void jsonOpsWorkInPreview1Mode() throws Exception {
 		// The Lisp-source JSON library (spliced by JsonLibrary.process, mirroring the
-		// cli pre-pass) runs in Preview 1: plist and hash-table object modes, escapes
-		// (including \\uXXXX decoded to UTF-8 bytes), numbers, stringify and the
+		// cli pre-pass) runs in Preview 1 with jzon's value mapping: objects become
+		// hash tables with string keys, arrays vectors, null the symbol null, plus
+		// escapes (\\uXXXX decoded to UTF-8 bytes), numbers, stringify and the
 		// #' wrappers.
-		assertThat(
-				compileAndRunJson("(print (rontolisp:json-parse \"{\\\"name\\\": \\\"rontolisp\\\", \\\"n\\\": 2}\"))"))
-			.isEqualTo("(:name \"rontolisp\" :n 2)");
+		assertThat(compileAndRunJson("""
+				(let ((h (rontolisp:json-parse "{\\"name\\": \\"rontolisp\\", \\"n\\": 2}")))
+				  (print (list (gethash "name" h) (gethash "n" h))))
+				""")).isEqualTo("(\"rontolisp\" 2)");
 		assertThat(compileAndRunJson("""
 				(print (rontolisp:json-parse "42"))
 				(print (rontolisp:json-parse "1e3"))
 				(print (floatp (rontolisp:json-parse "1234567890123")))
 				(print (rontolisp:json-parse "[1, [2, \\"x\\"], null]"))
 				(print (rontolisp:json-parse "\\"\\\\u0041\\\\u3042\\""))
-				""")).isEqualTo("42\n1000.0\nt\n(1 (2 \"x\") nil)\n\"A\u3042\"");
+				""")).isEqualTo("42\n1000.0\nt\n#(1 #(2 \"x\") null)\n\"A\u3042\"");
 		assertThat(compileAndRunJson("""
-				(let ((h (rontolisp:json-parse "{\\"content-type\\": \\"text/html\\"}" :hash-table)))
-				  (print (gethash "content-type" h)))
+				(print (gethash "content-type"
+				                (rontolisp:json-parse "{\\"content-type\\": \\"text/html\\"}")))
 				""")).isEqualTo("\"text/html\"");
 		assertThat(compileAndRunJson(
 				"""
-						(print (rontolisp:json-stringify (list :name "rontolisp" :ok t :ver 1.5)))
+						(print (rontolisp:json-stringify (list 1 (list 2 3) nil)))
 						(print (rontolisp:json-stringify (rontolisp:json-parse "{\\"deep\\": {\\"list\\": [{\\"k\\": \\"v\\"}, 2.5, true]}}")))
 						(print (funcall #'rontolisp:json-stringify (list 1 2)))
 						"""))
-			.isEqualTo(
-					"\"{\"name\":\"rontolisp\",\"ok\":true,\"ver\":1.5}\"\n\"{\"deep\":{\"list\":[{\"k\":\"v\"},2.5,true]}}\"\n\"[1,2]\"");
+			.isEqualTo("\"[1,[2,3],false]\"\n\"{\"deep\":{\"list\":[{\"k\":\"v\"},2.5,true]}}\"\n\"[1,2]\"");
+	}
+
+	@Test
+	void plistHashTableAndClosObjectsInPreview1Mode() throws Exception {
+		// rontolisp:plist-hash-table (prelude, an alexandria subset) builds objects,
+		// and json-stringify serializes a CLOS instance as an object (slots in
+		// definition order; a hash-table slot nests as an object) -- single-key
+		// objects keep the output backend-stable.
+		List<LispVal> program = am.ik.rontolisp.eval.JsonLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+					"""
+							(print (rontolisp:json-stringify (rontolisp:plist-hash-table (list :msg "hi"))))
+							(print (rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 1))))
+							(print (rontolisp:json-stringify (rontolisp:alist-hash-table (list (cons "x" 1)))))
+							(defclass json-resp () ((status :initarg :status) (headers :initarg :headers) (items :initarg :items)))
+							(let ((h (make-hash-table :test 'equal)))
+							  (setf (gethash "content-type" h) "application/json")
+							  (print (rontolisp:json-stringify
+							          (make-instance 'json-resp :status 200 :headers h :items (list 1 2 3)))))
+							""")));
+		assertThat(compileAndRunProgram(program)).isEqualTo(
+				"\"{\"msg\":\"hi\"}\"\n(:a 1)\n\"{\"x\":1}\"\n\"{\"status\":200,\"headers\":{\"content-type\":\"application/json\"},\"items\":[1,2,3]}\"");
 	}
 
 	@Test

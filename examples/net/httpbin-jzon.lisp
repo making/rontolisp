@@ -1,42 +1,39 @@
-;; A miniature httpbin (https://httpbin.org) built on rontolisp:http-handler --
-;; the advanced companion of http-handler.lisp. Five echo endpoints respond
-;; with a JSON document describing the request, built with
-;; rontolisp:json-stringify (and rontolisp:json-parse for the request body):
+;; The jzon flavour of httpbin.lisp: the very same program, but the JSON is
+;; parsed and rendered by the real com.inuoe.jzon library instead of
+;; rontolisp:json-parse / rontolisp:json-stringify. rontolisp:json-* is a
+;; lightweight subset of jzon with the same value mapping, so the switch is
+;; mechanical -- only the two call sites change (json-parse -> jzon:parse,
+;; json-stringify -> jzon:stringify), and everything else (rontolisp:plist-hash-table
+;; for the objects, the symbol null for JSON null) works unchanged. Reach for
+;; jzon when you outgrow the subset (pretty printing, a streaming writer,
+;; :replacer, custom serialization).
 ;;
 ;;   GET    /get      -> {"args": {...}, "headers": {...}, "method": "GET",  "path": "/get"}
 ;;   POST   /post     -> the same plus {"data": "<raw body>", "json": <parsed body or null>}
-;;   PUT    /put      -> ditto
-;;   PATCH  /patch    -> ditto
-;;   DELETE /delete   -> ditto
+;;   PUT/PATCH/DELETE  -> ditto ; a wrong method 405, an unknown path 404.
 ;;
-;; A wrong method answers 405, an unknown path 404. Query strings are parsed
-;; into "args" with rontolisp:query-params (keys and values url-decoded);
-;; "json" is filled only when the body starts
-;; with '{' or '[' (malformed JSON then signals an error -- rontolisp has no
-;; condition handling to fall back to null like the real httpbin).
-;; On the JVM and WASM component backends "headers" is always {} (request
-;; headers are not marshalled there yet) and the response content-type header
-;; is ignored; only the interpreter passes headers through.
+;; ql:quickload downloads com.inuoe.jzon (and caches it) the first time -- at
+;; compile time for the compiled backends, so the library is baked in.
 ;;
 ;; Run (interpreter, blocking server on :8080):
-;;   java -jar $JAR examples/net/httpbin.lisp
+;;   java -jar $JAR examples/net/httpbin-jzon.lisp
 ;; Run (JVM class; needs the rontolisp jar on the classpath):
-;;   java -jar $JAR examples/net/httpbin.lisp -o Httpbin.class && java -cp $JAR:. Httpbin
+;;   java -jar $JAR examples/net/httpbin-jzon.lisp -o HttpbinJzon.class && java -cp $JAR:. HttpbinJzon
 ;; Run (WASI component under wasmtime serve):
-;;   java -jar $JAR examples/net/httpbin.lisp -o httpbin.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y httpbin.wasm
-;; Talk to it with:
-;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'
-;;   curl -X POST -d '{"name":"rontolisp"}' http://127.0.0.1:8080/post
+;;   java -jar $JAR examples/net/httpbin-jzon.lisp -o httpbin-jzon.wasm --component && \
+;;     wasmtime serve -W gc=y -W exceptions=y httpbin-jzon.wasm
+
+(ql:quickload '#:com.inuoe.jzon)
 
 ;; --- request helpers ------------------------------------------------------
 
-;; Parse the body as JSON when it looks like a JSON object or array.
+;; Parse the body with jzon when it looks like a JSON object or array, else the
+;; symbol null (jzon's JSON-null sentinel, which jzon:stringify renders as null).
 (defun body-json (body)
   (if (and (stringp body)
            (> (length body) 0)
            (or (eql (char body 0) #\{) (eql (char body 0) #\[)))
-      (rontolisp:json-parse body)
+      (com.inuoe.jzon:parse body)
       'null))
 
 ;; --- responses ------------------------------------------------------------
@@ -44,16 +41,13 @@
 (defun json-response (status obj)
   (list :status status
         :headers (list (cons "content-type" "application/json"))
-        :body (format nil "~a~%" (rontolisp:json-stringify obj))))
+        :body (format nil "~a~%" (com.inuoe.jzon:stringify obj))))
 
-;; The common echo fields, as a JSON object. rontolisp:plist-hash-table (a
-;; subset of alexandria:plist-hash-table) turns a keyword plist into a
-;; string-keyed hash table, which json-stringify serializes as an object --
-;; keyword keys are down-cased, so :method becomes "method". "args" and
-;; "headers" are themselves objects: query-params and the request headers are
-;; already alists, so rontolisp:alist-hash-table (a subset of
-;; alexandria:alist-hash-table) turns each into a hash table -- an empty (or
-;; missing) query still serializes as {}.
+;; The common echo fields, as a JSON object. rontolisp:plist-hash-table and
+;; rontolisp:alist-hash-table (subsets of the alexandria utilities) build the
+;; hash tables, which jzon:stringify serializes as objects (their keyword keys
+;; down-cased); the standalone utilities need no change when the JSON library
+;; does.
 (defun request-info (request)
   (rontolisp:plist-hash-table
    (list :args (rontolisp:alist-hash-table (rontolisp:query-params (getf request :query)))
@@ -70,8 +64,6 @@
     (setf (gethash "json" info) (body-json (getf request :body)))
     (json-response 200 info)))
 
-;; Echo the request (with the body fields when with-body is non-nil) only
-;; when the request used the expected method; otherwise 405.
 (defun echo-when (request expected with-body)
   (cond ((not (string= (getf request :method) expected))
          (json-response 405 (rontolisp:plist-hash-table
@@ -81,8 +73,6 @@
 
 ;; --- routing --------------------------------------------------------------
 
-;; The request plist's :path carries the path only (the query string arrives
-;; separately as :query), so the comparisons are exact.
 (defun route (request)
   (let ((path (getf request :path)))
     (cond ((string= path "/get") (echo-when request "GET" nil))
@@ -94,8 +84,7 @@
                                  (list :error "not found" :path path)))))))
 
 ;; The request :body is an asynchronous stream on every backend; drain it once
-;; here and hand the helpers a request whose :body is the whole string (getf
-;; finds the prepended pair first).
+;; here and hand the helpers a request whose :body is the whole string.
 (rontolisp:async-defun handle (request)
   (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
     (route (append (list :body body) request))))

@@ -298,8 +298,12 @@ package system. Each name below links to its own page.
 | `rontolisp:read-all` | `(rontolisp:read-all s)` | a future settling to the concatenation of all remaining string chunks |
 | `rontolisp:wait-for` | `(rontolisp:wait-for 100)` | a future settling to `nil` after the given milliseconds; the async counterpart of `cl:sleep` |
 | `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | serve HTTP requests with a handler function (a blocking server; a `wasi:http` component under `--component`) |
-| `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | parse a JSON string: objects become keyword plists, or hash tables with `:hash-table` |
-| `rontolisp:json-stringify` | `(rontolisp:json-stringify (list :n 1))` | serialize a value (plists and hash tables become objects) to a JSON string |
+| `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | parse a JSON string (jzon-compatible): objects become hash tables with string keys, arrays vectors |
+| `rontolisp:json-stringify` | `(rontolisp:json-stringify (vector 1 2))` | serialize a value to a JSON string (hash tables and CLOS instances become objects, lists and vectors arrays) |
+| `rontolisp:plist-hash-table` | `(rontolisp:plist-hash-table (list :n 1))` | build a hash table from a property list (subset of `alexandria:plist-hash-table`); handy for JSON objects |
+| `rontolisp:hash-table-plist` | `(rontolisp:hash-table-plist h)` | property list of a hash table's pairs (subset of `alexandria:hash-table-plist`) |
+| `rontolisp:alist-hash-table` | `(rontolisp:alist-hash-table al)` | build a hash table from an association list (subset of `alexandria:alist-hash-table`) |
+| `rontolisp:hash-table-alist` | `(rontolisp:hash-table-alist h)` | association list of a hash table's pairs (subset of `alexandria:hash-table-alist`) |
 | `rontolisp:tcp-connect` | `(rontolisp:tcp-connect "127.0.0.1" 7777)` | open a blocking TCP connection; returns a bidirectional stream handle |
 | `rontolisp:tcp-listen` | `(rontolisp:tcp-listen 7777)`, `(rontolisp:tcp-listen 0 "127.0.0.1")` | bind a listening TCP socket and return a listener handle; port `0` picks a free ephemeral port |
 | `rontolisp:tcp-accept` | `(rontolisp:tcp-accept listener)` | wait for a client connection (blocking); returns a bidirectional stream handle |
@@ -332,7 +336,7 @@ function over the same request/response property lists; see the
 backend, and the [http-handler](functions/rontolisp-http-handler.md) reference
 page for backend support and limitations. `rontolisp:json-parse` and
 `rontolisp:json-stringify` convert between JSON documents and Lisp values
-(JavaScript `JSON.parse`/`JSON.stringify` style) -- for example to parse a
+(a lightweight, `com.inuoe.jzon`-compatible subset) -- for example to parse a
 fetch response body; see the
 [json-parse](functions/rontolisp-json-parse.md) and
 [json-stringify](functions/rontolisp-json-stringify.md) reference pages for

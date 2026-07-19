@@ -294,8 +294,12 @@
 | `rontolisp:read-all` | `(rontolisp:read-all s)` | 残りの文字列チャンクすべての連結で確定する future |
 | `rontolisp:wait-for` | `(rontolisp:wait-for 100)` | 指定ミリ秒後に `nil` で確定する future。`cl:sleep` の非同期版の対応物 |
 | `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | ハンドラ関数でHTTPリクエストを処理します（ブロッキングサーバ。`--component` では `wasi:http` コンポーネント） |
-| `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | JSON文字列をパースします: オブジェクトはキーワードのplist（`:hash-table` 指定でハッシュテーブル）になります |
-| `rontolisp:json-stringify` | `(rontolisp:json-stringify (list :n 1))` | 値（plistとハッシュテーブルはオブジェクト）をJSON文字列にシリアライズします |
+| `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | JSON文字列をパースします（jzon互換）: オブジェクトは文字列キーのハッシュテーブル、配列はベクタになります |
+| `rontolisp:json-stringify` | `(rontolisp:json-stringify (vector 1 2))` | 値をJSON文字列にシリアライズします（ハッシュテーブルとCLOSインスタンスはオブジェクト、リストとベクタは配列） |
+| `rontolisp:plist-hash-table` | `(rontolisp:plist-hash-table (list :n 1))` | プロパティリストからハッシュテーブルを構築します（`alexandria:plist-hash-table` のサブセット）。JSONオブジェクトに便利です |
+| `rontolisp:hash-table-plist` | `(rontolisp:hash-table-plist h)` | ハッシュテーブルのペアのプロパティリスト（`alexandria:hash-table-plist` のサブセット） |
+| `rontolisp:alist-hash-table` | `(rontolisp:alist-hash-table al)` | 連想リストからハッシュテーブルを構築します（`alexandria:alist-hash-table` のサブセット） |
+| `rontolisp:hash-table-alist` | `(rontolisp:hash-table-alist h)` | ハッシュテーブルのペアの連想リスト（`alexandria:hash-table-alist` のサブセット） |
 | `rontolisp:tcp-connect` | `(rontolisp:tcp-connect "127.0.0.1" 7777)` | ブロッキングTCP接続を開きます。双方向ストリームハンドルを返します |
 | `rontolisp:tcp-listen` | `(rontolisp:tcp-listen 7777)`, `(rontolisp:tcp-listen 0 "127.0.0.1")` | リスニングTCPソケットをバインドしてリスナーハンドルを返します。ポート `0` は空きエフェメラルポートを選びます |
 | `rontolisp:tcp-accept` | `(rontolisp:tcp-accept listener)` | クライアント接続を待ちます (ブロッキング)。双方向ストリームハンドルを返します |
@@ -322,7 +326,7 @@
 [await](special-forms/rontolisp-await.md)、
 [futurep](functions/rontolisp-futurep.md) のリファレンスページを参照してください。`rontolisp:http-handler` は `fetch` の受信側で、同じリクエスト／レスポンスのプロパティリストを使ってハンドラ関数でHTTPリクエストを処理します。各バックエンドでの実例は
 [HTTPサーバガイド](../guides/http-handler.md)を、バックエンドのサポートと制限は
-[http-handler](functions/rontolisp-http-handler.md) のリファレンスページを参照してください。`rontolisp:json-parse` と `rontolisp:json-stringify` はJSONドキュメントとLispの値を相互変換します（JavaScriptの `JSON.parse`/`JSON.stringify` 相当。fetchレスポンスボディのパースなどに使えます）。値の対応と制限については
+[http-handler](functions/rontolisp-http-handler.md) のリファレンスページを参照してください。`rontolisp:json-parse` と `rontolisp:json-stringify` はJSONドキュメントとLispの値を相互変換します（`com.inuoe.jzon` 互換の軽量サブセット。fetchレスポンスボディのパースなどに使えます）。値の対応と制限については
 [json-parse](functions/rontolisp-json-parse.md) と
 [json-stringify](functions/rontolisp-json-stringify.md) のリファレンスページを参照してください。tcp関数（`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port` および[アドレスアクセサ](functions/rontolisp-tcp-addresses.md)）は素のTCPソケットを開き、そのハンドルには標準のストリーム関数（`read-line` / `write-line` / `read-byte` / `write-byte` / `close`）がそのまま使えます。echoサーバーの実例は
 [TCPソケットガイド](../guides/tcp-sockets.md)を、バックエンドのサポートと制限は

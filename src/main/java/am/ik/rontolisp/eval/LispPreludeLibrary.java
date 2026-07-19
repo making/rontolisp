@@ -38,6 +38,11 @@ import am.ik.rontolisp.reader.LispReader;
  * characters; mirrors the interpreter's Java primitive.</li>
  * <li>{@code rontolisp:read-all} -- an {@code rontolisp:async-defun} draining an
  * asynchronous stream's string chunks into one string.</li>
+ * <li>{@code rontolisp:plist-hash-table} / {@code rontolisp:hash-table-plist} and
+ * {@code rontolisp:alist-hash-table} / {@code rontolisp:hash-table-alist} -- lightweight
+ * subsets of the same-named {@code alexandria} utilities, converting a property list or
+ * association list to a hash table (and back); the {@code *-hash-table} ones pair with
+ * {@code rontolisp:json-stringify} for building JSON objects.</li>
  * </ul>
  */
 public final class LispPreludeLibrary {
@@ -170,6 +175,33 @@ public final class LispPreludeLibrary {
 				      (setq acc (concatenate 'string acc chunk))
 				      (setq chunk (rontolisp:await (rontolisp:stream-read s))))
 				    acc))
+				""");
+		SOURCES.put(LispNames.PLIST_HASH_TABLE, """
+				(defun rontolisp:plist-hash-table (plist &rest hash-table-initargs)
+				  (let ((table (apply #'make-hash-table hash-table-initargs)))
+				    (do ((tail plist (cddr tail)))
+				        ((null tail) table)
+				      (setf (gethash (car tail) table) (cadr tail)))))
+				""");
+		SOURCES.put(LispNames.HASH_TABLE_PLIST, """
+				(defun rontolisp:hash-table-plist (table)
+				  (let ((%htp-acc nil))
+				    (maphash (lambda (k v) (setq %htp-acc (cons k (cons v %htp-acc)))) table)
+				    %htp-acc))
+				""");
+		SOURCES.put(LispNames.ALIST_HASH_TABLE, """
+				(defun rontolisp:alist-hash-table (alist &rest hash-table-initargs)
+				  (let ((table (apply #'make-hash-table hash-table-initargs)))
+				    (dolist (cell alist)
+				      (unless (nth-value 1 (gethash (car cell) table))
+				        (setf (gethash (car cell) table) (cdr cell))))
+				    table))
+				""");
+		SOURCES.put(LispNames.HASH_TABLE_ALIST, """
+				(defun rontolisp:hash-table-alist (table)
+				  (let ((%hta-acc nil))
+				    (maphash (lambda (k v) (setq %hta-acc (cons (cons k v) %hta-acc))) table)
+				    %hta-acc))
 				""");
 		SOURCES.put(LispNames.GET_SETF_EXPANSION, """
 				(defun get-setf-expansion (place &optional env)

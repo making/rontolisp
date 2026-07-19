@@ -59,11 +59,16 @@
   ;; handler's result, and await flattens the future echo returns.
   (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
     (if (json-object-p body)
-        (let ((message (getf (rontolisp:json-parse body) :message)))
+        (let ((message (gethash "message" (rontolisp:json-parse body))))
           (if (stringp message)
-              (json-response 200 (list :message message))
-              (json-response 400 (list :error "expected a JSON object with a string message field"))))
-        (json-response 400 (list :error "expected a JSON object with a string message field")))))
+              (json-response 200
+                             (rontolisp:plist-hash-table (list :message message)))
+              (json-response 400
+                             (rontolisp:plist-hash-table
+                              (list :error "expected a JSON object with a string message field")))))
+        (json-response 400
+                       (rontolisp:plist-hash-table
+                        (list :error "expected a JSON object with a string message field"))))))
 
 (defun not-found (request)
   (text-response 404 (format nil "Not found~%")))

@@ -411,6 +411,10 @@ examples:
     systemPath: src/test/resources/cl-who
   - path: net/httpbin.lisp
     backends: [jvm-compile, wasm-component]
+  - path: net/httpbin-clos.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/httpbin-jzon.lisp
+    backends: [jvm-compile, wasm-component]
   - path: net/magic-8-ball.lisp
     backends: [jvm-compile, wasm-component]
   - path: net/dog-fetcher.lisp

@@ -4,6 +4,14 @@
 ;; definitions lazily on first use, and the compile path splices them into the
 ;; program when it references the public functions (see JsonLibrary.java).
 ;;
+;; The value mapping mirrors com.inuoe.jzon's defaults, so json-parse /
+;; json-stringify are a lightweight, forward-compatible subset of jzon: a
+;; program can start with rontolisp:json-* and later switch to jzon without a
+;; shape change. A JSON object parses to a hash table with string keys
+;; (test 'equal), an array to a simple vector, true/false/null to t/nil and the
+;; symbol null; on the way out nil becomes false, the symbol null becomes null,
+;; a vector or list becomes an array, and a hash table becomes an object.
+;;
 ;; Portability constraints honored here (see .kb/json.md):
 ;; - Only ASCII structural characters are examined with char-code; any unit
 ;;   >= 128 (a UTF-16 unit on the interpreter/JVM, a UTF-8 byte on WASM) is
@@ -196,15 +204,13 @@
             (cons (parse-integer (subseq s i int-end)) k)
             (cons (rontolisp::%json-float s i int-start int-end frac-start frac-end k) k))))))
 
-(defun rontolisp::%json-key (key)
-  ;; Converts an object key string into a keyword for the plist
-  ;; representation. The printed form must round-trip so keys that do not
-  ;; read as a single keyword (spaces, parentheses, ...) are rejected.
-  (let ((colon-key (concatenate 'string ":" key)))
-    (let ((sym (read-from-string colon-key)))
-      (if (and (keywordp sym) (string= (symbol-name sym) key))
-          sym
-          (error "json-parse: object key is not usable as a keyword (parse with :hash-table)")))))
+(defun rontolisp::%json-list->vector (rev-items count)
+  ;; rev-items holds the elements in REVERSE order; build a forward simple
+  ;; vector, matching jzon's array representation.
+  (let ((v (make-array count)))
+    (do ((k (- count 1) (- k 1)) (x rev-items (cdr x)))
+        ((< k 0) v)
+      (setf (aref v k) (car x)))))
 
 (defun rontolisp::%json-literal (s i n word value)
   (let ((e (+ i (length word))))
@@ -212,31 +218,33 @@
         (cons value e)
         (error "json-parse: invalid literal"))))
 
-(defun rontolisp::%json-array (s i n as)
-  ;; i points at [; returns (list . next-index).
+(defun rontolisp::%json-array (s i n)
+  ;; i points at [; returns (vector . next-index).
   (let ((first-i (rontolisp::%json-skip-ws s (+ i 1) n)))
     (when (>= first-i n) (error "json-parse: unterminated array"))
     (if (= (char-code (char s first-i)) 93)
-        (cons nil (+ first-i 1))
-        (let ((items nil))
+        (cons (make-array 0) (+ first-i 1))
+        (let ((items nil) (count 0))
           (do ((j first-i))
               (nil)
-            (let ((r (rontolisp::%json-value s j n as)))
+            (let ((r (rontolisp::%json-value s j n)))
               (setq items (cons (car r) items))
+              (setq count (+ count 1))
               (setq j (rontolisp::%json-skip-ws s (cdr r) n))
               (when (>= j n) (error "json-parse: unterminated array"))
               (let ((c (char-code (char s j))))
                 (cond ((= c 44) (setq j (+ j 1)))
-                      ((= c 93) (return (cons (nreverse items) (+ j 1))))
+                      ((= c 93) (return (cons (rontolisp::%json-list->vector items count) (+ j 1))))
                       (t (error "json-parse: expected , or ] in array"))))))))))
 
-(defun rontolisp::%json-object (s i n as)
-  ;; i points at {; returns (plist-or-hash-table . next-index).
+(defun rontolisp::%json-object (s i n)
+  ;; i points at {; returns (hash-table . next-index). Keys stay strings, like
+  ;; jzon's (make-hash-table :test 'equal) objects.
   (let ((first-i (rontolisp::%json-skip-ws s (+ i 1) n)))
     (when (>= first-i n) (error "json-parse: unterminated object"))
     (if (= (char-code (char s first-i)) 125)
-        (cons (if (eq as :hash-table) (make-hash-table) nil) (+ first-i 1))
-        (let ((h (if (eq as :hash-table) (make-hash-table) nil)) (acc nil))
+        (cons (make-hash-table :test 'equal) (+ first-i 1))
+        (let ((h (make-hash-table :test 'equal)))
           (do ((j first-i))
               (nil)
             (setq j (rontolisp::%json-skip-ws s j n))
@@ -246,42 +254,36 @@
               (setq j (rontolisp::%json-skip-ws s (cdr kr) n))
               (when (or (>= j n) (not (= (char-code (char s j)) 58)))
                 (error "json-parse: expected : after object key"))
-              (let ((vr (rontolisp::%json-value s (+ j 1) n as)))
-                (if (eq as :hash-table)
-                    (setf (gethash (car kr) h) (car vr))
-                    (setq acc (cons (car vr) (cons (rontolisp::%json-key (car kr)) acc))))
+              (let ((vr (rontolisp::%json-value s (+ j 1) n)))
+                (setf (gethash (car kr) h) (car vr))
                 (setq j (rontolisp::%json-skip-ws s (cdr vr) n))
                 (when (>= j n) (error "json-parse: unterminated object"))
                 (let ((c (char-code (char s j))))
                   (cond ((= c 44) (setq j (+ j 1)))
-                        ((= c 125)
-                         (return (cons (if (eq as :hash-table) h (nreverse acc)) (+ j 1))))
+                        ((= c 125) (return (cons h (+ j 1))))
                         (t (error "json-parse: expected , or } in object")))))))))))
 
-(defun rontolisp::%json-value (s i n as)
+(defun rontolisp::%json-value (s i n)
   ;; Returns (value . next-index).
   (let ((j (rontolisp::%json-skip-ws s i n)))
     (when (>= j n) (error "json-parse: unexpected end of input"))
     (let ((c (char-code (char s j))))
       (cond ((= c 34) (rontolisp::%json-string s j n))
-            ((= c 123) (rontolisp::%json-object s j n as))
-            ((= c 91) (rontolisp::%json-array s j n as))
+            ((= c 123) (rontolisp::%json-object s j n))
+            ((= c 91) (rontolisp::%json-array s j n))
             ((= c 116) (rontolisp::%json-literal s j n "true" t))
             ((= c 102) (rontolisp::%json-literal s j n "false" nil))
-            ((= c 110) (rontolisp::%json-literal s j n "null" nil))
+            ((= c 110) (rontolisp::%json-literal s j n "null" 'null))
             ((or (= c 45) (and (>= c 48) (<= c 57))) (rontolisp::%json-number s j n))
             (t (error "json-parse: unexpected character"))))))
 
-(defun rontolisp::%json-parse (s as)
+(defun rontolisp::%json-parse (s)
   (when (not (stringp s)) (error "json-parse expects a string"))
-  (let ((mode (if (null as) :plist as)))
-    (when (not (or (eq mode :plist) (eq mode :hash-table)))
-      (error "json-parse: the object representation must be :plist or :hash-table"))
-    (let ((n (length s)))
-      (let ((r (rontolisp::%json-value s 0 n mode)))
-        (when (< (rontolisp::%json-skip-ws s (cdr r) n) n)
-          (error "json-parse: unexpected trailing characters"))
-        (car r)))))
+  (let ((n (length s)))
+    (let ((r (rontolisp::%json-value s 0 n)))
+      (when (< (rontolisp::%json-skip-ws s (cdr r) n) n)
+        (error "json-parse: unexpected trailing characters"))
+      (car r))))
 
 ;; --- serializer -------------------------------------------------------------
 
@@ -315,30 +317,36 @@
     (when (> n start) (setq a (cons (subseq s start n) a)))
     (cons "\"" a)))
 
+(defun rontolisp::%json-downcase-key (name)
+  ;; jzon coerces a symbol key with (string-downcase name) unless the name
+  ;; already contains a lower-case letter (matching coerce-key). ASCII only,
+  ;; via char-code, so it runs identically on the byte-indexed WASM backends.
+  (let ((n (length name)) (has-lower nil))
+    (do ((i 0 (+ i 1)))
+        ((or (>= i n) has-lower))
+      (let ((c (char-code (char name i))))
+        (when (and (>= c 97) (<= c 122)) (setq has-lower t))))
+    (if has-lower
+        name
+        (let ((parts nil) (start 0))
+          (do ((i 0 (+ i 1)))
+              ((>= i n))
+            (let ((c (char-code (char name i))))
+              (when (and (>= c 65) (<= c 90))
+                (when (> i start) (setq parts (cons (subseq name start i) parts)))
+                (setq parts (cons (rontolisp::%json-char-string (+ c 32)) parts))
+                (setq start (+ i 1)))))
+          (when (> n start) (setq parts (cons (subseq name start n) parts)))
+          (rontolisp::%json-concat (nreverse parts))))))
+
 (defun rontolisp::%json-key-name (k)
+  ;; Coerce a hash-table key to a string the way jzon's coerce-key does.
   (cond ((stringp k) k)
-        ((keywordp k) (symbol-name k))
-        ((symbolp k) (princ-to-string k))
+        ((symbolp k) (rontolisp::%json-downcase-key (string k)))
         ((integerp k) (princ-to-string k))
         ((floatp k) (princ-to-string k))
+        ((characterp k) (string k))
         (t (error "json-stringify: unsupported hash-table key"))))
-
-(defun rontolisp::%json-plist-p (v)
-  ;; t when v looks like a keyword property list: (keyword value ...).
-  (do ((x v (cdr (cdr x))))
-      ((null x) t)
-    (when (not (and (consp x) (keywordp (car x)) (consp (cdr x))))
-      (return nil))))
-
-(defun rontolisp::%json-out-plist (v acc)
-  (let ((a (cons "{" acc)) (firstp t))
-    (do ((x v (cdr (cdr x))))
-        ((null x))
-      (if firstp (setq firstp nil) (setq a (cons "," a)))
-      (setq a (rontolisp::%json-out-string (symbol-name (car x)) a))
-      (setq a (cons ":" a))
-      (setq a (rontolisp::%json-out (car (cdr x)) a)))
-    (cons "}" a)))
 
 (defun rontolisp::%json-out-array (v acc)
   (let ((a (cons "[" acc)) (firstp t))
@@ -347,6 +355,14 @@
       (when (not (consp x)) (error "json-stringify: improper list"))
       (if firstp (setq firstp nil) (setq a (cons "," a)))
       (setq a (rontolisp::%json-out (car x) a)))
+    (cons "]" a)))
+
+(defun rontolisp::%json-out-vec (v acc)
+  (let ((a (cons "[" acc)) (nn (length v)))
+    (do ((i 0 (+ i 1)))
+        ((>= i nn))
+      (when (> i 0) (setq a (cons "," a)))
+      (setq a (rontolisp::%json-out (aref v i) a)))
     (cons "]" a)))
 
 (defun rontolisp::%json-out-hash (h acc)
@@ -366,21 +382,39 @@
              h)
     (cons "}" %json-hash-acc)))
 
+(defun rontolisp::%json-out-instance (v acc)
+  ;; A CLOS instance serializes as a JSON object: each slot's name (coerced like
+  ;; a symbol object key) maps to its slot-value, in definition order -- matching
+  ;; jzon's standard-object serialization. A slot may itself hold a hash table (a
+  ;; nested object), a list/vector (an array), or any serializable value.
+  (let ((a (cons "{" acc)) (firstp t))
+    (do ((defs (%class-slot-defs (class-of v)) (cdr defs)))
+        ((null defs))
+      (let ((name (car (car defs))))
+        (if firstp (setq firstp nil) (setq a (cons "," a)))
+        (setq a (rontolisp::%json-out-string (rontolisp::%json-key-name name) a))
+        (setq a (cons ":" a))
+        (setq a (rontolisp::%json-out (slot-value v name) a))))
+    (cons "}" a)))
+
 (defun rontolisp::%json-out (v acc)
-  (cond ((null v) (cons "null" acc))
-        ((eq v t) (cons "true" acc))
+  ;; Value -> JSON, mirroring jzon's write-value defaults: nil is false, the
+  ;; symbol null is null, a vector or list is an array, a hash table or CLOS
+  ;; instance is an object, any other symbol/character prints its name as a
+  ;; string.
+  (cond ((eq v t) (cons "true" acc))
+        ((eq v 'null) (cons "null" acc))
+        ((null v) (cons "false" acc))
         ((integerp v) (cons (princ-to-string v) acc))
         ((floatp v) (cons (princ-to-string v) acc))
         ((rationalp v) (cons (princ-to-string (float v)) acc))
         ((stringp v) (rontolisp::%json-out-string v acc))
-        ((keywordp v) (rontolisp::%json-out-string (symbol-name v) acc))
-        ((symbolp v) (rontolisp::%json-out-string (princ-to-string v) acc))
-        ((characterp v) (rontolisp::%json-out-string (princ-to-string v) acc))
         ((hash-table-p v) (rontolisp::%json-out-hash v acc))
-        ((consp v)
-         (if (rontolisp::%json-plist-p v)
-             (rontolisp::%json-out-plist v acc)
-             (rontolisp::%json-out-array v acc)))
+        ((vectorp v) (rontolisp::%json-out-vec v acc))
+        ((symbolp v) (rontolisp::%json-out-string (string v) acc))
+        ((characterp v) (rontolisp::%json-out-string (string v) acc))
+        ((typep v 'standard-object) (rontolisp::%json-out-instance v acc))
+        ((consp v) (rontolisp::%json-out-array v acc))
         (t (error "json-stringify: unsupported value"))))
 
 (defun rontolisp::%json-stringify (v)

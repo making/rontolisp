@@ -1148,7 +1148,7 @@ cases:
   # resolves everywhere the canonical name does.
   - name: builtin-package-nicknames
     source: |
-      (print (getf (rl:json-parse "{\"a\": 7}") :a))
+      (print (gethash "a" (rl:json-parse "{\"a\": 7}")))
       (print (la:to-list (la:from-list '(1 2 3))))
       (defpackage :ci-nick (:use :cl) (:nicknames :cn) (:export :ci-nick-inc))
       (in-package :ci-nick)
@@ -2900,45 +2900,49 @@ cases:
 
   # JSON: the Lisp-source library (json.lisp) is spliced by the compile path and
   # loaded lazily by the interpreter, so one implementation runs on all four
-  # backends. Integers wider than 9 digits become floats (WASM i31 range); a
-  # float with magnitude >= 2^31 cannot be *printed* on WASM (a known limitation of
-  # the emitted WASM float printer), so
-  # the wide-integer case asserts floatp instead of printing the value.
-  # Hash-table object mode uses single-key objects here because iteration order
-  # is backend-specific.
+  # backends. The value mapping matches com.inuoe.jzon's defaults: an object
+  # becomes a hash table with string keys, an array a vector, and null the
+  # symbol null; on the way out nil is false and the symbol null is null.
+  # Integers wider than 9 digits become floats (WASM i31 range); a float with
+  # magnitude >= 2^31 cannot be *printed* on WASM (a known limitation of the
+  # emitted WASM float printer), so the wide-integer case asserts floatp instead
+  # of printing the value. Objects are read key by key (and stringified from
+  # single-key hash tables) because hash-table iteration order is
+  # backend-specific.
   - name: json-parse-and-stringify
     source: |
-      (print (rontolisp:json-parse "{\"name\": \"rontolisp\", \"n\": 2}"))
-      (print (getf (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}") :a))
+      (let ((h (rontolisp:json-parse "{\"name\": \"rontolisp\", \"n\": 2}")))
+        (print (list (gethash "name" h) (gethash "n" h))))
+      (print (gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}"))))
       (print (rontolisp:json-parse "[1, 2.5, \"x\", false, null]"))
       (print (rontolisp:json-parse "1e3"))
       (print (floatp (rontolisp:json-parse "1234567890123")))
       (print (rontolisp:json-parse "\"a\\tb\\u3042\""))
-      (print (rontolisp:json-parse "{}"))
-      (let ((h (rontolisp:json-parse "{\"content-type\": \"text/html\"}" :hash-table)))
+      (print (hash-table-count (rontolisp:json-parse "{}")))
+      (let ((h (rontolisp:json-parse "{\"content-type\": \"text/html\"}")))
         (print (gethash "content-type" h))
         (print (hash-table-count h)))
-      (print (rontolisp:json-stringify (list :name "rontolisp" :ok t :ver 1.5)))
       (print (rontolisp:json-stringify (list 1 (list 2 3) nil)))
+      (print (rontolisp:json-stringify (vector t 'null 1.5)))
       (print (rontolisp:json-stringify "a\"b"))
       (print (rontolisp:json-stringify 3/2))
-      (let ((h (make-hash-table)))
+      (let ((h (make-hash-table :test 'equal)))
         (setf (gethash "x" h) (list 1 2))
         (print (rontolisp:json-stringify h)))
       (print (rontolisp:json-stringify (rontolisp:json-parse "{\"deep\": {\"list\": [{\"k\": \"v\"}, 2.5, true]}}")))
       (print (funcall #'rontolisp:json-stringify (list 7)))
     expected: |
-      (:name "rontolisp" :n 2)
-      (:b (1 t nil))
-      (1 2.5 "x" nil nil)
+      ("rontolisp" 2)
+      #(1 t null)
+      #(1 2.5 "x" nil null)
       1000.0
       t
       "a	bあ"
-      nil
+      0
       "text/html"
       1
-      "{"name":"rontolisp","ok":true,"ver":1.5}"
-      "[1,[2,3],null]"
+      "[1,[2,3],false]"
+      "[true,null,1.5]"
       ""a\"b""
       "1.5"
       "{"x":[1,2]}"
@@ -2988,10 +2992,36 @@ cases:
   - name: json-double-colon-qualifier
     source: |
       (print (rontolisp::json-stringify (list 1 2 3)))
-      (print (getf (rontolisp::json-parse "{\"n\": 5}") :n))
+      (print (gethash "n" (rontolisp::json-parse "{\"n\": 5}")))
     expected: |
       "[1,2,3]"
       5
+
+  # Building JSON objects: rontolisp:plist-hash-table / hash-table-plist and
+  # rontolisp:alist-hash-table / hash-table-alist (subsets of the same-named
+  # alexandria utilities, prelude-spliced) turn a keyword plist or an association
+  # list into a string-keyed hash table and back, and json-stringify also
+  # serializes a CLOS instance as an object (slots in definition order; a
+  # hash-table slot nests as an object, a list slot as an array) -- matching
+  # com.inuoe.jzon. Single-key hash objects keep the output backend-stable; the
+  # CLOS slot order is fixed by the class definition.
+  - name: json-object-building-and-clos
+    source: |
+      (print (rontolisp:json-stringify (rontolisp:plist-hash-table (list :msg "hi"))))
+      (print (rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 1))))
+      (print (rontolisp:json-stringify (rontolisp:alist-hash-table (list (cons "x" 1)))))
+      (print (rontolisp:hash-table-alist (rontolisp:alist-hash-table (list (cons "k" 7)))))
+      (defclass ci-json-resp () ((status :initarg :status) (headers :initarg :headers) (items :initarg :items)))
+      (let ((h (make-hash-table :test 'equal)))
+        (setf (gethash "content-type" h) "application/json")
+        (print (rontolisp:json-stringify
+                (make-instance 'ci-json-resp :status 200 :headers h :items (list 1 2 3)))))
+    expected: |
+      "{"msg":"hi"}"
+      (:a 1)
+      "{"x":1}"
+      (("k" . 7))
+      "{"status":200,"headers":{"content-type":"application/json"},"items":[1,2,3]}"
 
   # equal on strings compares content on every backend (the WASM _equal/_hash
   # runtime folds string bytes), so runtime-built strings work as hash-table

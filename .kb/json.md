@@ -1,9 +1,43 @@
 # JSON (`rontolisp:json-parse` / `rontolisp:json-stringify`)
 
-`rontolisp`-package functions (not CL standard), modeled on JavaScript's
-`JSON.parse`/`JSON.stringify`. User-facing behavior (value mapping, plist vs
-`:hash-table` representations, limitations) lives in
+`rontolisp`-package functions (not CL standard) whose value mapping matches
+`com.inuoe.jzon`'s defaults, so they are a lightweight, forward-compatible
+subset of jzon (a program can start on `rontolisp:json-*` and switch to jzon
+unchanged). Object -> hash table with string keys (`equal`), array -> vector,
+`true`/`false`/`null` -> `t`/`nil`/the symbol `null`; on the way out `nil` ->
+`false`, the symbol `null` -> `null`, a vector or list -> array, a hash table or
+a CLOS instance -> object (a symbol/slot-name key is down-cased unless it already
+holds a lower-case letter, like jzon's `coerce-key`). This is *the same* value
+shape the real jzon produces under rontolisp -- `JzonE2eTest` is the oracle, and
+`json.lisp` is validated byte-for-byte against `com.inuoe.jzon:parse`/`stringify`
+(both directions). User-facing behavior lives in
 `doc/*/reference/functions/rontolisp-json-{parse,stringify}.md`.
+
+**CLOS instance -> object** (`%json-out-instance`, checked in `%json-out` before
+the `consp` branch because an instance IS a tagged cons): detected with
+`(typep v 'standard-object)`, its slots enumerated in definition order via the
+bare `%class-slot-defs` (the interpreter builtin / the compilers' macro-expanded
+registry dispatch, the same primitive `closer-mop:class-slots` is built on) and
+each `(slot-value v name)` recursively serialized -- so a hash-table slot nests
+as an object, a list/vector slot as an array. A class-free program still splices
+this (dead) code and compiles cleanly (`typep 'standard-object` is nil, the
+dispatch folds to `(cond (t nil))`). jzon serializes a `standard-object` the same
+way (its `structure-object` MOP method is feature-gated off under rontolisp, so a
+`defstruct` -- a `%struct-`-tagged list -- serializes as an ARRAY on BOTH sides;
+do not "fix" that into an object).
+
+**Building objects ergonomically** without breaking the drop-in-jzon promise:
+`rontolisp:plist-hash-table` / `rontolisp:hash-table-plist` and
+`rontolisp:alist-hash-table` / `rontolisp:hash-table-alist` (prelude defuns in
+`LispPreludeLibrary`, subsets of the same-named `alexandria` utilities) turn a
+keyword plist or an association list into a string-keyed hash table and back;
+`json-stringify` down-cases the keyword keys. `alist-hash-table` is first-key-wins
+(`(nth-value 1 (gethash ...))`, a recognized multi-value producer on every
+backend) and default-`eql` like alexandria, which is exactly what the httpbin
+examples' request headers / `query-params` alists want -- so the hand-rolled
+`args-table`/`headers-table` helpers are gone. The alexandria names (not a
+bespoke helper) keep the switch-to-alexandria path clean, mirroring the
+json-*/jzon relationship.
 
 **Single Lisp-source implementation.** The parser/serializer is hand-written
 in rontolisp itself: `src/main/resources/am/ik/rontolisp/eval/json.lisp`
@@ -22,21 +56,18 @@ sound). One implementation runs on every backend:
   call it explicitly, like `UserMacroExpander`). When the program references
   the public names (qualified anywhere — either colon spelling — bare under
   `(in-package rontolisp)`, quoted mentions and `#'` count as usage), it
-  rewrites call sites to the
-  fixed-arity helpers — `(rontolisp:json-parse s)` gains a trailing `nil`;
-  a wrong arity is a compile-time error — and prepends the library defuns
-  plus one-argument `#'` wrapper defuns
-  (`(defun rontolisp:json-parse (s) ...)`, reached only via
-  `function`/`symbol-function`). A program without JSON is returned unchanged.
+  rewrites call sites to the fixed-arity helpers — both `%json-parse` and
+  `%json-stringify` take exactly one argument, so a wrong arity is a
+  compile-time error — and prepends the library defuns plus one-argument `#'`
+  wrapper defuns (`(defun rontolisp:json-parse (s) (rontolisp::%json-parse s))`,
+  reached only via `function`/`symbol-function`). A program without JSON is
+  returned unchanged.
 
-**Why not plain defuns/&optional**: nothing forces the split any more — it
-predates the lambda-list extensions and has not been revisited. When it was
-written, a user lambda list took required parameters only; today
-`LambdaLists.desugarProgram` runs inside each compiler, i.e. after
-`JsonLibrary.process` has prepended the library defuns, so an `&optional` in
-`json.lisp` would be desugared like any other. Collapsing the dispatcher and
-the call-site rewrite into one `&optional` defun is therefore open work, not a
-constraint. The `%json-`
+**Why the dispatcher/rewrite split at all**: it predates the lambda-list
+extensions and both public functions are single-arity now (jzon's `parse`
+takes just the JSON string), so the dispatcher/wrapper indirection is a thin
+arity/first-class-value shim rather than an `&optional` desugaring; collapsing
+it is open cleanup, not a constraint. The `%json-`
 helper names are excluded from `cl-user` introspection by the existing
 `PackageIntrospection.userFunctionNames` filter (`%` prefix / `:` qualified).
 
@@ -49,11 +80,17 @@ only ASCII structural characters are compared via `char-code`; any unit >= 128
 everywhere (WASM i31 range); WASM *prints* them since todo-108 group C fixed
 the float printer (exact integer part up to 2^63), but between 10^7 and 2^63
 the SHAPE differs: WASM emits all digits (`1500000000000.0`) where the
-interpreter/JVM use `1.5E12` (residual of `.todo/046`). plist keywords are
-interned via `read-from-string` (round-trip
-guarded, so non-symbol-friendly keys error toward `:hash-table`), which pulls
-the runtime reader into compiled output. The one closure (maphash callback in
-`%json-out-hash`) uses `%json-`-prefixed capture variable names, a leftover
+interpreter/JVM use `1.5E12` (residual of `.todo/046`). Objects build a
+`(make-hash-table :test 'equal)` with the verbatim string keys and arrays a
+simple vector (`%json-list->vector`: reverse-accumulated list filled into a
+`make-array`), so — unlike the former keyword-plist mode — `json.lisp` no
+longer calls `read-from-string` and does **not** pull the runtime reader into
+compiled output. `null` is the symbol `'null` (`cl:null`, name `"null"`);
+stringify detects it with `(eq v 'null)` and detects the empty-string /
+symbol-key cases with `stringp` *before* `vectorp` (a string is a vector) and
+`(eq v 'null)`/`(null v)` before the general `symbolp` branch. The one closure
+(maphash callback in `%json-out-hash`) uses `%json-`-prefixed capture variable
+names, a leftover
 workaround from when compiled closures resolved captured names against
 same-named top-level globals (fixed 2026-07-03 in `Jvm/WasmLambdaCompiler`;
 the rename stays because it is harmless).

@@ -6304,26 +6304,30 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void jsonParseReturnsPlistByDefault() {
-		assertThat(eval("(rontolisp:json-parse \"{\\\"name\\\": \\\"rontolisp\\\", \\\"n\\\": 2}\")").print())
-			.isEqualTo("(:name \"rontolisp\" :n 2)");
-		assertThat(eval("(getf (rontolisp:json-parse \"{\\\"a\\\": {\\\"b\\\": [1, true, null]}}\") :a)").print())
-			.isEqualTo("(:b (1 t nil))");
-		assertThat(eval("(rontolisp:json-parse \"{}\")").print()).isEqualTo("nil");
+	void jsonParseReturnsHashTablesAndVectors() {
+		// jzon's defaults: objects become hash tables with string keys, arrays
+		// become vectors, and true/false/null become t/nil/the symbol null.
+		assertThat(eval("""
+				(let ((h (rontolisp:json-parse "{\\"name\\": \\"rontolisp\\", \\"n\\": 2}")))
+				  (list (gethash "name" h) (gethash "n" h)))""").print()).isEqualTo("(\"rontolisp\" 2)");
+		assertThat(eval(
+				"(gethash \"b\" (gethash \"a\" (rontolisp:json-parse \"{\\\"a\\\": {\\\"b\\\": [1, true, null]}}\")))")
+			.print()).isEqualTo("#(1 t null)");
+		assertThat(eval("(hash-table-count (rontolisp:json-parse \"{}\"))").print()).isEqualTo("0");
 	}
 
 	@Test
 	void jsonDoubleColonQualifierNamesTheSameFunctions() {
 		// pkg::name also reaches external symbols, like Common Lisp.
 		assertThat(eval("(rontolisp::json-stringify (list 1 2 3))").print()).isEqualTo("\"[1,2,3]\"");
-		assertThat(eval("(getf (rontolisp::json-parse \"{\\\"n\\\": 5}\") :n)").print()).isEqualTo("5");
+		assertThat(eval("(gethash \"n\" (rontolisp::json-parse \"{\\\"n\\\": 5}\"))").print()).isEqualTo("5");
 	}
 
 	@Test
 	void jsonSingleColonAccessToInternalHelperIsRejected() {
 		// %json-parse is internal to the rontolisp package: a single colon only
 		// reaches external symbols.
-		assertThatThrownBy(() -> eval("(rontolisp:%json-parse \"1\" nil)"))
+		assertThatThrownBy(() -> eval("(rontolisp:%json-parse \"1\")"))
 			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)
 			.hasMessageContaining("The symbol %json-parse is not external in the rontolisp package");
 	}
@@ -6337,21 +6341,24 @@ class LispEvaluatorTest {
 		assertThat(eval("(floatp (rontolisp:json-parse \"1234567890123\"))").print()).isEqualTo("t");
 		assertThat(eval("(rontolisp:json-parse \"true\")").print()).isEqualTo("t");
 		assertThat(eval("(rontolisp:json-parse \"false\")").print()).isEqualTo("nil");
-		assertThat(eval("(rontolisp:json-parse \"null\")").print()).isEqualTo("nil");
-		assertThat(eval("(rontolisp:json-parse \"[1, [2, \\\"x\\\"], null]\")").print()).isEqualTo("(1 (2 \"x\") nil)");
+		// JSON null parses to the symbol null (jzon's sentinel), not nil
+		assertThat(eval("(rontolisp:json-parse \"null\")").print()).isEqualTo("null");
+		assertThat(eval("(rontolisp:json-parse \"[1, [2, \\\"x\\\"], null]\")").print())
+			.isEqualTo("#(1 #(2 \"x\") null)");
 		assertThat(eval("(rontolisp:json-parse \"\\\"a\\\\nb\\\"\")").print()).isEqualTo("\"a\nb\"");
 		assertThat(eval("(rontolisp:json-parse \"\\\"\\\\u0041\\\\u3042\\\"\")").print()).isEqualTo("\"Aあ\"");
 	}
 
 	@Test
-	void jsonParseHashTableMode() {
+	void jsonParseObjectsAreHashTablesWithStringKeys() {
 		assertThat(eval("""
-				(let ((h (rontolisp:json-parse "{\\"content-type\\": \\"text/html\\"}" :hash-table)))
-				  (gethash "content-type" h))""").print()).isEqualTo("\"text/html\"");
-		// the representation applies recursively
+				(gethash "content-type"
+				         (rontolisp:json-parse "{\\"content-type\\": \\"text/html\\"}"))""").print())
+			.isEqualTo("\"text/html\"");
+		// nesting works, and arbitrary key strings (spaces and all) are fine
 		assertThat(eval("""
-				(let ((h (rontolisp:json-parse "{\\"a\\": {\\"b\\": 5}}" :hash-table)))
-				  (gethash "b" (gethash "a" h)))""").print()).isEqualTo("5");
+				(let ((h (rontolisp:json-parse "{\\"a b\\": {\\"c\\": 5}}")))
+				  (gethash "c" (gethash "a b" h)))""").print()).isEqualTo("5");
 	}
 
 	@Test
@@ -6360,29 +6367,24 @@ class LispEvaluatorTest {
 			.hasMessageContaining("json-parse");
 		assertThatThrownBy(() -> eval("(rontolisp:json-parse \"1 2\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("trailing");
-		assertThatThrownBy(() -> eval("(rontolisp:json-parse \"1\" :alist)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining(":plist or :hash-table");
 		assertThatThrownBy(() -> eval("(rontolisp:json-parse 42)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects a string");
-		// an object key that does not read as a keyword only works with :hash-table
-		assertThatThrownBy(() -> eval("(rontolisp:json-parse \"{\\\"a b\\\": 1}\")"))
-			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining(":hash-table");
-		assertThat(eval("""
-				(let ((h (rontolisp:json-parse "{\\"a b\\": 1}" :hash-table)))
-				  (gethash "a b" h))""").print()).isEqualTo("1");
+		// json-parse takes exactly the JSON string -- there is no representation argument
+		assertThatThrownBy(() -> eval("(rontolisp:json-parse \"1\" :hash-table)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("1 argument");
 	}
 
 	@Test
 	void jsonStringifySerializesLispValues() {
-		assertThat(eval("(rontolisp:json-stringify (list :name \"rontolisp\" :ok t :ver 1.5))").print())
-			.isEqualTo("\"{\"name\":\"rontolisp\",\"ok\":true,\"ver\":1.5}\"");
-		assertThat(eval("(rontolisp:json-stringify (list 1 (list 2 3) nil))").print()).isEqualTo("\"[1,[2,3],null]\"");
+		// nil is false, the symbol null is null, a list or vector is an array
+		assertThat(eval("(rontolisp:json-stringify (list 1 (list 2 3) nil))").print()).isEqualTo("\"[1,[2,3],false]\"");
+		assertThat(eval("(rontolisp:json-stringify (vector t 'null 1.5))").print()).isEqualTo("\"[true,null,1.5]\"");
 		assertThat(eval("(rontolisp:json-stringify \"a\\\"b\")").print()).isEqualTo("\"\"a\\\"b\"\"");
 		assertThat(eval("(rontolisp:json-stringify :key)").print()).isEqualTo("\"\"key\"\"");
 		assertThat(eval("(rontolisp:json-stringify 3/2)").print()).isEqualTo("\"1.5\"");
+		// a hash table becomes an object
 		assertThat(eval("""
-				(let ((h (make-hash-table)))
+				(let ((h (make-hash-table :test 'equal)))
 				  (setf (gethash "x" h) (list 1 2))
 				  (rontolisp:json-stringify h))""").print()).isEqualTo("\"{\"x\":[1,2]}\"");
 	}
@@ -6397,7 +6399,52 @@ class LispEvaluatorTest {
 	@Test
 	void jsonFunctionsAreFirstClass() {
 		assertThat(eval("(funcall #'rontolisp:json-stringify (list 1 2))").print()).isEqualTo("\"[1,2]\"");
-		assertThat(eval("(funcall #'rontolisp:json-parse \"[7]\")").print()).isEqualTo("(7)");
+		assertThat(eval("(funcall #'rontolisp:json-parse \"[7]\")").print()).isEqualTo("#(7)");
+	}
+
+	@Test
+	void plistHashTableAndHashTablePlist() {
+		// subsets of alexandria:plist-hash-table / hash-table-plist; keyword keys
+		// downcase in the JSON, so the pair builds JSON objects ergonomically
+		assertThat(eval("""
+				(rontolisp:json-stringify
+				 (rontolisp:plist-hash-table (list :name "rontolisp" :ok t :ver 1.5)))""").print())
+			.isEqualTo("\"{\"name\":\"rontolisp\",\"ok\":true,\"ver\":1.5}\"");
+		assertThat(eval("(rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 5)))").print())
+			.isEqualTo("(:a 5)");
+		// trailing arguments pass through to make-hash-table, like alexandria
+		assertThat(eval("(gethash \"k\" (rontolisp:plist-hash-table (list \"k\" 9) :test 'equal))").print())
+			.isEqualTo("9");
+	}
+
+	@Test
+	void alistHashTableAndHashTableAlist() {
+		// subsets of alexandria:alist-hash-table / hash-table-alist; an alist
+		// (like the request headers or query-params) becomes a JSON object
+		assertThat(eval("""
+				(rontolisp:json-stringify
+				 (rontolisp:alist-hash-table (list (cons "host" "localhost") (cons "n" 2))))""").print())
+			.isEqualTo("\"{\"host\":\"localhost\",\"n\":2}\"");
+		assertThat(eval("(rontolisp:hash-table-alist (rontolisp:alist-hash-table (list (cons \"k\" 7))))").print())
+			.isEqualTo("((\"k\" . 7))");
+		// first occurrence of a key wins, like alexandria
+		assertThat(eval("""
+				(hash-table-count
+				 (rontolisp:alist-hash-table (list (cons "a" 1) (cons "a" 9)) :test 'equal))""").print())
+			.isEqualTo("1");
+	}
+
+	@Test
+	void jsonStringifySerializesClosInstancesAsObjects() {
+		// a CLOS instance serializes as an object (slots in definition order),
+		// matching jzon; a hash-table slot nests as an object, a list slot as an array
+		assertThat(evalMulti("""
+				(defclass json-resp () ((status :initarg :status) (headers :initarg :headers) (items :initarg :items)))
+				(let ((h (make-hash-table :test 'equal)))
+				  (setf (gethash "content-type" h) "application/json")
+				  (rontolisp:json-stringify
+				   (make-instance 'json-resp :status 200 :headers h :items (list 1 2 3))))""").print())
+			.isEqualTo("\"{\"status\":200,\"headers\":{\"content-type\":\"application/json\"},\"items\":[1,2,3]}\"");
 	}
 
 	@Test

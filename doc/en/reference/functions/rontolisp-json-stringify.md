@@ -2,38 +2,59 @@
 
 `(rontolisp:json-stringify value)`
 
-Serializes a Lisp value into a JSON document string, modeled on JavaScript's
-`JSON.stringify`. Both object representations produced by
-[`rontolisp:json-parse`](rontolisp-json-parse.md) serialize back to JSON
-objects: a property list whose keys are keywords, and a hash table (keys may
-be strings, symbols, keywords or numbers).
+Serializes a Lisp value into a JSON document string, following the defaults of
+the [`com.inuoe.jzon`](../../guides/asdf-systems.md) library and inverting
+[`rontolisp:json-parse`](rontolisp-json-parse.md): a hash table becomes an
+object, a vector or list an array, and `nil`, `t` and the symbol `null` become
+`false`, `true` and `null`. It is a lightweight subset of jzon, so a program can
+switch to jzon without changing shape.
+
+Switch to `com.inuoe.jzon` when you outgrow the subset: for its richer features
+(pretty-printing, a streaming writer, a `:replacer`, custom serialization), or
+to make the JSON code portable to other Common Lisp implementations —
+`com.inuoe.jzon` is a standard library, while `rontolisp:json-*` runs only on
+rontolisp.
 
 ```lisp
-(rontolisp:json-stringify (list :name "rontolisp" :ok t :ver 1.5))   ; => "{\"name\":\"rontolisp\",\"ok\":true,\"ver\":1.5}"
-(rontolisp:json-stringify (list 1 (list 2 3) nil))   ; => "[1,[2,3],null]"
-(let ((h (make-hash-table)))
-  (setf (gethash "x" h) (list 1 2))
-  (rontolisp:json-stringify h))   ; => "{"x":[1,2]}"
+(rontolisp:json-stringify (vector 1 2 3))   ; => "[1,2,3]"
+(rontolisp:json-stringify (list 1 (list 2 3) nil))   ; => "[1,[2,3],false]"
+(let ((h (make-hash-table :test 'equal)))
+  (setf (gethash "name" h) "rontolisp")
+  (rontolisp:json-stringify h))   ; => "{"name":"rontolisp"}"
 ```
 
 ## Value mapping
 
 | Lisp | JSON |
 |------|------|
-| `nil` | `null` |
+| `nil` | `false` |
 | `t` | `true` |
+| the symbol `null` | `null` |
 | integer, float | number |
 | ratio | number (converted with `float`) |
 | string | string (quote, backslash and control characters are escaped) |
-| keyword, symbol, character | string (a keyword drops its leading colon) |
-| non-empty list of alternating keyword/value pairs | object |
-| any other list | array |
-| hash table | object (iteration order is unspecified) |
+| vector, list | array |
+| hash table | object (a symbol key is down-cased unless it has a lower-case letter) |
+| CLOS instance (`standard-object`) | object (each slot name → its value, in definition order) |
+| keyword, symbol, character | string |
 
-Anything else (functions, streams, promises, arrays) signals an error.
+Anything else (functions, streams, multidimensional arrays) signals an error.
+
+A hash table and a CLOS instance both serialize as objects, so there are two
+ways to build one — a hash table (often via
+[`rontolisp:plist-hash-table`](rontolisp-plist-hash-table.md)) for dynamic keys,
+and a class for a fixed shape. A slot may itself hold a hash table (a nested
+object), a list or vector (an array), or another instance:
 
 ```lisp
-(rontolisp:json-stringify :key)   ; => "\"key\""
+(defclass response () ((status :initarg :status) (body :initarg :body)))
+(let ((h (make-hash-table :test 'equal)))
+  (setf (gethash "content-type" h) "text/plain")
+  (rontolisp:json-stringify (make-instance 'response :status 200 :body h)))   ; => "{"status":200,"body":{"content-type":"text/plain"}}"
+```
+
+```lisp
+(rontolisp:json-stringify :key)   ; => ""key""
 (rontolisp:json-stringify 3/2)   ; => "1.5"
 (rontolisp:json-stringify "a\"b")   ; => ""a\"b""
 ```
@@ -47,12 +68,14 @@ A value parsed from JSON round-trips structurally:
 
 ## Limitations
 
-- A list is serialized as an object exactly when it looks like a keyword
-  property list (`(:a 1 :b 2)`); a genuine array whose elements alternate
-  keywords and values is indistinguishable and becomes an object.
-- `nil` always serializes as `null` — there is no way to produce an empty
-  array `[]` or (from a plist) an empty object `{}`; build an empty hash table
-  for the latter.
+- `nil` serializes as `false` and the empty list is `nil`, so use `#()` (an
+  empty vector) for an empty array and an empty hash table for an empty object
+  `{}`.
+- A list is always an array — build a hash table for a JSON object (jzon dropped
+  alist/plist detection, and so does this subset).
+  [`rontolisp:plist-hash-table`](rontolisp-plist-hash-table.md) turns a keyword
+  property list, and [`rontolisp:alist-hash-table`](rontolisp-alist-hash-table.md)
+  an association list, into that hash table.
 - Hash-table key order in the output is backend-specific (unspecified), like
   `maphash`.
 - Non-ASCII characters are emitted verbatim (never `\uXXXX`-escaped), which is

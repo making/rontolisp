@@ -606,16 +606,13 @@ public final class LispEvaluator {
 			return LispNil.INSTANCE; // serve() blocks forever; unreachable in practice
 		}));
 		// The JSON functions live here because they dispatch to the Lisp-source
-		// library (JsonLibrary), evaluated into the global environment on first use;
-		// user lambda lists have no &optional yet, so these variadic dispatchers pad
-		// the fixed-arity helper arguments.
+		// library (JsonLibrary), evaluated into the global environment on first use.
 		String jsonParseName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JSON_PARSE);
 		this.globalEnv.defineFunction(jsonParseName, new LispFunction(jsonParseName, args -> {
-			if (args.size() != 1 && args.size() != 2) {
-				throw new LispEvalException(LispNames.JSON_PARSE + " expects 1 or 2 arguments, got " + args.size());
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.JSON_PARSE + " expects 1 argument, got " + args.size());
 			}
-			LispVal as = args.size() == 2 ? args.get(1) : LispNil.INSTANCE;
-			return applyJsonHelper(JsonLibrary.HELPER_PARSE, List.of(args.get(0), as));
+			return applyJsonHelper(JsonLibrary.HELPER_PARSE, List.of(args.get(0)));
 		}));
 		String jsonStringifyName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JSON_STRINGIFY);
 		this.globalEnv.defineFunction(jsonStringifyName, new LispFunction(jsonStringifyName, args -> {
