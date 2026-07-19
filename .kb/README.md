@@ -6,9 +6,11 @@ workflow) with full detail: internal class names, per-backend mechanics, edge
 cases, and the tests that pin the behavior. Read the CLAUDE.md summary first;
 come here only when you need the "why exactly" behind a constraint.
 
+- [core-representation.md](core-representation.md) -- core value model: symbolp/stringp & consp encodings, three-pass compilation, `%` prefix, `BuiltinFunctionWrappers`, JVM method mangling + the JVMCI `%` gotcha, WASM rec-group rule (the "no `.kb` file" core-representation bullets, relocated)
 - [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split across all backends
 - [lambda-lists.md](lambda-lists.md) -- lambda list extensions (`&optional`/`&rest`/`&key`/`&aux`) desugared to "required + `&rest`"
-- [do-return-block.md](do-return-block.md) -- `do`/`return` and the `%block` non-local exit boundary
+- [do-return-block.md](do-return-block.md) -- `do`/`return` and the `%block` non-local exit boundary; named `block`/`return-from`; `tagbody`/`go` + `prog`/`prog*`
+- [jzon-cl-additions.md](jzon-cl-additions.md) -- the jzon-driven all-backend CL additions (shiftf/typep/subtypep/`|...|`/`#'format`/mutable strings/runtime type-dispatch sweep &c), pinned by `runtime-type-dispatch-residue` + `JzonE2eTest`
 - [defmacro-backquote.md](defmacro-backquote.md) -- `defmacro`, read-time backquote, compile-time macro expansion
 - [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`
 - [symbol-runtime-api.md](symbol-runtime-api.md) -- `symbol-name`/`intern`/`find-symbol`/`make-symbol`/`boundp`/`fboundp`/`symbol-value` (verbatim names, no intern table, global-only variable lookups)

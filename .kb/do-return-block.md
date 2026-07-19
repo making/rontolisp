@@ -72,3 +72,27 @@ compiled function. Machinery:
 Needed by cl-utilities' `rotate-byte`/`read-delimited` (function-scoped early returns,
 now exact) and cl-ppcre (`ClPpcreE2eTest`, all four backends: `(block scan ...)` in the
 generated scanner closures, `collect-char-class` returning across a `loop`).
+
+## `tagbody`/`go` + `prog`/`prog*`
+
+`tagbody`/`go` and `prog`/`prog*` work on all three backends (interpreter, JVM,
+wasm-GC).
+
+- **Interpreter = dynamic `go`**: `go` throws a `GoSignal` exception; `evalTagbody`
+  catches it and re-enters at the target label via label-indexed re-entry. Because it
+  is a thrown signal, a dynamic `go` **crosses function boundaries** (the target need
+  not be lexically enclosing).
+- **Compilers = LEXICAL subset only**: a `go` must target a lexically enclosing
+  `tagbody` in the SAME compiled function; a non-lexical `go` is unsupported on the
+  compile path.
+  - **JVM**: `JvmTagbodyCompiler` lowers to goto/patch, with every label emitted as a
+    `joinShape` join point at the tagbody's entry stack shape. `JvmGoCompiler` performs
+    the escaped-cleanup/spill unwind (inlining escaped `unwind-protect` cleanups,
+    restoring `handler-case` spills, operand-stack unwind) mirroring `return`
+    (`JvmReturnCompiler`).
+  - **WASM**: `WasmTagbodyCompiler` emits a dispatch loop plus a `br_table` over the
+    segment blocks, using an `i31`-boxed pc. `go` inlines escaped `unwind-protect`
+    cleanups at the branch site (same strategy/limit as `return-from` above). It
+    **rejects `await` inside** a tagbody.
+- **`prog`/`prog*`** = `%block` + `let`/`let*` + `tagbody`, so a user `(return x)`
+  inside a `prog` exits the prog (via the `%block` boundary).
