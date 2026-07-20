@@ -1411,14 +1411,14 @@ final class JvmEvalRuntimeBuilder {
 		aloadStr(a, opSlot);
 		a.iconst(0);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('c');
+		a.iconst('C');
 		a.branch(Opcode.IF_ICMPNE, noMatch);
 		aloadStr(a, opSlot);
 		a.iload(lenSlot);
 		a.iconst(1);
 		a.op(Opcode.ISUB);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('r');
+		a.iconst('R');
 		a.branch(Opcode.IF_ICMPNE, noMatch);
 		// scan middle bytes: valid = all in {'a','d'}
 		a.iconst(1);
@@ -1439,10 +1439,10 @@ final class JvmEvalRuntimeBuilder {
 		a.istore(chSlot);
 		int okch = a.label();
 		a.iload(chSlot);
-		a.iconst('a');
+		a.iconst('A');
 		a.branch(Opcode.IF_ICMPEQ, okch);
 		a.iload(chSlot);
-		a.iconst('d');
+		a.iconst('D');
 		a.branch(Opcode.IF_ICMPEQ, okch);
 		a.iconst(0);
 		a.istore(validSlot);
@@ -1472,7 +1472,7 @@ final class JvmEvalRuntimeBuilder {
 		aloadStr(a, opSlot);
 		a.iload(idxSlot);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('a');
+		a.iconst('A');
 		a.branch(Opcode.IF_ICMPNE, isCdr);
 		car(a, targetSlot);
 		a.astore(targetSlot);
@@ -1491,7 +1491,7 @@ final class JvmEvalRuntimeBuilder {
 		aloadStr(a, opSlot);
 		a.iconst(1);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('d');
+		a.iconst('D');
 		a.branch(Opcode.IF_ICMPNE, notD);
 		a.iconst(1);
 		a.istore(fieldSlot);
@@ -2613,14 +2613,14 @@ final class JvmEvalRuntimeBuilder {
 		aloadStr(a, opSlot);
 		a.iconst(0);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('c');
+		a.iconst('C');
 		a.branch(Opcode.IF_ICMPNE, noMatch);
 		aloadStr(a, opSlot);
 		a.iload(lenSlot);
 		a.iconst(1);
 		a.op(Opcode.ISUB);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('r');
+		a.iconst('R');
 		a.branch(Opcode.IF_ICMPNE, noMatch);
 		// scan middle bytes: valid = all in {'a','d'}
 		a.iconst(1);
@@ -2641,10 +2641,10 @@ final class JvmEvalRuntimeBuilder {
 		a.istore(chSlot);
 		int okch = a.label();
 		a.iload(chSlot);
-		a.iconst('a');
+		a.iconst('A');
 		a.branch(Opcode.IF_ICMPEQ, okch);
 		a.iload(chSlot);
-		a.iconst('d');
+		a.iconst('D');
 		a.branch(Opcode.IF_ICMPEQ, okch);
 		a.iconst(0);
 		a.istore(validSlot);
@@ -2673,7 +2673,7 @@ final class JvmEvalRuntimeBuilder {
 		aloadStr(a, opSlot);
 		a.iload(idxSlot);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('a');
+		a.iconst('A');
 		a.branch(Opcode.IF_ICMPNE, isCdr);
 		car(a, accSlot);
 		a.astore(accSlot);

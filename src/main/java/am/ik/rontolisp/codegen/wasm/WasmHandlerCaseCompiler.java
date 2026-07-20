@@ -263,7 +263,7 @@ final class WasmHandlerCaseCompiler {
 		try {
 			// (list '%class-simple-error __hc_msg nil)
 			LispVal quotedTag = new LispCons(new LispSymbol(LispNames.QUOTE),
-					new LispCons(new LispSymbol("%class-simple-error"), LispNil.INSTANCE));
+					new LispCons(new LispSymbol("%class-SIMPLE-ERROR"), LispNil.INSTANCE));
 			LispVal instance = new LispCons(new LispSymbol(LispNames.LIST), new LispCons(quotedTag,
 					new LispCons(new LispSymbol(msgVarName), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
 			WasmExprCompiler.compileExpr(instance, ctx);

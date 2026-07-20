@@ -55,11 +55,11 @@ import org.jspecify.annotations.Nullable;
 public final class StdinLibrary {
 
 	// The or-raw helper every splice shape defines exactly once -- the dedup marker.
-	private static final String HELPER_MARKER = "%stdin-read-line-or-raw-f";
+	private static final String HELPER_MARKER = "%STDIN-READ-LINE-OR-RAW-F";
 
 	// The sockets.lisp dispatch marker: when present, the program only needs the
 	// helpers (real or stub), never the stdin-dispatch.lisp dispatchers.
-	private static final String IO_MARKER = "%io-read-line";
+	private static final String IO_MARKER = "%IO-READ-LINE";
 
 	private static final List<String> READ_NAMES = List.of(LispNames.READ_LINE, LispNames.READ_CHAR,
 			LispNames.READ_BYTE);
@@ -239,7 +239,7 @@ public final class StdinLibrary {
 			synchronized (StdinLibrary.class) {
 				cached = forms;
 				if (cached == null) {
-					cached = LispReader.readAllFromString(readResource("stdin.lisp"), Features.INTERNAL);
+					cached = LispReader.readAllFromString(readResource("stdin.lisp"), Features.INTERPRETER);
 					forms = cached;
 				}
 			}
@@ -253,7 +253,7 @@ public final class StdinLibrary {
 			synchronized (StdinLibrary.class) {
 				cached = stubForms;
 				if (cached == null) {
-					cached = LispReader.readAllFromString(readResource("stdin-stub.lisp"), Features.INTERNAL);
+					cached = LispReader.readAllFromString(readResource("stdin-stub.lisp"), Features.INTERPRETER);
 					stubForms = cached;
 				}
 			}
@@ -267,7 +267,7 @@ public final class StdinLibrary {
 			synchronized (StdinLibrary.class) {
 				cached = dispatchForms;
 				if (cached == null) {
-					cached = LispReader.readAllFromString(readResource("stdin-dispatch.lisp"), Features.INTERNAL);
+					cached = LispReader.readAllFromString(readResource("stdin-dispatch.lisp"), Features.INTERPRETER);
 					dispatchForms = cached;
 				}
 			}

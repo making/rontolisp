@@ -206,24 +206,24 @@ public final class LispReader {
 
 	private LispVal readSymbol(Token.SymbolToken sym) {
 		String name = sym.name();
-		if ("nil".equals(name)) {
+		if ("NIL".equals(name)) {
 			return LispNil.INSTANCE;
 		}
-		if ("t".equals(name)) {
+		if ("T".equals(name)) {
 			return LispTrue.INSTANCE;
 		}
-		if ("pi".equals(name)) {
+		if ("PI".equals(name)) {
 			// The mathematical constant pi, read as a self-evaluating double like
 			// nil/t. This gives all three backends parity for free.
 			return new LispDouble(Math.PI);
 		}
-		if ("most-positive-fixnum".equals(name) || "most-negative-fixnum".equals(name)) {
+		if ("MOST-POSITIVE-FIXNUM".equals(name) || "MOST-NEGATIVE-FIXNUM".equals(name)) {
 			// The fixnum range constants, read as self-evaluating integers like pi.
 			// The value is backend-dependent (fixed at read time like *features*):
 			// WASM fixnums are unboxed i31 references, the interpreter and the JVM
 			// backend use Java longs.
 			boolean wasm = this.features.contains("rontolisp-wasm");
-			long value = name.startsWith("most-positive") ? (wasm ? (1L << 30) - 1 : Long.MAX_VALUE)
+			long value = name.startsWith("MOST-POSITIVE") ? (wasm ? (1L << 30) - 1 : Long.MAX_VALUE)
 					: (wasm ? -(1L << 30) : Long.MIN_VALUE);
 			return new LispInteger(value);
 		}
@@ -249,7 +249,7 @@ public final class LispReader {
 			LispVal list = LispNil.INSTANCE;
 			List<String> names = this.features.names();
 			for (int i = names.size() - 1; i >= 0; i--) {
-				list = new LispCons(new LispSymbol(":" + names.get(i)), list);
+				list = new LispCons(new LispSymbol(":" + names.get(i).toUpperCase(java.util.Locale.ROOT)), list);
 			}
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(list, LispNil.INSTANCE));
 		}

@@ -114,7 +114,7 @@ class LispReaderTest {
 		LispVal result = LispReader.readFromString("'foo");
 		assertThat(result).isInstanceOf(LispCons.class);
 		LispCons cons = (LispCons) result;
-		assertThat(cons.car()).isEqualTo(new LispSymbol("quote"));
+		assertThat(cons.car()).isEqualTo(new LispSymbol("QUOTE"));
 		LispCons inner = (LispCons) cons.cdr();
 		assertThat(inner.car()).isEqualTo(new LispSymbol("FOO"));
 	}
@@ -285,7 +285,7 @@ class LispReaderTest {
 
 	@Test
 	void readBackquoteSymbol() {
-		assertThat(LispReader.readFromString("`x").print()).isEqualTo("(quote X)");
+		assertThat(LispReader.readFromString("`x").print()).isEqualTo("(QUOTE X)");
 	}
 
 	@Test
@@ -301,39 +301,39 @@ class LispReaderTest {
 
 	@Test
 	void readBackquoteList() {
-		assertThat(LispReader.readFromString("`(a ,b 3)").print()).isEqualTo("(list (quote A) B 3)");
+		assertThat(LispReader.readFromString("`(a ,b 3)").print()).isEqualTo("(LIST (QUOTE A) B 3)");
 	}
 
 	@Test
 	void readBackquoteSplicing() {
 		assertThat(LispReader.readFromString("`(a ,@bs c)").print())
-			.isEqualTo("(append (list (quote A)) BS (list (quote C)))");
+			.isEqualTo("(APPEND (LIST (QUOTE A)) BS (LIST (QUOTE C)))");
 	}
 
 	@Test
 	void readBackquoteLoneSplicing() {
-		assertThat(LispReader.readFromString("`(,@xs)").print()).isEqualTo("(append XS)");
+		assertThat(LispReader.readFromString("`(,@xs)").print()).isEqualTo("(APPEND XS)");
 	}
 
 	@Test
 	void readBackquoteNestedList() {
-		assertThat(LispReader.readFromString("`(a (b ,c))").print()).isEqualTo("(list (quote A) (list (quote B) C))");
+		assertThat(LispReader.readFromString("`(a (b ,c))").print()).isEqualTo("(LIST (QUOTE A) (LIST (QUOTE B) C))");
 	}
 
 	@Test
 	void readBackquoteEmptyList() {
-		assertThat(LispReader.readFromString("`()").print()).isEqualTo("nil");
+		assertThat(LispReader.readFromString("`()").print()).isEqualTo("NIL");
 	}
 
 	@Test
 	void readBackquoteQuoteInTemplate() {
-		assertThat(LispReader.readFromString("`('a ,b)").print()).isEqualTo("(list (list (quote quote) (quote A)) B)");
+		assertThat(LispReader.readFromString("`('a ,b)").print()).isEqualTo("(LIST (LIST (QUOTE QUOTE) (QUOTE A)) B)");
 	}
 
 	@Test
 	void readBackquoteWithoutWhitespaceAroundUnquote() {
 		// ',' terminates a symbol, so `(a ,b) parses the same without the space.
-		assertThat(LispReader.readFromString("`(a,b)").print()).isEqualTo("(list (quote A) B)");
+		assertThat(LispReader.readFromString("`(a,b)").print()).isEqualTo("(LIST (QUOTE A) B)");
 	}
 
 	@Test
@@ -354,20 +354,20 @@ class LispReaderTest {
 	void readNestedBackquoteSymbol() {
 		// ``x -> (list 'quote 'x), folded to (quote (quote x)); evaluating once
 		// yields (quote x) = `x, matching an inner backquote whose comma survives.
-		assertThat(LispReader.readFromString("``x").print()).isEqualTo("(quote (quote X))");
+		assertThat(LispReader.readFromString("``x").print()).isEqualTo("(QUOTE (QUOTE X))");
 	}
 
 	@Test
 	void readNestedBackquoteDoubleUnquote() {
 		// ``(,,a): the inner comma survives, the outer one evaluates a. Expanding
 		// once builds (list 'list a) -- code that, evaluated with a, rebuilds `(,a).
-		assertThat(LispReader.readFromString("``(,,a)").print()).isEqualTo("(list (quote list) A)");
+		assertThat(LispReader.readFromString("``(,,a)").print()).isEqualTo("(LIST (QUOTE LIST) A)");
 	}
 
 	@Test
 	void readNestedBackquoteDoubleUnquoteSplicing() {
 		// ``(,,@lst): the ,@ splices lst at the outer level, each element re-quoted.
-		assertThat(LispReader.readFromString("``(,,@lst)").print()).isEqualTo("(cons (quote list) LST)");
+		assertThat(LispReader.readFromString("``(,,@lst)").print()).isEqualTo("(CONS (QUOTE LIST) LST)");
 	}
 
 	@Test
@@ -375,7 +375,7 @@ class LispReaderTest {
 		// The inner backquote sits in a data position, so only its ,(+ 1 2) that
 		// reaches level 0 would evaluate here; ,(+ 1 2) stays at level 1 and is kept.
 		assertThat(LispReader.readFromString("`(a `(b ,(+ 1 2)))").print())
-			.isEqualTo("(quote (A (list (quote B) (+ 1 2))))");
+			.isEqualTo("(QUOTE (A (LIST (QUOTE B) (+ 1 2))))");
 	}
 
 	@Test
@@ -383,7 +383,7 @@ class LispReaderTest {
 		// A third level: only the innermost triple-comma reaches level 0. Peeling
 		// all three levels reproduces `a`, verified against SBCL.
 		assertThat(LispReader.readFromString("```(,,,a)").print())
-			.isEqualTo("(list (quote list) (quote (quote list)) A)");
+			.isEqualTo("(LIST (QUOTE LIST) (QUOTE (QUOTE LIST)) A)");
 	}
 
 	// --- Dotted pairs: (a . b) reads as a cons with a non-list cdr ---
@@ -413,7 +413,7 @@ class LispReaderTest {
 	@Test
 	void readQuotedAlist() {
 		LispVal result = LispReader.readFromString("'((a . 1) (b . 2))");
-		assertThat(result.print()).isEqualTo("(quote ((A . 1) (B . 2)))");
+		assertThat(result.print()).isEqualTo("(QUOTE ((A . 1) (B . 2)))");
 	}
 
 	@Test
@@ -449,23 +449,23 @@ class LispReaderTest {
 
 	@Test
 	void readBackquoteDottedUnquoteTail() {
-		assertThat(LispReader.readFromString("`(a . ,b)").print()).isEqualTo("(cons (quote A) B)");
+		assertThat(LispReader.readFromString("`(a . ,b)").print()).isEqualTo("(CONS (QUOTE A) B)");
 	}
 
 	@Test
 	void readBackquoteDottedSymbolTail() {
-		assertThat(LispReader.readFromString("`(a . b)").print()).isEqualTo("(cons (quote A) (quote B))");
+		assertThat(LispReader.readFromString("`(a . b)").print()).isEqualTo("(CONS (QUOTE A) (QUOTE B))");
 	}
 
 	@Test
 	void readBackquoteDottedTailAfterMultipleElements() {
-		assertThat(LispReader.readFromString("`(a ,b . ,c)").print()).isEqualTo("(cons (quote A) (cons B C))");
+		assertThat(LispReader.readFromString("`(a ,b . ,c)").print()).isEqualTo("(CONS (QUOTE A) (CONS B C))");
 	}
 
 	@Test
 	void readBackquoteDottedPairInsideList() {
 		assertThat(LispReader.readFromString("`((a . ,x) (b . 2))").print())
-			.isEqualTo("(list (cons (quote A) X) (cons (quote B) 2))");
+			.isEqualTo("(LIST (CONS (QUOTE A) X) (CONS (QUOTE B) 2))");
 	}
 
 	@Test
@@ -503,21 +503,21 @@ class LispReaderTest {
 	void readFeatureConditionalPositiveMatch() {
 		List<LispVal> result = LispReader.readAllFromString("#+rontolisp (print 1) (print 2)");
 		assertThat(result).hasSize(2);
-		assertThat(result.get(0).print()).isEqualTo("(print 1)");
+		assertThat(result.get(0).print()).isEqualTo("(PRINT 1)");
 	}
 
 	@Test
 	void readFeatureConditionalPositiveMiss() {
 		List<LispVal> result = LispReader.readAllFromString("#+sbcl (print 1) (print 2)");
 		assertThat(result).hasSize(1);
-		assertThat(result.get(0).print()).isEqualTo("(print 2)");
+		assertThat(result.get(0).print()).isEqualTo("(PRINT 2)");
 	}
 
 	@Test
 	void readFeatureConditionalNegative() {
 		List<LispVal> result = LispReader.readAllFromString("#-sbcl (print 1) #-rontolisp (print 2)");
 		assertThat(result).hasSize(1);
-		assertThat(result.get(0).print()).isEqualTo("(print 1)");
+		assertThat(result.get(0).print()).isEqualTo("(PRINT 1)");
 	}
 
 	@Test
@@ -579,9 +579,9 @@ class LispReaderTest {
 		// the substitution would corrupt binding positions); the compile backends
 		// substitute the quoted list so a compiled program's feature set is fixed.
 		LispVal result = LispReader.readFromString("*features*");
-		assertThat(result.print()).isEqualTo("*features*");
+		assertThat(result.print()).isEqualTo("*FEATURES*");
 		List<LispVal> jvm = LispReader.readAllFromString("*features*", Features.JVM);
-		assertThat(jvm.get(0).print()).isEqualTo("(quote (:rontolisp :rontolisp-jvm))");
+		assertThat(jvm.get(0).print()).isEqualTo("(QUOTE (:RONTOLISP :RONTOLISP-JVM))");
 	}
 
 	@Test
@@ -624,16 +624,16 @@ class LispReaderTest {
 	}
 
 	@Test
-	void readUpcaseModeUpcasesUserSymbolsAndFoldsStandardNames() {
-		// Unescaped symbols upcase like CL's :upcase readtable case; names whose
-		// canonical rontolisp spelling is lowercase (cl symbols, lambda-list markers)
-		// fold back, so only user symbols stay upcased.
+	void readUpcaseModeUpcasesAllSymbols() {
+		// Unescaped symbols upcase like CL's :upcase readtable case, with no fold: the
+		// standard names, lambda-list markers and the user's own symbols all read
+		// uppercase, so a lexed name is already its canonical spelling.
 		List<LispVal> result = LispReader.readAllFromString("(DEFUN Foo (X &OPTIONAL y) (LIST X y))", upcase());
-		assertThat(result.get(0).print()).isEqualTo("(defun FOO (X &optional Y) (list X Y))");
+		assertThat(result.get(0).print()).isEqualTo("(DEFUN FOO (X &OPTIONAL Y) (LIST X Y))");
 	}
 
 	@Test
-	void readUpcaseModeFoldsTAndNil() {
+	void readUpcaseModeReadsTAndNil() {
 		List<LispVal> result = LispReader.readAllFromString("(T NIL)", upcase());
 		assertThat(result.get(0))
 			.isEqualTo(new LispCons(LispTrue.INSTANCE, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)));
@@ -642,19 +642,20 @@ class LispReaderTest {
 	@Test
 	void readUpcaseModeKeepsEscapedCharactersVerbatim() {
 		// |...| protects case like CL: |mixedCase| stays verbatim, while |CAR| is the
-		// standard car (rontolisp's canonical spelling of standard symbols is
-		// lowercase, so the fold applies to the finished name).
+		// standard CAR (the canonical spelling of the standard symbols is uppercase, so
+		// an escaped uppercase name IS the standard symbol; |car| would be a distinct
+		// lowercase symbol).
 		assertThat(LispReader.readAllFromString("|mixedCase|", upcase()).get(0)).isEqualTo(new LispSymbol("mixedCase"));
-		assertThat(LispReader.readAllFromString("|CAR|", upcase()).get(0)).isEqualTo(new LispSymbol("car"));
+		assertThat(LispReader.readAllFromString("|CAR|", upcase()).get(0)).isEqualTo(new LispSymbol("CAR"));
 	}
 
 	@Test
-	void readUpcaseModeFoldsBuiltinPackagePrefixesAndDesignators() {
-		// A built-in package prefix (and its member) folds; a keyword designator of a
-		// built-in package folds; a data keyword stays upcased; a user package prefix
-		// stays upcased self-consistently.
-		assertThat(LispReader.readAllFromString("RL:FETCH", upcase()).get(0)).isEqualTo(new LispSymbol("rl:fetch"));
-		assertThat(LispReader.readAllFromString(":CL-USER", upcase()).get(0)).isEqualTo(new LispSymbol(":cl-user"));
+	void readUpcaseModeUpcasesBuiltinPackagePrefixesAndDesignators() {
+		// Everything upcases with no fold: a built-in package prefix and its member, a
+		// keyword designator, a data keyword and a user package prefix all keep their
+		// upcased spelling self-consistently (the resolver maps the upcased nickname).
+		assertThat(LispReader.readAllFromString("RL:FETCH", upcase()).get(0)).isEqualTo(new LispSymbol("RL:FETCH"));
+		assertThat(LispReader.readAllFromString(":CL-USER", upcase()).get(0)).isEqualTo(new LispSymbol(":CL-USER"));
 		assertThat(LispReader.readAllFromString(":ELEMENTS", upcase()).get(0)).isEqualTo(new LispSymbol(":ELEMENTS"));
 		assertThat(LispReader.readAllFromString("my-pkg:frob", upcase()).get(0))
 			.isEqualTo(new LispSymbol("MY-PKG:FROB"));

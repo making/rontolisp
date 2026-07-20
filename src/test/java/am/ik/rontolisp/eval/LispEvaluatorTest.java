@@ -550,7 +550,7 @@ class LispEvaluatorTest {
 				(1 2 3)
 				third")
 				  (list (read-line s) (read s) (read-line s) (read-line s)))""");
-		assertThat(result.print()).isEqualTo("(\"first line\" (1 2 3) \"third\" nil)");
+		assertThat(result.print()).isEqualTo("(\"first line\" (1 2 3) \"third\" NIL)");
 	}
 
 	@Test
@@ -718,7 +718,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalFormatColonAestheticNil() {
 		assertThat(eval("(format nil \"~:a\" nil)")).isEqualTo(new LispString("()"));
-		assertThat(eval("(format nil \"~a\" nil)")).isEqualTo(new LispString("nil"));
+		assertThat(eval("(format nil \"~a\" nil)")).isEqualTo(new LispString("NIL"));
 	}
 
 	@Test
@@ -1001,7 +1001,7 @@ class LispEvaluatorTest {
 		assertThat(eval("(lower-case-p #\\5)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(upper-case-p #\\A)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(upper-case-p #\\a)")).isEqualTo(LispNil.INSTANCE);
-		assertThat(eval("(mapcar #'upper-case-p '(#\\A #\\b))").print()).isEqualTo("(t nil)");
+		assertThat(eval("(mapcar #'upper-case-p '(#\\A #\\b))").print()).isEqualTo("(T NIL)");
 	}
 
 	@Test
@@ -1019,7 +1019,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalStreamp() {
-		assertThat(eval("(with-output-to-string (s) (princ (streamp s) s))")).isEqualTo(new LispString("t"));
+		assertThat(eval("(with-output-to-string (s) (princ (streamp s) s))")).isEqualTo(new LispString("T"));
 		assertThat(eval("(streamp 5)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(streamp \"x\")")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(with-output-to-string (s) (check-type s stream) (write-string \"ok\" s))"))
@@ -1964,7 +1964,7 @@ class LispEvaluatorTest {
 	void evalLoopAcross() {
 		assertThat(eval("(loop for c across \"hello\" collect c)").print()).isEqualTo("(#\\h #\\e #\\l #\\l #\\o)");
 		assertThat(eval("(loop for c across \"hello\" count (eql c #\\l))")).isEqualTo(new LispInteger(2));
-		assertThat(eval("(loop for c across \"\" collect c)").print()).isEqualTo("nil");
+		assertThat(eval("(loop for c across \"\" collect c)").print()).isEqualTo("NIL");
 		// across also walks a vector's elements.
 		assertThat(eval("(loop for x across #(1 2 3 4 5) collect (* x x))").print()).isEqualTo("(1 4 9 16 25)");
 		assertThat(eval("(loop for x across #(3 1 4 1 5) maximize x)")).isEqualTo(new LispInteger(5));
@@ -1974,16 +1974,16 @@ class LispEvaluatorTest {
 	void evalLoopBeingSymbols() {
 		// Lite `being` package iteration: parses and iterates the empty sequence (no
 		// runtime intern table), so every variant yields nil / an empty accumulation.
-		assertThat(eval("(loop for s being the external-symbols of :cl collect s)").print()).isEqualTo("nil");
-		assertThat(eval("(loop for s being the symbols of :cl collect s)").print()).isEqualTo("nil");
-		assertThat(eval("(loop for s being each present-symbols in :cl-user collect s)").print()).isEqualTo("nil");
+		assertThat(eval("(loop for s being the external-symbols of :cl collect s)").print()).isEqualTo("NIL");
+		assertThat(eval("(loop for s being the symbols of :cl collect s)").print()).isEqualTo("NIL");
+		assertThat(eval("(loop for s being each present-symbols in :cl-user collect s)").print()).isEqualTo("NIL");
 		assertThat(eval("(loop for s being the external-symbols of :cl count s)")).isEqualTo(new LispInteger(0));
 		// Embedded in the cl-who hyperdoc shape: the let+defun loads without error.
 		assertThat(evalMulti("""
 				(let ((alist (loop for symbol being the external-symbols of :cl-who
 				                   collect (cons symbol (string-downcase symbol)))))
 				  (defun hyperdoc-lookup (symbol type) (cdr (assoc symbol alist))))
-				(hyperdoc-lookup 'with-html-output 'function)""").print()).isEqualTo("nil");
+				(hyperdoc-lookup 'with-html-output 'function)""").print()).isEqualTo("NIL");
 	}
 
 	@Test
@@ -2213,12 +2213,12 @@ class LispEvaluatorTest {
 		assertThat(eval("(position-if #'digit-char-p \"ab3c\")").print()).isEqualTo("2");
 		assertThat(eval("(count #\\a \"banana\")").print()).isEqualTo("3");
 		assertThat(eval("(count-if #'digit-char-p \"a1b2\")").print()).isEqualTo("2");
-		assertThat(eval("(every #'digit-char-p \"123\")").print()).isEqualTo("t");
+		assertThat(eval("(every #'digit-char-p \"123\")").print()).isEqualTo("T");
 		assertThat(eval("(every #'digit-char-p \"12a\")")).isSameAs(LispNil.INSTANCE);
 		// some yields the first non-nil predicate value: digit-char-p's weight of #\1
 		assertThat(eval("(some #'digit-char-p \"abc1\")").print()).isEqualTo("1");
 		assertThat(eval("(notany #'digit-char-p \"ab1\")")).isSameAs(LispNil.INSTANCE);
-		assertThat(eval("(notevery #'digit-char-p \"12a\")").print()).isEqualTo("t");
+		assertThat(eval("(notevery #'digit-char-p \"12a\")").print()).isEqualTo("T");
 		assertThat(
 				eval("(reduce (lambda (acc c) (if (char= c #\\a) (+ acc 1) acc)) \"banana\" :initial-value 0)").print())
 			.isEqualTo("3");
@@ -2506,9 +2506,9 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalMakeList() {
-		assertThat(eval("(make-list 3)").print()).isEqualTo("(nil nil nil)");
+		assertThat(eval("(make-list 3)").print()).isEqualTo("(NIL NIL NIL)");
 		assertThat(eval("(make-list 0)")).isSameAs(LispNil.INSTANCE);
-		assertThat(eval("(funcall #'make-list 2)").print()).isEqualTo("(nil nil)");
+		assertThat(eval("(funcall #'make-list 2)").print()).isEqualTo("(NIL NIL)");
 	}
 
 	@Test
@@ -2566,12 +2566,12 @@ class LispEvaluatorTest {
 		assertThat(eval("(integer-length 255)").print()).isEqualTo("8");
 		assertThat(eval("(integer-length -1)").print()).isEqualTo("0");
 		assertThat(eval("(integer-length -5)").print()).isEqualTo("3");
-		assertThat(eval("(logbitp 0 5)").print()).isEqualTo("t");
-		assertThat(eval("(logbitp 1 5)").print()).isEqualTo("nil");
-		assertThat(eval("(logbitp 2 5)").print()).isEqualTo("t");
-		assertThat(eval("(logbitp 3 -1)").print()).isEqualTo("t");
+		assertThat(eval("(logbitp 0 5)").print()).isEqualTo("T");
+		assertThat(eval("(logbitp 1 5)").print()).isEqualTo("NIL");
+		assertThat(eval("(logbitp 2 5)").print()).isEqualTo("T");
+		assertThat(eval("(logbitp 3 -1)").print()).isEqualTo("T");
 		assertThat(eval("(funcall #'integer-length 8)").print()).isEqualTo("4");
-		assertThat(eval("(funcall #'logbitp 1 2)").print()).isEqualTo("t");
+		assertThat(eval("(funcall #'logbitp 1 2)").print()).isEqualTo("T");
 	}
 
 	@Test
@@ -2623,17 +2623,17 @@ class LispEvaluatorTest {
 		// error rather than silently returning nil, which would hide a caller's mistake.
 		// nil is a valid empty list and must stay accepted.
 		assertThatThrownBy(() -> eval("(mapcar #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("mapcar: argument is not a list: \"abc\"");
+			.hasMessageContaining("MAPCAR: argument is not a list: \"abc\"");
 		assertThatThrownBy(() -> eval("(mapc #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("mapc: argument is not a list");
+			.hasMessageContaining("MAPC: argument is not a list");
 		assertThatThrownBy(() -> eval("(mapcan #'list \"abc\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("mapcan: argument is not a list");
+			.hasMessageContaining("MAPCAN: argument is not a list");
 		assertThatThrownBy(() -> eval("(maplist #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("maplist: argument is not a list");
+			.hasMessageContaining("MAPLIST: argument is not a list");
 		assertThatThrownBy(() -> eval("(mapcon #'list \"abc\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("mapcon: argument is not a list");
+			.hasMessageContaining("MAPCON: argument is not a list");
 		assertThatThrownBy(() -> eval("(mapcar #'1+ 5)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("mapcar: argument is not a list: 5");
+			.hasMessageContaining("MAPCAR: argument is not a list: 5");
 		// nil (the empty list) stays accepted across the family.
 		assertThat(eval("(mapcar #'1+ nil)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(maplist #'identity nil)")).isEqualTo(LispNil.INSTANCE);
@@ -2718,7 +2718,7 @@ class LispEvaluatorTest {
 				  (list orig copy))
 				""").print()).isEqualTo("(((1 2)) ((99 2)))");
 		assertThat(eval("(search \"bc\" \"abcd\")").print()).isEqualTo("1");
-		assertThat(eval("(search \"x\" \"abcd\")").print()).isEqualTo("nil");
+		assertThat(eval("(search \"x\" \"abcd\")").print()).isEqualTo("NIL");
 		assertThat(eval("(search \"ab\" \"ab-ab\" :from-end t)").print()).isEqualTo("3");
 		assertThat(eval("(search \"BC\" \"abcd\" :test #'char-equal)").print()).isEqualTo("1");
 	}
@@ -2920,7 +2920,7 @@ class LispEvaluatorTest {
 		assertThat(eval("(let ((n 5)) (check-type n (integer 0 9)))")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(let ((s \"x\")) (check-type s (or null string)))")).isEqualTo(LispNil.INSTANCE);
 		assertThatThrownBy(() -> eval("(let ((n \"5\")) (check-type n integer))")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("The value of N is \"5\", which is not of type integer.");
+			.hasMessageContaining("The value of N is \"5\", which is not of type INTEGER.");
 		assertThatThrownBy(() -> eval("(let ((n 12)) (check-type n (integer 0 9) \"a single digit\"))"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("The value of N is 12, which is not a single digit.");
@@ -2932,7 +2932,7 @@ class LispEvaluatorTest {
 			.isEqualTo(LispNil.INSTANCE);
 		assertThatThrownBy(() -> eval("(let ((k 'd)) (check-type k (member a b c)))"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("which is not of type (member A B C)");
+			.hasMessageContaining("which is not of type (MEMBER A B C)");
 	}
 
 	@Test
@@ -2965,7 +2965,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalFletLambdaListExtensionsAndClosure() {
 		assertThat(eval("(flet ((opt (a &optional (b 10) &rest r) (list a b r))) (opt 1))").print())
-			.isEqualTo("(1 10 nil)");
+			.isEqualTo("(1 10 NIL)");
 		assertThat(eval("(flet ((opt (a &optional (b 10) &rest r) (list a b r))) (opt 1 2 3 4))").print())
 			.isEqualTo("(1 2 (3 4))");
 		assertThat(eval("(let ((base 100)) (flet ((offs (x) (+ base x))) (offs 5)))")).isEqualTo(new LispInteger(105));
@@ -2997,7 +2997,7 @@ class LispEvaluatorTest {
 	void evalLabelsMutualRecursion() {
 		assertThat(eval("(labels ((ev (n) (if (= n 0) t (od (- n 1)))) (od (n) (if (= n 0) nil (ev (- n 1)))))"
 				+ " (list (ev 10) (od 10)))")
-			.print()).isEqualTo("(t nil)");
+			.print()).isEqualTo("(T NIL)");
 	}
 
 	@Test
@@ -3064,12 +3064,12 @@ class LispEvaluatorTest {
 	void evalMultipleValueBind() {
 		assertThat(eval("(multiple-value-bind (a b) (values 1 2) (list a b))").print()).isEqualTo("(1 2)");
 		// Missing values bind to nil; surplus values are evaluated and discarded.
-		assertThat(eval("(multiple-value-bind (a b c) (values 1 2) (list a b c))").print()).isEqualTo("(1 2 nil)");
+		assertThat(eval("(multiple-value-bind (a b c) (values 1 2) (list a b c))").print()).isEqualTo("(1 2 NIL)");
 		assertThat(evalMulti(
 				"(setq mv-side 0)" + " (multiple-value-bind (a) (values 1 (setq mv-side 7)) (list a mv-side))")
 			.print()).isEqualTo("(1 7)");
 		// A single-value producer supplies its primary value only.
-		assertThat(eval("(multiple-value-bind (a b) (+ 1 2) (list a b))").print()).isEqualTo("(3 nil)");
+		assertThat(eval("(multiple-value-bind (a b) (+ 1 2) (list a b))").print()).isEqualTo("(3 NIL)");
 		assertThat(eval("(multiple-value-bind () (values 1 2) 'ok)").print()).isEqualTo("OK");
 	}
 
@@ -3091,8 +3091,8 @@ class LispEvaluatorTest {
 			.isEqualTo("(3 3 2)");
 		// Extra variables receive nil; a single-value producer supplies its primary only.
 		assertThat(eval("(let (a b c) (multiple-value-setq (a b c) (values 1 2)) (list a b c))").print())
-			.isEqualTo("(1 2 nil)");
-		assertThat(eval("(let (a b) (multiple-value-setq (a b) (+ 1 2)) (list a b))").print()).isEqualTo("(3 nil)");
+			.isEqualTo("(1 2 NIL)");
+		assertThat(eval("(let (a b) (multiple-value-setq (a b) (+ 1 2)) (list a b))").print()).isEqualTo("(3 NIL)");
 	}
 
 	@Test
@@ -3115,7 +3115,7 @@ class LispEvaluatorTest {
 		assertThat(eval("(destructuring-bind (a (b (c))) '(1 (2 (3))) (list a b c))").print()).isEqualTo("(1 2 3)");
 		// Lite semantics: a missing position binds to nil, surplus elements are
 		// ignored.
-		assertThat(eval("(destructuring-bind (a b) '(1) (list a b))").print()).isEqualTo("(1 nil)");
+		assertThat(eval("(destructuring-bind (a b) '(1) (list a b))").print()).isEqualTo("(1 NIL)");
 		assertThat(eval("(destructuring-bind (a) '(1 2 3) a)")).isEqualTo(new LispInteger(1));
 		assertThat(eval("(destructuring-bind () '(1) 'ok)").print()).isEqualTo("OK");
 	}
@@ -3123,9 +3123,9 @@ class LispEvaluatorTest {
 	@Test
 	void evalDestructuringBindOptionalRestKeyAux() {
 		assertThat(eval("(destructuring-bind (a &optional (b 10) c) '(1) (list a b c))").print())
-			.isEqualTo("(1 10 nil)");
+			.isEqualTo("(1 10 NIL)");
 		assertThat(eval("(destructuring-bind (a &optional (b 10 bp)) '(1 2) (list a b bp))").print())
-			.isEqualTo("(1 2 t)");
+			.isEqualTo("(1 2 T)");
 		assertThat(eval("(destructuring-bind (a &rest r) '(1 2 3) (list a r))").print()).isEqualTo("(1 (2 3))");
 		assertThat(eval("(destructuring-bind (a &body b) '(1 2 3) (list a b))").print()).isEqualTo("(1 (2 3))");
 		assertThat(eval("(destructuring-bind (a &key k (j 5)) '(1 :k 2) (list a k j))").print()).isEqualTo("(1 2 5)");
@@ -3171,20 +3171,20 @@ class LispEvaluatorTest {
 		String setup = "(progn (setq mv-h (make-hash-table)) (setf (gethash 'x mv-h) nil)"
 				+ " (setf (gethash 'y mv-h) 42)) ";
 		assertThat(evalMulti(setup + "(multiple-value-bind (v p) (gethash 'y mv-h) (list v p))").print())
-			.isEqualTo("(42 t)");
+			.isEqualTo("(42 T)");
 		// A stored nil is present (present-p distinguishes it from a missing key).
 		assertThat(evalMulti(setup + "(multiple-value-bind (v p) (gethash 'x mv-h) (list v p))").print())
-			.isEqualTo("(nil t)");
+			.isEqualTo("(NIL T)");
 		assertThat(evalMulti(setup + "(multiple-value-bind (v p) (gethash 'z mv-h) (list v p))").print())
-			.isEqualTo("(nil nil)");
+			.isEqualTo("(NIL NIL)");
 		assertThat(evalMulti(setup + "(multiple-value-bind (v p) (gethash 'z mv-h 'dflt) (list v p))").print())
-			.isEqualTo("(DFLT nil)");
+			.isEqualTo("(DFLT NIL)");
 	}
 
 	@Test
 	void evalMultipleValueList() {
 		assertThat(eval("(multiple-value-list (values 1 2 3))").print()).isEqualTo("(1 2 3)");
-		assertThat(eval("(multiple-value-list (values))").print()).isEqualTo("nil");
+		assertThat(eval("(multiple-value-list (values))").print()).isEqualTo("NIL");
 		assertThat(eval("(multiple-value-list (floor 17 5))").print()).isEqualTo("(3 2)");
 		assertThat(eval("(multiple-value-list (+ 1 2))").print()).isEqualTo("(3)");
 	}
@@ -3214,11 +3214,11 @@ class LispEvaluatorTest {
 			.print()).isEqualTo("(4 5)");
 		// A producer that never calls values leaves the cleared spill: extras are nil.
 		assertThat(evalMulti("(defun mv-one () 4)" + " (multiple-value-bind (a b) (mv-one) (list a b))").print())
-			.isEqualTo("(4 nil)");
+			.isEqualTo("(4 NIL)");
 		// A values tail with FEWER values than a previous call's resets the spill.
 		assertThat(evalMulti("(defun mv-two2 () (values 4 5))" + " (defun mv-one2 () (values 6))"
 				+ " (multiple-value-bind (a b) (mv-two2) nil)" + " (multiple-value-bind (a b) (mv-one2) (list a b))")
-			.print()).isEqualTo("(6 nil)");
+			.print()).isEqualTo("(6 NIL)");
 	}
 
 	@Test
@@ -3354,7 +3354,7 @@ class LispEvaluatorTest {
 	void evalRemove() {
 		assertThat(eval("(remove 2 '(1 2 3 2 4))").print()).isEqualTo("(1 3 4)");
 		assertThat(eval("(remove 9 '(1 2 3))").print()).isEqualTo("(1 2 3)");
-		assertThat(eval("(remove 1 '())").print()).isEqualTo("nil");
+		assertThat(eval("(remove 1 '())").print()).isEqualTo("NIL");
 	}
 
 	@Test
@@ -3367,7 +3367,7 @@ class LispEvaluatorTest {
 	void evalRemoveIfNot() {
 		assertThat(eval("(remove-if-not #'evenp '(1 2 3 4 5))").print()).isEqualTo("(2 4)");
 		assertThat(eval("(remove-if-not (lambda (x) (> x 3)) '(1 2 3 4 5))").print()).isEqualTo("(4 5)");
-		assertThat(eval("(remove-if-not #'evenp '())").print()).isEqualTo("nil");
+		assertThat(eval("(remove-if-not #'evenp '())").print()).isEqualTo("NIL");
 		assertThat(evalMulti("(funcall #'remove-if-not #'oddp '(1 2 3 4))").print()).isEqualTo("(1 3)");
 	}
 
@@ -3387,7 +3387,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalSubstitute() {
 		assertThat(eval("(substitute 0 2 '(1 2 3 2 1))").print()).isEqualTo("(1 0 3 0 1)");
-		assertThat(eval("(substitute 9 1 '())").print()).isEqualTo("nil");
+		assertThat(eval("(substitute 9 1 '())").print()).isEqualTo("NIL");
 		assertThat(eval("(nsubstitute 9 1 '(1 2 1 3))").print()).isEqualTo("(9 2 9 3)");
 		assertThat(evalMulti("(funcall #'substitute 0 2 '(2 2 2))").print()).isEqualTo("(0 0 0)");
 	}
@@ -3416,7 +3416,7 @@ class LispEvaluatorTest {
 	void evalMapcan() {
 		assertThat(eval("(mapcan (lambda (x) (list x x)) '(1 2 3))").print()).isEqualTo("(1 1 2 2 3 3)");
 		assertThat(eval("(mapcan (lambda (x) (if (evenp x) (list x) nil)) '(1 2 3 4))").print()).isEqualTo("(2 4)");
-		assertThat(eval("(mapcan #'list '())").print()).isEqualTo("nil");
+		assertThat(eval("(mapcan #'list '())").print()).isEqualTo("NIL");
 		assertThat(evalMulti("(funcall #'mapcan (lambda (x) (list x)) '(1 2 3))").print()).isEqualTo("(1 2 3)");
 	}
 
@@ -3424,7 +3424,7 @@ class LispEvaluatorTest {
 	void evalSort() {
 		assertThat(eval("(sort '(3 1 4 1 5 9 2 6) #'<)").print()).isEqualTo("(1 1 2 3 4 5 6 9)");
 		assertThat(eval("(sort '(3 1 4) #'>)").print()).isEqualTo("(4 3 1)");
-		assertThat(eval("(sort '() #'<)").print()).isEqualTo("nil");
+		assertThat(eval("(sort '() #'<)").print()).isEqualTo("NIL");
 		assertThat(eval("(sort '(5) #'<)").print()).isEqualTo("(5)");
 		assertThat(evalMulti("(funcall #'sort '(2 3 1) #'<)").print()).isEqualTo("(1 2 3)");
 	}
@@ -3444,7 +3444,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalBareFunctionNameAsVariableIsUnbound() {
 		assertThatThrownBy(() -> eval("car")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("The variable car is unbound");
+			.hasMessageContaining("The variable CAR is unbound");
 	}
 
 	@Test
@@ -3591,7 +3591,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalReadSharpQuote() {
 		LispVal result = evalWithStdin("(read)", "#'car\n");
-		assertThat(result.print()).isEqualTo("(function car)");
+		assertThat(result.print()).isEqualTo("(FUNCTION CAR)");
 	}
 
 	@Test
@@ -3789,7 +3789,7 @@ class LispEvaluatorTest {
 				(with-open-file (in "%s")
 				  (list (read-line in) (read-line in) (read-line in)))
 				""".formatted(file, file));
-		assertThat(result.print()).isEqualTo("(\"hello\" \"world\" nil)");
+		assertThat(result.print()).isEqualTo("(\"hello\" \"world\" NIL)");
 	}
 
 	@Test
@@ -3852,7 +3852,7 @@ class LispEvaluatorTest {
 		// implements (:supersede); :append must not be silently reinterpreted.
 		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :if-exists :append) s)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining(":if-exists supports only the native default value");
+			.hasMessageContaining(":IF-EXISTS supports only the native default value");
 	}
 
 	@Test
@@ -3867,7 +3867,7 @@ class LispEvaluatorTest {
 				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
 				  (list (read-byte in) (read-byte in) (read-byte in) (read-byte in) (read-byte in nil nil)))
 				""".formatted(file, file));
-		assertThat(result.print()).isEqualTo("(0 10 34 255 nil)");
+		assertThat(result.print()).isEqualTo("(0 10 34 255 NIL)");
 	}
 
 	@Test
@@ -4057,7 +4057,7 @@ class LispEvaluatorTest {
 		evaluator.setLoadBaseDir(tempDir.toString());
 		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(require :nope)")))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("require: cannot read file");
+			.hasMessageContaining("REQUIRE: cannot read file");
 	}
 
 	@Test
@@ -4076,7 +4076,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void rontolispVersionReturnsPlist() {
-		assertThat(eval("(car (rontolisp:version))")).isEqualTo(new LispSymbol(":version"));
+		assertThat(eval("(car (rontolisp:version))")).isEqualTo(new LispSymbol(":VERSION"));
 		assertThat(eval("(cadr (rontolisp:version))")).isEqualTo(new LispString(am.ik.rontolisp.Version.getVersion()));
 	}
 
@@ -4105,7 +4105,7 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> evalMulti(
 				"(rontolisp:wasm-import 'add :from \"host\" :params '(:int :int) :returns :int)" + "(add 1 2)"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("rontolisp:wasm-import");
+			.hasMessageContaining("RONTOLISP:WASM-IMPORT");
 	}
 
 	private static java.util.List<String> symbolNames(LispVal val) {
@@ -4120,43 +4120,43 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander defsetf deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop print-unreadable-object proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-package-iterator with-slots write-char)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WRITE-CHAR)");
 	}
 
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
 		assertThat(eval("(rontolisp:list-special-forms)").print()).isEqualTo(
-				"(defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function go if in-package lambda let progn progv quote return setq tagbody unwind-protect while)");
+				"(DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY UNWIND-PROTECT WHILE)");
 	}
 
 	@Test
 	void listFunctionsReturnsSortedClFunctions() {
 		java.util.List<String> names = symbolNames(eval("(rontolisp:list-functions)"));
 		assertThat(names)
-			.contains("first", "rest", "nth", "funcall", "length", "1+", "car", "eval", "not", "equal", "map",
-					"map-into", "mapc", "every", "some", "remove", "remove-if", "remove-if-not", "find", "find-if",
-					"find-if-not", "position", "position-if", "count", "count-if", "mapcan", "apply", "sort",
-					"member-if", "assoc-if", "getf", "butlast", "remove-duplicates", "nconc", "identity", "copy-list",
-					"nreverse", "make-list", "union", "intersection", "set-difference", "adjoin", "logand", "logior",
-					"logxor", "lognot", "ash", "integer-length", "logbitp", "list*", "acons", "endp", "elt", "rassoc",
-					"pairlis", "copy-alist", "revappend", "nreconc", "maplist", "mapcon", "mapl", "notany", "notevery",
-					"delete", "delete-if", "delete-if-not", "substitute", "nsubstitute", "fresh-line", "equalp",
-					"string<")
-			.doesNotContain("cond", "quote", "defun", "setf", "%remf-tail", "cadr", "*package*", "error", "%fmt-pad")
-			.contains("random", "get-universal-time", "get-internal-real-time", "get-internal-run-time", "getenv")
-			.contains("read-from-string", "parse-integer", "char", "schar", "char-code", "code-char", "char=", "char<",
-					"char<=", "char-upcase", "char-downcase", "characterp", "alpha-char-p", "digit-char-p")
-			.contains("make-hash-table", "gethash", "remhash", "clrhash", "hash-table-count", "hash-table-p", "maphash")
-			.contains("make-array", "aref", "row-major-aref", "array-row-major-index")
-			.contains("fill-pointer", "array-has-fill-pointer-p", "adjustable-array-p", "vector-push", "vector-pop",
-					"vector-push-extend", "array-element-type")
-			.contains("gensym", "macroexpand", "macroexpand-1")
-			.contains("require", "provide")
-			.contains("read-byte", "write-byte", "read-sequence", "write-sequence")
-			.contains("write-string", "write-to-string")
-			.contains("symbol-name", "intern", "find-symbol", "make-symbol", "boundp", "fboundp", "symbol-value")
-			.contains("byte", "byte-size", "byte-position", "ldb", "dpb")
-			.contains("string")
+			.contains("FIRST", "REST", "NTH", "FUNCALL", "LENGTH", "1+", "CAR", "EVAL", "NOT", "EQUAL", "MAP",
+					"MAP-INTO", "MAPC", "EVERY", "SOME", "REMOVE", "REMOVE-IF", "REMOVE-IF-NOT", "FIND", "FIND-IF",
+					"FIND-IF-NOT", "POSITION", "POSITION-IF", "COUNT", "COUNT-IF", "MAPCAN", "APPLY", "SORT",
+					"MEMBER-IF", "ASSOC-IF", "GETF", "BUTLAST", "REMOVE-DUPLICATES", "NCONC", "IDENTITY", "COPY-LIST",
+					"NREVERSE", "MAKE-LIST", "UNION", "INTERSECTION", "SET-DIFFERENCE", "ADJOIN", "LOGAND", "LOGIOR",
+					"LOGXOR", "LOGNOT", "ASH", "INTEGER-LENGTH", "LOGBITP", "LIST*", "ACONS", "ENDP", "ELT", "RASSOC",
+					"PAIRLIS", "COPY-ALIST", "REVAPPEND", "NRECONC", "MAPLIST", "MAPCON", "MAPL", "NOTANY", "NOTEVERY",
+					"DELETE", "DELETE-IF", "DELETE-IF-NOT", "SUBSTITUTE", "NSUBSTITUTE", "FRESH-LINE", "EQUALP",
+					"STRING<")
+			.doesNotContain("COND", "QUOTE", "DEFUN", "SETF", "%remf-tail", "CADR", "*package*", "ERROR", "%fmt-pad")
+			.contains("RANDOM", "GET-UNIVERSAL-TIME", "GET-INTERNAL-REAL-TIME", "GET-INTERNAL-RUN-TIME", "GETENV")
+			.contains("READ-FROM-STRING", "PARSE-INTEGER", "CHAR", "SCHAR", "CHAR-CODE", "CODE-CHAR", "CHAR=", "CHAR<",
+					"CHAR<=", "CHAR-UPCASE", "CHAR-DOWNCASE", "CHARACTERP", "ALPHA-CHAR-P", "DIGIT-CHAR-P")
+			.contains("MAKE-HASH-TABLE", "GETHASH", "REMHASH", "CLRHASH", "HASH-TABLE-COUNT", "HASH-TABLE-P", "MAPHASH")
+			.contains("MAKE-ARRAY", "AREF", "ROW-MAJOR-AREF", "ARRAY-ROW-MAJOR-INDEX")
+			.contains("FILL-POINTER", "ARRAY-HAS-FILL-POINTER-P", "ADJUSTABLE-ARRAY-P", "VECTOR-PUSH", "VECTOR-POP",
+					"VECTOR-PUSH-EXTEND", "ARRAY-ELEMENT-TYPE")
+			.contains("GENSYM", "MACROEXPAND", "MACROEXPAND-1")
+			.contains("REQUIRE", "PROVIDE")
+			.contains("READ-BYTE", "WRITE-BYTE", "READ-SEQUENCE", "WRITE-SEQUENCE")
+			.contains("WRITE-STRING", "WRITE-TO-STRING")
+			.contains("SYMBOL-NAME", "INTERN", "FIND-SYMBOL", "MAKE-SYMBOL", "BOUNDP", "FBOUNDP", "SYMBOL-VALUE")
+			.contains("BYTE", "BYTE-SIZE", "BYTE-POSITION", "LDB", "DPB")
+			.contains("STRING")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer")
 			.isSorted()
@@ -4168,7 +4168,7 @@ class LispEvaluatorTest {
 		LispVal byDefault = eval("(rontolisp:list-functions)");
 		assertThat(eval("(rontolisp:list-functions :cl)")).isEqualTo(byDefault);
 		assertThat(eval("(rontolisp:list-functions cl)")).isEqualTo(byDefault);
-		assertThat(eval("(rontolisp:list-functions \"cl\")")).isEqualTo(byDefault);
+		assertThat(eval("(rontolisp:list-functions \"CL\")")).isEqualTo(byDefault);
 		assertThat(eval("(rontolisp:list-functions 'cl)")).isEqualTo(byDefault);
 	}
 
@@ -4191,12 +4191,12 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
+				"(AWAIT FETCH HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 	}
 
 	@Test
 	void listFunctionsForJavaReturnsOwnedFunctions() {
-		assertThat(eval("(rontolisp:list-functions :java)").print()).isEqualTo("(call field new proxy static)");
+		assertThat(eval("(rontolisp:list-functions :java)").print()).isEqualTo("(CALL FIELD NEW PROXY STATIC)");
 	}
 
 	@Test
@@ -4235,7 +4235,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)");
+				"(AWAIT FETCH HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 	}
 
 	@Test
@@ -4251,7 +4251,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void packageDefaultsToClUser() {
-		assertThat(eval("*package*")).isEqualTo(new LispSymbol("cl-user"));
+		assertThat(eval("*package*")).isEqualTo(new LispSymbol("CL-USER"));
 	}
 
 	@Test
@@ -4262,7 +4262,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void inPackageUpdatesPackageVar() {
-		assertThat(evalMulti("(in-package :rontolisp) cl:*package*")).isEqualTo(new LispSymbol("rontolisp"));
+		assertThat(evalMulti("(in-package :rontolisp) cl:*package*")).isEqualTo(new LispSymbol("RONTOLISP"));
 	}
 
 	@Test
@@ -4274,13 +4274,13 @@ class LispEvaluatorTest {
 	void unqualifiedStandardSymbolInRontolispIsRejected() {
 		assertThatThrownBy(() -> evalMulti("(in-package :rontolisp) (car '(1 2))"))
 			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)
-			.hasMessageContaining("use cl:car");
+			.hasMessageContaining("use CL:CAR");
 	}
 
 	@Test
 	void inPackageCanSwitchBackToClUser() {
 		assertThat(evalMulti("(in-package :rontolisp) (in-package :cl-user) *package*"))
-			.isEqualTo(new LispSymbol("cl-user"));
+			.isEqualTo(new LispSymbol("CL-USER"));
 	}
 
 	@Test
@@ -4389,7 +4389,7 @@ class LispEvaluatorTest {
 				.isEqualTo(new LispString("hello world"));
 			assertThat(eval("(rontolisp:streamp (getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port
 					+ "/hello\")) :body))")
-				.print()).isEqualTo("t");
+				.print()).isEqualTo("T");
 			LispVal headers = eval(
 					"(getf (rontolisp:await (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")) :headers)");
 			// the JDK HttpClient normalizes response header names to lower case
@@ -4401,7 +4401,7 @@ class LispEvaluatorTest {
 			assertThat(eval("(rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")").print())
 				.isEqualTo("#<FUTURE>");
 			assertThat(eval("(rontolisp:futurep (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\"))").print())
-				.isEqualTo("t");
+				.isEqualTo("T");
 			// a settled future can be awaited more than once
 			assertThat(eval("(let ((p (rontolisp:fetch \"http://127.0.0.1:" + port + "/hello\")))"
 					+ " (rontolisp:await p) (getf (rontolisp:await p) :status))"))
@@ -4488,7 +4488,7 @@ class LispEvaluatorTest {
 	@Test
 	void tcpArgumentValidation() {
 		assertThatThrownBy(() -> eval("(rontolisp:tcp-connect \"127.0.0.1\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("tcp-connect");
+			.hasMessageContaining("TCP-CONNECT");
 		assertThatThrownBy(() -> eval("(rontolisp:tcp-connect 80 80)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects a string host");
 		assertThatThrownBy(() -> eval("(rontolisp:tcp-listen \"nope\")")).isInstanceOf(LispEvalException.class)
@@ -4583,7 +4583,7 @@ class LispEvaluatorTest {
 				  (usocket:socket-close listener)
 				  result)
 				""";
-		assertThat(eval(program).print()).isEqualTo("(\"127.0.0.1\" t \"127.0.0.1\" \"127.0.0.1\")");
+		assertThat(eval(program).print()).isEqualTo("(\"127.0.0.1\" T \"127.0.0.1\" \"127.0.0.1\")");
 	}
 
 	@Test
@@ -4622,7 +4622,7 @@ class LispEvaluatorTest {
 				    (usocket:socket-close listener)
 				    (list addr (= p port))))
 				""";
-		assertThat(eval(program).print()).isEqualTo("(\"127.0.0.1\" t)");
+		assertThat(eval(program).print()).isEqualTo("(\"127.0.0.1\" T)");
 	}
 
 	@Test
@@ -4801,7 +4801,7 @@ class LispEvaluatorTest {
 	@Test
 	void makeConditionBuildsTypedInstance() {
 		assertThat(eval("(make-condition 'simple-error :format-control \"x\")").print())
-			.isEqualTo("(%class-simple-error \"x\" nil)");
+			.isEqualTo("(%class-SIMPLE-ERROR \"x\" NIL)");
 	}
 
 	@Test
@@ -5059,7 +5059,7 @@ class LispEvaluatorTest {
 	void tlsListenPemArgumentValidation() {
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen-pem \"c.pem\" \"k.pem\")"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("tls-listen-pem");
+			.hasMessageContaining("TLS-LISTEN-PEM");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen-pem 1 \"k.pem\" 0)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects a string certificate path");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen-pem \"c.pem\" 1 0)")).isInstanceOf(LispEvalException.class)
@@ -5079,7 +5079,7 @@ class LispEvaluatorTest {
 	@Test
 	void tlsListenArgumentValidation() {
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen \"ks.p12\" \"pw\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("tls-listen");
+			.hasMessageContaining("TLS-LISTEN");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen 1 \"pw\" 0)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects a string keystore path");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-listen \"ks.p12\" 1 0)")).isInstanceOf(LispEvalException.class)
@@ -5092,7 +5092,7 @@ class LispEvaluatorTest {
 	@Test
 	void tlsArgumentValidation() {
 		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("tls-connect");
+			.hasMessageContaining("TLS-CONNECT");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-connect 443 443)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects a string host");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\" \"nope\")"))
@@ -5101,7 +5101,7 @@ class LispEvaluatorTest {
 		// the only accepted option is the :insecure keyword-value pair (arity 4)
 		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\" 443 :insecure)"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("tls-connect");
+			.hasMessageContaining("TLS-CONNECT");
 		assertThatThrownBy(() -> eval("(rontolisp:tls-connect \"127.0.0.1\" 443 :verify t)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects :insecure");
@@ -5192,7 +5192,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void fetchRejectsWrongArgCount() {
-		assertThatThrownBy(() -> eval("(rontolisp:fetch)")).hasMessageContaining("fetch");
+		assertThatThrownBy(() -> eval("(rontolisp:fetch)")).hasMessageContaining("FETCH");
 	}
 
 	@Test
@@ -5208,8 +5208,8 @@ class LispEvaluatorTest {
 		// like JavaScript await, a non-promise value is returned unchanged
 		assertThat(eval("(rontolisp:await 42)")).isEqualTo(new LispInteger(42));
 		assertThat(eval("(rontolisp:await \"p\")")).isEqualTo(new LispString("p"));
-		assertThat(eval("(rontolisp:await nil)").print()).isEqualTo("nil");
-		assertThatThrownBy(() -> eval("(rontolisp:await)")).hasMessageContaining("await");
+		assertThat(eval("(rontolisp:await nil)").print()).isEqualTo("NIL");
+		assertThatThrownBy(() -> eval("(rontolisp:await)")).hasMessageContaining("AWAIT");
 	}
 
 	@Test
@@ -5218,9 +5218,9 @@ class LispEvaluatorTest {
 		// the one asynchronous value (rontolisp:futurep), and composition is
 		// async-defun/async-lambda + await.
 		assertThatThrownBy(() -> eval("(rontolisp:then 1 (lambda (x) x))"))
-			.hasMessageContaining("not external in the rontolisp package");
+			.hasMessageContaining("not external in the RONTOLISP package");
 		assertThatThrownBy(() -> eval("(rontolisp:promisep 42)"))
-			.hasMessageContaining("not external in the rontolisp package");
+			.hasMessageContaining("not external in the RONTOLISP package");
 	}
 
 	// Characters and string/number parsing
@@ -5330,7 +5330,7 @@ class LispEvaluatorTest {
 				(with-open-file (in "%s")
 				  (list (read in) (read in) (read in)))
 				""".formatted(file, file));
-		assertThat(result.print()).isEqualTo("((10 20 30) 99 nil)");
+		assertThat(result.print()).isEqualTo("((10 20 30) 99 NIL)");
 	}
 
 	@Test
@@ -5341,7 +5341,7 @@ class LispEvaluatorTest {
 				(setf (gethash "b" *h*) 2)
 				(list (gethash "a" *h*) (gethash "b" *h*) (gethash "c" *h*))
 				""");
-		assertThat(result.print()).isEqualTo("(1 2 nil)");
+		assertThat(result.print()).isEqualTo("(1 2 NIL)");
 	}
 
 	@Test
@@ -5379,7 +5379,7 @@ class LispEvaluatorTest {
 				(remhash 1 *h*)
 				(list (hash-table-count *h*) (gethash 1 *h*) (gethash 2 *h*))
 				""");
-		assertThat(result.print()).isEqualTo("(1 nil B)");
+		assertThat(result.print()).isEqualTo("(1 NIL B)");
 	}
 
 	@Test
@@ -5413,7 +5413,7 @@ class LispEvaluatorTest {
 				      (mapcar #'hash-table-p (list *h* 5))
 				      (funcall #'hash-table-count *h*))
 				""");
-		assertThat(result.print()).isEqualTo("(1 (t nil) 2)");
+		assertThat(result.print()).isEqualTo("(1 (T NIL) 2)");
 	}
 
 	@Test
@@ -5524,7 +5524,7 @@ class LispEvaluatorTest {
 	void lengthOfTwoDimensionalArrayIsAnError() {
 		assertThatThrownBy(() -> eval("(length (make-array (list 2 3) :initial-element 0))"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("length");
+			.hasMessageContaining("LENGTH");
 	}
 
 	@Test
@@ -5579,7 +5579,7 @@ class LispEvaluatorTest {
 				(list (linalg:sum *c*) (linalg:amax *c*)
 				      (linalg:array-equal (linalg:add *c* 10) (linalg:reshape (linalg:arange 10 18) '(2 2 2))))
 				""");
-		assertThat(result.print()).isEqualTo("(28.0 7.0 t)");
+		assertThat(result.print()).isEqualTo("(28.0 7.0 T)");
 	}
 
 	@Test
@@ -5608,7 +5608,7 @@ class LispEvaluatorTest {
 				(list (linalg:mul (linalg:from-list '((1 2) (3 4)) 'single-float) #(10 20))
 				      (array-element-type (linalg:mul #(10 20) (linalg:ones '(2 2) 'single-float))))
 				""");
-		assertThat(result.print()).isEqualTo("(#f((10.0 40.0) (30.0 80.0)) double-float)");
+		assertThat(result.print()).isEqualTo("(#f((10.0 40.0) (30.0 80.0)) DOUBLE-FLOAT)");
 	}
 
 	@Test
@@ -5647,7 +5647,7 @@ class LispEvaluatorTest {
 				        (array-element-type (linalg:add (linalg:from-list '(1 2 3)) 10))))
 				""");
 		assertThat(result.print())
-			.isEqualTo("(single-float double-float #f((0.5 1.5) (2.5 3.5)) single-float single-float double-float)");
+			.isEqualTo("(SINGLE-FLOAT DOUBLE-FLOAT #f((0.5 1.5) (2.5 3.5)) SINGLE-FLOAT SINGLE-FLOAT DOUBLE-FLOAT)");
 	}
 
 	@Test
@@ -5670,7 +5670,7 @@ class LispEvaluatorTest {
 				      (array-element-type (linalg:gradient (linalg:arange 0 4 'single-float))))
 				""");
 		assertThat(result.print()).isEqualTo("(#d(1.0 2.0 3.0 -7.0) #d(1.0 1.0 -10.0) #d((2.0 3.0) (5.0 1.0)) #d()"
-				+ " #d(1.0 2.0 4.0 6.0 7.0) #d(0.5 1.0 2.0 3.0 3.5) #d(1.0 2.0 4.0) single-float single-float)");
+				+ " #d(1.0 2.0 4.0 6.0 7.0) #d(0.5 1.0 2.0 3.0 3.5) #d(1.0 2.0 4.0) SINGLE-FLOAT SINGLE-FLOAT)");
 		assertThatThrownBy(() -> eval("(linalg:gradient #(1))"))
 			.hasMessageContaining("linalg: gradient needs at least 2 samples");
 		assertThatThrownBy(() -> eval("(linalg:gradient #2A((1 2) (3 4)))"))
@@ -5698,7 +5698,7 @@ class LispEvaluatorTest {
 				""");
 		assertThat(result.print()).isEqualTo("(#d(5.0 7.0 9.0) #d(6.0 15.0) #d(6.0 15.0)"
 				+ " #d((6.0) (15.0)) #d((21.0)) #d(2.5 3.5 4.5) #d(3.0 6.0) #d((1.0 2.0 3.0))"
-				+ " 6 #d(6.0) single-float)");
+				+ " 6 #d(6.0) SINGLE-FLOAT)");
 		// Rank-3 middle axis: out[o, i] folds over a[o, j, i].
 		LispVal rank3 = evalMulti("""
 				(defparameter *c* (linalg:reshape (linalg:arange 24) '(2 3 4)))
@@ -5767,8 +5767,8 @@ class LispEvaluatorTest {
 				      (array-element-type (linalg:rand 3 'single-float))
 				      (linalg:shape (linalg:randn '(2 3))))
 				""");
-		assertThat(result.print()).isEqualTo("(t #d(26833.0 11120.0 29256.0 22347.0) 45.0"
-				+ " #d((317.0 637.0) (949.0 376.0)) #d(284.0 -21.0 221.0) t single-float (2 3))");
+		assertThat(result.print()).isEqualTo("(T #d(26833.0 11120.0 29256.0 22347.0) 45.0"
+				+ " #d((317.0 637.0) (949.0 376.0)) #d(284.0 -21.0 221.0) T SINGLE-FLOAT (2 3))");
 	}
 
 	@Test
@@ -5791,7 +5791,7 @@ class LispEvaluatorTest {
 				""");
 		assertThat(result.print()).isEqualTo("(#d((30.0 31.0 32.0) (10.0 11.0 12.0) (30.0 31.0 32.0))"
 				+ " #d(4.0 0.0) (2 3 2) #d(30.0 31.0 32.0) (3 2) #d(12.0 20.0 31.0)"
-				+ " #d((0.0 1.0 0.0) (1.0 0.0 0.0) (0.0 0.0 1.0)) single-float single-float single-float)");
+				+ " #d((0.0 1.0 0.0) (1.0 0.0 0.0) (0.0 0.0 1.0)) SINGLE-FLOAT SINGLE-FLOAT SINGLE-FLOAT)");
 		assertThatThrownBy(() -> eval("(linalg:row #(1 2 3) 1)")).hasMessageContaining("linalg: row expects rank >= 2");
 		assertThatThrownBy(() -> eval("(linalg:gather #(1 2 3) #(0))"))
 			.hasMessageContaining("linalg: gather expects a matrix");
@@ -5820,11 +5820,11 @@ class LispEvaluatorTest {
 				      (array-element-type (linalg:transpose (linalg:ones '(2 2 2) 'single-float) '(2 1 0)))
 				      (array-element-type (linalg:pad (linalg:ones 2 'single-float) 1)))
 				""");
-		assertThat(result.print()).isEqualTo("((3 2 4) #d((1.0 3.0) (2.0 4.0)) t"
+		assertThat(result.print()).isEqualTo("((3 2 4) #d((1.0 3.0) (2.0 4.0)) T"
 				+ " #d((0.0 0.0 0.0 0.0 0.0 0.0) (0.0 0.0 1.0 2.0 0.0 0.0) (0.0 0.0 3.0 4.0 0.0 0.0)"
 				+ " (0.0 0.0 0.0 0.0 0.0 0.0)) #d(0.0 1.0 2.0 0.0)"
-				+ " #d((0.0 1.0 4.0 5.0) (2.0 3.0 6.0 7.0) (8.0 9.0 12.0 13.0) (10.0 11.0 14.0 15.0)) t"
-				+ " #d((((1.0 2.0 1.0) (2.0 4.0 2.0) (1.0 2.0 1.0)))) single-float single-float)");
+				+ " #d((0.0 1.0 4.0 5.0) (2.0 3.0 6.0 7.0) (8.0 9.0 12.0 13.0) (10.0 11.0 14.0 15.0)) T"
+				+ " #d((((1.0 2.0 1.0) (2.0 4.0 2.0) (1.0 2.0 1.0)))) SINGLE-FLOAT SINGLE-FLOAT)");
 		assertThatThrownBy(() -> eval("(linalg:transpose (linalg:zeros '(2 3)) '(0 0))"))
 			.hasMessageContaining("linalg: transpose axes must be a permutation");
 		assertThatThrownBy(() -> eval("(linalg:transpose (linalg:zeros '(2 3)) '(0))"))
@@ -5853,7 +5853,7 @@ class LispEvaluatorTest {
 				""");
 		assertThat(result.print()).isEqualTo("(#d(0.0 1.0 0.0) #d(0.0 0.0 1.0) #d(0.0 1.0 1.0)"
 				+ " #d(1.0 0.0 0.0) #d(1.0 1.0 0.0) #d(0.0 1.0 1.0) #d((1.0 0.0) (0.0 1.0))"
-				+ " #d((0.0 0.0) (0.0 0.0)) single-float 1.0)");
+				+ " #d((0.0 0.0) (0.0 0.0)) SINGLE-FLOAT 1.0)");
 	}
 
 	@Test
@@ -6041,10 +6041,10 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(defmacro my-env-mac (a &environment e) `(list ,a ',e))
 				(my-env-mac 7)
-				""").print()).isEqualTo("(7 nil)");
+				""").print()).isEqualTo("(7 NIL)");
 		assertThatThrownBy(() -> evalMulti("(defmacro my-mac2 (a &environment) a)"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("&environment must be followed by exactly one parameter symbol");
+			.hasMessageContaining("&ENVIRONMENT must be followed by exactly one parameter symbol");
 	}
 
 	@Test
@@ -6147,9 +6147,9 @@ class LispEvaluatorTest {
 
 	@Test
 	void findSymbolReturnsKnownNamesOnly() {
-		assertThat(evalMulti("(find-symbol \"car\")").print()).isEqualTo("car");
-		assertThat(evalMulti("(find-symbol \"cond\")").print()).isEqualTo("cond");
-		assertThat(evalMulti("(find-symbol \":kw\")").print()).isEqualTo(":kw");
+		assertThat(evalMulti("(find-symbol \"CAR\")").print()).isEqualTo("CAR");
+		assertThat(evalMulti("(find-symbol \"COND\")").print()).isEqualTo("COND");
+		assertThat(evalMulti("(find-symbol \":KW\")").print()).isEqualTo(":KW");
 		assertThat(evalMulti("(find-symbol \"no-such-name\")")).isEqualTo(LispNil.INSTANCE);
 		assertThat(evalMulti("(defun my-fn (x) x) (find-symbol \"MY-FN\")").print()).isEqualTo("MY-FN");
 		assertThat(evalMulti("(defvar *my-var* 1) (find-symbol \"*MY-VAR*\")").print()).isEqualTo("*MY-VAR*");
@@ -6225,14 +6225,14 @@ class LispEvaluatorTest {
 				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))
 				(macroexpand-1 '(my-when2 (> 2 1) 'a 'b))
 				""");
-		assertThat(result.print()).isEqualTo("(if (> 2 1) (progn (quote A) (quote B)) nil)");
+		assertThat(result.print()).isEqualTo("(IF (> 2 1) (PROGN (QUOTE A) (QUOTE B)) NIL)");
 	}
 
 	@Test
 	void macroexpand1ExpandsABuiltinMacroOnce() {
-		assertThat(evalMulti("(macroexpand-1 '(unless c x))").print()).isEqualTo("(if C nil X)");
+		assertThat(evalMulti("(macroexpand-1 '(unless c x))").print()).isEqualTo("(IF C NIL X)");
 		// incf expands to setf: one step only, the setf is left for another round.
-		assertThat(evalMulti("(macroexpand-1 '(incf n 2))").print()).isEqualTo("(setf N (+ N 2))");
+		assertThat(evalMulti("(macroexpand-1 '(incf n 2))").print()).isEqualTo("(SETF N (+ N 2))");
 	}
 
 	@Test
@@ -6240,7 +6240,7 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(macroexpand-1 '(+ 1 2))").print()).isEqualTo("(+ 1 2)");
 		assertThat(evalMulti("(macroexpand-1 'x)").print()).isEqualTo("X");
 		assertThat(evalMulti("(macroexpand-1 12)").print()).isEqualTo("12");
-		assertThat(evalMulti("(macroexpand-1 '(if a b c))").print()).isEqualTo("(if A B C)");
+		assertThat(evalMulti("(macroexpand-1 '(if a b c))").print()).isEqualTo("(IF A B C)");
 	}
 
 	@Test
@@ -6252,12 +6252,12 @@ class LispEvaluatorTest {
 				(macroexpand '(outer 41))
 				""");
 		assertThat(result.print()).isEqualTo("(+ 41 1)");
-		assertThat(evalMulti("(macroexpand '(when a (when b c)))").print()).isEqualTo("(if A (when B C) nil)");
+		assertThat(evalMulti("(macroexpand '(when a (when b c)))").print()).isEqualTo("(IF A (WHEN B C) NIL)");
 	}
 
 	@Test
 	void macroexpandWorksThroughRuntimeEval() {
-		assertThat(evalMulti("(eval '(macroexpand-1 '(unless c x)))").print()).isEqualTo("(if C nil X)");
+		assertThat(evalMulti("(eval '(macroexpand-1 '(unless c x)))").print()).isEqualTo("(IF C NIL X)");
 	}
 
 	@Test
@@ -6314,7 +6314,7 @@ class LispEvaluatorTest {
 				  (list (gethash "name" h) (gethash "n" h)))""").print()).isEqualTo("(\"rontolisp\" 2)");
 		assertThat(eval(
 				"(gethash \"b\" (gethash \"a\" (rontolisp:json-parse \"{\\\"a\\\": {\\\"b\\\": [1, true, null]}}\")))")
-			.print()).isEqualTo("#(1 t null)");
+			.print()).isEqualTo("#(1 T NULL)");
 		assertThat(eval("(hash-table-count (rontolisp:json-parse \"{}\"))").print()).isEqualTo("0");
 	}
 
@@ -6331,7 +6331,7 @@ class LispEvaluatorTest {
 		// reaches external symbols.
 		assertThatThrownBy(() -> eval("(rontolisp:%json-parse \"1\")"))
 			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)
-			.hasMessageContaining("The symbol %json-parse is not external in the rontolisp package");
+			.hasMessageContaining("The symbol %JSON-PARSE is not external in the RONTOLISP package");
 	}
 
 	@Test
@@ -6340,13 +6340,13 @@ class LispEvaluatorTest {
 		assertThat(eval("(rontolisp:json-parse \"-3.5\")").print()).isEqualTo("-3.5");
 		assertThat(eval("(rontolisp:json-parse \"1e3\")").print()).isEqualTo("1000.0");
 		// integers wider than 9 digits become floats on every backend (WASM i31)
-		assertThat(eval("(floatp (rontolisp:json-parse \"1234567890123\"))").print()).isEqualTo("t");
-		assertThat(eval("(rontolisp:json-parse \"true\")").print()).isEqualTo("t");
-		assertThat(eval("(rontolisp:json-parse \"false\")").print()).isEqualTo("nil");
+		assertThat(eval("(floatp (rontolisp:json-parse \"1234567890123\"))").print()).isEqualTo("T");
+		assertThat(eval("(rontolisp:json-parse \"true\")").print()).isEqualTo("T");
+		assertThat(eval("(rontolisp:json-parse \"false\")").print()).isEqualTo("NIL");
 		// JSON null parses to the symbol null (jzon's sentinel), not nil
-		assertThat(eval("(rontolisp:json-parse \"null\")").print()).isEqualTo("null");
+		assertThat(eval("(rontolisp:json-parse \"null\")").print()).isEqualTo("NULL");
 		assertThat(eval("(rontolisp:json-parse \"[1, [2, \\\"x\\\"], null]\")").print())
-			.isEqualTo("#(1 #(2 \"x\") null)");
+			.isEqualTo("#(1 #(2 \"x\") NULL)");
 		assertThat(eval("(rontolisp:json-parse \"\\\"a\\\\nb\\\"\")").print()).isEqualTo("\"a\nb\"");
 		assertThat(eval("(rontolisp:json-parse \"\\\"\\\\u0041\\\\u3042\\\"\")").print()).isEqualTo("\"Aあ\"");
 	}
@@ -6486,8 +6486,8 @@ class LispEvaluatorTest {
 			.isEqualTo("((\"q\" . \"あ\") (\"q\" . \"2\"))");
 		assertThat(eval("(rontolisp:query-params \"a=1&&b=2&\")").print())
 			.isEqualTo("((\"a\" . \"1\") (\"b\" . \"2\"))");
-		assertThat(eval("(rontolisp:query-params nil)").print()).isEqualTo("nil");
-		assertThat(eval("(rontolisp:query-params \"\")").print()).isEqualTo("nil");
+		assertThat(eval("(rontolisp:query-params nil)").print()).isEqualTo("NIL");
+		assertThat(eval("(rontolisp:query-params \"\")").print()).isEqualTo("NIL");
 	}
 
 	@Test
@@ -6495,8 +6495,8 @@ class LispEvaluatorTest {
 		assertThat(eval("(rontolisp:query-param \"a=1&name=ronto%20lisp\" \"name\")").print())
 			.isEqualTo("\"ronto lisp\"");
 		assertThat(eval("(rontolisp:query-param \"q=1&q=2\" \"q\")").print()).isEqualTo("\"1\"");
-		assertThat(eval("(rontolisp:query-param \"a=1\" \"missing\")").print()).isEqualTo("nil");
-		assertThat(eval("(rontolisp:query-param nil \"a\")").print()).isEqualTo("nil");
+		assertThat(eval("(rontolisp:query-param \"a=1\" \"missing\")").print()).isEqualTo("NIL");
+		assertThat(eval("(rontolisp:query-param nil \"a\")").print()).isEqualTo("NIL");
 	}
 
 	@Test
@@ -6504,7 +6504,7 @@ class LispEvaluatorTest {
 		assertThat(eval("(rontolisp:url-path \"/get?a=1\")").print()).isEqualTo("\"/get\"");
 		assertThat(eval("(rontolisp:url-path \"/get\")").print()).isEqualTo("\"/get\"");
 		assertThat(eval("(rontolisp:url-query \"/get?a=1\")").print()).isEqualTo("\"a=1\"");
-		assertThat(eval("(rontolisp:url-query \"/get\")").print()).isEqualTo("nil");
+		assertThat(eval("(rontolisp:url-query \"/get\")").print()).isEqualTo("NIL");
 		assertThat(eval("(rontolisp:url-query \"/get?\")").print()).isEqualTo("\"\"");
 	}
 
@@ -6518,23 +6518,23 @@ class LispEvaluatorTest {
 	@Test
 	void defunRestCollectsSurplusArguments() {
 		assertThat(evalMulti("(defun f (a &rest r) (list a r)) (f 1 2 3)").print()).isEqualTo("(1 (2 3))");
-		assertThat(evalMulti("(defun f (a &rest r) (list a r)) (f 1)").print()).isEqualTo("(1 nil)");
+		assertThat(evalMulti("(defun f (a &rest r) (list a r)) (f 1)").print()).isEqualTo("(1 NIL)");
 	}
 
 	@Test
 	void defunOptionalDefaultsAndSuppliedP() {
 		String def = "(defun f (x &optional (y 10) (z (* y 2) zp)) (list x y z zp)) ";
-		assertThat(evalMulti(def + "(f 1)").print()).isEqualTo("(1 10 20 nil)");
-		assertThat(evalMulti(def + "(f 1 2)").print()).isEqualTo("(1 2 4 nil)");
-		assertThat(evalMulti(def + "(f 1 2 3)").print()).isEqualTo("(1 2 3 t)");
+		assertThat(evalMulti(def + "(f 1)").print()).isEqualTo("(1 10 20 NIL)");
+		assertThat(evalMulti(def + "(f 1 2)").print()).isEqualTo("(1 2 4 NIL)");
+		assertThat(evalMulti(def + "(f 1 2 3)").print()).isEqualTo("(1 2 3 T)");
 	}
 
 	@Test
 	void defunKeywordArguments() {
 		String def = "(defun f (a &key (k 1 kp) m) (list a k kp m)) ";
-		assertThat(evalMulti(def + "(f 0)").print()).isEqualTo("(0 1 nil nil)");
-		assertThat(evalMulti(def + "(f 0 :k 5)").print()).isEqualTo("(0 5 t nil)");
-		assertThat(evalMulti(def + "(f 0 :m 7 :k 9)").print()).isEqualTo("(0 9 t 7)");
+		assertThat(evalMulti(def + "(f 0)").print()).isEqualTo("(0 1 NIL NIL)");
+		assertThat(evalMulti(def + "(f 0 :k 5)").print()).isEqualTo("(0 5 T NIL)");
+		assertThat(evalMulti(def + "(f 0 :m 7 :k 9)").print()).isEqualTo("(0 9 T 7)");
 	}
 
 	@Test
@@ -6546,7 +6546,7 @@ class LispEvaluatorTest {
 	void defunUnknownKeywordSignals() {
 		assertThatThrownBy(() -> evalMulti("(defun f (&key k) k) (f :bogus 1)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("Unknown keyword argument: :BOGUS");
-		assertThat(evalMulti("(defun f (&key k) k) (f :bogus 1 :allow-other-keys t)").print()).isEqualTo("nil");
+		assertThat(evalMulti("(defun f (&key k) k) (f :bogus 1 :allow-other-keys t)").print()).isEqualTo("NIL");
 		assertThat(evalMulti("(defun f (&key k &allow-other-keys) k) (f :bogus 1 :k 2)").print()).isEqualTo("2");
 	}
 
@@ -6559,7 +6559,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void defunAuxVariables() {
-		assertThat(evalMulti("(defun f (x &aux (y (+ x 1)) z) (list x y z)) (f 5)").print()).isEqualTo("(5 6 nil)");
+		assertThat(evalMulti("(defun f (x &aux (y (+ x 1)) z) (list x y z)) (f 5)").print()).isEqualTo("(5 6 NIL)");
 	}
 
 	@Test
@@ -6601,7 +6601,7 @@ class LispEvaluatorTest {
 				(defstruct point x y)
 				(defstruct circle r)
 				(list (point-p (make-point :x 1 :y 2)) (point-p (make-circle :r 3)) (point-p '(1 2)) (point-p 42))
-				""").print()).isEqualTo("(t nil nil nil)");
+				""").print()).isEqualTo("(T NIL NIL NIL)");
 	}
 
 	@Test
@@ -6623,7 +6623,7 @@ class LispEvaluatorTest {
 				(setq q (copy-point p))
 				(setf (point-x q) 100)
 				(list (point-x p) (point-x q) (point-p q))
-				""").print()).isEqualTo("(1 100 t)");
+				""").print()).isEqualTo("(1 100 T)");
 	}
 
 	@Test
@@ -6655,7 +6655,7 @@ class LispEvaluatorTest {
 				(setq p (geo::make-pt :x 3 :y 4))
 				(setf (geo::pt-y p) 5)
 				(list (geo::pt-x p) (geo::pt-y p) (geo::pt-p p))
-				""").print()).isEqualTo("(3 5 t)");
+				""").print()).isEqualTo("(3 5 T)");
 	}
 
 	@Test
@@ -6665,7 +6665,7 @@ class LispEvaluatorTest {
 				  (x 0 :type integer) y)
 				(let ((p (%mk-point :x 3 :y 4)))
 				  (list (pt-x p) (pt-y p) (fboundp 'point-p) (fboundp 'copy-point)))
-				""").print()).isEqualTo("(3 4 nil nil)");
+				""").print()).isEqualTo("(3 4 NIL NIL)");
 	}
 
 	@Test
@@ -6680,7 +6680,7 @@ class LispEvaluatorTest {
 	void defstructIncludeIsNotSupported() {
 		assertThatThrownBy(() -> eval("(defstruct (point (:include base)) x y)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("defstruct option is not supported");
+			.hasMessageContaining("DEFSTRUCT option is not supported");
 	}
 
 	@Test
@@ -6769,7 +6769,7 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(defclass csd-p () ((name :initarg :name) (married :initarg :married :type boolean)))
 				(%class-slot-defs (class-of (make-instance 'csd-p)))
-				""").print()).isEqualTo("((NAME t) (MARRIED boolean))");
+				""").print()).isEqualTo("((NAME T) (MARRIED BOOLEAN))");
 	}
 
 	@Test
@@ -6864,7 +6864,7 @@ class LispEvaluatorTest {
 				(defmethod describe-chain ((x mid)) (cons :mid (call-next-method)))
 				(defmethod describe-chain ((x leaf)) (cons :leaf (call-next-method)))
 				(describe-chain (make-instance 'leaf))
-				""").print()).isEqualTo("(:LEAF :MID :BASE nil)");
+				""").print()).isEqualTo("(:LEAF :MID :BASE NIL)");
 	}
 
 	@Test
@@ -6975,7 +6975,7 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(setq v (make-array 5 :fill-pointer 2 :initial-element 0))
 				(list (length v) (fill-pointer v) (array-has-fill-pointer-p v) (adjustable-array-p v))
-				""").print()).isEqualTo("(2 2 t nil)");
+				""").print()).isEqualTo("(2 2 T NIL)");
 	}
 
 	@Test
@@ -6991,7 +6991,7 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(setq v (make-array 3 :fill-pointer 0))
 				(list (vector-push 10 v) (vector-push 20 v) (vector-push 30 v) (vector-push 40 v))
-				""").print()).isEqualTo("(0 1 2 nil)");
+				""").print()).isEqualTo("(0 1 2 NIL)");
 	}
 
 	@Test
@@ -7021,7 +7021,7 @@ class LispEvaluatorTest {
 				(vector-push-extend 2 v)
 				(vector-push-extend 3 v)
 				(list (length v) (adjustable-array-p v) (aref v 2))
-				""").print()).isEqualTo("(3 t 3)");
+				""").print()).isEqualTo("(3 T 3)");
 	}
 
 	@Test
@@ -7038,7 +7038,7 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(setq v (make-array 3 :initial-element 0))
 				(list (array-has-fill-pointer-p v) (adjustable-array-p v))
-				""").print()).isEqualTo("(nil nil)");
+				""").print()).isEqualTo("(NIL NIL)");
 	}
 
 	@Test
@@ -7077,7 +7077,7 @@ class LispEvaluatorTest {
 				(setq dst (copy-array src))
 				(list (length dst) (aref dst 0) (aref dst 1) (aref dst 2)
 				      (array-has-fill-pointer-p dst) (adjustable-array-p dst) (eq src dst))
-				""").print()).isEqualTo("(3 11 22 33 t t nil)");
+				""").print()).isEqualTo("(3 11 22 33 T T NIL)");
 	}
 
 	@Test
@@ -7086,7 +7086,7 @@ class LispEvaluatorTest {
 				(setq v (make-array 3 :initial-element 7))
 				(setq v2 (adjust-array v 5 :initial-element 0))
 				(list v2 (eq v v2))
-				""").print()).isEqualTo("(#(7 7 7 0 0) nil)");
+				""").print()).isEqualTo("(#(7 7 7 0 0) NIL)");
 	}
 
 	@Test
@@ -7095,7 +7095,7 @@ class LispEvaluatorTest {
 				(setq w (make-array 3 :adjustable t :initial-element 1))
 				(setq w2 (adjust-array w 5 :initial-element 9))
 				(list (eq w w2) w)
-				""").print()).isEqualTo("(t #(1 1 1 9 9))");
+				""").print()).isEqualTo("(T #(1 1 1 9 9))");
 	}
 
 	@Test
@@ -7169,11 +7169,11 @@ class LispEvaluatorTest {
 				(setq view (make-array 2 :displaced-to base :displaced-index-offset 3))
 				(multiple-value-bind (tgt off) (array-displacement view)
 				  (list (eq tgt base) off))
-				""").print()).isEqualTo("(t 3)");
+				""").print()).isEqualTo("(T 3)");
 		assertThat(evalMulti("""
 				(multiple-value-bind (tgt off) (array-displacement (make-array 2))
 				  (list tgt off))
-				""").print()).isEqualTo("(nil 0)");
+				""").print()).isEqualTo("(NIL 0)");
 	}
 
 	@Test
@@ -7311,7 +7311,7 @@ class LispEvaluatorTest {
 			.isEqualTo("(10 20)");
 		// A progv-bound symbol reads directly too, and is unbound again after the extent.
 		assertThat(evalMulti("(progv '(foo) '(42) foo)").print()).isEqualTo("42");
-		assertThat(evalMulti("(progv '(foo) '(42) foo) (boundp 'foo)").print()).isEqualTo("nil");
+		assertThat(evalMulti("(progv '(foo) '(42) foo) (boundp 'foo)").print()).isEqualTo("NIL");
 	}
 
 	@Test
@@ -7319,7 +7319,7 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(defvar *x* 1)
 				(let ((*x* 42)) (list (symbol-value '*x*) (boundp '*x*)))
-				""").print()).isEqualTo("(42 t)");
+				""").print()).isEqualTo("(42 T)");
 	}
 
 	@Test
@@ -7540,7 +7540,7 @@ class LispEvaluatorTest {
 				(kv:bucket-delete *b* "greeting")
 				(append *stored* (list (kv:bucket-exists *b* "greeting")
 				                       (sort (kv:bucket-list-keys *b*) #'string<)))
-				""").print()).isEqualTo("(t \"hello\" nil t (\"count\" \"greeting\") nil (\"count\"))");
+				""").print()).isEqualTo("(T \"hello\" NIL T (\"count\" \"greeting\") NIL (\"count\"))");
 	}
 
 	@Test
@@ -7556,7 +7556,7 @@ class LispEvaluatorTest {
 				      (funcall #'kv:bucket-get *b* "a")
 				      (apply #'kv:bucket-get (list *b* "b"))
 				      (mapcar (lambda (k) (funcall #'kv:bucket-get *b* k)) '("a" "b" "zz")))
-				""").print()).isEqualTo("(t \"1\" \"2\" (\"1\" \"2\" nil))");
+				""").print()).isEqualTo("(T \"1\" \"2\" (\"1\" \"2\" NIL))");
 	}
 
 	@Test
@@ -7665,7 +7665,7 @@ class LispEvaluatorTest {
 	void typepTestsLiteralCompoundTypeSpecifiers() {
 		assertThat(
 				eval("(list (typep 5 '(unsigned-byte 8)) (typep 500 '(unsigned-byte 8)) (typep -1 'integer))").print())
-			.isEqualTo("(t nil t)");
+			.isEqualTo("(T NIL T)");
 	}
 
 	@Test
@@ -7673,7 +7673,7 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(deftype my-even () '(satisfies evenp))
 				(list (typep 4 'my-even) (typep 3 'my-even))
-				""").print()).isEqualTo("(t nil)");
+				""").print()).isEqualTo("(T NIL)");
 	}
 
 	@Test
@@ -7684,7 +7684,7 @@ class LispEvaluatorTest {
 				(deftype my-int () 'integer)
 				(list (typep '((a . 1) (b . 2)) 'my-alist) (typep '(a b) 'my-alist)
 				      (typep 7 'my-int) (typep 'x 'my-int))
-				""").print()).isEqualTo("(t nil t nil)");
+				""").print()).isEqualTo("(T NIL T NIL)");
 	}
 
 	@Test
@@ -7700,7 +7700,7 @@ class LispEvaluatorTest {
 	void subtypepAnswersTheBuiltinLatticeAndConditionClasses() {
 		assertThat(eval("(list (subtypep 'integer 'number) (subtypep 'number 'integer)"
 				+ " (subtypep 'type-error 'error) (subtypep 'short-float 'single-float))")
-			.print()).isEqualTo("(t nil t t)");
+			.print()).isEqualTo("(T NIL T T)");
 	}
 
 	@Test
@@ -7764,7 +7764,7 @@ class LispEvaluatorTest {
 				  (vector-push-extend #\\b s)
 				  (vector-push-extend #\\c s)
 				  (list s (length s) (array-dimension s 0) (adjustable-array-p s) (array-has-fill-pointer-p s)))
-				""").print()).isEqualTo("(\"abc\" 3 4 t t)");
+				""").print()).isEqualTo("(\"abc\" 3 4 T T)");
 	}
 
 	@Test
@@ -7801,7 +7801,7 @@ class LispEvaluatorTest {
 	@Test
 	void symbolpAnswersTrueForNilAndT() {
 		assertThat(eval("(list (symbolp nil) (symbolp t) (symbolp 'x) (symbolp \"s\"))").print())
-			.isEqualTo("(t t t nil)");
+			.isEqualTo("(T T T NIL)");
 	}
 
 	@Test

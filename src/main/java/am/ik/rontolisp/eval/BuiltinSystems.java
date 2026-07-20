@@ -4,7 +4,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
-import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 
 /**
@@ -19,14 +18,15 @@ import am.ik.rontolisp.LispVal;
  */
 public final class BuiltinSystems {
 
-	private static final Map<String, Supplier<List<LispVal>>> SYSTEMS = Map.of(LispNames.USOCKET_PKG,
-			UsocketLibrary::forms, LispNames.CLOSER_MOP_PKG, () -> ShimLibraries.forms(LispNames.CLOSER_MOP_PKG),
-			LispNames.FLEXI_STREAMS_PKG, () -> ShimLibraries.forms(LispNames.FLEXI_STREAMS_PKG), "float-features",
-			() -> ShimLibraries.forms("float-features"), LispNames.TRIVIAL_GRAY_STREAMS_PKG,
-			() -> ShimLibraries.forms(LispNames.TRIVIAL_GRAY_STREAMS_PKG),
+	// Keyed by the ASDF system name -- always the canonical lower-case coerce-name form
+	// (system names are a separate namespace from the upcase-canonical package names).
+	private static final Map<String, Supplier<List<LispVal>>> SYSTEMS = Map.of("usocket", UsocketLibrary::forms,
+			"closer-mop", () -> ShimLibraries.forms("closer-mop"), "flexi-streams",
+			() -> ShimLibraries.forms("flexi-streams"), "float-features", () -> ShimLibraries.forms("float-features"),
+			"trivial-gray-streams", () -> ShimLibraries.forms("trivial-gray-streams"),
 			// The uiop package stub is seeded in PackageRegistry; the system contributes
 			// no forms (real libraries only name it so its symbols resolve).
-			LispNames.UIOP_PKG, List::of);
+			"uiop", List::of);
 
 	private BuiltinSystems() {
 	}

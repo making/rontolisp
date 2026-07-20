@@ -145,7 +145,7 @@ public final class HttpLibrary {
 			out.addAll(LispReader.readAllFromString("""
 					(defun %%serve-dispatch (%%serve-req) (%s %%serve-req))
 					(rontolisp:wasm-export '%%serve-handle :as "handle" :params '(:int) :returns :void)
-					""".formatted(handler), Features.INTERNAL));
+					""".formatted(handler), Features.INTERPRETER));
 		}
 		out.addAll(withoutDirective);
 		return out;
@@ -292,8 +292,8 @@ public final class HttpLibrary {
 					// hand-written, on this backend too); the reachability walk drops
 					// whichever generated helpers the active half never calls.
 					List<LispVal> all = new ArrayList<>(
-							LispReader.readAllFromString(readResource("http.lisp"), Features.INTERNAL));
-					all.addAll(LispReader.readAllFromString(HttpPlistShape.lispHelpersSource(), Features.INTERNAL));
+							LispReader.readAllFromString(readResource("http.lisp"), Features.INTERPRETER));
+					all.addAll(LispReader.readAllFromString(HttpPlistShape.lispHelpersSource(), Features.INTERPRETER));
 					cached = List.copyOf(all);
 					forms = cached;
 				}

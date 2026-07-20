@@ -359,11 +359,10 @@ public final class LoadInliner {
 			searchDirs.add(requestBaseDir == null ? "" : requestBaseDir);
 			searchDirs.addAll(ctx.systemPath());
 			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, ctx.loader());
-			// .asd system definitions are parsed as data against lowercase spellings,
-			// so they stay case-preserving (the upcase premise applies to program
-			// source, not to system-definition data).
+			// .asd forms read upcased like all source; AsdfSystems matches clause
+			// keywords case-insensitively and coerce-names system designators.
 			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(),
-					ctx.features().preservingCase())) {
+					ctx.features())) {
 				ctx.systems().putIfAbsent(defined.name(), defined);
 			}
 			system = ctx.systems().get(name);

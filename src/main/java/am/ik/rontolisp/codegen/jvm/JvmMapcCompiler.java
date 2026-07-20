@@ -34,7 +34,7 @@ final class JvmMapcCompiler {
 		ctx.emit(listSlot);
 
 		// mapc operates on lists; a non-list (e.g. a string) signals an error.
-		JvmEmitHelper.emitRequireListGuard(ctx, listSlot, "mapc: argument is not a list (use map for strings/vectors)");
+		JvmEmitHelper.emitRequireListGuard(ctx, listSlot, "MAPC: argument is not a list (use map for strings/vectors)");
 
 		// cursor = list
 		ctx.emit(Opcode.ALOAD);

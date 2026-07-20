@@ -513,7 +513,7 @@ public final class LambdaLists {
 	 */
 	private static LispVal keyCellScan(LispSymbol source, LispSymbol keyword) {
 		LispSymbol cur = new LispSymbol(CUR_VAR);
-		LispVal bindings = list(list(cur, source, call("cddr", cur)));
+		LispVal bindings = list(list(cur, source, call("CDDR", cur)));
 		LispVal endClause = list(call(LispNames.ATOM, cur), LispNil.INSTANCE);
 		LispVal match = list(new LispSymbol(LispNames.EQL), call(LispNames.CAR, cur), keyword);
 		// A lowercase-derived keyword (an internal lowercase-authored &key parameter)
@@ -556,7 +556,7 @@ public final class LambdaLists {
 		// themselves are derived from the parameter names, so they always match).
 		known.add(new LispSymbol(":ALLOW-OTHER-KEYS"));
 		LispVal knownList = list(new LispSymbol(LispNames.QUOTE), list(known.toArray(LispVal[]::new)));
-		LispVal bindings = list(list(cur, source, call("cddr", cur)));
+		LispVal bindings = list(list(cur, source, call("CDDR", cur)));
 		LispVal endClause = list(call(LispNames.ATOM, cur), LispNil.INSTANCE);
 		LispVal ok = list(new LispSymbol(LispNames.MEMBER), call(LispNames.CAR, cur), knownList);
 		LispVal callerOverride = list(new LispSymbol(LispNames.OR),

@@ -1335,10 +1335,11 @@ public final class LispEvaluator {
 			searchDirs.add(baseDir == null ? "" : baseDir);
 			searchDirs.addAll(this.systemPath);
 			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, this.sourceLoader);
-			// .asd system definitions are data matched against lowercase spellings, so
-			// they read case-preserving (Features.INTERNAL), not with the upcase fold.
+			// .asd forms read upcased like all source; AsdfSystems matches clause
+			// keywords case-insensitively and coerce-names (downcases) system
+			// designators.
 			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(),
-					Features.INTERNAL)) {
+					Features.INTERPRETER)) {
 				this.asdfSystems.putIfAbsent(defined.name(), defined);
 			}
 			system = this.asdfSystems.get(name);
@@ -1384,7 +1385,7 @@ public final class LispEvaluator {
 	private LispVal evalDefsystem(LispCons cons) {
 		String baseDir = this.loadDirStack.peekLast();
 		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir,
-				Features.INTERNAL);
+				Features.INTERPRETER);
 		this.asdfSystems.put(system.name(), system);
 		return new LispSymbol(system.name());
 	}
@@ -1608,8 +1609,8 @@ public final class LispEvaluator {
 			if (sup instanceof LispSymbol sym) {
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 				if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())
-						&& (qn.member().equals("fundamental-character-output-stream")
-								|| qn.member().equals("fundamental-character-input-stream"))) {
+						&& (qn.member().equals("FUNDAMENTAL-CHARACTER-OUTPUT-STREAM")
+								|| qn.member().equals("FUNDAMENTAL-CHARACTER-INPUT-STREAM"))) {
 					return true;
 				}
 			}
@@ -2190,7 +2191,7 @@ public final class LispEvaluator {
 	}
 
 	// The lambda list of a global defun, in the shape WitExportDirective checks: the
-	// required parameters, plus a "&rest" marker when the function is variadic (an
+	// required parameters, plus a "&REST" marker when the function is variadic (an
 	// exported function must take required parameters only). A built-in (a LispFunction,
 	// not a LispLambda) is not a program-defined function, so it reads as undefined.
 	private @Nullable List<String> exportedLambdaList(String name) {
@@ -2203,7 +2204,7 @@ public final class LispEvaluator {
 			lambdaList.add(param.name());
 		}
 		if (lambda.rest() != null) {
-			lambdaList.add("&rest");
+			lambdaList.add("&REST");
 		}
 		return lambdaList;
 	}
@@ -2590,7 +2591,7 @@ public final class LispEvaluator {
 		String envVar = null;
 		List<LispVal> cleaned = new ArrayList<>();
 		for (int i = 0; i < llItems.size(); i++) {
-			if (llItems.get(i) instanceof LispSymbol s && "&environment".equals(s.name())) {
+			if (llItems.get(i) instanceof LispSymbol s && "&ENVIRONMENT".equals(s.name())) {
 				if (i + 1 < llItems.size() && llItems.get(i + 1) instanceof LispSymbol e) {
 					envVar = e.name();
 				}
@@ -2801,7 +2802,7 @@ public final class LispEvaluator {
 	private LispVal evalDefsetfLongBody(DefsetfLong lng, List<LispVal> temps, List<LispVal> storeSyms) {
 		List<LispVal> params = new ArrayList<>();
 		for (LispVal p : lng.argParams()) {
-			if (p instanceof LispSymbol s && "&environment".equals(s.name())) {
+			if (p instanceof LispSymbol s && "&ENVIRONMENT".equals(s.name())) {
 				break;
 			}
 			params.add(p);
@@ -3422,7 +3423,7 @@ public final class LispEvaluator {
 			return null;
 		}
 		if (designator instanceof LispSymbol sym && !sym.isKeyword()) {
-			return "nil".equals(sym.name()) ? null : sym.name();
+			return "NIL".equals(sym.name()) ? null : sym.name();
 		}
 		throw new LispEvalException(LispNames.BLOCK + ": block name must be a symbol, got " + designator.print());
 	}
@@ -3520,7 +3521,7 @@ public final class LispEvaluator {
 	 */
 	private static LispVal synthesizeSimpleError(@Nullable String message) {
 		LispVal messageVal = message == null ? LispNil.INSTANCE : new LispString(message);
-		return new LispCons(new LispSymbol("%class-simple-error"),
+		return new LispCons(new LispSymbol("%class-SIMPLE-ERROR"),
 				new LispCons(messageVal, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)));
 	}
 
@@ -3719,7 +3720,7 @@ public final class LispEvaluator {
 			}
 			LispVal value = args.get(i + 1);
 			boolean absent = value instanceof LispNil;
-			switch (LispNames.foldKeyword(kw.name())) {
+			switch (kw.name()) {
 				case LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD -> {
 					if (mode != PositionScanMode.ITEM) {
 						throw new LispEvalException(opName + " does not take " + kw.name());

@@ -271,8 +271,8 @@ final class JvmSymbolApiCompiler {
 	 * "not self-bound" continuation.
 	 */
 	private static int[] emitSelfBoundCheck(int tempSlot, JvmLispCompiler.Ctx ctx) {
-		// "t".equals(value) -> self-bound
-		JvmEmitHelper.compileStringLiteral("t", ctx);
+		// "T".equals(value) -> self-bound
+		JvmEmitHelper.compileStringLiteral("T", ctx);
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(tempSlot);
 		ctx.emit(Opcode.INVOKEVIRTUAL);

@@ -725,7 +725,7 @@ final class JvmReadRuntimeBuilder {
 		a.astore(0);
 		// nil?
 		a.aload(0);
-		ldc(a, "nil");
+		ldc(a, "NIL");
 		a.invokevirtual(this.objectEquals);
 		a.branch(Opcode.IFEQ, notNil);
 		a.aconstNull();
@@ -734,10 +734,10 @@ final class JvmReadRuntimeBuilder {
 		// t? -> the symbol t (the bare String "t", like the interpreter's reader), so it
 		// prints as t and is eq to a quoted 't.
 		a.aload(0);
-		ldc(a, "t");
+		ldc(a, "T");
 		a.invokevirtual(this.objectEquals);
 		a.branch(Opcode.IFEQ, notT);
-		ldc(a, "t");
+		ldc(a, "T");
 		a.areturn();
 		a.bind(notT);
 		// n = token.length(); slot2

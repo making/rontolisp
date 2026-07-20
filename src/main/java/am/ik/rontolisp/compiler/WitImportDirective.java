@@ -174,14 +174,14 @@ public final class WitImportDirective {
 				throw new UnsupportedOperationException("Missing value for " + keyword.name() + " in " + form.print());
 			}
 			LispVal value = items.get(i + 1);
-			switch (LispNames.foldKeyword(keyword.name())) {
+			switch (keyword.name()) {
 				// :interface and :from name WIT-side things (lower-kebab), so a bare
 				// symbol -- upcased by the reader -- lowercases; :package names the
 				// Lisp-side package and keeps the reader's spelling.
-				case ":interface" -> iface = designator(value, ":interface", form).toLowerCase(java.util.Locale.ROOT);
-				case ":package" -> pkg = designator(value, ":package", form);
-				case ":from" -> module = designator(value, ":from", form).toLowerCase(java.util.Locale.ROOT);
-				case ":field-style" -> fieldStyle = fieldStyle(value, form);
+				case ":INTERFACE" -> iface = designator(value, ":interface", form).toLowerCase(java.util.Locale.ROOT);
+				case ":PACKAGE" -> pkg = designator(value, ":package", form);
+				case ":FROM" -> module = designator(value, ":from", form).toLowerCase(java.util.Locale.ROOT);
+				case ":FIELD-STYLE" -> fieldStyle = fieldStyle(value, form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wit-import option " + keyword.name() + " in " + form.print());
 			}
@@ -209,9 +209,9 @@ public final class WitImportDirective {
 
 	private static FieldStyle fieldStyle(LispVal value, LispCons form) {
 		if (value instanceof LispSymbol sym && sym.isKeyword()) {
-			return switch (LispNames.foldKeyword(sym.name())) {
-				case ":camel" -> FieldStyle.CAMEL;
-				case ":kebab" -> FieldStyle.KEBAB;
+			return switch (sym.name()) {
+				case ":CAMEL" -> FieldStyle.CAMEL;
+				case ":KEBAB" -> FieldStyle.KEBAB;
 				default -> throw new UnsupportedOperationException(
 						"rontolisp:wit-import :field-style expects :camel or :kebab in " + form.print() + ", got: "
 								+ sym.name());
@@ -527,14 +527,14 @@ public final class WitImportDirective {
 	// wrapper reads the result out of the return area once the subtask has returned
 	// (called by %subtask-future for an eager completion, or by the scheduler).
 	private static LispVal asyncCallBinding(String member, String startName, String liftName) {
-		return list(List.of(new LispSymbol(":async-call"), new LispString(member), new LispString(startName),
+		return list(List.of(new LispSymbol(":ASYNC-CALL"), new LispString(member), new LispString(startName),
 				new LispString(liftName)));
 	}
 
 	// (:task-return "handle-result" "pkg::handle-result-task-return") -- the task-return
 	// built-in derived from a non-stream/future type alias.
 	private static LispVal taskReturnBinding(String alias, String lispName) {
-		return list(List.of(new LispSymbol(":task-return"), new LispString(alias), new LispString(lispName)));
+		return list(List.of(new LispSymbol(":TASK-RETURN"), new LispString(alias), new LispString(lispName)));
 	}
 
 	// The public binding of an async func member under --component. A plain member:
@@ -614,7 +614,7 @@ public final class WitImportDirective {
 	// stream/future type, with no instance function behind it.
 	private static LispVal asyncBinding(String alias, String op, String lispName) {
 		return list(
-				List.of(new LispSymbol(":async"), new LispString(alias), new LispString(op), new LispString(lispName)));
+				List.of(new LispSymbol(":ASYNC"), new LispString(alias), new LispString(op), new LispString(lispName)));
 	}
 
 	// The element/payload contract of a bound async alias: a stream must be a byte
@@ -661,7 +661,7 @@ public final class WitImportDirective {
 	// no
 	// component function behind it.
 	private static LispVal dropBinding(String resource, String lispName) {
-		return list(List.of(new LispSymbol(":drop"), new LispString(resource), new LispString(lispName)));
+		return list(List.of(new LispSymbol(":DROP"), new LispString(resource), new LispString(lispName)));
 	}
 
 	// (defun name (self) self nil) -- a Preview 1 drop, which releases nothing.
@@ -1118,13 +1118,13 @@ public final class WitImportDirective {
 		List<LispVal> out = new ArrayList<>();
 		out.add(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_IMPORT)));
 		out.add(quote(new LispSymbol(name)));
-		out.add(new LispSymbol(":from"));
+		out.add(new LispSymbol(":FROM"));
 		out.add(new LispString(module));
-		out.add(new LispSymbol(":as"));
+		out.add(new LispSymbol(":AS"));
 		out.add(new LispString(field));
-		out.add(new LispSymbol(":params"));
+		out.add(new LispSymbol(":PARAMS"));
 		out.add(quote(list(designators)));
-		out.add(new LispSymbol(":returns"));
+		out.add(new LispSymbol(":RETURNS"));
 		out.add(new LispSymbol(returns));
 		return list(out);
 	}
@@ -1149,11 +1149,11 @@ public final class WitImportDirective {
 	// external symbols, so a call site spells them kv:get like any other package.
 	private static LispVal defpackageForm(String pkg, Set<String> members) {
 		List<LispVal> exports = new ArrayList<>();
-		exports.add(new LispSymbol(":export"));
+		exports.add(new LispSymbol(":EXPORT"));
 		for (String member : members) {
 			exports.add(new LispSymbol(member));
 		}
-		LispVal use = list(List.of(new LispSymbol(":use"), new LispSymbol(LispNames.CL_PKG)));
+		LispVal use = list(List.of(new LispSymbol(":USE"), new LispSymbol(LispNames.CL_PKG)));
 		// The package name is the designator VERBATIM: rontolisp symbols are
 		// case-preserving, so lowercasing it here while `PackageRegistry.qualify` keeps
 		// the bindings' case defined `KV:open` in a package named `kv` -- and every call

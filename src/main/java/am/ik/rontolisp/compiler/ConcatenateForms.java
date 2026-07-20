@@ -55,7 +55,7 @@ public final class ConcatenateForms {
 		}
 		List<LispVal> quoteParts = quoted.toList();
 		return quoteParts.size() == 2 && quoteParts.get(0) instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
-				&& quoteParts.get(1) instanceof LispSymbol s && "string".equals(s.name());
+				&& quoteParts.get(1) instanceof LispSymbol s && "STRING".equals(s.name());
 	}
 
 	private static LispVal concatCall(LispVal a, LispVal b) {

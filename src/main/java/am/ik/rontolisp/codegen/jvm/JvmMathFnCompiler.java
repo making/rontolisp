@@ -49,7 +49,11 @@ final class JvmMathFnCompiler {
 	static Map<String, MethodrefConstant> buildOps(ConstantPool cp, ClassConstant mathClass) {
 		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
 		for (String name : UNARY_NAMES) {
-			ops.put(name, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8("(D)D"))));
+			// The map key is the (uppercase-canonical) Lisp name; the java.lang.Math
+			// method
+			// name is its lowercase Java spelling (Math.sqrt, not Math.SQRT).
+			ops.put(name, cp.addMethodref(mathClass,
+					cp.addNameAndType(cp.addUtf8(name.toLowerCase(java.util.Locale.ROOT)), cp.addUtf8("(D)D"))));
 		}
 		ops.put(POW, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("pow"), cp.addUtf8("(DD)D"))));
 		ops.put(SIGNUM_D, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(D)D"))));

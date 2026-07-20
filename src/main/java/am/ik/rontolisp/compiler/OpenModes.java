@@ -51,10 +51,10 @@ public final class OpenModes {
 			if (i + 1 >= parts.size() || !(parts.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
 				throw new UnsupportedOperationException("open expects :option value pairs: " + cons.print());
 			}
-			switch (LispNames.foldKeyword(key.name())) {
-				case ":direction" -> direction = parts.get(i + 1);
-				case ":element-type" -> elementType = parts.get(i + 1);
-				case ":external-format", ":if-exists", ":if-does-not-exist" -> {
+			switch (key.name()) {
+				case ":DIRECTION" -> direction = parts.get(i + 1);
+				case ":ELEMENT-TYPE" -> elementType = parts.get(i + 1);
+				case ":EXTERNAL-FORMAT", ":IF-EXISTS", ":IF-DOES-NOT-EXIST" -> {
 					if (!am.ik.rontolisp.LispMacroExpander.ignorableOpenOptionValue(key.name(), parts.get(i + 1))) {
 						throw new UnsupportedOperationException(
 								"open: " + key.name() + " supports only the native default value");

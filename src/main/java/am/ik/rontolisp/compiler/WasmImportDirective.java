@@ -74,11 +74,11 @@ public record WasmImportDirective(String name, String module, String field, List
 				throw new UnsupportedOperationException("Missing value for " + keyword + " in " + form.print());
 			}
 			LispVal value = items.get(i + 1);
-			switch (LispNames.foldKeyword(keyword)) {
-				case ":from" -> module = stringValue(value, keyword, form);
-				case ":as" -> field = stringValue(value, keyword, form);
-				case ":params" -> params = quotedKeywordList(value, form);
-				case ":returns" -> returns = returnKeyword(value, form);
+			switch (keyword) {
+				case ":FROM" -> module = stringValue(value, keyword, form);
+				case ":AS" -> field = stringValue(value, keyword, form);
+				case ":PARAMS" -> params = quotedKeywordList(value, form);
+				case ":RETURNS" -> returns = returnKeyword(value, form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wasm-import option " + keyword + " in " + form.print());
 			}

@@ -156,7 +156,7 @@ public final class LispLexer {
 								"#. datum could not be read: " + this.input.substring(datumStart, this.pos));
 					}
 					System.err.println("warning: skipping unsupported #. read-time-eval form");
-					tokens.add(new Token.SymbolToken("nil"));
+					tokens.add(new Token.SymbolToken("NIL"));
 				}
 				else {
 					tokens.add(new Token.LeftParen());

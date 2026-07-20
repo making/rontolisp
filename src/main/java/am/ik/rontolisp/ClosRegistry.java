@@ -34,34 +34,34 @@ public final class ClosRegistry {
 	 * membership.
 	 */
 	public ClosRegistry() {
-		seedConditionClass("condition", null);
-		seedConditionClass("serious-condition", "condition");
-		seedConditionClass("error", "serious-condition");
-		seedConditionClass("simple-error", "error", "format-control", "format-arguments");
-		seedConditionClass("simple-condition", "condition", "format-control", "format-arguments");
-		seedConditionClass("warning", "condition");
-		seedConditionClass("simple-warning", "warning", "format-control", "format-arguments");
-		seedConditionClass("style-warning", "warning");
-		seedConditionClass("parse-error", "error");
-		seedConditionClass("type-error", "error", "datum", "expected-type");
-		seedConditionClass("stream-error", "error");
-		seedConditionClass("end-of-file", "stream-error");
-		seedConditionClass("file-error", "error");
-		seedConditionClass("arithmetic-error", "error");
-		seedConditionClass("division-by-zero", "arithmetic-error");
-		seedConditionClass("control-error", "error");
-		seedConditionClass("program-error", "error");
-		seedConditionClass("package-error", "error");
-		seedConditionClass("cell-error", "error");
-		seedConditionClass("unbound-variable", "cell-error");
-		seedConditionClass("undefined-function", "cell-error");
+		seedConditionClass("CONDITION", null);
+		seedConditionClass("SERIOUS-CONDITION", "CONDITION");
+		seedConditionClass("ERROR", "SERIOUS-CONDITION");
+		seedConditionClass("SIMPLE-ERROR", "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
+		seedConditionClass("SIMPLE-CONDITION", "CONDITION", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
+		seedConditionClass("WARNING", "CONDITION");
+		seedConditionClass("SIMPLE-WARNING", "WARNING", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
+		seedConditionClass("STYLE-WARNING", "WARNING");
+		seedConditionClass("PARSE-ERROR", "ERROR");
+		seedConditionClass("TYPE-ERROR", "ERROR", "DATUM", "EXPECTED-TYPE");
+		seedConditionClass("STREAM-ERROR", "ERROR");
+		seedConditionClass("END-OF-FILE", "STREAM-ERROR");
+		seedConditionClass("FILE-ERROR", "ERROR");
+		seedConditionClass("ARITHMETIC-ERROR", "ERROR");
+		seedConditionClass("DIVISION-BY-ZERO", "ARITHMETIC-ERROR");
+		seedConditionClass("CONTROL-ERROR", "ERROR");
+		seedConditionClass("PROGRAM-ERROR", "ERROR");
+		seedConditionClass("PACKAGE-ERROR", "ERROR");
+		seedConditionClass("CELL-ERROR", "ERROR");
+		seedConditionClass("UNBOUND-VARIABLE", "CELL-ERROR");
+		seedConditionClass("UNDEFINED-FUNCTION", "CELL-ERROR");
 	}
 
 	private void seedConditionClass(String name, @Nullable String parent, String... slotNames) {
 		ClassInfo parentInfo = parent == null ? null : this.classes.get(parent);
 		java.util.List<SlotSpec> slots = new java.util.ArrayList<>(parentInfo == null ? List.of() : parentInfo.slots());
 		for (String slotName : slotNames) {
-			slots.add(new SlotSpec(slotName, slotName, LispNil.INSTANCE, ":" + slotName, List.of(), List.of(), "t"));
+			slots.add(new SlotSpec(slotName, slotName, LispNil.INSTANCE, ":" + slotName, List.of(), List.of(), "T"));
 		}
 		java.util.Set<String> ancestors = new java.util.LinkedHashSet<>();
 		if (parentInfo != null) {
@@ -138,7 +138,7 @@ public final class ClosRegistry {
 		 */
 		public String keyText() {
 			return switch (this.kind) {
-				case DEFAULT -> "t";
+				case DEFAULT -> "T";
 				case EQL -> "eql " + java.util.Objects.requireNonNull(this.eqlValue).print();
 				case CLASS -> "class " + this.name;
 				case TYPE -> "type " + this.name;
@@ -276,8 +276,8 @@ public final class ClosRegistry {
 					return false;
 				}
 				String plain = plainNameOf(s.name());
-				return "standard-object".equals(plain) || "cons".equals(plain) || "list".equals(plain)
-						|| "sequence".equals(plain);
+				return "STANDARD-OBJECT".equals(plain) || "CONS".equals(plain) || "LIST".equals(plain)
+						|| "SEQUENCE".equals(plain);
 			}));
 		}
 

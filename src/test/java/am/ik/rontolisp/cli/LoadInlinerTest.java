@@ -40,14 +40,14 @@ class LoadInlinerTest {
 		List<LispVal> result = inline("(load \"core.lisp\") (print (f 5))",
 				Map.of("core.lisp", "(defun f (x) (* x x))"));
 		// (defun F ...) from the loaded file, then the original (print (F 5)).
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun F (X) (* X X))", "(print (F 5))");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN F (X) (* X X))", "(PRINT (F 5))");
 	}
 
 	@Test
 	void inlineIsRecursive() {
 		List<LispVal> result = inline("(load \"a.lisp\")",
 				Map.of("a.lisp", "(load \"b.lisp\") (defun a () 1)", "b.lisp", "(defun b () 2)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun B nil 2)", "(defun A nil 1)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN B NIL 2)", "(DEFUN A NIL 1)");
 	}
 
 	@Test
@@ -59,8 +59,8 @@ class LoadInlinerTest {
 				loaderOf(Map.of("proj/core.lisp", "(load \"common.lisp\") (defun cube (x) (* x (sq x)))", //
 						"proj/common.lisp", "(defun sq (x) (* x x))")),
 				"proj");
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun SQ (X) (* X X))",
-				"(defun CUBE (X) (* X (SQ X)))", "(print (CUBE 3))");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN SQ (X) (* X X))",
+				"(DEFUN CUBE (X) (* X (SQ X)))", "(PRINT (CUBE 3))");
 	}
 
 	@Test
@@ -76,7 +76,7 @@ class LoadInlinerTest {
 				loaderOf(Map.of("common/gl.lisp", "(provide :gl) (rontolisp:wit-import \"gl.wit\" :interface gl)")),
 				"demo");
 		assertThat(result.stream().map(LispVal::print))
-			.contains("(rontolisp:wit-import \"../common/gl.wit\" :INTERFACE GL)");
+			.contains("(RONTOLISP:WIT-IMPORT \"../common/gl.wit\" :INTERFACE GL)");
 	}
 
 	@Test
@@ -87,7 +87,7 @@ class LoadInlinerTest {
 				LispReader.readAllFromString("(rontolisp:wit-import \"wit/gl.wit\" :interface gl)"), loaderOf(Map.of()),
 				"demo");
 		assertThat(result.stream().map(LispVal::print))
-			.containsExactly("(rontolisp:wit-import \"wit/gl.wit\" :INTERFACE GL)");
+			.containsExactly("(RONTOLISP:WIT-IMPORT \"wit/gl.wit\" :INTERFACE GL)");
 	}
 
 	@Test
@@ -95,7 +95,7 @@ class LoadInlinerTest {
 		// A load with a computed argument is not a compile-time include.
 		List<LispVal> result = inline("(load (concatenate 'string \"a\" \".lisp\"))", Map.of());
 		assertThat(result).hasSize(1);
-		assertThat(result.get(0).print()).startsWith("(load");
+		assertThat(result.get(0).print()).startsWith("(LOAD");
 	}
 
 	@Test
@@ -110,8 +110,8 @@ class LoadInlinerTest {
 	void requireSplicesTheModuleFile() {
 		List<LispVal> result = inline("(require :util) (print (u-sq 5))",
 				Map.of("util.lisp", "(provide :util) (defun u-sq (x) (* x x))"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote UTIL)", "(defun U-SQ (X) (* X X))",
-				"(print (U-SQ 5))");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE UTIL)", "(DEFUN U-SQ (X) (* X X))",
+				"(PRINT (U-SQ 5))");
 	}
 
 	@Test
@@ -122,14 +122,14 @@ class LoadInlinerTest {
 				Map.of("a.lisp", "(provide :a) (require :utils) (defun a () (u 1))", //
 						"b.lisp", "(provide :b) (require :utils) (defun b () (u 2))", //
 						"utils.lisp", "(provide :utils) (defun u (x) x)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote A)", "(quote UTILS)", "(defun U (X) X)",
-				"(defun A nil (U 1))", "(quote B)", "(quote UTILS)", "(defun B nil (U 2))");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE A)", "(QUOTE UTILS)", "(DEFUN U (X) X)",
+				"(DEFUN A NIL (U 1))", "(QUOTE B)", "(QUOTE UTILS)", "(DEFUN B NIL (U 2))");
 	}
 
 	@Test
 	void provideFirstConsumesALaterRequire() {
 		List<LispVal> result = inline("(provide :util) (require :util)", Map.of());
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote UTIL)", "(quote UTIL)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE UTIL)", "(QUOTE UTIL)");
 	}
 
 	@Test
@@ -139,14 +139,14 @@ class LoadInlinerTest {
 		List<LispVal> result = inline("(require :util \"lib/util-v2.lisp\") (require 'util) (require \"UTIL\")", files);
 		// The explicit path wins; the later requires (quoted-symbol and string
 		// designators) see the module as provided and are consumed.
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote UTIL)", "(defun U nil 1)",
-				"(quote UTIL)", "(quote UTIL)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE UTIL)", "(DEFUN U NIL 1)",
+				"(QUOTE UTIL)", "(QUOTE UTIL)");
 	}
 
 	@Test
 	void requireMissingModuleFileThrows() {
 		assertThatThrownBy(() -> inline("(require :nope)", Map.of())).isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("require: cannot read file nope.lisp");
+			.hasMessageContaining("REQUIRE: cannot read file nope.lisp");
 	}
 
 	@Test
@@ -168,8 +168,8 @@ class LoadInlinerTest {
 				loaderOf(Map.of("proj/core.lisp", "(provide :core) (require :util) (defun c () (u))", //
 						"proj/util.lisp", "(provide :util) (defun u () 42)")),
 				"proj");
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote CORE)", "(quote UTIL)",
-				"(defun U nil 42)", "(defun C nil (U))");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE CORE)", "(QUOTE UTIL)",
+				"(DEFUN U NIL 42)", "(DEFUN C NIL (U))");
 	}
 
 	@Test
@@ -191,8 +191,8 @@ class LoadInlinerTest {
 		// main.lisp selects a package, so it is bracketed with package save/restore
 		// markers (package.lisp has no in-package, so it is spliced verbatim).
 		assertThat(result.stream().map(LispVal::print)).containsExactly(
-				"(defpackage :MY-LIB (:USE :cl) (:EXPORT :GREET))", "(%push-package)", "(in-package :MY-LIB)",
-				"(defun GREET nil 1)", "(%pop-package)", "(quote my-lib)", "(print (MY-LIB:GREET))");
+				"(DEFPACKAGE :MY-LIB (:USE :CL) (:EXPORT :GREET))", "(%PUSH-PACKAGE)", "(IN-PACKAGE :MY-LIB)",
+				"(DEFUN GREET NIL 1)", "(%POP-PACKAGE)", "(QUOTE my-lib)", "(PRINT (MY-LIB:GREET))");
 	}
 
 	@Test
@@ -203,8 +203,8 @@ class LoadInlinerTest {
 						"base.lisp", "(defun base () 1)", //
 						"app.lisp", "(defun app () (base))"));
 		// base splices once, before app; the second load-system is consumed.
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun BASE nil 1)", "(defun APP nil (BASE))",
-				"(quote app)", "(quote base)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN BASE NIL 1)", "(DEFUN APP NIL (BASE))",
+				"(QUOTE app)", "(QUOTE base)");
 	}
 
 	@Test
@@ -212,8 +212,8 @@ class LoadInlinerTest {
 		List<LispVal> result = inline("""
 				(asdf:defsystem :inline-sys :components ((:file "main")))
 				(asdf:load-system :inline-sys)""", Map.of("main.lisp", "(defun f () 42)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(quote inline-sys)", "(defun F nil 42)",
-				"(quote inline-sys)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE inline-sys)", "(DEFUN F NIL 42)",
+				"(QUOTE inline-sys)");
 	}
 
 	@Test
@@ -225,7 +225,7 @@ class LoadInlinerTest {
 						"(defsystem :lib :components ((:module \"src\" :components ((:file \"main\")))))",
 						"registry/src/main.lisp", "(defun f () 1)")),
 				"proj", List.of("registry"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun F nil 1)", "(quote lib)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN F NIL 1)", "(QUOTE lib)");
 	}
 
 	@Test
@@ -234,8 +234,8 @@ class LoadInlinerTest {
 				Map.of("lib.asd", "(defsystem :lib :components ((:file \"main\")))", //
 						"main.lisp", "(load \"helper.lisp\") (defun f () (h))", //
 						"helper.lisp", "(defun h () 7)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun H nil 7)", "(defun F nil (H))",
-				"(quote lib)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN H NIL 7)", "(DEFUN F NIL (H))",
+				"(QUOTE lib)");
 	}
 
 	@Test
@@ -295,7 +295,7 @@ class LoadInlinerTest {
 	private static long countUsocketSocketConnectDefuns(List<LispVal> program) {
 		return program.stream()
 			.map(LispVal::print)
-			.filter(printed -> printed.startsWith("(defun usocket:socket-connect "))
+			.filter(printed -> printed.startsWith("(DEFUN USOCKET:SOCKET-CONNECT "))
 			.count();
 	}
 
@@ -310,7 +310,7 @@ class LoadInlinerTest {
 				(print (usocket:socket-stream 42))
 				""", Map.of());
 		assertThat(countUsocketSocketConnectDefuns(result)).isEqualTo(1);
-		assertThat(result.getLast().print()).isEqualTo("(print (usocket:socket-stream 42))");
+		assertThat(result.getLast().print()).isEqualTo("(PRINT (USOCKET:SOCKET-STREAM 42))");
 	}
 
 	@Test
@@ -320,11 +320,11 @@ class LoadInlinerTest {
 						(defsystem :net-lib
 						  :depends-on ("usocket")
 						  :components ((:file "net")))""", //
-				"net.lisp", "(defun stream-of (s) (usocket:socket-stream s))"));
+				"net.lisp", "(defun stream-of (s) (USOCKET:SOCKET-STREAM s))"));
 		assertThat(countUsocketSocketConnectDefuns(result)).isEqualTo(1);
 		List<String> printed = result.stream().map(LispVal::print).toList();
 		// The shim precedes the dependent component file.
-		assertThat(printed.indexOf("(defun STREAM-OF (S) (usocket:socket-stream S))"))
+		assertThat(printed.indexOf("(DEFUN STREAM-OF (S) (USOCKET:SOCKET-STREAM S))"))
 			.isGreaterThan(printed.indexOf("(defparameter usocket:*wildcard-host* \"0.0.0.0\")"));
 	}
 
@@ -383,8 +383,8 @@ class LoadInlinerTest {
 				LispReader.readAllFromString("(ql:quickload \"mylib\") (print (mylib-answer))"),
 				SourceLoader.fileSystem(), null, List.of(), Features.INTERPRETER,
 				quicklispClient(home, "(defun mylib-answer () 42)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(defun MYLIB-ANSWER nil 42)", "(quote mylib)",
-				"(print (MYLIB-ANSWER))");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN MYLIB-ANSWER NIL 42)", "(QUOTE mylib)",
+				"(PRINT (MYLIB-ANSWER))");
 	}
 
 	@Test

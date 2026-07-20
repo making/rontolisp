@@ -10,7 +10,7 @@ public record LispNil() implements LispVal {
 
 	@Override
 	public String print() {
-		return "nil";
+		return "NIL";
 	}
 
 }

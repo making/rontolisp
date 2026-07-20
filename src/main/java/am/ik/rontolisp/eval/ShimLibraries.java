@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -43,10 +42,13 @@ import org.jspecify.annotations.Nullable;
  */
 public final class ShimLibraries {
 
-	/** Built-in system name to its classpath resource. */
-	private static final Map<String, String> RESOURCES = Map.of(LispNames.CLOSER_MOP_PKG, "closer-mop.lisp",
-			LispNames.FLEXI_STREAMS_PKG, "flexi-streams.lisp", "float-features", "float-features.lisp",
-			LispNames.TRIVIAL_GRAY_STREAMS_PKG, "trivial-gray-streams.lisp");
+	/**
+	 * Built-in system name (canonical lower-case coerce-name form -- a separate namespace
+	 * from the upcase-canonical package names) to its classpath resource.
+	 */
+	private static final Map<String, String> RESOURCES = Map.of("closer-mop", "closer-mop.lisp", "flexi-streams",
+			"flexi-streams.lisp", "float-features", "float-features.lisp", "trivial-gray-streams",
+			"trivial-gray-streams.lisp");
 
 	/**
 	 * Leaf-module substitutions: system name to (component file relative to the system's
@@ -83,8 +85,8 @@ public final class ShimLibraries {
 			throw new IllegalArgumentException("Not a shim system: " + name);
 		}
 		return CACHE.computeIfAbsent(name, key -> {
-			List<LispVal> parsed = LispReader.readAllFromString(readSource(resource), Features.INTERNAL);
-			if (LispNames.TRIVIAL_GRAY_STREAMS_PKG.equals(key)) {
+			List<LispVal> parsed = LispReader.readAllFromString(readSource(resource), Features.INTERPRETER);
+			if ("trivial-gray-streams".equals(key)) {
 				// The adapter's superclasses and delegation targets are rontolisp's
 				// own Gray protocol: its definitions must precede the adapter's.
 				List<LispVal> combined = new java.util.ArrayList<>(GrayStreamsLibrary.forms());
@@ -112,7 +114,8 @@ public final class ShimLibraries {
 		if (resource == null) {
 			return null;
 		}
-		return CACHE.computeIfAbsent(resource, key -> LispReader.readAllFromString(readSource(key), Features.INTERNAL));
+		return CACHE.computeIfAbsent(resource,
+				key -> LispReader.readAllFromString(readSource(key), Features.INTERPRETER));
 	}
 
 	private static String readSource(String resource) {

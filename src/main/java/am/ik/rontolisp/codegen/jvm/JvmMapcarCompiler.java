@@ -38,7 +38,7 @@ final class JvmMapcarCompiler {
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(listSlot);
 			JvmEmitHelper.emitRequireListGuard(ctx, listSlot,
-					"mapcar: argument is not a list (use map for strings/vectors)");
+					"MAPCAR: argument is not a list (use map for strings/vectors)");
 			listSlots.add(listSlot);
 		}
 

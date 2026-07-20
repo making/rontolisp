@@ -94,7 +94,7 @@ final class JvmEmitHelper {
 	 * and is {@code eq} to a quoted {@code 't}, matching the interpreter.
 	 */
 	static void compileTrue(JvmLispCompiler.Ctx ctx) {
-		compileStringLiteral("t", ctx);
+		compileStringLiteral("T", ctx);
 	}
 
 	static void compileStringLiteral(String value, JvmLispCompiler.Ctx ctx) {

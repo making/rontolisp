@@ -39,7 +39,7 @@ public final class GrayStreamsLibrary {
 			synchronized (GrayStreamsLibrary.class) {
 				cached = forms;
 				if (cached == null) {
-					cached = LispReader.readAllFromString(readSource(), Features.INTERNAL);
+					cached = LispReader.readAllFromString(readSource(), Features.INTERPRETER);
 					forms = cached;
 				}
 			}
@@ -64,9 +64,9 @@ public final class GrayStreamsLibrary {
 			LispNames.GRAY_STREAM_WRITE_STRING, "fundamental-character-output-stream",
 			"fundamental-character-input-stream");
 
-	private static final String WRITE_STRING_DISPATCH = "%gray-write-string-dispatch";
+	private static final String WRITE_STRING_DISPATCH = "%GRAY-WRITE-STRING-DISPATCH";
 
-	private static final String WRITE_CHAR_DISPATCH = "%gray-write-char-dispatch";
+	private static final String WRITE_CHAR_DISPATCH = "%GRAY-WRITE-CHAR-DISPATCH";
 
 	/**
 	 * The compile-path pre-pass (the usocket {@code process()} pattern): when the program
@@ -111,7 +111,7 @@ public final class GrayStreamsLibrary {
 		}
 		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(name.name());
 		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())
-				&& "fundamental-character-output-stream".equals(qn.member());
+				&& "FUNDAMENTAL-CHARACTER-OUTPUT-STREAM".equals(qn.member());
 	}
 
 	private static LispVal rewrite(LispVal form) {

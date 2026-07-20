@@ -1328,7 +1328,7 @@ public final class LispMacroExpander {
 				// The variable holds the first element already at binding time (so a
 				// later sequential clause's init can reference it, as in CL) and is
 				// re-synced from the cursor after each step.
-				LispSymbol cursor = gensym("list");
+				LispSymbol cursor = gensym("LIST");
 				piece.binds.add(new ForBinding(cursor, listForm, false));
 				piece.endTests.add(makeNot(call(LispNames.CONSP, cursor)));
 				destructureInto(piece, pattern, call(LispNames.CAR, cursor));
@@ -1928,8 +1928,7 @@ public final class LispMacroExpander {
 				return replaced;
 			}
 			if (tree instanceof LispCons cons) {
-				if (cons.car() instanceof LispSymbol head
-						&& skipHeads.contains(head.name().toLowerCase(java.util.Locale.ROOT))) {
+				if (cons.car() instanceof LispSymbol head && skipHeads.contains(head.name())) {
 					return tree;
 				}
 				LispVal car = substituteTree(cons.car(), skipHeads, replacer);
@@ -2103,7 +2102,7 @@ public final class LispMacroExpander {
 	private static LispVal seqAsListForm(LispVal seqExpr) {
 		LispSymbol in = new LispSymbol(SEQ_IN_VAR);
 		// (let ((__seq_in seq)) (if (stringp __seq_in) (coerce __seq_in 'list) __seq_in))
-		return makeLet(SEQ_IN_VAR, seqExpr, makeIf(callOf(LispNames.STRINGP, in), coerceTo(in, "list"), in));
+		return makeLet(SEQ_IN_VAR, seqExpr, makeIf(callOf(LispNames.STRINGP, in), coerceTo(in, "LIST"), in));
 	}
 
 	/**
@@ -2122,9 +2121,9 @@ public final class LispMacroExpander {
 		// (let ((__seq_lst (if __seq_str (coerce __seq_in 'list) __seq_in)))
 		// (let ((__seq_res <algo __seq_lst>))
 		// (if __seq_str (coerce __seq_res 'string) __seq_res)))))
-		LispVal result = makeIf(isStr, coerceTo(res, "string"), res);
+		LispVal result = makeIf(isStr, coerceTo(res, "STRING"), res);
 		LispVal resLet = makeLet(SEQ_RES_VAR, algo.apply(lst), result);
-		LispVal lstLet = makeLet(SEQ_LIST_VAR, makeIf(isStr, coerceTo(in, "list"), in), resLet);
+		LispVal lstLet = makeLet(SEQ_LIST_VAR, makeIf(isStr, coerceTo(in, "LIST"), in), resLet);
 		LispVal strLet = makeLet(SEQ_STR_VAR, callOf(LispNames.STRINGP, in), lstLet);
 		return makeLet(SEQ_IN_VAR, seqExpr, strLet);
 	}
@@ -2416,12 +2415,12 @@ public final class LispMacroExpander {
 	 */
 	public static boolean isCarCdrComposition(String name) {
 		int len = name.length();
-		if (len < 4 || len > 6 || name.charAt(0) != 'c' || name.charAt(len - 1) != 'r') {
+		if (len < 4 || len > 6 || name.charAt(0) != 'C' || name.charAt(len - 1) != 'R') {
 			return false;
 		}
 		for (int i = 1; i < len - 1; i++) {
 			char ch = name.charAt(i);
-			if (ch != 'a' && ch != 'd') {
+			if (ch != 'A' && ch != 'D') {
 				return false;
 			}
 		}
@@ -2444,7 +2443,7 @@ public final class LispMacroExpander {
 		LispVal arg = parts.get(1);
 		// Process middle characters right to left
 		for (int i = name.length() - 2; i >= 1; i--) {
-			String op = (name.charAt(i) == 'a') ? LispNames.CAR : LispNames.CDR;
+			String op = (name.charAt(i) == 'A') ? LispNames.CAR : LispNames.CDR;
 			arg = listToCons(List.of(new LispSymbol(op), arg));
 		}
 		return arg;
@@ -2776,7 +2775,7 @@ public final class LispMacroExpander {
 					LispSymbol endVar = new LispSymbol("__setf_ss_end");
 					LispSymbol valVar = new LispSymbol(SETF_VAR);
 					LispVal replaceCall = listToCons(List.of(new LispSymbol(LispNames.REPLACE), seqVar, valVar,
-							new LispSymbol(":start1"), startVar, new LispSymbol(":end1"), endVar));
+							new LispSymbol(":START1"), startVar, new LispSymbol(":END1"), endVar));
 					LispVal endInit = placeParts.size() > 3 ? placeParts.get(3) : LispNil.INSTANCE;
 					yield makeLet(seqVar.name(), placeParts.get(1),
 							makeLet(startVar.name(), placeParts.get(2), makeLet(endVar.name(), endInit,
@@ -2938,10 +2937,10 @@ public final class LispMacroExpander {
 		// Build the inner chain: characters from index 2 to len-2 (right to left)
 		LispVal target = arg;
 		for (int i = accessor.length() - 2; i >= 2; i--) {
-			String op = (accessor.charAt(i) == 'a') ? LispNames.CAR : LispNames.CDR;
+			String op = (accessor.charAt(i) == 'A') ? LispNames.CAR : LispNames.CDR;
 			target = listToCons(List.of(new LispSymbol(op), target));
 		}
-		if (outerOp == 'a') {
+		if (outerOp == 'A') {
 			return expandSetfWithRplaca(target, value);
 		}
 		else {
@@ -3746,7 +3745,7 @@ public final class LispMacroExpander {
 	private static void requireKeywords(String name, List<LispVal> parts, int start, String... allowed) {
 		for (int i = start; i < parts.size(); i += 2) {
 			if (!(parts.get(i) instanceof LispSymbol kw)
-					|| !List.of(allowed).contains(LispNames.foldKeyword(kw.name()))) {
+					|| List.of(allowed).stream().noneMatch(a -> a.equalsIgnoreCase(kw.name()))) {
 				throw new IllegalArgumentException(name + " expects keyword arguments " + String.join("/", allowed)
 						+ ", got: " + parts.get(i).print());
 			}
@@ -3915,12 +3914,12 @@ public final class LispMacroExpander {
 		// (do ((__getf_key key) (__getf_cur plist (cddr __getf_cur)))
 		// ((atom __getf_cur) nil)
 		// (if (eql __getf_key (car __getf_cur)) (return (cadr __getf_cur)) nil))
-		LispVal cddrStep = listToCons(List.of(new LispSymbol("cddr"), cur));
+		LispVal cddrStep = listToCons(List.of(new LispSymbol("CDDR"), cur));
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(key, parts.get(2))), listToCons(List.of(cur, parts.get(1), cddrStep))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
 		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), key, callOf(LispNames.CAR, cur)));
-		LispVal value = listToCons(List.of(new LispSymbol("cadr"), cur));
+		LispVal value = listToCons(List.of(new LispSymbol("CADR"), cur));
 		LispVal body = makeIf(match, makeReturn(value), LispNil.INSTANCE);
 		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
 	}
@@ -4623,12 +4622,12 @@ public final class LispMacroExpander {
 				// create/supersede defaults); any other value must not be silently
 				// reinterpreted.
 				if (i + 1 >= specParts.size() || !ignorableOpenOptionValue(key.name(), specParts.get(i + 1))) {
-					throw new UnsupportedOperationException(LispNames.WITH_OPEN_FILE + " "
-							+ LispNames.foldKeyword(key.name()) + " supports only the native default value ("
-							+ (LispNames.keywordMatches(key.name(), ":external-format") ? ":utf-8"
-									: LispNames.keywordMatches(key.name(), ":if-exists") ? ":supersede"
-											: ":create or :error")
-							+ ")");
+					throw new UnsupportedOperationException(
+							LispNames.WITH_OPEN_FILE + " " + key.name() + " supports only the native default value ("
+									+ (LispNames.keywordMatches(key.name(), ":external-format") ? ":utf-8"
+											: LispNames.keywordMatches(key.name(), ":if-exists") ? ":supersede"
+													: ":create or :error")
+									+ ")");
 				}
 			}
 			else {
@@ -4655,11 +4654,11 @@ public final class LispMacroExpander {
 		if (!(value instanceof LispSymbol sym)) {
 			return false;
 		}
-		return switch (LispNames.foldKeyword(option)) {
-			case ":external-format" ->
+		return switch (option) {
+			case ":EXTERNAL-FORMAT" ->
 				LispNames.keywordMatches(sym.name(), ":utf-8") || LispNames.keywordMatches(sym.name(), ":default");
-			case ":if-exists" -> LispNames.keywordMatches(sym.name(), ":supersede");
-			case ":if-does-not-exist" ->
+			case ":IF-EXISTS" -> LispNames.keywordMatches(sym.name(), ":supersede");
+			case ":IF-DOES-NOT-EXIST" ->
 				LispNames.keywordMatches(sym.name(), ":create") || LispNames.keywordMatches(sym.name(), ":error");
 			default -> false;
 		};
@@ -4864,11 +4863,11 @@ public final class LispMacroExpander {
 	private static final String USOCKET_SOCKET_CONNECT_QUALIFIED = LispNames.USOCKET_PKG + ":"
 			+ LispNames.USOCKET_SOCKET_CONNECT;
 
-	private static final String USOCKET_SOCKET_STREAM_QUALIFIED = LispNames.USOCKET_PKG + ":socket-stream";
+	private static final String USOCKET_SOCKET_STREAM_QUALIFIED = LispNames.USOCKET_PKG + ":SOCKET-STREAM";
 
-	private static final String USOCKET_SOCKET_CLOSE_QUALIFIED = LispNames.USOCKET_PKG + ":socket-close";
+	private static final String USOCKET_SOCKET_CLOSE_QUALIFIED = LispNames.USOCKET_PKG + ":SOCKET-CLOSE";
 
-	private static final String USOCKET_SOCKET_LISTEN_QUALIFIED = LispNames.USOCKET_PKG + ":socket-listen";
+	private static final String USOCKET_SOCKET_LISTEN_QUALIFIED = LispNames.USOCKET_PKG + ":SOCKET-LISTEN";
 
 	private static final String USOCKET_RESULT_VAR = "__usocket_result";
 
@@ -5030,8 +5029,8 @@ public final class LispMacroExpander {
 			return parts.get(1);
 		}
 		LispSymbol condVar = new LispSymbol("__usock_cond");
-		LispVal resignal = callOf(LispNames.USOCKET_PKG + "::%usock-resignal", condVar);
-		LispVal clause = listToCons(List.of(new LispSymbol("error"), listToCons(List.<LispVal>of(condVar)), resignal));
+		LispVal resignal = callOf(LispNames.USOCKET_PKG + "::%USOCK-RESIGNAL", condVar);
+		LispVal clause = listToCons(List.of(new LispSymbol("ERROR"), listToCons(List.<LispVal>of(condVar)), resignal));
 		return listToCons(List.of(new LispSymbol(LispNames.HANDLER_CASE), parts.get(1), clause));
 	}
 
@@ -5225,7 +5224,7 @@ public final class LispMacroExpander {
 		LispSymbol r = new LispSymbol("__ms_r");
 		LispSymbol c = new LispSymbol("__ms_c");
 		LispSymbol idx = new LispSymbol("__ms_i");
-		LispVal concat = fmtCall(LispNames.SETQ, r, fmtCall(LispNames.CONCATENATE, quoteOf("string"), r, c));
+		LispVal concat = fmtCall(LispNames.SETQ, r, fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), r, c));
 		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(idx, size)), concat));
 		LispVal bindings = listToCons(List.of(listToCons(List.of(r, new LispString(""))),
 				listToCons(List.of(c, fmtCall(LispNames.STRING, init)))));
@@ -5276,7 +5275,7 @@ public final class LispMacroExpander {
 			}
 			// A nil bound keeps its default (a runtime nil through the or-wrapper), as in
 			// the interpreter.
-			switch (LispNames.foldKeyword(key.name())) {
+			switch (key.name()) {
 				case LispNames.START1_KEYWORD -> s1 = boundOrDefault(parts.get(k + 1), s1);
 				case LispNames.END1_KEYWORD -> e1 = boundOrDefault(parts.get(k + 1), e1);
 				case LispNames.START2_KEYWORD -> s2 = boundOrDefault(parts.get(k + 1), s2);
@@ -5297,7 +5296,7 @@ public final class LispMacroExpander {
 		LispVal head = fmtCall(LispNames.SUBSEQ, r1, new LispInteger(0), vs1);
 		LispVal mid = fmtCall(LispNames.SUBSEQ, r2, vs2, fmtCall(LispNames.ADD, vs2, n));
 		LispVal tail = fmtCall(LispNames.SUBSEQ, r1, fmtCall(LispNames.ADD, vs1, n), fmtCall(LispNames.LENGTH, r1));
-		LispVal functional = fmtCall(LispNames.CONCATENATE, quoteOf("string"), head, mid, tail);
+		LispVal functional = fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), head, mid, tail);
 		LispSymbol k = new LispSymbol("__rpl_k");
 		LispVal copyLoop = listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(k, n)),
 				fmtCall(LispNames.ROW_MAJOR_ASET, r1, fmtCall(LispNames.ADD, vs1, k),
@@ -5424,7 +5423,7 @@ public final class LispMacroExpander {
 	 * @return the quoted type name
 	 */
 	public static LispVal quotedCharacterTypeName() {
-		return quoteOf("character");
+		return quoteOf("CHARACTER");
 	}
 
 	/**
@@ -5638,9 +5637,9 @@ public final class LispMacroExpander {
 				throw new UnsupportedOperationException(
 						LispNames.WRITE_STRING + " supports only literal keyword arguments: " + cons.print());
 			}
-			switch (LispNames.foldKeyword(key.name())) {
-				case ":start" -> startExpr = parts.get(i + 1);
-				case ":end" -> endExpr = parts.get(i + 1);
+			switch (key.name()) {
+				case ":START" -> startExpr = parts.get(i + 1);
+				case ":END" -> endExpr = parts.get(i + 1);
 				default -> throw new UnsupportedOperationException(
 						LispNames.WRITE_STRING + ": unsupported keyword " + key.name());
 			}
@@ -5793,8 +5792,8 @@ public final class LispMacroExpander {
 				List<LispVal> optParts = optCons.toList();
 				String optName = optSym.name();
 				LispVal optValue = optParts.size() > 1 ? optParts.get(1) : LispNil.INSTANCE;
-				switch (LispNames.foldKeyword(optName)) {
-					case ":constructor" -> {
+				switch (optName) {
+					case ":CONSTRUCTOR" -> {
 						if (optParts.size() > 3) {
 							throw new UnsupportedOperationException(
 									LispNames.DEFSTRUCT + " option is not supported: " + option.print());
@@ -5812,7 +5811,7 @@ public final class LispMacroExpander {
 							suppressConstructor = true;
 						}
 					}
-					case ":conc-name" -> {
+					case ":CONC-NAME" -> {
 						concNameGiven = true;
 						if (optValue instanceof LispSymbol s) {
 							PackageRegistry.QualifiedName cqn = PackageRegistry.splitQualified(s.name());
@@ -5825,7 +5824,7 @@ public final class LispMacroExpander {
 							concNameOverride = "";
 						}
 					}
-					case ":predicate" -> {
+					case ":PREDICATE" -> {
 						if (optValue instanceof LispSymbol s) {
 							customPredicate = s.name();
 						}
@@ -5833,7 +5832,7 @@ public final class LispMacroExpander {
 							suppressPredicate = true;
 						}
 					}
-					case ":copier" -> {
+					case ":COPIER" -> {
 						if (optValue instanceof LispSymbol s) {
 							customCopier = s.name();
 						}
@@ -6225,7 +6224,7 @@ public final class LispMacroExpander {
 		LispSymbol slotSym;
 		LispVal initform = LispNil.INSTANCE;
 		String initarg = null;
-		String type = "t";
+		String type = "T";
 		List<String> readers = new java.util.ArrayList<>();
 		List<String> accessors = new java.util.ArrayList<>();
 		if (spec instanceof LispSymbol s) {
@@ -6244,21 +6243,21 @@ public final class LispMacroExpander {
 							LispNames.DEFCLASS + " expects a keyword slot option, got " + specParts.get(i).print());
 				}
 				LispVal optValue = specParts.get(i + 1);
-				switch (LispNames.foldKeyword(keySym.name())) {
-					case ":initarg" -> {
+				switch (keySym.name()) {
+					case ":INITARG" -> {
 						if (!(optValue instanceof LispSymbol kw && kw.isKeyword())) {
 							throw new IllegalArgumentException(
 									LispNames.DEFCLASS + " :initarg expects a keyword: " + spec.print());
 						}
 						initarg = kw.name();
 					}
-					case ":initform" -> initform = optValue;
-					case ":reader" -> readers.add(requireSlotFunctionName(optValue, spec));
-					case ":accessor" -> accessors.add(requireSlotFunctionName(optValue, spec));
-					case ":documentation" -> {
+					case ":INITFORM" -> initform = optValue;
+					case ":READER" -> readers.add(requireSlotFunctionName(optValue, spec));
+					case ":ACCESSOR" -> accessors.add(requireSlotFunctionName(optValue, spec));
+					case ":DOCUMENTATION" -> {
 						// Accepted and dropped (docstrings are not stored anywhere).
 					}
-					case ":type" -> {
+					case ":TYPE" -> {
 						// Recorded for introspection only (%class-slot-defs; JSON
 						// serializers disambiguate a nil value by declared type); still a
 						// no-op for checking, like declare/the. A compound specifier is
@@ -6322,7 +6321,7 @@ public final class LispMacroExpander {
 		ClosRegistry.GenericInfo init = closRegistry.generics()
 			.values()
 			.stream()
-			.filter(g -> "initialize-instance".equals(plainName(g.name())))
+			.filter(g -> "INITIALIZE-INSTANCE".equals(plainName(g.name())))
 			.findFirst()
 			.orElse(null);
 		if (init == null) {
@@ -6465,19 +6464,19 @@ public final class LispMacroExpander {
 			tags.add("%class-" + className);
 		}
 		clauses.add(listToCons(List.of(instanceTagTest(v, List.copyOf(tags)), mvCall(LispNames.CAR, v))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.NULL, v), quoteOf("null"))));
-		clauses.add(listToCons(List.of(fmtCall(LispNames.EQ_GENERAL, v, LispTrue.INSTANCE), quoteOf("boolean"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.INTEGERP, v), quoteOf("integer"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.RATIONALP, v), quoteOf("ratio"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.FLOATP, v), quoteOf("float"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.STRINGP, v), quoteOf("string"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.CHARACTERP, v), quoteOf("character"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.KEYWORDP, v), quoteOf("keyword"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.SYMBOLP, v), quoteOf("symbol"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.HASH_TABLE_P, v), quoteOf("hash-table"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.FUNCTIONP, v), quoteOf("function"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.CONSP, v), quoteOf("cons"))));
-		clauses.add(listToCons(List.of(LispTrue.INSTANCE, quoteOf("t"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.NULL, v), quoteOf("NULL"))));
+		clauses.add(listToCons(List.of(fmtCall(LispNames.EQ_GENERAL, v, LispTrue.INSTANCE), quoteOf("BOOLEAN"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.INTEGERP, v), quoteOf("INTEGER"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.RATIONALP, v), quoteOf("RATIO"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.FLOATP, v), quoteOf("FLOAT"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.STRINGP, v), quoteOf("STRING"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.CHARACTERP, v), quoteOf("CHARACTER"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.KEYWORDP, v), quoteOf("KEYWORD"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.SYMBOLP, v), quoteOf("SYMBOL"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.HASH_TABLE_P, v), quoteOf("HASH-TABLE"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.FUNCTIONP, v), quoteOf("FUNCTION"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.CONSP, v), quoteOf("CONS"))));
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, quoteOf("T"))));
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
@@ -6583,7 +6582,7 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSimpleConditionFormatControl(LispCons cons, ClosRegistry closRegistry) {
-		return expandConditionSlotReader(cons, closRegistry, "format-control", true);
+		return expandConditionSlotReader(cons, closRegistry, "FORMAT-CONTROL", true);
 	}
 
 	/**
@@ -6596,7 +6595,7 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSimpleConditionFormatArguments(LispCons cons, ClosRegistry closRegistry) {
-		return expandConditionSlotReader(cons, closRegistry, "format-arguments", false);
+		return expandConditionSlotReader(cons, closRegistry, "FORMAT-ARGUMENTS", false);
 	}
 
 	private static LispVal expandConditionSlotReader(LispCons cons, ClosRegistry closRegistry, String baseName,
@@ -7052,7 +7051,7 @@ public final class LispMacroExpander {
 		// user method on it -- typically an :after (cl-ppcre's str length computer) --
 		// also synthesizes an identity default primary; without it the dispatcher
 		// would signal "No applicable method" for every other class.
-		if ("initialize-instance".equals(plainName(generic.name()))
+		if ("INITIALIZE-INSTANCE".equals(plainName(generic.name()))
 				&& generic.methods().values().stream().noneMatch(m -> m.qualifier().isEmpty())) {
 			List<ClosRegistry.Specializer> defaults = new java.util.ArrayList<>();
 			for (int i = 0; i < generic.paramNames().size(); i++) {
@@ -7093,7 +7092,7 @@ public final class LispMacroExpander {
 		if (spec instanceof LispSymbol specSym) {
 			String plainName = plainTypeName(specSym);
 			ClosRegistry.ClassInfo specClass = closRegistry.findClass(specSym.name());
-			if ("t".equals(plainName)) {
+			if ("T".equals(plainName)) {
 				return ClosRegistry.Specializer.DEFAULT;
 			}
 			if (specClass != null) {
@@ -7206,8 +7205,8 @@ public final class LispMacroExpander {
 	/** Whether a plain (package-stripped) type name is usable as a TYPE specializer. */
 	private static boolean isSupportedTypeSpecializer(String plainName) {
 		return atomicTypePredicate(plainName) != null || switch (plainName) {
-			case "boolean", "unsigned-byte", "signed-byte", "vector", "simple-vector", "array", "simple-array",
-					"sequence", "standard-object", "pathname" ->
+			case "BOOLEAN", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
+					"SEQUENCE", "STANDARD-OBJECT", "PATHNAME" ->
 				true;
 			default -> false;
 		};
@@ -7242,7 +7241,7 @@ public final class LispMacroExpander {
 		defun.add(new LispSymbol(generic.name()));
 		List<LispVal> defunParams = new java.util.ArrayList<>(params);
 		if (variadic) {
-			defunParams.add(new LispSymbol("&rest"));
+			defunParams.add(new LispSymbol("&REST"));
 			defunParams.add(new LispSymbol(GF_REST_VAR));
 		}
 		defun.add(defunParams.isEmpty() ? LispNil.INSTANCE : listToCons(defunParams));
@@ -7474,7 +7473,7 @@ public final class LispMacroExpander {
 	private static LispVal lambdaOf(List<LispVal> params, LispVal body, boolean variadic) {
 		List<LispVal> lambdaParams = new java.util.ArrayList<>(params);
 		if (variadic) {
-			lambdaParams.add(new LispSymbol("&rest"));
+			lambdaParams.add(new LispSymbol("&REST"));
 			lambdaParams.add(new LispSymbol(GF_REST_VAR));
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
@@ -7554,7 +7553,7 @@ public final class LispMacroExpander {
 				// cons-shaped built-in specializer and never reach the default method
 				// (where e.g. jzon's coerced-fields object serialization lives). Guard
 				// those specializers to fail for any registered class instance.
-				if (("cons".equals(plain) || "list".equals(plain) || "sequence".equals(plain))
+				if (("CONS".equals(plain) || "LIST".equals(plain) || "SEQUENCE".equals(plain))
 						&& !closRegistry.classes().isEmpty()) {
 					yield makeIf(makeAnyClassInstanceTest(arg, closRegistry), LispNil.INSTANCE, test);
 				}
@@ -7623,16 +7622,16 @@ public final class LispMacroExpander {
 				yield Math.max(10, 100 - (info == null ? 1 : info.ancestors().size()));
 			}
 			case TYPE -> switch (java.util.Objects.requireNonNull(spec.name())) {
-				case "null" -> 200;
-				case "keyword", "unsigned-byte" -> 210;
-				case "boolean" -> 212;
-				case "standard-char", "base-char" -> 215;
-				case "double-float", "single-float", "short-float", "long-float" -> 218;
-				case "rational", "ratio" -> 225;
-				case "number", "real", "vector", "simple-vector", "simple-string", "base-string" -> 230;
-				case "list", "array", "simple-array" -> 235;
-				case "sequence", "atom" -> 240;
-				case "standard-object", "structure-object" -> 250;
+				case "NULL" -> 200;
+				case "KEYWORD", "UNSIGNED-BYTE" -> 210;
+				case "BOOLEAN" -> 212;
+				case "STANDARD-CHAR", "BASE-CHAR" -> 215;
+				case "DOUBLE-FLOAT", "SINGLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> 218;
+				case "RATIONAL", "RATIO" -> 225;
+				case "NUMBER", "REAL", "VECTOR", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING" -> 230;
+				case "LIST", "ARRAY", "SIMPLE-ARRAY" -> 235;
+				case "SEQUENCE", "ATOM" -> 240;
+				case "STANDARD-OBJECT", "STRUCTURE-OBJECT" -> 250;
 				default -> 220;
 			};
 			case DEFAULT -> 1000;
@@ -8028,7 +8027,7 @@ public final class LispMacroExpander {
 		// 16)))))))
 		LispVal hexBody = makeIf(fmtCall(LispNames.LT, hn, new LispInteger(16)),
 				fmtCall(LispNames.STRING, fmtCall(LispNames.CHAR, new LispString("0123456789abcdef"), hn)),
-				fmtCall(LispNames.CONCATENATE, quoteOf("string"),
+				fmtCall(LispNames.CONCATENATE, quoteOf("STRING"),
 						fmtCall(hex.name(), fmtCall(LispNames.FLOOR, hn, new LispInteger(16))),
 						fmtCall(LispNames.STRING, fmtCall(LispNames.CHAR, new LispString("0123456789abcdef"),
 								fmtCall(LispNames.MOD, hn, new LispInteger(16))))));
@@ -8052,7 +8051,7 @@ public final class LispMacroExpander {
 						fmtCall(LispNames.STRING, fmtCall(LispNames.CAR, args)), popArg),
 				// (t (setq out (concatenate 'string out "~" (string (char ctrl i)))))
 				listToCons(List.of(LispTrue.INSTANCE,
-						fmtCall(LispNames.SETQ, out, fmtCall(LispNames.CONCATENATE, quoteOf("string"), out,
+						fmtCall(LispNames.SETQ, out, fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), out,
 								new LispString("~"), fmtCall(LispNames.STRING, fmtCall(LispNames.CHAR, ctrl, i))))))));
 		// (progn (setq i (+ i 1)) (let ((d (char-downcase (char ctrl i)))) cond))
 		LispVal directive = makeProgn(List.of(fmtCall(LispNames.SETQ, i, fmtCall(LispNames.ADD, i, one)),
@@ -8061,7 +8060,7 @@ public final class LispMacroExpander {
 								List.of(d, fmtCall(LispNames.CHAR_DOWNCASE, fmtCall(LispNames.CHAR, ctrl, i)))))),
 						condForm))));
 		LispVal charBranch = makeIf(fmtCall(LispNames.CHAR_EQ, c, new LispChar('~')), directive, fmtCall(LispNames.SETQ,
-				out, fmtCall(LispNames.CONCATENATE, quoteOf("string"), out, fmtCall(LispNames.STRING, c))));
+				out, fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), out, fmtCall(LispNames.STRING, c))));
 		// (let ((c (char ctrl i))) charBranch (setq i (+ i 1)))
 		LispVal whileBody = listToCons(List.of(new LispSymbol(LispNames.LET),
 				listToCons(List.of(listToCons(List.of(c, fmtCall(LispNames.CHAR, ctrl, i))))), charBranch,
@@ -8084,7 +8083,7 @@ public final class LispMacroExpander {
 
 	// Builds a cond clause (test (setq out (concatenate 'string out value)) [extra]).
 	private static LispVal appendClause(LispSymbol out, LispVal test, LispVal value, @Nullable LispVal extra) {
-		LispVal append = fmtCall(LispNames.SETQ, out, fmtCall(LispNames.CONCATENATE, quoteOf("string"), out, value));
+		LispVal append = fmtCall(LispNames.SETQ, out, fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), out, value));
 		return extra == null ? listToCons(List.of(test, append)) : listToCons(List.of(test, append, extra));
 	}
 
@@ -9329,8 +9328,8 @@ public final class LispMacroExpander {
 	private static final String SIGNAL_STREAM_VAR = "__signal_stream";
 
 	/** The simple-* condition tags whose slot 1 is the message (format-control). */
-	private static final List<String> SIMPLE_CONDITION_TAGS = List.of("%class-simple-error", "%class-simple-condition",
-			"%class-simple-warning");
+	private static final List<String> SIMPLE_CONDITION_TAGS = List.of("%class-SIMPLE-ERROR", "%class-SIMPLE-CONDITION",
+			"%class-SIMPLE-WARNING");
 
 	/**
 	 * Expands {@code (error datum args...)} through the CL condition designators:
@@ -9572,7 +9571,7 @@ public final class LispMacroExpander {
 			// __signal_cond nil) __signal_cond))
 			LispSymbol msgVar = new LispSymbol(SIGNAL_COND_VAR);
 			LispVal instance = listToCons(List.of(new LispSymbol(LispNames.LIST),
-					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-simple-condition"))),
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-SIMPLE-CONDITION"))),
 					msgVar, LispNil.INSTANCE));
 			signalCall = makeLet(SIGNAL_COND_VAR, message,
 					listToCons(List.of(new LispSymbol(internalName), instance, msgVar)));
@@ -9677,9 +9676,9 @@ public final class LispMacroExpander {
 	public static LispVal expandIgnoreErrors(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol condVar = new LispSymbol(IGNORE_ERRORS_COND_VAR);
-		LispVal valuesForm = listToCons(List.of(new LispSymbol("values"), LispNil.INSTANCE, condVar));
+		LispVal valuesForm = listToCons(List.of(new LispSymbol("VALUES"), LispNil.INSTANCE, condVar));
 		LispVal clause = listToCons(
-				List.of(new LispSymbol("error"), listToCons(List.<LispVal>of(condVar)), valuesForm));
+				List.of(new LispSymbol("ERROR"), listToCons(List.<LispVal>of(condVar)), valuesForm));
 		return listToCons(
 				List.of(new LispSymbol(LispNames.HANDLER_CASE), prognOrNil(parts.subList(1, parts.size())), clause));
 	}
@@ -9716,7 +9715,7 @@ public final class LispMacroExpander {
 	 * matches).
 	 */
 	private static @Nullable LispVal suppliedFormatControl(ClosRegistry.@Nullable ClassInfo cls, List<LispVal> items) {
-		if (cls == null || cls.slots().stream().noneMatch(s -> "format-control".equals(s.baseName()))) {
+		if (cls == null || cls.slots().stream().noneMatch(s -> "FORMAT-CONTROL".equals(s.baseName()))) {
 			return null;
 		}
 		for (int i = 0; i + 1 < items.size(); i += 2) {
@@ -9767,7 +9766,7 @@ public final class LispMacroExpander {
 		}
 		else if (LispNames.SIGNAL_COND_INTERNAL.equals(internalName)) {
 			LispVal instance = listToCons(List.of(new LispSymbol(LispNames.LIST),
-					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-simple-condition"))),
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-SIMPLE-CONDITION"))),
 					condVar, LispNil.INSTANCE));
 			stringCase = listToCons(List.of(new LispSymbol(internalName), instance, condVar));
 			conditionCase = listToCons(List.of(new LispSymbol(internalName), condVar, message));
@@ -9787,7 +9786,7 @@ public final class LispMacroExpander {
 		}
 		else if (LispNames.SIGNAL_COND_INTERNAL.equals(internalName)) {
 			LispVal instance = listToCons(List.of(new LispSymbol(LispNames.LIST),
-					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-simple-condition"))),
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-SIMPLE-CONDITION"))),
 					symbolMessage, LispNil.INSTANCE));
 			symbolCase = listToCons(List.of(new LispSymbol(internalName), instance, symbolMessage));
 		}
@@ -10185,7 +10184,7 @@ public final class LispMacroExpander {
 		LispVal fpExpr = null;
 		for (int i = 3; i + 1 < parts.size(); i += 2) {
 			if (parts.get(i) instanceof LispSymbol kw) {
-				switch (LispNames.foldKeyword(kw.name())) {
+				switch (kw.name()) {
 					case LispNames.INITIAL_ELEMENT_KEYWORD -> initExpr = parts.get(i + 1);
 					case LispNames.FILL_POINTER_KEYWORD -> fpExpr = parts.get(i + 1);
 					case LispNames.DISPLACED_TO_KEYWORD ->
@@ -10332,8 +10331,8 @@ public final class LispMacroExpander {
 			// string conversion (cl-ppcre's initialize-instance normalization).
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(type);
 			type = switch (qn == null ? type : qn.member()) {
-				case "simple-string", "base-string", "simple-base-string" -> "string";
-				case "simple-vector" -> "vector";
+				case "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> "STRING";
+				case "SIMPLE-VECTOR" -> "VECTOR";
 				default -> qn == null ? type : qn.member();
 			};
 		}
@@ -10361,15 +10360,15 @@ public final class LispMacroExpander {
 		}
 		LispSymbol x = new LispSymbol("__coerce_x");
 		LispVal stringToList = listToCons(List.of(new LispSymbol(LispNames.MAP),
-				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("list"))),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("LIST"))),
 				listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))), x));
 		LispVal body;
-		if ("list".equals(type)) {
+		if ("LIST".equals(type)) {
 			// (if (listp x) x (if (stringp x) (map 'list #'identity x) <vector scan>))
 			body = makeIf(callOf(LispNames.LISTP, x), x,
 					makeIf(callOf(LispNames.STRINGP, x), stringToList, coerceVectorToList(x)));
 		}
-		else if ("vector".equals(type)) {
+		else if ("VECTOR".equals(type)) {
 			// (if (or (listp x) (stringp x))
 			// (let ((__coerce_l (if (stringp x) (map 'list #'identity x) x))) <fill>)
 			// x)
@@ -10381,11 +10380,11 @@ public final class LispMacroExpander {
 					List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, x), callOf(LispNames.STRINGP, x)));
 			body = makeIf(sequencep, fill, x);
 		}
-		else if ("string".equals(type)) {
+		else if ("STRING".equals(type)) {
 			// (if (stringp x) x (map 'string #'identity (if (listp x) x <vector scan>)))
 			LispVal chars = makeIf(callOf(LispNames.LISTP, x), x, coerceVectorToList(x));
 			LispVal build = listToCons(List.of(new LispSymbol(LispNames.MAP),
-					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("string"))),
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("STRING"))),
 					listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))),
 					chars));
 			body = makeIf(callOf(LispNames.STRINGP, x), x, build);
@@ -10792,20 +10791,20 @@ public final class LispMacroExpander {
 		if (resultType != null) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(resultType);
 			resultType = qn == null ? resultType : qn.member();
-			if ("simple-string".equals(resultType) || "base-string".equals(resultType)) {
-				resultType = "string";
+			if ("SIMPLE-STRING".equals(resultType) || "BASE-STRING".equals(resultType)) {
+				resultType = "STRING";
 			}
 		}
 		boolean nilResult = isNilForm(resultTypeForm);
-		if ("vector".equals(resultType) || "simple-vector".equals(resultType) || "array".equals(resultType)) {
+		if ("VECTOR".equals(resultType) || "SIMPLE-VECTOR".equals(resultType) || "ARRAY".equals(resultType)) {
 			// (map 'vector fn seq...) -> (coerce (map 'list fn seq...) 'vector): the
 			// list expansion below does the walking, coerce fills a fresh vector.
 			List<LispVal> mapList = new java.util.ArrayList<>(parts);
-			mapList.set(1, listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("list"))));
+			mapList.set(1, listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("LIST"))));
 			return expandCoerce((LispCons) listToCons(List.of(new LispSymbol(LispNames.COERCE), listToCons(mapList),
-					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("vector"))))));
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("VECTOR"))))));
 		}
-		if (!nilResult && !"list".equals(resultType) && !"string".equals(resultType)) {
+		if (!nilResult && !"LIST".equals(resultType) && !"STRING".equals(resultType)) {
 			throw new UnsupportedOperationException(
 					"map supports only the 'list, 'string, 'vector, or nil result types, got: "
 							+ resultTypeForm.print());
@@ -10858,13 +10857,13 @@ public final class LispMacroExpander {
 		LispVal accInit;
 		LispVal accStep;
 		LispVal resultForm;
-		if ("string".equals(resultType)) {
+		if ("STRING".equals(resultType)) {
 			accInit = new LispString("");
 			accStep = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), accVar,
 					listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), call))));
 			resultForm = accVar;
 		}
-		else if ("list".equals(resultType)) {
+		else if ("LIST".equals(resultType)) {
 			accInit = LispNil.INSTANCE;
 			accStep = listToCons(List.of(new LispSymbol(LispNames.CONS), call, accVar));
 			resultForm = callOf(LispNames.NREVERSE, accVar);
@@ -10890,8 +10889,8 @@ public final class LispMacroExpander {
 
 	/** Returns the symbol name inside a {@code (quote name)} form, or null otherwise. */
 	/** The float type-specifier names; all map to the one double representation. */
-	private static final List<String> FLOAT_TYPE_NAMES = List.of("float", "single-float", "double-float", "short-float",
-			"long-float");
+	private static final List<String> FLOAT_TYPE_NAMES = List.of("FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT",
+			"LONG-FLOAT");
 
 	private static boolean isFloatTypeName(String name) {
 		return FLOAT_TYPE_NAMES.contains(name);
@@ -10912,7 +10911,7 @@ public final class LispMacroExpander {
 	 * Returns true when the form denotes nil (the nil literal or the {@code nil} symbol).
 	 */
 	private static boolean isNilForm(LispVal form) {
-		return form instanceof LispNil || (form instanceof LispSymbol s && "nil".equals(s.name()));
+		return form instanceof LispNil || (form instanceof LispSymbol s && "NIL".equals(s.name()));
 	}
 
 	/**
@@ -11236,7 +11235,7 @@ public final class LispMacroExpander {
 			return null;
 		}
 		if (designator instanceof LispSymbol sym && !sym.isKeyword()) {
-			return "nil".equals(sym.name()) ? null : sym.name();
+			return "NIL".equals(sym.name()) ? null : sym.name();
 		}
 		throw new IllegalArgumentException(
 				LispNames.BLOCK + ": block name must be a symbol, got " + designator.print());
@@ -11375,29 +11374,29 @@ public final class LispMacroExpander {
 		}
 		String name = plainTypeName(sym);
 		switch (name) {
-			case "boolean":
+			case "BOOLEAN":
 				// (or (null value) (eq value t))
 				return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.NULL, value),
 						listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), value, LispTrue.INSTANCE))));
-			case "unsigned-byte":
+			case "UNSIGNED-BYTE":
 				// unsigned-byte = (integer 0 *): a non-negative integer.
 				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.INTEGERP, value),
 						listToCons(List.of(new LispSymbol(LispNames.GE), value, new LispInteger(0)))));
-			case "signed-byte":
+			case "SIGNED-BYTE":
 				// signed-byte with no width = integer.
 				return callOf(LispNames.INTEGERP, value);
-			case "standard-object":
+			case "STANDARD-OBJECT":
 				return makeAnyClassInstanceTest(value, closRegistry);
-			case "pathname":
+			case "PATHNAME":
 				// No pathname type exists in rontolisp: nothing is a pathname.
 				return LispNil.INSTANCE;
-			case "vector", "simple-vector", "array", "simple-array":
+			case "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY":
 				// Strings are vectors (so arrays) in CL. The rank is NOT checked (a
 				// rank-n array passes a `vector` test too): the rank read would drag
 				// the gated array helpers into every typecase-using program.
 				return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, value),
 						callOf(LispNames.ARRAYP_INTERNAL, value)));
-			case "sequence":
+			case "SEQUENCE":
 				return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, value),
 						callOf(LispNames.STRINGP, value), callOf(LispNames.ARRAYP_INTERNAL, value)));
 			default:
@@ -11484,21 +11483,21 @@ public final class LispMacroExpander {
 	 */
 	private static @Nullable String atomicTypePredicate(String name) {
 		return switch (name) {
-			case "integer", "fixnum", "bignum" -> LispNames.INTEGERP;
-			case "float", "single-float", "double-float", "short-float", "long-float" -> LispNames.FLOATP;
-			case "number", "real" -> LispNames.NUMBERP;
-			case "rational", "ratio" -> LispNames.RATIONALP;
-			case "string", "simple-string", "base-string", "simple-base-string" -> LispNames.STRINGP;
-			case "symbol" -> LispNames.SYMBOLP;
-			case "keyword" -> LispNames.KEYWORDP;
-			case "cons" -> LispNames.CONSP;
-			case "list" -> LispNames.LISTP;
-			case "null" -> LispNames.NULL;
-			case "atom" -> LispNames.ATOM;
-			case "character", "base-char", "standard-char" -> LispNames.CHARACTERP;
-			case "hash-table" -> LispNames.HASH_TABLE_P;
-			case "function" -> LispNames.FUNCTIONP;
-			case "stream" -> LispNames.STREAMP;
+			case "INTEGER", "FIXNUM", "BIGNUM" -> LispNames.INTEGERP;
+			case "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> LispNames.FLOATP;
+			case "NUMBER", "REAL" -> LispNames.NUMBERP;
+			case "RATIONAL", "RATIO" -> LispNames.RATIONALP;
+			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> LispNames.STRINGP;
+			case "SYMBOL" -> LispNames.SYMBOLP;
+			case "KEYWORD" -> LispNames.KEYWORDP;
+			case "CONS" -> LispNames.CONSP;
+			case "LIST" -> LispNames.LISTP;
+			case "NULL" -> LispNames.NULL;
+			case "ATOM" -> LispNames.ATOM;
+			case "CHARACTER", "BASE-CHAR", "STANDARD-CHAR" -> LispNames.CHARACTERP;
+			case "HASH-TABLE" -> LispNames.HASH_TABLE_P;
+			case "FUNCTION" -> LispNames.FUNCTIONP;
+			case "STREAM" -> LispNames.STREAMP;
 			default -> null;
 		};
 	}
@@ -11506,8 +11505,8 @@ public final class LispMacroExpander {
 	/** The canonical element-type name of an array type specifier's element type. */
 	private static String canonicalElementTypeName(LispSymbol sym) {
 		return switch (plainTypeName(sym)) {
-			case "character", "base-char", "standard-char" -> "character";
-			case "t" -> "t";
+			case "CHARACTER", "BASE-CHAR", "STANDARD-CHAR" -> "CHARACTER";
+			case "T" -> "T";
 			default -> plainTypeName(sym);
 		};
 	}
@@ -11547,13 +11546,13 @@ public final class LispMacroExpander {
 				return listToCons(List.of(new LispSymbol(LispNames.EQL), value,
 						listToCons(List.of(new LispSymbol(LispNames.QUOTE), parts.get(1)))));
 			}
-			case "satisfies": {
+			case "SATISFIES": {
 				if (parts.size() != 2 || !(parts.get(1) instanceof LispSymbol)) {
 					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
 				}
 				return listToCons(List.of(parts.get(1), value));
 			}
-			case "array", "simple-array", "vector", "simple-vector": {
+			case "ARRAY", "SIMPLE-ARRAY", "VECTOR", "SIMPLE-VECTOR": {
 				// (simple-array ELEMENT-TYPE DIMS): the dimensions are not checked (the
 				// rank read would drag the gated array helpers in, like the atomic
 				// case). A character element type keeps strings in the test; any other
@@ -11562,7 +11561,7 @@ public final class LispMacroExpander {
 				if (parts.size() > 1 && !(parts.get(1) instanceof LispSymbol star && "*".equals(plainTypeName(star)))) {
 					LispVal elementType = parts.get(1);
 					String elementName = elementType instanceof LispSymbol s ? canonicalElementTypeName(s) : "";
-					characterElements = "character".equals(elementName) || "t".equals(elementName);
+					characterElements = "CHARACTER".equals(elementName) || "T".equals(elementName);
 				}
 				if (characterElements) {
 					return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, value),
@@ -11570,10 +11569,10 @@ public final class LispMacroExpander {
 				}
 				return callOf(LispNames.ARRAYP_INTERNAL, value);
 			}
-			case "string", "simple-string", "base-string", "simple-base-string":
+			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING":
 				// (simple-string SIZE): the size is not checked.
 				return callOf(LispNames.STRINGP, value);
-			case "unsigned-byte": {
+			case "UNSIGNED-BYTE": {
 				// (unsigned-byte N) = (integer 0 (2^N - 1)).
 				List<LispVal> tests = new java.util.ArrayList<>();
 				tests.add(new LispSymbol(LispNames.AND));
@@ -11586,7 +11585,7 @@ public final class LispMacroExpander {
 				}
 				return listToCons(tests);
 			}
-			case "signed-byte": {
+			case "SIGNED-BYTE": {
 				// (signed-byte N) = (integer -2^(N-1) (2^(N-1) - 1)).
 				List<LispVal> tests = new java.util.ArrayList<>();
 				tests.add(new LispSymbol(LispNames.AND));
@@ -11843,27 +11842,27 @@ public final class LispMacroExpander {
 			}
 		}
 		else {
-			parentList = listToCons(List.of(new LispSymbol("condition")));
+			parentList = listToCons(List.of(new LispSymbol("CONDITION")));
 		}
 		LispVal slots = parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE;
 		LispVal defaultInitargs = null;
 		for (int i = 4; i < parts.size(); i++) {
 			if (parts.get(i) instanceof LispCons opt && opt.car() instanceof LispSymbol optSym) {
-				switch (LispNames.foldKeyword(optSym.name())) {
-					case ":report" -> {
+				switch (optSym.name()) {
+					case ":REPORT" -> {
 						if (!(opt.cdr() instanceof LispCons reportCell)) {
 							throw new IllegalArgumentException(
 									LispNames.DEFINE_CONDITION + " :report expects a value: " + cons.print());
 						}
 						closRegistry.registerConditionReport(nameSym.name(), reportCell.car());
 					}
-					case ":default-initargs" -> {
+					case ":DEFAULT-INITARGS" -> {
 						// Forwarded verbatim to the generated defclass, which supports
 						// the
 						// option.
 						defaultInitargs = opt;
 					}
-					case ":documentation" -> {
+					case ":DOCUMENTATION" -> {
 						// Accepted and dropped, like the defclass class option.
 					}
 					default -> throw new UnsupportedOperationException(LispNames.DEFINE_CONDITION + " option "
@@ -11895,7 +11894,7 @@ public final class LispMacroExpander {
 
 	/**
 	 * Returns whether {@code designator} names the {@code keyword} package -- the keyword
-	 * {@code :keyword}, the symbol {@code keyword}, or the string {@code "keyword"} (case
+	 * {@code :keyword}, the symbol {@code keyword}, or the string {@code "KEYWORD"} (case
 	 * insensitive). Used to give {@code (intern name :keyword)} keyword semantics;
 	 * symbols otherwise compare by name with no intern table, so any other package
 	 * argument stays unsupported.
@@ -11916,7 +11915,7 @@ public final class LispMacroExpander {
 		else {
 			return false;
 		}
-		return name.equalsIgnoreCase("keyword");
+		return name.equalsIgnoreCase("KEYWORD");
 	}
 
 	/**
@@ -12199,7 +12198,7 @@ public final class LispMacroExpander {
 			if (!(parts.get(i) instanceof LispSymbol kw)) {
 				return null;
 			}
-			switch (LispNames.foldKeyword(kw.name())) {
+			switch (kw.name()) {
 				case LispNames.ELEMENT_TYPE_KEYWORD -> elementType = parts.get(i + 1);
 				case LispNames.INITIAL_ELEMENT_KEYWORD -> initialElement = parts.get(i + 1);
 				default -> {
@@ -12239,7 +12238,7 @@ public final class LispMacroExpander {
 		String name = typeSym.name();
 		int colon = name.lastIndexOf(':');
 		String local = colon >= 0 ? name.substring(colon + 1) : name;
-		return local.equals("character") || local.equals("base-char") || local.equals("standard-char");
+		return local.equals("CHARACTER") || local.equals("BASE-CHAR") || local.equals("STANDARD-CHAR");
 	}
 
 	/**
@@ -12263,7 +12262,7 @@ public final class LispMacroExpander {
 			if (!(parts.get(i) instanceof LispSymbol kw)) {
 				return null;
 			}
-			switch (LispNames.foldKeyword(kw.name())) {
+			switch (kw.name()) {
 				case LispNames.ELEMENT_TYPE_KEYWORD -> elementType = parts.get(i + 1);
 				case LispNames.INITIAL_CONTENTS_KEYWORD -> contents = parts.get(i + 1);
 				default -> {
@@ -12279,7 +12278,7 @@ public final class LispMacroExpander {
 		LispSymbol nVar = new LispSymbol("__mca_n");
 		LispSymbol cVar = new LispSymbol("__mca_c");
 		LispVal copy = fmtCall(LispNames.SUBSEQ, cVar, new LispInteger(0));
-		LispVal convert = fmtCall(LispNames.COERCE, cVar, quoteOf("string"));
+		LispVal convert = fmtCall(LispNames.COERCE, cVar, quoteOf("STRING"));
 		LispVal body = makeIf(callOf(LispNames.STRINGP, cVar), copy, convert);
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(nVar, parts.get(1))), listToCons(List.of(cVar, contents))));
@@ -13078,9 +13077,9 @@ public final class LispMacroExpander {
 			default -> "";
 		};
 		String constructor = switch (typeName) {
-			case "string", "simple-string", "base-string", "simple-base-string" -> LispNames.MAKE_STRING;
-			case "list" -> LispNames.MAKE_LIST;
-			case "vector", "simple-vector", "array", "simple-array" -> LispNames.MAKE_ARRAY;
+			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> LispNames.MAKE_STRING;
+			case "LIST" -> LispNames.MAKE_LIST;
+			case "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY" -> LispNames.MAKE_ARRAY;
 			default -> throw new IllegalArgumentException("make-sequence: unsupported result type " + typeSpec.print());
 		};
 		List<LispVal> call = new java.util.ArrayList<>();
@@ -13561,24 +13560,24 @@ public final class LispMacroExpander {
 
 	/** The immediate supertypes of each built-in type name ({@code subtypep} lattice). */
 	private static final java.util.Map<String, List<String>> SUBTYPEP_PARENTS = java.util.Map.ofEntries(
-			java.util.Map.entry("fixnum", List.of("integer")), java.util.Map.entry("bignum", List.of("integer")),
-			java.util.Map.entry("bit", List.of("integer")), java.util.Map.entry("unsigned-byte", List.of("integer")),
-			java.util.Map.entry("signed-byte", List.of("integer")), java.util.Map.entry("integer", List.of("rational")),
-			java.util.Map.entry("ratio", List.of("rational")), java.util.Map.entry("rational", List.of("real")),
-			java.util.Map.entry("float", List.of("real")), java.util.Map.entry("real", List.of("number")),
-			java.util.Map.entry("keyword", List.of("symbol")), java.util.Map.entry("boolean", List.of("symbol")),
-			java.util.Map.entry("null", List.of("symbol", "list")), java.util.Map.entry("cons", List.of("list")),
-			java.util.Map.entry("list", List.of("sequence")), java.util.Map.entry("string", List.of("vector")),
-			java.util.Map.entry("vector", List.of("array", "sequence")));
+			java.util.Map.entry("FIXNUM", List.of("INTEGER")), java.util.Map.entry("BIGNUM", List.of("INTEGER")),
+			java.util.Map.entry("bit", List.of("INTEGER")), java.util.Map.entry("UNSIGNED-BYTE", List.of("INTEGER")),
+			java.util.Map.entry("SIGNED-BYTE", List.of("INTEGER")), java.util.Map.entry("INTEGER", List.of("RATIONAL")),
+			java.util.Map.entry("RATIO", List.of("RATIONAL")), java.util.Map.entry("RATIONAL", List.of("REAL")),
+			java.util.Map.entry("FLOAT", List.of("REAL")), java.util.Map.entry("REAL", List.of("NUMBER")),
+			java.util.Map.entry("KEYWORD", List.of("SYMBOL")), java.util.Map.entry("BOOLEAN", List.of("SYMBOL")),
+			java.util.Map.entry("NULL", List.of("SYMBOL", "LIST")), java.util.Map.entry("CONS", List.of("LIST")),
+			java.util.Map.entry("LIST", List.of("SEQUENCE")), java.util.Map.entry("STRING", List.of("VECTOR")),
+			java.util.Map.entry("VECTOR", List.of("ARRAY", "SEQUENCE")));
 
 	/** Collapses the type-name aliases the one runtime representation makes equal. */
 	private static String canonicalSubtypeName(String plain) {
 		return switch (plain) {
-			case "single-float", "double-float", "short-float", "long-float" -> "float";
-			case "base-char", "standard-char", "extended-char" -> "character";
-			case "simple-string", "base-string", "simple-base-string" -> "string";
-			case "simple-vector" -> "vector";
-			case "simple-array" -> "array";
+			case "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> "FLOAT";
+			case "BASE-CHAR", "STANDARD-CHAR", "EXTENDED-CHAR" -> "CHARACTER";
+			case "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> "STRING";
+			case "SIMPLE-VECTOR" -> "VECTOR";
+			case "SIMPLE-ARRAY" -> "ARRAY";
 			default -> plain;
 		};
 	}
@@ -13604,7 +13603,7 @@ public final class LispMacroExpander {
 		}
 		String sub = canonicalSubtypeName(plainTypeName(subSym));
 		String sup = canonicalSubtypeName(plainTypeName(superSym));
-		if ("t".equals(sup) || sub.equals(sup)) {
+		if ("T".equals(sup) || sub.equals(sup)) {
 			return true;
 		}
 		ClosRegistry.ClassInfo subClass = closRegistry.findClass(subSym.name());
@@ -13613,7 +13612,7 @@ public final class LispMacroExpander {
 			if (superClass != null) {
 				return subClass.ancestors().contains(ClosRegistry.normalize(superClass.name()));
 			}
-			return "standard-object".equals(sup);
+			return "STANDARD-OBJECT".equals(sup);
 		}
 		// Walk the built-in lattice upward from sub.
 		java.util.ArrayDeque<String> queue = new java.util.ArrayDeque<>();
@@ -13770,9 +13769,9 @@ public final class LispMacroExpander {
 			names.add(entry.getKey());
 			names.addAll(entry.getValue());
 		}
-		names.addAll(List.of("single-float", "double-float", "short-float", "long-float", "base-char", "standard-char",
-				"extended-char", "simple-string", "base-string", "simple-base-string", "simple-vector", "simple-array",
-				"character", "standard-object", "condition", "error", "simple-error", "simple-condition"));
+		names.addAll(List.of("SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "BASE-CHAR", "STANDARD-CHAR",
+				"EXTENDED-CHAR", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING", "SIMPLE-VECTOR", "SIMPLE-ARRAY",
+				"CHARACTER", "STANDARD-OBJECT", "CONDITION", "ERROR", "SIMPLE-ERROR", "SIMPLE-CONDITION"));
 		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
 			names.add(info.name());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
@@ -14149,7 +14148,7 @@ public final class LispMacroExpander {
 			// works. See LispNames.READ_DEFAULT_FLOAT_FORMAT.
 			out.add(listToCons(
 					List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.READ_DEFAULT_FLOAT_FORMAT),
-							listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("double-float"))))));
+							listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("DOUBLE-FLOAT"))))));
 		}
 		out.addAll(program);
 		return out;

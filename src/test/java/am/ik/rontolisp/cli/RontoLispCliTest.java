@@ -38,13 +38,13 @@ class RontoLispCliTest {
 		// as #<function vec:dot>. The surefire JVM has jdk.incubator.vector on the
 		// module path, so VecSimd.available() is true here.
 		String output = runCli("(vec:dot #d(1.0) #d(1.0)) #'vec:dot\n", "--simd");
-		assertThat(output).contains("#<function vec:dot>");
+		assertThat(output).contains("#<function VEC:DOT>");
 	}
 
 	@Test
 	void replWithoutSimdKeepsScalarVecKernels() {
 		String output = runCli("(vec:dot #d(1.0) #d(1.0)) #'vec:dot\n");
-		assertThat(output).contains("#<lambda>").doesNotContain("#<function vec:dot>");
+		assertThat(output).contains("#<lambda>").doesNotContain("#<function VEC:DOT>");
 	}
 
 	@Test
@@ -138,7 +138,7 @@ class RontoLispCliTest {
 				(cl:print (cl:car (version)))
 				""");
 		String output = runCli("", file.toString());
-		assertThat(output).contains("cl-user").contains(":version");
+		assertThat(output).contains("CL-USER").contains(":VERSION");
 	}
 
 }

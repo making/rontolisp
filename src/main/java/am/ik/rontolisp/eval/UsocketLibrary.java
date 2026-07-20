@@ -64,7 +64,7 @@ public final class UsocketLibrary {
 			synchronized (UsocketLibrary.class) {
 				cached = forms;
 				if (cached == null) {
-					cached = LispReader.readAllFromString(readSource(), Features.INTERNAL);
+					cached = LispReader.readAllFromString(readSource(), Features.INTERPRETER);
 					forms = cached;
 				}
 			}

@@ -133,10 +133,10 @@ public final class PackageRegistry {
 	 * become {@code pkg::double-float}); they are not callable and do not appear in the
 	 * introspection listings.
 	 */
-	private static final Set<String> CL_TYPES = Set.of("integer", "number", "rational", "ratio", "real", "fixnum",
-			"bignum", "single-float", "double-float", "short-float", "long-float", "unsigned-byte", "signed-byte",
-			"boolean", "sequence", "array", "simple-array", "simple-vector", "simple-string", "base-string",
-			"character", "base-char", "standard-char", "satisfies", "otherwise", "stream");
+	private static final Set<String> CL_TYPES = Set.of("INTEGER", "NUMBER", "RATIONAL", "RATIO", "REAL", "FIXNUM",
+			"BIGNUM", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "UNSIGNED-BYTE", "SIGNED-BYTE",
+			"BOOLEAN", "SEQUENCE", "ARRAY", "SIMPLE-ARRAY", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING",
+			"CHARACTER", "BASE-CHAR", "STANDARD-CHAR", "SATISFIES", "OTHERWISE", "STREAM");
 
 	/**
 	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the
@@ -172,14 +172,14 @@ public final class PackageRegistry {
 	 * names are plain strings rather than {@link LispNames} constants because they exist
 	 * only as Lisp-source defuns -- no evaluator or compiler dispatches on them.
 	 */
-	private static final Set<String> LINALG_FUNCTIONS = Set.of("zeros", "ones", "full", "eye", "arange", "linspace",
-			"from-list", "to-list", "shape", "ndim", "size", "reshape", "flatten", "transpose", "pad", "add", "sub",
-			"mul", "div", "emap", "dot", "matmul", "outer", "sum", "mean", "amax", "amin", "argmax", "argmin", "norm",
-			"trace", "det", "inv", "solve", "array-equal", "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos",
-			"atan", "sinh", "cosh", "sqrt", "abs", "square", "negative", "sign", "reciprocal", "maximum", "minimum",
-			"clip", "relu", "diff", "gradient", "zeros-like", "seed", "rand", "randn", "uniform", "choice",
-			"permutation", "take-rows", "row", "gather", "one-hot", "equal", "greater", "greater-equal", "less",
-			"less-equal");
+	private static final Set<String> LINALG_FUNCTIONS = Set.of("ZEROS", "ONES", "FULL", "EYE", "ARANGE", "LINSPACE",
+			"FROM-LIST", "TO-LIST", "SHAPE", "NDIM", "SIZE", "RESHAPE", "FLATTEN", "TRANSPOSE", "PAD", "ADD", "SUB",
+			"MUL", "DIV", "EMAP", "DOT", "MATMUL", "OUTER", "SUM", "MEAN", "AMAX", "AMIN", "ARGMAX", "ARGMIN", "NORM",
+			"TRACE", "DET", "INV", "SOLVE", "ARRAY-EQUAL", "EXP", "LOG", "TANH", "SIN", "COS", "TAN", "ASIN", "ACOS",
+			"ATAN", "SINH", "COSH", "SQRT", "ABS", "SQUARE", "NEGATIVE", "SIGN", "RECIPROCAL", "MAXIMUM", "MINIMUM",
+			"CLIP", "RELU", "DIFF", "GRADIENT", "ZEROS-LIKE", "SEED", "RAND", "RANDN", "UNIFORM", "CHOICE",
+			"PERMUTATION", "TAKE-ROWS", "ROW", "GATHER", "ONE-HOT", "EQUAL", "GREATER", "GREATER-EQUAL", "LESS",
+			"LESS-EQUAL");
 
 	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
 
@@ -217,9 +217,9 @@ public final class PackageRegistry {
 	 * compiler dispatches on them (only the {@code with-*} macros below are dispatched
 	 * on, by their qualified names).
 	 */
-	private static final Set<String> USOCKET_FUNCTIONS = Set.of(LispNames.USOCKET_SOCKET_CONNECT, "socket-listen",
-			"socket-accept", "socket-close", "socket-stream", "get-local-port", "get-local-address", "get-local-name",
-			"get-peer-port", "get-peer-address", "get-peer-name");
+	private static final Set<String> USOCKET_FUNCTIONS = Set.of(LispNames.USOCKET_SOCKET_CONNECT, "SOCKET-LISTEN",
+			"SOCKET-ACCEPT", "SOCKET-CLOSE", "SOCKET-STREAM", "GET-LOCAL-PORT", "GET-LOCAL-ADDRESS", "GET-LOCAL-NAME",
+			"GET-PEER-PORT", "GET-PEER-ADDRESS", "GET-PEER-NAME");
 
 	/**
 	 * The macros exported by the {@code usocket} package: built-in
@@ -236,9 +236,9 @@ public final class PackageRegistry {
 	 * system, so the condition names resolve as plain data symbols only (e.g.
 	 * {@code 'usocket:socket-error}) -- {@code handler-case} over them is not supported.
 	 */
-	private static final Set<String> USOCKET_VARIABLES = Set.of("*wildcard-host*", "*auto-port*", "socket-condition",
-			"socket-error", "connection-refused-error", "connection-aborted-error", "connection-reset-error",
-			"timeout-error", "address-in-use-error", "ns-error");
+	private static final Set<String> USOCKET_VARIABLES = Set.of("*WILDCARD-HOST*", "*AUTO-PORT*", "SOCKET-CONDITION",
+			"SOCKET-ERROR", "CONNECTION-REFUSED-ERROR", "CONNECTION-ABORTED-ERROR", "CONNECTION-RESET-ERROR",
+			"TIMEOUT-ERROR", "ADDRESS-IN-USE-ERROR", "NS-ERROR");
 
 	private static final Set<String> USOCKET_EXTERNALS = union(USOCKET_FUNCTIONS, USOCKET_MACROS, USOCKET_VARIABLES);
 
@@ -264,10 +264,10 @@ public final class PackageRegistry {
 	 * {@link #splitQualified} can normalize built-in qualifiers for the compile-path
 	 * pre-passes that scan the program before package resolution runs.
 	 */
-	private static final Map<String, String> BUILTIN_NICKNAMES = Map.of("common-lisp", LispNames.CL_PKG,
-			"common-lisp-user", LispNames.CL_USER_PKG, "rl", LispNames.RONTOLISP_PKG, "la", LispNames.LINALG_PKG,
-			"quicklisp", LispNames.QL_PKG, "c2mop", LispNames.CLOSER_MOP_PKG, "c2cl", LispNames.CLOSER_MOP_PKG,
-			"float-features", LispNames.FLOAT_FEATURES_PKG);
+	private static final Map<String, String> BUILTIN_NICKNAMES = Map.of("COMMON-LISP", LispNames.CL_PKG,
+			"COMMON-LISP-USER", LispNames.CL_USER_PKG, "RL", LispNames.RONTOLISP_PKG, "LA", LispNames.LINALG_PKG,
+			"QUICKLISP", LispNames.QL_PKG, "C2MOP", LispNames.CLOSER_MOP_PKG, "C2CL", LispNames.CLOSER_MOP_PKG,
+			"FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG);
 
 	/**
 	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
@@ -284,7 +284,7 @@ public final class PackageRegistry {
 	private static final Set<String> BUILTIN_PACKAGE_NAMES = Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
 			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
 			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
-			LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG, "keyword");
+			LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG, "KEYWORD");
 
 	/**
 	 * Creates a registry seeded with the built-in packages.

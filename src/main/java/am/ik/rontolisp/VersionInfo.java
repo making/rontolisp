@@ -19,9 +19,9 @@ public final class VersionInfo {
 	 * @return the version information as a Lisp property list
 	 */
 	public static LispVal plist() {
-		return list(new LispSymbol(":version"), new LispString(Version.getVersion()),
-				new LispSymbol(":build-timestamp"), new LispString(Version.getBuild()), new LispSymbol(":git-commit"),
-				new LispString(Version.getGitCommit()), new LispSymbol(":git-branch"),
+		return list(new LispSymbol(":VERSION"), new LispString(Version.getVersion()),
+				new LispSymbol(":BUILD-TIMESTAMP"), new LispString(Version.getBuild()), new LispSymbol(":GIT-COMMIT"),
+				new LispString(Version.getGitCommit()), new LispSymbol(":GIT-BRANCH"),
 				new LispString(Version.getGitBranch()));
 	}
 

@@ -273,7 +273,7 @@ public final class Environment implements Scope {
 						case LispFunction f -> f.name();
 						default -> "";
 					};
-					equalTest = "equal".equals(testName) || "equalp".equals(testName);
+					equalTest = "EQUAL".equals(testName) || "EQUALP".equals(testName);
 				}
 			}
 			return new LispHashTable(equalTest);
@@ -345,7 +345,7 @@ public final class Environment implements Scope {
 			LispVal elementTypeArg = null;
 			for (int i = 1; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw) {
-					switch (LispNames.foldKeyword(kw.name())) {
+					switch (kw.name()) {
 						case LispNames.INITIAL_ELEMENT_KEYWORD -> {
 							init = args.get(i + 1);
 							initGiven = true;
@@ -605,7 +605,7 @@ public final class Environment implements Scope {
 				return new LispSymbol(fa.elementType());
 			}
 			requireArray(LispNames.ARRAY_ELEMENT_TYPE, args.get(0));
-			return new LispSymbol("t");
+			return new LispSymbol("T");
 		}));
 		env.defineFunction(LispNames.ADJUSTABLE_ARRAY_P, new LispFunction(LispNames.ADJUSTABLE_ARRAY_P, args -> {
 			requireArgCount(LispNames.ADJUSTABLE_ARRAY_P, args, 1);
@@ -688,7 +688,7 @@ public final class Environment implements Scope {
 			LispVal fillPointerArg = null;
 			for (int i = 2; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw) {
-					switch (LispNames.foldKeyword(kw.name())) {
+					switch (kw.name()) {
 						case LispNames.INITIAL_ELEMENT_KEYWORD -> init = args.get(i + 1);
 						case LispNames.FILL_POINTER_KEYWORD -> fillPointerArg = args.get(i + 1);
 						case LispNames.DISPLACED_TO_KEYWORD ->
@@ -913,7 +913,7 @@ public final class Environment implements Scope {
 			String name = sym.name();
 			int colon = name.lastIndexOf(':');
 			String local = colon >= 0 ? name.substring(colon + 1) : name;
-			return local.equals("character") || local.equals("base-char") || local.equals("standard-char");
+			return local.equals("CHARACTER") || local.equals("BASE-CHAR") || local.equals("STANDARD-CHAR");
 		}
 		return false;
 	}
@@ -2592,9 +2592,9 @@ public final class Environment implements Scope {
 			}
 			for (; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw) {
-					switch (LispNames.foldKeyword(kw.name())) {
-						case ":start" -> start = (int) asLong(args.get(i + 1));
-						case ":end" ->
+					switch (kw.name()) {
+						case ":START" -> start = (int) asLong(args.get(i + 1));
+						case ":END" ->
 							end = args.get(i + 1) instanceof LispNil ? full.length() : (int) asLong(args.get(i + 1));
 						default ->
 							throw new LispEvalException(LispNames.WRITE_STRING + ": unsupported keyword " + kw.name());
@@ -2664,7 +2664,7 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.STREAM_ELEMENT_TYPE, new LispFunction(LispNames.STREAM_ELEMENT_TYPE, args -> {
 			requireArgCount(LispNames.STREAM_ELEMENT_TYPE, args, 1);
 			// Every stream is a character stream.
-			return new LispSymbol("character");
+			return new LispSymbol("CHARACTER");
 		}));
 		env.defineFunction(LispNames.STRING_STREAM_CONTENTS,
 				new LispFunction(LispNames.STRING_STREAM_CONTENTS, args -> {
@@ -2695,7 +2695,7 @@ public final class Environment implements Scope {
 		// concatenate: only the string result type is supported.
 		env.defineFunction(LispNames.CONCATENATE, new LispFunction(LispNames.CONCATENATE, args -> {
 			requireMinArgCount(LispNames.CONCATENATE, args, 1);
-			if (!(args.get(0) instanceof LispSymbol type) || !"string".equals(type.name())) {
+			if (!(args.get(0) instanceof LispSymbol type) || !"STRING".equals(type.name())) {
 				throw new LispEvalException(
 						"concatenate supports only the string result type, got: " + args.get(0).print());
 			}
@@ -2761,13 +2761,13 @@ public final class Environment implements Scope {
 							|| !key.name().startsWith(":")) {
 						throw new LispEvalException(LispNames.OPEN + " expects :option value pairs");
 					}
-					switch (LispNames.foldKeyword(key.name())) {
-						case ":direction" -> direction = args.get(i + 1);
-						case ":element-type" -> elementType = args.get(i + 1);
-						case ":external-format", ":if-exists", ":if-does-not-exist" -> {
+					switch (key.name()) {
+						case ":DIRECTION" -> direction = args.get(i + 1);
+						case ":ELEMENT-TYPE" -> elementType = args.get(i + 1);
+						case ":EXTERNAL-FORMAT", ":IF-EXISTS", ":IF-DOES-NOT-EXIST" -> {
 							if (!LispMacroExpander.ignorableOpenOptionValue(key.name(), args.get(i + 1))) {
-								throw new LispEvalException(LispNames.OPEN + ": " + LispNames.foldKeyword(key.name())
-										+ " supports only the native default value");
+								throw new LispEvalException(
+										LispNames.OPEN + ": " + key.name() + " supports only the native default value");
 							}
 						}
 						default -> throw new LispEvalException(LispNames.OPEN + ": unsupported option " + key.name());
@@ -3274,7 +3274,7 @@ public final class Environment implements Scope {
 			for (int i = 1; i + 1 < args.size(); i += 2) {
 				String key = (args.get(i) instanceof LispSymbol kw) ? kw.name() : "";
 				LispVal value = args.get(i + 1);
-				switch (LispNames.foldKeyword(key)) {
+				switch (key) {
 					case LispNames.RADIX_KEYWORD -> radix = (int) asLong(value);
 					case LispNames.JUNK_ALLOWED_KEYWORD -> junkAllowed = !(value instanceof LispNil);
 					case LispNames.START_KEYWORD -> start = (int) asLong(value);
@@ -3528,7 +3528,7 @@ public final class Environment implements Scope {
 			// A nil bound keeps its default (nil :end = the sequence's length, as in CL).
 			for (int i = 2; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol key && !(args.get(i + 1) instanceof LispNil)) {
-					switch (LispNames.foldKeyword(key.name())) {
+					switch (key.name()) {
 						case LispNames.START1_KEYWORD -> start1 = requireIndex(LispNames.REPLACE, args.get(i + 1));
 						case LispNames.END1_KEYWORD -> end1 = requireIndex(LispNames.REPLACE, args.get(i + 1));
 						case LispNames.START2_KEYWORD -> start2 = requireIndex(LispNames.REPLACE, args.get(i + 1));

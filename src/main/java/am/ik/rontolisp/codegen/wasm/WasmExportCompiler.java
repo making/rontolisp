@@ -163,12 +163,12 @@ final class WasmExportCompiler {
 				throw new UnsupportedOperationException("Missing value for " + keyword + " in " + form.print());
 			}
 			LispVal value = items.get(i + 1);
-			switch (LispNames.foldKeyword(keyword)) {
-				case ":as" -> exportName = exportAlias(value, form);
-				case ":params" -> params = quotedTypeList(value, form);
-				case ":param-names" -> paramNames = quotedNameList(value, form);
-				case ":returns" -> returns = returnDesignator(value, form);
-				case ":async" -> async = booleanOption(value, form);
+			switch (keyword) {
+				case ":AS" -> exportName = exportAlias(value, form);
+				case ":PARAMS" -> params = quotedTypeList(value, form);
+				case ":PARAM-NAMES" -> paramNames = quotedNameList(value, form);
+				case ":RETURNS" -> returns = returnDesignator(value, form);
+				case ":ASYNC" -> async = booleanOption(value, form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wasm-export option " + keyword + " in " + form.print());
 			}

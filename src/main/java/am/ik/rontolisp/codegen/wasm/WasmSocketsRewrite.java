@@ -44,7 +44,7 @@ import am.ik.rontolisp.PackageRegistry;
 final class WasmSocketsRewrite {
 
 	// Sync-context substitutions: native name -> the sockets.lisp dispatch defun.
-	private static final Map<String, String> SYNC_DISPATCH = Map.of(LispNames.READ_LINE, "%io-read-line",
+	private static final Map<String, String> SYNC_DISPATCH = Map.of(LispNames.READ_LINE, "%IO-READ-LINE",
 			LispNames.READ_CHAR, "%io-read-char", LispNames.READ_BYTE, "%io-read-byte", LispNames.WRITE_LINE,
 			"%io-write-line", LispNames.WRITE_BYTE, "%io-write-byte", LispNames.WRITE_STRING, "%io-write-string",
 			LispNames.CLOSE, "%io-close");
@@ -68,7 +68,7 @@ final class WasmSocketsRewrite {
 			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT), new int[] { 2, 2 },
 			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT), new int[] { 1, 1 });
 
-	private static final String IO_MARKER = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%io-read-line");
+	private static final String IO_MARKER = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%IO-READ-LINE");
 
 	private WasmSocketsRewrite() {
 	}

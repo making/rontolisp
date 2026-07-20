@@ -10,7 +10,7 @@ public record LispTrue() implements LispVal {
 
 	@Override
 	public String print() {
-		return "t";
+		return "T";
 	}
 
 }

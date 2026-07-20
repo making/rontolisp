@@ -179,7 +179,7 @@ public final class SocketsLibrary {
 			synchronized (SocketsLibrary.class) {
 				cached = forms;
 				if (cached == null) {
-					cached = LispReader.readAllFromString(readResource("sockets.lisp"), Features.INTERNAL);
+					cached = LispReader.readAllFromString(readResource("sockets.lisp"), Features.INTERPRETER);
 					forms = cached;
 				}
 			}

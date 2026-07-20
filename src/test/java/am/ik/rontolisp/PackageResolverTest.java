@@ -21,15 +21,15 @@ class PackageResolverTest {
 
 	@Test
 	void clQualifiedSymbolNormalizesToBare() {
-		assertThat(resolve("(cl:car x)")).isEqualTo("(car X)");
+		assertThat(resolve("(cl:car x)")).isEqualTo("(CAR X)");
 	}
 
 	@Test
 	void clUserSingleColonIsRejectedBecauseNothingIsExported() {
 		// cl-user exports nothing, like the Common Lisp COMMON-LISP-USER package.
 		assertThatThrownBy(() -> resolve("cl-user:foo")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("The symbol FOO is not external in the cl-user package")
-			.hasMessageContaining("use cl-user::FOO");
+			.hasMessageContaining("The symbol FOO is not external in the CL-USER package")
+			.hasMessageContaining("use CL-USER::FOO");
 	}
 
 	@Test
@@ -39,37 +39,37 @@ class PackageResolverTest {
 
 	@Test
 	void clDoubleColonNormalizesToBare() {
-		assertThat(resolve("(cl::car x)")).isEqualTo("(car X)");
+		assertThat(resolve("(cl::car x)")).isEqualTo("(CAR X)");
 	}
 
 	@Test
 	void clCarCdrCompositionIsExternal() {
-		assertThat(resolve("(cl:cadr x)")).isEqualTo("(cadr X)");
+		assertThat(resolve("(cl:cadr x)")).isEqualTo("(CADR X)");
 	}
 
 	@Test
 	void clInternalHelperRequiresDoubleColon() {
 		assertThatThrownBy(() -> resolve("(cl:%remf-tail x y)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("The symbol %remf-tail is not external in the cl package")
-			.hasMessageContaining("use cl::%remf-tail");
-		assertThat(resolve("(cl::%remf-tail x y)")).isEqualTo("(%remf-tail X Y)");
+			.hasMessageContaining("The symbol %REMF-TAIL is not external in the CL package")
+			.hasMessageContaining("use CL::%REMF-TAIL");
+		assertThat(resolve("(cl::%remf-tail x y)")).isEqualTo("(%REMF-TAIL X Y)");
 	}
 
 	@Test
 	void rontolispInternalSingleColonIsRejected() {
 		assertThatThrownBy(() -> resolve("(rontolisp:%json-parse s nil)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("The symbol %json-parse is not external in the rontolisp package")
-			.hasMessageContaining("use rontolisp::%json-parse");
+			.hasMessageContaining("The symbol %JSON-PARSE is not external in the RONTOLISP package")
+			.hasMessageContaining("use RONTOLISP::%JSON-PARSE");
 	}
 
 	@Test
 	void rontolispInternalDoubleColonIsKept() {
-		assertThat(resolve("(rontolisp::%json-parse s nil)")).isEqualTo("(rontolisp::%json-parse S nil)");
+		assertThat(resolve("(rontolisp::%json-parse s nil)")).isEqualTo("(RONTOLISP::%JSON-PARSE S NIL)");
 	}
 
 	@Test
 	void rontolispExternalDoubleColonNormalizesToSingleColon() {
-		assertThat(resolve("(rontolisp::version)")).isEqualTo("(rontolisp:version)");
+		assertThat(resolve("(rontolisp::version)")).isEqualTo("(RONTOLISP:VERSION)");
 	}
 
 	@Test
@@ -78,30 +78,30 @@ class PackageResolverTest {
 		// canonical spelling uses the double colon.
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(in-package :rontolisp)");
-		assertThat(resolve(resolver, "(%my-helper x)")).isEqualTo("(rontolisp::%my-helper rontolisp::X)");
+		assertThat(resolve(resolver, "(%my-helper x)")).isEqualTo("(RONTOLISP::%MY-HELPER RONTOLISP::X)");
 	}
 
 	@Test
 	void clVisibleSymbolsStayBareInClUser() {
-		assertThat(resolve("(if a b c)")).isEqualTo("(if A B C)");
+		assertThat(resolve("(if a b c)")).isEqualTo("(IF A B C)");
 	}
 
 	@Test
 	void unqualifiedVersionInRontolispBecomesQualified() {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(in-package :rontolisp)");
-		assertThat(resolve(resolver, "(version)")).isEqualTo("(rontolisp:version)");
+		assertThat(resolve(resolver, "(version)")).isEqualTo("(RONTOLISP:VERSION)");
 	}
 
 	@Test
 	void rontolispVersionQualifiedIsKept() {
-		assertThat(resolve("(rontolisp:version)")).isEqualTo("(rontolisp:version)");
+		assertThat(resolve("(RONTOLISP:VERSION)")).isEqualTo("(RONTOLISP:VERSION)");
 	}
 
 	@Test
 	void wasmExportQualifiedIsKeptWithQuotedDatumAndKeywords() {
 		assertThat(resolve("(rontolisp:wasm-export 'fact :params '(:int) :returns :int)"))
-			.isEqualTo("(rontolisp:wasm-export (quote FACT) :PARAMS (quote (:INT)) :RETURNS :INT)");
+			.isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE FACT) :PARAMS (QUOTE (:INT)) :RETURNS :INT)");
 	}
 
 	@Test
@@ -113,13 +113,13 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :gl (:use :cl) (:export :create-shader))");
 		resolve(resolver, "(in-package :gl)");
 		assertThat(resolve(resolver,
-				"(rontolisp:wasm-import 'create-shader :from \"gl\" :as \"createShader\" :params '(:int) :returns :int)"))
-			.isEqualTo("(rontolisp:wasm-import (quote GL:CREATE-SHADER) :FROM \"gl\" :AS \"createShader\""
-					+ " :PARAMS (quote (:INT)) :RETURNS :INT)");
+				"(RONTOLISP:WASM-IMPORT 'create-shader :from \"gl\" :as \"createShader\" :params '(:int) :returns :int)"))
+			.isEqualTo("(RONTOLISP:WASM-IMPORT (QUOTE GL:CREATE-SHADER) :FROM \"gl\" :AS \"createShader\""
+					+ " :PARAMS (QUOTE (:INT)) :RETURNS :INT)");
 		// An unexported name is internal to the package.
-		assertThat(resolve(resolver, "(rontolisp:wasm-import 'fail :from \"ui\" :params '(:string) :returns :void)"))
+		assertThat(resolve(resolver, "(RONTOLISP:WASM-IMPORT 'fail :from \"ui\" :params '(:string) :returns :void)"))
 			.isEqualTo(
-					"(rontolisp:wasm-import (quote GL::FAIL) :FROM \"ui\" :PARAMS (quote (:STRING)) :RETURNS :VOID)");
+					"(RONTOLISP:WASM-IMPORT (QUOTE GL::FAIL) :FROM \"ui\" :PARAMS (QUOTE (:STRING)) :RETURNS :VOID)");
 	}
 
 	@Test
@@ -129,7 +129,7 @@ class PackageResolverTest {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :gl (:use :cl) (:export :create-shader))");
 		assertThat(resolve(resolver, "(rontolisp:wasm-import 'gl:create-shader :params '(:int) :returns :int)"))
-			.isEqualTo("(rontolisp:wasm-import (quote GL:CREATE-SHADER) :PARAMS (quote (:INT)) :RETURNS :INT)");
+			.isEqualTo("(RONTOLISP:WASM-IMPORT (QUOTE GL:CREATE-SHADER) :PARAMS (QUOTE (:INT)) :RETURNS :INT)");
 	}
 
 	@Test
@@ -138,7 +138,7 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :gl (:use :cl) (:export :frame))");
 		resolve(resolver, "(in-package :gl)");
 		assertThat(resolve(resolver, "(rontolisp:wasm-export 'frame :as \"frame\" :params '(:float))"))
-			.isEqualTo("(rontolisp:wasm-export (quote GL:FRAME) :AS \"frame\" :PARAMS (quote (:FLOAT)))");
+			.isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE GL:FRAME) :AS \"frame\" :PARAMS (QUOTE (:FLOAT)))");
 	}
 
 	@Test
@@ -149,30 +149,30 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :gl (:use :cl) (:export :frame))");
 		resolve(resolver, "(in-package :gl)");
 		assertThat(resolve(resolver, "(rontolisp:wasm-export 'frame :as 'tick :params '(:float))"))
-			.isEqualTo("(rontolisp:wasm-export (quote GL:FRAME) :AS (quote TICK) :PARAMS (quote (:FLOAT)))");
+			.isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE GL:FRAME) :AS (QUOTE TICK) :PARAMS (QUOTE (:FLOAT)))");
 	}
 
 	@Test
 	void packageVarExpandsToQuotedCurrentPackage() {
-		assertThat(resolve("*package*")).isEqualTo("(quote cl-user)");
+		assertThat(resolve("*package*")).isEqualTo("(QUOTE CL-USER)");
 	}
 
 	@Test
 	void inPackageAcceptsKeywordAndBareSymbol() {
-		assertThat(resolve("(in-package :rontolisp)")).isEqualTo("(quote rontolisp)");
-		assertThat(resolve("(in-package rontolisp)")).isEqualTo("(quote rontolisp)");
+		assertThat(resolve("(in-package :rontolisp)")).isEqualTo("(QUOTE RONTOLISP)");
+		assertThat(resolve("(in-package rontolisp)")).isEqualTo("(QUOTE RONTOLISP)");
 	}
 
 	@Test
 	void quoteDatumIsLeftUntouched() {
-		assertThat(resolve("'(car x if)")).isEqualTo("(quote (car X if))");
+		assertThat(resolve("'(car x if)")).isEqualTo("(QUOTE (CAR X IF))");
 	}
 
 	@Test
 	void quoteDatumUntouchedEvenInRontolisp() {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(in-package :rontolisp)");
-		assertThat(resolve(resolver, "'(car x)")).isEqualTo("(quote (car X))");
+		assertThat(resolve(resolver, "'(car x)")).isEqualTo("(QUOTE (CAR X))");
 	}
 
 	@Test
@@ -180,7 +180,7 @@ class PackageResolverTest {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(in-package :rontolisp)");
 		assertThatThrownBy(() -> resolve(resolver, "(car x)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("use cl:car");
+			.hasMessageContaining("use CL:CAR");
 	}
 
 	@Test
@@ -188,7 +188,7 @@ class PackageResolverTest {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(in-package :rontolisp)");
 		assertThatThrownBy(() -> resolve(resolver, "*package*")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("use cl:*package*");
+			.hasMessageContaining("use CL:*PACKAGE*");
 	}
 
 	@Test
@@ -202,33 +202,33 @@ class PackageResolverTest {
 		// A gensym-generated "#:g1" contains a colon but must not be parsed as the
 		// package "#"; it stays a plain user symbol (expanded macro bodies reach the
 		// resolver on the compile path).
-		assertThat(resolve("(let ((#:g1 1)) #:g1)")).isEqualTo("(let ((#:G1 1)) #:G1)");
+		assertThat(resolve("(let ((#:g1 1)) #:g1)")).isEqualTo("(LET ((#:G1 1)) #:G1)");
 	}
 
 	@Test
 	void introspectionDesignatorIsNormalizedToKeyword() {
-		assertThat(resolve("(rontolisp:list-functions cl)")).isEqualTo("(rontolisp:list-functions :cl)");
-		assertThat(resolve("(rontolisp:list-functions :cl-user)")).isEqualTo("(rontolisp:list-functions :cl-user)");
-		assertThat(resolve("(rontolisp:list-macros \"cl\")")).isEqualTo("(rontolisp:list-macros :cl)");
+		assertThat(resolve("(rontolisp:list-functions cl)")).isEqualTo("(RONTOLISP:LIST-FUNCTIONS :CL)");
+		assertThat(resolve("(RONTOLISP:LIST-FUNCTIONS :CL-USER)")).isEqualTo("(RONTOLISP:LIST-FUNCTIONS :CL-USER)");
+		assertThat(resolve("(rontolisp:list-macros \"CL\")")).isEqualTo("(RONTOLISP:LIST-MACROS :CL)");
 		assertThat(resolve("(rontolisp:list-special-forms 'rontolisp)"))
-			.isEqualTo("(rontolisp:list-special-forms :rontolisp)");
+			.isEqualTo("(RONTOLISP:LIST-SPECIAL-FORMS :RONTOLISP)");
 	}
 
 	@Test
 	void introspectionWithoutArgumentIsKeptAsIs() {
-		assertThat(resolve("(rontolisp:list-functions)")).isEqualTo("(rontolisp:list-functions)");
+		assertThat(resolve("(RONTOLISP:LIST-FUNCTIONS)")).isEqualTo("(RONTOLISP:LIST-FUNCTIONS)");
 	}
 
 	@Test
 	void introspectionIsNormalizedInNestedForms() {
-		assertThat(resolve("(print (rontolisp:list-macros cl))")).isEqualTo("(print (rontolisp:list-macros :cl))");
+		assertThat(resolve("(print (rontolisp:list-macros cl))")).isEqualTo("(PRINT (RONTOLISP:LIST-MACROS :CL))");
 	}
 
 	@Test
 	void unqualifiedIntrospectionInRontolispBecomesQualified() {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(in-package :rontolisp)");
-		assertThat(resolve(resolver, "(list-functions)")).isEqualTo("(rontolisp:list-functions)");
+		assertThat(resolve(resolver, "(list-functions)")).isEqualTo("(RONTOLISP:LIST-FUNCTIONS)");
 	}
 
 	@Test
@@ -307,11 +307,11 @@ class PackageResolverTest {
 	@Test
 	void defpackageRegistersPackageAndResolvesQuoted() {
 		PackageResolver resolver = new PackageResolver();
-		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:export :greet))")).isEqualTo("(quote MYPKG)");
+		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:export :greet))")).isEqualTo("(QUOTE MYPKG)");
 		// defpackage does not switch the current package.
-		assertThat(resolve(resolver, "*package*")).isEqualTo("(quote cl-user)");
-		assertThat(resolve(resolver, "(in-package :mypkg)")).isEqualTo("(quote MYPKG)");
-		assertThat(resolve(resolver, "*package*")).isEqualTo("(quote MYPKG)");
+		assertThat(resolve(resolver, "*package*")).isEqualTo("(QUOTE CL-USER)");
+		assertThat(resolve(resolver, "(in-package :mypkg)")).isEqualTo("(QUOTE MYPKG)");
+		assertThat(resolve(resolver, "*package*")).isEqualTo("(QUOTE MYPKG)");
 	}
 
 	@Test
@@ -322,12 +322,12 @@ class PackageResolverTest {
 		// The exported name is owned and external: the canonical spelling is
 		// single-colon.
 		assertThat(resolve(resolver, "(defun greet (x) (car x))"))
-			.isEqualTo("(defun MYPKG:GREET (MYPKG::X) (car MYPKG::X))");
+			.isEqualTo("(DEFUN MYPKG:GREET (MYPKG::X) (CAR MYPKG::X))");
 		// A name interned later (not in the :export clause) is internal.
-		assertThat(resolve(resolver, "(defun helper (x) x)")).isEqualTo("(defun MYPKG::HELPER (MYPKG::X) MYPKG::X)");
+		assertThat(resolve(resolver, "(defun helper (x) x)")).isEqualTo("(DEFUN MYPKG::HELPER (MYPKG::X) MYPKG::X)");
 		resolve(resolver, "(in-package :cl-user)");
-		assertThat(resolve(resolver, "(mypkg:greet '(1))")).isEqualTo("(MYPKG:GREET (quote (1)))");
-		assertThat(resolve(resolver, "#'mypkg:greet")).isEqualTo("(function MYPKG:GREET)");
+		assertThat(resolve(resolver, "(mypkg:greet '(1))")).isEqualTo("(MYPKG:GREET (QUOTE (1)))");
+		assertThat(resolve(resolver, "#'mypkg:greet")).isEqualTo("(FUNCTION MYPKG:GREET)");
 		assertThatThrownBy(() -> resolve(resolver, "(mypkg:helper 1)")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("The symbol HELPER is not external in the MYPKG package")
 			.hasMessageContaining("use MYPKG::HELPER");
@@ -340,8 +340,8 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :bare (:export :f))");
 		resolve(resolver, "(in-package :bare)");
 		assertThatThrownBy(() -> resolve(resolver, "(car x)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("use cl:car");
-		assertThat(resolve(resolver, "(cl:car cl:*package*)")).isEqualTo("(car (quote BARE))");
+			.hasMessageContaining("use CL:CAR");
+		assertThat(resolve(resolver, "(cl:car cl:*package*)")).isEqualTo("(CAR (QUOTE BARE))");
 	}
 
 	@Test
@@ -365,11 +365,11 @@ class PackageResolverTest {
 	void defpackageAcceptsStringAndBareSymbolDesignators() {
 		PackageResolver resolver = new PackageResolver();
 		assertThat(resolve(resolver, "(defpackage \"STRPKG\" (:use cl) (:export \"F\" g :h))"))
-			.isEqualTo("(quote STRPKG)");
+			.isEqualTo("(QUOTE STRPKG)");
 		resolve(resolver, "(in-package :strpkg)");
-		assertThat(resolve(resolver, "(defun f () 1)")).isEqualTo("(defun STRPKG:F nil 1)");
-		assertThat(resolve(resolver, "(defun g () 2)")).isEqualTo("(defun STRPKG:G nil 2)");
-		assertThat(resolve(resolver, "(defun h () 3)")).isEqualTo("(defun STRPKG:H nil 3)");
+		assertThat(resolve(resolver, "(defun f () 1)")).isEqualTo("(DEFUN STRPKG:F NIL 1)");
+		assertThat(resolve(resolver, "(defun g () 2)")).isEqualTo("(DEFUN STRPKG:G NIL 2)");
+		assertThat(resolve(resolver, "(defun h () 3)")).isEqualTo("(DEFUN STRPKG:H NIL 3)");
 	}
 
 	@Test
@@ -377,13 +377,13 @@ class PackageResolverTest {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :mypkg (:use :cl))");
 		assertThat(resolve(resolver, "(rontolisp:list-functions :mypkg)"))
-			.isEqualTo("(rontolisp:list-functions :MYPKG)");
+			.isEqualTo("(RONTOLISP:LIST-FUNCTIONS :MYPKG)");
 	}
 
 	@Test
 	void defpackageExistingPackageIsRejected() {
 		assertThatThrownBy(() -> resolve("(defpackage :cl-user)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Package already exists: cl-user");
+			.hasMessageContaining("Package already exists: CL-USER");
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :mypkg)");
 		assertThatThrownBy(() -> resolve(resolver, "(defpackage :mypkg)")).isInstanceOf(LispPackageException.class)
@@ -402,14 +402,14 @@ class PackageResolverTest {
 			.isInstanceOf(LispPackageException.class)
 			.hasMessageContaining(":SHADOWING-IMPORT-FROM is not supported");
 		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:intern :f))")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Unsupported defpackage clause: :INTERN");
+			.hasMessageContaining("Unsupported DEFPACKAGE clause: :INTERN");
 	}
 
 	@Test
 	void defpackageDocumentationAndSizeAreIgnored() {
 		PackageResolver resolver = new PackageResolver();
 		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:documentation \"doc\") (:size 10))"))
-			.isEqualTo("(quote MYPKG)");
+			.isEqualTo("(QUOTE MYPKG)");
 	}
 
 	@Test
@@ -418,7 +418,7 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :mypackage (:use :cl) (:nicknames :mp :mypkg2) (:export :greet))");
 		assertThat(resolve(resolver, "(mp:greet)")).isEqualTo("(MYPACKAGE:GREET)");
 		assertThat(resolve(resolver, "(mypkg2:greet)")).isEqualTo("(MYPACKAGE:GREET)");
-		assertThat(resolve(resolver, "(in-package :mp)")).isEqualTo("(quote MYPACKAGE)");
+		assertThat(resolve(resolver, "(in-package :mp)")).isEqualTo("(QUOTE MYPACKAGE)");
 		assertThatThrownBy(() -> resolve(resolver, "(defpackage :mp)")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("Package already exists: MP");
 	}
@@ -427,35 +427,35 @@ class PackageResolverTest {
 	void defpackageNicknameCollidingWithExistingPackageIsRejected() {
 		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:nicknames :cl-user))"))
 			.isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Package already exists: cl-user");
+			.hasMessageContaining("Package already exists: CL-USER");
 	}
 
 	@Test
 	void commonLispNicknamesResolveToClAndClUser() {
 		PackageResolver resolver = new PackageResolver();
-		assertThat(resolve(resolver, "(common-lisp:car x)")).isEqualTo("(car X)");
-		assertThat(resolve(resolver, "(in-package :common-lisp-user)")).isEqualTo("(quote cl-user)");
+		assertThat(resolve(resolver, "(common-lisp:car x)")).isEqualTo("(CAR X)");
+		assertThat(resolve(resolver, "(in-package :common-lisp-user)")).isEqualTo("(QUOTE CL-USER)");
 		resolve(resolver, "(defpackage :mypkg (:use :common-lisp) (:export :f))");
 		resolve(resolver, "(in-package :mypkg)");
-		assertThat(resolve(resolver, "(car x)")).isEqualTo("(car MYPKG::X)");
+		assertThat(resolve(resolver, "(car x)")).isEqualTo("(CAR MYPKG::X)");
 	}
 
 	@Test
 	void builtinNicknamesResolveToRontolispAndLinalg() {
 		PackageResolver resolver = new PackageResolver();
-		assertThat(resolve(resolver, "(rl:version)")).isEqualTo("(rontolisp:version)");
-		assertThat(resolve(resolver, "(rl:json-parse s)")).isEqualTo("(rontolisp:json-parse S)");
-		assertThat(resolve(resolver, "(la:zeros 2 2)")).isEqualTo("(linalg:zeros 2 2)");
-		assertThat(resolve(resolver, "(in-package :rl)")).isEqualTo("(quote rontolisp)");
+		assertThat(resolve(resolver, "(rl:version)")).isEqualTo("(RONTOLISP:VERSION)");
+		assertThat(resolve(resolver, "(rl:json-parse s)")).isEqualTo("(RONTOLISP:JSON-PARSE S)");
+		assertThat(resolve(resolver, "(la:zeros 2 2)")).isEqualTo("(LINALG:ZEROS 2 2)");
+		assertThat(resolve(resolver, "(in-package :rl)")).isEqualTo("(QUOTE RONTOLISP)");
 	}
 
 	@Test
 	void builtinNicknamesAreReservedLikePackageNames() {
 		assertThatThrownBy(() -> resolve("(defpackage :rl)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Package already exists: rl");
+			.hasMessageContaining("Package already exists: RL");
 		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:nicknames :la))"))
 			.isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Package already exists: la");
+			.hasMessageContaining("Package already exists: LA");
 	}
 
 	@Test
@@ -464,7 +464,7 @@ class PackageResolverTest {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage #:mypkg (:use #:common-lisp) (:nicknames #:mp) (:export #:greet))");
 		resolve(resolver, "(in-package #:mypkg)");
-		assertThat(resolve(resolver, "(defun greet () (car x))")).isEqualTo("(defun MYPKG:GREET nil (car MYPKG::X))");
+		assertThat(resolve(resolver, "(defun greet () (car x))")).isEqualTo("(DEFUN MYPKG:GREET NIL (CAR MYPKG::X))");
 		assertThat(resolve(resolver, "(mp:greet)")).isEqualTo("(MYPKG:GREET)");
 	}
 
@@ -486,9 +486,9 @@ class PackageResolverTest {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :bare (:import-from #:common-lisp #:car #:defun))");
 		resolve(resolver, "(in-package :bare)");
-		assertThat(resolve(resolver, "(car x)")).isEqualTo("(car BARE::X)");
+		assertThat(resolve(resolver, "(car x)")).isEqualTo("(CAR BARE::X)");
 		assertThatThrownBy(() -> resolve(resolver, "(cdr x)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Undefined symbol: cdr");
+			.hasMessageContaining("Undefined symbol: CDR");
 	}
 
 	@Test
@@ -497,7 +497,7 @@ class PackageResolverTest {
 			.isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("No such package: NOSUCH");
 		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:import-from))")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining(":import-from expects a package name");
+			.hasMessageContaining(":IMPORT-FROM expects a package name");
 	}
 
 	@Test
@@ -512,20 +512,20 @@ class PackageResolverTest {
 		assertThatThrownBy(() -> resolve("(defpackage :mypkg :use)")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("expects (:use ...) / (:export ...) clauses");
 		assertThatThrownBy(() -> resolve("(defpackage)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("defpackage expects a package name");
+			.hasMessageContaining("DEFPACKAGE expects a package name");
 		assertThatThrownBy(() -> resolve("(defpackage (car x))")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("defpackage expects a package name");
+			.hasMessageContaining("DEFPACKAGE expects a package name");
 	}
 
 	@Test
 	void defpackageNestedIsRejected() {
 		assertThatThrownBy(() -> resolve("(print (defpackage :mypkg))")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("defpackage is only supported as a literal top-level form");
+			.hasMessageContaining("DEFPACKAGE is only supported as a literal top-level form");
 	}
 
 	@Test
 	void defpackageQuotedDatumIsLeftUntouched() {
-		assertThat(resolve("'(defpackage :mypkg)")).isEqualTo("(quote (defpackage :MYPKG))");
+		assertThat(resolve("'(defpackage :mypkg)")).isEqualTo("(QUOTE (DEFPACKAGE :MYPKG))");
 	}
 
 	@Test
@@ -555,11 +555,11 @@ class PackageResolverTest {
 		registry.define(new LispPackage("MYPKG", List.of(LispNames.RONTOLISP_PKG), Set.of("GREET")));
 		PackageResolver resolver = new PackageResolver(registry);
 		resolve(resolver, "(in-package mypkg)");
-		assertThat(resolve(resolver, "(version)")).isEqualTo("(rontolisp:version)");
+		assertThat(resolve(resolver, "(version)")).isEqualTo("(RONTOLISP:VERSION)");
 		assertThat(resolve(resolver, "(greet)")).isEqualTo("(MYPKG:GREET)");
 		// x is not registered in MYPKG, so it is internal: the canonical spelling is
 		// MYPKG::X.
-		assertThat(resolve(resolver, "(cl:car x)")).isEqualTo("(car MYPKG::X)");
+		assertThat(resolve(resolver, "(cl:car x)")).isEqualTo("(CAR MYPKG::X)");
 	}
 
 }

@@ -371,14 +371,14 @@ public final class WitExportDirective {
 		List<LispVal> out = new ArrayList<>();
 		out.add(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_EXPORT)));
 		out.add(quote(new LispSymbol(defunName)));
-		out.add(new LispSymbol(":params"));
+		out.add(new LispSymbol(":PARAMS"));
 		out.add(quote(list(params)));
-		out.add(new LispSymbol(":param-names"));
+		out.add(new LispSymbol(":PARAM-NAMES"));
 		out.add(quote(list(paramNames)));
-		out.add(new LispSymbol(":returns"));
+		out.add(new LispSymbol(":RETURNS"));
 		out.add(new LispSymbol(returns));
 		if (func.async()) {
-			out.add(new LispSymbol(":async"));
+			out.add(new LispSymbol(":ASYNC"));
 			out.add(LispTrue.INSTANCE);
 		}
 		return list(out);
