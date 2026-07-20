@@ -397,6 +397,52 @@ examples:
       per instance, so the tally restarts each request) or `wash dev` on wasmCloud,
       where an out-of-process provider holds the counts and they accumulate
 
+  # --- wit/lisp-calls-rust & wit/rust-calls-lisp: cross-language wac compose ---
+  - path: wit/lisp-calls-rust/app.lisp
+    backends: [interpreter, jvm, wasm-component]
+    note: >-
+      the Lisp half of the "Lisp calls Rust" example (see
+      wit/lisp-calls-rust/README.md and build.sh): a command that imports the
+      interface example:textkit/casing with rontolisp:wit-import and calls shout.
+      It also binds a two-line rontolisp:wit-provide, so the interpreter and jvm
+      legs RUN standalone (the Lisp provider answers) and their output is checked.
+      wasm-component pins that the import lowers (canon lower, a plain
+      string->string func); the harness only compiles that leg, because RUNNING it
+      needs the Rust component (scaffolded with cargo-component) plug-composed in
+      with `wac`, off the test path -- and there the wit-provide is inert, so the
+      Rust component answers with the same output.
+    expect:
+      equals: |
+        hello world  ->  HELLO WORLD!
+        component model  ->  COMPONENT MODEL!
+        rust and lisp  ->  RUST AND LISP!
+  - path: wit/rust-calls-lisp/counter.lisp
+    backends: [wasm-component]
+    note: >-
+      the Lisp half of the "Rust calls Lisp" example: a reactor that exports the
+      plain function vowel-count via rontolisp:wit-export (world counter), exactly
+      the shape the Rust describer imports. wasm-component pins the wasm-GC lowering
+      of that world; the Rust component calls this export through `wac` composition
+      (`wasmtime run --invoke 'describe("hello world")' vowels.wasm` -> a sentence
+      with the Lisp-computed vowel count), off the test path
+  - path: wit/pipeline/app.lisp
+    backends: [wasm-component]
+    note: >-
+      the Lisp command of the THREE-component pipeline (wit/pipeline/README.md,
+      composition.wac): imports example:pipeline/shout with rontolisp:wit-import.
+      wasm-component pins the import lowering; RUNNING it needs the Rust shouter and
+      the Lisp counter wired in with a single `wac compose` (a chain plug cannot
+      do in one step), off the test path. Assembled, `wasmtime run -W gc=y
+      pipeline.wasm` prints "hello world  ->  HELLO WORLD!!!"
+  - path: wit/pipeline/stats.lisp
+    backends: [wasm-component]
+    note: >-
+      the Lisp counter of the same pipeline: exports the plain function vowel-count
+      via rontolisp:wit-export (world statistician), which the Rust shouter imports.
+      wasm-component pins the wasm-GC lowering; the Rust shouter calls this export,
+      and the Lisp app calls the shouter, all wired by wit/pipeline/composition.wac
+      through `wac compose`, off the test path
+
   # --- net: sockets / HTTP servers & clients (blocking -> compile-only) -------
   - path: net/echo-server.lisp
     backends: [jvm-compile, wasm-component]

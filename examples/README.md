@@ -15,6 +15,7 @@ The programs are grouped by theme, one directory per group:
 | [`rainbow/`](browser/rainbow), [`wasm-browser/`](browser/wasm-browser), [`webgl-*/`](browser/webgl-common), [`minesweeper/`](browser/minesweeper), [`hiragana/`](browser/hiragana), [`wit-component/`](browser/wit-component) | Browser demos (compile to WASM, run in a page) |
 | [`count-vowels/`](count-vowels), [`wit/world/`](wit/world) | Embedding a rontolisp Wasm module in a host; implementing a WIT world |
 | [`wit/keyvalue/`](wit/keyvalue) | The other direction: *calling* a WIT interface, with a different implementation behind it per backend |
+| [`wit/lisp-calls-rust/`](wit/lisp-calls-rust), [`wit/rust-calls-lisp/`](wit/rust-calls-lisp), [`wit/pipeline/`](wit/pipeline) | Across languages: Lisp and Rust components composed into one with `wac`, calling each other through WIT (a direction each, plus a three-component `wac compose` chain) |
 | [`asdf/`](asdf), [`wasmcloud/`](wasmcloud) | Third-party libraries and platform templates |
 
 Assuming the executable JAR has been built
@@ -165,6 +166,25 @@ exports, but the ones it **calls**.
 | Directory | What it demonstrates |
 | --- | --- |
 | [`wit/keyvalue/`](wit/keyvalue) | A page-view counter written against [`wasi:keyvalue/store`](wit/keyvalue/wit/keyvalue.wit) -- the **real** upstream interface, vendored verbatim (a `variant error`, a `resource bucket`, `open: func(identifier: string) -> result<bucket, error>`). `(rontolisp:wit-import "wit/keyvalue.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)` binds every function of it as an ordinary `defun` -- `bucket.get` becomes `(kv:bucket-get b key)`, the resource handle first -- and **what those calls reach is bound separately, so it changes without the program changing**. rontolisp ships no store (it knows how to bind a provider, not what `wasi:keyvalue` is), so the directory holds two, both ordinary user code: [`memory-store.lisp`](wit/keyvalue/memory-store.lisp), ~50 lines of portable Lisp over a hash table, and [`java-store.lisp`](wit/keyvalue/java-store.lisp), the same interface over a real `java.util.LinkedHashMap` through `java:` interop, whose `rontolisp:wit-provide` replaces the first on the JVM. Compiled with `--component` there is no provider in the program at all: **wasmtime's own `wasi:keyvalue` implementation** answers (`-S keyvalue=y`), and prints exactly what the two Lisp stores print. `result<T, E>`'s ok arm is the return value and its error arm signals `rontolisp:wit-error`, so a store's failures are caught with `handler-case` like anything else. [`page-hits-server.lisp`](wit/keyvalue/page-hits-server.lisp) then serves the counter over HTTP -- the pairing a served component needs, its instance being recreated per request. Not on Preview 1 (a core import carries flat values only, and every function here returns a `result`) nor `--no-gc` (its MVP module imports nothing) |
+
+## Composing with another language — `wit/lisp-calls-rust/`, `wit/rust-calls-lisp/`
+
+The two directories above each call one side of a WIT boundary against a
+**host**. These two call **another guest language**: a Lisp component and a Rust
+component (scaffolded with [`cargo-component`](https://github.com/bytecodealliance/cargo-component)),
+[`wac`](https://github.com/bytecodealliance/wac)-composed into a single runnable
+component. Each directory is one direction, and independent of the other. The
+`.wit` type is the only thing the two languages share.
+
+The shapes are drawn to match what each side supports: `rontolisp:wit-import`
+binds an **interface**, and `rontolisp:wit-export` implements a **plain
+function** — the Rust side takes whichever shape the Lisp end needs.
+
+| Directory | What it demonstrates |
+| --- | --- |
+| [`wit/lisp-calls-rust/`](wit/lisp-calls-rust) | **Lisp calls Rust.** [`app.lisp`](wit/lisp-calls-rust/app.lisp) (a Lisp command) imports the interface `example:textkit/casing` with `rontolisp:wit-import` and calls `(tk:shout phrase)`; [`rust-shouter/`](wit/lisp-calls-rust/rust-shouter) (Rust) **exports** that interface, uppercasing the text and adding `!`. [`build.sh`](wit/lisp-calls-rust/build.sh) compiles both (`rontolisp app.lisp --component`; `cargo component build --target wasm32-unknown-unknown`), `wac plug`s the Rust component into the Lisp app, and `wasmtime run -W gc=y textkit.wasm` prints `hello world  ->  HELLO WORLD!`. The Rust component imports no WASI, so it needs no adapter. The app also runs **standalone** on the interpreter/JVM, where a bundled Lisp `rontolisp:wit-provide` answers the same interface |
+| [`wit/rust-calls-lisp/`](wit/rust-calls-lisp) | **Rust calls Lisp.** [`counter.lisp`](wit/rust-calls-lisp/counter.lisp) (a Lisp component) **exports** the plain function `vowel-count` via `rontolisp:wit-export`; [`rust-describer/`](wit/rust-calls-lisp/rust-describer) (Rust) **imports** it and calls it from `describe`, building a sentence like `"hello world" has 3 vowels`. `wac plug`s the Lisp counter into the Rust describer, and `wasmtime run -W gc=y --invoke 'describe("hello world")' vowels.wasm` returns the sentence — the vowel count in it came from Lisp, the wording from Rust |
+| [`wit/pipeline/`](wit/pipeline) | **Both directions, chained — with `wac compose`.** A three-component pipeline: [`app.lisp`](wit/pipeline/app.lisp) (Lisp) imports `example:pipeline/shout`, [`rust-shouter/`](wit/pipeline/rust-shouter) (Rust) exports it and in turn imports `vowel-count`, and [`stats.lisp`](wit/pipeline/stats.lisp) (Lisp) exports `vowel-count`. So one call is **Lisp → Rust → Lisp**. `wac plug` cannot wire a plug into another plug, so [`composition.wac`](wit/pipeline/composition.wac) writes out each edge and one `wac compose` builds the whole chain; `wasmtime run -W gc=y pipeline.wasm` prints `hello world  ->  HELLO WORLD!!!` (five `!` for the five vowels of `component model`, counted by Lisp) |
 
 ## Running
 

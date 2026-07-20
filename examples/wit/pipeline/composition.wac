@@ -1,0 +1,37 @@
+// composition.wac -- wire all three components together in one shot.
+//
+// `wac plug` fills one socket's imports from plug components; it cannot wire a
+// plug into another plug. This chain needs exactly that (stats -> shouter ->
+// app), so it is a `wac compose` job: every edge is written out by hand.
+//
+//   wac compose composition.wac \
+//     --dep example:app=app.wasm \
+//     --dep example:shouter=shouter.wasm \
+//     --dep example:stats=stats.wasm \
+//     -o pipeline.wasm
+//
+// Each `--dep name=file.wasm` binds a package name used below to a built
+// component. The `...` lets every unmentioned import (the WASI interfaces the
+// Lisp components need) fall through as an import of the composed component,
+// which wasmtime satisfies at run time.
+
+package example:composed;
+
+// The Lisp vowel counter. Nothing to wire in -- it only needs WASI (via `...`).
+let stats = new example:stats { ... };
+
+// The Rust shouter. Its `vowel-count` import is satisfied by the counter above.
+let shouter = new example:shouter {
+  "vowel-count": stats["vowel-count"],
+  ...
+};
+
+// The Lisp app. Its `example:pipeline/shout` import is satisfied by the shouter.
+let app = new example:app {
+  "example:pipeline/shout": shouter["example:pipeline/shout"],
+  ...
+};
+
+// Re-export the app's own exports (its wasi:cli/run entry point) as the
+// composition's exports, so `wasmtime run` has something to start.
+export app...;

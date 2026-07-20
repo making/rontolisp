@@ -1,0 +1,26 @@
+[package]
+name = "shouter"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wit-bindgen-rt = { version = "0.44.0", features = ["bitflags"] }
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "example:shouter"
+
+# Target the shared world instead of a crate-local wit/: `../wit` is the same
+# pipeline.wit the Lisp components use, so no side can drift.
+[package.metadata.component.target]
+path = "../wit"
+world = "shouter"
+
+[package.metadata.component.dependencies]
+
+[profile.release]
+opt-level = "s"
+strip = true
