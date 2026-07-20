@@ -2116,8 +2116,19 @@ public final class WasmLispCompiler implements LispCompiler {
 			int internBase = stringTable.appendBlob(buildInternBlob(internEntries));
 			internBody = WasmReadRuntimeBuilder.buildInternBody(internBase, internCount, hostArena);
 			if (usesRead) {
-				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(nilOffset, tOffset, quoteOffset,
-						functionOffset);
+				// The read-time canonical fold (upcase premise) needs the foldable-name
+				// and
+				// builtin-package-name sets in linear memory to test membership; append
+				// them
+				// as \n-delimited blobs (byte-identical to the JVM backend's baked
+				// strings)
+				// and hand the reader their offsets. See .kb/reader-case-upcase.md.
+				byte[] foldBlob = am.ik.rontolisp.UpcaseSymbols.foldNamesBlob().getBytes(StandardCharsets.UTF_8);
+				byte[] pkgBlob = am.ik.rontolisp.UpcaseSymbols.foldPackageNamesBlob().getBytes(StandardCharsets.UTF_8);
+				int foldBase = stringTable.appendBlob(foldBlob);
+				int pkgBase = stringTable.appendBlob(pkgBlob);
+				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(nilOffset, tOffset, quoteOffset, functionOffset,
+						foldBase, foldBlob.length, pkgBase, pkgBlob.length);
 				readListBody = WasmReadRuntimeBuilder.buildReadListBody();
 				readBody = WasmReadRuntimeBuilder.buildReadBody();
 				loadBody = WasmReadRuntimeBuilder.buildLoadBody();

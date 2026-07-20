@@ -60,6 +60,22 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(output).isEqualTo("42\n2\n\"FOO\"");
 	}
 
+	@Test
+	void compileAndRunUpcaseReaderModeFoldsRuntimeRead() throws Exception {
+		// The embedded reader runtime folds like the frontend (upcase premise): a user
+		// symbol reads upcased, a standard operator folds back to its canonical
+		// lowercase spelling so it stays eq to a compiled quoted reference,
+		// byte-identical
+		// to the interpreter and the JVM.
+		assertThat(compileAndRun("(print (read-from-string \"foo\"))")).isEqualTo("FOO");
+		assertThat(compileAndRun("(print (symbol-name (read-from-string \"foo\")))")).isEqualTo("\"FOO\"");
+		assertThat(compileAndRun("(print (eq (read-from-string \"car\") 'car))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (read-from-string \"(x . 9)\"))")).isEqualTo("(X . 9)");
+		// A standard name folds even when the program does not otherwise use it (the fold
+		// set is baked whole), and eval can then run it.
+		assertThat(compileAndRun("(print (eval (read-from-string \"(reverse (list 1 2 3))\")))")).isEqualTo("(3 2 1)");
+	}
+
 	private static String compileAndRunProgram(List<LispVal> program) throws Exception {
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
@@ -3840,7 +3856,7 @@ class WasmLispCompilerIntegrationTest {
 			syms.append(" fresh-sym-").append(i);
 		}
 		program.append("(print (car (read-from-string \"(").append(syms).append(")\")))\n");
-		expected.append("fresh-sym-0\n");
+		expected.append("FRESH-SYM-0\n");
 		for (int i = 0; i < 200; i++) {
 			String pad = "inflate-" + i + "-abcdefghijklmnopqrstuvwxyz-0123456789";
 			program.append("(print \"").append(pad).append("\")\n");
@@ -4915,7 +4931,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void readSymbol() throws Exception {
-		assertThat(compileAndRunWithStdin("(print (read))", "foo")).isEqualTo("foo");
+		assertThat(compileAndRunWithStdin("(print (read))", "foo")).isEqualTo("FOO");
 	}
 
 	@Test
@@ -4930,7 +4946,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void readCarOfList() throws Exception {
-		assertThat(compileAndRunWithStdin("(print (car (read)))", "(a b c)")).isEqualTo("a");
+		assertThat(compileAndRunWithStdin("(print (car (read)))", "(a b c)")).isEqualTo("A");
 	}
 
 	@Test
@@ -4983,7 +4999,7 @@ class WasmLispCompilerIntegrationTest {
 		String repl = "(setq form (read)) (while form (print (eval form)) (setq form (read)))";
 		assertThat(compileAndRunWithStdinFile(repl,
 				"(defun square (x) (* x x))\n(square 7)\n\n(mapcar #'square '(1 2 3))\n"))
-			.isEqualTo("square\n49\n(1 4 9)");
+			.isEqualTo("SQUARE\n49\n(1 4 9)");
 	}
 
 	// load tests
@@ -6813,7 +6829,7 @@ class WasmLispCompilerIntegrationTest {
 	void compileReadFromStringDottedPair() throws Exception {
 		assertThat(compileAndRun("(print (read-from-string \"(a . 1)\")) (print (read-from-string \"(a b . c)\")) "
 				+ "(print (read-from-string \"((a . 1) (b . 2))\")) (print (read-from-string \"3.5\"))"))
-			.isEqualTo("(a . 1)\n(a b . c)\n((a . 1) (b . 2))\n3.5");
+			.isEqualTo("(A . 1)\n(A B . C)\n((A . 1) (B . 2))\n3.5");
 	}
 
 	@Test
@@ -6871,7 +6887,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void compileParseIntegerAndReadFromStringAsValues() throws Exception {
 		assertThat(compileAndRun("(print (mapcar #'parse-integer (list \"1\" \"2\" \"3\")))")).isEqualTo("(1 2 3)");
-		assertThat(compileAndRun("(print (funcall #'read-from-string \"(a b c)\"))")).isEqualTo("(a b c)");
+		assertThat(compileAndRun("(print (funcall #'read-from-string \"(a b c)\"))")).isEqualTo("(A B C)");
 	}
 
 	@Test

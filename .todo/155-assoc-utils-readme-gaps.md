@@ -347,23 +347,44 @@ splices `http.lisp`). Both trace to gap-A's own uncommitted edits to that test f
 These are gap-A cleanup (the async-built-in case bridge + a byte-identity refresh), left
 for the owner of the upcase premise to reconcile; they were NOT touched here.
 
-**NEXT → item 3 (runtime `read`/`read-from-string` case fold).** NOT a
-backend divergence — all four backends already agree (case-preserving), it's a
-rontolisp-vs-CL deviation: `(read-from-string "foo")` yields `foo`, CL yields
-`FOO`, so `(eq (read-from-string "foo") 'foo)` is nil here / t in CL. `intern`
-already folds (so `with-keys` etc. are fine); this is only raw runtime `read`.
-The subtlety that made it deferred: the compiled backends' EMBEDDED reader
-runtimes (`JvmReadRuntimeBuilder`, the WASM reader runtime) don't fold, and the
-interpreter's runtime `read` was deliberately set to `Features.INTERNAL`
-(case-preserving) to MATCH them (cross-backend identity beat CL-faithfulness).
-To fix CL-faithfully AND keep identity, all reader runtimes must fold together:
-interpreter `read`/`read-from-string` drop `Features.INTERNAL` for the fold, and
-`JvmReadRuntimeBuilder` + the WASM reader runtime learn `UpcaseSymbols`
-canonicalization at read time (WASM needs it done on the interned string before
-offset assignment — ties into item 1's `_intern` rail). Pin with a cross-backend
-E2E: `(read-from-string "foo")` → `FOO`, `(eq (read-from-string "car") 'car)`
-→ t. This partially subsumes item 1 (same WASM `_intern` machinery), so doing 3
-may unlock 1 cheaply — check at the time.
+**item 3 (runtime `read`/`read-from-string` case fold) — DONE (2026-07-20).**
+Runtime `read`/`read-from-string`/`read`-from-stream now fold like the frontend on
+ALL FOUR backends: `(read-from-string "foo")` → `FOO`, `(eq (read-from-string
+"car") 'car)` → t, `(read-from-string ":cl")` → `:cl`, `(eval (read-from-string
+"(reverse (list 1 2 3))"))` → `(3 2 1)`, byte-identical across interp/JVM/WASM-P1/
+component (manual 4-backend probe + `read-from-string-upcase-fold` ci-spec case).
+Mechanics (also in `.kb/reader-case-upcase.md`, the runtime-`read` paragraph):
+- **Interpreter**: `read`/`read-from-string` built-ins read with `Features.INTERPRETER`
+  (was `Features.INTERNAL`) — the full lexer upcase + `UpcaseSymbols.canonicalize`.
+- **Single source of truth**: `UpcaseSymbols.foldNamesBlob()` (567 foldable bare names)
+  + `foldPackageNamesBlob()` (builtin package/nickname designators), sorted +
+  `\n`-delimited, both baked by the compiled backends. Backed by new accessors
+  `UpcaseSymbols.foldableBareNames()`/`foldablePackageNames()` and
+  `PackageRegistry.clSymbols()`/`builtinPackageAndNicknameNames()`.
+- **JVM**: `JvmReadRuntimeBuilder` emits `_canon` (called at the top of `_classify`)
+  + `_delimContains`, testing membership with `String.contains` over the baked blob.
+- **WASM**: `WasmReadRuntimeBuilder.emitCanon` folds the token bytes IN PLACE before
+  `_intern` (inlined in `_read_expr`; the fold preserves length, so the intern/nil/t
+  path is unchanged). The blobs are appended to the data segment via
+  `stringTable.appendBlob` only when the program uses `read`.
+- **The one simplification**: both compiled backends use a fold-whole-or-keep rule
+  (byte-identical to each other), which equals `canonicalize(upcase(token))` for every
+  bare name / keyword+`#:` designator / `&`+`%` prefix / builtin-package-qualified
+  name, and deviates from the interpreter only on two pathological package-qualified
+  RUNTIME-read shapes (`cl-user::X`, and a non-builtin package's `%`-member) — untested,
+  semantically moot (no runtime package resolution on WASM). Verified over 30k tokens
+  the deviation set is exactly those two shapes.
+- **Fold set baked whole** → a standard name folds even if the program never
+  references it (`(read-from-string "reverse")` → `reverse` everywhere), so the fold is
+  program-INDEPENDENT (no reliance on the compile-time intern table, unlike item 1).
+Pins: `LispEvaluatorTest.upcaseReaderModeFoldsRuntimeRead{FromString,FromStream}`,
+`{Jvm,Wasm}...UpcaseReaderModeFoldsRuntimeRead`, ci-spec `read-from-string-upcase-fold`,
+docs (reader-case guide + `read`/`read-from-string` reference, en+ja). NOTE: item 3 did
+NOT change the compiled backends' `intern` built-in (still no CL-name fold) — a
+pre-existing, narrow interp-vs-compiled deviation for `(intern "<cl-name>")`, out of
+scope. Item 1 (WASM runtime-load bridge) remains open and is NOT subsumed: the read
+fold is program-independent, whereas item 1 needs the `_intern` rail for runtime-DEFINED
+symbols absent from the compile-time intern table.
 
 ### Deferred follow-up — item 1 (WASM runtime-load bridge), no session yet
 WASM runtime-`load`/`eval`-`read` case-flip bridge (offset identity; needs the

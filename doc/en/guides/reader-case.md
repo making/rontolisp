@@ -54,6 +54,18 @@ the same way, so their definitions and your references fold consistently.
 stay case-preserving, and a symbol system designator is downcased like
 ASDF's `coerce-name` (`(ql:quickload :ASSOC-UTILS)` finds `assoc-utils`).
 
+The runtime reader folds too, so a datum read at run time behaves like the
+same datum written in source: `read` and `read-from-string` upcase your
+symbols and fold the standard names back to their canonical spelling,
+identically on the interpreter, the JVM and both WASM backends.
+
+```lisp
+(read-from-string "foo") ; => FOO
+(symbol-name (read-from-string "foo")) ; => "FOO"
+(eq (read-from-string "list") 'list) ; => t
+(eval (read-from-string "(reverse (list 1 2 3))")) ; => (3 2 1)
+```
+
 ## Deviations from Common Lisp
 
 - rontolisp's canonical spelling of the standard symbols is lowercase, so

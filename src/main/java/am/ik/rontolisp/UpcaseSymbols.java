@@ -132,4 +132,83 @@ public final class UpcaseSymbols {
 		return PackageRegistry.isBuiltinPackageName(lower) ? lower : body;
 	}
 
+	/**
+	 * The complete, enumerated set of lowercase bare names that {@link #canonicalize}
+	 * folds a bare (unqualified, unprefixed) upcased token to -- exactly the names for
+	 * which the bare-name branch returns the lowercase spelling: the {@code cl} symbols,
+	 * every car/cdr composition (length 4-6; {@code car}/{@code cdr} are already
+	 * {@code cl} symbols), the read-time constants and seeded condition types in
+	 * {@link #EXTRA_CANONICAL}, and the built-in package/nickname names. The compiled
+	 * backends' embedded reader runtimes bake this set (they cannot call
+	 * {@link #canonicalize}), so it is the single source of truth for their fold; keep it
+	 * in step with {@link #canonicalize}'s bare-name branch.
+	 * @return the foldable bare names, lowercase
+	 */
+	public static Set<String> foldableBareNames() {
+		Set<String> names = new java.util.HashSet<>(PackageRegistry.clSymbols());
+		names.addAll(EXTRA_CANONICAL);
+		names.addAll(PackageRegistry.builtinPackageAndNicknameNames());
+		// car/cdr compositions are a pattern in canonicalize (via isCarCdrComposition);
+		// enumerate the finite length-4..6 members here so the baked set is complete.
+		for (int len = 4; len <= 6; len++) {
+			enumerateCarCdr(new char[len], 1, len - 1, names);
+		}
+		return names;
+	}
+
+	private static void enumerateCarCdr(char[] buf, int index, int endExclusive, Set<String> out) {
+		if (index == endExclusive) {
+			buf[0] = 'c';
+			buf[buf.length - 1] = 'r';
+			out.add(new String(buf));
+			return;
+		}
+		buf[index] = 'a';
+		enumerateCarCdr(buf, index + 1, endExclusive, out);
+		buf[index] = 'd';
+		enumerateCarCdr(buf, index + 1, endExclusive, out);
+	}
+
+	/**
+	 * The (lowercase) built-in package and nickname names -- exactly what
+	 * {@link PackageRegistry#isBuiltinPackageName} accepts, which the qualified-name and
+	 * {@code :}/{@code #:} designator branches of {@link #canonicalize} consult. Baked by
+	 * the compiled backends' reader runtimes alongside {@link #foldableBareNames}.
+	 * @return the built-in package designator names, lowercase
+	 */
+	public static Set<String> foldablePackageNames() {
+		return PackageRegistry.builtinPackageAndNicknameNames();
+	}
+
+	/**
+	 * The foldable bare names as a single {@code \n}-delimited blob, sorted
+	 * (deterministic across builds so the emitted class/module stays byte-identical) with
+	 * a leading and trailing {@code \n}. The compiled reader runtimes bake this and test
+	 * membership by searching for {@code \n} + name + {@code \n} -- a newline can never
+	 * appear in a symbol token, which the whitespace-terminated reader guarantees. Both
+	 * the JVM and WASM backends bake this exact string, so their read-time fold is
+	 * byte-identical.
+	 * @return the delimited fold-name blob
+	 */
+	public static String foldNamesBlob() {
+		return delimitedBlob(foldableBareNames());
+	}
+
+	/**
+	 * The foldable built-in package/nickname names as a {@code \n}-delimited blob, in the
+	 * same shape as {@link #foldNamesBlob}.
+	 * @return the delimited package-name blob
+	 */
+	public static String foldPackageNamesBlob() {
+		return delimitedBlob(foldablePackageNames());
+	}
+
+	private static String delimitedBlob(Set<String> names) {
+		StringBuilder sb = new StringBuilder("\n");
+		for (String name : new java.util.TreeSet<>(names)) {
+			sb.append(name).append('\n');
+		}
+		return sb.toString();
+	}
+
 }

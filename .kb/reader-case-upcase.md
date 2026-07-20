@@ -45,12 +45,39 @@ up immediately as `Undefined function` in that library's tests. User-facing read
 `(intern "TIME")` names the standard `time` — CL's upcase-world answer, required by
 with-keys-style synthesis; ASDF/quicklisp SYMBOL system designators downcase like
 ASDF `coerce-name` (`AsdfSystems.symbolName`; string designators stay verbatim).
-EXCEPTION: the runtime `read`/`read-from-string` built-ins read with
-`Features.INTERNAL` (case-preserving) — the compiled backends' embedded reader
-runtimes (`JvmReadRuntimeBuilder` / the WASM reader runtime) do not upcase, and the
-cross-backend-identity rule wins over CL-faithful runtime case folding; upgrading the
-embedded runtimes to the fold is the open follow-up if runtime read of mixed-case
-symbols ever matters.
+(The compiled backends' `intern` built-in does NOT fold a CL-name string — a known,
+narrow interp-vs-compiled deviation for `(intern "<cl-name>")`, unrelated to `read`.)
+
+**Runtime `read`/`read-from-string` fold on ALL FOUR backends** (the CL-faithful
+answer, so `(read-from-string "foo")` is `FOO`, `(eq (read-from-string "car") 'car)`
+is `t`). The interpreter's `read`/`read-from-string` built-ins read with
+`Features.INTERPRETER` (the full lexer upcase + `UpcaseSymbols.canonicalize`). The
+compiled backends replicate `canonicalize(upcase(token))` in their embedded reader
+runtimes from a single baked source of truth: `UpcaseSymbols.foldNamesBlob()` (the
+567 foldable bare names) and `foldPackageNamesBlob()` (the built-in package/nickname
+designators), both sorted + `\n`-delimited (a newline can never appear in a
+whitespace-terminated token). The JVM emits a `_canon` helper
+(`JvmReadRuntimeBuilder.buildCanon`, called at the top of `_classify`) that tests
+membership with `String.contains` over the baked blob; the WASM reader folds the
+token bytes IN PLACE before `_intern` (`WasmReadRuntimeBuilder.emitCanon`, inlined in
+`_read_expr` — the fold preserves length, so the intern/nil/t path is unchanged) by
+lowercasing, scanning the blob (appended to the module's data segment via
+`stringTable.appendBlob`, only when the program uses `read`), and uppercasing back
+when the name is not foldable. Because the fold set is baked whole, a standard name
+folds even when the program does not otherwise reference it (`(read-from-string
+"reverse")` is `reverse` on every backend), so the fold is program-independent.
+
+Both compiled backends use the same SIMPLIFIED rule — fold the whole name to
+lowercase when foldable, else keep it upcased — which equals
+`canonicalize(upcase(token))` for every bare name, keyword/`#:` designator,
+`&`/`%` prefix and built-in-package-qualified name, and deviates from the
+interpreter only on two pathological package-qualified *runtime-read* shapes:
+`cl-user::X` (whole folds instead of just the package part) and a non-built-in
+package's `%`-member (kept upcased instead of folding just the member). These are
+untested and semantically moot (the compiled reader does not resolve packages at
+runtime), and the JVM and WASM are byte-identical to each other. Non-ASCII bytes are
+left as-is on WASM (a documented runtime-read limitation, consistent with the other
+WASM non-ASCII gaps); the JVM/interpreter fold full Unicode.
 
 **Keyword-argument matching is case-insensitive** at every builtin matcher:
 `LispNames.keywordMatches(symName, canonicalLower)` (equalsIgnoreCase) and
@@ -88,16 +115,20 @@ lowercase defuns); `ClosRegistry.slotPosition` flips both ways (Java asks
 runtime (`JvmEvalRuntimeBuilder`) flips in the function lookup, the variable lookup
 (self-eval still returns the ORIGINAL spelling) and the apply operator (ARITY's sign
 is the one-shot guard — CH is clobbered by carCdrComposition, which runs BEFORE the
-flip so compositions see the original spelling). These bridge compiled-upcased
-references with the case-preserving embedded runtime reader (`load`/`read` in
-compiled programs) in both directions. The WASM backends have NO such bridge:
-their eval runtime compares interned string-table OFFSETS, so a case-flip retry
-would need runtime re-interning (the `_intern` rail) — deferred. Documented
-limitation: on WASM, a runtime-`load`ed/`eval`-`read` definition is reachable
-from compiled code only under the SAME spelling; the integration tests for that
-path spell the runtime-loaded definitions uppercase (the embedded reader is
-case-preserving, so an uppercase source file matches the compiled upcased
-references — the CL-shaped workaround). Follow-up tracked in `.todo/155`.
+flip so compositions see the original spelling). On the JVM these bridge
+compiled-upcased references with a runtime-`load`ed/`read` symbol in both directions
+(the embedded reader now folds — see the runtime-`read` paragraph above — but the
+flip still handles a runtime-defined symbol whose spelling the fold cannot reach).
+The WASM backends have NO such bridge: their eval runtime compares interned
+string-table OFFSETS, so bridging a runtime-DEFINED symbol whose bytes were not
+compile-time-interned needs runtime re-interning (the `_intern` rail) — deferred.
+Documented limitation: on WASM, a runtime-`load`ed definition (a NEW symbol absent
+from the compile-time intern table) is reachable from compiled code only under an
+offset the program already interned; the integration tests for that path spell such
+runtime-loaded definitions to match a compiled reference. (This is distinct from the
+runtime-`read` case fold above, which IS live on WASM — a read token that folds to a
+compile-time-interned canonical name resolves by offset.) Follow-up tracked in
+`.todo/155` (item 1).
 
 **Host-facing names derive lowercased**: wasm-export/wasm-import default
 export/import names and `:as` quoted-symbol aliases, wasm-export `:param-names`
@@ -137,8 +168,11 @@ under `wasmtime serve`).
 
 Pinned by: `LispReaderTest` (fold/escape/designator cases), `LispEvaluatorTest`
 (`upcaseReaderMode*`: mixed-case program, upcased keyword args, intern fold,
-keyword-data symbol-name), `JvmLispCompilerTest.compileAndRunUpcaseReaderMode`,
-`WasmLispCompilerIntegrationTest.compileAndRunUpcaseReaderMode`,
-`AssocUtilsUpcaseE2eTest` (the REAL assoc-utils README gap-A examples on all four
-backends). Docs: `doc/{en,ja}/guides/reader-case.md` + the `symbol-name`/`string`
-reference pages.
+keyword-data symbol-name, and `upcaseReaderModeFoldsRuntimeRead*`: runtime
+`read`/`read-from-string`/`read`-from-stream fold),
+`JvmLispCompilerTest.compileAndRunUpcaseReaderMode{,FoldsRuntimeRead}`,
+`WasmLispCompilerIntegrationTest.compileAndRunUpcaseReaderMode{,FoldsRuntimeRead}`,
+the `read-from-string-upcase-fold` ci-spec case (native `CiSpecE2eTest`, all four
+backends), `AssocUtilsUpcaseE2eTest` (the REAL assoc-utils README gap-A examples on
+all four backends). Docs: `doc/{en,ja}/guides/reader-case.md` + the
+`symbol-name`/`string`/`read-from-string`/`read` reference pages.

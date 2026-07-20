@@ -9,3 +9,9 @@ Parses and returns one datum from the given string. It reuses the same reader as
 ```
 
 The result is the parsed list `(+ 1 2)` as data, not its evaluation; pass it to `eval` if you want the value `3`.
+
+Symbols are read with the reader's [upcase premise](../../guides/reader-case.md), identically on every backend: your symbols read upcased and standard names fold to their canonical spelling.
+
+```lisp
+(read-from-string "foo") ; => FOO
+```

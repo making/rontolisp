@@ -4172,7 +4172,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunReadSymbol() throws Exception {
-		assertThat(compileAndRunWithStdin("(print (read))", "foo\n")).isEqualTo("foo");
+		assertThat(compileAndRunWithStdin("(print (read))", "foo\n")).isEqualTo("FOO");
 	}
 
 	@Test
@@ -4187,12 +4187,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunReadCarList() throws Exception {
-		assertThat(compileAndRunWithStdin("(print (car (read)))", "(a b c)\n")).isEqualTo("a");
+		assertThat(compileAndRunWithStdin("(print (car (read)))", "(a b c)\n")).isEqualTo("A");
 	}
 
 	@Test
 	void compileAndRunReadQuote() throws Exception {
-		assertThat(compileAndRunWithStdin("(print (read))", "'x\n")).isEqualTo("(quote x)");
+		assertThat(compileAndRunWithStdin("(print (read))", "'x\n")).isEqualTo("(quote X)");
 	}
 
 	@Test
@@ -4259,7 +4259,7 @@ class JvmLispCompilerTest {
 		String repl = "(setq form (read)) (while form (print (eval form)) (setq form (read)))";
 		assertThat(
 				compileAndRunWithStdin(repl, "(defun square (x) (* x x))\n(square 7)\n\n(mapcar #'square '(1 2 3))\n"))
-			.isEqualTo("square\n49\n(1 4 9)");
+			.isEqualTo("SQUARE\n49\n(1 4 9)");
 	}
 
 	// === load ===
@@ -5244,13 +5244,13 @@ class JvmLispCompilerTest {
 	void compileReadFromStringDottedPair() throws Exception {
 		assertThat(compileAndRun("(print (read-from-string \"(a . 1)\")) (print (read-from-string \"(a b . c)\")) "
 				+ "(print (read-from-string \"((a . 1) (b . 2))\")) (print (read-from-string \"3.5\"))"))
-			.isEqualTo("(a . 1)\n(a b . c)\n((a . 1) (b . 2))\n3.5");
+			.isEqualTo("(A . 1)\n(A B . C)\n((A . 1) (B . 2))\n3.5");
 	}
 
 	@Test
 	void compileParseIntegerAndReadFromStringAsValues() throws Exception {
 		assertThat(compileAndRun("(print (mapcar #'parse-integer (list \"1\" \"2\" \"3\")))")).isEqualTo("(1 2 3)");
-		assertThat(compileAndRun("(print (funcall #'read-from-string \"(a b c)\"))")).isEqualTo("(a b c)");
+		assertThat(compileAndRun("(print (funcall #'read-from-string \"(a b c)\"))")).isEqualTo("(A B C)");
 	}
 
 	@Test
@@ -6967,6 +6967,18 @@ class JvmLispCompilerTest {
 				(PRINT (SYMBOL-NAME :foo))
 				""", upcase)));
 		assertThat(output).isEqualTo("42\n1\n2\n\"FOO\"");
+	}
+
+	@Test
+	void compileAndRunUpcaseReaderModeFoldsRuntimeRead() throws Exception {
+		// The embedded reader runtime folds like the frontend (upcase premise): a user
+		// symbol reads upcased, a standard operator folds back to its canonical
+		// lowercase spelling so it stays eq to a compiled quoted reference, and the fold
+		// is byte-identical to the interpreter and both WASM backends.
+		assertThat(compileAndRun("(print (read-from-string \"foo\"))")).isEqualTo("FOO");
+		assertThat(compileAndRun("(print (symbol-name (read-from-string \"foo\")))")).isEqualTo("\"FOO\"");
+		assertThat(compileAndRun("(print (eq (read-from-string \"car\") 'car))")).isEqualTo("t");
+		assertThat(compileAndRun("(print (read-from-string \"(x . 9)\"))")).isEqualTo("(X . 9)");
 	}
 
 }

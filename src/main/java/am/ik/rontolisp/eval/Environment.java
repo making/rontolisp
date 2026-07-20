@@ -3235,11 +3235,12 @@ public final class Environment implements Scope {
 					if (line.isEmpty() || line.startsWith(";")) {
 						continue;
 					}
-					// Runtime read stays case-preserving: the compiled backends' embedded
-					// reader runtimes do not upcase, and cross-backend identity wins over
-					// CL-faithful runtime case folding (the frontend read of program
-					// source DOES upcase -- see .kb/reader-case-upcase.md).
-					return LispReader.readFromString(line, am.ik.rontolisp.reader.Features.INTERNAL);
+					// Runtime read follows the upcase premise, exactly like the frontend
+					// read of program source: unescaped symbols upcase and the canonical
+					// fold applies, so (read "foo") is FOO and (read "car") folds to car.
+					// The compiled backends' embedded reader runtimes fold to match, so
+					// cross-backend identity holds (see .kb/reader-case-upcase.md).
+					return LispReader.readFromString(line, am.ik.rontolisp.reader.Features.INTERPRETER);
 				}
 				return LispNil.INSTANCE;
 			}
@@ -3255,8 +3256,9 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.READ_FROM_STRING + " expects a string");
 			}
-			// Case-preserving for cross-backend identity, like read above.
-			return LispReader.readFromString(str.value(), am.ik.rontolisp.reader.Features.INTERNAL);
+			// Folds like read above (upcase premise), so (read-from-string "foo") is
+			// the symbol FOO and (read-from-string "car") folds to the standard car.
+			return LispReader.readFromString(str.value(), am.ik.rontolisp.reader.Features.INTERPRETER);
 		}));
 		// parse-integer: parse an integer from a string, with the common :radix,
 		// :junk-allowed, :start and :end keywords.

@@ -1578,7 +1578,7 @@ cases:
       ((A . 1) (B . 2) (C . 3))
       ((A . 1) (B . 2))
       ((A . 1) (B . 2))
-      (x . 9)
+      (X . 9)
   - name: quoted-character-list
     source: |
       (print '(#\a #\b))
@@ -1914,6 +1914,19 @@ cases:
       1.5
       t
       -2.0
+  - name: read-from-string-upcase-fold
+    source: |
+      (print (read-from-string "foo"))
+      (print (symbol-name (read-from-string "foo")))
+      (print (eq (read-from-string "car") 'car))
+      (print (eval (read-from-string "(reverse (list 1 2 3))")))
+      (print (read-from-string ":cl"))
+    expected: |
+      FOO
+      "FOO"
+      t
+      (3 2 1)
+      :cl
   - name: mod-large-operands-floored
     source: |
       (print (mod 843749 65537))

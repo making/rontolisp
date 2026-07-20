@@ -513,6 +513,31 @@ public final class PackageRegistry {
 	}
 
 	/**
+	 * Returns the fixed set of {@code cl}-package symbol names (functions, macros,
+	 * special forms, variables, type specifiers). Excludes the car/cdr compositions,
+	 * which are a pattern rather than a set (see
+	 * {@link LispMacroExpander#isCarCdrComposition}). Used by
+	 * {@link am.ik.rontolisp.UpcaseSymbols#foldableBareNames} to bake the compiled
+	 * backends' runtime-reader fold set from one source of truth.
+	 * @return the {@code cl} symbol names
+	 */
+	public static Set<String> clSymbols() {
+		return CL_SYMBOLS;
+	}
+
+	/**
+	 * Returns the (lowercase) names of every built-in package plus every built-in
+	 * nickname -- exactly the names {@link #isBuiltinPackageName} accepts. Used by the
+	 * upcase reader's canonical fold and by the compiled backends' baked fold set.
+	 * @return the built-in package and nickname names
+	 */
+	public static Set<String> builtinPackageAndNicknameNames() {
+		Set<String> names = new HashSet<>(BUILTIN_PACKAGE_NAMES);
+		names.addAll(BUILTIN_NICKNAMES.keySet());
+		return names;
+	}
+
+	/**
 	 * Composes a package-qualified symbol name for an external symbol, e.g.
 	 * {@code qualify("rontolisp", "version")} yields {@code "rontolisp:version"}.
 	 * @param pkg the package name

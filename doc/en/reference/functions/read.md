@@ -8,4 +8,4 @@ Reads and parses a single S-expression. With no argument it reads from standard 
 (print (read))
 ```
 
-Reading the line `(+ 1 2)` from standard input parses it into the list `(+ 1 2)`, which `print` then echoes back. At end of input `read` returns `nil`.
+Reading the line `(+ 1 2)` from standard input parses it into the list `(+ 1 2)`, which `print` then echoes back. At end of input `read` returns `nil`. Symbols read at run time follow the reader's [upcase premise](../../guides/reader-case.md) -- your symbols upcase, standard names fold to their canonical spelling -- identically on every backend.

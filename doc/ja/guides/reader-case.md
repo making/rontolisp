@@ -54,6 +54,18 @@ $ rontolisp keys.lisp
 同様に小文字化されます(`(ql:quickload :ASSOC-UTILS)` は `assoc-utils` を
 見つけます)。
 
+実行時のリーダーも畳み込みを行うため、実行時に読み取ったデータはソースに
+書いた同じデータと同じように振る舞います: `read` と `read-from-string` は
+ユーザーのシンボルを大文字化し、標準の名前を正規の綴りに畳み込みます。
+これはインタプリタ・JVM・両方の WASM バックエンドで同一です。
+
+```lisp
+(read-from-string "foo") ; => FOO
+(symbol-name (read-from-string "foo")) ; => "FOO"
+(eq (read-from-string "list") 'list) ; => t
+(eval (read-from-string "(reverse (list 1 2 3))")) ; => (3 2 1)
+```
+
 ## Common Lisp との相違点
 
 - rontolisp の標準シンボルの正規の綴りは小文字なので、`(symbol-name 'car)`

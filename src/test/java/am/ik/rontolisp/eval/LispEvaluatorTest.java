@@ -5315,7 +5315,9 @@ class LispEvaluatorTest {
 		assertThat(eval("(read-from-string \"(+ 1 2)\")")).isEqualTo(new LispCons(new LispSymbol("+"),
 				new LispCons(new LispInteger(1), new LispCons(new LispInteger(2), LispNil.INSTANCE))));
 		assertThat(eval("(read-from-string \"42\")")).isEqualTo(new LispInteger(42));
-		assertThat(eval("(read-from-string \"foo\")")).isEqualTo(new LispSymbol("foo"));
+		// Runtime read follows the upcase premise: a user symbol reads upcased (CL's
+		// answer), where the old case-preserving runtime read returned foo.
+		assertThat(eval("(read-from-string \"foo\")")).isEqualTo(new LispSymbol("FOO"));
 	}
 
 	@Test
@@ -7911,6 +7913,27 @@ class LispEvaluatorTest {
 		// Data keywords upcase and symbol-name reports the upcased spelling -- the CL
 		// answer for (symbol-name :foo).
 		assertThat(evalUpcase("(SYMBOL-NAME :foo)")).isEqualTo(new LispString("FOO"));
+	}
+
+	@Test
+	void upcaseReaderModeFoldsRuntimeReadFromString() {
+		// Runtime read follows the same upcase premise as the frontend reader: a user
+		// symbol upcases, so (read-from-string "foo") is the symbol FOO -- CL's answer,
+		// where the old case-preserving runtime read returned foo.
+		assertThat(evalUpcase("(READ-FROM-STRING \"foo\")").print()).isEqualTo("FOO");
+		assertThat(evalUpcase("(SYMBOL-NAME (READ-FROM-STRING \"foo\"))")).isEqualTo(new LispString("FOO"));
+		// A standard operator read at runtime folds back to its canonical lowercase
+		// spelling, so it stays eq to a compiled quoted reference.
+		assertThat(evalUpcase("(EQ (READ-FROM-STRING \"car\") 'car)")).isEqualTo(LispTrue.INSTANCE);
+		// User symbols inside a read datum upcase (the dotted-pair shape).
+		assertThat(evalUpcase("(READ-FROM-STRING \"(x . 9)\")").print()).isEqualTo("(X . 9)");
+	}
+
+	@Test
+	void upcaseReaderModeFoldsRuntimeReadFromStream() {
+		// (read stream) shares the read-from-string fold: a user symbol read from an
+		// input stream upcases too.
+		assertThat(evalUpcase("(WITH-INPUT-FROM-STRING (S \"foo\") (READ S))").print()).isEqualTo("FOO");
 	}
 
 }
