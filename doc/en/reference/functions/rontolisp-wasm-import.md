@@ -14,7 +14,7 @@ for a complete browser program.
 
 ```lisp
 (rontolisp:wasm-import 'draw-pixel :from "gl" :as "drawPixel"
-                       :params '(:int :int :int) :returns :void)   ; => draw-pixel
+                       :params '(:int :int :int) :returns :void)   ; => DRAW-PIXEL
 ```
 
 ## Arguments

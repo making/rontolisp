@@ -10,5 +10,5 @@ Writes `object` to standard output in human-readable form, with no surrounding q
 ```
 
 ```
-helloready
+helloREADY
 ```

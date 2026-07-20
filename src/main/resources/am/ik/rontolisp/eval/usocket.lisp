@@ -67,7 +67,7 @@
   ;; TCP only. :element-type/:timeout/:deadline/:nodelay/:local-host/
   ;; :local-port are accepted and ignored (no such knobs on
   ;; rontolisp:tcp-connect).
-  (when (eql protocol :datagram)
+  (when (or (eql protocol :datagram) (eql protocol :DATAGRAM))
     (error "usocket:socket-connect: :protocol :datagram (UDP) is not supported"))
   (usocket::%usock-guard (rontolisp:tcp-connect host port)))
 

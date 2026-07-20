@@ -11,6 +11,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 
 /**
@@ -286,7 +287,7 @@ public final class LispPreludeLibrary {
 			if (source == null) {
 				throw new IllegalArgumentException(n + " is not a prelude function");
 			}
-			return LispReader.readAllFromString(source);
+			return LispReader.readAllFromString(source, Features.INTERNAL);
 		});
 	}
 

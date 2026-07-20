@@ -110,7 +110,7 @@ class WitExportDirectiveTest {
 	void rejectsAnUnknownOption() {
 		assertThatThrownBy(() -> WitExportDirective.parse(form("(rontolisp:wit-export \"w.wit\" :package foo)")))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("Unknown rontolisp:wit-export option :package");
+			.hasMessageContaining("Unknown rontolisp:wit-export option :PACKAGE");
 	}
 
 	@Test
@@ -120,7 +120,7 @@ class WitExportDirectiveTest {
 			.hasMessageContaining("Expected a keyword option");
 		assertThatThrownBy(() -> WitExportDirective.parse(form("(rontolisp:wit-export \"w.wit\" :world)")))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("Missing value for :world");
+			.hasMessageContaining("Missing value for :WORLD");
 	}
 
 	@Test

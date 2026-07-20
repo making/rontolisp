@@ -74,7 +74,7 @@ public record WasmImportDirective(String name, String module, String field, List
 				throw new UnsupportedOperationException("Missing value for " + keyword + " in " + form.print());
 			}
 			LispVal value = items.get(i + 1);
-			switch (keyword) {
+			switch (LispNames.foldKeyword(keyword)) {
 				case ":from" -> module = stringValue(value, keyword, form);
 				case ":as" -> field = stringValue(value, keyword, form);
 				case ":params" -> params = quotedKeywordList(value, form);
@@ -88,12 +88,13 @@ public record WasmImportDirective(String name, String module, String field, List
 				params == null ? List.of() : params, returns);
 	}
 
-	// The host-facing default field is the symbol's bare member name; a package
-	// qualifier (pkg:name from a directive inside a user package) is Lisp-side
-	// spelling only.
+	// The host-facing default field is the symbol's bare member name, lowercased: the
+	// reader upcases Lisp symbols while host import fields are conventionally
+	// lowercase, so the derivation maps DRAW back to "draw" (a package qualifier --
+	// pkg:name from a directive inside a user package -- is Lisp-side spelling only).
 	private static String unqualifiedMember(String name) {
 		var qn = PackageRegistry.splitQualified(name);
-		return qn == null ? name : qn.member();
+		return (qn == null ? name : qn.member()).toLowerCase(java.util.Locale.ROOT);
 	}
 
 	private static String quotedSymbolName(LispVal value, LispCons form) {
@@ -141,7 +142,7 @@ public record WasmImportDirective(String name, String module, String field, List
 			if (rest.car() instanceof LispCons list) {
 				for (LispVal element : list.toList()) {
 					if (element instanceof LispSymbol sym && sym.isKeyword()) {
-						result.add(sym.name());
+						result.add(LispNames.foldKeyword(sym.name()));
 					}
 					else {
 						throw new UnsupportedOperationException("rontolisp:wasm-import :params expects keyword "
@@ -169,7 +170,8 @@ public record WasmImportDirective(String name, String module, String field, List
 			return null;
 		}
 		if (value instanceof LispSymbol sym && sym.isKeyword()) {
-			return ":void".equals(sym.name()) ? null : sym.name();
+			String folded = LispNames.foldKeyword(sym.name());
+			return ":void".equals(folded) ? null : folded;
 		}
 		throw new UnsupportedOperationException("rontolisp:wasm-import :returns expects a keyword type designator in "
 				+ form.print() + ", got: " + value.print());

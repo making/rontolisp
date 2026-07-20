@@ -7,7 +7,7 @@ Defines a condition type as a CLOS-subset class (see [`defclass`](../special-for
 ```lisp
 (define-condition my-parse-error (error)
   ((input :initarg :input :reader my-parse-error-input))
-  (:report "input did not parse")) ; => my-parse-error
+  (:report "input did not parse")) ; => MY-PARSE-ERROR
 ```
 
 ```console

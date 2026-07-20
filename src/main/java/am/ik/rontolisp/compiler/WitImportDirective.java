@@ -174,10 +174,13 @@ public final class WitImportDirective {
 				throw new UnsupportedOperationException("Missing value for " + keyword.name() + " in " + form.print());
 			}
 			LispVal value = items.get(i + 1);
-			switch (keyword.name()) {
-				case ":interface" -> iface = designator(value, ":interface", form);
+			switch (LispNames.foldKeyword(keyword.name())) {
+				// :interface and :from name WIT-side things (lower-kebab), so a bare
+				// symbol -- upcased by the reader -- lowercases; :package names the
+				// Lisp-side package and keeps the reader's spelling.
+				case ":interface" -> iface = designator(value, ":interface", form).toLowerCase(java.util.Locale.ROOT);
 				case ":package" -> pkg = designator(value, ":package", form);
-				case ":from" -> module = designator(value, ":from", form);
+				case ":from" -> module = designator(value, ":from", form).toLowerCase(java.util.Locale.ROOT);
 				case ":field-style" -> fieldStyle = fieldStyle(value, form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wit-import option " + keyword.name() + " in " + form.print());
@@ -206,7 +209,7 @@ public final class WitImportDirective {
 
 	private static FieldStyle fieldStyle(LispVal value, LispCons form) {
 		if (value instanceof LispSymbol sym && sym.isKeyword()) {
-			return switch (sym.name()) {
+			return switch (LispNames.foldKeyword(sym.name())) {
 				case ":camel" -> FieldStyle.CAMEL;
 				case ":kebab" -> FieldStyle.KEBAB;
 				default -> throw new UnsupportedOperationException(

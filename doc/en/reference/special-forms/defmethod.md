@@ -43,7 +43,7 @@ Inside a primary or `:around` method, `(call-next-method)` invokes the next less
 (defmethod describe-point ((p point)) (list :x (px p)))
 (defmethod describe-point ((p point3d)) (append (call-next-method) (list :z (pz p))))
 (defmethod describe-point :around ((p point)) (list :point (call-next-method)))
-(describe-point (make-instance 'point3d :x 1 :z 3)) ; => (:point (:x 1 :z 3))
+(describe-point (make-instance 'point3d :x 1 :z 3)) ; => (:POINT (:X 1 :Z 3))
 ```
 
 Lite subset: `&key` is an error, `call-next-method` on a variadic generic forwards the required arguments only, and standard method combination is supported for class and default methods (an `:around`/`:before`/`:after` with an `eql` or built-in-type specializer combines only with primaries of the same specializer plus the default method). On the compilation path `defmethod` is only supported as a top-level form; the dispatched method set of a compiled program is fixed at compile time.

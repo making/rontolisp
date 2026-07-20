@@ -52,6 +52,22 @@ public final class LispReader {
 	}
 
 	/**
+	 * Read a single expression from the input string with the given feature set (the
+	 * runtime {@code read}/{@code read-from-string} built-ins pass the evaluator's
+	 * per-run features so the upcase reader mode applies there too).
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @return the parsed expression
+	 */
+	public static LispVal readFromString(String input, Features features) {
+		List<LispVal> exprs = readAllFromString(input, features);
+		if (exprs.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		return exprs.get(0);
+	}
+
+	/**
 	 * Read all expressions from the input string with the interpreter feature set.
 	 * @param input the source code string
 	 * @return the list of parsed expressions

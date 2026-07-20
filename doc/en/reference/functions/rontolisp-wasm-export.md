@@ -11,7 +11,7 @@ source runs on every backend. See
 
 ```lisp
 (defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
-(rontolisp:wasm-export 'fact :params '(:int) :returns :int)   ; => fact
+(rontolisp:wasm-export 'fact :params '(:int) :returns :int)   ; => FACT
 ```
 
 ## Arguments

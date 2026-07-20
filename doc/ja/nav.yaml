@@ -53,6 +53,8 @@ sections:
         title: Gray ストリーム
       - file: guides/asdf-systems.md
         title: システム（asdf）
+      - file: guides/reader-case.md
+        title: リーダーのケース（大文字化）
       - file: guides/math-backends.md
         title: 数学関数のバックエンド
       - file: guides/missing-features.md

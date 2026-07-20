@@ -18,5 +18,5 @@ Like [`intern`](intern.md) but never creates: returns the symbol when the name i
 
 ```lisp
 (defun greet (n) n)
-(find-symbol "greet") ; => greet
+(find-symbol "greet") ; => nil
 ```

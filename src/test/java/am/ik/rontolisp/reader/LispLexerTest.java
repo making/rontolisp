@@ -48,7 +48,7 @@ class LispLexerTest {
 	@Test
 	void tokenizeQuote() {
 		List<Token> tokens = new LispLexer("'foo").tokenize();
-		assertThat(tokens).containsExactly(new Token.Quote(), new Token.SymbolToken("foo"));
+		assertThat(tokens).containsExactly(new Token.Quote(), new Token.SymbolToken("FOO"));
 	}
 
 	@Test
@@ -73,14 +73,14 @@ class LispLexerTest {
 	void tokenizeOnePlus() {
 		List<Token> tokens = new LispLexer("(1+ x)").tokenize();
 		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("1+"),
-				new Token.SymbolToken("x"), new Token.RightParen());
+				new Token.SymbolToken("X"), new Token.RightParen());
 	}
 
 	@Test
 	void tokenizeOneMinus() {
 		List<Token> tokens = new LispLexer("(1- x)").tokenize();
 		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("1-"),
-				new Token.SymbolToken("x"), new Token.RightParen());
+				new Token.SymbolToken("X"), new Token.RightParen());
 	}
 
 	@Test
@@ -132,9 +132,9 @@ class LispLexerTest {
 	@Test
 	void tokenizeBackquoteAndUnquotes() {
 		List<Token> tokens = new LispLexer("`(a ,b ,@c)").tokenize();
-		assertThat(tokens).containsExactly(new Token.Backquote(), new Token.LeftParen(), new Token.SymbolToken("a"),
-				new Token.Unquote(), new Token.SymbolToken("b"), new Token.UnquoteSplicing(),
-				new Token.SymbolToken("c"), new Token.RightParen());
+		assertThat(tokens).containsExactly(new Token.Backquote(), new Token.LeftParen(), new Token.SymbolToken("A"),
+				new Token.Unquote(), new Token.SymbolToken("B"), new Token.UnquoteSplicing(),
+				new Token.SymbolToken("C"), new Token.RightParen());
 	}
 
 	@Test
@@ -167,8 +167,8 @@ class LispLexerTest {
 	void tokenizeMarkerWithoutExponentDigitsIsSymbol() {
 		// A marker not followed by digits is not an exponent: the whole token is a
 		// symbol, so "1d" and "1d0x" stay symbols rather than becoming floats.
-		assertThat(new LispLexer("1d").tokenize()).containsExactly(new Token.SymbolToken("1d"));
-		assertThat(new LispLexer("1d0x").tokenize()).containsExactly(new Token.SymbolToken("1d0x"));
+		assertThat(new LispLexer("1d").tokenize()).containsExactly(new Token.SymbolToken("1D"));
+		assertThat(new LispLexer("1d0x").tokenize()).containsExactly(new Token.SymbolToken("1D0X"));
 	}
 
 	@Test
@@ -218,7 +218,7 @@ class LispLexerTest {
 	void tokenizeSharpDigitsWithoutArrayOpenIsASymbol() {
 		// #2A not followed by '(' keeps the previous symbol tokenization.
 		assertThat(new LispLexer("#2A").tokenize()).containsExactly(new Token.SymbolToken("#2A"));
-		assertThat(new LispLexer("#2Ax").tokenize()).containsExactly(new Token.SymbolToken("#2Ax"));
+		assertThat(new LispLexer("#2Ax").tokenize()).containsExactly(new Token.SymbolToken("#2AX"));
 		assertThat(new LispLexer("#2B(").tokenize()).containsExactly(new Token.SymbolToken("#2B"),
 				new Token.LeftParen());
 	}

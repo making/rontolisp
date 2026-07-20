@@ -246,9 +246,9 @@ class WasmComponentImportCompilerTest {
 	// The keyvalue program the component tests compile: one interface, two bound members,
 	// and (unlike the tokens/bag pair below) nothing used from another interface.
 	private static byte[] keyvalueComponent() {
-		return compileComponent("(defpackage kv (:use cl) (:export open))\n"
-				+ importForm("wasi:keyvalue/store@0.2.0-draft", KV_WIT, "(\"open\" \"kv::%open\")",
-						"(\"bucket-get\" \"kv::%bucket-get\")")
+		return compileComponent("(defpackage kv (:use cl) (:export \"open\"))\n"
+				+ importForm("wasi:keyvalue/store@0.2.0-draft", KV_WIT, "(\"open\" \"KV::%open\")",
+						"(\"bucket-get\" \"KV::%bucket-get\")")
 				+ "(defun kv:open (identifier) (rontolisp::%wit-result (kv::%open identifier)))\n"
 				+ "(print (kv:open \"\"))\n");
 	}
@@ -256,28 +256,38 @@ class WasmComponentImportCompilerTest {
 	// A program over the tokens/bag pair, with the two %component-import forms written in
 	// the given source order.
 	private static byte[] tokensAndBagComponent(boolean providerFirst) {
-		String tokens = importForm(TOKENS_ID, TOKENS_WIT, "(\"token-value\" \"tk:token-value\")");
-		String bag = importForm(BAG_ID, TOKENS_WIT, "(\"take\" \"bg:take\")");
-		return compileComponent(
-				"(defpackage tk (:use cl) (:export token-value))\n" + "(defpackage bg (:use cl) (:export take))\n"
-						+ (providerFirst ? tokens + bag : bag + tokens) + "(print (tk:token-value (bg:take)))\n");
+		String tokens = importForm(TOKENS_ID, TOKENS_WIT, "(\"token-value\" \"TK:token-value\")");
+		String bag = importForm(BAG_ID, TOKENS_WIT, "(\"take\" \"BG:take\")");
+		return compileComponent("(defpackage tk (:use cl) (:export \"token-value\"))\n"
+				+ "(defpackage bg (:use cl) (:export \"take\"))\n" + (providerFirst ? tokens + bag : bag + tokens)
+				+ "(print (tk:token-value (bg:take)))\n");
 	}
 
 	// A program that binds the `token` resource's DROP -- the one binding WIT declares no
 	// function for -- alongside one of its methods.
 	private static byte[] tokensDropComponent() {
 		return compileComponent(
-				"(defpackage tk (:use cl) (:export token-value token-drop))\n"
-						+ importForm(TOKENS_ID, TOKENS_WIT, "(\"token-value\" \"tk:token-value\")",
-								"(:drop \"token\" \"tk:token-drop\")")
+				"(defpackage tk (:use cl) (:export \"token-value\" \"token-drop\"))\n"
+						+ importForm(TOKENS_ID, TOKENS_WIT, "(\"token-value\" \"TK:token-value\")",
+								"(:drop \"token\" \"TK:token-drop\")")
 						+ "(print (tk:token-value 1))\n(tk:token-drop 1)\n");
 	}
 
 	// The same program as the DIRECTIVE lowers it, with and without a call to the drop --
 	// which is the only thing that decides whether one is bound at all.
 	private static byte[] tokensComponentNaming(boolean drop) {
+		// The package designator matches what WitImportDirective.parse yields for
+		// `:package tk` under the reader's upcase premise -- the symbol reads as TK -- so
+		// the
+		// directive's own output lines up with the hand-written preDrops form (which
+		// spells
+		// the package TK too). Passing the lowercase "tk" here left the package name "tk"
+		// in
+		// the emitted string table while preDrops carried "TK", so the byte-identity pin
+		// saw
+		// a spurious difference.
 		List<LispVal> forms = new ArrayList<>(WitImportDirective.lower(
-				new WitImportDirective.Directive("x.wit", TOKENS_ID, "tk", null, WitImportDirective.FieldStyle.CAMEL),
+				new WitImportDirective.Directive("x.wit", TOKENS_ID, "TK", null, WitImportDirective.FieldStyle.CAMEL),
 				TOKENS_WIT, "x.wit", WitExportDirective.Backend.WASM_COMPONENT, java.util.Set.of("token-value"),
 				drop ? java.util.Set.of("token-drop") : java.util.Set.of()));
 		forms.addAll(LispReader.readAllFromString("(print (tk:token-value 1))" + (drop ? "\n(tk:token-drop 1)" : "")));
@@ -361,7 +371,7 @@ class WasmComponentImportCompilerTest {
 		// -- which is what keeps every component emitted before the projection existed
 		// byte-identical.
 		WasmComponentImportCompiler.Import kv = parseImport("wasi:keyvalue/store@0.2.0-draft", KV_WIT,
-				"(\"open\" \"kv::%open\")", "(\"bucket-get\" \"kv::%bucket-get\")");
+				"(\"open\" \"KV::%open\")", "(\"bucket-get\" \"KV::%bucket-get\")");
 		assertThat(WitComponentTypeEncoder.foreignResourcesOf(kv)).isEmpty();
 		assertThat(WasmComponentBuilder.appendUserImports(new ComponentWriter(), List.of(kv), 0, 0, 0, 0).types())
 			.isEqualTo(1);
@@ -414,9 +424,9 @@ class WasmComponentImportCompilerTest {
 				}
 				""";
 		String witLiteral = "\"" + fsWit.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
-		assertThatThrownBy(() -> compileComponent("(defpackage fs (:use cl) (:export descriptor-sync))\n"
+		assertThatThrownBy(() -> compileComponent("(defpackage fs (:use cl) (:export \"descriptor-sync\"))\n"
 				+ "(rontolisp::%component-import \"wasi:filesystem/types@0.3.0\" " + witLiteral
-				+ " (\"descriptor-sync\" \"fs:descriptor-sync\"))\n" + "(fs:descriptor-sync 1)\n"))
+				+ " (\"descriptor-sync\" \"FS:descriptor-sync\"))\n" + "(fs:descriptor-sync 1)\n"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("wasi:filesystem/types@0.3.0")
 			.hasMessageContaining("already imports that interface as part of its own WASI surface");
@@ -436,8 +446,8 @@ class WasmComponentImportCompilerTest {
 				    feed: func(body: stream<u8>);
 				}
 				""";
-		String program = "(defpackage sx (:use cl) (:export read feed))\n"
-				+ importForm("local:x/s", streamWit, "(\"read\" \"sx:read\")", "(\"feed\" \"sx:feed\")")
+		String program = "(defpackage sx (:use cl) (:export \"read\" \"feed\"))\n"
+				+ importForm("local:x/s", streamWit, "(\"read\" \"SX:read\")", "(\"feed\" \"SX:feed\")")
 				+ "(sx:feed (sx:read))\n";
 		byte[] component = compileComponent(program);
 		assertThat(containsAscii(component, "local:x/s")).isTrue();
@@ -463,7 +473,7 @@ class WasmComponentImportCompilerTest {
 				}
 				""";
 		WasmComponentImportCompiler.Import imported = parseImport("local:x/streaming@0.3.0", wit,
-				"(\"read-body\" \"sx:read-body\")");
+				"(\"read-body\" \"SX:read-body\")");
 		byte[] instanceType = WitComponentTypeEncoder.encode(imported, (ownerId, resource) -> {
 			throw new AssertionError("no foreign resource expected: " + ownerId + "#" + resource);
 		}, java.util.Set.of());
@@ -528,18 +538,20 @@ class WasmComponentImportCompilerTest {
 	@Test
 	void lowersRichParametersThroughTheCanonicalAbi() {
 		String witLiteral = "\"" + RICH_PARAM_WIT.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
-		byte[] component = compileComponent("(defpackage kv (:use cl) (:export thing-new thing-set-method thing-paint "
-				+ "thing-move-to thing-span thing-nudge thing-send))\n" + "(rontolisp::%component-import \"local:x/s\" "
-				+ witLiteral + " (\"thing-new\" \"kv:thing-new\") (\"thing-set-method\" \"kv::%thing-set-method\")"
-				+ " (\"thing-paint\" \"kv:thing-paint\") (\"thing-move-to\" \"kv:thing-move-to\")"
-				+ " (\"thing-span\" \"kv:thing-span\") (\"thing-nudge\" \"kv:thing-nudge\")"
-				+ " (\"thing-send\" \"kv:thing-send\"))\n"
-				+ "(defun kv:thing-set-method (self m) (rontolisp::%wit-result (kv::%thing-set-method self m)))\n"
-				+ "(let ((th (kv:thing-new)))\n" + "  (kv:thing-set-method th :get)\n"
-				+ "  (kv:thing-set-method th '(:other . \"PATCH\"))\n" + "  (kv:thing-paint th :red)\n"
-				+ "  (kv:thing-move-to th '(:x 1 :y 2))\n" + "  (kv:thing-span th '(1 \"a\"))\n"
-				+ "  (kv:thing-nudge th nil)\n" + "  (kv:thing-send th '(:ok :x 1 :y 2))\n"
-				+ "  (kv:thing-send th '(:error . \"boom\")))\n");
+		byte[] component = compileComponent(
+				"(defpackage kv (:use cl) (:export \"thing-new\" \"thing-set-method\" \"thing-paint\" "
+						+ "\"thing-move-to\" \"thing-span\" \"thing-nudge\" \"thing-send\"))\n"
+						+ "(rontolisp::%component-import \"local:x/s\" " + witLiteral
+						+ " (\"thing-new\" \"KV:thing-new\") (\"thing-set-method\" \"KV::%thing-set-method\")"
+						+ " (\"thing-paint\" \"KV:thing-paint\") (\"thing-move-to\" \"KV:thing-move-to\")"
+						+ " (\"thing-span\" \"KV:thing-span\") (\"thing-nudge\" \"KV:thing-nudge\")"
+						+ " (\"thing-send\" \"KV:thing-send\"))\n"
+						+ "(defun kv:thing-set-method (self m) (rontolisp::%wit-result (kv::%thing-set-method self m)))\n"
+						+ "(let ((th (kv:thing-new)))\n" + "  (kv:thing-set-method th :get)\n"
+						+ "  (kv:thing-set-method th '(:other . \"PATCH\"))\n" + "  (kv:thing-paint th :red)\n"
+						+ "  (kv:thing-move-to th '(:x 1 :y 2))\n" + "  (kv:thing-span th '(1 \"a\"))\n"
+						+ "  (kv:thing-nudge th nil)\n" + "  (kv:thing-send th '(:ok :x 1 :y 2))\n"
+						+ "  (kv:thing-send th '(:error . \"boom\")))\n");
 		assertThat(containsAscii(component, "local:x/s")).isTrue();
 		assertThat(containsAscii(component, "[method]thing.set-method")).isTrue();
 		assertThat(containsAscii(component, "[method]thing.send")).isTrue();
@@ -585,9 +597,9 @@ class WasmComponentImportCompilerTest {
 		// fixed
 		// pool sized for anything shallower simply runs out.
 		String witLiteral = "\"" + DEEP_VARIANT_WIT.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
-		byte[] component = compileComponent("(defpackage kv (:use cl) (:export response-outparam-set))\n"
+		byte[] component = compileComponent("(defpackage kv (:use cl) (:export \"response-outparam-set\"))\n"
 				+ "(rontolisp::%component-import \"local:x/s\" " + witLiteral
-				+ " (\"response-outparam-set\" \"kv:response-outparam-set\"))\n"
+				+ " (\"response-outparam-set\" \"KV:response-outparam-set\"))\n"
 				+ "(kv:response-outparam-set 1 '(:ok . 200))\n"
 				+ "(kv:response-outparam-set 1 '(:error :dns-error :rcode \"NXDOMAIN\" :info-code 3))\n"
 				+ "(kv:response-outparam-set 1 '(:error :http-request-header-size :field-name \"x\" :field-size 9))\n");
@@ -693,6 +705,59 @@ class WasmComponentImportCompilerTest {
 			.contains("(\"palette\" \"kv:palette\")");
 	}
 
+	// The interface whose RESULTS are inspected by raw tag: an enum, a variant (a
+	// payload-less and a payload-bearing case) and a nested result (a list<result>, whose
+	// inner envelope is not unwrapped -- only a top-level result is). Under the reader's
+	// upcase premise a user writes (eq (kv:get-color) :red) / (:ok . v), which reads
+	// upcased, so the lift MUST spell the case names / the (:ok . v) envelope UPCASED or
+	// every such comparison silently misses (todo-155 item 2; the wasi:http `method`
+	// variant is the real-host instance of the same lift, pinned end-to-end by
+	// ServeMethodCaseComponentE2eTest).
+	private static final String RAW_TAG_RESULT_WIT = """
+			package local:x@0.1.0;
+
+			interface s {
+			    enum color {
+			        red,
+			        green,
+			    }
+			    variant shape {
+			        circle,
+			        labeled(string),
+			    }
+			    get-color: func() -> color;
+			    classify: func(n: s32) -> shape;
+			    probe: func() -> list<result<s32, string>>;
+			}
+			""";
+
+	@Test
+	void liftsAVariantEnumAndResultTagUpcasedSoRawInspectionMatchesUserData() {
+		String witLiteral = "\"" + RAW_TAG_RESULT_WIT.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
+		byte[] component = compileComponent("(defpackage kv (:use cl) (:export \"get-color\" \"classify\" \"probe\"))\n"
+				+ "(rontolisp::%component-import \"local:x/s\" " + witLiteral
+				+ " (\"get-color\" \"KV:get-color\") (\"classify\" \"KV:classify\") (\"probe\" \"KV:probe\"))\n"
+				+ "(print (kv:get-color))\n(print (kv:classify 5))\n(print (kv:probe))\n");
+		// The enum / variant case names and the (:ok . v) / (:error . e) envelope heads
+		// all
+		// lift UPCASED -- the keyword a user compares against reads upcased too, so this
+		// is
+		// what makes the raw-tag comparison hit.
+		assertThat(containsAscii(component, ":RED")).as("enum case lifts upcased").isTrue();
+		assertThat(containsAscii(component, ":GREEN")).isTrue();
+		assertThat(containsAscii(component, ":CIRCLE")).as("variant case lifts upcased").isTrue();
+		assertThat(containsAscii(component, ":LABELED")).isTrue();
+		assertThat(containsAscii(component, ":OK")).as("result envelope head lifts upcased").isTrue();
+		assertThat(containsAscii(component, ":ERROR")).isTrue();
+		// None of these are lowered here (no function TAKES them as a parameter), so the
+		// only emitter is the lift: a regression to a lowercase lift would drop the upper
+		// spelling AND surface the lower one, so the enum/variant lowercase forms must be
+		// absent.
+		assertThat(containsAscii(component, ":red")).as("no lowercase enum lift remains").isFalse();
+		assertThat(containsAscii(component, ":circle")).as("no lowercase variant lift remains").isFalse();
+		assertThat(containsAscii(component, ":labeled")).isFalse();
+	}
+
 	@Test
 	void aServedComponentImportsTheInterfaceAlongsideItsFixedWasiHttpSurface() {
 		// A rontolisp:http-handler component wraps the preview1 bridge and the serve core
@@ -701,9 +766,9 @@ class WasmComponentImportCompilerTest {
 		// same appendUserImports wiring as the other variants, and the fixed
 		// wasi:http/handler export survives it.
 		String witLiteral = "\"" + KV_WIT.replace("\n", "\\n").replace("\"", "\\\"") + "\"";
-		byte[] component = compileServeComponent("(defpackage kv (:use cl) (:export open))\n"
+		byte[] component = compileServeComponent("(defpackage kv (:use cl) (:export \"open\"))\n"
 				+ "(rontolisp::%component-import \"wasi:keyvalue/store@0.2.0-draft\" " + witLiteral
-				+ " (\"open\" \"kv::%open\") (\"bucket-get\" \"kv::%bucket-get\"))\n"
+				+ " (\"open\" \"KV::%open\") (\"bucket-get\" \"KV::%bucket-get\"))\n"
 				+ "(defun kv:open (identifier) (rontolisp::%wit-result (kv::%open identifier)))\n"
 				+ "(defun handle (request) (list :status 200 :body (kv:open \"\")))\n"
 				+ "(rontolisp:http-handler 'handle)\n");
@@ -804,8 +869,8 @@ class WasmComponentImportCompilerTest {
 		// to
 		// be declared even though no signature of this interface mentions it.
 		byte[] component = compileComponent(
-				"(defpackage bg (:use cl) (:export take))\n" + importForm(TOKENS_ID, TOKENS_WIT)
-						+ importForm(BAG_ID, TOKENS_WIT, "(\"take\" \"bg:take\")") + "(print (bg:take))\n");
+				"(defpackage bg (:use cl) (:export \"take\"))\n" + importForm(TOKENS_ID, TOKENS_WIT)
+						+ importForm(BAG_ID, TOKENS_WIT, "(\"take\" \"BG:take\")") + "(print (bg:take))\n");
 		List<Section> sections = sections(component);
 		assertThat(sections.get(instanceTypeSectionIndex(sections, TOKENS_ID)).payload()).isEqualTo(ComponentWriter.vec(
 				List.of(ComponentWriter.instanceTypeOf(List.of(ComponentWriter.instanceDeclExportResource("token"))))));
@@ -832,8 +897,8 @@ class WasmComponentImportCompilerTest {
 		// wrong answer (see aUsedResourceIsTheDefiningInterfacesOwnType). So the error
 		// names
 		// the interface to add.
-		assertThatThrownBy(() -> compileComponent("(defpackage bg (:use cl) (:export take))\n"
-				+ importForm(BAG_ID, TOKENS_WIT, "(\"take\" \"bg:take\")") + "(print (bg:take))\n"))
+		assertThatThrownBy(() -> compileComponent("(defpackage bg (:use cl) (:export \"take\"))\n"
+				+ importForm(BAG_ID, TOKENS_WIT, "(\"take\" \"BG:take\")") + "(print (bg:take))\n"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("cannot bind the resource 'token', which it uses from '" + TOKENS_ID + "'")
 			.hasMessageContaining("(rontolisp:wit-import ... :interface \"" + TOKENS_ID + "\")");
@@ -889,7 +954,7 @@ class WasmComponentImportCompilerTest {
 		// must not. Get it backwards and you get a component that VALIDATES while lifting
 		// the wrong core function.
 		WasmComponentImportCompiler.Import tokens = parseImport(TOKENS_ID, TOKENS_WIT,
-				"(\"token-value\" \"tk:token-value\")", "(:drop \"token\" \"tk:token-drop\")");
+				"(\"token-value\" \"TK:token-value\")", "(:drop \"token\" \"TK:token-drop\")");
 		assertThat(tokens.decls()).hasSize(1);
 		assertThat(tokens.drops()).hasSize(1);
 		WasmComponentBuilder.Appended appended = WasmComponentBuilder.appendUserImports(new ComponentWriter(),
@@ -928,8 +993,8 @@ class WasmComponentImportCompilerTest {
 		// a
 		// component built before drops existed did, which is what the hand-written import
 		// form (the shape the directive emitted then) stands in for here.
-		byte[] preDrops = compileComponent("(defpackage tk (:use cl) (:export token-value))\n"
-				+ importForm(TOKENS_ID, TOKENS_WIT, "(\"token-value\" \"tk:token-value\")")
+		byte[] preDrops = compileComponent("(defpackage tk (:use cl) (:export \"token-value\"))\n"
+				+ importForm(TOKENS_ID, TOKENS_WIT, "(\"token-value\" \"TK:token-value\")")
 				+ "(print (tk:token-value 1))\n");
 		assertThat(tokensComponentNaming(false)).isEqualTo(preDrops);
 		assertThat(containsAscii(preDrops, "resource-drop")).isFalse();
@@ -964,16 +1029,16 @@ class WasmComponentImportCompilerTest {
 		return compileComponent("(defpackage h (:use cl) (:export fields-get consume body-stream-new body-stream-read"
 				+ " body-stream-write body-stream-drop-readable body-stream-drop-writable trailers-future-read"
 				+ " trailers-future-write transmit-future-new transmit-future-read))\n"
-				+ importForm(ASYNC_HTTP_ID, ASYNC_HTTP_WIT, "(\"fields-get\" \"h:fields-get\")",
-						"(\"consume\" \"h:consume\")", "(:async \"body-stream\" \"new\" \"h:body-stream-new\")",
-						"(:async \"body-stream\" \"read\" \"h:body-stream-read\")",
-						"(:async \"body-stream\" \"write\" \"h:body-stream-write\")",
-						"(:async \"body-stream\" \"drop-readable\" \"h:body-stream-drop-readable\")",
-						"(:async \"body-stream\" \"drop-writable\" \"h:body-stream-drop-writable\")",
-						"(:async \"trailers-future\" \"read\" \"h:trailers-future-read\")",
-						"(:async \"trailers-future\" \"write\" \"h:trailers-future-write\")",
-						"(:async \"transmit-future\" \"new\" \"h:transmit-future-new\")",
-						"(:async \"transmit-future\" \"read\" \"h:transmit-future-read\")")
+				+ importForm(ASYNC_HTTP_ID, ASYNC_HTTP_WIT, "(\"fields-get\" \"H:fields-get\")",
+						"(\"consume\" \"H:CONSUME\")", "(:async \"body-stream\" \"new\" \"H:BODY-STREAM-NEW\")",
+						"(:async \"body-stream\" \"read\" \"H:BODY-STREAM-READ\")",
+						"(:async \"body-stream\" \"write\" \"H:BODY-STREAM-WRITE\")",
+						"(:async \"body-stream\" \"drop-readable\" \"H:BODY-STREAM-DROP-READABLE\")",
+						"(:async \"body-stream\" \"drop-writable\" \"H:BODY-STREAM-DROP-WRITABLE\")",
+						"(:async \"trailers-future\" \"read\" \"H:TRAILERS-FUTURE-READ\")",
+						"(:async \"trailers-future\" \"write\" \"H:TRAILERS-FUTURE-WRITE\")",
+						"(:async \"transmit-future\" \"new\" \"H:TRANSMIT-FUTURE-NEW\")",
+						"(:async \"transmit-future\" \"read\" \"H:TRANSMIT-FUTURE-READ\")")
 				+ "(let ((ends (h:body-stream-new)))\n" + "  (h:body-stream-write (cdr ends) \"hi\")\n"
 				+ "  (h:body-stream-drop-writable (cdr ends))\n" + "  (print (h:body-stream-read (car ends)))\n"
 				+ "  (h:body-stream-drop-readable (car ends)))\n" + "(let ((pair (h:consume 1)))\n"
@@ -1014,9 +1079,9 @@ class WasmComponentImportCompilerTest {
 		// projection can only link against a name the instance type exports, so the
 		// async machinery must force the `fields` declaration exactly as a drop does --
 		// a bound function reaching it is not required.
-		byte[] component = compileComponent("(defpackage h (:use cl) (:export trailers-future-read))\n"
+		byte[] component = compileComponent("(defpackage h (:use cl) (:export \"trailers-future-read\"))\n"
 				+ importForm(ASYNC_HTTP_ID, ASYNC_HTTP_WIT,
-						"(:async \"trailers-future\" \"read\" \"h:trailers-future-read\")")
+						"(:async \"trailers-future\" \"read\" \"H:trailers-future-read\")")
 				+ "(print (h:trailers-future-read 1))\n");
 		List<Section> sections = sections(component);
 		byte[] instanceType = sections.get(instanceTypeSectionIndex(sections, ASYNC_HTTP_ID)).payload();
@@ -1049,8 +1114,8 @@ class WasmComponentImportCompilerTest {
 		// resource out of this instance, and an instance can only be projected from for a
 		// name it EXPORTS. It also makes such an import legal at all, since an interface
 		// whose functions the program never calls is otherwise dead weight.
-		byte[] component = compileComponent("(defpackage tk (:use cl) (:export token-drop))\n"
-				+ importForm(TOKENS_ID, TOKENS_WIT, "(:drop \"token\" \"tk:token-drop\")") + "(tk:token-drop 1)\n");
+		byte[] component = compileComponent("(defpackage tk (:use cl) (:export \"token-drop\"))\n"
+				+ importForm(TOKENS_ID, TOKENS_WIT, "(:drop \"token\" \"TK:token-drop\")") + "(tk:token-drop 1)\n");
 		List<Section> sections = sections(component);
 		assertThat(sections.get(instanceTypeSectionIndex(sections, TOKENS_ID)).payload()).isEqualTo(ComponentWriter.vec(
 				List.of(ComponentWriter.instanceTypeOf(List.of(ComponentWriter.instanceDeclExportResource("token"))))));

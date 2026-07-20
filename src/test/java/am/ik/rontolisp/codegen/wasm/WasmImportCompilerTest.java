@@ -43,7 +43,7 @@ class WasmImportCompilerTest {
 	@Test
 	void parsesDirectiveWithDefaults() {
 		WasmImportCompiler.Decl decl = parse("(rontolisp:wasm-import 'draw :params '(:int :int) :returns :void)");
-		assertThat(decl.name()).isEqualTo("draw");
+		assertThat(decl.name()).isEqualTo("DRAW");
 		assertThat(decl.module()).isEqualTo("env");
 		assertThat(decl.field()).isEqualTo("draw");
 		assertThat(decl.paramTypes()).containsExactly(":int", ":int");
@@ -54,7 +54,7 @@ class WasmImportCompilerTest {
 	void parsesFromAndAsOptions() {
 		WasmImportCompiler.Decl decl = parse(
 				"(rontolisp:wasm-import 'draw-pixel :from \"gl\" :as \"drawPixel\" :params '(:float) :returns :int)");
-		assertThat(decl.name()).isEqualTo("draw-pixel");
+		assertThat(decl.name()).isEqualTo("DRAW-PIXEL");
 		assertThat(decl.module()).isEqualTo("gl");
 		assertThat(decl.field()).isEqualTo("drawPixel");
 		assertThat(decl.paramTypes()).containsExactly(":float");
@@ -67,10 +67,10 @@ class WasmImportCompilerTest {
 		// host-facing import field must default to the bare member name, not the
 		// package-qualified spelling.
 		WasmImportCompiler.Decl decl = parse("(rontolisp:wasm-import 'gl:enable :params '(:int) :returns :void)");
-		assertThat(decl.name()).isEqualTo("gl:enable");
+		assertThat(decl.name()).isEqualTo("GL:ENABLE");
 		assertThat(decl.field()).isEqualTo("enable");
 		WasmImportCompiler.Decl internal = parse("(rontolisp:wasm-import 'gl::fail :params '(:string))");
-		assertThat(internal.name()).isEqualTo("gl::fail");
+		assertThat(internal.name()).isEqualTo("GL::FAIL");
 		assertThat(internal.field()).isEqualTo("fail");
 	}
 
@@ -94,7 +94,7 @@ class WasmImportCompilerTest {
 
 	@Test
 	void rejectsUnknownOption() {
-		assertThatThrownBy(() -> parse("(rontolisp:wasm-import 'g :wat 1)")).hasMessageContaining(":wat");
+		assertThatThrownBy(() -> parse("(rontolisp:wasm-import 'g :wat 1)")).hasMessageContaining(":WAT");
 	}
 
 	@Test

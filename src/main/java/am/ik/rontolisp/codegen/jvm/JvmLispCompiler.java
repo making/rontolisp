@@ -1887,7 +1887,8 @@ public final class JvmLispCompiler implements LispCompiler {
 	private static boolean makeArrayIsPackedFloat(LispCons makeArray) {
 		List<LispVal> args = makeArray.toList();
 		for (int i = 2; i + 1 < args.size(); i++) {
-			if (args.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
+			if (args.get(i) instanceof LispSymbol kw
+					&& LispNames.keywordMatches(kw.name(), LispNames.ELEMENT_TYPE_KEYWORD)) {
 				LispVal type = args.get(i + 1);
 				if (type instanceof LispCons q && q.car() instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name())
 						&& q.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol ts) {

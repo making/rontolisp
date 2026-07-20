@@ -167,7 +167,7 @@ class WitImportDirectiveTest {
 	void parsesEveryOption() {
 		assertThat(WitImportDirective.parse(form("(rontolisp:wit-import \"wit/kv.wit\" :interface \"" + STORE + "\" "
 				+ ":package kv :from \"keyvalue\" :field-style :kebab)")))
-			.isEqualTo(new Directive("wit/kv.wit", STORE, "kv", "keyvalue", FieldStyle.KEBAB));
+			.isEqualTo(new Directive("wit/kv.wit", STORE, "KV", "keyvalue", FieldStyle.KEBAB));
 	}
 
 	@Test
@@ -175,7 +175,7 @@ class WitImportDirectiveTest {
 		// A name may be written as a symbol in the WIT's own spelling, not just a string.
 		assertThat(WitImportDirective
 			.parse(form("(rontolisp:wit-import \"kv.wit\" :interface store :package kv :from keyvalue)")))
-			.isEqualTo(new Directive("kv.wit", "store", "kv", "keyvalue", FieldStyle.CAMEL));
+			.isEqualTo(new Directive("kv.wit", "store", "KV", "keyvalue", FieldStyle.CAMEL));
 	}
 
 	@Test
@@ -206,7 +206,7 @@ class WitImportDirectiveTest {
 		assertThatThrownBy(
 				() -> WitImportDirective.parse(form("(rontolisp:wit-import \"kv.wit\" :interface \"s\" :world w)")))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("Unknown rontolisp:wit-import option :world");
+			.hasMessageContaining("Unknown rontolisp:wit-import option :WORLD");
 	}
 
 	@Test
@@ -216,7 +216,7 @@ class WitImportDirectiveTest {
 			.hasMessageContaining("Expected a keyword option");
 		assertThatThrownBy(() -> WitImportDirective.parse(form("(rontolisp:wit-import \"kv.wit\" :interface)")))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("Missing value for :interface");
+			.hasMessageContaining("Missing value for :INTERFACE");
 	}
 
 	@Test

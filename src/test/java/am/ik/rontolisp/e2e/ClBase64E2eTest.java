@@ -41,7 +41,7 @@ class ClBase64E2eTest extends AsdfLibraryE2eSupport {
 
 	private static final List<String> EXPECTED = List.of("\"SGVsbG8sIFdvcmxkIQ==\"", "\"Hello, World!\"", "\"SGVsb",
 			"G8sIF", "dvcmx", "kIQ==\"", "\"SGVsbG8_Pj4.\"", "\"Hello?>>\"", "\"AQID\"", "#(1 2 3)", "\"EtaH\"",
-			"1234567", ":caught-bad-char");
+			"1234567", ":CAUGHT-BAD-CHAR");
 
 	@Override
 	protected String systemDir() {

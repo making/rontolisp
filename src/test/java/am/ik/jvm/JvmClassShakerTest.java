@@ -90,7 +90,7 @@ class JvmClassShakerTest {
 	void dropsAnUncalledDefunAndItsHelpers() throws Exception {
 		byte[] optimized = compile("(defun used (x) (+ x 1)) (defun unused (x) (car x)) (print (used 41))", true);
 		List<String> names = declaredMethodNames(optimized);
-		assertThat(names).contains("main", "used").doesNotContain("unused");
+		assertThat(names).contains("main", "USED").doesNotContain("UNUSED");
 		assertThat(run(optimized)).isEqualTo("42");
 	}
 

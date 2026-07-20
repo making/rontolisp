@@ -7,7 +7,7 @@ Returns a property list of the hash table's key/value pairs — the inverse of
 subset of `alexandria:hash-table-plist`.
 
 ```lisp
-(rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 1)))   ; => (:a 1)
+(rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 1)))   ; => (:A 1)
 ```
 
 The pair order follows the table's iteration order (backend-specific, like

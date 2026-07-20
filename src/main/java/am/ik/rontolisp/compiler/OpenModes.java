@@ -41,7 +41,8 @@ public final class OpenModes {
 	public static LispCons normalizeKeywordForm(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || !(parts.get(2) instanceof LispSymbol first) || !first.name().startsWith(":")
-				|| LispNames.INPUT_KEYWORD.equals(first.name()) || LispNames.OUTPUT_KEYWORD.equals(first.name())) {
+				|| LispNames.keywordMatches(first.name(), LispNames.INPUT_KEYWORD)
+				|| LispNames.keywordMatches(first.name(), LispNames.OUTPUT_KEYWORD)) {
 			return cons;
 		}
 		LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
@@ -50,7 +51,7 @@ public final class OpenModes {
 			if (i + 1 >= parts.size() || !(parts.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
 				throw new UnsupportedOperationException("open expects :option value pairs: " + cons.print());
 			}
-			switch (key.name()) {
+			switch (LispNames.foldKeyword(key.name())) {
 				case ":direction" -> direction = parts.get(i + 1);
 				case ":element-type" -> elementType = parts.get(i + 1);
 				case ":external-format", ":if-exists", ":if-does-not-exist" -> {
@@ -84,10 +85,11 @@ public final class OpenModes {
 			return 0;
 		}
 		int mode;
-		if (parts.get(2) instanceof LispSymbol dir && LispNames.INPUT_KEYWORD.equals(dir.name())) {
+		if (parts.get(2) instanceof LispSymbol dir && LispNames.keywordMatches(dir.name(), LispNames.INPUT_KEYWORD)) {
 			mode = 0;
 		}
-		else if (parts.get(2) instanceof LispSymbol dir && LispNames.OUTPUT_KEYWORD.equals(dir.name())) {
+		else if (parts.get(2) instanceof LispSymbol dir
+				&& LispNames.keywordMatches(dir.name(), LispNames.OUTPUT_KEYWORD)) {
 			mode = OUTPUT_BIT;
 		}
 		else {

@@ -53,6 +53,8 @@ sections:
         title: Gray Streams
       - file: guides/asdf-systems.md
         title: Systems (asdf)
+      - file: guides/reader-case.md
+        title: Reader Case (Upcasing)
       - file: guides/math-backends.md
         title: Math Function Backends
       - file: guides/missing-features.md

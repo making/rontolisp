@@ -10,11 +10,11 @@ Returns the value of the **global** variable named by `symbol`; an unbound name 
 ```
 
 ```lisp
-(symbol-value (intern "*level*")) ; => 7
+(symbol-value (intern "*LEVEL*")) ; => 7
 ```
 
 ```lisp
-(symbol-value :key) ; => :key
+(symbol-value :key) ; => :KEY
 ```
 
 An unbound variable signals an error:

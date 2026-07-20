@@ -3281,7 +3281,7 @@ public final class LispMacroExpander {
 	// keyword, returning the form following the first match, or null when absent.
 	private static @Nullable LispVal keywordValue(List<LispVal> parts, int start, String keyword) {
 		for (int i = start; i + 1 < parts.size(); i += 2) {
-			if (parts.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
+			if (parts.get(i) instanceof LispSymbol kw && LispNames.keywordMatches(kw.name(), keyword)) {
 				return parts.get(i + 1);
 			}
 		}
@@ -3294,7 +3294,8 @@ public final class LispMacroExpander {
 	private static void requireTestKeyKeywords(String name, List<LispVal> parts, int start) {
 		for (int i = start; i < parts.size(); i += 2) {
 			if (!(parts.get(i) instanceof LispSymbol kw)
-					|| (!LispNames.TEST_KEYWORD.equals(kw.name()) && !LispNames.KEY_KEYWORD.equals(kw.name()))) {
+					|| (!LispNames.keywordMatches(kw.name(), LispNames.TEST_KEYWORD)
+							&& !LispNames.keywordMatches(kw.name(), LispNames.KEY_KEYWORD))) {
 				throw new IllegalArgumentException(
 						name + " expects keyword arguments :test/:key, got: " + parts.get(i).print());
 			}
@@ -3725,9 +3726,27 @@ public final class LispMacroExpander {
 
 	// Validates a keyword/value argument tail against the operator's allowed keyword
 	// set; anything else is rejected loudly rather than silently ignored.
+	// The affix in the same case as the base name: all-uppercase bases (the upcase
+	// reader's user symbols) get an upcased affix, everything else (the
+	// lowercase-authored internal sources) keeps it lowercase.
+	private static String affixFor(String affix, String base) {
+		boolean hasLetter = false;
+		for (int i = 0; i < base.length(); i++) {
+			char c = base.charAt(i);
+			if (Character.isLowerCase(c)) {
+				return affix;
+			}
+			if (Character.isLetter(c)) {
+				hasLetter = true;
+			}
+		}
+		return hasLetter ? affix.toUpperCase(java.util.Locale.ROOT) : affix;
+	}
+
 	private static void requireKeywords(String name, List<LispVal> parts, int start, String... allowed) {
 		for (int i = start; i < parts.size(); i += 2) {
-			if (!(parts.get(i) instanceof LispSymbol kw) || !List.of(allowed).contains(kw.name())) {
+			if (!(parts.get(i) instanceof LispSymbol kw)
+					|| !List.of(allowed).contains(LispNames.foldKeyword(kw.name()))) {
 				throw new IllegalArgumentException(name + " expects keyword arguments " + String.join("/", allowed)
 						+ ", got: " + parts.get(i).print());
 			}
@@ -4577,32 +4596,38 @@ public final class LispMacroExpander {
 		String direction = LispNames.INPUT_KEYWORD;
 		boolean binary = false;
 		for (int i = 2; i < specParts.size(); i += 2) {
-			if (specParts.get(i) instanceof LispSymbol key && LispNames.DIRECTION_KEYWORD.equals(key.name())) {
+			if (specParts.get(i) instanceof LispSymbol key
+					&& LispNames.keywordMatches(key.name(), LispNames.DIRECTION_KEYWORD)) {
 				if (i + 1 >= specParts.size() || !(specParts.get(i + 1) instanceof LispSymbol dir)
-						|| !(LispNames.INPUT_KEYWORD.equals(dir.name())
-								|| LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
+						|| !(LispNames.keywordMatches(dir.name(), LispNames.INPUT_KEYWORD)
+								|| LispNames.keywordMatches(dir.name(), LispNames.OUTPUT_KEYWORD))) {
 					throw new UnsupportedOperationException(
 							LispNames.WITH_OPEN_FILE + " :direction must be the literal :input or :output");
 				}
 				direction = dir.name();
 			}
-			else if (specParts.get(i) instanceof LispSymbol key && LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name())) {
+			else if (specParts.get(i) instanceof LispSymbol key
+					&& LispNames.keywordMatches(key.name(), LispNames.ELEMENT_TYPE_KEYWORD)) {
 				if (i + 1 >= specParts.size()) {
 					throw new UnsupportedOperationException(LispNames.WITH_OPEN_FILE
 							+ " :element-type must be the literal 'character or '(unsigned-byte 8)");
 				}
 				binary = isBinaryElementTypeLiteral(specParts.get(i + 1));
 			}
-			else if (specParts.get(i) instanceof LispSymbol key && (":external-format".equals(key.name())
-					|| ":if-exists".equals(key.name()) || ":if-does-not-exist".equals(key.name()))) {
+			else if (specParts.get(i) instanceof LispSymbol key
+					&& (LispNames.keywordMatches(key.name(), ":external-format")
+							|| LispNames.keywordMatches(key.name(), ":if-exists")
+							|| LispNames.keywordMatches(key.name(), ":if-does-not-exist"))) {
 				// Accepted and dropped like open's keyword normalization -- but only
 				// with the value the native behavior already implements (UTF-8, the
 				// create/supersede defaults); any other value must not be silently
 				// reinterpreted.
 				if (i + 1 >= specParts.size() || !ignorableOpenOptionValue(key.name(), specParts.get(i + 1))) {
-					throw new UnsupportedOperationException(LispNames.WITH_OPEN_FILE + " " + key.name()
-							+ " supports only the native default value (" + (":external-format".equals(key.name())
-									? ":utf-8" : ":if-exists".equals(key.name()) ? ":supersede" : ":create or :error")
+					throw new UnsupportedOperationException(LispNames.WITH_OPEN_FILE + " "
+							+ LispNames.foldKeyword(key.name()) + " supports only the native default value ("
+							+ (LispNames.keywordMatches(key.name(), ":external-format") ? ":utf-8"
+									: LispNames.keywordMatches(key.name(), ":if-exists") ? ":supersede"
+											: ":create or :error")
 							+ ")");
 				}
 			}
@@ -4630,10 +4655,12 @@ public final class LispMacroExpander {
 		if (!(value instanceof LispSymbol sym)) {
 			return false;
 		}
-		return switch (option) {
-			case ":external-format" -> ":utf-8".equals(sym.name()) || ":default".equals(sym.name());
-			case ":if-exists" -> ":supersede".equals(sym.name());
-			case ":if-does-not-exist" -> ":create".equals(sym.name()) || ":error".equals(sym.name());
+		return switch (LispNames.foldKeyword(option)) {
+			case ":external-format" ->
+				LispNames.keywordMatches(sym.name(), ":utf-8") || LispNames.keywordMatches(sym.name(), ":default");
+			case ":if-exists" -> LispNames.keywordMatches(sym.name(), ":supersede");
+			case ":if-does-not-exist" ->
+				LispNames.keywordMatches(sym.name(), ":create") || LispNames.keywordMatches(sym.name(), ":error");
 			default -> false;
 		};
 	}
@@ -5182,10 +5209,12 @@ public final class LispMacroExpander {
 		LispVal size = parts.get(1);
 		LispVal init = new LispChar(' ');
 		for (int k = 2; k < parts.size(); k += 2) {
-			if (parts.get(k) instanceof LispSymbol key && LispNames.INITIAL_ELEMENT_KEYWORD.equals(key.name())) {
+			if (parts.get(k) instanceof LispSymbol key
+					&& LispNames.keywordMatches(key.name(), LispNames.INITIAL_ELEMENT_KEYWORD)) {
 				init = parts.get(k + 1);
 			}
-			else if (parts.get(k) instanceof LispSymbol key && LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name())) {
+			else if (parts.get(k) instanceof LispSymbol key
+					&& LispNames.keywordMatches(key.name(), LispNames.ELEMENT_TYPE_KEYWORD)) {
 				// element-type is parsed and ignored (single string representation).
 			}
 			else {
@@ -5247,7 +5276,7 @@ public final class LispMacroExpander {
 			}
 			// A nil bound keeps its default (a runtime nil through the or-wrapper), as in
 			// the interpreter.
-			switch (key.name()) {
+			switch (LispNames.foldKeyword(key.name())) {
 				case LispNames.START1_KEYWORD -> s1 = boundOrDefault(parts.get(k + 1), s1);
 				case LispNames.END1_KEYWORD -> e1 = boundOrDefault(parts.get(k + 1), e1);
 				case LispNames.START2_KEYWORD -> s2 = boundOrDefault(parts.get(k + 1), s2);
@@ -5609,7 +5638,7 @@ public final class LispMacroExpander {
 				throw new UnsupportedOperationException(
 						LispNames.WRITE_STRING + " supports only literal keyword arguments: " + cons.print());
 			}
-			switch (key.name()) {
+			switch (LispNames.foldKeyword(key.name())) {
 				case ":start" -> startExpr = parts.get(i + 1);
 				case ":end" -> endExpr = parts.get(i + 1);
 				default -> throw new UnsupportedOperationException(
@@ -5653,10 +5682,12 @@ public final class LispMacroExpander {
 		String seqVar = LispNames.READ_SEQUENCE.equals(op) ? "__rseq_seq" : "__wseq_seq";
 		LispVal end = callOf(LispNames.LENGTH, new LispSymbol(seqVar));
 		for (int i = 3; i < parts.size(); i += 2) {
-			if (parts.get(i) instanceof LispSymbol key && LispNames.START_KEYWORD.equals(key.name())) {
+			if (parts.get(i) instanceof LispSymbol key
+					&& LispNames.keywordMatches(key.name(), LispNames.START_KEYWORD)) {
 				start = parts.get(i + 1);
 			}
-			else if (parts.get(i) instanceof LispSymbol key && LispNames.END_KEYWORD.equals(key.name())) {
+			else if (parts.get(i) instanceof LispSymbol key
+					&& LispNames.keywordMatches(key.name(), LispNames.END_KEYWORD)) {
 				end = parts.get(i + 1);
 			}
 			else {
@@ -5762,7 +5793,7 @@ public final class LispMacroExpander {
 				List<LispVal> optParts = optCons.toList();
 				String optName = optSym.name();
 				LispVal optValue = optParts.size() > 1 ? optParts.get(1) : LispNil.INSTANCE;
-				switch (optName) {
+				switch (LispNames.foldKeyword(optName)) {
 					case ":constructor" -> {
 						if (optParts.size() > 3) {
 							throw new UnsupportedOperationException(
@@ -5829,6 +5860,12 @@ public final class LispMacroExpander {
 		String prefix = qn == null ? "" : qn.pkg() + "::";
 		String base = qn == null ? structName : qn.member();
 		String concName = concNameGiven ? (concNameOverride == null ? "" : concNameOverride) : base + "-";
+		// Synthesized affixes follow the base name's case: an upcased-reader struct PT
+		// gets MAKE-PT/PT-P/COPY-PT (matching the call sites the reader upcases), while
+		// a lowercase-authored internal struct keeps make-/-p/copy-.
+		String makeAffix = affixFor("make-", base);
+		String pAffix = affixFor("-p", base);
+		String copyAffix = affixFor("copy-", base);
 		LispVal quotedTag = listToCons(
 				List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%struct-" + structName)));
 		List<LispSymbol> slotSyms = new java.util.ArrayList<>();
@@ -5854,8 +5891,8 @@ public final class LispMacroExpander {
 				// Slot options after the initform: :type and :read-only are parsed and
 				// ignored (declarations are no-ops); anything else is a hard error.
 				for (int i = 2; i + 1 < specParts.size(); i += 2) {
-					if (!(specParts.get(i) instanceof LispSymbol opt)
-							|| (!":type".equals(opt.name()) && !":read-only".equals(opt.name()))) {
+					if (!(specParts.get(i) instanceof LispSymbol opt) || (!LispNames.keywordMatches(opt.name(), ":type")
+							&& !LispNames.keywordMatches(opt.name(), ":read-only"))) {
 						throw new IllegalArgumentException(
 								LispNames.DEFSTRUCT + " slot option is not supported: " + spec.print());
 					}
@@ -5886,7 +5923,7 @@ public final class LispMacroExpander {
 		listCall.add(quotedTag);
 		listCall.addAll(slotSyms);
 		if (!suppressConstructor) {
-			String constructorName = customConstructor != null ? customConstructor : prefix + "make-" + base;
+			String constructorName = customConstructor != null ? customConstructor : prefix + makeAffix + base;
 			if (boaLambdaList != null) {
 				// (defun name (<boa lambda list>) (list '%struct-<name> value...)):
 				// a slot bound by the lambda list reads that parameter, the rest
@@ -5915,19 +5952,23 @@ public final class LispMacroExpander {
 			.of(new LispSymbol(LispNames.EQUAL), listToCons(List.of(new LispSymbol(LispNames.CAR), obj)), quotedTag)),
 				LispNil.INSTANCE);
 		if (!suppressPredicate) {
-			String predicateName = customPredicate != null ? customPredicate : prefix + base + "-p";
+			String predicateName = customPredicate != null ? customPredicate : prefix + base + pAffix;
 			forms.add(listToCons(
 					List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(predicateName), params, tagCheck)));
 		}
 		// (defun copy-<base> (__struct) (copy-list __struct))
 		if (!suppressCopier) {
-			String copierName = customCopier != null ? customCopier : prefix + "copy-" + base;
+			String copierName = customCopier != null ? customCopier : prefix + copyAffix + base;
 			forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(copierName), params,
 					listToCons(List.of(new LispSymbol(LispNames.COPY_LIST), obj)))));
 		}
 		// (defun <conc-name><slot> (__struct) (nth <position> __struct))
+		// The slot part case-matches the struct base: a slot named after a CL symbol
+		// (md5's `block`) folds to lowercase while the upcase-read struct name stays
+		// upper, and the accessor must match its fully-upcased call sites
+		// (MD5-STATE-BLOCK).
 		for (int i = 0; i < slotSyms.size(); i++) {
-			String accessor = prefix + concName + slotBases.get(i);
+			String accessor = prefix + concName + affixFor(slotBases.get(i), base);
 			forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params,
 					listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i + 1), obj)))));
 			structAccessors.put(accessor, i + 1);
@@ -6134,8 +6175,9 @@ public final class LispMacroExpander {
 			listCall.add(new LispSymbol(slot.name()));
 		}
 		List<LispVal> forms = new java.util.ArrayList<>();
-		forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(prefix + "%make-" + base),
-				lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList), listToCons(listCall))));
+		forms.add(listToCons(
+				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(prefix + affixFor("%make-", base) + base),
+						lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList), listToCons(listCall))));
 		// Reader/accessor METHODS for the class's OWN slots (inherited slots keep the
 		// methods their defining class generated; positions are shared and the class
 		// test covers descendants). A reader is a defmethod, not a plain defun, because
@@ -6202,7 +6244,7 @@ public final class LispMacroExpander {
 							LispNames.DEFCLASS + " expects a keyword slot option, got " + specParts.get(i).print());
 				}
 				LispVal optValue = specParts.get(i + 1);
-				switch (keySym.name()) {
+				switch (LispNames.foldKeyword(keySym.name())) {
 					case ":initarg" -> {
 						if (!(optValue instanceof LispSymbol kw && kw.isKeyword())) {
 							throw new IllegalArgumentException(
@@ -6272,7 +6314,8 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(LispNames.MAKE_INSTANCE + ": unknown class " + classSym.name());
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
-		String ctor = qn == null ? "%make-" + info.name() : qn.pkg() + "::%make-" + qn.member();
+		String ctor = qn == null ? affixFor("%make-", info.name()) + info.name()
+				: qn.pkg() + "::" + affixFor("%make-", qn.member()) + qn.member();
 		// CL has ONE initialize-instance generic; the registry keys generics by their
 		// package-qualified spelling, so match by plain name (a make-instance in any
 		// package must find cl-ppcre::initialize-instance).
@@ -6575,7 +6618,9 @@ public final class LispMacroExpander {
 		java.util.Map<Integer, List<String>> byPosition = new java.util.LinkedHashMap<>();
 		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
 			for (int i = 0; i < info.slots().size(); i++) {
-				if (info.slots().get(i).baseName().equals(baseName)) {
+				// Case-insensitive: the canonical Java-side name is lowercase while an
+				// upcase-read user condition's slots register upcased.
+				if (info.slots().get(i).baseName().equalsIgnoreCase(baseName)) {
 					byPosition.computeIfAbsent(i + 1, k -> new java.util.ArrayList<>()).add("%class-" + info.name());
 					break;
 				}
@@ -9675,7 +9720,8 @@ public final class LispMacroExpander {
 			return null;
 		}
 		for (int i = 0; i + 1 < items.size(); i += 2) {
-			if (items.get(i) instanceof LispSymbol k && k.isKeyword() && ":format-control".equals(k.name())) {
+			if (items.get(i) instanceof LispSymbol k && k.isKeyword()
+					&& LispNames.keywordMatches(k.name(), ":format-control")) {
 				return items.get(i + 1);
 			}
 		}
@@ -9780,13 +9826,16 @@ public final class LispMacroExpander {
 		List<LispVal> ctorParts = new java.util.ArrayList<>();
 		ctorParts.add(new LispSymbol(LispNames.LIST));
 		if (cls != null && pairs) {
+			// Initarg matching is case-insensitive like every keyword-parameter match:
+			// the reader upcases user initargs while a lowercase-authored (or seeded)
+			// condition's slots keep lowercase initarg keywords.
 			java.util.Map<String, LispVal> byInitarg = new java.util.LinkedHashMap<>();
 			for (int i = 0; i + 1 < items.size(); i += 2) {
-				byInitarg.put(((LispSymbol) items.get(i)).name(), items.get(i + 1));
+				byInitarg.put(LispNames.foldKeyword(((LispSymbol) items.get(i)).name()), items.get(i + 1));
 			}
 			ctorParts.add(listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("%class-" + cls.name()))));
 			for (ClosRegistry.SlotSpec slot : cls.slots()) {
-				LispVal supplied = byInitarg.get(slot.initargKeyword());
+				LispVal supplied = byInitarg.get(LispNames.foldKeyword(slot.initargKeyword()));
 				ctorParts.add(supplied != null ? supplied : slot.initform());
 			}
 		}
@@ -10136,7 +10185,7 @@ public final class LispMacroExpander {
 		LispVal fpExpr = null;
 		for (int i = 3; i + 1 < parts.size(); i += 2) {
 			if (parts.get(i) instanceof LispSymbol kw) {
-				switch (kw.name()) {
+				switch (LispNames.foldKeyword(kw.name())) {
 					case LispNames.INITIAL_ELEMENT_KEYWORD -> initExpr = parts.get(i + 1);
 					case LispNames.FILL_POINTER_KEYWORD -> fpExpr = parts.get(i + 1);
 					case LispNames.DISPLACED_TO_KEYWORD ->
@@ -11127,7 +11176,7 @@ public final class LispMacroExpander {
 		}
 		LispVal typeArg = LispNil.INSTANCE;
 		for (int i = 2; i + 1 < spec.size(); i += 2) {
-			if (spec.get(i) instanceof LispSymbol kw && ":type".equals(kw.name())) {
+			if (spec.get(i) instanceof LispSymbol kw && LispNames.keywordMatches(kw.name(), ":type")) {
 				typeArg = spec.get(i + 1);
 			}
 		}
@@ -11423,7 +11472,10 @@ public final class LispMacroExpander {
 	 */
 	private static String plainTypeName(LispSymbol sym) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-		return qn == null ? sym.name() : qn.member();
+		String name = qn == null ? sym.name() : qn.member();
+		// Keyword names fold for matching (:BEFORE is :before): every caller compares
+		// against canonical lowercase clause/qualifier names.
+		return name.startsWith(":") ? LispNames.foldKeyword(name) : name;
 	}
 
 	/**
@@ -11797,7 +11849,7 @@ public final class LispMacroExpander {
 		LispVal defaultInitargs = null;
 		for (int i = 4; i < parts.size(); i++) {
 			if (parts.get(i) instanceof LispCons opt && opt.car() instanceof LispSymbol optSym) {
-				switch (optSym.name()) {
+				switch (LispNames.foldKeyword(optSym.name())) {
 					case ":report" -> {
 						if (!(opt.cdr() instanceof LispCons reportCell)) {
 							throw new IllegalArgumentException(
@@ -12025,7 +12077,7 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException("make-condition expects a condition type: " + cons.print());
 		}
 		for (int i = 2; i + 1 < parts.size(); i += 2) {
-			if (parts.get(i) instanceof LispSymbol key && ":format-control".equals(key.name())) {
+			if (parts.get(i) instanceof LispSymbol key && LispNames.keywordMatches(key.name(), ":format-control")) {
 				return parts.get(i + 1);
 			}
 		}
@@ -12092,7 +12144,8 @@ public final class LispMacroExpander {
 			inner.add(parts.get(1));
 		}
 		for (int i = 2; i + 1 < parts.size(); i += 2) {
-			if (parts.get(i) instanceof LispSymbol kw && LispNames.INITIAL_CONTENTS_KEYWORD.equals(kw.name())) {
+			if (parts.get(i) instanceof LispSymbol kw
+					&& LispNames.keywordMatches(kw.name(), LispNames.INITIAL_CONTENTS_KEYWORD)) {
 				contents = parts.get(i + 1);
 			}
 			else {
@@ -12146,7 +12199,7 @@ public final class LispMacroExpander {
 			if (!(parts.get(i) instanceof LispSymbol kw)) {
 				return null;
 			}
-			switch (kw.name()) {
+			switch (LispNames.foldKeyword(kw.name())) {
 				case LispNames.ELEMENT_TYPE_KEYWORD -> elementType = parts.get(i + 1);
 				case LispNames.INITIAL_ELEMENT_KEYWORD -> initialElement = parts.get(i + 1);
 				default -> {
@@ -12210,7 +12263,7 @@ public final class LispMacroExpander {
 			if (!(parts.get(i) instanceof LispSymbol kw)) {
 				return null;
 			}
-			switch (kw.name()) {
+			switch (LispNames.foldKeyword(kw.name())) {
 				case LispNames.ELEMENT_TYPE_KEYWORD -> elementType = parts.get(i + 1);
 				case LispNames.INITIAL_CONTENTS_KEYWORD -> contents = parts.get(i + 1);
 				default -> {

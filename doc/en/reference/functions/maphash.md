@@ -11,5 +11,5 @@ Calls `function` once for each entry in `table`, passing the key and value as it
 ```
 
 ```
-(a 1)
+(A 1)
 ```

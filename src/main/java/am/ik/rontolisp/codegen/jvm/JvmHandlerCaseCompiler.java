@@ -45,7 +45,7 @@ final class JvmHandlerCaseCompiler {
 						LispNames.HANDLER_CASE + " expects (type (var) body...) clauses: " + parts.get(i).print());
 			}
 			List<LispVal> clauseParts = clause.toList();
-			if (clause.car() instanceof LispSymbol head && ":no-error".equals(head.name())) {
+			if (clause.car() instanceof LispSymbol head && LispNames.keywordMatches(head.name(), ":no-error")) {
 				noErrorClause = clauseParts;
 			}
 			else {

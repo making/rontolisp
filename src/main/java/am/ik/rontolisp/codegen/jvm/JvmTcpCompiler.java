@@ -46,7 +46,7 @@ final class JvmTcpCompiler {
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 				if (given == 4) {
 					if (!(args.get(3) instanceof LispSymbol option) || !option.isKeyword()
-							|| !option.name().equals(":insecure")) {
+							|| !LispNames.keywordMatches(option.name(), ":insecure")) {
 						throw new UnsupportedOperationException(
 								member + " expects :insecure, got: " + args.get(3).print());
 					}

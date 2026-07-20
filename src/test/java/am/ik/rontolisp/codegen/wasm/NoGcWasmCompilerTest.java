@@ -239,7 +239,7 @@ class NoGcWasmCompilerTest {
 				(defun f (n) (setq g (+ n 1)))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
 				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("setq target 'g'")
+			.hasMessageContaining("setq target 'G'")
 			.hasMessageContaining("not a parameter or let binding");
 	}
 
@@ -294,7 +294,7 @@ class NoGcWasmCompilerTest {
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (+ n missing))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
-				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("missing");
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("MISSING");
 	}
 
 	@Test

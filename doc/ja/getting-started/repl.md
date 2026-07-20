@@ -14,7 +14,7 @@ rontolisp
 > (* 3 (+ 4 5))
 27
 > (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
-fact
+FACT
 > (fact 10)
 3628800
 > (quit)

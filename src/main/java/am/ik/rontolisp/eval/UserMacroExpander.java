@@ -569,7 +569,8 @@ public final class UserMacroExpander {
 					List<LispVal> newParts = new ArrayList<>(parts);
 					for (int i = 3; i < parts.size(); i++) {
 						if (parts.get(i) instanceof LispCons opt && opt.isProperList()
-								&& opt.car() instanceof LispSymbol key && ":method".equals(key.name())) {
+								&& opt.car() instanceof LispSymbol key
+								&& LispNames.keywordMatches(key.name(), ":method")) {
 							List<LispVal> mp = opt.toList();
 							// (:method [qualifier] (lambda-list) body...)
 							int llIndex = mp.size() > 1 && mp.get(1) instanceof LispSymbol ? 2 : 1;
@@ -600,7 +601,7 @@ public final class UserMacroExpander {
 								newSlot.add(slotParts.get(i));
 								if (i + 1 < slotParts.size()) {
 									boolean initform = slotParts.get(i) instanceof LispSymbol key
-											&& ":initform".equals(key.name());
+											&& LispNames.keywordMatches(key.name(), ":initform");
 									newSlot.add(initform ? expandAll(slotParts.get(i + 1), macroEval)
 											: slotParts.get(i + 1));
 								}

@@ -122,9 +122,9 @@
            (slash (position #\/ rest))
            (authority (if slash (subseq rest 0 slash) rest))
            (path (if slash (subseq rest slash) "/"))
-           (body (getf options :body))
+           (body (getf options :BODY))
            (fields (%http:fields-new)))
-      (%http-add-headers fields (getf options :headers))
+      (%http-add-headers fields (getf options :HEADERS))
       (let* ((bodypair (if body (%http:body-stream-new) nil))
              (trailers (%http:trailers-future-new))
              (reqpair (%http:request-new fields
@@ -132,7 +132,7 @@
                                          (car trailers)
                                          nil))
              (req (car reqpair)))
-        (%http:request-set-method req (%fetch-method-variant (getf options :method)))
+        (%http:request-set-method req (%fetch-method-variant (getf options :METHOD)))
         (%http:request-set-scheme req (%fetch-scheme-keyword url colon))
         (%http:request-set-authority req authority)
         (%http:request-set-path-with-query req path)
@@ -189,19 +189,22 @@
     acc))
 
 (defun %serve-method-string (m)
-  ;; request.get-method returns the `method` variant: a keyword (:get/:post/...) for a
-  ;; known method, or (:other . "FOO") for a custom one. The request plist wants an
-  ;; upper-case method string, matching the interpreter/JVM backends.
+  ;; request.get-method returns the `method` variant: a payload-less keyword for a
+  ;; known method, or (:other . "FOO") for a custom one. The lifted case name reads
+  ;; UPCASED on the component backend (:GET/:POST/...), so match both spellings --
+  ;; this file is case-preserving (Features.INTERNAL), so nothing folds :get to :GET
+  ;; for us; the interpreter and JVM run a Java-backed server and never reach here.
+  ;; The request plist wants an upper-case method string, matching those backends.
   (cond ((consp m) (cdr m))
-        ((eq m :get) "GET")
-        ((eq m :head) "HEAD")
-        ((eq m :post) "POST")
-        ((eq m :put) "PUT")
-        ((eq m :delete) "DELETE")
-        ((eq m :connect) "CONNECT")
-        ((eq m :options) "OPTIONS")
-        ((eq m :trace) "TRACE")
-        ((eq m :patch) "PATCH")
+        ((or (eq m :get) (eq m :GET)) "GET")
+        ((or (eq m :head) (eq m :HEAD)) "HEAD")
+        ((or (eq m :post) (eq m :POST)) "POST")
+        ((or (eq m :put) (eq m :PUT)) "PUT")
+        ((or (eq m :delete) (eq m :DELETE)) "DELETE")
+        ((or (eq m :connect) (eq m :CONNECT)) "CONNECT")
+        ((or (eq m :options) (eq m :OPTIONS)) "OPTIONS")
+        ((or (eq m :trace) (eq m :TRACE)) "TRACE")
+        ((or (eq m :patch) (eq m :PATCH)) "PATCH")
         (t "GET")))
 
 (defun %serve-read-request (request)

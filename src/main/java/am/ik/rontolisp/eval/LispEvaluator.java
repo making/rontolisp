@@ -294,6 +294,19 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Folds a runtime-supplied symbol name ({@code intern}/{@code find-symbol}) through
+	 * the reader's canonical fold. {@code (intern "TIME")} names the standard
+	 * {@code time} -- the same answer Common Lisp's upcase reader world gives -- which is
+	 * what makes the {@code (intern (string-upcase ...))} macro name-synthesis idiom line
+	 * up with folded body references.
+	 * @param name the runtime symbol name
+	 * @return the canonical name
+	 */
+	private static String foldRuntimeSymbolName(String name) {
+		return am.ik.rontolisp.UpcaseSymbols.canonicalize(name);
+	}
+
+	/**
 	 * Sets the base directory against which a top-level relative {@code load} path
 	 * resolves -- normally the directory of the entry file being interpreted, so that a
 	 * program run from anywhere can {@code (load "sibling.lisp")} its companions (like
@@ -550,7 +563,7 @@ public final class LispEvaluator {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
 			}
-			String name = str.value();
+			String name = foldRuntimeSymbolName(str.value());
 			boolean known = PackageRegistry.isClSymbol(name) || (!name.isEmpty() && name.charAt(0) == ':')
 					|| this.userMacros.containsKey(name) || this.globalEnv.lookupFunctionOrNull(name) != null
 					|| this.globalEnv.lookupOrNull(name) != null;
@@ -575,7 +588,7 @@ public final class LispEvaluator {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
 			}
-			return new LispSymbol(this.packageResolver.internSpelling(str.value()));
+			return new LispSymbol(this.packageResolver.internSpelling(foldRuntimeSymbolName(str.value())));
 		}));
 		// error / signal / warn are real CL functions (cl-base64 signals via
 		// (apply #'error args)), so they get function values that rebuild the literal
@@ -704,7 +717,7 @@ public final class LispEvaluator {
 				return reduceValues(args.get(0), first.car(), first.cdr());
 			}
 			if (args.size() == 4 && args.get(2) instanceof LispSymbol kw
-					&& LispNames.INITIAL_VALUE_KEYWORD.equals(kw.name())) {
+					&& LispNames.keywordMatches(kw.name(), LispNames.INITIAL_VALUE_KEYWORD)) {
 				return reduceValues(args.get(0), args.get(3), Environment.seqAsList(args.get(1)));
 			}
 			throw new LispEvalException(
@@ -887,8 +900,8 @@ public final class LispEvaluator {
 			}
 			LispVal keyFn = null;
 			for (int i = 2; i < args.size(); i += 2) {
-				if (!(args.get(i) instanceof LispSymbol kw) || !LispNames.KEY_KEYWORD.equals(kw.name())
-						|| i + 1 >= args.size()) {
+				if (!(args.get(i) instanceof LispSymbol kw)
+						|| !LispNames.keywordMatches(kw.name(), LispNames.KEY_KEYWORD) || i + 1 >= args.size()) {
 					throw new LispEvalException(
 							LispNames.STABLE_SORT + " expects keyword arguments :key, got: " + args.get(i).print());
 				}
@@ -954,7 +967,8 @@ public final class LispEvaluator {
 					path = str.value();
 				}
 				else {
-					path = name + ".lisp";
+					// Downcased like ASDF's coerce-name (see LoadInliner).
+					path = name.toLowerCase(java.util.Locale.ROOT) + ".lisp";
 				}
 				// The required file is expected to (provide name) itself, which marks
 				// the module; requiring loads the file either way (like Common Lisp).
@@ -1037,7 +1051,7 @@ public final class LispEvaluator {
 				}
 			}
 			else {
-				for (LispVal form : LispReader.readAllFromString(source)) {
+				for (LispVal form : LispReader.readAllFromString(source, Features.INTERPRETER)) {
 					eval(form);
 				}
 			}
@@ -1321,8 +1335,10 @@ public final class LispEvaluator {
 			searchDirs.add(baseDir == null ? "" : baseDir);
 			searchDirs.addAll(this.systemPath);
 			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, this.sourceLoader);
+			// .asd system definitions are data matched against lowercase spellings, so
+			// they read case-preserving (Features.INTERNAL), not with the upcase fold.
 			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(),
-					Features.INTERPRETER)) {
+					Features.INTERNAL)) {
 				this.asdfSystems.putIfAbsent(defined.name(), defined);
 			}
 			system = this.asdfSystems.get(name);
@@ -1368,7 +1384,7 @@ public final class LispEvaluator {
 	private LispVal evalDefsystem(LispCons cons) {
 		String baseDir = this.loadDirStack.peekLast();
 		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir,
-				Features.INTERPRETER);
+				Features.INTERNAL);
 		this.asdfSystems.put(system.name(), system);
 		return new LispSymbol(system.name());
 	}
@@ -3442,7 +3458,7 @@ public final class LispEvaluator {
 				throw new LispEvalException(
 						LispNames.HANDLER_CASE + " expects (type (var) body...) clauses: " + parts.get(i).print());
 			}
-			if (clause.car() instanceof LispSymbol head && ":no-error".equals(head.name())) {
+			if (clause.car() instanceof LispSymbol head && LispNames.keywordMatches(head.name(), ":no-error")) {
 				noErrorClause = clause;
 			}
 			else {
@@ -3703,12 +3719,12 @@ public final class LispEvaluator {
 			}
 			LispVal value = args.get(i + 1);
 			boolean absent = value instanceof LispNil;
-			switch (kw.name()) {
+			switch (LispNames.foldKeyword(kw.name())) {
 				case LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD -> {
 					if (mode != PositionScanMode.ITEM) {
 						throw new LispEvalException(opName + " does not take " + kw.name());
 					}
-					if (LispNames.TEST_KEYWORD.equals(kw.name())) {
+					if (LispNames.keywordMatches(kw.name(), LispNames.TEST_KEYWORD)) {
 						test = absent ? null : value;
 					}
 					else {
@@ -4191,7 +4207,7 @@ public final class LispEvaluator {
 	// default designator, such as :key).
 	private static @Nullable LispVal optionalKeywordArg(List<LispVal> args, int start, String keyword) {
 		for (int i = start; i + 1 < args.size(); i += 2) {
-			if (args.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
+			if (args.get(i) instanceof LispSymbol kw && LispNames.keywordMatches(kw.name(), keyword)) {
 				return args.get(i + 1);
 			}
 		}
@@ -4204,8 +4220,8 @@ public final class LispEvaluator {
 	// in LispMacroExpander.
 	private static void requireTestKeyKeywords(String name, List<LispVal> args, int start) {
 		for (int i = start; i < args.size(); i += 2) {
-			if (!(args.get(i) instanceof LispSymbol kw)
-					|| (!LispNames.TEST_KEYWORD.equals(kw.name()) && !LispNames.KEY_KEYWORD.equals(kw.name()))) {
+			if (!(args.get(i) instanceof LispSymbol kw) || (!LispNames.keywordMatches(kw.name(), LispNames.TEST_KEYWORD)
+					&& !LispNames.keywordMatches(kw.name(), LispNames.KEY_KEYWORD))) {
 				throw new LispEvalException(
 						name + " expects keyword arguments :test/:key, got: " + args.get(i).print());
 			}

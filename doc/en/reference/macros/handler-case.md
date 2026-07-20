@@ -8,7 +8,7 @@ Evaluates `expression`; when an error is signaled during it, control transfers t
 
 ```lisp
 (handler-case (error "boom")
-  (error (e) (list :caught (nth 1 e)))) ; => (:caught "boom")
+  (error (e) (list :caught (nth 1 e)))) ; => (:CAUGHT "boom")
 ```
 
 Typed conditions dispatch through the class hierarchy, first matching clause wins:
@@ -17,11 +17,11 @@ Typed conditions dispatch through the class hierarchy, first matching clause win
 (define-condition low-fuel (warning) ((level :initarg :level :reader low-fuel-level)))
 (handler-case (error 'low-fuel :level 5)
   (error (e) :error)
-  (warning (w) (list :warned (low-fuel-level w)))) ; => (:warned 5)
+  (warning (w) (list :warned (low-fuel-level w)))) ; => (:WARNED 5)
 ```
 
 ```lisp
 (handler-case (+ 1 2)
   (error (e) :err)
-  (:no-error (v) (list :ok v))) ; => (:ok 3)
+  (:no-error (v) (list :ok v))) ; => (:OK 3)
 ```

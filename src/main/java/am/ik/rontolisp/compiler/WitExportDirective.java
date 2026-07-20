@@ -171,7 +171,7 @@ public final class WitExportDirective {
 				throw new UnsupportedOperationException("Missing value for " + keyword.name() + " in " + form.print());
 			}
 			LispVal value = items.get(i + 1);
-			if (":world".equals(keyword.name())) {
+			if (LispNames.keywordMatches(keyword.name(), ":world")) {
 				world = worldName(value, form);
 			}
 			else {
@@ -188,8 +188,10 @@ public final class WitExportDirective {
 		return switch (value) {
 			case LispString str -> str.value();
 			case LispSymbol sym when !sym.isKeyword() -> {
+				// A SYMBOL world designator lowercases (WIT worlds are lower-kebab and
+				// the reader upcases unescaped symbols); a string stays verbatim.
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				yield qn == null ? sym.name() : qn.member();
+				yield (qn == null ? sym.name() : qn.member()).toLowerCase(java.util.Locale.ROOT);
 			}
 			default -> throw new UnsupportedOperationException(
 					"rontolisp:wit-export :world expects a world name in " + form.print() + ", got: " + value.print());
@@ -324,7 +326,19 @@ public final class WitExportDirective {
 			throw error(witPath, locations, item,
 					"export 'run' collides with the component's wasi:cli/run entry point; rename it in the world");
 		}
-		List<String> lambdaList = defuns.lambdaList(name);
+		// The reader upcases user defuns while WIT export names are lower-kebab: try
+		// the literal spelling first (lowercase-authored sources), then the upcased
+		// twin. The emitted wasm-export quotes the ACTUAL defun spelling; the export
+		// label still derives lowercased, so the component surface keeps the WIT name.
+		String defunName = name;
+		List<String> lambdaList = defuns.lambdaList(defunName);
+		if (lambdaList == null) {
+			String upper = name.toUpperCase(java.util.Locale.ROOT);
+			lambdaList = defuns.lambdaList(upper);
+			if (lambdaList != null) {
+				defunName = upper;
+			}
+		}
 		if (lambdaList == null) {
 			throw error(witPath, locations, item,
 					"export '" + name + "' has no matching (defun " + name + " ...) in the program");
@@ -356,7 +370,7 @@ public final class WitExportDirective {
 
 		List<LispVal> out = new ArrayList<>();
 		out.add(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_EXPORT)));
-		out.add(quote(new LispSymbol(name)));
+		out.add(quote(new LispSymbol(defunName)));
 		out.add(new LispSymbol(":params"));
 		out.add(quote(list(params)));
 		out.add(new LispSymbol(":param-names"));

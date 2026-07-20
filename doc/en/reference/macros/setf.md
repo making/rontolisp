@@ -20,5 +20,5 @@ Beyond the built-in places, a `defstruct` accessor, a CLOS `:accessor`, and a us
 (defvar *mode* :xml)
 (defun (setf my-mode) (m) (setq *mode* m))
 (setf (my-mode) :html5)
-*mode* ; => :html5
+*mode* ; => :HTML5
 ```

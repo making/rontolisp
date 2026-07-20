@@ -697,6 +697,44 @@ final class JvmEvalRuntimeBuilder {
 	 * {@code areturn}; clobbers {@code tmpSlot}.
 	 */
 	private void emitFunctionLookupReturn(Asm a, int nameSlot, int tmpSlot) {
+		ConstantPool.MethodrefConstant toLowerCase = stringCaseRef("toLowerCase");
+		ConstantPool.MethodrefConstant toUpperCase = stringCaseRef("toUpperCase");
+		// Probe the exact spelling first.
+		emitFunctionProbeReturn(a, nameSlot, tmpSlot);
+		// One case-flip retry: compiled references read upcased (the reader premise)
+		// while runtime-read definitions are case-preserved -- and vice versa for a
+		// runtime-read reference to a compiled definition. Flip to the lowercase
+		// spelling (or, when already lowercase, the uppercase one) and probe again.
+		int realMiss = a.label();
+		int flipped = a.label();
+		a.aload(nameSlot);
+		a.checkcast(this.k.stringClass());
+		a.invokevirtual(toLowerCase);
+		a.astore(tmpSlot);
+		a.aload(tmpSlot);
+		a.aload(nameSlot);
+		a.invokevirtual(this.k.objectEquals());
+		a.branch(Opcode.IFEQ, flipped);
+		a.aload(nameSlot);
+		a.checkcast(this.k.stringClass());
+		a.invokevirtual(toUpperCase);
+		a.astore(tmpSlot);
+		a.aload(tmpSlot);
+		a.aload(nameSlot);
+		a.invokevirtual(this.k.objectEquals());
+		a.branch(Opcode.IFNE, realMiss);
+		a.bind(flipped);
+		a.aload(tmpSlot);
+		a.astore(nameSlot);
+		emitFunctionProbeReturn(a, nameSlot, tmpSlot);
+		a.bind(realMiss);
+		a.aconstNull();
+		a.areturn();
+	}
+
+	// One probe pass of the function namespace: a runtime defun binding in _fenv, then
+	// the compiled function registry; every hit returns, a miss falls through.
+	private void emitFunctionProbeReturn(Asm a, int nameSlot, int tmpSlot) {
 		int reg = a.label();
 		a.aload(nameSlot);
 		a.getstatic(this.k.fenvField());
@@ -727,8 +765,13 @@ final class JvmEvalRuntimeBuilder {
 		a.aastore();
 		a.areturn();
 		a.bind(miss);
-		a.aconstNull();
-		a.areturn();
+	}
+
+	// A java/lang/String zero-argument case-conversion methodref.
+	private ConstantPool.MethodrefConstant stringCaseRef(String method) {
+		return this.k.cp()
+			.addMethodref(this.k.stringClass(), this.k.cp()
+				.addNameAndType(this.k.cp().addUtf8(method), this.k.cp().addUtf8("()Ljava/lang/String;")));
 	}
 
 	/**
@@ -1527,9 +1570,45 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(global);
 		// global lookup; Lisp-2: a bare symbol resolves the variable namespace only,
-		// never the function registry. An unbound symbol evaluates to itself.
+		// never the function registry. An unbound symbol retries the case-flipped
+		// spelling once (compiled references read upcased while runtime-read
+		// definitions are case-preserved, and vice versa), then evaluates to ITSELF
+		// under its original spelling.
+		ConstantPool.MethodrefConstant varToLowerCase = stringCaseRef("toLowerCase");
+		ConstantPool.MethodrefConstant varToUpperCase = stringCaseRef("toUpperCase");
 		int self = a.label();
+		int varFlipped = a.label();
+		int retry = a.label();
 		a.aload(VAL);
+		a.getstatic(this.k.genvField());
+		a.invokestatic(this.k.envLookupRef());
+		a.astore(TMP);
+		a.aload(TMP);
+		a.branch(Opcode.IFNULL, retry);
+		a.aload(TMP);
+		a.checkcast(this.k.objectArrayClass());
+		a.iconst(1);
+		a.aaload();
+		a.areturn();
+		a.bind(retry);
+		a.aload(VAL);
+		a.checkcast(this.k.stringClass());
+		a.invokevirtual(varToLowerCase);
+		a.astore(TMP);
+		a.aload(TMP);
+		a.aload(VAL);
+		a.invokevirtual(this.k.objectEquals());
+		a.branch(Opcode.IFEQ, varFlipped);
+		a.aload(VAL);
+		a.checkcast(this.k.stringClass());
+		a.invokevirtual(varToUpperCase);
+		a.astore(TMP);
+		a.aload(TMP);
+		a.aload(VAL);
+		a.invokevirtual(this.k.objectEquals());
+		a.branch(Opcode.IFNE, self);
+		a.bind(varFlipped);
+		a.aload(TMP);
 		a.getstatic(this.k.genvField());
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(TMP);
@@ -2388,7 +2467,17 @@ final class JvmEvalRuntimeBuilder {
 
 		// ---- generic named application ----
 		// Lisp-2: the operator resolves in the function namespace only. Variable
-		// bindings (lexical or global) never shadow a function.
+		// bindings (lexical or global) never shadow a function. ARITY doubles as the
+		// one-shot case-flip guard until branch (b) assigns it on a registry hit: an
+		// unknown operator retries once with the case-flipped spelling (compiled
+		// definitions are upcased, runtime-read references case-preserved, and vice
+		// versa) after the carcdr check falls through.
+		ConstantPool.MethodrefConstant applyToLowerCase = stringCaseRef("toLowerCase");
+		ConstantPool.MethodrefConstant applyToUpperCase = stringCaseRef("toUpperCase");
+		a.iconst(0);
+		a.istore(ARITY);
+		int genericApply = a.label();
+		a.bind(genericApply);
 		// (a) operator defined at runtime via defun (the _fenv function namespace)
 		a.aload(OP);
 		a.getstatic(this.k.fenvField());
@@ -2449,8 +2538,39 @@ final class JvmEvalRuntimeBuilder {
 		a.invokestatic(this.k.applyRef());
 		a.areturn();
 		a.bind(notReg);
-		// (c) car/cdr composition such as cadr
+		// (c) car/cdr composition such as cadr -- BEFORE the case-flip retry, so the
+		// composition sees the original spelling (a returning match ends the eval).
 		carCdrComposition(a, OP, REST, ENV, ACC, IDX, CH, LEN, VALID);
+		// One case-flip retry of (a)+(b), guarded by ARITY's sign (branch (b) only
+		// assigns it on a registry hit, which returns; a second pass runs the
+		// composition again with the flipped spelling, harmlessly).
+		int noRetry = a.label();
+		int applyFlipped = a.label();
+		a.iload(ARITY);
+		a.branch(Opcode.IFLT, noRetry);
+		a.iconst(-1);
+		a.istore(ARITY);
+		a.aload(OP);
+		a.checkcast(this.k.stringClass());
+		a.invokevirtual(applyToLowerCase);
+		a.astore(TMP);
+		a.aload(TMP);
+		a.aload(OP);
+		a.invokevirtual(this.k.objectEquals());
+		a.branch(Opcode.IFEQ, applyFlipped);
+		a.aload(OP);
+		a.checkcast(this.k.stringClass());
+		a.invokevirtual(applyToUpperCase);
+		a.astore(TMP);
+		a.aload(TMP);
+		a.aload(OP);
+		a.invokevirtual(this.k.objectEquals());
+		a.branch(Opcode.IFNE, noRetry);
+		a.bind(applyFlipped);
+		a.aload(TMP);
+		a.astore(OP);
+		a.branch(Opcode.GOTO, genericApply);
+		a.bind(noRetry);
 		// (d) unknown operator
 		a.aconstNull();
 		a.areturn();

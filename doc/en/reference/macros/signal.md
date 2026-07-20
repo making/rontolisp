@@ -10,5 +10,5 @@ Signals a **non-fatal** condition with the same designator surface as [`error`](
 
 ```lisp
 (handler-case (progn (signal "caught mid-flight") :not-raised)
-  (condition (c) :raised)) ; => :raised
+  (condition (c) :raised)) ; => :RAISED
 ```

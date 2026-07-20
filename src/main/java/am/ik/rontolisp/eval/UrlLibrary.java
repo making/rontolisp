@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -63,7 +64,7 @@ public final class UrlLibrary {
 			synchronized (UrlLibrary.class) {
 				cached = forms;
 				if (cached == null) {
-					cached = LispReader.readAllFromString(readSource());
+					cached = LispReader.readAllFromString(readSource(), Features.INTERNAL);
 					forms = cached;
 				}
 			}

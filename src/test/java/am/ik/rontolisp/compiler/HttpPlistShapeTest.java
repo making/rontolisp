@@ -21,7 +21,7 @@ class HttpPlistShapeTest {
 		assertThat(HttpPlistShape.requestFields()).extracting(HttpPlistShape.Field::name)
 			.containsExactly("method", "path", "query", "headers", "body");
 		assertThat(HttpPlistShape.requestFields()).extracting(HttpPlistShape.Field::keyword)
-			.containsExactly(":method", ":path", ":query", ":headers", ":body");
+			.containsExactly(":METHOD", ":PATH", ":QUERY", ":HEADERS", ":BODY");
 	}
 
 	@Test
@@ -29,7 +29,7 @@ class HttpPlistShapeTest {
 		assertThat(HttpPlistShape.responseFields()).extracting(HttpPlistShape.Field::name)
 			.containsExactly("status", "headers", "body");
 		assertThat(HttpPlistShape.responseFields()).extracting(HttpPlistShape.Field::keyword)
-			.containsExactly(":status", ":headers", ":body");
+			.containsExactly(":STATUS", ":HEADERS", ":BODY");
 	}
 
 	@Test
@@ -40,7 +40,7 @@ class HttpPlistShapeTest {
 
 	@Test
 	void responseFieldResolvesByName() {
-		assertThat(HttpPlistShape.responseField("status").keyword()).isEqualTo(":status");
+		assertThat(HttpPlistShape.responseField("status").keyword()).isEqualTo(":STATUS");
 		assertThatThrownBy(() -> HttpPlistShape.responseField("trailers")).isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("trailers");
 	}
@@ -61,13 +61,13 @@ class HttpPlistShapeTest {
 		String source = HttpPlistShape.lispHelpersSource();
 		List<String> lines = source.lines().toList();
 		assertThat(lines).contains("(defun %http-request-plist (method path query headers body)",
-				"  (list :method method :path path :query query :headers headers :body body))",
+				"  (list :METHOD method :PATH path :QUERY query :HEADERS headers :BODY body))",
 				"(defun %http-response-plist (status headers body)",
-				"  (list :status status :headers headers :body body))");
-		assertThat(source).contains("(defun %http-response-status (plist)\n  (or (getf plist :status) 200))")
-			.contains("(defun %http-response-body (plist)\n  (or (getf plist :body) \"\"))")
-			.contains("(defun %http-response-headers (plist)\n  (getf plist :headers))")
-			.contains("(defun %http-request-body (plist)\n  (getf plist :body))");
+				"  (list :STATUS status :HEADERS headers :BODY body))");
+		assertThat(source).contains("(defun %http-response-status (plist)\n  (or (getf plist :STATUS) 200))")
+			.contains("(defun %http-response-body (plist)\n  (or (getf plist :BODY) \"\"))")
+			.contains("(defun %http-response-headers (plist)\n  (getf plist :HEADERS))")
+			.contains("(defun %http-request-body (plist)\n  (getf plist :BODY))");
 	}
 
 }

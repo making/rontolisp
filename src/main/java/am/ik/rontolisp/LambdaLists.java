@@ -516,9 +516,23 @@ public final class LambdaLists {
 		LispVal bindings = list(list(cur, source, call("cddr", cur)));
 		LispVal endClause = list(call(LispNames.ATOM, cur), LispNil.INSTANCE);
 		LispVal match = list(new LispSymbol(LispNames.EQL), call(LispNames.CAR, cur), keyword);
+		// A lowercase-derived keyword (an internal lowercase-authored &key parameter)
+		// also accepts its upcased twin: user call sites read upcased.
+		LispSymbol upper = upcasedTwin(keyword);
+		if (upper != null) {
+			match = list(new LispSymbol(LispNames.OR), match,
+					list(new LispSymbol(LispNames.EQL), call(LispNames.CAR, cur), upper));
+		}
 		LispVal body = list(new LispSymbol(LispNames.IF), match, list(new LispSymbol(LispNames.RETURN), cur),
 				LispNil.INSTANCE);
 		return list(new LispSymbol(LispNames.DO), bindings, endClause, body);
+	}
+
+	// The all-uppercase spelling of a keyword whose name has lowercase letters, or null
+	// when the spellings coincide.
+	private static @Nullable LispSymbol upcasedTwin(LispSymbol keyword) {
+		String upper = keyword.name().toUpperCase(java.util.Locale.ROOT);
+		return upper.equals(keyword.name()) ? null : new LispSymbol(upper);
 	}
 
 	/**
@@ -531,14 +545,23 @@ public final class LambdaLists {
 		List<LispVal> known = new ArrayList<>();
 		for (KeyParam key : keys) {
 			known.add(key.keyword());
+			LispSymbol upper = upcasedTwin(key.keyword());
+			if (upper != null) {
+				known.add(upper);
+			}
 		}
 		known.add(new LispSymbol(LispNames.ALLOW_OTHER_KEYS_KEYWORD));
+		// The upcase reader mode upcases a caller's :ALLOW-OTHER-KEYS while this
+		// generated literal stays lowercase; accept both spellings (the &key keywords
+		// themselves are derived from the parameter names, so they always match).
+		known.add(new LispSymbol(":ALLOW-OTHER-KEYS"));
 		LispVal knownList = list(new LispSymbol(LispNames.QUOTE), list(known.toArray(LispVal[]::new)));
 		LispVal bindings = list(list(cur, source, call("cddr", cur)));
 		LispVal endClause = list(call(LispNames.ATOM, cur), LispNil.INSTANCE);
 		LispVal ok = list(new LispSymbol(LispNames.MEMBER), call(LispNames.CAR, cur), knownList);
-		LispVal callerOverride = list(new LispSymbol(LispNames.GETF), source,
-				new LispSymbol(LispNames.ALLOW_OTHER_KEYS_KEYWORD));
+		LispVal callerOverride = list(new LispSymbol(LispNames.OR),
+				list(new LispSymbol(LispNames.GETF), source, new LispSymbol(LispNames.ALLOW_OTHER_KEYS_KEYWORD)),
+				list(new LispSymbol(LispNames.GETF), source, new LispSymbol(":ALLOW-OTHER-KEYS")));
 		LispVal signal = list(new LispSymbol(LispNames.ERROR), new LispString("Unknown keyword argument: ~s"),
 				call(LispNames.CAR, cur));
 		LispVal body = list(new LispSymbol(LispNames.IF), ok, LispNil.INSTANCE,

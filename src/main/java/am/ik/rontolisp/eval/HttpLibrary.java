@@ -21,6 +21,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.HttpPlistShape;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -144,7 +145,7 @@ public final class HttpLibrary {
 			out.addAll(LispReader.readAllFromString("""
 					(defun %%serve-dispatch (%%serve-req) (%s %%serve-req))
 					(rontolisp:wasm-export '%%serve-handle :as "handle" :params '(:int) :returns :void)
-					""".formatted(handler)));
+					""".formatted(handler), Features.INTERNAL));
 		}
 		out.addAll(withoutDirective);
 		return out;
@@ -290,8 +291,9 @@ public final class HttpLibrary {
 					// the http-plist WIT records (the plist shape is derived, not
 					// hand-written, on this backend too); the reachability walk drops
 					// whichever generated helpers the active half never calls.
-					List<LispVal> all = new ArrayList<>(LispReader.readAllFromString(readResource("http.lisp")));
-					all.addAll(LispReader.readAllFromString(HttpPlistShape.lispHelpersSource()));
+					List<LispVal> all = new ArrayList<>(
+							LispReader.readAllFromString(readResource("http.lisp"), Features.INTERNAL));
+					all.addAll(LispReader.readAllFromString(HttpPlistShape.lispHelpersSource(), Features.INTERNAL));
 					cached = List.copyOf(all);
 					forms = cached;
 				}

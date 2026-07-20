@@ -5,7 +5,7 @@
 Defines a function named `name` in the function namespace, with the given parameter list and body, and returns the name symbol. The `body` is not evaluated at definition time; it runs on each call, returning the value of the last body form. Per Lisp-2 the definition lives in the function namespace, so the name is reachable in call position (and via `#'name`) without colliding with any like-named variable.
 
 ```lisp
-(defun sq (x) (* x x)) ; => sq
+(defun sq (x) (* x x)) ; => SQ
 ```
 
 ```lisp
@@ -59,7 +59,7 @@ The `name` may be a `(setf name)` list instead of a plain symbol. This defines a
 (defvar *mode* :xml)
 (defun (setf my-mode) (m) (setq *mode* m))
 (setf (my-mode) :html5)
-*mode* ; => :html5
+*mode* ; => :HTML5
 ```
 
 Only the `(setf name)` form is supported (a two-element list); `symbol-function`/`fboundp` of a `(setf ...)` name is not.

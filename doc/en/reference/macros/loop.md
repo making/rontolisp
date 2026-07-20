@@ -27,7 +27,7 @@ Otherwise it is an **extended loop** built from clauses. The supported clauses a
 Multiple `for` clauses step together, and the loop ends as soon as the shortest driver is exhausted — the idiomatic indexed map. Sequential clauses step in order (a later clause's init and step forms see the values the earlier clauses just produced, and stepping stops at the first exhausted driver, so `for x in xs for a = (f x) then (g a x)` works as in CL):
 
 ```lisp
-(loop for x in '(a b c) for i from 0 collect (list i x)) ; => ((0 a) (1 b) (2 c))
+(loop for x in '(a b c) for i from 0 collect (list i x)) ; => ((0 A) (1 B) (2 C))
 ```
 
 `and` joins `for` clauses into one group whose inits and steps are computed against the previous iteration's values (like `do`'s parallel stepping versus `do*`):
@@ -78,7 +78,7 @@ A `for`/`with` variable may be a destructuring pattern — a list of variables (
 A dotted pattern binds the rest of the list, so it walks an alist directly:
 
 ```lisp
-(loop for (k . v) in '((a . 1) (b . 2)) collect (list k v)) ; => ((a 1) (b 2))
+(loop for (k . v) in '((a . 1) (b . 2)) collect (list k v)) ; => ((A 1) (B 2))
 ```
 
 `for ... across` walks a string character by character, or a vector element by element:
@@ -96,7 +96,7 @@ A dotted pattern binds the rest of the list, so it walks an alist directly:
 ```lisp
 (let ((h (make-hash-table)))
   (setf (gethash 'a h) 1)
-  (loop for k being the hash-keys of h using (hash-value v) collect (list k v))) ; => ((a 1))
+  (loop for k being the hash-keys of h using (hash-value v) collect (list k v))) ; => ((A 1))
 ```
 
 The clause snapshots the table and walks the snapshot, so the iteration order is the table's, and mutating the table inside the body does not affect the walk in progress.

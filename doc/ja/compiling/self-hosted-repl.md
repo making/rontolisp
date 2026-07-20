@@ -21,6 +21,12 @@ rontolisp repl.lisp -o repl.wasm
 wasmtime run -W gc repl.wasm                                               # REPL on WASM
 ```
 
+セルフホスト REPL は入力を埋め込みランタイムリーダーで読みます。これは(フロント
+エンドリーダーの Common Lisp 流の大文字化と違い)ケース保存です
+([リーダーのケースのガイド](../guides/reader-case.md)を参照)。そのため
+`(defun square ...)` はここでは `square` とエコーされます(ネイティブ REPL では
+`SQUARE` になります)。
+
 ```console
 > (defun square (x) (* x x))
 square

@@ -185,13 +185,13 @@
 
 (defun rontolisp::%sock-addr-string (addr)
   ;; (:ipv4 . (:port N :address (a b c d))) -> "a.b.c.d"; ipv6 unsupported -> nil.
-  (if (and (consp addr) (eq (car addr) :ipv4))
-      (rontolisp::%sock-format-quad (getf (cdr addr) :address))
+  (if (and (consp addr) (or (eq (car addr) :ipv4) (eq (car addr) :IPV4)))
+      (rontolisp::%sock-format-quad (getf (cdr addr) :ADDRESS))
       nil))
 
 (defun rontolisp:tcp-local-port (fd)
   (let ((addr (rontolisp::%sock-local-address fd)))
-    (if (consp addr) (getf (cdr addr) :port) nil)))
+    (if (consp addr) (getf (cdr addr) :PORT) nil)))
 
 (defun rontolisp:tcp-local-address (fd)
   (rontolisp::%sock-addr-string (rontolisp::%sock-local-address fd)))
@@ -201,7 +201,7 @@
 
 (defun rontolisp:tcp-peer-port (fd)
   (let ((addr (rontolisp::%sock-remote-address fd)))
-    (if (consp addr) (getf (cdr addr) :port) nil)))
+    (if (consp addr) (getf (cdr addr) :PORT) nil)))
 
 ;;; --- buffered reads (chunked; the %...-future internals are async-defuns so an
 ;;; async body's promoted read suspends instead of blocking the task) ---

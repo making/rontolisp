@@ -9,7 +9,7 @@ Evaluates `list` once and runs the body repeatedly with `var` bound to each succ
 ```
 
 ```
-a
-b
-c
+A
+B
+C
 ```

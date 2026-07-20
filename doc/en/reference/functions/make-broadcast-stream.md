@@ -7,5 +7,5 @@ With no component streams, returns a discarding sink: writes to it are dropped (
 ```lisp
 (let ((s (make-broadcast-stream)))
   (write-string "discarded" s)
-  :done) ; => :done
+  :done) ; => :DONE
 ```

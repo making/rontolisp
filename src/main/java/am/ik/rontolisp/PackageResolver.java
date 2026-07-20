@@ -205,7 +205,8 @@ public final class PackageResolver {
 		if (parts.size() != 2) {
 			throw new LispPackageException(LispNames.IN_PACKAGE + " expects exactly one argument");
 		}
-		String name = this.registry.canonicalName(packageDesignator(LispNames.IN_PACKAGE, parts.get(1)));
+		String name = registeredPackageName(
+				this.registry.canonicalName(packageDesignator(LispNames.IN_PACKAGE, parts.get(1))));
 		if (!this.registry.contains(name)) {
 			throw new LispPackageException("No such package: " + name);
 		}
@@ -226,6 +227,32 @@ public final class PackageResolver {
 	 * the package resolve package-locally (see {@link #resolveUnqualified}).
 	 * {@code :shadowing-import-from} (and any other clause) is an error.
 	 */
+	// The registered spelling of a package name: the exact spelling when registered,
+	// else its lowercase twin when THAT is registered (an internal lowercase-authored
+	// registration -- a shim leaf-module package -- referenced from upcase-read
+	// source), else the exact spelling (the caller's not-found error names it).
+	private String registeredPackageName(String name) {
+		if (this.registry.contains(name)) {
+			return name;
+		}
+		String lower = name.toLowerCase(java.util.Locale.ROOT);
+		if (!lower.equals(name) && this.registry.contains(lower)) {
+			return lower;
+		}
+		return name;
+	}
+
+	// Whether the named package provides (owns or exports) the given symbol name --
+	// the :import-from fold's oracle. cl is answered by the static symbol set, so
+	// car/cdr compositions count too.
+	private boolean sourceProvides(String packageName, String symbolName) {
+		if (LispNames.CL_PKG.equals(packageName)) {
+			return PackageRegistry.isClSymbol(symbolName);
+		}
+		LispPackage pkg = this.registry.get(packageName);
+		return pkg.owns(symbolName) || pkg.exports(symbolName);
+	}
+
 	private LispVal resolveDefpackage(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
@@ -247,11 +274,11 @@ public final class PackageResolver {
 						LispNames.DEFPACKAGE + " expects (:use ...) / (:export ...) clauses, got " + clause.print());
 			}
 			List<LispVal> args = clauseCons.toList();
-			switch (keyword.name()) {
+			switch (LispNames.foldKeyword(keyword.name())) {
 				case LispNames.USE_KEYWORD -> {
 					for (LispVal arg : args.subList(1, args.size())) {
-						String used = this.registry
-							.canonicalName(designator(LispNames.USE_KEYWORD, "a package name", arg));
+						String used = registeredPackageName(
+								this.registry.canonicalName(designator(LispNames.USE_KEYWORD, "a package name", arg)));
 						if (!this.registry.contains(used)) {
 							throw new LispPackageException("No such package: " + used);
 						}
@@ -292,13 +319,22 @@ public final class PackageResolver {
 					if (args.size() < 2) {
 						throw new LispPackageException(LispNames.IMPORT_FROM_KEYWORD + " expects a package name");
 					}
-					String source = this.registry
-						.canonicalName(designator(LispNames.IMPORT_FROM_KEYWORD, "a package name", args.get(1)));
+					String source = registeredPackageName(this.registry
+						.canonicalName(designator(LispNames.IMPORT_FROM_KEYWORD, "a package name", args.get(1))));
 					if (!this.registry.contains(source)) {
 						throw new LispPackageException("No such package: " + source);
 					}
 					for (LispVal arg : args.subList(2, args.size())) {
-						imports.put(designator(LispNames.IMPORT_FROM_KEYWORD, "a symbol name", arg), source);
+						String member = designator(LispNames.IMPORT_FROM_KEYWORD, "a symbol name", arg);
+						// The upcase reader premise upcases the designator while a
+						// built-in source package's canonical spellings are lowercase:
+						// fold when the lowercase spelling is the one the source
+						// actually provides ((:import-from #:cl #:car) imports car).
+						String lower = member.toLowerCase(java.util.Locale.ROOT);
+						if (!member.equals(lower) && sourceProvides(source, lower) && !sourceProvides(source, member)) {
+							member = lower;
+						}
+						imports.put(member, source);
 					}
 				}
 				// Metadata: accepted for portability, not recorded anywhere.
@@ -309,7 +345,13 @@ public final class PackageResolver {
 					// the package's own symbols, so a library can redefine a cl name
 					// (cl-ppcre shadows digit-char-p and defconstant).
 					for (LispVal arg : args.subList(1, args.size())) {
-						shadows.add(designator(":shadow", "a symbol name", arg));
+						String shadowed = designator(":shadow", "a symbol name", arg);
+						// The designator reads upcased while a shadowed CL name's folded
+						// references are lowercase ((:shadow #:defconstant) must catch
+						// the bare defconstant the reader folds); non-CL names stay as
+						// spelled, matching their equally-upcased references.
+						String shadowedLower = shadowed.toLowerCase(java.util.Locale.ROOT);
+						shadows.add(PackageRegistry.isClSymbol(shadowedLower) ? shadowedLower : shadowed);
 					}
 				}
 				case ":shadowing-import-from" -> throw new LispPackageException(LispNames.DEFPACKAGE + " "
@@ -546,13 +588,20 @@ public final class PackageResolver {
 	}
 
 	private LispVal resolveQualified(PackageRegistry.QualifiedName qn) {
-		String pkg = this.registry.canonicalName(qn.pkg());
+		String pkg = registeredPackageName(this.registry.canonicalName(qn.pkg()));
 		String member = qn.member();
 		if (!this.registry.contains(pkg)) {
 			throw new LispPackageException("No such package: " + pkg);
 		}
 		if (LispNames.CL_PKG.equals(pkg) && LispNames.PACKAGE_VAR.equals(member)) {
 			return quotedSymbol(this.currentPackage);
+		}
+		// The reader upcases user spellings while a package's canonical members may be
+		// lowercase (a wit-import package's defuns derive from the WIT's lower-kebab
+		// names): retry the lowercase spelling before judging externality.
+		String lower = member.toLowerCase(java.util.Locale.ROOT);
+		if (!lower.equals(member) && !providesMember(pkg, member) && providesMember(pkg, lower)) {
+			member = lower;
 		}
 		// A single colon only reaches external (exported) symbols, like Common Lisp; a
 		// double colon reaches (and interns) any symbol.
@@ -572,6 +621,13 @@ public final class PackageResolver {
 			return new LispSymbol(member);
 		}
 		return canonical(pkg, member);
+	}
+
+	// Whether the package provides (owns, exports or imports) the member under this
+	// exact spelling -- the case-fold retry's oracle in resolveQualified.
+	private boolean providesMember(String pkg, String member) {
+		LispPackage p = this.registry.get(pkg);
+		return p.owns(member) || p.exports(member) || p.imports().containsKey(member);
 	}
 
 	private boolean isExternal(String pkg, String member) {
@@ -624,6 +680,21 @@ public final class PackageResolver {
 			// like Common Lisp; internal symbols still require the double colon.
 			if (this.registry.get(used).exports(name)) {
 				return canonical(used, name);
+			}
+		}
+		// The reader upcases user spellings while the built-in packages' canonical
+		// members are lowercase, so a bare reference under (in-package :rontolisp) --
+		// VERSION for version -- retries its lowercase spelling against the current
+		// package and the use list before being interned as a fresh symbol.
+		String lower = name.toLowerCase(java.util.Locale.ROOT);
+		if (!lower.equals(name)) {
+			if (current.owns(lower) || current.exports(lower)) {
+				return canonical(this.currentPackage, lower);
+			}
+			for (String used : current.useList()) {
+				if (!LispNames.CL_PKG.equals(used) && this.registry.get(used).exports(lower)) {
+					return canonical(used, lower);
+				}
 			}
 		}
 		// Unknown symbol: a user definition or forward reference in the current package.

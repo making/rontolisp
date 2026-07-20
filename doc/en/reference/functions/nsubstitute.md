@@ -9,5 +9,5 @@ The destructive counterpart of `substitute`: rewrites the cars of `list` in plac
 ```
 
 ```lisp
-(nsubstitute 'x 2 (list '(1) '(2)) :key #'car) ; => ((1) x)
+(nsubstitute 'x 2 (list '(1) '(2)) :key #'car) ; => ((1) X)
 ```

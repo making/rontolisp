@@ -34,7 +34,7 @@ class UserMacroExpanderTest {
 			.stream()
 			.map(LispVal::print)
 			.collect(Collectors.joining("\n"));
-		assertThat(expanded).isEqualTo("(print 42)\n(print (quote (a 6 c)))");
+		assertThat(expanded).isEqualTo("(print 42)\n(print (quote (A 6 C)))");
 	}
 
 	@Test
@@ -45,7 +45,7 @@ class UserMacroExpanderTest {
 			.stream()
 			.map(LispVal::print)
 			.collect(Collectors.joining("\n"));
-		assertThat(expanded).isEqualTo("(defun re-h (x) (* x 10))\n(print 50)");
+		assertThat(expanded).isEqualTo("(defun RE-H (X) (* X 10))\n(print 50)");
 	}
 
 	@Test
@@ -61,7 +61,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro twice (x) `(* 2 ,x))
 				(defun f (n) (twice n))
-				""")).isEqualTo("(defun f (n) (* 2 n))");
+				""")).isEqualTo("(defun F (N) (* 2 N))");
 	}
 
 	@Test
@@ -79,7 +79,7 @@ class UserMacroExpanderTest {
 				(defun expand-helper (n) (* n 2))
 				(defmacro with-doubled (n x) `(+ ,(expand-helper n) ,x))
 				(print (with-doubled 5 1))
-				""")).isEqualTo("(defun expand-helper (n) (* n 2))\n(print (+ 10 1))");
+				""")).isEqualTo("(defun EXPAND-HELPER (N) (* N 2))\n(print (+ 10 1))");
 	}
 
 	@Test
@@ -87,7 +87,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro m (x) `(+ ,x 1))
 				(print '(m 1))
-				""")).isEqualTo("(print (quote (m 1)))");
+				""")).isEqualTo("(print (quote (M 1)))");
 	}
 
 	@Test
@@ -96,7 +96,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro m (x) `(+ ,x 1))
 				(print (let ((m (m 1))) m))
-				""")).isEqualTo("(print (let ((m (+ 1 1))) m))");
+				""")).isEqualTo("(print (let ((M (+ 1 1))) M))");
 	}
 
 	@Test
@@ -104,7 +104,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro m (x) `(+ ,x 1))
 				(defun f (m) (funcall (lambda (m) m) m))
-				""")).isEqualTo("(defun f (m) (funcall (lambda (m) m) m))");
+				""")).isEqualTo("(defun F (M) (funcall (lambda (M) M) M))");
 	}
 
 	@Test
@@ -112,7 +112,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro m (x) `(+ ,x 1))
 				(print (case 'm ((m) (m 1)) (otherwise 0)))
-				""")).isEqualTo("(print (case (quote m) ((m) (+ 1 1)) (otherwise 0)))");
+				""")).isEqualTo("(print (case (quote M) ((M) (+ 1 1)) (otherwise 0)))");
 	}
 
 	@Test
@@ -120,7 +120,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro m (x) `(list ,x))
 				(dolist (m (m 3)) (print m))
-				""")).isEqualTo("(dolist (m (list 3)) (print m))");
+				""")).isEqualTo("(dolist (M (list 3)) (print M))");
 	}
 
 	@Test
@@ -150,7 +150,7 @@ class UserMacroExpanderTest {
 				(defmacro pt () '(f))
 				(defmacro x (v) `(g ,v))
 				(defstruct pt (x 1) (y (x 2)))
-				""")).isEqualTo("(defstruct pt (x 1) (y (g 2)))");
+				""")).isEqualTo("(defstruct PT (X 1) (Y (G 2)))");
 	}
 
 	@Test
@@ -158,7 +158,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro defpair (name) (list 'defstruct name 'left 'right))
 				(defpair pair)
-				""")).isEqualTo("(defstruct pair left right)");
+				""")).isEqualTo("(defstruct PAIR LEFT RIGHT)");
 	}
 
 	@Test
@@ -168,7 +168,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro x (v) `(g ,v))
 				(defmethod f ((x (eql :br)) y) (x y))
-				""")).isEqualTo("(defmethod f ((x (eql :br)) y) (g y))");
+				""")).isEqualTo("(defmethod F ((X (eql :BR)) Y) (G Y))");
 	}
 
 	@Test
@@ -177,7 +177,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro dflt () '(h))
 				(defclass c () ((s :initarg :s :initform (dflt) :accessor c-s)))
-				""")).isEqualTo("(defclass c nil ((s :initarg :s :initform (h) :accessor c-s)))");
+				""")).isEqualTo("(defclass C nil ((S :INITARG :S :INITFORM (H) :ACCESSOR C-S)))");
 	}
 
 	@Test
@@ -193,11 +193,11 @@ class UserMacroExpanderTest {
 				(print (tag-of :p))
 				(print (tag-of :br))
 				""")).isEqualTo("""
-				(defgeneric conv (tag))
-				(defmethod conv (tag) (list tag :end))
-				(defmethod conv ((tag (eql :br))) (list :br-tag))
-				(print (list :p :end))
-				(print (list :br-tag))""");
+				(defgeneric CONV (TAG))
+				(defmethod CONV (TAG) (list TAG :END))
+				(defmethod CONV ((TAG (eql :BR))) (list :BR-TAG))
+				(print (list :P :END))
+				(print (list :BR-TAG))""");
 	}
 
 	// --- macrolet (local macros consumed at compile time) ---
@@ -219,14 +219,14 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(macrolet ((m (x) `(+ ,x 1))) (print (m 5)))
 				(print (m 5))
-				""")).isEqualTo("(print (+ 5 1))\n(print (m 5))");
+				""")).isEqualTo("(print (+ 5 1))\n(print (M 5))");
 	}
 
 	@Test
 	void macroletNestedInADefunBodyIsExpanded() {
 		assertThat(expand("""
 				(defun f (n) (macrolet ((dbl (x) `(* 2 ,x))) (dbl n)))
-				""")).isEqualTo("(defun f (n) (* 2 n))");
+				""")).isEqualTo("(defun F (N) (* 2 N))");
 	}
 
 	@Test
@@ -234,7 +234,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defun h (n) (* n 10))
 				(macrolet ((m (n) `(+ ,(h n) 1))) (print (m 4)))
-				""")).isEqualTo("(defun h (n) (* n 10))\n(print (+ 40 1))");
+				""")).isEqualTo("(defun H (N) (* N 10))\n(print (+ 40 1))");
 	}
 
 	// --- macroexpand / macroexpand-1 folding ---
@@ -244,14 +244,14 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))
 				(print (macroexpand-1 '(my-when2 a b)))
-				""")).isEqualTo("(print (quote (if a (progn b) nil)))");
+				""")).isEqualTo("(print (quote (if A (progn B) nil)))");
 	}
 
 	@Test
 	void macroexpandFoldsBuiltinMacrosWithoutAnyDefmacro() {
 		// The pass must activate on macroexpand alone (no defmacro in the program).
-		assertThat(expand("(print (macroexpand-1 '(unless c x)))")).isEqualTo("(print (quote (if c nil x)))");
-		assertThat(expand("(print (macroexpand '(outer 1)))")).isEqualTo("(print (quote (outer 1)))");
+		assertThat(expand("(print (macroexpand-1 '(unless c x)))")).isEqualTo("(print (quote (if C nil X)))");
+		assertThat(expand("(print (macroexpand '(outer 1)))")).isEqualTo("(print (quote (OUTER 1)))");
 	}
 
 	@Test
@@ -261,13 +261,13 @@ class UserMacroExpanderTest {
 				(defmacro outer (x) `(inner ,x))
 				(print (macroexpand '(outer 41)))
 				(print (macroexpand-1 '(outer 41)))
-				""")).isEqualTo("(print (quote (+ 41 1)))\n(print (quote (inner 41)))");
+				""")).isEqualTo("(print (quote (+ 41 1)))\n(print (quote (INNER 41)))");
 	}
 
 	@Test
 	void macroexpandOfANonMacroFormFoldsToTheFormItself() {
 		assertThat(expand("(print (macroexpand-1 '(+ 1 2)))")).isEqualTo("(print (quote (+ 1 2)))");
-		assertThat(expand("(print (macroexpand-1 'x))")).isEqualTo("(print (quote x))");
+		assertThat(expand("(print (macroexpand-1 'x))")).isEqualTo("(print (quote X))");
 	}
 
 	@Test
@@ -275,7 +275,7 @@ class UserMacroExpanderTest {
 		// Only a literal quoted argument can be folded; a computed one stays and fails
 		// in the compilers ("Cannot compile").
 		assertThat(expand("(setq f '(when a b))\n(print (macroexpand-1 f))"))
-			.isEqualTo("(setq f (quote (when a b)))\n(print (macroexpand-1 f))");
+			.isEqualTo("(setq F (quote (when A B)))\n(print (macroexpand-1 F))");
 	}
 
 	@Test
@@ -294,7 +294,7 @@ class UserMacroExpanderTest {
 		assertThat(expand("""
 				(defmacro twice (x) `(* 2 ,x))
 				(print (twice (car '((a . 1)))))
-				""")).isEqualTo("(print (* 2 (car (quote ((a . 1))))))");
+				""")).isEqualTo("(print (* 2 (car (quote ((A . 1))))))");
 	}
 
 	// --- pure-config-setter replay (macro-time (setf (place) ...) auto-detect) ---
@@ -312,10 +312,10 @@ class UserMacroExpanderTest {
 				(setf (mode) :b)
 				(print (current-mode))
 				""")).isEqualTo("""
-				(defvar *mode* :a)
-				(defun (setf mode) (v) (setf *mode* v))
-				(setf (mode) :b)
-				(print (quote :b))""");
+				(defvar *MODE* :A)
+				(defun (setf MODE) (V) (setf *MODE* V))
+				(setf (MODE) :B)
+				(print (quote :B))""");
 	}
 
 	@Test
@@ -346,7 +346,7 @@ class UserMacroExpanderTest {
 				(defmacro current-mode () (list 'quote *mode*))
 				(setf (mode) :b)
 				(print (current-mode))
-				""")).endsWith("(print (quote :a))");
+				""")).endsWith("(print (quote :A))");
 	}
 
 	@Test
@@ -359,7 +359,7 @@ class UserMacroExpanderTest {
 				(defmacro current-mode () (list 'quote *mode*))
 				(setf (mode) (progn (print 'x) :b))
 				(print (current-mode))
-				""")).endsWith("(print (quote :a))");
+				""")).endsWith("(print (quote :A))");
 	}
 
 	@Test
@@ -384,7 +384,7 @@ class UserMacroExpanderTest {
 				(defmacro m (x) `(+ ,x 1))
 				(setf (foo) 3)
 				(print (m 1))
-				""")).isEqualTo("(setf (foo) 3)\n(print (+ 1 1))");
+				""")).isEqualTo("(setf (FOO) 3)\n(print (+ 1 1))");
 	}
 
 }

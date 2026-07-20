@@ -110,8 +110,8 @@ public final class HttpPlistShape {
 
 	/**
 	 * One plist entry derived from a WIT record field: the field name, the keyword it
-	 * crosses as (the component record-marshalling rule, {@code ":" + name}) and the WIT
-	 * type.
+	 * crosses as (the component record-marshalling rule, {@code ":" + upcased name}) and
+	 * the WIT type.
 	 *
 	 * @param name the WIT field name
 	 * @param keyword the plist keyword ({@code :name})
@@ -235,7 +235,12 @@ public final class HttpPlistShape {
 					// Classifiability sanity check: every field type must map to a
 					// settled representation.
 					WitTypeMapper.rep(field.type());
-					fields.add(new Field(field.name(), ":" + field.name(), field.type()));
+					// The plist keyword is the UPCASED field name: the reader upcases
+					// user spellings ((getf resp :status) reads :STATUS), so every
+					// backend emits/reads the upcased key; the generated Lisp helpers
+					// and internal sources spell it uppercase literally.
+					fields.add(new Field(field.name(), ":" + field.name().toUpperCase(java.util.Locale.ROOT),
+							field.type()));
 				}
 				return List.copyOf(fields);
 			}

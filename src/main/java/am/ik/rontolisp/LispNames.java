@@ -3632,6 +3632,31 @@ public final class LispNames {
 	/** The {@code *error-output*} variable -- also the {@code t} designator (lite). */
 	public static final String ERROR_OUTPUT_VAR = "*error-output*";
 
+	/**
+	 * Whether a keyword symbol name matches a canonical (lowercase) built-in keyword
+	 * parameter name. Case-insensitive: built-in keyword parameters accept {@code :TEST}
+	 * as well as {@code :test}, which is what makes them work under the upcase reader
+	 * mode, where every source keyword reads upcased. Keyword symbols used as data are
+	 * never folded -- only the comparison against a known parameter name is.
+	 * @param symbolName the keyword symbol's name (with the leading colon)
+	 * @param canonicalKeyword the canonical lowercase keyword name (with the colon)
+	 * @return {@code true} when the names match ignoring case
+	 */
+	public static boolean keywordMatches(String symbolName, String canonicalKeyword) {
+		return canonicalKeyword.equalsIgnoreCase(symbolName);
+	}
+
+	/**
+	 * Folds a keyword symbol name to lowercase for matching against canonical keyword
+	 * names -- the {@code switch} counterpart of {@link #keywordMatches}: wrap the
+	 * scrutinee, keep the lowercase {@code case} labels.
+	 * @param symbolName the keyword symbol's name
+	 * @return the lowercased name
+	 */
+	public static String foldKeyword(String symbolName) {
+		return symbolName.toLowerCase(java.util.Locale.ROOT);
+	}
+
 	private LispNames() {
 	}
 

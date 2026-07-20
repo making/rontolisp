@@ -14,5 +14,5 @@ On the JVM and WASM compilers `go` is lexical: it must target a tag of a lexical
     (push :never acc)
    skip
     (push :b acc))
-  (nreverse acc)) ; => (:a :b)
+  (nreverse acc)) ; => (:A :B)
 ```

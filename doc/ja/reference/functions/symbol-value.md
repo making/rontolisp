@@ -10,7 +10,7 @@
 ```
 
 ```lisp
-(symbol-value (intern "*level*")) ; => 7
+(symbol-value (intern "*LEVEL*")) ; => 7
 ```
 
 ```lisp

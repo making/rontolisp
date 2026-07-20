@@ -7,7 +7,7 @@ Defines a global variable `name`, binding it to `value` only if `name` is not al
 `defvar` also proclaims `name` **special**: a later [`let`](let.md)/`let*` of it establishes a dynamic binding (visible to functions called within the extent, restored on exit) rather than a lexical one. See [`let`](let.md) and [`progv`](progv.md).
 
 ```lisp
-(defvar *counter* 0) ; => *counter*
+(defvar *counter* 0) ; => *COUNTER*
 ```
 
 ```lisp

@@ -45,6 +45,21 @@ class WasmLispCompilerIntegrationTest {
 		return compileAndRunProgram(LispReader.readAllFromString(lispCode));
 	}
 
+	@Test
+	void compileAndRunUpcaseReaderMode() throws Exception {
+		// The reader's upcase premise is a frontend concern: the WASM compiler sees
+		// the folded token stream, so mixed-case operators, upcased user symbols and
+		// upcased keyword arguments behave as on the interpreter and the JVM.
+		am.ik.rontolisp.reader.Features upcase = am.ik.rontolisp.reader.Features.WASM;
+		String output = compileAndRunProgram(LispReader.readAllFromString("""
+				(DEFUN ADD2 (X) (+ X 2))
+				(PRINT (add2 40))
+				(PRINT (CDR (ASSOC :b '((:A . 1) (:B . 2)))))
+				(PRINT (SYMBOL-NAME :foo))
+				""", upcase));
+		assertThat(output).isEqualTo("42\n2\n\"FOO\"");
+	}
+
 	private static String compileAndRunProgram(List<LispVal> program) throws Exception {
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
@@ -1605,11 +1620,11 @@ class WasmLispCompilerIntegrationTest {
 	void loopMacroCompilesAndRuns() throws Exception {
 		assertThat(compileAndRun("(print (loop for i from 1 to 5 collect i))")).isEqualTo("(1 2 3 4 5)");
 		assertThat(compileAndRun("(print (loop for x in '(a b c) for i from 0 collect (list i x)))"))
-			.isEqualTo("((0 a) (1 b) (2 c))");
+			.isEqualTo("((0 A) (1 B) (2 C))");
 		assertThat(compileAndRun("(print (loop for i from 1 to 5 sum i))")).isEqualTo("15");
 		assertThat(compileAndRun("(print (loop for i from 1 to 10 when (evenp i) collect i))"))
 			.isEqualTo("(2 4 6 8 10)");
-		assertThat(compileAndRun("(print (loop repeat 3 collect 'x))")).isEqualTo("(x x x)");
+		assertThat(compileAndRun("(print (loop repeat 3 collect 'x))")).isEqualTo("(X X X)");
 		assertThat(compileAndRun("(print (loop for i from 1 do (when (> i 3) (return i))))")).isEqualTo("4");
 		assertThat(compileAndRun("(print (loop for c across \"hello\" collect c))"))
 			.isEqualTo("(#\\h #\\e #\\l #\\l #\\o)");
@@ -2253,7 +2268,7 @@ class WasmLispCompilerIntegrationTest {
 		byte[] componentBytes = new WasmLispCompiler(true, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
 		wasmtime.copyFileToContainer(
-				Transferable.of("(defun sq (x) (* x x))".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				Transferable.of("(defun SQ (x) (* x x))".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
 				"/tmp/clib.lisp");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
 				"cd /tmp && wasmtime run -W gc=y -W exceptions=y --dir . test.component.wasm");
@@ -2298,7 +2313,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void defvarReturnsName() throws Exception {
-		assertThat(compileAndRun("(print (defvar *x* 42))")).isEqualTo("*x*");
+		assertThat(compileAndRun("(print (defvar *x* 42))")).isEqualTo("*X*");
 	}
 
 	@Test
@@ -2776,7 +2791,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void format() throws Exception {
 		assertThat(compileAndRun("(format t \"Hello ~a, you are ~d! ~s~%\" 'world 42 \"str\")"))
-			.isEqualTo("Hello world, you are 42! \"str\"");
+			.isEqualTo("Hello WORLD, you are 42! \"str\"");
 	}
 
 	@Test
@@ -2793,13 +2808,13 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void formatInsideDefun() throws Exception {
 		assertThat(compileAndRun("(defun greet (name) (format t \"Hi, ~a!~%\" name)) (greet 'alice) (greet \"bob\")"))
-			.isEqualTo("Hi, alice!\nHi, bob!");
+			.isEqualTo("Hi, ALICE!\nHi, bob!");
 	}
 
 	@Test
 	void formatNil() throws Exception {
 		assertThat(compileAndRun("(princ (format nil \"Hello ~a, ~d! ~s~%\" 'world 42 \"str\"))"))
-			.isEqualTo("Hello world, 42! \"str\"");
+			.isEqualTo("Hello WORLD, 42! \"str\"");
 	}
 
 	@Test
@@ -2875,7 +2890,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void formatIteration() throws Exception {
 		assertThat(compileAndRun("(format t \"~{<~a>~}|~2{ ~a~}|~:{(~a,~a)~}\" '(1 2) '(a b c d) '((x 1) (y 2)))"))
-			.isEqualTo("<1><2>| a b|(x,1)(y,2)");
+			.isEqualTo("<1><2>| A B|(X,1)(Y,2)");
 		assertThat(compileAndRun("(format t \"x~2@{ ~a~}|~:@{(~a)~}\" 1 2 '(3) '(4))")).isEqualTo("x 1 2|(3)(4)");
 	}
 
@@ -2900,7 +2915,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void princToString() throws Exception {
 		assertThat(compileAndRun("(print (princ-to-string 42)) (princ (princ-to-string 'sym))"))
-			.isEqualTo("\"42\"\nsym");
+			.isEqualTo("\"42\"\nSYM");
 	}
 
 	@Test
@@ -2964,7 +2979,7 @@ class WasmLispCompilerIntegrationTest {
 	void subseqList() throws Exception {
 		assertThat(compileAndRun("(print (subseq '(1 2 3 4 5) 1 3))")).isEqualTo("(2 3)");
 		assertThat(compileAndRun("(print (subseq '(1 2 3 4 5) 2))")).isEqualTo("(3 4 5)");
-		assertThat(compileAndRun("(print (subseq '(a b c) 0))")).isEqualTo("(a b c)");
+		assertThat(compileAndRun("(print (subseq '(a b c) 0))")).isEqualTo("(A B C)");
 		assertThat(compileAndRun("(print (subseq '(1 2 3) 3))")).isEqualTo("nil");
 	}
 
@@ -3564,7 +3579,7 @@ class WasmLispCompilerIntegrationTest {
 				(setq plist (list 'a 1 'b 2 'c 3))
 				(remf plist 'a)
 				(print plist)
-				""")).isEqualTo("(b 2 c 3)");
+				""")).isEqualTo("(B 2 C 3)");
 	}
 
 	@Test
@@ -3573,7 +3588,7 @@ class WasmLispCompilerIntegrationTest {
 				(setq plist (list 'a 1 'b 2 'c 3))
 				(remf plist 'b)
 				(print plist)
-				""")).isEqualTo("(a 1 c 3)");
+				""")).isEqualTo("(A 1 C 3)");
 	}
 
 	@Test
@@ -3582,7 +3597,7 @@ class WasmLispCompilerIntegrationTest {
 				(setq plist (list 'a 1 'b 2 'c 3))
 				(remf plist 'c)
 				(print plist)
-				""")).isEqualTo("(a 1 b 2)");
+				""")).isEqualTo("(A 1 B 2)");
 	}
 
 	@Test
@@ -3603,7 +3618,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void keywordPrint() throws Exception {
-		assertThat(compileAndRun("(print :foo)")).isEqualTo(":foo");
+		assertThat(compileAndRun("(print :foo)")).isEqualTo(":FOO");
 	}
 
 	@Test
@@ -3683,17 +3698,17 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void caseSingleKey() throws Exception {
-		assertThat(compileAndRun("(print (case 2 (1 'one) (2 'two) (3 'three)))")).isEqualTo("two");
+		assertThat(compileAndRun("(print (case 2 (1 'one) (2 'two) (3 'three)))")).isEqualTo("TWO");
 	}
 
 	@Test
 	void caseKeyList() throws Exception {
-		assertThat(compileAndRun("(print (case 3 (1 'one) ((2 3 4) 'small) (otherwise 'big)))")).isEqualTo("small");
+		assertThat(compileAndRun("(print (case 3 (1 'one) ((2 3 4) 'small) (otherwise 'big)))")).isEqualTo("SMALL");
 	}
 
 	@Test
 	void caseOtherwise() throws Exception {
-		assertThat(compileAndRun("(print (case 99 (1 'one) ((2 3 4) 'small) (otherwise 'big)))")).isEqualTo("big");
+		assertThat(compileAndRun("(print (case 99 (1 'one) ((2 3 4) 'small) (otherwise 'big)))")).isEqualTo("BIG");
 	}
 
 	@Test
@@ -3771,7 +3786,7 @@ class WasmLispCompilerIntegrationTest {
 	void memberWithTestKeyword() throws Exception {
 		assertThat(compileAndRun("(print (member '(a d) '((a b) (a c) (a d) (a e)) :test 'equal)) "
 				+ "(print (member '(a d) '((a b) (a c) (a d) (a e))))"))
-			.isEqualTo("((a d) (a e))\nnil");
+			.isEqualTo("((A D) (A E))\nnil");
 	}
 
 	@Test
@@ -3891,28 +3906,28 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void assocFunction() throws Exception {
 		assertThat(compileAndRun("(print (assoc 'b '((a 1) (b 2) (c 3)))) (print (assoc 'z '((a 1))))"))
-			.isEqualTo("(b 2)\nnil");
+			.isEqualTo("(B 2)\nnil");
 	}
 
 	@Test
 	void assocOnDottedAlistLiteral() throws Exception {
 		assertThat(compileAndRun(
 				"(print (assoc 'b '((a . 1) (b . 2) (c . 3)))) (print (cdr (assoc 'b '((a . 1) (b . 2)))))"))
-			.isEqualTo("(b . 2)\n2");
+			.isEqualTo("(B . 2)\n2");
 	}
 
 	@Test
 	void assocWithTest() throws Exception {
 		assertThat(compileAndRun("(print (assoc \"b\" '((\"a\" . 1) (\"b\" . 2)) :test #'equal)) "
 				+ "(print (assoc \"z\" '((\"a\" . 1)) :test 'equal)) (print (funcall #'assoc 'b '((a . 1) (b . 2))))"))
-			.isEqualTo("(\"b\" . 2)\nnil\n(b . 2)");
+			.isEqualTo("(\"b\" . 2)\nnil\n(B . 2)");
 	}
 
 	@Test
 	void rassocWithTest() throws Exception {
 		assertThat(compileAndRun("(print (rassoc \"x\" '((a . \"w\") (b . \"x\")) :test #'equal)) "
 				+ "(print (rassoc \"z\" '((a . \"w\")) :test 'equal)) (print (funcall #'rassoc 2 '((a . 1) (b . 2))))"))
-			.isEqualTo("(b . \"x\")\nnil\n(b . 2)");
+			.isEqualTo("(B . \"x\")\nnil\n(B . 2)");
 	}
 
 	@Test
@@ -3920,7 +3935,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (assoc 2 '((1 . a) (2 . b) (3 . c)) :key (lambda (k) (+ k 1)))) "
 				+ "(print (member 3 '((1 2) (3 4) (5 6)) :key #'car)) "
 				+ "(print (rassoc 2 '((a . 1) (b . 3)) :key (lambda (v) (- v 1))))"))
-			.isEqualTo("(1 . a)\n((3 4) (5 6))\n(b . 3)");
+			.isEqualTo("(1 . A)\n((3 4) (5 6))\n(B . 3)");
 	}
 
 	@Test
@@ -3956,13 +3971,13 @@ class WasmLispCompilerIntegrationTest {
 				+ "(print (intersection '((1) (2)) '((2) (3)) :key #'car)) "
 				+ "(print (set-difference '((1) (2)) '((2) (3)) :key #'car)) "
 				+ "(print (adjoin '(1 x) '((1 a) (2 b)) :key #'car))"))
-			.isEqualTo("(3 4)\n3\n2\n((2 b))\n((2 b))\n((2 b) (1 c))\n((1) x (3))\n((1) x)\n((2) (1))\n"
-					+ "((2))\n((1))\n((1 a) (2 b))");
+			.isEqualTo("(3 4)\n3\n2\n((2 B))\n((2 B))\n((2 B) (1 C))\n((1) X (3))\n((1) X)\n((2) (1))\n"
+					+ "((2))\n((1))\n((1 A) (2 B))");
 	}
 
 	@Test
 	void aconsAsFunctionValue() throws Exception {
-		assertThat(compileAndRun("(print (funcall #'acons 'a 1 '((b . 2))))")).isEqualTo("((a . 1) (b . 2))");
+		assertThat(compileAndRun("(print (funcall #'acons 'a 1 '((b . 2))))")).isEqualTo("((A . 1) (B . 2))");
 	}
 
 	@Test
@@ -3981,7 +3996,7 @@ class WasmLispCompilerIntegrationTest {
 	void pairlisFunction() throws Exception {
 		assertThat(compileAndRun("(print (pairlis '(a b c) '(1 2 3))) (print (pairlis '(a b) '(1 2) '((c . 3)))) "
 				+ "(print (pairlis nil nil)) (print (pairlis '(a b) '(1))) (print (funcall #'pairlis '(a) '(1)))"))
-			.isEqualTo("((a . 1) (b . 2) (c . 3))\n((a . 1) (b . 2) (c . 3))\nnil\n((a . 1))\n((a . 1))");
+			.isEqualTo("((A . 1) (B . 2) (C . 3))\n((A . 1) (B . 2) (C . 3))\nnil\n((A . 1))\n((A . 1))");
 	}
 
 	@Test
@@ -3993,7 +4008,7 @@ class WasmLispCompilerIntegrationTest {
 				       (copy (copy-alist orig)))
 				  (rplacd (assoc 'a copy) 99)
 				  (print (cdr (assoc 'a orig))))
-				(print (funcall #'copy-alist '((a . 1))))""")).isEqualTo("((a . 1) (b . 2))\nnil\n1\n((a . 1))");
+				(print (funcall #'copy-alist '((a . 1))))""")).isEqualTo("((A . 1) (B . 2))\nnil\n1\n((A . 1))");
 	}
 
 	@Test
@@ -4012,7 +4027,7 @@ class WasmLispCompilerIntegrationTest {
 	void assocIfFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (assoc-if #'oddp '((2 a) (3 b) (5 c)))) (print (assoc-if #'evenp '((1 a) (3 b)))) (print (funcall #'assoc-if #'plusp '((-1 a) (2 b))))"))
-			.isEqualTo("(3 b)\nnil\n(2 b)");
+			.isEqualTo("(3 B)\nnil\n(2 B)");
 	}
 
 	@Test
@@ -4026,41 +4041,41 @@ class WasmLispCompilerIntegrationTest {
 	void removeDuplicatesFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (remove-duplicates '(1 2 1 3))) (print (remove-duplicates '(1 2 3))) (print (funcall #'remove-duplicates '(a b a a c)))"))
-			.isEqualTo("(2 1 3)\n(1 2 3)\n(b a c)");
+			.isEqualTo("(2 1 3)\n(1 2 3)\n(B A C)");
 	}
 
 	@Test
 	void butlastFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (butlast '(1 2 3))) (print (butlast '(1))) (print (butlast nil)) (print (funcall #'butlast '(a b c d)))"))
-			.isEqualTo("(1 2)\nnil\nnil\n(a b c)");
+			.isEqualTo("(1 2)\nnil\nnil\n(A B C)");
 	}
 
 	@Test
 	void nconcFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (nconc (list 1 2) (list 3 4))) (print (nconc nil (list 1 2))) (print (funcall #'nconc (list 'a) (list 'b 'c)))"))
-			.isEqualTo("(1 2 3 4)\n(1 2)\n(a b c)");
+			.isEqualTo("(1 2 3 4)\n(1 2)\n(A B C)");
 	}
 
 	@Test
 	void identityFunction() throws Exception {
 		assertThat(compileAndRun("(print (identity 42)) (print (identity '(1 2 3))) (print (funcall #'identity 'x))"))
-			.isEqualTo("42\n(1 2 3)\nx");
+			.isEqualTo("42\n(1 2 3)\nX");
 	}
 
 	@Test
 	void copyListFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (copy-list '(1 2 3))) (print (copy-list nil)) (print (funcall #'copy-list '(a b)))"))
-			.isEqualTo("(1 2 3)\nnil\n(a b)");
+			.isEqualTo("(1 2 3)\nnil\n(A B)");
 	}
 
 	@Test
 	void nreverseFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (nreverse '(1 2 3))) (print (nreverse nil)) (print (funcall #'nreverse '(a b c)))"))
-			.isEqualTo("(3 2 1)\nnil\n(c b a)");
+			.isEqualTo("(3 2 1)\nnil\n(C B A)");
 	}
 
 	@Test
@@ -4073,28 +4088,28 @@ class WasmLispCompilerIntegrationTest {
 	void unionFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (union '(1 2 3) '(2 3 4))) (print (union nil '(1 2))) (print (funcall #'union '(a) '(a b)))"))
-			.isEqualTo("(4 1 2 3)\n(2 1)\n(b a)");
+			.isEqualTo("(4 1 2 3)\n(2 1)\n(B A)");
 	}
 
 	@Test
 	void intersectionFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (intersection '(1 2 3) '(2 3 4))) (print (intersection '(1 2) '(3 4))) (print (funcall #'intersection '(a b c) '(b c d)))"))
-			.isEqualTo("(3 2)\nnil\n(c b)");
+			.isEqualTo("(3 2)\nnil\n(C B)");
 	}
 
 	@Test
 	void setDifferenceFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (set-difference '(1 2 3) '(2))) (print (set-difference '(1 2 3) '(1 2 3))) (print (funcall #'set-difference '(a b c) '(b)))"))
-			.isEqualTo("(3 1)\nnil\n(c a)");
+			.isEqualTo("(3 1)\nnil\n(C A)");
 	}
 
 	@Test
 	void adjoinFunction() throws Exception {
 		assertThat(compileAndRun(
 				"(print (adjoin 1 '(2 3))) (print (adjoin 2 '(1 2 3))) (print (adjoin 'a nil)) (print (funcall #'adjoin 5 '(5 6)))"))
-			.isEqualTo("(1 2 3)\n(1 2 3)\n(a)\n(5 6)");
+			.isEqualTo("(1 2 3)\n(1 2 3)\n(A)\n(5 6)");
 	}
 
 	@Test
@@ -4135,14 +4150,14 @@ class WasmLispCompilerIntegrationTest {
 	void listStarAndAcons() throws Exception {
 		assertThat(compileAndRun(
 				"(print (list* 1 2 '(3 4))) (print (list* 1 2 3)) (print (list* 'x)) (print (acons 'a 1 nil))"))
-			.isEqualTo("(1 2 3 4)\n(1 2 . 3)\nx\n((a . 1))");
+			.isEqualTo("(1 2 3 4)\n(1 2 . 3)\nX\n((A . 1))");
 	}
 
 	@Test
 	void eltEndpRassoc() throws Exception {
 		assertThat(compileAndRun(
 				"(print (elt '(a b c) 1)) (print (endp nil)) (print (endp '(1))) (print (rassoc 2 (list (cons 'a 1) (cons 'b 2))))"))
-			.isEqualTo("b\nt\nnil\n(b . 2)");
+			.isEqualTo("B\nt\nnil\n(B . 2)");
 	}
 
 	@Test
@@ -4196,7 +4211,7 @@ class WasmLispCompilerIntegrationTest {
 				(defun probe (xs)
 				  (mapcar #'(lambda (x) (if (evenp x) (return-from probe :even) x)) xs))
 				(print (probe '(1 2 3)))
-				""")).isEqualTo("6\n:none\n(1 :even 3)");
+				""")).isEqualTo("6\n:NONE\n(1 :EVEN 3)");
 	}
 
 	@Test
@@ -4230,7 +4245,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (subst 9 '(m) '(f (m) g) :test #'equal))
 				(print (simple-string-p "abc"))
 				(print (simple-string-p 42))
-				""")))).isEqualTo("(x (b x) c)\n(f 9 g)\nt\nnil");
+				""")))).isEqualTo("(X (B X) C)\n(F 9 G)\nt\nnil");
 	}
 
 	@Test
@@ -4436,7 +4451,7 @@ class WasmLispCompilerIntegrationTest {
 						+ " (multiple-value-bind (v p) (gethash 'x mv-h) (print (list v p)))"
 						+ " (multiple-value-bind (v p) (gethash 'z mv-h) (print (list v p)))"
 						+ " (multiple-value-bind (v p) (gethash 'z mv-h 'dflt) (print (list v p)))"))
-			.isEqualTo("(42 t)\n(nil t)\n(nil nil)\n(dflt nil)");
+			.isEqualTo("(42 t)\n(nil t)\n(nil nil)\n(DFLT nil)");
 	}
 
 	@Test
@@ -4530,7 +4545,7 @@ class WasmLispCompilerIntegrationTest {
 				+ " (print (class-of #'car))"
 				+ " (defclass co-pt () ((x :initarg :x))) (print (class-of (make-instance 'co-pt :x 1)))"))
 			.isEqualTo(
-					"integer\nstring\nsymbol\nkeyword\nfloat\ncons\nnull\nboolean\nhash-table\nfunction\n%class-co-pt");
+					"integer\nstring\nsymbol\nkeyword\nfloat\ncons\nnull\nboolean\nhash-table\nfunction\n%class-CO-PT");
 		assertThat(compileAndRun(
 				"(defclass sb-pt () ((x :initarg :x) (y :initarg :y)))" + " (let ((p (make-instance 'sb-pt :x 1 :y 2)))"
 						+ " (print (slot-boundp p 'x)) (print (slot-boundp p 'z))"
@@ -4585,7 +4600,7 @@ class WasmLispCompilerIntegrationTest {
 				    (setf (so-get-val k2) 99)
 				    (print (list (so-get-val k) (so-get-val k2)))))
 				""")).isEqualTo(
-				"(:chase :flee :ignore)\n(:dog (1 2))\n(\"localhost\" 8080 9090)\n(11 2)\n11\n" + "(a t nil)\n(1 99)");
+				"(:CHASE :FLEE :IGNORE)\n(:DOG (1 2))\n(\"localhost\" 8080 9090)\n(11 2)\n11\n" + "(A t nil)\n(1 99)");
 	}
 
 	@Test
@@ -4617,7 +4632,7 @@ class WasmLispCompilerIntegrationTest {
 						"(defvar +re-six+ #.(* 2 3)) (print +re-six+)" + " (print #.(+ 40 2)) (print '(a #.(+ 1 2) c))"
 								+ " (defmacro re-stamp (&rest body) `(list #.(* 7 6) ,@body)) (print (re-stamp 1 2))",
 						am.ik.rontolisp.reader.Features.WASM))))
-			.isEqualTo("6\n42\n(a 3 c)\n(42 1 2)");
+			.isEqualTo("6\n42\n(A 3 C)\n(42 1 2)");
 	}
 
 	@Test
@@ -4654,7 +4669,7 @@ class WasmLispCompilerIntegrationTest {
 	void goEscapesUnwindProtect() throws Exception {
 		assertThat(compileAndRunEh("(let ((i 0)) (tagbody top (setq i (+ i 1))"
 				+ " (unwind-protect (if (< i 3) (go top)) (print (list :cleanup i)))) (print i))"))
-			.isEqualTo("(:cleanup 1)\n(:cleanup 2)\n(:cleanup 3)\n3");
+			.isEqualTo("(:CLEANUP 1)\n(:CLEANUP 2)\n(:CLEANUP 3)\n3");
 	}
 
 	@Test
@@ -4766,7 +4781,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void mapcarMultipleListsStopsAtShortest() throws Exception {
-		assertThat(compileAndRun("(print (mapcar #'cons '(1 2 3) '(a b)))")).isEqualTo("((1 . a) (2 . b))");
+		assertThat(compileAndRun("(print (mapcar #'cons '(1 2 3) '(a b)))")).isEqualTo("((1 . A) (2 . B))");
 	}
 
 	@Test
@@ -5100,7 +5115,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void writeToStringIsPrin1ToString() throws Exception {
-		assertThat(compileAndRun("(princ (write-to-string '(a \"b\" 3)))")).isEqualTo("(a \"b\" 3)");
+		assertThat(compileAndRun("(princ (write-to-string '(a \"b\" 3)))")).isEqualTo("(A \"b\" 3)");
 	}
 
 	@Test
@@ -5220,14 +5235,18 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void loadDefunAndUseViaEval() throws Exception {
 		// Definitions from the loaded file live in the eval runtime's global env.
-		String lib = "(defun square (x) (* x x))\n(setq base 5)\n";
+		// The embedded runtime reader is case-preserving while compiled references
+		// read upcased, so runtime-loaded definitions are spelled uppercase to be
+		// reachable from compiled code on this backend (the JVM eval runtime bridges
+		// the cases; the WASM one does not).
+		String lib = "(defun SQUARE (x) (* x x))\n(setq BASE 5)\n";
 		String code = "(load \"lib.lisp\") (print (eval '(square base)))";
 		assertThat(compileAndRunLoad(code, lib)).isEqualTo("25");
 	}
 
 	@Test
 	void loadMultipleForms() throws Exception {
-		String lib = "(defun inc (x) (+ x 1))\n(defun dbl (x) (* x 2))\n";
+		String lib = "(defun INC (x) (+ x 1))\n(defun DBL (x) (* x 2))\n";
 		String code = "(load \"lib.lisp\") (print (eval '(dbl (inc 4))))";
 		assertThat(compileAndRunLoad(code, lib)).isEqualTo("10");
 	}
@@ -5278,7 +5297,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void dynamicCallToLoadDefinedFunction() throws Exception {
 		// (cube 3) is unknown at compile time; dynamic mode resolves it at runtime.
-		String lib = "(defun cube (x) (* x x x))\n";
+		String lib = "(defun CUBE (x) (* x x x))\n";
 		String code = "(load \"lib.lisp\") (print (cube 3))";
 		assertThat(compileAndRunLoadDynamic(code, lib)).isEqualTo("27");
 	}
@@ -5286,14 +5305,14 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void dynamicCallFromCompiledFunctionSeesLocals() throws Exception {
 		// caller is compiled; its local n must reach the runtime-resolved cube/square.
-		String lib = "(defun cube (x) (* x x x))\n(defun square (x) (* x x))\n";
+		String lib = "(defun CUBE (x) (* x x x))\n(defun SQUARE (x) (* x x))\n";
 		String code = "(load \"lib.lisp\") (defun caller (n) (+ (cube n) (square n))) (print (caller 5))";
 		assertThat(compileAndRunLoadDynamic(code, lib)).isEqualTo("150");
 	}
 
 	@Test
 	void dynamicReferenceToLoadDefinedVariable() throws Exception {
-		String lib = "(setq base 7)\n";
+		String lib = "(setq BASE 7)\n";
 		String code = "(load \"lib.lisp\") (print base)";
 		assertThat(compileAndRunLoadDynamic(code, lib)).isEqualTo("7");
 	}
@@ -5361,7 +5380,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void evalQuoteSpecialForm() throws Exception {
-		assertThat(compileAndRun("(print (eval ''hello))")).isEqualTo("hello");
+		assertThat(compileAndRun("(print (eval ''hello))")).isEqualTo("HELLO");
 	}
 
 	@Test
@@ -5414,7 +5433,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void evalUnboundSymbolSelfEvaluates() throws Exception {
-		assertThat(compileAndRun("(print (eval ':foo))")).isEqualTo(":foo");
+		assertThat(compileAndRun("(print (eval ':foo))")).isEqualTo(":FOO");
 	}
 
 	@Test
@@ -5853,7 +5872,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (rontolisp:list-functions :mypkg))
 				""";
 		assertThat(compileAndRun(code))
-			.isEqualTo("\"hello, world\"\n(2 4 6)\n42\n(mypkg::helper mypkg:greet mypkg:twice)");
+			.isEqualTo("\"hello, world\"\n(2 4 6)\n42\n(MYPKG::HELPER MYPKG:GREET MYPKG:TWICE)");
 	}
 
 	@Test
@@ -5892,7 +5911,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (symbol-name 'foo)) (print (symbol-name :bar))"
 				+ "(print (symbol-name (gensym))) (print (symbol-name nil))"
 				+ "(print (funcall #'symbol-name 'xyz)) (print (mapcar #'symbol-name '(a b)))"))
-			.isEqualTo("\"foo\"\n\"bar\"\n\"g1\"\n\"nil\"\n\"xyz\"\n(\"a\" \"b\")");
+			.isEqualTo("\"FOO\"\n\"BAR\"\n\"g1\"\n\"nil\"\n\"XYZ\"\n(\"A\" \"B\")");
 	}
 
 	@Test
@@ -5900,17 +5919,17 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (string \"foo\")) (print (string 'foo)) (print (string :bar))"
 				+ "(print (string #\\a)) (print (string t)) (print (string nil))"
 				+ "(print (funcall #'string 'xyz)) (print (mapcar #'string '(a b)))"))
-			.isEqualTo("\"foo\"\n\"foo\"\n\"bar\"\n\"a\"\n\"t\"\n\"nil\"\n\"xyz\"\n(\"a\" \"b\")");
+			.isEqualTo("\"foo\"\n\"FOO\"\n\"BAR\"\n\"a\"\n\"t\"\n\"nil\"\n\"XYZ\"\n(\"A\" \"B\")");
 	}
 
 	@Test
 	void internReturnsCanonicalSymbols() throws Exception {
 		// the interned symbol's offset is canonicalized through _intern, so eq against
 		// a literal and env lookups (symbol-value below) both work
-		assertThat(compileAndRun("(print (intern \"hello\")) (print (eq (intern \"foo\") 'foo))"
+		assertThat(compileAndRun("(print (intern \"hello\")) (print (eq (intern \"FOO\") 'foo))"
 				+ "(print (symbolp (intern \"hello\"))) (print (intern (symbol-name 'round-trip)))"
 				+ "(print (funcall #'intern \"abc\"))"))
-			.isEqualTo("hello\nt\nt\nround-trip\nabc");
+			.isEqualTo("hello\nt\nt\nROUND-TRIP\nabc");
 	}
 
 	@Test
@@ -5930,8 +5949,8 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void findSymbolFoldsLiterals() throws Exception {
 		assertThat(compileAndRun("(print (find-symbol \"car\")) (print (find-symbol \"cond\"))"
-				+ "(print (find-symbol \"no-such-name\")) (defun fs-fn (x) x) (print (find-symbol \"fs-fn\"))"))
-			.isEqualTo("car\ncond\nnil\nfs-fn");
+				+ "(print (find-symbol \"no-such-name\")) (defun fs-fn (x) x) (print (find-symbol \"FS-FN\"))"))
+			.isEqualTo("car\ncond\nnil\nFS-FN");
 	}
 
 	@Test
@@ -5952,9 +5971,9 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void symbolValueReadsTheGlobalVariableNamespace() throws Exception {
 		assertThat(compileAndRun("(defvar *sv-var* 42) (print (symbol-value '*sv-var*))"
-				+ "(setq *sv-var2* 7) (print (symbol-value (intern \"*sv-var2*\")))"
+				+ "(setq *sv-var2* 7) (print (symbol-value (intern \"*SV-VAR2*\")))"
 				+ "(print (symbol-value :kw)) (print (symbol-value t)) (print (symbol-value nil))"))
-			.isEqualTo("42\n7\n:kw\nt\nnil");
+			.isEqualTo("42\n7\n:KW\nt\nnil");
 	}
 
 	@Test
@@ -5964,7 +5983,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (fboundp 'car)) (print (fboundp 'cond)) (print (fboundp 'defun))"
 				+ "(print (fboundp 'cadr)) (print (fboundp 'no-such-fn))"
 				+ "(defun fb-fn (x) x) (print (fboundp 'fb-fn))"
-				+ "(print (fboundp (intern \"fb-fn\"))) (print (fboundp (intern \"car\")))"
+				+ "(print (fboundp (intern \"FB-FN\"))) (print (fboundp (intern \"car\")))"
 				+ "(print (fboundp (intern \"nothing\")))"))
 			.isEqualTo("t\nt\nt\nt\nnil\nt\nt\nt\nnil");
 	}
@@ -5977,7 +5996,7 @@ class WasmLispCompilerIntegrationTest {
 				(defun add2 (a) (+ a 2))
 				(print (rontolisp:list-functions :cl-user))
 				""";
-		assertThat(compileAndRun(code)).isEqualTo("(add2 fib)");
+		assertThat(compileAndRun(code)).isEqualTo("(ADD2 FIB)");
 	}
 
 	@Test
@@ -5999,7 +6018,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThatThrownBy(() -> new WasmLispCompiler()
 			.compile(LispReader.readAllFromString("(print (rontolisp:list-functions :foo))")))
 			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)
-			.hasMessageContaining("No such package: foo");
+			.hasMessageContaining("No such package: FOO");
 	}
 
 	@Test
@@ -6095,7 +6114,7 @@ class WasmLispCompilerIntegrationTest {
 				(print :not-yet)
 				(print (handler-case (rontolisp:await *bf*) (error (e) :caught)))
 				(print (handler-case (rontolisp:await *bf*) (error (e) :caught-again)))
-				""")).isEqualTo(":not-yet\n:caught\n:caught-again");
+				""")).isEqualTo(":NOT-YET\n:CAUGHT\n:CAUGHT-AGAIN");
 	}
 
 	@Test
@@ -6134,7 +6153,7 @@ class WasmLispCompilerIntegrationTest {
 				(print 20)
 				(rontolisp::%future-reject *f* "boom")
 				(print (rontolisp:await *tf*))
-				""")).isEqualTo("10\n20\n:in-clause\n5");
+				""")).isEqualTo("10\n20\n:IN-CLAUSE\n5");
 	}
 
 	@Test
@@ -6151,7 +6170,7 @@ class WasmLispCompilerIntegrationTest {
 				(print 32)
 				(rontolisp::%future-settle *u* 0)
 				(rontolisp:await *uf*)
-				""")).isEqualTo("30\n32\n31\n:cleanup");
+				""")).isEqualTo("30\n32\n31\n:CLEANUP");
 	}
 
 	@Test
@@ -6264,7 +6283,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (rontolisp:await (rontolisp:wait-for 20)))
 				(print (rontolisp:futurep (rontolisp:wait-for 0)))
 				(print 'done)
-				""")).isEqualTo("nil\nt\ndone");
+				""")).isEqualTo("nil\nt\nDONE");
 	}
 
 	@Test
@@ -6279,7 +6298,7 @@ class WasmLispCompilerIntegrationTest {
 				  (rontolisp:await a)
 				  (rontolisp:await b))
 				(print 'end)
-				""")).isEqualTo("quick\nslow\nend");
+				""")).isEqualTo("QUICK\nSLOW\nEND");
 	}
 
 	@Test
@@ -6287,7 +6306,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunWaitForComponent("""
 				(print (handler-case (rontolisp:await (rontolisp:wait-for -5)) (error (e) 'caught)))
 				(print (handler-case (rontolisp:await (rontolisp:wait-for "x")) (error (e) 'caught)))
-				""")).isEqualTo("caught\ncaught");
+				""")).isEqualTo("CAUGHT\nCAUGHT");
 	}
 
 	@Test
@@ -6305,7 +6324,7 @@ class WasmLispCompilerIntegrationTest {
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
 				"http=y", "/tmp/fetch-err.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo(":refused");
+		assertThat(result.getStdout().trim()).isEqualTo(":REFUSED");
 	}
 
 	@Test
@@ -6845,7 +6864,7 @@ class WasmLispCompilerIntegrationTest {
 		// expression read at runtime.
 		assertThat(compileAndRunWithStdinFile(
 				"(defun make-adder (n) (lambda (x) (+ x n))) (setq add10 (make-adder 10)) (print (eval (read)))",
-				"(funcall add10 100)\n"))
+				"(funcall ADD10 100)\n"))
 			.isEqualTo("110");
 	}
 
@@ -6905,7 +6924,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (list (hash-table-count *h*) (gethash "b" *h* 'gone)))
 				(clrhash *h*)
 				(print (hash-table-count *h*))
-				""")).isEqualTo("60\n(2 gone)\n0");
+				""")).isEqualTo("60\n(2 GONE)\n0");
 	}
 
 	@Test
@@ -6926,7 +6945,7 @@ class WasmLispCompilerIntegrationTest {
 				(let ((h (funcall #'make-hash-table)))
 				  (setf (gethash 1 h) 'x)
 				  (print (gethash 1 h)))
-				""")).isEqualTo("x");
+				""")).isEqualTo("X");
 	}
 
 	@Test
@@ -7111,7 +7130,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileVectorLiteralPrin1QuotesStringsPrincDoesNot() throws Exception {
-		assertThat(compileAndRun("(prin1 #(a \"b\")) (terpri) (princ #(a \"b\"))")).isEqualTo("#(a \"b\")\n#(a b)");
+		assertThat(compileAndRun("(prin1 #(a \"b\")) (terpri) (princ #(a \"b\"))")).isEqualTo("#(A \"b\")\n#(A b)");
 	}
 
 	@Test
@@ -7207,7 +7226,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compilePackedFloatIsAnArrayAndVector() throws Exception {
-		assertThat(compileAndRun("(print (typecase #d(1 2 3) (array 'arr) (t 'no)))")).isEqualTo("arr");
+		assertThat(compileAndRun("(print (typecase #d(1 2 3) (array 'arr) (t 'no)))")).isEqualTo("ARR");
 		assertThat(compileAndRun("(print (typecase #d(1 2 3) (vector 'vec) (t 'no)))")).isEqualTo("vec");
 	}
 
@@ -7286,7 +7305,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compilePackedSingleFloatIsAnArrayAndVector() throws Exception {
-		assertThat(compileAndRun("(print (typecase #f(1 2 3) (array 'arr) (t 'no)))")).isEqualTo("arr");
+		assertThat(compileAndRun("(print (typecase #f(1 2 3) (array 'arr) (t 'no)))")).isEqualTo("ARR");
 		assertThat(compileAndRun("(print (typecase #f(1 2 3) (vector 'vec) (t 'no)))")).isEqualTo("vec");
 	}
 
@@ -7875,7 +7894,7 @@ class WasmLispCompilerIntegrationTest {
 							          (make-instance 'json-resp :status 200 :headers h :items (list 1 2 3)))))
 							""")));
 		assertThat(compileAndRunProgram(program)).isEqualTo(
-				"\"{\"msg\":\"hi\"}\"\n(:a 1)\n\"{\"x\":1}\"\n\"{\"status\":200,\"headers\":{\"content-type\":\"application/json\"},\"items\":[1,2,3]}\"");
+				"\"{\"msg\":\"hi\"}\"\n(:A 1)\n\"{\"x\":1}\"\n\"{\"status\":200,\"headers\":{\"content-type\":\"application/json\"},\"items\":[1,2,3]}\"");
 	}
 
 	@Test
@@ -7916,7 +7935,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (f 0 :m 7 :k 9))
 				(defun g (a &optional b &rest r &key c &allow-other-keys) (list a b r c))
 				(print (g 1 2 :c 3 :d 4))
-				""")).isEqualTo("(0 1 nil nil)\n(0 5 t nil)\n(0 9 t 7)\n(1 2 (:c 3 :d 4) 3)");
+				""")).isEqualTo("(0 1 nil nil)\n(0 5 t nil)\n(0 9 t 7)\n(1 2 (:C 3 :D 4) 3)");
 	}
 
 	@Test
@@ -7974,7 +7993,7 @@ class WasmLispCompilerIntegrationTest {
 				(print *mode*)
 				(funcall #'(setf my-mode) :sgml)
 				(print *mode*)
-				""")).isEqualTo(":html5\n:sgml");
+				""")).isEqualTo(":HTML5\n:SGML");
 	}
 
 	@Test
@@ -7985,7 +8004,7 @@ class WasmLispCompilerIntegrationTest {
 				(defmethod describe-it ((x (eql :br))) (list :special x))
 				(print (list (describe-it 5) (describe-it :br)))
 				(print (funcall #'describe-it 9))
-				""")).isEqualTo("((:default 5) (:special :br))\n(:default 9)");
+				""")).isEqualTo("((:DEFAULT 5) (:SPECIAL :BR))\n(:DEFAULT 9)");
 	}
 
 	@Test
@@ -8018,7 +8037,7 @@ class WasmLispCompilerIntegrationTest {
 				  (:method ((x standard-object)) :instance))
 				(defclass spx-thing () ((v :initarg :v)))
 				(print (list (spx-kind (make-instance 'spx-thing :v 1)) (spx-kind '(1 2)) (spx-kind 5)))
-				""")).isEqualTo("(:instance :list :object)");
+				""")).isEqualTo("(:INSTANCE :LIST :OBJECT)");
 	}
 
 	@Test
@@ -8037,7 +8056,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (streamp t))
 				(print (streamp "x"))
 				(let ((s t)) (check-type s stream) (print :ok))
-				""")).isEqualTo("t\nnil\n:ok");
+				""")).isEqualTo("t\nnil\n:OK");
 	}
 
 	@Test
@@ -8073,7 +8092,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (touch (make-instance 'dog)))
 				(print (reverse *log*))
 				""")).isEqualTo(
-				":done\n" + "(:before-dog :before-animal :primary-dog :primary-animal :after-animal :after-dog)");
+				":DONE\n" + "(:BEFORE-DOG :BEFORE-ANIMAL :PRIMARY-DOG :PRIMARY-ANIMAL :AFTER-ANIMAL :AFTER-DOG)");
 	}
 
 	@Test
@@ -8086,7 +8105,7 @@ class WasmLispCompilerIntegrationTest {
 				(defmethod render ((x gadget)) (cons :gadget (call-next-method)))
 				(defmethod render :around ((x thing)) (list :around (call-next-method)))
 				(print (render (make-instance 'gadget)))
-				""")).isEqualTo("(:around (:gadget :thing nil))");
+				""")).isEqualTo("(:AROUND (:GADGET :THING nil))");
 	}
 
 	// --- Dynamic (special) variable binding ---
@@ -9019,7 +9038,7 @@ class WasmLispCompilerIntegrationTest {
 				(define-condition hc-err (error) ((v :initarg :v :reader hc-err-v)))
 				(print (handler-case (error 'hc-err :v 7)
 				         (hc-err (e) (list :caught (hc-err-v e)))))
-				""")).isEqualTo("(:caught 7)");
+				""")).isEqualTo("(:CAUGHT 7)");
 	}
 
 	@Test
@@ -9027,7 +9046,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunEh("""
 				(print (handler-case (error "boom ~a" 1)
 				         (error (e) (list :caught (nth 1 e)))))
-				""")).isEqualTo("(:caught \"boom 1\")");
+				""")).isEqualTo("(:CAUGHT \"boom 1\")");
 	}
 
 	@Test
@@ -9035,7 +9054,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunEh("""
 				(defun hc-thrower () (error "deep"))
 				(print (handler-case (hc-thrower) (error (e) :caught)))
-				""")).isEqualTo(":caught");
+				""")).isEqualTo(":CAUGHT");
 	}
 
 	@Test
@@ -9046,7 +9065,7 @@ class WasmLispCompilerIntegrationTest {
 				         (warning (w) :warning)
 				         (parse-error (e) :parse)
 				         (error (e) :error)))
-				""")).isEqualTo(":parse");
+				""")).isEqualTo(":PARSE");
 	}
 
 	@Test
@@ -9057,7 +9076,7 @@ class WasmLispCompilerIntegrationTest {
 				           (handler-case (error 'hc-warn2)
 				             (error (e) :inner))
 				         (warning (w) :outer)))
-				""")).isEqualTo(":outer");
+				""")).isEqualTo(":OUTER");
 	}
 
 	@Test
@@ -9072,14 +9091,14 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void ehHandlerCaseNoErrorClauseReceivesValue() throws Exception {
 		assertThat(compileAndRunEh("(print (handler-case (+ 1 2) (error (e) :err) (:no-error (v) (list :ok v))))"))
-			.isEqualTo("(:ok 3)");
+			.isEqualTo("(:OK 3)");
 	}
 
 	@Test
 	void ehHandlerCaseCatchesSignal() throws Exception {
 		assertThat(compileAndRunEh(
 				"(print (handler-case (progn (signal \"quiet\") :not-raised) (condition (c) :raised))) (print (signal \"quiet\"))"))
-			.isEqualTo(":raised\nnil");
+			.isEqualTo(":RAISED\nnil");
 	}
 
 	@Test
@@ -9089,7 +9108,7 @@ class WasmLispCompilerIntegrationTest {
 				  (print (handler-case
 				             (unwind-protect (error "boom") (setq log (cons :cleaned log)))
 				           (error (e) (cons :caught log)))))
-				""")).isEqualTo("(:caught :cleaned)");
+				""")).isEqualTo("(:CAUGHT :CLEANED)");
 	}
 
 	@Test
@@ -9101,7 +9120,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (dolist (x '(1 2 3))
 				         (handler-case (when (= x 2) (return :done)) (error (e) :err))))
 				(print (signal "after"))
-				""")).isEqualTo(":done\nnil");
+				""")).isEqualTo(":DONE\nnil");
 	}
 
 	@Test
@@ -9112,7 +9131,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void ehUnwindProtectRunsCleanupOnNormalExit() throws Exception {
-		assertThat(compileAndRunEh("(print (unwind-protect (+ 1 2) (print :cleanup)))")).isEqualTo(":cleanup\n3");
+		assertThat(compileAndRunEh("(print (unwind-protect (+ 1 2) (print :cleanup)))")).isEqualTo(":CLEANUP\n3");
 	}
 
 	@Test
@@ -9126,7 +9145,7 @@ class WasmLispCompilerIntegrationTest {
 				          (setq log (cons :inner log)))
 				      (setq log (cons :outer log))))
 				  (print log))
-				""")).isEqualTo("(:outer :inner)");
+				""")).isEqualTo("(:OUTER :INNER)");
 	}
 
 	@Test
@@ -9139,7 +9158,7 @@ class WasmLispCompilerIntegrationTest {
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y",
 				"/tmp/test.wasm");
 		assertThat(result.getExitCode()).isNotZero();
-		assertThat(result.getStdout().trim()).isEqualTo(":cleaned");
+		assertThat(result.getStdout().trim()).isEqualTo(":CLEANED");
 		assertThat(result.getStderr()).contains("unreachable");
 	}
 
@@ -9228,7 +9247,7 @@ class WasmLispCompilerIntegrationTest {
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
 				"http=y", "/tmp/wit-variant.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo(":get\n:post\n(:other . \"PATCH\")\n:rejected");
+		assertThat(result.getStdout().trim()).isEqualTo(":GET\n:POST\n(:OTHER . \"PATCH\")\n:REJECTED");
 	}
 
 	// A subset of the real wasi:sockets/types@0.3.0: `create` takes an enum, `bind` takes
@@ -9311,7 +9330,7 @@ class WasmLispCompilerIntegrationTest {
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
 				"inherit-network=y", "/tmp/wit-record.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo("(:ipv4 (127 0 0 1))\nt");
+		assertThat(result.getStdout().trim()).isEqualTo("(:IPV4 (127 0 0 1))\nt");
 	}
 
 	@Test
@@ -9337,7 +9356,7 @@ class WasmLispCompilerIntegrationTest {
 		ExecResult okResult = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
 				"/tmp/wit-exit-ok.component.wasm");
 		assertThat(okResult.getExitCode()).as("stderr: %s", okResult.getStderr()).isZero();
-		assertThat(okResult.getStdout().trim()).isEqualTo(":bye");
+		assertThat(okResult.getStdout().trim()).isEqualTo(":BYE");
 
 		byte[] err = compileWitImportComponent(wit, """
 				(rontolisp:wit-import "iface.wit" :interface "wasi:cli/exit@0.3.0" :package cli)
@@ -9349,7 +9368,7 @@ class WasmLispCompilerIntegrationTest {
 		ExecResult errResult = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
 				"/tmp/wit-exit-err.component.wasm");
 		assertThat(errResult.getExitCode()).isEqualTo(1);
-		assertThat(errResult.getStdout().trim()).isEqualTo(":bye");
+		assertThat(errResult.getStdout().trim()).isEqualTo(":BYE");
 	}
 
 	// Every parameter shape the canonical ABI flattens, including the ones no wasmtime

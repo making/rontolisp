@@ -83,7 +83,7 @@ final class WasmFetchCompiler {
 		}
 		LispVal current = plist;
 		while (current instanceof LispCons key && key.cdr() instanceof LispCons value) {
-			if (key.car() instanceof LispSymbol sym && ":method".equals(sym.name())
+			if (key.car() instanceof LispSymbol sym && LispNames.keywordMatches(sym.name(), ":method")
 					&& value.car() instanceof LispString method) {
 				return method.value();
 			}

@@ -492,7 +492,7 @@ final class WasmComponentImportCompiler {
 			// the keyword head is what tells these apart from a ("member" "lisp-name")
 			// function binding.
 			if (pair.car() instanceof LispSymbol keyword && keyword.isKeyword()) {
-				if (":async-call".equals(keyword.name())) {
+				if (LispNames.keywordMatches(keyword.name(), ":async-call")) {
 					if (!(rest.car() instanceof LispString member) || !(rest.cdr() instanceof LispCons startCons)
 							|| !(startCons.car() instanceof LispString startName)
 							|| !(startCons.cdr() instanceof LispCons liftCons)
@@ -509,7 +509,7 @@ final class WasmComponentImportCompiler {
 							func, abi, abi.flatSigAsyncLower(func)));
 					continue;
 				}
-				if (":task-return".equals(keyword.name())) {
+				if (LispNames.keywordMatches(keyword.name(), ":task-return")) {
 					if (!(rest.car() instanceof LispString alias) || !(rest.cdr() instanceof LispCons nameCons)
 							|| !(nameCons.car() instanceof LispString trName)) {
 						throw new UnsupportedOperationException(
@@ -520,7 +520,7 @@ final class WasmComponentImportCompiler {
 							alias.value(), target.abi(), target.type()));
 					continue;
 				}
-				if (":async".equals(keyword.name())) {
+				if (LispNames.keywordMatches(keyword.name(), ":async")) {
 					if (!(rest.car() instanceof LispString alias) || !(rest.cdr() instanceof LispCons opCons)
 							|| !(opCons.car() instanceof LispString op) || !(opCons.cdr() instanceof LispCons nameCons)
 							|| !(nameCons.car() instanceof LispString asyncName)) {
@@ -538,7 +538,7 @@ final class WasmComponentImportCompiler {
 							target.type()));
 					continue;
 				}
-				if (!":drop".equals(keyword.name()) || !(rest.car() instanceof LispString resource)
+				if (!LispNames.keywordMatches(keyword.name(), ":drop") || !(rest.car() instanceof LispString resource)
 						|| !(rest.cdr() instanceof LispCons tail) || !(tail.car() instanceof LispString dropName)) {
 					throw new UnsupportedOperationException(
 							"Malformed internal component-import member: " + items.get(i).print());
@@ -1783,9 +1783,17 @@ final class WasmComponentImportCompiler {
 				int payload = joined.isEmpty() ? -1 : emitPayload(slot);
 				int n = info.names().size();
 				for (int i = 0; i < n; i++) {
+					// Accept BOTH spellings: user data reads upcased (:GET) while the
+					// internal lowercase-authored sources construct :get.
 					getLocal(tagId);
 					i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
 					this.w.write(Instruction.I32_EQ);
+					getLocal(tagId);
+					i32Const(
+							this.ctx.stringTable.addString(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT))
+								.offset());
+					this.w.write(Instruction.I32_EQ);
+					this.w.write(Instruction.I32_OR);
 					this.w.write(Instruction.IF, 0x40);
 					i32Const(i);
 					setLocal(disc);
@@ -1957,10 +1965,24 @@ final class WasmComponentImportCompiler {
 				getLocal(slot);
 				if (plist) {
 					// _plist_get(plist, ":field") -- nil when the key is absent, which is
-					// what an option field wants.
+					// what an option field wants. Probe the lowercase spelling first,
+					// then the upcased twin (user plists read upcased).
 					i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
 					this.w.write(Instruction.CALL);
 					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
+					setLocal(field);
+					getLocal(field);
+					this.w.write(Instruction.REF_IS_NULL);
+					this.w.write(Instruction.IF, 0x40);
+					getLocal(slot);
+					i32Const(
+							this.ctx.stringTable.addString(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT))
+								.offset());
+					this.w.write(Instruction.CALL);
+					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
+					setLocal(field);
+					this.w.write(Instruction.END);
+					getLocal(field);
 				}
 				else {
 					for (int k = 0; k < i; k++) {
@@ -2185,9 +2207,15 @@ final class WasmComponentImportCompiler {
 			int payload = anyPayload ? emitPayload(slot) : -1;
 			int n = info.names().size();
 			for (int i = 0; i < n; i++) {
+				// Accept BOTH spellings (upcased user data, lowercase internal sources).
 				getLocal(tagId);
 				i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
 				this.w.write(Instruction.I32_EQ);
+				getLocal(tagId);
+				i32Const(this.ctx.stringTable.addString(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT))
+					.offset());
+				this.w.write(Instruction.I32_EQ);
+				this.w.write(Instruction.I32_OR);
 				this.w.write(Instruction.IF, 0x40);
 				getLocal(base);
 				i32Const(i);
@@ -2232,9 +2260,23 @@ final class WasmComponentImportCompiler {
 				int field = this.ctx.allocTemp();
 				getLocal(slot);
 				if (plist) {
+					// Lowercase probe, then the upcased twin (user plists read upcased).
 					i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
 					this.w.write(Instruction.CALL);
 					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
+					setLocal(field);
+					getLocal(field);
+					this.w.write(Instruction.REF_IS_NULL);
+					this.w.write(Instruction.IF, 0x40);
+					getLocal(slot);
+					i32Const(
+							this.ctx.stringTable.addString(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT))
+								.offset());
+					this.w.write(Instruction.CALL);
+					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
+					setLocal(field);
+					this.w.write(Instruction.END);
+					getLocal(field);
 				}
 				else {
 					for (int k = 0; k < i; k++) {
@@ -2325,7 +2367,8 @@ final class WasmComponentImportCompiler {
 			int conses = 0;
 			for (int i = 0; i < info.names().size(); i++) {
 				if (plist) {
-					WasmEmitHelper.compileStringLiteral(":" + info.names().get(i), this.ctx);
+					WasmEmitHelper.compileStringLiteral(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT),
+							this.ctx);
 					conses++;
 				}
 				if (i == carrier) {
@@ -2513,13 +2556,14 @@ final class WasmComponentImportCompiler {
 				return;
 			}
 			if (resolved instanceof WitType.ResultOf) {
-				WasmEmitHelper.compileStringLiteral(index == 0 ? ":ok" : ":error", this.ctx);
+				WasmEmitHelper.compileStringLiteral(index == 0 ? ":OK" : ":ERROR", this.ctx);
 				emitPayloadOrNil(info.abi(), payload, payloadBase, payloadOffset);
 				newCons();
 				return;
 			}
 			// enum / variant: the case keyword, dotted with the payload when present.
-			WasmEmitHelper.compileStringLiteral(":" + info.names().get(index), this.ctx);
+			WasmEmitHelper.compileStringLiteral(":" + info.names().get(index).toUpperCase(java.util.Locale.ROOT),
+					this.ctx);
 			if (payload != null) {
 				emitPayloadOrNil(info.abi(), payload, payloadBase, payloadOffset);
 				newCons();
@@ -2545,7 +2589,8 @@ final class WasmComponentImportCompiler {
 			int conses = 0;
 			for (int i = 0; i < info.names().size(); i++) {
 				if (plist) {
-					WasmEmitHelper.compileStringLiteral(":" + info.names().get(i), this.ctx);
+					WasmEmitHelper.compileStringLiteral(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT),
+							this.ctx);
 					conses++;
 				}
 				emitLiftAt(info.abi(), info.types().get(i), base, offset + info.offsets().get(i));

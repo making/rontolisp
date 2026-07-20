@@ -11,5 +11,5 @@ Binds the variables of `pattern` to the corresponding parts of the value of `for
 
 ```lisp
 (destructuring-bind (name &key (size 1) color) '(box :color red)
-  (list name size color)) ; => (box 1 red)
+  (list name size color)) ; => (BOX 1 RED)
 ```

@@ -128,9 +128,11 @@ final class JvmFetchRuntimeBuilder {
 		Asm a = new Asm();
 
 		// --- options parsing: method (10), request headers (9), request body (15) ---
-		emitPlistGet(a, methodKey, 11, 10, objectArrayClass, stringClass, stringEquals);
-		emitPlistGet(a, headersKey, 11, 9, objectArrayClass, stringClass, stringEquals);
-		emitPlistGet(a, bodyKey, 11, 15, objectArrayClass, stringClass, stringEquals);
+		// Keyword-argument matching is case-insensitive (the reader upcases source
+		// keywords to :METHOD/:HEADERS/:BODY).
+		emitPlistGet(a, methodKey, 11, 10, objectArrayClass, stringClass, stringEqualsIgnoreCase);
+		emitPlistGet(a, headersKey, 11, 9, objectArrayClass, stringClass, stringEqualsIgnoreCase);
+		emitPlistGet(a, bodyKey, 11, 15, objectArrayClass, stringClass, stringEqualsIgnoreCase);
 
 		// --- resolve the canonical method into slot 16: nil defaults to GET, otherwise
 		// it

@@ -9,10 +9,10 @@ Returns the symbol named by `string` (no case folding). rontolisp symbols compar
 ```
 
 ```lisp
-(eq (intern "foo") 'foo) ; => t
+(eq (intern "foo") 'foo) ; => nil
 ```
 
 ```lisp
 (defvar *level* 7)
-(symbol-value (intern "*level*")) ; => 7
+(symbol-value (intern "*LEVEL*")) ; => 7
 ```

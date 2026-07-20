@@ -14,7 +14,7 @@ Defines a new package named `name` and returns the name symbol. Like `in-package
 Redefining an existing package is an error, and so are `:shadow`/`:shadowing-import-from` (rontolisp has no symbol shadowing) and any other clause (`:intern`, ...). See [Packages](../packages.md#user-defined-packages-defpackage) for the full rules.
 
 ```lisp
-(defpackage :util (:use :cl) (:export :trim)) ; => util
+(defpackage :util (:use :cl) (:export :trim)) ; => UTIL
 ```
 
 ```lisp

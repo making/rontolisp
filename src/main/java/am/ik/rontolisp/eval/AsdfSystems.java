@@ -319,7 +319,7 @@ public final class AsdfSystems {
 						+ " expects a keyword option, got " + items.get(i).print());
 			}
 			LispVal value = items.get(i + 1);
-			switch (key.name()) {
+			switch (LispNames.foldKeyword(key.name())) {
 				// Metadata: accepted for .asd compatibility, not recorded anywhere. The
 				// :version value may be any literal form, including ASDF's
 				// (:read-file-form "version.sexp") indirection -- it is never inspected.
@@ -341,9 +341,10 @@ public final class AsdfSystems {
 				}
 				case ":serial" -> serial = !(value instanceof LispNil);
 				case ":components" -> components = value;
-				default -> throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
-						+ ": unsupported option " + key.name() + " (supported: :name :description :long-description"
-						+ " :version :author :maintainer :license :depends-on :serial :components)");
+				default ->
+					throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name + ": unsupported option "
+							+ LispNames.foldKeyword(key.name()) + " (supported: :name :description :long-description"
+							+ " :version :author :maintainer :license :depends-on :serial :components)");
 			}
 		}
 		List<String> files = components == null ? List.of() : orderComponents(name, components, serial, "", features);
@@ -393,7 +394,7 @@ public final class AsdfSystems {
 	 */
 	@Nullable private static String dependencyName(String systemName, LispVal dep, Features features) {
 		if (dep instanceof LispCons cons && cons.car() instanceof LispSymbol op && cons.isProperList()) {
-			if (":feature".equals(op.name())) {
+			if (LispNames.keywordMatches(op.name(), ":feature")) {
 				List<LispVal> items = cons.toList();
 				if (items.size() != 3) {
 					throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + systemName
@@ -405,7 +406,7 @@ public final class AsdfSystems {
 				}
 				return dependencyName(systemName, items.get(2), features);
 			}
-			if (":require".equals(op.name())) {
+			if (LispNames.keywordMatches(op.name(), ":require")) {
 				throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + systemName
 						+ " :depends-on (:require ...) is not supported (implementation-provided modules do not"
 						+ " exist here): " + dep.print());
@@ -439,15 +440,23 @@ public final class AsdfSystems {
 	}
 
 	private static String symbolName(LispSymbol sym) {
+		// A SYMBOL designator downcases, like ASDF's coerce-name (string designators
+		// stay verbatim, also like ASDF). This is what keeps (ql:quickload :LIB) --
+		// the spelling the upcase reader mode produces -- pointing at the same
+		// lowercase dist/directory name as (ql:quickload :lib).
 		if (sym.name().startsWith("#:")) {
 			// An uninterned designator (#:lib), the portable defsystem idiom.
-			return sym.name().substring(2);
+			return lower(sym.name().substring(2));
 		}
 		if (sym.isKeyword()) {
-			return sym.name().substring(1);
+			return lower(sym.name().substring(1));
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-		return qn == null ? sym.name() : qn.member();
+		return lower(qn == null ? sym.name() : qn.member());
+	}
+
+	private static String lower(String name) {
+		return name.toLowerCase(java.util.Locale.ROOT);
 	}
 
 	/**
@@ -538,8 +547,8 @@ public final class AsdfSystems {
 						+ " expects a keyword option, got " + parts.get(i).print());
 			}
 			LispVal value = parts.get(i + 1);
-			boolean module = ":module".equals(type.name());
-			switch (key.name()) {
+			boolean module = LispNames.keywordMatches(type.name(), ":module");
+			switch (LispNames.foldKeyword(key.name())) {
 				case ":depends-on" -> {
 					for (LispVal dep : properList("component " + name + " :depends-on", value)) {
 						dependsOn.add(designator(":depends-on", dep));
@@ -561,7 +570,7 @@ public final class AsdfSystems {
 				default -> throw unsupportedComponentOption(systemName, type, name, key);
 			}
 		}
-		List<String> files = switch (type.name()) {
+		List<String> files = switch (LispNames.foldKeyword(type.name())) {
 			case ":file" -> List.of(prefix + name + ".lisp");
 			// A static file participates in ordering but contributes no source.
 			case ":static-file" -> List.of();
@@ -573,7 +582,7 @@ public final class AsdfSystems {
 				yield orderComponents(systemName, nested, moduleSerial, prefix + name + "/", features);
 			}
 			default -> throw new IllegalStateException("system " + systemName + ": unsupported component type "
-					+ type.name() + " (supported: :file :module :static-file)");
+					+ LispNames.foldKeyword(type.name()) + " (supported: :file :module :static-file)");
 		};
 		// A feature-disabled component keeps its place in the dependency graph (a
 		// sibling may :depends-on it) but contributes no source files.

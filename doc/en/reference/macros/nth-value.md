@@ -9,5 +9,5 @@ Returns the `n`-th (0-based) value of `values-form`, or nil when there is no suc
 ```
 
 ```lisp
-(nth-value 0 (values 'a 'b)) ; => a
+(nth-value 0 (values 'a 'b)) ; => A
 ```

@@ -456,7 +456,26 @@ public final class ClosRegistry {
 	 * @return the position, -1, or null
 	 */
 	@Nullable public Integer slotPosition(String baseName) {
-		return this.slotPositions.get(baseName);
+		Integer exact = this.slotPositions.get(baseName);
+		if (exact != null) {
+			return exact;
+		}
+		// Case-flip retry: a Java-side reader asks with the canonical lowercase name
+		// (simple-condition-format-control -> "format-control") while an upcase-read
+		// user condition registered the slot upcased -- and vice versa for the seeded
+		// lowercase hierarchy.
+		String upper = baseName.toUpperCase(java.util.Locale.ROOT);
+		if (!upper.equals(baseName)) {
+			Integer flipped = this.slotPositions.get(upper);
+			if (flipped != null) {
+				return flipped;
+			}
+		}
+		String lower = baseName.toLowerCase(java.util.Locale.ROOT);
+		if (!lower.equals(baseName)) {
+			return this.slotPositions.get(lower);
+		}
+		return null;
 	}
 
 	/**

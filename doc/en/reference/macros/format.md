@@ -17,7 +17,7 @@ a file stream). All arguments are evaluated left to right before any output.
 ```
 
 ```
-Hello world, you are 42!
+Hello WORLD, you are 42!
 ```
 
 With destination `nil` the result is returned as a string instead of printed:
@@ -74,17 +74,17 @@ default). `~a`/`~s` pad on the right (left with `@`); numbers pad on the left.
 ```
 
 ```
-Hello world, you are 42 years old.
+Hello WORLD, you are 42 years old.
 1,000,000 and +42
 3.14 and 3.14
 1.2345e+3 and 3.1416e+0
 foo       |00042|
-Hello world!
+Hello WORLD!
 FF 100 101 10000
 a #\b Newline
 foo bar Foo Bar
 one yes x=42
-<1><2> (x,1)(y,2) a b
+<1><2> (X,1)(Y,2) A B
 1  1
 ```
 

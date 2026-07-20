@@ -132,7 +132,7 @@ final class JvmReduceCompiler {
 			return false;
 		}
 		if (args.size() == 5 && args.get(3) instanceof LispSymbol kw
-				&& LispNames.INITIAL_VALUE_KEYWORD.equals(kw.name())) {
+				&& LispNames.keywordMatches(kw.name(), LispNames.INITIAL_VALUE_KEYWORD)) {
 			return true;
 		}
 		throw new UnsupportedOperationException(

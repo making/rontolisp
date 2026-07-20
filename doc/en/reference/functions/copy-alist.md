@@ -5,7 +5,7 @@
 Returns a copy of an association list: both the list spine and each `(key . value)` pair cell are fresh cons cells, so mutating a pair in the copy (e.g. with `rplacd` or `setf` of `cdr`) leaves the original alist intact. The keys and values themselves are shared, not copied.
 
 ```lisp
-(copy-alist '((a . 1) (b . 2))) ; => ((a . 1) (b . 2))
+(copy-alist '((a . 1) (b . 2))) ; => ((A . 1) (B . 2))
 ```
 
 ```lisp

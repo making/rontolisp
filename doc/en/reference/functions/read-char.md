@@ -9,5 +9,5 @@ Reads one character from `stream` (default: standard input) and returns it. The 
   (let* ((c1 (read-char s))
          (c2 (read-char s))
          (c3 (read-char s nil :end)))
-    (list c1 c2 c3))) ; => (#\h #\i :end)
+    (list c1 c2 c3))) ; => (#\h #\i :END)
 ```

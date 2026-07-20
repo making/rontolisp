@@ -90,7 +90,7 @@ cases:
       (defvar *gv* 200)
       (print *gv*)
     expected: |
-      *gv*
+      *GV*
       100
       100
   - name: defun
@@ -507,9 +507,9 @@ cases:
       (print (case 99 (1 'one) ((2 3 4) 'small) (otherwise 'big)))
       (print (case 5 (1 'a) (2 'b)))
     expected: |
-      two
-      small
-      big
+      TWO
+      SMALL
+      BIG
       nil
   - name: type-conversion-float
     source: |
@@ -595,8 +595,8 @@ cases:
       (setq plist3 (list 'p 1 'q 2))
       (print (if (remf plist3 'z) 42 99))
     expected: |
-      (a 1 c 3)
-      (y 20)
+      (A 1 C 3)
+      (Y 20)
       99
   - name: keyword-symbols
     source: |
@@ -607,7 +607,7 @@ cases:
       (print (if (keywordp 'foo) 42 99))
       (print (if (symbolp :foo) 42 99))
     expected: |
-      :foo
+      :FOO
       42
       99
       42
@@ -631,7 +631,7 @@ cases:
       (print (mapcar (lambda (a b c) (+ a b c)) '(1 2) '(10 20) '(100 200)))
     expected: |
       (11 22 33 44)
-      ((1 . a) (2 . b))
+      ((1 . A) (2 . B))
       (111 222)
   - name: map-into
     source: |
@@ -950,9 +950,9 @@ cases:
       nil
       (3 4)
       nil
-      ((a d) (a e))
+      ((A D) (A E))
       nil
-      (b 2)
+      (B 2)
       nil
       (3)
       nil
@@ -981,7 +981,7 @@ cases:
       0
       3
       (5 6)
-      (3 b)
+      (3 B)
       2
       nil
       (2 1 3)
@@ -1103,7 +1103,7 @@ cases:
       (print (with-slots (v) (make-condition 'ci-cond-err :v 9) v))
       (print (signal "quiet"))
     expected: |
-      e
+      E
       7
       9
       nil
@@ -1124,7 +1124,7 @@ cases:
       292
       (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
       (call field new proxy static)
-      ci-intro-fn
+      CI-INTRO-FN
       nil
       nil
   - name: defpackage-use-export
@@ -1143,7 +1143,7 @@ cases:
       "hello, world"
       (2 4 6)
       42
-      (ci-pkg::ci-priv ci-pkg:ci-greet ci-pkg:ci-twice)
+      (CI-PKG::CI-PRIV CI-PKG:CI-GREET CI-PKG:CI-TWICE)
   # rl/la are built-in nicknames for rontolisp/linalg; a user defpackage nickname
   # resolves everywhere the canonical name does.
   - name: builtin-package-nicknames
@@ -1280,10 +1280,10 @@ cases:
       (defun ci-greet (name) (format t "Hi, ~a!~%" name))
       (ci-greet 'alice)
     expected: |
-      Hello world, you are 42!
+      Hello WORLD, you are 42!
       "str" and str
       list=(1 2 3) tilde=~
-      Hi, alice!
+      Hi, ALICE!
   - name: format-nil-princ-to-string-prin1-to
     source: |
       (princ (format nil "fmt-nil: ~a ~d ~s ~~~%" 'world 42 "str"))
@@ -1295,7 +1295,7 @@ cases:
       (princ (prin1-to-string "abc"))
       (terpri)
     expected: |
-      fmt-nil: world 42 "str" ~
+      fmt-nil: WORLD 42 "str" ~
       5
       foobar
       3.14
@@ -1343,7 +1343,7 @@ cases:
     expected: |
       b10|no20| 30
       two 5 6
-      <1><2>| a b|(x,1)(y,2)
+      <1><2>| A B|(X,1)(Y,2)
       x 1 2|(3)(4)
       1  4  3
       000042 [   3.14159e+000] [********]
@@ -1543,11 +1543,11 @@ cases:
     expected: |
       (1 2 3 4)
       (1 2 . 3)
-      ((a . 1))
-      b
+      ((A . 1))
+      B
       t
       nil
-      (b . 2)
+      (B . 2)
       (3 2 1 4 5)
       (3 2 1 4 5)
       ((1 2 3) (2 3) (3))
@@ -1568,16 +1568,16 @@ cases:
       (print `((a . 1) (b . ,(+ 1 1))))
       (print (read-from-string "(x . 9)"))
     expected: |
-      (a . 1)
-      (b . 2)
+      (A . 1)
+      (B . 2)
       2
       ("b" . 2)
-      (b . "x")
-      (b . 2)
-      ((a . 1) (b . 2))
-      ((a . 1) (b . 2) (c . 3))
-      ((a . 1) (b . 2))
-      ((a . 1) (b . 2))
+      (B . "x")
+      (B . 2)
+      ((A . 1) (B . 2))
+      ((A . 1) (B . 2) (C . 3))
+      ((A . 1) (B . 2))
+      ((A . 1) (B . 2))
       (x . 9)
   - name: quoted-character-list
     source: |
@@ -1606,7 +1606,7 @@ cases:
       (print +c+)
     expected: |
       2
-      +c+
+      +C+
       9
   - name: do-sequential-bindings-and-steps
     source: |
@@ -1622,7 +1622,7 @@ cases:
       (print (loop for c across "hello" count (eql c #\l)))
     expected: |
       (1 2 3 4 5)
-      ((0 a) (1 b) (2 c))
+      ((0 A) (1 B) (2 C))
       30
       4
       2
@@ -1945,7 +1945,7 @@ cases:
       11
       3
       (t nil nil)
-      (2 gone)
+      (2 GONE)
       14
       0
 
@@ -2057,8 +2057,8 @@ cases:
       (ci-vectors)
     expected: |
       #(1 2 3)
-      #(a "b")
-      #(a b)
+      #(A "b")
+      #(A b)
       #(#(1 2) #(3 4))
       20
       #(7 7 7)
@@ -2569,7 +2569,7 @@ cases:
       #d((0.0 1.0) (10.0 11.0))
       4.0
       (1.0 2.0 3.0)
-      arr
+      ARR
 
   # The vec: package (see .kb/vec.md): portable packed-f64 vector kernels over the packed
   # double-float array type, implemented once in vec.lisp as the scalar reference and run
@@ -2704,7 +2704,7 @@ cases:
       #f((0.0 1.0) (10.0 11.0))
       4.0
       (1.0 2.0 3.0)
-      arr
+      ARR
       nil
       #f(5.0 7.0 9.0)
       #f(0.0 1.0 2.0 3.0)
@@ -2859,7 +2859,7 @@ cases:
       (2 1)
       11
       42
-      (a 3 3 4 b)
+      (A 3 3 4 B)
 
   # gensym + macroexpand/macroexpand-1. Runtime gensym names print identically on
   # all four backends only while no earlier form runs gensym at macro-expansion
@@ -2893,8 +2893,8 @@ cases:
       nil
       t
       (9 90)
-      (if a (progn b) nil)
-      (if c nil x)
+      (if A (progn B) nil)
+      (if C nil X)
       (+ 41 1)
       (+ 1 2)
 
@@ -3018,7 +3018,7 @@ cases:
                 (make-instance 'ci-json-resp :status 200 :headers h :items (list 1 2 3)))))
     expected: |
       "{"msg":"hi"}"
-      (:a 1)
+      (:A 1)
       "{"x":1}"
       (("k" . 7))
       "{"status":200,"headers":{"content-type":"application/json"},"items":[1,2,3]}"
@@ -3075,7 +3075,7 @@ cases:
       (0 5 t nil)
       (0 9 t 7)
       (0 1 nil nil)
-      (1 2 (:c 3 :d 4) 3)
+      (1 2 (:C 3 :D 4) 3)
       (5 6 nil)
   - name: lambda-list-first-class-and-eval
     source: |
@@ -3139,8 +3139,8 @@ cases:
       (funcall #'(setf sf-mode) :sgml)
       (print *sf-mode*)
     expected: |
-      :html5
-      :sgml
+      :HTML5
+      :SGML
   - name: clos-defgeneric-defmethod-eql-dispatch
     source: |
       (defgeneric clos-describe-it (x))
@@ -3149,8 +3149,8 @@ cases:
       (print (list (clos-describe-it 5) (clos-describe-it :br)))
       (print (funcall #'clos-describe-it 9))
     expected: |
-      ((:default 5) (:special :br))
-      (:default 9)
+      ((:DEFAULT 5) (:SPECIAL :BR))
+      (:DEFAULT 9)
   - name: clos-defclass-slots-inheritance-and-dispatch
     source: |
       (defclass clos-animal () ((name :initarg :name :accessor clos-animal-name)))
@@ -3186,8 +3186,8 @@ cases:
       (print (clos-mc-touch (make-instance 'clos-mc-dog)))
       (print (reverse *clos-mc-log*))
     expected: |
-      (:around :done t)
-      (:before-dog :before-animal :primary-dog :primary-animal :after-animal :after-dog)
+      (:AROUND :DONE t)
+      (:BEFORE-DOG :BEFORE-ANIMAL :PRIMARY-DOG :PRIMARY-ANIMAL :AFTER-ANIMAL :AFTER-DOG)
   - name: binary-file-round-trip-with-read-byte-write-byte
     source: |
       (with-open-file (out "bin.dat" :direction :output :element-type '(unsigned-byte 8))
@@ -3288,7 +3288,7 @@ cases:
       (terpri)
     expected: |
       no newline
-      "(a "b" 3)"
+      "(A "b" 3)"
       x
       done
   - name: sequence-and-alist-test-key-keywords
@@ -3316,26 +3316,26 @@ cases:
       (print (adjoin '(1 x) '((1 a) (2 b)) :key #'car))
     expected: |
       ("b" . 2)
-      (1 . a)
+      (1 . A)
       ((3 4) (5 6))
-      (b . 3)
+      (B . 3)
       "b"
       (3 4)
       1
       2
       ("a" "c")
-      ((2 b))
+      ((2 B))
       ("a" "c")
       ("b" "a" "c")
-      ((2 b) (1 c))
+      ((2 B) (1 C))
       ("a" "X" "c")
-      ((1) x)
+      ((1) X)
       ("c" "a" "b")
       ("b")
       ("a")
       ("a" "b")
       ("z" "a" "b")
-      ((1 a) (2 b))
+      ((1 A) (2 B))
   - name: reader-block-comments
     source: |
       #| a block comment
@@ -3353,21 +3353,21 @@ cases:
       #+(and rontolisp (not sbcl)) (print :compound)
       #+nil (print :never)
     expected: |
-      :yes
-      :portable
-      :compound
+      :YES
+      :PORTABLE
+      :COMPOUND
   - name: reader-per-backend-features
     source: |
       (print #+rontolisp-interpreter :interpreter
              #+rontolisp-jvm :jvm
              #+rontolisp-wasm :wasm)
     expected: |
-      :interpreter
+      :INTERPRETER
     expectedByBackend:
       jvm: |
-        :jvm
+        :JVM
       wasm: |
-        :wasm
+        :WASM
   - name: reader-features-variable
     source: |
       (print (length *features*))
@@ -3394,10 +3394,10 @@ cases:
       42
       3
       42
-      :checked
-      :checked2
-      :digit
-      :abc
+      :CHECKED
+      :CHECKED2
+      :DIGIT
+      :ABC
   - name: user-deftype-typep-satisfies
     source: |
       (deftype ci-even () '(satisfies evenp))
@@ -3415,7 +3415,7 @@ cases:
       nil
       t
       nil
-      :even
+      :EVEN
       t
   - name: user-setf-expander-and-defsetf
     source: |
@@ -3550,13 +3550,13 @@ cases:
       (3 2)
       (3)
       1
-      a
+      A
       3
       (1 2 3 2 1)
       (42 t)
       (nil t)
       (nil nil)
-      (dflt nil)
+      (DFLT nil)
       502
       ((2 1) (2 2) (2 3))
       3
@@ -3636,59 +3636,59 @@ cases:
     source: |
       (print (symbol-name 'foo))
       (print (symbol-name :bar))
-      (print (intern "sym-api-hello"))
-      (print (eq (intern "foo") 'foo))
+      (print (intern "SYM-API-HELLO"))
+      (print (eq (intern "FOO") 'foo))
       (print (intern (symbol-name 'sym-api-round-trip)))
       (print (find-symbol "car"))
       (print (find-symbol "cond"))
-      (print (find-symbol "sym-api-no-such-name"))
-      (print (make-symbol "sym-api-temp"))
-      (print (eq (make-symbol "foo") 'foo))
+      (print (find-symbol "SYM-API-NO-SUCH-NAME"))
+      (print (make-symbol "SYM-API-TEMP"))
+      (print (eq (make-symbol "FOO") 'foo))
       (defvar *sym-api-var* 42)
       (print (boundp '*sym-api-var*))
       (print (boundp '*sym-api-nope*))
       (print (boundp :sym-api-kw))
       (print (symbol-value '*sym-api-var*))
-      (print (symbol-value (intern "*sym-api-var*")))
+      (print (symbol-value (intern "*SYM-API-VAR*")))
       (print (symbol-value :sym-api-kw))
       (defun sym-api-fn (x) x)
       (print (fboundp 'sym-api-fn))
       (print (fboundp 'car))
       (print (fboundp 'cond))
       (print (fboundp 'sym-api-no-such-fn))
-      (print (fboundp (intern "sym-api-fn")))
+      (print (fboundp (intern "SYM-API-FN")))
       (print (mapcar #'symbol-name '(a b)))
       (print (string "sym-api-str"))
       (print (string 'sym-api-sym))
       (print (string #\z))
       (print (mapcar #'string '(a b)))
     expected: |
-      "foo"
-      "bar"
-      sym-api-hello
+      "FOO"
+      "BAR"
+      SYM-API-HELLO
       t
-      sym-api-round-trip
+      SYM-API-ROUND-TRIP
       car
       cond
       nil
-      #:sym-api-temp
+      #:SYM-API-TEMP
       nil
       t
       nil
       t
       42
       42
-      :sym-api-kw
+      :SYM-API-KW
       t
       t
       t
       nil
       t
-      ("a" "b")
+      ("A" "B")
       "sym-api-str"
-      "sym-api-sym"
+      "SYM-API-SYM"
       "z"
-      ("a" "b")
+      ("A" "B")
   - name: split-sequence-residue-features
     source: |
       (defun res-two () (values 40 40))
@@ -3727,7 +3727,7 @@ cases:
       nil
       (2 1)
       3
-      res-vec-tag
+      RES-VEC-TAG
       nil
   - name: parse-number-residue-features
     source: |
@@ -3803,18 +3803,18 @@ cases:
       3
       4
       1
-      ((0 . a) (1 . b) (1 . a))
+      ((0 . A) (1 . B) (1 . A))
       (1 2 3)
       ((1 2 3) nil "xyz")
       (t t nil t)
-      (#\h #\i :end)
+      (#\h #\i :END)
       (9 (8 5 6))
       9
       197
       t
       42
       7
-      (:zero 40)
+      (:ZERO 40)
       nil
       10
 
@@ -3849,7 +3849,7 @@ cases:
       (10 20 10)
       (2 3 2)
       (5 5)
-      (:html :xhtml :html)
+      (:HTML :XHTML :HTML)
 
   - name: assoc-utils-features
     source: |
@@ -3877,7 +3877,7 @@ cases:
       ((1 2 3) 6)
       (t t nil)
       (2 nil 2)
-      ((1 . a) (2 . b) (3 . c))
+      ((1 . A) (2 . B) (3 . C))
       (:FOO t)
       5
       (("k" . 42))
@@ -4014,9 +4014,9 @@ cases:
       (defun ci-hc-thrower () (error "deep"))
       (print (handler-case (ci-hc-thrower) (error (e) :caught)))
     expected: |
-      (:caught 7)
-      (:caught "boom 1")
-      :caught
+      (:CAUGHT 7)
+      (:CAUGHT "boom 1")
+      :CAUGHT
   - name: handler-case-dispatch-rethrow-no-error-and-signal
     source: |
       (define-condition ci-hc-sub (parse-error) ())
@@ -4033,10 +4033,10 @@ cases:
       (print (handler-case (progn (signal "quiet") :not-raised) (condition (c) :raised)))
       (print (signal "quiet"))
     expected: |
-      :parse
-      :outer
-      (:ok 3)
-      :raised
+      :PARSE
+      :OUTER
+      (:OK 3)
+      :RAISED
       nil
   - name: unwind-protect-cleanups-and-return-channel
     source: |
@@ -4058,12 +4058,12 @@ cases:
       (print (ignore-errors (error "x")))
       (print (ignore-errors (+ 40 2)))
     expected: |
-      :cleanup
+      :CLEANUP
       3
-      (:caught :cleaned)
-      :done
+      (:CAUGHT :CLEANED)
+      :DONE
       nil
-      (:outer :inner)
+      (:OUTER :INNER)
       nil
       42
   # A catching form in an ARGUMENT position: the enclosing call has operands live
@@ -4086,9 +4086,9 @@ cases:
       ("result:" "caught")
       3.5
       ("r:" nil 42)
-      ((1 1) (2 :err) (3 3))
+      ((1 1) (2 :ERR) (3 3))
       ("seen" 1)
-      ("outer" :caught)
+      ("outer" :CAUGHT)
   # The cl-base64 integration residue: the language features the library forced --
   # locally, cerror (lite, not continuable), in-place string setf via schar/char
   # (setq-rebuild lowering on the compiled backends), a string as a rank-1
@@ -4115,14 +4115,14 @@ cases:
       (print (princ-to-string :cb64-kw))
     expected: |
       42
-      :cerror-caught
+      :CERROR-CAUGHT
       "aba"
       "yx"
       #\b
       ok
       30
-      "cb64-kw"
-      "cb64-kw"
+      "CB64-KW"
+      "CB64-KW"
   - name: jzon-residue-features
     source: |
       (let ((jzr-i 0)) (tagbody jzr-top (setq jzr-i (+ jzr-i 1)) (if (< jzr-i 3) (go jzr-top))) (print jzr-i))
@@ -4183,7 +4183,7 @@ cases:
       (t t nil)
       character
       (integer string null boolean)
-      %class-lbr-pt
+      %class-LBR-PT
       (t nil)
       nil
       "lbr 7"
@@ -4211,10 +4211,10 @@ cases:
                          (slot-value rtd-p (car rtd-pair))
                          (slot-boundp rtd-p (car rtd-pair)))))))
     expected: |
-      :rtd-caught
+      :RTD-CAUGHT
       (t nil t)
-      (rtd-x integer 5 t)
-      (rtd-y list nil t)
+      (RTD-X integer 5 t)
+      (RTD-Y list nil t)
   - name: read-time-eval-residue
     source: |
       (defvar +rte-six+ #.(* 2 3))
@@ -4226,7 +4226,7 @@ cases:
     expected: |
       6
       42
-      (rte-a 3 rte-c)
+      (RTE-A 3 RTE-C)
       (42 1 2)
   - name: clos-multi-dispatch-and-defstruct-options
     source: |
@@ -4256,10 +4256,10 @@ cases:
           (setf (cmd-get-cmd-val cmd-k2) 99)
           (print (list (cmd-get-cmd-val cmd-k) (cmd-get-cmd-val cmd-k2)))))
     expected: |
-      (:chase :flee :ignore)
-      (:dog (1 2))
+      (:CHASE :FLEE :IGNORE)
+      (:DOG (1 2))
       ("localhost" 8080)
-      (a t nil)
+      (A t nil)
       (1 99)
   - name: gray-stream-instance-dispatch
     source: |
@@ -4302,7 +4302,7 @@ cases:
     expected: |
       t
       nil
-      :ok
+      :OK
   - name: format-as-first-class-function
     source: |
       (print (apply #'format nil "x=~a y=~d" (list 5 7)))
@@ -4328,7 +4328,7 @@ cases:
       (defclass spx-thing () ((spx-v :initarg :spx-v)))
       (print (list (spx-kind (make-instance 'spx-thing :spx-v 1)) (spx-kind (list 1 2)) (spx-kind 5)))
     expected: |
-      (:instance :list :object)
+      (:INSTANCE :LIST :OBJECT)
   - name: named-block-return-from
     source: |
       (print (block nbrf-scan
@@ -4347,6 +4347,6 @@ cases:
       (print (block nil (return 7) 9))
     expected: |
       400
-      (6 :none)
-      :from-inner
+      (6 :NONE)
+      :FROM-INNER
       7

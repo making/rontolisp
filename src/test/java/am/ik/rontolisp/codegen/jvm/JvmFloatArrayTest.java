@@ -113,8 +113,8 @@ class JvmFloatArrayTest {
 	void arraypAndVectorp() throws Exception {
 		// %arrayp is the internal predicate arrayp expands to; the raw compile path here
 		// does not run the macro layer, so the internal name is exercised directly.
-		assertThat(compileAndRun("(print (if (%arrayp #d(1.0 2.0)) 'yes 'no))")).isEqualTo("yes");
-		assertThat(compileAndRun("(print (if (vectorp #d(1.0 2.0)) 'yes 'no))")).isEqualTo("yes");
+		assertThat(compileAndRun("(print (if (%arrayp #d(1.0 2.0)) 'yes 'no))")).isEqualTo("YES");
+		assertThat(compileAndRun("(print (if (vectorp #d(1.0 2.0)) 'yes 'no))")).isEqualTo("YES");
 	}
 
 	@Test
@@ -246,8 +246,8 @@ class JvmFloatArrayTest {
 
 	@Test
 	void singleArraypAndVectorp() throws Exception {
-		assertThat(compileAndRun("(print (if (%arrayp #f(1.0 2.0)) 'yes 'no))")).isEqualTo("yes");
-		assertThat(compileAndRun("(print (if (vectorp #f(1.0 2.0)) 'yes 'no))")).isEqualTo("yes");
+		assertThat(compileAndRun("(print (if (%arrayp #f(1.0 2.0)) 'yes 'no))")).isEqualTo("YES");
+		assertThat(compileAndRun("(print (if (vectorp #f(1.0 2.0)) 'yes 'no))")).isEqualTo("YES");
 	}
 
 	@Test

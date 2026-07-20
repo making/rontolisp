@@ -91,7 +91,7 @@ class JvmAsyncCompilerTest {
 				(rontolisp:async-defun failing () (error 'my-err :v 7))
 				(print (handler-case (rontolisp:await (failing))
 				         (my-err (e) (list :caught (my-err-v e)))))
-				""")).isEqualTo("(:caught 7)");
+				""")).isEqualTo("(:CAUGHT 7)");
 	}
 
 	@Test

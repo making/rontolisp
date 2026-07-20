@@ -163,7 +163,7 @@ final class WasmExportCompiler {
 				throw new UnsupportedOperationException("Missing value for " + keyword + " in " + form.print());
 			}
 			LispVal value = items.get(i + 1);
-			switch (keyword) {
+			switch (LispNames.foldKeyword(keyword)) {
 				case ":as" -> exportName = exportAlias(value, form);
 				case ":params" -> params = quotedTypeList(value, form);
 				case ":param-names" -> paramNames = quotedNameList(value, form);
@@ -225,12 +225,13 @@ final class WasmExportCompiler {
 		return name;
 	}
 
-	// The host-facing default export name is the symbol's bare member name; a package
-	// qualifier (pkg:name from a directive inside a user package) is Lisp-side spelling
-	// only.
+	// The host-facing default export name is the symbol's bare member name, lowercased:
+	// the reader upcases Lisp symbols while component-model labels are lower-kebab, so
+	// the derivation maps DRAW-LINE back to "draw-line" (a package qualifier -- pkg:name
+	// from a directive inside a user package -- is Lisp-side spelling only).
 	private static String unqualifiedMember(String name) {
 		var qn = am.ik.rontolisp.PackageRegistry.splitQualified(name);
-		return qn == null ? name : qn.member();
+		return (qn == null ? name : qn.member()).toLowerCase(java.util.Locale.ROOT);
 	}
 
 	// An :async value is the literal t or nil (leniently also a quoted one).
@@ -258,7 +259,9 @@ final class WasmExportCompiler {
 		}
 		if (value instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
 				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
-			return name.name();
+			// A quoted-symbol alias lowercases like the default derivation (the reader
+			// upcases symbols; host-facing names are lowercase); a string is verbatim.
+			return name.name().toLowerCase(java.util.Locale.ROOT);
 		}
 		throw new UnsupportedOperationException(
 				"rontolisp:wasm-export :as expects a string in " + form.print() + ", got: " + value.print());
@@ -753,8 +756,10 @@ final class WasmExportCompiler {
 	}
 
 	static String typeDesignator(LispVal value, LispCons form) {
-		if (value instanceof LispSymbol sym && sym.isKeyword() && KNOWN_TYPES.contains(sym.name())) {
-			return sym.name();
+		if (value instanceof LispSymbol sym && sym.isKeyword()
+				&& KNOWN_TYPES.contains(LispNames.foldKeyword(sym.name()))) {
+			// Return the canonical lowercase spelling so the per-type switches match.
+			return LispNames.foldKeyword(sym.name());
 		}
 		throw new UnsupportedOperationException("Unknown rontolisp:wasm-export type designator " + value.print()
 				+ " in " + form.print() + " (expected one of " + KNOWN_TYPES + ")");
@@ -767,7 +772,7 @@ final class WasmExportCompiler {
 		if (isVoidMarker(value)) {
 			return T_VOID;
 		}
-		if (value instanceof LispSymbol sym && sym.isKeyword() && T_VOID.equals(sym.name())) {
+		if (value instanceof LispSymbol sym && sym.isKeyword() && LispNames.keywordMatches(sym.name(), T_VOID)) {
 			return T_VOID;
 		}
 		return typeDesignator(value, form);

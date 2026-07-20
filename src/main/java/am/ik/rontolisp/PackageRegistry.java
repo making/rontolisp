@@ -276,6 +276,17 @@ public final class PackageRegistry {
 	private final Map<String, String> nicknames = new HashMap<>(BUILTIN_NICKNAMES);
 
 	/**
+	 * The canonical names of the packages the constructor seeds (plus {@code keyword},
+	 * the designator of the keyword package accepted by {@code intern}). Kept in sync
+	 * with the constructor by hand; used by {@link #isBuiltinPackageName} for the upcase
+	 * reader mode's canonical fold, which must not depend on a registry instance.
+	 */
+	private static final Set<String> BUILTIN_PACKAGE_NAMES = Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
+			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
+			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
+			LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG, "keyword");
+
+	/**
 	 * Creates a registry seeded with the built-in packages.
 	 */
 	public PackageRegistry() {
@@ -522,6 +533,19 @@ public final class PackageRegistry {
 	 */
 	public static String qualifyInternal(String pkg, String member) {
 		return pkg + "::" + member;
+	}
+
+	/**
+	 * Returns whether the given (lowercase) name is a built-in package name or built-in
+	 * nickname. Static, like {@link #canonicalBuiltinName}: user {@code defpackage}
+	 * packages are unknown here, which is exactly what the upcase reader mode needs (a
+	 * user package spelled in source keeps its upcased spelling everywhere, so it stays
+	 * self-consistent).
+	 * @param name the candidate package name, already lowercased
+	 * @return {@code true} if it names a built-in package or nickname
+	 */
+	public static boolean isBuiltinPackageName(String name) {
+		return BUILTIN_PACKAGE_NAMES.contains(name) || BUILTIN_NICKNAMES.containsKey(name);
 	}
 
 	/**

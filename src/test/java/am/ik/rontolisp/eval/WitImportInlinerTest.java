@@ -144,8 +144,8 @@ class WitImportInlinerTest {
 		List<LispVal> out = WitImportInliner.inline(LispReader.readAllFromString(DIRECTIVE + BODY), null,
 				WitExportDirective.Backend.WASM_GC, uploads(Map.of("gl.wit", GL_WIT)));
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList())).doesNotContain("wit-import")
-			.contains("(defpackage gl (:use cl) (:export create-shader shader-source compile-shader clear-color))")
-			.contains("(rontolisp:wasm-import (quote gl:create-shader) :from \"gl\" :as \"createShader\" "
+			.contains("(defpackage GL (:use cl) (:export create-shader shader-source compile-shader clear-color))")
+			.contains("(rontolisp:wasm-import (quote GL:create-shader) :from \"gl\" :as \"createShader\" "
 					+ ":params (quote (:int)) :returns :int)");
 	}
 
@@ -177,7 +177,7 @@ class WitImportInlinerTest {
 						"(rontolisp:wit-import \"wit/gl.wit\" :interface \"local:webgl/gl\" :package gl)\n" + BODY),
 				this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList()))
-			.contains("(rontolisp:wasm-import (quote gl:create-shader)");
+			.contains("(rontolisp:wasm-import (quote GL:create-shader)");
 	}
 
 	/**
@@ -219,12 +219,12 @@ class WitImportInlinerTest {
 		List<LispVal> out = WitImportInliner.inline(LispReader.readAllFromString(KV_DIRECTIVE), null,
 				WitExportDirective.Backend.OTHER, uploads(Map.of("kv.wit", KV_WIT)));
 		assertThat(out.stream().map(LispVal::print).toList()).containsExactly(
-				"(defpackage kv (:use cl) (:export bucket-get bucket-set open))",
-				"(defun kv:bucket-get (self key) "
+				"(defpackage KV (:use cl) (:export bucket-get bucket-set open))",
+				"(defun KV:bucket-get (self key) "
 						+ "(rontolisp::%wit-call \"wasi:keyvalue/store@0.2.0\" \"bucket-get\" self key))",
-				"(defun kv:bucket-set (self key value) "
+				"(defun KV:bucket-set (self key value) "
 						+ "(rontolisp::%wit-call \"wasi:keyvalue/store@0.2.0\" \"bucket-set\" self key value))",
-				"(defun kv:open (identifier) "
+				"(defun KV:open (identifier) "
 						+ "(rontolisp::%wit-call \"wasi:keyvalue/store@0.2.0\" \"open\" identifier))");
 	}
 
@@ -245,20 +245,20 @@ class WitImportInlinerTest {
 					SourceLoader.fileSystem())
 			.stream()
 			.map(LispVal::print)
-			.toList()).containsExactly("(defun my-gl (member &rest args) 0)");
+			.toList()).containsExactly("(defun MY-GL (member &rest ARGS) 0)");
 		assertThat(WitImportInliner
 			.inline(LispReader.readAllFromString(program), null, WitExportDirective.Backend.WASM_NO_GC,
 					SourceLoader.fileSystem())
 			.stream()
 			.map(LispVal::print)
-			.toList()).containsExactly("(defun my-gl (member &rest args) 0)");
+			.toList()).containsExactly("(defun MY-GL (member &rest ARGS) 0)");
 		assertThat(WitImportInliner
 			.inline(LispReader.readAllFromString(program), null, WitExportDirective.Backend.OTHER,
 					SourceLoader.fileSystem())
 			.stream()
 			.map(LispVal::print)
-			.toList()).containsExactly("(defun my-gl (member &rest args) 0)",
-					"(rontolisp:wit-provide \"local:webgl/gl\" (function my-gl))");
+			.toList()).containsExactly("(defun MY-GL (member &rest ARGS) 0)",
+					"(rontolisp:wit-provide \"local:webgl/gl\" (function MY-GL))");
 	}
 
 	/**

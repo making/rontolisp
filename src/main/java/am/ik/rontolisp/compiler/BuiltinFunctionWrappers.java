@@ -268,7 +268,16 @@ public final class BuiltinFunctionWrappers {
 
 	// (getf kw :indicator) -- runtime keyword extraction from the wrapper's rest list.
 	private static LispVal getfKw(String indicator) {
-		return callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(indicator));
+		// getf is plain data matching, and applied keyword plists read UPCASED under
+		// the reader premise while these wrapper ASTs are authored lowercase: probe
+		// the lowercase spelling first, then the upcased twin (getf is pure).
+		LispVal lower = callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(indicator));
+		String upper = indicator.toUpperCase(java.util.Locale.ROOT);
+		if (upper.equals(indicator)) {
+			return lower;
+		}
+		LispVal upperGet = callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(upper));
+		return listToCons(List.of(new LispSymbol(LispNames.IF), lower, lower, upperGet));
 	}
 
 	// (if (getf kw :indicator) (getf kw :indicator) default) -- getf is pure, so the

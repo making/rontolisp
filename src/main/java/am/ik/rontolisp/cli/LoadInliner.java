@@ -246,7 +246,11 @@ public final class LoadInliner {
 					out.add(quotedSymbol(require.name()));
 					continue;
 				}
-				rawPath = require.path() != null ? require.path() : require.name() + ".lisp";
+				// The default file mapping downcases the module name (like ASDF's
+				// coerce-name): (require :util) reads as UTIL under the upcase premise
+				// but still loads util.lisp.
+				rawPath = require.path() != null ? require.path()
+						: require.name().toLowerCase(java.util.Locale.ROOT) + ".lisp";
 			}
 			else {
 				rawPath = loadPath(form);
@@ -355,8 +359,11 @@ public final class LoadInliner {
 			searchDirs.add(requestBaseDir == null ? "" : requestBaseDir);
 			searchDirs.addAll(ctx.systemPath());
 			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, ctx.loader());
+			// .asd system definitions are parsed as data against lowercase spellings,
+			// so they stay case-preserving (the upcase premise applies to program
+			// source, not to system-definition data).
 			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(),
-					ctx.features())) {
+					ctx.features().preservingCase())) {
 				ctx.systems().putIfAbsent(defined.name(), defined);
 			}
 			system = ctx.systems().get(name);

@@ -51,7 +51,7 @@ class WasmExportCompilerTest {
 	@Test
 	void parsesScalarDirective() {
 		WasmExportCompiler.Decl decl = parse("(rontolisp:wasm-export 'fact :params '(:int) :returns :int)");
-		assertThat(decl.name()).isEqualTo("fact");
+		assertThat(decl.name()).isEqualTo("FACT");
 		assertThat(decl.paramTypes()).containsExactly(":int");
 		assertThat(decl.returnType()).isEqualTo(":int");
 	}
@@ -146,7 +146,7 @@ class WasmExportCompilerTest {
 	@Test
 	void rejectsUnknownTypeDesignator() {
 		assertThatThrownBy(() -> parse("(rontolisp:wasm-export 'g :params '(:widget) :returns :int)"))
-			.hasMessageContaining(":widget");
+			.hasMessageContaining(":WIDGET");
 	}
 
 	@Test
@@ -347,7 +347,8 @@ class WasmExportCompilerTest {
 	void rejectsAParamNameThatIsNotAComponentModelLabel() {
 		// The lifted function type's parameter labels obey the same lower-kebab-case
 		// grammar as an export name.
-		assertThatThrownBy(() -> parse("(rontolisp:wasm-export 'f :params '(:int) :param-names '(Foo) :returns :int)"))
+		assertThatThrownBy(
+				() -> parse("(rontolisp:wasm-export 'f :params '(:int) :param-names '(\"Foo\") :returns :int)"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("is not a valid component-model parameter name");
 		assertThatThrownBy(() -> parse("(rontolisp:wasm-export 'f :params '(:int) :param-names '(x_y) :returns :int)"))

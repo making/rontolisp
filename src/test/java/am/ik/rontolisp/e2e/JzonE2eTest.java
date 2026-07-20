@@ -130,7 +130,7 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 				// stringify #(null nil t 42 3.14 "Hello, world!") :stream t :pretty t
 				"[", "null,", "false,", "true,", "42,", "3.14,", "\"Hello, world!\"", "]",
 				// allow-multiple-content signals json-parse-error
-				":caught-multiple-content",
+				":CAUGHT-MULTIPLE-CONTENT",
 				// :replacer (returned string, echoed via print)
 				"\"[", "\"second\",", "\"Lupin the third\"", "]\"",
 				// a |...|-escaped symbol hash key (verbatim case)
@@ -139,7 +139,7 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 				"{", "\"name\": \"Anya\",", "\"alias\": null,", "\"job\": null,", "\"married\": false,",
 				"\"children\": []", "}",
 				// stringify into a user-supplied fill-pointered adjustable string
-				"\"{\"k\":[1,true]}\"", ":caught-eof");
+				"\"{\"k\":[1,true]}\"", ":CAUGHT-EOF");
 	}
 
 	// The README walkthrough pieces the four-backend exercise cannot carry -- a
@@ -161,7 +161,7 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 			""";
 
 	private static final List<String> INTERPRETER_RESIDUE_EXPECTED = List.of("\"a", "bé\"", "-1.5E10", "{",
-			"\"only-keys\": \"are-affected\",", "\"noChange\": \"when used\",", "\"AS A\": \"value\"", "}");
+			"\"only-keys\": \"ARE-AFFECTED\",", "\"noChange\": \"when used\",", "\"AS A\": \"value\"", "}");
 
 	@Test
 	void interpreterResidueCases() {

@@ -266,7 +266,8 @@ public final class Environment implements Scope {
 			// always structural, so :test is informational only (see LispHashTable).
 			boolean equalTest = false;
 			for (int i = 0; i + 1 < args.size(); i += 2) {
-				if (args.get(i) instanceof LispSymbol kw && LispNames.TEST_KEYWORD.equals(kw.name())) {
+				if (args.get(i) instanceof LispSymbol kw
+						&& LispNames.keywordMatches(kw.name(), LispNames.TEST_KEYWORD)) {
 					String testName = switch (args.get(i + 1)) {
 						case LispSymbol s -> s.name();
 						case LispFunction f -> f.name();
@@ -344,7 +345,7 @@ public final class Environment implements Scope {
 			LispVal elementTypeArg = null;
 			for (int i = 1; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw) {
-					switch (kw.name()) {
+					switch (LispNames.foldKeyword(kw.name())) {
 						case LispNames.INITIAL_ELEMENT_KEYWORD -> {
 							init = args.get(i + 1);
 							initGiven = true;
@@ -687,7 +688,7 @@ public final class Environment implements Scope {
 			LispVal fillPointerArg = null;
 			for (int i = 2; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw) {
-					switch (kw.name()) {
+					switch (LispNames.foldKeyword(kw.name())) {
 						case LispNames.INITIAL_ELEMENT_KEYWORD -> init = args.get(i + 1);
 						case LispNames.FILL_POINTER_KEYWORD -> fillPointerArg = args.get(i + 1);
 						case LispNames.DISPLACED_TO_KEYWORD ->
@@ -1103,7 +1104,7 @@ public final class Environment implements Scope {
 	private static LispVal plistGet(LispVal plist, String key) {
 		LispVal current = plist;
 		while (current instanceof LispCons cons && cons.cdr() instanceof LispCons valueCell) {
-			if (cons.car() instanceof LispSymbol sym && sym.name().equals(key)) {
+			if (cons.car() instanceof LispSymbol sym && LispNames.keywordMatches(sym.name(), key)) {
 				return valueCell.car();
 			}
 			current = valueCell.cdr();
@@ -2591,7 +2592,7 @@ public final class Environment implements Scope {
 			}
 			for (; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw) {
-					switch (kw.name()) {
+					switch (LispNames.foldKeyword(kw.name())) {
 						case ":start" -> start = (int) asLong(args.get(i + 1));
 						case ":end" ->
 							end = args.get(i + 1) instanceof LispNil ? full.length() : (int) asLong(args.get(i + 1));
@@ -2751,8 +2752,8 @@ public final class Environment implements Scope {
 			// (UTF-8 is the native format), :if-exists and :if-does-not-exist (the
 			// create/supersede defaults already match) are accepted and dropped.
 			if (args.size() > 2 && args.get(1) instanceof LispSymbol first && first.name().startsWith(":")
-					&& !LispNames.INPUT_KEYWORD.equals(first.name())
-					&& !LispNames.OUTPUT_KEYWORD.equals(first.name())) {
+					&& !LispNames.keywordMatches(first.name(), LispNames.INPUT_KEYWORD)
+					&& !LispNames.keywordMatches(first.name(), LispNames.OUTPUT_KEYWORD)) {
 				LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
 				LispVal elementType = null;
 				for (int i = 1; i < args.size(); i += 2) {
@@ -2760,13 +2761,13 @@ public final class Environment implements Scope {
 							|| !key.name().startsWith(":")) {
 						throw new LispEvalException(LispNames.OPEN + " expects :option value pairs");
 					}
-					switch (key.name()) {
+					switch (LispNames.foldKeyword(key.name())) {
 						case ":direction" -> direction = args.get(i + 1);
 						case ":element-type" -> elementType = args.get(i + 1);
 						case ":external-format", ":if-exists", ":if-does-not-exist" -> {
 							if (!LispMacroExpander.ignorableOpenOptionValue(key.name(), args.get(i + 1))) {
-								throw new LispEvalException(
-										LispNames.OPEN + ": " + key.name() + " supports only the native default value");
+								throw new LispEvalException(LispNames.OPEN + ": " + LispNames.foldKeyword(key.name())
+										+ " supports only the native default value");
 							}
 						}
 						default -> throw new LispEvalException(LispNames.OPEN + ": unsupported option " + key.name());
@@ -2780,11 +2781,12 @@ public final class Environment implements Scope {
 			}
 			boolean output = false;
 			if (args.size() > 1) {
-				if (!(args.get(1) instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())
-						|| LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
+				if (!(args.get(1) instanceof LispSymbol dir)
+						|| !(LispNames.keywordMatches(dir.name(), LispNames.INPUT_KEYWORD)
+								|| LispNames.keywordMatches(dir.name(), LispNames.OUTPUT_KEYWORD))) {
 					throw new LispEvalException(LispNames.OPEN + " supports :input and :output directions");
 				}
-				output = LispNames.OUTPUT_KEYWORD.equals(dir.name());
+				output = LispNames.keywordMatches(dir.name(), LispNames.OUTPUT_KEYWORD);
 			}
 			// The optional third argument is the element type: '(unsigned-byte 8) opens a
 			// binary stream, 'character (the default) a text stream.
@@ -3017,7 +3019,7 @@ public final class Environment implements Scope {
 			boolean insecure = false;
 			if (args.size() == 4) {
 				if (!(args.get(2) instanceof LispSymbol option) || !option.isKeyword()
-						|| !option.name().equals(":insecure")) {
+						|| !LispNames.keywordMatches(option.name(), ":insecure")) {
 					throw new LispEvalException(
 							LispNames.TLS_CONNECT + " expects :insecure, got: " + args.get(2).print());
 				}
@@ -3233,7 +3235,11 @@ public final class Environment implements Scope {
 					if (line.isEmpty() || line.startsWith(";")) {
 						continue;
 					}
-					return LispReader.readFromString(line);
+					// Runtime read stays case-preserving: the compiled backends' embedded
+					// reader runtimes do not upcase, and cross-backend identity wins over
+					// CL-faithful runtime case folding (the frontend read of program
+					// source DOES upcase -- see .kb/reader-case-upcase.md).
+					return LispReader.readFromString(line, am.ik.rontolisp.reader.Features.INTERNAL);
 				}
 				return LispNil.INSTANCE;
 			}
@@ -3249,7 +3255,8 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.READ_FROM_STRING + " expects a string");
 			}
-			return LispReader.readFromString(str.value());
+			// Case-preserving for cross-backend identity, like read above.
+			return LispReader.readFromString(str.value(), am.ik.rontolisp.reader.Features.INTERNAL);
 		}));
 		// parse-integer: parse an integer from a string, with the common :radix,
 		// :junk-allowed, :start and :end keywords.
@@ -3265,7 +3272,7 @@ public final class Environment implements Scope {
 			for (int i = 1; i + 1 < args.size(); i += 2) {
 				String key = (args.get(i) instanceof LispSymbol kw) ? kw.name() : "";
 				LispVal value = args.get(i + 1);
-				switch (key) {
+				switch (LispNames.foldKeyword(key)) {
 					case LispNames.RADIX_KEYWORD -> radix = (int) asLong(value);
 					case LispNames.JUNK_ALLOWED_KEYWORD -> junkAllowed = !(value instanceof LispNil);
 					case LispNames.START_KEYWORD -> start = (int) asLong(value);
@@ -3493,10 +3500,10 @@ public final class Environment implements Scope {
 			int fill = ' ';
 			for (int i = 1; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol key) {
-					if (LispNames.INITIAL_ELEMENT_KEYWORD.equals(key.name())) {
+					if (LispNames.keywordMatches(key.name(), LispNames.INITIAL_ELEMENT_KEYWORD)) {
 						fill = requireChar(LispNames.MAKE_STRING, args.get(i + 1)).codePoint();
 					}
-					else if (!LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name())) {
+					else if (!LispNames.keywordMatches(key.name(), LispNames.ELEMENT_TYPE_KEYWORD)) {
 						throw new LispEvalException("make-string: unsupported keyword " + key.name());
 					}
 				}
@@ -3519,7 +3526,7 @@ public final class Environment implements Scope {
 			// A nil bound keeps its default (nil :end = the sequence's length, as in CL).
 			for (int i = 2; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol key && !(args.get(i + 1) instanceof LispNil)) {
-					switch (key.name()) {
+					switch (LispNames.foldKeyword(key.name())) {
 						case LispNames.START1_KEYWORD -> start1 = requireIndex(LispNames.REPLACE, args.get(i + 1));
 						case LispNames.END1_KEYWORD -> end1 = requireIndex(LispNames.REPLACE, args.get(i + 1));
 						case LispNames.START2_KEYWORD -> start2 = requireIndex(LispNames.REPLACE, args.get(i + 1));
