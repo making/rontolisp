@@ -6421,8 +6421,15 @@ class WasmLispCompilerIntegrationTest {
 	void componentAsyncStdinReadDoesNotStallTheInstance() throws Exception {
 		// The stdin migration's promotion goal: a pending stdin read in an async body
 		// suspends the task, so a concurrent 100ms timer fires BEFORE the line the
-		// pipe delivers 500ms later. The preview1 adapter's blocking stdin branch
+		// pipe delivers much later. The preview1 adapter's blocking stdin branch
 		// could never do this -- it parks the whole instance.
+		//
+		// The pipe delay must comfortably exceed wasmtime's cold-start: `sleep` starts
+		// with the subshell, in parallel with wasmtime launch, so any startup latency
+		// (heavier under a loaded/shared-container CI runner) eats into the margin. Too
+		// tight and the line is already buffered by the time the body reaches read-line,
+		// inverting the order ("hello" before "timer fired"). 2s vs a 100ms timer keeps
+		// a ~1.9s cushion while still proving the timer wins.
 		String program = """
 				(rontolisp:async-defun reader ()
 				  (print (read-line)))
@@ -6436,7 +6443,7 @@ class WasmLispCompilerIntegrationTest {
 		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/stdin-async.component.wasm");
 		ExecResult result = wasmtime.execInContainer("sh", "-c",
-				"(sleep 0.5; echo hello) | wasmtime run -W gc=y -W exceptions=y /tmp/stdin-async.component.wasm");
+				"(sleep 2; echo hello) | wasmtime run -W gc=y -W exceptions=y /tmp/stdin-async.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("\"timer fired\"\n\"hello\"");
 	}
