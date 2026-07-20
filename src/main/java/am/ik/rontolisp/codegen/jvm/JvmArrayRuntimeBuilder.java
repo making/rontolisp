@@ -1173,7 +1173,7 @@ final class JvmArrayRuntimeBuilder {
 		a.iconst(slot);
 		a.aaload();
 		a.branch(Opcode.IFNULL, isNil);
-		a.ldcString(cp.addString("t"));
+		a.ldcString(cp.addString("T"));
 		a.areturn();
 		a.bind(isNil);
 		a.aconstNull();

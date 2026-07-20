@@ -2053,7 +2053,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.SUB)
 				.add(stringTable, LispNames.MUL)
 				.add(stringTable, LispNames.DIV)
-				.add(stringTable, "t")
+				.add(stringTable, "T")
 				.add(stringTable, LispNames.FIRST)
 				.add(stringTable, LispNames.REST)
 				.add(stringTable, LispNames.SECOND)
@@ -2092,9 +2092,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		// The symbol-API helper bodies (always emitted) embed the offset of the symbol
-		// t; intern it before the runtime intern blob below is snapshotted so a runtime
-		// (intern "t") canonicalizes to the same offset literals use.
-		int symbolTOffset = stringTable.addString("t").offset();
+		// T; intern it before the runtime intern blob below is snapshotted so a runtime
+		// (intern "T") resolves to the same offset literals use (uppercase-canonical).
+		int symbolTOffset = stringTable.addString("T").offset();
 		// Build the reader runtime (read/load). Symbols parsed at runtime are interned
 		// against a compile-time table of (offset,length) so they match the offsets the
 		// eval runtime compares against. The intern built-in reuses _intern for the same
@@ -2105,10 +2105,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] readBody;
 		final byte[] loadBody;
 		if (usesIntern) {
-			// Intern nil/t/quote/function before snapshotting so the runtime resolves
-			// them to the same offsets the eval runtime uses.
-			int nilOffset = stringTable.addString("nil").offset();
-			int tOffset = stringTable.addString("t").offset();
+			// Intern NIL/quote/function before snapshotting so the runtime resolves them
+			// to the same offsets the eval runtime uses (uppercase-canonical: the
+			// embedded
+			// reader upcases a runtime-read token, so nil reads as NIL, and t reads as
+			// the
+			// ordinary interned symbol T -- no t special-case in the reader). T itself is
+			// interned above via symbolTOffset.
+			int nilOffset = stringTable.addString("NIL").offset();
 			int quoteOffset = stringTable.addString(LispNames.QUOTE).offset();
 			int functionOffset = stringTable.addString(LispNames.FUNCTION).offset();
 			java.util.Collection<StringTable.StringEntry> internEntries = stringTable.entries();
@@ -2116,19 +2120,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			int internBase = stringTable.appendBlob(buildInternBlob(internEntries));
 			internBody = WasmReadRuntimeBuilder.buildInternBody(internBase, internCount, hostArena);
 			if (usesRead) {
-				// The read-time canonical fold (upcase premise) needs the foldable-name
-				// and
-				// builtin-package-name sets in linear memory to test membership; append
-				// them
-				// as \n-delimited blobs (byte-identical to the JVM backend's baked
-				// strings)
-				// and hand the reader their offsets. See .kb/reader-case-upcase.md.
-				byte[] foldBlob = am.ik.rontolisp.UpcaseSymbols.foldNamesBlob().getBytes(StandardCharsets.UTF_8);
-				byte[] pkgBlob = am.ik.rontolisp.UpcaseSymbols.foldPackageNamesBlob().getBytes(StandardCharsets.UTF_8);
-				int foldBase = stringTable.appendBlob(foldBlob);
-				int pkgBase = stringTable.appendBlob(pkgBlob);
-				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(nilOffset, tOffset, quoteOffset, functionOffset,
-						foldBase, foldBlob.length, pkgBase, pkgBlob.length);
+				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(nilOffset, quoteOffset, functionOffset);
 				readListBody = WasmReadRuntimeBuilder.buildReadListBody();
 				readBody = WasmReadRuntimeBuilder.buildReadBody();
 				loadBody = WasmReadRuntimeBuilder.buildLoadBody();
@@ -4120,7 +4112,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		StringTable(int baseOffset) {
 			this.nextOffset = baseOffset;
-			this.nil = addString("nil");
+			this.nil = addString("NIL");
 			this.lparen = addString("(");
 			this.rparen = addString(")");
 			this.space = addString(" ");

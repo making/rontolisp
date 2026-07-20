@@ -986,8 +986,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (printUsed) {
 			literals.add("\n");
 			literals.add("\"");
-			literals.add("t");
-			literals.add("nil");
+			literals.add("T");
+			literals.add("NIL");
 		}
 		if (ftoaUsed) {
 			// __ftoa returns these header pointers directly for the IEEE specials.
@@ -4618,7 +4618,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		LispVal arg = args.get(1);
 		boolean print = LispNames.PRINT.equals(name);
 		if (arg instanceof LispTrue || arg instanceof LispNil) {
-			emitWriteLiteral(fn, arg instanceof LispTrue ? "t" : "nil");
+			emitWriteLiteral(fn, arg instanceof LispTrue ? "T" : "NIL");
 			if (print) {
 				emitWriteLiteral(fn, "\n");
 			}
@@ -5073,7 +5073,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException(
 					"--no-gc: concatenate needs a result-type designator in '" + fnName + "'");
 		}
-		if (!isQuotedSymbol(args.get(1), "string")) {
+		if (!isQuotedSymbol(args.get(1), "STRING")) {
 			throw new UnsupportedOperationException(
 					"--no-gc: concatenate only supports 'string in '" + fnName + "' (got " + args.get(1).print() + ")");
 		}

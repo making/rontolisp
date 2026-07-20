@@ -12,7 +12,7 @@ Being a function value, it can be passed around like any other function; each in
 
 ```lisp
 (let ((double-later (rontolisp:async-lambda (x) (* x 2))))
-  (rontolisp:futurep (funcall double-later 3)))   ; => t
+  (rontolisp:futurep (funcall double-later 3)))   ; => T
 ```
 
 ## Backend support

@@ -9,5 +9,5 @@ Creates a sequence of the given type and size. The result type must be a literal
 ```
 
 ```lisp
-(make-sequence 'list 3) ; => (nil nil nil)
+(make-sequence 'list 3) ; => (NIL NIL NIL)
 ```

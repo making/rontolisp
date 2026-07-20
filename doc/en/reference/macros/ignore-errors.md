@@ -7,7 +7,7 @@ Evaluates the forms and returns the value of the last one; when an error is sign
 Like `handler-case` it is supported on **every backend** except `--no-gc`; on the wasm-GC backends the emitted module needs `wasmtime run -W exceptions=y` (37+), and runtime traps remain uncatchable there — see [`handler-case`](handler-case.md).
 
 ```lisp
-(ignore-errors (error "boom")) ; => nil
+(ignore-errors (error "boom")) ; => NIL
 ```
 
 ```lisp

@@ -65,7 +65,8 @@ class LinalgSimdTest {
 		for (String member : new String[] { "add", "sub", "mul", "div", "sum", "norm", "amax", "amin", "argmax",
 				"argmin", "trace", "transpose", "reshape", "dot", "outer" }) {
 			String form = "(linalg:zeros 1) #'linalg:" + member;
-			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function linalg:" + member + ">");
+			assertThat(eval(form, true).print()).as(member)
+				.isEqualTo("#<function LINALG:" + member.toUpperCase(java.util.Locale.ROOT) + ">");
 			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
 		}
 	}
@@ -220,7 +221,8 @@ class LinalgSimdTest {
 	void simdReplacesTheComparisonSelectDefunsWithNativeFunctions() {
 		for (String member : new String[] { "maximum", "minimum" }) {
 			String form = "(linalg:zeros 1) #'linalg:" + member;
-			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function linalg:" + member + ">");
+			assertThat(eval(form, true).print()).as(member)
+				.isEqualTo("#<function LINALG:" + member.toUpperCase(java.util.Locale.ROOT) + ">");
 			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
 		}
 		// clip / relu are accelerated transitively -- their defuns compose
@@ -334,7 +336,7 @@ class LinalgSimdTest {
 				+ " (linalg:arange 0 2 'single-float))");
 		assertThat(
 				eval("(array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0)))", true).print())
-			.isEqualTo("single-float");
+			.isEqualTo("SINGLE-FLOAT");
 		// The row and column shapes of the CNN layers, and a rank-3 vs rank-2 pair.
 		assertMatchesScalarOracle("(linalg:sub (linalg:reshape (linalg:arange 6) '(2 3))"
 				+ " (linalg:reshape (linalg:from-list '(100.0 200.0)) '(2 1)))");
@@ -509,8 +511,8 @@ class LinalgSimdTest {
 	@Test
 	void transposeReturnsAVectorUnchanged() {
 		// linalg.lisp returns `a` itself for a rank-1 input, so eq must still hold.
-		assertThat(eval("(let ((v (linalg:arange 5))) (eq v (linalg:transpose v)))", true).print()).isEqualTo("t");
-		assertThat(eval("(let ((v (linalg:arange 5))) (eq v (linalg:transpose v)))", false).print()).isEqualTo("t");
+		assertThat(eval("(let ((v (linalg:arange 5))) (eq v (linalg:transpose v)))", true).print()).isEqualTo("T");
+		assertThat(eval("(let ((v (linalg:arange 5))) (eq v (linalg:transpose v)))", false).print()).isEqualTo("T");
 	}
 
 	// --- element-wise unary ufuncs ------------------------------------------------
@@ -520,7 +522,8 @@ class LinalgSimdTest {
 		for (String member : new String[] { "exp", "log", "tanh", "sin", "cos", "tan", "asin", "acos", "atan", "sinh",
 				"cosh", "sqrt", "abs", "negative", "sign" }) {
 			String form = "(linalg:zeros 1) #'linalg:" + member;
-			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function linalg:" + member + ">");
+			assertThat(eval(form, true).print()).as(member)
+				.isEqualTo("#<function LINALG:" + member.toUpperCase(java.util.Locale.ROOT) + ">");
 			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
 		}
 		// square/reciprocal are accelerated transitively -- their bodies call
@@ -636,7 +639,8 @@ class LinalgSimdTest {
 		// is a native LispFunction, the default a linalg.lisp lambda.
 		for (String member : new String[] { "%la-im2col", "%la-col2im" }) {
 			String form = "(linalg:zeros 1) #'linalg::" + member;
-			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function linalg::" + member + ">");
+			assertThat(eval(form, true).print()).as(member)
+				.isEqualTo("#<function LINALG::" + member.toUpperCase(java.util.Locale.ROOT) + ">");
 			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
 		}
 	}

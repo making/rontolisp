@@ -223,7 +223,7 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertMatchesScalarReference("(print (linalg:sub (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
 				+ " (linalg:arange 0 2 'single-float)))");
 		assertThat(accel("(print (array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0))))"))
-			.isEqualTo("single-float");
+			.isEqualTo("SINGLE-FLOAT");
 		// The row and column shapes of the CNN layers, a rank-3 pair, and the strict
 		// comparison selects through the same kernel.
 		assertMatchesScalarReference("(print (linalg:mul (linalg:reshape (linalg:arange 8) '(4 2))"
@@ -389,7 +389,7 @@ class JvmLinalgSimdAccelCompilerTest {
 		assertMatchesScalarReference("(print (linalg:reshape (linalg:arange 0 12 'single-float) 12))");
 		assertMatchesScalarReference("(print (linalg:flatten #d((1.0 2.0) (3.0 4.0))))");
 		// A vector transposes to itself, the very same object.
-		assertThat(accel("(let ((v #d(1.0 2.0))) (print (eq v (linalg:transpose v))))")).isEqualTo("t");
+		assertThat(accel("(let ((v #d(1.0 2.0))) (print (eq v (linalg:transpose v))))")).isEqualTo("T");
 	}
 
 	// --- element-wise unary ufuncs -----------------------------------------------------

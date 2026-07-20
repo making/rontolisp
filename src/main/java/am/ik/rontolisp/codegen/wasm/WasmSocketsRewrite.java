@@ -45,18 +45,18 @@ final class WasmSocketsRewrite {
 
 	// Sync-context substitutions: native name -> the sockets.lisp dispatch defun.
 	private static final Map<String, String> SYNC_DISPATCH = Map.of(LispNames.READ_LINE, "%IO-READ-LINE",
-			LispNames.READ_CHAR, "%io-read-char", LispNames.READ_BYTE, "%io-read-byte", LispNames.WRITE_LINE,
-			"%io-write-line", LispNames.WRITE_BYTE, "%io-write-byte", LispNames.WRITE_STRING, "%io-write-string",
-			LispNames.CLOSE, "%io-close");
+			LispNames.READ_CHAR, "%IO-READ-CHAR", LispNames.READ_BYTE, "%IO-READ-BYTE", LispNames.WRITE_LINE,
+			"%IO-WRITE-LINE", LispNames.WRITE_BYTE, "%IO-WRITE-BYTE", LispNames.WRITE_STRING, "%IO-WRITE-STRING",
+			LispNames.CLOSE, "%IO-CLOSE");
 
 	// Async-context read promotions: native name -> the future-returning async internal.
-	private static final Map<String, String> ASYNC_FUTURES = Map.of(LispNames.READ_LINE, "%read-line-future",
-			LispNames.READ_CHAR, "%read-char-future", LispNames.READ_BYTE, "%read-byte-future");
+	private static final Map<String, String> ASYNC_FUTURES = Map.of(LispNames.READ_LINE, "%READ-LINE-FUTURE",
+			LispNames.READ_CHAR, "%READ-CHAR-FUTURE", LispNames.READ_BYTE, "%READ-BYTE-FUTURE");
 
 	// Async-context tcp promotions: canonical qualified name -> the async internal.
 	private static final Map<String, String> TCP_FUTURES = Map.of(
-			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT), "%tcp-connect-f",
-			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT), "%tcp-accept-f");
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT), "%TCP-CONNECT-F",
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT), "%TCP-ACCEPT-F");
 
 	// Accepted argument-count ranges per target: a call outside its range is left
 	// UNREWRITTEN so it resolves against the native built-in / public defun and errors

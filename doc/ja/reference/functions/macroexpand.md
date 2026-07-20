@@ -13,5 +13,5 @@
 サブフォームは走査されません:
 
 ```lisp
-(macroexpand '(when a (when b c))) ; => (if a (when b c) nil)
+(macroexpand '(when a (when b c))) ; => (IF A (WHEN B C) NIL)
 ```

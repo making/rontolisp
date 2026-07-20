@@ -2,7 +2,7 @@
 
 `(symbol-name symbol)`
 
-Returns the symbol's name as a string. The reader upcases unescaped symbols like Common Lisp (see the [reader case guide](../../guides/reader-case.md)), so a user symbol reports its upcased name — `(symbol-name 'foo)` is `"FOO"`, the Common Lisp answer. The one deviation: the canonical spelling of the *standard* symbols is lowercase, so `(symbol-name 'car)` is `"car"` where CL says `"CAR"`. A keyword's leading `:` and a [`gensym`](gensym.md)/[`make-symbol`](make-symbol.md) result's `#:` prefix are package markers, not part of the name, and are stripped — the same text `princ` prints (`prin1` keeps the markers).
+Returns the symbol's name as a string. The reader upcases unescaped symbols like Common Lisp (see the [reader case guide](../../guides/reader-case.md)), so a symbol reports its upcased name — `(symbol-name 'foo)` is `"FOO"` and `(symbol-name 'car)` is `"CAR"`, the Common Lisp answer. A keyword's leading `:` and a [`gensym`](gensym.md)/[`make-symbol`](make-symbol.md) result's `#:` prefix are package markers, not part of the name, and are stripped — the same text `princ` prints (`prin1` keeps the markers).
 
 On the compiled backends (JVM/WASM) `symbol-name` shares the `princ-to-string` machinery, so a non-symbol argument yields its display text instead of signaling an error (the interpreter signals).
 
@@ -17,7 +17,7 @@ The reader supports the Common Lisp escape syntaxes for symbol names: a backslas
 ```
 
 ```lisp
-(symbol-name 'car) ; => "car"
+(symbol-name 'car) ; => "CAR"
 ```
 
 ```lisp

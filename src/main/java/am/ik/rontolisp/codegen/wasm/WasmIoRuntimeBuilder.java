@@ -100,12 +100,12 @@ final class WasmIoRuntimeBuilder {
 
 	/**
 	 * Builds the _close(stream) function body. Closes the file descriptor via WASI
-	 * fd_close and returns the symbol {@code t}.
-	 * @param st the string table (for the {@code t} symbol)
+	 * fd_close and returns the symbol {@code T}.
+	 * @param st the string table (for the {@code T} symbol)
 	 * @return the function body bytes
 	 */
 	static byte[] buildCloseBody(WasmLispCompiler.StringTable st) {
-		WasmLispCompiler.StringTable.StringEntry t = st.addString("t");
+		WasmLispCompiler.StringTable.StringEntry t = st.addString("T");
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: FD_VAL=0 (ref) ; i32 local: FD=1

@@ -117,7 +117,7 @@ public final class HttpLibrary {
 			roots.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH));
 		}
 		if (handler != null) {
-			roots.add("%serve-handle");
+			roots.add("%SERVE-HANDLE");
 		}
 		Set<String> reachable = reachableDefuns(defunOf, roots);
 		Set<String> members = new HashSet<>();
@@ -267,9 +267,15 @@ public final class HttpLibrary {
 		switch (form) {
 			case LispSymbol sym -> {
 				names.add(sym.name());
+				// The reader upcases user spellings while WIT member names are
+				// lower-kebab:
+				// record the lowercase twin too, so the member filter matches every
+				// referenced binding (mirrors WitImportInliner.collectNames).
+				names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 				if (qn != null) {
 					names.add(qn.member());
+					names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
 				}
 			}
 			case LispCons cons -> {

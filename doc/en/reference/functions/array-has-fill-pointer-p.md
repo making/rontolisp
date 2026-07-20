@@ -6,5 +6,5 @@ Returns `t` when the array has a fill pointer (it was created with [`make-array`
 
 ```lisp
 (array-has-fill-pointer-p (make-array 3 :fill-pointer 0)) ; => t
-(array-has-fill-pointer-p (make-array 3)) ; => nil
+(array-has-fill-pointer-p (make-array 3)) ; => NIL
 ```

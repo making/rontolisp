@@ -153,9 +153,9 @@ class JvmFloatArrayTest {
 
 	@Test
 	void arrayElementTypeIsDoubleFloat() throws Exception {
-		assertThat(compileAndRun("(print (array-element-type #d(1.0 2.0)))")).isEqualTo("double-float");
+		assertThat(compileAndRun("(print (array-element-type #d(1.0 2.0)))")).isEqualTo("DOUBLE-FLOAT");
 		assertThat(compileAndRun("(print (array-element-type (make-array 3 :element-type 'double-float)))"))
-			.isEqualTo("double-float");
+			.isEqualTo("DOUBLE-FLOAT");
 	}
 
 	@Test
@@ -257,9 +257,9 @@ class JvmFloatArrayTest {
 
 	@Test
 	void arrayElementTypeIsSingleFloat() throws Exception {
-		assertThat(compileAndRun("(print (array-element-type #f(1.0 2.0)))")).isEqualTo("single-float");
+		assertThat(compileAndRun("(print (array-element-type #f(1.0 2.0)))")).isEqualTo("SINGLE-FLOAT");
 		assertThat(compileAndRun("(print (array-element-type (make-array 3 :element-type 'single-float)))"))
-			.isEqualTo("single-float");
+			.isEqualTo("SINGLE-FLOAT");
 	}
 
 	@Test
@@ -269,7 +269,7 @@ class JvmFloatArrayTest {
 		// picks the matching #d(/#f( prefix, and array-element-type distinguishes them.
 		assertThat(compileAndRun(
 				"(progn (print #d(1.0 2.0)) (print #f(3.0 4.0)) (print (array-element-type #d(1.0))) (print (array-element-type #f(1.0))))"))
-			.isEqualTo("#d(1.0 2.0)\n#f(3.0 4.0)\ndouble-float\nsingle-float");
+			.isEqualTo("#d(1.0 2.0)\n#f(3.0 4.0)\nDOUBLE-FLOAT\nSINGLE-FLOAT");
 	}
 
 	@Test

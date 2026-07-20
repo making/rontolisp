@@ -294,19 +294,6 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Folds a runtime-supplied symbol name ({@code intern}/{@code find-symbol}) through
-	 * the reader's canonical fold. {@code (intern "TIME")} names the standard
-	 * {@code time} -- the same answer Common Lisp's upcase reader world gives -- which is
-	 * what makes the {@code (intern (string-upcase ...))} macro name-synthesis idiom line
-	 * up with folded body references.
-	 * @param name the runtime symbol name
-	 * @return the canonical name
-	 */
-	private static String foldRuntimeSymbolName(String name) {
-		return am.ik.rontolisp.UpcaseSymbols.canonicalize(name);
-	}
-
-	/**
 	 * Sets the base directory against which a top-level relative {@code load} path
 	 * resolves -- normally the directory of the entry file being interpreted, so that a
 	 * program run from anywhere can {@code (load "sibling.lisp")} its companions (like
@@ -413,7 +400,10 @@ public final class LispEvaluator {
 					&& tag.name().startsWith("%class-")) {
 				return tag;
 			}
-			return new LispSymbol(builtinTypeName(v));
+			// The class name is a symbol, printed uppercase like every symbol under the
+			// reader's upcase premise (the compile backends return INTEGER/STRING/...
+			// too).
+			return new LispSymbol(builtinTypeName(v).toUpperCase(java.util.Locale.ROOT));
 		}));
 		this.globalEnv.defineFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL,
 				new LispFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL, args -> {
@@ -563,7 +553,9 @@ public final class LispEvaluator {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
 			}
-			String name = foldRuntimeSymbolName(str.value());
+			// intern/find-symbol take the name verbatim under the uppercase-canonical
+			// model -- (find-symbol "car") is NIL, (find-symbol "CAR") names CAR.
+			String name = str.value();
 			boolean known = PackageRegistry.isClSymbol(name) || (!name.isEmpty() && name.charAt(0) == ':')
 					|| this.userMacros.containsKey(name) || this.globalEnv.lookupFunctionOrNull(name) != null
 					|| this.globalEnv.lookupOrNull(name) != null;
@@ -588,7 +580,7 @@ public final class LispEvaluator {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
 			}
-			return new LispSymbol(this.packageResolver.internSpelling(foldRuntimeSymbolName(str.value())));
+			return new LispSymbol(this.packageResolver.internSpelling(str.value()));
 		}));
 		// error / signal / warn are real CL functions (cl-base64 signals via
 		// (apply #'error args)), so they get function values that rebuild the literal
@@ -1224,7 +1216,13 @@ public final class LispEvaluator {
 		}
 		String base = plainName(slotSym.name());
 		for (int i = 0; i < info.slots().size(); i++) {
-			if (info.slots().get(i).baseName().equals(base)) {
+			// Case-insensitive: a Java-side caller (conditionSlotValue passes the
+			// built-in
+			// "format-control"/"format-arguments") spells the slot lowercase, while an
+			// upcase-read condition registers its slots upcased -- the same
+			// reconciliation
+			// LispMacroExpander.expandConditionSlotReader makes.
+			if (info.slots().get(i).baseName().equalsIgnoreCase(base)) {
 				LispVal cell = cons;
 				for (int j = 0; j <= i; j++) {
 					if (!(cell instanceof LispCons c) || !(c.cdr() instanceof LispCons next)) {

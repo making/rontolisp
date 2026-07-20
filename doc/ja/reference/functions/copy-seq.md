@@ -6,7 +6,7 @@
 
 ```lisp
 (let ((original '(1 2 3)))
-  (eq (copy-seq original) original)) ; => nil
+  (eq (copy-seq original) original)) ; => NIL
 ```
 
 ```lisp

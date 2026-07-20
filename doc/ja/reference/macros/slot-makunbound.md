@@ -10,5 +10,5 @@ JVM / WASM コンパイラではスロット名はクオートされたシンボ
 (defclass point () ((x :initarg :x)))
 (let ((p (make-instance 'point :x 1)))
   (slot-makunbound p 'x)
-  (slot-value p 'x)) ; => nil
+  (slot-value p 'x)) ; => NIL
 ```

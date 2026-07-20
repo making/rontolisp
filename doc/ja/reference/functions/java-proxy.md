@@ -40,7 +40,7 @@ rontolisp の callable を背後に持つ、指定インターフェースのホ
 ```lisp
 ;; Predicate<Integer>: test(x) -> even?
 (java:call (java:proxy "java.util.function.Predicate" (lambda (method x) (evenp x))) "test" 4)
-; => t
+; => T
 ```
 
 JDK 側が SAM メソッドを呼び出す場合でもプロキシは動作します。たとえば `HashMap.merge` は、渡された `BiFunction` を呼び出して古い値と新しい値を合成します。

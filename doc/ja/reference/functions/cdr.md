@@ -9,5 +9,5 @@
 ```
 
 ```lisp
-(cdr nil) ; => nil
+(cdr nil) ; => NIL
 ```

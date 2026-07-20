@@ -101,33 +101,11 @@ final class JvmReadRuntimeBuilder {
 
 	private final MethodrefConstant classify;
 
-	// The read-time canonical fold (the upcase premise): _canon folds an atom token like
-	// the frontend reader's UpcaseSymbols.canonicalize(upcase(token)); _delimContains is
-	// its baked-set membership test. See .kb/reader-case-upcase.md.
-	private final MethodrefConstant canon;
-
-	private final MethodrefConstant delimContains;
-
+	// _classify upcases an atom token like CL's :upcase readtable case (the uppercase
+	// name is canonical -- there is no fold). See .kb/reader-case-upcase.md.
 	private final MethodrefConstant stringToUpperCase;
 
-	private final MethodrefConstant stringToLowerCase;
-
-	private final MethodrefConstant stringSubstringFrom;
-
-	private final MethodrefConstant stringIndexOfChar;
-
-	private final MethodrefConstant stringContains;
-
-	private final MethodrefConstant stringConcat;
-
 	private final FieldrefConstant localeRoot;
-
-	/**
-	 * The sorted, {@code \n}-delimited baked fold sets (deterministic for byte-identity).
-	 */
-	private final String foldNamesBlob;
-
-	private final String pkgNamesBlob;
 
 	private final @Nullable MethodrefConstant evalRef;
 
@@ -188,25 +166,11 @@ final class JvmReadRuntimeBuilder {
 		this.readAtom = methodref("_readAtom", "()Ljava/lang/Object;");
 		this.readStr = methodref("_readStr", "()Ljava/lang/Object;");
 		this.classify = methodref("_classify", "(Ljava/lang/String;)Ljava/lang/Object;");
-		this.canon = methodref("_canon", "(Ljava/lang/String;)Ljava/lang/String;");
-		this.delimContains = methodref("_delimContains", "(Ljava/lang/String;Ljava/lang/String;)Z");
 		ClassConstant localeClass = cp.addClass(cp.addUtf8("java/util/Locale"));
 		this.localeRoot = cp.addFieldref(localeClass,
 				cp.addNameAndType(cp.addUtf8("ROOT"), cp.addUtf8("Ljava/util/Locale;")));
 		this.stringToUpperCase = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("toUpperCase"), cp.addUtf8("(Ljava/util/Locale;)Ljava/lang/String;")));
-		this.stringToLowerCase = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("toLowerCase"), cp.addUtf8("(Ljava/util/Locale;)Ljava/lang/String;")));
-		this.stringSubstringFrom = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(I)Ljava/lang/String;")));
-		this.stringIndexOfChar = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("indexOf"), cp.addUtf8("(I)I")));
-		this.stringContains = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("contains"), cp.addUtf8("(Ljava/lang/CharSequence;)Z")));
-		this.stringConcat = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		this.foldNamesBlob = am.ik.rontolisp.UpcaseSymbols.foldNamesBlob();
-		this.pkgNamesBlob = am.ik.rontolisp.UpcaseSymbols.foldPackageNamesBlob();
 
 		if (emitLoad) {
 			this.evalRef = methodref("_eval", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
@@ -252,10 +216,6 @@ final class JvmReadRuntimeBuilder {
 				buildReadStr()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_classify"), this.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/Object;"),
 				4, 7, buildClassify()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_canon"), this.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;"), 4,
-				4, buildCanon()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_delimContains"),
-				this.cp.addUtf8("(Ljava/lang/String;Ljava/lang/String;)Z"), 3, 2, buildDelimContains()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_read"), this.cp.addUtf8("()Ljava/lang/Object;"), 4, 1, buildRead()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_readStream"), this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"),
 				4, 2, buildReadStream()));
@@ -715,13 +675,15 @@ final class JvmReadRuntimeBuilder {
 		int sym = a.label();
 		int intPath = a.label();
 		int big = a.label();
-		// Fold the token to its canonical spelling first (the upcase premise): user
-		// symbols upcase, standard names fold back to lowercase, so (read "foo") is FOO
-		// and (read "car")/(read "nil") fold to car/nil -- matching the frontend reader.
-		// A numeric token has no letters, so the fold is a no-op and the classifier below
-		// still parses it; nil/t are recognized on the folded name.
+		// Upcase the token to its canonical spelling first (uppercase-canonical: the
+		// reader upcases every unescaped symbol character like CL's :upcase readtable
+		// case, with no fold back to a lowercase form). So (read "foo") is FOO, (read
+		// "car") is CAR and (read "&optional") is &OPTIONAL -- matching the frontend
+		// reader. A numeric token has no letters, so the upcase is a no-op and the
+		// classifier below still parses it; NIL/T are recognized on the upcased name.
 		a.aload(0);
-		a.invokestatic(this.canon);
+		a.getstatic(this.localeRoot);
+		a.invokevirtual(this.stringToUpperCase);
 		a.astore(0);
 		// nil?
 		a.aload(0);
@@ -830,142 +792,6 @@ final class JvmReadRuntimeBuilder {
 		a.bind(sym);
 		a.aload(0);
 		a.areturn();
-		return a.finish();
-	}
-
-	// _canon(String token) -> String: the read-time canonical fold. It upcases the token
-	// and then, if the (lowercased) name is foldable, returns the lowercase spelling;
-	// otherwise the upcased spelling. Foldable = a builtin-package keyword/`#:`
-	// designator, a package-qualified name whose package part is a builtin package, a
-	// lambda-list `&` marker or `%` internal helper, or a bare foldable canonical name.
-	// This is UpcaseSymbols.canonicalize(upcase(token)) except for two pathological
-	// runtime-read shapes it deliberately folds whole instead of partially -- a
-	// cl-user-qualified name (cl:car folds like CL, cl-user::X folds the member too) and
-	// a user-package `%`-member -- kept byte-identical with the WASM backend, whose
-	// in-place byte fold uses the same rule. See .kb/reader-case-upcase.md. Locals:
-	// 0=token, 1=U, 2=len, 3=colon.
-	private List<Integer> buildCanon() {
-		JvmAsm a = new JvmAsm();
-		int fold = a.label();
-		int keep = a.label();
-		int notSharp = a.label();
-		int notLead = a.label();
-		int notQual = a.label();
-		// U = token.toUpperCase(Locale.ROOT)
-		a.aload(0);
-		a.getstatic(this.localeRoot);
-		a.invokevirtual(this.stringToUpperCase);
-		a.astore(1);
-		// len = U.length()
-		a.aload(1);
-		a.invokevirtual(this.stringLength);
-		a.istore(2);
-		// empty token -> keep (returns U)
-		a.iload(2);
-		a.branch(Opcode.IFEQ, keep);
-		// colon = U.indexOf(':')
-		a.aload(1);
-		a.iconst(':');
-		a.invokevirtual(this.stringIndexOfChar);
-		a.istore(3);
-		// --- branch 1: "#:" designator -> fold iff the package body is a builtin package
-		a.iload(2);
-		a.iconst(2);
-		a.branch(Opcode.IF_ICMPLT, notSharp);
-		a.aload(1);
-		a.iconst(0);
-		a.invokevirtual(this.stringCharAt);
-		a.iconst('#');
-		a.branch(Opcode.IF_ICMPNE, notSharp);
-		a.aload(1);
-		a.iconst(1);
-		a.invokevirtual(this.stringCharAt);
-		a.iconst(':');
-		a.branch(Opcode.IF_ICMPNE, notSharp);
-		ldc(a, this.pkgNamesBlob);
-		a.aload(1);
-		a.iconst(2);
-		a.invokevirtual(this.stringSubstringFrom);
-		a.getstatic(this.localeRoot);
-		a.invokevirtual(this.stringToLowerCase);
-		a.invokestatic(this.delimContains);
-		a.branch(Opcode.IFNE, fold);
-		a.branch(Opcode.GOTO, keep);
-		a.bind(notSharp);
-		// --- branch 2: leading ':' designator ---
-		a.aload(1);
-		a.iconst(0);
-		a.invokevirtual(this.stringCharAt);
-		a.iconst(':');
-		a.branch(Opcode.IF_ICMPNE, notLead);
-		ldc(a, this.pkgNamesBlob);
-		a.aload(1);
-		a.iconst(1);
-		a.invokevirtual(this.stringSubstringFrom);
-		a.getstatic(this.localeRoot);
-		a.invokevirtual(this.stringToLowerCase);
-		a.invokestatic(this.delimContains);
-		a.branch(Opcode.IFNE, fold);
-		a.branch(Opcode.GOTO, keep);
-		a.bind(notLead);
-		// --- branch 3: colon > 0 -> package-qualified; fold iff the package is builtin
-		a.iload(3);
-		a.branch(Opcode.IFLE, notQual);
-		ldc(a, this.pkgNamesBlob);
-		a.aload(1);
-		a.iconst(0);
-		a.iload(3);
-		a.invokevirtual(this.stringSubstring);
-		a.getstatic(this.localeRoot);
-		a.invokevirtual(this.stringToLowerCase);
-		a.invokestatic(this.delimContains);
-		a.branch(Opcode.IFNE, fold);
-		a.branch(Opcode.GOTO, keep);
-		a.bind(notQual);
-		// --- branch 4: '&' lambda-list marker or '%' internal helper -> always fold
-		a.aload(1);
-		a.iconst(0);
-		a.invokevirtual(this.stringCharAt);
-		a.iconst('&');
-		a.branch(Opcode.IF_ICMPEQ, fold);
-		a.aload(1);
-		a.iconst(0);
-		a.invokevirtual(this.stringCharAt);
-		a.iconst('%');
-		a.branch(Opcode.IF_ICMPEQ, fold);
-		// --- branch 5: bare name -> fold iff it is a foldable canonical name ---
-		ldc(a, this.foldNamesBlob);
-		a.aload(1);
-		a.getstatic(this.localeRoot);
-		a.invokevirtual(this.stringToLowerCase);
-		a.invokestatic(this.delimContains);
-		a.branch(Opcode.IFEQ, keep);
-		// fall through to fold
-		a.bind(fold);
-		a.aload(1);
-		a.getstatic(this.localeRoot);
-		a.invokevirtual(this.stringToLowerCase);
-		a.areturn();
-		a.bind(keep);
-		a.aload(1);
-		a.areturn();
-		return a.finish();
-	}
-
-	// _delimContains(String set, String cand) -> boolean: set.contains("\n" + cand +
-	// "\n").
-	// The set is a \n-delimited blob with leading/trailing \n, so this is an exact-name
-	// membership test.
-	private List<Integer> buildDelimContains() {
-		JvmAsm a = new JvmAsm();
-		a.aload(0); // set (receiver of contains)
-		ldc(a, "\n");
-		a.aload(1);
-		a.invokevirtual(this.stringConcat); // "\n" + cand
-		ldc(a, "\n");
-		a.invokevirtual(this.stringConcat); // + "\n"
-		a.invokevirtual(this.stringContains);
-		a.ireturn();
 		return a.finish();
 	}
 

@@ -230,7 +230,7 @@ public final class Environment implements Scope {
 		env.define(LispNames.MV_SPILL, LispNil.INSTANCE);
 		// Informational (every float is the one double representation); predefined so
 		// library code reading it works. The compilers inject an equivalent setq.
-		env.define(LispNames.READ_DEFAULT_FLOAT_FORMAT, new LispSymbol("double-float"));
+		env.define(LispNames.READ_DEFAULT_FLOAT_FORMAT, new LispSymbol("DOUBLE-FLOAT"));
 		// The maximum array dimension: Java arrays cap just below Integer.MAX_VALUE.
 		env.define(LispNames.ARRAY_DIMENSION_LIMIT, new LispInteger(2147483639L));
 		// Accepted and ignored: the printer does no circle detection.
@@ -240,7 +240,10 @@ public final class Environment implements Scope {
 		LispVal featureList = LispNil.INSTANCE;
 		List<String> featureNames = am.ik.rontolisp.reader.Features.INTERPRETER.names();
 		for (int i = featureNames.size() - 1; i >= 0; i--) {
-			featureList = new LispCons(new LispSymbol(":" + featureNames.get(i)), featureList);
+			// Features are keywords, printed uppercase like every other symbol under the
+			// reader's upcase premise; the compile backends substitute :RONTOLISP too.
+			featureList = new LispCons(new LispSymbol(":" + featureNames.get(i).toUpperCase(java.util.Locale.ROOT)),
+					featureList);
 		}
 		env.define(LispNames.FEATURES_VAR, featureList);
 		// The standard streams are the t designator (standard output), which the whole

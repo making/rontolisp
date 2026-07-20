@@ -9,6 +9,24 @@ user reacted to is caused entirely by *lowercase-canonical*, not by the missing
 intern table, and A2 deletes all of it. **A1 (a real intern table with symbol
 identity) is deferred to a go/no-go decision AFTER the cutover lands.**
 
+## ⟶ STATUS (2026-07-20): CUTOVER COMPLETE + COMMITTED; only the deferred A1 (Phase 5) remains
+
+The A2 cutover is DONE, validated on all four backends, and COMMITTED to `develop` + pushed
+(see git log). This todo is kept open ONLY to track the deferred **Phase 5 (A1 intern-table
+go/no-go)** below, plus the optional follow-up in `.todo/157`. Nothing else is open.
+
+Validated green before the commit (native binary at `target/rontolisp`):
+- `./mvnw test` = **4052 / 0 failures / 0 errors**, 7 skipped (incl. Docker WASM integration)
+- native `CiSpecE2eTest -Drontolisp.binary=$PWD/target/rontolisp` = **908 / 0** (all 4 backends)
+- `DocExamplesTest` 542/0; `javadoc:jar` = only the known `Version` build-time error; `-Pweb compile` OK
+
+When Phase 5 is decided (or dropped), close this todo per the global protocol: delete it in a
+commit, then record its `.todo/.history.md` row (path, date, status, the commit ID that REMOVED
+the file, model from the work commits' `Co-Authored-By`) in a SECOND commit. `.todo/155` is also
+closeable (its Gap A — the reader case-fold — is what this cutover solved).
+
+The rest of this file is the historical decision record + phase-by-phase implementation log.
+
 ## Why A2, and why the intern table is a separate axis (decision record)
 
 The seams below (fold, `Features.INTERNAL`, `keywordMatches`, case-flip retries,
@@ -254,12 +272,242 @@ redesign). NOT committed yet (backends must all be green first).
   the fold-set blob is empty, retries are one-shot) — delete as Phase-4 cleanup.
   Semantic test updates: `(find-symbol "car")`/`(fboundp (intern "car"))` now nil
   (verbatim intern; CL-correct).
-- **Phase 3 (WASM): NOT STARTED** — needs Docker/wasmtime. Same bug classes expected
-  (car/cdr `arr[1]=='d'` in `WasmEvalRuntimeBuilder`, emitCanon, baked t/nil, component
-  rich-params LOWER dual-compares, findKeywordValue copies).
-- **Phase 4: NOT STARTED** — seam cleanup (delete inert `_canon`/`emitCanon`/keywordMatches/
-  foldKeyword/case-flips/`Features.INTERNAL`), ci-spec + native `CiSpecE2eTest`, docs
-  (reader-case.md et al.), `.kb` rewrite.
+- **Phase 3 (WASM): PRODUCTION CODE DONE + VERIFIED on all four backends** 2026-07-20
+  (interp/JVM/WASM-P1/WASM-component/WASM-no-gc all produce byte-identical A2 output for
+  t/nil print, symbol/keyword upcase, runtime read fold-free, eval car/cdr, and every
+  t/nil-returning predicate — verified by cross-backend probes). NOT committed yet.
+  Real WASM/cross-backend bugs fixed:
+  1. `WasmReadRuntimeBuilder`: deleted `emitCanon`+CANON locals+fold params; runtime read
+     now upcases in place unconditionally (fixes `&`/`%` staying lowercase). The read
+     runtime's t special-case (returned i31(1) → printed "1") DELETED: `t` reads as the
+     ordinary interned symbol `T` (same string-table offset a compiled `t` uses, so eq).
+  2. `WasmLispCompiler`: `addString("nil"/"t")` → `"NIL"/"T"` at StringTable.nil (print),
+     symbolTOffset, and the read-runtime nil offset; dropped the fold-blob appendBlob wiring.
+  3. `WasmEmitHelper.emitTrue` → `compileStringLiteral("T")` (compiled `t` + every boolean
+     result is now the symbol `T`). `WasmIoRuntimeBuilder`/`WasmStringRuntimeBuilder`
+     close/string= return `"T"` (baking `"t"` late produced a blank — the early `"t"` entry
+     is gone). `WasmEvalRuntimeBuilder` `(and)` special form → `off.of("T")` (+ its
+     registration in `WasmLispCompiler`).
+  4. `WasmEvalRuntimeBuilder` car/cdr composition decoders (eval + store copies): `'c'/'r'/
+     'a'/'d'` (0x63/72/61/64) → `'C'/'R'/'A'/'D'` (0x43/52/41/44).
+  5. `NoGcWasmCompiler`: t/nil print pool `"t"/"nil"` → `"T"/"NIL"`; `concatenate 'string`
+     type check `isQuotedSymbol(..,"string")` → `"STRING"`.
+  6. Component-splice compile bugs (were RED at HEAD — full suite never run for Phase 1/2):
+     the 4 library member-filter scanners (`WaitForLibrary`/`HttpLibrary`/`SocketsLibrary`/
+     `StdinLibrary` `collectNames`) were missing the lowercase-twin `WitImportInliner` has,
+     so upcased references (`%MONO-CLOCK:WAIT-FOR`) never matched the lower-kebab WIT member
+     (`wait-for`) → the member was filtered out → its defpackage `:export` was empty →
+     "X not external". `WasmSocketsRewrite` dispatch maps had inconsistent case
+     (`%io-read-char`/`%tcp-connect-f` lowercase vs the upcased sockets.lisp defuns) → now
+     all uppercase. `HttpLibrary` serve root `"%serve-handle"` → `"%SERVE-HANDLE"` (was
+     pruned before its wasm-export). wait/tcp/stdin/serve/fetch all compile `--component` now.
+  7. JVM residuals (bug-class 7 + the `_canon` `&`/`%` fold Phase 2 deferred, both needed for
+     4-backend consistency): `JvmLispCompiler` nil print `"nil"` → `"NIL"`; the 5 runtime
+     builders + JVM eval-runtime `(and)` + java-interop bridge that baked symbol `"t"` →
+     `"T"`; `JvmReadRuntimeBuilder.buildClassify` `_canon` call → unconditional
+     `toUpperCase(ROOT)`. `describe(nil)` → `"NIL"`.
+  Component rich-params LOWER dual-compares + JVM `buildCanon`/`emitCanon`-machinery
+  deletion + `findKeywordValue` tightening are INERT and DEFERRED to Phase 4 (behavior is
+  already correct). `WitImportDirective` was NOT changed (the resolver lowercase retry
+  handles upcased references once the member is bound — the collectNames fix is what
+  matters).
+  TEST STATUS: `JvmLispCompilerTest` green (147 pure case-flips, 0 real bugs). WASM
+  integration flip loop running. The rest of the suite needs the same mechanical case-flip
+  sweep (autoflip tool + hand-updates of hardcoded Lisp-name strings in library/wit/
+  component tests). Pitfall: the autoflip tool can corrupt a `.java` file when a case-flip
+  token collides with a Java identifier (it flipped `block`→`BLOCK` in DocExamplesTest) —
+  keep DocExamplesTest out of it (its examples are `.md`; use `-Drontolisp.doc.fix=true`).
+  PRE-EXISTING Phase-1 residuals surfaced by finally running the full suite (NOT Phase 3
+  WASM, out of scope here): parse-number `(coerce x computed-type)` fails because
+  parse-number interns a verbatim-lowercase `double-float` while `FLOAT_TYPE_NAMES` is
+  uppercase; several AsdfSystemsTest `.asd` cases; some DocExamples. Investigate under
+  Phase 4 / a separate pass.
+- **Phase 4: DONE** (2026-07-20) — tests/docs/kb + native ci-spec + the inert-seam deletion all
+  landed (see "GREEN-SUITE UPDATE", "Native ci-spec DONE", and "#6 inert cleanup DONE + #5 docs
+  DONE" below, and the top-of-file RESUME section). `UpcaseSymbols`/`Features.INTERNAL`/JVM
+  `_canon` DELETED; `keywordMatches`/`foldKeyword` + the `--component` LOWER dual-compares were
+  KEPT (case-tolerance, not fold) and moved to `.todo/157` as an optional simplification. The
+  parse-number/asdf residuals were fixed. Only the commit remains (RESUME section, top).
+
+## MID-FLIGHT HANDOFF (compaction point, 2026-07-20)
+
+Working tree is UNCOMMITTED and COMPILES CLEAN (`./mvnw -o test-compile` = 0). 297 files
+changed: **22 src/main (production, DONE + verified on all 4 backends)**, 28 src/test
+(flip in progress), 246 doc (en+ja doc-fix, DONE), 1 .todo. Do NOT `git checkout` broadly.
+
+### Production (src/main) — DONE, verified via cross-backend probes, do not revert
+The 22 changed main files implement the full items 1-7 listed in the Phase 3 status above.
+Extra production fixes made during the full-suite sweep (all real A2 bugs, keep them):
+- `Environment.java`: `*READ-DEFAULT-FLOAT-FORMAT*` seed `"double-float"` → `"DOUBLE-FLOAT"`
+  (parse-number `(coerce x *read-default-float-format*)` was erroring; compiler side already
+  had DOUBLE-FLOAT in `LispMacroExpander` ~14151).
+- `WaitForLibrary`/`HttpLibrary`/`SocketsLibrary`/`StdinLibrary` `collectNames`: added the
+  lowercase-twin (mirrors `WitImportInliner.collectNames`) — the ROOT of every component
+  "X not external in %PKG". `WasmSocketsRewrite` SYNC_DISPATCH/ASYNC_FUTURES/TCP_FUTURES
+  now uppercase (`%IO-READ-CHAR`/`%TCP-CONNECT-F`...). `HttpLibrary` serve root
+  `"%serve-handle"` → `"%SERVE-HANDLE"`. `NoGcWasmCompiler` `concatenate 'string` check
+  `isQuotedSymbol(..,"STRING")`. Verified: wait/tcp/stdin/serve/fetch all compile `--component`.
+- WitImportDirective.java was NOT changed (the resolver lowercase-retry `PackageResolver`
+  ~602-605 handles upcased refs once the member is BOUND — the collectNames fix is the key).
+
+### Tests — status + the tooling to finish the rest
+GREEN now: JvmLispCompilerTest (147 flips), DocExamplesTest (via doc-fix; ja synced),
+WasmLispCompilerIntegrationTest (Docker; 8 survivors hand-fixed + `findSymbolIsVerbatim`/
+`fboundp` recast), ClUtilities/Jzon/LinalgSimd/VecSimd E2E, JvmAsync/FloatArray/JavaInterop/
+Simd/LinalgSimd, AsyncEval, Http/Wait/Stdin/LispEvaluatorAsdf/LispFloatArray/ClPpcre.
+
+REMAINING FAILURES (~11 classes, ~30, ALL are test-EXPECTATION case updates — every
+`but was:` shows the A2-correct actual; production is right). Run this to see them:
+`./mvnw -Dtest='WitImportDirectiveTest,WitExportDirectiveTest,WitImportInlinerTest,WitExportInlinerTest,WasmComponentImportCompilerTest,WasmLispCompilerTest,NoGcWasmCompilerTest,UserMacroExpanderTest,LibraryDefunPrunerTest,AsdfSystemsTest,LispLexerTest' test`
+- **Form-comparison** (startsWith / containsExactly / dynamic isEqualTo with `+ VAR +`):
+  WitImportDirective (~11: `%component-import`/`wasm-import` forms + `(DEFUN emit ...)`
+  emit/save/reset), WitExportDirective (3), Wit{Import,Export}Inliner (3+3),
+  WasmComponentImport (STARTS/LIST: `(DEFPACKAGE kv (:USE CL) (:EXPORT open ...))`),
+  LispLexer (2: `SymbolToken[name=PRINT]`), UserMacroExpander (3 macroexpand:
+  `(PRINT (QUOTE ...))`). Rule of the actual: uppercase EVERY Lisp symbol/keyword EXCEPT
+  WIT names (the quoted member in `(QUOTE open)` / string args) and type designators
+  (`:int`/`:string`/`:void`/`:float`/`:long`/`:bool`/`:s-expr`) and string data. This
+  WIT-vs-Lisp case split is why a blind global uppercase fails.
+- **Component `Cannot compile: KV:thing-move-to`**: the `thing-*` `:export` in
+  `WasmComponentImportCompilerTest` ~542-543 spans Java `+`-concatenated lines, so the
+  `(:export ...)` uppercaser missed those members. Uppercase them (and any other multi-line
+  `:export`) to match the upcased refs/DefunDecls.
+- **UserMacroExpander impure* / configSetter (4)** and **LibraryDefunPruner (3:
+  bareNamesInsideInPackage returns `[]`, keepsTheRngSeeds, functionQuote...)**: verify these
+  are pure case (they looked like it: `(DEFVAR *MODE* :A) ...`) — but bareNames returning an
+  EMPTY list smells like a possible real pruner/resolve issue under `(in-package :linalg)` +
+  `(cl:print ...)`; INVESTIGATE that one, don't blind-flip.
+- **AsdfSystemsTest.parsesTheClPostgresAsdHeaderShape (1E)**: `.asd` now read upcased
+  (`Features.INTERPRETER`; the test's other `Features.INTERNAL` were switched already), and a
+  `defparameter` whose value is `(IF *UNICODE* "..." "...")` is rejected as "unsupported
+  form". Decide: is an IF-valued defparameter meant to parse? (probably a test-expectation or
+  a small AsdfSystems allowance).
+
+### The flip TOOLS (persisted, survive compaction) in
+`~/.claude/projects/-Users-toshiaki-git-rontolisp/cutover-tools/`:
+- `repl2.py <TEST-x.xml> <src.java>` — BEST for `isEqualTo`: value-matches the RIGHT
+  assertion (handles multi-isEqualTo methods) and un-indents AssertJ's 2-space continuation
+  prefix. Use after a run that produced the XML.
+- `autoflip2.py` + `flipall.sh` — line-anchored pure-case-flip for simple `expected/actual`;
+  `flipall.sh` SKIPS DocExamplesTest (it corrupts it, see gotcha).
+- `fliploop.sh <FQCN> <src> <rounds>` — run→flip→rerun loop for one class.
+- `sync_doc_ja.py` — run AFTER `-Drontolisp.doc.fix=true -Dtest=DocExamplesTest#fixDetailResults test`
+  (which only rewrites doc/en) to mirror the same result-line changes into doc/ja.
+- `isequal_replace.py`/`formflip.py`/`globalflip.py` — earlier iterations; repl2 supersedes.
+
+### GOTCHAS (learned the hard way)
+- The interactive `grep` shell function is BROKEN on some large files (returns nothing for
+  `package` etc.) — ALWAYS use `/usr/bin/grep`.
+- autoflip flips a Java identifier `block`→`BLOCK` in DocExamplesTest.java (its examples are
+  .md, not .java) → breaks test-compile. Keep DocExamplesTest OUT of any autoflip; fix its
+  results only via `-Drontolisp.doc.fix=true` then `sync_doc_ja.py`.
+- doc-fix (`DocExamplesTest#fixDetailResults`) only walks `doc/en` (DOC_ROOT). Always run
+  `sync_doc_ja.py` after to keep en/ja code-fences byte-identical.
+- `spring-javaformat:apply` re-wraps long escaped-string test expecteds; harmless.
+
+### To finish + verify
+1. Flip the remaining ~30 (per rules above), re-run the class list to green.
+2. `./mvnw spring-javaformat:apply test` (full, Docker up) → all green.
+3. ci-spec (Phase 4, native): ~150 standalone t/nil lines flip (line counts stable). Build
+   `-Pnative`, run `CiSpecE2eTest -Drontolisp.binary=...`; also flip `read-from-string-upcase-fold`
+   (t→T, `:cl`→`:CL`) and `symbol-runtime-api` (t→T, `(find-symbol "car")`→nil) cases.
+4. `.kb/reader-case-upcase.md` still describes the OLD fold model — rewrite for A2. Also
+   `symbol-runtime-api.md`, `core-representation.md`, `doc/{en,ja}/guides/reader-case.md`.
+5. Phase-4 inert cleanup: delete JVM `buildCanon`/`_delimContains`, WASM component LOWER
+   dual-compares, `keywordMatches`/`foldKeyword`, `Features.INTERNAL`, `UpcaseSymbols`.
+   Consider the user's suggestion: wrap the `WasmSocketsRewrite`-style dispatch Maps in an
+   always-uppercasing Map to prevent future case-drift structurally.
+6. Only then commit (all four backends green first, per the governing rule).
 
 Governing rule: where behavior must match across interpreter + JVM + both WASM backends,
 change all four and their pinning tests together — never one backend in isolation.
+
+## GREEN-SUITE UPDATE (2026-07-20, post-compaction)
+
+The whole `./mvnw test` suite is GREEN: **4052 tests, 0 failures, 0 errors, 7 skipped**
+(the 7 are opt-in / native-binary-gated). Docker was up, so `WasmLispCompilerIntegrationTest`
+(real wasmtime P1 + component) ran and passed too. Working tree still UNCOMMITTED.
+
+Beyond the test-expectation flips listed above, the full-suite sweep found and fixed FOUR
+more real A2 production bugs (all in `src/main`, keep them):
+1. `LinalgLibrary` / `VecLibrary` / `UsocketLibrary` splice triggers matched bare names under
+   `(in-package :pkg)` against the now-UPPERCASE `*FunctionNames()` sets with `.toLowerCase()`
+   — flipped to `.toUpperCase()`. Before the fix a `(in-package :linalg) (cl:print (to-list
+   (zeros ...)))` program spliced NOTHING (`spliced size=2`), so the pruner saw no defuns.
+2. `LibraryDefunPruner.collectReferences` string-literal carve-out now upcases the string
+   before `contains` — `(read-from-string "linalg:ndim")` names `LINALG:NDIM`, so the match
+   must be case-insensitive.
+3. `AsdfSystems.evalDataForm` `.asd` mini-eval `case "if"/"not"/"or"/"and"` were lowercase
+   literals; the reader upcases, so `(if *unicode* ...)` fell through to "unsupported form".
+   Switched to `LispNames.IF/NOT/OR/AND`.
+4. (test-side but subtle) `WasmComponentImportCompilerTest` directive-path lisp-names keep the
+   "kv" designator's case (lowercase `kv:member`); the hand-written `%component-import` test
+   uppercases its `:export` designators to line up with the upcased user calls.
+
+### Native ci-spec DONE (2026-07-20)
+Built `-Pnative`; regenerated ci-spec.yaml `expected` from the native binary's real per-backend
+output with a line-based regen tool (`scratchpad/cispec_regen.py`, copied to `cutover-tools/`):
+it parses the block scalars, builds the concatenated program, runs all four backends
+(interpreter / `-o Test.class`+java / `-o test.wasm`+wasmtime / `--component`+wasmtime), slices
+each backend's stdout by the CURRENT per-case expected line counts (A2 preserves counts — only
+casing shifts), and REFUSES to rewrite if any simple case's four backends disagree (guards the
+cross-backend-identity invariant). `CiSpecE2eTest -Drontolisp.binary=target/rontolisp` =
+**908 tests, 0 failures** on all four backends.
+
+The regen caught THREE real A2 interpreter regressions the unit suite missed (fixed in `src/main`):
+1. `Environment` `*features*` seeded `:rontolisp` (lowercase) -> `.toUpperCase()` = `:RONTOLISP`.
+2. `LispEvaluator` `class-of` wrapped a lowercase `builtinTypeName` -> `.toUpperCase()` so
+   `(class-of 42)` prints `INTEGER`, matching the compiled backends.
+3. `LispEvaluator.instanceSlotCell` compared slot base names with `equals`; a Java-side caller
+   spells the built-in slot lowercase ("format-control") while an upcase-read condition registers
+   `FORMAT-CONTROL` -> `equalsIgnoreCase` (same reconciliation `expandConditionSlotReader` makes),
+   so `simple-condition-format-control` returns "lbr 7" not NIL.
+Renamed the ci-spec case `read-from-string-upcase-fold` -> `read-from-string-upcase`.
+
+### REMAINING (tasks #5 + #6 are COUPLED; do #6 then #5; needs one more hot native ci-spec re-run)
+The fold is already INERT — `UpcaseSymbols.canonicalize` is identity, `foldableBareNames()`/
+`foldPackageNamesBlob()` are empty; the class Javadoc says it "remains only so the now-inert fold
+entry points ... can be retired backend by backend". So:
+- **Inert cleanup** (task #6, do FIRST): behavior-neutral dead-code removal across ~20 files —
+  `UpcaseSymbols` + `canonicalize` callers, JVM `buildCanon`/`_canon`, WASM `emitCanon`, the baked
+  `foldNamesBlob`/`foldPackageNamesBlob`, `Features.INTERNAL`/`preserveCase` (IF the .asd/shim
+  lowercase island is truly gone — verify AsdfSystems/shim reads), the component LOWER dual-compares
+  and `keywordMatches`/`foldKeyword` simplification. Validate with the JVM suite AND a final native
+  `CiSpecE2eTest` (deleting inert code must be byte-identical). Consider the user's always-uppercasing
+  Map wrapper for `WasmSocketsRewrite` dispatch to prevent future case-drift.
+- **.kb/docs rewrite** (task #5, do AFTER #6 so it describes the CLEAN state): rewrite
+  `.kb/reader-case-upcase.md` for A2 (no fold; `symbol-name 'car` = "CAR" now — the old lowercase
+  deviation is GONE; `(find-symbol "car")` = NIL; runtime read just upcases), and
+  `symbol-runtime-api.md`, `core-representation.md`, `doc/{en,ja}/guides/reader-case.md`.
+- Then commit (with permission).
+
+### COMMITTABLE NOW (independent of the follow-up)
+The A2 cutover behavior + all test-expectation updates are a complete, validated unit: full suite
+4052/0 (incl. Docker WASM integration) + native CiSpecE2eTest 908/0 on all four backends, with the
+fold code left as inert no-ops. This is committable on its own; #6+#5 are a clean second unit.
+
+### #6 inert cleanup DONE + #5 docs DONE (2026-07-20)
+#6 (behavior-neutral fold removal): DELETED `UpcaseSymbols` (identity/empty no-ops); inlined the
+`LispEvaluator.foldRuntimeSymbolName` identity wrapper (intern/find-symbol now verbatim); removed
+`LispLexer`'s `canonicalize` calls + the dead `preserveCase` branches; removed `Features.INTERNAL`/
+`preservingCase()`/`preserveCase` (the case-preserving island was already unreachable); removed the
+JVM read runtime's dead `_canon`/`_delimContains` + their fold-only string helpers/blobs
+(`JvmReadRuntimeBuilder`). WASM `emitCanon` was already gone (Phase 3). Left in place (case-tolerance,
+NOT fold; noted in `.kb/reader-case-upcase.md`): `keywordMatches`/`foldKeyword`,
+`instanceSlotCell` equalsIgnoreCase, PackageResolver lowercase-retry, the component LOWER dual-compares
+(a later simplification candidate). Full suite re-ran GREEN after cleanup except 3 DocExamples that my
+earlier interpreter fixes changed (class-of->INTEGER, simple-condition-format-control/arguments now
+return the value not NIL) -- fixed via doc-fix.
+
+#5 (docs): rewrote `doc/{en,ja}/guides/reader-case.md` for A2 (upcase, no fold; `symbol-name 'car`
+= "CAR"; `find-symbol "car"` = NIL; `|car|` distinct from CAR), `.kb/reader-case-upcase.md` (fold
+deleted; documents the residual case-tolerance seams), and fixed the stale "standard names stay
+lowercase" prose in `.kb/symbol-runtime-api.md` + `functions.md`/`symbol-name.md`/`string.md`/
+`read.md`/`read-from-string.md` and the self-hosted-REPL "case-preserving" claim (the embedded runtime
+reader upcases now -> the REPL echoes `SQUARE`, verified). Ran `-Drontolisp.doc.fix=true` +
+`sync_doc_ja.py` + a hand pass for the multi-line examples; DocExamplesTest 542/0 and all 125 changed
+doc pages have en/ja code-fence parity. Javadoc: only the known `Version` build-time error. Web
+profile compiles.
+
+Only the FINAL native `CiSpecE2eTest` re-run (byte-identical after the dead-code deletion) remains
+before commit.

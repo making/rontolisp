@@ -295,7 +295,7 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
 		this.runtimeExceptionInit = cp.addMethodref(this.runtimeExceptionClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.tStr = cp.addString("t");
+		this.tStr = cp.addString("T");
 		this.quoteStr = cp.addString("\"");
 		this.newlineStr = cp.addString("\n");
 		this.eofStr = cp.addString("read-byte: end of file");

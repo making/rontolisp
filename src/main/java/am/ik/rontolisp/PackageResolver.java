@@ -682,9 +682,9 @@ public final class PackageResolver {
 				return canonical(used, name);
 			}
 		}
-		// The reader upcases user spellings while the built-in packages' canonical
-		// members are lowercase, so a bare reference under (in-package :rontolisp) --
-		// VERSION for version -- retries its lowercase spelling against the current
+		// The reader upcases user spellings, but a wit-import package's members are
+		// lower-kebab WIT labels (create-shader, not CREATE-SHADER), so a bare reference
+		// under (in-package :gl) retries its lowercase spelling against the current
 		// package and the use list before being interned as a fresh symbol.
 		String lower = name.toLowerCase(java.util.Locale.ROOT);
 		if (!lower.equals(name)) {

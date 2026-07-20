@@ -9,5 +9,5 @@
 ```
 
 ```lisp
-(car nil) ; => nil
+(car nil) ; => NIL
 ```

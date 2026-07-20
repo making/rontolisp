@@ -6,5 +6,5 @@ Returns `t` when `a` and `b` have the same shape and numerically equal elements,
 
 ```lisp
 (linalg:array-equal (linalg:eye 2) #2A((1 0) (0 1))) ; => t
-(linalg:array-equal #(1 2) #(1 2 3))                  ; => nil
+(linalg:array-equal #(1 2) #(1 2 3))                  ; => NIL
 ```

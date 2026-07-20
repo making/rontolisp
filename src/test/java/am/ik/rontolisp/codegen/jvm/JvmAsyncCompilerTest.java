@@ -62,7 +62,7 @@ class JvmAsyncCompilerTest {
 				  (print (rontolisp:futurep f))
 				  (print (rontolisp:await f))
 				  (print (rontolisp:await f)))
-				""")).isEqualTo("\"before\"\n\"in\"\n\"after\"\nt\n3\n3");
+				""")).isEqualTo("\"before\"\n\"in\"\n\"after\"\nT\n3\n3");
 	}
 
 	@Test
@@ -73,7 +73,7 @@ class JvmAsyncCompilerTest {
 				(print (rontolisp:await (outer)))
 				(print (rontolisp:await 42))
 				(print (rontolisp:await nil))
-				""")).isEqualTo("11\n42\nnil");
+				""")).isEqualTo("11\n42\nNIL");
 	}
 
 	@Test
@@ -105,7 +105,7 @@ class JvmAsyncCompilerTest {
 				  (rontolisp:stream-close s)
 				  (print (rontolisp:await (rontolisp:read-all s)))
 				  (print (rontolisp:await (rontolisp:stream-read s))))
-				""")).isEqualTo("t\nnil\n\"hello world\"\nnil");
+				""")).isEqualTo("T\nNIL\n\"hello world\"\nNIL");
 	}
 
 	@Test
@@ -160,7 +160,7 @@ class JvmAsyncCompilerTest {
 				(print (rontolisp:futurep (add 1 2)))
 				(print (rontolisp:await (add 20 22)))
 				(print (rontolisp:await (funcall (rontolisp:async (lambda (x) (* x 2))) 21)))
-				""")).isEqualTo("t\n42\n42");
+				""")).isEqualTo("T\n42\n42");
 	}
 
 	@Test
@@ -194,7 +194,7 @@ class JvmAsyncCompilerTest {
 				(let ((f (rontolisp:wait-for 10)))
 				  (print (rontolisp:futurep f))
 				  (print (rontolisp:await f)))
-				""")).isEqualTo("t\nnil");
+				""")).isEqualTo("T\nNIL");
 	}
 
 	@Test

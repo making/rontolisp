@@ -9,5 +9,5 @@ Spreads `list` as multiple values: the first element is the primary value and th
 ```
 
 ```lisp
-(multiple-value-bind (a b) (values-list '(10)) (list a b)) ; => (10 nil)
+(multiple-value-bind (a b) (values-list '(10)) (list a b)) ; => (10 NIL)
 ```

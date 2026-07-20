@@ -15,7 +15,7 @@ compatibility and ignored (the backlog is the runtime default).
 (let* ((listener (usocket:socket-listen usocket:*wildcard-host* usocket:*auto-port*))
        (port (usocket:get-local-port listener)))
   (usocket:socket-close listener)
-  (> port 0)) ; => t
+  (> port 0)) ; => T
 ```
 
 Accept connections with [`usocket:socket-accept`](usocket-socket-accept.md).

@@ -13,7 +13,7 @@
 (let ((s (rontolisp:make-stream)))
   (rontolisp:stream-write s "x")
   (rontolisp:stream-close s)
-  (rontolisp:stream-close s))   ; => nil
+  (rontolisp:stream-close s))   ; => NIL
 ```
 
 ## バックエンドのサポート

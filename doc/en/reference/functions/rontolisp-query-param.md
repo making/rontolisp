@@ -13,7 +13,7 @@ requests without a query string inside an
 (rontolisp:query-param "a=1&name=ronto%20lisp" "name")   ; => "ronto lisp"
 (rontolisp:query-param "q=1&q=2" "q")   ; => "1"
 (rontolisp:query-param "a=1" "missing")   ; => nil
-(rontolisp:query-param nil "a")   ; => nil
+(rontolisp:query-param nil "a")   ; => NIL
 ```
 
 ## Backend support

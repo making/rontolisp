@@ -144,9 +144,9 @@ class WitImportInlinerTest {
 		List<LispVal> out = WitImportInliner.inline(LispReader.readAllFromString(DIRECTIVE + BODY), null,
 				WitExportDirective.Backend.WASM_GC, uploads(Map.of("gl.wit", GL_WIT)));
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList())).doesNotContain("wit-import")
-			.contains("(defpackage GL (:use cl) (:export create-shader shader-source compile-shader clear-color))")
-			.contains("(rontolisp:wasm-import (quote GL:create-shader) :from \"gl\" :as \"createShader\" "
-					+ ":params (quote (:int)) :returns :int)");
+			.contains("(DEFPACKAGE GL (:USE CL) (:EXPORT create-shader shader-source compile-shader clear-color))")
+			.contains("(RONTOLISP:WASM-IMPORT (QUOTE GL:create-shader) :FROM \"gl\" :AS \"createShader\" "
+					+ ":PARAMS (QUOTE (:int)) :RETURNS :int)");
 	}
 
 	@Test
@@ -177,7 +177,7 @@ class WitImportInlinerTest {
 						"(rontolisp:wit-import \"wit/gl.wit\" :interface \"local:webgl/gl\" :package gl)\n" + BODY),
 				this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList()))
-			.contains("(rontolisp:wasm-import (quote GL:create-shader)");
+			.contains("(RONTOLISP:WASM-IMPORT (QUOTE GL:create-shader)");
 	}
 
 	/**
@@ -219,13 +219,13 @@ class WitImportInlinerTest {
 		List<LispVal> out = WitImportInliner.inline(LispReader.readAllFromString(KV_DIRECTIVE), null,
 				WitExportDirective.Backend.OTHER, uploads(Map.of("kv.wit", KV_WIT)));
 		assertThat(out.stream().map(LispVal::print).toList()).containsExactly(
-				"(defpackage KV (:use cl) (:export bucket-get bucket-set open))",
-				"(defun KV:bucket-get (self key) "
-						+ "(rontolisp::%wit-call \"wasi:keyvalue/store@0.2.0\" \"bucket-get\" self key))",
-				"(defun KV:bucket-set (self key value) "
-						+ "(rontolisp::%wit-call \"wasi:keyvalue/store@0.2.0\" \"bucket-set\" self key value))",
-				"(defun KV:open (identifier) "
-						+ "(rontolisp::%wit-call \"wasi:keyvalue/store@0.2.0\" \"open\" identifier))");
+				"(DEFPACKAGE KV (:USE CL) (:EXPORT bucket-get bucket-set open))",
+				"(DEFUN KV:bucket-get (self key) "
+						+ "(RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-get\" self key))",
+				"(DEFUN KV:bucket-set (self key value) "
+						+ "(RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"bucket-set\" self key value))",
+				"(DEFUN KV:open (identifier) "
+						+ "(RONTOLISP::%WIT-CALL \"wasi:keyvalue/store@0.2.0\" \"open\" identifier))");
 	}
 
 	/**
@@ -245,20 +245,20 @@ class WitImportInlinerTest {
 					SourceLoader.fileSystem())
 			.stream()
 			.map(LispVal::print)
-			.toList()).containsExactly("(defun MY-GL (member &rest ARGS) 0)");
+			.toList()).containsExactly("(DEFUN MY-GL (MEMBER &REST ARGS) 0)");
 		assertThat(WitImportInliner
 			.inline(LispReader.readAllFromString(program), null, WitExportDirective.Backend.WASM_NO_GC,
 					SourceLoader.fileSystem())
 			.stream()
 			.map(LispVal::print)
-			.toList()).containsExactly("(defun MY-GL (member &rest ARGS) 0)");
+			.toList()).containsExactly("(DEFUN MY-GL (MEMBER &REST ARGS) 0)");
 		assertThat(WitImportInliner
 			.inline(LispReader.readAllFromString(program), null, WitExportDirective.Backend.OTHER,
 					SourceLoader.fileSystem())
 			.stream()
 			.map(LispVal::print)
-			.toList()).containsExactly("(defun MY-GL (member &rest ARGS) 0)",
-					"(rontolisp:wit-provide \"local:webgl/gl\" (function MY-GL))");
+			.toList()).containsExactly("(DEFUN MY-GL (MEMBER &REST ARGS) 0)",
+					"(RONTOLISP:WIT-PROVIDE \"local:webgl/gl\" (FUNCTION MY-GL))");
 	}
 
 	/**
@@ -288,15 +288,15 @@ class WitImportInlinerTest {
 			// untouched.
 			.endsWith(provider.toArray(new LispVal[0]));
 		assertThat(String.join("\n", spliced.stream().map(LispVal::print).toList()))
-			.contains("(defun rontolisp::%wit-call")
-			.contains("(defun rontolisp:wit-provide")
+			.contains("(DEFUN RONTOLISP::%WIT-CALL")
+			.contains("(DEFUN RONTOLISP:WIT-PROVIDE")
 			// ...and the runtime is the MECHANISM only: it binds a provider for NOTHING.
 			// The core knows how to dispatch a WIT interface; it does not know what
 			// wasi:keyvalue is, and ships an implementation of it (or of any other
 			// interface) nowhere -- a store is user code, as in examples/wit/keyvalue.
 			// A top-level (rontolisp:wit-provide "<interface>" ...) here would be the
 			// core privileging one third-party spec, version-pinned and name-pinned.
-			.doesNotContain("(rontolisp:wit-provide \"");
+			.doesNotContain("(RONTOLISP:WIT-PROVIDE \"");
 		// Idempotent: the spliced program already defines %wit-call, so a second pass
 		// cannot prepend a second copy of the runtime.
 		assertThat(WitLibrary.process(spliced)).isSameAs(spliced);

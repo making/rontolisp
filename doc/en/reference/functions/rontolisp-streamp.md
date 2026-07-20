@@ -8,14 +8,14 @@ Returns `t` if `value` is an *asynchronous* stream — as returned by
 
 ```lisp
 (rontolisp:streamp (rontolisp:make-stream))   ; => t
-(rontolisp:streamp 42)                        ; => nil
+(rontolisp:streamp 42)                        ; => NIL
 ```
 
 This is a different symbol from `cl:streamp`, the file-stream predicate: each
 answers `nil` for the other's streams.
 
 ```lisp
-(streamp (rontolisp:make-stream))   ; => nil
+(streamp (rontolisp:make-stream))   ; => NIL
 ```
 
 An asynchronous stream is an opaque value: it has no reader syntax and prints

@@ -5,5 +5,5 @@
 ライト版スタブ: `(values nil t nil)` を返します — 関数オブジェクトにソース式は記録されません。
 
 ```lisp
-(function-lambda-expression #'car) ; => nil
+(function-lambda-expression #'car) ; => NIL
 ```

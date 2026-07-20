@@ -13,7 +13,7 @@ the main use); the `get-peer-*` accessors work on connected sockets only.
 (let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
        (port (usocket:get-local-port listener)))
   (usocket:socket-close listener)
-  (> port 0)) ; => t
+  (> port 0)) ; => T
 ```
 
 `get-local-name` / `get-peer-name` return `(values address port)`: a
@@ -24,7 +24,7 @@ context receives the address.
 (let ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*)))
   (multiple-value-bind (address port) (usocket:get-local-name listener)
     (usocket:socket-close listener)
-    (list address (> port 0)))) ; => ("127.0.0.1" t)
+    (list address (> port 0)))) ; => ("127.0.0.1" T)
 ```
 
 ## Backend support

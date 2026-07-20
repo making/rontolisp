@@ -47,7 +47,7 @@ class NoGcWasmCompilerTest {
 		assertThatThrownBy(() -> compile("""
 				(defun up-f (n) (unwind-protect (* n 2) n))
 				(rontolisp:wasm-export 'up-f :params '(:int) :returns :int)
-				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("unwind-protect");
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("UNWIND-PROTECT");
 	}
 
 	@Test
@@ -263,7 +263,7 @@ class NoGcWasmCompilerTest {
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (let ((s 0)) (dolist (x (list 1 2 n)) (setq s (+ s x))) s))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
-				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("dolist");
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("DOLIST");
 	}
 
 	@Test
@@ -285,7 +285,7 @@ class NoGcWasmCompilerTest {
 				(defun f (n) (car (cons n n)))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
 				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("car")
+			.hasMessageContaining("CAR")
 			.hasMessageContaining("f");
 	}
 
@@ -1896,27 +1896,27 @@ class NoGcWasmCompilerTest {
 				(rontolisp:async-defun f () 1)
 				(rontolisp:wasm-export 'f :returns :long)
 				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("rontolisp:async-defun is not supported with --no-gc");
+			.hasMessageContaining("RONTOLISP:ASYNC-DEFUN is not supported with --no-gc");
 		assertThatThrownBy(() -> compile("""
 				(rontolisp:async (defun f () 1))
 				(rontolisp:wasm-export 'f :returns :long)
 				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("rontolisp:async is not supported with --no-gc");
+			.hasMessageContaining("RONTOLISP:ASYNC is not supported with --no-gc");
 		assertThatThrownBy(() -> compile("""
 				(defun f () (rontolisp:await 1))
 				(rontolisp:wasm-export 'f :returns :long)
 				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("rontolisp:await is not supported with --no-gc");
+			.hasMessageContaining("RONTOLISP:AWAIT is not supported with --no-gc");
 		assertThatThrownBy(() -> compile("""
 				(defun f () (rontolisp:make-stream))
 				(rontolisp:wasm-export 'f :returns :long)
 				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("rontolisp:make-stream is not supported with --no-gc");
+			.hasMessageContaining("RONTOLISP:MAKE-STREAM is not supported with --no-gc");
 		assertThatThrownBy(() -> compile("""
 				(defun f () (rontolisp:wait-for 10))
 				(rontolisp:wasm-export 'f :returns :long)
 				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("rontolisp:wait-for is not supported with --no-gc");
+			.hasMessageContaining("RONTOLISP:WAIT-FOR is not supported with --no-gc");
 	}
 
 	@Test

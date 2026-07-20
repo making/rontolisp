@@ -9,5 +9,5 @@ Returns the cdr of a cons cell -- the rest of a list after its first element. As
 ```
 
 ```lisp
-(cdr nil) ; => nil
+(cdr nil) ; => NIL
 ```

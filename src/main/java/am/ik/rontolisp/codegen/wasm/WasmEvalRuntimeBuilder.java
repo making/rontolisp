@@ -776,7 +776,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, REST);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
-		i32(w, off.of("t"));
+		i32(w, off.of("T"));
 		i32(w, 1);
 		WasmEmitHelper.emitStrBuildCall(w);
 		w.write(Instruction.RETURN);
@@ -1580,12 +1580,12 @@ final class WasmEvalRuntimeBuilder {
 	 */
 	private static void emitCarCdrComposition(WasmWriter w, int strValSlot, int lenSlot, int restSlot, int envSlot,
 			int accSlot, int idxSlot, int chSlot, int validSlot) {
-		// first/last byte check: len>=3 && arr[0]=='c' && arr[len-1]=='r'
+		// first/last byte check: len>=3 && arr[0]=='C' && arr[len-1]=='R'
 		getLocal(w, lenSlot);
 		i32(w, 3);
 		w.write(Instruction.I32_GE_S);
 		strByteAt(w, strValSlot, () -> i32(w, 0));
-		i32(w, 0x63);
+		i32(w, 0x43);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_AND);
 		strByteAt(w, strValSlot, () -> {
@@ -1593,11 +1593,11 @@ final class WasmEvalRuntimeBuilder {
 			i32(w, 1);
 			w.write(Instruction.I32_SUB);
 		});
-		i32(w, 0x72);
+		i32(w, 0x52);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.IF, 0x40);
-		// scan middle bytes: valid = all in {'a','d'}
+		// scan middle bytes: valid = all in {'A','D'}
 		i32(w, 1);
 		setLocal(w, validSlot);
 		i32(w, 1);
@@ -1613,10 +1613,10 @@ final class WasmEvalRuntimeBuilder {
 		strByteAt(w, strValSlot, () -> getLocal(w, idxSlot));
 		setLocal(w, chSlot);
 		getLocal(w, chSlot);
-		i32(w, 0x61);
+		i32(w, 0x41);
 		w.write(Instruction.I32_NE);
 		getLocal(w, chSlot);
-		i32(w, 0x64);
+		i32(w, 0x44);
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.IF, 0x40);
@@ -1647,7 +1647,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.I32_LT_S);
 		w.write(Instruction.BR_IF, 1);
 		strByteAt(w, strValSlot, () -> getLocal(w, idxSlot));
-		i32(w, 0x61);
+		i32(w, 0x41);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
 		emitCarOf(w, accSlot);
@@ -2189,12 +2189,12 @@ final class WasmEvalRuntimeBuilder {
 	 */
 	private static void emitCarCdrStoreTarget(WasmWriter w, int strValSlot, int lenSlot, int argsSlot, int envSlot,
 			int targetSlot, int fieldSlot, int idxSlot, int validSlot) {
-		// first/last byte check: len>=3 && arr[0]=='c' && arr[len-1]=='r'
+		// first/last byte check: len>=3 && arr[0]=='C' && arr[len-1]=='R'
 		getLocal(w, lenSlot);
 		i32(w, 3);
 		w.write(Instruction.I32_GE_S);
 		strByteAt(w, strValSlot, () -> i32(w, 0));
-		i32(w, 0x63);
+		i32(w, 0x43);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_AND);
 		strByteAt(w, strValSlot, () -> {
@@ -2202,11 +2202,11 @@ final class WasmEvalRuntimeBuilder {
 			i32(w, 1);
 			w.write(Instruction.I32_SUB);
 		});
-		i32(w, 0x72);
+		i32(w, 0x52);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.IF, 0x40);
-		// scan middle bytes: valid = all in {'a','d'}
+		// scan middle bytes: valid = all in {'A','D'}
 		i32(w, 1);
 		setLocal(w, validSlot);
 		i32(w, 1);
@@ -2220,10 +2220,10 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.BR_IF, 1);
 		strByteAt(w, strValSlot, () -> getLocal(w, idxSlot));
-		i32(w, 0x61);
+		i32(w, 0x41);
 		w.write(Instruction.I32_NE);
 		strByteAt(w, strValSlot, () -> getLocal(w, idxSlot));
-		i32(w, 0x64);
+		i32(w, 0x44);
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.IF, 0x40);
@@ -2255,7 +2255,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.I32_LT_S);
 		w.write(Instruction.BR_IF, 1);
 		strByteAt(w, strValSlot, () -> getLocal(w, idxSlot));
-		i32(w, 0x61);
+		i32(w, 0x41);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
 		emitCarOf(w, targetSlot);
@@ -2271,11 +2271,11 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
-		// field = (arr[1] == 'd') ? 1 : 0
+		// field = (arr[1] == 'D') ? 1 : 0
 		i32(w, 0);
 		setLocal(w, fieldSlot);
 		strByteAt(w, strValSlot, () -> i32(w, 1));
-		i32(w, 0x64);
+		i32(w, 0x44);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
 		i32(w, 1);

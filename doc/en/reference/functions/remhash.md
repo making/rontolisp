@@ -7,5 +7,5 @@ Removes the entry for `key` from `table`. Returns `t` if an entry was present an
 ```lisp
 (let ((h (make-hash-table)))
   (setf (gethash 'a h) 1)
-  (remhash 'a h)) ; => t
+  (remhash 'a h)) ; => T
 ```

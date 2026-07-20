@@ -14,7 +14,7 @@
 (let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
        (port (rontolisp:tcp-local-port listener)))
   (close listener)
-  (> port 0))   ; => t
+  (> port 0))   ; => T
 ```
 
 サーバーはループで接続を受け付けます。accept されたハンドルは双方向ストリーム

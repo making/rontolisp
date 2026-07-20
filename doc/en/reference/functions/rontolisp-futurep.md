@@ -10,7 +10,7 @@ Returns `t` if `value` is a future — as returned by calling an
 ```lisp
 (rontolisp:async-defun f () 1)
 (rontolisp:futurep (f))    ; => t
-(rontolisp:futurep 42)     ; => nil
+(rontolisp:futurep 42)     ; => NIL
 ```
 
 A future is an opaque value: it has no reader syntax and prints as `#<FUTURE>`.

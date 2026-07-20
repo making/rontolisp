@@ -9,5 +9,5 @@
 ```
 
 ```lisp
-(make-sequence 'list 3) ; => (nil nil nil)
+(make-sequence 'list 3) ; => (NIL NIL NIL)
 ```

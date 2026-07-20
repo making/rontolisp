@@ -104,7 +104,7 @@ The clause snapshots the table and walks the snapshot, so the iteration order is
 The package form of `being` — `for VAR being {the|each} {symbols|present-symbols|external-symbols} {of|in} PACKAGE` — is accepted but **lite**: rontolisp has no runtime intern table, so the clause parses and iterates the *empty* sequence. The body never runs and accumulation yields `nil`. It exists so libraries whose load-time code walks a package (such as cl-who's hyperdoc table) load without error:
 
 ```lisp
-(loop for s being the external-symbols of :cl collect s) ; => nil
+(loop for s being the external-symbols of :cl collect s) ; => NIL
 ```
 
 Limitations: `named`/`return-from` is not supported. Destructuring patterns do not recognize lambda-list keywords (`&optional` and friends bind as ordinary variables rather than signalling). `(loop-finish)` must appear in statement position (not mid-expression) and not inside a nested iteration form. `thereis`/`always`/`never` cannot be combined with accumulation into the default result (use `into`). Accumulation clauses without `into` must all be of the same kind; collecting clauses build the result list in source order.

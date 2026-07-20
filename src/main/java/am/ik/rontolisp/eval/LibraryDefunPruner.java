@@ -242,7 +242,9 @@ public final class LibraryDefunPruner {
 				}
 			}
 			case LispString str -> {
-				String value = str.value();
+				// Match case-insensitively: the reader upcases, so a lowercase source
+				// string like "linalg:ndim" fed to read-from-string names LINALG:NDIM.
+				String value = str.value().toUpperCase(java.util.Locale.ROOT);
 				for (String name : prunable) {
 					if (value.contains(name)) {
 						out.add(name);

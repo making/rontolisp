@@ -9,5 +9,5 @@ The name of a non-graphic character (`"Space"`, `"Newline"`, `"Tab"`, ...), a `"
 ```
 
 ```lisp
-(char-name #\a) ; => nil
+(char-name #\a) ; => NIL
 ```

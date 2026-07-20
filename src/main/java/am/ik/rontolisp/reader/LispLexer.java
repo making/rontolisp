@@ -494,10 +494,8 @@ public final class LispLexer {
 		// verbatim, whitespace and terminating characters included (|when used|);
 		// the pipes themselves are dropped and a backslash still escapes inside.
 		// The reader upcases unescaped characters like CL's :upcase readtable case
-		// -- escaped ones stay verbatim -- and folds the finished name to its
-		// canonical spelling (UpcaseSymbols). Only rontolisp's own lowercase-authored
-		// sources are read case-preserving (Features.INTERNAL).
-		boolean upcase = !this.features.preserveCase();
+		// -- escaped ones stay verbatim. There is no fold to a lowercase canonical
+		// spelling: the uppercase name IS canonical (foo and FOO both read as FOO).
 		StringBuilder sb = new StringBuilder();
 		while (this.pos < this.input.length()) {
 			char c = this.input.charAt(this.pos);
@@ -527,23 +525,17 @@ public final class LispLexer {
 			if (!isSymbolChar(c)) {
 				break;
 			}
-			sb.append(upcase ? Character.toUpperCase(c) : c);
+			sb.append(Character.toUpperCase(c));
 			this.pos++;
 		}
-		String name = sb.toString();
-		return new Token.SymbolToken(upcase ? am.ik.rontolisp.UpcaseSymbols.canonicalize(name) : name);
+		return new Token.SymbolToken(sb.toString());
 	}
 
 	// A token that started as a number but fell back to a symbol (e.g. "1+"). These
 	// runs come straight from the raw input with no escape processing, so the whole
-	// token upcases before the canonical fold ("1+" is its own lowercase fold
-	// target).
+	// token upcases like every other symbol.
 	private Token.SymbolToken numberFallbackSymbol(String raw) {
-		if (this.features.preserveCase()) {
-			return new Token.SymbolToken(raw);
-		}
-		return new Token.SymbolToken(
-				am.ik.rontolisp.UpcaseSymbols.canonicalize(raw.toUpperCase(java.util.Locale.ROOT)));
+		return new Token.SymbolToken(raw.toUpperCase(java.util.Locale.ROOT));
 	}
 
 	private Token.StringToken readString() {

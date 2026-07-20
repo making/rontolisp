@@ -199,8 +199,8 @@ class LispFloatArrayTest {
 		assertThat(eval("(%arrayp #d(1.0 2.0))")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(vectorp #f(1.0 2.0))")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(vectorp #d(1.0 2.0))")).isEqualTo(LispTrue.INSTANCE);
-		assertThat(eval("(array-element-type #f(1.0))").print()).isEqualTo("single-float");
-		assertThat(eval("(array-element-type #d(1.0))").print()).isEqualTo("double-float");
+		assertThat(eval("(array-element-type #f(1.0))").print()).isEqualTo("SINGLE-FLOAT");
+		assertThat(eval("(array-element-type #d(1.0))").print()).isEqualTo("DOUBLE-FLOAT");
 		assertThat(eval("(array-has-fill-pointer-p #f(1.0))")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(adjustable-array-p #d(1.0))")).isEqualTo(LispNil.INSTANCE);
 	}

@@ -18,7 +18,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [clos.md](clos.md) -- static CLOS subset (`defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value`): shared registry, dispatcher generation, cl-who expansion-time dispatch
 - [gray-streams.md](gray-streams.md) -- rontolisp's own Gray-stream protocol (gray.lisp base classes + generics), the interpreter write dispatch, the compile-path `GrayStreamsLibrary.process` call-site rewrite, the trivial-gray-streams shim
 - [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system
-- [reader-case-upcase.md](reader-case-upcase.md) -- the reader's CL-style upcase premise + the canonical lowercase fold (`UpcaseSymbols`), `Features.INTERNAL` for lowercase-authored internal sources, case-insensitive keyword-argument matching
+- [reader-case-upcase.md](reader-case-upcase.md) -- the reader's CL-style uppercase-canonical model (upcase, no fold), verbatim `intern`/`find-symbol`, and the remaining case-tolerance seams (keyword-arg matching, WIT/host lower-kebab bridges)
 - [reader-features.md](reader-features.md) -- `#+`/`#-` feature conditionals, `*features*`, `#|...|#` block comments, `#.` handling
 - [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams runtime; component stdin (stdin.lisp)
 - [load-inliner.md](load-inliner.md) -- compile-time `load` inlining (`LoadInliner`)

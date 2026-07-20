@@ -11,7 +11,7 @@ a self-contained example avoids hard-coding a port:
 (let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
        (port (rontolisp:tcp-local-port listener)))
   (close listener)
-  (> port 0))   ; => t
+  (> port 0))   ; => T
 ```
 
 It also works on a connected socket handle, where it reports the local

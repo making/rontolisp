@@ -5,5 +5,5 @@
 Lite stub: always returns `nil`. Macros are fully expanded at compile time, so no runtime macro table exists.
 
 ```lisp
-(macro-function 'when) ; => nil
+(macro-function 'when) ; => NIL
 ```

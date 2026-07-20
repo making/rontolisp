@@ -15,7 +15,7 @@ listen します。`port` が `usocket:*auto-port*`(`0`)なら空いている
 (let* ((listener (usocket:socket-listen usocket:*wildcard-host* usocket:*auto-port*))
        (port (usocket:get-local-port listener)))
   (usocket:socket-close listener)
-  (> port 0)) ; => t
+  (> port 0)) ; => T
 ```
 
 接続の受け付けは [`usocket:socket-accept`](usocket-socket-accept.md) で

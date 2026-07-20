@@ -9,5 +9,5 @@ Ordinal accessors for the 2nd, 3rd, and 4th elements of a list, equivalent to `c
 ```
 
 ```lisp
-(fourth '(a b)) ; => nil
+(fourth '(a b)) ; => NIL
 ```

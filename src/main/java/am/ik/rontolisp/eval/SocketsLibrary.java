@@ -159,9 +159,15 @@ public final class SocketsLibrary {
 		switch (form) {
 			case LispSymbol sym -> {
 				names.add(sym.name());
+				// The reader upcases user spellings while WIT member names are
+				// lower-kebab:
+				// record the lowercase twin too, so the member filter matches every
+				// referenced binding (mirrors WitImportInliner.collectNames).
+				names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 				if (qn != null) {
 					names.add(qn.member());
+					names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
 				}
 			}
 			case LispCons cons -> {

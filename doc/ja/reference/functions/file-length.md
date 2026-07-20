@@ -6,5 +6,5 @@ lite 版: 常に nil を返します (ストリーム長は追跡されません
 
 ```lisp
 (with-input-from-string (s "abc")
-  (file-length s)) ; => nil
+  (file-length s)) ; => NIL
 ```

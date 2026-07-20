@@ -6,5 +6,5 @@ lite 版: 任意のストリームハンドルと標準出力の指定子 `t` �
 
 ```lisp
 (with-input-from-string (s "x")
-  (input-stream-p s)) ; => t
+  (input-stream-p s)) ; => T
 ```

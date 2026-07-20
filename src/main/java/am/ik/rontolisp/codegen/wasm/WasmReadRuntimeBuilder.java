@@ -15,8 +15,11 @@ import am.ik.wasm.WasmWriter;
  * The reader walks UTF-8 bytes in linear memory between a cursor
  * ({@code READ_CURSOR_ADDR}) and an end offset ({@code READ_END_ADDR}), producing values
  * in the shared runtime representation: {@code ref.null eq} for nil, an i31ref for
- * integers, a {@code TYPE_STRING} struct {@code {offset,length}} for symbols and string
- * literals, {@code i31(1)} for {@code t}, and a {@code TYPE_CONS} struct for cons cells.
+ * integers, a {@code TYPE_STRING} struct {@code {offset,length}} for symbols (including
+ * {@code t}, an ordinary interned symbol {@code T}) and string literals, and a
+ * {@code TYPE_CONS} struct for cons cells. The token bytes are upcased in place before
+ * interning (uppercase-canonical: the reader upcases every unescaped symbol character
+ * like CL's {@code :upcase} readtable case, with no fold back to a lowercase form).
  * Symbols are interned via {@code _intern} so their string-table offset matches what the
  * eval runtime compares against.
  *
@@ -414,14 +417,13 @@ final class WasmReadRuntimeBuilder {
 
 	// === _read_expr() -> value ===
 
-	static byte[] buildReadExprBody(int nilOffset, int tOffset, int quoteOffset, int functionOffset, int foldBase,
-			int foldLen, int pkgBase, int pkgLen) {
+	static byte[] buildReadExprBody(int nilOffset, int quoteOffset, int functionOffset) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// ref locals: CAR=0, CDR=1 ; i32 locals: BYTE=2, START=3, LEN=4, OFF=5, POS=6,
 		// ESC=7, HP=8, NEG=9, ACC=10, VALID=11, SAWDOT=12 ; f64 locals: FVAL=13,
-		// FPLACE=14 ; the read-time canonical fold (CANON_*) uses i32 locals 15..34.
-		w.write(4);
+		// FPLACE=14. The symbol-atom upcase loop reuses POS (index) and BYTE (byte).
+		w.write(3);
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
@@ -429,8 +431,6 @@ final class WasmReadRuntimeBuilder {
 		w.write(Type.I32);
 		w.write(2);
 		w.write(Type.F64);
-		w.write(20);
-		w.write(Type.I32);
 		final int CAR = 0, CDR = 1, BYTE = 2, START = 3, LEN = 4, OFF = 5, POS = 6, ESC = 7, HP = 8, NEG = 9, ACC = 10,
 				VALID = 11, SAWDOT = 12, FVAL = 13, FPLACE = 14;
 
@@ -576,18 +576,55 @@ final class WasmReadRuntimeBuilder {
 		// classify: float? (a token with a '.' falls through the integer parser)
 		emitTryFloat(w, BYTE, START, LEN, POS, NEG, VALID, ESC, SAWDOT, FVAL, FPLACE);
 
-		// Fold the token bytes in place to their canonical spelling (the upcase premise):
-		// user symbols upcase, standard names fold back to lowercase, matching the
-		// frontend reader's UpcaseSymbols.canonicalize(upcase(token)). The fold preserves
-		// length, so the existing intern/nil/t path below is unchanged.
-		emitCanon(w, START, LEN, foldBase, foldLen, pkgBase, pkgLen);
+		// Upcase the token bytes in place (uppercase-canonical: the reader upcases every
+		// unescaped symbol character like CL's :upcase readtable case, so a lexed name IS
+		// its canonical spelling -- there is no fold back to a lowercase form). The
+		// upcase
+		// preserves length, so the intern/nil/t path below is unchanged. Non-ASCII bytes
+		// are left as-is (a documented WASM runtime-read limitation).
+		i32(w, 0);
+		setLocal(w, POS);
+		block(w);
+		loop(w);
+		getLocal(w, POS);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_GE_S);
+		brIf(w, 1); // break block
+		getLocal(w, START);
+		getLocal(w, POS);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, BYTE);
+		getLocal(w, BYTE);
+		i32(w, 'a');
+		w.write(Instruction.I32_GE_S);
+		getLocal(w, BYTE);
+		i32(w, 'z');
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		getLocal(w, START);
+		getLocal(w, POS);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, BYTE);
+		i32(w, 32);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		end(w);
+		getLocal(w, POS);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, POS);
+		br(w, 0); // continue loop
+		end(w); // loop
+		end(w); // block
 		// symbol: off = _intern(start, len)
 		getLocal(w, START);
 		getLocal(w, LEN);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_INTERN);
 		setLocal(w, OFF);
-		// nil?
+		// nil? -> the null ref (nil is the unique null value, not a symbol struct)
 		getLocal(w, OFF);
 		i32(w, nilOffset);
 		w.write(Instruction.I32_EQ);
@@ -595,16 +632,8 @@ final class WasmReadRuntimeBuilder {
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		end(w);
-		// t?
-		getLocal(w, OFF);
-		i32(w, tOffset);
-		w.write(Instruction.I32_EQ);
-		ifVoid(w);
-		i32(w, 1);
-		i31New(w);
-		w.write(Instruction.RETURN);
-		end(w);
-		// symbol struct
+		// symbol struct (t is an ordinary interned symbol "T": the token upcased to "T",
+		// interned to the same offset a compiled t literal uses, so they compare eq)
 		getLocal(w, OFF);
 		getLocal(w, LEN);
 		WasmEmitHelper.emitStrBuildCall(w);
@@ -617,345 +646,6 @@ final class WasmReadRuntimeBuilder {
 		i32(w, ch);
 		w.write(Instruction.I32_EQ);
 		brIf(w, 1);
-	}
-
-	// Canonical-fold local slots (i32 15..34, declared as the 4th local group of
-	// _read_expr). See emitCanon.
-	private static final int C_FW = 15, C_COLON = 16, C_SB = 17, C_SL = 18, C_CO = 19, C_CL = 20, C_NEED = 21, C_I = 22,
-			C_B = 23, C_P = 24, C_K = 25, C_MATCH = 26;
-
-	/**
-	 * Folds the token bytes at {@code [START, START+LEN)} in place to their canonical
-	 * spelling, mirroring the JVM {@code _canon} (fold-whole-or-keep): lowercases every
-	 * byte, decides whether the (now lowercase) name is foldable, and if not, uppercases
-	 * every byte back. Foldable = a builtin-package {@code :}/{@code #:} keyword
-	 * designator, a package-qualified name whose package part is a builtin package, a
-	 * {@code &} lambda-list marker or {@code %} internal helper, or a bare foldable
-	 * canonical name (a member of {@code foldBase}). The fold preserves length, so the
-	 * caller's {@code _intern}/{@code nil}/{@code t} path is unchanged. The two
-	 * pathological package-qualified deviations from
-	 * {@code UpcaseSymbols.canonicalize(upcase(token))} match the JVM backend exactly
-	 * (see {@code JvmReadRuntimeBuilder.buildCanon}). Non-ASCII bytes are left as-is (the
-	 * frontend/interpreter upcase full Unicode, a documented WASM runtime-read
-	 * limitation).
-	 */
-	private static void emitCanon(WasmWriter w, int START, int LEN, int foldBase, int foldLen, int pkgBase,
-			int pkgLen) {
-		// === Step A: lowercase [START, START+LEN) in place ===
-		i32(w, 0);
-		setLocal(w, C_I);
-		block(w);
-		loop(w);
-		getLocal(w, C_I);
-		getLocal(w, LEN);
-		w.write(Instruction.I32_GE_S);
-		brIf(w, 1); // break block
-		getLocal(w, START);
-		getLocal(w, C_I);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		setLocal(w, C_B);
-		getLocal(w, C_B);
-		i32(w, 'A');
-		w.write(Instruction.I32_GE_S);
-		getLocal(w, C_B);
-		i32(w, 'Z');
-		w.write(Instruction.I32_LE_S);
-		w.write(Instruction.I32_AND);
-		ifVoid(w);
-		getLocal(w, START);
-		getLocal(w, C_I);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, C_B);
-		i32(w, 32);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		end(w);
-		getLocal(w, C_I);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, C_I);
-		br(w, 0); // continue loop
-		end(w); // loop
-		end(w); // block
-
-		// === Step B: determine foldWhole (C_FW) ===
-		i32(w, 0);
-		setLocal(w, C_FW);
-		i32(w, 0);
-		setLocal(w, C_NEED);
-		// colon = first ':' in [START, START+LEN); -1 if none
-		i32(w, -1);
-		setLocal(w, C_COLON);
-		i32(w, 0);
-		setLocal(w, C_I);
-		block(w);
-		loop(w);
-		getLocal(w, C_I);
-		getLocal(w, LEN);
-		w.write(Instruction.I32_GE_S);
-		brIf(w, 1); // break block (no colon)
-		getLocal(w, START);
-		getLocal(w, C_I);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		i32(w, ':');
-		w.write(Instruction.I32_EQ);
-		ifVoid(w);
-		getLocal(w, C_I);
-		setLocal(w, C_COLON);
-		br(w, 2); // break block (found first colon)
-		end(w);
-		getLocal(w, C_I);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, C_I);
-		br(w, 0);
-		end(w); // loop
-		end(w); // block
-
-		// Branch dispatch (token is lowercase): sets C_SB/C_SL/C_CO/C_CL + C_NEED for a
-		// membership test, or C_FW directly for a &/% prefix. Order mirrors
-		// UpcaseSymbols.canonicalize: #:, leading ':', qualified, &/%, bare.
-		// #: designator
-		getLocal(w, LEN);
-		i32(w, 2);
-		w.write(Instruction.I32_GE_S);
-		getLocal(w, START);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		i32(w, '#');
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_AND);
-		getLocal(w, START);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		i32(w, ':');
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_AND);
-		ifVoid(w);
-		i32(w, pkgBase);
-		setLocal(w, C_SB);
-		i32(w, pkgLen);
-		setLocal(w, C_SL);
-		getLocal(w, START);
-		i32(w, 2);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, C_CO);
-		getLocal(w, LEN);
-		i32(w, 2);
-		w.write(Instruction.I32_SUB);
-		setLocal(w, C_CL);
-		i32(w, 1);
-		setLocal(w, C_NEED);
-		w.write(Instruction.ELSE);
-		// leading ':' designator
-		getLocal(w, START);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		i32(w, ':');
-		w.write(Instruction.I32_EQ);
-		ifVoid(w);
-		i32(w, pkgBase);
-		setLocal(w, C_SB);
-		i32(w, pkgLen);
-		setLocal(w, C_SL);
-		getLocal(w, START);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, C_CO);
-		getLocal(w, LEN);
-		i32(w, 1);
-		w.write(Instruction.I32_SUB);
-		setLocal(w, C_CL);
-		i32(w, 1);
-		setLocal(w, C_NEED);
-		w.write(Instruction.ELSE);
-		// package-qualified (colon > 0)
-		getLocal(w, C_COLON);
-		i32(w, 0);
-		w.write(Instruction.I32_GT_S);
-		ifVoid(w);
-		i32(w, pkgBase);
-		setLocal(w, C_SB);
-		i32(w, pkgLen);
-		setLocal(w, C_SL);
-		getLocal(w, START);
-		setLocal(w, C_CO);
-		getLocal(w, C_COLON);
-		setLocal(w, C_CL);
-		i32(w, 1);
-		setLocal(w, C_NEED);
-		w.write(Instruction.ELSE);
-		// '&' lambda-list marker or '%' internal helper -> always fold
-		getLocal(w, START);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		i32(w, '&');
-		w.write(Instruction.I32_EQ);
-		getLocal(w, START);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		i32(w, '%');
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_OR);
-		ifVoid(w);
-		i32(w, 1);
-		setLocal(w, C_FW);
-		w.write(Instruction.ELSE);
-		// bare name
-		i32(w, foldBase);
-		setLocal(w, C_SB);
-		i32(w, foldLen);
-		setLocal(w, C_SL);
-		getLocal(w, START);
-		setLocal(w, C_CO);
-		getLocal(w, LEN);
-		setLocal(w, C_CL);
-		i32(w, 1);
-		setLocal(w, C_NEED);
-		end(w); // else bare
-		end(w); // else &/%
-		end(w); // else qualified
-		end(w); // else leading-:
-
-		// Membership scan (only when C_NEED): search [C_SB, C_SB+C_SL) for the pattern
-		// '\n' + token[C_CO..C_CO+C_CL) + '\n'; sets C_FW = 1 on a hit. The blob is
-		// lowercase and the token is lowercase, so bytes compare directly.
-		getLocal(w, C_NEED);
-		ifVoid(w);
-		i32(w, 0);
-		setLocal(w, C_MATCH);
-		getLocal(w, C_SB);
-		setLocal(w, C_P);
-		block(w); // OUTER
-		loop(w); // SCAN
-		// if P + CL + 1 >= SB + SL: no room -> break OUTER
-		getLocal(w, C_P);
-		getLocal(w, C_CL);
-		w.write(Instruction.I32_ADD);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, C_SB);
-		getLocal(w, C_SL);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_GE_S);
-		brIf(w, 1); // break OUTER
-		// if mem[P] != '\n': P++, continue
-		getLocal(w, C_P);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		i32(w, '\n');
-		w.write(Instruction.I32_NE);
-		ifVoid(w);
-		getLocal(w, C_P);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, C_P);
-		br(w, 1); // continue SCAN
-		end(w);
-		// compare candidate bytes
-		i32(w, 0);
-		setLocal(w, C_K);
-		block(w); // INNER
-		loop(w); // COMPARE
-		getLocal(w, C_K);
-		getLocal(w, C_CL);
-		w.write(Instruction.I32_GE_S);
-		brIf(w, 1); // all matched so far -> break INNER
-		// if mem[P+1+K] != mem[CO+K]: K = CL+1 (mismatch sentinel), break INNER
-		getLocal(w, C_P);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, C_K);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		getLocal(w, C_CO);
-		getLocal(w, C_K);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		w.write(Instruction.I32_NE);
-		ifVoid(w);
-		getLocal(w, C_CL);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, C_K);
-		br(w, 2); // break INNER
-		end(w);
-		getLocal(w, C_K);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, C_K);
-		br(w, 0); // continue COMPARE
-		end(w); // COMPARE loop
-		end(w); // INNER block
-		// matched iff K == CL and mem[P+1+CL] == '\n'
-		getLocal(w, C_K);
-		getLocal(w, C_CL);
-		w.write(Instruction.I32_EQ);
-		getLocal(w, C_P);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, C_CL);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		i32(w, '\n');
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_AND);
-		ifVoid(w);
-		i32(w, 1);
-		setLocal(w, C_MATCH);
-		br(w, 2); // break OUTER
-		end(w);
-		// no match here: P++, continue
-		getLocal(w, C_P);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, C_P);
-		br(w, 0); // continue SCAN
-		end(w); // SCAN loop
-		end(w); // OUTER block
-		getLocal(w, C_MATCH);
-		setLocal(w, C_FW);
-		end(w); // if C_NEED
-
-		// === Step C: if not foldWhole, uppercase [START, START+LEN) back ===
-		getLocal(w, C_FW);
-		w.write(Instruction.I32_EQZ);
-		ifVoid(w);
-		i32(w, 0);
-		setLocal(w, C_I);
-		block(w);
-		loop(w);
-		getLocal(w, C_I);
-		getLocal(w, LEN);
-		w.write(Instruction.I32_GE_S);
-		brIf(w, 1); // break block
-		getLocal(w, START);
-		getLocal(w, C_I);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		setLocal(w, C_B);
-		getLocal(w, C_B);
-		i32(w, 'a');
-		w.write(Instruction.I32_GE_S);
-		getLocal(w, C_B);
-		i32(w, 'z');
-		w.write(Instruction.I32_LE_S);
-		w.write(Instruction.I32_AND);
-		ifVoid(w);
-		getLocal(w, START);
-		getLocal(w, C_I);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, C_B);
-		i32(w, 32);
-		w.write(Instruction.I32_SUB);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		end(w);
-		getLocal(w, C_I);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, C_I);
-		br(w, 0);
-		end(w); // loop
-		end(w); // block
-		end(w); // if !C_FW
 	}
 
 	/**

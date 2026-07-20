@@ -54,7 +54,7 @@ so match the arity to the interface's single abstract method (SAM):
 ```lisp
 ;; Predicate<Integer>: test(x) -> even?
 (java:call (java:proxy "java.util.function.Predicate" (lambda (method x) (evenp x))) "test" 4)
-; => t
+; => T
 ```
 
 The proxy also works when the JDK itself invokes the SAM method. For example

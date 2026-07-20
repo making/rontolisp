@@ -5,9 +5,9 @@
 Returns `t` if `number` is zero, else `nil`. It works for any numeric type; an integer, float or ratio of value zero all satisfy it.
 
 ```lisp
-(zerop 0) ; => t
+(zerop 0) ; => T
 ```
 
 ```lisp
-(zerop 0.0) ; => t
+(zerop 0.0) ; => T
 ```

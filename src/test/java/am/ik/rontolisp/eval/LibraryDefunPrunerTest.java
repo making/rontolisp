@@ -37,7 +37,7 @@ class LibraryDefunPrunerTest {
 
 	@Nullable private static String definitionName(LispVal form) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
-				&& (op.name().equals("defun") || op.name().equals("defparameter") || op.name().equals("defvar"))
+				&& (op.name().equals("DEFUN") || op.name().equals("DEFPARAMETER") || op.name().equals("DEFVAR"))
 				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
 			return name.name();
 		}
@@ -47,26 +47,26 @@ class LibraryDefunPrunerTest {
 	@Test
 	void keepsOnlyTheTransitiveClosureOfTheCalledLinalgFunction() {
 		List<String> names = definedNames(spliceAndPrune("(print (linalg:to-list (linalg:zeros '(2 2))))"));
-		assertThat(names).contains("linalg:zeros", "linalg:to-list")
+		assertThat(names).contains("LINALG:ZEROS", "LINALG:TO-LIST")
 			// %la-make is the constructor funnel zeros goes through
-			.contains("linalg::%la-make")
+			.contains("LINALG::%LA-MAKE")
 			// unrelated members of the library are dropped
-			.doesNotContain("linalg:det", "linalg:inv", "linalg:randn", "linalg:matmul");
+			.doesNotContain("LINALG:DET", "LINALG:INV", "LINALG:RANDN", "LINALG:MATMUL");
 	}
 
 	@Test
 	void dropsTheRngSeedsWhenNoRngFunctionIsReachable() {
 		List<String> names = definedNames(spliceAndPrune("(print (linalg:to-list (linalg:zeros '(2))))"));
-		assertThat(names).doesNotContain("linalg::%la-rng-s1", "linalg::%la-rng-s2", "linalg::%la-rng-s3",
-				"linalg::%la-rng-next");
+		assertThat(names).doesNotContain("LINALG::%LA-RNG-S1", "LINALG::%LA-RNG-S2", "LINALG::%LA-RNG-S3",
+				"LINALG::%LA-RNG-NEXT");
 	}
 
 	@Test
 	void keepsTheRngSeedsThroughTheRngClosure() {
 		List<String> names = definedNames(
 				spliceAndPrune("(linalg:seed 42) (print (linalg:to-list (linalg:randn '(2))))"));
-		assertThat(names).contains("linalg:seed", "linalg:randn", "linalg::%la-rng-next", "linalg::%la-rng-s1",
-				"linalg::%la-rng-s2", "linalg::%la-rng-s3");
+		assertThat(names).contains("LINALG:SEED", "LINALG:RANDN", "LINALG::%LA-RNG-NEXT", "LINALG::%LA-RNG-S1",
+				"LINALG::%LA-RNG-S2", "LINALG::%LA-RNG-S3");
 	}
 
 	@Test
@@ -75,19 +75,19 @@ class LibraryDefunPrunerTest {
 		// so vec:aset is a hardcoded edge of vec:aref.
 		List<String> names = definedNames(
 				spliceAndPrune("(let ((v (vec:zeros 3))) (setf (vec:aref v 0) 1.0) (print (vec:aref v 0)))"));
-		assertThat(names).contains("vec:aref", "vec:aset");
+		assertThat(names).contains("VEC:AREF", "VEC:ASET");
 	}
 
 	@Test
 	void functionQuoteAndQuotedDesignatorAndStringLiteralAllCountAsReferences() {
 		assertThat(definedNames(spliceAndPrune("(print (funcall #'linalg:ndim (linalg:zeros '(2))))")))
-			.contains("linalg:ndim");
+			.contains("LINALG:NDIM");
 		assertThat(definedNames(spliceAndPrune("(print (funcall 'linalg:ndim (linalg:zeros '(2))))")))
-			.contains("linalg:ndim");
+			.contains("LINALG:NDIM");
 		// A string literal containing the qualified name keeps the target: the
 		// carve-out for (intern "...")/read-from-string idioms.
 		assertThat(definedNames(spliceAndPrune("(print (linalg:shape (linalg:zeros '(2)))) (print \"linalg:ndim\")")))
-			.contains("linalg:ndim");
+			.contains("LINALG:NDIM");
 	}
 
 	@Test
@@ -98,7 +98,7 @@ class LibraryDefunPrunerTest {
 				(in-package :linalg)
 				(cl:print (to-list (zeros (cl:quote (2)))))
 				"""));
-		assertThat(names).contains("linalg:zeros", "linalg:to-list").doesNotContain("linalg:det");
+		assertThat(names).contains("LINALG:ZEROS", "LINALG:TO-LIST").doesNotContain("LINALG:DET");
 	}
 
 	@Test
@@ -114,7 +114,7 @@ class LibraryDefunPrunerTest {
 		// the whole package is excluded from pruning.
 		List<String> names = definedNames(
 				spliceAndPrune("(print (usocket:socket-stream (usocket:socket-connect \"127.0.0.1\" 1234)))"));
-		assertThat(names).contains("usocket:socket-close", "usocket::%usock-resignal", "usocket:get-peer-address");
+		assertThat(names).contains("USOCKET:SOCKET-CLOSE", "USOCKET::%USOCK-RESIGNAL", "USOCKET:GET-PEER-ADDRESS");
 	}
 
 	@Test
@@ -127,7 +127,7 @@ class LibraryDefunPrunerTest {
 				LispReader.readAllFromString("(print (rontolisp:await (rontolisp:fetch \"http://example.com\")))"),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false);
 		List<String> names = definedNames(LibraryDefunPruner.prune(spliced));
-		assertThat(names).contains("rontolisp:fetch", "%http-body-value", "%http-write-body", "%fetch-send");
+		assertThat(names).contains("RONTOLISP:FETCH", "%HTTP-BODY-VALUE", "%HTTP-WRITE-BODY", "%FETCH-SEND");
 	}
 
 	@Test
@@ -157,10 +157,10 @@ class LibraryDefunPrunerTest {
 	@Test
 	void jsonParseClosureKeepsTheParserHelpers() {
 		List<String> names = definedNames(spliceAndPrune("(print (rontolisp:json-parse \"[1,2]\"))"));
-		assertThat(names).contains("rontolisp::%json-parse", "rontolisp::%json-value", "rontolisp::%json-array")
+		assertThat(names).contains("RONTOLISP::%JSON-PARSE", "RONTOLISP::%JSON-VALUE", "RONTOLISP::%JSON-ARRAY")
 			// the stringify side is unreachable from parse alone (shared low-level
 			// helpers like %json-concat stay, but the %json-out* family goes)
-			.doesNotContain("rontolisp::%json-out", "rontolisp::%json-stringify");
+			.doesNotContain("RONTOLISP::%JSON-OUT", "RONTOLISP::%JSON-STRINGIFY");
 	}
 
 }

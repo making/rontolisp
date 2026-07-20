@@ -1026,7 +1026,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.SINGLE_FLOAT));
 		a.areturn();
 		a.bind(notPacked);
-		a.ldcString(cp.addString("t"));
+		a.ldcString(cp.addString("T"));
 		a.areturn();
 		return new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 1, 1, a.finish());
 	}

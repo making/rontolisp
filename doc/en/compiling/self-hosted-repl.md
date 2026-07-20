@@ -21,14 +21,13 @@ rontolisp repl.lisp -o repl.wasm
 wasmtime run -W gc repl.wasm                                               # REPL on WASM
 ```
 
-The self-hosted REPL reads its input with the embedded runtime reader, which is
-case-preserving (unlike the frontend reader's Common Lisp upcasing — see the
-[reader case guide](../guides/reader-case.md)), so `(defun square ...)` echoes
-`square` here where the native REPL would echo `SQUARE`.
+The self-hosted REPL reads its input with the embedded runtime reader, which
+upcases symbols like Common Lisp (see the [reader case guide](../guides/reader-case.md)),
+so `(defun square ...)` echoes `SQUARE`, the same as the native REPL.
 
 ```console
 > (defun square (x) (* x x))
-square
+SQUARE
 > (mapcar #'square '(1 2 3))
 (1 4 9)
 > (- 5)

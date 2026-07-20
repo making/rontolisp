@@ -13,7 +13,7 @@ listener binds all interfaces; pass an address string (for example
 (let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
        (port (rontolisp:tcp-local-port listener)))
   (close listener)
-  (> port 0))   ; => t
+  (> port 0))   ; => T
 ```
 
 A server accepts connections in a loop; each accepted handle is a

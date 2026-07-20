@@ -13,5 +13,5 @@ Repeats [`macroexpand-1`](macroexpand-1.md) on the top-level form until it stops
 Subforms are not walked:
 
 ```lisp
-(macroexpand '(when a (when b c))) ; => (if A (when B C) nil)
+(macroexpand '(when a (when b c))) ; => (IF A (WHEN B C) NIL)
 ```

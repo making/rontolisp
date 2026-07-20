@@ -477,7 +477,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant sbToString = cp.addMethodref(stringBuilderClass,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
 		ClassConstant ratioArrayClass = cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;"));
-		ConstantPool.StringConstant nilStr = cp.addString("nil");
+		ConstantPool.StringConstant nilStr = cp.addString("NIL");
 		ConstantPool.StringConstant funcStr = cp.addString("#<function>");
 		ConstantPool.StringConstant slashStr = cp.addString("/");
 		ConstantPool.StringConstant openParenStr = cp.addString("(");

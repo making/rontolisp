@@ -8,5 +8,5 @@ JVM / WASM コンパイラではスロット名はクオートされたシンボ
 
 ```lisp
 (defclass point () ((x :initarg :x)))
-(slot-boundp (make-instance 'point :x 1) 'x) ; => t
+(slot-boundp (make-instance 'point :x 1) 'x) ; => T
 ```

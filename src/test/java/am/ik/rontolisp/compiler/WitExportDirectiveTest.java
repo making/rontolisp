@@ -67,8 +67,8 @@ class WitExportDirectiveTest {
 		// the % is source escaping, and the component-model label is the bare word. A
 		// world using one must lower to a valid :param-names entry, not to '%type'.
 		List<LispVal> forms = lower(world("  export count-vowels: func(%type: string) -> s32;"), Backend.WASM_GC);
-		assertThat(printed(forms)).isEqualTo("(rontolisp:wasm-export (quote count-vowels) :params (quote (:string)) "
-				+ ":param-names (quote (type)) :returns :int)");
+		assertThat(printed(forms)).isEqualTo(
+				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:string)) :PARAM-NAMES (QUOTE (type)) :RETURNS :int)");
 	}
 
 	@Test
@@ -137,8 +137,8 @@ class WitExportDirectiveTest {
 		// the WIT's own parameter names, which is why an implemented world round-trips
 		// through --emit-wit with its parameter names intact.
 		List<LispVal> forms = lower(world("  export count-vowels: func(s: string) -> s32;"), Backend.WASM_GC);
-		assertThat(printed(forms)).isEqualTo("(rontolisp:wasm-export (quote count-vowels) :params (quote (:string)) "
-				+ ":param-names (quote (s)) :returns :int)");
+		assertThat(printed(forms)).isEqualTo(
+				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:string)) :PARAM-NAMES (QUOTE (s)) :RETURNS :int)");
 	}
 
 	@Test
@@ -151,10 +151,8 @@ class WitExportDirectiveTest {
 				  export ping: func();
 				}
 				""", Backend.WASM_GC, Map.of("mix", List.of("a", "b", "c", "d"), "ping", List.of()));
-		assertThat(printed(forms)).isEqualTo("""
-				(rontolisp:wasm-export (quote mix) :params (quote (:int :float :bool :string)) \
-				:param-names (quote (a b c d)) :returns :bool)
-				(rontolisp:wasm-export (quote ping) :params (quote nil) :param-names (quote nil) :returns :void)""");
+		assertThat(printed(forms)).isEqualTo(
+				"(RONTOLISP:WASM-EXPORT (QUOTE mix) :PARAMS (QUOTE (:int :float :bool :string)) :PARAM-NAMES (QUOTE (a b c d)) :RETURNS :bool)\n(RONTOLISP:WASM-EXPORT (QUOTE ping) :PARAMS (QUOTE NIL) :PARAM-NAMES (QUOTE NIL) :RETURNS :void)");
 	}
 
 	@Test
@@ -163,17 +161,16 @@ class WitExportDirectiveTest {
 		// export
 		// doing I/O traps at run time ("cannot block a synchronous task").
 		List<LispVal> forms = lower(world("  export count-vowels: async func(s: string) -> s32;"), Backend.WASM_GC);
-		assertThat(printed(forms)).isEqualTo("(rontolisp:wasm-export (quote count-vowels) :params (quote (:string)) "
-				+ ":param-names (quote (s)) :returns :int :async t)");
+		assertThat(printed(forms)).isEqualTo(
+				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:string)) :PARAM-NAMES (QUOTE (s)) :RETURNS :int :ASYNC T)");
 	}
 
 	@Test
 	void lowersS64OnlyWhereTheBackendCanCarryIt() {
 		String wit = world("  export count-vowels: func(s: s64) -> s64;");
 		// --no-gc's value model is unboxed i64, so s64 crosses the boundary as :long.
-		assertThat(printed(lower(wit, Backend.WASM_NO_GC)))
-			.isEqualTo("(rontolisp:wasm-export (quote count-vowels) :params (quote (:long)) "
-					+ ":param-names (quote (s)) :returns :long)");
+		assertThat(printed(lower(wit, Backend.WASM_NO_GC))).isEqualTo(
+				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:long)) :PARAM-NAMES (QUOTE (s)) :RETURNS :long)");
 		// The interpreter/JVM check the contract but export nothing, so no backend rule
 		// applies.
 		assertThat(printed(lower(wit, Backend.OTHER))).contains(":long");
@@ -301,7 +298,7 @@ class WitExportDirectiveTest {
 				}
 				""", Backend.WASM_GC);
 		assertThat(forms).hasSize(1);
-		assertThat(printed(forms)).contains("(quote count-vowels)");
+		assertThat(printed(forms)).contains("(QUOTE count-vowels)");
 	}
 
 	@Test
@@ -344,7 +341,7 @@ class WitExportDirectiveTest {
 				""";
 		List<LispVal> forms = WitExportDirective.lower(new Directive(WIT, "analyzer"), wit, WIT,
 				defuns(Map.of("count-vowels", List.of("s"))), Backend.WASM_GC);
-		assertThat(printed(forms)).contains("(quote count-vowels)").doesNotContain("shout");
+		assertThat(printed(forms)).contains("(QUOTE count-vowels)").doesNotContain("shout");
 	}
 
 	@Test
@@ -403,7 +400,7 @@ class WitExportDirectiveTest {
 				  }
 				}
 				""", Backend.WASM_GC);
-		assertThat(printed(forms)).contains("(quote count-vowels)");
+		assertThat(printed(forms)).contains("(QUOTE count-vowels)");
 	}
 
 }

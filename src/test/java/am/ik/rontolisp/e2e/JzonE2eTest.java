@@ -126,7 +126,7 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 		return List.of("3.14", "#(1 2 3)", "\"a", "bA\"", "#(1.5 \"z\")", "\"0.1\"", "\"\"he\\\"llo\"\"",
 				"\"{\"a\":[1,2.5,\"x\",true,null]}\"", "\"[", "1,", "2,", "3", "]\"",
 				// the README hash-table equalp series
-				"t", "t", "t", "t", "t", "t", "t",
+				"T", "T", "T", "T", "T", "T", "T",
 				// stringify #(null nil t 42 3.14 "Hello, world!") :stream t :pretty t
 				"[", "null,", "false,", "true,", "42,", "3.14,", "\"Hello, world!\"", "]",
 				// allow-multiple-content signals json-parse-error

@@ -9,5 +9,5 @@
 ```
 
 ```lisp
-(char-name #\a) ; => nil
+(char-name #\a) ; => NIL
 ```

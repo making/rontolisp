@@ -221,16 +221,16 @@ class WasmLispCompilerTest {
 	void tcpRejectsWrongArgCounts() {
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-connect \"127.0.0.1\")"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tcp-connect expects 2 arguments");
+			.hasMessageContaining("TCP-CONNECT expects 2 arguments");
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-listen)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tcp-listen expects at least 1 argument");
+			.hasMessageContaining("TCP-LISTEN expects at least 1 argument");
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-accept)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tcp-accept expects 1 argument");
+			.hasMessageContaining("TCP-ACCEPT expects 1 argument");
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-local-port 1 2)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tcp-local-port expects 1 argument");
+			.hasMessageContaining("TCP-LOCAL-PORT expects 1 argument");
 	}
 
 	@Test
@@ -260,7 +260,7 @@ class WasmLispCompilerTest {
 				""")).isNotEmpty();
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-peer-address 1 2)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tcp-peer-address expects 1 argument");
+			.hasMessageContaining("TCP-PEER-ADDRESS expects 1 argument");
 	}
 
 	@Test
@@ -341,35 +341,35 @@ class WasmLispCompilerTest {
 		// no TLS for WASI 0.3 components, so the tls built-ins are interpreter/JVM only.
 		assertThatThrownBy(() -> compile("(rontolisp:tls-connect \"example.com\" 443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tls-connect is not supported on the WASM backend");
+			.hasMessageContaining("TLS-CONNECT is not supported on the WASM backend");
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tls-connect \"example.com\" 443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tls-connect is not supported on the WASM backend");
+			.hasMessageContaining("TLS-CONNECT is not supported on the WASM backend");
 	}
 
 	@Test
 	void tlsListenIsCompileErrorInBothWasmModes() {
 		assertThatThrownBy(() -> compile("(rontolisp:tls-listen \"ks.p12\" \"pw\" 8443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tls-listen is not supported on the WASM backend");
+			.hasMessageContaining("TLS-LISTEN is not supported on the WASM backend");
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tls-listen \"ks.p12\" \"pw\" 8443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tls-listen is not supported on the WASM backend");
+			.hasMessageContaining("TLS-LISTEN is not supported on the WASM backend");
 	}
 
 	@Test
 	void tlsListenPemIsCompileErrorInBothWasmModes() {
 		assertThatThrownBy(() -> compile("(rontolisp:tls-listen-pem \"cert.pem\" \"key.pem\" 8443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tls-listen-pem is not supported on the WASM backend");
+			.hasMessageContaining("TLS-LISTEN-PEM is not supported on the WASM backend");
 		assertThatThrownBy(() -> compileComponent("(rontolisp:tls-listen-pem \"cert.pem\" \"key.pem\" 8443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tls-listen-pem is not supported on the WASM backend");
+			.hasMessageContaining("TLS-LISTEN-PEM is not supported on the WASM backend");
 		// The internal %tls-listen-p12 shape (were the inliner ever run for WASM) also
 		// reports as tls-listen-pem.
 		assertThatThrownBy(() -> compile("(rontolisp:%tls-listen-p12 \"blob\" \"pw\" 8443)"))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("tls-listen-pem is not supported on the WASM backend");
+			.hasMessageContaining("TLS-LISTEN-PEM is not supported on the WASM backend");
 	}
 
 	// The serve library pipeline the CLI runs for a --component rontolisp:http-handler:

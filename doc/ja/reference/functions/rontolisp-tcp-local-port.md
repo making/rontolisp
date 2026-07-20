@@ -11,7 +11,7 @@
 (let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
        (port (rontolisp:tcp-local-port listener)))
   (close listener)
-  (> port 0))   ; => t
+  (> port 0))   ; => T
 ```
 
 接続済みのソケットハンドルにも使え、その場合は接続のローカル(クライアント側)

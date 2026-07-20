@@ -18,7 +18,7 @@ alexandria へ切り替えられます。JSON オブジェクトの構築では
 なので、値は `gethash` で読み戻せます:
 
 ```lisp
-(gethash :ok (rontolisp:plist-hash-table (list :name "x" :ok t)))   ; => t
+(gethash :ok (rontolisp:plist-hash-table (list :name "x" :ok t)))   ; => T
 ```
 
 デフォルトのハッシュテーブルのテストは `alexandria:plist-hash-table` と同じく

@@ -115,7 +115,7 @@ class JvmJavaInteropCompilerTest {
 		assertThat(compileAndRun("""
 				(setq lst (java:new "java.util.ArrayList"))
 				(print (java:call lst "add" 42))
-				""")).isEqualTo("t");
+				""")).isEqualTo("T");
 	}
 
 	@Test
@@ -137,7 +137,7 @@ class JvmJavaInteropCompilerTest {
 				(setq r (java:proxy "java.lang.Runnable" (lambda (method) (setq fired t))))
 				(java:call r "run")
 				(print fired)
-				""")).isEqualTo("t");
+				""")).isEqualTo("T");
 	}
 
 	@Test
@@ -279,7 +279,7 @@ class JvmJavaInteropCompilerTest {
 				(setf (gethash 'k h) (java:static "java.lang.Math" "max" 1 2))
 				(print (gethash 'k h))
 				(print (hash-table-p h))
-				""")).isEqualTo("2\nt");
+				""")).isEqualTo("2\nT");
 	}
 
 	@Test

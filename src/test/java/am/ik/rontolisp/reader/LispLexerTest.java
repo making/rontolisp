@@ -18,7 +18,7 @@ class LispLexerTest {
 	@Test
 	void tokenizeNestedExpression() {
 		List<Token> tokens = new LispLexer("(print (+ 1 (* 2 3)))").tokenize();
-		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("print"), new Token.LeftParen(),
+		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("PRINT"), new Token.LeftParen(),
 				new Token.SymbolToken("+"), new Token.NumberToken(1), new Token.LeftParen(), new Token.SymbolToken("*"),
 				new Token.NumberToken(2), new Token.NumberToken(3), new Token.RightParen(), new Token.RightParen(),
 				new Token.RightParen());
@@ -34,7 +34,7 @@ class LispLexerTest {
 	@Test
 	void tokenizeStringLiteral() {
 		List<Token> tokens = new LispLexer("(print \"hello\")").tokenize();
-		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("print"),
+		assertThat(tokens).containsExactly(new Token.LeftParen(), new Token.SymbolToken("PRINT"),
 				new Token.StringToken("hello"), new Token.RightParen());
 	}
 

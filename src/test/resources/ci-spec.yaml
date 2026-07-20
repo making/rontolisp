@@ -133,7 +133,7 @@ cases:
       42
       (1 2 3)
       (1 (2 3) 4)
-      nil
+      NIL
       (+ 1 2)
   - name: string-literals
     source: |
@@ -172,10 +172,10 @@ cases:
       (print (car '()))
       (print (cdr '()))
     expected: |
-      nil
-      nil
-      nil
-      nil
+      NIL
+      NIL
+      NIL
+      NIL
   - name: car-cdr-composition-functions
     source: |
       (print (cadr '(1 2 3)))
@@ -300,10 +300,10 @@ cases:
       (print (when (= 1 2) 10))
     expected: |
       42
-      nil
+      NIL
       3
       10
-      nil
+      NIL
   - name: append
     source: |
       (print (append '(1 2) '(3 4)))
@@ -381,7 +381,7 @@ cases:
       (print (unless nil 1 2 3))
     expected: |
       42
-      nil
+      NIL
       3
   - name: while-and-dotimes
     source: |
@@ -391,7 +391,7 @@ cases:
       (print (let ((n 0) (s 0)) (while (< n 4) (setq s (+ s n)) (setq n (+ n 1))) s))
     expected: |
       10
-      nil
+      NIL
       16
       6
   - name: prog1
@@ -510,7 +510,7 @@ cases:
       TWO
       SMALL
       BIG
-      nil
+      NIL
   - name: type-conversion-float
     source: |
       (print (float 42))
@@ -623,7 +623,7 @@ cases:
       (1 4 9)
       (11 12 13)
       (1 4 9)
-      nil
+      NIL
   - name: mapcar-multiple-lists
     source: |
       (print (mapcar #'+ '(1 2 3 4) '(10 20 30 40)))
@@ -660,7 +660,7 @@ cases:
       (11 22 33)
       "ABC"
       (2 3 4)
-      nil
+      NIL
   - name: reduce
     source: |
       (print (reduce (lambda (a b) (+ a b)) '(1 2 3 4 5) :initial-value 0))
@@ -846,10 +846,10 @@ cases:
       (cl:print cl:*package*)
       (cl:print (cl:car (version)))
     expected: |
-      cl-user
-      :version
-      rontolisp
-      :version
+      CL-USER
+      :VERSION
+      RONTOLISP
+      :VERSION
   - name: lisp-2-function-namespace-via-function
     source: |
       (cl:in-package cl-user)
@@ -947,32 +947,32 @@ cases:
       5
       0
       (3 2 1)
-      nil
+      NIL
       (3 4)
-      nil
+      NIL
       ((A D) (A E))
-      nil
+      NIL
       (B 2)
-      nil
+      NIL
       (3)
-      nil
+      NIL
       3
       ((2 1) (4 3))
       (2 3)
       3
-      nil
+      NIL
       2
       6
-      nil
+      NIL
       3
       5
-      nil
+      NIL
       4
       2
-      nil
+      NIL
       1
       3
-      nil
+      NIL
       2
       3
       0
@@ -983,11 +983,11 @@ cases:
       (5 6)
       (3 B)
       2
-      nil
+      NIL
       (2 1 3)
       (1 2)
       (1 2 3 4)
-      nil
+      NIL
       (1 2 3 4 5)
       (1 2)
       (1 2 3)
@@ -998,7 +998,7 @@ cases:
       (print (funcall #'position #\l "hello"))
     expected: |
       5
-      nil
+      NIL
       2
   - name: sequence-functions-on-strings
     source: |
@@ -1027,10 +1027,10 @@ cases:
       2
       3
       2
-      nil
+      NIL
       1
-      nil
-      t
+      NIL
+      T
       3
       "cba"
       "heo"
@@ -1055,10 +1055,10 @@ cases:
         (print (funcall #'remove 9 '(1 2 3))))
       (ci-every-some)
     expected: |
-      t
-      nil
-      t
-      nil
+      T
+      NIL
+      T
+      NIL
       (1 3 4)
       (1 3 5)
       (2 4)
@@ -1093,7 +1093,7 @@ cases:
       (print rest-lst)
     expected: |
       (2 3)
-      nil
+      NIL
       (1 9)
   - name: condition-objects
     source: |
@@ -1106,7 +1106,7 @@ cases:
       E
       7
       9
-      nil
+      NIL
   - name: rontolisp-package-introspection
     source: |
       (print (rontolisp:list-macros))
@@ -1119,14 +1119,14 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (and assert block case ccase cerror check-type complement complex cond decf declaim declare define-compiler-macro define-condition define-modify-macro define-setf-expander defsetf deftype destructuring-bind do do* documentation dolist dotimes ecase error etypecase eval-when flet format handler-case ignore-errors incf labels let* load-time-value locally loop macrolet make-condition make-instance make-sequence multiple-value-bind multiple-value-call multiple-value-list multiple-value-setq nth-value or pop print-unreadable-object proclaim prog prog* prog1 prog2 psetf psetq push pushnew remf restart-case return-from rotatef setf shiftf signal slot-boundp slot-makunbound slot-value the time typecase typep unless warn when with-input-from-string with-open-file with-output-to-string with-package-iterator with-slots write-char)
-      (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function go if in-package lambda let progn progv quote return setq tagbody unwind-protect while)
+      (AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WRITE-CHAR)
+      (DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY UNWIND-PROTECT WHILE)
       292
-      (await fetch http-handler json-parse json-stringify list-functions list-macros list-special-forms query-param query-params tcp-accept tcp-connect tcp-listen tcp-local-address tcp-local-port tcp-peer-address tcp-peer-port tls-connect tls-listen tls-listen-pem url-decode url-encode url-path url-query version wit-error-payload wit-provide)
-      (call field new proxy static)
+      (AWAIT FETCH HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
+      (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
-      nil
-      nil
+      NIL
+      NIL
   - name: defpackage-use-export
     source: |
       (defpackage :ci-pkg (:use :cl) (:export :ci-greet :ci-twice))
@@ -1180,8 +1180,8 @@ cases:
       "ci-async-before"
       "ci-async-in"
       "ci-async-after"
-      t
-      nil
+      T
+      NIL
       42
       42
       #<FUTURE>
@@ -1195,7 +1195,7 @@ cases:
       (print (rontolisp:await "ci-await"))
     expected: |
       42
-      nil
+      NIL
       "ci-await"
   - name: async-wrapper-macro-expands-to-async-defun-and-lambda
     source: |
@@ -1204,7 +1204,7 @@ cases:
       (print (rontolisp:await (ci-async-wrap-add 20 22)))
       (print (rontolisp:await (funcall (rontolisp:async (lambda (x) (* x 2))) 21)))
     expected: |
-      t
+      T
       42
       42
   - name: first-rest-nth-as-first-class-function
@@ -1375,8 +1375,8 @@ cases:
       Hello World
       world
       (2 3)
-      t
-      t
+      T
+      T
       hi
       foobar
       FOOBAR
@@ -1387,7 +1387,7 @@ cases:
       (print (floatp pi))
     expected: |
       3
-      t
+      T
   - name: do-loop-and-return-non-local-exit-from
     source: |
       (print (do ((i 0 (+ i 1)) (s 0)) ((= i 5) s) (setq s (+ s i))))
@@ -1398,7 +1398,7 @@ cases:
     expected: |
       10
       55
-      nil
+      NIL
       0
       4
   - name: eql-type-aware-value-equality
@@ -1429,10 +1429,10 @@ cases:
       (print (equal (list 1 2) (list 1 2)))
       (print (if (eql (list 1 2) (list 1 2)) 42 99))
     expected: |
-      t
-      nil
-      t
-      t
+      T
+      NIL
+      T
+      T
       99
   - name: mapc-apply-for-effect-return-the
     source: |
@@ -1458,7 +1458,7 @@ cases:
       42
       (1 2 3)
       (3 2 1)
-      (nil nil nil)
+      (NIL NIL NIL)
       (4 1 2 3)
       (3 2)
       (3 1)
@@ -1501,10 +1501,10 @@ cases:
       8
       0
       3
-      t
-      nil
-      t
-      t
+      T
+      NIL
+      T
+      T
       (0 1 3 4)
   - name: byte-field-ops
     source: |
@@ -1545,15 +1545,15 @@ cases:
       (1 2 . 3)
       ((A . 1))
       B
-      t
-      nil
+      T
+      NIL
       (B . 2)
       (3 2 1 4 5)
       (3 2 1 4 5)
       ((1 2 3) (2 3) (3))
       (1 2 3)
-      t
-      nil
+      T
+      NIL
   - name: alist-operations
     source: |
       (print '(a . 1))
@@ -1586,7 +1586,7 @@ cases:
       (print '(#\a . #\b))
     expected: |
       (#\a #\b)
-      t
+      T
       (#\a . #\b)
   - name: control-macros-prog2-psetq-typecase
     source: |
@@ -1642,7 +1642,7 @@ cases:
     expected: |
       (1 2 3)
       7
-      t
+      T
       (1 3 5)
       3
       (1 1 2 3 5 8 13 21)
@@ -1656,7 +1656,7 @@ cases:
       (print (loop for s being the external-symbols of :cl collect s))
       (print (loop for s being each present-symbols in :cl-user count s))
     expected: |
-      nil
+      NIL
       0
   - name: delete-delete-if-delete-if-not
     source: |
@@ -1703,7 +1703,6 @@ cases:
       "BC"
       "i"
       "s"
-
   # random draws differ per backend and per run (interpreter/JVM use Math.random;
   # WASM draws real entropy from the WASI random_get host function), so the output
   # is only asserted on deterministic properties: (random 1) is always 0, the
@@ -1719,13 +1718,12 @@ cases:
       (let ((x 5)) (print (integerp (random x))))
     expected: |
       0
-      t
-      t
+      T
+      T
       "int-in-range"
       "float-in-range"
-      t
-      t
-
+      T
+      T
   # Float values flowing through variables/parameters (not literals) must use float
   # arithmetic on every backend, with integer contagion, while integer/ratio stay exact.
   - name: float-arithmetic-through-variables
@@ -1758,7 +1756,6 @@ cases:
       (1.0 4.0 9.0)
       3
       1/3
-
   # exp is native (Math.exp) on the interpreter/JVM and a software approximation on
   # WASM, so only values that are exact on every backend are asserted: exp(0) is 1.0
   # and sigmoid(0) = 1/(1+exp(0)) is 0.5.
@@ -1770,7 +1767,6 @@ cases:
     expected: |
       1.0
       0.5
-
   # log and tanh are native (Math.log/Math.tanh) on the interpreter/JVM and software
   # approximations on WASM, so only values that are exact on every backend are
   # asserted: log(1) is 0.0, tanh(0) is 0.0, and tanh saturates to exactly
@@ -1786,7 +1782,6 @@ cases:
       0.0
       1.0
       -1.0
-
   # sin/cos/tan are native (Math.sin/cos/tan) on the interpreter/JVM and a software
   # Cody-Waite + Taylor approximation on WASM, so only values that are exact on
   # every backend are asserted: the zero anchors, and the two quadrant anchors
@@ -1805,7 +1800,6 @@ cases:
       0.0
       1.0
       -1.0
-
   # The arc/hyperbolic ufuncs (atan/asin/acos/sinh/cosh): only the exact
   # anchors -- the wasm software approximations agree with Math.* to ~1e-15 (atan
   # family) / ~1e-7 (sinh/cosh), which diverges in printed low digits, so pi/4-class
@@ -1823,7 +1817,6 @@ cases:
       0.0
       0.0
       1.0
-
   # The comparison-select ufuncs (maximum/minimum/clip/relu): every value is a select of an
   # exact input, so all four backends print identically -- including the -0.0/0.0
   # tie, where the strict comparison keeps the SECOND operand.
@@ -1850,7 +1843,6 @@ cases:
       5.0
       0.0
       1.0
-
   # Character type and accessors, plus string/number parsing. Every value below is
   # deterministic and identical across the interpreter, JVM and WASM backends.
   - name: characters-and-parsing-cross-backend
@@ -1884,20 +1876,20 @@ cases:
       65
       #\B
       #\e
-      t
-      nil
-      t
-      t
-      t
+      T
+      NIL
+      T
+      T
+      T
       #\A
       #\z
-      t
-      nil
+      T
+      NIL
       7
       15
-      nil
-      t
-      t
+      NIL
+      T
+      T
       42
       -13
       255
@@ -1912,9 +1904,9 @@ cases:
       (print (+ (read-from-string "-2.5") (read-from-string "0.5")))
     expected: |
       1.5
-      t
+      T
       -2.0
-  - name: read-from-string-upcase-fold
+  - name: read-from-string-upcase
     source: |
       (print (read-from-string "foo"))
       (print (symbol-name (read-from-string "foo")))
@@ -1924,9 +1916,9 @@ cases:
     expected: |
       FOO
       "FOO"
-      t
+      T
       (3 2 1)
-      :cl
+      :CL
   - name: mod-large-operands-floored
     source: |
       (print (mod 843749 65537))
@@ -1957,11 +1949,10 @@ cases:
       (1 2 3 0)
       11
       3
-      (t nil nil)
+      (T NIL NIL)
       (2 GONE)
       14
       0
-
   - name: hash-table-functions-first-class
     source: |
       (defun ci-ht-fc ()
@@ -1976,10 +1967,9 @@ cases:
       (ci-ht-fc)
     expected: |
       1
-      (t nil)
+      (T NIL)
       2
       1
-
   - name: arrays-cross-backend
     source: |
       (defun ci-mat-sum (m rows cols)
@@ -2009,8 +1999,7 @@ cases:
       (1 7 99)
       (2 8 2)
       128
-      (nil nil)
-
+      (NIL NIL)
   # Rank-n arrays: make-array with 3+ dimensions, per-call-site static-rank
   # aref/(setf aref), #nA printing, and the rank-generic introspection expansions.
   - name: rank-n-arrays-cross-backend
@@ -2035,7 +2024,6 @@ cases:
       4
       4
       120
-
   # row-major-aref (flat access independent of rank, + its setf place) and
   # array-row-major-index (the Horner-fold expansion over array-dimensions).
   - name: row-major-aref-cross-backend
@@ -2052,7 +2040,6 @@ cases:
     expected: |
       (9 9 4)
       (7 5 30)
-
   - name: vector-literals-cross-backend
     source: |
       (defun ci-vectors ()
@@ -2076,7 +2063,6 @@ cases:
       20
       #(7 7 7)
       #2A((1 0 0) (0 0 9))
-
   # Fill-pointer arrays (see .kb/adjustable-arrays.md): make-array :fill-pointer/:adjustable,
   # length/printing clamped to the fill pointer, fill-pointer (+ setf),
   # array-has-fill-pointer-p, adjustable-array-p, array-element-type,
@@ -2137,18 +2123,17 @@ cases:
             (print (list copy orig (fill-pointer copy) (adjustable-array-p copy))))))
       (ci-fill-pointer)
     expected: |
-      (2 2 t nil)
+      (2 2 T NIL)
       #(0 0)
       (4 4)
-      (0 1 2 nil)
+      (0 1 2 NIL)
       (3 10 20)
       (30 2)
-      (3 t 3)
-      (nil nil t)
+      (3 T 3)
+      (NIL NIL T)
       (4 4)
-      (1 5 t)
-      (#(99 8 5) #(5 8 5) 3 t)
-
+      (1 5 T)
+      (#(99 8 5) #(5 8 5) 3 T)
   - name: adjust-displaced-arrays-cross-backend
     source: |
       (defun ci-adjust-displaced ()
@@ -2182,16 +2167,15 @@ cases:
             (print (aref dv 0)))))
       (ci-adjust-displaced)
     expected: |
-      (#(7 7 7 0 0) nil)
-      (t #(1 1 1 9 9))
+      (#(7 7 7 0 0) NIL)
+      (T #(1 1 1 9 9))
       #2A((1 2 0) (3 4 0) (0 0 0))
       2
       99
       (#(99 30 111) 111 3)
-      (t 2)
-      (nil 0)
+      (T 2)
+      (NIL 0)
       55
-
   - name: mutable-strings-cross-backend
     source: |
       (defun ci-mutable-strings ()
@@ -2227,22 +2211,21 @@ cases:
           (terpri)))
       (ci-mutable-strings)
     expected: |
-      (t 2)
+      (T 2)
       "ab"
       ab
-      (t "AB")
+      (T "AB")
       "a"
       "abc"
       "aXY"
       "aXY"
-      t
+      T
       42
       "aXYz!"
       (#\X (#\a #\X #\Y #\z))
       "QXYz"
       QXYz|"QXYz"
       QXYz
-
   - name: array-literals-cross-backend
     source: |
       (defun ci-array-literals ()
@@ -2262,7 +2245,6 @@ cases:
       #3A(((1 2) (3 4)) ((5 6) (7 8)))
       6
       #2A((1 9) (3 4))
-
   - name: vector-svref-and-array-introspection-cross-backend
     source: |
       (defun ci-array-intro ()
@@ -2290,7 +2272,6 @@ cases:
       3
       6
       3
-
   - name: coerce-cross-backend
     source: |
       (defun ci-coerce ()
@@ -2308,7 +2289,6 @@ cases:
       "ab"
       (1 2)
       "hi"
-
   # The linalg package is a Lisp-source library (linalg.lisp) spliced by
   # LinalgLibrary.process on the compile path and loaded lazily by the interpreter,
   # so one implementation must behave identically on every backend. linalg computes in
@@ -2382,13 +2362,12 @@ cases:
       -2.0
       #d((0.25 0.0) (-0.125 0.25))
       #d(2.0 1.0)
-      t
+      T
       5.0
       #d(((10.0 11.0) (12.0 13.0)) ((14.0 15.0) (16.0 17.0)))
       28.0
       7.0
-      t
-
+      T
   # linalg numpy-style broadcasting: two arrays of different shapes align their
   # trailing axes, and an axis of extent 1 (or a missing leading axis) stretches
   # over the other operand's extent. The result keeps the FIRST array operand's
@@ -2413,7 +2392,6 @@ cases:
       #d((3.0 5.0) (4.0 3.0))
       #f((10.0 40.0) (30.0 80.0))
       #d(((1.0 1.0) (3.0 2.0)))
-
   # linalg calculus (numpy diff/gradient parity): diff is the n-th discrete
   # difference along the last axis; gradient is second-order central differences
   # with first-order one-sided ends over a uniform scalar spacing or a non-uniform
@@ -2437,8 +2415,7 @@ cases:
       #d(1.0 2.0 4.0 6.0 7.0)
       #d(0.5 1.0 2.0 3.0 3.5)
       #d(1.0 2.0 4.0)
-      single-float
-
+      SINGLE-FLOAT
   # The deep-learning-from-scratch additions: numpy axis/keepdims reductions,
   # reshape -1 inference, the seeded Wichmann-Hill RNG (exact integer + IEEE
   # double arithmetic, so a seeded sequence is bit-identical on every backend;
@@ -2485,7 +2462,6 @@ cases:
       #d(26833.0 11120.0 29256.0 22347.0)
       #d(4.0 5.0 6.0 2.0 9.0 7.0 1.0 0.0 8.0 3.0)
       #d(284.0 -21.0 221.0 -1653.0)
-
   # The ch07 CNN additions: transpose with an axes list (rank-n permutation),
   # np.pad's constant-0 mode, and the internal rank-4 %la-im2col / %la-col2im
   # pair (window unfold + scatter-add adjoint) behind the
@@ -2508,13 +2484,12 @@ cases:
       (ci-linalg-cnn)
     expected: |
       (3 2 4)
-      t
+      T
       #d(0.0 1.0 2.0 0.0)
       #d((0.0 1.0 2.0 0.0) (0.0 3.0 4.0 0.0))
       #d((0.0 1.0 4.0 5.0) (2.0 3.0 6.0 7.0) (8.0 9.0 12.0 13.0) (10.0 11.0 14.0 15.0))
-      t
+      T
       #d((((1.0 2.0 1.0) (2.0 4.0 2.0) (1.0 2.0 1.0))))
-
   # A fixed-decimal ~f of a NEGATIVE value: the format expansion computes the
   # magnitude as (- 0 (round (* v 10^places))), and the compile-time double-path
   # classifier (containsDouble) must NOT descend into the rounding form -- a
@@ -2532,7 +2507,6 @@ cases:
       -1.2500   -5.0 3.75
       500
       3
-
   # length is a sequence operation: it returns the element count of a vector (rank-1
   # array) just as for a list or string. A rank-2 array is not a sequence, so length
   # signals an error on it (not covered here, since the cases share one program).
@@ -2547,7 +2521,6 @@ cases:
       5
       3
       0
-
   # Packed float arrays (see .kb/vec.md): #d(...) literals and make-array :element-type
   # 'double-float are a dedicated rank-n unboxed-double array type on every backend
   # (interpreter double[]/int[]; JVM bare double[] with a dims header; wasm-GC a distinct
@@ -2578,12 +2551,11 @@ cases:
       (2 (2 3) 6.0)
       #d((1.0 2.0 3.0) (4.0 5.0 6.0))
       #d(1.0 42.0 3.0)
-      (#d(9.0 2.5 2.5) 3 double-float)
+      (#d(9.0 2.5 2.5) 3 DOUBLE-FLOAT)
       #d((0.0 1.0) (10.0 11.0))
       4.0
       (1.0 2.0 3.0)
       ARR
-
   # The vec: package (see .kb/vec.md): portable packed-f64 vector kernels over the packed
   # double-float array type, implemented once in vec.lisp as the scalar reference and run
   # by the interpreter / JVM / wasm-GC / component over the packed representation (the JVM
@@ -2630,7 +2602,6 @@ cases:
       10.0
       #d(17.0 39.0)
       #d(14.0 32.0)
-
   # Destination-passing vec: kernels (see .kb/vec.md): the -into siblings write into a
   # caller-supplied vector and return it, so a loop allocates nothing. Semantics must be
   # identical to the allocating kernels on every backend, including in-place aliasing
@@ -2662,12 +2633,11 @@ cases:
       #d(3.0 3.0 3.0)
       #d(4.0 10.0 18.0)
       #d(2.0 4.0 6.0)
-      t
+      T
       #d(3.0 6.0 9.0)
       #f(4.0 6.0)
       #d(17.0 39.0)
       #d(14.0 32.0)
-
   # Packed single-float arrays (see .kb/vec.md): the #f(...) / :element-type 'single-float
   # counterpart of packed-float-arrays-cross-backend, storing elements unboxed as f32
   # (half the memory, 2x the SIMD lanes) on every backend (interpreter float[]/int[];
@@ -2713,17 +2683,16 @@ cases:
       (2 (2 3) 6.0)
       #f((1.0 2.0 3.0) (4.0 5.0 6.0))
       #f(1.0 42.0 3.0)
-      (#f(9.0 2.5 2.5) 3 single-float)
+      (#f(9.0 2.5 2.5) 3 SINGLE-FLOAT)
       #f((0.0 1.0) (10.0 11.0))
       4.0
       (1.0 2.0 3.0)
       ARR
-      nil
+      NIL
       #f(5.0 7.0 9.0)
       #f(0.0 1.0 2.0 3.0)
       14.0
       12.0
-
   # linalg single-float (see .kb/linalg.md): linalg is width-polymorphic -- a constructor opts
   # into packed single-float (#f) with a trailing element-type (double stays the default
   # for precision), and every transform PRESERVES the input width, so a #f value flowing
@@ -2777,11 +2746,10 @@ cases:
       #f((1.0 2.0) (3.0 4.0))
       #f(3.0 7.0)
       #f((1.0 1.0 1.0) (2.0 2.0 2.0))
-      single-float
-      double-float
+      SINGLE-FLOAT
+      DOUBLE-FLOAT
       10.0
       14.0
-
   # Regression: getenv's environ scratch addresses must not overlap the
   # interned-string data segment on the WASM backends. An unset variable keeps the output
   # deterministic across backends; the bug corrupted the shared newline byte so any newline
@@ -2795,7 +2763,6 @@ cases:
     expected: |
       alpha
       beta
-
   # Regression: a top-level global special variable
   # (defvar/defparameter) must be readable and assignable from inside a defun/lambda
   # body, not just at top level. Each global gets its own backing store (a JVM static
@@ -2817,7 +2784,6 @@ cases:
       15
       2
       (11 12 13)
-
   # A lambda capturing a local (a surrounding let variable or an enclosing defun
   # parameter) that shadows a same-named top-level global must read/write the
   # captured binding, not the global (the interpreter always got this right; the
@@ -2839,7 +2805,6 @@ cases:
       666
       42
       555
-
   # defmacro (user macros) with backquote templates. The interpreter expands macro
   # calls at evaluation time; the compile path (JVM / WASM / component) expands them
   # in a pre-pass (eval.UserMacroExpander) before the compilers run, so all four
@@ -2868,12 +2833,11 @@ cases:
       (print `(a ,(+ 1 2) ,@(list 3 4) b))
     expected: |
       20
-      nil
+      NIL
       (2 1)
       11
       42
       (A 3 3 4 B)
-
   # gensym + macroexpand/macroexpand-1. Runtime gensym names print identically on
   # all four backends only while no earlier form runs gensym at macro-expansion
   # time: the interpreter shares one counter between expansion time and run time,
@@ -2903,14 +2867,13 @@ cases:
     expected: |
       #:g1
       #:ci2
-      nil
-      t
+      NIL
+      T
       (9 90)
-      (if A (progn B) nil)
-      (if C nil X)
+      (IF A (PROGN B) NIL)
+      (IF C NIL X)
       (+ 41 1)
       (+ 1 2)
-
   # JSON: the Lisp-source library (json.lisp) is spliced by the compile path and
   # loaded lazily by the interpreter, so one implementation runs on all four
   # backends. The value mapping matches com.inuoe.jzon's defaults: an object
@@ -2946,10 +2909,10 @@ cases:
       (print (funcall #'rontolisp:json-stringify (list 7)))
     expected: |
       ("rontolisp" 2)
-      #(1 t null)
-      #(1 2.5 "x" nil null)
+      #(1 T NULL)
+      #(1 2.5 "x" NIL NULL)
       1000.0
-      t
+      T
       "a	bあ"
       0
       "text/html"
@@ -2961,7 +2924,6 @@ cases:
       "{"x":[1,2]}"
       "{"deep":{"list":[{"k":"v"},2.5,true]}}"
       "[7]"
-
   # The URL / query-string library (url.lisp, spliced by UrlLibrary): percent
   # decoding/encoding must agree across the UTF-16-indexed backends
   # (interpreter/JVM) and the UTF-8 byte-indexed WASM backends, including
@@ -2990,14 +2952,13 @@ cases:
       "%E3%81%82"
       "日本語 text?&="
       (("a" . "1") ("b" . "two") ("flag" . ""))
-      nil
+      NIL
       "ronto lisp"
-      nil
+      NIL
       "/get"
       "a=1"
-      nil
+      NIL
       ("a+b" "1 2")
-
   # Double-colon package qualifiers, mirroring Common Lisp: pkg::name also
   # reaches external symbols, so rontolisp::json-parse names the same function
   # as rontolisp:json-parse (a single colon reaches external symbols only and
@@ -3009,7 +2970,6 @@ cases:
     expected: |
       "[1,2,3]"
       5
-
   # Building JSON objects: rontolisp:plist-hash-table / hash-table-plist and
   # rontolisp:alist-hash-table / hash-table-alist (subsets of the same-named
   # alexandria utilities, prelude-spliced) turn a keyword plist or an association
@@ -3035,7 +2995,6 @@ cases:
       "{"x":1}"
       (("k" . 7))
       "{"status":200,"headers":{"content-type":"application/json"},"items":[1,2,3]}"
-
   # equal on strings compares content on every backend (the WASM _equal/_hash
   # runtime folds string bytes), so runtime-built strings work as hash-table
   # keys and equal partners of interned literals.
@@ -3050,12 +3009,11 @@ cases:
         (print (gethash "ab" h))
         (print (hash-table-count h)))
     expected: |
-      t
-      nil
+      T
+      NIL
       1
       2
       1
-
   # Lambda-list extensions: &optional/&key/&aux/&allow-other-keys are desugared
   # (LambdaLists) into the native "required + &rest" shape shared by all
   # backends; funcall/apply/eval dispatch packages surplus args into the rest
@@ -3080,16 +3038,16 @@ cases:
       (print (ll-aux 5))
     expected: |
       (1 (2 3))
-      (1 nil)
-      (1 10 20 nil)
-      (1 2 4 nil)
-      (1 2 3 t)
-      (0 1 nil nil)
-      (0 5 t nil)
-      (0 9 t 7)
-      (0 1 nil nil)
+      (1 NIL)
+      (1 10 20 NIL)
+      (1 2 4 NIL)
+      (1 2 3 T)
+      (0 1 NIL NIL)
+      (0 5 T NIL)
+      (0 9 T 7)
+      (0 1 NIL NIL)
       (1 2 (:C 3 :D 4) 3)
-      (5 6 nil)
+      (5 6 NIL)
   - name: lambda-list-first-class-and-eval
     source: |
       (print (funcall (lambda (&rest xs) xs) 1 2 3))
@@ -3120,8 +3078,8 @@ cases:
     expected: |
       1
       10
-      t
-      nil
+      T
+      NIL
       1
       100
   - name: defstruct-setf-places-and-first-class-accessors
@@ -3142,7 +3100,7 @@ cases:
       (99 15)
       (10 20)
       25
-      (t nil)
+      (T NIL)
   - name: setf-function-definitions
     source: |
       (defvar *sf-mode* :xml)
@@ -3199,7 +3157,7 @@ cases:
       (print (clos-mc-touch (make-instance 'clos-mc-dog)))
       (print (reverse *clos-mc-log*))
     expected: |
-      (:AROUND :DONE t)
+      (:AROUND :DONE T)
       (:BEFORE-DOG :BEFORE-ANIMAL :PRIMARY-DOG :PRIMARY-ANIMAL :AFTER-ANIMAL :AFTER-DOG)
   - name: binary-file-round-trip-with-read-byte-write-byte
     source: |
@@ -3225,7 +3183,7 @@ cases:
         (print (string= (read-line in) "")))
     expected: |
       "hi"
-      t
+      T
   - name: read-sequence-and-write-sequence-round-trip
     source: |
       (let ((buf (make-array 4)))
@@ -3287,7 +3245,7 @@ cases:
       "first line"
       (1 2 3)
       "third"
-      nil
+      NIL
       abc
   - name: write-string-and-write-to-string
     source: |
@@ -3387,7 +3345,7 @@ cases:
       (print (car *features*))
     expected: |
       2
-      :rontolisp
+      :RONTOLISP
   - name: declarations-eval-when-check-type-assert
     source: |
       (declaim (optimize (speed 3)))
@@ -3424,12 +3382,12 @@ cases:
       (print (typecase 6 (ci-even :even) (t :other)))
       (print (typep 9 'ci-int))
     expected: |
-      t
-      nil
-      t
-      nil
+      T
+      NIL
+      T
+      NIL
       :EVEN
-      t
+      T
   - name: user-setf-expander-and-defsetf
     source: |
       (defun ci-aget (alist key) (cdr (assoc key alist :test #'equal)))
@@ -3486,11 +3444,11 @@ cases:
       36
       0
       (2 1)
-      (1 10 nil)
+      (1 10 NIL)
       (1 2 (3 4))
       105
       720
-      (t nil)
+      (T NIL)
       (1 2 3 4)
   - name: macrolet-compiler-macro-restart-case
     source: |
@@ -3551,9 +3509,9 @@ cases:
       (print (truncate -7 2))
     expected: |
       1
-      nil
+      NIL
       1
-      (1 2 nil)
+      (1 2 NIL)
       (3 1)
       (-3 -1)
       (4 -1)
@@ -3566,10 +3524,10 @@ cases:
       A
       3
       (1 2 3 2 1)
-      (42 t)
-      (nil t)
-      (nil nil)
-      (DFLT nil)
+      (42 T)
+      (NIL T)
+      (NIL NIL)
+      (DFLT NIL)
       502
       ((2 1) (2 2) (2 3))
       3
@@ -3588,7 +3546,7 @@ cases:
       (1 2)
       3
       (3 2)
-      (1 2 nil)
+      (1 2 NIL)
       (2 1)
       (2 3 1)
       (2 . 1)
@@ -3611,7 +3569,7 @@ cases:
       (print (list (ci-db-defaulted 1) (ci-db-defaulted 1 2)))
     expected: |
       10
-      (1 10 nil)
+      (1 10 NIL)
       (1 (2 3))
       (1 2 5)
       (1 2 3)
@@ -3644,7 +3602,6 @@ cases:
     expected: |
       25
       1
-
   - name: symbol-runtime-api
     source: |
       (print (symbol-name 'foo))
@@ -3679,24 +3636,24 @@ cases:
       "FOO"
       "BAR"
       SYM-API-HELLO
-      t
+      T
       SYM-API-ROUND-TRIP
-      car
-      cond
-      nil
+      NIL
+      NIL
+      NIL
       #:SYM-API-TEMP
-      nil
-      t
-      nil
-      t
+      NIL
+      T
+      NIL
+      T
       42
       42
       :SYM-API-KW
-      t
-      t
-      t
-      nil
-      t
+      T
+      T
+      T
+      NIL
+      T
       ("A" "B")
       "sym-api-str"
       "SYM-API-SYM"
@@ -3735,13 +3692,13 @@ cases:
       0
       2
       2
-      t
-      t
-      nil
+      T
+      T
+      NIL
       (2 1)
       3
       RES-VEC-TAG
-      nil
+      NIL
   - name: parse-number-residue-features
     source: |
       (multiple-value-bind (pn-n pn-pos) (parse-integer "  -42abc" :junk-allowed t)
@@ -3765,16 +3722,16 @@ cases:
       (-42 5)
       13
       2
-      (10 20 nil)
-      nil
-      t
-      nil
-      (5 nil)
+      (10 20 NIL)
+      NIL
+      T
+      NIL
+      (5 NIL)
       7
       5.0
       0.25
       9
-      double-float
+      DOUBLE-FLOAT
   - name: cl-utilities-residue-features
     source: |
       (print (apply #'position #\, "ab,cd" (list :start 1)))
@@ -3818,19 +3775,18 @@ cases:
       1
       ((0 . A) (1 . B) (1 . A))
       (1 2 3)
-      ((1 2 3) nil "xyz")
-      (t t nil t)
+      ((1 2 3) NIL "xyz")
+      (T T NIL T)
       (#\h #\i :END)
       (9 (8 5 6))
       9
       197
-      t
+      T
       42
       7
       (:ZERO 40)
-      nil
+      NIL
       10
-
   - name: clwho-string-char-primitives
     source: |
       (print (make-string 3 :initial-element #\x))
@@ -3844,11 +3800,10 @@ cases:
       "xxx"
       "aXYaa"
       "bc"
-      (t t t nil)
+      (T T T NIL)
       "ok"
       4
-      (t nil nil)
-
+      (T NIL NIL)
   - name: special-variable-dynamic-binding
     source: |
       (defvar *sv* 10)
@@ -3863,7 +3818,6 @@ cases:
       (2 3 2)
       (5 5)
       (:HTML :XHTML :HTML)
-
   - name: assoc-utils-features
     source: |
       ;; mapl: apply to successive tails for effect, return the original list
@@ -3888,10 +3842,10 @@ cases:
                      collect (cons key val))))
     expected: |
       ((1 2 3) 6)
-      (t t nil)
-      (2 nil 2)
+      (T T NIL)
+      (2 NIL 2)
       ((1 . A) (2 . B) (3 . C))
-      (:FOO t)
+      (:FOO T)
       5
       (("k" . 42))
   # IEEE-754 float edge semantics: unary minus over float-literal
@@ -3926,14 +3880,14 @@ cases:
     expected: |
       -0.0
       -0.0
-      t
-      nil
-      nil
-      t
-      t
-      t
-      nil
-      nil
+      T
+      NIL
+      NIL
+      T
+      T
+      T
+      NIL
+      NIL
       -0.0
       0.0
   - name: ieee-float-nan-comparisons
@@ -3949,13 +3903,13 @@ cases:
       (print (min 1.0 (/ 0.0 0.0)))
       (print (max (/ 0.0 0.0) 1.0))
     expected: |
-      nil
-      nil
-      nil
-      nil
-      nil
-      t
-      (nil nil nil nil nil t)
+      NIL
+      NIL
+      NIL
+      NIL
+      NIL
+      T
+      (NIL NIL NIL NIL NIL T)
       NaN
       NaN
   - name: ieee-float-infinity-nan-printing
@@ -4011,7 +3965,7 @@ cases:
     expected: |
       3
       "abcd"
-      nil
+      NIL
   # Condition catching (see .kb/error-handling.md): handler-case / ignore-errors / unwind-protect
   # now compile on the wasm-GC backends via the exception-handling proposal (one
   # $lisp-cond tag; try_table/throw). NOTE: once any case below is present, the
@@ -4050,7 +4004,7 @@ cases:
       :OUTER
       (:OK 3)
       :RAISED
-      nil
+      NIL
   - name: unwind-protect-cleanups-and-return-channel
     source: |
       (print (unwind-protect (+ 1 2) (print :cleanup)))
@@ -4075,9 +4029,9 @@ cases:
       3
       (:CAUGHT :CLEANED)
       :DONE
-      nil
+      NIL
       (:OUTER :INNER)
-      nil
+      NIL
       42
   # A catching form in an ARGUMENT position: the enclosing call has operands live
   # when the protected region begins, and entering a handler discards them (on the
@@ -4098,7 +4052,7 @@ cases:
     expected: |
       ("result:" "caught")
       3.5
-      ("r:" nil 42)
+      ("r:" NIL 42)
       ((1 1) (2 :ERR) (3 3))
       ("seen" 1)
       ("outer" :CAUGHT)
@@ -4155,13 +4109,13 @@ cases:
       1
       (2 9)
       10
-      t
-      nil
-      t
-      nil
+      T
+      NIL
+      T
+      NIL
       (7 8)
       5
-      (t t)
+      (T T)
   - name: lite-builtins-residue
     source: |
       (print (mask-field (byte 4 4) 255))
@@ -4192,15 +4146,15 @@ cases:
       "Space"
       "U+0001"
       42
-      (nil nil nil)
-      (t t nil)
-      character
-      (integer string null boolean)
+      (NIL NIL NIL)
+      (T T NIL)
+      CHARACTER
+      (INTEGER STRING NULL BOOLEAN)
       %class-LBR-PT
-      (t nil)
-      nil
+      (T NIL)
+      NIL
       "lbr 7"
-      nil
+      NIL
       "aXYZef"
       el
   - name: runtime-type-dispatch-residue
@@ -4225,9 +4179,9 @@ cases:
                          (slot-boundp rtd-p (car rtd-pair)))))))
     expected: |
       :RTD-CAUGHT
-      (t nil t)
-      (RTD-X integer 5 t)
-      (RTD-Y list nil t)
+      (T NIL T)
+      (RTD-X INTEGER 5 T)
+      (RTD-Y LIST NIL T)
   - name: read-time-eval-residue
     source: |
       (defvar +rte-six+ #.(* 2 3))
@@ -4272,7 +4226,7 @@ cases:
       (:CHASE :FLEE :IGNORE)
       (:DOG (1 2))
       ("localhost" 8080)
-      (A t nil)
+      (A T NIL)
       (1 99)
   - name: gray-stream-instance-dispatch
     source: |
@@ -4304,17 +4258,17 @@ cases:
       (print (equalp #(1) #(1 2)))
       (print (equalp #(1) "x"))
     expected: |
-      t
-      nil
-      nil
+      T
+      NIL
+      NIL
   - name: streamp-standard-output-designator
     source: |
       (print (streamp t))
       (print (streamp "x"))
       (let ((sod-s t)) (check-type sod-s stream) (print :ok))
     expected: |
-      t
-      nil
+      T
+      NIL
       :OK
   - name: format-as-first-class-function
     source: |

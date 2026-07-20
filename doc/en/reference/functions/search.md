@@ -9,7 +9,7 @@ Returns the position in `sequence-2` where `sequence-1` first occurs as a subseq
 ```
 
 ```lisp
-(search "x" "abcd") ; => nil
+(search "x" "abcd") ; => NIL
 ```
 
 ```lisp

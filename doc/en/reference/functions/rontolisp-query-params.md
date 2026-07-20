@@ -13,7 +13,7 @@ skipped. `nil` (a request without a query string) yields `nil`, so
 ```lisp
 (rontolisp:query-params "a=1&b=two&flag")   ; => (("a" . "1") ("b" . "two") ("flag" . ""))
 (rontolisp:query-params "q=%E3%81%82&q=2")   ; => (("q" . "あ") ("q" . "2"))
-(rontolisp:query-params nil)   ; => nil
+(rontolisp:query-params nil)   ; => NIL
 ```
 
 The alist prints readably and works with `assoc`:

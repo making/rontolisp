@@ -144,7 +144,7 @@ public final class VecLibrary {
 				case LispSymbol sym -> {
 					if (isVecQualified(sym.name())
 							|| (LispNames.VEC_PKG.equals(this.currentPackage) && PackageRegistry.vecFunctionNames()
-								.contains(sym.name().toLowerCase(java.util.Locale.ROOT)))) {
+								.contains(sym.name().toUpperCase(java.util.Locale.ROOT)))) {
 						this.found = true;
 					}
 				}

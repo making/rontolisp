@@ -211,7 +211,7 @@ public final class AsdfSystems {
 			case LispNames.QUOTE -> {
 				return items.get(1);
 			}
-			case "if" -> {
+			case LispNames.IF -> {
 				if (items.size() != 3 && items.size() != 4) {
 					throw new IllegalStateException("unsupported form " + form.print());
 				}
@@ -221,13 +221,13 @@ public final class AsdfSystems {
 				}
 				return items.size() == 4 ? evalDataForm(items.get(3), parameters) : LispNil.INSTANCE;
 			}
-			case "not" -> {
+			case LispNames.NOT -> {
 				if (items.size() != 2) {
 					throw new IllegalStateException("unsupported form " + form.print());
 				}
 				return evalDataForm(items.get(1), parameters) instanceof LispNil ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
-			case "or" -> {
+			case LispNames.OR -> {
 				LispVal result = LispNil.INSTANCE;
 				for (int i = 1; i < items.size(); i++) {
 					result = evalDataForm(items.get(i), parameters);
@@ -237,7 +237,7 @@ public final class AsdfSystems {
 				}
 				return result;
 			}
-			case "and" -> {
+			case LispNames.AND -> {
 				LispVal result = LispTrue.INSTANCE;
 				for (int i = 1; i < items.size(); i++) {
 					result = evalDataForm(items.get(i), parameters);

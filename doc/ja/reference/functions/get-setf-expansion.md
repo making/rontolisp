@@ -7,5 +7,5 @@
 ```lisp
 (multiple-value-bind (vars vals stores writer reader)
     (get-setf-expansion 'x)
-  (list vars vals (length stores) reader)) ; => (nil nil 1 x)
+  (list vars vals (length stores) reader)) ; => (NIL NIL 1 X)
 ```

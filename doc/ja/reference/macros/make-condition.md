@@ -5,7 +5,7 @@
 指定した型のコンディションオブジェクト(スロットを initarg から埋めた CLOS サブセットインスタンス。未指定スロットは `:initform` を取ります)を構築します。型はリテラルのクォートされたシンボルでなければなりません。[`define-condition`](define-condition.md) で定義されていない(かつ `simple-error` などの組み込みでもない)型は、引数をそのまま持つ raw なタグ付きインスタンスになります。インスタンスは [`error`](error.md)/[`signal`](signal.md)(コンディションオブジェクト designator)に渡せ、`typecase` でテストできます。
 
 ```lisp
-(make-condition 'simple-error :format-control "something failed") ; => (%class-simple-error "something failed" nil)
+(make-condition 'simple-error :format-control "something failed") ; => (%class-SIMPLE-ERROR "something failed" NIL)
 ```
 
 ```console

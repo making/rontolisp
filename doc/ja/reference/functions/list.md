@@ -9,5 +9,5 @@
 ```
 
 ```lisp
-(list) ; => nil
+(list) ; => NIL
 ```

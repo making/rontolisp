@@ -32,7 +32,7 @@ The parameter list supports the Common Lisp lambda-list keywords `&optional`, `&
 ```lisp
 (defun make-point (&key (x 0) (y 0 y-supplied-p))
   (list x y y-supplied-p))
-(make-point :y 5) ; => (0 5 t)
+(make-point :y 5) ; => (0 5 T)
 ```
 
 An unknown keyword argument signals an error unless the lambda list declares `&allow-other-keys` or the caller passes `:allow-other-keys t`. `&aux` introduces auxiliary variables bound like a trailing `let*`. `&whole` is not supported.

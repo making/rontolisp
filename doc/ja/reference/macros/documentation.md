@@ -7,5 +7,5 @@
 ```lisp
 (defun greet () "hi")
 (setf (documentation 'greet 'function) "Says hi.") ; => "Says hi."
-(documentation 'greet 'function) ; => nil
+(documentation 'greet 'function) ; => NIL
 ```

@@ -16,7 +16,7 @@ class WaitForLibraryTest {
 		List<LispVal> program = LispReader
 			.readAllFromString("(rontolisp:async-defun main () (rontolisp:await (rontolisp:wait-for 10)))");
 		List<LispVal> out = WaitForLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
-		assertThat(HttpLibraryTest.definesDefun(out, "rontolisp:wait-for")).isTrue();
+		assertThat(HttpLibraryTest.definesDefun(out, "RONTOLISP:WAIT-FOR")).isTrue();
 	}
 
 	@Test
@@ -25,7 +25,7 @@ class WaitForLibraryTest {
 		// PackageResolver normalizes it, so the scan must normalize itself.
 		List<LispVal> program = LispReader.readAllFromString("(rl:async-defun main () (rl:await (rl:wait-for 10)))");
 		List<LispVal> out = WaitForLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
-		assertThat(HttpLibraryTest.definesDefun(out, "rontolisp:wait-for")).isTrue();
+		assertThat(HttpLibraryTest.definesDefun(out, "RONTOLISP:WAIT-FOR")).isTrue();
 	}
 
 	@Test

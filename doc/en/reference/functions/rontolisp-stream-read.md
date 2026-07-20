@@ -18,7 +18,7 @@ asynchronous function parks on.
 
 ```
 "a"
-nil
+NIL
 ```
 
 To concatenate all remaining string chunks in one await, use

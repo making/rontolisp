@@ -165,7 +165,7 @@ class LispEvaluatorAsdfTest {
 				"main.lisp", """
 						(in-package :my-lib)
 						(defun greet () 1)"""), List.of());
-		assertThat(output).isEqualTo("cl-user");
+		assertThat(output).isEqualTo("CL-USER");
 	}
 
 	@Test

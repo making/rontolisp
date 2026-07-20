@@ -8,14 +8,14 @@
 
 ```lisp
 (rontolisp:streamp (rontolisp:make-stream))   ; => t
-(rontolisp:streamp 42)                        ; => nil
+(rontolisp:streamp 42)                        ; => NIL
 ```
 
 ファイルストリームの述語 `cl:streamp` とは別のシンボルです: 互いに相手の
 ストリームには `nil` を返します。
 
 ```lisp
-(streamp (rontolisp:make-stream))   ; => nil
+(streamp (rontolisp:make-stream))   ; => NIL
 ```
 
 非同期ストリームは不透明な値です: リーダ構文はなく、`#<STREAM>` と印字されます。

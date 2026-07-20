@@ -516,9 +516,7 @@ public final class PackageRegistry {
 	 * Returns the fixed set of {@code cl}-package symbol names (functions, macros,
 	 * special forms, variables, type specifiers). Excludes the car/cdr compositions,
 	 * which are a pattern rather than a set (see
-	 * {@link LispMacroExpander#isCarCdrComposition}). Used by
-	 * {@link am.ik.rontolisp.UpcaseSymbols#foldableBareNames} to bake the compiled
-	 * backends' runtime-reader fold set from one source of truth.
+	 * {@link LispMacroExpander#isCarCdrComposition}).
 	 * @return the {@code cl} symbol names
 	 */
 	public static Set<String> clSymbols() {

@@ -214,7 +214,7 @@ final class JvmAsyncRuntimeBuilder {
 		ConstantPool.StringConstant sMarker = cp.addString(SMARKER);
 		ConstantPool.StringConstant rMarker = cp.addString(RMARKER);
 		ConstantPool.StringConstant eMarker = cp.addString(EMARKER);
-		ConstantPool.StringConstant tStr = cp.addString("t");
+		ConstantPool.StringConstant tStr = cp.addString("T");
 		ConstantPool.StringConstant quote = cp.addString("\"");
 
 		List<AsyncMethod> methods = new ArrayList<>();

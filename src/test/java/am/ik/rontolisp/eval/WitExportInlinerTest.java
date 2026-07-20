@@ -56,8 +56,8 @@ class WitExportInlinerTest {
 					return content;
 				});
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList())).doesNotContain("wit-export")
-			.contains("(rontolisp:wasm-export (quote COUNT-VOWELS) :params (quote (:string)) "
-					+ ":param-names (quote (s)) :returns :int)");
+			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:string)) "
+					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :int)");
 	}
 
 	@Test
@@ -141,9 +141,9 @@ class WitExportInlinerTest {
 				WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		String printed = String.join("\n", out.stream().map(LispVal::print).toList());
 		assertThat(printed).doesNotContain("wit-export")
-			.contains("(rontolisp:wasm-export (quote COUNT-VOWELS) :params (quote (:string)) "
-					+ ":param-names (quote (s)) :returns :int)")
-			.contains("(defun COUNT-VOWELS");
+			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:string)) "
+					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :int)")
+			.contains("(DEFUN COUNT-VOWELS");
 	}
 
 	@Test
@@ -260,8 +260,8 @@ class WitExportInlinerTest {
 		List<LispVal> out = WitExportInliner.inline(expanded, this.tempDir.toString(),
 				WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList()))
-			.contains("(rontolisp:wasm-export (quote COUNT-VOWELS) :params (quote (:string)) "
-					+ ":param-names (quote (s)) :returns :int)");
+			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:string)) "
+					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :int)");
 	}
 
 	@Test
@@ -283,7 +283,7 @@ class WitExportInlinerTest {
 				LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"wit/world.wit\")"),
 				this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList()))
-			.contains("(rontolisp:wasm-export (quote COUNT-VOWELS)");
+			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS)");
 	}
 
 	@Test
@@ -305,9 +305,9 @@ class WitExportInlinerTest {
 		List<LispVal> lowered = WitExportInliner.inline(program, this.tempDir.toString(),
 				WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		String printed = String.join("\n", LibraryDefunPruner.prune(lowered).stream().map(LispVal::print).toList());
-		assertThat(printed).contains("(defun GREET")
-			.contains("(rontolisp:wasm-export (quote GREET)")
-			.contains("(defun rontolisp:url-encode")
+		assertThat(printed).contains("(DEFUN GREET")
+			.contains("(RONTOLISP:WASM-EXPORT (QUOTE GREET)")
+			.contains("(DEFUN RONTOLISP:URL-ENCODE")
 			// url-decode is spliced with the library but unreachable from the export.
 			.doesNotContain("(defun rontolisp:url-decode");
 		// And the pruned program still compiles as a component.

@@ -13,7 +13,7 @@ Binds the variables to the values of `values-form` and evaluates the body. A lit
 (let ((h (make-hash-table)))
   (setf (gethash 'a h) nil)
   (multiple-value-bind (v present-p) (gethash 'a h)
-    (list v present-p))) ; => (nil t)
+    (list v present-p))) ; => (NIL T)
 ```
 
 ```lisp

@@ -142,7 +142,7 @@ public final class LinalgLibrary {
 				case LispSymbol sym -> {
 					if (isLinalgQualified(sym.name()) || (LispNames.LINALG_PKG.equals(this.currentPackage)
 							&& PackageRegistry.linalgFunctionNames()
-								.contains(sym.name().toLowerCase(java.util.Locale.ROOT)))) {
+								.contains(sym.name().toUpperCase(java.util.Locale.ROOT)))) {
 						this.found = true;
 					}
 				}

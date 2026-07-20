@@ -8,17 +8,17 @@ On the compiled backends the check reads the embedded eval runtime's global envi
 
 ```lisp
 (defvar *level* 7)
-(boundp '*level*) ; => t
+(boundp '*level*) ; => T
 ```
 
 ```lisp
-(boundp '*undefined-var*) ; => nil
+(boundp '*undefined-var*) ; => NIL
 ```
 
 ```lisp
-(boundp :key) ; => t
+(boundp :key) ; => T
 ```
 
 ```lisp
-(let ((x 1)) (boundp 'x)) ; => nil
+(let ((x 1)) (boundp 'x)) ; => NIL
 ```

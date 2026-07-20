@@ -10,7 +10,7 @@
 ```lisp
 (rontolisp:async-defun f () 1)
 (rontolisp:futurep (f))    ; => t
-(rontolisp:futurep 42)     ; => nil
+(rontolisp:futurep 42)     ; => NIL
 ```
 
 future は不透明な値です: リーダ構文はなく、`#<FUTURE>` と印字されます。

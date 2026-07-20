@@ -9,7 +9,7 @@
 ```
 
 ```lisp
-(search "x" "abcd") ; => nil
+(search "x" "abcd") ; => NIL
 ```
 
 ```lisp

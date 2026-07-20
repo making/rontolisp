@@ -8,5 +8,5 @@ On the JVM and WASM compilers the slot name must be a literal quoted symbol, lik
 
 ```lisp
 (defclass point () ((x :initarg :x)))
-(slot-boundp (make-instance 'point :x 1) 'x) ; => t
+(slot-boundp (make-instance 'point :x 1) 'x) ; => T
 ```

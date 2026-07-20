@@ -14,5 +14,5 @@ Looks up `key` in `table` and returns the associated value, or `default` (nil wh
 (let ((h (make-hash-table)))
   (setf (gethash 'a h) nil)
   (multiple-value-bind (v present-p) (gethash 'a h)
-    (list v present-p))) ; => (nil t)
+    (list v present-p))) ; => (NIL T)
 ```

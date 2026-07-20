@@ -9,9 +9,9 @@
 ```
 
 ```lisp
-(eq (make-symbol "foo") 'foo) ; => nil
+(eq (make-symbol "foo") 'foo) ; => NIL
 ```
 
 ```lisp
-(symbolp (make-symbol "temp")) ; => t
+(symbolp (make-symbol "temp")) ; => T
 ```

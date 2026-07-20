@@ -6,5 +6,5 @@ Returns `t` when the array was created with [`make-array`](make-array.md) `:adju
 
 ```lisp
 (adjustable-array-p (make-array 2 :adjustable t)) ; => t
-(adjustable-array-p (make-array 2)) ; => nil
+(adjustable-array-p (make-array 2)) ; => NIL
 ```

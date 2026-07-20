@@ -93,8 +93,8 @@ final class JvmHashRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("values"), cp.addUtf8("()Ljava/util/Collection;")));
 		MethodrefConstant collectionToArray = cp.addInterfaceMethodref(collectionClass,
 				cp.addNameAndType(cp.addUtf8("toArray"), cp.addUtf8("()[Ljava/lang/Object;")));
-		// The compiled representation of the boolean t is the symbol "t" (a bare String).
-		StringConstant trueStr = cp.addString("t");
+		// The compiled representation of the boolean t is the symbol "T" (a bare String).
+		StringConstant trueStr = cp.addString("T");
 
 		List<HashMethod> methods = new ArrayList<>();
 

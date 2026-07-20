@@ -7,9 +7,9 @@ Whether `type1` names a subtype of `type2`, answering over the built-in type lat
 On the JVM and WASM compilers both type specifiers must be literal (quoted): the answer is folded into a constant at compile time; runtime-computed designators work on the interpreter only.
 
 ```lisp
-(subtypep 'integer 'number) ; => t
+(subtypep 'integer 'number) ; => T
 ```
 
 ```lisp
-(subtypep 'type-error 'error) ; => t
+(subtypep 'type-error 'error) ; => T
 ```

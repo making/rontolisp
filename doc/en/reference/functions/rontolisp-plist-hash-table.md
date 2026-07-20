@@ -18,7 +18,7 @@ backend-specific, like `maphash`); the table is a real hash table, so its values
 read back with `gethash`:
 
 ```lisp
-(gethash :ok (rontolisp:plist-hash-table (list :name "x" :ok t)))   ; => t
+(gethash :ok (rontolisp:plist-hash-table (list :name "x" :ok t)))   ; => T
 ```
 
 The default hash-table test is `eql`, like `alexandria:plist-hash-table`; pass

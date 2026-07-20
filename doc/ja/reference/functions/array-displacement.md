@@ -9,5 +9,5 @@
 (defparameter *view* (make-array 2 :displaced-to *base* :displaced-index-offset 3))
 (multiple-value-bind (target offset) (array-displacement *view*)
   (list (eq target *base*) offset)) ; => (t 3)
-(array-displacement *base*) ; => nil
+(array-displacement *base*) ; => NIL
 ```

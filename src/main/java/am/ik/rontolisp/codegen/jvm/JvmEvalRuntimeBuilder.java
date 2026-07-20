@@ -1868,7 +1868,7 @@ final class JvmEvalRuntimeBuilder {
 		int andNotEmpty = a.label();
 		a.aload(REST);
 		a.branch(Opcode.IFNONNULL, andNotEmpty);
-		ldcStr(a, "t");
+		ldcStr(a, "T");
 		a.areturn();
 		a.bind(andNotEmpty);
 		a.aload(REST);

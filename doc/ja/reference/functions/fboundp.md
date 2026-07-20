@@ -7,18 +7,18 @@
 コンパイルバックエンドでは、**リテラル**のクォートされた引数はコンパイル時に完全な知識(マクロ・特殊形式込み)で決定されます。計算された引数は実行時に関数レジストリと照合され、そこには本物の関数しか登録されていないため、`(fboundp (intern "cond"))` はコンパイル済みコードでは nil、インタプリタでは `t` になります。`defmacro` マクロも同様にコンパイル時のみの存在です。
 
 ```lisp
-(fboundp 'car) ; => t
+(fboundp 'car) ; => T
 ```
 
 ```lisp
-(fboundp 'cond) ; => t
+(fboundp 'cond) ; => T
 ```
 
 ```lisp
 (defun greet (n) n)
-(fboundp 'greet) ; => t
+(fboundp 'greet) ; => T
 ```
 
 ```lisp
-(fboundp 'no-such-fn) ; => nil
+(fboundp 'no-such-fn) ; => NIL
 ```

@@ -18,7 +18,7 @@ class AsdfSystemsTest {
 	}
 
 	private static AsdfSystems.LispSystem parse(String source) {
-		return AsdfSystems.parseDefsystem(form(source), null, Features.INTERNAL);
+		return AsdfSystems.parseDefsystem(form(source), null, Features.INTERPRETER);
 	}
 
 	private static SourceLoader loaderOf(Map<String, String> files) {
@@ -149,7 +149,7 @@ class AsdfSystemsTest {
 		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
 				(in-package :asdf-user)
 				(defsystem :lib :components ((:file "main")))
-				(defsystem :lib/tests :components ((:file "tests")))""", "proj/lib.asd", Features.INTERNAL);
+				(defsystem :lib/tests :components ((:file "tests")))""", "proj/lib.asd", Features.INTERPRETER);
 		assertThat(systems).hasSize(2);
 		assertThat(systems.get(0).name()).isEqualTo("lib");
 		assertThat(systems.get(0).baseDir()).isEqualTo("proj");
@@ -158,7 +158,7 @@ class AsdfSystemsTest {
 
 	@Test
 	void parseAsdSourceRejectsOtherForms() {
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(print 1)", "lib.asd", Features.INTERNAL))
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(print 1)", "lib.asd", Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("lib.asd")
 			.hasMessageContaining("unsupported form in .asd file");
@@ -206,7 +206,7 @@ class AsdfSystemsTest {
 	void ifFeatureIsEvaluatedAgainstTheGivenFeatures() {
 		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(
 				form("(asdf:defsystem :lib :components ((:file \"jvm\" :if-feature :rontolisp-jvm)))"), null,
-				Features.JVM.preservingCase());
+				Features.JVM);
 		assertThat(system.files()).containsExactly("jvm.lisp");
 	}
 
@@ -215,7 +215,7 @@ class AsdfSystemsTest {
 		// The ASDF-version-guard idiom: a leading top-level #. form is skipped.
 		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
 				#.(unless (uiop-version<= "3.1" (asdf-version)) (error "too old"))
-				(defsystem :lib :components ((:file "main")))""", "lib.asd", Features.INTERNAL);
+				(defsystem :lib :components ((:file "main")))""", "lib.asd", Features.INTERPRETER);
 		assertThat(systems).hasSize(1);
 		assertThat(systems.get(0).files()).containsExactly("main.lisp");
 	}
@@ -225,7 +225,7 @@ class AsdfSystemsTest {
 		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
 				(defsystem :lib
 				  :components (#+rontolisp (:file "main")
-				               #+sbcl (:file "sbcl-only")))""", "lib.asd", Features.INTERNAL);
+				               #+sbcl (:file "sbcl-only")))""", "lib.asd", Features.INTERPRETER);
 		assertThat(systems.get(0).files()).containsExactly("main.lisp");
 	}
 
@@ -311,7 +311,7 @@ class AsdfSystemsTest {
 				                 (:file #.*string-file*
 				                  :depends-on ("package" "trivial-utf-8"))
 				                 (:file "communicate"
-				                  :depends-on (#.*string-file*))))))""", "proj/cl-postgres.asd", Features.INTERNAL);
+				                  :depends-on (#.*string-file*))))))""", "proj/cl-postgres.asd", Features.INTERPRETER);
 		assertThat(systems).hasSize(1);
 		AsdfSystems.LispSystem system = systems.get(0);
 		assertThat(system.name()).isEqualTo("cl-postgres");
@@ -342,10 +342,10 @@ class AsdfSystemsTest {
 		// Deny by default: the .asd is never really evaluated, so a defparameter value
 		// outside the pure-data mini evaluator fails the parse instead of guessing.
 		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(defparameter *when* (get-universal-time))", "lib.asd",
-				Features.INTERNAL))
+				Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("lib.asd")
-			.hasMessageContaining("defparameter")
+			.hasMessageContaining("DEFPARAMETER")
 			.hasMessageContaining("pure data");
 	}
 
@@ -356,7 +356,7 @@ class AsdfSystemsTest {
 		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
 				(defsystem :lib
 				  :version #.(uiop:read-file-form "version.sexp")
-				  :components ((:file "main")))""", "lib.asd", Features.INTERNAL);
+				  :components ((:file "main")))""", "lib.asd", Features.INTERPRETER);
 		assertThat(systems.get(0).files()).containsExactly("main.lisp");
 	}
 

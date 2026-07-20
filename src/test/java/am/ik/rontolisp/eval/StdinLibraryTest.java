@@ -43,9 +43,9 @@ class StdinLibraryTest {
 		List<LispVal> program = LispReader
 			.readAllFromString("(rontolisp:async-defun main () (print (read-line)))\n(rontolisp:await (main))");
 		List<LispVal> out = StdinLibrary.process(program, COMPONENT, false);
-		assertThat(definesInternal(out, "rontolisp::%io-read-line")).isTrue();
-		assertThat(definesInternal(out, "rontolisp::%stdin-read-line-or-raw-f")).isTrue();
-		assertThat(definesInternal(out, "rontolisp::%stdin-read-line-f")).isTrue();
+		assertThat(definesInternal(out, "RONTOLISP::%IO-READ-LINE")).isTrue();
+		assertThat(definesInternal(out, "RONTOLISP::%STDIN-READ-LINE-OR-RAW-F")).isTrue();
+		assertThat(definesInternal(out, "RONTOLISP::%STDIN-READ-LINE-F")).isTrue();
 	}
 
 	@Test
@@ -56,7 +56,7 @@ class StdinLibraryTest {
 		List<LispVal> program = LispReader
 			.readAllFromString("(rl:async-defun main () (print (cl:read-line)))\n(rl:await (main))");
 		List<LispVal> out = StdinLibrary.process(program, COMPONENT, false);
-		assertThat(definesInternal(out, "rontolisp::%io-read-line")).isTrue();
+		assertThat(definesInternal(out, "RONTOLISP::%IO-READ-LINE")).isTrue();
 	}
 
 	@Test
@@ -76,9 +76,9 @@ class StdinLibraryTest {
 		List<LispVal> program = SocketsLibrary
 			.process(LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"), COMPONENT);
 		List<LispVal> out = StdinLibrary.process(program, COMPONENT, false);
-		assertThat(definesInternal(out, "rontolisp::%stdin-read-line-or-raw-f")).isTrue();
-		assertThat(definesInternal(out, "rontolisp::%stdin-read-line-f")).isTrue();
-		assertThat(countDefuns(out, "rontolisp::%io-read-line")).isEqualTo(1);
+		assertThat(definesInternal(out, "RONTOLISP::%STDIN-READ-LINE-OR-RAW-F")).isTrue();
+		assertThat(definesInternal(out, "RONTOLISP::%STDIN-READ-LINE-F")).isTrue();
+		assertThat(countDefuns(out, "RONTOLISP::%IO-READ-LINE")).isEqualTo(1);
 	}
 
 	@Test
@@ -92,8 +92,8 @@ class StdinLibraryTest {
 				(rontolisp:http-handler 'h)
 				"""), COMPONENT);
 		List<LispVal> out = StdinLibrary.process(program, COMPONENT, true);
-		assertThat(definesInternal(out, "rontolisp::%stdin-read-line-or-raw-f")).isTrue();
-		assertThat(definesInternal(out, "rontolisp::%stdin-read-line-f")).isFalse();
+		assertThat(definesInternal(out, "RONTOLISP::%STDIN-READ-LINE-OR-RAW-F")).isTrue();
+		assertThat(definesInternal(out, "RONTOLISP::%STDIN-READ-LINE-F")).isFalse();
 	}
 
 	@Test
@@ -112,7 +112,7 @@ class StdinLibraryTest {
 		int count = 0;
 		for (LispVal form : forms) {
 			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
-					&& ("defun".equals(head.name()) || "rontolisp:async-defun".equals(head.name()))
+					&& ("DEFUN".equals(head.name()) || "RONTOLISP:ASYNC-DEFUN".equals(head.name()))
 					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol defunName
 					&& name.equals(defunName.name())) {
 				count++;

@@ -9,5 +9,5 @@ Returns the element at zero-based index `n` of `list`. If `n` is greater than or
 ```
 
 ```lisp
-(nth 10 '(a b c)) ; => nil
+(nth 10 '(a b c)) ; => NIL
 ```

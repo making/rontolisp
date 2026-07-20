@@ -6,5 +6,5 @@ Lite: always returns nil — streams do not support repositioning, so portable c
 
 ```lisp
 (with-input-from-string (s "abc")
-  (file-position s)) ; => nil
+  (file-position s)) ; => NIL
 ```

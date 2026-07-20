@@ -9,7 +9,7 @@
 ```
 
 ```lisp
-(eq (intern "foo") 'foo) ; => t
+(eq (intern "foo") 'foo) ; => NIL
 ```
 
 ```lisp

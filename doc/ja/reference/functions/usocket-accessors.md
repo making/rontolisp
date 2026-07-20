@@ -14,7 +14,7 @@ usocket のアドレスアクセサです。
 (let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
        (port (usocket:get-local-port listener)))
   (usocket:socket-close listener)
-  (> port 0)) ; => t
+  (> port 0)) ; => T
 ```
 
 `get-local-name` / `get-peer-name` は `(values address port)` を返します:
@@ -25,7 +25,7 @@ usocket のアドレスアクセサです。
 (let ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*)))
   (multiple-value-bind (address port) (usocket:get-local-name listener)
     (usocket:socket-close listener)
-    (list address (> port 0)))) ; => ("127.0.0.1" t)
+    (list address (> port 0)))) ; => ("127.0.0.1" T)
 ```
 
 ## バックエンドごとの対応

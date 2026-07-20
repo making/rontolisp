@@ -38,7 +38,7 @@ class HttpLibraryTest {
 		List<LispVal> program = LispReader
 			.readAllFromString("(princ (rl:await (getf (rl:await (rl:fetch \"https://example.com\")) :status)))");
 		List<LispVal> out = HttpLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
-		assertThat(definesDefun(out, "rontolisp:fetch")).isTrue();
+		assertThat(definesDefun(out, "RONTOLISP:FETCH")).isTrue();
 	}
 
 	@Test
@@ -61,7 +61,7 @@ class HttpLibraryTest {
 
 	static boolean definesDefun(List<LispVal> forms, String name) {
 		for (LispVal form : forms) {
-			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && "defun".equals(head.name())
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && "DEFUN".equals(head.name())
 					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol defunName
 					&& name.equals(defunName.name())) {
 				return true;

@@ -168,7 +168,7 @@ public final class UsocketLibrary {
 				case LispSymbol sym -> {
 					if (isUsocketQualified(sym.name()) || (LispNames.USOCKET_PKG.equals(this.currentPackage)
 							&& PackageRegistry.usocketExportedNames()
-								.contains(sym.name().toLowerCase(java.util.Locale.ROOT)))) {
+								.contains(sym.name().toUpperCase(java.util.Locale.ROOT)))) {
 						this.found = true;
 					}
 				}

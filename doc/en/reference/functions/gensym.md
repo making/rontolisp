@@ -15,7 +15,7 @@ Deviations from Common Lisp: the prefix must be a **literal** string on the comp
 ```
 
 ```lisp
-(eq (gensym) (gensym)) ; => nil
+(eq (gensym) (gensym)) ; => NIL
 ```
 
 A macro temporary generated with `gensym` cannot collide with the caller's variables:

@@ -7,5 +7,5 @@
 ```lisp
 (let ((h (make-hash-table)))
   (setf (gethash 'a h) 1)
-  (remhash 'a h)) ; => t
+  (remhash 'a h)) ; => T
 ```

@@ -5,7 +5,7 @@
 指定したパラメータリストと本体を持つ `name` という名前の関数を関数名前空間に定義し、名前シンボルを返します。`body` は定義時には評価されず、呼び出しごとに実行され、本体の最後のフォームの値を返します。Lisp-2 に従い、定義は関数名前空間に存在するため、同名の変数と衝突することなく、呼び出し位置で(および `#'name` を通じて)その名前を参照できます。
 
 ```lisp
-(defun sq (x) (* x x)) ; => sq
+(defun sq (x) (* x x)) ; => SQ
 ```
 
 ```lisp
@@ -32,7 +32,7 @@
 ```lisp
 (defun make-point (&key (x 0) (y 0 y-supplied-p))
   (list x y y-supplied-p))
-(make-point :y 5) ; => (0 5 t)
+(make-point :y 5) ; => (0 5 T)
 ```
 
 未知のキーワード引数は、ラムダリストが `&allow-other-keys` を宣言しているか、呼び出し側が `:allow-other-keys t` を渡さない限りエラーを通知します。`&aux` は末尾の `let*` のように束縛される補助変数を導入します。`&whole` はサポートされません。
@@ -59,7 +59,7 @@ Function expects 2 arguments, got 1
 (defvar *mode* :xml)
 (defun (setf my-mode) (m) (setq *mode* m))
 (setf (my-mode) :html5)
-*mode* ; => :html5
+*mode* ; => :HTML5
 ```
 
 サポートされるのは `(setf name)` 形式(2 要素のリスト)のみです。`(setf ...)` 名に対する `symbol-function`/`fboundp` はサポートされません。

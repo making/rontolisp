@@ -9,5 +9,5 @@ Returns a freshly allocated proper list of its evaluated arguments, in order. Wi
 ```
 
 ```lisp
-(list) ; => nil
+(list) ; => NIL
 ```

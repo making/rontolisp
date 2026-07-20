@@ -7,9 +7,9 @@
 JVM / WASM コンパイラでは両方の型指定子がリテラル(クオート)である必要があります: 答えはコンパイル時に定数へ畳み込まれます。実行時に計算される指定子はインタープリタのみで動作します。
 
 ```lisp
-(subtypep 'integer 'number) ; => t
+(subtypep 'integer 'number) ; => T
 ```
 
 ```lisp
-(subtypep 'type-error 'error) ; => t
+(subtypep 'type-error 'error) ; => T
 ```

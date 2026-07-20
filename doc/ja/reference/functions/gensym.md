@@ -15,7 +15,7 @@ Common Lisp からの相違点: コンパイルパス(JVM/WASM)では、シン�
 ```
 
 ```lisp
-(eq (gensym) (gensym)) ; => nil
+(eq (gensym) (gensym)) ; => NIL
 ```
 
 `gensym` で生成したマクロの一時変数は、呼び出し側の変数と衝突しません:

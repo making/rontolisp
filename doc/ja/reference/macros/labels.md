@@ -7,5 +7,5 @@
 ```lisp
 (labels ((ev (n) (if (= n 0) t (od (- n 1))))
          (od (n) (if (= n 0) nil (ev (- n 1)))))
-  (list (ev 10) (od 9))) ; => (t t)
+  (list (ev 10) (od 9))) ; => (T T)
 ```

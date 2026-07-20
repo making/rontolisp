@@ -6,5 +6,5 @@
 
 ```lisp
 (adjustable-array-p (make-array 2 :adjustable t)) ; => t
-(adjustable-array-p (make-array 2)) ; => nil
+(adjustable-array-p (make-array 2)) ; => NIL
 ```

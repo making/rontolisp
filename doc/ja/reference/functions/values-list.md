@@ -9,5 +9,5 @@
 ```
 
 ```lisp
-(multiple-value-bind (a b) (values-list '(10)) (list a b)) ; => (10 nil)
+(multiple-value-bind (a b) (values-list '(10)) (list a b)) ; => (10 NIL)
 ```

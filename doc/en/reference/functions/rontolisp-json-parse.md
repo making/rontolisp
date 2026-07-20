@@ -18,7 +18,7 @@ rontolisp.
 
 ```lisp
 (gethash "name" (rontolisp:json-parse "{\"name\": \"rontolisp\", \"n\": 2}"))   ; => "rontolisp"
-(gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}")))   ; => #(1 t null)
+(gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}")))   ; => #(1 T NULL)
 ```
 
 ## Value mapping
@@ -49,7 +49,7 @@ millisecond timestamp parses as `1.234567890123E12` here but as
 `1234567890123` under jzon. Everything else round-trips identically.
 
 ```lisp
-(floatp (rontolisp:json-parse "1234567890123"))   ; => t
+(floatp (rontolisp:json-parse "1234567890123"))   ; => T
 ```
 
 ## Errors

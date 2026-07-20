@@ -6,5 +6,5 @@
 
 ```lisp
 (with-input-from-string (s "x")
-  (stream-element-type s)) ; => character
+  (stream-element-type s)) ; => CHARACTER
 ```

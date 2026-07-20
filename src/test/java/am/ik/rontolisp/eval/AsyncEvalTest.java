@@ -48,7 +48,7 @@ class AsyncEvalTest {
 				(let ((f (add 1 2)))
 				  (list (rontolisp:futurep f) (rontolisp:await f) (rontolisp:await f)))
 				""");
-		assertThat(run.result().print()).isEqualTo("(t 3 3)");
+		assertThat(run.result().print()).isEqualTo("(T 3 3)");
 	}
 
 	@Test
@@ -98,8 +98,8 @@ class AsyncEvalTest {
 	@Test
 	void awaitPassesNonFutureThrough() {
 		assertThat(eval("(rontolisp:await 42)")).isEqualTo(new LispInteger(42));
-		assertThat(eval("(rontolisp:await nil)").print()).isEqualTo("nil");
-		assertThatThrownBy(() -> eval("(rontolisp:await)")).hasMessageContaining("await");
+		assertThat(eval("(rontolisp:await nil)").print()).isEqualTo("NIL");
+		assertThatThrownBy(() -> eval("(rontolisp:await)")).hasMessageContaining("AWAIT");
 	}
 
 	@Test
@@ -137,7 +137,7 @@ class AsyncEvalTest {
 				(let ((f (add 1 2)))
 				  (list (rontolisp:futurep f) (rontolisp:await f)))
 				""");
-		assertThat(run.result().print()).isEqualTo("(t 3)");
+		assertThat(run.result().print()).isEqualTo("(T 3)");
 	}
 
 	@Test
@@ -256,7 +256,7 @@ class AsyncEvalTest {
 				      (rontolisp:await (rontolisp:stream-read *s*))
 				      (rontolisp:await (rontolisp:stream-read *s*)))
 				""");
-		assertThat(run.result().print()).isEqualTo("(\"a\" \"b\" nil)");
+		assertThat(run.result().print()).isEqualTo("(\"a\" \"b\" NIL)");
 	}
 
 	@Test
@@ -292,7 +292,7 @@ class AsyncEvalTest {
 				      (rontolisp:futurep (rontolisp:make-stream))
 				      (rontolisp:futurep (rontolisp:stream-read (rontolisp:make-stream))))
 				""");
-		assertThat(run.result().print()).isEqualTo("(t nil nil t)");
+		assertThat(run.result().print()).isEqualTo("(T NIL NIL T)");
 	}
 
 	@Test
@@ -336,7 +336,7 @@ class AsyncEvalTest {
 				(let ((f (rontolisp:wait-for 10)))
 				  (list (rontolisp:futurep f) (rontolisp:await f)))
 				""");
-		assertThat(run.result().print()).isEqualTo("(t nil)");
+		assertThat(run.result().print()).isEqualTo("(T NIL)");
 	}
 
 	@Test
@@ -358,9 +358,9 @@ class AsyncEvalTest {
 	@Test
 	void waitForRejectsNegativeAndNonIntegerArguments() {
 		assertThatThrownBy(() -> eval("(rontolisp:wait-for -1)"))
-			.hasMessageContaining("wait-for expects a non-negative integer of milliseconds");
+			.hasMessageContaining("WAIT-FOR expects a non-negative integer of milliseconds");
 		assertThatThrownBy(() -> eval("(rontolisp:wait-for \"x\")"))
-			.hasMessageContaining("wait-for expects a non-negative integer of milliseconds");
+			.hasMessageContaining("WAIT-FOR expects a non-negative integer of milliseconds");
 	}
 
 }

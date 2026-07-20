@@ -6,36 +6,38 @@ reading (the `:upcase` readtable case), so `foo`, `Foo` and `FOO` in source
 all name the same symbol `FOO`. Escaped characters keep their case:
 `|mixed Case|` and `\(` read verbatim.
 
-The one rontolisp twist is that the *canonical spelling* of every built-in
-name is lowercase. After upcasing, the reader folds a name whose canonical
-spelling is lowercase back down, so all of these still resolve no matter how
-they are written:
+The upcased name is the canonical one -- there is no fold back to a lowercase
+spelling. Standard names, `t`/`nil`, lambda-list markers and built-in package
+members are all upper case like everything else:
 
-- standard `cl` names (`DEFUN` and `defun` both read as `defun`, `LIST` as
-  `list`), including type-specifier and condition-type names (`HASH-TABLE`,
+- standard `cl` names (`defun` and `DEFUN` both read as `DEFUN`, `list` as
+  `LIST`), including type-specifier and condition-type names (`HASH-TABLE`,
   `TYPE-ERROR`),
 - `T` / `NIL` / `PI` and the other read-time constants,
 - lambda-list markers (`&OPTIONAL`, `&KEY`, ...),
-- built-in package prefixes and their members (`RL:FETCH` reads as
-  `rl:fetch`, `QL:QUICKLOAD` as `ql:quickload`),
-- keyword or `#:` designators of built-in packages (`(in-package :CL-USER)`,
-  `(:use #:CL)`).
+- built-in package prefixes and their members (`rl:fetch` reads as
+  `RL:FETCH`, `ql:quickload` as `QL:QUICKLOAD`),
+- keyword or `#:` designators (`(in-package :cl-user)` reads `:CL-USER`,
+  `(:use #:cl)` reads `#:CL`).
 
-Everything else -- your symbols, your packages, data keywords -- reads
-upcased, self-consistently, exactly like Common Lisp:
+Your symbols, your packages and your data keywords upcase the same way,
+self-consistently, exactly like Common Lisp:
 
 ```lisp
 (defun greet (name) (format nil "Hello, ~a!" name))
 (greet "world") ; => "Hello, world!"
 'foo ; => FOO
 (symbol-name 'foo) ; => "FOO"
-(eq 'foo 'FOO) ; => t
-(cdr (assoc :note '((:NOTE . "hi")))) ; => "hi"
+(symbol-name 'car) ; => "CAR"
+(eq 'foo 'FOO) ; => T
+(cdr (assoc :note '((:note . "hi")))) ; => "hi"
 ```
 
+An escaped name keeps its case and is therefore a *distinct* symbol from the
+upcased one, as in Common Lisp: `|car|` is not `CAR`.
+
 Built-in keyword parameters match case-insensitively (`:TEST` works where
-`:test` does), and `(intern "TIME")` names the standard `time` -- the same
-answer Common Lisp's upcase world gives -- so the
+`:test` does), and `(intern "TIME")` names the standard `TIME`, so the
 `(intern (string-upcase ...))` name-synthesis idiom lines up with body
 references, the pattern behind macros like assoc-utils' `with-keys`:
 
@@ -49,31 +51,28 @@ $ rontolisp keys.lisp
 ```
 
 Libraries loaded with `load`, `asdf:load-system` or `ql:quickload` are read
-the same way, so their definitions and your references fold consistently.
-`.asd` system definitions are the exception: they are parsed as data and
-stay case-preserving, and a symbol system designator is downcased like
-ASDF's `coerce-name` (`(ql:quickload :ASSOC-UTILS)` finds `assoc-utils`).
+the same way, so their definitions and your references upcase consistently.
+A symbol system designator is downcased like ASDF's `coerce-name`
+(`(ql:quickload :ASSOC-UTILS)` finds the `assoc-utils` system).
 
-The runtime reader folds too, so a datum read at run time behaves like the
+The runtime reader upcases too, so a datum read at run time behaves like the
 same datum written in source: `read` and `read-from-string` upcase your
-symbols and fold the standard names back to their canonical spelling,
-identically on the interpreter, the JVM and both WASM backends.
+symbols identically on the interpreter, the JVM and both WASM backends.
 
 ```lisp
 (read-from-string "foo") ; => FOO
 (symbol-name (read-from-string "foo")) ; => "FOO"
-(eq (read-from-string "list") 'list) ; => t
+(eq (read-from-string "list") 'list) ; => T
 (eval (read-from-string "(reverse (list 1 2 3))")) ; => (3 2 1)
 ```
 
 ## Deviations from Common Lisp
 
-- rontolisp's canonical spelling of the standard symbols is lowercase, so
-  `(symbol-name 'car)` is `"car"` (CL says `"CAR"`); a user symbol like
-  `'foo` reports `"FOO"` as in CL, and printing follows the same rule
-  (`(print 'car)` shows `car`, `(print 'foo)` shows `FOO`).
-- `|car|` (pipe-escaped lowercase) is the standard `car`, not a distinct
-  lowercase symbol -- the fold applies to the finished name.
-- `(:import-from #:cl #:car)`-style clauses that spell a `cl` member as an
-  uninterned designator resolve only when the member's lowercase spelling is
-  used.
+- `intern`, `make-symbol` and `find-symbol` take the name verbatim (there is
+  no separate intern table; a symbol *is* its name). `(find-symbol "car")` is
+  `NIL` because the standard symbol is named `"CAR"`, and `(make-symbol "X")`
+  twice yields `eq` symbols. Reading is unaffected -- `car` in source still
+  upcases to `CAR`.
+- A keyword or `#:` designator that spells a member in mixed case names that
+  exact (mixed-case) symbol; write built-in members upper case (`#:CL`) or let
+  the reader upcase a bare name.

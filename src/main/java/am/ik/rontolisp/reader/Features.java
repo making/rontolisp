@@ -29,37 +29,13 @@ public final class Features {
 	/** The features active when compiling to WASM (Preview 1, component and no-gc). */
 	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm"), true);
 
-	/**
-	 * The case-preserving feature set for rontolisp's own lowercase-authored Lisp sources
-	 * (the spliced libraries, the prelude, the shims) and for {@code .asd} system
-	 * definitions, which are parsed as data against lowercase spellings. User source is
-	 * never read with this: the public reader upcases like Common Lisp (see
-	 * {@link #preserveCase()}).
-	 */
-	public static final Features INTERNAL = INTERPRETER.preservingCase();
-
 	private final List<String> names;
 
 	private final boolean substituteFeaturesVar;
 
-	/**
-	 * Whether {@link LispLexer#readSymbol} keeps symbol case verbatim instead of applying
-	 * the Common Lisp {@code :upcase} readtable case plus the canonical fold
-	 * ({@code am.ik.rontolisp.UpcaseSymbols}). {@code false} -- upcasing -- is the
-	 * premise for every user-facing read; {@code true} exists only for rontolisp's own
-	 * lowercase-authored library sources and for {@code .asd} data (see {@link #INTERNAL}
-	 * and {@link #preservingCase()}).
-	 */
-	private final boolean preserveCase;
-
 	private Features(List<String> names, boolean substituteFeaturesVar) {
-		this(names, substituteFeaturesVar, false);
-	}
-
-	private Features(List<String> names, boolean substituteFeaturesVar, boolean preserveCase) {
 		this.names = names;
 		this.substituteFeaturesVar = substituteFeaturesVar;
-		this.preserveCase = preserveCase;
 	}
 
 	/**
@@ -82,25 +58,6 @@ public final class Features {
 	 */
 	public static Features of(String... names) {
 		return new Features(List.of(names), true);
-	}
-
-	/**
-	 * Returns a copy of this feature set that keeps symbol case verbatim (this instance
-	 * when it already does). Only rontolisp's own lowercase-authored sources and
-	 * {@code .asd} data are read this way; see {@link #INTERNAL}.
-	 * @return the case-preserving feature set
-	 */
-	public Features preservingCase() {
-		return this.preserveCase ? this : new Features(this.names, this.substituteFeaturesVar, true);
-	}
-
-	/**
-	 * Whether the lexer keeps symbol case verbatim instead of upcasing like Common Lisp;
-	 * see {@link #preserveCase}.
-	 * @return {@code true} when case is preserved
-	 */
-	public boolean preserveCase() {
-		return this.preserveCase;
 	}
 
 	/**

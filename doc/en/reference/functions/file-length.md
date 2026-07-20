@@ -6,5 +6,5 @@ Lite: always returns nil (stream lengths are not tracked); portable callers take
 
 ```lisp
 (with-input-from-string (s "abc")
-  (file-length s)) ; => nil
+  (file-length s)) ; => NIL
 ```

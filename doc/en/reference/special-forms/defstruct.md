@@ -16,7 +16,7 @@ An instance is represented as a tagged list, so `print` shows that representatio
 ```lisp
 (defstruct point x (y 10))
 (setq p (make-point :x 1))
-(list (point-x p) (point-y p) (point-p p) (point-p '(1 2))) ; => (1 10 t nil)
+(list (point-x p) (point-y p) (point-p p) (point-p '(1 2))) ; => (1 10 T NIL)
 ```
 
 ```lisp

@@ -5,5 +5,5 @@
 Lite stub: always returns `nil` (no distinction between compiled and interpreted function objects is recorded).
 
 ```lisp
-(compiled-function-p #'car) ; => nil
+(compiled-function-p #'car) ; => NIL
 ```

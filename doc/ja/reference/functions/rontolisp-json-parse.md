@@ -18,7 +18,7 @@ rontolisp 上でのみ動作します。
 
 ```lisp
 (gethash "name" (rontolisp:json-parse "{\"name\": \"rontolisp\", \"n\": 2}"))   ; => "rontolisp"
-(gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}")))   ; => #(1 t null)
+(gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}")))   ; => #(1 T NULL)
 ```
 
 ## 値の対応
@@ -49,7 +49,7 @@ rontolisp 上でのみ動作します。
 すべて同一にラウンドトリップします。
 
 ```lisp
-(floatp (rontolisp:json-parse "1234567890123"))   ; => t
+(floatp (rontolisp:json-parse "1234567890123"))   ; => T
 ```
 
 ## エラー

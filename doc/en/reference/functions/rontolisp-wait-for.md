@@ -9,7 +9,7 @@ the *awaiting* code only -- other async bodies keep running, which makes
 seconds).
 
 ```lisp
-(rontolisp:await (rontolisp:wait-for 100))   ; => nil
+(rontolisp:await (rontolisp:wait-for 100))   ; => NIL
 ```
 
 Timers run concurrently: two futures started together settle in delay order,

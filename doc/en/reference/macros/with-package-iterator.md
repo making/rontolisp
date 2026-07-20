@@ -7,5 +7,5 @@ Lite expansion: binds `name` to a LOCAL FUNCTION (an `flet`, not CL's `macrolet`
 ```lisp
 (with-package-iterator (next nil :external)
   (multiple-value-bind (morep sym) (next)
-    (list morep sym))) ; => (nil nil)
+    (list morep sym))) ; => (NIL NIL)
 ```

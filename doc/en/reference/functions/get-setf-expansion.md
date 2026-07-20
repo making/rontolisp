@@ -7,5 +7,5 @@ Returns the five setf-expansion values for `place`: a list of temporary variable
 ```lisp
 (multiple-value-bind (vars vals stores writer reader)
     (get-setf-expansion 'x)
-  (list vars vals (length stores) reader)) ; => (nil nil 1 X)
+  (list vars vals (length stores) reader)) ; => (NIL NIL 1 X)
 ```

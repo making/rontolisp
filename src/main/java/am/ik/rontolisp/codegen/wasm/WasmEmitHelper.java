@@ -196,7 +196,7 @@ final class WasmEmitHelper {
 	 * as {@code t} and is {@code eq} to a quoted {@code 't}, matching the interpreter.
 	 */
 	static void emitTrue(WasmLispCompiler.Ctx ctx) {
-		compileStringLiteral("t", ctx);
+		compileStringLiteral("T", ctx);
 	}
 
 	/**

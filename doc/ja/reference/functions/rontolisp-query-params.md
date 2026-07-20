@@ -14,7 +14,7 @@
 ```lisp
 (rontolisp:query-params "a=1&b=two&flag")   ; => (("a" . "1") ("b" . "two") ("flag" . ""))
 (rontolisp:query-params "q=%E3%81%82&q=2")   ; => (("q" . "あ") ("q" . "2"))
-(rontolisp:query-params nil)   ; => nil
+(rontolisp:query-params nil)   ; => NIL
 ```
 
 alist は読みやすく印字され、`assoc` でも扱えます:

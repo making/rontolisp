@@ -586,7 +586,7 @@ final class JavaBridgeTemplate {
 			return null;
 		}
 		if (o instanceof Boolean b) {
-			return b ? "t" : null;
+			return b ? "T" : null;
 		}
 		if (o instanceof Integer i) {
 			return (long) i;
@@ -658,7 +658,7 @@ final class JavaBridgeTemplate {
 	// A minimal prin1-ish description for error messages.
 	private static String describe(@Nullable Object v) {
 		if (v == null) {
-			return "nil";
+			return "NIL";
 		}
 		if (v instanceof String || v instanceof Long || v instanceof Double || v instanceof Character) {
 			return String.valueOf(v);

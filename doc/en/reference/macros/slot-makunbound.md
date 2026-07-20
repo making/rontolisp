@@ -10,5 +10,5 @@ On the JVM and WASM compilers the slot name must be a literal quoted symbol, lik
 (defclass point () ((x :initarg :x)))
 (let ((p (make-instance 'point :x 1)))
   (slot-makunbound p 'x)
-  (slot-value p 'x)) ; => nil
+  (slot-value p 'x)) ; => NIL
 ```

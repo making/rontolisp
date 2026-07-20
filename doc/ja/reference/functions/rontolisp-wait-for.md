@@ -8,7 +8,7 @@
 `cl:sleep` に対する、非同期版の対応物です。
 
 ```lisp
-(rontolisp:await (rontolisp:wait-for 100))   ; => nil
+(rontolisp:await (rontolisp:wait-for 100))   ; => NIL
 ```
 
 タイマーは並行に走ります: 同時に開始した 2 つの future は開始順ではなく

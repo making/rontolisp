@@ -27,7 +27,7 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 複数の `for` 節は一緒にステップし、最も短いドライバが尽きた時点でループは終了します。これがインデックス付き map の定石です。逐次的な節は順にステップします (後の節の初期化式・ステップ式は直前の節が生成した値を参照でき、最初に尽きたドライバでステップは停止するため、`for x in xs for a = (f x) then (g a x)` は CL と同様に動作します)。
 
 ```lisp
-(loop for x in '(a b c) for i from 0 collect (list i x)) ; => ((0 a) (1 b) (2 c))
+(loop for x in '(a b c) for i from 0 collect (list i x)) ; => ((0 A) (1 B) (2 C))
 ```
 
 `and` は `for` 節をひとつのグループに連結し、初期化とステップを前回の反復の値に対して計算します (`do*` に対する `do` の並行ステップに相当)。
@@ -78,7 +78,7 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 ドットパターンはリストの残りを束縛するため、連想リストをそのまま走査できます。
 
 ```lisp
-(loop for (k . v) in '((a . 1) (b . 2)) collect (list k v)) ; => ((a 1) (b 2))
+(loop for (k . v) in '((a . 1) (b . 2)) collect (list k v)) ; => ((A 1) (B 2))
 ```
 
 `for ... across` は文字列を 1 文字ずつ、またはベクタを 1 要素ずつ走査します。
@@ -96,7 +96,7 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 ```lisp
 (let ((h (make-hash-table)))
   (setf (gethash 'a h) 1)
-  (loop for k being the hash-keys of h using (hash-value v) collect (list k v))) ; => ((a 1))
+  (loop for k being the hash-keys of h using (hash-value v) collect (list k v))) ; => ((A 1))
 ```
 
 この節はテーブルのスナップショットを取ってそれを走査するため、反復順序はテーブルのものになり、本体でテーブルを変更しても進行中の走査には影響しません。
@@ -104,7 +104,7 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 `being` のパッケージ形式 — `for VAR being {the|each} {symbols|present-symbols|external-symbols} {of|in} PACKAGE` — は受け付けますが **簡易版** です: rontolisp には実行時のインターンテーブルがないため、この節は解析され *空* のシーケンスを反復します。本体は実行されず、集約結果は `nil` になります。ロード時にパッケージを走査するライブラリ (cl-who の hyperdoc テーブルなど) がエラーなくロードできるようにするためのものです:
 
 ```lisp
-(loop for s being the external-symbols of :cl collect s) ; => nil
+(loop for s being the external-symbols of :cl collect s) ; => NIL
 ```
 
 制限事項: `named`/`return-from` は未対応です。分配束縛パターンはラムダリストキーワードを認識しません (`&optional` などはエラーにはならず、通常の変数として束縛されます)。`(loop-finish)` は文の位置 (式の途中は不可) に置く必要があり、ネストした反復形式の内側では使えません。`thereis`/`always`/`never` はデフォルト結果への集約とは併用できません (`into` を使ってください)。`into` を伴わない集約節はすべて同種でなければならず、収集系の節は結果リストをソース順に構築します。

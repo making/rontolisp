@@ -6,5 +6,5 @@ Always the symbol `character`: every rontolisp stream is a character stream (the
 
 ```lisp
 (with-input-from-string (s "x")
-  (stream-element-type s)) ; => character
+  (stream-element-type s)) ; => CHARACTER
 ```

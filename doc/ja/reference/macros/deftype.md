@@ -6,9 +6,9 @@
 
 ```lisp
 (deftype my-even () '(satisfies evenp))
-(list (typep 4 'my-even) (typep 3 'my-even)) ; => (t nil)
+(list (typep 4 'my-even) (typep 3 'my-even)) ; => (T NIL)
 ```
 
 ```lisp
-(deftype array-index (&optional (length 1000)) `(integer 0 (,length))) ; => nil
+(deftype array-index (&optional (length 1000)) `(integer 0 (,length))) ; => NIL
 ```

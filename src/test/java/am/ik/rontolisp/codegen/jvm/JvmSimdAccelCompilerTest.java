@@ -441,7 +441,7 @@ class JvmSimdAccelCompilerTest {
 				""";
 		assertThat(accel(inPlace)).isEqualTo(scalar(fresh));
 		assertThat(accel("(let ((o (vec:zeros 2))) (print (eq o (vec:add-into o #d(1.0 2.0) #d(3.0 4.0)))))"))
-			.isEqualTo("t");
+			.isEqualTo("T");
 	}
 
 	@Test
@@ -542,7 +542,7 @@ class JvmSimdAccelCompilerTest {
 	@Test
 	void unaryIntoKernelsWriteIntoTheDestinationAndReturnIt() throws Exception {
 		assertThat(accel("(let ((o (vec:zeros 3))) (print (eq o (vec:sqrt-into o #d(4.0 9.0 16.0)))) (print o))"))
-			.isEqualTo("t\n#d(2.0 3.0 4.0)");
+			.isEqualTo("T\n#d(2.0 3.0 4.0)");
 		// In-place update: out MAY alias the operand (the add-into rule).
 		assertMatchesScalarReference("""
 				(let ((v (vec:add (vec:arange 200) (vec:ones 200))))
@@ -632,7 +632,7 @@ class JvmSimdAccelCompilerTest {
 		// -into returns the very destination and tolerates aliasing (the add-into
 		// rule); the guard comment lives in the bridge because it replaces the defun.
 		assertThat(accel("(let ((o (vec:zeros 2))) (print (eq o (vec:maximum-into o #d(1.0 2.0) #d(2.0 1.0)))))"))
-			.isEqualTo("t");
+			.isEqualTo("T");
 		assertThat(accel("(let ((v #d(-9.0 9.0))) (vec:clip-into v v -1.0 1.0) (print v))")).isEqualTo("#d(-1.0 1.0)");
 	}
 

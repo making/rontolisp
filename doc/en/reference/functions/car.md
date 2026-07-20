@@ -9,5 +9,5 @@ Returns the car (first element) of a cons cell. As a special case `(car nil)` is
 ```
 
 ```lisp
-(car nil) ; => nil
+(car nil) ; => NIL
 ```

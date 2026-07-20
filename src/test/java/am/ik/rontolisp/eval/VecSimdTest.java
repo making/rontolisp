@@ -55,7 +55,7 @@ class VecSimdTest {
 		// A vec.lisp defun is a LispLambda ("#<lambda>"); the installed kernel is a
 		// native LispFunction. Without this the flag could be silently dead and every
 		// numeric assertion below would still pass on the scalar reference.
-		assertThat(eval("(vec:dot #d(1.0) #d(1.0)) #'vec:dot", true).print()).isEqualTo("#<function vec:dot>");
+		assertThat(eval("(vec:dot #d(1.0) #d(1.0)) #'vec:dot", true).print()).isEqualTo("#<function VEC:DOT>");
 		assertThat(eval("(vec:dot #d(1.0) #d(1.0)) #'vec:dot", false).print()).isEqualTo("#<lambda>");
 	}
 
@@ -204,8 +204,8 @@ class VecSimdTest {
 
 	@Test
 	void simdReplacesTheIntoDefunsWithNativeFunctionsToo() {
-		assertThat(eval("(vec:zeros 1) #'vec:add-into", true).print()).isEqualTo("#<function vec:add-into>");
-		assertThat(eval("(vec:zeros 1) #'vec:matvec-into", true).print()).isEqualTo("#<function vec:matvec-into>");
+		assertThat(eval("(vec:zeros 1) #'vec:add-into", true).print()).isEqualTo("#<function VEC:ADD-INTO>");
+		assertThat(eval("(vec:zeros 1) #'vec:matvec-into", true).print()).isEqualTo("#<function VEC:MATVEC-INTO>");
 		assertThat(eval("(vec:zeros 1) #'vec:add-into", false).print()).isEqualTo("#<lambda>");
 	}
 
@@ -243,9 +243,9 @@ class VecSimdTest {
 		// fresh wrapper around the same backing array, or in-place accumulation loops
 		// silently rebind to a different value each iteration.
 		assertThat(eval("(let ((o (vec:zeros 2))) (eq o (vec:add-into o #d(1.0 2.0) #d(3.0 4.0))))", true).print())
-			.isEqualTo("t");
+			.isEqualTo("T");
 		assertThat(eval("(let ((o (vec:zeros 2))) (eq o (vec:scale-into o #d(1.0 2.0) 2.0)))", true).print())
-			.isEqualTo("t");
+			.isEqualTo("T");
 	}
 
 	@Test
@@ -324,7 +324,8 @@ class VecSimdTest {
 				"sin-into", "cos-into", "tan-into", "asin-into", "acos-into", "atan-into", "sinh-into", "cosh-into",
 				"sqrt-into", "abs-into", "negative-into", "sign-into", "reciprocal-into" }) {
 			String form = "(vec:zeros 1) #'vec:" + member;
-			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function vec:" + member + ">");
+			assertThat(eval(form, true).print()).as(member)
+				.isEqualTo("#<function VEC:" + member.toUpperCase(java.util.Locale.ROOT) + ">");
 			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
 		}
 	}
@@ -427,7 +428,7 @@ class VecSimdTest {
 			}
 			assertThat(eval("(let ((o (vec:zeros 2))) (eq o (vec:" + op + "-into o #d(1.0 2.0))))", true).print())
 				.as(op)
-				.isEqualTo("t");
+				.isEqualTo("T");
 		}
 		assertMatchesScalarOracle(
 				"(vec:sqrt-into (vec:zeros 200 'single-float) (vec:add (vec:arange 200 'single-float) (vec:ones 200 'single-float)))");
@@ -462,7 +463,8 @@ class VecSimdTest {
 		for (String member : new String[] { "maximum", "minimum", "relu", "clip", "maximum-into", "minimum-into",
 				"relu-into", "clip-into" }) {
 			String form = "(vec:zeros 1) #'vec:" + member;
-			assertThat(eval(form, true).print()).as(member).isEqualTo("#<function vec:" + member + ">");
+			assertThat(eval(form, true).print()).as(member)
+				.isEqualTo("#<function VEC:" + member.toUpperCase(java.util.Locale.ROOT) + ">");
 			assertThat(eval(form, false).print()).as(member).isEqualTo("#<lambda>");
 		}
 	}
@@ -542,7 +544,7 @@ class VecSimdTest {
 		}
 		// -into returns the very destination and tolerates aliasing (the add-into rule).
 		assertThat(eval("(let ((o (vec:zeros 2))) (eq o (vec:maximum-into o #d(1.0 2.0) #d(2.0 1.0))))", true).print())
-			.isEqualTo("t");
+			.isEqualTo("T");
 		assertThat(eval("(let ((v (vec:from-list '(-1.0 2.0)))) (vec:relu-into v v) v)", true).print())
 			.isEqualTo(eval("(vec:relu (vec:from-list '(-1.0 2.0)))", false).print());
 		assertThat(eval("(let ((v (vec:from-list '(-9.0 9.0)))) (vec:clip-into v v -1.0 1.0) v)", true).print())
