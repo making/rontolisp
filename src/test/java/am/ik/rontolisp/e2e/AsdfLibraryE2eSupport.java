@@ -17,11 +17,10 @@ import am.ik.rontolisp.eval.UserMacroExpander;
 import am.ik.rontolisp.eval.UsocketLibrary;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.WasmtimeSupport;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.Container.ExecResult;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.images.builder.ImageFromDockerfile;
 import org.testcontainers.images.builder.Transferable;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -74,27 +73,12 @@ abstract class AsdfLibraryE2eSupport {
 	/** A path-free name for the compiled JVM class / WASM temp files. */
 	protected abstract String artifactName();
 
-	private static final boolean DOCKER_AVAILABLE = DockerClientFactory.instance().isDockerAvailable();
-
-	// A single wasmtime container shared across every library subclass. It is started
-	// eagerly (not via @Testcontainers) so the JVM-only backends do not pay for it and so
-	// the four subclasses reuse one container; Ryuk reaps it at JVM shutdown. The install
-	// mirrors WasmLispCompilerIntegrationTest so the built image is cached and reused.
-	private static final GenericContainer<?> WASMTIME = new GenericContainer<>(
-			new ImageFromDockerfile().withDockerfileFromBuilder(builder -> builder.from("debian:bookworm-slim")
-				.run("apt-get update && apt-get install -y --no-install-recommends curl ca-certificates xz-utils"
-						+ " && curl https://wasmtime.dev/install.sh -sSf -o /tmp/install-wasmtime.sh"
-						+ " && bash /tmp/install-wasmtime.sh && rm /tmp/install-wasmtime.sh"
-						+ " && ln -s /root/.wasmtime/bin/wasmtime /usr/local/bin/wasmtime" + " && wasmtime --version"
-						+ " && rm -rf /var/lib/apt/lists/*")
-				.build()))
-		.withCommand("sleep", "infinity");
-
-	static {
-		if (DOCKER_AVAILABLE) {
-			WASMTIME.start();
-		}
-	}
+	// A single wasmtime container from the prebuilt GHCR image (see WasmtimeSupport),
+	// shared across every library subclass AND with WasmLispCompilerIntegrationTest;
+	// started lazily on first use and reaped by Ryuk at JVM shutdown. The JVM-only
+	// backends do not pay for it: the WASM tests below guard on DOCKER_AVAILABLE, and
+	// WasmtimeSupport.container() contacts Docker only when actually called.
+	private static final boolean DOCKER_AVAILABLE = WasmtimeSupport.DOCKER_AVAILABLE;
 
 	@Test
 	void loadsAndRunsOnTheInterpreter() {
@@ -165,10 +149,11 @@ abstract class AsdfLibraryE2eSupport {
 	// Copies the module into the container and runs it under wasmtime, returning stdout.
 	private String runWasm(byte[] wasmBytes, boolean component) throws Exception {
 		String path = "/tmp/" + artifactName() + (component ? "-component.wasm" : "-p1.wasm");
-		WASMTIME.copyFileToContainer(Transferable.of(wasmBytes), path);
+		GenericContainer<?> wasmtime = WasmtimeSupport.container();
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path);
 		ExecResult result = component
-				? WASMTIME.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path)
-				: WASMTIME.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", path);
+				? wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path)
+				: wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", path);
 		assertThat(result.getExitCode()).as("exit code (component=%s): stderr: %s", component, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();

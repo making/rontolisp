@@ -195,7 +195,12 @@ does not need rebuilding unless Java sources changed).
 - Use modern Java features (Records, Pattern Matching, Sealed Types, Text Blocks, etc.)
 - Avoid circular references between classes and packages
 - `src/test/resources/ci-spec.yaml` is the single source of truth for the cross-backend E2E test (`CiSpecE2eTest`). Cases share global state and run IN ORDER: the driver concatenates them into one program, runs the native binary once per backend, and slices the output back per case. It only runs when `-Drontolisp.binary=<path>` is set.
-- WASM integration tests skipped if Docker unavailable
+- WASM integration tests skipped if Docker unavailable. They run `wasmtime` from a
+  prebuilt image (`WasmtimeSupport.IMAGE`, a pinned wasmtime on Debian, tracked as
+  `:latest` and always re-pulled) that `.github/workflows/wasmtime-image.yaml` builds from
+  `.github/docker/wasmtime/Dockerfile` and pushes to GHCR. Bump the wasmtime version in the
+  Dockerfile ARG and the workflow `WASMTIME_VERSION` together, then re-run the workflow --
+  no test change needed. Keep it >= 46 for the `--component` tests.
 
 ### After Task Completion
 

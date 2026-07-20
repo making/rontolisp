@@ -4,12 +4,12 @@ import java.util.List;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.WasmtimeSupport;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.Container.ExecResult;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.images.builder.ImageFromDockerfile;
 import org.testcontainers.images.builder.Transferable;
-import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -23,23 +23,17 @@ import static org.assertj.core.api.Assertions.within;
 @Testcontainers(disabledWithoutDocker = true)
 class WasmLispCompilerIntegrationTest {
 
-	// The install script is downloaded to a file first (a failed `curl | bash` exits 0
-	// because bash just sees EOF) and the installed binary is verified, so a transient
-	// download failure fails the image build instead of producing an image without
-	// wasmtime (every test then fails with exit code 127).
-	@Container
-	static GenericContainer<?> wasmtime = new GenericContainer<>(
-			new ImageFromDockerfile().withDockerfileFromBuilder(builder -> builder.from("debian:bookworm-slim")
-				.run("apt-get update && apt-get install -y --no-install-recommends curl ca-certificates xz-utils"
-						+ " && curl https://wasmtime.dev/install.sh -sSf -o /tmp/install-wasmtime.sh"
-						+ " && bash /tmp/install-wasmtime.sh && rm /tmp/install-wasmtime.sh"
-						+ " && ln -s /root/.wasmtime/bin/wasmtime /usr/local/bin/wasmtime" + " && wasmtime --version"
-						// curl stays installed: the http-handler serve test curls the
-						// wasi:http/incoming-handler component running under `wasmtime
-						// serve`.
-						+ " && rm -rf /var/lib/apt/lists/*")
-				.build()))
-		.withCommand("sleep", "infinity");
+	// The wasmtime container comes from a prebuilt GHCR image (see WasmtimeSupport); it
+	// is shared across every WASM test class and started once per JVM. The class-level
+	// @Testcontainers(disabledWithoutDocker = true) disables all of these Docker-only
+	// tests when no daemon is reachable, so the container is only obtained (and Docker
+	// only contacted) from @BeforeAll, which never runs for a disabled class.
+	static GenericContainer<?> wasmtime;
+
+	@BeforeAll
+	static void startWasmtime() {
+		wasmtime = WasmtimeSupport.container();
+	}
 
 	private static String compileAndRun(String lispCode) throws Exception {
 		return compileAndRunProgram(LispReader.readAllFromString(lispCode));
