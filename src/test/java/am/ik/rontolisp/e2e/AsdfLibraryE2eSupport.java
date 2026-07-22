@@ -63,6 +63,24 @@ abstract class AsdfLibraryE2eSupport {
 	protected abstract String systemDir();
 
 	/**
+	 * Additional directories searched for a dependency's {@code .asd}, in order after
+	 * {@link #systemDir()}. Override for a library whose {@code :depends-on} lists
+	 * another vendored ASDF-loadable library (uax-15 depends on split-sequence and
+	 * cl-ppcre); an empty list -- the default -- means the library's own directory is
+	 * self-contained.
+	 */
+	protected List<String> extraSystemPath() {
+		return List.of();
+	}
+
+	private List<String> systemPath() {
+		List<String> path = new java.util.ArrayList<>();
+		path.add(systemDir());
+		path.addAll(extraSystemPath());
+		return path;
+	}
+
+	/**
 	 * The exercise program: an {@code asdf:load-system} plus prints of the public API.
 	 */
 	protected abstract String exercise();
@@ -84,7 +102,7 @@ abstract class AsdfLibraryE2eSupport {
 	void loadsAndRunsOnTheInterpreter() {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-		evaluator.setSystemPath(List.of(systemDir()));
+		evaluator.setSystemPath(systemPath());
 		for (LispVal expr : LispReader.readAllFromString(exercise())) {
 			evaluator.eval(expr);
 		}
@@ -119,7 +137,7 @@ abstract class AsdfLibraryE2eSupport {
 	private List<LispVal> compileProgram(Features features) {
 		return UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispPreludeLibrary
 			.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(exercise(), features),
-					SourceLoader.fileSystem(), null, List.of(systemDir()), features)))));
+					SourceLoader.fileSystem(), null, systemPath(), features)))));
 	}
 
 	// Defines the compiled class from its bytes and runs main, capturing UTF-8 stdout.

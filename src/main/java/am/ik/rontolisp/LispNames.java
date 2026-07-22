@@ -3362,6 +3362,38 @@ public final class LispNames {
 	public static final String ASDF_LOAD_SYSTEM = ASDF_PKG + ":" + LOAD_SYSTEM;
 
 	/**
+	 * {@code asdf:find-system} -- looks up a system by name; returns the system name (as
+	 * a string) when found, or {@code nil} when the optional {@code error-p} arg is nil
+	 * and the system is not registered. The uax-15 pattern:
+	 * {@code (asdf:system-source-directory (asdf:find-system 'uax-15 nil))}.
+	 */
+	public static final String FIND_SYSTEM = "FIND-SYSTEM";
+
+	/**
+	 * {@code asdf:system-source-directory} -- returns the system's source directory (with
+	 * a trailing {@code /}) as a string, for building runtime paths to bundled data files
+	 * that live next to the {@code .asd}.
+	 */
+	public static final String SYSTEM_SOURCE_DIRECTORY = "SYSTEM-SOURCE-DIRECTORY";
+
+	/** The canonical qualified spelling of {@code asdf:find-system}. */
+	public static final String ASDF_FIND_SYSTEM = ASDF_PKG + ":" + FIND_SYSTEM;
+
+	/** The canonical qualified spelling of {@code asdf:system-source-directory}. */
+	public static final String ASDF_SYSTEM_SOURCE_DIRECTORY = ASDF_PKG + ":" + SYSTEM_SOURCE_DIRECTORY;
+
+	/** The canonical qualified spelling of {@code uiop:merge-pathnames*}. */
+	public static final String UIOP_MERGE_PATHNAMES_STAR = "UIOP:MERGE-PATHNAMES*";
+
+	/**
+	 * {@code make-pathname} (CL) -- builds a pathname value. Rontolisp uses strings for
+	 * paths, so this returns a namestring composed of {@code :directory} (a list starting
+	 * with {@code :relative} or {@code :absolute}) plus optional {@code :name} and
+	 * {@code :type} components.
+	 */
+	public static final String MAKE_PATHNAME = "MAKE-PATHNAME";
+
+	/**
 	 * The {@code ql} package name (a limited, API-compatible subset of Quicklisp). Its
 	 * canonical spelling is {@code ql}; {@code quicklisp} is a nickname. Downloads a
 	 * system (and its dependencies) from the real Quicklisp distribution into a local
@@ -3597,6 +3629,14 @@ public final class LispNames {
 	 * {@code com.inuoe.jzon} to {@code jzon}.
 	 */
 	public static final String ADD_PACKAGE_LOCAL_NICKNAME = "ADD-PACKAGE-LOCAL-NICKNAME";
+
+	/**
+	 * {@code uiop:merge-pathnames*} -- the safer defaults-aware merge, portable across
+	 * ASDF-loaded libraries. Runtime function on all backends (interpreter + JVM at
+	 * present; the WASM sandbox has no filesystem access to the loaded system's data dir,
+	 * so the WASM tests using it are gated at the E2E layer).
+	 */
+	public static final String MERGE_PATHNAMES_STAR = "MERGE-PATHNAMES*";
 
 	/**
 	 * The {@code defpackage} {@code :local-nicknames} clause keyword -- lite: each

@@ -985,9 +985,44 @@ public final class LispMacroExpander {
 
 		private final List<LispVal> mainBody = new java.util.ArrayList<>();
 
+		// Forms emitted at the START of every iteration body (before any user do form
+		// or accumulator). Populated by `for X = init` (no `then`) clauses so the init
+		// is re-evaluated per iteration -- a zero-iteration loop never runs it (see
+		// ForPiece.bodyPrefix).
+		private final List<LispVal> bodyPrefix = new java.util.ArrayList<>();
+
 		private final List<LispVal> steps = new java.util.ArrayList<>();
 
+		// Termination tests other than per-piece driver ends and user
+		// while/until (which live in iterationHeads / userEndTests): always /
+		// never / thereis contribute here.
 		private final List<LispVal> endTests = new java.util.ArrayList<>();
+
+		// Per-clause iteration heads (source order): for each `for` group we emit
+		// one composite form that (a) checks the group's driver terminations, and
+		// (b) runs the group's `for X = init` setqs. The while cond is
+		// (and iterHead-1 iterHead-2 ... userEndTests) so a driver terminating in
+		// clause K skips the assigns of clauses K+1..N -- matching CL's per-clause
+		// evaluation order (uax-15's compose-hangul relies on driver K firing
+		// before the following `for ch = (aref ...)` init runs; parse-number's
+		// parse-integers relies on the preceding `for left = ... then (1+ right)`
+		// updating left BEFORE the subsequent `for point in splits` driver
+		// terminates, so its `finally` sees the fresh left).
+		private final List<LispVal> iterationHeads = new java.util.ArrayList<>();
+
+		// User-supplied `while`/`until` end-tests that appear BEFORE any mainBody
+		// form. Emitted AFTER every iterationHead so an all-clauses-passed loop
+		// still respects the outer termination (CL semantics for
+		// `for c = (form) while c`).
+		private final List<LispVal> userEndTests = new java.util.ArrayList<>();
+
+		// A shared iteration flag: {@code t} on the first pass through the body,
+		// {@code nil} thereafter. Materialized on demand by
+		// {@link #iterationCounterVar()}; the outer let* binds it to {@code t} and
+		// the last step form flips it to nil. Used by {@code for X = init then step}
+		// bodyPrefix expansions to pick init the first time through and step-form
+		// afterwards.
+		@Nullable private LispSymbol firstIterVar;
 
 		// The (loop named foo ...) block name: the whole expansion is additionally
 		// wrapped in (block foo ...), a named return-from target on every backend.
@@ -1049,14 +1084,46 @@ public final class LispMacroExpander {
 			parse();
 			LispVal epilogue = epilogueExit();
 			substituteEpilogueExits(initially, epilogue);
+			substituteEpilogueExits(iterationHeads, epilogue);
 			substituteEpilogueExits(mainBody, epilogue);
 			substituteEpilogueExits(steps, epilogue);
-			LispVal whileCond = endTests.isEmpty() ? LispTrue.INSTANCE : makeNot(orOf(endTests));
+			// Per-iteration control order: process for-groups in source order, each
+			// group checking its drivers then running its `for X = init` setqs; a
+			// terminating driver short-circuits the following groups' setqs. After
+			// every group runs its setqs, user `while`/`until` clauses evaluate and
+			// finally any leftover `endTests` (from always/never/thereis) fire.
+			List<LispVal> conjuncts = new java.util.ArrayList<>();
+			conjuncts.addAll(iterationHeads);
+			if (!userEndTests.isEmpty()) {
+				conjuncts.add(makeNot(orOf(userEndTests)));
+			}
+			if (!endTests.isEmpty()) {
+				conjuncts.add(makeNot(orOf(endTests)));
+			}
+			LispVal whileCond;
+			if (conjuncts.isEmpty()) {
+				whileCond = LispTrue.INSTANCE;
+			}
+			else if (conjuncts.size() == 1) {
+				whileCond = conjuncts.get(0);
+			}
+			else {
+				List<LispVal> andParts = new java.util.ArrayList<>(conjuncts.size() + 1);
+				andParts.add(new LispSymbol(LispNames.AND));
+				andParts.addAll(conjuncts);
+				whileCond = listToCons(andParts);
+			}
 			List<LispVal> whileParts = new java.util.ArrayList<>();
 			whileParts.add(new LispSymbol(LispNames.WHILE));
 			whileParts.add(whileCond);
 			whileParts.addAll(mainBody);
 			whileParts.addAll(steps);
+			// The shared first-iter flag flips to nil at the tail of the body, so all
+			// bodyPrefix reads on the first iteration see t (init picked) and all
+			// subsequent iterations see nil (then-form picked).
+			if (this.firstIterVar != null) {
+				whileParts.add(setq(this.firstIterVar, LispNil.INSTANCE));
+			}
 			if (whileParts.size() == 2) {
 				// while needs a (possibly nil) body form.
 				whileParts.add(LispNil.INSTANCE);
@@ -1069,7 +1136,13 @@ public final class LispMacroExpander {
 			letBody.add(resultExpr());
 			List<LispVal> letParts = new java.util.ArrayList<>();
 			letParts.add(new LispSymbol(LispNames.LET_STAR));
-			letParts.add(bindings.isEmpty() ? LispNil.INSTANCE : listToCons(bindings));
+			List<LispVal> effectiveBindings = new java.util.ArrayList<>(bindings);
+			// Prepend the first-iter flag binding (initial value t) so its var name is
+			// in scope for every bodyPrefix setq that reads it (see parseForEquals).
+			if (this.firstIterVar != null) {
+				effectiveBindings.add(0, pair(this.firstIterVar, LispTrue.INSTANCE));
+			}
+			letParts.add(effectiveBindings.isEmpty() ? LispNil.INSTANCE : listToCons(effectiveBindings));
 			letParts.addAll(letBody);
 			LispVal expansion = makeBlock(listToCons(letParts));
 			if (this.blockName != null) {
@@ -1124,6 +1197,14 @@ public final class LispMacroExpander {
 		}
 
 		/**
+		 * A {@code for X = init [then step]} clause's per-iteration re-assignment record.
+		 * {@code then} is null when the loop had no {@code then} form (the init is
+		 * re-evaluated on every iteration).
+		 */
+		private record ForEqualsRecord(LispSymbol var, LispVal init, @Nullable LispVal then) {
+		}
+
+		/**
 		 * One {@code for} clause's contributions, kept separate so {@code and}-joined
 		 * clauses can bind and step in parallel.
 		 */
@@ -1139,6 +1220,14 @@ public final class LispMacroExpander {
 			// and, in an `and` group, after the whole group's parallel steps, so the
 			// other clauses' step forms still see the previous element.
 			final List<LispVal> postSteps = new java.util.ArrayList<>();
+
+			// Per-iteration re-assignment records {var, init, then} for
+			// `for X = init [then step]` clauses. Applied at the START of each
+			// iteration in a sequential group (see flushForGroup), or promoted to
+			// eager outer-bind + parallel-step in a parallel `and` group. `then`
+			// may be null (no `then` clause), in which case init is re-evaluated
+			// every iteration.
+			final List<ForEqualsRecord> bodyPrefix = new java.util.ArrayList<>();
 
 			final List<LispVal> endTests = new java.util.ArrayList<>();
 
@@ -1203,6 +1292,9 @@ public final class LispMacroExpander {
 			boolean parallel = group.size() > 1;
 			List<ForBinding> deferred = new java.util.ArrayList<>();
 			List<LispVal[]> groupSteps = new java.util.ArrayList<>();
+			// Composite driverEndTests / bodyPrefix for THIS group only.
+			List<LispVal> groupDriverEndTests = new java.util.ArrayList<>();
+			List<ForEqualsRecord> groupBodyPrefix = new java.util.ArrayList<>();
 			for (ForPiece piece : group) {
 				for (ForBinding b : piece.binds) {
 					if (parallel && b.user()) {
@@ -1219,18 +1311,61 @@ public final class LispMacroExpander {
 						bindings.add(pair(b.var(), b.init()));
 					}
 				}
-				endTests.addAll(piece.endTests);
+				groupDriverEndTests.addAll(piece.endTests);
 				groupSteps.addAll(piece.steps);
+				groupBodyPrefix.addAll(piece.bodyPrefix);
 			}
+			// Flush deferred outer bindings (parallel nil-init and temp-driven
+			// entries) BEFORE the parallel bodyPrefix rewrite so replaceBinding
+			// finds the freshly added (var, nil) entries to overwrite. Sequential
+			// groups have no deferred entries; this is a no-op there.
 			for (ForBinding b : deferred) {
 				bindings.add(pair(b.var(), b.init()));
 			}
-			// As in CL, stepping stops at the first exhausted driver: guard this
-			// group's steps with the earlier drivers' termination tests (exiting
-			// through the epilogue, exactly like the loop head test would).
-			if (!steps.isEmpty() && !driverEndTests.isEmpty()) {
-				steps.add(makeIf(orOf(driverEndTests), EPILOGUE_MARKER, LispNil.INSTANCE));
+			deferred.clear();
+			// A PARALLEL `and` group must snapshot every stepping var against the
+			// previous iteration's values -- both cursor advances (`for x in xs`)
+			// and the `for X = init then step` re-assigns. Move the bodyPrefix
+			// records into groupSteps as (var, then-form) step-pairs + eagerly
+			// bind their vars to INIT in the outer let*, so on iter 1 the var is
+			// `init` (from outer bind) and on iter N > 1 the then-form runs at
+			// end of iter N-1 against previous values via makeStepForms's temps
+			// (Fibonacci shape). A record with no `then` (init re-evaluated each
+			// iter) uses init as its step form.
+			//
+			// SEQUENTIAL (a single `for` group) picks init or then via the
+			// per-loop first-iter flag inside bodyPrefix, so the per-clause
+			// order applies: a driver terminating in group K skips the
+			// subsequent groups' setqs (uax-15's compose-hangul), while an
+			// earlier group's setq still runs even if a later driver terminates
+			// the loop this iteration (parse-number).
+			if (parallel && !groupBodyPrefix.isEmpty()) {
+				List<LispVal[]> stripped = new java.util.ArrayList<>(groupBodyPrefix.size());
+				for (ForEqualsRecord rec : groupBodyPrefix) {
+					replaceBinding(rec.var(), rec.init());
+					stripped.add(new LispVal[] { rec.var(), rec.then() != null ? rec.then() : rec.init() });
+				}
+				groupBodyPrefix.clear();
+				groupSteps.addAll(stripped);
 			}
+			// Emit one iterationHead for this group: check its drivers, then run
+			// its (sequential) bodyPrefix. A later group's iterationHead runs
+			// only after this one signals continue, so a driver terminating
+			// here prevents the later group's bodyPrefix from evaluating.
+			List<LispVal> groupBodyPrefixForms = sequentialBodyPrefix(groupBodyPrefix);
+			LispVal iterHead;
+			if (groupDriverEndTests.isEmpty()) {
+				iterHead = groupBodyPrefixForms.isEmpty() ? LispTrue.INSTANCE : prognT(groupBodyPrefixForms);
+			}
+			else if (groupBodyPrefixForms.isEmpty()) {
+				iterHead = makeNot(orOf(groupDriverEndTests));
+			}
+			else {
+				// (if (not (or drivers...)) (progn bodyPrefix t) nil)
+				iterHead = listToCons(List.of(new LispSymbol(LispNames.IF), makeNot(orOf(groupDriverEndTests)),
+						prognT(groupBodyPrefixForms), LispNil.INSTANCE));
+			}
+			iterationHeads.add(iterHead);
 			if (parallel) {
 				// All steps compute against the previous iteration's values; the
 				// cursor-var syncs run once every cursor has stepped.
@@ -1506,18 +1641,35 @@ public final class LispMacroExpander {
 				pos++;
 				then = nextForm();
 			}
-			// With `then`, step to the then-form; without it, re-evaluate the init each
-			// iteration (the step runs at the end of the iteration, so the next pass sees
-			// it).
+			// The variable is bound to nil in the outer let*, then re-assigned at the
+			// TOP of every iteration body (bodyPrefix) -- so a zero-iteration loop never
+			// evaluates the init at all (uax-15's compose-hangul relies on this: its
+			// (aref str i) init form would run out of bounds when the outer let* is
+			// entered with i already past the sequence length). Without `then`, the
+			// bodyPrefix evaluates init on EVERY iteration. With `then`, the bodyPrefix
+			// picks init the first time through and then-form afterwards, using the
+			// shared iterationCounterVar() flag so a cross-clause reference (later
+			// `for` clauses see the just-assigned value) works correctly.
 			if (pattern instanceof LispSymbol var) {
-				piece.binds.add(new ForBinding(var, init, true));
-				piece.steps.add(new LispVal[] { var, then != null ? then : init });
+				piece.binds.add(new ForBinding(var, LispNil.INSTANCE, true));
+				piece.bodyPrefix.add(new ForEqualsRecord(var, init, then));
 			}
 			else {
 				LispSymbol whole = gensym("d");
-				piece.binds.add(new ForBinding(whole, init, false));
-				destructureInto(piece, pattern, whole);
-				piece.steps.add(new LispVal[] { whole, then != null ? then : init });
+				piece.binds.add(new ForBinding(whole, LispNil.INSTANCE, false));
+				piece.bodyPrefix.add(new ForEqualsRecord(whole, init, then));
+				// Destructure INSIDE bodyPrefix so a `(loop for (a b) = init then
+				// step collect a)` sees the just-assigned a on every iteration
+				// (destructureInto by itself only rebinds via outer let* + postSteps,
+				// which fires at the END of an iteration -- too late for the body's
+				// first pass to see a fresh a). The destructured sub-var records
+				// have no `then` (the whole var's then already drives them).
+				List<LispVal[]> destructureParts = new java.util.ArrayList<>();
+				destructurePairs(pattern, whole, destructureParts);
+				for (LispVal[] p : destructureParts) {
+					piece.binds.add(new ForBinding((LispSymbol) p[0], LispNil.INSTANCE, true));
+					piece.bodyPrefix.add(new ForEqualsRecord((LispSymbol) p[0], p[1], null));
+				}
 			}
 		}
 
@@ -1602,7 +1754,11 @@ public final class LispMacroExpander {
 		 */
 		private void addTerminationTest(LispVal test, boolean until) {
 			if (mainBody.isEmpty()) {
-				endTests.add(until ? test : makeNot(test));
+				// Route to userEndTests so the per-iteration bodyPrefix (from
+				// `for X = init` clauses) runs BEFORE this check -- CL semantics for
+				// `for c = (form) while c` requires c to be freshly assigned before
+				// the check.
+				userEndTests.add(until ? test : makeNot(test));
 			}
 			else if (until) {
 				mainBody.add(makeIf(test, EPILOGUE_MARKER, LispNil.INSTANCE));
@@ -1997,6 +2153,55 @@ public final class LispMacroExpander {
 			return new LispSymbol("__loop_" + tag + (gen++));
 		}
 
+		private LispSymbol iterationCounterVar() {
+			if (this.firstIterVar == null) {
+				this.firstIterVar = gensym("first");
+			}
+			return this.firstIterVar;
+		}
+
+		private LispVal prognT(List<LispVal> forms) {
+			List<LispVal> out = new java.util.ArrayList<>(forms.size() + 2);
+			out.add(new LispSymbol(LispNames.PROGN));
+			out.addAll(forms);
+			out.add(LispTrue.INSTANCE);
+			return listToCons(out);
+		}
+
+		// Sequential body-prefix: emit `(setq X init)` (or `(setq X (if __first
+		// init then))` when a `then` is present) in source order, so a later
+		// clause's init sees the earlier clause's just-assigned value.
+		private List<LispVal> sequentialBodyPrefix(List<ForEqualsRecord> records) {
+			List<LispVal> forms = new java.util.ArrayList<>(records.size());
+			for (ForEqualsRecord rec : records) {
+				LispVal effective;
+				if (rec.then() == null) {
+					effective = rec.init();
+				}
+				else {
+					LispSymbol counter = iterationCounterVar();
+					effective = listToCons(List.of(new LispSymbol(LispNames.IF), counter, rec.init(), rec.then()));
+				}
+				forms.add(setq(rec.var(), effective));
+			}
+			return forms;
+		}
+
+		// Replaces the outer let* binding value for {@code var} in-place. Called
+		// when a parallel-group re-classification of a `for X = init` promotes X
+		// from lazy-nil to eagerly-init: the same variable was already added to
+		// bindings with nil in flushForGroup's binds walk.
+		private void replaceBinding(LispSymbol var, LispVal init) {
+			for (int i = 0; i < bindings.size(); i++) {
+				if (bindings.get(i) instanceof LispCons pair && pair.car() instanceof LispSymbol name
+						&& name.name().equals(var.name())) {
+					bindings.set(i, pair(var, init));
+					return;
+				}
+			}
+			bindings.add(pair(var, init));
+		}
+
 		private static LispVal pair(LispSymbol var, LispVal val) {
 			return listToCons(List.of(var, val));
 		}
@@ -2083,6 +2288,8 @@ public final class LispMacroExpander {
 
 	private static final String SEQ_STR_VAR = "__seq_str";
 
+	private static final String SEQ_VEC_VAR = "__seq_vec";
+
 	private static final String SEQ_LIST_VAR = "__seq_lst";
 
 	private static final String SEQ_RES_VAR = "__seq_res";
@@ -2113,17 +2320,23 @@ public final class LispMacroExpander {
 	private static LispVal seqResultDispatchForm(LispVal seqExpr, java.util.function.UnaryOperator<LispVal> algo) {
 		LispSymbol in = new LispSymbol(SEQ_IN_VAR);
 		LispSymbol isStr = new LispSymbol(SEQ_STR_VAR);
+		LispSymbol isVec = new LispSymbol(SEQ_VEC_VAR);
 		LispSymbol lst = new LispSymbol(SEQ_LIST_VAR);
 		LispSymbol res = new LispSymbol(SEQ_RES_VAR);
 		// (let ((__seq_in seq))
 		// (let ((__seq_str (stringp __seq_in)))
-		// (let ((__seq_lst (if __seq_str (coerce __seq_in 'list) __seq_in)))
+		// (let ((__seq_vec (vectorp __seq_in)))
+		// (let ((__seq_lst (if (or __seq_str __seq_vec) (coerce __seq_in 'list)
+		// __seq_in)))
 		// (let ((__seq_res <algo __seq_lst>))
-		// (if __seq_str (coerce __seq_res 'string) __seq_res)))))
-		LispVal result = makeIf(isStr, coerceTo(res, "STRING"), res);
+		// (if __seq_str (coerce __seq_res 'string)
+		// (if __seq_vec (coerce __seq_res 'vector) __seq_res)))))))
+		LispVal result = makeIf(isStr, coerceTo(res, "STRING"), makeIf(isVec, coerceTo(res, "VECTOR"), res));
 		LispVal resLet = makeLet(SEQ_RES_VAR, algo.apply(lst), result);
-		LispVal lstLet = makeLet(SEQ_LIST_VAR, makeIf(isStr, coerceTo(in, "LIST"), in), resLet);
-		LispVal strLet = makeLet(SEQ_STR_VAR, callOf(LispNames.STRINGP, in), lstLet);
+		LispVal orStrVec = listToCons(List.of(new LispSymbol(LispNames.OR), isStr, isVec));
+		LispVal lstLet = makeLet(SEQ_LIST_VAR, makeIf(orStrVec, coerceTo(in, "LIST"), in), resLet);
+		LispVal vecLet = makeLet(SEQ_VEC_VAR, callOf(LispNames.VECTORP, in), lstLet);
+		LispVal strLet = makeLet(SEQ_STR_VAR, callOf(LispNames.STRINGP, in), vecLet);
 		return makeLet(SEQ_IN_VAR, seqExpr, strLet);
 	}
 
@@ -10321,6 +10534,18 @@ public final class LispMacroExpander {
 				default -> qn == null ? type : qn.member();
 			};
 		}
+		else {
+			// A compound type spec: (vector T), (simple-vector T), (array T ...),
+			// (vector T dim) collapse to VECTOR; (string N) and (simple-string) to
+			// STRING; a bare list of type name to LIST. This handles both the
+			// as-written compound specs and a user deftype whose expansion the reader
+			// has embedded in the source (uax-15's (coerce ... 'unicode-string) reaches
+			// here after macro expansion when the deftype has already been dropped).
+			String compound = quotedCompoundTypeHead(parts.get(2));
+			if (compound != null) {
+				type = compound;
+			}
+		}
 		if (type != null && isFloatTypeName(type)) {
 			// Every float type is the same double representation here.
 			return mvCall(LispNames.FLOAT, parts.get(1));
@@ -10373,6 +10598,19 @@ public final class LispMacroExpander {
 					listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))),
 					chars));
 			body = makeIf(callOf(LispNames.STRINGP, x), x, build);
+		}
+		else if (type != null) {
+			// A user deftype name we cannot resolve at expansion time (no deftype
+			// registry from here). Common shape in real libraries: the deftype expands
+			// to a (vector ...) subtype -- uax-15's unicode-string is `(vector
+			// unicode-point)` -- so default to the vector conversion.
+			LispSymbol l = new LispSymbol("__coerce_l");
+			LispVal asList = makeIf(callOf(LispNames.STRINGP, x), stringToList, x);
+			LispVal fill = listToCons(List.of(new LispSymbol(LispNames.LET),
+					listToCons(List.of(listToCons(List.of(l, asList)))), coerceListToVector(l)));
+			LispVal sequencep = listToCons(
+					List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, x), callOf(LispNames.STRINGP, x)));
+			body = makeIf(sequencep, fill, x);
 		}
 		else {
 			throw new UnsupportedOperationException(
@@ -10890,6 +11128,34 @@ public final class LispMacroExpander {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * When {@code form} is a quoted compound type spec whose head names a collection
+	 * kind, returns the canonical spelling of that head: {@code VECTOR} for
+	 * {@code (vector T)}/{@code (simple-vector T)}/{@code (array T)}, {@code STRING} for
+	 * {@code (string N)}, {@code LIST} for {@code (list T)}. Returns null otherwise.
+	 * @param form the quoted type spec form
+	 * @return the collection head, or null
+	 */
+	private static @Nullable String quotedCompoundTypeHead(LispVal form) {
+		if (!(form instanceof LispCons quoted)) {
+			return null;
+		}
+		List<LispVal> p = quoted.toList();
+		if (p.size() != 2 || !(p.get(0) instanceof LispSymbol q) || !LispNames.QUOTE.equals(q.name())) {
+			return null;
+		}
+		if (!(p.get(1) instanceof LispCons spec) || !(spec.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+		return switch (qn == null ? head.name() : qn.member()) {
+			case "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY" -> "VECTOR";
+			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> "STRING";
+			case "LIST", "CONS" -> "LIST";
+			default -> null;
+		};
 	}
 
 	/**
@@ -14091,6 +14357,12 @@ public final class LispMacroExpander {
 		for (LispVal entry : entries) {
 			if (entry instanceof LispSymbol) {
 				out.add(listToCons(List.of(entry, LispNil.INSTANCE)));
+				changed = true;
+			}
+			else if (entry instanceof LispCons pair && pair.isProperList() && pair.toList().size() == 1) {
+				// (x) is CL shorthand for (x nil): real-library idioms use it to reserve
+				// accumulators before the body fills them in.
+				out.add(listToCons(List.of(pair.car(), LispNil.INSTANCE)));
 				changed = true;
 			}
 			else {

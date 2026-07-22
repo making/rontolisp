@@ -77,14 +77,59 @@ chain, plus the transitive `cl-ppcre` (via uax-15; cl-postgres itself has one
   `make-load-form-saving-slots`) + `print-unreadable-object` /
   `with-package-iterator` macros. `cl-ppcre:split` now unblocks uax-15
   (its OWN extra gates listed below).
-- `uax-15` -- blocked on cl-ppcre (`cl-ppcre:split` at load time), then
-  needs: `asdf:find-system` + `asdf:system-source-directory` +
-  `uiop:merge-pathnames*` + `make-pathname` (load-time data-file path
-  resolution in precomputed-tables.lisp), and load-time
-  `with-open-file :external-format :UTF-8` reads of `unicode-15-data/*.txt`
-  (verify the keyword-value acceptance and per-line `read-line` perf over
-  ~34k-line UnicodeData.txt). Loop shapes look supported (destructuring
-  `for (a b c) in` works -- md5 exercised it).
+- `uax-15` -- **INTERPRETER DONE 2026-07-22** (`Uax15E2eTest`, vendored
+  `src/test/resources/uax-15`, MIT license, v0.1.3 loads uax-15 + its
+  transitive split-sequence/cl-ppcre deps and exercises `normalize`
+  :nfc/:nfd/:nfkc/:nfkd on codepoints A+U+030A, U+00C5, U+2460+U+00BD,
+  U+FB00, U+212B). Gates cleared:
+  * The four pathname / ASDF primitives are runtime functions in the
+    interpreter (`eval/PathnameOps` + wiring in `LispEvaluator` and
+    `Environment`): `asdf:find-system` returns the system name (or nil
+    with `error-p` nil) from the per-evaluator `asdfSystems` registry
+    which is already populated by `loadSystem`; `asdf:system-source-directory`
+    returns the system's baseDir (with trailing `/`);
+    `uiop:merge-pathnames*` does the CL merge over namestrings; and
+    `make-pathname` composes `:directory` (a list starting with `:relative`
+    or `:absolute`) + `:name` + `:type` into a namestring.
+  * `with-open-file :external-format :UTF-8` was already accepted (the
+    keyword-value drop for `:UTF-8`); `read-line`'s 3-arg form (stream +
+    eof-error-p + eof-value) grew from 1-arg only.
+  * The loop macro (`LispMacroExpander.LoopExpander`) was rewritten to
+    per-clause iteration heads: each `for` group's driver-terminations
+    check BEFORE the group's `for X = init` bodyPrefix runs, but subsequent
+    groups' checks/setqs run only if this group didn't terminate. This
+    matches CL's per-clause evaluation order: uax-15's compose-hangul
+    relies on `for i from 1 below len` firing BEFORE the following
+    `for ch = (aref str i)` init evaluates (a zero-iteration loop must not
+    (aref str 1)); parse-number's parse-integers relies on the preceding
+    `for left = start then (1+ right)` still updating left BEFORE the
+    subsequent `for point in splits` driver terminates, so its `finally`
+    sees the fresh left. The old step-guard (`if driverEndTests EPILOGUE
+    nil`) is now redundant and was removed. The `for X = init` binding is
+    lazy in the outer let* (`nil`) and re-assigned via bodyPrefix on each
+    iteration; `for X = init then step` uses a shared per-loop first-iter
+    flag so cross-clause references to X see the just-assigned value.
+  * `subseq` on a 1-D vector returns a fresh vector; `replace` mutates a
+    vector target in place; `remove`'s `seqResultDispatchForm` grew a
+    vector branch (coerce vector→list→scan→coerce list→vector), matching
+    the string branch (uax-15's compose does
+    `(coerce (remove nil to-cs) 'unicode-string)` on a simple-vector);
+    `coerce` accepts a compound `(vector T)` / `(simple-vector T)` / a
+    user-deftype target name, all defaulting to VECTOR (matches
+    unicode-string = `(vector unicode-point)`).
+  * Small fix: `LispMacroExpander.normalizeBindingList` now converts a
+    1-element `(x)` binding to `(x nil)` on top of the existing bare-x
+    case, so a top-level `(let (a b c) ...)` still binds a=b=c=nil.
+  * Compile paths (JVM + both WASM) STAY EXCLUDED (all three @Disabled with
+    a specific reason): the four pathname primitives are interpreter-only
+    (JVM would need a `Jvm*Compiler` case or a compile-time substitution
+    pass); the .txt data files need a filesystem the wasmtime sandbox
+    doesn't have. Follow-up work is a separate item.
+- `uax-15` compile-path follow-up: split out to **`.todo/159`**
+  (uax-15 on JVM + WASM). Self-contained, picks up cold: goal state,
+  current failure surface, two viable approaches (compile-time
+  substitution in `LoadInliner` vs per-backend runtime function support),
+  the WASM data-file bundling angle, verification chain, files to touch.
 - `ironclad` -- real loading judged INFEASIBLE under the current
   architecture: `ironclad.asd` is executable code (defclass on
   cl-source-file, a defmacro generating defsystems, uiop/format at parse

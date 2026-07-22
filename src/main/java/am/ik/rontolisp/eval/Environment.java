@@ -1828,6 +1828,13 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}
+		if (val instanceof LispArray arr && arr.dimensions().length == 1) {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = arr.effectiveLength() - 1; i >= 0; i--) {
+				result = new LispCons(arr.readFlat(i), result);
+			}
+			return result;
+		}
 		return val;
 	}
 
@@ -1839,20 +1846,30 @@ public final class Environment implements Scope {
 	 * @return the result in the original sequence's representation
 	 */
 	static LispVal seqResult(LispVal original, LispVal list) {
-		if (!(original instanceof LispString)) {
-			return list;
-		}
-		StringBuilder sb = new StringBuilder();
-		LispVal cur = list;
-		while (cur instanceof LispCons cell) {
-			if (!(cell.car() instanceof LispChar c)) {
-				throw new LispEvalException(
-						"cannot build a string from a non-character element: " + cell.car().print());
+		if (original instanceof LispString) {
+			StringBuilder sb = new StringBuilder();
+			LispVal cur = list;
+			while (cur instanceof LispCons cell) {
+				if (!(cell.car() instanceof LispChar c)) {
+					throw new LispEvalException(
+							"cannot build a string from a non-character element: " + cell.car().print());
+				}
+				sb.appendCodePoint(c.codePoint());
+				cur = cell.cdr();
 			}
-			sb.appendCodePoint(c.codePoint());
-			cur = cell.cdr();
+			return new LispString(sb.toString());
 		}
-		return new LispString(sb.toString());
+		if (original instanceof LispArray) {
+			List<LispVal> flat = new ArrayList<>();
+			LispVal cur = list;
+			while (cur instanceof LispCons cell) {
+				flat.add(cell.car());
+				cur = cell.cdr();
+			}
+			LispVal[] data = flat.toArray(new LispVal[0]);
+			return new LispArray(new int[] { data.length }, data);
+		}
+		return list;
 	}
 
 	private static void registerSequenceOps(Environment env) {
@@ -2398,7 +2415,24 @@ public final class Environment implements Scope {
 				}
 				return result;
 			}
-			throw new LispEvalException(LispNames.SUBSEQ + " expects a string or list, got: " + args.get(0).print());
+			if (args.get(0) instanceof LispArray arr && arr.dimensions().length == 1) {
+				// A general 1-D array: return a fresh vector of the same element type.
+				// uax-15's canonical-ordering does (setf (subseq vec beg end) ...) on a
+				// unicode-string, so subseq must round-trip through the vector shape.
+				int len = arr.effectiveLength();
+				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : len;
+				if (start < 0 || end > len || start > end) {
+					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
+							+ " for vector of length " + len);
+				}
+				LispVal[] copy = new LispVal[end - start];
+				for (int i = start; i < end; i++) {
+					copy[i - start] = arr.readFlat(i);
+				}
+				return new LispArray(new int[] { copy.length }, copy);
+			}
+			throw new LispEvalException(
+					LispNames.SUBSEQ + " expects a string, list, or vector, got: " + args.get(0).print());
 		}));
 		// copy-seq is (subseq seq 0): a fresh copy of a string or list. The call
 		// position expands to exactly that; this registration covers first-class use.
@@ -2453,6 +2487,56 @@ public final class Environment implements Scope {
 			return str.value();
 		}
 		throw new LispEvalException(name + " expects a string, got: " + val.print());
+	}
+
+	/**
+	 * Returns the length of a sequence (list, string, or general 1-D array). The general
+	 * {@code replace} needs it to bound the source or target when {@code :end1}/
+	 * {@code :end2} is omitted.
+	 */
+	private static int sequenceLength(String name, LispVal val) {
+		if (val instanceof LispString str) {
+			return str.value().length();
+		}
+		if (val instanceof LispArray arr && arr.dimensions().length == 1) {
+			return arr.effectiveLength();
+		}
+		if (val instanceof LispNil) {
+			return 0;
+		}
+		if (val instanceof LispCons) {
+			int n = 0;
+			LispVal cur = val;
+			while (cur instanceof LispCons cell) {
+				n++;
+				cur = cell.cdr();
+			}
+			return n;
+		}
+		throw new LispEvalException(name + ": expected a sequence, got: " + val.print());
+	}
+
+	/**
+	 * Reads the {@code index}-th element of a sequence (list, string, or general 1-D
+	 * array). Bounds are assumed to be checked already by the caller ({@code replace}).
+	 */
+	private static LispVal sequenceRef(LispVal val, int index) {
+		if (val instanceof LispString str) {
+			return new LispChar(str.value().charAt(index));
+		}
+		if (val instanceof LispArray arr) {
+			return arr.readFlat(index);
+		}
+		LispVal cur = val;
+		int i = 0;
+		while (cur instanceof LispCons cell) {
+			if (i == index) {
+				return cell.car();
+			}
+			cur = cell.cdr();
+			i++;
+		}
+		throw new LispEvalException("sequence-ref: index " + index + " out of range for " + val.print());
 	}
 
 	// Coerces a Common Lisp string designator (a string, a symbol, or a character) to a
@@ -2862,28 +2946,49 @@ public final class Environment implements Scope {
 			return str;
 		}));
 		env.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
+			// (read-line &optional stream eof-error-p eof-value): rontolisp lite
+			// defaults eof-error-p to NIL (returns eof-value / nil at EOF) rather than
+			// CL's t -- historical convention here that a lot of tests + call sites
+			// rely on. The 3-arg (in nil nil) form is the standard "swallow EOF" idiom
+			// real libraries use to loop over a file's lines, and it works out of the
+			// box because both branches converge on the nil-at-EOF behavior.
+			if (args.size() > 3) {
+				throw new LispEvalException(LispNames.READ_LINE + " expects 0 to 3 arguments");
+			}
 			try {
-				if (args.isEmpty()) {
+				String line;
+				if (args.isEmpty() || args.get(0) instanceof LispNil) {
 					// Drain buffered output so any prompt is visible before we block on
 					// stdin.
 					out.flush();
-					String line = stdinReader.readLine();
-					return line == null ? LispNil.INSTANCE : new LispString(line);
+					line = stdinReader.readLine();
 				}
-				requireArgCount(LispNames.READ_LINE, args, 1);
-				if (!(args.get(0) instanceof LispInteger handle)) {
+				else if (!(args.get(0) instanceof LispInteger handle)) {
 					throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
 				}
-				Closeable entry = streams.get(handle.value());
-				if (entry instanceof Socket socket) {
-					String socketLine = SocketSupport.readLine(socket);
-					return socketLine == null ? LispNil.INSTANCE : new LispString(socketLine);
+				else {
+					Closeable entry = streams.get(handle.value());
+					if (entry instanceof Socket socket) {
+						line = SocketSupport.readLine(socket);
+					}
+					else if (entry instanceof BufferedReader reader) {
+						line = reader.readLine();
+					}
+					else {
+						throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
+					}
 				}
-				if (!(entry instanceof BufferedReader reader)) {
-					throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
+				if (line != null) {
+					return new LispString(line);
 				}
-				String line = reader.readLine();
-				return line == null ? LispNil.INSTANCE : new LispString(line);
+				// EOF: honor eof-error-p ONLY when it is explicitly non-nil; the default
+				// is silent nil to match the callers that predate the 3-arg form.
+				boolean eofError = args.size() >= 2 && args.get(1) != LispNil.INSTANCE
+						&& !(args.get(1) instanceof LispSymbol sym && "NIL".equals(sym.name()));
+				if (eofError) {
+					throw new LispEvalException(LispNames.READ_LINE + ": end of file");
+				}
+				return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
 			}
 			catch (IOException ex) {
 				throw new UncheckedIOException(ex);
@@ -3471,6 +3576,8 @@ public final class Environment implements Scope {
 			// No pathname type exists: paths are plain strings.
 			return LispNil.INSTANCE;
 		}));
+		env.defineFunction(LispNames.MAKE_PATHNAME,
+				new LispFunction(LispNames.MAKE_PATHNAME, args -> new LispString(PathnameOps.makePathname(args))));
 		env.defineFunction(LispNames.CHAR_NAME, new LispFunction(LispNames.CHAR_NAME, args -> {
 			requireArgCount(LispNames.CHAR_NAME, args, 1);
 			int cp = requireChar(LispNames.CHAR_NAME, args.get(0)).codePoint();
@@ -3519,13 +3626,12 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.REPLACE, new LispFunction(LispNames.REPLACE, args -> {
 			requireMinArgCount(LispNames.REPLACE, args, 2);
-			// String-aware (cl-who's only use); lists are not required here.
-			String s1 = requireString(LispNames.REPLACE, args.get(0));
-			String s2 = requireString(LispNames.REPLACE, args.get(1));
+			LispVal target = args.get(0);
+			LispVal source = args.get(1);
+			int end1 = sequenceLength(LispNames.REPLACE, target);
+			int end2 = sequenceLength(LispNames.REPLACE, source);
 			int start1 = 0;
-			int end1 = s1.length();
 			int start2 = 0;
-			int end2 = s2.length();
 			// A nil bound keeps its default (nil :end = the sequence's length, as in CL).
 			for (int i = 2; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol key && !(args.get(i + 1) instanceof LispNil)) {
@@ -3539,16 +3645,37 @@ public final class Environment implements Scope {
 				}
 			}
 			int copied = Math.min(end1 - start1, end2 - start2);
-			// Common Lisp REPLACE is destructive: mutate the target string in place and
-			// return it, so a (make-string ...) buffer filled by successive REPLACE calls
-			// (cl-who's string-list-to-string) accumulates correctly.
-			if (args.get(0) instanceof LispString target) {
-				target.replaceInPlace(start1, s2, start2, copied);
+			// Common Lisp REPLACE is destructive: mutate the target sequence in place and
+			// return it, so buffers filled by successive REPLACE calls (cl-who's
+			// string-list-to-string, uax-15's canonical-ordering's
+			// (setf (subseq vec beg end) sorted)) accumulate correctly.
+			if (target instanceof LispString targetStr) {
+				String s2 = requireString(LispNames.REPLACE, source);
+				targetStr.replaceInPlace(start1, s2, start2, copied);
+				return targetStr;
+			}
+			if (target instanceof LispArray targetArr && targetArr.dimensions().length == 1) {
+				for (int k = 0; k < copied; k++) {
+					targetArr.writeFlat(start1 + k, sequenceRef(source, start2 + k));
+				}
+				return targetArr;
+			}
+			if (target instanceof LispCons || target instanceof LispNil) {
+				// A list target: walk to start1 and destructively rewrite copied cars.
+				int idx = 0;
+				LispVal cur = target;
+				while (cur instanceof LispCons cell && idx < start1) {
+					cur = cell.cdr();
+					idx++;
+				}
+				for (int k = 0; k < copied && cur instanceof LispCons cell; k++) {
+					cell.setCar(sequenceRef(source, start2 + k));
+					cur = cell.cdr();
+				}
 				return target;
 			}
-			String result = s1.substring(0, start1) + s2.substring(start2, start2 + copied)
-					+ s1.substring(start1 + copied);
-			return new LispString(result);
+			throw new LispEvalException(
+					LispNames.REPLACE + ": target must be a string, vector, or list, got: " + target.print());
 		}));
 	}
 

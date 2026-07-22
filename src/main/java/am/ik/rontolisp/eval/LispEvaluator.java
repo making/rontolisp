@@ -980,6 +980,70 @@ public final class LispEvaluator {
 			loadSystem(name);
 			return new LispSymbol(name);
 		}));
+		// asdf:find-system + asdf:system-source-directory: the runtime companions of
+		// asdf:defsystem/asdf:load-system. A library reads its bundled data files at
+		// load time via
+		// (asdf:system-source-directory (asdf:find-system 'lib nil)) -- the uax-15
+		// precomputed-tables.lisp seed case. Both consult the per-evaluator asdfSystems
+		// registry, which loadSystem populates before invoking a system's component
+		// files, so find-system is guaranteed to hit for the system currently loading.
+		String findSystemName = PackageRegistry.qualify(LispNames.ASDF_PKG, LispNames.FIND_SYSTEM);
+		this.globalEnv.defineFunction(findSystemName, new LispFunction(findSystemName, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(
+						LispNames.ASDF_FIND_SYSTEM + " expects (name [error-p]), got " + args.size() + " arguments");
+			}
+			String name = AsdfSystems.designator(LispNames.ASDF_FIND_SYSTEM, args.get(0));
+			boolean errorP = args.size() < 2 || !(args.get(1) instanceof LispNil);
+			AsdfSystems.LispSystem system = this.asdfSystems.get(name);
+			if (system == null) {
+				if (errorP) {
+					throw new LispEvalException(LispNames.ASDF_FIND_SYSTEM + ": system not registered: " + name);
+				}
+				return LispNil.INSTANCE;
+			}
+			// The "system object" is materialized as its downcase-canonical name (a
+			// string): system-source-directory accepts it back verbatim.
+			return new LispString(name);
+		}));
+		String systemSourceDirectoryName = PackageRegistry.qualify(LispNames.ASDF_PKG,
+				LispNames.SYSTEM_SOURCE_DIRECTORY);
+		this.globalEnv.defineFunction(systemSourceDirectoryName, new LispFunction(systemSourceDirectoryName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(
+						LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY + " expects 1 argument, got " + args.size());
+			}
+			String name;
+			if (args.get(0) instanceof LispString str) {
+				name = AsdfSystems.designator(LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY, str);
+			}
+			else {
+				name = AsdfSystems.designator(LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY, args.get(0));
+			}
+			AsdfSystems.LispSystem system = this.asdfSystems.get(name);
+			if (system == null) {
+				throw new LispEvalException(
+						LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY + ": system not registered: " + name);
+			}
+			String base = system.baseDir();
+			if (base == null || base.isEmpty()) {
+				return new LispString("./");
+			}
+			return new LispString(base.endsWith("/") ? base : base + "/");
+		}));
+		// uiop:merge-pathnames* -- the safer defaults-aware merge, portable across
+		// ASDF-loaded libraries. See PathnameOps for the string-level semantics.
+		String mergePathnamesStarName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.MERGE_PATHNAMES_STAR);
+		this.globalEnv.defineFunction(mergePathnamesStarName, new LispFunction(mergePathnamesStarName, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.UIOP_MERGE_PATHNAMES_STAR
+						+ " expects (specified [defaults]), got " + args.size() + " arguments");
+			}
+			String specified = PathnameOps.namestring(LispNames.UIOP_MERGE_PATHNAMES_STAR, args.get(0));
+			String defaults = args.size() > 1 ? PathnameOps.namestring(LispNames.UIOP_MERGE_PATHNAMES_STAR, args.get(1))
+					: "";
+			return new LispString(PathnameOps.mergePathnames(specified, defaults));
+		}));
 		// ql:quickload = auto-download (real Quicklisp dist) + asdf:load-system. It
 		// accepts a single system name or a list of names, downloads each (with its
 		// dependencies) into the cache, adds the extracted .asd directories to the search

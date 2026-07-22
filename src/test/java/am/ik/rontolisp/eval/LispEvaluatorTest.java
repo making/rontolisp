@@ -4160,7 +4160,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer")
 			.isSorted()
-			.hasSize(292);
+			.hasSize(293);
 	}
 
 	@Test

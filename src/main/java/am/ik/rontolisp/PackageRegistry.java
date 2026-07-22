@@ -118,7 +118,8 @@ public final class PackageRegistry {
 			LispNames.MASK_FIELD, LispNames.SCALE_FLOAT, LispNames.SUBTYPEP, LispNames.CHAR_NAME, LispNames.FDEFINITION,
 			LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.MAKE_BROADCAST_STREAM, LispNames.PATHNAMEP,
 			LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P, LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF,
-			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS);
+			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
+			LispNames.MAKE_PATHNAME);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
@@ -336,8 +337,8 @@ public final class PackageRegistry {
 		// A limited, API-compatible subset of ASDF (system definitions parsed from .asd
 		// files as plain data -- see eval.AsdfSystems). Does not use cl; both symbols
 		// are external.
-		define(new LispPackage(LispNames.ASDF_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.DEFSYSTEM, LispNames.LOAD_SYSTEM))));
+		define(new LispPackage(LispNames.ASDF_PKG, List.of(), new HashSet<>(Set.of(LispNames.DEFSYSTEM,
+				LispNames.LOAD_SYSTEM, LispNames.FIND_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY))));
 		// A limited, API-compatible subset of Quicklisp: ql:quickload downloads a system
 		// (and its dependencies) from the real Quicklisp distribution into a local cache
 		// and then defers to the asdf subset (see eval.QuicklispClient). Its canonical
@@ -351,7 +352,8 @@ public final class PackageRegistry {
 		// nickname); the rest resolve but are undefined-function errors when called.
 		define(new LispPackage(LispNames.UIOP_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING, LispNames.GETENV,
-						LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME))));
+						LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
+						LispNames.MERGE_PATHNAMES_STAR))));
 		// The dependency-shim packages behind the built-in ASDF systems of the same
 		// names (see eval.ShimLibraries): closer-mop (nicknames c2mop/c2cl),
 		// flexi-streams, org.shirakumo.float-features (nickname float-features) and
