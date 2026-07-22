@@ -162,10 +162,16 @@ public final class LoadInliner {
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
 			List<String> systemPath, Features features, QuicklispClient quicklisp) {
 		List<LispVal> result = new ArrayList<>();
-		expandInto(program, result, new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new HashMap<>(),
-				new HashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, quicklisp, baseDir),
-				baseDir);
-		return result;
+		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new HashMap<>(), new HashSet<>(),
+				new ArrayDeque<>(), new ArrayList<>(systemPath), features, quicklisp, baseDir);
+		expandInto(program, result, ctx, baseDir);
+		// Fold the four ASDF/UIOP pathname primitives + bundle with-open-file bodies of
+		// literal-path files: a real library evaluates them at load time to build a path
+		// pointing at a bundled data file (uax-15's precomputed-tables.lisp), and the
+		// compilers cannot lower them dynamically. See CompileTimePathnameFolder. The
+		// systems registry is complete by this point -- every asdf:load-system, inline
+		// asdf:defsystem and ql:quickload has already registered its LispSystem.
+		return CompileTimePathnameFolder.fold(result, ctx.systems());
 	}
 
 	/**

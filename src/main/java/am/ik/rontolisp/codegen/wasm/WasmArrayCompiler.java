@@ -90,7 +90,13 @@ final class WasmArrayCompiler {
 		}
 		LispVal characterString = am.ik.rontolisp.LispMacroExpander.lowerCharacterMakeArray(cons);
 		if (characterString != null) {
-			// A rank-1 :element-type 'character array is a string: make-string.
+			// A rank-1 :element-type 'character array without fill-pointer/adjustable
+			// stays a plain (immutable) TYPE_STRING here: the WASM string model is
+			// byte-oriented (_charvec_to_str truncates each element to one byte), so
+			// routing every character make-array through the mutable char-vec would
+			// silently truncate non-ASCII code points on downstream string reads. A
+			// caller that needs mutation must ask for :fill-pointer / :adjustable
+			// explicitly, which selects the char-vec branch below.
 			WasmExprCompiler.compileExpr(characterString, ctx);
 			return;
 		}

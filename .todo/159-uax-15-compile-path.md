@@ -1,167 +1,133 @@
-# uax-15 v0.1.3 on the JVM + WASM compile paths
+# uax-15 v0.1.3 on the WASM compile paths (JVM already GREEN)
 
-Parent: `.todo/154` (cl-postgres dependency-library grind; uax-15 interpreter
-gate closed there). Interpreter is fully green (`Uax15E2eTest#loadsAndRunsOnTheInterpreter`),
-the four pathname / ASDF primitives are runtime functions in
-`eval/PathnameOps` + `eval/Environment` + `eval/LispEvaluator`, and the LOOP
-macro was reworked to per-clause iteration heads so both compose-hangul and
-parse-integers work. What remains is teaching the compile path to lower those
-four calls, and to bundle the `unicode-15-data/*.txt` for WASM. This todo is
-self-contained so it can be picked up cold.
+Parent: `.todo/154` (cl-postgres dependency-library grind). The interpreter and
+JVM are green (`Uax15E2eTest#loadsAndRunsOnTheInterpreter`,
+`Uax15E2eTest#compilesAndRunsOnJvm`); both WASM backends remain @Disabled with
+a rationale referencing this file. What follows is the piece that survives:
+the WASM string model does not carry non-BMP code points, so uax-15's
+`unicode-string` scratch values truncate on serialization.
 
-Goal state: `Uax15E2eTest#compilesAndRunsOnJvm`,
-`Uax15E2eTest#compilesAndRunsOnWasmPreview1` and
-`Uax15E2eTest#compilesAndRunsOnWasmComponent` all enabled and green; the three
-`@Disabled` overrides in `src/test/java/am/ik/rontolisp/e2e/Uax15E2eTest.java`
-deleted; the "compile paths (JVM + both WASM backends) are excluded" paragraph
-in the class Javadoc removed. On the way `AsdfLibraryE2eSupport` should stop
-needing per-library disables for this shape (once the mechanism is generic).
+## What already landed (JVM + interpreter)
 
-## Current failure surface
+Committed together in this pass; the changes are entirely on the compile path
+so the interpreter is untouched. The seed shape is
+`src/test/resources/uax-15/src/precomputed-tables.lisp` line 5-7, 13, 52 +
+`uax-15.lisp` line 53 (four load-time pathname primitive uses composed with a
+34k-line `with-open-file`).
 
-Running `./mvnw test -Dtest=Uax15E2eTest#compilesAndRunsOnJvm` (with the JVM
-`@Disabled` removed) fails at compile time with:
+- `cli/CompileTimePathnameFolder` -- a post-`spliceSystem` walker on top of
+  `LoadInliner.inline`. Folds `(asdf:find-system 'NAME [nil])` to `"name"`,
+  `(asdf:system-source-directory X)` to `<baseDir>/`,
+  `(make-pathname :directory ...)` to a namestring, and
+  `(uiop:merge-pathnames* A B)` to the merged namestring, when every argument
+  reduces to a literal string / symbol / keyword. A top-level `(defparameter
+  *X* <literal string>)` records the substitution so later forms of the same
+  compile unit fold references to `*X*` too. A `(quote DATUM)` is opaque so
+  quoted data is never rewritten.
+- Same class also rewrites `(with-open-file (VAR <literal utf-8 path>
+  [:external-format :UTF-8]) BODY...)` as `(with-input-from-string (VAR
+  <inlined file contents>) BODY...)` when the literal path names a UTF-8 file
+  that exists at compile time. Contents past ~20k Java chars are split at
+  code-point boundaries and reassembled at runtime through `(concatenate
+  'string CHUNK1 ...)` so the JVM's 65535 UTF-8 byte per-string ceiling is
+  never crossed (uax-15's 1.9 MB `UnicodeData.txt` becomes ~64 chunks).
+- `LispMacroExpander.expandReadLineCompat` -- lowers `(read-line stream nil
+  [eof-value])` to `(read-line stream)` (or `(or (read-line stream) eof-val)`
+  when the eof-value is not literal nil); the per-backend `JvmReadLineCompiler`
+  / `WasmReadLineCompiler` call it before their argcount check.
+- `LispMacroExpander.expandSubseqCompat` + `LispNames.SUBSEQ_CORE` -- the
+  public `subseq` dispatches at runtime on `%arrayp`. A vector is copied
+  element-by-element through `make-array` + `aref` + `%aset` (fresh vector
+  result, same length semantics as the interpreter's `Environment.SUBSEQ`);
+  everything else routes through `%SUBSEQ-CORE`, the pre-existing
+  string/list-only dispatch each per-backend subseq compiler kept.
+- `LispMacroExpander.seqAsListForm` collapsed to `(coerce X 'list)`. The
+  coerce macro already dispatches on `listp` / `stringp` / else, so vectors
+  now scan through `aref` + `length` instead of the old `(if (stringp x)
+  (coerce ...) x)` shape that fell through to CAR/CDR on a vector.
+- `JvmArrayCompiler.compileMake` -- `(make-array N :element-type 'character)`
+  without `:fill-pointer` / `:adjustable` no longer lowers to the immutable
+  `make-string`; it routes to `_charVecMake` with an implicit fill-pointer
+  = capacity so `setf-aref` writes land in place. The WASM equivalent is
+  intentionally NOT changed (see below).
 
-```
-UnsupportedOperationException: Cannot compile: MAKE-PATHNAME
-```
+Verification: `Uax15E2eTest#loadsAndRunsOnTheInterpreter` +
+`Uax15E2eTest#compilesAndRunsOnJvm` green, all four normalize forms produce
+the exact expected code-point sequences. Regression guards `ClPpcreE2eTest`,
+`ParseNumberE2eTest`, `LoadInlinerTest` (with 8 new fold cases) all green.
 
-thrown by `JvmFunctionCallCompiler.compileDirectCall` (see
-`src/main/java/am/ik/rontolisp/codegen/jvm/JvmFunctionCallCompiler.java`
-around the "Cannot compile: " + name" throw). The other three primitives
-(`asdf:find-system`, `asdf:system-source-directory`, `uiop:merge-pathnames*`)
-would fail on the same fallthrough once make-pathname is fixed --
-`uiop:merge-pathnames*` currently expands via `expandUiopStubCall` into a
-runtime "The function UIOP:MERGE-PATHNAMES* is undefined" error stub, which
-compiles but blows up at run time when the load-time
-`(defparameter *data-directory* ...)` fires.
+## What remains (both WASM backends)
 
-Their call shapes in uax-15 are all in one place --
-`src/test/resources/uax-15/src/precomputed-tables.lisp` line 5-7 and line 13
-and line 52 -- and then `src/test/resources/uax-15/src/uax-15.lisp` line 53:
+The WASM string model is byte-oriented. `_charvec_to_str` in
+`WasmStringRuntimeBuilder.buildCharvecToStrBody` -- the function every WASM
+consumer that treats a mutable character vector as a string routes through
+(`stringp`, `char`, `schar`, `subseq`, printing, `=`, `_eqv`) -- writes each
+element as a SINGLE BYTE via `I32_STORE8`. uax-15 stores non-BMP scratch
+values in `unicode-string` (a `(vector unicode-point)`) during
+`from-unicode-string`, so `(char lisp-string i)` on WASM reads a truncated
+code point: expected 197 (Å), actual 65 (A). Every downstream read that
+goes through `char` / `stringp` sees the same truncation, so the compiled
+binary silently produces wrong output.
 
-```lisp
-;; precomputed-tables.lisp
-(defparameter *data-directory*
-  (uiop:merge-pathnames*
-    (make-pathname :directory (list :relative "unicode-15-data")
-                   :name nil :type nil)
-    (asdf:system-source-directory (asdf:find-system 'uax-15 nil))))
+Two viable directions:
 
-(defvar *unicode-data*
-  (with-open-file (in (uiop:merge-pathnames* *data-directory* "UnicodeData.txt")
-                      :external-format :UTF-8)
-    (loop for line = (read-line in nil nil) while line
-       collect (cl-ppcre:split ";" line))))
+**A. Widen `_charvec_to_str` to UTF-8** (recommended, keeps WASM's byte-string
+model). Each stored code point emits 1 to 4 bytes; the buffer growth
+allocation in `buildCharvecToStrBody` picks the worst case (`n * 4`). Then
+`char` / `schar` / `_subseq` on the resulting TYPE_STRING decode UTF-8 back
+to code points on read -- and every backend consumer of a string byte array
+gets the same treatment. Not a small change: the WASM string byte array's
+"length in code points" and "length in bytes" diverge everywhere they used
+to be interchangeable. Pinning tests need to cover both an all-ASCII and a
+mixed BMP+supplementary case.
 
-(with-open-file (in (uiop:merge-pathnames* *data-directory* "CompositionExclusions.txt")
-                    :external-format :UTF-8)
-  ...)
+**B. Keep the byte-string model and make aref/char on a char-vec bypass the
+string conversion** (smaller, but semantically odd). `(aref char-vec i)`
+already reads the raw TYPE_CHAR from the data slot; `(char char-vec i)`
+would have to be rewritten to detect a char-vec target and use the same
+raw read. `elt`'s dispatch (`(if (stringp seq) (char ...) ...)`) then
+misroutes through the truncating string branch -- the compat rewrite could
+prefer aref on char-vecs. Also `map`/`concatenate`/every-other string
+consumer that goes through `_charvec_to_str` needs its own handling. This
+is a lot of "avoid the shared normalizer" plumbing scattered across the
+WASM backend; the shared normalizer is the whole reason the truncation is
+uniform in the first place.
 
-;; uax-15.lisp
-(defparameter *derived-normalization-props-data-file*
-  (uiop:merge-pathnames* *data-directory* "DerivedNormalizationProps.txt"))
-```
+Recommend A. The refactor is large enough to warrant its own todo split.
 
-Three of the calls have both args literal at compile time. Only the second
-and third form the `<*data-directory* + filename>` combinations, and one of
-the `*data-directory* + filename` cases is a `defparameter` init (the last
-one).
+## Verification chain (after A lands)
 
-## Two viable approaches
+1. `./mvnw test -Dtest=Uax15E2eTest` -- all four backends green (delete the
+   two `@Disabled` overrides at the bottom of `Uax15E2eTest`).
+2. `./mvnw test -Dtest=ClPpcreE2eTest` -- LOOP + subseq regression guard.
+3. `./mvnw test -Dtest=ParseNumberE2eTest` -- LOOP regression guard.
+4. `./mvnw test` -- full suite (~10 min); watch for any WASM printing case
+   that now emits multi-byte sequences.
+5. Manual four-backend spot-check per `CLAUDE.md`: interpreter, JVM,
+   Preview 1, Component, on a tiny `(uax-15:normalize ...)` script under
+   `--system-path` to the vendored `src/test/resources/uax-15`.
+6. Native E2E if `ci-spec.yaml` corpus grew a char-vec case.
 
-**A. Compile-time substitution in `LoadInliner`** (**recommended, cross-
-backend**). When `spliceSystem` inlines a system's forms, walk them and
-substitute the specific patterns:
+## Files to touch when A begins
 
-- `(asdf:find-system 'NAME [nil])` where NAME is a literal designator known to
-  the loaded systems -> literal `"NAME"` string.
-- `(asdf:system-source-directory X)` where X reduces to a known system name
-  literal -> the baseDir string with a trailing `/`.
-- `(make-pathname :directory (list :relative "STR") :name nil :type nil)` and
-  `(make-pathname :directory '(:absolute "a" "b") ...)` -> the composed
-  namestring literal (share `eval/PathnameOps.makePathname`).
-- `(uiop:merge-pathnames* A B)` where both A and B are literal strings -> a
-  literal string via `eval/PathnameOps.mergePathnames`.
-- `(uiop:merge-pathnames* VAR "file.txt")` where VAR is a `defparameter` init
-  we already resolved to a literal string -> lower to
-  `(concatenate 'string VAR "file.txt")` (or a smarter form if VAR is known to
-  end in `/`). Do NOT substitute when VAR could vary at run time.
-
-Emit warnings for any residual call the compiled binary would still hit, so
-we don't silently regress. Add a `CompileTimePathnameFolder` (or similar) as
-its own class next to `WitExportInliner` / `WitImportInliner` for symmetry.
-
-Coverage: extend `LoadInlinerTest` (`src/test/java/am/ik/rontolisp/cli/`) with
-a per-pattern test, plus one end-to-end test that inlines a tiny system that
-uses each of the four primitives.
-
-**B. Runtime function support on JVM + WASM**. Add per-backend compilers for
-each of the four functions -- `JvmMakePathnameCompiler`, etc. -- that emit
-bytecode calling into the same `PathnameOps` methods. This keeps the compiled
-binary's behavior identical to the interpreter for arbitrary (non-literal)
-call sites, but is more work and doesn't help WASM which still can't access
-the host filesystem.
-
-Recommend A alone if the substitution passes are complete (all uax-15 uses
-reduce to literals); fall back to A+B if any residue would trap a compiled
-program.
-
-## WASM: bundling `unicode-15-data/*.txt`
-
-Even after the compile-time substitutions, WASM can't `with-open-file` the
-data files because the wasmtime sandbox has no `--dir` mounted (see
-`AsdfLibraryE2eSupport.runWasm`). The clean answer is to bundle the files as
-string literals: at `LoadInliner` splice time, detect
-`(with-open-file (in <literal-path> :external-format :UTF-8) BODY)`
-where the literal path lives inside a spliced system's tree and the file is
-UTF-8 text -- and substitute with
-`(with-input-from-string (in "<file contents>") BODY)`. Guard on file size
-(the UTF-8 UnicodeData.txt is ~1.7 MB) and back off with a warning if a
-per-backend baked-constant limit would blow -- see `.todo/17`
-(`jvm-baked-constant-limit`) for the JVM ceiling.
-
-Alternative for WASM: mount `--dir` in `AsdfLibraryE2eSupport.runWasm` and
-copy the data files into the container. Simpler for tests but leaves the
-compiled binary depending on run-time filesystem access -- not useful for
-users. Prefer bundling.
-
-## Verification chain
-
-Every change re-runs:
-
-1. `./mvnw test -Dtest=Uax15E2eTest` -- all four backends green.
-2. `./mvnw test -Dtest=ClPpcreE2eTest` -- LOOP macro regression guard, must
-   still be green (the interpreter session verified this).
-3. `./mvnw test -Dtest=ParseNumberE2eTest` -- also LOOP regression guard.
-4. `./mvnw test` -- full suite (~10 min on this laptop).
-5. Manual four-backend spot-check per `CLAUDE.md` -- interpreter, JVM,
-   WASM Preview 1, WASM Component -- on a tiny `(uax-15:normalize ...)`
-   script under `--system-path` to the vendored `src/test/resources/uax-15`.
-6. Native E2E per `CLAUDE.md` if the `ci-spec.yaml` corpus changed.
-
-## Files to touch (starting point)
-
-- `src/main/java/am/ik/rontolisp/cli/LoadInliner.java` -- the walker /
-  substitution pass belongs here, next to the existing `spliceSystem`.
-- New `src/main/java/am/ik/rontolisp/cli/CompileTimePathnameFolder.java`
-  (or similar) -- the pass itself.
-- `src/main/java/am/ik/rontolisp/eval/PathnameOps.java` -- already has
-  `makePathname` and `mergePathnames`; reuse them.
-- `src/test/java/am/ik/rontolisp/cli/LoadInlinerTest.java` -- new tests.
-- `src/test/java/am/ik/rontolisp/e2e/Uax15E2eTest.java` -- delete the three
-  `@Disabled` overrides and update the class Javadoc.
-- `.todo/154-cl-postgres-dependency-library-grind.md` -- flip uax-15's status
-  from "INTERPRETER DONE" to "ALL FOUR BACKENDS" and remove the compile-path
-  follow-up paragraph.
-- `.kb/asdf.md` -- add a paragraph on compile-time pathname folding.
-- `doc/{en,ja}/guides/asdf-systems.md` -- update if user-visible surface
-  changed.
-- `.todo/.history.md` -- record when this todo closes (per `CLAUDE.md`).
+- `src/main/java/am/ik/rontolisp/codegen/wasm/WasmStringRuntimeBuilder.java`
+  -- `buildCharvecToStrBody` (encoder) and its consumers (`_subseq`,
+  `_char_star`, printer).
+- `src/main/java/am/ik/rontolisp/codegen/wasm/WasmCharCompiler.java`
+  -- `char`/`schar` reads decode UTF-8; `code-char` writes multi-byte.
+- `src/main/java/am/ik/rontolisp/codegen/wasm/WasmArrayCompiler.java`
+  -- revive the JVM-side "always char-vec for character element type"
+  branch under the widened model.
+- `src/test/java/am/ik/rontolisp/e2e/Uax15E2eTest.java` -- delete the two
+  `@Disabled` overrides.
+- `.kb/asdf.md` -- flip uax-15's status; update the "all four backends"
+  paragraph.
 
 ## Non-goals
 
 - General runtime pathname support (`pathname` values distinct from strings).
-- General filesystem access from the WASM sandbox.
-- The `md5` WASM exclusion (that's `.todo/154`'s bignum idea; separate).
-- The `ironclad` real-source loading (also separate under `.todo/154`).
+- General filesystem access from the WASM sandbox (bundling is already the
+  answer for compile-time-known files).
+- Fixing the byte-string assumption in the WASM printer's numeric or
+  s-expression paths (they are ASCII by construction; only the char-vec
+  serialization needs widening).

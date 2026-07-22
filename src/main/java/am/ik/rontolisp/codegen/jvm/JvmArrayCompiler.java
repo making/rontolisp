@@ -80,20 +80,17 @@ final class JvmArrayCompiler {
 			JvmExprCompiler.compileExpr(contentsLowering, ctx, className);
 			return;
 		}
-		LispVal characterString = LispMacroExpander.lowerCharacterMakeArray(cons);
-		if (characterString != null) {
-			// A rank-1 :element-type 'character array is a string: make-string.
-			JvmExprCompiler.compileExpr(characterString, ctx, className);
-			return;
-		}
-		if (LispMacroExpander.isCharacterElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
-				&& (fillPointer != null || adjustable != null)) {
-			// A fill-pointered/adjustable character vector: the general array shape,
-			// marked mutable-character by _charVecMake's length-4 header. Elements
-			// default to spaces so unfilled slots read back as characters.
+		if (LispMacroExpander.isCharacterElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))) {
+			// A rank-1 :element-type 'character array is a mutable character vector,
+			// marked by _charVecMake's length-4 header and normalized on demand into the
+			// quote-framed runtime string (_strv). A missing fill-pointer defaults to the
+			// capacity so aref reads and setf-aref writes see every slot -- uax-15's
+			// from-unicode-string is (make-array N :element-type 'character) followed by
+			// (setf (aref ...) ch), which requires the mutable representation.
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			compileKeywordValueOrNull(initValue != null ? initValue : new LispChar(' '), ctx, className);
-			compileKeywordValueOrNull(fillPointer, ctx, className);
+			LispVal effectiveFillPointer = fillPointer != null ? fillPointer : args.get(1);
+			compileKeywordValueOrNull(effectiveFillPointer, ctx, className);
 			compileKeywordValueOrNull(adjustable, ctx, className);
 			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.CHAR_VEC_MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
 			return;

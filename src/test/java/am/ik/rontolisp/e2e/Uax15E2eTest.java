@@ -9,23 +9,26 @@ import org.junit.jupiter.api.Disabled;
  * An ASDF subset integration target ({@code .kb/asdf.md}): the REAL uax-15 v0.1.3 sources
  * (vendored unmodified under {@code src/test/resources/uax-15}, MIT license) load via
  * {@code asdf:load-system} and run the four Unicode normalization forms on the
- * INTERPRETER via {@link AsdfLibraryE2eSupport}. The library transitively pulls
+ * INTERPRETER + JVM via {@link AsdfLibraryE2eSupport}. The library transitively pulls
  * split-sequence and cl-ppcre, then loads the 34k-line UnicodeData.txt,
  * CompositionExclusions.txt and DerivedNormalizationProps.txt into precomputed hash
  * tables at load time via {@code with-open-file :external-format :UTF-8}. This exercises
  * the {@code asdf:find-system} / {@code asdf:system-source-directory} pair (the runtime
- * system registry), {@code uiop:merge-pathnames*} + {@code make-pathname} (namestring
- * composition), and per-line {@code read-line} over 34k lines.
+ * system registry, folded at compile time by
+ * {@link am.ik.rontolisp.cli.CompileTimePathnameFolder}), {@code uiop:merge-pathnames*} +
+ * {@code make-pathname} (namestring composition, also folded), per-line {@code read-line}
+ * over 34k lines (2/3-arg CL form lowered by
+ * {@link am.ik.rontolisp.LispMacroExpander#expandReadLineCompat}), and
+ * {@code (subseq unicode-string ...)}/{@code (stable-sort unicode-string ...)} on
+ * mutable-character vectors (subseq's vector arm added in this integration).
  *
  * <p>
- * The compile paths (JVM + both WASM backends) are excluded: the pathname / ASDF
- * primitives ({@code make-pathname}, {@code uiop:merge-pathnames*},
- * {@code asdf:find-system}, {@code asdf:system-source-directory}) are registered as
- * runtime functions in the interpreter only and need per-backend compile-time
- * substitution (or bytecode) support to lower on the JVM and WASM. Additionally, the
- * compiled {@code .wasm} would need runtime filesystem access to the
- * {@code unicode-15-data/*.txt} data files, which the wasmtime sandbox does not provide
- * by default.
+ * Both WASM backends remain excluded: the WASM string model is byte/ASCII
+ * ({@code _charvec_to_str} truncates each element to one byte), and uax-15 stores non-BMP
+ * scratch values in its {@code unicode-string} arrays, so downstream string reads on the
+ * compiled program silently drop the high bytes. Fixing this needs a wider WASM string
+ * model (UTF-8 encoding on serialization at minimum) that a follow-up scope should tackle
+ * -- see {@code .todo/159}.
  */
 class Uax15E2eTest extends AsdfLibraryE2eSupport {
 
@@ -77,17 +80,16 @@ class Uax15E2eTest extends AsdfLibraryE2eSupport {
 	}
 
 	@Override
-	@Disabled("uax-15 uses make-pathname / uiop:merge-pathnames* / asdf:find-system / asdf:system-source-directory at load time; interpreter-only until the JVM compile path grows lowerings for them")
-	void compilesAndRunsOnJvm() {
-	}
-
-	@Override
-	@Disabled("uax-15 reads unicode-15-data/*.txt at load time; the wasmtime sandbox has no --dir mount")
+	@Disabled("WASM string model is byte/ASCII (_charvec_to_str truncates each element to one byte);"
+			+ " uax-15 stores non-BMP scratch values in unicode-string vectors so downstream"
+			+ " string reads silently drop the high bytes. Follow-up: .todo/159 wide-char WASM" + " string model.")
 	void compilesAndRunsOnWasmPreview1() {
 	}
 
 	@Override
-	@Disabled("uax-15 reads unicode-15-data/*.txt at load time; the wasmtime sandbox has no --dir mount")
+	@Disabled("WASM string model is byte/ASCII (_charvec_to_str truncates each element to one byte);"
+			+ " uax-15 stores non-BMP scratch values in unicode-string vectors so downstream"
+			+ " string reads silently drop the high bytes. Follow-up: .todo/159 wide-char WASM" + " string model.")
 	void compilesAndRunsOnWasmComponent() {
 	}
 

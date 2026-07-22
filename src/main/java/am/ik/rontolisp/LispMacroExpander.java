@@ -2301,14 +2301,15 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Wraps a sequence expression so a string argument scans as a list: the sequence is
-	 * bound once and coerced to a list of its characters when it is a string. This lets
-	 * the list-walking sequence expansions accept strings (Common Lisp sequences).
+	 * Wraps a sequence expression so it always scans as a list: the sequence is bound
+	 * once and coerced to a list of its elements, matching the {@code list} branch of
+	 * {@link #expandCoerce} (a bare list passes through, a string yields its chars, a
+	 * general array yields its elements). This lets the list-walking sequence expansions
+	 * accept every Common Lisp sequence, not just strings and lists -- uax-15's
+	 * {@code (stable-sort <unicode-string> ...)} is the seed vector case.
 	 */
 	private static LispVal seqAsListForm(LispVal seqExpr) {
-		LispSymbol in = new LispSymbol(SEQ_IN_VAR);
-		// (let ((__seq_in seq)) (if (stringp __seq_in) (coerce __seq_in 'list) __seq_in))
-		return makeLet(SEQ_IN_VAR, seqExpr, makeIf(callOf(LispNames.STRINGP, in), coerceTo(in, "LIST"), in));
+		return coerceTo(seqExpr, "LIST");
 	}
 
 	/**
@@ -5725,6 +5726,116 @@ public final class LispMacroExpander {
 		progn.add(listToCons(List.of(new LispSymbol(LispNames.ERROR),
 				new LispString("The function " + op.name() + " is undefined"))));
 		return listToCons(progn);
+	}
+
+	/**
+	 * If {@code cons} is a {@code (read-line ...)} call in CL's 2- or 3-argument shape
+	 * with a literal-{@code nil} {@code eof-error-p}, returns a lowered form the
+	 * per-backend compilers can consume. Real libraries drive a per-line loop with
+	 * {@code (read-line stream nil nil)} (the standard "swallow EOF" idiom) -- uax-15's
+	 * {@code precomputed-tables.lisp} is the seed. Returns {@code null} for shapes the
+	 * compilers can already handle (0 or 1 argument) and for the {@code eof-error-p}
+	 * non-nil branch (the compile paths do not carry a runtime EOF error yet).
+	 *
+	 * <ul>
+	 * <li>{@code (read-line s nil)} -> {@code (read-line s)}</li>
+	 * <li>{@code (read-line s nil nil)} -> {@code (read-line s)}</li>
+	 * <li>{@code (read-line s nil EOF-VAL)} -> {@code (or (read-line s) EOF-VAL)}</li>
+	 * </ul>
+	 *
+	 * The runtime stream helpers on all backends already return {@code nil} at EOF, so
+	 * the "swallow" branch collapses to the 1-arg call without behavior change.
+	 * @param cons the call expression
+	 * @return the lowered expression, or {@code null} when the shape is not handled here
+	 */
+	@Nullable public static LispVal expandReadLineCompat(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol op) || !LispNames.READ_LINE.equals(op.name())) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || parts.size() > 4) {
+			return null;
+		}
+		LispVal eofErrorP = parts.get(2);
+		if (!isLiteralNil(eofErrorP)) {
+			return null;
+		}
+		LispVal stream = parts.get(1);
+		LispVal readLineOnly = listToCons(List.of(new LispSymbol(LispNames.READ_LINE), stream));
+		if (parts.size() == 3 || isLiteralNil(parts.get(3))) {
+			return readLineOnly;
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.OR), readLineOnly, parts.get(3)));
+	}
+
+	private static boolean isLiteralNil(LispVal expr) {
+		return expr instanceof LispNil || (expr instanceof LispSymbol sym && "NIL".equals(sym.name()));
+	}
+
+	/**
+	 * If {@code cons} is a {@code (subseq seq start [end])} call, returns a form that
+	 * dispatches on the runtime type of {@code seq}: a general array
+	 * ({@link LispNames#ARRAYP_INTERNAL}) is copied element by element into a fresh array
+	 * via {@code make-array}/{@code aref}/{@code %aset}, and any other shape falls
+	 * through to {@link LispNames#SUBSEQ_CORE} -- the string/list dispatch the
+	 * per-backend compilers already emit. Returns {@code null} for the already-lowered
+	 * {@code %subseq-core} form so the compilers do not loop, and for any
+	 * unusually-shaped {@code subseq} call the compilers would themselves reject.
+	 *
+	 * <p>
+	 * Motivation: the JVM/WASM {@code subseq} runtime lanes cover strings and cons chains
+	 * but not vectors, and uax-15's {@code canonical-ordering} exercises
+	 * {@code (subseq unicode-string beg end)} at load time. The interpreter dispatches to
+	 * {@link am.ik.rontolisp.eval.Environment#seqAsList} directly, so it does not need
+	 * this rewrite.
+	 * @param cons the call expression
+	 * @return the lowered expression, or {@code null} when the shape is not handled here
+	 */
+	@Nullable public static LispVal expandSubseqCompat(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol op) || !LispNames.SUBSEQ.equals(op.name())) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || parts.size() > 4) {
+			return null;
+		}
+		LispSymbol seqVar = new LispSymbol("__ss_seq");
+		LispSymbol startVar = new LispSymbol("__ss_start");
+		LispSymbol endVar = new LispSymbol("__ss_end");
+		LispSymbol lenVar = new LispSymbol("__ss_len");
+		LispSymbol nVar = new LispSymbol("__ss_n");
+		LispSymbol outVar = new LispSymbol("__ss_out");
+		LispSymbol iVar = new LispSymbol("__ss_i");
+		LispVal endInit = parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE;
+		LispVal effectiveEnd = makeIf(endVar, endVar, callOf(LispNames.LENGTH, seqVar));
+		LispVal length = listToCons(List.of(new LispSymbol(LispNames.SUB), lenVar, startVar));
+		LispVal makeOut = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), nVar));
+		LispVal readSrc = listToCons(List.of(new LispSymbol(LispNames.AREF), seqVar,
+				listToCons(List.of(new LispSymbol(LispNames.ADD), startVar, iVar))));
+		LispVal writeDst = listToCons(List.of(new LispSymbol(LispNames.ASET), outVar, iVar, readSrc));
+		LispVal fillLoop = listToCons(
+				List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(iVar, nVar, outVar)), writeDst));
+		LispVal vectorBody = listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(lenVar, effectiveEnd)), listToCons(List.of(nVar, length)),
+						listToCons(List.of(outVar, makeOut)))),
+				fillLoop));
+		List<LispVal> coreParts = new java.util.ArrayList<>();
+		coreParts.add(new LispSymbol(LispNames.SUBSEQ_CORE));
+		coreParts.add(seqVar);
+		coreParts.add(startVar);
+		if (parts.size() > 3) {
+			coreParts.add(endVar);
+		}
+		LispVal coreCall = listToCons(coreParts);
+		// Stringp first so a mutable character vector (which is stringp on both
+		// backends) stays on the string branch and the returned value keeps the
+		// caller-expected element type; only a general (non-string) array switches to
+		// the fresh make-array copy.
+		LispVal arrayDispatch = makeIf(callOf(LispNames.ARRAYP_INTERNAL, seqVar), vectorBody, coreCall);
+		LispVal dispatch = makeIf(callOf(LispNames.STRINGP, seqVar), coreCall, arrayDispatch);
+		LispVal outerBindings = listToCons(List.of(listToCons(List.of(seqVar, parts.get(1))),
+				listToCons(List.of(startVar, parts.get(2))), listToCons(List.of(endVar, endInit))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, dispatch));
 	}
 
 	/**

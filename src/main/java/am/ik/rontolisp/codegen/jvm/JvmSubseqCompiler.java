@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.StringConstant;
@@ -13,12 +14,20 @@ import am.ik.jvm.OperandStack;
  * Compiles {@code subseq} for strings and lists: {@code (subseq seq start [end])}.
  *
  * <p>
- * The sequence type is not known statically, so a runtime {@code instanceof String} test
- * selects the branch. For a string (which carries surrounding quotes), the content at
- * {@code [start, end)} is {@code s.substring(1 + start, 1 + end)} re-wrapped in quotes.
- * For a list (an {@code Object[2]} cons chain, nil = null), the elements from index
- * {@code start} up to {@code end} are copied into a fresh cons chain. When {@code end} is
- * omitted (passed as the sentinel int {@code -1}) it defaults to the sequence length.
+ * The public {@code subseq} operator is rewritten first through
+ * {@link LispMacroExpander#expandSubseqCompat}, which routes a general array through an
+ * inline {@code make-array}+{@code aref}+{@code %aset} fill and falls back to
+ * {@link am.ik.rontolisp.LispNames#SUBSEQ_CORE} for the string/list branches this class
+ * compiles directly (uax-15's {@code (subseq unicode-string beg end)} is the seed).
+ *
+ * <p>
+ * For the string/list branch, the sequence type is not known statically, so a runtime
+ * {@code instanceof String} test selects the arm. For a string (which carries surrounding
+ * quotes), the content at {@code [start, end)} is {@code s.substring(1 + start, 1 + end)}
+ * re-wrapped in quotes. For a list (an {@code Object[2]} cons chain, nil = null), the
+ * elements from index {@code start} up to {@code end} are copied into a fresh cons chain.
+ * When {@code end} is omitted (passed as the sentinel int {@code -1}) it defaults to the
+ * sequence length.
  */
 final class JvmSubseqCompiler {
 
@@ -26,6 +35,11 @@ final class JvmSubseqCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		LispVal rewritten = LispMacroExpander.expandSubseqCompat(cons);
+		if (rewritten != null) {
+			JvmExprCompiler.compileExpr(rewritten, ctx, className);
+			return;
+		}
 		List<LispVal> args = cons.toList();
 		int length = JvmEmitHelper.stringMethod(ctx, "length", "()I").index();
 		int substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();

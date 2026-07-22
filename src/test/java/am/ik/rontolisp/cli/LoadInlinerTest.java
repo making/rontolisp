@@ -445,6 +445,121 @@ class LoadInlinerTest {
 		assertThat(runMain(classBytes, "Test")).isEqualTo("49");
 	}
 
+	// -- compile-time pathname folding (CompileTimePathnameFolder via LoadInliner) --
+
+	@Test
+	void foldsMakePathnameLiteralArgs() {
+		// A literal (make-pathname ...) with only self-evaluating args collapses to its
+		// namestring so the compilers never see the primitive.
+		List<LispVal> program = LispReader.readAllFromString(
+				"(defparameter *dir* (make-pathname :directory '(:absolute \"a\" \"b\") :name nil :type nil))");
+		List<LispVal> result = LoadInliner.inline(program, loaderOf(Map.of()));
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFPARAMETER *DIR* \"/a/b/\")");
+	}
+
+	@Test
+	void foldsMergePathnamesStarOfTwoLiterals() {
+		List<LispVal> program = LispReader
+			.readAllFromString("(defparameter *p* (uiop:merge-pathnames* \"file.txt\" \"/abs/\"))");
+		List<LispVal> result = LoadInliner.inline(program, loaderOf(Map.of()));
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFPARAMETER *P* \"/abs/file.txt\")");
+	}
+
+	@Test
+	void foldsMergePathnamesStarAgainstRecordedDefparameter() {
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defparameter *dir* "/base/")
+				(defparameter *file* (uiop:merge-pathnames* *dir* "child.txt"))""");
+		List<LispVal> result = LoadInliner.inline(program, loaderOf(Map.of()));
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFPARAMETER *DIR* \"/base/\")",
+				"(DEFPARAMETER *FILE* \"/base/child.txt\")");
+	}
+
+	@Test
+	void foldsFindSystemAndSystemSourceDirectory() {
+		// Inline defsystem registers the system's baseDir; find-system reduces to the
+		// downcased name, system-source-directory to the baseDir with a trailing slash.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(asdf:defsystem :demo :components ((:file "main")))
+				(defparameter *root* (asdf:system-source-directory (asdf:find-system 'demo nil)))""");
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString("""
+				(asdf:defsystem :demo :components ((:file "main")))
+				(defparameter *root* (asdf:system-source-directory (asdf:find-system 'demo nil)))"""),
+				loaderOf(Map.of("main.lisp", "(defun m () 1)")), "projects/demo");
+		List<String> printed = result.stream().map(LispVal::print).toList();
+		assertThat(printed).contains("(DEFPARAMETER *ROOT* \"projects/demo/\")");
+	}
+
+	@Test
+	void foldsMakePathnameNestedInsideMergePathnamesStar() {
+		// The uax-15 seed shape end-to-end: system-source-directory + find-system on the
+		// currently-loading system merged with a make-pathname directory literal.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(asdf:defsystem :demo :components ((:file "main")))
+				(defparameter *data-dir*
+				  (uiop:merge-pathnames*
+				    (make-pathname :directory (list :relative "data") :name nil :type nil)
+				    (asdf:system-source-directory (asdf:find-system 'demo nil))))""");
+		List<LispVal> result = LoadInliner.inline(program, loaderOf(Map.of("main.lisp", "(defun m () 1)")),
+				"projects/demo");
+		assertThat(result.stream().map(LispVal::print)).contains("(DEFPARAMETER *DATA-DIR* \"projects/demo/data/\")");
+	}
+
+	@Test
+	void leavesUnfoldableMergePathnamesStarIntact() {
+		// A non-literal specified path with no defparameter binding stays as-is so a
+		// runtime uiop:merge-pathnames* implementation (interpreter path) still handles
+		// it.
+		List<LispVal> program = LispReader.readAllFromString("(defparameter *p* (uiop:merge-pathnames* (foo) \"x\"))");
+		List<LispVal> result = LoadInliner.inline(program, loaderOf(Map.of()));
+		assertThat(result.stream().map(LispVal::print))
+			.containsExactly("(DEFPARAMETER *P* (UIOP:MERGE-PATHNAMES* (FOO) \"x\"))");
+	}
+
+	@Test
+	void bundlesLiteralUtf8WithOpenFile(@TempDir Path tempDir) throws Exception {
+		// A (with-open-file (var <literal path> :external-format :utf-8) BODY) whose
+		// path names a UTF-8 file on disk becomes a (with-input-from-string (var
+		// "<contents>") BODY) so the compiled binary carries the data instead of
+		// depending on the same absolute path at run time.
+		Path dataFile = tempDir.resolve("payload.txt");
+		java.nio.file.Files.writeString(dataFile, "hello world\n");
+		String source = "(with-open-file (in \"" + dataFile.toAbsolutePath() + "\" :external-format :utf-8)"
+				+ " (read-line in nil nil))";
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString(source), loaderOf(Map.of()));
+		assertThat(result.stream().map(LispVal::print).findFirst().orElseThrow())
+			.startsWith("(WITH-INPUT-FROM-STRING (IN \"hello world\n\")");
+	}
+
+	@Test
+	void bundlesChunksLargeUtf8Files(@TempDir Path tempDir) throws Exception {
+		// A file larger than the safe single-string threshold is split into chunks
+		// reassembled at runtime via (concatenate 'string CHUNK1 CHUNK2 ...) so the
+		// JVM's 65535 UTF-8 byte per-string constant-pool ceiling is not exceeded.
+		Path dataFile = tempDir.resolve("big.txt");
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < 50_000; i++) {
+			sb.append('a');
+		}
+		java.nio.file.Files.writeString(dataFile, sb.toString());
+		String source = "(with-open-file (in \"" + dataFile.toAbsolutePath() + "\" :external-format :utf-8)"
+				+ " (read-line in nil nil))";
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString(source), loaderOf(Map.of()));
+		String printed = result.stream().map(LispVal::print).findFirst().orElseThrow();
+		assertThat(printed).startsWith("(WITH-INPUT-FROM-STRING (IN (CONCATENATE (QUOTE STRING)");
+	}
+
+	@Test
+	void leavesWithOpenFileUnchangedForMissingLiteralPath() {
+		// Path is a literal but the file does not exist: pass through so the JVM path
+		// still opens the file at run time with the folded literal.
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString(
+				"(with-open-file (in \"/nonexistent/path.txt\" :external-format :utf-8) (read-line in nil nil))"),
+				loaderOf(Map.of()));
+		assertThat(result.stream().map(LispVal::print).findFirst().orElseThrow())
+			.startsWith("(WITH-OPEN-FILE (IN \"/nonexistent/path.txt\"");
+	}
+
 	// Defines the compiled class from its bytes and runs main, capturing stdout.
 	private static String runMain(byte[] classBytes, String name) throws Exception {
 		ClassLoader loader = new ClassLoader(LoadInlinerTest.class.getClassLoader()) {

@@ -77,7 +77,7 @@ chain, plus the transitive `cl-ppcre` (via uax-15; cl-postgres itself has one
   `make-load-form-saving-slots`) + `print-unreadable-object` /
   `with-package-iterator` macros. `cl-ppcre:split` now unblocks uax-15
   (its OWN extra gates listed below).
-- `uax-15` -- **INTERPRETER DONE 2026-07-22** (`Uax15E2eTest`, vendored
+- `uax-15` -- **INTERPRETER + JVM DONE 2026-07-22** (`Uax15E2eTest`, vendored
   `src/test/resources/uax-15`, MIT license, v0.1.3 loads uax-15 + its
   transitive split-sequence/cl-ppcre deps and exercises `normalize`
   :nfc/:nfd/:nfkc/:nfkd on codepoints A+U+030A, U+00C5, U+2460+U+00BD,
@@ -120,16 +120,23 @@ chain, plus the transitive `cl-ppcre` (via uax-15; cl-postgres itself has one
   * Small fix: `LispMacroExpander.normalizeBindingList` now converts a
     1-element `(x)` binding to `(x nil)` on top of the existing bare-x
     case, so a top-level `(let (a b c) ...)` still binds a=b=c=nil.
-  * Compile paths (JVM + both WASM) STAY EXCLUDED (all three @Disabled with
-    a specific reason): the four pathname primitives are interpreter-only
-    (JVM would need a `Jvm*Compiler` case or a compile-time substitution
-    pass); the .txt data files need a filesystem the wasmtime sandbox
-    doesn't have. Follow-up work is a separate item.
-- `uax-15` compile-path follow-up: split out to **`.todo/159`**
-  (uax-15 on JVM + WASM). Self-contained, picks up cold: goal state,
-  current failure surface, two viable approaches (compile-time
-  substitution in `LoadInliner` vs per-backend runtime function support),
-  the WASM data-file bundling angle, verification chain, files to touch.
+  * **JVM compile path CLEARED 2026-07-22** by `.todo/159`: the four
+    pathname primitives fold to literals at compile time
+    (`cli/CompileTimePathnameFolder`), `with-open-file` on a literal
+    UTF-8 path bundles the file contents inline via
+    `with-input-from-string` + `concatenate 'string` chunking (JVM 65535
+    per-string ceiling), `read-line`'s 3-arg CL shape lowers through
+    `expandReadLineCompat`, `subseq` on a general array copies through
+    `make-array` + `%aset` via `expandSubseqCompat`,  `seqAsListForm` now
+    coerces every sequence to a list (including vectors), and
+    `(make-array N :element-type 'character)` uses the mutable char-vec
+    representation on the JVM so `setf-aref` writes land in place.
+  * Both WASM backends still @Disabled: the WASM string model is
+    byte/ASCII (`_charvec_to_str` truncates each element to one byte),
+    so uax-15's non-BMP scratch values silently lose their high bytes on
+    downstream string reads. Fixing that needs a wider WASM string
+    model (UTF-8 encoding on serialization at minimum) -- see
+    `.todo/159` for the follow-up scope.
 - `ironclad` -- real loading judged INFEASIBLE under the current
   architecture: `ironclad.asd` is executable code (defclass on
   cl-source-file, a defmacro generating defsystems, uiop/format at parse

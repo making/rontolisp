@@ -3,13 +3,16 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 
 /**
  * Compiles the {@code read-line} built-in function. Without an argument it reads from
  * stdin (fd 0); with a stream argument the stream's i31-boxed file descriptor is unboxed
- * and read from instead.
+ * and read from instead. A CL 3-arg {@code (read-line stream eof-error-p eof-value)} is
+ * lowered first through {@link LispMacroExpander#expandReadLineCompat} so the standard
+ * "swallow EOF" idiom real libraries drive their per-line loops with works on WASM too.
  */
 final class WasmReadLineCompiler {
 
@@ -17,6 +20,11 @@ final class WasmReadLineCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		LispVal rewritten = LispMacroExpander.expandReadLineCompat(cons);
+		if (rewritten != null) {
+			WasmExprCompiler.compileExpr(rewritten, ctx);
+			return;
+		}
 		List<LispVal> parts = cons.toList();
 		if (parts.size() == 1) {
 			ctx.writer.write(Instruction.I32_CONST);

@@ -1688,6 +1688,16 @@ public final class LispNames {
 	public static final String SUBSEQ = "SUBSEQ";
 
 	/**
+	 * The internal {@code %subseq-core} operator (compile-path only): the JVM/WASM subseq
+	 * compilers, without the arrayp dispatch that
+	 * {@link am.ik.rontolisp.LispMacroExpander#expandSubseqCompat} injects to route a
+	 * vector argument through {@code make-array} + {@code aref}. Never appears in user
+	 * source (the expansion is only re-entered internally through the same subseq
+	 * compilers).
+	 */
+	public static final String SUBSEQ_CORE = "%SUBSEQ-CORE";
+
+	/**
 	 * The {@code make-string} built-in function ({@code (make-string n &key
 	 * initial-element element-type)}). Lowered to a fill loop over {@code concatenate};
 	 * {@code element-type} is parsed and ignored (single string representation).
