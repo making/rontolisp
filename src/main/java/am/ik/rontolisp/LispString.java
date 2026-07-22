@@ -1,7 +1,7 @@
 package am.ik.rontolisp;
 
 /**
- * A string value. Backed by a mutable character buffer so that destructive operations
+ * A string value. Backed by a mutable code-point buffer so that destructive operations
  * (notably {@code replace} into a {@code make-string} result) can update the string in
  * place -- Common Lisp strings are mutable sequences. Equality and hashing stay
  * content-based (as the former {@code record} definition provided), so runtime-built
@@ -15,10 +15,17 @@ package am.ik.rontolisp;
  * capacity is the array dimension. {@code vector-push-extend} appends past the fill
  * pointer, growing the buffer when the string is adjustable, and {@code adjust-array}
  * resizes the capacity explicitly.
+ *
+ * <p>
+ * The backing buffer stores ONE Unicode code point per slot ({@code int[]}), matching the
+ * JVM ({@code int[]{cp}} per char-vec slot) and WASM ({@code TYPE_CHAR} per slot) compile
+ * paths. A supplementary code point (above {@code U+FFFF}) occupies exactly one indexed
+ * slot on every backend, so {@code (setf (schar s i) (code-char 128512))} stores in one
+ * indexed step and prints as its glyph on every backend.
  */
 public final class LispString implements LispVal {
 
-	private char[] chars;
+	private int[] chars;
 
 	/** The active length, or -1 when the string has no fill pointer. */
 	private int fillPointer = -1;
@@ -26,110 +33,103 @@ public final class LispString implements LispVal {
 	private boolean adjustable;
 
 	/**
-	 * Creates a string with the given content.
+	 * Creates a string with the given content. Each Unicode code point of {@code value}
+	 * fills exactly one slot; a supplementary code point does not split into surrogate
+	 * halves.
 	 * @param value the string content
 	 */
 	public LispString(String value) {
-		this.chars = value.toCharArray();
+		this.chars = value.codePoints().toArray();
 	}
 
 	/**
 	 * Creates a string with the given backing content, fill pointer and adjustability
-	 * (the {@code make-array :element-type 'character} shapes).
-	 * @param value the backing buffer content (its length is the capacity)
-	 * @param fillPointer the active length, or -1 for no fill pointer
+	 * (the {@code make-array :element-type 'character} shapes). Slots are in code-point
+	 * units on every axis: capacity, fill pointer, and index.
+	 * @param value the backing buffer content (its code-point length is the capacity)
+	 * @param fillPointer the active length (in code points), or -1 for no fill pointer
 	 * @param adjustable whether the string may grow
 	 */
 	public LispString(String value, int fillPointer, boolean adjustable) {
-		this.chars = value.toCharArray();
+		this.chars = value.codePoints().toArray();
 		this.fillPointer = fillPointer;
 		this.adjustable = adjustable;
 	}
 
 	/**
-	 * Returns the current content of the string: the active prefix when a fill pointer is
-	 * present, the whole buffer otherwise.
+	 * Returns the current content of the string as a Java {@code String}: the active
+	 * prefix when a fill pointer is present, the whole buffer otherwise. Reassembled from
+	 * code points via {@link String#String(int[], int, int)} so a supplementary code
+	 * point expands to its UTF-16 surrogate pair at the Java boundary.
 	 * @return the string content
 	 */
 	public String value() {
-		return this.fillPointer >= 0 ? new String(this.chars, 0, this.fillPointer) : new String(this.chars);
+		int end = this.fillPointer >= 0 ? this.fillPointer : this.chars.length;
+		return new String(this.chars, 0, end);
 	}
 
 	/**
-	 * Destructively copies {@code count} characters from {@code source} (starting at
-	 * {@code sourceStart}) into this string starting at {@code targetStart}, like the
-	 * effect of {@code replace} on a string. Out-of-range copies are clamped to this
-	 * string's capacity.
-	 * @param targetStart the index in this string to start writing at
+	 * Destructively copies {@code count} code points from {@code source} (starting at
+	 * character index {@code sourceStart}) into this string starting at
+	 * {@code targetStart}, like the effect of {@code replace} on a string. The walk is BY
+	 * CODE POINT on both sides so a supplementary code point in the source round-trips
+	 * into one target slot. Out-of-range copies are clamped to this string's capacity.
+	 * @param targetStart the code-point index in this string to start writing at
 	 * @param source the source string to copy from
-	 * @param sourceStart the index in {@code source} to start reading from
-	 * @param count the number of characters to copy
+	 * @param sourceStart the character index (in code points) in {@code source} to start
+	 * reading from
+	 * @param count the number of code points to copy
 	 */
 	public void replaceInPlace(int targetStart, String source, int sourceStart, int count) {
+		int srcCpLen = source.codePointCount(0, source.length());
+		int srcCu = source.offsetByCodePoints(0, Math.min(sourceStart, srcCpLen));
+		int srcSlot = sourceStart;
 		for (int i = 0; i < count; i++) {
 			int t = targetStart + i;
-			int s = sourceStart + i;
-			if (t < 0 || t >= this.chars.length || s < 0 || s >= source.length()) {
+			if (t < 0 || t >= this.chars.length || srcSlot >= srcCpLen) {
 				break;
 			}
-			this.chars[t] = source.charAt(s);
+			int cp = source.codePointAt(srcCu);
+			this.chars[t] = cp;
+			srcCu += Character.charCount(cp);
+			srcSlot++;
 		}
 	}
 
 	/**
-	 * Returns the number of UTF-16 code units in the string (the fill pointer when
-	 * present). This is the size of the backing buffer and NOT the character-visible
-	 * length -- callers implementing Common Lisp's
-	 * {@code length}/{@code char}/{@code aref} should use {@link #codePointCount()} /
-	 * {@link #codePointAt(int)} / {@link #codePointByteIndex(int)} so a supplementary
-	 * code point (a surrogate pair occupies two code units) still counts as one
-	 * character.
-	 * @return the code-unit length
+	 * Returns the number of Unicode code points (character-visible length) in the string
+	 * -- {@link #length()} and {@link #codePointCount()} are the same value now that the
+	 * backing store is code-point per slot. A supplementary code point counts as one
+	 * character on every backend.
+	 * @return the code-point length
 	 */
 	public int length() {
 		return this.fillPointer >= 0 ? this.fillPointer : this.chars.length;
 	}
 
 	/**
-	 * Returns the number of Unicode code points (character-visible length) in the string,
-	 * matching Java's {@code String.codePointCount(0, length())}. A supplementary code
-	 * point counts as one character; every ASCII / BMP-only string agrees with
+	 * Returns the number of Unicode code points in the string. Kept as a distinct name
+	 * for callers that document indexing by code point at their call site; equivalent to
 	 * {@link #length()}.
 	 * @return the code-point count
 	 */
 	public int codePointCount() {
-		int n = length();
-		return Character.codePointCount(this.chars, 0, n);
+		return length();
 	}
 
 	/**
-	 * Returns the Unicode code point at character index {@code cpIndex} (0-based). Walks
-	 * the buffer with {@link Character#offsetByCodePoints(char[], int, int, int, int)} so
-	 * a supplementary code point comes back as a single 21-bit value.
+	 * Returns the Unicode code point at character index {@code cpIndex} (0-based). Since
+	 * the backing store is one code point per slot, this is a trivial array lookup.
 	 * @param cpIndex the 0-based character index
 	 * @return the code point at that position
 	 */
 	public int codePointAt(int cpIndex) {
-		int codeUnit = codePointByteIndex(cpIndex);
-		return Character.codePointAt(this.chars, codeUnit);
-	}
-
-	/**
-	 * Returns the UTF-16 code-unit offset at which the {@code cpIndex}-th character
-	 * begins. Useful for taking substrings on a character range: convert a start/end
-	 * character range to code-unit offsets and slice through {@code value()} /
-	 * {@code new String(...)}. Passing the code-point count returns the code-unit length
-	 * (a valid one-past-the-end for slicing).
-	 * @param cpIndex the 0-based character index (in {@code [0, codePointCount()]})
-	 * @return the code-unit offset
-	 */
-	public int codePointByteIndex(int cpIndex) {
-		return Character.offsetByCodePoints(this.chars, 0, length(), 0, cpIndex);
+		return this.chars[cpIndex];
 	}
 
 	/**
 	 * Returns the backing buffer's capacity (the array dimension of a fill-pointered
-	 * string; equal to {@link #length()} otherwise).
+	 * string; equal to {@link #length()} otherwise). Capacity is in CODE POINTS.
 	 * @return the capacity
 	 */
 	public int capacity() {
@@ -137,7 +137,7 @@ public final class LispString implements LispVal {
 	}
 
 	/**
-	 * Returns the fill pointer, or -1 when the string has none.
+	 * Returns the fill pointer (in code points), or -1 when the string has none.
 	 * @return the fill pointer or -1
 	 */
 	public int fillPointer() {
@@ -154,7 +154,7 @@ public final class LispString implements LispVal {
 
 	/**
 	 * Moves the fill pointer.
-	 * @param fillPointer the new active length (0..capacity)
+	 * @param fillPointer the new active length (0..capacity, in code points)
 	 */
 	public void setFillPointer(int fillPointer) {
 		if (fillPointer < 0 || fillPointer > this.chars.length) {
@@ -164,22 +164,23 @@ public final class LispString implements LispVal {
 	}
 
 	/**
-	 * Appends a character at the fill pointer, growing the buffer when needed (the
-	 * {@code vector-push-extend} operation).
-	 * @param c the character to append
-	 * @return the index the character was stored at
+	 * Appends a code point at the fill pointer, growing the buffer when needed (the
+	 * {@code vector-push-extend} operation). A supplementary code point still occupies
+	 * exactly one slot.
+	 * @param codePoint the code point to append
+	 * @return the index the code point was stored at
 	 */
-	public int vectorPushExtend(char c) {
+	public int vectorPushExtend(int codePoint) {
 		if (this.fillPointer < 0) {
 			throw new IllegalStateException("string has no fill pointer");
 		}
 		if (this.fillPointer >= this.chars.length) {
-			char[] grown = new char[this.chars.length == 0 ? 8 : this.chars.length * 2];
+			int[] grown = new int[this.chars.length == 0 ? 8 : this.chars.length * 2];
 			System.arraycopy(this.chars, 0, grown, 0, this.chars.length);
 			this.chars = grown;
 		}
 		int index = this.fillPointer;
-		this.chars[index] = c;
+		this.chars[index] = codePoint;
 		this.fillPointer = index + 1;
 		return index;
 	}
@@ -187,10 +188,10 @@ public final class LispString implements LispVal {
 	/**
 	 * Resizes the backing buffer (the {@code adjust-array} operation), preserving the
 	 * existing content and the fill pointer (clamped to the new capacity).
-	 * @param newCapacity the new capacity
+	 * @param newCapacity the new capacity (in code points)
 	 */
 	public void adjustCapacity(int newCapacity) {
-		char[] resized = new char[newCapacity];
+		int[] resized = new int[newCapacity];
 		System.arraycopy(this.chars, 0, resized, 0, Math.min(this.chars.length, newCapacity));
 		this.chars = resized;
 		if (this.fillPointer > newCapacity) {
@@ -199,23 +200,23 @@ public final class LispString implements LispVal {
 	}
 
 	/**
-	 * Destructively replaces the character at {@code index}, like the effect of
+	 * Destructively replaces the code point at {@code index}, like the effect of
 	 * {@code (setf (schar s index) c)}. The caller checks bounds (the capacity, so a
 	 * write between the fill pointer and the capacity is allowed, as in CL).
 	 * @param index the index to write at
-	 * @param c the replacement character
+	 * @param codePoint the replacement code point
 	 */
-	public void setCharAt(int index, char c) {
-		this.chars[index] = c;
+	public void setCharAt(int index, int codePoint) {
+		this.chars[index] = codePoint;
 	}
 
 	/**
-	 * Reads the character at {@code index} from the backing buffer (capacity bounds, like
-	 * {@link #setCharAt}).
+	 * Reads the code point at {@code index} from the backing buffer (capacity bounds,
+	 * like {@link #setCharAt}). Supplementary code points come back unsplit.
 	 * @param index the index to read
-	 * @return the character
+	 * @return the code point
 	 */
-	public char charAt(int index) {
+	public int charAt(int index) {
 		return this.chars[index];
 	}
 

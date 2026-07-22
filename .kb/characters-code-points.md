@@ -13,6 +13,10 @@ holds byte-identically across all four.
 | JVM compile | length-1 `int[]{codePoint}` (a plain Java `int[]`) | `instanceof int[]` |
 | WASM (both P1 and component) | `TYPE_CHAR = struct { i32 code }` | `ref.test $type_char` |
 
+The interpreter's mutable-string storage is a matching `int[]` (one code point per
+slot in `LispString.chars`), so `(setf (schar s i) (code-char cp))` writes one
+indexed slot on every backend for any code point in `[0, 0x10FFFF]`.
+
 Notes on the JVM representation: previously chars were `java.lang.Character`
 (16-bit `char`), so `#\U+1F600` truncated silently to a lone surrogate. Widening
 to `int[]{cp}` was done together with the string-indexing code-point work in
@@ -34,12 +38,15 @@ argument BY CODE POINT, not by UTF-16 code unit. A supplementary code point
 `(char "aé😀b" 2) == #\😀` on every backend.
 
 - **Interpreter** (`Environment.java`) -- `LENGTH` reads `str.codePointCount()`
-  (added to `LispString`), `charRef` / `sequenceRef` walk `String.offsetByCodePoints(0, i)` +
-  `String.codePointAt(codeUnit)`, `SUBSEQ` translates a character range to a
-  code-unit range through the same walk, `seqAsList` builds one `LispChar` per
-  code point via `String.codePointBefore(codeUnit)`. `capitalizeString` and
-  `trimString` walk by code point via `Character.isLetterOrDigit(int)` and
-  `Character.toUpperCase(int)` / `toLowerCase(int)`.
+  (equivalent to `length()` under the new int[] storage), `charRef` /
+  `sequenceRef` walk `String.offsetByCodePoints(0, i)` +
+  `String.codePointAt(codeUnit)` on the reassembled `value()`, `SUBSEQ` translates
+  a character range to a code-unit range through the same walk, `seqAsList` builds
+  one `LispChar` per code point via `String.codePointBefore(codeUnit)`.
+  `capitalizeString` and `trimString` walk by code point via
+  `Character.isLetterOrDigit(int)` and `Character.toUpperCase(int)` /
+  `toLowerCase(int)`. Mutation (`%schar-set`, `storeStringChar`,
+  `vectorPushExtend`) writes one code point into one slot -- no BMP-only reject.
 - **JVM compile path** -- `JvmLengthRuntimeBuilder` returns
   `str.codePointCount(1, length()-1)` on the string branch (the framing quotes
   live at 0 and `length-1`). `JvmCharCompiler.compileChar` and
@@ -88,12 +95,18 @@ result.
   JVM, `emitPrintChar` on the WASM) and `#\<glyph>` otherwise.
 - A `#\` reader token in source is read as a code point directly (the reader
   decodes UTF-8 in source verbatim).
-- `read-char` at runtime returns a CHARACTER holding whatever integer the
-  underlying stream produced: on the interpreter and the JVM it walks Java's
-  UTF-16 code-unit stream, so a supplementary code point surfaces as a lone
-  surrogate; on WASM the binary stream returns one UTF-8 byte at a time. Not
-  a defect at the character type; the widening (combine surrogate pairs
-  / decode multi-byte UTF-8) is `.todo/161`.
+- `read-char` at runtime returns a CHARACTER holding a full code point on every
+  backend. Interpreter and JVM: a `BufferedReader.read()` high-surrogate code unit
+  is combined with the peeked low half via `mark(1)` + conditional `reset()` before
+  boxing. WASM (both backends): `_read_char` decodes a 1-4 byte UTF-8 sequence at
+  the cursor by dispatching on the lead byte's high bits (the same
+  `<0x80 / <0xE0 / <0xF0 / else` ladder `_str_char_at` uses); the string-stream
+  branch clamps against the buffer end, the WASI fd branch clamps against
+  successive `fd_read` yields (a truncated tail falls back to the lead byte as a
+  bare CHARACTER on both paths, matching the interpreter's non-surrogate follow
+  behaviour). A supplementary code point round-trips as one CHARACTER through
+  `(with-input-from-string ... (read-char ...))` on all four backends
+  byte-identically.
 
 ## Java interop (JVM compile path)
 
@@ -112,27 +125,23 @@ boundary:
 ## Mutation semantics
 
 `(setf (aref s i) ch)` / `%schar-set` on a mutable string (`make-array N :element-type 'character`)
-stores one CHARACTER per slot on the JVM (`int[]{cp}` per ArrayList slot,
-normalized to a String at read-out via `StringBuilder.appendCodePoint`) and
-on WASM (`TYPE_CHAR` per slot). The interpreter still stores `char[]` under
-the hood, so a supplementary code point via setf-aref is REJECTED (`storeStringChar`
-in `Environment.java`). The read path (`length` / `char` / `subseq` / ...)
-is code-point-visible on every backend regardless.
+stores one CHARACTER per slot on every backend: the interpreter's `LispString`
+holds `int[]` (one code point per slot), the JVM char-vec holds `int[]{cp}` per
+ArrayList slot (normalized to a String at read-out via
+`StringBuilder.appendCodePoint`), and WASM holds `TYPE_CHAR` per slot. A
+supplementary code point via setf-aref lands in exactly one indexed slot on
+every backend and prints as its glyph. Capacity, fill pointer and index are all
+in code-point units.
 
-This mutation asymmetry -- interpreter rejects, JVM/WASM accept -- is one of
-three remaining "not-all-four-backends" gaps after todo 153; widening the
-interpreter's `LispString` backing store to `int[]` (one code point per slot)
-is the fundamental fix, deferred to `.todo/160`. The other two:
+The other cross-backend gap after todo 160 / 161:
 
-- `read-char` returns a lone UTF-16 surrogate on the interpreter / JVM and one
-  UTF-8 byte on WASM instead of one CHARACTER holding the full code point --
-  see `.todo/161`.
 - `(eq (code-char cp) (code-char cp))` returns T on the interpreter and the
   JVM compile path but NIL on WASM (implementation-defined by CL, but a
   byte-identical divergence) -- see `.todo/162`.
 
-Programs that stick to BMP-only mutable strings and eq-only-for-identity (not
-value) round-trip identically on every backend today.
+`read-char` is code-point-symmetric across all four backends now (interpreter
+and JVM combine UTF-16 surrogate pairs via `mark(1)`/`reset()`; WASM decodes
+1-4 byte UTF-8 sequences in `_read_char`).
 
 ## Pinning tests
 
@@ -141,7 +150,11 @@ value) round-trip identically on every backend today.
   Covers `code-char` / `char-code` round-trip on Latin-1 supplement, Greek,
   Cyrillic and astral (`U+1F600`); the case-fold table on all three of those
   scripts; string `length` / `char` / `subseq` on a mixed-BMP-and-astral
-  string; the read-side predicates on ASCII.
+  string; the read-side predicates on ASCII; the mutation round-trip
+  (`(setf (schar s i) (code-char 128512))` + `vector-push-extend`) landing a
+  supplementary code point in one indexed slot on every backend; and the
+  `(with-input-from-string ... (read-char ...))` round-trip that returns one
+  CHARACTER per code point on every backend.
 - `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`
   cover per-backend char builtins and the WASM `_char_upcase` /
   `_char_downcase` helper indices.

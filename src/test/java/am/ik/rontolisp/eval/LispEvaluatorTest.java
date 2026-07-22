@@ -5289,6 +5289,46 @@ class LispEvaluatorTest {
 		assertThat(eval("(subseq \"aé😀b\" 1 3)")).isEqualTo(new am.ik.rontolisp.LispString("é😀"));
 	}
 
+	// read-char over a supplementary code point reads it as one CHARACTER (a full
+	// code point), not as its high UTF-16 surrogate: BufferedReader.read() delivers
+	// two code units, the runtime combines them via mark(1)/reset() on the low half.
+	@Test
+	void evalReadCharCombinesSurrogatePairsOnSupplementaryCodePoint() {
+		assertThat(evalMulti("""
+				(with-input-from-string (s "😀X")
+				  (let* ((c1 (read-char s))
+				         (c2 (read-char s))
+				         (c3 (read-char s nil :eof)))
+				    (list (char-code c1) (char-code c2) c3)))
+				""")).isEqualTo(evalMulti("(list 128512 88 :eof)"));
+	}
+
+	// Mutation (setf (schar s i) c) / (setf (aref s i) c) accepts a supplementary
+	// code point in one indexed slot, matching the JVM and WASM char-vec models.
+	// A mutable string of :element-type 'character is one code point per slot on
+	// every backend now.
+	@Test
+	void evalStringMutationSupplementaryCodePointRoundTrip() {
+		assertThat(evalMulti("""
+				(let ((s (make-string 1 :initial-element #\\a)))
+				  (setf (schar s 0) (code-char 128512))
+				  (list (length s) (char-code (schar s 0)) s))
+				""")).isEqualTo(evalMulti("(list 1 128512 \"😀\")"));
+		assertThat(evalMulti("""
+				(let ((s (make-array 3 :element-type 'character :initial-element #\\a)))
+				  (setf (aref s 1) (code-char 128512))
+				  (list (length s) (char-code (aref s 1)) s))
+				""")).isEqualTo(evalMulti("(list 3 128512 \"a😀a\")"));
+		// vector-push-extend of an astral char lands in exactly one slot.
+		assertThat(evalMulti("""
+				(let ((s (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t)))
+				  (vector-push-extend #\\a s)
+				  (vector-push-extend (code-char 128512) s)
+				  (vector-push-extend #\\b s)
+				  (list (length s) (char-code (aref s 1)) s))
+				""")).isEqualTo(evalMulti("(list 3 128512 \"a😀b\")"));
+	}
+
 	@Test
 	void evalCharComparisons() {
 		assertThat(eval("(char= #\\a #\\a)")).isEqualTo(LispTrue.INSTANCE);

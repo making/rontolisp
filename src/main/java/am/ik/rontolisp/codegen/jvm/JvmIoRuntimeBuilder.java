@@ -215,6 +215,16 @@ final class JvmIoRuntimeBuilder {
 
 	private final MethodrefConstant bufferedReaderRead;
 
+	private final MethodrefConstant bufferedReaderMark;
+
+	private final MethodrefConstant bufferedReaderReset;
+
+	private final MethodrefConstant characterIsHighSurrogate;
+
+	private final MethodrefConstant characterIsLowSurrogate;
+
+	private final MethodrefConstant characterToCodePoint;
+
 	/**
 	 * Socket-runtime constants, non-null only when the program uses a tcp built-in; the
 	 * stream built-ins then grow socket branches (a socket entry is a raw
@@ -326,6 +336,17 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/InputStream;)V")));
 		this.bufferedReaderRead = cp.addMethodref(this.bufferedReaderClass,
 				cp.addNameAndType(cp.addUtf8("read"), cp.addUtf8("()I")));
+		this.bufferedReaderMark = cp.addMethodref(this.bufferedReaderClass,
+				cp.addNameAndType(cp.addUtf8("mark"), cp.addUtf8("(I)V")));
+		this.bufferedReaderReset = cp.addMethodref(this.bufferedReaderClass,
+				cp.addNameAndType(cp.addUtf8("reset"), cp.addUtf8("()V")));
+		ClassConstant characterClass = cp.addClass(cp.addUtf8("java/lang/Character"));
+		this.characterIsHighSurrogate = cp.addMethodref(characterClass,
+				cp.addNameAndType(cp.addUtf8("isHighSurrogate"), cp.addUtf8("(C)Z")));
+		this.characterIsLowSurrogate = cp.addMethodref(characterClass,
+				cp.addNameAndType(cp.addUtf8("isLowSurrogate"), cp.addUtf8("(C)Z")));
+		this.characterToCodePoint = cp.addMethodref(characterClass,
+				cp.addNameAndType(cp.addUtf8("toCodePoint"), cp.addUtf8("(CC)I")));
 	}
 
 	static JvmIoRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
@@ -347,7 +368,7 @@ final class JvmIoRuntimeBuilder {
 		ms.add(new IoMethod(this.cp.addUtf8(READ_LINE_STREAM_METHOD), this.cp.addUtf8(READ_LINE_STREAM_DESC), 4, 2,
 				buildReadLineStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(READ_BYTE_METHOD), this.cp.addUtf8(READ_BYTE_DESC), 4, 5, buildReadByte()));
-		ms.add(new IoMethod(this.cp.addUtf8(READ_CHAR_METHOD), this.cp.addUtf8(READ_CHAR_DESC), 5, 5, buildReadChar()));
+		ms.add(new IoMethod(this.cp.addUtf8(READ_CHAR_METHOD), this.cp.addUtf8(READ_CHAR_DESC), 5, 6, buildReadChar()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_BYTE_METHOD), this.cp.addUtf8(WRITE_BYTE_DESC), 4, 3,
 				buildWriteByte()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STR_METHOD), this.cp.addUtf8(WRITE_STR_DESC), 4, 3, buildWriteStr()));
@@ -878,15 +899,22 @@ final class JvmIoRuntimeBuilder {
 
 	/**
 	 * {@code _readChar(Object handle, Object eofErrorP, Object eofValue) -> Object}.
-	 * Reads one character (a UTF-16 code unit, like the rest of the string
-	 * representation) from the text stream in the table, or from standard input when the
-	 * handle is {@code null} (lazily initializing the {@code _stdinReader} field the
-	 * {@code _readLine} helper shares). On EOF returns {@code eofValue} when
-	 * {@code eofErrorP} is nil, otherwise throws. A character is a boxed
-	 * {@code Character}.
+	 * Reads one character (a Unicode CODE POINT) from the text stream in the table, or
+	 * from standard input when the handle is {@code null} (lazily initializing the
+	 * {@code _stdinReader} field the {@code _readLine} helper shares). On EOF returns
+	 * {@code eofValue} when {@code eofErrorP} is nil, otherwise throws.
+	 *
+	 * <p>
+	 * When the underlying {@code BufferedReader.read()} yields a high-surrogate UTF-16
+	 * code unit, peek/consume the following unit and combine into a single supplementary
+	 * code point before boxing as CHARACTER ({@code int[1]{cp}}). {@code mark(1)} +
+	 * conditional {@code reset()} on a non-matching low half keeps the stream position
+	 * aligned. Matches {@code Environment.READ_CHAR} on the interpreter and the
+	 * code-point walk on the WASM binary stream.
 	 */
 	private List<Integer> buildReadChar() {
-		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=r (BufferedReader), 4=c (int)
+		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=r (BufferedReader), 4=c (int),
+		// 5=low (int)
 		List<Integer> code = new ArrayList<>();
 		// if (handle != null) goto STREAM;
 		code.add(Opcode.ALOAD_0);
@@ -943,16 +971,70 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.bufferedReaderRead.index());
 		code.add(Opcode.ISTORE);
 		code.add(4);
-		// if (c >= 0) return int[1]{c}; -- the runtime CHARACTER representation. A
-		// supplementary code point read via read-char surfaces as a lone surrogate
-		// (BufferedReader.read() returns UTF-16 code units), which is a pre-existing
-		// limitation shared with the interpreter -- the box just carries whatever
-		// integer read() produced.
+		// if (c < 0) goto EOF;
 		code.add(Opcode.ILOAD);
 		code.add(4);
 		int ifEofPos = code.size();
 		code.add(Opcode.IFLT);
 		emitU2(code, 0);
+		// if (!Character.isHighSurrogate((char) c)) goto BOX;
+		code.add(Opcode.ILOAD);
+		code.add(4);
+		code.add(Opcode.I2C);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.characterIsHighSurrogate.index());
+		int ifNotHighPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		// r.mark(1);
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.bufferedReaderMark.index());
+		// low = r.read();
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.bufferedReaderRead.index());
+		code.add(Opcode.ISTORE);
+		code.add(5);
+		// if (low < 0) goto BOX; -- EOF on the low half, keep the raw surrogate.
+		code.add(Opcode.ILOAD);
+		code.add(5);
+		int ifLowEofPos = code.size();
+		code.add(Opcode.IFLT);
+		emitU2(code, 0);
+		// if (!Character.isLowSurrogate((char) low)) goto RESET;
+		code.add(Opcode.ILOAD);
+		code.add(5);
+		code.add(Opcode.I2C);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.characterIsLowSurrogate.index());
+		int ifNotLowPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		// c = Character.toCodePoint((char) c, (char) low);
+		code.add(Opcode.ILOAD);
+		code.add(4);
+		code.add(Opcode.I2C);
+		code.add(Opcode.ILOAD);
+		code.add(5);
+		code.add(Opcode.I2C);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.characterToCodePoint.index());
+		code.add(Opcode.ISTORE);
+		code.add(4);
+		int gotoBoxAfterCombinePos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		// RESET: r.reset(); goto BOX (the raw high surrogate stays in c).
+		patchBranch(code, ifNotLowPos, code.size());
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.bufferedReaderReset.index());
+		// BOX: return int[1]{c} -- the runtime CHARACTER representation.
+		patchBranch(code, ifNotHighPos, code.size());
+		patchBranch(code, ifLowEofPos, code.size());
+		patchBranch(code, gotoBoxAfterCombinePos, code.size());
 		code.add(Opcode.ICONST_1);
 		code.add(Opcode.NEWARRAY);
 		code.add(10); // T_INT
@@ -962,8 +1044,8 @@ final class JvmIoRuntimeBuilder {
 		code.add(4);
 		code.add(Opcode.IASTORE);
 		code.add(Opcode.ARETURN);
+		// EOF: if (eofErrorP == null) return eofValue;
 		patchBranch(code, ifEofPos, code.size());
-		// if (eofErrorP == null) return eofValue;
 		code.add(Opcode.ALOAD_1);
 		int ifThrowPos = code.size();
 		code.add(Opcode.IFNONNULL);

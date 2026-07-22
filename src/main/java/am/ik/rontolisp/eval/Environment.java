@@ -630,7 +630,7 @@ public final class Environment implements Scope {
 					return LispNil.INSTANCE;
 				}
 				return new LispInteger(
-						str.vectorPushExtend((char) requireChar(LispNames.VECTOR_PUSH, args.get(0)).codePoint()));
+						str.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH, args.get(0)).codePoint()));
 			}
 			LispArray array = requireGeneralArray(LispNames.VECTOR_PUSH, args.get(1));
 			int index = vectorPush(LispNames.VECTOR_PUSH, array, args.get(0));
@@ -661,8 +661,8 @@ public final class Environment implements Scope {
 				if (str.fillPointer() < 0) {
 					throw new LispEvalException(LispNames.VECTOR_PUSH_EXTEND + ": string has no fill pointer");
 				}
-				return new LispInteger(str
-					.vectorPushExtend((char) requireChar(LispNames.VECTOR_PUSH_EXTEND, args.get(0)).codePoint()));
+				return new LispInteger(
+						str.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH_EXTEND, args.get(0)).codePoint()));
 			}
 			LispArray array = requireGeneralArray(LispNames.VECTOR_PUSH_EXTEND, args.get(1));
 			int extension = args.size() == 3 ? (int) asLong(args.get(2)) : 1;
@@ -3044,8 +3044,11 @@ public final class Environment implements Scope {
 			}
 		}));
 		// (read-char [stream [eof-error-p [eof-value]]]): one character from standard
-		// input or a text stream handle (file streams and string input streams). Reads
-		// UTF-16 code units, like the rest of the interpreter string representation.
+		// input or a text stream handle (file streams and string input streams). A
+		// CHARACTER is a Unicode CODE POINT on every backend, so a supplementary code
+		// point read as a UTF-16 surrogate pair combines into the full code point via a
+		// mark/reset peek on the low half. The interpreter's stream table only holds
+		// BufferedReader instances (mark is supported).
 		env.defineFunction(LispNames.READ_CHAR, new LispFunction(LispNames.READ_CHAR, args -> {
 			if (args.size() > 3) {
 				throw new LispEvalException(LispNames.READ_CHAR + " expects 0 to 3 arguments");
@@ -3073,7 +3076,17 @@ public final class Environment implements Scope {
 					}
 					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
 				}
-				return new LispChar((char) c);
+				if (Character.isHighSurrogate((char) c)) {
+					reader.mark(1);
+					int low = reader.read();
+					if (low >= 0 && Character.isLowSurrogate((char) low)) {
+						c = Character.toCodePoint((char) c, (char) low);
+					}
+					else if (low >= 0) {
+						reader.reset();
+					}
+				}
+				return new LispChar(c);
 			}
 			catch (IOException ex) {
 				throw new UncheckedIOException(ex);
@@ -3490,8 +3503,9 @@ public final class Environment implements Scope {
 	/**
 	 * Stores a character into a mutable string cell ({@code (setf (aref s i) c)} and the
 	 * row-major variant): bounds-checked against the capacity (the fill pointer only
-	 * limits the effective length, so a write between them is legal, as in CL), BMP only
-	 * like {@code %schar-set}.
+	 * limits the effective length, so a write between them is legal, as in CL). One
+	 * indexed slot holds one full code point (including supplementary code points),
+	 * matching the JVM and WASM char-vec representations.
 	 */
 	private static LispVal storeStringChar(String op, LispString str, int index, LispVal value) {
 		if (index < 0 || index >= str.capacity()) {
@@ -3499,10 +3513,7 @@ public final class Environment implements Scope {
 					op + ": index " + index + " out of bounds for string of capacity " + str.capacity());
 		}
 		LispChar c = requireChar(op, value);
-		if (!Character.isBmpCodePoint(c.codePoint())) {
-			throw new LispEvalException(op + " cannot store a supplementary character: " + c.print());
-		}
-		str.setCharAt(index, (char) c.codePoint());
+		str.setCharAt(index, c.codePoint());
 		return c;
 	}
 
@@ -3510,6 +3521,8 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.CHAR, new LispFunction(LispNames.CHAR, args -> charRef(LispNames.CHAR, args)));
 		env.defineFunction(LispNames.SCHAR, new LispFunction(LispNames.SCHAR, args -> charRef(LispNames.SCHAR, args)));
 		// %schar-set: the (setf (schar s i) c) lowering -- mutate in place, return c.
+		// One indexed slot holds one full code point (including supplementary code
+		// points), matching the JVM and WASM char-vec representations.
 		env.defineFunction(LispNames.SCHAR_SET, new LispFunction(LispNames.SCHAR_SET, args -> {
 			requireArgCount(LispNames.SCHAR_SET, args, 3);
 			if (!(args.get(0) instanceof LispString str)) {
@@ -3521,11 +3534,7 @@ public final class Environment implements Scope {
 						+ " out of bounds for string of length " + str.length());
 			}
 			LispChar c = requireChar(LispNames.SCHAR_SET, args.get(2));
-			if (!Character.isBmpCodePoint(c.codePoint())) {
-				throw new LispEvalException(
-						LispNames.SCHAR_SET + " cannot store a supplementary character: " + c.print());
-			}
-			str.setCharAt(index, (char) c.codePoint());
+			str.setCharAt(index, c.codePoint());
 			return c;
 		}));
 		env.defineFunction(LispNames.CHAR_CODE, new LispFunction(LispNames.CHAR_CODE, args -> {

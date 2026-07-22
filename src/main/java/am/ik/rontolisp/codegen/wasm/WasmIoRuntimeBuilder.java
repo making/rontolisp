@@ -314,25 +314,30 @@ final class WasmIoRuntimeBuilder {
 	}
 
 	/**
-	 * Builds the _read_char(stream, eof-error-p, eof-value) function body. Reads one BYTE
-	 * from the stream and returns it as a character struct -- WASM strings are
-	 * byte-indexed (like {@code char}/{@code schar}), so a character read is a byte read.
-	 * A nil stream reads from standard input (fd 0); a negative i31 handle is a string
-	 * input stream whose {@code [kind][cursor][end]} record is consumed one byte at a
-	 * time; a non-negative handle is a WASI fd read via fd_read through the
-	 * BYTE_SCRATCH_ADDR scratch cell. On EOF returns eof-value when eof-error-p is nil,
-	 * otherwise traps (like _read_byte).
+	 * Builds the _read_char(stream, eof-error-p, eof-value) function body. Reads one
+	 * Unicode CODE POINT (1..4 UTF-8 bytes) from the stream and returns it as a character
+	 * struct -- WASM strings are UTF-8 encoded on the byte model but a CHARACTER is a
+	 * code point on every backend, so read-char decodes the sequence starting at the
+	 * cursor. A nil stream reads from standard input (fd 0); a negative i31 handle is a
+	 * string input stream whose {@code [kind][cursor][end]} record is consumed 1..4 bytes
+	 * at a time (the sequence is clamped against the buffer end -- a truncated tail
+	 * yields the lead byte as a bare CHARACTER); a non-negative handle is a WASI fd read
+	 * via {@code fd_read} where the lead byte's continuation count drives per-byte
+	 * follow-up reads into the {@code BYTE_SCRATCH_ADDR} scratch cell (a truncated tail
+	 * from EOF mid-sequence also falls back to the lead byte). On EOF at the start
+	 * returns eof-value when eof-error-p is nil, otherwise traps.
 	 * @return the function body bytes
 	 */
 	static byte[] buildReadCharBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STREAM=0 (ref), EOF_ERROR_P=1 (ref), EOF_VALUE=2 (ref) ; i32 locals:
-		// FD=3, REC=4, CUR=5
+		// FD=3, REC=4, CUR=5, END=6, NEEDED=7, B0=8, B1=9, B2=10, B3=11, I=12
 		w.write(1);
-		w.write(3);
+		w.write(10);
 		w.write(Type.I32);
-		final int STREAM = 0, EOF_ERROR_P = 1, EOF_VALUE = 2, FD = 3, REC = 4, CUR = 5;
+		final int STREAM = 0, EOF_ERROR_P = 1, EOF_VALUE = 2, FD = 3, REC = 4, CUR = 5, END = 6, NEEDED = 7, B0 = 8,
+				B1 = 9, B2 = 10, B3 = 11, I = 12;
 		final int IOV = WasmLispCompiler.IOV_OFFSET;
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 		final int SCRATCH = WasmLispCompiler.BYTE_SCRATCH_ADDR;
@@ -349,7 +354,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 		w.write(Instruction.END);
 		setLocal(w, FD);
-		// A negative handle is a string input stream: consume one byte of the record's
+		// A negative handle is a string input stream: decode a UTF-8 sequence within the
 		// [cursor, end) range.
 		getLocal(w, FD);
 		i32(w, 0);
@@ -359,39 +364,87 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, FD);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, REC);
-		// cur = mem[rec + 4]
+		// cur = mem[rec + 4]; end = mem[rec + 8];
 		getLocal(w, REC);
 		i32(w, 4);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		setLocal(w, CUR);
-		// if (cur >= mem[rec + 8]): EOF
-		getLocal(w, CUR);
 		getLocal(w, REC);
 		i32(w, 8);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, END);
+		// if (cur >= end): EOF
+		getLocal(w, CUR);
+		getLocal(w, END);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.IF, 0x40);
 		emitReadCharEof(w, EOF_ERROR_P, EOF_VALUE);
 		w.write(Instruction.END);
-		// mem[rec + 4] = cur + 1
+		// b0 = mem_u8[cur]; needed = utf8ByteCount(b0);
+		getLocal(w, CUR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B0);
+		emitUtf8ByteCount(w, B0);
+		setLocal(w, NEEDED);
+		// If cur + needed > end: needed = 1 (truncated tail -- return bare lead byte).
+		getLocal(w, CUR);
+		getLocal(w, NEEDED);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, END);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 1);
+		setLocal(w, NEEDED);
+		w.write(Instruction.END);
+		// Load b1..b3 as needed.
+		getLocal(w, NEEDED);
+		i32(w, 2);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B1);
+		w.write(Instruction.END);
+		getLocal(w, NEEDED);
+		i32(w, 3);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B2);
+		w.write(Instruction.END);
+		getLocal(w, NEEDED);
+		i32(w, 4);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B3);
+		w.write(Instruction.END);
+		// mem[rec + 4] = cur + needed
 		getLocal(w, REC);
 		i32(w, 4);
 		w.write(Instruction.I32_ADD);
 		getLocal(w, CUR);
-		i32(w, 1);
+		getLocal(w, NEEDED);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// return char(mem_u8[cur])
-		getLocal(w, CUR);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		// return TYPE_CHAR(decodeUtf8(needed, b0, b1, b2, b3))
+		emitUtf8DecodeFromLocals(w, NEEDED, B0, B1, B2, B3);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// WASI fd: read one byte through the scratch cell, like _read_byte.
-		// iov.ptr = BYTE_SCRATCH_ADDR ; iov.len = 1
+		// WASI fd branch: read the lead byte via fd_read, then per-byte follow-ups.
+		// iov.ptr = SCRATCH ; iov.len = 1
 		i32(w, IOV);
 		i32(w, SCRATCH);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
@@ -412,9 +465,89 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		emitReadCharEof(w, EOF_ERROR_P, EOF_VALUE);
 		w.write(Instruction.END);
-		// return char(mem_u8[BYTE_SCRATCH_ADDR])
+		// b0 = mem_u8[SCRATCH]; needed = utf8ByteCount(b0);
 		i32(w, SCRATCH);
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B0);
+		emitUtf8ByteCount(w, B0);
+		setLocal(w, NEEDED);
+		// i = 1; loop { if i >= needed break; fd_read(fd, IOV, 1, NWRITTEN); if nread==0
+		// { needed = i; break; } mem_u8[SCRATCH+i] = mem_u8[SCRATCH]; i++; }
+		i32(w, 1);
+		setLocal(w, I);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		// if (i >= needed) break out of block.
+		getLocal(w, I);
+		getLocal(w, NEEDED);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF);
+		w.writeSignedLeb128(1);
+		// iov points at SCRATCH already; we reuse it. Read one byte into SCRATCH.
+		getLocal(w, FD);
+		i32(w, IOV);
+		i32(w, 1);
+		i32(w, NWRITTEN);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_READ);
+		w.write(Instruction.DROP);
+		// If nread == 0: needed = i; break.
+		loadMem32(w, NWRITTEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, I);
+		setLocal(w, NEEDED);
+		w.write(Instruction.BR);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.END);
+		// Stash the just-read byte into local B1/B2/B3 by index. Emitted as a small
+		// switch on i to keep the loop body free of writable memory (SCRATCH is single-
+		// byte, reused for the next read).
+		getLocal(w, I);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, SCRATCH);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B1);
+		w.write(Instruction.END);
+		getLocal(w, I);
+		i32(w, 2);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, SCRATCH);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B2);
+		w.write(Instruction.END);
+		getLocal(w, I);
+		i32(w, 3);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, SCRATCH);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B3);
+		w.write(Instruction.END);
+		// i = i + 1; continue.
+		getLocal(w, I);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, I);
+		w.write(Instruction.BR);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// If needed collapsed to 0 mid-sequence (very first follow-up EOF), clamp to 1
+		// so we return the lead byte as a bare CHARACTER rather than dispatching to a
+		// zero-count decode.
+		getLocal(w, NEEDED);
+		i32(w, 1);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 1);
+		setLocal(w, NEEDED);
+		w.write(Instruction.END);
+		// return TYPE_CHAR(decodeUtf8(needed, b0, b1, b2, b3))
+		emitUtf8DecodeFromLocals(w, NEEDED, B0, B1, B2, B3);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		w.write(Instruction.END);
@@ -430,6 +563,115 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.ELSE);
 		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the UTF-8 sequence length (1..4) implied by a lead byte, based on the
+	// same high-bit ranges as _str_char_at: [0..0x80)=1, [0x80..0xE0)=2,
+	// [0xE0..0xF0)=3, else 4.
+	private static void emitUtf8ByteCount(WasmWriter w, int b0Local) {
+		getLocal(w, b0Local);
+		i32(w, 0x80);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 1);
+		w.write(Instruction.ELSE);
+		getLocal(w, b0Local);
+		i32(w, 0xE0);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 2);
+		w.write(Instruction.ELSE);
+		getLocal(w, b0Local);
+		i32(w, 0xF0);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 3);
+		w.write(Instruction.ELSE);
+		i32(w, 4);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the decoded Unicode code point given the sequence length in {@code
+	// neededLocal} and the 1..4 bytes in {@code b0Local}..{@code b3Local}. Follows the
+	// same 6-bit continuation decoding as _str_char_at.
+	private static void emitUtf8DecodeFromLocals(WasmWriter w, int neededLocal, int b0Local, int b1Local, int b2Local,
+			int b3Local) {
+		getLocal(w, neededLocal);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, b0Local);
+		w.write(Instruction.ELSE);
+		getLocal(w, neededLocal);
+		i32(w, 2);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		// ((b0 & 0x1F) << 6) | (b1 & 0x3F)
+		getLocal(w, b0Local);
+		i32(w, 0x1F);
+		w.write(Instruction.I32_AND);
+		i32(w, 6);
+		w.write(Instruction.I32_SHL);
+		getLocal(w, b1Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.ELSE);
+		getLocal(w, neededLocal);
+		i32(w, 3);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		// ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F)
+		getLocal(w, b0Local);
+		i32(w, 0x0F);
+		w.write(Instruction.I32_AND);
+		i32(w, 12);
+		w.write(Instruction.I32_SHL);
+		getLocal(w, b1Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 6);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_OR);
+		getLocal(w, b2Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.ELSE);
+		// 4-byte: ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) |
+		// (b3 & 0x3F)
+		getLocal(w, b0Local);
+		i32(w, 0x07);
+		w.write(Instruction.I32_AND);
+		i32(w, 18);
+		w.write(Instruction.I32_SHL);
+		getLocal(w, b1Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 12);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_OR);
+		getLocal(w, b2Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 6);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_OR);
+		getLocal(w, b3Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 		w.write(Instruction.END);
 	}
 

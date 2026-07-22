@@ -4341,6 +4341,33 @@ cases:
       ;; Full-Unicode read-side digit / letter predicates still work on ASCII.
       (print (alpha-char-p #\A))
       (print (digit-char-p #\7))
+      ;; Mutation of a supplementary code point lands in exactly one indexed slot
+      ;; on every backend (interpreter LispString stores int[] per slot; JVM
+      ;; char-vec stores int[]{cp} per slot; WASM stores TYPE_CHAR per slot). The
+      ;; asymmetric interpreter reject on a non-BMP code point is gone.
+      (let ((mut (make-string 3 :initial-element #\a)))
+        (setf (schar mut 1) (code-char 128512))
+        (print (length mut))
+        (print (char-code (schar mut 1)))
+        (print mut))
+      (let ((mut2 (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t)))
+        (vector-push-extend #\a mut2)
+        (vector-push-extend (code-char 128512) mut2)
+        (vector-push-extend #\b mut2)
+        (print (length mut2))
+        (print mut2))
+      ;; read-char over a mixed-BMP-and-astral string stream: the interpreter and
+      ;; JVM combine UTF-16 surrogate pairs on BufferedReader.read(); the WASM
+      ;; backends decode 1-4 byte UTF-8 sequences. All four return one CHARACTER
+      ;; holding the full code point per read-char call. Uses a plain symbol as
+      ;; the eof-value to sidestep the WASM princ-list keyword-with-colon quirk.
+      (with-input-from-string (rs "aé😀b")
+        (let* ((r1 (read-char rs))
+               (r2 (read-char rs))
+               (r3 (read-char rs))
+               (r4 (read-char rs))
+               (r5 (read-char rs nil 'done)))
+          (print (list (char-code r1) (char-code r2) (char-code r3) (char-code r4) r5))))
     expected: |
       233
       "é"
@@ -4356,3 +4383,9 @@ cases:
       "é😀"
       T
       7
+      3
+      128512
+      "a😀a"
+      3
+      "a😀b"
+      (97 233 128512 98 DONE)

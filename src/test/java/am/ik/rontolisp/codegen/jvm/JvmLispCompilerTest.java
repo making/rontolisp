@@ -1159,6 +1159,22 @@ class JvmLispCompilerTest {
 				  (print (read-line s)))""")).isEqualTo("\"first line\"\n(1 2 3)\n\"third\"\nNIL");
 	}
 
+	// A supplementary code point read through read-char comes back as ONE
+	// CHARACTER (a full code point), not as a high UTF-16 surrogate: the
+	// _readChar body combines surrogate pairs via BufferedReader.mark/read/reset,
+	// mirroring the interpreter's Environment.READ_CHAR. Uses a plain symbol
+	// (not keyword) as eof-value to sidestep the compile-path list-princ
+	// keyword-with-colon divergence -- the assertion is about the astral decode.
+	@Test
+	void readCharCombinesSurrogatePairsOnSupplementaryCodePoint() throws Exception {
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "😀X")
+				  (let* ((c1 (read-char s))
+				         (c2 (read-char s))
+				         (c3 (read-char s nil 'done)))
+				    (princ (list (char-code c1) (char-code c2) c3))))""")).isEqualTo("(128512 88 DONE)");
+	}
+
 	@Test
 	void writeStringWithoutStreamPrintsToStdoutWithoutNewline() throws Exception {
 		assertThat(compileAndRun("(write-string \"no\") (write-string \" newline\")")).isEqualTo("no newline");

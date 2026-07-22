@@ -5124,6 +5124,35 @@ class WasmLispCompilerIntegrationTest {
 				    (setq line (read-line s))))""")).isEqualTo("abc");
 	}
 
+	// A supplementary code point read through read-char comes back as ONE CHARACTER
+	// (a full code point), not as its UTF-8 lead byte: _read_char decodes 1-4 byte
+	// sequences via the lead byte's high-bit range in both string-stream and WASI fd
+	// branches. Matches the interpreter and JVM (surrogate-pair combining there;
+	// UTF-8 sequence walk here).
+	@Test
+	void readCharDecodesSupplementaryCodePointFromStringStream() throws Exception {
+		// A plain symbol (not keyword) as the eof-value sidesteps the WASM princ-list
+		// keyword-with-colon divergence -- the assertion is about the astral decode.
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "😀X")
+				  (let* ((c1 (read-char s))
+				         (c2 (read-char s))
+				         (c3 (read-char s nil 'done)))
+				    (princ (list (char-code c1) (char-code c2) c3))))""")).isEqualTo("(128512 88 DONE)");
+	}
+
+	// Same, for a 2-byte (Latin-1 supplement) and 3-byte (Greek) sequence.
+	@Test
+	void readCharDecodesMultibyteBmpFromStringStream() throws Exception {
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "éαa")
+				  (princ (char-code (read-char s)))
+				  (princ #\\Space)
+				  (princ (char-code (read-char s)))
+				  (princ #\\Space)
+				  (princ (char-code (read-char s))))""")).isEqualTo("233 945 97");
+	}
+
 	@Test
 	void writeStringWithoutStreamPrintsToStdoutWithoutNewline() throws Exception {
 		assertThat(compileAndRun("(write-string \"no\") (write-string \" newline\")")).isEqualTo("no newline");
