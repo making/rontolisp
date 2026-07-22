@@ -1906,14 +1906,13 @@ public final class LispMacroExpander {
 			if (v instanceof LispSymbol s && EPILOGUE_MARKER.name().equals(s.name())) {
 				return true;
 			}
-			return v instanceof LispCons c && c.car() instanceof LispSymbol head
-					&& head.name().equalsIgnoreCase("loop-finish");
+			return v instanceof LispCons c && c.car() instanceof LispSymbol head && head.name().equals("LOOP-FINISH");
 		}
 
 		/** Substitutes the anaphoric {@code it} symbol with the given variable. */
 		private static LispVal substituteIt(LispVal tree, LispSymbol itVar) {
 			return substituteTree(tree, IT_SKIP_HEADS,
-					v -> (v instanceof LispSymbol s && s.name().equalsIgnoreCase("it")) ? itVar : null);
+					v -> (v instanceof LispSymbol s && s.name().equals("IT")) ? itVar : null);
 		}
 
 		/**
