@@ -56,11 +56,6 @@ user symbol goes through `LispMacroExpander.affixFor` (defstruct `MAKE-PT`/`PT-P
 data with lower-kebab WIT / host-ABI names, or give CL-style case-insensitive keyword
 args; keep them):
 
-- `LispNames.keywordMatches` (equalsIgnoreCase) and `foldKeyword` (lowercased `switch`
-  scrutinees): the builtin keyword-argument matchers accept `:TEST` where `:test` is
-  meant, at the helper choke points, the `findKeywordValue` copies, and the option
-  `switch`es (defstruct/defclass/define-condition, defpackage, open/parse-integer/...,
-  wasm-export/wit-import directives, AsdfSystems clauses). Keyword DATA is never re-cased.
 - `LispEvaluator.instanceSlotCell` compares slot base names with `equalsIgnoreCase`: a
   Java-side caller spells a built-in condition slot lowercase (`conditionSlotValue`
   passes `"format-control"`) while an upcase-read condition registers `FORMAT-CONTROL`
@@ -74,7 +69,44 @@ args; keep them):
   all four backends emit/read `:STATUS`/`:HEADERS`/`:BODY`..., a host-ABI decision (see
   `http-plist-shape` in the kb index), kept.
 
-**Removed seam (2026-07-21, the `--component` canonical-ABI dual-compares).** The
+**Removed seam (2026-07-22, `LispNames.keywordMatches` + `foldKeyword` + the WIT/CLOS
+lowercase designator system).** Both helpers are DELETED. Every keyword-argument matcher is
+an exact `.equals` now, and the two design systems they bridged are uppercase-canonical:
+
+- **WIT type designators are uppercase internally**: `WasmExportCompiler.T_INT` / `T_LONG`
+  / `T_FLOAT` / `T_BOOL` / `T_STRING` / `T_S_EXPR` / `T_VOID` = `":INT"` / ... / `":VOID"`;
+  `KNOWN_TYPES` and every per-type `switch` follow. `WitExportDirective` and
+  `WitImportDirective` synthesize the upcased spelling into the lowered
+  `wasm-export`/`wasm-import` forms; `WasmImportDirective` no longer folds parsed
+  keywords. The HOST-facing WIT label still derives lowercased at the single emit point
+  (`componentValType` / `WitEmitter` / `WitExportDirective.worldName`), so component
+  surface bytes are unchanged.
+- **CLOS method qualifiers are uppercase**: `plainTypeName` no longer folds; the
+  qualifier switch in `expandDefmethod` and `applicableMethods(..., ":BEFORE", ...)` /
+  `":AFTER"` / `":AROUND"` match the upcased spelling.
+- **CLOS initarg map matches by exact name**: `LispMacroExpander.buildTypedConstruct` drops
+  both folds; `slot.initargKeyword()` is `":" + baseName` over an upcased slot name
+  (`parseDefclassSlot`, `ClosRegistry.seedConditionClass`), so both sides agree.
+- **AsdfSystems switches on `key.name()` directly**, case labels uppercased
+  (`:NAME`/`:DEPENDS-ON`/`:COMPONENTS`/`:MODULE`/`:FILE`/`:STATIC-FILE`/...); error
+  messages report the as-seen upper-case spelling.
+
+Every hard-coded lowercase literal canonical passed to a matcher is now upcased
+(`:TEST`, `:KEY`, `:INSECURE`, `:NO-ERROR`, `:EXTERNAL-FORMAT`, `:IF-EXISTS`,
+`:IF-DOES-NOT-EXIST`, `:UTF-8`, `:DEFAULT`, `:SUPERSEDE`, `:CREATE`, `:ERROR`,
+`:TYPE`, `:READ-ONLY`, `:FORMAT-CONTROL`, `:ASYNC-CALL`, `:TASK-RETURN`, `:ASYNC`,
+`:DROP`, `:METHOD`, `:WORLD`, `:FEATURE`, `:REQUIRE`, `:INITFORM`, ...); the
+`Environment.plistGet` HTTP callers pass upper (`:HEADERS`/`:METHOD`/`:BODY`) matching
+the already-upper HTTP plist keys ([[http-plist-shape]]). `LispMacroExpander.requireKeywords`
+(a sibling helper that used `equalsIgnoreCase` directly instead of going through
+`keywordMatches`) collapsed to `.equals` as well -- every caller passes `*_KEYWORD`
+constants that are already upper. Output is byte-identical on
+every backend: `./mvnw test` GREEN (4052 tests, incl. Docker WASM integration on wasmtime
+46 and `WitScaffolderTest.theScaffoldedProgramCompilesUnchanged` -- the canary that killed
+the shallow attempt earlier); native `CiSpecE2eTest` GREEN (908/908) across all four
+backends. `.todo/157`.
+
+**Earlier removed seam (2026-07-21, the `--component` canonical-ABI dual-compares).** The
 canonical-ABI boundary is now UPCASED-ONLY in both directions. The LIFT always spelled
 every variant/enum case, record plist-key and `result` envelope-head upcased (matching
 upcased user data); the LOWER used to dual-compare a tag against BOTH the lowercase WIT

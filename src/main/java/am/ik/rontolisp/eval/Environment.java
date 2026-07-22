@@ -269,8 +269,7 @@ public final class Environment implements Scope {
 			// always structural, so :test is informational only (see LispHashTable).
 			boolean equalTest = false;
 			for (int i = 0; i + 1 < args.size(); i += 2) {
-				if (args.get(i) instanceof LispSymbol kw
-						&& LispNames.keywordMatches(kw.name(), LispNames.TEST_KEYWORD)) {
+				if (args.get(i) instanceof LispSymbol kw && LispNames.TEST_KEYWORD.equals(kw.name())) {
 					String testName = switch (args.get(i + 1)) {
 						case LispSymbol s -> s.name();
 						case LispFunction f -> f.name();
@@ -990,7 +989,7 @@ public final class Environment implements Scope {
 			}
 			LispVal options = args.size() == 2 ? args.get(1) : LispNil.INSTANCE;
 			String method = fetchMethod(options);
-			List<HttpSupport.Header> requestHeaders = parseHeaderAlist(plistGet(options, ":headers"));
+			List<HttpSupport.Header> requestHeaders = parseHeaderAlist(plistGet(options, ":HEADERS"));
 			String body = fetchBody(options);
 			return LispFuture.of(HttpSupport.requestAsync(method, url.value(), requestHeaders, body)
 				.thenApply(Environment::fetchResponsePlist));
@@ -1107,7 +1106,7 @@ public final class Environment implements Scope {
 	private static LispVal plistGet(LispVal plist, String key) {
 		LispVal current = plist;
 		while (current instanceof LispCons cons && cons.cdr() instanceof LispCons valueCell) {
-			if (cons.car() instanceof LispSymbol sym && LispNames.keywordMatches(sym.name(), key)) {
+			if (cons.car() instanceof LispSymbol sym && key.equals(sym.name())) {
 				return valueCell.car();
 			}
 			current = valueCell.cdr();
@@ -1122,7 +1121,7 @@ public final class Environment implements Scope {
 	// Resolves the :method option (default GET), normalizing it to upper case. Only the
 	// methods in SUPPORTED_METHODS are accepted.
 	private static String fetchMethod(LispVal options) {
-		LispVal methodVal = plistGet(options, ":method");
+		LispVal methodVal = plistGet(options, ":METHOD");
 		String method;
 		if (methodVal instanceof LispNil) {
 			return "GET";
@@ -1143,7 +1142,7 @@ public final class Environment implements Scope {
 
 	// Resolves the :body option (default none). Must be a string when present.
 	private static @Nullable String fetchBody(LispVal options) {
-		LispVal bodyVal = plistGet(options, ":body");
+		LispVal bodyVal = plistGet(options, ":BODY");
 		if (bodyVal instanceof LispNil) {
 			return null;
 		}
@@ -2755,8 +2754,8 @@ public final class Environment implements Scope {
 			// (UTF-8 is the native format), :if-exists and :if-does-not-exist (the
 			// create/supersede defaults already match) are accepted and dropped.
 			if (args.size() > 2 && args.get(1) instanceof LispSymbol first && first.name().startsWith(":")
-					&& !LispNames.keywordMatches(first.name(), LispNames.INPUT_KEYWORD)
-					&& !LispNames.keywordMatches(first.name(), LispNames.OUTPUT_KEYWORD)) {
+					&& !LispNames.INPUT_KEYWORD.equals(first.name())
+					&& !LispNames.OUTPUT_KEYWORD.equals(first.name())) {
 				LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
 				LispVal elementType = null;
 				for (int i = 1; i < args.size(); i += 2) {
@@ -2784,12 +2783,11 @@ public final class Environment implements Scope {
 			}
 			boolean output = false;
 			if (args.size() > 1) {
-				if (!(args.get(1) instanceof LispSymbol dir)
-						|| !(LispNames.keywordMatches(dir.name(), LispNames.INPUT_KEYWORD)
-								|| LispNames.keywordMatches(dir.name(), LispNames.OUTPUT_KEYWORD))) {
+				if (!(args.get(1) instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())
+						|| LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
 					throw new LispEvalException(LispNames.OPEN + " supports :input and :output directions");
 				}
-				output = LispNames.keywordMatches(dir.name(), LispNames.OUTPUT_KEYWORD);
+				output = LispNames.OUTPUT_KEYWORD.equals(dir.name());
 			}
 			// The optional third argument is the element type: '(unsigned-byte 8) opens a
 			// binary stream, 'character (the default) a text stream.
@@ -3022,7 +3020,7 @@ public final class Environment implements Scope {
 			boolean insecure = false;
 			if (args.size() == 4) {
 				if (!(args.get(2) instanceof LispSymbol option) || !option.isKeyword()
-						|| !LispNames.keywordMatches(option.name(), ":insecure")) {
+						|| !":INSECURE".equals(option.name())) {
 					throw new LispEvalException(
 							LispNames.TLS_CONNECT + " expects :insecure, got: " + args.get(2).print());
 				}
@@ -3505,10 +3503,10 @@ public final class Environment implements Scope {
 			int fill = ' ';
 			for (int i = 1; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol key) {
-					if (LispNames.keywordMatches(key.name(), LispNames.INITIAL_ELEMENT_KEYWORD)) {
+					if (LispNames.INITIAL_ELEMENT_KEYWORD.equals(key.name())) {
 						fill = requireChar(LispNames.MAKE_STRING, args.get(i + 1)).codePoint();
 					}
-					else if (!LispNames.keywordMatches(key.name(), LispNames.ELEMENT_TYPE_KEYWORD)) {
+					else if (!LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name())) {
 						throw new LispEvalException("make-string: unsupported keyword " + key.name());
 					}
 				}

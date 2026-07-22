@@ -46,29 +46,30 @@ import org.jspecify.annotations.Nullable;
  */
 final class WasmExportCompiler {
 
-	static final String T_INT = ":int";
+	static final String T_INT = ":INT";
 
 	/**
 	 * A 64-bit signed integer ({@code i64}). Supported by the {@code --no-gc} scalar
 	 * backend only (whose internal integer representation is {@code i64}); the GC backend
 	 * rejects it, since its integers are {@code i31ref}.
 	 */
-	static final String T_LONG = ":long";
+	static final String T_LONG = ":LONG";
 
-	static final String T_FLOAT = ":float";
+	static final String T_FLOAT = ":FLOAT";
 
-	static final String T_BOOL = ":bool";
+	static final String T_BOOL = ":BOOL";
 
-	static final String T_STRING = ":string";
+	static final String T_STRING = ":STRING";
 
-	static final String T_S_EXPR = ":s-expr";
+	static final String T_S_EXPR = ":S-EXPR";
 
 	/**
 	 * Internal sentinel for a void result: the wrapper discards the Lisp return value and
 	 * has no WASM result. Selected when {@code :returns} is omitted, or given as
-	 * {@code nil}, {@code '()} or {@code :void}.
+	 * {@code nil}, {@code '()} or {@code :void} (the reader upcases every source keyword,
+	 * so the internal canonical is the upcased spelling {@code :VOID}).
 	 */
-	static final String T_VOID = ":void";
+	static final String T_VOID = ":VOID";
 
 	private static final List<String> KNOWN_TYPES = List.of(T_INT, T_LONG, T_FLOAT, T_BOOL, T_STRING, T_S_EXPR);
 
@@ -756,10 +757,8 @@ final class WasmExportCompiler {
 	}
 
 	static String typeDesignator(LispVal value, LispCons form) {
-		if (value instanceof LispSymbol sym && sym.isKeyword()
-				&& KNOWN_TYPES.contains(LispNames.foldKeyword(sym.name()))) {
-			// Return the canonical lowercase spelling so the per-type switches match.
-			return LispNames.foldKeyword(sym.name());
+		if (value instanceof LispSymbol sym && sym.isKeyword() && KNOWN_TYPES.contains(sym.name())) {
+			return sym.name();
 		}
 		throw new UnsupportedOperationException("Unknown rontolisp:wasm-export type designator " + value.print()
 				+ " in " + form.print() + " (expected one of " + KNOWN_TYPES + ")");
@@ -772,7 +771,7 @@ final class WasmExportCompiler {
 		if (isVoidMarker(value)) {
 			return T_VOID;
 		}
-		if (value instanceof LispSymbol sym && sym.isKeyword() && LispNames.keywordMatches(sym.name(), T_VOID)) {
+		if (value instanceof LispSymbol sym && sym.isKeyword() && T_VOID.equals(sym.name())) {
 			return T_VOID;
 		}
 		return typeDesignator(value, form);

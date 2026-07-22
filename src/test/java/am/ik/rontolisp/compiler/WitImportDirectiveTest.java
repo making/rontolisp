@@ -277,7 +277,7 @@ class WitImportDirectiveTest {
 		// resource method's field is bucketGet, matching a jco-transpiled host).
 		List<LispVal> forms = lower(KEYVALUE, Backend.WASM_GC, new Directive(WIT, STORE, null, null, FieldStyle.CAMEL));
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-IMPORT (QUOTE open) :FROM \"store\" :AS \"open\" :PARAMS (QUOTE (:string)) :RETURNS :int)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-new) :FROM \"store\" :AS \"bucketNew\" :PARAMS (QUOTE (:string)) :RETURNS :int)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-get) :FROM \"store\" :AS \"bucketGet\" :PARAMS (QUOTE (:int :string)) :RETURNS :string)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-set) :FROM \"store\" :AS \"bucketSet\" :PARAMS (QUOTE (:int :string :string)) :RETURNS :void)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-count) :FROM \"store\" :AS \"bucketCount\" :PARAMS (QUOTE (:string)) :RETURNS :int)");
+				"(RONTOLISP:WASM-IMPORT (QUOTE open) :FROM \"store\" :AS \"open\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-new) :FROM \"store\" :AS \"bucketNew\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-get) :FROM \"store\" :AS \"bucketGet\" :PARAMS (QUOTE (:INT :STRING)) :RETURNS :STRING)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-set) :FROM \"store\" :AS \"bucketSet\" :PARAMS (QUOTE (:INT :STRING :STRING)) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT (QUOTE bucket-count) :FROM \"store\" :AS \"bucketCount\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)");
 	}
 
 	@Test
@@ -285,11 +285,11 @@ class WitImportDirectiveTest {
 		// The name mapping the docs pin: create-shader -> the import field createShader.
 		// A func with no parameters lowers to an empty :params list, and one with no
 		// result
-		// to :returns :void.
+		// to :returns :VOID.
 		List<LispVal> forms = lower(GL, Backend.WASM_GC,
 				new Directive(WIT, "example:gfx/gl@0.1.0", null, null, FieldStyle.CAMEL));
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-IMPORT (QUOTE create-shader) :FROM \"gl\" :AS \"createShader\" :PARAMS (QUOTE (:string)) :RETURNS :int)\n(RONTOLISP:WASM-IMPORT (QUOTE set-uniform) :FROM \"gl\" :AS \"setUniform\" :PARAMS (QUOTE (:string :float)) :RETURNS :void)\n(RONTOLISP:WASM-IMPORT (QUOTE is-ready) :FROM \"gl\" :AS \"isReady\" :PARAMS (QUOTE NIL) :RETURNS :bool)");
+				"(RONTOLISP:WASM-IMPORT (QUOTE create-shader) :FROM \"gl\" :AS \"createShader\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE set-uniform) :FROM \"gl\" :AS \"setUniform\" :PARAMS (QUOTE (:STRING :FLOAT)) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT (QUOTE is-ready) :FROM \"gl\" :AS \"isReady\" :PARAMS (QUOTE NIL) :RETURNS :BOOL)");
 	}
 
 	@Test
@@ -297,7 +297,7 @@ class WitImportDirectiveTest {
 		List<LispVal> forms = lower(GL, Backend.WASM_GC,
 				new Directive(WIT, "example:gfx/gl@0.1.0", null, "graphics", FieldStyle.KEBAB));
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-IMPORT (QUOTE create-shader) :FROM \"graphics\" :AS \"create-shader\" :PARAMS (QUOTE (:string)) :RETURNS :int)\n(RONTOLISP:WASM-IMPORT (QUOTE set-uniform) :FROM \"graphics\" :AS \"set-uniform\" :PARAMS (QUOTE (:string :float)) :RETURNS :void)\n(RONTOLISP:WASM-IMPORT (QUOTE is-ready) :FROM \"graphics\" :AS \"is-ready\" :PARAMS (QUOTE NIL) :RETURNS :bool)");
+				"(RONTOLISP:WASM-IMPORT (QUOTE create-shader) :FROM \"graphics\" :AS \"create-shader\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE set-uniform) :FROM \"graphics\" :AS \"set-uniform\" :PARAMS (QUOTE (:STRING :FLOAT)) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT (QUOTE is-ready) :FROM \"graphics\" :AS \"is-ready\" :PARAMS (QUOTE NIL) :RETURNS :BOOL)");
 	}
 
 	@Test
@@ -347,7 +347,7 @@ class WitImportDirectiveTest {
 				drop-it: func(b: own<bucket>);
 				owner: func(b: bucket) -> string;""";
 		assertThat(printed(lowerApi(body, Backend.WASM_GC))).isEqualTo(
-				"(RONTOLISP:WASM-IMPORT (QUOTE bucket-get) :FROM \"api\" :AS \"bucketGet\" :PARAMS (QUOTE (:int :string)) :RETURNS :string)\n(RONTOLISP:WASM-IMPORT (QUOTE size) :FROM \"api\" :AS \"size\" :PARAMS (QUOTE (:int)) :RETURNS :int)\n(RONTOLISP:WASM-IMPORT (QUOTE drop-it) :FROM \"api\" :AS \"dropIt\" :PARAMS (QUOTE (:int)) :RETURNS :void)\n(RONTOLISP:WASM-IMPORT (QUOTE owner) :FROM \"api\" :AS \"owner\" :PARAMS (QUOTE (:int)) :RETURNS :string)");
+				"(RONTOLISP:WASM-IMPORT (QUOTE bucket-get) :FROM \"api\" :AS \"bucketGet\" :PARAMS (QUOTE (:INT :STRING)) :RETURNS :STRING)\n(RONTOLISP:WASM-IMPORT (QUOTE size) :FROM \"api\" :AS \"size\" :PARAMS (QUOTE (:INT)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE drop-it) :FROM \"api\" :AS \"dropIt\" :PARAMS (QUOTE (:INT)) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT (QUOTE owner) :FROM \"api\" :AS \"owner\" :PARAMS (QUOTE (:INT)) :RETURNS :STRING)");
 	}
 
 	@Test
@@ -398,7 +398,7 @@ class WitImportDirectiveTest {
 		// hand-written JS import objects.
 		List<LispVal> forms = lowerKeyvalue(Backend.WASM_GC, Set.of("bucket-drop"));
 		assertThat(printed(forms)).isEqualTo(
-				"(DEFPACKAGE kv (:USE CL) (:EXPORT open bucket-new bucket-get bucket-set bucket-count bucket-drop))\n(RONTOLISP:WASM-IMPORT (QUOTE kv:open) :FROM \"store\" :AS \"open\" :PARAMS (QUOTE (:string)) :RETURNS :int)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-new) :FROM \"store\" :AS \"bucketNew\" :PARAMS (QUOTE (:string)) :RETURNS :int)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-get) :FROM \"store\" :AS \"bucketGet\" :PARAMS (QUOTE (:int :string)) :RETURNS :string)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-set) :FROM \"store\" :AS \"bucketSet\" :PARAMS (QUOTE (:int :string :string)) :RETURNS :void)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-count) :FROM \"store\" :AS \"bucketCount\" :PARAMS (QUOTE (:string)) :RETURNS :int)\n(DEFUN kv:bucket-drop (self) self NIL)");
+				"(DEFPACKAGE kv (:USE CL) (:EXPORT open bucket-new bucket-get bucket-set bucket-count bucket-drop))\n(RONTOLISP:WASM-IMPORT (QUOTE kv:open) :FROM \"store\" :AS \"open\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-new) :FROM \"store\" :AS \"bucketNew\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-get) :FROM \"store\" :AS \"bucketGet\" :PARAMS (QUOTE (:INT :STRING)) :RETURNS :STRING)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-set) :FROM \"store\" :AS \"bucketSet\" :PARAMS (QUOTE (:INT :STRING :STRING)) :RETURNS :VOID)\n(RONTOLISP:WASM-IMPORT (QUOTE kv:bucket-count) :FROM \"store\" :AS \"bucketCount\" :PARAMS (QUOTE (:STRING)) :RETURNS :INT)\n(DEFUN kv:bucket-drop (self) self NIL)");
 	}
 
 	@Test
@@ -434,9 +434,9 @@ class WitImportDirectiveTest {
 	void carriesAByteStringAcrossThePreview1Boundary() {
 		// list<u8> is a byte-per-char rontolisp string (the settled mapping), so it
 		// crosses
-		// as :string -- the same designator as a WIT string.
+		// as :STRING -- the same designator as a WIT string.
 		assertThat(printed(lowerApi("  put: func(data: list<u8>) -> list<u8>;", Backend.WASM_GC))).isEqualTo(
-				"(RONTOLISP:WASM-IMPORT (QUOTE put) :FROM \"api\" :AS \"put\" :PARAMS (QUOTE (:string)) :RETURNS :string)");
+				"(RONTOLISP:WASM-IMPORT (QUOTE put) :FROM \"api\" :AS \"put\" :PARAMS (QUOTE (:STRING)) :RETURNS :STRING)");
 	}
 
 	@Test

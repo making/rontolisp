@@ -46,7 +46,7 @@ class WasmImportCompilerTest {
 		assertThat(decl.name()).isEqualTo("DRAW");
 		assertThat(decl.module()).isEqualTo("env");
 		assertThat(decl.field()).isEqualTo("draw");
-		assertThat(decl.paramTypes()).containsExactly(":int", ":int");
+		assertThat(decl.paramTypes()).containsExactly(":INT", ":INT");
 		assertThat(decl.returnType()).isEqualTo(WasmExportCompiler.T_VOID);
 	}
 
@@ -57,8 +57,8 @@ class WasmImportCompilerTest {
 		assertThat(decl.name()).isEqualTo("DRAW-PIXEL");
 		assertThat(decl.module()).isEqualTo("gl");
 		assertThat(decl.field()).isEqualTo("drawPixel");
-		assertThat(decl.paramTypes()).containsExactly(":float");
-		assertThat(decl.returnType()).isEqualTo(":int");
+		assertThat(decl.paramTypes()).containsExactly(":FLOAT");
+		assertThat(decl.returnType()).isEqualTo(":INT");
 	}
 
 	@Test
@@ -87,9 +87,9 @@ class WasmImportCompilerTest {
 	@Test
 	void rejectsUnknownTypeDesignator() {
 		assertThatThrownBy(() -> parse("(rontolisp:wasm-import 'g :params '(:widget))"))
-			.hasMessageContaining(":widget");
+			.hasMessageContaining(":WIDGET");
 		assertThatThrownBy(() -> parse("(rontolisp:wasm-import 'g :params '(:int) :returns :widget)"))
-			.hasMessageContaining(":widget");
+			.hasMessageContaining(":WIDGET");
 	}
 
 	@Test

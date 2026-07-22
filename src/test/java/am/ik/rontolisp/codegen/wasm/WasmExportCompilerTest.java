@@ -52,15 +52,15 @@ class WasmExportCompilerTest {
 	void parsesScalarDirective() {
 		WasmExportCompiler.Decl decl = parse("(rontolisp:wasm-export 'fact :params '(:int) :returns :int)");
 		assertThat(decl.name()).isEqualTo("FACT");
-		assertThat(decl.paramTypes()).containsExactly(":int");
-		assertThat(decl.returnType()).isEqualTo(":int");
+		assertThat(decl.paramTypes()).containsExactly(":INT");
+		assertThat(decl.returnType()).isEqualTo(":INT");
 	}
 
 	@Test
 	void parsesMultipleParamsAndMemoryTypes() {
 		WasmExportCompiler.Decl decl = parse(
 				"(rontolisp:wasm-export 'concat :params '(:string :s-expr) :returns :string)");
-		assertThat(decl.paramTypes()).containsExactly(":string", ":s-expr");
+		assertThat(decl.paramTypes()).containsExactly(":STRING", ":S-EXPR");
 		assertThat(WasmExportCompiler.usesMemory(decl)).isTrue();
 		assertThat(WasmExportCompiler.paramSlotCount(decl)).isEqualTo(4);
 	}

@@ -146,7 +146,7 @@ class WitImportInlinerTest {
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList())).doesNotContain("wit-import")
 			.contains("(DEFPACKAGE GL (:USE CL) (:EXPORT create-shader shader-source compile-shader clear-color))")
 			.contains("(RONTOLISP:WASM-IMPORT (QUOTE GL:create-shader) :FROM \"gl\" :AS \"createShader\" "
-					+ ":PARAMS (QUOTE (:int)) :RETURNS :int)");
+					+ ":PARAMS (QUOTE (:INT)) :RETURNS :INT)");
 	}
 
 	@Test

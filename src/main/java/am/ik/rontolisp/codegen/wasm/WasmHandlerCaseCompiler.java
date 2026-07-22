@@ -62,7 +62,7 @@ final class WasmHandlerCaseCompiler {
 						+ " move the await outside the handler clause");
 			}
 			List<LispVal> clauseParts = clause.toList();
-			if (clause.car() instanceof LispSymbol head && LispNames.keywordMatches(head.name(), ":no-error")) {
+			if (clause.car() instanceof LispSymbol head && ":NO-ERROR".equals(head.name())) {
 				noErrorClause = clauseParts;
 			}
 			else {

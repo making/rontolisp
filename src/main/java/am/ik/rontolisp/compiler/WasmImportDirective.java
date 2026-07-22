@@ -142,7 +142,7 @@ public record WasmImportDirective(String name, String module, String field, List
 			if (rest.car() instanceof LispCons list) {
 				for (LispVal element : list.toList()) {
 					if (element instanceof LispSymbol sym && sym.isKeyword()) {
-						result.add(LispNames.foldKeyword(sym.name()));
+						result.add(sym.name());
 					}
 					else {
 						throw new UnsupportedOperationException("rontolisp:wasm-import :params expects keyword "
@@ -170,8 +170,8 @@ public record WasmImportDirective(String name, String module, String field, List
 			return null;
 		}
 		if (value instanceof LispSymbol sym && sym.isKeyword()) {
-			String folded = LispNames.foldKeyword(sym.name());
-			return ":void".equals(folded) ? null : folded;
+			String name = sym.name();
+			return ":VOID".equals(name) ? null : name;
 		}
 		throw new UnsupportedOperationException("rontolisp:wasm-import :returns expects a keyword type designator in "
 				+ form.print() + ", got: " + value.print());

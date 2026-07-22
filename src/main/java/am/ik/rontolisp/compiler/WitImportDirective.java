@@ -414,7 +414,7 @@ public final class WitImportDirective {
 				bindings.add(noopDropDefun(name));
 			}
 			else {
-				bindings.add(providerDefun(name, ifaceId, member, List.of(new Param("self", ":int"))));
+				bindings.add(providerDefun(name, ifaceId, member, List.of(new Param("self", ":INT"))));
 			}
 		}
 		// An async built-in is derived from a `type` ALIAS the interface declares to a
@@ -1004,7 +1004,7 @@ public final class WitImportDirective {
 		List<Param> params = new ArrayList<>();
 		boolean method = func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN;
 		if (method) {
-			params.add(new Param("self", ":int"));
+			params.add(new Param("self", ":INT"));
 		}
 		for (var param : func.def().func().params()) {
 			String designator = designatorOf(param.type(), witPath, locations, resolver, iface, func, member,
@@ -1020,16 +1020,16 @@ public final class WitImportDirective {
 		return params;
 	}
 
-	// The wasm-import :returns designator (":void" when the function returns nothing). A
+	// The wasm-import :returns designator (":VOID" when the function returns nothing). A
 	// constructor returns its resource, which the WIT model leaves implicit.
 	private static String resultDesignator(WitResolver.Func func, String witPath, WitLocations locations,
 			WitResolver resolver, WitItem.InterfaceDef iface, String member, boolean wasm) {
 		if (func.def().kind() == WitItem.FuncKind.CONSTRUCTOR) {
-			return ":int";
+			return ":INT";
 		}
 		WitType result = func.def().func().result();
 		if (result == null) {
-			return ":void";
+			return ":VOID";
 		}
 		// resultDesignator is only reached on the non-component path (the component path
 		// binds through the WIT text, not a flat designator), so component is always
@@ -1054,7 +1054,7 @@ public final class WitImportDirective {
 				// designator
 				// is unused on the component path, which drives the wrapper off the WIT
 				// text.
-				return ":void";
+				return ":VOID";
 			}
 			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
 					+ "': the WIT type of " + what + " is a stream or a future, which only the --component backend can "
@@ -1068,13 +1068,13 @@ public final class WitImportDirective {
 		if (!wasm) {
 			// The interpreter and the JVM pass LispVals straight through to the provider,
 			// so the designator is unused there -- every representation is expressible.
-			return ":void";
+			return ":VOID";
 		}
 		return switch (rep) {
-			case INT, HANDLE -> ":int";
-			case FLOAT -> ":float";
-			case BOOLEAN -> ":bool";
-			case STRING, BYTE_STRING -> ":string";
+			case INT, HANDLE -> ":INT";
+			case FLOAT -> ":FLOAT";
+			case BOOLEAN -> ":BOOL";
+			case STRING, BYTE_STRING -> ":STRING";
 			// A Preview 1 core import is a bare host function: it carries flat values and
 			// nothing else, because a core module has no component type with which to
 			// declare a richer shape to its host. The canonical ABI is what marshals the

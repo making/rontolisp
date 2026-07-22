@@ -41,8 +41,7 @@ public final class OpenModes {
 	public static LispCons normalizeKeywordForm(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || !(parts.get(2) instanceof LispSymbol first) || !first.name().startsWith(":")
-				|| LispNames.keywordMatches(first.name(), LispNames.INPUT_KEYWORD)
-				|| LispNames.keywordMatches(first.name(), LispNames.OUTPUT_KEYWORD)) {
+				|| LispNames.INPUT_KEYWORD.equals(first.name()) || LispNames.OUTPUT_KEYWORD.equals(first.name())) {
 			return cons;
 		}
 		LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
@@ -85,11 +84,10 @@ public final class OpenModes {
 			return 0;
 		}
 		int mode;
-		if (parts.get(2) instanceof LispSymbol dir && LispNames.keywordMatches(dir.name(), LispNames.INPUT_KEYWORD)) {
+		if (parts.get(2) instanceof LispSymbol dir && LispNames.INPUT_KEYWORD.equals(dir.name())) {
 			mode = 0;
 		}
-		else if (parts.get(2) instanceof LispSymbol dir
-				&& LispNames.keywordMatches(dir.name(), LispNames.OUTPUT_KEYWORD)) {
+		else if (parts.get(2) instanceof LispSymbol dir && LispNames.OUTPUT_KEYWORD.equals(dir.name())) {
 			mode = OUTPUT_BIT;
 		}
 		else {

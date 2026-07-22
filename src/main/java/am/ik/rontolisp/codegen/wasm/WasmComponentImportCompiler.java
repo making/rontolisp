@@ -492,7 +492,7 @@ final class WasmComponentImportCompiler {
 			// the keyword head is what tells these apart from a ("member" "lisp-name")
 			// function binding.
 			if (pair.car() instanceof LispSymbol keyword && keyword.isKeyword()) {
-				if (LispNames.keywordMatches(keyword.name(), ":async-call")) {
+				if (":ASYNC-CALL".equals(keyword.name())) {
 					if (!(rest.car() instanceof LispString member) || !(rest.cdr() instanceof LispCons startCons)
 							|| !(startCons.car() instanceof LispString startName)
 							|| !(startCons.cdr() instanceof LispCons liftCons)
@@ -509,7 +509,7 @@ final class WasmComponentImportCompiler {
 							func, abi, abi.flatSigAsyncLower(func)));
 					continue;
 				}
-				if (LispNames.keywordMatches(keyword.name(), ":task-return")) {
+				if (":TASK-RETURN".equals(keyword.name())) {
 					if (!(rest.car() instanceof LispString alias) || !(rest.cdr() instanceof LispCons nameCons)
 							|| !(nameCons.car() instanceof LispString trName)) {
 						throw new UnsupportedOperationException(
@@ -520,7 +520,7 @@ final class WasmComponentImportCompiler {
 							alias.value(), target.abi(), target.type()));
 					continue;
 				}
-				if (LispNames.keywordMatches(keyword.name(), ":async")) {
+				if (":ASYNC".equals(keyword.name())) {
 					if (!(rest.car() instanceof LispString alias) || !(rest.cdr() instanceof LispCons opCons)
 							|| !(opCons.car() instanceof LispString op) || !(opCons.cdr() instanceof LispCons nameCons)
 							|| !(nameCons.car() instanceof LispString asyncName)) {
@@ -538,7 +538,7 @@ final class WasmComponentImportCompiler {
 							target.type()));
 					continue;
 				}
-				if (!LispNames.keywordMatches(keyword.name(), ":drop") || !(rest.car() instanceof LispString resource)
+				if (!":DROP".equals(keyword.name()) || !(rest.car() instanceof LispString resource)
 						|| !(rest.cdr() instanceof LispCons tail) || !(tail.car() instanceof LispString dropName)) {
 					throw new UnsupportedOperationException(
 							"Malformed internal component-import member: " + items.get(i).print());

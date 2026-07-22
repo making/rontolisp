@@ -56,8 +56,8 @@ class WitExportInlinerTest {
 					return content;
 				});
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList())).doesNotContain("wit-export")
-			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:string)) "
-					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :int)");
+			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:STRING)) "
+					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :INT)");
 	}
 
 	@Test
@@ -141,8 +141,8 @@ class WitExportInlinerTest {
 				WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		String printed = String.join("\n", out.stream().map(LispVal::print).toList());
 		assertThat(printed).doesNotContain("wit-export")
-			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:string)) "
-					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :int)")
+			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:STRING)) "
+					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :INT)")
 			.contains("(DEFUN COUNT-VOWELS");
 	}
 
@@ -260,8 +260,8 @@ class WitExportInlinerTest {
 		List<LispVal> out = WitExportInliner.inline(expanded, this.tempDir.toString(),
 				WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList()))
-			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:string)) "
-					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :int)");
+			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:STRING)) "
+					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :INT)");
 	}
 
 	@Test

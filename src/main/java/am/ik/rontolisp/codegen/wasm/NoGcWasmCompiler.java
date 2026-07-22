@@ -3368,7 +3368,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// WasmArrayCompiler.findKeywordValue.
 	private static @Nullable LispVal findKeywordValue(List<LispVal> args, String keyword) {
 		for (int i = 2; i + 1 < args.size(); i += 2) {
-			if (args.get(i) instanceof LispSymbol kw && LispNames.keywordMatches(kw.name(), keyword)) {
+			if (args.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
 				return args.get(i + 1);
 			}
 		}

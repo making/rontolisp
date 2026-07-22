@@ -105,7 +105,7 @@ class AsdfSystemsTest {
 	void unsupportedOptionIsAHardError() {
 		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :defsystem-depends-on (:some-plugin))"))
 			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("unsupported option :defsystem-depends-on");
+			.hasMessageContaining("unsupported option :DEFSYSTEM-DEPENDS-ON");
 	}
 
 	@Test
@@ -125,7 +125,7 @@ class AsdfSystemsTest {
 	void unsupportedComponentTypeIsAHardError() {
 		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :components ((:doc-file \"README\")))"))
 			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("unsupported component type :doc-file");
+			.hasMessageContaining("unsupported component type :DOC-FILE");
 	}
 
 	@Test

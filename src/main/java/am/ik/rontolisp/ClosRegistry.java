@@ -152,7 +152,8 @@ public final class ClosRegistry {
 	 * @param specializers one specializer per required parameter (in parameter order)
 	 * @param functionName the name of the generated method-body defun
 	 * @param qualifier the method qualifier ({@code ""} for a primary method, or
-	 * {@code ":before"}/{@code ":after"}/{@code ":around"})
+	 * {@code ":BEFORE"}/{@code ":AFTER"}/{@code ":AROUND"} -- the upcased canonical,
+	 * which the reader upcases every source qualifier to)
 	 * @param usesNext whether the method body calls {@code call-next-method} or
 	 * {@code next-method-p} (forces the combined dispatcher even without a qualifier)
 	 */

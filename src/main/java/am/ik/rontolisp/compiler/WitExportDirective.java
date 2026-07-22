@@ -171,7 +171,7 @@ public final class WitExportDirective {
 				throw new UnsupportedOperationException("Missing value for " + keyword.name() + " in " + form.print());
 			}
 			LispVal value = items.get(i + 1);
-			if (LispNames.keywordMatches(keyword.name(), ":world")) {
+			if (":WORLD".equals(keyword.name())) {
 				world = worldName(value, form);
 			}
 			else {
@@ -365,7 +365,7 @@ public final class WitExportDirective {
 			paramNames.add(new LispSymbol(param.name()));
 		}
 		WitType result = func.result();
-		String returns = result == null ? ":void"
+		String returns = result == null ? ":VOID"
 				: designator(result, name, "the result", witPath, locations, item, backend);
 
 		List<LispVal> out = new ArrayList<>();
@@ -394,19 +394,19 @@ public final class WitExportDirective {
 		if (type instanceof WitType.Prim prim) {
 			switch (prim.name()) {
 				case "s32":
-					return ":int";
+					return ":INT";
 				case "s64":
 					if (backend == Backend.WASM_GC || backend == Backend.WASM_COMPONENT) {
 						throw error(witPath, locations, item, "export '" + exportName + "': s64 (" + what
 								+ ") requires --no-gc (the wasm-GC backend's integers are i31ref)");
 					}
-					return ":long";
+					return ":LONG";
 				case "f64":
-					return ":float";
+					return ":FLOAT";
 				case "bool":
-					return ":bool";
+					return ":BOOL";
 				case "string":
-					return ":string";
+					return ":STRING";
 				default:
 					break;
 			}

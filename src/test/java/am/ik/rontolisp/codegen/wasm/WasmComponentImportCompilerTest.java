@@ -406,7 +406,7 @@ class WasmComponentImportCompilerTest {
 			.contains("(\"send\" \"kv:send\")");
 		// Preview 1 wants the same alias resolved down to its flat designator.
 		assertThat(lower(aliasWit, "local:x/s", WitExportDirective.Backend.WASM_GC).stream().map(LispVal::print))
-			.anyMatch(form -> form.contains("WASM-IMPORT") && form.contains("send") && form.contains(":int"));
+			.anyMatch(form -> form.contains("WASM-IMPORT") && form.contains("send") && form.contains(":INT"));
 	}
 
 	@Test
