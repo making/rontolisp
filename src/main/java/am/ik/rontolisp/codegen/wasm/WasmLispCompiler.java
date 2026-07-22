@@ -527,26 +527,55 @@ public final class WasmLispCompiler implements LispCompiler {
 	// value passes through unchanged. Called by the string consumers (stringp, char,
 	// subseq, string=/-equal, case/trim/concat, write-string, read-from-string, intern,
 	// make-symbol) and at the entry of _equal/_hash/_print_val/_princ_val so a character
-	// vector behaves as a string everywhere. Reuses the unary TYPE_CALLABLE_BASE + 0
-	// signature, so no new type entry.
+	// vector behaves as a string everywhere. Each TYPE_CHAR code point is written as its
+	// UTF-8 encoding (1-4 bytes) so the WASM string byte model can carry the full Unicode
+	// range without truncation; consumers that treat the byte array as an ASCII character
+	// index (char/schar/length/subseq) walk the UTF-8 through _str_char_count /
+	// _str_char_at. Reuses the unary TYPE_CALLABLE_BASE + 0 signature, so no new type
+	// entry.
 	static final int FUNC_CHARVEC_TO_STR = FUNC_WRITE_STR_GC + 1;
 
+	// _str_char_count (str) -> i32: the number of Unicode characters in a
+	// UTF-8-encoded string (its content walk minus the surrounding quotes, counting one
+	// per lead byte -- byte with `(b & 0xC0) != 0x80`). The character-based length of
+	// TYPE_STRING; every WasmLengthCompiler string arm reads through it. Reuses the
+	// ((ref null eq)) -> i32 signature (TYPE_RAT_GET), so no new type entry.
+	static final int FUNC_STR_CHAR_COUNT = FUNC_CHARVEC_TO_STR + 1;
+
+	// _str_char_at (str, i) -> i32: the i-th character's Unicode code point in a
+	// UTF-8-encoded string, from a byte walk that skips continuation bytes and decodes
+	// the 1-4 byte sequence at the matched position. The character indexed accessor
+	// every `char` / `schar` lowering calls (the caller boxes the returned i32 as a
+	// TYPE_CHAR struct). Reuses the ((ref null eq), i32) -> i32 signature
+	// (TYPE_STR_TO_MEM), so no new type entry.
+	static final int FUNC_STR_CHAR_AT = FUNC_STR_CHAR_COUNT + 1;
+
+	// _str_char_byte_offset (str, i) -> i32: the byte offset within the string's data
+	// array where the i-th character's UTF-8 sequence starts. If i is greater than or
+	// equal to the character count, returns len - 1 (the position of the closing quote)
+	// so a subseq end walk lands on the string terminator. The compile-time subseq
+	// helper reads it twice (for start and end) to translate character indices to byte
+	// ranges. Reuses the ((ref null eq), i32) -> i32 signature (TYPE_STR_TO_MEM), so no
+	// new type entry.
+	static final int FUNC_STR_CHAR_BYTE_OFFSET = FUNC_STR_CHAR_AT + 1;
+
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
-	// under --simd. Fixed indices relative to FUNC_CHARVEC_TO_STR, so every constant
-	// above
+	// under --simd. Fixed indices relative to FUNC_STR_CHAR_BYTE_OFFSET, so every
+	// constant above
 	// keeps
 	// its value; the user defuns below shift by WasmVecSimdRuntimeBuilder.FUNC_COUNT when
 	// the block is present. Read the base through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_CHARVEC_TO_STR + 1;
+	static final int FUNC_VEC_BASE = FUNC_STR_CHAR_BYTE_OFFSET + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
 	// p1-future-await helper, the two binary stream helpers, the four string-stream
 	// helpers, the five symbol-API helpers, the read-char helper, the four string
-	// GC helpers (_str_build, _str_fresh, _str_to_mem, _write_str_gc), and the
-	// character-vector normalizer (_charvec_to_str) -- plus, under
+	// GC helpers (_str_build, _str_fresh, _str_to_mem, _write_str_gc), the
+	// character-vector normalizer (_charvec_to_str) and the three UTF-8 walking helpers
+	// (_str_char_count, _str_char_at, _str_char_byte_offset) -- plus, under
 	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_CHARVEC_TO_STR + 1;
+	static final int FUNC_USER_BASE = FUNC_STR_CHAR_BYTE_OFFSET + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -2560,13 +2589,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				if (this.component) {
 					// Import the linear memory from the shared canonical-memory module so
-					// the
-					// lowered WASI imports and this module share one memory.
+					// the lowered WASI imports and this module share one memory. The min
+					// page count matches the P1 own-memory declaration (heap base rounded
+					// up plus three growth pages, floored at four) so a program whose
+					// static data / intern pool needs more than the mem module's default
+					// six pages tells its component builder to grow that module too --
+					// otherwise instantiation traps on the first data-segment write.
+					final int componentMemMinPages = Math.max(4, (heapBase + 65535) / 65536 + 3);
 					imports.add(w -> {
 						w.write("mem".length(), "mem", "memory".length(), "memory");
 						w.write(ExternalKind.MEMORY);
 						w.write(0x00); // limits: min only
-						w.writeUnsignedLeb128(4); // min 4 pages
+						w.writeUnsignedLeb128(componentMemMinPages);
 					});
 				}
 			})
@@ -2692,6 +2726,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_WRITE_STR_GC); // _write_str_gc (FUNC_WRITE_STR_GC)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _charvec_to_str
 															// (FUNC_CHARVEC_TO_STR)
+				fnDef.addFunction(TYPE_RAT_GET); // _str_char_count (FUNC_STR_CHAR_COUNT)
+				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_char_at (FUNC_STR_CHAR_AT)
+				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_char_byte_offset
+													// (FUNC_STR_CHAR_BYTE_OFFSET)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -3062,6 +3100,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				// _charvec_to_str (FUNC_CHARVEC_TO_STR): normalize a mutable character
 				// vector into the equivalent runtime string.
 				code.addFunction(WasmStringRuntimeBuilder.buildCharvecToStrBody());
+				// _str_char_count (FUNC_STR_CHAR_COUNT): count Unicode characters in a
+				// UTF-8-encoded string.
+				code.addFunction(WasmStringRuntimeBuilder.buildStrCharCountBody());
+				// _str_char_at (FUNC_STR_CHAR_AT): the i-th character's code point in a
+				// UTF-8-encoded string.
+				code.addFunction(WasmStringRuntimeBuilder.buildStrCharAtBody());
+				// _str_char_byte_offset (FUNC_STR_CHAR_BYTE_OFFSET): the byte offset of
+				// the i-th character in a UTF-8-encoded string.
+				code.addFunction(WasmStringRuntimeBuilder.buildStrCharByteOffsetBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

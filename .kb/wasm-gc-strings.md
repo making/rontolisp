@@ -33,7 +33,35 @@ $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
   `0x22`), a symbol is bare, a keyword leads with `:`. So old `linear[id + i]` == new
   `array[i]`; the discriminator is `array.get_u data 0 == 0x22` (string) / `0x3A`
   (keyword). Readers `ref.cast $str_bytes` before `array.get_u` / `array.len`
-  (`WasmEmitHelper.emitStrBytesArray`).
+  (`WasmEmitHelper.emitStrBytesArray`). **String content is UTF-8**: source-literal
+  bytes are already UTF-8 (the `StringTable` stores `String.getBytes(UTF_8)`), and a
+  mutable character vector normalizes through `_charvec_to_str` which emits each
+  `TYPE_CHAR` code point as its 1-4 byte UTF-8 sequence -- so `len` (field 1) is the
+  BYTE length and can exceed the character count on non-ASCII input. Character-based
+  accessors walk the byte data through three shared runtime helpers appended right
+  after `FUNC_CHARVEC_TO_STR`:
+
+  - `FUNC_STR_CHAR_COUNT` `_str_char_count(str) -> i32` -- character count of a
+    UTF-8-encoded string (walk bytes 1..len-1, count lead bytes, i.e. bytes with
+    `(b & 0xC0) != 0x80`). Every `(length s)` on a string reads through it.
+  - `FUNC_STR_CHAR_AT` `_str_char_at(str, i) -> i32` -- the i-th character's code
+    point. Delegates the walk to `_str_char_byte_offset` and decodes the 1-4 byte
+    UTF-8 sequence at the returned position. Every `(char s i)` / `(schar s i)` and
+    `(aref TYPE_STRING i)` lowering routes through it (the caller boxes the returned
+    i32 as a `TYPE_CHAR` struct).
+  - `FUNC_STR_CHAR_BYTE_OFFSET` `_str_char_byte_offset(str, i) -> i32` -- byte
+    offset within `$str_bytes` where the i-th character's UTF-8 sequence starts (or
+    `len - 1`, the closing quote's position, when i is at or past the character
+    count so subseq's end walk lands on the string terminator). `_subseq`'s string
+    branch reads it twice to translate a character range into a byte range.
+
+  ASCII case-fold and byte-level equality on the raw byte data stay correct without
+  further changes: an ASCII byte-equal string comparison matches character-for-character
+  under UTF-8 canonical form, and non-ASCII bytes fall outside the A-Z / a-z range that
+  `_string_upcase` / `_string_downcase` / `_string_capitalize` shift, so they pass
+  through unchanged. `emitPrintChar`'s `emitGlyph` now also expands its code point to
+  1-4 UTF-8 bytes before handing them to `_write_str`, so `#\A` prints as
+  `A` on stdout and `#\U+00C5` prints as its two-byte UTF-8 encoding.
 
 ## HEAP_PTR is a stack pointer; identity is a counter (the leak fix)
 
@@ -137,6 +165,22 @@ representation -- a `TYPE_VBLOCK` over an `(array (mut v128))` of lane groups in
 `--simd` module grows without bound. todo-101 briefly did move them into a bump arena here
 (`VEC_HEAP_PTR_ADDR` = 160); todo-105 removed that word and its allocator. Without `--simd`
 the module is byte-identical either way.
+
+## Component memory grows with the program (uax-15 unblock)
+
+`WasmComponentBuilder.memModuleFor` reads the rontolisp core module's
+`"mem"/"memory"` import declaration (whose `min` pages equals the P1 own-memory
+declaration, `max(4, (heapBase + 65535) / 65536 + 3)`), and rewrites the shared
+`mem.wasm` module's memory section so its EXPORTED memory starts with at least
+that many pages. Active data segments are copied to memory at instantiation
+BEFORE any function runs, so a program whose static data / intern pool alone
+exceeds the mem module's default six pages (uax-15 loads a ~2.7MB UnicodeData
+blob at load time via the compile-time `with-open-file` file-inlining --
+`.kb/asdf.md`) would otherwise trap with an out-of-bounds memory access on the
+very first byte written. The patched mem module keeps its bump-allocator body
+byte-identical; only the `(memory (;0;) N)` count changes. When the core module
+does not import a `"mem"/"memory"` (a non-rontolisp embedder or a small program
+whose min stayed at four) the fallback returns the unchanged resource.
 
 ## Related
 - [[27-wasm-gc-heap-never-grows]] -- the linear string heap this retires.

@@ -1037,8 +1037,12 @@ public final class WasmComponentBuilder {
 		// All imported WASI 0.3 interfaces in one block: import instances 0-8, types
 		// 0-11.
 		c.writeRaw(IMPORT_BLOCK);
-		// Core modules: 0 = shared memory, 1 = adapter, 2 = rontolisp.
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, MEM_MODULE);
+		// Core modules: 0 = shared memory, 1 = adapter, 2 = rontolisp. The shared
+		// memory module is sized to fit the rontolisp module's static data / intern
+		// pool (its memory-import min-pages declaration), so a program with a large
+		// data segment does not trap on the very first data-segment write when the
+		// mem module is instantiated with only its default six pages.
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, memModuleFor(coreModule));
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_MODULE);
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
 		// Instantiate the shared memory module (core instance 0).
@@ -1202,6 +1206,182 @@ public final class WasmComponentBuilder {
 		catch (IOException ex) {
 			throw new UncheckedIOException("Failed to read component resource: " + RES + name, ex);
 		}
+	}
+
+	/**
+	 * Return {@link #MEM_MODULE} bytes with the exported memory sized to at least the
+	 * rontolisp core module's memory-import minimum. The default {@code mem.wasm} exports
+	 * six pages, which fits every small program but traps at instantiation on a program
+	 * whose static data / intern pool alone exceeds 384KB (uax-15's ~2.7MB UnicodeData
+	 * tables, for instance). This walks the core module's import section to find its
+	 * {@code "mem"/"memory"} declaration and rewrites the mem module's memory section so
+	 * its exported memory starts with at least that many pages -- because active data
+	 * segments are copied to memory at instantiation, growing on demand from
+	 * {@code _start} is too late.
+	 * @param coreModule the rontolisp core module whose memory-import minimum drives the
+	 * mem module's initial size
+	 * @return a fresh copy of {@link #MEM_MODULE} with the memory section rewritten, or
+	 * the unchanged resource when the core module asks for six pages or fewer
+	 */
+	private static byte[] memModuleFor(byte[] coreModule) {
+		int needed = requiredMemPagesFromCore(coreModule);
+		if (needed <= 6) {
+			return MEM_MODULE;
+		}
+		return patchMemModuleMinPages(MEM_MODULE, needed);
+	}
+
+	/**
+	 * Extract the minimum-pages value from the {@code "mem"/"memory"} import of the given
+	 * core module. Returns six (the mem module's default) when the import is not present
+	 * so any embedder that reuses the mem module beside a non-rontolisp core module keeps
+	 * working.
+	 * @param coreModule the core module bytes
+	 * @return the requested min pages, or six when the import is absent
+	 */
+	private static int requiredMemPagesFromCore(byte[] coreModule) {
+		// Walk the sections: skip \0asm + version, then each (id, size, body).
+		int pos = 8;
+		while (pos < coreModule.length) {
+			int id = coreModule[pos++] & 0xFF;
+			long[] sz = readLeb128(coreModule, pos);
+			pos = (int) sz[1];
+			int bodyEnd = pos + (int) sz[0];
+			if (id != 2) { // 2 = import section
+				pos = bodyEnd;
+				continue;
+			}
+			// Import section body: vec of imports. Each import is
+			// module-name (leb len + utf-8), field-name (leb len + utf-8), kind byte,
+			// then kind-specific descriptor.
+			long[] count = readLeb128(coreModule, pos);
+			pos = (int) count[1];
+			for (int i = 0; i < count[0]; i++) {
+				long[] modLen = readLeb128(coreModule, pos);
+				pos = (int) modLen[1];
+				String modName = new String(coreModule, pos, (int) modLen[0]);
+				pos += (int) modLen[0];
+				long[] fldLen = readLeb128(coreModule, pos);
+				pos = (int) fldLen[1];
+				String fldName = new String(coreModule, pos, (int) fldLen[0]);
+				pos += (int) fldLen[0];
+				int kind = coreModule[pos++] & 0xFF;
+				// kind 0 = func (type index leb), 1 = table (elemtype + limits),
+				// 2 = memory (limits), 3 = global (valtype + mutability byte).
+				if (kind == 2 && "mem".equals(modName) && "memory".equals(fldName)) {
+					int flags = coreModule[pos++] & 0xFF;
+					long[] min = readLeb128(coreModule, pos);
+					return (int) min[0];
+				}
+				// Skip the descriptor of imports we don't care about.
+				switch (kind) {
+					case 0 -> {
+						long[] typeIdx = readLeb128(coreModule, pos);
+						pos = (int) typeIdx[1];
+					}
+					case 1 -> {
+						pos++; // elem type
+						int lim = coreModule[pos++] & 0xFF;
+						long[] mn = readLeb128(coreModule, pos);
+						pos = (int) mn[1];
+						if ((lim & 0x01) != 0) {
+							long[] mx = readLeb128(coreModule, pos);
+							pos = (int) mx[1];
+						}
+					}
+					case 2 -> {
+						int lim = coreModule[pos++] & 0xFF;
+						long[] mn = readLeb128(coreModule, pos);
+						pos = (int) mn[1];
+						if ((lim & 0x01) != 0) {
+							long[] mx = readLeb128(coreModule, pos);
+							pos = (int) mx[1];
+						}
+					}
+					case 3 -> {
+						pos++; // valtype
+						pos++; // mutability
+					}
+					default -> throw new IllegalStateException("Unknown import kind " + kind);
+				}
+			}
+			pos = bodyEnd;
+		}
+		return 6;
+	}
+
+	/**
+	 * Patch the given mem module bytes so its memory section declares the given min
+	 * pages. Assumes the memory section is the first section with id 5 and rewrites only
+	 * its size prefix and min-pages LEB128. Bytes after the memory section are shifted by
+	 * the size delta.
+	 * @param original the original mem module bytes
+	 * @param minPages the new min-pages value
+	 * @return a fresh byte array with the memory section rewritten
+	 */
+	private static byte[] patchMemModuleMinPages(byte[] original, int minPages) {
+		int pos = 8; // \0asm + version
+		while (pos < original.length) {
+			int id = original[pos] & 0xFF;
+			long[] sz = readLeb128(original, pos + 1);
+			int sizePos = pos + 1;
+			int bodyPos = (int) sz[1];
+			int bodyLen = (int) sz[0];
+			if (id != 5) {
+				pos = bodyPos + bodyLen;
+				continue;
+			}
+			// memory section body: vec of memories. Each memory is (limits).
+			// Rewrite the whole body: count 01, flags 00, minPages LEB128.
+			byte[] newLeb = encodeLeb128(minPages);
+			byte[] newBody = new byte[2 + newLeb.length];
+			newBody[0] = 0x01; // count
+			newBody[1] = 0x00; // flags: min only
+			System.arraycopy(newLeb, 0, newBody, 2, newLeb.length);
+			byte[] newSize = encodeLeb128(newBody.length);
+			byte[] result = new byte[pos + 1 + newSize.length + newBody.length
+					+ (original.length - (bodyPos + bodyLen))];
+			System.arraycopy(original, 0, result, 0, pos + 1);
+			int cur = pos + 1;
+			System.arraycopy(newSize, 0, result, cur, newSize.length);
+			cur += newSize.length;
+			System.arraycopy(newBody, 0, result, cur, newBody.length);
+			cur += newBody.length;
+			System.arraycopy(original, bodyPos + bodyLen, result, cur, original.length - (bodyPos + bodyLen));
+			return result;
+		}
+		return original;
+	}
+
+	// Reads an unsigned LEB128 integer starting at position and returns [value, nextPos].
+	private static long[] readLeb128(byte[] buf, int pos) {
+		long value = 0;
+		int shift = 0;
+		while (true) {
+			int b = buf[pos++] & 0xFF;
+			value |= ((long) (b & 0x7F)) << shift;
+			if ((b & 0x80) == 0) {
+				break;
+			}
+			shift += 7;
+		}
+		return new long[] { value, pos };
+	}
+
+	// Encodes an unsigned integer as LEB128.
+	private static byte[] encodeLeb128(int value) {
+		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+		int v = value;
+		while (true) {
+			int b = v & 0x7F;
+			v >>>= 7;
+			if (v == 0) {
+				out.write(b);
+				break;
+			}
+			out.write(b | 0x80);
+		}
+		return out.toByteArray();
 	}
 
 }

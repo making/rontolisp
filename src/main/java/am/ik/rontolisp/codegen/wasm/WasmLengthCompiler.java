@@ -8,14 +8,15 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
 /**
- * Compiles the {@code length} built-in. A string returns its character count (the stored
- * byte length minus the two surrounding quotes); a vector (rank-1 array) returns its
- * element count; any other argument is treated as a list and its cons cells are counted
- * (Common Lisp sequences). A symbol (which shares the string struct representation but
- * lacks the leading quote) is not a sequence and yields zero, matching the interpreter; a
- * hash table likewise yields zero. A rank-2 array is not a sequence and traps. An array
- * and a hash table are both {@code TYPE_CELL} boxes; the header's car distinguishes them
- * (a bucket array for an array, an i31 count for a hash table). A packed float vector
+ * Compiles the {@code length} built-in. A string returns its character count via
+ * {@code _str_char_count} (a UTF-8 walk of the byte data between the two surrounding
+ * quotes, counting one per lead byte); a vector (rank-1 array) returns its element count;
+ * any other argument is treated as a list and its cons cells are counted (Common Lisp
+ * sequences). A symbol (which shares the string struct representation but lacks the
+ * leading quote) is not a sequence and yields zero, matching the interpreter; a hash
+ * table likewise yields zero. A rank-2 array is not a sequence and traps. An array and a
+ * hash table are both {@code TYPE_CELL} boxes; the header's car distinguishes them (a
+ * bucket array for an array, an i31 count for a hash table). A packed float vector
  * ({@code TYPE_FARRAY}) is handled first: a rank-1 one yields its {@code dims[0]}, a
  * higher-rank one traps like a general rank-n array.
  */
@@ -98,17 +99,12 @@ final class WasmLengthCompiler {
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
-		// String: character count is the stored length minus the two quotes.
+		// String: character count via a UTF-8 walk (byte data between the two quotes
+		// carries the string's content as its UTF-8 encoding, so the byte length and
+		// character count can diverge on non-ASCII input).
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(valSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.writeSignedLeb128(1); // field 1: length
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(2);
-		ctx.writer.write(Instruction.I32_SUB);
+		WasmEmitHelper.emitStrCharCountCall(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.ELSE);
 		// Symbol: not a sequence -> 0.

@@ -84,6 +84,35 @@ Governing rule (why "all four backends" matters): where behavior must be identic
 interpreter, the JVM, and both WASM backends, the topic's `.kb` file says so and names the
 pinning test -- change the file and the test together, never one backend in isolation.
 
+## Working principles
+
+Distilled from post-mortems of features that landed cleanly vs. features that had to
+be redone. Apply to any non-trivial change; the acceptance criterion is these plus
+"all four backends" above.
+
+- **A todo's "non-goals" are the author's scope, not an unconditional constraint.**
+  If the essential fix requires touching a stated non-goal, propose the widened scope
+  before routing around the real cause. A non-goal that the fix silently ignores keeps
+  the root cause alive on the "lagging" side.
+
+- **Prefer widening the shared normalizer over adding bypass wiring.** When a backend
+  divergence is documented with a "reason for the divergence" clause and the reason
+  now longer holds (e.g., the shared path just gained the wider semantics), retire
+  the divergence in the SAME pass; leaving it in ships a hidden correctness gap on
+  the lagging backend. A shared normalizer with a bigger contract is auditable;
+  scattered "avoid the normalizer here" branches are not.
+
+- **Turning a long-`@Disabled` test green is not just closing that one gate.** The
+  test may have been skipped precisely because it exercises a code path with a latent
+  bug on some backend; make the enablement a first-class finding in the same session,
+  not a follow-up -- if you only satisfy the failing assertion and stop, the next
+  enable will re-trap on the same latent bug.
+
+- **When you touch a backend divergence, leave a re-evaluation trigger behind.** Write
+  the reason for the divergence into the `.kb` file explicitly, so the next visitor
+  can tell whether the reason still holds. A divergence with only a "how" and no "why"
+  is a permanent gap.
+
 ## Development Workflows
 
 ### Implementation Order

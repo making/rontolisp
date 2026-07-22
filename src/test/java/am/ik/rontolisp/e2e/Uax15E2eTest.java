@@ -3,13 +3,11 @@ package am.ik.rontolisp.e2e;
 import java.nio.file.Path;
 import java.util.List;
 
-import org.junit.jupiter.api.Disabled;
-
 /**
  * An ASDF subset integration target ({@code .kb/asdf.md}): the REAL uax-15 v0.1.3 sources
  * (vendored unmodified under {@code src/test/resources/uax-15}, MIT license) load via
- * {@code asdf:load-system} and run the four Unicode normalization forms on the
- * INTERPRETER + JVM via {@link AsdfLibraryE2eSupport}. The library transitively pulls
+ * {@code asdf:load-system} and run the four Unicode normalization forms on all four
+ * backends via {@link AsdfLibraryE2eSupport}. The library transitively pulls
  * split-sequence and cl-ppcre, then loads the 34k-line UnicodeData.txt,
  * CompositionExclusions.txt and DerivedNormalizationProps.txt into precomputed hash
  * tables at load time via {@code with-open-file :external-format :UTF-8}. This exercises
@@ -23,12 +21,14 @@ import org.junit.jupiter.api.Disabled;
  * mutable-character vectors (subseq's vector arm added in this integration).
  *
  * <p>
- * Both WASM backends remain excluded: the WASM string model is byte/ASCII
- * ({@code _charvec_to_str} truncates each element to one byte), and uax-15 stores non-BMP
- * scratch values in its {@code unicode-string} arrays, so downstream string reads on the
- * compiled program silently drop the high bytes. Fixing this needs a wider WASM string
- * model (UTF-8 encoding on serialization at minimum) that a follow-up scope should tackle
- * -- see {@code .todo/159}.
+ * All four backends produce the same code-point sequences: the WASM GC string byte data
+ * is UTF-8 encoded on serialization ({@code _charvec_to_str} emits each character's 1-4
+ * byte UTF-8 sequence) and read back through
+ * {@link am.ik.rontolisp.codegen.wasm.WasmStringRuntimeBuilder#buildStrCharAtBody
+ * _str_char_at} /
+ * {@link am.ik.rontolisp.codegen.wasm.WasmStringRuntimeBuilder#buildStrCharCountBody
+ * _str_char_count}, so a non-BMP scratch value stored by uax-15 in a
+ * {@code unicode-string} char vector round-trips through the compiled program unchanged.
  */
 class Uax15E2eTest extends AsdfLibraryE2eSupport {
 
@@ -77,20 +77,6 @@ class Uax15E2eTest extends AsdfLibraryE2eSupport {
 	@Override
 	protected String artifactName() {
 		return "Uax15E2e";
-	}
-
-	@Override
-	@Disabled("WASM string model is byte/ASCII (_charvec_to_str truncates each element to one byte);"
-			+ " uax-15 stores non-BMP scratch values in unicode-string vectors so downstream"
-			+ " string reads silently drop the high bytes. Follow-up: .todo/159 wide-char WASM" + " string model.")
-	void compilesAndRunsOnWasmPreview1() {
-	}
-
-	@Override
-	@Disabled("WASM string model is byte/ASCII (_charvec_to_str truncates each element to one byte);"
-			+ " uax-15 stores non-BMP scratch values in unicode-string vectors so downstream"
-			+ " string reads silently drop the high bytes. Follow-up: .todo/159 wide-char WASM" + " string model.")
-	void compilesAndRunsOnWasmComponent() {
 	}
 
 }

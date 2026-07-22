@@ -570,6 +570,31 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Emits {@code call FUNC_STR_CHAR_COUNT}: replaces a {@code TYPE_STRING} value on the
+	 * stack with the i32 character count of its UTF-8 encoded content (byte count minus
+	 * two surrounding quotes, walking one increment per UTF-8 lead byte). Every
+	 * character-based length reads through it.
+	 * @param ctx the compilation context (its writer receives the instructions)
+	 */
+	static void emitStrCharCountCall(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_COUNT);
+	}
+
+	/**
+	 * Emits {@code call FUNC_STR_CHAR_AT}: consumes a {@code (str, i)} pair (a
+	 * {@code TYPE_STRING} and an i32 character index) and pushes the i32 code point of
+	 * the {@code i}-th character, walking UTF-8 to find the character then decoding its
+	 * 1-4 byte sequence. Every {@code (char s i)}/{@code (schar s i)} lowering routes
+	 * through it.
+	 * @param ctx the compilation context (its writer receives the instructions)
+	 */
+	static void emitStrCharAtCall(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_AT);
+	}
+
+	/**
 	 * Given a value on the stack that is a {@code TYPE_STRING}, replaces it with its
 	 * {@code $str_bytes} data array (field 2), cast to the concrete array type so callers
 	 * can {@code array.get_u} / {@code array.len} it. The array holds the same

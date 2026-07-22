@@ -11,9 +11,9 @@ import am.ik.wasm.Type;
  * Compiles the character built-ins. A character is a {@code TYPE_CHAR} struct holding the
  * i32 code point. Because every compiler-allocated temporary local is a {@code (ref null
  * eq)}, i32 intermediates that must outlive a single stack expression are boxed as i31
- * refs and unboxed on use. Strings carry the surrounding double quotes, so a Lisp index
- * {@code i} reads the byte at {@code offset + 1 + i} (ASCII/byte indexing, matching the
- * i31 reader limitation).
+ * refs and unboxed on use. Strings are UTF-8 encoded byte sequences (a Lisp index
+ * {@code i} names the i-th Unicode CHARACTER, whose UTF-8 sequence starts at a byte
+ * offset the {@code _str_char_at} runtime helper walks to and decodes).
  */
 final class WasmCharCompiler {
 
@@ -23,19 +23,13 @@ final class WasmCharCompiler {
 	/** {@code (char string index)} / {@code (schar string index)}. */
 	static void compileChar(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		// the string's byte array (a mutable character vector normalizes to a string
-		// first)
+		// A mutable character vector normalizes to a string first; the string carries
+		// its content as UTF-8 bytes and _str_char_at walks to the i-th character.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmEmitHelper.emitCharvecToStrCall(ctx);
-		WasmEmitHelper.emitStrBytesArray(ctx);
-		// array index = 1 (skip the opening quote at index 0) + the Lisp index
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(1);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
-		ctx.writer.write(Instruction.I32_ADD);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		WasmEmitHelper.emitStrCharAtCall(ctx);
 		makeChar(ctx);
 	}
 

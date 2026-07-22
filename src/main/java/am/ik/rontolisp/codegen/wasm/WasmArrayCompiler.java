@@ -88,28 +88,21 @@ final class WasmArrayCompiler {
 			WasmExprCompiler.compileExpr(contentsLowering, ctx);
 			return;
 		}
-		LispVal characterString = am.ik.rontolisp.LispMacroExpander.lowerCharacterMakeArray(cons);
-		if (characterString != null) {
-			// A rank-1 :element-type 'character array without fill-pointer/adjustable
-			// stays a plain (immutable) TYPE_STRING here: the WASM string model is
-			// byte-oriented (_charvec_to_str truncates each element to one byte), so
-			// routing every character make-array through the mutable char-vec would
-			// silently truncate non-ASCII code points on downstream string reads. A
-			// caller that needs mutation must ask for :fill-pointer / :adjustable
-			// explicitly, which selects the char-vec branch below.
-			WasmExprCompiler.compileExpr(characterString, ctx);
-			return;
-		}
 		boolean singleFloat = isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
 		boolean doubleFloat = isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
 		LispVal fpArg = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
 		LispVal adjArg = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
-		// A fill-pointered/adjustable character vector: the general array shape holding
+		// A rank-1 :element-type 'character array is the general array shape holding
 		// TYPE_CHAR elements, marked mutable-character by a meta offset of 1 (an
 		// ordinary array's offset is 0; a displaced array holds a cell in its data
-		// slot). _charvec_to_str renders it as a string on demand.
-		boolean charVector = am.ik.rontolisp.LispMacroExpander.isCharacterElementType(
-				findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD)) && (fpArg != null || adjArg != null);
+		// slot). {@code _charvec_to_str} renders it as a UTF-8 encoded string on
+		// demand, so a non-ASCII code point stored via setf-aref round-trips through
+		// the string boundary intact. Every make-array with :element-type 'character
+		// now takes this route (matching the JVM), so setf-aref writes always land in
+		// place -- the previous immutable TYPE_STRING branch dropped high bytes on
+		// downstream read even for programs that never called mutation.
+		boolean charVector = am.ik.rontolisp.LispMacroExpander
+			.isCharacterElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
 		if ((doubleFloat || singleFloat) && fpArg == null && adjArg == null) {
 			// A plain :element-type 'double-float / 'single-float array (no fill pointer
 			// /
@@ -617,20 +610,16 @@ final class WasmArrayCompiler {
 		int arrSlot = setTemp(ctx);
 		if (rank == 1) {
 			// A string is a rank-1 character array in CL: (aref s i) reads like
-			// (char s i) (bytes[1 + i] skips the opening quote byte).
+			// (char s i), walking the UTF-8 byte data with _str_char_at to decode
+			// the i-th character's 1-4 byte sequence.
 			getLocal(ctx, arrSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 			emitIfEq(ctx);
 			getLocal(ctx, arrSlot);
-			WasmEmitHelper.emitStrBytesArray(ctx);
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(1);
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
 			WasmEmitHelper.castI31GetS(ctx);
-			ctx.writer.write(Instruction.I32_ADD);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+			WasmEmitHelper.emitStrCharAtCall(ctx);
 			WasmCharCompiler.makeChar(ctx);
 			ctx.writer.write(Instruction.ELSE);
 		}

@@ -2357,9 +2357,18 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 	}
 
-	// Writes the single byte in i32 local slot 2 to stdout (via the print scratch
-	// buffer).
+	// Writes the character in i32 local slot 2 (its Unicode code point) to stdout as
+	// its 1-4 byte UTF-8 encoding via the print scratch buffer. A code point >= 0x80
+	// expands to multiple bytes so that non-ASCII glyphs print correctly on a UTF-8
+	// stdout, matching the interpreter's println.
 	private static void emitGlyph(WasmWriter w) {
+		// if (code < 0x80) 1-byte fast path
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET);
 		w.write(Instruction.GET_LOCAL);
@@ -2371,6 +2380,153 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(1);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.ELSE);
+		// else if (code < 0x800) 2-byte
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x800);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(6);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0xC0);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET + 1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.ELSE);
+		// else if (code < 0x10000) 3-byte
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x10000);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(12);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0xE0);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET + 1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(6);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET + 2);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.ELSE);
+		// else 4-byte
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(18);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0xF0);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET + 1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(12);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET + 2);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(6);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET + 3);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PRINT_BUF_OFFSET);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(4);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.END); // closes IF (code < 0x10000)
+		w.write(Instruction.END); // closes IF (code < 0x800)
+		w.write(Instruction.END); // closes IF (code < 0x80)
 	}
 
 	// Writes the string-table entry (offset/length) to stdout via _write_str.
