@@ -70,16 +70,28 @@ args; keep them):
 - `PackageResolver.resolveUnqualified`/`resolveQualified` one-shot lowercase retry:
   bridges an upcased reference to a `wit-import` package's lower-kebab member once the
   member is bound (`GL:CREATE-SHADER` reaching a wit-imported `gl:create-shader` defun).
-- The `--component` LOWER dual-compares (`:get` OR `:GET` via `I32_OR` in
-  `WasmComponentImportCompiler`) and `wit.lisp`'s `%wit-result` dual envelope heads
-  (`:ok`/`:OK`): the canonical-ABI boundary where a rich WIT type crosses as Lisp data.
-  The LIFT spells every tag/plist-key/envelope-head UPCASED (matching upcased user data);
-  the LOWER dual-compares because some internal constructions historically spelled the
-  lowercase tag. Simplification candidate now that library sources read upcased -- tracked
-  in `.todo/156` -- but harmless as-is.
 - HTTP plist keys are UPPERCASE (`compiler/HttpPlistShape`: keyword = `:` + upcased field):
   all four backends emit/read `:STATUS`/`:HEADERS`/`:BODY`..., a host-ABI decision (see
   `http-plist-shape` in the kb index), kept.
+
+**Removed seam (2026-07-21, the `--component` canonical-ABI dual-compares).** The
+canonical-ABI boundary is now UPCASED-ONLY in both directions. The LIFT always spelled
+every variant/enum case, record plist-key and `result` envelope-head upcased (matching
+upcased user data); the LOWER used to dual-compare a tag against BOTH the lowercase WIT
+name (`:get`) and its upcased twin (`:GET`, via `I32_OR` in `WasmComponentImportCompiler`),
+and `wit.lisp`'s `%wit-result` accepted both `:ok`/`:OK` envelope heads -- to also admit
+the lowercase tag the *pre-A2 case-preserving* library sources constructed. Under A2 those
+sources (`http.lisp`'s `%fetch-method-variant`, `sockets.lisp`'s `%sock-addr`, ...) read
+upcased too, so the lowercase arm went dead and was dropped: the four
+`WasmComponentImportCompiler` LOWER dual-compares and `%wit-result` now match the upcased
+spelling only. The same collapse applied to the lift-facing Lisp consumers whose two arms
+had become the *identical* upcased symbol under A2 -- `(or (eq x :foo) (eq x :FOO))` is
+`(or A A)` -- in `http.lisp`'s `%serve-method-string`, `sockets.lisp`'s
+`%sock-addr-string`, and `usocket.lisp`'s protocol check. Output is byte-identical on
+every backend; the compiled `.wasm`/`.class` shrink by the dropped instructions. The LIFT
+emission is untouched. Pinned by `WasmComponentImportCompilerTest` (the lift stays
+upcased-only, no lowercase spelling emitted) and `ServeMethodCaseComponentE2eTest` (every
+HTTP method round-trips through the real `wasi:http` `method` variant). `.todo/157`.
 
 **Host-facing names derive lowercased**: wasm-export/wasm-import default export/import
 names and `:as` quoted-symbol aliases, wasm-export `:param-names` symbols, and wit-export

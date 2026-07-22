@@ -56,10 +56,12 @@
   ;; (:ok . value) / (:error . payload) and its public wrapper defun unwraps it
   ;; here: the ok arm IS the value, the error arm signals rontolisp:wit-error
   ;; exactly as an interpreter/JVM provider would have (the settled result
-  ;; mapping, a condition on every backend).
-  (if (and (consp envelope) (or (eq (car envelope) :ok) (eq (car envelope) :OK)))
+  ;; mapping, a condition on every backend). The lift spells the envelope head
+  ;; UPCASED (:OK/:ERROR), matching the head this source reads under the
+  ;; reader's upcase premise.
+  (if (and (consp envelope) (eq (car envelope) :ok))
       (cdr envelope)
-      (if (and (consp envelope) (or (eq (car envelope) :error) (eq (car envelope) :ERROR)))
+      (if (and (consp envelope) (eq (car envelope) :error))
           (error 'rontolisp:wit-error :payload (cdr envelope)
                  :message (concatenate 'string "the WIT call answered its error arm: "
                                        (prin1-to-string (cdr envelope))))

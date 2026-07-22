@@ -1783,17 +1783,14 @@ final class WasmComponentImportCompiler {
 				int payload = joined.isEmpty() ? -1 : emitPayload(slot);
 				int n = info.names().size();
 				for (int i = 0; i < n; i++) {
-					// Accept BOTH spellings: user data reads upcased (:GET) while the
-					// internal lowercase-authored sources construct :get.
-					getLocal(tagId);
-					i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
-					this.w.write(Instruction.I32_EQ);
+					// The tag reads upcased (:GET): a source keyword upcases under the
+					// reader's upcase premise, and a lifted variant case spells itself
+					// upcased too, so a lifted value passes straight back here.
 					getLocal(tagId);
 					i32Const(
 							this.ctx.stringTable.addString(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT))
 								.offset());
 					this.w.write(Instruction.I32_EQ);
-					this.w.write(Instruction.I32_OR);
 					this.w.write(Instruction.IF, 0x40);
 					i32Const(i);
 					setLocal(disc);
@@ -1964,25 +1961,16 @@ final class WasmComponentImportCompiler {
 				int field = this.ctx.allocTemp();
 				getLocal(slot);
 				if (plist) {
-					// _plist_get(plist, ":field") -- nil when the key is absent, which is
-					// what an option field wants. Probe the lowercase spelling first,
-					// then the upcased twin (user plists read upcased).
-					i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
-					this.w.write(Instruction.CALL);
-					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
-					setLocal(field);
-					getLocal(field);
-					this.w.write(Instruction.REF_IS_NULL);
-					this.w.write(Instruction.IF, 0x40);
-					getLocal(slot);
+					// _plist_get(plist, ":FIELD") -- nil when the key is absent, which is
+					// what an option field wants. The key reads upcased -- a user plist
+					// and
+					// a lifted record both upcase their keys under the reader's upcase
+					// premise.
 					i32Const(
 							this.ctx.stringTable.addString(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT))
 								.offset());
 					this.w.write(Instruction.CALL);
 					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
-					setLocal(field);
-					this.w.write(Instruction.END);
-					getLocal(field);
 				}
 				else {
 					for (int k = 0; k < i; k++) {
@@ -2207,15 +2195,13 @@ final class WasmComponentImportCompiler {
 			int payload = anyPayload ? emitPayload(slot) : -1;
 			int n = info.names().size();
 			for (int i = 0; i < n; i++) {
-				// Accept BOTH spellings (upcased user data, lowercase internal sources).
-				getLocal(tagId);
-				i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
-				this.w.write(Instruction.I32_EQ);
+				// The tag reads upcased (:GET): a source keyword upcases under the
+				// reader's upcase premise, and a lifted variant case spells itself
+				// upcased too, so a lifted value passes straight back here.
 				getLocal(tagId);
 				i32Const(this.ctx.stringTable.addString(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT))
 					.offset());
 				this.w.write(Instruction.I32_EQ);
-				this.w.write(Instruction.I32_OR);
 				this.w.write(Instruction.IF, 0x40);
 				getLocal(base);
 				i32Const(i);
@@ -2260,23 +2246,16 @@ final class WasmComponentImportCompiler {
 				int field = this.ctx.allocTemp();
 				getLocal(slot);
 				if (plist) {
-					// Lowercase probe, then the upcased twin (user plists read upcased).
-					i32Const(this.ctx.stringTable.addString(":" + info.names().get(i)).offset());
-					this.w.write(Instruction.CALL);
-					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
-					setLocal(field);
-					getLocal(field);
-					this.w.write(Instruction.REF_IS_NULL);
-					this.w.write(Instruction.IF, 0x40);
-					getLocal(slot);
+					// _plist_get(plist, ":FIELD") -- nil when the key is absent, which is
+					// what an option field wants. The key reads upcased -- a user plist
+					// and
+					// a lifted record both upcase their keys under the reader's upcase
+					// premise.
 					i32Const(
 							this.ctx.stringTable.addString(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT))
 								.offset());
 					this.w.write(Instruction.CALL);
 					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
-					setLocal(field);
-					this.w.write(Instruction.END);
-					getLocal(field);
 				}
 				else {
 					for (int k = 0; k < i; k++) {

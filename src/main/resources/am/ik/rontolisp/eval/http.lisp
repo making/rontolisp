@@ -191,20 +191,20 @@
 (defun %serve-method-string (m)
   ;; request.get-method returns the `method` variant: a payload-less keyword for a
   ;; known method, or (:other . "FOO") for a custom one. The lifted case name reads
-  ;; UPCASED on the component backend (:GET/:POST/...), so match both spellings --
-  ;; this file is case-preserving (Features.INTERNAL), so nothing folds :get to :GET
-  ;; for us; the interpreter and JVM run a Java-backed server and never reach here.
-  ;; The request plist wants an upper-case method string, matching those backends.
+  ;; UPCASED on the component backend (:GET/:POST/...), and this file's own :get
+  ;; reads :GET too under the reader's upcase premise, so one upcased arm suffices;
+  ;; the interpreter and JVM run a Java-backed server and never reach here. The
+  ;; request plist wants an upper-case method string, matching those backends.
   (cond ((consp m) (cdr m))
-        ((or (eq m :get) (eq m :GET)) "GET")
-        ((or (eq m :head) (eq m :HEAD)) "HEAD")
-        ((or (eq m :post) (eq m :POST)) "POST")
-        ((or (eq m :put) (eq m :PUT)) "PUT")
-        ((or (eq m :delete) (eq m :DELETE)) "DELETE")
-        ((or (eq m :connect) (eq m :CONNECT)) "CONNECT")
-        ((or (eq m :options) (eq m :OPTIONS)) "OPTIONS")
-        ((or (eq m :trace) (eq m :TRACE)) "TRACE")
-        ((or (eq m :patch) (eq m :PATCH)) "PATCH")
+        ((eq m :get) "GET")
+        ((eq m :head) "HEAD")
+        ((eq m :post) "POST")
+        ((eq m :put) "PUT")
+        ((eq m :delete) "DELETE")
+        ((eq m :connect) "CONNECT")
+        ((eq m :options) "OPTIONS")
+        ((eq m :trace) "TRACE")
+        ((eq m :patch) "PATCH")
         (t "GET")))
 
 (defun %serve-read-request (request)

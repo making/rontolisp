@@ -185,7 +185,9 @@
 
 (defun rontolisp::%sock-addr-string (addr)
   ;; (:ipv4 . (:port N :address (a b c d))) -> "a.b.c.d"; ipv6 unsupported -> nil.
-  (if (and (consp addr) (or (eq (car addr) :ipv4) (eq (car addr) :IPV4)))
+  ;; The lifted variant tag reads UPCASED (:IPV4), and this file's own :ipv4 reads
+  ;; :IPV4 too under the reader's upcase premise, so one upcased arm suffices.
+  (if (and (consp addr) (eq (car addr) :ipv4))
       (rontolisp::%sock-format-quad (getf (cdr addr) :ADDRESS))
       nil))
 
