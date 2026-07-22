@@ -286,29 +286,45 @@ final class JvmArrayRuntimeBuilder {
 
 		// _aref1(arr, i): return _rmGet(arr, 1 + ((Long) i).intValue()) -- _rmGet
 		// follows the displacement chain, so every accessor goes through it. A string
-		// is a rank-1 character array in CL, so a runtime String (its representation
-		// carries surrounding quotes, hence the same 1 + i offset) yields the
-		// character at the index instead.
+		// is a rank-1 character array in CL: on a runtime String the string's content
+		// lives in [1, length-1) (the surrounding quotes are the framing), and the
+		// requested character index walks BY CODE POINT via s.offsetByCodePoints(1, i)
+		// -> s.codePointAt(codeUnit) so a supplementary code point counts as one
+		// indexed element -- matching the (length s) contract everywhere else.
 		ClassConstant strClass = cp.addClass(cp.addUtf8("java/lang/String"));
-		MethodrefConstant strCharAt = cp.addMethodref(strClass,
-				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
-		ClassConstant charClass = cp.addClass(cp.addUtf8("java/lang/Character"));
-		MethodrefConstant charValueOf = cp.addMethodref(charClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(C)Ljava/lang/Character;")));
+		MethodrefConstant strOffsetByCodePoints = cp.addMethodref(strClass,
+				cp.addNameAndType(cp.addUtf8("offsetByCodePoints"), cp.addUtf8("(II)I")));
+		MethodrefConstant strCodePointAt = cp.addMethodref(strClass,
+				cp.addNameAndType(cp.addUtf8("codePointAt"), cp.addUtf8("(I)I")));
 		JvmAsm a1 = new JvmAsm();
 		a1.aload(0);
 		a1.instanceOf(strClass);
 		int a1NotString = a1.label();
 		a1.branch(Opcode.IFEQ, a1NotString);
+		// s = (String) arr; codeUnit = s.offsetByCodePoints(1, ((Long)i).intValue());
+		// return int[]{s.codePointAt(codeUnit)}.
 		a1.aload(0);
 		a1.checkcast(strClass);
+		a1.astore(3); // slot 3: s
+		a1.aload(3);
 		a1.iconst(1);
 		a1.aload(1);
 		a1.checkcast(longClass);
 		a1.invokevirtual(longIntValue);
-		a1.op(Opcode.IADD);
-		a1.invokevirtual(strCharAt);
-		a1.invokestatic(charValueOf);
+		a1.invokevirtual(strOffsetByCodePoints);
+		a1.istore(4); // slot 4: codeUnit
+		a1.aload(3);
+		a1.iload(4);
+		a1.invokevirtual(strCodePointAt);
+		a1.istore(5); // slot 5: cp
+		// Box cp as int[1]{cp} -- the runtime CHARACTER representation on the JVM
+		// compile path.
+		a1.iconst(1);
+		a1.newarrayInt();
+		a1.op(Opcode.DUP);
+		a1.iconst(0);
+		a1.iload(5);
+		a1.iastore();
 		a1.areturn();
 		a1.bind(a1NotString);
 		a1.aload(0);
@@ -319,7 +335,7 @@ final class JvmArrayRuntimeBuilder {
 		a1.op(Opcode.IADD);
 		a1.invokestatic(rmGet);
 		a1.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(AREF1_DESC), 3, 2, a1.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(AREF1_DESC), 4, 6, a1.finish()));
 
 		// _aref2(arr, i, j): cols = dims[1]; return _rmGet(arr, 1 + i * cols + j)
 		JvmAsm a2 = new JvmAsm();
@@ -875,22 +891,23 @@ final class JvmArrayRuntimeBuilder {
 		cv.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(CHAR_VEC_MAKE), cp.addUtf8(MAKE_DESC), 4, 7, cv.finish()));
 
-		// _strv(o): normalizes a mutable character vector (a length-4-header array of
-		// Character elements) into the quote-framed runtime string, reading up to the
-		// fill pointer (or dims[0] when the fill pointer is nil); any other value is
-		// returned unchanged. Locals: 0 = o, 1 = list, 2 = header, 3 = n (int), 4 = sb,
-		// 5 = i (int).
+		// _strv(o): normalizes a mutable character vector (a length-4-header array whose
+		// elements are runtime CHARACTERs -- length-1 int[]{codePoint}) into the
+		// quote-framed runtime string, reading up to the fill pointer (or dims[0] when
+		// the fill pointer is nil); any other value is returned unchanged. Each element
+		// appends via StringBuilder.appendCodePoint(int) so a supplementary code point
+		// expands to its two-unit UTF-16 pair rather than being narrowed to 16 bits.
+		// Locals: 0 = o, 1 = list, 2 = header, 3 = n (int), 4 = sb, 5 = i (int).
 		ClassConstant sbClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
+		ClassConstant intArrayClass = cp.addClass(cp.addUtf8("[I"));
 		MethodrefConstant sbInit = cp.addMethodref(sbClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant sbAppendChar = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(C)Ljava/lang/StringBuilder;")));
+		MethodrefConstant sbAppendCodePoint = cp.addMethodref(sbClass,
+				cp.addNameAndType(cp.addUtf8("appendCodePoint"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
 		MethodrefConstant sbAppendStr = cp.addMethodref(sbClass,
 				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
 		MethodrefConstant sbToString = cp.addMethodref(sbClass,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
-		MethodrefConstant charCharValue = cp.addMethodref(charClass,
-				cp.addNameAndType(cp.addUtf8("charValue"), cp.addUtf8("()C")));
 		am.ik.jvm.ConstantPool.StringConstant quoteStr = cp.addString("\"");
 		JvmAsm sv = new JvmAsm();
 		int svNotCv = sv.label();
@@ -955,9 +972,10 @@ final class JvmArrayRuntimeBuilder {
 		sv.iload(5);
 		sv.op(Opcode.IADD);
 		sv.invokevirtual(alGet);
-		sv.checkcast(charClass);
-		sv.invokevirtual(charCharValue);
-		sv.invokevirtual(sbAppendChar);
+		sv.checkcast(intArrayClass);
+		sv.iconst(0);
+		sv.iaload();
+		sv.invokevirtual(sbAppendCodePoint);
 		sv.pop();
 		sv.iinc(5, 1);
 		sv.branch(Opcode.GOTO, svLoop);

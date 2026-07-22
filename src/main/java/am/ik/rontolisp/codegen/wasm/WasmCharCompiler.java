@@ -54,33 +54,26 @@ final class WasmCharCompiler {
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
-	/** {@code (char-upcase ch)}. */
+	/** {@code (char-upcase ch)}. Full-Unicode fold via {@code _char_upcase}. */
 	static void compileUpcase(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileCaseFold(cons, ctx, 'a', 'z', -32);
+		compileCaseFold(cons, ctx, WasmLispCompiler.FUNC_CHAR_UPCASE);
 	}
 
-	/** {@code (char-downcase ch)}. */
+	/** {@code (char-downcase ch)}. Full-Unicode fold via {@code _char_downcase}. */
 	static void compileDowncase(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileCaseFold(cons, ctx, 'A', 'Z', 32);
+		compileCaseFold(cons, ctx, WasmLispCompiler.FUNC_CHAR_DOWNCASE);
 	}
 
-	private static void compileCaseFold(LispCons cons, WasmLispCompiler.Ctx ctx, char lo, char hi, int delta) {
-		int t = ctx.allocTemp();
+	// Pushes the code point, calls the case-fold helper (identity for a non-letter code
+	// point) and boxes the returned i32 back into a TYPE_CHAR struct.
+	// Character.toUpperCase
+	// / toLowerCase always return a SINGLE code point, so the whole char fold stays
+	// inside
+	// TYPE_CHAR without allocating a string.
+	private static void compileCaseFold(LispCons cons, WasmLispCompiler.Ctx ctx, int funcIndex) {
 		pushCode(cons.toList().get(1), ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(t);
-		// in [lo, hi] ?
-		inRange(ctx, t, lo, hi);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		getI32(ctx, t);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(delta);
-		ctx.writer.write(Instruction.I32_ADD);
-		ctx.writer.write(Instruction.ELSE);
-		getI32(ctx, t);
-		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(funcIndex);
 		makeChar(ctx);
 	}
 

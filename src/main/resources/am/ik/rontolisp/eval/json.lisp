@@ -28,8 +28,11 @@
 ;; --- shared helpers ---------------------------------------------------------
 
 (defun rontolisp::%json-utf8p ()
-  ;; t when strings are indexed by UTF-8 bytes (the WASM backends).
-  (= (length "あ") 3))
+  ;; Retained as NIL for backwards compatibility with any caller that
+  ;; resolves the internal helper: every backend now indexes strings BY
+  ;; CODE POINT (todo 153), so %json-encode-char takes the direct
+  ;; (code-char cp) path below on every backend.
+  nil)
 
 (defun rontolisp::%json-char-string (code)
   ;; A one-unit string holding the given char code (byte or UTF-16 unit).
@@ -81,26 +84,12 @@
       (setq v (+ (* v 16) (rontolisp::%json-hex-digit (char-code (char s (+ i k)))))))))
 
 (defun rontolisp::%json-encode-char (cp)
-  ;; Encodes a code point as a string in the backend's native representation.
-  (if (rontolisp::%json-utf8p)
-      (cond ((< cp 128) (rontolisp::%json-char-string cp))
-            ((< cp 2048)
-             (concatenate 'string (rontolisp::%json-char-string (+ 192 (ash cp -6)))
-                          (rontolisp::%json-char-string (+ 128 (logand cp 63)))))
-            ((< cp 65536)
-             (concatenate 'string (rontolisp::%json-char-string (+ 224 (ash cp -12)))
-                          (rontolisp::%json-char-string (+ 128 (logand (ash cp -6) 63)))
-                          (rontolisp::%json-char-string (+ 128 (logand cp 63)))))
-            (t
-             (concatenate 'string (rontolisp::%json-char-string (+ 240 (ash cp -18)))
-                          (rontolisp::%json-char-string (+ 128 (logand (ash cp -12) 63)))
-                          (rontolisp::%json-char-string (+ 128 (logand (ash cp -6) 63)))
-                          (rontolisp::%json-char-string (+ 128 (logand cp 63))))))
-      (if (< cp 65536)
-          (rontolisp::%json-char-string cp)
-          (let ((u (- cp 65536)))
-            (concatenate 'string (rontolisp::%json-char-string (+ 55296 (ash u -10)))
-                         (rontolisp::%json-char-string (+ 56320 (logand u 1023))))))))
+  ;; One CHARACTER string for the given code point. Prior to the code-point
+  ;; string-indexing cutover the WASM backends emitted the code point's UTF-8
+  ;; bytes as one-byte characters and the UTF-16-indexed backends split a
+  ;; supplementary code point into a surrogate pair here; now every backend
+  ;; indexes strings by code point (todo 153), so (code-char cp) suffices.
+  (rontolisp::%json-char-string cp))
 
 (defun rontolisp::%json-unicode-escape (s j n)
   ;; j points at the backslash of \uXXXX; combines surrogate pairs.

@@ -72,11 +72,13 @@ helper names are excluded from `cl-user` introspection by the existing
 `PackageIntrospection.userFunctionNames` filter (`%` prefix / `:` qualified).
 
 **Portability rules inside json.lisp** (why it runs unchanged on WASM):
-only ASCII structural characters are compared via `char-code`; any unit >= 128
-(UTF-16 unit on interpreter/JVM, UTF-8 byte on WASM) is copied verbatim with
-`subseq`. `\uXXXX` decoding detects the representation at runtime
-(`(= (length "あ") 3)` — byte-indexed) and emits UTF-8 bytes or UTF-16 units
-(surrogate pairs combined). Integers wider than 9 digits parse as floats
+only ASCII structural characters are compared via `char-code`; any non-ASCII
+character is copied verbatim with `subseq`. `\uXXXX` decoding always emits
+one CHARACTER per decoded code point via `%json-encode-char` -> `code-char`
+(surrogate pairs in the SOURCE `😀` combine into a single
+supplementary code point first); every backend indexes strings by code
+point after todo 153 (see [[characters-code-points]]) so no per-backend
+representation branch is needed. Integers wider than 9 digits parse as floats
 everywhere (WASM i31 range); WASM *prints* them since todo-108 group C fixed
 the float printer (exact integer part up to 2^63), but between 10^7 and 2^63
 the SHAPE differs: WASM emits all digits (`1500000000000.0`) where the

@@ -5257,6 +5257,38 @@ class LispEvaluatorTest {
 		assertThat(eval("(char-downcase #\\Z)")).isEqualTo(new LispChar('z'));
 	}
 
+	// A CHARACTER is a Unicode code point: (code-char 128512) is U+1F600 unchanged, and
+	// char-code round-trips. Pins the interpreter half of todo 153; see
+	// .kb/characters-code-points.md.
+	@Test
+	void evalCharBeyondBmpCodePoint() {
+		assertThat(eval("(code-char 128512)")).isEqualTo(new LispChar(0x1F600));
+		assertThat(eval("(char-code (code-char 128512))")).isEqualTo(new LispInteger(0x1F600));
+		assertThat(eval("(string (code-char 233))"))
+			.isEqualTo(new am.ik.rontolisp.LispString(new String(Character.toChars(233))));
+		assertThat(eval("(string (code-char 128512))"))
+			.isEqualTo(new am.ik.rontolisp.LispString(new String(Character.toChars(128512))));
+	}
+
+	// Full-Unicode case fold via Character.toUpperCase(int) / toLowerCase(int).
+	@Test
+	void evalCharCaseFoldBeyondAscii() {
+		assertThat(eval("(char-upcase (code-char 233))")).isEqualTo(new LispChar(201));
+		assertThat(eval("(char-downcase (code-char 201))")).isEqualTo(new LispChar(233));
+		assertThat(eval("(char-upcase (code-char 945))")).isEqualTo(new LispChar(913));
+		assertThat(eval("(char-downcase (code-char 1040))")).isEqualTo(new LispChar(1072));
+	}
+
+	// String indexing (length / char / subseq) walks BY CODE POINT; a supplementary
+	// code point is one indexed character.
+	@Test
+	void evalStringIndexingByCodePoint() {
+		assertThat(eval("(length \"😀\")")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(length \"aé😀b\")")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(char-code (char \"aé😀b\" 2))")).isEqualTo(new LispInteger(0x1F600));
+		assertThat(eval("(subseq \"aé😀b\" 1 3)")).isEqualTo(new am.ik.rontolisp.LispString("é😀"));
+	}
+
 	@Test
 	void evalCharComparisons() {
 		assertThat(eval("(char= #\\a #\\a)")).isEqualTo(LispTrue.INSTANCE);

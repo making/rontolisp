@@ -1822,9 +1822,14 @@ public final class Environment implements Scope {
 	static LispVal seqAsList(LispVal val) {
 		if (val instanceof LispString str) {
 			String s = str.value();
+			// Walk by CODE POINT: a supplementary code point produces one LispChar, not
+			// two surrogate halves (which #\? would print).
 			LispVal result = LispNil.INSTANCE;
-			for (int i = s.length() - 1; i >= 0; i--) {
-				result = new LispCons(new LispChar(s.charAt(i)), result);
+			int codeUnit = s.length();
+			while (codeUnit > 0) {
+				int cp = s.codePointBefore(codeUnit);
+				result = new LispCons(new LispChar(cp), result);
+				codeUnit -= Character.charCount(cp);
 			}
 			return result;
 		}
@@ -1878,7 +1883,8 @@ public final class Environment implements Scope {
 			// length applies to strings and vectors as well as lists (Common Lisp
 			// sequences). A rank-2 array is not a sequence, so it is an error.
 			if (args.get(0) instanceof LispString str) {
-				return new LispInteger(str.value().length());
+				// codePointCount() -- a supplementary code point counts as one character.
+				return new LispInteger(str.codePointCount());
 			}
 			if (args.get(0) instanceof LispArray array) {
 				if (array.dimensions().length != 1) {
@@ -2390,12 +2396,18 @@ public final class Environment implements Scope {
 			int start = requireIndex(LispNames.SUBSEQ, args.get(1));
 			if (args.get(0) instanceof LispString str) {
 				String s = str.value();
-				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : s.length();
-				if (start < 0 || end > s.length() || start > end) {
+				// Bounds are CHARACTER positions (code points), not UTF-16 code units, so
+				// a
+				// non-BMP glyph still counts as one index step.
+				int cpLen = s.codePointCount(0, s.length());
+				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : cpLen;
+				if (start < 0 || end > cpLen || start > end) {
 					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
-							+ " for string of length " + s.length());
+							+ " for string of length " + cpLen);
 				}
-				return new LispString(s.substring(start, end));
+				int startCU = s.offsetByCodePoints(0, start);
+				int endCU = s.offsetByCodePoints(0, end);
+				return new LispString(s.substring(startCU, endCU));
 			}
 			if (args.get(0) instanceof LispCons || args.get(0) instanceof LispNil) {
 				List<LispVal> elements = new ArrayList<>();
@@ -2496,7 +2508,7 @@ public final class Environment implements Scope {
 	 */
 	private static int sequenceLength(String name, LispVal val) {
 		if (val instanceof LispString str) {
-			return str.value().length();
+			return str.codePointCount();
 		}
 		if (val instanceof LispArray arr && arr.dimensions().length == 1) {
 			return arr.effectiveLength();
@@ -2522,7 +2534,11 @@ public final class Environment implements Scope {
 	 */
 	private static LispVal sequenceRef(LispVal val, int index) {
 		if (val instanceof LispString str) {
-			return new LispChar(str.value().charAt(index));
+			// Index by CODE POINT: a supplementary character is one indexed element, not
+			// two surrogate halves. Matches the LENGTH/CHAR contract everywhere else.
+			String s = str.value();
+			int codeUnit = s.offsetByCodePoints(0, index);
+			return new LispChar(s.codePointAt(codeUnit));
 		}
 		if (val instanceof LispArray arr) {
 			return arr.readFlat(index);
@@ -2562,40 +2578,69 @@ public final class Environment implements Scope {
 	}
 
 	// Capitalizes the first letter of each alphanumeric word and lowercases the rest,
-	// matching Common Lisp string-capitalize.
+	// matching Common Lisp string-capitalize. Walks by CODE POINT so a Latin-1 supplement
+	// letter or an astral cased letter is treated as a single word character.
 	private static String capitalizeString(String s) {
-		char[] chars = s.toCharArray();
+		StringBuilder sb = new StringBuilder(s.length());
 		boolean atWordStart = true;
-		for (int i = 0; i < chars.length; i++) {
-			char ch = chars[i];
-			if (Character.isLetterOrDigit(ch)) {
-				chars[i] = atWordStart ? Character.toUpperCase(ch) : Character.toLowerCase(ch);
+		int i = 0;
+		while (i < s.length()) {
+			int cp = s.codePointAt(i);
+			if (Character.isLetterOrDigit(cp)) {
+				sb.appendCodePoint(atWordStart ? Character.toUpperCase(cp) : Character.toLowerCase(cp));
 				atWordStart = false;
 			}
 			else {
+				sb.appendCodePoint(cp);
 				atWordStart = true;
 			}
+			i += Character.charCount(cp);
 		}
-		return new String(chars);
+		return sb.toString();
 	}
 
-	// Removes characters that appear in the bag string from the requested ends.
+	// Removes characters that appear in the bag string from the requested ends. Walks by
+	// CODE POINT so a supplementary character is one indexed step and its surrogate
+	// halves
+	// are not compared against the bag as individual characters.
 	private static String trimString(String name, LispVal bagVal, LispVal strVal, boolean left, boolean right) {
 		String bag = requireString(name, bagVal);
 		String s = requireString(name, strVal);
 		int start = 0;
 		int end = s.length();
 		if (left) {
-			while (start < end && bag.indexOf(s.charAt(start)) >= 0) {
-				start++;
+			while (start < end) {
+				int cp = s.codePointAt(start);
+				if (!containsCodePoint(bag, cp)) {
+					break;
+				}
+				start += Character.charCount(cp);
 			}
 		}
 		if (right) {
-			while (end > start && bag.indexOf(s.charAt(end - 1)) >= 0) {
-				end--;
+			while (end > start) {
+				int cp = s.codePointBefore(end);
+				if (!containsCodePoint(bag, cp)) {
+					break;
+				}
+				end -= Character.charCount(cp);
 			}
 		}
 		return s.substring(start, end);
+	}
+
+	// Whether bag contains the given code point, walked as a single indexed step (so a
+	// supplementary code point in the bag is one match, not two surrogate halves).
+	private static boolean containsCodePoint(String bag, int cp) {
+		int i = 0;
+		while (i < bag.length()) {
+			int bcp = bag.codePointAt(i);
+			if (bcp == cp) {
+				return true;
+			}
+			i += Character.charCount(bcp);
+		}
+		return false;
 	}
 
 	private static void registerIO(Environment env, PrintStream out, InputStream in) {
@@ -2670,7 +2715,10 @@ public final class Environment implements Scope {
 			LispVal stream = null;
 			int start = 0;
 			String full = str.value();
-			int end = full.length();
+			// :start / :end are CHARACTER positions (code points), not code units, so a
+			// supplementary code point in the string counts as one index step.
+			int cpLen = full.codePointCount(0, full.length());
+			int end = cpLen;
 			int i = 1;
 			if (args.size() > 1 && !(args.get(1) instanceof LispSymbol kw && kw.name().startsWith(":"))) {
 				stream = args.get(1);
@@ -2680,17 +2728,18 @@ public final class Environment implements Scope {
 				if (args.get(i) instanceof LispSymbol kw) {
 					switch (kw.name()) {
 						case ":START" -> start = (int) asLong(args.get(i + 1));
-						case ":END" ->
-							end = args.get(i + 1) instanceof LispNil ? full.length() : (int) asLong(args.get(i + 1));
+						case ":END" -> end = args.get(i + 1) instanceof LispNil ? cpLen : (int) asLong(args.get(i + 1));
 						default ->
 							throw new LispEvalException(LispNames.WRITE_STRING + ": unsupported keyword " + kw.name());
 					}
 				}
 			}
-			if (start < 0 || end > full.length() || start > end) {
+			if (start < 0 || end > cpLen || start > end) {
 				throw new LispEvalException(LispNames.WRITE_STRING + ": bad bounding indices " + start + ".." + end);
 			}
-			emitTo.accept(full.substring(start, end), stream);
+			int startCU = full.offsetByCodePoints(0, start);
+			int endCU = full.offsetByCodePoints(0, end);
+			emitTo.accept(full.substring(startCU, endCU), stream);
 			return str;
 		}));
 		env.defineFunction(LispNames.WRITE_TO_STRING, new LispFunction(LispNames.WRITE_TO_STRING, args -> {
@@ -3683,11 +3732,15 @@ public final class Environment implements Scope {
 		requireArgCount(name, args, 2);
 		String s = requireString(name, args.get(0));
 		int index = requireIndex(name, args.get(1));
-		if (index < 0 || index >= s.length()) {
-			throw new LispEvalException(
-					name + ": index " + index + " out of bounds for string of length " + s.length());
+		// Indexing is by CHARACTER (Unicode code point), not by UTF-16 code unit -- a
+		// supplementary code point is one indexed character, not two, matching every
+		// other backend and Common Lisp's contract.
+		int cpLen = s.codePointCount(0, s.length());
+		if (index < 0 || index >= cpLen) {
+			throw new LispEvalException(name + ": index " + index + " out of bounds for string of length " + cpLen);
 		}
-		return new LispChar(s.charAt(index));
+		int codeUnit = s.offsetByCodePoints(0, index);
+		return new LispChar(s.codePointAt(codeUnit));
 	}
 
 	private static LispChar requireChar(String name, LispVal val) {

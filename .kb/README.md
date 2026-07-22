@@ -19,6 +19,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [gray-streams.md](gray-streams.md) -- rontolisp's own Gray-stream protocol (gray.lisp base classes + generics), the interpreter write dispatch, the compile-path `GrayStreamsLibrary.process` call-site rewrite, the trivial-gray-streams shim
 - [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system
 - [reader-case-upcase.md](reader-case-upcase.md) -- the reader's CL-style uppercase-canonical model (upcase, no fold), verbatim `intern`/`find-symbol`, and the remaining case-tolerance seams (keyword-arg matching, WIT/host lower-kebab bridges)
+- [characters-code-points.md](characters-code-points.md) -- CHARACTER = Unicode code point on every backend: JVM widening to `int[]{cp}`, WASM `_char_upcase`/`_char_downcase` case-fold table, code-point string indexing (`length`/`char`/`subseq`)
 - [reader-features.md](reader-features.md) -- `#+`/`#-` feature conditionals, `*features*`, `#|...|#` block comments, `#.` handling
 - [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams runtime; component stdin (stdin.lisp)
 - [load-inliner.md](load-inliner.md) -- compile-time `load` inlining (`LoadInliner`)

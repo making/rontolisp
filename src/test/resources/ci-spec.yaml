@@ -1121,7 +1121,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WRITE-CHAR)
       (DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY UNWIND-PROTECT WHILE)
-      292
+      293
       (AWAIT FETCH HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -4316,4 +4316,43 @@ cases:
       400
       (6 :NONE)
       :FROM-INNER
+      7
+  - name: code-point-characters-beyond-ascii
+    source: |
+      ;; Latin-1 supplement round-trip through code-char / char-code.
+      (print (char-code (code-char 233)))            ; U+00E9
+      (print (string (code-char 233)))
+      ;; Full-Unicode case fold: Latin-1 supplement, Greek and Cyrillic all
+      ;; delegate to Character.toUpperCase(int) / toLowerCase(int); the WASM
+      ;; backend consults a baked case-fold table for the same result.
+      (print (char-code (char-upcase (code-char 233))))    ; -> 201 (E-acute)
+      (print (char-code (char-downcase (code-char 201))))  ; -> 233
+      (print (char-code (char-upcase (code-char 945))))    ; U+03B1 alpha -> U+0391
+      (print (char-code (char-downcase (code-char 1040)))) ; U+0410 CY-A  -> U+0430
+      ;; Supplementary code point (astral): U+1F600 grinning face.
+      (print (char-code (code-char 128512)))
+      (print (string (code-char 128512)))
+      ;; String indexing / length are CHARACTER-based (code points), not code
+      ;; units, so a supplementary code point counts as one indexed step.
+      (print (length "😀"))
+      (print (length "aé😀b"))
+      (print (char-code (char "aé😀b" 2)))
+      (print (subseq "aé😀b" 1 3))
+      ;; Full-Unicode read-side digit / letter predicates still work on ASCII.
+      (print (alpha-char-p #\A))
+      (print (digit-char-p #\7))
+    expected: |
+      233
+      "é"
+      201
+      233
+      913
+      1072
+      128512
+      "😀"
+      1
+      4
+      128512
+      "é😀"
+      T
       7

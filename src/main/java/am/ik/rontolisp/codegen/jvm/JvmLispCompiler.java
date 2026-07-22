@@ -227,16 +227,19 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
 		MethodrefConstant objectEquals = cp.addMethodref(objectClass,
 				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		// Character runtime representation references (used by _lispToString /
+		// CHARACTER runtime representation references (used by _lispToString /
 		// _lispToDisplayString to print the #\name form and the bare glyph,
-		// respectively).
+		// respectively). A CHARACTER is a length-1 int[]{codePoint} (see
+		// JvmEmitHelper.boxCodePoint) -- the discriminator is INSTANCEOF [I. The classic
+		// java/lang/Character is still cached below because the char builtins delegate
+		// to Character.toUpperCase(int) / Character.isLetter(int) / Character.digit(int,
+		// int) / Character.toString(int) for JDK-provided semantics.
+		ClassConstant charBoxClass = cp.addClass(cp.addUtf8("[I"));
 		ClassConstant characterClass = cp.addClass(cp.addUtf8("java/lang/Character"));
-		MethodrefConstant charValue = cp.addMethodref(characterClass,
-				cp.addNameAndType(cp.addUtf8("charValue"), cp.addUtf8("()C")));
-		MethodrefConstant stringValueOfChar = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(C)Ljava/lang/String;")));
+		MethodrefConstant characterToString = cp.addMethodref(characterClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("(I)Ljava/lang/String;")));
 		Utf8Constant charPrin1Name = cp.addUtf8("_charPrin1");
-		Utf8Constant charPrin1Desc = cp.addUtf8("(C)Ljava/lang/String;");
+		Utf8Constant charPrin1Desc = cp.addUtf8("(I)Ljava/lang/String;");
 		MethodrefConstant charPrin1Method = cp.addMethodref(thisClass, cp.addNameAndType(charPrin1Name, charPrin1Desc));
 		ClassConstant mathClass = cp.addClass(cp.addUtf8("java/lang/Math"));
 		MethodrefConstant mathAbsLong = cp.addMethodref(mathClass,
@@ -1092,7 +1095,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
-				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, characterClass, charValue, charPrin1Method,
+				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, charBoxClass, charPrin1Method,
 				arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, futurePrint, packedPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
@@ -1100,9 +1103,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
 				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
-				characterClass, charValue, stringValueOfChar, arrayListClassForPrint, arrayToDisplayStringMethod,
-				strvMethod, javaPrint, futurePrint, packedPrint);
-		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, stringValueOfChar);
+				charBoxClass, characterToString, arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod,
+				javaPrint, futurePrint, packedPrint);
+		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, characterToString);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
 				dotStr, ratioArrayClass);

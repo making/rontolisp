@@ -171,6 +171,7 @@ final class JvmNumericRuntimeBuilder {
 		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
 		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
 		ClassConstant ratArrClass = cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;"));
+		ClassConstant intArrClass = cp.addClass(cp.addUtf8("[I"));
 		ClassConstant objArrClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		ClassConstant integerClass = cp.addClass(cp.addUtf8("java/lang/Integer"));
 		ClassConstant bigDecClass = cp.addClass(cp.addUtf8("java/math/BigDecimal"));
@@ -371,7 +372,7 @@ final class JvmNumericRuntimeBuilder {
 				mcDecimal64, doubleValueOf, numDoubleValue, rRatNum, rRatDen));
 		methods.add(buildPow(nPow, dPow, rRatNum, rRatDen, rRat, biPow, doubleClass, numberClass, numDoubleValue,
 				doubleValueOf, mathPow));
-		methods.add(buildEqv(nEqv, dCmp, ratArrClass, objEquals, strvMethod));
+		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, objEquals, strvMethod));
 		methods.add(buildEqStrict(nEqStrict, dCmp, doubleClass, ratArrClass, rEqv));
 		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual));
 		methods.add(buildRatTrunc(nRatTrunc, dUnary, rRatNum, rRatDen, rNorm, biDiv));
@@ -1284,13 +1285,51 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _eqv(Object a, Object b): value equality used by eq; ratios compare element-wise
-	// (Object[].equals is reference equality), everything else uses a.equals(b). When
-	// the array helpers are emitted (strvMethod non-null) the fallback first
-	// normalizes both operands through _strv so a mutable character vector compares
-	// equal to a string with the same content.
+	// (Object[].equals is reference equality), CHARACTERs (int[]{codePoint}) compare by
+	// their sole code point (int[].equals is also reference equality, and the JVM does
+	// not cache char literals like Character.valueOf(char) does), everything else uses
+	// a.equals(b). When the array helpers are emitted (strvMethod non-null) the fallback
+	// first normalizes both operands through _strv so a mutable character vector
+	// compares equal to a string with the same content.
 	private static NumericMethod buildEqv(Utf8Constant name, Utf8Constant desc, ClassConstant ratArrClass,
-			MethodrefConstant objEquals, @org.jspecify.annotations.Nullable MethodrefConstant strvMethod) {
+			ClassConstant intArrClass, MethodrefConstant objEquals,
+			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod) {
 		List<Integer> c = new ArrayList<>();
+		// CHARACTER compare (int[]{cp}): if both operands are length-1 int[], value
+		// equality is (a[0] == b[0]). Emitted BEFORE the ratio and equals paths so a
+		// character never falls through to Object.equals.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, intArrClass.index());
+		int ifNotChar1 = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, intArrClass.index());
+		int ifNotChar2 = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, intArrClass.index());
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IALOAD);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, intArrClass.index());
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IALOAD);
+		int ifCpNe = c.size();
+		c.add(Opcode.IF_ICMPNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifCpNe, c.size());
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IRETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotChar1, c.size());
+		JvmRuntimeBuilder.patchBranch(c, ifNotChar2, c.size());
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
 		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());

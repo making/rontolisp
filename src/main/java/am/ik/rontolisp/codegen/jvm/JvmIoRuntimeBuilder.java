@@ -215,8 +215,6 @@ final class JvmIoRuntimeBuilder {
 
 	private final MethodrefConstant bufferedReaderRead;
 
-	private final MethodrefConstant characterValueOf;
-
 	/**
 	 * Socket-runtime constants, non-null only when the program uses a tcp built-in; the
 	 * stream built-ins then grow socket branches (a socket entry is a raw
@@ -328,8 +326,6 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/InputStream;)V")));
 		this.bufferedReaderRead = cp.addMethodref(this.bufferedReaderClass,
 				cp.addNameAndType(cp.addUtf8("read"), cp.addUtf8("()I")));
-		this.characterValueOf = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Character")),
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(C)Ljava/lang/Character;")));
 	}
 
 	static JvmIoRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
@@ -947,17 +943,24 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.bufferedReaderRead.index());
 		code.add(Opcode.ISTORE);
 		code.add(4);
-		// if (c >= 0) return Character.valueOf((char) c);
+		// if (c >= 0) return int[1]{c}; -- the runtime CHARACTER representation. A
+		// supplementary code point read via read-char surfaces as a lone surrogate
+		// (BufferedReader.read() returns UTF-16 code units), which is a pre-existing
+		// limitation shared with the interpreter -- the box just carries whatever
+		// integer read() produced.
 		code.add(Opcode.ILOAD);
 		code.add(4);
 		int ifEofPos = code.size();
 		code.add(Opcode.IFLT);
 		emitU2(code, 0);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.NEWARRAY);
+		code.add(10); // T_INT
+		code.add(Opcode.DUP);
+		code.add(Opcode.ICONST_0);
 		code.add(Opcode.ILOAD);
 		code.add(4);
-		code.add(Opcode.I2C);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.characterValueOf.index());
+		code.add(Opcode.IASTORE);
 		code.add(Opcode.ARETURN);
 		patchBranch(code, ifEofPos, code.size());
 		// if (eofErrorP == null) return eofValue;

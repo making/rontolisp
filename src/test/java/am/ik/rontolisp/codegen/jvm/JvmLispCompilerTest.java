@@ -5223,6 +5223,43 @@ class JvmLispCompilerTest {
 			.isEqualTo("#\\a#\\Space#\\Newline!");
 	}
 
+	// A CHARACTER is a Unicode code point on every backend: (code-char 128512) survives
+	// as U+1F600 (not truncated to a lone surrogate) and prints as its glyph. Pins the
+	// JVM int[]{cp} widening from todo 153; see .kb/characters-code-points.md.
+	@Test
+	void compileCharBeyondBmpCodePoint() throws Exception {
+		assertThat(compileAndRun("""
+				(print (char-code (code-char 128512)))
+				(print (string (code-char 128512)))
+				(print (char-code (code-char 233)))
+				(print (string (code-char 233)))
+				""")).isEqualTo("128512\n\"😀\"\n233\n\"é\"");
+	}
+
+	// Full-Unicode case fold via Character.toUpperCase(int) / toLowerCase(int) so a
+	// Latin-1 supplement letter and non-Latin scripts fold correctly (not just ASCII).
+	@Test
+	void compileCharCaseFoldBeyondAscii() throws Exception {
+		assertThat(compileAndRun("""
+				(print (char-code (char-upcase (code-char 233))))
+				(print (char-code (char-downcase (code-char 201))))
+				(print (char-code (char-upcase (code-char 945))))
+				(print (char-code (char-downcase (code-char 1040))))
+				""")).isEqualTo("201\n233\n913\n1072");
+	}
+
+	// String indexing (length / char / subseq) walks BY CODE POINT so a supplementary
+	// code point counts as one indexed character.
+	@Test
+	void compileStringIndexingByCodePoint() throws Exception {
+		assertThat(compileAndRun("""
+				(print (length "😀"))
+				(print (length "aé😀b"))
+				(print (char-code (char "aé😀b" 2)))
+				(print (subseq "aé😀b" 1 3))
+				""")).isEqualTo("1\n4\n128512\n\"é😀\"");
+	}
+
 	@Test
 	void compileParseInteger() throws Exception {
 		assertThat(compileAndRun("""

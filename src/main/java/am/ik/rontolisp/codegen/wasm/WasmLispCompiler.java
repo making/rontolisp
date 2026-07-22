@@ -559,23 +559,35 @@ public final class WasmLispCompiler implements LispCompiler {
 	// new type entry.
 	static final int FUNC_STR_CHAR_BYTE_OFFSET = FUNC_STR_CHAR_AT + 1;
 
+	// _char_upcase (cp) -> cp: binary-search a compressed (from, to, delta) range table
+	// backed by Character.toUpperCase(int) and return the folded code point, or cp
+	// unchanged when no range covers it. Every (char-upcase ch) call routes through it
+	// (the caller boxes the returned i32 as a TYPE_CHAR struct). Reuses (i32) -> i32
+	// (TYPE_LOOKUP), so no new type entry.
+	static final int FUNC_CHAR_UPCASE = FUNC_STR_CHAR_BYTE_OFFSET + 1;
+
+	// _char_downcase (cp) -> cp: the same shape as FUNC_CHAR_UPCASE but backed by
+	// Character.toLowerCase(int). Every (char-downcase ch) call routes through it.
+	static final int FUNC_CHAR_DOWNCASE = FUNC_CHAR_UPCASE + 1;
+
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
-	// under --simd. Fixed indices relative to FUNC_STR_CHAR_BYTE_OFFSET, so every
+	// under --simd. Fixed indices relative to FUNC_CHAR_DOWNCASE, so every
 	// constant above
 	// keeps
 	// its value; the user defuns below shift by WasmVecSimdRuntimeBuilder.FUNC_COUNT when
 	// the block is present. Read the base through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_STR_CHAR_BYTE_OFFSET + 1;
+	static final int FUNC_VEC_BASE = FUNC_CHAR_DOWNCASE + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
 	// p1-future-await helper, the two binary stream helpers, the four string-stream
 	// helpers, the five symbol-API helpers, the read-char helper, the four string
 	// GC helpers (_str_build, _str_fresh, _str_to_mem, _write_str_gc), the
-	// character-vector normalizer (_charvec_to_str) and the three UTF-8 walking helpers
-	// (_str_char_count, _str_char_at, _str_char_byte_offset) -- plus, under
-	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_STR_CHAR_BYTE_OFFSET + 1;
+	// character-vector normalizer (_charvec_to_str), the three UTF-8 walking helpers
+	// (_str_char_count, _str_char_at, _str_char_byte_offset) and the two case-fold
+	// helpers (_char_upcase, _char_downcase) -- plus, under --simd, the vec: SIMD
+	// block. Use userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_CHAR_DOWNCASE + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -2176,8 +2188,22 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset);
 		final byte[] fboundpBody = WasmSymbolApiRuntimeBuilder.buildFboundp(symbolTOffset);
 
+		// Case-fold tables. Two compressed (from, to, delta) triple tables, generated
+		// from Character.toUpperCase(int) / toLowerCase(int) so char-upcase /
+		// char-downcase
+		// fold every Unicode letter (Latin-1 supplement, Greek, Cyrillic, ...) the same
+		// way the interpreter and the JVM compile path already do. Appended to the static
+		// data segment BEFORE it is snapshotted below; each blob's absolute offset feeds
+		// straight into the helper's binary-search head. See WasmCaseFoldRuntimeBuilder.
+		int upperFoldOffset = stringTable.appendBlob(WasmCaseFoldRuntimeBuilder.upperTableBytes());
+		int lowerFoldOffset = stringTable.appendBlob(WasmCaseFoldRuntimeBuilder.lowerTableBytes());
+		final byte[] charUpcaseBody = WasmCaseFoldRuntimeBuilder.buildBody(upperFoldOffset,
+				WasmCaseFoldRuntimeBuilder.upperTableCount());
+		final byte[] charDowncaseBody = WasmCaseFoldRuntimeBuilder.buildBody(lowerFoldOffset,
+				WasmCaseFoldRuntimeBuilder.lowerTableCount());
+
 		// Final static-data layout. The string table is complete here (its last append
-		// was the runtime-reader intern blob above), so the runtime intern table's base
+		// was the two case-fold tables just above), so the runtime intern table's base
 		// and the bump-allocator heap base can be derived from its size; both are seeded
 		// into fixed cells by active data segments below. This keeps runtime interning
 		// and heap allocation above the static data no matter how large the program is.
@@ -2730,6 +2756,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_char_at (FUNC_STR_CHAR_AT)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_char_byte_offset
 													// (FUNC_STR_CHAR_BYTE_OFFSET)
+				fnDef.addFunction(TYPE_LOOKUP); // _char_upcase (FUNC_CHAR_UPCASE)
+				fnDef.addFunction(TYPE_LOOKUP); // _char_downcase (FUNC_CHAR_DOWNCASE)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -3109,6 +3137,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				// _str_char_byte_offset (FUNC_STR_CHAR_BYTE_OFFSET): the byte offset of
 				// the i-th character in a UTF-8-encoded string.
 				code.addFunction(WasmStringRuntimeBuilder.buildStrCharByteOffsetBody());
+				// _char_upcase (FUNC_CHAR_UPCASE): full-Unicode case fold backed by
+				// Character.toUpperCase(int); binary-searches the compressed range table
+				// baked into the static data at upperFoldOffset.
+				code.addFunction(charUpcaseBody);
+				// _char_downcase (FUNC_CHAR_DOWNCASE): the same shape, backed by
+				// Character.toLowerCase(int); binary-searches the table at
+				// lowerFoldOffset.
+				code.addFunction(charDowncaseBody);
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

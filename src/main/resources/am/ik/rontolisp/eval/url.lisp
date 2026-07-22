@@ -21,8 +21,11 @@
 ;; --- shared helpers ----------------------------------------------------------
 
 (defun rontolisp::%url-utf8p ()
-  ;; t when strings are indexed by UTF-8 bytes (the WASM backends).
-  (= (length "あ") 3))
+  ;; Retained as NIL for backwards compatibility with any caller that resolves
+  ;; the internal helper: every backend now indexes strings BY CODE POINT
+  ;; (todo 153), so the previous "UTF-8 bytes per (char s i)" WASM path is
+  ;; gone. url-decode / url-encode always take the code-point path below.
+  nil)
 
 (defun rontolisp::%url-char-string (code)
   ;; A one-unit string holding the given char code (byte or UTF-16 unit).
@@ -69,12 +72,12 @@
       (setq k (+ k 3)))))
 
 (defun rontolisp::%url-utf16-string (cp)
-  ;; Encodes a code point as UTF-16 units (surrogate pair above the BMP).
-  (if (< cp 65536)
-      (rontolisp::%url-char-string cp)
-      (let ((u (- cp 65536)))
-        (concatenate 'string (rontolisp::%url-char-string (+ 55296 (ash u -10)))
-                     (rontolisp::%url-char-string (+ 56320 (logand u 1023)))))))
+  ;; Emit one CHARACTER string for a code point. Prior to the code-point
+  ;; string-indexing cutover the UTF-16-indexed backends split a supplementary
+  ;; code point into a surrogate pair here (each half became one indexed
+  ;; character); now (char s i) returns the code point directly on every
+  ;; backend, so a single (code-char cp) suffices.
+  (rontolisp::%url-char-string cp))
 
 (defun rontolisp::%url-cont-byte (x)
   ;; The 6 payload bits of a UTF-8 continuation byte (10xxxxxx).

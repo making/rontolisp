@@ -3,16 +3,25 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.ArrayList;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
 /**
- * Compiles the character built-ins. Characters are represented at runtime as a boxed
- * {@code java.lang.Character}, distinguished from other values by {@code instanceof}.
- * Strings carry the surrounding double quotes, so a Lisp index {@code i} reads the Java
- * char at position {@code i + 1}.
+ * Compiles the character built-ins. A CHARACTER on the JVM compile path is a length-1
+ * {@code int[]} whose sole element is the Unicode code point -- a wider representation
+ * than the old {@code java.lang.Character} 16-bit box, so a supplementary code point like
+ * {@code #\U+1F600} carries its full 21-bit value through {@code code-char},
+ * {@code char-code}, {@code char-upcase}/{@code char-downcase}, {@code (string ch)} and
+ * every printer. The type discriminator is {@code instanceof int[]}: functions
+ * ({@code Object[]}), ratios ({@code BigInteger[]}), packed float arrays
+ * ({@code double[]} / {@code float[]}) all pick different array classes.
+ *
+ * <p>
+ * Strings are UTF-16 buffers with surrounding double quotes; a Lisp CHARACTER index walks
+ * the buffer by code point ({@link String#offsetByCodePoints(int, int)}), so the same
+ * astral glyph reads back as one indexed character on {@code (char s i)} / {@code (aref s
+ * i)} / {@code (subseq s a b)}.
  */
 final class JvmCharCompiler {
 
@@ -20,7 +29,11 @@ final class JvmCharCompiler {
 	}
 
 	/**
-	 * {@code (char string index)} / {@code (schar string index)}: the character at index.
+	 * {@code (char string index)} / {@code (schar string index)}: the code point at
+	 * index. The quote-framed string carries its content in {@code [1, length-1)}; the
+	 * index is a Lisp CHARACTER position and is translated to a UTF-16 code-unit offset
+	 * via {@code String.offsetByCodePoints(1, index)} so a supplementary code point
+	 * counts as one indexed character.
 	 */
 	static void compileChar(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
@@ -31,23 +44,34 @@ final class JvmCharCompiler {
 		ctx.emitU2(ctx.stringClass.index());
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(sSlot);
+		// codeUnit = s.offsetByCodePoints(1, index) -- 1 skips the leading quote, then
+		// walk `index` code points to land on the requested character's lead unit.
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(sSlot);
+		ctx.emit(Opcode.ICONST_1);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.emit(Opcode.L2I);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.IADD);
 		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.stringCharAt.index());
-		boxChar(ctx);
+		ctx.emitU2(JvmEmitHelper.stringMethod(ctx, "offsetByCodePoints", "(II)I").index());
+		// cp = s.codePointAt(codeUnit)
+		int cuSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ISTORE);
+		ctx.emit(cuSlot);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(sSlot);
+		ctx.emit(Opcode.ILOAD);
+		ctx.emit(cuSlot);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(JvmEmitHelper.stringMethod(ctx, "codePointAt", "(I)I").index());
+		JvmEmitHelper.boxCodePoint(ctx);
 	}
 
 	/** {@code (char-code ch)}: the code point as an integer. */
 	static void compileCharCode(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		charValue(ctx);
+		JvmEmitHelper.unboxCodePoint(ctx);
 		ctx.emit(Opcode.I2L);
 		JvmEmitHelper.boxLong(ctx);
 	}
@@ -58,15 +82,20 @@ final class JvmCharCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.emit(Opcode.L2I);
-		boxChar(ctx);
+		JvmEmitHelper.boxCodePoint(ctx);
 	}
 
-	/** {@code (char-upcase ch)}. */
+	/**
+	 * {@code (char-upcase ch)}. Full-Unicode fold via {@code Character.toUpperCase(int)}.
+	 */
 	static void compileUpcase(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		compileCaseFold(cons, ctx, className, "toUpperCase");
 	}
 
-	/** {@code (char-downcase ch)}. */
+	/**
+	 * {@code (char-downcase ch)}. Full-Unicode fold via
+	 * {@code Character.toLowerCase(int)}.
+	 */
 	static void compileDowncase(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		compileCaseFold(cons, ctx, className, "toLowerCase");
 	}
@@ -74,28 +103,31 @@ final class JvmCharCompiler {
 	private static void compileCaseFold(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String method) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		charValue(ctx);
+		JvmEmitHelper.unboxCodePoint(ctx);
+		// Character.toUpperCase(int)/toLowerCase(int) take a code point and return a code
+		// point; a mapping that would expand to multiple code units lives on the String
+		// overload, so this is the right level for a single-character fold.
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, method, "(C)C").index());
-		boxChar(ctx);
+		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, method, "(I)I").index());
+		JvmEmitHelper.boxCodePoint(ctx);
 	}
 
-	/** {@code (characterp x)}. */
+	/** {@code (characterp x)}: {@code instanceof int[]}. */
 	static void compileCharacterp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(JvmEmitHelper.characterClass(ctx).index());
+		ctx.emitU2(JvmEmitHelper.charArrayClass(ctx).index());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
-	/** {@code (alpha-char-p ch)}. */
+	/** {@code (alpha-char-p ch)}: {@code Character.isLetter(int)} on the code point. */
 	static void compileAlphaCharP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		charValue(ctx);
+		JvmEmitHelper.unboxCodePoint(ctx);
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, "isLetter", "(C)Z").index());
+		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, "isLetter", "(I)Z").index());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
@@ -103,7 +135,7 @@ final class JvmCharCompiler {
 	static void compileDigitCharP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		charValue(ctx);
+		JvmEmitHelper.unboxCodePoint(ctx);
 		if (args.size() > 2) {
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			JvmEmitHelper.unboxLong(ctx);
@@ -113,7 +145,7 @@ final class JvmCharCompiler {
 			JvmEmitHelper.emitIntConst(ctx, 10);
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, "digit", "(CI)I").index());
+		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, "digit", "(II)I").index());
 		// weight on stack: if weight < 0 return nil, else Long.valueOf(weight)
 		ctx.emit(Opcode.DUP);
 		int ifNotDigit = ctx.code.size();
@@ -153,13 +185,13 @@ final class JvmCharCompiler {
 		int prev = ctx.allocTemp();
 		int cur = ctx.allocTemp();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		charValue(ctx);
+		JvmEmitHelper.unboxCodePoint(ctx);
 		ctx.emit(Opcode.ISTORE);
 		ctx.emit(prev);
 		List<Integer> failBranches = new ArrayList<>();
 		for (int i = 2; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-			charValue(ctx);
+			JvmEmitHelper.unboxCodePoint(ctx);
 			ctx.emit(Opcode.ISTORE);
 			ctx.emit(cur);
 			ctx.emit(Opcode.ILOAD);
@@ -183,22 +215,6 @@ final class JvmCharCompiler {
 		}
 		ctx.emit(Opcode.ACONST_NULL);
 		JvmEmitHelper.patchBranch(ctx, gotoEnd, ctx.code.size());
-	}
-
-	// Unboxes the Character on the stack to its primitive char (an int on the JVM stack).
-	private static void charValue(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(JvmEmitHelper.characterClass(ctx).index());
-		MethodrefConstant charValue = JvmEmitHelper.characterMethod(ctx, "charValue", "()C");
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(charValue.index());
-	}
-
-	// Boxes the primitive char (int) on the stack into a Character.
-	private static void boxChar(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.I2C);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, "valueOf", "(C)Ljava/lang/Character;").index());
 	}
 
 }

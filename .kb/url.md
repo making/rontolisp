@@ -35,14 +35,14 @@ ci-spec and the docs). The native binary embeds `url.lisp` via
 **Portability inside url.lisp** (same rules as json.lisp, `.kb/json.md`):
 only ASCII structural characters are examined via `char-code`; a `%XX` run is
 collected into a byte list first so multi-byte UTF-8 sequences reassemble;
-`(= (length "あ") 3)` detects byte-indexed (WASM) vs UTF-16 backends --
-decoded bytes are emitted directly on WASM and UTF-8-decoded to UTF-16 units
-(surrogate pairs combined) elsewhere; `url-encode` does the inverse (encodes
-UTF-16 surrogate pairs back to 4-byte UTF-8 before percent-encoding;
-uppercase hex, space -> `%20`, RFC 3986 unreserved pass through).
-`url-decode` also maps `+` -> space (query-string convention). Strictness:
-invalid hex, truncated escapes and invalid UTF-8 byte sequences signal
-errors; lone surrogates signal in `url-encode`.
+decoded bytes are UTF-8-decoded straight to CODE POINTS and each is emitted
+as one `(code-char cp)` character (no surrogate splitting -- every backend
+indexes strings by code point after todo 153, see
+[[characters-code-points]]). `url-encode` iterates the input's code points
+and emits each as UTF-8 percent escapes (uppercase hex, space -> `%20`,
+RFC 3986 unreserved pass through). `url-decode` also maps `+` -> space
+(query-string convention). Strictness: invalid hex, truncated escapes and
+invalid UTF-8 byte sequences signal errors.
 
 **Semantics worth remembering**: `query-params` returns an ALIST of
 `(key . value)` strings (duplicates preserved in order, bare `flag` ->

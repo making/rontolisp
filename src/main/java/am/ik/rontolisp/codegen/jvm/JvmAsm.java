@@ -198,6 +198,22 @@ final class JvmAsm {
 		JvmRuntimeBuilder.emitU2(this.code, f.index());
 	}
 
+	// --- int[] support (used by the char runtime -- a CHARACTER is int[]{codePoint}) ---
+
+	/** The {@code newarray int} instruction (atype 10 = {@code T_INT}). */
+	void newarrayInt() {
+		this.code.add(Opcode.NEWARRAY);
+		this.code.add(10);
+	}
+
+	void iaload() {
+		this.code.add(Opcode.IALOAD);
+	}
+
+	void iastore() {
+		this.code.add(Opcode.IASTORE);
+	}
+
 	// --- double / double[] support (used by the packed float-array runtime) ---
 
 	/** The {@code newarray double} instruction (atype 7 = {@code T_DOUBLE}). */

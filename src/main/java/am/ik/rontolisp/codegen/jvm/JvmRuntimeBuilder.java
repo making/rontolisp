@@ -183,8 +183,8 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant longToString, MethodrefConstant doubleToString, MethodrefConstant objectToString,
 			MethodrefConstant consToStringMethod, ConstantPool.StringConstant nilStr,
 			ConstantPool.StringConstant funcStr, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
-			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
-			MethodrefConstant charPrin1Method, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
+			ConstantPool.StringConstant slashStr, ClassConstant charBoxClass, MethodrefConstant charPrin1Method,
+			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
@@ -251,19 +251,25 @@ final class JvmRuntimeBuilder {
 		emitU2(code, stringClass.index());
 		code.add(Opcode.ARETURN);
 
-		// if (val instanceof Character) return _charPrin1(((Character)val).charValue());
+		// if (val instanceof int[]) return _charPrin1(((int[])val)[0]);
+		//
+		// A CHARACTER on the JVM compile path is a length-1 int[] whose sole element is
+		// the Unicode code point (see JvmEmitHelper.boxCodePoint/unboxCodePoint). The
+		// discriminator is INSTANCEOF [I -- disjoint from Object[] (functions/cons),
+		// BigInteger[] (ratios) and the packed double[]/float[] arrays -- so no earlier
+		// branch consumes it.
 		patchBranch(code, ifNotStringPos, code.size());
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
-		emitU2(code, characterClass.index());
+		emitU2(code, charBoxClass.index());
 		int ifNotCharPos = code.size();
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.CHECKCAST);
-		emitU2(code, characterClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, charValue.index());
+		emitU2(code, charBoxClass.index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.IALOAD);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, charPrin1Method.index());
 		code.add(Opcode.ARETURN);
@@ -319,12 +325,15 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * Builds {@code _charPrin1(char) -> String}: the readable {@code #\name} form of a
-	 * character (a standard name for the common non-graphic characters, otherwise the
-	 * bare glyph). Used by {@code _lispToString} (prin1) to print a {@code Character}.
+	 * Builds {@code _charPrin1(int codePoint) -> String}: the readable {@code #\name}
+	 * form of a character (a standard name for the common non-graphic characters,
+	 * otherwise the bare glyph). Used by {@code _lispToString} (prin1) to print a
+	 * CHARACTER ({@code int[]}). Takes an {@code int} code point (not a {@code char}) so
+	 * a supplementary code point survives — the glyph fallback calls
+	 * {@link Character#toString(int)} which handles surrogate expansion.
 	 */
 	static List<Integer> buildCharPrin1Body(ConstantPool cp, MethodrefConstant stringConcat,
-			MethodrefConstant stringValueOfChar) {
+			MethodrefConstant characterToString) {
 		JvmAsm a = new JvmAsm();
 		emitCharNameCase(a, cp, ' ', "#\\Space");
 		emitCharNameCase(a, cp, '\n', "#\\Newline");
@@ -334,10 +343,10 @@ final class JvmRuntimeBuilder {
 		emitCharNameCase(a, cp, '\b', "#\\Backspace");
 		emitCharNameCase(a, cp, 0, "#\\Nul");
 		emitCharNameCase(a, cp, 127, "#\\Rubout");
-		// default: "#\".concat(String.valueOf(c))
+		// default: "#\".concat(Character.toString(codePoint))
 		a.ldcString(cp.addString("#\\"));
 		a.iload(0);
-		a.invokestatic(stringValueOfChar);
+		a.invokestatic(characterToString);
 		a.invokevirtual(stringConcat);
 		a.areturn();
 		return a.finish();
@@ -496,8 +505,8 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant consToDisplayStringMethod, ConstantPool.StringConstant nilStr,
 			ConstantPool.StringConstant funcStr, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
 			MethodrefConstant stringSubstring, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
-			ConstantPool.StringConstant slashStr, ClassConstant characterClass, MethodrefConstant charValue,
-			MethodrefConstant stringValueOfChar, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
+			ConstantPool.StringConstant slashStr, ClassConstant charBoxClass, MethodrefConstant characterToString,
+			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod,
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
@@ -643,22 +652,25 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.ARETURN);
 
-		// if (val instanceof Character) return
-		// String.valueOf(((Character)val).charValue());
+		// if (val instanceof int[]) return Character.toString(((int[])val)[0]);
+		//
+		// A CHARACTER is a length-1 int[]{codePoint}. Character.toString(int) expands a
+		// supplementary code point to its surrogate pair so a #\U+1F600 princes as its
+		// glyph, not as a lone surrogate.
 		patchBranch(code, ifNotStringPos, code.size());
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
-		emitU2(code, characterClass.index());
+		emitU2(code, charBoxClass.index());
 		int ifNotCharPos = code.size();
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.CHECKCAST);
-		emitU2(code, characterClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, charValue.index());
+		emitU2(code, charBoxClass.index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.IALOAD);
 		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, stringValueOfChar.index());
+		emitU2(code, characterToString.index());
 		code.add(Opcode.ARETURN);
 
 		// if (val instanceof BigInteger[]) -> "num/den" (must precede the Object[]

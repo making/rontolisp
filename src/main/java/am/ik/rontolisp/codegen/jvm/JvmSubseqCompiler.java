@@ -44,6 +44,11 @@ final class JvmSubseqCompiler {
 		int length = JvmEmitHelper.stringMethod(ctx, "length", "()I").index();
 		int substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();
 		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
+		// offsetByCodePoints(begin, cpDelta): the UTF-16 code-unit index reached by
+		// walking cpDelta code points from position `begin`. Used to translate a
+		// character range (start, end) into byte offsets so a supplementary code point
+		// in the middle is one indexed step, matching (length s) after todo 153.
+		int offsetByCP = JvmEmitHelper.stringMethod(ctx, "offsetByCodePoints", "(II)I").index();
 		StringConstant quote = ctx.cp.addString("\"");
 
 		int seqSlot = ctx.allocTemp();
@@ -109,15 +114,20 @@ final class JvmSubseqCompiler {
 		asm.branch(Opcode.IFEQ, listLabel);
 
 		// ---- STRING PATH ----
+		// A subseq range on a string is a CHARACTER range: translate (start, end) to
+		// code-unit offsets via s.offsetByCodePoints(1, N) so a supplementary code point
+		// in the middle counts as one indexed step (matching the (length s) contract).
 		asm.aload(seqSlot);
 		asm.checkcast(ctx.stringClass);
 		asm.astore(sSlot);
-		// a = 1 + start
+		// a = s.offsetByCodePoints(1, start) -- 1 skips the leading quote.
+		asm.aload(sSlot);
 		asm.iconst(1);
 		asm.iload(startSlot);
-		asm.op(Opcode.IADD);
+		asm.op(Opcode.INVOKEVIRTUAL);
+		asm.u2(offsetByCP);
 		asm.istore(aSlot);
-		// b = (end < 0) ? s.length() - 1 : 1 + end
+		// b = (end < 0) ? s.length() - 1 : s.offsetByCodePoints(1, end)
 		int haveEnd = asm.label();
 		int gotB = asm.label();
 		asm.iload(endSlot);
@@ -130,9 +140,11 @@ final class JvmSubseqCompiler {
 		asm.istore(bSlot);
 		asm.branch(Opcode.GOTO, gotB);
 		asm.bind(haveEnd);
+		asm.aload(sSlot);
 		asm.iconst(1);
 		asm.iload(endSlot);
-		asm.op(Opcode.IADD);
+		asm.op(Opcode.INVOKEVIRTUAL);
+		asm.u2(offsetByCP);
 		asm.istore(bSlot);
 		asm.bind(gotB);
 		// result = "\"" + s.substring(a, b) + "\""

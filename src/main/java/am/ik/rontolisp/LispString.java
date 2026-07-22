@@ -77,11 +77,54 @@ public final class LispString implements LispVal {
 	}
 
 	/**
-	 * Returns the number of characters in the string (the fill pointer when present).
-	 * @return the string length
+	 * Returns the number of UTF-16 code units in the string (the fill pointer when
+	 * present). This is the size of the backing buffer and NOT the character-visible
+	 * length -- callers implementing Common Lisp's
+	 * {@code length}/{@code char}/{@code aref} should use {@link #codePointCount()} /
+	 * {@link #codePointAt(int)} / {@link #codePointByteIndex(int)} so a supplementary
+	 * code point (a surrogate pair occupies two code units) still counts as one
+	 * character.
+	 * @return the code-unit length
 	 */
 	public int length() {
 		return this.fillPointer >= 0 ? this.fillPointer : this.chars.length;
+	}
+
+	/**
+	 * Returns the number of Unicode code points (character-visible length) in the string,
+	 * matching Java's {@code String.codePointCount(0, length())}. A supplementary code
+	 * point counts as one character; every ASCII / BMP-only string agrees with
+	 * {@link #length()}.
+	 * @return the code-point count
+	 */
+	public int codePointCount() {
+		int n = length();
+		return Character.codePointCount(this.chars, 0, n);
+	}
+
+	/**
+	 * Returns the Unicode code point at character index {@code cpIndex} (0-based). Walks
+	 * the buffer with {@link Character#offsetByCodePoints(char[], int, int, int, int)} so
+	 * a supplementary code point comes back as a single 21-bit value.
+	 * @param cpIndex the 0-based character index
+	 * @return the code point at that position
+	 */
+	public int codePointAt(int cpIndex) {
+		int codeUnit = codePointByteIndex(cpIndex);
+		return Character.codePointAt(this.chars, codeUnit);
+	}
+
+	/**
+	 * Returns the UTF-16 code-unit offset at which the {@code cpIndex}-th character
+	 * begins. Useful for taking substrings on a character range: convert a start/end
+	 * character range to code-unit offsets and slice through {@code value()} /
+	 * {@code new String(...)}. Passing the code-point count returns the code-unit length
+	 * (a valid one-past-the-end for slicing).
+	 * @param cpIndex the 0-based character index (in {@code [0, codePointCount()]})
+	 * @return the code-unit offset
+	 */
+	public int codePointByteIndex(int cpIndex) {
+		return Character.offsetByCodePoints(this.chars, 0, length(), 0, cpIndex);
 	}
 
 	/**

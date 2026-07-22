@@ -406,14 +406,27 @@ final class JavaBridgeTemplate {
 		if (value instanceof Double d) {
 			return marshalDouble(d, target, out, index);
 		}
-		if (value instanceof Character c) {
-			if (target == char.class) {
+		if (value instanceof int[] chBox && chBox.length == 1) {
+			// A Lisp CHARACTER is a length-1 int[]{codePoint}. Narrow to a Java char when
+			// the target parameter is char/Character AND the code point fits in the BMP;
+			// a
+			// supplementary code point cannot fit a single Java char, so bridging that
+			// parameter shape is refused (the caller can accept a String / int instead).
+			int cp = chBox[0];
+			if ((target == char.class || target == Character.class || target.isAssignableFrom(Character.class))
+					&& Character.isBmpCodePoint(cp)) {
+				Character c = (char) cp;
 				out[index] = c;
-				return COST_EXACT;
+				return target == char.class ? COST_EXACT : (target == Character.class ? COST_WIDEN : COST_BOXED);
 			}
-			if (target == Character.class || target.isAssignableFrom(Character.class)) {
-				out[index] = c;
-				return target == Character.class ? COST_WIDEN : COST_BOXED;
+			// int / Integer accept the raw code point (including supplementary values).
+			if (target == int.class) {
+				out[index] = cp;
+				return COST_WIDEN;
+			}
+			if (target == Integer.class || target.isAssignableFrom(Integer.class)) {
+				out[index] = cp;
+				return target == Integer.class ? COST_WIDEN : COST_BOXED;
 			}
 			return NO_MATCH;
 		}
@@ -606,8 +619,10 @@ final class JavaBridgeTemplate {
 		if (o instanceof Float f) {
 			return (double) f;
 		}
-		if (o instanceof Character) {
-			return o;
+		if (o instanceof Character c) {
+			// A Java char is a UTF-16 code unit; the Lisp CHARACTER is a length-1
+			// int[]{codePoint}. Wrap directly (BMP code units are also code points).
+			return new int[] { c.charValue() };
 		}
 		if (o instanceof String s) {
 			return quote(s);
@@ -646,12 +661,12 @@ final class JavaBridgeTemplate {
 
 	// A wrapped host object is any value outside the compiled Lisp representation
 	// (Long/Double/BigInteger integers, BigInteger[] ratios, String symbols/strings,
-	// Character, Object[] conses/function values). ArrayList/HashMap receivers are
-	// accepted: a wrapped List/Map is indistinguishable from a Lisp array/hash-table
-	// here, and calling methods on either is harmless.
+	// int[]{codePoint} CHARACTERs, Object[] conses/function values). ArrayList/HashMap
+	// receivers are accepted: a wrapped List/Map is indistinguishable from a Lisp
+	// array/hash-table here, and calling methods on either is harmless.
 	private static boolean isJavaObject(@Nullable Object v) {
 		return v != null && !(v instanceof Long) && !(v instanceof Double) && !(v instanceof BigInteger)
-				&& !(v instanceof BigInteger[]) && !(v instanceof String) && !(v instanceof Character)
+				&& !(v instanceof BigInteger[]) && !(v instanceof String) && !(v instanceof int[])
 				&& v.getClass() != Object[].class;
 	}
 
@@ -660,7 +675,10 @@ final class JavaBridgeTemplate {
 		if (v == null) {
 			return "NIL";
 		}
-		if (v instanceof String || v instanceof Long || v instanceof Double || v instanceof Character) {
+		if (v instanceof int[] cp && cp.length == 1) {
+			return "#\\" + Character.toString(cp[0]);
+		}
+		if (v instanceof String || v instanceof Long || v instanceof Double) {
 			return String.valueOf(v);
 		}
 		return "#<java " + v.getClass().getName() + ">";

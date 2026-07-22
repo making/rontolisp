@@ -63,6 +63,22 @@ $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
   1-4 UTF-8 bytes before handing them to `_write_str`, so `#\A` prints as
   `A` on stdout and `#\U+00C5` prints as its two-byte UTF-8 encoding.
 
+  Per-character case fold (the `(char-upcase ch)` / `(char-downcase ch)` builtins)
+  used to shift only ASCII (a-z <-> A-Z, delta +/- 32) which silently misfolded a
+  Latin-1 supplement letter and every non-ASCII alphabet. The `_char_upcase` /
+  `_char_downcase` runtime helpers (`WasmCaseFoldRuntimeBuilder`, function indices
+  `FUNC_CHAR_UPCASE` / `FUNC_CHAR_DOWNCASE`, both bound to the shared
+  `TYPE_LOOKUP = (i32) -> i32` signature) binary-search a compressed sorted
+  `(from:u32, to:u32, delta:i32)` range table baked into the static data
+  segment (~16 KB combined at Unicode 15: 690 upper ranges, 674 lower ranges).
+  The tables are generated at compile time from `Character.toUpperCase(int)` /
+  `Character.toLowerCase(int)` so the WASM result matches the interpreter and
+  the JVM compile path byte-for-byte on every Unicode letter -- including
+  supplementary ones like Deseret. The old ASCII-only fold is fully retired
+  (`WasmCharCompiler.compileCaseFold` now emits a single `call` to the helper
+  and re-boxes the returned i32 as `TYPE_CHAR`). See [[characters-code-points]]
+  for the cross-backend CHARACTER invariant this closes.
+
 ## HEAP_PTR is a stack pointer; identity is a counter (the leak fix)
 
 `HEAP_PTR_ADDR` linear memory is now used essentially ONLY as a reused byte-assembly

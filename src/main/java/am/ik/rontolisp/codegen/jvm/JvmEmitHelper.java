@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import am.ik.jvm.ArrayType;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.Opcode;
 
@@ -115,28 +116,81 @@ final class JvmEmitHelper {
 	}
 
 	/**
-	 * The {@code java/lang/Character} class constant (the char runtime representation).
+	 * The {@code java/lang/Character} class constant. Used by JDK static helpers
+	 * ({@code Character.toUpperCase(int)}, {@code Character.isLetter(int)}, ...); the
+	 * runtime CHARACTER representation is a length-1 {@code int[]} whose sole element is
+	 * the Unicode code point ({@link #charArrayClass}), not this class.
 	 */
 	static ConstantPool.ClassConstant characterClass(JvmLispCompiler.Ctx ctx) {
 		return ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Character"));
 	}
 
-	/** A {@code java.lang.Character} method reference. */
+	/**
+	 * A {@code java.lang.Character} static method reference (still needed for the JDK
+	 * helpers like {@code Character.toUpperCase(int)} / {@code Character.digit(int, int)}
+	 * that the char builtins delegate to).
+	 */
 	static ConstantPool.MethodrefConstant characterMethod(JvmLispCompiler.Ctx ctx, String name, String desc) {
 		return ctx.cp.addMethodref(characterClass(ctx),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
 	}
 
 	/**
-	 * Compiles a character literal to its runtime representation, a boxed
-	 * {@code java.lang.Character}. The code point is narrowed to a 16-bit char (the JVM
-	 * char range), matching the BMP coverage of the other backends.
+	 * The class constant for the runtime CHARACTER representation ({@code int[]}, spelled
+	 * {@code [I} in bytecode). A Lisp character on the JVM compile path is a length-1
+	 * {@code int[]} holding its Unicode code point; a supplementary code point (above
+	 * U+FFFF) fits without truncation and prints as its glyph via
+	 * {@link Character#toChars(int)}. Instance and array-class checks against this
+	 * constant are the type discriminator ({@code instanceof int[]}), never
+	 * {@link #characterClass} which is 16-bit.
+	 */
+	static ConstantPool.ClassConstant charArrayClass(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.addClass(ctx.cp.addUtf8("[I"));
+	}
+
+	/**
+	 * Compiles a character literal to its runtime representation, a length-1
+	 * {@code int[]} holding the Unicode code point. Uses a temporary local so the boxing
+	 * sequence is straight-line (allocate, dup, store [0], leave array on stack). Widens
+	 * the previous 16-bit Character representation so a {@code #\U+1F600} literal
+	 * survives every downstream op.
 	 */
 	static void compileCharLiteral(int codePoint, JvmLispCompiler.Ctx ctx) {
-		emitIntConst(ctx, codePoint & 0xFFFF);
-		ctx.emit(Opcode.I2C);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(characterMethod(ctx, "valueOf", "(C)Ljava/lang/Character;").index());
+		emitIntConst(ctx, codePoint);
+		boxCodePoint(ctx);
+	}
+
+	/**
+	 * Boxes the {@code int} Unicode code point currently on top of the operand stack into
+	 * the runtime CHARACTER representation ({@code int[]{cp}}). Uses one transient temp
+	 * local so the sequence stays branch-free and self-contained. On entry:
+	 * {@code [.., cp:int]}; on exit: {@code [.., int[1]{cp}:ref]}.
+	 */
+	static void boxCodePoint(JvmLispCompiler.Ctx ctx) {
+		int tmp = ctx.allocTemp();
+		ctx.emit(Opcode.ISTORE);
+		ctx.emit(tmp);
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.NEWARRAY);
+		ctx.emit(ArrayType.T_INT);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.ILOAD);
+		ctx.emit(tmp);
+		ctx.emit(Opcode.IASTORE);
+	}
+
+	/**
+	 * Unboxes a runtime CHARACTER ({@code int[]}) on top of the operand stack to its
+	 * Unicode code point ({@code int}). Casts to {@code [I} first so the JVM verifier
+	 * sees an int-array reference, then reads {@code arr[0]}. On entry:
+	 * {@code [.., ref]}; on exit: {@code [.., cp:int]}.
+	 */
+	static void unboxCodePoint(JvmLispCompiler.Ctx ctx) {
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(charArrayClass(ctx).index());
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.IALOAD);
 	}
 
 	/** A {@code java.math.BigInteger} instance-method reference. */
