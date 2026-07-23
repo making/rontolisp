@@ -143,109 +143,29 @@ API は提供しません。
 
 ## 実際に何がロードできるか
 
-現在、実世界の 7 つのライブラリが無改変でロードでき、4 つ全てのバックエンド
-(インタプリタ、JVM、WASM Preview 1、`--component`) で検証済みです:
+現在、実世界の 9 つのライブラリが無改変でロードできます。**バックエンド**列は
+それぞれの検証済み範囲を示します — 「4 つ全て」はインタプリタ、JVM、WASM
+Preview 1、`--component` を意味します。
 
-- **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
-  `split-sequence`/`split-sequence-if`/`split-sequence-if-not` が文字列と
-  リストに対して動作します — 関数境界を多値チャネル経由で越える第 2 戻り値
-  (再開インデックス) を含めて。CLOS 専用の `extended-sequence.lisp` は
-  `:if-feature (:or :sbcl :abcl)` でゲートされており自動的に除外されます。
-- **[parse-number](https://github.com/sharplispers/parse-number) v1.8**:
-  `parse-number`/`parse-real-number`/`parse-positive-real-number` が整数、
-  有理数、浮動小数点数、基数プレフィクス付きリテラル (`#xFF`、`#3r12`)、
-  指数マーカーを扱います。`(error 'invalid-number :value ... :reason ...)`
-  イディオムは簡易コンディション代替を通じて意図した診断情報付きで
-  シグナルされます。
-- **[cl-utilities](https://common-lisp.net/project/cl-utilities/) v1.2.4**:
-  公開 API 全体が動作します — 独自の `split-sequence`、`extremum`
-  ファミリー (`extremum`/`extremum-fastkey`/`extrema`/`n-most-extreme`)、
-  `read-delimited`、`expt-mod`、`collecting`/`with-collectors`、自作マクロ
-  から使える `with-unique-names`/`with-gensyms`/`once-only` (3 段のネスト
-  バッククォート)、`rotate-byte`、`copy-array`、`compose`。
-- **[cl-who](https://edicl.github.io/cl-who/) v1.1.5**: Edi Weitz による
-  (X)HTML 生成マクロ。`with-html-output-to-string` (および
-  `with-html-output`) が S 式の HTML を、属性・ネストしたタグ・ローカルな
-  `str`/`esc`/`fmt`/`htm` 演算子とともにレンダリングします。エスケープと
-  数値文字参照も動作します。マクロ展開は通常の defun 群**と総称関数**
-  (`convert-tag-to-string-list`) をマクロ展開時に実行します — CLOS 静的
-  サブセットと setf 関数定義 (`(defun (setf html-mode) ...)`) によりロード
-  できます。2 つの簡易版の制限があります: **`:indent` (整形出力) は未対応**
-  で、既定のコンパクトなレンダリングになります。また出力モードの切り替えは
-  **`(setf (html-mode) :html5)`** を使います — cl-who はモードをマクロ展開
-  (コンパイル) 時に読み取るため、`*html-mode*` の実行時 `let` 再束縛は既に
-  展開済みのマクロには反映されません (スペシャル変数束縛自体は動作します)。
-  既定の `:xml` モードと `:html5` はどちらも正しくレンダリングされます。
-- **[assoc-utils](https://github.com/fukamachi/assoc-utils)**: 深町英太郎に
-  よる alist ユーティリティ。読み取り/変換 API が動作します — `aget`
-  (デフォルト値付き)、`alist-keys`/`alist-values`、
-  `alist-plist`/`plist-alist`、`remove-from-alist` とその場所版
-  `delete-from-alistf`、`alist-hash`/`hash-alist`、`with-keys`、キーパス
-  指定の `alist-get`、`alist=`。2 つの簡易版の制限があります:
-  **`(setf (aget alist key) value)` は使えません** (`define-setf-expander`
-  の 5 値プロトコルが必要ですが、ここではパース済み no-op です) —
-  `cons`/`delete-from-alistf` で alist を組み立ててください。また
-  **`alistp` は alist でない値に対して信頼できません** — `mapl` のラムダ
-  からの早期脱出がここではラムダローカルな return になるため、本物の
-  ASDF ホストなら弾く値に対して `t` を返すことがあります。
-- **[cl-base64](https://github.com/darabi/cl-base64) v3.4**: Kevin Rosenberg
-  による Base64 エンコーダ/デコーダ。
-  `string-to-base64-string`/`base64-string-to-string`(`:columns` の折り返しと
-  `:uri` アルファベット付き)、`(unsigned-byte 8)` 配列ペア
-  (`usb8-array-to-base64-string` とその逆)、整数ペアがすべて動作します。
-  不正な入力文字は `bad-base64-character` を通知し、その
-  `:input`/`:position`/`:code` スロットはインタプリタで読み取れます
-  (コンパイル系バックエンドは簡易版の `#'error` ラッパを通して素の
-  コンディションを通知しますが、同じ `handler-case` で捕捉できます)。
-  数値の制限が 1 つ: WASM バックエンドは `i31` 範囲(約 2^30)を超える
-  整数を浮動小数点で表現するため、大きな整数の `integer-to-base64-string`
-  はそこで結果が変わります。
+| ライブラリ | バックエンド | 動作する範囲 | 簡易版の制限 |
+|------------|--------------|--------------|--------------|
+| [split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1 | 4 つ全て | `split-sequence`/`split-sequence-if`/`split-sequence-if-not` が文字列とリストに対して動作します — 関数境界を多値チャネル経由で越える第 2 戻り値 (再開インデックス) を含めて | なし — CLOS 専用の `extended-sequence.lisp` は `:if-feature (:or :sbcl :abcl)` でゲートされており自動的に除外されます |
+| [parse-number](https://github.com/sharplispers/parse-number) v1.8 | 4 つ全て | `parse-number`/`parse-real-number`/`parse-positive-real-number` が整数、有理数、浮動小数点数、基数プレフィクス付きリテラル (`#xFF`、`#3r12`)、指数マーカーを扱います | なし — `(error 'invalid-number :value ... :reason ...)` イディオムは簡易コンディション代替を通じて意図した診断情報付きでシグナルされます |
+| [cl-utilities](https://common-lisp.net/project/cl-utilities/) v1.2.4 | 4 つ全て | 公開 API 全体 — 独自の `split-sequence`、`extremum` ファミリー (`extremum`/`extremum-fastkey`/`extrema`/`n-most-extreme`)、`read-delimited`、`expt-mod`、`collecting`/`with-collectors`、自作マクロから使える `with-unique-names`/`with-gensyms`/`once-only` (3 段のネストバッククォート)、`rotate-byte`、`copy-array`、`compose` | なし |
+| [cl-who](https://edicl.github.io/cl-who/) v1.1.5 | 4 つ全て | Edi Weitz による (X)HTML 生成マクロ。`with-html-output-to-string` (および `with-html-output`) が S 式の HTML を、属性・ネストしたタグ・ローカルな `str`/`esc`/`fmt`/`htm` 演算子とともにレンダリングします。エスケープと数値文字参照も動作します。マクロ展開は通常の defun 群**と総称関数** (`convert-tag-to-string-list`) をマクロ展開時に実行します — CLOS 静的サブセットと setf 関数定義 (`(defun (setf html-mode) ...)`) によりロードできます | **`:indent` (整形出力) は未対応**で、既定のコンパクトなレンダリングになります。また出力モードの切り替えは **`(setf (html-mode) :html5)`** を使います — cl-who はモードをマクロ展開 (コンパイル) 時に読み取るため、`*html-mode*` の実行時 `let` 再束縛は既に展開済みのマクロには反映されません (スペシャル変数束縛自体は動作します)。既定の `:xml` モードと `:html5` はどちらも正しくレンダリングされます |
+| [assoc-utils](https://github.com/fukamachi/assoc-utils) | 4 つ全て | 深町英太郎による alist ユーティリティの読み取り/変換 API — `aget` (デフォルト値付き)、`alist-keys`/`alist-values`、`alist-plist`/`plist-alist`、`remove-from-alist` とその場所版 `delete-from-alistf`、`alist-hash`/`hash-alist`、`with-keys`、キーパス指定の `alist-get`、`alist=` | **`(setf (aget alist key) value)` は使えません** (`define-setf-expander` の 5 値プロトコルが必要ですが、ここではパース済み no-op です) — `cons`/`delete-from-alistf` で alist を組み立ててください。また **`alistp` は alist でない値に対して信頼できません** — `mapl` のラムダからの早期脱出がここではラムダローカルな return になるため、本物の ASDF ホストなら弾く値に対して `t` を返すことがあります |
+| [cl-base64](https://github.com/darabi/cl-base64) v3.4 | 4 つ全て | Kevin Rosenberg による Base64 エンコーダ/デコーダ。`string-to-base64-string`/`base64-string-to-string` (`:columns` の折り返しと `:uri` アルファベット付き)、`(unsigned-byte 8)` 配列ペア (`usb8-array-to-base64-string` とその逆)、整数ペアがすべて動作します。不正な入力文字は `bad-base64-character` を通知します | そのコンディションの `:input`/`:position`/`:code` スロットはインタプリタで読み取れます (コンパイル系バックエンドは簡易版の `#'error` ラッパを通して素のコンディションを通知しますが、同じ `handler-case` で捕捉できます)。また WASM バックエンドは `i31` 範囲 (約 2^30) を超える整数を浮動小数点で表現するため、大きな整数の `integer-to-base64-string` はそこで結果が変わります |
+| [md5](https://github.com/pmai/md5) v2.0.4 | インタプリタ + JVM | Pierre Mai による MD5 メッセージダイジェスト実装 (RFC 1321)。文字列と `(unsigned-byte 8)` ベクタに対する `md5sum-sequence`、`md5sum-string` (flexi-streams シムの `string-to-octets` による UTF-8)、インクリメンタルな `make-md5-state`/`update-md5-state`/`finalize-md5-state` API のすべてが RFC のテストベクタと一致します | **WASM バックエンドでは実行できません**: MD5 の作業状態は符号なし 32 ビット演算で、WASM の `i31` fixnum 範囲に収まりません |
+| [cl-ppcre](https://github.com/edicl/cl-ppcre) v2.1.2 | 4 つ全て | Dr. Edmund Weitz による Perl 互換正規表現ライブラリを、実物の未改変ソースからロードします。`scan` (レジスタ境界付き)、`scan-to-strings`、`split`、`regex-replace`/`regex-replace-all`、`all-matches`(-as-strings)、`count-matches`、`do-scans`/`do-matches`(-as-strings) 系の反復マクロ、`register-groups-bind`、`quote-meta-chars`、パースツリー正規表現、`(?i)` などのインラインモディファイアがすべて動作します — 生成されるスキャナクロージャが依存する、ループを横断する名前付き `block`/`return-from` を、コンパイルバックエンドはレキシカルな名前付き脱出として実装しています | なし |
+| [com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4 (`(ql:quickload '#:com.inuoe.jzon)` による本物のライブラリ) | 4 つ全て | README のウォークスルーを含む JSON のパースと文字列化 — ハッシュテーブル / ベクタのラウンドトリップ、`:key-fn`/`jzon:coerce-key`、可変文字列へ書き込む Gray ストリームクラス経由の `:stream` ライタ API、インクリメンタルな `jzon:writer`、`closer-mop` シムの実スロットリストによる CLOS インスタンスの文字列化。依存システム (`closer-mop`、`flexi-streams`、`float-features`、`trivial-gray-streams`、`uiop`) は上記の組み込みシムシステムに解決されます | 3 つの数値リーフコンポーネント (`eisel-lemire.lisp`/`ratio-to-double.lisp`/`schubfach.lisp` — eisel-lemire の float リーダと Schubfach の float プリンタ。u64/u128 ビット演算が WASM の数値モデルを超えます) はロード時に rontolisp ネイティブの float 演算・プリンタによる組み込みシムに置き換えられます。そのため float のテキストは Schubfach の最短ラウンドトリップ文字列ではなく rontolisp のバックエンド間で同一な形になり、極端な指数のパースは正確な丸めから数 ulp ずれることがあります (よく使う範囲である絶対値 22 以下の 10 進指数はちょうど 1 回の丸めです)。WASM バックエンドでは通常の WASM の注意点 (巨大 float の印字形、ハッシュテーブルの巡回順、非 ASCII `\u` エスケープ — `code-char` がバイト単位) が適用されます |
 
-- **[md5](https://github.com/pmai/md5) v2.0.4**: Pierre Mai による MD5
-  メッセージダイジェスト実装 (RFC 1321) です。文字列と `(unsigned-byte 8)`
-  ベクタに対する `md5sum-sequence`、`md5sum-string`(flexi-streams シムの
-  `string-to-octets` による UTF-8)、インクリメンタルな
-  `make-md5-state`/`update-md5-state`/`finalize-md5-state` API のすべてが、
-  インタプリタと JVM バックエンドで RFC のテストベクタと一致します。WASM
-  バックエンドでは実行できません: MD5 の作業状態は符号なし 32 ビット演算で、
-  WASM の `i31` fixnum 範囲に収まりません。
+cl-ppcre のロードはこれまでで最大の機能バッチ — ローカル
+`(declare (special ...))`、ジェネリック化された CLOS スロットアクセサ、
+`initialize-instance :after`、`&environment` + `get-setf-expansion`、`psetf`、
+`(setf (subseq ...))`、`subst`/`search`/`copy-tree`、降順・大文字小文字非区別の
+文字比較 — を牽引しました。
 
-- **[cl-ppcre](https://github.com/edicl/cl-ppcre) v2.1.2**: Dr. Edmund Weitz
-  による Perl 互換正規表現ライブラリを、実物の未改変ソースからロードします。
-  `scan`(レジスタ境界付き)、`scan-to-strings`、`split`、
-  `regex-replace`/`regex-replace-all`、`all-matches`(-as-strings)、
-  `count-matches`、`do-scans`/`do-matches`(-as-strings) 系の反復マクロ、
-  `register-groups-bind`、`quote-meta-chars`、パースツリー正規表現、`(?i)`
-  などのインラインモディファイアがすべて 4 バックエンドで動作します。
-  生成されるスキャナクロージャが依存する、ループを横断する名前付き
-  `block`/`return-from` を、コンパイルバックエンドはレキシカルな名前付き
-  脱出として実装しています。このロードはこれまでで最大の機能バッチ -- ローカル
-  `(declare (special ...))`、ジェネリック化された CLOS スロットアクセサ、
-  `initialize-instance :after`、`&environment` + `get-setf-expansion`、
-  `psetf`、`(setf (subseq ...))`、`subst`/`search`/`copy-tree`、降順・大文字
-  小文字非区別の文字比較 -- を牽引しました。
-
-- **[com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4** (`(ql:quickload
-  '#:com.inuoe.jzon)` による本物のライブラリ): README
-  のウォークスルーを含む JSON のパースと文字列化 — ハッシュテーブル /
-  ベクタのラウンドトリップ、`:key-fn`/`jzon:coerce-key`、可変文字列へ書き込む
-  Gray ストリームクラス経由の `:stream` ライタ API、インクリメンタルな
-  `jzon:writer`、`closer-mop` シムの実スロットリストによる CLOS
-  インスタンスの文字列化。依存システム (`closer-mop`、`flexi-streams`、
-  `float-features`、`trivial-gray-streams`、`uiop`)
-  は下記の組み込みシムシステムに解決され、3 つの数値リーフコンポーネント
-  (`eisel-lemire.lisp`/`ratio-to-double.lisp`/`schubfach.lisp` —
-  eisel-lemire の float リーダと Schubfach の float プリンタ。u64/u128
-  ビット演算が WASM の数値モデルを超えます) はロード時に rontolisp
-  ネイティブの float 演算・プリンタによる組み込みシムに置き換えられます。
-  トレードオフ: float のテキストは Schubfach の最短ラウンドトリップ文字列では
-  なく rontolisp のバックエンド間で同一な形になり、極端な指数のパースは正確な
-  丸めから数 ulp ずれることがあります (よく使う範囲の `|exp10| <= 22`
-  はちょうど 1 回の丸めです)。WASM バックエンドでは通常の WASM の注意点
-  (巨大 float の印字形、ハッシュテーブルの巡回順、非 ASCII `\u`
-  エスケープ — `code-char` がバイト単位) が適用されます。
-
-7 ライブラリ全ての実行可能なデモ — バックエンド別の実行コマンドと期待
+9 ライブラリ全ての実行可能なデモ — バックエンド別の実行コマンドと期待
 出力付き — は
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf)
 にあります。

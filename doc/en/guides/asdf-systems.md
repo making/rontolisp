@@ -150,110 +150,29 @@ actually call, not the full upstream APIs.
 
 ## What can I actually load?
 
-Seven real-world libraries load unmodified today, verified on all four
-backends (interpreter, JVM, WASM Preview 1 and `--component`):
+Nine real-world libraries load unmodified today. The **Backends** column says
+where each one is verified — "all four" means the interpreter, the JVM, WASM
+Preview 1 and `--component`.
 
-- **[split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1**:
-  `split-sequence`/`split-sequence-if`/`split-sequence-if-not` work on
-  strings and lists — including the second return value (the resume index),
-  which crosses the function boundary through the multiple-value channel.
-  Its CLOS-only `extended-sequence.lisp` is gated behind
-  `:if-feature (:or :sbcl :abcl)` and drops out automatically.
-- **[parse-number](https://github.com/sharplispers/parse-number) v1.8**:
-  `parse-number`/`parse-real-number`/`parse-positive-real-number` handle
-  integers, ratios, floats, radix-prefixed literals (`#xFF`, `#3r12`) and
-  exponent markers; the `(error 'invalid-number :value ... :reason ...)`
-  idiom signals with the intended diagnostics through the lite condition
-  stand-ins.
-- **[cl-utilities](https://common-lisp.net/project/cl-utilities/) v1.2.4**:
-  the whole public API works — its own `split-sequence`, the `extremum`
-  family (`extremum`/`extremum-fastkey`/`extrema`/`n-most-extreme`),
-  `read-delimited`, `expt-mod`, `collecting`/`with-collectors`,
-  `with-unique-names`/`with-gensyms`/`once-only` (three-level nested
-  backquote) usable from your own macros, `rotate-byte`, `copy-array` and
-  `compose`.
-- **[cl-who](https://edicl.github.io/cl-who/) v1.1.5**: Edi Weitz's (X)HTML
-  generation macros. `with-html-output-to-string` (and `with-html-output`)
-  render s-expression HTML with attributes, nested tags and the local
-  `str`/`esc`/`fmt`/`htm` operators; escaping and numeric character entities
-  work. Its macro expansion runs a chain of ordinary defuns **and a generic
-  function** (`convert-tag-to-string-list`) at macro-expansion time — the CLOS
-  static subset plus setf-function definitions (`(defun (setf html-mode) ...)`)
-  make it load. Two lite limitations: **`:indent` (pretty-printed output) is
-  unsupported**, so the default compact rendering is what you get; and switching
-  output mode must use **`(setf (html-mode) :html5)`** — cl-who reads the mode at
-  macro-expansion (compile) time, so a runtime `let` rebinding of `*html-mode*`
-  is not observed by the already-expanded macro (even though special variable
-  binding otherwise works). The default `:xml` mode and `:html5` both render
-  correctly.
-- **[assoc-utils](https://github.com/fukamachi/assoc-utils)**: Eitaro
-  Fukamachi's alist utilities. The read/convert API works — `aget` (with a
-  default), `alist-keys`/`alist-values`, `alist-plist`/`plist-alist`,
-  `remove-from-alist` and its `delete-from-alistf` place variant,
-  `alist-hash`/`hash-alist`, `with-keys`, the key-path `alist-get` and
-  `alist=`. Two lite limitations: **`(setf (aget alist key) value)` is
-  unavailable** (it needs `define-setf-expander`'s five-value protocol, which
-  is a parsed no-op here), so build the alist with `cons`/`delete-from-alistf`
-  instead; and **`alistp` is unreliable on a non-alist** — its early exit out
-  of a `mapl` lambda is a lambda-local return here, so it can report `t` for a
-  value a real ASDF host would reject.
-- **[cl-base64](https://github.com/darabi/cl-base64) v3.4**: Kevin Rosenberg's
-  Base64 encoder/decoder. `string-to-base64-string`/`base64-string-to-string`
-  (with `:columns` line wrapping and the `:uri` alphabet), the
-  `(unsigned-byte 8)` array pair (`usb8-array-to-base64-string` and back) and
-  the integer pair all work; a bad input character signals
-  `bad-base64-character`, whose `:input`/`:position`/`:code` slots are readable
-  on the interpreter (the compiled backends signal a plain condition through
-  the lite `#'error` wrapper — still caught by the same `handler-case`). One
-  numeric limitation: the WASM backends represent an integer beyond the `i31`
-  range (about 2^30) as a float, so `integer-to-base64-string` of a large
-  integer diverges there.
+| Library | Backends | What works | Lite limitations |
+|---------|----------|------------|------------------|
+| [split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1 | all four | `split-sequence`/`split-sequence-if`/`split-sequence-if-not` on strings and lists — including the second return value (the resume index), which crosses the function boundary through the multiple-value channel | none — its CLOS-only `extended-sequence.lisp` is gated behind `:if-feature (:or :sbcl :abcl)` and drops out automatically |
+| [parse-number](https://github.com/sharplispers/parse-number) v1.8 | all four | `parse-number`/`parse-real-number`/`parse-positive-real-number` over integers, ratios, floats, radix-prefixed literals (`#xFF`, `#3r12`) and exponent markers | none — the `(error 'invalid-number :value ... :reason ...)` idiom signals with the intended diagnostics through the lite condition stand-ins |
+| [cl-utilities](https://common-lisp.net/project/cl-utilities/) v1.2.4 | all four | the whole public API — its own `split-sequence`, the `extremum` family (`extremum`/`extremum-fastkey`/`extrema`/`n-most-extreme`), `read-delimited`, `expt-mod`, `collecting`/`with-collectors`, `with-unique-names`/`with-gensyms`/`once-only` (three-level nested backquote) usable from your own macros, `rotate-byte`, `copy-array` and `compose` | none |
+| [cl-who](https://edicl.github.io/cl-who/) v1.1.5 | all four | Edi Weitz's (X)HTML generation macros. `with-html-output-to-string` (and `with-html-output`) render s-expression HTML with attributes, nested tags and the local `str`/`esc`/`fmt`/`htm` operators; escaping and numeric character entities work. Its macro expansion runs a chain of ordinary defuns **and a generic function** (`convert-tag-to-string-list`) at macro-expansion time — the CLOS static subset plus setf-function definitions (`(defun (setf html-mode) ...)`) make it load | **`:indent` (pretty-printed output) is unsupported**, so the default compact rendering is what you get; and switching output mode must use **`(setf (html-mode) :html5)`** — cl-who reads the mode at macro-expansion (compile) time, so a runtime `let` rebinding of `*html-mode*` is not observed by the already-expanded macro (even though special variable binding otherwise works). The default `:xml` mode and `:html5` both render correctly |
+| [assoc-utils](https://github.com/fukamachi/assoc-utils) | all four | Eitaro Fukamachi's alist utilities, read/convert API — `aget` (with a default), `alist-keys`/`alist-values`, `alist-plist`/`plist-alist`, `remove-from-alist` and its `delete-from-alistf` place variant, `alist-hash`/`hash-alist`, `with-keys`, the key-path `alist-get` and `alist=` | **`(setf (aget alist key) value)` is unavailable** (it needs `define-setf-expander`'s five-value protocol, which is a parsed no-op here), so build the alist with `cons`/`delete-from-alistf` instead; and **`alistp` is unreliable on a non-alist** — its early exit out of a `mapl` lambda is a lambda-local return here, so it can report `t` for a value a real ASDF host would reject |
+| [cl-base64](https://github.com/darabi/cl-base64) v3.4 | all four | Kevin Rosenberg's Base64 encoder/decoder. `string-to-base64-string`/`base64-string-to-string` (with `:columns` line wrapping and the `:uri` alphabet), the `(unsigned-byte 8)` array pair (`usb8-array-to-base64-string` and back) and the integer pair all work; a bad input character signals `bad-base64-character` | that condition's `:input`/`:position`/`:code` slots are readable on the interpreter (the compiled backends signal a plain condition through the lite `#'error` wrapper — still caught by the same `handler-case`); and the WASM backends represent an integer beyond the `i31` range (about 2^30) as a float, so `integer-to-base64-string` of a large integer diverges there |
+| [md5](https://github.com/pmai/md5) v2.0.4 | interpreter + JVM | Pierre Mai's MD5 message-digest implementation (RFC 1321). `md5sum-sequence` on strings and `(unsigned-byte 8)` vectors, `md5sum-string` (UTF-8 through the flexi-streams shim's `string-to-octets`), and the incremental `make-md5-state`/`update-md5-state`/`finalize-md5-state` API all match the RFC test vectors | **the WASM backends cannot run it**: the MD5 working state is unsigned 32-bit arithmetic, which does not fit the WASM `i31` fixnum range |
+| [cl-ppcre](https://github.com/edicl/cl-ppcre) v2.1.2 | all four | Dr. Edmund Weitz's Perl-compatible regular expression library, loaded from its real unmodified sources. `scan` (with register bounds), `scan-to-strings`, `split`, `regex-replace`/`regex-replace-all`, `all-matches`(-as-strings), `count-matches`, the `do-scans`/`do-matches`(-as-strings) iteration macros, `register-groups-bind`, `quote-meta-chars`, parse-tree regexes and inline modifiers like `(?i)` all work — the generated scanner closures rely on named `block`/`return-from` crossing loops, which the compile backends implement as lexical named exits | none |
+| [com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4 (the real library via `(ql:quickload '#:com.inuoe.jzon)`) | all four | JSON parsing and stringification including the README walkthrough — hash-table / vector round-trips, `:key-fn`/`jzon:coerce-key`, the `:stream` writer API over a Gray-stream class writing into an adjustable string, incremental `jzon:writer`, and CLOS-instance stringification through the `closer-mop` shim's real slot list. Its dependencies (`closer-mop`, `flexi-streams`, `float-features`, `trivial-gray-streams`, `uiop`) resolve to the built-in shim systems above | its three numeric leaf components (`eisel-lemire.lisp`/`ratio-to-double.lisp`/`schubfach.lisp` — the eisel-lemire float reader and Schubfach float printer, whose u64/u128 bit algorithms are beyond the WASM numeric model) are replaced at load time by built-in shims over rontolisp's native float arithmetic and printer, so float text takes rontolisp's cross-backend-identical shape rather than Schubfach's shortest-round-trip string, and parsing an extreme exponent can be a few ulps off exact rounding (a decimal exponent of magnitude 22 or less — the common range — rounds exactly once). The usual WASM caveats apply on the WASM backends: large-float print shape, hash-table iteration order and non-ASCII `\u` escapes (`code-char` is byte-oriented there) |
 
-- **[md5](https://github.com/pmai/md5) v2.0.4**: Pierre Mai's MD5
-  message-digest implementation (RFC 1321). `md5sum-sequence` on strings and
-  `(unsigned-byte 8)` vectors, `md5sum-string` (UTF-8 through the
-  flexi-streams shim's `string-to-octets`), and the incremental
-  `make-md5-state`/`update-md5-state`/`finalize-md5-state` API all match the
-  RFC test vectors on the interpreter and the JVM backend. The WASM backends
-  cannot run it: the MD5 working state is unsigned 32-bit arithmetic, which
-  does not fit the WASM `i31` fixnum range.
+cl-ppcre's load drove the widest feature batch so far — local
+`(declare (special ...))`, CLOS slot accessors as generics,
+`initialize-instance :after`, `&environment` + `get-setf-expansion`, `psetf`,
+`(setf (subseq ...))`, `subst`/`search`/`copy-tree` and the
+descending/case-insensitive character comparisons.
 
-- **[cl-ppcre](https://github.com/edicl/cl-ppcre) v2.1.2**: Dr. Edmund
-  Weitz's Perl-compatible regular expression library, loaded from its real
-  unmodified sources. `scan` (with register bounds), `scan-to-strings`,
-  `split`, `regex-replace`/`regex-replace-all`, `all-matches`(-as-strings),
-  `count-matches`, the `do-scans`/`do-matches`(-as-strings) iteration macros,
-  `register-groups-bind`, `quote-meta-chars`, parse-tree regexes and inline
-  modifiers like `(?i)` all work, on all four backends -- the generated
-  scanner closures rely on named `block`/`return-from` crossing loops, which
-  the compile backends implement as lexical named exits. Its
-  load drove the widest feature batch so far -- local
-  `(declare (special ...))`, CLOS slot accessors as generics,
-  `initialize-instance :after`, `&environment` + `get-setf-expansion`,
-  `psetf`, `(setf (subseq ...))`, `subst`/`search`/`copy-tree` and the
-  descending/case-insensitive character comparisons.
-
-- **[com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4** (the real
-  library via `(ql:quickload '#:com.inuoe.jzon)`): JSON parsing and
-  stringification including the README walkthrough — hash-table / vector
-  round-trips, `:key-fn`/`jzon:coerce-key`, the `:stream` writer API over a
-  Gray-stream class writing into an adjustable string, incremental
-  `jzon:writer`, and CLOS-instance stringification through the `closer-mop`
-  shim's real slot list. Its dependencies (`closer-mop`, `flexi-streams`,
-  `float-features`, `trivial-gray-streams`, `uiop`) resolve to the built-in
-  shim systems below, and its three numeric leaf components
-  (`eisel-lemire.lisp`/`ratio-to-double.lisp`/`schubfach.lisp` — the
-  eisel-lemire float reader and Schubfach float printer, whose u64/u128 bit
-  algorithms are beyond the WASM numeric model) are replaced at load time by
-  built-in shims over rontolisp's native float arithmetic and printer. The
-  tradeoff: float text takes rontolisp's cross-backend-identical shape rather
-  than Schubfach's shortest-round-trip string, and parsing an extreme exponent
-  can be a few ulps off exact rounding (`|exp10| <= 22` — the common range —
-  rounds exactly once). The usual WASM caveats apply on the WASM backends:
-  large-float print shape, hash-table iteration order and non-ASCII
-  `\u` escapes (`code-char` is byte-oriented there).
-
-Runnable demos for all seven — with the per-backend commands and
+Runnable demos for all nine — with the per-backend commands and
 expected output — live in
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf).
 
