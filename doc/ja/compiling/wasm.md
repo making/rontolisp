@@ -61,6 +61,15 @@ wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~18 KB module
 
 この `fact` の例では、モジュールは約 170 KB から約 18 KB まで縮みます。`--optimize` はオプトインで、動作を保存します: 実際の `call` 命令から呼び出しグラフを辿るため、到達可能なもの(組み込みの `eval`/`load` がディスパッチするコードを含む)はすべて保持されます。**GC の `--component`** パスでは no-op です(WASI 0.3 アダプタがコアの固定インポート/インデックスレイアウトに依存しているため、コンポーネントは無変更で出力されます)。[`--no-gc --component`](../guides/wasm-nogc.md#compact-component-output---no-gc---component) では有効です — コアモジュールはラップの前にシェイクされます。同じフラグは [JVM 出力](jvm.md)のデッドコード除去も行います。
 
+さらに小さく仕上げたい場合は、同じ `fact.lisp` を [`--no-gc`](../guides/wasm-nogc.md) でコンパイルすると `fact` は unboxed な `i32` にローワリングされ、18 KB を占めていた GC ランタイム一式（リーダーの大文字化テーブル、条件クラス階層、cons セル、プリンタ）が丸ごと落ちます:
+
+```bash
+rontolisp fact.lisp --no-gc --optimize -o fact.wasm
+wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~76 byte module (no -W gc)
+```
+
+ソースは変更不要で（`wasm-export` は値モデルを問わず同じ挙動）、生成モジュールは `-W gc` の要求も落とします。
+
 `--optimize` とは独立に（`--component` を含むすべての出力モードで）、コンパイルは常に同梱の Lisp ソースライブラリ（`linalg:`、`vec:`、JSON、URL、`equalp`/`string<`）をツリーシェイキングします。プログラムがソース中でその名前に一切言及しない（クォートされたシンボルや文字列リテラルの中も含む）ライブラリ関数はモジュールに含まれません。その帰結として、実行時に計算した文字列から名前を組み立てて `eval`/`apply` 経由で呼び出すライブラリ関数は、通常の「undefined function」エラーを通知します。その場合は `--no-prune`（または `--dynamic`）を付けてコンパイルすると、すべてのライブラリ定義が保持されます。
 
 ### SIMD アクセラレーション(`--simd`)

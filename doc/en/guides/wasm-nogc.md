@@ -11,7 +11,7 @@ with no import object and runs on any MVP-class runtime with **no `-W gc`**:
 
 ```bash
 rontolisp fact.lisp --no-gc --optimize -o fact.wasm
-wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
+wasmtime run --invoke fact fact.wasm 5      # => 120, ~76 bytes, no -W gc needed
 ```
 
 It achieves this by lowering each value directly onto an unboxed wasm

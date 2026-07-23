@@ -107,6 +107,19 @@ layout, so the component is emitted unchanged); under
 it works — the core module is shaken before the wrap. The same flag also
 dead-code-eliminates the [JVM output](jvm.md).
 
+For a much smaller module still, the same `fact.lisp` compiled with
+[`--no-gc`](../guides/wasm-nogc.md) lowers `fact` to unboxed `i32` and drops
+the whole GC runtime that made the 18 KB (the reader's case-fold table, the
+condition hierarchy, cons cells, the printer):
+
+```bash
+rontolisp fact.lisp --no-gc --optimize -o fact.wasm
+wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~76 byte module (no -W gc)
+```
+
+The source is unchanged — `wasm-export` works identically on both value models
+— and the resulting module also drops the `-W gc` runtime requirement.
+
 Independently of `--optimize` (and on every output mode, `--component`
 included), compilation always tree-shakes the bundled Lisp-source libraries
 (`linalg:`, `vec:`, JSON, URL, `equalp`/`string<`): a library function your

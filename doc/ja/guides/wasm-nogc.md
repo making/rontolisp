@@ -4,7 +4,7 @@ GC 値モデルの出力は — 最適化されたリアクターであっても
 
 ```bash
 rontolisp fact.lisp --no-gc --optimize -o fact.wasm
-wasmtime run --invoke fact fact.wasm 5      # => 120, no -W gc needed
+wasmtime run --invoke fact fact.wasm 5      # => 120, ~76 bytes, no -W gc needed
 ```
 
 これは、各値をアンボックスな wasm スカラーへ直接ローワリングし、文字列には小さなリニアメモリ表現を加えることで達成されます — そのため対象サブセットは言語の制限であって、別の言語ではありません。プログラムの形も制限されます: トップレベルには `defun` と `rontolisp:wasm-export` ディレクティブ**のみ**を置けます(純粋計算リアクターであり、`_start` はありません)。境界指定子は `:int`、`:long`、`:float`、`:bool`、`:string`(および `:void`/省略)です。`:s-expr` は**非対応**です — このバックエンドが意図的に省いている cons/リーダー/プリンターのランタイムを必要とするためです。
