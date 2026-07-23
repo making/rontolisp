@@ -53,11 +53,13 @@ wasmtime run -W gc hello.wasm
 デフォルトでは、コンパイルされたモジュールは、関数インデックスが固定に保たれているために、プログラムが実際に使うものとは無関係に**ランタイム全体**(プリンター、有理数、文字列、リーダー、`eval` ヘルパー、WASI インポートスロットなど)を埋め込みます。`--optimize` を追加すると、モジュールのルート(そのエクスポートと `_start`/`_initialize` エントリ)から到達不能なすべての関数を落とし、生き残りを再番号付けします。未使用の WASI インポートも除去されるため、純粋計算のリアクターモジュールは一握りの関数まで縮みます:
 
 ```bash
+echo "(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+(rontolisp:wasm-export 'fact :params '(:int) :returns :int)" > fact.lisp
 rontolisp fact.lisp --no-wasi --optimize -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~2 KB module
+wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~18 KB module
 ```
 
-この `fact` の例では、モジュールは約 100 KB から 2 KB 未満まで縮みます。`--optimize` はオプトインで、動作を保存します: 実際の `call` 命令から呼び出しグラフを辿るため、到達可能なもの(組み込みの `eval`/`load` がディスパッチするコードを含む)はすべて保持されます。**GC の `--component`** パスでは no-op です(WASI 0.3 アダプタがコアの固定インポート/インデックスレイアウトに依存しているため、コンポーネントは無変更で出力されます)。[`--no-gc --component`](../guides/wasm-nogc.md#compact-component-output---no-gc---component) では有効です — コアモジュールはラップの前にシェイクされます。同じフラグは [JVM 出力](jvm.md)のデッドコード除去も行います。
+この `fact` の例では、モジュールは約 170 KB から約 18 KB まで縮みます。`--optimize` はオプトインで、動作を保存します: 実際の `call` 命令から呼び出しグラフを辿るため、到達可能なもの(組み込みの `eval`/`load` がディスパッチするコードを含む)はすべて保持されます。**GC の `--component`** パスでは no-op です(WASI 0.3 アダプタがコアの固定インポート/インデックスレイアウトに依存しているため、コンポーネントは無変更で出力されます)。[`--no-gc --component`](../guides/wasm-nogc.md#compact-component-output---no-gc---component) では有効です — コアモジュールはラップの前にシェイクされます。同じフラグは [JVM 出力](jvm.md)のデッドコード除去も行います。
 
 `--optimize` とは独立に（`--component` を含むすべての出力モードで）、コンパイルは常に同梱の Lisp ソースライブラリ（`linalg:`、`vec:`、JSON、URL、`equalp`/`string<`）をツリーシェイキングします。プログラムがソース中でその名前に一切言及しない（クォートされたシンボルや文字列リテラルの中も含む）ライブラリ関数はモジュールに含まれません。その帰結として、実行時に計算した文字列から名前を組み立てて `eval`/`apply` 経由で呼び出すライブラリ関数は、通常の「undefined function」エラーを通知します。その場合は `--no-prune`（または `--dynamic`）を付けてコンパイルすると、すべてのライブラリ定義が保持されます。
 

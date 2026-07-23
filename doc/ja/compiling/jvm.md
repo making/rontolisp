@@ -25,6 +25,8 @@ java Hello
 デフォルトでは、コンパイルされたクラスはプログラムが実際に使用するものに関係なく **ランタイム全体**（プリンター、数値、リーダーおよび `eval` ヘルパーメソッド、さらにすべての組み込み関数のファーストクラスラッパー）を埋め込みます。`--optimize` を追加すると、`main` から到達できないすべてのメソッドを、それらだけが参照していた static フィールドとともに除去し、それに合わせて定数プールを圧縮します。
 
 ```bash
+echo '(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+(print (fact 10))' > fact.lisp
 rontolisp fact.lisp --optimize -o Fact.class
 java Fact
 ```

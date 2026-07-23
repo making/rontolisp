@@ -36,6 +36,8 @@ from `main`, along with any static field only they referenced, and compact the
 constant pool accordingly:
 
 ```bash
+echo '(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+(print (fact 10))' > fact.lisp
 rontolisp fact.lisp --optimize -o Fact.class
 java Fact
 ```

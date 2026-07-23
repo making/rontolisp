@@ -91,11 +91,13 @@ Unused WASI imports are removed too, so a pure-compute reactor module shrinks
 to a handful of functions:
 
 ```bash
+echo "(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+(rontolisp:wasm-export 'fact :params '(:int) :returns :int)" > fact.lisp
 rontolisp fact.lisp --no-wasi --optimize -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~2 KB module
+wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~18 KB module
 ```
 
-For the `fact` example the module drops from ~100 KB to under 2 KB.
+For the `fact` example the module drops from ~170 KB to ~18 KB.
 `--optimize` is opt-in and behavior-preserving: it walks the call graph from
 the actual `call` instructions, so anything reachable (including code an
 embedded `eval`/`load` dispatches to) is kept. On the **GC `--component`** path
