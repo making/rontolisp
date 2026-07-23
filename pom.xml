@@ -233,6 +233,19 @@ public final class Version {
 					     bridge (Lookup.defineClass) and invokes it in-process, so the test
 					     JVM must have jdk.incubator.vector in its module graph. -->
 					<argLine>--add-modules jdk.incubator.vector</argLine>
+					<!-- Two forked JVMs run different test classes in parallel; the wall
+					     clock is bounded by the slowest single class (Uax15E2eTest /
+					     WasmLispCompilerIntegrationTest at ~16 min each), and pairing
+					     them roughly halves the whole surefire pass. Two forks fit
+					     comfortably on the CI runner's 4 vCPU / 16 GB and reuse across
+					     classes so JVM startup is paid once per fork. Each fork gets
+					     its own static wasmtime container instance for the Docker-based
+					     tests (WasmLispCompilerIntegrationTest and the
+					     AsdfLibraryE2eSupport subclasses); the container image is a
+					     GHCR-pinned Debian+wasmtime with :latest re-pull, so cost of
+					     starting two of them is one extra "docker run" per fork. -->
+					<forkCount>2</forkCount>
+					<reuseForks>true</reuseForks>
 				</configuration>
 			</plugin>
 			<plugin>
