@@ -9,7 +9,7 @@
 ```
 
 ```lisp
-(let* ((orig (list (cons 'a 1)))
+(let* ((orig '((a . 1)))
        (copy (copy-alist orig)))
   (rplacd (assoc 'a copy) 99)
   (cdr (assoc 'a orig))) ; => 1

@@ -44,7 +44,7 @@ references, the pattern behind macros like assoc-utils' `with-keys`:
 ```console
 $ cat keys.lisp
 (ql:quickload :assoc-utils)
-(print (assoc-utils:with-keys ("name") (list (cons "name" "eitaro"))
+(print (assoc-utils:with-keys ("name") '(("name" . "eitaro"))
          name))
 $ rontolisp keys.lisp
 "eitaro"

@@ -43,12 +43,12 @@ every backend `:body` is an asynchronous stream, drained with
 
 Reading the individual fields:
 
-```console
-(let ((res (rontolisp:await (rontolisp:fetch "http://example.com/"))))
+```lisp
+(let ((res (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get"))))
   (print (getf res :status))    ; => 200
   (print (rontolisp:await (rontolisp:read-all (getf res :body))))
-                                ; => "<html>...</html>"
-  (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
+                                ; => "{...}"
+  (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
 ```
 
 ## Request options
@@ -57,16 +57,18 @@ The optional second argument is an options property list with `:method`
 (a string, default `"GET"`), `:headers` (an alist of `(name . value)` string
 pairs) and `:body` (a string):
 
-```console
+```lisp
 ;; GET with request headers (an alist of (name . value) string pairs)
-(rontolisp:fetch "http://example.com/api"
-                 (list :headers (list (cons "Accept" "application/json"))))
+(rontolisp:await
+  (rontolisp:fetch "https://httpbin.ik.am/get"
+                   '(:headers (("Accept" . "application/json")))))
 
 ;; POST with a request body
-(rontolisp:fetch "http://example.com/api"
-                 (list :method "POST"
-                       :headers (list (cons "Content-Type" "application/json"))
-                       :body "{\"name\":\"rontolisp\"}"))
+(rontolisp:await
+  (rontolisp:fetch "https://httpbin.ik.am/post"
+                   '(:method "POST"
+                     :headers (("Content-Type" . "application/json"))
+                     :body "{\"name\":\"rontolisp\"}")))
 ```
 
 The supported methods are `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS`
@@ -80,10 +82,11 @@ there; `nil` comes back only for a request that cannot be *started*).
 Because the request is already running when `fetch` returns, several requests
 overlap — start them all, then await each (in any order):
 
-```console
-(let ((p1 (rontolisp:fetch "http://example.com/a"))
-      (p2 (rontolisp:fetch "http://example.com/b")))  ; both requests running
-  (list (rontolisp:await p1) (rontolisp:await p2)))
+```lisp
+(let ((p1 (rontolisp:fetch "https://httpbin.ik.am/status/200"))
+      (p2 (rontolisp:fetch "https://httpbin.ik.am/status/201")))  ; both requests running
+  (list (getf (rontolisp:await p1) :status)
+        (getf (rontolisp:await p2) :status)))                     ; => (200 201)
 ```
 
 To transform a response — or to build any asynchronous helper — define an
@@ -91,7 +94,7 @@ To transform a response — or to build any asynchronous helper — define an
 its body runs eagerly to the first pending `await`, and the caller gets a
 future for the rest:
 
-```console
+```lisp
 (rontolisp:async-defun fetch-status (url)
   (getf (rontolisp:await (rontolisp:fetch url)) :status))
 
@@ -154,23 +157,23 @@ The pieces combine into the typical JSON-API round trip: build the request
 body with `json-stringify`, POST it, await the response and parse the body
 with `json-parse`. Save the following as `fetch-post.lisp`:
 
-```console
+```lisp
 (let ((req (make-hash-table :test 'equal)))
   (setf (gethash "name" req) "rontolisp")
   (setf (gethash "stars" req) 1)
   (let* ((payload (rontolisp:json-stringify req))
          (res (rontolisp:await
                (rontolisp:fetch "https://httpbin.ik.am/post"
-                                (list :method "POST"
-                                      :headers (list (cons "Content-Type" "application/json"))
-                                      :body payload))))
+                                `(:method "POST"
+                                  :headers (("Content-Type" . "application/json"))
+                                  :body ,payload))))
          (body (rontolisp:await (rontolisp:read-all (getf res :body))))
          (json (rontolisp:json-parse body)))
     (print (getf res :status))
-    (write-line (gethash "data" json))))
+    (write-line (or (gethash "data" json) body))))
 ```
 
-```
+```console
 200
 {"name":"rontolisp","stars":1}
 ```

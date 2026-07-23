@@ -7,7 +7,7 @@ Returns an association list of the hash table's key/value pairs — the inverse 
 subset of `alexandria:hash-table-alist`.
 
 ```lisp
-(rontolisp:hash-table-alist (rontolisp:alist-hash-table (list (cons "k" 7))))   ; => (("k" . 7))
+(rontolisp:hash-table-alist (rontolisp:alist-hash-table '(("k" . 7))))   ; => (("k" . 7))
 ```
 
 The pair order follows the table's iteration order (backend-specific, like

@@ -11,14 +11,14 @@
 [`rontolisp:json-stringify`](rontolisp-json-stringify.md) と組み合わせられます。
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:alist-hash-table (list (cons "n" 1))))   ; => "{"n":1}"
+(rontolisp:json-stringify (rontolisp:alist-hash-table '(("n" . 1))))   ; => "{"n":1}"
 ```
 
 デフォルトのハッシュテーブルのテストは `alexandria:alist-hash-table` と同じく
 `eql` です。内容で重複を排除したい文字列キーには `:test 'equal` を渡してください:
 
 ```lisp
-(hash-table-count (rontolisp:alist-hash-table (list (cons "a" 1) (cons "a" 2)) :test 'equal))   ; => 1
+(hash-table-count (rontolisp:alist-hash-table '(("a" . 1) ("a" . 2)) :test 'equal))   ; => 1
 ```
 
 逆の変換は [`rontolisp:hash-table-alist`](rontolisp-hash-table-alist.md) です。

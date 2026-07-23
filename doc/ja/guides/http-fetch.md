@@ -45,12 +45,12 @@
 
 個々のフィールドの読み取り:
 
-```console
-(let ((res (rontolisp:await (rontolisp:fetch "http://example.com/"))))
+```lisp
+(let ((res (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get"))))
   (print (getf res :status))    ; => 200
   (print (rontolisp:await (rontolisp:read-all (getf res :body))))
-                                ; => "<html>...</html>"
-  (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
+                                ; => "{...}"
+  (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
 ```
 
 ## リクエストのオプション
@@ -59,16 +59,18 @@
 (文字列、デフォルト `"GET"`)、`:headers` (`(name . value)` の文字列ペアの
 alist)、`:body` (文字列) を指定できます:
 
-```console
-;; GET with request headers (an alist of (name . value) string pairs)
-(rontolisp:fetch "http://example.com/api"
-                 (list :headers (list (cons "Accept" "application/json"))))
+```lisp
+;; GETリクエスト（ヘッダーは (name . value) 文字列ペアの alist）
+(rontolisp:await
+  (rontolisp:fetch "https://httpbin.ik.am/get"
+                   '(:headers (("Accept" . "application/json")))))
 
-;; POST with a request body
-(rontolisp:fetch "http://example.com/api"
-                 (list :method "POST"
-                       :headers (list (cons "Content-Type" "application/json"))
-                       :body "{\"name\":\"rontolisp\"}"))
+;; POSTリクエスト（ボディ付き）
+(rontolisp:await
+  (rontolisp:fetch "https://httpbin.ik.am/post"
+                   '(:method "POST"
+                     :headers (("Content-Type" . "application/json"))
+                     :body "{\"name\":\"rontolisp\"}")))
 ```
 
 サポートされるメソッドは `GET`、`HEAD`、`POST`、`PUT`、`DELETE`、`OPTIONS`、
@@ -85,10 +87,11 @@ alist)、`:body` (文字列) を指定できます:
 オーバーラップします — 全部開始してからそれぞれを (どの順番でも) await
 します:
 
-```console
-(let ((p1 (rontolisp:fetch "http://example.com/a"))
-      (p2 (rontolisp:fetch "http://example.com/b")))  ; both requests running
-  (list (rontolisp:await p1) (rontolisp:await p2)))
+```lisp
+(let ((p1 (rontolisp:fetch "https://httpbin.ik.am/status/200"))
+      (p2 (rontolisp:fetch "https://httpbin.ik.am/status/201")))  ; 両方のリクエストが並行して走る
+  (list (getf (rontolisp:await p1) :status)
+        (getf (rontolisp:await p2) :status)))                     ; => (200 201)
 ```
 
 レスポンスを変換するには — あるいは任意の非同期ヘルパーを組み立てるには —
@@ -96,7 +99,7 @@ alist)、`:body` (文字列) を指定できます:
 を定義します: 本体は最初の未確定の `await` まで即時に実行され、残りに
 対する future が呼び出し元に返ります:
 
-```console
+```lisp
 (rontolisp:async-defun fetch-status (url)
   (getf (rontolisp:await (rontolisp:fetch url)) :status))
 
@@ -160,23 +163,23 @@ future と通常の値を見分けられます:
 ボディを `json-parse` でパースします。以下を `fetch-post.lisp` として保存
 してください:
 
-```console
+```lisp
 (let ((req (make-hash-table :test 'equal)))
   (setf (gethash "name" req) "rontolisp")
   (setf (gethash "stars" req) 1)
   (let* ((payload (rontolisp:json-stringify req))
          (res (rontolisp:await
                (rontolisp:fetch "https://httpbin.ik.am/post"
-                                (list :method "POST"
-                                      :headers (list (cons "Content-Type" "application/json"))
-                                      :body payload))))
+                                `(:method "POST"
+                                  :headers (("Content-Type" . "application/json"))
+                                  :body ,payload))))
          (body (rontolisp:await (rontolisp:read-all (getf res :body))))
          (json (rontolisp:json-parse body)))
     (print (getf res :status))
-    (write-line (gethash "data" json))))
+    (write-line (or (gethash "data" json) body))))
 ```
 
-```
+```console
 200
 {"name":"rontolisp","stars":1}
 ```

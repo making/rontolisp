@@ -19,8 +19,8 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
 並行させることができます。
 
 ```console
-(let ((p1 (rontolisp:fetch "http://example.com/a"))
-      (p2 (rontolisp:fetch "http://example.com/b")))  ; both requests running
+(let ((p1 (rontolisp:fetch "https://httpbin.ik.am/status/200"))
+      (p2 (rontolisp:fetch "https://httpbin.ik.am/status/201")))  ; both requests running
   (list (rontolisp:await p1) (rontolisp:await p2)))
 ```
 
@@ -39,14 +39,14 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
 
 ```console
 ;; GET with request headers (an alist of (name . value) string pairs)
-(rontolisp:fetch "http://example.com/api"
-                 (list :headers (list (cons "Accept" "application/json"))))
+(rontolisp:fetch "https://httpbin.ik.am/get"
+                 '(:headers (("Accept" . "application/json"))))
 
 ;; POST with a request body
-(rontolisp:fetch "http://example.com/api"
-                 (list :method "POST"
-                       :headers (list (cons "Content-Type" "application/json"))
-                       :body "{\"name\":\"rontolisp\"}"))
+(rontolisp:fetch "https://httpbin.ik.am/post"
+                 '(:method "POST"
+                   :headers (("Content-Type" . "application/json"))
+                   :body "{\"name\":\"rontolisp\"}"))
 ```
 
 ## 結果
@@ -60,11 +60,11 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
 [`rontolisp:stream-read`](rontolisp-stream-read.md) を使います):
 
 ```console
-(let ((res (rontolisp:await (rontolisp:fetch "http://example.com/"))))
+(let ((res (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get"))))
   (print (getf res :status))    ; => 200
   (print (rontolisp:await (rontolisp:read-all (getf res :body))))
-                                ; => "<html>...</html>"
-  (print (getf res :headers)))  ; => (("content-type" . "text/html") ...)
+                                ; => "{...}"
+  (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
 ```
 
 > **バックエンドの注意。** ストリーム値の `:body` はインタプリタ/JVM の契約です。

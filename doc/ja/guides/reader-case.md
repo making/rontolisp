@@ -43,7 +43,7 @@ assoc-utils の `with-keys` のようなマクロが動きます:
 ```console
 $ cat keys.lisp
 (ql:quickload :assoc-utils)
-(print (assoc-utils:with-keys ("name") (list (cons "name" "eitaro"))
+(print (assoc-utils:with-keys ("name") '(("name" . "eitaro"))
          name))
 $ rontolisp keys.lisp
 "eitaro"

@@ -13,7 +13,7 @@ model as
 ```console
 (defun handle (request)
   (list :status 200
-        :headers (list (cons "content-type" "text/plain"))
+        :headers '(("content-type" . "text/plain"))
         :body (format nil "Hello from rontolisp!~%~a ~a~%"
                       (getf request :method) (getf request :path))))
 

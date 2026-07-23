@@ -12,14 +12,14 @@ turning an alist (like a
 headers) into a JSON object.
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:alist-hash-table (list (cons "n" 1))))   ; => "{"n":1}"
+(rontolisp:json-stringify (rontolisp:alist-hash-table '(("n" . 1))))   ; => "{"n":1}"
 ```
 
 The default hash-table test is `eql`, like `alexandria:alist-hash-table`; pass
 `:test 'equal` for string keys that should dedup by content:
 
 ```lisp
-(hash-table-count (rontolisp:alist-hash-table (list (cons "a" 1) (cons "a" 2)) :test 'equal))   ; => 1
+(hash-table-count (rontolisp:alist-hash-table '(("a" . 1) ("a" . 2)) :test 'equal))   ; => 1
 ```
 
 The inverse is [`rontolisp:hash-table-alist`](rontolisp-hash-table-alist.md).

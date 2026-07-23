@@ -7,7 +7,7 @@
 `alexandria:hash-table-alist` の軽量なサブセットです。
 
 ```lisp
-(rontolisp:hash-table-alist (rontolisp:alist-hash-table (list (cons "k" 7))))   ; => (("k" . 7))
+(rontolisp:hash-table-alist (rontolisp:alist-hash-table '(("k" . 7))))   ; => (("k" . 7))
 ```
 
 ペアの順序はテーブルの反復順序に従う(`maphash` と同様にバックエンド依存)
