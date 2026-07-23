@@ -31,6 +31,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md) -- `--optimize` tree-shaking (WASM + JVM)
 - [library-defun-pruning.md](library-defun-pruning.md) -- default-on AST pruning of spliced library defuns (`LibraryDefunPruner`, `--no-prune` escape) + `am.ik.jvm` constant-pool deduplication
 - [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- `--no-gc` non-GC scalar WASM backend
+- [wasm-function-body-size.md](wasm-function-body-size.md) -- no single emitted WASM function body may grow without bound: wasmtime's cold compile memory is superlinear in ONE body's size (850 KB -> 25.8 GB), the default compilation cache hides it, and `ulimit -v` cannot bound it
 - [wasm-gc-strings.md](wasm-gc-strings.md) -- WASM GC-backend strings as `$str_bytes` arrays (HEAP_PTR as a stack pointer, `_str_fresh` counter ids, `_str_to_mem`/`_write_str_gc` bridges) -- retires the linear string heap leak
 - [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins
 - [fetch-http.md](fetch-http.md) -- `rontolisp:fetch` outgoing HTTP

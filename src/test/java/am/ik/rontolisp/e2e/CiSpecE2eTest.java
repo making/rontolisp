@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Stream;
 
+import am.ik.rontolisp.codegen.wasm.WasmModuleInspector;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicContainer;
 import org.junit.jupiter.api.DynamicNode;
@@ -99,18 +100,66 @@ class CiSpecE2eTest {
 
 		Spec spec = loadSpec();
 		Path program = writeProgram(spec);
+		String wasmGuardFailure = wasmCompileMemoryGuard(bin, program);
 
 		List<DynamicNode> backends = new ArrayList<>();
 		for (Backend backend : Backend.values()) {
-			backends.add(backendNode(backend, bin, program, spec));
+			backends.add(backendNode(backend, bin, program, spec, wasmGuardFailure));
 		}
 		return backends.stream();
 	}
 
-	private static DynamicContainer backendNode(Backend backend, Path bin, Path program, Spec spec) {
-		if ((backend == Backend.WASM || backend == Backend.WASM_COMPONENT) && !onPath("wasmtime")) {
-			return dynamicContainer(backend.name(),
-					Stream.of(dynamicTest("(skipped)", () -> abort("wasmtime not on PATH"))));
+	/**
+	 * Largest emitted WASM function body this test is willing to hand to wasmtime.
+	 * <p>
+	 * A wasmtime cold compile needs memory superlinear in the size of ONE function body
+	 * -- 850 KB of body peaks at 25.8 GB, 630 KB at 15.1 GB -- so a monolithic module
+	 * does not fail here, it gets the whole CI runner OOM-killed ("The runner has
+	 * received a shutdown signal", no stderr, no timeout, every other backend in the run
+	 * cancelled as a fail-fast peer). The bound and its measurements are pinned in
+	 * {@code WasmToplevelChunkingTest}.
+	 */
+	private static final int MAX_WASM_FUNCTION_BODY_BYTES = 256 * 1024;
+
+	/**
+	 * Compiles the corpus to a core module and reports why the WASM backends must not be
+	 * run, or {@code null} when they are safe to run. Returning a message rather than
+	 * launching wasmtime is the whole point: it turns a machine-killing OOM into an
+	 * ordinary test failure that names its own cause.
+	 */
+	private static @Nullable String wasmCompileMemoryGuard(Path bin, Path program) {
+		byte[] module;
+		try {
+			execLabeled("compile-wasm-guard", List.of(bin.toString(), program.toString(), "-o", "guard.wasm"));
+			module = Files.readAllBytes(workDir.resolve("guard.wasm"));
+		}
+		catch (Exception ex) {
+			// Not this guard's job to report a compile failure; the backend legs run
+			// their own compile and will surface it with their own label.
+			return null;
+		}
+		int largest = WasmModuleInspector.largestFunctionBodySize(module);
+		if (largest <= MAX_WASM_FUNCTION_BODY_BYTES) {
+			return null;
+		}
+		return ("refusing to run wasmtime: largest emitted function body is %d bytes, over the %d byte bound. "
+				+ "A wasmtime cold compile needs memory superlinear in that number (850 KB of body -> 25.8 GB), "
+				+ "so running this module would OOM-kill the CI runner instead of failing. "
+				+ "See WasmToplevelChunkingTest.")
+			.formatted(largest, MAX_WASM_FUNCTION_BODY_BYTES);
+	}
+
+	private static DynamicContainer backendNode(Backend backend, Path bin, Path program, Spec spec,
+			@Nullable String wasmGuardFailure) {
+		if (backend == Backend.WASM || backend == Backend.WASM_COMPONENT) {
+			if (!onPath("wasmtime")) {
+				return dynamicContainer(backend.name(),
+						Stream.of(dynamicTest("(skipped)", () -> abort("wasmtime not on PATH"))));
+			}
+			if (wasmGuardFailure != null) {
+				return dynamicContainer(backend.name(),
+						Stream.of(dynamicTest("(module too large to run)", () -> fail(wasmGuardFailure))));
+			}
 		}
 
 		List<String> actual;
