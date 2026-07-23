@@ -796,7 +796,7 @@ final class WasmAsyncEmit {
 	 */
 	static WasmLispCompiler.Ctx freshCtx(WasmLispCompiler.Ctx proto, WasmWriter writer,
 			ByteArrayOutputStream bodyStream) {
-		return WasmLispCompiler.Ctx.builder()
+		WasmLispCompiler.Ctx ctx = WasmLispCompiler.Ctx.builder()
 			.writer(writer)
 			.bodyStream(bodyStream)
 			.stringTable(proto.stringTable)
@@ -825,6 +825,11 @@ final class WasmAsyncEmit {
 			.currentTaskGlobalIndex(proto.currentTaskGlobalIndex)
 			.callbackExports(proto.callbackExports)
 			.build();
+		// A top level split across several contexts is still ONE top level: defvar's
+		// compile-time "already initialized" set has to be the same object, or a name
+		// defvar'd in two chunks is initialized twice.
+		ctx.definedGlobals = proto.definedGlobals;
+		return ctx;
 	}
 
 }

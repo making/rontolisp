@@ -1569,10 +1569,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			WasmAsyncEmit.emitStartEntry(ctx, topResume);
 		}
 		else {
-			for (LispVal expr : topLevelExprs) {
-				WasmExprCompiler.compileExpr(expr, ctx);
-				startWriter.write(Instruction.DROP);
-			}
+			// Not a plain loop over the forms: a program's top level is unbounded, and
+			// wasmtime's cold compile needs memory superlinear in the size of ONE
+			// function body, so concatenating every form into _start makes a large
+			// program un-runnable rather than slow. See .kb/wasm-function-body-size.md.
+			WasmToplevelEmit.emit(topLevelExprs, ctx);
 		}
 		if (this.component) {
 			// _start returns i32 (0 = ok) so it can be lifted as wasi:cli/run `run`
@@ -3750,8 +3751,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * Top-level globals already initialized by a defvar/defparameter in this
 		 * compilation, for defvar's compile-time idempotence. Only the top-level context
 		 * mutates it.
+		 * <p>
+		 * Shared with every context the top level is outlined into
+		 * ({@link WasmToplevelEmit} chunks, {@link WasmAsyncEmit} resume chunks) -- see
+		 * {@code WasmAsyncEmit.freshCtx}. Two chunks that each contain a {@code defvar}
+		 * of the same name must not both emit an initializer.
 		 */
-		final Set<String> definedGlobals = new HashSet<>();
+		Set<String> definedGlobals = new HashSet<>();
 
 		/**
 		 * The number of currently-open WASM control structures (block/loop/if) that

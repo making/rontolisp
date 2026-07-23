@@ -20,7 +20,12 @@ Linux amd64:
 | 261 KB | 2.7 GB | 4.5 s |
 | 437 KB | 7.4 GB | 12 s |
 | 630 KB (`6645c6d`) | 15.1 GB | 22 s |
-| 850 KB (`develop`, 2026-07) | 25.8 GB | 36 s |
+| 850 KB (before chunking) | 25.8 GB | 36 s |
+| **75 KB (after chunking)** | **3.7 GB** | **1.8 s** |
+
+The last row is the same corpus after `WasmToplevelEmit` split the top level: the
+module is byte-for-byte equivalent in behaviour (identical 1405 lines of output on
+all four backends) and costs 7x less memory and 20x less time to compile.
 
 Pinned by `WasmToplevelChunkingTest` (bound: 256 KiB) and guarded before the fact by
 `CiSpecE2eTest.wasmCompileMemoryGuard`, which refuses to launch wasmtime on a module
@@ -54,40 +59,59 @@ module also kills a trivial one. A cgroup cap (`systemd-run -p MemoryMax=`) does
 but is not portable to every CI runner. Checking the emitted body size before running
 is the portable check, and it names the actual cause.
 
-## Where bodies get large
+## How the top level is kept bounded
 
-`WasmLispCompiler.compile()` Pass 2b builds the `_start` body by concatenating every
-top-level expression into one function. A long program therefore has exactly one
-pathological function, and it grows linearly with the source.
+A program's top level is the one body that grows with the source, so it is the one
+that must not be a single function. `WasmLispCompiler.compile()` Pass 2b hands the
+top-level forms to **`WasmToplevelEmit.emit`**, which compiles them into chunk
+functions -- closing a chunk once its body passes `CHUNK_TARGET_BYTES` (48 KiB) -- and
+emits `ref.null eq; call <chunk>; drop` per chunk into `_start`. Each chunk is an
+arity-0 callable registered as a `LambdaInfo` with a precompiled body, called
+directly, never through the dispatch.
 
-The **async top-level path already chunks** for this precise reason:
-`WasmAsyncEmit.compileTopLevelChunk` outlines a run of top-level statements into a
-zero-arg function registered as a `LambdaInfo`, and its doc comment records that the
-un-chunked form "grows past what Cranelift compiles in sane time (superlinear; the
-full corpus never finished)". The synchronous path is the one that must not regress.
+The **async top level already chunked** for the same reason:
+`WasmAsyncEmit.compileTopLevelChunk` outlines each await-free run, and its doc comment
+records that the un-chunked form "grows past what Cranelift compiles in sane time
+(superlinear; the full corpus never finished)". The synchronous path is the one that
+was left behind; both are now bounded.
 
-Constraints any chunker has to respect (all verified against the current backend):
+Why the pieces are where they are:
 
 - `let`/`let*` locals do not leak across top-level forms -- `WasmLetCompiler` saves and
-  restores `ctx.locals`, so a cut between forms is safe.
-- `defvar`/`setq`/`setf` of a symbol **directly** at top level are promoted to module
-  globals by `GlobalVarCollector`, visible from any function. But `GlobalVarCollector`
-  only inspects each top-level form's head symbol, so a *nested* `(when x (setq new 1))`
-  still allocates a `_start` local -- a cut between that form and a later reader of
-  `new` breaks it.
-- `ctx.definedGlobals` is per-`Ctx` and drives `defvar`'s compile-time idempotence; it
-  must be hoisted to shared state before chunks get their own `Ctx`, or a name defined
-  in two chunks is initialised twice.
+  restores `ctx.locals` -- so a cut between forms is safe as far as `let` is concerned.
+- A `setq`/`defvar` whose name has no module global falls through to `allocLocal`, i.e.
+  a local of the enclosing top-level function, which a later top-level form then reads
+  back. An outlined chunk cannot see another chunk's locals, so **`GlobalVarCollector`
+  collects assignments nested at any depth inside a top-level form**, not only the ones
+  in head position: `(print (progn (setq a 10) a))` gets a global like a head-position
+  `setq` would. Every backend already let a later top-level form read such a name, so
+  this aligns the implementation with the semantics all four already had. The
+  collection is deliberately blind to lexical scope -- a name that is only ever a `let`
+  variable gets a store it never uses, because every site resolves a lexical slot
+  first. **Without this, one nested `setq` anywhere in the program disables chunking
+  entirely** (`WasmToplevelEmit` stops cutting the moment a chunk allocates a named
+  local, which is the correctness backstop).
+- `Ctx.definedGlobals` drives `defvar`'s compile-time idempotence and is shared by
+  `WasmAsyncEmit.freshCtx` with every outlined context; a per-`Ctx` copy would let two
+  chunks each initialise the same name.
 - Block/branch targets, `tagbody`/`go` scopes, `handler-case`/`unwind-protect` regions
-  and special-binding scopes are all balanced within a single top-level form.
+  and special-binding scopes are all balanced within a single top-level form, so a cut
+  between forms never splits one.
 - Every top-level form's value is dropped and `_start` returns nothing (or a literal
   `i32.const 0` under `--component`), so no value has to flow between chunks.
-- Chunks must be registered during Pass 2b: Pass 2c iterates `lambdaDecls` by index and
+- Chunks are registered during Pass 2b: Pass 2c iterates `lambdaDecls` by index and
   picks up entries appended while it runs, but the function section (built later) will
   not.
+- A chunk context leaves `boxedVars` at its default, which is what `_start` itself
+  uses, so a chunk's body is byte-identical to the run it was cut from.
 
 ## Re-evaluation trigger
 
 Raise the 256 KiB bound only with fresh cold-cache measurements on the smallest CI
 runner in use, and update the table above in the same change. The bound is a statement
 about how much memory a user needs to run their own program, not a test detail.
+
+Chunking bounds the TOP LEVEL, which is the body that grows with program length. One
+enormous user `defun` is still one function and still pays the superlinear cost --
+there is no way to outline it without changing what the user wrote. If that ever
+becomes a real limit, the measurements above are what to reason from.
