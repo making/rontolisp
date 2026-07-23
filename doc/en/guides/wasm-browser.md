@@ -12,16 +12,41 @@ Two paths deliver a rontolisp WASM build to a browser:
 
 A component is not a wasmtime-only artifact. `jco transpile` turns one into
 JavaScript, and the result runs in a browser — the exports become plain
-JavaScript functions. jco camel-cases the component-model export name, so
-the WIT export `count-vowels` arrives as `countVowels`. (Verified with jco
-1.25.2 on Chrome 149.)
+JavaScript functions.
+
+The example used throughout this section is `count-vowels`: one exported
+function taking a string and returning how many vowels it contains.
+
+```lisp
+;; count-vowels.lisp
+(defun vowelp (c)
+  (or (char= c #\a) (char= c #\e) (char= c #\i) (char= c #\o) (char= c #\u)
+      (char= c #\A) (char= c #\E) (char= c #\I) (char= c #\O) (char= c #\U)))
+
+(defun count-vowels (s)
+  (let ((n 0))
+    (dotimes (i (length s))
+      (when (vowelp (char s i))
+        (setq n (+ n 1))))
+    n))
+
+(rontolisp:wasm-export 'count-vowels :params '(:string) :returns :int)
+
+(count-vowels "Hello, World!")   ; => 3
+```
+
+It is pure compute — no cons, no I/O — so it stays inside the
+[`--no-gc` subset](wasm-nogc.md#eligible-subset) and compiles to a component
+with zero imports. jco camel-cases the component-model export name, so
+`count-vowels` arrives as `countVowels`. (Verified with jco 1.25.2 on Chrome
+149.) The same program driven from a Node host and from a Java host, with the
+export declared in WIT instead of `wasm-export`, is
+[`examples/count-vowels`](https://github.com/making/rontolisp/tree/develop/examples/count-vowels).
 
 **A `--no-gc --component` needs nothing at all.** Its world has no imports,
 so jco emits one self-contained ES module — the core WASM base64-inlined
-inside it, about 90 KB for the
-[`count-vowels`](wasm-nogc.md#compact-component-output---no-gc---component)
-example — with no `import` statements of its own. The page supplies no
-shim, no import map and no polyfill:
+inside it, about 90 KB for `count-vowels` — with no `import` statements of
+its own. The page supplies no shim, no import map and no polyfill:
 
 ```bash
 rontolisp count-vowels.lisp --no-gc --component --optimize -o cv.wasm

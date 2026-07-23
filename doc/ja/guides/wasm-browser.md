@@ -7,9 +7,31 @@ rontolisp の WASM ビルドをブラウザへ届ける経路は 2 つありま�
 
 ## ブラウザでコンポーネントを実行する(jco)
 
-コンポーネントは wasmtime 専用の成果物ではありません。`jco transpile` はコンポーネントを JavaScript に変換し、その結果はブラウザで動作します — エクスポートはただの JavaScript 関数になります。jco はコンポーネントモデルのエクスポート名を camelCase 化するため、WIT の `count-vowels` は `countVowels` として現れます。(jco 1.25.2 + Chrome 149 で確認。)
+コンポーネントは wasmtime 専用の成果物ではありません。`jco transpile` はコンポーネントを JavaScript に変換し、その結果はブラウザで動作します — エクスポートはただの JavaScript 関数になります。
 
-**`--no-gc --component` は何も必要としません。** その world はインポートを持たないため、jco は自己完結した単一の ES モジュール(コア WASM が base64 で内部に埋め込まれ、[`count-vowels`](wasm-nogc.md#compact-component-output---no-gc---component) の例で約 90 KB)を、それ自身の `import` 文なしで出力します。ページ側が供給するものは何もありません — シムも、import map も、ポリフィルも不要です:
+この節を通して使う例は `count-vowels` です。文字列を受け取り、その中の母音の個数を返す関数を 1 つエクスポートするだけのプログラムです。
+
+```lisp
+;; count-vowels.lisp
+(defun vowelp (c)
+  (or (char= c #\a) (char= c #\e) (char= c #\i) (char= c #\o) (char= c #\u)
+      (char= c #\A) (char= c #\E) (char= c #\I) (char= c #\O) (char= c #\U)))
+
+(defun count-vowels (s)
+  (let ((n 0))
+    (dotimes (i (length s))
+      (when (vowelp (char s i))
+        (setq n (+ n 1))))
+    n))
+
+(rontolisp:wasm-export 'count-vowels :params '(:string) :returns :int)
+
+(count-vowels "Hello, World!")   ; => 3
+```
+
+純粋な計算だけ(cons も I/O もなし)なので [`--no-gc` のサブセット](wasm-nogc.md#eligible-subset)に収まり、インポートを 1 つも持たないコンポーネントにコンパイルされます。jco はコンポーネントモデルのエクスポート名を camelCase 化するため、`count-vowels` は `countVowels` として現れます。(jco 1.25.2 + Chrome 149 で確認。)同じプログラムを Node ホストと Java ホストから駆動し、エクスポートを `wasm-export` ではなく WIT で宣言したものが [`examples/count-vowels`](https://github.com/making/rontolisp/tree/develop/examples/count-vowels) です。
+
+**`--no-gc --component` は何も必要としません。** その world はインポートを持たないため、jco は自己完結した単一の ES モジュール(コア WASM が base64 で内部に埋め込まれ、`count-vowels` の例で約 90 KB)を、それ自身の `import` 文なしで出力します。ページ側が供給するものは何もありません — シムも、import map も、ポリフィルも不要です:
 
 ```bash
 rontolisp count-vowels.lisp --no-gc --component --optimize -o cv.wasm

@@ -1,4 +1,4 @@
-# Non-GC Output (`--no-gc`)
+# WASM Non-GC Output (`--no-gc`)
 
 Every GC-value-model output — even an optimized reactor — needs a **wasm-GC
 capable** runtime, because every value is a GC heap type (`i31ref`, the
