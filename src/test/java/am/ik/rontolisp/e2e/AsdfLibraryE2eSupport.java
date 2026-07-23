@@ -19,6 +19,8 @@ import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.WasmtimeSupport;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.testcontainers.containers.Container.ExecResult;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.images.builder.Transferable;
@@ -57,6 +59,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * skipped (via {@link org.junit.jupiter.api.Assumptions}) while the interpreter and JVM
  * tests still run. A single {@code wasmtime} container is shared across every subclass.
  */
+@Execution(ExecutionMode.CONCURRENT)
 abstract class AsdfLibraryE2eSupport {
 
 	/** Absolute path to the vendored system directory (holds the {@code .asd}). */
