@@ -2354,6 +2354,46 @@ public final class LispNames {
 	public static final String WAIT_FOR = "WAIT-FOR";
 
 	/**
+	 * The {@code then} future-as-value combinator provided by the {@code rontolisp}
+	 * package: {@code (rontolisp:then future fn)} returns a fresh future that, on the
+	 * input's successful settlement, applies {@code fn} to its value; on error it
+	 * propagates the condition through unchanged (the JavaScript {@code .then} shape).
+	 * Implemented as a Lisp-prelude {@code defun} over {@code async-lambda} +
+	 * {@code await}, so every backend supports it identically.
+	 */
+	public static final String THEN = "THEN";
+
+	/**
+	 * The {@code then*} variadic future combinator provided by the {@code rontolisp}
+	 * package: {@code (rontolisp:then* future fn1 fn2 ...)} chains each function through
+	 * the previous stage's (flattened) settled value. With no callbacks the operator
+	 * returns the input future unchanged. A stage that returns a future is auto-flattened
+	 * on the next stage's read.
+	 */
+	public static final String THEN_STAR = "THEN*";
+
+	/**
+	 * The {@code catch} future-as-value combinator provided by the {@code rontolisp}
+	 * package: {@code (rontolisp:catch future handler)} returns a fresh future that, on
+	 * the input's error, invokes {@code handler} on the condition and settles to its
+	 * return value; on success it passes the value through. Deliberately named
+	 * {@code catch}: it is the JavaScript {@code .catch} shape, not the CL
+	 * {@code catch}/{@code throw} tag-based non-local exit. Users writing in the
+	 * {@code cl-user} package (or with {@code cl:} qualified) still get the CL sense; a
+	 * program that qualifies with {@code rontolisp:}/{@code rl:} gets this operator.
+	 */
+	public static final String CATCH = "CATCH";
+
+	/**
+	 * The {@code finally} future-as-value combinator provided by the {@code rontolisp}
+	 * package: {@code (rontolisp:finally future thunk)} returns a fresh future carrying
+	 * the input's original settlement (value or condition) and runs the thunk exactly
+	 * once on either outcome. The thunk's return value is discarded; a condition raised
+	 * inside the thunk replaces the pending outcome (matches {@code unwind-protect}).
+	 */
+	public static final String FINALLY = "FINALLY";
+
+	/**
 	 * The internal {@code %async-run} primitive backing the
 	 * {@code rontolisp:async-defun}/{@code async-lambda} lowering on the interpreter, JVM
 	 * and Preview-1 WASM backends: takes a zero-argument function value, runs it under
@@ -3212,6 +3252,26 @@ public final class LispNames {
 	 * in call position after {@code PackageResolver} resolution.
 	 */
 	public static final String AWAIT_QUALIFIED = RONTOLISP_PKG + ":" + AWAIT;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:then}.
+	 */
+	public static final String THEN_QUALIFIED = RONTOLISP_PKG + ":" + THEN;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:then*}.
+	 */
+	public static final String THEN_STAR_QUALIFIED = RONTOLISP_PKG + ":" + THEN_STAR;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:catch}.
+	 */
+	public static final String CATCH_QUALIFIED = RONTOLISP_PKG + ":" + CATCH;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:finally}.
+	 */
+	public static final String FINALLY_QUALIFIED = RONTOLISP_PKG + ":" + FINALLY;
 
 	/**
 	 * The canonical internal-qualified spelling of {@code rontolisp::%async-run}, the

@@ -6069,7 +6069,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(AWAIT FETCH HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("NIL");
 	}
 
@@ -6100,10 +6100,10 @@ class WasmLispCompilerIntegrationTest {
 	void promiseOpsWorkInPreview1Mode() throws Exception {
 		// await is the one generic asynchronous operation that runs in Preview 1 too
 		// (only fetch itself is component-only): a non-future passes through unchanged.
-		// The promise-era then/promisep were deleted in the async/await redesign.
+		// The promise-era promisep was deleted in the async/await redesign; the new
+		// future-as-value combinators (rontolisp:then/then*/catch/finally, added on
+		// this shape) are exercised through their own p1 / component tests below.
 		assertThat(compileAndRun("(print (rontolisp:await 42)) (print (rontolisp:await nil))")).isEqualTo("42\nNIL");
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:then 1 (lambda (x) x))"))
-			.hasMessageContaining("not external in the RONTOLISP package");
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:promisep 42)"))
 			.hasMessageContaining("not external in the RONTOLISP package");
 	}
@@ -6374,6 +6374,120 @@ class WasmLispCompilerIntegrationTest {
 				(print (handler-case (rontolisp:await (rontolisp:wait-for -5)) (error (e) 'caught)))
 				(print (handler-case (rontolisp:await (rontolisp:wait-for "x")) (error (e) 'caught)))
 				""")).isEqualTo("CAUGHT\nCAUGHT");
+	}
+
+	// ---------- Future-as-value combinators: then / then* / catch / finally ----------
+	//
+	// The combinators are LispPreludeLibrary defuns that expand to async-lambda + await
+	// + handler-case + unwind-protect, so each backend must run its own splice AND flip
+	// EH mode (the WASM compiler auto-detects the head symbols and produces the tag
+	// section, so wasmtime needs `-W exceptions=y` on both variants).
+	private static String compileAndRunCombinatorsP1(String lispCode) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y",
+				"/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	private static String compileAndRunCombinatorsComponent(String lispCode) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
+		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+				"/tmp/test.component.wasm");
+		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
+			.isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void p1ThenChainsOnFutureSettledValue() throws Exception {
+		assertThat(compileAndRunCombinatorsP1("""
+				(rontolisp:async-defun produce () 21)
+				(print (rontolisp:await (rontolisp:then (produce) (lambda (v) (* v 2)))))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void componentThenChainsOnFutureSettledValue() throws Exception {
+		assertThat(compileAndRunCombinatorsComponent("""
+				(rontolisp:async-defun produce () 21)
+				(print (rontolisp:await (rontolisp:then (produce) (lambda (v) (* v 2)))))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void p1ThenStarVariadicChainsAcrossStages() throws Exception {
+		assertThat(compileAndRunCombinatorsP1("""
+				(rontolisp:async-defun produce () 40)
+				(print (rontolisp:await (rontolisp:then* (produce) #'1+ #'1+)))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void componentThenStarVariadicChainsAcrossStages() throws Exception {
+		assertThat(compileAndRunCombinatorsComponent("""
+				(rontolisp:async-defun produce () 40)
+				(print (rontolisp:await (rontolisp:then* (produce) #'1+ #'1+)))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void p1CatchPassesUpstreamValueThroughOnSuccess() throws Exception {
+		// P1 is degenerate-synchronous: an errored async body signals AT THE CALL, not
+		// at await (per .kb/async-await.md), so an error-path test cannot pass here --
+		// the error escapes past (catch ...) before catch's own body runs. The
+		// success-path is byte-identical; the full error-channel semantics are pinned
+		// on --component below.
+		assertThat(compileAndRunCombinatorsP1("""
+				(rontolisp:async-defun ok () 99)
+				(print (rontolisp:await
+				         (rontolisp:catch (ok) (lambda (c) (declare (ignore c)) :should-not-see))))
+				""")).isEqualTo("99");
+	}
+
+	@Test
+	void componentCatchRunsOnlyWhenUpstreamSignals() throws Exception {
+		assertThat(compileAndRunCombinatorsComponent("""
+				(rontolisp:async-defun boom () (error "nope"))
+				(rontolisp:async-defun ok () 99)
+				(print (rontolisp:await
+				         (rontolisp:catch (boom) (lambda (c) (declare (ignore c)) :fallback))))
+				(print (rontolisp:await
+				         (rontolisp:catch (ok) (lambda (c) (declare (ignore c)) :should-not-see))))
+				""")).isEqualTo(":FALLBACK\n99");
+	}
+
+	@Test
+	void p1FinallyRunsOnSuccessPathAndPreservesValue() throws Exception {
+		// P1 divergence again: the error-arm of finally would require the futured
+		// error-at-await contract; the success arm is byte-identical.
+		assertThat(compileAndRunCombinatorsP1("""
+				(defvar *finlog-p1* nil)
+				(rontolisp:async-defun ok () 5)
+				(print (rontolisp:await
+				         (rontolisp:finally (ok) (lambda () (push :ok-cleanup *finlog-p1*)))))
+				(print (reverse *finlog-p1*))
+				""")).isEqualTo("5\n(:OK-CLEANUP)");
+	}
+
+	@Test
+	void componentFinallyRunsOnBothPathsAndPreservesOutcome() throws Exception {
+		assertThat(compileAndRunCombinatorsComponent("""
+				(defvar *finlog* nil)
+				(rontolisp:async-defun ok () 5)
+				(rontolisp:async-defun boom () (error "detonate"))
+				(print (rontolisp:await
+				         (rontolisp:finally (ok) (lambda () (push :ok-cleanup *finlog*)))))
+				(print (handler-case
+				         (rontolisp:await
+				           (rontolisp:finally (boom) (lambda () (push :err-cleanup *finlog*))))
+				         (error (e) (simple-condition-format-control e))))
+				(print (reverse *finlog*))
+				""")).isEqualTo("5\n\"detonate\"\n(:OK-CLEANUP :ERR-CLEANUP)");
 	}
 
 	@Test

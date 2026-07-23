@@ -297,6 +297,10 @@ package system. Each name below links to its own page.
 | `rontolisp:stream-close` | `(rontolisp:stream-close s)` | close the write end; buffered chunks stay readable, then reads observe end of stream |
 | `rontolisp:read-all` | `(rontolisp:read-all s)` | a future settling to the concatenation of all remaining string chunks |
 | `rontolisp:wait-for` | `(rontolisp:wait-for 100)` | a future settling to `nil` after the given milliseconds; the async counterpart of `cl:sleep` |
+| `rontolisp:then` | `(rontolisp:then f (lambda (v) (* 2 v)))` | attach a transform to a future as a value; returns a fresh future on the success channel (JavaScript `.then`) |
+| `rontolisp:then*` | `(rontolisp:then* f #'1+ #'1+)` | variadic chain sugar for `rontolisp:then`; each function receives the previous stage's flattened value |
+| `rontolisp:catch` | `(rontolisp:catch f (lambda (c) :fallback))` | attach an error fallback to a future as a value (JavaScript `.catch`); distinct from `cl:catch`/`throw` |
+| `rontolisp:finally` | `(rontolisp:finally f (lambda () (cleanup)))` | run a cleanup thunk on both success and error channels; the original outcome carries through |
 | `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | serve HTTP requests with a handler function (a blocking server; a `wasi:http` component under `--component`) |
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | parse a JSON string (jzon-compatible): objects become hash tables with string keys, arrays vectors |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (vector 1 2))` | serialize a value to a JSON string (hash tables and CLOS instances become objects, lists and vectors arrays) |

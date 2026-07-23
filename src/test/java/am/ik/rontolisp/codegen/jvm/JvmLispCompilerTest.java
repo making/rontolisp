@@ -4705,7 +4705,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(AWAIT FETCH HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 		assertThat(compileAndRun("(print (rontolisp:list-macros :rontolisp))")).isEqualTo("NIL");
 	}
 
@@ -5185,11 +5185,11 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void thenAndPromisepAreGoneOnTheJvm() {
-		// The promise-era surface was deleted in the async/await redesign: the names
-		// are no longer exported from the rontolisp package.
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:then 1 (lambda (x) x))"))
-			.hasMessageContaining("not external in the RONTOLISP package");
+	void promisepIsGoneOnTheJvm() {
+		// The promise-era promisep was deleted in the async/await redesign (futurep is
+		// the one predicate). The name rontolisp:then was later restored as a
+		// future-as-value combinator on top of the async surface -- exercised by
+		// JvmAsyncCompilerTest -- so only promisep is expected to fail resolution.
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:promisep 42)"))
 			.hasMessageContaining("not external in the RONTOLISP package");
 	}

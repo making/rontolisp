@@ -17,10 +17,13 @@ Then `rontolisp:await` (a SPECIAL FORM), the predicates `rontolisp:futurep` /
 `stream-read` / `stream-write` / `stream-close` / `read-all`, and the timer
 `rontolisp:wait-for` (milliseconds -> a future settling to nil; deliberately
 NOT named sleep -- `cl:sleep` exists with blocking-seconds semantics). The
-promise-era vocabulary (`rontolisp:then` / `promisep`, and the interpreter's
-`LispPromise`) is DELETED -- the names are no longer exported from the
-rontolisp package; a future is the one asynchronous value and composition is
-async-defun/async-lambda + await.
+promise-era `promisep` (and the interpreter's `LispPromise`) is DELETED --
+`rontolisp:futurep` is the one predicate now. `rontolisp:then` was also
+initially deleted in the async/await redesign, but the future-as-value
+combinator quartet `rontolisp:then` / `then*` / `catch` / `finally` was
+subsequently restored on top of the async surface (Lisp-prelude defuns over
+`async-lambda` + `await` + `handler-case` + `unwind-protect`, one splice for
+every backend; see the "Future-as-value combinators" section below).
 
 ## The cross-backend contract
 
@@ -162,6 +165,31 @@ async-defun/async-lambda + await.
   wasm-tools dump). Preview 1 keeps the compile error (no host timer);
   `--no-gc` keeps the async-surface rejection. wasmCloud (`wash dev` 2.5.2)
   hosts a wait-for-awaiting handler too.
+
+## Future-as-value combinators (`then` / `then*` / `catch` / `finally`)
+
+`rontolisp:then` / `then*` / `catch` / `finally` are Lisp-prelude `defun`s
+in `LispPreludeLibrary.SOURCES` (alongside `read-all`), one definition for
+every backend. Each expands to `funcall` of an `async-lambda` whose body
+uses `await` + `handler-case`/`unwind-protect`, so the WASM EH-mode gate
+flips automatically and every backend picks them up through the normal
+prelude splice (compile paths) / lazy-load (interpreter). Because they
+lower onto the existing primitives, they inherit for free: the eager-start
+contract, condition-type dispatch across the await barrier, the JVM
+`_condTl` ThreadLocal restore, the wasm-component scheduler integration,
+and the `--no-gc` rejection (the combinator names are ADDED to
+`NoGcWasmCompiler`'s rejection list at the FRONT so the diagnostic points
+at `rontolisp:then` rather than the downstream `async-lambda`). Preview 1
+supports only the success half: an errored async body signals AT THE CALL
+there (documented degenerate synchronous divergence), so a `catch`/`finally`
+error-arm cannot fire on P1. A non-future first argument is a `type-error`
+on every backend -- no JS-style auto-coercion to a resolved promise.
+Pinned by `AsyncEvalTest.thenChainsOnFutureSettledValue` etc.,
+`JvmAsyncCompilerTest` mirror, `WasmLispCompilerIntegrationTest.p1Then*` /
+`componentThen*` / `componentCatchRunsOnlyWhenUpstreamSignals` /
+`componentFinallyRunsOnBothPathsAndPreservesOutcome`,
+`NoGcWasmCompilerTest.asyncAwaitSurfaceIsRejected` and the
+`future-as-value-combinators-then-catch-finally` ci-spec case.
 
 ## read-all is prelude Lisp
 

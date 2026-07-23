@@ -4191,7 +4191,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(AWAIT FETCH HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 	}
 
 	@Test
@@ -4235,7 +4235,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(AWAIT FETCH HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 	}
 
 	@Test
@@ -5213,12 +5213,12 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void thenAndPromisepAreGone() {
-		// The promise-era surface was deleted in the async/await redesign: futures are
-		// the one asynchronous value (rontolisp:futurep), and composition is
-		// async-defun/async-lambda + await.
-		assertThatThrownBy(() -> eval("(rontolisp:then 1 (lambda (x) x))"))
-			.hasMessageContaining("not external in the RONTOLISP package");
+	void promisepIsGone() {
+		// The promise-era promisep was deleted in the async/await redesign: futures
+		// are the one asynchronous value (rontolisp:futurep). The name rontolisp:then
+		// was later restored as a future-as-value combinator on top of the async
+		// surface -- exercised by AsyncEvalTest -- so only promisep is expected to
+		// fail resolution now.
 		assertThatThrownBy(() -> eval("(rontolisp:promisep 42)"))
 			.hasMessageContaining("not external in the RONTOLISP package");
 	}

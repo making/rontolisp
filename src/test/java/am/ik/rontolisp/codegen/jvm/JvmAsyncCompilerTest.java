@@ -217,4 +217,143 @@ class JvmAsyncCompilerTest {
 				""")).isEqualTo("\"bad-arg\"");
 	}
 
+	// ---------- Future-as-value combinators: then / then* / catch / finally ----------
+
+	@Test
+	void thenChainsOnFutureSettledValue() throws Exception {
+		assertThat(compileAndRun("""
+				(rontolisp:async-defun produce () 21)
+				(let ((chained (rontolisp:then (produce) (lambda (v) (* v 2)))))
+				  (print (rontolisp:futurep chained))
+				  (print (rontolisp:await chained)))
+				""")).isEqualTo("T\n42");
+	}
+
+	@Test
+	void thenPropagatesUpstreamConditionThroughToTheAwaitingHandler() throws Exception {
+		// pins ThreadLocal (_condTl) restore across the await barrier: the callback
+		// is skipped and the condition rides the fresh future to the outer handler-case
+		assertThat(compileAndRun("""
+				(rontolisp:async-defun failing () (error "boom"))
+				(print (handler-case
+				         (rontolisp:await (rontolisp:then (failing) (lambda (v) (list :nope v))))
+				         (error (c) :caught)))
+				""")).isEqualTo(":CAUGHT");
+	}
+
+	@Test
+	void thenStarVariadicChainsAcrossStages() throws Exception {
+		assertThat(compileAndRun("""
+				(rontolisp:async-defun produce () 40)
+				(print (rontolisp:await (rontolisp:then* (produce) (lambda (v) (+ v 1)) #'1+)))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void thenStarNoCallbacksReturnsInputFutureUnchanged() throws Exception {
+		assertThat(compileAndRun("""
+				(rontolisp:async-defun produce () 7)
+				(let* ((f (produce))
+				       (g (rontolisp:then* f)))
+				  (print (eq f g))
+				  (print (rontolisp:await g)))
+				""")).isEqualTo("T\n7");
+	}
+
+	@Test
+	void thenStarStageMayReturnAFutureAndIsFlattened() throws Exception {
+		assertThat(compileAndRun("""
+				(rontolisp:async-defun add-one (n) (+ n 1))
+				(rontolisp:async-defun produce () 10)
+				(print (rontolisp:await (rontolisp:then* (produce) #'add-one #'add-one)))
+				""")).isEqualTo("12");
+	}
+
+	@Test
+	void catchRunsOnlyWhenUpstreamSignals() throws Exception {
+		assertThat(compileAndRun("""
+				(rontolisp:async-defun boom () (error "nope"))
+				(print (rontolisp:await
+				         (rontolisp:catch (boom) (lambda (c) (declare (ignore c)) :fallback))))
+				""")).isEqualTo(":FALLBACK");
+	}
+
+	@Test
+	void catchPassesUpstreamValueThroughOnSuccess() throws Exception {
+		assertThat(compileAndRun("""
+				(rontolisp:async-defun ok () 99)
+				(print (rontolisp:await
+				         (rontolisp:catch (ok) (lambda (c) (declare (ignore c)) :should-not-see))))
+				""")).isEqualTo("99");
+	}
+
+	@Test
+	void catchRestoresCondTlAcrossAwait() throws Exception {
+		// the JVM stores the current condition in a ThreadLocal (_condTl); a failure
+		// on the async body's virtual thread must re-set that ThreadLocal on the
+		// awaiting thread before rethrowing, or the type-dispatched inner handler
+		// inside the catch's handler would fail to see it. This test pins that path
+		// through the catch combinator.
+		assertThat(compileAndRun("""
+				(define-condition my-err (error) ((v :initarg :v :reader my-err-v)))
+				(rontolisp:async-defun failing () (error 'my-err :v 7))
+				(print (rontolisp:await
+				         (rontolisp:catch (failing)
+				                          (lambda (c) (list :caught (my-err-v c))))))
+				""")).isEqualTo("(:CAUGHT 7)");
+	}
+
+	@Test
+	void finallyRunsOnSuccessPathAndPreservesValue() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *fin-success-log* nil)
+				(rontolisp:async-defun ok () 5)
+				(let ((v (rontolisp:await
+				           (rontolisp:finally (ok)
+				                              (lambda () (push :done *fin-success-log*))))))
+				  (print v)
+				  (print (reverse *fin-success-log*)))
+				""")).isEqualTo("5\n(:DONE)");
+	}
+
+	@Test
+	void finallyRunsOnFailurePathAndPreservesCondition() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *fin-failure-log* nil)
+				(rontolisp:async-defun boom () (error "detonate"))
+				(let ((c (handler-case
+				             (rontolisp:await
+				               (rontolisp:finally (boom)
+				                                  (lambda () (push :cleanup *fin-failure-log*))))
+				           (error (e) (simple-condition-format-control e)))))
+				  (print c)
+				  (print (reverse *fin-failure-log*)))
+				""")).isEqualTo("\"detonate\"\n(:CLEANUP)");
+	}
+
+	@Test
+	void finallyThunkErrorReplacesPendingOutcome() throws Exception {
+		assertThat(compileAndRun("""
+				(rontolisp:async-defun ok () 5)
+				(print (handler-case
+				         (rontolisp:await
+				           (rontolisp:finally (ok) (lambda () (error "cleanup-boom"))))
+				         (error (c) (simple-condition-format-control c))))
+				""")).isEqualTo("\"cleanup-boom\"");
+	}
+
+	@Test
+	void combinatorsRejectNonFutureFirstArgument() throws Exception {
+		assertThat(compileAndRun("""
+				(print (handler-case (rontolisp:then 42 #'identity)
+				         (error (c) (simple-condition-format-control c))))
+				(print (handler-case (rontolisp:catch 42 (lambda (c) c))
+				         (error (c) (simple-condition-format-control c))))
+				(print (handler-case (rontolisp:finally 42 (lambda () nil))
+				         (error (c) (simple-condition-format-control c))))
+				""")).isEqualTo("\"rontolisp:THEN expects a future as its first argument\"\n"
+				+ "\"rontolisp:CATCH expects a future as its first argument\"\n"
+				+ "\"rontolisp:FINALLY expects a future as its first argument\"");
+	}
+
 }

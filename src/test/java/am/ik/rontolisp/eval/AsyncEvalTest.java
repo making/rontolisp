@@ -363,4 +363,207 @@ class AsyncEvalTest {
 			.hasMessageContaining("WAIT-FOR expects a non-negative integer of milliseconds");
 	}
 
+	// ---------- Future-as-value combinators: then / then* / catch / finally ----------
+
+	@Test
+	void thenChainsOnFutureSettledValue() {
+		Run run = evalMulti("""
+				(rontolisp:async-defun produce () 21)
+				(let ((chained (rontolisp:then (produce) (lambda (v) (* v 2)))))
+				  (list (rontolisp:futurep chained) (rontolisp:await chained)))
+				""");
+		assertThat(run.result().print()).isEqualTo("(T 42)");
+	}
+
+	@Test
+	void thenPropagatesUpstreamConditionUnchanged() {
+		// on error the callback is skipped and the condition rides through the fresh
+		// future; handler-case around the outer await catches it by type
+		Run run = evalMulti("""
+				(rontolisp:async-defun failing () (error "boom"))
+				(handler-case
+				    (rontolisp:await (rontolisp:then (failing) (lambda (v) (list :should-not-see v))))
+				  (error (c) :caught))
+				""");
+		assertThat(run.result().print()).isEqualTo(":CAUGHT");
+	}
+
+	@Test
+	void thenStarVariadicChainsAcrossStages() {
+		Run run = evalMulti("""
+				(rontolisp:async-defun produce () 40)
+				(rontolisp:await
+				  (rontolisp:then* (produce) (lambda (v) (+ v 1)) #'1+))
+				""");
+		assertThat(run.result()).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void thenStarNoCallbacksReturnsInputFutureUnchanged() {
+		// documented degenerate identity: zero callbacks = the input future carried
+		// through; award-once semantics of the original future are preserved
+		Run run = evalMulti("""
+				(rontolisp:async-defun produce () 7)
+				(let* ((f (produce))
+				       (g (rontolisp:then* f)))
+				  (list (eq f g) (rontolisp:await g)))
+				""");
+		assertThat(run.result().print()).isEqualTo("(T 7)");
+	}
+
+	@Test
+	void thenStarStageMayReturnAFutureWhichIsFlattened() {
+		// a stage returning a future is auto-flattened by await on the next stage; the
+		// caller never observes future<future<T>>
+		Run run = evalMulti("""
+				(rontolisp:async-defun add-one (n) (+ n 1))
+				(rontolisp:async-defun produce () 10)
+				(rontolisp:await
+				  (rontolisp:then* (produce) #'add-one #'add-one))
+				""");
+		assertThat(run.result()).isEqualTo(new LispInteger(12));
+	}
+
+	@Test
+	void catchRunsOnlyWhenUpstreamSignals() {
+		Run run = evalMulti("""
+				(rontolisp:async-defun boom () (error "nope"))
+				(rontolisp:await (rontolisp:catch (boom) (lambda (c) (declare (ignore c)) :fallback)))
+				""");
+		assertThat(run.result().print()).isEqualTo(":FALLBACK");
+	}
+
+	@Test
+	void catchPassesUpstreamValueThroughOnSuccess() {
+		Run run = evalMulti("""
+				(rontolisp:async-defun ok () 99)
+				(rontolisp:await
+				  (rontolisp:catch (ok) (lambda (c) (declare (ignore c)) :should-not-see)))
+				""");
+		assertThat(run.result()).isEqualTo(new LispInteger(99));
+	}
+
+	@Test
+	void catchHandlerReceivesTheCondition() {
+		Run run = evalMulti("""
+				(define-condition my-err (error) ((v :initarg :v :reader my-err-v)))
+				(rontolisp:async-defun failing () (error 'my-err :v 7))
+				(rontolisp:await
+				  (rontolisp:catch (failing) (lambda (c) (list :caught (my-err-v c)))))
+				""");
+		assertThat(run.result().print()).isEqualTo("(:CAUGHT 7)");
+	}
+
+	@Test
+	void catchHandlerErrorReplacesOutcome() {
+		Run run = evalMulti("""
+				(rontolisp:async-defun failing () (error "first"))
+				(handler-case
+				    (rontolisp:await
+				      (rontolisp:catch (failing) (lambda (c) (declare (ignore c)) (error "second"))))
+				  (error (c) (simple-condition-format-control c)))
+				""");
+		assertThat(run.result().print()).isEqualTo("\"second\"");
+	}
+
+	@Test
+	void finallyRunsOnSuccessPathAndPreservesValue() {
+		Run run = evalMulti("""
+				(defvar *fin-success-log* nil)
+				(rontolisp:async-defun ok () 5)
+				(let ((v (rontolisp:await
+				           (rontolisp:finally (ok)
+				                              (lambda () (push :done *fin-success-log*))))))
+				  (list v (reverse *fin-success-log*)))
+				""");
+		assertThat(run.result().print()).isEqualTo("(5 (:DONE))");
+	}
+
+	@Test
+	void finallyRunsOnFailurePathAndPreservesCondition() {
+		// the thunk runs on the error channel too, and the original condition is what
+		// the surrounding handler-case observes -- not the thunk's return value
+		Run run = evalMulti("""
+				(defvar *fin-failure-log* nil)
+				(rontolisp:async-defun boom () (error "detonate"))
+				(let ((c (handler-case
+				             (rontolisp:await
+				               (rontolisp:finally (boom)
+				                                  (lambda () (push :cleanup *fin-failure-log*))))
+				           (error (e) (simple-condition-format-control e)))))
+				  (list c (reverse *fin-failure-log*)))
+				""");
+		assertThat(run.result().print()).isEqualTo("(\"detonate\" (:CLEANUP))");
+	}
+
+	@Test
+	void finallyThunkErrorReplacesPendingOutcome() {
+		// unwind-protect semantics: an exception from the cleanup wins over the
+		// primary outcome; here the primary was a success, but the thunk's error rides
+		Run run = evalMulti("""
+				(rontolisp:async-defun ok () 5)
+				(handler-case
+				    (rontolisp:await
+				      (rontolisp:finally (ok) (lambda () (error "cleanup-boom"))))
+				  (error (c) (simple-condition-format-control c)))
+				""");
+		assertThat(run.result().print()).isEqualTo("\"cleanup-boom\"");
+	}
+
+	@Test
+	void combinatorsReturnAFreshFutureNotTheInputExceptThenStarZeroArg() {
+		// eq-identity of the returned future distinguishes the fresh futures from
+		// then*'s documented degenerate identity path
+		Run run = evalMulti("""
+				(rontolisp:async-defun ok () 1)
+				(let* ((base (ok))
+				       (t1 (rontolisp:then base #'identity))
+				       (t2 (rontolisp:catch base (lambda (c) c)))
+				       (t3 (rontolisp:finally base (lambda () nil))))
+				  (list (rontolisp:futurep t1) (eq t1 base)
+				        (rontolisp:futurep t2) (eq t2 base)
+				        (rontolisp:futurep t3) (eq t3 base)))
+				""");
+		assertThat(run.result().print()).isEqualTo("(T NIL T NIL T NIL)");
+	}
+
+	@Test
+	void combinatorsRejectNonFutureFirstArgument() {
+		// the design decision: no JS-style auto-coercion of arbitrary values to a
+		// resolved promise -- each operator signals a clear error
+		assertThatThrownBy(() -> eval("(rontolisp:then 42 #'identity)"))
+			.hasMessageContaining("rontolisp:THEN expects a future");
+		assertThatThrownBy(() -> eval("(rontolisp:then* 42 #'identity)"))
+			.hasMessageContaining("rontolisp:THEN* expects a future");
+		assertThatThrownBy(() -> eval("(rontolisp:catch 42 (lambda (c) c))"))
+			.hasMessageContaining("rontolisp:CATCH expects a future");
+		assertThatThrownBy(() -> eval("(rontolisp:finally 42 (lambda () nil))"))
+			.hasMessageContaining("rontolisp:FINALLY expects a future");
+	}
+
+	@Test
+	void combinatorsAreFirstClassAndFunctionalUnderRlNickname() {
+		// rl: is a built-in nickname of rontolisp; both spellings must reach the same
+		// defun (the splice / lazy-load derivation is member-name-based)
+		Run run = evalMulti("""
+				(rontolisp:async-defun produce () 10)
+				(rontolisp:await (rl:then (produce) (lambda (v) (+ v 5))))
+				""");
+		assertThat(run.result()).isEqualTo(new LispInteger(15));
+	}
+
+	@Test
+	void combinatorsComposeAcrossBoundaryReadable() {
+		// the motivating shape from the todo: a plain defun exposes a future that a
+		// caller decorates with a value combinator, without pulling the callee inside
+		// its own async body
+		Run run = evalMulti("""
+				(rontolisp:async-defun some-future-producer () 21)
+				(defun caller ()
+				  (rontolisp:then (some-future-producer) (lambda (v) (* 2 v))))
+				(rontolisp:await (caller))
+				""");
+		assertThat(run.result()).isEqualTo(new LispInteger(42));
+	}
+
 }

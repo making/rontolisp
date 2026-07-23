@@ -645,10 +645,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				indirectCallArities.add(arity);
 			}
 		}
-		// _await applies rontolisp:then callbacks through the arity-1 dispatcher and
-		// _async_run applies the body thunk through the arity-0 one, so their emission
-		// must be forced whenever the async runtime is present; the http-handler
-		// handle() method applies the handler through arity 1 the same way.
+		// _async_run applies the body thunk through the arity-0 dispatcher and _await
+		// applies async-lambda callbacks (rontolisp:then/catch/finally handlers,
+		// http-handler dispatch, ...) through the arity-1 one, so their emission must
+		// be forced whenever the async runtime is present.
 		if (usesAsyncRuntime) {
 			indirectCallArities.add(0);
 			indirectCallArities.add(1);

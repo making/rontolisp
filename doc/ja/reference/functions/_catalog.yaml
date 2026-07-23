@@ -334,6 +334,10 @@ categories:
       - { slug: rontolisp-stream-close, name: "rontolisp:stream-close" }
       - { slug: rontolisp-read-all, name: "rontolisp:read-all" }
       - { slug: rontolisp-wait-for, name: "rontolisp:wait-for" }
+      - { slug: rontolisp-then, name: "rontolisp:then" }
+      - { slug: rontolisp-then-star, name: "rontolisp:then*" }
+      - { slug: rontolisp-catch, name: "rontolisp:catch" }
+      - { slug: rontolisp-finally, name: "rontolisp:finally" }
       - { slug: rontolisp-http-handler, name: "rontolisp:http-handler" }
       - { slug: rontolisp-json-parse, name: "rontolisp:json-parse" }
       - { slug: rontolisp-json-stringify, name: "rontolisp:json-stringify" }

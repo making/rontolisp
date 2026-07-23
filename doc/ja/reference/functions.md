@@ -293,6 +293,10 @@
 | `rontolisp:stream-close` | `(rontolisp:stream-close s)` | 書き側をクローズします。バッファ済みチャンクは読み取り可能なままで、その後の read は終端を観測します |
 | `rontolisp:read-all` | `(rontolisp:read-all s)` | 残りの文字列チャンクすべての連結で確定する future |
 | `rontolisp:wait-for` | `(rontolisp:wait-for 100)` | 指定ミリ秒後に `nil` で確定する future。`cl:sleep` の非同期版の対応物 |
+| `rontolisp:then` | `(rontolisp:then f (lambda (v) (* 2 v)))` | future に対する変換を値として付与します。成功チャネル上に新しい future を返します (JavaScript の `.then`) |
+| `rontolisp:then*` | `(rontolisp:then* f #'1+ #'1+)` | `rontolisp:then` の可変長チェーン糖衣。各関数は 1 つ前の段の平坦化された値を受け取ります |
+| `rontolisp:catch` | `(rontolisp:catch f (lambda (c) :fallback))` | future に対するエラー時フォールバックを値として付与します (JavaScript の `.catch`)。`cl:catch`/`throw` とは別物 |
+| `rontolisp:finally` | `(rontolisp:finally f (lambda () (cleanup)))` | 成功・エラーどちらの経路でも走る後始末 thunk。元の結末はそのまま通過します |
 | `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | ハンドラ関数でHTTPリクエストを処理します（ブロッキングサーバ。`--component` では `wasi:http` コンポーネント） |
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | JSON文字列をパースします（jzon互換）: オブジェクトは文字列キーのハッシュテーブル、配列はベクタになります |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (vector 1 2))` | 値をJSON文字列にシリアライズします（ハッシュテーブルとCLOSインスタンスはオブジェクト、リストとベクタは配列） |

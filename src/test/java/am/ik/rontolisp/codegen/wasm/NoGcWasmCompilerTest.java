@@ -1917,6 +1917,29 @@ class NoGcWasmCompilerTest {
 				(rontolisp:wasm-export 'f :returns :long)
 				""")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("RONTOLISP:WAIT-FOR is not supported with --no-gc");
+		// The future-as-value combinators are rejected BY NAME (not the downstream
+		// async-lambda the prelude splice would inject): the diagnostic points at the
+		// operator the user's program actually mentions.
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:then 1 #'identity))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:THEN is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:then* 1 #'identity))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:THEN* is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:catch 1 (lambda (c) c)))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:CATCH is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:finally 1 (lambda () nil)))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:FINALLY is not supported with --no-gc");
 	}
 
 	@Test

@@ -39,6 +39,14 @@ import am.ik.rontolisp.reader.LispReader;
  * characters; mirrors the interpreter's Java primitive.</li>
  * <li>{@code rontolisp:read-all} -- an {@code rontolisp:async-defun} draining an
  * asynchronous stream's string chunks into one string.</li>
+ * <li>{@code rontolisp:then} / {@code then*} / {@code catch} / {@code finally} -- the
+ * future-as-value combinator quartet ({@code (rl:then future fn)} attaches a transform,
+ * {@code (rl:catch future handler)} an error fallback, {@code (rl:finally future thunk)}
+ * a cleanup; {@code (rl:then* future fn1 fn2 ...)} is the variadic chain sugar). Each
+ * returns a fresh future composing the input's settlement; a non-future first argument
+ * signals a {@code type-error}. Expands to {@code async-lambda} + {@code await} +
+ * {@code handler-case}/{@code unwind-protect}, so every backend supports them
+ * identically.</li>
  * <li>{@code rontolisp:plist-hash-table} / {@code rontolisp:hash-table-plist} and
  * {@code rontolisp:alist-hash-table} / {@code rontolisp:hash-table-alist} -- lightweight
  * subsets of the same-named {@code alexandria} utilities, converting a property list or
@@ -176,6 +184,61 @@ public final class LispPreludeLibrary {
 				      (setq acc (concatenate 'string acc chunk))
 				      (setq chunk (rontolisp:await (rontolisp:stream-read s))))
 				    acc))
+				""");
+		// The future-as-value combinator quartet (rontolisp:then / then* / catch /
+		// finally): each returns a FRESH future that composes the input future's
+		// settlement. Implemented in Lisp over async-lambda + await + handler-case +
+		// unwind-protect, so every backend supports them identically (the WASM EH mode
+		// gate flips automatically because handler-case/unwind-protect head symbols land
+		// in the AST via the splice, and --no-gc rejects the surface by name).
+		//
+		// Non-future first argument is a type-error -- no JS-style auto-coercion to a
+		// resolved promise (users write (funcall (async-lambda () v)) for that).
+		SOURCES.put(LispNames.THEN, """
+				(defun rontolisp:then (%rl-then-fut %rl-then-fn)
+				  (unless (rontolisp:futurep %rl-then-fut)
+				    (error "rontolisp:THEN expects a future as its first argument"))
+				  (funcall (rontolisp:async-lambda ()
+				             (funcall %rl-then-fn (rontolisp:await %rl-then-fut)))))
+				""");
+		// then* with no callbacks returns the input future unchanged -- degenerate
+		// identity, documented as such. With callbacks it threads each function's
+		// (auto-flattened via await) result to the next stage.
+		SOURCES.put(LispNames.THEN_STAR, """
+				(defun rontolisp:then* (%rl-thens-fut &rest %rl-thens-fns)
+				  (unless (rontolisp:futurep %rl-thens-fut)
+				    (error "rontolisp:THEN* expects a future as its first argument"))
+				  (if (null %rl-thens-fns)
+				      %rl-thens-fut
+				      (funcall (rontolisp:async-lambda ()
+				                 (let ((%rl-thens-v (rontolisp:await %rl-thens-fut)))
+				                   (dolist (%rl-thens-fn %rl-thens-fns)
+				                     (setq %rl-thens-v (rontolisp:await
+				                                        (funcall %rl-thens-fn %rl-thens-v))))
+				                   %rl-thens-v)))))
+				""");
+		// catch: JS-style single-handler on the error channel. The value-shaped
+		// counterpart to (handler-case (await f) (some-type (c) ...)) already exists
+		// lexically -- this operator is only the value combinator you attach when the
+		// future crosses a boundary. A handler that itself signals produces a future
+		// carrying THAT condition.
+		SOURCES.put(LispNames.CATCH, """
+				(defun rontolisp:catch (%rl-catch-fut %rl-catch-handler)
+				  (unless (rontolisp:futurep %rl-catch-fut)
+				    (error "rontolisp:CATCH expects a future as its first argument"))
+				  (funcall (rontolisp:async-lambda ()
+				             (handler-case (rontolisp:await %rl-catch-fut)
+				               (error (%rl-catch-c) (funcall %rl-catch-handler %rl-catch-c))))))
+				""");
+		// finally: runs the thunk exactly once on either channel; the original outcome
+		// carries through (a thunk-raised condition replaces it, per unwind-protect).
+		SOURCES.put(LispNames.FINALLY, """
+				(defun rontolisp:finally (%rl-fin-fut %rl-fin-thunk)
+				  (unless (rontolisp:futurep %rl-fin-fut)
+				    (error "rontolisp:FINALLY expects a future as its first argument"))
+				  (funcall (rontolisp:async-lambda ()
+				             (unwind-protect (rontolisp:await %rl-fin-fut)
+				               (funcall %rl-fin-thunk)))))
 				""");
 		SOURCES.put(LispNames.PLIST_HASH_TABLE, """
 				(defun rontolisp:plist-hash-table (plist &rest hash-table-initargs)
