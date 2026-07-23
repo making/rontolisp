@@ -4389,3 +4389,39 @@ cases:
       3
       "a😀b"
       (97 233 128512 98 DONE)
+  - name: eq-on-characters-by-code-point
+    source: |
+      ;; CL permits (but does not require) eq to return T on two characters that
+      ;; are char=. The interpreter (LispChar record equality), the JVM compile
+      ;; path (_eqv int[] slot-0 fast path) and the WASM compile paths (TYPE_CHAR
+      ;; struct code-point compare after ref.eq falls through) all say T here.
+      ;; Byte-identical output on every backend is what this case pins.
+      (print (eq #\A #\A))                                 ; T
+      (print (eq (code-char 65) #\A))                      ; T
+      (print (eq (code-char 128512) (code-char 128512)))   ; T (astral, non-BMP)
+      (print (eq (code-char 128512) #\A))                  ; NIL (different cps)
+      ;; With a runtime-computed code point, so no compile-time constant folding
+      ;; can collapse the two allocations to one.
+      (let ((cp 128513))
+        (print (eq (code-char cp) (code-char cp))))        ; T
+      ;; eq on non-characters unchanged: two freshly-consed cells are not eq,
+      ;; two boxed floats with the same value are not eq, but two equal small
+      ;; integers (i31) are (ref.eq on i31 already worked).
+      (print (eq (list 1) (list 1)))                       ; NIL
+      (print (eq 1.5 1.5))                                 ; NIL
+      (print (eq 42 42))                                   ; T
+      ;; eql / equal on characters unchanged (they already worked); pinned here
+      ;; as a companion regression guard.
+      (print (eql #\A (code-char 65)))                     ; T
+      (print (equal (code-char 128512) (code-char 128512))); T
+    expected: |
+      T
+      T
+      T
+      NIL
+      T
+      NIL
+      NIL
+      T
+      T
+      T

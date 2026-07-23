@@ -288,7 +288,11 @@ final class WasmEmitHelper {
 	/**
 	 * Compares two (ref null eq) values on the stack for {@code eq} (object identity).
 	 * Produces an i32 (0=false, 1=true). Uses ref.eq for identity (so equal small
-	 * integers and same-object cons cells are eq), falling back to string offset
+	 * integers and same-object cons cells are eq); when ref.eq is false, two TYPE_CHAR
+	 * structs with the same code point still compare equal (matching the interpreter's
+	 * value-based {@code LispChar.equals} and the JVM's {@code _eqv} int[] fast-path, so
+	 * {@code (eq #\A #\A)} agrees across every backend -- CL permits {@code eq} to return
+	 * {@code T} for characters that {@code char=}); otherwise falls back to string offset
 	 * comparison for TYPE_STRING values (which also covers symbols, since the StringTable
 	 * deduplicates identical symbols/strings to the same offset). Floats and ratios are
 	 * distinct boxed objects and are therefore never eq.
@@ -311,35 +315,20 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(1);
 		ctx.writer.write(Instruction.ELSE);
-		// Symbols and strings: compare interned offsets
-		emitStringEqOrZero(ctx, aSlot, bSlot);
+		// Both characters: compare code points; else fall back to symbol/string offset
+		emitCharCodePointEqOrElse(ctx, aSlot, bSlot, () -> emitStringEqOrZero(ctx, aSlot, bSlot));
 		ctx.writer.write(Instruction.END); // end ref.eq if
 	}
 
 	/**
-	 * Compares two (ref null eq) values on the stack for {@code eql}. Like {@code eq},
-	 * but floats and ratios of the same type and value are equal. Produces an i32
-	 * (0=false, 1=true).
+	 * Emits {@code if both operands are TYPE_CHAR then code point == code point else
+	 * <fallback>}, leaving an i32 (0=false, 1=true) on the stack. Shared between
+	 * {@link #emitEqComparison eq} and {@link #emitEqlComparison eql} so both give
+	 * TYPE_CHAR value equality (two separately-allocated char structs holding the same
+	 * code point compare true, mirroring the JVM {@code _eqv} int[] branch and the
+	 * interpreter's value-based {@code LispChar.equals}).
 	 */
-	static void emitEqlComparison(WasmLispCompiler.Ctx ctx) {
-		int aSlot = ctx.allocTemp();
-		int bSlot = ctx.allocTemp();
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
-		// Try ref.eq
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
-		ctx.writer.write(Instruction.REF_EQ);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(1);
-		ctx.writer.write(Instruction.ELSE);
-		// Both characters: compare code points (char structs are value objects)
+	private static void emitCharCodePointEqOrElse(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot, Runnable elseBranch) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -367,6 +356,45 @@ final class WasmEmitHelper {
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.I32_EQ);
 		ctx.writer.write(Instruction.ELSE);
+		elseBranch.run();
+		ctx.writer.write(Instruction.END); // end char if
+	}
+
+	/**
+	 * Compares two (ref null eq) values on the stack for {@code eql}. Like {@code eq},
+	 * but floats and ratios of the same type and value are equal. Produces an i32
+	 * (0=false, 1=true).
+	 */
+	static void emitEqlComparison(WasmLispCompiler.Ctx ctx) {
+		int aSlot = ctx.allocTemp();
+		int bSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		// Try ref.eq
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.REF_EQ);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.ELSE);
+		// Both characters: compare code points (char structs are value objects); if not
+		// both chars, fall through to float / ratio / string comparisons below.
+		emitCharCodePointEqOrElse(ctx, aSlot, bSlot, () -> emitEqlNonCharTail(ctx, aSlot, bSlot));
+		ctx.writer.write(Instruction.END); // end ref.eq if
+	}
+
+	// Emits eql's non-char, non-ref.eq tail: TYPE_FLOAT value comparison, then
+	// TYPE_RATIO numerator+denominator comparison, then symbol/string offset compare.
+	// Leaves an i32 (0/1) on the stack. Extracted so the shared TYPE_CHAR helper can be
+	// used from both emitEqComparison and emitEqlComparison without duplicating the
+	// char-compare shape.
+	private static void emitEqlNonCharTail(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
 		// Both floats: compare f64 fields (float structs are value objects)
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(aSlot);
@@ -431,8 +459,8 @@ final class WasmEmitHelper {
 		emitStringEqOrZero(ctx, aSlot, bSlot);
 		ctx.writer.write(Instruction.END); // end ratio if
 		ctx.writer.write(Instruction.END); // end float if
-		ctx.writer.write(Instruction.END); // end char if
-		ctx.writer.write(Instruction.END); // end ref.eq if
+		// end char if and end ref.eq if are emitted by the caller
+		// (emitCharCodePointEqOrElse and emitEqlComparison respectively).
 	}
 
 	// Emits an i32 result: 1 if both slots are TYPE_STRING structs with the same data

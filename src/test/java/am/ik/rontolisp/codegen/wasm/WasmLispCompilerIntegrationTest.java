@@ -3541,6 +3541,21 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void eqOnCharactersComparesByCodePoint() throws Exception {
+		// CL permits eq to return T when char= would. TYPE_CHAR is a struct so ref.eq
+		// on two separately allocated char structs returns 0; emitEqComparison's added
+		// TYPE_CHAR branch compares the code-point field, matching the interpreter's
+		// value-based LispChar.equals and the JVM _eqv int[] fast path.
+		assertThat(compileAndRun("(print (eq #\\A #\\A))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (eq (code-char 65) #\\A))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (eq (code-char 128512) (code-char 128512)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (eq (code-char 128512) #\\A))")).isEqualTo("NIL");
+		// Guard against constant folding: build the two char structs from a runtime
+		// integer so the compile-time constant path can't collapse them into one.
+		assertThat(compileAndRun("(let ((cp 128513)) (print (eq (code-char cp) (code-char cp))))")).isEqualTo("T");
+	}
+
+	@Test
 	void equalNestedLists() throws Exception {
 		assertThat(compileAndRun("(print (equal '(1 2 (3)) '(1 2 (3))))")).isEqualTo("T");
 	}

@@ -133,15 +133,32 @@ supplementary code point via setf-aref lands in exactly one indexed slot on
 every backend and prints as its glyph. Capacity, fill pointer and index are all
 in code-point units.
 
-The other cross-backend gap after todo 160 / 161:
-
-- `(eq (code-char cp) (code-char cp))` returns T on the interpreter and the
-  JVM compile path but NIL on WASM (implementation-defined by CL, but a
-  byte-identical divergence) -- see `.todo/162`.
-
 `read-char` is code-point-symmetric across all four backends now (interpreter
 and JVM combine UTF-16 surrogate pairs via `mark(1)`/`reset()`; WASM decodes
 1-4 byte UTF-8 sequences in `_read_char`).
+
+## eq on CHARACTER = char= (implementation-defined but pinned)
+
+CL permits `eq` on two `char=` characters to return `T`, and every backend now
+takes that permission. Each rep is a value object, so two allocations with the
+same code point compare equal even though they are not the same reference:
+
+- **Interpreter** -- `LispChar` is a record; its derived `equals` is
+  value-based and the `eq` primitive walks through it for a `LispChar` operand.
+- **JVM compile path** -- `_eqv` (the shared value-equality helper `eq`
+  delegates to via `_eq`) has an early-branch for two length-1 `int[]` operands
+  that compares by `arr[0]`, restoring the T that the pre-widening
+  `Character.valueOf(char)` cache produced for BMP code units.
+- **WASM (both backends)** -- `emitEqComparison` in `WasmEmitHelper` follows a
+  `ref.eq`-false miss with a `ref.test $type_char` guard on both operands, and
+  when it hits compares the code-point field. `emitEqlComparison` uses the
+  same shared helper (`emitCharCodePointEqOrElse`), so both `eq` and `eql`
+  give TYPE_CHAR value equality without duplicating the char-compare shape.
+  `_equal` (`WasmRuntimeBuilder.buildEqualBody`) already had its own
+  TYPE_CHAR branch for structural equality.
+
+`(eq (code-char cp) (code-char cp))` returns `T` on every backend as a result;
+`(eq (code-char 128512) #\A)` returns `NIL` (different code points).
 
 ## Pinning tests
 
@@ -155,9 +172,18 @@ and JVM combine UTF-16 surrogate pairs via `mark(1)`/`reset()`; WASM decodes
   supplementary code point in one indexed slot on every backend; and the
   `(with-input-from-string ... (read-char ...))` round-trip that returns one
   CHARACTER per code point on every backend.
+- `src/test/resources/ci-spec.yaml` -- `eq-on-characters-by-code-point` case
+  pins `(eq #\A #\A)` / `(eq (code-char 65) #\A)` /
+  `(eq (code-char 128512) (code-char 128512))` all to `T` on every backend
+  (including a `let`-bound cp defeating any constant folding of the two
+  allocations), and `(eq (code-char 128512) #\A)` to `NIL`. Also pins that
+  `eq` on freshly-consed cells and on two boxed floats stays `NIL` -- the
+  new TYPE_CHAR branch adds no extra value equality for non-chars.
 - `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`
   cover per-backend char builtins and the WASM `_char_upcase` /
-  `_char_downcase` helper indices.
+  `_char_downcase` helper indices;
+  `WasmLispCompilerIntegrationTest#eqOnCharactersComparesByCodePoint`
+  guards the WASM emit path directly.
 
 ## Related
 - [[wasm-gc-strings]] -- the WASM byte model behind these code-point walks
