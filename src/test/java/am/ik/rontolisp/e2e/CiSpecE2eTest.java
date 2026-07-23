@@ -8,6 +8,12 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Stream;
 
 import org.jspecify.annotations.Nullable;
@@ -109,9 +115,14 @@ class CiSpecE2eTest {
 
 		List<String> actual;
 		try {
+			System.err.println("[CiSpecE2eTest] starting backend " + backend);
+			long t0 = System.nanoTime();
 			actual = runBackend(backend, bin, program);
+			System.err.println("[CiSpecE2eTest] finished backend " + backend + " in "
+					+ ((System.nanoTime() - t0) / 1_000_000) + " ms");
 		}
 		catch (Exception ex) {
+			System.err.println("[CiSpecE2eTest] backend " + backend + " failed: " + ex.getMessage());
 			return dynamicContainer(backend.name(),
 					Stream.of(dynamicTest("(execution failed)", () -> fail(ex.getMessage(), ex))));
 		}
@@ -161,16 +172,62 @@ class CiSpecE2eTest {
 		};
 	}
 
+	/**
+	 * Timeout for a single child-process invocation. All four backends finish the full
+	 * ci-spec corpus in well under a minute locally; the ceiling here just needs to be
+	 * high enough that a healthy CI runner never trips it and low enough that a hang
+	 * surfaces as a clear failure long before the CI job's own time limit kicks in.
+	 */
+	private static final long EXEC_TIMEOUT_SECONDS = 300;
+
 	private static List<String> exec(List<String> command) throws IOException, InterruptedException {
 		ProcessBuilder pb = new ProcessBuilder(command).directory(workDir.toFile());
 		Process process = pb.start();
-		String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		String stderr = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
-		int exit = process.waitFor();
-		if (exit != 0) {
-			throw new IOException("command %s exited with %d%nstderr:%n%s".formatted(command, exit, stderr));
+		// Drain stdout and stderr concurrently. A single-threaded readAllBytes() on
+		// stdout deadlocks when the child fills the OS pipe buffer on stderr (Linux
+		// pipe buffer is 64 KB, macOS's grows further), so the buffered-first-stream
+		// approach can hang forever even when the child is running normally.
+		ExecutorService drain = Executors.newFixedThreadPool(2);
+		Future<String> stdoutFuture = drain.submit(() -> readAll(process.getInputStream()));
+		Future<String> stderrFuture = drain.submit(() -> readAll(process.getErrorStream()));
+		try {
+			if (!process.waitFor(EXEC_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+				process.destroyForcibly();
+				throw new IOException("command %s timed out after %d seconds".formatted(command, EXEC_TIMEOUT_SECONDS));
+			}
+			String stdout = getSafely(stdoutFuture);
+			String stderr = getSafely(stderrFuture);
+			int exit = process.exitValue();
+			if (exit != 0) {
+				throw new IOException("command %s exited with %d%nstderr:%n%s".formatted(command, exit, stderr));
+			}
+			return splitLines(stdout);
 		}
-		return splitLines(stdout);
+		finally {
+			drain.shutdownNow();
+		}
+	}
+
+	private static String readAll(InputStream in) {
+		try {
+			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+		}
+		catch (IOException ex) {
+			return "";
+		}
+	}
+
+	private static String getSafely(Future<String> future) throws IOException {
+		try {
+			return future.get(30, TimeUnit.SECONDS);
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+			throw new IOException("interrupted while collecting process output", ex);
+		}
+		catch (ExecutionException | TimeoutException ex) {
+			return "";
+		}
 	}
 
 	private static Spec loadSpec() throws IOException {
