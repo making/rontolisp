@@ -33,6 +33,26 @@ extending `trivial-gray-streams:fundamental-character-output-stream` with
 methods on `trivial-gray-streams:stream-write-char`/`-string` receives the
 built-ins' writes unchanged — this is how jzon's `:stream` writer API runs.
 
+```lisp
+(asdf:load-system "trivial-gray-streams")
+
+(defclass upcase-stream (trivial-gray-streams:fundamental-character-output-stream)
+  ((acc :initform "")))
+(defmethod trivial-gray-streams:stream-write-string
+    ((s upcase-stream) str &optional start end)
+  (declare (ignore start end))
+  (setf (slot-value s 'acc)
+        (concatenate 'string (slot-value s 'acc) (string-upcase str)))
+  str)
+(defmethod trivial-gray-streams:stream-write-char ((s upcase-stream) c)
+  (trivial-gray-streams:stream-write-string s (string c))
+  c)
+(let ((s (make-instance 'upcase-stream)))
+  (write-string "hello" s)
+  (write-char #\! s)
+  (slot-value s 'acc)) ; => "HELLO!"
+```
+
 ## Limits
 
 - Output side only: `stream-write-char` and `stream-write-string` exist; the

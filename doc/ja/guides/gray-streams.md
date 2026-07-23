@@ -34,6 +34,26 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが基�
 にメソッドを定義したクラスは、組み込みの書き込みをそのまま受け取ります — jzon の
 `:stream` ライタ API はこの仕組みで動いています。
 
+```lisp
+(asdf:load-system "trivial-gray-streams")
+
+(defclass upcase-stream (trivial-gray-streams:fundamental-character-output-stream)
+  ((acc :initform "")))
+(defmethod trivial-gray-streams:stream-write-string
+    ((s upcase-stream) str &optional start end)
+  (declare (ignore start end))
+  (setf (slot-value s 'acc)
+        (concatenate 'string (slot-value s 'acc) (string-upcase str)))
+  str)
+(defmethod trivial-gray-streams:stream-write-char ((s upcase-stream) c)
+  (trivial-gray-streams:stream-write-string s (string c))
+  c)
+(let ((s (make-instance 'upcase-stream)))
+  (write-string "hello" s)
+  (write-char #\! s)
+  (slot-value s 'acc)) ; => "HELLO!"
+```
+
 ## 制限
 
 - 出力側のみ: `stream-write-char` と `stream-write-string` が存在します。完全な
