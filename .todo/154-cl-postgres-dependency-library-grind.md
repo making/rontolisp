@@ -11,13 +11,7 @@ the transitive `cl-ppcre` (via uax-15; cl-postgres itself has one
 - `split-sequence` -- REAL, all 4 backends (todo-054).
 - `cl-base64` -- REAL, all 4 backends (todo-085).
 - `cl-ppcre` v2.1.2 -- REAL, all 4 backends (`ClPpcreE2eTest`).
-- `uax-15` v0.1.3 -- REAL, all 4 backends (`Uax15E2eTest`). Last blocker
-  cleared by `.todo/159`: WASM string model widened to UTF-8 byte encoding
-  with three shared walking helpers (`_str_char_count` /
-  `_str_char_at` / `_str_char_byte_offset`) so non-BMP scratch values
-  survive `unicode-string` round-trips; component mem module now grows to
-  the core module's data-segment needs so the 2.7MB UnicodeData tables
-  don't trap at instantiation.
+- `uax-15` v0.1.3 -- REAL, all 4 backends (`Uax15E2eTest`).
 - `md5` -- REAL on interpreter + JVM (`Md5E2eTest`,
   `examples/asdf/md5-demo.lisp`). WASM excluded: MD5 working state is
   unsigned 32-bit arithmetic beyond the `i31` fixnum range. See
