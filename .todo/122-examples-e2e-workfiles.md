@@ -1,30 +1,55 @@
 # ExamplesE2eTest: workFiles manifest field (RUN legs for file-reading examples)
 
 Split out of todo-117 (deleted on completion 2026-07-13). E2E-infrastructure
-item: examples that read data files are compile-only today
-(`jvm-compile` + `wasm-component`), because the driver runs each program in
-a throwaway workdir that has none of the example's files.
+item: examples that read data files USED to be compile-only
+(`jvm-compile` + `wasm-component`), because the driver runs each program in a
+throwaway workdir that has none of the example's files.
 
-## The idea
+## What shipped 2026-07-23
 
-A per-example `workFiles:` list in `examples/examples.yaml`: paths
-(relative to `examples/`) the driver copies into the workdir before the RUN
-legs, preserving relative layout so the scripts' CWD-relative reads
-(`dataset/...`, `ch07/params.bin`) work. WASM legs already pass `--dir .`.
+Two new per-example manifest fields in `examples/examples.yaml`:
 
-Candidates, in order of value:
+- `workDir` -- sub-dir under `examples/` the process runs from (default: none,
+  i.e. the throwaway workdir itself). Set it when the script's CWD-relative
+  reads assume a book root (e.g. `deep-learning-from-scratch/`); the leg's CWD
+  becomes `work/<workDir>/`.
+- `workFiles` -- paths (relative to `workDir` when set, otherwise `examples/`)
+  copied 1:1 into the workspace, so the mirrored slice looks like the fragment
+  of `examples/` the script was written against.
 
-- `deep-learning-from-scratch/ch07/visualize-filter.lisp`: needs ONLY the
-  committed `ch07/params.bin` (1.7 MB) -- and its output is byte-identical
-  on every backend, so it can get full `interpreter`/`jvm`/`wasm` RUN legs
-  with a `file:` expect. The best first target.
-- `ch03/neuralnet-mnist{,-batch}.lisp`: committed `ch03/sample-weight.bin`
-  plus the gitignored idx files (~55 MB, `./download-mnist.sh`) -- gate on
-  file presence with an assumption-skip like the existing wasmtime check.
-- `ch08/misclassified-mnist.lisp` / `half-float-network.lisp`: idx files +
-  committed `ch08/deep-convnet-params.bin`; byte-identical output, but a
-  deep-convnet forward @1000 is minutes-per-leg (todo-121 would shrink the
-  interpreter leg) -- consider a small `*sampled*` override or skip.
+`stageWorkspace` in `ExamplesE2eTest.java` does the copy. A missing workFile
+aborts the leg as a skipped assumption (same shape as the wasmtime-on-PATH
+check), not a failure -- so CI without the gitignored idx dumps only exercises
+the compile-only `wasm-component` leg, while a developer with the dumps run
+gets the full cross-backend accuracy check. `workFiles` are only staged for RUN
+backends (`interpreter`/`jvm`/`wasm`); compile-only legs never need them.
+
+The RUN-leg upgrades that landed with the feature:
+
+- `ch07/visualize-filter.lisp` -- workFiles: [ch07/params.bin]. Full
+  `interpreter/jvm/wasm/wasm-component` coverage, byte-identical output pinned
+  in `.expected/dlfs-visualize-filter.txt`. The intended first target.
+- `ch03/mnist-show.lisp` -- workFiles: dataset/train-{images,labels}. Same
+  four-backend coverage, `.expected/dlfs-mnist-show.txt` -- the RUN legs skip
+  themselves when the gitignored dumps are absent.
+- `ch03/neuralnet-mnist.lisp` + `neuralnet-mnist-batch.lisp` -- workFiles:
+  ch03/sample-weight.bin + dataset/t10k-{images,labels}. Softmax + argmax
+  gives the same classes on every backend, checked with `equals: "Accuracy:
+  932/1000"`. Also skip themselves without the idx files.
+
+## What still isn't a RUN leg
+
+- ch08 (`misclassified-mnist.lisp`, `half-float-network.lisp`,
+  `train-deepnet.lisp`) -- workFiles are cheap (deep-convnet-params.bin is
+  committed, or the training scripts just need the dataset dumps), but the
+  deep-convnet forward pass at `*test-limit* = 1000` is minutes per
+  interpreter leg. Revisit when the forward pass shrinks or add a `*sampled*`
+  override + smaller expected value.
+- Everything under ch04/ch05/ch06 that reads `dataset/*-ubyte` -- the training
+  scripts (`train-neuralnet`, `optimizer-compare-mnist`, `weight-init-compare`,
+  `overfit-*`, `hyperparameter-optimization`, `batch-norm-test`). Same reason:
+  they're wall-clock heavy even when the data is present. Also revisit with
+  the ch08 shrink.
 
 ## Folded-in notes parked from todo-117
 

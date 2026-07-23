@@ -58,6 +58,18 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * output".</li>
  * <li>{@code systemPath} -- directory added as {@code --system-path} (ASDF
  * registry).</li>
+ * <li>{@code workDir} -- sub-directory under {@code examples/} the process runs from
+ * (default: none, i.e. the throwaway workdir itself). Set it when the script's
+ * CWD-relative reads are written against a book root (e.g.
+ * {@code deep-learning-from-scratch/}); the leg's CWD becomes
+ * {@code work/<workDir>/}.</li>
+ * <li>{@code workFiles} -- files to stage beside the program before it runs (list of
+ * paths, relative to {@code workDir} when set, otherwise relative to {@code examples/}).
+ * Each is copied 1:1 into the workspace, so the mirrored slice looks like the fragment of
+ * {@code examples/} the script was written against. A missing file aborts the leg as a
+ * skipped assumption (not a failure), so datasets that need
+ * {@code deep-learning-from-scratch/download-mnist.sh} silently gate on file
+ * presence.</li>
  * </ul>
  * Exact matches ({@code equals}/{@code file}) are compared line-by-line, tolerant of a
  * trailing newline, and are asserted against every RUN backend -- so a per-backend
@@ -107,6 +119,14 @@ class ExamplesE2eTest {
 			return Backend.valueOf(normalized);
 		}
 
+		/**
+		 * Whether this backend runs the program (rather than only compiling it) -- gates
+		 * whether {@code workFiles} must actually exist ahead of the leg.
+		 */
+		boolean runsProgram() {
+			return this == INTERPRETER || this == JVM || this == WASM;
+		}
+
 	}
 
 	record Expect(@Nullable String equals, @Nullable String file, @Nullable List<String> contains,
@@ -114,7 +134,8 @@ class ExamplesE2eTest {
 	}
 
 	record Example(String path, List<String> backends, @Nullable List<String> args, @Nullable String stdin,
-			@Nullable String stdinFile, @Nullable Expect expect, @Nullable String systemPath, @Nullable String note) {
+			@Nullable String stdinFile, @Nullable Expect expect, @Nullable String systemPath, @Nullable String workDir,
+			@Nullable List<String> workFiles, @Nullable String note) {
 
 		List<String> argsOrEmpty() {
 			return this.args == null ? List.of() : this.args;
@@ -165,54 +186,103 @@ class ExamplesE2eTest {
 
 	private static void verify(Backend backend, Example example, Path source, List<String> driver, Path work)
 			throws Exception {
+		Path runDir = stageWorkspace(example, work, backend);
 		String src = source.toString();
 		List<String> args = example.argsOrEmpty();
 		byte @Nullable [] stdin = resolveStdin(example);
 		List<String> flags = systemPathFlags(example);
 		switch (backend) {
 			case INTERPRETER -> {
-				Result run = exec(work, concat(driver, concat(List.of(src), args)), stdin);
+				Result run = exec(runDir, concat(driver, concat(List.of(src), args)), stdin);
 				assertRan(run, example, "interpreter");
 			}
 			case JVM -> {
-				Result compile = exec(work, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null);
+				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null);
 				assertCompiled(compile, example, "jvm (compile)");
-				Result run = exec(work, concat(List.of("java", "-cp", work.toString(), "Prog"), args), stdin);
+				Result run = exec(runDir, concat(List.of("java", "-cp", runDir.toString(), "Prog"), args), stdin);
 				assertRan(run, example, "jvm (run)");
 			}
 			case WASM -> {
-				Result compile = exec(work,
+				Result compile = exec(runDir,
 						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--optimize"), flags)), null);
 				assertCompiled(compile, example, "wasm (compile)");
-				Result run = exec(work,
+				Result run = exec(runDir,
 						concat(List.of("wasmtime", "run", "-W", "gc", "-W", "exceptions=y", "--dir", ".", "prog.wasm"),
 								args),
 						stdin);
 				assertRan(run, example, "wasm (run)");
 			}
 			case JVM_COMPILE -> {
-				Result compile = exec(work, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null);
+				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null);
 				assertCompiled(compile, example, "jvm-compile");
 			}
 			case WASM_COMPONENT -> {
-				Result compile = exec(work,
+				Result compile = exec(runDir,
 						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--component", "--optimize"), flags)),
 						null);
 				assertCompiled(compile, example, "wasm-component");
 			}
 			case NO_GC -> {
-				Result compile = exec(work,
+				Result compile = exec(runDir,
 						concat(driver, concat(List.of(src, "-o", "prog.wasm", "--no-gc", "--optimize"), flags)), null);
 				assertCompiled(compile, example, "no-gc");
 			}
 			case NO_GC_SIMD -> {
-				Result compile = exec(work,
+				Result compile = exec(runDir,
 						concat(driver,
 								concat(List.of(src, "-o", "prog.wasm", "--no-gc", "--simd", "--optimize"), flags)),
 						null);
 				assertCompiled(compile, example, "no-gc-simd");
 			}
 		}
+	}
+
+	/**
+	 * Prepare the working directory the leg will run in and stage any files the example
+	 * needs beside it.
+	 * <p>
+	 * With {@code workDir} set, the process CWD becomes {@code work/<workDir>} so a
+	 * script written to run from {@code examples/<workDir>/} keeps its CWD-relative reads
+	 * (like {@code "ch07/params.bin"}) resolving. {@code workFiles} entries are relative
+	 * to {@code workDir} (or to {@code examples/} when it is unset) and are copied 1:1
+	 * into the workspace, so the mirrored slice looks like the fragment of
+	 * {@code examples/} the script was written against. If a required file is missing
+	 * (the MNIST idx dumps are gitignored, fetched by
+	 * {@code deep-learning-from-scratch/download-mnist.sh}) the leg is skipped rather
+	 * than failed -- same shape as the wasmtime-on-PATH check.
+	 */
+	private static Path stageWorkspace(Example example, Path work, Backend backend) throws IOException {
+		Path runDir = work;
+		if (example.workDir() != null && !example.workDir().isBlank()) {
+			runDir = work.resolve(example.workDir());
+			Files.createDirectories(runDir);
+		}
+		if (example.workFiles() == null || example.workFiles().isEmpty()) {
+			return runDir;
+		}
+		// workFiles are runtime inputs -- a compile-only leg does not read them, so it
+		// stays green whether or not the file is present. RUN legs skip themselves when a
+		// required file is absent (same shape as the wasmtime-on-PATH check), so CI
+		// without the gitignored idx dumps still exercises every leg it can.
+		if (!backend.runsProgram()) {
+			return runDir;
+		}
+		Path anchor = (example.workDir() == null || example.workDir().isBlank()) ? EXAMPLES_DIR
+				: EXAMPLES_DIR.resolve(example.workDir());
+		for (String rel : example.workFiles()) {
+			Path src = anchor.resolve(rel);
+			if (!Files.isRegularFile(src)) {
+				abort("required work file is missing: " + rel + " (looked in " + src
+						+ ") -- run examples/deep-learning-from-scratch/download-mnist.sh if it is a dataset/*-ubyte file");
+			}
+			Path dst = runDir.resolve(rel);
+			Path parent = dst.getParent();
+			if (parent != null) {
+				Files.createDirectories(parent);
+			}
+			Files.copy(src, dst);
+		}
+		return runDir;
 	}
 
 	private static void assertCompiled(Result result, Example example, String label) {

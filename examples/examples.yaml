@@ -36,6 +36,17 @@
 #                equals/file are compared against ALL run backends, so a per-backend
 #                divergence is a real failure.
 #   systemPath   directory added as --system-path (ASDF source registry)
+#   workDir      sub-dir under examples/ the process runs from (default: none,
+#                i.e. the throwaway workdir itself). Set it when the script's
+#                CWD-relative reads assume a book root (e.g. deep-learning-from-
+#                scratch/); the leg's CWD becomes work/<workDir>/.
+#   workFiles    files to stage beside the program before it runs (relative to
+#                workDir when set, otherwise relative to examples/). Copied 1:1
+#                into the workspace, so the mirrored slice looks like the
+#                fragment of examples/ the script was written against. A missing
+#                file skips the leg (assumption abort) rather than failing --
+#                for gitignored dataset dumps you fetch via
+#                deep-learning-from-scratch/download-mnist.sh.
 #   note         free-form comment
 #
 # GUI examples (jvm/, minesweeper, rainbow/, the webgl-*/ and other browser
@@ -205,11 +216,16 @@ examples:
   # --- deep-learning-from-scratch: the book, ported (see its README.md) -------
   # The data-free scripts print byte-identically on every backend (weights come
   # from the seeded linalg RNG; the exp-using ones round through truncate or a
-  # bucketed histogram, which the WASM exp approximation cannot flip). The
-  # MNIST scripts read dataset/*-ubyte (a one-time ./download-mnist.sh) and
-  # ch03/sample-weight.bin relative to the example root, which the throwaway
-  # test workdir does not have -- so they get compile-only legs; run them
-  # manually per the README.
+  # bucketed histogram, which the WASM exp approximation cannot flip). Scripts
+  # that read committed weight files (ch07/params.bin, ch03/sample-weight.bin)
+  # get RUN legs, with the file staged via workFiles. Scripts that also read
+  # dataset/*-ubyte (the gitignored idx dumps -- fetch via ./download-mnist.sh)
+  # ALSO get RUN legs, but each leg skips itself when the dumps are absent
+  # (assumption abort, not failure) -- CI without the dumps only exercises the
+  # compile-only wasm-component leg, a developer with them run gets the full
+  # cross-backend accuracy check. Only the ch08 training scripts stay
+  # compile-only: their deep-convnet forward pass is minutes per interpreter
+  # leg (revisit once it shrinks).
   - path: deep-learning-from-scratch/ch02/and-gate.lisp
     backends: [interpreter, jvm, wasm]
     expect:
@@ -231,14 +247,28 @@ examples:
     expect:
       file: .expected/dlfs-activation-functions.txt
   - path: deep-learning-from-scratch/ch03/mnist-show.lisp
-    backends: [jvm-compile, wasm-component]
-    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+    backends: [interpreter, jvm, wasm, wasm-component]
+    workDir: deep-learning-from-scratch
+    workFiles: [dataset/train-images-idx3-ubyte, dataset/train-labels-idx1-ubyte]
+    note: reads dataset/train-*-ubyte (gitignored -- ./download-mnist.sh); RUN legs skip themselves when the dumps are absent
+    expect:
+      file: .expected/dlfs-mnist-show.txt
   - path: deep-learning-from-scratch/ch03/neuralnet-mnist.lisp
-    backends: [jvm-compile, wasm-component]
-    note: reads dataset/t10k-*-ubyte + ch03/sample-weight.bin
+    backends: [interpreter, jvm, wasm, wasm-component]
+    workDir: deep-learning-from-scratch
+    workFiles: [ch03/sample-weight.bin, dataset/t10k-images-idx3-ubyte, dataset/t10k-labels-idx1-ubyte]
+    note: reads dataset/t10k-*-ubyte (gitignored -- ./download-mnist.sh) + ch03/sample-weight.bin (committed); RUN legs skip themselves when the idx dumps are absent; softmax + argmax over 1000 images -> the same class per image on every backend
+    expect:
+      equals: |
+        Accuracy: 932/1000
   - path: deep-learning-from-scratch/ch03/neuralnet-mnist-batch.lisp
-    backends: [jvm-compile, wasm-component]
-    note: reads dataset/t10k-*-ubyte + ch03/sample-weight.bin
+    backends: [interpreter, jvm, wasm, wasm-component]
+    workDir: deep-learning-from-scratch
+    workFiles: [ch03/sample-weight.bin, dataset/t10k-images-idx3-ubyte, dataset/t10k-labels-idx1-ubyte]
+    note: reads dataset/t10k-*-ubyte (gitignored -- ./download-mnist.sh) + ch03/sample-weight.bin (committed); RUN legs skip themselves when the idx dumps are absent
+    expect:
+      equals: |
+        Accuracy: 932/1000
   - path: deep-learning-from-scratch/ch04/gradient-1d.lisp
     backends: [interpreter, jvm, wasm]
     expect:
@@ -316,8 +346,12 @@ examples:
     backends: [jvm-compile, wasm-component]
     note: reads dataset/*-ubyte (./download-mnist.sh)
   - path: deep-learning-from-scratch/ch07/visualize-filter.lisp
-    backends: [jvm-compile, wasm-component]
-    note: reads ch07/params.bin (committed); output byte-identical across backends when run manually
+    backends: [interpreter, jvm, wasm, wasm-component]
+    workDir: deep-learning-from-scratch
+    workFiles: [ch07/params.bin]
+    note: reads ch07/params.bin (committed) -- staged into the workspace via workFiles; output byte-identical across all four backends
+    expect:
+      file: .expected/dlfs-visualize-filter.txt
   - path: deep-learning-from-scratch/ch08/train-deepnet.lisp
     backends: [jvm-compile, wasm-component]
     note: reads dataset/*-ubyte (./download-mnist.sh)
