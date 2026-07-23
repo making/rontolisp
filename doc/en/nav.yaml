@@ -57,6 +57,18 @@ sections:
         title: Reader Case (Upcasing)
       - file: guides/math-backends.md
         title: Math Function Backends
+      - file: guides/wasm-host-boundary.md
+        title: WASM Host Boundary (wasm-export / wasm-import)
+      - file: guides/wit-contracts.md
+        title: WIT Contracts (wit-export / wit-import)
+      - file: guides/wasm-gc-module.md
+        title: wasm-GC Core Module (Default Output)
+      - file: guides/wasm-component.md
+        title: WASI 0.3 Component (--component)
+      - file: guides/wasm-nogc.md
+        title: Non-GC Output (--no-gc)
+      - file: guides/wasm-browser.md
+        title: Running WASM in a Browser
       - file: guides/missing-features.md
         title: Unsupported CL Features
       - file: guides/eval-limitations.md

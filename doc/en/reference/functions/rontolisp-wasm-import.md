@@ -8,8 +8,8 @@ exactly like a top-level `defun` — including `#'name`, `funcall`, `mapcar` and
 `eval`. It is a compile-time directive, not an ordinary function: on the
 **interpreter** and **JVM** backends it defines a stub that signals an error
 when called (there is no host to call), so the same source still loads on every
-backend. See [Compiling to WebAssembly](../../compiling/wasm.md) for the full
-guide and the [WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy)
+backend. See the [WASM host boundary guide](../../guides/wasm-host-boundary.md)
+for the full guide and the [WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy)
 for a complete browser program.
 
 ```lisp

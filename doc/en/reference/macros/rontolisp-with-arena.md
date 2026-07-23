@@ -3,7 +3,7 @@
 `(rontolisp:with-arena () body...)`
 
 Runs the body and returns its value, naming a **memory-reclamation boundary** for the
-non-GC WASM backend ([`--no-gc`](../../compiling/wasm.md#non-gc-output---no-gc)). On
+non-GC WASM backend ([`--no-gc`](../../guides/wasm-nogc.md)). On
 that backend nothing is freed within one export call — the bump allocator only pops at
 the export boundary — so a loop that allocates each iteration (string building, fresh
 `vec:` vectors) grows the linear memory. `with-arena` closes that gap: it snapshots the
@@ -31,7 +31,7 @@ Nothing allocated inside the body may be reachable after it, **except the body's
 value**. Storing an inner allocation somewhere that outlives the arena (for example
 writing it into an array created outside) leaves a dangling pointer once the arena pops
 — the same rule as the host-side `__ronto_alloc_reset`
-([Reclaiming memory](../../compiling/wasm.md#reclaiming-memory-the-arena-api)).
+([Reclaiming memory](../../guides/wasm-nogc.md#reclaiming-memory-the-arena-api)).
 
 A typical use — keeping a hot loop flat on `--no-gc`:
 

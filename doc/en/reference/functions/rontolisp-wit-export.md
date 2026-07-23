@@ -13,7 +13,7 @@ byte-identical to the one those hand-written directives would have produced. It
 is a compile-time directive, not an ordinary function: on the **interpreter**
 and **JVM** backends it runs the same contract check and then returns `nil`, so
 the same source runs on every backend. See
-[Implementing a WIT World](../../compiling/wasm.md#implementing-a-wit-world-wit-export)
+[Implementing a WIT World](../../guides/wit-contracts.md#implementing-a-wit-world-wit-export)
 for the full guide.
 
 Because the directive reads a `.wit` file from disk, the example is shown

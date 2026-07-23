@@ -9,7 +9,7 @@ WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロー�
 ディレクティブです。**インタプリタ**および **JVM** バックエンドでは、呼び出すと
 エラーを通知するスタブを定義する (呼び出すべきホストが存在しない) ため、同じ
 ソースはすべてのバックエンドでロードできます。詳細は
-[WebAssembly へのコンパイル](../../compiling/wasm.md) を、完全なブラウザ
+[WASM ホスト境界ガイド](../../guides/wasm-host-boundary.md) を、完全なブラウザ
 プログラムは [WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy)
 を参照してください。
 

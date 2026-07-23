@@ -27,7 +27,7 @@ source runs on every backend. See
   per `:params` entry, as symbols or strings. Each must be a component-model
   label (lower-kebab-case words). Defaults to `p0`, `p1`, ... — the names a host
   or a binding generator sees in the component's type, and therefore the names
-  [`--emit-wit`](../../compiling/wasm.md#emitting-the-wit-world---emit-wit) prints. It is
+  [`--emit-wit`](../../guides/wit-contracts.md#emitting-the-wit-world---emit-wit) prints. It is
   ignored outside `--component` (a core WASM parameter has no name), and a
   program that implements a WIT world with
   [`rontolisp:wit-export`](rontolisp-wit-export.md) gets these from the world
@@ -71,8 +71,8 @@ it exposes the full width with no `wrap`/`extend` conversion.
   The export name must be lower-kebab-case (rename with `:as` otherwise), and
   adding `--emit-wit` writes the component's WIT world (with every export's typed
   signature) next to the `.wasm`. See
-  [Component-model function exports](../../compiling/wasm.md#component-model-function-exports-wasm-export)
-  and [Compact component output](../../compiling/wasm.md#compact-component-output---no-gc---component).
+  [Component-model function exports](../../guides/wasm-component.md#component-model-function-exports-wasm-export)
+  and [Compact component output](../../guides/wasm-nogc.md#compact-component-output---no-gc---component).
   On the interpreter and JVM the directive just returns the named symbol.
 - Only a top-level `defun` can be exported; the declared parameter count must
   match its arity, and functions that take or return function values are out of
@@ -82,7 +82,7 @@ it exposes the full width with no `wrap`/`extend` conversion.
   `--no-wasi` and is otherwise unsupported. One exception: under `--no-gc`,
   `print`/`princ`/`terpri` work through a single `fd_write` import that is
   added only when the program prints (see
-  [Printing](../../compiling/wasm.md#printing-print--princ--terpri)).
+  [Printing](../../guides/wasm-nogc.md#printing-print--princ--terpri)).
 - The non-GC backend (`--no-gc`) supports `:int`/`:long`/`:float`/`:bool`/`:string`
   but not `:s-expr`, which needs the cons/reader/printer runtime. `:long` is
   `--no-gc`-only: the GC backend rejects it (its integers are `i31ref`, which

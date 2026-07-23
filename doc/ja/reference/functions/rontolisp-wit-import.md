@@ -16,7 +16,7 @@ Lisp 関数として束縛されます。[`rontolisp:wit-export`](rontolisp-wit-
 **`--component`** では、インターフェースがコンポーネントモデルの本物の**インポート**
 になり、その関数群はモジュールへ `canon lower` されます — つまりプロバイダは*ホスト*
 であり、そのインターフェースをエクスポートする相手となら誰とでも合成できます。詳細は
-[WIT インターフェースのインポート](../../compiling/wasm.md#importing-a-wit-interface-wit-import)
+[WIT インターフェースのインポート](../../guides/wit-contracts.md#importing-a-wit-interface-wit-import)
 を参照してください。
 
 このディレクティブはディスク上の `.wit` ファイルを読むため、例は静的に示します。
@@ -163,7 +163,7 @@ Preview 1 では、生成されるモジュールは手書きの等価物と**�
 **インポートするのはプログラムが実際に呼ぶ関数だけ**です (コンポーネント経路には
 コアのツリーシェイカーがないため、使われないインターフェースメンバーはインポート自体
 から落とされます。`--no-prune` ですべて残せます)。
-[`--emit-wit`](../../compiling/wasm.md) はその刈り込まれたインターフェースを
+[`--emit-wit`](../../guides/wit-contracts.md#emitting-the-wit-world---emit-wit) はその刈り込まれたインターフェースを
 コンポーネントの world に書き出し、`wasm-tools component wit`
 の出力とバイト単位で一致します。インポートのないコンポーネントは従来どおりです。
 

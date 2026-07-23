@@ -27,7 +27,7 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
   モデルのラベル (lower-kebab-case の語) でなければなりません。デフォルトは `p0`、
   `p1`、... です。これはホストやバインディングジェネレータがコンポーネントの型で
   目にする名前であり、したがって
-  [`--emit-wit`](../../compiling/wasm.md#emitting-the-wit-world---emit-wit)
+  [`--emit-wit`](../../guides/wit-contracts.md#emitting-the-wit-world---emit-wit)
   が印字する名前でもあります。`--component` 以外では無視されます (コア WASM の引数に
   名前はありません)。また
   [`rontolisp:wit-export`](rontolisp-wit-export.md) で WIT world を実装している
@@ -74,8 +74,8 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
   lower-kebab-case である必要があります (そうでない場合は
   `:as` で改名します)。また `--emit-wit` を追加すると、コンポーネントの WIT world
   (すべてのエクスポートの型付きシグネチャ入り) が `.wasm` の隣に書き出されます。
-  [コンポーネントモデル関数エクスポート](../../compiling/wasm.md#component-model-function-exports-wasm-export)
-  と[コンパクトなコンポーネント出力](../../compiling/wasm.md#compact-component-output---no-gc---component)
+  [コンポーネントモデル関数エクスポート](../../guides/wasm-component.md#component-model-function-exports-wasm-export)
+  と[コンパクトなコンポーネント出力](../../guides/wasm-nogc.md#compact-component-output---no-gc---component)
   を参照してください。インタプリタおよび JVM では名前付きシンボルを返すだけです。
 - エクスポートできるのはトップレベルの `defun` のみで、宣言した引数の数はその
   アリティと一致しなければなりません。また関数値を引数や戻り値とする関数は対象外
@@ -85,7 +85,7 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
   トラップし、それ以外ではサポートされません。1 つ例外があります: `--no-gc` では
   `print`/`princ`/`terpri` が、プログラムが印字する場合にのみ追加される単一の
   `fd_write` インポートを通じて動作します
-  ([印字](../../compiling/wasm.md#printing-print--princ--terpri)を参照)。
+  ([印字](../../guides/wasm-nogc.md#printing-print--princ--terpri)を参照)。
 - 非 GC バックエンド (`--no-gc`) は `:int`/`:long`/`:float`/`:bool`/`:string` を
   サポートしますが、cons/リーダ/プリンタのランタイムを必要とする `:s-expr` は
   サポートしません。`:long` は `--no-gc` 専用です。GC バックエンドは (整数が `i64`

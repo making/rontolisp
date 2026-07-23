@@ -1,0 +1,73 @@
+# wasm-GC コアモジュール(デフォルト出力)
+
+デフォルトの出力 — `-o file.wasm` 以外のフラグなし — は、wasm-GC 値モデル上の **WASI Preview 1 コアモジュール**です:
+
+- **wasm-GC** — 整数は `i31ref` として表現されます。浮動小数点数は `float_struct { f64 }` にボックス化されます。スタック上のすべての値は `(ref eq)` として型付けされます。これが言語全機能(cons セル、シンボル、クロージャ、ハッシュテーブル、`eval` など)を支えるものであり、モジュールが wasmtime 14+(`-W gc`)、Node 22+、現行ブラウザといった wasm-GC 対応ランタイムを必要とする理由です。
+- **WASI Preview 1** — モジュールは 8 つの `wasi_snapshot_preview1` 関数(標準出力の `fd_write`、`random_get`、クロック、環境変数など)をインポートし、`_start` エントリポイントを公開するため、`wasmtime run` はプログラムのトップレベルをコマンドのように実行します。
+
+```bash
+echo '(print (+ 1 2))' > hello.lisp
+rontolisp hello.lisp -o hello.wasm
+wasmtime run -W gc hello.wasm
+# 3
+```
+
+エクスポートされた関数は**生のコア関数**です: スカラー(`:int`/`:float`/`:bool`)は素の数値として境界を渡るため、`wasmtime --invoke` や `instance.exports.fact(5)` が直接使えます。メモリ経由の `:string` と `:s-expr` はモジュールのエクスポートする `memory` を通じて `(ptr, len)` ペアを渡し、ホストが引数バイト列を書き込むための `__ronto_alloc(size)` バンプアロケータも併せてエクスポートされます — このプロトコルはメモリを読み書きできるホスト(JavaScript であって `wasmtime --invoke` ではない)を必要とし、[ブラウザガイドの「JavaScript からのモジュール呼び出し」付録](wasm-browser.md#appendix-calling-a-module-from-javascript)で端から端まで解説します。モジュールのインスタンス化には依然として 8 つの WASI インポートを満たす必要があります。`wasmtime run` は自動で提供し、ブラウザホストは純粋計算関数に対して no-op スタブを供給できます。あるいは [`--no-wasi`](#no-wasi-reactor-mode) で丸ごと取り除けます。
+
+この形状での `wasm-export` の全体像(運ばれる型、`:as` による改名、アリティ一致、void 戻り値)は、[ホスト境界ガイド](wasm-host-boundary.md)を参照してください。
+
+## 値モデルの動作上の注意
+
+wasm-GC 値モデルに関する 2 つの動作上の注意:
+
+- **パラメータ数の上限。** 関数(`defun` または `lambda`)は最大 **7 つのパラメータ**しか取れません(インタプリタと JVM バックエンドにこの制限はありません)。上限を超えた固定アリティの `defun` は自動的にバンドルされます: コンパイラは最初の 6 パラメータを残し、残りをリストに詰め、すべての直接呼び出しサイトを一致するように書き換えます — そのため幅広いライブラリシグネチャもそのままコンパイルされます。そのような関数の値を `#'name`/`symbol-function` で取るのはコンパイルエラーです(バンドルされた形を知っているのは直接呼び出しだけです)。また、上限を超えた `lambda` や可変長関数は依然としてエラーになります — その場合は自分で引数をリストにまとめてください。可変長関数の rest リストは 1 パラメータと数えられるため、`&rest` 関数は最大 6 つの必須パラメータを宣言でき、直接呼び出しサイトでは任意個の引数を受け取れます。
+- **浮動小数点数の印字の形。** WASM ではあらゆる大きさの浮動小数点数が印字できます: 整数部は 2⁶³ まで正確で、それを超える値は近似的な指数形式(`1.0E19`)にフォールバックし、`Infinity`、`-Infinity`、`NaN` は他のバックエンドと同様にその語で印字されます。形の違いが 1 つ残っています: 10⁷ から 2⁶³ までは、インタプリタと JVM が指数表記(`1.5E12`)を使うのに対し、WASM はすべての桁を印字します(`1500000000000.0`)。`rontolisp:json-stringify` もこの形の違いを引き継ぎます。
+
+## ホストのバッファの回収(アリーナ API)
+
+Lisp 側が確保するもの — コンスセル、クロージャ、文字列 — はすべてエンジンが回収するため、wasm-GC モジュールの*内側*にメモリ規律は不要です。エンジンから見えない唯一のものが、**ホスト**が引数のバイト列を書き込んだバッファです: それはリニアメモリであり、エンジンが決してトレースしない不透明なバイト配列で、決して解放しないバンプアロケータ `__ronto_alloc` から配られます。したがって、呼び出しごとに新しい入力バッファを確保する常駐ホストは、リニアメモリを際限なく成長させます。
+
+そこで、`memory` をエクスポートするモジュールは、同じヒープポインタ上の対の関数もエクスポートします:
+
+| export | signature | meaning |
+| --- | --- | --- |
+| `__ronto_alloc_mark` | `() -> i32` | snapshot the current bump-heap top |
+| `__ronto_alloc_reset` | `(i32 mark) -> ()` | restore the top to a saved mark |
+
+入力を確保する**前**にスナップショットを取り、結果を読み出した**後**に復元すれば、何回呼び出しても、各入力がどれだけ長くても、常駐インスタンスは平坦なままです:
+
+```js
+const countVowels = (s) => {
+  const b = enc.encode(s);
+  const mark = ex.__ronto_alloc_mark();          // snapshot BEFORE allocating
+  const ptr = ex.__ronto_alloc(b.length);        // a fresh buffer, any length
+  new Uint8Array(ex.memory.buffer, ptr, b.length).set(b);
+  const n = ex['count-vowels'](ptr, b.length);   // scalar result, read out here
+  ex.__ronto_alloc_reset(mark);                  // pop the input buffer
+  return n;
+};
+```
+
+アリーナ一般と同じく、ルールは 2 つです:
+
+- まだ生きているすべてのものより**前**に取ったマークにだけリセットしてください。
+- `:string` を**返す**エクスポートは結果のバイト列をメモリに残します: **リセットする前にデコードしてください**。さもないと次の確保がそれを上書きします。
+
+バックエンド固有のガードが 1 つあります: GC バックエンドでは同じヒープポインタがインターン済みシンボルのバイトプールも保持している(シンボルの同一性がそこでのオフセット*そのもの*)ため、`__ronto_alloc_reset` はそのプールの高水位より下へはポップしません。したがって新しいシンボルをインターンする呼び出し(`read`、`intern`、`gensym`)は入力バッファを保持し、それ以外の呼び出しは最後までポップします。ホスト側ですることはありません。
+
+このブラケットは、[`count-vowels` の例](https://github.com/making/rontolisp/tree/develop/examples/count-vowels)が `--no-gc` について Node と [Endive](https://endive.run)(Java)で示しているものと同一です — 境界のプロトコルはバックエンドで変わらず、変わるのは関数の中に何を書けるかだけです。[`--component`](wasm-component.md) ではアリーナ API はなく、囲むものもありません: 正準 ABI の `post-return` が引数の文字列を解放してくれます。
+
+## No-WASI(リアクター)モード
+
+`--no-wasi` を追加すると、WASI 関数を**一切**インポートしない Preview 1 モジュールが出力され、ホストはインポートオブジェクトなしでインスタンス化できます — エクスポートされた Lisp 関数だけを表面とする「リアクター」/ライブラリモジュールです:
+
+```bash
+rontolisp fact.lisp --no-wasi -o fact.wasm
+wasmtime run --invoke fact -W gc fact.wasm 5      # => 120
+```
+
+リアクターは JavaScript からも同様に簡単に駆動できます: **インポートオブジェクトがない**ため、ホスト側は「インスタンス化してからエクスポートを呼び出す」だけです(`WebAssembly.instantiate(bytes).then(({ instance }) => instance.exports.fact(5))`)。コピー＆ペーストして実行できる完全な Node + ブラウザの例は、[ブラウザガイドの付録](wasm-browser.md#appendix-calling-a-module-from-javascript)にあります。
+
+8 つの WASI インポートスロットは内部のトラップスタブで埋められるため、すべての関数インデックスは固定のままです(他のコード生成に変更はありません)。このモードは**純粋計算**のエクスポート専用です: あらゆる I/O(`print`/`read`/`open`/`getenv`/時刻/`random`、印字するトップレベルフォームを含む)はスタブに当たって**トラップ**します。Preview 1 専用です — `--no-wasi` は `--component` のもとでは無視されます。
+
+モジュールはリアクター(WASI コマンドではない)なので、トップレベルの初期化子は `_start` ではなく **`_initialize`** としてエクスポートされます。ホストはインスタンス化後に一度 `_initialize` を呼んでトップレベルフォーム(エクスポートされた関数が読む `defvar`/`defparameter`/`setq` のグローバル)を実行すべきです。トップレベル状態を持たない純粋計算リアクターは省略できます。

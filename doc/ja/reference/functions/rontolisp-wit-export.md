@@ -13,7 +13,7 @@
 なくコンパイル時のディレクティブです。**インタプリタ**および **JVM**
 バックエンドでも同じ契約チェックを行ったうえで `nil` を返すため、同じソースが
 すべてのバックエンドで動作します。詳細は
-[WIT world の実装](../../compiling/wasm.md#implementing-a-wit-world-wit-export)
+[WIT world の実装](../../guides/wit-contracts.md#implementing-a-wit-world-wit-export)
 を参照してください。
 
 このディレクティブはディスク上の `.wit` ファイルを読むため、例は静的に示します。

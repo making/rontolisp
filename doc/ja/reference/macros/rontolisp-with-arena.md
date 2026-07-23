@@ -3,7 +3,7 @@
 `(rontolisp:with-arena () body...)`
 
 ボディを実行してその値を返し、非 GC WASM バックエンド
-([`--no-gc`](../../compiling/wasm.md#non-gc-output---no-gc))
+([`--no-gc`](../../guides/wasm-nogc.md))
 の**メモリ再利用境界**を名付けます。このバックエンドでは 1 回のエクスポート呼び出しの中では
 何も解放されません — バンプアロケータはエクスポート境界でしかポップしない — ため、
 毎イテレーション確保するループ(文字列構築、新しい `vec:` ベクタ)は線形メモリを成長させます。
@@ -31,7 +31,7 @@ packed float 配列の結果はスナップショット位置へコピーダウ�
 あってはなりません。内部の確保値をアリーナより長生きする場所(たとえば外側で作った配列)
 に格納すると、アリーナのポップ後にダングリングポインタになります — ホスト側の
 `__ronto_alloc_reset`
-([メモリの再利用](../../compiling/wasm.md#reclaiming-memory-the-arena-api))
+([メモリの再利用](../../guides/wasm-nogc.md#reclaiming-memory-the-arena-api))
 と同じ規則です。
 
 典型的な使い方 — `--no-gc` でホットループをフラットに保つ:

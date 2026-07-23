@@ -16,7 +16,7 @@ becomes a [`rontolisp:wasm-import`](rontolisp-wasm-import.md); and under
 **`--component`** the interface becomes a real component-model **import**, whose
 functions are `canon lower`ed into the module — so the provider is the *host*,
 and the component composes with anyone who exports that interface. See
-[Importing a WIT Interface](../../compiling/wasm.md#importing-a-wit-interface-wit-import)
+[Importing a WIT Interface](../../guides/wit-contracts.md#importing-a-wit-interface-wit-import)
 for the full guide.
 
 Because the directive reads a `.wit` file from disk, the example is shown
@@ -163,7 +163,7 @@ Under `--component` the interface becomes an instance import of the component,
 and each bound function a `canon lower`ed core import. A component **only imports
 the functions the program actually calls** (the component path has no core tree
 shaker, so unused interface members are dropped from the import instead;
-`--no-prune` keeps them all), and [`--emit-wit`](../../compiling/wasm.md) writes
+`--no-prune` keeps them all), and [`--emit-wit`](../../guides/wit-contracts.md#emitting-the-wit-world---emit-wit) writes
 that pruned interface into the component's world — where `wasm-tools component
 wit` agrees with it, byte for byte. An import-free component is unchanged.
 
