@@ -151,25 +151,44 @@ class CiSpecE2eTest {
 
 	private static List<String> runBackend(Backend backend, Path bin, Path program) throws Exception {
 		return switch (backend) {
-			case INTERPRETER -> exec(List.of(bin.toString(), program.toString()));
+			case INTERPRETER -> execLabeled("interpret", List.of(bin.toString(), program.toString()));
 			case JVM -> {
-				exec(List.of(bin.toString(), program.toString(), "-o", "Test.class"));
-				yield exec(List.of("java", "Test"));
+				execLabeled("compile-jvm", List.of(bin.toString(), program.toString(), "-o", "Test.class"));
+				yield execLabeled("run-jvm", List.of("java", "Test"));
 			}
 			case WASM -> {
-				exec(List.of(bin.toString(), program.toString(), "-o", "test.wasm"));
+				execLabeled("compile-wasm", List.of(bin.toString(), program.toString(), "-o", "test.wasm"));
 				// --dir . preopens the work dir so the file-stream cases can open files;
 				// exceptions=y because the concatenated program contains catching cases
 				// (handler-case &c), which put the whole module in EH mode (harmless
 				// otherwise).
-				yield exec(List.of("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", "--dir", ".", "test.wasm"));
+				yield execLabeled("run-wasm",
+						List.of("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", "--dir", ".", "test.wasm"));
 			}
 			case WASM_COMPONENT -> {
-				exec(List.of(bin.toString(), program.toString(), "-o", "test.component.wasm", "--component"));
-				yield exec(List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--dir", ".",
-						"test.component.wasm"));
+				execLabeled("compile-wasm-component",
+						List.of(bin.toString(), program.toString(), "-o", "test.component.wasm", "--component"));
+				yield execLabeled("run-wasm-component", List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+						"--dir", ".", "test.component.wasm"));
 			}
 		};
+	}
+
+	private static List<String> execLabeled(String label, List<String> command)
+			throws IOException, InterruptedException {
+		System.err.println("[CiSpecE2eTest]   > " + label + " " + command);
+		long t0 = System.nanoTime();
+		try {
+			List<String> out = exec(command);
+			System.err.println("[CiSpecE2eTest]   < " + label + " ok in " + ((System.nanoTime() - t0) / 1_000_000)
+					+ " ms (" + out.size() + " lines)");
+			return out;
+		}
+		catch (IOException | InterruptedException ex) {
+			System.err.println("[CiSpecE2eTest]   ! " + label + " failed after "
+					+ ((System.nanoTime() - t0) / 1_000_000) + " ms: " + ex.getMessage());
+			throw ex;
+		}
 	}
 
 	/**
