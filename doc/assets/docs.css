@@ -55,6 +55,29 @@ a:hover { text-decoration: underline; }
 }
 .topbar .brand .paren { color: var(--accent); }
 
+/* Hamburger toggle: hidden on the desktop layout; revealed on narrow screens. */
+.nav-toggle {
+	display: none;
+	flex-direction: column;
+	justify-content: center;
+	gap: 4px;
+	width: 36px;
+	height: 32px;
+	padding: 0 7px;
+	background: var(--panel-2);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	cursor: pointer;
+}
+.nav-toggle:hover { border-color: var(--accent); }
+.nav-toggle-bar {
+	display: block;
+	height: 2px;
+	background: var(--fg);
+	border-radius: 2px;
+}
+
 .topnav {
 	margin-left: auto;
 	display: flex;
@@ -378,6 +401,31 @@ pre.cell-out.err { color: var(--err); }
 	.toc { display: none; }
 }
 @media (max-width: 800px) {
-	.sidebar { display: none; }
+	.nav-toggle { display: inline-flex; }
+	/* On narrow screens the sidebar becomes a slide-in overlay, revealed via
+	   the hamburger button. It has no reserved space in the flex layout. */
+	.sidebar {
+		position: fixed;
+		top: var(--topbar-h);
+		left: 0;
+		height: calc(100vh - var(--topbar-h));
+		width: min(80vw, 300px);
+		flex: none;
+		background: var(--panel);
+		border-right: 1px solid var(--border);
+		z-index: 30;
+		transform: translateX(-100%);
+		transition: transform 0.18s ease;
+	}
+	body.nav-open .sidebar { transform: translateX(0); }
+	.sidebar-backdrop {
+		position: fixed;
+		top: var(--topbar-h);
+		left: 0;
+		right: 0;
+		bottom: 0;
+		background: rgba(0, 0, 0, 0.5);
+		z-index: 25;
+	}
 	.content { padding: 20px; }
 }

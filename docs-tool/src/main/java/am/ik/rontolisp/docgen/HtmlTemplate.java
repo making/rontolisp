@@ -104,6 +104,12 @@ public final class HtmlTemplate {
 
 	private static void appendTopbar(StringBuilder html, PageContext ctx, String homeHref) {
 		html.append("<header class=\"topbar\">\n");
+		html.append("<button type=\"button\" class=\"nav-toggle\" aria-label=\"Toggle navigation\"")
+			.append(" aria-expanded=\"false\" aria-controls=\"sidebar\">\n")
+			.append("<span class=\"nav-toggle-bar\"></span>")
+			.append("<span class=\"nav-toggle-bar\"></span>")
+			.append("<span class=\"nav-toggle-bar\"></span>")
+			.append("</button>\n");
 		html.append("<a class=\"brand\" href=\"")
 			.append(homeHref)
 			.append("\"><span class=\"paren\">(</span>")
@@ -149,7 +155,8 @@ public final class HtmlTemplate {
 	}
 
 	private static void appendSidebar(StringBuilder html, PageContext ctx) {
-		html.append("<aside class=\"sidebar\">\n<nav>\n");
+		html.append("<div class=\"sidebar-backdrop\" hidden></div>\n");
+		html.append("<aside class=\"sidebar\" id=\"sidebar\">\n<nav>\n");
 		for (Nav.Section section : ctx.nav().sections()) {
 			html.append("<div class=\"nav-section\">\n");
 			html.append("<div class=\"nav-section-title\">").append(esc(section.title())).append("</div>\n");

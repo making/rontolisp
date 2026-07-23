@@ -211,8 +211,40 @@
 		update();
 	}
 
+	// Hamburger toggle for the sidebar on narrow screens. The sidebar is
+	// hidden by default via CSS transform; toggling body.nav-open slides it in.
+	function wireNavToggle() {
+		var toggle = document.querySelector(".nav-toggle");
+		var backdrop = document.querySelector(".sidebar-backdrop");
+		var sidebar = document.querySelector(".sidebar");
+		if (!toggle || !sidebar) return;
+
+		function setOpen(open) {
+			document.body.classList.toggle("nav-open", open);
+			toggle.setAttribute("aria-expanded", open ? "true" : "false");
+			if (backdrop) backdrop.hidden = !open;
+		}
+		toggle.addEventListener("click", function () {
+			setOpen(!document.body.classList.contains("nav-open"));
+		});
+		if (backdrop) {
+			backdrop.addEventListener("click", function () { setOpen(false); });
+		}
+		// Close after navigating within the sidebar (single-page-feel on mobile).
+		sidebar.addEventListener("click", function (ev) {
+			var a = ev.target.closest && ev.target.closest("a");
+			if (a) setOpen(false);
+		});
+		// If the viewport grows past the mobile breakpoint, drop the open state
+		// so the sidebar returns to its normal docked layout cleanly.
+		window.addEventListener("resize", function () {
+			if (window.innerWidth > 800) setOpen(false);
+		});
+	}
+
 	function wire() {
 		statusEl = document.querySelector(".runtime-status");
+		wireNavToggle();
 		wireToc();
 		wireCopy();
 
