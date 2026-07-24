@@ -47,6 +47,10 @@ final class JvmExprCompiler {
 			}
 			case LispCons cons -> compileCons(cons, ctx, className);
 			case am.ik.rontolisp.LispArray array -> JvmQuoteCompiler.compileLiteralArray(array, ctx, className);
+			// An instance is self-evaluating (CLHS 3.1.2.1.3: neither a symbol nor a
+			// cons), so a #S(...) literal in code position builds the same
+			// Object[]{layout, slots...} %obj-new does.
+			case am.ik.rontolisp.LispInstance inst -> JvmQuoteCompiler.compileLiteralInstance(inst, ctx, className);
 			// A packed #d(...) double-float literal compiles to a native double[] with a
 			// dimension header (the packed representation), disjoint from the general
 			// array.
@@ -729,6 +733,12 @@ final class JvmExprCompiler {
 				case LispNames.STRINGP -> JvmStringpCompiler.compile(cons, ctx, className);
 				case LispNames.LISTP -> JvmListpCompiler.compile(cons, ctx, className);
 				case LispNames.CONSP -> JvmConspCompiler.compile(cons, ctx, className);
+				case LispNames.OBJ_NEW -> JvmObjCompiler.compileNew(cons, ctx, className);
+				case LispNames.OBJ_REF -> JvmObjCompiler.compileRef(cons, ctx, className);
+				case LispNames.OBJ_SET -> JvmObjCompiler.compileSet(cons, ctx, className);
+				case LispNames.OBJ_IS -> JvmObjCompiler.compileIs(cons, ctx, className);
+				case LispNames.OBJ_TAG -> JvmObjCompiler.compileTag(cons, ctx, className);
+				case LispNames.OBJ_P -> JvmObjCompiler.compileP(cons, ctx, className);
 				case LispNames.FUNCTIONP -> JvmFunctionpCompiler.compile(cons, ctx, className);
 				case LispNames.ARRAYP_INTERNAL -> JvmArraypCompiler.compile(cons, ctx, className);
 				case LispNames.KEYWORDP -> JvmKeywordpCompiler.compile(cons, ctx, className);

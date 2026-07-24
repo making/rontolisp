@@ -189,7 +189,8 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
-			@org.jspecify.annotations.Nullable PackedPrint packedPrint) {
+			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
+			@org.jspecify.annotations.Nullable InstPrint instPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -309,9 +310,14 @@ final class JvmRuntimeBuilder {
 		// It's a function value
 		emitLdc(code, funcStr.index());
 		code.add(Opcode.ARETURN);
-		// Not a function -> cons list
-		patchBranch(code, ifEmptyPos, code.size());
+		// Not a function: an instance (arr[0] is its String[] layout), else a cons list.
+		// The empty-array escape jumps PAST the instance test, which probes arr[0].
 		patchBranch(code, ifNotFuncPos, code.size());
+		int ifNotInstPos = emitInstanceBranch(code, instPrint, false);
+		if (ifNotInstPos >= 0) {
+			patchBranch(code, ifNotInstPos, code.size());
+		}
+		patchBranch(code, ifEmptyPos, code.size());
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, consToStringMethod.index());
@@ -511,7 +517,8 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
-			@org.jspecify.annotations.Nullable PackedPrint packedPrint) {
+			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
+			@org.jspecify.annotations.Nullable InstPrint instPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -706,8 +713,12 @@ final class JvmRuntimeBuilder {
 		emitU2(code, 0);
 		emitLdc(code, funcStr.index());
 		code.add(Opcode.ARETURN);
-		patchBranch(code, ifEmptyPos, code.size());
 		patchBranch(code, ifNotFuncPos, code.size());
+		int ifNotInstPos = emitInstanceBranch(code, instPrint, true);
+		if (ifNotInstPos >= 0) {
+			patchBranch(code, ifNotInstPos, code.size());
+		}
+		patchBranch(code, ifEmptyPos, code.size());
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, consToDisplayStringMethod.index());
@@ -881,6 +892,199 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant fvToGeneralMethod, MethodrefConstant stringReplaceFirst,
 			ConstantPool.StringConstant prefixRegex, ConstantPool.StringConstant prefixRepl,
 			ConstantPool.StringConstant prefixReplSingle) {
+	}
+
+	/**
+	 * Constant-pool references for printing an instance -- {@code #S(NAME :SLOT v ...)}
+	 * for a struct layout, {@code #&lt;NAME :SLOT v ...&gt;} for a class one. Threaded
+	 * into the two lisp-to-string builders only when the program can build an instance,
+	 * so an instance-free program keeps the branch out entirely.
+	 *
+	 * @param stringArrayClass the {@code [Ljava/lang/String;} discriminator: an instance
+	 * is an {@code Object[]} with its layout there
+	 * @param instToString the {@code _instToString} helper (prin1 slot values)
+	 * @param instToDisplayString the {@code _instToDisplayString} helper (princ slot
+	 * values)
+	 */
+	record InstPrint(ClassConstant stringArrayClass, MethodrefConstant instToString,
+			MethodrefConstant instToDisplayString) {
+	}
+
+	/**
+	 * Builds {@code _instToString}/{@code _instToDisplayString}: renders an instance
+	 * {@code Object[]{String[] layout, v1, ..., vn}} as {@code #S(NAME :SLOT v ...)} or
+	 * {@code #&lt;NAME :SLOT v ...&gt;}, where the layout is
+	 * <code>{tag, printName, "S"|"C", slot0, ...}</code>.
+	 *
+	 * <p>
+	 * The {@code #S}/{@code #&lt;} frame and the colon on each slot key are literal
+	 * syntax, so they are emitted in BOTH escape modes (CLHS 22.1.3.12); only the slot
+	 * VALUES go through {@code elementFormatter}, which is the caller's choice of
+	 * {@code _lispToString} (prin1) or {@code _lispToDisplayString} (princ). One body
+	 * builder, two calls -- the {@code buildConsToDisplayStringBody} idiom -- so the two
+	 * renderings cannot drift.
+	 * @param objectArrayClass the {@code [Ljava/lang/Object;} class constant
+	 * @param stringArrayClass the {@code [Ljava/lang/String;} class constant
+	 * @param stringBuilderClass the {@code StringBuilder} class constant
+	 * @param sbInitStr the {@code StringBuilder(String)} constructor
+	 * @param sbAppendStr the {@code StringBuilder.append(String)} method
+	 * @param sbToString the {@code StringBuilder.toString()} method
+	 * @param objectEquals the {@code Object.equals(Object)} method
+	 * @param elementFormatter the per-slot-value renderer
+	 * @param structKindStr the {@code "S"} kind marker
+	 * @param openStructStr the {@code "#S("} opener
+	 * @param openClassStr the {@code "#&lt;"} opener
+	 * @param closeStructStr the {@code ")"} closer
+	 * @param closeClassStr the {@code "&gt;"} closer
+	 * @param keySepStr the {@code " :"} separator preceding a slot name
+	 * @param spaceStr the {@code " "} separator between a slot name and its value
+	 * @return the method body
+	 */
+	static List<Integer> buildInstToStringBody(ClassConstant objectArrayClass, ClassConstant stringArrayClass,
+			ClassConstant stringBuilderClass, MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr,
+			MethodrefConstant sbToString, MethodrefConstant objectEquals, MethodrefConstant elementFormatter,
+			ConstantPool.StringConstant structKindStr, ConstantPool.StringConstant openStructStr,
+			ConstantPool.StringConstant openClassStr, ConstantPool.StringConstant closeStructStr,
+			ConstantPool.StringConstant closeClassStr, ConstantPool.StringConstant keySepStr,
+			ConstantPool.StringConstant spaceStr) {
+		List<Integer> code = new ArrayList<>();
+		// layout = (String[]) arr[0]
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, stringArrayClass.index());
+		code.add(Opcode.ASTORE_2);
+		// The opener is chosen into a local BEFORE the StringBuilder is allocated: a
+		// branch merge with an uninitialized NEW on the operand stack is exactly what
+		// the offline StackMapTable computation should never have to model.
+		emitKindChoice(code, objectEquals, structKindStr, openStructStr, openClassStr);
+		code.add(Opcode.NEW);
+		emitU2(code, stringBuilderClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ALOAD);
+		code.add(4);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, sbInitStr.index());
+		code.add(Opcode.ASTORE_1);
+		// sb.append(layout[1]) -- the printed type name
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+		// for (i = 3; i < layout.length; i++) sb.append(" :").append(layout[i])
+		// .append(' ').append(format(arr[i - 2]))
+		code.add(Opcode.ICONST_3);
+		code.add(Opcode.ISTORE_3);
+		int loopStart = code.size();
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ARRAYLENGTH);
+		int ifDonePos = code.size();
+		code.add(Opcode.IF_ICMPGE);
+		emitU2(code, 0);
+		emitAppendConst(code, sbAppendStr, keySepStr);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+		emitAppendConst(code, sbAppendStr, spaceStr);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.ICONST_2);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, elementFormatter.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+		code.add(Opcode.IINC);
+		code.add(3);
+		code.add(1);
+		int gotoLoopPos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, gotoLoopPos, loopStart);
+		patchBranch(code, ifDonePos, code.size());
+		emitKindChoice(code, objectEquals, structKindStr, closeStructStr, closeClassStr);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ALOAD);
+		code.add(4);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbToString.index());
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	// Stores structText or classText into local 4, depending on layout[2].equals("S").
+	private static void emitKindChoice(List<Integer> code, MethodrefConstant objectEquals,
+			ConstantPool.StringConstant structKindStr, ConstantPool.StringConstant structText,
+			ConstantPool.StringConstant classText) {
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ICONST_2);
+		code.add(Opcode.AALOAD);
+		emitLdc(code, structKindStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, objectEquals.index());
+		int ifClassPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		emitLdc(code, structText.index());
+		code.add(Opcode.ASTORE);
+		code.add(4);
+		int gotoDonePos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifClassPos, code.size());
+		emitLdc(code, classText.index());
+		code.add(Opcode.ASTORE);
+		code.add(4);
+		patchBranch(code, gotoDonePos, code.size());
+	}
+
+	// sb.append(<constant>); pop
+	private static void emitAppendConst(List<Integer> code, MethodrefConstant sbAppendStr,
+			ConstantPool.StringConstant text) {
+		code.add(Opcode.ALOAD_1);
+		emitLdc(code, text.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, sbAppendStr.index());
+		code.add(Opcode.POP);
+	}
+
+	// Emits, inside the Object[] branch of a lisp-to-string body, the instance test:
+	// "if (arr[0] instanceof String[]) return _instToString(arr);". A no-op when the
+	// program can build no instance, so its bytes stay out entirely.
+	private static int emitInstanceBranch(List<Integer> code, @org.jspecify.annotations.Nullable InstPrint instPrint,
+			boolean display) {
+		if (instPrint == null) {
+			return -1;
+		}
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, instPrint.stringArrayClass().index());
+		int ifNotInstPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, display ? instPrint.instToDisplayString().index() : instPrint.instToString().index());
+		code.add(Opcode.ARETURN);
+		return ifNotInstPos;
 	}
 
 	// Emits "if (val instanceof CompletableFuture) return "#<FUTURE>";" at the current

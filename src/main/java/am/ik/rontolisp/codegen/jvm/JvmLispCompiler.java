@@ -1100,11 +1100,27 @@ public final class JvmLispCompiler implements LispCompiler {
 						cp.addString(JvmAsyncRuntimeBuilder.RMARKER), cp.addString("#<STREAM>"))
 				: null;
 
+		// Instances print as #S(NAME :SLOT v ...) / #<NAME :SLOT v ...>. Every constant
+		// is minted here, AFTER the body passes have interned whatever layouts the
+		// program references and BEFORE .writeConstantPool(cp) freezes the pool, so an
+		// instance-free program's pool -- and therefore its whole class -- is unchanged.
+		final boolean usesInstances = !mainCtx.layoutPool.isEmpty();
+		Utf8Constant instToStringName = usesInstances ? cp.addUtf8("_instToString") : null;
+		Utf8Constant instToDisplayStringName = usesInstances ? cp.addUtf8("_instToDisplayString") : null;
+		final JvmRuntimeBuilder.@Nullable InstPrint instPrint = usesInstances ? new JvmRuntimeBuilder.InstPrint(
+				mainCtx.layoutPool.stringArrayClass(cp),
+				cp.addMethodref(thisClass,
+						cp.addNameAndType(Objects.requireNonNull(instToStringName), consToStringDescUtf)),
+				cp.addMethodref(thisClass,
+						cp.addNameAndType(Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf)))
+				: null;
+
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
 				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, charBoxClass, charPrin1Method,
-				arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, futurePrint, packedPrint);
+				arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, futurePrint, packedPrint,
+				instPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
@@ -1112,7 +1128,15 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
 				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
 				charBoxClass, characterToString, arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod,
-				javaPrint, futurePrint, packedPrint);
+				javaPrint, futurePrint, packedPrint, instPrint);
+		List<Integer> instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
+				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
+				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
+				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr) : List.of();
+		List<Integer> instDisplayCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
+				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
+				objectEquals, lispToDisplayStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
+				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr) : List.of();
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, characterToString);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
@@ -1208,6 +1232,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<Integer> storeBody = storeCode;
 		final List<Integer> envLookupBody = envLookupCode;
 		final List<Integer> lookupBody = lookupCode;
+
+		// The layout half of <clinit>, assembled HERE because it mints CONSTANT_String
+		// entries and the constant pool is serialized by .writeConstantPool(cp) below,
+		// before the writeFields/writeMethods lambdas run.
+		final List<Integer> layoutClinitCode = new ArrayList<>();
+		mainCtx.layoutPool.emitClinitInit(layoutClinitCode, cp);
 
 		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
 		new ByteCodeWriter(classOut) //
@@ -1329,6 +1359,16 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc))
 						.writeU2(0));
 				}
+				// One private static String[] per instance layout the program references:
+				// {tag, printName, "S"|"C", slot0, ...}. Initialized in <clinit>; the
+				// array in slot 0 of an instance is also its type discriminator. The
+				// attribute count MUST stay 0 -- JvmClassShaker rejects field attributes.
+				for (LayoutPool.LayoutField lf : mainCtx.layoutPool.fields()) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(lf.name())
+						.writeU2(java.util.Objects.requireNonNull(mainCtx.layoutPool.fieldDesc))
+						.writeU2(0));
+				}
 			})
 			.writeMethods(methods -> {
 				methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainUtf8, mainDesc,
@@ -1386,12 +1426,17 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0);
 							})));
 				}
-				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed) {
+				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed
+						|| !mainCtx.layoutPool.isEmpty()) {
 					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 					// on a thread with no pending condition returns null). The async
 					// runtime's _handoffTl (the eager-start handoff) joins the same
 					// initializer when present, as does _nleTl (the cross-lambda exit
 					// carrier) -- appended last so a condition-only program is unchanged.
+					// The instance-layout constants join the SAME method (a class may
+					// have
+					// only one <clinit>), appended after the ThreadLocals for the same
+					// reason.
 					ConditionChannel channel = mainCtx.conditionChannel;
 					List<FieldrefConstant> tlFields = new java.util.ArrayList<>();
 					if (channel.used) {
@@ -1415,11 +1460,22 @@ public final class JvmLispCompiler implements LispCompiler {
 						clinitCode.add(Opcode.PUTSTATIC);
 						JvmRuntimeBuilder.emitU2(clinitCode, tlField.index());
 					}
+					clinitCode.addAll(layoutClinitCode);
 					clinitCode.add(Opcode.RETURN);
-					methods.add(AccessFlag.ACC_STATIC, java.util.Objects.requireNonNull(channel.clinitName),
-							java.util.Objects.requireNonNull(channel.clinitDesc),
+					// max_stack: the ThreadLocal group peaks at 2 (NEW; DUP), the layout
+					// group at 4 (array; DUP; index; LDC). StackMapAugmenter copies the
+					// declared maximum verbatim, so an under-declaration is a VerifyError
+					// at class load, not a compile error.
+					final int clinitMaxStack = mainCtx.layoutPool.isEmpty() ? 2 : 4;
+					// A layout-only program never runs ensureThreadLocalInfra, so the
+					// channel's <clinit> name constants are null there.
+					Utf8Constant clinitNameUtf = channel.clinitName != null ? channel.clinitName
+							: java.util.Objects.requireNonNull(mainCtx.layoutPool.clinitName);
+					Utf8Constant clinitDescUtf = channel.clinitDesc != null ? channel.clinitDesc
+							: java.util.Objects.requireNonNull(mainCtx.layoutPool.clinitDesc);
+					methods.add(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(2)
+								attr.writeU2(clinitMaxStack)
 									.writeU2(0)
 									.writeCode((Object[]) clinitCode.toArray(new Integer[0]))
 									.writeU2(0)
@@ -1434,6 +1490,28 @@ public final class JvmLispCompiler implements LispCompiler {
 								.writeU2(0)
 								.writeU2(0);
 						})));
+				if (usesInstances) {
+					// _instToString / _instToDisplayString: one body builder, two element
+					// formatters, so the readable and display renderings cannot drift.
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+							Objects.requireNonNull(instToStringName), consToStringDescUtf,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(5)
+									.writeU2(5)
+									.writeCode((Object[]) instCode.toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+							Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(5)
+									.writeU2(5)
+									.writeCode((Object[]) instDisplayCode.toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
 				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToStringName, consToStringDescUtf,
 						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 							attr.writeU2(3)
@@ -2264,6 +2342,145 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
+	 * The compilation-wide interner of instance layouts: one {@code private static}
+	 * {@code String[]} field per instance tag the program actually references, holding
+	 * <code>{tag, printName, "S"|"C", slot0, slot1, ...}</code> and initialized in
+	 * {@code <clinit>}.
+	 *
+	 * <p>
+	 * That array is also the runtime type discriminator: an instance is {@code Object[]{
+	 * layout, v1, ..., vn }} and no other value the backend produces has a
+	 * {@code String[]} in slot 0 (a cons is {@code Object[2]} of Lisp values, a function
+	 * value has an {@code Integer} there, a ratio is {@code BigInteger[]}).
+	 *
+	 * <p>
+	 * Everything is minted during body compilation, never from a writer lambda: the
+	 * constant pool is serialized by {@code .writeConstantPool(cp)} before the field and
+	 * method writers run, so an index created later would never be written.
+	 */
+	static final class LayoutPool {
+
+		/**
+		 * One interned layout: the field name constant, the fieldref to load it, and the
+		 * layout whose strings {@code <clinit>} materializes.
+		 *
+		 * @param name the field name constant
+		 * @param ref the fieldref used by {@code GETSTATIC}/{@code PUTSTATIC}
+		 * @param layout the layout the field holds
+		 */
+		record LayoutField(Utf8Constant name, FieldrefConstant ref, am.ik.rontolisp.LispLayout layout) {
+		}
+
+		private final Map<String, LayoutField> byTag = new java.util.LinkedHashMap<>();
+
+		private final Set<String> usedFieldNames = new HashSet<>();
+
+		@Nullable Utf8Constant fieldDesc;
+
+		@Nullable ClassConstant stringArrayCls;
+
+		@Nullable ClassConstant stringCls;
+
+		@Nullable Utf8Constant clinitName;
+
+		@Nullable Utf8Constant clinitDesc;
+
+		/**
+		 * Whether no layout field has been interned, i.e. the program builds no instance.
+		 * @return true when nothing has to be emitted
+		 */
+		boolean isEmpty() {
+			return this.byTag.isEmpty();
+		}
+
+		/**
+		 * The interned layout fields, in interning order.
+		 * @return the fields to emit
+		 */
+		java.util.Collection<LayoutField> fields() {
+			return this.byTag.values();
+		}
+
+		/**
+		 * The {@code [Ljava/lang/String;} class constant -- the instance discriminator.
+		 * Needed by the predicates even when no layout field is interned.
+		 * @param cp the constant pool
+		 * @return the class constant
+		 */
+		ClassConstant stringArrayClass(ConstantPool cp) {
+			if (this.stringArrayCls == null) {
+				this.stringArrayCls = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
+			}
+			return this.stringArrayCls;
+		}
+
+		/**
+		 * Interns the static field holding one instance tag's layout; idempotent per tag.
+		 * @param cp the constant pool
+		 * @param className the internal name of the class being emitted
+		 * @param layout the layout to intern
+		 * @return the fieldref of the layout constant
+		 */
+		FieldrefConstant intern(ConstantPool cp, String className, am.ik.rontolisp.LispLayout layout) {
+			LayoutField existing = this.byTag.get(layout.tag());
+			if (existing != null) {
+				return existing.ref();
+			}
+			stringArrayClass(cp);
+			if (this.stringCls == null) {
+				this.stringCls = cp.addClass(cp.addUtf8("java/lang/String"));
+			}
+			if (this.fieldDesc == null) {
+				this.fieldDesc = cp.addUtf8("[Ljava/lang/String;");
+			}
+			if (this.clinitName == null) {
+				this.clinitName = cp.addUtf8("<clinit>");
+				this.clinitDesc = cp.addUtf8("()V");
+			}
+			// The mangled tag can in principle collide with another mangled tag; the
+			// used-name set makes the field name deterministic and unique anyway.
+			String base = "_ly$" + mangleMethodName(layout.tag());
+			String name = base;
+			for (int n = 1; !this.usedFieldNames.add(name); n++) {
+				name = base + "$" + n;
+			}
+			Utf8Constant nameUtf = cp.addUtf8(name);
+			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
+			FieldrefConstant ref = cp.addFieldref(thisClass, cp.addNameAndType(nameUtf, this.fieldDesc));
+			this.byTag.put(layout.tag(), new LayoutField(nameUtf, ref, layout));
+			return ref;
+		}
+
+		/**
+		 * Appends the layout initializers to the shared {@code <clinit>} body. Peak
+		 * operand depth is 4 (array, dup, index, string).
+		 * @param code the {@code <clinit>} body being assembled
+		 * @param cp the constant pool (mints the layout strings)
+		 */
+		void emitClinitInit(List<Integer> code, ConstantPool cp) {
+			for (LayoutField lf : this.byTag.values()) {
+				List<String> parts = new ArrayList<>();
+				parts.add(lf.layout().tag());
+				parts.add(lf.layout().printName());
+				parts.add(lf.layout().kind() == am.ik.rontolisp.LispLayout.Kind.STRUCT ? "S" : "C");
+				parts.addAll(lf.layout().slotNames());
+				JvmRuntimeBuilder.emitIntConstStatic(code, parts.size());
+				code.add(Opcode.ANEWARRAY);
+				JvmRuntimeBuilder.emitU2(code, Objects.requireNonNull(this.stringCls).index());
+				for (int i = 0; i < parts.size(); i++) {
+					code.add(Opcode.DUP);
+					JvmRuntimeBuilder.emitIntConstStatic(code, i);
+					JvmRuntimeBuilder.emitLdc(code, cp.addString(parts.get(i)).index());
+					code.add(Opcode.AASTORE);
+				}
+				code.add(Opcode.PUTSTATIC);
+				JvmRuntimeBuilder.emitU2(code, lf.ref().index());
+			}
+		}
+
+	}
+
+	/**
 	 * An active {@code unwind-protect} protected region during compilation.
 	 * {@code cleanupForms} are re-compiled inline at every {@code return} escape site (a
 	 * cleanup runs once per exit path); {@code blockDepth} is the {@code %block} stack
@@ -2615,8 +2832,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final ConditionChannel conditionChannel;
 
+		/**
+		 * The compilation-wide instance-layout interner (one static {@code String[]}
+		 * field per instance tag actually referenced); one instance shared across every
+		 * context of a compilation through the single builder, like
+		 * {@link #conditionChannel}.
+		 */
+		final LayoutPool layoutPool;
+
 		private Ctx(Builder builder) {
 			this.conditionChannel = builder.conditionChannel;
+			this.layoutPool = builder.layoutPool;
 			this.dynamic = builder.dynamic;
 			this.crossLambdaExit = builder.crossLambdaExit;
 			this.usesFloatArray = builder.usesFloatArray;
@@ -2706,6 +2932,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * from the same builder shares it.
 			 */
 			private final ConditionChannel conditionChannel = new ConditionChannel();
+
+			/**
+			 * One layout pool per builder (= per compilation): every context built from
+			 * the same builder shares it.
+			 */
+			private final LayoutPool layoutPool = new LayoutPool();
 
 			private @Nullable ConstantPool cp;
 

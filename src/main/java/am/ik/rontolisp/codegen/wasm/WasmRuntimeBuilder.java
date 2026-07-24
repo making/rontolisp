@@ -640,6 +640,160 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END);
 	}
 
+	/**
+	 * Emits the {@code TYPE_INSTANCE} print branch: {@code #S(NAME :SLOT value ...)} for
+	 * a struct layout, {@code #<NAME :SLOT value ...>} for a class one. The
+	 * {@code #S}/{@code #<} frame and the colon on each slot key are literal syntax and
+	 * so are written in BOTH escape modes (CLHS 22.1.3.12); only the slot VALUES go
+	 * through {@code elementFunc}, which is {@code FUNC_PRINT_VAL} for {@code prin1} and
+	 * {@code FUNC_PRINC_VAL} for {@code princ}.
+	 *
+	 * <p>
+	 * The branch is a FIXED-SIZE loop driven by the layout record in linear memory, not a
+	 * per-type if-chain, so the body does not grow with the number of struct or class
+	 * types the program defines.
+	 *
+	 * <p>
+	 * It is mandatory rather than cosmetic: the printer's tail assumes a cons and would
+	 * trap on {@code ref.cast $cons}. A no-op when the module has no instance type
+	 * ({@code instanceTypeIndex < 0}), keeping every instance-free module byte-identical
+	 * -- which is also why the four delimiter strings are interned HERE and not as
+	 * StringTable constructor fields, where they would move every existing offset.
+	 * @param w the writer for the printer body
+	 * @param st the module string table, still open for appends
+	 * @param elementFunc the per-slot-value renderer
+	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
+	 * @param addrSlot an i32 local holding the layout record address
+	 * @param idxSlot an i32 local holding the slot loop counter
+	 * @param cntSlot an i32 local holding the slot count
+	 */
+	private static void emitPrintInstance(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc,
+			int instanceTypeIndex, int addrSlot, int idxSlot, int cntSlot) {
+		if (instanceTypeIndex < 0) {
+			return;
+		}
+		WasmLispCompiler.StringTable.StringEntry openStruct = st.addString("#S(");
+		WasmLispCompiler.StringTable.StringEntry openClass = st.addString("#<");
+		WasmLispCompiler.StringTable.StringEntry closeClass = st.addString(">");
+		WasmLispCompiler.StringTable.StringEntry keySep = st.addString(" :");
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(instanceTypeIndex);
+		w.write(Instruction.IF, 0x40);
+		// addr = the layout record's linear address
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(instanceTypeIndex);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(instanceTypeIndex);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(addrSlot);
+		// kind == CLASS ? "#<" : "#S("
+		emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_KIND);
+		w.write(Instruction.IF, 0x40);
+		emitWriteString(w, openClass);
+		w.write(Instruction.ELSE);
+		emitWriteString(w, openStruct);
+		w.write(Instruction.END);
+		// the printed type name
+		emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_NAME_OFF);
+		emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_NAME_LEN);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_SLOT_COUNT);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(cntSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(idxSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(idxSlot);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(cntSlot);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF);
+		w.writeSignedLeb128(1);
+		emitWriteString(w, keySep);
+		// the slot name: addr + OFF_SLOTS + idx * SLOT_ENTRY_BYTES
+		emitSlotEntryAddress(w, addrSlot, idxSlot);
+		w.write(Instruction.I32_LOAD, 0x02, WasmInstanceLayouts.OFF_SLOTS);
+		emitSlotEntryAddress(w, addrSlot, idxSlot);
+		w.write(Instruction.I32_LOAD, 0x02, WasmInstanceLayouts.OFF_SLOTS + 4);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		emitWriteString(w, st.space);
+		// the slot value, rendered in the ambient escape mode
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(instanceTypeIndex);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(instanceTypeIndex);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(idxSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(elementFunc);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(idxSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(idxSlot);
+		w.write(Instruction.BR);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_KIND);
+		w.write(Instruction.IF, 0x40);
+		emitWriteString(w, closeClass);
+		w.write(Instruction.ELSE);
+		emitWriteString(w, st.rparen);
+		w.write(Instruction.END);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the i32 word at addrSlot + offset out of a layout record.
+	private static void emitLoadLayoutWord(WasmWriter w, int addrSlot, int offset) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(addrSlot);
+		w.write(Instruction.I32_LOAD, 0x02, offset);
+	}
+
+	// Pushes addrSlot + idxSlot * SLOT_ENTRY_BYTES: the base of one slot-name entry.
+	private static void emitSlotEntryAddress(WasmWriter w, int addrSlot, int idxSlot) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(addrSlot);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(idxSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmInstanceLayouts.SLOT_ENTRY_BYTES);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_ADD);
+	}
+
+	// (offset, length) -> _write_str: writes an interned string to the current sink.
+	private static void emitWriteString(WasmWriter w, WasmLispCompiler.StringTable.StringEntry entry) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(entry.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(entry.length());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+	}
+
 	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase) {
@@ -1727,7 +1881,8 @@ final class WasmRuntimeBuilder {
 	 * newline. Handles null (nil), i31ref (integer), string struct, closure struct, and
 	 * cons struct (list).
 	 */
-	static byte[] buildPrintValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex) {
+	static byte[] buildPrintValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex,
+			int instanceTypeIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -1868,6 +2023,7 @@ final class WasmRuntimeBuilder {
 		emitPrintFuture(w, st, futureTypeIndex);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
+		emitPrintInstance(w, st, WasmLispCompiler.FUNC_PRINT_VAL, instanceTypeIndex, 5, 6, 7);
 		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, simd);
 
 		// Must be cons struct - print as list
@@ -1970,7 +2126,8 @@ final class WasmRuntimeBuilder {
 	 * Builds the princ_val helper function body. Same as print_val but strips quotes from
 	 * strings and uses FUNC_PRINC_VAL for recursive cons printing.
 	 */
-	static byte[] buildPrincValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex) {
+	static byte[] buildPrincValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex,
+			int instanceTypeIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -2182,6 +2339,7 @@ final class WasmRuntimeBuilder {
 		emitPrintFuture(w, st, futureTypeIndex);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
+		emitPrintInstance(w, st, WasmLispCompiler.FUNC_PRINC_VAL, instanceTypeIndex, 6, 7, 8);
 		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINC_VAL, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, simd);
 
 		// Must be cons struct - print as list

@@ -76,6 +76,10 @@ final class WasmExprCompiler {
 			}
 			case LispCons cons -> compileCons(cons, ctx);
 			case am.ik.rontolisp.LispArray array -> WasmQuoteCompiler.compileLiteralArray(array, ctx);
+			// An instance is self-evaluating (CLHS 3.1.2.1.3: neither a symbol nor a
+			// cons), so a #S(...) literal in code position builds the same TYPE_INSTANCE
+			// struct %obj-new does.
+			case am.ik.rontolisp.LispInstance inst -> WasmQuoteCompiler.compileLiteralInstance(inst, ctx);
 			case am.ik.rontolisp.LispDoubleFloatArray fa -> WasmQuoteCompiler.compilePackedLiteral(fa, ctx);
 			case am.ik.rontolisp.LispSingleFloatArray fa -> WasmQuoteCompiler.compileSinglePackedLiteral(fa, ctx);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
@@ -813,6 +817,12 @@ final class WasmExprCompiler {
 				case LispNames.STRINGP -> WasmStringpCompiler.compile(cons, ctx);
 				case LispNames.LISTP -> WasmListpCompiler.compile(cons, ctx);
 				case LispNames.CONSP -> WasmConspCompiler.compile(cons, ctx);
+				case LispNames.OBJ_NEW -> WasmInstanceCompiler.compileNew(cons, ctx);
+				case LispNames.OBJ_REF -> WasmInstanceCompiler.compileRef(cons, ctx);
+				case LispNames.OBJ_SET -> WasmInstanceCompiler.compileSet(cons, ctx);
+				case LispNames.OBJ_IS -> WasmInstanceCompiler.compileIs(cons, ctx);
+				case LispNames.OBJ_TAG -> WasmInstanceCompiler.compileTag(cons, ctx);
+				case LispNames.OBJ_P -> WasmInstanceCompiler.compileP(cons, ctx);
 				case LispNames.FUNCTIONP -> WasmFunctionpCompiler.compile(cons, ctx);
 				case LispNames.ARRAYP_INTERNAL -> WasmArraypCompiler.compile(cons, ctx);
 				case LispNames.KEYWORDP -> WasmKeywordpCompiler.compile(cons, ctx);

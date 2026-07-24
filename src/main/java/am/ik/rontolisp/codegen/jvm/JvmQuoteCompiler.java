@@ -164,6 +164,10 @@ final class JvmQuoteCompiler {
 			case LispSymbol sym -> JvmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx, className);
 			case LispArray array -> compileQuotedArray(array, ctx, className);
+			// An instance inside quoted data (a #S(...) literal) builds the same
+			// Object[]{layout, slots...} %obj-new does; the layout constant is interned
+			// once per tag.
+			case am.ik.rontolisp.LispInstance inst -> compileQuotedInstance(inst, ctx, className);
 			// A packed #d(...) double-float literal compiles to a native double[] with a
 			// dimension header (the packed representation), disjoint from the general
 			// array.
@@ -174,6 +178,40 @@ final class JvmQuoteCompiler {
 			// general array and from the double[] packed representation.
 			case am.ik.rontolisp.LispSingleFloatArray fa -> compileSinglePackedLiteral(fa, ctx);
 			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
+		}
+	}
+
+	/**
+	 * Compiles a self-evaluating instance literal in code position (an instance is
+	 * neither a symbol nor a cons, CLHS 3.1.2.1.3).
+	 * @param inst the instance literal
+	 * @param ctx the compilation context
+	 * @param className the class being emitted
+	 */
+	static void compileLiteralInstance(am.ik.rontolisp.LispInstance inst, JvmLispCompiler.Ctx ctx, String className) {
+		compileQuotedInstance(inst, ctx, className);
+	}
+
+	// Builds Object[]{String[] layout, v1, ..., vn} -- the same shape %obj-new emits.
+	// The layout is taken from the VALUE, because a #S(...) literal carries the layout
+	// the reader already resolved against the same registry the compiler uses.
+	private static void compileQuotedInstance(am.ik.rontolisp.LispInstance inst, JvmLispCompiler.Ctx ctx,
+			String className) {
+		am.ik.jvm.ConstantPool.FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, inst.layout());
+		int slots = inst.slotCount();
+		JvmEmitHelper.emitIntConst(ctx, 1 + slots);
+		ctx.emit(Opcode.ANEWARRAY);
+		ctx.emitU2(ctx.objectClass.index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(lf.index());
+		ctx.emit(Opcode.AASTORE);
+		for (int i = 0; i < slots; i++) {
+			ctx.emit(Opcode.DUP);
+			JvmEmitHelper.emitIntConst(ctx, 1 + i);
+			compileQuotedVal(inst.slot(i), ctx, className);
+			ctx.emit(Opcode.AASTORE);
 		}
 	}
 

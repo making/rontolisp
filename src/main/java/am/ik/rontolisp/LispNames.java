@@ -3687,6 +3687,49 @@ public final class LispNames {
 	 */
 	public static final String CLASS_SLOT_DEFS_INTERNAL = "%CLASS-SLOT-DEFS";
 
+	/**
+	 * The internal instance constructor: {@code (%obj-new '<tag> v1 ... vn)} builds an
+	 * instance of the type carrying that tag, with the values in layout order. The tag
+	 * must be a quoted literal on the compile path (the same rule
+	 * {@code make-instance}/{@code slot-value} follow), because the layout is resolved at
+	 * expansion time.
+	 */
+	public static final String OBJ_NEW = "%OBJ-NEW";
+
+	/**
+	 * The internal slot reader: {@code (%obj-ref obj <k>)} reads slot {@code k} (0-based,
+	 * a literal integer) of an instance.
+	 */
+	public static final String OBJ_REF = "%OBJ-REF";
+
+	/**
+	 * The internal slot writer: {@code (%obj-set obj <k> v)} writes slot {@code k}
+	 * (0-based, a literal integer) of an instance and returns the value written.
+	 */
+	public static final String OBJ_SET = "%OBJ-SET";
+
+	/**
+	 * The internal instance-of test: {@code (%obj-is obj '<tag1> '<tag2> ...)} is
+	 * {@code t} when the value is an instance whose type tag is one of the listed ones.
+	 * Replaces the tagged-list era's {@code (if (consp x) (equal (car x) 'tag) nil)} in
+	 * struct predicates, class specializers and condition-type tests.
+	 */
+	public static final String OBJ_IS = "%OBJ-IS";
+
+	/**
+	 * The internal instance tag reader: {@code (%obj-tag obj)} yields the
+	 * {@code %struct-<name>} / {@code %class-<name>} symbol of an instance, or nil for a
+	 * non-instance. {@code class-of} is built on it.
+	 */
+	public static final String OBJ_TAG = "%OBJ-TAG";
+
+	/**
+	 * The internal instance predicate: {@code (%obj-p x)} is {@code t} for any instance
+	 * of a struct or class type. Used where a test must accept every instance regardless
+	 * of type (the Gray-stream dispatch, {@code standard-object}).
+	 */
+	public static final String OBJ_P = "%OBJ-P";
+
 	/** The {@code simple-condition-format-control} condition reader. */
 	public static final String SIMPLE_CONDITION_FORMAT_CONTROL = "SIMPLE-CONDITION-FORMAT-CONTROL";
 

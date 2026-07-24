@@ -273,6 +273,10 @@ final class WasmQuoteCompiler {
 			case LispArray array -> compileQuotedArray(array, ctx);
 			case am.ik.rontolisp.LispDoubleFloatArray fa -> compilePackedLiteral(fa, ctx);
 			case am.ik.rontolisp.LispSingleFloatArray fa -> compileSinglePackedLiteral(fa, ctx);
+			// An instance inside quoted data (a #S(...) literal) builds the same
+			// TYPE_INSTANCE struct %obj-new does; it is self-evaluating, so it also
+			// reaches here from the bare-literal arm of compileExpr.
+			case am.ik.rontolisp.LispInstance inst -> compileQuotedInstance(inst, ctx);
 			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
 		}
 	}
@@ -339,6 +343,43 @@ final class WasmQuoteCompiler {
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+	}
+
+	/**
+	 * Compiles a self-evaluating instance literal in code position (an instance is
+	 * neither a symbol nor a cons, CLHS 3.1.2.1.3).
+	 * @param inst the instance literal
+	 * @param ctx the compilation context
+	 */
+	static void compileLiteralInstance(am.ik.rontolisp.LispInstance inst, WasmLispCompiler.Ctx ctx) {
+		compileQuotedInstance(inst, ctx);
+	}
+
+	// Builds a TYPE_INSTANCE over the layout the value already carries: the slots array
+	// first, then the baked layout address, then struct.new.
+	private static void compileQuotedInstance(am.ik.rontolisp.LispInstance inst, WasmLispCompiler.Ctx ctx) {
+		Integer address = ctx.layoutAddresses.get(inst.layout().tag());
+		if (address == null || ctx.instanceTypeIndex < 0) {
+			throw new UnsupportedOperationException(
+					"Cannot quote an instance of an unregistered type: " + inst.layout().tag());
+		}
+		int slotCount = inst.slotCount();
+		refNull(ctx);
+		i32Const(ctx, slotCount);
+		arrayNew(ctx);
+		int slotsSlot = ctx.allocTemp();
+		setLocal(ctx, slotsSlot);
+		for (int i = 0; i < slotCount; i++) {
+			getBuckets(ctx, slotsSlot);
+			i32Const(ctx, i);
+			compileQuotedVal(inst.slot(i), ctx);
+			arraySet(ctx);
+		}
+		i32Const(ctx, address);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slotsSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(ctx.instanceTypeIndex);
 	}
 
 	private static void refNull(WasmLispCompiler.Ctx ctx) {

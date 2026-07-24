@@ -6468,6 +6468,49 @@ class JvmLispCompilerTest {
 			.hasMessageContaining("expects at least 1 argument, got 0");
 	}
 
+	// The instance tag is written with |...| because the reader upcases every ordinary
+	// symbol: a source-written '%struct-POINT reads as %STRUCT-POINT and can never match
+	// a real tag, which is what stops a program forging an instance.
+	@Test
+	void compileAndRunInstancePrimitives() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(setq p (%obj-new '|%struct-POINT| 10 20))
+				(print (%obj-ref p 0))
+				(print (%obj-set p 1 99))
+				(print (%obj-ref p 1))
+				(print (%obj-is p '|%struct-POINT|))
+				(print (%obj-is p '|%struct-OTHER| '|%struct-POINT|))
+				(print (%obj-is p '|%struct-OTHER|))
+				(print (%obj-tag p))
+				(print (%obj-p p))
+				(print (%obj-ref (%obj-new '|%struct-POINT| 1) 1))
+				""")).isEqualTo("10\n99\n99\nT\nT\nNIL\n%struct-POINT\nT\nNIL");
+	}
+
+	@Test
+	void compileAndRunInstancePredicateRejectsEveryOtherShape() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(print (list (%obj-p nil) (%obj-p (cons 1 2)) (%obj-p '(1 2 3)) (%obj-p 1/2)
+				             (%obj-p #\\a) (%obj-p "s") (%obj-p 5) (%obj-p 1.5)
+				             (%obj-p (make-array 2)) (%obj-p (make-hash-table)) (%obj-p #'car)
+				             (%obj-p (cons #'car 2)) (%obj-p (cons "x" 2))))
+				(print (%obj-tag (cons 1 2)))
+				""")).isEqualTo("(NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL)\nNIL");
+	}
+
+	// A program with BOTH a layout constant and a condition channel shares one <clinit>;
+	// an under-declared max_stack there is a load-time VerifyError, so this must RUN.
+	@Test
+	void compileAndRunInstancePrimitivesAlongsideHandlerCase() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(setq p (%obj-new '|%struct-POINT| 1 2))
+				(print (handler-case (error "boom") (error (e) (%obj-ref p 1))))
+				""")).isEqualTo("2");
+	}
+
 	@Test
 	void compileAndRunDefstructBasics() throws Exception {
 		assertThat(compileAndRun("""

@@ -8379,6 +8379,51 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("(1 2 3)\n(1 (2 3))\n(1 (2 3))\n(101 102 103)\n(1 (2 3))");
 	}
 
+	// The instance tag is written with |...| because the reader upcases every ordinary
+	// symbol: a source-written '%struct-POINT reads as %STRUCT-POINT and can never match
+	// a real tag, which is what stops a program forging an instance.
+	@Test
+	void compileAndRunInstancePrimitives() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(setq p (%obj-new '|%struct-POINT| 10 20))
+				(print (%obj-ref p 0))
+				(print (%obj-set p 1 99))
+				(print (%obj-ref p 1))
+				(print (%obj-is p '|%struct-POINT|))
+				(print (%obj-is p '|%struct-OTHER| '|%struct-POINT|))
+				(print (%obj-is p '|%struct-OTHER|))
+				(print (%obj-tag p))
+				(print (list (%obj-p p) (%obj-p (cons 1 2)) (%obj-p nil) (%obj-p 5)))
+				(print (eq (%obj-tag p) (%obj-tag (%obj-new '|%struct-POINT| 1 2))))
+				""")).isEqualTo("10\n99\n99\nT\nT\nNIL\n%struct-POINT\n(T NIL NIL NIL)\nT");
+	}
+
+	@Test
+	void compileAndRunInstancePrintsInStructAndAngleSyntax() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(defstruct empty)
+				(defclass pt () ((a :initarg :a) (b :initarg :b)))
+				(defclass bare () ())
+				(setq p (%obj-new '|%struct-POINT| "str" nil))
+				(print p)
+				(princ p) (terpri)
+				(print (%obj-new '|%struct-POINT| p 3))
+				(print (%obj-new '|%struct-EMPTY|))
+				(print (list 1 p 2))
+				(print (%obj-new '|%class-PT| 5 nil))
+				(print (%obj-new '|%class-BARE|))
+				""")).isEqualTo("""
+				#S(POINT :X "str" :Y NIL)
+				#S(POINT :X str :Y NIL)
+				#S(POINT :X #S(POINT :X "str" :Y NIL) :Y 3)
+				#S(EMPTY)
+				(1 #S(POINT :X "str" :Y NIL) 2)
+				#<PT :A 5 :B NIL>
+				#<BARE>""");
+	}
+
 	@Test
 	void compileAndRunDefstructBasics() throws Exception {
 		assertThat(compileAndRun("""

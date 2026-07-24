@@ -821,6 +821,11 @@ final class WasmAsyncEmit {
 			.futureTypeIndex(proto.futureTypeIndex)
 			.frameTypeIndex(proto.frameTypeIndex)
 			.wasiStreamTypeIndex(proto.wasiStreamTypeIndex)
+			// NOT optional: freshCtx also builds the SYNCHRONOUS top level, so without
+			// these a top-level %obj-* would compile with no type index and no layout
+			// addresses while the same form inside a defun worked.
+			.instanceTypeIndex(proto.instanceTypeIndex)
+			.layoutAddresses(proto.layoutAddresses)
 			.asyncFuncBase(proto.asyncFuncBase)
 			.asyncDefunNames(proto.asyncDefunNames)
 			.currentTaskGlobalIndex(proto.currentTaskGlobalIndex)

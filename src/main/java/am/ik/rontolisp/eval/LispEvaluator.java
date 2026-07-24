@@ -16,8 +16,10 @@ import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispJavaObject;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
@@ -391,6 +393,54 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.SUBTYPEP + " expects 2 arguments, got " + args.size());
 			}
 			return subtypep(args.get(0), args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// The instance primitives. Every struct/class/condition instance is built, read,
+		// written and type-tested through these six; nothing else may touch the slot
+		// storage, which is what keeps the value model swappable behind one seam.
+		this.globalEnv.defineFunction(LispNames.OBJ_NEW, new LispFunction(LispNames.OBJ_NEW, args -> {
+			if (args.isEmpty() || !(args.get(0) instanceof LispSymbol tag)) {
+				throw new LispEvalException(LispNames.OBJ_NEW + " expects an instance tag symbol");
+			}
+			LispLayout layout = this.closRegistry.findLayoutByTag(tag.name());
+			if (layout == null) {
+				throw new LispEvalException(LispNames.OBJ_NEW + ": unknown instance type " + tag.name());
+			}
+			LispVal[] slots = new LispVal[layout.slotCount()];
+			for (int i = 0; i < slots.length; i++) {
+				slots[i] = i + 1 < args.size() ? args.get(i + 1) : LispNil.INSTANCE;
+			}
+			return new LispInstance(layout, slots);
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_REF, new LispFunction(LispNames.OBJ_REF, args -> {
+			LispInstance inst = requireInstance(LispNames.OBJ_REF, args);
+			return inst.slot(requireSlotIndex(LispNames.OBJ_REF, inst, args));
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_SET, new LispFunction(LispNames.OBJ_SET, args -> {
+			if (args.size() != 3) {
+				throw new LispEvalException(LispNames.OBJ_SET + " expects 3 arguments, got " + args.size());
+			}
+			LispInstance inst = requireInstance(LispNames.OBJ_SET, args);
+			inst.setSlot(requireSlotIndex(LispNames.OBJ_SET, inst, args), args.get(2));
+			return args.get(2);
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_IS, new LispFunction(LispNames.OBJ_IS, args -> {
+			if (args.isEmpty() || !(args.get(0) instanceof LispInstance inst)) {
+				return LispNil.INSTANCE;
+			}
+			for (int i = 1; i < args.size(); i++) {
+				if (args.get(i) instanceof LispSymbol tag && inst.hasTag(tag.name())) {
+					return LispTrue.INSTANCE;
+				}
+			}
+			return LispNil.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_TAG, new LispFunction(LispNames.OBJ_TAG, args -> {
+			requireSingleArg(LispNames.OBJ_TAG, args);
+			return args.get(0) instanceof LispInstance inst ? new LispSymbol(inst.layout().tag()) : LispNil.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_P, new LispFunction(LispNames.OBJ_P, args -> {
+			requireSingleArg(LispNames.OBJ_P, args);
+			return args.get(0) instanceof LispInstance ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		this.globalEnv.defineFunction(LispNames.CLASS_OF, new LispFunction(LispNames.CLASS_OF, args -> {
 			requireSingleArg(LispNames.CLASS_OF, args);
@@ -1604,6 +1654,7 @@ public final class LispEvaluator {
 			case LispJavaObject j -> j;
 			case LispFuture f -> f;
 			case LispStream s -> s;
+			case LispInstance inst -> inst;
 			case LispSymbol sym -> evalSymbolRef(sym, env);
 			case LispCons cons -> evalCons(cons, env);
 		};
@@ -3068,6 +3119,27 @@ public final class LispEvaluator {
 		if (args.size() != 1) {
 			throw new LispEvalException(name + " expects 1 argument, got " + args.size());
 		}
+	}
+
+	/** The first argument of an instance primitive, which must be an instance. */
+	private static LispInstance requireInstance(String name, List<LispVal> args) {
+		if (args.isEmpty() || !(args.get(0) instanceof LispInstance inst)) {
+			throw new LispEvalException(
+					name + " expects an instance, got " + (args.isEmpty() ? "no arguments" : args.get(0).print()));
+		}
+		return inst;
+	}
+
+	/** The second argument of an instance primitive: a 0-based slot index in range. */
+	private static int requireSlotIndex(String name, LispInstance inst, List<LispVal> args) {
+		if (args.size() < 2 || !(args.get(1) instanceof LispInteger idx)) {
+			throw new LispEvalException(name + " expects a slot index");
+		}
+		long k = idx.value();
+		if (k < 0 || k >= inst.slotCount()) {
+			throw new LispEvalException(name + ": slot index " + k + " is outside " + inst.layout().tag());
+		}
+		return (int) k;
 	}
 
 	/**

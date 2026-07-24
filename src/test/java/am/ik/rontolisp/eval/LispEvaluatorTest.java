@@ -6743,6 +6743,37 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo("(T NIL)");
 	}
 
+	// The instance tag is written with |...| here because the reader upcases every
+	// ordinary symbol: a source-written '%struct-POINT reads as %STRUCT-POINT and can
+	// never match a real tag, which is what stops a program forging an instance.
+	@Test
+	void instancePrimitivesBuildReadWriteAndTestAnInstance() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(setq i (%obj-new '|%struct-POINT| 1 2))
+				(%obj-set i 1 99)
+				(list (%obj-ref i 0) (%obj-ref i 1) (%obj-is i '|%struct-POINT|)
+				      (%obj-is i '|%struct-OTHER|) (%obj-is 5 '|%struct-POINT|)
+				      (%obj-tag i) (%obj-p i) (%obj-p '(1 2)))
+				""").print()).isEqualTo("(1 99 T NIL NIL %struct-POINT T NIL)");
+	}
+
+	@Test
+	void instancePrintsInStructSyntax() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(%obj-new '|%struct-POINT| 1 "hi")
+				""").print()).isEqualTo("#S(POINT :X 1 :Y \"hi\")");
+	}
+
+	@Test
+	void classInstancePrintsInAngleSyntax() {
+		assertThat(evalMulti("""
+				(defclass pt () ((x :initarg :x) (y :initarg :y)))
+				(%obj-new '|%class-PT| 5 nil)
+				""").print()).isEqualTo("#<PT :X 5 :Y NIL>");
+	}
+
 	@Test
 	void defstructReturnsStructName() {
 		assertThat(eval("(defstruct point x y)").print()).isEqualTo("POINT");

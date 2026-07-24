@@ -233,6 +233,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @return the index of the first export wrapper type
 	 */
 	private int fixedTypeCount() {
+		return instanceTypeBase() + (this.usesInstances ? INSTANCE_TYPE_COUNT : 0);
+	}
+
+	/**
+	 * The index of {@code TYPE_INSTANCE}: right after the fixed types, the {@code --simd}
+	 * block and the async block, so adding it moves no existing type index. Only
+	 * meaningful when the program uses an instance primitive.
+	 * @return the index the instance struct would occupy
+	 */
+	private int instanceTypeBase() {
 		return asyncTypeBase() + (this.asyncMode ? ASYNC_TYPE_COUNT : 0);
 	}
 
@@ -244,6 +254,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * {@code wasmtime -W exceptions=y}.
 	 */
 	private boolean asyncMode;
+
+	/**
+	 * Whether the program calls one of the six {@code %obj-*} instance primitives. It
+	 * adds ONE type entry and the layout blob and nothing else -- no function index moves
+	 * -- so a program without them is byte-identical to a build that never knew about
+	 * instances, the same conditional-index discipline {@code --simd} and async use.
+	 */
+	private boolean usesInstances;
 
 	/**
 	 * Test hook: export names (beyond serve's {@code handle}) given the CALLBACK-lift
@@ -773,6 +791,24 @@ public final class WasmLispCompiler implements LispCompiler {
 	// fixedTypeCount()).
 	static final int ASYNC_TYPE_COUNT = 4;
 
+	// --- the instance struct (usesInstances only) ---------------------------------
+	//
+	// TYPE_INSTANCE = struct {i32 layout address (const), (ref null eq) slots (MUT)},
+	// in its OWN rec group, appended after the fixed types, the --simd block and the
+	// async block so every TYPE_* constant above keeps its value. `slots` holds a
+	// TYPE_HASH_BUCKETS array, one element per layout slot; `layout` points at the
+	// linear-memory record WasmInstanceLayouts bakes, which is what makes an instance
+	// self-describing to the printer.
+	//
+	// The shape is deliberately 2 fields with field 1 MUTABLE. Two other struct types
+	// share the {i32, eqref} shape: TYPE_CLOSURE {const i32, const eqref}, kept apart
+	// by field-1 mutability AND by rec-group identity (it is member 3 of the 5-member
+	// group), and TYPE_P1_FUTURE {mut i32, mut eqref}, kept apart by field-0
+	// mutability alone. Do NOT "simplify" this to three fields: {i32, i32, eqref} with
+	// an immutable tail would canonicalize equal to TYPE_VBLOCK under --simd and
+	// ref.test could no longer tell an instance from a packed-array block.
+	static final int INSTANCE_TYPE_COUNT = 1;
+
 	// The exception tag index of the one Lisp condition tag ($lisp-cond), emitted only
 	// in EH mode (the program uses handler-case/ignore-errors/unwind-protect). Its
 	// payload is a cons (condition-instance . message-string) over TYPE_CONS, and its
@@ -1033,6 +1069,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, Integer> structAccessors = new HashMap<>();
 		ClosRegistry closRegistry = new ClosRegistry();
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry);
+		// Every struct/class layout is registered by the pass above, so the instance gate
+		// can be decided here. The scan over-approximates (it fires on the symbol
+		// anywhere in a cons head, quoted data included), which is safe: only a program
+		// that literally mentions one of the six can flip it on.
+		this.usesInstances = programUsesSymbol(program, LispNames.OBJ_NEW)
+				|| programUsesSymbol(program, LispNames.OBJ_REF) || programUsesSymbol(program, LispNames.OBJ_SET)
+				|| programUsesSymbol(program, LispNames.OBJ_IS) || programUsesSymbol(program, LispNames.OBJ_TAG)
+				|| programUsesSymbol(program, LispNames.OBJ_P);
 		// Lower a return-from that crosses a lambda boundary into an EH-based non-local
 		// exit (before desugarProgram, so the %fn-block wrap for a same-function
 		// return-from naturally nests around the injected let/%nlx-catch).
@@ -1403,6 +1447,14 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		// Create string table
 		StringTable stringTable = new StringTable(DATA_BASE_OFFSET);
+		// Bake the instance layouts into the data segment BEFORE Pass 2a: %obj-new
+		// emits a record's address as an i32.const inside an ordinary function body, so
+		// unlike the eval registry, the intern table and the case-fold tables -- all of
+		// which are consumed by runtime helper bodies built after their append -- these
+		// addresses must exist before any body is compiled. (Like them, the append must
+		// also land before the data segment is snapshotted.)
+		Map<String, Integer> layoutAddresses = this.usesInstances ? WasmInstanceLayouts.emit(closRegistry, stringTable)
+				: Map.of();
 
 		// Assign funcIds and build function info map
 		int[] nextFuncId = { 0 };
@@ -1474,6 +1526,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.futureTypeIndex(this.asyncMode ? asyncTypeBase() : -1)
 			.frameTypeIndex(this.asyncMode ? asyncTypeBase() + 1 : -1)
 			.wasiStreamTypeIndex(this.asyncMode ? asyncTypeBase() + 2 : -1)
+			.instanceTypeIndex(this.usesInstances ? instanceTypeBase() : -1)
+			.layoutAddresses(layoutAddresses)
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
 			.asyncDefunNames(Set.copyOf(asyncDefunNames))
 			.currentTaskGlobalIndex(currentTaskGlobalIndex)
@@ -2086,14 +2140,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] printI32Body = WasmRuntimeBuilder.buildPrintI32Core(true);
 		byte[] writeStrBody = WasmRuntimeBuilder.buildWriteStrBody();
 		byte[] printValBody = WasmRuntimeBuilder.buildPrintValBody(stringTable, this.simd,
-				this.asyncMode ? asyncTypeBase() : -1);
+				this.asyncMode ? asyncTypeBase() : -1, this.usesInstances ? instanceTypeBase() : -1);
 		byte[] printI32NoNlBody = WasmRuntimeBuilder.buildPrintI32Core(false);
 		byte[] printF64Body = WasmRuntimeBuilder.buildPrintF64Core(true, stringTable);
 		byte[] printF64NoNlBody = WasmRuntimeBuilder.buildPrintF64Core(false, stringTable);
 		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody();
 		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
 		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable, this.simd,
-				this.asyncMode ? asyncTypeBase() : -1);
+				this.asyncMode ? asyncTypeBase() : -1, this.usesInstances ? instanceTypeBase() : -1);
 
 		// Build the eval runtime (interpreter + function-name registry). The registry
 		// maps a symbol-name string offset to (funcId, arity). Because the string table
@@ -2572,6 +2626,17 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.write(1);
 						w.write(Type.I32);
 					});
+				}
+				if (this.usesInstances) {
+					// TYPE_INSTANCE {i32 layout address (const), (ref null eq) slots
+					// (mut)} in its OWN rec group, so it can never canonicalize into
+					// TYPE_CLOSURE (member 3 of the group opened above). Field 1 is
+					// mutable, which is also what keeps it apart from TYPE_P1_FUTURE
+					// {mut i32, mut eq}. The slots array is a TYPE_HASH_BUCKETS.
+					types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
+						fields.addField(false, w -> w.write(Type.I32));
+						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+					}));
 				}
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed type (TYPE_F32ARR, or the --simd block's TYPE_V_SET). One per
@@ -3870,6 +3935,18 @@ public final class WasmLispCompiler implements LispCompiler {
 		int wasiStreamTypeIndex = -1;
 
 		/**
+		 * The {@code TYPE_INSTANCE} type index, or -1 when the program uses no instance
+		 * primitive.
+		 */
+		int instanceTypeIndex = -1;
+
+		/**
+		 * Instance tag to the absolute linear address of its baked layout record (see
+		 * {@code WasmInstanceLayouts}); empty when the program uses no instance.
+		 */
+		Map<String, Integer> layoutAddresses = Map.of();
+
+		/**
 		 * The async runtime block's base function index ({@code _future_new}), or -1
 		 * outside asyncMode.
 		 */
@@ -3964,6 +4041,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.futureTypeIndex = builder.futureTypeIndex;
 			this.frameTypeIndex = builder.frameTypeIndex;
 			this.wasiStreamTypeIndex = builder.wasiStreamTypeIndex;
+			this.instanceTypeIndex = builder.instanceTypeIndex;
+			this.layoutAddresses = builder.layoutAddresses;
 			this.asyncFuncBase = builder.asyncFuncBase;
 			this.asyncDefunNames = builder.asyncDefunNames;
 			this.currentTaskGlobalIndex = builder.currentTaskGlobalIndex;
@@ -4024,6 +4103,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int frameTypeIndex = -1;
 
 			private int wasiStreamTypeIndex = -1;
+
+			private int instanceTypeIndex = -1;
+
+			private Map<String, Integer> layoutAddresses = Map.of();
 
 			private int asyncFuncBase = -1;
 
@@ -4152,6 +4235,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder wasiStreamTypeIndex(int wasiStreamTypeIndex) {
 				this.wasiStreamTypeIndex = wasiStreamTypeIndex;
+				return this;
+			}
+
+			Builder instanceTypeIndex(int instanceTypeIndex) {
+				this.instanceTypeIndex = instanceTypeIndex;
+				return this;
+			}
+
+			Builder layoutAddresses(Map<String, Integer> layoutAddresses) {
+				this.layoutAddresses = layoutAddresses;
 				return this;
 			}
 
