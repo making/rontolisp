@@ -4,6 +4,12 @@
 
 JSON ライブラリと同様に、`linalg` は Lisp ソース（`linalg.lisp`）として一度だけ実装されています。インタプリタは `linalg:` 関数が最初に使われたときに定義を遅延ロードし、コンパイルパスはパッケージが参照されたときに定義をプログラムへ継ぎ足します。バックエンドごとのコードは存在しないため、すべての関数はインタプリタ、JVM コンパイラ、WASM Preview 1、WASM コンポーネントで同一に振る舞います。
 
+`la` は `linalg` の組み込みニックネームです。以下の `linalg:` 呼び出しはすべて、より短い `la:` プレフィックスでも記述できます。
+
+```lisp
+(la:arange 5) ; => #d(0.0 1.0 2.0 3.0 4.0)
+```
+
 ## データ表現
 
 linalg のコンストラクタは [packed float 配列](../reference/data-types.md) を作ります。これは `#d(...)` リテラルと同じ、アンボックスな `(array double-float)` です。ベクタはランク 1 の配列で `#d(1.0 2.0 ...)` と印字され、行列はランク 2 の配列でネストした `#d((...) ...)` 形式で印字されます。`#d` はアンボックスな packed 表現を表すため、その印字結果を読み戻すと packed 配列になります。個々の要素は `aref` で読み書きでき、プログラムの他の場所で構築された配列 (packed でも一般のボックス配列でも) も linalg 関数に渡せます。より高いランクの配列も扱えます。要素ごとの演算、リダクション、`reshape`/`flatten`、`array-equal` はフラットな行優先順で要素を走査するため任意のランクを受け付けます。一方 `dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` は numpy の専用ルーチンと同様、ベクタと行列 (ランク 2 以下) に対して定義されたままです。[`linalg:from-list`](../reference/functions/linalg-from-list.md) / [`linalg:to-list`](../reference/functions/linalg-to-list.md) は配列とリストを相互に変換します。
