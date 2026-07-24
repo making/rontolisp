@@ -1169,10 +1169,12 @@ public final class LispNames {
 	public static final String DEFINE_MODIFY_MACRO = "DEFINE-MODIFY-MACRO";
 
 	/**
-	 * The {@code define-setf-expander} macro. Parsed no-op returning nil (like
-	 * {@link #DEFINE_CONDITION}): the full five-value setf-expansion protocol
-	 * ({@code get-setf-expansion}/{@code &environment}) is unsupported, so
-	 * {@code (setf (place ...) v)} for the newly defined place is not available.
+	 * The {@code define-setf-expander} macro. The five-value setf-expansion protocol
+	 * ({@code get-setf-expansion}/{@code &environment}) is supported: the interpreter's
+	 * {@code setfExpanders} registry and {@code UserMacroExpander} rewrite
+	 * {@code (setf/incf/decf (place ...) v)} for the newly defined place before the
+	 * compilers, so it works on all four backends. The expr-compiler case for this symbol
+	 * stays a nil no-op only because the rewrite already ran at macro-expansion time.
 	 */
 	public static final String DEFINE_SETF_EXPANDER = "DEFINE-SETF-EXPANDER";
 

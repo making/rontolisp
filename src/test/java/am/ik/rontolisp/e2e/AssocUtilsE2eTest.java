@@ -15,10 +15,12 @@ import java.util.List;
  * {@code define-modify-macro}/{@code define-setf-expander} macros, {@code sort}'s
  * {@code :key} keyword (routed through {@code stable-sort}),
  * {@code (intern name :keyword)} and
- * {@code loop ... being the hash-keys ... using (hash-value ...)}. Lite limitations:
- * {@code (setf (aget ...) v)} is unavailable ({@code define-setf-expander} is a no-op)
- * and {@code alistp} treats {@code return-from} across the {@code mapl} lambda as a
- * lambda-local exit, so it is not exercised for a non-alist here.
+ * {@code loop ... being the hash-keys ... using (hash-value ...)}. {@code aget} is a
+ * settable place: {@code (setf (aget ...) v)} works on all four backends (pinned by
+ * {@link AssocUtilsUpcaseE2eTest}). Lite limitation: on the compile paths {@code alistp}
+ * treats {@code return-from} across the {@code mapl} lambda as a lambda-local exit, so a
+ * compiled {@code alistp} can report {@code t} for a non-alist; it is not exercised for a
+ * non-alist here.
  */
 class AssocUtilsE2eTest extends AsdfLibraryE2eSupport {
 

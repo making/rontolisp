@@ -12240,10 +12240,12 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (define-setf-expander name lambda-list body...)} to {@code nil}: the
-	 * full five-value setf-expansion protocol ({@code get-setf-expansion}/
-	 * {@code &environment}) is unsupported, so the newly defined place cannot be used as
-	 * a {@code setf} target. Same parsed-no-op pattern as {@link #expandDefineCondition}.
+	 * Expands {@code (define-setf-expander name lambda-list body...)} to {@code nil} on
+	 * the compile path: the definition itself is registered and applied earlier, by
+	 * {@code UserMacroExpander} rewriting {@code (setf/incf/decf (place ...) v)} through
+	 * the five-value protocol before the compilers, so the newly defined place is a
+	 * usable {@code setf} target on all four backends and only the residual form drops to
+	 * nil here.
 	 * @param cons the define-setf-expander expression
 	 * @return nil
 	 */
