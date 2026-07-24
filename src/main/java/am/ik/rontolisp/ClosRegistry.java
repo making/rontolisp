@@ -321,6 +321,17 @@ public final class ClosRegistry {
 	private final Map<String, String> structTags = new LinkedHashMap<>();
 
 	/**
+	 * Instance tag ({@code %struct-<name>} / {@code %class-<name>}) to the interned
+	 * {@link LispLayout} of that type. Keyed by tag rather than by type name because the
+	 * two prefixes keep struct and class entries apart even when a program defines a
+	 * struct and a class of the same name; the name-based lookups
+	 * ({@link #findStructLayout} / {@link #findClassLayout}) route through the existing
+	 * {@link #findStructTag} / {@link #findClass} resolution rules first, so package
+	 * spellings resolve exactly as they do everywhere else.
+	 */
+	private final Map<String, LispLayout> layoutsByTag = new LinkedHashMap<>();
+
+	/**
 	 * User {@code deftype} name (normalized) to its expansion -- the literal type
 	 * specifier a zero-parameter {@code (deftype name () 'spec)} defines. Consulted by
 	 * the shared type-test builder so {@code typep}/{@code typecase} resolve a
@@ -365,11 +376,17 @@ public final class ClosRegistry {
 	}
 
 	/**
-	 * Registers a {@code defstruct} type so its name is usable as a method specializer.
+	 * Registers a {@code defstruct} type so its name is usable as a method specializer
+	 * and its {@link LispLayout} is available to instance construction, printing and
+	 * {@code #S(...)} reading.
 	 * @param structName the struct name as spelled in the defstruct
+	 * @param slotBaseNames the package-stripped slot names, in declaration order
+	 * @param initforms the slot initforms, in the same order
 	 */
-	public void registerStruct(String structName) {
-		this.structTags.put(normalize(structName), "%struct-" + structName);
+	public void registerStruct(String structName, List<String> slotBaseNames, List<LispVal> initforms) {
+		this.structTags.put(normalize(structName), LispLayout.STRUCT_TAG_PREFIX + structName);
+		LispLayout layout = LispLayout.ofStruct(structName, slotBaseNames, initforms);
+		this.layoutsByTag.put(layout.tag(), layout);
 	}
 
 	/**
@@ -510,6 +527,51 @@ public final class ClosRegistry {
 			info = new ClassInfo(info.name(), info.superclass(), info.slots(), Set.copyOf(merged));
 		}
 		this.classes.put(key, info);
+		// Every class -- seeded condition or user defclass -- gets its layout here, so
+		// the instance shape can never disagree with the slot list it was built from.
+		LispLayout layout = LispLayout.ofClass(info.name(), info.slots().stream().map(SlotSpec::baseName).toList(),
+				info.slots().stream().map(SlotSpec::initform).toList());
+		this.layoutsByTag.put(layout.tag(), layout);
+	}
+
+	/**
+	 * The layout registered under an exact instance tag.
+	 * @param tag the instance tag ({@code %struct-<name>} or {@code %class-<name>})
+	 * @return the layout, or null when no such type is registered
+	 */
+	@Nullable public LispLayout findLayoutByTag(String tag) {
+		return this.layoutsByTag.get(tag);
+	}
+
+	/**
+	 * The layout of a {@code defstruct} type by name, resolved with the same single-/
+	 * double-colon tolerance as {@link #findStructTag}.
+	 * @param name the struct name as spelled
+	 * @return the layout, or null when no such struct is registered
+	 */
+	@Nullable public LispLayout findStructLayout(String name) {
+		String tag = findStructTag(name);
+		return tag == null ? null : this.layoutsByTag.get(tag);
+	}
+
+	/**
+	 * The layout of a CLOS class by name, resolved with the same package tolerance as
+	 * {@link #findClass}.
+	 * @param name the class name as spelled
+	 * @return the layout, or null when no such class is registered
+	 */
+	@Nullable public LispLayout findClassLayout(String name) {
+		ClassInfo info = findClass(name);
+		return info == null ? null : this.layoutsByTag.get(LispLayout.CLASS_TAG_PREFIX + info.name());
+	}
+
+	/**
+	 * Every registered layout, keyed by instance tag, in registration order. The
+	 * compilers walk this to bake the layout constants into their artifacts.
+	 * @return the layout registry
+	 */
+	public Map<String, LispLayout> layouts() {
+		return this.layoutsByTag;
 	}
 
 	void registerGeneric(GenericInfo info) {

@@ -6049,25 +6049,19 @@ public final class LispMacroExpander {
 	 * struct name derives internal (double-colon) generated names, e.g.
 	 * {@code (defstruct foo::point x)} defines {@code foo::make-point},
 	 * {@code foo::point-p}, {@code foo::copy-point} and {@code foo::point-x}, and the
-	 * constructor keywords come from the unqualified slot names ({@code :x}). defstruct
-	 * options ({@code (defstruct (name (:conc-name ...) ...) ...)}) are not supported.
+	 * constructor keywords come from the unqualified slot names ({@code :x}).
+	 *
+	 * <p>
+	 * The struct type is also registered in {@code closRegistry} so its name is usable as
+	 * a {@code defmethod} parameter specializer and its {@link LispLayout} -- the ordered
+	 * slot names and initforms -- is available to instance construction, printing and
+	 * {@code #S(...)} reading.
 	 * @param cons the defstruct expression
 	 * @param structAccessors mutated: accessor name to 1-based slot position in the
 	 * tagged list
+	 * @param closRegistry mutated when non-null: the struct type and its layout are
+	 * registered
 	 * @return the generated top-level forms, in definition order
-	 */
-	public static List<LispVal> expandDefstruct(LispCons cons, java.util.Map<String, Integer> structAccessors) {
-		return expandDefstruct(cons, structAccessors, null);
-	}
-
-	/**
-	 * Like {@link #expandDefstruct(LispCons, java.util.Map)}, additionally registering
-	 * the struct type in the given {@link ClosRegistry} so the struct name is usable as a
-	 * {@code defmethod} parameter specializer.
-	 * @param cons the defstruct expression
-	 * @param structAccessors mutated: accessor name to 1-based slot position
-	 * @param closRegistry mutated when non-null: the struct type is registered
-	 * @return the generated defuns
 	 */
 	public static List<LispVal> expandDefstruct(LispCons cons, java.util.Map<String, Integer> structAccessors,
 			@org.jspecify.annotations.Nullable ClosRegistry closRegistry) {
@@ -6160,9 +6154,6 @@ public final class LispMacroExpander {
 					LispNames.DEFSTRUCT + " options are not supported: " + parts.get(1).print());
 		}
 		String structName = nameSym.name();
-		if (closRegistry != null) {
-			closRegistry.registerStruct(structName);
-		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(structName);
 		// Generated names of a qualified struct are interned as internal symbols
 		// (double colon), matching how the resolver canonicalizes their call sites.
@@ -6216,6 +6207,12 @@ public final class LispMacroExpander {
 			slotBases.add(slotQn == null ? slot.name() : slotQn.member());
 			slotDefaults.add(dflt);
 		}
+		// Registered only after the slot loop: the layout carries the ordered slot names
+		// and initforms, which is what makes an instance self-describing to the printer
+		// and what #S(...) reading permutes its keyword arguments against.
+		if (closRegistry != null) {
+			closRegistry.registerStruct(structName, slotBases, slotDefaults);
+		}
 		List<LispVal> forms = new java.util.ArrayList<>();
 		// (defun make-<base> (&key ((:slot slot) default)...) (list '%struct-<name>
 		// slot...))
@@ -6249,8 +6246,11 @@ public final class LispMacroExpander {
 						boaLambdaList, listToCons(boaCall))));
 			}
 			else {
-				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(constructorName),
-						listToCons(lambdaList), listToCons(listCall))));
+				// A slot-less struct has an EMPTY lambda list, which is nil rather than a
+				// cons -- listToCons would blow up casting it.
+				LispVal params0 = lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList);
+				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(constructorName), params0,
+						listToCons(listCall))));
 			}
 		}
 		// (defun <base>-p (__struct) (if (consp __struct) (equal (car __struct)
@@ -6315,33 +6315,6 @@ public final class LispMacroExpander {
 			cur = c.cdr();
 		}
 		return bound;
-	}
-
-	/**
-	 * Splices every top-level {@code (defstruct ...)} of a program into its generated
-	 * defuns (see {@link #expandDefstruct}). The compilers run this after package
-	 * resolution and before lambda-list desugaring, so Pass 1 collects the generated
-	 * defuns as ordinary top-level functions; a defstruct anywhere else is rejected by
-	 * the expression compilers. Returns the program unchanged when it has no defstruct.
-	 * @param program the top-level forms
-	 * @param structAccessors mutated: accessor name to 1-based slot position
-	 * @return the program with each defstruct replaced by its generated defuns
-	 */
-	public static List<LispVal> expandTopLevelDefstructs(List<LispVal> program,
-			java.util.Map<String, Integer> structAccessors) {
-		if (program.stream().noneMatch(LispMacroExpander::isDefstructForm)) {
-			return program;
-		}
-		List<LispVal> out = new java.util.ArrayList<>(program.size());
-		for (LispVal form : program) {
-			if (isDefstructForm(form)) {
-				out.addAll(expandDefstruct((LispCons) form, structAccessors));
-			}
-			else {
-				out.add(form);
-			}
-		}
-		return out;
 	}
 
 	private static boolean isDefstructForm(LispVal form) {
@@ -7950,15 +7923,15 @@ public final class LispMacroExpander {
 
 	/**
 	 * Splices every top-level {@code defstruct}/{@code defclass}/{@code defgeneric}/
-	 * {@code defmethod} of a program into its generated defuns. Extends
-	 * {@link #expandTopLevelDefstructs}: classes and methods are collected across the
-	 * WHOLE program first, then each generic's dispatcher defun is inserted at its
-	 * defgeneric's position (or its first defmethod's position when no defgeneric
-	 * exists), so class-specializer descendant sets and method sets are complete
-	 * regardless of definition order (Pass 1 collects all defuns before compiling
-	 * bodies). The compilers run this after package resolution and before lambda-list
-	 * desugaring (the generated constructors use {@code &key}); a CLOS form anywhere else
-	 * is rejected by the expression compilers.
+	 * {@code defmethod} of a program into its generated defuns. A defstruct is spliced
+	 * where it stands, while classes and methods are collected across the WHOLE program
+	 * first, then each generic's dispatcher defun is inserted at its defgeneric's
+	 * position (or its first defmethod's position when no defgeneric exists), so
+	 * class-specializer descendant sets and method sets are complete regardless of
+	 * definition order (Pass 1 collects all defuns before compiling bodies). The
+	 * compilers run this after package resolution and before lambda-list desugaring (the
+	 * generated constructors use {@code &key}); a CLOS form anywhere else is rejected by
+	 * the expression compilers.
 	 * @param program the top-level forms
 	 * @param structAccessors mutated: accessor name to 1-based slot position
 	 * @param closRegistry mutated: classes, generics, and methods

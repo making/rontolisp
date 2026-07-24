@@ -6736,6 +6736,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defstructWithNoSlotsBuildsAnInstance() {
+		assertThat(evalMulti("""
+				(defstruct empty)
+				(list (empty-p (make-empty)) (empty-p 42))
+				""").print()).isEqualTo("(T NIL)");
+	}
+
+	@Test
 	void defstructReturnsStructName() {
 		assertThat(eval("(defstruct point x y)").print()).isEqualTo("POINT");
 	}
