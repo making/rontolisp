@@ -72,6 +72,46 @@ class WitOracleE2eTest {
 	}
 
 	@Test
+	void gcInterfaceExportWitMatchesWasmToolsByteForByte() throws Exception {
+		// An interface export (`export docs:adder/add@0.1.0`) bundles its functions into
+		// an
+		// exported component instance and reconstructs into a trailing package block. The
+		// whole document -- the `export <id>;` reference plus the package block -- must
+		// byte-match what wasm-tools prints for that exported instance. This is what a
+		// world
+		// with a separated interface (`rontolisp:wit-export`, which lowers into exactly
+		// these :interface directives) rides on.
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		byte[] component = compiler.compile(LispReader.readAllFromString(
+				"""
+						(defun add (x y) (+ x y))
+						(defun negate (x) (- x))
+						(rontolisp:wasm-export 'add :params '(:int :int) :param-names '(x y) :returns :int :interface "docs:adder/add@0.1.0")
+						(rontolisp:wasm-export 'negate :params '(:int) :param-names '(x) :returns :int :interface "docs:adder/add@0.1.0")
+						"""));
+		assertThat(compiler.componentWit()).isEqualTo(oracle(component));
+	}
+
+	@Test
+	void gcMixedFlatAndInterfaceExportsMatchWasmToolsByteForByte() throws Exception {
+		// A world can mix a freestanding function export with an interface export: the
+		// flat
+		// export stays a top-level function, the interface export becomes an instance,
+		// and
+		// both the export ORDER and the trailing package block must byte-match
+		// wasm-tools.
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		byte[] component = compiler.compile(LispReader.readAllFromString(
+				"""
+						(defun ping (n) n)
+						(defun add (x y) (+ x y))
+						(rontolisp:wasm-export 'ping :params '(:int) :param-names '(n) :returns :int)
+						(rontolisp:wasm-export 'add :params '(:int :int) :param-names '(x y) :returns :int :interface "docs:adder/add@0.1.0")
+						"""));
+		assertThat(compiler.componentWit()).isEqualTo(oracle(component));
+	}
+
+	@Test
 	void socketsWorldReParsesAndCarriesItsWasiSocketsImport() {
 		// The rontolisp:tcp-* built-ins are the sockets.lisp library over a
 		// canon-lowered wasi:sockets USER import now (the dedicated sockets blob
@@ -131,6 +171,22 @@ class WitOracleE2eTest {
 				(rontolisp:wasm-export 'hello)
 				"""));
 		assertThat(print.componentWit()).isEqualTo(oracle(printComponent));
+	}
+
+	@Test
+	void noGcInterfaceExportWitMatchesWasmToolsByteForByte() throws Exception {
+		// The adapter-free reactor carries an interface export too: its exported instance
+		// starts at component instance 0 (no run instance, no imports), and the emitted
+		// WIT
+		// -- `export docs:calc/ops@1.0.0;` plus its package block -- must byte-match
+		// wasm-tools.
+		NoGcWasmCompiler compiler = new NoGcWasmCompiler(false, false, true);
+		byte[] component = compiler.compile(LispReader.readAllFromString(
+				"""
+						(defun add (x y) (+ x y))
+						(rontolisp:wasm-export 'add :params '(:long :long) :param-names '(x y) :returns :long :interface "docs:calc/ops@1.0.0")
+						"""));
+		assertThat(compiler.componentWit()).isEqualTo(oracle(component));
 	}
 
 	@Test

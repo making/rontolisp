@@ -6,7 +6,9 @@ import java.util.List;
 import am.ik.wit.WitDocument;
 import am.ik.wit.WitFunc;
 import am.ik.wit.WitItem;
+import am.ik.wit.WitMeta;
 import am.ik.wit.WitParser;
+import am.ik.wit.WitResolver;
 import am.ik.wit.WitType;
 
 import org.jspecify.annotations.Nullable;
@@ -49,11 +51,33 @@ final class WitScaffolder {
 		out.append(";;;; it, so a renamed export, a changed arity or a changed type is a compile\n");
 		out.append(";;;; error rather than a runtime surprise. Fill in the bodies; each one signals\n");
 		out.append(";;;; until you do.\n");
+		WitResolver resolver = new WitResolver(document);
 		for (WitItem item : target.items()) {
-			if (item instanceof WitItem.ExportNamed export
-					&& export.extern() instanceof WitItem.Extern.ExternFunc extern) {
-				out.append('\n');
-				appendStub(out, export, extern.func());
+			switch (item) {
+				case WitItem.ExportNamed export -> {
+					switch (export.extern()) {
+						case WitItem.Extern.ExternFunc extern -> {
+							out.append('\n');
+							appendStub(out, export.name(), export.meta(), extern.func());
+						}
+						// An inline interface export: stub each of its functions.
+						case WitItem.Extern.ExternInterface inline -> appendInterfaceStubs(out, inline.items());
+					}
+				}
+				// `export add;` -- an interface defined in this file: stub the functions
+				// of
+				// the interface it resolves to. A reference to an interface the file does
+				// not define (the fixed wasi:cli/run entry point, or an external
+				// interface)
+				// resolves to nothing and has no functions the user implements.
+				case WitItem.ExportRef ref -> {
+					WitItem.InterfaceDef iface = resolver.findInterface(ref.target().toString());
+					if (iface != null) {
+						appendInterfaceStubs(out, iface.items());
+					}
+				}
+				default -> {
+				}
 			}
 		}
 		out.append("\n(rontolisp:wit-export \"")
@@ -64,18 +88,27 @@ final class WitScaffolder {
 		return out.toString();
 	}
 
-	private static void appendStub(StringBuilder out, WitItem.ExportNamed export, WitFunc func) {
-		for (String doc : export.meta().docs()) {
+	private static void appendInterfaceStubs(StringBuilder out, List<WitItem> members) {
+		for (WitItem member : members) {
+			if (member instanceof WitItem.FuncDef func && func.kind() == WitItem.FuncKind.PLAIN) {
+				out.append('\n');
+				appendStub(out, func.name(), func.meta(), func.func());
+			}
+		}
+	}
+
+	private static void appendStub(StringBuilder out, String name, WitMeta meta, WitFunc func) {
+		for (String doc : meta.docs()) {
 			out.append(";;;").append(doc).append('\n');
 		}
-		out.append(";;; WIT: ").append(export.name()).append(": ").append(signature(func)).append('\n');
-		out.append("(defun ").append(export.name()).append(" (");
+		out.append(";;; WIT: ").append(name).append(": ").append(signature(func)).append('\n');
+		out.append("(defun ").append(name).append(" (");
 		List<String> names = new ArrayList<>();
 		for (WitFunc.Param param : func.params()) {
 			names.add(param.name());
 		}
 		out.append(String.join(" ", names)).append(")\n");
-		out.append("  (error \"").append(export.name()).append(" is not implemented yet\"))\n");
+		out.append("  (error \"").append(name).append(" is not implemented yet\"))\n");
 	}
 
 	// The WIT signature, rendered back into WIT so the stub carries the contract it must

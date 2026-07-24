@@ -1,14 +1,18 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import am.ik.wasm.ComponentWriter;
 import am.ik.wit.WitDocument;
 import am.ik.wit.WitFunc;
 import am.ik.wit.WitItem;
 import am.ik.wit.WitMeta;
+import am.ik.wit.WitPackageName;
 import am.ik.wit.WitPrinter;
+import am.ik.wit.WitRef;
 import am.ik.wit.WitType;
 
 /**
@@ -71,6 +75,25 @@ final class WitEmitter {
 	static String emit(String variant, List<WasmExportCompiler.Decl> exportDecls,
 			List<WasmComponentImportCompiler.Import> imports) {
 		WitDocument document = WasiWitDefinitions.document(variant);
+		// On the nogc-print variant EVERY export is an async lift (the print bridge's
+		// blocking waitable-set park is legal only inside an async-typed task), so the
+		// emitted WIT must say `async func` the way wasm-tools does -- the directives
+		// themselves never carry :async there (it is rejected under --no-gc).
+		boolean forceAsync = VARIANT_NOGC_PRINT.equals(variant);
+		// An export naming a WIT interface (`export docs:adder/add;`) is bundled by its
+		// interface id: it prints as an `export <id>;` reference plus a package block
+		// defining the interface, exactly as wasm-tools reads the component's exported
+		// instance. A flat export prints as an inline `export name: func(...)`.
+		List<WasmExportCompiler.Decl> flat = new ArrayList<>();
+		LinkedHashMap<String, List<WasmExportCompiler.Decl>> byInterface = new LinkedHashMap<>();
+		for (WasmExportCompiler.Decl decl : exportDecls) {
+			if (decl.iface() == null) {
+				flat.add(decl);
+			}
+			else {
+				byInterface.computeIfAbsent(decl.iface(), k -> new ArrayList<>()).add(decl);
+			}
+		}
 		if (!exportDecls.isEmpty() || !imports.isEmpty()) {
 			WitItem.World world = document.world();
 			List<WitItem> items = new ArrayList<>(world.items());
@@ -88,23 +111,53 @@ final class WitEmitter {
 				importItems.add(WitImportWorldEmitter.importItem(imported));
 			}
 			items.addAll(firstExport, importItems);
-			// On the nogc-print variant EVERY export is an async lift (the print bridge's
-			// blocking waitable-set park is legal only inside an async-typed task), so
-			// the
-			// emitted WIT must say `async func` the way wasm-tools does -- the directives
-			// themselves never carry :async there (it is rejected under --no-gc).
-			boolean forceAsync = VARIANT_NOGC_PRINT.equals(variant);
-			for (WasmExportCompiler.Decl decl : exportDecls) {
+			// Flat function exports first (in export order), then one interface reference
+			// per exported interface -- the order the component's export section carries.
+			for (WasmExportCompiler.Decl decl : flat) {
 				items.add(exportItem(decl, forceAsync));
+			}
+			for (String ifaceId : byInterface.keySet()) {
+				items.add(new WitItem.ExportRef(WitMeta.none(), new WitRef(WitImportWorldEmitter.packageOf(ifaceId),
+						WitImportWorldEmitter.interfaceNameOf(ifaceId))));
 			}
 			document = document.withWorld(new WitItem.World(world.meta(), world.name(), List.copyOf(items)));
 		}
+		// Package blocks: the imported interfaces first (as before), then a block per
+		// exported-interface package, defining the interfaces the world's `export <id>;`
+		// references -- the tail wasm-tools prints for a component's exported instances.
+		List<WitItem> extraBlocks = new ArrayList<>();
 		if (!imports.isEmpty()) {
+			extraBlocks.addAll(WitImportWorldEmitter.packageBlocks(imports));
+		}
+		extraBlocks.addAll(exportPackageBlocks(byInterface, forceAsync));
+		if (!extraBlocks.isEmpty()) {
 			List<WitItem> items = new ArrayList<>(document.items());
-			items.addAll(WitImportWorldEmitter.packageBlocks(imports));
+			items.addAll(extraBlocks);
 			document = new WitDocument(List.copyOf(items));
 		}
 		return WitPrinter.print(document);
+	}
+
+	// One package block per exported-interface package (interfaces of one package share a
+	// block), each defining the interface's exported functions -- the reconstruction of
+	// the component's exported instance type wasm-tools prints.
+	private static List<WitItem> exportPackageBlocks(LinkedHashMap<String, List<WasmExportCompiler.Decl>> byInterface,
+			boolean forceAsync) {
+		LinkedHashMap<WitPackageName, List<WitItem>> byPackage = new LinkedHashMap<>();
+		byInterface.forEach((ifaceId, decls) -> {
+			List<WitItem> members = new ArrayList<>();
+			for (WasmExportCompiler.Decl decl : decls) {
+				members.add(new WitItem.FuncDef(WitMeta.none(), decl.exportName(), WitItem.FuncKind.PLAIN,
+						witFunc(decl, forceAsync)));
+			}
+			WitItem.InterfaceDef iface = new WitItem.InterfaceDef(WitMeta.none(),
+					WitImportWorldEmitter.interfaceNameOf(ifaceId), List.copyOf(members));
+			byPackage.computeIfAbsent(WitImportWorldEmitter.packageOf(ifaceId), k -> new ArrayList<>()).add(iface);
+		});
+		List<WitItem> blocks = new ArrayList<>();
+		byPackage
+			.forEach((pkg, ifaces) -> blocks.add(new WitItem.PackageBlock(WitMeta.none(), pkg, List.copyOf(ifaces))));
+		return blocks;
 	}
 
 	// Builds one typed world export the way wasm-tools prints it, e.g.
@@ -114,15 +167,20 @@ final class WitEmitter {
 	// WasmComponentBuilder/NoGcWasmComponentBuilder encode into the component's function
 	// types, which is what makes an implemented world round-trip unchanged.
 	private static WitItem exportItem(WasmExportCompiler.Decl decl, boolean forceAsync) {
+		return new WitItem.ExportNamed(WitMeta.none(), decl.exportName(),
+				new WitItem.Extern.ExternFunc(witFunc(decl, forceAsync)));
+	}
+
+	// The WIT function type of an export declaration: its parameter labels and boundary
+	// types, and its result, with `async func` forced on the nogc-print variant.
+	private static WitFunc witFunc(WasmExportCompiler.Decl decl, boolean forceAsync) {
 		List<WitFunc.Param> params = new ArrayList<>();
 		List<String> paramTypes = decl.paramTypes();
 		for (int i = 0; i < paramTypes.size(); i++) {
 			params.add(new WitFunc.Param(decl.paramNames().get(i), witType(paramTypes.get(i))));
 		}
 		Integer result = WasmExportCompiler.componentValType(decl.returnType());
-		WitFunc func = new WitFunc(decl.async() || forceAsync, List.copyOf(params),
-				result == null ? null : witTypeOf(result));
-		return new WitItem.ExportNamed(WitMeta.none(), decl.exportName(), new WitItem.Extern.ExternFunc(func));
+		return new WitFunc(decl.async() || forceAsync, List.copyOf(params), result == null ? null : witTypeOf(result));
 	}
 
 	private static WitType witType(String designator) {

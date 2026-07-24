@@ -265,7 +265,7 @@ final class WitImportWorldEmitter {
 	}
 
 	// wasi:keyvalue/store@0.2.0-draft -> package wasi:keyvalue@0.2.0-draft.
-	private static WitPackageName packageOf(String ifaceId) {
+	static WitPackageName packageOf(String ifaceId) {
 		int slash = ifaceId.indexOf('/');
 		int colon = ifaceId.indexOf(':');
 		if (slash < 0 || colon < 0 || colon > slash) {
@@ -276,7 +276,7 @@ final class WitImportWorldEmitter {
 		return new WitPackageName(ifaceId.substring(0, colon), ifaceId.substring(colon + 1, slash), version);
 	}
 
-	private static String interfaceNameOf(String ifaceId) {
+	static String interfaceNameOf(String ifaceId) {
 		int slash = ifaceId.indexOf('/');
 		int at = ifaceId.indexOf('@', slash);
 		return at < 0 ? ifaceId.substring(slash + 1) : ifaceId.substring(slash + 1, at);

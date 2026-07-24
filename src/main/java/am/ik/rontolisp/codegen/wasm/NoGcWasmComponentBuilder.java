@@ -116,6 +116,11 @@ final class NoGcWasmComponentBuilder {
 	// Component import-instance indices (from import-block-nogc-print.bin).
 	private static final int INST_CLI_STDOUT = 1;
 
+	// First free component instance index on the print variant: the block imports two
+	// instances (wasi:cli/types = 0, wasi:cli/stdout = 1), so a synthesized export
+	// instance starts at 2. The print-free variant imports none and starts at 0.
+	private static final int FIRST_PRINT_INSTANCE = 2;
+
 	// The cli error-code enum, aliased out of wasi:cli/types INSIDE the import block.
 	private static final int T_CLI_ERRCODE = 1;
 
@@ -233,7 +238,12 @@ final class NoGcWasmComponentBuilder {
 		final List<byte[]> aliases = new ArrayList<>();
 		final List<byte[]> types = new ArrayList<>();
 		final List<byte[]> lifts = new ArrayList<>();
+		final List<byte[]> instances = new ArrayList<>();
 		final List<byte[]> exports = new ArrayList<>();
+		// Exports naming a WIT interface (`export docs:adder/add;`) are bundled into one
+		// exported component instance per interface; a flat export stays a top-level
+		// function export. Insertion order is world order.
+		final LinkedHashMap<String, List<Map.Entry<String, Integer>>> ifaceGroups = new LinkedHashMap<>();
 		// The canonical string ABI aliases (memory, realloc, post-returns) come first in
 		// this block's core function/memory index spaces; they exist only when a :string
 		// boundary is present, so a scalar-only component keeps the Release 1 bytes (or
@@ -285,11 +295,29 @@ final class NoGcWasmComponentBuilder {
 				// memory/realloc.
 				lifts.add(ComponentWriter.canonLift(func, typeBase + i));
 			}
-			exports.add(ComponentWriter.exportFunc(e.name(), componentFuncBase + i));
+			if (e.iface() == null) {
+				exports.add(ComponentWriter.exportFunc(e.name(), componentFuncBase + i));
+			}
+			else {
+				ifaceGroups.computeIfAbsent(e.iface(), k -> new ArrayList<>())
+					.add(Map.entry(e.name(), componentFuncBase + i));
+			}
+		}
+		// One synthesized instance per exported interface, exported under its id. The
+		// component instance index space holds only the import instances at this point
+		// (the two print-block imports, or none when print is unused), so the first free
+		// index is 2 with print, 0 without.
+		int componentInstance = printUsed ? FIRST_PRINT_INSTANCE : 0;
+		for (Map.Entry<String, List<Map.Entry<String, Integer>>> group : ifaceGroups.entrySet()) {
+			instances.add(ComponentWriter.componentInstanceFromFuncs(group.getValue()));
+			exports.add(ComponentWriter.exportInstance(group.getKey(), componentInstance++));
 		}
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
 		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(types));
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(lifts));
+		if (!instances.isEmpty()) {
+			c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(instances));
+		}
 		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter.vec(exports));
 		return c.toByteArray();
 	}

@@ -115,8 +115,13 @@ world と `rontolisp:http-handler` の併用 (serve モードのコンポーネ�
   上の 6 行の world は 149 行のコンポーネント型 (10 個の `wasi:*` インポートと
   `export wasi:cli/run`) にコンパイルされ、`greet` の中で `rontolisp:fetch` を
   呼べばさらに 5 つが黙って加わります。それを見る手段が `--emit-wit` です。
-- 実装できるのは素の関数エクスポート (`export name: func(...)`) だけです。
-  インターフェースをエクスポートする world はエラーになります。
+- world がエクスポートできるのは、素の関数か、**同じファイル内で定義された
+  インターフェース**です: ファイル内の `interface add { ... }` を参照する
+  `export add;` や、インライン `export ops: interface { ... }` は、関数ごとに
+  実装され、本物の `docs:adder/add` インスタンスエクスポートを生成します(参照:
+  [インターフェースをエクスポートする](../../guides/wit-contracts.md#exporting-an-interface))。
+  ファイルが定義しないインターフェース(素の `wasi:*` 参照)を指すエクスポートは
+  依然としてエラーです。
 - `:s-expr` に対応する WIT の綴りはないため、任意の S 式を境界で受け渡すエクスポート
   には引き続き手書きの
   [`rontolisp:wasm-export`](rontolisp-wasm-export.md) が必要です (したがって

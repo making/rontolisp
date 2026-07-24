@@ -204,4 +204,69 @@ class WitScaffolderTest {
 		assertThat(Files.readAllBytes(wasm)).startsWith(new byte[] { 0x00, 0x61, 0x73, 0x6D });
 	}
 
+	@Test
+	void scaffoldsStubsForAWorldExportingASeparatedInterface() {
+		// The idiomatic WIT shape: a named interface referenced by the world. Each of the
+		// interface's functions gets a stub, exactly as an inline function export would.
+		String wit = """
+				package docs:adder@0.1.0;
+
+				interface add {
+				  /// Add two integers.
+				  add: func(x: s32, y: s32) -> s32;
+				  negate: func(x: s32) -> s32;
+				}
+
+				world adder {
+				  export add;
+				}
+				""";
+		String lisp = WitScaffolder.scaffold(wit, "adder.wit", "adder");
+		assertThat(lisp).contains(";;; Add two integers.")
+			.contains(";;; WIT: add: func(x: s32, y: s32) -> s32")
+			.contains("(defun add (x y)")
+			.contains("(defun negate (x)")
+			.contains("(rontolisp:wit-export \"adder.wit\" :world adder)");
+	}
+
+	@Test
+	void scaffoldsStubsForAnInlineInterfaceExport() {
+		String wit = """
+				package root:component;
+
+				world calc {
+				  export ops: interface {
+				    add: func(x: s32, y: s32) -> s32;
+				  }
+				}
+				""";
+		assertThat(WitScaffolder.scaffold(wit, "calc.wit", "calc")).contains("(defun add (x y)")
+			.contains(":world calc)");
+	}
+
+	@Test
+	void theScaffoldedSeparatedInterfaceProgramCompilesUnchanged() throws Exception {
+		// The definition-of-done for the idiomatic separated-interface shape: the
+		// generated
+		// program passes its own contract check and compiles to a component.
+		Path wit = this.tempDir.resolve("adder.wit");
+		Files.writeString(wit, """
+				package docs:adder@0.1.0;
+
+				interface add {
+				  add: func(x: s32, y: s32) -> s32;
+				}
+
+				world adder {
+				  export add;
+				}
+				""");
+		Path lisp = this.tempDir.resolve("adder.lisp");
+		runCli("--scaffold-wit", wit.toString(), "-o", lisp.toString());
+		Path wasm = this.tempDir.resolve("adder.wasm");
+		runCli(lisp.toString(), "-o", wasm.toString(), "--component");
+		assertThat(Files.exists(wasm)).isTrue();
+		assertThat(Files.readAllBytes(wasm)).startsWith(new byte[] { 0x00, 0x61, 0x73, 0x6D });
+	}
+
 }

@@ -89,6 +89,48 @@ around that one export. Two differences from the input are deliberate: the
 (`wasm-tools` cannot recover them either), and the emitted world is always
 `package root:component; world root`. That is what a component's type *is*.
 
+### Exporting an interface
+
+Most WIT worlds export an **interface** rather than a bare function — the
+idiomatic shape keeps the interface definition separate from the world:
+
+```console
+// wit/adder.wit
+package docs:adder@0.1.0;
+
+interface add {
+  add: func(x: s32, y: s32) -> s32;
+}
+
+world adder {
+  export add;
+}
+```
+
+`wit-export` implements this the same way: it resolves `export add;` to the
+`add` interface defined in the file and checks each of its functions against
+the program. The component then genuinely exports the interface, so
+`wasm-tools component wit` and a host see `docs:adder/add`, not a flattened
+top-level function:
+
+```console
+;;; adder.lisp
+(defun add (x y) (+ x y))
+
+(rontolisp:wit-export "wit/adder.wit" :world adder)
+```
+
+```bash
+rontolisp adder.lisp --component -o adder.wasm
+wasmtime run -W gc=y --invoke 'add(20, 22)' adder.wasm
+# 42
+```
+
+An inline `export ops: interface { ... }` works the same way, keyed by its
+plain name, and `--emit-wit` reconstructs the interface — `export
+docs:adder/add@0.1.0;` plus its `interface` definition — byte-for-byte the way
+`wasm-tools` prints it.
+
 Current limitations:
 
 - Only the world's **export** side is bound. `import` items are ignored (a
@@ -98,9 +140,11 @@ Current limitations:
   silently dropped; the functions a program calls are bound from an
   interface with [`wit-import`](#importing-a-wit-interface-wit-import) (or
   declared by hand with `rontolisp:wasm-import`).
-- Only plain function exports are implemented; a world exporting an interface
-  is an error, and a `rontolisp:http-handler` program cannot use a world at
-  all (a serve-mode component's only export is `wasi:http/handler@0.3.0`).
+- A world exports freestanding functions or an interface **defined in the same
+  file** (above); an export naming an interface the file does not define — a
+  bare `wasi:*` reference — is an error, and a `rontolisp:http-handler`
+  program cannot use a world at all (a serve-mode component's only export is
+  `wasi:http/handler@0.3.0`).
 - `:s-expr` has no WIT spelling, so an export passing an arbitrary
   s-expression across the boundary still needs a hand-written
   `rontolisp:wasm-export`.
@@ -136,7 +180,9 @@ The parameters are named as the WIT names them, each export's WIT signature
 is carried above its stub as the contract it must satisfy, and the `///` doc
 comments become `;;;` comments. The stubs signal at **run** time, not compile
 time, so the generated file compiles unchanged and the exports can be filled
-in one at a time. Add `--world NAME` when the `.wit` declares several worlds.
+in one at a time. A world exporting an interface scaffolds one stub per
+interface function, so the separated shape above yields the same skeleton. Add
+`--world NAME` when the `.wit` declares several worlds.
 
 ## Emitting the WIT World (`--emit-wit`)
 

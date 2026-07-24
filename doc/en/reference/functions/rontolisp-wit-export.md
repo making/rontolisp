@@ -116,8 +116,13 @@ serve-mode component exports only `wasi:http/handler@0.3.0`).
   the 6-line world above compiles to a 149-line component type (ten `wasi:*`
   imports plus `export wasi:cli/run`), and calling `rontolisp:fetch` inside `greet`
   silently adds five more. `--emit-wit` is how you see it.
-- Only plain function exports (`export name: func(...)`) are implemented; a world
-  that exports an interface is an error.
+- A world exports freestanding functions or an **interface defined in the same
+  file**: `export add;` referencing an in-file `interface add { ... }`, or an
+  inline `export ops: interface { ... }`, is implemented member by member and
+  produces a real `docs:adder/add` instance export (see
+  [Exporting an interface](../../guides/wit-contracts.md#exporting-an-interface)).
+  An export naming an interface the file does not define (a bare `wasi:*`
+  reference) is still an error.
 - `:s-expr` has no WIT spelling, so an export carrying an arbitrary s-expression
   still needs a hand-written
   [`rontolisp:wasm-export`](rontolisp-wasm-export.md) — and therefore a program

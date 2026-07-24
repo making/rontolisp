@@ -20,6 +20,7 @@ import am.ik.wit.WitLocations;
 import am.ik.wit.WitParseException;
 import am.ik.wit.WitParseResult;
 import am.ik.wit.WitParser;
+import am.ik.wit.WitResolver;
 import am.ik.wit.WitType;
 
 import org.jspecify.annotations.Nullable;
@@ -50,6 +51,16 @@ import org.jspecify.annotations.Nullable;
  * <li>an {@code async func} in the world (the {@code :async t} lift is stated by the WIT
  * instead of guessed; a sync-lifted export doing I/O traps at run time)</li>
  * </ul>
+ *
+ * <p>
+ * A world may export freestanding functions or an <strong>interface defined in the same
+ * file</strong> — the idiomatic {@code export docs:adder/add;} that references an in-file
+ * {@code interface add { ... }}, or an inline {@code export ops: interface { ... }}. An
+ * interface export is checked and lowered member by member, each carrying the interface's
+ * id ({@code :interface "docs:adder/add@0.1.0"}) so the backend bundles them into one
+ * exported component instance. An export naming an interface the file does NOT define (a
+ * bare {@code wasi:*} reference) is still rejected; the fixed {@code wasi:cli/run} entry
+ * point is the one such reference that is silently ignored.
  *
  * <p>
  * This directive covers the export side only. A world's {@code import} interface items
@@ -222,19 +233,28 @@ public final class WitExportDirective {
 		}
 		WitLocations locations = parsed.locations();
 		WitItem.World world = selectWorld(parsed.document(), directive.world(), witPath);
+		WitResolver resolver = new WitResolver(parsed.document());
 		List<LispVal> forms = new ArrayList<>();
 		Set<String> seen = new LinkedHashSet<>();
 		for (WitItem item : world.items()) {
 			switch (item) {
 				case WitItem.ExportNamed export -> {
-					if (!(export.extern() instanceof WitItem.Extern.ExternFunc func)) {
-						throw error(witPath, locations, item, "export '" + export.name()
-								+ "' is an inline interface; rontolisp:wit-export implements plain function exports only");
+					switch (export.extern()) {
+						case WitItem.Extern.ExternFunc func -> {
+							if (!seen.add(export.name())) {
+								throw error(witPath, locations, item, "duplicate export '" + export.name() + "'");
+							}
+							forms.add(exportForm(export.name(), func.func(), witPath, locations, item, defuns, backend,
+									null));
+						}
+						// An inline interface export (`export add: interface { ... }`):
+						// its
+						// plain name is the exported instance's id, and each of its
+						// functions
+						// is a member the program must implement.
+						case WitItem.Extern.ExternInterface inline -> lowerInterfaceMembers(export.name(),
+								inline.items(), forms, seen, witPath, locations, item, defuns, backend);
 					}
-					if (!seen.add(export.name())) {
-						throw error(witPath, locations, item, "duplicate export '" + export.name() + "'");
-					}
-					forms.add(exportForm(export, func.func(), witPath, locations, item, defuns, backend));
 				}
 				case WitItem.ExportRef ref -> {
 					// wasi:cli/run is the component's own entry point (the adapter lifts
@@ -242,15 +262,29 @@ public final class WitExportDirective {
 					// program's top level as it), not something a defun implements -- and
 					// every world --emit-wit emits for a GC component carries it, so a
 					// world
-					// we
-					// emitted must be feedable straight back in. Any OTHER interface
-					// export
-					// would need machinery this directive does not have.
-					if (!isComponentRunExport(ref)) {
-						throw error(witPath, locations, item, "export '" + ref.target().name()
-								+ "' names an interface; rontolisp:wit-export implements plain function exports only "
-								+ "(a program's wasi:http/incoming-handler export comes from rontolisp:http-handler)");
+					// we emitted must be feedable straight back in.
+					if (isComponentRunExport(ref)) {
+						break;
 					}
+					// `export add;` -- an interface DEFINED IN THIS FILE becomes an
+					// exported
+					// component instance whose members the program implements. An
+					// interface
+					// the file does not define (a bare `wasi:*` reference) has no
+					// functions
+					// to check and is not something this directive can bind.
+					WitItem.InterfaceDef iface = resolver.findInterface(ref.target().toString());
+					if (iface == null) {
+						throw error(witPath, locations, item, "export '" + ref.target()
+								+ "' names an interface this file does not define; rontolisp:wit-export implements "
+								+ "plain function exports and interfaces defined in the same file only "
+								+ "(a program's wasi:http/handler@0.3.0 export comes from rontolisp:http-handler)");
+					}
+					// canonicalId is non-null for an interface obtained from this
+					// resolver.
+					String ifaceId = java.util.Objects.requireNonNull(resolver.canonicalId(iface));
+					lowerInterfaceMembers(ifaceId, iface.items(), forms, seen, witPath, locations, item, defuns,
+							backend);
 				}
 				case WitItem.ImportNamed named -> throw error(witPath, locations, item, "import '" + named.name()
 						+ "': a world's inline function imports are not bound; declare the interface to call with "
@@ -313,11 +347,39 @@ public final class WitExportDirective {
 		return String.join(", ", worlds.stream().map(WitItem.World::name).toList());
 	}
 
+	// Checks every function of an exported interface (a world's `export docs:adder/add;`,
+	// or an inline `export name: interface { ... }`) against the program and lowers each
+	// into a wasm-export carrying the interface's id, so the backend bundles them into
+	// one
+	// exported component instance. `ifaceId` is the instance's export id (the interface's
+	// fully-qualified id for a reference, its plain name for an inline interface).
+	private static void lowerInterfaceMembers(String ifaceId, List<WitItem> members, List<LispVal> forms,
+			Set<String> seen, String witPath, WitLocations locations, WitItem item, Defuns defuns, Backend backend) {
+		boolean any = false;
+		for (WitItem member : members) {
+			// Only plain functions are exportable members; an interface's type
+			// definitions
+			// only describe signatures, and a resource is not a function export.
+			if (member instanceof WitItem.FuncDef func && func.kind() == WitItem.FuncKind.PLAIN) {
+				if (!seen.add(ifaceId + "#" + func.name())) {
+					throw error(witPath, locations, item,
+							"duplicate export '" + func.name() + "' in interface '" + ifaceId + "'");
+				}
+				forms.add(exportForm(func.name(), func.func(), witPath, locations, item, defuns, backend, ifaceId));
+				any = true;
+			}
+		}
+		if (!any) {
+			throw error(witPath, locations, item, "interface '" + ifaceId + "' declares no functions to export");
+		}
+	}
+
 	// Builds the (rontolisp:wasm-export 'name :params '(...) :param-names '(...) :returns
-	// ... [:async t]) form for one world export, after checking it against the program.
-	private static LispVal exportForm(WitItem.ExportNamed export, WitFunc func, String witPath, WitLocations locations,
-			WitItem item, Defuns defuns, Backend backend) {
-		String name = export.name();
+	// ... [:async t] [:interface "id"]) form for one world export, after checking it
+	// against the program. `ifaceId` is null for a freestanding function export and the
+	// exported interface's id for an interface member.
+	private static LispVal exportForm(String name, WitFunc func, String witPath, WitLocations locations, WitItem item,
+			Defuns defuns, Backend backend, @Nullable String ifaceId) {
 		if (!LABEL.matcher(name).matches()) {
 			throw error(witPath, locations, item,
 					"export '" + name + "' is not a component-model label (lower-kebab-case words)");
@@ -380,6 +442,13 @@ public final class WitExportDirective {
 		if (func.async()) {
 			out.add(new LispSymbol(":ASYNC"));
 			out.add(LispTrue.INSTANCE);
+		}
+		if (ifaceId != null) {
+			// The exported interface's id: the backend bundles every export sharing it
+			// into
+			// one component instance exported under this id (`export docs:adder/add;`).
+			out.add(new LispSymbol(":INTERFACE"));
+			out.add(new LispString(ifaceId));
 		}
 		return list(out);
 	}

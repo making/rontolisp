@@ -52,10 +52,44 @@ export greet: func(who: string) -> string;
 
 ただしこの行は不動点であって、判定ではありません: world *から*導出されたものである以上、world と矛盾しえないのです。それでも出力する理由はファイルの残りにあります — world が何も語らない `wasi:*` インポートと `wasi:cli/run` エクスポート、すなわちホストが供給しなければならないものです。`greet.wit` は、あの 1 つのエクスポートのまわりに 149 行あります。入力との意図的な違いが 2 つあります: `///` ドキュメントコメントは失われます。コンポーネントの型がそれを保持しないためです(`wasm-tools` も復元できません)。そして出力される world は常に `package root:component; world root` です。それがコンポーネントの型*そのもの*だからです。
 
+### インターフェースをエクスポートする
+
+ほとんどの WIT world は、素の関数ではなく**インターフェース**をエクスポートします — 定石は、インターフェース定義を world から分離して書く形です:
+
+```console
+// wit/adder.wit
+package docs:adder@0.1.0;
+
+interface add {
+  add: func(x: s32, y: s32) -> s32;
+}
+
+world adder {
+  export add;
+}
+```
+
+`wit-export` はこれも同じように実装します: `export add;` をファイル内で定義された `add` インターフェースへ解決し、その各関数をプログラムと照合します。するとコンポーネントは本当にそのインターフェースをエクスポートするので、`wasm-tools component wit` もホストも、平坦化されたトップレベル関数ではなく `docs:adder/add` を見ます:
+
+```console
+;;; adder.lisp
+(defun add (x y) (+ x y))
+
+(rontolisp:wit-export "wit/adder.wit" :world adder)
+```
+
+```bash
+rontolisp adder.lisp --component -o adder.wasm
+wasmtime run -W gc=y --invoke 'add(20, 22)' adder.wasm
+# 42
+```
+
+インライン `export ops: interface { ... }` も同じように、その素の名前をキーとして動作します。`--emit-wit` はインターフェースを復元します — `export docs:adder/add@0.1.0;` とその `interface` 定義を、`wasm-tools` が印字するのとバイト単位で同じ形で。
+
 現在の制限:
 
 - 束縛されるのは world の**エクスポート**側だけです。`import` 項目は無視され(コンポーネントの WASI インポートは、それが構築される固定のアダプタ表面から来ます — それを見る手段が [`--emit-wit`](#emitting-the-wit-world---emit-wit) です)、インラインの `import name: func(...)` は黙って捨てるのではなく拒否されます。プログラムが呼び出す関数は、[`wit-import`](#importing-a-wit-interface-wit-import) でインターフェースから束縛します(あるいは `rontolisp:wasm-import` で手書きします)。
-- 実装できるのは素の関数エクスポートだけです。インターフェースをエクスポートする world はエラーであり、`rontolisp:http-handler` のプログラムは world をまったく使えません(serve モードのコンポーネントの唯一のエクスポートは `wasi:http/handler@0.3.0` です)。
+- world がエクスポートできるのは、素の関数か、**同じファイル内で定義されたインターフェース**(上記)です。ファイルが定義しないインターフェース — 素の `wasi:*` 参照 — を指すエクスポートはエラーであり、`rontolisp:http-handler` のプログラムは world をまったく使えません(serve モードのコンポーネントの唯一のエクスポートは `wasi:http/handler@0.3.0` です)。
 - `:s-expr` に対応する WIT の綴りはないため、任意の S 式を境界で受け渡すエクスポートには引き続き手書きの `rontolisp:wasm-export` が必要です。
 - インタプリタではディレクティブは順に評価され、それまでに定義された関数しか見えません。ファイルの末尾に置いてください。
 
@@ -83,7 +117,7 @@ rontolisp --scaffold-wit wit/greeter.wit -o greet.lisp   # no -o: print to stdou
 (rontolisp:wit-export "wit/greeter.wit" :world greeter)
 ```
 
-引数は WIT の名前のまま命名され、各エクスポートの WIT シグネチャは満たすべき契約としてスタブの上に書き出され、`///` ドキュメントコメントは `;;;` コメントになります。スタブはコンパイル時ではなく**実行**時にシグナルするため、生成されたファイルはそのままコンパイルでき、エクスポートを 1 つずつ埋めていけます。`.wit` が複数の world を宣言している場合は `--world NAME` を追加してください。
+引数は WIT の名前のまま命名され、各エクスポートの WIT シグネチャは満たすべき契約としてスタブの上に書き出され、`///` ドキュメントコメントは `;;;` コメントになります。スタブはコンパイル時ではなく**実行**時にシグナルするため、生成されたファイルはそのままコンパイルでき、エクスポートを 1 つずつ埋めていけます。インターフェースをエクスポートする world は、インターフェース関数ごとに 1 つのスタブを生成するので、上記の分離形も同じスケルトンになります。`.wit` が複数の world を宣言している場合は `--world NAME` を追加してください。
 
 ## WIT ワールドの出力(`--emit-wit`)
 

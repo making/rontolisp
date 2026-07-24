@@ -246,9 +246,11 @@ Every one names the WIT file and line (`WitLocations`), e.g.
 - an export name that is not a component-model `label` (lower-kebab-case), or the
   reserved `run` (the component's `wasi:cli/run` entry point) — the WIT makes the
   *correct* name authoritative, instead of the ad-hoc `:as` fix-up
-- an export that names an interface (`export foo/bar;` or an inline interface):
-  `wit-export` implements plain function exports only (a program's
-  `wasi:http/handler@0.3.0` export comes from `rontolisp:http-handler`)
+- an export that names an interface the file **does not define** (a bare `wasi:*`
+  reference, e.g. `export wasi:http/incoming-handler@0.2.0;`): there are no functions to
+  check, and a program's `wasi:http/handler@0.3.0` export comes from
+  `rontolisp:http-handler`. An interface **defined in the same file** is NOT rejected —
+  it is implemented member by member (see "Interface exports" below)
 - an inline `import name: func(...)` in the world — rejected, not silently dropped; it is
   the one import shape `rontolisp:wit-import` cannot bind either (it is not an interface),
   and the message says to declare the interface to call instead
@@ -270,6 +272,55 @@ Every one names the WIT file and line (`WitLocations`), e.g.
 A world's `import` items and type definitions are IGNORED by the check (a component's
 imports come from the fixed WASI adapter surface, and the type definitions only spell
 out the signatures). Only the export side is a contract today.
+
+### Interface exports — `export docs:adder/add;` (the idiomatic WIT shape)
+
+A world usually exports an **interface**, not a bare function — the common shape splits
+the interface definition from the world:
+
+```wit
+package docs:adder@0.1.0;
+interface add { add: func(x: s32, y: s32) -> s32; }
+world adder { export add; }          // <- an ExportRef to the same-file interface
+```
+
+`wit-export` implements this: it resolves the reference through `WitResolver`
+(`findInterface(ref.target().toString())` → `canonicalId` = `docs:adder/add@0.1.0`),
+then checks and lowers **each of the interface's functions** exactly like a freestanding
+export — same arity/`&optional`/type checks, same `:param-names`. An **inline** interface
+(`export ops: interface { ... }`) works the same way, keyed by its plain name. The only
+`ExportRef` that stays a no-op is the fixed `wasi:cli/run` entry point; a reference to an
+interface the file does not define is still the error above.
+
+**The lowering carries the interface id.** Each member lowers to a `wasm-export` with a
+new **`:interface "docs:adder/add@0.1.0"`** option (`WasmExportCompiler.Decl.iface`,
+component-facing, string). Exports sharing an `iface` are bundled by
+`WasmComponentBuilder.appendFuncExports` / `NoGcWasmComponentBuilder` into **one exported
+component instance** (`ComponentWriter.componentInstanceFromFuncs` +
+`exportInstance(id, idx)`), the same machinery the serve path uses for
+`wasi:http/handler`. So the component genuinely exports `docs:adder/add`, not a flattened
+top-level `add` — `wasm-tools component wit` prints `export docs:adder/add@0.1.0;` and
+`wasmtime --invoke 'add(1,2)'` resolves it inside that instance. Byte-identity to a
+hand-written `wasm-export … :interface …` still holds; the front-end adds no new emit
+path, per the design invariant. A flat (no `:interface`) export stays a top-level
+`exportFunc` and is byte-identical to before.
+
+**GOTCHA — an instance EXPORT consumes an instance index.** In the GC builder the run
+instance is `11 + userIfaces`, but its `export wasi:cli/run` statement *itself* introduces
+another component instance (`12 + userIfaces`), so the first free index for an exported
+interface's from-exports instance is **`13 + userIfaces`** (not 12). Getting this wrong
+points the export at the run instance and `wasm-tools component wit` prints the wrong
+interface body (it *validates*, so only the WIT diff catches it). The `--no-gc` builder
+has no run instance and only the print block's import instances, so its base is
+`FIRST_PRINT_INSTANCE (2)` with print, `0` without.
+
+`--emit-wit` reconstructs the interface: `WitEmitter` emits `export <id>;` in the world
+plus a trailing `package <ns>:<pkg>@<ver> { interface <name> { … } }` block (reusing
+`WitImportWorldEmitter.packageOf` / `interfaceNameOf`). Pinned line-level in
+`WitEmitterTest` and **byte-for-byte vs `wasm-tools`** in `WitOracleE2eTest`
+(`gcInterfaceExportWitMatchesWasmToolsByteForByte`,
+`noGcInterfaceExportWitMatchesWasmToolsByteForByte`). Note wasm-tools separates an
+interface's functions with a blank line — the emitter matches.
 
 ### `:param-names` on `wasm-export`, and what it makes true
 
@@ -352,7 +403,10 @@ signature line, a `defun` stub whose parameters are the WIT's own names, and a b
 `(error "name is not implemented yet")`; the `wit-export` directive comes LAST, so the
 interpreter's check (which sees only what precedes it) passes. The output **compiles
 unchanged** — the stubs signal at run time, not at compile time, so a world can be filled
-in one export at a time.
+in one export at a time. **Interface exports scaffold too**: `export add;` (a same-file
+interface) and an inline `export ops: interface { ... }` each emit one stub per interface
+function (via `WitResolver` / the inline members), so the idiomatic separated-interface
+world yields the same fillable skeleton as a world of freestanding functions.
 
 ### What `wit-export` does NOT do: the import side
 

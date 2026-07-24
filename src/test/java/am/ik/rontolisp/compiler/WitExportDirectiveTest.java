@@ -258,14 +258,76 @@ class WitExportDirectiveTest {
 	}
 
 	@Test
-	void rejectsAnInterfaceExport() {
-		// A program's wasi:http/incoming-handler export comes from
-		// rontolisp:http-handler,
-		// not from a world implemented function by function.
+	void rejectsAnExportOfAnInterfaceTheFileDoesNotDefine() {
+		// An interface this file does not define (a bare wasi:* reference) has no
+		// functions
+		// to check; a program's wasi:http/incoming-handler export comes from
+		// rontolisp:http-handler, not from a world implemented function by function.
 		assertThatThrownBy(() -> lower(world("  export wasi:http/incoming-handler@0.2.0;"), Backend.WASM_GC))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageStartingWith("world.wit:4: export 'incoming-handler' names an interface")
+			.hasMessageStartingWith(
+					"world.wit:4: export 'wasi:http/incoming-handler@0.2.0' names an interface this file does not define")
 			.hasMessageContaining("rontolisp:http-handler");
+	}
+
+	@Test
+	void lowersAnExportOfASameFileInterfaceIntoInstanceGroupedFunctions() {
+		// `export add;` names an interface DEFINED IN THIS FILE: each of its functions is
+		// checked against the program and lowered into a wasm-export carrying the
+		// interface's fully-qualified id, so the backend bundles them into one exported
+		// component instance (`export docs:adder/add@0.1.0`).
+		String wit = """
+				package docs:adder@0.1.0;
+
+				interface add {
+				  add: func(x: s32, y: s32) -> s32;
+				}
+
+				world adder {
+				  export add;
+				}
+				""";
+		List<LispVal> forms = WitExportDirective.lower(new Directive(WIT, "adder"), wit, WIT,
+				defuns(Map.of("add", List.of("x", "y"))), Backend.WASM_COMPONENT);
+		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE add) :PARAMS (QUOTE (:INT :INT)) "
+				+ ":PARAM-NAMES (QUOTE (x y)) :RETURNS :INT :INTERFACE \"docs:adder/add@0.1.0\")");
+	}
+
+	@Test
+	void lowersAnInlineInterfaceExportUnderItsPlainName() {
+		// `export calc: interface { ... }` bundles the inline interface's functions under
+		// the plain export name.
+		List<LispVal> forms = lower(world("""
+				export calc: interface {
+				  add: func(x: s32, y: s32) -> s32;
+				  negate: func(x: s32) -> s32;
+				}"""), Backend.WASM_COMPONENT, Map.of("add", List.of("x", "y"), "negate", List.of("x")));
+		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE add) :PARAMS (QUOTE (:INT :INT)) "
+				+ ":PARAM-NAMES (QUOTE (x y)) :RETURNS :INT :INTERFACE \"calc\")\n"
+				+ "(RONTOLISP:WASM-EXPORT (QUOTE negate) :PARAMS (QUOTE (:INT)) :PARAM-NAMES (QUOTE (x)) "
+				+ ":RETURNS :INT :INTERFACE \"calc\")");
+	}
+
+	@Test
+	void checksArityOfASameFileInterfaceMember() {
+		// The contract check reaches interface members too: a defun of the wrong arity is
+		// a
+		// compile error naming the WIT line, exactly as for a freestanding export.
+		String wit = """
+				package docs:adder@0.1.0;
+
+				interface add {
+				  add: func(x: s32, y: s32) -> s32;
+				}
+
+				world adder {
+				  export add;
+				}
+				""";
+		assertThatThrownBy(() -> WitExportDirective.lower(new Directive(WIT, "adder"), wit, WIT,
+				defuns(Map.of("add", List.of("x"))), Backend.WASM_COMPONENT))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("world.wit:8: export 'add' declares 2 parameter(s), but (defun add ...) takes 1");
 	}
 
 	@Test

@@ -106,9 +106,17 @@ final class WasmExportCompiler {
 	 * meaningful on the GC {@code --component} (non-serve) path; ignored on Preview 1 /
 	 * {@code --no-wasi} (core exports whose I/O the host provides directly) and rejected
 	 * under {@code --no-gc --component} (the adapter-free reactor has no async machinery)
+	 * @param iface the fully-qualified id of the WIT interface this export belongs to
+	 * ({@code :interface "docs:adder/add@0.1.0"}, or {@code null} for a freestanding
+	 * world-level function export). {@code rontolisp:wit-export} fills this in when a
+	 * world exports an interface ({@code export docs:adder/add;}): every export sharing
+	 * an {@code iface} is bundled into one component <em>instance</em> exported under
+	 * that id, instead of a flat top-level function export. Only meaningful on the
+	 * {@code --component} paths; ignored on Preview 1 / {@code --no-wasi} (a core module
+	 * has no instances)
 	 */
 	record Decl(String name, String exportName, List<String> paramTypes, List<String> paramNames, String returnType,
-			boolean async) {
+			boolean async, @Nullable String iface) {
 	}
 
 	/**
@@ -157,6 +165,7 @@ final class WasmExportCompiler {
 		List<String> paramNames = null;
 		String returns = null;
 		boolean async = false;
+		String iface = null;
 		int i = 2;
 		while (i < items.size()) {
 			String keyword = keywordName(items.get(i), form);
@@ -170,6 +179,7 @@ final class WasmExportCompiler {
 				case ":PARAM-NAMES" -> paramNames = quotedNameList(value, form);
 				case ":RETURNS" -> returns = returnDesignator(value, form);
 				case ":ASYNC" -> async = booleanOption(value, form);
+				case ":INTERFACE" -> iface = interfaceId(value, form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wasm-export option " + keyword + " in " + form.print());
 			}
@@ -183,7 +193,20 @@ final class WasmExportCompiler {
 		// Omitted :returns (like nil / '() / :void) means a void result.
 		return new Decl(name, exportName == null ? unqualifiedMember(name) : exportName, types,
 				paramNames == null ? defaultParamNames(types.size()) : paramNames, returns == null ? T_VOID : returns,
-				async);
+				async, iface);
+	}
+
+	// The :interface value is a string naming the WIT interface the export belongs to
+	// (its fully-qualified id, e.g. "docs:adder/add@0.1.0", or a bare label for an inline
+	// interface). It is component-facing metadata (rontolisp:wit-export fills it in), so
+	// a
+	// bare string is all the directive carries.
+	private static String interfaceId(LispVal value, LispCons form) {
+		if (value instanceof am.ik.rontolisp.LispString str) {
+			return str.value();
+		}
+		throw new UnsupportedOperationException(
+				"rontolisp:wasm-export :interface expects an interface-id string in " + form.print());
 	}
 
 	// A :param-names value is a quoted list of names (symbols or strings), each a valid
@@ -719,7 +742,7 @@ final class WasmExportCompiler {
 			params.add(componentValType(t));
 		}
 		return new WasmComponentBuilder.FuncExport(decl.exportName(), decl.paramNames(), params,
-				componentValType(decl.returnType()), decl.async());
+				componentValType(decl.returnType()), decl.async(), decl.iface());
 	}
 
 	static void appendWasmTypes(List<Type> types, String type) {

@@ -664,11 +664,25 @@ public final class ComponentWriter {
 	 * @return the encoded component instance entry
 	 */
 	public static byte[] componentInstanceFromFunc(String exportName, int funcIndex) {
+		return componentInstanceFromFuncs(java.util.List.of(java.util.Map.entry(exportName, funcIndex)));
+	}
+
+	/**
+	 * Encode a component instance synthesized from one or more function exports — the
+	 * general form of {@link #componentInstanceFromFunc}, used to bundle the lifted
+	 * functions of a user WIT interface (a world's {@code export docs:adder/add;}) into
+	 * the single instance the {@code export docs:adder/add@0.1.0} then names.
+	 * @param funcs the {@code (export name, component function index)} pairs, in order
+	 * @return the encoded component instance entry
+	 */
+	public static byte[] componentInstanceFromFuncs(java.util.List<java.util.Map.Entry<String, Integer>> funcs) {
 		return enc(w -> {
 			w.write(0x01); // from-exports
-			w.writeUnsignedLeb128(1); // one export
-			declName(w, exportName);
-			w.write(0x01).writeUnsignedLeb128(funcIndex); // sortidx: func
+			w.writeUnsignedLeb128(funcs.size());
+			for (java.util.Map.Entry<String, Integer> func : funcs) {
+				declName(w, func.getKey());
+				w.write(0x01).writeUnsignedLeb128(func.getValue()); // sortidx: func
+			}
 		});
 	}
 

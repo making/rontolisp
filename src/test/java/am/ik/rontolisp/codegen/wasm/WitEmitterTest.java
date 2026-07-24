@@ -57,6 +57,42 @@ class WitEmitterTest {
 	}
 
 	@Test
+	void rendersAnInterfaceExportAsAReferencePlusAPackageBlock() {
+		// A :interface export prints as an `export <id>;` reference in the world plus a
+		// trailing package block defining the interface -- the shape wasm-tools reads
+		// back
+		// from the component's exported instance, and the always-on twin of the byte
+		// oracle.
+		// Two functions of one interface share the block; a flat export still prints
+		// inline.
+		String wit = WitEmitter.emit(WitEmitter.VARIANT_BASE,
+				List.of(parse("(rontolisp:wasm-export 'ping :params '() :returns :int)"),
+						parse("(rontolisp:wasm-export 'add :params '(:int :int) :param-names '(x y) :returns :int "
+								+ ":interface \"docs:adder/add@0.1.0\")"),
+						parse("(rontolisp:wasm-export 'negate :params '(:int) :param-names '(x) :returns :int "
+								+ ":interface \"docs:adder/add@0.1.0\")")));
+		// The flat export stays inline; the interface export is a reference after it.
+		assertThat(wit).contains("""
+				  export ping: func() -> s32;
+				  export docs:adder/add@0.1.0;
+				}
+				""");
+		// The interface is reconstructed in a trailing package block, both functions in
+		// it
+		// (wasm-tools separates an interface's functions with a blank line, and the byte
+		// oracle confirms this matches).
+		assertThat(wit).contains("""
+				package docs:adder@0.1.0 {
+				  interface add {
+				    add: func(x: s32, y: s32) -> s32;
+
+				    negate: func(x: s32) -> s32;
+				  }
+				}
+				""");
+	}
+
+	@Test
 	void rendersTheDeclaredParameterNames() {
 		// :param-names (what rontolisp:wit-export fills in from the world it implements)
 		// are the labels of the lifted function type, so the emitted world shows them --

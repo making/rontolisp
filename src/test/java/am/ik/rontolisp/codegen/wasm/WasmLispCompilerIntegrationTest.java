@@ -240,6 +240,35 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndInvoke(program, "evenp2", "5")).isEqualTo("0");
 	}
 
+	// Compiles a --component program and invokes a component-model function by its WAVE
+	// signature (`name(arg, ...)`), the form an interface member is reached by.
+	private static String compileComponentAndInvoke(String lispCode, String invocation) throws Exception {
+		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(lispCode));
+		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke", invocation,
+				"/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void interfaceExportIsCallableAsAComponentInstance() throws Exception {
+		// A world's interface export (`export docs:adder/add;`, the idiomatic separated
+		// shape) lowers into a :interface wasm-export, which the component builder
+		// bundles
+		// into an exported component INSTANCE. wasmtime resolves the member inside it
+		// (WAVE
+		// `add(20, 22)`), proving the emitted instance genuinely carries the function --
+		// not a flattened top-level export.
+		assertThat(compileComponentAndInvoke(
+				"""
+						(defun add (x y) (+ x y))
+						(rontolisp:wasm-export 'add :params '(:int :int) :param-names '(x y) :returns :int :interface "docs:adder/add@0.1.0")
+						""",
+				"add(20, 22)"))
+			.isEqualTo("42");
+	}
+
 	@Test
 	void exportVoidFunctionRunsForItsSideEffect() throws Exception {
 		// An omitted :returns makes a side-effecting export with no WASM result; invoking

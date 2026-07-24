@@ -165,9 +165,13 @@ public final class WasmComponentBuilder {
 	 * @param resultValType the {@code ComponentWriter.VT_*} result code, or {@code null}
 	 * for no result
 	 * @param async whether to lift against an async function type ({@code :async t})
+	 * @param iface the fully-qualified id of the WIT interface this export belongs to
+	 * ({@code "docs:adder/add@0.1.0"}), or {@code null} for a flat top-level function
+	 * export. Exports sharing an {@code iface} are bundled into one exported component
+	 * <em>instance</em> under that id, instead of being exported as flat functions
 	 */
 	public record FuncExport(String name, List<String> paramNames, List<Integer> paramValTypes,
-			@Nullable Integer resultValType, boolean async) {
+			@Nullable Integer resultValType, boolean async, @Nullable String iface) {
 	}
 
 	/**
@@ -197,16 +201,27 @@ public final class WasmComponentBuilder {
 	 * @param nextType the first free component type index
 	 * @param nextComponentFunc the first free component function index (after the
 	 * {@code run} lift)
+	 * @param nextComponentInstance the first free component instance index (after the
+	 * {@code wasi:cli/run} instance and the user-import instances); each exported WIT
+	 * interface consumes one
 	 */
 	private static void appendFuncExports(ComponentWriter c, List<WasmExportCompiler.Decl> decls, int nextCoreFunc,
-			int nextType, int nextComponentFunc, int rontolispInstance) {
+			int nextType, int nextComponentFunc, int rontolispInstance, int nextComponentInstance) {
 		if (decls.isEmpty()) {
 			return;
 		}
 		final List<byte[]> aliases = new java.util.ArrayList<>();
 		final List<byte[]> types = new java.util.ArrayList<>();
 		final List<byte[]> lifts = new java.util.ArrayList<>();
+		final List<byte[]> instances = new java.util.ArrayList<>();
 		final List<byte[]> exports = new java.util.ArrayList<>();
+		// Exports that name a WIT interface (`export docs:adder/add;`) are bundled into
+		// one
+		// component instance per interface, exported under the interface's id; a flat
+		// (interface-less) export is exported as a top-level function, as before.
+		// Insertion
+		// order is world order, so the emitted exports keep it.
+		final java.util.LinkedHashMap<String, List<java.util.Map.Entry<String, Integer>>> ifaceGroups = new java.util.LinkedHashMap<>();
 		// The canonical string ABI aliases (cabi_realloc, the cabi_post_* post-returns)
 		// come first in the core function index space; they exist only when a
 		// :string/:s-expr boundary is present, so a scalar-only component keeps the
@@ -256,12 +271,32 @@ public final class WasmComponentBuilder {
 				// memory/realloc.
 				lifts.add(ComponentWriter.canonLift(func, nextType + i));
 			}
-			// Export the lifted component func directly under the export name.
-			exports.add(ComponentWriter.exportFunc(e.name(), nextComponentFunc + i));
+			if (e.iface() == null) {
+				// Flat export: export the lifted component func directly under its name.
+				exports.add(ComponentWriter.exportFunc(e.name(), nextComponentFunc + i));
+			}
+			else {
+				// Interface member: defer to a per-interface instance built below.
+				ifaceGroups.computeIfAbsent(e.iface(), k -> new java.util.ArrayList<>())
+					.add(java.util.Map.entry(e.name(), nextComponentFunc + i));
+			}
+		}
+		// One synthesized instance per exported interface, exported under the interface's
+		// fully-qualified id (`export docs:adder/add@0.1.0`). The instances come after
+		// the
+		// run instance and the user-import instances in the component instance index
+		// space.
+		int componentInstance = nextComponentInstance;
+		for (java.util.Map.Entry<String, List<java.util.Map.Entry<String, Integer>>> group : ifaceGroups.entrySet()) {
+			instances.add(ComponentWriter.componentInstanceFromFuncs(group.getValue()));
+			exports.add(ComponentWriter.exportInstance(group.getKey(), componentInstance++));
 		}
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
 		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(types));
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(lifts));
+		if (!instances.isEmpty()) {
+			c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(instances));
+		}
 		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter.vec(exports));
 	}
 
@@ -1185,9 +1220,14 @@ public final class WasmComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_EXPORT,
 				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 11 + userIfaces))));
 		// Scalar wasm-export functions: next free indices after the run wiring, each
-		// shifted by the fixed and user-import counts.
+		// shifted by the fixed and user-import counts. The component instance index space
+		// at this point holds the run from-exports instance (11 + userIfaces) AND the
+		// instance its `export wasi:cli/run` statement itself introduces (12 +
+		// userIfaces)
+		// -- an instance export consumes an index -- so the next free instance is
+		// 13 + userIfaces.
 		appendFuncExports(c, funcExports, io.nextCoreFunc() + user.coreFuncs() + 1, io.nextType() + user.types(),
-				io.nextComponentFunc() + user.componentFuncs() + 1, rontolisp);
+				io.nextComponentFunc() + user.componentFuncs() + 1, rontolisp, 13 + userIfaces);
 		return c.toByteArray();
 	}
 
