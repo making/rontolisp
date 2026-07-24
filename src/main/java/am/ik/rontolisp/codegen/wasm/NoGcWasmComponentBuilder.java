@@ -333,12 +333,15 @@ final class NoGcWasmComponentBuilder {
 	 */
 	static String postReturnKind(WasmExportCompiler.Decl decl) {
 		return switch (decl.returnType()) {
-			case WasmExportCompiler.T_STRING, WasmExportCompiler.T_INT, WasmExportCompiler.T_BOOL -> "i32";
-			case WasmExportCompiler.T_LONG -> "i64";
-			case WasmExportCompiler.T_FLOAT -> "f64";
-			case WasmExportCompiler.T_VOID -> "void";
-			default -> throw new UnsupportedOperationException(
-					"rontolisp:wasm-export type " + decl.returnType() + " has no component post-return signature");
+			case STRING, S8, S16, S32, U8, U16, U32, BOOL -> "i32";
+			case S64, U64 -> "i64";
+			case FLOAT -> "f64";
+			case VOID -> "void";
+			// --no-gc has no cons/reader/printer runtime, so it rejects :s-expr long
+			// before
+			// a component lift is planned (NoGcWasmCompiler.requireSupported).
+			case S_EXPR -> throw new UnsupportedOperationException("rontolisp:wasm-export type "
+					+ decl.returnType().designator() + " has no component post-return signature");
 		};
 	}
 

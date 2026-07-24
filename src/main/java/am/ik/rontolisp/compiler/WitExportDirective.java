@@ -43,9 +43,10 @@ import org.jspecify.annotations.Nullable;
  * <ul>
  * <li>an export the world declares but the program does not define, or defines with a
  * different arity</li>
- * <li>a WIT type outside the boundary subset ({@code s32} / {@code s64} / {@code f64} /
- * {@code bool} / {@code string}), including {@code s64} on the wasm-GC backend, which
- * only {@code --no-gc --component} can carry</li>
+ * <li>a WIT type outside the boundary subset (every fixed-width integer, {@code f64},
+ * {@code bool} and {@code string} — see {@link BoundaryType}), including {@code s64} /
+ * {@code u64} on the wasm-GC backends, which only {@code --no-gc --component} can
+ * carry</li>
  * <li>an export name that is not a component-model label, or the reserved
  * {@code run}</li>
  * <li>an {@code async func} in the world (the {@code :async t} lift is stated by the WIT
@@ -423,12 +424,13 @@ public final class WitExportDirective {
 		List<LispVal> params = new ArrayList<>();
 		List<LispVal> paramNames = new ArrayList<>();
 		for (WitFunc.Param param : func.params()) {
-			params.add(new LispSymbol(designator(param.type(), name, param.name(), witPath, locations, item, backend)));
+			params.add(new LispSymbol(
+					designator(param.type(), name, param.name(), witPath, locations, item, backend).designator()));
 			paramNames.add(new LispSymbol(param.name()));
 		}
 		WitType result = func.result();
-		String returns = result == null ? ":VOID"
-				: designator(result, name, "the result", witPath, locations, item, backend);
+		String returns = result == null ? BoundaryType.VOID.designator()
+				: designator(result, name, "the result", witPath, locations, item, backend).designator();
 
 		List<LispVal> out = new ArrayList<>();
 		out.add(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_EXPORT)));
@@ -454,36 +456,44 @@ public final class WitExportDirective {
 	}
 
 	// The wasm-export type designator a WIT type crosses the component boundary as. The
-	// supported set is exactly the boundary's (WitTypeMapper names the representation of
-	// every WIT type, but only these five have a component-model scalar/string lift
-	// today);
-	// anything else is a clear compile error rather than a silent reinterpretation.
-	private static String designator(WitType type, String exportName, String what, String witPath,
+	// supported set is exactly the boundary's: the whole fixed-width integer family, plus
+	// f64 / bool / string (WitTypeMapper names the representation of every WIT type, but
+	// only these have a component-model scalar/string lift today); anything else is a
+	// clear
+	// compile error rather than a silent reinterpretation.
+	private static BoundaryType designator(WitType type, String exportName, String what, String witPath,
 			WitLocations locations, WitItem item, Backend backend) {
 		if (type instanceof WitType.Prim prim) {
-			switch (prim.name()) {
-				case "s32":
-					return ":INT";
-				case "s64":
-					if (backend == Backend.WASM_GC || backend == Backend.WASM_COMPONENT) {
-						throw error(witPath, locations, item, "export '" + exportName + "': s64 (" + what
-								+ ") requires --no-gc (the wasm-GC backend's integers are i31ref)");
-					}
-					return ":LONG";
-				case "f64":
-					return ":FLOAT";
-				case "bool":
-					return ":BOOL";
-				case "string":
-					return ":STRING";
-				default:
-					break;
+			BoundaryType boundary = BoundaryType.forWitName(prim.name());
+			if (boundary != null) {
+				// A 64-bit integer has no exact place on the wasm-GC backends: their
+				// integers are i31ref and widen to a float, which is exact only below
+				// 2^53.
+				// Refusing here beats carrying a type that would silently round -- see
+				// .kb/wit.md for the decision and what would make it worth revisiting.
+				if (boundary.bits() == 64 && (backend == Backend.WASM_GC || backend == Backend.WASM_COMPONENT)) {
+					throw error(witPath, locations, item, "export '" + exportName + "': " + prim.name() + " (" + what
+							+ ") requires --no-gc (the wasm-GC backend's integers are i31ref)");
+				}
+				return boundary;
 			}
 		}
 		throw error(witPath, locations, item,
 				"export '" + exportName + "': the WIT type of " + what + " is not supported at the export boundary yet "
-						+ "(supported: s32, s64, f64, bool, string). Its rontolisp representation is settled " + "("
+						+ "(supported: " + supportedWitTypes() + "). Its rontolisp representation is settled " + "("
 						+ describe(type) + "), but the component boundary cannot marshal it yet");
+	}
+
+	// The WIT spellings the export boundary carries, in vocabulary order, for the error
+	// message above -- derived from the table so the message can never drift from it.
+	private static String supportedWitTypes() {
+		List<String> names = new ArrayList<>();
+		for (BoundaryType type : BoundaryType.values()) {
+			if (type.witName() != null) {
+				names.add(type.witName());
+			}
+		}
+		return String.join(", ", names);
 	}
 
 	// Names the WIT type and its settled house representation, so the error says what the

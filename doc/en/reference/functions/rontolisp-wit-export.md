@@ -60,12 +60,35 @@ Everything else comes from the world: `rontolisp:wasm-export`'s `:params`,
 
 | WIT type | Boundary type | Lisp value |
 | --- | --- | --- |
-| `s32` | `:int` | an integer (31-bit signed range) |
-| `s64` | `:long` | an integer; needs `--no-gc` (wasm-GC integers are `i31ref`) |
+| `s8` `s16` `s32` | `:s8` `:s16` `:s32` | an integer |
+| `u8` `u16` `u32` | `:u8` `:u16` `:u32` | an integer |
+| `s64` `u64` | `:s64` `:u64` | an integer; needs `--no-gc` (wasm-GC integers are `i31ref`) |
 | `f64` | `:float` | a float |
 | `bool` | `:bool` | `t` or `nil` |
 | `string` | `:string` | a string |
 | (no result) | `:void` | the function's value is discarded |
+
+The whole fixed-width integer family crosses, so the canonical component-model
+tutorial world compiles unedited:
+
+```console
+// wit/adder.wit
+package docs:adder@0.1.0;
+
+interface add {
+  add: func(x: u32, y: u32) -> u32;
+}
+
+world adder {
+  export add;
+}
+```
+
+Each type carries its own range exactly, or the call traps — a negative returned
+through `u32` is refused rather than delivered as `4294967295`. The component
+model has no integer subtyping, so this is not cosmetic: a component that lifted
+`u32` as `s32` would be rejected against its own world by
+`wasm-tools component targets`, by `jco`, and by any `bindgen`-based host.
 
 An `async func` in the world lifts the export with `:async t`, so blocking is
 always legal inside it: I/O inside a sync export usually works too (the
@@ -88,8 +111,8 @@ offending export:
   `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`
   (an exported function takes required parameters only: `&optional` / `&rest` /
   `&key` are rejected)
-- a WIT type the export boundary does not carry, including `s64` on the wasm-GC
-  backend —
+- a WIT type the export boundary does not carry, including `s64` / `u64` on the
+  wasm-GC backend —
   `calc.wit:4: export 'square': s64 (n) requires --no-gc (the wasm-GC backend's integers are i31ref)`
 - an `async func` under `--no-gc --component`, whose adapter-free reactor has no
   async machinery

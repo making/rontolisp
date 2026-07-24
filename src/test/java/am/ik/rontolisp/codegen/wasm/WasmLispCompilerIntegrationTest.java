@@ -611,6 +611,45 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void noGcComponentCarriesEveryFixedWidthIntegerType() throws Exception {
+		// The house integer here is i64, so the whole family crosses exactly -- including
+		// the u32 the canonical tutorial world uses at its full 2^32 range, and the u64
+		// range up to 2^63-1 (past that a value has no place in the signed house
+		// integer, which is why the wrapper traps rather than reporting a negative).
+		String program = """
+				(defun bump (n) (+ n 1))
+				(defun sum4 (a b c d) (+ a b c d))
+				(defun scale (n) (* n 1000000))
+				(rontolisp:wasm-export 'bump :params '(:u32) :returns :u32)
+				(rontolisp:wasm-export 'sum4 :params '(:s8 :s16 :u8 :u16) :returns :u16)
+				(rontolisp:wasm-export 'scale :params '(:u64) :returns :u64)
+				""";
+		assertThat(compileNoGcComponentAndInvoke(program, "bump(4294967294)")).isEqualTo("4294967295");
+		assertThat(compileNoGcComponentAndInvoke(program, "sum4(-8, -300, 250, 60000)")).isEqualTo("59942");
+		assertThat(compileNoGcComponentAndInvoke(program, "scale(9000000000000)")).isEqualTo("9000000000000000000");
+	}
+
+	@Test
+	void noGcComponentRefusesAValueTheDeclaredTypeCannotState() throws Exception {
+		// Same rule as the GC path: the boundary carries the value exactly or it traps.
+		// :s32 keeps that promise too -- what used to be a silent i32.wrap_i64 of the
+		// i64 house integer is now a refusal.
+		byte[] component = new NoGcWasmCompiler(false, false, true).compile(LispReader.readAllFromString("""
+				(defun down (n) (- n))
+				(defun wide (n) (* n 1000000))
+				(rontolisp:wasm-export 'down :params '(:s32) :returns :u32)
+				(rontolisp:wasm-export 'wide :params '(:s32) :returns :s32)
+				"""));
+		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/test.component.wasm");
+		for (String invocation : new String[] { "down(5)", "wide(1000000)" }) {
+			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", invocation,
+					"/tmp/test.component.wasm");
+			assertThat(result.getExitCode()).as(invocation).isNotZero();
+			assertThat(result.getStderr()).as(invocation).contains("wasm trap");
+		}
+	}
+
+	@Test
 	void noGcComponentHonorsAsAliasAndComposesWithOptimize() throws Exception {
 		// :as renames to a valid component label; --optimize tree-shakes the core module
 		// before the wrap (unlike the GC path, where --optimize is skipped under
@@ -1800,6 +1839,44 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "bigp(5)")).isEqualTo("false");
 		// wasmtime prints a void invocation's (absent) result as the empty tuple ().
 		assertThat(compileAndInvokeComponent(COMPONENT_EXPORT_PROGRAM, "quiet-square(6)")).isEqualTo("()");
+	}
+
+	@Test
+	void componentExportCarriesTheWholeUnsignedRange() throws Exception {
+		// The canonical component-model tutorial world's type. A u32 above the i31 house
+		// range crosses exactly, because the wrapper boxes it the way this backend
+		// represents every wide integer -- as a float, which holds each of the 2^32
+		// values exactly. Lifting it as s32 instead would not merely print differently:
+		// wasm-tools component targets rejects the component against its own world,
+		// since the component model has no integer subtyping.
+		String program = """
+				(defun bump (n) (+ n 1))
+				(rontolisp:wasm-export 'bump :params '(:u32) :returns :u32)
+				""";
+		assertThat(compileAndInvokeComponent(program, "bump(1073741824)")).isEqualTo("1073741825");
+		assertThat(compileAndInvokeComponent(program, "bump(3000000000)")).isEqualTo("3000000001");
+		assertThat(compileAndInvokeComponent(program, "bump(4294967294)")).isEqualTo("4294967295");
+	}
+
+	@Test
+	void componentExportRefusesAValueTheDeclaredTypeCannotState() throws Exception {
+		// The boundary carries the value exactly or it traps: a negative is not a u32,
+		// and 300 is not a u8. Neither is silently masked -- masking is what the
+		// canonical ABI would do and what makes a component behave differently under
+		// jco (which throws) than under wasmtime.
+		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString("""
+				(defun down (n) (- n))
+				(defun wide (n) (* n 100))
+				(rontolisp:wasm-export 'down :params '(:s32) :returns :u32)
+				(rontolisp:wasm-export 'wide :params '(:u8) :returns :u8)
+				"""));
+		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/test.wasm");
+		for (String invocation : new String[] { "down(5)", "wide(7)" }) {
+			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke", invocation,
+					"/tmp/test.wasm");
+			assertThat(result.getExitCode()).as(invocation).isNotZero();
+			assertThat(result.getStderr()).as(invocation).contains("wasm trap");
+		}
 	}
 
 	@Test

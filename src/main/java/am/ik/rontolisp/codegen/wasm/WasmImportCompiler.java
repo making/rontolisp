@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.WasmImportDirective;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -50,8 +51,16 @@ final class WasmImportCompiler {
 	 */
 	static final int PLACEHOLDER_FUNC_BASE = 1 << 27;
 
-	private static final List<String> KNOWN_PARAM_TYPES = List.of(WasmExportCompiler.T_INT, WasmExportCompiler.T_FLOAT,
-			WasmExportCompiler.T_BOOL, WasmExportCompiler.T_STRING, WasmExportCompiler.T_S_EXPR);
+	/**
+	 * The boundary types a host import may name. Deliberately narrower than the export
+	 * side's: the import wrappers marshal only the vocabulary they always have, and
+	 * widening them to the rest of the {@link BoundaryType} family is its own change (an
+	 * import's inbound value is a host promise, so the same "carries it exactly or traps"
+	 * rule has to be worked through for every WASI import a program already makes). See
+	 * {@code .kb/wit.md}.
+	 */
+	private static final List<BoundaryType> KNOWN_PARAM_TYPES = List.of(BoundaryType.S32, BoundaryType.FLOAT,
+			BoundaryType.BOOL, BoundaryType.STRING, BoundaryType.S_EXPR);
 
 	private WasmImportCompiler() {
 	}
@@ -65,7 +74,7 @@ final class WasmImportCompiler {
 	 * @param paramTypes the declared parameter type designators, in order
 	 * @param returnType the declared return type designator ({@code :void} when omitted)
 	 */
-	record Decl(String name, String module, String field, List<String> paramTypes, String returnType) {
+	record Decl(String name, String module, String field, List<BoundaryType> paramTypes, BoundaryType returnType) {
 	}
 
 	/**
@@ -86,36 +95,45 @@ final class WasmImportCompiler {
 	 */
 	static Decl parse(LispCons form) {
 		WasmImportDirective directive = WasmImportDirective.parse(form);
+		List<BoundaryType> params = new ArrayList<>();
 		for (String t : directive.paramTypes()) {
-			if (!KNOWN_PARAM_TYPES.contains(t)) {
-				throw new UnsupportedOperationException("Unknown rontolisp:wasm-import type designator " + t + " in "
-						+ form.print() + " (expected one of " + KNOWN_PARAM_TYPES + ")");
-			}
+			params.add(knownType(t, form, false));
 		}
-		String returns = directive.returnType() == null ? WasmExportCompiler.T_VOID : directive.returnType();
-		if (!WasmExportCompiler.T_VOID.equals(returns) && !KNOWN_PARAM_TYPES.contains(returns)) {
-			throw new UnsupportedOperationException("Unknown rontolisp:wasm-import type designator " + returns + " in "
-					+ form.print() + " (expected one of " + KNOWN_PARAM_TYPES + " or :void)");
+		BoundaryType returns = directive.returnType() == null ? BoundaryType.VOID
+				: knownType(directive.returnType(), form, true);
+		return new Decl(directive.name(), directive.module(), directive.field(), List.copyOf(params), returns);
+	}
+
+	// One designator from the directive, restricted to the import vocabulary. The
+	// designator spelling is the shared one, so :int is accepted as the alias of :s32
+	// here
+	// exactly as it is on the export side.
+	private static BoundaryType knownType(String designator, LispCons form, boolean result) {
+		BoundaryType type = BoundaryType.forDesignator(designator);
+		if (type != null && (KNOWN_PARAM_TYPES.contains(type) || (result && type == BoundaryType.VOID))) {
+			return type;
 		}
-		return new Decl(directive.name(), directive.module(), directive.field(), directive.paramTypes(), returns);
+		throw new UnsupportedOperationException("Unknown rontolisp:wasm-import type designator " + designator + " in "
+				+ form.print() + " (expected one of "
+				+ KNOWN_PARAM_TYPES.stream().map(BoundaryType::designator).toList() + (result ? " or :void)" : ")"));
 	}
 
 	/**
 	 * Returns whether the declaration's result is host-written bytes in linear memory.
 	 */
 	static boolean usesStrFromMem(Decl decl) {
-		return WasmExportCompiler.T_STRING.equals(decl.returnType());
+		return decl.returnType() == BoundaryType.STRING;
 	}
 
 	/** Returns whether the declaration's result is parsed with the embedded reader. */
 	static boolean needsReader(Decl decl) {
-		return WasmExportCompiler.T_S_EXPR.equals(decl.returnType());
+		return decl.returnType() == BoundaryType.S_EXPR;
 	}
 
 	/** Returns the WASM parameter types of the imported function's host signature. */
 	static Type[] hostParamTypes(Decl decl) {
 		List<Type> types = new ArrayList<>();
-		for (String t : decl.paramTypes()) {
+		for (BoundaryType t : decl.paramTypes()) {
 			WasmExportCompiler.appendWasmTypes(types, t);
 		}
 		return types.toArray(new Type[0]);
@@ -126,7 +144,7 @@ final class WasmImportCompiler {
 	 * a void result).
 	 */
 	static Type[] hostResultTypes(Decl decl) {
-		if (WasmExportCompiler.T_VOID.equals(decl.returnType())) {
+		if (decl.returnType() == BoundaryType.VOID) {
 			return new Type[0];
 		}
 		List<Type> types = new ArrayList<>();
@@ -187,23 +205,23 @@ final class WasmImportCompiler {
 	}
 
 	// Pushes the host-ABI value(s) of the boxed Lisp argument in the given local slot.
-	private static void emitUnboxParam(WasmLispCompiler.Ctx ctx, String type, int slot) {
+	private static void emitUnboxParam(WasmLispCompiler.Ctx ctx, BoundaryType type, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(slot);
 		switch (type) {
-			case WasmExportCompiler.T_INT -> WasmEmitHelper.castI31GetS(ctx);
+			case S32 -> WasmEmitHelper.castI31GetS(ctx);
 			// Accepts an int, ratio or float Lisp value (numeric contagion like the
 			// arithmetic built-ins).
-			case WasmExportCompiler.T_FLOAT -> WasmEmitHelper.castFloatGetF64(ctx);
-			case WasmExportCompiler.T_BOOL -> {
+			case FLOAT -> WasmEmitHelper.castFloatGetF64(ctx);
+			case BOOL -> {
 				// nil -> 0, anything else -> 1
 				ctx.writer.write(Instruction.REF_IS_NULL);
 				ctx.writer.write(Instruction.I32_EQZ);
 			}
 			// A Lisp string -> (content ptr, content len) into linear memory.
-			case WasmExportCompiler.T_STRING -> WasmExportCompiler.emitStringResult(ctx);
+			case STRING -> WasmExportCompiler.emitStringResult(ctx);
 			// Any Lisp value -> readable s-expression text -> (ptr, len).
-			case WasmExportCompiler.T_S_EXPR -> {
+			case S_EXPR -> {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
 				WasmExportCompiler.emitStringResult(ctx);
@@ -213,25 +231,26 @@ final class WasmImportCompiler {
 	}
 
 	// Boxes the host call's result (already on the stack) into (ref null eq).
-	private static void emitBoxResult(WasmLispCompiler.Ctx ctx, String type, int ptrSlot, int strFromMemFuncIndex) {
+	private static void emitBoxResult(WasmLispCompiler.Ctx ctx, BoundaryType type, int ptrSlot,
+			int strFromMemFuncIndex) {
 		switch (type) {
-			case WasmExportCompiler.T_INT -> ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-			case WasmExportCompiler.T_FLOAT -> {
+			case S32 -> ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			case FLOAT -> {
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			}
-			case WasmExportCompiler.T_BOOL -> WasmEmitHelper.emitBoolFromI32(ctx);
-			case WasmExportCompiler.T_VOID -> {
+			case BOOL -> WasmEmitHelper.emitBoolFromI32(ctx);
+			case VOID -> {
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());
 			}
 			// (ptr,len) the host wrote into linear memory -> a fresh Lisp string.
-			case WasmExportCompiler.T_STRING -> {
+			case STRING -> {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeSignedLeb128(strFromMemFuncIndex);
 			}
 			// (ptr,len) of s-expression text -> parse via the embedded reader.
-			case WasmExportCompiler.T_S_EXPR -> {
+			case S_EXPR -> {
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeSignedLeb128(ptrSlot + 1); // len
 				ctx.writer.write(Instruction.SET_LOCAL);

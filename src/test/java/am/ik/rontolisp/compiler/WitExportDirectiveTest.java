@@ -68,7 +68,7 @@ class WitExportDirectiveTest {
 		// world using one must lower to a valid :param-names entry, not to '%type'.
 		List<LispVal> forms = lower(world("  export count-vowels: func(%type: string) -> s32;"), Backend.WASM_GC);
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:STRING)) :PARAM-NAMES (QUOTE (type)) :RETURNS :INT)");
+				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:STRING)) :PARAM-NAMES (QUOTE (type)) :RETURNS :S32)");
 	}
 
 	@Test
@@ -138,7 +138,7 @@ class WitExportDirectiveTest {
 		// through --emit-wit with its parameter names intact.
 		List<LispVal> forms = lower(world("  export count-vowels: func(s: string) -> s32;"), Backend.WASM_GC);
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:STRING)) :PARAM-NAMES (QUOTE (s)) :RETURNS :INT)");
+				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:STRING)) :PARAM-NAMES (QUOTE (s)) :RETURNS :S32)");
 	}
 
 	@Test
@@ -152,7 +152,7 @@ class WitExportDirectiveTest {
 				}
 				""", Backend.WASM_GC, Map.of("mix", List.of("a", "b", "c", "d"), "ping", List.of()));
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE mix) :PARAMS (QUOTE (:INT :FLOAT :BOOL :STRING)) :PARAM-NAMES (QUOTE (a b c d)) :RETURNS :BOOL)\n(RONTOLISP:WASM-EXPORT (QUOTE ping) :PARAMS (QUOTE NIL) :PARAM-NAMES (QUOTE NIL) :RETURNS :VOID)");
+				"(RONTOLISP:WASM-EXPORT (QUOTE mix) :PARAMS (QUOTE (:S32 :FLOAT :BOOL :STRING)) :PARAM-NAMES (QUOTE (a b c d)) :RETURNS :BOOL)\n(RONTOLISP:WASM-EXPORT (QUOTE ping) :PARAMS (QUOTE NIL) :PARAM-NAMES (QUOTE NIL) :RETURNS :VOID)");
 	}
 
 	@Test
@@ -162,20 +162,20 @@ class WitExportDirectiveTest {
 		// doing I/O traps at run time ("cannot block a synchronous task").
 		List<LispVal> forms = lower(world("  export count-vowels: async func(s: string) -> s32;"), Backend.WASM_GC);
 		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:STRING)) :PARAM-NAMES (QUOTE (s)) :RETURNS :INT :ASYNC T)");
+				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:STRING)) :PARAM-NAMES (QUOTE (s)) :RETURNS :S32 :ASYNC T)");
 	}
 
 	@Test
 	void lowersS64OnlyWhereTheBackendCanCarryIt() {
 		String wit = world("  export count-vowels: func(s: s64) -> s64;");
-		// --no-gc's value model is unboxed i64, so s64 crosses the boundary as :LONG
+		// --no-gc's value model is unboxed i64, so s64 crosses the boundary as :S64
 		// (the internal designator is upcased, matching the reader's upcase spelling
-		// of any source :long token).
+		// of any source :s64 token; the legacy :long spells the same type).
 		assertThat(printed(lower(wit, Backend.WASM_NO_GC))).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:LONG)) :PARAM-NAMES (QUOTE (s)) :RETURNS :LONG)");
+				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:S64)) :PARAM-NAMES (QUOTE (s)) :RETURNS :S64)");
 		// The interpreter/JVM check the contract but export nothing, so no backend rule
 		// applies.
-		assertThat(printed(lower(wit, Backend.OTHER))).contains(":LONG");
+		assertThat(printed(lower(wit, Backend.OTHER))).contains(":S64");
 		// The wasm-GC backend's integers are i31ref: it cannot represent an i64 at all.
 		assertThatThrownBy(() -> lower(wit, Backend.WASM_GC)).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessage("world.wit:4: export 'count-vowels': s64 (s) requires --no-gc "
@@ -216,27 +216,73 @@ class WitExportDirectiveTest {
 	@Test
 	void reportsAWitTypeOutsideTheBoundarySubsetAgainstTheWitLine() {
 		// The representation of every WIT type is settled (WitTypeMapper), but only the
-		// five with a component-model scalar/string lift can cross the boundary today;
-		// the
-		// error says what the value WOULD be rather than just refusing.
+		// ones with a component-model scalar/string lift can cross the boundary today;
+		// the error says what the value WOULD be rather than just refusing.
 		assertThatThrownBy(() -> lower(world("  export count-vowels: func(s: list<u8>) -> s32;"), Backend.WASM_GC))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageStartingWith("world.wit:4: export 'count-vowels': the WIT type of s is not supported at the "
-					+ "export boundary yet (supported: s32, s64, f64, bool, string)")
+					+ "export boundary yet (supported: s8, s16, s32, s64, u8, u16, u32, u64, f64, bool, string)")
 			// The settled house representation is named, so the error says what the value
 			// WOULD be -- but it must not cite a .todo file, which is deleted the moment
 			// the work lands.
 			.hasMessageContaining("BYTE_STRING")
 			.hasMessageNotContaining(".todo");
-		assertThatThrownBy(() -> lower(world("  export count-vowels: func(s: u32) -> s32;"), Backend.WASM_GC))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("world.wit:4:")
-			.hasMessageContaining("the WIT type of s is not supported");
-		// The result is checked the same way, and named as such.
+		// The result is checked the same way, and named as such. f32 stays out: rontolisp
+		// has no internal single-precision float (.kb/wasm-export-no-wasi.md).
 		assertThatThrownBy(() -> lower(world("  export count-vowels: func(s: string) -> f32;"), Backend.WASM_GC))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("world.wit:4:")
 			.hasMessageContaining("the WIT type of the result is not supported");
+	}
+
+	@Test
+	void lowersTheWholeFixedWidthIntegerFamily() {
+		// The export boundary's accepted set is the import side's: every WIT fixed-width
+		// integer, spelled the way WIT spells it. The canonical tutorial world's u32 is
+		// the case that made this necessary.
+		List<LispVal> forms = lower("""
+				package root:component;
+
+				world numbers {
+				  export narrow: func(a: s8, b: s16, c: u8, d: u16) -> u8;
+				  export wide: func(a: s32, b: u32) -> u32;
+				}
+				""", Backend.WASM_GC, Map.of("narrow", List.of("a", "b", "c", "d"), "wide", List.of("a", "b")));
+		assertThat(printed(forms)).isEqualTo(
+				"(RONTOLISP:WASM-EXPORT (QUOTE narrow) :PARAMS (QUOTE (:S8 :S16 :U8 :U16)) :PARAM-NAMES (QUOTE (a b c d)) :RETURNS :U8)\n"
+						+ "(RONTOLISP:WASM-EXPORT (QUOTE wide) :PARAMS (QUOTE (:S32 :U32)) :PARAM-NAMES (QUOTE (a b)) :RETURNS :U32)");
+	}
+
+	@Test
+	void lowersTheTutorialAdderWorldVerbatim() {
+		// The component-model tutorial world every newcomer starts from, unedited: it is
+		// the reason the export boundary had to learn the unsigned types.
+		List<LispVal> forms = lower("""
+				package docs:adder@0.1.0;
+
+				interface add {
+				  add: func(x: u32, y: u32) -> u32;
+				}
+
+				world adder {
+				  export add;
+				}
+				""", Backend.WASM_COMPONENT, Map.of("add", List.of("x", "y")));
+		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE add) :PARAMS (QUOTE (:U32 :U32)) "
+				+ ":PARAM-NAMES (QUOTE (x y)) :RETURNS :U32 :INTERFACE \"docs:adder/add@0.1.0\")");
+	}
+
+	@Test
+	void lowersU64OnlyWhereTheBackendCanCarryIt() {
+		// u64 rides the same i64 core type as s64, so it inherits the same rule: the
+		// wasm-GC backends carry integers as i31ref, widening to a float that is exact
+		// only below 2^53, so a 64-bit boundary type is refused there.
+		String wit = world("  export count-vowels: func(s: u64) -> u64;");
+		assertThat(printed(lower(wit, Backend.WASM_NO_GC))).isEqualTo(
+				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:U64)) :PARAM-NAMES (QUOTE (s)) :RETURNS :U64)");
+		assertThatThrownBy(() -> lower(wit, Backend.WASM_GC)).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("world.wit:4: export 'count-vowels': u64 (s) requires --no-gc "
+					+ "(the wasm-GC backend's integers are i31ref)");
 	}
 
 	@Test
@@ -289,8 +335,8 @@ class WitExportDirectiveTest {
 				""";
 		List<LispVal> forms = WitExportDirective.lower(new Directive(WIT, "adder"), wit, WIT,
 				defuns(Map.of("add", List.of("x", "y"))), Backend.WASM_COMPONENT);
-		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE add) :PARAMS (QUOTE (:INT :INT)) "
-				+ ":PARAM-NAMES (QUOTE (x y)) :RETURNS :INT :INTERFACE \"docs:adder/add@0.1.0\")");
+		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE add) :PARAMS (QUOTE (:S32 :S32)) "
+				+ ":PARAM-NAMES (QUOTE (x y)) :RETURNS :S32 :INTERFACE \"docs:adder/add@0.1.0\")");
 	}
 
 	@Test
@@ -302,10 +348,10 @@ class WitExportDirectiveTest {
 				  add: func(x: s32, y: s32) -> s32;
 				  negate: func(x: s32) -> s32;
 				}"""), Backend.WASM_COMPONENT, Map.of("add", List.of("x", "y"), "negate", List.of("x")));
-		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE add) :PARAMS (QUOTE (:INT :INT)) "
-				+ ":PARAM-NAMES (QUOTE (x y)) :RETURNS :INT :INTERFACE \"calc\")\n"
-				+ "(RONTOLISP:WASM-EXPORT (QUOTE negate) :PARAMS (QUOTE (:INT)) :PARAM-NAMES (QUOTE (x)) "
-				+ ":RETURNS :INT :INTERFACE \"calc\")");
+		assertThat(printed(forms)).isEqualTo("(RONTOLISP:WASM-EXPORT (QUOTE add) :PARAMS (QUOTE (:S32 :S32)) "
+				+ ":PARAM-NAMES (QUOTE (x y)) :RETURNS :S32 :INTERFACE \"calc\")\n"
+				+ "(RONTOLISP:WASM-EXPORT (QUOTE negate) :PARAMS (QUOTE (:S32)) :PARAM-NAMES (QUOTE (x)) "
+				+ ":RETURNS :S32 :INTERFACE \"calc\")");
 	}
 
 	@Test

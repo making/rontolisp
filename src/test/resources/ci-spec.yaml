@@ -3975,6 +3975,8 @@ cases:
       (rontolisp:wasm-export 'ci-sumsq :params '(:int :int) :returns :int)
       (rontolisp:wasm-export 'ci-shout :params '(:string) :returns :string)
       (rontolisp:wasm-export 'ci-noisy :params '(:int) :returns :int :async t)
+      (rontolisp:wasm-export 'ci-sumsq :as "ci-sumsq-u" :params '(:u32 :u32) :returns :u32)
+      (rontolisp:wasm-export 'ci-sumsq :as "ci-sumsq-n" :params '(:s8 :u16) :returns :u32)
       (print (ci-sumsq 2 3))
       (print (ci-shout "ok"))
       (print (ci-noisy 7))

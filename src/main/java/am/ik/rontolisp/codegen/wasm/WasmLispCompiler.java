@@ -1288,8 +1288,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// force the reader runtime on (FUNC_READ_EXPR must be a real body, not a stub).
 		// Applies to Preview 1 / no-wasi and (since todo 92 Tier 2) component non-serve;
 		// serve mode's synthetic %http-dispatch export is :string-only.
-		boolean exportNeedsReader = !(this.component && this.serve)
-				&& exportDecls.stream().anyMatch(d -> d.paramTypes().contains(WasmExportCompiler.T_S_EXPR));
+		boolean exportNeedsReader = !(this.component && this.serve) && exportDecls.stream()
+			.anyMatch(d -> d.paramTypes().contains(am.ik.rontolisp.compiler.BoundaryType.S_EXPR));
 		// An :s-expr import result likewise parses host-provided text at runtime.
 		boolean importNeedsReader = importDecls.stream().anyMatch(WasmImportCompiler::needsReader);
 		if (exportNeedsReader || importNeedsReader) {
@@ -1933,10 +1933,17 @@ public final class WasmLispCompiler implements LispCompiler {
 			int wrapperFuncIndex = exportHelperBase + helperFuncCount;
 			int wrapperTypeIndex = fixedTypeCount();
 			for (WasmExportCompiler.Decl decl : exportDecls) {
-				if (decl.paramTypes().contains(WasmExportCompiler.T_LONG)
-						|| WasmExportCompiler.T_LONG.equals(decl.returnType())) {
-					throw new UnsupportedOperationException("rontolisp:wasm-export :long requires --no-gc for '"
-							+ decl.name() + "' (the GC backend represents integers as i31ref, not i64; use :int)");
+				// The 64-bit boundary types have no exact representation here: this
+				// backend's integers are i31ref, widening to a float past that range, and
+				// a
+				// float is exact only below 2^53. Refusing at compile time is the honest
+				// answer -- see .kb/wit.md for the decision and its re-evaluation
+				// trigger.
+				am.ik.rontolisp.compiler.BoundaryType wide = wideIntegerType(decl);
+				if (wide != null) {
+					throw new UnsupportedOperationException("rontolisp:wasm-export "
+							+ wide.designator().toLowerCase(java.util.Locale.ROOT) + " requires --no-gc for '"
+							+ decl.name() + "' (the GC backend represents integers as i31ref, not i64; use :s32/:u32)");
 				}
 				// Component-model exports (non-serve --component): scalars lift
 				// synchronously with no canonical options; :string/:s-expr lift through
@@ -1971,21 +1978,29 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmWriter bodyWriter = new WasmWriter(bodyStream);
 				Ctx wrapperCtx = ctxBuilder.writer(bodyWriter).bodyStream(bodyStream).build();
 				int paramSlots = WasmExportCompiler.paramSlotCount(decl);
-				wrapperCtx.nextLocal = paramSlots;
+				// The wrapper's typed scratch locals occupy the slots directly after the
+				// parameters, so the boxing code can address them by a base it knows
+				// before
+				// emission; the (ref null eq) temps allocTemp hands out follow.
+				List<Type> scratch = WasmExportCompiler.scratchTypes(decl);
+				wrapperCtx.nextLocal = paramSlots + scratch.size();
 				WasmExportCompiler.emitBody(wrapperCtx, decl, target.funcIndex(), strFromMemFuncIndex);
-				// Prepend the local declarations (extra (ref null eq) locals beyond
-				// params).
+				// Prepend the local declarations: the scratch locals (one run each, so
+				// the
+				// declaration order matches the slot order), then the (ref null eq)
+				// temps.
 				ByteArrayOutputStream finalBody = new ByteArrayOutputStream();
 				WasmWriter finalWriter = new WasmWriter(finalBody);
-				int extraLocals = wrapperCtx.nextLocal - paramSlots;
+				int extraLocals = wrapperCtx.nextLocal - paramSlots - scratch.size();
+				finalWriter.writeUnsignedLeb128(scratch.size() + (extraLocals > 0 ? 1 : 0));
+				for (Type scratchType : scratch) {
+					finalWriter.writeUnsignedLeb128(1);
+					finalWriter.write(scratchType);
+				}
 				if (extraLocals > 0) {
-					finalWriter.write(1);
 					finalWriter.writeUnsignedLeb128(extraLocals);
 					finalWriter.write(Type.REFNULL.code());
 					finalWriter.writeHeapType(Type.EQ.code());
-				}
-				else {
-					finalWriter.write(0);
 				}
 				finalWriter.write((Object) bodyStream.toByteArray());
 				exportBodies.add(finalBody.toByteArray());
@@ -3572,6 +3587,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param funcIndex the wrapper's own function index
 	 */
 	record ExportPlan(WasmExportCompiler.Decl decl, int targetFuncIndex, int typeIndex, int funcIndex) {
+	}
+
+	// The first 64-bit boundary type a declaration names, or null when it names none: the
+	// wasm-GC backends carry integers as i31ref (widening to a float, exact only below
+	// 2^53), so an s64/u64 boundary is refused rather than silently rounded.
+	private static am.ik.rontolisp.compiler.@Nullable BoundaryType wideIntegerType(WasmExportCompiler.Decl decl) {
+		for (am.ik.rontolisp.compiler.BoundaryType type : decl.paramTypes()) {
+			if (type.bits() == 64) {
+				return type;
+			}
+		}
+		return decl.returnType().bits() == 64 ? decl.returnType() : null;
 	}
 
 	/**

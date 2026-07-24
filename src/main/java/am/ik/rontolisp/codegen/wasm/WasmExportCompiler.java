@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import org.jspecify.annotations.Nullable;
@@ -25,12 +26,18 @@ import org.jspecify.annotations.Nullable;
  * every argument and result is a GC reference the host cannot construct.
  *
  * <p>
- * Supported type designators and their boundary representations:
+ * The type designators are {@link BoundaryType}'s: every WIT fixed-width integer
+ * ({@code :s8} … {@code :u64}, with {@code :int} / {@code :long} as the aliases of
+ * {@code :s32} / {@code :s64}), plus {@code :float}, {@code :bool}, {@code :string} and
+ * the rontolisp-only {@code :s-expr}. Their boundary representations:
  * <ul>
- * <li>{@code :int} -- {@code i32} (boxed as {@code i31ref}; 31-bit signed range)</li>
- * <li>{@code :long} -- {@code i64} ({@code --no-gc} only; matches the scalar backend's
- * internal {@code i64} integer representation, so the full 2^63 range crosses the
- * boundary with no {@code wrap}/{@code extend})</li>
+ * <li>an integer up to 32 bits -- {@code i32}. Boxed as an {@code i31ref} when the value
+ * fits it, and as a float otherwise (the wasm-GC backend's settled representation of an
+ * integer beyond the {@code i31} range, {@code .kb/time-environment-builtins.md}), so the
+ * whole declared range crosses exactly</li>
+ * <li>{@code :s64} / {@code :u64} -- {@code i64} ({@code --no-gc} only; matches the
+ * scalar backend's internal {@code i64} integer representation, so the full 2^63 range
+ * crosses the boundary with no {@code wrap}/{@code extend})</li>
  * <li>{@code :float} -- {@code f64} (boxed as a float struct)</li>
  * <li>{@code :bool} -- {@code i32} (0 = nil, non-zero = the symbol {@code t})</li>
  * <li>{@code :string} -- {@code (ptr,len)} bytes in linear memory</li>
@@ -38,40 +45,22 @@ import org.jspecify.annotations.Nullable;
  * </ul>
  *
  * <p>
- * Scalar designators ({@code :int}/{@code :float}/{@code :bool}) yield a pure numeric
- * signature callable straight from {@code wasmtime --invoke}. The memory-backed
- * {@code :string} / {@code :s-expr} designators pass {@code (ptr,len)} through linear
- * memory and need a host that can read/write it (e.g. JavaScript), using the exported
- * {@code __ronto_alloc} bump allocator to reserve input buffers.
+ * A returned Lisp value is normalized the way every other numeric boundary on this
+ * backend normalizes one (through {@link WasmEmitHelper#castFloatGetF64}, so an integer,
+ * a ratio or a float are all accepted) and then converted with a trapping {@code trunc}:
+ * <strong>the boundary carries the value exactly, or the wrapper traps</strong>. Nothing
+ * is silently wrapped or masked, which also keeps the component callable from generators
+ * stricter than the canonical ABI (jco throws on an out-of-range narrow result where
+ * wasmtime masks).
+ *
+ * <p>
+ * Scalar designators yield a pure numeric signature callable straight from
+ * {@code wasmtime --invoke}. The memory-backed {@code :string} / {@code :s-expr}
+ * designators pass {@code (ptr,len)} through linear memory and need a host that can
+ * read/write it (e.g. JavaScript), using the exported {@code __ronto_alloc} bump
+ * allocator to reserve input buffers.
  */
 final class WasmExportCompiler {
-
-	static final String T_INT = ":INT";
-
-	/**
-	 * A 64-bit signed integer ({@code i64}). Supported by the {@code --no-gc} scalar
-	 * backend only (whose internal integer representation is {@code i64}); the GC backend
-	 * rejects it, since its integers are {@code i31ref}.
-	 */
-	static final String T_LONG = ":LONG";
-
-	static final String T_FLOAT = ":FLOAT";
-
-	static final String T_BOOL = ":BOOL";
-
-	static final String T_STRING = ":STRING";
-
-	static final String T_S_EXPR = ":S-EXPR";
-
-	/**
-	 * Internal sentinel for a void result: the wrapper discards the Lisp return value and
-	 * has no WASM result. Selected when {@code :returns} is omitted, or given as
-	 * {@code nil}, {@code '()} or {@code :void} (the reader upcases every source keyword,
-	 * so the internal canonical is the upcased spelling {@code :VOID}).
-	 */
-	static final String T_VOID = ":VOID";
-
-	private static final List<String> KNOWN_TYPES = List.of(T_INT, T_LONG, T_FLOAT, T_BOOL, T_STRING, T_S_EXPR);
 
 	/**
 	 * The component-model {@code label} grammar (lower-kebab-case words) a component
@@ -115,8 +104,8 @@ final class WasmExportCompiler {
 	 * {@code --component} paths; ignored on Preview 1 / {@code --no-wasi} (a core module
 	 * has no instances)
 	 */
-	record Decl(String name, String exportName, List<String> paramTypes, List<String> paramNames, String returnType,
-			boolean async, @Nullable String iface) {
+	record Decl(String name, String exportName, List<BoundaryType> paramTypes, List<String> paramNames,
+			BoundaryType returnType, boolean async, @Nullable String iface) {
 	}
 
 	/**
@@ -161,9 +150,9 @@ final class WasmExportCompiler {
 		}
 		String name = quotedSymbolName(items.get(1));
 		String exportName = null;
-		List<String> params = null;
+		List<BoundaryType> params = null;
 		List<String> paramNames = null;
-		String returns = null;
+		BoundaryType returns = null;
 		boolean async = false;
 		String iface = null;
 		int i = 2;
@@ -185,15 +174,15 @@ final class WasmExportCompiler {
 			}
 			i += 2;
 		}
-		List<String> types = params == null ? List.of() : params;
+		List<BoundaryType> types = params == null ? List.of() : params;
 		if (paramNames != null && paramNames.size() != types.size()) {
 			throw new UnsupportedOperationException("rontolisp:wasm-export :param-names has " + paramNames.size()
 					+ " name(s) but :params has " + types.size() + " type(s) in " + form.print());
 		}
 		// Omitted :returns (like nil / '() / :void) means a void result.
 		return new Decl(name, exportName == null ? unqualifiedMember(name) : exportName, types,
-				paramNames == null ? defaultParamNames(types.size()) : paramNames, returns == null ? T_VOID : returns,
-				async, iface);
+				paramNames == null ? defaultParamNames(types.size()) : paramNames,
+				returns == null ? BoundaryType.VOID : returns, async, iface);
 	}
 
 	// The :interface value is a string naming the WIT interface the export belongs to
@@ -294,10 +283,25 @@ final class WasmExportCompiler {
 	/** Returns the number of WASM parameter slots a declaration occupies. */
 	static int paramSlotCount(Decl decl) {
 		int slots = 0;
-		for (String t : decl.paramTypes()) {
+		for (BoundaryType t : decl.paramTypes()) {
 			slots += slotsForType(t);
 		}
 		return slots;
+	}
+
+	/**
+	 * The extra typed locals the wrapper body needs beyond its parameter slots and the
+	 * {@code (ref null eq)} temps {@code Ctx.allocTemp} hands out — they occupy the slots
+	 * right after the parameters, so the boxing/unboxing code can address them by a base
+	 * known before emission. Only a narrow integer result needs one (an {@code i32} to
+	 * hold the truncated value while its range is checked); every other boundary type
+	 * keeps the declaration exactly as it was, so an export that uses none stays
+	 * byte-identical.
+	 * @param decl the parsed export directive
+	 * @return the scratch local types, in slot order
+	 */
+	static List<Type> scratchTypes(Decl decl) {
+		return needsNarrowGuard(decl.returnType()) ? List.of(Type.I32) : List.of();
 	}
 
 	/**
@@ -308,7 +312,7 @@ final class WasmExportCompiler {
 		if (isMemoryType(decl.returnType())) {
 			return true;
 		}
-		for (String t : decl.paramTypes()) {
+		for (BoundaryType t : decl.paramTypes()) {
 			if (isMemoryType(t)) {
 				return true;
 			}
@@ -319,7 +323,7 @@ final class WasmExportCompiler {
 	/** Returns the WASM parameter types for the wrapper signature. */
 	static Type[] paramWasmTypes(Decl decl) {
 		List<Type> types = new ArrayList<>();
-		for (String t : decl.paramTypes()) {
+		for (BoundaryType t : decl.paramTypes()) {
 			appendWasmTypes(types, t);
 		}
 		return types.toArray(new Type[0]);
@@ -329,7 +333,7 @@ final class WasmExportCompiler {
 	 * Returns the WASM result types for the wrapper signature (empty for a void result).
 	 */
 	static Type[] resultWasmTypes(Decl decl) {
-		if (T_VOID.equals(decl.returnType())) {
+		if (decl.returnType() == BoundaryType.VOID) {
 			return new Type[0];
 		}
 		List<Type> types = new ArrayList<>();
@@ -448,7 +452,7 @@ final class WasmExportCompiler {
 		ctx.writer.writeHeapType(Type.EQ.code());
 		// Box each parameter from its wasm slot(s) into the internal (ref null eq) value.
 		int slot = 0;
-		for (String t : decl.paramTypes()) {
+		for (BoundaryType t : decl.paramTypes()) {
 			emitBoxParam(ctx, t, slot, strFromMemFuncIndex);
 			slot += slotsForType(t);
 		}
@@ -520,7 +524,8 @@ final class WasmExportCompiler {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeSignedLeb128(polled);
 		}
-		emitUnboxResult(ctx, decl.returnType());
+		// The scratch locals sit right after the parameter slots (see scratchTypes).
+		emitUnboxResult(ctx, decl.returnType(), paramSlotCount(decl));
 		if (isCallbackExport(ctx, decl)) {
 			// a callback-lifted export whose target is not an async-defun completed
 			// within the call: the packed EXIT code (the response went out through
@@ -534,25 +539,35 @@ final class WasmExportCompiler {
 		ctx.writer.write(Instruction.END);
 	}
 
-	private static void emitBoxParam(WasmLispCompiler.Ctx ctx, String type, int slot, int strFromMemFuncIndex) {
+	private static void emitBoxParam(WasmLispCompiler.Ctx ctx, BoundaryType type, int slot, int strFromMemFuncIndex) {
 		switch (type) {
-			case T_INT -> {
+			// Every value of these types fits the i31 house integer exactly (the widest
+			// is
+			// u16's 65535), so they box with the plain i31 boxing and need no check: the
+			// canonical ABI guarantees an in-range core value, and a core-module host is
+			// held to the same declared type.
+			case S8, S16, U8, U16 -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeSignedLeb128(slot);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			}
-			case T_FLOAT -> {
+			// s32/u32 exceed the i31 house integer, so they box the way every other wide
+			// integer on this backend does: an i31 when it fits, a float otherwise (exact
+			// -- an f64 holds every integer below 2^53, and 2^32 is far below it).
+			case S32 -> emitBoxWideInt(ctx, slot, true);
+			case U32 -> emitBoxWideInt(ctx, slot, false);
+			case FLOAT -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeSignedLeb128(slot);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			}
-			case T_BOOL -> {
+			case BOOL -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeSignedLeb128(slot);
 				WasmEmitHelper.emitBoolFromI32(ctx);
 			}
-			case T_STRING -> {
+			case STRING -> {
 				// (ptr,len) -> a Lisp string copied out of linear memory.
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeSignedLeb128(slot);
@@ -561,44 +576,138 @@ final class WasmExportCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeSignedLeb128(strFromMemFuncIndex);
 			}
-			case T_S_EXPR -> {
+			case S_EXPR -> {
 				// (ptr,len) of s-expression text -> parse via the embedded reader.
 				storeWord(ctx, WasmLispCompiler.READ_CURSOR_ADDR, slot, false);
 				storeWord(ctx, WasmLispCompiler.READ_END_ADDR, slot, true);
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 			}
-			default -> throw new UnsupportedOperationException("Unknown rontolisp:wasm-export type: " + type);
+			// The wasm-GC backends reject the 64-bit types before a wrapper is emitted
+			// (WasmLispCompiler's export loop), and :void is never a parameter.
+			case S64, U64, VOID -> throw new UnsupportedOperationException(
+					"rontolisp:wasm-export type " + type.designator() + " is not a wasm-GC parameter type");
 		}
 	}
 
-	private static void emitUnboxResult(WasmLispCompiler.Ctx ctx, String type) {
+	// The i31 house integer's range: an integer outside it is carried as a float.
+	private static final int I31_LIMIT = 1 << 30;
+
+	// s32/u32 -> a boxed Lisp integer, exactly. An i31 when the value fits one, the wide
+	// integer's float box otherwise -- the representation this backend already gives
+	// every
+	// integer beyond the i31 range (the clock built-ins, and every wide integer a
+	// component
+	// import lifts). Reading the parameter slot three times is free: it is a local.
+	private static void emitBoxWideInt(WasmLispCompiler.Ctx ctx, int slot, boolean signed) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(I31_LIMIT);
+		ctx.writer.write(signed ? Instruction.I32_LT_S : Instruction.I32_LT_U);
+		if (signed) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(slot);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(-I31_LIMIT);
+			ctx.writer.write(Instruction.I32_GE_S);
+			ctx.writer.write(Instruction.I32_AND);
+		}
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(signed ? Instruction.F64_CONVERT_S_I32 : Instruction.F64_CONVERT_U_I32);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.write(Instruction.END);
+	}
+
+	// Whether an integer result needs an explicit range check after the trapping trunc:
+	// i32.trunc_s/u_f64 already rejects everything outside the full 32-bit range, so only
+	// the sub-32-bit types have a range of their own left to enforce.
+	private static boolean needsNarrowGuard(BoundaryType type) {
+		return type.isInteger() && type.bits() < 32;
+	}
+
+	private static void emitUnboxResult(WasmLispCompiler.Ctx ctx, BoundaryType type, int scratchSlot) {
 		switch (type) {
-			case T_INT -> WasmEmitHelper.castI31GetS(ctx);
-			case T_FLOAT -> {
+			// Every integer result normalizes through the backend's own number-to-f64
+			// conversion (an i31, a ratio or a float all cross), then converts with a
+			// TRAPPING trunc: a value the declared type cannot state stops the call
+			// instead
+			// of arriving silently wrapped. i32.trunc_u_f64 also rejects a negative,
+			// which
+			// is what a negative returned from an unsigned export must do.
+			case S8, S16, S32, U8, U16, U32 -> {
+				WasmEmitHelper.castFloatGetF64(ctx);
+				ctx.writer.write(type.signed() ? Instruction.I32_TRUNC_S_F64 : Instruction.I32_TRUNC_U_F64);
+				if (needsNarrowGuard(type)) {
+					emitNarrowGuard(ctx, type, scratchSlot);
+				}
+			}
+			case FLOAT -> {
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 				ctx.writer.writeSignedLeb128(0);
 			}
-			case T_BOOL -> {
+			case BOOL -> {
 				// nil -> 0, anything else -> 1
 				ctx.writer.write(Instruction.REF_IS_NULL);
 				ctx.writer.write(Instruction.I32_EQZ);
 			}
-			case T_STRING -> emitStringResult(ctx);
-			case T_S_EXPR -> {
+			case STRING -> emitStringResult(ctx);
+			case S_EXPR -> {
 				// Serialize any value to readable s-expression text, then return its
 				// bytes.
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
 				emitStringResult(ctx);
 			}
-			case T_VOID -> ctx.writer.write(Instruction.DROP); // discard the Lisp return
+			case VOID -> ctx.writer.write(Instruction.DROP); // discard the Lisp return
 																// value
-			default -> throw new UnsupportedOperationException("Unknown rontolisp:wasm-export type: " + type);
+			case S64, U64 -> throw new UnsupportedOperationException(
+					"rontolisp:wasm-export type " + type.designator() + " is not a wasm-GC result type");
 		}
+	}
+
+	// Traps unless the truncated i32 on the stack lies inside a sub-32-bit type's range,
+	// and leaves it there. The unsigned types need no lower check: the i32.trunc_u_f64
+	// that
+	// produced the value already trapped on a negative.
+	private static void emitNarrowGuard(WasmLispCompiler.Ctx ctx, BoundaryType type, int scratchSlot) {
+		BoundaryType.Range range = java.util.Objects.requireNonNull(type.range());
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(scratchSlot);
+		if (type.signed()) {
+			emitTrapUnless(ctx, scratchSlot, Instruction.I32_LT_S, range.min().intValueExact());
+		}
+		emitTrapUnless(ctx, scratchSlot, type.signed() ? Instruction.I32_GT_S : Instruction.I32_GT_U,
+				range.max().intValueExact());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(scratchSlot);
+	}
+
+	// `if (local[slot] <op> bound) unreachable` -- the boundary's way of refusing a value
+	// it cannot state. A trap is what the host already sees for an error inside an
+	// exported
+	// function (the catch_all landing pad above), so the failure shape is unchanged.
+	private static void emitTrapUnless(WasmLispCompiler.Ctx ctx, int slot, int comparison, int bound) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(bound);
+		ctx.writer.write(comparison);
+		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
 	}
 
 	// Returns a Lisp string value (a TYPE_STRING on the stack) to the host as two i32
@@ -651,34 +760,38 @@ final class WasmExportCompiler {
 		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
 	}
 
-	static int slotsForType(String type) {
+	static int slotsForType(BoundaryType type) {
 		return isMemoryType(type) ? 2 : 1;
 	}
 
-	private static boolean isMemoryType(String type) {
-		return T_STRING.equals(type) || T_S_EXPR.equals(type);
+	private static boolean isMemoryType(BoundaryType type) {
+		return type == BoundaryType.STRING || type == BoundaryType.S_EXPR;
 	}
 
 	/**
 	 * Maps a type designator to its component-model primitive value type code for the
-	 * {@code --component} export path ({@code null} = no result). {@code :long} (s64) is
-	 * reachable only from the {@code --no-gc} component path (the GC backend rejects it
+	 * {@code --component} export path ({@code null} = no result). The 64-bit types are
+	 * reachable only from the {@code --no-gc} component path (the GC backend rejects them
 	 * outright); {@code :string} lifts as {@code string} on both component paths, and
 	 * {@code :s-expr} (GC only) lifts as {@code string} too -- the s-expression crosses
 	 * the boundary as its printed text.
 	 * @param type the type designator
 	 * @return the {@code ComponentWriter.VT_*} code, or {@code null} for {@code :void}
 	 */
-	static @Nullable Integer componentValType(String type) {
+	static @Nullable Integer componentValType(BoundaryType type) {
 		return switch (type) {
-			case T_INT -> am.ik.wasm.ComponentWriter.VT_S32;
-			case T_LONG -> am.ik.wasm.ComponentWriter.VT_S64;
-			case T_FLOAT -> am.ik.wasm.ComponentWriter.VT_F64;
-			case T_BOOL -> am.ik.wasm.ComponentWriter.VT_BOOL;
-			case T_STRING, T_S_EXPR -> am.ik.wasm.ComponentWriter.VT_STRING;
-			case T_VOID -> null;
-			default -> throw new UnsupportedOperationException(
-					"rontolisp:wasm-export type " + type + " has no component-model scalar mapping");
+			case S8 -> am.ik.wasm.ComponentWriter.VT_S8;
+			case S16 -> am.ik.wasm.ComponentWriter.VT_S16;
+			case S32 -> am.ik.wasm.ComponentWriter.VT_S32;
+			case S64 -> am.ik.wasm.ComponentWriter.VT_S64;
+			case U8 -> am.ik.wasm.ComponentWriter.VT_U8;
+			case U16 -> am.ik.wasm.ComponentWriter.VT_U16;
+			case U32 -> am.ik.wasm.ComponentWriter.VT_U32;
+			case U64 -> am.ik.wasm.ComponentWriter.VT_U64;
+			case FLOAT -> am.ik.wasm.ComponentWriter.VT_F64;
+			case BOOL -> am.ik.wasm.ComponentWriter.VT_BOOL;
+			case STRING, S_EXPR -> am.ik.wasm.ComponentWriter.VT_STRING;
+			case VOID -> null;
 		};
 	}
 
@@ -713,11 +826,10 @@ final class WasmExportCompiler {
 	 */
 	static String componentPostReturnKind(Decl decl) {
 		return switch (decl.returnType()) {
-			case T_STRING, T_S_EXPR, T_INT, T_BOOL -> "i32";
-			case T_FLOAT -> "f64";
-			case T_VOID -> "void";
-			default -> throw new UnsupportedOperationException(
-					"rontolisp:wasm-export type " + decl.returnType() + " has no component post-return signature");
+			case STRING, S_EXPR, S8, S16, S32, U8, U16, U32, BOOL -> "i32";
+			case S64, U64 -> "i64";
+			case FLOAT -> "f64";
+			case VOID -> "void";
 		};
 	}
 
@@ -738,23 +850,28 @@ final class WasmExportCompiler {
 	 */
 	static WasmComponentBuilder.FuncExport componentExport(Decl decl) {
 		List<Integer> params = new ArrayList<>();
-		for (String t : decl.paramTypes()) {
+		for (BoundaryType t : decl.paramTypes()) {
 			params.add(componentValType(t));
 		}
 		return new WasmComponentBuilder.FuncExport(decl.exportName(), decl.paramNames(), params,
 				componentValType(decl.returnType()), decl.async(), decl.iface());
 	}
 
-	static void appendWasmTypes(List<Type> types, String type) {
+	static void appendWasmTypes(List<Type> types, BoundaryType type) {
 		switch (type) {
-			case T_INT, T_BOOL -> types.add(Type.I32);
-			case T_LONG -> types.add(Type.I64);
-			case T_FLOAT -> types.add(Type.F64);
-			case T_STRING, T_S_EXPR -> {
+			// The canonical ABI flattens every integer up to 32 bits, signed or not, to
+			// one
+			// i32, and both 64-bit ones to one i64: the core signature of a u32 export is
+			// the same as an s32 export's, and only the component type section tells them
+			// apart.
+			case S8, S16, S32, U8, U16, U32, BOOL -> types.add(Type.I32);
+			case S64, U64 -> types.add(Type.I64);
+			case FLOAT -> types.add(Type.F64);
+			case STRING, S_EXPR -> {
 				types.add(Type.I32);
 				types.add(Type.I32);
 			}
-			default -> throw new UnsupportedOperationException("Unknown rontolisp:wasm-export type: " + type);
+			case VOID -> throw new UnsupportedOperationException("rontolisp:wasm-export :void has no WASM value type");
 		}
 	}
 
@@ -779,23 +896,26 @@ final class WasmExportCompiler {
 				"Expected a keyword option in " + form.print() + ", got: " + value.print());
 	}
 
-	static String typeDesignator(LispVal value, LispCons form) {
-		if (value instanceof LispSymbol sym && sym.isKeyword() && KNOWN_TYPES.contains(sym.name())) {
-			return sym.name();
+	static BoundaryType typeDesignator(LispVal value, LispCons form) {
+		if (value instanceof LispSymbol sym && sym.isKeyword()) {
+			BoundaryType type = BoundaryType.forDesignator(sym.name());
+			if (type != null && type != BoundaryType.VOID) {
+				return type;
+			}
 		}
 		throw new UnsupportedOperationException("Unknown rontolisp:wasm-export type designator " + value.print()
-				+ " in " + form.print() + " (expected one of " + KNOWN_TYPES + ")");
+				+ " in " + form.print() + " (expected one of " + BoundaryType.valueDesignators() + ")");
 	}
 
 	// A return designator is a known scalar/memory type, or a void marker: :void, nil,
 	// '()
 	// or (quote nil) -> the wrapper has no result and discards the Lisp return value.
-	private static String returnDesignator(LispVal value, LispCons form) {
+	private static BoundaryType returnDesignator(LispVal value, LispCons form) {
 		if (isVoidMarker(value)) {
-			return T_VOID;
+			return BoundaryType.VOID;
 		}
-		if (value instanceof LispSymbol sym && sym.isKeyword() && T_VOID.equals(sym.name())) {
-			return T_VOID;
+		if (value instanceof LispSymbol sym && BoundaryType.forDesignator(sym.name()) == BoundaryType.VOID) {
+			return BoundaryType.VOID;
 		}
 		return typeDesignator(value, form);
 	}
@@ -809,7 +929,7 @@ final class WasmExportCompiler {
 				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof am.ik.rontolisp.LispNil;
 	}
 
-	private static List<String> quotedTypeList(LispVal value, LispCons form) {
+	private static List<BoundaryType> quotedTypeList(LispVal value, LispCons form) {
 		// Bare nil (an omitted / empty parameter list) -> no parameters.
 		if (value instanceof am.ik.rontolisp.LispNil) {
 			return List.of();
@@ -817,7 +937,7 @@ final class WasmExportCompiler {
 		// (quote (:t1 :t2 ...)) -> [:t1, :t2, ...]
 		if (value instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
 				&& cons.cdr() instanceof LispCons rest) {
-			List<String> result = new ArrayList<>();
+			List<BoundaryType> result = new ArrayList<>();
 			if (rest.car() instanceof LispCons list) {
 				for (LispVal element : list.toList()) {
 					result.add(typeDesignator(element, form));

@@ -129,7 +129,8 @@ and the `25` is wasmtime rendering the export's return value in WAVE syntax,
 not output from `print`. The plain `run` executes the top-level program
 instead, so the `400` is the output of `(print (sumsquared 10 10))`.
 
-The typed signature (`:int` → `s32`, `:float` → `f64`, `:bool` → `bool`,
+The typed signature (each integer designator under its own WIT name — `:s32`
+→ `s32`, `:u32` → `u32`, … — plus `:float` → `f64`, `:bool` → `bool`,
 `:string` → `string`, `:s-expr` → `string` carrying the printed s-expression
 text, omitted `:returns` → no result) is visible to any component host, and
 `:as` renames the component export just like the core one.

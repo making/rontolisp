@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Objects;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -46,8 +47,8 @@ class WasmImportCompilerTest {
 		assertThat(decl.name()).isEqualTo("DRAW");
 		assertThat(decl.module()).isEqualTo("env");
 		assertThat(decl.field()).isEqualTo("draw");
-		assertThat(decl.paramTypes()).containsExactly(":INT", ":INT");
-		assertThat(decl.returnType()).isEqualTo(WasmExportCompiler.T_VOID);
+		assertThat(decl.paramTypes()).containsExactly(BoundaryType.S32, BoundaryType.S32);
+		assertThat(decl.returnType()).isEqualTo(BoundaryType.VOID);
 	}
 
 	@Test
@@ -57,8 +58,8 @@ class WasmImportCompilerTest {
 		assertThat(decl.name()).isEqualTo("DRAW-PIXEL");
 		assertThat(decl.module()).isEqualTo("gl");
 		assertThat(decl.field()).isEqualTo("drawPixel");
-		assertThat(decl.paramTypes()).containsExactly(":FLOAT");
-		assertThat(decl.returnType()).isEqualTo(":INT");
+		assertThat(decl.paramTypes()).containsExactly(BoundaryType.FLOAT);
+		assertThat(decl.returnType()).isEqualTo(BoundaryType.S32);
 	}
 
 	@Test
@@ -76,12 +77,11 @@ class WasmImportCompilerTest {
 
 	@Test
 	void treatsOmittedReturnsAsVoid() {
-		assertThat(parse("(rontolisp:wasm-import 'go :params '(:int))").returnType())
-			.isEqualTo(WasmExportCompiler.T_VOID);
+		assertThat(parse("(rontolisp:wasm-import 'go :params '(:int))").returnType()).isEqualTo(BoundaryType.VOID);
 		assertThat(parse("(rontolisp:wasm-import 'go :params '(:int) :returns :void)").returnType())
-			.isEqualTo(WasmExportCompiler.T_VOID);
+			.isEqualTo(BoundaryType.VOID);
 		assertThat(parse("(rontolisp:wasm-import 'go :params '(:int) :returns nil)").returnType())
-			.isEqualTo(WasmExportCompiler.T_VOID);
+			.isEqualTo(BoundaryType.VOID);
 	}
 
 	@Test

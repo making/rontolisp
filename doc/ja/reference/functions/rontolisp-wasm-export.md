@@ -11,7 +11,7 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
 
 ```lisp
 (defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
-(rontolisp:wasm-export 'fact :params '(:int) :returns :int)   ; => fact
+(rontolisp:wasm-export 'fact :params '(:int) :returns :int)   ; => FACT
 ```
 
 ## 引数
@@ -42,20 +42,30 @@ WebAssembly コアモジュールへコンパイルする際に、トップレ�
 
 型指定子と境界表現は次のとおりです。
 
-| Designator | WASM boundary | Notes |
-| --- | --- | --- |
-| `:int` | `i32` | 31-bit signed range (the internal `i31ref`) |
-| `:long` | `i64` | `--no-gc` only; full 64-bit signed range, matching the scalar backend's internal `i64` (no `wrap`/`extend` at the boundary) |
-| `:float` | `f64` | |
-| `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
-| `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
-| `:s-expr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
+| Designator | WIT type | WASM boundary | Notes |
+| --- | --- | --- | --- |
+| `:s8` `:s16` `:s32` | `s8` `s16` `s32` | `i32` | `:int` は `:s32` の恒久的な別名 |
+| `:u8` `:u16` `:u32` | `u8` `u16` `u32` | `i32` | |
+| `:s64` `:u64` | `s64` `u64` | `i64` | `--no-gc` のみ。スカラーバックエンドの内部表現 `i64` に一致する。`:long` は `:s64` の恒久的な別名 |
+| `:float` | `f64` | `f64` | rontolisp に単精度浮動小数点数はないため、`f32` は境界型ではない |
+| `:bool` | `bool` | `i32` | `0` が `nil`、非ゼロの値はすべて `t` |
+| `:string` | `string` | `(ptr, len)` | 線形メモリ上の UTF-8 バイト列 |
+| `:s-expr` | `string` | `(ptr, len)` | 線形メモリ上の S 式テキスト (関数以外の任意の値)。対応する WIT 型はない |
 
-デフォルト (GC) バックエンドでは、`:int` は境界を `i32` として渡りますが、内部の
-整数は `i31ref` であるため、`:int` 経由で返す値は 32 ビット境界を超えると切り詰め
-られます。非 GC バックエンド (`--no-gc`) では整数を `i64` で計算するため、引数や
-戻り値が 32 ビット範囲を超えうる場合は `:long` を使ってください。`wrap`/`extend`
-変換なしで全幅を公開します。
+**境界は値を正確に運ぶか、さもなければトラップします。** 宣言した型が表現できない
+値 — `:u32` で返した負数、`:u8` で返した `300`、`:s32` で返した 32 ビット範囲外の
+値 — は、静かに折り返されて届くのではなく呼び出しを停止させます。マスクは一切行い
+ません。これは `wasmtime` と、より厳格なバインディング生成系 (`jco` など) とで
+コンポーネントの挙動を一致させることにもつながります。
+
+表現可能な範囲は、どのバックエンドでも宣言した型そのものの範囲です。デフォルト
+(GC) バックエンドでは整数は `i31ref` で、その範囲を超えると float に広がるため、
+`3000000000` という `:u32` 引数は正確な float `3000000000.0` として Lisp コードに
+届きます。なお `i31` 範囲**内**の整数演算はそこで折り返す (WASM バックエンドの
+整数は昇格なしの 31 ビット) ため、`:u32` 引数 `1073741823` に対する `(+ x 1)` は
+誤った数値を報告するのではなく境界でトラップします。非 GC バックエンド
+(`--no-gc`) では整数を `i64` で計算するので、`:s64`/`:u64` までの族全体がこの注意
+なしに渡ります。
 
 ## 制限事項
 

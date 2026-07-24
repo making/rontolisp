@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -52,15 +53,15 @@ class WasmExportCompilerTest {
 	void parsesScalarDirective() {
 		WasmExportCompiler.Decl decl = parse("(rontolisp:wasm-export 'fact :params '(:int) :returns :int)");
 		assertThat(decl.name()).isEqualTo("FACT");
-		assertThat(decl.paramTypes()).containsExactly(":INT");
-		assertThat(decl.returnType()).isEqualTo(":INT");
+		assertThat(decl.paramTypes()).containsExactly(BoundaryType.S32);
+		assertThat(decl.returnType()).isEqualTo(BoundaryType.S32);
 	}
 
 	@Test
 	void parsesMultipleParamsAndMemoryTypes() {
 		WasmExportCompiler.Decl decl = parse(
 				"(rontolisp:wasm-export 'concat :params '(:string :s-expr) :returns :string)");
-		assertThat(decl.paramTypes()).containsExactly(":STRING", ":S-EXPR");
+		assertThat(decl.paramTypes()).containsExactly(BoundaryType.STRING, BoundaryType.S_EXPR);
 		assertThat(WasmExportCompiler.usesMemory(decl)).isTrue();
 		assertThat(WasmExportCompiler.paramSlotCount(decl)).isEqualTo(4);
 	}
@@ -74,18 +75,17 @@ class WasmExportCompilerTest {
 
 	@Test
 	void treatsOmittedReturnsAsVoid() {
-		assertThat(parse("(rontolisp:wasm-export 'go :params '(:int))").returnType())
-			.isEqualTo(WasmExportCompiler.T_VOID);
+		assertThat(parse("(rontolisp:wasm-export 'go :params '(:int))").returnType()).isEqualTo(BoundaryType.VOID);
 	}
 
 	@Test
 	void treatsExplicitVoidMarkersAsVoid() {
 		assertThat(parse("(rontolisp:wasm-export 'go :params '(:int) :returns :void)").returnType())
-			.isEqualTo(WasmExportCompiler.T_VOID);
+			.isEqualTo(BoundaryType.VOID);
 		assertThat(parse("(rontolisp:wasm-export 'go :params '(:int) :returns nil)").returnType())
-			.isEqualTo(WasmExportCompiler.T_VOID);
+			.isEqualTo(BoundaryType.VOID);
 		assertThat(parse("(rontolisp:wasm-export 'go :params '(:int) :returns '())").returnType())
-			.isEqualTo(WasmExportCompiler.T_VOID);
+			.isEqualTo(BoundaryType.VOID);
 	}
 
 	@Test
@@ -205,12 +205,47 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
-	void rejectsLongDesignatorOnTheGcBackend() {
-		// :long maps to i64, which the GC backend cannot represent (its integers are
-		// i31ref); it is a --no-gc-only designator, rejected with a pointer to --no-gc.
+	void rejectsTheSixtyFourBitDesignatorsOnTheGcBackend() {
+		// The 64-bit types map to i64, which the GC backend cannot represent exactly (its
+		// integers are i31ref, widening to a float that is exact only below 2^53); they
+		// are --no-gc-only designators, rejected with a pointer to --no-gc. The legacy
+		// :long spelling is the same type, so it is rejected under its canonical name.
 		assertThatThrownBy(() -> compile("(defun f (a b) (* (+ a b) (+ a b)))"
 				+ "(rontolisp:wasm-export 'f :params '(:long :long) :returns :long)"))
-			.hasMessageContaining(":long requires --no-gc");
+			.hasMessageContaining(":s64 requires --no-gc");
+		assertThatThrownBy(() -> compile("(defun f (a b) (* (+ a b) (+ a b)))"
+				+ "(rontolisp:wasm-export 'f :params '(:u64 :u64) :returns :u64)"))
+			.hasMessageContaining(":u64 requires --no-gc");
+	}
+
+	@Test
+	void theLegacyIntAndLongSpellingsAreAliasesOfTheirWitTypes() {
+		// Every program written against the pre-WIT vocabulary keeps parsing, and
+		// normalizes to the canonical spelling -- which is what makes it compile to the
+		// same bytes as the WIT-spelled twin.
+		WasmExportCompiler.Decl legacy = parse("(rontolisp:wasm-export 'f :params '(:int :long) :returns :int)");
+		WasmExportCompiler.Decl canonical = parse("(rontolisp:wasm-export 'f :params '(:s32 :s64) :returns :s32)");
+		assertThat(legacy).isEqualTo(canonical);
+		assertThat(legacy.paramTypes()).containsExactly(BoundaryType.S32, BoundaryType.S64);
+	}
+
+	@Test
+	void componentLiftsEachIntegerTypeUnderItsOwnValueTypeCode() {
+		// There is no integer subtyping in the component model: lifting a u32 export as
+		// s32 would make `wasm-tools component targets` (and jco, and any bindgen host)
+		// reject the component against its own world. The type code has to be exact, and
+		// the recorded WIT is how the component's own type section reads back.
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		compiler.compile(LispReader.readAllFromString("""
+				(defun bump (n) (+ n 1))
+				(defun narrow (a b c d) (+ a b c d))
+				(rontolisp:wasm-export 'bump :params '(:u32) :returns :u32)
+				(rontolisp:wasm-export 'narrow :params '(:s8 :s16 :u8 :u16) :returns :u8)
+				"""));
+		assertThat(compiler.componentWit()).contains("""
+				  export bump: func(p0: u32) -> u32;
+				  export narrow: func(p0: s8, p1: s16, p2: u8, p3: u16) -> u8;
+				""");
 	}
 
 	@Test

@@ -330,11 +330,13 @@ wasmtime run --invoke 'fact(5)' fact.wasm
 # 120
 ```
 
-The typed WIT signature maps `:int` → `s32`, `:long` → `s64`, `:float` →
-`f64`, `:bool` → `bool`, `:string` → `string`, and an omitted `:returns` →
-no result. The component also transpiles with jco (`jco transpile`, where
-`:long` surfaces as a JavaScript BigInt) and runs on any component-model
-host, with no wasm-GC support required.
+The typed WIT signature carries each designator under its own WIT name
+(`:s32` → `s32`, `:u32` → `u32`, … up to `:s64`/`:u64`, which only this
+backend can lift; `:int` and `:long` are the legacy aliases of `:s32` and
+`:s64`), plus `:float` → `f64`, `:bool` → `bool`, `:string` → `string`, and
+an omitted `:returns` → no result. The component also transpiles with jco
+(`jco transpile`, where the 64-bit types surface as JavaScript BigInt) and
+runs on any component-model host, with no wasm-GC support required.
 
 `:long` is valid here, unlike the GC component path — use it when a value
 can exceed the 32-bit range, matching the backend's internal `i64`

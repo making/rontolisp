@@ -59,6 +59,8 @@ class WitOracleE2eTest {
 				(defun swap (e) (list (cadr e) (car e)))
 				(defun noisy-mul (a b) (print (* a b)) (* a b))
 				(defun side-effect (n) n)
+				(defun narrow (a b c d) (+ a b c d))
+				(defun wide (a b) (+ a b))
 				(rontolisp:wasm-export 'pure-add :params '(:int :int) :returns :int)
 				(rontolisp:wasm-export 'scale :params '(:float :float) :returns :float)
 				(rontolisp:wasm-export 'evenp2 :params '(:int) :returns :bool)
@@ -66,6 +68,8 @@ class WitOracleE2eTest {
 				(rontolisp:wasm-export 'swap :params '(:s-expr) :returns :s-expr)
 				(rontolisp:wasm-export 'noisy-mul :params '(:int :int) :returns :int :async t)
 				(rontolisp:wasm-export 'side-effect :params '(:int) :returns nil :as "drop-it")
+				(rontolisp:wasm-export 'narrow :params '(:s8 :s16 :u8 :u16) :returns :u8)
+				(rontolisp:wasm-export 'wide :params '(:s32 :u32) :returns :u32)
 				(print "top level ran")
 				"""));
 		assertThat(compiler.componentWit()).isEqualTo(oracle(component));
@@ -161,8 +165,10 @@ class WitOracleE2eTest {
 		byte[] plainComponent = plain.compile(LispReader.readAllFromString("""
 				(defun big-add (a b) (+ a b))
 				(defun shout (s) (concatenate 'string s "!"))
+				(defun huge (a b) (+ a b))
 				(rontolisp:wasm-export 'big-add :params '(:long :long) :returns :long)
 				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				(rontolisp:wasm-export 'huge :params '(:u64 :u64) :returns :u64)
 				"""));
 		assertThat(plain.componentWit()).isEqualTo(oracle(plainComponent));
 		NoGcWasmCompiler print = new NoGcWasmCompiler(false, false, true);

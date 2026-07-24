@@ -3738,6 +3738,31 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void witExportAcceptsTheTutorialWorldVerbatim(@TempDir Path tempDir) throws Exception {
+		// The canonical component-model tutorial world, unedited. Its u32 types made it a
+		// hard error here -- on the plain interpreter, before any WASM was involved --
+		// which is the wrong first impression for the first world anyone meets.
+		Path wit = tempDir.resolve("adder.wit");
+		Files.writeString(wit, """
+				package docs:adder@0.1.0;
+
+				interface add {
+				  add: func(x: u32, y: u32) -> u32;
+				}
+
+				world adder {
+				  export add;
+				}
+				""");
+		String directive = "(rontolisp:wit-export \"" + wit.toString().replace("\\", "\\\\") + "\" :world adder)";
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.eval(LispReader.readFromString("(defun add (x y) (+ x y))"));
+		assertThat(evaluator.eval(LispReader.readFromString(directive))).isEqualTo(LispNil.INSTANCE);
+		assertThat(evaluator.eval(LispReader.readFromString("(add 2 3)"))).isEqualTo(new LispInteger(5));
+	}
+
+	@Test
 	void witExportReportsAMissingWitFile() {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));

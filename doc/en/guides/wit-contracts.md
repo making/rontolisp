@@ -48,8 +48,9 @@ single source of truth**:
 - The world is the program's export list, so a hand-written
   `rontolisp:wasm-export` in the same program is a compile error.
 - Every export must have a matching `defun` of the right arity, every WIT
-  type must be one the boundary carries (`s32`, `s64`, `f64`, `bool`,
-  `string`), and an `async func` in the world lifts that export with
+  type must be one the boundary carries (every fixed-width integer `s8` …
+  `u64`, plus `f64`, `bool`, `string`), and an `async func` in the world
+  lifts that export with
   `:async t` (so an export that does I/O is declared async by the WIT
   instead of being guessed at). Each mismatch is a compile error naming the
   WIT file and line:
@@ -257,8 +258,8 @@ What `--emit-wit` is **not** — for a program that has a world — is a drift
 check on that program. The export lines are a fixpoint by construction: the
 world produces the `rontolisp:wasm-export` directives, those produce the
 component's function types, and those are what is printed back out, over a
-boundary type set (`s32`, `s64`, `f64`, `bool`, `string`) that maps one-to-one
-in both directions. They cannot come out disagreeing with the world you
+boundary type set (every fixed-width integer, plus `f64`, `bool`, `string`)
+that maps one-to-one in both directions. They cannot come out disagreeing with the world you
 handed in. Re-emitting the `.wit` and diffing it in CI is therefore a
 regression check on *rontolisp's* type mapping — cheap, and worth keeping —
 not a check on your source. The thing that catches a drifted program is

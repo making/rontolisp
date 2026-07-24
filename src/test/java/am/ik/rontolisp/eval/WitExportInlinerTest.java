@@ -57,7 +57,7 @@ class WitExportInlinerTest {
 				});
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList())).doesNotContain("wit-export")
 			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:STRING)) "
-					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :INT)");
+					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :S32)");
 	}
 
 	@Test
@@ -107,12 +107,17 @@ class WitExportInlinerTest {
 	 */
 	private void assertByteIdentical(String prelude, Function<List<LispVal>, byte[]> compile,
 			WitExportDirective.Backend backend) throws IOException {
+		assertByteIdentical(prelude, compile, backend, WORLD, HAND_WRITTEN);
+	}
+
+	private void assertByteIdentical(String prelude, Function<List<LispVal>, byte[]> compile,
+			WitExportDirective.Backend backend, String world, String handWrittenExport) throws IOException {
 		Path wit = this.tempDir.resolve("world.wit");
-		Files.writeString(wit, WORLD);
+		Files.writeString(wit, world);
 		List<LispVal> witProgram = WitExportInliner.inline(
 				LispReader.readAllFromString(prelude + BODY + "(rontolisp:wit-export \"world.wit\")"),
 				this.tempDir.toString(), backend, SourceLoader.fileSystem());
-		List<LispVal> handWritten = LispReader.readAllFromString(prelude + BODY + HAND_WRITTEN);
+		List<LispVal> handWritten = LispReader.readAllFromString(prelude + BODY + handWrittenExport);
 		assertThat(compile.apply(witProgram)).isEqualTo(compile.apply(handWritten));
 	}
 
@@ -142,7 +147,7 @@ class WitExportInlinerTest {
 		String printed = String.join("\n", out.stream().map(LispVal::print).toList());
 		assertThat(printed).doesNotContain("wit-export")
 			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:STRING)) "
-					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :INT)")
+					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :S32)")
 			.contains("(DEFUN COUNT-VOWELS");
 	}
 
@@ -185,6 +190,38 @@ class WitExportInlinerTest {
 	void noGcComponentIsByteIdenticalToTheHandWrittenExport() throws IOException {
 		assertByteIdentical("", program -> new NoGcWasmCompiler(false, false, true).compile(program),
 				WitExportDirective.Backend.WASM_NO_GC);
+	}
+
+	@Test
+	void anUnsignedWorldIsByteIdenticalToTheHandWrittenExport() throws IOException {
+		// wit-export stays a pure front-end for the widened vocabulary too: a world
+		// declaring u32 lowers into exactly the wasm-export a hand-written program
+		// carries, so the new types add no emit path of their own.
+		String world = """
+				package root:component;
+
+				world root {
+				  export count-vowels: func(s: string) -> u32;
+				}
+				""";
+		String handWritten = "(rontolisp:wasm-export 'count-vowels :params '(:string) "
+				+ ":param-names '(s) :returns :u32)";
+		assertByteIdentical("",
+				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(program),
+				WitExportDirective.Backend.WASM_GC, world, handWritten);
+		assertByteIdentical("", program -> new NoGcWasmCompiler(false, false, true).compile(program),
+				WitExportDirective.Backend.WASM_NO_GC, world, handWritten);
+	}
+
+	@Test
+	void theLegacyIntSpellingCompilesToTheSameBytesAsItsWitSpelling() throws IOException {
+		// :int and :long are permanent aliases of :s32 / :s64, normalized at parse time.
+		// That is the whole reason every program written against the pre-WIT vocabulary
+		// keeps producing the artifact it always did.
+		assertByteIdentical("",
+				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(program),
+				WitExportDirective.Backend.WASM_GC, WORLD,
+				"(rontolisp:wasm-export 'count-vowels :params '(:string) " + ":param-names '(s) :returns :s32)");
 	}
 
 	@Test
@@ -261,7 +298,7 @@ class WitExportInlinerTest {
 				WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem());
 		assertThat(String.join("\n", out.stream().map(LispVal::print).toList()))
 			.contains("(RONTOLISP:WASM-EXPORT (QUOTE COUNT-VOWELS) :PARAMS (QUOTE (:STRING)) "
-					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :INT)");
+					+ ":PARAM-NAMES (QUOTE (s)) :RETURNS :S32)");
 	}
 
 	@Test

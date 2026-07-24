@@ -28,6 +28,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
@@ -615,15 +616,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	// The internal value type a boundary designator pins a parameter to: :float -> FLOAT,
-	// :string -> STRING, :int/:bool -> INT.
-	private static Ty boundaryTy(String designator) {
-		if (WasmExportCompiler.T_FLOAT.equals(designator)) {
-			return Ty.FLOAT;
-		}
-		if (WasmExportCompiler.T_STRING.equals(designator)) {
-			return Ty.STRING;
-		}
-		return Ty.INT;
+	// :string -> STRING, every integer designator and :bool -> INT (the house i64).
+	private static Ty boundaryTy(BoundaryType designator) {
+		return switch (designator) {
+			case FLOAT -> Ty.FLOAT;
+			case STRING -> Ty.STRING;
+			default -> Ty.INT;
+		};
 	}
 
 	private static Map<String, Ty> paramEnv(Defun d, Map<String, Ty[]> params) {
@@ -1024,8 +1023,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 		boolean boundaryString = false;
 		for (WasmExportCompiler.Decl decl : exportDecls) {
-			if (WasmExportCompiler.T_STRING.equals(decl.returnType())
-					|| decl.paramTypes().contains(WasmExportCompiler.T_STRING)) {
+			if (decl.returnType() == BoundaryType.STRING || decl.paramTypes().contains(BoundaryType.STRING)) {
 				boundaryString = true;
 			}
 		}
@@ -1191,7 +1189,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (componentStringAbi) {
 			for (int j = 0; j < exportDecls.size(); j++) {
 				WasmExportCompiler.Decl decl = exportDecls.get(j);
-				if (WasmExportCompiler.T_STRING.equals(decl.returnType())) {
+				if (decl.returnType() == BoundaryType.STRING) {
 					stringReturnDecls.add(j);
 				}
 				if (WasmExportCompiler.usesMemory(decl)) {
@@ -2032,17 +2030,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		Ty[] internalParams = Objects.requireNonNull(types.params().get(decl.name()));
 		for (int p = 0; p < decl.paramTypes().size(); p++) {
-			String hostType = decl.paramTypes().get(p);
+			BoundaryType hostType = decl.paramTypes().get(p);
 			Ty internal = internalParams[p];
-			boolean identity = (WasmExportCompiler.T_LONG.equals(hostType) && internal == Ty.INT)
-					|| (WasmExportCompiler.T_FLOAT.equals(hostType) && internal == Ty.FLOAT);
+			boolean identity = (hostType == BoundaryType.S64 && internal == Ty.INT)
+					|| (hostType == BoundaryType.FLOAT && internal == Ty.FLOAT);
 			if (!identity) {
 				return false;
 			}
 		}
 		Ty ret = returnTy(decl.name(), types);
-		return (WasmExportCompiler.T_LONG.equals(decl.returnType()) && ret == Ty.INT)
-				|| (WasmExportCompiler.T_FLOAT.equals(decl.returnType()) && ret == Ty.FLOAT);
+		return (decl.returnType() == BoundaryType.S64 && ret == Ty.INT)
+				|| (decl.returnType() == BoundaryType.FLOAT && ret == Ty.FLOAT);
 	}
 
 	private byte[] compileWrapperBody(WasmExportCompiler.Decl decl, int targetIndex, Types types, Mem mem) {
@@ -2065,8 +2063,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// repeatedly-called instance stops growing. Gated on the return type NOT being a
 		// memory designator (:string/:s-expr, whose result pointer must stay live) and on
 		// mem.used() (a pure-numeric export has no heap global at all).
-		boolean resetHeap = mem.used() && !WasmExportCompiler.T_STRING.equals(decl.returnType())
-				&& !WasmExportCompiler.T_S_EXPR.equals(decl.returnType());
+		boolean resetHeap = mem.used() && decl.returnType() != BoundaryType.STRING
+				&& decl.returnType() != BoundaryType.S_EXPR;
 		int mark = -1;
 		if (resetHeap) {
 			mark = nextLocal++;
@@ -2079,9 +2077,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// order, then call the internal function.
 		int slot = 0;
 		for (int p = 0; p < decl.paramTypes().size(); p++) {
-			String hostType = decl.paramTypes().get(p);
+			BoundaryType hostType = decl.paramTypes().get(p);
 			Ty internal = internalParams[p];
-			if (WasmExportCompiler.T_STRING.equals(hostType)) {
+			if (hostType == BoundaryType.STRING) {
 				// (ptr,len) -> a fresh internal [len][bytes] string copied out of the
 				// host
 				// buffer. Scratch locals: hp(host ptr), len, dst.
@@ -2120,27 +2118,49 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				slot += 2;
 			}
 			else {
+				// A u64 above 2^63 has no exact place in the house i64: refuse it here
+				// rather than let it arrive as a negative Lisp integer.
+				if (hostType == BoundaryType.U64) {
+					w.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
+					i64Const(w, 0);
+					w.write(Instruction.I64_LT_S);
+					w.write(Instruction.IF, 0x40);
+					w.write(Instruction.UNREACHABLE);
+					w.write(Instruction.END);
+				}
 				w.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
-				if (WasmExportCompiler.T_FLOAT.equals(hostType)) {
+				switch (hostType) {
 					// host f64 -> internal (always FLOAT, since :float pins the param)
-					if (internal == Ty.INT) {
-						w.write(Instruction.I64_TRUNC_S_F64);
+					case FLOAT -> {
+						if (internal == Ty.INT) {
+							w.write(Instruction.I64_TRUNC_S_F64);
+						}
 					}
-				}
-				else if (WasmExportCompiler.T_LONG.equals(hostType)) {
-					// host i64 -> internal i64 (INT): identity, no conversion. :long pins
-					// the parameter to INT, so the FLOAT branch is defensive only.
-					if (internal == Ty.FLOAT) {
-						w.write(Instruction.F64_CONVERT_S_I64);
+					// host i64 -> internal i64 (INT): identity, no conversion. A 64-bit
+					// designator pins the parameter to INT, so the FLOAT branch is
+					// defensive only.
+					case S64 -> {
+						if (internal == Ty.FLOAT) {
+							w.write(Instruction.F64_CONVERT_S_I64);
+						}
 					}
-				}
-				else {
-					// host i32 (:int/:bool) -> internal
-					if (internal == Ty.INT) {
-						w.write(Instruction.I64_EXTEND_S_I32);
+					case U64 -> {
+						if (internal == Ty.FLOAT) {
+							w.write(Instruction.F64_CONVERT_U_I64);
+						}
 					}
-					else {
-						w.write(Instruction.F64_CONVERT_S_I32);
+					// host i32 -> internal, widened in the declared type's own
+					// signedness:
+					// zero-extending a u32 is what makes its top half arrive as the
+					// positive integer the WIT type says it is.
+					default -> {
+						boolean signed = !hostType.isInteger() || hostType.signed();
+						if (internal == Ty.INT) {
+							w.write(signed ? Instruction.I64_EXTEND_S_I32 : Instruction.I64_EXTEND_U_I32);
+						}
+						else {
+							w.write(signed ? Instruction.F64_CONVERT_S_I32 : Instruction.F64_CONVERT_U_I32);
+						}
 					}
 				}
 				slot += 1;
@@ -2150,26 +2170,30 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// Unbox the internal result (its inferred return type) back to the host type.
 		Ty ret = returnTy(name, types);
 		switch (decl.returnType()) {
-			case WasmExportCompiler.T_INT -> {
-				if (ret == Ty.INT) {
+			// Every integer result is normalized to an i64 in the declared type's own
+			// signedness (a FLOAT body truncates through the trapping i64.trunc, which is
+			// also what rejects a negative for an unsigned type), range-checked against
+			// the
+			// declared type, and only then narrowed. A value the type cannot state stops
+			// the call instead of arriving silently wrapped; :s64 needs neither a check
+			// nor
+			// a narrowing, so it stays the identity it always was.
+			case S8, S16, S32, S64, U8, U16, U32, U64 -> {
+				BoundaryType type = decl.returnType();
+				if (ret == Ty.FLOAT) {
+					w.write(type.signed() ? Instruction.I64_TRUNC_S_F64 : Instruction.I64_TRUNC_U_F64);
+				}
+				nextLocal += emitBoundaryRangeGuard(w, type, ret == Ty.FLOAT, nextLocal, wrapperLocals);
+				if (type.bits() < 64) {
 					w.write(Instruction.I32_WRAP_I64);
 				}
-				else {
-					w.write(Instruction.I32_TRUNC_S_F64);
-				}
 			}
-			case WasmExportCompiler.T_LONG -> {
-				// internal i64 -> host i64 is identity; a FLOAT result truncates to i64.
-				if (ret == Ty.FLOAT) {
-					w.write(Instruction.I64_TRUNC_S_F64);
-				}
-			}
-			case WasmExportCompiler.T_FLOAT -> {
+			case FLOAT -> {
 				if (ret == Ty.INT) {
 					w.write(Instruction.F64_CONVERT_S_I64);
 				}
 			}
-			case WasmExportCompiler.T_BOOL -> {
+			case BOOL -> {
 				// non-zero -> 1, zero -> 0
 				if (ret == Ty.INT) {
 					i64Const(w, 0);
@@ -2179,7 +2203,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					w.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_NE);
 				}
 			}
-			case WasmExportCompiler.T_STRING -> {
+			case STRING -> {
 				// internal [len][bytes] pointer -> (content ptr, len) host pair.
 				int r = nextLocal++;
 				wrapperLocals.add(Ty.STRING);
@@ -2191,9 +2215,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					.write(Instruction.I32_ADD);
 				w.write(Instruction.GET_LOCAL).writeSignedLeb128(r).write(Instruction.I32_LOAD, 0x02, 0x00);
 			}
-			case WasmExportCompiler.T_VOID -> w.write(Instruction.DROP);
-			default -> throw new UnsupportedOperationException("--no-gc does not support the export return type "
-					+ decl.returnType() + " (only :int/:long/:float/:bool/:string/:void)");
+			case VOID -> w.write(Instruction.DROP);
+			case S_EXPR -> throw new UnsupportedOperationException("--no-gc does not support the export return type "
+					+ decl.returnType().designator() + " (it needs a cons/reader/printer runtime)");
 		}
 		// Restore the heap pointer for scalar returns. local.get pushes mark above the
 		// host result already on the stack, global.set pops it -- the result stays on top
@@ -2203,6 +2227,66 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		w.write(Instruction.END);
 		return withLocals(bodyStream.toByteArray(), wrapperLocals);
+	}
+
+	/**
+	 * Traps unless the i64 on the stack is a value the declared boundary type can state,
+	 * and leaves it there. The check is derived from two intervals -- the type's range
+	 * and the house integer's -- so no case is special: only the bounds the house integer
+	 * can actually cross are emitted, which is why {@code :s64} keeps the plain identity
+	 * wrapper it always had.
+	 * @param w the wrapper's writer
+	 * @param type the declared boundary type (an integer)
+	 * @param fromFloat whether the value came through a trapping {@code i64.trunc}, which
+	 * has already enforced the full 64-bit range in the type's own signedness
+	 * @param slot the next free wrapper local slot
+	 * @param wrapperLocals the wrapper's local-type list, appended to when a scratch is
+	 * used
+	 * @return the number of local slots consumed (0 when the type needs no check)
+	 */
+	private static int emitBoundaryRangeGuard(WasmWriter w, BoundaryType type, boolean fromFloat, int slot,
+			List<Ty> wrapperLocals) {
+		boolean narrowSigned = type.signed() && type.bits() < 64;
+		boolean narrowUnsigned = !type.signed() && type.bits() < 64;
+		// A u64 result is only at risk coming out of the signed house i64: a negative
+		// Lisp
+		// integer is not a u64. Out of i64.trunc_u_f64 the whole 0..2^64-1 range is
+		// already
+		// exact, so nothing is left to check.
+		boolean unsignedFromSignedHouse = !type.signed() && type.bits() == 64 && !fromFloat;
+		if (!narrowSigned && !narrowUnsigned && !unsignedFromSignedHouse) {
+			return 0;
+		}
+		wrapperLocals.add(Ty.INT);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(slot);
+		BoundaryType.Range range = Objects.requireNonNull(type.range());
+		if (narrowSigned) {
+			emitTrapIf(w, slot, Instruction.I64_LT_S, range.min().longValueExact());
+			emitTrapIf(w, slot, Instruction.I64_GT_S, range.max().longValueExact());
+		}
+		else if (narrowUnsigned) {
+			// One unsigned comparison covers both ends: a negative i64 read as an
+			// unsigned
+			// 64-bit value is larger than any sub-64-bit unsigned maximum.
+			emitTrapIf(w, slot, Instruction.I64_GT_U, range.max().longValueExact());
+		}
+		else {
+			emitTrapIf(w, slot, Instruction.I64_LT_S, 0);
+		}
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
+		return 1;
+	}
+
+	// `if (local[slot] <op> bound) unreachable` -- the boundary refusing a value it
+	// cannot
+	// state. A trap is the shape a host already sees for a failure inside an export.
+	private static void emitTrapIf(WasmWriter w, int slot, int comparison, long bound) {
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
+		i64Const(w, bound);
+		w.write(comparison);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
 	}
 
 	// Prepends the locals declaration to a function body. Each extra local is emitted as
@@ -5209,26 +5293,23 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private static void validateScalarTypes(WasmExportCompiler.Decl decl) {
-		for (String t : decl.paramTypes()) {
+		for (BoundaryType t : decl.paramTypes()) {
 			requireSupported(t, decl);
 		}
-		if (!WasmExportCompiler.T_VOID.equals(decl.returnType())) {
+		if (decl.returnType() != BoundaryType.VOID) {
 			requireSupported(decl.returnType(), decl);
 		}
 	}
 
-	private static void requireSupported(String type, WasmExportCompiler.Decl decl) {
-		if (WasmExportCompiler.T_S_EXPR.equals(type)) {
+	// This backend carries every boundary type except :s-expr, whose printed-text
+	// crossing
+	// needs a cons/reader/printer runtime it does not have. Its house integer is i64, so
+	// the whole fixed-width integer family -- including the 64-bit types the wasm-GC
+	// backends refuse -- crosses here.
+	private static void requireSupported(BoundaryType type, WasmExportCompiler.Decl decl) {
+		if (type == BoundaryType.S_EXPR) {
 			throw new UnsupportedOperationException("--no-gc does not support the :s-expr export type for '"
-					+ decl.name()
-					+ "' (it needs a cons/reader/printer runtime; only :int/:float/:bool/:string/:void are supported)");
-		}
-		if (!WasmExportCompiler.T_INT.equals(type) && !WasmExportCompiler.T_LONG.equals(type)
-				&& !WasmExportCompiler.T_FLOAT.equals(type) && !WasmExportCompiler.T_BOOL.equals(type)
-				&& !WasmExportCompiler.T_STRING.equals(type)) {
-			throw new UnsupportedOperationException(
-					"--no-gc supports only :int/:long/:float/:bool/:string export types, " + "got " + type + " for '"
-							+ decl.name() + "'");
+					+ decl.name() + "' (it needs a cons/reader/printer runtime)");
 		}
 	}
 

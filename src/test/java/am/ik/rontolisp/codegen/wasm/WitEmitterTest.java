@@ -125,6 +125,27 @@ class WitEmitterTest {
 	}
 
 	@Test
+	void rendersEveryFixedWidthIntegerUnderItsOwnWitSpelling() {
+		// An implemented world round-trips through --emit-wit with its own type names
+		// intact -- the same property :param-names gives the labels. Rendering a u32 as
+		// s32 would make the emitted WIT describe a component that does not exist: there
+		// is no integer subtyping, so the two are different types to every consumer.
+		String wit = WitEmitter.emit(WitEmitter.VARIANT_NOGC,
+				List.of(parse("(rontolisp:wasm-export 'narrow :params '(:s8 :s16 :u8 :u16) :returns :u8)"),
+						parse("(rontolisp:wasm-export 'wide :params '(:s32 :u32) :returns :u32)"),
+						parse("(rontolisp:wasm-export 'huge :params '(:s64 :u64) :returns :u64)")));
+		assertThat(wit).isEqualTo("""
+				package root:component;
+
+				world root {
+				  export narrow: func(p0: s8, p1: s16, p2: u8, p3: u16) -> u8;
+				  export wide: func(p0: s32, p1: u32) -> u32;
+				  export huge: func(p0: s64, p1: u64) -> u64;
+				}
+				""");
+	}
+
+	@Test
 	void separatesImportsFromExportsWithOneBlankLineOnTheNoGcPrintVariant() {
 		// The no-gc print template's world ends on an import line; wasm-tools prints one
 		// blank line between a world's import block and its export block. Every export

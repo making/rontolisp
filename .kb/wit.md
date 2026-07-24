@@ -254,15 +254,17 @@ Every one names the WIT file and line (`WitLocations`), e.g.
 - an inline `import name: func(...)` in the world — rejected, not silently dropped; it is
   the one import shape `rontolisp:wit-import` cannot bind either (it is not an interface),
   and the message says to declare the interface to call instead
-- a WIT type outside the export boundary's subset (`s32` / `s64` / `f64` / `bool` /
-  `string`). The error names the type's SETTLED house representation via
-  `WitTypeMapper.rep` and says the component boundary cannot marshal it yet (todo-128)
-  — "your `record` is a keyword plist, marshalling it is not built yet", not a bare
-  refusal. The message itself carries no `.todo` pointer: a todo file is deleted the
-  moment the work lands, so a user-facing string must never name one
-- `s64` on the wasm-GC backend (its integers are `i31ref`; only `--no-gc --component`
-  lifts an `s64`) — the pre-existing rule, now reported against the WIT line that asked
-  for it
+- a WIT type outside the export boundary's subset (every fixed-width integer `s8` …
+  `u64`, plus `f64` / `bool` / `string` — the table is `compiler/BoundaryType`, and the
+  error message's "supported: ..." list is DERIVED from it, so the two cannot drift).
+  The error names the type's SETTLED house representation via `WitTypeMapper.rep` and
+  says the component boundary cannot marshal it yet — "your `record` is a keyword plist,
+  marshalling it is not built yet", not a bare refusal. The message itself carries no
+  `.todo` pointer: a todo file is deleted the moment the work lands, so a user-facing
+  string must never name one
+- `s64` / `u64` on the wasm-GC backends (only `--no-gc --component` lifts a 64-bit
+  boundary type) — see "The integer boundary" below for why, reported against the WIT
+  line that asked for it
 - an `async func` under `--no-gc --component` (the adapter-free reactor has no async
   machinery). Conversely, an `async func` in the world SETS `:async t` on the lowered
   export: the stackful-async lift an I/O-bearing export needs is now **stated by the
@@ -272,6 +274,69 @@ Every one names the WIT file and line (`WitLocations`), e.g.
 A world's `import` items and type definitions are IGNORED by the check (a component's
 imports come from the fixed WASI adapter surface, and the type definitions only spell
 out the signatures). Only the export side is a contract today.
+
+### The integer boundary — the exact-or-trap rule (`compiler/BoundaryType`)
+
+**The vocabulary IS the WIT spelling.** `BoundaryType` is the single table both WIT
+front-ends and both WASM backends consult: `:s8 :s16 :s32 :s64 :u8 :u16 :u32 :u64`, plus
+`:float` (f64 — rontolisp has no internal f32, `.kb/wasm-export-no-wasi.md`), `:bool`,
+`:string` and the rontolisp-only `:s-expr` / `:void`. **`:int` and `:long` are permanent
+aliases of `:s32` / `:s64`, normalized at parse time** — that normalization is exactly
+what makes a program written against the pre-WIT vocabulary compile to the same bytes as
+its WIT-spelled twin (`WitExportInlinerTest.theLegacyIntSpellingCompilesToTheSameBytesAsItsWitSpelling`).
+Before this the designator set predated WIT and had no unsigned member, so the canonical
+component-model tutorial world (`add: func(x: u32, y: u32) -> u32`) could not be
+implemented without editing the upstream `.wit`.
+
+**Emitting `s32` for a `u32` is not a benign shortcut.** The component model has NO
+integer subtyping (`Explainer.md`: subtyping is relaxed only for `instance`/`component`),
+so `wasm-tools component targets -w <world> <wit> <component>` REJECTS a component that
+lifted the wrong code, and so do jco and every `bindgen`-based host. The pinning test is
+`WitOracleE2eTest` (byte-for-byte against `wasm-tools component wit`).
+
+**The rule: the boundary carries the value exactly, or the wrapper traps.** It is uniform
+over the whole family, `:int`/`:long` included, and it is derived from two intervals
+(`BoundaryType.range()` vs. the backend's house-integer range) rather than enumerated per
+type — inbound needs a check when the house range does not contain the type's, outbound
+when the type's does not contain the house range. Per backend:
+
+| | wasm-GC (house = `i31ref`) | `--no-gc` (house = `i64`) |
+|---|---|---|
+| inbound `s8`/`s16`/`u8`/`u16` | plain `ref.i31` (always fits) | `i64.extend_i32_s` / `_u` |
+| inbound `s32`/`u32` | `i31` when it fits, else the **float box** — the representation this backend already gives every integer past the `i31` range (`.kb/time-environment-builtins.md`, and `WasmComponentImportCompiler.boxI64` on the import side). An f64 holds all 2^32 values exactly, so the whole range crosses | `i64.extend_i32_s` / `_u`, exact |
+| inbound `u64` | rejected at compile time | traps below 0 (no exact place in the signed house i64) |
+| outbound, every integer | `WasmEmitHelper.castFloatGetF64` then a trapping `i32.trunc_s/u_f64` — the same shape the import side lowers with; sub-32-bit types add one explicit range check (one `i32` scratch local, reserved by `WasmExportCompiler.scratchTypes` right after the parameter slots) | normalize to i64 (`i64.trunc_s/u_f64` for a float body), `NoGcWasmCompiler.emitBoundaryRangeGuard`, then `i32.wrap_i64` |
+
+`:s64` needs neither check nor narrowing on `--no-gc`, which is why its **pass-through
+wrapper elision** (`isPassThroughExport`) survives untouched.
+
+**Why the 64-bit types stay a compile error on wasm-GC.** The reason is NOT "the core
+signature cannot be i64" — the wrapper is hand-emitted and could carry one. It is that
+the house integer's float fallback is exact only below 2^53, so an `s64`/`u64` boundary
+would silently round exactly the values the type exists to express. A compile error the
+user can act on ("use `--no-gc`") beats a runtime surprise. Note the asymmetry with the
+IMPORT side, which DOES carry `s64`/`u64` on wasm-GC through the same float fallback:
+an import's value is what the host happens to send and the program can only observe what
+the backend holds, whereas an export's declared type is a promise the program makes.
+**Re-evaluation trigger:** if the wasm-GC backend ever gains an exact wide-integer
+representation (a boxed i64 struct or a bignum), retire this rejection in the same pass.
+
+**What the trap does NOT fix.** wasm-GC integer arithmetic still wraps at the `i31` range
+with no promotion (`doc/en/reference/functions/mul.md`), so `(+ x 1)` on a `:u32`
+argument of `1073741823` produces a negative — and the boundary then TRAPS rather than
+reporting `3221225472`. That is the rule working: the wrong number stops at the boundary
+instead of crossing it. The same program on `--no-gc` computes in i64 and returns
+`1073741824`. The arithmetic itself is `.todo/168`: the backend already has a
+representation for an integer past the `i31` range (the wide-integer float box this
+boundary now uses), and `+`/`-`/`*` are the one place that never learned it.
+
+**The import side is deliberately NOT widened here.** `WasmImportCompiler`'s accepted set
+is still `{:s32, :float, :bool, :string, :s-expr}` and `WitImportDirective.designatorOf`
+still maps the whole `Rep.INT` family to `:s32`, so a `u32` import above 2^30 keeps its
+pre-existing narrowing. Widening it is its own change: an import's inbound value is a
+host promise, so the exact-or-trap rule has to be worked through for every WASI import a
+program already makes, and it moves the emitted bytes of every Preview 1 `wit-import`
+program. Filed as `.todo/169`, which retires this paragraph when it lands.
 
 ### Interface exports — `export docs:adder/add;` (the idiomatic WIT shape)
 

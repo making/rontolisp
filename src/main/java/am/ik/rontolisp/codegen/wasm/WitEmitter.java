@@ -175,7 +175,7 @@ final class WitEmitter {
 	// types, and its result, with `async func` forced on the nogc-print variant.
 	private static WitFunc witFunc(WasmExportCompiler.Decl decl, boolean forceAsync) {
 		List<WitFunc.Param> params = new ArrayList<>();
-		List<String> paramTypes = decl.paramTypes();
+		List<am.ik.rontolisp.compiler.BoundaryType> paramTypes = decl.paramTypes();
 		for (int i = 0; i < paramTypes.size(); i++) {
 			params.add(new WitFunc.Param(decl.paramNames().get(i), witType(paramTypes.get(i))));
 		}
@@ -183,19 +183,29 @@ final class WitEmitter {
 		return new WitFunc(decl.async() || forceAsync, List.copyOf(params), result == null ? null : witTypeOf(result));
 	}
 
-	private static WitType witType(String designator) {
+	private static WitType witType(am.ik.rontolisp.compiler.BoundaryType designator) {
 		Integer valType = WasmExportCompiler.componentValType(designator);
 		if (valType == null) {
 			throw new UnsupportedOperationException(
-					"rontolisp:wasm-export type " + designator + " is not a WIT parameter type");
+					"rontolisp:wasm-export type " + designator.designator() + " is not a WIT parameter type");
 		}
 		return witTypeOf(valType);
 	}
 
+	// A component value type back to its WIT spelling. An implemented world therefore
+	// round-trips through --emit-wit with its own type names intact -- the same property
+	// :param-names gives the labels -- which is what lets a world be fed straight back
+	// in.
 	private static WitType witTypeOf(int valType) {
 		return new WitType.Prim(switch (valType) {
+			case ComponentWriter.VT_S8 -> "s8";
+			case ComponentWriter.VT_S16 -> "s16";
 			case ComponentWriter.VT_S32 -> "s32";
 			case ComponentWriter.VT_S64 -> "s64";
+			case ComponentWriter.VT_U8 -> "u8";
+			case ComponentWriter.VT_U16 -> "u16";
+			case ComponentWriter.VT_U32 -> "u32";
+			case ComponentWriter.VT_U64 -> "u64";
 			case ComponentWriter.VT_F64 -> "f64";
 			case ComponentWriter.VT_BOOL -> "bool";
 			case ComponentWriter.VT_STRING -> "string";

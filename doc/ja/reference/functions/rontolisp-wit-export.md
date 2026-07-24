@@ -59,12 +59,35 @@ wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
 
 | WIT type | Boundary type | Lisp value |
 | --- | --- | --- |
-| `s32` | `:int` | an integer (31-bit signed range) |
-| `s64` | `:long` | an integer; needs `--no-gc` (wasm-GC integers are `i31ref`) |
+| `s8` `s16` `s32` | `:s8` `:s16` `:s32` | an integer |
+| `u8` `u16` `u32` | `:u8` `:u16` `:u32` | an integer |
+| `s64` `u64` | `:s64` `:u64` | an integer; needs `--no-gc` (wasm-GC integers are `i31ref`) |
 | `f64` | `:float` | a float |
 | `bool` | `:bool` | `t` or `nil` |
 | `string` | `:string` | a string |
 | (no result) | `:void` | the function's value is discarded |
+
+固定幅整数の族がすべて渡るため、コンポーネントモデルの標準的なチュートリアル
+world がそのまま (無編集で) コンパイルできます。
+
+```console
+// wit/adder.wit
+package docs:adder@0.1.0;
+
+interface add {
+  add: func(x: u32, y: u32) -> u32;
+}
+
+world adder {
+  export add;
+}
+```
+
+各型はその範囲を正確に運ぶか、さもなければ呼び出しをトラップさせます。`u32` で
+返した負数は `4294967295` として届くのではなく拒否されます。コンポーネントモデルに
+整数の部分型関係はないため、これは見た目の問題ではありません。`u32` を `s32` として
+リフトしたコンポーネントは、`wasm-tools component targets` にも `jco` にも
+`bindgen` ベースのホストにも、自分自身の world に対して拒否されます。
 
 world 中の `async func` はエクスポートを `:async t` としてリフトするため、その中では
 ブロッキング待機が常に合法です: 同期エクスポート内の I/O も通常は動作します
@@ -87,7 +110,7 @@ world 中の `async func` はエクスポートを `:async t` としてリフト
   `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`
   (エクスポートされる関数は必須引数のみを取ります。`&optional` / `&rest` /
   `&key` は拒否されます)
-- エクスポート境界が運べない WIT 型 (wasm-GC バックエンドでの `s64` を含む) —
+- エクスポート境界が運べない WIT 型 (wasm-GC バックエンドでの `s64` / `u64` を含む) —
   `calc.wit:4: export 'square': s64 (n) requires --no-gc (the wasm-GC backend's integers are i31ref)`
 - `--no-gc --component` での `async func` (アダプタのないリアクターには非同期の
   機構がありません)

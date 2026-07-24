@@ -42,20 +42,31 @@ source runs on every backend. See
 
 The type designators and their boundary representations are:
 
-| Designator | WASM boundary | Notes |
-| --- | --- | --- |
-| `:int` | `i32` | 31-bit signed range (the internal `i31ref`) |
-| `:long` | `i64` | `--no-gc` only; full 64-bit signed range, matching the scalar backend's internal `i64` (no `wrap`/`extend` at the boundary) |
-| `:float` | `f64` | |
-| `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
-| `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
-| `:s-expr` | `(ptr, len)` | s-expression text in linear memory (any value except a function) |
+| Designator | WIT type | WASM boundary | Notes |
+| --- | --- | --- | --- |
+| `:s8` `:s16` `:s32` | `s8` `s16` `s32` | `i32` | `:int` is a permanent alias of `:s32` |
+| `:u8` `:u16` `:u32` | `u8` `u16` `u32` | `i32` | |
+| `:s64` `:u64` | `s64` `u64` | `i64` | `--no-gc` only, matching the scalar backend's internal `i64`; `:long` is a permanent alias of `:s64` |
+| `:float` | `f64` | `f64` | rontolisp has no single-precision float, so `f32` is not a boundary type |
+| `:bool` | `bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
+| `:string` | `string` | `(ptr, len)` | UTF-8 bytes in linear memory |
+| `:s-expr` | `string` | `(ptr, len)` | s-expression text in linear memory (any value except a function); no WIT type of its own |
 
-With the default (GC) backend, `:int` crosses the boundary as `i32` but the
-internal integer is an `i31ref`, so a value returned through `:int` is truncated
-past the 32-bit boundary. On the non-GC backend (`--no-gc`) integers are computed
-as `i64`, so use `:long` when a parameter or result can exceed the 32-bit range —
-it exposes the full width with no `wrap`/`extend` conversion.
+**The boundary carries the value exactly, or the call traps.** A value the
+declared type cannot state — a negative returned through `:u32`, `300` through
+`:u8`, anything past the 32-bit range through `:s32` — stops the call instead of
+arriving silently wrapped. Nothing is masked, which is also what keeps a
+component behaving the same under `wasmtime` and under stricter binding
+generators such as `jco`.
+
+The representable range is the declared type's own, on every backend. With the
+default (GC) backend integers are an `i31ref` widening to a float past that
+range, so a `:u32` argument of `3000000000` reaches the Lisp code as the exact
+float `3000000000.0` — and note that integer arithmetic *below* the `i31` range
+still wraps there (the WASM backend uses 31-bit integers with no promotion), so
+`(+ x 1)` on a `:u32` argument of `1073741823` traps at the boundary rather than
+reporting a wrong number. On the non-GC backend (`--no-gc`) integers are computed
+as `i64`, so the whole family up to `:s64`/`:u64` crosses with no such caveat.
 
 ## Limitations
 

@@ -176,7 +176,7 @@ wasmtime run --invoke 'fact(5)' fact.wasm
 # 120
 ```
 
-型付き WIT シグネチャは `:int` → `s32`、`:long` → `s64`、`:float` → `f64`、`:bool` → `bool`、`:string` → `string` に対応し、`:returns` 省略は結果なしです。コンポーネントは jco でもトランスパイルでき(`jco transpile`、`:long` は JavaScript の BigInt として現れます)、wasm-GC サポートなしで任意のコンポーネントモデルホスト上で動作します。
+型付き WIT シグネチャは各指定子をそれ自身の WIT 名で運びます(`:s32` → `s32`、`:u32` → `u32`、…、このバックエンドだけがリフトできる `:s64`/`:u64` まで。`:int` と `:long` は `:s32`/`:s64` の従来からの別名です)。加えて `:float` → `f64`、`:bool` → `bool`、`:string` → `string` で、`:returns` 省略は結果なしです。コンポーネントは jco でもトランスパイルでき(`jco transpile`、64 ビット型は JavaScript の BigInt として現れます)、wasm-GC サポートなしで任意のコンポーネントモデルホスト上で動作します。
 
 GC コンポーネントパスと違い、ここでは `:long` が有効です — 値が 32 ビット範囲を超えうるときに使ってください。バックエンド内部の `i64` 演算とそのまま一致します:
 
