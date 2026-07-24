@@ -130,10 +130,15 @@ per key — is awkward, four utilities convert to and from the usual list shapes
 [`rontolisp:plist-hash-table`](../reference/functions/rontolisp-plist-hash-table.md)
 and [`rontolisp:alist-hash-table`](../reference/functions/rontolisp-alist-hash-table.md)
 build a hash table from a property list or an association list (a keyword key
-like `:name` down-cases to `"name"`), so a JSON object is one expression:
+like `:name` down-cases to `"name"`), so a JSON object is one expression from a
+quoted literal:
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "rontolisp" :stars 1)))   ; => "{"name":"rontolisp","stars":1}"
+(rontolisp:json-stringify (rontolisp:plist-hash-table '(:name "rontolisp" :stars 1)))   ; => "{"name":"rontolisp","stars":1}"
+```
+
+```lisp
+(rontolisp:json-stringify (rontolisp:alist-hash-table '(("name" . "rontolisp") ("stars" . 1))))   ; => "{"name":"rontolisp","stars":1}"
 ```
 
 The inverses
@@ -143,7 +148,11 @@ flatten a parsed object back into a list you can walk with `getf` or `assoc`
 (a parsed object has string keys, so `assoc` with `:test 'equal`):
 
 ```lisp
-(cdr (assoc "n" (rontolisp:hash-table-alist (rontolisp:json-parse "{\"n\": 1}")) :test 'equal))   ; => 1
+(rontolisp:hash-table-plist (rontolisp:json-parse "{\"n\": 1}"))   ; => ("n" 1)
+```
+
+```lisp
+(rontolisp:hash-table-alist (rontolisp:json-parse "{\"n\": 1}"))   ; => (("n" . 1))
 ```
 
 They are lightweight subsets of the same-named `alexandria` functions and, like

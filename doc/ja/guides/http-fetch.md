@@ -136,11 +136,15 @@ alist)、`:body` (文字列) を指定できます:
 [`rontolisp:plist-hash-table`](../reference/functions/rontolisp-plist-hash-table.md)
 と [`rontolisp:alist-hash-table`](../reference/functions/rontolisp-alist-hash-table.md)
 はプロパティリストや連想リストからハッシュテーブルを作り (`:name` のような
-キーワードキーは `"name"` に小文字化されます)、JSONオブジェクトを1つの式で
-書けます:
+キーワードキーは `"name"` に小文字化されます)、JSONオブジェクトをクオート
+リテラルから1つの式で書けます:
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "rontolisp" :stars 1)))   ; => "{"name":"rontolisp","stars":1}"
+(rontolisp:json-stringify (rontolisp:plist-hash-table '(:name "rontolisp" :stars 1)))   ; => "{"name":"rontolisp","stars":1}"
+```
+
+```lisp
+(rontolisp:json-stringify (rontolisp:alist-hash-table '(("name" . "rontolisp") ("stars" . 1))))   ; => "{"name":"rontolisp","stars":1}"
 ```
 
 逆変換の
@@ -150,7 +154,11 @@ alist)、`:body` (文字列) を指定できます:
 (パース結果のキーは文字列なので、`assoc` には `:test 'equal` を指定します):
 
 ```lisp
-(cdr (assoc "n" (rontolisp:hash-table-alist (rontolisp:json-parse "{\"n\": 1}")) :test 'equal))   ; => 1
+(rontolisp:hash-table-plist (rontolisp:json-parse "{\"n\": 1}"))   ; => ("n" 1)
+```
+
+```lisp
+(rontolisp:hash-table-alist (rontolisp:json-parse "{\"n\": 1}"))   ; => (("n" . 1))
 ```
 
 いずれも同名の `alexandria` 関数の軽量なサブセットで、JSON関数と同様に
