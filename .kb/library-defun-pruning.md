@@ -52,7 +52,10 @@ per-library compiler unit tests (they deliberately compile the full splice),
 
 **Prunable set**: top-level `defun`/`defparameter`/`defvar` forms whose name is
 defined by linalg, vec, json (+ its `#'` wrapper defuns), url, or the prelude
-(`equalp`/`string<`). Collected once from the libraries' `forms()` (see the
+(`equalp`/`string<`/... -- note `LispPreludeLibrary.process` selects the entries
+to splice to a fixpoint, so a prelude defun pulled in only by ANOTHER prelude
+defun, like the string comparison family's `%string-compare`, is present here
+and stays reachable through the kept caller). Collected once from the libraries' `forms()` (see the
 package-private `JsonLibrary.wrapperForms()` / `LispPreludeLibrary.names()`
 accessors). **usocket is excluded entirely**: its `with-*` built-in macros
 (`LispMacroExpander`) synthesize `usocket:socket-close` /

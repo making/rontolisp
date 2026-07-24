@@ -1068,6 +1068,53 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalStringOrderingPredicates() {
+		// The mismatch index (a generalized boolean), not t/nil: the index into string1
+		// of the first differing character, or end1 when the substrings are equal.
+		assertThat(eval("(string< \"aaaa\" \"aaab\")").print()).isEqualTo("3");
+		assertThat(eval("(string< \"abc\" \"abc\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(string> \"abcd\" \"abc\")").print()).isEqualTo("3");
+		assertThat(eval("(string> \"abc\" \"abd\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(string<= \"abc\" \"abc\")").print()).isEqualTo("3");
+		assertThat(eval("(string<= \"abd\" \"abc\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(string>= \"aaaaa\" \"aaaa\")").print()).isEqualTo("4");
+		assertThat(eval("(string>= \"abc\" \"abd\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(string/= \"abc\" \"abd\")").print()).isEqualTo("2");
+		assertThat(eval("(string/= \"abc\" \"abc\")")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalStringCaseInsensitiveOrderingPredicates() {
+		assertThat(eval("(string-lessp \"ABC\" \"abd\")").print()).isEqualTo("2");
+		assertThat(eval("(string-lessp \"abc\" \"ABC\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(string-greaterp \"ABD\" \"abc\")").print()).isEqualTo("2");
+		assertThat(eval("(string-not-greaterp \"Abcde\" \"abcdE\")").print()).isEqualTo("5");
+		assertThat(eval("(string-not-lessp \"Abcde\" \"abcdE\")").print()).isEqualTo("5");
+		assertThat(eval("(string-not-equal \"AAAA\" \"aaaA\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(string-not-equal \"AAAB\" \"aaaa\")").print()).isEqualTo("3");
+	}
+
+	@Test
+	void evalStringComparisonBoundingIndices() {
+		// The returned index is absolute in string1, not relative to :start1.
+		assertThat(eval("(string-lessp \"012AAAA789\" \"01aaab6\" :start1 3 :end1 7 :start2 2 :end2 6)").print())
+			.isEqualTo("6");
+		assertThat(eval("(string< \"xabc\" \"abd\" :start1 1)").print()).isEqualTo("3");
+		assertThat(eval("(string= \"together\" \"frog\" :start1 1 :end1 3 :start2 2)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(string-equal \"TOGETHER\" \"frog\" :start1 1 :end1 3 :start2 2)"))
+			.isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(funcall #'string= \"xabc\" \"abc\" :start1 1)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(apply #'string-equal \"XABC\" \"abc\" '(:start1 1))")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalStringComparisonAcceptsDesignators() {
+		// 'abc is the symbol ABC (the reader upcases), so it sorts before "abd" at 0.
+		assertThat(eval("(string< 'abc \"abd\")").print()).isEqualTo("0");
+		assertThat(eval("(string> \"b\" #\\a)").print()).isEqualTo("0");
+	}
+
+	@Test
 	void evalStringTrim() {
 		assertThat(eval("(string-trim \" xy\" \"xyhelloyx \")")).isEqualTo(new LispString("hello"));
 		assertThat(eval("(string-left-trim \"x\" \"xxhello\")")).isEqualTo(new LispString("hello"));
@@ -4166,7 +4213,8 @@ class LispEvaluatorTest {
 					"LOGXOR", "LOGNOT", "ASH", "INTEGER-LENGTH", "LOGBITP", "LIST*", "ACONS", "ENDP", "ELT", "RASSOC",
 					"PAIRLIS", "COPY-ALIST", "REVAPPEND", "NRECONC", "MAPLIST", "MAPCON", "MAPL", "NOTANY", "NOTEVERY",
 					"DELETE", "DELETE-IF", "DELETE-IF-NOT", "SUBSTITUTE", "NSUBSTITUTE", "FRESH-LINE", "EQUALP",
-					"STRING<")
+					"STRING<", "STRING>", "STRING<=", "STRING>=", "STRING/=", "STRING-LESSP", "STRING-GREATERP",
+					"STRING-NOT-LESSP", "STRING-NOT-GREATERP", "STRING-NOT-EQUAL")
 			.doesNotContain("COND", "QUOTE", "DEFUN", "SETF", "%remf-tail", "CADR", "*package*", "ERROR", "%fmt-pad")
 			.contains("RANDOM", "GET-UNIVERSAL-TIME", "GET-INTERNAL-REAL-TIME", "GET-INTERNAL-RUN-TIME", "GETENV")
 			.contains("READ-FROM-STRING", "PARSE-INTEGER", "CHAR", "SCHAR", "CHAR-CODE", "CODE-CHAR", "CHAR=", "CHAR<",
@@ -4183,9 +4231,9 @@ class LispEvaluatorTest {
 			.contains("BYTE", "BYTE-SIZE", "BYTE-POSITION", "LDB", "DPB")
 			.contains("STRING")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
-					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer")
+					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer", "%string-compare")
 			.isSorted()
-			.hasSize(293);
+			.hasSize(302);
 	}
 
 	@Test

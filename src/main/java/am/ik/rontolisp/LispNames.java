@@ -1754,8 +1754,69 @@ public final class LispNames {
 	 */
 	public static final String STRING_LT = "STRING<";
 
+	/**
+	 * The {@code string>} built-in function (case-sensitive lexicographic greater-than;
+	 * returns the mismatch index or nil).
+	 */
+	public static final String STRING_GT = "STRING>";
+
+	/**
+	 * The {@code string<=} built-in function (case-sensitive lexicographic not-greater;
+	 * returns the mismatch index or nil).
+	 */
+	public static final String STRING_LE = "STRING<=";
+
+	/**
+	 * The {@code string>=} built-in function (case-sensitive lexicographic not-less;
+	 * returns the mismatch index or nil).
+	 */
+	public static final String STRING_GE = "STRING>=";
+
+	/**
+	 * The {@code string/=} built-in function (case-sensitive inequality; returns the
+	 * mismatch index or nil).
+	 */
+	public static final String STRING_NE = "STRING/=";
+
 	/** The {@code string-equal} built-in function (case-insensitive string equality). */
 	public static final String STRING_EQUAL = "STRING-EQUAL";
+
+	/**
+	 * The {@code string-lessp} built-in function (case-insensitive lexicographic
+	 * less-than; returns the mismatch index or nil).
+	 */
+	public static final String STRING_LESSP = "STRING-LESSP";
+
+	/**
+	 * The {@code string-greaterp} built-in function (case-insensitive lexicographic
+	 * greater-than; returns the mismatch index or nil).
+	 */
+	public static final String STRING_GREATERP = "STRING-GREATERP";
+
+	/**
+	 * The {@code string-not-greaterp} built-in function (case-insensitive lexicographic
+	 * not-greater; returns the mismatch index or nil).
+	 */
+	public static final String STRING_NOT_GREATERP = "STRING-NOT-GREATERP";
+
+	/**
+	 * The {@code string-not-lessp} built-in function (case-insensitive lexicographic
+	 * not-less; returns the mismatch index or nil).
+	 */
+	public static final String STRING_NOT_LESSP = "STRING-NOT-LESSP";
+
+	/**
+	 * The {@code string-not-equal} built-in function (case-insensitive inequality;
+	 * returns the mismatch index or nil).
+	 */
+	public static final String STRING_NOT_EQUAL = "STRING-NOT-EQUAL";
+
+	/**
+	 * The {@code %string-compare} internal helper backing the whole {@code string<} /
+	 * {@code string-lessp} comparison family: one lexicographic walk returning
+	 * {@code (order . mismatch-index)}.
+	 */
+	public static final String STRING_COMPARE = "%STRING-COMPARE";
 
 	/** The {@code string-trim} built-in function. */
 	public static final String STRING_TRIM = "STRING-TRIM";

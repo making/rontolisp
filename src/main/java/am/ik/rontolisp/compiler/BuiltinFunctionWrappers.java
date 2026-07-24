@@ -339,6 +339,23 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(LispNames.MAKE_ARRAY, List.of("dims", LispNames.LAMBDA_REST, "kw"), List.of(body));
 	}
 
+	// Variadic wrapper for string= / string-equal: a plain two-argument call (the hot
+	// :test #'string= shape) stays a direct call, and a first-class call carrying the
+	// bounding-index keywords re-extracts them with getf and compares the designated
+	// substrings -- the same subseq lowering the compilers apply to a literal call
+	// (LispMacroExpander.expandStringComparisonBounds), so #'string= agrees with
+	// string= and with the interpreter's Java-side keyword parsing.
+	private static WrapperDef stringEquality(String name) {
+		LispVal boundedA = callV(LispNames.SUBSEQ, new LispSymbol("a"),
+				getfKwOr(LispNames.START1_KEYWORD, new LispInteger(0)), getfKw(LispNames.END1_KEYWORD));
+		LispVal boundedB = callV(LispNames.SUBSEQ, new LispSymbol("b"),
+				getfKwOr(LispNames.START2_KEYWORD, new LispInteger(0)), getfKw(LispNames.END2_KEYWORD));
+		LispVal bounded = listToCons(List.of(new LispSymbol(name), boundedA, boundedB));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"), bounded, call(name, "a", "b")));
+		return new WrapperDef(name, List.of("a", "b", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
 	// Variadic wrapper for stable-sort: only :key is supported, extracted at runtime
 	// like the position family.
 	private static WrapperDef variadicStableSort() {
@@ -481,8 +498,9 @@ public final class BuiltinFunctionWrappers {
 			// String operations
 			unary(LispNames.STRING), unary(LispNames.STRING_UPCASE), unary(LispNames.STRING_DOWNCASE),
 			unary(LispNames.STRING_CAPITALIZE), unary(LispNames.MAKE_STRING), binary(LispNames.REPLACE),
-			binaryOptionalThird(LispNames.SUBSEQ), binary(LispNames.STRING_EQ), binary(LispNames.STRING_EQUAL),
-			binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM), binary(LispNames.STRING_RIGHT_TRIM),
+			binaryOptionalThird(LispNames.SUBSEQ), stringEquality(LispNames.STRING_EQ),
+			stringEquality(LispNames.STRING_EQUAL), binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM),
+			binary(LispNames.STRING_RIGHT_TRIM),
 			// Character operations
 			binary(LispNames.CHAR), binary(LispNames.SCHAR), unary(LispNames.CHAR_CODE), unary(LispNames.CODE_CHAR),
 			unary(LispNames.CHAR_UPCASE), unary(LispNames.CHAR_DOWNCASE), unary(LispNames.CHARACTERP),

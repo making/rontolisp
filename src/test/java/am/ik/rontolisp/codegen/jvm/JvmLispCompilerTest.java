@@ -1854,6 +1854,46 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (string= \"abc\" \"abc\"))")).isEqualTo("T");
 		assertThat(compileAndRun("(print (string= \"abc\" \"abd\"))")).isEqualTo("NIL");
 		assertThat(compileAndRun("(print (string-equal \"ABC\" \"abc\"))")).isEqualTo("T");
+		// The bounding-index keywords lower onto subseq; the two-string intrinsic is
+		// unchanged.
+		assertThat(compileAndRun("(print (string= \"together\" \"frog\" :start1 1 :end1 3 :start2 2))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (string= \"abc\" \"xabc\" :start2 1))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (string-equal \"TOGETHER\" \"frog\" :start1 1 :end1 3 :start2 2))"))
+			.isEqualTo("T");
+		// ... and through the first-class value, whose wrapper re-reads the keywords
+		// from its &rest list (an ordinary two-argument :test #'string= stays direct).
+		assertThat(compileAndRun("(print (funcall #'string= \"xabc\" \"abc\" :start1 1)) "
+				+ "(print (apply #'string-equal \"XABC\" \"abc\" '(:start1 1))) "
+				+ "(print (find \"b\" '(\"a\" \"b\" \"c\") :test #'string=))"))
+			.isEqualTo("T\nT\n\"b\"");
+	}
+
+	@Test
+	void compileAndRunStringOrderingPredicates() throws Exception {
+		// The prelude splice mirrors the CLI pipeline (the whole comparison family are
+		// prelude defuns over %string-compare, pulled in transitively).
+		assertThat(compileAndRun("""
+				(print (list (string< "aaaa" "aaab") (string< "abc" "abc")))
+				(print (list (string> "abcd" "abc") (string> "abc" "abd")))
+				(print (list (string<= "abc" "abc") (string<= "abd" "abc")))
+				(print (list (string>= "aaaaa" "aaaa") (string>= "abc" "abd")))
+				(print (list (string/= "abc" "abd") (string/= "abc" "abc")))
+				(print (list (string-lessp "ABC" "abd") (string-greaterp "ABD" "abc")))
+				(print (list (string-not-greaterp "Abcde" "abcdE") (string-not-lessp "Abcde" "abcdE")))
+				(print (list (string-not-equal "AAAA" "aaaA") (string-not-equal "AAAB" "aaaa")))
+				(print (string-lessp "012AAAA789" "01aaab6" :start1 3 :end1 7 :start2 2 :end2 6))
+				(print (sort (list "pear" "Apple" "banana") #'string-lessp))
+				""")).isEqualTo("""
+				(3 NIL)
+				(3 NIL)
+				(3 NIL)
+				(4 NIL)
+				(2 NIL)
+				(2 2)
+				(5 5)
+				(NIL 3)
+				6
+				("Apple" "banana" "pear")""");
 	}
 
 	@Test
@@ -4774,12 +4814,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("293");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("302");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("293");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("302");
 	}
 
 	@Test

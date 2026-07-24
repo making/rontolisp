@@ -46,9 +46,10 @@ page.
 | `make-string` | `(make-string 3 :initial-element #\x)` | `"xxx"` -- a fresh string of `n` copies of `:initial-element` (default space); `:element-type` is accepted and ignored |
 | `make-sequence` | `(make-sequence 'list 3)` | `(nil nil nil)` -- a sequence of the literal quoted result type (string types via `make-string`, `list` via `make-list`, vector types via `make-array`) |
 | `replace` | `(replace (make-string 5 :initial-element #\a) "XY" :start1 1)` | `"aXYaa"` -- copy `sequence-2` into `sequence-1` (`:start1`/`:end1`/`:start2`/`:end2`); string-aware, returns a fresh string (strings are immutable) |
-| `string=` | `(string= "abc" "abc")` | `t` (case-sensitive string equality) |
-| `string<` | `(string< "abc" "abd")` | `2` (case-sensitive lexicographic less-than: the mismatch index, or nil) |
+| `string=` | `(string= "abc" "abc")`, `(string= "together" "frog" :start1 1 :end1 3 :start2 2)` | `t` (case-sensitive string equality; `:start1`/`:end1`/`:start2`/`:end2` bound the compared substrings) |
+| `string<` `string>` `string<=` `string>=` `string/=` | `(string< "abc" "abd")` | `2` -- case-sensitive lexicographic comparison: the mismatch index in `string1` (`end1` when equal), or nil. Same `:start1`/`:end1`/`:start2`/`:end2` keywords |
 | `string-equal` | `(string-equal "ABC" "abc")` | `t` (case-insensitive, ASCII) |
+| `string-lessp` `string-greaterp` `string-not-greaterp` `string-not-lessp` `string-not-equal` | `(string-not-greaterp "Abcde" "abcdE")` | `5` -- the case-insensitive counterparts of `string<` `string>` `string<=` `string>=` `string/=` |
 | `string-trim` | `(string-trim " " "  hi  ")` | `"hi"` (removes the bag's characters from both ends) |
 | `string-left-trim` | `(string-left-trim "x" "xxhi")` | `"hi"` |
 | `string-right-trim` | `(string-right-trim "x" "hixx")` | `"hi"` |

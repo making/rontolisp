@@ -428,8 +428,26 @@ final class JvmExprCompiler {
 				case LispNames.NE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandNumericNotEqual(cons), ctx, className);
 				case LispNames.READ_FROM_STRING -> JvmReadFromStringCompiler.compile(cons, ctx, className);
-				case LispNames.STRING_EQ -> JvmStringEqCompiler.compileEq(cons, ctx, className);
-				case LispNames.STRING_EQUAL -> JvmStringEqCompiler.compileEqual(cons, ctx, className);
+				// A string=/string-equal call with the bounding-index keywords is lowered
+				// onto subseq first, so the intrinsic below always sees two strings.
+				case LispNames.STRING_EQ -> {
+					if (LispMacroExpander.hasStringComparisonBounds(cons)) {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandStringComparisonBounds(cons), ctx,
+								className);
+					}
+					else {
+						JvmStringEqCompiler.compileEq(cons, ctx, className);
+					}
+				}
+				case LispNames.STRING_EQUAL -> {
+					if (LispMacroExpander.hasStringComparisonBounds(cons)) {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandStringComparisonBounds(cons), ctx,
+								className);
+					}
+					else {
+						JvmStringEqCompiler.compileEqual(cons, ctx, className);
+					}
+				}
 				case LispNames.STRING_TRIM -> JvmStringTrimCompiler.compileTrim(cons, ctx, className);
 				case LispNames.STRING_LEFT_TRIM -> JvmStringTrimCompiler.compileLeft(cons, ctx, className);
 				case LispNames.STRING_RIGHT_TRIM -> JvmStringTrimCompiler.compileRight(cons, ctx, className);

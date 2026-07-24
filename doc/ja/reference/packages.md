@@ -143,7 +143,7 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
 (print (rontolisp:list-special-forms))
 ; => (defclass defconstant defgeneric defmacro defmethod defpackage defparameter defstruct defun defvar function if in-package lambda let progn quote return setq while)
 (print (length (rontolisp:list-functions)))
-; => 242
+; => 302
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (square)

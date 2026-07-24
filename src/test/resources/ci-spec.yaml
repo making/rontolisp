@@ -1121,7 +1121,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WRITE-CHAR)
       (DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY UNWIND-PROTECT WHILE)
-      293
+      302
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -1411,6 +1411,43 @@ cases:
       foobar
       FOOBAR
       Foo-Bar
+  - name: string-comparison-family
+    source: |
+      ;; the ordering predicates return the mismatch index (or nil), not t/nil
+      (print (list (string< "aaaa" "aaab") (string< "abc" "abc")))
+      (print (list (string> "abcd" "abc") (string> "abc" "abd")))
+      (print (list (string<= "abc" "abc") (string<= "abd" "abc")))
+      (print (list (string>= "aaaaa" "aaaa") (string>= "abc" "abd")))
+      (print (list (string/= "abc" "abd") (string/= "abc" "abc")))
+      ;; the case-insensitive counterparts
+      (print (list (string-lessp "ABC" "abd") (string-greaterp "ABD" "abc")))
+      (print (list (string-not-greaterp "Abcde" "abcdE") (string-not-lessp "Abcde" "abcdE")))
+      (print (list (string-not-equal "AAAA" "aaaA") (string-not-equal "AAAB" "aaaa")))
+      ;; :start1/:end1/:start2/:end2 -- the index is absolute in string1
+      (print (string-lessp "012AAAA789" "01aaab6" :start1 3 :end1 7 :start2 2 :end2 6))
+      (print (list (string= "together" "frog" :start1 1 :end1 3 :start2 2)
+                   (string-equal "TOGETHER" "frog" :start1 1 :end1 3 :start2 2)))
+      ;; the same through the first-class value (the #' wrapper re-reads the keywords)
+      (print (list (funcall #'string= "xabc" "abc" :start1 1)
+                   (apply #'string-equal "XABC" "abc" '(:start1 1))
+                   (find "b" '("a" "b" "c") :test #'string=)))
+      ;; string designators, non-ASCII (code-point indexing) and first-class use
+      (print (list (string< 'abc "abd") (string> "b" #\a) (string< "あい" "あう")))
+      (print (sort (list "pear" "Apple" "banana") #'string-lessp))
+    expected: |
+      (3 NIL)
+      (3 NIL)
+      (3 NIL)
+      (4 NIL)
+      (2 NIL)
+      (2 2)
+      (5 5)
+      (NIL 3)
+      6
+      (T T)
+      (T T "b")
+      (0 0 1)
+      ("Apple" "banana" "pear")
   - name: the-pi-constant-output-kept-backend
     source: |
       (print (truncate pi))

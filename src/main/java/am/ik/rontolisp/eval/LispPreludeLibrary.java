@@ -29,8 +29,12 @@ import am.ik.rontolisp.reader.LispReader;
  * insensitively, numbers by value, and arrays element-wise (same dimensions, elements
  * compared with {@code equalp}); lite (hash-tables/structures fall back to
  * {@code eql}).</li>
- * <li>{@code string<} -- case-sensitive lexicographic less-than, returning the mismatch
- * index or nil.</li>
+ * <li>{@code string<} / {@code string>} / {@code string<=} / {@code string>=} /
+ * {@code string/=} and their case-insensitive counterparts {@code string-lessp} /
+ * {@code string-greaterp} / {@code string-not-greaterp} / {@code string-not-lessp} /
+ * {@code string-not-equal} -- lexicographic comparison returning the mismatch index or
+ * nil, with {@code :start1}/{@code :end1}/{@code :start2}/{@code :end2}; all ten share
+ * the {@code %string-compare} walk.</li>
  * <li>{@code get-setf-expansion} -- the five setf-expansion values (lite: variable and
  * accessor-cons places, environment ignored), consumed through the ordinary
  * {@code %mv-spill} channel by a {@code multiple-value-bind} caller.</li>
@@ -314,18 +318,84 @@ public final class LispPreludeLibrary {
 				              (setq ok nil))))
 				        (when ok (setq result pos))))))
 				""");
-		SOURCES.put(LispNames.STRING_LT, """
-				(defun string< (a b)
+		// The whole string comparison family walks ONE shared lexicographic loop:
+		// %string-compare returns (order . mismatch-index), where order is -1/0/1 for
+		// substring1 before/equal/after substring2 and mismatch-index is the index into
+		// string1 of the first differing character (end1 when the substrings are equal,
+		// which is what string<=/string>= must return). Each operator is then a one-line
+		// test on the order, so the case-folding and the bounding-index handling exist
+		// once instead of ten times. Iterative (not recursive) so comparing long strings
+		// cannot exhaust the stack on any backend.
+		SOURCES.put(LispNames.STRING_COMPARE, """
+				(defun %string-compare (a b start1 end1 start2 end2 foldp)
 				  (let* ((sa (string a)) (sb (string b))
-				         (la (length sa)) (lb (length sb)))
-				    (labels ((cmp (i)
-				               (cond ((and (>= i la) (>= i lb)) nil)
-				                     ((>= i la) i)
-				                     ((>= i lb) nil)
-				                     ((char< (char sa i) (char sb i)) i)
-				                     ((char< (char sb i) (char sa i)) nil)
-				                     (t (cmp (+ i 1))))))
-				      (cmp 0))))
+				         (i (or start1 0)) (j (or start2 0))
+				         (e1 (or end1 (length sa))) (e2 (or end2 (length sb)))
+				         (result nil))
+				    (while (null result)
+				      (cond ((and (>= i e1) (>= j e2)) (setq result (cons 0 i)))
+				            ((>= i e1) (setq result (cons -1 i)))
+				            ((>= j e2) (setq result (cons 1 i)))
+				            (t (let ((ca (char sa i))
+				                     (cb (char sb j)))
+				                 (when foldp
+				                   (setq ca (char-downcase ca))
+				                   (setq cb (char-downcase cb)))
+				                 (cond ((char< ca cb) (setq result (cons -1 i)))
+				                       ((char< cb ca) (setq result (cons 1 i)))
+				                       (t (setq i (+ i 1))
+				                          (setq j (+ j 1))))))))
+				    result))
+				""");
+		SOURCES.put(LispNames.STRING_LT, """
+				(defun string< (string1 string2 &key (start1 0) end1 (start2 0) end2)
+				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 nil)))
+				    (if (< (car r) 0) (cdr r) nil)))
+				""");
+		SOURCES.put(LispNames.STRING_GT, """
+				(defun string> (string1 string2 &key (start1 0) end1 (start2 0) end2)
+				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 nil)))
+				    (if (> (car r) 0) (cdr r) nil)))
+				""");
+		SOURCES.put(LispNames.STRING_LE, """
+				(defun string<= (string1 string2 &key (start1 0) end1 (start2 0) end2)
+				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 nil)))
+				    (if (<= (car r) 0) (cdr r) nil)))
+				""");
+		SOURCES.put(LispNames.STRING_GE, """
+				(defun string>= (string1 string2 &key (start1 0) end1 (start2 0) end2)
+				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 nil)))
+				    (if (>= (car r) 0) (cdr r) nil)))
+				""");
+		SOURCES.put(LispNames.STRING_NE, """
+				(defun string/= (string1 string2 &key (start1 0) end1 (start2 0) end2)
+				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 nil)))
+				    (if (= (car r) 0) nil (cdr r))))
+				""");
+		SOURCES.put(LispNames.STRING_LESSP, """
+				(defun string-lessp (string1 string2 &key (start1 0) end1 (start2 0) end2)
+				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 t)))
+				    (if (< (car r) 0) (cdr r) nil)))
+				""");
+		SOURCES.put(LispNames.STRING_GREATERP, """
+				(defun string-greaterp (string1 string2 &key (start1 0) end1 (start2 0) end2)
+				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 t)))
+				    (if (> (car r) 0) (cdr r) nil)))
+				""");
+		SOURCES.put(LispNames.STRING_NOT_GREATERP, """
+				(defun string-not-greaterp (string1 string2 &key (start1 0) end1 (start2 0) end2)
+				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 t)))
+				    (if (<= (car r) 0) (cdr r) nil)))
+				""");
+		SOURCES.put(LispNames.STRING_NOT_LESSP, """
+				(defun string-not-lessp (string1 string2 &key (start1 0) end1 (start2 0) end2)
+				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 t)))
+				    (if (>= (car r) 0) (cdr r) nil)))
+				""");
+		SOURCES.put(LispNames.STRING_NOT_EQUAL, """
+				(defun string-not-equal (string1 string2 &key (start1 0) end1 (start2 0) end2)
+				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 t)))
+				    (if (= (car r) 0) nil (cdr r))))
 				""");
 	}
 
@@ -372,18 +442,38 @@ public final class LispPreludeLibrary {
 	 * @return the program with the referenced prelude definitions spliced in
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
-		List<String> referenced = new ArrayList<>();
-		for (String name : SOURCES.keySet()) {
-			if (referencesName(program, name) && !definesName(program, name)) {
-				referenced.add(name);
+		// A prelude definition may itself call another one (string< and its nine
+		// siblings all go through %string-compare), so the selection runs to a fixpoint:
+		// a name pulled in for its own sake drags in whatever IT references. The
+		// interpreter gets this for free -- it resolves prelude names lazily at call
+		// time, one at a time.
+		java.util.Set<String> referenced = new java.util.LinkedHashSet<>();
+		boolean grew = true;
+		while (grew) {
+			grew = false;
+			for (String name : SOURCES.keySet()) {
+				if (referenced.contains(name) || definesName(program, name)) {
+					continue;
+				}
+				boolean used = referencesName(program, name);
+				for (String pulled : referenced) {
+					used = used || referencesName(formsFor(pulled), name);
+				}
+				if (used) {
+					referenced.add(name);
+					grew = true;
+				}
 			}
 		}
 		if (referenced.isEmpty()) {
 			return program;
 		}
 		List<LispVal> out = new ArrayList<>();
-		for (String name : referenced) {
-			out.addAll(formsFor(name));
+		// Emit in SOURCES order, not discovery order, so the spliced prefix stays stable.
+		for (String name : SOURCES.keySet()) {
+			if (referenced.contains(name)) {
+				out.addAll(formsFor(name));
+			}
 		}
 		out.addAll(program);
 		return out;

@@ -11047,6 +11047,65 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Whether a {@code string=} / {@code string-equal} call carries the bounding-index
+	 * keywords ({@code :start1}/{@code :end1}/{@code :start2}/{@code :end2}), i.e. has
+	 * more than the two string arguments.
+	 * @param cons the string= / string-equal expression
+	 * @return true when the call must go through
+	 * {@link #expandStringComparisonBounds(LispCons)} first
+	 */
+	public static boolean hasStringComparisonBounds(LispCons cons) {
+		return cons.toList().size() > 3;
+	}
+
+	/**
+	 * Expands (string= s1 s2 :start1 a :end1 b :start2 c :end2 d) -- and the identical
+	 * {@code string-equal} shape -- into (string= (subseq s1 a b) (subseq s2 c d)), so
+	 * the compile backends keep their two-argument string-equality intrinsic and the
+	 * bounding indices cost nothing when absent. The ordering predicates ({@code string<}
+	 * and its nine siblings) need no such lowering: they are ordinary {@code defun}s
+	 * taking the four keywords in their lambda list.
+	 * @param cons the string= / string-equal expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandStringComparisonBounds(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal start1 = null;
+		LispVal end1 = null;
+		LispVal start2 = null;
+		LispVal end2 = null;
+		String name = ((LispSymbol) parts.get(0)).name();
+		for (int i = 3; i < parts.size(); i += 2) {
+			if (i + 1 >= parts.size() || !(parts.get(i) instanceof LispSymbol key)) {
+				throw new IllegalArgumentException(name + " expects :start1/:end1/:start2/:end2 keyword pairs");
+			}
+			switch (key.name()) {
+				case LispNames.START1_KEYWORD -> start1 = parts.get(i + 1);
+				case LispNames.END1_KEYWORD -> end1 = parts.get(i + 1);
+				case LispNames.START2_KEYWORD -> start2 = parts.get(i + 1);
+				case LispNames.END2_KEYWORD -> end2 = parts.get(i + 1);
+				default -> throw new IllegalArgumentException(name + ": unsupported keyword " + key.name());
+			}
+		}
+		return listToCons(List.of(parts.get(0), boundedSubstringForm(parts.get(1), start1, end1),
+				boundedSubstringForm(parts.get(2), start2, end2)));
+	}
+
+	// (subseq s start end) for the bounds actually given -- the string itself when
+	// neither is. subseq accepts a nil end (the string's length), so an :end without a
+	// :start still becomes a single call.
+	private static LispVal boundedSubstringForm(LispVal string, @Nullable LispVal start, @Nullable LispVal end) {
+		if (start == null && end == null) {
+			return string;
+		}
+		LispVal startForm = (start == null) ? new LispInteger(0) : start;
+		if (end == null) {
+			return listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), string, startForm));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), string, startForm, end));
+	}
+
+	/**
 	 * Expands (mapl fn lst) like {@code maplist} but applies the function to successive
 	 * cdrs (tails) of the list for its side effects only, returning the original list
 	 * rather than collecting the results. Single-list only.

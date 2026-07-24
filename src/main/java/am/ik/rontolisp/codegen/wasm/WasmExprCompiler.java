@@ -555,8 +555,24 @@ final class WasmExprCompiler {
 				case LispNames.COMPLEX -> WasmExprCompiler.compileExpr(LispMacroExpander.expandComplexLite(cons), ctx);
 				case LispNames.NE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNumericNotEqual(cons), ctx);
 				case LispNames.READ_FROM_STRING -> WasmReadFromStringCompiler.compile(cons, ctx);
-				case LispNames.STRING_EQ -> WasmStringEqCompiler.compileEq(cons, ctx);
-				case LispNames.STRING_EQUAL -> WasmStringEqCompiler.compileEqual(cons, ctx);
+				// A string=/string-equal call with the bounding-index keywords is lowered
+				// onto subseq first, so the intrinsic below always sees two strings.
+				case LispNames.STRING_EQ -> {
+					if (LispMacroExpander.hasStringComparisonBounds(cons)) {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandStringComparisonBounds(cons), ctx);
+					}
+					else {
+						WasmStringEqCompiler.compileEq(cons, ctx);
+					}
+				}
+				case LispNames.STRING_EQUAL -> {
+					if (LispMacroExpander.hasStringComparisonBounds(cons)) {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandStringComparisonBounds(cons), ctx);
+					}
+					else {
+						WasmStringEqCompiler.compileEqual(cons, ctx);
+					}
+				}
 				case LispNames.STRING_TRIM -> WasmStringTrimCompiler.compileTrim(cons, ctx);
 				case LispNames.STRING_LEFT_TRIM -> WasmStringTrimCompiler.compileLeft(cons, ctx);
 				case LispNames.STRING_RIGHT_TRIM -> WasmStringTrimCompiler.compileRight(cons, ctx);

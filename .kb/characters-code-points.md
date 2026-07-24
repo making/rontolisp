@@ -63,6 +63,52 @@ argument BY CODE POINT, not by UTF-16 code unit. A supplementary code point
   position, `_str_char_byte_offset` translates a character index to a byte
   offset for `subseq`. Length / char / subseq lower through those helpers.
 
+## String comparison family = ONE code-point walk
+
+`string<` / `string>` / `string<=` / `string>=` / `string/=` and their
+case-insensitive counterparts `string-lessp` / `string-greaterp` /
+`string-not-greaterp` / `string-not-lessp` / `string-not-equal` are ten
+one-liners over a single shared helper, the `LispPreludeLibrary` defun
+`%string-compare`, which returns `(order . mismatch-index)`: `order` is `-1`/`0`/`1`
+for substring1 before/equal/after substring2, and `mismatch-index` is the index
+**into string1** of the first differing character -- `end1` when the substrings
+are equal, which is exactly what `string<=` / `string>=` /
+`string-not-greaterp` / `string-not-lessp` must return for equal strings. Being
+one rontolisp-source defun, the walk IS the same code on all four backends, and
+because it steps with `char` / `char<` / `char-downcase` it is code-point-based
+and full-Unicode case-folding for free (`(string< "あい" "あう")` = 1 everywhere).
+It is iterative (a `while` over a `result` accumulator), not recursive, so
+comparing long strings cannot exhaust the stack on any backend.
+
+`string=` / `string-equal` are the exception: they stay per-backend intrinsics
+(`Environment` + `Jvm/WasmStringEqCompiler`) because two-argument string equality
+is hot everywhere. Their `:start1`/`:end1`/`:start2`/`:end2` shape is therefore
+handled twice, deliberately: the interpreter parses the keywords in Java
+(`Environment.boundedStringArg`, code-point bounds like `subseq`'s), and both
+compilers lower the call onto `subseq` first
+(`LispMacroExpander.expandStringComparisonBounds`, dispatched from
+`Jvm/WasmExprCompiler` only when `hasStringComparisonBounds`), so the intrinsic
+still always sees two plain strings and a keyword-free call compiles
+byte-identically to before. The `#'string=` / `#'string-equal` first-class value
+needs the same treatment a third time: their `BuiltinFunctionWrappers` entries
+(`stringEquality`) are `(a b &rest kw)` and re-extract the bounds with `getf`,
+falling back to the direct two-argument call when `kw` is nil -- without that,
+`(apply #'string= a b :start1 1)` would silently ignore the keywords on the
+compile paths while the interpreter honoured them. The ordering predicates need
+none of this: they are ordinary defuns whose lambda list takes the four keywords.
+
+One consequence for the compile path: a program calling `string>` never
+mentions `%string-compare`, so `LispPreludeLibrary.process` selects the prelude
+entries to splice **to a fixpoint** (a pulled-in definition drags in whatever it
+references). The interpreter gets this for free -- it resolves prelude names
+lazily, one call at a time.
+
+Pinned by the `string-comparison-family` ci-spec case (all four backends),
+`LispEvaluatorTest#evalStringOrderingPredicates` (+ the case-insensitive /
+bounding-index / designator siblings),
+`JvmLispCompilerTest#compileAndRunStringOrderingPredicates` and
+`WasmLispCompilerIntegrationTest#stringOrderingPredicates`.
+
 ## Case fold is FULL Unicode
 
 `char-upcase` / `char-downcase` produce the same code point

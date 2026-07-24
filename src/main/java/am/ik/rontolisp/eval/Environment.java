@@ -2469,15 +2469,13 @@ public final class Environment implements Scope {
 			throw new LispEvalException(LispNames.COPY_SEQ + " expects a string or list, got: " + args.get(0).print());
 		}));
 		env.defineFunction(LispNames.STRING_EQ, new LispFunction(LispNames.STRING_EQ, args -> {
-			requireArgCount(LispNames.STRING_EQ, args, 2);
-			String a = stringDesignator(LispNames.STRING_EQ, args.get(0));
-			String b = stringDesignator(LispNames.STRING_EQ, args.get(1));
+			String a = boundedStringArg(LispNames.STRING_EQ, args, 0);
+			String b = boundedStringArg(LispNames.STRING_EQ, args, 1);
 			return a.equals(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.STRING_EQUAL, new LispFunction(LispNames.STRING_EQUAL, args -> {
-			requireArgCount(LispNames.STRING_EQUAL, args, 2);
-			String a = stringDesignator(LispNames.STRING_EQUAL, args.get(0));
-			String b = stringDesignator(LispNames.STRING_EQUAL, args.get(1));
+			String a = boundedStringArg(LispNames.STRING_EQUAL, args, 0);
+			String b = boundedStringArg(LispNames.STRING_EQUAL, args, 1);
 			return a.equalsIgnoreCase(b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.STRING_TRIM, new LispFunction(LispNames.STRING_TRIM, args -> {
@@ -2568,6 +2566,48 @@ public final class Environment implements Scope {
 			case LispChar c -> new String(Character.toChars(c.codePoint()));
 			default -> throw new LispEvalException(name + " expects a string designator, got: " + val.print());
 		};
+	}
+
+	// One side of a (string= s1 s2 &key start1 end1 start2 end2) call -- which is also
+	// the string-equal lambda list -- as the substring the bounding indices designate.
+	// Parsed here so the interpreter keeps the direct Java String comparison; the compile
+	// paths lower the same call shape onto subseq
+	// (LispMacroExpander.expandStringComparisonBounds), and the ordering predicates
+	// (string</string-lessp/...) take their bounds through the shared %string-compare
+	// walk. Indices are CHARACTER positions (code points), like subseq's.
+	private static String boundedStringArg(String name, List<LispVal> args, int which) {
+		requireMinArgCount(name, args, 2);
+		String s = stringDesignator(name, args.get(which));
+		int cpLen = s.codePointCount(0, s.length());
+		int start = 0;
+		int end = cpLen;
+		String startKey = (which == 0) ? LispNames.START1_KEYWORD : LispNames.START2_KEYWORD;
+		String endKey = (which == 0) ? LispNames.END1_KEYWORD : LispNames.END2_KEYWORD;
+		for (int i = 2; i + 1 < args.size(); i += 2) {
+			if (args.get(i) instanceof LispSymbol key && !(args.get(i + 1) instanceof LispNil)) {
+				// A nil bound keeps its default (nil :end = the string's length, as in
+				// CL). The two keywords addressing the OTHER argument are this call's
+				// business too, so they are accepted and skipped rather than rejected.
+				if (startKey.equals(key.name())) {
+					start = requireIndex(name, args.get(i + 1));
+				}
+				else if (endKey.equals(key.name())) {
+					end = requireIndex(name, args.get(i + 1));
+				}
+				else if (!LispNames.START1_KEYWORD.equals(key.name()) && !LispNames.END1_KEYWORD.equals(key.name())
+						&& !LispNames.START2_KEYWORD.equals(key.name()) && !LispNames.END2_KEYWORD.equals(key.name())) {
+					throw new LispEvalException(name + ": unsupported keyword " + key.name());
+				}
+			}
+		}
+		if (start < 0 || end > cpLen || start > end) {
+			throw new LispEvalException(
+					name + ": invalid bounds " + start + ", " + end + " for string of length " + cpLen);
+		}
+		if (start == 0 && end == cpLen) {
+			return s;
+		}
+		return s.substring(s.offsetByCodePoints(0, start), s.offsetByCodePoints(0, end));
 	}
 
 	static int requireIndex(String name, LispVal val) {

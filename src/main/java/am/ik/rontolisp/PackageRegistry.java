@@ -82,7 +82,9 @@ public final class PackageRegistry {
 			LispNames.REMOVE_DUPLICATES, LispNames.NCONC, LispNames.REST, LispNames.PRINC_TO_STRING,
 			LispNames.PRIN1_TO_STRING, LispNames.CONCATENATE, LispNames.STRING, LispNames.STRING_UPCASE,
 			LispNames.STRING_DOWNCASE, LispNames.STRING_CAPITALIZE, LispNames.SUBSEQ, LispNames.STRING_EQ,
-			LispNames.STRING_LT, LispNames.STRING_EQUAL, LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM,
+			LispNames.STRING_LT, LispNames.STRING_GT, LispNames.STRING_LE, LispNames.STRING_GE, LispNames.STRING_NE,
+			LispNames.STRING_EQUAL, LispNames.STRING_LESSP, LispNames.STRING_GREATERP, LispNames.STRING_NOT_GREATERP,
+			LispNames.STRING_NOT_LESSP, LispNames.STRING_NOT_EQUAL, LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM,
 			LispNames.STRING_RIGHT_TRIM, LispNames.OPEN, LispNames.CLOSE, LispNames.WRITE_LINE, LispNames.READ_BYTE,
 			LispNames.WRITE_BYTE, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.IDENTITY,
 			LispNames.COPY_LIST, LispNames.COPY_TREE, LispNames.NREVERSE, LispNames.MAKE_LIST, LispNames.UNION,
@@ -151,7 +153,7 @@ public final class PackageRegistry {
 			LispNames.ARRAY_DISP_OFFSET, LispNames.WARN_INTERNAL, LispNames.SCHAR_SET, LispNames.IEEE754_DOUBLE_BITS,
 			LispNames.IEEE754_DOUBLE_FROM_BITS, LispNames.IEEE754_SINGLE_BITS, LispNames.IEEE754_SINGLE_FROM_BITS,
 			LispNames.READ_EVAL, LispNames.SUBSEQ_CORE, LispNames.NLX_TAG_INTERNAL, LispNames.NLX_CATCH_INTERNAL,
-			LispNames.NLX_THROW_INTERNAL);
+			LispNames.NLX_THROW_INTERNAL, LispNames.STRING_COMPARE);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

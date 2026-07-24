@@ -43,9 +43,10 @@
 | `make-string` | `(make-string 3 :initial-element #\x)` | `"xxx"` -- `:initial-element`（デフォルトは空白）を `n` 個並べた新しい文字列。`:element-type` は受け付けるが無視 |
 | `make-sequence` | `(make-sequence 'list 3)` | `(nil nil nil)` -- リテラルのクォートされた結果型のシーケンス（文字列型は `make-string`、`list` は `make-list`、ベクタ型は `make-array` 経由） |
 | `replace` | `(replace (make-string 5 :initial-element #\a) "XY" :start1 1)` | `"aXYaa"` -- `sequence-2` を `sequence-1` にコピー（`:start1`/`:end1`/`:start2`/`:end2`）。文字列対応で、新しい文字列を返す（文字列は不変） |
-| `string=` | `(string= "abc" "abc")` | `t`(大小文字を区別する文字列等価) |
-| `string<` | `(string< "abc" "abd")` | `2`(大小文字を区別する辞書順の less-than: 不一致のインデックス、なければ nil) |
+| `string=` | `(string= "abc" "abc")`, `(string= "together" "frog" :start1 1 :end1 3 :start2 2)` | `t`(大小文字を区別する文字列等価。`:start1`/`:end1`/`:start2`/`:end2` で比較する部分文字列を指定) |
+| `string<` `string>` `string<=` `string>=` `string/=` | `(string< "abc" "abd")` | `2` -- 大小文字を区別する辞書順比較: `string1` 内の不一致インデックス(等しい場合は `end1`)、成り立たなければ nil。`:start1`/`:end1`/`:start2`/`:end2` も同様に指定可能 |
 | `string-equal` | `(string-equal "ABC" "abc")` | `t`(大小文字を区別しない、ASCII) |
+| `string-lessp` `string-greaterp` `string-not-greaterp` `string-not-lessp` `string-not-equal` | `(string-not-greaterp "Abcde" "abcdE")` | `5` -- `string<` `string>` `string<=` `string>=` `string/=` の大小文字を区別しない版 |
 | `string-trim` | `(string-trim " " "  hi  ")` | `"hi"`(指定した文字集合の文字を両端から取り除きます) |
 | `string-left-trim` | `(string-left-trim "x" "xxhi")` | `"hi"` |
 | `string-right-trim` | `(string-right-trim "x" "hixx")` | `"hi"` |

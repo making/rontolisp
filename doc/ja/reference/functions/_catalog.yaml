@@ -119,7 +119,7 @@ categories:
       - { slug: string-capitalize, name: "string-capitalize" }
       - { slug: subseq, name: "subseq" }
       - { slug: string-eq, name: "string=" }
-      - { slug: string-lt, name: "string<" }
+      - { slug: string-compare, name: "string< string> string<= string>= string/= string-lessp string-greaterp string-not-greaterp string-not-lessp string-not-equal" }
       - { slug: string-equal, name: "string-equal" }
       - { slug: string-trim, name: "string-trim" }
       - { slug: string-left-trim, name: "string-left-trim" }
