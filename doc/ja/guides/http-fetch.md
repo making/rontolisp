@@ -130,6 +130,32 @@ alist)、`:body` (文字列) を指定できます:
 [json-stringify](../reference/functions/rontolisp-json-stringify.md)
 のリファレンスページにあります。
 
+ハッシュテーブルを手で組み立てる — `make-hash-table` してからキーごとに
+`setf gethash` する — のが面倒なときは、よくあるリスト形式との相互変換を行う
+4つのユーティリティが使えます。
+[`rontolisp:plist-hash-table`](../reference/functions/rontolisp-plist-hash-table.md)
+と [`rontolisp:alist-hash-table`](../reference/functions/rontolisp-alist-hash-table.md)
+はプロパティリストや連想リストからハッシュテーブルを作り (`:name` のような
+キーワードキーは `"name"` に小文字化されます)、JSONオブジェクトを1つの式で
+書けます:
+
+```lisp
+(rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "rontolisp" :stars 1)))   ; => "{"name":"rontolisp","stars":1}"
+```
+
+逆変換の
+[`rontolisp:hash-table-plist`](../reference/functions/rontolisp-hash-table-plist.md)
+と [`rontolisp:hash-table-alist`](../reference/functions/rontolisp-hash-table-alist.md)
+は、パースしたオブジェクトを `getf` や `assoc` で辿れるリストに平坦化します
+(パース結果のキーは文字列なので、`assoc` には `:test 'equal` を指定します):
+
+```lisp
+(cdr (assoc "n" (rontolisp:hash-table-alist (rontolisp:json-parse "{\"n\": 1}")) :test 'equal))   ; => 1
+```
+
+いずれも同名の `alexandria` 関数の軽量なサブセットで、JSON関数と同様に
+すべてのバックエンドでプログラムにコンパイルされます。
+
 ## 完全なプログラム
 
 これらの部品を組み合わせると、JSON APIの典型的な往復になります:
