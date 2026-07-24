@@ -5,82 +5,35 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 プロトコルなしで言語をそのままのバイトコードにコンパイルできるよう保つため、
 完全な Common Lisp の機能の多くが意図的に省かれています。
 
-このページでは、特に目立つ省略事項を挙げます。**利用できる**ものについては、
+このページでは **利用できない、または部分的にしか対応していないもの** だけを
+挙げます。**利用できる**ものについては、
 [言語リファレンス](../reference/special-forms.md)を参照するか、実行時に
 `rontolisp:list-special-forms`、`rontolisp:list-macros`、`rontolisp:list-functions`
 で一覧表示してください。
 
 | 機能 | 状況 |
 | --- | --- |
-| `defmacro`（ユーザーマクロ） | 利用可能（[`defmacro`](../reference/special-forms/defmacro.md) 参照） |
-| `&optional` / `&rest` / `&key` / `&aux` | `defun`/`lambda` で利用可能（[`defun`](../reference/special-forms/defun.md) を参照）。`defmacro` は `&rest`/`&body` のみ |
-| `&whole` | 利用不可 |
-| `values` / `multiple-value-bind` | 利用可能。ユーザ関数の多値も含む（[`multiple-value-bind`](../reference/macros/multiple-value-bind.md) を参照） |
-| `block` / `return-from` / `tagbody` / `go` | 利用可能（[`block`](../reference/macros/block.md)/[`return-from`](../reference/macros/return-from.md) はすべてのバックエンドで名前付き脱出 — インタープリタはダイナミックエクステント、コンパイラは同一関数内なら直接ジャンプ、lambda をまたぐ場合は非局所脱出。[`tagbody`](../reference/special-forms/tagbody.md)/[`go`](../reference/special-forms/go.md) も同様で、コンパイラはレキシカルサブセットをサポート） |
-| `catch` / `throw` | 利用不可 |
-| `unwind-protect` | 利用可能（[`unwind-protect`](../reference/special-forms/unwind-protect.md) 参照）。wasm-GC では exception-handling プロポーザル経由（`wasmtime -W exceptions=y`）。`--no-gc` ではコンパイルエラー |
-| 条件（`define-condition`、`handler-case`、`ignore-errors`、`signal`） | 利用可能（[`handler-case`](../reference/macros/handler-case.md) 参照）。wasm-GC では捕捉に `wasmtime -W exceptions=y` が必要で、ランタイムトラップはそこでは捕捉不能のまま。`--no-gc` ではコンパイルエラー。リスタート（`handler-bind`/`restart-case`）は利用不可 |
-| `flet` / `labels` | 利用可能（[`flet`](../reference/macros/flet.md)、[`labels`](../reference/macros/labels.md) 参照） |
-| `macrolet` | 利用可能（[`macrolet`](../reference/macros/macrolet.md) を参照）。`symbol-macrolet` は利用不可 |
-| `loop`（拡張版） | 一部対応（単純ループのサブセット） |
-| `defstruct` | 利用可能。`:constructor`/`:conc-name`/`:predicate`/`:copier` オプションとライト形式の BOA コンストラクタを含む（[`defstruct`](../reference/special-forms/defstruct.md) 参照）。`:include` は利用不可 |
-| CLOS | 一部対応（静的サブセット: [`defclass`](../reference/special-forms/defclass.md)、[`defgeneric`](../reference/special-forms/defgeneric.md)、[`defmethod`](../reference/special-forms/defmethod.md)、[`make-instance`](../reference/macros/make-instance.md)、[`slot-value`](../reference/macros/slot-value.md)） |
-| `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op として利用可能（[`declare`](../reference/macros/declare.md) 参照） |
-| `check-type` / `assert` | 利用可能（ライト版、リスタートなし。[`check-type`](../reference/macros/check-type.md) 参照） |
-| `eval-when` | 利用可能（`progn` として扱う。[`eval-when`](../reference/macros/eval-when.md) 参照） |
-| `typep` | リテラル（クオートされた）型指定子で利用可能（[`typep`](../reference/macros/typep.md) を参照）。[`subtypep`](../reference/functions/subtypep.md) も同様 |
-| `coerce` | 部分対応(リテラルの `'list` / `'vector` / `'string` 結果型。[`coerce`](../reference/functions/coerce.md) を参照) |
-| `defpackage`（ユーザーパッケージ） | 一部対応（`:use`/`:export`/`:nicknames`/`:import-from`。[`defpackage`](../reference/special-forms/defpackage.md) 参照） |
-| `make-package` / `export` / `use-package`（ランタイム） | 利用不可 |
-| `#+` / `#-` / `*features*` / `#\| ... \|#` | 利用可能（[データ型](../reference/data-types.md#コメントフィーチャー条件features)参照） |
-| `#.` read 時評価 / `#:` の新規 uninterned シンボル | 部分的（`#.` は利用可能 — 各データはそのトップレベルフォームの直前に評価され、コンパイルパスではコンパイル時評価器に対して評価される。`.asd` ファイル内では警告付きでスキップ。`#:name` は普通のシンボルとして読まれ、designator として受理されるが、gensym 的な新規性はない） |
-| `require` / `provide` | 利用可能（[`require`](../reference/functions/require.md) 参照）。`*modules*` 変数は利用不可 |
-| `let` による動的（special）束縛 | 利用可能（`defvar`/`defparameter`/`declaim special` が名前を special 宣言する。`progv` はインタプリタのみ） |
+| `catch` / `throw` | 利用不可（`block`/`return-from`/`tagbody`/`go` は利用可能） |
+| リスタート（`handler-bind`、`restart-case`、`invoke-restart`、`cerror` など） | 利用不可 |
+| `symbol-macrolet` | 利用不可（`macrolet` は利用可能） |
+| `&whole` / `&environment` | 利用不可。`defmacro` のラムダリストは必須パラメータと末尾の `&rest`/`&body` 1 つのみ |
+| `loop`（拡張版） | 一部対応（後述） |
+| CLOS | 一部対応（静的サブセット、MOP なし） |
+| `defstruct` の `:include` / `#S(...)` 構文 | 利用不可 |
+| `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op（コンパイルには影響しない） |
+| `typep` / `subtypep` / `coerce` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string` |
+| `make-package` / `export` / `import` / `use-package` / `find-package` / `rename-package`（ランタイム） | 利用不可。`defpackage` の `:shadow` / `:shadowing-import-from` はエラー |
+| `progv` | インタプリタのみ（JVM/WASM ではコンパイルエラー） |
+| `eval-when` | `progn` として扱う（フェーズの区別なし） |
+| `#:name` | 普通のシンボルとして読まれ、gensym 的な新規性はない |
+| `*modules*` | 利用不可（`require`/`provide` は利用可能） |
 | 複素数 | 利用不可 |
+| `--no-gc` での `unwind-protect` / 条件 | コンパイルエラー（他のバックエンドでは利用可能） |
 
-## ユーザー定義マクロ（`defmacro`）
+## 多値
 
-ユーザーマクロは**サポートされています** —
-バッククォートのテンプレート構文（ネストしたバッククォートを含む）や制限事項
-（`&whole`/`&environment` 非対応、コンパイル済みプログラムの実行時 `eval` では
-認識されない、など）を含む詳細は
-[`defmacro`](../reference/special-forms/defmacro.md) を参照してください。
-組み込みマクロのセット（`cond`、`case`、`when`、`unless`、`dotimes`、`dolist`、
-`do`、`setf`、`push`、`pop`、`incf` など）は `(rontolisp:list-macros)` で
-一覧できます。これらの名前は再定義できません。
-
-## ラムダリストキーワード（`&optional`、`&rest`、`&key`、`&aux`）
-
-`defun` と `lambda` は `&optional`、`&rest`、`&key`、`&allow-other-keys`、
-`&aux` をサポートします。詳細は [`defun`](../reference/special-forms/defun.md)
-を参照してください。残る制限は次のとおりです: `&whole` は利用できません。
-`defmacro` のラムダリストは引き続き必須パラメータと末尾の `&rest`/`&body`
-1 つのみを取ります。funcall/apply 経由の呼び出しでは関数の物理パラメータは
-7 個までです。コンパイル済み `eval` がランタイムに構築する `lambda` は
-ラムダリストキーワードを解釈しません（[コンパイル済み eval の制限](eval-limitations.md)
-を参照）。
-
-## 多値（`values`、`multiple-value-bind`）
-
-多値は**利用可能**です: [`values`](../reference/functions/values.md)、
-[`values-list`](../reference/functions/values-list.md)、
-[`multiple-value-bind`](../reference/macros/multiple-value-bind.md)、
-[`multiple-value-list`](../reference/macros/multiple-value-list.md)、
-[`multiple-value-call`](../reference/macros/multiple-value-call.md)、
-[`nth-value`](../reference/macros/nth-value.md)、および
-`floor`/`ceiling`/`round`/`truncate`（剰余）、`gethash`（present-p）、
-`parse-integer`（パース停止位置）の副次値と `floor` ファミリのオプションの
-除数引数です。**ユーザ定義関数**の結果位置にある `(values ...)` は内部
-チャネルを通じて呼び出し側のコンシューマに届くため、CL の一般的なイディオムが
-動作します:
-
-```console
-> (defun two () (values 1 2))
-> (multiple-value-bind (a b) (two) (list a b))
-(1 2)
-```
-
-Common Lisp からの残る相違点は次のとおりです:
+[`values`](../reference/functions/values.md) とその消費側は、ユーザ定義関数の
+多値も含めて利用できます。Common Lisp からの残る相違点は次のとおりです:
 
 - **末尾以外**の位置で `values` を呼んでから通常の値を返すプロデューサは
   古い余剰値を残すことがあるため、`values` は結果位置で使ってください。
@@ -92,166 +45,82 @@ Common Lisp からの残る相違点は次のとおりです:
 - CL で副次値を持つ他の組み込み関数（`read-from-string`、`macroexpand-1`、
   `intern` など）は単一値のままです。
 
-## 非局所脱出と制御フロー
+## 非局所脱出
 
-名前付きブロックとラベル・ジャンプによる制御フローは利用できます。利用できないのは動的スコープの `catch`/`throw` だけです。
+`catch` / `throw` — 動的スコープの脱出はありません。
 
-- [`block`](../reference/macros/block.md) /
-  [`return-from`](../reference/macros/return-from.md) — **利用可能**です。
-  `defun`/`defmethod` 本体は関数名/ジェネリック名の暗黙ブロックになり、
-  [`return`](../reference/macros/return.md) は
-  `do` / `do*` / `dolist` / `dotimes` によって確立された
-  **最も内側**の反復ブロックから抜けます。インタープリタでは名前付き脱出は
-  動的（ブロックのエクステント内で呼ばれたクロージャも越える）で、JVM / WASM
-  コンパイラは同一関数内の `return-from` を直接ジャンプに、囲みブロックを
-  名指しする lambda 内（例えば `mapcar`/`mapl` に渡した lambda の中）の
-  `return-from` を非局所脱出にコンパイルするので、後者も外側のブロックから
-  抜けます — インタープリタと一致します。この lambda 境界をまたぐ脱出は例外
-  処理モードでコンパイルされます（wasm-GC モジュールは
-  `wasmtime -W exceptions=y` が必要）。`flet`/`labels` のローカル関数をまたぐ
-  必要がある `return-from` はコンパイラではまだ未対応です。
-- [`tagbody`](../reference/special-forms/tagbody.md) /
-  [`go`](../reference/special-forms/go.md) — [`prog`](../reference/macros/prog.md) /
-  [`prog*`](../reference/macros/prog-star.md) とともに**利用可能**です。JVM / WASM
-  コンパイラはレキシカルサブセット（`go` は同一関数内のレキシカルに囲む `tagbody`
-  のタグのみを対象にできる）をサポートし、インタープリタはさらに関数境界を越える
-  動的 `go` をサポートします。
-- `catch` / `throw` — 動的スコープの脱出はありません。
+[`block`](../reference/macros/block.md) /
+[`return-from`](../reference/macros/return-from.md) と
+[`tagbody`](../reference/special-forms/tagbody.md) /
+[`go`](../reference/special-forms/go.md) は利用できますが、**コンパイル済み**
+バックエンドには 2 つの制限があります（インタプリタには影響しません）:
 
-```lisp
-(block done (return-from done 1) 2) ; => 1
-```
+- `flet`/`labels` のローカル関数をまたぐ必要がある `return-from` はまだ
+  未対応です（`lambda` をまたぐものは非局所脱出として対応済みです）。
+- `go` は同一関数内のレキシカルに囲む `tagbody` のタグのみを対象にできます。
+  インタプリタはさらに関数境界を越える動的 `go` をサポートします。
 
-[`unwind-protect`](../reference/special-forms/unwind-protect.md)(あらゆる
-脱出時 — 通常復帰・`error` 巻き戻し・`return`/`return-from` — の
-クリーンアップ)は `--no-gc` を除くすべてのバックエンドで**利用可能**です。
-wasm-GC バックエンドでは WebAssembly の exception-handling プロポーザルを
-使うため、出力モジュールの実行には `wasmtime -W exceptions=y`(37+)が必要で、
-ランタイムトラップは依然として cleanup をスキップします。
+`lambda` をまたぐ `return-from`、`unwind-protect`、条件の捕捉はいずれも例外
+処理モードでコンパイルされるため、出力される wasm-GC モジュールの実行には
+`wasmtime -W exceptions=y`（37+）が必要です。`--no-gc` では `unwind-protect` と
+条件系のフォームはコンパイルエラーになります。
 
-## 条件とリスタート
+## リスタート
 
-条件システムのコアは**利用可能**です: コンディション型は組み込み階層
-（`condition` > `serious-condition` > `error`、`warning`）の上の CLOS
-サブセットクラスで、[`define-condition`](../reference/macros/define-condition.md)
-（`:report` 付き）で定義し、[`make-condition`](../reference/macros/make-condition.md)
-や型付きの [`error`](../reference/macros/error.md)/[`signal`](../reference/macros/signal.md)
-designator で構築し、`--no-gc`(コンパイルエラー)を除くすべてのバックエンドで
-[`handler-case`](../reference/macros/handler-case.md) /
-[`ignore-errors`](../reference/macros/ignore-errors.md) により型で捕捉できます。
-wasm-GC バックエンドでの捕捉は WebAssembly の exception-handling プロポーザルを
-使い(`wasmtime -W exceptions=y`、37+)、捕捉できるのは**シグナルされた**
+条件システムのコア（`define-condition`、`handler-case`、`ignore-errors`、
+`signal`、型付きの `error`）は利用できますが、**リスタートシステム**は利用
+できません: `handler-bind`、`restart-case`（主フォームだけを残す no-op として
+受理）、`restart-bind`、`invoke-restart`、`with-simple-restart`、`cerror`、
+`abort`、`continue`、`break` は存在せず、
+[`check-type`](../reference/macros/check-type.md) /
+[`assert`](../reference/macros/assert.md) は再格納リスタートを提供せずに
+エラーを通知します。wasm-GC バックエンドで捕捉できるのは**シグナルされた**
 コンディションのみです — ランタイムトラップは依然として中断させます。
-
-```lisp
-(handler-case (error "boom") (error (e) :caught)) ; => :caught
-```
-
-**リスタートシステム**は利用できません: `handler-bind`、`restart-case`
-（主フォームだけを残す no-op として受理）、`restart-bind`、`invoke-restart`、
-`with-simple-restart`、`cerror`、`abort`、`continue`、`break` は存在せず、
-`check-type`/`assert` は再格納リスタートを提供せずにエラーを通知します。
-
-## 局所マクロ（`macrolet`）
-
-局所関数は**利用可能**です -- [`flet`](../reference/macros/flet.md) と
-[`labels`](../reference/macros/labels.md) を参照してください。局所マクロ
-（[`macrolet`](../reference/macros/macrolet.md)）も**利用可能**です --
-コンパイルパスではコンパイラが走る前に展開しきり、インタープリタはネイティブに
-展開します。`symbol-macrolet` は利用できません。
 
 ## `loop` マクロ
 
-拡張版 `loop` の限定的なサブセットが **利用可能** です（[`loop`](../reference/macros/loop.md) を参照）。
-数値/リストのステップ（`for`）、文字列のステップ（`for ... across`）、よく使う集約
-（`collect`、`append`、`sum`、`count`、`maximize`、`minimize` など）、単純な制御節
-（`while`/`until`、`repeat`、`when`/`unless`、`finally`、`return`）に対応します。
-対象外は、分配束縛、`for` 節同士の並行 `and`、`being`、アナフォリックな `it`、
-`named`/`loop-finish`、`thereis`/`always`/`never` です。その他の反復フォーム（`do`、`dolist`、`dotimes`、
-`while`）も引き続き利用できます。
+拡張版 [`loop`](../reference/macros/loop.md) の限定的なサブセットが利用でき
+ます: 数値/リストのステップ（`for`）、文字列のステップ（`for ... across`）、
+よく使う集約（`collect`、`append`、`sum`、`count`、`maximize`、`minimize`
+など）、単純な制御節（`while`/`until`、`repeat`、`when`/`unless`、`finally`、
+`return`）。対象外は、分配束縛、`for` 節同士の並行 `and`、`being`、アナフォリック
+な `it`、`named`/`loop-finish`、`thereis`/`always`/`never` です。
 
-## 構造体とオブジェクト（`defstruct`、CLOS）
+## 構造体とオブジェクト
 
-構造体は [`defstruct`](../reference/special-forms/defstruct.md) で **利用可能**
-です。キーワードコンストラクタ、述語、コピー関数、`setf` 可能なアクセサを生成し、
-`:constructor`/`:conc-name`/`:predicate`/`:copier` オプションとライト形式の
-BOA コンストラクタ（ラムダリストに名前があるスロットはそのパラメータを読み、
-残りは initform を評価する）をサポートします。`:include` による継承と
-`#S(...)` の印字/読み取り構文はサポートされません。
+[`defstruct`](../reference/special-forms/defstruct.md) は `:include` による継承と
+`#S(...)` の印字/読み取り構文をサポートしません。
 
-**静的な CLOS サブセット**が利用可能です:
-[`defclass`](../reference/special-forms/defclass.md)（単一継承、
-`:initarg`/`:initform`/`:reader`/`:accessor` スロットオプション）、
-[`make-instance`](../reference/macros/make-instance.md) と
-[`slot-value`](../reference/macros/slot-value.md)（どちらもリテラルのクォート
-された名前が必要）、そして第 1 引数でディスパッチする
-[`defgeneric`](../reference/special-forms/defgeneric.md) /
-[`defmethod`](../reference/special-forms/defmethod.md)（`eql`、クラス、組み込み
-型の specializer）で、標準メソッド結合 — `:before`/`:after`/`:around` 修飾子、
-`call-next-method`、`next-method-p`（クラスメソッドとデフォルトメソッド向け）—
-も含みます。対象外: 多重継承、第 2 引数以降の specializer、`slot-boundp`、
-MOP / 実行時クラス操作（`find-class`、`change-class`、`add-method`、クラス
-再定義）— コンパイルされたプログラムのクラスとメソッドの集合はコンパイル時に
-固定されます。
-
-## 型宣言、`typep`、`coerce`
-
-型宣言は解析されるだけの no-op として **受理されます**。
-[`declare`](../reference/macros/declare.md)、
-[`declaim`](../reference/macros/declaim.md)、
-[`proclaim`](../reference/macros/proclaim.md)、
-[`the`](../reference/macros/the.md) はいずれもパースされ、効果を持たないため、
-型注釈付きのソースを変更なしにロードできます。
-[`check-type`](../reference/macros/check-type.md) と
-[`assert`](../reference/macros/assert.md) は実際のランタイム検査を提供します
-（ライト版、リスタートなし）。ランタイムヘルパーの
-[`typep`](../reference/macros/typep.md) はリテラル（クオートされた）型指定子で
-**利用可能**で、[`subtypep`](../reference/functions/subtypep.md) も同様です。
-[`coerce`](../reference/functions/coerce.md) はリテラルの結果型 `'list`、`'vector`、
-`'string` に限り **利用できます**(結果型は `map` と同様、クォートされたリテラルで
-なければなりません)。その他の結果型はサポートされません。
+CLOS は**静的なサブセット**です
+（[`defclass`](../reference/special-forms/defclass.md)、第 1 引数で
+ディスパッチする [`defgeneric`](../reference/special-forms/defgeneric.md) /
+[`defmethod`](../reference/special-forms/defmethod.md)、リテラルのクォートされた
+名前を取る [`make-instance`](../reference/macros/make-instance.md) と
+[`slot-value`](../reference/macros/slot-value.md)）。対象外: 多重継承、
+第 2 引数以降の specializer、`slot-boundp`、MOP / 実行時クラス操作
+（`find-class`、`change-class`、`add-method`、クラス再定義）—
+コンパイルされたプログラムのクラスとメソッドの集合はコンパイル時に固定されます。
 
 ## ユーザー定義パッケージ
 
-新しいパッケージは [`defpackage`](../reference/special-forms/defpackage.md) で
-定義 **できます**。これは `:use`、`:export`、`:nicknames`、`:import-from` の
-clause をサポートする、リテラルなトップレベルの read/コンパイル時
-ディレクティブです（`:documentation`/`:size` は受理されるが無視されます。
-[パッケージ](../reference/packages.md#ユーザー定義パッケージdefpackage)を参照）。
-`:shadow` と `:shadowing-import-from` はエラーで(シンボルのシャドウイングは
-ありません)、**ランタイム** のパッケージ操作はありません:
+[`defpackage`](../reference/special-forms/defpackage.md) は `:use`、`:export`、
+`:nicknames`、`:import-from` をサポートする、リテラルなトップレベルの
+read/コンパイル時ディレクティブです（`:documentation`/`:size` は受理されるが
+無視されます）。`:shadow` と `:shadowing-import-from` はエラーで（シンボルの
+シャドウイングはありません）、**ランタイム**のパッケージ操作はありません:
 `make-package`、`export`、`import`、`use-package`、`find-package`、
-`rename-package` は利用できません。パッケージの export(external)シンボルの
-集合は定義時に固定されます。シングル/ダブルコロンの修飾子(external シンボルには
-`pkg:name`、internal シンボルには `pkg::name`)は Common Lisp と同様に
-機能します([パッケージ](../reference/packages.md#external-シンボルと-internal-シンボル)を参照)。
-標準ニックネーム `common-lisp`/`common-lisp-user` は `cl`/`cl-user` に解決され、
-`#:name` の designator も受理されます。
-複数の使用先パッケージが同じ名前を export している場合、コンフリクトをシグナル
-する代わりに `:use` 順で最初のパッケージが優先されます。
+`rename-package` は利用できないため、パッケージの export シンボルの集合は
+定義時に固定されます。複数の使用先パッケージが同じ名前を export している場合、
+コンフリクトをシグナルする代わりに `:use` 順で最初のパッケージが優先されます。
 
-## 動的（special）変数束縛
+## 動的（special）変数
 
-動的（special）変数束縛は **サポートされています**。`defvar`、`defparameter`、
-`defconstant`(および `(declaim (special *x*))`)は変数を special 宣言し、special
-な名前に対する `let`/`let*` は、レキシカルではなく **動的** 束縛を確立します。
-これはエクステント内で呼ばれた関数からも見え、脱出時に復元されます。
-
-```console
-> (defvar *factor* 1)
-> (defun scale (n) (* n *factor*))
-> (let ((*factor* 10)) (scale 5))
-50
-```
-
-束縛は制御のスレッドごとに保持されるため、並行する
-[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
-リクエストが互いの束縛を見ることはありません。**コンパイル済み** バックエンドに
-限り、2 つの制限があります(インタプリタには影響しません)。実行時に計算される
-シンボルのリストを束縛する [`progv`](../reference/special-forms/progv.md) は
-インタプリタのみで、JVM/WASM ではコンパイルエラーになります。また special な
-`let` の境界を **越えて** 脱出する `return`/`return-from` は、そこでグローバルを
-復元しません(通常の脱出とエラーによる中断は問題ありません)。
+`let`/`let*` による動的束縛はサポートされていますが、**コンパイル済み**
+バックエンドには 2 つの制限があります（インタプリタには影響しません）。実行時に
+計算されるシンボルのリストを束縛する
+[`progv`](../reference/special-forms/progv.md) はコンパイルエラーになり、
+special な `let` の境界を**越えて**脱出する `return`/`return-from` は、そこで
+グローバルを復元しません（通常の脱出とエラーによる中断は問題ありません）。
 
 ## 数値タワー
 
@@ -266,7 +135,15 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
 
 ## その他の省略事項
 
-`symbol-macrolet` は利用できず、`progv` はインタプリタのみです(JVM/WASM では
-コンパイルエラー)。[`eval-when`](../reference/macros/eval-when.md) は `progn`
-として扱われ、**利用できます**。この一覧はすべてを網羅したものではありません。rontolisp は
-完全な標準ではなく、焦点を絞ったコアを実装しています。
+- ラムダリスト: `&whole` は利用できず、`defmacro` のラムダリストは必須
+  パラメータと末尾の `&rest`/`&body` 1 つのみを取り、funcall/apply 経由の
+  呼び出しでは関数の物理パラメータは 7 個までです。
+- ユーザーマクロはコンパイル済みプログラムの実行時 `eval` では認識されず、
+  その `eval` がランタイムに構築する `lambda` はラムダリストキーワードを
+  解釈しません（[コンパイル済み eval の制限](eval-limitations.md)を参照）。
+- `#.` の read 時評価は `.asd` ファイル内では警告付きでスキップされます。
+- 組み込みマクロの名前（`cond`、`case`、`when`、`setf`、`push` など）は
+  再定義できません。一覧は `(rontolisp:list-macros)` で取得できます。
+
+この一覧はすべてを網羅したものではありません。rontolisp は完全な標準ではなく、
+焦点を絞ったコアを実装しています。
