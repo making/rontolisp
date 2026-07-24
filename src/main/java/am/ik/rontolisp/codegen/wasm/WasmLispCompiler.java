@@ -26,6 +26,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
@@ -776,8 +777,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// in EH mode (the program uses handler-case/ignore-errors/unwind-protect). Its
 	// payload is a cons (condition-instance . message-string) over TYPE_CONS, and its
 	// function type reuses TYPE_PRINT_VAL (((ref null eq)) -> ()), so no type-section
-	// entry is added. Tags have their own index space; this is always the only tag.
+	// entry is added. Tags have their own index space; $lisp-cond is always tag 0.
 	static final int TAG_LISP_COND = 0;
+
+	// The block-exit tag a cross-lambda return-from throws/catches, carrying a
+	// (block-instance-id . value) cons; its payload type also reuses TYPE_PRINT_VAL, so
+	// no
+	// type-section entry is added. Emitted (tag 1) only when the program lowers a
+	// cross-lambda exit, so a program that does not stays byte-identical to before.
+	static final int TAG_BLOCK_EXIT = 1;
 
 	// The empty block type (0x40) for block/try_table instructions without a result.
 	static final int BLOCKTYPE_EMPTY = 0x40;
@@ -1025,6 +1033,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, Integer> structAccessors = new HashMap<>();
 		ClosRegistry closRegistry = new ClosRegistry();
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry);
+		// Lower a return-from that crosses a lambda boundary into an EH-based non-local
+		// exit (before desugarProgram, so the %fn-block wrap for a same-function
+		// return-from naturally nests around the injected let/%nlx-catch).
+		CrossLambdaExitLowering.Result crossLambda = CrossLambdaExitLowering.lower(program);
+		program = crossLambda.program();
+		boolean crossLambdaExit = crossLambda.used();
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		program = LambdaLists.desugarProgram(program);
@@ -1068,7 +1082,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// and the `wasmtime -W exceptions=y` run flag.
 		// asyncMode implies EH mode: the async entry's reject path and the
 		// rejected-await re-signal throw on the $lisp-cond tag.
-		boolean ehMode = programUsesEhForm(program) || this.asyncMode;
+		// A cross-lambda return-from lowers to a throw/catch on a dedicated block-exit
+		// tag,
+		// so it forces EH mode (and the `wasmtime -W exceptions=y` run flag) exactly like
+		// a
+		// catching form. A program without one stays byte-identical and flag-free.
+		boolean ehMode = programUsesEhForm(program) || this.asyncMode || crossLambdaExit;
 		// The rontolisp:tcp-* built-ins are component-only the same way: they are the
 		// spliced sockets.lisp defuns over a wit-imported wasi:sockets@0.3.0 (an
 		// ordinary user import -- the base variant; the dedicated sockets blob variant
@@ -1435,6 +1454,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.stringTable(stringTable)
 			.ehMode(ehMode)
+			.crossLambdaExit(crossLambdaExit)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
 			.functions(functions)
 			.lambdaDecls(lambdaDecls)
@@ -2831,7 +2851,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// and global sections. Emitting it at all requires the host to enable the
 		// exception-handling proposal, which is why it is gated.
 		if (ehMode) {
-			mainWriter.writeTagSection(tags -> tags.addTag(TYPE_PRINT_VAL));
+			mainWriter.writeTagSection(tags -> {
+				tags.addTag(TYPE_PRINT_VAL);
+				// The block-exit tag (index 1), only when a cross-lambda return-from is
+				// lowered -- so a handler-case-only program keeps exactly one tag and
+				// stays byte-identical.
+				if (crossLambdaExit) {
+					tags.addTag(TYPE_PRINT_VAL);
+				}
+			});
 		}
 		mainWriter
 			// Global section: the eval top-level variable environment (GLOBAL_ENV) and
@@ -3677,6 +3705,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean ehMode = false;
 
 		/**
+		 * True when the program lowers a cross-lambda {@code return-from}: the block-exit
+		 * tag (index 1) exists and {@code handler-case} is made block-exit aware (it lets
+		 * a block-exit unwind through, decrementing the handler depth). Gated so a
+		 * program without a cross-lambda exit stays byte-identical.
+		 */
+		boolean crossLambdaExit = false;
+
+		/**
 		 * The wasm global index of the handler-depth counter (a {@code (mut i32)} = 0
 		 * appended after the user-variable globals), or -1 outside EH mode. The
 		 * {@code handler-case} region increments/decrements it (the JVM
@@ -3888,6 +3924,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.component = builder.component;
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
+			this.crossLambdaExit = builder.crossLambdaExit;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
 			this.simd = builder.simd;
 			this.userFuncBase = builder.userFuncBase;
@@ -3934,6 +3971,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean serve = false;
 
 			private boolean ehMode = false;
+
+			private boolean crossLambdaExit = false;
 
 			private int ehDepthGlobalIndex = -1;
 
@@ -4021,6 +4060,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder ehMode(boolean ehMode) {
 				this.ehMode = ehMode;
+				return this;
+			}
+
+			Builder crossLambdaExit(boolean crossLambdaExit) {
+				this.crossLambdaExit = crossLambdaExit;
 				return this;
 			}
 

@@ -16,7 +16,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `&optional` / `&rest` / `&key` / `&aux` | `defun`/`lambda` で利用可能（[`defun`](../reference/special-forms/defun.md) を参照）。`defmacro` は `&rest`/`&body` のみ |
 | `&whole` | 利用不可 |
 | `values` / `multiple-value-bind` | 利用可能。ユーザ関数の多値も含む（[`multiple-value-bind`](../reference/macros/multiple-value-bind.md) を参照） |
-| `block` / `return-from` / `tagbody` / `go` | 利用可能（[`block`](../reference/macros/block.md)/[`return-from`](../reference/macros/return-from.md) はすべてのバックエンドで名前付き脱出 — インタープリタはダイナミックエクステント、コンパイラはレキシカル（同一関数内）。[`tagbody`](../reference/special-forms/tagbody.md)/[`go`](../reference/special-forms/go.md) も同様で、コンパイラはレキシカルサブセットをサポート） |
+| `block` / `return-from` / `tagbody` / `go` | 利用可能（[`block`](../reference/macros/block.md)/[`return-from`](../reference/macros/return-from.md) はすべてのバックエンドで名前付き脱出 — インタープリタはダイナミックエクステント、コンパイラは同一関数内なら直接ジャンプ、lambda をまたぐ場合は非局所脱出。[`tagbody`](../reference/special-forms/tagbody.md)/[`go`](../reference/special-forms/go.md) も同様で、コンパイラはレキシカルサブセットをサポート） |
 | `catch` / `throw` | 利用不可 |
 | `unwind-protect` | 利用可能（[`unwind-protect`](../reference/special-forms/unwind-protect.md) 参照）。wasm-GC では exception-handling プロポーザル経由（`wasmtime -W exceptions=y`）。`--no-gc` ではコンパイルエラー |
 | 条件（`define-condition`、`handler-case`、`ignore-errors`、`signal`） | 利用可能（[`handler-case`](../reference/macros/handler-case.md) 参照）。wasm-GC では捕捉に `wasmtime -W exceptions=y` が必要で、ランタイムトラップはそこでは捕捉不能のまま。`--no-gc` ではコンパイルエラー。リスタート（`handler-bind`/`restart-case`）は利用不可 |
@@ -103,10 +103,13 @@ Common Lisp からの残る相違点は次のとおりです:
   `do` / `do*` / `dolist` / `dotimes` によって確立された
   **最も内側**の反復ブロックから抜けます。インタープリタでは名前付き脱出は
   動的（ブロックのエクステント内で呼ばれたクロージャも越える）で、JVM / WASM
-  コンパイラはレキシカルサブセットをサポートします — ターゲットのブロックは
-  同一関数内で `return-from` をレキシカルに囲んでいる必要があり、名前がどの
-  囲みブロックにもマッチしない lambda 内の `return-from` はその lambda から
-  抜けます。
+  コンパイラは同一関数内の `return-from` を直接ジャンプに、囲みブロックを
+  名指しする lambda 内（例えば `mapcar`/`mapl` に渡した lambda の中）の
+  `return-from` を非局所脱出にコンパイルするので、後者も外側のブロックから
+  抜けます — インタープリタと一致します。この lambda 境界をまたぐ脱出は例外
+  処理モードでコンパイルされます（wasm-GC モジュールは
+  `wasmtime -W exceptions=y` が必要）。`flet`/`labels` のローカル関数をまたぐ
+  必要がある `return-from` はコンパイラではまだ未対応です。
 - [`tagbody`](../reference/special-forms/tagbody.md) /
   [`go`](../reference/special-forms/go.md) — [`prog`](../reference/macros/prog.md) /
   [`prog*`](../reference/macros/prog-star.md) とともに**利用可能**です。JVM / WASM

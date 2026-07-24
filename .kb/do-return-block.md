@@ -60,14 +60,37 @@ compiled function. Machinery:
   escaped scopes' cleanups at the exit site and brs straight to the target — the same
   strategy and lite limit as `go` (a throw from an inlined cleanup can re-enter its own
   handler).
-- **The remaining deviation from CL** (pinned by
-  `compileAndRunReturnFromInsideLambdaStaysLambdaLocal` and assoc-utils todo-086's
-  `alistp`): a `return-from` inside a lambda whose name only matches a block in the
-  lexically enclosing function exits *that lambda* (the `%fn-block` fallback), NOT the
-  outer defun — a goto cannot cross into a separately compiled method. The interpreter's
-  dynamic-extent crossing still differs there. `--no-gc` keeps the old name-dropping
-  `expandBlock` lowering and has no `return-from` at all (it never ran
-  `desugarProgram`).
+- **Cross-lambda `return-from` = a real non-local exit** (JVM + wasm-GC, EH-based; pinned
+  by `compileAndRunReturnFromInsideLambdaExitsOuterDefun` / wasm
+  `returnFromExitsDefunAcrossLoop` and the `cross-lambda-return-from` ci-spec case): a
+  `return-from` inside a lambda whose name matches a block in the lexically enclosing
+  function exits the OUTER defun/block, matching the interpreter and CL. The lexical
+  goto/br fast path stays for a same-function `return-from`; only one that actually crosses
+  a lambda boundary pays the EH cost. Mechanics — the shared, compile-path-only
+  `compiler/CrossLambdaExitLowering` (run before `desugarProgram`) detects a `return-from`
+  whose target block is established outside the nested lambda it sits in and rewrites the
+  establishing block to `(let ((id (%nlx-tag))) (%nlx-catch id BODY))` with the crossing
+  `(return-from name v)` rewritten to `(%nlx-throw id v)`. The `id` is a **dynamic
+  block-instance id** — a genuine lexical the existing closure machinery
+  (`FreeVarAnalyzer`) captures into the lambda, minted fresh per block activation
+  (`%nlx-tag`), so recursion targets the right frame and an exit after the block returned
+  surfaces as an error. `%nlx-throw`/`%nlx-catch` unwind the real stack: JVM via a plain
+  `RuntimeException` + the `_nleTl` `{throwable,id,value}` channel (`JvmNlxCompiler`), wasm
+  via a dedicated `$block-exit` tag carrying an `(id . value)` cons (`WasmNlxCompiler`,
+  tag 1, gated). Intervening `unwind-protect` cleanups run on the way out (JVM native
+  unwind; wasm `catch_all_ref`). `handler-case` does NOT intercept it: the JVM handler
+  rethrows a pending `_nleTl` before dispatching, and wasm uses a distinct tag with a
+  block-exit passthrough that restores the handler depth (`JvmHandlerCaseCompiler` /
+  `WasmHandlerCaseCompiler`, both gated on the cross-lambda-exit flag). **EH-mode / flag
+  trigger:** a program with a cross-lambda exit compiles in EH mode and needs
+  `wasmtime -W exceptions=y` on both wasm run commands, exactly like `handler-case`; a
+  program without one is byte-identical and flag-free. `--no-gc` keeps the old
+  name-dropping `expandBlock` lowering and has no `return-from` at all (it never ran
+  `desugarProgram`), so this does not apply there; the interpreter was already correct and
+  is untouched.
+- **Still lexical-only** (a follow-up, same root cause): a `return-from` that crosses a
+  `flet`/`labels` local function (a lambda introduced by macro expansion, which
+  `CrossLambdaExitLowering` does not descend into) and a **non-lexical `go`** (see below).
 
 Needed by cl-utilities' `rotate-byte`/`read-delimited` (function-scoped early returns,
 now exact) and cl-ppcre (`ClPpcreE2eTest`, all four backends: `(block scan ...)` in the
@@ -83,8 +106,14 @@ wasm-GC).
   is a thrown signal, a dynamic `go` **crosses function boundaries** (the target need
   not be lexically enclosing).
 - **Compilers = LEXICAL subset only**: a `go` must target a lexically enclosing
-  `tagbody` in the SAME compiled function; a non-lexical `go` is unsupported on the
-  compile path.
+  `tagbody` in the SAME compiled function; a non-lexical `go` (inside a lambda, targeting
+  an enclosing `tagbody`) is unsupported on the compile path. It is the deferred sibling of
+  the cross-lambda `return-from` EH crossing above: the same `%nlx-tag`/throw/catch scheme
+  could carry a `(tag . pc-index)` payload, but the establishing tagbody's dispatch loop
+  must be re-entered at the caught pc, which needs the JVM `tagbody` restructured into a
+  pc-dispatch loop (wasm already is one). Split out to keep the `return-from` crossing
+  focused; the lowering is designed not to foreclose it (`CrossLambdaExitLowering` handles
+  `return-from` only, leaving `go` to be added the same way).
   - **JVM**: `JvmTagbodyCompiler` lowers to goto/patch, with every label emitted as a
     `joinShape` join point at the tagbody's entry stack shape. `JvmGoCompiler` performs
     the escaped-cleanup/spill unwind (inlining escaped `unwind-protect` cleanups,

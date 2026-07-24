@@ -3202,16 +3202,93 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunReturnFromInsideLambdaStaysLambdaLocal() throws Exception {
-		// Compile-path DEVIATION (pinned): a return-from inside a lambda whose name
-		// matches no lexically enclosing block exits the lambda (the %fn-block
-		// fallback), not the outer defun -- the interpreter's dynamic-extent
-		// crossing cannot span a separately compiled method.
+	void compileAndRunReturnFromInsideLambdaExitsOuterDefun() throws Exception {
+		// A return-from inside a lambda whose name matches an enclosing defun exits that
+		// defun as a non-local exit -- matching the interpreter and CL. The lowering keys
+		// on a dynamic block-instance id the lambda closes over, thrown to the
+		// establishing
+		// block's %nlx-catch. (Was a pinned compile-path deviation that stayed
+		// lambda-local.)
 		assertThat(compileAndRun("""
 				(defun probe (xs)
 				  (mapcar #'(lambda (x) (if (evenp x) (return-from probe :even) x)) xs))
 				(print (probe '(1 2 3)))
-				""")).isEqualTo("(1 :EVEN 3)");
+				""")).isEqualTo(":EVEN");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaReturnFromMidExpression() throws Exception {
+		// The cross-lambda exit value is consumed mid-expression: the abandoned outer
+		// (list :head ... :tail) operands are discarded, like a plain return.
+		assertThat(compileAndRun("""
+				(defun probe (xs)
+				  (list :head (mapcar #'(lambda (x) (if (evenp x) (return-from probe :even) x)) xs) :tail))
+				(print (probe '(1 2 3)))
+				(print (probe '(1 3 5)))
+				""")).isEqualTo(":EVEN\n(:HEAD (1 3 5) :TAIL)");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaReturnFromRecursiveTargetsCorrectFrame() throws Exception {
+		// A recursive defun whose lambda does a cross-lambda return-from: the dynamic
+		// block-instance id targets the innermost active frame, so the exit unwinds one
+		// activation, not the whole recursion.
+		assertThat(compileAndRun("""
+				(defun deep (n)
+				  (if (= n 0)
+				      :bottom
+				      (block done
+				        (mapcar #'(lambda (x) (return-from done (list n (deep (- n 1)) x))) '(:mark))
+				        :unreached)))
+				(print (deep 3))
+				""")).isEqualTo("(3 (2 (1 :BOTTOM :MARK) :MARK) :MARK)");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaReturnFromUserBlockAndFlet() throws Exception {
+		// A cross-lambda return-from to a user (block name ...) in argument position
+		// (spilling), plus one that also crosses an flet local function holding the
+		// lambda
+		// (the id is captured through both closure levels).
+		assertThat(compileAndRun("""
+				(defun f (v)
+				  (+ 100 (block b (mapcar #'(lambda (x) (if (evenp x) (return-from b x) 0)) v) 7)))
+				(print (f '(1 4 5)))
+				(print (f '(1 3 5)))
+				(defun g (xs)
+				  (flet ((h () (mapcar #'(lambda (x) (return-from g (* x 10))) xs)))
+				    (h)))
+				(print (g '(3 4)))
+				""")).isEqualTo("104\n107\n30");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaReturnFromDoesNotLeakHandlerDepth() throws Exception {
+		// A cross-lambda return-from unwinding through a handler-case must leave the
+		// handler depth balanced, so a later unhandled signal still yields nil.
+		assertThat(compileAndRun("""
+				(defun leak (xs)
+				  (handler-case
+				      (mapcar #'(lambda (x) (return-from leak :exited)) xs)
+				    (error (e) :caught)))
+				(print (leak '(1)))
+				(print (signal "quiet"))
+				""")).isEqualTo(":EXITED\nNIL");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaReturnFromThroughHandlerCase() throws Exception {
+		// A cross-lambda return-from unwinding through a handler-case is NOT intercepted
+		// by it (it is a non-local exit, not a signaled condition) -- the handler-case
+		// depth/spill machinery must let it pass.
+		assertThat(compileAndRun("""
+				(defun probe (xs)
+				  (handler-case
+				      (mapcar #'(lambda (x) (if (evenp x) (return-from probe :even) x)) xs)
+				    (error (e) :caught)))
+				(print (probe '(1 2 3)))
+				(print (probe '(1 3 5)))
+				""")).isEqualTo(":EVEN\n(1 3 5)");
 	}
 
 	@Test

@@ -26,6 +26,7 @@ import am.ik.rontolisp.SpecialVarCollector;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
@@ -159,6 +160,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry);
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
+		// Lower a return-from that crosses a lambda boundary into an EH-based non-local
+		// exit (before desugarProgram, so the %fn-block wrap for a same-function
+		// return-from naturally nests around the injected let/%nlx-catch).
+		CrossLambdaExitLowering.Result crossLambda = CrossLambdaExitLowering.lower(program);
+		program = crossLambda.program();
+		boolean crossLambdaExit = crossLambda.used();
 		program = LambdaLists.desugarProgram(program);
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
@@ -749,6 +756,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.httpHandlerRuntime(httpHandlerRuntime)
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
+			.crossLambdaExit(crossLambdaExit)
 			.usesFloatArray(usesFloatArray)
 			.usesArrays(usesArrays)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
@@ -1311,6 +1319,16 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc))
 						.writeU2(0));
 				}
+				if (mainCtx.conditionChannel.nleUsed) {
+					// The per-thread non-local-exit carrier from a %nlx-throw site to the
+					// matching %nlx-catch (a {throwable, id, value} Object[]);
+					// initialized
+					// in <clinit>.
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.nleFieldName))
+						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc))
+						.writeU2(0));
+				}
 			})
 			.writeMethods(methods -> {
 				methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainUtf8, mainDesc,
@@ -1368,18 +1386,26 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0);
 							})));
 				}
-				if (mainCtx.conditionChannel.used) {
+				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed) {
 					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 					// on a thread with no pending condition returns null). The async
 					// runtime's _handoffTl (the eager-start handoff) joins the same
-					// initializer when present.
+					// initializer when present, as does _nleTl (the cross-lambda exit
+					// carrier) -- appended last so a condition-only program is unchanged.
 					ConditionChannel channel = mainCtx.conditionChannel;
+					List<FieldrefConstant> tlFields = new java.util.ArrayList<>();
+					if (channel.used) {
+						tlFields.add(java.util.Objects.requireNonNull(channel.condTlField));
+						tlFields.add(java.util.Objects.requireNonNull(channel.depthTlField));
+						if (handoffFieldRef != null) {
+							tlFields.add(handoffFieldRef);
+						}
+					}
+					if (channel.nleUsed) {
+						tlFields.add(java.util.Objects.requireNonNull(channel.nleTlField));
+					}
 					List<Integer> clinitCode = new java.util.ArrayList<>();
-					for (FieldrefConstant tlField : (handoffFieldRef != null)
-							? List.of(java.util.Objects.requireNonNull(channel.condTlField),
-									java.util.Objects.requireNonNull(channel.depthTlField), handoffFieldRef)
-							: List.of(java.util.Objects.requireNonNull(channel.condTlField),
-									java.util.Objects.requireNonNull(channel.depthTlField))) {
+					for (FieldrefConstant tlField : tlFields) {
 						clinitCode.add(Opcode.NEW);
 						JvmRuntimeBuilder.emitU2(clinitCode,
 								java.util.Objects.requireNonNull(channel.threadLocalClass).index());
@@ -2170,6 +2196,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		@Nullable Utf8Constant depthFieldName;
 
 		/**
+		 * True when the program lowers a cross-lambda {@code return-from}: the
+		 * {@code _nleTl} ThreadLocal channel carries the pending non-local exit's
+		 * {@code {throwable, id, value}} triple. Tracked independently of {@link #used}
+		 * so a program that only lowers a cross-lambda exit (no typed conditions) still
+		 * emits the field and its {@code <clinit>}, and a program that only uses
+		 * conditions stays byte-identical.
+		 */
+		boolean nleUsed = false;
+
+		@Nullable FieldrefConstant nleTlField;
+
+		@Nullable Utf8Constant nleFieldName;
+
+		/**
 		 * Lazily creates the constant-pool entries (idempotent adds) and marks the
 		 * channel used, so the class writer emits the two ThreadLocal fields and their
 		 * {@code <clinit>}.
@@ -2185,6 +2225,31 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.condTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.fieldName, this.fieldDesc));
 			this.depthFieldName = cp.addUtf8("_hcDepthTl");
 			this.depthTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.depthFieldName, this.fieldDesc));
+			ensureThreadLocalInfra(cp);
+		}
+
+		/**
+		 * Lazily creates the {@code _nleTl} field ref and marks the NLE channel used, so
+		 * the class writer emits the field and initializes it in {@code <clinit>}.
+		 * Ensures the shared ThreadLocal constants exist even when no typed condition
+		 * does.
+		 */
+		void ensureNle(ConstantPool cp, String className) {
+			if (this.nleUsed) {
+				return;
+			}
+			this.nleUsed = true;
+			this.fieldDesc = this.fieldDesc != null ? this.fieldDesc : cp.addUtf8("Ljava/lang/ThreadLocal;");
+			this.nleFieldName = cp.addUtf8("_nleTl");
+			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
+			this.nleTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.nleFieldName, this.fieldDesc));
+			ensureThreadLocalInfra(cp);
+		}
+
+		private void ensureThreadLocalInfra(ConstantPool cp) {
+			if (this.threadLocalClass != null) {
+				return;
+			}
 			this.threadLocalClass = cp.addClass(cp.addUtf8("java/lang/ThreadLocal"));
 			this.tlCtor = cp.addMethodref(this.threadLocalClass,
 					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
@@ -2411,6 +2476,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean dynamic = false;
 
 		/**
+		 * True when the program lowers a cross-lambda {@code return-from} (a
+		 * {@code %nlx-*} form is emitted). Gates the {@code handler-case} handler's
+		 * non-local-exit awareness so a program without a cross-lambda exit stays
+		 * byte-identical.
+		 */
+		boolean crossLambdaExit = false;
+
+		/**
 		 * True when the program can produce a packed float array (a {@code #d(...)}
 		 * literal or {@code make-array :element-type 'double-float}). When set, the array
 		 * op compilers route through the {@code _fv*} dispatch helpers (which handle both
@@ -2545,6 +2618,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		private Ctx(Builder builder) {
 			this.conditionChannel = builder.conditionChannel;
 			this.dynamic = builder.dynamic;
+			this.crossLambdaExit = builder.crossLambdaExit;
 			this.usesFloatArray = builder.usesFloatArray;
 			this.usesArrays = builder.usesArrays;
 			this.className = builder.className;
@@ -2756,6 +2830,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private int[] nextFuncId = new int[1];
 
 			private boolean dynamic = false;
+
+			private boolean crossLambdaExit = false;
 
 			private boolean usesFloatArray = false;
 
@@ -3088,6 +3164,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder dynamic(boolean dynamic) {
 				this.dynamic = dynamic;
+				return this;
+			}
+
+			Builder crossLambdaExit(boolean crossLambdaExit) {
+				this.crossLambdaExit = crossLambdaExit;
 				return this;
 			}
 

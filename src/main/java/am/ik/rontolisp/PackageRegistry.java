@@ -150,7 +150,8 @@ public final class PackageRegistry {
 			LispNames.MV_SPILL, LispNames.SET_FILL_POINTER, LispNames.ARRAY_BECOME, LispNames.ARRAY_DISP_TARGET,
 			LispNames.ARRAY_DISP_OFFSET, LispNames.WARN_INTERNAL, LispNames.SCHAR_SET, LispNames.IEEE754_DOUBLE_BITS,
 			LispNames.IEEE754_DOUBLE_FROM_BITS, LispNames.IEEE754_SINGLE_BITS, LispNames.IEEE754_SINGLE_FROM_BITS,
-			LispNames.READ_EVAL, LispNames.SUBSEQ_CORE);
+			LispNames.READ_EVAL, LispNames.SUBSEQ_CORE, LispNames.NLX_TAG_INTERNAL, LispNames.NLX_CATCH_INTERNAL,
+			LispNames.NLX_THROW_INTERNAL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

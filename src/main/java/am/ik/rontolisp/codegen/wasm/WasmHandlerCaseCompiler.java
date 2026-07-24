@@ -94,21 +94,43 @@ final class WasmHandlerCaseCompiler {
 			ctx.wasmCtrlDepth++;
 			trampolineDepth = ctx.wasmCtrlDepth;
 		}
+		// block $bx (result (ref null eq)) -- the block-exit passthrough landing, only
+		// when the program lowers a cross-lambda return-from. A block-exit unwinding
+		// through this region carries a different tag, so handler-case would otherwise
+		// not
+		// see it and its depth increment would leak; catching it here restores the depth
+		// and rethrows, matching the JVM (whose catch-any handler already does).
+		int blockExitDepth = -1;
+		if (ctx.crossLambdaExit) {
+			ctx.writer.write(Instruction.BLOCK);
+			ctx.writer.write(Type.REFNULL.code());
+			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.wasmCtrlDepth++;
+			blockExitDepth = ctx.wasmCtrlDepth;
+		}
 		// block $h (result (ref null eq)) -- the landing pad, receiving the payload.
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
 		ctx.wasmCtrlDepth++;
 		int handlerDepth = ctx.wasmCtrlDepth;
-		// try_table (result (ref null eq)) (catch $lisp-cond $h). Catch labels are
-		// resolved without the try_table's own label, so label 0 is block $h here.
+		// try_table (result (ref null eq)) (catch $lisp-cond $h) [(catch $block-exit
+		// $bx)].
+		// Catch labels are resolved without the try_table's own label, so label 0 is
+		// block
+		// $h; $bx (one level out) is label 1.
 		ctx.writer.write(Instruction.TRY_TABLE);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
-		ctx.writer.writeUnsignedLeb128(1);
+		ctx.writer.writeUnsignedLeb128(ctx.crossLambdaExit ? 2 : 1);
 		ctx.writer.write(Instruction.CATCH);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 		ctx.writer.writeUnsignedLeb128(ctx.wasmCtrlDepth - handlerDepth);
+		if (ctx.crossLambdaExit) {
+			ctx.writer.write(Instruction.CATCH);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_BLOCK_EXIT);
+			ctx.writer.writeUnsignedLeb128(ctx.wasmCtrlDepth - blockExitDepth);
+		}
 		ctx.wasmCtrlDepth++;
 		LispVal depthDecForm = new LispCons(new LispSymbol(LispNames.HC_DEPTH_DEC_INTERNAL), LispNil.INSTANCE);
 		ctx.unwindScopes
@@ -187,6 +209,17 @@ final class WasmHandlerCaseCompiler {
 		ctx.writer.writeSignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.THROW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		if (ctx.crossLambdaExit) {
+			ctx.wasmCtrlDepth--;
+			ctx.writer.write(Instruction.END); // block $bx
+			// Block-exit landing: the (id . value) payload is on the stack; a
+			// cross-lambda
+			// return-from is unwinding through this handler-case, so undo the depth
+			// increment its head added and rethrow it for the establishing %nlx-catch.
+			emitDepthAdjust(ctx, false);
+			ctx.writer.write(Instruction.THROW);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_BLOCK_EXIT);
+		}
 		if (needTrampoline) {
 			ctx.wasmCtrlDepth--;
 			ctx.writer.write(Instruction.END); // block $tramp

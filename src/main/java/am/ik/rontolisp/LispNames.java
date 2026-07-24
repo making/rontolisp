@@ -1530,6 +1530,36 @@ public final class LispNames {
 	 */
 	public static final String FN_BLOCK_INTERNAL = "%FN-BLOCK";
 
+	/**
+	 * The internal {@code (%nlx-tag)} primitive: mints a fresh, unique identity object
+	 * per evaluation -- the dynamic block-instance id that keys a cross-lambda non-local
+	 * exit. The compile-path {@code CrossLambdaExitLowering} binds one per establishing
+	 * block activation (via {@code let}) so recursion targets the right frame. Never
+	 * printed or inspected; only compared by identity. Not part of the public Lisp API.
+	 */
+	public static final String NLX_TAG_INTERNAL = "%NLX-TAG";
+
+	/**
+	 * The internal {@code (%nlx-catch id body...)} form the compile-path
+	 * {@code CrossLambdaExitLowering} wraps a block whose {@code return-from} escapes a
+	 * nested lambda in. It runs {@code body} as an implicit {@code progn} inside an
+	 * exception-handling region: a {@code %nlx-throw} whose id matches {@code id} is
+	 * caught and its carried value becomes the form's value; any other throw (a real
+	 * condition, or a {@code %nlx-throw} for an outer block) propagates. Only emitted
+	 * when the program uses a cross-lambda exit (EH mode); not part of the public Lisp
+	 * API.
+	 */
+	public static final String NLX_CATCH_INTERNAL = "%NLX-CATCH";
+
+	/**
+	 * The internal {@code (%nlx-throw id value)} form a cross-lambda {@code return-from}
+	 * lowers to: it throws a non-local exit carrying the dynamic block-instance
+	 * {@code id} (a lexical the lambda closed over) and {@code value}, unwinding the real
+	 * call stack to the matching {@code %nlx-catch}. Intervening {@code unwind-protect}
+	 * cleanups run on the way out. Not part of the public Lisp API.
+	 */
+	public static final String NLX_THROW_INTERNAL = "%NLX-THROW";
+
 	// Type predicates
 
 	/** The {@code null} built-in function. */

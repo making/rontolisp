@@ -17,10 +17,9 @@ import java.util.List;
  * {@code (intern name :keyword)} and
  * {@code loop ... being the hash-keys ... using (hash-value ...)}. {@code aget} is a
  * settable place: {@code (setf (aget ...) v)} works on all four backends (pinned by
- * {@link AssocUtilsUpcaseE2eTest}). Lite limitation: on the compile paths {@code alistp}
- * treats {@code return-from} across the {@code mapl} lambda as a lambda-local exit, so a
- * compiled {@code alistp} can report {@code t} for a non-alist; it is not exercised for a
- * non-alist here.
+ * {@link AssocUtilsUpcaseE2eTest}). {@code alistp} reports {@code nil} for a non-alist on
+ * every backend: its {@code (return-from alistp nil)} across the {@code mapl} lambda is a
+ * real non-local exit on the compile paths too (the cross-lambda-exit lowering).
  */
 class AssocUtilsE2eTest extends AsdfLibraryE2eSupport {
 
@@ -51,11 +50,13 @@ class AssocUtilsE2eTest extends AsdfLibraryE2eSupport {
 			  (if (assoc-utils:alist= (list (cons "a" "1") (cons "b" "2"))
 			                          (list (cons "b" "2") (cons "a" "1")))
 			      "eq" "neq"))
+			(format t "~a~%" (assoc-utils:alistp (list (cons "a" 1) (cons "b" 2))))
+			(format t "~a~%" (assoc-utils:alistp (list 1 2 3)))
 			""";
 
 	private static final List<String> EXPECTED = List.of("eitaro", "none", "(name loc)", "(eitaro vienna)",
 			"(NAME eitaro LOC vienna)", "((name . eitaro) (loc . vienna))", "((name . eitaro))", "eitaro@vienna",
-			"((y . 2))", "((k . v))", "42", "eq");
+			"((y . 2))", "((k . v))", "42", "eq", "T", "NIL");
 
 	@Override
 	protected String systemDir() {

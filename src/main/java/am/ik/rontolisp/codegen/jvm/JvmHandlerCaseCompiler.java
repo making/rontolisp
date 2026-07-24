@@ -96,6 +96,14 @@ final class JvmHandlerCaseCompiler {
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(excSlot);
 		emitDepthAdjust(ctx, className, false);
+		// A cross-lambda non-local exit unwinding through this region rides a plain
+		// RuntimeException that this catch-any handler would otherwise swallow as a
+		// synthesized condition. Rethrow it (identity-checked against the pending _nleTl)
+		// before dispatching, so return-from is never intercepted by handler-case. Gated
+		// so a program without a cross-lambda exit stays byte-identical.
+		if (ctx.crossLambdaExit) {
+			emitRethrowPendingNle(ctx, className, excSlot);
+		}
 		ctx.emit(Opcode.GETSTATIC);
 		ctx.emitU2(Objects.requireNonNull(channel.condTlField).index());
 		ctx.emit(Opcode.INVOKEVIRTUAL);
@@ -162,6 +170,48 @@ final class JvmHandlerCaseCompiler {
 		ctx.emit(resultSlot);
 		addExceptionEntries(ctx, scope, start, end, handler);
 		ctx.nextLocal = savedNextLocal;
+	}
+
+	/**
+	 * Emits, at the handler entry, a guard that rethrows the caught throwable when it is
+	 * the pending cross-lambda non-local exit (its {@code _nleTl} triple's throwable
+	 * equals the caught one), so a {@code return-from} crossing a lambda is never
+	 * intercepted here. A null channel or a mismatched throwable (a real condition, or a
+	 * stale channel from an unwind-protect cleanup that itself threw) falls through to
+	 * the normal dispatch.
+	 */
+	private static void emitRethrowPendingNle(JvmLispCompiler.Ctx ctx, String className, int excSlot) {
+		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
+		channel.ensureNle(ctx.cp, className);
+		int nleSlot = ctx.allocTemp();
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(Objects.requireNonNull(channel.nleTlField).index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(Objects.requireNonNull(channel.tlGet).index());
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(nleSlot);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nleSlot);
+		int ifNullPos = ctx.code.size();
+		ctx.emit(Opcode.IFNULL);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nleSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.AALOAD);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(excSlot);
+		int ifNotSamePos = ctx.code.size();
+		ctx.emit(Opcode.IF_ACMPNE);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(excSlot);
+		ctx.emit(Opcode.ATHROW);
+		int proceed = ctx.code.size();
+		JvmEmitHelper.patchBranch(ctx, ifNullPos, proceed);
+		JvmEmitHelper.patchBranch(ctx, ifNotSamePos, proceed);
 	}
 
 	/**

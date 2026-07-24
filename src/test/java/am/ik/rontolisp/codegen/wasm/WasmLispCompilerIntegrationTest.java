@@ -4229,9 +4229,9 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void returnFromExitsDefunAcrossLoop() throws Exception {
 		// The %fn-block function boundary: a return-from naming the defun exits the
-		// function from inside a loop whose after-loop code must not run; a
-		// return-from inside a lambda stays lambda-local (the pinned compile-path
-		// deviation).
+		// function from inside a loop whose after-loop code must not run; a return-from
+		// inside a lambda now exits the outer defun as a non-local exit (matching the
+		// interpreter and CL) via the block-exit tag.
 		assertThat(compileAndRun("""
 				(defun find-first-even (xs)
 				  (dolist (x xs)
@@ -4242,7 +4242,83 @@ class WasmLispCompilerIntegrationTest {
 				(defun probe (xs)
 				  (mapcar #'(lambda (x) (if (evenp x) (return-from probe :even) x)) xs))
 				(print (probe '(1 2 3)))
-				""")).isEqualTo("6\n:NONE\n(1 :EVEN 3)");
+				""")).isEqualTo("6\n:NONE\n:EVEN");
+	}
+
+	@Test
+	void crossLambdaReturnFromMidExpression() throws Exception {
+		// The cross-lambda exit value is consumed mid-expression: the abandoned outer
+		// (list :head ... :tail) operands are discarded, like a plain return.
+		assertThat(compileAndRun("""
+				(defun probe (xs)
+				  (list :head (mapcar #'(lambda (x) (if (evenp x) (return-from probe :even) x)) xs) :tail))
+				(print (probe '(1 2 3)))
+				(print (probe '(1 3 5)))
+				""")).isEqualTo(":EVEN\n(:HEAD (1 3 5) :TAIL)");
+	}
+
+	@Test
+	void crossLambdaReturnFromRecursiveTargetsCorrectFrame() throws Exception {
+		// A recursive defun whose lambda does a cross-lambda return-from: the dynamic
+		// block-instance id targets the innermost active frame, so the exit unwinds one
+		// activation, not the whole recursion.
+		assertThat(compileAndRun("""
+				(defun deep (n)
+				  (if (= n 0)
+				      :bottom
+				      (block done
+				        (mapcar #'(lambda (x) (return-from done (list n (deep (- n 1)) x))) '(:mark))
+				        :unreached)))
+				(print (deep 3))
+				""")).isEqualTo("(3 (2 (1 :BOTTOM :MARK) :MARK) :MARK)");
+	}
+
+	@Test
+	void crossLambdaReturnFromUserBlockAndFlet() throws Exception {
+		// A cross-lambda return-from to a user (block name ...) in argument position,
+		// plus
+		// one that also crosses an flet local function holding the lambda (the id is
+		// captured through both closure levels).
+		assertThat(compileAndRun("""
+				(defun f (v)
+				  (+ 100 (block b (mapcar #'(lambda (x) (if (evenp x) (return-from b x) 0)) v) 7)))
+				(print (f '(1 4 5)))
+				(print (f '(1 3 5)))
+				(defun g (xs)
+				  (flet ((h () (mapcar #'(lambda (x) (return-from g (* x 10))) xs)))
+				    (h)))
+				(print (g '(3 4)))
+				""")).isEqualTo("104\n107\n30");
+	}
+
+	@Test
+	void crossLambdaReturnFromDoesNotLeakHandlerDepth() throws Exception {
+		// A cross-lambda return-from unwinding through a handler-case must restore the
+		// handler-depth global on the way out (the block-exit passthrough); otherwise a
+		// later unhandled signal would wrongly raise (trap) instead of yielding nil.
+		assertThat(compileAndRun("""
+				(defun leak (xs)
+				  (handler-case
+				      (mapcar #'(lambda (x) (return-from leak :exited)) xs)
+				    (error (e) :caught)))
+				(print (leak '(1)))
+				(print (signal "quiet"))
+				""")).isEqualTo(":EXITED\nNIL");
+	}
+
+	@Test
+	void crossLambdaReturnFromThroughHandlerCase() throws Exception {
+		// A cross-lambda return-from unwinding through a handler-case is NOT intercepted
+		// by it (a distinct block-exit tag), and the handler-depth global is restored on
+		// the way out so a later signal still sees no established handler.
+		assertThat(compileAndRun("""
+				(defun probe (xs)
+				  (handler-case
+				      (mapcar #'(lambda (x) (if (evenp x) (return-from probe :even) x)) xs)
+				    (error (e) :caught)))
+				(print (probe '(1 2 3)))
+				(print (probe '(1 3 5)))
+				""")).isEqualTo(":EVEN\n(1 3 5)");
 	}
 
 	@Test

@@ -16,7 +16,7 @@ This page lists the most notable omissions. For what **is** available, see the
 | `&optional` / `&rest` / `&key` / `&aux` | available in `defun`/`lambda` (see [`defun`](../reference/special-forms/defun.md)); `defmacro` takes `&rest`/`&body` only |
 | `&whole` | not available |
 | `values` / `multiple-value-bind` | available, including user-function values (see [`multiple-value-bind`](../reference/macros/multiple-value-bind.md)) |
-| `block` / `return-from` / `tagbody` / `go` | available ([`block`](../reference/macros/block.md)/[`return-from`](../reference/macros/return-from.md) are named exits on every backend — dynamic extent on the interpreter, lexical (same-function) on the compilers; [`tagbody`](../reference/special-forms/tagbody.md)/[`go`](../reference/special-forms/go.md) likewise, with the compilers supporting the lexical subset) |
+| `block` / `return-from` / `tagbody` / `go` | available ([`block`](../reference/macros/block.md)/[`return-from`](../reference/macros/return-from.md) are named exits on every backend — dynamic extent on the interpreter, and on the compilers a same-function exit is a direct jump while one that crosses a lambda is a non-local exit; [`tagbody`](../reference/special-forms/tagbody.md)/[`go`](../reference/special-forms/go.md) likewise, with the compilers supporting the lexical subset) |
 | `catch` / `throw` | not available |
 | `unwind-protect` | available (see [`unwind-protect`](../reference/special-forms/unwind-protect.md)); on wasm-GC via the exception-handling proposal (`wasmtime -W exceptions=y`); compile error under `--no-gc` |
 | conditions (`define-condition`, `handler-case`, `ignore-errors`, `signal`) | available (see [`handler-case`](../reference/macros/handler-case.md)); on wasm-GC catching needs `wasmtime -W exceptions=y`, and runtime traps stay uncatchable there; compile error under `--no-gc`. Restarts (`handler-bind`/`restart-case`) are not available |
@@ -102,10 +102,13 @@ scoped `catch`/`throw` is not:
   **nearest** enclosing iteration block established by
   `do` / `do*` / `dolist` / `dotimes`. On the interpreter the named exit is
   dynamic (it crosses closures called within the block's extent); the
-  JVM/WASM compilers support the lexical subset — the target block must
-  lexically enclose the `return-from` in the same function, so a
-  `return-from` inside a lambda whose name matches no enclosing block exits
-  that lambda instead.
+  JVM/WASM compilers compile a same-function `return-from` to a direct jump
+  and a `return-from` inside a lambda that names an enclosing block (e.g. in a
+  lambda passed to `mapcar`/`mapl`) to a non-local exit, so it too exits the
+  outer block — matching the interpreter. Such a cross-lambda exit compiles in
+  exception-handling mode (the wasm-GC modules need `wasmtime -W exceptions=y`);
+  a `return-from` that would cross an `flet`/`labels` local function is not yet
+  supported on the compilers.
 - [`tagbody`](../reference/special-forms/tagbody.md) /
   [`go`](../reference/special-forms/go.md) — **available**, along with
   [`prog`](../reference/macros/prog.md) /

@@ -631,6 +631,9 @@ final class WasmExprCompiler {
 				case LispNames.BLOCK_INTERNAL -> WasmBlockCompiler.compile(cons, ctx);
 				case LispNames.BLOCK -> WasmBlockCompiler.compileNamed(cons, ctx);
 				case LispNames.FN_BLOCK_INTERNAL -> WasmBlockCompiler.compileFnBlock(cons, ctx);
+				case LispNames.NLX_TAG_INTERNAL -> WasmNlxCompiler.compileTag(ctx);
+				case LispNames.NLX_CATCH_INTERNAL -> WasmNlxCompiler.compileCatch(cons, ctx);
+				case LispNames.NLX_THROW_INTERNAL -> WasmNlxCompiler.compileThrow(cons, ctx);
 				case LispNames.RETURN_FROM -> WasmReturnFromCompiler.compile(cons, ctx);
 				case LispNames.RETURN -> WasmReturnCompiler.compile(cons, ctx);
 				case LispNames.INCF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx);
