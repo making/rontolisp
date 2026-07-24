@@ -142,10 +142,25 @@ public final class CrossLambdaExitLowering {
 					}
 				}
 			}
-			// Structural recursion: preserve the cons spine, transforming each element.
-			// Operators (symbols) pass through unchanged; nested forms are visited so
-			// lambdas and return-froms in argument position are found.
+			return structural(cons, lambdaDepth);
+		}
+
+		// Preserve the cons spine, transforming each element. Operators (symbols) pass
+		// through unchanged; nested forms are visited so lambdas and return-froms in
+		// argument position are found. This is also the fall-through for a cons whose
+		// head
+		// only LOOKS like block/return-from -- a let binding, a defstruct slot, or data
+		// whose variable happens to be named `block` -- so those are traversed, not
+		// mis-parsed as the special form (md5 binds a variable named `block`).
+		private LispVal structural(LispCons cons, int lambdaDepth) {
 			return new LispCons(transform(cons.car(), lambdaDepth), transform(cons.cdr(), lambdaDepth));
+		}
+
+		// A well-formed block/return-from name: a non-keyword symbol or nil. Anything
+		// else
+		// (a cons, a number, a keyword) means the head is not really that special form.
+		private static boolean isBlockName(LispVal form) {
+			return (form instanceof LispSymbol sym && !sym.isKeyword()) || form instanceof LispNil;
 		}
 
 		private LispVal transformLambda(LispCons cons, int lambdaDepth) {
@@ -203,8 +218,10 @@ public final class CrossLambdaExitLowering {
 
 		private LispVal transformBlock(LispCons cons, int lambdaDepth) {
 			List<LispVal> parts = cons.toList();
-			if (parts.size() < 2) {
-				return cons;
+			if (parts.size() < 2 || !isBlockName(parts.get(1))) {
+				// Not a real (block name ...) -- a binding/slot/data whose var is
+				// `block`.
+				return structural(cons, lambdaDepth);
 			}
 			String name = LispMacroExpander.blockName(parts.get(1));
 			if (name == null) {
@@ -236,8 +253,11 @@ public final class CrossLambdaExitLowering {
 
 		private LispVal transformReturnFrom(LispCons cons, int lambdaDepth) {
 			List<LispVal> parts = cons.toList();
-			if (parts.size() < 2 || parts.size() > 3) {
-				return cons;
+			if (parts.size() < 2 || parts.size() > 3 || !isBlockName(parts.get(1))) {
+				// Not a real (return-from name [value]) -- e.g. a binding whose var is
+				// `return-from`; traverse it so a return-from in an init form is still
+				// found.
+				return structural(cons, lambdaDepth);
 			}
 			LispVal value = parts.size() == 3 ? transform(parts.get(2), lambdaDepth) : LispNil.INSTANCE;
 			String name = LispMacroExpander.blockName(parts.get(1));

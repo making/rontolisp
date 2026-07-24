@@ -4303,6 +4303,25 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void crossLambdaExitToleratesBlockAsVariableName() throws Exception {
+		// A cons headed by `block`/`return-from` in a non-operator position -- here a let
+		// binding whose variable is named `block` -- must not be mis-parsed as the
+		// special
+		// form; the cross-lambda return-from referencing it still works.
+		assertThat(compileAndRun("""
+				(defun uses-block-as-var (xs)
+				  (let ((block 10) (return-from 20))
+				    (mapcar #'(lambda (x)
+				                (if (evenp x)
+				                    (return-from uses-block-as-var (+ x block return-from))
+				                    x))
+				            xs)))
+				(print (uses-block-as-var '(1 2 3)))
+				(print (uses-block-as-var '(1 3 5)))
+				""")).isEqualTo("32\n(1 3 5)");
+	}
+
+	@Test
 	void crossLambdaReturnFromUserBlockAndFlet() throws Exception {
 		// A cross-lambda return-from to a user (block name ...) in argument position,
 		// plus
