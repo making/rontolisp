@@ -4,12 +4,6 @@ The `linalg` package provides a numpy-style API for vectors and matrices: constr
 
 Like the JSON library, `linalg` is implemented once in Lisp source (`linalg.lisp`): the interpreter loads the definitions lazily on the first use of a `linalg:` function, and the compile path splices them into the program when it references the package. There is no per-backend code, so every function behaves identically on the interpreter, the JVM compiler, WASM Preview 1 and the WASM component.
 
-`la` is a built-in nickname for `linalg`, so every `linalg:` call below can also be written with the shorter `la:` prefix:
-
-```lisp
-(la:arange 5) ; => #d(0.0 1.0 2.0 3.0 4.0)
-```
-
 ## Data representation
 
 linalg constructors build [packed float arrays](../reference/data-types.md): unboxed `(array double-float)` values, the same representation as an `#d(...)` literal. A vector is a rank-1 array, printed `#d(1.0 2.0 ...)`, and a matrix is a rank-2 array, printed with the nested `#d((...) ...)` form -- the `#d` marks the unboxed packed representation, so the printed form reads back as a packed array. Individual elements are read and written with `aref`, and any array built elsewhere -- packed or a general boxed array -- can be handed to a linalg function. Arrays of higher rank work too: the elementwise operations, the reductions, `reshape`/`flatten` and `array-equal` walk the elements in flat row-major order and accept any rank, while `dot`/`matmul`/`outer`/`det`/`inv`/`solve`/`trace`/`transpose` stay defined for vectors and matrices (rank <= 2), like numpy's specialized routines. [`linalg:from-list`](../reference/functions/linalg-from-list.md) / [`linalg:to-list`](../reference/functions/linalg-to-list.md) convert between arrays and lists.
@@ -30,6 +24,12 @@ linalg computes in floating point, prioritizing speed: every constructor and arr
 ```
 
 The `inv` and `solve` matrices above are chosen so their float results are exact and print identically on every backend; a general inverse such as `(linalg:inv #2A((1 2) (3 4)))` computes the same values but carries floating-point rounding.
+
+`la` is a built-in nickname for `linalg`, so every `linalg:` call can also be written with the shorter `la:` prefix:
+
+```lisp
+(la:arange 5) ; => #d(0.0 1.0 2.0 3.0 4.0)
+```
 
 ## Elementwise arithmetic and broadcasting
 
