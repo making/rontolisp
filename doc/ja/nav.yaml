@@ -43,6 +43,8 @@ sections:
         title: ベクトルカーネルと SIMD（vec, linalg）
       - file: guides/java-interop.md
         title: Java 連携
+      - file: guides/async.md
+        title: 非同期プログラミング（async / await）
       - file: guides/http-fetch.md
         title: HTTPリクエスト（fetch）
       - file: guides/http-handler.md

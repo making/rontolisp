@@ -4,17 +4,15 @@
 それと自然に組み合わせられるJSON関数を提供します。いずれも Common Lisp の
 一部ではないため、`rontolisp:` 修飾子で参照します
 ([パッケージ](../reference/packages.md)を参照)。`rontolisp:fetch` は
-リクエストを開始して即座に **future** を返します。`rontolisp:await`
-([`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md)
-の中、またはトップレベルで) がそれを解決し、`rontolisp:json-parse` /
-`rontolisp:json-stringify` がJSONドキュメントとLispの値を相互変換します。
+リクエストを開始して即座に **future** を返します。それは `rontolisp:await`
+で解決します。future と `await` の仕組みそのものはHTTP固有ではなく —
+[非同期プログラミングガイド](async.md)の主題です。このページはそれを前提と
+した上で、リクエストに固有の部分だけを扱います。
 
 | 関数 | 用途 |
 |----------|---------|
 | [`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) | HTTPリクエストを開始する: `(rontolisp:fetch url &optional options)` |
-| [`rontolisp:await`](../reference/special-forms/rontolisp-await.md) | future が確定するまでサスペンドして値を返す |
-| [`rontolisp:futurep`](../reference/functions/rontolisp-futurep.md) | 値が future なら `t` |
-| [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) | ボディストリームのチャンクをひとつの文字列に読み尽くす (非同期) |
+| [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) | レスポンスのボディストリームをひとつの文字列に読み尽くす (非同期) |
 | [`rontolisp:json-parse`](../reference/functions/rontolisp-json-parse.md) | JSON文字列をLispの値にパースする |
 | [`rontolisp:json-stringify`](../reference/functions/rontolisp-json-stringify.md) | Lispの値をJSON文字列にシリアライズする |
 
@@ -26,15 +24,17 @@
 > fetchを使うcomponentは通常のフラグに加えて `-S http=y` を付けて実行する
 > 必要があります。**ブラウザプレイグラウンド** では本物のブラウザの
 > `fetch()` が実行され (CORSの制約を受けます)、その間プログラムは続行
-> します。`await`、`futurep`、JSON関数は **すべての** バックエンド・
-> すべてのWASMモードで動作します — 制限があるのは `fetch` 自体だけです。
+> します。JSON関数は **すべての** バックエンド・すべてのWASMモードで動作
+> します。制限があるのは `fetch` 自体だけです。`await`、`futurep`、future
+> コンビネータは[非同期ガイド](async.md)で扱います。
 
 ## 最初のリクエスト
 
 `fetch` はリクエストが飛び始めたらすぐに返ります。future を
 `rontolisp:await` に渡すとレスポンスの到着までサスペンドし、結果の
 プロパティリスト `(:status <integer> :headers <alist> :body <stream>)` が
-得られます — どのバックエンドでも `:body` は非同期ストリームで、
+得られます — どのバックエンドでも `:body` は
+[非同期ストリーム](async.md#非同期ストリーム)で、
 [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md)
 で読み尽くします:
 
@@ -51,6 +51,18 @@
   (print (rontolisp:await (rontolisp:read-all (getf res :body))))
                                 ; => "{...}"
   (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
+```
+
+`fetch` が返った時点でリクエストは既に走っているので、複数のリクエストは
+オーバーラップします — 全部開始してからそれぞれを (どの順番でも) await
+します。これは future の一般的な[オーバーラップ](async.md#処理をオーバーラップさせる)の
+挙動そのものです:
+
+```lisp
+(let ((p1 (rontolisp:fetch "https://httpbin.ik.am/status/200"))
+      (p2 (rontolisp:fetch "https://httpbin.ik.am/status/201")))  ; 両方のリクエストが並行して走る
+  (list (getf (rontolisp:await p1) :status)
+        (getf (rontolisp:await p2) :status)))                     ; => (200 201)
 ```
 
 ## リクエストのオプション
@@ -80,44 +92,6 @@ alist)、`:body` (文字列) を指定できます:
 *開始*すらできなかった場合だけです) は
 [fetch](../reference/functions/rontolisp-fetch.md)
 のリファレンスページを参照してください。
-
-## Future
-
-`fetch` が返った時点でリクエストは既に走っているので、複数のリクエストは
-オーバーラップします — 全部開始してからそれぞれを (どの順番でも) await
-します:
-
-```lisp
-(let ((p1 (rontolisp:fetch "https://httpbin.ik.am/status/200"))
-      (p2 (rontolisp:fetch "https://httpbin.ik.am/status/201")))  ; 両方のリクエストが並行して走る
-  (list (getf (rontolisp:await p1) :status)
-        (getf (rontolisp:await p2) :status)))                     ; => (200 201)
-```
-
-レスポンスを変換するには — あるいは任意の非同期ヘルパーを組み立てるには —
-[`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md)
-を定義します: 本体は最初の未確定の `await` まで即時に実行され、残りに
-対する future が呼び出し元に返ります:
-
-```lisp
-(rontolisp:async-defun fetch-status (url)
-  (getf (rontolisp:await (rontolisp:fetch url)) :status))
-
-(rontolisp:await (fetch-status "https://httpbin.ik.am/get"))   ; => 200
-```
-
-`await` は汎用です: future 以外の値はそのまま通り、確定した future は
-何度でもawaitできます。
-[`rontolisp:futurep`](../reference/functions/rontolisp-futurep.md) で
-future と通常の値を見分けられます:
-
-```lisp
-(rontolisp:await 42)   ; => 42
-```
-
-```lisp
-(rontolisp:futurep (rontolisp:fetch "https://httpbin.ik.am/get"))   ; => t
-```
 
 ## JSONの扱い
 

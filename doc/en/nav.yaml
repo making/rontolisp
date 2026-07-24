@@ -43,6 +43,8 @@ sections:
         title: Vector Kernels & SIMD (vec, linalg)
       - file: guides/java-interop.md
         title: Java Interop
+      - file: guides/async.md
+        title: Asynchronous Programming (async / await)
       - file: guides/http-fetch.md
         title: HTTP Requests (fetch)
       - file: guides/http-handler.md

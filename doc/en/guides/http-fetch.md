@@ -1,20 +1,18 @@
 # HTTP Requests (fetch)
 
 The `rontolisp` package provides outgoing HTTP modeled on the JavaScript
-`fetch` API, plus the JSON functions that pair naturally with it. None of
-these are part of Common Lisp; reference them with the `rontolisp:` qualifier
-(see [Packages](../reference/packages.md)). `rontolisp:fetch` starts a request
-and immediately returns a **future**; `rontolisp:await` resolves it (inside an
-[`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md)
-or at top level), and `rontolisp:json-parse` / `rontolisp:json-stringify`
-convert between JSON documents and Lisp values.
+`fetch` API, plus the JSON functions that pair naturally with it. None of these
+are part of Common Lisp; reference them with the `rontolisp:` qualifier (see
+[Packages](../reference/packages.md)). `rontolisp:fetch` starts a request and
+immediately returns a **future**; you resolve it with `rontolisp:await`. The
+future / `await` mechanics themselves are not specific to HTTP — they are the
+subject of the [Asynchronous Programming guide](async.md), which this page
+assumes; here we cover only what is particular to making requests.
 
 | Function | Purpose |
 |----------|---------|
 | [`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) | Start an HTTP request: `(rontolisp:fetch url &optional options)` |
-| [`rontolisp:await`](../reference/special-forms/rontolisp-await.md) | Suspend until a future settles and return its value |
-| [`rontolisp:futurep`](../reference/functions/rontolisp-futurep.md) | `t` if a value is a future |
-| [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) | Drain a body stream's chunks into one string (async) |
+| [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) | Drain a response body stream into one string (async) |
 | [`rontolisp:json-parse`](../reference/functions/rontolisp-json-parse.md) | Parse a JSON string into Lisp values |
 | [`rontolisp:json-stringify`](../reference/functions/rontolisp-json-stringify.md) | Serialize a Lisp value to a JSON string |
 
@@ -25,15 +23,17 @@ convert between JSON documents and Lisp values.
 > error in Preview 1 (core-module) mode, and a fetch component must run with
 > `-S http=y` on top of the usual flags. In the **browser playground** `fetch`
 > runs the real browser `fetch()` (subject to CORS) while the program
-> continues. `await`, `futurep` and the JSON functions work on **every**
-> backend and in every WASM mode — only `fetch` itself is restricted.
+> continues. The JSON functions work on **every** backend and in every WASM
+> mode; only `fetch` itself is restricted. `await`, `futurep` and the future
+> combinators are covered in the [async guide](async.md).
 
 ## A first request
 
 `fetch` returns as soon as the request is in flight. Passing the future to
 `rontolisp:await` suspends until the response arrives and yields the result
-property list `(:status <integer> :headers <alist> :body <stream>)` — on
-every backend `:body` is an asynchronous stream, drained with
+property list `(:status <integer> :headers <alist> :body <stream>)` — on every
+backend `:body` is an [asynchronous stream](async.md#asynchronous-streams),
+drained with
 [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md):
 
 ```lisp
@@ -49,6 +49,17 @@ Reading the individual fields:
   (print (rontolisp:await (rontolisp:read-all (getf res :body))))
                                 ; => "{...}"
   (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
+```
+
+Because the request is already running when `fetch` returns, several requests
+overlap — start them all, then await each (in any order). This is just the
+general [overlapping-work](async.md#overlapping-work) behavior of futures:
+
+```lisp
+(let ((p1 (rontolisp:fetch "https://httpbin.ik.am/status/200"))
+      (p2 (rontolisp:fetch "https://httpbin.ik.am/status/201")))  ; both requests running
+  (list (getf (rontolisp:await p1) :status)
+        (getf (rontolisp:await p2) :status)))                     ; => (200 201)
 ```
 
 ## Request options
@@ -76,43 +87,6 @@ and `PATCH`; see the [fetch](../reference/functions/rontolisp-fetch.md)
 reference page for validation timing and error behavior per backend (a failed
 request surfaces at `await`, not at `fetch` — every backend signals an error
 there; `nil` comes back only for a request that cannot be *started*).
-
-## Futures
-
-Because the request is already running when `fetch` returns, several requests
-overlap — start them all, then await each (in any order):
-
-```lisp
-(let ((p1 (rontolisp:fetch "https://httpbin.ik.am/status/200"))
-      (p2 (rontolisp:fetch "https://httpbin.ik.am/status/201")))  ; both requests running
-  (list (getf (rontolisp:await p1) :status)
-        (getf (rontolisp:await p2) :status)))                     ; => (200 201)
-```
-
-To transform a response — or to build any asynchronous helper — define an
-[`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md):
-its body runs eagerly to the first pending `await`, and the caller gets a
-future for the rest:
-
-```lisp
-(rontolisp:async-defun fetch-status (url)
-  (getf (rontolisp:await (rontolisp:fetch url)) :status))
-
-(rontolisp:await (fetch-status "https://httpbin.ik.am/get"))   ; => 200
-```
-
-`await` is generic: a non-future value passes through unchanged, and a settled
-future can be awaited any number of times.
-[`rontolisp:futurep`](../reference/functions/rontolisp-futurep.md) tells
-futures apart from plain values:
-
-```lisp
-(rontolisp:await 42)   ; => 42
-```
-
-```lisp
-(rontolisp:futurep (rontolisp:fetch "https://httpbin.ik.am/get"))   ; => t
-```
 
 ## Working with JSON
 
