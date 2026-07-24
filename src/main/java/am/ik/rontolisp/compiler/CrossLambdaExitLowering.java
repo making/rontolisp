@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 
+import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
@@ -59,6 +60,9 @@ public final class CrossLambdaExitLowering {
 	/**
 	 * The rewritten program plus whether any cross-lambda exit was lowered (drives EH
 	 * mode).
+	 *
+	 * @param program the rewritten top-level forms
+	 * @param used {@code true} when at least one cross-lambda exit was lowered
 	 */
 	public record Result(List<LispVal> program, boolean used) {
 	}
