@@ -82,15 +82,16 @@ Iterate with the cached copy in
      behavior-identical to real CL here. The real restart gate is Postmodern
      proper, which is out of scope (see the milestones).
 4. **Dependency systems**: `:depends-on ("md5" "split-sequence" "ironclad"
-   "cl-base64" "uax-15")`. **Status + remaining grind: `.todo/154`** (the
-   REAL-source policy of `.todo/147` supersedes the original shim-everything
-   strategy below).
-   - `split-sequence` already runs REAL (todo-054 verification chain).
+   "cl-base64" "uax-15")`. **The dependency grind (formerly `.todo/154`) is
+   DONE modulo ironclad** -- every other system runs REAL on all 4 backends
+   (the REAL-source policy of `.todo/147` superseded the original
+   shim-everything strategy below).
+   - `split-sequence` runs REAL (todo-054 verification chain).
    - `cl-base64` runs REAL (todo-085, all 4 backends).
-   - `md5` runs REAL (2026-07-18, interpreter + JVM, `Md5E2eTest`; WASM
-     excluded -- unsigned 32-bit arithmetic beyond `i31`).
-   - `uax-15`: blocked on real `cl-ppcre` (in progress, `.todo/154`) plus
-     asdf source-directory introspection for its Unicode data files.
+   - `md5` runs REAL on ALL 4 backends (`Md5E2eTest`; the WASM exclusion was
+     retired by the boxed exact-integer path, `.kb/wasm-bignum.md`).
+   - `cl-ppcre` v2.1.2 runs REAL on all 4 backends (`ClPpcreE2eTest`).
+   - `uax-15` v0.1.3 runs REAL on all 4 backends (`Uax15E2eTest`).
    - `ironclad`: reached ONLY from `scram.lisp` (SCRAM-SHA-256:
      sha256/hmac/pbkdf2). Real loading judged infeasible (its `.asd` is
      executable CLOS/macro code, against the mini-ASDF plain-data

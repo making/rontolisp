@@ -28,7 +28,7 @@ rontolisp.
 | object | hash table with string keys (`equal` test) |
 | array | vector |
 | string | string (`\uXXXX` escapes and surrogate pairs are decoded) |
-| number | integer, or float when it has a fraction, an exponent or more than 9 digits |
+| number | integer, or float when it has a fraction, an exponent or more than 18 digits |
 | `true` | `t` |
 | `false` | `nil` |
 | `null` | the symbol `null` |
@@ -41,15 +41,17 @@ rontolisp.
 
 ### The one incompatibility with jzon
 
-Integers wider than 9 digits become floats on every backend, keeping the value
-inside the WASM backend's `i31` integer range and identical across all
-backends. jzon instead keeps them as exact integers, so this is the single
-point where `rontolisp:json-parse` and `jzon:parse` disagree — a 13-digit
-millisecond timestamp parses as `1.234567890123E12` here but as
-`1234567890123` under jzon. Everything else round-trips identically.
+Integers wider than 18 digits become floats on every backend, keeping the
+value inside the signed 64-bit range the WASM backend's exact integers carry
+and identical across all backends. jzon instead keeps them as exact integers
+of any width, so this is the single point where `rontolisp:json-parse` and
+`jzon:parse` disagree — a 13-digit millisecond timestamp parses exactly on
+both, but a 19-digit integer parses as a float here and as an exact integer
+under jzon. Everything else round-trips identically.
 
 ```lisp
-(floatp (rontolisp:json-parse "1234567890123"))   ; => T
+(rontolisp:json-parse "1234567890123")   ; => 1234567890123
+(floatp (rontolisp:json-parse "1234567890123456789"))   ; => T
 ```
 
 ## Errors

@@ -50,8 +50,7 @@ import org.jspecify.annotations.Nullable;
  *
  * The rule the guards implement is uniform over the whole family, including {@code :int}
  * and {@code :long}: <em>the boundary carries the value exactly, or the wrapper
- * traps</em>. Full rationale, the per-backend matrix and the reason 64-bit types stay a
- * compile error on the wasm-GC backends: {@code .kb/wit.md}.
+ * traps</em>. Full rationale and the per-backend matrix: {@code .kb/wit.md}.
  *
  * @see WitTypeMapper
  */
@@ -71,8 +70,9 @@ public enum BoundaryType {
 
 	/**
 	 * {@code s64}: a 64-bit signed integer. The house spelling {@code :long} is an alias
-	 * of this member. Carried by the {@code --no-gc} backend only, whose house integer is
-	 * {@code i64}.
+	 * of this member. Exact on every backend: {@code --no-gc}'s house integer is
+	 * {@code i64}, and the wasm-GC backends carry it through the boxed exact-integer
+	 * representation ({@code .kb/wasm-bignum.md}).
 	 */
 	S64(":S64", "s64", 64, true),
 
@@ -87,8 +87,8 @@ public enum BoundaryType {
 
 	/**
 	 * {@code u64}: a 64-bit unsigned integer. Like {@link #S64} it rides the {@code i64}
-	 * core type, so the {@code --no-gc} backend carries it and the wasm-GC ones reject
-	 * it.
+	 * core type; every backend's house integer is signed 64-bit, so a value at or above
+	 * 2^63 has no exact representation and the wrapper traps (exact-or-trap).
 	 */
 	U64(":U64", "u64", 64, false),
 

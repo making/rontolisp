@@ -37,12 +37,11 @@ import org.jspecify.annotations.Nullable;
  * lower to the canonical flat representation (strings and {@code list<u8>} staged into
  * linear memory, a {@code variant} / {@code enum} / {@code result} / {@code option} to
  * its discriminant plus the joined payload flats, a {@code record} / {@code tuple} to its
- * fields' flats, 64-bit integers through the wide-int convention), and results lift from
- * the flat value or the return area per the canonical ABI's layout rules
- * ({@link WitCanonicalAbi}) into rontolisp values &mdash; a {@code result} lifts to the
- * {@code (:ok . V)} / {@code (:error . E)} envelope the Lisp-side
- * {@code rontolisp::%wit-result} wrapper unwraps (and whose error arm it signals as
- * {@code rontolisp:wit-error}).
+ * fields' flats, 64-bit integers on the {@code i64} lane), and results lift from the flat
+ * value or the return area per the canonical ABI's layout rules ({@link WitCanonicalAbi})
+ * into rontolisp values &mdash; a {@code result} lifts to the {@code (:ok . V)} /
+ * {@code (:error . E)} envelope the Lisp-side {@code rontolisp::%wit-result} wrapper
+ * unwraps (and whose error arm it signals as {@code rontolisp:wit-error}).
  *
  * <p>
  * Lowering and lifting are mirror images of one shape, which is what makes a lifted value
@@ -1686,16 +1685,8 @@ final class WasmComponentImportCompiler {
 							WasmEmitHelper.castFloatGetF64(this.ctx);
 							this.w.write(Instruction.I32_TRUNC_U_F64);
 						}
-						case "s64" -> {
-							getLocal(slot);
-							WasmEmitHelper.castFloatGetF64(this.ctx);
-							this.w.write(Instruction.I64_TRUNC_S_F64);
-						}
-						case "u64" -> {
-							getLocal(slot);
-							WasmEmitHelper.castFloatGetF64(this.ctx);
-							this.w.write(Instruction.I64_TRUNC_U_F64);
-						}
+						case "s64" -> lowerI64(slot, true);
+						case "u64" -> lowerI64(slot, false);
 						case "f32" -> {
 							getLocal(slot);
 							WasmEmitHelper.castFloatGetF64(this.ctx);
@@ -2076,16 +2067,12 @@ final class WasmComponentImportCompiler {
 						}
 						case "s64" -> {
 							getLocal(base);
-							getLocal(slot);
-							WasmEmitHelper.castFloatGetF64(this.ctx);
-							this.w.write(Instruction.I64_TRUNC_S_F64);
+							lowerI64(slot, true);
 							store(offset, Instruction.I64_STORE, 3);
 						}
 						case "u64" -> {
 							getLocal(base);
-							getLocal(slot);
-							WasmEmitHelper.castFloatGetF64(this.ctx);
-							this.w.write(Instruction.I64_TRUNC_U_F64);
+							lowerI64(slot, false);
 							store(offset, Instruction.I64_STORE, 3);
 						}
 						case "f32" -> {
@@ -2641,30 +2628,56 @@ final class WasmComponentImportCompiler {
 			this.w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		}
 
-		// Boxes the i64 on the stack: an i31 when it fits, else the wide-int float
-		// convention (the time built-ins' precedent for values beyond the i31 range).
+		// Pushes the eqref local's value as an i64. The exact-integer representations
+		// (i31 and TYPE_BIGNUM) unbox through _int_val, exact over the full signed
+		// 64-bit range -- the f64 route would round past 2^53; a float or ratio
+		// normalizes through the number-to-f64 conversion with a trapping trunc.
+		private void lowerI64(int slot, boolean signed) {
+			getLocal(slot);
+			this.w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			this.w.writeHeapType(Type.I31.code());
+			getLocal(slot);
+			this.w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			this.w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+			this.w.write(Instruction.I32_OR);
+			this.w.write(Instruction.IF);
+			this.w.write(Type.I64);
+			getLocal(slot);
+			this.w.write(Instruction.CALL);
+			this.w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			this.w.write(Instruction.ELSE);
+			getLocal(slot);
+			WasmEmitHelper.castFloatGetF64(this.ctx);
+			this.w.write(signed ? Instruction.I64_TRUNC_S_F64 : Instruction.I64_TRUNC_U_F64);
+			this.w.write(Instruction.END);
+		}
+
+		// Boxes the i64 on the stack as an exact integer through _int_new (an i31 when
+		// it fits, a TYPE_BIGNUM box otherwise). One exception keeps the old float
+		// widening: an UNSIGNED value at or above 2^63 has no exact representation in
+		// the signed i64 box, and a host is allowed to hand one in (u64::MAX is a
+		// common "no limit" sentinel in WASI), so it degrades to the float
+		// approximation instead of arriving as a wrong negative number or a trap.
 		private void boxI64(boolean signed) {
+			if (signed) {
+				this.w.write(Instruction.CALL);
+				this.w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+				return;
+			}
 			setLocal64();
 			getLocal64();
 			this.w.write(Instruction.I64_CONST);
-			this.w.writeSignedLeb128(1 << 30);
-			this.w.write(signed ? Instruction.I64_LT_S : Instruction.I64_LT_U);
-			if (signed) {
-				getLocal64();
-				this.w.write(Instruction.I64_CONST);
-				this.w.writeSignedLeb128(-(1 << 30));
-				this.w.write(Instruction.I64_GE_S);
-				this.w.write(Instruction.I32_AND);
-			}
+			this.w.writeSignedLeb128(0);
+			this.w.write(Instruction.I64_GE_S);
 			this.w.write(Instruction.IF);
 			this.w.write(Type.REFNULL.code());
 			this.w.writeHeapType(Type.EQ.code());
 			getLocal64();
-			this.w.write(Instruction.I32_WRAP_I64);
-			boxI31();
+			this.w.write(Instruction.CALL);
+			this.w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 			this.w.write(Instruction.ELSE);
 			getLocal64();
-			this.w.write(signed ? Instruction.F64_CONVERT_S_I64 : Instruction.F64_CONVERT_U_I64);
+			this.w.write(Instruction.F64_CONVERT_U_I64);
 			boxFloat();
 			this.w.write(Instruction.END);
 		}

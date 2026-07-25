@@ -6483,8 +6483,10 @@ class LispEvaluatorTest {
 		assertThat(eval("(rontolisp:json-parse \"42\")").print()).isEqualTo("42");
 		assertThat(eval("(rontolisp:json-parse \"-3.5\")").print()).isEqualTo("-3.5");
 		assertThat(eval("(rontolisp:json-parse \"1e3\")").print()).isEqualTo("1000.0");
-		// integers wider than 9 digits become floats on every backend (WASM i31)
-		assertThat(eval("(floatp (rontolisp:json-parse \"1234567890123\"))").print()).isEqualTo("T");
+		// integers up to 18 digits stay exact on every backend (the WASM GC backend
+		// carries them in the boxed exact-integer i64 range); wider becomes a float
+		assertThat(eval("(rontolisp:json-parse \"1234567890123\")").print()).isEqualTo("1234567890123");
+		assertThat(eval("(floatp (rontolisp:json-parse \"1234567890123456789\"))").print()).isEqualTo("T");
 		assertThat(eval("(rontolisp:json-parse \"true\")").print()).isEqualTo("T");
 		assertThat(eval("(rontolisp:json-parse \"false\")").print()).isEqualTo("NIL");
 		// JSON null parses to the symbol null (jzon's sentinel), not nil

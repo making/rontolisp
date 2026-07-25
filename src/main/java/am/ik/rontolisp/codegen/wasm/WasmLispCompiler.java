@@ -2084,18 +2084,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			int wrapperFuncIndex = exportHelperBase + helperFuncCount;
 			int wrapperTypeIndex = fixedTypeCount();
 			for (WasmExportCompiler.Decl decl : exportDecls) {
-				// The 64-bit boundary types have no exact representation here: this
-				// backend's integers are i31ref, widening to a float past that range, and
-				// a
-				// float is exact only below 2^53. Refusing at compile time is the honest
-				// answer -- see .kb/wit.md for the decision and its re-evaluation
-				// trigger.
-				am.ik.rontolisp.compiler.BoundaryType wide = wideIntegerType(decl);
-				if (wide != null) {
-					throw new UnsupportedOperationException("rontolisp:wasm-export "
-							+ wide.designator().toLowerCase(java.util.Locale.ROOT) + " requires --no-gc for '"
-							+ decl.name() + "' (the GC backend represents integers as i31ref, not i64; use :s32/:u32)");
-				}
 				// Component-model exports (non-serve --component): scalars lift
 				// synchronously with no canonical options; :string/:s-expr lift through
 				// the canonical string ABI over the appended cabi_realloc / post-return
@@ -3911,18 +3899,6 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param funcIndex the wrapper's own function index
 	 */
 	record ExportPlan(WasmExportCompiler.Decl decl, int targetFuncIndex, int typeIndex, int funcIndex) {
-	}
-
-	// The first 64-bit boundary type a declaration names, or null when it names none: the
-	// wasm-GC backends carry integers as i31ref (widening to a float, exact only below
-	// 2^53), so an s64/u64 boundary is refused rather than silently rounded.
-	private static am.ik.rontolisp.compiler.@Nullable BoundaryType wideIntegerType(WasmExportCompiler.Decl decl) {
-		for (am.ik.rontolisp.compiler.BoundaryType type : decl.paramTypes()) {
-			if (type.bits() == 64) {
-				return type;
-			}
-		}
-		return decl.returnType().bits() == 64 ? decl.returnType() : null;
 	}
 
 	/**

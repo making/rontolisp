@@ -102,4 +102,4 @@ wasmtime run -W gc=y -W exceptions=y -S http=y \
 - エクスポート名は lower-kebab-case のコンポーネントモデル名(`sum-squared`)でなければなりません。その文法から外れる Lisp 名については、コンパイラが `:as` での改名を求めます。
 - エクスポートの呼び出しはプログラムのトップレベルを先に実行しないため、`defvar`/`defparameter` のグローバルを読むエクスポートは未初期化の値を見ることになります(これは Preview 1 の `--invoke` の動作と一致します)。
 
-純粋計算のエクスポートキットには、コンパクトな [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component) が同じ型付きエクスポート(加えて `:long` → `s64`、ただし `:s-expr` なし)を、wasmtime のフラグを一切必要としない数百バイトのコンポーネントとして出力します。
+純粋計算のエクスポートキットには、コンパクトな [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component) が同じ型付きエクスポート(ただし `:s-expr` なし)を、wasmtime のフラグを一切必要としない数百バイトのコンポーネントとして出力します。

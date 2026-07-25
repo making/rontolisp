@@ -1831,7 +1831,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void timeReportsElapsedAndReturnsValue() throws Exception {
-		// On WASM get-internal-real-time is a float, so the elapsed reads as float ms.
+		// get-internal-real-time is an exact integer, so the elapsed reads as integer
+		// ms, like the interpreter and JVM.
 		String output = compileAndRun("(print (time (+ 1 2)))");
 		assertThat(output).contains("; Elapsed real time: ").contains(" ms").endsWith("3");
 	}
@@ -1904,10 +1905,10 @@ class WasmLispCompilerIntegrationTest {
 	void componentExportCarriesTheWholeUnsignedRange() throws Exception {
 		// The canonical component-model tutorial world's type. A u32 above the i31 house
 		// range crosses exactly, because the wrapper boxes it the way this backend
-		// represents every wide integer -- as a float, which holds each of the 2^32
-		// values exactly. Lifting it as s32 instead would not merely print differently:
-		// wasm-tools component targets rejects the component against its own world,
-		// since the component model has no integer subtyping.
+		// represents every wide integer -- as a boxed exact integer (TYPE_BIGNUM).
+		// Lifting it as s32 instead would not merely print differently: wasm-tools
+		// component targets rejects the component against its own world, since the
+		// component model has no integer subtyping.
 		String program = """
 				(defun bump (n) (+ n 1))
 				(rontolisp:wasm-export 'bump :params '(:u32) :returns :u32)
@@ -1915,6 +1916,30 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndInvokeComponent(program, "bump(1073741824)")).isEqualTo("1073741825");
 		assertThat(compileAndInvokeComponent(program, "bump(3000000000)")).isEqualTo("3000000001");
 		assertThat(compileAndInvokeComponent(program, "bump(4294967294)")).isEqualTo("4294967295");
+	}
+
+	@Test
+	void componentExportCarriesTheSixtyFourBitTypes() throws Exception {
+		// s64/u64 used to be a compile-time refusal on the GC backend (its integers
+		// widened to a float past i31, exact only below 2^53). The boxed exact-integer
+		// representation carries the full signed 64-bit range, so the whole family
+		// crosses exactly now -- like --no-gc. A u64 at or above 2^63 still has no
+		// exact representation, so the wrapper traps rather than answering a negative.
+		String program = """
+				(defun bump (n) (+ n 1))
+				(defun scale (n) (* n 1000000))
+				(rontolisp:wasm-export 'bump :params '(:s64) :returns :s64)
+				(rontolisp:wasm-export 'scale :params '(:u64) :returns :u64)
+				""";
+		assertThat(compileAndInvokeComponent(program, "bump(9007199254740993)")).isEqualTo("9007199254740994");
+		assertThat(compileAndInvokeComponent(program, "bump(-9007199254740995)")).isEqualTo("-9007199254740994");
+		assertThat(compileAndInvokeComponent(program, "scale(9000000000000)")).isEqualTo("9000000000000000000");
+		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke",
+				"scale(9300000000000000000)", "/tmp/test.wasm");
+		assertThat(result.getExitCode()).isNotZero();
+		assertThat(result.getStderr()).contains("wasm trap");
 	}
 
 	@Test
@@ -2118,21 +2143,21 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void componentTimeFromWasiClocks() throws Exception {
-		// Component mode reads time from wasi:clocks; WASM returns it as a float (i31
-		// can't
-		// hold the magnitude). Compare/difference rather than print the raw value.
-		assertThat(compileAndRunComponent("(print (> (get-universal-time) 3786825600.0))")).isEqualTo("T");
-		assertThat(compileAndRunComponent("(print (floatp (get-internal-real-time)))")).isEqualTo("T");
+		// Component mode reads time from wasi:clocks. The value is an exact integer
+		// (boxed past the i31 range), like the interpreter and JVM.
+		assertThat(compileAndRunComponent("(print (> (get-universal-time) 3786825600))")).isEqualTo("T");
+		assertThat(compileAndRunComponent("(print (integerp (get-internal-real-time)))")).isEqualTo("T");
 		assertThat(compileAndRunComponent(
-				"(let ((s (get-internal-run-time))) (print (>= (- (get-internal-run-time) s) 0.0)))"))
+				"(let ((s (get-internal-run-time))) (print (>= (- (get-internal-run-time) s) 0)))"))
 			.isEqualTo("T");
 	}
 
 	@Test
 	void preview1TimeFromHostClock() throws Exception {
 		// Preview 1 mode binds the real wasi_snapshot_preview1 clock_time_get.
-		assertThat(compileAndRun("(print (> (get-universal-time) 3786825600.0))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (floatp (get-internal-real-time)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (> (get-universal-time) 3786825600))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (integerp (get-internal-real-time)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (integerp (get-universal-time)))")).isEqualTo("T");
 	}
 
 	@Test
@@ -6121,6 +6146,23 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (gcd -12 18))")).isEqualTo("6");
 		assertThat(compileAndRun("(print (lcm 4 6))")).isEqualTo("12");
 		assertThat(compileAndRun("(print (lcm 0 6))")).isEqualTo("0");
+		// The i64 path: operands and results beyond the i31 fixnum range stay exact
+		// (gcd/lcm compute in i64 over the boxed exact-integer representation).
+		assertThat(compileAndRun("(print (gcd 4294967296 6442450944))")).isEqualTo("2147483648");
+		assertThat(compileAndRun("(print (gcd 9000000000 -6000000000))")).isEqualTo("3000000000");
+		assertThat(compileAndRun("(print (lcm 4294967296 6442450944))")).isEqualTo("12884901888");
+		assertThat(compileAndRun("(print (lcm 3000000000 2))")).isEqualTo("3000000000");
+	}
+
+	@Test
+	void randomOnABoxedIntegerLimit() throws Exception {
+		// An integer limit beyond the i31 range used to trap on the i31 cast; the
+		// integer path now draws 63 bits and computes rem in i64.
+		assertThat(compileAndRun("""
+				(let ((r (random 10000000000)))
+				  (print (integerp r))
+				  (print (and (>= r 0) (< r 10000000000))))
+				""")).isEqualTo("T\nT");
 	}
 
 	@Test
@@ -8438,10 +8480,11 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunJson("""
 				(print (rontolisp:json-parse "42"))
 				(print (rontolisp:json-parse "1e3"))
-				(print (floatp (rontolisp:json-parse "1234567890123")))
+				(print (rontolisp:json-parse "1234567890123"))
+				(print (floatp (rontolisp:json-parse "1234567890123456789")))
 				(print (rontolisp:json-parse "[1, [2, \\"x\\"], null]"))
 				(print (rontolisp:json-parse "\\"\\\\u0041\\\\u3042\\""))
-				""")).isEqualTo("42\n1000.0\nT\n#(1 #(2 \"x\") NULL)\n\"A\u3042\"");
+				""")).isEqualTo("42\n1000.0\n1234567890123\nT\n#(1 #(2 \"x\") NULL)\n\"A\u3042\"");
 		assertThat(compileAndRunJson("""
 				(print (gethash "content-type"
 				                (rontolisp:json-parse "{\\"content-type\\": \\"text/html\\"}")))

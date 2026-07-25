@@ -34,7 +34,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- `--no-gc` non-GC scalar WASM backend
 - [wasm-function-body-size.md](wasm-function-body-size.md) -- no single emitted WASM function body may grow without bound: wasmtime's cold compile memory is superlinear in ONE body's size (850 KB -> 25.8 GB), the default compilation cache hides it, and `ulimit -v` cannot bound it
 - [wasm-gc-strings.md](wasm-gc-strings.md) -- WASM GC-backend strings as `$str_bytes` arrays (HEAP_PTR as a stack pointer, `_str_fresh` counter ids, `_str_to_mem`/`_write_str_gc` bridges) -- retires the linear string heap leak
-- [wasm-bignum.md](wasm-bignum.md) -- WASM GC-backend boxed exact integers past the i31 fixnum range (`TYPE_BIGNUM` `{i64}`, the always-i31-when-in-range normalization invariant, `_int_new`/`_int_val`, i64-exact arithmetic/bitwise/print/read) -- unlocks md5's unsigned 32-bit state; ratio components deliberately stay i32
+- [wasm-bignum.md](wasm-bignum.md) -- WASM GC-backend boxed exact integers past the i31 fixnum range (`TYPE_BIGNUM` `{i64}`, the always-i31-when-in-range normalization invariant, `_int_new`/`_int_val`, i64-exact arithmetic/bitwise/print/read, plus the widened consumers: gcd/lcm/random, the integer time built-ins, the 64-bit export boundary, json-parse's 18-digit rule) -- unlocks md5's unsigned 32-bit state; ratio components deliberately stay i32
 - [time-environment-builtins.md](time-environment-builtins.md) -- time/environment built-ins
 - [fetch-http.md](fetch-http.md) -- `rontolisp:fetch` outgoing HTTP
 - [async-await.md](async-await.md) -- async-defun/await, futures and asynchronous streams

@@ -75,10 +75,10 @@ Each value's wasm type is chosen by static type inference: integers use
 `i64`, floats use `f64`. Types are inferred with a fixpoint over the call
 graph seeded by the export boundary designators, and where an integer and a
 float meet (e.g. `(* 3.14 n)`) the integer is promoted to `f64`. Using `i64`
-makes integer arithmetic exact to 2^63 — far wider than both the GC
-backend's `i31` fixnums and what an all-`f64` lowering (exact only to 2^53)
-could offer; for example `a*a - (a-1)*(a+1)` stays exactly `1` even when the
-intermediates exceed 2^53.
+makes integer arithmetic exact to 2^63 (the GC backend reaches the same range
+through its boxed integers) — far wider than what an all-`f64` lowering
+(exact only to 2^53) could offer; for example `a*a - (a-1)*(a+1)` stays
+exactly `1` even when the intermediates exceed 2^53.
 
 Inference also widens automatically: a let/`do`-bound variable takes the
 join of its initializer and every value assigned to it, so an integer
@@ -104,8 +104,7 @@ treats only `nil` as false). The **boundary** designators stay host-width —
 value outside the 32-bit range wraps; the wide `i64` range applies only to
 the internal computation. When a parameter or result can exceed the 32-bit
 range, declare it `:long` — it crosses the boundary as `i64` with no
-`wrap`/`extend` (`:long` is `--no-gc`-only; the GC backend rejects it, its
-integers being `i31ref`). For the numeric kernels this mode targets
+`wrap`/`extend`. For the numeric kernels this mode targets
 (factorials, math/finance functions, validators) the results match the
 interpreter and the GC backend.
 

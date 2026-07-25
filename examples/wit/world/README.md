@@ -302,7 +302,7 @@ is not a copy of the input file, and the input file remains the source of truth.
 | WIT type | Lisp value |
 |---|---|
 | `s32` | an integer |
-| `s64` | an integer -- `--no-gc` only (wasm-GC integers are `i31ref`) |
+| `s64` | an integer (a `u64` value of 2^63 or more traps at the boundary) |
 | `f64` | a float |
 | `bool` | `t` / `nil` |
 | `string` | a string |

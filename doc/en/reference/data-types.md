@@ -2,7 +2,7 @@
 
 | Type | Example | Description |
 |------|---------|-------------|
-| Integer | `42`, `-5`, `1,000`, `#xff`, `#o777`, `#b1010` | 64-bit signed integer that auto-promotes to a big integer on overflow (interpreter and JVM), 31-bit signed integer (WASM). `#x`/`#o`/`#b` read hexadecimal/octal/binary literals |
+| Integer | `42`, `-5`, `1,000`, `#xff`, `#o777`, `#b1010` | 64-bit signed integer that auto-promotes to a big integer on overflow (interpreter and JVM); on WASM exact within the signed 64-bit range, wrapping beyond it. `#x`/`#o`/`#b` read hexadecimal/octal/binary literals |
 | Ratio | `1/3`, `-2/5` | Exact rational number (Common Lisp ratio), always normalized; supported by all three backends |
 | Double | `3.14`, `-0.5`, `3,000.50`, `1d0`, `6.02e23` | 64-bit floating-point number |
 | String | `"hello"` | String literal |

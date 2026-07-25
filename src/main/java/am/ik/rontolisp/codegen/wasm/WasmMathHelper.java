@@ -5,8 +5,11 @@ import am.ik.wasm.Type;
 
 /**
  * Shared bytecode-emission helpers for the integer math built-ins ({@code gcd},
- * {@code lcm}, {@code signum}, {@code expt}). All operate on i31-boxed integers held in
- * {@code (ref null eq)} locals, since the WASM backend has no scratch i32/f64 locals.
+ * {@code lcm}, {@code signum}, {@code expt}). All operate on boxed integers held in
+ * {@code (ref null eq)} locals, since the WASM backend has no scratch i32/i64/f64 locals:
+ * the i32 helpers read/write i31 boxes, the i64 helpers go through
+ * {@code _int_val}/{@code _int_new} and so accept the full exact-integer range (an i31 or
+ * a {@code TYPE_BIGNUM} box, {@code .kb/wasm-bignum.md}).
  */
 final class WasmMathHelper {
 
@@ -34,25 +37,49 @@ final class WasmMathHelper {
 	}
 
 	/**
-	 * Leaves {@code abs(x)} as an i32 on the stack, where {@code x} is the i31-boxed
-	 * integer held in {@code slot}.
+	 * Pushes the signed i64 value of the exact integer (an i31 or a {@code TYPE_BIGNUM}
+	 * box) held in {@code slot}, via {@code _int_val}.
 	 */
-	static void emitAbsFromLocal(WasmLispCompiler.Ctx ctx, int slot) {
-		getI32(ctx, slot);
-		constI32(ctx, 0);
-		ctx.writer.write(Instruction.I32_LT_S);
+	static void getI64(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+	}
+
+	/**
+	 * Pops an i64 from the stack and stores it into {@code slot}, normalized through
+	 * {@code _int_new} (an i31 when it fits, a {@code TYPE_BIGNUM} box otherwise).
+	 */
+	static void setI64(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+	}
+
+	/**
+	 * Leaves {@code abs(x)} as an i64 on the stack, where {@code x} is the exact integer
+	 * held in {@code slot}.
+	 */
+	static void emitAbs64FromLocal(WasmLispCompiler.Ctx ctx, int slot) {
+		getI64(ctx, slot);
+		ctx.writer.write(Instruction.I64_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.I64_LT_S);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		constI32(ctx, 0);
-		getI32(ctx, slot);
-		ctx.writer.write(Instruction.I32_SUB);
+		ctx.writer.write(Type.I64);
+		ctx.writer.write(Instruction.I64_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		getI64(ctx, slot);
+		ctx.writer.write(Instruction.I64_SUB);
 		ctx.writer.write(Instruction.ELSE);
-		getI32(ctx, slot);
+		getI64(ctx, slot);
 		ctx.writer.write(Instruction.END);
 	}
 
 	/**
-	 * Emits the Euclidean algorithm over two i31-boxed working locals. On exit
+	 * Emits the Euclidean algorithm in i64 over two exact-integer working locals. On exit
 	 * {@code aSlot} holds the (possibly negative) gcd and {@code bSlot} holds 0;
 	 * {@code scratchSlot} is used as the swap temporary. Callers typically take the
 	 * absolute value of {@code aSlot} afterwards.
@@ -61,14 +88,14 @@ final class WasmMathHelper {
 		ctx.writer.write(Instruction.BLOCK, 0x40);
 		ctx.writer.write(Instruction.LOOP, 0x40);
 		// if b == 0, exit the block
-		getI32(ctx, bSlot);
-		ctx.writer.write(Instruction.I32_EQZ);
+		getI64(ctx, bSlot);
+		ctx.writer.write(Instruction.I64_EQZ);
 		ctx.writer.write(Instruction.BR_IF, 1);
 		// scratch = a % b
-		getI32(ctx, aSlot);
-		getI32(ctx, bSlot);
-		ctx.writer.write(Instruction.I32_REM_S);
-		setI32(ctx, scratchSlot);
+		getI64(ctx, aSlot);
+		getI64(ctx, bSlot);
+		ctx.writer.write(Instruction.I64_REM_S);
+		setI64(ctx, scratchSlot);
 		// a = b
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(bSlot);

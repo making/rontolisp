@@ -12,8 +12,10 @@ import am.ik.wasm.Type;
  * backends (which use {@code Math.random()}), WASM draws entropy from the WASI
  * {@code random_get} host function (imported in both Preview 1 and {@code --component}
  * mode; see {@link WasmLispCompiler#FUNC_RANDOM_GET}), so {@code (random N)} differs each
- * run. The low 32 bits of the filled buffer are masked to {@code [0, 2^31)} to match the
- * range the integer/float paths below assume.
+ * run. The float path masks the low 32 bits of the filled buffer to {@code [0, 2^31)} for
+ * its fraction; the integer path draws all 64 bits masked to {@code [0, 2^63)}, so an
+ * integer limit beyond the i31 fixnum range (a {@code TYPE_BIGNUM} box) works and the
+ * result normalizes through {@code _int_new}.
  *
  * <p>
  * A float-literal argument compiles straight to the float path
@@ -68,14 +70,17 @@ final class WasmRandomCompiler {
 				WasmEmitHelper.castFloatGetF64(ctx);
 			});
 			ctx.writer.write(Instruction.ELSE);
-			// Integer limit: rand mod limit, an i31ref. The masked value is non-negative
-			// and the limit is positive, so the unsigned remainder stays in [0, limit).
-			emitRandomI32(ctx);
+			// Integer limit: rand mod limit in i64, normalized through _int_new. The
+			// masked value is non-negative and the limit is positive, so the unsigned
+			// remainder stays in [0, limit); _int_val accepts an i31 or boxed limit.
+			emitRandomI63(ctx);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeSignedLeb128(limitSlot);
-			WasmEmitHelper.castI31GetS(ctx);
-			ctx.writer.write(Instruction.I32_REM_U);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			ctx.writer.write(Instruction.I64_REM_U);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 			ctx.writer.write(Instruction.END);
 		}
 	}
@@ -116,6 +121,24 @@ final class WasmRandomCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(RANDOM_MASK);
 		ctx.writer.write(Instruction.I32_AND);
+	}
+
+	// Leaves a non-negative random i64 in [0, 2^63) on the stack: the same 8-byte
+	// random_get draw, loaded whole and masked to 63 bits.
+	private static void emitRandomI63(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(8);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
+		ctx.writer.write(Instruction.DROP);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
+		ctx.writer.write(Instruction.I64_LOAD, 0x03, 0x00);
+		ctx.writer.write(Instruction.I64_CONST);
+		ctx.writer.writeSignedLeb128(Long.MAX_VALUE);
+		ctx.writer.write(Instruction.I64_AND);
 	}
 
 }

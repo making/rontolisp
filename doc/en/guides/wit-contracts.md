@@ -64,8 +64,8 @@ a second export path: it lowers into exactly the `rontolisp:wasm-export`
 directives a hand-written implementation would carry, so **the emitted
 component is byte-identical** to that one — on the GC path and under
 [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component)
-alike (the latter is the backend to pick when the world uses `s64`, which the
-wasm-GC `i31ref` integers cannot hold).
+alike (a world using `s64`/`u64` works on both: the GC backend carries the
+64-bit types through its boxed exact integers).
 
 Adding [`--emit-wit`](#emitting-the-wit-world---emit-wit) to the build writes
 out the component's real type, and its export lines come back the way you

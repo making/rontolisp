@@ -205,17 +205,18 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
-	void rejectsTheSixtyFourBitDesignatorsOnTheGcBackend() {
-		// The 64-bit types map to i64, which the GC backend cannot represent exactly (its
-		// integers are i31ref, widening to a float that is exact only below 2^53); they
-		// are --no-gc-only designators, rejected with a pointer to --no-gc. The legacy
-		// :long spelling is the same type, so it is rejected under its canonical name.
-		assertThatThrownBy(() -> compile("(defun f (a b) (* (+ a b) (+ a b)))"
+	void carriesTheSixtyFourBitDesignatorsOnTheGcBackend() {
+		// The 64-bit types used to be a compile-time refusal here (integers widened to
+		// a float past i31, exact only below 2^53). The boxed exact-integer
+		// representation (.kb/wasm-bignum.md) carries the full signed 64-bit range, so
+		// the declarations compile on the GC backend too; the legacy :long spelling is
+		// the same type.
+		assertThat(compile("(defun f (a b) (* (+ a b) (+ a b)))"
 				+ "(rontolisp:wasm-export 'f :params '(:long :long) :returns :long)"))
-			.hasMessageContaining(":s64 requires --no-gc");
-		assertThatThrownBy(() -> compile("(defun f (a b) (* (+ a b) (+ a b)))"
+			.isNotEmpty();
+		assertThat(compile("(defun f (a b) (* (+ a b) (+ a b)))"
 				+ "(rontolisp:wasm-export 'f :params '(:u64 :u64) :returns :u64)"))
-			.hasMessageContaining(":u64 requires --no-gc");
+			.isNotEmpty();
 	}
 
 	@Test

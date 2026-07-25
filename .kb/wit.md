@@ -262,9 +262,6 @@ Every one names the WIT file and line (`WitLocations`), e.g.
   marshalling it is not built yet", not a bare refusal. The message itself carries no
   `.todo` pointer: a todo file is deleted the moment the work lands, so a user-facing
   string must never name one
-- `s64` / `u64` on the wasm-GC backends (only `--no-gc --component` lifts a 64-bit
-  boundary type) — see "The integer boundary" below for why, reported against the WIT
-  line that asked for it
 - an `async func` under `--no-gc --component` (the adapter-free reactor has no async
   machinery). Conversely, an `async func` in the world SETS `:async t` on the lowered
   export: the stackful-async lift an I/O-bearing export needs is now **stated by the
@@ -300,35 +297,37 @@ over the whole family, `:int`/`:long` included, and it is derived from two inter
 type — inbound needs a check when the house range does not contain the type's, outbound
 when the type's does not contain the house range. Per backend:
 
-| | wasm-GC (house = `i31ref`) | `--no-gc` (house = `i64`) |
+| | wasm-GC (house = exact integer: `i31ref` or the boxed i64, `.kb/wasm-bignum.md`) | `--no-gc` (house = `i64`) |
 |---|---|---|
 | inbound `s8`/`s16`/`u8`/`u16` | plain `ref.i31` (always fits) | `i64.extend_i32_s` / `_u` |
-| inbound `s32`/`u32` | `i31` when it fits, else the **float box** — the representation this backend already gives every integer past the `i31` range (`.kb/time-environment-builtins.md`, and `WasmComponentImportCompiler.boxI64` on the import side). An f64 holds all 2^32 values exactly, so the whole range crosses | `i64.extend_i32_s` / `_u`, exact |
-| inbound `u64` | rejected at compile time | traps below 0 (no exact place in the signed house i64) |
-| outbound, every integer | `WasmEmitHelper.castFloatGetF64` then a trapping `i32.trunc_s/u_f64` — the same shape the import side lowers with; sub-32-bit types add one explicit range check (one `i32` scratch local, reserved by `WasmExportCompiler.scratchTypes` right after the parameter slots) | normalize to i64 (`i64.trunc_s/u_f64` for a float body), `NoGcWasmCompiler.emitBoundaryRangeGuard`, then `i32.wrap_i64` |
+| inbound `s32`/`u32` | widen to i64 (`i64.extend_i32_s` / `_u`) and normalize through `_int_new` (`WasmExportCompiler.emitBoxWideInt`): an i31 when it fits, the boxed exact integer otherwise — exact over the whole range | `i64.extend_i32_s` / `_u`, exact |
+| inbound `s64` | `_int_new`, exact over the whole range | pass-through, exact |
+| inbound `u64` | traps below 0 as an i64 (a value at or above 2^63 has no exact place in the signed i64 box), then `_int_new` | traps below 0 (same reason) |
+| outbound, up to 32 bits | `WasmEmitHelper.castFloatGetF64` (which converts an exact integer via `f64.convert_i64_s` — exact for anything a 32-bit type can state) then a trapping `i32.trunc_s/u_f64`; sub-32-bit types add one explicit range check (one `i32` scratch local, reserved by `WasmExportCompiler.scratchTypes` right after the parameter slots) | normalize to i64 (`i64.trunc_s/u_f64` for a float body), `NoGcWasmCompiler.emitBoundaryRangeGuard`, then `i32.wrap_i64` |
+| outbound `s64`/`u64` | `WasmExportCompiler.emitWideIntResult`: an exact integer (i31 or box) unboxes through `_int_val` — exact over the full signed 64-bit range, where the f64 route would round past 2^53; a float/ratio result goes `castFloatGetF64` + trapping `i64.trunc_s/u_f64`; a negative from a `u64` export traps on both paths | pass-through (float body: trapping trunc) |
 
 `:s64` needs neither check nor narrowing on `--no-gc`, which is why its **pass-through
 wrapper elision** (`isPassThroughExport`) survives untouched.
 
-**Why the 64-bit types stay a compile error on wasm-GC.** The reason is NOT "the core
-signature cannot be i64" — the wrapper is hand-emitted and could carry one. It is that
-the house integer's float fallback is exact only below 2^53, so an `s64`/`u64` boundary
-would silently round exactly the values the type exists to express. A compile error the
-user can act on ("use `--no-gc`") beats a runtime surprise. Note the asymmetry with the
-IMPORT side, which DOES carry `s64`/`u64` on wasm-GC through the same float fallback:
-an import's value is what the host happens to send and the program can only observe what
-the backend holds, whereas an export's declared type is a promise the program makes.
-**Re-evaluation trigger:** if the wasm-GC backend ever gains an exact wide-integer
-representation (a boxed i64 struct or a bignum), retire this rejection in the same pass.
+**The 64-bit compile error on wasm-GC is retired.** The old refusal ("requires
+--no-gc") existed because the house integer's float fallback was exact only below
+2^53, so an `s64`/`u64` boundary would have silently rounded exactly the values the
+type exists to express. Its stated re-evaluation trigger — "if the wasm-GC backend
+ever gains an exact wide-integer representation" — fired when the boxed exact-integer
+path landed (`.kb/wasm-bignum.md`), and the rejection (formerly
+`WasmLispCompiler.wideIntegerType` and a backend check in
+`WitExportDirective.designator`) was removed in the same sweep that widened the
+wrappers. The one residual asymmetry: a host-supplied `u64` at or above 2^63 still has
+no exact representation — an export wrapper TRAPS on it (the declared type is a
+promise the program makes), while a `--component` import lift degrades it to the float
+approximation (`WasmComponentImportCompiler.boxI64`; the host is allowed to send
+`u64::MAX` as a "no limit" sentinel, so trapping would break real programs).
 
-**What the trap does NOT fix.** wasm-GC integer arithmetic still wraps at the `i31` range
-with no promotion (`doc/en/reference/functions/mul.md`), so `(+ x 1)` on a `:u32`
-argument of `1073741823` produces a negative — and the boundary then TRAPS rather than
-reporting `3221225472`. That is the rule working: the wrong number stops at the boundary
-instead of crossing it. The same program on `--no-gc` computes in i64 and returns
-`1073741824`. The arithmetic itself is `.todo/168`: the backend already has a
-representation for an integer past the `i31` range (the wide-integer float box this
-boundary now uses), and `+`/`-`/`*` are the one place that never learned it.
+**Arithmetic promotes past `i31` now.** wasm-GC `+`/`-`/`*` compute the exact-integer
+fast path in i64 and normalize through `_int_new` (`.kb/wasm-bignum.md`), so `(+ x 1)`
+on a `:u32` argument of `1073741823` answers `1073741824` and the boundary carries it —
+the old failure shape (the wrapped negative stopped by the boundary trap) is gone,
+along with the wide-integer float box it was documented against.
 
 **The import side is deliberately NOT widened here.** `WasmImportCompiler`'s accepted set
 is still `{:s32, :float, :bool, :string, :s-expr}` and `WitImportDirective.designatorOf`

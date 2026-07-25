@@ -62,7 +62,7 @@ Everything else comes from the world: `rontolisp:wasm-export`'s `:params`,
 | --- | --- | --- |
 | `s8` `s16` `s32` | `:s8` `:s16` `:s32` | an integer |
 | `u8` `u16` `u32` | `:u8` `:u16` `:u32` | an integer |
-| `s64` `u64` | `:s64` `:u64` | an integer; needs `--no-gc` (wasm-GC integers are `i31ref`) |
+| `s64` `u64` | `:s64` `:u64` | an integer; a `u64` value of 2^63 or more traps at the boundary |
 | `f64` | `:float` | a float |
 | `bool` | `:bool` | `t` or `nil` |
 | `string` | `:string` | a string |
@@ -111,9 +111,9 @@ offending export:
   `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`
   (an exported function takes required parameters only: `&optional` / `&rest` /
   `&key` are rejected)
-- a WIT type the export boundary does not carry, including `s64` / `u64` on the
-  wasm-GC backend —
-  `calc.wit:4: export 'square': s64 (n) requires --no-gc (the wasm-GC backend's integers are i31ref)`
+- a WIT type the export boundary does not carry (the whole fixed-width integer
+  family plus `f64` / `bool` / `string` crosses; a `record`, `list`, ... does
+  not yet)
 - an `async func` under `--no-gc --component`, whose adapter-free reactor has no
   async machinery
 - an export name that is not a component-model label (lower-kebab-case words), a

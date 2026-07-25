@@ -52,6 +52,10 @@ cases:
       (print (abs -4294967296))
       (print (signum -4294967296))
       (print (integer-length 4294967296))
+      (print (gcd 4294967296 6442450944))
+      (print (lcm 4294967296 6442450944))
+      (print (if (integerp (get-universal-time)) 'time-int 'time-other))
+      (print (if (integerp (random 10000000000)) 'rand-int 'rand-other))
     expected: |
       4023233417
       1073741824
@@ -70,6 +74,10 @@ cases:
       4294967296
       -1
       33
+      2147483648
+      12884901888
+      TIME-INT
+      RAND-INT
   - name: comparison-operators-verified-via-if
     source: |
       (print (if (= 1 1) 42 99))
@@ -3067,10 +3075,12 @@ cases:
   # backends. The value mapping matches com.inuoe.jzon's defaults: an object
   # becomes a hash table with string keys, an array a vector, and null the
   # symbol null; on the way out nil is false and the symbol null is null.
-  # Integers wider than 9 digits become floats (WASM i31 range); a float with
-  # magnitude >= 2^31 cannot be *printed* on WASM (a known limitation of the
-  # emitted WASM float printer), so the wide-integer case asserts floatp instead
-  # of printing the value. Objects are read key by key (and stringified from
+  # Integers up to 18 digits stay exact (the WASM GC backend carries them in
+  # its boxed exact-integer i64 range) and print identically everywhere; wider
+  # than 18 digits becomes a float, and a float with magnitude >= 2^31 cannot
+  # be *printed* on WASM (a known limitation of the emitted WASM float
+  # printer), so that case asserts floatp instead of printing the value.
+  # Objects are read key by key (and stringified from
   # single-key hash tables) because hash-table iteration order is
   # backend-specific.
   - name: json-parse-and-stringify
@@ -3080,7 +3090,8 @@ cases:
       (print (gethash "b" (gethash "a" (rontolisp:json-parse "{\"a\": {\"b\": [1, true, null]}}"))))
       (print (rontolisp:json-parse "[1, 2.5, \"x\", false, null]"))
       (print (rontolisp:json-parse "1e3"))
-      (print (floatp (rontolisp:json-parse "1234567890123")))
+      (print (rontolisp:json-parse "1234567890123"))
+      (print (floatp (rontolisp:json-parse "1234567890123456789")))
       (print (rontolisp:json-parse "\"a\\tb\\u3042\""))
       (print (hash-table-count (rontolisp:json-parse "{}")))
       (let ((h (rontolisp:json-parse "{\"content-type\": \"text/html\"}")))
@@ -3100,6 +3111,7 @@ cases:
       #(1 T NULL)
       #(1 2.5 "x" NIL NULL)
       1000.0
+      1234567890123
       T
       "a	bあ"
       0

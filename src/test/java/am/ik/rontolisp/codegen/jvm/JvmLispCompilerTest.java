@@ -6372,10 +6372,11 @@ class JvmLispCompilerTest {
 				(print (rontolisp:json-parse "42"))
 				(print (rontolisp:json-parse "-3.5"))
 				(print (rontolisp:json-parse "1e3"))
-				(print (floatp (rontolisp:json-parse "1234567890123")))
+				(print (rontolisp:json-parse "1234567890123"))
+				(print (floatp (rontolisp:json-parse "1234567890123456789")))
 				(print (rontolisp:json-parse "[1, [2, \\"x\\"], null]"))
 				(print (rontolisp:json-parse "\\"\\\\u0041\\\\u3042\\""))
-				""")).isEqualTo("42\n-3.5\n1000.0\nT\n#(1 #(2 \"x\") NULL)\n\"A\u3042\"");
+				""")).isEqualTo("42\n-3.5\n1000.0\n1234567890123\nT\n#(1 #(2 \"x\") NULL)\n\"A\u3042\"");
 	}
 
 	@Test

@@ -46,7 +46,7 @@ The type designators and their boundary representations are:
 | --- | --- | --- | --- |
 | `:s8` `:s16` `:s32` | `s8` `s16` `s32` | `i32` | `:int` is a permanent alias of `:s32` |
 | `:u8` `:u16` `:u32` | `u8` `u16` `u32` | `i32` | |
-| `:s64` `:u64` | `s64` `u64` | `i64` | `--no-gc` only, matching the scalar backend's internal `i64`; `:long` is a permanent alias of `:s64` |
+| `:s64` `:u64` | `s64` `u64` | `i64` | `:long` is a permanent alias of `:s64`; a `:u64` value of 2^63 or more traps (it has no exact representation in the signed 64-bit integers every backend computes with) |
 | `:float` | `f64` | `f64` | rontolisp has no single-precision float, so `f32` is not a boundary type |
 | `:bool` | `bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `string` | `(ptr, len)` | UTF-8 bytes in linear memory |
@@ -60,21 +60,22 @@ component behaving the same under `wasmtime` and under stricter binding
 generators such as `jco`.
 
 The representable range is the declared type's own, on every backend. With the
-default (GC) backend an incoming integer is an `i31ref` widening to a float past
-that range, so a `:u32` argument of `3000000000` reaches the Lisp code as the
-exact float `3000000000.0`; integer arithmetic inside the Lisp code is exact
-through the signed 64-bit range (a result past the `i31` fixnum range promotes
-to a boxed integer, so `(+ x 1)` on a `:u32` argument of `1073741823` returns
-`1073741824` exactly), and only a result the declared type cannot state traps at
-the boundary. On the non-GC backend (`--no-gc`) integers are computed as `i64`,
-so the whole family up to `:s64`/`:u64` crosses with no float widening.
+default (GC) backend an incoming integer arrives as an exact integer (a fixnum
+when it fits, a boxed 64-bit integer past that), so a `:u32` argument of
+`3000000000` reaches the Lisp code as the exact integer `3000000000`; integer
+arithmetic inside the Lisp code is exact through the signed 64-bit range
+(`(+ x 1)` on a `:u32` argument of `1073741823` returns `1073741824` exactly),
+and only a result the declared type cannot state traps at the boundary. On the
+non-GC backend (`--no-gc`) integers are computed as `i64`, crossing the same
+way.
 
 ## Limitations
 
 - Under `--component`, an export becomes a **typed component-model export**
-  callable with WAVE syntax (`wasmtime run --invoke 'name(args)'`):
-  `:int`/`:float`/`:bool`/void, `:string` and `:s-expr` as component-model
-  `string` (plus `:long` with `--no-gc`, which has no `:s-expr`). A sync
+  callable with WAVE syntax (`wasmtime run --invoke 'name(args)'`): the whole
+  fixed-width integer family (`:long` included), `:float`/`:bool`/void,
+  `:string` and `:s-expr` as component-model `string` (`--no-gc` has no
+  `:s-expr`). A sync
   (default) export must be pure-compute — I/O inside it traps; declare
   `:async t` when the export prints or fetches. Under `--no-gc --component`,
   `:async` is rejected but printing still works, through a built-in WASI 0.3
@@ -96,6 +97,4 @@ so the whole family up to `:s64`/`:u64` crosses with no float widening.
   added only when the program prints (see
   [Printing](../../guides/wasm-nogc.md#printing-print--princ--terpri)).
 - The non-GC backend (`--no-gc`) supports `:int`/`:long`/`:float`/`:bool`/`:string`
-  but not `:s-expr`, which needs the cons/reader/printer runtime. `:long` is
-  `--no-gc`-only: the GC backend rejects it (its integers are `i31ref`, which
-  cannot hold an `i64`), pointing you at `--no-gc`.
+  but not `:s-expr`, which needs the cons/reader/printer runtime.

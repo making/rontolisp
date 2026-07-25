@@ -44,9 +44,7 @@ import org.jspecify.annotations.Nullable;
  * <li>an export the world declares but the program does not define, or defines with a
  * different arity</li>
  * <li>a WIT type outside the boundary subset (every fixed-width integer, {@code f64},
- * {@code bool} and {@code string} — see {@link BoundaryType}), including {@code s64} /
- * {@code u64} on the wasm-GC backends, which only {@code --no-gc --component} can
- * carry</li>
+ * {@code bool} and {@code string} — see {@link BoundaryType})</li>
  * <li>an export name that is not a component-model label, or the reserved
  * {@code run}</li>
  * <li>an {@code async func} in the world (the {@code :async t} lift is stated by the WIT
@@ -466,15 +464,6 @@ public final class WitExportDirective {
 		if (type instanceof WitType.Prim prim) {
 			BoundaryType boundary = BoundaryType.forWitName(prim.name());
 			if (boundary != null) {
-				// A 64-bit integer has no exact place on the wasm-GC backends: their
-				// integers are i31ref and widen to a float, which is exact only below
-				// 2^53.
-				// Refusing here beats carrying a type that would silently round -- see
-				// .kb/wit.md for the decision and what would make it worth revisiting.
-				if (boundary.bits() == 64 && (backend == Backend.WASM_GC || backend == Backend.WASM_COMPONENT)) {
-					throw error(witPath, locations, item, "export '" + exportName + "': " + prim.name() + " (" + what
-							+ ") requires --no-gc (the wasm-GC backend's integers are i31ref)");
-				}
 				return boundary;
 			}
 		}

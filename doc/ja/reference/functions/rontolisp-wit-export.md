@@ -61,7 +61,7 @@ wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
 | --- | --- | --- |
 | `s8` `s16` `s32` | `:s8` `:s16` `:s32` | an integer |
 | `u8` `u16` `u32` | `:u8` `:u16` `:u32` | an integer |
-| `s64` `u64` | `:s64` `:u64` | an integer; needs `--no-gc` (wasm-GC integers are `i31ref`) |
+| `s64` `u64` | `:s64` `:u64` | an integer; a `u64` value of 2^63 or more traps at the boundary |
 | `f64` | `:float` | a float |
 | `bool` | `:bool` | `t` or `nil` |
 | `string` | `:string` | a string |
@@ -110,8 +110,8 @@ world 中の `async func` はエクスポートを `:async t` としてリフト
   `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`
   (エクスポートされる関数は必須引数のみを取ります。`&optional` / `&rest` /
   `&key` は拒否されます)
-- エクスポート境界が運べない WIT 型 (wasm-GC バックエンドでの `s64` / `u64` を含む) —
-  `calc.wit:4: export 'square': s64 (n) requires --no-gc (the wasm-GC backend's integers are i31ref)`
+- エクスポート境界が運べない WIT 型 (固定幅整数族全体と `f64` / `bool` / `string`
+  は渡ります。`record` や `list` などはまだ渡りません)
 - `--no-gc --component` での `async func` (アダプタのないリアクターには非同期の
   機構がありません)
 - コンポーネントモデルのラベル (lower-kebab-case の語) でないエクスポート名、

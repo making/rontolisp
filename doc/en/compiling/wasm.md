@@ -24,7 +24,8 @@ wasmtime run -W gc hello.wasm
 Two independent choices determine the shape of the output:
 
 - **Value model.** By default, values live on the WebAssembly **GC heap**
-  (integers as `i31ref`, floats boxed in a struct), which supports the **full
+  (integers as `i31ref`, boxed as a signed 64-bit struct past the fixnum
+  range, floats boxed in a struct), which supports the **full
   language** but requires a wasm-GC capable runtime (wasmtime 14+, Node 22+,
   current browsers). `--no-gc` instead lowers a **pure-compute subset** of the
   language onto unboxed `i64`/`f64` scalars and linear-memory strings — the

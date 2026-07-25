@@ -212,6 +212,5 @@ Current limitations of component exports:
 
 For a pure-compute export kit, the compact
 [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component)
-variant emits the same typed exports (plus `:long` → `s64`, minus
-`:s-expr`) in a component of a few hundred bytes that needs no wasmtime
-flags at all.
+variant emits the same typed exports (minus `:s-expr`) in a component of a
+few hundred bytes that needs no wasmtime flags at all.

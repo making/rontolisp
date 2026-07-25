@@ -22,8 +22,8 @@
         (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3))))
 (print (cl-base64:base64-string-to-usb8-array "AQID"))
 
-;; integers (keep the value inside the WASM i31 range: a larger integer
-;; degrades to a float on the WASM backends)
+;; integers (exact on every backend within the signed 64-bit range the
+;; WASM backends carry)
 (print (cl-base64:integer-to-base64-string 1234567))
 (print (cl-base64:base64-string-to-integer "EtaH"))
 

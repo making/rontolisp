@@ -28,8 +28,8 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 
 | Designator | WASM boundary | Notes |
 | --- | --- | --- |
-| `:int` | `i32` | 31-bit signed range (the internal `i31ref`) |
-| `:long` | `i64` | `--no-gc` only; full 64-bit signed range, matching the non-GC backend's internal `i64` |
+| `:int` | `i32` | full 32-bit signed range |
+| `:long` | `i64` | full 64-bit signed range on every backend |
 | `:float` | `f64` | |
 | `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory; a component-model `string` under `--component` |
@@ -62,7 +62,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 | --- | --- | --- | --- | --- |
 | ホスト要件 | wasm-GC エンジン(`wasmtime -W gc`、Node 22+、現行ブラウザ) | wasmtime 46+(`-W gc=y`)または wasm-GC + JSPI 対応のコンポーネントホスト([jco 経由のブラウザ](wasm-browser.md)ではロードと計算はできるが、まだ印字はできない) | **任意の** WebAssembly エンジン | 任意のコンポーネントモデルホスト、**フラグ不要** — 依存ゼロで動く [jco 経由のブラウザ](wasm-browser.md)を含む |
 | エクスポートの形 | 生のコア関数 | 型付きコンポーネントモデルエクスポート(WAVE `--invoke`、jco) | 生のコア関数 | 型付きコンポーネントモデルエクスポート(WAVE `--invoke`、jco) |
-| スカラー | `:int`/`:float`/`:bool`/void | `:int`/`:float`/`:bool`/void | + `:long`(`i64`) | + `:long`(`s64`) |
+| スカラー | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void |
 | `:string` | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) |
 | `:s-expr` | 手動の `(ptr,len)` | コンポーネントモデル `string`(印字テキスト) | 非対応 | 非対応 |
 | 関数本体で使える機能 | 言語全機能 | 言語全機能 | [非 GC サブセット](wasm-nogc.md#eligible-subset) | [非 GC サブセット](wasm-nogc.md#eligible-subset) |

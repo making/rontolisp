@@ -9,8 +9,9 @@ import am.ik.wasm.Type;
 
 /**
  * Compiles the {@code lcm} built-in: the least common multiple of two integers, computed
- * as {@code abs((a / gcd(a, b)) * b)}. Returns 0 when either argument is 0. Operates on
- * the i31 integer range (no overflow promotion).
+ * as {@code abs((a / gcd(a, b)) * b)}. Returns 0 when either argument is 0. Computes in
+ * i64, so the full exact-integer range (i31 or boxed) crosses exactly; a product past
+ * 2^63 wraps, like the arithmetic built-ins.
  */
 final class WasmLcmCompiler {
 
@@ -34,10 +35,10 @@ final class WasmLcmCompiler {
 		ctx.writer.writeSignedLeb128(bSlot);
 
 		// if (a == 0 || b == 0) result is 0
-		WasmMathHelper.getI32(ctx, aSlot);
-		ctx.writer.write(Instruction.I32_EQZ);
-		WasmMathHelper.getI32(ctx, bSlot);
-		ctx.writer.write(Instruction.I32_EQZ);
+		WasmMathHelper.getI64(ctx, aSlot);
+		ctx.writer.write(Instruction.I64_EQZ);
+		WasmMathHelper.getI64(ctx, bSlot);
+		ctx.writer.write(Instruction.I64_EQZ);
 		ctx.writer.write(Instruction.I32_OR);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.REFNULL.code());
@@ -56,15 +57,16 @@ final class WasmLcmCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(gbSlot);
 		WasmMathHelper.emitEuclid(ctx, gaSlot, gbSlot, scratch);
-		// prod = (a / gcd) * b, then take abs.
-		WasmMathHelper.getI32(ctx, aSlot);
-		WasmMathHelper.getI32(ctx, gaSlot);
-		ctx.writer.write(Instruction.I32_DIV_S);
-		WasmMathHelper.getI32(ctx, bSlot);
-		ctx.writer.write(Instruction.I32_MUL);
-		WasmMathHelper.setI32(ctx, prodSlot);
-		WasmMathHelper.emitAbsFromLocal(ctx, prodSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		// prod = (a / gcd) * b, then take abs and normalize through _int_new.
+		WasmMathHelper.getI64(ctx, aSlot);
+		WasmMathHelper.getI64(ctx, gaSlot);
+		ctx.writer.write(Instruction.I64_DIV_S);
+		WasmMathHelper.getI64(ctx, bSlot);
+		ctx.writer.write(Instruction.I64_MUL);
+		WasmMathHelper.setI64(ctx, prodSlot);
+		WasmMathHelper.emitAbs64FromLocal(ctx, prodSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 
 		ctx.writer.write(Instruction.END);
 	}

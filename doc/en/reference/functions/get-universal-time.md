@@ -2,7 +2,7 @@
 
 `(get-universal-time)`
 
-Returns the current time as the number of seconds since the Common Lisp epoch of 1900-01-01 GMT (Unix time plus 2208988800). The interpreter and JVM return an integer; the WASM backend reads the clock (the real host clock in Preview 1, `wasi:clocks@0.3.0` in `--component` mode) and returns a **float**, because its 31-bit integers cannot hold the magnitude. Because of this, use the value in comparisons or differences rather than printing the raw number.
+Returns the current time as the number of seconds since the Common Lisp epoch of 1900-01-01 GMT (Unix time plus 2208988800). Every backend returns an integer; the WASM backend reads the clock from the host (the real host clock in Preview 1, `wasi:clocks@0.3.0` in `--component` mode).
 
 ```lisp
 (get-universal-time)

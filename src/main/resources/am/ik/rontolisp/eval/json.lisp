@@ -167,9 +167,10 @@
       (if (= (char-code (char s tok-start)) 45) (- v) v))))
 
 (defun rontolisp::%json-number (s i n)
-  ;; Returns (number . next-index). Integers of at most 9 digits stay
-  ;; integers (safely inside the WASM i31 range); anything with a fraction,
-  ;; an exponent or more digits becomes a float on every backend.
+  ;; Returns (number . next-index). Integers of at most 18 digits stay
+  ;; integers (safely inside the signed 64-bit range the WASM GC backend's
+  ;; boxed exact integers carry); anything with a fraction, an exponent or
+  ;; more digits becomes a float on every backend.
   (let ((j (if (and (< i n) (= (char-code (char s i)) 45)) (+ i 1) i)))
     (let ((int-start j) (int-end (rontolisp::%json-scan-digits s j n)))
       (when (= int-end int-start) (error "json-parse: invalid number"))
@@ -189,7 +190,7 @@
           (let ((es k))
             (setq k (rontolisp::%json-scan-digits s es n))
             (when (= k es) (error "json-parse: invalid number"))))
-        (if (and (null frac-start) (not exp-p) (<= (- int-end int-start) 9))
+        (if (and (null frac-start) (not exp-p) (<= (- int-end int-start) 18))
             (cons (parse-integer (subseq s i int-end)) k)
             (cons (rontolisp::%json-float s i int-start int-end frac-start frac-end k) k))))))
 

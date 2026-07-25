@@ -176,10 +176,9 @@ class WitExportDirectiveTest {
 		// The interpreter/JVM check the contract but export nothing, so no backend rule
 		// applies.
 		assertThat(printed(lower(wit, Backend.OTHER))).contains(":S64");
-		// The wasm-GC backend's integers are i31ref: it cannot represent an i64 at all.
-		assertThatThrownBy(() -> lower(wit, Backend.WASM_GC)).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessage("world.wit:4: export 'count-vowels': s64 (s) requires --no-gc "
-					+ "(the wasm-GC backend's integers are i31ref)");
+		// The wasm-GC backends carry it too: the boxed exact-integer representation
+		// holds the full signed 64-bit range.
+		assertThat(printed(lower(wit, Backend.WASM_GC))).contains(":S64");
 	}
 
 	@Test
@@ -273,16 +272,14 @@ class WitExportDirectiveTest {
 	}
 
 	@Test
-	void lowersU64OnlyWhereTheBackendCanCarryIt() {
-		// u64 rides the same i64 core type as s64, so it inherits the same rule: the
-		// wasm-GC backends carry integers as i31ref, widening to a float that is exact
-		// only below 2^53, so a 64-bit boundary type is refused there.
+	void lowersU64OnEveryWasmBackend() {
+		// u64 rides the same i64 core type as s64 on every backend; a value at or
+		// above 2^63 is the wrapper's run-time exact-or-trap concern, not a lowering
+		// rule.
 		String wit = world("  export count-vowels: func(s: u64) -> u64;");
 		assertThat(printed(lower(wit, Backend.WASM_NO_GC))).isEqualTo(
 				"(RONTOLISP:WASM-EXPORT (QUOTE count-vowels) :PARAMS (QUOTE (:U64)) :PARAM-NAMES (QUOTE (s)) :RETURNS :U64)");
-		assertThatThrownBy(() -> lower(wit, Backend.WASM_GC)).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessage("world.wit:4: export 'count-vowels': u64 (s) requires --no-gc "
-					+ "(the wasm-GC backend's integers are i31ref)");
+		assertThat(printed(lower(wit, Backend.WASM_GC))).contains(":U64");
 	}
 
 	@Test

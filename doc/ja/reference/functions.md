@@ -193,9 +193,9 @@
 | `isqrt` | `(isqrt 17)` | `4`(整数平方根、実数根の床) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
 | `random` | `(random 100)`, `(random 1.0)` | `[0, 100)` / `[0.0, 1.0)` の範囲の値(結果型は上限に従います。`(random 1)` は常に `0`)。インタプリタとJVMは `Math.random` から取得します。WASMはPreview 1モードではWASIの `random_get` ホスト関数から、`--component` モードでは `wasi:random@0.3.0` から実際のエントロピーを取得するため、列は実行ごとに異なります |
-| `get-universal-time` | `(get-universal-time)` | 1900-01-01 GMTからの秒数。インタプリタとJVMは整数を返します。WASMはクロック(Preview 1では実際のホストクロック、`--component` モードでは `wasi:clocks@0.3.0`)を読み、31ビット整数では値を保持できないため **浮動小数点** を返します(そのため生の値を印字するのではなく比較/差分で使ってください) |
-| `get-internal-real-time` | `(get-internal-real-time)` | 経過実時間(ミリ秒)(インタプリタ/JVMでは整数、WASMでは浮動小数点) |
-| `get-internal-run-time` | `(get-internal-run-time)` | 消費した実行時間(ミリ秒)(インタプリタ/JVMでは整数、WASMでは浮動小数点) |
+| `get-universal-time` | `(get-universal-time)` | 1900-01-01 GMTからの秒数。すべてのバックエンドで整数です(WASMはPreview 1では実際のホストクロック、`--component` モードでは `wasi:clocks@0.3.0` を読みます) |
+| `get-internal-real-time` | `(get-internal-real-time)` | 経過実時間(ミリ秒)(すべてのバックエンドで整数) |
+| `get-internal-run-time` | `(get-internal-run-time)` | 消費した実行時間(ミリ秒)(すべてのバックエンドで整数) |
 | `getenv` | `(getenv "PATH")` | 環境変数の値を文字列として、未設定の場合は `nil` を返します。3つのバックエンドすべて。WASMはPreview 1では実際のホスト環境を、`--component` モードでは `wasi:cli/environment@0.3.0` を読みます(wasmtimeに `--env`/`-S inherit-env` を渡してください) |
 | `exp` | `(exp 0)` | `1.0`(インタプリタ/JVMは `Math.exp` を使用。WASMはソフトウェア近似を使用) |
 | `log` | `(log 1)` | `0.0`(自然対数。インタプリタ/JVM は `Math.log`、WASM はソフトウェア近似) |

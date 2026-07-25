@@ -38,7 +38,7 @@ wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
   `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`。
 - 契約は**すべての**バックエンドで検査されます: 素の `rontolisp greet.lisp` 実行(や `-o Greet.class` ビルド)は world を検証するだけでエクスポートは行いません。したがって乖離は WASM ビルドよりずっと手前で捕まります。
 
-このディレクティブは前節までの機構のフロントエンドであって、第 2 のエクスポート経路ではありません: 手書きの実装が持つのとまったく同じ `rontolisp:wasm-export` ディレクティブへローワリングされるため、**生成されるコンポーネントはそれとバイト単位で同一**です — GC パスでも [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component) でも同様です(world が `s64` を使う場合は後者を選びます。wasm-GC の `i31ref` 整数は `s64` を保持できません)。
+このディレクティブは前節までの機構のフロントエンドであって、第 2 のエクスポート経路ではありません: 手書きの実装が持つのとまったく同じ `rontolisp:wasm-export` ディレクティブへローワリングされるため、**生成されるコンポーネントはそれとバイト単位で同一**です — GC パスでも [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component) でも同様です(`s64`/`u64` を使う world は両者で動作します。GC バックエンドはボックス化された正確な整数で 64 ビット型を運びます)。
 
 ビルドに [`--emit-wit`](#emitting-the-wit-world---emit-wit) を追加するとコンポーネントの実際の型が書き出され、そのエクスポート行は書いたとおりに戻ってきます。引数名も含めてです — WIT の名前はコンポーネントの関数型まで運ばれます(手書きのエクスポートは、自分で `:param-names '(who)` と宣言しない限り引数を `p0`、`p1`、... と名づけます)。
 

@@ -552,10 +552,34 @@ final class WasmExportCompiler {
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			}
 			// s32/u32 exceed the i31 house integer, so they box the way every other wide
-			// integer on this backend does: an i31 when it fits, a float otherwise (exact
-			// -- an f64 holds every integer below 2^53, and 2^32 is far below it).
+			// integer on this backend does: through _int_new, which answers an i31 when
+			// the value fits and the boxed exact integer (TYPE_BIGNUM) otherwise.
 			case S32 -> emitBoxWideInt(ctx, slot, true);
 			case U32 -> emitBoxWideInt(ctx, slot, false);
+			// s64 rides the i64 house lane of the exact-integer box directly. u64 is
+			// exact through 2^63-1; a value with the top bit set has no exact
+			// representation here, so the wrapper traps rather than reporting a
+			// different number (the boundary's exact-or-trap rule).
+			case S64 -> {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			}
+			case U64 -> {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.write(Instruction.I64_CONST);
+				ctx.writer.writeSignedLeb128(0);
+				ctx.writer.write(Instruction.I64_LT_S);
+				ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+				ctx.writer.write(Instruction.UNREACHABLE);
+				ctx.writer.write(Instruction.END);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			}
 			case FLOAT -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeSignedLeb128(slot);
@@ -583,49 +607,23 @@ final class WasmExportCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 			}
-			// The wasm-GC backends reject the 64-bit types before a wrapper is emitted
-			// (WasmLispCompiler's export loop), and :void is never a parameter.
-			case S64, U64, VOID -> throw new UnsupportedOperationException(
+			// :void is never a parameter.
+			case VOID -> throw new UnsupportedOperationException(
 					"rontolisp:wasm-export type " + type.designator() + " is not a wasm-GC parameter type");
 		}
 	}
 
-	// The i31 house integer's range: an integer outside it is carried as a float.
-	private static final int I31_LIMIT = 1 << 30;
-
-	// s32/u32 -> a boxed Lisp integer, exactly. An i31 when the value fits one, the wide
-	// integer's float box otherwise -- the representation this backend already gives
-	// every
+	// s32/u32 -> a boxed Lisp integer, exactly: widen to i64 and normalize through
+	// _int_new, which answers an i31 when the value fits one and the boxed exact
+	// integer (TYPE_BIGNUM) otherwise -- the representation this backend gives every
 	// integer beyond the i31 range (the clock built-ins, and every wide integer a
-	// component
-	// import lifts). Reading the parameter slot three times is free: it is a local.
+	// component import lifts).
 	private static void emitBoxWideInt(WasmLispCompiler.Ctx ctx, int slot, boolean signed) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(slot);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(I31_LIMIT);
-		ctx.writer.write(signed ? Instruction.I32_LT_S : Instruction.I32_LT_U);
-		if (signed) {
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(slot);
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(-I31_LIMIT);
-			ctx.writer.write(Instruction.I32_GE_S);
-			ctx.writer.write(Instruction.I32_AND);
-		}
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		ctx.writer.write(Instruction.ELSE);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
-		ctx.writer.write(signed ? Instruction.F64_CONVERT_S_I32 : Instruction.F64_CONVERT_U_I32);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.write(Instruction.END);
+		ctx.writer.write(signed ? Instruction.I64_EXTEND_S_I32 : Instruction.I64_EXTEND_U_I32);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 	}
 
 	// Whether an integer result needs an explicit range check after the trapping trunc:
@@ -673,8 +671,11 @@ final class WasmExportCompiler {
 			}
 			case VOID -> ctx.writer.write(Instruction.DROP); // discard the Lisp return
 																// value
-			case S64, U64 -> throw new UnsupportedOperationException(
-					"rontolisp:wasm-export type " + type.designator() + " is not a wasm-GC result type");
+			// A 64-bit result crosses exactly from the exact-integer representations
+			// (i31 or TYPE_BIGNUM, via _int_val); a float or ratio result normalizes
+			// through f64 with a TRAPPING trunc, like the 32-bit family. A negative
+			// returned from a u64 export traps on both paths.
+			case S64, U64 -> emitWideIntResult(ctx, type.signed());
 		}
 	}
 
@@ -693,6 +694,52 @@ final class WasmExportCompiler {
 				range.max().intValueExact());
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(scratchSlot);
+	}
+
+	// A 64-bit integer result. The exact-integer representations (i31 and TYPE_BIGNUM)
+	// unbox through _int_val, carrying the full signed 64-bit range exactly; any other
+	// numeric representation (float, ratio) normalizes through the backend's
+	// number-to-f64 conversion and a TRAPPING trunc, like the 32-bit family. For u64 the
+	// exact path refuses a negative explicitly (_int_val is called twice on that path --
+	// once for the check, once for the value -- it is pure and cheap); the float path's
+	// i64.trunc_u_f64 already rejects a negative.
+	private static void emitWideIntResult(WasmLispCompiler.Ctx ctx, boolean signed) {
+		int slot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.I32_OR);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I64);
+		if (!signed) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(slot);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.write(Instruction.I64_LT_S);
+			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			ctx.writer.write(Instruction.END);
+		}
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		WasmEmitHelper.castFloatGetF64(ctx);
+		ctx.writer.write(signed ? Instruction.I64_TRUNC_S_F64 : Instruction.I64_TRUNC_U_F64);
+		ctx.writer.write(Instruction.END);
 	}
 
 	// `if (local[slot] <op> bound) unreachable` -- the boundary's way of refusing a value

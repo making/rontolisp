@@ -22,8 +22,9 @@ its pre-existing silent narrowing. The two sides of the same contract disagree.
 
 The `--component` import path is NOT affected: it binds through the WIT text
 (`WitComponentTypeEncoder` / `WitCanonicalAbi` map all thirteen primitives, and
-`WasmComponentImportCompiler` already lifts a wide integer through the
-wide-integer float box). This is a Preview 1 / `wasm-import` gap.
+`WasmComponentImportCompiler` lifts a wide integer into the boxed exact
+integer -- `boxI64`/`lowerI64`, `.kb/wasm-bignum.md`). This is a Preview 1 /
+`wasm-import` gap.
 
 ## Why it was left out of the export work
 
@@ -46,7 +47,7 @@ inside the export change would have made one commit that touches two contracts.
 - Decide whether the exact-or-trap rule applies inbound here, or whether an
   import is trusted the way a component-ABI export parameter is trusted. State
   the reason in `.kb/wit.md` next to the export rule either way.
-- Lift `s64` / `u64` onto the Preview 1 import path (the wide-integer float box
+- Lift `s64` / `u64` onto the Preview 1 import path (the boxed exact integer
   is what the `--component` path already uses), or record why they stay
   rejected.
 

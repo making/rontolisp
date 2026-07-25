@@ -39,8 +39,8 @@ The type designators and their boundary representations are:
 
 | Designator | WASM boundary | Notes |
 | --- | --- | --- |
-| `:int` | `i32` | 31-bit signed range (the internal `i31ref`) |
-| `:long` | `i64` | `--no-gc` only; full 64-bit signed range, matching the non-GC backend's internal `i64` |
+| `:int` | `i32` | full 32-bit signed range |
+| `:long` | `i64` | full 64-bit signed range on every backend |
 | `:float` | `f64` | |
 | `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory; a component-model `string` under `--component` |
@@ -82,7 +82,7 @@ the `--no-gc` / `--component` flags:
 | --- | --- | --- | --- | --- |
 | Host requirements | wasm-GC engine (`wasmtime -W gc`, Node 22+, current browsers) | wasmtime 46+ (`-W gc=y`) or a component host with wasm-GC + JSPI (a [browser via jco](wasm-browser.md) loads and computes, but cannot print yet) | **any** WebAssembly engine | any component-model host, **no flags** — including a [browser via jco](wasm-browser.md), with no dependencies at all |
 | Export shape | raw core function | typed component-model export (WAVE `--invoke`, jco) | raw core function | typed component-model export (WAVE `--invoke`, jco) |
-| Scalars | `:int`/`:float`/`:bool`/void | `:int`/`:float`/`:bool`/void | + `:long` (`i64`) | + `:long` (`s64`) |
+| Scalars | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void |
 | `:string` | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) |
 | `:s-expr` | manual `(ptr,len)` | component-model `string` (printed text) | not supported | not supported |
 | Function body may use | the full language | the full language | the [non-GC subset](wasm-nogc.md#eligible-subset) | the [non-GC subset](wasm-nogc.md#eligible-subset) |

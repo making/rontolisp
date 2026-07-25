@@ -58,6 +58,25 @@ Dispatch sites that know about the box:
 - `_equal` and `_hash` (`WasmRuntimeBuilder`): both-boxed value equality; the
   hash folds the i64 halves (mirrors the float branch).
 
+## Widened consumers (post-md5 sweep)
+
+- **`gcd`/`lcm`** compute in i64 (`WasmGcdCompiler`/`WasmLcmCompiler` over
+  `WasmMathHelper.getI64/setI64/emitEuclid`), **`random`'s integer path** draws
+  63 bits and takes the remainder in i64 (`WasmRandomCompiler.emitRandomI63`) —
+  all three accept and return the full exact-integer range. Pinned by the
+  `gcdLcm`/`randomOnABoxedIntegerLimit` integration tests and the
+  `exact-integers-beyond-the-i31-fixnum-range` ci-spec case.
+- **The time built-ins return exact integers** (`WasmTimeCompiler` → `_int_new`),
+  not the pre-bignum float — `.kb/time-environment-builtins.md`.
+- **The export boundary carries the whole fixed-width family, 64-bit included**
+  (`WasmExportCompiler`: `emitBoxWideInt` and the s64/u64 param/result cases go
+  through `_int_new`/`_int_val`; a u64 at or above 2^63 traps, exact-or-trap),
+  and a `--component` import lifts a wide integer into the box
+  (`WasmComponentImportCompiler.boxI64`) and lowers one exactly
+  (`lowerI64`) — `.kb/wit.md` "The integer boundary".
+- **`json-parse`** keeps integers up to 18 digits exact (json.lisp
+  `%json-number`), retiring the 9-digit float rule.
+
 ## Deliberate limits (the "why", so the next visitor can re-evaluate)
 
 - **Ratio components stay i32** (`TYPE_RATIO` unchanged): `TYPE_RAT_NEW`/
@@ -69,16 +88,17 @@ Dispatch sites that know about the box:
   lowers to `(floor (/ big 16))`) are inexact past i31. Even division is exact
   via the `_rat_div` i64 fast path. Revisit if a real library needs exact big
   ratios.
-- **`gcd`/`lcm`/`random` stay i31-range** (inline i32 loops, `WasmGcdCompiler` /
-  `WasmLcmCompiler` / `WasmRandomCompiler`): no consumer yet; the md5/cl-postgres
-  chain does not touch them.
 - **`expt`** promotes automatically (it loops `_rat_mul`), exact to i64.
 - Products/sums past 2^63 wrap silently — same class as the old i31 wrap, one
   range up. `most-positive-fixnum` semantics are unchanged.
-- The **`--no-gc`** backend and the **JVM/interpreter** are untouched; the wasm
-  boundary designators (`:int` = i32) are unchanged, so a bignum crossing a
-  `wasm-export`/`wit-export` `:int` boundary still wraps to the host width
-  (`s64` on the GC component export boundary remains unsupported).
+- A host-supplied **u64 at or above 2^63** has no exact place in the signed i64
+  box: an import lift degrades it to the float approximation (u64::MAX is a
+  common "no limit" sentinel, so trapping would break real hosts); an export
+  wrapper traps instead, because there the declared type is a promise the
+  program makes (`.kb/wit.md`).
+- The **`--no-gc`** backend and the **JVM/interpreter** are untouched. The
+  Preview 1 `wasm-import`/`wit-import` seam still narrows to `:s32`
+  (`.todo/169`).
 
 ## Index bookkeeping
 

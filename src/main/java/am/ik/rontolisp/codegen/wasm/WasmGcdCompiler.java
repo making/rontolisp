@@ -8,7 +8,8 @@ import am.ik.wasm.Instruction;
 
 /**
  * Compiles the {@code gcd} built-in: the greatest common divisor of two integers via the
- * Euclidean algorithm (always non-negative). Operates on the i31 integer range.
+ * Euclidean algorithm (always non-negative). Computes in i64, so the full exact-integer
+ * range (i31 or boxed) crosses exactly.
  */
 final class WasmGcdCompiler {
 
@@ -29,9 +30,10 @@ final class WasmGcdCompiler {
 		ctx.writer.writeSignedLeb128(bSlot);
 
 		WasmMathHelper.emitEuclid(ctx, aSlot, bSlot, scratch);
-		// Result is abs(aSlot).
-		WasmMathHelper.emitAbsFromLocal(ctx, aSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		// Result is abs(aSlot), normalized through _int_new.
+		WasmMathHelper.emitAbs64FromLocal(ctx, aSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 	}
 
 }
