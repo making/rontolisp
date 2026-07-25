@@ -18,9 +18,9 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 | `&whole` / `&environment` | not available; a `defmacro` lambda list takes required parameters plus one trailing `&rest`/`&body` |
 | `loop` (extended) | partial (see below) |
 | CLOS | partial (static subset; no MOP) |
-| `defstruct` `:include` | not available (an instance prints AND reads as `#S(...)`) |
+| `defstruct` `:include` | single inheritance only; a slot-override `(:include parent (slot default))` is not available |
 | `declare` / `declaim` / `proclaim` / `the` | parsed no-ops (no effect on compilation) |
-| `typep` / `subtypep` / `coerce` | literal (quoted) type specifiers only; `coerce` targets `'list` / `'vector` / `'string` |
+| `typep` / `subtypep` / `coerce` / `concatenate` | literal (quoted) type specifiers only; `coerce` targets `'list` / `'vector` / `'string` (or a float type), `concatenate` builds those same three sequence families |
 | `make-package` / `export` / `import` / `use-package` / `find-package` / `rename-package` (runtime) | not available; `defpackage` `:shadow` / `:shadowing-import-from` are errors |
 | `progv` | interpreter only (compile error on the JVM/WASM backends) |
 | `eval-when` | treated as `progn` (no phase distinction) |
@@ -90,8 +90,9 @@ and `thereis`/`always`/`never`.
 
 ## Structures and objects
 
-[`defstruct`](../reference/special-forms/defstruct.md) does not support
-`:include` inheritance. An instance prints in the standard `#S(...)` syntax, and
+[`defstruct`](../reference/special-forms/defstruct.md) supports `:include`
+inheritance in its single-inheritance form only -- a slot-override
+`(:include parent (slot new-default))` is not available. An instance prints in the standard `#S(...)` syntax, and
 a `#S(...)` literal reads back into an instance -- in source and through the
 runtime `read` / `read-from-string` on every backend (a compiled program's
 reader has frontend parity; only `#.`, `#+`/`#-` and `#n=`/`#n#` signal there).

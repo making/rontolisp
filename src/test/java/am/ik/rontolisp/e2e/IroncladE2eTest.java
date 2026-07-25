@@ -21,9 +21,10 @@ import java.util.List;
  * <p>
  * The vectors: SHA-256 of {@code "abc"} and of a two-block message (FIPS 180-2 appendix
  * B), SHA-224 of {@code "abc"}, HMAC-SHA-256 of RFC 4231 test case 2 through BOTH the
- * {@code make-mac} API and the deprecated {@code make-hmac} one, PBKDF2-HMAC-SHA-256 at 1
- * and 4096 iterations, and finally RFC 7677's SCRAM-SHA-256 {@code SaltedPassword} -- the
- * value that makes this slice the cl-postgres SCRAM authentication dependency.
+ * {@code make-mac} API and the deprecated {@code make-hmac} one, HKDF-SHA-256 of RFC 5869
+ * test case 1 (the {@code hmac-kdf}), PBKDF2-HMAC-SHA-256 at 1 and 4096 iterations, and
+ * finally RFC 7677's SCRAM-SHA-256 {@code SaltedPassword} -- the value that makes this
+ * slice the cl-postgres SCRAM authentication dependency.
  */
 class IroncladE2eTest extends AsdfLibraryE2eSupport {
 
@@ -47,6 +48,14 @@ class IroncladE2eTest extends AsdfLibraryE2eSupport {
 			(let ((hmac (ironclad:make-hmac (ironclad:ascii-string-to-byte-array "Jefe") :sha256)))
 			  (ironclad:update-hmac hmac (ironclad:ascii-string-to-byte-array "what do ya want for nothing?"))
 			  (print (ironclad:byte-array-to-hex-string (ironclad:hmac-digest hmac))))
+			(let ((kdf (ironclad:make-kdf :hmac-kdf :digest :sha256
+			                              :additional-data (ironclad:hex-string-to-byte-array "f0f1f2f3f4f5f6f7f8f9"))))
+			  (print (ironclad:byte-array-to-hex-string
+			          (ironclad:derive-key kdf
+			                               (ironclad:hex-string-to-byte-array
+			                                "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")
+			                               (ironclad:hex-string-to-byte-array "000102030405060708090a0b0c")
+			                               1 42))))
 			(let ((kdf (ironclad:make-kdf :pbkdf2 :digest :sha256)))
 			  (print (ironclad:byte-array-to-hex-string
 			          (ironclad:derive-key kdf (ironclad:ascii-string-to-byte-array "password")
@@ -66,6 +75,7 @@ class IroncladE2eTest extends AsdfLibraryE2eSupport {
 			"\"23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7\"",
 			"\"5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843\"",
 			"\"5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843\"",
+			"\"3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865\"",
 			"\"120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b\"",
 			"\"c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a\"",
 			"\"c4a49510323ab4f952cac1fa99441939e78ea74d6be81ddf7096e87513dc615d\"");

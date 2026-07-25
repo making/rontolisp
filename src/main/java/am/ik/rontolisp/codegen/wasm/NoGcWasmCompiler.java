@@ -29,6 +29,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BoundaryType;
+import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
@@ -2925,6 +2926,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (args.size() < 2) {
 			throw new UnsupportedOperationException(
 					"--no-gc: concatenate needs a result-type and operands in '" + fn.fnName + "'");
+		}
+		// This backend has no cons cells and no general array type, so only the string
+		// family is buildable here (the GC backends take the list / vector families too).
+		if (ConcatenateForms.literalResultFamily(args.get(1)) != ConcatenateForms.ResultFamily.STRING) {
+			throw new UnsupportedOperationException(
+					"--no-gc: concatenate supports only the literal 'string result type " + "in '" + fn.fnName
+							+ "', got: " + args.get(1).print());
 		}
 		WasmWriter w = fn.writer;
 		// Evaluate each operand string into its own i32 (STRING) local.

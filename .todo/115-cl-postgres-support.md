@@ -82,7 +82,7 @@ Iterate with the cached copy in
      proper, which is out of scope (see the milestones).
 4. **Dependency systems**: `:depends-on ("md5" "split-sequence" "ironclad"
    "cl-base64" "uax-15")`. **The dependency grind (formerly `.todo/154`) is
-   DONE modulo ironclad** -- every other system runs REAL on all 4 backends
+   DONE** -- every other system runs REAL on all 4 backends
    (the REAL-source policy of `.todo/147` superseded the original
    shim-everything strategy below).
    - `split-sequence` runs REAL (todo-054 verification chain).
@@ -91,16 +91,35 @@ Iterate with the cached copy in
      retired by the boxed exact-integer path, `.kb/wasm-bignum.md`).
    - `cl-ppcre` v2.1.2 runs REAL on all 4 backends (`ClPpcreE2eTest`).
    - `uax-15` v0.1.3 runs REAL on all 4 backends (`Uax15E2eTest`).
-   - `ironclad`: the SHA-256/HMAC/PBKDF2 slice runs REAL on all 4 backends
+   - `ironclad`: the SHA-256/HMAC/PBKDF2/HKDF slice runs REAL on all 4 backends
      (`IroncladE2eTest`, todo-173 -- the "real loading is infeasible" verdict
      was WRONG: the executable `.asd` blocked parsing, not loading, and
      `eval/AsdOverrides` substitutes a hand-authored replacement while keeping
      the real sources). **The JDK-backed shim strategy is dead** -- that was
      the frozen `cl-postgres-wip` M2's whole reason to exist.
-     Residual gap: `scram.lisp` calls THREE ironclad names outside the slice
-     (`pbkdf2-hash-password`, `integer-to-octets`, `octets-to-integer`); all three
-     are small and the route for each is written up in `.todo/173`. SCRAM is
-     the LAST auth method in M5's order, so this does not block M4.
+     Residual gap: of the nine `ironclad:` names `scram.lisp` calls, six are in
+     the slice (`digest-sequence`, `make-hmac`, `update-hmac`, `hmac-digest`,
+     `ascii-string-to-byte-array`, `hex-string-to-byte-array`) and THREE are not
+     (verified by grep 2026-07-25). Both routes are small:
+     - `pbkdf2-hash-password` (`kdf/password-hash.lisp`, 61 lines): its body is
+       the one-liner `(pbkdf2-derive-key digest password salt iterations
+       (digest-length digest))`, all of which the slice already has. The file's
+       only out-of-slice reference is `make-random-salt` (prng/), and only as the
+       DEFAULT of its `:salt` keyword -- cl-postgres passes an explicit salt, so
+       on the interpreter the default never evaluates; the compile paths are
+       eager, so they need a `make-random-salt` stub (or a prng slice). Add the
+       file to `ironclad-slice.asd`.
+     - `integer-to-octets` / `octets-to-integer` (`public-key/public-key.lisp`):
+       self-contained `ldb`/`loop` byte<->integer converters (no
+       arbitrary-precision math, no elliptic curves) that merely LIVE in a
+       3,065-line file. Loading that file whole is not viable, so the route is a
+       `ShimLibraries.leafModuleForms` substitution for `public-key.lisp`
+       exposing just these two (the jzon numeric-leaf precedent).
+     SCRAM is the LAST auth method in M5's order, so this does not block M4.
+     Widening the slice further (ciphers / public-key / prng / the other digests)
+     is NOT planned -- the next real consumer decides. `dotimes-unrolled` users
+     stay out until then: its DEFINITION loads, but no expansion of it does
+     (`symbol-macrolet` is still unsupported).
 5. **Stream/socket gaps + the four missing CL primitives** (inventory verified
    against develop 2026-07-25 -- these are now the FIRST thing to do in M4,
    each is tens of lines):

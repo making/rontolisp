@@ -8,6 +8,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
@@ -91,6 +92,7 @@ public final class BuiltinFunctionWrappers {
 	static {
 		Set<String> gated = new java.util.HashSet<>(SIGNAL_FUNCTIONS);
 		gated.add(LispNames.FORMAT);
+		gated.add(LispNames.CONCATENATE);
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
 	}
 
@@ -395,11 +397,69 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(LispNames.FORMAT, List.of("dest", "ctrl", LispNames.LAMBDA_REST, "r"), List.of(body));
 	}
 
+	// #'concatenate wrapper (gated by REFERENCE_GATED_FUNCTIONS): the result type is a
+	// RUNTIME value here, so the family dispatch that ConcatenateForms performs at
+	// expansion time is re-done with member over the designator (its head, for a compound
+	// spec like '(vector (unsigned-byte 8))). The string family folds the arguments with
+	// %string-concat exactly like the call-position lowering -- so, there as here, its
+	// arguments must be strings; the list / vector families walk elements through
+	// (coerce x 'list). An unsupported designator signals, matching the interpreter.
+	private static WrapperDef concatenateWrapper() {
+		LispSymbol head = new LispSymbol("__cc_head");
+		LispVal headOfSpec = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.CONSP, "type"),
+				call(LispNames.CAR, "type"), new LispSymbol("type")));
+		LispVal strings = foldReduce(LispNames.STRING_CONCAT, new LispSymbol("seqs"), new LispString(""));
+		LispVal vector = listToCons(List.of(new LispSymbol(LispNames.COERCE), concatenatedElements(),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("VECTOR")))));
+		LispVal unsupported = listToCons(
+				List.of(new LispSymbol(LispNames.ERROR), new LispString("concatenate: unsupported result type")));
+		LispVal dispatch = listToCons(
+				List.of(new LispSymbol(LispNames.IF),
+						memberOf(head, "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING"), strings,
+						listToCons(List.of(new LispSymbol(LispNames.IF), memberOf(head, "LIST", "CONS"),
+								concatenatedElements(),
+								listToCons(List.of(
+										new LispSymbol(LispNames.IF), memberOf(head, "VECTOR", "SIMPLE-VECTOR", "ARRAY",
+												"SIMPLE-ARRAY", "BIT-VECTOR", "SIMPLE-BIT-VECTOR"),
+										vector, unsupported))))));
+		LispVal bindings = listToCons(List.of((LispVal) listToCons(List.of(head, headOfSpec))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, dispatch));
+		return new WrapperDef(LispNames.CONCATENATE, List.of("type", LispNames.LAMBDA_REST, "seqs"), List.of(body));
+	}
+
+	// Every argument's elements, in order, in a FRESH list:
+	// (append (reduce (lambda (a x) (append a (coerce x 'list))) seqs :initial-value nil)
+	// nil) -- the outer append is what copies the last argument too. Built per use so the
+	// two dispatch arms never share one AST node.
+	private static LispVal concatenatedElements() {
+		LispVal step = listToCons(
+				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(new LispSymbol("a"), new LispSymbol("x"))),
+						callV(LispNames.APPEND, new LispSymbol("a"), coerceTo("x", "LIST"))));
+		LispVal reduced = listToCons(List.of(new LispSymbol(LispNames.REDUCE), step, new LispSymbol("seqs"),
+				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), LispNil.INSTANCE));
+		return callV(LispNames.APPEND, reduced, LispNil.INSTANCE);
+	}
+
+	// (coerce <var> '<type>)
+	private static LispVal coerceTo(String var, String type) {
+		return listToCons(List.of(new LispSymbol(LispNames.COERCE), new LispSymbol(var),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(type)))));
+	}
+
+	// (member x '(name...))
+	private static LispVal memberOf(LispSymbol x, String... names) {
+		List<LispVal> symbols = new ArrayList<>();
+		for (String name : names) {
+			symbols.add(new LispSymbol(name));
+		}
+		return callV(LispNames.MEMBER, x, listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(symbols))));
+	}
+
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
 			// Signal operators and format (gated by REFERENCE_GATED_FUNCTIONS in the
 			// backend compilers)
 			signalDatum(LispNames.ERROR, LispNames.ERROR), signalDatum(LispNames.SIGNAL, LispNames.SIGNAL),
-			signalDatum(LispNames.WARN, LispNames.WARN), cerrorWrapper(), formatWrapper(),
+			signalDatum(LispNames.WARN, LispNames.WARN), cerrorWrapper(), formatWrapper(), concatenateWrapper(),
 			// Arithmetic: +/-/*// are variadic in CL, so their wrappers accept any arity
 			// (a fixed-arity wrapper returned nil on the JVM / trapped on WASM when
 			// funcall/apply passed a different argument count). - and / keep their

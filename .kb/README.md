@@ -45,6 +45,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [vec.md](vec.md) -- `vec` package + the packed float-array type and its four `--simd` acceleration layers
 - [linalg-simd.md](linalg-simd.md) -- `--simd` interception of the `linalg:` kernels (the declined-input protocol, the precision contract)
 - [vec.md](vec.md) -- `vec:` package (packed-f64 vector kernels over the packed float-array type) + JVM `--simd` (jdk.incubator.vector) and `--no-gc` native `v128` acceleration
+- [concatenate-result-families.md](concatenate-result-families.md) -- `concatenate`'s `string`/`list`/`vector` result families: the one shared designator normalizer + compile-path lowering (`compiler/ConcatenateForms`), why the string family takes string arguments, the reference-gated `#'concatenate` wrapper, the `--no-gc` restriction
 - [adjustable-arrays.md](adjustable-arrays.md) -- fill-pointer / `:adjustable` / displaced arrays + `vector-push`/`-pop`/`-push-extend` + `adjust-array`/`array-displacement` (all four backends)
 - [url.md](url.md) -- `rontolisp:url-*`/`query-param*` URL / query-string Lisp-source library
 - [java-interop.md](java-interop.md) -- `java:` reflection interop bridge

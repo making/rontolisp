@@ -35,7 +35,7 @@
 | `fresh-line` | `(fresh-line)` | 標準出力がまだ行頭にない場合のみ改行を印字します。nilを返します |
 | `princ-to-string` | `(princ-to-string '(1 "x"))` | `"(1 x)"` -- `princ` が印字する文字列 |
 | `prin1-to-string` | `(prin1-to-string "abc")` | `"\"abc\""` -- `prin1` が印字する文字列(読み戻し可能な形式) |
-| `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"`(サポートされるのは `'string` 結果型のみ。コンパイラはリテラルの `'string` を要求します) |
+| `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"`(`'string` / `'list` / `'vector` の 3 系統。コンパイラはリテラルの引用指定子を要求します) |
 | `string-upcase` | `(string-upcase "abc")` | `"ABC"`(WASMバックエンドでは大小文字変換はASCII限定です) |
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"`(各単語の最初の文字) |

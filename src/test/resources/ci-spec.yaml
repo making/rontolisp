@@ -2485,6 +2485,35 @@ cases:
       "ab"
       (1 2)
       "hi"
+  # concatenate's three result families (ConcatenateForms): the string family folds the
+  # binary string primitive and takes string arguments, the list / vector families walk
+  # elements so any mix of sequences works, and a compound spec normalizes to its head
+  # ('(vector (unsigned-byte 8)) is the vector family -- what ironclad's HKDF builds with).
+  # The last case is the first-class #'concatenate wrapper, whose result type is a runtime
+  # value rather than a literal.
+  - name: concatenate-result-families
+    source: |
+      (defun ci-concatenate ()
+        (print (concatenate 'string "foo" "bar" "baz"))
+        (print (concatenate 'list '(1 2) "ab" #(3)))
+        (print (concatenate 'vector '(1 2) #(3)))
+        (print (concatenate '(vector (unsigned-byte 8)) #(1) #(2 3)))
+        (print (concatenate 'list))
+        (print (concatenate 'vector))
+        (print (let ((a (list 1 2))) (eq a (concatenate 'list a))))
+        (print (apply #'concatenate '(vector (unsigned-byte 8)) (list #(1) #(2 3))))
+        (print (apply #'concatenate 'string (list "a" "b"))))
+      (ci-concatenate)
+    expected: |
+      "foobarbaz"
+      (1 2 #\a #\b 3)
+      #(1 2 3)
+      #(1 2 3)
+      NIL
+      #()
+      NIL
+      #(1 2 3)
+      "ab"
   # The linalg package is a Lisp-source library (linalg.lisp) spliced by
   # LinalgLibrary.process on the compile path and loaded lazily by the interpreter,
   # so one implementation must behave identically on every backend. linalg computes in
@@ -4732,12 +4761,16 @@ cases:
     source: |
       ;; The general (non-library-specific) features the ironclad slice forced.
       ;; defstruct :include -- the parent's slots come first, so its accessors read
-      ;; a child instance, and (typep child 'parent) is true.
+      ;; a child instance, and both (typep child 'parent) and the parent's PREDICATE
+      ;; are true (the predicate is regenerated as later children widen the tag set).
       (defstruct ic-base (a 1) (b 2))
       (defstruct (ic-child (:include ic-base)) (c 3))
+      (defstruct (ic-grand (:include ic-child)) (d 4))
       (let ((ic-k (make-ic-child :a 10 :c 30)))
         (print (list (ic-base-a ic-k) (ic-base-b ic-k) (ic-child-c ic-k)))
-        (print (list (ic-child-p ic-k) (typep ic-k 'ic-base) (typep (make-ic-base) 'ic-child))))
+        (print (list (ic-child-p ic-k) (typep ic-k 'ic-base) (typep (make-ic-base) 'ic-child)))
+        (print (list (ic-base-p ic-k) (ic-base-p (make-ic-grand)) (ic-child-p (make-ic-grand))
+                     (ic-grand-p ic-k) (ic-base-p 5))))
       ;; defstruct (:type (vector ...)) -- the instance IS a vector; the accessor
       ;; is an aref read and a settable place.
       (defstruct (ic-regs (:type (vector (unsigned-byte 32))) (:constructor initial-ic-regs ()))
@@ -4773,6 +4806,7 @@ cases:
     expected: |
       (10 2 30)
       (T T NIL)
+      (T T T NIL NIL)
       (#(7 99) 7 T)
       (IC-BASE INTEGER STRING)
       (:CL NIL :KEYWORD)

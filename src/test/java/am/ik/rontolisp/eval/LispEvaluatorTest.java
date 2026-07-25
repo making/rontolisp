@@ -928,9 +928,36 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalConcatenateRejectsNonStringResultType() {
-		assertThatThrownBy(() -> eval("(concatenate 'list \"a\" \"b\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("string result type");
+	void evalConcatenateListAndVectorResultTypes() {
+		// The list / vector families walk elements, so the arguments may be any mix of
+		// sequences; the compound spellings normalize to the same families (the element
+		// type is dropped -- rontolisp vectors are generic).
+		assertThat(eval("(princ-to-string (concatenate 'list '(1 2) \"ab\" #(3)))"))
+			.isEqualTo(new LispString("(1 2 a b 3)"));
+		assertThat(eval("(princ-to-string (concatenate 'vector '(1 2) #(3)))")).isEqualTo(new LispString("#(1 2 3)"));
+		assertThat(eval("(princ-to-string (concatenate '(vector (unsigned-byte 8)) #(1) #(2 3)))"))
+			.isEqualTo(new LispString("#(1 2 3)"));
+		assertThat(eval("(concatenate 'list)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(princ-to-string (concatenate 'vector))")).isEqualTo(new LispString("#()"));
+		// The result is always fresh: the last argument is copied, not shared.
+		assertThat(eval("(let ((a (list 1 2))) (eq a (concatenate 'list a)))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalConcatenateRejectsUnsupportedResultType() {
+		assertThatThrownBy(() -> eval("(concatenate 'hash-table \"a\" \"b\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("string, list and vector result types");
+		// The string family lowers to the binary string primitive on the compile paths,
+		// so a non-string argument is rejected here too (coerce it first).
+		assertThatThrownBy(() -> eval("(concatenate 'string \"a\" '(#\\b))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("concatenate expects strings");
+	}
+
+	@Test
+	void evalConcatenateAsFunctionValue() {
+		assertThat(eval("(princ-to-string (apply #'concatenate '(vector (unsigned-byte 8)) (list #(1) #(2 3))))"))
+			.isEqualTo(new LispString("#(1 2 3)"));
+		assertThat(eval("(apply #'concatenate 'string (list \"a\" \"b\"))")).isEqualTo(new LispString("ab"));
 	}
 
 	@Test
@@ -7097,16 +7124,18 @@ class LispEvaluatorTest {
 	@Test
 	void defstructIncludeInheritsSlotsAndTypeTests() {
 		// The parent's slots come first, so its accessors read a child instance too, and
-		// a (typep x 'parent) written after both defstructs matches the child. The
-		// parent's PREDICATE defun, emitted at the parent's defstruct, only knows the
-		// descendants registered by then -- see .kb/defstruct.md.
+		// both (typep x 'parent) and the parent's PREDICATE match the child -- the
+		// predicate is regenerated when the child's defstruct widens the tag set, even
+		// though the parent's defstruct came first (see .kb/defstruct.md).
 		assertThat(evalMulti("""
 				(defstruct base (a 1) (b 2))
 				(defstruct (child (:include base)) (c 3))
+				(defstruct (grand (:include child)) (d 4))
 				(let ((k (make-child :a 10 :c 30)))
-				  (list (base-a k) (base-b k) (child-c k) (child-p k)
+				  (list (base-a k) (base-b k) (child-c k) (child-p k) (base-p k)
+				        (base-p (make-grand)) (child-p (make-grand)) (grand-p k)
 				        (child-p (make-base)) (typep k 'base) (typep (make-base) 'child)))
-				""").print()).isEqualTo("(10 2 30 T NIL T NIL)");
+				""").print()).isEqualTo("(10 2 30 T T T T NIL NIL T NIL)");
 	}
 
 	@Test

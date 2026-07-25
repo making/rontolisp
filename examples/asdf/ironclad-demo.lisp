@@ -1,4 +1,4 @@
-;; Loads the SHA-256 / HMAC / PBKDF2 slice of the REAL ironclad (BSD 3-Clause,
+;; Loads the SHA-256 / HMAC / PBKDF2 / HKDF slice of the REAL ironclad (BSD 3-Clause,
 ;; Nathan Froyd / Guillaume LE VAILLANT) via asdf:load-system and reproduces
 ;; published test vectors. Run with:
 ;;   rontolisp examples/asdf/ironclad-demo.lisp --system-path src/test/resources/ironclad
@@ -26,6 +26,17 @@
 (let ((mac (ironclad:make-mac :hmac (ironclad:ascii-string-to-byte-array "Jefe") :sha256)))
   (ironclad:update-mac mac (ironclad:ascii-string-to-byte-array "what do ya want for nothing?"))
   (print (ironclad:byte-array-to-hex-string (ironclad:produce-mac mac))))
+
+;; RFC 5869 test case 1: HKDF-SHA-256 (make-kdf :hmac-kdf), whose output builder
+;; concatenates its blocks into a '(vector (unsigned-byte 8))
+(let ((kdf (ironclad:make-kdf :hmac-kdf :digest :sha256
+                              :additional-data (ironclad:hex-string-to-byte-array "f0f1f2f3f4f5f6f7f8f9"))))
+  (print (ironclad:byte-array-to-hex-string
+          (ironclad:derive-key kdf
+                               (ironclad:hex-string-to-byte-array
+                                "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")
+                               (ironclad:hex-string-to-byte-array "000102030405060708090a0b0c")
+                               1 42))))
 
 ;; PBKDF2-HMAC-SHA-256, 4096 iterations
 (let ((kdf (ironclad:make-kdf :pbkdf2 :digest :sha256)))

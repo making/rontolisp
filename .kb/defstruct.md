@@ -70,19 +70,37 @@ ancestor chain (`structAncestors`, the struct-side twin of
 between classes and built-in types, deeper `:include` first). Slot-override
 syntax (`(:include parent (slot new-default))`) is NOT supported.
 
-**Known limit — the predicate is emitted before later children exist**: a
-predicate defun bakes the descendant tags registered AT ITS defstruct, so
-`(base-p child)` is `NIL` when `child`'s defstruct comes after `base`'s (the
-normal case). `(typep x 'base)` written after both IS `T` — type tests expand at
-their use site, predicates at their definition site. Both compile paths and the
-interpreter process forms in order, so all four backends agree. Re-evaluation
-trigger: fixing this needs either the parent's predicate REGENERATED on each
-child registration (interpreter) plus a pre-scan of `:include` links before any
-predicate is emitted (compile path), or a late-bound runtime ancestry test —
-neither existed when `:include` landed, and the ironclad slice that motivated it
-only needs the `typep`/specializer side. Pinned by
-`LispEvaluatorTest#defstructIncludeInheritsSlotsAndTypeTests`, which asserts the
-`NIL` deliberately.
+**The predicate is REGENERATED as later children appear**: a predicate defun can
+only bake the descendant tags registered at the point it is built, and a child's
+defstruct normally comes after its parent's — so `(base-p child)` would test too
+few tags. Every generated predicate is therefore rebuilt (
+`LispMacroExpander.structPredicateDefun`, from the registry as it then stands)
+once the wider tag set is known:
+
+- **interpreter** — `evalDefstruct`, after evaluating the expansion of a
+  `(:include parent)` struct, re-evaluates the predicate defun of each ANCESTOR
+  (`ClosRegistry.structAncestorNames`), so the redefinition happens form by form
+  exactly as a REPL would need it.
+- **compile path** — `expandTopLevelDefinitions` calls `refreshStructPredicates`
+  in the same "registry is complete" phase that fills the method dispatchers,
+  replacing each emitted predicate defun in place. It only replaces a form whose
+  name is a registered struct predicate AND whose body is still the generated
+  `(%obj-is __struct ...)` shape, so a program that redefines that name itself
+  keeps its own defun.
+
+`ClosRegistry.structPredicates` (normalized struct name → predicate defun name)
+is what records which defuns to rebuild; `(:predicate nil)` and `:type` structs
+never enter it (no predicate to refresh). Pinned by
+`LispEvaluatorTest#defstructIncludeInheritsSlotsAndTypeTests`,
+`Jvm/WasmLispCompilerIntegrationTest#compileAndRunDefstructIncludePredicateMatchesLaterChildren`
+and the ci-spec `ironclad-residue-features` case (all four backends).
+
+Still definition-site-baked, for the same reason but WITHOUT a refresh: a
+`defmethod` whose specializer names a `defclass` class tests the descendant tags
+known when the dispatcher is generated. On the compile path that is after the
+whole program is registered (so subclasses defined later are covered), and the
+interpreter dispatches through the registry at call time — the gap is only a
+compiled program that registers a class through runtime `eval`.
 
 **`(:type (vector ...))`**: a typed struct IS a plain vector — no instance tag,
 so it is not registered as a type (no specializer, no `typep`, not a

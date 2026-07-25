@@ -19,9 +19,9 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `&whole` / `&environment` | 利用不可。`defmacro` のラムダリストは必須パラメータと末尾の `&rest`/`&body` 1 つのみ |
 | `loop`（拡張版） | 一部対応（後述） |
 | CLOS | 一部対応（静的サブセット、MOP なし） |
-| `defstruct` の `:include` | 利用不可（インスタンスは `#S(...)` 形式で印字・読み取りされます）|
+| `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default))` は利用不可 |
 | `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op（コンパイルには影響しない） |
-| `typep` / `subtypep` / `coerce` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string` |
+| `typep` / `subtypep` / `coerce` / `concatenate` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型）、`concatenate` はこの 3 つのシーケンス系統を構築 |
 | `make-package` / `export` / `import` / `use-package` / `find-package` / `rename-package`（ランタイム） | 利用不可。`defpackage` の `:shadow` / `:shadowing-import-from` はエラー |
 | `progv` | インタプリタのみ（JVM/WASM ではコンパイルエラー） |
 | `eval-when` | `progn` として扱う（フェーズの区別なし） |
@@ -89,7 +89,9 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 ## 構造体とオブジェクト
 
 [`defstruct`](../reference/special-forms/defstruct.md) は `:include` による継承を
-サポートしません。インスタンスは標準の `#S(...)` 構文で印字され、`#S(...)`
+単一継承の形でのみサポートします — スロットのデフォルトを上書きする
+`(:include parent (slot new-default))` は利用できません。インスタンスは標準の
+`#S(...)` 構文で印字され、`#S(...)`
 リテラルはインスタンスとして読み戻されます — ソース中でも、すべてのバックエンド
 のランタイム `read` / `read-from-string` を通しても（コンパイルされたリーダーは
 フロントエンドと同等で、`#.`、`#+`/`#-`、`#n=`/`#n#` だけはシグナルします）。

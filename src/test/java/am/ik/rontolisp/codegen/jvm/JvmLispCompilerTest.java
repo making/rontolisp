@@ -1756,6 +1756,32 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunConcatenateListAndVectorResultTypes() throws Exception {
+		assertThat(compileAndRun("(print (concatenate 'list '(1 2) \"ab\" #(3)))")).isEqualTo("(1 2 #\\a #\\b 3)");
+		assertThat(compileAndRun("(print (concatenate 'vector '(1 2) #(3)))")).isEqualTo("#(1 2 3)");
+		assertThat(compileAndRun("(print (concatenate '(vector (unsigned-byte 8)) #(1) #(2 3)))"))
+			.isEqualTo("#(1 2 3)");
+		assertThat(compileAndRun("(print (concatenate 'list))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (concatenate 'vector))")).isEqualTo("#()");
+		assertThat(compileAndRun("(print (let ((a (list 1 2))) (eq a (concatenate 'list a))))")).isEqualTo("NIL");
+	}
+
+	@Test
+	void compileAndRunConcatenateAsFunctionValue() throws Exception {
+		assertThat(compileAndRun("(print (apply #'concatenate '(vector (unsigned-byte 8)) (list #(1) #(2 3))))"))
+			.isEqualTo("#(1 2 3)");
+		assertThat(compileAndRun("(print (apply #'concatenate 'list (list '(1) '(2 3))))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (apply #'concatenate 'string (list \"a\" \"b\")))")).isEqualTo("\"ab\"");
+	}
+
+	@Test
+	void compileConcatenateWithComputedResultTypeFails() {
+		assertThatThrownBy(() -> compileAndRun("(let ((ty 'string)) (princ (concatenate ty \"a\" \"b\")))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("literal quoted");
+	}
+
+	@Test
 	void compileAndRunPrincToStringAsFunctionValue() throws Exception {
 		assertThat(compileAndRun("(print (mapcar #'princ-to-string (list 1 2)))")).isEqualTo("(\"1\" \"2\")");
 	}
@@ -6843,6 +6869,21 @@ class JvmLispCompilerTest {
 				    (setf (so-get-val k2) 99)
 				    (print (list (so-get-val k) (so-get-val k2)))))
 				""")).isEqualTo("(A T NIL)\n(1 99)");
+	}
+
+	@Test
+	void compileAndRunDefstructIncludePredicateMatchesLaterChildren() throws Exception {
+		// The parent's predicate is regenerated once the whole program is registered, so
+		// a child (and grandchild) whose defstruct FOLLOWS the parent's still answers T
+		// -- and an unrelated value still answers NIL.
+		assertThat(compileAndRun("""
+				(defstruct dp-base a)
+				(defstruct (dp-child (:include dp-base)) b)
+				(defstruct (dp-grand (:include dp-child)) c)
+				(print (list (dp-base-p (make-dp-child)) (dp-base-p (make-dp-grand))
+				             (dp-child-p (make-dp-grand)) (dp-grand-p (make-dp-child))
+				             (dp-base-p (make-dp-base)) (dp-base-p 5)))
+				""")).isEqualTo("(T T T NIL T NIL)");
 	}
 
 	@Test

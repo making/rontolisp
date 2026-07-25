@@ -38,7 +38,7 @@ page.
 | `fresh-line` | `(fresh-line)` | Prints a newline only if standard output is not already at the start of a line. Returns nil |
 | `princ-to-string` | `(princ-to-string '(1 "x"))` | `"(1 x)"` -- the string `princ` would print |
 | `prin1-to-string` | `(prin1-to-string "abc")` | `"\"abc\""` -- the string `prin1` would print (readable form) |
-| `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"` (only the `'string` result type is supported; the compilers require the literal `'string`) |
+| `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"` (`'string` / `'list` / `'vector` result families; the compilers require a literal quoted designator) |
 | `string-upcase` | `(string-upcase "abc")` | `"ABC"` (case conversion is ASCII-only in the WASM backend) |
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"` (first letter of each word) |

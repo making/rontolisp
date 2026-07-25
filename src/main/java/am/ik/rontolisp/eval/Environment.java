@@ -55,6 +55,7 @@ import am.ik.rontolisp.PackageIntrospection;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.Scope;
 import am.ik.rontolisp.VersionInfo;
+import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.HttpPlistShape;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -1880,6 +1881,30 @@ public final class Environment implements Scope {
 		return list;
 	}
 
+	/**
+	 * Appends every element of a sequence to {@code out}, in order: a list, a string (by
+	 * code point), a general rank-1 array or a rank-1 packed float array -- the same set
+	 * the compile paths reach through {@code (coerce x 'list)}.
+	 * @param seq the sequence argument
+	 * @param out the collector
+	 */
+	private static void appendSequenceElements(LispVal seq, List<LispVal> out) {
+		if (seq instanceof LispFloatArray packed && packed.rank() == 1) {
+			for (int i = 0; i < packed.totalSize(); i++) {
+				out.add(packed.readFlat(i));
+			}
+			return;
+		}
+		LispVal cur = seqAsList(seq);
+		if (!(cur instanceof LispCons) && !(cur instanceof LispNil)) {
+			throw new LispEvalException("not a sequence: " + seq.print());
+		}
+		while (cur instanceof LispCons cell) {
+			out.add(cell.car());
+			cur = cell.cdr();
+		}
+	}
+
 	private static void registerSequenceOps(Environment env) {
 		env.defineFunction(LispNames.LENGTH, new LispFunction(LispNames.LENGTH, args -> {
 			requireArgCount(LispNames.LENGTH, args, 1);
@@ -2871,21 +2896,41 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.PRIN1_TO_STRING, args, 1);
 			return new LispString(printString(args.get(0)));
 		}));
-		// concatenate: only the string result type is supported.
+		// concatenate: the string, list and vector result families (ConcatenateForms is
+		// the shared contract the compilers lower through as well).
 		env.defineFunction(LispNames.CONCATENATE, new LispFunction(LispNames.CONCATENATE, args -> {
 			requireMinArgCount(LispNames.CONCATENATE, args, 1);
-			if (!(args.get(0) instanceof LispSymbol type) || !"STRING".equals(type.name())) {
+			ConcatenateForms.ResultFamily family = ConcatenateForms.resultFamily(args.get(0));
+			if (family == null) {
 				throw new LispEvalException(
-						"concatenate supports only the string result type, got: " + args.get(0).print());
+						"concatenate supports the string, list and vector result types, got: " + args.get(0).print());
 			}
-			StringBuilder sb = new StringBuilder();
-			for (int i = 1; i < args.size(); i++) {
-				if (!(args.get(i) instanceof LispString str)) {
-					throw new LispEvalException("concatenate expects strings, got: " + args.get(i).print());
+			List<LispVal> rest = args.subList(1, args.size());
+			if (family == ConcatenateForms.ResultFamily.STRING) {
+				// The string family lowers to %string-concat on the compile paths, so it
+				// takes string arguments there and here alike.
+				StringBuilder sb = new StringBuilder();
+				for (LispVal arg : rest) {
+					if (!(arg instanceof LispString str)) {
+						throw new LispEvalException("concatenate expects strings, got: " + arg.print());
+					}
+					sb.append(str.value());
 				}
-				sb.append(str.value());
+				return new LispString(sb.toString());
 			}
-			return new LispString(sb.toString());
+			// The list / vector families walk elements, so any sequence argument works.
+			List<LispVal> elements = new ArrayList<>();
+			for (LispVal arg : rest) {
+				appendSequenceElements(arg, elements);
+			}
+			if (family == ConcatenateForms.ResultFamily.VECTOR) {
+				return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]));
+			}
+			LispVal list = LispNil.INSTANCE;
+			for (int i = elements.size() - 1; i >= 0; i--) {
+				list = new LispCons(elements.get(i), list);
+			}
+			return list;
 		}));
 		// %string-concat: internal binary string concatenation used by
 		// format/concatenate.

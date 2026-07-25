@@ -26,6 +26,7 @@ import am.ik.rontolisp.SpecialVarCollector;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
@@ -1973,7 +1974,36 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.ARRAY_DISPLACEMENT)
 				|| programUsesSymbol(program, LispNames.ARRAY_DISP_TARGET)
 				|| programUsesSymbol(program, LispNames.ARRAY_DISP_OFFSET)
-				|| programUsesSymbol(program, LispNames.COERCE) || programContainsArrayLiteral(program);
+				|| programUsesSymbol(program, LispNames.COERCE) || programBuildsConcatenateSequence(program)
+				|| programContainsArrayLiteral(program);
+	}
+
+	// True when concatenate can build a list / vector here, which lowers through coerce
+	// (the array runtime): a call whose literal result type is not the string family, a
+	// computed one (which the lowering rejects, but not before this gate), or a
+	// first-class #'concatenate, whose wrapper dispatches on a runtime result type. A
+	// plain (concatenate 'string ...) program stays array-runtime-free.
+	private static boolean programBuildsConcatenateSequence(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (BuiltinFunctionWrappers.referencesFunctionValue(expr, LispNames.CONCATENATE)
+					|| buildsConcatenateSequence(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean buildsConcatenateSequence(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op && LispNames.CONCATENATE.equals(op.name())) {
+			LispVal typeForm = (cons.cdr() instanceof LispCons rest) ? rest.car() : LispNil.INSTANCE;
+			if (ConcatenateForms.literalResultFamily(typeForm) != ConcatenateForms.ResultFamily.STRING) {
+				return true;
+			}
+		}
+		return buildsConcatenateSequence(cons.car()) || buildsConcatenateSequence(cons.cdr());
 	}
 
 	// True when a self-evaluating array literal (#(...)) appears anywhere in the program,

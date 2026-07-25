@@ -314,6 +314,34 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void concatenateBuildsListAndVectorResultTypes() throws Exception {
+		// concatenate's list / vector families (ConcatenateForms): they walk elements, so
+		// any mix of sequences works and a compound spec like '(vector (unsigned-byte 8))
+		// -- what ironclad's HKDF builds its output with -- normalizes to the vector
+		// family. Also the first-class #'concatenate wrapper, whose result type is a
+		// runtime value.
+		String program = """
+				(print (concatenate 'list '(1 2) "ab" #(3)))
+				(print (concatenate 'vector '(1 2) #(3)))
+				(print (concatenate '(vector (unsigned-byte 8)) #(1) #(2 3)))
+				(print (concatenate 'list))
+				(print (concatenate 'vector))
+				(print (let ((a (list 1 2))) (eq a (concatenate 'list a))))
+				(print (apply #'concatenate '(vector (unsigned-byte 8)) (list #(1) #(2 3))))
+				(print (apply #'concatenate 'string (list "a" "b")))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("""
+				(1 2 #\\a #\\b 3)
+				#(1 2 3)
+				#(1 2 3)
+				NIL
+				#()
+				NIL
+				#(1 2 3)
+				"ab\"""");
+	}
+
+	@Test
 	void exactIntegersBeyondI31PromoteToBoxedI64() throws Exception {
 		// The boxed exact-integer overflow path (TYPE_BIGNUM, .kb/wasm-bignum.md): an
 		// arithmetic or shift result outside the i31 fixnum range promotes to a boxed
@@ -8712,6 +8740,20 @@ class WasmLispCompilerIntegrationTest {
 				(setq gp (geo::make-pt :x 3 :y 4))
 				(print (list (geo::pt-x gp) (geo::pt-p gp) (geo::pt-p p)))
 				""")).isEqualTo("(99 7)\n(10 20)\n(3 T NIL)");
+	}
+
+	@Test
+	void compileAndRunDefstructIncludePredicateMatchesLaterChildren() throws Exception {
+		// The parent's predicate is regenerated once the whole program is registered, so
+		// a child (and grandchild) whose defstruct FOLLOWS the parent's still answers T.
+		assertThat(compileAndRun("""
+				(defstruct dp-base a)
+				(defstruct (dp-child (:include dp-base)) b)
+				(defstruct (dp-grand (:include dp-child)) c)
+				(print (list (dp-base-p (make-dp-child)) (dp-base-p (make-dp-grand))
+				             (dp-child-p (make-dp-grand)) (dp-grand-p (make-dp-child))
+				             (dp-base-p (make-dp-base)) (dp-base-p 5)))
+				""")).isEqualTo("(T T T NIL T NIL)");
 	}
 
 	@Test

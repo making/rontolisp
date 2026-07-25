@@ -2489,8 +2489,30 @@ public final class LispEvaluator {
 		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors, this.closRegistry)) {
 			eval(form, env);
 		}
+		// A struct predicate bakes the descendant tags known when it was generated, so
+		// this (:include parent) definition has just widened every ancestor's tag set:
+		// redefine their predicates against the registry as it now stands, which is what
+		// makes (parent-p child) true even though the parent's defstruct came first.
+		String structName = cons.toList().get(1) instanceof LispCons header ? headerStructName(header)
+				: symbolNameOf(cons.toList().get(1));
+		if (structName != null) {
+			for (String ancestor : this.closRegistry.structAncestorNames(structName)) {
+				String predicateName = this.closRegistry.structPredicates().get(ancestor);
+				if (predicateName != null && !ancestor.equals(ClosRegistry.normalize(structName))) {
+					eval(LispMacroExpander.structPredicateDefun(ancestor, predicateName, this.closRegistry), env);
+				}
+			}
+		}
 		// defstruct returns the structure name, like Common Lisp.
 		return cons.toList().get(1);
+	}
+
+	private @Nullable String headerStructName(LispCons header) {
+		return symbolNameOf(header.car());
+	}
+
+	private @Nullable String symbolNameOf(LispVal form) {
+		return (form instanceof LispSymbol sym) ? sym.name() : null;
 	}
 
 	private LispVal evalDefclass(LispCons cons, Environment env) {

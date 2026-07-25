@@ -329,6 +329,17 @@ public final class ClosRegistry {
 	private final Map<String, Set<String>> structAncestors = new LinkedHashMap<>();
 
 	/**
+	 * Struct type name (normalized) to the name of the predicate defun {@code defstruct}
+	 * generated for it (absent when {@code (:predicate nil)} suppressed it, or for a
+	 * {@code :type} struct, which has no instance tag to test). A predicate bakes the
+	 * descendant tag set known when it is generated, so a struct defined LATER with
+	 * {@code (:include this)} has to make the predicate regenerate -- this is the map
+	 * that says which defuns to rebuild (see
+	 * {@code LispMacroExpander.structPredicateDefun}).
+	 */
+	private final Map<String, String> structPredicates = new LinkedHashMap<>();
+
+	/**
 	 * Instance tag ({@code %struct-<name>} / {@code %class-<name>}) to the interned
 	 * {@link LispLayout} of that type. Keyed by tag rather than by type name because the
 	 * two prefixes keep struct and class entries apart even when a program defines a
@@ -423,6 +434,42 @@ public final class ClosRegistry {
 		this.structAncestors.put(key, Set.copyOf(ancestors));
 		LispLayout layout = LispLayout.ofStruct(structName, slotBaseNames, initforms);
 		this.layoutsByTag.put(layout.tag(), layout);
+	}
+
+	/**
+	 * Records the predicate defun {@code defstruct} generated for a struct type, so it
+	 * can be regenerated once a later {@code (:include this)} struct widens the
+	 * descendant tag set.
+	 * @param structName the struct name as spelled in the defstruct
+	 * @param predicateName the generated (or {@code (:predicate name)}-given) predicate
+	 * name
+	 */
+	public void registerStructPredicate(String structName, String predicateName) {
+		this.structPredicates.put(normalize(structName), predicateName);
+	}
+
+	/**
+	 * The recorded struct predicates: normalized struct name to predicate defun name, in
+	 * definition order.
+	 * @return the struct predicate registry
+	 */
+	public Map<String, String> structPredicates() {
+		return java.util.Collections.unmodifiableMap(this.structPredicates);
+	}
+
+	/**
+	 * The ancestor set of a registered struct type -- the struct itself plus its
+	 * {@code :include} chain, all normalized -- or an empty set when unknown.
+	 * @param structName the struct name as spelled
+	 * @return the ancestor names
+	 */
+	public Set<String> structAncestorNames(String structName) {
+		Set<String> ancestors = this.structAncestors.get(normalize(structName));
+		if (ancestors == null
+				&& PackageRegistry.splitQualified(structName) instanceof PackageRegistry.QualifiedName qn) {
+			ancestors = this.structAncestors.get(qn.member());
+		}
+		return ancestors == null ? Set.of() : ancestors;
 	}
 
 	/**

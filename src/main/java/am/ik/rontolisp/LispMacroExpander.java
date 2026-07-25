@@ -6480,17 +6480,18 @@ public final class LispMacroExpander {
 			}
 		}
 		// (defun <base>-p (__struct) (%obj-is __struct '%struct-<name> ...)): the tag
-		// set covers the struct and its :include descendants registered SO FAR -- a
-		// descendant defined after the predicate defun is not re-tested (document over
-		// regenerate; typep/etypecase expand lazily enough in practice).
+		// set covers the struct and its :include descendants. Only those registered SO
+		// FAR are known here, so the predicate is REGENERATED once a later child widens
+		// the set -- by the interpreter's evalDefstruct and, on the compile path, by
+		// refreshStructPredicates after the whole program is registered.
 		LispSymbol obj = new LispSymbol(STRUCT_VAR);
 		LispVal params = listToCons(List.<LispVal>of(obj));
 		if (!suppressPredicate && !typedVector) {
 			String predicateName = customPredicate != null ? customPredicate : prefix + base + pAffix;
-			List<String> predicateTags = closRegistry != null ? closRegistry.descendantStructTags(structName)
-					: List.of(structTag);
-			forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(predicateName), params,
-					objIs(obj, predicateTags))));
+			forms.add(structPredicateDefun(structName, predicateName, closRegistry));
+			if (closRegistry != null) {
+				closRegistry.registerStructPredicate(structName, predicateName);
+			}
 		}
 		// (defun copy-<base> (__struct) (%obj-new '%struct-<name> (%obj-ref __struct 0)
 		// ...)): a shallow copy, like copy-structure -- the slot values are shared. A
@@ -6583,6 +6584,73 @@ public final class LispMacroExpander {
 	private static boolean isDefstructForm(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 				&& LispNames.DEFSTRUCT.equals(sym.name());
+	}
+
+	/**
+	 * Builds a struct predicate defun --
+	 * {@code (defun P (__struct) (%obj-is __struct '%struct-<name> <descendant tags>...))}
+	 * -- from the registry AS IT STANDS. Every caller that learns about a new
+	 * {@code :include} child rebuilds the ancestors' predicates through here, so
+	 * {@code (base-p child)} is true whichever order the two defstructs were processed
+	 * in.
+	 * @param structName the struct name as spelled in its defstruct
+	 * @param predicateName the predicate defun name
+	 * @param closRegistry the type registry (null yields the struct's own tag only)
+	 * @return the predicate defun form
+	 */
+	public static LispVal structPredicateDefun(String structName, String predicateName,
+			@org.jspecify.annotations.Nullable ClosRegistry closRegistry) {
+		String ownTag = LispLayout.STRUCT_TAG_PREFIX + structName;
+		List<String> tags = (closRegistry == null) ? List.of() : closRegistry.descendantStructTags(structName);
+		if (tags.isEmpty()) {
+			tags = List.of(ownTag);
+		}
+		LispSymbol obj = new LispSymbol(STRUCT_VAR);
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(predicateName),
+				listToCons(List.<LispVal>of(obj)), objIs(obj, tags)));
+	}
+
+	/**
+	 * Rebuilds every generated struct predicate in an expanded top-level program, now
+	 * that the whole program is registered: a predicate emitted before its
+	 * {@code :include} children were seen tests too few tags. Runs in the same "registry
+	 * is complete" phase as the method dispatchers. Only a form that still IS the
+	 * generated predicate is replaced (name recorded in the registry AND the generated
+	 * {@code (%obj-is __struct ...)} body shape), so a program that redefines the name
+	 * itself keeps its own defun.
+	 * @param out the expanded program, updated in place
+	 * @param closRegistry the type registry
+	 */
+	private static void refreshStructPredicates(List<LispVal> out, @Nullable ClosRegistry closRegistry) {
+		if (closRegistry == null || closRegistry.structPredicates().isEmpty()) {
+			return;
+		}
+		java.util.Map<String, String> structByPredicate = new java.util.HashMap<>();
+		for (java.util.Map.Entry<String, String> entry : closRegistry.structPredicates().entrySet()) {
+			structByPredicate.put(entry.getValue(), entry.getKey());
+		}
+		for (int i = 0; i < out.size(); i++) {
+			if (!(out.get(i) instanceof LispCons form) || !isNamedForm(form, LispNames.DEFUN)) {
+				continue;
+			}
+			List<LispVal> parts = form.toList();
+			if (parts.size() != 4 || !(parts.get(1) instanceof LispSymbol name)) {
+				continue;
+			}
+			String structName = structByPredicate.get(name.name());
+			if (structName == null || !isGeneratedStructPredicateBody(parts.get(2), parts.get(3))) {
+				continue;
+			}
+			out.set(i, structPredicateDefun(structName, name.name(), closRegistry));
+		}
+	}
+
+	// The generated shape: a single __struct parameter and a (%obj-is __struct ...) body.
+	private static boolean isGeneratedStructPredicateBody(LispVal params, LispVal body) {
+		return params instanceof LispCons paramList && paramList.toList().size() == 1
+				&& paramList.car() instanceof LispSymbol param && STRUCT_VAR.equals(param.name())
+				&& body instanceof LispCons call && call.car() instanceof LispSymbol op
+				&& LispNames.OBJ_IS.equals(op.name());
 	}
 
 	private static final String CLOS_OBJ_VAR = "__obj";
@@ -8638,6 +8706,9 @@ public final class LispMacroExpander {
 		for (java.util.Map.Entry<Integer, String> slot : dispatcherSlots.entrySet()) {
 			out.set(slot.getKey(), generateDispatcher(slot.getValue(), closRegistry));
 		}
+		// Same phase, same reason as the dispatchers: a struct predicate emitted before
+		// its :include children were registered tests too few tags.
+		refreshStructPredicates(out, closRegistry);
 		if (runtimeSubtypep) {
 			// Injected once the registry is complete; defuns are collected in a
 			// position-independent pass, so appending is safe.
