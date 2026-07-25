@@ -9,6 +9,7 @@ import am.ik.jvm.ConstantPool;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
@@ -257,7 +258,7 @@ final class JvmHandlerCaseCompiler {
 
 	/**
 	 * Synthesizes the {@code simple-error} instance of a condition-less throw:
-	 * {@code (list '%class-simple-error "<quote-framed message>" nil)}, with a nil
+	 * {@code (%obj-new '%class-SIMPLE-ERROR "<quote-framed message>" nil)}, with a nil
 	 * message slot when the throwable carries none.
 	 */
 	private static void emitSynthesizeSimpleError(int excSlot, int condSlot, JvmLispCompiler.Ctx ctx,
@@ -295,10 +296,10 @@ final class JvmHandlerCaseCompiler {
 		String msgVarName = "__hc_msg$" + msgSlot;
 		ctx.locals.put(msgVarName, msgSlot);
 		try {
-			// (list '%class-simple-error __hc_msg nil)
+			// (%obj-new '%class-SIMPLE-ERROR __hc_msg nil)
 			LispVal quotedTag = new LispCons(new LispSymbol(LispNames.QUOTE),
-					new LispCons(new LispSymbol("%class-SIMPLE-ERROR"), LispNil.INSTANCE));
-			LispVal instance = new LispCons(new LispSymbol(LispNames.LIST), new LispCons(quotedTag,
+					new LispCons(new LispSymbol(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"), LispNil.INSTANCE));
+			LispVal instance = new LispCons(new LispSymbol(LispNames.OBJ_NEW), new LispCons(quotedTag,
 					new LispCons(new LispSymbol(msgVarName), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
 			JvmExprCompiler.compileExpr(instance, ctx, className);
 		}

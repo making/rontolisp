@@ -162,7 +162,8 @@ final class JvmNumericRuntimeBuilder {
 	 * @return the helper methods and the invokable references compiled code calls
 	 */
 	static NumericRuntime build(ConstantPool cp, ClassConstant thisClass,
-			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod) {
+			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
+			@org.jspecify.annotations.Nullable ClassConstant strArrClass) {
 		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 		ClassConstant bigClass = cp.addClass(cp.addUtf8("java/math/BigInteger"));
 		ClassConstant arithEx = cp.addClass(cp.addUtf8("java/lang/ArithmeticException"));
@@ -374,7 +375,7 @@ final class JvmNumericRuntimeBuilder {
 				doubleValueOf, mathPow));
 		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, objEquals, strvMethod));
 		methods.add(buildEqStrict(nEqStrict, dCmp, doubleClass, ratArrClass, rEqv));
-		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual));
+		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual, strArrClass));
 		methods.add(buildRatTrunc(nRatTrunc, dUnary, rRatNum, rRatDen, rNorm, biDiv));
 		methods.add(buildRatFloor(nRatFloor, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, null, null));
 		methods.add(buildRatFloor(nRatCeil, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, biOne, biAdd));
@@ -1437,7 +1438,8 @@ final class JvmNumericRuntimeBuilder {
 	// compare
 	// by value. Returns 1 for equal, 0 otherwise.
 	private static NumericMethod buildEqual(Utf8Constant name, Utf8Constant desc, ClassConstant objArrClass,
-			ClassConstant ratArrClass, ClassConstant integerClass, MethodrefConstant eqv, MethodrefConstant equal) {
+			ClassConstant ratArrClass, ClassConstant integerClass, MethodrefConstant eqv, MethodrefConstant equal,
+			@org.jspecify.annotations.Nullable ClassConstant strArrClass) {
 		List<Integer> c = new ArrayList<>();
 		// if (a == null) return (b == null) ? 1 : 0;
 		c.add(Opcode.ALOAD_0);
@@ -1455,6 +1457,18 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.IRETURN);
 		// a is not null
 		JvmRuntimeBuilder.patchBranch(c, ifANotNull, c.size());
+		// Instances first (emitted only when the program can build one, so an
+		// instance-free class is byte-identical): an instance is an Object[] with the
+		// interned String[] layout in slot 0, and two of them are equal when they share
+		// that layout and every slot is recursively _equal. This keeps compiled `equal`
+		// structural over struct/CLOS instances, matching the interpreter's
+		// LispInstance.equals -- and it must be checked BEFORE the cons branch, whose
+		// Object[] shape an instance would otherwise satisfy.
+		int maxLocals = 2;
+		if (strArrClass != null) {
+			maxLocals = 3;
+			emitInstanceEqual(c, objArrClass, strArrClass, equal);
+		}
 		// Detect both cons: instanceof Object[], not BigInteger[], head not Integer.
 		List<Integer> notBothCons = new ArrayList<>();
 		emitConsGuard(c, Opcode.ALOAD_0, objArrClass, ratArrClass, integerClass, notBothCons);
@@ -1485,7 +1499,105 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, eqv.index());
 		c.add(Opcode.IRETURN);
-		return new NumericMethod(name, desc, c, 3, 2, List.of());
+		return new NumericMethod(name, desc, c, 3, maxLocals, List.of());
+	}
+
+	// The instance arm of _equal: if either argument is an instance, the whole answer is
+	// decided here (t only when both are, over the same layout, with every slot equal),
+	// so control falls through to the cons/eqv code only for two non-instances. Local 2
+	// is the slot cursor.
+	private static void emitInstanceEqual(List<Integer> c, ClassConstant objArrClass, ClassConstant strArrClass,
+			MethodrefConstant equal) {
+		List<Integer> aNotInstance = new ArrayList<>();
+		emitInstanceGuard(c, Opcode.ALOAD_0, objArrClass, strArrClass, aNotInstance);
+		// a IS an instance: b must be one too, or they differ.
+		List<Integer> toFalse = new ArrayList<>();
+		emitInstanceGuard(c, Opcode.ALOAD_1, objArrClass, strArrClass, toFalse);
+		// Same layout? The pool interns one String[] per tag, so identity IS tag
+		// identity, and the slot count comes with it.
+		emitArrayElement(c, Opcode.ALOAD_0, objArrClass, Opcode.ICONST_0);
+		emitArrayElement(c, Opcode.ALOAD_1, objArrClass, Opcode.ICONST_0);
+		toFalse.add(c.size());
+		c.add(Opcode.IF_ACMPNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// for (int i = 1; i < a.length; i++) if (!_equal(a[i], b[i])) return 0;
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.ISTORE_2);
+		int loopTop = c.size();
+		c.add(Opcode.ILOAD_2);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, objArrClass.index());
+		c.add(Opcode.ARRAYLENGTH);
+		int exitLoop = c.size();
+		c.add(Opcode.IF_ICMPGE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, objArrClass.index());
+		c.add(Opcode.ILOAD_2);
+		c.add(Opcode.AALOAD);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, objArrClass.index());
+		c.add(Opcode.ILOAD_2);
+		c.add(Opcode.AALOAD);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, equal.index());
+		toFalse.add(c.size());
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.IINC);
+		c.add(2);
+		c.add(1);
+		int gotoTop = c.size();
+		c.add(Opcode.GOTO);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.patchBranch(c, gotoTop, loopTop);
+		JvmRuntimeBuilder.patchBranch(c, exitLoop, c.size());
+		c.add(Opcode.ICONST_1);
+		c.add(Opcode.IRETURN);
+		for (int pos : toFalse) {
+			JvmRuntimeBuilder.patchBranch(c, pos, c.size());
+		}
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IRETURN);
+		// a is NOT an instance: b must not be either, or they differ.
+		for (int pos : aNotInstance) {
+			JvmRuntimeBuilder.patchBranch(c, pos, c.size());
+		}
+		List<Integer> bothPlain = new ArrayList<>();
+		emitInstanceGuard(c, Opcode.ALOAD_1, objArrClass, strArrClass, bothPlain);
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.IRETURN);
+		for (int pos : bothPlain) {
+			JvmRuntimeBuilder.patchBranch(c, pos, c.size());
+		}
+	}
+
+	// Branches to the recorded escape positions unless the value loaded by loadOpcode is
+	// an instance: a non-empty Object[] carrying a String[] layout in slot 0.
+	private static void emitInstanceGuard(List<Integer> c, int loadOpcode, ClassConstant objArrClass,
+			ClassConstant strArrClass, List<Integer> escapes) {
+		c.add(loadOpcode);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, objArrClass.index());
+		escapes.add(c.size());
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(loadOpcode);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, objArrClass.index());
+		c.add(Opcode.ARRAYLENGTH);
+		escapes.add(c.size());
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitArrayElement(c, loadOpcode, objArrClass, Opcode.ICONST_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, strArrClass.index());
+		escapes.add(c.size());
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
 	}
 
 	// Emits a cons-cell guard for the value loaded by loadOpcode: if it is not a cons

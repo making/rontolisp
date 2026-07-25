@@ -3730,6 +3730,15 @@ public final class LispNames {
 	 */
 	public static final String OBJ_P = "%OBJ-P";
 
+	/**
+	 * The internal instance slot reader: {@code (%obj-slots x)} is a FRESH list of the
+	 * instance's slot values in layout order, nil for anything else. It exists so Lisp
+	 * code can walk an instance's contents without a registry lookup per slot -- the
+	 * prelude's {@code equalp} compares two instances by handing their slot lists back to
+	 * itself, which is exact AND costs no per-call-site slot dispatch.
+	 */
+	public static final String OBJ_SLOTS = "%OBJ-SLOTS";
+
 	/** The {@code simple-condition-format-control} condition reader. */
 	public static final String SIMPLE_CONDITION_FORMAT_CONTROL = "SIMPLE-CONDITION-FORMAT-CONTROL";
 

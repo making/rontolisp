@@ -32,9 +32,11 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
   exists), and `expandMakeInstance` — when any generic plainly named
   `initialize-instance` is registered — hoists the initargs into let* temps,
   calls the constructor, then the generic, and returns the instance. An
-  instance is `(%class-<name> v1 v2 ...)`; layout = superclass
-  slots (inheritance order) + own slots, so single inheritance keeps positions
-  stable in all descendants.
+  instance is a first-class object built by `(%obj-new '%class-<name> v...)`
+  (`.kb/instance-syntax.md`), NOT a list; layout = superclass slots
+  (inheritance order) + own slots, so single inheritance keeps slot indexes
+  stable in all descendants, and a reader/writer body is
+  `(%obj-ref __obj i)` / `(%obj-set __obj i __new)`.
 - `registerDefgeneric` / `expandDefmethod` — record into
   `ClosRegistry.GenericInfo` (methods keyed by `qualifier + specializer`, so
   same-qualifier-same-specializer redefinition replaces while a `:before dog`
@@ -67,8 +69,8 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
   `(error "No applicable method: <name>")`. eql/built-in tests reuse
   `makeTypeTest`-family helpers (`makeEqlSpecializerTest`: symbols/keywords
   compare with `equal` — content-safe on WASM — numbers/characters with `eql`);
-  a class test is `(if (consp x) (or (equal (car x) '%class-C) ...) nil)` over
-  the statically-known descendant tags. The dispatcher is an ordinary defun, so
+  a class test is `(%obj-is x '%class-C ...)` over the statically-known
+  descendant tags. The dispatcher is an ordinary defun, so
   `#'name`/`funcall`/mapcar work with no `BuiltinFunctionWrappers` entry.
   - Two bodies: `simpleDispatchBody` (unchanged single-call-per-branch) is used
     when the generic has NO qualifier and NO `call-next-method` usage; otherwise
@@ -134,17 +136,22 @@ over `(c2mop:class-slots (class-of obj))`) forced compile-path support for a
 RUNTIME (non-literal) slot name and for `%class-slot-defs`:
 
 - `expandClassSlotDefs` (both compilers dispatch `%class-slot-defs` through it):
-  a `member` cond over every registered class -- designators are the class-tag
-  (`%class-NAME`, what `class-of` yields) and the plain name -- yielding the
-  quoted `((slot-name declared-type) ...)` list. Anything else (builtin type
-  names included) is nil, the interpreter's semantics.
+  a `member` cond over every registered LAYOUT -- classes AND structs, since
+  `ClosRegistry.slotDefs` is the one resolver both it and the interpreter use --
+  designators being the instance tag (`%class-NAME`/`%struct-NAME`, what
+  `class-of` yields) and the plain name, yielding the quoted
+  `((slot-name declared-type) ...)` list (a struct's types all read `T`).
+  Anything else (builtin type names included) is nil, the interpreter's
+  semantics. A struct answering here is what lets a slot-walking serializer
+  (json.lisp's `%json-out-instance`) treat a struct like a CLOS instance.
 - `expandSlotValue` with a non-literal name falls to `expandRuntimeSlotValue`:
-  a position dispatch grouping every slot base name with a globally consistent
-  `slotPosition` (the same layout rule the literal expansion enforces); an
-  unknown/ambiguous runtime name signals at run time.
+  a NAME dispatch over every slot name any layout declares. Names sitting at the
+  same index everywhere share one `member` arm (the common case); a name at
+  differing indexes gets an inner `%obj-is` TAG dispatch, so an ambiguous runtime
+  name resolves instead of erroring. Only an unknown name signals at run time.
 - `expandSlotBoundp` with a non-literal name falls to `expandRuntimeSlotBoundp`:
-  class-tag dispatch, each arm a `member` of the runtime name over that class's
-  declared slot names (the lite always-initialized semantics).
+  instance-tag dispatch over the layouts, each arm a `member` of the runtime name
+  over that type's declared slot names (the lite always-initialized semantics).
 
 Pinned by `runtime-type-dispatch-residue` (ci-spec) and `JzonE2eTest`'s CLOS
 stringification case.

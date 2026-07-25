@@ -49,10 +49,13 @@
 
 (defun usocket::%usock-resignal (c)
   ;; Re-signal an underlying failure as a typed usocket:socket-error carrying
-  ;; the original message (slot 1 of the synthesized simple-error the handler
-  ;; receives); the :report echoes it, so an uncaught error prints unchanged.
+  ;; the original message (the format-control of the synthesized simple-error the
+  ;; handler receives); the :report echoes it, so an uncaught error prints
+  ;; unchanged.
   (error 'usocket:socket-error :message
-         (if (stringp (nth 1 c)) (nth 1 c) "socket error")))
+         (if (stringp (simple-condition-format-control c))
+             (simple-condition-format-control c)
+             "socket error")))
 
 (defun usocket::%usock-listen-host (host)
   ;; usocket passes the host first and uses *wildcard-host* / nil for "all

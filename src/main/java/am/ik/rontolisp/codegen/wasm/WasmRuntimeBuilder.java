@@ -80,12 +80,29 @@ final class WasmRuntimeBuilder {
 	 * their cars and cdrs are recursively _equal; otherwise it reproduces eql semantics
 	 * for the remaining value types (floats by value, ratios by numerator/denominator,
 	 * symbols and strings by interned offset).
+	 *
+	 * <p>
+	 * With an instance type present, two instances are equal when they carry the SAME
+	 * layout record and every slot is recursively {@code _equal} -- structural, matching
+	 * the interpreter's {@code LispInstance.equals} and the JVM arm, so
+	 * {@code (equal p1 p2)} answers alike on all four backends. Nothing is emitted for it
+	 * when the program cannot build an instance.
+	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
+	 * @return the function body
 	 */
-	static byte[] buildEqualBody() {
+	static byte[] buildEqualBody(int instanceTypeIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		w.write(0); // 0 extra locals; params (local 0 = a, local 1 = b) suffice
+		if (instanceTypeIndex < 0) {
+			w.write(0); // 0 extra locals; params (local 0 = a, local 1 = b) suffice
+		}
+		else {
+			// The slot walk needs a cursor, the slot count and the running answer.
+			w.write(1);
+			w.write(3);
+			w.write(Type.I32);
+		}
 
 		// Normalize mutable character vectors into strings up front (before the ref.eq
 		// fast path, so one code path serves all four combinations): two character
@@ -132,6 +149,8 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // end car-equal if
 		w.write(Instruction.ELSE);
 
+		emitInstanceEqual(w, instanceTypeIndex);
+
 		// else (ref.eq already false): eql base case for value types.
 		// both characters -> code points equal
 		refTest(w, 0, WasmLispCompiler.TYPE_CHAR);
@@ -176,11 +195,107 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // end ratio if
 		w.write(Instruction.END); // end float if
 		w.write(Instruction.END); // end char if
+		if (instanceTypeIndex >= 0) {
+			w.write(Instruction.END); // end both-instance if
+		}
 		w.write(Instruction.END); // end both-cons if
 		w.write(Instruction.END); // end ref.eq if
 
 		w.write(Instruction.END); // end function
 		return body.toByteArray();
+	}
+
+	/**
+	 * Opens the both-instances arm of {@code _equal} (nothing when there is no instance
+	 * type): same layout record and every slot recursively equal. The caller closes the
+	 * {@code if} after the remaining eql arms, so this leaves the ELSE open.
+	 */
+	private static void emitInstanceEqual(WasmWriter w, int instanceTypeIndex) {
+		if (instanceTypeIndex < 0) {
+			return;
+		}
+		refTest(w, 0, instanceTypeIndex);
+		refTest(w, 1, instanceTypeIndex);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		// Same layout record? One record is interned per tag, so address equality IS
+		// type equality -- and it settles the slot count too.
+		instanceField(w, 0, instanceTypeIndex, 0);
+		instanceField(w, 1, instanceTypeIndex, 0);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2); // i = 0
+		instanceSlots(w, 0, instanceTypeIndex);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(3); // n = slot count
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(4); // answer = 1 until a slot differs
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, 2);
+		getLocal(w, 3);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		instanceSlot(w, 0, instanceTypeIndex, 2);
+		instanceSlot(w, 1, instanceTypeIndex, 2);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(4);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+		getLocal(w, 2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // end loop
+		w.write(Instruction.END); // end block
+		getLocal(w, 4);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END); // end same-layout if
+		w.write(Instruction.ELSE);
+	}
+
+	/** Pushes field {@code field} of the instance in {@code local}. */
+	private static void instanceField(WasmWriter w, int local, int instanceTypeIndex, int field) {
+		getLocal(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(instanceTypeIndex);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(instanceTypeIndex);
+		w.writeSignedLeb128(field);
+	}
+
+	/** Pushes the slot array of the instance in {@code local}, cast to $buckets. */
+	private static void instanceSlots(WasmWriter w, int local, int instanceTypeIndex) {
+		instanceField(w, local, instanceTypeIndex, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	/** Pushes slot {@code local(indexLocal)} of the instance in {@code local}. */
+	private static void instanceSlot(WasmWriter w, int local, int instanceTypeIndex, int indexLocal) {
+		instanceSlots(w, local, instanceTypeIndex);
+		getLocal(w, indexLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	/**
@@ -190,9 +305,12 @@ final class WasmRuntimeBuilder {
 	 * string/symbol content bytes, float bit patterns and ratio components into the
 	 * result. Value types not recognised by {@code _equal}'s eql base case (e.g.
 	 * closures, which {@code equal} compares by identity) hash to a constant 0, which is
-	 * correct (they simply collide into one bucket).
+	 * correct (they simply collide into one bucket). An instance folds its layout address
+	 * and its slot hashes, so it agrees with {@code _equal}'s structural instance arm.
+	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
+	 * @return the function body
 	 */
-	static byte[] buildHashBody() {
+	static byte[] buildHashBody(int instanceTypeIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -341,10 +459,58 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.ELSE);
 
+		// instance -> fold the layout address, then every slot hash (h = h * 31 + hash)
+		if (instanceTypeIndex >= 0) {
+			refTest(w, 0, instanceTypeIndex);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			instanceField(w, 0, instanceTypeIndex, 0);
+			w.write(Instruction.SET_LOCAL);
+			w.writeSignedLeb128(2); // h = layout address
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.SET_LOCAL);
+			w.writeSignedLeb128(3); // idx = 0
+			instanceSlots(w, 0, instanceTypeIndex);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+			w.write(Instruction.SET_LOCAL);
+			w.writeSignedLeb128(4); // end = slot count
+			w.write(Instruction.BLOCK, 0x40);
+			w.write(Instruction.LOOP, 0x40);
+			getLocal(w, 3);
+			getLocal(w, 4);
+			w.write(Instruction.I32_GE_U);
+			w.write(Instruction.BR_IF, 1);
+			getLocal(w, 2);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(31);
+			w.write(Instruction.I32_MUL);
+			instanceSlot(w, 0, instanceTypeIndex, 3);
+			w.write(Instruction.CALL);
+			w.writeSignedLeb128(WasmLispCompiler.FUNC_HASH);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.SET_LOCAL);
+			w.writeSignedLeb128(2);
+			getLocal(w, 3);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.SET_LOCAL);
+			w.writeSignedLeb128(3);
+			w.write(Instruction.BR, 0);
+			w.write(Instruction.END); // end loop
+			w.write(Instruction.END); // end block
+			getLocal(w, 2);
+			w.write(Instruction.ELSE);
+		}
+
 		// anything else (e.g. a closure) -> 0
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 
+		if (instanceTypeIndex >= 0) {
+			w.write(Instruction.END); // end instance if
+		}
 		w.write(Instruction.END); // end ratio if
 		w.write(Instruction.END); // end float if
 		w.write(Instruction.END); // end string if

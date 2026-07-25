@@ -19,7 +19,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `&whole` / `&environment` | 利用不可。`defmacro` のラムダリストは必須パラメータと末尾の `&rest`/`&body` 1 つのみ |
 | `loop`（拡張版） | 一部対応（後述） |
 | CLOS | 一部対応（静的サブセット、MOP なし） |
-| `defstruct` の `:include` / `#S(...)` 構文 | 利用不可 |
+| `defstruct` の `:include` / `#S(...)` の読み取り | 利用不可（印字は `#S(...)` 形式）|
 | `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op（コンパイルには影響しない） |
 | `typep` / `subtypep` / `coerce` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string` |
 | `make-package` / `export` / `import` / `use-package` / `find-package` / `rename-package`（ランタイム） | 利用不可。`defpackage` の `:shadow` / `:shadowing-import-from` はエラー |
@@ -88,8 +88,9 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 ## 構造体とオブジェクト
 
-[`defstruct`](../reference/special-forms/defstruct.md) は `:include` による継承と
-`#S(...)` の印字/読み取り構文をサポートしません。
+[`defstruct`](../reference/special-forms/defstruct.md) は `:include` による継承を
+サポートしません。インスタンスは標準の `#S(...)` 構文で印字されますが、ソース中の
+`#S(...)` は読み取られません。
 
 CLOS は**静的なサブセット**です
 （[`defclass`](../reference/special-forms/defclass.md)、第 1 引数で

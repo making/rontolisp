@@ -4744,7 +4744,7 @@ class LispEvaluatorTest {
 	void handlerCaseCatchesPlainErrorAsError() {
 		assertThat(eval("""
 				(handler-case (error "boom ~a" 1)
-				  (error (e) (list :caught (nth 1 e))))
+				  (error (e) (list :caught (simple-condition-format-control e))))
 				""").print()).isEqualTo("(:CAUGHT \"boom 1\")");
 	}
 
@@ -4845,8 +4845,7 @@ class LispEvaluatorTest {
 			.isInstanceOfSatisfying(LispEvalException.class, e -> {
 				assertThat(e.getMessage()).isEqualTo("Condition (MY-COND-ERR :V 42) was signalled.");
 				assertThat(e.condition()).isNotNull();
-				assertThat(java.util.Objects.requireNonNull(e.condition()).print())
-					.isEqualTo("(%class-MY-COND-ERR 42)");
+				assertThat(java.util.Objects.requireNonNull(e.condition()).print()).isEqualTo("#<MY-COND-ERR :V 42>");
 			});
 	}
 
@@ -4874,7 +4873,7 @@ class LispEvaluatorTest {
 	@Test
 	void makeConditionBuildsTypedInstance() {
 		assertThat(eval("(make-condition 'simple-error :format-control \"x\")").print())
-			.isEqualTo("(%class-SIMPLE-ERROR \"x\" NIL)");
+			.isEqualTo("#<SIMPLE-ERROR :FORMAT-CONTROL \"x\" :FORMAT-ARGUMENTS NIL>");
 	}
 
 	@Test
@@ -6756,6 +6755,30 @@ class LispEvaluatorTest {
 				      (%obj-is i '|%struct-OTHER|) (%obj-is 5 '|%struct-POINT|)
 				      (%obj-tag i) (%obj-p i) (%obj-p '(1 2)))
 				""").print()).isEqualTo("(1 99 T NIL NIL %struct-POINT T NIL)");
+	}
+
+	@Test
+	void instanceSlotsListsTheSlotValuesInLayoutOrder() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(defstruct empty)
+				(list (%obj-slots (%obj-new '|%struct-POINT| 1 "hi"))
+				      (%obj-slots (%obj-new '|%struct-EMPTY|))
+				      (%obj-slots '(1 2)) (%obj-slots 5))
+				""").print()).isEqualTo("((1 \"hi\") NIL NIL NIL)");
+	}
+
+	@Test
+	void equalpDescendsIntoInstanceSlots() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(defclass box () ((w :initarg :w)))
+				(list (equalp (make-point :x 1 :y "A") (make-point :x 1 :y "a"))
+				      (equalp (make-point :x 1 :y "A") (make-point :x 2 :y "a"))
+				      (equalp (make-point :x 1 :y 2) (make-point :x 1.0 :y 2))
+				      (equalp (make-instance 'box :w 1) (make-instance 'box :w 1))
+				      (equalp (make-point :x 1 :y 2) (make-instance 'box :w 1)))
+				""").print()).isEqualTo("(T NIL T T NIL)");
 	}
 
 	@Test

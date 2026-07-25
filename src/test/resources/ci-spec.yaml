@@ -3168,6 +3168,44 @@ cases:
       (10 20)
       25
       (T NIL)
+  - name: instance-print-syntax-and-identity
+    source: |
+      (defstruct ips-pt x y)
+      (defstruct ips-empty)
+      (defclass ips-box () ((w :initarg :w) (h :initarg :h)))
+      (print (make-ips-pt :x 1 :y "hi"))
+      (princ (make-ips-pt :x 1 :y "hi"))
+      (terpri)
+      (print (make-ips-empty))
+      (print (list (make-ips-pt :x nil :y (make-ips-pt :x 2 :y 3))))
+      (print (make-instance 'ips-box :w 3 :h 4))
+      (format t "~s|~a~%" (make-ips-pt :x 1 :y "s") (make-ips-pt :x 1 :y "s"))
+      (print (list (consp (make-ips-pt :x 1 :y 2)) (listp (make-ips-pt :x 1 :y 2))
+                   (atom (make-ips-pt :x 1 :y 2))
+                   (typep (make-ips-pt :x 1 :y 2) 'structure-object)
+                   (typep (make-instance 'ips-box :w 1 :h 2) 'standard-object)))
+      (print (list (equal (make-ips-pt :x 1 :y 2) (make-ips-pt :x 1 :y 2))
+                   (equal (make-ips-pt :x 1 :y 2) (make-ips-pt :x 1 :y 9))
+                   (equalp (make-ips-pt :x 1 :y "A") (make-ips-pt :x 1 :y "a"))))
+      (print (class-of (make-ips-pt :x 1 :y 2)))
+      (print (princ-to-string (make-instance 'ips-box :w 1 :h 2)))
+      (let ((ips-h (make-hash-table :test 'equal)))
+        (setf (gethash (make-ips-pt :x 1 :y 2) ips-h) :ips-v)
+        (print (gethash (make-ips-pt :x 1 :y 2) ips-h)))
+      (print (rontolisp:json-stringify (make-ips-pt :x 1 :y "s")))
+    expected: |
+      #S(IPS-PT :X 1 :Y "hi")
+      #S(IPS-PT :X 1 :Y hi)
+      #S(IPS-EMPTY)
+      (#S(IPS-PT :X NIL :Y #S(IPS-PT :X 2 :Y 3)))
+      #<IPS-BOX :W 3 :H 4>
+      #S(IPS-PT :X 1 :Y "s")|#S(IPS-PT :X 1 :Y s)
+      (NIL NIL T T T)
+      (T NIL T)
+      %struct-IPS-PT
+      "#<IPS-BOX :W 1 :H 2>"
+      :IPS-V
+      "{"x":1,"y":"s"}"
   - name: setf-function-definitions
     source: |
       (defvar *sf-mode* :xml)
@@ -4046,7 +4084,7 @@ cases:
       (print (handler-case (error 'ci-hc-err :v 7)
                (ci-hc-err (e) (list :caught (ci-hc-err-v e)))))
       (print (handler-case (error "boom ~a" 1)
-               (error (e) (list :caught (nth 1 e)))))
+               (error (e) (list :caught (simple-condition-format-control e)))))
       (defun ci-hc-thrower () (error "deep"))
       (print (handler-case (ci-hc-thrower) (error (e) :caught)))
     expected: |

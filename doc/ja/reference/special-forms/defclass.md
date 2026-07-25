@@ -2,7 +2,7 @@
 
 `(defclass name (superclass?) ((slot slot-option...) ...) class-option...)`
 
-クラスを定義し、名前シンボルを返します。これは **静的な CLOS サブセット**です。スーパークラスは最大 1 つ（単一継承）で、インスタンスは [`make-instance`](../macros/make-instance.md) で生成されるタグ付きリストとして表現されます（[`defstruct`](defstruct.md) のインスタンスと同様に `consp` を満たし、`print` はそのリスト表現を表示します）。スロットオプション:
+クラスを定義し、名前シンボルを返します。これは **静的な CLOS サブセット**です。スーパークラスは最大 1 つ（単一継承）で、インスタンスは [`make-instance`](../macros/make-instance.md) で生成される第一級のオブジェクトです（[`defstruct`](defstruct.md) のインスタンスと同様にリストではなく、`consp` は `nil`、`print` は `#<NAME :SLOT value ...>` と表示します）。スロットオプション:
 
 - `:initarg keyword` — コンストラクタで使うキーワード（省略時はスロット名のキーワード）
 - `:initform expr` — スロットが与えられなかったときに生成時に評価されるデフォルト値（省略時は `nil`。unbound 状態はありません）

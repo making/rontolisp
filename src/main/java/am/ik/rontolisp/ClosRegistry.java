@@ -407,6 +407,44 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * One entry of a type's {@code %class-slot-defs} answer.
+	 *
+	 * @param name the slot base name
+	 * @param type the declared type name ({@code T} when none was declared)
+	 */
+	public record SlotDef(String name, String type) {
+	}
+
+	/**
+	 * The slot definitions of a type DESIGNATOR: an instance tag ({@code %class-<name>}
+	 * or {@code %struct-<name>}, what {@code class-of} yields) or the plain type name. A
+	 * {@code defstruct} answers too -- its slots have no declared type, so every entry
+	 * reads {@code T} -- which is what lets a serializer walk a struct's slots the same
+	 * way it walks a CLOS instance's.
+	 * @param designator the instance tag or plain type name
+	 * @return the slot definitions in layout order, or null when the designator names
+	 * neither a registered class nor a registered struct
+	 */
+	@Nullable public List<SlotDef> slotDefs(String designator) {
+		String name = LispLayout.printNameOfTag(designator);
+		boolean structOnly = designator.startsWith(LispLayout.STRUCT_TAG_PREFIX);
+		if (name == null) {
+			name = designator;
+		}
+		if (!structOnly) {
+			ClassInfo info = findClass(name);
+			if (info != null) {
+				return info.slots().stream().map(s -> new SlotDef(s.baseName(), s.type())).toList();
+			}
+			if (designator.startsWith(LispLayout.CLASS_TAG_PREFIX)) {
+				return null;
+			}
+		}
+		LispLayout layout = findStructLayout(name);
+		return layout == null ? null : layout.slotNames().stream().map(s -> new SlotDef(s, "T")).toList();
+	}
+
+	/**
 	 * The registered condition {@code :report} forms by normalized class name. The report
 	 * ASTs live only here after {@code define-condition} is rewritten out of the program,
 	 * so a scan for first-class function references (e.g. a report lambda applying

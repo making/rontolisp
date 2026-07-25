@@ -1070,13 +1070,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		ClosRegistry closRegistry = new ClosRegistry();
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry);
 		// Every struct/class layout is registered by the pass above, so the instance gate
-		// can be decided here. The scan over-approximates (it fires on the symbol
-		// anywhere in a cons head, quoted data included), which is safe: only a program
-		// that literally mentions one of the six can flip it on.
-		this.usesInstances = programUsesSymbol(program, LispNames.OBJ_NEW)
-				|| programUsesSymbol(program, LispNames.OBJ_REF) || programUsesSymbol(program, LispNames.OBJ_SET)
-				|| programUsesSymbol(program, LispNames.OBJ_IS) || programUsesSymbol(program, LispNames.OBJ_TAG)
-				|| programUsesSymbol(program, LispNames.OBJ_P);
+		// can be decided here -- it must be, because the struct type index and the baked
+		// layout addresses are needed as constants before any body is compiled.
+		this.usesInstances = LispMacroExpander.mayCreateInstances(program, closRegistry);
 		// Lower a return-from that crosses a lambda boundary into an EH-based non-local
 		// exit (before desugarProgram, so the %fn-block wrap for a same-function
 		// return-from naturally nests around the injected let/%nlx-catch).
@@ -3188,7 +3184,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmIoRuntimeBuilder.buildOpenBody())
 					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable))
 					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable))
-					.addFunction(WasmRuntimeBuilder.buildEqualBody())
+					.addFunction(WasmRuntimeBuilder.buildEqualBody(this.usesInstances ? instanceTypeBase() : -1))
 					.addFunction(WasmGetenvRuntimeBuilder.build());
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
@@ -3197,7 +3193,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// plist runtime helper body (FUNC_PLIST_GET)
 				code.addFunction(WasmPlistRuntimeBuilder.buildPlistGet());
 				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HASH_RESIZE)
-				code.addFunction(WasmRuntimeBuilder.buildHashBody());
+				code.addFunction(WasmRuntimeBuilder.buildHashBody(this.usesInstances ? instanceTypeBase() : -1));
 				code.addFunction(WasmRuntimeBuilder.buildHashResizeBody());
 				// Modulo / remainder runtime helper bodies (FUNC_RAT_REM, FUNC_RAT_MOD)
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(false));

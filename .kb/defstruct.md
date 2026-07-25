@@ -20,13 +20,17 @@ predicate.
 `LispMacroExpander.expandDefstruct(cons, structAccessors)` is the single
 expansion shared by all backends. `(defstruct point x (y 10))` becomes ordinary
 top-level defuns — keyword constructor (`make-point`, `&key` with the slot
-defaults), predicate (`point-p`), copier (`copy-point`, `copy-list`), and one
-accessor per slot (`point-x` = `(nth 1 obj)`) — so no `Jvm/Wasm` defstruct
-compiler exists. An instance is a tagged proper list
-`(%struct-<name> v1 v2 ...)`; the predicate compares the tag with `equal`
-(content-safe on WASM, where symbols are interned strings). Consequences:
-instances satisfy `consp`/`listp`, `print` shows the underlying list, `equal`
-compares slot-wise.
+defaults), predicate (`point-p`), copier (`copy-point`), and one accessor per
+slot (`point-x` = `(%obj-ref obj 0)`) — so no `Jvm/Wasm` defstruct compiler
+exists. An instance is a first-class object built by `%obj-new` over the
+registered `LispLayout` (see `.kb/instance-syntax.md` for the six
+`%obj-*` primitives and the per-backend value shapes): the constructor is
+`(%obj-new '%struct-<name> slot...)`, the predicate `(%obj-is obj
+'%struct-<name>)`, the copier a fresh `%obj-new` over `%obj-ref`s (shallow, like
+`copy-structure`), and an accessor's setf place `%obj-set`. Consequences:
+instances do NOT satisfy `consp`/`listp`, `print` shows `#S(NAME :SLOT value
+...)`, and `equal` compares slot-wise (a deliberate deviation from CL, where
+distinct structures are never `equal` -- see `.kb/instance-syntax.md`).
 
 ## Where each path hooks in
 
@@ -55,7 +59,7 @@ There is no `defsetf`; `LispMacroExpander.expandSetf`'s place list is a
 hard-coded switch. `expandDefstruct` therefore records accessor -> 1-based slot
 position into a registry map, and the overload
 `expandSetf(cons, structAccessors)` resolves an unknown place accessor through
-it, expanding `(setf (point-x p) v)` like `(setf (nth 1 p) v)` (rplaca/nthcdr).
+it, expanding `(setf (point-x p) v)` to `(%obj-set p 0 v)`.
 The registry lives per-evaluator (`LispEvaluator.structAccessors`) and
 per-compilation (`Jvm/WasmLispCompiler.Ctx.structAccessors`, threaded through
 the shared `Ctx.Builder`); the three setf dispatch sites (`LispEvaluator`

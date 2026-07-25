@@ -15,6 +15,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`
 - [symbol-runtime-api.md](symbol-runtime-api.md) -- `symbol-name`/`intern`/`find-symbol`/`make-symbol`/`boundp`/`fboundp`/`symbol-value` (verbatim names, no intern table, global-only variable lookups)
 - [defstruct.md](defstruct.md) -- `defstruct` expansion into plain defuns, tagged-list representation, setf accessor registry
+- [instance-syntax.md](instance-syntax.md) -- the ONE instance value model behind defstruct/CLOS/conditions: the `%obj-*` primitive seam, `#S(...)`/`#<...>` printing, per-backend shapes (JVM `String[]` discriminator, WASM `TYPE_INSTANCE` + bake-all), the emit gate, and the structural-`equal` decision record
 - [clos.md](clos.md) -- static CLOS subset (`defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value`): shared registry, dispatcher generation, cl-who expansion-time dispatch
 - [gray-streams.md](gray-streams.md) -- rontolisp's own Gray-stream protocol (gray.lisp base classes + generics), the interpreter write dispatch, the compile-path `GrayStreamsLibrary.process` call-site rewrite, the trivial-gray-streams shim
 - [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system

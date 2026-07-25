@@ -395,7 +395,7 @@ public final class LispEvaluator {
 			return subtypep(args.get(0), args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// The instance primitives. Every struct/class/condition instance is built, read,
-		// written and type-tested through these six; nothing else may touch the slot
+		// written and type-tested through these; nothing else may touch the slot
 		// storage, which is what keeps the value model swappable behind one seam.
 		this.globalEnv.defineFunction(LispNames.OBJ_NEW, new LispFunction(LispNames.OBJ_NEW, args -> {
 			if (args.isEmpty() || !(args.get(0) instanceof LispSymbol tag)) {
@@ -442,13 +442,24 @@ public final class LispEvaluator {
 			requireSingleArg(LispNames.OBJ_P, args);
 			return args.get(0) instanceof LispInstance ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_SLOTS, new LispFunction(LispNames.OBJ_SLOTS, args -> {
+			requireSingleArg(LispNames.OBJ_SLOTS, args);
+			if (!(args.get(0) instanceof LispInstance inst)) {
+				return LispNil.INSTANCE;
+			}
+			LispVal list = LispNil.INSTANCE;
+			for (int i = inst.slotCount() - 1; i >= 0; i--) {
+				list = new LispCons(inst.slot(i), list);
+			}
+			return list;
+		}));
 		this.globalEnv.defineFunction(LispNames.CLASS_OF, new LispFunction(LispNames.CLASS_OF, args -> {
 			requireSingleArg(LispNames.CLASS_OF, args);
-			// Lite: the class-tag symbol of a CLOS instance, or a built-in type name.
+			// Lite: the instance-tag symbol of a struct/CLOS instance, or a built-in type
+			// name.
 			LispVal v = args.get(0);
-			if (v instanceof LispCons cons && cons.car() instanceof LispSymbol tag
-					&& tag.name().startsWith("%class-")) {
-				return tag;
+			if (v instanceof LispInstance inst) {
+				return new LispSymbol(inst.layout().tag());
 			}
 			// The class name is a symbol, printed uppercase like every symbol under the
 			// reader's upcase premise (the compile backends return INTEGER/STRING/...
@@ -458,22 +469,19 @@ public final class LispEvaluator {
 		this.globalEnv.defineFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL,
 				new LispFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL, args -> {
 					requireSingleArg(LispNames.CLASS_SLOT_DEFS_INTERNAL, args);
-					// ((slot-name declared-type) ...) for the class's full slot list;
-					// nil for anything that is not a registered class designator.
+					// ((slot-name declared-type) ...) for the type's full slot list; nil
+					// for anything that is not a registered class or struct designator.
 					if (!(args.get(0) instanceof LispSymbol sym)) {
 						return LispNil.INSTANCE;
 					}
-					String name = sym.name().startsWith("%class-") ? sym.name().substring("%class-".length())
-							: sym.name();
-					ClosRegistry.ClassInfo info = this.closRegistry.findClass(name);
-					if (info == null) {
+					List<ClosRegistry.SlotDef> defs = this.closRegistry.slotDefs(sym.name());
+					if (defs == null) {
 						return LispNil.INSTANCE;
 					}
 					LispVal result = LispNil.INSTANCE;
-					for (int i = info.slots().size() - 1; i >= 0; i--) {
-						ClosRegistry.SlotSpec slot = info.slots().get(i);
-						LispVal pair = new LispCons(new LispSymbol(slot.baseName()),
-								new LispCons(new LispSymbol(slot.type()), LispNil.INSTANCE));
+					for (int i = defs.size() - 1; i >= 0; i--) {
+						LispVal pair = new LispCons(new LispSymbol(defs.get(i).name()),
+								new LispCons(new LispSymbol(defs.get(i).type()), LispNil.INSTANCE));
 						result = new LispCons(pair, result);
 					}
 					return result;
@@ -494,18 +502,17 @@ public final class LispEvaluator {
 			}
 			// Lite: slots are always initialized (nil default), so a slot the class has
 			// is bound; see slot-makunbound.
-			return instanceSlotCell(args.get(0), args.get(1)) != null ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return instanceSlotRef(args.get(0), args.get(1)) != null ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// Gray-stream dispatch: write-string (and write-char, which lowers to it)
-		// handed a CLOS instance as its stream calls rontolisp's own Gray protocol
+		// handed an INSTANCE as its stream calls rontolisp's own Gray protocol
 		// (eval.GrayStreamsLibrary) instead of the handle-based built-in, so a user
 		// output-stream class receives the writes. Portability layers
 		// (trivial-gray-streams) adapt onto that protocol through their shim system;
 		// the core knows no third-party name.
 		LispVal baseWriteString = this.globalEnv.lookupFunction(LispNames.WRITE_STRING);
 		this.globalEnv.defineFunction(LispNames.WRITE_STRING, new LispFunction(LispNames.WRITE_STRING, args -> {
-			if (args.size() >= 2 && args.get(1) instanceof LispCons instance && instance.car() instanceof LispSymbol tag
-					&& tag.name().startsWith("%class-")) {
+			if (args.size() >= 2 && args.get(1) instanceof LispInstance) {
 				ensureGrayStreamsLoaded();
 				LispVal generic = resolveFunction(
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.GRAY_STREAM_WRITE_STRING));
@@ -534,11 +541,11 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.SLOT_MAKUNBOUND + " expects 2 arguments, got " + args.size());
 			}
 			// Lite: stores nil into the slot (there is no distinct unbound state).
-			LispCons cell = instanceSlotCell(args.get(0), args.get(1));
-			if (cell == null) {
+			SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
+			if (slot == null) {
 				throw new LispEvalException(LispNames.SLOT_MAKUNBOUND + ": no such slot " + args.get(1).print());
 			}
-			cell.setCar(LispNil.INSTANCE);
+			slot.write(LispNil.INSTANCE);
 			return args.get(0);
 		}));
 		// boundp/symbol-value read the GLOBAL variable namespace only (like CL, where
@@ -1286,8 +1293,8 @@ public final class LispEvaluator {
 	 * Evaluates {@code (slot-value obj slot)}. A literal quoted slot name goes through
 	 * the shared macro expansion (positional {@code nth}, compile-path parity); a
 	 * computed name -- a variable or expression, e.g. a serializer walking
-	 * {@code %class-slot-defs} results as data -- resolves the slot cell at runtime by
-	 * base name (interpreter only).
+	 * {@code %class-slot-defs} results as data -- resolves the slot at runtime by base
+	 * name (interpreter only).
 	 */
 	private LispVal evalSlotValue(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
@@ -1296,55 +1303,53 @@ public final class LispEvaluator {
 		if (parts.size() == 3 && !literalName) {
 			LispVal instance = eval(parts.get(1), env);
 			LispVal slotName = eval(parts.get(2), env);
-			LispCons cell = instanceSlotCell(instance, slotName);
-			if (cell == null) {
+			SlotRef slot = instanceSlotRef(instance, slotName);
+			if (slot == null) {
 				throw new LispEvalException(
 						LispNames.SLOT_VALUE + ": unknown slot " + slotName.print() + " on " + instance.print());
 			}
-			return cell.car();
+			return slot.read();
 		}
 		return eval(LispMacroExpander.expandSlotValue(cons, this.closRegistry), env);
 	}
 
 	/** The value of a condition instance's slot by base name ({@code nil} if absent). */
 	private LispVal conditionSlotValue(LispVal instance, String baseName) {
-		LispCons cell = instanceSlotCell(instance, new LispSymbol(baseName));
-		return cell == null ? LispNil.INSTANCE : cell.car();
+		SlotRef slot = instanceSlotRef(instance, new LispSymbol(baseName));
+		return slot == null ? LispNil.INSTANCE : slot.read();
+	}
+
+	/** An instance together with the 0-based index of one of its slots. */
+	private record SlotRef(LispInstance instance, int index) {
+
+		LispVal read() {
+			return this.instance.slot(this.index);
+		}
+
+		void write(LispVal value) {
+			this.instance.setSlot(this.index, value);
+		}
+
 	}
 
 	/**
-	 * The cons cell holding the given slot of a CLOS-subset instance, or null when the
-	 * value is not an instance or its class has no slot of that name.
+	 * The slot of an instance named by a (runtime) symbol, or null when the value is not
+	 * an instance or its layout has no slot of that name. The layout rides on the value,
+	 * so this resolves a {@code defstruct} instance as readily as a CLOS one.
 	 */
-	private @Nullable LispCons instanceSlotCell(LispVal instance, LispVal slotName) {
-		if (!(instance instanceof LispCons cons) || !(cons.car() instanceof LispSymbol tag)
-				|| !tag.name().startsWith("%class-")) {
-			return null;
-		}
-		if (!(slotName instanceof LispSymbol slotSym)) {
-			return null;
-		}
-		ClosRegistry.ClassInfo info = this.closRegistry.findClass(tag.name().substring("%class-".length()));
-		if (info == null) {
+	private static @Nullable SlotRef instanceSlotRef(LispVal instance, LispVal slotName) {
+		if (!(instance instanceof LispInstance inst) || !(slotName instanceof LispSymbol slotSym)) {
 			return null;
 		}
 		String base = plainName(slotSym.name());
-		for (int i = 0; i < info.slots().size(); i++) {
+		List<String> slotNames = inst.layout().slotNames();
+		for (int i = 0; i < slotNames.size(); i++) {
 			// Case-insensitive: a Java-side caller (conditionSlotValue passes the
-			// built-in
-			// "format-control"/"format-arguments") spells the slot lowercase, while an
-			// upcase-read condition registers its slots upcased -- the same
-			// reconciliation
-			// LispMacroExpander.expandConditionSlotReader makes.
-			if (info.slots().get(i).baseName().equalsIgnoreCase(base)) {
-				LispVal cell = cons;
-				for (int j = 0; j <= i; j++) {
-					if (!(cell instanceof LispCons c) || !(c.cdr() instanceof LispCons next)) {
-						return null;
-					}
-					cell = next;
-				}
-				return (LispCons) cell;
+			// built-in "format-control"/"format-arguments") spells the slot lowercase,
+			// while an upcase-read condition registers its slots upcased -- the same
+			// reconciliation LispMacroExpander.expandConditionSlotReader makes.
+			if (slotNames.get(i).equalsIgnoreCase(base)) {
+				return new SlotRef(inst, i);
 			}
 		}
 		return null;
@@ -3653,10 +3658,11 @@ public final class LispEvaluator {
 	 * error that was signaled without a condition object (a plain {@code %error}, or a
 	 * runtime failure inside a built-in).
 	 */
-	private static LispVal synthesizeSimpleError(@Nullable String message) {
+	private LispVal synthesizeSimpleError(@Nullable String message) {
 		LispVal messageVal = message == null ? LispNil.INSTANCE : new LispString(message);
-		return new LispCons(new LispSymbol("%class-SIMPLE-ERROR"),
-				new LispCons(messageVal, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)));
+		LispLayout layout = java.util.Objects
+			.requireNonNull(this.closRegistry.findLayoutByTag(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"));
+		return new LispInstance(layout, new LispVal[] { messageVal, LispNil.INSTANCE });
 	}
 
 	/**

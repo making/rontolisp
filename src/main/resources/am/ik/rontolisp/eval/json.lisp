@@ -372,10 +372,12 @@
     (cons "}" %json-hash-acc)))
 
 (defun rontolisp::%json-out-instance (v acc)
-  ;; A CLOS instance serializes as a JSON object: each slot's name (coerced like
-  ;; a symbol object key) maps to its slot-value, in definition order -- matching
-  ;; jzon's standard-object serialization. A slot may itself hold a hash table (a
-  ;; nested object), a list/vector (an array), or any serializable value.
+  ;; A CLOS instance or a defstruct instance serializes as a JSON object: each
+  ;; slot's name (coerced like a symbol object key) maps to its slot-value, in
+  ;; definition order -- matching jzon's standard-object serialization. A slot
+  ;; may itself hold a hash table (a nested object), a list/vector (an array), or
+  ;; any serializable value. Both shapes answer %class-slot-defs and slot-value,
+  ;; so one walk covers them.
   (let ((a (cons "{" acc)) (firstp t))
     (do ((defs (%class-slot-defs (class-of v)) (cdr defs)))
         ((null defs))
@@ -388,9 +390,9 @@
 
 (defun rontolisp::%json-out (v acc)
   ;; Value -> JSON, mirroring jzon's write-value defaults: nil is false, the
-  ;; symbol null is null, a vector or list is an array, a hash table or CLOS
-  ;; instance is an object, any other symbol/character prints its name as a
-  ;; string.
+  ;; symbol null is null, a vector or list is an array, a hash table or a
+  ;; struct/CLOS instance is an object, any other symbol/character prints its
+  ;; name as a string.
   (cond ((eq v t) (cons "true" acc))
         ((eq v 'null) (cons "null" acc))
         ((null v) (cons "false" acc))
@@ -403,6 +405,7 @@
         ((symbolp v) (rontolisp::%json-out-string (string v) acc))
         ((characterp v) (rontolisp::%json-out-string (string v) acc))
         ((typep v 'standard-object) (rontolisp::%json-out-instance v acc))
+        ((typep v 'structure-object) (rontolisp::%json-out-instance v acc))
         ((consp v) (rontolisp::%json-out-array v acc))
         (t (error "json-stringify: unsupported value"))))
 

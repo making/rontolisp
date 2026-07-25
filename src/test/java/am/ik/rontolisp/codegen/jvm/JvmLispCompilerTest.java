@@ -92,7 +92,7 @@ class JvmLispCompilerTest {
 	void compileAndRunHandlerCaseCatchesPlainErrorAsError() throws Exception {
 		assertThat(compileAndRun("""
 				(print (handler-case (error "boom ~a" 1)
-				         (error (e) (list :caught (nth 1 e)))))
+				         (error (e) (list :caught (simple-condition-format-control e)))))
 				""")).isEqualTo("(:CAUGHT \"boom 1\")");
 	}
 
@@ -294,7 +294,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("""
 				(defun hc-msg-risky () (error "boom"))
 				(print (handler-case (error (handler-case (hc-msg-risky) (error (e) "recovered")))
-				         (error (e) (nth 1 e))))
+				         (error (e) (simple-condition-format-control e))))
 				""")).isEqualTo("\"recovered\"");
 	}
 
@@ -6498,6 +6498,26 @@ class JvmLispCompilerTest {
 				             (%obj-p (cons #'car 2)) (%obj-p (cons "x" 2))))
 				(print (%obj-tag (cons 1 2)))
 				""")).isEqualTo("(NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL)\nNIL");
+	}
+
+	@Test
+	void compileAndRunInstanceSlotsAndEqualp() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(defstruct empty)
+				(defclass box () ((w :initarg :w)))
+				(print (list (%obj-slots (%obj-new '|%struct-POINT| 1 "hi"))
+				             (%obj-slots (%obj-new '|%struct-EMPTY|))
+				             (%obj-slots '(1 2)) (%obj-slots 5)))
+				(print (list (equalp (make-point :x 1 :y "A") (make-point :x 1 :y "a"))
+				             (equalp (make-point :x 1 :y "A") (make-point :x 2 :y "a"))
+				             (equalp (make-point :x 1 :y 2) (make-point :x 1.0 :y 2))
+				             (equalp (make-instance 'box :w 1) (make-instance 'box :w 1))
+				             (equalp (make-point :x 1 :y 2) (make-instance 'box :w 1))))
+				(print (list (equal (make-point :x 1 :y 2) (make-point :x 1 :y 2))
+				             (equal (make-point :x 1 :y 2) (make-point :x 1 :y 9))
+				             (equal (make-point :x 1 :y 2) (list 1 2))))
+				""")).isEqualTo("((1 \"hi\") NIL NIL NIL)\n(T NIL T T NIL)\n(T NIL NIL)");
 	}
 
 	// A program with BOTH a layout constant and a condition channel shares one <clinit>;

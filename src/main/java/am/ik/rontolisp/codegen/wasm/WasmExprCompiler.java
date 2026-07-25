@@ -505,8 +505,7 @@ final class WasmExprCompiler {
 				case LispNames.MASK_FIELD -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMaskField(cons), ctx);
 				case LispNames.SCALE_FLOAT ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandScaleFloat(cons), ctx);
-				case LispNames.CLASS_OF ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandClassOf(cons, ctx.closRegistry), ctx);
+				case LispNames.CLASS_OF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandClassOf(cons), ctx);
 				case LispNames.CLASS_SLOT_DEFS_INTERNAL ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandClassSlotDefs(cons, ctx.closRegistry), ctx);
 				case LispNames.SLOT_BOUNDP ->
@@ -823,6 +822,7 @@ final class WasmExprCompiler {
 				case LispNames.OBJ_IS -> WasmInstanceCompiler.compileIs(cons, ctx);
 				case LispNames.OBJ_TAG -> WasmInstanceCompiler.compileTag(cons, ctx);
 				case LispNames.OBJ_P -> WasmInstanceCompiler.compileP(cons, ctx);
+				case LispNames.OBJ_SLOTS -> WasmInstanceCompiler.compileSlots(cons, ctx);
 				case LispNames.FUNCTIONP -> WasmFunctionpCompiler.compile(cons, ctx);
 				case LispNames.ARRAYP_INTERNAL -> WasmArraypCompiler.compile(cons, ctx);
 				case LispNames.KEYWORDP -> WasmKeywordpCompiler.compile(cons, ctx);

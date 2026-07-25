@@ -2,7 +2,7 @@
 
 `(defclass name (superclass?) ((slot slot-option...) ...) class-option...)`
 
-Defines a class and returns the name symbol. This is a **static CLOS subset**: at most one superclass (single inheritance), and instances are plain tagged lists created with [`make-instance`](../macros/make-instance.md) (like [`defstruct`](defstruct.md) instances, they satisfy `consp` and `print` as their list representation). Slot options:
+Defines a class and returns the name symbol. This is a **static CLOS subset**: at most one superclass (single inheritance), and instances are first-class objects created with [`make-instance`](../macros/make-instance.md) (like [`defstruct`](defstruct.md) instances they are not lists — `consp` is `nil` — and `print` shows them as `#<NAME :SLOT value ...>`). Slot options:
 
 - `:initarg keyword` — the constructor keyword for the slot (defaults to the slot-name keyword)
 - `:initform expr` — the default value, evaluated at construction time when the slot is not supplied (defaults to `nil`; there is no unbound-slot state)

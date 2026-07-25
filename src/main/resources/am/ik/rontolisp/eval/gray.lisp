@@ -20,7 +20,7 @@
 ;; needs no rewrite -- its write-string wrapper dispatches natively.
 
 (defun rontolisp::%gray-write-string-dispatch (s stream)
-  (if (consp stream)
+  (if (%obj-p stream)
       (rontolisp:stream-write-string stream s)
       (write-string s stream)))
 

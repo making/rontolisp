@@ -8399,6 +8399,24 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("10\n99\n99\nT\nT\nNIL\n%struct-POINT\n(T NIL NIL NIL)\nT");
 	}
 
+	// equalp lives in the spliced prelude, which this harness does not run: the
+	// instance-descending equalp is pinned end-to-end by the ci-spec case
+	// instance-print-syntax-and-identity (all four backends through the real CLI).
+	@Test
+	void compileAndRunInstanceSlotsAndStructuralEqual() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(defstruct empty)
+				(print (list (%obj-slots (%obj-new '|%struct-POINT| 1 "hi"))
+				             (%obj-slots (%obj-new '|%struct-EMPTY|))
+				             (%obj-slots '(1 2)) (%obj-slots 5)))
+				(print (list (equal (make-point :x 1 :y 2) (make-point :x 1 :y 2))
+				             (equal (make-point :x 1 :y 2) (make-point :x 1 :y 9))
+				             (equal (make-point :x 1 :y 2) (list 1 2))
+				             (equal (make-point :x 1 :y 2) 5)))
+				""")).isEqualTo("((1 \"hi\") NIL NIL NIL)\n(T NIL NIL NIL)");
+	}
+
 	@Test
 	void compileAndRunInstancePrintsInStructAndAngleSyntax() throws Exception {
 		assertThat(compileAndRun("""
@@ -9519,7 +9537,7 @@ class WasmLispCompilerIntegrationTest {
 	void ehHandlerCaseCatchesPlainErrorAsError() throws Exception {
 		assertThat(compileAndRunEh("""
 				(print (handler-case (error "boom ~a" 1)
-				         (error (e) (list :caught (nth 1 e)))))
+				         (error (e) (list :caught (simple-condition-format-control e)))))
 				""")).isEqualTo("(:CAUGHT \"boom 1\")");
 	}
 

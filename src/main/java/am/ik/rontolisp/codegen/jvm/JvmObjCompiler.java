@@ -13,10 +13,10 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
 /**
- * Compiles the six instance primitives -- {@code %obj-new}, {@code %obj-ref},
- * {@code %obj-set}, {@code %obj-is}, {@code %obj-tag} and {@code %obj-p} -- through which
- * every {@code defstruct}/{@code defclass}/condition instance is built, read, written and
- * type-tested.
+ * Compiles the instance primitives -- {@code %obj-new}, {@code %obj-ref},
+ * {@code %obj-set}, {@code %obj-is}, {@code %obj-tag}, {@code %obj-p} and
+ * {@code %obj-slots} -- through which every {@code defstruct}/{@code defclass}/condition
+ * instance is built, read, written and type-tested.
  *
  * <p>
  * An instance is {@code Object[]{ String[] layout, v1, ..., vn }}. The {@code String[]}
@@ -54,6 +54,28 @@ final class JvmObjCompiler {
 				"an instance slot index must be a literal integer on the compile path, got " + form.print());
 	}
 
+	// The gate says whether an instance can EXIST in this class. Only construction needs
+	// it on; the four reading primitives answer nil without it (there is nothing to
+	// read), which is also what keeps an instance-free class free of their code. A
+	// %obj-new here with the gate off is a gate/expansion disagreement -- and a silent
+	// one, because consp/listp would then NOT exclude the instance it builds.
+	private static void requireGate(JvmLispCompiler.Ctx ctx, String name) {
+		if (!ctx.mayUseInstances) {
+			throw new UnsupportedOperationException(name + " reached the compiler with no instance representation");
+		}
+	}
+
+	private static boolean gateOff(JvmLispCompiler.Ctx ctx) {
+		return !ctx.mayUseInstances;
+	}
+
+	/** Compiles the operand for its side effects and leaves nil on the stack. */
+	private static void evaluateForEffectThenNil(LispVal operand, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(operand, ctx, className);
+		ctx.emit(Opcode.POP);
+		ctx.emit(Opcode.ACONST_NULL);
+	}
+
 	private static LispLayout requireLayout(JvmLispCompiler.Ctx ctx, String tag) {
 		LispLayout layout = ctx.closRegistry.findLayoutByTag(tag);
 		if (layout == null) {
@@ -64,6 +86,7 @@ final class JvmObjCompiler {
 
 	/** {@code (%obj-new '<tag> v1 ... vn)}. */
 	static void compileNew(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		requireGate(ctx, LispNames.OBJ_NEW);
 		List<LispVal> args = cons.toList();
 		LispLayout layout = requireLayout(ctx, literalTag(args.get(1)));
 		FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, layout);
@@ -98,6 +121,12 @@ final class JvmObjCompiler {
 	/** {@code (%obj-ref obj <k>)}. */
 	static void compileRef(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			// No instance can exist here, so this read is unreachable; the object is
+			// still evaluated for effect and the result is nil.
+			evaluateForEffectThenNil(args.get(1), ctx, className);
+			return;
+		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.objectArrayClass.index());
@@ -107,6 +136,7 @@ final class JvmObjCompiler {
 
 	/** {@code (%obj-set obj <k> v)}, returning the value written. */
 	static void compileSet(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		requireGate(ctx, LispNames.OBJ_SET);
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
@@ -161,6 +191,10 @@ final class JvmObjCompiler {
 	/** {@code (%obj-is obj '<tag1> '<tag2> ...)}. */
 	static void compileIs(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx, className);
+			return;
+		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int objSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
@@ -203,6 +237,87 @@ final class JvmObjCompiler {
 		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
 	}
 
+	/**
+	 * {@code (%obj-slots obj)}: a FRESH list of the slot values in layout order, nil for
+	 * a non-instance. Built back to front so each cons can be closed as it is made, which
+	 * keeps the whole thing one loop with no tail pointer.
+	 */
+	static void compileSlots(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx, className);
+			return;
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		int objSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(objSlot);
+		int hdrSlot = ctx.allocTemp();
+		List<Integer> toFalse = new ArrayList<>();
+		emitInstanceGuard(ctx, objSlot, hdrSlot, toFalse);
+		// list = null; for (i = obj.length - 1; i >= 1; i--) list = new Object[]{obj[i],
+		// list}. The cursor stops at 1, not 0: slot 0 of the instance array is the
+		// layout, not a slot value.
+		int listSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ACONST_NULL);
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(listSlot);
+		int idxSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(objSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ARRAYLENGTH);
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.ISUB);
+		ctx.emit(Opcode.ISTORE);
+		ctx.emit(idxSlot);
+		int loopTop = ctx.code.size();
+		ctx.emit(Opcode.ILOAD);
+		ctx.emit(idxSlot);
+		int exitLoop = ctx.code.size();
+		ctx.emit(Opcode.IFLE);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.ICONST_2);
+		ctx.emit(Opcode.ANEWARRAY);
+		ctx.emitU2(ctx.objectClass.index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(objSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ILOAD);
+		ctx.emit(idxSlot);
+		ctx.emit(Opcode.AALOAD);
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(listSlot);
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(listSlot);
+		ctx.emit(Opcode.IINC);
+		ctx.emit(idxSlot);
+		ctx.emit(0xff);
+		int gotoTop = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		JvmEmitHelper.patchBranch(ctx, gotoTop, loopTop);
+		JvmEmitHelper.patchBranch(ctx, exitLoop, ctx.code.size());
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(listSlot);
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		for (int p : toFalse) {
+			JvmEmitHelper.patchBranch(ctx, p, ctx.code.size());
+		}
+		ctx.emit(Opcode.ACONST_NULL);
+		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+	}
+
 	/** {@code (%obj-tag obj)}: the tag symbol, or nil for a non-instance. */
 	static void compileTag(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		compileGuarded(cons, ctx, className, true);
@@ -220,6 +335,10 @@ final class JvmObjCompiler {
 	 */
 	private static void compileGuarded(LispCons cons, JvmLispCompiler.Ctx ctx, String className, boolean readTag) {
 		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx, className);
+			return;
+		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int objSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);

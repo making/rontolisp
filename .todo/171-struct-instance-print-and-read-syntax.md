@@ -89,67 +89,77 @@ like the JVM) because a tag a program uses only becomes known during Pass 2 -- a
 address as an `i32.const` before Pass 2a. Record this asymmetry in `.kb` when it
 lands. See the memory note `instance-object-type-migration`.
 
-## Remaining work (start here in the new session)
+### DONE -- Phase 2 (the atomic flip; every instance now goes through the six primitives)
 
-The primitives exist and are proven on all three backends; nothing calls them yet.
-The rest is the atomic flip plus reading and docs.
+Everything the checklist below listed, plus what it did not anticipate:
 
-### Phase 2 -- flip defstruct/defclass/conditions onto the object type (ATOMIC, one commit)
+- `LispMacroExpander` grew five private builders (`objNew`/`objRef`/`objSet`/`objIs`/
+  `objTag`) and EVERY site was rewritten through them -- defstruct, defclass, the setf
+  struct place, `class-of`, `slot-value`/`slot-boundp` (literal + runtime), the condition
+  slot readers, `buildTypedConstruct`, `expandStringSignal`/`expandObjectSignal`,
+  `makeHandlerTypeTest`, the class/struct instance tests. The cons/list/sequence
+  specializer exclusion hack is DELETED.
+- `(setf (%obj-ref o k) v)` is a setf place of its own, so slot-value / with-slots / a
+  struct accessor all compose with setf/incf/push through one case.
+- `class-of` became `(if (%obj-p v) (%obj-tag v) ...)`: no tag enumeration to keep in
+  step with the registry, and it answers for a STRUCT too (`%struct-NAME`).
+- `ClosRegistry.slotDefs(designator)` is the one resolver behind `%class-slot-defs` on
+  both the interpreter and the compile path, and it answers for STRUCT designators (all
+  types read `T`) -- which is what makes json.lisp serialize a struct as a JSON object
+  through the unchanged CLOS walk, and what `typep 'structure-object` (new) tests.
+- Runtime-name `slot-value` was rewritten: names at a consistent index share one `member`
+  arm, an AMBIGUOUS name now gets an inner `%obj-is` tag dispatch instead of the old hard
+  error. `slot-boundp` dispatches over layouts (structs included).
+- `equal` kept STRUCTURAL on instances (decision recorded in `.kb/instance-syntax.md`
+  with its re-evaluation trigger); JVM `_equal` and WASM `_equal`/`_hash` gained matching
+  arms. `equalp` (prelude) descends slot-wise via `%obj-p`/`%obj-tag`/`%class-slot-defs`.
+  The JVM hash table keys by printed text, so it agrees for free.
+- The emit gate is `LispMacroExpander.mayCreateInstances(program, registry)` -- "can an
+  instance be CONSTRUCTED here". Only construction needs it; the four reading primitives
+  fold to a constant nil when it is off. It must stay in step with
+  `expandSignalDesignator`'s case split (handler-case/ignore-errors/signal/make-condition,
+  and error/warn/cerror with a quoted type, a literal make-condition datum or -- for
+  error -- a runtime datum with initargs), plus `#'signal`.
+- Bug the flip exposed and fixed: `buildTypedConstruct`'s non-pair fallback tagged the
+  instance with the QUOTED spelling (`%class-JSON-WRITE-ERROR`) while the layout is
+  registered under the resolved one (`%class-COM.INUOE.JZON:JSON-WRITE-ERROR`) -- it now
+  uses `cls.name()` whenever the class is known. jzon's `(error 'json-write-error
+  :format-control c :format-arguments a)` (odd arg count -> not pairs) hit exactly this.
+- `expandObjectSignal`'s fallback message now checks `%obj-p` first, so `(error x)` on a
+  non-condition signals x's printed form instead of running off the end of a nil tag.
+- gray.lisp dispatches on `%obj-p` (the interpreter wrapper matches: any instance);
+  usocket.lisp reads `simple-condition-format-control`; `(nth 1 e)` on a caught condition
+  is retired everywhere (tests, ci-spec, doc/en+ja handler-case).
 
-The expander is shared by all backends, so the switch must be one change. Rewrite in
-`LispMacroExpander` (all sites already located):
+- A SEVENTH primitive landed that the checklist did not foresee: `%obj-slots` (a fresh
+  list of an instance's slot values). It exists for `equalp`, which must descend into
+  slots as CL does and as the tagged list did by accident. Walking them through
+  `%class-slot-defs` + a runtime-name `slot-value` was exact but cost **+19 KB in every
+  artifact that so much as mentions `equalp`**; `(equalp (%obj-slots a) (%obj-slots b))`
+  reuses the existing cons arm for **+63 bytes**. Trap it exposed: the JVM instance array
+  carries the layout at index 0 while the WASM slot array does not, so the JVM cursor
+  must stop at 1 -- getting that wrong returned the `String[]` layout as a list element
+  and made `equalp` recurse forever.
+- Both backends now ASSERT the gate on construction (`%obj-new`/`%obj-set`, and a
+  Pass-2 instance literal): a gate that under-approximates used to be silent on the JVM
+  (`consp` would answer T for an instance it never knew about); now it is a loud
+  compile error, as it already was on WASM.
 
-- **defstruct** (`expandDefstruct`, ~6170): constructor `(list '%struct-NAME v...)` ->
-  `(%obj-new '%struct-NAME v...)` (keyword and BOA); predicate `(if (consp o) (equal
-  (car o) 'tag) nil)` -> `(%obj-is o 'tag)`; copier `(copy-list o)` -> `(%obj-new 'tag
-  (%obj-ref o 0) ...)`; accessor `(nth i o)` -> `(%obj-ref o (i-1))`; the
-  `structAccessors` setf position must now emit `%obj-set` (check `expandSetf`'s struct
-  branch).
-- **defclass** (`expandDefclass`, ~6442): constructor `(list '%class-NAME v...)` ->
-  `%obj-new`; reader/writer methods -> `%obj-ref`/`%obj-set`.
-- **tag tests** -> `%obj-is`: `instanceTagTest` (~6960), `makeClassInstanceTest`
-  (~11849), `makeAnyClassInstanceTest` (~11829), the struct specializer (~7822/7841),
-  the `class-of` dispatch (`expandClassOf` ~6745, currently `(car v)` after the tag
-  test -> `%obj-tag`), `expandSlotValue`/runtime slot dispatch (position walks -> `%obj-ref`).
-- **DELETE** the cons/list/sequence specializer exclusion hack (~7841 +
-  `makeAnyClassInstanceTest`'s `consp` guard) -- with `consp` nil it is dead.
-- **conditions** (all AST, all in `LispMacroExpander`): `buildTypedConstruct`,
-  `expandObjectSignal` ctors (~10117/10125), the literal-control signal (~9857), and
-  the message builder `(subseq (prin1-to-string (car cond)) 7)` (~10061) -> `%obj-tag`
-  minus prefix. `SIMPLE_CONDITION_TAGS` tag tests -> `%obj-is`.
-- **synthesizeSimpleError** (`LispEvaluator.java:3658`) -> build a `LispInstance`.
-- **handler-case condition construction**: `JvmHandlerCaseCompiler.java:298-303` and
-  `WasmHandlerCaseCompiler.java:297-303` build `(list '%class-simple-error msg nil)` as
-  AST -> `(%obj-new '%class-SIMPLE-ERROR msg nil)` (a few lines each, no emitter work).
-- **`consp`/`listp`/`atom`/`typep 'cons/'list/'sequence`** on every backend: add the
-  `arr[0] instanceof String[]` (JVM) / `ref.test $instance` (WASM) exclusion so an
-  instance is not a list; interpreter `isCons`/`isList` reject `LispInstance`.
-- **`equal`/`equalp`/`_hash`**: interpreter `LispInstance.equals` is already structural
-  (tag + slots). Give the JVM `_equal` and the WASM `_equal`/`_hash` matching instance
-  arms so `(equal p1 p2)` agrees across backends AND stays consistent with the
-  printed-key hash tables. DECIDE and record: keep `equal` structural (today's
-  behaviour) rather than switching to CL's "distinct structs are not `equal`", which
-  would silently change loaded libraries -- `.kb` re-eval trigger.
-- **class-of** keeps returning the `%class-NAME` tag SYMBOL (do not change the printer's
-  symbol branch) -- ci-spec `rontolisp-package-introspection` / the three backend tests
-  stay green.
-- **gray.lisp:23** `(consp stream)` and **usocket.lisp:55** `(nth 1 c)`: rewrite to an
-  instance-aware predicate / `%obj-ref` (or a slot reader).
-- **json.lisp** `%json-out-instance` / `%json-out` cond order: `(car v)` -> `class-of`
-  via `%obj-tag`, `(slot-value ...)` walk stays through `%class-slot-defs`; retire the
-  "instance IS a tagged cons" comment. A struct now serializes as a JSON OBJECT (was
-  `["%struct-POINT",1,2]`); extend `%class-slot-defs` to answer for struct designators;
-  add a `JzonE2eTest` struct case; update `.kb/json.md`.
-- **Move the pinned expectations in the SAME commit**: `LispEvaluatorTest` condition
-  prints (`(%class-...)` -> `#<...>`), `doc/{en,ja}/reference/macros/make-condition.md`
-  (`; =>` line), and anything printing a condition. NOTHING that does not involve an
-  instance may change output.
+**Verified:** all four backends print `#S(...)`/`#<...>` byte-identically for the whole
+shape matrix (string/nil/nested/in-list/empty slot, princ/prin1/`format ~a`/`~s`/
+`prin1-to-string`/`princ-to-string`/`write-to-string`) and agree on `consp`/`listp`/
+`atom`/`typep structure-object|standard-object`/`equal`/`equalp`/`class-of`/an
+instance-keyed `equal` hash table. New ci-spec case `instance-print-syntax-and-identity`.
+Full suite 4180 green; `-Pweb compile` green; `javadoc:jar` clean apart from the
+pre-existing `Version` error; native-binary `CiSpecE2eTest` 932 green.
 
-Risk watchlist: JVM printer `max_stack` literals are hand-written and StackMapAugmenter
-copies them verbatim (VerifyError only shows at RUN, not compile) -- run every new JVM
-test. WASM StringTable ordering trap. The emit gate must be "program defines a struct/
-class or uses conditions", never `closRegistry.classes().isEmpty()` (21 seeded classes,
-never empty).
+**Byte-identity caveat (report, do not "fix"):** an instance-FREE program is no longer
+byte-identical when its (spliced) code merely INSPECTS an instance -- `class-of`, a
+`typep 'standard-object`, an `(error <runtime-datum>)` object designator. Those expand to
+`%obj-*`, which folds to a constant with the gate off, so the artifact SHRINKS (~1.3% on
+a hello-world) with identical behaviour. Programs that touch none of those are unchanged.
+
+## Remaining work
 
 ### Phase 3 -- read `#S(...)` from source
 
@@ -176,6 +186,14 @@ Lisp defun (the `%class-slot-defs` pattern) -- no slot table in the emitted read
 error set on every backend; add a ci-spec case.
 
 ### Phase 5 -- docs, `.kb`, ci-spec, native E2E
+
+Phase 2 already carried the parts its own change invalidated: `.kb/instance-syntax.md`
+(new, indexed in `.kb/README.md`), the representation paragraphs of `.kb/{defstruct,clos,
+error-handling,json,gray-streams}.md`, `doc/{en,ja}` for defstruct.md / defclass.md /
+make-condition.md / handler-case.md / missing-features.md, and the ci-spec case. What is
+LEFT here is the reading half (data-types.md's `#S(...)` reader literal,
+eval-limitations.md) plus `.kb/hash-tables.md`, and the final `-Pweb compile` /
+`javadoc:jar` / native `CiSpecE2eTest` sweep.
 
 `doc/{en,ja}` mirrored byte-identically: defstruct.md, defclass.md, make-condition.md,
 missing-features.md (narrow the row to `:include` only), data-types.md (`#S(...)` reader

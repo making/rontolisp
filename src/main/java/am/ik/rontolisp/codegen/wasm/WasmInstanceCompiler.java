@@ -12,10 +12,10 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
 /**
- * Compiles the six instance primitives -- {@code %obj-new}, {@code %obj-ref},
- * {@code %obj-set}, {@code %obj-is}, {@code %obj-tag} and {@code %obj-p} -- through which
- * every {@code defstruct}/{@code defclass}/condition instance is built, read, written and
- * type-tested.
+ * Compiles the instance primitives -- {@code %obj-new}, {@code %obj-ref},
+ * {@code %obj-set}, {@code %obj-is}, {@code %obj-tag}, {@code %obj-p} and
+ * {@code %obj-slots} -- through which every {@code defstruct}/{@code defclass}/condition
+ * instance is built, read, written and type-tested.
  *
  * <p>
  * An instance is a {@code TYPE_INSTANCE} struct: field 0 is the absolute linear address
@@ -77,8 +77,13 @@ final class WasmInstanceCompiler {
 
 	/** {@code (%obj-ref obj <k>)}. */
 	static void compileRef(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		requireGate(ctx, LispNames.OBJ_REF);
 		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			// No instance can exist in this module, so this read is unreachable; the
+			// object is still evaluated for effect and the result is nil.
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		pushSlots(ctx);
 		i32Const(ctx, literalIndex(args.get(2), LispNames.OBJ_REF));
@@ -108,8 +113,11 @@ final class WasmInstanceCompiler {
 
 	/** {@code (%obj-is obj '<tag1> '<tag2> ...)}. */
 	static void compileIs(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		requireGate(ctx, LispNames.OBJ_IS);
 		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int objSlot = ctx.allocTemp();
 		setLocal(ctx, objSlot);
@@ -146,8 +154,11 @@ final class WasmInstanceCompiler {
 
 	/** {@code (%obj-tag obj)}: the tag symbol, or nil for a non-instance. */
 	static void compileTag(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		requireGate(ctx, LispNames.OBJ_TAG);
 		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int objSlot = ctx.allocTemp();
 		setLocal(ctx, objSlot);
@@ -172,10 +183,84 @@ final class WasmInstanceCompiler {
 		ctx.writer.write(Instruction.END);
 	}
 
+	/**
+	 * {@code (%obj-slots obj)}: a FRESH list of the slot values in layout order, nil for
+	 * a non-instance. Built back to front so each cons closes as it is made -- one loop,
+	 * no tail pointer. Every local here is an {@code eqref} (the only local type the
+	 * emitted functions declare), so the cursor rides as an i31.
+	 */
+	static void compileSlots(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int objSlot = ctx.allocTemp();
+		setLocal(ctx, objSlot);
+		int listSlot = ctx.allocTemp();
+		int idxSlot = ctx.allocTemp();
+		getLocal(ctx, objSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		refNull(ctx);
+		setLocal(ctx, listSlot);
+		getLocal(ctx, objSlot);
+		pushSlots(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_SUB);
+		refI31(ctx);
+		setLocal(ctx, idxSlot);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+		getIndex(ctx, idxSlot);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.BR_IF, 1);
+		getLocal(ctx, objSlot);
+		pushSlots(ctx);
+		getIndex(ctx, idxSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		getLocal(ctx, listSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		setLocal(ctx, listSlot);
+		getIndex(ctx, idxSlot);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_SUB);
+		refI31(ctx);
+		setLocal(ctx, idxSlot);
+		ctx.writer.write(Instruction.BR, 0);
+		ctx.writer.write(Instruction.END); // end loop
+		ctx.writer.write(Instruction.END); // end block
+		getLocal(ctx, listSlot);
+		ctx.writer.write(Instruction.ELSE);
+		refNull(ctx);
+		ctx.writer.write(Instruction.END);
+	}
+
+	// Pushes the i32 value of the i31-boxed cursor in the given local.
+	private static void getIndex(WasmLispCompiler.Ctx ctx, int slot) {
+		getLocal(ctx, slot);
+		WasmEmitHelper.castI31GetS(ctx);
+	}
+
+	private static void refI31(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
 	/** {@code (%obj-p x)}. */
 	static void compileP(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		requireGate(ctx, LispNames.OBJ_P);
 		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
@@ -184,12 +269,27 @@ final class WasmInstanceCompiler {
 
 	// --- helpers -------------------------------------------------------------
 
-	// The gate scan and what is being compiled must always agree; a mismatch would emit
-	// a negative heap type, which validates as garbage rather than failing loudly.
+	// The gate says whether an instance can EXIST in this module. Only construction
+	// needs it to be on; the four reading primitives answer nil without it, which is
+	// exactly right (there is nothing to read) and keeps an instance-free module
+	// byte-identical to a build that never knew about instances. A %obj-new that gets
+	// here with the gate off is a gate/expansion disagreement -- it would emit a
+	// negative heap type, which validates as garbage rather than failing loudly.
 	private static void requireGate(WasmLispCompiler.Ctx ctx, String name) {
 		if (ctx.instanceTypeIndex < 0) {
 			throw new UnsupportedOperationException(name + " reached the compiler with no instance type emitted");
 		}
+	}
+
+	private static boolean gateOff(WasmLispCompiler.Ctx ctx) {
+		return ctx.instanceTypeIndex < 0;
+	}
+
+	/** Compiles the operand for its side effects and leaves nil on the stack. */
+	private static void evaluateForEffectThenNil(LispVal operand, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.compileExpr(operand, ctx);
+		ctx.writer.write(Instruction.DROP);
+		refNull(ctx);
 	}
 
 	private static int layoutAddress(WasmLispCompiler.Ctx ctx, String tag) {

@@ -12,7 +12,7 @@ plain CLOS-subset definitions — so the whole protocol is backend-free
 expansion output, no codegen.
 
 **Interpreter dispatch**: `LispEvaluator` wraps the `write-string` builtin —
-when the stream argument is a CLOS instance (`%class-` tagged cons) it lazy-loads
+when the stream argument is an INSTANCE (`%obj-p`, `.kb/instance-syntax.md`) it lazy-loads
 `gray.lisp` (`ensureGrayStreamsLoaded`) and applies
 `rontolisp:stream-write-string` with `(stream string)`. `write-char` lowers to
 `write-string` (shared `expandWriteChar`), so it dispatches too. A `defclass`
@@ -30,7 +30,7 @@ count). It (1) splices `gray.lisp` unless a load already did (guard: a
 (2) rewrites every `(write-string s STREAM)` / `(write-char c STREAM)` call
 with an explicit non-literal stream (not `t`/`nil`/string literal) onto
 `rontolisp::%gray-write-string-dispatch` / `-char-dispatch` — defuns at the
-bottom of `gray.lisp` that test `(consp stream)` and route instances to the
+bottom of `gray.lisp` that test `(%obj-p stream)` and route instances to the
 generic, everything else back to the builtin. The rewrite walker skips quoted
 data and the dispatch defuns' own bodies (their fallback `write-string` call
 must not rewrite into itself). The compiled runtimes themselves know nothing:
@@ -56,9 +56,9 @@ as a call (`rewriteTail` — `(error 'ty :format-control format
 :format-arguments args)` has a tail whose car is `format`).
 
 **Limits**: output side only (`stream-write-char`/`-string`); the input
-generics of full Gray (stream-read-char, ...) do not exist. The interpreter
-dispatch keys on the `%class-` tag, the compiled dispatch on `consp` — a plain
-cons handed as a stream errors either way, just differently. A bounded
+generics of full Gray (stream-read-char, ...) do not exist. Both the interpreter
+and the compiled dispatch key on "is this an instance", so they agree; a plain
+cons handed as a stream falls through to the built-in either way. A bounded
 `(write-string s instance :start ...)` is NOT rewritten (interpreter ignores
 the bounds for instances; both are edge behavior). A runtime-nil `format`
 destination reached through the rewrite writes like a designator instead of

@@ -90,6 +90,36 @@ final class JvmEmitHelper {
 	}
 
 	/**
+	 * Emits the instance exclusion shared by the cons-shaped predicates
+	 * ({@code consp}/{@code listp}/{@code atom}): an instance is an {@code Object[]}
+	 * carrying its {@code String[]} layout in slot 0, and must NOT answer as a cons. The
+	 * value must already be in {@code tempSlot} and known to be a non-ratio
+	 * {@code Object[]}. Nothing is emitted when the program cannot build an instance, so
+	 * such a program compiles byte-identically to a build that never knew about them.
+	 * @param ctx the compilation context
+	 * @param tempSlot the local holding the value
+	 * @return the branch position to patch to the not-a-cons target, or -1 when no test
+	 * was emitted
+	 */
+	static int emitInstanceExclusion(JvmLispCompiler.Ctx ctx, int tempSlot) {
+		if (!ctx.mayUseInstances) {
+			return -1;
+		}
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.AALOAD);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.layoutPool.stringArrayClass(ctx.cp).index());
+		int pos = ctx.code.size();
+		ctx.emit(Opcode.IFNE);
+		ctx.emitU2(0);
+		return pos;
+	}
+
+	/**
 	 * Compiles the Lisp boolean true. It is the symbol {@code t} (represented at runtime
 	 * as the bare String {@code "t"}, like any other symbol), so it prints as {@code t}
 	 * and is {@code eq} to a quoted {@code 't}, matching the interpreter.

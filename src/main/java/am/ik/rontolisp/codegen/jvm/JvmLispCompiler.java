@@ -158,6 +158,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<String, Integer> structAccessors = new HashMap<>();
 		ClosRegistry closRegistry = new ClosRegistry();
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry);
+		// Whether an instance value can exist in this class at all. The predicates and
+		// _equal need the answer BEFORE any body is compiled (their shape changes), and
+		// with the gate off nothing they would guard against can be constructed -- so an
+		// instance-free program stays byte-identical to a build that never knew about
+		// instances.
+		boolean mayUseInstances = LispMacroExpander.mayCreateInstances(program, closRegistry);
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		// Lower a return-from that crosses a lambda boundary into an EH-based non-local
@@ -679,7 +685,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass,
-				strvMethod);
+				strvMethod, mayUseInstances ? cp.addClass(cp.addUtf8("[Ljava/lang/String;")) : null);
 
 		// --vec: emit the Vector API acceleration bridge only when the program actually
 		// references one of the six accelerated vec: kernels (directly or via a spliced
@@ -759,6 +765,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.crossLambdaExit(crossLambdaExit)
 			.usesFloatArray(usesFloatArray)
 			.usesArrays(usesArrays)
+			.mayUseInstances(mayUseInstances)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
@@ -2719,6 +2726,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesArrays = false;
 
 		/**
+		 * True when an instance value can exist in this class (see
+		 * {@code LispMacroExpander.mayCreateInstances}). Gates the instance exclusion in
+		 * the cons-shaped predicates, so a program that cannot build one compiles
+		 * byte-identically. Shared across every context.
+		 */
+		boolean mayUseInstances = false;
+
+		/**
 		 * True for the single context that compiles top-level forms (the {@code main}
 		 * body), false for defun/lambda bodies. When the embedded {@code eval} runtime is
 		 * present, a top-level global variable binding is mirrored into the runtime's
@@ -2847,6 +2862,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.crossLambdaExit = builder.crossLambdaExit;
 			this.usesFloatArray = builder.usesFloatArray;
 			this.usesArrays = builder.usesArrays;
+			this.mayUseInstances = builder.mayUseInstances;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
 			this.structAccessors = builder.structAccessors;
@@ -3068,6 +3084,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesFloatArray = false;
 
 			private boolean usesArrays = false;
+
+			private boolean mayUseInstances = false;
 
 			private String className = "";
 
@@ -3411,6 +3429,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesArrays(boolean usesArrays) {
 				this.usesArrays = usesArrays;
+				return this;
+			}
+
+			Builder mayUseInstances(boolean mayUseInstances) {
+				this.mayUseInstances = mayUseInstances;
 				return this;
 			}
 

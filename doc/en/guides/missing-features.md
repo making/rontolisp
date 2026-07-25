@@ -18,7 +18,7 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 | `&whole` / `&environment` | not available; a `defmacro` lambda list takes required parameters plus one trailing `&rest`/`&body` |
 | `loop` (extended) | partial (see below) |
 | CLOS | partial (static subset; no MOP) |
-| `defstruct` `:include` / `#S(...)` syntax | not available |
+| `defstruct` `:include` / reading `#S(...)` | not available (an instance PRINTS as `#S(...)`) |
 | `declare` / `declaim` / `proclaim` / `the` | parsed no-ops (no effect on compilation) |
 | `typep` / `subtypep` / `coerce` | literal (quoted) type specifiers only; `coerce` targets `'list` / `'vector` / `'string` |
 | `make-package` / `export` / `import` / `use-package` / `find-package` / `rename-package` (runtime) | not available; `defpackage` `:shadow` / `:shadowing-import-from` are errors |
@@ -91,7 +91,8 @@ and `thereis`/`always`/`never`.
 ## Structures and objects
 
 [`defstruct`](../reference/special-forms/defstruct.md) does not support
-`:include` inheritance or the `#S(...)` print/read syntax.
+`:include` inheritance. An instance prints in the standard `#S(...)` syntax, but
+`#S(...)` in source is not read back.
 
 CLOS is a **static subset**
 ([`defclass`](../reference/special-forms/defclass.md),

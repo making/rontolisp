@@ -197,6 +197,13 @@ final class JvmQuoteCompiler {
 	// the reader already resolved against the same registry the compiler uses.
 	private static void compileQuotedInstance(am.ik.rontolisp.LispInstance inst, JvmLispCompiler.Ctx ctx,
 			String className) {
+		if (!ctx.mayUseInstances) {
+			// The gate is decided before any body compiles, so a literal that only
+			// appears during Pass 2 (a macro that returns an instance) would build one
+			// the predicates were not told about. Fail loudly instead.
+			throw new UnsupportedOperationException(
+					"an instance literal of type " + inst.layout().tag() + " appeared after the instance gate closed");
+		}
 		am.ik.jvm.ConstantPool.FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, inst.layout());
 		int slots = inst.slotCount();
 		JvmEmitHelper.emitIntConst(ctx, 1 + slots);

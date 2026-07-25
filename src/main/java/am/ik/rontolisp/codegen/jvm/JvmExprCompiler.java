@@ -377,8 +377,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMaskField(cons), ctx, className);
 				case LispNames.SCALE_FLOAT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandScaleFloat(cons), ctx, className);
-				case LispNames.CLASS_OF -> JvmExprCompiler
-					.compileExpr(LispMacroExpander.expandClassOf(cons, ctx.closRegistry), ctx, className);
+				case LispNames.CLASS_OF ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandClassOf(cons), ctx, className);
 				case LispNames.CLASS_SLOT_DEFS_INTERNAL -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandClassSlotDefs(cons, ctx.closRegistry), ctx, className);
 				case LispNames.SLOT_BOUNDP -> JvmExprCompiler
@@ -739,6 +739,7 @@ final class JvmExprCompiler {
 				case LispNames.OBJ_IS -> JvmObjCompiler.compileIs(cons, ctx, className);
 				case LispNames.OBJ_TAG -> JvmObjCompiler.compileTag(cons, ctx, className);
 				case LispNames.OBJ_P -> JvmObjCompiler.compileP(cons, ctx, className);
+				case LispNames.OBJ_SLOTS -> JvmObjCompiler.compileSlots(cons, ctx, className);
 				case LispNames.FUNCTIONP -> JvmFunctionpCompiler.compile(cons, ctx, className);
 				case LispNames.ARRAYP_INTERNAL -> JvmArraypCompiler.compile(cons, ctx, className);
 				case LispNames.KEYWORDP -> JvmKeywordpCompiler.compile(cons, ctx, className);

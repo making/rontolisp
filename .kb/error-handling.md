@@ -54,7 +54,9 @@ everywhere except `--no-gc`.
 
 ## Phase 2 — condition objects
 
-- A condition is a CLOS-subset tagged-list instance `(%class-<name> slots...)`.
+- A condition is a CLOS-subset instance, the one object value model of
+  `.kb/instance-syntax.md` (built by `(%obj-new '%class-<name> slots...)`, printed
+  `#<NAME :SLOT value ...>`, NOT a list).
   `ClosRegistry`'s constructor seeds the built-in hierarchy (`condition` >
   `serious-condition` > `error` > `simple-error` + `parse-error`,
   `type-error`, ..., `warning` > `simple-warning`; `simple-*` carry
@@ -73,7 +75,8 @@ everywhere except `--no-gc`.
   (`LispMacroExpander`): string designator = the LEGACY `(%error message)`
   path, byte-identical output; quoted-type designator binds initarg temps,
   builds the instance via the registry slot layout (`buildTypedConstruct`;
-  unknown class or non-keyword args → raw tagged list) and signals
+  unknown class or non-keyword args → the values fill the layout positionally,
+  and an unregistered type is an error, as in CL) and signals
   `(%error-cond instance message)` where the message is the `:report`
   rendering (string directly; lambda via `with-output-to-string` + `funcall`),
   a supplied `:format-control` for `simple-*`-style classes, or the legacy

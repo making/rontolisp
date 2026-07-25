@@ -13,18 +13,19 @@ shape the real jzon produces under rontolisp -- `JzonE2eTest` is the oracle, and
 (both directions). User-facing behavior lives in
 `doc/*/reference/functions/rontolisp-json-{parse,stringify}.md`.
 
-**CLOS instance -> object** (`%json-out-instance`, checked in `%json-out` before
-the `consp` branch because an instance IS a tagged cons): detected with
-`(typep v 'standard-object)`, its slots enumerated in definition order via the
+**Instance -> object** (`%json-out-instance`): detected with
+`(typep v 'standard-object)` for a CLOS instance and `(typep v 'structure-object)`
+for a `defstruct` one, its slots enumerated in definition order via the
 bare `%class-slot-defs` (the interpreter builtin / the compilers' macro-expanded
 registry dispatch, the same primitive `closer-mop:class-slots` is built on) and
 each `(slot-value v name)` recursively serialized -- so a hash-table slot nests
 as an object, a list/vector slot as an array. A class-free program still splices
 this (dead) code and compiles cleanly (`typep 'standard-object` is nil, the
 dispatch folds to `(cond (t nil))`). jzon serializes a `standard-object` the same
-way (its `structure-object` MOP method is feature-gated off under rontolisp, so a
-`defstruct` -- a `%struct-`-tagged list -- serializes as an ARRAY on BOTH sides;
-do not "fix" that into an object).
+way. A `defstruct` instance also serializes as an OBJECT here: it is no longer a
+list (so the array branch cannot claim it) and `%class-slot-defs` answers for a
+struct designator, which makes the CLOS walk work verbatim -- a divergence from
+jzon, whose `structure-object` MOP method is feature-gated off under rontolisp.
 
 **Building objects ergonomically** without breaking the drop-in-jzon promise:
 `rontolisp:plist-hash-table` / `rontolisp:hash-table-plist` and
