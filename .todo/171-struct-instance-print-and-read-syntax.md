@@ -159,27 +159,62 @@ byte-identical when its (spliced) code merely INSPECTS an instance -- `class-of`
 `%obj-*`, which folds to a constant with the gate off, so the artifact SHRINKS (~1.3% on
 a hello-world) with identical behaviour. Programs that touch none of those are unchanged.
 
+### DONE -- Phase 3 (read `#S(...)` from source)
+
+Exactly the shape the checklist called for: `Token.StructOpen` + a `#S(`/`#s(` lexer
+branch (placed after the `#(` one), `LispReader.readStruct`, and the NON-cons
+`LispStructLiteral` carrier -- which needed zero special cases in the single-level
+backquote expander, the CLtL2 nested one, `#(...)` or `UserMacroExpander` (its walker
+returns any non-cons verbatim), exactly as predicted.
+
+- `StructLiteralFolder` (new, `am.ik.rontolisp`) is the one fold, called per top-level
+  form from `expandTopLevelDefinitions` (compile) and from
+  `LispEvaluator.resolveStructLiterals` at `eval(LispVal)` + `evalResolved`
+  (interpreter). Per-form is load-bearing: it is what makes the `defstruct` have to
+  PRECEDE the literal on every backend. The fold walks conses AND `LispArray` storage
+  (`#(#S(...))`), and keeps identity when there is nothing to fold, so the
+  no-`#S` program is untouched -- including `expandTopLevelDefinitions`'s early return,
+  which now returns `foldProgram(program, registry)` (identity, or a clear "not a defined
+  structure type" for a `#S` in a program with no definitions at all).
+- Division of errors: the reader decides what it can alone (missing/non-symbol type
+  name, non-symbol slot name, ODD slot list -> `LispReadException`); the fold decides the
+  rest (unknown type -- with a "names a class" hint --, unknown slot, and an omitted slot
+  whose initform is not a constant). Duplicate slots are leftmost-wins, NOT an error
+  (the Corrections section above already said so; the old Phase 3 line saying
+  "odd/unknown-name = reader error" meant the struct NAME).
+- Two things the checklist did not anticipate:
+  - **The type name is package-resolved.** `PackageResolver.resolveForm` grew a
+    `LispStructLiteral` arm that rewrites the TYPE NAME only (slot names match by base
+    name, values are data). Without it `#S(PT :X 1)` inside `(in-package :geo)` could not
+    find `geo::pt`: `findStructTag` has no unique-base-name fallback the way `findClass`
+    does. Resolving it is also the CL-faithful reading -- the type name sits in a genuine
+    symbol position, unlike the quoted name of `(make-instance 'dog)`.
+  - **The emit gate needed no new case.** `mayCreateInstance` already answers `true` for a
+    `LispInstance` in the AST, and a folded literal IS one; it only had to learn to look
+    inside `LispArray` storage. So the gate is right even if the `defstruct`'s constructor
+    defun were ever pruned away.
+
+**Verified:** the whole shape matrix (`'`, single- and nested-backquote, `#(...)`, `#s`
+lowercase, qualified + in-package-unqualified names, `#S(EMPTY)`, duplicate slot, omitted
+slot -> initform, values-as-data, `#S` under a failing `#+`) prints byte-identically on
+all four backends through the real CLI (interpreter / JVM / WASM P1 / `--component`); new
+ci-spec case `struct-literal-read-syntax`. Instance-free programs stay BYTE-IDENTICAL to
+the Phase 2 build: hello / mandelbrot / nqueens / contact-book / error-handling /
+word-frequency, `.class` (default/`--optimize`/`--dynamic`) and `.wasm`
+(default/`--optimize`/`--simd`/`--component`), 42/42 identical. `--no-gc` rejects a `#S`
+literal with its ordinary "unsupported value in function" error, which is right: it has no
+instances at all.
+
 ## Remaining work
-
-### Phase 3 -- read `#S(...)` from source
-
-`Token.StructOpen` + a `#S(`/`#s(` lexer branch beside `#(`; `LispReader.readStruct`;
-a NON-cons `LispStructLiteral` carrier (survives quote/backquote/`#(` with zero special
-cases, unlike a `%read-eval`-style marker). Fold `LispStructLiteral` -> `LispInstance`
-against `ClosRegistry`: on the compile path inside `expandTopLevelDefinitions` (per
-form, so the `defstruct` must precede the `#S`; reached by the browser playground --
-NOT `UserMacroExpander`/`cli`); in the interpreter a `resolveStructLiterals` sibling of
-`resolveReadTimeEval` at the two top-level `eval` entries. CL rules: leftmost-wins
-duplicates, odd/unknown-name = reader error, values read as DATA, absent slot = its
-recorded initform (constant, else a clear error). Pin: top level, `'(...)`, single- and
-nested-backquote, `#(...)`, `#s` lowercase, qualified name, `#S(EMPTY)`, `#S` under a
-failing `#+`. Correct the todo's duplicate-slot claim in the same commit.
 
 ### Phase 4 -- runtime `read`/`read-from-string`/`load` of `#S(...)`
 
-Not "do nothing" -- once the lexer has `#S(`, interpreter runtime `read` would return
-an unfolded literal. Interpreter: post-process `read`/`read-from-string` through
-`foldStructLiterals`. Compile backends: give the emitted readers
+**Now a live divergence, not a nicety:** as of Phase 3 the interpreter's runtime `read`
+returns an unfolded `LispStructLiteral` (which prints as `#S(...)` but answers nil to
+`point-p`), while the compiled backends' emitted readers do not know `#S(` at all.
+
+Interpreter: post-process `read`/`read-from-string` through
+`StructLiteralFolder.fold`. Compile backends: give the emitted readers
 (`JvmReadRuntimeBuilder`, `WasmReadRuntimeBuilder`) a syntactic `#S` branch producing a
 `(%read-struct NAME :K v ...)` marker, canonicalized by one generated `%struct-canon`
 Lisp defun (the `%class-slot-defs` pattern) -- no slot table in the emitted reader. Same
@@ -187,24 +222,20 @@ error set on every backend; add a ci-spec case.
 
 ### Phase 5 -- docs, `.kb`, ci-spec, native E2E
 
-Phase 2 already carried the parts its own change invalidated: `.kb/instance-syntax.md`
-(new, indexed in `.kb/README.md`), the representation paragraphs of `.kb/{defstruct,clos,
-error-handling,json,gray-streams}.md`, `doc/{en,ja}` for defstruct.md / defclass.md /
-make-condition.md / handler-case.md / missing-features.md, and the ci-spec case. What is
-LEFT here is the reading half (data-types.md's `#S(...)` reader literal,
-eval-limitations.md) plus `.kb/hash-tables.md`, and the final `-Pweb compile` /
-`javadoc:jar` / native `CiSpecE2eTest` sweep.
+Phases 2 and 3 each carried the parts their own change invalidated. Phase 2:
+`.kb/instance-syntax.md` (new, indexed in `.kb/README.md`), the representation paragraphs
+of `.kb/{defstruct,clos,error-handling,json,gray-streams}.md`, `doc/{en,ja}` for
+defstruct.md / defclass.md / make-condition.md / handler-case.md / missing-features.md,
+and the ci-spec case. Phase 3: the reading half of `.kb/{instance-syntax,defstruct,
+README}.md` and of `doc/{en,ja}/{reference/special-forms/defstruct.md,
+reference/data-types.md,guides/missing-features.md,guides/eval-limitations.md}` (the
+missing-features row narrowed to `:include` only), plus the
+`struct-literal-read-syntax` ci-spec case.
 
-`doc/{en,ja}` mirrored byte-identically: defstruct.md, defclass.md, make-condition.md,
-missing-features.md (narrow the row to `:include` only), data-types.md (`#S(...)` reader
-literal), eval-limitations.md. New `.kb/instance-syntax.md` (normative text contract,
-the object model, the WASM `TYPE_INSTANCE` disjointness + pinning test, the JVM
-discriminator, the WASM bake-all vs JVM demand-intern asymmetry, the settled-vs-interim
-note the todo asks for: printed/read SYNTAX settled, and now the VALUE MODEL is the real
-object type). Update `.kb/{defstruct,clos,error-handling,json,hash-tables,gray-streams,
-README}.md`. New ci-spec cases for the whole shape matrix (all four backends incl.
-`--component`). `./mvnw -Pweb compile`, `javadoc:jar`, then the native binary
-`CiSpecE2eTest` (not just `./mvnw test`).
+What is LEFT here is whatever Phase 4 invalidates -- every one of those pages currently
+says the RUNTIME `read` does not understand `#S(...)` -- plus `.kb/hash-tables.md` and the
+final `./mvnw -Pweb compile` / `javadoc:jar` / native-binary `CiSpecE2eTest` sweep (not
+just `./mvnw test`).
 
 ## Verification bar (unchanged)
 

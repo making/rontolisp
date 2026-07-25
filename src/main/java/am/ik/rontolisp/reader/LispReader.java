@@ -166,6 +166,7 @@ public final class LispReader {
 			case Token.VectorOpen ignored -> readVector();
 			case Token.BitVectorToken bits -> readBitVector(bits.bits());
 			case Token.ArrayOpen array -> readArray(array.rank());
+			case Token.StructOpen ignored -> readStruct();
 			case Token.FloatArrayOpen open -> readFloatArray(open.single());
 			case Token.Quote ignored -> readQuote();
 			case Token.FunctionQuote ignored -> readFunctionQuote();
@@ -354,6 +355,42 @@ public final class LispReader {
 			data[i] = coerceFloatLeaf(flat.get(i));
 		}
 		return new LispDoubleFloatArray(data, dims);
+	}
+
+	// Reads a #S(NAME :SLOT value ...) structure literal into a LispStructLiteral
+	// carrier.
+	// Everything the reader can decide on its own is decided here -- the type name must
+	// be
+	// a symbol and the slot names/values must pair up -- while whether the type exists
+	// and
+	// whether it has those slots needs the ClosRegistry, so it is left to the fold
+	// (StructLiteralFolder), which runs per top-level form on every backend. Contents are
+	// read as DATA: (make-point) inside a #S stays the literal list, matching Common
+	// Lisp.
+	private LispVal readStruct() {
+		List<LispVal> items = readGroupedElements();
+		if (items.isEmpty()) {
+			throw new LispReadException("#S(): a structure literal needs a type name");
+		}
+		if (!(items.get(0) instanceof LispSymbol nameSym)) {
+			throw new LispReadException("#S: expected a structure type name, got " + items.get(0).print());
+		}
+		String typeName = nameSym.name();
+		if ((items.size() - 1) % 2 != 0) {
+			throw new LispReadException(
+					"#S(" + typeName + " ...): odd number of slot name/value items in a structure literal");
+		}
+		List<String> slotNames = new ArrayList<>();
+		List<LispVal> slotValues = new ArrayList<>();
+		for (int i = 1; i < items.size(); i += 2) {
+			if (!(items.get(i) instanceof LispSymbol slotSym)) {
+				throw new LispReadException(
+						"#S(" + typeName + " ...): expected a slot name, got " + items.get(i).print());
+			}
+			slotNames.add(slotSym.name());
+			slotValues.add(items.get(i + 1));
+		}
+		return new am.ik.rontolisp.LispStructLiteral(typeName, slotNames, slotValues);
 	}
 
 	// Reads the elements of a #(...)/#nA(...)/#f(...) literal up to the closing ')'.

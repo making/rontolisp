@@ -172,6 +172,17 @@ public final class LispLexer {
 				tokens.add(new Token.VectorOpen());
 				this.pos += 2;
 			}
+			else if (c == '#' && this.pos + 2 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'S' || this.input.charAt(this.pos + 1) == 's')
+					&& this.input.charAt(this.pos + 2) == '(') {
+				// #S( opens a structure literal (e.g., #S(POINT :X 1 :Y 2)); the contents
+				// are read as data and folded into an instance once a registry is
+				// available. #S not followed by '(' falls through to symbol reading
+				// below,
+				// which is what it did before this branch existed.
+				tokens.add(new Token.StructOpen());
+				this.pos += 3;
+			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '*') {
 				// #*1010 is a bit-vector literal; #* alone is the empty bit vector
 				// (cl-ppcre's charmap slot default #*0).

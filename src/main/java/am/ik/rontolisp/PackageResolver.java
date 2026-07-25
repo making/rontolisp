@@ -414,8 +414,26 @@ public final class PackageResolver {
 		return switch (form) {
 			case LispSymbol sym -> resolveSymbol(sym);
 			case LispCons cons -> resolveCons(cons);
+			case LispStructLiteral literal -> resolveStructLiteralType(literal);
 			default -> form;
 		};
+	}
+
+	/**
+	 * Resolves the TYPE NAME of a {@code #S(...)} literal, and nothing else. The type
+	 * name sits in a genuine symbol position -- Common Lisp reads it in the current
+	 * package -- so resolving it here is what makes {@code #S(PT :X 1)} inside a package
+	 * find the {@code (defstruct pt ...)} of that same package: both spellings go through
+	 * this resolver exactly once and end up canonically equal. The slot names are matched
+	 * by base name and the slot values are DATA, so both are left untouched, exactly as
+	 * the datum of a {@code quote} is.
+	 */
+	private LispVal resolveStructLiteralType(LispStructLiteral literal) {
+		if (!(resolveSymbol(new LispSymbol(literal.typeName())) instanceof LispSymbol resolved)
+				|| resolved.name().equals(literal.typeName())) {
+			return literal;
+		}
+		return new LispStructLiteral(resolved.name(), literal.slotNames(), literal.slotValues());
 	}
 
 	private LispVal resolveCons(LispCons cons) {

@@ -18,6 +18,7 @@
 | Function | `#'car`, `(lambda (x) x)` | Function object obtained via `#'`/`function`/`lambda` |
 | Array | `#(1 2 3)`, `#2A((1 2) (3 4))` | Fixed-size array of any rank (rank 1 = vector); `#(...)` and `#nA(...)` are self-evaluating array literals |
 | Hash table | `(make-hash-table)` | Mutable key/value table with structural (`equal`) keys |
+| Structure | `#S(POINT :X 1 :Y 2)` | An instance of a [`defstruct`](special-forms/defstruct.md) type. `#S(...)` is both how an instance prints and a self-evaluating literal that reads back into one; the `defstruct` must appear in an earlier top-level form |
 
 Numeric literals may use `,` as a grouping separator between digits in the
 integer part, so `1,000` reads as `1000` and `(+ 1,000 100)` evaluates to

@@ -7029,6 +7029,11 @@ public final class LispMacroExpander {
 	 * split {@code expandSignalDesignator} makes, and it must stay in step with it. The
 	 * scan is deliberately conservative: over-approximating costs one unused type entry,
 	 * under-approximating is a compile failure.
+	 *
+	 * <p>
+	 * A folded {@code #S(...)} literal is an instance sitting in the AST, which the scan
+	 * answers for directly -- it does not depend on the constructor defun the same
+	 * {@code defstruct} spliced in still being there.
 	 * @param program the top-level forms, AFTER {@link #expandTopLevelDefinitions}
 	 * @param closRegistry the class registry (its condition {@code :report} forms are
 	 * compiled too, but live outside the program)
@@ -7051,6 +7056,16 @@ public final class LispMacroExpander {
 	private static boolean mayCreateInstance(LispVal form) {
 		if (form instanceof LispInstance) {
 			return true;
+		}
+		if (form instanceof LispArray array) {
+			// A folded #S(...) literal may sit inside a #(...) vector literal, which is
+			// the one container the cons walk below cannot see through.
+			for (LispVal element : array.data()) {
+				if (mayCreateInstance(element)) {
+					return true;
+				}
+			}
+			return false;
 		}
 		if (!(form instanceof LispCons cons)) {
 			return false;
@@ -8049,6 +8064,12 @@ public final class LispMacroExpander {
 	 * compilers run this after package resolution and before lambda-list desugaring (the
 	 * generated constructors use {@code &key}); a CLOS form anywhere else is rejected by
 	 * the expression compilers.
+	 *
+	 * <p>
+	 * This is also where a {@code #S(...)} source literal becomes an instance: each form
+	 * is run through {@link StructLiteralFolder} against the registry as it stands at
+	 * that point, which is the compile-path half of CL's read-time construction (the
+	 * interpreter's half sits at its top-level {@code eval} entries).
 	 * @param program the top-level forms
 	 * @param structAccessors mutated: accessor name to 1-based slot position
 	 * @param closRegistry mutated: classes, generics, and methods
@@ -8060,12 +8081,21 @@ public final class LispMacroExpander {
 		if (!runtimeSubtypep && program.stream()
 			.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
 					|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
-			return program;
+			// No definitions to splice, so the registry stays as seeded: a #S(...)
+			// literal
+			// here can only name an unregistered structure type and the fold says so. It
+			// returns the program itself when there is no literal, keeping the fast path.
+			return StructLiteralFolder.foldProgram(program, closRegistry);
 		}
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		java.util.Map<Integer, String> dispatcherSlots = new java.util.LinkedHashMap<>();
 		java.util.Set<String> placedDispatchers = new java.util.HashSet<>();
-		for (LispVal form : program) {
+		for (LispVal rawForm : program) {
+			// Fold this form's #S(...) literals against the registry as it stands BEFORE
+			// the form is processed, so the defstruct must precede the literal -- CL's
+			// read-time rule, which a whole-program fold after the walk would silently
+			// relax.
+			LispVal form = StructLiteralFolder.fold(rawForm, closRegistry);
 			if (isSetfFunctionDefun(form)) {
 				// (defun (setf name) ...) -> a plain (defun %setf-name ...); register the
 				// place so (setf (name ...) v) expands to a call through the writer

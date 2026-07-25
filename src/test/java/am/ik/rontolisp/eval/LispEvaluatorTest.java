@@ -6798,6 +6798,188 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void structLiteralReadsIntoAnInstance() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				#S(POINT :X 1 :Y "hi")
+				""").print()).isEqualTo("#S(POINT :X 1 :Y \"hi\")");
+	}
+
+	@Test
+	void structLiteralIsAnInstanceNotAList() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(list (point-p #S(POINT :X 1 :Y 2)) (consp #S(POINT :X 1 :Y 2)) (point-x #S(POINT :X 7 :Y 2)))
+				""").print()).isEqualTo("(T NIL 7)");
+	}
+
+	@Test
+	void structLiteralReadsInLowercaseSpelling() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				#s(point :x 1 :y 2)
+				""").print()).isEqualTo("#S(POINT :X 1 :Y 2)");
+	}
+
+	@Test
+	void structLiteralAcceptsNonKeywordSlotNames() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				#S(POINT X 1 Y 2)
+				""").print()).isEqualTo("#S(POINT :X 1 :Y 2)");
+	}
+
+	@Test
+	void structLiteralSurvivesQuoteAndBackquote() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(list '#S(POINT :X 1 :Y 2) `(a #S(POINT :X 3 :Y 4)) `(b `(c #S(POINT :X 5 :Y 6))))
+				""").print())
+			.isEqualTo("(#S(POINT :X 1 :Y 2) (A #S(POINT :X 3 :Y 4)) (B (QUOTE (C #S(POINT :X 5 :Y 6)))))");
+	}
+
+	@Test
+	void structLiteralInsideAVectorLiteral() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(aref #(#S(POINT :X 1 :Y 2)) 0)
+				""").print()).isEqualTo("#S(POINT :X 1 :Y 2)");
+	}
+
+	@Test
+	void structLiteralValuesAreReadAsData() {
+		assertThat(evalMulti("""
+				(defstruct box v)
+				(box-v #S(BOX :V (+ 1 2)))
+				""").print()).isEqualTo("(+ 1 2)");
+	}
+
+	@Test
+	void structLiteralNestsAnotherStructLiteral() {
+		assertThat(evalMulti("""
+				(defstruct inner n)
+				(defstruct outer i)
+				#S(OUTER :I #S(INNER :N 5))
+				""").print()).isEqualTo("#S(OUTER :I #S(INNER :N 5))");
+	}
+
+	@Test
+	void structLiteralOfASlotlessType() {
+		assertThat(evalMulti("""
+				(defstruct empty)
+				#S(EMPTY)
+				""").print()).isEqualTo("#S(EMPTY)");
+	}
+
+	@Test
+	void structLiteralOmittedSlotTakesItsInitform() {
+		assertThat(evalMulti("""
+				(defstruct point (x 10) (y 20))
+				#S(POINT :Y 2)
+				""").print()).isEqualTo("#S(POINT :X 10 :Y 2)");
+	}
+
+	@Test
+	void structLiteralDuplicateSlotKeepsTheLeftmostValue() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				#S(POINT :X 1 :Y 2 :X 99)
+				""").print()).isEqualTo("#S(POINT :X 1 :Y 2)");
+	}
+
+	@Test
+	void structLiteralReadsAPackageQualifiedTypeName() {
+		assertThat(evalMulti("""
+				(defpackage :geo (:use :cl))
+				(in-package :geo)
+				(defstruct pt x)
+				(in-package :cl-user)
+				#S(GEO::PT :X 3)
+				""").print()).isEqualTo("#S(GEO::PT :X 3)");
+	}
+
+	// The type name sits in a symbol position, so it is package-resolved like the
+	// defstruct's own name: the bare spelling inside the package finds it.
+	@Test
+	void structLiteralReadsAnUnqualifiedTypeNameInsideItsPackage() {
+		assertThat(evalMulti("""
+				(defpackage :geo (:use :cl))
+				(in-package :geo)
+				(defstruct pt x)
+				#S(PT :X 3)
+				""").print()).isEqualTo("#S(GEO::PT :X 3)");
+	}
+
+	@Test
+	void structLiteralUnderAFailingFeatureConditionalIsSkipped() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(list 1 #+no-such-feature #S(POINT :X 1 :Y 2) 3)
+				""").print()).isEqualTo("(1 3)");
+	}
+
+	@Test
+	void structLiteralOfAnUnknownTypeSignals() {
+		assertThatThrownBy(() -> evalMulti("#S(NOPE :X 1)"))
+			.hasMessageContaining("NOPE is not a defined structure type");
+	}
+
+	@Test
+	void structLiteralOfAClassSignals() {
+		assertThatThrownBy(() -> evalMulti("""
+				(defclass pt () ((x :initarg :x)))
+				#S(PT :X 1)
+				""")).hasMessageContaining("#S reads defstruct types only");
+	}
+
+	@Test
+	void structLiteralMustFollowItsDefstruct() {
+		assertThatThrownBy(() -> evalMulti("""
+				#S(POINT :X 1)
+				(defstruct point x)
+				""")).hasMessageContaining("POINT is not a defined structure type");
+	}
+
+	@Test
+	void structLiteralOfAnUnknownSlotSignals() {
+		assertThatThrownBy(() -> evalMulti("""
+				(defstruct point x y)
+				#S(POINT :Z 1)
+				""")).hasMessageContaining("POINT has no slot named :Z");
+	}
+
+	@Test
+	void structLiteralWithAnOddArgumentListIsAReadError() {
+		assertThatThrownBy(() -> evalMulti("""
+				(defstruct point x y)
+				#S(POINT :X)
+				""")).hasMessageContaining("odd number of slot name/value items");
+	}
+
+	@Test
+	void structLiteralWithoutATypeNameIsAReadError() {
+		assertThatThrownBy(() -> evalMulti("#S()")).hasMessageContaining("a structure literal needs a type name");
+	}
+
+	@Test
+	void structLiteralOmittingASlotWithANonConstantInitformSignals() {
+		assertThatThrownBy(() -> evalMulti("""
+				(defstruct point (x (+ 1 2)))
+				#S(POINT)
+				""")).hasMessageContaining("is not a constant");
+	}
+
+	@Test
+	void structLiteralIsEqualToTheConstructedInstance() {
+		assertThat(evalMulti(
+				"""
+						(defstruct point x y)
+						(list (equal #S(POINT :X 1 :Y 2) (make-point :x 1 :y 2)) (equal #S(POINT :X 1 :Y 2) (make-point :x 9 :y 2)))
+						""")
+			.print()).isEqualTo("(T NIL)");
+	}
+
+	@Test
 	void defstructReturnsStructName() {
 		assertThat(eval("(defstruct point x y)").print()).isEqualTo("POINT");
 	}

@@ -1,8 +1,9 @@
-# `defstruct` — expansion into plain defuns, tagged-list representation
+# `defstruct` — expansion into plain defuns, instance-object representation
 
 User-facing behavior: `doc/en/reference/special-forms/defstruct.md` (and the
-missing-features guide for what is out of scope: `:include`, `#S(...)`
-print/read, CLOS). The options syntax IS supported: `(:constructor name)` /
+missing-features guide for what is out of scope: `:include`). An instance both
+prints AND reads as `#S(...)` — `.kb/instance-syntax.md` owns both halves.
+The options syntax IS supported: `(:constructor name)` /
 `(:conc-name prefix)` / `(:predicate name)` / `(:copier name)`, a dropped
 docstring before the slots, slot options `:type`/`:read-only` (parsed,
 ignored), and lite BOA constructors — `(:constructor name (lambda-list))`
@@ -29,8 +30,10 @@ registered `LispLayout` (see `.kb/instance-syntax.md` for the six
 '%struct-<name>)`, the copier a fresh `%obj-new` over `%obj-ref`s (shallow, like
 `copy-structure`), and an accessor's setf place `%obj-set`. Consequences:
 instances do NOT satisfy `consp`/`listp`, `print` shows `#S(NAME :SLOT value
-...)`, and `equal` compares slot-wise (a deliberate deviation from CL, where
-distinct structures are never `equal` -- see `.kb/instance-syntax.md`).
+...)` and a source `#S(...)` reads back into an instance (`StructLiteralFolder`,
+which is why the layout carries the ordered slot names and initforms), and
+`equal` compares slot-wise (a deliberate deviation from CL, where distinct
+structures are never `equal` -- see `.kb/instance-syntax.md`).
 
 ## Where each path hooks in
 

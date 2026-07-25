@@ -38,6 +38,14 @@ public sealed interface Token {
 	}
 
 	/**
+	 * Structure literal open ({@code #S(} / {@code #s(}) token; closed by the matching
+	 * {@link RightParen}. The contents are the type name followed by alternating slot
+	 * names and values, read as data.
+	 */
+	record StructOpen() implements Token {
+	}
+
+	/**
 	 * Rank-n array literal open ({@code #nA(}) token; closed by the {@link RightParen}
 	 * matching the opening parenthesis.
 	 *

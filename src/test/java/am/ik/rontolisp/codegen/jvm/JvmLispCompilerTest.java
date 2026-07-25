@@ -6531,6 +6531,62 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("2");
 	}
 
+	// A #S(...) source literal is folded into an instance before compilation, so it must
+	// print and behave exactly like the constructed one. The printer's max_stack is
+	// hand-written, so this RUNS the class.
+	@Test
+	void compileAndRunStructLiteral() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(print #S(POINT :X 1 :Y "hi"))
+				(print (list (point-p #S(POINT :X 1 :Y 2)) (consp #S(POINT :X 1 :Y 2)) (point-x #S(POINT :X 7 :Y 2))))
+				(print (equal #S(POINT :X 1 :Y 2) (make-point :x 1 :y 2)))
+				""")).isEqualTo("#S(POINT :X 1 :Y \"hi\")\n(T NIL 7)\nT");
+	}
+
+	@Test
+	void compileAndRunStructLiteralShapes() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point (x 10) (y 20))
+				(defstruct empty)
+				(defstruct outer i)
+				(print '#S(POINT :X 1 :Y 2))
+				(print `(a #S(POINT :X 3 :Y 4)))
+				(print (aref #(#S(POINT :X 5 :Y 6)) 0))
+				(print #s(point :y 2))
+				(print #S(POINT :X 1 :Y 2 :X 99))
+				(print #S(EMPTY))
+				(print #S(OUTER :I #S(EMPTY)))
+				(print (point-x #S(POINT :X (+ 1 2))))
+				""")).isEqualTo("""
+				#S(POINT :X 1 :Y 2)
+				(A #S(POINT :X 3 :Y 4))
+				#S(POINT :X 5 :Y 6)
+				#S(POINT :X 10 :Y 2)
+				#S(POINT :X 1 :Y 2)
+				#S(EMPTY)
+				#S(OUTER :I #S(EMPTY))
+				(+ 1 2)""");
+	}
+
+	@Test
+	void compileStructLiteralOfAnUnknownTypeFails() {
+		assertThatThrownBy(() -> compileAndRun("(print #S(NOPE :X 1))"))
+			.hasMessageContaining("NOPE is not a defined structure type");
+	}
+
+	@Test
+	void compileStructLiteralOfAnUnknownSlotFails() {
+		assertThatThrownBy(() -> compileAndRun("(defstruct point x y) (print #S(POINT :Z 1))"))
+			.hasMessageContaining("POINT has no slot named :Z");
+	}
+
+	@Test
+	void compileStructLiteralBeforeItsDefstructFails() {
+		assertThatThrownBy(() -> compileAndRun("(print #S(POINT :X 1)) (defstruct point x)"))
+			.hasMessageContaining("POINT is not a defined structure type");
+	}
+
 	@Test
 	void compileAndRunDefstructBasics() throws Exception {
 		assertThat(compileAndRun("""

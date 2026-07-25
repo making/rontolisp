@@ -3206,6 +3206,33 @@ cases:
       "#<IPS-BOX :W 1 :H 2>"
       :IPS-V
       "{"x":1,"y":"s"}"
+  - name: struct-literal-read-syntax
+    source: |
+      (defstruct slr-pt (x 10) y)
+      (defstruct slr-empty)
+      (print #S(SLR-PT :X 1 :Y "hi"))
+      (print '#S(SLR-PT :X 1 :Y 2))
+      (print `(a #S(SLR-PT :X 3 :Y 4)))
+      (print (aref #(#S(SLR-PT :X 5 :Y 6)) 0))
+      (print #s(slr-pt :y 2))
+      (print #S(SLR-PT :X 1 :Y 2 :X 99))
+      (print #S(SLR-EMPTY))
+      (print (list (slr-pt-p #S(SLR-PT :X 1 :Y 2)) (consp #S(SLR-PT :X 1 :Y 2))
+                   (slr-pt-x #S(SLR-PT :X 7 :Y 2))
+                   (equal #S(SLR-PT :X 1 :Y 2) (make-slr-pt :x 1 :y 2))))
+      (print (slr-pt-y #S(SLR-PT :Y (+ 1 2))))
+      (print (list 1 #+no-such-slr-feature #S(SLR-PT :X 1 :Y 2) 3))
+    expected: |
+      #S(SLR-PT :X 1 :Y "hi")
+      #S(SLR-PT :X 1 :Y 2)
+      (A #S(SLR-PT :X 3 :Y 4))
+      #S(SLR-PT :X 5 :Y 6)
+      #S(SLR-PT :X 10 :Y 2)
+      #S(SLR-PT :X 1 :Y 2)
+      #S(SLR-EMPTY)
+      (T NIL 7 T)
+      (+ 1 2)
+      (1 3)
   - name: setf-function-definitions
     source: |
       (defvar *sf-mode* :xml)

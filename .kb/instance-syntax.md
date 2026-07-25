@@ -24,7 +24,53 @@ no registry lookup and all three backends can render it with one fixed loop.
 - `NAME` is the type name as spelled, keeping a package qualifier (`GEO::PT`).
 - A slot-less type prints `#S(EMPTY)` / `#<EMPTY>`.
 
-Reading `#S(...)` back is NOT supported (roadmap: `.todo/171` phases 3-4).
+A `#S(...)` literal in SOURCE reads back into the instance it denotes (see
+"Reading `#S(...)`" below). A `#S(...)` handed to the RUNTIME `read` /
+`read-from-string` does not yet — roadmap: `.todo/171` phase 4.
+
+## Reading `#S(...)`
+
+CL builds the structure inside the reader, which works because `load` reads and
+evaluates one form at a time, so an earlier `defstruct` is already in effect.
+rontolisp reads a whole file up front and `LispReader` knows nothing about the
+`ClosRegistry`, so reading is split in two:
+
+- The lexer's `#S(`/`#s(` branch (beside `#(`) emits `Token.StructOpen` and
+  `LispReader.readStruct` builds a **`LispStructLiteral`** — the type name and
+  the slot name/value pairs exactly as written. Only what the reader can decide
+  alone is decided there: a non-symbol type name, a missing type name and an ODD
+  slot list are `LispReadException`s.
+- `StructLiteralFolder` turns each literal into a `LispInstance` against the
+  registry. It runs **per top-level form** on both paths — inside
+  `expandTopLevelDefinitions` on the compile path, at the interpreter's two
+  top-level `eval` entries (`eval(LispVal)` / `evalResolved`) via
+  `LispEvaluator.resolveStructLiterals`, a sibling of `resolveReadTimeEval`.
+  Per-form, not whole-program, is the point: it reproduces CL's rule that the
+  `defstruct` must PRECEDE the literal, on every backend.
+
+The carrier is a first-class `LispVal` rather than a `(%read-struct ...)` marker
+cons on purpose: being neither a symbol nor a cons it rides through `quote`,
+backquote templates (both the single-level and the CLtL2 nested expander) and
+`#(...)` vector literals with no special case, exactly like the `LispInstance` it
+becomes. The fold walks conses AND `LispArray` storage for the same reason.
+
+Fold-time rules (CLHS 2.4.8.13): values are DATA and never evaluated
+(`#S(BOX :V (+ 1 2))` stores the list); a repeated slot keeps its LEFTMOST value;
+an omitted slot takes its recorded initform, which must be a CONSTANT — the fold
+runs at compile time on three of the four backends, so a `(+ 1 2)` initform is a
+clear error instead of a per-backend divergence. An unknown type name and a slot
+the type does not have are errors too (a class name gets a "`#S` reads defstruct
+types only" hint). Slot names match by package-stripped base name with the
+keyword marker dropped, so `:X`, `X` and `PKG::X` all name slot `X`.
+
+A `#S` literal under a failing `#+` needs no work: the lexer's skip already
+treats `#<symbol-prefix>(` as a prefixed list.
+
+The emit gate needs no new case either — a folded literal IS a `LispInstance` in
+the AST and `mayCreateInstance` already answers `true` for one, independent of
+whether the `defstruct`'s constructor defun survived. It was extended to look
+inside `LispArray` storage, the one container its cons walk could not see
+through.
 
 ## Consequences of "an instance is not a list"
 
@@ -155,6 +201,10 @@ by `Jvm/WasmHandlerCaseCompiler` and by
 
 ## Pinning tests
 
+`LispEvaluatorTest#structLiteral*`,
+`Jvm/WasmLispCompilerTest#compileAndRunStructLiteral*` +
+`#compileStructLiteral*Fails`, the ci-spec case `struct-literal-read-syntax`
+(all four backends), and
 `LispEvaluatorTest#instancePrimitivesBuildReadWriteAndTestAnInstance` /
 `#instanceSlotsListsTheSlotValuesInLayoutOrder` / `#equalpDescendsIntoInstanceSlots` /
 `#instancePrintsInStructSyntax` / `#classInstancePrintsInAngleSyntax` / `#defstruct*` /

@@ -28,6 +28,8 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispStream;
 import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispStructLiteral;
+import am.ik.rontolisp.StructLiteralFolder;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
@@ -1365,6 +1367,21 @@ public final class LispEvaluator {
 	 * @param form a top-level form possibly carrying read-eval markers
 	 * @return the form with every marker replaced by its datum's value
 	 */
+	/**
+	 * Replaces every {@code #S(NAME :SLOT value ...)} literal in the form with the
+	 * instance it denotes, against this evaluator's registry -- the interpreter's half of
+	 * the read-time construction Common Lisp performs inside its reader (the compile
+	 * path's half runs per form inside
+	 * {@link LispMacroExpander#expandTopLevelDefinitions}). Called at the top-level
+	 * entries only, so a literal sees the {@code defstruct} of every PRECEDING top-level
+	 * form and of no later one, which is the ordering CL's form-at-a-time load gives.
+	 * @param form a top-level form possibly carrying struct literals
+	 * @return the form with every literal replaced by its instance
+	 */
+	public LispVal resolveStructLiterals(LispVal form) {
+		return StructLiteralFolder.fold(form, this.closRegistry);
+	}
+
 	public LispVal resolveReadTimeEval(LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
@@ -1575,7 +1592,7 @@ public final class LispEvaluator {
 	public LispVal eval(LispVal expr) {
 		// Resolve packages at the top-level entry only; nested evaluation and macro
 		// expansion operate on the already-resolved canonical form.
-		LispVal resolved = this.packageResolver.resolve(expr);
+		LispVal resolved = resolveStructLiterals(this.packageResolver.resolve(expr));
 		// Register special declarations BEFORE evaluating, so a defun body's local
 		// (declare (special x)) makes later let bindings of x dynamic (the same
 		// pessimistic program-wide reading the compilers get from SpecialVarCollector).
@@ -1626,6 +1643,7 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	public LispVal evalResolved(LispVal expr) {
+		expr = resolveStructLiterals(expr);
 		SpecialVarCollector.collectForm(expr, this.specialVars);
 		try {
 			return eval(expr, this.globalEnv);
@@ -1660,6 +1678,10 @@ public final class LispEvaluator {
 			case LispFuture f -> f;
 			case LispStream s -> s;
 			case LispInstance inst -> inst;
+			// A #S(...) literal the top-level fold did not reach (one produced by a
+			// runtime read, say) is folded here, so evaluating it always yields the
+			// instance rather than a carrier leaking into user data.
+			case LispStructLiteral literal -> StructLiteralFolder.fold(literal, this.closRegistry);
 			case LispSymbol sym -> evalSymbolRef(sym, env);
 			case LispCons cons -> evalCons(cons, env);
 		};
