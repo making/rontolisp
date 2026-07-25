@@ -61,6 +61,8 @@
 | `read` | `(read)`, `(read stream)` | 標準入力(または `open`/`with-open-file` で開いた入力ストリーム)からS式を1つ読み込みます(3つのバックエンドすべて)。EOFでは `nil` |
 | `read-from-string` | `(read-from-string "(+ 1 2)")` | 文字列からデータを1つパースします(3つのバックエンドすべて)。省略可能な `eof-error-p`/`eof-value` および `:start`/`:end` 引数はサポートされません |
 | `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | 文字列から整数をパースします。すべてのバックエンドで `:start`/`:end`/`:radix`/`:junk-allowed` をサポートします。パース停止位置が 2 番目の値になり、`multiple-value-bind` で観測できます。`:junk-allowed` がない場合、末尾の非空白文字はエラーです |
+| `copy-readtable` | `(copy-readtable nil)` | ライト版スタブ: 常に `nil` -- リーダーはリードテーブル駆動ではないため、リードテーブルオブジェクトは存在しません (`*readtable*` は存在しますが `nil` に初期化されています) |
+| `set-dispatch-macro-character` | `(set-dispatch-macro-character #\# #\7 fn)` | ライト版スタブ: 受け付けますが無視し、`t` を返します (ユーザーのディスパッチマクロでリーダーを拡張することはできません) |
 | `char` `schar` | `(char "hello" 1)` | `#\e` -- 0始まりの文字列インデックスの文字 |
 | `char-code` | `(char-code #\A)` | `65` -- 文字のコードポイント |
 | `code-char` | `(code-char 66)` | `#\B` -- 指定したコードポイントの文字 |
@@ -90,7 +92,9 @@
 | `make-symbol` | `(make-symbol "temp")` | `#:temp` -- 新しいアンインターンドシンボル(gensym の `#:` 規約、カウンタなし) |
 | `intern` | `(intern "foo")` | シンボル `foo`。インタプリタでは名前はカレントパッケージ(`in-package` の状態)にインターンされます。`(intern name :keyword)` はキーワードを作り、それ以外のパッケージ引数はエラー |
 | `find-symbol` | `(find-symbol "car")` | 名前が既知(cl シンボル・キーワード・ユーザー定義)なら `car`、なければ `nil`(コンパイラ: リテラル文字列のみ) |
+| `find-package` | `(find-package :cl)` | `:cl` -- lite 版: 大文字化されたパッケージ名のキーワード(パッケージオブジェクトはありません)。未知なら `nil`。計算された指定子はインタプリタ専用 |
 | `symbol-name` | `(symbol-name 'foo)` | `"FOO"` -- シンボルは CL 同様大文字化されて読まれるので `(symbol-name 'car)` も `"CAR"` |
+| `symbol-package` | `(symbol-package :foo)` | `:keyword` -- `find-package` と同じキーワード形式(標準シンボルは `:cl`、それ以外は `:cl-user`、`#:` シンボルは `nil`)。コンパイラは `cl` と `cl-user` のどちらにも `:cl-user` を返します |
 | `symbol-value` | `(symbol-value '*level*)` | グローバル変数の値。未束縛の名前はエラー(レキシカルな束縛は見えない) |
 | `boundp` | `(boundp '*level*)` | シンボルが束縛されたグローバル変数を指すとき `t`(t/nil/キーワードは自己束縛) |
 | `fboundp` | `(fboundp 'car)` | 関数・マクロ・特殊形式に対して `t`(コンパイラ: 計算された引数は関数のみ判定) |
@@ -269,6 +273,7 @@
 | `output-stream-p` | `(output-stream-p s)` | 任意のストリームハンドルに `t` |
 | `stream-element-type` | `(stream-element-type s)` | 常に `character` -- すべてのストリームは文字ストリーム |
 | `class-of` | `(class-of 42)` | `integer` -- 型/クラス「名」のシンボルで、メタオブジェクトではありません |
+| `type-of` | `(type-of 42)` | `integer` -- `class-of` と同様ですが、構造体/CLOS インスタンスにはインスタンスタグではなく構造体/クラスの「名前」のシンボルを返します |
 | `simple-condition-format-control` | `(simple-condition-format-control c)` | コンディションの `:format-control` スロット、なければ `nil` |
 | `simple-condition-format-arguments` | `(simple-condition-format-arguments c)` | コンディションの `:format-arguments` スロット、なければ `nil` |
 

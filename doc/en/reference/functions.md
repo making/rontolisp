@@ -64,6 +64,8 @@ page.
 | `read` | `(read)`, `(read stream)` | Read one S-expression from stdin (or from an input stream opened by `open`/`with-open-file`) (all three backends). `nil` on EOF |
 | `read-from-string` | `(read-from-string "(+ 1 2)")` | Parse one datum from a string (all three backends). The optional `eof-error-p`/`eof-value` and `:start`/`:end` arguments are not supported |
 | `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | Parse an integer from a string. Supports `:start`/`:end`/`:radix`/`:junk-allowed` on all backends; the stop position is the second value, observable through `multiple-value-bind`. Without `:junk-allowed`, trailing non-whitespace is an error |
+| `copy-readtable` | `(copy-readtable nil)` | Lite stub: always `nil` -- the reader is not readtable-driven, so there is no readtable object (`*readtable*` exists but is seeded to `nil`) |
+| `set-dispatch-macro-character` | `(set-dispatch-macro-character #\# #\7 fn)` | Lite stub: accepted and ignored, returns `t` (user dispatch macros cannot extend the reader) |
 | `char` `schar` | `(char "hello" 1)` | `#\e` -- the character at a 0-based string index |
 | `char-code` | `(char-code #\A)` | `65` -- the code point of a character |
 | `code-char` | `(code-char 66)` | `#\B` -- the character with a given code point |
@@ -93,7 +95,9 @@ page.
 | `make-symbol` | `(make-symbol "temp")` | `#:temp` -- a fresh uninterned symbol (the gensym `#:` convention, no counter) |
 | `intern` | `(intern "foo")` | The symbol `foo`. On the interpreter the name is interned into the current package (`in-package` state); `(intern name :keyword)` builds a keyword, any other package argument is an error |
 | `find-symbol` | `(find-symbol "car")` | `car` when the name is known (cl symbol, keyword, or user definition), else `nil` (compilers: literal string only) |
+| `find-package` | `(find-package :cl)` | `:cl` -- lite: the upcased package name as a keyword (no package objects), `nil` when unknown; a computed designator is interpreter-only |
 | `symbol-name` | `(symbol-name 'foo)` | `"FOO"` -- symbols read upcased like CL, so `(symbol-name 'car)` is `"CAR"` too |
+| `symbol-package` | `(symbol-package :foo)` | `:keyword` -- the same keyword shape `find-package` returns (`:cl` for standard symbols, `:cl-user` otherwise, `nil` for `#:` symbols); the compilers answer `:cl-user` for both `cl` and `cl-user` |
 | `symbol-value` | `(symbol-value '*level*)` | The global variable's value; unbound names signal an error (lexical bindings are invisible) |
 | `boundp` | `(boundp '*level*)` | `t` when the symbol names a bound global variable (t/nil/keywords are self-bound) |
 | `fboundp` | `(fboundp 'car)` | `t` for functions, macros and special forms (compilers: a computed argument sees functions only) |
@@ -273,6 +277,7 @@ page.
 | `output-stream-p` | `(output-stream-p s)` | `t` for any stream handle |
 | `stream-element-type` | `(stream-element-type s)` | always `character` -- every stream is a character stream |
 | `class-of` | `(class-of 42)` | `integer` -- a type/class NAME symbol, not a metaobject |
+| `type-of` | `(type-of 42)` | `integer` -- like `class-of`, but a struct/CLOS instance answers its structure/class NAME symbol, not the instance tag |
 | `simple-condition-format-control` | `(simple-condition-format-control c)` | the condition's `:format-control` slot, or `nil` |
 | `simple-condition-format-arguments` | `(simple-condition-format-arguments c)` | the condition's `:format-arguments` slot, or `nil` |
 

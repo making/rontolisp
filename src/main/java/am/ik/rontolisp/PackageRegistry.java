@@ -121,13 +121,14 @@ public final class PackageRegistry {
 			LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.MAKE_BROADCAST_STREAM, LispNames.PATHNAMEP,
 			LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P, LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF,
 			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
-			LispNames.MAKE_PATHNAME);
+			LispNames.MAKE_PATHNAME, LispNames.COPY_READTABLE, LispNames.SET_DISPATCH_MACRO_CHARACTER,
+			LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
 			LispNames.ARRAY_DIMENSION_LIMIT, LispNames.ARRAY_TOTAL_SIZE_LIMIT, LispNames.CHAR_CODE_LIMIT,
 			LispNames.PRINT_CIRCLE_VAR, LispNames.FEATURES_VAR, LispNames.STANDARD_OUTPUT_VAR,
-			LispNames.ERROR_OUTPUT_VAR);
+			LispNames.ERROR_OUTPUT_VAR, LispNames.READTABLE_VAR);
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also

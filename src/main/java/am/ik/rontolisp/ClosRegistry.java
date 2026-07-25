@@ -321,6 +321,14 @@ public final class ClosRegistry {
 	private final Map<String, String> structTags = new LinkedHashMap<>();
 
 	/**
+	 * Struct type name (normalized) to its ancestor set (the struct itself and its
+	 * {@code :include} chain, all normalized) -- the struct-side twin of
+	 * {@link ClassInfo#ancestors()}, giving {@code typep}/predicates/method dispatch the
+	 * statically-known descendant tag sets.
+	 */
+	private final Map<String, Set<String>> structAncestors = new LinkedHashMap<>();
+
+	/**
 	 * Instance tag ({@code %struct-<name>} / {@code %class-<name>}) to the interned
 	 * {@link LispLayout} of that type. Keyed by tag rather than by type name because the
 	 * two prefixes keep struct and class entries apart even when a program defines a
@@ -384,9 +392,77 @@ public final class ClosRegistry {
 	 * @param initforms the slot initforms, in the same order
 	 */
 	public void registerStruct(String structName, List<String> slotBaseNames, List<LispVal> initforms) {
-		this.structTags.put(normalize(structName), LispLayout.STRUCT_TAG_PREFIX + structName);
+		registerStruct(structName, null, slotBaseNames, initforms);
+	}
+
+	/**
+	 * Registers a {@code defstruct} type with an {@code :include} parent. The slot lists
+	 * must already carry the parent's slots first (the caller prepends them), so the
+	 * layout is complete; this overload additionally records the ancestor chain for
+	 * {@code typep}/predicate/dispatch descendant enumeration.
+	 * @param structName the struct name as spelled in the defstruct
+	 * @param parentName the {@code :include} parent struct name, or null for none
+	 * @param slotBaseNames the package-stripped slot names (parent slots first)
+	 * @param initforms the slot initforms, in the same order
+	 */
+	public void registerStruct(String structName, @Nullable String parentName, List<String> slotBaseNames,
+			List<LispVal> initforms) {
+		String key = normalize(structName);
+		this.structTags.put(key, LispLayout.STRUCT_TAG_PREFIX + structName);
+		Set<String> ancestors = new java.util.LinkedHashSet<>();
+		if (parentName != null) {
+			Set<String> parentAncestors = this.structAncestors.get(normalize(parentName));
+			if (parentAncestors != null) {
+				ancestors.addAll(parentAncestors);
+			}
+			else {
+				ancestors.add(normalize(parentName));
+			}
+		}
+		ancestors.add(key);
+		this.structAncestors.put(key, Set.copyOf(ancestors));
 		LispLayout layout = LispLayout.ofStruct(structName, slotBaseNames, initforms);
 		this.layoutsByTag.put(layout.tag(), layout);
+	}
+
+	/**
+	 * The tag symbols ({@code %struct-<name>}) of the given struct type and all its
+	 * registered {@code :include} descendants, in definition order -- the struct-side
+	 * twin of {@link #descendantTags}. A name with no registered struct yields an empty
+	 * list.
+	 * @param structName the struct name as spelled
+	 * @return the descendant tags
+	 */
+	public List<String> descendantStructTags(String structName) {
+		String key = normalize(structName);
+		if (!this.structAncestors.containsKey(key)
+				&& PackageRegistry.splitQualified(structName) instanceof PackageRegistry.QualifiedName qn
+				&& this.structAncestors.containsKey(qn.member())) {
+			key = qn.member();
+		}
+		List<String> tags = new java.util.ArrayList<>();
+		for (Map.Entry<String, Set<String>> entry : this.structAncestors.entrySet()) {
+			if (entry.getValue().contains(key)) {
+				tags.add(this.structTags.get(entry.getKey()));
+			}
+		}
+		return tags;
+	}
+
+	/**
+	 * The ancestor-set size of a registered struct type (the struct itself plus its
+	 * {@code :include} chain), or 1 when unknown -- the dispatch-specificity input for a
+	 * struct specializer (deeper included structs dispatch first).
+	 * @param structName the struct name as spelled
+	 * @return the ancestor count
+	 */
+	public int structAncestorCount(String structName) {
+		Set<String> ancestors = this.structAncestors.get(normalize(structName));
+		if (ancestors == null
+				&& PackageRegistry.splitQualified(structName) instanceof PackageRegistry.QualifiedName qn) {
+			ancestors = this.structAncestors.get(qn.member());
+		}
+		return ancestors == null ? 1 : ancestors.size();
 	}
 
 	/**

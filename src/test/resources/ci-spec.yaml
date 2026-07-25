@@ -1166,7 +1166,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WRITE-CHAR)
       (DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY UNWIND-PROTECT WHILE)
-      302
+      307
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -4727,3 +4727,61 @@ cases:
       T
       T
       T
+
+  - name: ironclad-residue-features
+    source: |
+      ;; The general (non-library-specific) features the ironclad slice forced.
+      ;; defstruct :include -- the parent's slots come first, so its accessors read
+      ;; a child instance, and (typep child 'parent) is true.
+      (defstruct ic-base (a 1) (b 2))
+      (defstruct (ic-child (:include ic-base)) (c 3))
+      (let ((ic-k (make-ic-child :a 10 :c 30)))
+        (print (list (ic-base-a ic-k) (ic-base-b ic-k) (ic-child-c ic-k)))
+        (print (list (ic-child-p ic-k) (typep ic-k 'ic-base) (typep (make-ic-base) 'ic-child))))
+      ;; defstruct (:type (vector ...)) -- the instance IS a vector; the accessor
+      ;; is an aref read and a settable place.
+      (defstruct (ic-regs (:type (vector (unsigned-byte 32))) (:constructor initial-ic-regs ()))
+        (x 7) (y 8))
+      (let ((ic-r (initial-ic-regs)))
+        (setf (ic-regs-y ic-r) 99)
+        (print (list ic-r (ic-regs-x ic-r) (vectorp ic-r))))
+      ;; type-of names the type; class-of yields the instance tag.
+      (print (list (type-of (make-ic-base)) (type-of 42) (type-of "s")))
+      ;; a package is its upcased name as a keyword, and the two APIs agree
+      (print (list (find-package :cl) (find-package "no-such-pkg") (symbol-package :ic-kw)))
+      (print (eq (symbol-package :ic-kw) (find-package :keyword)))
+      ;; symbol-name / string drop the package marker (a qualifier is not part of
+      ;; the name); princ keeps what it prints.
+      (print (list (symbol-name :ic-kw) (string :ic-kw)))
+      ;; a computed typep specifier dispatches at runtime
+      (let ((ic-spec 'integer))
+        (print (list (typep 5 ic-spec) (typep "s" ic-spec))))
+      (let ((ic-spec 'ic-base))
+        (print (list (typep (make-ic-child) ic-spec) (typep 5 ic-spec))))
+      ;; the readtable API is an accepted no-op, and #N@(...) reads as a vector
+      ;; whose element width is dropped
+      (print (copy-readtable nil))
+      (print (set-dispatch-macro-character #\# #\7 (lambda (s c n) nil)))
+      (print (aref #32@(#x428A2F98 #x71374491) 1))
+      ;; (setf (aref s i) c) works on a string place too (a string is a rank-1
+      ;; character array)
+      (let ((ic-s (make-string 3 :initial-element #\a)))
+        (setf (aref ic-s 1) #\z)
+        (print ic-s))
+      ;; the full CL read/macroexpand tails are accepted
+      (print (macroexpand '(when t 1) nil))
+    expected: |
+      (10 2 30)
+      (T T NIL)
+      (#(7 99) 7 T)
+      (IC-BASE INTEGER STRING)
+      (:CL NIL :KEYWORD)
+      T
+      ("IC-KW" "IC-KW")
+      (T NIL)
+      (T NIL)
+      NIL
+      T
+      1899447441
+      "aza"
+      (IF T 1 NIL)

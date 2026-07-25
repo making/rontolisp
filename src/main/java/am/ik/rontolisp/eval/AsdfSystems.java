@@ -371,7 +371,12 @@ public final class AsdfSystems {
 				continue;
 			}
 			try {
-				return new LocatedAsd(path, loader.load(path));
+				String source = loader.load(path);
+				// An executable .asd (ironclad's) cannot be parsed as data: substitute
+				// the bundled replacement declaring the loadable slice, keeping the
+				// located path so component files resolve against the real library.
+				String replacement = AsdOverrides.replacementSource(fileName);
+				return new LocatedAsd(path, replacement != null ? replacement : source);
 			}
 			catch (IOException ex) {
 				tried.add(path);

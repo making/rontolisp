@@ -1532,7 +1532,11 @@ public final class LispMacroExpander {
 				parseForBeingHash(piece, var, hashKeys);
 				return;
 			}
-			if (!"symbols".equals(kind) && !"present-symbols".equals(kind) && !"external-symbols".equals(kind)) {
+			// The singular spellings (each symbol / each external-symbol) are the same
+			// clause in CL.
+			if (!"symbols".equals(kind) && !"symbol".equals(kind) && !"present-symbols".equals(kind)
+					&& !"present-symbol".equals(kind) && !"external-symbols".equals(kind)
+					&& !"external-symbol".equals(kind)) {
 				throw new UnsupportedOperationException(
 						"loop: unsupported being clause (only hash-keys/hash-values/{external-,present-,}symbols): "
 								+ kind);
@@ -2844,7 +2848,10 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSetf(LispCons cons) {
-		return expandSetf(cons, java.util.Map.of());
+		// The registry-less overload is the --no-gc backend's (and macroexpand-1's):
+		// stringsExist=false keeps (setf (aref v i) x) a bare %aset there, since that
+		// backend has no string values and no `stringp` to dispatch on.
+		return expandSetf(cons, java.util.Map.of(), EMPTY_CLOS_REGISTRY, false);
 	}
 
 	/**
@@ -2859,7 +2866,7 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSetf(LispCons cons, java.util.Map<String, Integer> structAccessors) {
-		return expandSetf(cons, structAccessors, EMPTY_CLOS_REGISTRY);
+		return expandSetf(cons, structAccessors, EMPTY_CLOS_REGISTRY, true);
 	}
 
 	/**
@@ -2874,6 +2881,16 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandSetf(LispCons cons, java.util.Map<String, Integer> structAccessors,
 			ClosRegistry closRegistry) {
+		return expandSetf(cons, structAccessors, closRegistry, true);
+	}
+
+	/**
+	 * The shared implementation. {@code stringsExist} tells whether the target has string
+	 * values at all (false only for the {@code --no-gc} backend), which decides whether
+	 * an {@code (setf (aref var i) v)} place gets its string dispatch.
+	 */
+	private static LispVal expandSetf(LispCons cons, java.util.Map<String, Integer> structAccessors,
+			ClosRegistry closRegistry, boolean stringsExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() > 3) {
 			if (parts.size() % 2 == 0) {
@@ -2923,7 +2940,20 @@ public final class LispMacroExpander {
 						asetParts.add(placeParts.get(i));
 					}
 					asetParts.add(value);
-					yield listToCons(asetParts);
+					LispVal aset = listToCons(asetParts);
+					if (stringsExist && placeParts.size() == 3 && placeParts.get(1) instanceof LispSymbol arrayVar) {
+						// A STRING is a rank-1 character array, so (setf (aref s i) c) is
+						// legal CL -- and `s` may be a string OR an array at run time
+						// (ironclad's byte-array-to-hex-string fills a make-string buffer
+						// this way). Dispatch: %aset for an array, the schar-set rebuild
+						// for a string. Only a variable place can take the string branch
+						// (see expandScharSetFunctional's lite semantics).
+						yield makeIf(
+								callOf(LispNames.STRINGP, arrayVar), listToCons(List
+									.of(new LispSymbol(LispNames.SCHAR_SET), arrayVar, placeParts.get(2), value)),
+								aset);
+					}
+					yield aset;
 				}
 				case LispNames.ROW_MAJOR_AREF ->
 					// (setf (row-major-aref array k) val) -> (%row-major-aset array k
@@ -2996,9 +3026,18 @@ public final class LispMacroExpander {
 				}
 				case LispNames.SLOT_VALUE -> {
 					// (setf (slot-value obj 'slot) val) -> (%obj-set obj <index> val):
-					// the index comes from the CLOS class registry. A position-ambiguous
-					// slot expands to its reader-generic call instead; re-dispatch that
-					// as an accessor place (the %setf- writer generic).
+					// the index comes from the CLOS class registry.
+					LispSymbol litSlot = placeParts.size() == 3 ? quotedSymbol(placeParts.get(2)) : null;
+					if (litSlot != null && ambiguousSlotPosition(litSlot, closRegistry)) {
+						// The name sits at different indexes in unrelated types, so no
+						// one
+						// index can be baked: dispatch on the instance TAG, the
+						// write-side
+						// twin of the ambiguous READ dispatch. (Routing through the
+						// reader
+						// generic would only work when the class declares an :accessor.)
+						yield expandAmbiguousSlotSet(placeParts.get(1), litSlot, value, closRegistry);
+					}
 					LispVal expandedPlace = expandSlotValue(placeCons, closRegistry);
 					yield expandSetf(
 							(LispCons) listToCons(List.of(new LispSymbol(LispNames.SETF), expandedPlace, value)),
@@ -3091,6 +3130,15 @@ public final class LispMacroExpander {
 	 * through every backend.
 	 */
 	public static final int SETF_FUNCTION_MARKER = -1;
+
+	/**
+	 * The variable a {@code (let ((*package* X)) ...)} binding is renamed to by
+	 * {@link #normalizeBindingList}: the resolver's read-time {@code *package*}
+	 * substitution leaves a quoted package in the binding-name slot, so the name is
+	 * replaced with this marker. The interpreter's {@code evalLet} rebinds its runtime
+	 * current package for the binding's extent.
+	 */
+	public static final String PACKAGE_REBIND_VAR = "__package_rebind";
 
 	/**
 	 * Internal function-namespace name for a {@code (setf NAME)} writer function.
@@ -3697,6 +3745,34 @@ public final class LispMacroExpander {
 		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fn, x));
 		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(x)), makeNot(call)));
 		return makeLet(fn.name(), normalizeFunctionDesignator(parts.get(1)), lambda);
+	}
+
+	/**
+	 * Expands {@code (copy-readtable ...)} into a nil-returning progn over its arguments:
+	 * rontolisp's reader is not readtable-driven, so a "readtable" is an opaque nil token
+	 * (the ironclad {@code *ironclad-readtable*} header binds one and never uses it for
+	 * reading -- its {@code #N@(...)} syntax is native in the lexer).
+	 * @param cons the copy-readtable expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCopyReadtable(LispCons cons) {
+		List<LispVal> forms = new java.util.ArrayList<>(cons.toList().subList(1, cons.toList().size()));
+		forms.add(LispNil.INSTANCE);
+		return makeProgn(forms);
+	}
+
+	/**
+	 * Expands {@code (set-dispatch-macro-character c1 c2 fn [readtable])} into a
+	 * t-returning progn over its arguments: user dispatch macros cannot extend the
+	 * Java-side reader, so the registration is accepted and ignored (see
+	 * {@link #expandCopyReadtable}).
+	 * @param cons the set-dispatch-macro-character expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSetDispatchMacroCharacter(LispCons cons) {
+		List<LispVal> forms = new java.util.ArrayList<>(cons.toList().subList(1, cons.toList().size()));
+		forms.add(LispTrue.INSTANCE);
+		return makeProgn(forms);
 	}
 
 	/**
@@ -5770,6 +5846,105 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * If {@code cons} is a two-argument {@code (find-symbol NAME PKG)} whose package
+	 * designator is a literal, returns the equivalent {@code intern} of the canonical
+	 * qualified spelling: {@code (intern (concatenate 'string "PKG:" NAME))}. The
+	 * compiled backends have no package registry at runtime, but a symbol IS its
+	 * canonical spelling there, so building that spelling is the lookup -- with two
+	 * deviations from the interpreter's registry-backed version: an unknown name yields a
+	 * symbol instead of nil (harmless where find-symbol feeds a plist/dispatch lookup
+	 * that then answers nil anyway), and the qualifier is the single-colon EXTERNAL
+	 * spelling, which is what a library's exported API uses. The {@code keyword},
+	 * {@code cl} and {@code cl-user} packages need no qualifier work. Returns
+	 * {@code null} when the package argument is not a literal designator.
+	 * @param cons the find-symbol call
+	 * @return the lowered expression, or {@code null}
+	 */
+	@Nullable public static LispVal expandFindSymbolInPackage(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			return null;
+		}
+		LispVal name = parts.get(1);
+		String pkg = literalPackageDesignator(parts.get(2));
+		if (pkg == null) {
+			// A computed package value (ironclad's massage-symbol holds one in a local):
+			// build the qualified spelling from it at run time. A package value prints as
+			// its name, so (string PKG) is the qualifier. The keyword package would need
+			// the ":NAME" shape instead, so only a LITERAL keyword designator gets that
+			// (see below) -- a computed one is out of scope.
+			LispVal pkgName = listToCons(List.of(new LispSymbol(LispNames.STRING), parts.get(2)));
+			LispVal runtimeQualified = listToCons(List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"),
+					pkgName, new LispString(":"), name));
+			return listToCons(List.of(new LispSymbol(LispNames.INTERN), runtimeQualified));
+		}
+		if ("KEYWORD".equalsIgnoreCase(pkg)) {
+			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name, new LispSymbol(":KEYWORD")));
+		}
+		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) || LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
+			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name));
+		}
+		LispVal qualified = listToCons(
+				List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), new LispString(pkg + ":"), name));
+		return listToCons(List.of(new LispSymbol(LispNames.INTERN), qualified));
+	}
+
+	/**
+	 * A literal package designator: a string, a keyword, a quoted symbol, or a
+	 * {@code (load-time-value (find-package ...))}-style wrapper the resolver has already
+	 * folded to a quoted keyword. Returns null for a computed designator.
+	 */
+	@Nullable private static String literalPackageDesignator(LispVal arg) {
+		if (arg instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& (LispNames.QUOTE.equals(op.name()) || LispNames.LOAD_TIME_VALUE.equals(op.name()))
+				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
+			return literalPackageDesignator(rest.car());
+		}
+		return switch (arg) {
+			case LispString str -> str.value();
+			// A bare (non-keyword) symbol here is a VARIABLE REFERENCE holding a package
+			// value, not a designator literal -- reading its NAME as the package is how
+			// (find-symbol n ironclad) once built the doubly-qualified
+			// IRONCLAD::IRONCLAD:X.
+			case LispSymbol sym ->
+				sym.isKeyword() || sym.name().startsWith("#:") ? LispSymbol.displayName(sym.name()) : null;
+			default -> null;
+		};
+	}
+
+	/**
+	 * If {@code cons} is a {@code read} call carrying the full CL tail
+	 * ({@code (read stream eof-error-p eof-value recursive-p)}), returns the equivalent
+	 * one-argument call: {@code recursive-p} is dropped (there is no recursive-read
+	 * state), {@code eof-error-p} is dropped (this {@code read} returns nil at end of
+	 * input and never signals), and a non-nil {@code eof-value} becomes an {@code or}
+	 * default -- the same lowering {@link #expandReadLineCompat} does. So a nil datum and
+	 * end-of-input stay indistinguishable, exactly as they already are for the
+	 * one-argument call. Returns {@code null} for the 0/1-argument shapes so those keep
+	 * their existing (byte-identical) lowering, and for a non-nil literal
+	 * {@code eof-error-p} (signalling at EOF is not supported).
+	 * @param cons the call expression
+	 * @return the lowered expression, or {@code null} when the shape is not handled here
+	 */
+	@Nullable public static LispVal expandReadCompat(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol op) || !LispNames.READ.equals(op.name())) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || parts.size() > 5) {
+			return null;
+		}
+		if (!isLiteralNil(parts.get(2))) {
+			return null;
+		}
+		LispVal readOnly = listToCons(List.of(new LispSymbol(LispNames.READ), parts.get(1)));
+		if (parts.size() == 3 || isLiteralNil(parts.get(3))) {
+			return readOnly;
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.OR), readOnly, parts.get(3)));
+	}
+
+	/**
 	 * If {@code cons} is a {@code (subseq seq start [end])} call, returns a form that
 	 * dispatches on the runtime type of {@code seq}: a general array
 	 * ({@link LispNames#ARRAYP_INTERNAL}) is copied element by element into a fresh array
@@ -6068,9 +6243,9 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(LispNames.DEFSTRUCT + " expects a struct name: " + cons.print());
 		}
 		// (defstruct (name option...) slot...): the supported options are
-		// (:constructor name), (:conc-name prefix-or-nil), (:copier name-or-nil) and
-		// (:predicate name-or-nil); anything else (BOA constructors, :include) is a
-		// hard error naming the clause.
+		// (:constructor name [boa-lambda-list]), (:conc-name prefix-or-nil),
+		// (:copier name-or-nil), (:predicate name-or-nil), (:include parent) and
+		// (:type (vector ...)); anything else is a hard error naming the clause.
 		LispSymbol nameSym;
 		String customConstructor = null;
 		LispVal boaLambdaList = null;
@@ -6081,6 +6256,8 @@ public final class LispMacroExpander {
 		boolean suppressPredicate = false;
 		String customCopier = null;
 		boolean suppressCopier = false;
+		String includeParent = null;
+		boolean typedVector = false;
 		if (parts.get(1) instanceof LispSymbol plain) {
 			nameSym = plain;
 		}
@@ -6141,6 +6318,29 @@ public final class LispMacroExpander {
 						else {
 							suppressCopier = true;
 						}
+					}
+					case ":INCLUDE" -> {
+						// (:include parent): slot overrides ((:include parent (slot new
+						// -default))) are not supported.
+						if (optParts.size() != 2 || !(optValue instanceof LispSymbol inc)) {
+							throw new UnsupportedOperationException(
+									LispNames.DEFSTRUCT + " option is not supported: " + option.print());
+						}
+						includeParent = inc.name();
+					}
+					case ":TYPE" -> {
+						// Only the vector shape: the struct is a plain vector (no
+						// instance
+						// tag), accessors are aref reads at the slot index. (:type list)
+						// is not supported.
+						boolean vectorShape = (optValue instanceof LispSymbol ts && "VECTOR".equals(plainTypeName(ts)))
+								|| (optValue instanceof LispCons tc && tc.car() instanceof LispSymbol th
+										&& "VECTOR".equals(plainTypeName(th)));
+						if (!vectorShape) {
+							throw new UnsupportedOperationException(
+									LispNames.DEFSTRUCT + " option is not supported: " + option.print());
+						}
+						typedVector = true;
 					}
 					default -> throw new UnsupportedOperationException(
 							LispNames.DEFSTRUCT + " option is not supported: " + option.print());
@@ -6204,11 +6404,46 @@ public final class LispMacroExpander {
 			slotBases.add(slotQn == null ? slot.name() : slotQn.member());
 			slotDefaults.add(dflt);
 		}
+		if (includeParent != null) {
+			// (:include parent): the parent's slots (its own layout order, so a chain
+			// nests) come first, keeping every inherited slot at the same index in all
+			// descendants -- the parent's accessors then work on child instances as-is.
+			if (typedVector) {
+				throw new UnsupportedOperationException(
+						LispNames.DEFSTRUCT + " :include on a :type struct is not supported: " + cons.print());
+			}
+			if (closRegistry == null) {
+				throw new UnsupportedOperationException(
+						LispNames.DEFSTRUCT + " :include is not supported here (no type registry): " + cons.print());
+			}
+			LispLayout parentLayout = closRegistry.findStructLayout(includeParent);
+			if (parentLayout == null) {
+				throw new IllegalArgumentException(
+						LispNames.DEFSTRUCT + " :include names an unknown struct: " + includeParent);
+			}
+			List<LispSymbol> mergedSyms = new java.util.ArrayList<>();
+			List<String> mergedBases = new java.util.ArrayList<>();
+			List<LispVal> mergedDefaults = new java.util.ArrayList<>();
+			for (int i = 0; i < parentLayout.slotNames().size(); i++) {
+				mergedSyms.add(new LispSymbol(parentLayout.slotNames().get(i)));
+				mergedBases.add(parentLayout.slotNames().get(i));
+				mergedDefaults.add(parentLayout.initforms().get(i));
+			}
+			mergedSyms.addAll(slotSyms);
+			mergedBases.addAll(slotBases);
+			mergedDefaults.addAll(slotDefaults);
+			slotSyms = mergedSyms;
+			slotBases = mergedBases;
+			slotDefaults = mergedDefaults;
+		}
 		// Registered only after the slot loop: the layout carries the ordered slot names
 		// and initforms, which is what makes an instance self-describing to the printer
-		// and what #S(...) reading permutes its keyword arguments against.
-		if (closRegistry != null) {
-			closRegistry.registerStruct(structName, slotBases, slotDefaults);
+		// and what #S(...) reading permutes its keyword arguments against. A :type
+		// vector struct is NOT registered: its "instances" are plain vectors with no
+		// instance tag, so it is not a specializer/typep type (CL agrees -- a typed
+		// struct is not a structure-object).
+		if (closRegistry != null && !typedVector) {
+			closRegistry.registerStruct(structName, includeParent, slotBases, slotDefaults);
 		}
 		List<LispVal> forms = new java.util.ArrayList<>();
 		// (defun make-<base> (&key ((:slot slot) default)...) (%obj-new '%struct-<name>
@@ -6234,47 +6469,83 @@ public final class LispMacroExpander {
 					boaValues.add(param != null ? param : slotDefaults.get(i));
 				}
 				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(constructorName),
-						boaLambdaList, objNew(structTag, boaValues))));
+						boaLambdaList, typedVector ? vectorOf(boaValues) : objNew(structTag, boaValues))));
 			}
 			else {
 				// A slot-less struct has an EMPTY lambda list, which is nil rather than a
 				// cons -- listToCons would blow up casting it.
 				LispVal params0 = lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList);
 				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(constructorName), params0,
-						objNew(structTag, List.copyOf(slotSyms)))));
+						typedVector ? vectorOf(List.copyOf(slotSyms)) : objNew(structTag, List.copyOf(slotSyms)))));
 			}
 		}
-		// (defun <base>-p (__struct) (%obj-is __struct '%struct-<name>))
+		// (defun <base>-p (__struct) (%obj-is __struct '%struct-<name> ...)): the tag
+		// set covers the struct and its :include descendants registered SO FAR -- a
+		// descendant defined after the predicate defun is not re-tested (document over
+		// regenerate; typep/etypecase expand lazily enough in practice).
 		LispSymbol obj = new LispSymbol(STRUCT_VAR);
 		LispVal params = listToCons(List.<LispVal>of(obj));
-		if (!suppressPredicate) {
+		if (!suppressPredicate && !typedVector) {
 			String predicateName = customPredicate != null ? customPredicate : prefix + base + pAffix;
+			List<String> predicateTags = closRegistry != null ? closRegistry.descendantStructTags(structName)
+					: List.of(structTag);
 			forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(predicateName), params,
-					objIs(obj, List.of(structTag)))));
+					objIs(obj, predicateTags))));
 		}
 		// (defun copy-<base> (__struct) (%obj-new '%struct-<name> (%obj-ref __struct 0)
-		// ...)): a shallow copy, like copy-structure -- the slot values are shared.
+		// ...)): a shallow copy, like copy-structure -- the slot values are shared. A
+		// :type vector struct copies with copy-seq (it IS a vector).
 		if (!suppressCopier) {
 			String copierName = customCopier != null ? customCopier : prefix + copyAffix + base;
-			List<LispVal> copied = new java.util.ArrayList<>();
-			for (int i = 0; i < slotSyms.size(); i++) {
-				copied.add(objRef(obj, i));
+			if (typedVector) {
+				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(copierName), params,
+						callOf(LispNames.COPY_SEQ, obj))));
 			}
-			forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(copierName), params,
-					objNew(structTag, copied))));
+			else {
+				List<LispVal> copied = new java.util.ArrayList<>();
+				for (int i = 0; i < slotSyms.size(); i++) {
+					copied.add(objRef(obj, i));
+				}
+				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(copierName), params,
+						objNew(structTag, copied))));
+			}
 		}
 		// (defun <conc-name><slot> (__struct) (%obj-ref __struct <index>))
 		// The slot part case-matches the struct base: a slot named after a CL symbol
 		// (md5's `block`) folds to lowercase while the upcase-read struct name stays
 		// upper, and the accessor must match its fully-upcased call sites
-		// (MD5-STATE-BLOCK).
+		// (MD5-STATE-BLOCK). A :type vector struct reads with aref and writes through a
+		// generated %setf-<accessor> writer defun (the setf-function protocol), since
+		// there is no instance object to %obj-set.
 		for (int i = 0; i < slotSyms.size(); i++) {
 			String accessor = prefix + concName + affixFor(slotBases.get(i), base);
-			forms.add(listToCons(
-					List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params, objRef(obj, i))));
-			structAccessors.put(accessor, i + 1);
+			if (typedVector) {
+				LispVal arefRead = listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(i)));
+				forms.add(listToCons(
+						List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params, arefRead)));
+				LispSymbol newVal = new LispSymbol("__struct_newval");
+				LispVal writerParams = listToCons(List.<LispVal>of(newVal, obj));
+				LispVal arefPlace = listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(i)));
+				LispVal store = listToCons(List.of(new LispSymbol(LispNames.SETF), arefPlace, newVal));
+				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN),
+						new LispSymbol(setfFunctionName(accessor)), writerParams, store)));
+				structAccessors.put(accessor, SETF_FUNCTION_MARKER);
+			}
+			else {
+				forms.add(listToCons(
+						List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params, objRef(obj, i))));
+				structAccessors.put(accessor, i + 1);
+			}
 		}
 		return forms;
+	}
+
+	/** A {@code (vector v...)} construction form (the :type vector struct instance). */
+	private static LispVal vectorOf(List<LispVal> values) {
+		List<LispVal> call = new java.util.ArrayList<>();
+		call.add(new LispSymbol(LispNames.VECTOR));
+		call.addAll(values);
+		return listToCons(call);
 	}
 
 	private static final String STRUCT_VAR = "__struct";
@@ -6442,6 +6713,11 @@ public final class LispMacroExpander {
 				LispVal initform = defaultInitargs.getOrDefault(slot.initargKeyword(), slot.initform());
 				lambdaList.add(listToCons(List.of(keywordAndVar, initform)));
 			}
+			// A non-slot initarg is consumed by an initialize-instance/shared-initialize
+			// method, not the constructor (ironclad's (make-instance 'hmac :key ...));
+			// the lite model always tolerates extras instead of computing the valid
+			// initarg set from the applicable methods.
+			lambdaList.add(new LispSymbol(LispNames.LAMBDA_ALLOW_OTHER_KEYS));
 		}
 		List<LispVal> slotVars = new java.util.ArrayList<>();
 		for (ClosRegistry.SlotSpec slot : slots) {
@@ -6570,6 +6846,24 @@ public final class LispMacroExpander {
 	 * @return the constructor call
 	 */
 	public static LispVal expandMakeInstance(LispCons cons, ClosRegistry closRegistry) {
+		return expandMakeInstance(cons, closRegistry, false);
+	}
+
+	/**
+	 * As {@link #expandMakeInstance(LispCons, ClosRegistry)}, but {@code coldBranchOk}
+	 * degrades an UNKNOWN class from a compile-time error to a runtime {@code error}
+	 * call. The compile paths pass true: they compile every branch eagerly, so a library
+	 * whose dispatcher names classes from subsystems that were not loaded (ironclad's
+	 * {@code make-kdf} listing scrypt/argon2/bcrypt) would otherwise be uncompilable even
+	 * though the branch is never taken -- the same eager-cold-branch tolerance
+	 * {@code format} already has. The interpreter passes false (it only expands what it
+	 * evaluates, so a genuinely wrong class name still reports at that point).
+	 * @param cons the make-instance expression
+	 * @param closRegistry the class registry
+	 * @param coldBranchOk whether an unknown class lowers to a runtime error
+	 * @return the constructor call
+	 */
+	public static LispVal expandMakeInstance(LispCons cons, ClosRegistry closRegistry, boolean coldBranchOk) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(LispNames.MAKE_INSTANCE + " expects a class name: " + cons.print());
@@ -6581,6 +6875,10 @@ public final class LispMacroExpander {
 		}
 		ClosRegistry.ClassInfo info = closRegistry.findClass(classSym.name());
 		if (info == null) {
+			if (coldBranchOk) {
+				return listToCons(List.of(new LispSymbol(LispNames.ERROR),
+						new LispString(LispNames.MAKE_INSTANCE + ": unknown class " + classSym.name())));
+			}
 			throw new IllegalArgumentException(LispNames.MAKE_INSTANCE + ": unknown class " + classSym.name());
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
@@ -6588,13 +6886,26 @@ public final class LispMacroExpander {
 				: qn.pkg() + "::" + affixFor("%make-", qn.member()) + qn.member();
 		// CL has ONE initialize-instance generic; the registry keys generics by their
 		// package-qualified spelling, so match by plain name (a make-instance in any
-		// package must find cl-ppcre::initialize-instance).
+		// package must find cl-ppcre::initialize-instance). When only shared-initialize
+		// methods exist (ironclad's hmac keying :after), make-instance calls that
+		// generic directly with the t slot-names argument -- the same effective chain
+		// CL's default initialize-instance primary would run.
 		ClosRegistry.GenericInfo init = closRegistry.generics()
 			.values()
 			.stream()
 			.filter(g -> "INITIALIZE-INSTANCE".equals(plainName(g.name())))
 			.findFirst()
 			.orElse(null);
+		boolean sharedInit = false;
+		if (init == null) {
+			init = closRegistry.generics()
+				.values()
+				.stream()
+				.filter(g -> "SHARED-INITIALIZE".equals(plainName(g.name())))
+				.findFirst()
+				.orElse(null);
+			sharedInit = init != null;
+		}
 		if (init == null) {
 			List<LispVal> call = new java.util.ArrayList<>();
 			call.add(new LispSymbol(ctor));
@@ -6612,6 +6923,11 @@ public final class LispMacroExpander {
 		initCall.add(new LispSymbol(init.name()));
 		LispSymbol objVar = new LispSymbol(prefix + "_obj");
 		initCall.add(objVar);
+		if (sharedInit) {
+			// (shared-initialize obj t initargs...): t = all slots, CL's make-instance
+			// slot-names argument.
+			initCall.add(LispTrue.INSTANCE);
+		}
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		for (int i = 2; i < parts.size(); i++) {
 			LispSymbol temp = new LispSymbol(prefix + "_a" + (i - 2));
@@ -6674,6 +6990,46 @@ public final class LispMacroExpander {
 					+ " has different positions in unrelated classes; use the accessor");
 		}
 		return objRef(parts.get(1), position - 1);
+	}
+
+	/**
+	 * Whether the registry places the named slot at different indexes in unrelated types
+	 * (the {@code -1} marker).
+	 */
+	private static boolean ambiguousSlotPosition(LispSymbol slotSym, ClosRegistry closRegistry) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
+		Integer position = closRegistry.slotPosition(qn == null ? slotSym.name() : qn.member());
+		return position != null && position == -1;
+	}
+
+	/**
+	 * Expands {@code (setf (slot-value obj 'AMBIGUOUS) val)} into an instance-TAG
+	 * dispatch that writes the type-correct index: the write-side twin of the ambiguous
+	 * read dispatch in {@link #expandSlotValue}. An instance of a type that does not
+	 * declare the slot signals at run time.
+	 */
+	private static LispVal expandAmbiguousSlotSet(LispVal objExpr, LispSymbol slotSym, LispVal value,
+			ClosRegistry closRegistry) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
+		String baseName = qn == null ? slotSym.name() : qn.member();
+		String prefix = "__ss" + MV_COUNTER.getAndIncrement();
+		LispSymbol v = new LispSymbol(prefix + "_v");
+		LispSymbol nv = new LispSymbol(prefix + "_n");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		for (LispLayout layout : closRegistry.layouts().values()) {
+			int index = layout.slotNames().indexOf(baseName);
+			if (index < 0) {
+				continue;
+			}
+			clauses.add(
+					listToCons(List.of(objIs(v, List.of(layout.tag())), makeProgn(List.of(objSet(v, index, nv), nv)))));
+		}
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString(LispNames.SLOT_VALUE + ": no slot " + baseName + " in this instance"))))));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return makeLet(v.name(), objExpr, makeLet(nv.name(), value, listToCons(condParts)));
 	}
 
 	/**
@@ -7438,6 +7794,30 @@ public final class LispMacroExpander {
 		}
 		if (!tail.isEmpty()) {
 			generic.markVariadic();
+			// CL computes a generic call's valid keyword set as the UNION of the
+			// generic's
+			// and every applicable method's keywords, so a method never rejects a keyword
+			// a sibling method accepts: (update-digest state seq :digest d) reaches
+			// ironclad's sha256 updater, which declares only :start/:end. The lite model
+			// makes every &key method permissive instead of computing that union.
+			if (tail.stream().anyMatch(p -> p instanceof LispSymbol s && LispNames.LAMBDA_KEY.equals(s.name())) && tail
+				.stream()
+				.noneMatch(p -> p instanceof LispSymbol s && LispNames.LAMBDA_ALLOW_OTHER_KEYS.equals(s.name()))) {
+				tail.add(new LispSymbol(LispNames.LAMBDA_ALLOW_OTHER_KEYS));
+			}
+		}
+		// A bare (call-next-method) passes the method's ORIGINAL arguments, the optional
+		// and keyword ones included -- ironclad's hmac reinitialize-instance forwards its
+		// :key that way to the system default. The forwarding needs a rest variable, so
+		// one is injected when the method declares a keyword/optional tail without one
+		// (CL section order allows &rest before &key; a tail already starting with
+		// &optional keeps the required-args-only forwarding).
+		String methodRestVar = restVarOf(tail);
+		if (methodRestVar == null && !tail.isEmpty() && tail.get(0) instanceof LispSymbol firstMarker
+				&& LispNames.LAMBDA_KEY.equals(firstMarker.name())) {
+			methodRestVar = "%method-args";
+			tail.add(0, new LispSymbol(methodRestVar));
+			tail.add(0, new LispSymbol(LispNames.LAMBDA_REST));
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
 		String functionName = (qn == null ? "%" + generic.name() : qn.pkg() + "::%" + qn.member()) + "--m"
@@ -7469,35 +7849,106 @@ public final class LispMacroExpander {
 		blockParts.add(new LispSymbol(LispNames.BLOCK));
 		blockParts.add(new LispSymbol(generic.name()));
 		for (LispVal form : body) {
-			blockParts.add(rewriteNextMethod(form, paramNames));
+			blockParts.add(rewriteNextMethod(form, paramNames, methodRestVar));
 		}
 		defun.add(listToCons(blockParts));
 		LispVal methodDefun = listToCons(defun);
-		// initialize-instance has no system-supplied primary method in the static
-		// subset (make-instance's constructor already fills the slots), so the FIRST
-		// user method on it -- typically an :after (cl-ppcre's str length computer) --
-		// also synthesizes an identity default primary; without it the dispatcher
-		// would signal "No applicable method" for every other class.
-		if ("INITIALIZE-INSTANCE".equals(plainName(generic.name()))
-				&& generic.methods().values().stream().noneMatch(m -> m.qualifier().isEmpty())) {
-			List<ClosRegistry.Specializer> defaults = new java.util.ArrayList<>();
-			for (int i = 0; i < generic.paramNames().size(); i++) {
-				defaults.add(ClosRegistry.Specializer.DEFAULT);
-			}
-			String defaultName = (qn == null ? "%" + generic.name() : qn.pkg() + "::%" + qn.member()) + "--m"
-					+ generic.nextMethodIndex();
-			generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
-			generic.markVariadic();
-			List<LispVal> defaultParams = new java.util.ArrayList<>();
-			defaultParams.add(new LispSymbol(NEXT_METHOD_VAR));
-			generic.paramNames().stream().<LispVal>map(LispSymbol::new).forEach(defaultParams::add);
-			defaultParams.add(new LispSymbol(LispNames.LAMBDA_REST));
-			defaultParams.add(new LispSymbol("%init-args"));
-			LispVal defaultDefun = listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(defaultName),
-					listToCons(defaultParams), new LispSymbol(generic.paramNames().get(0))));
-			return makeProgn(List.of(defaultDefun, methodDefun));
+		// The instance-initialization generics (initialize-instance /
+		// reinitialize-instance / shared-initialize) have no system-supplied primary
+		// method in the static subset (make-instance's constructor already fills the
+		// slots), so the FIRST user method on one of them -- typically an :after
+		// (cl-ppcre's str length computer, ironclad's hmac keying) -- also synthesizes
+		// the system default primary; without it the dispatcher would signal "No
+		// applicable method" for every other class. The defaults chain like CL's:
+		// initialize-instance and reinitialize-instance call shared-initialize (with t
+		// and nil slot-names respectively), whose own default returns the instance.
+		// The condition is the ABSENCE of an all-default primary (not of any primary):
+		// the
+		// system method is applicable to every instance, so a class-specialized primary
+		// (ironclad's sha256 register reset) does not replace it -- a sibling primary's
+		// (call-next-method) must still find it.
+		if (isInitProtocolGeneric(plainName(generic.name())) && !hasDefaultPrimary(generic)) {
+			List<LispVal> synthesized = new java.util.ArrayList<>();
+			synthesizeInitProtocolDefault(generic, closRegistry, synthesized);
+			synthesized.add(methodDefun);
+			return makeProgn(synthesized);
 		}
 		return methodDefun;
+	}
+
+	/**
+	 * Whether the generic already has an unqualified method specialized on nothing (the
+	 * shape of both a user default method and the synthesized system default).
+	 */
+	private static boolean hasDefaultPrimary(ClosRegistry.GenericInfo generic) {
+		return generic.methods()
+			.values()
+			.stream()
+			.anyMatch(m -> m.qualifier().isEmpty()
+					&& m.specializers().stream().allMatch(s -> s.kind() == ClosRegistry.SpecializerKind.DEFAULT));
+	}
+
+	/** Whether the plain generic name is one of the instance-initialization generics. */
+	private static boolean isInitProtocolGeneric(String plainName) {
+		return "INITIALIZE-INSTANCE".equals(plainName) || "REINITIALIZE-INSTANCE".equals(plainName)
+				|| "SHARED-INITIALIZE".equals(plainName);
+	}
+
+	/**
+	 * Synthesizes the system default primary of one instance-initialization generic into
+	 * {@code out} and registers it on the generic: shared-initialize's default returns
+	 * the instance; initialize-instance's / reinitialize-instance's defaults
+	 * {@code (apply #'shared-initialize instance t/nil initargs)} -- creating the
+	 * shared-initialize generic (with its own identity default and dispatcher) when the
+	 * program never defines a method on it, so the chain always resolves.
+	 */
+	private static void synthesizeInitProtocolDefault(ClosRegistry.GenericInfo generic, ClosRegistry closRegistry,
+			List<LispVal> out) {
+		String plain = plainName(generic.name());
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
+		List<ClosRegistry.Specializer> defaults = new java.util.ArrayList<>();
+		for (int i = 0; i < generic.paramNames().size(); i++) {
+			defaults.add(ClosRegistry.Specializer.DEFAULT);
+		}
+		String defaultName = (qn == null ? "%" + generic.name() : qn.pkg() + "::%" + qn.member()) + "--m"
+				+ generic.nextMethodIndex();
+		generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
+		generic.markVariadic();
+		List<LispVal> defaultParams = new java.util.ArrayList<>();
+		defaultParams.add(new LispSymbol(NEXT_METHOD_VAR));
+		generic.paramNames().stream().<LispVal>map(LispSymbol::new).forEach(defaultParams::add);
+		defaultParams.add(new LispSymbol(LispNames.LAMBDA_REST));
+		defaultParams.add(new LispSymbol("%init-args"));
+		LispSymbol instanceVar = new LispSymbol(generic.paramNames().get(0));
+		LispVal body;
+		if ("SHARED-INITIALIZE".equals(plain)) {
+			body = instanceVar;
+		}
+		else {
+			ClosRegistry.GenericInfo shared = closRegistry.generics()
+				.values()
+				.stream()
+				.filter(g -> "SHARED-INITIALIZE".equals(plainName(g.name())))
+				.findFirst()
+				.orElse(null);
+			if (shared == null) {
+				// No shared-initialize method anywhere yet: create the generic with its
+				// own system default so the chain resolves. Its DISPATCHER is emitted by
+				// the caller (the compile path reserves a slot per registered generic;
+				// the interpreter regenerates every dispatcher after each defmethod).
+				String sharedName = qn == null ? "SHARED-INITIALIZE" : qn.pkg() + "::SHARED-INITIALIZE";
+				shared = new ClosRegistry.GenericInfo(sharedName, List.of("%obj", "%slot-names"));
+				closRegistry.registerGeneric(shared);
+				synthesizeInitProtocolDefault(shared, closRegistry, out);
+			}
+			LispVal slotNamesArg = "INITIALIZE-INSTANCE".equals(plain) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			LispVal applyCall = listToCons(List.of(new LispSymbol(LispNames.APPLY),
+					listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(shared.name()))), instanceVar,
+					slotNamesArg, new LispSymbol("%init-args")));
+			body = makeProgn(List.of(applyCall, instanceVar));
+		}
+		out.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(defaultName),
+				listToCons(defaultParams), body)));
 	}
 
 	/** Strips a package qualifier from a symbol name. */
@@ -7575,7 +8026,7 @@ public final class LispMacroExpander {
 	 * {@code (next-method-p)} to a nil-test of that thunk. Quoted data and other symbols
 	 * are left untouched.
 	 */
-	private static LispVal rewriteNextMethod(LispVal form, List<String> paramNames) {
+	private static LispVal rewriteNextMethod(LispVal form, List<String> paramNames, @Nullable String restVar) {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
 			return form;
 		}
@@ -7587,12 +8038,19 @@ public final class LispMacroExpander {
 			if (LispNames.CALL_NEXT_METHOD.equals(plain)) {
 				List<LispVal> rawArgs = cons.toList().subList(1, cons.toList().size());
 				List<LispVal> args = rawArgs.isEmpty() ? paramNames.stream().<LispVal>map(LispSymbol::new).toList()
-						: rawArgs.stream().map(a -> rewriteNextMethod(a, paramNames)).toList();
-				List<LispVal> funcall = new java.util.ArrayList<>();
-				funcall.add(new LispSymbol(LispNames.FUNCALL));
-				funcall.add(new LispSymbol(NEXT_METHOD_VAR));
-				funcall.addAll(args);
-				return makeIf(new LispSymbol(NEXT_METHOD_VAR), listToCons(funcall), listToCons(
+						: rawArgs.stream().map(a -> rewriteNextMethod(a, paramNames, restVar)).toList();
+				List<LispVal> call = new java.util.ArrayList<>();
+				// A bare (call-next-method) in a method with a rest tail forwards that
+				// tail too (the original arguments, keywords included), so it becomes an
+				// apply rather than a funcall.
+				String forwardedRest = rawArgs.isEmpty() ? restVar : null;
+				call.add(new LispSymbol(forwardedRest != null ? LispNames.APPLY : LispNames.FUNCALL));
+				call.add(new LispSymbol(NEXT_METHOD_VAR));
+				call.addAll(args);
+				if (forwardedRest != null) {
+					call.add(new LispSymbol(forwardedRest));
+				}
+				return makeIf(new LispSymbol(NEXT_METHOD_VAR), listToCons(call), listToCons(
 						List.of(new LispSymbol(LispNames.ERROR), new LispString("call-next-method: no next method"))));
 			}
 			if (LispNames.NEXT_METHOD_P.equals(plain) && cons.toList().size() == 1) {
@@ -7601,9 +8059,24 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> out = new java.util.ArrayList<>();
 		for (LispVal element : cons.toList()) {
-			out.add(rewriteNextMethod(element, paramNames));
+			out.add(rewriteNextMethod(element, paramNames, restVar));
 		}
 		return listToCons(out);
+	}
+
+	/**
+	 * The {@code &rest}/{@code &body} variable name declared by a lambda-list tail, or
+	 * null when it declares none.
+	 */
+	@Nullable private static String restVarOf(List<LispVal> tail) {
+		for (int i = 0; i + 1 < tail.size(); i++) {
+			if (tail.get(i) instanceof LispSymbol marker
+					&& (LispNames.LAMBDA_REST.equals(marker.name()) || LispNames.LAMBDA_BODY.equals(marker.name()))
+					&& tail.get(i + 1) instanceof LispSymbol var) {
+				return var.name();
+			}
+		}
+		return null;
 	}
 
 	/** The literal compared against by an {@code (eql ...)} specializer. */
@@ -7966,9 +8439,10 @@ public final class LispMacroExpander {
 			case TYPE -> {
 				String structTag = closRegistry.findStructTag(java.util.Objects.requireNonNull(spec.name()));
 				if (structTag != null) {
-					// A defstruct type: test the instance tag, exactly like the struct
-					// predicate.
-					yield objIs(arg, List.of(structTag));
+					// A defstruct type: test the tag set of the struct and its :include
+					// descendants, exactly like the struct predicate.
+					List<String> tags = closRegistry.descendantStructTags(spec.name());
+					yield objIs(arg, tags.isEmpty() ? List.of(structTag) : tags);
 				}
 				// No cons/list/sequence exclusion is needed: an instance is its own
 				// value type, so consp/listp are already nil on it.
@@ -8036,19 +8510,26 @@ public final class LispMacroExpander {
 				ClosRegistry.ClassInfo info = closRegistry.classes().get(spec.name());
 				yield Math.max(10, 100 - (info == null ? 1 : info.ancestors().size()));
 			}
-			case TYPE -> switch (java.util.Objects.requireNonNull(spec.name())) {
-				case "NULL" -> 200;
-				case "KEYWORD", "UNSIGNED-BYTE" -> 210;
-				case "BOOLEAN" -> 212;
-				case "STANDARD-CHAR", "BASE-CHAR" -> 215;
-				case "DOUBLE-FLOAT", "SINGLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> 218;
-				case "RATIONAL", "RATIO" -> 225;
-				case "NUMBER", "REAL", "VECTOR", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING" -> 230;
-				case "LIST", "ARRAY", "SIMPLE-ARRAY" -> 235;
-				case "SEQUENCE", "ATOM" -> 240;
-				case "STANDARD-OBJECT", "STRUCTURE-OBJECT" -> 250;
-				default -> 220;
-			};
+			case TYPE -> {
+				if (closRegistry.findStructTag(java.util.Objects.requireNonNull(spec.name())) != null) {
+					// A defstruct specializer: deeper :include descendants dispatch first
+					// (the 100-199 band sits between classes and built-in types).
+					yield Math.max(100, 199 - closRegistry.structAncestorCount(spec.name()));
+				}
+				yield switch (spec.name()) {
+					case "NULL" -> 200;
+					case "KEYWORD", "UNSIGNED-BYTE" -> 210;
+					case "BOOLEAN" -> 212;
+					case "STANDARD-CHAR", "BASE-CHAR" -> 215;
+					case "DOUBLE-FLOAT", "SINGLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> 218;
+					case "RATIONAL", "RATIO" -> 225;
+					case "NUMBER", "REAL", "VECTOR", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING" -> 230;
+					case "LIST", "ARRAY", "SIMPLE-ARRAY" -> 235;
+					case "SEQUENCE", "ATOM" -> 240;
+					case "STANDARD-OBJECT", "STRUCTURE-OBJECT" -> 250;
+					default -> 220;
+				};
+			}
 			case DEFAULT -> 1000;
 		};
 	}
@@ -8191,6 +8672,17 @@ public final class LispMacroExpander {
 		if (placedDispatchers.add(generic)) {
 			dispatcherSlots.put(out.size(), generic);
 			out.add(LispNil.INSTANCE);
+		}
+		// A method expansion may REGISTER a further generic as a side effect (the
+		// instance-initialization protocol's shared-initialize), which needs a dispatcher
+		// slot of its own. Reserving it here is safe whatever the definition order: the
+		// dispatchers are generated after the whole walk, from the complete method set.
+		for (ClosRegistry.GenericInfo info : closRegistry.generics().values()) {
+			String name = ClosRegistry.normalize(info.name());
+			if (placedDispatchers.add(name)) {
+				dispatcherSlots.put(out.size(), name);
+				out.add(LispNil.INSTANCE);
+			}
 		}
 	}
 
@@ -11951,6 +12443,11 @@ public final class LispMacroExpander {
 			if (classInfo != null) {
 				return makeClassInstanceTest(value, classInfo.name(), closRegistry);
 			}
+			// A defstruct type: instance-of by tag membership over the struct and its
+			// :include descendants, the same test the struct predicate compiles to.
+			if (closRegistry.findStructTag(sym.name()) != null) {
+				return objIs(value, closRegistry.descendantStructTags(sym.name()));
+			}
 			// A user deftype: resolve its registered expansion and test against that
 			// (a zero-parameter (deftype name () 'spec), typically an (satisfies pred)).
 			LispVal deftypeExpansion = closRegistry.findDeftype(sym.name());
@@ -14078,8 +14575,11 @@ public final class LispMacroExpander {
 			spec = typeArg;
 		}
 		else {
-			throw new UnsupportedOperationException(
-					LispNames.TYPEP + " supports a literal (quoted) type specifier only: " + cons.print());
+			// A COMPUTED type specifier: dispatch on the runtime type NAME over every
+			// type name the registry knows plus the built-in names, each arm carrying
+			// the static test it would have compiled to (the runtime-slot-name dispatch
+			// precedent, .kb/clos.md). A name outside that set matches nothing.
+			return expandRuntimeTypep(parts.get(1), typeArg, closRegistry);
 		}
 		LispSymbol temp = new LispSymbol("__typep" + ROTATEF_COUNTER.getAndIncrement());
 		LispVal test;
@@ -14091,6 +14591,81 @@ public final class LispMacroExpander {
 			test = LispNil.INSTANCE;
 		}
 		return makeLet(temp.name(), parts.get(1), makeIf(test, LispTrue.INSTANCE, LispNil.INSTANCE));
+	}
+
+	/**
+	 * The built-in type names a runtime {@code typep} specifier can hold, each testable
+	 * by the shared static builder. Deliberately the atomic names only: a computed
+	 * specifier carrying a COMPOUND specifier (an {@code (integer 0 10)} list) is not
+	 * dispatched.
+	 */
+	private static final List<String> RUNTIME_TYPEP_BUILTINS = List.of("NULL", "BOOLEAN", "KEYWORD", "SYMBOL",
+			"INTEGER", "FIXNUM", "RATIONAL", "RATIO", "FLOAT", "REAL", "NUMBER", "CHARACTER", "STRING", "CONS", "LIST",
+			"ATOM", "VECTOR", "ARRAY", "SEQUENCE", "HASH-TABLE", "FUNCTION", "STANDARD-OBJECT", "STRUCTURE-OBJECT",
+			"UNSIGNED-BYTE", "T");
+
+	/**
+	 * Expands a {@code typep} whose type specifier is computed at run time: a
+	 * {@code cond} keyed on the specifier symbol, one arm per type the registry knows
+	 * (structs, classes and conditions -- matched by their canonical name, which is the
+	 * spelling a runtime specifier carries) plus one per built-in name, each arm holding
+	 * the very test the literal specifier would have compiled to. An unrecognized
+	 * specifier yields nil rather than signalling: this is the lite runtime-dispatch
+	 * model (see {@code .kb/clos.md}), not a real type table.
+	 */
+	private static LispVal expandRuntimeTypep(LispVal value, LispVal typeExpr, ClosRegistry closRegistry) {
+		String prefix = "__rtp" + ROTATEF_COUNTER.getAndIncrement();
+		LispSymbol v = new LispSymbol(prefix + "_v");
+		LispSymbol tn = new LispSymbol(prefix + "_t");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		for (LispLayout layout : closRegistry.layouts().values()) {
+			String typeName = layout.printName();
+			if (!seen.add(typeName)) {
+				continue;
+			}
+			LispVal test;
+			try {
+				test = makeTypeTest(v, new LispSymbol(typeName), closRegistry);
+			}
+			catch (IllegalArgumentException unsupported) {
+				continue;
+			}
+			clauses.add(listToCons(
+					List.of(nameMatchTest(tn, typeName), makeIf(test, LispTrue.INSTANCE, LispNil.INSTANCE))));
+		}
+		for (String builtin : RUNTIME_TYPEP_BUILTINS) {
+			LispVal test;
+			try {
+				test = makeTypeTest(v, new LispSymbol(builtin), closRegistry);
+			}
+			catch (IllegalArgumentException unsupported) {
+				continue;
+			}
+			clauses.add(
+					listToCons(List.of(nameMatchTest(tn, builtin), makeIf(test, LispTrue.INSTANCE, LispNil.INSTANCE))));
+		}
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return makeLet(v.name(), value, makeLet(tn.name(), typeExpr, listToCons(condParts)));
+	}
+
+	/**
+	 * The runtime-specifier match of one type name: {@code equal} against the canonical
+	 * spelling, and -- when the name is package-qualified -- also against its plain
+	 * member spelling, since a runtime specifier may carry either (symbols compare by
+	 * content on every backend).
+	 */
+	private static LispVal nameMatchTest(LispSymbol runtimeName, String typeName) {
+		LispVal exact = listToCons(List.of(new LispSymbol(LispNames.EQUAL), runtimeName, quoteOf(typeName)));
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(typeName);
+		if (qn == null) {
+			return exact;
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.OR), exact,
+				listToCons(List.of(new LispSymbol(LispNames.EQUAL), runtimeName, quoteOf(qn.member())))));
 	}
 
 	/** The immediate supertypes of each built-in type name ({@code subtypep} lattice). */
@@ -14651,6 +15226,18 @@ public final class LispMacroExpander {
 				// (x) is CL shorthand for (x nil): real-library idioms use it to reserve
 				// accumulators before the body fills them in.
 				out.add(listToCons(List.of(pair.car(), LispNil.INSTANCE)));
+				changed = true;
+			}
+			else if (entry instanceof LispCons pair && pair.car() instanceof LispCons quoted
+					&& quoted.car() instanceof LispSymbol qop && LispNames.QUOTE.equals(qop.name())) {
+				// A (let ((*package* X)) ...) rebinding: the resolver substitutes a
+				// *package* READ with its quoted read-time package, which also hits the
+				// binding-name slot. The binding is renamed to the PACKAGE_REBIND_VAR
+				// marker; the interpreter's evalLet additionally rebinds its runtime
+				// current package (so a macro-time (intern ...) under the binding homes
+				// where CL would -- ironclad's optimized-maker-name idiom), while the
+				// compilers treat it as a plain throwaway binding.
+				out.add(listToCons(List.of(new LispSymbol(PACKAGE_REBIND_VAR), pair.toList().get(1))));
 				changed = true;
 			}
 			else {

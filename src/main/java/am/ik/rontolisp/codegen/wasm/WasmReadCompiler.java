@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 
@@ -10,7 +11,9 @@ import am.ik.wasm.Instruction;
  * Compiles the {@code read} built-in. Invokes the {@code _read} runtime helper, passing
  * fd 0 (stdin) for {@code (read)} or the stream's WASI file descriptor for
  * {@code (read stream)}. It parses one S-expression into the runtime value
- * representation.
+ * representation. The full CL tail
+ * ({@code (read stream eof-error-p eof-value recursive-p)}) is rewritten first through
+ * {@link LispMacroExpander#expandReadCompat}.
  */
 final class WasmReadCompiler {
 
@@ -18,6 +21,11 @@ final class WasmReadCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		LispVal rewritten = LispMacroExpander.expandReadCompat(cons);
+		if (rewritten != null) {
+			WasmExprCompiler.compileExpr(rewritten, ctx);
+			return;
+		}
 		List<LispVal> parts = cons.toList();
 		if (parts.size() == 1) {
 			ctx.writer.write(Instruction.I32_CONST);

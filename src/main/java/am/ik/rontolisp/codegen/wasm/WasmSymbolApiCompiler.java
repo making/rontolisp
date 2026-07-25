@@ -81,8 +81,13 @@ final class WasmSymbolApiCompiler {
 	 */
 	static void compileFindSymbol(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (cons.toList().size() == 3) {
-			throw new UnsupportedOperationException(
-					LispNames.FIND_SYMBOL + " with a package argument is not supported");
+			LispVal inPackage = LispMacroExpander.expandFindSymbolInPackage(cons);
+			if (inPackage == null) {
+				throw new UnsupportedOperationException(LispNames.FIND_SYMBOL
+						+ " needs a literal package designator in compiled mode: " + cons.print());
+			}
+			WasmExprCompiler.compileExpr(inPackage, ctx);
+			return;
 		}
 		List<LispVal> parts = requireArgs(cons, LispNames.FIND_SYMBOL);
 		if (!(parts.get(1) instanceof LispString str)) {

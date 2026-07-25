@@ -18,6 +18,19 @@ The `.todo/054` Phase-2 read-layer additions, implemented entirely in the fronte
 
 ci-spec cases: `reader-block-comments`, `reader-feature-conditionals`, `reader-per-backend-features` (first use of `expectedByBackend`), `reader-features-variable`. Unit pins: the feature-conditional block in `LispReaderTest`, `loadedFilesAreReadWithTheGivenFeatures` in `LoadInlinerTest`.
 
+`#N@(...)` (added for ironclad, 2026-07-25): a vector literal whose element
+WIDTH is dropped — `#32@(#x428A2F98 ...)` reads exactly like `#(...)`. In
+ironclad this syntax comes from a `set-dispatch-macro-character` handler
+returning a `(make-array n :element-type '(unsigned-byte N) :initial-contents
+'(...))` form, and rontolisp arrays are generic, so the literal vector IS that
+form's value. Native in `LispLexer` because a user dispatch macro cannot extend
+the Java-side reader: `set-dispatch-macro-character` is an accepted no-op
+returning `t`, `copy-readtable` a no-op returning nil, and `*readtable*` a
+variable seeded nil (`LispNames.COPY_READTABLE` and friends) — enough for the
+`(defparameter *lib-readtable* (copy-readtable nil))` header idiom to load. Any
+OTHER user dispatch character is therefore silently not honored: its literals hit
+the ordinary lexer, which is a read error unless they happen to parse.
+
 Symbol single-escapes (added for parse-number, 2026-07-05): a backslash in a
 symbol token makes the NEXT character part of the name verbatim -- even a
 terminating one -- and is itself dropped (`LispLexer.readSymbol`), so locals

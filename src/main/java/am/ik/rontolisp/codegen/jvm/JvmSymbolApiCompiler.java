@@ -95,8 +95,13 @@ final class JvmSymbolApiCompiler {
 	 */
 	static void compileFindSymbol(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		if (cons.toList().size() == 3) {
-			throw new UnsupportedOperationException(
-					LispNames.FIND_SYMBOL + " with a package argument is not supported");
+			LispVal inPackage = LispMacroExpander.expandFindSymbolInPackage(cons);
+			if (inPackage == null) {
+				throw new UnsupportedOperationException(LispNames.FIND_SYMBOL
+						+ " needs a literal package designator in compiled mode: " + cons.print());
+			}
+			JvmExprCompiler.compileExpr(inPackage, ctx, className);
+			return;
 		}
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.FIND_SYMBOL);
 		if (!(parts.get(1) instanceof LispString str)) {

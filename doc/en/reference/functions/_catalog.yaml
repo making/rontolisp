@@ -96,6 +96,7 @@ categories:
       - { slug: streamp, name: "streamp" }
       - { slug: subtypep, name: "subtypep" }
       - { slug: class-of, name: "class-of" }
+      - { slug: type-of, name: "type-of" }
       - { slug: pathnamep, name: "pathnamep" }
   - title: "Output"
     functions:
@@ -279,6 +280,8 @@ categories:
       - { slug: read-char, name: "read-char" }
       - { slug: read-from-string, name: "read-from-string" }
       - { slug: parse-integer, name: "parse-integer" }
+      - { slug: copy-readtable, name: "copy-readtable" }
+      - { slug: set-dispatch-macro-character, name: "set-dispatch-macro-character" }
       - { slug: eval, name: "eval" }
       - { slug: load, name: "load" }
       - { slug: require, name: "require" }
@@ -289,7 +292,9 @@ categories:
       - { slug: make-symbol, name: "make-symbol" }
       - { slug: intern, name: "intern" }
       - { slug: find-symbol, name: "find-symbol" }
+      - { slug: find-package, name: "find-package" }
       - { slug: symbol-name, name: "symbol-name" }
+      - { slug: symbol-package, name: "symbol-package" }
       - { slug: symbol-value, name: "symbol-value" }
       - { slug: boundp, name: "boundp" }
       - { slug: fboundp, name: "fboundp" }

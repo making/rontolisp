@@ -53,7 +53,8 @@ public final class UserMacroExpander {
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFSETF))
 				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)
-				&& program.stream().noneMatch(UserMacroExpander::usesReadEvalMarker)) {
+				&& program.stream().noneMatch(UserMacroExpander::usesReadEvalMarker)
+				&& program.stream().noneMatch(UserMacroExpander::isParameterizedDeftype)) {
 			return program;
 		}
 		LispEvaluator macroEval = new LispEvaluator(new PrintStream(OutputStream.nullOutputStream()));
@@ -87,6 +88,22 @@ public final class UserMacroExpander {
 				// form: the generated macro is expanded at its call sites like any other
 				// user macro (the compilers never see define-modify-macro).
 				macroEval.evalResolved(LispMacroExpander.expandDefineModifyMacro((LispCons) resolved));
+				continue;
+			}
+			if (isOperator(resolved, LispNames.DEFTYPE) && resolved instanceof LispCons deftype) {
+				// A PARAMETERIZED deftype is folded here, the one pass with an evaluator:
+				// its body runs with each parameter defaulted (to * unless the lambda
+				// list says otherwise) and the result replaces the form as the equivalent
+				// zero-parameter deftype -- the shape the compilers' own registry pass
+				// understands, so a bare use of the type name (ironclad's
+				// simple-octet-vector in an etypecase) resolves on every backend.
+				LispVal folded = macroEval.foldDeftype(deftype);
+				if (folded != null && deftype.toList().get(1) instanceof LispSymbol typeName) {
+					result.add(properList(List.of(new LispSymbol(LispNames.DEFTYPE), typeName, LispNil.INSTANCE,
+							properList(List.of(new LispSymbol(LispNames.QUOTE), folded)))));
+					continue;
+				}
+				result.add(form);
 				continue;
 			}
 			if (isOperator(resolved, LispNames.DEFINE_SETF_EXPANDER) || isOperator(resolved, LispNames.DEFSETF)) {
@@ -494,6 +511,16 @@ public final class UserMacroExpander {
 	// A macrolet anywhere (top level or nested in a body) forces the pass to run so its
 	// local macros are expanded away; the compilers have no macrolet support of their
 	// own.
+	/**
+	 * Whether the top-level form is a {@code deftype} with a non-empty lambda list -- the
+	 * shape folded into a zero-parameter deftype by the loop above, which also activates
+	 * the pass.
+	 */
+	private static boolean isParameterizedDeftype(LispVal form) {
+		return isOperator(form, LispNames.DEFTYPE) && form instanceof LispCons cons && cons.isProperList()
+				&& cons.toList().size() >= 4 && cons.toList().get(2) instanceof LispCons;
+	}
+
 	private static boolean usesMacrolet(LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return false;
@@ -723,7 +750,11 @@ public final class UserMacroExpander {
 					// (the
 					// only form the compilers can support: the macro table does not exist
 					// at runtime). A computed argument is left as-is and fails naturally.
-					if (parts.size() == 2 && parts.get(1) instanceof LispCons quoted
+					// The optional second argument is CL's macro-expansion environment,
+					// accepted and ignored (there is none to consult), so the fold
+					// applies
+					// to both call shapes.
+					if ((parts.size() == 2 || parts.size() == 3) && parts.get(1) instanceof LispCons quoted
 							&& quoted.car() instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name())
 							&& quoted.cdr() instanceof LispCons quotedCdr) {
 						LispVal target = quotedCdr.car();

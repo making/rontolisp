@@ -1,61 +1,70 @@
 # ironclad: real loading of the SCRAM-SHA-256 subsystem slice
 
-Parent: `.todo/115` (cl-postgres; ironclad is reached only from scram.lisp:
-sha256 / hmac / pbkdf2). Design line: `.todo/147` (real libraries over shims).
-This re-opens the "real loading judged INFEASIBLE" verdict recorded when the
-dependency grind closed, because both grounds for it have weakened:
+Parent: `.todo/115` (cl-postgres). Design line: `.todo/147` (real libraries over
+shims).
 
-- **The executable `.asd`** (defclass on cl-source-file, a defmacro generating
-  defsystems, uiop at parse time) blocked *parsing*, not *loading*: the
-  BuiltinSystems mechanism (usocket precedent) can hand-author the subsystem
-  file lists and never read `ironclad.asd` at all.
-- **The 32-bit working state** was the WASM blocker; the boxed exact-integer
-  path (`.kb/wasm-bignum.md`) landed and md5 -- the same arithmetic class --
-  is REAL on all four backends.
+## Status: the slice is DONE (2026-07-25)
 
-## The needed slice (ironclad v0.61, already in ~/.rontolisp/quicklisp)
+The `ironclad/core` + `digest/sha256` + `mac/hmac` + `kdf/pkcs5` + `kdf/kdf`
+slice loads from ironclad v0.61's REAL sources and reproduces the FIPS 180-2,
+RFC 4231 and RFC 7677 vectors byte-identically on ALL FOUR backends
+(`IroncladE2eTest`; sources vendored under `src/test/resources/ironclad`).
+Mechanics, the deliberate load-order/scope deviations and the mechanism that
+made an executable `.asd` loadable at all: `.kb/asdf.md` (the `AsdOverrides`
+replacement-`.asd` tier + the ironclad slice section). The features it forced
+are recorded in `.kb/defstruct.md` (`:include`, `:type (vector ...)`),
+`.kb/clos.md` (the instance-initialization protocol, keyword congruence,
+`call-next-method` rest forwarding, ambiguous slot writes, runtime `typep`),
+`.kb/symbol-runtime-api.md` (`symbol-name` drops the qualifier; `find-package`
+/ `symbol-package` / `type-of` / 2-argument `find-symbol`; quoted lone symbols
+resolve) and `.kb/reader-features.md` (`#N@(...)`, readtable no-ops).
 
-`ironclad/core` (minus opt/, doc/, static files) + `digests/sha256` +
-`macs/hmac` + `kdf/pbkdf2`, concretely:
+`.todo/115` can now take the real dependency for MOST of what it needs -- but
+NOT all of it. Verified by grepping `scram.lisp` (2026-07-25): of the nine
+`ironclad:` names it calls, six are in this slice (`digest-sequence`,
+`make-hmac`, `update-hmac`, `hmac-digest`, `ascii-string-to-byte-array`,
+`hex-string-to-byte-array`) and THREE are not:
 
-    src/package.lisp conditions.lisp generic.lisp macro-utils.lisp util.lisp
-    common.lisp digests/digest.lisp digests/sha256.lisp
-    macs/mac.lisp macs/hmac.lisp kdf/kdf.lisp kdf/hmac.lisp kdf/pkcs5.lisp
+- `pbkdf2-hash-password` (`kdf/password-hash.lisp`, 61 lines). Its body is the
+  one-liner `(pbkdf2-derive-key digest password salt iterations
+  (digest-length digest))`, all of which this slice has. The file's only
+  out-of-slice reference is `make-random-salt` (prng/), and only as the DEFAULT
+  of its `:salt` keyword -- cl-postgres passes an explicit salt, so the default
+  never evaluates on the interpreter. The compile paths are eager, so a
+  `make-random-salt` stub (or a prng slice) is needed there.
+- `integer-to-octets` / `octets-to-integer` (`public-key/public-key.lisp`).
+  Both are self-contained `ldb`/`loop` byte<->integer converters -- no
+  arbitrary-precision math, no elliptic curves; they merely LIVE in the 3,065-line
+  public-key file. Loading that file whole is not viable, so the route is a
+  `ShimLibraries.leafModuleForms` substitution for `public-key.lisp` exposing
+  just these two (the jzon numeric-leaf precedent).
 
-~3-4k lines. Probed 2026-07-25:
+Neither is on the critical path for the first cl-postgres milestones: SCRAM is
+the LAST auth method in `.todo/115`'s M5 order (trust -> password -> md5 ->
+SCRAM), and trust auth uses no digests at all.
 
-- `dotimes-unrolled` (the one `symbol-macrolet` + `&environment` +
-  `trivial-macroexpand-all` user in macro-utils.lisp) is used ONLY by ciphers
-  and non-SHA-2 digests -- nothing in the slice expands it. Its DEFINITION
-  still has to load: needs `defmacro` with `&environment` accepted (can be
-  ignored) and `loop ... collect ... finally (return ...)`.
-- `bordeaux-threads` (a `:depends-on` of ironclad/core) has zero call sites in
-  the slice (it serves prng/); shim it as an empty leaf module
-  (`ShimLibraries.leafModuleForms` precedent from the jzon numeric shims).
-  `#+sbcl sb-rotate-byte` / `sb-posix` drop out via features.
-- CLOS surface: generic.lisp (~40 defgenerics) + digest.lisp (defclass
-  digest hierarchy, defmethod dispatch, `make-instance` via `make-digest`) --
-  inside the post-todo-116/jzon CLOS subset on paper; the register machinery
-  in common.lisp (`define-digest-registers`, struct-backed state,
-  `(unsigned-byte 32)` arrays, `rotate-byte` portable fallback) is the part
-  most likely to hit a gap.
+## What is left
 
-## Plan
-
-1. Interpreter first: BuiltinSystems entry for `ironclad/digest/sha256` (+
-   mac/kdf slices), leaf-module shim for bordeaux-threads, then grind file by
-   file (the md5/cl-ppcre workflow). Gate: `(ironclad:digest-sequence :sha256
-   ...)` against a NIST vector, then `ironclad:make-hmac` + RFC 4231 vectors,
-   then `ironclad:derive-key` PBKDF2 against RFC 7677's SCRAM test vector.
-2. Compile paths + WASM after the interpreter is green (same order as md5).
-3. E2E: `IroncladE2eTest` via AsdfLibraryE2eSupport + the asdf-systems guide
-   rows + an examples/asdf demo (the library-integration checklist).
+1. **`concatenate` with a non-string result type.** `(concatenate '(vector
+   (unsigned-byte 8)) a b)` / `(concatenate 'list ...)` signal "concatenate
+   supports only the string result type" on every backend. This is a general CL
+   gap, not an ironclad one; it is the single reason `kdf/hmac.lisp` (HKDF,
+   RFC 5869) is excluded from the slice, and it also blocks `#'concatenate` as a
+   first-class value (a `BuiltinFunctionWrappers` entry needs a working
+   multi-type `concatenate` first). Fixing it re-enables `ironclad/kdf/hmac` by
+   adding the file back to `ironclad-slice.asd` -- nothing else.
+2. **Struct predicate vs later `:include` children.** `(base-p child)` is `NIL`
+   when the child's defstruct follows the parent's, because the predicate bakes
+   the descendant tags known at its own definition site. `typep` is correct. The
+   two candidate fixes and why neither was taken are written into
+   `.kb/defstruct.md`; `LispEvaluatorTest#defstructIncludeInheritsSlotsAndTypeTests`
+   pins the current answer, so that test is the thing to change.
+3. **Widening the slice** (ciphers / public-key / prng / the other digests) is
+   NOT planned: nothing needs it. The next real consumer decides. `dotimes-unrolled`
+   users stay out until then -- its DEFINITION loads, but no expansion of it does
+   (`symbol-macrolet` is still unsupported).
 
 ## Non-goals
 
-- The full ironclad aggregate system (ciphers, aead, public-key, prng): the
-  cl-postgres gate needs only the slice above. `dotimes-unrolled` users stay
-  out of scope until something needs them.
-- Replacing the frozen `cl-postgres-wip` M2 JDK shim decision retroactively;
-  if this lands, scram.lisp simply gets the real dependency when `.todo/115`
-  resumes.
+- The full ironclad aggregate system.
+- Replacing the frozen `cl-postgres-wip` M2 JDK shim decision retroactively.

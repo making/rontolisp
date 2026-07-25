@@ -125,6 +125,18 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.MACRO_FUNCTION, """
 				(defun macro-function (symbol &optional environment) nil)
 				""");
+		// A compiled image has no macro table, so a form built at RUNTIME is already its
+		// own expansion: these identity defuns are what let a portable code walker
+		// (ironclad's trivial-macroexpand-all) compile. A literal quoted argument never
+		// reaches them -- UserMacroExpander folds it to the real expansion at compile
+		// time -- and the interpreter defines the real functions eagerly, so the prelude
+		// only ever serves the compiled backends.
+		SOURCES.put(LispNames.MACROEXPAND, """
+				(defun macroexpand (form &optional environment) (values form nil))
+				""");
+		SOURCES.put(LispNames.MACROEXPAND_1, """
+				(defun macroexpand-1 (form &optional environment) (values form nil))
+				""");
 		SOURCES.put(LispNames.COMPILED_FUNCTION_P, """
 				(defun compiled-function-p (object) nil)
 				""");
@@ -134,8 +146,41 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.LIST_ALL_PACKAGES, """
 				(defun list-all-packages () nil)
 				""");
+		// A "package" is the upcased canonical package name as a keyword (there are no
+		// package objects), so symbol-package reads the qualifier off the symbol's
+		// stored spelling: prin1-to-string keeps it, unlike symbol-name. The
+		// interpreter overrides this with the registry-backed version (which
+		// distinguishes cl from cl-user); the compiled backends have no registry at
+		// runtime, so every bare symbol answers CL-USER here.
+		SOURCES.put(LispNames.SYMBOL_PACKAGE, """
+				(defun symbol-package (symbol)
+				  (let* ((s (prin1-to-string symbol))
+				         (n (length s)))
+				    (cond ((= n 0) nil)
+				          ((char= (char s 0) #\\:) :keyword)
+				          ((and (> n 1) (char= (char s 0) #\\#) (char= (char s 1) #\\:)) nil)
+				          (t (let ((idx (position #\\: s)))
+				               (if idx
+				                   (intern (subseq s 0 idx) :keyword)
+				                   :cl-user))))))
+				""");
 		SOURCES.put(LispNames.FIND_CLASS, """
 				(defun find-class (symbol &optional errorp environment) nil)
+				""");
+		// type-of over class-of: class-of yields a struct/CLOS instance's TAG symbol
+		// (%struct-NAME / %class-NAME), and type-of is the type NAME -- so a digest
+		// object's type is usable as the digest-name designator it came from. The tag
+		// spelling is read with prin1-to-string, since symbol-name would drop the
+		// package qualifier a canonical type name carries. Everything else answers what
+		// class-of does (a built-in type name, or T).
+		SOURCES.put(LispNames.TYPE_OF, """
+				(defun type-of (object)
+				  (let* ((c (class-of object))
+				         (s (prin1-to-string c))
+				         (n (length s)))
+				    (cond ((and (> n 8) (string= (subseq s 0 8) "%struct-")) (intern (subseq s 8)))
+				          ((and (> n 7) (string= (subseq s 0 7) "%class-")) (intern (subseq s 7)))
+				          (t c))))
 				""");
 		SOURCES.put(LispNames.GET, """
 				(defvar %symbol-plists nil)

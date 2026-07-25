@@ -1,5 +1,65 @@
 # Runtime symbol API (`symbol-name`/`intern`/`find-symbol`/`make-symbol`/`boundp`/`fboundp`/`symbol-value`)
 
+## `symbol-name` drops the package qualifier; the package API (todo-173)
+
+**`symbol-name` (and the string-designator coercions `string`/`string=`/
+`string-equal`) return the MEMBER name**: `(symbol-name 'foo::bar)` is `"BAR"` —
+the qualifier says where the symbol lives, it is not part of its name
+(`LispSymbol.memberName`). `princ`/`~A`/`display` still keep the qualifier
+(`LispSymbol.displayName` strips only the `:`/`#:` markers), and `prin1` keeps
+everything. This is CL's answer, and it is what makes name surgery work: a
+library that does `(intern (concatenate 'string (symbol-name x) "-SUFFIX"))`
+under `(in-package p)` would otherwise re-qualify an already-qualified spelling
+into `P::P:X-SUFFIX` (ironclad's `optimized-maker-name`).
+
+**A "package" at runtime is the UPCASED canonical package name as a keyword** —
+there are no package objects, and `eq` compares symbols by content, so
+`find-package` and `symbol-package` agree by construction and
+`(eq (symbol-package s) (find-package :p))` works (ironclad's `massage-symbol`).
+Upcased because the compile paths' spelling comes from reader-upcased literals.
+- `find-package`: nil for an unknown package. A LITERAL designator is folded by
+  `PackageResolver.resolveCons` (the one pass with the registry), so it answers
+  identically on all four backends; a computed designator stays a runtime call,
+  which only the interpreter serves.
+- `symbol-package`: registry-backed on the interpreter; a backend-neutral
+  `LispPreludeLibrary` defun elsewhere, which reads the qualifier off
+  `prin1-to-string` and therefore cannot tell `cl` from `cl-user` (both answer
+  `:CL-USER` on the compiled backends).
+- `type-of`: also a prelude defun, over `class-of` — it strips the
+  `%struct-`/`%class-` tag prefix to yield the type NAME, so a digest object's
+  type is usable as the digest-name designator it came from.
+- **2-argument `find-symbol`**: interpreter = registry-backed ("interned" means
+  the package owns/exports/imports the verbatim name), returning the canonical
+  spelling so plist and dispatch lookups keyed by a resolver-canonicalized quote
+  match. On the compiled backends a symbol IS its canonical spelling, so
+  `expandFindSymbolInPackage` BUILDS that spelling: `(intern (concatenate 'string
+  "PKG:" name))` for a literal package designator, or the same over
+  `(string PKG)` when the designator is computed (a local holding a package
+  value). Two deviations there: an unknown name yields a symbol instead of nil
+  (harmless where find-symbol feeds a plist lookup that then answers nil anyway),
+  and the qualifier is the single-colon EXTERNAL spelling — right for a library's
+  exported API, wrong for an internal symbol. A bare non-keyword symbol in the
+  package-argument position is a VARIABLE REFERENCE, never a designator literal:
+  reading its name as the package is how this once built the doubly-qualified
+  `IRONCLAD::IRONCLAD:SHA256`.
+- **A quoted LONE SYMBOL is package-resolved in ordinary code**, not only inside
+  a defmacro template: CL interns it in the current package at read time, so a
+  `'%indicator` in a defun body must name the same canonical symbol a template in
+  the same package stores (ironclad's `defdigest` writes plist entries under
+  template-resolved indicators that `digestp` reads back with a body quote).
+  Quoted LISTS stay untouched, and the `wasm-export`/`wasm-import` option tail is
+  exempt (`inHostFacingData`) because its quoted values are host-facing data — an
+  export field name must stay `tick`, not `gl::tick`.
+- **`(let ((*package* X)) ...)`**: the resolver substitutes a `*package*` READ
+  with its quoted read-time package, which also hits a binding-NAME slot, so
+  `normalizeBindingList` renames the binding to the `PACKAGE_REBIND_VAR` marker.
+  The interpreter's `evalLet` additionally swaps the resolver's current package
+  for the binding's extent, so a macro-time `(intern ...)` under it homes where CL
+  would; the compilers treat it as a plain throwaway binding.
+
+`unintern`, `export` and the rest of the runtime package-mutation API remain in
+`.todo/038`.
+
 Seven CL functions (`PackageRegistry.CL_FUNCTIONS`, cl function count 210 -> 217) in all three backends. rontolisp symbols compare by name (no intern table), which shapes every deviation: `symbol-name` returns the name **without the package marker** — a keyword's leading `:` and a gensym's `#:` are stripped (`LispSymbol.displayName`, shared with `princ`/`~A`/`string`; `prin1`/`print` keep the stored spelling) — the STORED spelling verbatim, which under the uppercase-canonical model (`.kb/reader-case-upcase.md`) is upcased for every symbol read from source — user AND standard (`(symbol-name 'foo)` = `"FOO"`, `(symbol-name 'car)` = `"CAR"`, the CL answer; there is no lowercase-standard-name deviation); `intern`/`find-symbol` take the name VERBATIM (`(find-symbol "car")` = `NIL` because the standard symbol is named `"CAR"`; `(intern "TIME")` = `TIME`, `(intern "time")` = the distinct `time`). `intern` (1-arg) interns into the **current package** on the interpreter (`PackageResolver.internSpelling`: an accessible symbol keeps its canonical home spelling, an unknown name is homed verbatim into the resolver's `in-package` state — the LispEvaluator override; the Environment converter and the compiled backends stay package-blind), `(intern name :keyword)` builds a keyword, any other package argument is a hard error (as is find-symbol's); `make-symbol` prepends the `#:` uninterned marker (same string twice = `eq` symbols, unlike CL); `find-symbol` returns the symbol only when the (verbatim) name is "known".
 
 **Interpreter**: the pure converters live in `Environment` (next to gensym), but `intern` is overridden in `LispEvaluator.registerEval` (it needs the evaluator's `packageResolver` for the current package -- the Environment version stays as the resolver-less fallback); `boundp`/`symbol-value`/`fboundp`/`find-symbol` live in `LispEvaluator.registerEval` because they capture `globalEnv` (variable lookups see GLOBAL bindings only — CL's dynamic-only semantics; `Environment.lookupOrNull` was added for this) and `userMacros`/`SPECIAL_OPERATORS` (fboundp is t for macros, special forms and car/cdr compositions, like CL). t/nil/keywords are self-bound in boundp/symbol-value on every backend.

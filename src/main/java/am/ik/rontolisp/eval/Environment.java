@@ -235,6 +235,9 @@ public final class Environment implements Scope {
 		env.define(LispNames.ARRAY_DIMENSION_LIMIT, new LispInteger(2147483639L));
 		// Accepted and ignored: the printer does no circle detection.
 		env.define(LispNames.PRINT_CIRCLE_VAR, LispNil.INSTANCE);
+		// Accepted and ignored: the reader is not readtable-driven, a "readtable" is an
+		// opaque nil token (see LispNames.COPY_READTABLE).
+		env.define(LispNames.READTABLE_VAR, LispNil.INSTANCE);
 		// The interpreter's *features* is a real global variable (the compile backends
 		// substitute the symbol at read time instead; see reader.Features).
 		LispVal featureList = LispNil.INSTANCE;
@@ -2195,14 +2198,14 @@ public final class Environment implements Scope {
 			}
 			return new LispSymbol("#:" + prefix + gensymCounter.incrementAndGet());
 		}));
-		// symbol-name returns the name without the package marker (the same spelling
-		// princ prints): rontolisp symbols are case-preserving lowercase (no CL
-		// upcase); a keyword's leading ':' and a gensym's "#:" are markers, not part
-		// of the name.
+		// symbol-name returns the CL name: a package qualifier (foo::bar -> "BAR") is
+		// where the symbol lives, not part of its name, and a keyword's leading ':'
+		// and a gensym's "#:" are markers, not part of the name. princ keeps the
+		// qualifier; symbol-name must not (LispSymbol.memberName).
 		env.defineFunction(LispNames.SYMBOL_NAME, new LispFunction(LispNames.SYMBOL_NAME, args -> {
 			requireArgCount(LispNames.SYMBOL_NAME, args, 1);
 			return switch (args.get(0)) {
-				case LispSymbol sym -> new LispString(sym.display());
+				case LispSymbol sym -> new LispString(LispSymbol.memberName(sym.name()));
 				case LispTrue ignored -> new LispString("t");
 				case LispNil ignored -> new LispString("nil");
 				default -> throw new LispEvalException(
@@ -2217,10 +2220,11 @@ public final class Environment implements Scope {
 			return switch (args.get(0)) {
 				case LispString s -> s;
 				// Coercing a symbol yields its name; a keyword's ':' and a gensym's
-				// "#:" are markers, not part of the name, so (string :html) is "html"
+				// "#:" are markers, and a package qualifier is not part of the name,
+				// so (string :html) is "html" and (string 'pkg::sym) is "sym"
 				// (matches CL, and is what cl-who's maybe-downcase relies on to emit
 				// <html> not <:html>). Same spelling as symbol-name.
-				case LispSymbol sym -> new LispString(sym.display());
+				case LispSymbol sym -> new LispString(LispSymbol.memberName(sym.name()));
 				case LispChar c -> new LispString(new String(Character.toChars(c.codePoint())));
 				case LispTrue ignored -> new LispString("t");
 				case LispNil ignored -> new LispString("nil");
@@ -2560,9 +2564,9 @@ public final class Environment implements Scope {
 	private static String stringDesignator(String name, LispVal val) {
 		return switch (val) {
 			case LispString str -> str.value();
-			// The symbol-name spelling: a keyword's ':' and a gensym's "#:" are
-			// package markers, not part of the name.
-			case LispSymbol sym -> sym.display();
+			// The symbol-name spelling: markers and package qualifiers are not part
+			// of the name.
+			case LispSymbol sym -> LispSymbol.memberName(sym.name());
 			case LispChar c -> new String(Character.toChars(c.codePoint()));
 			default -> throw new LispEvalException(name + " expects a string designator, got: " + val.print());
 		};

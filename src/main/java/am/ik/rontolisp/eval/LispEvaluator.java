@@ -363,15 +363,19 @@ public final class LispEvaluator {
 		// macroexpand-1/macroexpand live on the evaluator (not Environment) because they
 		// need the user macro table. On the compile path, calls with a literal quoted
 		// argument are folded to their expansion by UserMacroExpander.
+		// The optional second argument is CL's macro-expansion environment; there is no
+		// lexical macro environment to consult (macrolet is expanded away before any
+		// body runs), so it is accepted and ignored -- which is what lets a portable
+		// code walker's (macroexpand form env) load on every backend.
 		this.globalEnv.defineFunction(LispNames.MACROEXPAND_1, new LispFunction(LispNames.MACROEXPAND_1, args -> {
-			if (args.size() != 1) {
-				throw new LispEvalException(LispNames.MACROEXPAND_1 + " expects 1 argument, got " + args.size());
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.MACROEXPAND_1 + " expects 1 or 2 arguments, got " + args.size());
 			}
 			return macroexpand1(args.get(0));
 		}));
 		this.globalEnv.defineFunction(LispNames.MACROEXPAND, new LispFunction(LispNames.MACROEXPAND, args -> {
-			if (args.size() != 1) {
-				throw new LispEvalException(LispNames.MACROEXPAND + " expects 1 argument, got " + args.size());
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.MACROEXPAND + " expects 1 or 2 arguments, got " + args.size());
 			}
 			return macroexpand(args.get(0));
 		}));
@@ -613,7 +617,18 @@ public final class LispEvaluator {
 		// fold a literal call against their compile-time view (cl symbols + user defuns).
 		this.globalEnv.defineFunction(LispNames.FIND_SYMBOL, new LispFunction(LispNames.FIND_SYMBOL, args -> {
 			if (args.size() == 2) {
-				throw new LispEvalException(LispNames.FIND_SYMBOL + " with a package argument is not supported");
+				// (find-symbol name pkg): "interned in the package" is judged by the
+				// package registry (owns/exports/imports) -- no intern table exists.
+				// The result keeps the canonical qualified spelling, so plist/dispatch
+				// lookups keyed by a resolver-canonicalized quote match (ironclad's
+				// massage-symbol -> (get sym '%digest-length) chain).
+				if (!(args.get(0) instanceof LispString str)) {
+					throw new LispEvalException(
+							LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
+				}
+				String spelling = this.packageResolver
+					.memberSpelling(packageDesignator(LispNames.FIND_SYMBOL, args.get(1)), str.value());
+				return spelling == null ? LispNil.INSTANCE : new LispSymbol(spelling);
 			}
 			requireSingleArg(LispNames.FIND_SYMBOL, args);
 			if (!(args.get(0) instanceof LispString str)) {
@@ -647,6 +662,31 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
 			}
 			return new LispSymbol(this.packageResolver.internSpelling(str.value()));
+		}));
+		// find-package: rontolisp has no package objects, so a "package" at runtime is
+		// the UPCASED canonical package name as a keyword -- eq-comparable by name, and
+		// upcased so the compile paths' spelling (which comes from reader-upcased
+		// literals) agrees. Returns nil for an unknown package, like CL.
+		this.globalEnv.defineFunction(LispNames.FIND_PACKAGE, new LispFunction(LispNames.FIND_PACKAGE, args -> {
+			requireSingleArg(LispNames.FIND_PACKAGE, args);
+			String found = this.packageResolver.findPackageName(packageDesignator(LispNames.FIND_PACKAGE, args.get(0)));
+			return found == null ? LispNil.INSTANCE : packageKeyword(found);
+		}));
+		// symbol-package: the same keyword shape find-package yields, so the two are
+		// eq-comparable (ironclad's massage-symbol pattern); nil for an uninterned (#:)
+		// symbol. Overrides the backend-neutral prelude defun, which cannot tell cl
+		// from cl-user without the registry.
+		this.globalEnv.defineFunction(LispNames.SYMBOL_PACKAGE, new LispFunction(LispNames.SYMBOL_PACKAGE, args -> {
+			requireSingleArg(LispNames.SYMBOL_PACKAGE, args);
+			String name = switch (args.get(0)) {
+				case LispSymbol sym -> sym.name();
+				case LispTrue ignored -> "T";
+				case LispNil ignored -> "NIL";
+				default -> throw new LispEvalException(
+						LispNames.SYMBOL_PACKAGE + " expects a symbol, got " + args.get(0).print());
+			};
+			String pkg = this.packageResolver.symbolPackageName(name);
+			return pkg == null ? LispNil.INSTANCE : packageKeyword(pkg);
 		}));
 		// error / signal / warn are real CL functions (cl-base64 signals via
 		// (apply #'error args)), so they get function values that rebuild the literal
@@ -2030,7 +2070,7 @@ public final class LispEvaluator {
 				case LispNames.PUSHNEW:
 					return eval(LispMacroExpander.expandPushnew(cons), env);
 				case LispNames.DEFTYPE:
-					return eval(LispMacroExpander.expandDeftype(cons, this.closRegistry), env);
+					return evalDeftype(cons);
 				case LispNames.DEFINE_CONDITION:
 					// A condition type is an ordinary CLOS-subset class; the :report form
 					// is registered for the error/signal/warn message building.
@@ -2052,6 +2092,10 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandMakeCondition(cons, this.closRegistry), env);
 				case LispNames.DOCUMENTATION:
 					return eval(LispMacroExpander.expandDocumentation(cons), env);
+				case LispNames.COPY_READTABLE:
+					return eval(LispMacroExpander.expandCopyReadtable(cons), env);
+				case LispNames.SET_DISPATCH_MACRO_CHARACTER:
+					return eval(LispMacroExpander.expandSetDispatchMacroCharacter(cons), env);
 				case LispNames.COMPLEX:
 					return eval(LispMacroExpander.expandComplexLite(cons), env);
 				case LispNames.NE:
@@ -2061,6 +2105,16 @@ public final class LispEvaluator {
 					// return value; the Environment function remains for first-class
 					// use (#'parse-integer).
 					return eval(LispMacroExpander.expandParseInteger(cons), env);
+				case LispNames.READ: {
+					// The full CL tail (eof-error-p / eof-value / recursive-p) lowers to
+					// the 0/1-argument call the Environment function implements, so the
+					// same shape loads on every backend.
+					LispVal readCompat = LispMacroExpander.expandReadCompat(cons);
+					if (readCompat != null) {
+						return eval(readCompat, env);
+					}
+					break;
+				}
 				case LispNames.READ_SEQUENCE:
 					return eval(LispMacroExpander.expandReadSequence(cons), env);
 				case LispNames.WRITE_SEQUENCE:
@@ -2115,9 +2169,9 @@ public final class LispEvaluator {
 				case LispNames.LOCALLY:
 					return eval(LispMacroExpander.expandLocally(cons), env);
 				case LispNames.FLET:
-					return eval(LispMacroExpander.expandFlet(cons), env);
+					return eval(LispMacroExpander.expandFlet(preExpandLocalMacros(cons)), env);
 				case LispNames.LABELS:
-					return eval(LispMacroExpander.expandLabels(cons), env);
+					return eval(LispMacroExpander.expandLabels(preExpandLocalMacros(cons)), env);
 				case LispNames.MULTIPLE_VALUE_BIND:
 					return eval(LispMacroExpander.expandMultipleValueBind(cons), env);
 				case LispNames.MULTIPLE_VALUE_LIST:
@@ -2384,6 +2438,17 @@ public final class LispEvaluator {
 
 	private LispVal evalDefun(LispCons cons, Environment env) {
 		checkAwaitPlacement(cons);
+		if (treeContainsMacrolet(cons)) {
+			// A body carrying a macrolet is pre-expanded at DEFINITION time, like CL's
+			// compile-time expansion: the local macros' expander functions run under the
+			// defining package (a macro-time (intern ...) must home there, not in the
+			// caller's package -- ironclad's finalize-registers name synthesis), and the
+			// baked body no longer needs the local macros at call time.
+			LispVal expanded = UserMacroExpander.expandAll(cons, this);
+			if (expanded instanceof LispCons expandedCons) {
+				cons = expandedCons;
+			}
+		}
 		List<LispVal> parts = cons.toList();
 		LispVal nameForm = parts.get(1);
 		// (defun (setf name) ...): a setf-function. Install it under the mangled internal
@@ -2467,6 +2532,14 @@ public final class LispEvaluator {
 		eval(LispMacroExpander.expandDefmethod(cons, this.closRegistry), env);
 		String generic = ((LispSymbol) cons.toList().get(1)).name();
 		eval(LispMacroExpander.generateDispatcher(generic, this.closRegistry), env);
+		// The expansion may have REGISTERED a further generic (the
+		// instance-initialization protocol's shared-initialize) whose dispatcher does not
+		// exist yet; define any such dispatcher too.
+		for (ClosRegistry.GenericInfo info : this.closRegistry.generics().values()) {
+			if (this.globalEnv.lookupFunctionOrNull(info.name()) == null) {
+				eval(LispMacroExpander.generateDispatcher(info.name(), this.closRegistry), env);
+			}
+		}
 		return cons.toList().get(1);
 	}
 
@@ -3175,6 +3248,27 @@ public final class LispEvaluator {
 				LispNames.FUNCTION + " expects a function name or lambda expression, got " + designator.print());
 	}
 
+	/**
+	 * The runtime "package value" of a canonical package name: the upcased name as a
+	 * keyword. See {@code find-package}.
+	 */
+	private static LispSymbol packageKeyword(String canonicalName) {
+		return new LispSymbol(":" + canonicalName.toUpperCase(java.util.Locale.ROOT));
+	}
+
+	/**
+	 * Coerces a runtime package designator -- a string, a keyword/symbol, or a package
+	 * value (which IS a keyword here, see {@code find-package}) -- to the bare package
+	 * name.
+	 */
+	private static String packageDesignator(String operator, LispVal val) {
+		return switch (val) {
+			case LispString str -> str.value();
+			case LispSymbol sym -> LispSymbol.displayName(sym.name());
+			default -> throw new LispEvalException(operator + " expects a package designator, got " + val.print());
+		};
+	}
+
 	private static void requireSingleArg(String name, List<LispVal> args) {
 		if (args.size() != 1) {
 			throw new LispEvalException(name + " expects 1 argument, got " + args.size());
@@ -3357,6 +3451,110 @@ public final class LispEvaluator {
 		}
 	}
 
+	/**
+	 * Evaluates a {@code deftype}: the zero-parameter quoted-literal shape registers
+	 * through the shared expander; a parameterized or computed one additionally evaluates
+	 * its body with every lambda-list parameter bound to its default (or {@code *}, CL's
+	 * unsupplied-deftype-argument value) and registers the resulting specifier -- the
+	 * bare-name use ironclad's {@code simple-octet-vector} sees in
+	 * {@code etypecase}/{@code check-type}. A body that genuinely needs its arguments (or
+	 * fails to evaluate) stays an unresolved specifier, as before.
+	 */
+	private LispVal evalDeftype(LispCons cons) {
+		foldDeftype(cons);
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Registers a {@code deftype}: the zero-parameter quoted-literal shape goes through
+	 * the shared expander; a parameterized or computed one additionally evaluates its
+	 * body with every lambda-list parameter bound to its default (or {@code *}, CL's
+	 * unsupplied-deftype-argument value) and registers the resulting specifier -- the
+	 * bare-name use ironclad's {@code simple-octet-vector} gets in
+	 * {@code etypecase}/{@code check-type}. A body that genuinely needs its arguments (or
+	 * fails to evaluate) stays an unresolved specifier, as before. Returns the folded
+	 * specifier so the compile-path pre-pass ({@code UserMacroExpander}) can emit the
+	 * equivalent zero-parameter deftype, which is the shape the compilers' own registry
+	 * pass understands.
+	 * @param cons the deftype form (canonical, package-resolved spelling)
+	 * @return the folded literal type specifier, or null when nothing was folded here
+	 */
+	@org.jspecify.annotations.Nullable
+	public LispVal foldDeftype(LispCons cons) {
+		LispMacroExpander.expandDeftype(cons, this.closRegistry);
+		List<LispVal> parts = cons.toList();
+		if (parts.size() >= 4 && parts.get(1) instanceof LispSymbol nameSym
+				&& this.closRegistry.findDeftype(nameSym.name()) == null) {
+			LispVal quotedStar = consListOf(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("*")));
+			List<LispVal> bindings = new java.util.ArrayList<>();
+			LispVal cur = parts.get(2);
+			while (cur instanceof LispCons c) {
+				LispVal item = c.car();
+				if (item instanceof LispSymbol p && !p.name().startsWith("&")) {
+					bindings.add(consListOf(List.of(p, quotedStar)));
+				}
+				else if (item instanceof LispCons pc && pc.car() instanceof LispSymbol p) {
+					List<LispVal> pcParts = pc.toList();
+					bindings.add(consListOf(List.of(p, pcParts.size() > 1 ? pcParts.get(1) : quotedStar)));
+				}
+				cur = c.cdr();
+			}
+			List<LispVal> body = new java.util.ArrayList<>(parts.subList(3, parts.size()));
+			if (body.size() > 1 && body.get(0) instanceof LispString) {
+				body.remove(0);
+			}
+			List<LispVal> letParts = new java.util.ArrayList<>();
+			letParts.add(new LispSymbol(LispNames.LET_STAR));
+			letParts.add(bindings.isEmpty() ? LispNil.INSTANCE : consListOf(bindings));
+			letParts.addAll(body);
+			try {
+				LispVal spec = eval(consListOf(letParts), this.globalEnv);
+				if (spec instanceof LispSymbol || spec instanceof LispCons) {
+					this.closRegistry.registerDeftype(nameSym.name(), spec);
+					return spec;
+				}
+			}
+			catch (RuntimeException bodyNeedsArguments) {
+				// Left unresolved: typep/typecase of the name still errors, as before.
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Pre-expands user macros (macrolet included) inside an {@code flet}/{@code labels}
+	 * form when its body contains a {@code macrolet}: the flet expansion rewrites its
+	 * local-function CALL SITES textually, so a call site that only appears after a
+	 * nested macrolet expands (ironclad's {@code sha256-round} calling the flet-bound
+	 * {@code sigma1}) must be materialized first or it misses the rewrite. The common
+	 * macrolet-free case skips the walk.
+	 */
+	private LispCons preExpandLocalMacros(LispCons cons) {
+		if (!treeContainsMacrolet(cons)) {
+			return cons;
+		}
+		return UserMacroExpander.expandAll(cons, this) instanceof LispCons expanded ? expanded : cons;
+	}
+
+	private static boolean treeContainsMacrolet(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol sym && LispNames.MACROLET.equals(sym.name())) {
+			return true;
+		}
+		return treeContainsMacrolet(cons.car()) || treeContainsMacrolet(cons.cdr());
+	}
+
+	/** Builds a proper list from the given elements. */
+	private static LispVal consListOf(List<LispVal> elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return result;
+	}
+
 	private LispVal evalIf(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
 		LispVal condition = eval(parts.get(1), env);
@@ -3380,6 +3578,7 @@ public final class LispEvaluator {
 		// all-lexical
 		// path so there is no per-let allocation or finally cost).
 		List<String> dynamicNames = null;
+		String savedPackage = null;
 		if (bindings instanceof LispCons bindingsCons) {
 			List<LispVal> bindingList = bindingsCons.toList();
 			if (this.specialVars.isEmpty()) {
@@ -3388,7 +3587,12 @@ public final class LispEvaluator {
 				// effect.
 				for (LispVal binding : bindingList) {
 					List<LispVal> pair = ((LispCons) binding).toList();
-					letEnv.define(((LispSymbol) pair.get(0)).name(), eval(pair.get(1), env));
+					String bindingName = ((LispSymbol) pair.get(0)).name();
+					LispVal bindingValue = eval(pair.get(1), env);
+					if (LispMacroExpander.PACKAGE_REBIND_VAR.equals(bindingName) && savedPackage == null) {
+						savedPackage = rebindCurrentPackage(bindingValue);
+					}
+					letEnv.define(bindingName, bindingValue);
 				}
 			}
 			else {
@@ -3403,6 +3607,9 @@ public final class LispEvaluator {
 					List<LispVal> pair = ((LispCons) bindingList.get(i)).toList();
 					names[i] = ((LispSymbol) pair.get(0)).name();
 					vals[i] = eval(pair.get(1), env);
+					if (LispMacroExpander.PACKAGE_REBIND_VAR.equals(names[i]) && savedPackage == null) {
+						savedPackage = rebindCurrentPackage(vals[i]);
+					}
 				}
 				for (int i = 0; i < n; i++) {
 					// A special name is ALSO defined lexically with the same value (dual
@@ -3441,7 +3648,36 @@ public final class LispEvaluator {
 					this.dynamicBindings.pop(dynamicNames.get(i));
 				}
 			}
+			if (savedPackage != null) {
+				this.packageResolver.setCurrentPackage(savedPackage);
+			}
 		}
+	}
+
+	/**
+	 * The runtime half of a {@code (let ((*package* X)) ...)} rebinding (see
+	 * {@code LispMacroExpander.PACKAGE_REBIND_VAR}): swaps the resolver's current package
+	 * to the bound value for the let's extent so a macro-time {@code (intern ...)} homes
+	 * where CL would. Returns the saved package name, or null when the value is not a
+	 * package designator (the binding then has no effect).
+	 */
+	@org.jspecify.annotations.Nullable
+	private String rebindCurrentPackage(LispVal value) {
+		String designator = switch (value) {
+			case LispString str -> str.value();
+			case LispSymbol sym -> LispSymbol.displayName(sym.name());
+			default -> null;
+		};
+		if (designator == null) {
+			return null;
+		}
+		String found = this.packageResolver.findPackageName(designator);
+		if (found == null) {
+			return null;
+		}
+		String saved = this.packageResolver.currentPackageName();
+		this.packageResolver.setCurrentPackage(found);
+		return saved;
 	}
 
 	/**

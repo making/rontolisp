@@ -34,6 +34,26 @@ public record LispSymbol(String name) implements LispVal {
 		return name;
 	}
 
+	/**
+	 * Returns the CL {@code symbol-name} spelling: the member part of a package-qualified
+	 * name ({@code (symbol-name 'foo::bar)} is {@code "BAR"} -- the qualifier is where
+	 * the symbol lives, not part of its name), and otherwise the {@link #displayName}
+	 * marker-stripped spelling. {@code princ}/{@code ~A} keep the qualifier (see
+	 * {@link #display()}); {@code symbol-name} and the string-designator coercions must
+	 * not, or name surgery like ironclad's
+	 * {@code (intern (concatenate ... (string digest-name) ...))} re-qualifies an
+	 * already-qualified spelling.
+	 * @param name the stored symbol name
+	 * @return the package-stripped, marker-stripped name
+	 */
+	public static String memberName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		if (qn != null) {
+			return qn.member();
+		}
+		return displayName(name);
+	}
+
 	@Override
 	public String print() {
 		return this.name;

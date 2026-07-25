@@ -4,7 +4,8 @@ User-facing behavior: `doc/en/reference/special-forms/defstruct.md` (and the
 missing-features guide for what is out of scope: `:include`). An instance both
 prints AND reads as `#S(...)` — `.kb/instance-syntax.md` owns both halves.
 The options syntax IS supported: `(:constructor name)` /
-`(:conc-name prefix)` / `(:predicate name)` / `(:copier name)`, a dropped
+`(:conc-name prefix)` / `(:predicate name)` / `(:copier name)` /
+`(:include parent)` / `(:type (vector ...))`, a dropped
 docstring before the slots, slot options `:type`/`:read-only` (parsed,
 ignored), and lite BOA constructors — `(:constructor name (lambda-list))`
 passes the lambda list to the generated defun verbatim; a slot whose plain
@@ -55,6 +56,44 @@ structures are never `equal` -- see `.kb/instance-syntax.md`).
   the struct/slot names are preserved, slot defaults are expanded as
   expressions. A user macro may expand INTO a top-level defstruct (the splice
   runs later, inside the compilers).
+
+## `:include` (single struct inheritance) and `:type (vector ...)` — todo-173
+
+**`(:include parent)`**: the parent's slots (in ITS layout order, so a chain
+nests) are prepended to the child's, which keeps every inherited slot at the
+same index in all descendants — the parent's accessors, its `%obj-ref` indexes
+baked, therefore read a child instance unchanged. `ClosRegistry` records the
+ancestor chain (`structAncestors`, the struct-side twin of
+`ClassInfo.ancestors`); `descendantStructTags(name)` gives the tag set that
+`typep`, the generated predicate and a struct method specializer all test, and
+`structAncestorCount` ranks a struct specializer for dispatch (band 100-199,
+between classes and built-in types, deeper `:include` first). Slot-override
+syntax (`(:include parent (slot new-default))`) is NOT supported.
+
+**Known limit — the predicate is emitted before later children exist**: a
+predicate defun bakes the descendant tags registered AT ITS defstruct, so
+`(base-p child)` is `NIL` when `child`'s defstruct comes after `base`'s (the
+normal case). `(typep x 'base)` written after both IS `T` — type tests expand at
+their use site, predicates at their definition site. Both compile paths and the
+interpreter process forms in order, so all four backends agree. Re-evaluation
+trigger: fixing this needs either the parent's predicate REGENERATED on each
+child registration (interpreter) plus a pre-scan of `:include` links before any
+predicate is emitted (compile path), or a late-bound runtime ancestry test —
+neither existed when `:include` landed, and the ironclad slice that motivated it
+only needs the `typep`/specializer side. Pinned by
+`LispEvaluatorTest#defstructIncludeInheritsSlotsAndTypeTests`, which asserts the
+`NIL` deliberately.
+
+**`(:type (vector ...))`**: a typed struct IS a plain vector — no instance tag,
+so it is not registered as a type (no specializer, no `typep`, not a
+`structure-object`, matching CL). The constructor builds `(vector v...)`, the
+copier is `copy-seq`, an accessor is an `aref` read, and each accessor also gets
+a generated `%setf-<accessor>` writer defun (the setf-function protocol) since
+there is no instance to `%obj-set`. The element type is dropped (rontolisp arrays
+are generic). `(:type list)` is not supported; `:include` on a typed struct is
+rejected. This is what makes ironclad's `define-digest-registers` — a
+`(:type (vector (unsigned-byte 32)))` struct over the digest registers — load
+verbatim.
 
 ## setf on accessors: the registry
 

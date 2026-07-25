@@ -59,6 +59,14 @@ public final class PackageResolver {
 	private boolean inMacroDefinition = false;
 
 	/**
+	 * Whether resolution is inside the options of a {@code wasm-export}/
+	 * {@code wasm-import} directive, whose quoted values are HOST-facing data (an export
+	 * field name, a WIT type) rather than package-scoped symbols -- so the
+	 * quoted-lone-symbol resolution in {@link #resolveCons} must not touch them.
+	 */
+	private boolean inHostFacingData = false;
+
+	/**
 	 * Creates a resolver with a fresh registry of the built-in packages.
 	 */
 	public PackageResolver() {
@@ -176,6 +184,27 @@ public final class PackageResolver {
 					: sym.name().startsWith(":") ? sym.name().substring(1) : datum == arg ? null : sym.name();
 			default -> null;
 		};
+	}
+
+	/**
+	 * The current package name, as tracked across the forms resolved so far.
+	 * @return the current package name
+	 */
+	public String currentPackageName() {
+		return this.currentPackage;
+	}
+
+	/**
+	 * Sets the current package to the given (canonicalized) name -- the runtime half of a
+	 * {@code (let ((*package* X)) ...)} rebinding: the interpreter's {@code evalLet}
+	 * swaps the package for the binding's extent so a macro-time {@code (intern ...)}
+	 * under the binding homes where CL would. The caller restores the saved name.
+	 * @param name the package name (any case, nickname allowed)
+	 */
+	public void setCurrentPackage(String name) {
+		String canonical = registeredPackageName(
+				this.registry.canonicalName(PackageRegistry.canonicalBuiltinName(name)));
+		this.currentPackage = canonical;
 	}
 
 	/**
@@ -439,14 +468,20 @@ public final class PackageResolver {
 	private LispVal resolveCons(LispCons cons) {
 		if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(operatorMember(op))) {
 			LispVal datum = ((LispCons) cons.cdr()).car();
-			// (quote DATUM): the operator is exempt and the datum is left untouched --
-			// except inside a defmacro/macrolet definition, where quoted symbols come
+			// (quote DATUM): the operator is exempt and quoted LISTS are left untouched
+			// -- except inside a defmacro/macrolet definition, where quoted data comes
 			// from backquote templates (the reader expands every backquote level into
-			// list/cons/quote calls before this pass runs) and belong to the defining
-			// package: a bare template symbol must resolve to the same canonical
-			// spelling as the package-qualified defun/local-function it names.
+			// list/cons/quote calls before this pass runs) and belongs to the defining
+			// package. A quoted LONE SYMBOL resolves in ordinary code too (CL interns
+			// it in the current package at read time): a '%indicator in a defun body
+			// must name the same canonical symbol as the one a defmacro template in the
+			// same package stores (ironclad's defdigest writes plist entries under
+			// template-resolved indicators that digestp reads back via a body quote).
 			if (this.inMacroDefinition) {
 				datum = resolveQuotedData(datum);
+			}
+			else if (datum instanceof LispSymbol loneSym && !this.inHostFacingData) {
+				datum = resolveSymbol(loneSym);
 			}
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE));
 		}
@@ -486,6 +521,19 @@ public final class PackageResolver {
 			}
 			return new LispCons(resolveForm(cons.car()), new LispCons(defs, resolveForm(defsCell.cdr())));
 		}
+		if (cons.car() instanceof LispSymbol findPkgOp && LispNames.FIND_PACKAGE.equals(operatorMember(findPkgOp))
+				&& cons.cdr() instanceof LispCons argCell && argCell.cdr() instanceof LispNil) {
+			// (find-package LITERAL) folds here, the one place with the registry: the
+			// "package value" is the upcased canonical name as a keyword (nil when
+			// unknown), so a literal call answers identically on every backend -- the
+			// compiled runtimes have no package registry. A computed designator stays a
+			// call, which only the interpreter can serve.
+			String designator = literalDesignator(argCell.car());
+			if (designator != null) {
+				String found = findPackageName(designator);
+				return found == null ? LispNil.INSTANCE : quotedSymbol(":" + found.toUpperCase(java.util.Locale.ROOT));
+			}
+		}
 		LispVal car = resolveForm(cons.car());
 		if (car instanceof LispSymbol op) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
@@ -524,21 +572,32 @@ public final class PackageResolver {
 	 * alias stay untouched under the quote exemption.
 	 */
 	private LispVal resolveWasmDirective(LispSymbol op, LispCons cons) {
-		if (cons.cdr() instanceof LispCons nameCell) {
-			LispVal nameArg = nameCell.car();
-			LispVal resolvedName;
-			if (nameArg instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
-					&& LispNames.QUOTE.equals(operatorMember(quoteOp)) && quoted.cdr() instanceof LispCons datumCell
-					&& datumCell.car() instanceof LispSymbol nameSym && !nameSym.isKeyword()) {
-				resolvedName = new LispCons(new LispSymbol(LispNames.QUOTE),
-						new LispCons(resolveSymbol(nameSym), LispNil.INSTANCE));
+		// Only the FIRST argument names a Lisp function; everything after it is
+		// host-facing data (the export field name, the WIT parameter types), so its
+		// quoted symbols stay verbatim.
+		boolean saved = this.inHostFacingData;
+		try {
+			if (cons.cdr() instanceof LispCons nameCell) {
+				LispVal nameArg = nameCell.car();
+				LispVal resolvedName;
+				if (nameArg instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
+						&& LispNames.QUOTE.equals(operatorMember(quoteOp)) && quoted.cdr() instanceof LispCons datumCell
+						&& datumCell.car() instanceof LispSymbol nameSym && !nameSym.isKeyword()) {
+					resolvedName = new LispCons(new LispSymbol(LispNames.QUOTE),
+							new LispCons(resolveSymbol(nameSym), LispNil.INSTANCE));
+				}
+				else {
+					resolvedName = resolveForm(nameArg);
+				}
+				this.inHostFacingData = true;
+				return new LispCons(op, new LispCons(resolvedName, resolveForm(nameCell.cdr())));
 			}
-			else {
-				resolvedName = resolveForm(nameArg);
-			}
-			return new LispCons(op, new LispCons(resolvedName, resolveForm(nameCell.cdr())));
+			this.inHostFacingData = true;
+			return new LispCons(op, resolveForm(cons.cdr()));
 		}
-		return new LispCons(op, resolveForm(cons.cdr()));
+		finally {
+			this.inHostFacingData = saved;
+		}
 	}
 
 	private static boolean isIntrospectionMember(String member) {
@@ -763,6 +822,95 @@ public final class PackageResolver {
 			// current package like CL would.
 		}
 		return canonical(this.currentPackage, name).name();
+	}
+
+	/**
+	 * The canonical registered name of a runtime package designator, or null when no such
+	 * package exists. The {@code keyword} pseudo-package answers as {@code "keyword"}
+	 * even though it is not a registration (its "symbols" are the keywords). This backs
+	 * the runtime {@code find-package}: rontolisp has no package objects, so a "package"
+	 * at runtime is its canonical name (as a keyword) and {@code eq} compares those by
+	 * name.
+	 * @param designator the package name as given (any case, nickname allowed)
+	 * @return the canonical registered name, or null
+	 */
+	public @Nullable String findPackageName(String designator) {
+		if (designator.isEmpty()) {
+			return null;
+		}
+		if ("KEYWORD".equalsIgnoreCase(designator)) {
+			return "keyword";
+		}
+		String canonical = registeredPackageName(
+				this.registry.canonicalName(PackageRegistry.canonicalBuiltinName(designator)));
+		if (this.registry.contains(canonical)) {
+			return this.registry.canonicalName(canonical);
+		}
+		String lower = designator.toLowerCase(java.util.Locale.ROOT);
+		if (!lower.equals(designator)) {
+			return findPackageName(lower);
+		}
+		return null;
+	}
+
+	/**
+	 * The canonical name of the package a symbol lives in: the qualifier of a qualified
+	 * spelling, {@code "keyword"} for a keyword, {@code cl} for a standard symbol,
+	 * {@code cl-user} otherwise; null for an uninterned ({@code #:}) symbol. The runtime
+	 * {@code symbol-package} answer, kept consistent with {@link #findPackageName} so the
+	 * two are {@code eq}-comparable (ironclad's {@code massage-symbol} pattern).
+	 * @param symbolName the stored symbol name
+	 * @return the canonical package name, or null
+	 */
+	public @Nullable String symbolPackageName(String symbolName) {
+		if (symbolName.startsWith("#:")) {
+			return null;
+		}
+		if (symbolName.startsWith(":")) {
+			return "keyword";
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbolName);
+		if (qn != null) {
+			String found = findPackageName(qn.pkg());
+			return found != null ? found : qn.pkg();
+		}
+		if (PackageRegistry.isClSymbol(symbolName)) {
+			String cl = findPackageName(LispNames.CL_PKG);
+			return cl != null ? cl : LispNames.CL_PKG;
+		}
+		String clUser = findPackageName(LispNames.CL_USER_PKG);
+		return clUser != null ? clUser : LispNames.CL_USER_PKG;
+	}
+
+	/**
+	 * The canonical spelling {@code (find-symbol name pkg)} yields, or null when the
+	 * package does not provide the name. Rontolisp has no intern table, so "interned in
+	 * the package" is judged by the registry: the package owns, exports or imports the
+	 * (verbatim) name. The keyword pseudo-package builds the keyword; the {@code cl}
+	 * package answers its static symbol set.
+	 * @param pkgDesignator the package name as given
+	 * @param member the verbatim symbol name
+	 * @return the canonical spelling, or null
+	 */
+	public @Nullable String memberSpelling(String pkgDesignator, String member) {
+		String pkg = findPackageName(pkgDesignator);
+		if (pkg == null) {
+			throw new LispPackageException("No such package: " + pkgDesignator);
+		}
+		if ("keyword".equals(pkg)) {
+			return ":" + member;
+		}
+		if (LispNames.CL_PKG.equals(pkg)) {
+			return PackageRegistry.isClSymbol(member) ? member : null;
+		}
+		if (LispNames.CL_USER_PKG.equals(pkg)) {
+			return member;
+		}
+		LispPackage p = this.registry.get(pkg);
+		if (p.owns(member) || p.exports(member) || p.imports().containsKey(member)) {
+			return canonical(pkg, member).name();
+		}
+		return null;
 	}
 
 	private static String operatorMember(LispSymbol op) {

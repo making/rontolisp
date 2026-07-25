@@ -13,15 +13,15 @@ come here only when you need the "why exactly" behind a constraint.
 - [jzon-cl-additions.md](jzon-cl-additions.md) -- the jzon-driven all-backend CL additions (shiftf/typep/subtypep/`|...|`/`#'format`/mutable strings/runtime type-dispatch sweep &c), pinned by `runtime-type-dispatch-residue` + `JzonE2eTest`
 - [defmacro-backquote.md](defmacro-backquote.md) -- `defmacro`, read-time backquote, compile-time macro expansion
 - [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`
-- [symbol-runtime-api.md](symbol-runtime-api.md) -- `symbol-name`/`intern`/`find-symbol`/`make-symbol`/`boundp`/`fboundp`/`symbol-value` (verbatim names, no intern table, global-only variable lookups)
-- [defstruct.md](defstruct.md) -- `defstruct` expansion into plain defuns, instance-object representation, setf accessor registry
+- [symbol-runtime-api.md](symbol-runtime-api.md) -- `symbol-name`/`intern`/`find-symbol`/`make-symbol`/`boundp`/`fboundp`/`symbol-value` (verbatim names, no intern table, global-only variable lookups) + the package API (`find-package`/`symbol-package`/`type-of`, a "package" = its upcased name as a keyword) and quoted-lone-symbol resolution
+- [defstruct.md](defstruct.md) -- `defstruct` expansion into plain defuns, instance-object representation, setf accessor registry, `:include` inheritance + `:type (vector ...)`
 - [instance-syntax.md](instance-syntax.md) -- the ONE instance value model behind defstruct/CLOS/conditions: the `%obj-*` primitive seam, `#S(...)`/`#<...>` printing and `#S(...)` source reading, per-backend shapes (JVM `String[]` discriminator, WASM `TYPE_INSTANCE` + bake-all), the emit gate, and the structural-`equal` decision record
-- [clos.md](clos.md) -- static CLOS subset (`defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value`): shared registry, dispatcher generation, cl-who expansion-time dispatch
+- [clos.md](clos.md) -- static CLOS subset (`defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value`): shared registry, dispatcher generation, cl-who expansion-time dispatch, the instance-initialization protocol + runtime `typep`
 - [gray-streams.md](gray-streams.md) -- rontolisp's own Gray-stream protocol (gray.lisp base classes + generics), the interpreter write dispatch, the compile-path `GrayStreamsLibrary.process` call-site rewrite, the trivial-gray-streams shim
 - [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system
 - [reader-case-upcase.md](reader-case-upcase.md) -- the reader's CL-style uppercase-canonical model (upcase, no fold), verbatim `intern`/`find-symbol`, and the remaining case-tolerance seams (keyword-arg matching, WIT/host lower-kebab bridges)
 - [characters-code-points.md](characters-code-points.md) -- CHARACTER = Unicode code point on every backend: JVM widening to `int[]{cp}`, WASM `_char_upcase`/`_char_downcase` case-fold table, code-point string indexing (`length`/`char`/`subseq`)
-- [reader-features.md](reader-features.md) -- `#+`/`#-` feature conditionals, `*features*`, `#|...|#` block comments, `#.` handling
+- [reader-features.md](reader-features.md) -- `#+`/`#-` feature conditionals, `*features*`, `#|...|#` block comments, `#.` handling, `#N@(...)` + the readtable no-ops
 - [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams runtime; component stdin (stdin.lisp)
 - [load-inliner.md](load-inliner.md) -- compile-time `load` inlining (`LoadInliner`)
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
@@ -53,7 +53,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output
 - [hash-tables.md](hash-tables.md) -- hash table representation per backend
 - [documentation-site.md](documentation-site.md) -- doc site layout, code-fence conventions, build/preview
-- [asdf.md](asdf.md) -- `asdf:defsystem`/`asdf:load-system` limited ASDF subset (.asd parsed as data, LoadInliner splice + interpreter runtime)
+- [asdf.md](asdf.md) -- `asdf:defsystem`/`asdf:load-system` limited ASDF subset (.asd parsed as data, LoadInliner splice + interpreter runtime), the shim/replacement-`.asd`/leaf-module substitution ladder, and every loadable real library incl. the ironclad slice
 - [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when` (+ top-level flattening), `check-type`/`assert`, shared type-specifier tests
 - [flet-labels.md](flet-labels.md) -- `flet`/`labels` local functions via let-bound lambdas + Lisp-2 call-site rewrite (labels = nil-then-setq letrec)
 - [dynamic-special-variables.md](dynamic-special-variables.md) -- dynamic (special) variable binding (`defvar`/`declaim special` + `let`/`let*`/`progv`): thread-scoped shallow binding on the interpreter, static-field/module-global save/restore on the compilers

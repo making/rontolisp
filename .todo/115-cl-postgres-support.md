@@ -16,26 +16,25 @@ layer cl-postgres uses (`socket-connect` + `:element-type '(unsigned-byte 8)`
 `public.lisp` select the usocket path under rontolisp's feature set. This todo
 is everything ABOVE the socket.
 
-## Empirical state (2026-07-12)
+## Empirical state (updated 2026-07-25)
 
 **M1 (the `.asd` front-end) is merged on develop**: the verbatim
 cl-postgres.asd parses (defparameter env, `#.*string-file*` resolves to
 "strings-ascii", the usocket/sb-bsd-sockets `:feature` clauses drop). Pinned
 by `AsdfSystemsTest.parsesTheClPostgresAsdHeaderShape`.
 
-**Everything after M1 is parked on the `cl-postgres-wip` branch, which is
-FROZEN -- do not touch or rebase it; adoption is undecided**: the M2 crypto
-shim systems (md5/ironclad/cl-base64/uax-15 over the java: bridge, +
-cl-ppcre/alexandria reference shims), and the M4 pre-work batch (source-file
-`#.` read-time eval via ReadTimeEvaluator, the find-package fold, defgeneric
-inline `:method`, `with-standard-io-syntax`, `encode-universal-time`). With
-that branch, cl-postgres loads through interpret.lisp on the interpreter.
+**M2 (deps) is DONE on develop as of 2026-07-25** -- and done BETTER than
+planned: every dependency loads from its real unmodified sources on all four
+backends instead of through a shim (see blocker 4 and the milestones).
 
-Its last known failure (`defmethod: unknown specializer bad-char-error` --
-define-condition classes) is **stale**: that was the todo-116 Phase 2 gate, and
-it closed on develop (Phases 1-3 shipped, commit a8b957b). The branch has not
-been re-run since, so its real next gate is unknown -- re-run it against
-post-116 develop before planning anything on top of it.
+**The `cl-postgres-wip` branch is now obsolete, not merely frozen.** It was
+parked with the M2 JDK-backed crypto shims (dead: the real libraries load) plus
+an M4 pre-work batch whose useful parts have since landed on develop
+independently -- source-file `#.` (2026-07-18), the `find-package` fold and
+`defgeneric` inline `:method` (2026-07-25). Only `with-standard-io-syntax` and
+`encode-universal-time` remain unimplemented, and both are tens of lines
+(blocker 5). Recommendation: start M4 fresh from develop rather than revive a
+branch last exercised before todo-116 shipped.
 
 Iterate with the cached copy in
 `~/.rontolisp/quicklisp/software/postmodern-*/cl-postgres/`.
@@ -50,11 +49,10 @@ Iterate with the cached copy in
    fine, usocket is built in). Suggested lite fix: allow top-level
    `defparameter` of a literal/`#+`-conditional value in a `.asd` into the
    parse-time data env, and resolve `#.<var>` in the .asd against it.
-2. **`#.` read-time eval in SOURCE files** (~46 sites across 7 files, e.g.
-   constant tables in `interpret.lisp`/`oid.lisp`): currently a hard read
-   error outside `.asd`. Needs a restricted read-time evaluator (literals +
-   arithmetic + quoted data would cover most sites) or a documented
-   preprocessing step. Survey the actual 46 forms before designing.
+2. **`#.` read-time eval in SOURCE files -- SHIPPED** (2026-07-18, the jzon
+   work): source files support `#.` on every path (marker-mode reader +
+   `UserMacroExpander` resolution against the macro-time evaluator; see
+   `.kb/reader-features.md`). The ~46 cl-postgres sites need no new mechanism.
 3. **Condition system — mostly SHIPPED** (todo-116 Phases 1-3, commit
    a8b957b, 2026-07-12; the durable record is `.kb/error-handling.md`, and
    `.todo/039` remains the API catalog). `define-condition` with
@@ -70,9 +68,10 @@ Iterate with the cached copy in
      exists, the file still LOADS (defun bodies are lazy on the
      interpreter); only a call to `wait-for-notification` fails, so
      LISTEN/NOTIFY is simply unsupported for now.
-   - **`cerror`** — 4 sites (protocol.lisp:269/289 auth edge + SCRAM
-     signature checks); needs a lite `cerror` → `error` lowering, an
-     M4/M5-sized item.
+   - **`cerror` -- SHIPPED** (the cl-base64 work, todo-085): it lowers to
+     `error` with the continue-format dropped (not continuable, no restarts).
+     The 4 cl-postgres sites (protocol.lisp:269/289 auth edge + the SCRAM
+     signature checks) need nothing further.
    - **`restart-case`** (4 sites) needs **nothing**. The todo-116 Phase 4
      survey (see `.kb/error-handling.md`, "The Phase 4 survey") proved the
      verbatim cl-postgres needs NO restart system at all: all 4 sites are
@@ -92,21 +91,34 @@ Iterate with the cached copy in
      retired by the boxed exact-integer path, `.kb/wasm-bignum.md`).
    - `cl-ppcre` v2.1.2 runs REAL on all 4 backends (`ClPpcreE2eTest`).
    - `uax-15` v0.1.3 runs REAL on all 4 backends (`Uax15E2eTest`).
-   - `ironclad`: reached ONLY from `scram.lisp` (SCRAM-SHA-256:
-     sha256/hmac/pbkdf2). Real loading judged infeasible (its `.asd` is
-     executable CLOS/macro code, against the mini-ASDF plain-data
-     invariant); the JDK-backed shim strategy (frozen `cl-postgres-wip`
-     M2: `MessageDigest` SHA-256, `javax.crypto.Mac` HmacSHA256,
-     `SecretKeyFactory` PBKDF2WithHmacSHA256, `java.text.Normalizer`)
-     remains the route for the ironclad piece specifically.
-5. **Stream/socket gaps**: `force-output` (16 — no-op shim is correct, socket
-   writes are unbuffered), `(listen socket)` (1, the MITM check — needs an
-   `InputStream.available()`-style primitive or a documented stub),
-   `read-sequence`/`write-sequence` on SOCKET handles (the built-ins exist
-   for file streams; verify the socket branch), plus cl-postgres's own
-   buffered reader over `read-byte` (21) — byte-at-a-time socket reads will
-   be slow; consider a buffered socket read primitive later (perf, not
-   correctness).
+   - `ironclad`: the SHA-256/HMAC/PBKDF2 slice runs REAL on all 4 backends
+     (`IroncladE2eTest`, todo-173 -- the "real loading is infeasible" verdict
+     was WRONG: the executable `.asd` blocked parsing, not loading, and
+     `eval/AsdOverrides` substitutes a hand-authored replacement while keeping
+     the real sources). **The JDK-backed shim strategy is dead** -- that was
+     the frozen `cl-postgres-wip` M2's whole reason to exist.
+     Residual gap: `scram.lisp` calls THREE ironclad names outside the slice
+     (`pbkdf2-hash-password`, `integer-to-octets`, `octets-to-integer`); all three
+     are small and the route for each is written up in `.todo/173`. SCRAM is
+     the LAST auth method in M5's order, so this does not block M4.
+5. **Stream/socket gaps + the four missing CL primitives** (inventory verified
+   against develop 2026-07-25 -- these are now the FIRST thing to do in M4,
+   each is tens of lines):
+   - **`encode-universal-time`** (2 sites) -- the urgent one: it is evaluated
+     at LOAD time by `(defconstant +start-of-2000+ (encode-universal-time
+     ...))` in `interpret.lisp:427`, so the file cannot load without it.
+   - **`force-output`** (16 sites, incl. `protocol.lisp:193` on the exec-query
+     path) -- a no-op is correct, socket writes are unbuffered.
+   - **`with-standard-io-syntax`** (3 sites, e.g. inside the `intern` call at
+     `communicate.lisp:10`) -- a lite `progn` is enough.
+   - **`(listen socket)`** (1 site, `protocol.lisp:232`, the MITM check) --
+     needs an `InputStream.available()`-style primitive. A nil-returning stub
+     silently DISABLES that security check, so decide deliberately.
+   - `handler-bind` (2 sites) is LISTEN/NOTIFY only, not on the exec-query
+     path -- defer it.
+   - `read-byte`/`write-byte`/`read-sequence`/`write-sequence` all exist;
+     verify the SOCKET-handle branch. cl-postgres's own buffered reader does
+     byte-at-a-time socket reads (21 sites) -- a perf item, not correctness.
 6. **CLOS/macro surface**: 4 `defclass` / 7 `defgeneric` / 3 `defmethod`
    (single dispatch — should fit the static subset; verify `:initform`/
    `:reader` coverage), 18 `defmacro` (loadable-library defmacro works since
@@ -128,9 +140,16 @@ Iterate with the cached copy in
   defparameter/`#.`/`:feature` support; the cl-postgres system graph parses
   and file loading starts. Pinned by AsdfSystemsTest over the verbatim
   cl-postgres.asd header shape.
-- **M2 (deps)**: built-in shim systems "md5"/"ironclad"/"cl-base64"/"uax-15"
-  (BuiltinSystems entries + JDK-backed built-ins, usocket pattern) →
-  `:depends-on` chain resolves without network beyond the postmodern tarball.
+- **M2 (deps)**: DONE 2026-07-25, and NOT as shims -- every dependency
+  (`md5`, `split-sequence`, `cl-base64`, `cl-ppcre`, `uax-15`, `ironclad`)
+  loads from its REAL unmodified sources on all four backends. The
+  `:depends-on` chain resolves with no network beyond the tarballs.
+  **Recommendation: abandon the frozen `cl-postgres-wip` branch rather than
+  re-run it.** Its main content was the M2 JDK shims, which are now dead
+  weight; of its M4 pre-work, `#.`/`find-package`/`defgeneric :method` are on
+  develop already and only `with-standard-io-syntax` + `encode-universal-time`
+  are missing -- cheaper to add fresh (see blocker 5) than to revive a
+  stale branch.
 - **M3 (conditions + unwind-protect)**: todo-116. Gate: `errors.lisp` +
   `protocol.lisp` load; `handler-case` over `database-error` works on the
   interpreter.

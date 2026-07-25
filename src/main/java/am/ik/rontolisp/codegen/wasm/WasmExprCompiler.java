@@ -551,6 +551,10 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandParseInteger(cons), ctx);
 				case LispNames.VALUES_LIST ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandValuesList(cons), ctx);
+				case LispNames.COPY_READTABLE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandCopyReadtable(cons), ctx);
+				case LispNames.SET_DISPATCH_MACRO_CHARACTER ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSetDispatchMacroCharacter(cons), ctx);
 				case LispNames.COMPLEX -> WasmExprCompiler.compileExpr(LispMacroExpander.expandComplexLite(cons), ctx);
 				case LispNames.NE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNumericNotEqual(cons), ctx);
 				case LispNames.READ_FROM_STRING -> WasmReadFromStringCompiler.compile(cons, ctx);
@@ -619,8 +623,8 @@ final class WasmExprCompiler {
 				case LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFMETHOD ->
 					// Like defstruct: the CLOS forms are spliced before Pass 1.
 					throw new UnsupportedOperationException(sym.name() + " is only supported as a top-level form");
-				case LispNames.MAKE_INSTANCE ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeInstance(cons, ctx.closRegistry), ctx);
+				case LispNames.MAKE_INSTANCE -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandMakeInstance(cons, ctx.closRegistry, true), ctx);
 				case LispNames.SLOT_VALUE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx);
 				case LispNames.WITH_SLOTS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWithSlots(cons), ctx);

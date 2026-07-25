@@ -373,6 +373,52 @@ public final class LispNames {
 	public static final String GET = "GET";
 
 	/**
+	 * The {@code type-of} standard function, a prelude defun over {@link #CLASS_OF}: the
+	 * type NAME of a struct/CLOS instance (class-of yields the instance TAG), else the
+	 * built-in type name class-of reports.
+	 */
+	public static final String TYPE_OF = "TYPE-OF";
+
+	/**
+	 * The {@code find-package} standard function. Rontolisp has no package objects: the
+	 * returned "package" is the canonical package name as a keyword, {@code eq}
+	 * -comparable by name with what {@link #SYMBOL_PACKAGE} yields; nil for an unknown
+	 * package.
+	 */
+	public static final String FIND_PACKAGE = "FIND-PACKAGE";
+
+	/**
+	 * The {@code symbol-package} standard function: the canonical name (same keyword
+	 * shape as {@link #FIND_PACKAGE}) of the package in a symbol's qualified spelling;
+	 * {@code keyword} for keywords, {@code cl}/{@code cl-user} for bare symbols, nil for
+	 * uninterned ({@code #:}) ones.
+	 */
+	public static final String SYMBOL_PACKAGE = "SYMBOL-PACKAGE";
+
+	/**
+	 * The {@code copy-readtable} standard function, lowered to a nil-returning no-op:
+	 * rontolisp's reader is not readtable-driven, so there is no readtable object to copy
+	 * (the ironclad {@code *ironclad-readtable*} header idiom). The arguments are still
+	 * evaluated for effect.
+	 */
+	public static final String COPY_READTABLE = "COPY-READTABLE";
+
+	/**
+	 * The {@code set-dispatch-macro-character} standard function, lowered to a
+	 * t-returning no-op like {@link #COPY_READTABLE}: user dispatch macros cannot extend
+	 * the Java-side reader. The one known user syntax, ironclad's {@code #N@(...)} s-box
+	 * literal, is native in {@code LispLexer} instead.
+	 */
+	public static final String SET_DISPATCH_MACRO_CHARACTER = "SET-DISPATCH-MACRO-CHARACTER";
+
+	/**
+	 * The {@code *readtable*} standard variable, seeded nil so the
+	 * {@code (setq *readtable* ...)} idiom loads (the assigned value is an opaque no-op
+	 * token -- see {@link #COPY_READTABLE}).
+	 */
+	public static final String READTABLE_VAR = "*READTABLE*";
+
+	/**
 	 * The {@code remove} built-in function (return a copy without items eql to the given
 	 * one).
 	 */

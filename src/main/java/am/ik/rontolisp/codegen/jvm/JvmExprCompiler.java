@@ -427,6 +427,10 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandParseInteger(cons), ctx, className);
 				case LispNames.VALUES_LIST ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandValuesList(cons), ctx, className);
+				case LispNames.COPY_READTABLE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopyReadtable(cons), ctx, className);
+				case LispNames.SET_DISPATCH_MACRO_CHARACTER -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandSetDispatchMacroCharacter(cons), ctx, className);
 				case LispNames.COMPLEX ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandComplexLite(cons), ctx, className);
 				case LispNames.NE ->
@@ -488,7 +492,7 @@ final class JvmExprCompiler {
 					// Like defstruct: the CLOS forms are spliced before Pass 1.
 					throw new UnsupportedOperationException(sym.name() + " is only supported as a top-level form");
 				case LispNames.MAKE_INSTANCE -> JvmExprCompiler
-					.compileExpr(LispMacroExpander.expandMakeInstance(cons, ctx.closRegistry), ctx, className);
+					.compileExpr(LispMacroExpander.expandMakeInstance(cons, ctx.closRegistry, true), ctx, className);
 				case LispNames.SLOT_VALUE -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx, className);
 				case LispNames.WITH_SLOTS ->

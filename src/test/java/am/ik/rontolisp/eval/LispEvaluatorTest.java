@@ -4233,7 +4233,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer", "%string-compare")
 			.isSorted()
-			.hasSize(302);
+			.hasSize(307);
 	}
 
 	@Test
@@ -7095,10 +7095,37 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void defstructIncludeIsNotSupported() {
+	void defstructIncludeInheritsSlotsAndTypeTests() {
+		// The parent's slots come first, so its accessors read a child instance too, and
+		// a (typep x 'parent) written after both defstructs matches the child. The
+		// parent's PREDICATE defun, emitted at the parent's defstruct, only knows the
+		// descendants registered by then -- see .kb/defstruct.md.
+		assertThat(evalMulti("""
+				(defstruct base (a 1) (b 2))
+				(defstruct (child (:include base)) (c 3))
+				(let ((k (make-child :a 10 :c 30)))
+				  (list (base-a k) (base-b k) (child-c k) (child-p k)
+				        (child-p (make-base)) (typep k 'base) (typep (make-base) 'child)))
+				""").print()).isEqualTo("(10 2 30 T NIL T NIL)");
+	}
+
+	@Test
+	void defstructIncludeUnknownParentSignals() {
 		assertThatThrownBy(() -> eval("(defstruct (point (:include base)) x y)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("DEFSTRUCT option is not supported");
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining(":include names an unknown struct");
+	}
+
+	@Test
+	void defstructTypeVectorMakesPlainVectors() {
+		// A (:type (vector ...)) struct IS a vector: accessors are aref reads (and setf
+		// places through the generated writer), and it is not an instance object.
+		assertThat(evalMulti("""
+				(defstruct (regs (:type (vector (unsigned-byte 32))) (:constructor initial-regs ())) (a 7) (b 8))
+				(let ((r (initial-regs)))
+				  (setf (regs-b r) 99)
+				  (list r (regs-a r) (regs-b r) (vectorp r)))
+				""").print()).isEqualTo("(#(7 99) 7 99 T)");
 	}
 
 	@Test

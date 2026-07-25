@@ -129,6 +129,71 @@ threaded through `Ctx.Builder` beside `structAccessors`).
   and defclass names/options verbatim; only defmethod bodies and defclass
   `:initform` values are walked.
 
+## The instance-initialization protocol (todo-173)
+
+`initialize-instance`, `reinitialize-instance` and `shared-initialize` have no
+system-supplied primary method in the static subset (the generated constructor
+already fills the slots), so `expandDefmethod` SYNTHESIZES one the first time a
+program defines any method on one of them — and the CL chain with it:
+`initialize-instance`'s and `reinitialize-instance`'s defaults
+`(apply #'shared-initialize instance t/nil initargs)`, `shared-initialize`'s
+returns the instance. When the program has no `shared-initialize` method yet, the
+generic is CREATED here (with its own default); its dispatcher is emitted by the
+caller — the compile path reserves a slot for every registered generic in
+`addExpandedDefinition` (dispatchers are generated after the whole walk, so
+order does not matter), the interpreter defines any missing dispatcher after each
+`defmethod`. `expandMakeInstance` calls `shared-initialize` DIRECTLY (with the
+`t` slot-names argument) when only that generic exists, which is the same
+effective chain CL's default `initialize-instance` primary would run.
+
+The synthesis condition is the absence of an ALL-DEFAULT primary, not of any
+primary: the system method applies to every instance, so a class-specialized
+primary (ironclad's sha256 register reset) must not displace it — a sibling
+primary's `(call-next-method)` still has to find it.
+
+Three congruence rules landed with it, all general CL semantics the lite model
+had been approximating:
+- **A `&key` method never rejects a sibling's keyword.** CL computes a generic
+  call's valid keyword set as the UNION of the generic's and every applicable
+  method's; the lite model instead appends `&allow-other-keys` to every `&key`
+  method lambda list. (ironclad calls `(update-digest state seq :digest d)`,
+  which reaches an updater declaring only `:start`/`:end`.)
+- **A defclass constructor tolerates extra initargs** (`&allow-other-keys` on
+  `%make-<name>`): a non-slot initarg belongs to an `initialize-instance` /
+  `shared-initialize` method, not the constructor (`(make-instance 'hmac :key k)`).
+- **A bare `(call-next-method)` forwards the rest tail**, not just the required
+  parameters: `rewriteNextMethod` emits `apply` over the method's `&rest`
+  variable, injecting one (`%method-args`) when the method declares a `&key` tail
+  without a `&rest`. Without this, ironclad's hmac `reinitialize-instance` lost
+  the `:key` it forwards to the system default and PBKDF2 silently produced the
+  wrong key.
+
+**Cold-branch tolerance**: on the COMPILE paths only,
+`expandMakeInstance(cons, registry, true)` lowers an unknown class to a runtime
+`error` call instead of failing the compile — the compilers expand every branch
+eagerly, so a dispatcher naming classes from subsystems that were not loaded
+(ironclad's `make-kdf` listing scrypt/argon2/bcrypt) would otherwise be
+uncompilable. The interpreter passes `false`, so a genuinely wrong class name
+still reports when the branch runs. Same tolerance `format` has for a
+cold-branch control string.
+
+## Ambiguous slot writes and runtime `typep` (todo-173)
+
+- `(setf (slot-value obj 'NAME) v)` where NAME sits at DIFFERENT indexes in
+  unrelated types no longer errors at compile time: `expandAmbiguousSlotSet`
+  emits an instance-TAG dispatch that writes the type-correct index (the
+  write-side twin of the ambiguous READ dispatch). Routing through the reader
+  generic — the old behavior — only worked when the class declared an
+  `:accessor`; ironclad's `digest` slot has a `:reader` only, and the name
+  collides with the `digest` reader of the `unsupported-digest` condition.
+- `(typep x COMPUTED-SPEC)` no longer errors: `expandRuntimeTypep` emits a
+  `cond` keyed on the specifier symbol, one arm per registered layout (matched by
+  canonical name AND plain member name) plus one per built-in atomic type name
+  (`RUNTIME_TYPEP_BUILTINS`), each arm carrying the very test the literal
+  specifier would have compiled to. An unrecognized specifier — a COMPOUND one
+  included — yields nil rather than signalling: this is the lite runtime-dispatch
+  model, not a real type table.
+
 ## Runtime slot names + class introspection on the compiled backends (todo-146)
 
 jzon's `coerced-fields` walk (`(slot-value obj (c2mop:slot-definition-name s))`

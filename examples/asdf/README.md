@@ -6,7 +6,7 @@ All of them run identically on all four backends (interpreter, JVM,
 WASM Preview 1 and `--component`); they are the programs the cross-backend E2E
 tests pin (`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest`
 / `ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest` / `JzonE2eTest`
-/ `Md5E2eTest` / `ClPpcreE2eTest`).
+/ `Md5E2eTest` / `ClPpcreE2eTest` / `IroncladE2eTest`).
 jzon's three numeric leaf components (the eisel-lemire float reader and
 Schubfach float printer) are replaced at load time by built-in shims over
 rontolisp's native float arithmetic, so float text takes rontolisp's
@@ -28,6 +28,7 @@ rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src
 | [`jzon-demo.lisp`](jzon-demo.lisp) | com.inuoe.jzon v1.1.4 (MIT) | <https://github.com/Zulu-Inuoe/jzon> |
 | [`md5-demo.lisp`](md5-demo.lisp) | md5 v2.0.4 (public domain) | <https://github.com/pmai/md5> |
 | [`cl-ppcre-demo.lisp`](cl-ppcre-demo.lisp) | cl-ppcre v2.1.2 (BSD 2-Clause) | <https://github.com/edicl/cl-ppcre> |
+| [`ironclad-demo.lisp`](ironclad-demo.lisp) | ironclad v0.61, SHA-256/HMAC/PBKDF2 slice (BSD 3-Clause) | <https://github.com/sharplispers/ironclad> |
 
 ## Where the libraries come from
 
@@ -43,6 +44,8 @@ the demos run out of the box from the repository root:
 - `src/test/resources/jzon/` (the `.asd` lives in its `src/` subdirectory)
 - `src/test/resources/md5/`
 - `src/test/resources/cl-ppcre/`
+- `src/test/resources/ironclad/` (the SHA-256/HMAC/PBKDF2 slice only; its executable
+  `ironclad.asd` is kept for provenance but a bundled replacement is what loads)
 
 Alternatively, download the same versions from upstream and point
 `--system-path` (or the `RONTOLISP_SOURCE_REGISTRY` environment variable) at
