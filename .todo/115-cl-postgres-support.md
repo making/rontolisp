@@ -97,25 +97,19 @@ Iterate with the cached copy in
      `eval/AsdOverrides` substitutes a hand-authored replacement while keeping
      the real sources). **The JDK-backed shim strategy is dead** -- that was
      the frozen `cl-postgres-wip` M2's whole reason to exist.
-     Residual gap: of the nine `ironclad:` names `scram.lisp` calls, six are in
-     the slice (`digest-sequence`, `make-hmac`, `update-hmac`, `hmac-digest`,
-     `ascii-string-to-byte-array`, `hex-string-to-byte-array`) and THREE are not
-     (verified by grep 2026-07-25). Both routes are small:
-     - `pbkdf2-hash-password` (`kdf/password-hash.lisp`, 61 lines): its body is
-       the one-liner `(pbkdf2-derive-key digest password salt iterations
-       (digest-length digest))`, all of which the slice already has. The file's
-       only out-of-slice reference is `make-random-salt` (prng/), and only as the
-       DEFAULT of its `:salt` keyword -- cl-postgres passes an explicit salt, so
-       on the interpreter the default never evaluates; the compile paths are
-       eager, so they need a `make-random-salt` stub (or a prng slice). Add the
-       file to `ironclad-slice.asd`.
-     - `integer-to-octets` / `octets-to-integer` (`public-key/public-key.lisp`):
-       self-contained `ldb`/`loop` byte<->integer converters (no
-       arbitrary-precision math, no elliptic curves) that merely LIVE in a
-       3,065-line file. Loading that file whole is not viable, so the route is a
-       `ShimLibraries.leafModuleForms` substitution for `public-key.lisp`
-       exposing just these two (the jzon numeric-leaf precedent).
-     SCRAM is the LAST auth method in M5's order, so this does not block M4.
+     Residual gap, now owned by **`.todo/175`**: of the nine `ironclad:` names
+     `scram.lisp` calls, six are in the slice and THREE are not
+     (`pbkdf2-hash-password`, `integer-to-octets`, `octets-to-integer`) -- the
+     route for each is written up there, along with the measured reason a
+     four-backend SCRAM needs `.todo/174` (arbitrary-precision integers on WASM)
+     first. **Order decision (user, 2026-07-25): all four backends, so
+     174 -> 175 -> this item.** Two consequences for M4 sequencing:
+     - An undefined function is a COMPILE-time error on the JVM/WASM backends
+       (measured), so cl-postgres cannot be COMPILED until those three names
+       exist -- even for a trust-auth connection that never runs SCRAM. Only the
+       interpreter defers it to the call.
+     - SCRAM is still the LAST auth method in M5's order, so 175 gates the
+       compile paths, not the first interpreter round-trip.
      Widening the slice further (ciphers / public-key / prng / the other digests)
      is NOT planned -- the next real consumer decides. `dotimes-unrolled` users
      stay out until then: its DEFINITION loads, but no expansion of it does
