@@ -113,6 +113,25 @@ this widening on wasm-GC as written. Re-doing it means designing the WASM side
 FIRST, with `ClPpcreE2eTest`/`Uax15E2eTest`/`IroncladE2eTest` as the gate --
 not extending the JVM side and assuming WASM follows.
 
+### Where the next session starts
+
+The interpreter work is committed (`dc8bc14c`). The compile path is two
+INDEPENDENT pieces of design work, either of which can go first:
+
+- **JVM**: the oversized-method / 16-bit branch-offset overflow below. Measure
+  which expansion inflates `%SHARED-INITIALIZE--m2` BEFORE touching
+  `am.ik.jvm` -- if it is the runtime-`typep` dispatch chain (whose length
+  grows with the number of registered classes), the fix belongs in the
+  expansion, and wide-branch relaxation in the emitter is the heavier
+  alternative.
+- **WASM**: the cross-lambda plain-`return` lowering (the reverted work
+  above). Design the wasm-GC side first; `ClPpcreE2eTest` / `Uax15E2eTest` /
+  `IroncladE2eTest` are the gate that caught the naive version.
+
+Not yet run for this feature: the native-image `CiSpecE2eTest` (the pinned
+introspection listings in `ci-spec.yaml` changed with the new operators, and
+`./mvnw test` cannot catch a stale expectation there -- see CLAUDE.md).
+
 ### The remaining gate: the JVM backend cannot build the whole stack yet
 
 The interpreter is green end to end; the JVM compile of the full program
