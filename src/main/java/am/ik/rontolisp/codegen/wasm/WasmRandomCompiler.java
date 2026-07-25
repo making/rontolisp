@@ -85,6 +85,33 @@ final class WasmRandomCompiler {
 		}
 	}
 
+	/**
+	 * Compiles the internal {@code rontolisp::%random-byte} primitive: one
+	 * cryptographically strong byte (0-255) as an i31 fixnum. The entropy source is the
+	 * same {@code random_get} host function {@code random} draws from -- real host
+	 * entropy in Preview 1, {@code wasi:random} under {@code --component} -- so the byte
+	 * is as strong as the host's generator on every WASM target.
+	 * @param cons the call form (no arguments)
+	 * @param ctx the compilation context
+	 */
+	static void compileRandomByte(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (cons.toList().size() != 1) {
+			throw new UnsupportedOperationException(
+					"%random-byte expects 0 arguments, got " + (cons.toList().size() - 1));
+		}
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(8);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
+		ctx.writer.write(Instruction.DROP);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
+		ctx.writer.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
 	// Consumes a random i32 on the stack and emits (rand / 2^31) * limit as a TYPE_FLOAT
 	// struct. pushLimitF64 is run after the [0,1) fraction is on the stack and must
 	// append

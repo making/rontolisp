@@ -92,8 +92,38 @@ public final class LispNames {
 	/** The {@code random} built-in function. */
 	public static final String RANDOM = "RANDOM";
 
+	/**
+	 * The internal {@code %random-byte} primitive: one cryptographically strong random
+	 * byte (0-255). Unlike {@code random} (a plain PRNG on the interpreter/JVM) this
+	 * draws from the platform's cryptographic entropy source on every backend --
+	 * {@code SecureRandom} on the interpreter/JVM, the WASI {@code random_get} host
+	 * function (real host entropy in Preview 1, {@code wasi:random} under
+	 * {@code --component}) on WASM. {@code rontolisp:random-bytes} is the public API over
+	 * it.
+	 */
+	public static final String RANDOM_BYTE_INTERNAL = "%RANDOM-BYTE";
+
+	/**
+	 * The {@code rontolisp:random-bytes} function: a vector of {@code n}
+	 * cryptographically strong random bytes, built over {@link #RANDOM_BYTE_INTERNAL} in
+	 * the prelude.
+	 */
+	public static final String RANDOM_BYTES = "RANDOM-BYTES";
+
 	/** The {@code get-universal-time} built-in function. */
 	public static final String GET_UNIVERSAL_TIME = "GET-UNIVERSAL-TIME";
+
+	/**
+	 * The {@code encode-universal-time} prelude function (pure Gregorian calendar
+	 * arithmetic, one Lisp definition shared by every backend).
+	 */
+	public static final String ENCODE_UNIVERSAL_TIME = "ENCODE-UNIVERSAL-TIME";
+
+	/**
+	 * The {@code decode-universal-time} prelude function (the inverse split into the nine
+	 * decoded-time values).
+	 */
+	public static final String DECODE_UNIVERSAL_TIME = "DECODE-UNIVERSAL-TIME";
 
 	/** The {@code get-internal-real-time} built-in function. */
 	public static final String GET_INTERNAL_REAL_TIME = "GET-INTERNAL-REAL-TIME";
@@ -498,6 +528,12 @@ public final class LispNames {
 	public static final String SEARCH = "SEARCH";
 
 	/**
+	 * The {@code mismatch} prelude function: the index of the first mismatching element
+	 * of two (bounded) sequences, or nil when they match.
+	 */
+	public static final String MISMATCH = "MISMATCH";
+
+	/**
 	 * The {@code nconc} built-in function (destructively concatenate two lists).
 	 */
 	public static final String NCONC = "NCONC";
@@ -673,6 +709,31 @@ public final class LispNames {
 
 	/** The {@code clrhash} built-in function. */
 	public static final String CLRHASH = "CLRHASH";
+
+	/**
+	 * The {@code hash-table-test} built-in function. Always answers {@code equal}: every
+	 * backend's table is keyed structurally, so that is the test the lookups actually
+	 * implement whatever {@code :test} the table was made with.
+	 */
+	public static final String HASH_TABLE_TEST = "HASH-TABLE-TEST";
+
+	/**
+	 * The {@code hash-table-size} built-in function. Lite: a rontolisp table has no
+	 * separate capacity, so the size IS the entry count.
+	 */
+	public static final String HASH_TABLE_SIZE = "HASH-TABLE-SIZE";
+
+	/**
+	 * The {@code hash-table-rehash-size} built-in function. Lite: growth is the host
+	 * map's business here, so the standard default (1.5) is reported.
+	 */
+	public static final String HASH_TABLE_REHASH_SIZE = "HASH-TABLE-REHASH-SIZE";
+
+	/**
+	 * The {@code hash-table-rehash-threshold} built-in function. Lite: reports the
+	 * standard default (1.0), like {@link #HASH_TABLE_REHASH_SIZE}.
+	 */
+	public static final String HASH_TABLE_REHASH_THRESHOLD = "HASH-TABLE-REHASH-THRESHOLD";
 
 	/** The {@code hash-table-count} built-in function. */
 	public static final String HASH_TABLE_COUNT = "HASH-TABLE-COUNT";
@@ -1046,6 +1107,13 @@ public final class LispNames {
 	 */
 	public static final String LAMBDA_ENVIRONMENT = "&ENVIRONMENT";
 
+	/**
+	 * The {@code &whole} macro-lambda-list keyword: binds the whole macro call form
+	 * (defmacro) or the whole destructured list (destructuring-bind). Must be the first
+	 * element of the lambda list, per CL.
+	 */
+	public static final String LAMBDA_WHOLE = "&WHOLE";
+
 	/** The {@code :allow-other-keys} call-site keyword argument. */
 	public static final String ALLOW_OTHER_KEYS_KEYWORD = ":ALLOW-OTHER-KEYS";
 
@@ -1352,6 +1420,9 @@ public final class LispNames {
 	 * {@code setq} and returns the primary value; extra variables receive nil.
 	 */
 	public static final String MULTIPLE_VALUE_SETQ = "MULTIPLE-VALUE-SETQ";
+
+	/** The {@code multiple-value-prog1} macro. */
+	public static final String MULTIPLE_VALUE_PROG1 = "MULTIPLE-VALUE-PROG1";
 
 	/**
 	 * The {@code rotatef} macro. Rotates the values of its setf-able places left (each
@@ -1922,6 +1993,12 @@ public final class LispNames {
 	 * {@code vector}/{@code array}/{@code sequence} type specifiers in
 	 * {@code check-type}/{@code typecase} tests; not a public function.
 	 */
+	/**
+	 * The {@code arrayp} built-in function: the standard spelling of the internal
+	 * {@link #ARRAYP_INTERNAL} predicate (a string is an array, like CL).
+	 */
+	public static final String ARRAYP = "ARRAYP";
+
 	public static final String ARRAYP_INTERNAL = "%ARRAYP";
 
 	/**
@@ -2032,6 +2109,12 @@ public final class LispNames {
 	 * The {@code sbit} built-in function (+ its {@code (setf sbit)} writer): prelude
 	 * defuns over {@code aref}, since a "bit vector" is the general array holding 0/1.
 	 */
+	/**
+	 * The {@code bit} prelude function: a bit-array element (and its {@code setf}
+	 * writer), the non-simple twin of {@link #SBIT}.
+	 */
+	public static final String BIT = "BIT";
+
 	public static final String SBIT = "SBIT";
 
 	/**
@@ -2095,6 +2178,13 @@ public final class LispNames {
 	public static final String WITH_PACKAGE_ITERATOR = "WITH-PACKAGE-ITERATOR";
 
 	/**
+	 * The {@code do-external-symbols} macro: iterates a package's external symbols
+	 * (interpreter-real over the package registry; the compile paths support it inside
+	 * {@code #.} only, through the macro-time evaluator).
+	 */
+	public static final String DO_EXTERNAL_SYMBOLS = "DO-EXTERNAL-SYMBOLS";
+
+	/**
 	 * The {@code lower-case-p} built-in function (true if the character is a lowercase
 	 * letter). Lowered to {@code (not (char= c (char-upcase c)))} so it follows the
 	 * platform's Unicode case tables.
@@ -2111,6 +2201,12 @@ public final class LispNames {
 	 * The {@code digit-char-p} built-in function (the weight of a digit character in the
 	 * given radix, or nil).
 	 */
+	/**
+	 * The {@code digit-char} prelude function: the character denoting a weight in a radix
+	 * (the inverse of {@code digit-char-p}), or nil.
+	 */
+	public static final String DIGIT_CHAR = "DIGIT-CHAR";
+
 	public static final String DIGIT_CHAR_P = "DIGIT-CHAR-P";
 
 	/** The {@code :radix} keyword recognized by {@code parse-integer}. */
@@ -2168,6 +2264,13 @@ public final class LispNames {
 
 	/** The {@code write-line} built-in function. */
 	public static final String WRITE_LINE = "WRITE-LINE";
+
+	/**
+	 * The {@code with-open-stream} macro: binds a variable to an already-open stream
+	 * expression and closes it on exit (the {@code with-open-file} shape without the
+	 * open).
+	 */
+	public static final String WITH_OPEN_STREAM = "WITH-OPEN-STREAM";
 
 	/** The {@code with-open-file} macro. */
 	public static final String WITH_OPEN_FILE = "WITH-OPEN-FILE";
@@ -2255,6 +2358,22 @@ public final class LispNames {
 
 	/** The {@code write-sequence} macro (writes a vector to a binary stream). */
 	public static final String WRITE_SEQUENCE = "WRITE-SEQUENCE";
+
+	/**
+	 * The {@code force-output} built-in function: flushes an output stream's buffered
+	 * bytes to the underlying sink ({@code finish-output} is the same operation here --
+	 * every write is synchronous once flushed). Returns nil.
+	 */
+	public static final String FORCE_OUTPUT = "FORCE-OUTPUT";
+
+	/** The {@code finish-output} built-in function (alias of {@code force-output}). */
+	public static final String FINISH_OUTPUT = "FINISH-OUTPUT";
+
+	/**
+	 * The {@code listen} built-in function: whether a character/byte is immediately
+	 * available on an input stream without blocking.
+	 */
+	public static final String LISTEN = "LISTEN";
 
 	// String streams
 
@@ -3573,6 +3692,15 @@ public final class LispNames {
 	 */
 	public static final String READ_EVAL = "%READ-EVAL";
 
+	/**
+	 * The {@code #.} marker variant the backquote reader emits for a marker kept whole
+	 * inside a template's construction code: the load-time substitution wraps the value
+	 * in {@code quote} (the value is template DATA, not code), where the plain
+	 * {@link #READ_EVAL} marker substitutes the raw value. Unresolved occurrences
+	 * evaluate as the same 1-arg identity.
+	 */
+	public static final String READ_EVAL_TEMPLATE = "%READ-EVAL-TEMPLATE";
+
 	/** The canonical qualified spelling of {@code asdf:defsystem}. */
 	public static final String ASDF_DEFSYSTEM = ASDF_PKG + ":" + DEFSYSTEM;
 
@@ -3665,6 +3793,12 @@ public final class LispNames {
 	public static final String MASK_FIELD = "MASK-FIELD";
 
 	/** The {@code scale-float} built-in function ({@code f * 2^n}). */
+	/**
+	 * The {@code decode-float} prelude function: the three values of a float's binary
+	 * decomposition -- significand in [1/2, 1), exponent, and sign (1.0 or -1.0).
+	 */
+	public static final String DECODE_FLOAT = "DECODE-FLOAT";
+
 	public static final String SCALE_FLOAT = "SCALE-FLOAT";
 
 	/**
@@ -3711,6 +3845,12 @@ public final class LispNames {
 
 	/** The {@code input-stream-p} built-in function -- lite: any stream handle. */
 	public static final String INPUT_STREAM_P = "INPUT-STREAM-P";
+
+	/**
+	 * The {@code open-stream-p} built-in function: real against the stream table (a
+	 * closed handle's entry is removed), unlike the lite direction predicates.
+	 */
+	public static final String OPEN_STREAM_P = "OPEN-STREAM-P";
 
 	/** The {@code output-stream-p} built-in function -- lite: any stream handle. */
 	public static final String OUTPUT_STREAM_P = "OUTPUT-STREAM-P";
@@ -3803,8 +3943,21 @@ public final class LispNames {
 	/** The {@code array-dimension-limit} constant variable. */
 	public static final String ARRAY_DIMENSION_LIMIT = "ARRAY-DIMENSION-LIMIT";
 
+	/**
+	 * The {@code internal-time-units-per-second} constant variable: 1000 on every
+	 * backend, since {@code get-internal-real-time}/{@code get-internal-run-time} count
+	 * milliseconds.
+	 */
+	public static final String INTERNAL_TIME_UNITS_PER_SECOND = "INTERNAL-TIME-UNITS-PER-SECOND";
+
 	/** The {@code char-code-limit} constant variable. */
 	public static final String CHAR_CODE_LIMIT = "CHAR-CODE-LIMIT";
+
+	/**
+	 * The {@code lambda-list-keywords} constant variable (substituted at read time as a
+	 * quoted list of the supported {@code &}-symbols).
+	 */
+	public static final String LAMBDA_LIST_KEYWORDS = "LAMBDA-LIST-KEYWORDS";
 
 	/** The {@code array-total-size-limit} constant variable. */
 	public static final String ARRAY_TOTAL_SIZE_LIMIT = "ARRAY-TOTAL-SIZE-LIMIT";

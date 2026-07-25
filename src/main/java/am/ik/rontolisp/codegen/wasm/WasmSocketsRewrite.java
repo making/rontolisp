@@ -47,7 +47,7 @@ final class WasmSocketsRewrite {
 	private static final Map<String, String> SYNC_DISPATCH = Map.of(LispNames.READ_LINE, "%IO-READ-LINE",
 			LispNames.READ_CHAR, "%IO-READ-CHAR", LispNames.READ_BYTE, "%IO-READ-BYTE", LispNames.WRITE_LINE,
 			"%IO-WRITE-LINE", LispNames.WRITE_BYTE, "%IO-WRITE-BYTE", LispNames.WRITE_STRING, "%IO-WRITE-STRING",
-			LispNames.CLOSE, "%IO-CLOSE");
+			LispNames.CLOSE, "%IO-CLOSE", LispNames.LISTEN, "%IO-LISTEN", LispNames.OPEN_STREAM_P, "%IO-OPEN-STREAM-P");
 
 	// Async-context read promotions: native name -> the future-returning async internal.
 	private static final Map<String, String> ASYNC_FUTURES = Map.of(LispNames.READ_LINE, "%READ-LINE-FUTURE",
@@ -61,12 +61,13 @@ final class WasmSocketsRewrite {
 	// Accepted argument-count ranges per target: a call outside its range is left
 	// UNREWRITTEN so it resolves against the native built-in / public defun and errors
 	// under its public name ("tcp-connect expects 2 arguments"), not an internal one.
-	private static final Map<String, int[]> ARITIES = Map.of(LispNames.READ_LINE, new int[] { 0, 1 },
-			LispNames.READ_CHAR, new int[] { 0, 1 }, LispNames.READ_BYTE, new int[] { 0, 1 }, LispNames.WRITE_LINE,
-			new int[] { 1, 2 }, LispNames.WRITE_BYTE, new int[] { 2, 2 }, LispNames.WRITE_STRING, new int[] { 1, 2 },
-			LispNames.CLOSE, new int[] { 1, 1 },
-			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT), new int[] { 2, 2 },
-			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT), new int[] { 1, 1 });
+	private static final Map<String, int[]> ARITIES = Map.ofEntries(Map.entry(LispNames.READ_LINE, new int[] { 0, 1 }),
+			Map.entry(LispNames.READ_CHAR, new int[] { 0, 1 }), Map.entry(LispNames.READ_BYTE, new int[] { 0, 1 }),
+			Map.entry(LispNames.WRITE_LINE, new int[] { 1, 2 }), Map.entry(LispNames.WRITE_BYTE, new int[] { 2, 2 }),
+			Map.entry(LispNames.WRITE_STRING, new int[] { 1, 2 }), Map.entry(LispNames.CLOSE, new int[] { 1, 1 }),
+			Map.entry(LispNames.LISTEN, new int[] { 0, 1 }), Map.entry(LispNames.OPEN_STREAM_P, new int[] { 1, 1 }),
+			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT), new int[] { 2, 2 }),
+			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT), new int[] { 1, 1 }));
 
 	private static final String IO_MARKER = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%IO-READ-LINE");
 
@@ -206,6 +207,12 @@ final class WasmSocketsRewrite {
 	// The call substitution, or null when the head is not a target.
 	private static @org.jspecify.annotations.Nullable LispVal substitute(String head, List<LispVal> parts,
 			boolean asyncContext) {
+		// (close stream :abort expr) normalizes to (close stream) BEFORE the arity
+		// check, so an aborting close on a socket still reaches %io-close.
+		if (LispNames.CLOSE.equals(head) && parts.size() == 4 && parts.get(2) instanceof LispSymbol kw
+				&& ":ABORT".equals(kw.name())) {
+			parts = List.of(parts.get(0), parts.get(1));
+		}
 		int[] arity = ARITIES.get(head);
 		if (arity != null && (parts.size() - 1 < arity[0] || parts.size() - 1 > arity[1])) {
 			return null;

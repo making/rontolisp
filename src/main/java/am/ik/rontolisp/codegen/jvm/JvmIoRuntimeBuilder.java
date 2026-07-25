@@ -89,6 +89,18 @@ final class JvmIoRuntimeBuilder {
 
 	static final String STRING_STREAM_CONTENTS_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String FORCE_OUTPUT_METHOD = "_forceOutput";
+
+	static final String FORCE_OUTPUT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String OPEN_STREAM_P_METHOD = "_openStreamP";
+
+	static final String OPEN_STREAM_P_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String LISTEN_METHOD = "_listen";
+
+	static final String LISTEN_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	private final ConstantPool cp;
 
 	private final FieldrefConstant streamsField;
@@ -225,6 +237,18 @@ final class JvmIoRuntimeBuilder {
 
 	private final MethodrefConstant characterToCodePoint;
 
+	private final MethodrefConstant printStreamFlush;
+
+	private final MethodrefConstant writerFlush;
+
+	private final MethodrefConstant outputStreamFlush;
+
+	private final MethodrefConstant bufferedReaderReady;
+
+	private final MethodrefConstant inputStreamAvailable;
+
+	private final MethodrefConstant socketIsClosed;
+
 	/**
 	 * Socket-runtime constants, non-null only when the program uses a tcp built-in; the
 	 * stream built-ins then grow socket branches (a socket entry is a raw
@@ -347,6 +371,19 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("isLowSurrogate"), cp.addUtf8("(C)Z")));
 		this.characterToCodePoint = cp.addMethodref(characterClass,
 				cp.addNameAndType(cp.addUtf8("toCodePoint"), cp.addUtf8("(CC)I")));
+		// force-output / listen support: flush on the three writer shapes, readiness
+		// probes on the two reader shapes.
+		this.printStreamFlush = cp.addMethodref(printStreamClass,
+				cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")));
+		this.writerFlush = cp.addMethodref(this.writerClass, cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")));
+		this.outputStreamFlush = cp.addMethodref(this.outputStreamClass,
+				cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")));
+		this.bufferedReaderReady = cp.addMethodref(this.bufferedReaderClass,
+				cp.addNameAndType(cp.addUtf8("ready"), cp.addUtf8("()Z")));
+		this.inputStreamAvailable = cp.addMethodref(this.inputStreamClass,
+				cp.addNameAndType(cp.addUtf8("available"), cp.addUtf8("()I")));
+		this.socketIsClosed = cp.addMethodref(cp.addClass(cp.addUtf8("java/net/Socket")),
+				cp.addNameAndType(cp.addUtf8("isClosed"), cp.addUtf8("()Z")));
 	}
 
 	static JvmIoRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
@@ -380,7 +417,326 @@ final class JvmIoRuntimeBuilder {
 				this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_DESC), 7, 4, buildMakeStringInputStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(STRING_STREAM_CONTENTS_METHOD),
 				this.cp.addUtf8(STRING_STREAM_CONTENTS_DESC), 3, 2, buildStringStreamContents()));
+		ms.add(new IoMethod(this.cp.addUtf8(FORCE_OUTPUT_METHOD), this.cp.addUtf8(FORCE_OUTPUT_DESC), 4, 2,
+				buildForceOutput()));
+		ms.add(new IoMethod(this.cp.addUtf8(LISTEN_METHOD), this.cp.addUtf8(LISTEN_DESC), 4, 2, buildListen()));
+		ms.add(new IoMethod(this.cp.addUtf8(OPEN_STREAM_P_METHOD), this.cp.addUtf8(OPEN_STREAM_P_DESC), 4, 2,
+				buildOpenStreamP()));
 		return ms;
+	}
+
+	/**
+	 * {@code _forceOutput(Object handle) -> null}. Flushes the designated output stream's
+	 * buffered bytes: a non-handle designator ({@code null}/T) flushes standard output, a
+	 * socket entry its output stream, a writer/output-stream entry itself. Anything else
+	 * (an input stream, a closed slot) is a no-op -- flushing never signals here.
+	 */
+	private List<Integer> buildForceOutput() {
+		// Slots: 0=handle, 1=entry
+		List<Integer> code = new ArrayList<>();
+		// if (!(handle instanceof Long)) { System.out.flush(); return null; }
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
+		int ifHandlePos = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.systemOut.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.printStreamFlush.index());
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifHandlePos, code.size());
+		// entry = _streams[(int) ((Long) handle).longValue()];
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ASTORE_1);
+		List<Integer> gotoDones = new ArrayList<>();
+		if (this.sockets != null) {
+			// if (entry instanceof Socket) { entry.getOutputStream().flush(); }
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.sockets.socketClass().index());
+			int ifNotSocketPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.sockets.socketClass().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.sockets.socketGetOutputStream().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.outputStreamFlush.index());
+			gotoDones.add(code.size());
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, ifNotSocketPos, code.size());
+		}
+		// if (entry instanceof Writer) ((Writer) entry).flush();
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.writerClass.index());
+		int ifNotWriterPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.writerClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.writerFlush.index());
+		gotoDones.add(code.size());
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotWriterPos, code.size());
+		// else if (entry instanceof OutputStream) ((OutputStream) entry).flush();
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.outputStreamClass.index());
+		int ifNotOutputPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.outputStreamClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.outputStreamFlush.index());
+		patchBranch(code, ifNotOutputPos, code.size());
+		for (int gotoDone : gotoDones) {
+			patchBranch(code, gotoDone, code.size());
+		}
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _openStreamP(Object handle) -> "T" | null}. Whether the handle still names
+	 * an open stream: its {@code _streams} slot is non-null (a {@code close} nulls it)
+	 * and, for a socket entry, the socket has not been closed from the other side. A
+	 * non-handle designator (the {@code t} standard-output designator) answers T; any
+	 * other value answers nil.
+	 */
+	private List<Integer> buildOpenStreamP() {
+		// Slots: 0=handle, 1=idx (int)
+		List<Integer> code = new ArrayList<>();
+		List<Integer> gotoNils = new ArrayList<>();
+		// A non-Long designator: T for the t stream designator, nil for anything else.
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
+		int ifHandlePos = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_0);
+		gotoNils.add(code.size());
+		code.add(Opcode.IFNULL);
+		emitU2(code, 0);
+		emitLdc(code, this.tStr.index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifHandlePos, code.size());
+		// _streams == null -> nil
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		gotoNils.add(code.size());
+		code.add(Opcode.IFNULL);
+		emitU2(code, 0);
+		// idx = (int) handle; idx < 0 || idx >= _streams.length -> nil
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.ISTORE_1);
+		code.add(Opcode.ILOAD_1);
+		gotoNils.add(code.size());
+		code.add(Opcode.IFLT);
+		emitU2(code, 0);
+		code.add(Opcode.ILOAD_1);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ARRAYLENGTH);
+		gotoNils.add(code.size());
+		code.add(Opcode.IF_ICMPGE);
+		emitU2(code, 0);
+		// entry == null -> nil
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ILOAD_1);
+		code.add(Opcode.AALOAD);
+		gotoNils.add(code.size());
+		code.add(Opcode.IFNULL);
+		emitU2(code, 0);
+		if (this.sockets != null) {
+			// A socket the peer (or a foreign close) shut: isClosed() -> nil.
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, this.streamsField.index());
+			code.add(Opcode.ILOAD_1);
+			code.add(Opcode.AALOAD);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.sockets.socketClass().index());
+			int ifNotSocketPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, this.streamsField.index());
+			code.add(Opcode.ILOAD_1);
+			code.add(Opcode.AALOAD);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.sockets.socketClass().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.socketIsClosed.index());
+			gotoNils.add(code.size());
+			code.add(Opcode.IFNE);
+			emitU2(code, 0);
+			patchBranch(code, ifNotSocketPos, code.size());
+		}
+		emitLdc(code, this.tStr.index());
+		code.add(Opcode.ARETURN);
+		for (int gotoNil : gotoNils) {
+			patchBranch(code, gotoNil, code.size());
+		}
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _listen(Object handle) -> "T" | null}. Whether a character/byte is
+	 * immediately available without blocking: a non-handle designator probes standard
+	 * input ({@code _stdinReader.ready()} when the shared reader exists, otherwise
+	 * {@code System.in.available()}), a socket entry asks the kernel receive buffer, a
+	 * reader entry {@code ready()}, a byte-stream entry {@code available()}. A non-input
+	 * entry answers nil.
+	 */
+	private List<Integer> buildListen() {
+		// Slots: 0=handle, 1=entry
+		List<Integer> code = new ArrayList<>();
+		List<Integer> gotoNils = new ArrayList<>();
+		List<Integer> gotoTs = new ArrayList<>();
+		// if (!(handle instanceof Long)) { stdin probe }
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
+		int ifHandlePos = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		// if (_stdinReader != null) return _stdinReader.ready() ? "T" : null;
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.stdinReaderField.index());
+		int ifNoReaderPos = code.size();
+		code.add(Opcode.IFNULL);
+		emitU2(code, 0);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.stdinReaderField.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.bufferedReaderReady.index());
+		gotoNils.add(code.size());
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		gotoTs.add(code.size());
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNoReaderPos, code.size());
+		// return System.in.available() > 0 ? "T" : null;
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.systemIn.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.inputStreamAvailable.index());
+		gotoNils.add(code.size());
+		code.add(Opcode.IFLE);
+		emitU2(code, 0);
+		gotoTs.add(code.size());
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifHandlePos, code.size());
+		// entry = _streams[(int) ((Long) handle).longValue()];
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ASTORE_1);
+		if (this.sockets != null) {
+			// if (entry instanceof Socket) return in.available() > 0 ? "T" : null;
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.sockets.socketClass().index());
+			int ifNotSocketPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.sockets.socketClass().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.sockets.socketGetInputStream().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.inputStreamAvailable.index());
+			gotoNils.add(code.size());
+			code.add(Opcode.IFLE);
+			emitU2(code, 0);
+			gotoTs.add(code.size());
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, ifNotSocketPos, code.size());
+		}
+		// if (entry instanceof BufferedReader) return ready() ? "T" : null;
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.bufferedReaderClass.index());
+		int ifNotReaderPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.bufferedReaderClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.bufferedReaderReady.index());
+		gotoNils.add(code.size());
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		gotoTs.add(code.size());
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotReaderPos, code.size());
+		// if (entry instanceof InputStream) return available() > 0 ? "T" : null;
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.inputStreamClass.index());
+		gotoNils.add(code.size());
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.inputStreamClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.inputStreamAvailable.index());
+		gotoNils.add(code.size());
+		code.add(Opcode.IFLE);
+		emitU2(code, 0);
+		for (int gotoT : gotoTs) {
+			patchBranch(code, gotoT, code.size());
+		}
+		emitLdc(code, this.tStr.index());
+		code.add(Opcode.ARETURN);
+		for (int gotoNil : gotoNils) {
+			patchBranch(code, gotoNil, code.size());
+		}
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		return code;
 	}
 
 	/**

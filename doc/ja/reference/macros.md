@@ -17,6 +17,7 @@
 | `do*` | `(do* ((var init step?)...) (end-test result...) body...)` | `do` と同様ですが、束縛とステップが逐次的(`let*` 形式)です。各init/stepフォームは今回の反復ですでに更新された変数を参照します |
 | `loop` | `(loop for i from 1 to n collect (f i))` | ANSI `loop` の限定サブセット。数値/リストのステップ(`for`)、集約(`collect`/`sum`/`count`/...)、単純な制御節(`while`/`repeat`/`when`/`finally`/`return`)に対応します。完全な文法と制限事項はページを参照してください |
 | `prog1` | `(prog1 first body...)` | すべてのフォームを順に評価し、`first` の値を返します |
+| `multiple-value-prog1` | `(multiple-value-prog1 (floor 17 5) (cleanup))` | `prog1` と同様だが最初のフォームの全多値を返す |
 | `prog2` | `(prog2 first second body...)` | すべてのフォームを順に評価し、`second` の値を返します |
 | `time` | `(time form)` | `form` を評価し、経過実時間を標準出力に印字し(`; Elapsed real time: N ms`)、formの値を返します。`N` はインタプリタ/JVMではミリ秒の整数、WASMではミリ秒の浮動小数点です |
 | `psetq` | `(psetq v1 e1 v2 e2 ...)` | 並列代入。いずれかの変数に代入する前にすべての右辺が評価されます。nilを返します |
@@ -39,6 +40,7 @@
 | `decf` | `(decf place delta?)` | `(setf place (- place delta))` に展開されます。`delta` のデフォルトは1です。新しい値を返します |
 | `format` | `(format t "Hello ~a, ~d!~%" 'world 42)`, `(format nil "~a" x)` | 標準出力(`t`、nilを返す)または文字列(`nil`)への整形出力 |
 | `with-open-file` | `(with-open-file (s "f.txt" :direction :output) (write-line "hi" s))` | ファイルを開き、ストリームを `s` に束縛し、bodyを評価し、ファイルを閉じます。bodyの値を返します。サポートされるのは `:direction` オプション(`:input` がデフォルト、`:output`)と `:element-type` オプション(`'character` がデフォルト、バイナリストリームには `'(unsigned-byte 8)`)で、どちらもリテラルでなければなりません |
+| `with-open-stream` | `(with-open-stream (s (make-string-input-stream "hi")) (read-line s))` | すでに開いているストリームを束縛して本体を評価し、閉じる。`open` を伴わない `with-open-file` |
 | `check-type` | `(check-type place typespec [string])` | `place` の値が指定された型でなければエラーをシグナルし、型に合致していれば nil を返します。ライト版: リスタートがないため place への再格納はありません |
 | `assert` | `(assert test-form [(place...) [datum args...]])` | `test-form` が偽ならエラーをシグナルし、真なら nil を返します。place のリストは受理されますが無視されます（リスタートなし） |
 | `declare` | `(declare declaration...)` | 解析されるだけの no-op: nil に評価され、引数は評価も検証もされません |
@@ -68,6 +70,7 @@
 | `slot-makunbound` | `(slot-makunbound obj 'slot)` | lite 版: スロットに nil を格納し、インスタンスを返します |
 | `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | 本体出力を `#<[class ]...>` で囲んで書き、nil を返します(`:identity` は受理のみ) |
 | `with-package-iterator` | `(with-package-iterator (next pkgs :external) body...)` | ライト版: イテレータ名を「もうシンボルはない」と常に返すローカル関数に束縛(intern テーブルなし) |
+| `do-external-symbols` | `(do-external-symbols (s :rontolisp) (print s))` | パッケージのエクスポート済みシンボルを反復 (インタプリタ専用。コンパイル済みバックエンドはパッケージレジストリを持たない) |
 
 マクロは関数値を持ちません。`#'cond` や `(funcall 'setf ...)`
 はエラーです。呼び出し位置でインライン展開される便利なアクセサや述語(`first`, `rest`, `nth`,

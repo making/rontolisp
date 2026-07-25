@@ -242,7 +242,8 @@ public final class UserMacroExpander {
 	/** Whether the form contains a {@code %read-eval} marker symbol anywhere. */
 	private static boolean usesReadEvalMarker(LispVal form) {
 		return switch (form) {
-			case LispSymbol sym -> LispNames.READ_EVAL.equals(sym.name());
+			case LispSymbol sym ->
+				LispNames.READ_EVAL.equals(sym.name()) || LispNames.READ_EVAL_TEMPLATE.equals(sym.name());
 			case LispCons cons -> usesReadEvalMarker(cons.car()) || usesReadEvalMarker(cons.cdr());
 			default -> false;
 		};

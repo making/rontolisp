@@ -50,6 +50,7 @@ categories:
       - { slug: sinh-cosh-tanh, name: "sinh cosh tanh" }
       - { slug: random, name: "random" }
       - { slug: scale-float, name: "scale-float" }
+      - { slug: decode-float, name: "decode-float" }
   - title: "Bitwise Operations"
     functions:
       - { slug: logand, name: "logand" }
@@ -91,6 +92,7 @@ categories:
       - { slug: characterp, name: "characterp" }
       - { slug: functionp, name: "functionp" }
       - { slug: vectorp, name: "vectorp" }
+      - { slug: arrayp, name: "arrayp" }
       - { slug: constantp, name: "constantp" }
       - { slug: get-setf-expansion, name: "get-setf-expansion" }
       - { slug: streamp, name: "streamp" }
@@ -137,6 +139,7 @@ categories:
       - { slug: make-load-form-saving-slots, name: "make-load-form-saving-slots" }
       - { slug: sxhash, name: "sxhash" }
       - { slug: sbit, name: "sbit" }
+      - { slug: bit, name: "bit" }
       - { slug: both-case-p, name: "both-case-p" }
       - { slug: special-operator-p, name: "special-operator-p" }
       - { slug: macro-function, name: "macro-function" }
@@ -147,6 +150,7 @@ categories:
       - { slug: get, name: "get" }
       - { slug: case-char-p, name: "lower-case-p upper-case-p" }
       - { slug: digit-char-p, name: "digit-char-p" }
+      - { slug: digit-char, name: "digit-char" }
       - { slug: char-name, name: "char-name" }
   - title: "Cons & List Construction"
     functions:
@@ -209,6 +213,7 @@ categories:
       - { slug: delete-if-not, name: "delete-if-not" }
       - { slug: subst, name: "subst" }
       - { slug: search, name: "search" }
+      - { slug: mismatch, name: "mismatch" }
       - { slug: substitute, name: "substitute" }
       - { slug: nsubstitute, name: "nsubstitute" }
   - title: "Sets"
@@ -249,6 +254,10 @@ categories:
       - { slug: remhash, name: "remhash" }
       - { slug: clrhash, name: "clrhash" }
       - { slug: hash-table-count, name: "hash-table-count" }
+      - { slug: hash-table-test, name: "hash-table-test" }
+      - { slug: hash-table-size, name: "hash-table-size" }
+      - { slug: hash-table-rehash-size, name: "hash-table-rehash-size" }
+      - { slug: hash-table-rehash-threshold, name: "hash-table-rehash-threshold" }
       - { slug: hash-table-p, name: "hash-table-p" }
       - { slug: maphash, name: "maphash" }
   - title: "Arrays"
@@ -306,6 +315,10 @@ categories:
     functions:
       - { slug: open, name: "open" }
       - { slug: close, name: "close" }
+      - { slug: open-stream-p, name: "open-stream-p" }
+      - { slug: force-output, name: "force-output" }
+      - { slug: finish-output, name: "finish-output" }
+      - { slug: listen, name: "listen" }
       - { slug: write-line, name: "write-line" }
       - { slug: write-string, name: "write-string" }
       - { slug: read-byte, name: "read-byte" }
@@ -321,12 +334,15 @@ categories:
   - title: "System & Time"
     functions:
       - { slug: get-universal-time, name: "get-universal-time" }
+      - { slug: encode-universal-time, name: "encode-universal-time" }
+      - { slug: decode-universal-time, name: "decode-universal-time" }
       - { slug: get-internal-real-time, name: "get-internal-real-time" }
       - { slug: get-internal-run-time, name: "get-internal-run-time" }
       - { slug: getenv, name: "getenv" }
   - title: "rontolisp Package"
     functions:
       - { slug: rontolisp-version, name: "rontolisp:version" }
+      - { slug: rontolisp-random-bytes, name: "rontolisp:random-bytes" }
       - { slug: rontolisp-list-functions, name: "rontolisp:list-functions" }
       - { slug: rontolisp-list-macros, name: "rontolisp:list-macros" }
       - { slug: rontolisp-list-special-forms, name: "rontolisp:list-special-forms" }

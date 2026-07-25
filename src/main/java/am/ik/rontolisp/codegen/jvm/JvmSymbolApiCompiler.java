@@ -70,8 +70,11 @@ final class JvmSymbolApiCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.internKeywordForm(full.get(1)), ctx, className);
 				return;
 			}
-			throw new UnsupportedOperationException(
-					LispNames.INTERN + " with a non-keyword package argument is not supported");
+			// A runtime package argument needs the resolver's package state, which only
+			// the interpreter has -- lower to a call-time signal (the jzon stub-lowering
+			// precedent) so a library defun merely CONTAINING the form still compiles.
+			JvmExprCompiler.compileExpr(LispMacroExpander.internPackageArgumentStub(), ctx, className);
+			return;
 		}
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.INTERN);
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);

@@ -24,14 +24,13 @@ final class WasmGensymCompiler {
 		if (args.size() > 2) {
 			throw new UnsupportedOperationException(LispNames.GENSYM + " expects at most 1 argument: " + cons.print());
 		}
-		String prefix = "g";
-		if (args.size() == 2) {
-			if (!(args.get(1) instanceof LispString s)) {
-				throw new UnsupportedOperationException(
-						LispNames.GENSYM + " prefix must be a literal string: " + cons.print());
-			}
-			prefix = s.value();
+		if (args.size() == 2 && !(args.get(1) instanceof LispString)) {
+			// A computed prefix: the shared string-construction lowering (the interned
+			// prefix text below is a compile-time constant, so it has no place here).
+			WasmExprCompiler.compileExpr(am.ik.rontolisp.LispMacroExpander.expandComputedGensym(args.get(1)), ctx);
+			return;
 		}
+		String prefix = args.size() == 2 ? ((LispString) args.get(1)).value() : "g";
 		WasmLispCompiler.StringTable.StringEntry entry = ctx.stringTable.addString("#:" + prefix);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(entry.offset());

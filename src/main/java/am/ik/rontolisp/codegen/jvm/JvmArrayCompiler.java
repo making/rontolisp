@@ -47,8 +47,7 @@ final class JvmArrayCompiler {
 		if (displacedTo != null) {
 			// A displaced view excludes the other keywords (lite semantics; detected at
 			// compile time because make-array keywords are literal at the call site).
-			if (findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD) != null
-					|| findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD) != null
+			if (nonNilKeyword(args, LispNames.FILL_POINTER_KEYWORD) || nonNilKeyword(args, LispNames.ADJUSTABLE_KEYWORD)
 					|| findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD) != null) {
 				throw new UnsupportedOperationException(
 						"make-array: :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element");
@@ -418,6 +417,14 @@ final class JvmArrayCompiler {
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(ref.index());
+	}
+
+	// A make-array keyword explicitly given a NON-nil value. An explicit nil
+	// (alexandria's ":adjustable nil" beside :displaced-to) asserts exactly what a
+	// displaced view already is, so it must not read as a conflicting option.
+	private static boolean nonNilKeyword(List<LispVal> args, String keyword) {
+		LispVal value = findKeywordValue(args, keyword);
+		return value != null && !(value instanceof am.ik.rontolisp.LispNil);
 	}
 
 }

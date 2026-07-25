@@ -290,6 +290,13 @@ final class WasmExprCompiler {
 					}
 					return;
 				}
+				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {
+					// One cryptographically strong byte: the low byte of a WASI
+					// random_get draw (real host entropy in Preview 1, wasi:random
+					// under --component), boxed as an i31 fixnum.
+					WasmRandomCompiler.compileRandomByte(cons, ctx);
+					return;
+				}
 				if (LispNames.WAIT_FOR.equals(qn.member()) && !ctx.component) {
 					// Under --component, wait-for is the spliced wait.lisp defun (over
 					// the wit-imported wasi:clocks monotonic-clock, a pending future the
@@ -468,10 +475,39 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeCondition(cons, ctx.closRegistry), ctx);
 				case LispNames.DOCUMENTATION ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandDocumentation(cons), ctx);
+				case LispNames.WITH_OPEN_STREAM ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenStream(cons, ctx.ehMode), ctx);
 				case LispNames.WITH_OPEN_FILE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons, ctx.ehMode), ctx);
 				case LispNames.READ_BYTE -> WasmReadByteCompiler.compile(cons, ctx);
 				case LispNames.WRITE_BYTE -> WasmWriteByteCompiler.compile(cons, ctx);
+				case LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT -> {
+					// Every WASM write goes out synchronously (fd_write / the component's
+					// sock-stream-write park per call), so flushing is the identity: the
+					// designator is still evaluated, the value is nil.
+					java.util.List<LispVal> foParts = cons.toList();
+					if (foParts.size() > 2) {
+						throw new UnsupportedOperationException(
+								"force-output expects 0 or 1 arguments, got " + (foParts.size() - 1));
+					}
+					LispVal foExpansion = foParts.size() == 2
+							? new LispCons(new LispSymbol(LispNames.PROGN),
+									new LispCons(foParts.get(1), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)))
+							: LispNil.INSTANCE;
+					WasmExprCompiler.compileExpr(foExpansion, ctx);
+				}
+				case LispNames.OPEN_STREAM_P ->
+					// Without the sockets library spliced (which rewrites this to its
+					// table-backed dispatch defun) there is no per-fd open/closed record
+					// here: a non-nil stream designator answers t.
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandOpenStreamPLite(cons), ctx);
+				case LispNames.LISTEN ->
+					// Under --component with sockets spliced, listen is rewritten to the
+					// %io-listen dispatch defun before compilation (WasmSocketsRewrite);
+					// one reaching this compiler has no non-blocking probe behind it.
+					throw new UnsupportedOperationException(
+							"listen requires the interpreter, the JVM backend or a --component socket stream"
+									+ " (no non-blocking input probe exists on this WASM target)");
 				case LispNames.READ_SEQUENCE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandReadSequence(cons), ctx);
 				case LispNames.WRITE_SEQUENCE ->
@@ -522,7 +558,7 @@ final class WasmExprCompiler {
 							LispMacroExpander.expandUnsupportedCall(cons,
 									((LispSymbol) cons.car()).name() + " is unsupported on the WASM numeric model"),
 							ctx);
-				case LispNames.READ_EVAL ->
+				case LispNames.READ_EVAL, LispNames.READ_EVAL_TEMPLATE ->
 					// Identity: a #. marker split into code position by a backquote
 					// template
 					// arrives here with its (already evaluated) argument.
@@ -609,6 +645,13 @@ final class WasmExprCompiler {
 				case LispNames.GO -> WasmTagbodyCompiler.compileGo(cons, ctx);
 				case LispNames.PRINT_UNREADABLE_OBJECT ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandPrintUnreadableObject(cons), ctx);
+				case LispNames.DO_EXTERNAL_SYMBOLS ->
+					// Real on the interpreter (registry-backed); inside #. the macro-time
+					// evaluator resolves it before compilation. A runtime occurrence has
+					// no
+					// package registry behind it here.
+					throw new UnsupportedOperationException(LispNames.DO_EXTERNAL_SYMBOLS
+							+ " requires the interpreter (no runtime package registry in compiled mode)");
 				case LispNames.WITH_PACKAGE_ITERATOR ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithPackageIterator(cons), ctx);
 				case LispNames.PROG -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, false), ctx);
@@ -718,6 +761,13 @@ final class WasmExprCompiler {
 				case LispNames.REMHASH -> WasmHashTableCompiler.compileRem(cons, ctx);
 				case LispNames.CLRHASH -> WasmHashTableCompiler.compileClr(cons, ctx);
 				case LispNames.HASH_TABLE_COUNT -> WasmHashTableCompiler.compileCount(cons, ctx);
+				case LispNames.HASH_TABLE_TEST ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandHashTableTest(cons), ctx);
+				case LispNames.HASH_TABLE_SIZE -> WasmHashTableCompiler.compileCount(cons, ctx);
+				case LispNames.HASH_TABLE_REHASH_SIZE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.5), ctx);
+				case LispNames.HASH_TABLE_REHASH_THRESHOLD ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.0), ctx);
 				case LispNames.HASH_TABLE_P -> WasmHashTableCompiler.compileP(cons, ctx);
 				case LispNames.MAPHASH -> WasmHashTableCompiler.compileMaphash(cons, ctx);
 				case LispNames.MAKE_ARRAY -> WasmArrayCompiler.compileMake(cons, ctx);
@@ -803,6 +853,7 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandStableSort(cons), ctx);
 				case LispNames.COPY_SEQ -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCopySeq(cons), ctx);
 				case LispNames.VECTORP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandVectorp(cons), ctx);
+				case LispNames.ARRAYP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayp(cons), ctx);
 				case LispNames.APPLY -> WasmApplyCompiler.compile(cons, ctx);
 				case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);
 				case LispNames.ATOM -> WasmAtomCompiler.compile(cons, ctx);
@@ -985,6 +1036,8 @@ final class WasmExprCompiler {
 				case LispNames.NTH_VALUE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNthValue(cons), ctx);
 				case LispNames.MULTIPLE_VALUE_SETQ ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueSetq(cons), ctx);
+				case LispNames.MULTIPLE_VALUE_PROG1 ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueProg1(cons), ctx);
 				case LispNames.ROTATEF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRotatef(cons), ctx);
 				case LispNames.SHIFTF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandShiftf(cons), ctx);
 				case LispNames.LOAD_TIME_VALUE ->

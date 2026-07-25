@@ -56,6 +56,10 @@ page.
 | `read-line` | `(read-line)`, `(read-line stream)` | Read one line from stdin (or from an input stream), return as string. `nil` on EOF |
 | `open` | `(open "f.txt")`, `(open "f.txt" :output)`, `(open "f.bin" :input '(unsigned-byte 8))` | Open a file and return a stream. The direction must be the literal `:input` (default, read) or `:output` (create/truncate, write); the optional element type must be the literal `'character` (default, text) or `'(unsigned-byte 8)` (binary) |
 | `close` | `(close stream)` | Close a stream opened by `open`. Returns `t` |
+| `open-stream-p` | `(open-stream-p stream)` | `t` while the handle names an open stream, `nil` after `close` (exact for sockets on the interpreter/JVM and on `--component`) |
+| `force-output` | `(force-output stream)` | Flush an output stream (no argument = standard output). Returns nil |
+| `finish-output` | `(finish-output stream)` | The same operation as `force-output` -- every write here is synchronous once flushed |
+| `listen` | `(listen stream)` | `t` when input is immediately available without blocking; Preview 1 WASM has no such probe |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | Write the string plus a newline to an output stream (or to standard output). Returns the string |
 | `read-byte` | `(read-byte stream)`, `(read-byte stream nil -1)` | Read one byte (0-255) from a binary input stream. At EOF, signal an error, or return `eof-value` when `eof-error-p` is `nil` |
 | `write-byte` | `(write-byte 255 stream)` | Write one raw byte (0-255) to a binary output stream. Returns the byte |
@@ -77,6 +81,7 @@ page.
 | `make-load-form-saving-slots` | `(make-load-form-saving-slots obj)` | Lite stub: signals (no fasl dumper); exists so `make-load-form` methods compile |
 | `sxhash` | `(sxhash "ab")` | Structural hash (integers/characters/strings/symbols/conses); stable within a run, not across backends |
 | `sbit` | `(sbit #*0110 1)` | Bit-vector element read; `(setf (sbit v i) b)` writes |
+| `bit` | `(bit #*0110 1)` | Bit-array element read; `(setf (bit v i) b)` writes |
 | `both-case-p` | `(both-case-p #\a)` | True for a cased letter (`lower-case-p` or `upper-case-p`) |
 | `special-operator-p` | `(special-operator-p 'if)` | Lite stub: always `nil` (no reified operator table) |
 | `macro-function` | `(macro-function 'when)` | Lite stub: always `nil` (macros are fully expanded at compile time) |
@@ -87,6 +92,7 @@ page.
 | `get` | `(get 'sym 'prop)`, `(setf (get 'sym 'prop) v)` | Symbol property lists over one program-global name-keyed store |
 | `lower-case-p` `upper-case-p` | `(lower-case-p #\a)`, `(upper-case-p #\A)` | `t`, `t` -- true when up/down-casing changes the character (follows the Unicode case tables) |
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- the digit weight in the given radix (default 10), or nil |
+| `digit-char` | `(digit-char 11 16)` | `#\B` -- the character for a weight in the radix (default 10), or nil |
 | `eval` | `(eval '(+ 1 2))` | Evaluate an expression (all three backends). Returns the result |
 | `load` | `(load "bar.lisp")` | Read and evaluate every top-level form in a file in the global environment (all three backends). Returns `t` |
 | `require` | `(require :util)`, `(require :util "lib/util.lisp")` | Load a module's file (`<name>.lisp` next to the requiring file, or the explicit path) unless already `provide`d. Returns the module name. On the compile path it must be a literal, top-level form |
@@ -114,6 +120,7 @@ page.
 | `denominator` | `(denominator 3/4)` | `4` (`1` for integers) |
 | `symbolp` | `(symbolp 'foo)` | `t` |
 | `stringp` | `(stringp "hello")` | `t` |
+| `arrayp` | `(arrayp "abc")` | `T` -- a string is an array in CL, like `vectorp` |
 | `simple-string-p` | `(simple-string-p "hello")` | `t` -- every rontolisp string is "simple" (lite) |
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
@@ -155,6 +162,7 @@ page.
 | `delete-if-not` | `(delete-if-not #'evenp '(1 2 3 4))` | `(2 4)` (destructive `remove-if-not`) |
 | `subst` | `(subst 'x 'a '(a (b a) c))` | `(x (b x) c)` (non-destructive tree substitution; optional `:test`/`:key` keywords) |
 | `search` | `(search "bc" "abcd")` | `1` (position of one sequence inside another, or nil; `:start1`/`:end1`/`:start2`/`:end2`/`:test`/`:key`/`:from-end`) |
+| `mismatch` | `(mismatch "apple" "apricot")` | `2` -- the index into the first sequence where the two differ, or nil; same keywords as `search` |
 | `substitute` | `(substitute 0 2 '(1 2 3 2))` | `(1 0 3 0)` (copy with every element `eql` to the old item replaced by the new one; optional `:test`/`:key` keywords) |
 | `nsubstitute` | `(nsubstitute 0 2 '(1 2 3 2))` | `(1 0 3 0)` (destructive `substitute`: rewrites matching cars in place; optional `:test`/`:key` keywords) |
 | `get-setf-expansion` | `(get-setf-expansion 'x)` | the five setf-expansion values, consumed with `multiple-value-bind` (lite: variable and accessor places) |
@@ -202,6 +210,8 @@ page.
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
 | `random` | `(random 100)`, `(random 1.0)` | a value in `[0, 100)` / `[0.0, 1.0)` (the result type follows the limit; `(random 1)` is always `0`). The interpreter and JVM draw from `Math.random`; WASM draws real entropy from the WASI `random_get` host function in Preview 1 mode and `wasi:random@0.3.0` in `--component` mode, so the sequence differs each run |
 | `get-universal-time` | `(get-universal-time)` | seconds since 1900-01-01 GMT, as an integer on every backend (WASM reads the real host clock in Preview 1, `wasi:clocks@0.3.0` in `--component` mode) |
+| `encode-universal-time` | `(encode-universal-time 0 0 0 1 1 1970 0)` | `2208988800` -- decoded components to universal time; a missing time zone means GMT, not the local zone |
+| `decode-universal-time` | `(decode-universal-time 2208988800 0)` | the nine decoded values (second, minute, hour, date, month, year, day-of-week, daylight-p, zone); `daylight-p` is always nil |
 | `get-internal-real-time` | `(get-internal-real-time)` | elapsed real time in milliseconds (integer on every backend) |
 | `get-internal-run-time` | `(get-internal-run-time)` | consumed run time in milliseconds (integer on every backend) |
 | `getenv` | `(getenv "PATH")` | the value of an environment variable as a string, or `nil` if unset. All three backends; WASM reads the real host environment in Preview 1 and `wasi:cli/environment@0.3.0` in `--component` mode (pass `--env`/`-S inherit-env` to wasmtime) |
@@ -242,6 +252,10 @@ page.
 | `remhash` | `(remhash key table)` | Remove the entry for `key`; returns `t` if one was removed, else `nil` |
 | `clrhash` | `(clrhash table)` | Remove all entries; returns the table |
 | `hash-table-count` | `(hash-table-count table)` | The number of entries |
+| `hash-table-test` | `(hash-table-test table)` | Always `EQUAL`: every backend keys structurally, whatever `:test` was requested |
+| `hash-table-size` | `(hash-table-size table)` | The entry count (a rontolisp table has no separate capacity) |
+| `hash-table-rehash-size` | `(hash-table-rehash-size table)` | The standard default `1.5` (growth belongs to the host map) |
+| `hash-table-rehash-threshold` | `(hash-table-rehash-threshold table)` | The standard default `1.0` |
 | `hash-table-p` | `(hash-table-p x)` | `t` if `x` is a hash table, else `nil` |
 | `maphash` | `(maphash (lambda (k v) ...) table)` | Call the function on each key/value pair for effect; returns nil |
 | `make-array` | `(make-array 5 :initial-element 0)`, `(make-array (list 2 3))` | Create an array of any rank; `:initial-element` sets every cell (nil if omitted) |
@@ -266,6 +280,7 @@ page.
 | `subtypep` | `(subtypep 'integer 'number)` | `t` -- the built-in type lattice plus `defclass`/condition hierarchies; a single value, unknown pairs answer `nil`; the compilers fold literal specifiers at compile time |
 | `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- the `ldb` field left in its original position |
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- `float × 2^n` with IEEE semantics |
+| `decode-float` | `(decode-float 6.5)` | `0.8125`, `3`, `1.0` -- significand in [1/2, 1), binary exponent, sign |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters |
 | `fdefinition` | `(fdefinition 'car)` | the function value, like `symbol-function` |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping) |
@@ -291,6 +306,7 @@ package system. Each name below links to its own page.
 | Function | Example | Result |
 |----------|---------|--------|
 | `rontolisp:version` | `(rontolisp:version)` | a property list of build info (`:version`, `:build-timestamp`, `:git-commit`, `:git-branch`) |
+| `rontolisp:random-bytes` | `(rontolisp:random-bytes 16)` | a vector of cryptographically strong random bytes (`SecureRandom` / WASI `random_get`) |
 | `rontolisp:list-functions` | `(rontolisp:list-functions :cl)` | the function symbols of a package, sorted (defaults to `:cl`) |
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | the macro symbols of a package, sorted |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | the special-form symbols of a package, sorted |

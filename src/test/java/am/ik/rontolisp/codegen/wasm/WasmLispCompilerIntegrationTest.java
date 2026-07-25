@@ -6362,7 +6362,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
@@ -6373,7 +6373,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("307");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("322");
 	}
 
 	@Test
@@ -6384,10 +6384,10 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void gensymRejectsANonLiteralPrefix() {
-		assertThatThrownBy(
-				() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(setq p \"t\") (gensym p)")))
-			.hasMessageContaining("literal string");
+	void gensymAcceptsAComputedPrefix() throws Exception {
+		// A computed prefix lowers to string construction over the literal-prefix
+		// gensym, so the printed name matches the interpreter's ("#:<prefix><n>").
+		assertThat(compileAndRun("(setq p \"tmp\") (print (gensym p)) (print (gensym p))")).isEqualTo("#:tmp1\n#:tmp2");
 	}
 
 	@Test
@@ -6417,10 +6417,13 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void internRejectsAPackageArgument() {
-		assertThatThrownBy(
-				() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(print (intern \"foo\" :cl-user))")))
-			.hasMessageContaining("package argument is not supported");
+	void internWithARuntimePackageArgumentSignalsAtCallTime() throws Exception {
+		// Interning into a designated package needs the resolver's package state, which
+		// only the interpreter carries at run time: the call COMPILES (so a library
+		// merely containing the form builds) and signals when reached. WASM cannot
+		// catch a signal, so the compile-level check is what this pins.
+		assertThat(new WasmLispCompiler().compile(LispReader.readAllFromString("(print (intern \"foo\" :cl-user))")))
+			.isNotEmpty();
 	}
 
 	@Test
@@ -6493,7 +6496,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("NIL");
 	}
 

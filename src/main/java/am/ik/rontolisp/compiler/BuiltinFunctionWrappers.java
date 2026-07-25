@@ -93,6 +93,7 @@ public final class BuiltinFunctionWrappers {
 		Set<String> gated = new java.util.HashSet<>(SIGNAL_FUNCTIONS);
 		gated.add(LispNames.FORMAT);
 		gated.add(LispNames.CONCATENATE);
+		gated.add(LispNames.OPEN);
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
 	}
 
@@ -455,11 +456,41 @@ public final class BuiltinFunctionWrappers {
 		return callV(LispNames.MEMBER, x, listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(symbols))));
 	}
 
+	/**
+	 * The {@code #'open} wrapper: {@code (apply #'open path plist)} is the portable way
+	 * to build an option list at run time (alexandria's {@code with-input-from-file}),
+	 * but the compiled {@code open} needs its direction and element type as LITERALS (the
+	 * file mode is picked statically). The wrapper therefore dispatches the plist onto
+	 * the four literal shapes rather than forwarding the options.
+	 */
+	private static WrapperDef openWrapper() {
+		LispSymbol opts = new LispSymbol("o");
+		LispSymbol path = new LispSymbol("p");
+		LispVal binaryType = listToCons(List.of(new LispSymbol(LispNames.QUOTE),
+				listToCons(List.of(new LispSymbol(LispNames.UNSIGNED_BYTE), new LispInteger(8)))));
+		LispVal isOutput = callV(LispNames.EQ_GENERAL,
+				callV(LispNames.GETF, opts, new LispSymbol(LispNames.DIRECTION_KEYWORD)),
+				new LispSymbol(LispNames.OUTPUT_KEYWORD));
+		LispVal isBinary = callV(LispNames.EQUAL,
+				callV(LispNames.GETF, opts, new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD)), binaryType);
+		LispVal binaryBranch = listToCons(List.of(new LispSymbol(LispNames.IF), isOutput,
+				callV(LispNames.OPEN, path, new LispSymbol(LispNames.OUTPUT_KEYWORD), binaryType),
+				callV(LispNames.OPEN, path, new LispSymbol(LispNames.INPUT_KEYWORD), binaryType)));
+		LispVal textBranch = listToCons(List.of(new LispSymbol(LispNames.IF), isOutput,
+				callV(LispNames.OPEN, path, new LispSymbol(LispNames.OUTPUT_KEYWORD)),
+				callV(LispNames.OPEN, path, new LispSymbol(LispNames.INPUT_KEYWORD))));
+		return new WrapperDef(LispNames.OPEN, List.of("p", LispNames.LAMBDA_REST, "o"),
+				List.of(listToCons(List.of(new LispSymbol(LispNames.IF), isBinary, binaryBranch, textBranch))));
+	}
+
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
 			// Signal operators and format (gated by REFERENCE_GATED_FUNCTIONS in the
 			// backend compilers)
 			signalDatum(LispNames.ERROR, LispNames.ERROR), signalDatum(LispNames.SIGNAL, LispNames.SIGNAL),
 			signalDatum(LispNames.WARN, LispNames.WARN), cerrorWrapper(), formatWrapper(), concatenateWrapper(),
+			// #'open (reference-gated): dispatches an option plist onto the four literal
+			// direction/element-type shapes the compiled open needs.
+			openWrapper(),
 			// Arithmetic: +/-/*// are variadic in CL, so their wrappers accept any arity
 			// (a fixed-arity wrapper returned nil on the JVM / trapped on WASM when
 			// funcall/apply passed a different argument count). - and / keep their
@@ -492,6 +523,11 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.REMOVE_IF_NOT), binary(LispNames.DELETE), binary(LispNames.DELETE_IF),
 			binary(LispNames.DELETE_IF_NOT), ternary(LispNames.SUBSTITUTE), ternary(LispNames.NSUBSTITUTE),
 			binary(LispNames.MAPCAN), binary(LispNames.SORT), variadicStableSort(), unary(LispNames.COPY_SEQ),
+			// The mapping family as first-class values (alexandria hands #'mapcar to
+			// its own combinators). Two-list shapes are the ones a wrapper can carry:
+			// the expansions take a fixed sequence count.
+			binary(LispNames.MAPCAR), binary(LispNames.MAPC), binary(LispNames.MAPLIST), binary(LispNames.MAPCON),
+			binary(LispNames.MAPL),
 			// funcall is variadic: (lambda (f &rest r) (apply f r)) -- e.g.
 			// cl-utilities' compose folds with (reduce #'funcall fns ...).
 			new WrapperDef(LispNames.FUNCALL, List.of("f", LispNames.LAMBDA_REST, "r"),
@@ -525,6 +561,10 @@ public final class BuiltinFunctionWrappers {
 			// Byte-field operations (macro-lowered to list/car/ash/logand/logior/lognot)
 			binary(LispNames.BYTE), unary(LispNames.BYTE_SIZE), unary(LispNames.BYTE_POSITION), binary(LispNames.LDB),
 			ternary(LispNames.DPB), binary(LispNames.MASK_FIELD), binary(LispNames.SCALE_FLOAT),
+			// open as a first-class value: (apply #'open path options) is the portable
+			// way to build an option list at run time (alexandria's
+			// with-input-from-file).
+			// The wrapper takes the positional shape the built-in compiles.
 			// Lite stream/type introspection stubs (macro-lowered; slot-boundp and
 			// slot-makunbound are omitted -- their expansions need a literal slot name)
 			unary(LispNames.FILE_POSITION), unary(LispNames.FILE_LENGTH), unary(LispNames.PATHNAMEP),

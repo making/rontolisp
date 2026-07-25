@@ -38,6 +38,10 @@ import am.ik.rontolisp.reader.LispReader;
  * <li>{@code get-setf-expansion} -- the five setf-expansion values (lite: variable and
  * accessor-cons places, environment ignored), consumed through the ordinary
  * {@code %mv-spill} channel by a {@code multiple-value-bind} caller.</li>
+ * <li>{@code encode-universal-time} / {@code decode-universal-time} -- the CL universal
+ * time codec (seconds since 1900-01-01 00:00:00 GMT) as pure era-based Gregorian
+ * arithmetic; lite: a nil time-zone means GMT, not the local zone (no backend-portable
+ * local-zone source exists), and {@code daylight-p} decodes as nil.</li>
  * <li>{@code char-name} -- the standard character names ({@code Space}, {@code Newline},
  * ...), a {@code U+XXXX} label for other non-printing code points, nil for graphic
  * characters; mirrors the interpreter's Java primitive.</li>
@@ -113,6 +117,12 @@ public final class LispPreludeLibrary {
 				(defun sbit (bit-array index)
 				  (aref bit-array index))
 				(defun (setf sbit) (new-value bit-array index)
+				  (setf (aref bit-array index) new-value))
+				""");
+		SOURCES.put(LispNames.BIT, """
+				(defun bit (bit-array index)
+				  (aref bit-array index))
+				(defun (setf bit) (new-value bit-array index)
 				  (setf (aref bit-array index) new-value))
 				""");
 		SOURCES.put(LispNames.BOTH_CASE_P, """
@@ -332,6 +342,63 @@ public final class LispPreludeLibrary {
 				      (let ((store (gensym)))
 				        (values nil nil (list store) (list 'setq place store) place))))
 				""");
+		// Universal time = seconds since 1900-01-01 00:00:00 GMT. Days go through the
+		// era-based civil-date algorithm (proleptic Gregorian, exact for any year),
+		// so both directions are pure integer arithmetic that every backend runs
+		// identically. Lite deviation, documented: a nil time-zone means GMT (zone 0),
+		// not the machine's local zone -- no backend-portable local-zone source
+		// exists (WASI exposes no timezone), and defaulting to the one zone every
+		// backend agrees on keeps the pair backend-identical. 25567 = days from
+		// 1900-01-01 to the 1970-01-01 pivot of the civil-date algorithm.
+		SOURCES.put(LispNames.ENCODE_UNIVERSAL_TIME, """
+				(defun encode-universal-time (second minute hour date month year &optional time-zone)
+				  (let* ((y (if (<= month 2) (- year 1) year))
+				         (era (floor y 400))
+				         (yoe (- y (* era 400)))
+				         (mp (mod (+ month 9) 12))
+				         (doy (+ (floor (+ (* 153 mp) 2) 5) (- date 1)))
+				         (doe (+ (* yoe 365) (floor yoe 4) (- (floor yoe 100)) doy))
+				         (days-1970 (+ (* era 146097) doe -719468))
+				         (tz (or time-zone 0)))
+				    (+ (* (+ days-1970 25567) 86400)
+				       (* hour 3600) (* minute 60) second
+				       (* tz 3600))))
+				""");
+		SOURCES.put(LispNames.DECODE_UNIVERSAL_TIME, """
+				(defun decode-universal-time (universal-time &optional time-zone)
+				  (let* ((tz (or time-zone 0))
+				         (ut (- universal-time (* tz 3600)))
+				         (days (floor ut 86400))
+				         (secs (- ut (* days 86400)))
+				         (z (+ (- days 25567) 719468))
+				         (era (floor z 146097))
+				         (doe (- z (* era 146097)))
+				         (yoe (floor (- (+ doe (floor doe 36524))
+				                        (+ (floor doe 1460) (floor doe 146096)))
+				                     365))
+				         (y (+ yoe (* era 400)))
+				         (doy (- doe (+ (* 365 yoe) (floor yoe 4) (- (floor yoe 100)))))
+				         (mp (floor (+ (* 5 doy) 2) 153))
+				         (date (+ (- doy (floor (+ (* 153 mp) 2) 5)) 1))
+				         (month (if (< mp 10) (+ mp 3) (- mp 9)))
+				         (year (if (<= month 2) (+ y 1) y)))
+				    (values (mod secs 60)
+				            (mod (floor secs 60) 60)
+				            (floor secs 3600)
+				            date month year
+				            (mod (+ (- days 25567) 3) 7)
+				            nil tz)))
+				""");
+		// rontolisp:random-bytes -- the public cryptographic-entropy API, one Lisp
+		// definition over the per-backend %random-byte primitive (SecureRandom on the
+		// interpreter/JVM, WASI random_get on both WASM backends).
+		SOURCES.put(LispNames.RANDOM_BYTES, """
+				(defun rontolisp:random-bytes (n)
+				  (let ((%rb-out (make-array n)))
+				    (dotimes (%rb-i n)
+				      (setf (aref %rb-out %rb-i) (rontolisp::%random-byte)))
+				    %rb-out))
+				""");
 		SOURCES.put(LispNames.SUBST, """
 				(defun subst (new old tree &key (test #'eql) key)
 				  (labels ((walk (x)
@@ -341,6 +408,52 @@ public final class LispPreludeLibrary {
 				                      (if (and (eq a (car x)) (eq d (cdr x))) x (cons a d))))
 				                   (t x))))
 				    (walk tree)))
+				""");
+		// mismatch: the index INTO SEQUENCE1 of the first differing element, or nil
+		// when the bounded subsequences match. Lite: :from-end is accepted and the
+		// scan still runs forward (the returned index is then the forward one).
+		// digit-char: the inverse of digit-char-p -- the (upper-case) character
+		// denoting a weight in the radix, or nil when the weight is out of range.
+		SOURCES.put(LispNames.DIGIT_CHAR, """
+				(defun digit-char (weight &optional (radix 10))
+				  (if (and (integerp weight) (>= weight 0) (< weight radix))
+				      (if (< weight 10)
+				          (code-char (+ (char-code #\\0) weight))
+				          (code-char (+ (char-code #\\A) (- weight 10))))
+				      nil))
+				""");
+		// decode-float: significand in [1/2, 1), exponent, sign -- CL's binary
+		// decomposition. Halving/doubling by two is exact in binary floating point,
+		// so the scaling loop introduces no rounding error on any backend.
+		SOURCES.put(LispNames.DECODE_FLOAT, """
+				(defun decode-float (f)
+				  (let ((x (abs (float f)))
+				        (s (if (< f 0) -1.0 1.0))
+				        (e 0))
+				    (if (= x 0.0)
+				        (values 0.0 0 s)
+				        (progn
+				          (while (>= x 1.0) (setq x (/ x 2.0)) (setq e (+ e 1)))
+				          (while (< x 0.5) (setq x (* x 2.0)) (setq e (- e 1)))
+				          (values x e s)))))
+				""");
+		SOURCES.put(LispNames.MISMATCH, """
+				(defun mismatch (seq1 seq2 &key (test #'eql) key (start1 0) end1 (start2 0) end2 from-end)
+				  (let* ((e1 (or end1 (length seq1)))
+				         (e2 (or end2 (length seq2)))
+				         (i start1)
+				         (j start2)
+				         (result nil)
+				         (done nil))
+				    (while (not done)
+				      (cond ((and (>= i e1) (>= j e2)) (setq done t))
+				            ((or (>= i e1) (>= j e2)) (setq result i) (setq done t))
+				            (t (let ((a (elt seq1 i)) (b (elt seq2 j)))
+				                 (if (funcall test (if key (funcall key a) a)
+				                              (if key (funcall key b) b))
+				                     (progn (setq i (+ i 1)) (setq j (+ j 1)))
+				                     (progn (setq result i) (setq done t)))))))
+				    result))
 				""");
 		SOURCES.put(LispNames.COPY_TREE, """
 				(defun copy-tree (tree)

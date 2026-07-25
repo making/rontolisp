@@ -258,6 +258,23 @@ public final class FreeVarAnalyzer {
 						}
 						case LispNames.IGNORE_ERRORS -> collectFreeVars(LispMacroExpander.expandIgnoreErrors(cons),
 								boundVars, knownFunctions, globals, specialNames, freeVars);
+						// The with-* stream macros BIND their stream variable; the
+						// default
+						// walk would read it as a free reference and try to capture a
+						// variable that only the expansion introduces (a labels-local
+						// function whose body opens a string stream, cl-postgres'
+						// read-array-value).
+						case LispNames.WITH_OUTPUT_TO_STRING ->
+							collectFreeVars(LispMacroExpander.expandWithOutputToString(cons), boundVars, knownFunctions,
+									globals, specialNames, freeVars);
+						case LispNames.WITH_INPUT_FROM_STRING ->
+							collectFreeVars(LispMacroExpander.expandWithInputFromString(cons), boundVars,
+									knownFunctions, globals, specialNames, freeVars);
+						case LispNames.WITH_OPEN_FILE -> collectFreeVars(LispMacroExpander.expandWithOpenFile(cons),
+								boundVars, knownFunctions, globals, specialNames, freeVars);
+						case LispNames.WITH_OPEN_STREAM ->
+							collectFreeVars(LispMacroExpander.expandWithOpenStream(cons, true), boundVars,
+									knownFunctions, globals, specialNames, freeVars);
 						case LispNames.FUNCTION -> {
 							// (function name) names the function namespace, not a
 							// variable; (function (lambda ...)) is analyzed like lambda
@@ -397,6 +414,20 @@ public final class FreeVarAnalyzer {
 								knownFunctions, captured, insideLambda);
 						case LispNames.LOOP -> collectCapturedVars(LispMacroExpander.expandLoop(cons), localVars,
 								knownFunctions, captured, insideLambda);
+						// The with-* stream macros bind their stream variable (same
+						// reason
+						// as in collectFreeVars).
+						case LispNames.WITH_OUTPUT_TO_STRING ->
+							collectCapturedVars(LispMacroExpander.expandWithOutputToString(cons), localVars,
+									knownFunctions, captured, insideLambda);
+						case LispNames.WITH_INPUT_FROM_STRING ->
+							collectCapturedVars(LispMacroExpander.expandWithInputFromString(cons), localVars,
+									knownFunctions, captured, insideLambda);
+						case LispNames.WITH_OPEN_FILE -> collectCapturedVars(LispMacroExpander.expandWithOpenFile(cons),
+								localVars, knownFunctions, captured, insideLambda);
+						case LispNames.WITH_OPEN_STREAM ->
+							collectCapturedVars(LispMacroExpander.expandWithOpenStream(cons, true), localVars,
+									knownFunctions, captured, insideLambda);
 						// Expand before walking (same reason as collectFreeVars).
 						case LispNames.CHECK_TYPE -> collectCapturedVars(LispMacroExpander.expandCheckType(cons),
 								localVars, knownFunctions, captured, insideLambda);

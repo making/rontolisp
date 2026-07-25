@@ -44,6 +44,11 @@ public final class ClosRegistry {
 		seedConditionClass("STYLE-WARNING", "WARNING");
 		seedConditionClass("PARSE-ERROR", "ERROR");
 		seedConditionClass("TYPE-ERROR", "ERROR", "DATUM", "EXPECTED-TYPE");
+		// simple-type-error carries BOTH the type-error slots and the simple-condition
+		// report slots -- CL's multiple inheritance flattened onto the type-error
+		// branch, which is the branch a handler-case clause tests (alexandria's
+		// sequence bounds checks signal it).
+		seedConditionClass("SIMPLE-TYPE-ERROR", "TYPE-ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
 		seedConditionClass("STREAM-ERROR", "ERROR");
 		seedConditionClass("END-OF-FILE", "STREAM-ERROR");
 		seedConditionClass("FILE-ERROR", "ERROR");
@@ -604,12 +609,28 @@ public final class ClosRegistry {
 			// A qualified spelling also matches a class registered under the plain name:
 			// the built-in condition hierarchy is package-less, while the resolver
 			// qualifies non-CL-symbol names (e.g. pkg::program-error) inside a package.
-			return this.classes.get(qn.member());
+			ClassInfo plain = this.classes.get(qn.member());
+			if (plain != null) {
+				return plain;
+			}
+			// ... and, failing that, a class of the same MEMBER name registered in
+			// another package, when that match is unique. A condition type named in one
+			// package but defined in a sibling (cl-postgres names
+			// cl-postgres-error's protocol-violation unqualified) would otherwise have
+			// no layout at all, which is a COMPILE error on the JVM/WASM backends while
+			// the interpreter resolves it at signal time.
+			return uniqueByMember(qn.member());
 		}
+		return uniqueByMember(name);
+	}
+
+	// The one registered class whose member name matches, or null when none does (or
+	// when two packages define the name -- an ambiguous match must stay unresolved).
+	@Nullable private ClassInfo uniqueByMember(String member) {
 		ClassInfo found = null;
 		for (ClassInfo candidate : this.classes.values()) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(candidate.name());
-			if (qn != null && qn.member().equals(name)) {
+			if (qn != null && qn.member().equals(member)) {
 				if (found != null) {
 					return null;
 				}

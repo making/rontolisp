@@ -18,6 +18,7 @@ description and a runnable example you can evaluate in your browser.
 | `do*` | `(do* ((var init step?)...) (end-test result...) body...)` | Like `do` but bindings and steps are sequential (`let*`-style): each init/step form sees the variables already updated this iteration |
 | `loop` | `(loop for i from 1 to n collect (f i))` | A bounded subset of the ANSI `loop`: numeric/list stepping (`for`), accumulation (`collect`/`sum`/`count`/...), and simple control clauses (`while`/`repeat`/`when`/`finally`/`return`). See the page for the full grammar and limitations |
 | `prog1` | `(prog1 first body...)` | Evaluate all forms in order, return the value of `first` |
+| `multiple-value-prog1` | `(multiple-value-prog1 (floor 17 5) (cleanup))` | Like `prog1` but returns ALL values of the first form |
 | `prog2` | `(prog2 first second body...)` | Evaluate all forms in order, return the value of `second` |
 | `time` | `(time form)` | Evaluate `form`, print the elapsed real time to standard output (`; Elapsed real time: N ms`), and return the form's value. `N` is an integer of milliseconds on the interpreter/JVM and a float of milliseconds on WASM |
 | `psetq` | `(psetq v1 e1 v2 e2 ...)` | Parallel assignment: every right-hand side is evaluated before any variable is assigned. Returns nil |
@@ -40,6 +41,7 @@ description and a runnable example you can evaluate in your browser.
 | `decf` | `(decf place delta?)` | Expands to `(setf place (- place delta))`. `delta` defaults to 1. Returns the new value |
 | `format` | `(format t "Hello ~a, ~d!~%" 'world 42)`, `(format nil "~a" x)` | Formatted output to standard output (`t`, returns nil) or to a string (`nil`) |
 | `with-open-file` | `(with-open-file (s "f.txt" :direction :output) (write-line "hi" s))` | Open a file, bind the stream to `s`, evaluate the body, close the file. Returns the body value. Supports the `:direction` option (`:input` default, `:output`) and the `:element-type` option (`'character` default, `'(unsigned-byte 8)` for a binary stream); both must be literal |
+| `with-open-stream` | `(with-open-stream (s (make-string-input-stream "hi")) (read-line s))` | Bind an ALREADY-OPEN stream, evaluate the body, close it. `with-open-file` without the `open` |
 | `check-type` | `(check-type place typespec [string])` | Signal an error when the value of `place` is not of the given type; return nil when it is. Lite version: no restarts, so the place is never re-stored |
 | `assert` | `(assert test-form [(place...) [datum args...]])` | Signal an error when `test-form` is false; return nil when it is true. The places list is accepted but ignored (no restarts) |
 | `declare` | `(declare declaration...)` | Parsed no-op: evaluates to nil, arguments never evaluated or validated |
@@ -69,6 +71,7 @@ description and a runnable example you can evaluate in your browser.
 | `slot-makunbound` | `(slot-makunbound obj 'slot)` | Lite: stores nil into the slot and returns the instance |
 | `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | Writes `#<[class ]...>` around the body's output; returns nil (`:identity` accepted, not printed) |
 | `with-package-iterator` | `(with-package-iterator (next pkgs :external) body...)` | Lite: binds the iterator name to a local FUNCTION always reporting no more symbols (no intern table) |
+| `do-external-symbols` | `(do-external-symbols (s :rontolisp) (print s))` | Iterate a package's exported symbols (interpreter only: the compiled backends carry no package registry) |
 
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
 accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,

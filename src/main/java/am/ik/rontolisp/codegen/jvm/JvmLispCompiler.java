@@ -397,6 +397,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN))
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN_P12));
+		// Cryptographic entropy helper: emitted only when the program references the
+		// internal %random-byte primitive, so an entropy-free program never loads
+		// java.security and keeps byte-identical output.
+		boolean usesSecureRandom = programUsesSymbol(program,
+				PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.RANDOM_BYTE_INTERNAL));
 		MethodrefConstant tcpConnectHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_DESC)))
@@ -1184,6 +1189,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// TCP/TLS socket runtime (only when the program uses a rontolisp:tcp-* or
 		// rontolisp:tls-connect built-in); built before the IO runtime so the stream
 		// built-ins can grow socket branches.
+		final JvmSecureRandomRuntimeBuilder.@Nullable SecureRandomRuntime secureRandomRuntime = usesSecureRandom
+				? JvmSecureRandomRuntimeBuilder.build(cp, thisClass, longValueOf) : null;
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
 				? JvmSocketRuntimeBuilder.build(cp, thisClass, objectClass, stringClass, longClass, longValueOf,
 						longValue, stringLengthForIo, stringSubstring, stringConcat)
@@ -1293,6 +1300,12 @@ public final class JvmLispCompiler implements LispCompiler {
 					.writeU2(stdinReaderFieldName)
 					.writeU2(stdinReaderFieldDesc)
 					.writeU2(0));
+				if (secureRandomRuntime != null) {
+					f.add(w -> w.writeU2(JvmSecureRandomRuntimeBuilder.fieldAccessFlags())
+						.writeU2(secureRandomRuntime.fieldName())
+						.writeU2(secureRandomRuntime.fieldDesc())
+						.writeU2(0));
+				}
 				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 					.writeU2(streamsFieldName)
 					.writeU2(streamsFieldDesc)
@@ -1641,6 +1654,17 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeCode((Object[]) runBody.code().toArray(new Integer[0]));
 								writeAsyncExceptionTable(attr, runBody);
 								attr.writeU2(0);
+							})));
+				}
+				if (secureRandomRuntime != null) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, secureRandomRuntime.name(),
+							secureRandomRuntime.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(secureRandomRuntime.maxStack())
+									.writeU2(secureRandomRuntime.maxLocals())
+									.writeCode((Object[]) secureRandomRuntime.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
 							})));
 				}
 				if (socketRuntime != null) {

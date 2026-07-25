@@ -57,8 +57,11 @@ final class WasmSymbolApiCompiler {
 				WasmExprCompiler.compileExpr(LispMacroExpander.internKeywordForm(full.get(1)), ctx);
 				return;
 			}
-			throw new UnsupportedOperationException(
-					LispNames.INTERN + " with a non-keyword package argument is not supported");
+			// A runtime package argument needs the resolver's package state, which only
+			// the interpreter has -- lower to a call-time signal (the jzon stub-lowering
+			// precedent) so a library defun merely CONTAINING the form still compiles.
+			WasmExprCompiler.compileExpr(LispMacroExpander.internPackageArgumentStub(), ctx);
+			return;
 		}
 		compileUnaryCall(cons, LispNames.INTERN, WasmLispCompiler.FUNC_INTERN_SYM, ctx, true);
 	}

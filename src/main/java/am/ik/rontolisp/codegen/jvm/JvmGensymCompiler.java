@@ -36,18 +36,18 @@ final class JvmGensymCompiler {
 		if (args.size() > 2) {
 			throw new UnsupportedOperationException(LispNames.GENSYM + " expects at most 1 argument: " + cons.print());
 		}
-		String prefix = "g";
-		if (args.size() == 2) {
-			if (!(args.get(1) instanceof LispString s)) {
-				throw new UnsupportedOperationException(
-						LispNames.GENSYM + " prefix must be a literal string: " + cons.print());
-			}
-			prefix = s.value();
-		}
 		FieldrefConstant ctr = ctrField(ctx, className);
 		MethodrefConstant intToString = ctx.cp.addMethodref(ctx.integerClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("toString"), ctx.cp.addUtf8("(I)Ljava/lang/String;")));
 		MethodrefConstant concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		if (args.size() == 2 && !(args.get(1) instanceof LispString)) {
+			// A computed prefix: the shared string-construction lowering (the interned
+			// prefix text below is a compile-time constant, so it has no place here).
+			JvmExprCompiler.compileExpr(am.ik.rontolisp.LispMacroExpander.expandComputedGensym(args.get(1)), ctx,
+					className);
+			return;
+		}
+		String prefix = args.size() == 2 ? ((LispString) args.get(1)).value() : "g";
 		// "#:prefix".concat(Integer.toString(++_gensymCtr))
 		JvmEmitHelper.compileStringLiteral("#:" + prefix, ctx);
 		ctx.emit(Opcode.GETSTATIC);

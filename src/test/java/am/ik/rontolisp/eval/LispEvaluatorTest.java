@@ -3223,9 +3223,10 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalDestructuringBindRejectsWholeAndEnvironment() {
-		assertThatThrownBy(() -> eval("(destructuring-bind (&whole w a) '(1) a)"))
-			.hasMessageContaining("Unsupported lambda-list keyword");
+	void evalDestructuringBindBindsWholeAndRejectsEnvironment() {
+		// &whole binds the whole source list (first element of the pattern, per CL).
+		assertThat(eval("(destructuring-bind (&whole w a b) '(1 2) (list w a b))").print()).isEqualTo("((1 2) 1 2)");
+		// &environment stays unsupported: there is no environment object to bind.
 		assertThatThrownBy(() -> eval("(destructuring-bind (a &environment e) '(1) a)"))
 			.hasMessageContaining("Unsupported lambda-list keyword");
 	}
@@ -4219,7 +4220,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
@@ -4260,7 +4261,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer", "%string-compare")
 			.isSorted()
-			.hasSize(307);
+			.hasSize(322);
 	}
 
 	@Test
@@ -4291,7 +4292,7 @@ class LispEvaluatorTest {
 	@Test
 	void listFunctionsForRontolispReturnsOwnedFunctions() {
 		assertThat(eval("(rontolisp:list-functions :rontolisp)").print()).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 	}
 
 	@Test
@@ -4335,7 +4336,7 @@ class LispEvaluatorTest {
 	@Test
 	void unqualifiedIntrospectionWorksInRontolispPackage() {
 		assertThat(evalMulti("(in-package :rontolisp) (list-functions :rontolisp)").print()).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 	}
 
 	@Test
@@ -6203,10 +6204,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void defmacroRejectsUnsupportedLambdaListKeywords() {
-		// &whole stays unsupported and signals at definition time.
-		assertThatThrownBy(() -> evalMulti("(defmacro my-mac (&whole w a) a)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("Unsupported lambda-list keyword");
+	void defmacroSupportsWholeAndLiteEnvironment() {
+		// &whole binds the whole macro CALL form (alexandria's switch/eswitch idiom).
+		assertThat(evalMulti("""
+				(defmacro my-whole-mac (&whole w a) `(list ',w ,a))
+				(my-whole-mac 7)
+				""").print()).isEqualTo("((MY-WHOLE-MAC 7) 7)");
+		assertThatThrownBy(() -> evalMulti("(defmacro my-mac (&whole) 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("&WHOLE must be followed by exactly one parameter symbol");
 		// &environment is accepted (lite): the parameter binds to nil, so threading it
 		// into constantp/get-setf-expansion works.
 		assertThat(evalMulti("""
@@ -6309,9 +6314,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void internRejectsAPackageArgumentAndNonStrings() {
-		assertThatThrownBy(() -> evalMulti("(intern \"foo\" :cl-user)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("package argument is not supported");
+	void internHomesTheNameInTheDesignatedPackage() {
+		// A package designator interns into THAT package (alexandria's ensure-symbol):
+		// a cl-user name stays bare, a keyword designator builds a keyword, and an
+		// unknown package signals.
+		assertThat(evalMulti("(intern \"FOO\" :cl-user)").print()).isEqualTo("FOO");
+		assertThat(evalMulti("(intern \"FOO\" :keyword)").print()).isEqualTo(":FOO");
+		assertThat(evalMulti("(intern \"CAR\" :cl)").print()).isEqualTo("CAR");
+		assertThatThrownBy(() -> evalMulti("(intern \"FOO\" :no-such-package)"))
+			.hasMessageContaining("No such package");
 		assertThatThrownBy(() -> evalMulti("(intern 'foo)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects a string");
 	}

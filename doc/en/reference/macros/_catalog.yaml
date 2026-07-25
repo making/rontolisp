@@ -15,6 +15,7 @@ categories:
       - { slug: do-star, name: "do*" }
       - { slug: loop, name: loop }
       - { slug: prog1, name: prog1 }
+      - { slug: multiple-value-prog1, name: multiple-value-prog1 }
       - { slug: prog2, name: prog2 }
       - { slug: time, name: time }
       - { slug: psetq, name: psetq }
@@ -37,6 +38,7 @@ categories:
       - { slug: decf, name: decf }
       - { slug: format, name: format }
       - { slug: with-open-file, name: with-open-file }
+      - { slug: with-open-stream, name: with-open-stream }
       - { slug: with-output-to-string, name: with-output-to-string }
       - { slug: with-input-from-string, name: with-input-from-string }
       - { slug: with-standard-io-syntax, name: with-standard-io-syntax }
@@ -87,3 +89,4 @@ categories:
       - { slug: slot-makunbound, name: slot-makunbound }
       - { slug: print-unreadable-object, name: "print-unreadable-object" }
       - { slug: with-package-iterator, name: "with-package-iterator" }
+      - { slug: do-external-symbols, name: "do-external-symbols" }

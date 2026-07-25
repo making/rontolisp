@@ -2499,6 +2499,41 @@ public final class LispMacroExpander {
 	 * @param cons the vectorp expression
 	 * @return the expanded expression
 	 */
+	/**
+	 * Expands {@code (arrayp x)} to {@code (or (stringp x) (%arrayp x))}: a string is an
+	 * array in Common Lisp, and the internal predicate answers only for the array
+	 * representation.
+	 * @param cons the arrayp expression
+	 * @return the expanded expression
+	 */
+	/**
+	 * Expands {@code (open-stream-p x)} to {@code (if x t nil)} -- the lite answer for a
+	 * backend with no per-stream open/closed record (Preview 1 WASM, and a component
+	 * program that never spliced the sockets library). The socket case is exact: the
+	 * component rewrite redirects this call to the sockets library's table-backed
+	 * dispatch defun before compilation.
+	 * @param cons the open-stream-p expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandOpenStreamPLite(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.OPEN_STREAM_P + " expects 1 argument: " + cons.print());
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.IF), parts.get(1), LispTrue.INSTANCE, LispNil.INSTANCE));
+	}
+
+	public static LispVal expandArrayp(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.ARRAYP + " expects 1 argument: " + cons.print());
+		}
+		LispSymbol v = new LispSymbol("__arrp");
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, v),
+				callOf(LispNames.ARRAYP_INTERNAL, v)));
+		return makeLet(v.name(), parts.get(1), test);
+	}
+
 	public static LispVal expandVectorp(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
@@ -3024,6 +3059,19 @@ public final class LispMacroExpander {
 					yield makeLet(seqVar.name(), placeParts.get(1),
 							makeLet(startVar.name(), placeParts.get(2), makeLet(endVar.name(), endInit,
 									makeLet(valVar.name(), value, makeProgn(List.of(replaceCall, valVar))))));
+				}
+				case LispNames.LDB -> {
+					// (setf (ldb bytespec place) val) -> (setf place (dpb val bytespec
+					// place)), returning val (the new byte). The bytespec and value hoist
+					// to temps so each evaluates once; the inner setf recursion handles
+					// the place (a variable in the cl-postgres integer readers).
+					LispSymbol specVar = new LispSymbol("__setf_ldb_spec");
+					LispSymbol valVar = new LispSymbol("__setf_ldb_val");
+					LispVal bytePlace = placeParts.get(2);
+					LispVal dpbCall = listToCons(List.of(new LispSymbol(LispNames.DPB), valVar, specVar, bytePlace));
+					LispVal inner = listToCons(List.of(new LispSymbol(LispNames.SETF), bytePlace, dpbCall));
+					yield makeLet(specVar.name(), placeParts.get(1),
+							makeLet(valVar.name(), value, makeProgn(List.of(inner, valVar))));
 				}
 				case LispNames.SLOT_VALUE -> {
 					// (setf (slot-value obj 'slot) val) -> (%obj-set obj <index> val):
@@ -4919,6 +4967,36 @@ public final class LispMacroExpander {
 		List<LispVal> openParts = new java.util.ArrayList<>(
 				List.of(new LispSymbol(LispNames.OPEN), filename, new LispSymbol(direction)));
 		return buildWithOpenFile(var, openParts, binary, body, unwindProtect);
+	}
+
+	/**
+	 * Expands {@code (with-open-stream (var stream-form) body...)}: binds the variable to
+	 * an ALREADY-OPEN stream and closes it on exit -- {@code with-open-file}'s tail
+	 * without the {@code open}. Same backend switch: the interpreter/JVM close through
+	 * {@code unwind-protect}, the WASM compilers keep the close-after-body shape.
+	 * @param cons the with-open-stream expression
+	 * @param unwindProtect whether the expansion may use {@code unwind-protect}
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithOpenStream(LispCons cons, boolean unwindProtect) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || spec.toList().size() != 2) {
+			throw new IllegalArgumentException(
+					LispNames.WITH_OPEN_STREAM + " expects a (var stream-form) spec as the first argument");
+		}
+		List<LispVal> specParts = spec.toList();
+		LispVal var = specParts.get(0);
+		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
+		LispVal bindings = new LispCons(listToCons(List.of(var, specParts.get(1))), LispNil.INSTANCE);
+		if (unwindProtect) {
+			return listToCons(List.of(new LispSymbol(LispNames.LET), bindings,
+					unwindProtectAround(bodyExpr, callOf(LispNames.CLOSE, var))));
+		}
+		LispSymbol result = new LispSymbol(WOF_RESULT_VAR);
+		LispVal innerBindings = new LispCons(listToCons(List.of(result, bodyExpr)), LispNil.INSTANCE);
+		LispVal innerLet = listToCons(
+				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, innerLet));
 	}
 
 	/**
@@ -10825,13 +10903,22 @@ public final class LispMacroExpander {
 			}
 			return objNew(LispLayout.CLASS_TAG_PREFIX + cls.name(), slotValues);
 		}
+		if (cls == null) {
+			// An UNDEFINED condition type: no class of that name is registered anywhere
+			// (a library naming a sibling package's condition unqualified, e.g.
+			// cl-postgres' 'protocol-error, whose real definition is
+			// cl-postgres-error:protocol-violation). There is no layout to build, so the
+			// signal degrades to a plain simple-condition naming the type -- the shape
+			// the symbol designator already produces. The argument temps stay bound, so
+			// their side effects still happen exactly once. A COMPILE error here would
+			// make one cold, never-taken branch unbuildable.
+			return objNew(SIMPLE_CONDITION_TAG,
+					List.of(new LispString("Condition " + typeSym.name() + " was signalled."), LispNil.INSTANCE));
+		}
 		// Arguments that are not initarg pairs: the values fill the layout positionally
 		// (surplus ones are evaluated and dropped by %obj-new). The tag comes from the
-		// REGISTERED spelling whenever the class is known -- the quoted type in
-		// (error 'json-write-error ...) is not package-resolved, and only the registered
-		// name carries a layout.
-		String tag = LispLayout.CLASS_TAG_PREFIX + (cls == null ? typeSym.name() : cls.name());
-		return objNew(tag, items);
+		// REGISTERED spelling.
+		return objNew(LispLayout.CLASS_TAG_PREFIX + cls.name(), items);
 	}
 
 	/**
@@ -10841,7 +10928,22 @@ public final class LispMacroExpander {
 	 * destination does.
 	 */
 	private static LispVal formatMessagePieces(String controlText, List<LispSymbol> argSyms) {
-		List<LispVal> pieces = opsToPieces(new FmtParser(controlText).parseTop(FmtArgs.forTemps(argSyms)));
+		List<FmtOp> parsed;
+		try {
+			parsed = new FmtParser(controlText).parseTop(FmtArgs.forTemps(argSyms));
+		}
+		catch (UnsupportedOperationException unsupportedDirective) {
+			// A directive the static expansion cannot lower (justification ~<, ~@?, an
+			// uneven ~[) falls back to the runtime renderer, exactly as expandFormat
+			// does -- a condition message must never be the reason a library fails to
+			// COMPILE (cl-ppcre's hyperdoc printer carries ~< on a cold branch).
+			List<LispVal> renderArgs = new java.util.ArrayList<>();
+			renderArgs.add(new LispSymbol(LispNames.LIST));
+			renderArgs.addAll(argSyms);
+			return listToCons(List.of(new LispSymbol(LispNames.FUNCALL), formatRuntimeLambda(),
+					new LispString(controlText), listToCons(renderArgs)));
+		}
+		List<LispVal> pieces = opsToPieces(parsed);
 		LispVal message = pieces.isEmpty() ? new LispString("") : pieces.get(0);
 		for (int i = 1; i < pieces.size(); i++) {
 			message = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), message, pieces.get(i)));
@@ -11868,6 +11970,20 @@ public final class LispMacroExpander {
 			}
 		}
 		boolean nilResult = isNilForm(resultTypeForm);
+		if (resultType == null && resultTypeForm instanceof LispCons quoteCons
+				&& quoteCons.car() instanceof LispSymbol quoteSym && LispNames.QUOTE.equals(quoteSym.name())
+				&& quoteCons.cdr() instanceof LispCons datumCons && datumCons.car() instanceof LispCons typeCons
+				&& typeCons.car() instanceof LispSymbol typeHead) {
+			// A compound vector designator -- (simple-array (unsigned-byte 8) (*)),
+			// (vector t), ... -- collapses to the generic vector family: rontolisp
+			// arrays are untyped (cl-postgres's md5 path maps into a byte vector).
+			PackageRegistry.QualifiedName typeQn = PackageRegistry.splitQualified(typeHead.name());
+			String typeMember = typeQn == null ? typeHead.name() : typeQn.member();
+			if ("SIMPLE-ARRAY".equals(typeMember) || "ARRAY".equals(typeMember) || "VECTOR".equals(typeMember)
+					|| "SIMPLE-VECTOR".equals(typeMember)) {
+				resultType = "VECTOR";
+			}
+		}
 		if ("VECTOR".equals(resultType) || "SIMPLE-VECTOR".equals(resultType) || "ARRAY".equals(resultType)) {
 			// (map 'vector fn seq...) -> (coerce (map 'list fn seq...) 'vector): the
 			// list expansion below does the walking, coerce fills a fresh vector.
@@ -13032,11 +13148,101 @@ public final class LispMacroExpander {
 	 * @param nameForm the (unevaluated) symbol-name argument
 	 * @return the equivalent single-argument {@code intern} form
 	 */
+	/**
+	 * Lowers {@code (gensym expr)} with a COMPUTED prefix to string construction over the
+	 * literal-prefix {@code gensym}: {@code "#:" + (princ-to-string expr)} followed by
+	 * the fresh suffix of a plain {@code (gensym)} (its {@code #:} marker dropped). The
+	 * compiled backends bake the interned prefix text of a literal {@code gensym} into
+	 * the call, so a runtime prefix has no place there; this keeps the uniqueness
+	 * guarantee (the suffix carries the counter) and the {@code #:} shape while staying
+	 * backend-neutral. Alexandria's {@code format-symbol}/{@code make-gensym} pass such a
+	 * prefix.
+	 * @param prefixForm the (unevaluated) prefix expression
+	 * @return the equivalent string-construction form
+	 */
+	/**
+	 * Expands {@code (hash-table-test h)} to {@code (progn h 'equal)}: the table argument
+	 * is still evaluated, the answer is the constant {@code equal}. Every backend keys
+	 * its tables structurally, so {@code equal} is the test the lookups implement
+	 * whatever {@code :test} the table was created with.
+	 * @param cons the hash-table-test expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandHashTableTest(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.HASH_TABLE_TEST + " expects one hash table: " + cons.print());
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.PROGN), parts.get(1),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.EQUAL)))));
+	}
+
+	/**
+	 * Expands {@code (hash-table-rehash-size h)} / {@code (hash-table-rehash-threshold
+	 * h)} to {@code (progn h <default>)}: the table has no growth knobs of its own here
+	 * (the host map grows), so the standard defaults are reported after evaluating the
+	 * argument.
+	 * @param cons the accessor expression
+	 * @param value the reported constant
+	 * @return the expanded expression
+	 */
+	public static LispVal expandHashTableGrowthConstant(LispCons cons, double value) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(parts.get(0).print() + " expects one hash table: " + cons.print());
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.PROGN), parts.get(1), new LispDouble(value)));
+	}
+
+	public static LispVal expandComputedGensym(LispVal prefixForm) {
+		// The suffix comes from an EMPTY-prefix gensym, so princ-to-string (which drops
+		// the "#:" marker, LispSymbol.displayName) yields the bare counter -- the same
+		// "#:<prefix><n>" text the interpreter's native computed-prefix gensym prints.
+		// intern turns the assembled name back into a symbol (a name starting with "#:"
+		// IS the uninterned spelling here).
+		LispVal freshSuffix = listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING),
+				listToCons(List.of(new LispSymbol(LispNames.GENSYM), new LispString("")))));
+		LispVal head = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("#:"),
+				listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), prefixForm))));
+		return listToCons(List.of(new LispSymbol(LispNames.INTERN),
+				listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), head, freshSuffix))));
+	}
+
 	public static LispVal internKeywordForm(LispVal nameForm) {
 		LispVal concat = listToCons(List.of(new LispSymbol(LispNames.CONCATENATE),
 				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.STRING))),
 				new LispString(":"), nameForm));
 		return listToCons(List.of(new LispSymbol(LispNames.INTERN), concat));
+	}
+
+	/**
+	 * The call-time stub the compiled backends lower a general 2-arg
+	 * {@code (intern name package)} to: an unconditional {@code error}. Interning into a
+	 * designated package needs the resolver's package state, which only the interpreter
+	 * carries at run time; the stub keeps a library defun merely CONTAINING the form
+	 * compilable (the jzon stub-lowering precedent), and signals only if it is actually
+	 * called.
+	 * @return the signaling expression
+	 */
+	/**
+	 * Normalizes {@code (close stream :abort expr)} to plain {@code (close stream)}:
+	 * every rontolisp close is effectively an aborting close (no buffered data survives
+	 * it), so the option adds nothing. The abort expression is dropped unevaluated (call
+	 * sites pass a variable). Returns null when the form is not that shape.
+	 * @param cons the close expression
+	 * @return the 1-argument close, or null
+	 */
+	public static @org.jspecify.annotations.Nullable LispVal stripCloseAbort(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 4 && parts.get(2) instanceof LispSymbol kw && ":ABORT".equals(kw.name())) {
+			return listToCons(List.of(parts.get(0), parts.get(1)));
+		}
+		return null;
+	}
+
+	public static LispVal internPackageArgumentStub() {
+		return listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString("intern with a runtime package argument is not supported on compiled backends")));
 	}
 
 	/**
@@ -14559,6 +14765,40 @@ public final class LispMacroExpander {
 		return listToCons(mvbParts);
 	}
 
+	/** Counter for the temporaries generated by {@code multiple-value-prog1}. */
+	private static final java.util.concurrent.atomic.AtomicInteger MVP_COUNTER = new java.util.concurrent.atomic.AtomicInteger();
+
+	/**
+	 * Expands (multiple-value-prog1 first-form forms...) into a
+	 * {@code multiple-value-list} capture of the first form's values, the remaining forms
+	 * for effect, and a {@code values-list} republication -- the spill's spread operator,
+	 * so every value survives the intervening forms on the syntactic multiple-value tier.
+	 *
+	 * <pre>
+	 * (multiple-value-prog1 (floor 17 5) (cleanup))
+	 * -&gt; (let ((__mvp0 (multiple-value-list (floor 17 5))))
+	 *      (cleanup)
+	 *      (values-list __mvp0))
+	 * </pre>
+	 * @param cons the multiple-value-prog1 expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMultipleValueProg1(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException(
+					LispNames.MULTIPLE_VALUE_PROG1 + " expects a first form: " + cons.print());
+		}
+		LispSymbol tmp = new LispSymbol("__mvp" + MVP_COUNTER.getAndIncrement());
+		LispVal capture = listToCons(List.of(new LispSymbol(LispNames.MULTIPLE_VALUE_LIST), parts.get(1)));
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET));
+		letParts.add(listToCons(List.of(listToCons(List.of(tmp, capture)))));
+		letParts.addAll(parts.subList(2, parts.size()));
+		letParts.add(listToCons(List.of(new LispSymbol(LispNames.VALUES_LIST), tmp)));
+		return listToCons(letParts);
+	}
+
 	/** Counter for the temporaries generated by {@code rotatef} expansions. */
 	private static final java.util.concurrent.atomic.AtomicInteger ROTATEF_COUNTER = new java.util.concurrent.atomic.AtomicInteger();
 
@@ -15159,6 +15399,15 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException("invalid destructuring pattern: " + pattern.print());
 		}
 		List<LispVal> elements = patternCons.toList();
+		// &whole var (first element, per CL): bind var to the whole source list, then
+		// destructure the remaining pattern over the same source. The source accessor
+		// chain is side-effect-free, so evaluating it twice is safe.
+		if (elements.size() >= 2 && elements.get(0) instanceof LispSymbol wholeKw
+				&& LispNames.LAMBDA_WHOLE.equals(wholeKw.name()) && elements.get(1) instanceof LispSymbol wholeVar
+				&& !wholeVar.name().startsWith("&")) {
+			out.add(listToCons(List.of(wholeVar, source)));
+			elements = elements.subList(2, elements.size());
+		}
 		int firstKeyword = 0;
 		while (firstKeyword < elements.size()
 				&& !(elements.get(firstKeyword) instanceof LispSymbol sym && sym.name().startsWith("&"))) {
@@ -15188,7 +15437,27 @@ public final class LispMacroExpander {
 			// The keyword may also sit only inside a nested sub-pattern (handled above).
 			LispSymbol restTmp = new LispSymbol(prefix + "_r" + counter[0]++);
 			out.add(listToCons(List.of(restTmp, cursor)));
-			LambdaLists.appendTailBindings(elements.subList(firstKeyword, elements.size()), restTmp, out);
+			// &rest/&body may be followed by a destructuring PATTERN instead of a
+			// variable (macro lambda lists; alexandria's if-let is
+			// (bindings &body (then-form &optional else-form))): route the rest list
+			// through a temporary and recurse the pattern over it.
+			List<LispVal> tail = new java.util.ArrayList<>(elements.subList(firstKeyword, elements.size()));
+			LispVal restPattern = null;
+			LispSymbol restPatternTmp = null;
+			for (int i = 0; i + 1 < tail.size(); i++) {
+				if (tail.get(i) instanceof LispSymbol s
+						&& (LispNames.LAMBDA_REST.equals(s.name()) || LispNames.LAMBDA_BODY.equals(s.name()))
+						&& tail.get(i + 1) instanceof LispCons pat) {
+					restPattern = pat;
+					restPatternTmp = new LispSymbol(prefix + "_g" + counter[0]++);
+					tail.set(i + 1, restPatternTmp);
+					break;
+				}
+			}
+			LambdaLists.appendTailBindings(tail, restTmp, out);
+			if (restPattern != null && restPatternTmp != null) {
+				destructuringBindings(restPattern, restPatternTmp, prefix, counter, out);
+			}
 		}
 	}
 

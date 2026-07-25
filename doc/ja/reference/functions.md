@@ -53,6 +53,10 @@
 | `read-line` | `(read-line)`, `(read-line stream)` | 標準入力(または入力ストリーム)から1行読み込み、文字列として返します。EOFでは `nil` |
 | `open` | `(open "f.txt")`, `(open "f.txt" :output)`, `(open "f.bin" :input '(unsigned-byte 8))` | ファイルを開いてストリームを返します。方向はリテラルの `:input`(デフォルト、読み込み)または `:output`(作成/切り詰め、書き込み)でなければなりません。省略可能な要素型はリテラルの `'character`(デフォルト、テキスト)または `'(unsigned-byte 8)`(バイナリ)でなければなりません |
 | `close` | `(close stream)` | `open` で開いたストリームを閉じます。`t` を返します |
+| `open-stream-p` | `(open-stream-p stream)` | ハンドルが開いているストリームを指す間は `t`、`close` 後は `nil` (インタプリタ/JVM と `--component` のソケットでは正確) |
+| `force-output` | `(force-output stream)` | 出力ストリームを書き出す (引数なしは標準出力)。nil を返す |
+| `finish-output` | `(finish-output stream)` | `force-output` と同じ操作。ここでは書き出し後の書き込みはすべて同期的 |
+| `listen` | `(listen stream)` | ブロックせずに入力を読めるなら `t`。Preview 1 の WASM にはこの問い合わせ手段がない |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | 文字列と改行を出力ストリーム(または標準出力)に書き込みます。文字列を返します |
 | `read-byte` | `(read-byte stream)`, `(read-byte stream nil -1)` | バイナリ入力ストリームから 1 バイト(0-255)を読み込みます。EOF ではエラーを通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
 | `write-byte` | `(write-byte 255 stream)` | バイナリ出力ストリームに生の 1 バイト(0-255)を書き込みます。バイトを返します |
@@ -74,6 +78,7 @@
 | `make-load-form-saving-slots` | `(make-load-form-saving-slots obj)` | ライト版スタブ: エラーをシグナル(faslダンパなし)。`make-load-form` メソッドをコンパイル可能にするために存在 |
 | `sxhash` | `(sxhash "ab")` | 構造的ハッシュ(整数/文字/文字列/シンボル/コンス)。実行内では安定、バックエンド間では非規定 |
 | `sbit` | `(sbit #*0110 1)` | ビットベクタ要素の読み取り。`(setf (sbit v i) b)` で書き込み |
+| `bit` | `(bit #*0110 1)` | ビット配列の要素読み出し。`(setf (bit v i) b)` で書き込み |
 | `both-case-p` | `(both-case-p #\a)` | 大小両形を持つ英字なら真(`lower-case-p` または `upper-case-p`) |
 | `special-operator-p` | `(special-operator-p 'if)` | ライト版スタブ: 常に `nil`(演算子テーブルの実体なし) |
 | `macro-function` | `(macro-function 'when)` | ライト版スタブ: 常に `nil`(マクロはコンパイル時に完全展開) |
@@ -84,6 +89,7 @@
 | `get` | `(get 'sym 'prop)`、`(setf (get 'sym 'prop) v)` | シンボル属性リスト(プログラム全体で 1 つの名前キーのストア) |
 | `lower-case-p` `upper-case-p` | `(lower-case-p #\a)`, `(upper-case-p #\A)` | `t`, `t` -- 大文字化・小文字化で文字が変化するとき真（Unicode ケース表に従う） |
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- 指定した基数(デフォルト10)での桁の重み、またはnil |
+| `digit-char` | `(digit-char 11 16)` | `#\B` -- 基数 (既定 10) における重みを表す文字、範囲外なら nil |
 | `eval` | `(eval '(+ 1 2))` | 式を評価します(3つのバックエンドすべて)。結果を返します |
 | `load` | `(load "bar.lisp")` | ファイル内のすべてのトップレベルフォームをグローバル環境で読み込んで評価します(3つのバックエンドすべて)。`t` を返します |
 | `require` | `(require :util)`, `(require :util "lib/util.lisp")` | モジュールのファイル(require するファイルの隣の `<name>.lisp`、または明示パス)を、まだ `provide` されていなければロードします。モジュール名を返します。コンパイルパスではリテラルなトップレベルフォームである必要があります |
@@ -111,6 +117,7 @@
 | `denominator` | `(denominator 3/4)` | `4`(整数では `1`) |
 | `symbolp` | `(symbolp 'foo)` | `t` |
 | `stringp` | `(stringp "hello")` | `t` |
+| `arrayp` | `(arrayp "abc")` | `T` -- CL では文字列も配列。`vectorp` と同様 |
 | `simple-string-p` | `(simple-string-p "hello")` | `t` -- rontolisp のすべての文字列は「simple」です(lite) |
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
@@ -152,6 +159,7 @@
 | `delete-if-not` | `(delete-if-not #'evenp '(1 2 3 4))` | `(2 4)`(破壊的な `remove-if-not`) |
 | `subst` | `(subst 'x 'a '(a (b a) c))` | `(x (b x) c)`(非破壊的な木の置換。省略可能な `:test`/`:key` キーワードを取ります) |
 | `search` | `(search "bc" "abcd")` | `1`（あるシーケンスが別のシーケンス内に現れる位置、なければ nil。`:start1`/`:end1`/`:start2`/`:end2`/`:test`/`:key`/`:from-end`） |
+| `mismatch` | `(mismatch "apple" "apricot")` | `2` -- 2 つのシーケンスが最初に異なる位置 (第 1 引数上のインデックス)、一致すれば nil。キーワードは `search` と同じ |
 | `substitute` | `(substitute 0 2 '(1 2 3 2))` | `(1 0 3 0)`(旧要素と `eql` になるすべての要素を新要素に置き換えたコピー。省略可能な `:test`/`:key` キーワードを取ります) |
 | `nsubstitute` | `(nsubstitute 0 2 '(1 2 3 2))` | `(1 0 3 0)`(破壊的な `substitute`。マッチするcarをその場で書き換えます。省略可能な `:test`/`:key` キーワードを取ります) |
 | `get-setf-expansion` | `(get-setf-expansion 'x)` | setf 展開の 5 値。`multiple-value-bind` で受け取ります(lite: 変数プレースとアクセサプレース) |
@@ -198,6 +206,8 @@
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
 | `random` | `(random 100)`, `(random 1.0)` | `[0, 100)` / `[0.0, 1.0)` の範囲の値(結果型は上限に従います。`(random 1)` は常に `0`)。インタプリタとJVMは `Math.random` から取得します。WASMはPreview 1モードではWASIの `random_get` ホスト関数から、`--component` モードでは `wasi:random@0.3.0` から実際のエントロピーを取得するため、列は実行ごとに異なります |
 | `get-universal-time` | `(get-universal-time)` | 1900-01-01 GMTからの秒数。すべてのバックエンドで整数です(WASMはPreview 1では実際のホストクロック、`--component` モードでは `wasi:clocks@0.3.0` を読みます) |
+| `encode-universal-time` | `(encode-universal-time 0 0 0 1 1 1970 0)` | `2208988800` -- 分解された時刻要素からユニバーサルタイムへ。タイムゾーン省略時はローカルではなく GMT |
+| `decode-universal-time` | `(decode-universal-time 2208988800 0)` | 9 個の分解値 (秒・分・時・日・月・年・曜日・夏時間・ゾーン)。`daylight-p` は常に nil |
 | `get-internal-real-time` | `(get-internal-real-time)` | 経過実時間(ミリ秒)(すべてのバックエンドで整数) |
 | `get-internal-run-time` | `(get-internal-run-time)` | 消費した実行時間(ミリ秒)(すべてのバックエンドで整数) |
 | `getenv` | `(getenv "PATH")` | 環境変数の値を文字列として、未設定の場合は `nil` を返します。3つのバックエンドすべて。WASMはPreview 1では実際のホスト環境を、`--component` モードでは `wasi:cli/environment@0.3.0` を読みます(wasmtimeに `--env`/`-S inherit-env` を渡してください) |
@@ -238,6 +248,10 @@
 | `remhash` | `(remhash key table)` | `key` のエントリを削除します。削除されたら `t`、そうでなければ `nil` を返します |
 | `clrhash` | `(clrhash table)` | すべてのエントリを削除します。テーブルを返します |
 | `hash-table-count` | `(hash-table-count table)` | エントリ数 |
+| `hash-table-test` | `(hash-table-test table)` | 常に `EQUAL`。`:test` に関わらずどのバックエンドも構造的にキーを比較する |
+| `hash-table-size` | `(hash-table-size table)` | 格納数 (rontolisp のテーブルは独自の容量を持たない) |
+| `hash-table-rehash-size` | `(hash-table-rehash-size table)` | 標準の既定値 `1.5` (拡張はホスト側のマップに任せている) |
+| `hash-table-rehash-threshold` | `(hash-table-rehash-threshold table)` | 標準の既定値 `1.0` |
 | `hash-table-p` | `(hash-table-p x)` | `x` がハッシュテーブルなら `t`、そうでなければ `nil` |
 | `maphash` | `(maphash (lambda (k v) ...) table)` | 副作用のために各キー/値ペアに関数を呼びます。nilを返します |
 | `make-array` | `(make-array 5 :initial-element 0)`, `(make-array (list 2 3))` | 任意の階数の配列を作成します。`:initial-element` はすべてのセルを設定します(省略時はnil) |
@@ -262,6 +276,7 @@
 | `subtypep` | `(subtypep 'integer 'number)` | `t` -- 組み込み型の束と `defclass`/コンディション階層に対して判定。主値のみで、未知の組は `nil`。コンパイラはリテラル指定子をコンパイル時に畳み込みます |
 | `mask-field` | `(mask-field (byte 4 4) 255)` | `240` -- `ldb` のフィールドを元の位置のまま返します |
 | `scale-float` | `(scale-float 1.5 3)` | `12.0` -- IEEE の意味論で `float × 2^n` |
+| `decode-float` | `(decode-float 6.5)` | `0.8125`、`3`、`1.0` -- [1/2, 1) の仮数部、2 進指数部、符号 |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil` |
 | `fdefinition` | `(fdefinition 'car)` | 関数値を返します。`symbol-function` と同じ |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録（lite: グローバル、パッケージごとのスコープなし） |
@@ -287,6 +302,7 @@
 | Function | Example | Result |
 |----------|---------|--------|
 | `rontolisp:version` | `(rontolisp:version)` | ビルド情報のプロパティリスト(`:version`, `:build-timestamp`, `:git-commit`, `:git-branch`) |
+| `rontolisp:random-bytes` | `(rontolisp:random-bytes 16)` | 暗号論的に強い乱数バイトのベクタ (`SecureRandom` / WASI `random_get`) |
 | `rontolisp:list-functions` | `(rontolisp:list-functions :cl)` | パッケージの関数シンボルをソートしたもの(デフォルトは `:cl`) |
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | パッケージのマクロシンボルをソートしたもの |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | パッケージの特殊形式シンボルをソートしたもの |

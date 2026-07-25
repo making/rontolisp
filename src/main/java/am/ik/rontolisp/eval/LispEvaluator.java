@@ -655,7 +655,15 @@ public final class LispEvaluator {
 					}
 					return new LispSymbol(":" + str.value());
 				}
-				throw new LispEvalException(LispNames.INTERN + " with a non-keyword package argument is not supported");
+				// A general package designator (string / symbol / find-package keyword):
+				// intern into that package through the resolver, so the spelling agrees
+				// with what a literal defun in that package would have produced
+				// (alexandria's ensure-symbol/format-symbol).
+				if (!(args.get(0) instanceof LispString str)) {
+					throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
+				}
+				String designator = packageDesignator(LispNames.INTERN, args.get(1));
+				return new LispSymbol(this.packageResolver.internSpellingIn(designator, str.value()));
 			}
 			requireSingleArg(LispNames.INTERN, args);
 			if (!(args.get(0) instanceof LispString str)) {
@@ -1463,6 +1471,14 @@ public final class LispEvaluator {
 				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
 			return eval(resolveReadTimeEval(datumCons.car()));
 		}
+		if (cons.car() instanceof LispSymbol head && LispNames.READ_EVAL_TEMPLATE.equals(head.name())
+				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
+			// A marker inside backquote construction code (the reader's renamed
+			// variant): the value is template DATA, so it substitutes quoted --
+			// evaluating the construction code embeds the value itself.
+			LispVal value = eval(resolveReadTimeEval(datumCons.car()));
+			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+		}
 		LispVal car = resolveReadTimeEval(cons.car());
 		LispVal cdr = resolveReadTimeEval(cons.cdr());
 		if (car == cons.car() && cdr == cons.cdr()) {
@@ -2184,6 +2200,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandNthValue(cons), env);
 				case LispNames.MULTIPLE_VALUE_SETQ:
 					return eval(LispMacroExpander.expandMultipleValueSetq(cons), env);
+				case LispNames.MULTIPLE_VALUE_PROG1:
+					return eval(LispMacroExpander.expandMultipleValueProg1(cons), env);
 				case LispNames.ROTATEF:
 					return eval(LispMacroExpander.expandRotatef(cons), env);
 				case LispNames.SHIFTF:
@@ -2194,8 +2212,12 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandTypep(cons, this.closRegistry), env);
 				case LispNames.PRINT_UNREADABLE_OBJECT:
 					return eval(LispMacroExpander.expandPrintUnreadableObject(cons), env);
+				case LispNames.WITH_OPEN_STREAM:
+					return eval(LispMacroExpander.expandWithOpenStream(cons, true), env);
 				case LispNames.WITH_PACKAGE_ITERATOR:
 					return eval(LispMacroExpander.expandWithPackageIterator(cons), env);
+				case LispNames.DO_EXTERNAL_SYMBOLS:
+					return evalDoExternalSymbols(cons, env);
 				case LispNames.PROG:
 					return eval(LispMacroExpander.expandProg(cons, false), env);
 				case LispNames.PROG_STAR:
@@ -2568,6 +2590,38 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Evaluates {@code (do-external-symbols (var package [result]) body...)}: iterates
+	 * the designated package's external symbols (canonically spelled, in sorted order --
+	 * the registry records exports from {@code defpackage}, so this is the real listing,
+	 * unlike the empty {@code with-package-iterator} lite). The result form is evaluated
+	 * with the variable bound to nil, per CL.
+	 */
+	private LispVal evalDoExternalSymbols(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons specCons) || specCons.toList().isEmpty()
+				|| !(specCons.toList().get(0) instanceof LispSymbol var)) {
+			throw new LispEvalException(
+					LispNames.DO_EXTERNAL_SYMBOLS + " expects ((var package [result]) body...): " + cons.print());
+		}
+		List<LispVal> spec = specCons.toList();
+		String designator = spec.size() >= 2 ? packageDesignator(LispNames.DO_EXTERNAL_SYMBOLS, eval(spec.get(1), env))
+				: this.packageResolver.currentPackageName();
+		for (LispSymbol sym : this.packageResolver.externalSymbols(designator)) {
+			Environment iterEnv = new Environment(env);
+			iterEnv.define(var.name(), sym);
+			for (LispVal bodyForm : parts.subList(2, parts.size())) {
+				eval(bodyForm, iterEnv);
+			}
+		}
+		if (spec.size() >= 3) {
+			Environment resultEnv = new Environment(env);
+			resultEnv.define(var.name(), LispNil.INSTANCE);
+			return eval(spec.get(2), resultEnv);
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/**
 	 * Internal rest parameter binding the whole unevaluated argument list of a macro
 	 * whose lambda list needs destructuring (see {@link #evalDefmacro}).
 	 */
@@ -2629,6 +2683,53 @@ public final class LispEvaluator {
 				wrappedBody = new LispCons(letParts.get(i), wrappedBody);
 			}
 			return makeUserMacro(op, name, strippedForm, List.of(wrappedBody), env);
+		}
+		// &whole var (first element, per CL; after the &environment strip so the two
+		// compose): bind var to the whole macro call form, (cons 'name args), and
+		// destructure the REMAINING pattern over the argument list as usual. Forces the
+		// destructuring path so the internal rest variable exists for the whole-form
+		// rebuild.
+		if (!paramList.isEmpty() && paramList.get(0) instanceof LispSymbol wholeKw
+				&& LispNames.LAMBDA_WHOLE.equals(wholeKw.name())) {
+			if (paramList.size() < 2 || !(paramList.get(1) instanceof LispSymbol wholeVar)
+					|| wholeVar.name().startsWith("&")) {
+				throw new LispEvalException(op + " " + name.name() + ": " + LispNames.LAMBDA_WHOLE
+						+ " must be followed by exactly one parameter symbol");
+			}
+			List<LispVal> stripped = paramList.subList(2, paramList.size());
+			LispVal strippedForm = LispNil.INSTANCE;
+			for (int i = stripped.size() - 1; i >= 0; i--) {
+				strippedForm = new LispCons(stripped.get(i), strippedForm);
+			}
+			LispSymbol argsVar = new LispSymbol(MACRO_ARGS_VAR);
+			LispVal wholeForm = new LispCons(new LispSymbol(LispNames.CONS),
+					new LispCons(new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(name, LispNil.INSTANCE)),
+							new LispCons(argsVar, LispNil.INSTANCE)));
+			List<LispVal> letParts = new ArrayList<>();
+			letParts.add(new LispSymbol(LispNames.LET));
+			letParts
+				.add(new LispCons(new LispCons(wholeVar, new LispCons(wholeForm, LispNil.INSTANCE)), LispNil.INSTANCE));
+			letParts.addAll(body);
+			LispVal letForm = LispNil.INSTANCE;
+			for (int i = letParts.size() - 1; i >= 0; i--) {
+				letForm = new LispCons(letParts.get(i), letForm);
+			}
+			List<LispVal> dbParts = new ArrayList<>();
+			dbParts.add(new LispSymbol(LispNames.DESTRUCTURING_BIND));
+			dbParts.add(strippedForm);
+			dbParts.add(argsVar);
+			dbParts.add(letForm);
+			LispVal wrapped = LispNil.INSTANCE;
+			for (int i = dbParts.size() - 1; i >= 0; i--) {
+				wrapped = new LispCons(dbParts.get(i), wrapped);
+			}
+			try {
+				LispMacroExpander.expandDestructuringBind((LispCons) wrapped);
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(op + " " + name.name() + ": " + ex.getMessage());
+			}
+			return new UserMacro(List.of(), argsVar, List.of(wrapped), env);
 		}
 		if (!isSimpleMacroLambdaList(paramList)) {
 			LispSymbol argsVar = new LispSymbol(MACRO_ARGS_VAR);

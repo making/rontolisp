@@ -241,6 +241,24 @@ public final class LispReader {
 			// WASM i31 fixnum range), so one value serves all of them.
 			return new LispInteger(0x110000);
 		}
+		if (LispNames.INTERNAL_TIME_UNITS_PER_SECOND.equals(name)) {
+			// The internal-time-units-per-second constant, read like char-code-limit:
+			// every backend's get-internal-real-time counts milliseconds.
+			return new LispInteger(1000);
+		}
+		if (LispNames.LAMBDA_LIST_KEYWORDS.equals(name)) {
+			// The lambda-list-keywords constant, substituted like *features*: a quoted
+			// list of the &-symbols (alexandria's parse-ordinary-lambda-list walks it).
+			// &whole/&environment are included -- they name positions the reader knows,
+			// even where a consumer's support for them is partial.
+			LispVal list = LispNil.INSTANCE;
+			List<String> keywords = List.of("&ALLOW-OTHER-KEYS", "&AUX", "&BODY", "&ENVIRONMENT", "&KEY", "&OPTIONAL",
+					"&REST", "&WHOLE");
+			for (int i = keywords.size() - 1; i >= 0; i--) {
+				list = new LispCons(new LispSymbol(keywords.get(i)), list);
+			}
+			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(list, LispNil.INSTANCE));
+		}
 		if (LispNames.FEATURES_VAR.equals(name) && this.features.substituteFeaturesVar()) {
 			// The active feature list, substituted at read time like pi: a quoted
 			// list of keywords, so a compiled program's feature set is fixed at compile
@@ -557,11 +575,19 @@ public final class LispReader {
 			case Token.LeftParen ignored -> {
 				// A (%read-eval datum) marker (the #. wrapping in marker read mode) must
 				// not be split into template list-construction code: keep it whole as a
-				// call, so instantiating the template evaluates the datum -- read-time
-				// evaluation deferred to macro-expansion time.
+				// call, RENAMED to the %read-eval-template variant -- the load-time
+				// substitution then knows the value is template DATA and wraps it in
+				// quote (a raw cons value in construction-code position would be
+				// evaluated as a call: cl-postgres's `#.*optimize*` inside a declare
+				// template). An unresolved occurrence still evaluates as the identity,
+				// deferring the read-time evaluation to macro-expansion time.
 				if (this.pos + 1 < this.tokens.size() && this.tokens.get(this.pos + 1) instanceof Token.SymbolToken sym
 						&& LispNames.READ_EVAL.equals(sym.name())) {
-					yield new TemplateElement(readExpr(), false);
+					LispVal marker = readExpr();
+					if (marker instanceof LispCons markerCons) {
+						marker = new LispCons(new LispSymbol(LispNames.READ_EVAL_TEMPLATE), markerCons.cdr());
+					}
+					yield new TemplateElement(marker, false);
 				}
 				this.pos++;
 				yield new TemplateElement(readTemplateList(), false);

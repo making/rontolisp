@@ -35,22 +35,23 @@ public final class PackageRegistry {
 	private static final Set<String> CL_MACROS = Set.of(LispNames.BLOCK, LispNames.COND, LispNames.CASE, LispNames.AND,
 			LispNames.OR, LispNames.WHEN, LispNames.UNLESS, LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH,
 			LispNames.POP, LispNames.REMF, LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF,
-			LispNames.FORMAT, LispNames.WITH_OPEN_FILE, LispNames.PROG1, LispNames.DO, LispNames.DO_STAR,
-			LispNames.PROG2, LispNames.PSETQ, LispNames.PSETF, LispNames.TYPECASE, LispNames.ECASE, LispNames.ETYPECASE,
-			LispNames.CCASE, LispNames.ERROR, LispNames.CERROR, LispNames.TIME, LispNames.LOOP, LispNames.CHECK_TYPE,
-			LispNames.ASSERT, LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.THE,
-			LispNames.EVAL_WHEN, LispNames.LOCALLY, LispNames.FLET, LispNames.LABELS, LispNames.MULTIPLE_VALUE_BIND,
-			LispNames.MULTIPLE_VALUE_LIST, LispNames.MULTIPLE_VALUE_CALL, LispNames.NTH_VALUE,
-			LispNames.MULTIPLE_VALUE_SETQ, LispNames.ROTATEF, LispNames.DESTRUCTURING_BIND,
-			LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING, LispNames.WITH_STANDARD_IO_SYNTAX,
-			LispNames.PUSHNEW, LispNames.DEFTYPE, LispNames.DEFINE_CONDITION, LispNames.DEFINE_MODIFY_MACRO,
-			LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFSETF, LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE,
-			LispNames.MACROLET, LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT,
-			LispNames.COMPLEX, LispNames.WARN, LispNames.SIGNAL, LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE,
-			LispNames.SLOT_VALUE, LispNames.WITH_SLOTS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS,
-			LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF,
-			LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND,
-			LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR);
+			LispNames.FORMAT, LispNames.WITH_OPEN_FILE, LispNames.WITH_OPEN_STREAM, LispNames.PROG1, LispNames.DO,
+			LispNames.DO_STAR, LispNames.PROG2, LispNames.PSETQ, LispNames.PSETF, LispNames.TYPECASE, LispNames.ECASE,
+			LispNames.ETYPECASE, LispNames.CCASE, LispNames.ERROR, LispNames.CERROR, LispNames.TIME, LispNames.LOOP,
+			LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM,
+			LispNames.THE, LispNames.EVAL_WHEN, LispNames.LOCALLY, LispNames.FLET, LispNames.LABELS,
+			LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST, LispNames.MULTIPLE_VALUE_CALL,
+			LispNames.NTH_VALUE, LispNames.MULTIPLE_VALUE_SETQ, LispNames.MULTIPLE_VALUE_PROG1, LispNames.ROTATEF,
+			LispNames.DESTRUCTURING_BIND, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
+			LispNames.WITH_STANDARD_IO_SYNTAX, LispNames.PUSHNEW, LispNames.DEFTYPE, LispNames.DEFINE_CONDITION,
+			LispNames.DEFINE_MODIFY_MACRO, LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFSETF,
+			LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET, LispNames.MAKE_CONDITION,
+			LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN, LispNames.SIGNAL,
+			LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE, LispNames.WITH_SLOTS,
+			LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE,
+			LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP,
+			LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.PRINT_UNREADABLE_OBJECT,
+			LispNames.WITH_PACKAGE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -95,40 +96,47 @@ public final class PackageRegistry {
 			LispNames.ACONS, LispNames.ENDP, LispNames.ELT, LispNames.RASSOC, LispNames.PAIRLIS, LispNames.COPY_ALIST,
 			LispNames.REVAPPEND, LispNames.NRECONC, LispNames.MAPLIST, LispNames.MAPCON, LispNames.MAPL,
 			LispNames.NOTANY, LispNames.NOTEVERY, LispNames.DELETE, LispNames.DELETE_IF, LispNames.DELETE_IF_NOT,
-			LispNames.SUBSTITUTE, LispNames.SUBST, LispNames.NSUBSTITUTE, LispNames.SEARCH,
-			LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME,
-			LispNames.GETENV, LispNames.READ_FROM_STRING, LispNames.PARSE_INTEGER, LispNames.CHAR, LispNames.SCHAR,
-			LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE,
-			LispNames.CHAR_GT, LispNames.CHAR_GE, LispNames.CHAR_NE, LispNames.CHAR_EQUAL, LispNames.CHAR_UPCASE,
-			LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P, LispNames.ALPHANUMERICP,
-			LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT, LispNames.BOTH_CASE_P,
-			LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION, LispNames.COMPILED_FUNCTION_P,
-			LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.LIST_ALL_PACKAGES, LispNames.FIND_CLASS, LispNames.GET,
-			LispNames.DIGIT_CHAR_P, LispNames.MAKE_HASH_TABLE, LispNames.GETHASH, LispNames.REMHASH, LispNames.CLRHASH,
-			LispNames.HASH_TABLE_COUNT, LispNames.HASH_TABLE_P, LispNames.MAPHASH, LispNames.MAKE_ARRAY, LispNames.AREF,
-			LispNames.VECTOR, LispNames.SVREF, LispNames.ARRAY_DIMENSIONS, LispNames.ARRAY_DIMENSION,
-			LispNames.ARRAY_RANK, LispNames.ARRAY_TOTAL_SIZE, LispNames.ROW_MAJOR_AREF, LispNames.ARRAY_ROW_MAJOR_INDEX,
-			LispNames.COERCE, LispNames.GENSYM, LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.VALUES,
-			LispNames.WRITE_STRING, LispNames.WRITE_TO_STRING, LispNames.SYMBOL_NAME, LispNames.INTERN,
-			LispNames.FIND_SYMBOL, LispNames.MAKE_SYMBOL, LispNames.BOUNDP, LispNames.FBOUNDP, LispNames.SYMBOL_VALUE,
-			LispNames.FUNCTIONP, LispNames.VALUES_LIST, LispNames.NE, LispNames.FILL_POINTER,
-			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.VECTOR_PUSH,
-			LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ARRAY_ELEMENT_TYPE, LispNames.ADJUST_ARRAY,
-			LispNames.ARRAY_DISPLACEMENT, LispNames.STABLE_SORT, LispNames.COPY_SEQ, LispNames.READ_CHAR,
-			LispNames.VECTORP, LispNames.MAKE_STRING, LispNames.REPLACE, LispNames.LOWER_CASE_P, LispNames.UPPER_CASE_P,
-			LispNames.CONSTANTP, LispNames.GET_SETF_EXPANSION, LispNames.STREAMP, LispNames.SIMPLE_STRING_P,
-			LispNames.MASK_FIELD, LispNames.SCALE_FLOAT, LispNames.SUBTYPEP, LispNames.CHAR_NAME, LispNames.FDEFINITION,
-			LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.MAKE_BROADCAST_STREAM, LispNames.PATHNAMEP,
-			LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P, LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF,
-			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
-			LispNames.MAKE_PATHNAME, LispNames.COPY_READTABLE, LispNames.SET_DISPATCH_MACRO_CHARACTER,
-			LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF);
+			LispNames.SUBSTITUTE, LispNames.SUBST, LispNames.NSUBSTITUTE, LispNames.SEARCH, LispNames.MISMATCH,
+			LispNames.GET_UNIVERSAL_TIME, LispNames.ENCODE_UNIVERSAL_TIME, LispNames.DECODE_UNIVERSAL_TIME,
+			LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME, LispNames.FORCE_OUTPUT,
+			LispNames.FINISH_OUTPUT, LispNames.LISTEN, LispNames.GETENV, LispNames.READ_FROM_STRING,
+			LispNames.PARSE_INTEGER, LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR,
+			LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_GT, LispNames.CHAR_GE,
+			LispNames.CHAR_NE, LispNames.CHAR_EQUAL, LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE,
+			LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P, LispNames.ALPHANUMERICP,
+			LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT, LispNames.BIT,
+			LispNames.BOTH_CASE_P, LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION,
+			LispNames.COMPILED_FUNCTION_P, LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.LIST_ALL_PACKAGES,
+			LispNames.FIND_CLASS, LispNames.GET, LispNames.DIGIT_CHAR_P, LispNames.DIGIT_CHAR,
+			LispNames.MAKE_HASH_TABLE, LispNames.GETHASH, LispNames.REMHASH, LispNames.CLRHASH,
+			LispNames.HASH_TABLE_COUNT, LispNames.HASH_TABLE_TEST, LispNames.HASH_TABLE_SIZE,
+			LispNames.HASH_TABLE_REHASH_SIZE, LispNames.HASH_TABLE_REHASH_THRESHOLD, LispNames.HASH_TABLE_P,
+			LispNames.MAPHASH, LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.VECTOR, LispNames.SVREF,
+			LispNames.ARRAY_DIMENSIONS, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_RANK, LispNames.ARRAY_TOTAL_SIZE,
+			LispNames.ROW_MAJOR_AREF, LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.COERCE, LispNames.GENSYM,
+			LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.VALUES, LispNames.WRITE_STRING,
+			LispNames.WRITE_TO_STRING, LispNames.SYMBOL_NAME, LispNames.INTERN, LispNames.FIND_SYMBOL,
+			LispNames.MAKE_SYMBOL, LispNames.BOUNDP, LispNames.FBOUNDP, LispNames.SYMBOL_VALUE, LispNames.FUNCTIONP,
+			LispNames.VALUES_LIST, LispNames.NE, LispNames.FILL_POINTER, LispNames.ARRAY_HAS_FILL_POINTER_P,
+			LispNames.ADJUSTABLE_ARRAY_P, LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND,
+			LispNames.ARRAY_ELEMENT_TYPE, LispNames.ADJUST_ARRAY, LispNames.ARRAY_DISPLACEMENT, LispNames.STABLE_SORT,
+			LispNames.COPY_SEQ, LispNames.READ_CHAR, LispNames.VECTORP, LispNames.ARRAYP, LispNames.MAKE_STRING,
+			LispNames.REPLACE, LispNames.LOWER_CASE_P, LispNames.UPPER_CASE_P, LispNames.CONSTANTP,
+			LispNames.GET_SETF_EXPANSION, LispNames.STREAMP, LispNames.SIMPLE_STRING_P, LispNames.MASK_FIELD,
+			LispNames.SCALE_FLOAT, LispNames.DECODE_FLOAT, LispNames.SUBTYPEP, LispNames.CHAR_NAME,
+			LispNames.FDEFINITION, LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.MAKE_BROADCAST_STREAM,
+			LispNames.PATHNAMEP, LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P, LispNames.OPEN_STREAM_P,
+			LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF, LispNames.SIMPLE_CONDITION_FORMAT_CONTROL,
+			LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, LispNames.MAKE_PATHNAME, LispNames.COPY_READTABLE,
+			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE,
+			LispNames.TYPE_OF);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
 			LispNames.ARRAY_DIMENSION_LIMIT, LispNames.ARRAY_TOTAL_SIZE_LIMIT, LispNames.CHAR_CODE_LIMIT,
-			LispNames.PRINT_CIRCLE_VAR, LispNames.FEATURES_VAR, LispNames.STANDARD_OUTPUT_VAR,
-			LispNames.ERROR_OUTPUT_VAR, LispNames.READTABLE_VAR);
+			LispNames.INTERNAL_TIME_UNITS_PER_SECOND, LispNames.PRINT_CIRCLE_VAR, LispNames.FEATURES_VAR,
+			LispNames.STANDARD_OUTPUT_VAR, LispNames.ERROR_OUTPUT_VAR, LispNames.READTABLE_VAR,
+			LispNames.LAMBDA_LIST_KEYWORDS);
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also
@@ -153,9 +161,10 @@ public final class PackageRegistry {
 			LispNames.MV_SPILL, LispNames.SET_FILL_POINTER, LispNames.ARRAY_BECOME, LispNames.ARRAY_DISP_TARGET,
 			LispNames.ARRAY_DISP_OFFSET, LispNames.WARN_INTERNAL, LispNames.SCHAR_SET, LispNames.IEEE754_DOUBLE_BITS,
 			LispNames.IEEE754_DOUBLE_FROM_BITS, LispNames.IEEE754_SINGLE_BITS, LispNames.IEEE754_SINGLE_FROM_BITS,
-			LispNames.READ_EVAL, LispNames.SUBSEQ_CORE, LispNames.NLX_TAG_INTERNAL, LispNames.NLX_CATCH_INTERNAL,
-			LispNames.NLX_THROW_INTERNAL, LispNames.STRING_COMPARE, LispNames.OBJ_NEW, LispNames.OBJ_REF,
-			LispNames.OBJ_SET, LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P, LispNames.OBJ_SLOTS);
+			LispNames.READ_EVAL, LispNames.READ_EVAL_TEMPLATE, LispNames.SUBSEQ_CORE, LispNames.NLX_TAG_INTERNAL,
+			LispNames.NLX_CATCH_INTERNAL, LispNames.NLX_THROW_INTERNAL, LispNames.STRING_COMPARE, LispNames.OBJ_NEW,
+			LispNames.OBJ_REF, LispNames.OBJ_SET, LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P,
+			LispNames.OBJ_SLOTS);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
@@ -301,25 +310,24 @@ public final class PackageRegistry {
 		// symbols are reachable as cl-user::name, never cl-user:name.
 		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>(), Set.of()));
 		// Its canonical spelling is rontolisp; rl is a built-in nickname.
-		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.VERSION, LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
-						LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.AWAIT, LispNames.ASYNC,
-						LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.FUTUREP, LispNames.ASYNC_STREAMP,
-						LispNames.MAKE_STREAM, LispNames.STREAM_READ, LispNames.STREAM_WRITE, LispNames.STREAM_CLOSE,
-						LispNames.READ_ALL, LispNames.WAIT_FOR, LispNames.THEN, LispNames.THEN_STAR, LispNames.CATCH,
-						LispNames.FINALLY, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.PLIST_HASH_TABLE,
-						LispNames.HASH_TABLE_PLIST, LispNames.ALIST_HASH_TABLE, LispNames.HASH_TABLE_ALIST,
-						LispNames.URL_DECODE, LispNames.URL_ENCODE, LispNames.QUERY_PARAMS, LispNames.QUERY_PARAM,
-						LispNames.URL_PATH, LispNames.URL_QUERY, LispNames.WASM_EXPORT, LispNames.WASM_IMPORT,
-						LispNames.WIT_EXPORT, LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE, LispNames.WIT_ERROR,
-						LispNames.WIT_ERROR_PAYLOAD, LispNames.WITH_ARENA, LispNames.HTTP_HANDLER,
-						LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT,
-						LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT,
-						LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12,
-						// rontolisp's own Gray-stream extension
-						// (eval.GrayStreamsLibrary).
-						LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
-						LispNames.GRAY_STREAM_WRITE_CHAR, LispNames.GRAY_STREAM_WRITE_STRING))));
+		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(), new HashSet<>(Set.of(LispNames.VERSION,
+				LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS, LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH,
+				LispNames.AWAIT, LispNames.ASYNC, LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.FUTUREP,
+				LispNames.ASYNC_STREAMP, LispNames.MAKE_STREAM, LispNames.STREAM_READ, LispNames.STREAM_WRITE,
+				LispNames.STREAM_CLOSE, LispNames.READ_ALL, LispNames.WAIT_FOR, LispNames.THEN, LispNames.THEN_STAR,
+				LispNames.CATCH, LispNames.FINALLY, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY,
+				LispNames.PLIST_HASH_TABLE, LispNames.HASH_TABLE_PLIST, LispNames.ALIST_HASH_TABLE,
+				LispNames.HASH_TABLE_ALIST, LispNames.URL_DECODE, LispNames.URL_ENCODE, LispNames.QUERY_PARAMS,
+				LispNames.QUERY_PARAM, LispNames.URL_PATH, LispNames.URL_QUERY, LispNames.WASM_EXPORT,
+				LispNames.WASM_IMPORT, LispNames.WIT_EXPORT, LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE,
+				LispNames.WIT_ERROR, LispNames.WIT_ERROR_PAYLOAD, LispNames.WITH_ARENA, LispNames.HTTP_HANDLER,
+				LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT,
+				LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT,
+				LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12, LispNames.RANDOM_BYTES,
+				// rontolisp's own Gray-stream extension
+				// (eval.GrayStreamsLibrary).
+				LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_STREAM_WRITE_CHAR,
+				LispNames.GRAY_STREAM_WRITE_STRING))));
 		// numpy-style vector/matrix operations, implemented once in linalg.lisp and
 		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
 		// is external. Its canonical spelling is linalg; la is a built-in nickname.

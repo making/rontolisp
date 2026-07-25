@@ -263,6 +263,10 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.READ_EVAL, args, 1);
 			return args.get(0);
 		}));
+		env.defineFunction(LispNames.READ_EVAL_TEMPLATE, new LispFunction(LispNames.READ_EVAL_TEMPLATE, args -> {
+			requireArgCount(LispNames.READ_EVAL_TEMPLATE, args, 1);
+			return args.get(0);
+		}));
 		return env;
 	}
 
@@ -312,6 +316,36 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.HASH_TABLE_COUNT, args, 1);
 			return new LispInteger(requireHashTable(LispNames.HASH_TABLE_COUNT, args.get(0)).count());
 		}));
+		// hash-table-size / -rehash-size / -rehash-threshold: the lite triple a
+		// portable copy-hash-table reads before rebuilding a table (alexandria's).
+		// rontolisp tables have no capacity of their own -- growth belongs to the host
+		// map -- so size is the entry count and the two growth knobs report the
+		// standard defaults.
+		env.defineFunction(LispNames.HASH_TABLE_SIZE, new LispFunction(LispNames.HASH_TABLE_SIZE, args -> {
+			requireArgCount(LispNames.HASH_TABLE_SIZE, args, 1);
+			return new LispInteger(requireHashTable(LispNames.HASH_TABLE_SIZE, args.get(0)).count());
+		}));
+		env.defineFunction(LispNames.HASH_TABLE_REHASH_SIZE,
+				new LispFunction(LispNames.HASH_TABLE_REHASH_SIZE, args -> {
+					requireArgCount(LispNames.HASH_TABLE_REHASH_SIZE, args, 1);
+					requireHashTable(LispNames.HASH_TABLE_REHASH_SIZE, args.get(0));
+					return new LispDouble(1.5);
+				}));
+		env.defineFunction(LispNames.HASH_TABLE_REHASH_THRESHOLD,
+				new LispFunction(LispNames.HASH_TABLE_REHASH_THRESHOLD, args -> {
+					requireArgCount(LispNames.HASH_TABLE_REHASH_THRESHOLD, args, 1);
+					requireHashTable(LispNames.HASH_TABLE_REHASH_THRESHOLD, args.get(0));
+					return new LispDouble(1.0);
+				}));
+		// hash-table-test: always 'equal. Lookup is structural on every backend
+		// (the :test argument is recorded but never consulted), so equal is the test
+		// the table actually implements -- reporting the requested one would describe
+		// behavior that does not exist here.
+		env.defineFunction(LispNames.HASH_TABLE_TEST, new LispFunction(LispNames.HASH_TABLE_TEST, args -> {
+			requireArgCount(LispNames.HASH_TABLE_TEST, args, 1);
+			requireHashTable(LispNames.HASH_TABLE_TEST, args.get(0));
+			return new LispSymbol(LispNames.EQUAL);
+		}));
 		env.defineFunction(LispNames.HASH_TABLE_P, new LispFunction(LispNames.HASH_TABLE_P, args -> {
 			requireArgCount(LispNames.HASH_TABLE_P, args, 1);
 			return (args.get(0) instanceof LispHashTable) ? LispTrue.INSTANCE : LispNil.INSTANCE;
@@ -325,6 +359,14 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ARRAYP_INTERNAL, args, 1);
 			return (args.get(0) instanceof LispArray || args.get(0) instanceof LispFloatArray) ? LispTrue.INSTANCE
 					: LispNil.INSTANCE;
+		}));
+		// arrayp: the standard spelling -- a string is an array in CL, so the public
+		// predicate is the internal one widened by stringp.
+		env.defineFunction(LispNames.ARRAYP, new LispFunction(LispNames.ARRAYP, args -> {
+			requireArgCount(LispNames.ARRAYP, args, 1);
+			return (args.get(0) instanceof LispString || args.get(0) instanceof LispArray
+					|| args.get(0) instanceof LispDoubleFloatArray || args.get(0) instanceof LispSingleFloatArray)
+							? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// vectorp: strings are vectors in CL. Like the vector type specifier, the rank
 		// is NOT checked (a rank-n array passes too) -- see makeTypeTest. A packed
@@ -1525,6 +1567,18 @@ public final class Environment implements Scope {
 							.toBigInteger());
 			}
 			throw new LispEvalException("random expects an integer or float limit, got: " + limit.print());
+		}));
+		// %random-byte: ONE cryptographically strong byte (0-255). Unlike random (a
+		// plain PRNG here), the source is java.security.SecureRandom -- the same
+		// contract the WASM backends get from the WASI random_get host function. The
+		// generator is created once and reused; rontolisp:random-bytes (a prelude
+		// defun) is the public API over it.
+		String randomByteName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.RANDOM_BYTE_INTERNAL);
+		java.security.SecureRandom secureRandom = new java.security.SecureRandom();
+		env.defineFunction(randomByteName, new LispFunction(randomByteName, args -> {
+			requireArgCount(LispNames.RANDOM_BYTE_INTERNAL, args, 0);
+			return new LispInteger(secureRandom.nextInt(256));
 		}));
 		// get-universal-time: seconds since 1900-01-01 00:00:00 GMT (Common Lisp epoch).
 		// The interpreter and JVM backends read the real wall clock; the WASM backend
@@ -2865,6 +2919,22 @@ public final class Environment implements Scope {
 			LispVal out2 = args.get(0);
 			return (out2 instanceof LispInteger || out2 instanceof LispTrue) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		// open-stream-p: REAL against the stream table (close removes the entry), so
+		// the close-if-open idiom (cl-postgres's ensure-socket-is-closed) neither
+		// double-closes nor leaks. A closed-elsewhere Socket answers nil too. nil (no
+		// stream) answers nil rather than signaling -- callers probe with the raw slot.
+		env.defineFunction(LispNames.OPEN_STREAM_P, new LispFunction(LispNames.OPEN_STREAM_P, args -> {
+			requireArgCount(LispNames.OPEN_STREAM_P, args, 1);
+			return switch (args.get(0)) {
+				case LispTrue ignored -> LispTrue.INSTANCE;
+				case LispInteger handle -> switch (streams.get(handle.value())) {
+					case Socket socket -> socket.isClosed() ? LispNil.INSTANCE : LispTrue.INSTANCE;
+					case null -> LispNil.INSTANCE;
+					default -> LispTrue.INSTANCE;
+				};
+				default -> LispNil.INSTANCE;
+			};
+		}));
 		env.defineFunction(LispNames.STREAM_ELEMENT_TYPE, new LispFunction(LispNames.STREAM_ELEMENT_TYPE, args -> {
 			requireArgCount(LispNames.STREAM_ELEMENT_TYPE, args, 1);
 			// Every stream is a character stream.
@@ -3037,7 +3107,13 @@ public final class Environment implements Scope {
 			}
 		}));
 		env.defineFunction(LispNames.CLOSE, new LispFunction(LispNames.CLOSE, args -> {
-			requireArgCount(LispNames.CLOSE, args, 1);
+			// (close stream) or (close stream :abort expr) -- every rontolisp close is
+			// effectively aborting (no buffered data survives it), so :abort is
+			// accepted and ignored.
+			if (!(args.size() == 1
+					|| (args.size() == 3 && args.get(1) instanceof LispSymbol kw && ":ABORT".equals(kw.name())))) {
+				requireArgCount(LispNames.CLOSE, args, 1);
+			}
 			if (!(args.get(0) instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.CLOSE + " expects a stream");
 			}
@@ -3052,6 +3128,67 @@ public final class Environment implements Scope {
 				throw new UncheckedIOException(ex);
 			}
 			return LispTrue.INSTANCE;
+		}));
+		// force-output / finish-output: flush an output stream's buffered bytes to the
+		// underlying sink. Every rontolisp write is synchronous once flushed, so the two
+		// CL operations coincide; both return nil. No argument (or nil/t) flushes
+		// standard output.
+		java.util.function.Function<List<LispVal>, LispVal> forceOutput = args -> {
+			if (args.size() > 1) {
+				throw new LispEvalException(LispNames.FORCE_OUTPUT + " expects 0 or 1 arguments");
+			}
+			try {
+				if (args.isEmpty() || args.get(0) instanceof LispNil || args.get(0) instanceof LispTrue) {
+					out.flush();
+					return LispNil.INSTANCE;
+				}
+				if (!(args.get(0) instanceof LispInteger handle)) {
+					throw new LispEvalException(LispNames.FORCE_OUTPUT + " expects an output stream");
+				}
+				Closeable entry = streams.get(handle.value());
+				switch (entry) {
+					case Socket socket -> socket.getOutputStream().flush();
+					case Writer writer -> writer.flush();
+					case OutputStream os -> os.flush();
+					case null, default -> throw new LispEvalException(
+							LispNames.FORCE_OUTPUT + " expects an output stream, got: " + args.get(0).print());
+				}
+				return LispNil.INSTANCE;
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+		};
+		env.defineFunction(LispNames.FORCE_OUTPUT, new LispFunction(LispNames.FORCE_OUTPUT, forceOutput::apply));
+		env.defineFunction(LispNames.FINISH_OUTPUT, new LispFunction(LispNames.FINISH_OUTPUT, forceOutput::apply));
+		// (listen &optional stream): whether input is immediately available without
+		// blocking -- InputStream.available() / Reader.ready() semantics. Sockets answer
+		// from the kernel receive buffer, which is what cl-postgres's
+		// man-in-the-middle probe relies on.
+		env.defineFunction(LispNames.LISTEN, new LispFunction(LispNames.LISTEN, args -> {
+			if (args.size() > 1) {
+				throw new LispEvalException(LispNames.LISTEN + " expects 0 or 1 arguments");
+			}
+			try {
+				if (args.isEmpty() || args.get(0) instanceof LispNil || args.get(0) instanceof LispTrue) {
+					return stdinReader.ready() ? LispTrue.INSTANCE : LispNil.INSTANCE;
+				}
+				if (!(args.get(0) instanceof LispInteger handle)) {
+					throw new LispEvalException(LispNames.LISTEN + " expects an input stream");
+				}
+				Closeable entry = streams.get(handle.value());
+				boolean ready = switch (entry) {
+					case Socket socket -> socket.getInputStream().available() > 0;
+					case BufferedReader reader -> reader.ready();
+					case InputStream in2 -> in2.available() > 0;
+					case null, default -> throw new LispEvalException(
+							LispNames.LISTEN + " expects an input stream, got: " + args.get(0).print());
+				};
+				return ready ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
 		}));
 		env.defineFunction(LispNames.WRITE_LINE, new LispFunction(LispNames.WRITE_LINE, args -> {
 			requireMinArgCount(LispNames.WRITE_LINE, args, 1);

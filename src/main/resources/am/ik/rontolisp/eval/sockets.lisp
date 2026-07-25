@@ -321,6 +321,30 @@
                b)
         (rontolisp::%write-byte-raw b stream))))
 
+(defun rontolisp::%io-listen (&optional s)
+  ;; Immediately-available probe: unconsumed bytes in the socket entry's chunk
+  ;; buffer. The host kernel's receive buffer is not observable without
+  ;; blocking on this backend, so a drained chunk answers nil even when bytes
+  ;; wait host-side (documented divergence -- the chunk IS the readahead
+  ;; buffer here). A non-socket designator answers nil.
+  (let ((e (rontolisp::%sock-entry s)))
+    (if e
+        (if (rontolisp::%sock-buf-ready e) t nil)
+        nil)))
+
+(defun rontolisp::%io-open-stream-p (s)
+  ;; A socket entry lives in *sock-table* until %io-close drops it, so table
+  ;; membership answers "open" for a live socket. A handle in the socket fd
+  ;; range with no entry is a socket that has BEEN CLOSED -- the fds are handed
+  ;; out sequentially from 200 up to *sock-next-fd*, so the range test
+  ;; distinguishes it from a file/stdin handle with no bookkeeping here (those
+  ;; answer t for any non-nil designator, the documented lite edge).
+  (if (rontolisp::%sock-entry s)
+      t
+      (if (and (integerp s) (>= s 200) (< s rontolisp::*sock-next-fd*))
+          nil
+          (if s t nil))))
+
 (defun rontolisp::%io-close (stream)
   (let ((e (rontolisp::%sock-entry stream)))
     (if e

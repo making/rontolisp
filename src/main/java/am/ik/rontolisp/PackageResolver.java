@@ -825,6 +825,61 @@ public final class PackageResolver {
 	}
 
 	/**
+	 * The spelling {@code intern} gives a bare name in a DESIGNATED package (the 2-arg
+	 * {@code (intern name package)} form): the same accessibility rules as
+	 * {@link #internSpelling}, evaluated with the designated package current. The
+	 * {@code keyword} pseudo-package builds a keyword.
+	 * @param packageDesignator the package name as given (any case, nickname allowed)
+	 * @param name the bare name to intern
+	 * @return the canonical spelling for that package
+	 * @throws LispPackageException when no such package exists
+	 */
+	/**
+	 * The external symbols of a designated package, as canonically spelled symbols in a
+	 * stable (sorted) order -- the {@code do-external-symbols} iteration source. The
+	 * registry records exports from {@code defpackage}, so the listing reflects every
+	 * package registered so far.
+	 * @param packageDesignator the package name as given (any case, nickname allowed)
+	 * @return the external symbols, canonically spelled
+	 * @throws LispPackageException when no such package exists
+	 */
+	public java.util.List<LispSymbol> externalSymbols(String packageDesignator) {
+		String pkg = findPackageName(packageDesignator);
+		if (pkg == null) {
+			throw new LispPackageException("No such package: " + packageDesignator);
+		}
+		LispPackage p = this.registry.get(pkg);
+		if (p == null) {
+			return java.util.List.of();
+		}
+		java.util.List<String> names = new java.util.ArrayList<>(p.externals());
+		java.util.Collections.sort(names);
+		java.util.List<LispSymbol> out = new java.util.ArrayList<>(names.size());
+		for (String name : names) {
+			out.add(canonical(pkg, name));
+		}
+		return out;
+	}
+
+	public String internSpellingIn(String packageDesignator, String name) {
+		String pkg = findPackageName(packageDesignator);
+		if (pkg == null) {
+			throw new LispPackageException("No such package: " + packageDesignator);
+		}
+		if ("keyword".equals(pkg)) {
+			return ":" + name;
+		}
+		String saved = this.currentPackage;
+		this.currentPackage = pkg;
+		try {
+			return internSpelling(name);
+		}
+		finally {
+			this.currentPackage = saved;
+		}
+	}
+
+	/**
 	 * The canonical registered name of a runtime package designator, or null when no such
 	 * package exists. The {@code keyword} pseudo-package answers as {@code "keyword"}
 	 * even though it is not a registration (its "symbols" are the keywords). This backs

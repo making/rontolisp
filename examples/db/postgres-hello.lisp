@@ -1,0 +1,26 @@
+;; Connects to a PostgreSQL server with the REAL cl-postgres (zlib, Marijn
+;; Haverbeke / Sabra Crolleton -- Postmodern's low-level driver) loaded from its
+;; unmodified upstream sources, and runs one query. Run with:
+;;   rontolisp examples/db/postgres-hello.lisp
+;;
+;; It needs a server. The one-liner this example is written against:
+;;   docker run --rm -p 54329:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine
+;;
+;; INTERPRETER ONLY today. The driver loads through ql:quickload, which pulls
+;; md5, split-sequence, ironclad, cl-base64, cl-ppcre, uax-15 and alexandria --
+;; expect the first run to take minutes (uax-15 parses UnicodeData.txt at load
+;; time). trust, password and md5 authentication all complete; SCRAM-SHA-256
+;; also completes, but only if the server allows enough time: its 4096-round
+;; PBKDF2 outruns the default 60-second authentication_timeout in interpreted
+;; Lisp, so start the server with -c authentication_timeout=600 for it.
+
+(ql:quickload "cl-postgres")
+
+(let ((conn (cl-postgres:open-database "postgres" "postgres" nil "127.0.0.1" 54329)))
+  ;; A row reader turns the result rows into Lisp data; list-row-reader gives a
+  ;; list of lists.
+  (print (cl-postgres:exec-query conn "select 42, 'hello'"
+                                 'cl-postgres:list-row-reader))
+  (print (cl-postgres:exec-query conn "select generate_series(1, 3) as n"
+                                 'cl-postgres:list-row-reader))
+  (cl-postgres:close-database conn))

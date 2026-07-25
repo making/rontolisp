@@ -186,6 +186,20 @@ final class JvmExprCompiler {
 					JvmHttpHandlerCompiler.compile(cons, ctx, className);
 					return;
 				}
+				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {
+					// One cryptographically strong byte from the lazily created
+					// SecureRandom (_randomByte, emitted because the reference gated it).
+					if (cons.toList().size() != 1) {
+						throw new UnsupportedOperationException(
+								"%random-byte expects 0 arguments, got " + (cons.toList().size() - 1));
+					}
+					ctx.emit(Opcode.INVOKESTATIC);
+					ctx.emitU2(ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+							ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmSecureRandomRuntimeBuilder.METHOD),
+									ctx.cp.addUtf8(JvmSecureRandomRuntimeBuilder.DESC)))
+						.index());
+					return;
+				}
 				if (LispNames.WASM_EXPORT.equals(qn.member())) {
 					// rontolisp:wasm-export marks a function for direct WASM export; the
 					// JVM
@@ -338,10 +352,16 @@ final class JvmExprCompiler {
 					.compileExpr(LispMacroExpander.expandMakeCondition(cons, ctx.closRegistry), ctx, className);
 				case LispNames.DOCUMENTATION ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDocumentation(cons), ctx, className);
+				case LispNames.WITH_OPEN_STREAM ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenStream(cons, true), ctx, className);
 				case LispNames.WITH_OPEN_FILE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons), ctx, className);
 				case LispNames.READ_BYTE -> JvmReadByteCompiler.compile(cons, ctx, className);
 				case LispNames.WRITE_BYTE -> JvmWriteByteCompiler.compile(cons, ctx, className);
+				case LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT ->
+					JvmForceOutputCompiler.compile(cons, ctx, className);
+				case LispNames.LISTEN -> JvmListenCompiler.compile(cons, ctx, className);
+				case LispNames.OPEN_STREAM_P -> JvmOpenStreamPCompiler.compile(cons, ctx, className);
 				case LispNames.READ_SEQUENCE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandReadSequence(cons), ctx, className);
 				case LispNames.WRITE_SEQUENCE ->
@@ -395,7 +415,7 @@ final class JvmExprCompiler {
 				case LispNames.IEEE754_SINGLE_BITS -> JvmIeee754Compiler.compileSingleBits(cons, ctx, className);
 				case LispNames.IEEE754_SINGLE_FROM_BITS ->
 					JvmIeee754Compiler.compileSingleFromBits(cons, ctx, className);
-				case LispNames.READ_EVAL ->
+				case LispNames.READ_EVAL, LispNames.READ_EVAL_TEMPLATE ->
 					// Identity: a #. marker split into code position by a backquote
 					// template
 					// arrives here with its (already evaluated) argument.
@@ -475,6 +495,13 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintUnreadableObject(cons), ctx, className);
 				case LispNames.WITH_PACKAGE_ITERATOR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithPackageIterator(cons), ctx, className);
+				case LispNames.DO_EXTERNAL_SYMBOLS ->
+					// Real on the interpreter (registry-backed); inside #. the macro-time
+					// evaluator resolves it before compilation. A runtime occurrence has
+					// no
+					// package registry behind it here.
+					throw new UnsupportedOperationException(LispNames.DO_EXTERNAL_SYMBOLS
+							+ " requires the interpreter (no runtime package registry in compiled mode)");
 				case LispNames.PROG ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, false), ctx, className);
 				case LispNames.PROG_STAR ->
@@ -614,6 +641,13 @@ final class JvmExprCompiler {
 				case LispNames.REMHASH -> JvmHashTableCompiler.compileRem(cons, ctx, className);
 				case LispNames.CLRHASH -> JvmHashTableCompiler.compileClr(cons, ctx, className);
 				case LispNames.HASH_TABLE_COUNT -> JvmHashTableCompiler.compileCount(cons, ctx, className);
+				case LispNames.HASH_TABLE_TEST ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandHashTableTest(cons), ctx, className);
+				case LispNames.HASH_TABLE_SIZE -> JvmHashTableCompiler.compileCount(cons, ctx, className);
+				case LispNames.HASH_TABLE_REHASH_SIZE -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.5), ctx, className);
+				case LispNames.HASH_TABLE_REHASH_THRESHOLD -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.0), ctx, className);
 				case LispNames.HASH_TABLE_P -> JvmHashTableCompiler.compileP(cons, ctx, className);
 				case LispNames.MAPHASH -> JvmHashTableCompiler.compileMaphash(cons, ctx, className);
 				case LispNames.MAKE_ARRAY -> JvmArrayCompiler.compileMake(cons, ctx, className);
@@ -724,6 +758,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopySeq(cons), ctx, className);
 				case LispNames.VECTORP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandVectorp(cons), ctx, className);
+				case LispNames.ARRAYP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayp(cons), ctx, className);
 				case LispNames.APPLY -> JvmApplyCompiler.compile(cons, ctx, className);
 				case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);
 				case LispNames.ATOM -> JvmAtomCompiler.compile(cons, ctx, className);
@@ -955,6 +991,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandNthValue(cons), ctx, className);
 				case LispNames.MULTIPLE_VALUE_SETQ ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueSetq(cons), ctx, className);
+				case LispNames.MULTIPLE_VALUE_PROG1 ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueProg1(cons), ctx, className);
 				case LispNames.ROTATEF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRotatef(cons), ctx, className);
 				case LispNames.SHIFTF ->

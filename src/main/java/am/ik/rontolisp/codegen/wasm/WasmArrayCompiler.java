@@ -248,8 +248,7 @@ final class WasmArrayCompiler {
 	// against the target's total size (the product of its dims), trapping when too small.
 	private static void compileMakeDisplaced(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		if (findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD) != null
-				|| findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD) != null
+		if (nonNilKeyword(args, LispNames.FILL_POINTER_KEYWORD) || nonNilKeyword(args, LispNames.ADJUSTABLE_KEYWORD)
 				|| findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD) != null) {
 			throw new UnsupportedOperationException(
 					"make-array: :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element");
@@ -1750,6 +1749,14 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.writeSignedLeb128(field);
+	}
+
+	// A make-array keyword explicitly given a NON-nil value. An explicit nil
+	// (alexandria's ":adjustable nil" beside :displaced-to) asserts exactly what a
+	// displaced view already is, so it must not read as a conflicting option.
+	private static boolean nonNilKeyword(List<LispVal> args, String keyword) {
+		LispVal value = findKeywordValue(args, keyword);
+		return value != null && !(value instanceof am.ik.rontolisp.LispNil);
 	}
 
 }

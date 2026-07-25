@@ -18,6 +18,10 @@ final class JvmCloseCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		LispVal stripped = am.ik.rontolisp.LispMacroExpander.stripCloseAbort(cons);
+		if (stripped instanceof LispCons strippedCons) {
+			cons = strippedCons;
+		}
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new UnsupportedOperationException("close expects 1 argument, got " + (parts.size() - 1));
