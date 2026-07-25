@@ -2,7 +2,7 @@
 
 | Type | Example | Description |
 |------|---------|-------------|
-| Integer | `42`, `-5`, `1,000`, `#xff`, `#o777`, `#b1010` | 64-bit signed integer that auto-promotes to a big integer on overflow (interpreter and JVM); on WASM exact within the signed 64-bit range, wrapping beyond it. `#x`/`#o`/`#b` read hexadecimal/octal/binary literals |
+| Integer | `42`, `-5`, `1,000`, `#xff`, `#o777`, `#b1010` | 64-bit signed integer that auto-promotes to a big integer on overflow, exact at any magnitude on every backend. `#x`/`#o`/`#b` read hexadecimal/octal/binary literals |
 | Ratio | `1/3`, `-2/5` | Exact rational number (Common Lisp ratio), always normalized; supported by all three backends |
 | Double | `3.14`, `-0.5`, `3,000.50`, `1d0`, `6.02e23` | 64-bit floating-point number |
 | String | `"hello"` | String literal |
@@ -37,18 +37,17 @@ rontolisp has a single floating-point type, so every marker reads as the same
 that is not followed by exponent digits is not a float: `1d` and `1d0x` read as
 symbols (like `1+`), not numbers.
 
-In the **interpreter and the JVM compiler**, integer arithmetic never silently
-wraps: when a `long` operation (`+`, `-`, `*`, `/`, `1+`, `1-`, `abs`, ...)
-would overflow, the result is automatically promoted to an arbitrary-precision
-big integer, and integer literals larger than a `long` are read as big integers.
-A big-integer result that fits back in a `long` is demoted again, so values keep
-a single canonical representation. For example, with
+On **every backend**, integer arithmetic never silently wraps: when an
+operation (`+`, `-`, `*`, `/`, `1+`, `1-`, `abs`, ...) overflows the fixed-width
+representation, the result is automatically promoted to an arbitrary-precision
+big integer, and integer literals of any magnitude are read exactly. A
+big-integer result that fits back in the narrower representation is demoted
+again, so values keep a single canonical representation. For example, with
 `(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))`, `(fact 32)` returns the
-exact `263130836933693530167218012160000000`. The **WASM compiler** promotes an
-overflowing result out of its 31-bit fixnum representation into a boxed signed
-64-bit value (so unsigned 32-bit workloads such as MD5 compute exactly), but
-arithmetic past the 64-bit range wraps -- there is no arbitrary-precision
-promotion, so `(fact 32)` is exact only on the interpreter and the JVM.
+exact `263130836933693530167218012160000000` everywhere. (The WASM compiler
+promotes in two steps -- its unboxed 31-bit fixnums first box into a signed
+64-bit value, then into a limb-based big integer -- but that is invisible to
+programs.)
 
 **All three backends** support Common Lisp ratios (exact rational numbers).
 `1/3` reads as a ratio literal, and integer division that does not divide
@@ -81,9 +80,11 @@ Per backend, the components follow the integer representation: the
 **interpreter and the JVM compiler** use big integers (a ratio of huge
 numerators/denominators stays exact), while the **WASM compiler** keeps ratio
 components in the 31-bit fixnum range with no overflow promotion (plain
-integers promote to 64-bit, but a division that does not divide evenly folds
-its components back to 31 bits). The runtime reader emitted for compiled
-`read`/`load` does not
+integers promote without bound, and `truncate`/`floor`/`ceiling`/`round`/
+`mod`/`rem` over two integers divide exactly at any magnitude -- only a
+division kept as a fraction is limited: components past 31 bits fold back, and
+a limb-sized big integer in an uneven `/` traps). The runtime reader emitted
+for compiled `read`/`load` does not
 parse ratio literals (a `1/3` token read at runtime is a symbol), and `mod`,
 `evenp`/`oddp`, `gcd`/`lcm` and `isqrt` remain integer-only.
 

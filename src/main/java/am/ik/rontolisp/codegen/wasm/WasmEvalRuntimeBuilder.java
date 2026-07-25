@@ -509,9 +509,10 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// --- 2. integers (i31), ratios, floats and closures are self-evaluating ---
-		for (int heapType : new int[] { Type.I31.code(), WasmLispCompiler.TYPE_RATIO, WasmLispCompiler.TYPE_FLOAT,
-				WasmLispCompiler.TYPE_CLOSURE }) {
+		// --- 2. integers (i31 / boxed i64 / limb), ratios, floats and closures are
+		// self-evaluating ---
+		for (int heapType : new int[] { Type.I31.code(), WasmLispCompiler.TYPE_BIGNUM, WasmLispCompiler.TYPE_BIGINT,
+				WasmLispCompiler.TYPE_RATIO, WasmLispCompiler.TYPE_FLOAT, WasmLispCompiler.TYPE_CLOSURE }) {
 			getLocal(w, VAL);
 			refTest(w, heapType);
 			w.write(Instruction.IF, 0x40);

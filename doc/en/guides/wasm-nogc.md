@@ -75,8 +75,8 @@ Each value's wasm type is chosen by static type inference: integers use
 `i64`, floats use `f64`. Types are inferred with a fixpoint over the call
 graph seeded by the export boundary designators, and where an integer and a
 float meet (e.g. `(* 3.14 n)`) the integer is promoted to `f64`. Using `i64`
-makes integer arithmetic exact to 2^63 (the GC backend reaches the same range
-through its boxed integers) — far wider than what an all-`f64` lowering
+makes integer arithmetic exact to 2^63 (the GC backend goes further still,
+promoting to big integers of any magnitude) — far wider than what an all-`f64` lowering
 (exact only to 2^53) could offer; for example `a*a - (a-1)*(a+1)` stays
 exactly `1` even when the intermediates exceed 2^53.
 

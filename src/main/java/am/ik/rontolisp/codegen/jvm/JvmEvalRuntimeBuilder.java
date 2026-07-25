@@ -1529,6 +1529,15 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(VAL);
 		a.areturn();
 		a.bind(notDouble);
+		// a BigInteger (an exact integer past the long range) is self-evaluating too
+		ClassConstant bigIntegerClass = this.k.cp().addClass(this.k.cp().addUtf8("java/math/BigInteger"));
+		int notBigInteger = a.label();
+		a.aload(VAL);
+		a.instanceOf(bigIntegerClass);
+		a.branch(Opcode.IFEQ, notBigInteger);
+		a.aload(VAL);
+		a.areturn();
+		a.bind(notBigInteger);
 
 		// --- ratios (BigInteger[]) are self-evaluating; checked before the generic
 		// Object[] form handling because a ratio is also an Object[] ---

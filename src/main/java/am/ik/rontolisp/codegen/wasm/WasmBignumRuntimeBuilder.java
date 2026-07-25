@@ -12,10 +12,11 @@ import am.ik.wasm.WasmWriter;
  * {@code _int_new} enforces the normalization invariant (an in-range value is ALWAYS a
  * plain i31, so the existing ref.eq/eql fast paths stay valid and a boxed value only ever
  * compares against another boxed value), {@code _int_val} widens either integer
- * representation to i64, and {@code _print_i64_no_nl} is the i64 counterpart of the
- * {@code _print_i32_no_nl} digit renderer. Arithmetic beyond the i64 range wraps (no
- * arbitrary-precision promotion), which covers unsigned 32-bit workloads (e.g. md5) and
- * 64-bit integer columns exactly.
+ * representation to i64 (and TRAPS on the limb tier's {@code TYPE_BIGINT}, keeping every
+ * boundary exact-or-trap), and {@code _print_i64_no_nl} is the i64 counterpart of the
+ * {@code _print_i32_no_nl} digit renderer. Arithmetic beyond the i64 range promotes into
+ * the limb tier ({@link WasmBigIntRuntimeBuilder}), so exact integers carry any
+ * magnitude.
  */
 final class WasmBignumRuntimeBuilder {
 

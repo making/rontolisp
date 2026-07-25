@@ -401,6 +401,60 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void exactIntegersBeyondI64PromoteToLimbBigints() throws Exception {
+		// The third exact-integer tier (TYPE_BIGINT, .kb/wasm-bignum.md): a literal,
+		// arithmetic result or shift outside the signed 64-bit range is a
+		// two's-complement limb integer -- exact at any magnitude, as Common Lisp
+		// requires -- and a shrinking result demotes back through the boxed-i64 and
+		// i31 tiers (so ref.eq/eql fast paths stay valid). This is what unlocks
+		// SCRAM-SHA-256-style 256-bit working state.
+		String program = """
+				(defvar *a* #xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad)
+				(print *a*)
+				(print (+ 9223372036854775807 1))
+				(print (* 4611686018427387904 4))
+				(print (logxor *a* *a*))
+				(print (integer-length *a*))
+				(print (ldb (byte 8 248) *a*))
+				(print (ash *a* 8))
+				(print (ash *a* -248))
+				(print (truncate *a* 16))
+				(print (mod (- 0 *a*) 1000000007))
+				(print (gcd (* *a* 6) (* *a* 15)))
+				(print (= *a* *a*))
+				(print (< (- 0 *a*) *a*))
+				(print (eql (- (+ *a* 5) *a*) 5))
+				(print (equal (list *a*) (list *a*)))
+				(print (expt 2 100))
+				(print (/ (* *a* 8) 8))
+				(print (read-from-string "1267650600228229401496703205376"))
+				(print (read-from-string "#x-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"))
+				(print (eval (list '+ *a* 1)))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("""
+				84342368487090800366523834928142263660104883695016514377462985829716817089965
+				9223372036854775808
+				18446744073709551616
+				0
+				256
+				186
+				21591646332695244893830101741604419496986850225924227680630524372407505175031040
+				186
+				5271398030443175022907739683008891478756555230938532148591436614357301068122
+				2077788
+				253027105461272401099571504784426790980314651085049543132388957489150451269895
+				T
+				T
+				T
+				T
+				1267650600228229401496703205376
+				84342368487090800366523834928142263660104883695016514377462985829716817089965
+				1267650600228229401496703205376
+				-84342368487090800366523834928142263660104883695016514377462985829716817089965
+				84342368487090800366523834928142263660104883695016514377462985829716817089966""");
+	}
+
+	@Test
 	void floatModAndRemComputeCorrectly() throws Exception {
 		// Regression: float mod/rem on the GC backend used to miscompile. A literal float
 		// operand wrote an invalid f64 opcode (byte 0xff, there is no f64.rem), and a

@@ -4,7 +4,8 @@ The default output — no flags beyond `-o file.wasm` — is a **WASI Preview 1
 core module** over the wasm-GC value model:
 
 - **wasm-GC** — Integers are represented as `i31ref` (a value past the fixnum
-  range is boxed as a signed 64-bit struct, keeping arithmetic exact to 2^63).
+  range is boxed as a signed 64-bit struct, and past that as a limb-based big
+  integer, keeping arithmetic exact at any magnitude).
   Floating-point numbers are boxed in a `float_struct { f64 }`. All values on the stack are typed as
   `(ref eq)`. This is what supports the full language (cons cells, symbols,
   closures, hash tables, `eval`, ...), and why the module needs a wasm-GC

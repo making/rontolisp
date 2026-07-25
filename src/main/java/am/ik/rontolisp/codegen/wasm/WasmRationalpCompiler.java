@@ -36,6 +36,11 @@ final class WasmRationalpCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		ctx.writer.write(Instruction.I32_OR);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		ctx.writer.write(Instruction.I32_OR);
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 

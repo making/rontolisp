@@ -35,6 +35,7 @@ final class WasmExprCompiler {
 		}
 		switch (expr) {
 			case LispInteger i -> WasmEmitHelper.compileIntegerLiteral(i.value(), ctx);
+			case am.ik.rontolisp.LispBigInteger bi -> WasmEmitHelper.compileBigIntegerLiteral(bi.value(), ctx);
 			case LispNil ignored -> {
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());

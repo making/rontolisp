@@ -561,6 +561,13 @@ public interface Instruction {
 	/** {@code F64_REINTERPRET_I64} (0xBF). */
 	int F64_REINTERPRET_I64 = 0XBF;
 
+	// Misc prefix (saturating truncation / bulk memory group)
+	/** {@code MISC_PREFIX} (0xFC). */
+	int MISC_PREFIX = 0xFC;
+
+	/** {@code I64_TRUNC_SAT_F64_S} (0xFC 0x06). */
+	int I64_TRUNC_SAT_F64_S = 0x06;
+
 	// Reference instructions (no prefix)
 	/** {@code REF_NULL} (0xD0). */
 	int REF_NULL = 0xD0;

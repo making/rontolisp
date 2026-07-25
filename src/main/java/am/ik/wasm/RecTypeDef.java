@@ -41,6 +41,28 @@ public class RecTypeDef {
 	}
 
 	/**
+	 * Add a sub-final array type to this rec group.
+	 * @param consumer a consumer that writes the element field type (storage type
+	 * followed by mutability)
+	 * @return this instance for chaining
+	 */
+	public RecTypeDef addSubFinalArray(Consumer<WasmWriter> consumer) {
+		this.count++;
+		ByteArrayOutputStream stream = new ByteArrayOutputStream();
+		WasmWriter writer = new WasmWriter(stream);
+		writer.write(Type.SUB_FINAL, 0x00); // sub final, 0 supertypes
+		writer.write(Type.ARRAY_TYPE);
+		consumer.accept(writer);
+		try {
+			this.out.write(stream.toByteArray());
+		}
+		catch (java.io.IOException e) {
+			throw new java.io.UncheckedIOException(e);
+		}
+		return this;
+	}
+
+	/**
 	 * Add a sub-final struct type to this rec group.
 	 * @param consumer a consumer that defines the struct fields
 	 * @return this instance for chaining

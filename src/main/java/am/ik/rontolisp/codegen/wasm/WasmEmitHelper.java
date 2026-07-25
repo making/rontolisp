@@ -112,6 +112,34 @@ final class WasmEmitHelper {
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
 	}
 
+	/**
+	 * Emits an exact-integer literal outside the signed 64-bit range: the canonical
+	 * two's-complement little-endian 32-bit limbs (the same minimal length
+	 * {@code _limb_new} produces at runtime, so a literal and a computed value of the
+	 * same magnitude share one representation) built with {@code array.new_fixed} into a
+	 * {@code TYPE_BIGINT} struct.
+	 * @param value the integer value (magnitude outside the {@code long} range)
+	 * @param ctx the compilation context
+	 */
+	static void compileBigIntegerLiteral(java.math.BigInteger value, WasmLispCompiler.Ctx ctx) {
+		int n = value.bitLength() / 32 + 1;
+		if (n > 10000) {
+			// array.new_fixed is capped at 10000 operands; a 320k-bit literal has no
+			// business in a program.
+			throw new UnsupportedOperationException("Integer literal too large to compile: " + value.bitLength()
+					+ " bits (the WASM backend caps literals at " + (10000 * 32) + " bits)");
+		}
+		for (int i = 0; i < n; i++) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(value.shiftRight(32 * i).intValue());
+		}
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_FIXED);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+		ctx.writer.writeSignedLeb128(n);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGINT);
+	}
+
 	static void castI31GetS(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(Type.I31.code());
@@ -197,6 +225,18 @@ final class WasmEmitHelper {
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.F64_CONVERT_S_I64);
 		ctx.writer.write(Instruction.ELSE);
+		// limb-integer path: the float approximation via _big_to_f64
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.F64);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_TO_F64);
+		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -224,6 +264,7 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
@@ -383,7 +424,28 @@ final class WasmEmitHelper {
 		emitBignumField(ctx, bSlot);
 		ctx.writer.write(Instruction.I64_EQ);
 		ctx.writer.write(Instruction.ELSE);
+		// both limb integers -> _big_eq (canonical limbs, so limb value equality;
+		// the normalization invariant keeps mixed-tier pairs numerically unequal)
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_EQ);
+		ctx.writer.write(Instruction.ELSE);
 		elseBranch.run();
+		ctx.writer.write(Instruction.END); // end limb-integer if
 		ctx.writer.write(Instruction.END); // end bignum if
 	}
 
@@ -480,6 +542,25 @@ final class WasmEmitHelper {
 		emitBignumField(ctx, bSlot);
 		ctx.writer.write(Instruction.I64_EQ);
 		ctx.writer.write(Instruction.ELSE);
+		// Both limb integers: _big_eq value equality (canonical limbs)
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_EQ);
+		ctx.writer.write(Instruction.ELSE);
 		// Both floats: compare f64 fields (float structs are value objects)
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(aSlot);
@@ -544,6 +625,7 @@ final class WasmEmitHelper {
 		emitStringEqOrZero(ctx, aSlot, bSlot);
 		ctx.writer.write(Instruction.END); // end ratio if
 		ctx.writer.write(Instruction.END); // end float if
+		ctx.writer.write(Instruction.END); // end limb-integer if
 		ctx.writer.write(Instruction.END); // end bignum if
 		// end char if and end ref.eq if are emitted by the caller
 		// (emitCharCodePointEqOrElse and emitEqlComparison respectively).

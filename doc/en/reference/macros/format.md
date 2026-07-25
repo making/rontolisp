@@ -103,7 +103,7 @@ any other destination is written with one `write-string` call. Further notes:
   backend's native float printing, so its exact form is backend-specific; supply
   a digit count for portable output. `~g` accepts no prefix parameters.
 - `~e` builds its mantissa from integer arithmetic (so the output is identical on
-  every backend) and the digit count must be a literal, not a runtime `v`. Because the WASM backend caps integers at the signed 64-bit range, the scaled mantissa limits `~,De` to roughly `D` <= 17 digits of precision; the default (`~e`, 6 digits) is well within that bound. The scale factor of `~e` must be 1 (the default), and
+  every backend) and the digit count must be a literal, not a runtime `v`. The scaled mantissa is computed in 64-bit arithmetic, which limits `~,De` to roughly `D` <= 17 digits of precision (identically on every backend); the default (`~e`, 6 digits) is well within that bound. The scale factor of `~e` must be 1 (the default), and
   the overflow character of `~f`/`~e` requires a literal width.
 - The repeat count of `~%`/`~&`/`~~` must be a literal or `#` (a runtime `v` count
   there is not supported). `~&` decides whether to emit a newline from the actual
@@ -114,7 +114,7 @@ any other destination is written with one `write-string` call. Further notes:
   clause to consume the same number of arguments (a literal or `#` selector
   lifts that restriction), a `~@[` clause must consume exactly the tested
   argument, and `#` and `~@{` are not available inside a `~{ ... ~}` body.
-- On the WASM backend integers are limited to the signed 64-bit range, so `~:d` grouping (and `~x`/`~o`/`~b`/`~r`) is exact up to that range; arbitrary-precision (bignum) values work only in the interpreter and the JVM backend.
+- `~:d` grouping and the radix directives `~x`/`~o`/`~b`/`~r` are exact for integers of any magnitude on every backend.
 
 Like the other macros, `format` is not recognized by the embedded `eval` runtime
 in compiled output (see [Compiled `eval` limitations](../../guides/eval-limitations.md)).

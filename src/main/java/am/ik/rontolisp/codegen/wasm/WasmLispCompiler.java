@@ -213,7 +213,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * after the fixed and {@code --simd} types in {@code asyncMode} only.
 	 */
 	private int asyncTypeBase() {
-		return BIGNUM_TYPE_LAST + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
+		return BIGINT_TYPE_LAST + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
 	}
 
 	/**
@@ -638,12 +638,131 @@ public final class WasmLispCompiler implements LispCompiler {
 	// _print_i64_no_nl (i64) -> (): the i64 counterpart of _print_i32_no_nl.
 	static final int FUNC_PRINT_I64_NO_NL = FUNC_INT_VAL + 1;
 
+	// The limb (arbitrary-precision) integer runtime (WasmBigIntRuntimeBuilder, always
+	// present, appended after the boxed-i64 helpers so every constant above keeps its
+	// value). An exact integer outside the signed 64-bit range is a TYPE_BIGINT struct
+	// holding a TYPE_LIMBS array (two's-complement little-endian 32-bit limbs). The
+	// _limb_* helpers work on raw limb arrays; the _big_* helpers dispatch across all
+	// three integer tiers (i31, TYPE_BIGNUM, TYPE_BIGINT) with an i64 fast path first,
+	// promoting on overflow and normalizing every result to the narrowest tier.
+
+	// _limb_of ((ref null eq)) -> (ref null eq): any exact integer's limb array.
+	static final int FUNC_LIMB_OF = FUNC_PRINT_I64_NO_NL + 1;
+
+	// _limb_new ((ref null eq) arr) -> (ref null eq): canonicalize to the narrowest tier.
+	static final int FUNC_LIMB_NEW = FUNC_LIMB_OF + 1;
+
+	// _limb_get ((ref null eq) arr, i32 i) -> i32: limb i, sign-extended past the top.
+	static final int FUNC_LIMB_GET = FUNC_LIMB_NEW + 1;
+
+	// _limb_addsub ((ref null eq) a, (ref null eq) b, i32 sub) -> (ref null eq) array.
+	static final int FUNC_LIMB_ADDSUB = FUNC_LIMB_GET + 1;
+
+	// _limb_neg ((ref null eq) arr) -> (ref null eq) array: two's-complement negate.
+	static final int FUNC_LIMB_NEG = FUNC_LIMB_ADDSUB + 1;
+
+	// _limb_copy ((ref null eq) arr) -> (ref null eq) array: fresh mutable copy.
+	static final int FUNC_LIMB_COPY = FUNC_LIMB_NEG + 1;
+
+	// _limb_mul ((ref null eq) a, (ref null eq) b) -> (ref null eq) array.
+	static final int FUNC_LIMB_MUL = FUNC_LIMB_COPY + 1;
+
+	// _limb_cmp ((ref null eq) a, (ref null eq) b) -> i32: signed -1/0/1.
+	static final int FUNC_LIMB_CMP = FUNC_LIMB_MUL + 1;
+
+	// _limb_shl / _limb_shr ((ref null eq) arr, i32 bits) -> (ref null eq) array.
+	static final int FUNC_LIMB_SHL = FUNC_LIMB_CMP + 1;
+
+	static final int FUNC_LIMB_SHR = FUNC_LIMB_SHL + 1;
+
+	// _limb_divrem_mag ((ref null eq) u, (ref null eq) v, i32 which) -> (ref null eq)
+	// array: binary long division on non-negative magnitudes (0 = quotient, 1 = rem).
+	static final int FUNC_LIMB_DIVREM_MAG = FUNC_LIMB_SHR + 1;
+
+	// _limb_divmod_small ((ref null eq) arr, i32 d) -> i32 rem: in-place magnitude
+	// division by a small positive divisor (the decimal printer's 10^9 chunker).
+	static final int FUNC_LIMB_DIVMOD_SMALL = FUNC_LIMB_DIVREM_MAG + 1;
+
+	// _big_add/_big_sub/_big_mul ((ref null eq), (ref null eq)) -> (ref null eq):
+	// exact-integer arithmetic across all three tiers; i64 fast path promotes on
+	// overflow instead of wrapping.
+	static final int FUNC_BIG_ADD = FUNC_LIMB_DIVMOD_SMALL + 1;
+
+	static final int FUNC_BIG_SUB = FUNC_BIG_ADD + 1;
+
+	static final int FUNC_BIG_MUL = FUNC_BIG_SUB + 1;
+
+	// _big_neg ((ref null eq)) -> (ref null eq): exact negation (i64.min promotes).
+	static final int FUNC_BIG_NEG = FUNC_BIG_MUL + 1;
+
+	// _big_divrem ((ref null eq) a, (ref null eq) b, i32 which) -> (ref null eq):
+	// truncating quotient (0) / remainder (1); traps on a zero divisor.
+	static final int FUNC_BIG_DIVREM = FUNC_BIG_NEG + 1;
+
+	// _big_mod ((ref null eq) a, (ref null eq) b) -> (ref null eq): CL mod semantics.
+	static final int FUNC_BIG_MOD = FUNC_BIG_DIVREM + 1;
+
+	// _big_cmp ((ref null eq), (ref null eq)) -> i32: -1/0/1 over exact integers.
+	static final int FUNC_BIG_CMP = FUNC_BIG_MOD + 1;
+
+	// _big_and/_big_or/_big_xor ((ref null eq), (ref null eq)) -> (ref null eq).
+	static final int FUNC_BIG_AND = FUNC_BIG_CMP + 1;
+
+	static final int FUNC_BIG_OR = FUNC_BIG_AND + 1;
+
+	static final int FUNC_BIG_XOR = FUNC_BIG_OR + 1;
+
+	// _big_not ((ref null eq)) -> (ref null eq): lognot.
+	static final int FUNC_BIG_NOT = FUNC_BIG_XOR + 1;
+
+	// _big_ash ((ref null eq) x, (ref null eq) count) -> (ref null eq).
+	static final int FUNC_BIG_ASH = FUNC_BIG_NOT + 1;
+
+	// _big_intlen ((ref null eq)) -> (ref null eq): integer-length.
+	static final int FUNC_BIG_INTLEN = FUNC_BIG_ASH + 1;
+
+	// _big_logbitp ((ref null eq) idx, (ref null eq) n) -> i32.
+	static final int FUNC_BIG_LOGBITP = FUNC_BIG_INTLEN + 1;
+
+	// _big_gcd ((ref null eq), (ref null eq)) -> (ref null eq): non-negative gcd.
+	static final int FUNC_BIG_GCD = FUNC_BIG_LOGBITP + 1;
+
+	// _big_grow ((ref null eq) acc, i32 radix, i32 digit) -> (ref null eq): the
+	// reader's accumulator step acc*radix + digit at any tier.
+	static final int FUNC_BIG_GROW = FUNC_BIG_GCD + 1;
+
+	// _big_to_f64 ((ref null eq)) -> f64: float conversion of a limb integer.
+	static final int FUNC_BIG_TO_F64 = FUNC_BIG_GROW + 1;
+
+	// _big_print ((ref null eq)) -> (): decimal renderer for a TYPE_BIGINT.
+	static final int FUNC_BIG_PRINT = FUNC_BIG_TO_F64 + 1;
+
+	// _big_print_mag ((ref null eq) arr) -> (): recursive magnitude digit renderer.
+	static final int FUNC_BIG_PRINT_MAG = FUNC_BIG_PRINT + 1;
+
+	// _big_pad9 (i32) -> (): a zero-padded 9-digit chunk through _write_str.
+	static final int FUNC_BIG_PAD9 = FUNC_BIG_PRINT_MAG + 1;
+
+	// _big_eq ((ref null eq), (ref null eq)) -> i32: both-TYPE_BIGINT value equality.
+	static final int FUNC_BIG_EQ = FUNC_BIG_PAD9 + 1;
+
+	// _big_hash ((ref null eq)) -> i32: limb fold for _hash.
+	static final int FUNC_BIG_HASH = FUNC_BIG_EQ + 1;
+
+	// _big_fdiv ((ref null eq) a, (ref null eq) b, i32 mode) -> (ref null eq): exact
+	// integer division -- mode 0 = truncate, 1 = floor, 2 = ceiling, 3 = round (ties
+	// to even). The fused form of `(truncate (/ a b))` and friends for exact-integer
+	// operands, where the ratio intermediate cannot hold limb components.
+	static final int FUNC_BIG_FDIV = FUNC_BIG_HASH + 1;
+
+	static final int BIGINT_FUNC_LAST = FUNC_BIG_FDIV;
+
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
-	// under --simd. Fixed indices relative to FUNC_PRINT_I64_NO_NL, so every constant
+	// under --simd. Fixed indices relative to BIGINT_FUNC_LAST, so every constant
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_PRINT_I64_NO_NL + 1;
+	static final int FUNC_VEC_BASE = BIGINT_FUNC_LAST + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -653,10 +772,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// character-vector normalizer (_charvec_to_str), the three UTF-8 walking helpers
 	// (_str_char_count, _str_char_at, _str_char_byte_offset) and the two case-fold
 	// helpers (_char_upcase, _char_downcase), the thirteen reader # dispatch
-	// helpers and the three bignum helpers (_int_new, _int_val, _print_i64_no_nl) --
-	// plus, under --simd, the vec: SIMD block. Use userFuncBase(), which adds that
-	// offset.
-	static final int FUNC_USER_BASE = FUNC_PRINT_I64_NO_NL + 1;
+	// helpers, the three bignum helpers (_int_new, _int_val, _print_i64_no_nl) and the
+	// limb bigint runtime (_limb_* / _big_*, WasmBigIntRuntimeBuilder) -- plus, under
+	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = BIGINT_FUNC_LAST + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -841,6 +960,37 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int BIGNUM_TYPE_LAST = TYPE_PRINT_I64;
 
+	// --- the limb bigint block (always present) -----------------------------------
+	//
+	// The third exact-integer tier: an integer outside the signed 64-bit range is a
+	// TYPE_BIGINT struct holding a TYPE_LIMBS array of two's-complement little-endian
+	// 32-bit limbs, canonicalized to the minimal length (>= 3 limbs; anything shorter
+	// normalizes down through _int_new). The two types share one rec group -- the
+	// struct's field is typed (ref null $limbs), a recursive intra-group reference no
+	// other type in the module can structurally canonicalize with, so ref.test
+	// discriminates TYPE_BIGINT from every other value.
+
+	// TYPE_LIMBS: array (mut i32) -- limb storage.
+	static final int TYPE_LIMBS = BIGNUM_TYPE_LAST + 1; // 48
+
+	// TYPE_BIGINT: struct {(ref null $limbs) limbs}.
+	static final int TYPE_BIGINT = TYPE_LIMBS + 1; // 49
+
+	// _limb_shl/_limb_shr ((ref null eq), i32) -> (ref null eq)
+	static final int TYPE_BIG_SHIFT = TYPE_BIGINT + 1; // 50
+
+	// _limb_addsub/_limb_divrem_mag/_big_divrem ((ref null eq), (ref null eq), i32) ->
+	// (ref null eq)
+	static final int TYPE_BIG_TRIPLE = TYPE_BIG_SHIFT + 1; // 51
+
+	// _big_grow ((ref null eq), i32, i32) -> (ref null eq)
+	static final int TYPE_BIG_GROW = TYPE_BIG_TRIPLE + 1; // 52
+
+	// _big_to_f64 ((ref null eq)) -> f64
+	static final int TYPE_BIG_TO_F64 = TYPE_BIG_GROW + 1; // 53
+
+	static final int BIGINT_TYPE_LAST = TYPE_BIG_TO_F64;
+
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
 	// Four types, emitted ONLY under --simd, appended after the reader signatures and
@@ -852,7 +1002,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// array (mut v128) -- the lane-group storage of a packed float array under --simd.
 	// A bare array comptype (implicitly sub final), so a subtype of eq. array.new_default
 	// zeroes every lane, which is what lets the kernels drop their scalar tails.
-	static final int TYPE_V128ARR = BIGNUM_TYPE_LAST + 1; // 48
+	static final int TYPE_V128ARR = BIGINT_TYPE_LAST + 1; // 54
 
 	// struct {i32 count, i32 kind, (ref null eq) groups} -- the --simd replacement for
 	// the
@@ -864,13 +1014,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_V128ARR, and `groups` holds ceil(count / lanes) + 1 groups -- the trailing one
 	// a
 	// zero sentinel so matvec's shuffle window can always read one group past its last.
-	static final int TYPE_VBLOCK = BIGNUM_TYPE_LAST + 2; // 49
+	static final int TYPE_VBLOCK = BIGINT_TYPE_LAST + 2; // 55
 
 	// _v_get ((ref null eq) vblock, i32 index) -> f64
-	static final int TYPE_V_GET = BIGNUM_TYPE_LAST + 3; // 50
+	static final int TYPE_V_GET = BIGINT_TYPE_LAST + 3; // 56
 
 	// _v_set ((ref null eq) vblock, i32 index, f64 value) -> f64 (the value AS STORED)
-	static final int TYPE_V_SET = BIGNUM_TYPE_LAST + 4; // 51
+	static final int TYPE_V_SET = BIGINT_TYPE_LAST + 4; // 57
 
 	// How many type entries the --simd block appends.
 	static final int SIMD_TYPE_COUNT = 4;
@@ -2746,6 +2896,63 @@ public final class WasmLispCompiler implements LispCompiler {
 				});
 				// type 47 (TYPE_PRINT_I64): _print_i64_no_nl (i64) -> ()
 				types.addFunc(new Type[] { Type.I64 }, new Type[] {});
+				// types 48+49 (TYPE_LIMBS + TYPE_BIGINT), ONE rec group: the limb array
+				// (array (mut i32)) and the struct holding it as a typed (ref null
+				// $limbs) field. The intra-group reference keeps the pair structurally
+				// unique, so ref.test discriminates TYPE_BIGINT.
+				types.addRecGroup(rec -> {
+					rec.addSubFinalArray(w -> {
+						w.write(Type.I32);
+						w.write(am.ik.wasm.Mutability.VAR);
+					});
+					rec.addSubFinalStruct(fields -> fields.addField(false, w -> w.writeRefType(true, TYPE_LIMBS)));
+				});
+				// type 50 (TYPE_BIG_SHIFT): ((ref null eq), i32) -> (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(2);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I32);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
+				// type 51 (TYPE_BIG_TRIPLE): ((ref null eq), (ref null eq), i32) ->
+				// (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(3);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I32);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
+				// type 52 (TYPE_BIG_GROW): ((ref null eq), i32, i32) -> (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(3);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I32);
+					w.write(Type.I32);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
+				// type 53 (TYPE_BIG_TO_F64): ((ref null eq)) -> f64
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(1);
+					w.write(Type.F64);
+				});
 				if (this.simd) {
 					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
@@ -3087,6 +3294,42 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_INT_NEW); // _int_new (i64) -> (ref null eq)
 				fnDef.addFunction(TYPE_INT_VAL); // _int_val ((ref null eq)) -> i64
 				fnDef.addFunction(TYPE_PRINT_I64); // _print_i64_no_nl (i64) -> ()
+				// the limb bigint runtime (FUNC_LIMB_OF .. FUNC_BIG_HASH)
+				fnDef.addFunction(TYPE_CALLABLE_BASE); // _limb_of
+				fnDef.addFunction(TYPE_CALLABLE_BASE); // _limb_new
+				fnDef.addFunction(TYPE_STR_TO_MEM); // _limb_get
+				fnDef.addFunction(TYPE_BIG_TRIPLE); // _limb_addsub
+				fnDef.addFunction(TYPE_CALLABLE_BASE); // _limb_neg
+				fnDef.addFunction(TYPE_CALLABLE_BASE); // _limb_copy
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _limb_mul
+				fnDef.addFunction(TYPE_RAT_CMP); // _limb_cmp
+				fnDef.addFunction(TYPE_BIG_SHIFT); // _limb_shl
+				fnDef.addFunction(TYPE_BIG_SHIFT); // _limb_shr
+				fnDef.addFunction(TYPE_BIG_TRIPLE); // _limb_divrem_mag
+				fnDef.addFunction(TYPE_STR_TO_MEM); // _limb_divmod_small
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _big_add
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _big_sub
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _big_mul
+				fnDef.addFunction(TYPE_CALLABLE_BASE); // _big_neg
+				fnDef.addFunction(TYPE_BIG_TRIPLE); // _big_divrem
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _big_mod
+				fnDef.addFunction(TYPE_RAT_CMP); // _big_cmp
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _big_and
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _big_or
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _big_xor
+				fnDef.addFunction(TYPE_CALLABLE_BASE); // _big_not
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _big_ash
+				fnDef.addFunction(TYPE_CALLABLE_BASE); // _big_intlen
+				fnDef.addFunction(TYPE_RAT_CMP); // _big_logbitp
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _big_gcd
+				fnDef.addFunction(TYPE_BIG_GROW); // _big_grow
+				fnDef.addFunction(TYPE_BIG_TO_F64); // _big_to_f64
+				fnDef.addFunction(TYPE_PRINT_VAL); // _big_print
+				fnDef.addFunction(TYPE_PRINT_VAL); // _big_print_mag
+				fnDef.addFunction(TYPE_PRINT_I32); // _big_pad9
+				fnDef.addFunction(TYPE_RAT_CMP); // _big_eq
+				fnDef.addFunction(TYPE_RAT_GET); // _big_hash
+				fnDef.addFunction(TYPE_BIG_TRIPLE); // _big_fdiv
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -3501,6 +3744,42 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmBignumRuntimeBuilder.buildIntNewBody());
 				code.addFunction(WasmBignumRuntimeBuilder.buildIntValBody());
 				code.addFunction(WasmBignumRuntimeBuilder.buildPrintI64NoNlBody());
+				// the limb bigint runtime bodies (FUNC_LIMB_OF .. FUNC_BIG_HASH)
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbOfBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbNewBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbGetBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbAddsubBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbNegBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbCopyBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbMulBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbCmpBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbShlBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbShrBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbDivremMagBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbDivmodSmallBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigAddBody(false));
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigAddBody(true));
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigMulBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigNegBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigDivremBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigModBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigCmpBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigBitopBody(am.ik.wasm.Instruction.I64_AND));
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigBitopBody(am.ik.wasm.Instruction.I64_OR));
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigBitopBody(am.ik.wasm.Instruction.I64_XOR));
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigNotBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigAshBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigIntlenBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigLogbitpBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigGcdBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigGrowBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigToF64Body());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigPrintBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigPrintMagBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigPad9Body());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigEqBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigHashBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigFdivBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

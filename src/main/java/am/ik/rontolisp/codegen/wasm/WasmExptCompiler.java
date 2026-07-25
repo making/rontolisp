@@ -7,11 +7,11 @@ import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 
 /**
- * Compiles the {@code expt} built-in for the i31 integer range: repeated rational
- * multiplication of the base by itself {@code power} times, so a ratio base stays exact
- * and a negative integer exponent yields the reciprocal (e.g. {@code (expt 2 -1)} is
- * {@code 1/2}). Fractional powers require the interpreter or JVM backend. There is no
- * overflow promotion (i31 wraps).
+ * Compiles the {@code expt} built-in: repeated rational multiplication of the base by
+ * itself {@code power} times, so a ratio base stays exact, an integer base promotes to
+ * big integers at any magnitude (the loop runs through {@code _rat_mul}'s tier-aware fast
+ * path), and a negative integer exponent yields the reciprocal (e.g. {@code (expt 2 -1)}
+ * is {@code 1/2}). Fractional powers require the interpreter or JVM backend.
  */
 final class WasmExptCompiler {
 

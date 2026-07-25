@@ -63,7 +63,7 @@ The representable range is the declared type's own, on every backend. With the
 default (GC) backend an incoming integer arrives as an exact integer (a fixnum
 when it fits, a boxed 64-bit integer past that), so a `:u32` argument of
 `3000000000` reaches the Lisp code as the exact integer `3000000000`; integer
-arithmetic inside the Lisp code is exact through the signed 64-bit range
+arithmetic inside the Lisp code is exact at any magnitude
 (`(+ x 1)` on a `:u32` argument of `1073741823` returns `1073741824` exactly),
 and only a result the declared type cannot state traps at the boundary. On the
 non-GC backend (`--no-gc`) integers are computed as `i64`, crossing the same

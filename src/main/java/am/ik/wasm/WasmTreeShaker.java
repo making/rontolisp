@@ -458,6 +458,14 @@ public final class WasmTreeShaker {
 			case 0x43 -> p[0] += 4; // f32.const
 			case 0x44 -> p[0] += 8; // f64.const
 			case 0xFB -> skipGc(buf, p); // wasm-GC prefix
+			// Misc prefix: the saturating truncations (0x00-0x07) carry no immediate.
+			case 0xFC -> {
+				int sub = readU(buf, p);
+				if (sub > 0x07) {
+					throw new IllegalStateException(
+							String.format("WasmTreeShaker: unhandled misc opcode 0xFC 0x%02X", sub));
+				}
+			}
 			case 0xFD -> skipSimd(buf, p); // fixed-width SIMD prefix
 			default -> throw new IllegalStateException(String.format("WasmTreeShaker: unhandled opcode 0x%02X", op));
 		}
