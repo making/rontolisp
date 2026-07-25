@@ -50,10 +50,16 @@ import org.jspecify.annotations.Nullable;
  * verbatim, so the pass is a no-op (and byte-identical) for the common case.
  *
  * <p>
- * Scope: explicit {@code (lambda ...)} boundaries only. {@code flet}/{@code labels} local
- * functions (which macro-expand into lambdas) and a non-lexical {@code go} are left as
- * they are today (still lambda-local); the interpreter and {@code --no-gc} are out of
- * scope.
+ * Covered boundaries: explicit {@code (lambda ...)} forms and {@code flet}/{@code labels}
+ * local-function definition bodies (which macro-expand into lambdas -- their bodies count
+ * as one lambda level deeper). Covered exits: a named {@code return-from} and a plain
+ * {@code (return [value])}, whose establishing point is the nearest nil-block boundary --
+ * a loop macro ({@code loop}/{@code do}/{@code do*}/{@code dotimes}/{@code dolist}/
+ * {@code prog}/{@code prog*}), the internal {@code %block}, or {@code (block nil ...)} --
+ * with named blocks in between transparent, mirroring the interpreter's signal
+ * transparency (cl-postgres' {@code message-case} does {@code (return)} out of a
+ * {@code loop} from inside a {@code labels} function). A non-lexical {@code go} is left
+ * as it is today; the interpreter and {@code --no-gc} are out of scope.
  */
 public final class CrossLambdaExitLowering {
 
@@ -94,12 +100,16 @@ public final class CrossLambdaExitLowering {
 
 		final LispSymbol idVar;
 
+		/** True for a nil-block boundary (a loop macro / {@code (block nil ...)}). */
+		final boolean nilBlock;
+
 		boolean used = false;
 
-		Scope(@Nullable String name, int lambdaDepth, LispSymbol idVar) {
+		Scope(@Nullable String name, int lambdaDepth, LispSymbol idVar, boolean nilBlock) {
 			this.name = name;
 			this.lambdaDepth = lambdaDepth;
 			this.idVar = idVar;
+			this.nilBlock = nilBlock;
 		}
 
 	}
@@ -140,6 +150,16 @@ public final class CrossLambdaExitLowering {
 					}
 					case LispNames.RETURN_FROM -> {
 						return transformReturnFrom(cons, lambdaDepth);
+					}
+					case LispNames.RETURN -> {
+						return transformReturn(cons, lambdaDepth);
+					}
+					case LispNames.LOOP, LispNames.DO, LispNames.DO_STAR, LispNames.DOTIMES, LispNames.DOLIST,
+							LispNames.PROG, LispNames.PROG_STAR, LispNames.BLOCK_INTERNAL -> {
+						return transformNilBlockForm(cons, lambdaDepth);
+					}
+					case LispNames.FLET, LispNames.LABELS -> {
+						return transformFletLabels(cons, lambdaDepth);
 					}
 					default -> {
 						// fall through to structural recursion
@@ -200,7 +220,7 @@ public final class CrossLambdaExitLowering {
 			}
 			String blockName = defunBlockName(parts.get(1));
 			LispSymbol idVar = freshId();
-			Scope scope = new Scope(blockName, lambdaDepth, idVar);
+			Scope scope = new Scope(blockName, lambdaDepth, idVar, false);
 			scopes.push(scope);
 			List<LispVal> body = new ArrayList<>();
 			for (int i = 3; i < parts.size(); i++) {
@@ -228,19 +248,10 @@ public final class CrossLambdaExitLowering {
 				return structural(cons, lambdaDepth);
 			}
 			String name = LispMacroExpander.blockName(parts.get(1));
-			if (name == null) {
-				// (block nil ...) -- the plain-return boundary; not a named cross-lambda
-				// target. Descend without establishing a named scope.
-				List<LispVal> out = new ArrayList<>();
-				out.add(parts.get(0));
-				out.add(parts.get(1));
-				for (int i = 2; i < parts.size(); i++) {
-					out.add(transform(parts.get(i), lambdaDepth));
-				}
-				return list(out);
-			}
 			LispSymbol idVar = freshId();
-			Scope scope = new Scope(name, lambdaDepth, idVar);
+			// (block nil ...) is the plain-return boundary: a nil-block scope, so a bare
+			// (return) crossing a lambda targets it like a named return-from would.
+			Scope scope = new Scope(name, lambdaDepth, idVar, name == null);
 			scopes.push(scope);
 			List<LispVal> body = new ArrayList<>();
 			for (int i = 2; i < parts.size(); i++) {
@@ -265,13 +276,11 @@ public final class CrossLambdaExitLowering {
 			}
 			LispVal value = parts.size() == 3 ? transform(parts.get(2), lambdaDepth) : LispNil.INSTANCE;
 			String name = LispMacroExpander.blockName(parts.get(1));
-			if (name != null) {
-				Scope target = nearestScope(name);
-				if (target != null && target.lambdaDepth < lambdaDepth) {
-					target.used = true;
-					this.used = true;
-					return list(List.of(new LispSymbol(LispNames.NLX_THROW_INTERNAL), target.idVar, value));
-				}
+			Scope target = name != null ? nearestScope(name) : nearestNilScope();
+			if (target != null && target.lambdaDepth < lambdaDepth) {
+				target.used = true;
+				this.used = true;
+				return list(List.of(new LispSymbol(LispNames.NLX_THROW_INTERNAL), target.idVar, value));
 			}
 			// Same-function (or unmatched) return-from: keep it lexical.
 			List<LispVal> out = new ArrayList<>();
@@ -281,6 +290,99 @@ public final class CrossLambdaExitLowering {
 				out.add(value);
 			}
 			return list(out);
+		}
+
+		// A bare (return [value]) -- (return-from nil ...): targets the nearest
+		// nil-block boundary (a loop macro, %block or (block nil ...)); named blocks in
+		// between are transparent, mirroring the signal transparency of the runtime.
+		private LispVal transformReturn(LispCons cons, int lambdaDepth) {
+			List<LispVal> parts = cons.toList();
+			if (parts.isEmpty() || parts.size() > 2 || !cons.isProperList()) {
+				// Not a real (return [value]) -- a binding whose var is `return`, or
+				// data; traverse it so nested forms are still found.
+				return structural(cons, lambdaDepth);
+			}
+			LispVal value = parts.size() == 2 ? transform(parts.get(1), lambdaDepth) : LispNil.INSTANCE;
+			Scope target = nearestNilScope();
+			if (target != null && target.lambdaDepth < lambdaDepth) {
+				target.used = true;
+				this.used = true;
+				return list(List.of(new LispSymbol(LispNames.NLX_THROW_INTERNAL), target.idVar, value));
+			}
+			List<LispVal> out = new ArrayList<>();
+			out.add(parts.get(0));
+			if (parts.size() == 2) {
+				out.add(value);
+			}
+			return list(out);
+		}
+
+		// A loop macro (loop/do/do*/dotimes/dolist/prog/prog*) or the internal %block:
+		// each establishes the implicit nil block a bare (return) exits. The scope wraps
+		// the WHOLE form, so a lowered exit delivers the loop form's value.
+		private LispVal transformNilBlockForm(LispCons cons, int lambdaDepth) {
+			List<LispVal> parts = cons.toList();
+			if (parts.isEmpty() || !cons.isProperList()) {
+				return structural(cons, lambdaDepth);
+			}
+			LispSymbol idVar = freshId();
+			Scope scope = new Scope(null, lambdaDepth, idVar, true);
+			scopes.push(scope);
+			List<LispVal> out = new ArrayList<>(parts.size());
+			out.add(parts.get(0));
+			for (int i = 1; i < parts.size(); i++) {
+				out.add(transform(parts.get(i), lambdaDepth));
+			}
+			scopes.pop();
+			LispVal form = list(out);
+			return scope.used ? wrapWithCatch(idVar, List.of(form)) : form;
+		}
+
+		// flet/labels definition bodies expand into lambdas (separately compiled
+		// functions), so a return/return-from inside one crosses a function boundary:
+		// transform them at lambdaDepth + 1. The flet body itself stays at this depth.
+		private LispVal transformFletLabels(LispCons cons, int lambdaDepth) {
+			List<LispVal> parts = cons.toList();
+			if (parts.size() < 2 || !cons.isProperList()
+					|| !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+				return structural(cons, lambdaDepth);
+			}
+			List<LispVal> defs = parts.get(1) instanceof LispCons defsCons ? defsCons.toList() : List.of();
+			List<LispVal> outDefs = new ArrayList<>(defs.size());
+			for (LispVal def : defs) {
+				if (!(def instanceof LispCons defCons) || !defCons.isProperList()) {
+					outDefs.add(def);
+					continue;
+				}
+				List<LispVal> dp = defCons.toList();
+				if (dp.size() < 2) {
+					outDefs.add(def);
+					continue;
+				}
+				List<LispVal> outDef = new ArrayList<>(dp.size());
+				outDef.add(dp.get(0)); // name
+				outDef.add(dp.get(1)); // lambda list
+				for (int i = 2; i < dp.size(); i++) {
+					outDef.add(transform(dp.get(i), lambdaDepth + 1));
+				}
+				outDefs.add(list(outDef));
+			}
+			List<LispVal> out = new ArrayList<>(parts.size());
+			out.add(parts.get(0));
+			out.add(defs.isEmpty() ? parts.get(1) : list(outDefs));
+			for (int i = 2; i < parts.size(); i++) {
+				out.add(transform(parts.get(i), lambdaDepth));
+			}
+			return list(out);
+		}
+
+		private @Nullable Scope nearestNilScope() {
+			for (Scope scope : scopes) {
+				if (scope.nilBlock) {
+					return scope;
+				}
+			}
+			return null;
 		}
 
 		private @Nullable Scope nearestScope(String name) {

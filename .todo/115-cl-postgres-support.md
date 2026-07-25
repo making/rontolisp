@@ -113,6 +113,131 @@ this widening on wasm-GC as written. Re-doing it means designing the WASM side
 FIRST, with `ClPpcreE2eTest`/`Uax15E2eTest`/`IroncladE2eTest` as the gate --
 not extending the JVM side and assuming WASM follows.
 
+### Session record 2026-07-26 (WASM leg): the widening is CORRECT; the trap is an ENGINE-LEVEL failure of the %nlx id compare
+
+**The widening was re-applied** (uncommitted, in the working tree):
+`CrossLambdaExitLowering` gained nil-block scopes for
+`loop`/`do`/`do*`/`dotimes`/`dolist`/`prog`/`prog*`/`%block` and `(block nil ...)`,
+a `transformReturn` for bare `(return [v])`, `(return-from nil ...)` routing through
+the nil scope, and `transformFletLabels` (definition bodies at lambdaDepth+1). It also
+currently carries two TEMPORARY debug hooks to strip before landing:
+`-Drontolisp.nlx.debug` (prints every scope push / rewrite) and
+`-Drontolisp.nlx.range=lo:hi` (applies only rewrites number lo..hi -- the bisection
+gate that isolated the failing site).
+
+**What works with it**: the todo's minimal repro (`loop`+`labels`+bare `(return)`)
+returns 4 on ALL FOUR backends; `IroncladE2eTest`'s program passes on wasm P1 AND
+`--component` (the "invalid module" of the previous session did NOT reproduce);
+block-in-lambda + labels `return-from`, specials-in-let*, extended `for/then` loop
+heads, and a faithful standalone port of cl-ppcre's whole scanner template all pass
+on wasm. Interpreter and JVM agree everywhere.
+
+**What still fails**: `ClPpcreE2eTest`'s program traps (`unreachable`, exit 134).
+Minimal failing program (`--system-path src/test/resources/cl-ppcre`):
+
+```lisp
+(asdf:load-system :cl-ppcre)
+(let ((sc (cl-ppcre:create-scanner "a")))
+  (print (funcall sc "banana" 6 6)))
+```
+
+**The complete forensic chain** (all verified by patching the disassembled wat with
+`wasm-tools print` / `parse` and re-running; every claim below has a probe behind it):
+
+1. The trap is the top-level catch_all landing in `_start` = an UNCAUGHT rethrow of
+   the `$block-exit` (tag 1) exception.
+2. The exit IS caught first by the correct `%nlx-catch` landing (the scanner
+   lambda's), but the id compare `car(payload) ref.eq unbox(local4)` fails, so the
+   landing rethrows. Forcing the compare to constant-true makes the whole program
+   produce the CORRECT output -- the only broken layer is tag identity.
+3. Structure is sound end-to-end (verified in the wat): one mint per activation
+   (`cell{null}` tag, boxed into local 4), the advance-fn closure env carries THE
+   SAME box, the funcId->function dispatch table arms are correct (env-size
+   fingerprints match creation sites pairwise), only one `local.set 4` per function,
+   no `struct.set` ever writes the box, activation counting confirms no re-entry.
+4. The decisive single-build trace (prologue stores the box to a fresh global g53;
+   checks at creation / at the throw / at the landing): at the THROW the closure's
+   env box `ref.eq`-equals g53 AND unboxes equal; at the LANDING (same activation by
+   global counter) `local4 != g53`. That pair is wasm-impossible if execution is
+   spec-conformant -- g53 was stored FROM local 4 in that same frame's prologue.
+5. **Engines diverge on the identical binary**: with the trace probes patched in,
+   V8 (node 22, `--experimental-wasm-exnref`) runs the SAME marker sequence but the
+   landing compares succeed and the program completes correctly; wasmtime 46.0.1 AND
+   47.0.2 fail the landing compares and trap. wasmtime is internally inconsistent
+   within one run (fact 4). The UNPATCHED binary traps on both engines, so V8 is not
+   simply "correct" -- both engines flip behavior when semantically-inert print calls
+   are inserted, and the flip boundary differs per engine.
+6. The trap is shape-dependent at the LISP-source level too: adding one top-level
+   `(print :loaded)` between the load and the scanner use makes the full program pass
+   (`sc8.lisp` vs `sc9.lisp` pair); carving unrelated DEAD code out of api.lisp
+   (the top-level `(let* (...(create-scanner "[^a-zA-Z_0-9]"))...)` block) also
+   flips it, while running the same char-class creation from user code does not.
+   `-O opt-level=0` and `-O gc-zeal-alloc-counter=1` do NOT flip anything --
+   deterministic per (binary, engine).
+
+**Further single-build probes** (each of these is ONE binary, ONE run):
+
+7. Payload integrity across the throw hop: the cons delivered to the landing
+   `ref.eq`-equals the cons the thrower built (and their cars are identical). The
+   exception transport is NOT corrupting anything.
+8. The "ultimate" build (thrower stashes its env box AND the payload; all 105
+   `struct.set 5 0` sites carry a watchpoint; landing compares everything):
+   **the thrower's env box != the catching frame's local4** (two DISTINCT boxes,
+   each internally consistent, ZERO writes to either). Yet a different build with a
+   call-site probe showed the closure called at the loop head has env[1] == local4
+   right before the call. The causal story itself ("stale closure ran" vs "same box,
+   different unbox") FLIPS between builds that differ only by probe code -- on BOTH
+   engines.
+9. The `%nlx-catch` snapshot hardening (id evaluated once into a dedicated local at
+   region entry, landing compares the snapshot -- now implemented in
+   `WasmNlxCompiler`, kept: it is semantically sound and regressed nothing) does
+   NOT fix the trap. So the failing channel is not the landing's boxed re-read.
+
+**Interpretation**: the module's OBSERVED behavior changes under semantically inert
+code insertions, deterministically per (binary, engine), differently per engine, and
+the interpreter/JVM outputs prove the Lisp-level semantics have no stale exit. Every
+compiler-emitted layer that could pair the wrong tag with the wrong catch has been
+individually exonerated IN THE WAT (mint, box, closure env, call site, dispatch
+tables, payload transport, writer-freedom). What has NOT been possible is verifying
+all links in ONE binary -- each probe combination flips which link looks broken.
+That pattern fits a runtime miscompilation (register allocation / stack maps around
+`try_table` + GC refs) present in some form in BOTH wasmtime 46/47 and V8 (node 22),
+each with different trigger shapes -- or a module-side violation the wat-level checks
+cannot see (`wasm-tools` round-trips preserve behavior, so any such bug survives
+reprinting).
+
+**RESOLUTION: `%nlx-tag` on wasm-GC now mints an i31 VALUE id** (the next integer
+from the new `NLX_ID_CTR` linear-memory cell at address 196; `ref.eq` on i31 is
+value equality), and `%nlx-catch` snapshots the id into a dedicated local at region
+entry. GC-struct identity is out of the matching path entirely. This fixed EVERY
+repro immediately: the count-matches/all-matches/scanner programs, the full
+ClPpcreE2eTest exercise on P1 AND `--component`, and the ironclad exercise -- with
+zero regressions in the small-case battery. Whose bug the identity scheme tripped
+(wasmtime's, V8's, or a layout-sensitive emitter bug the probes could not see)
+remains UNRESOLVED but is no longer load-bearing; if it is ever worth pursuing, the
+sc8/sc9 flip pair (one `(print :loaded)` apart) and the probe recipes above are the
+seed. The JVM keeps `new Object()` identity tags, which are sound there.
+
+**Verified after the fix**: full `./mvnw test` GREEN (4270 tests, 0 failures --
+includes `ClPpcreE2eTest` 4/4, `IroncladE2eTest` 4/4, `Uax15E2eTest` 4/4, each on
+all four backends); native-image `CiSpecE2eTest` 980/980 against a fresh `-Pnative`
+binary; `-Pweb compile` clean; javadoc clean except the known `Version` error; the
+message-case-shaped minimal repro returns 4 on all four backends (P1 and
+`--component`); `.kb/do-return-block.md` updated (widened lowering scope + the
+wasm i31 id design + why identity was retired). All of this is UNCOMMITTED in the
+working tree: `compiler/CrossLambdaExitLowering.java` (the widening),
+`codegen/wasm/WasmNlxCompiler.java` (i31 ids + entry snapshot),
+`codegen/wasm/WasmLispCompiler.java` (the `NLX_ID_CTR_ADDR` cell), this file and
+`.kb/do-return-block.md`.
+
+Repro/tooling notes: probe workflow is `wasm-tools print X.wasm > X.wat`, patch with
+python by exact line, `wasm-tools parse X.wat -o X2.wasm`, run with
+`wasmtime run -W gc -W exceptions=y` (46.0.1 on PATH; 47.0.2 binary was fetched to
+the session scratchpad) or `node --experimental-wasm-exnref runwasi.js X.wasm`
+(node:wasi preview1 harness, trivial to recreate). `-Drontolisp.nlx.range=8:8`
+narrows the cl-ppcre program to ONE lowered site (the start-string-test variant)
+and still traps.
+
 ### Where the next session starts
 
 The interpreter work is committed (`dc8bc14c`). The compile path is two
@@ -124,13 +249,15 @@ INDEPENDENT pieces of design work, either of which can go first:
   grows with the number of registered classes), the fix belongs in the
   expansion, and wide-branch relaxation in the emitter is the heavier
   alternative.
-- **WASM**: the cross-lambda plain-`return` lowering (the reverted work
-  above). Design the wasm-GC side first; `ClPpcreE2eTest` / `Uax15E2eTest` /
-  `IroncladE2eTest` are the gate that caught the naive version.
+- **WASM**: the cross-lambda plain-`return` lowering. The widening is
+  RE-APPLIED and correct (see the 2026-07-26 WASM-leg session record above);
+  what remains is the `%nlx` tag-identity failure at cl-ppcre scale --
+  engine-divergent, fully characterized, with a hardening design sketched
+  (snapshot/i31 ids in `WasmNlxCompiler`). Follow that record's "Next steps".
 
-Not yet run for this feature: the native-image `CiSpecE2eTest` (the pinned
-introspection listings in `ci-spec.yaml` changed with the new operators, and
-`./mvnw test` cannot catch a stale expectation there -- see CLAUDE.md).
+The native-image `CiSpecE2eTest` was run 2026-07-26 (WASM-leg session) against a
+fresh `-Pnative` binary: 980/980 green -- this clears the debt from the
+interpreter session too.
 
 ### The remaining gate: the JVM backend cannot build the whole stack yet
 

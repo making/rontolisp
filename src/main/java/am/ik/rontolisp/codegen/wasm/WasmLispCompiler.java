@@ -1193,6 +1193,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// locals, so #| ... |# nesting counts through this cell instead).
 	static final int RD_DEPTH_ADDR = 192;
 
+	// Monotonic counter cell minting the dynamic block-instance id of the cross-lambda
+	// non-local-exit machinery ({@code %nlx-tag}, see WasmNlxCompiler): each catch
+	// activation gets the next integer as an i31 value, so throw/catch matching is
+	// VALUE equality on i31 (ref.eq of equal i31s is true by spec), never GC-struct
+	// identity. Zero-initialized memory starts the ids at 1.
+	static final int NLX_ID_CTR_ADDR = 196;
+
 	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
 	// and
 	// the allocation base just above its 8 bytes. cabi_realloc keeps its pointer in this

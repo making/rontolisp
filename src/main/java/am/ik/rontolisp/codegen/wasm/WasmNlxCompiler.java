@@ -15,10 +15,11 @@ import am.ik.wasm.Type;
  * cross), the wasm-GC EH counterpart of {@code JvmNlxCompiler}:
  *
  * <ul>
- * <li>{@code (%nlx-tag)} mints a fresh {@code (struct.new $cell)} -- a unique {@code (ref
- * eq)} that is the dynamic block-instance id. A {@code let} binds one per establishing
- * block activation, and the existing closure machinery captures it into the lambda, so
- * recursion targets the right frame.</li>
+ * <li>{@code (%nlx-tag)} mints the next integer from the {@code NLX_ID_CTR} memory cell
+ * as a {@code ref.i31} -- a dynamic block-instance id unique BY VALUE (i31 {@code ref.eq}
+ * is value equality). A {@code let} binds one per establishing block activation, and the
+ * existing closure machinery captures it into the lambda, so recursion targets the right
+ * frame.</li>
  * <li>{@code (%nlx-throw id value)} conses {@code (id . value)} and {@code throw}s it on
  * the dedicated {@code $block-exit} tag; the wasm stack unwind runs every intervening
  * {@code unwind-protect} (its {@code catch_all_ref} reraises with
@@ -38,13 +39,24 @@ final class WasmNlxCompiler {
 	private WasmNlxCompiler() {
 	}
 
-	/** {@code (%nlx-tag)} -- a fresh unique {@code (ref eq)} identity. */
+	/** {@code (%nlx-tag)} -- a fresh block-instance id, unique BY VALUE. */
 	static void compileTag(WasmLispCompiler.Ctx ctx) {
-		// struct.new $cell over a null field: a fresh, identity-distinct heap object.
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(Type.EQ.code());
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		// The next integer from the NLX_ID_CTR memory cell, boxed as ref.i31: i31
+		// equality is value equality, so the throw/catch match never depends on
+		// GC-struct identity surviving capture, unwinding and register pressure.
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.NLX_ID_CTR_ADDR);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.NLX_ID_CTR_ADDR);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.I32_ADD);
+		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.NLX_ID_CTR_ADDR);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 	}
 
 	/** {@code (%nlx-throw id value)} -- throw a block exit carrying (id . value). */
@@ -73,6 +85,19 @@ final class WasmNlxCompiler {
 		}
 		LispVal idForm = parts.get(1);
 		int payloadSlot = ctx.allocTemp();
+		// Snapshot the block-instance id into a dedicated local BEFORE the protected
+		// region, and compare the landing against the snapshot instead of re-reading
+		// the (boxed) id variable after the unwind. The id is minted immediately
+		// before this form and never assigned again, so the snapshot is exact; it
+		// keeps the landing's compare independent of the capture/box read path. Not
+		// used in state-machine mode, where a resume re-enters past this entry code.
+		int idSlot = -1;
+		if (ctx.asyncResume == null) {
+			idSlot = ctx.allocTemp();
+			WasmExprCompiler.compileExpr(idForm, ctx);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(idSlot);
+		}
 		// block $done (result (ref null eq)) -- the whole form's value.
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.write(Type.REFNULL.code());
@@ -121,7 +146,13 @@ final class WasmNlxCompiler {
 		ctx.writer.writeSignedLeb128(payloadSlot);
 		// tag = car(payload); if it ref.eq the id, deliver cdr(payload); else rethrow.
 		emitConsField(ctx, payloadSlot, 0);
-		WasmExprCompiler.compileExpr(idForm, ctx);
+		if (idSlot >= 0) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(idSlot);
+		}
+		else {
+			WasmExprCompiler.compileExpr(idForm, ctx);
+		}
 		ctx.writer.write(Instruction.REF_EQ);
 		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		ctx.wasmCtrlDepth++;

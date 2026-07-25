@@ -60,24 +60,38 @@ compiled function. Machinery:
   escaped scopes' cleanups at the exit site and brs straight to the target — the same
   strategy and lite limit as `go` (a throw from an inlined cleanup can re-enter its own
   handler).
-- **Cross-lambda `return-from` = a real non-local exit** (JVM + wasm-GC, EH-based; pinned
-  by `compileAndRunReturnFromInsideLambdaExitsOuterDefun` / wasm
+- **Cross-lambda `return-from` AND plain `return` = a real non-local exit** (JVM +
+  wasm-GC, EH-based; pinned by `compileAndRunReturnFromInsideLambdaExitsOuterDefun` / wasm
   `returnFromExitsDefunAcrossLoop` and the `cross-lambda-return-from` ci-spec case): a
   `return-from` inside a lambda whose name matches a block in the lexically enclosing
   function exits the OUTER defun/block, matching the interpreter and CL. The lexical
-  goto/br fast path stays for a same-function `return-from`; only one that actually crosses
+  goto/br fast path stays for a same-function exit; only one that actually crosses
   a lambda boundary pays the EH cost. Mechanics — the shared, compile-path-only
-  `compiler/CrossLambdaExitLowering` (run before `desugarProgram`) detects a `return-from`
+  `compiler/CrossLambdaExitLowering` (run before `desugarProgram`) detects an exit
   whose target block is established outside the nested lambda it sits in and rewrites the
   establishing block to `(let ((id (%nlx-tag))) (%nlx-catch id BODY))` with the crossing
-  `(return-from name v)` rewritten to `(%nlx-throw id v)`. The `id` is a **dynamic
-  block-instance id** — a genuine lexical the existing closure machinery
-  (`FreeVarAnalyzer`) captures into the lambda, minted fresh per block activation
-  (`%nlx-tag`), so recursion targets the right frame and an exit after the block returned
-  surfaces as an error. `%nlx-throw`/`%nlx-catch` unwind the real stack: JVM via a plain
-  `RuntimeException` + the `_nleTl` `{throwable,id,value}` channel (`JvmNlxCompiler`), wasm
-  via a dedicated `$block-exit` tag carrying an `(id . value)` cons (`WasmNlxCompiler`,
-  tag 1, gated). Intervening `unwind-protect` cleanups run on the way out (JVM native
+  `(return-from name v)` rewritten to `(%nlx-throw id v)`. Covered boundaries include
+  `flet`/`labels` definition bodies (counted one lambda level deeper, since they expand
+  into lambdas); covered exits include a bare `(return [v])` and `(return-from nil ...)`,
+  whose establishing point is the nearest NIL-BLOCK scope — a loop macro
+  (`loop`/`do`/`do*`/`dotimes`/`dolist`/`prog`/`prog*`), the internal `%block`, or a user
+  `(block nil ...)` — with named blocks in between transparent, mirroring the runtime
+  signal transparency (cl-postgres' `message-case` does `(return)` out of a `loop` from
+  inside a `labels` function). The `id` is a **dynamic block-instance id** — a genuine
+  lexical the existing closure machinery (`FreeVarAnalyzer`) captures into the lambda,
+  minted fresh per block activation (`%nlx-tag`), so recursion targets the right frame and
+  an exit after the block returned surfaces as an error. `%nlx-throw`/`%nlx-catch` unwind
+  the real stack: JVM via a plain `RuntimeException` + the `_nleTl` `{throwable,id,value}`
+  channel (`JvmNlxCompiler`), wasm via a dedicated `$block-exit` tag carrying an
+  `(id . value)` cons (`WasmNlxCompiler`, tag 1, gated). **On wasm the id is an i31 VALUE**
+  (the next integer from the `NLX_ID_CTR` linear-memory cell, compared by `ref.eq` which
+  is value equality for i31), and the catch snapshots it into a dedicated local at region
+  entry — never a fresh GC struct compared by identity: the original
+  `struct.new $cell` identity scheme broke at cl-ppcre scale in a shape-dependent,
+  engine-divergent way (wasmtime 46/47 AND V8 flipped behavior under semantically inert
+  code insertions; the forensic record lives in `.todo/115`). The JVM keeps plain object
+  identity (`new Object()`-style tags), which is sound there. Intervening
+  `unwind-protect` cleanups run on the way out (JVM native
   unwind; wasm `catch_all_ref`). `handler-case` does NOT intercept it: the JVM handler
   rethrows a pending `_nleTl` before dispatching, and wasm uses a distinct tag with a
   block-exit passthrough that restores the handler depth (`JvmHandlerCaseCompiler` /
@@ -88,9 +102,8 @@ compiled function. Machinery:
   name-dropping `expandBlock` lowering and has no `return-from` at all (it never ran
   `desugarProgram`), so this does not apply there; the interpreter was already correct and
   is untouched.
-- **Still lexical-only** (a follow-up, same root cause): a `return-from` that crosses a
-  `flet`/`labels` local function (a lambda introduced by macro expansion, which
-  `CrossLambdaExitLowering` does not descend into) and a **non-lexical `go`** (see below).
+- **Still lexical-only** (a follow-up, same root cause): a **non-lexical `go`** (see
+  below).
 
 Needed by cl-utilities' `rotate-byte`/`read-delimited` (function-scoped early returns,
 now exact) and cl-ppcre (`ClPpcreE2eTest`, all four backends: `(block scan ...)` in the
