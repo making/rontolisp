@@ -671,7 +671,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// make-array :element-type 'double-float). When true, the array op compilers
 		// route through the _fv* dispatch helpers so a packed double[] and a general
 		// ArrayList are both handled; when false the default build is byte-identical.
-		boolean usesFloatArray = programUsesFloatArray(program);
+		// A runtime read can produce ANY datum -- #(...), #f(...), #d(...) -- so the
+		// reader forces the array machinery on; without it a read vector would not
+		// print or index correctly.
+		boolean usesFloatArray = programUsesFloatArray(program) || usesRead;
 
 		// Whether the array runtime helper group is emitted (the same test that gates
 		// its emission below). The mutable-character-vector consumers -- the _eqv
@@ -834,11 +837,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Utf8Constant> topChunkNames = new ArrayList<>();
 		List<MethodrefConstant> topChunkRefs = new ArrayList<>();
 		// Budget well under 65535 to leave room for the final form pushed past the check
-		// plus the trailing RETURN; a single form larger than this still cannot be split
-		// (a pre-existing per-form limit: chunking happens BETWEEN top-level forms, so
-		// one
-		// form whose bytecode passes the 64 KB per-method cap has no split point).
-		final int chunkCodeBudget = 48000;
+		// plus the trailing RETURN; a single form larger than the difference still
+		// cannot be split (a pre-existing per-form limit: chunking happens BETWEEN
+		// top-level forms, so one form whose bytecode passes the 64 KB per-method cap
+		// has no split point). 40000 leaves ~25 KB of per-form headroom -- the reader's
+		// usesFloatArray forcing widened the array call sites enough that the ci-spec
+		// corpus overflowed the old 48000 budget's ~17 KB headroom.
+		final int chunkCodeBudget = 40000;
 		Ctx chunkCtx = null;
 		for (LispVal expr : topLevelExprs) {
 			if (chunkCtx == null || chunkCtx.code.size() >= chunkCodeBudget) {
@@ -1017,14 +1022,33 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant readSrcDesc = cp.addUtf8("Ljava/lang/String;");
 		Utf8Constant readPosName = cp.addUtf8("_readPos");
 		Utf8Constant readPosDesc = cp.addUtf8("I");
+		Utf8Constant rdStructsName = cp.addUtf8(JvmReadRuntimeBuilder.STRUCT_TABLE_FIELD);
+		Utf8Constant rdStructsDesc = cp.addUtf8(JvmReadRuntimeBuilder.STRUCT_TABLE_DESC);
 		List<JvmReadRuntimeBuilder.ReadMethod> readMethods = List.of();
+		List<Integer> structTableClinit = List.of();
 		if (usesRead) {
+			// The reader reads #S(...) only when an instance can exist at all (the same
+			// gate the instance machinery uses); with it on, every struct layout is
+			// interned so the runtime directory can resolve any registered tag, and the
+			// directory itself is baked into <clinit>.
+			boolean readerInstances = mayUseInstances;
+			if (readerInstances) {
+				for (am.ik.rontolisp.LispLayout layout : closRegistry.layouts().values()) {
+					if (layout.kind() == am.ik.rontolisp.LispLayout.Kind.STRUCT) {
+						mainCtx.layoutPool.intern(cp, className, layout);
+					}
+				}
+				structTableClinit = JvmReadRuntimeBuilder.structTableClinit(cp, thisClass, mainCtx.layoutPool,
+						closRegistry, objectClass, objectArrayClass, stringClass);
+			}
 			readMethods = JvmReadRuntimeBuilder
 				.create(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf, doubleValueOf,
-						stringCharAt, stringLength, stringSubstring, objectEquals, readLineHelperMethod, usesLoad)
+						stringCharAt, stringLength, stringSubstring, objectEquals, readLineHelperMethod, usesLoad,
+						readerInstances)
 				.methods();
 		}
 		final List<JvmReadRuntimeBuilder.ReadMethod> readMethodsFinal = readMethods;
+		final List<Integer> structTableClinitFinal = structTableClinit;
 
 		// Build the hash-table runtime helpers, only when the program uses hash tables.
 		boolean usesHashTables = programUsesAnyHashOp(program);
@@ -1344,6 +1368,13 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(readPosDesc)
 						.writeU2(0));
 				}
+				if (!structTableClinitFinal.isEmpty()) {
+					// The runtime struct-layout directory for #S(...) read at run time.
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(rdStructsName)
+						.writeU2(rdStructsDesc)
+						.writeU2(0));
+				}
 				if (mainCtx.conditionChannel.used) {
 					// The per-thread condition carrier from a %error-cond throw site to a
 					// handler-case catch handler; initialized in <clinit>.
@@ -1433,8 +1464,8 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0);
 							})));
 				}
-				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed
-						|| !mainCtx.layoutPool.isEmpty()) {
+				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || !mainCtx.layoutPool.isEmpty()
+						|| !structTableClinitFinal.isEmpty()) {
 					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 					// on a thread with no pending condition returns null). The async
 					// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -1468,12 +1499,16 @@ public final class JvmLispCompiler implements LispCompiler {
 						JvmRuntimeBuilder.emitU2(clinitCode, tlField.index());
 					}
 					clinitCode.addAll(layoutClinitCode);
+					clinitCode.addAll(structTableClinitFinal);
 					clinitCode.add(Opcode.RETURN);
 					// max_stack: the ThreadLocal group peaks at 2 (NEW; DUP), the layout
-					// group at 4 (array; DUP; index; LDC). StackMapAugmenter copies the
-					// declared maximum verbatim, so an under-declaration is a VerifyError
-					// at class load, not a compile error.
-					final int clinitMaxStack = mainCtx.layoutPool.isEmpty() ? 2 : 4;
+					// group at 4 (array; DUP; index; LDC), the reader's struct directory
+					// at 10 (outer array, entry, initTexts nested builds each keep a DUP
+					// and an index live). StackMapAugmenter copies the declared maximum
+					// verbatim, so an under-declaration is a VerifyError at class load,
+					// not a compile error.
+					final int clinitMaxStack = !structTableClinitFinal.isEmpty() ? 10
+							: (mainCtx.layoutPool.isEmpty() ? 2 : 4);
 					// A layout-only program never runs ensureThreadLocalInfra, so the
 					// channel's <clinit> name constants are null there.
 					Utf8Constant clinitNameUtf = channel.clinitName != null ? channel.clinitName

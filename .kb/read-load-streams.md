@@ -1,18 +1,36 @@
 # `read`/`load`, `read-line`, file streams in all three backends
 
-**The emitted reader reads a NARROW SUBSET, and nothing warns you.** `buildReadExpr`
-(JVM) / its WASM twin dispatch on exactly six shapes: `(`, `'`, `#'`, `"`, `)` and
-"atom" (symbol / integer / bignum / double / nil / t). Every other `#` dispatch form the
-FRONTEND reader handles -- `#S(...)`, `#(...)`, `#\a`, `#nA(...)`, `#f(`/`#d(`, `#x`/`#o`/`#b`,
-`#*`, `#n=`/`#n#`, ratios -- falls through to the atom path and is SILENTLY MISREAD: `#S(P
-:X 1)` reads as the symbol `#S` followed by the list `(P :X 1)`, `#(1 2)` as the symbol
-`#` followed by `(1 2)`. So the interpreter and the compiled backends disagree on those
-inputs by construction, and the disagreement produces wrong data rather than an error.
-Closing it is `.todo/172`; until then, do NOT read one `#`-dispatch form into the emitted
-reader in isolation -- a reader that reads `#S(` but not `#\a` is harder to explain than
-one that reads neither.
+**The emitted reader has FRONTEND PARITY; anything outside it SIGNALS, never misreads.**
+`buildReadExpr` (JVM) / its WASM twin dispatch on the frontend lexer's full set: `(`
+(dotted pairs included), `'`, `"`, `)`, atoms (symbol / integer / bignum(JVM) / double /
+ratio / nil / t, with a leading `+` consumed before a digit like the frontend), and the
+`#` dispatch mirror -- `#'`, `#\` character literals (the frontend's 9-name table,
+case-insensitive), `#(...)` and `#nA(...)` arrays, `#*` bit vectors (a general vector,
+like the frontend), `#f(`/`#d(` packed float arrays (`--simd` builds the VBLOCK layout),
+`#S(...)` structure literals, `#x`/`#o`/`#b` radix integers, and nesting `#|...|#` block
+comments in the whitespace skipper. A token no dispatch claims falls through to the atom
+path exactly like the frontend's `readSymbol` (`#foo` is the symbol `#FOO`, `#:g` is
+`#:G`, `#16r1f` is a symbol -- `#nR` is not frontend syntax either). Three forms are
+PERMANENT limits because they need an evaluator / the feature set at run time: `#.`,
+`#+`/`#-` and `#n=`/`#n#` reader labels signal a catchable error (the interpreter's
+runtime read still resolves the first two and reads labels -- the one documented
+interpreter/compiled divergence). Reader errors are `RuntimeException`s on the JVM
+(handler-case catches them as `simple-error` with the frontend's EXACT messages;
+`LispEvaluator.foldStructLiteralsOf` converts the interpreter's `LispReadException` the
+same way), and on WASM an `unreachable` trap -- or, in EH mode, a catchable
+`$lisp-cond` throw whose message is STATIC (no name interpolation; see
+`WasmReadRuntimeBuilder.emitErr`). `#S` mechanics: the JVM bakes an `Object[][]`
+`_rdStructs` directory (every registered layout + per-slot initform actions, filled in
+`<clinit>` via `JvmReadRuntimeBuilder.structTableClinit`, gated on `usesRead &&
+mayUseInstances`); WASM appends a directory blob after the `WasmInstanceLayouts` records
+(`buildReadCtx`). An omitted slot takes a `nil` initform, re-reads a baked
+`EmittedReaderInitforms` constant text in place (cursor save/restore), or signals --
+never a silently wrong value. The reader forces the JVM array machinery
+(`usesFloatArray |= usesRead`) since a read datum can be any value kind. Pinned by
+`Jvm/WasmLispCompilerTest#compileReadFromString{CharLiterals,RatiosAndRadix,VectorsAndArrays,StructLiterals,SymbolParityAndBlockComments,ReaderErrors*}`
+and the ci-spec cases `runtime-read-*` (all four backends).
 
-A runtime reader/parser is emitted into the compiled output (like `eval`). Interpreter uses `LispReader`/`Files`; JVM emits a recursive-descent reader (`JvmReadRuntimeBuilder`) with full JDK parity; WASM (`WasmReadRuntimeBuilder`) walks linear memory, interns symbols to shared string offsets; its integers are `i31` and it parses decimal floats (`emitTryFloat`, no exponent) into `TYPE_FLOAT`. All three readers parse dotted pairs `(a . b)`: `LispReader.readList` consumes a `Token.Dot`, and the runtime list parsers (`JvmReadRuntimeBuilder.buildReadList`, `WasmReadRuntimeBuilder.buildReadListBody`) treat a `.` as a dot token only when the following byte is a delimiter (whitespace, `(`, `)`, `'`, `"`, `;`) or end of input, so symbols/floats containing `.` are untouched. `with-open-file` is a plain macro (`LispMacroExpander.expandWithOpenFile`) over `open`/`close`, so no backend needed a new special form. A stream is an opaque integer handle, backend-local: interpreter/JVM index a stream table, WASM uses the WASI fd directly.
+A runtime reader/parser is emitted into the compiled output (like `eval`). Interpreter uses `LispReader`/`Files`; JVM emits a recursive-descent reader (`JvmReadRuntimeBuilder`) with full JDK parity; WASM (`WasmReadRuntimeBuilder`) walks linear memory, interns symbols to shared string offsets; its integers are `i31` (ratio/radix tokens included) and it parses decimal floats (`emitTryFloat`, no exponent) into `TYPE_FLOAT`. All three readers parse dotted pairs `(a . b)`: `LispReader.readList` consumes a `Token.Dot`, and the runtime list parsers (`JvmReadRuntimeBuilder.buildReadList`, `WasmReadRuntimeBuilder.buildReadListBody`) treat a `.` as a dot token only when the following byte is a delimiter (whitespace, `(`, `)`, `'`, `"`, `;`) or end of input, so symbols/floats containing `.` are untouched. `with-open-file` is a plain macro (`LispMacroExpander.expandWithOpenFile`) over `open`/`close`, so no backend needed a new special form. A stream is an opaque integer handle, backend-local: interpreter/JVM index a stream table, WASM uses the WASI fd directly.
 
 **CRLF parity**: `read-line` strips one trailing carriage return on every backend (interpreter/JVM inherit it from `BufferedReader.readLine`; the WASM `_read_line` does an explicit `pos--` when the byte before the newline is `0x0D`, added for the tcp built-ins -- CRLF-terminated socket lines such as HTTP must read as plain lines and a blank CRLF line must compare `string=` to `""`; see `.kb/tcp-sockets.md`). A lone `\r\n` line therefore reads as `""`, not `"\r"`, on all backends.
 

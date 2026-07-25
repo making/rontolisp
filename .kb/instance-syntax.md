@@ -25,12 +25,16 @@ no registry lookup and all three backends can render it with one fixed loop.
 - A slot-less type prints `#S(EMPTY)` / `#<EMPTY>`.
 
 A `#S(...)` literal in SOURCE reads back into the instance it denotes (see
-"Reading `#S(...)`" below), and so does one handed to the INTERPRETER's runtime
-`read` / `read-from-string`, so `(read-from-string (prin1-to-string p))` round
-trips there. A COMPILED program's emitted reader does not read it — not as an
-instance-model gap but because that reader reads a narrow syntax subset with no
-`#`-dispatch form at all (no `#(...)`, no `#\a` either); see
-`.kb/read-load-streams.md` and `.todo/172`.
+"Reading `#S(...)`" below), and so does one handed to the runtime `read` /
+`read-from-string` on EVERY backend, so `(read-from-string (prin1-to-string p))`
+round trips everywhere. The compiled readers resolve the type in a baked
+directory of every registered layout (JVM: the `_rdStructs` `Object[][]` filled
+in `<clinit>`; WASM: a blob after the `WasmInstanceLayouts` records) with
+`findStructTag`'s exact-then-member-fallback rule, and apply the fold's slot
+rules; an omitted slot takes a `nil` initform, re-reads a baked constant text
+(`EmittedReaderInitforms`), or signals -- never a silently wrong value. Error
+messages match `StructLiteralFolder`'s verbatim on the JVM; WASM signals static
+messages (trap outside EH mode). See `.kb/read-load-streams.md`.
 
 ## Reading `#S(...)`
 

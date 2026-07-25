@@ -6979,6 +6979,24 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void runtimeReadErrorsAreCatchableConditions() {
+		// A runtime read error is a catchable condition (CL's reader-error is an error
+		// subtype), carrying the frontend's message -- the same contract the compiled
+		// backends' emitted readers follow.
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(list
+				  (handler-case (read-from-string "#\\\\Foo") (error (e) (simple-condition-format-control e)))
+				  (handler-case (read-from-string "#xZZ") (error (e) (simple-condition-format-control e)))
+				  (handler-case (read-from-string "#S(NOSUCH :X 1)") (error (e) (simple-condition-format-control e)))
+				  (handler-case (read-from-string "#S(POINT :Z 1)") (error (e) (simple-condition-format-control e)))
+				  (handler-case (read-from-string "1/0") (error (e) (simple-condition-format-control e))))
+				""").print()).isEqualTo("(\"Unknown character name: #\\Foo\" \"Invalid digits after #x: Z\" "
+				+ "\"#S(NOSUCH ...): NOSUCH is not a defined structure type\" "
+				+ "\"#S(POINT ...): POINT has no slot named :Z\" \"Division by zero in ratio literal: 1/0\")");
+	}
+
+	@Test
 	void structLiteralIsEqualToTheConstructedInstance() {
 		assertThat(evalMulti(
 				"""

@@ -1400,8 +1400,19 @@ public final class LispEvaluator {
 		if (!(this.globalEnv.lookupFunctionOrNull(name) instanceof LispFunction raw)) {
 			return;
 		}
-		this.globalEnv.defineFunction(name,
-				new LispFunction(name, args -> StructLiteralFolder.fold(raw.body().apply(args), this.closRegistry)));
+		this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+			try {
+				return StructLiteralFolder.fold(raw.body().apply(args), this.closRegistry);
+			}
+			catch (am.ik.rontolisp.reader.LispReadException | IllegalArgumentException e) {
+				// A runtime read error is a catchable condition (CL's reader-error is an
+				// error subtype): without this conversion a bad datum handed to
+				// read/read-from-string would blow through handler-case as a raw Java
+				// exception, while the compiled backends' emitted readers signal a
+				// catchable simple-error -- the same parity contract the reader follows.
+				throw new LispEvalException(String.valueOf(e.getMessage()));
+			}
+		}));
 	}
 
 	public LispVal resolveReadTimeEval(LispVal form) {

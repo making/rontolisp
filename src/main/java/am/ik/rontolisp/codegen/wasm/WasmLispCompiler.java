@@ -213,7 +213,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * after the fixed and {@code --simd} types in {@code asyncMode} only.
 	 */
 	private int asyncTypeBase() {
-		return TYPE_F32ARR + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
+		return READER_TYPE_LAST + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
 	}
 
 	/**
@@ -589,13 +589,45 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Character.toLowerCase(int). Every (char-downcase ch) call routes through it.
 	static final int FUNC_CHAR_DOWNCASE = FUNC_CHAR_UPCASE + 1;
 
+	// The reader's # dispatch helpers (WasmReadRuntimeBuilder): the frontend lexer's
+	// dispatch set mirrored into the emitted runtime reader -- character literals,
+	// radix integers, bit vectors, #(...)/#nA(...) arrays, #f(/#d( packed floats and
+	// #S(...) structure literals, plus the shared token/list walkers they use. Appended
+	// before FUNC_VEC_BASE/FUNC_USER_BASE like the mod/rem helpers, so no
+	// import/FUNC_START index shifts and the component blobs are unaffected; stubs when
+	// the program does not read.
+	static final int FUNC_RD_CHARLIT = FUNC_CHAR_DOWNCASE + 1;
+
+	static final int FUNC_RD_RADIX = FUNC_RD_CHARLIT + 1;
+
+	static final int FUNC_RD_BITS = FUNC_RD_RADIX + 1;
+
+	static final int FUNC_RD_ARRAYN = FUNC_RD_BITS + 1;
+
+	static final int FUNC_RD_PACKED = FUNC_RD_ARRAYN + 1;
+
+	static final int FUNC_RD_STRUCT = FUNC_RD_PACKED + 1;
+
+	static final int FUNC_RD_TOKEN = FUNC_RD_STRUCT + 1;
+
+	static final int FUNC_RD_LEN = FUNC_RD_TOKEN + 1;
+
+	static final int FUNC_RD_LEVEL = FUNC_RD_LEN + 1;
+
+	static final int FUNC_RD_DIMS = FUNC_RD_LEVEL + 1;
+
+	static final int FUNC_RD_FLAT = FUNC_RD_DIMS + 1;
+
+	static final int FUNC_RD_INFER = FUNC_RD_FLAT + 1;
+
+	static final int FUNC_RD_MEMEQ = FUNC_RD_INFER + 1;
+
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
-	// under --simd. Fixed indices relative to FUNC_CHAR_DOWNCASE, so every
-	// constant above
-	// keeps
-	// its value; the user defuns below shift by WasmVecSimdRuntimeBuilder.FUNC_COUNT when
-	// the block is present. Read the base through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_CHAR_DOWNCASE + 1;
+	// under --simd. Fixed indices relative to FUNC_RD_INFER, so every constant above
+	// keeps its value; the user defuns below shift by
+	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
+	// through userFuncBase(), never FUNC_USER_BASE.
+	static final int FUNC_VEC_BASE = FUNC_RD_MEMEQ + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -604,9 +636,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// GC helpers (_str_build, _str_fresh, _str_to_mem, _write_str_gc), the
 	// character-vector normalizer (_charvec_to_str), the three UTF-8 walking helpers
 	// (_str_char_count, _str_char_at, _str_char_byte_offset) and the two case-fold
-	// helpers (_char_upcase, _char_downcase) -- plus, under --simd, the vec: SIMD
-	// block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_CHAR_DOWNCASE + 1;
+	// helpers (_char_upcase, _char_downcase), and the thirteen reader # dispatch
+	// helpers -- plus, under --simd, the vec: SIMD block. Use userFuncBase(), which
+	// adds that offset.
+	static final int FUNC_USER_BASE = FUNC_RD_MEMEQ + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -744,18 +777,42 @@ public final class WasmLispCompiler implements LispCompiler {
 	// after TYPE_FARRAY (last type of the DEFAULT module).
 	static final int TYPE_F32ARR = TYPE_FARRAY + 1; // 39
 
+	// --- the reader # dispatch signatures (always present) ------------------------
+	//
+	// Three plain function signatures for the WasmReadRuntimeBuilder # dispatch
+	// helpers, appended after TYPE_F32ARR (the conditional --simd/async/instance blocks
+	// shift past them, like everything after the fixed types).
+
+	// _rd_dims ((ref null eq) rows, i32 rank) -> (ref null eq) dims buckets
+	static final int TYPE_RD_DIMS = TYPE_F32ARR + 1; // 40
+
+	// _rd_flat ((ref null eq) items, i32 depth, (ref null eq) dims, (ref null eq) out,
+	// i32 idx) -> i32 next idx
+	static final int TYPE_RD_FLAT = TYPE_RD_DIMS + 1; // 41
+
+	// _rd_token () -> i32 start offset (the token's end is the read cursor)
+	static final int TYPE_RD_TOKEN = TYPE_RD_FLAT + 1; // 42
+
+	// _rd_memeq (i32 a, i32 b, i32 len) -> i32 (byte-range equality)
+	static final int TYPE_RD_MEMEQ = TYPE_RD_TOKEN + 1; // 43
+
+	// How many type entries the reader block appends.
+	static final int READER_TYPE_COUNT = 4;
+
+	static final int READER_TYPE_LAST = TYPE_RD_MEMEQ;
+
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
-	// Four types, emitted ONLY under --simd, appended after TYPE_F32ARR and before the
-	// export/import wrapper signatures (which shift past them via fixedTypeCount()).
-	// Declaring an (array (mut v128)) at all requires the SIMD proposal, so the default
-	// module keeps validating on a runtime that has it turned off -- which is exactly the
-	// dead-flag guard WasmLispCompilerIntegrationTest runs.
+	// Four types, emitted ONLY under --simd, appended after the reader signatures and
+	// before the export/import wrapper signatures (which shift past them via
+	// fixedTypeCount()). Declaring an (array (mut v128)) at all requires the SIMD
+	// proposal, so the default module keeps validating on a runtime that has it turned
+	// off -- which is exactly the dead-flag guard WasmLispCompilerIntegrationTest runs.
 
 	// array (mut v128) -- the lane-group storage of a packed float array under --simd.
 	// A bare array comptype (implicitly sub final), so a subtype of eq. array.new_default
 	// zeroes every lane, which is what lets the kernels drop their scalar tails.
-	static final int TYPE_V128ARR = TYPE_F32ARR + 1; // 40
+	static final int TYPE_V128ARR = READER_TYPE_LAST + 1; // 44
 
 	// struct {i32 count, i32 kind, (ref null eq) groups} -- the --simd replacement for
 	// the
@@ -767,13 +824,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_V128ARR, and `groups` holds ceil(count / lanes) + 1 groups -- the trailing one
 	// a
 	// zero sentinel so matvec's shuffle window can always read one group past its last.
-	static final int TYPE_VBLOCK = TYPE_F32ARR + 2; // 41
+	static final int TYPE_VBLOCK = READER_TYPE_LAST + 2; // 45
 
 	// _v_get ((ref null eq) vblock, i32 index) -> f64
-	static final int TYPE_V_GET = TYPE_F32ARR + 3; // 42
+	static final int TYPE_V_GET = READER_TYPE_LAST + 3; // 46
 
 	// _v_set ((ref null eq) vblock, i32 index, f64 value) -> f64 (the value AS STORED)
-	static final int TYPE_V_SET = TYPE_F32ARR + 4; // 43
+	static final int TYPE_V_SET = READER_TYPE_LAST + 4; // 47
 
 	// How many type entries the --simd block appends.
 	static final int SIMD_TYPE_COUNT = 4;
@@ -941,6 +998,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int DB_READ_SCRATCH_ADDR = 176;
 
 	static final int DB_WRITE_SCRATCH_ADDR = 184;
+
+	// The reader's block-comment nesting depth (the inline whitespace skipper uses no
+	// locals, so #| ... |# nesting counts through this cell instead).
+	static final int RD_DEPTH_ADDR = 192;
 
 	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
 	// and
@@ -2231,6 +2292,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] readListBody;
 		final byte[] readBody;
 		final byte[] loadBody;
+		final byte[] rdCharlitBody;
+		final byte[] rdRadixBody;
+		final byte[] rdBitsBody;
+		final byte[] rdArrayNBody;
+		final byte[] rdPackedBody;
+		final byte[] rdStructBody;
+		final byte[] rdTokenBody;
+		final byte[] rdLenBody;
+		final byte[] rdLevelBody;
+		final byte[] rdDimsBody;
+		final byte[] rdFlatBody;
+		final byte[] rdInferBody;
+		final byte[] rdMemeqBody;
 		if (usesIntern) {
 			// Intern NIL/quote/function before snapshotting so the runtime resolves them
 			// to the same offsets the eval runtime uses (uppercase-canonical: the
@@ -2247,16 +2321,45 @@ public final class WasmLispCompiler implements LispCompiler {
 			int internBase = stringTable.appendBlob(buildInternBlob(internEntries));
 			internBody = WasmReadRuntimeBuilder.buildInternBody(internBase, internCount, hostArena);
 			if (usesRead) {
-				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(nilOffset, quoteOffset, functionOffset);
-				readListBody = WasmReadRuntimeBuilder.buildReadListBody();
-				readBody = WasmReadRuntimeBuilder.buildReadBody();
-				loadBody = WasmReadRuntimeBuilder.buildLoadBody();
+				WasmReadRuntimeBuilder.ReadCtx readCtx = WasmReadRuntimeBuilder.buildReadCtx(stringTable, nilOffset,
+						quoteOffset, functionOffset, ehMode, this.simd, this.usesInstances ? instanceTypeBase() : -1,
+						closRegistry, layoutAddresses);
+				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(readCtx);
+				readListBody = WasmReadRuntimeBuilder.buildReadListBody(readCtx);
+				readBody = WasmReadRuntimeBuilder.buildReadBody(readCtx);
+				loadBody = WasmReadRuntimeBuilder.buildLoadBody(readCtx);
+				rdCharlitBody = WasmReadRuntimeBuilder.buildRdCharlitBody(readCtx);
+				rdRadixBody = WasmReadRuntimeBuilder.buildRdRadixBody(readCtx);
+				rdBitsBody = WasmReadRuntimeBuilder.buildRdBitsBody();
+				rdArrayNBody = WasmReadRuntimeBuilder.buildRdArrayNBody(readCtx);
+				rdPackedBody = WasmReadRuntimeBuilder.buildRdPackedBody(readCtx);
+				rdStructBody = WasmReadRuntimeBuilder.buildRdStructBody(readCtx);
+				rdTokenBody = WasmReadRuntimeBuilder.buildRdTokenBody();
+				rdLenBody = WasmReadRuntimeBuilder.buildRdLenBody(readCtx);
+				rdLevelBody = WasmReadRuntimeBuilder.buildRdLevelBody(readCtx);
+				rdDimsBody = WasmReadRuntimeBuilder.buildRdDimsBody(readCtx);
+				rdFlatBody = WasmReadRuntimeBuilder.buildRdFlatBody(readCtx);
+				rdInferBody = WasmReadRuntimeBuilder.buildRdInferBody();
+				rdMemeqBody = WasmReadRuntimeBuilder.buildRdMemeqBody();
 			}
 			else {
 				readExprBody = WasmReadRuntimeBuilder.buildReadExprStub();
 				readListBody = WasmReadRuntimeBuilder.buildReadListStub();
 				readBody = WasmReadRuntimeBuilder.buildReadStub();
 				loadBody = WasmReadRuntimeBuilder.buildLoadStub();
+				rdCharlitBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+				rdRadixBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+				rdBitsBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+				rdArrayNBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+				rdPackedBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+				rdStructBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+				rdTokenBody = WasmReadRuntimeBuilder.buildRdI32Stub();
+				rdLenBody = WasmReadRuntimeBuilder.buildRdI32Stub();
+				rdLevelBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+				rdDimsBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+				rdFlatBody = WasmReadRuntimeBuilder.buildRdI32Stub();
+				rdInferBody = WasmReadRuntimeBuilder.buildRdI32Stub();
+				rdMemeqBody = WasmReadRuntimeBuilder.buildRdI32Stub();
 			}
 		}
 		else {
@@ -2265,6 +2368,19 @@ public final class WasmLispCompiler implements LispCompiler {
 			readListBody = WasmReadRuntimeBuilder.buildReadListStub();
 			readBody = WasmReadRuntimeBuilder.buildReadStub();
 			loadBody = WasmReadRuntimeBuilder.buildLoadStub();
+			rdCharlitBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+			rdRadixBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+			rdBitsBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+			rdArrayNBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+			rdPackedBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+			rdStructBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+			rdTokenBody = WasmReadRuntimeBuilder.buildRdI32Stub();
+			rdLenBody = WasmReadRuntimeBuilder.buildRdI32Stub();
+			rdLevelBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+			rdDimsBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
+			rdFlatBody = WasmReadRuntimeBuilder.buildRdI32Stub();
+			rdInferBody = WasmReadRuntimeBuilder.buildRdI32Stub();
+			rdMemeqBody = WasmReadRuntimeBuilder.buildRdI32Stub();
 		}
 		// Symbol-API helper bodies (FUNC_MAKE_SYMBOL .. FUNC_FBOUNDP), built before the
 		// string table is serialized because they embed the offset of the symbol t.
@@ -2533,8 +2649,52 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.F32);
 					w.write(am.ik.wasm.Mutability.VAR);
 				});
+				// type 40 (TYPE_RD_DIMS): _rd_dims ((ref null eq), i32) -> (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(2);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I32);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
+				// type 41 (TYPE_RD_FLAT): _rd_flat ((ref null eq), i32, (ref null eq),
+				// (ref null eq), i32) -> i32
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(5);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I32);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I32);
+					w.write(1);
+					w.write(Type.I32);
+				});
+				// type 42 (TYPE_RD_TOKEN): _rd_token () -> i32
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(0);
+					w.write(1);
+					w.write(Type.I32);
+				});
+				// type 43 (TYPE_RD_MEMEQ): _rd_memeq (i32, i32, i32) -> i32
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(3);
+					w.write(Type.I32);
+					w.write(Type.I32);
+					w.write(Type.I32);
+					w.write(1);
+					w.write(Type.I32);
+				});
 				if (this.simd) {
-					// type 40 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
+					// type 44 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
 					// proposal, which is why it is gated on --simd.
 					types.add(w -> {
@@ -2542,7 +2702,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.write(Type.V128);
 						w.write(am.ik.wasm.Mutability.VAR);
 					});
-					// type 41 (TYPE_VBLOCK): struct {i32 count, i32 kind, (ref null eq)
+					// type 45 (TYPE_VBLOCK): struct {i32 count, i32 kind, (ref null eq)
 					// groups} -- what TYPE_FARRAY's data field holds under --simd. All
 					// fields immutable (an aset mutates a v128 group, not the struct).
 					types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
@@ -2550,7 +2710,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						fields.addField(false, w -> w.write(Type.I32));
 						fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
 					}));
-					// type 42 (TYPE_V_GET): _v_get ((ref null eq), i32) -> f64
+					// type 46 (TYPE_V_GET): _v_get ((ref null eq), i32) -> f64
 					types.add(w -> {
 						w.write(Type.FUNC);
 						w.write(2);
@@ -2560,7 +2720,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.write(1);
 						w.write(Type.F64);
 					});
-					// type 43 (TYPE_V_SET): _v_set ((ref null eq), i32, f64) -> f64
+					// type 47 (TYPE_V_SET): _v_set ((ref null eq), i32, f64) -> f64
 					types.add(w -> {
 						w.write(Type.FUNC);
 						w.write(3);
@@ -2855,6 +3015,21 @@ public final class WasmLispCompiler implements LispCompiler {
 													// (FUNC_STR_CHAR_BYTE_OFFSET)
 				fnDef.addFunction(TYPE_LOOKUP); // _char_upcase (FUNC_CHAR_UPCASE)
 				fnDef.addFunction(TYPE_LOOKUP); // _char_downcase (FUNC_CHAR_DOWNCASE)
+				// the reader # dispatch helpers (FUNC_RD_CHARLIT .. FUNC_RD_MEMEQ)
+				fnDef.addFunction(TYPE_READ_LINE); // _rd_charlit () -> value
+				fnDef.addFunction(TYPE_READ_LINE_FD); // _rd_radix (radix) -> value
+				fnDef.addFunction(TYPE_READ_LINE); // _rd_bits () -> value
+				fnDef.addFunction(TYPE_READ_LINE_FD); // _rd_arrayn (rank) -> value
+				fnDef.addFunction(TYPE_READ_LINE_FD); // _rd_packed (single) -> value
+				fnDef.addFunction(TYPE_READ_LINE); // _rd_struct () -> value
+				fnDef.addFunction(TYPE_RD_TOKEN); // _rd_token () -> i32
+				fnDef.addFunction(TYPE_RAT_GET); // _rd_len (v) -> i32
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rd_level (v) -> value
+				fnDef.addFunction(TYPE_RD_DIMS); // _rd_dims (rows, rank) -> dims
+				fnDef.addFunction(TYPE_RD_FLAT); // _rd_flat (items, depth, dims, out,
+													// idx) -> idx
+				fnDef.addFunction(TYPE_RAT_GET); // _rd_infer_rank (rows) -> i32
+				fnDef.addFunction(TYPE_RD_MEMEQ); // _rd_memeq (a, b, len) -> i32
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -3250,6 +3425,21 @@ public final class WasmLispCompiler implements LispCompiler {
 				// Character.toLowerCase(int); binary-searches the table at
 				// lowerFoldOffset.
 				code.addFunction(charDowncaseBody);
+				// the reader # dispatch helper bodies (FUNC_RD_CHARLIT .. FUNC_RD_MEMEQ),
+				// stubs when the program does not read
+				code.addFunction(rdCharlitBody);
+				code.addFunction(rdRadixBody);
+				code.addFunction(rdBitsBody);
+				code.addFunction(rdArrayNBody);
+				code.addFunction(rdPackedBody);
+				code.addFunction(rdStructBody);
+				code.addFunction(rdTokenBody);
+				code.addFunction(rdLenBody);
+				code.addFunction(rdLevelBody);
+				code.addFunction(rdDimsBody);
+				code.addFunction(rdFlatBody);
+				code.addFunction(rdInferBody);
+				code.addFunction(rdMemeqBody);
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

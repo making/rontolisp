@@ -7245,6 +7245,98 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("(A . 1)\n(A B . C)\n((A . 1) (B . 2))\n3.5");
 	}
 
+	// === the emitted reader's # dispatch (frontend parity) ===
+
+	@Test
+	void compileReadFromStringCharLiterals() throws Exception {
+		assertThat(compileAndRun("""
+				(print (read-from-string "#\\\\a"))
+				(print (read-from-string "#\\\\Space"))
+				(print (read-from-string (prin1-to-string #\\Newline)))
+				(print (char-code (read-from-string "#\\\\A")))
+				(print (read-from-string "#\\\\("))
+				""")).isEqualTo("#\\a\n#\\Space\n#\\Newline\n65\n#\\(");
+	}
+
+	@Test
+	void compileReadFromStringRatiosAndRadix() throws Exception {
+		assertThat(compileAndRun("""
+				(print (read-from-string "1/3"))
+				(print (read-from-string "-2/8"))
+				(print (* 3 (read-from-string "1/3")))
+				(print (read-from-string "4/2"))
+				(print (read-from-string "#x10"))
+				(print (read-from-string "#o17"))
+				(print (read-from-string "#b101"))
+				(print (read-from-string "#x-ff"))
+				(print (read-from-string "+347"))
+				(print (read-from-string "+2.5"))
+				""")).isEqualTo("1/3\n-1/4\n1\n2\n16\n15\n5\n-255\n347\n2.5");
+	}
+
+	@Test
+	void compileReadFromStringVectorsAndArrays() throws Exception {
+		assertThat(compileAndRun("""
+				(print (read-from-string (prin1-to-string #(1 2 3))))
+				(print (aref (read-from-string "#(7 8 9)") 1))
+				(print (read-from-string "#2A((1 2) (3 4))"))
+				(print (read-from-string "#*101"))
+				(print (read-from-string (prin1-to-string #f(1.0 2.0))))
+				(print (read-from-string (prin1-to-string #d((1.0 2.0) (3.0 4.0)))))
+				""")).isEqualTo("#(1 2 3)\n8\n#2A((1 2) (3 4))\n#(1 0 1)\n#f(1.0 2.0)\n#d((1.0 2.0) (3.0 4.0))");
+	}
+
+	@Test
+	void compileReadFromStringStructLiterals() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct rdpt x y)
+				(print (read-from-string (prin1-to-string (make-rdpt :x 1 :y 2))))
+				(print (rdpt-y (read-from-string "#S(RDPT :X 5 :Y 6)")))
+				(print (read-from-string "#S(RDPT :X 5)"))
+				(defstruct rdcfg (retries 3) (host "h") (tag 'none))
+				(print (read-from-string "#S(RDCFG)"))
+				"""))
+			.isEqualTo("#S(RDPT :X 1 :Y 2)\n6\n#S(RDPT :X 5 :Y NIL)\n#S(RDCFG :RETRIES 3 :HOST \"h\" :TAG NONE)");
+	}
+
+	@Test
+	void compileReadFromStringSymbolParityAndBlockComments() throws Exception {
+		assertThat(compileAndRun("""
+				(print (read-from-string "#foo"))
+				(print (read-from-string "#|note|# 7"))
+				""")).isEqualTo("#FOO\n7");
+	}
+
+	@Test
+	void compileReadFromStringReaderErrorsSignalCatchably() throws Exception {
+		// EH mode: every reader error is a catchable $lisp-cond throw carrying a STATIC
+		// message (WASM cannot interpolate names into a baked string; the JVM and the
+		// interpreter carry the frontend's exact interpolated messages instead).
+		assertThat(compileAndRunEh("""
+				(defstruct rdpt x y)
+				(defun try (s)
+				  (handler-case (progn (read-from-string s) "no-error")
+				    (error (e) (simple-condition-format-control e))))
+				(print (try "#\\\\Foo"))
+				(print (try "#xZZ"))
+				(print (try "#S(NOSUCH :X 1)"))
+				(print (try "#S(RDPT :Z 1)"))
+				(print (try "#2A((1 2) (3))"))
+				(print (try "1/0"))
+				(print (try "#.(+ 1 2)"))
+				(print (try "#1=(a b)"))
+				""")).isEqualTo("""
+				"Unknown character name after #\\"
+				"Invalid digits after #x/#o/#b"
+				"#S: not a defined structure type"
+				"#S: no slot with that name"
+				"ragged array contents"
+				"Division by zero in ratio literal"
+				"#. read-time evaluation is not supported"
+				"reader labels (#N=/#N#) are not supported by the compiled runtime reader"
+				""".trim());
+	}
+
 	@Test
 	void compileReadFloatLiterals() throws Exception {
 		// Regression: the WASM runtime reader parsed only integers, so a float token such
