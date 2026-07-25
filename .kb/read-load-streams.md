@@ -1,5 +1,17 @@
 # `read`/`load`, `read-line`, file streams in all three backends
 
+**The emitted reader reads a NARROW SUBSET, and nothing warns you.** `buildReadExpr`
+(JVM) / its WASM twin dispatch on exactly six shapes: `(`, `'`, `#'`, `"`, `)` and
+"atom" (symbol / integer / bignum / double / nil / t). Every other `#` dispatch form the
+FRONTEND reader handles -- `#S(...)`, `#(...)`, `#\a`, `#nA(...)`, `#f(`/`#d(`, `#x`/`#o`/`#b`,
+`#*`, `#n=`/`#n#`, ratios -- falls through to the atom path and is SILENTLY MISREAD: `#S(P
+:X 1)` reads as the symbol `#S` followed by the list `(P :X 1)`, `#(1 2)` as the symbol
+`#` followed by `(1 2)`. So the interpreter and the compiled backends disagree on those
+inputs by construction, and the disagreement produces wrong data rather than an error.
+Closing it is `.todo/172`; until then, do NOT read one `#`-dispatch form into the emitted
+reader in isolation -- a reader that reads `#S(` but not `#\a` is harder to explain than
+one that reads neither.
+
 A runtime reader/parser is emitted into the compiled output (like `eval`). Interpreter uses `LispReader`/`Files`; JVM emits a recursive-descent reader (`JvmReadRuntimeBuilder`) with full JDK parity; WASM (`WasmReadRuntimeBuilder`) walks linear memory, interns symbols to shared string offsets; its integers are `i31` and it parses decimal floats (`emitTryFloat`, no exponent) into `TYPE_FLOAT`. All three readers parse dotted pairs `(a . b)`: `LispReader.readList` consumes a `Token.Dot`, and the runtime list parsers (`JvmReadRuntimeBuilder.buildReadList`, `WasmReadRuntimeBuilder.buildReadListBody`) treat a `.` as a dot token only when the following byte is a delimiter (whitespace, `(`, `)`, `'`, `"`, `;`) or end of input, so symbols/floats containing `.` are untouched. `with-open-file` is a plain macro (`LispMacroExpander.expandWithOpenFile`) over `open`/`close`, so no backend needed a new special form. A stream is an opaque integer handle, backend-local: interpreter/JVM index a stream table, WASM uses the WASI fd directly.
 
 **CRLF parity**: `read-line` strips one trailing carriage return on every backend (interpreter/JVM inherit it from `BufferedReader.readLine`; the WASM `_read_line` does an explicit `pos--` when the byte before the newline is `0x0D`, added for the tcp built-ins -- CRLF-terminated socket lines such as HTTP must read as plain lines and a blank CRLF line must compare `string=` to `""`; see `.kb/tcp-sockets.md`). A lone `\r\n` line therefore reads as `""`, not `"\r"`, on all backends.

@@ -6970,6 +6970,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void runtimeReadFromStringBuildsTheInstance() {
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(let ((p (read-from-string (prin1-to-string (make-point :x 1 :y "hi")))))
+				  (list p (point-p p) (point-y p) (funcall #'read-from-string "#S(POINT :X 5 :Y 6)")))
+				""").print()).isEqualTo("(#S(POINT :X 1 :Y \"hi\") T \"hi\" #S(POINT :X 5 :Y 6))");
+	}
+
+	@Test
 	void structLiteralIsEqualToTheConstructedInstance() {
 		assertThat(evalMulti(
 				"""

@@ -205,20 +205,26 @@ word-frequency, `.class` (default/`--optimize`/`--dynamic`) and `.wasm`
 literal with its ordinary "unsupported value in function" error, which is right: it has no
 instances at all.
 
-## Remaining work
+### DONE -- Phase 4 (runtime `read` of `#S(...)`), reduced to its interpreter half on purpose
 
-### Phase 4 -- runtime `read`/`read-from-string`/`load` of `#S(...)`
+Phase 3 left the interpreter's runtime `read`/`read-from-string` returning an UNFOLDED
+carrier -- it printed as `#S(...)` but answered nil to the predicate, the worst of both
+worlds. That is fixed: `LispEvaluator.registerEval` rebinds the two `Environment`
+built-ins to themselves plus `StructLiteralFolder.fold`. Rebinding the FUNCTION binding
+rather than the call sites is what keeps `#'read-from-string` and every library that
+funcalls it folding, and `Environment` stays registry-free.
+`(read-from-string (prin1-to-string p))` now round-trips
+(`LispEvaluatorTest#runtimeReadFromStringBuildsTheInstance`).
 
-**Now a live divergence, not a nicety:** as of Phase 3 the interpreter's runtime `read`
-returns an unfolded `LispStructLiteral` (which prints as `#S(...)` but answers nil to
-`point-p`), while the compiled backends' emitted readers do not know `#S(` at all.
-
-Interpreter: post-process `read`/`read-from-string` through
-`StructLiteralFolder.fold`. Compile backends: give the emitted readers
-(`JvmReadRuntimeBuilder`, `WasmReadRuntimeBuilder`) a syntactic `#S` branch producing a
-`(%read-struct NAME :K v ...)` marker, canonicalized by one generated `%struct-canon`
-Lisp defun (the `%class-slot-defs` pattern) -- no slot table in the emitted reader. Same
-error set on every backend; add a ci-spec case.
+**The compile-backend half was moved out to `.todo/172`, after measuring.** The plan above
+was to teach the emitted readers a `#S(` branch. Measuring the four backends first showed
+the premise was wrong: the emitted reader understands exactly `(`, `'`, `#'`, `"`, `)` and
+"atom", so `#(1 2)`, `#\a`, `1/3` and `#x10` are ALL silently misread there, exactly as
+`#S(...)` is. `#S` is not lagging behind the rest of the reader -- it is one member of a
+whole class of silent misreads, and a reader that reads `#S(P :X 1)` but not `#\a` would
+be harder to explain than one that reads neither. The owner chose full parity as its own
+work item rather than a lopsided one-form fix. Nothing about the instance model is
+involved: the layout table the reader would need is already baked into both artifacts.
 
 ### Phase 5 -- docs, `.kb`, ci-spec, native E2E
 
@@ -232,10 +238,17 @@ reference/data-types.md,guides/missing-features.md,guides/eval-limitations.md}` 
 missing-features row narrowed to `:include` only), plus the
 `struct-literal-read-syntax` ci-spec case.
 
-What is LEFT here is whatever Phase 4 invalidates -- every one of those pages currently
-says the RUNTIME `read` does not understand `#S(...)` -- plus `.kb/hash-tables.md` and the
-final `./mvnw -Pweb compile` / `javadoc:jar` / native-binary `CiSpecE2eTest` sweep (not
-just `./mvnw test`).
+Phase 4 carried its own too: `.kb/instance-syntax.md`, the new opening paragraph of
+`.kb/read-load-streams.md` (which records the emitted reader's real syntax subset -- an
+invariant nothing had written down), and
+`doc/{en,ja}/{reference/functions/{read,read-from-string}.md,
+reference/special-forms/defstruct.md,guides/missing-features.md}`, all of which now state
+the interpreter/compiled split explicitly.
+
+What is LEFT here is `.kb/hash-tables.md` and the final `./mvnw -Pweb compile` /
+`javadoc:jar` / native-binary `CiSpecE2eTest` sweep (not just `./mvnw test`). No ci-spec
+case can pin the runtime `#S` read: the four backends disagree by design until
+`.todo/172` lands, and a ci-spec case demands byte-identical output on all four.
 
 ## Verification bar (unchanged)
 

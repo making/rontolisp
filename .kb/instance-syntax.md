@@ -25,8 +25,12 @@ no registry lookup and all three backends can render it with one fixed loop.
 - A slot-less type prints `#S(EMPTY)` / `#<EMPTY>`.
 
 A `#S(...)` literal in SOURCE reads back into the instance it denotes (see
-"Reading `#S(...)`" below). A `#S(...)` handed to the RUNTIME `read` /
-`read-from-string` does not yet — roadmap: `.todo/171` phase 4.
+"Reading `#S(...)`" below), and so does one handed to the INTERPRETER's runtime
+`read` / `read-from-string`, so `(read-from-string (prin1-to-string p))` round
+trips there. A COMPILED program's emitted reader does not read it — not as an
+instance-model gap but because that reader reads a narrow syntax subset with no
+`#`-dispatch form at all (no `#(...)`, no `#\a` either); see
+`.kb/read-load-streams.md` and `.todo/172`.
 
 ## Reading `#S(...)`
 
@@ -47,6 +51,11 @@ rontolisp reads a whole file up front and `LispReader` knows nothing about the
   `LispEvaluator.resolveStructLiterals`, a sibling of `resolveReadTimeEval`.
   Per-form, not whole-program, is the point: it reproduces CL's rule that the
   `defstruct` must PRECEDE the literal, on every backend.
+- The interpreter's runtime `read` / `read-from-string` fold their RESULT through
+  the same `StructLiteralFolder`. `LispEvaluator.registerEval` rebinds the two
+  `Environment` built-ins (which hold no registry) to themselves plus the fold —
+  the FUNCTION binding, not the call sites, so `#'read-from-string` and every
+  library that funcalls it fold too.
 
 The carrier is a first-class `LispVal` rather than a `(%read-struct ...)` marker
 cons on purpose: being neither a symbol nor a cons it rides through `quote`,

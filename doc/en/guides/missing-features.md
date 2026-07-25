@@ -92,8 +92,10 @@ and `thereis`/`always`/`never`.
 
 [`defstruct`](../reference/special-forms/defstruct.md) does not support
 `:include` inheritance. An instance prints in the standard `#S(...)` syntax, and
-a `#S(...)` literal in source reads back into an instance; the runtime `read` /
-`read-from-string` of a compiled program does not understand `#S(...)`.
+a `#S(...)` literal in source reads back into an instance. The runtime `read` /
+`read-from-string` builds one too in the interpreter, but a compiled program's
+emitted reader reads a narrow syntax subset that understands no `#`-dispatch form
+at all (`#S(...)`, `#(...)`, `#\a`).
 
 CLOS is a **static subset**
 ([`defclass`](../reference/special-forms/defclass.md),

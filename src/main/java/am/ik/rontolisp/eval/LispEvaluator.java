@@ -347,6 +347,13 @@ public final class LispEvaluator {
 	}
 
 	private void registerEval() {
+		// The runtime readers return DATA, and a #S(...) datum must be the instance it
+		// denotes exactly as a source literal is. Environment holds no registry, so the
+		// fold is layered on here, where this evaluator's registry is in scope; wrapping
+		// the function BINDING (rather than the call sites) also keeps
+		// #'read/#'read-from-string folding.
+		foldStructLiteralsOf(LispNames.READ);
+		foldStructLiteralsOf(LispNames.READ_FROM_STRING);
 		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
 			if (args.size() != 1) {
 				throw new LispEvalException(LispNames.EVAL + " expects 1 argument, got " + args.size());
@@ -1380,6 +1387,21 @@ public final class LispEvaluator {
 	 */
 	public LispVal resolveStructLiterals(LispVal form) {
 		return StructLiteralFolder.fold(form, this.closRegistry);
+	}
+
+	/**
+	 * Rebinds a runtime reader built-in ({@code read} / {@code read-from-string}) to
+	 * itself plus a struct-literal fold, so a {@code #S(...)} datum read at run time is
+	 * the instance it denotes and never the unresolved carrier. Rebinding the FUNCTION
+	 * rather than the call sites keeps {@code #'read-from-string} and every library that
+	 * funcalls it folding too.
+	 */
+	private void foldStructLiteralsOf(String name) {
+		if (!(this.globalEnv.lookupFunctionOrNull(name) instanceof LispFunction raw)) {
+			return;
+		}
+		this.globalEnv.defineFunction(name,
+				new LispFunction(name, args -> StructLiteralFolder.fold(raw.body().apply(args), this.closRegistry)));
 	}
 
 	public LispVal resolveReadTimeEval(LispVal form) {
