@@ -147,10 +147,13 @@ final class WasmRatioRuntimeBuilder {
 		w.writeSignedLeb128(field);
 		w.write(Instruction.ELSE);
 		if (field == 0) {
+			// An i31 is its own numerator; a TYPE_BIGNUM wraps to i32 (ratio
+			// components are i31-range, so mixed bignum-ratio arithmetic keeps the
+			// pre-bignum truncating semantics instead of trapping).
 			getLocal(w, 0);
-			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-			w.writeHeapType(Type.I31.code());
-			w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+			w.write(Instruction.CALL);
+			w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			w.write(Instruction.I32_WRAP_I64);
 		}
 		else {
 			constI32(w, 1);
@@ -162,8 +165,13 @@ final class WasmRatioRuntimeBuilder {
 	}
 
 	// _rat_add/_rat_sub/_rat_mul((ref null eq) a, (ref null eq) b) -> (ref null eq):
-	// i31 fast path with plain i32 arithmetic, exact rational path otherwise.
+	// exact-integer fast path in i64 (i31 or TYPE_BIGNUM operands; the result
+	// re-normalizes through _int_new, so an i31 overflow promotes to a bignum box and
+	// a bignum result that fits demotes back), exact rational path otherwise.
+	// Arithmetic past the i64 range wraps.
 	static byte[] buildRatBinaryBody(int i32Opcode, int f64Opcode) {
+		int i64Opcode = i32Opcode == Instruction.I32_ADD ? Instruction.I64_ADD
+				: i32Opcode == Instruction.I32_SUB ? Instruction.I64_SUB : Instruction.I64_MUL;
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -180,19 +188,13 @@ final class WasmRatioRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.ELSE);
 
-		getLocal(w, 0);
-		refTestI31(w);
-		getLocal(w, 1);
-		refTestI31(w);
-		w.write(Instruction.I32_AND);
+		emitBothExactInt(w);
 		ifRefNullEq(w);
-		// fast path: both i31
-		getLocal(w, 0);
-		castI31GetS(w);
-		getLocal(w, 1);
-		castI31GetS(w);
-		w.write(i32Opcode);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		// fast path: both exact integers, computed in i64 and re-normalized
+		emitLocalToI64(w, 0);
+		emitLocalToI64(w, 1);
+		w.write(i64Opcode);
+		call(w, WasmLispCompiler.FUNC_INT_NEW);
 		w.write(Instruction.ELSE);
 		if (i32Opcode == Instruction.I32_MUL) {
 			// _rat_new(num(a)*num(b), den(a)*den(b))
@@ -231,12 +233,19 @@ final class WasmRatioRuntimeBuilder {
 	}
 
 	// _rat_div((ref null eq) a, (ref null eq) b) -> (ref null eq): exact Common Lisp
-	// division _rat_new(num(a)*den(b), den(a)*num(b)); traps on division by zero.
+	// division _rat_new(num(a)*den(b), den(a)*num(b)); traps on division by zero. Two
+	// exact-integer operands that divide evenly take an i64 fast path (so a bignum
+	// divided exactly stays exact, e.g. (/ #x100000000 2)); an uneven bignum division
+	// falls through to the i32 ratio path, where the components wrap (ratio components
+	// stay i31-range).
 	static byte[] buildRatDivBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		w.write(0); // no extra locals
+		// locals: 2=a64, 3=b64 (both i64)
+		w.write(1);
+		w.write(2);
+		w.write(Type.I64);
 
 		// Float fast path: f64 division when either operand is a float.
 		emitEitherFloat(w);
@@ -248,6 +257,41 @@ final class WasmRatioRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.ELSE);
 
+		emitBothExactInt(w);
+		ifRefNullEq(w);
+		// both exact integers: even division stays in i64 (the rem_s traps on b == 0,
+		// preserving the divide-by-zero trap)
+		emitLocalToI64(w, 0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(2);
+		emitLocalToI64(w, 1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(3);
+		getLocal(w, 2);
+		getLocal(w, 3);
+		w.write(Instruction.I64_REM_S);
+		w.write(Instruction.I64_EQZ);
+		ifRefNullEq(w);
+		getLocal(w, 2);
+		getLocal(w, 3);
+		w.write(Instruction.I64_DIV_S);
+		call(w, WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.ELSE);
+		emitRatDivRatioPath(w);
+		w.write(Instruction.END); // end even-division if
+		w.write(Instruction.ELSE);
+		emitRatDivRatioPath(w);
+		w.write(Instruction.END); // end exact-int if
+
+		w.write(Instruction.END); // end float-fast-path if
+
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// The exact rational division tail: _rat_new(num(a)*den(b), den(a)*num(b)) over the
+	// i32 ratio components.
+	private static void emitRatDivRatioPath(WasmWriter w) {
 		getLocal(w, 0);
 		call(w, WasmLispCompiler.FUNC_RAT_NUM);
 		getLocal(w, 1);
@@ -259,29 +303,26 @@ final class WasmRatioRuntimeBuilder {
 		call(w, WasmLispCompiler.FUNC_RAT_NUM);
 		w.write(Instruction.I32_MUL);
 		call(w, WasmLispCompiler.FUNC_RAT_NEW);
-		w.write(Instruction.END); // end float-fast-path if
-
-		w.write(Instruction.END);
-		return body.toByteArray();
 	}
 
 	// _rat_rem/_rat_mod((ref null eq) a, (ref null eq) b) -> (ref null eq): the Common
 	// Lisp remainder (sign of the dividend) and modulo (sign of the divisor). Both are
 	// a - b*q with q = trunc(a/b) for rem and q = floor(a/b) for mod. A float operand
-	// (either side) computes q in f64 (f64.trunc / f64.floor); two i31 integers take a
-	// fast i32 path (i32.rem_s, plus the divisor-sign correction for mod); otherwise the
-	// exact rational helpers compute a - b*(trunc|floor)(a/b). Mirrors the dispatch shape
-	// of buildRatBinaryBody so a float reaching mod/rem through a variable is handled.
+	// (either side) computes q in f64 (f64.trunc / f64.floor); two exact integers (i31
+	// or TYPE_BIGNUM) take a fast i64 path (i64.rem_s, plus the divisor-sign correction
+	// for mod, re-normalized through _int_new); otherwise the exact rational helpers
+	// compute a - b*(trunc|floor)(a/b). Mirrors the dispatch shape of
+	// buildRatBinaryBody so a float reaching mod/rem through a variable is handled.
 	static byte[] buildRatRemBody(boolean mod) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		// locals: 2=fa (f64), 3=fb (f64), 4=ri (i32, the i31 fast-path remainder)
+		// locals: 2=fa (f64), 3=fb (f64), 4=r64 (i64, the exact-int fast-path remainder)
 		w.write(2);
 		w.write(2);
 		w.write(Type.F64);
 		w.write(1);
-		w.write(Type.I32);
+		w.write(Type.I64);
 
 		// Float path: a - b * (floor|trunc)(a / b), all in f64, boxed as TYPE_FLOAT.
 		emitEitherFloat(w);
@@ -302,47 +343,42 @@ final class WasmRatioRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.ELSE);
 
-		// Non-float: fast i32 path when both operands are i31 integers.
-		getLocal(w, 0);
-		refTestI31(w);
-		getLocal(w, 1);
-		refTestI31(w);
-		w.write(Instruction.I32_AND);
+		// Non-float: fast i64 path when both operands are exact integers.
+		emitBothExactInt(w);
 		ifRefNullEq(w);
 		// r = a rem_s b (truncated remainder, sign of the dividend = Common Lisp rem)
-		getLocal(w, 0);
-		castI31GetS(w);
-		getLocal(w, 1);
-		castI31GetS(w);
-		w.write(Instruction.I32_REM_S);
+		emitLocalToI64(w, 0);
+		emitLocalToI64(w, 1);
+		w.write(Instruction.I64_REM_S);
 		setLocal(w, 4);
 		if (mod) {
 			// mod = r + ((r != 0 && sign(r) != sign(b)) ? b : 0). The sign test is
-			// (r ^ b) < 0, which avoids the r*b multiplication (and its i31 overflow).
+			// (r ^ b) < 0, which avoids the r*b multiplication (and its overflow).
 			getLocal(w, 4);
 			getLocal(w, 4);
-			constI32(w, 0);
-			w.write(Instruction.I32_NE);
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.I64_NE);
 			getLocal(w, 4);
-			getLocal(w, 1);
-			castI31GetS(w);
-			w.write(Instruction.I32_XOR);
-			constI32(w, 0);
-			w.write(Instruction.I32_LT_S);
+			emitLocalToI64(w, 1);
+			w.write(Instruction.I64_XOR);
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.I64_LT_S);
 			w.write(Instruction.I32_AND);
 			w.write(Instruction.IF);
-			w.write(Type.I32);
-			getLocal(w, 1);
-			castI31GetS(w);
+			w.write(Type.I64);
+			emitLocalToI64(w, 1);
 			w.write(Instruction.ELSE);
-			constI32(w, 0);
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(0);
 			w.write(Instruction.END);
-			w.write(Instruction.I32_ADD);
+			w.write(Instruction.I64_ADD);
 		}
 		else {
 			getLocal(w, 4);
 		}
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		call(w, WasmLispCompiler.FUNC_INT_NEW);
 		w.write(Instruction.ELSE);
 
 		// General path: a - b * (trunc|floor)(a / b) via the exact rational helpers, so
@@ -388,6 +424,20 @@ final class WasmRatioRuntimeBuilder {
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.ELSE);
 
+		// Exact-integer fast path: compare the i64 values directly (a bignum operand
+		// must not go through the i32 ratio components).
+		emitBothExactInt(w);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		emitLocalToI64(w, 0);
+		emitLocalToI64(w, 1);
+		w.write(Instruction.I64_GT_S);
+		emitLocalToI64(w, 0);
+		emitLocalToI64(w, 1);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.ELSE);
+
 		getLocal(w, 0);
 		call(w, WasmLispCompiler.FUNC_RAT_NUM);
 		w.write(Instruction.I64_EXTEND_S_I32);
@@ -412,6 +462,7 @@ final class WasmRatioRuntimeBuilder {
 		getLocal(w, 3);
 		w.write(Instruction.I64_LT_S);
 		w.write(Instruction.I32_SUB);
+		w.write(Instruction.END); // end exact-int fast-path if
 		w.write(Instruction.END); // end float-fast-path if
 
 		w.write(Instruction.END);
@@ -481,11 +532,15 @@ final class WasmRatioRuntimeBuilder {
 	}
 
 	// _rat_trunc((ref null eq) x) -> (ref null eq): num/den truncating toward zero.
+	// An exact integer (i31 or TYPE_BIGNUM) is already its own truncation and returns
+	// unchanged (the i32 component path would wrap a bignum).
 	static byte[] buildRatTruncBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		w.write(0); // no extra locals
+
+		emitIntIdentityReturn(w);
 
 		getLocal(w, 0);
 		call(w, WasmLispCompiler.FUNC_RAT_NUM);
@@ -509,6 +564,8 @@ final class WasmRatioRuntimeBuilder {
 		w.write(1);
 		w.write(3);
 		w.write(Type.I32);
+
+		emitIntIdentityReturn(w);
 
 		getLocal(w, 0);
 		call(w, WasmLispCompiler.FUNC_RAT_NUM);
@@ -554,6 +611,8 @@ final class WasmRatioRuntimeBuilder {
 		w.write(1);
 		w.write(5);
 		w.write(Type.I32);
+
+		emitIntIdentityReturn(w);
 
 		getLocal(w, 0);
 		call(w, WasmLispCompiler.FUNC_RAT_NUM);
@@ -661,11 +720,10 @@ final class WasmRatioRuntimeBuilder {
 	}
 
 	// Converts the value held in local[slot] to an f64, dispatching on its runtime type:
-	// an i31 integer converts directly, a ratio divides numerator by denominator, and a
-	// TYPE_FLOAT struct yields its field. Mirrors WasmEmitHelper.castFloatGetF64 but
-	// works
-	// on a value already stored in a local (no temp allocation), so it is usable from the
-	// raw-WasmWriter ratio runtime.
+	// an i31 integer converts directly, a TYPE_BIGNUM converts its i64 field, a ratio
+	// divides numerator by denominator, and a TYPE_FLOAT struct yields its field.
+	// Mirrors WasmEmitHelper.castFloatGetF64 but works on a value already stored in a
+	// local (no temp allocation), so it is usable from the raw-WasmWriter ratio runtime.
 	private static void emitLocalToF64(WasmWriter w, int slot) {
 		getLocal(w, slot);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -675,6 +733,18 @@ final class WasmRatioRuntimeBuilder {
 		getLocal(w, slot);
 		castI31GetS(w);
 		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.ELSE);
+		getLocal(w, slot);
+		refTestType(w, WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.IF);
+		w.write(Type.F64);
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.F64_CONVERT_S_I64);
 		w.write(Instruction.ELSE);
 		getLocal(w, slot);
 		refTestType(w, WasmLispCompiler.TYPE_RATIO);
@@ -695,6 +765,41 @@ final class WasmRatioRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	// Emits the test `(a is exact integer) & (b is exact integer)` over locals 0 and 1
+	// (an exact integer is an i31 or a TYPE_BIGNUM box), leaving an i32 on the stack.
+	private static void emitBothExactInt(WasmWriter w) {
+		emitIsExactInt(w, 0);
+		emitIsExactInt(w, 1);
+		w.write(Instruction.I32_AND);
+	}
+
+	// Emits `local[slot] is (i31 | TYPE_BIGNUM)` as an i32.
+	private static void emitIsExactInt(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		refTestI31(w);
+		getLocal(w, slot);
+		refTestType(w, WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.I32_OR);
+	}
+
+	// Pushes local[slot]'s exact-integer value as an i64 via _int_val.
+	private static void emitLocalToI64(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		call(w, WasmLispCompiler.FUNC_INT_VAL);
+	}
+
+	// Emits an early `if (x is exact integer) return x` guard over local 0: the
+	// trunc/floor/ceil/round of an integer is the integer itself, and the i32
+	// component path below would wrap a TYPE_BIGNUM.
+	private static void emitIntIdentityReturn(WasmWriter w) {
+		emitIsExactInt(w, 0);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 0);
+		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 	}
 

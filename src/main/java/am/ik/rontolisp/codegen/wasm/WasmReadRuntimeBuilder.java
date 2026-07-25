@@ -740,8 +740,10 @@ final class WasmReadRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		// ref locals: CAR=0, CDR=1 ; i32 locals: BYTE=2, START=3, LEN=4, OFF=5, POS=6,
 		// ESC=7, HP=8, NEG=9, ACC=10, VALID=11, SAWDOT=12, C2=13 ; f64 locals: FVAL=14,
-		// FPLACE=15. The classifiers reuse the i32 slots freely between attempts.
-		w.write(3);
+		// FPLACE=15 ; i64 local: ACC64=16 (the decimal-integer accumulator, wide so a
+		// token past the i31 range reads as a boxed integer like the frontend). The
+		// classifiers reuse the i32 slots freely between attempts.
+		w.write(4);
 		w.write(2);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
@@ -749,8 +751,10 @@ final class WasmReadRuntimeBuilder {
 		w.write(Type.I32);
 		w.write(2);
 		w.write(Type.F64);
+		w.write(1);
+		w.write(Type.I64);
 		final int CAR = 0, CDR = 1, BYTE = 2, START = 3, LEN = 4, OFF = 5, POS = 6, ESC = 7, HP = 8, NEG = 9, ACC = 10,
-				VALID = 11, SAWDOT = 12, C2 = 13, FVAL = 14, FPLACE = 15;
+				VALID = 11, SAWDOT = 12, C2 = 13, FVAL = 14, FPLACE = 15, ACC64 = 16;
 
 		emitSkipWs(w, ctx);
 		// if cursor >= end: return null
@@ -879,7 +883,7 @@ final class WasmReadRuntimeBuilder {
 		end(w);
 
 		// classify: integer?
-		emitTryInteger(w, BYTE, START, LEN, POS, NEG, ACC, VALID, ESC);
+		emitTryInteger(w, BYTE, START, LEN, POS, NEG, ACC64, VALID, ESC);
 
 		// classify: ratio? (N/D with grouping commas; a token the pattern rejects stays
 		// on the symbol path, and a literal /0 denominator signals like the frontend)
@@ -1197,8 +1201,9 @@ final class WasmReadRuntimeBuilder {
 	/**
 	 * Emits the integer classifier/parser for the token at {@code [START, START+LEN)}. If
 	 * the token is a valid signed integer (optional leading {@code -}, digits, grouping
-	 * commas), pushes the i31 value and returns from the function; otherwise falls
-	 * through.
+	 * commas), pushes the value (an i31, or a boxed integer past the fixnum range --
+	 * {@code ACC} is the caller's i64 accumulator local and the result normalizes through
+	 * {@code _int_new}) and returns from the function; otherwise falls through.
 	 */
 	private static void emitTryInteger(WasmWriter w, int BYTE, int START, int LEN, int POS, int NEG, int ACC, int VALID,
 			int SAWDIGIT) {
@@ -1211,7 +1216,8 @@ final class WasmReadRuntimeBuilder {
 		setLocal(w, SAWDIGIT);
 		i32(w, 0);
 		setLocal(w, NEG);
-		i32(w, 0);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
 		setLocal(w, ACC);
 		// if len > 1 and byte[START]=='-': NEG=1; POS++
 		getLocal(w, LEN);
@@ -1270,12 +1276,14 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 1);
 		setLocal(w, SAWDIGIT);
 		getLocal(w, ACC);
-		i32(w, 10);
-		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(10);
+		w.write(Instruction.I64_MUL);
 		getLocal(w, BYTE);
 		i32(w, '0');
 		w.write(Instruction.I32_SUB);
-		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I64_EXTEND_S_I32);
+		w.write(Instruction.I64_ADD);
 		setLocal(w, ACC);
 		end(w);
 		end(w);
@@ -1287,20 +1295,22 @@ final class WasmReadRuntimeBuilder {
 		br(w, 0);
 		end(w); // loop
 		end(w); // block
-		// if VALID and SAWDIGIT: return i31(neg ? -acc : acc)
+		// if VALID and SAWDIGIT: return _int_new(neg ? -acc : acc)
 		getLocal(w, VALID);
 		getLocal(w, SAWDIGIT);
 		w.write(Instruction.I32_AND);
 		ifVoid(w);
 		getLocal(w, NEG);
 		ifVoid(w);
-		i32(w, 0);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
 		getLocal(w, ACC);
-		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I64_SUB);
 		setLocal(w, ACC);
 		end(w);
 		getLocal(w, ACC);
-		i31New(w);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		w.write(Instruction.RETURN);
 		end(w);
 	}
@@ -2520,17 +2530,21 @@ final class WasmReadRuntimeBuilder {
 
 	// _rd_radix (radix) -> value: cursor just past "#x"/"#o"/"#b"; optional '-', digits
 	// of the radix; bad digits (or a trailing symbol character) signal. The accumulator
-	// is i32, matching the decimal classifier's documented WASM limits.
+	// is i64 and the result normalizes through _int_new, matching the frontend (so
+	// #xEFCDAB89 reads as the boxed integer, not an i31 wraparound).
 	static byte[] buildRdRadixBody(ReadCtx ctx) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		w.write(1);
-		w.write(5);
+		w.write(2);
+		w.write(4);
 		w.write(Type.I32);
-		final int RADIX = 0, NEG = 1, ACC = 2, DSTART = 3, BYTE = 4, DV = 5;
+		w.write(1);
+		w.write(Type.I64);
+		final int RADIX = 0, NEG = 1, DSTART = 2, BYTE = 3, DV = 4, ACC = 5;
 		i32(w, 0);
 		setLocal(w, NEG);
-		i32(w, 0);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
 		setLocal(w, ACC);
 		loadMem32(w, CURSOR);
 		loadMem32(w, END_ADDR);
@@ -2607,9 +2621,11 @@ final class WasmReadRuntimeBuilder {
 		brIf(w, 1);
 		getLocal(w, ACC);
 		getLocal(w, RADIX);
-		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I64_EXTEND_S_I32);
+		w.write(Instruction.I64_MUL);
 		getLocal(w, DV);
-		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I64_EXTEND_S_I32);
+		w.write(Instruction.I64_ADD);
 		setLocal(w, ACC);
 		advanceCursor(w);
 		br(w, 0);
@@ -2658,13 +2674,15 @@ final class WasmReadRuntimeBuilder {
 		end(w);
 		getLocal(w, NEG);
 		ifVoid(w);
-		i32(w, 0);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
 		getLocal(w, ACC);
-		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I64_SUB);
 		setLocal(w, ACC);
 		end(w);
 		getLocal(w, ACC);
-		i31New(w);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

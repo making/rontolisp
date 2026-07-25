@@ -163,6 +163,19 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.ELSE);
 
+		// both boxed integers -> i64 fields equal (an in-range integer is always an
+		// i31 by the _int_new normalization, so mixed i31/bignum pairs are never
+		// numerically equal)
+		refTest(w, 0, WasmLispCompiler.TYPE_BIGNUM);
+		refTest(w, 1, WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		bignumField(w, 0);
+		bignumField(w, 1);
+		w.write(Instruction.I64_EQ);
+		w.write(Instruction.ELSE);
+
 		// both floats -> f64 fields equal
 		refTest(w, 0, WasmLispCompiler.TYPE_FLOAT);
 		refTest(w, 1, WasmLispCompiler.TYPE_FLOAT);
@@ -194,6 +207,7 @@ final class WasmRuntimeBuilder {
 		emitStringContentEq(w);
 		w.write(Instruction.END); // end ratio if
 		w.write(Instruction.END); // end float if
+		w.write(Instruction.END); // end bignum if
 		w.write(Instruction.END); // end char if
 		if (instanceTypeIndex >= 0) {
 			w.write(Instruction.END); // end both-instance if
@@ -352,6 +366,24 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+
+		// boxed integer -> fold the i64 halves (mirrors the float branch; equal
+		// bignums hash equal, and an i31 never equals a bignum by normalization)
+		refTest(w, 0, WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		bignumField(w, 0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(1);
+		getLocal(w, 1);
+		w.write(Instruction.I32_WRAP_I64);
+		getLocal(w, 1);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(32);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_XOR);
 		w.write(Instruction.ELSE);
 
 		// cons -> hash(car) * 31 + hash(cdr) + 1
@@ -516,6 +548,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // end string if
 		w.write(Instruction.END); // end char if
 		w.write(Instruction.END); // end cons if
+		w.write(Instruction.END); // end bignum if
 		w.write(Instruction.END); // end i31 if
 		w.write(Instruction.END); // end null if
 
@@ -737,6 +770,15 @@ final class WasmRuntimeBuilder {
 		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeSignedLeb128(0);
+	}
+
+	private static void bignumField(WasmWriter w, int local) {
+		getLocal(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
 		w.writeSignedLeb128(0);
 	}
 
@@ -2108,6 +2150,9 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// Check boxed integer (TYPE_BIGNUM) -> i64 digits
+		emitPrintBignum(w);
+
 		// Check ratio struct -> "numerator/denominator"
 		emitPrintRatio(w, st);
 
@@ -2354,6 +2399,9 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
+
+		// Check boxed integer (TYPE_BIGNUM) -> i64 digits
+		emitPrintBignum(w);
 
 		// Check ratio struct -> "numerator/denominator"
 		emitPrintRatio(w, st);
@@ -3412,6 +3460,27 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
+	}
+
+	// Emits the boxed-integer branch shared by _print_val and _princ_val: if the value
+	// in param 0 is a TYPE_BIGNUM struct, prints its i64 digits and returns.
+	private static void emitPrintBignum(WasmWriter w) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_PRINT_I64_NO_NL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 	}
 
 	// Emits the ratio branch shared by _print_val and _princ_val: if the value in

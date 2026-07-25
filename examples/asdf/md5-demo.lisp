@@ -1,8 +1,8 @@
 ;; Loads the REAL md5 (public domain, Pierre R. Mai) via asdf:load-system and
 ;; digests the RFC 1321 A.5 test vectors. Run with:
 ;;   rontolisp examples/asdf/md5-demo.lisp --system-path src/test/resources/md5
-;; Interpreter and JVM backends only: the MD5 working state is unsigned 32-bit
-;; arithmetic, which does not fit the WASM i31 fixnum range.
+;; Runs on all four backends: the unsigned 32-bit MD5 working state rides the
+;; WASM backends' boxed 64-bit integer path.
 
 (asdf:load-system :md5)
 

@@ -213,7 +213,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * after the fixed and {@code --simd} types in {@code asyncMode} only.
 	 */
 	private int asyncTypeBase() {
-		return READER_TYPE_LAST + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
+		return BIGNUM_TYPE_LAST + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
 	}
 
 	/**
@@ -622,12 +622,28 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_RD_MEMEQ = FUNC_RD_INFER + 1;
 
+	// The boxed-integer (bignum) runtime helpers (always present, appended after the
+	// reader block so every constant above keeps its value). An exact integer outside
+	// the i31 fixnum range lives in a TYPE_BIGNUM struct {i64}; _int_new normalizes an
+	// i64 back into an i31 when it fits (the invariant: an in-range integer is ALWAYS
+	// an i31, so ref.eq/eql fast paths stay valid), _int_val widens either integer
+	// representation to i64, and _print_i64_no_nl renders an i64's digits.
+
+	// _int_new (i64) -> (ref null eq): i31 when in range, else a TYPE_BIGNUM box.
+	static final int FUNC_INT_NEW = FUNC_RD_MEMEQ + 1;
+
+	// _int_val ((ref null eq)) -> i64: i31 sign-extended, or a TYPE_BIGNUM's field.
+	static final int FUNC_INT_VAL = FUNC_INT_NEW + 1;
+
+	// _print_i64_no_nl (i64) -> (): the i64 counterpart of _print_i32_no_nl.
+	static final int FUNC_PRINT_I64_NO_NL = FUNC_INT_VAL + 1;
+
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
-	// under --simd. Fixed indices relative to FUNC_RD_INFER, so every constant above
-	// keeps its value; the user defuns below shift by
+	// under --simd. Fixed indices relative to FUNC_PRINT_I64_NO_NL, so every constant
+	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_RD_MEMEQ + 1;
+	static final int FUNC_VEC_BASE = FUNC_PRINT_I64_NO_NL + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -636,10 +652,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// GC helpers (_str_build, _str_fresh, _str_to_mem, _write_str_gc), the
 	// character-vector normalizer (_charvec_to_str), the three UTF-8 walking helpers
 	// (_str_char_count, _str_char_at, _str_char_byte_offset) and the two case-fold
-	// helpers (_char_upcase, _char_downcase), and the thirteen reader # dispatch
-	// helpers -- plus, under --simd, the vec: SIMD block. Use userFuncBase(), which
-	// adds that offset.
-	static final int FUNC_USER_BASE = FUNC_RD_MEMEQ + 1;
+	// helpers (_char_upcase, _char_downcase), the thirteen reader # dispatch
+	// helpers and the three bignum helpers (_int_new, _int_val, _print_i64_no_nl) --
+	// plus, under --simd, the vec: SIMD block. Use userFuncBase(), which adds that
+	// offset.
+	static final int FUNC_USER_BASE = FUNC_PRINT_I64_NO_NL + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -801,6 +818,29 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int READER_TYPE_LAST = TYPE_RD_MEMEQ;
 
+	// --- the bignum block (always present) ----------------------------------------
+	//
+	// The boxed exact-integer type and its helper signatures, appended after the
+	// reader signatures (the conditional --simd/async/instance blocks shift past
+	// them). See the FUNC_INT_NEW comment for the representation invariant.
+
+	// TYPE_BIGNUM: struct {i64 value} -- an exact integer OUTSIDE the i31 fixnum
+	// range. The only {i64} struct in the module, so ref.test can discriminate it.
+	// _int_new never boxes an in-range value, so two equal integers are only ever
+	// both-i31 (ref.eq works) or both-boxed (compared by field).
+	static final int TYPE_BIGNUM = TYPE_RD_MEMEQ + 1; // 44
+
+	// _int_new (i64) -> (ref null eq)
+	static final int TYPE_INT_NEW = TYPE_BIGNUM + 1; // 45
+
+	// _int_val ((ref null eq)) -> i64
+	static final int TYPE_INT_VAL = TYPE_INT_NEW + 1; // 46
+
+	// _print_i64_no_nl (i64) -> ()
+	static final int TYPE_PRINT_I64 = TYPE_INT_VAL + 1; // 47
+
+	static final int BIGNUM_TYPE_LAST = TYPE_PRINT_I64;
+
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
 	// Four types, emitted ONLY under --simd, appended after the reader signatures and
@@ -812,7 +852,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// array (mut v128) -- the lane-group storage of a packed float array under --simd.
 	// A bare array comptype (implicitly sub final), so a subtype of eq. array.new_default
 	// zeroes every lane, which is what lets the kernels drop their scalar tails.
-	static final int TYPE_V128ARR = READER_TYPE_LAST + 1; // 44
+	static final int TYPE_V128ARR = BIGNUM_TYPE_LAST + 1; // 48
 
 	// struct {i32 count, i32 kind, (ref null eq) groups} -- the --simd replacement for
 	// the
@@ -824,13 +864,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_V128ARR, and `groups` holds ceil(count / lanes) + 1 groups -- the trailing one
 	// a
 	// zero sentinel so matvec's shuffle window can always read one group past its last.
-	static final int TYPE_VBLOCK = READER_TYPE_LAST + 2; // 45
+	static final int TYPE_VBLOCK = BIGNUM_TYPE_LAST + 2; // 49
 
 	// _v_get ((ref null eq) vblock, i32 index) -> f64
-	static final int TYPE_V_GET = READER_TYPE_LAST + 3; // 46
+	static final int TYPE_V_GET = BIGNUM_TYPE_LAST + 3; // 50
 
 	// _v_set ((ref null eq) vblock, i32 index, f64 value) -> f64 (the value AS STORED)
-	static final int TYPE_V_SET = READER_TYPE_LAST + 4; // 47
+	static final int TYPE_V_SET = BIGNUM_TYPE_LAST + 4; // 51
 
 	// How many type entries the --simd block appends.
 	static final int SIMD_TYPE_COUNT = 4;
@@ -2693,8 +2733,33 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.write(Type.I32);
 				});
+				// type 44 (TYPE_BIGNUM): struct {i64 value} -- a boxed exact integer
+				// outside the i31 fixnum range. Own rec group; the only {i64} struct in
+				// the module, so ref.test discriminates it from every other value.
+				types.addRecGroup(
+						rec -> rec.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.I64))));
+				// type 45 (TYPE_INT_NEW): _int_new (i64) -> (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(1);
+					w.write(Type.I64);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
+				// type 46 (TYPE_INT_VAL): _int_val ((ref null eq)) -> i64
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(1);
+					w.write(Type.I64);
+				});
+				// type 47 (TYPE_PRINT_I64): _print_i64_no_nl (i64) -> ()
+				types.addFunc(new Type[] { Type.I64 }, new Type[] {});
 				if (this.simd) {
-					// type 44 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
+					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
 					// proposal, which is why it is gated on --simd.
 					types.add(w -> {
@@ -3030,6 +3095,10 @@ public final class WasmLispCompiler implements LispCompiler {
 													// idx) -> idx
 				fnDef.addFunction(TYPE_RAT_GET); // _rd_infer_rank (rows) -> i32
 				fnDef.addFunction(TYPE_RD_MEMEQ); // _rd_memeq (a, b, len) -> i32
+				// bignum helpers (FUNC_INT_NEW, FUNC_INT_VAL, FUNC_PRINT_I64_NO_NL)
+				fnDef.addFunction(TYPE_INT_NEW); // _int_new (i64) -> (ref null eq)
+				fnDef.addFunction(TYPE_INT_VAL); // _int_val ((ref null eq)) -> i64
+				fnDef.addFunction(TYPE_PRINT_I64); // _print_i64_no_nl (i64) -> ()
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -3440,6 +3509,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(rdFlatBody);
 				code.addFunction(rdInferBody);
 				code.addFunction(rdMemeqBody);
+				// bignum helper bodies (FUNC_INT_NEW, FUNC_INT_VAL, FUNC_PRINT_I64_NO_NL)
+				code.addFunction(WasmBignumRuntimeBuilder.buildIntNewBody());
+				code.addFunction(WasmBignumRuntimeBuilder.buildIntValBody());
+				code.addFunction(WasmBignumRuntimeBuilder.buildPrintI64NoNlBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

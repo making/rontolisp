@@ -54,21 +54,15 @@ final class WasmSignumCompiler {
 
 		ctx.writer.write(Instruction.ELSE);
 
-		// Integer/ratio path: (num > 0) - (num < 0) as an i31ref (_rat_num is the
-		// value itself for an i31 integer).
+		// Integer/ratio path: _rat_cmp(x, 0) already answers -1/0/1 and dispatches on
+		// the exact-integer (i31 or boxed i64) and ratio representations alike, where
+		// the old _rat_num shape would wrap a boxed integer's sign.
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(slot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
 		WasmMathHelper.constI32(ctx, 0);
-		ctx.writer.write(Instruction.I32_GT_S);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
-		WasmMathHelper.constI32(ctx, 0);
-		ctx.writer.write(Instruction.I32_LT_S);
-		ctx.writer.write(Instruction.I32_SUB);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_CMP);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 
 		ctx.writer.write(Instruction.END);

@@ -52,15 +52,35 @@ final class WasmIntConvCompiler {
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(ratioFunc);
 		ctx.writer.write(Instruction.ELSE);
-		// Integer/float path: convert through a f64.
+		// Exact-integer path: an i31 or boxed integer is already its own conversion
+		// (the f64 route below would trap on a value past the i32 range).
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(am.ik.wasm.Type.I31.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.I32_OR);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(am.ik.wasm.Type.REFNULL.code());
+		ctx.writer.writeHeapType(am.ik.wasm.Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.ELSE);
+		// Float path: apply the f64 rounding, then truncate to i64 and re-normalize
+		// (so a float past the i31 range converts to a boxed integer, not a trap).
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(tmpSlot);
 		WasmEmitHelper.castFloatGetF64(ctx);
 		if (f64RoundingOp >= 0) {
 			ctx.writer.write(f64RoundingOp);
 		}
-		ctx.writer.write(Instruction.I32_TRUNC_S_F64);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.I64_TRUNC_S_F64);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
 

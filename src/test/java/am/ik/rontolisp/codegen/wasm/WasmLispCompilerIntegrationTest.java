@@ -314,6 +314,65 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void exactIntegersBeyondI31PromoteToBoxedI64() throws Exception {
+		// The boxed exact-integer overflow path (TYPE_BIGNUM, .kb/wasm-bignum.md): an
+		// arithmetic or shift result outside the i31 fixnum range promotes to a boxed
+		// i64 value instead of silently wrapping, and a result that shrinks back into
+		// range demotes to a plain i31 (so ref.eq/eql fast paths stay valid). This is
+		// what unlocks unsigned 32-bit workloads (md5's #xEFCDAB89 magic constants and
+		// (ldb (byte 32 0) ...) sums) on both WASM backends.
+		String program = """
+				(print #xEFCDAB89)
+				(print (+ 1073741823 1))
+				(print (* 65536 65536))
+				(print (ash 1 32))
+				(print (ash 4294967296 -32))
+				(print (ldb (byte 32 0) (+ #xFFFFFFFF #xFFFFFFFF)))
+				(print (logior (ash #x12 24) (ash #x34 16) (ash #x56 8) #x78))
+				(print (lognot #xFFFFFFFF))
+				(print (mod 4294967296 10))
+				(print (truncate 4294967296))
+				(print (/ 4294967296 2))
+				(print (- 4294967296 4294967290))
+				(print (= 4294967296 4294967296))
+				(print (< 4294967295 4294967296))
+				(print (eql 4294967296 4294967296))
+				(print (equal (list 4294967296) (list 4294967296)))
+				(print (integerp 4294967296))
+				(print (evenp 4294967296))
+				(print (abs -4294967296))
+				(print (signum -4294967296))
+				(print (integer-length 4294967296))
+				(print (read-from-string "4294967296"))
+				(print (read-from-string "#xEFCDAB89"))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("""
+				4023233417
+				1073741824
+				4294967296
+				4294967296
+				1
+				4294967294
+				305419896
+				-4294967296
+				6
+				4294967296
+				2147483648
+				6
+				T
+				T
+				T
+				T
+				T
+				T
+				4294967296
+				-1
+				33
+				4294967296
+				4023233417""");
+	}
+
+	@Test
 	void floatModAndRemComputeCorrectly() throws Exception {
 		// Regression: float mod/rem on the GC backend used to miscompile. A literal float
 		// operand wrote an invalid f64 opcode (byte 0xff, there is no f64.rem), and a

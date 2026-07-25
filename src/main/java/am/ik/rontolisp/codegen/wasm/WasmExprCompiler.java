@@ -34,11 +34,7 @@ final class WasmExprCompiler {
 			ctx.asyncSpine = false;
 		}
 		switch (expr) {
-			case LispInteger i -> {
-				ctx.writer.write(Instruction.I32_CONST);
-				ctx.writer.writeSignedLeb128((int) i.value());
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-			}
+			case LispInteger i -> WasmEmitHelper.compileIntegerLiteral(i.value(), ctx);
 			case LispNil ignored -> {
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());

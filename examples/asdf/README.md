@@ -3,11 +3,7 @@
 These demos load REAL third-party Common Lisp libraries -- unmodified
 upstream sources -- through `asdf:load-system` and exercise their public API.
 All of them run identically on all four backends (interpreter, JVM,
-WASM Preview 1 and `--component`), except md5, which runs on the interpreter
-and the JVM only (its unsigned 32-bit arithmetic exceeds the WASM `i31`
-fixnum range), and cl-ppcre, which runs on the interpreter only (its scanner
-closures rely on named `block`/`return-from` crossing loops, which the
-compile backends keep lite); they are the programs the cross-backend E2E
+WASM Preview 1 and `--component`); they are the programs the cross-backend E2E
 tests pin (`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest`
 / `ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest` / `JzonE2eTest`
 / `Md5E2eTest` / `ClPpcreE2eTest`).
@@ -45,9 +41,8 @@ the demos run out of the box from the repository root:
 - `src/test/resources/assoc-utils/`
 - `src/test/resources/cl-base64/`
 - `src/test/resources/jzon/` (the `.asd` lives in its `src/` subdirectory)
-- `src/test/resources/md5/` (interpreter and JVM backends only: the MD5
-  working state needs unsigned 32-bit arithmetic beyond the WASM `i31` range)
-- `src/test/resources/cl-ppcre/` (interpreter only: named `block`/`return-from`)
+- `src/test/resources/md5/`
+- `src/test/resources/cl-ppcre/`
 
 Alternatively, download the same versions from upstream and point
 `--system-path` (or the `RONTOLISP_SOURCE_REGISTRY` environment variable) at

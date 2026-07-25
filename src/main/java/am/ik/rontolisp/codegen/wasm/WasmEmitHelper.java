@@ -91,6 +91,27 @@ final class WasmEmitHelper {
 		ctx.wasmCtrlDepth -= 2;
 	}
 
+	/**
+	 * Emits an exact-integer literal: an i31 for the fixnum range, else an i64 constant
+	 * boxed into a {@code TYPE_BIGNUM} struct (e.g. the {@code #xEFCDAB89} md5 magic
+	 * constants). Mirrors the runtime {@code _int_new} normalization, so a literal and a
+	 * computed value of the same magnitude share one representation.
+	 * @param value the integer value
+	 * @param ctx the compilation context
+	 */
+	static void compileIntegerLiteral(long value, WasmLispCompiler.Ctx ctx) {
+		if (value >= WasmBignumRuntimeBuilder.I31_MIN && value <= WasmBignumRuntimeBuilder.I31_MAX) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128((int) value);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			return;
+		}
+		ctx.writer.write(Instruction.I64_CONST);
+		ctx.writer.writeSignedLeb128(value);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+	}
+
 	static void castI31GetS(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(Type.I31.code());
@@ -138,8 +159,9 @@ final class WasmEmitHelper {
 
 	/**
 	 * Runtime type check: convert (ref eq) on stack to f64. If i31ref (integer), converts
-	 * via f64.convert_i32_s. If a ratio struct, divides numerator by denominator as f64.
-	 * If float_struct, extracts f64 field.
+	 * via f64.convert_i32_s. If a boxed integer ({@code TYPE_BIGNUM}), converts its i64
+	 * field. If a ratio struct, divides numerator by denominator as f64. If float_struct,
+	 * extracts f64 field.
 	 */
 	static void castFloatGetF64(WasmLispCompiler.Ctx ctx) {
 		int tmpSlot = ctx.allocTemp();
@@ -158,6 +180,22 @@ final class WasmEmitHelper {
 		ctx.writer.writeHeapType(Type.I31.code());
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 		ctx.writer.write(Instruction.F64_CONVERT_S_I32);
+		ctx.writer.write(Instruction.ELSE);
+		// boxed-integer path: convert the i64 field
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.F64);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.F64_CONVERT_S_I64);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(tmpSlot);
@@ -186,6 +224,7 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
@@ -315,9 +354,37 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(1);
 		ctx.writer.write(Instruction.ELSE);
-		// Both characters: compare code points; else fall back to symbol/string offset
-		emitCharCodePointEqOrElse(ctx, aSlot, bSlot, () -> emitStringEqOrZero(ctx, aSlot, bSlot));
+		// Both characters: compare code points; both boxed integers: compare i64 fields
+		// (the interpreter's eq compares value types by equals, so (eq #x100000000
+		// #x100000000) answers T on every backend); else fall back to symbol/string
+		// offset
+		emitCharCodePointEqOrElse(ctx, aSlot, bSlot,
+				() -> emitBignumEqOrElse(ctx, aSlot, bSlot, () -> emitStringEqOrZero(ctx, aSlot, bSlot)));
 		ctx.writer.write(Instruction.END); // end ref.eq if
+	}
+
+	/**
+	 * Emits {@code if both operands are TYPE_BIGNUM then i64 field == i64 field else
+	 * <fallback>}, leaving an i32 (0=false, 1=true) on the stack.
+	 */
+	private static void emitBignumEqOrElse(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot, Runnable elseBranch) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		emitBignumField(ctx, aSlot);
+		emitBignumField(ctx, bSlot);
+		ctx.writer.write(Instruction.I64_EQ);
+		ctx.writer.write(Instruction.ELSE);
+		elseBranch.run();
+		ctx.writer.write(Instruction.END); // end bignum if
 	}
 
 	/**
@@ -389,12 +456,30 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.END); // end ref.eq if
 	}
 
-	// Emits eql's non-char, non-ref.eq tail: TYPE_FLOAT value comparison, then
-	// TYPE_RATIO numerator+denominator comparison, then symbol/string offset compare.
-	// Leaves an i32 (0/1) on the stack. Extracted so the shared TYPE_CHAR helper can be
-	// used from both emitEqComparison and emitEqlComparison without duplicating the
-	// char-compare shape.
+	// Emits eql's non-char, non-ref.eq tail: TYPE_BIGNUM value comparison, TYPE_FLOAT
+	// value comparison, then TYPE_RATIO numerator+denominator comparison, then
+	// symbol/string offset compare. Leaves an i32 (0/1) on the stack. Extracted so the
+	// shared TYPE_CHAR helper can be used from both emitEqComparison and
+	// emitEqlComparison without duplicating the char-compare shape.
 	private static void emitEqlNonCharTail(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
+		// Both boxed integers: compare i64 fields (the _int_new normalization keeps
+		// every in-range integer an i31, so a boxed value only ever equals another
+		// boxed value)
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		emitBignumField(ctx, aSlot);
+		emitBignumField(ctx, bSlot);
+		ctx.writer.write(Instruction.I64_EQ);
+		ctx.writer.write(Instruction.ELSE);
 		// Both floats: compare f64 fields (float structs are value objects)
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(aSlot);
@@ -459,8 +544,20 @@ final class WasmEmitHelper {
 		emitStringEqOrZero(ctx, aSlot, bSlot);
 		ctx.writer.write(Instruction.END); // end ratio if
 		ctx.writer.write(Instruction.END); // end float if
+		ctx.writer.write(Instruction.END); // end bignum if
 		// end char if and end ref.eq if are emitted by the caller
 		// (emitCharCodePointEqOrElse and emitEqlComparison respectively).
+	}
+
+	// Pushes the i64 field of the TYPE_BIGNUM held in the given local.
+	private static void emitBignumField(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.writeSignedLeb128(0);
 	}
 
 	// Emits an i32 result: 1 if both slots are TYPE_STRING structs with the same data

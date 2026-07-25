@@ -10,7 +10,7 @@ In every backend `read` parses one S-expression from a line of stdin: blank and 
 
 The WASM reader has a hand-written parser and is narrower in its NUMBERS and its error MESSAGES:
 
-- **Integers are 31-bit.** Integer, ratio and radix tokens are parsed to `i31` and wrap on overflow; there is no big-integer parsing.
+- **Integers are 64-bit.** Integer and radix tokens are parsed exactly within the signed 64-bit range (a value past the 31-bit fixnum range becomes a boxed integer, matching the frontend) and wrap beyond it; ratio components stay 31-bit and there is no arbitrary-precision parsing.
 - **Floats have no exponent.** A decimal token (optional leading `-` or `+`, digits, one `.`, e.g. `1.0`, `-2.5`, `.5`, `5.`) parses to an `f64`-backed float. There is no exponent (`1e3`) support, and a token with two dots or any non-digit (e.g. `1.2.3`, `foo.bar`) stays a symbol.
 - **Error messages are static.** A reader error signals (catchably under `handler-case`), but the message is a fixed text without the offending name interpolated -- the JVM and the interpreter carry the frontend's exact messages.
 - **Symbol interning is runtime-backed.** Symbols that appear in the compiled program resolve to the same offset the compiled `eval` uses; symbols seen only at runtime (e.g. a lambda parameter inside a loaded file) are interned in a runtime table so repeated occurrences stay consistent.

@@ -3,14 +3,12 @@ package am.ik.rontolisp.e2e;
 import java.nio.file.Path;
 import java.util.List;
 
-import org.junit.jupiter.api.Disabled;
-
 /**
  * An ASDF subset integration target ({@code .kb/asdf.md}): the REAL md5 v2.0.4 sources
  * (vendored unmodified under {@code src/test/resources/md5}, public domain) load via
- * {@code asdf:load-system} and digest the RFC 1321 A.5 test vectors on the interpreter
- * and the JVM backend via {@link AsdfLibraryE2eSupport}. The library exercises the
- * two-argument {@code (float i 0.0d0)} prototype call, {@code logandc1}/{@code logandc2}/
+ * {@code asdf:load-system} and digest the RFC 1321 A.5 test vectors on ALL FOUR backends
+ * via {@link AsdfLibraryE2eSupport}. The library exercises the two-argument
+ * {@code (float i 0.0d0)} prototype call, {@code logandc1}/{@code logandc2}/
  * {@code logorc2}, {@code deftype} no-ops, {@code macrolet}, a {@code defmacro}-defined
  * accessor as a {@code setf} place, the BOA {@code (:constructor make-md5-state ())}
  * defstruct option with {@code :type}/{@code :read-only} slot options, a top-level
@@ -20,9 +18,10 @@ import org.junit.jupiter.api.Disabled;
  * {@code char-code-limit} &gt; 256).
  *
  * <p>
- * The two WASM backends are excluded: the MD5 working state is unsigned 32-bit arithmetic
- * ({@code #xEFCDAB89} magic constants, {@code (ldb (byte 32 0) ...)} sums), which does
- * not fit the WASM {@code i31} fixnum range.
+ * On the WASM backends the MD5 working state (unsigned 32-bit arithmetic:
+ * {@code #xEFCDAB89} magic constants, {@code (ldb (byte 32 0) ...)} sums) exercises the
+ * boxed exact-integer overflow path ({@code TYPE_BIGNUM}, {@code .kb/wasm-bignum.md}) --
+ * it does not fit the {@code i31} fixnum range.
  */
 class Md5E2eTest extends AsdfLibraryE2eSupport {
 
@@ -76,16 +75,6 @@ class Md5E2eTest extends AsdfLibraryE2eSupport {
 	@Override
 	protected String artifactName() {
 		return "Md5E2e";
-	}
-
-	@Override
-	@Disabled("md5 needs unsigned 32-bit arithmetic beyond the WASM i31 fixnum range")
-	void compilesAndRunsOnWasmPreview1() {
-	}
-
-	@Override
-	@Disabled("md5 needs unsigned 32-bit arithmetic beyond the WASM i31 fixnum range")
-	void compilesAndRunsOnWasmComponent() {
 	}
 
 }

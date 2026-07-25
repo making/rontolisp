@@ -33,6 +33,43 @@ cases:
       (print (+ (* 2 3) (- 10 4)))
     expected: |
       12
+  - name: exact-integers-beyond-the-i31-fixnum-range
+    source: |
+      (print #xEFCDAB89)
+      (print (+ 1073741823 1))
+      (print (* 65536 65536))
+      (print (ash 1 32))
+      (print (ldb (byte 32 0) (+ #xFFFFFFFF #xFFFFFFFF)))
+      (print (logior (ash #x12 24) (ash #x34 16) (ash #x56 8) #x78))
+      (print (lognot #xFFFFFFFF))
+      (print (mod 4294967296 10))
+      (print (truncate 4294967296))
+      (print (/ 4294967296 2))
+      (print (- 4294967296 4294967290))
+      (print (if (= 4294967296 4294967296) 'eq-yes 'eq-no))
+      (print (if (eql 4294967296 4294967296) 'eql-yes 'eql-no))
+      (print (if (integerp 4294967296) 'int-yes 'int-no))
+      (print (abs -4294967296))
+      (print (signum -4294967296))
+      (print (integer-length 4294967296))
+    expected: |
+      4023233417
+      1073741824
+      4294967296
+      4294967296
+      4294967294
+      305419896
+      -4294967296
+      6
+      4294967296
+      2147483648
+      6
+      EQ-YES
+      EQL-YES
+      INT-YES
+      4294967296
+      -1
+      33
   - name: comparison-operators-verified-via-if
     source: |
       (print (if (= 1 1) 42 99))

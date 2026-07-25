@@ -237,11 +237,7 @@ final class WasmQuoteCompiler {
 
 	private static void compileQuotedVal(LispVal val, WasmLispCompiler.Ctx ctx) {
 		switch (val) {
-			case LispInteger i -> {
-				ctx.writer.write(Instruction.I32_CONST);
-				ctx.writer.writeSignedLeb128((int) i.value());
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-			}
+			case LispInteger i -> WasmEmitHelper.compileIntegerLiteral(i.value(), ctx);
 			case am.ik.rontolisp.LispRatio r -> {
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(r.numerator().intValue());

@@ -60,13 +60,14 @@ component behaving the same under `wasmtime` and under stricter binding
 generators such as `jco`.
 
 The representable range is the declared type's own, on every backend. With the
-default (GC) backend integers are an `i31ref` widening to a float past that
-range, so a `:u32` argument of `3000000000` reaches the Lisp code as the exact
-float `3000000000.0` — and note that integer arithmetic *below* the `i31` range
-still wraps there (the WASM backend uses 31-bit integers with no promotion), so
-`(+ x 1)` on a `:u32` argument of `1073741823` traps at the boundary rather than
-reporting a wrong number. On the non-GC backend (`--no-gc`) integers are computed
-as `i64`, so the whole family up to `:s64`/`:u64` crosses with no such caveat.
+default (GC) backend an incoming integer is an `i31ref` widening to a float past
+that range, so a `:u32` argument of `3000000000` reaches the Lisp code as the
+exact float `3000000000.0`; integer arithmetic inside the Lisp code is exact
+through the signed 64-bit range (a result past the `i31` fixnum range promotes
+to a boxed integer, so `(+ x 1)` on a `:u32` argument of `1073741823` returns
+`1073741824` exactly), and only a result the declared type cannot state traps at
+the boundary. On the non-GC backend (`--no-gc`) integers are computed as `i64`,
+so the whole family up to `:s64`/`:u64` crosses with no float widening.
 
 ## Limitations
 
