@@ -2278,6 +2278,15 @@ public final class LispNames {
 	/** The {@code with-input-from-string} macro (read from a string as a stream). */
 	public static final String WITH_INPUT_FROM_STRING = "WITH-INPUT-FROM-STRING";
 
+	/**
+	 * The {@code with-standard-io-syntax} macro. Expands to {@code progn} of its body:
+	 * every reader/printer control variable Common Lisp asks it to rebind is, in
+	 * rontolisp, either informational or resolved before run time -- see
+	 * {@code LispMacroExpander#expandWithStandardIoSyntax} for the per-variable audit and
+	 * for when this has to stop being an identity.
+	 */
+	public static final String WITH_STANDARD_IO_SYNTAX = "WITH-STANDARD-IO-SYNTAX";
+
 	/** The internal {@code %make-string-output-stream} helper (string-builder stream). */
 	public static final String MAKE_STRING_OUTPUT_STREAM = "%MAKE-STRING-OUTPUT-STREAM";
 

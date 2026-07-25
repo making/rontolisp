@@ -2168,6 +2168,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandWriteChar(cons), env);
 				case LispNames.LOCALLY:
 					return eval(LispMacroExpander.expandLocally(cons), env);
+				case LispNames.WITH_STANDARD_IO_SYNTAX:
+					return eval(LispMacroExpander.expandWithStandardIoSyntax(cons), env);
 				case LispNames.FLET:
 					return eval(LispMacroExpander.expandFlet(preExpandLocalMacros(cons)), env);
 				case LispNames.LABELS:

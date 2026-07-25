@@ -27,7 +27,21 @@
                               :components ((:file "digest")))
                              (:module "macs"
                               :serial t
-                              :components ((:file "mac")))))))
+                              :components ((:file "mac")))
+                             ;; prng/prng.lisp and public-key/public-key.lisp are
+                             ;; ironclad/core components in the real .asd too, and are
+                             ;; kept here in the same position -- but as LEAF-MODULE
+                             ;; substitutions (eval/ShimLibraries): the real files pull
+                             ;; in the Fortuna CSPRNG resp. 3,065 lines of RSA/DSA/ECC.
+                             ;; The shims expose the three names the slice actually
+                             ;; needs: random-data (signals), octets-to-integer and
+                             ;; integer-to-octets (verbatim from the original).
+                             (:module "prng"
+                              :serial t
+                              :components ((:file "prng")))
+                             (:module "public-key"
+                              :serial t
+                              :components ((:file "public-key")))))))
 
 (defsystem "ironclad/digest/sha256"
   :depends-on ("ironclad/core")
@@ -60,6 +74,14 @@
                 :components ((:module "kdf"
                               :components ((:file "hmac")))))))
 
+;;; password-hash.lisp is the real file, unmodified: its pbkdf2-hash-password is
+;;; the entry point cl-postgres' SCRAM-SHA-256 authentication calls.
+(defsystem "ironclad/kdf/password-hash"
+  :depends-on ("ironclad/core" "ironclad/digest/sha256" "ironclad/kdf/pkcs5")
+  :components ((:module "src"
+                :components ((:module "kdf"
+                              :components ((:file "password-hash")))))))
+
 (defsystem "ironclad/kdfs"
   :depends-on ("ironclad/core" "ironclad/kdf/pkcs5" "ironclad/kdf/hmac")
   :components ((:module "src"
@@ -72,4 +94,5 @@
                "ironclad/mac/hmac"
                "ironclad/kdf/pkcs5"
                "ironclad/kdf/hmac"
+               "ironclad/kdf/password-hash"
                "ironclad/kdfs"))

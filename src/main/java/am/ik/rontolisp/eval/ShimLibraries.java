@@ -39,6 +39,18 @@ import org.jspecify.annotations.Nullable;
  * component file. Tradeoff: float text is rontolisp's cross-backend-identical shape, not
  * schubfach's shortest-round-trip string, and parsing extreme exponents is a few ulps off
  * eisel-lemire's exact rounding.
+ *
+ * <p>
+ * ironclad's core carries two more leaves, for a different reason: the file is not
+ * unportable, it is merely far too big to drag in for the handful of names the loadable
+ * slice needs. {@code src/public-key/public-key.lisp} is 3,065 lines of RSA/DSA/ECC of
+ * which the slice wants exactly the two integer/octet-vector converters cl-postgres'
+ * SCRAM client proof calls, so the shim reproduces those two VERBATIM and nothing else;
+ * {@code src/prng/prng.lisp} would pull in the Fortuna CSPRNG, and the slice needs only
+ * {@code random-data} to EXIST (it is the never-taken default of
+ * {@code pbkdf2-hash-password}'s {@code :salt}), so that shim signals rather than hand
+ * out non-cryptographic bytes under a name that promises unpredictability. See
+ * {@code .kb/asdf.md}.
  */
 public final class ShimLibraries {
 
@@ -56,7 +68,9 @@ public final class ShimLibraries {
 	 */
 	private static final Map<String, Map<String, String>> LEAF_MODULES = Map.of("com.inuoe.jzon",
 			Map.of("eisel-lemire.lisp", "jzon-eisel-lemire.lisp", "ratio-to-double.lisp", "jzon-ratio-to-double.lisp",
-					"schubfach.lisp", "jzon-schubfach.lisp"));
+					"schubfach.lisp", "jzon-schubfach.lisp"),
+			"ironclad/core", Map.of("src/prng/prng.lisp", "ironclad-prng.lisp", "src/public-key/public-key.lisp",
+					"ironclad-public-key.lisp"));
 
 	private static final Map<String, List<LispVal>> CACHE = new ConcurrentHashMap<>();
 

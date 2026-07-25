@@ -39,6 +39,7 @@ categories:
       - { slug: with-open-file, name: with-open-file }
       - { slug: with-output-to-string, name: with-output-to-string }
       - { slug: with-input-from-string, name: with-input-from-string }
+      - { slug: with-standard-io-syntax, name: with-standard-io-syntax }
       - { slug: check-type, name: check-type }
       - { slug: assert, name: assert }
       - { slug: declare, name: declare }

@@ -177,6 +177,24 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/ironclad-prng\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/ironclad-public-key\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/ironclad-slice\\.asd"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.GrayStreamsLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/gray\\.lisp"

@@ -42,10 +42,40 @@
 (let ((kdf (ironclad:make-kdf :pbkdf2 :digest :sha256)))
   (print (ironclad:byte-array-to-hex-string
           (ironclad:derive-key kdf (ironclad:ascii-string-to-byte-array "password")
-                               (ironclad:ascii-string-to-byte-array "salt") 4096 32)))
-  ;; RFC 7677's SCRAM-SHA-256 SaltedPassword -- the value a PostgreSQL client
-  ;; needs for SCRAM authentication
+                               (ironclad:ascii-string-to-byte-array "salt") 4096 32))))
+
+;; SCRAM-SHA-256 (RFC 7677 section 3), the sequence a PostgreSQL client runs to
+;; authenticate: SaltedPassword -> ClientKey -> StoredKey -> ClientSignature ->
+;; ClientProof. The proof step XORs two 32-byte digests as 256-bit INTEGERS, so
+;; it needs arbitrary-precision exact integers -- which every backend has.
+(defun scram-hmac (key message)
+  (ironclad:hmac-digest
+   (ironclad:update-hmac (ironclad:make-hmac key :sha256)
+                         (ironclad:ascii-string-to-byte-array message))))
+
+;; integer-to-octets returns the MINIMAL vector, so a proof whose high bytes
+;; cancel comes back shorter than 32 and has to be padded back on the left.
+(defun pad-octet-vector (vector desired-length)
+  (let ((length (length vector)))
+    (if (= desired-length length)
+        vector
+        (replace (make-array desired-length :element-type '(unsigned-byte 8) :initial-element 0)
+                 vector :start1 (- desired-length length)))))
+
+(let* ((salted (ironclad:pbkdf2-hash-password
+                (ironclad:ascii-string-to-byte-array "pencil")
+                :salt (ironclad:hex-string-to-byte-array "5b6d99689d12358eeca04b141236fa81")
+                :digest :sha256 :iterations 4096))
+       (nonce "rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0")
+       (auth-message (concatenate 'string
+                                  "n=user,r=rOprNGfwEbeRWgbNEkqO,r=" nonce
+                                  ",s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096,c=biws,r=" nonce))
+       (client-key (scram-hmac salted "Client Key"))
+       (stored-key (ironclad:digest-sequence :sha256 client-key))
+       (client-signature (scram-hmac stored-key auth-message)))
+  (print (ironclad:byte-array-to-hex-string salted))
   (print (ironclad:byte-array-to-hex-string
-          (ironclad:derive-key kdf (ironclad:ascii-string-to-byte-array "pencil")
-                               (ironclad:hex-string-to-byte-array "5b6d99689d12358eeca04b141236fa81")
-                               4096 32))))
+          (pad-octet-vector (ironclad:integer-to-octets
+                             (logxor (ironclad:octets-to-integer client-key)
+                                     (ironclad:octets-to-integer client-signature)))
+                            32))))

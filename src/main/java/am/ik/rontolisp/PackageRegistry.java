@@ -42,15 +42,15 @@ public final class PackageRegistry {
 			LispNames.EVAL_WHEN, LispNames.LOCALLY, LispNames.FLET, LispNames.LABELS, LispNames.MULTIPLE_VALUE_BIND,
 			LispNames.MULTIPLE_VALUE_LIST, LispNames.MULTIPLE_VALUE_CALL, LispNames.NTH_VALUE,
 			LispNames.MULTIPLE_VALUE_SETQ, LispNames.ROTATEF, LispNames.DESTRUCTURING_BIND,
-			LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING, LispNames.PUSHNEW, LispNames.DEFTYPE,
-			LispNames.DEFINE_CONDITION, LispNames.DEFINE_MODIFY_MACRO, LispNames.DEFINE_SETF_EXPANDER,
-			LispNames.DEFSETF, LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET,
-			LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN,
-			LispNames.SIGNAL, LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE,
-			LispNames.WITH_SLOTS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.WRITE_CHAR,
-			LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE,
-			LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.PRINT_UNREADABLE_OBJECT,
-			LispNames.WITH_PACKAGE_ITERATOR);
+			LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING, LispNames.WITH_STANDARD_IO_SYNTAX,
+			LispNames.PUSHNEW, LispNames.DEFTYPE, LispNames.DEFINE_CONDITION, LispNames.DEFINE_MODIFY_MACRO,
+			LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFSETF, LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE,
+			LispNames.MACROLET, LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT,
+			LispNames.COMPLEX, LispNames.WARN, LispNames.SIGNAL, LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE,
+			LispNames.SLOT_VALUE, LispNames.WITH_SLOTS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS,
+			LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF,
+			LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND,
+			LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via

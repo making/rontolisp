@@ -70,6 +70,7 @@ public final class LispMacroExpander {
 			case LispNames.EVAL_WHEN -> expandEvalWhen(cons);
 			case LispNames.WRITE_CHAR -> expandWriteChar(cons);
 			case LispNames.LOCALLY -> expandLocally(cons);
+			case LispNames.WITH_STANDARD_IO_SYNTAX -> expandWithStandardIoSyntax(cons);
 			case LispNames.FLET -> expandFlet(cons);
 			case LispNames.LABELS -> expandLabels(cons);
 			case LispNames.MULTIPLE_VALUE_BIND -> expandMultipleValueBind(cons);
@@ -13460,6 +13461,42 @@ public final class LispMacroExpander {
 			start++;
 		}
 		List<LispVal> body = parts.subList(start, parts.size());
+		if (body.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		if (body.size() == 1) {
+			return body.get(0);
+		}
+		return makeProgn(body);
+	}
+
+	/**
+	 * Expands {@code (with-standard-io-syntax body...)} to {@code (progn body...)}.
+	 *
+	 * <p>
+	 * Common Lisp defines this as a dynamic binding of the whole reader/printer control
+	 * set to standard values. rontolisp has no variable in that set whose value can
+	 * differ from its standard one at run time, so the binding has nothing to do:
+	 * {@code *package*} is resolved to the current package by {@code PackageResolver}
+	 * before the program runs and is not a run-time cell at all;
+	 * {@code *read-default-float-format*} is informational (every float shares the one
+	 * double representation, see {@link LispNames#READ_DEFAULT_FLOAT_FORMAT});
+	 * {@code *print-circle*} and {@code *readtable*} are predefined so library code
+	 * reading them loads, and no printer or reader consults them; the remaining standard
+	 * variables ({@code *print-base*}, {@code *print-escape*}, {@code *read-base*}, ...)
+	 * do not exist, which is the same as being permanently standard.
+	 *
+	 * <p>
+	 * That is the reason, and it is also the trigger to revisit: the FIRST reader or
+	 * printer control variable this implementation starts to honor at run time must be
+	 * bound here, or a {@code with-standard-io-syntax} body will silently inherit the
+	 * caller's setting.
+	 * @param cons the with-standard-io-syntax expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithStandardIoSyntax(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> body = parts.subList(1, parts.size());
 		if (body.isEmpty()) {
 			return LispNil.INSTANCE;
 		}

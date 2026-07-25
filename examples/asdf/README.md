@@ -28,7 +28,7 @@ rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src
 | [`jzon-demo.lisp`](jzon-demo.lisp) | com.inuoe.jzon v1.1.4 (MIT) | <https://github.com/Zulu-Inuoe/jzon> |
 | [`md5-demo.lisp`](md5-demo.lisp) | md5 v2.0.4 (public domain) | <https://github.com/pmai/md5> |
 | [`cl-ppcre-demo.lisp`](cl-ppcre-demo.lisp) | cl-ppcre v2.1.2 (BSD 2-Clause) | <https://github.com/edicl/cl-ppcre> |
-| [`ironclad-demo.lisp`](ironclad-demo.lisp) | ironclad v0.61, SHA-256/HMAC/PBKDF2/HKDF slice (BSD 3-Clause) | <https://github.com/sharplispers/ironclad> |
+| [`ironclad-demo.lisp`](ironclad-demo.lisp) | ironclad v0.61, SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice (BSD 3-Clause) | <https://github.com/sharplispers/ironclad> |
 
 ## Where the libraries come from
 
@@ -44,7 +44,7 @@ the demos run out of the box from the repository root:
 - `src/test/resources/jzon/` (the `.asd` lives in its `src/` subdirectory)
 - `src/test/resources/md5/`
 - `src/test/resources/cl-ppcre/`
-- `src/test/resources/ironclad/` (the SHA-256/HMAC/PBKDF2/HKDF slice only; its executable
+- `src/test/resources/ironclad/` (the SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice only; its executable
   `ironclad.asd` is kept for provenance but a bundled replacement is what loads)
 
 Alternatively, download the same versions from upstream and point

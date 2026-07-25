@@ -31,9 +31,9 @@ backends instead of through a shim (see blocker 4 and the milestones).
 parked with the M2 JDK-backed crypto shims (dead: the real libraries load) plus
 an M4 pre-work batch whose useful parts have since landed on develop
 independently -- source-file `#.` (2026-07-18), the `find-package` fold and
-`defgeneric` inline `:method` (2026-07-25). Only `with-standard-io-syntax` and
-`encode-universal-time` remain unimplemented, and both are tens of lines
-(blocker 5). Recommendation: start M4 fresh from develop rather than revive a
+`defgeneric` inline `:method` (2026-07-25), `with-standard-io-syntax`
+(2026-07-25, with `.todo/175`). Only `encode-universal-time` remains
+unimplemented, and it is tens of lines (blocker 5). Recommendation: start M4 fresh from develop rather than revive a
 branch last exercised before todo-116 shipped.
 
 Iterate with the cached copy in
@@ -97,19 +97,13 @@ Iterate with the cached copy in
      `eval/AsdOverrides` substitutes a hand-authored replacement while keeping
      the real sources). **The JDK-backed shim strategy is dead** -- that was
      the frozen `cl-postgres-wip` M2's whole reason to exist.
-     Residual gap, now owned by **`.todo/175`**: of the nine `ironclad:` names
-     `scram.lisp` calls, six are in the slice and THREE are not
-     (`pbkdf2-hash-password`, `integer-to-octets`, `octets-to-integer`) -- the
-     route for each is written up there, along with the measured reason a
-     four-backend SCRAM needs `.todo/174` (arbitrary-precision integers on WASM)
-     first. **Order decision (user, 2026-07-25): all four backends, so
-     174 -> 175 -> this item.** Two consequences for M4 sequencing:
-     - An undefined function is a COMPILE-time error on the JVM/WASM backends
-       (measured), so cl-postgres cannot be COMPILED until those three names
-       exist -- even for a trust-auth connection that never runs SCRAM. Only the
-       interpreter defers it to the call.
-     - SCRAM is still the LAST auth method in M5's order, so 175 gates the
-       compile paths, not the first interpreter round-trip.
+     Residual gap: CLOSED by `.todo/175` (2026-07-25). All nine `ironclad:`
+     names `scram.lisp` calls are now in the slice on all four backends --
+     `pbkdf2-hash-password` from the real `password-hash.lisp`, and
+     `octets-to-integer`/`integer-to-octets` as a two-function leaf shim over
+     `public-key.lisp`; `IroncladE2eTest` pins RFC 7677 section 3 end to end
+     (see `.kb/asdf.md`). **Order decision (user, 2026-07-25): all four
+     backends, so 174 -> 175 -> this item**, and both are done.
      Widening the slice further (ciphers / public-key / prng / the other digests)
      is NOT planned -- the next real consumer decides. `dotimes-unrolled` users
      stay out until then: its DEFINITION loads, but no expansion of it does
@@ -122,8 +116,10 @@ Iterate with the cached copy in
      ...))` in `interpret.lisp:427`, so the file cannot load without it.
    - **`force-output`** (16 sites, incl. `protocol.lisp:193` on the exec-query
      path) -- a no-op is correct, socket writes are unbuffered.
-   - **`with-standard-io-syntax`** (3 sites, e.g. inside the `intern` call at
-     `communicate.lisp:10`) -- a lite `progn` is enough.
+   - ~~**`with-standard-io-syntax`** (3 sites, e.g. inside the `intern` call
+     at `communicate.lisp:10`)~~ -- DONE 2026-07-25 (with `.todo/175`): a
+     `progn` identity, since no reader/printer control variable in rontolisp can
+     differ from its standard value at run time.
    - **`(listen socket)`** (1 site, `protocol.lisp:232`, the MITM check) --
      needs an `InputStream.available()`-style primitive. A nil-returning stub
      silently DISABLES that security check, so decide deliberately.
@@ -141,8 +137,7 @@ Iterate with the cached copy in
    subset; expect `:for x :across vector`, `:collect ... :into`, multi-clause
    forms. Inventory the failing shapes by iterating file loads and extend
    `expandLoop` case by case.
-8. **Misc**: `with-standard-io-syntax` (3, in sql-string printing — lite
-   no-op progn is probably acceptable), `scale-float` (1, ieee-floats.lisp;
+8. **Misc**: `scale-float` (1, ieee-floats.lisp;
    cl-postgres bundles its own float codec — check `ieee-floats.lisp`
    actually compiles), int8/OID values need arithmetic beyond i31 on WASM
    (bignum path exists on interpreter/JVM; WASM floats — acceptable, document).
@@ -159,10 +154,10 @@ Iterate with the cached copy in
   `:depends-on` chain resolves with no network beyond the tarballs.
   **Recommendation: abandon the frozen `cl-postgres-wip` branch rather than
   re-run it.** Its main content was the M2 JDK shims, which are now dead
-  weight; of its M4 pre-work, `#.`/`find-package`/`defgeneric :method` are on
-  develop already and only `with-standard-io-syntax` + `encode-universal-time`
-  are missing -- cheaper to add fresh (see blocker 5) than to revive a
-  stale branch.
+  weight; of its M4 pre-work, `#.`/`find-package`/`defgeneric :method` and
+  `with-standard-io-syntax` are on develop already and only
+  `encode-universal-time` is missing -- cheaper to add fresh (see blocker 5)
+  than to revive a stale branch.
 - **M3 (conditions + unwind-protect)**: todo-116. Gate: `errors.lisp` +
   `protocol.lisp` load; `handler-case` over `database-error` works on the
   interpreter.

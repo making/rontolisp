@@ -1205,7 +1205,7 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WRITE-CHAR)
+      (AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY UNWIND-PROTECT WHILE)
       307
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
@@ -4860,3 +4860,46 @@ cases:
       1899447441
       "aza"
       (IF T 1 NIL)
+
+  - name: scram-client-proof-arithmetic
+    source: |
+      ;; with-standard-io-syntax is an identity wrapper here: every reader/printer
+      ;; control variable Common Lisp asks it to rebind is, in rontolisp, either
+      ;; resolved before run time or informational, so it evaluates its body as a
+      ;; progn and returns the last value.
+      (print (with-standard-io-syntax (prin1-to-string (list 1 2 3))))
+      (print (with-standard-io-syntax 1 2 42))
+      ;; The SCRAM-SHA-256 client proof shape: two 32-byte digests XORed as 256-bit
+      ;; integers, converted back to the MINIMAL octet vector, then padded back out.
+      ;; Exact at 256 bits on every backend.
+      (let* ((scram-x (- (ash 1 256) 1))
+             (scram-z (logxor scram-x (ash 1 255))))
+        (print (list (integer-length scram-x) (integer-length scram-z)))
+        (print (= scram-z (- scram-x (ash 1 255)))))
+      (defun scram-octets-to-integer (v)
+        (let ((sum 0))
+          (dotimes (i (length v) sum)
+            (setq sum (+ (ash sum 8) (aref v i))))))
+      (defun scram-integer-to-octets (n)
+        (let* ((bits (integer-length n))
+               (bytes (ceiling bits 8))
+               (out (make-array bytes :initial-element 0)))
+          (dotimes (i bytes out)
+            (setf (aref out i) (ldb (byte 8 (* 8 (- bytes 1 i))) n)))))
+      (defun scram-pad (v n)
+        (let ((out (make-array n :initial-element 0)))
+          (dotimes (i (length v) out)
+            (setf (aref out (+ i (- n (length v)))) (aref v i)))))
+      ;; the leading-zero edge: the high bytes cancel, so the round trip comes back
+      ;; SHORT and only the pad restores the width a proof must have
+      (let ((scram-p (logxor (scram-octets-to-integer #(90 90 1 2))
+                             (scram-octets-to-integer #(90 90 125 2)))))
+        (print (scram-integer-to-octets scram-p))
+        (print (scram-pad (scram-integer-to-octets scram-p) 4)))
+    expected: |
+      "(1 2 3)"
+      42
+      (256 255)
+      T
+      #(124 0)
+      #(0 0 124 0)

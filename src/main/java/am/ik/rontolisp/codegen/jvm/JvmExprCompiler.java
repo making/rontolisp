@@ -936,6 +936,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx, className);
 				case LispNames.LOCALLY ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandLocally(cons), ctx, className);
+				case LispNames.WITH_STANDARD_IO_SYNTAX ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithStandardIoSyntax(cons), ctx, className);
 				case LispNames.WRITE_CHAR ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWriteChar(cons), ctx, className);
 				case LispNames.FLET -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFlet(cons), ctx, className);

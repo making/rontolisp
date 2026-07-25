@@ -970,6 +970,8 @@ final class WasmExprCompiler {
 				case LispNames.THE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandThe(cons), ctx);
 				case LispNames.EVAL_WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx);
 				case LispNames.LOCALLY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLocally(cons), ctx);
+				case LispNames.WITH_STANDARD_IO_SYNTAX ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithStandardIoSyntax(cons), ctx);
 				case LispNames.WRITE_CHAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWriteChar(cons), ctx);
 				case LispNames.FLET -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFlet(cons), ctx);
 				case LispNames.LABELS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLabels(cons), ctx);
