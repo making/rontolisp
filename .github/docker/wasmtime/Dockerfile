@@ -8,7 +8,7 @@
 # Bump WASMTIME_VERSION here and the tag in WasmtimeSupport.IMAGE together.
 FROM debian:bookworm-slim
 
-ARG WASMTIME_VERSION=v46.0.1
+ARG WASMTIME_VERSION=v46.0.2
 
 # curl and ca-certificates stay installed at run time: an http-handler test curls
 # the served component under `wasmtime serve`.
