@@ -380,4 +380,102 @@ class UserMacroExpanderTest {
 				""")).isEqualTo("(SETF (FOO) 3)\n(PRINT (+ 1 1))");
 	}
 
+	// --- lazy macro-time globals (defvar value expressions run only if read) ---
+
+	@Test
+	void defvarValueExpressionIsNotEvaluatedWhenNoMacroReadsIt() {
+		// The init form of *TABLE* would set *WITNESS*; nothing reads *TABLE* at
+		// expansion time, so the init never runs and the macro sees *WITNESS* untouched.
+		// This is the whole compile-time win: a library's load-time table building stays
+		// in the compiled program instead of also running in the macro-time interpreter.
+		assertThat(expand("""
+				(defvar *witness* :untouched)
+				(defvar *table* (progn (setq *witness* :init-ran) 42))
+				(defmacro witness () (list 'quote *witness*))
+				(print (witness))
+				""")).endsWith("(PRINT (QUOTE :UNTOUCHED))");
+	}
+
+	@Test
+	void defvarValueExpressionIsEvaluatedWhenAMacroReadsIt() {
+		// The converse, and the reason the registration cannot simply be skipped: a macro
+		// body reading the global at expansion time still gets the computed value.
+		assertThat(expand("""
+				(defvar *n* (+ 40 2))
+				(defmacro n () *n*)
+				(print (n))
+				""")).endsWith("(PRINT 42)");
+	}
+
+	@Test
+	void forcingOneMacroTimeGlobalForcesTheOnesItsValueReads() {
+		// A pending value expression that reads another pending global forces it in turn.
+		assertThat(expand("""
+				(defvar *a* 6)
+				(defvar *b* (* *a* 7))
+				(defmacro b () *b*)
+				(print (b))
+				""")).endsWith("(PRINT 42)");
+	}
+
+	@Test
+	void aSecondDefvarDoesNotReplaceAPendingValueExpression() {
+		// defvar is idempotent whether or not the first value expression has been forced
+		// yet -- a pending registration counts as bound.
+		assertThat(expand("""
+				(defvar *x* 1)
+				(defvar *x* 2)
+				(defmacro x () *x*)
+				(print (x))
+				""")).endsWith("(PRINT 1)");
+	}
+
+	@Test
+	void defparameterReplacesAPendingValueExpression() {
+		// defparameter always (re)assigns, so its expression supersedes the pending one.
+		assertThat(expand("""
+				(defvar *x* 1)
+				(defparameter *x* 2)
+				(defmacro x () *x*)
+				(print (x))
+				""")).endsWith("(PRINT 2)");
+	}
+
+	@Test
+	void readEvalMarkerForcesAMacroTimeGlobal() {
+		// The #. channel is the second reader of macro-time globals (cl-ppcre's
+		// (declare #.*standard-optimize-settings*)), and it forces like a macro body.
+		String expanded = UserMacroExpander.expand(LispReader.readAllWithReadEvalMarkers("""
+				(defvar *settings* '(speed 3))
+				(defmacro m (x) x)
+				(print (m '#.*settings*))
+				""", am.ik.rontolisp.reader.Features.JVM))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(expanded).endsWith("(PRINT (QUOTE (SPEED 3)))");
+	}
+
+	@Test
+	void aValueExpressionThatCannotEvaluateLeavesTheNameUnbound() {
+		// The error contract is unchanged, only relocated: the expression is reported and
+		// skipped, and the reading macro sees an unbound variable.
+		assertThatThrownBy(() -> expand("""
+				(defvar *broken* (no-such-function-here))
+				(defmacro use () *broken*)
+				(print (use))
+				""")).hasMessageContaining("*BROKEN*").hasMessageContaining("unbound");
+	}
+
+	@Test
+	void aValueExpressionThatCannotEvaluateIsHarmlessWhenNoMacroReadsIt() {
+		// ... and a program that never reads it compiles cleanly, where the eager
+		// registration used to warn about every such definition.
+		assertThat(expand("""
+				(defvar *broken* (no-such-function-here))
+				(defmacro m (x) `(+ ,x 1))
+				(print (m 1))
+				""")).endsWith("(PRINT (+ 1 1))");
+	}
+
 }

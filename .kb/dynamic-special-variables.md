@@ -146,6 +146,17 @@ it on all backends (pinned in `ci-spec.yaml`, the three backend tests, and
   auto-detected and replayed, deny-by-default so no external effect double-runs.
   It is a "macro-time configuration" concern, orthogonal to runtime dynamic
   binding. Details: `.kb/asdf.md` (cl-who paragraph).
+- **A macro-time global's VALUE is demand-driven; its SPECIAL proclamation is
+  not.** `LispEvaluator.registerLazyGlobal` adds the name to `specialVars` at
+  once but parks the value expression as a thunk
+  (`Environment.defineLazy`), so a `defvar` nobody reads at expansion time never
+  runs its init there. Two couplings hold the replay together and both fail
+  SILENTLY (wrong value, not a crash) if broken: `Environment.isBound` must count
+  a pending thunk -- `isGlobalOrSpecialVariable` is half of the purity walk's
+  "is this config state" test, and `defvar` idempotence rides on it -- and
+  `Environment.set` must DISCARD a pending thunk, or the replayed
+  `(setf *html-mode* :html5)` is later overwritten by the original `defvar`
+  default when something forces the stale expression.
 
 ## Tests
 

@@ -207,10 +207,16 @@ public final class UserMacroExpander {
 	 * reads {@code *html-mode*} and friends). A top-level {@code progn} is walked member
 	 * by member (a macrolet whose body defines defuns expands into one, and the compilers
 	 * flatten it the same way), evaluating ONLY the definition members. Every form stays
-	 * in the program for the compilers' own splice; a defvar/defparameter whose value
-	 * expression cannot evaluate at macro time (e.g. it needs runtime-only state) is
-	 * skipped with a warning instead of failing the compile -- macros reading that global
-	 * would fail later, plain runtime uses are unaffected.
+	 * in the program for the compilers' own splice.
+	 * <p>
+	 * The defvar family is registered LAZILY (see
+	 * {@link LispEvaluator#registerLazyGlobal}): the name is proclaimed special at once
+	 * but its value expression runs only if an expansion actually reads the global. A
+	 * library that builds its tables in a top-level {@code defvar} therefore builds them
+	 * once, in the compiled program, instead of once here and once again at run time. A
+	 * value expression that cannot evaluate at macro time (e.g. it needs runtime-only
+	 * state) is skipped with a warning instead of failing the compile -- macros reading
+	 * that global would fail later, plain runtime uses are unaffected.
 	 */
 	private static void registerMacroTimeDefinitions(LispVal form, LispEvaluator macroEval) {
 		if (isOperator(form, LispNames.PROGN) && form instanceof LispCons progn && progn.isProperList()) {
@@ -227,15 +233,7 @@ public final class UserMacroExpander {
 		}
 		if (isOperator(form, LispNames.DEFVAR) || isOperator(form, LispNames.DEFPARAMETER)
 				|| isOperator(form, LispNames.DEFCONSTANT)) {
-			try {
-				macroEval.evalResolved(form);
-			}
-			catch (RuntimeException ex) {
-				System.err.println("warning: skipping macro-time evaluation of "
-						+ (form instanceof LispCons cons && cons.cdr() instanceof LispCons nameCell
-								? cons.car().print() + " " + nameCell.car().print() : form.print())
-						+ ": " + ex.getMessage());
-			}
+			macroEval.registerLazyGlobal(form);
 		}
 	}
 

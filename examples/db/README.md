@@ -20,10 +20,13 @@ Runs on the **interpreter and the JVM backend**:
 rontolisp examples/db/postgres-hello.lisp -o Prog.class && java Prog
 ```
 
-Either way the first run is slow: `ql:quickload` pulls md5, split-sequence,
-ironclad, cl-base64, cl-ppcre, uax-15 and alexandria, and uax-15 parses
-UnicodeData.txt at load time. `trust`, `password` and `md5` authentication all
-complete on both. SCRAM-SHA-256 completes too, but on the INTERPRETER only when
+`ql:quickload` pulls md5, split-sequence, ironclad, cl-base64, cl-ppcre, uax-15
+and alexandria; the first run also downloads them into `~/.rontolisp/quicklisp`.
+Compiling takes seconds, and so does running the compiled program -- but running
+this on the INTERPRETER takes several minutes, because uax-15 parses
+UnicodeData.txt at load time and the interpreter does that work every run.
+Compile it if you are going to run it more than once. `trust`, `password` and
+`md5` authentication all complete on both. SCRAM-SHA-256 completes too, but on the INTERPRETER only when
 the server allows enough time: its 4096-round PBKDF2 outruns the default
 60-second `authentication_timeout` in interpreted Lisp, so start the server with
 `-c authentication_timeout=600` for it. The compiled backend has no such

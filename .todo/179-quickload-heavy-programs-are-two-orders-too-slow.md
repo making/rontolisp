@@ -72,38 +72,57 @@ same, because the cost is entirely in the shared CLI frontend. Compile time is
 linear in the baked file size (0.33 s per 20,000-character chunk, i.e. ~17 s/MB)
 purely because the interpreter re-reads it.
 
-### Spike: lazy macro-time globals (done, measured, reverted)
+### Lazy macro-time globals -- LANDED 2026-07-26
 
-Registered `defvar`/`defparameter`/`defconstant` value expressions as thunks in
-the macro-time evaluator's global environment (`Environment.defineLazy` +
-forcing in `lookup`/`lookupOrNull`, `isBound` counting a pending thunk,
-`define` clearing it) instead of evaluating them, so the init form runs only if
-a macro actually reads that variable at expansion time.
+`defvar`/`defparameter`/`defconstant` value expressions are registered as thunks
+in the macro-time evaluator's global environment (`Environment.defineLazy`,
+forced by `lookup`/`lookupOrNull`; `isBound` counts a pending thunk,
+`define`/`set` discard it, and a non-forcing `hasBinding` serves the existence
+probes in `boundp`/`find-symbol`). `LispEvaluator.registerLazyGlobal` is the
+registration site: the name is proclaimed special eagerly, only the value waits.
+A blanket SKIP (never evaluate) does NOT work and confirms the mechanism is
+load-bearing: it dies on `CL-PPCRE::*STANDARD-OPTIMIZE-SETTINGS* is unbound`
+(reached through the `#.` channel, not a macro body) and `MD5::*T* is unbound`.
+Lazy forcing serves them for a few microseconds each while never touching
+`*UNICODE-DATA*`.
 
-| | eager (HEAD) | lazy spike |
-| --- | --- | --- |
-| `(ql:quickload "uax-15")` -> `.class`, `java -jar` | 99.3 s | **1.78 s** |
-| `postgres-hello.lisp` -> component, `java -jar` | 100.4 s | **2.76 s** |
+Measured (same machine, `java -jar`, warm `~/.rontolisp/quicklisp`):
 
-Compiled output still runs correctly (the lazily-compiled component returns
-`((42 "hello"))` / `((1) (2) (3))` against live PostgreSQL), and
-`LispEvaluatorTest` + `JvmLispCompilerTest` + `ClWhoE2eTest` + `JzonE2eTest`
-pass with the lazy path forced on. A blanket SKIP (never evaluate) does not
-work and confirms the mechanism is load-bearing: it dies on
-`CL-PPCRE::*STANDARD-OPTIMIZE-SETTINGS* is unbound` and `MD5::*T* is unbound` --
-macros in those libraries read their globals at expansion time. Lazy forcing
-serves them for a few microseconds each while never touching `*UNICODE-DATA*`.
+| program -> output | eager | lazy | bytes |
+| --- | --- | --- | --- |
+| `(ql:quickload "uax-15")` -> `.class` | 173.5 s | **3.6 s** | identical |
+| same -> `.wasm` (Preview 1) | 157.8 s | **2.1 s** | identical |
+| same -> `--component --optimize` | 102.9 s | **1.5 s** | identical |
+| `postgres-hello.lisp` -> `.class` | 102 s | **6 s** | identical |
+| `postgres-hello.lisp` -> `--component --optimize` | 123 s | **4 s** | identical |
 
-**The one thing the spike did NOT settle, and the gate before landing:** the
-emitted component is NOT byte-identical between eager and lazy (same jar, same
-size, 1,147 bytes differ in one region starting at offset 5,219,037). The
-differing region is a run of `i32.const OFFSET / i32.const LEN / call 0x71`
-interned-string pairs -- an emitted list of symbol names whose contents and
-order change. Something downstream reads macro-time global state and bakes it;
-find it and decide whether it is an ordering artifact or a real behavior
-difference before this ships. Byte-identity of unaffected programs is the
-acceptance bar (`.kb/library-defun-pruning.md` and the EH-mode gate set the
-precedent).
+(The postgres-hello rows are the CONTROLLED comparison: both sides carry the
+determinism fix below, so they isolate laziness -- built by patching only the
+`registerLazyGlobal` call site back to the eager `evalResolved` and rebuilding.
+Against the UNFIXED jar the same program showed 1,560 / 1,177 differing bytes,
+which is exactly what the spike saw and attributed to laziness.)
+
+Ten probe programs (no defvar / pure defvar / macro-reads-a-global /
+symbols+intern / defstruct+CLOS / cl-ppcre / cl-who / md5 / split-sequence /
+macro-calls-a-defun), each compiled to BOTH a `.class` and a `.wasm`, are
+byte-identical before and after.
+
+**The gate the spike could not settle is settled, and it was a false alarm.**
+The 1,147-byte divergence is NOT caused by laziness: the emitter is
+nondeterministic across JVM runs, and always was. Compiling one four-line
+program with a runtime `subtypep` FOUR times with the SAME unmodified jar
+produces FOUR DIFFERENT modules. Cause: `LispMacroExpander.SUBTYPEP_PARENTS` was
+declared with `java.util.Map.ofEntries(...)`, and `Map.of`/`Set.of` randomize
+their iteration order once per JVM run (`ImmutableCollections.SALT`, seeded from
+`System.nanoTime` at class-init). That order flows through `subtypepUniverse` ->
+`subtypepAncestorTableForms` into the emitted `%subtypep-ancestor-table%`. The
+postgres-hello diff is exactly that table: the SAME 1,954 emitted strings in a
+different order (verified by disassembling both classes -- the multiset is
+identical, only the sequence differs). uax-15 alone never emits the table, which
+is why it was byte-identical either way. Fixed here by giving the lattice an
+insertion-ordered map (`LispMacroExpander.orderedMap`); the broader question of
+whether other `Map.of`/`Set.of` tables reach emitted output is being swept
+separately.
 
 ## Finding 2 -- run time: wasm-GC allocation cost scales with the live set
 
@@ -318,10 +337,13 @@ already have the machinery -- this is the same shape as
 
 ## Phases
 
-1. **Lazy macro-time globals** (Finding 1). Land the thunk mechanism, run down
-   the byte-identity divergence, add a pinning test that a program whose
-   `defvar` init is never read by a macro does not evaluate it at compile time
-   (assert on time, or on an observable side effect in the init form).
+1. ~~**Lazy macro-time globals** (Finding 1).~~ **DONE 2026-07-26** -- thunk
+   mechanism landed, divergence run down (a pre-existing emitter
+   nondeterminism, not laziness -- see above), pinned by eight tests in
+   `UserMacroExpanderTest` (an init that no macro reads never runs; the converse;
+   transitive forcing; `defvar` idempotence over a pending expression;
+   `defparameter` superseding it; the `#.` channel forcing; and both halves of
+   the failed-init contract) plus five mechanism tests in `EnvironmentTest`.
 2. **The uax-15 leaf-module lite (option B2)** -- spiked and measured above;
    what remains is productionizing it: derive the tables at compile time from
    the bundled data file rather than checking them in, chunk the data forms
@@ -340,10 +362,13 @@ already have the machinery -- this is the same shape as
    next visitor can tell whether it still holds. The spike suggests it is not
    needed for THIS program (0.31 s warm run already), so (A) should be judged on
    its own merits for other libraries, not carried by uax-15.
-7. **Re-measure and rewrite the docs.** `examples/db/README.md` and the header
-   of `examples/db/postgres-hello.lisp` both currently say "expect the first run
-   to take minutes"; that sentence is a bug report, not documentation. Replace
-   it with the real numbers once they are real.
+7. **Re-measure and rewrite the docs.** PARTLY DONE: phase 1 falsified the
+   "expect the first run to take minutes either way" sentence in
+   `examples/db/README.md` and the header of `examples/db/postgres-hello.lisp`
+   (compiling is now seconds), so both were corrected to say that the COMPILED
+   paths are fast and the INTERPRETER is the slow one. Revisit after phase 2 --
+   the interpreter's several minutes is uax-15's load, which the leaf-module
+   lite removes, and the component's ~30 s run is Finding 2.
 
 ## Notes worth not re-deriving
 

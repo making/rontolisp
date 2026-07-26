@@ -570,8 +570,9 @@ public final class LispEvaluator {
 			return switch (args.get(0)) {
 				case LispTrue ignored -> LispTrue.INSTANCE;
 				case LispNil ignored -> LispTrue.INSTANCE;
-				case LispSymbol sym -> sym.isKeyword() || this.dynamicBindings.isBound(sym.name())
-						|| this.globalEnv.lookupOrNull(sym.name()) != null ? LispTrue.INSTANCE : LispNil.INSTANCE;
+				case LispSymbol sym ->
+					sym.isKeyword() || this.dynamicBindings.isBound(sym.name()) || this.globalEnv.hasBinding(sym.name())
+							? LispTrue.INSTANCE : LispNil.INSTANCE;
 				default ->
 					throw new LispEvalException(LispNames.BOUNDP + " expects a symbol, got " + args.get(0).print());
 			};
@@ -639,7 +640,7 @@ public final class LispEvaluator {
 			String name = str.value();
 			boolean known = PackageRegistry.isClSymbol(name) || (!name.isEmpty() && name.charAt(0) == ':')
 					|| this.userMacros.containsKey(name) || this.globalEnv.lookupFunctionOrNull(name) != null
-					|| this.globalEnv.lookupOrNull(name) != null;
+					|| this.globalEnv.hasBinding(name);
 			return known ? new LispSymbol(name) : LispNil.INSTANCE;
 		}));
 		// intern overrides the package-blind Environment converter: a bare name is
@@ -1740,6 +1741,66 @@ public final class LispEvaluator {
 		catch (BlockReturnSignal signal) {
 			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
 		}
+	}
+
+	/**
+	 * Registers an already-resolved top-level
+	 * {@code defvar}/{@code defparameter}/{@code defconstant} into this evaluator WITHOUT
+	 * running its value expression: the expression is parked as a thunk in the global
+	 * environment and evaluated only if something READS the variable -- which, in the
+	 * {@code UserMacroExpander} pipeline this serves, means only if a macro body reads
+	 * the global at expansion time. Everything else about the definition is eager: the
+	 * name is proclaimed special immediately, and {@code defvar}'s idempotence still sees
+	 * a pending expression as bound.
+	 * <p>
+	 * The distinction is the whole compile-time cost of a library that builds tables at
+	 * load time: those value expressions are for the RUNTIME program, which compiles and
+	 * runs them itself, so evaluating them here as well was pure duplicated work. Only a
+	 * global that an expansion actually consults has to exist at macro time.
+	 * <p>
+	 * A value expression that fails to evaluate leaves the name unbound with a warning
+	 * (the same outcome as evaluating it eagerly and catching), reported at the point of
+	 * the read rather than at the definition.
+	 * @param expr the resolved top-level definition form
+	 */
+	public void registerLazyGlobal(LispVal expr) {
+		LispVal form = resolveStructLiterals(expr);
+		SpecialVarCollector.collectForm(form, this.specialVars);
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispSymbol name)) {
+			return;
+		}
+		this.specialVars.add(name.name());
+		// (defvar name) with no value form leaves the name unbound; defvar assigns only
+		// when unbound, defparameter/defconstant always (re)assign.
+		boolean force = !LispNames.DEFVAR.equals(op.name());
+		if (parts.size() <= 2 || (!force && this.globalEnv.isBound(name.name()))) {
+			return;
+		}
+		LispVal valueForm = parts.get(2);
+		// The expression runs later, under whatever in-package state the expander has
+		// reached by then, so the package current AT THE DEFINITION is captured and
+		// restored around the run: an init form calling (intern ...) must home its symbol
+		// into the package it was written in, exactly as evaluating it here would have.
+		String definingPackage = this.packageResolver.currentPackageName();
+		this.globalEnv.defineLazy(name.name(), () -> {
+			String savedPackage = this.packageResolver.currentPackageName();
+			this.packageResolver.setCurrentPackage(definingPackage);
+			try {
+				return eval(valueForm, this.globalEnv);
+			}
+			catch (RuntimeException ex) {
+				System.err.println("warning: skipping macro-time evaluation of " + op.print() + " " + name.print()
+						+ ": " + ex.getMessage());
+				return null;
+			}
+			finally {
+				this.packageResolver.setCurrentPackage(savedPackage);
+			}
+		});
 	}
 
 	/**

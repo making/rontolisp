@@ -30,7 +30,15 @@ Both are `LispMacroExpander` expansions (CL_MACROS; no per-backend codegen).
   unique names avoid same-name nesting entirely. Counter values differ between
   the analyzers'/interpreter's throwaway expansions and the compile one -- fine,
   every generated name is bound inside its own expansion (macroexpand output
-  diverges across backends like gensym, so no ci-spec macroexpand case).
+  diverges across backends like gensym, so no ci-spec macroexpand case). The
+  counter value also depends on HOW MUCH the macro-time evaluator evaluates,
+  which is demand-driven since macro-time globals went lazy
+  (`.kb/defmacro-backquote.md`): a `defvar` init that no macro reads no longer
+  bumps it. Same license -- names renumber, nothing rebinds -- but it means two
+  otherwise-identical compilers can emit different temp names, so a renumbering
+  in a diff is not by itself evidence of a behavior change. What IS a bug is a
+  compiler whose output varies between JVM RUNS of the same jar; see
+  `.kb/emitted-output-determinism.md`.
 - **Lambda lists are desugared in the expansion** via `LambdaLists.expand` (the
   native "required + &rest" shape + let* prologue): `LambdaLists.desugarProgram`
   does not look inside flet definition lists, and `FreeVarAnalyzer.extractParamNames`

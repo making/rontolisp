@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.DoubleUnaryOperator;
+import java.util.function.Supplier;
 
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDoubleFloatArray;
@@ -71,6 +72,13 @@ public final class Environment implements Scope {
 
 	private final Map<String, LispVal> functions;
 
+	/**
+	 * Value expressions registered by {@link #defineLazy} that have not been forced yet.
+	 * Allocated on first use: only the compile path's macro-time environment ever has
+	 * one, so an ordinary (per-call) environment pays a null check and no map.
+	 */
+	@Nullable private Map<String, Supplier<@Nullable LispVal>> pending;
+
 	@Nullable private final Environment parent;
 
 	/**
@@ -89,6 +97,12 @@ public final class Environment implements Scope {
 		if (val != null) {
 			return val;
 		}
+		if (this.pending != null) {
+			LispVal forced = force(name);
+			if (forced != null) {
+				return forced;
+			}
+		}
 		if (this.parent != null) {
 			return this.parent.lookup(name);
 		}
@@ -105,10 +119,80 @@ public final class Environment implements Scope {
 		if (val != null) {
 			return val;
 		}
+		if (this.pending != null) {
+			LispVal forced = force(name);
+			if (forced != null) {
+				return forced;
+			}
+		}
 		if (this.parent != null) {
 			return this.parent.lookupOrNull(name);
 		}
 		return null;
+	}
+
+	/**
+	 * Registers a value expression to be evaluated only if the name is actually read --
+	 * the compile path's macro-time globals (see
+	 * {@code UserMacroExpander.registerMacroTimeDefinitions}). Supersedes any current
+	 * value: a forced-then-redefined name goes back to pending, which is what
+	 * {@code defparameter} means.
+	 * <p>
+	 * COMPILE PATH ONLY. Forcing makes {@link #lookup} a writer, and this class is a
+	 * plain {@code HashMap} that the interpreter shares across the virtual threads of an
+	 * http handler. It is safe because the only producer -- {@code UserMacroExpander}'s
+	 * single-threaded macro-expansion pass -- runs before any program does; a runtime
+	 * environment never has a pending entry, and the extra null check is all it pays.
+	 * @param name the variable name
+	 * @param init supplies the value on first read; returns {@code null} to leave the
+	 * name unbound (its own diagnostic already reported)
+	 */
+	public void defineLazy(String name, Supplier<@Nullable LispVal> init) {
+		if (this.pending == null) {
+			this.pending = new HashMap<>();
+		}
+		this.bindings.remove(name);
+		this.pending.put(name, init);
+	}
+
+	/**
+	 * Evaluates a pending value expression, if any, and installs the result. The entry is
+	 * removed BEFORE the supplier runs, so an init form that reads its own variable sees
+	 * it unbound rather than recursing.
+	 * @return the forced value, or {@code null} when nothing was pending or the
+	 * expression declined to produce a value
+	 */
+	private @Nullable LispVal force(String name) {
+		Map<String, Supplier<@Nullable LispVal>> map = this.pending;
+		if (map == null) {
+			return null;
+		}
+		Supplier<@Nullable LispVal> init = map.remove(name);
+		if (init == null) {
+			return null;
+		}
+		LispVal value = init.get();
+		if (value == null) {
+			return null;
+		}
+		this.bindings.put(name, value);
+		return value;
+	}
+
+	/**
+	 * Whether a name has a value anywhere in this scope chain, WITHOUT running a pending
+	 * value expression. Existence tests ({@code boundp}, {@code find-symbol}) ask this
+	 * instead of {@link #lookupOrNull}: a name registered by {@link #defineLazy} is bound
+	 * -- its expression is what the value will be -- and forcing it merely to answer
+	 * "yes" would run arbitrary work for nothing.
+	 * @param name the variable name
+	 * @return {@code true} when the name has a value or a pending value expression
+	 */
+	public boolean hasBinding(String name) {
+		if (this.bindings.containsKey(name) || (this.pending != null && this.pending.containsKey(name))) {
+			return true;
+		}
+		return this.parent != null && this.parent.hasBinding(name);
 	}
 
 	/**
@@ -165,17 +249,22 @@ public final class Environment implements Scope {
 	 * @param value the value to bind
 	 */
 	public void define(String name, LispVal value) {
+		if (this.pending != null) {
+			this.pending.remove(name);
+		}
 		this.bindings.put(name, value);
 	}
 
 	/**
 	 * Returns whether a variable is bound in this environment (not including parent
-	 * scopes). Used by {@code defvar} to decide whether to assign the initial value.
+	 * scopes). Used by {@code defvar} to decide whether to assign the initial value. A
+	 * name whose value expression is still pending counts as bound -- {@code defvar} is
+	 * idempotent whether or not anything has read the variable yet.
 	 * @param name the variable name
 	 * @return {@code true} if the name is bound in this environment
 	 */
 	public boolean isBound(String name) {
-		return this.bindings.containsKey(name);
+		return this.bindings.containsKey(name) || (this.pending != null && this.pending.containsKey(name));
 	}
 
 	/**
@@ -184,7 +273,12 @@ public final class Environment implements Scope {
 	 * @param value the new value
 	 */
 	public void set(String name, LispVal value) {
-		if (this.bindings.containsKey(name)) {
+		if (this.bindings.containsKey(name) || (this.pending != null && this.pending.containsKey(name))) {
+			// An assignment supersedes a pending value expression outright: the init form
+			// would only be evaluated to have its result overwritten.
+			if (this.pending != null) {
+				this.pending.remove(name);
+			}
 			this.bindings.put(name, value);
 			return;
 		}
