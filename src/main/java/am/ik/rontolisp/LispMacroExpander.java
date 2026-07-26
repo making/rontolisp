@@ -15096,7 +15096,7 @@ public final class LispMacroExpander {
 	}
 
 	/** The immediate supertypes of each built-in type name ({@code subtypep} lattice). */
-	private static final java.util.Map<String, List<String>> SUBTYPEP_PARENTS = java.util.Map.ofEntries(
+	private static final java.util.Map<String, List<String>> SUBTYPEP_PARENTS = orderedMap(
 			java.util.Map.entry("FIXNUM", List.of("INTEGER")), java.util.Map.entry("BIGNUM", List.of("INTEGER")),
 			java.util.Map.entry("bit", List.of("INTEGER")), java.util.Map.entry("UNSIGNED-BYTE", List.of("INTEGER")),
 			java.util.Map.entry("SIGNED-BYTE", List.of("INTEGER")), java.util.Map.entry("INTEGER", List.of("RATIONAL")),
@@ -15106,6 +15106,27 @@ public final class LispMacroExpander {
 			java.util.Map.entry("NULL", List.of("SYMBOL", "LIST")), java.util.Map.entry("CONS", List.of("LIST")),
 			java.util.Map.entry("LIST", List.of("SEQUENCE")), java.util.Map.entry("STRING", List.of("VECTOR")),
 			java.util.Map.entry("VECTOR", List.of("ARRAY", "SEQUENCE")));
+
+	/**
+	 * An immutable map that iterates in DECLARATION order. {@code Map.of}/
+	 * {@code Map.ofEntries} deliberately randomize their iteration order once per JVM
+	 * run, so any table whose order reaches emitted output must not use them: it would
+	 * make the compiler emit a different (still correct) module for the same program on
+	 * every invocation, which silently destroys the byte-identity acceptance bar this
+	 * project checks changes against.
+	 * @param <K> the key type
+	 * @param <V> the value type
+	 * @param entries the entries, in the order they should iterate
+	 * @return an unmodifiable insertion-ordered map
+	 */
+	@SafeVarargs
+	private static <K, V> java.util.Map<K, V> orderedMap(java.util.Map.Entry<K, V>... entries) {
+		java.util.Map<K, V> map = new java.util.LinkedHashMap<>();
+		for (java.util.Map.Entry<K, V> entry : entries) {
+			map.put(entry.getKey(), entry.getValue());
+		}
+		return java.util.Collections.unmodifiableMap(map);
+	}
 
 	/** Collapses the type-name aliases the one runtime representation makes equal. */
 	private static String canonicalSubtypeName(String plain) {
