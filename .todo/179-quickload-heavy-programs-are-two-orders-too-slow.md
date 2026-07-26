@@ -420,30 +420,89 @@ worth its own item if it shows up again.
    derived tables sidestep `char-from-hexstring`, so `unicode-letter-p` is
    correct now (and pinned), but that is luck: the next library that pushes a
    feature and reads it back still takes the wrong branch silently.
-5. **cl-ppcre literal-pattern scanner hoisting** (Finding 2 / option C). The
-   ~1.8x is still on the table and still library-independent; nothing in phases
-   1-3 touched it.
-6. **Decide whether general (A) is still worth it** against the run time that
-   remains. The number to judge it against now exists: postgres-hello is 0.6 s
-   on the JVM and 2.2 s warm on the component, and the remaining component time
-   is module load plus the ~150k-iteration string scan of the derived data --
-   NOT re-executed library init. So (A) has no case left FOR THIS PROGRAM. Judge
-   it on the next library with load-time table building, and record the decision
-   with its reason in `.kb/`.
-   A cheaper idea surfaced while doing phase 2 and is worth costing out first,
-   because it is GENERAL where (A) needs a serializability judgment:
-   **`LibraryDefunPruner` already knows `get-illegal-char-list` is unreachable**
-   -- a rule for "a top-level `let`/`let*` whose body's only definitions are
-   pruned defuns is itself dead" would delete such blocks (and cl-ppcre's
-   `(let* ((scanner (create-scanner ...))) (defun ...))` idiom) with no data
-   derivation at all. It needs a sound purity side-condition for the non-defun
-   forms in the `let` body; that is the whole question.
-7. **Re-measure and rewrite the docs.** DONE for this seed case:
+5. ~~**cl-ppcre literal-pattern scanner hoisting** (Finding 2 / option C).~~
+   **DONE 2026-07-26** -- and NOT as a cl-ppcre-specific hoist. The essential fix
+   was to stop dropping two CL facilities the library already uses to solve this
+   itself: `define-compiler-macro` is now APPLIED at call sites and
+   `load-time-value` now evaluates once per occurrence, on all four backends. See
+   Finding 6 below and `.kb/compiler-macros.md`.
+6. ~~**Decide whether general (A) is still worth it.**~~ **DECIDED 2026-07-26: no,
+   and the cheaper idea underneath it was measured and rejected.** (A) has no case
+   left for this program -- postgres-hello is 0.6 s on the JVM and 2.2 s warm on the
+   component, and what remains is module load plus the string scan of the derived
+   data, not re-executed library init. Judge (A) again on the next library with
+   load-time table building.
+   The "dead top-level `let`" rule proposed here rested on a FALSE premise:
+   `LibraryDefunPruner` does not know `get-illegal-char-list` is unreachable and
+   cannot, because it prunes only rontolisp's OWN bundled libraries and because a
+   defun inside a `let` is not a definition to it at all (and phase 2 deleted that
+   block anyway). Measured across every loadable library, the rule can delete two
+   blocks -- cl-ppcre's and cl-who's `hyperdoc-lookup` -- worth **771 bytes of a
+   1.55 MB module**, and neither passes the existing purity judgment, so collecting
+   them would first mean widening `UserMacroExpander.isPure`. Reasoning recorded in
+   `.kb/library-defun-pruning.md`. What DOES have numbers is the premise itself --
+   pruning third-party trees at all, worth -3.0% on cl-ppcre with 20-23% of
+   cl-postgres's and ironclad's source lines statically dead, and unreachable by
+   `--optimize` -- filed as `.todo/183`.
+7. ~~**Re-measure and rewrite the docs.**~~ **DONE 2026-07-26.**
    `examples/db/README.md` and the `postgres-hello.lisp` header no longer warn
-   about the interpreter at all -- every backend runs it in a few seconds. The
-   `.kb` files were updated with phase 2/3 (`asdf.md`,
-   `jvm-method-size-limits.md`). What is left is the loadable-library doc row in
-   item 2.
+   about the interpreter -- every backend runs it in a few seconds. The `.kb` files
+   carry phases 2/3 (`asdf.md`, `jvm-method-size-limits.md`) and phase 5
+   (`compiler-macros.md`, new). The loadable-library gap left by todos 154/159 is
+   closed: uax-15 has a row in `doc/{en,ja}/guides/asdf-systems.md` (and the
+   section's "Nine"/"all ten" mismatch is fixed -- it is eleven of each now), an
+   `examples/asdf/uax-15-demo.lisp` matching `Uax15E2eTest`'s exercise, README rows
+   in `examples/asdf/` and `examples/`, and the note that it is the one demo whose
+   `--system-path` needs three directories. The stale "Interpreter only for now"
+   header on `examples/asdf/cl-ppcre-demo.lisp` went with it.
+
+## Finding 6 -- the scanner cost was two dropped CL facilities, not a missing hoist
+
+Option (C) assumed rontolisp had to hoist the scanner itself. It does not: cl-ppcre
+ships eight `define-compiler-macro`s that do exactly that -- `(constantp regex)` ->
+rewrite the call so the pattern becomes `(load-time-value (create-scanner ,regex))`.
+Both halves were parsed no-ops (`expandDefineCompilerMacro` returned nil;
+`expandLoadTimeValue` returned its form, re-evaluated at every use), and either one
+alone is worthless -- a compiler macro without a real `load-time-value` moves the
+cost instead of removing it. Making both real is library-independent by
+construction, and it turns on the compiler macros of every other loadable library at
+the same time (ironclad, cl-utilities, md5, cl-who, jzon: 33 definitions, 15 of them
+dropped by the reader's feature set, 11 that always decline, 5 that fire).
+
+`.kb/compiler-macros.md` has the mechanics. The three properties that each caused a
+real failure before being written down: decline (returning the `&whole` form, which
+is a fresh cons) has to be detected by printed shape or the expander spins -- a
+`StackOverflowError` on the interpreter and a silent hang with no diagnostic on the
+compile path; a signalling body must be caught and the call left alone (CLHS permits
+ignoring a compiler macro, which is what makes ironclad's `make-digest` safe); and
+expansion-time output has to be muted on the interpreter too, because the compile
+path's macro-time evaluator already swallows it and cl-utilities' `partition` macros
+`warn` before declining.
+
+Measured, `(cl-ppcre:split ";" line)` x 3,000 against a manually hoisted control:
+
+| backend | before | after | hoisted control |
+| --- | --- | --- | --- |
+| interpreter | 47,800 ms | **6,608 ms** | 6,413 ms |
+| JVM | 131 ms | **55 ms** | 13 ms (JIT noise at this size) |
+| WASM `--component` | 246 ms | **136 ms** | 140 ms |
+
+The todo's 1.8x understated the defect by an order of magnitude, because `split`
+amortizes one scanner over 16 scans. Isolated: `(cl-ppcre:scan "..." line)` was 146x
+the hoisted control on the interpreter, and `do-matches-as-strings` 80x. All three
+compiled backends are now at or below the hoisted control on every shape.
+
+The seed case was re-verified against a live `postgres:17-alpine` after the change:
+`((42 "hello"))` / `((1) (2) (3))` on the interpreter (4.2 s), the JVM (0.6 s) and
+`--component` (4.2 s cold), compiling in 2.3 s and 1.2 s. Preview 1 has no TCP by
+design. `CiSpecE2eTest` is green on all four backends against the native binary.
+
+One gap is left and it has a DIFFERENT cause, so it is `.todo/182`: the interpreter
+re-expands a user macro on every evaluation, so a literal regex inside `do-matches`
+gets a fresh `(scan ...)` cons per iteration, missing the per-call-site memos and
+recompiling the scanner anyway (11.1 s vs 0.75 s over 500 iterations, against 11 ms
+and 13 ms on the JVM and the component). Fixing it means memoizing macro expansion
+by call-site identity in the interpreter.
 
 ## Notes worth not re-deriving
 

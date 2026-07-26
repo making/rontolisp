@@ -5289,6 +5289,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.DEFINE_CONDITION -> LispMacroExpander.expandDefineCondition(cons);
 			case LispNames.DEFINE_SETF_EXPANDER -> LispMacroExpander.expandDefineSetfExpander(cons);
 			case LispNames.DEFINE_COMPILER_MACRO -> LispMacroExpander.expandDefineCompilerMacro(cons);
+			// The numeric subset does not run the whole-program hoist, so a
+			// load-time-value here keeps the re-evaluating lowering (nothing in this
+			// backend's value model is expensive enough to compute once).
+			case LispNames.LOAD_TIME_VALUE -> LispMacroExpander.expandLoadTimeValue(cons);
 			case LispNames.RESTART_CASE -> LispMacroExpander.expandRestartCase(cons);
 			case LispNames.MAKE_CONDITION -> LispMacroExpander.expandMakeCondition(cons);
 			case LispNames.DOCUMENTATION -> LispMacroExpander.expandDocumentation(cons);

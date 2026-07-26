@@ -8734,6 +8734,9 @@ public final class LispMacroExpander {
 	 */
 	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry) {
+		// The one whole-program pass both compilers already run, so the load-time-value
+		// hoist rides along instead of needing its own registration in every pipeline.
+		program = hoistLoadTimeValues(program);
 		boolean runtimeSubtypep = needsRuntimeSubtypep(program);
 		boolean runtimeTypep = needsRuntimeTypep(program);
 		boolean runtimeError = needsRuntimeErrorDispatch(program);
@@ -14940,9 +14943,11 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (load-time-value form [read-only-p])} -- lite: to the form itself,
-	 * so it re-evaluates at each use instead of once at load time (equivalent for the
-	 * pure-table reads real libraries guard with it).
+	 * Expands {@code (load-time-value form [read-only-p])} to the form itself, for the
+	 * paths that do not hoist it ({@link #hoistLoadTimeValues} gives the compile path the
+	 * evaluate-once contract; the interpreter memoizes per occurrence). A form left here
+	 * re-evaluates at each use, which is only reached for a value cheap enough that
+	 * {@link #hoistLoadTimeValues} declines to hoist it in the first place.
 	 * @param cons the load-time-value expression
 	 * @return the form
 	 */
@@ -14952,6 +14957,106 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(LispNames.LOAD_TIME_VALUE + " expects a form");
 		}
 		return parts.get(1);
+	}
+
+	/**
+	 * Gives {@code load-time-value} its "evaluated once" contract on the compile path:
+	 * every occurrence whose value form is worth computing (see
+	 * {@link #worthHoistingLoadTimeValue}) is replaced by a read of a synthesized global
+	 * that fills itself on first use, and one {@code (defvar %LOAD-TIME-VALUE-N nil)} per
+	 * occurrence is prepended to the program.
+	 *
+	 * <pre>
+	 * (cl-ppcre:split (load-time-value (cl-ppcre:create-scanner ";")) line)
+	 *   -&gt; (defvar %LOAD-TIME-VALUE-1 nil)                              ; prepended
+	 *      (cl-ppcre:split (car (or %LOAD-TIME-VALUE-1
+	 *                               (setq %LOAD-TIME-VALUE-1
+	 *                                     (list (cl-ppcre:create-scanner ";")))))
+	 *                      line)
+	 * </pre>
+	 *
+	 * The slot holds a one-element LIST rather than the value itself, so a value of
+	 * {@code nil} still counts as computed. Filling is LAZY rather than at program start:
+	 * a value form spliced out of a library (cl-ppcre's scanners are the motivating case)
+	 * routinely needs that library's own globals, which are initialized by top-level
+	 * forms further down the program, so evaluating it at index 0 would read them
+	 * unbound. The deviation from CL -- an occurrence never reached is never evaluated --
+	 * is the same bargain the macro-time defvar registration makes, and is invisible to a
+	 * value form without side effects (which is the only kind {@code load-time-value} is
+	 * for).
+	 *
+	 * <p>
+	 * Both compilers reach this through {@link #expandTopLevelDefinitions}; the
+	 * {@code --no-gc} numeric subset does not, and keeps the re-evaluating lowering. The
+	 * interpreter does not either -- it memoizes each occurrence by identity instead,
+	 * which is the same contract without a program rewrite.
+	 * @param program the top-level forms
+	 * @return the program with load-time values hoisted, itself when nothing was hoisted
+	 */
+	public static List<LispVal> hoistLoadTimeValues(List<LispVal> program) {
+		List<LispVal> slots = new ArrayList<>();
+		List<LispVal> out = new ArrayList<>(program.size());
+		boolean changed = false;
+		for (LispVal form : program) {
+			LispVal hoisted = hoistLoadTimeValues(form, slots);
+			changed = changed || hoisted != form;
+			out.add(hoisted);
+		}
+		if (!changed) {
+			return program;
+		}
+		out.addAll(0, slots);
+		return out;
+	}
+
+	private static LispVal hoistLoadTimeValues(LispVal form, List<LispVal> slots) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String name = operatorMember(op.name());
+			if (LispNames.QUOTE.equals(name)) {
+				// Quoted data is not code: a (load-time-value ...) inside it is a datum.
+				return form;
+			}
+			if (LispNames.LOAD_TIME_VALUE.equals(name) && cons.cdr() instanceof LispCons rest
+					&& worthHoistingLoadTimeValue(rest.car())) {
+				LispVal value = hoistLoadTimeValues(rest.car(), slots);
+				LispSymbol slot = new LispSymbol(LispNames.LOAD_TIME_VALUE_SLOT_PREFIX + (slots.size() + 1));
+				slots.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), slot, LispNil.INSTANCE)));
+				LispVal fill = listToCons(List.of(new LispSymbol(LispNames.SETQ), slot,
+						listToCons(List.of(new LispSymbol(LispNames.LIST), value))));
+				return listToCons(List.of(new LispSymbol(LispNames.CAR),
+						listToCons(List.of(new LispSymbol(LispNames.OR), slot, fill))));
+			}
+		}
+		LispVal car = hoistLoadTimeValues(cons.car(), slots);
+		LispVal cdr = hoistLoadTimeValues(cons.cdr(), slots);
+		return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
+	}
+
+	/**
+	 * Whether a {@code load-time-value} value form is worth a hoist. Only a call is: an
+	 * atom (a literal, or a special-variable read like jzon's
+	 * {@code (load-time-value *%offsets*)}) costs nothing to repeat, and {@code quote} /
+	 * {@code function} / {@code find-package} wrappers must stay literally where they are
+	 * -- {@link #literalPackageDesignator} folds the
+	 * {@code (load-time-value (find-package
+	 * ...))} idiom into a compile-time package name, and a hoist would hide it.
+	 */
+	private static boolean worthHoistingLoadTimeValue(LispVal value) {
+		if (!(value instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol op)) {
+			return false;
+		}
+		String name = operatorMember(op.name());
+		return !LispNames.QUOTE.equals(name) && !LispNames.FUNCTION.equals(name)
+				&& !LispNames.FIND_PACKAGE.equals(name);
+	}
+
+	/** The member name of a possibly package-qualified operator symbol. */
+	private static String operatorMember(String name) {
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
+		return qualified == null ? name : qualified.member();
 	}
 
 	/**

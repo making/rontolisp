@@ -129,6 +129,38 @@ public final class LispEvaluator {
 	private final java.util.Map<String, UserMacro> userMacros = new java.util.HashMap<>();
 
 	/**
+	 * Compiler macros defined with {@code define-compiler-macro}, keyed by name. Unlike a
+	 * {@code defmacro} these coexist with an ordinary function of the same name, so they
+	 * live in their own table: {@link #isUserMacro} must not see them, or the function
+	 * would be shadowed outright.
+	 */
+	private final java.util.Map<String, UserMacro> compilerMacros = new java.util.HashMap<>();
+
+	/**
+	 * Memo of {@link #expandCompilerMacro}, keyed by the CALL SITE's cons identity: a
+	 * compiler macro is a compile-time hint, so applying it once per source occurrence
+	 * (rather than once per evaluation) is both the point of the optimization and what
+	 * makes the {@code load-time-value} memo below hit -- the cached expansion is one
+	 * object, so its {@code load-time-value} occurrence is one object too.
+	 */
+	private final java.util.IdentityHashMap<LispVal, LispVal> compilerMacroExpansions = new java.util.IdentityHashMap<>();
+
+	/**
+	 * Memo of evaluated {@code (load-time-value ...)} occurrences, keyed by cons identity
+	 * -- CL's "evaluated once" for interpreted code. Holds a one-element list so a
+	 * {@code nil} result still counts as computed.
+	 */
+	private final java.util.IdentityHashMap<LispVal, List<LispVal>> loadTimeValues = new java.util.IdentityHashMap<>();
+
+	/**
+	 * Upper bound on the two identity memos above. A program that builds call forms at
+	 * runtime and feeds them to {@code eval} would otherwise retain one entry per form
+	 * forever; past the bound the expansion is simply recomputed, which is exactly the
+	 * behavior before compiler macros were applied at all.
+	 */
+	private static final int EXPANSION_MEMO_LIMIT = 20_000;
+
+	/**
 	 * A user macro: required parameters, an optional {@code &rest}/{@code &body}
 	 * parameter, the body forms, and the environment captured at definition time.
 	 */
@@ -269,11 +301,18 @@ public final class LispEvaluator {
 	private final ClosRegistry closRegistry = new ClosRegistry();
 
 	/**
+	 * The program's output stream, wrapped so expansion-time output can be silenced; see
+	 * {@link MutablePrintStream}.
+	 */
+	private final MutablePrintStream out;
+
+	/**
 	 * Create a new evaluator with the given output stream.
 	 * @param out the output stream for print operations
 	 */
 	public LispEvaluator(PrintStream out) {
-		this.globalEnv = Environment.createGlobal(out);
+		this.out = new MutablePrintStream(out);
+		this.globalEnv = Environment.createGlobal(this.out);
 		registerEval();
 	}
 
@@ -283,8 +322,46 @@ public final class LispEvaluator {
 	 * @param in the input stream for read operations
 	 */
 	public LispEvaluator(PrintStream out, InputStream in) {
-		this.globalEnv = Environment.createGlobal(out, in);
+		this.out = new MutablePrintStream(out);
+		this.globalEnv = Environment.createGlobal(this.out, in);
 		registerEval();
+	}
+
+	/**
+	 * The evaluator's output stream with a mute switch. Only one thing uses it: a
+	 * compiler-macro body runs at EXPANSION time, and its diagnostics (cl-utilities'
+	 * {@code partition} compiler macros {@code warn} before declining) are a property of
+	 * the expansion, not program output. The compile path already swallows them -- the
+	 * macro-time evaluator there writes to a null stream -- so muting here is what keeps
+	 * the interpreter's output identical to the compiled backends'.
+	 *
+	 * <p>
+	 * {@code PrintStream} funnels every {@code print}/{@code println} through its own
+	 * {@code write(byte[], int, int)}, so overriding the two write methods covers the
+	 * whole surface.
+	 */
+	private static final class MutablePrintStream extends PrintStream {
+
+		private boolean muted;
+
+		private MutablePrintStream(PrintStream delegate) {
+			super(delegate, true);
+		}
+
+		@Override
+		public void write(int b) {
+			if (!this.muted) {
+				super.write(b);
+			}
+		}
+
+		@Override
+		public void write(byte[] buf, int off, int len) {
+			if (!this.muted) {
+				super.write(buf, off, len);
+			}
+		}
+
 	}
 
 	/**
@@ -2173,7 +2250,7 @@ public final class LispEvaluator {
 				case LispNames.DEFSETF:
 					return registerDefsetf(cons);
 				case LispNames.DEFINE_COMPILER_MACRO:
-					return eval(LispMacroExpander.expandDefineCompilerMacro(cons), env);
+					return evalDefineCompilerMacro(cons, env);
 				case LispNames.RESTART_CASE:
 					return eval(LispMacroExpander.expandRestartCase(cons), env);
 				case LispNames.MACROLET:
@@ -2281,7 +2358,7 @@ public final class LispEvaluator {
 				case LispNames.SHIFTF:
 					return eval(LispMacroExpander.expandShiftf(cons), env);
 				case LispNames.LOAD_TIME_VALUE:
-					return eval(LispMacroExpander.expandLoadTimeValue(cons), env);
+					return evalLoadTimeValue(cons, env);
 				case LispNames.TYPEP:
 					return eval(LispMacroExpander.expandTypep(cons, this.closRegistry), env);
 				case LispNames.PRINT_UNREADABLE_OBJECT:
@@ -2433,6 +2510,15 @@ public final class LispEvaluator {
 			// after the built-in operators, so a user macro can never shadow them.
 			if (this.userMacros.containsKey(sym.name())) {
 				return eval(expandUserMacro(cons), env);
+			}
+			// Compiler macros: applied last, so a defmacro and every built-in operator
+			// still win, and memoized per call site so the expansion (and the
+			// load-time-value slot inside it) is built once for this occurrence.
+			if (!this.compilerMacros.isEmpty() && this.compilerMacros.containsKey(sym.name())) {
+				LispVal expansion = expandCompilerMacro(cons);
+				if (expansion != cons) {
+					return eval(expansion, env);
+				}
 			}
 			// Lisp-2: a symbol in call position is resolved in the function namespace
 			// only; variable bindings of the same name do not shadow it.
@@ -2712,6 +2798,110 @@ public final class LispEvaluator {
 		this.userMacros.put(name.name(),
 				makeUserMacro(LispNames.DEFMACRO, name, parts.get(2), parts.subList(3, parts.size()), env));
 		return name;
+	}
+
+	/**
+	 * Registers a {@code define-compiler-macro}. A compiler macro is a HINT: CL lets an
+	 * implementation ignore one entirely, so every shape rontolisp cannot carry -- a
+	 * {@code (setf name)} function designator, a standard operator (which the shared
+	 * expander lowers on every backend before a compiler macro could see it), a lambda
+	 * list the macro machinery rejects -- is silently not registered rather than an
+	 * error.
+	 * @param cons the {@code (define-compiler-macro name (params...) body...)} form
+	 * @param env the defining environment
+	 * @return the name, like {@code defmacro}
+	 */
+	private LispVal evalDefineCompilerMacro(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol name) || PackageRegistry.isClSymbol(name.name())) {
+			return parts.size() >= 2 ? parts.get(1) : LispNil.INSTANCE;
+		}
+		try {
+			this.compilerMacros.put(name.name(), makeUserMacro(LispNames.DEFINE_COMPILER_MACRO, name, parts.get(2),
+					parts.subList(3, parts.size()), env));
+		}
+		catch (RuntimeException ex) {
+			this.compilerMacros.remove(name.name());
+		}
+		return name;
+	}
+
+	/**
+	 * Whether a compiler macro is defined for the operator name.
+	 * @param name the canonical operator name
+	 * @return {@code true} when {@link #expandCompilerMacro} may rewrite a call to it
+	 */
+	public boolean hasCompilerMacro(String name) {
+		return this.compilerMacros.containsKey(name);
+	}
+
+	/**
+	 * Applies the call form's compiler macro ONCE, memoized by call-site identity.
+	 * Returns {@code form} itself -- the caller's signal to stop -- when the macro
+	 * declines, when its body signals, or when none is defined.
+	 *
+	 * <p>
+	 * Both escape hatches are load-bearing. The universal decline idiom is "return the
+	 * {@code &whole} parameter", and that parameter is a FRESHLY consed copy of the call,
+	 * so the comparison has to be on printed shape; an identity test would take the
+	 * expansion as progress and re-expand forever. And a body that signals (ironclad's
+	 * {@code make-digest} reaches for package objects at expansion time) must not fail
+	 * the program: CLHS explicitly permits ignoring a compiler macro, so a hint that
+	 * cannot be honoured is simply not honoured.
+	 * @param form the call form; its operator must be a symbol
+	 * @return the expansion, or {@code form} when the macro does not apply
+	 */
+	public LispVal expandCompilerMacro(LispCons form) {
+		LispVal cached = this.compilerMacroExpansions.get(form);
+		if (cached != null) {
+			return cached;
+		}
+		LispVal expansion = computeCompilerMacroExpansion(form);
+		if (this.compilerMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
+			this.compilerMacroExpansions.put(form, expansion);
+		}
+		return expansion;
+	}
+
+	private LispVal computeCompilerMacroExpansion(LispCons form) {
+		if (!(form.car() instanceof LispSymbol op)) {
+			return form;
+		}
+		UserMacro macro = this.compilerMacros.get(op.name());
+		if (macro == null) {
+			return form;
+		}
+		boolean savedMute = this.out.muted;
+		this.out.muted = true;
+		try {
+			LispVal expansion = expandMacroCall(op.name(), macro, form);
+			return expansion.print().equals(form.print()) ? form : expansion;
+		}
+		catch (RuntimeException | StackOverflowError ex) {
+			return form;
+		}
+		finally {
+			this.out.muted = savedMute;
+		}
+	}
+
+	/**
+	 * Evaluates {@code (load-time-value form [read-only-p])} at most once per source
+	 * occurrence, memoized by the form's cons identity -- CL's contract for interpreted
+	 * code, and the same one {@code LispMacroExpander.hoistLoadTimeValues} gives the
+	 * compile path with a synthesized global. The memo holds a one-element list so a
+	 * {@code nil} result still counts as computed.
+	 */
+	private LispVal evalLoadTimeValue(LispCons cons, Environment env) {
+		List<LispVal> computed = this.loadTimeValues.get(cons);
+		if (computed != null) {
+			return computed.get(0);
+		}
+		LispVal value = eval(LispMacroExpander.expandLoadTimeValue(cons), env);
+		if (this.loadTimeValues.size() < EXPANSION_MEMO_LIMIT) {
+			this.loadTimeValues.put(cons, List.of(value));
+		}
+		return value;
 	}
 
 	/**
@@ -3319,6 +3509,15 @@ public final class LispEvaluator {
 		if (macro == null) {
 			throw new LispEvalException(name + " is not a user macro");
 		}
+		return expandMacroCall(name, macro, form);
+	}
+
+	/**
+	 * Runs one macro expansion: binds the unevaluated argument forms to the macro's
+	 * parameters and evaluates its body. Shared by {@code defmacro} expansion and
+	 * {@link #expandCompilerMacro}, which differ only in which table the macro came from.
+	 */
+	private LispVal expandMacroCall(String name, UserMacro macro, LispCons form) {
 		List<LispVal> args = form.cdr() instanceof LispCons argCons ? argCons.toList() : List.of();
 		if (args.size() < macro.required().size() || (macro.rest() == null && args.size() > macro.required().size())) {
 			throw new LispEvalException(

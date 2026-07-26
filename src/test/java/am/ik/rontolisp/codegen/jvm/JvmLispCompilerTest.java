@@ -3570,11 +3570,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunDefineCompilerMacroIsNoOp() throws Exception {
-		// The compiler macro is dropped; the ordinary function definition wins.
-		assertThat(compileAndRun(
-				"(defun myinc (x) (+ x 1))" + " (define-compiler-macro myinc (x) `(+ ,x 100)) (print (myinc 10))"))
-			.isEqualTo("11");
+	void compileAndRunDefineCompilerMacroRewritesCallSites() throws Exception {
+		// define-compiler-macro is consumed by the compile-path pass
+		// (eval.UserMacroExpander), which the CLI runs before the compiler; mirror that
+		// here. The macro rewrites the call site; returning the &whole form declines (and
+		// must not loop); an error in the body leaves the ordinary call alone.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander
+			.expand(LispReader.readAllFromString("(defun myinc (x) (+ x 1))"
+					+ " (define-compiler-macro myinc (x) `(+ ,x 100)) (print (myinc 10))" + " (defun mydec (x) (- x 1))"
+					+ " (define-compiler-macro mydec (&whole form x) (declare (ignore x)) form) (print (mydec 10))"
+					+ " (defun mysafe (x) (+ x 1))"
+					+ " (define-compiler-macro mysafe (x) (error \"no\")) (print (mysafe 10))"));
+		assertThat(compileAndRun(program)).isEqualTo("110\n9\n11");
 	}
 
 	@Test
@@ -3697,6 +3704,17 @@ class JvmLispCompilerTest {
 	void compileAndRunLoadTimeValue() throws Exception {
 		assertThat(compileAndRun("(print (+ (load-time-value (* 2 3)) 4))")).isEqualTo("10");
 		assertThat(compileAndRun("(print (load-time-value 7 t))")).isEqualTo("7");
+		// Hoisted into a lazily filled slot: one evaluation per occurrence, however many
+		// times the enclosing function runs; a second occurrence gets its own slot, and a
+		// nil result still counts as computed. Printed one call per form -- the argument
+		// evaluation order of a single call is a separate cross-backend question.
+		assertThat(compileAndRun("(defvar ltv-n 0)" + " (defun ltv-bump () (setq ltv-n (+ ltv-n 1)) ltv-n)"
+				+ " (defun ltv-probe () (load-time-value (ltv-bump)))"
+				+ " (defun ltv-other () (load-time-value (ltv-bump)))" + " (print (ltv-probe)) (print (ltv-probe))"
+				+ " (print (ltv-probe)) (print (ltv-other)) (print ltv-n)" + " (defvar ltv-m 0)"
+				+ " (defun ltv-nil () (load-time-value (progn (setq ltv-m (+ ltv-m 1)) nil)))"
+				+ " (print (ltv-nil)) (print (ltv-nil)) (print ltv-m)"))
+			.isEqualTo("1\n1\n1\n2\n2\nNIL\nNIL\n1");
 	}
 
 	@Test

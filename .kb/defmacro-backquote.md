@@ -21,3 +21,9 @@ Consequences: the runtime `_eval`/`read` of compiled output knows neither `defma
 `defmacro` lambda lists beyond "required + one `&rest`/`&body`" route through the same machinery: `LispEvaluator.evalDefmacro` detects a non-simple lambda list (`isSimpleMacroLambdaList`) and stores the macro as rest-only (`__macro_args`) with the body wrapped in `(destructuring-bind <lambda-list> __macro_args body...)`, validated eagerly by a dry-run expansion (definition-time errors). Both consumers agree for free because `UserMacroExpander`'s macro-time evaluator IS a `LispEvaluator`. Simple lambda lists keep the old path (strict arity check + its error message); extended ones inherit the lite no-mismatch semantics.
 
 Tests: `LispReaderTest`/`LispLexerTest` (backquote), `LispEvaluatorTest` (defmacro + destructuring-bind sections), `UserMacroExpanderTest`, `JvmLispCompilerTest#compileAndRunUserMacroAfterExpansionPass`/`#compileAndRunDestructuringBind`/`#compileAndRunUserMacroWithDestructuringLambdaList`, `WasmLispCompilerIntegrationTest#destructuringBindForms`, ci-spec `defmacro-user-macros`/`destructuring-bind-and-defmacro-lambda-lists`. Follow-ups in `.todo/044`.
+
+A `define-compiler-macro` reuses every mechanism above (`makeUserMacro`, the
+`&whole`/`&environment` handling, `expandMacroCall`) but lives in its own table and
+is applied only after a same-named `defmacro` has had its chance — see
+`.kb/compiler-macros.md`, which also covers `load-time-value`'s evaluate-once
+contract, the pair being what makes a library's own constant-folding optimization run.

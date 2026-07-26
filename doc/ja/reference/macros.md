@@ -64,7 +64,8 @@
 | `prog` | `(prog ((v init)...) tag-or-form...)` | ブロック内の `let` + `tagbody`: `go` が本体のタグ間をジャンプし、`(return x)` が `x` を返して抜けます |
 | `prog*` | `(prog* ((v init)...) tag-or-form...)` | `prog` と同様で束縛が逐次的(`let*` 方式) |
 | `shiftf` | `(shiftf a b 9)` | 場所の値を左へシフトし、最後の場所に新しい値を格納し、最初の場所の古い値を返します |
-| `load-time-value` | `(load-time-value form)` | lite 版: `form` に展開されるため、ロード時一度ではなく使用のたびに再評価されます |
+| `load-time-value` | `(load-time-value form)` | `form` をソース中の出現ごとに一度だけ評価します(初回使用時に遅延評価)。使用のたびではありません |
+| `define-compiler-macro` | `(define-compiler-macro name (params...) body...)` | `name` の呼び出しをコンパイル時に書き換えます。`&whole` フォームを返すと辞退します。ヒントであり、本体がシグナルした場合・`name` が標準演算子の場合・`apply`/`funcall` 経由の場合は無視されます |
 | `typep` | `(typep x '(unsigned-byte 8))` | `typecase` の指定子集合に対する型判定。指定子はリテラル(クオートされた)型に限られます |
 | `slot-boundp` | `(slot-boundp obj 'slot)` | インスタンスのクラスが定義するすべてのスロットに `t`(lite: スロットは常に初期化され unbound 状態なし) |
 | `slot-makunbound` | `(slot-makunbound obj 'slot)` | lite 版: スロットに nil を格納し、インスタンスを返します |

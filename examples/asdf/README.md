@@ -6,7 +6,7 @@ All of them run identically on all four backends (interpreter, JVM,
 WASM Preview 1 and `--component`); they are the programs the cross-backend E2E
 tests pin (`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest`
 / `ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest` / `JzonE2eTest`
-/ `Md5E2eTest` / `ClPpcreE2eTest` / `IroncladE2eTest`).
+/ `Md5E2eTest` / `ClPpcreE2eTest` / `IroncladE2eTest` / `Uax15E2eTest`).
 jzon's three numeric leaf components (the eisel-lemire float reader and
 Schubfach float printer) are replaced at load time by built-in shims over
 rontolisp's native float arithmetic, so float text takes rontolisp's
@@ -29,6 +29,7 @@ rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src
 | [`md5-demo.lisp`](md5-demo.lisp) | md5 v2.0.4 (public domain) | <https://github.com/pmai/md5> |
 | [`cl-ppcre-demo.lisp`](cl-ppcre-demo.lisp) | cl-ppcre v2.1.2 (BSD 2-Clause) | <https://github.com/edicl/cl-ppcre> |
 | [`ironclad-demo.lisp`](ironclad-demo.lisp) | ironclad v0.61, SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice (BSD 3-Clause) | <https://github.com/sharplispers/ironclad> |
+| [`uax-15-demo.lisp`](uax-15-demo.lisp) | uax-15 v0.1.3 (MIT) | <https://github.com/sabracrolleton/uax-15> |
 
 ## Where the libraries come from
 
@@ -46,6 +47,9 @@ the demos run out of the box from the repository root:
 - `src/test/resources/cl-ppcre/`
 - `src/test/resources/ironclad/` (the SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice only; its executable
   `ironclad.asd` is kept for provenance but a bundled replacement is what loads)
+- `src/test/resources/uax-15/` (the only demo whose library depends on others, so its
+  `--system-path` also needs `src/test/resources/split-sequence` and
+  `src/test/resources/cl-ppcre`)
 
 Alternatively, download the same versions from upstream and point
 `--system-path` (or the `RONTOLISP_SOURCE_REGISTRY` environment variable) at
@@ -82,6 +86,15 @@ rontolisp examples/asdf/split-sequence-demo.lisp -o demo.wasm --system-path $SYS
 # 4. WASM component / WASI 0.3 (requires wasmtime 46+)
 rontolisp examples/asdf/split-sequence-demo.lisp -o demo-comp.wasm --component --system-path $SYS && \
   wasmtime run -W gc=y demo-comp.wasm
+```
+
+`--system-path` takes ONE value, a `:`-joined list of directories, so a library
+with dependencies of its own names them all in the same argument. uax-15 is the
+only demo here that needs it:
+
+```bash
+SYS=src/test/resources/uax-15:src/test/resources/split-sequence:src/test/resources/cl-ppcre
+rontolisp examples/asdf/uax-15-demo.lisp --system-path $SYS
 ```
 
 The compile path splices the system's component files in at compile time
@@ -199,6 +212,19 @@ null
 [1,2,3]
 {"a":1}
 {"k":[true,null,7]}
+```
+
+`uax-15-demo.lisp`:
+
+```console
+(197)
+(65 778)
+(49 49 8260 50)
+(102 102)
+(197)
+230
+(1231 (832 NIL) (71984 T))
+(T T NIL T)
 ```
 
 ## What can be loaded today

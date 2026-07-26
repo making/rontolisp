@@ -1,8 +1,8 @@
 ;; Loads the REAL cl-ppcre (BSD-2-Clause, Dr. Edmund Weitz) via asdf:load-system
 ;; and runs the Perl-compatible regex API. Run with:
 ;;   rontolisp examples/asdf/cl-ppcre-demo.lisp --system-path src/test/resources/cl-ppcre
-;; Interpreter only for now: the scanner closures rely on named
-;; block/return-from crossing loops, which the compile backends keep lite.
+;; Runs on all four backends: the scanner closures rely on named block/return-from
+;; crossing loops, which the compile backends implement as lexical named exits.
 
 (asdf:load-system :cl-ppcre)
 

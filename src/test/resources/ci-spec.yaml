@@ -3796,16 +3796,39 @@ cases:
         (macrolet ((ci-mklist (&rest xs) `(list ,@xs)))
           (ci-mklist n (* n n))))
       (print (ci-in-body 4))
-      ;; define-compiler-macro: dropped no-op, the ordinary function wins.
+      ;; define-compiler-macro: rewrites the call sites of the function it names.
       (defun ci-myinc (x) (+ x 1))
       (define-compiler-macro ci-myinc (x) `(+ ,x 100))
       (print (ci-myinc 10))
+      ;; returning the &whole form declines, and the ordinary function wins.
+      (defun ci-mydec (x) (- x 1))
+      (define-compiler-macro ci-mydec (&whole form x) (declare (ignore x)) form)
+      (print (ci-mydec 10))
+      ;; a body that signals is a hint that cannot be honoured, not a program error.
+      (defun ci-mysafe (x) (+ x 1))
+      (define-compiler-macro ci-mysafe (x) (error "no"))
+      (print (ci-mysafe 10))
+      ;; load-time-value: evaluated once per occurrence, however often it is reached.
+      (defvar ci-ltv-n 0)
+      (defun ci-ltv-bump () (setq ci-ltv-n (+ ci-ltv-n 1)) ci-ltv-n)
+      (defun ci-ltv-probe () (load-time-value (ci-ltv-bump)))
+      (defun ci-ltv-other () (load-time-value (ci-ltv-bump)))
+      (print (ci-ltv-probe))
+      (print (ci-ltv-probe))
+      (print (ci-ltv-other))
+      (print ci-ltv-n)
       ;; restart-case: lite lowering to the primary form (restart clauses are dead).
       (print (restart-case (+ 1 2) (continue () 99)))
     expected: |
       35
       (4 16)
+      110
+      9
       11
+      1
+      1
+      2
+      2
       3
   - name: multiple-values-core
     source: |

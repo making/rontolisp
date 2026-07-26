@@ -4856,12 +4856,26 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void defineCompilerMacroAndRestartCase() throws Exception {
-		// define-compiler-macro is a dropped no-op (the function wins); restart-case is a
+		// define-compiler-macro is consumed by eval.UserMacroExpander (the compilers
+		// never
+		// see it), so mirror the CLI by running the pass before compiling. The macro
+		// rewrites the call site; returning the &whole form declines; restart-case is a
 		// lite lowering to its primary form.
-		assertThat(compileAndRun(
-				"(defun myinc (x) (+ x 1))" + " (define-compiler-macro myinc (x) `(+ ,x 100)) (print (myinc 10))"
-						+ " (print (restart-case (+ 1 2) (continue () 99)))"))
-			.isEqualTo("11\n3");
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defun myinc (x) (+ x 1))
+				(define-compiler-macro myinc (x) `(+ ,x 100))
+				(print (myinc 10))
+				(defun mydec (x) (- x 1))
+				(define-compiler-macro mydec (&whole form x) (declare (ignore x)) form)
+				(print (mydec 10))
+				(print (restart-case (+ 1 2) (continue () 99)))
+				"""));
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
+				"/tmp/test.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("110\n9\n3");
 	}
 
 	@Test
@@ -4907,8 +4921,15 @@ class WasmLispCompilerIntegrationTest {
 	void shiftfAndLoadTimeValue() throws Exception {
 		assertThat(compileAndRun("(let ((x 1) (y 2) (z 3)) (print (shiftf x y z 4)) (print (list x y z)))"
 				+ " (let ((c (cons 1 2))) (print (shiftf (car c) 9)) (print c))"
-				+ " (print (+ (load-time-value (* 2 3)) 4))" + " (print (load-time-value 7 t))"))
-			.isEqualTo("1\n(2 3 4)\n1\n(9 . 2)\n10\n7");
+				+ " (print (+ (load-time-value (* 2 3)) 4))" + " (print (load-time-value 7 t))"
+				// Hoisted into a lazily filled slot: one evaluation per occurrence, and a
+				// second occurrence gets its own slot.
+				+ " (defvar ltv-n 0) (defun ltv-bump () (setq ltv-n (+ ltv-n 1)) ltv-n)"
+				+ " (defun ltv-probe () (load-time-value (ltv-bump)))"
+				+ " (defun ltv-other () (load-time-value (ltv-bump)))"
+				+ " (print (ltv-probe)) (print (ltv-probe)) (print (ltv-probe))"
+				+ " (print (ltv-other)) (print ltv-n)"))
+			.isEqualTo("1\n(2 3 4)\n1\n(9 . 2)\n10\n7\n1\n1\n1\n2\n2");
 	}
 
 	@Test

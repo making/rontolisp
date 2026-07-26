@@ -48,6 +48,7 @@ public final class UserMacroExpander {
 		// #. in) also activate the pass: they resolve against the macro-time evaluator
 		// per top-level form, mirroring the interpreter's loadFile timing.
 		if (program.stream().noneMatch(form -> isOperator(form, LispNames.DEFMACRO))
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_COMPILER_MACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_MODIFY_MACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_SETF_EXPANDER))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFSETF))
@@ -79,6 +80,14 @@ public final class UserMacroExpander {
 			// P-qualified).
 			LispVal resolved = macroEval.resolvePackages(form);
 			if (isOperator(resolved, LispNames.DEFMACRO)) {
+				macroEval.evalResolved(resolved);
+				continue;
+			}
+			if (isOperator(resolved, LispNames.DEFINE_COMPILER_MACRO)) {
+				// Register the hint and drop the form: a compiler macro rewrites CALL
+				// SITES here (see expandAll), and the backends have no table to consult
+				// at runtime. Registration cannot fail the compile -- an unsupported
+				// definition is simply not registered.
 				macroEval.evalResolved(resolved);
 				continue;
 			}
@@ -541,6 +550,23 @@ public final class UserMacroExpander {
 		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 				&& macroEval.isUserMacro(sym.name())) {
 			form = macroEval.expandUserMacro(cons);
+		}
+		// Then the operator's compiler macro, at most ONCE: the standard shape rewrites a
+		// call into a call of the SAME function with a better argument (cl-ppcre's
+		// literal regex becomes a load-time-value scanner), so re-applying would either
+		// spin or depend on the macro declining the second time. Declining is signalled
+		// by returning the form itself; a user macro of the same name has already won
+		// above, as CL requires.
+		if (form instanceof LispCons call && call.car() instanceof LispSymbol op && call.isProperList()
+				&& macroEval.hasCompilerMacro(op.name())) {
+			LispVal expansion = macroEval.expandCompilerMacro(call);
+			if (expansion != form) {
+				form = expansion;
+				while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+						&& macroEval.isUserMacro(sym.name())) {
+					form = macroEval.expandUserMacro(cons);
+				}
+			}
 		}
 		if (!(form instanceof LispCons cons)) {
 			return form;

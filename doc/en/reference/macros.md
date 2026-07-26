@@ -65,7 +65,8 @@ description and a runnable example you can evaluate in your browser.
 | `prog` | `(prog ((v init)...) tag-or-form...)` | `let` + `tagbody` inside a block: `go` jumps between the body's tags and `(return x)` exits with `x` |
 | `prog*` | `(prog* ((v init)...) tag-or-form...)` | Like `prog` with sequential (`let*`-style) bindings |
 | `shiftf` | `(shiftf a b 9)` | Shift place values left, store the last value into the last place, return the first place's old value |
-| `load-time-value` | `(load-time-value form)` | Lite: expands to `form`, so it re-evaluates at each use instead of once at load time |
+| `load-time-value` | `(load-time-value form)` | Evaluates `form` once per occurrence in the source (lazily, on first use), not once per use |
+| `define-compiler-macro` | `(define-compiler-macro name (params...) body...)` | Rewrite calls to `name` at compile time; returning the `&whole` form declines. A hint: it is ignored when the body signals, when `name` is a standard operator, or under `apply`/`funcall` |
 | `typep` | `(typep x '(unsigned-byte 8))` | Type test over the `typecase` specifier set; the specifier must be a literal (quoted) type |
 | `slot-boundp` | `(slot-boundp obj 'slot)` | `t` for every slot the instance's class defines (lite: slots are always initialized, no unbound state) |
 | `slot-makunbound` | `(slot-makunbound obj 'slot)` | Lite: stores nil into the slot and returns the instance |

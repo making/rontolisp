@@ -103,6 +103,41 @@ vec:aset edge, `#'`/quoted/string references, in-package resolution, load
 bail, usocket exclusion, order preservation) and the corpus tests' behavior
 identity + constant-pool headroom guard (<= 52,000).
 
+## Scope: rontolisp's OWN libraries only, and why the "dead top-level `let`" rule was rejected
+
+`prunableNames()` is the whole scope decision: linalg, vec, json (+ its `#'`
+wrappers), url and the prelude. **An ASDF-spliced third-party tree is never
+pruned** -- its definitions are not in the prunable set, so they are roots, and
+they additionally keep alive whatever rontolisp-library names they mention.
+
+A rule was proposed for the top-level `(let ((x ...)) (defun ...))` idiom -- delete
+the block when every definition inside it is dead -- on the premise that the pruner
+"already knows" uax-15's `get-illegal-char-list` is unreachable. **The premise is
+false and the rule was measured and rejected (2026-07-26).** Three findings, kept
+here so the idea is not re-proposed:
+
+- The pruner cannot know it. `definitionName` returns null for a `let`, so a defun
+  inside one is not a definition at all; and uax-15 is third-party, so nothing in
+  that file was ever in scope. The motivating block is also gone -- `eval/Uax15Tables`
+  replaces that whole `let` at the source level (`.kb/asdf.md`).
+- Across every loadable library (vendored + the quicklisp cache) the idiom occurs 14
+  times and only TWO blocks are dead: cl-ppcre's and cl-who's `hyperdoc-lookup`,
+  whose bodies are a `loop ... being the external-symbols` that rontolisp already
+  lowers to an empty iteration. Deleting both is worth **771 bytes of a 1.55 MB
+  module (0.05%)**. Worse, neither passes the existing purity judgment
+  (`UserMacroExpander.isPure` rejects `loop` and any user call), so collecting the
+  771 bytes would first require widening that allow-list.
+- What IS worth measuring is the premise, not the rule: extending the pruner to
+  third-party trees. Removing cl-ppcre's 13 statically dead top-level forms by hand
+  cut the wasm module 3.0% (46.7 KB) and the `.class` 3.2%, and 20-23% of the
+  SOURCE LINES of cl-postgres and the ironclad slice are unreachable. `--optimize`
+  cannot reach any of it -- the WASM/JVM shakers root at exports and every compiled
+  Lisp defun is reachable from the funcall dispatcher, so the reduction they achieve
+  is the same with and without the dead defuns present. That extension needs a
+  provenance marker from `LoadInliner`, a trie for the string-literal carve-out (the
+  prunable set grows from ~230 to ~3,000 names) and a conservative
+  CLOS/`defsetf`-stay-root line; it is filed separately.
+
 ## The constant-pool dedup
 
 `am.ik.jvm.ConstantPool.add` keys every entry by its serialized bytes

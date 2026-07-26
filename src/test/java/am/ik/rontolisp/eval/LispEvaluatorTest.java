@@ -3105,11 +3105,34 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalDefineCompilerMacroIsNoOp() {
-		// A compiler macro is only an optimization hint: the ordinary function wins.
+	void evalDefineCompilerMacroRewritesCallSites() {
+		// A compiler macro rewrites calls to the function it names.
 		assertThat(evalMulti("(defun myinc (x) (+ x 1))" + " (define-compiler-macro myinc (x) `(+ ,x 100)) (myinc 10)"))
+			.isEqualTo(new LispInteger(110));
+		// Returning the &whole form is the decline idiom: the ordinary function wins,
+		// and the application must not loop on the freshly consed copy it gets back.
+		assertThat(evalMulti("(defun mydec (x) (- x 1))"
+				+ " (define-compiler-macro mydec (&whole form x) (declare (ignore x)) form) (mydec 10)"))
+			.isEqualTo(new LispInteger(9));
+		// A macro that decides per call site: constant argument rewritten, variable not.
+		assertThat(evalMulti("(defun mytwice (x) (* x 2))"
+				+ " (define-compiler-macro mytwice (&whole form x) (if (constantp x) `(+ ,x ,x) form))"
+				+ " (list (mytwice 5) (let ((v 5)) (mytwice v)))")
+			.print()).isEqualTo("(10 10)");
+		// A body that signals is a hint that cannot be honoured, not a program error.
+		assertThat(evalMulti(
+				"(defun mysafe (x) (+ x 1))" + " (define-compiler-macro mysafe (x) (error \"no\")) (mysafe 10)"))
 			.isEqualTo(new LispInteger(11));
-		assertThat(eval("(define-compiler-macro foo (x) x)")).isSameAs(LispNil.INSTANCE);
+		// A compiler macro over a standard operator is never registered.
+		assertThat(evalMulti("(define-compiler-macro car (x) 99) (car (list 1 2))")).isEqualTo(new LispInteger(1));
+	}
+
+	@Test
+	void evalDefmacroWinsOverCompilerMacro() {
+		// CL: a macro function of the same name is expanded, the compiler macro ignored.
+		assertThat(evalMulti(
+				"(defmacro mypick (x) `(* ,x 3))" + " (define-compiler-macro mypick (x) `(* ,x 7))" + " (mypick 2)"))
+			.isEqualTo(new LispInteger(6));
 	}
 
 	@Test
@@ -8264,6 +8287,22 @@ class LispEvaluatorTest {
 	@Test
 	void loadTimeValueEvaluatesItsForm() {
 		assertThat(eval("(load-time-value (+ 1 2))").print()).isEqualTo("3");
+	}
+
+	@Test
+	void loadTimeValueEvaluatesOncePerOccurrence() {
+		// One occurrence, three calls: the value form runs once (the memo is keyed on
+		// the occurrence, so a second occurrence of the same text still runs).
+		assertThat(evalMulti("(defvar ltv-n 0)" + " (defun ltv-bump () (setq ltv-n (+ ltv-n 1)) ltv-n)"
+				+ " (defun ltv-probe () (load-time-value (ltv-bump)))"
+				+ " (defun ltv-other () (load-time-value (ltv-bump)))"
+				+ " (list (ltv-probe) (ltv-probe) (ltv-probe) (ltv-other) ltv-n)")
+			.print()).isEqualTo("(1 1 1 2 2)");
+		// A nil result still counts as computed.
+		assertThat(evalMulti(
+				"(defvar ltv-m 0)" + " (defun ltv-nil () (load-time-value (progn (setq ltv-m (+ ltv-m 1)) nil)))"
+						+ " (list (ltv-nil) (ltv-nil) ltv-m)")
+			.print()).isEqualTo("(NIL NIL 1)");
 	}
 
 	@Test
