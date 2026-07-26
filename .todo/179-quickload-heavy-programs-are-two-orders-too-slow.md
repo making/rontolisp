@@ -232,49 +232,67 @@ so it is tempting to make `normalize` a stub -- but that silently loses NFKC for
 non-ASCII passwords, i.e. a correctness regression in authentication. Off the
 table.
 
-### Spike: the leaf-module lite (done, measured, sources restored)
+### The derived tables -- LANDED 2026-07-26 (B2, as form-level rewrites)
 
-Generated a lite `precomputed-tables.lisp` (the four tables + exclusions +
-`*unicode-letters*` as literal data, 122 chunked data defuns, 401 KB of source)
-and a lite `uax-15.lisp` (the `DerivedNormalizationProps` block replaced by the
-1,344 source RANGE rows plus on-demand expansion inside
-`get-illegal-char-list`), then swapped them into the quicklisp cache -- exactly
-what `leafModuleForms` would do -- and measured `examples/db/postgres-hello.lisp`
-end to end against live PostgreSQL:
+`eval/Uax15Tables` + `ShimLibraries.rewriteComponentSource`, consulted by BOTH
+loaders right after the component source is read (`LispEvaluator.loadFile` and
+`cli.LoadInliner.spliceFile` each take the system name / component path now).
+Mechanics and the full rationale: `.kb/asdf.md`, the "Derived uax-15 tables"
+section.
 
-| | real uax-15 | lite leaf modules |
+The seam is NOT `leafModuleForms`. That one replaces a whole component with
+canonical-shape (fully qualified) forms and deliberately bypasses package
+resolution, so splicing the REAL uax-15 forms back through it would leave every
+bare symbol unresolved. Rewriting the SOURCE instead keeps the file on the normal
+read + `in-package` bracketing path, which is what makes a surgical replacement
+possible at all: three spans change, and everything else -- every normalization
+function, the `CompositionExclusions.txt` read, the `*canonical-comp-map*`
+maphash, the seven hardcoded CJK/Hangul/Tangut letter range loops -- stays
+verbatim upstream. Each span is located by a marker that must occur EXACTLY once;
+an upstream release that moves one throws, naming the marker and the file (a
+silent fallback to the real source would put the 30 s back with nothing pointing
+at why). Missing data files (no filesystem) DO fall back, since there the real
+source cannot work either.
+
+Measured on `examples/db/postgres-hello.lisp` against live `postgres:17-alpine`
+(`java -jar`, warm `~/.rontolisp/quicklisp`, wasmtime 46.0.1), all output
+identical (`((42 "hello"))`, `((1) (2) (3))`):
+
+| | before | after |
 | --- | --- | --- |
-| interpreter run | 404 s | **0.36 s** |
-| component compile | 34.7 s | **1.50 s** |
-| component run (warm) | 28.4 s | **0.31 s** |
-| component size | 8.60 MB | **6.66 MB** |
+| interpreter run | 404 s | **3.6 s** |
+| JVM compile | 102 s (eager) / 6 s (phase 1) | **3.2 s** |
+| JVM run | 3.5 s | **0.6 s** |
+| component compile | 123 s (eager) / 4 s (phase 1) | **2.1 s** |
+| component run (warm) | 28.4 s | **2.2 s** |
+| component size | 8.60 MB | **5.98 MB** |
 
-Output identical on the interpreter and the component (`((42 "hello"))`,
-`((1) (2) (3))`). A separate 71-line normalization-vector program (NFD/NFKD/NFC/
-NFKC over combining sequences, ccc reordering, compatibility ligatures, circled
-digits, halfwidth katakana, Hangul jamo composition and precomposed syllables,
-plus `get-illegal-char-list` lengths and endpoints for all four forms) is
-**byte-identical between the real and lite builds** on all 60 normalization
-lines and all 4 illegal-list lines -- including `(ILLEGAL :NFD 13233 (192 NIL)
-(195101 NIL))`, i.e. the on-demand range expansion reproduces the upstream list
-exactly. That program compiles in 0.33 s / runs in 1.17 s lite, against
-34.3 s / 34.2 s real.
+A 84-line normalization vector (NFD/NFKD/NFC/NFKC over combining sequences, ccc
+reordering, compatibility ligatures, circled digits, halfwidth katakana, Hangul
+jamo composition and precomposed syllables, the ccc map, and
+`get-illegal-char-list` length + both endpoints for all four forms) is IDENTICAL
+across the interpreter, the JVM, WASM Preview 1 and `--component`, and identical
+to the real build's output on every line except the four `unicode-letter-p` lines
+where the derived table is the CORRECT one (Finding 3). It runs in 3.7 s
+interpreted against 404 s+.
 
-Three things the spike settled that were guesses before:
+Two things the spike had concluded that this reversed:
 
-- **The JVM 64 KB method limit is real here.** The first generation put each
-  table in one `dolist` over a literal and blew up at 134,021 bytes of method
-  code (`.kb/jvm-method-size-limits.md`). Chunking the data into per-chunk
-  defuns (250 entries each) fixes it and must be part of the design, not an
-  afterthought.
-- **The `*unicode-letters*` range loops are NOT a time problem.** Dropping all
-  ~101k hardcoded CJK/Hangul/Tangut entries saves ~50 ms and 0.8 KB. The
-  range-predicate rewrite is live-set hygiene for Finding 2, not a speed win --
-  demote it accordingly.
-- **Two latent bugs surfaced, both on the REAL path.** See below. Neither is
-  caused by the lite tables; the lite build merely made them visible.
+- **Chunked literal DATA DEFUNS are the wrong encoding, not a mandatory one.**
+  They fix the 64 KB method limit and blow the 65534-entry CONSTANT POOL limit,
+  which is Finding 4 (below). Bulk numbers are emitted as decimal runs inside
+  string literals scanned by a generated helper: one pool entry per 18,000-char
+  chunk instead of two per distinct integer.
+- **`*unicode-letters*` keeps its CATEGORIES.** The spike stored `"Lo"` for
+  everything (only `unicode-letter-p` reads the table, as a boolean). Emitting
+  one range list per category costs ~2,000 more integers and loses nothing.
 
 ## Finding 3 -- `uax-15:unicode-letter-p` is WRONG today, on every backend
+
+(Split out as `.todo/181` for the general `*features*` gap. The uax-15 victim is
+no longer broken -- the derived tables never call `char-from-hexstring`, and
+`Uax15E2eTest` now asserts `T` for `#\A` on all four backends -- but that is a
+side effect, not a fix.)
 
 The spike's only output divergence was `unicode-letter-p`, and the **lite build
 is the correct one**: real says `(unicode-letter-p #\A)` -> NIL, and likewise for
@@ -308,25 +326,38 @@ correctness gap on the declared follow-up to `.todo/115`, not a curiosity. The
 `*features*` fidelity problem is the general bug and deserves its own item; the
 uax-15 breakage is one victim.
 
-## Finding 4 -- a JVM operand-stack underflow the lite build exposes
+## Finding 4 -- RESOLVED 2026-07-26: not an operand-stack bug, a constant-pool overflow
 
-With the lite modules in place, `(ql:quickload "cl-postgres")` compiled to a
-`.class` dies:
+With the SPIKE's lite modules in place (the chunked literal data defuns),
+`(ql:quickload "cl-postgres")` compiled to a `.class` died with
 
 ```
-while compiling lambda _lambda_2596: operand-stack model: underflow at 31 (opcode 0xb8)
+while compiling lambda _lambda_2603: operand-stack model: underflow at 31 (opcode 0xb8)
 ```
 
-Not caused by the lite tables themselves: the lite modules compile and run
-correctly to a `.class` on their own, `(ql:quickload "uax-15")` lite compiles to
-a `.class` fine, and `postgres-hello.lisp` with the REAL uax-15 compiles fine.
-It needs lite + cl-postgres together, reproduces with `--no-prune` (at a
-different lambda, `_lambda_2509`, underflow at 819, opcode 0xb6) and with
-`--optimize`, and does NOT occur on the WASM component. So it is a latent bug in
-`am.ik.jvm`'s emit-time operand-stack model (`.kb/jvm-operand-stack-model.md`)
-that the changed code shape happens to reach. Root-cause it as part of this work
--- shipping the lite modules without it would trade one broken backend for
-another.
+Reproduced, root-caused, fixed. It is not an `am.ik.jvm` operand-stack bug at
+all -- the model was the messenger. The failing `invokestatic`'s constant-pool
+operand was **296**, and entry 296 is a `Fieldref`; the model read that entry's
+`Ljava/lang/Object;` as if it were an argument list, counted 17 arguments and
+underflowed. The real index was **65832** (`0x10128`), and every emit site writes
+an index as `(short) index`, so it was silently truncated to `0x0128` = 296:
+`poolSize=65832` against the class-format limit of 65534. `~25,000` distinct
+integer literals is enough on top of cl-postgres, because an integer literal is a
+boxed `long` and a `CONSTANT_Long` takes TWO pool slots.
+
+This is why the failure "needed lite + cl-postgres together", moved to a
+different lambda under `--no-prune`, and never happened on WASM. The lambda it
+landed in (cl-ppcre's `quote-substring`) had nothing to do with it.
+
+Fixed at the source: `ConstantPool.add` now refuses the entry that would cross
+`MAX_INDEX` (counting both slots of a long/double before accepting), so the error
+names the real cause; the serialization-time check became an unreachable
+backstop. `OperandStack.invoke` additionally rejects an operand whose pool entry
+is not a method descriptor, so any OTHER way an index goes wrong is diagnosed
+instead of mis-decoded. Pinned by `am.ik.jvm.ConstantPoolTest`; documented in
+`.kb/jvm-method-size-limits.md` (new third-ceiling section), which also records
+the design consequence: bulk data must be string literals, and per-chunk defuns
+make the pool WORSE.
 
 **(C) Reduce allocation volume.** The cl-ppcre literal-pattern scanner cache
 above is the concrete, library-independent piece: hoist a literal-pattern
@@ -334,6 +365,31 @@ above is the concrete, library-independent piece: hoist a literal-pattern
 already have the machinery -- this is the same shape as
 `CompileTimePathnameFolder`'s call-shape reduction). Worth doing regardless of
 (A)/(B); ~1.8x on every regex call site.
+
+## Finding 5 -- `uax-15:get-mapping` fails on every backend (found 2026-07-26, not caused by this work)
+
+Noticed while building the normalization vector, so it is recorded rather than
+lost; it is NOT a regression from the derived tables (the real build fails the
+same way).
+
+`(uax-15:get-mapping :nfd)` signals on the interpreter and on the JVM, and the
+interpreter's message is the honest one: `STRING cannot coerce 192 to a string`.
+`get-mapping`'s local `to-str` is `(if (listp x) (coerce x 'string) (string x))`
+and it is applied to the decomposition maps' KEYS, which are integers
+(`parse-hex-string-to-int`) -- `(string 192)` is a type error in Common Lisp too,
+so the function is broken upstream, not here. Nothing calls it (it is exported
+API, no caller in uax-15, cl-postgres or Postmodern), which is why it went
+unnoticed.
+
+The part that IS ours: on the JVM the same program dies with a raw
+`java.lang.ClassCastException: class [I cannot be cast to class
+java.math.BigInteger` out of `_sub`, i.e. an `int[]` (a char vector's backing
+store) reaches the numeric helper and a HOST exception escapes where a Lisp
+condition is owed -- an `ignore-errors` around it would not catch it. The general
+case is fine (`(- (list 1) 2)` signals a catchable `SIMPLE-ERROR` on both the
+interpreter and the JVM), so this is specifically the char-vector representation
+leaking into arithmetic. Small, but it is a cross-backend condition-system hole
+worth its own item if it shows up again.
 
 ## Phases
 
@@ -344,31 +400,50 @@ already have the machinery -- this is the same shape as
    transitive forcing; `defvar` idempotence over a pending expression;
    `defparameter` superseding it; the `#.` channel forcing; and both halves of
    the failed-init contract) plus five mechanism tests in `EnvironmentTest`.
-2. **The uax-15 leaf-module lite (option B2)** -- spiked and measured above;
-   what remains is productionizing it: derive the tables at compile time from
-   the bundled data file rather than checking them in, chunk the data forms
-   (mandatory, see the 64 KB limit), route it through
-   `ShimLibraries.leafModuleForms`, and pin it with the normalization-vector
-   program. Blocked on Finding 4.
-3. **Finding 4 -- the JVM operand-stack underflow.** Gates phase 2.
-4. **Finding 3 -- `*features*` fidelity** (`pushnew` invisible to the compile
-   path entirely, and to the reader on both paths). Split into its own item;
-   it is what breaks `unicode-letter-p`, and the lite build must not simply
-   paper over it (the lite tables are correct BECAUSE they sidestep
-   `char-from-hexstring`, which is luck, not a fix).
-5. **cl-ppcre literal-pattern scanner hoisting** (Finding 2 / option C).
+2. ~~**The uax-15 leaf-module lite (option B2)**.~~ **DONE 2026-07-26** --
+   landed as form-level SOURCE rewrites, not leaf-module forms (the seam
+   difference matters, see "The derived tables" above): tables derived at
+   compile/load time from the bundled data, emitted as string-literal decimal
+   runs, both loaders wired, marker guards throwing on an upstream move. Pinned
+   by `Uax15E2eTest` on all four backends and `Uax15TablesTest` on the
+   derivation. Remaining doc gap, PRE-EXISTING and not introduced here: uax-15
+   has no row in the `doc/{en,ja}/guides/asdf-systems.md` loadable-library table
+   and no `examples/asdf/` demo, unlike the ten libraries listed there (a gap
+   left by todos 154/159). Adding it also means fixing that section's own
+   "Nine"/"all ten" mismatch.
+3. ~~**Finding 4 -- the JVM operand-stack underflow.**~~ **DONE 2026-07-26** --
+   it was the 65534-entry constant-pool ceiling truncating emitted u2 indices,
+   not an operand-stack bug; see Finding 4 above. It did not gate phase 2 in the
+   end: the string-literal encoding phase 2 needs for other reasons also keeps
+   the pool small, and cl-postgres compiles to a `.class` again.
+4. **Finding 3 -- `*features*` fidelity** -- SPLIT OUT as `.todo/181`. The
+   derived tables sidestep `char-from-hexstring`, so `unicode-letter-p` is
+   correct now (and pinned), but that is luck: the next library that pushes a
+   feature and reads it back still takes the wrong branch silently.
+5. **cl-ppcre literal-pattern scanner hoisting** (Finding 2 / option C). The
+   ~1.8x is still on the table and still library-independent; nothing in phases
+   1-3 touched it.
 6. **Decide whether general (A) is still worth it** against the run time that
-   remains after 1-5, and record the decision with its reason in `.kb/` so the
-   next visitor can tell whether it still holds. The spike suggests it is not
-   needed for THIS program (0.31 s warm run already), so (A) should be judged on
-   its own merits for other libraries, not carried by uax-15.
-7. **Re-measure and rewrite the docs.** PARTLY DONE: phase 1 falsified the
-   "expect the first run to take minutes either way" sentence in
-   `examples/db/README.md` and the header of `examples/db/postgres-hello.lisp`
-   (compiling is now seconds), so both were corrected to say that the COMPILED
-   paths are fast and the INTERPRETER is the slow one. Revisit after phase 2 --
-   the interpreter's several minutes is uax-15's load, which the leaf-module
-   lite removes, and the component's ~30 s run is Finding 2.
+   remains. The number to judge it against now exists: postgres-hello is 0.6 s
+   on the JVM and 2.2 s warm on the component, and the remaining component time
+   is module load plus the ~150k-iteration string scan of the derived data --
+   NOT re-executed library init. So (A) has no case left FOR THIS PROGRAM. Judge
+   it on the next library with load-time table building, and record the decision
+   with its reason in `.kb/`.
+   A cheaper idea surfaced while doing phase 2 and is worth costing out first,
+   because it is GENERAL where (A) needs a serializability judgment:
+   **`LibraryDefunPruner` already knows `get-illegal-char-list` is unreachable**
+   -- a rule for "a top-level `let`/`let*` whose body's only definitions are
+   pruned defuns is itself dead" would delete such blocks (and cl-ppcre's
+   `(let* ((scanner (create-scanner ...))) (defun ...))` idiom) with no data
+   derivation at all. It needs a sound purity side-condition for the non-defun
+   forms in the `let` body; that is the whole question.
+7. **Re-measure and rewrite the docs.** DONE for this seed case:
+   `examples/db/README.md` and the `postgres-hello.lisp` header no longer warn
+   about the interpreter at all -- every backend runs it in a few seconds. The
+   `.kb` files were updated with phase 2/3 (`asdf.md`,
+   `jvm-method-size-limits.md`). What is left is the loadable-library doc row in
+   item 2.
 
 ## Notes worth not re-deriving
 

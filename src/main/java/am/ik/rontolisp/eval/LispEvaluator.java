@@ -1198,6 +1198,16 @@ public final class LispEvaluator {
 	 * relative to it.
 	 */
 	private void loadFile(String operator, String rawPath) {
+		loadFile(operator, rawPath, null);
+	}
+
+	/**
+	 * Loads one file. When it is a COMPONENT of an ASDF system, that system's name is
+	 * given too, so {@link ShimLibraries#rewriteComponentSource} can rewrite forms of the
+	 * real source (uax-15's table building); the base directory the component and the
+	 * bundled data files resolve against is the system's, already on the load-dir stack.
+	 */
+	private void loadFile(String operator, String rawPath, @Nullable String systemName) {
 		String baseDir = this.loadDirStack.peekLast();
 		String resolved = SourceLoader.resolve(baseDir, rawPath);
 		String source;
@@ -1206,6 +1216,9 @@ public final class LispEvaluator {
 		}
 		catch (IOException ex) {
 			throw new LispEvalException(operator + ": cannot read file " + resolved + ": " + ex.getMessage());
+		}
+		if (systemName != null) {
+			source = ShimLibraries.rewriteComponentSource(systemName, rawPath, source, baseDir, this.sourceLoader);
 		}
 		String childDir = SourceLoader.parentDir(resolved);
 		this.loadDirStack.addLast(childDir == null ? "" : childDir);
@@ -1590,7 +1603,7 @@ public final class LispEvaluator {
 					}
 					continue;
 				}
-				loadFile(LispNames.ASDF_LOAD_SYSTEM, file);
+				loadFile(LispNames.ASDF_LOAD_SYSTEM, file, name);
 			}
 		}
 		finally {

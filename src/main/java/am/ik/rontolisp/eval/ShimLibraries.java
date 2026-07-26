@@ -51,6 +51,12 @@ import org.jspecify.annotations.Nullable;
  * {@code pbkdf2-hash-password}'s {@code :salt}), so that shim signals rather than hand
  * out non-cryptographic bytes under a name that promises unpredictability. See
  * {@code .kb/asdf.md}.
+ *
+ * <p>
+ * A third, lighter form of substitution rewrites INDIVIDUAL FORMS of a real component and
+ * leaves the rest of the file verbatim: {@link #rewriteComponentSource} hands uax-15's
+ * table-building forms to {@link Uax15Tables}, which derives the same tables from the
+ * same bundled Unicode data at compile time and emits them as data.
  */
 public final class ShimLibraries {
 
@@ -130,6 +136,31 @@ public final class ShimLibraries {
 		}
 		return CACHE.computeIfAbsent(resource,
 				key -> LispReader.readAllFromString(readSource(key), Features.INTERPRETER));
+	}
+
+	/**
+	 * Returns the source of the given component of the named system, REWRITTEN when the
+	 * component is one whose load-time table building rontolisp derives at compile time
+	 * instead ({@code uax-15}, see {@link Uax15Tables}). Unlike {@link #leafModuleForms},
+	 * which substitutes a whole component with canonical-shape forms, this rewrites the
+	 * real source in place and hands it back to the caller's normal read: everything the
+	 * rewrite does not touch stays verbatim upstream, and it keeps the package resolution
+	 * a real component file gets.
+	 * @param systemName the ASDF system name (canonical lower-case)
+	 * @param componentFile the component source file, relative to the system's base
+	 * directory
+	 * @param source the real component source
+	 * @param baseDir the system's base directory (bundled data files resolve against it)
+	 * @param loader the loader those data files are read through
+	 * @return the source to read, the given one when nothing is rewritten
+	 */
+	public static String rewriteComponentSource(String systemName, String componentFile, String source,
+			@Nullable String baseDir, SourceLoader loader) {
+		if (!Uax15Tables.SYSTEM.equals(systemName)) {
+			return source;
+		}
+		String rewritten = Uax15Tables.rewrite(componentFile, source, baseDir, loader);
+		return rewritten == null ? source : rewritten;
 	}
 
 	private static String readSource(String resource) {

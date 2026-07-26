@@ -278,6 +278,17 @@ public final class LoadInliner {
 	 * relative to the file's directory.
 	 */
 	private static void spliceFile(String operator, String path, List<LispVal> out, Ctx ctx) {
+		spliceFile(operator, path, out, ctx, null, null, null);
+	}
+
+	/**
+	 * Splices one file. When it is a COMPONENT of an ASDF system, the system's name, the
+	 * component's path within it and the system's base directory are given too, so
+	 * {@link ShimLibraries#rewriteComponentSource} can rewrite forms of the real source
+	 * (uax-15's table building).
+	 */
+	private static void spliceFile(String operator, String path, List<LispVal> out, Ctx ctx,
+			@Nullable String systemName, @Nullable String componentFile, @Nullable String systemBaseDir) {
 		if (ctx.loading().contains(path)) {
 			throw new IllegalStateException(
 					"Circular load detected: " + String.join(" -> ", ctx.loading()) + " -> " + path);
@@ -288,6 +299,10 @@ public final class LoadInliner {
 		}
 		catch (IOException ex) {
 			throw new IllegalStateException(operator + ": cannot read file " + path + ": " + ex.getMessage(), ex);
+		}
+		if (systemName != null && componentFile != null) {
+			source = ShimLibraries.rewriteComponentSource(systemName, componentFile, source, systemBaseDir,
+					ctx.loader());
 		}
 		ctx.loading().addLast(path);
 		// #. in a loaded file rides the same marker read as the main source; the markers
@@ -392,7 +407,8 @@ public final class LoadInliner {
 					out.addAll(leafShim);
 					continue;
 				}
-				spliceFile(LispNames.ASDF_LOAD_SYSTEM, SourceLoader.resolve(system.baseDir(), file), out, ctx);
+				spliceFile(LispNames.ASDF_LOAD_SYSTEM, SourceLoader.resolve(system.baseDir(), file), out, ctx, name,
+						file, system.baseDir());
 			}
 		}
 		finally {

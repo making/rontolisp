@@ -21,6 +21,17 @@ import java.util.List;
  * mutable-character vectors (subseq's vector arm added in this integration).
  *
  * <p>
+ * It is also the pin for {@link am.ik.rontolisp.eval.Uax15Tables}: those load-time table
+ * builds are the ones rontolisp DERIVES from the same bundled data files while loading or
+ * compiling and emits as data, so the combining-class map, the illegal-character list
+ * (length and both endpoints, i.e. the whole ordered list) and {@code unicode-letter-p}
+ * are asserted here alongside the normalizations. {@code unicode-letter-p} answering T
+ * for {@code #\A} is the derived table's doing: upstream's own letter loop keys every
+ * data-derived entry on {@code nil}, because a file's {@code pushnew} onto
+ * {@code *features*} never reaches the reader that would enable {@code #+utf-32} in
+ * {@code char-from-hexstring}.
+ *
+ * <p>
  * All four backends produce the same code-point sequences: the WASM GC string byte data
  * is UTF-8 encoded on serialization ({@code _charvec_to_str} emits each character's 1-4
  * byte UTF-8 sequence) and read back through
@@ -49,9 +60,15 @@ class Uax15E2eTest extends AsdfLibraryE2eSupport {
 			(print (codes (uax-15:normalize (format nil "~C~C" (code-char #x2460) (code-char #x00BD)) :nfkc)))
 			(print (codes (uax-15:normalize (string (code-char #xFB00)) :nfkd)))
 			(print (codes (uax-15:normalize (string (code-char #x212B)) :nfc)))
+			(print (gethash #x0301 (uax-15:get-canonical-combining-class-map) 0))
+			(let ((illegal (uax-15:get-illegal-char-list :nfc)))
+			  (print (list (length illegal) (first illegal) (car (last illegal)))))
+			(print (mapcar (lambda (code) (uax-15:unicode-letter-p (code-char code)))
+			               (list #x41 #x3042 #x30 #x4E00)))
 			""";
 
-	private static final List<String> EXPECTED = List.of("(197)", "(65 778)", "(49 49 8260 50)", "(102 102)", "(197)");
+	private static final List<String> EXPECTED = List.of("(197)", "(65 778)", "(49 49 8260 50)", "(102 102)", "(197)",
+			"230", "(1231 (832 NIL) (71984 T))", "(T T NIL T)");
 
 	@Override
 	protected String systemDir() {
