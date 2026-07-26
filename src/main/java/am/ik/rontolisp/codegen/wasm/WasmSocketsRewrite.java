@@ -69,6 +69,24 @@ final class WasmSocketsRewrite {
 			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT), new int[] { 2, 2 }),
 			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT), new int[] { 1, 1 }));
 
+	// The sequence ops and the eof-tolerant read-byte, dispatched by arity (they need
+	// per-shape targets, so they stay out of the 1:1 maps above): cl-postgres' socket
+	// layer reads/writes byte arrays with (read-sequence result socket) /
+	// (write-sequence bytes socket) and probes with (read-byte socket nil 0), none of
+	// which the plain maps cover -- unrewritten they compile to the NATIVE stream
+	// built-ins, whose fd_read/fd_write on a socket fd (>= 200) walks off the preview1
+	// adapter's 64-slot fd table. A non-socket designator still reaches the native
+	// expansion through the %...-raw aliases inside the dispatch defuns.
+	private static final String IO_READ_BYTE_EOF = "%IO-READ-BYTE-EOF";
+
+	private static final String READ_BYTE_EOF_FUTURE = "%READ-BYTE-EOF-FUTURE";
+
+	private static final String IO_READ_SEQUENCE = "%IO-READ-SEQUENCE";
+
+	private static final String READ_SEQUENCE_FUTURE = "%READ-SEQUENCE-FUTURE";
+
+	private static final String IO_WRITE_SEQUENCE = "%IO-WRITE-SEQUENCE";
+
 	private static final String IO_MARKER = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%IO-READ-LINE");
 
 	private WasmSocketsRewrite() {
@@ -85,7 +103,11 @@ final class WasmSocketsRewrite {
 	 * @return the {@code %io-*} member names
 	 */
 	static Set<String> strictDispatchMembers() {
-		return Set.copyOf(SYNC_DISPATCH.values());
+		Set<String> members = new java.util.HashSet<>(SYNC_DISPATCH.values());
+		members.add(IO_READ_BYTE_EOF);
+		members.add(IO_READ_SEQUENCE);
+		members.add(IO_WRITE_SEQUENCE);
+		return Set.copyOf(members);
 	}
 
 	/**
@@ -212,6 +234,20 @@ final class WasmSocketsRewrite {
 		if (LispNames.CLOSE.equals(head) && parts.size() == 4 && parts.get(2) instanceof LispSymbol kw
 				&& ":ABORT".equals(kw.name())) {
 			parts = List.of(parts.get(0), parts.get(1));
+		}
+		// The eof-tolerant read-byte (2-3 args) and the 2-arg sequence ops take their
+		// own dispatch targets; reads promote in async context like the 1-arg reads,
+		// writes never do.
+		if (LispNames.READ_BYTE.equals(head) && (parts.size() == 3 || parts.size() == 4)) {
+			return asyncContext ? awaitOf(replaceHead(parts, READ_BYTE_EOF_FUTURE, true))
+					: replaceHead(parts, IO_READ_BYTE_EOF, false);
+		}
+		if (LispNames.READ_SEQUENCE.equals(head) && parts.size() == 3) {
+			return asyncContext ? awaitOf(replaceHead(parts, READ_SEQUENCE_FUTURE, true))
+					: replaceHead(parts, IO_READ_SEQUENCE, false);
+		}
+		if (LispNames.WRITE_SEQUENCE.equals(head) && parts.size() == 3) {
+			return replaceHead(parts, IO_WRITE_SEQUENCE, asyncContext);
 		}
 		int[] arity = ARITIES.get(head);
 		if (arity != null && (parts.size() - 1 < arity[0] || parts.size() - 1 > arity[1])) {

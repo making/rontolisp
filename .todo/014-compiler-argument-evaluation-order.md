@@ -72,6 +72,19 @@ Common Lisp. Target: `order=123` everywhere.
   `defparameter`). Once this is fixed they can be simplified back to the natural
   single-form `(list (funcall ...) (funcall ...) (funcall ...))` shape.
 
+## A second field sighting (2026-07-26, from the cl-postgres component work)
+
+The `--component` socket layer surfaced the same defect and it was briefly
+misfiled as an async-scheduler bug (the deleted `.todo/176`, finding 1): at the
+top level, `(print (list (rb sock) (rb4 sock) (rb4 sock)))` -- each helper a
+plain defun doing sequential `read-byte`s -- consumed the wire bytes in
+REVERSE argument order, exactly this right-to-left evaluation (a socket read is
+an argument form with side effects). Note the contrast that proves it is not
+the async machinery: reads PROMOTED to `rontolisp:await` in the same position
+are hoisted into sequenced bindings by `WasmAwaitNormalizer` and observe
+left-to-right order correctly; only the un-promoted (plain-call) arguments
+reverse, on the JVM and both WASM backends alike.
+
 ## Related observation (separate, unverified)
 
 While probing this, a closure that captures a free variable named `log` (a `cl`

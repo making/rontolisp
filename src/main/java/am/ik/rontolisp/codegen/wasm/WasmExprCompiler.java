@@ -268,6 +268,8 @@ final class WasmExprCompiler {
 						|| LispNames.WRITE_LINE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.WRITE_BYTE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.WRITE_STRING_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.READ_SEQUENCE_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.WRITE_SEQUENCE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.CLOSE_RAW_INTERNAL.equals(qn.member())) {
 					// The NATIVE stream built-ins under their internal alias names: the
 					// %io-* socket-dispatch defuns sockets.lisp splices fall back through
@@ -286,8 +288,23 @@ final class WasmExprCompiler {
 						case LispNames.WRITE_BYTE_RAW_INTERNAL -> WasmWriteByteCompiler.compile(cons, ctx);
 						case LispNames.WRITE_STRING_RAW_INTERNAL ->
 							WasmWriteStringCompiler.compileWriteString(cons, ctx);
+						case LispNames.READ_SEQUENCE_RAW_INTERNAL ->
+							WasmExprCompiler.compileExpr(LispMacroExpander.expandReadSequence(cons), ctx);
+						case LispNames.WRITE_SEQUENCE_RAW_INTERNAL ->
+							WasmExprCompiler.compileExpr(LispMacroExpander.expandWriteSequence(cons), ctx);
 						default -> WasmCloseCompiler.compile(cons, ctx);
 					}
+					return;
+				}
+				if (LispNames.STR_BYTE_LENGTH_INTERNAL.equals(qn.member())
+						|| LispNames.STR_BYTE_REF_INTERNAL.equals(qn.member())
+						|| LispNames.STR_FROM_BYTE_INTERNAL.equals(qn.member())) {
+					// Byte-level string access for sockets.lisp's chunk bookkeeping: a
+					// socket chunk's BYTES are the wire truth, and the character
+					// accessors
+					// UTF-8-decode them (component-only; the names exist only
+					// post-splice).
+					WasmStrByteCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
 				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {

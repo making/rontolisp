@@ -7007,6 +7007,88 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void componentTcpBinaryBytesAreWireTransparent() throws Exception {
+		// The socket chunk cursor walks BYTES, not UTF-8 characters (todo-177's root
+		// cause: binary bytes forming a valid multi-byte sequence collapsed into one
+		// char and shifted the stream). Both directions are pinned: a string's UTF-8
+		// bytes read back byte-by-byte through read-byte, and write-byte puts exactly
+		// ONE byte on the wire (two raw bytes forming a valid 2-byte sequence decode
+		// as ONE char on the peer -- under the old per-char model each write-byte
+		// emitted a full UTF-8 sequence, invisible in loopback because the read side
+		// decoded it back).
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (write-string "AÇB" client)
+				  (let* ((b1 (read-byte server))
+				         (b2 (read-byte server))
+				         (b3 (read-byte server))
+				         (b4 (read-byte server)))
+				    (print (list b1 b2 b3 b4)))
+				  (write-byte 199 client)
+				  (write-byte 184 client)
+				  (print (char-code (read-char server)))
+				  (close client)
+				  (close server)
+				  (close listener))
+				""";
+		byte[] componentBytes = compileFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-binary.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"tcp=y", "-S", "inherit-network=y", "/tmp/tcp-binary.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("(65 195 135 66)\n504");
+	}
+
+	@Test
+	void componentTcpSequenceOpsReachTheSocketDispatch() throws Exception {
+		// read-sequence / write-sequence / 3-arg read-byte on a socket handle -- the
+		// cl-postgres surface -- must reach the sockets.lisp dispatch on BOTH the sync
+		// path (inside a defun, the driver's shape) and the async top level (promoted
+		// futures). Unrewritten they compile to the native stream built-ins, whose
+		// fd_read/fd_write on a socket fd (>= 200) walks off the preview1 adapter's
+		// 64-slot fd table ("unknown handle index"). The :eof value pins the
+		// eof-tolerant read-byte after peer close.
+		String program = """
+				(defun run-sync ()
+				  (let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				         (port (rontolisp:tcp-local-port listener))
+				         (client (rontolisp:tcp-connect "127.0.0.1" port))
+				         (server (rontolisp:tcp-accept listener))
+				         (buf (make-array 4 :initial-element 0)))
+				    (write-sequence (vector 1 2 250 4) client)
+				    (read-sequence buf server)
+				    (print (list (aref buf 0) (aref buf 1) (aref buf 2) (aref buf 3)))
+				    (write-byte 65 client)
+				    (print (read-byte server nil :eof))
+				    (close client)
+				    (print (read-byte server nil :eof))
+				    (close server)
+				    (close listener)))
+				(run-sync)
+				(let* ((l2 (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (c2 (rontolisp:tcp-connect "127.0.0.1" (rontolisp:tcp-local-port l2)))
+				       (s2 (rontolisp:tcp-accept l2))
+				       (buf2 (make-array 2 :initial-element 0)))
+				  (write-sequence (vector 7 200) c2)
+				  (read-sequence buf2 s2)
+				  (print (list (aref buf2 0) (aref buf2 1)))
+				  (close c2)
+				  (print (read-byte s2 nil :eof))
+				  (close s2)
+				  (close l2))
+				""";
+		byte[] componentBytes = compileFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-seq.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"tcp=y", "-S", "inherit-network=y", "/tmp/tcp-seq.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("(1 2 250 4)\n65\n:EOF\n(7 200)\n:EOF");
+	}
+
+	@Test
 	void componentUsocketEchoOverLoopback() throws Exception {
 		// The usocket shim (usocket.lisp, spliced by UsocketLibrary.process like the
 		// CLI pre-pass) over the same loopback choreography as componentTcpLoopbackEcho.

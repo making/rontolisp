@@ -2051,9 +2051,12 @@ final class WasmReadRuntimeBuilder {
 		final int FD_ADDR = WasmLispCompiler.READ_FD_ADDR;
 
 		// The path bytes live on the GC heap: copy them into linear scratch at HEAP_PTR
-		// (not advanced -- path_open consumes them immediately, and the file read below
-		// reuses the same scratch base). off = HEAP_PTR ; plen = _str_to_mem(path, off) -
-		// 2.
+		// and ADVANCE HEAP_PTR over them for the duration of path_open (popped back
+		// right after, so the file read below reuses the same scratch base): under
+		// --component the adapter's first open lifts the preopen directory list through
+		// cabi_realloc, which allocates at HEAP_PTR -- an un-advanced staging would be
+		// overwritten before path_open reads it. off = HEAP_PTR ; plen =
+		// _str_to_mem(path, off) - 2.
 		loadMem32(w, HEAP);
 		setLocal(w, OFF);
 		getLocal(w, PATH);
@@ -2062,6 +2065,16 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, PLEN);
+		// HEAP_PTR = align8(off + plen + 2)
+		i32(w, HEAP);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// path_open(dirfd=3, dirflags=0, path_ptr=off+1, path_len=plen, oflags=0,
 		// fs_rights_base=FD_READ(2), fs_rights_inheriting=0, fdflags=0, fd_out=FD_ADDR)
 		i32(w, 3);
@@ -2079,7 +2092,13 @@ final class WasmReadRuntimeBuilder {
 		i32(w, FD_ADDR);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		// pop the staged path on BOTH exits (PLEN is free now: reuse it for the errno)
+		setLocal(w, PLEN);
+		i32(w, HEAP);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// if errno != 0: return nil
+		getLocal(w, PLEN);
 		ifVoid(w);
 		emitNull(w);
 		w.write(Instruction.RETURN);

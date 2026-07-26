@@ -1262,6 +1262,20 @@ public final class WasmLispCompiler implements LispCompiler {
 	// the --component blobs are unaffected (see CLAUDE.md index-stability invariant).
 	private static final int DATA_BASE_OFFSET = 256;
 
+	// The --component interned-string data base: page 6, ABOVE every other writer of
+	// the component's ONE shared memory -- the core's fixed cells and env/socket
+	// scratch (pages 0-4), the preview1 adapter's scratch cells (page 5, 0x50000..),
+	// and the serve memory module's canonical-ABI cell/window at 0x10000. A large
+	// program's static data (cl-postgres: ~3 MB) otherwise grows straight across
+	// those regions: the segment bytes install at instantiation, so the adapter's
+	// zero-initialized flag cells read back interned-string bytes and its first
+	// blocking wait dies with "unknown handle index" (the cached waitable-set cell
+	// held string data). Preview 1 keeps DATA_BASE_OFFSET and stays byte-identical;
+	// under --component the non-serve canonical-ABI allocator no longer has a fixed
+	// region at all (mem.wat's cabi_realloc bumps the core's HEAP_PTR cell -- one
+	// shared monotonic allocator, see src/wasm-component/mem.wat).
+	private static final int COMPONENT_DATA_BASE_OFFSET = 0x60000;
+
 	@Override
 	public byte[] compile(List<LispVal> program) {
 		// Resolve packages (in-package directives, qualified symbols, *package*) up front
@@ -1703,7 +1717,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		int serveInitGlobalIndex = this.serve ? taskSeqGlobalIndex + 1 : -1;
 
 		// Create string table
-		int dataBase = DATA_BASE_OFFSET;
+		int dataBase = this.component ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
 		StringTable stringTable = new StringTable(dataBase);
 		// Bake the instance layouts into the data segment BEFORE Pass 2a: %obj-new
 		// emits a record's address as an i32.const inside an ordinary function body, so

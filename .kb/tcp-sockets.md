@@ -245,6 +245,41 @@ top-level suspension drives through the blocking event loop exactly as under
   mechanics live in `.kb/read-load-streams.md`); anything else -> the
   `%...-raw` internal aliases of the NATIVE built-ins (no rewrite recursion).
   A wrong-arity call is left unrewritten so it errors under its public name.
+- **The chunk buffer walks BYTES, never characters (todo-177's root cause)**: a
+  GC string's `$str_bytes` hold UTF-8 and the character accessors
+  (`length`/`char`) decode them, but a socket chunk's bytes ARE the wire --
+  binary data that happens to form a valid multi-byte sequence (a PostgreSQL
+  BackendKeyData secret) collapsed into one char under the old char-based
+  cursor, shifting the rest of the stream and hanging the driver on a read for
+  bytes it had already swallowed. sockets.lisp therefore keeps a BYTE cursor
+  over the chunk through three component-only intrinsics
+  (`WasmStrByteCompiler`): `rontolisp::%str-byte-length` /
+  `rontolisp::%str-byte-ref` (raw `$str_bytes` access) and
+  `rontolisp::%str-from-byte` (a one-content-byte string, valid UTF-8 or not,
+  which the raw-`$str_bytes` write path puts on the wire as exactly that byte
+  -- `write-byte` of a value >= 128 used to emit a TWO-byte UTF-8 sequence,
+  invisible in rontolisp-to-rontolisp loopback because the read side decoded it
+  back). `read-byte` pops one wire byte; `read-line` accumulates bytes (so a
+  UTF-8 line decodes exactly like the interpreter's byte-collecting readLine,
+  chunk boundaries included); `read-char` assembles one UTF-8 sequence
+  byte-wise (refills mid-sequence work). Pinned by
+  `componentTcpBinaryBytesAreWireTransparent`.
+- **Sequence ops and the eof-tolerant read-byte dispatch (cl-postgres'
+  surface)**: `(read-sequence seq s)` / `(write-sequence seq s)` (2-arg forms)
+  and `(read-byte s eof-error-p [eof-value])` are rewritten onto
+  `%io-read-sequence` / `%io-write-sequence` / `%io-read-byte-eof` (sync
+  context) or promoted onto `%read-sequence-future` / `%read-byte-eof-future`
+  (async context; writes never promote). A non-socket designator falls through
+  to the native expansions via the `%read-sequence-raw`/`%write-sequence-raw`
+  aliases and the 3-arg `%read-byte-raw`, byte-identical semantics to the
+  unrewritten forms -- this is what the earlier reverted attempt got wrong (it
+  widened `%io-read-byte` itself and broke a top-level file read at EOF in the
+  ci-spec corpus). Unrewritten, these calls compile to the NATIVE stream
+  built-ins whose `fd_read`/`fd_write` on a socket fd (>= 200) walks off the
+  preview1 adapter's 64-slot fd table -- the "unknown handle index" crash.
+  Socket write-sequence elements are BYTES (integers), like the interpreter's
+  per-element `write-byte` expansion. Pinned by
+  `componentTcpSequenceOpsReachTheSocketDispatch`.
 - **The two rewrites MEET in an async body, and the `%` prefix is a naming
   convention there, not a marker of specialness**: a write is never promoted,
   so it takes the `%io-*` dispatch head even in async context, while a read in

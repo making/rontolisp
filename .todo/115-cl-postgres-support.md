@@ -344,18 +344,39 @@ Reverted, with the analysis kept:
   a top-level (async-context) `with-open-file` -- a 3-arg read is not promoted
   to an await, so it takes the sync `%io-*` dispatch inside an async task.
 
-**What is left**: the component connects, sends `startup-message`, and walks
-the whole post-auth message stream correctly -- verified message by message
-against the JVM (`AuthenticationOk`, 14 `ParameterStatus`, `BackendKeyData`,
-all with identical tags and lengths) -- and then HANGS on the read that should
-return `ReadyForQuery` ('Z'), which the JVM receives immediately. A hand-rolled
-tag walk over the same socket reaches the same point, so the driver's own
-`message-case` is not implicated. Next step: instrument `%sock-fill` /
-`sock-stream-read` at the point after `BackendKeyData` -- does the host return
-a chunk that the entry then discards, or does the async read never settle?
-(`.todo/176` records two separate top-level-only async findings from the same
-tracing session: argument-order reversal of multiple promoted reads in ONE
-call, and an `fd_write` handle crash after many interleaved reads/prints.)
+**What was left then -- the ReadyForQuery stall -- is DONE (2026-07-26, the
+todo-177 session)**: `examples/db/postgres-hello.lisp` compiled `--component
+--optimize` returns `((42 "hello"))` and `((1) (2) (3))` under `wasmtime run -W
+gc=y -W exceptions=y -S tcp=y -S inherit-network=y`, identical to the
+interpreter and the JVM. Three root causes, none of them the async scheduler
+the stall pointed at:
+
+1. **The chunk cursor walked CHARACTERS over a UTF-8-decoding string.** The
+   BackendKeyData secret's random bytes formed valid multi-byte sequences,
+   collapsed into single chars, and the shifted stream swallowed ReadyForQuery
+   into the K payload -- the next read then waited for bytes the host had
+   already delivered. sockets.lisp now keeps a BYTE cursor via the new
+   `%str-byte-length`/`%str-byte-ref`/`%str-from-byte` intrinsics
+   (`WasmStrByteCompiler`); `write-byte` puts exactly one byte on the wire.
+   `.kb/tcp-sockets.md`, pinned by `componentTcpBinaryBytesAreWireTransparent`.
+2. **The shared-memory map collision (`.todo/178`) fixed for non-serve**:
+   component static data starts at page 6 (`COMPONENT_DATA_BASE_OFFSET`), and
+   mem.wat's `cabi_realloc` bumps the core's HEAP_PTR cell -- one shared
+   monotonic allocator, no ring. `.kb/wasi-component.md`. (The serve memory
+   module keeps its per-request reset window; `.todo/178` is narrowed to that.)
+3. **The sequence ops now reach the socket dispatch** (the previously reverted
+   item, redone with the raw-alias fallback that keeps file semantics
+   byte-identical): `read-sequence`/`write-sequence` (2-arg) and 2/3-arg
+   `read-byte` rewrite onto `%io-read-sequence`/`%io-write-sequence`/
+   `%io-read-byte-eof` (sync) or their `%...-future` twins (async top level).
+   Unrewritten they hit the native `fd_write` on fd >= 200 and walked off the
+   adapter's 64-slot fd table ("unknown handle index"). Pinned by
+   `componentTcpSequenceOpsReachTheSocketDispatch`.
+
+`.todo/176`'s two findings from the stall-hunt session both resolved: the
+`fd_write` handle crash was collision (2); the "reverse read order" is the
+long-known compiler right-to-left argument evaluation (`.todo/014`, now with
+the socket repro noted there) -- not an async bug.
 
 ### The remaining gate: the JVM backend cannot build the whole stack yet (RESOLVED above; historical analysis follows)
 

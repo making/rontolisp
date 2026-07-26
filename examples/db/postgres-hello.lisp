@@ -22,8 +22,7 @@
 ;; no host socket API):
 ;;   rontolisp examples/db/postgres-hello.lisp -o postgres-hello.wasm --component --optimize
 ;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y postgres-hello.wasm
-;; That build connects and authenticates but does not complete a query yet; see
-;; examples/db/README.md. TLS (sslmode) is interpreter/JVM only either way.
+;; TLS (sslmode) is interpreter/JVM only; use plain TCP on WASM.
 
 (ql:quickload "cl-postgres")
 

@@ -6,21 +6,35 @@ Opt-in (CLI `--component`; `WasmLispCompiler(dynamic, component)`; threaded as a
 
 **Gotchas to preserve**: `wasi:cli` and `wasi:filesystem` expose DISTINCT `error-code` types -> separate future built-ins (`future-read-cli`/`-fs`); the fs error-code is a string-bearing variant -> `future-read-fs` needs realloc.
 
-**Shared-memory map -- a KNOWN, UNFIXED collision (`.todo/178`)**: the component's ONE
-linear memory is shared by three writers -- the mem module's `cabi_realloc` bump (from
-page 1 up, monotonic), the adapter's fixed scratch (page 5: env/preopen buffers,
-stream/future handle cells, the 64-slot fd table), and the rontolisp core's static
-data/intern table/heap (from 256 up). Those regions OVERLAP for any program with more
-than ~64 KB of interned data, and past ~256 KB of cumulative ABI traffic the bump walks
-through the adapter's cells: cl-postgres (3.0 MB of static data) hits it as "unknown
-handle index" inside `fd_write`. Programs that work today do so because the bytes each
-side clobbers happen not to be re-read. A fix was attempted and REVERTED in the same
-session (2026-07-26): moving the core's data to page 6 and RINGING the ABI bump inside
-pages 1-2 fixed cl-postgres' symptom but broke the ci-spec corpus -- the ring recycles
-memory the adapter still points into (its cached preopen/environ buffers are canonical-ABI
-allocations that outlive the call that made them), so "every canonical-ABI allocation is
-per-call transient" is FALSE. Any real fix has to reason about which ABI allocations the
-adapter retains, and about two bump allocators growing in one memory; see `.todo/178`.
+**Shared-memory map (fixed for non-serve, 2026-07-26)**: the component's ONE linear
+memory is shared by three writers -- the canonical-ABI allocator, the adapter's fixed
+scratch (page 5: env/preopen buffers, stream/future handle cells, the 64-slot fd
+table), and the rontolisp core's static data/intern table/heap. The non-serve layout
+now separates them structurally:
+
+- **The core's interned-string data starts at page 6** (`COMPONENT_DATA_BASE_OFFSET`
+  = 0x60000, component only; Preview 1 keeps 256 and stays byte-identical). Before
+  this, a program with more than ~64 KB of interned data grew straight across the
+  serve cabi window (0x10000), the core's env/socket scratch (pages 3-4) and the
+  adapter's page-5 cells: the segment bytes install at instantiation, so the
+  adapter's zero-initialized flag cells read back interned-string bytes and its
+  first blocking wait died with "unknown handle index" inside `fd_write` (cl-postgres,
+  3.0 MB of static data, was the first program big enough).
+- **The non-serve `cabi_realloc` (mem.wat) bumps the core's own HEAP_PTR cell
+  (address 84)** -- one shared monotonic allocator instead of a private bump region.
+  Advancing HEAP_PTR is a PERMANENT allocation in the core's discipline (transient
+  string scratch sits above HEAP_PTR and pops back), so host-lifted buffers can never
+  be overwritten by core activity, and there is no fixed ABI window to outgrow. This
+  is the same contract the core's `__ronto_alloc` and (on wasm-export modules) its
+  appended `cabi_realloc` already follow. A 2026-07-26 attempt to instead RING a
+  fixed ABI window was reverted -- "every canonical-ABI allocation is per-call
+  transient" is false (the free-listed 8 KB socket/stdin read buffers alone are
+  retained indefinitely), and monotonic-shared makes the question moot.
+- **Serve is NOT unified**: `mem-http-client.wat` keeps its per-request-reset cabi
+  cell/window at 0x10000 (`CABI_HP_CELL_ADDR`) because a resident host must reclaim
+  request buffers per call. Its window can still collide with the core's page-3/4
+  scratch past ~128 KB of per-request ABI traffic -- the narrowed residual is
+  `.todo/178`.
 
 **Index stability**: WASM static function-import indices and the `FUNC_*` constants in `WasmLispCompiler` are kept identical across modes (preview1-style `random_get`/`clock_time_get`/`environ_*` imports exist in both modes; `WasmRandomCompiler` calls `random_get` in both modes (real host entropy in Preview 1, the adapter's `wasi:random` in component); `WasmTimeCompiler` branches on `Ctx.component`; the 0.2-era `FUNC_FETCH_*` reserved slots and the retired `FUNC_TCP_*` trap stubs are both deleted, so `FUNC_START` is `IMPORT_FUNC_COUNT` = 8).
 

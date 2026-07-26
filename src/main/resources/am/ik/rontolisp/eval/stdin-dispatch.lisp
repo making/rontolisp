@@ -47,3 +47,23 @@
 
 (defun rontolisp::%io-close (stream)
   (rontolisp::%close-raw stream))
+
+;;; The sequence ops and the eof-tolerant read-byte the rewrite also redirects:
+;;; raw passthroughs here (no socket can exist). The %...-future twins are plain
+;;; defuns -- rontolisp:await passes a settled plain value through -- so a
+;;; top-level (read-byte f nil -1) keeps the native built-in's exact semantics.
+
+(defun rontolisp::%io-read-byte-eof (s eof-error-p &optional eof-value)
+  (rontolisp::%read-byte-raw s eof-error-p eof-value))
+
+(defun rontolisp::%read-byte-eof-future (s eof-error-p &optional eof-value)
+  (rontolisp::%read-byte-raw s eof-error-p eof-value))
+
+(defun rontolisp::%io-read-sequence (seq s)
+  (rontolisp::%read-sequence-raw seq s))
+
+(defun rontolisp::%read-sequence-future (seq s)
+  (rontolisp::%read-sequence-raw seq s))
+
+(defun rontolisp::%io-write-sequence (seq s)
+  (rontolisp::%write-sequence-raw seq s))

@@ -41,10 +41,12 @@ final class WasmIoRuntimeBuilder {
 		final int PATH = 0, MODE = 1, OFF = 2, PLEN = 3;
 
 		// The path bytes live on the GC heap, so copy them into linear scratch at
-		// HEAP_PTR
-		// (not advanced -- path_open consumes them immediately) and derive the pointer +
-		// length it needs. off = HEAP_PTR ; plen = _str_to_mem(path, off) - 2 (strip the
-		// surrounding quotes).
+		// HEAP_PTR and derive the pointer + length path_open needs. off = HEAP_PTR ;
+		// plen = _str_to_mem(path, off) - 2 (strip the surrounding quotes). HEAP_PTR is
+		// then ADVANCED over the staged bytes for the duration of the call (and popped
+		// back right after): under --component the adapter's first open lifts the
+		// preopen directory list through cabi_realloc, which allocates at HEAP_PTR --
+		// an un-advanced staging would be overwritten before path_open reads it.
 		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		setLocal(w, OFF);
 		getLocal(w, PATH);
@@ -53,6 +55,16 @@ final class WasmIoRuntimeBuilder {
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, PLEN);
+		// HEAP_PTR = align8(off + plen + 2)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// path_open(dirfd=3, dirflags=0, path_ptr=off+1, path_len=plen,
 		// oflags=(read: 0, write: CREAT|TRUNC=9),
 		// fs_rights_base=(read: FD_READ=2, write: FD_WRITE|FD_SEEK|FD_TELL=100),
@@ -87,7 +99,13 @@ final class WasmIoRuntimeBuilder {
 		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		// pop the staged path (PLEN is free now: reuse it for the errno)
+		setLocal(w, PLEN);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// if errno != 0: trap
+		getLocal(w, PLEN);
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);

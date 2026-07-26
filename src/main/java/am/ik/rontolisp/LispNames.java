@@ -2762,6 +2762,36 @@ public final class LispNames {
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String CLOSE_RAW_INTERNAL = "%CLOSE-RAW";
 
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String READ_SEQUENCE_RAW_INTERNAL = "%READ-SEQUENCE-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String WRITE_SEQUENCE_RAW_INTERNAL = "%WRITE-SEQUENCE-RAW";
+
+	/**
+	 * The internal {@code rontolisp::%str-byte-length} accessor of the
+	 * {@code --component} socket layer: the content BYTE count of a string (its
+	 * {@code $str_bytes} length minus the two surrounding quotes). A socket chunk's bytes
+	 * are the wire truth, and the character accessors UTF-8-decode them (binary bytes
+	 * that happen to form a valid multi-byte sequence would collapse), so sockets.lisp's
+	 * chunk-buffer bookkeeping walks bytes through this family instead. Component-only.
+	 */
+	public static final String STR_BYTE_LENGTH_INTERNAL = "%STR-BYTE-LENGTH";
+
+	/**
+	 * The internal {@code rontolisp::%str-byte-ref} accessor: the i-th content byte
+	 * (0-255) of a string. See {@link #STR_BYTE_LENGTH_INTERNAL}.
+	 */
+	public static final String STR_BYTE_REF_INTERNAL = "%STR-BYTE-REF";
+
+	/**
+	 * The internal {@code rontolisp::%str-from-byte} constructor: a fresh string whose
+	 * ONE content byte is the given value (0-255), regardless of UTF-8 validity -- what
+	 * lets the socket {@code write-byte} put exactly one byte on the wire through the
+	 * write path's raw {@code $str_bytes} copy. See {@link #STR_BYTE_LENGTH_INTERNAL}.
+	 */
+	public static final String STR_FROM_BYTE_INTERNAL = "%STR-FROM-BYTE";
+
 	/**
 	 * The {@code json-parse} function provided by the {@code rontolisp} package. Parses a
 	 * JSON document string into Lisp values following {@code com.inuoe.jzon}'s defaults:

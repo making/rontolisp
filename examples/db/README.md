@@ -48,9 +48,7 @@ representation, `exceptions` because the driver uses `handler-case`, and
 changes nothing (the two builds are byte-identical): the library pruner runs
 by default and the driver uses nearly everything it loads.
 
-**This does not complete a query yet.** The component connects, sends the
-startup message and reads the whole authentication and parameter stream
-correctly -- byte for byte what the JVM backend sees -- and then stops on the
-read that should return `ReadyForQuery`. Note also that a connection which
-negotiates SSL can never work here: TLS is interpreter/JVM only. Use plain TCP
-(the default `:no`) on WASM.
+The component completes the full query round-trip and prints the same results
+as the interpreter and the JVM. One limitation remains: a connection which
+negotiates SSL can never work here -- TLS is interpreter/JVM only. Use plain
+TCP (the default `:no`) on WASM.

@@ -20,10 +20,13 @@
 ;;;;     at most once) and the write end stays for the write built-ins.
 ;;;;   - the socket HANDLE is an integer >= 200 in the file-stream handle space;
 ;;;;     the entry lives in the Lisp-side *sock-table*. The stream built-ins
-;;;;     (read-line/read-byte/read-char/write-line/write-byte/close) reach it
-;;;;     through the %io-* dispatch defuns the compiler rewrite targets; reads
-;;;;     buffer one host chunk per socket (a documented divergence from the
-;;;;     byte-at-a-time interpreter/JVM reads).
+;;;;     (read-line/read-byte/read-char/write-line/write-byte/close, plus
+;;;;     read-sequence/write-sequence and the eof-tolerant 2-3-arg read-byte)
+;;;;     reach it through the %io-* dispatch defuns the compiler rewrite
+;;;;     targets; reads buffer one host chunk per socket (a documented
+;;;;     divergence from the byte-at-a-time interpreter/JVM reads), and the
+;;;;     chunk bookkeeping walks the chunk's BYTES -- the wire truth -- through
+;;;;     the %str-byte-* intrinsics, never its UTF-8-decoded characters.
 
 ;; The WIT interface is lowered by SocketsLibrary (which calls
 ;; WitImportDirective.lower itself), so this directive never reaches
@@ -206,52 +209,84 @@
     (if (consp addr) (getf (cdr addr) :PORT) nil)))
 
 ;;; --- buffered reads (chunked; the %...-future internals are async-defuns so an
-;;; async body's promoted read suspends instead of blocking the task) ---
+;;; async body's promoted read suspends instead of blocking the task). The chunk
+;;; string's internal BYTES are exactly the bytes the host delivered, and the
+;;; cursor walks those bytes (%str-byte-ref) -- never characters: char access
+;;; UTF-8-decodes, so binary bytes that happen to form a valid multi-byte
+;;; sequence (a PostgreSQL BackendKeyData secret, say) would collapse into one
+;;; char and shift everything after them. ---
 
 (rontolisp:async-defun rontolisp::%sock-fill (e)
   ;; Refill the chunk buffer from the recv stream; nil (and the eof mark) at FIN.
   (let ((chunk (rontolisp:await (%sock:sock-stream-read (rontolisp::%sock-e-recv e)))))
-    (if (and chunk (> (length chunk) 0))
+    (if (and chunk (> (rontolisp::%str-byte-length chunk) 0))
         (progn (rontolisp::%sock-set-buf e chunk 0) t)
         (progn (rontolisp::%sock-set-eof e) nil))))
 
 (defun rontolisp::%sock-buf-ready (e)
   (let ((buf (rontolisp::%sock-e-buf e)))
-    (and buf (< (rontolisp::%sock-e-cursor e) (length buf)))))
+    (and buf (< (rontolisp::%sock-e-cursor e) (rontolisp::%str-byte-length buf)))))
 
-(defun rontolisp::%sock-pop-char (e)
+(defun rontolisp::%sock-pop-byte (e)
   (let* ((buf (rontolisp::%sock-e-buf e))
          (cursor (rontolisp::%sock-e-cursor e))
-         (c (char buf cursor)))
+         (b (rontolisp::%str-byte-ref buf cursor)))
     (rontolisp::%sock-set-buf e buf (+ cursor 1))
-    c))
+    b))
 
-(rontolisp:async-defun rontolisp::%sock-read-char-f (e)
+(rontolisp:async-defun rontolisp::%sock-read-byte-f (e)
   (if (rontolisp::%sock-buf-ready e)
-      (rontolisp::%sock-pop-char e)
+      (rontolisp::%sock-pop-byte e)
       (if (rontolisp::%sock-e-eof e)
           nil
           (if (rontolisp:await (rontolisp::%sock-fill e))
-              (rontolisp::%sock-pop-char e)
+              (rontolisp::%sock-pop-byte e)
               nil))))
 
+(rontolisp:async-defun rontolisp::%sock-read-char-f (e)
+  ;; One UTF-8 sequence assembled byte-wise (a refill may intervene between the
+  ;; bytes, so a sequence split across host chunks still decodes whole). An
+  ;; invalid lead byte stands alone and decodes to whatever the string layer's
+  ;; decoder yields for it -- the same bytes the interpreter's UTF-8 decode sees.
+  (let ((b0 (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+    (if (null b0)
+        nil
+        (if (< b0 128)
+            (code-char b0)
+            (let ((n (if (< b0 192) 0 (if (< b0 224) 1 (if (< b0 240) 2 3))))
+                  (acc (rontolisp::%str-from-byte b0)))
+              (while (> n 0)
+                (let ((bn (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+                  (if (null bn)
+                      (setq n 0)
+                      (progn
+                        (setq acc (concatenate 'string acc (rontolisp::%str-from-byte bn)))
+                        (setq n (- n 1))))))
+              (char acc 0))))))
+
 (rontolisp:async-defun rontolisp::%sock-read-line-f (e)
-  (let ((acc "") (got nil) (done nil))
+  ;; Bytes up to \n (one trailing \r stripped, dropped at EOF too), assembled
+  ;; into a string whose bytes ARE the wire bytes -- so a UTF-8 line decodes
+  ;; exactly like the interpreter's byte-collecting readLine, chunk boundaries
+  ;; included. The pending-cr flag holds a \r back until the next byte shows it
+  ;; is not the one before the terminating \n.
+  (let ((acc "") (got nil) (done nil) (cr nil))
     (while (not done)
-      (let ((c (rontolisp:await (rontolisp::%sock-read-char-f e))))
-        (if (null c)
+      (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+        (if (null b)
             (setq done t)
             (progn
               (setq got t)
-              (if (= (char-code c) 10)
+              (if (= b 10)
                   (setq done t)
-                  (setq acc (concatenate 'string acc (princ-to-string c))))))))
-    (if got
-        (let ((len (length acc)))
-          (if (and (> len 0) (= (char-code (char acc (- len 1))) 13))
-              (subseq acc 0 (- len 1))
-              acc))
-        nil)))
+                  (progn
+                    (if cr (setq acc (concatenate 'string acc (rontolisp::%str-from-byte 13))))
+                    (if (= b 13)
+                        (setq cr t)
+                        (progn
+                          (setq cr nil)
+                          (setq acc (concatenate 'string acc (rontolisp::%str-from-byte b)))))))))))
+    (if got acc nil)))
 
 ;;; --- the %io-* dispatch defuns (the compiler rewrite's targets; the %...-raw
 ;;; names compile to the NATIVE built-ins, so there is no rewrite recursion).
@@ -274,8 +309,7 @@
 (rontolisp:async-defun rontolisp::%read-byte-future (&optional s)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (let ((c (rontolisp:await (rontolisp::%sock-read-char-f e))))
-          (if c (char-code c) nil))
+        (rontolisp:await (rontolisp::%sock-read-byte-f e))
         (rontolisp:await (rontolisp::%stdin-read-byte-or-raw-f s)))))
 
 (defun rontolisp::%io-read-line (&optional s)
@@ -293,11 +327,72 @@
       (rontolisp::%future-force (rontolisp::%read-byte-future s))
       (rontolisp::%read-byte-raw s)))
 
+;;; --- the eof-tolerant read-byte and the sequence ops (what cl-postgres'
+;;; read-bytes / write-bytes / read-simple-str need on a socket handle). A
+;;; non-socket designator falls through to the native built-in / its expansion
+;;; under the %...-raw alias, byte-identical semantics to the unrewritten form. ---
+
+(rontolisp:async-defun rontolisp::%sock-read-seq-f (e seq)
+  ;; Fill seq with wire bytes; returns the count read (short at EOF).
+  (let ((n (length seq)) (i 0) (stop nil))
+    (while (and (< i n) (not stop))
+      (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+        (if (null b)
+            (setq stop t)
+            (progn
+              (setf (aref seq i) b)
+              (setq i (+ i 1))))))
+    i))
+
+(defun rontolisp::%sock-seq-string (seq)
+  ;; One write payload from a byte sequence (socket write-sequence elements are
+  ;; bytes, like the interpreter's socket branch).
+  (let ((acc "") (n (length seq)) (i 0))
+    (while (< i n)
+      (setq acc (concatenate 'string acc (rontolisp::%str-from-byte (aref seq i))))
+      (setq i (+ i 1)))
+    acc))
+
+(rontolisp:async-defun rontolisp::%read-byte-eof-future (s eof-error-p &optional eof-value)
+  (let ((e (rontolisp::%sock-entry s)))
+    (if e
+        (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+          (if b
+              b
+              (if eof-error-p (error "READ-BYTE: end of file") eof-value)))
+        (rontolisp::%read-byte-raw s eof-error-p eof-value))))
+
+(defun rontolisp::%io-read-byte-eof (s eof-error-p &optional eof-value)
+  (if (rontolisp::%sock-entry s)
+      (rontolisp::%future-force (rontolisp::%read-byte-eof-future s eof-error-p eof-value))
+      (rontolisp::%read-byte-raw s eof-error-p eof-value)))
+
+(rontolisp:async-defun rontolisp::%read-sequence-future (seq s)
+  (let ((e (rontolisp::%sock-entry s)))
+    (if e
+        (rontolisp:await (rontolisp::%sock-read-seq-f e seq))
+        (rontolisp::%read-sequence-raw seq s))))
+
+(defun rontolisp::%io-read-sequence (seq s)
+  (if (rontolisp::%sock-entry s)
+      (rontolisp::%future-force (rontolisp::%read-sequence-future seq s))
+      (rontolisp::%read-sequence-raw seq s)))
+
+(defun rontolisp::%io-write-sequence (seq s)
+  (let ((e (rontolisp::%sock-entry s)))
+    (if e
+        (progn
+          (rontolisp::%sock-write-string e (rontolisp::%sock-seq-string seq))
+          seq)
+        (rontolisp::%write-sequence-raw seq s))))
+
 ;;; --- writes (the synchronous stream.write built-in blocks until the peer has
 ;;; taken the bytes; FIN = dropping the write end at close) ---
 
 (defun rontolisp::%sock-write-string (e s)
-  (when (> (length s) 0)
+  ;; The byte-length guard, not the char count: a %str-from-byte payload whose
+  ;; byte is a UTF-8 continuation value has char count 0 but must still go out.
+  (when (> (rontolisp::%str-byte-length s) 0)
     (%sock:sock-stream-write (rontolisp::%sock-e-tx e) s))
   s)
 
@@ -315,9 +410,11 @@
         (rontolisp::%write-string-raw s stream))))
 
 (defun rontolisp::%io-write-byte (b stream)
+  ;; %str-from-byte, never code-char: the write path copies the string's raw
+  ;; bytes onto the wire, and a code point >= 128 is a TWO-byte UTF-8 sequence.
   (let ((e (rontolisp::%sock-entry stream)))
     (if e
-        (progn (rontolisp::%sock-write-string e (princ-to-string (code-char b)))
+        (progn (rontolisp::%sock-write-string e (rontolisp::%str-from-byte b))
                b)
         (rontolisp::%write-byte-raw b stream))))
 

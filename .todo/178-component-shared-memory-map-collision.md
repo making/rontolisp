@@ -1,74 +1,37 @@
-# The `--component` shared memory has three writers with overlapping regions
+# The SERVE component's canonical-ABI window can still collide with core scratch
 
-Found 2026-07-26 while getting cl-postgres onto the component (`.todo/115`,
-`.todo/177`). A fix was attempted and REVERTED in the same session; this file
-records what is true, what was tried, and why it failed, so the next attempt
-starts from the measurements instead of the symptom.
+NARROWED 2026-07-26 (the todo-177 session): the non-serve collision this file
+originally described is FIXED --
 
-## The collision
+- the component's interned-string data starts at page 6
+  (`COMPONENT_DATA_BASE_OFFSET` = 0x60000), above the adapter's page-5 scratch,
+  the serve cabi window and the core's page-3/4 env/socket cells;
+- the non-serve `cabi_realloc` (`src/wasm-component/mem.wat`) bumps the core's
+  own HEAP_PTR cell (address 84) -- ONE shared monotonic allocator, so there is
+  no private ABI region to outgrow and nothing recycles memory the adapter (or
+  the scheduler's free-listed read buffers) retains. Full mechanics:
+  `.kb/wasi-component.md`.
 
-A component's ONE linear memory is written by three parties:
+## What remains: the serve memory module
 
-| writer | region | growth |
-|---|---|---|
-| mem module's `cabi_realloc` (`src/wasm-component/mem.wat`) | from 0x10000 up | monotonic bump, never freed |
-| the adapter's scratch (`src/wasm-component/adapter.wat`) | page 5: 0x50000.. (env/preopen buffers, stream/future handle cells, 64-slot fd table at 0x50100) | fixed cells |
-| the rontolisp core: static data, runtime intern table, bump heap | from `DATA_BASE_OFFSET` = 256 up | grows with the program |
+`mem-http-client.wat` deliberately keeps its own cabi cell/window at 0x10000
+(`CABI_HP_CELL_ADDR`, base 0x10008) with a per-request reset from the `handle`
+wrapper, because a resident, instance-reusing host (jco / wasmCloud) must
+reclaim request buffers per call -- a monotonic HEAP_PTR bump would grow linear
+memory by ~one request per call, and the core's snapshot/pop discipline is
+per-export-invocation, not per-task.
 
-The core's static data alone is 3.0 MB for cl-postgres, so it covers the ABI
-heap's base, the core's own env buffers (0x30000/0x34000), the socket cell
-(0x40018) AND the adapter's page-5 scratch. Independently, the ABI bump only
-ever grows, so past ~256 KB of cumulative canonical-ABI traffic it walks into
-page 5 itself.
+Two latent issues survive there, both size-gated and none user-visible today:
 
-Nothing enforces the separation. Programs that work today work because the
-bytes each side clobbers are not re-read afterwards: an interned string that
-is never printed again, an adapter cell rewritten before its next use.
-cl-postgres is where it finally surfaced -- an adapter handle cell read back
-garbage mid-connection and wasmtime reported `unknown handle index` from
-inside `fd_write`, which reads like an async/scheduler bug.
+1. The window grows from 0x10008 toward the core's fixed env scratch at
+   0x30000: past ~128 KB of ABI traffic within ONE request (large request
+   bodies/headers lifted into guest memory), it clobbers `ENV_PTRS_ADDR` /
+   `ENV_BUF_ADDR` and, past 0x40000, the socket scratch cell.
+2. The per-request reset (`mem[CABI_HP_CELL] = CABI_HP_BASE` at the top of
+   `handle`) assumes one request at a time; under CONCURRENT callback tasks a
+   reset while another task's lifted buffers are still live recycles them.
 
-## What was tried, and why it was reverted
-
-Two changes together:
-
-1. `COMPONENT_DATA_BASE_OFFSET = 0x60000` -- the core's static data starts at
-   page 6 under `--component` only (Preview 1 keeps 256 and stays
-   byte-identical), so the core no longer overlaps anything.
-2. `cabi_realloc` WRAPS at the top of a fixed window instead of growing
-   forever -- a ring bump, on the premise that every canonical-ABI allocation
-   is per-call transient.
-
-(1) is sound as far as it goes and fixed the "unknown handle index".
-**(2)'s premise is false**, which the ci-spec corpus proved immediately: the
-adapter CACHES pointers into canonical-ABI allocations across calls (its
-preopen descriptor cache and the environ/get-directories lists are the ones to
-look at first), so a wrap recycles memory that is still live. The corpus --
-which prints ~1500 lines, so it does a lot of ABI traffic -- then trapped in a
-plain `(read-byte in nil -1)` at EOF, long after the wrap. Reverted both
-(keeping the change set's other, independent fixes) so the tree stays green.
-
-## What a real fix has to answer
-
-- **Which canonical-ABI allocations does the adapter retain past the call that
-  made them?** Enumerate them in `adapter.wat` (the cached preopen at
-  0x50040, the environ list at 0x50020, get-directories at 0x50030 are the
-  candidates). Either copy them into adapter scratch at capture time -- then
-  the ring premise becomes true -- or exclude them from any reclamation.
-- **Two bump allocators grow in one memory.** Even with (1), the core's heap
-  and the ABI heap both grow; today they only avoid each other by luck of
-  size. Options: grow toward each other from opposite ends with a checked
-  meeting point; give the ABI heap a per-call reset like the serve path
-  already does (`CABI_HP_CELL_ADDR`, driven from the `handle` wrapper) and
-  extend that to `run`; or make `cabi_realloc` grow the memory.
-- **The regression gate is the ci-spec corpus on the component**, not a small
-  program: run the native `CiSpecE2eTest` (`.kb`/CLAUDE.md's native E2E
-  procedure), which is what caught the ring.
-
-## Why it is not urgent
-
-No user-visible failure is known that this alone unblocks: cl-postgres on the
-component is blocked behind `.todo/177` (a socket read that never settles)
-regardless, and every other component program in the test suite passes. It is
-a latent-corruption risk that grows with program size -- worth fixing before
-the next multi-megabyte component library lands, not before.
+A unification would give serve the same shared-HEAP_PTR allocator plus a
+per-task mark/pop keyed to the task record (the callback-async machinery
+already has per-task state) -- design work, to be done when a serve workload
+actually hits either limit.
