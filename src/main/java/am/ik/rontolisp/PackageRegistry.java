@@ -48,9 +48,9 @@ public final class PackageRegistry {
 			LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET, LispNames.MAKE_CONDITION,
 			LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN, LispNames.SIGNAL,
 			LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE, LispNames.WITH_SLOTS,
-			LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE,
-			LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP,
-			LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.PRINT_UNREADABLE_OBJECT,
+			LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.HANDLER_BIND, LispNames.WRITE_CHAR,
+			LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE,
+			LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.PRINT_UNREADABLE_OBJECT,
 			LispNames.WITH_PACKAGE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS);
 
 	/**

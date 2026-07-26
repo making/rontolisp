@@ -186,13 +186,39 @@ cold-branch control string.
   generic — the old behavior — only worked when the class declared an
   `:accessor`; ironclad's `digest` slot has a `:reader` only, and the name
   collides with the `digest` reader of the `unsupported-digest` condition.
-- `(typep x COMPUTED-SPEC)` no longer errors: `expandRuntimeTypep` emits a
-  `cond` keyed on the specifier symbol, one arm per registered layout (matched by
-  canonical name AND plain member name) plus one per built-in atomic type name
-  (`RUNTIME_TYPEP_BUILTINS`), each arm carrying the very test the literal
-  specifier would have compiled to. An unrecognized specifier — a COMPOUND one
-  included — yields nil rather than signalling: this is the lite runtime-dispatch
-  model, not a real type table.
+- `(typep x COMPUTED-SPEC)` no longer errors. The INTERPRETER re-expands per
+  call through `expandRuntimeTypep`: a `cond` keyed on the specifier symbol, one
+  arm per registered layout (matched by canonical name AND plain member name)
+  plus one per built-in atomic type name (`RUNTIME_TYPEP_BUILTINS`), each arm
+  carrying the very test the literal specifier would have compiled to. An
+  unrecognized specifier — a COMPOUND one included — yields nil rather than
+  signalling: this is the lite runtime-dispatch model, not a real type table.
+- **The COMPILE paths must not inline that dispatch** (todo-115): its size is
+  proportional to the registered-class count, and at cl-postgres scale (165
+  layouts, ~68 KB of AST per call site) three sites each overflowed the JVM's
+  signed-16-bit branch offsets (`StackMapAugmenter: Index -31123 out of
+  bounds`). `expandTypep(cons, registry, false)` — what `Jvm/WasmExprCompiler`
+  call — emits `(%typep-runtime value spec)` instead, and
+  `expandTopLevelDefinitions` injects, once the registry is complete, the
+  `%typep-runtime` defun (bounded: the built-in arms plus a table scan) plus the
+  `%typep-tag-table%` data table — pure quoted data mapping each type name's
+  spellings to the instance tags it accepts, emitted as CHUNKED top-level forms
+  (a defvar plus `(setq .. (append 'chunk ..))` continuations, 48 entries each)
+  so no single method grows with the registry. The same treatment applies to
+  `%subtypep-runtime` (its grouped ancestor sets moved into
+  `%subtypep-ancestor-table%` — the inline shape had silently reached 59 KB) and
+  to a computed `error` condition-type datum WITH initargs: `(error
+  (get-error-type code) :code ...)` lowers to `(%error-runtime datum (list
+  args...))`, dispatching over one small per-condition-class construction helper
+  (`%ERROR-RT-n`, the literal typed expansion over `getf` reads with the slot
+  `:initform` as the getf default) — the old per-site inline expansion reached
+  90 KB, past the JVM's 64 KB hard method limit. Non-condition class names fall
+  to the object-designator path (CL calls that datum undefined behavior; the
+  interpreter's inline dispatch still constructs any class). Pinned by
+  `JvmLispCompilerTest#compileAndRunTypepWithComputedSpecifier` /
+  `#compileAndRunErrorWithComputedConditionType`,
+  `WasmLispCompilerIntegrationTest#typepWithComputedSpecifierAndRuntimeErrorType`
+  and the `runtime-type-dispatch-and-symbol-designators` ci-spec case.
 
 ## Runtime slot names + class introspection on the compiled backends (todo-146)
 

@@ -259,7 +259,105 @@ The native-image `CiSpecE2eTest` was run 2026-07-26 (WASM-leg session) against a
 fresh `-Pnative` binary: 980/980 green -- this clears the debt from the
 interpreter session too.
 
-### The remaining gate: the JVM backend cannot build the whole stack yet
+### Session record 2026-07-26 (JVM leg): DONE -- the full stack compiles AND queries live on the JVM
+
+The measurement the previous session asked for settled the design: with
+`-Drontolisp.jvm.debug-method-sizes=true` (a new permanent debug flag) the
+inflated bodies were (1) computed-`typep` inline dispatch, 3 sites x ~37 KB
+(ironclad pbkdf1 `shared-initialize`, alexandria `copy-sequence` + `of-type`),
+(2) `%SUBTYPEP-RUNTIME` at 59 KB (same disease, silently near the cliff), and
+(3) `CL-POSTGRES::GET-ERROR` at **90 KB** -- the computed-`error`-datum
+dispatch inlining a typed expansion per registered class, past even the JVM's
+64 KB HARD method limit, which no wide-branch relaxation can fix. The fix
+therefore went into the EXPANSIONS, all three onto one mechanism: quoted DATA
+tables in chunked top-level defvars + small injected dispatch defuns
+(`%typep-runtime` + `%typep-tag-table%`, `%subtypep-ancestor-table%`,
+`%error-runtime` + per-condition-class `%ERROR-RT-n` helpers). Two backend
+scale guards joined them: `_invoke_N` (66 KB at arity 9) and `_lookup` (60 KB)
+are now emitted as chained ~24 KB segments, and `patchBranch` /
+`ByteCodeWriter.writeCode` now throw loudly instead of silently truncating.
+Full mechanics: `.kb/jvm-method-size-limits.md`, `.kb/clos.md`,
+`.kb/error-handling.md`.
+
+Gates cleared along the way (each a general fix, not a cl-postgres hack):
+
+- `(progn)` in a value position pushed nothing on the JVM (message-case's
+  empty CloseComplete arm) -- operand-stack mismatch, fixed + pinned.
+- `handler-bind` (dead code here: `wait-for-notification`) lowers to a
+  call-time signal on both compilers, the 2-arg-intern stub contract.
+- A call to an UNDEFINED function (`stream-error-stream`, error path only)
+  compiles to the interpreter's call-time "The function X is undefined"
+  signal plus a compile-time warning, instead of rejecting the program.
+- `(funcall f args...)` with a SYMBOL value resolves late through `_lookup`
+  (the row-reader designator `'cl-postgres:list-row-reader`); `_lookup` is
+  emitted whenever indirect calls exist, not only under eval.
+- `(ql:quickload "cl-postgres")` as ONE form now resolves on the compile
+  paths: an `AsdOverrides` entry (`cl-postgres-deps.asd`) declares the
+  dependencies upstream under-declares (alexandria, cl-ppcre, usocket).
+
+**Verified**: the full program (quickloads + all driver files, exact
+interpreter load order) compiles to `Prog.class` and runs
+`(cl-postgres:exec-query conn "select 42, 'hello'" 'cl-postgres:list-row-reader)`
+plus a `generate_series` query against live `postgres:17-alpine` (trust,
+plain TCP) -- output IDENTICAL to the interpreter run of the same program.
+`./mvnw test` 4274/4274 green before the wasm-side follow-ups below.
+
+### Session record 2026-07-26 (WASM component leg, same session): 3 general fixes landed, 2 attempts REVERTED, one gate left
+
+The component leg surfaced its own gates. Three fixes are general and landed;
+two more were attempted, broke the ci-spec corpus, and were reverted with
+their analysis kept (`.todo/177`, `.todo/178`).
+
+Landed:
+
+- A funcall whose ARITY exceeds `MAX_CALLABLE_ARITY` (7) silently called the
+  NEIGHBORING runtime helper (`initiate-ssl`'s 9-arg `make-ssl-stream`
+  funcall -> invalid module); it now compiles to a call-time signal.
+- The symbol-designator funcall on wasm resolves through the eval registry's
+  `_lookup` and synthesizes a `{funcId, null-env}` closure (every dispatch
+  case casts the funcval). Emission is GATED on the program actually having a
+  runtime designator: the registry embeds every defun NAME, so emitting it
+  unconditionally made two programs with identical CODE differ in bytes (the
+  wit-import byte-identity pins caught it).
+- **An ambiguous slot NAME read dispatched into an unrelated package's reader
+  generic**: `(slot-value <cl-postgres protocol-error> 'message)` routed
+  through `IRONCLAD::MESSAGE` (the only same-named reader) and died with "No
+  applicable method" while rendering the protocol error's own report. Literal
+  ambiguous names now take an instance-TAG dispatch, the read-side twin of the
+  existing ambiguous WRITE. The dispatcher's no-match error also names the
+  argument's class now, which is what made this diagnosable.
+- Byte transparency of the component socket path was verified 0..255 (an
+  echo probe), so the binary protocol framing is sound.
+
+Reverted, with the analysis kept:
+
+- **The shared-memory map collision** (`.todo/178`): real -- the core's static
+  data, the canonical-ABI bump and the adapter's page-5 scratch all overlap for
+  a large program, which is what produced "unknown handle index" inside
+  `fd_write`. The fix attempt (core data at page 6 + a RINGING `cabi_realloc`)
+  broke the ci-spec corpus: the adapter keeps pointers into ABI allocations
+  across calls, so the ring recycles live memory.
+- **`read-sequence`/`write-sequence` + 3-arg `read-byte` reaching the socket
+  dispatch** (`.todo/177`): needed by cl-postgres, but pre-expanding the
+  sequence ops in `WasmSocketsRewrite` and widening `%io-read-byte` made the
+  corpus trap on a plain `(read-byte in nil -1)` at EOF over a FILE handle in
+  a top-level (async-context) `with-open-file` -- a 3-arg read is not promoted
+  to an await, so it takes the sync `%io-*` dispatch inside an async task.
+
+**What is left**: the component connects, sends `startup-message`, and walks
+the whole post-auth message stream correctly -- verified message by message
+against the JVM (`AuthenticationOk`, 14 `ParameterStatus`, `BackendKeyData`,
+all with identical tags and lengths) -- and then HANGS on the read that should
+return `ReadyForQuery` ('Z'), which the JVM receives immediately. A hand-rolled
+tag walk over the same socket reaches the same point, so the driver's own
+`message-case` is not implicated. Next step: instrument `%sock-fill` /
+`sock-stream-read` at the point after `BackendKeyData` -- does the host return
+a chunk that the entry then discards, or does the async read never settle?
+(`.todo/176` records two separate top-level-only async findings from the same
+tracing session: argument-order reversal of multiple promoted reads in ONE
+call, and an `fd_write` handle crash after many interleaved reads/prints.)
+
+### The remaining gate: the JVM backend cannot build the whole stack yet (RESOLVED above; historical analysis follows)
 
 The interpreter is green end to end; the JVM compile of the full program
 (quickloads + all cl-postgres files) stops at

@@ -16,6 +16,11 @@ final class JvmPrognCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
+		if (parts.size() == 1) {
+			// (progn) is nil; a value must be pushed even with no body forms.
+			ctx.emit(Opcode.ACONST_NULL);
+			return;
+		}
 		for (int i = 1; i < parts.size(); i++) {
 			if (i > 1) {
 				ctx.emit(Opcode.POP);

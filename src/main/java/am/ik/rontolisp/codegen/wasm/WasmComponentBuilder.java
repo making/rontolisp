@@ -1263,7 +1263,7 @@ public final class WasmComponentBuilder {
 	 * @return a fresh copy of {@link #MEM_MODULE} with the memory section rewritten, or
 	 * the unchanged resource when the core module asks for six pages or fewer
 	 */
-	private static byte[] memModuleFor(byte[] coreModule) {
+	static byte[] memModuleFor(byte[] coreModule) {
 		int needed = requiredMemPagesFromCore(coreModule);
 		if (needed <= 6) {
 			return MEM_MODULE;

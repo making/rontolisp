@@ -4922,6 +4922,33 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("T\nT\nNIL\nT\nT\nT\nNIL\nT\nT\nNIL\nT\nT");
 	}
 
+	@Test
+	void typepWithComputedSpecifierAndRuntimeErrorType() throws Exception {
+		// A computed typep specifier lowers to the shared %typep-runtime defun and a
+		// computed error condition-type with initargs to %error-runtime (both
+		// data-table-backed; the inline per-class dispatches overflowed JVM method
+		// limits at cl-postgres scale and inflate wasm bodies identically). The
+		// answers must match the literal-specifier expansions on every backend.
+		assertThat(compileAndRun("""
+				(defclass animal () ((name :initarg :name)))
+				(defclass dog (animal) ())
+				(defstruct point x y)
+				(define-condition my-err (error) ((code :initarg :code :reader my-err-code)))
+				(let ((d (make-instance 'dog)) (p (make-point :x 1 :y 2)))
+				  (let ((ty 'dog)) (print (typep d ty)))
+				  (let ((ty 'animal)) (print (typep d ty)))
+				  (let ((ty 'point)) (print (typep p ty)))
+				  (let ((ty 'integer)) (print (typep 42 ty)))
+				  (let ((ty 'string)) (print (typep d ty)))
+				  (let ((ty 'standard-object)) (print (typep d ty)))
+				  (let ((ty 'structure-object)) (print (typep p ty)))
+				  (let ((ty 'no-such-type)) (print (typep 1 ty)))
+				  (let ((ty t)) (print (typep 1 ty))))
+				(defun boom (ty) (error ty :code 42))
+				(print (handler-case (boom 'my-err) (my-err (c) (list :caught (my-err-code c)))))
+				""")).isEqualTo("T\nT\nT\nT\nNIL\nT\nT\nNIL\nT\n(:CAUGHT 42)");
+	}
+
 	// define-setf-expander / defsetf are consumed by the compile-path pass
 	// (eval.UserMacroExpander) and the setf call sites rewritten before the WASM
 	// compiler.
@@ -6362,7 +6389,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
@@ -10630,7 +10657,11 @@ class WasmLispCompilerIntegrationTest {
 							am.ik.wasm.ComponentWriter.funcTypeScalars(List.of("v"),
 									List.of(am.ik.wasm.ComponentWriter.VT_S32), am.ik.wasm.ComponentWriter.VT_S32))));
 		// Core modules: 0 = shared memory, 1 = preview1 trap stubs, 2 = probe core.
-		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_MODULE, mem);
+		// The memory must be sized from THIS core's import minimum, exactly as
+		// WasmComponentBuilder does for a production component: the component memory
+		// map puts the core's static data at page 6, so the stock six-page mem module
+		// no longer satisfies any core.
+		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_MODULE, WasmComponentBuilder.memModuleFor(core));
 		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_MODULE, probePreview1Stub());
 		c.rawSection(am.ik.wasm.ComponentWriter.SEC_CORE_MODULE, core);
 		// Core instance 0 = memory, 1 = the preview1 stubs.

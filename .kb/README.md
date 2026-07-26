@@ -51,6 +51,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [java-interop.md](java-interop.md) -- `java:` reflection interop bridge
 - [template-class-embedding.md](template-class-embedding.md) -- when/how to embed a Java "template" class
 - [stackmap-augmenter.md](stackmap-augmenter.md) -- class version 61 via `am.ik.jvm.StackMapAugmenter` (offline StackMapTable computation over frame-free emitter output; pipeline order, merge rules, size cost, what v61 unlocks)
+- [jvm-method-size-limits.md](jvm-method-size-limits.md) -- no emitted JVM method may outgrow the signed-16-bit branch / 64 KB code limits: loud guards, the segmented `_invoke_N`/`_lookup` dispatchers, chunked data-table forms, symbol funcall designators, the method-size debug flag
 - [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output
 - [hash-tables.md](hash-tables.md) -- hash table representation per backend
 - [documentation-site.md](documentation-site.md) -- doc site layout, code-fence conventions, build/preview

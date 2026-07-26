@@ -276,21 +276,48 @@ signals via `(apply #'error (list 'bad-base64-character :input ...))`:
 
 A NON-literal `(error TYPE args...)` datum WITH initargs now dispatches on the
 COMPILED backends too (jzon's `(defun %raise (type pos format &rest args)
-(error type :format-control ...))` helper): `expandSignalDesignator` generates a
-`member` cond over every registered class -- each branch is the same
-`expandTypedSignal` a literal call would get (instance construction + :report
-rendering + catchable class tag), matched against both the qualified and (when
-unambiguous) plain spelling of the class name. Argument VALUE expressions are
-bound to temps once (left to right); keyword LITERALS stay in place, because
-`buildTypedConstruct`'s keyword-pair detection must see them (binding them broke
-the slot layout and made jzon's :report read garbage -- a WASM-only trap, since
-the JVM's bad `apply` was itself catchable while a wasm cast failure is not).
+(error type :format-control ...))` helper, cl-postgres' `(error
+(get-error-type code) :code ...)`). Since todo-115 the dispatch is NOT inlined
+at the call site — at 165 registered classes the inline per-class expansion
+reached 90 KB in one method, past the JVM's 64 KB hard limit
+([jvm-method-size-limits.md](jvm-method-size-limits.md)) — the site lowers to
+`(%error-runtime datum (list args...))` and `expandTopLevelDefinitions` injects
+once per program: one small construction helper defun per registered CONDITION
+class (`%ERROR-RT-n` — the same `expandTypedSignal` a literal call would get:
+instance construction + :report rendering + catchable class tag, over `getf`
+reads of the runtime initarg list with each slot's `:initform` as the getf
+default) and the `%error-runtime` dispatch defun matching the datum against
+both the qualified and (when unambiguous) plain spelling. A NON-condition
+class name (an invalid CL datum) and any non-symbol fall to the
+`expandObjectSignal` arm; note the interpreter's inline dispatch still
+constructs ANY class — a divergence only for undefined-behavior programs.
 A DATUM-ONLY non-literal call keeps the object-designator path: it is the lite
 `#'error` wrapper (datum forwarded without initargs -- constructing a slot-less
 instance would run its :report over nil slots, cl-base64's
 `bad-base64-character` regression) and the condition-object re-signal shape.
-The `t` fallback arm is `expandObjectSignal` over the datum temp. Pinned by the
-`runtime-type-dispatch-residue` ci-spec case and `JzonE2eTest`.
+Pinned by the `runtime-type-dispatch-residue` and
+`runtime-type-dispatch-and-symbol-designators` ci-spec cases,
+`JvmLispCompilerTest#compileAndRunErrorWithComputedConditionType` and
+`JzonE2eTest`.
+
+## handler-bind: a call-time stub on the compile paths
+
+`handler-bind` is NOT implemented on any backend (its handlers run at the
+signal point without unwinding, which the condition machinery does not model).
+The interpreter errors at call time on its own (the name resolves to no
+function) — which is why cl-postgres LOADS there (its one real site,
+public.lisp's `wait-for-notification`, is never called by the driver's normal
+paths). The compilers compile every defun body eagerly, so the name is now in
+`PackageRegistry.CL_MACROS` and both expression compilers lower the form to
+`LispMacroExpander.handlerBindStub()` — an unconditional `(error
+"handler-bind is not supported on compiled backends")`, the 2-arg `intern`
+stub contract: a library merely CONTAINING the form stays compilable and
+signals only if the site actually runs. The same session generalized the
+contract to UNDEFINED functions: a call to a name with no definition compiles
+to `The function X is undefined` at call time (plus a compile-time warning),
+matching the interpreter's late binding — cl-postgres references
+`stream-error-stream` (a CL condition accessor rontolisp does not provide) on
+an error path only.
 
 ## Pinned lists and tests
 

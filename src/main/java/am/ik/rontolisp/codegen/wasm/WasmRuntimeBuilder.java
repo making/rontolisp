@@ -1066,6 +1066,53 @@ final class WasmRuntimeBuilder {
 		int funcIdLocal = arity + 1; // after params
 		int argListLocal = arity + 2;
 
+		// A SYMBOL funcval (a TYPE_STRING) is a function designator resolved through
+		// the eval registry's _lookup by its interned offset -- the interpreter's
+		// late binding (cl-postgres passes 'list-row-reader through exec-query).
+		// Without the eval runtime _lookup is the always--1 stub, so the miss arm
+		// traps exactly where the closure cast used to.
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0); // funcval
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeSignedLeb128(0); // field 0: interned offset
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(funcIdLocal);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(funcIdLocal);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(-1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.UNREACHABLE); // undefined function
+		w.write(Instruction.END);
+		// funcId = record.funcId (record: {nameOffset, funcId, arity})
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(funcIdLocal);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(funcIdLocal);
+		// Every case body casts the funcval to the closure struct for its env (the
+		// uniform calling convention), so replace the SYMBOL with a synthesized
+		// {funcId, null-env} closure -- exactly the value #'name would have produced.
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(funcIdLocal);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.ELSE);
 		// Extract funcId from closure struct
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0); // funcval
@@ -1076,6 +1123,7 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(0); // field 0: funcId
 		w.write(Instruction.SET_LOCAL);
 		w.writeSignedLeb128(funcIdLocal);
+		w.write(Instruction.END);
 
 		// Interpreted closure (funcId == -1, created by the eval runtime's lambda):
 		// delegate to _apply with the arguments collected into a cons list

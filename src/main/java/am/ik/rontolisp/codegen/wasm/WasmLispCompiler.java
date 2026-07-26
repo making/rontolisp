@@ -1365,6 +1365,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
 				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL);
+		// A funcall/apply through a RUNTIME designator resolves a symbol late through
+		// the name registry (see the _lookup emission gate below).
+		boolean usesRuntimeDesignator = LispMacroExpander.usesRuntimeFunctionDesignator(program);
 		// rontolisp:fetch is component-only: it is the spliced http.lisp defun over the
 		// canon-lowered wasi:http user import. In Preview 1 mode it raises a compile
 		// error (WasmFetchCompiler). await/futurep are generic future operations that
@@ -1700,7 +1703,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		int serveInitGlobalIndex = this.serve ? taskSeqGlobalIndex + 1 : -1;
 
 		// Create string table
-		StringTable stringTable = new StringTable(DATA_BASE_OFFSET);
+		int dataBase = DATA_BASE_OFFSET;
+		StringTable stringTable = new StringTable(dataBase);
 		// Bake the instance layouts into the data segment BEFORE Pass 2a: %obj-new
 		// emits a record's address as an i32.const inside an ordinary function body, so
 		// unlike the eval registry, the intern table and the case-fold tables -- all of
@@ -2400,6 +2404,30 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] evalBody;
 		final byte[] applyBody;
 		final byte[] storeBody;
+		// The name registry + real _lookup are needed by the eval runtime AND by the
+		// dispatch functions: a funcall whose designator is a SYMBOL at run time
+		// (cl-postgres passes 'list-row-reader through exec-query) resolves through
+		// _lookup, matching the interpreter's late binding. Gated on the program
+		// actually having such a call -- the registry embeds every defun NAME, so
+		// emitting it unconditionally would make two programs with identical CODE
+		// differ in bytes (the wit-import byte-identity pins).
+		if (usesEval || usesRuntimeDesignator) {
+			ByteArrayOutputStream registry = new ByteArrayOutputStream();
+			for (int i = 0; i < defuns.size(); i++) {
+				DefunDecl defun = defuns.get(i);
+				int nameOffset = stringTable.addString(defun.name).offset();
+				writeLittleEndian32(registry, nameOffset);
+				writeLittleEndian32(registry, i); // funcId == defun index
+				// arity; a variadic function is encoded as -physicalParamCount so the
+				// eval call path evaluates every argument instead of exactly arity
+				writeLittleEndian32(registry, defun.variadic ? -defun.paramNames.size() : defun.paramNames.size());
+			}
+			int registryBase = stringTable.appendBlob(registry.toByteArray());
+			lookupBody = WasmEvalRuntimeBuilder.buildLookupBody(registryBase, defuns.size());
+		}
+		else {
+			lookupBody = WasmEvalRuntimeBuilder.buildLookupStub();
+		}
 		if (usesEval) {
 			WasmEvalRuntimeBuilder.SpecialFormOffsets offsets = WasmEvalRuntimeBuilder.SpecialFormOffsets.builder()
 				.add(stringTable, LispNames.QUOTE)
@@ -2439,25 +2467,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.FUNCTION)
 				.add(stringTable, LispNames.SYMBOL_FUNCTION)
 				.build();
-			ByteArrayOutputStream registry = new ByteArrayOutputStream();
-			for (int i = 0; i < defuns.size(); i++) {
-				DefunDecl defun = defuns.get(i);
-				int nameOffset = stringTable.addString(defun.name).offset();
-				writeLittleEndian32(registry, nameOffset);
-				writeLittleEndian32(registry, i); // funcId == defun index
-				// arity; a variadic function is encoded as -physicalParamCount so the
-				// eval call path evaluates every argument instead of exactly arity
-				writeLittleEndian32(registry, defun.variadic ? -defun.paramNames.size() : defun.paramNames.size());
-			}
-			int registryBase = stringTable.appendBlob(registry.toByteArray());
-			lookupBody = WasmEvalRuntimeBuilder.buildLookupBody(registryBase, defuns.size());
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
 			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets);
 			applyBody = WasmEvalRuntimeBuilder.buildApplyBody();
 			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets);
 		}
 		else {
-			lookupBody = WasmEvalRuntimeBuilder.buildLookupStub();
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupStub();
 			evalBody = WasmEvalRuntimeBuilder.buildEvalStub();
 			applyBody = WasmEvalRuntimeBuilder.buildApplyStub();
@@ -2595,7 +2610,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// into fixed cells by active data segments below. This keeps runtime interning
 		// and heap allocation above the static data no matter how large the program is.
 		byte[] stringData = stringTable.toByteArray();
-		int staticEnd = DATA_BASE_OFFSET + stringData.length;
+		int staticEnd = dataBase + stringData.length;
 		int rtInternBase = Math.max(RT_INTERN_MIN_BASE, (staticEnd + 15) & ~15);
 		int heapBase = rtInternBase + RT_INTERN_REGION_SIZE;
 
@@ -3857,7 +3872,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// with each other even as the assembly scratch offset is reused.
 				data.addActiveData(0, STRING_ID_CTR_ADDR, littleEndian32(heapBase));
 				if (stringData.length > 0) {
-					data.addActiveData(0, DATA_BASE_OFFSET, stringData);
+					data.addActiveData(0, dataBase, stringData);
 				}
 			});
 		byte[] coreModule = out.toByteArray();

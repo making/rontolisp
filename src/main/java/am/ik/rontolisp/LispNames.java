@@ -1525,6 +1525,16 @@ public final class LispNames {
 	public static final String IGNORE_ERRORS = "IGNORE-ERRORS";
 
 	/**
+	 * The {@code handler-bind} operator. NOT implemented on any backend (its handlers run
+	 * at the signal point without unwinding, which the condition machinery does not
+	 * model); the compilers lower a defun merely containing it to a call-time signal so a
+	 * library carrying one in dead code stays compilable -- the same stub contract as a
+	 * 2-arg {@code intern}. The interpreter errors at call time on its own (the name
+	 * resolves to no function).
+	 */
+	public static final String HANDLER_BIND = "HANDLER-BIND";
+
+	/**
 	 * Internal zero-argument form that decrements the per-thread {@code handler-case}
 	 * handler depth and yields nil. JVM backend only: emitted as the cleanup of the
 	 * handler-depth bookkeeping when a {@code return} exits a {@code handler-case}
@@ -3818,6 +3828,43 @@ public final class LispNames {
 	 * program when a {@code subtypep} call carries a non-literal type specifier.
 	 */
 	public static final String SUBTYPEP_RUNTIME = "%SUBTYPEP-RUNTIME";
+
+	/**
+	 * The ancestor-set table backing {@link #SUBTYPEP_RUNTIME}: an alist-like constant,
+	 * each entry {@code ((sub-name...) ancestor-name...)} grouping the type universe's
+	 * names by ancestor set. Emitted as a top-level {@code defvar} of pure quoted data so
+	 * the dispatch defun stays small regardless of how many classes a program registers.
+	 */
+	public static final String SUBTYPEP_ANCESTOR_TABLE = "%SUBTYPEP-ANCESTOR-TABLE";
+
+	/**
+	 * The shared runtime-{@code typep} dispatch defun the compilers inject once per
+	 * program when a {@code typep} call carries a non-literal type specifier. Inlining
+	 * that dispatch at every call site (the interpreter's model) grows with the number of
+	 * registered classes and overflowed the JVM's 16-bit branch offsets at cl-postgres
+	 * scale; the defun keeps each call site one fixed-size call.
+	 */
+	public static final String TYPEP_RUNTIME = "%TYPEP-RUNTIME";
+
+	/**
+	 * The shared runtime-{@code error} dispatch defun the compilers inject once per
+	 * program when an {@code error} call carries a computed condition-type symbol with
+	 * initargs (cl-postgres' {@code (error (get-error-type code) :code ...)}). It
+	 * dispatches over the registered CONDITION classes, each arm a small call into a
+	 * per-class construction helper; inlining every class's typed expansion at the call
+	 * site produced a 90 KB method body at cl-postgres scale -- past even the JVM's 64 KB
+	 * hard method limit.
+	 */
+	public static final String ERROR_RUNTIME = "%ERROR-RUNTIME";
+
+	/**
+	 * The instance-tag acceptance table backing {@link #TYPEP_RUNTIME}: an alist-like
+	 * constant, each entry {@code ((type-name...) tag...)} mapping every registered
+	 * class/struct type name (qualified and plain spellings) to the instance tags it
+	 * accepts. Emitted as a top-level {@code defvar} holding pure quoted data so the
+	 * dispatch defun stays small regardless of how many classes a program registers.
+	 */
+	public static final String TYPEP_TAG_TABLE = "%TYPEP-TAG-TABLE";
 
 	/** The {@code char-name} built-in function. */
 	public static final String CHAR_NAME = "CHAR-NAME";

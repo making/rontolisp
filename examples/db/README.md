@@ -14,10 +14,43 @@ docker run --rm -p 54329:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alp
 rontolisp examples/db/postgres-hello.lisp
 ```
 
-**Interpreter only today**, and slow to start: `ql:quickload` pulls md5,
-split-sequence, ironclad, cl-base64, cl-ppcre, uax-15 and alexandria, and
-uax-15 parses UnicodeData.txt at load time. `trust`, `password` and `md5`
-authentication all complete. SCRAM-SHA-256 completes too, but only when the server
-allows enough time: its 4096-round PBKDF2 outruns the default 60-second
-`authentication_timeout` in interpreted Lisp, so start the server with
-`-c authentication_timeout=600` for it.
+Runs on the **interpreter and the JVM backend**:
+
+```bash
+rontolisp examples/db/postgres-hello.lisp -o Prog.class && java Prog
+```
+
+Either way the first run is slow: `ql:quickload` pulls md5, split-sequence,
+ironclad, cl-base64, cl-ppcre, uax-15 and alexandria, and uax-15 parses
+UnicodeData.txt at load time. `trust`, `password` and `md5` authentication all
+complete on both. SCRAM-SHA-256 completes too, but on the INTERPRETER only when
+the server allows enough time: its 4096-round PBKDF2 outruns the default
+60-second `authentication_timeout` in interpreted Lisp, so start the server with
+`-c authentication_timeout=600` for it. The compiled backend has no such
+problem.
+
+## WASM
+
+The driver needs TCP, and TCP on WASM is `--component` only (WASI 0.3 sockets;
+Preview 1 has no host socket API, so `rontolisp ... -o prog.wasm` rejects the
+program at compile time). The component build and its run flags are:
+
+```bash
+rontolisp examples/db/postgres-hello.lisp -o postgres-hello.wasm --component --optimize
+wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y postgres-hello.wasm
+```
+
+The three `-S`/`-W` groups are all required: `gc` for the value
+representation, `exceptions` because the driver uses `handler-case`, and
+`tcp` + `inherit-network` because wasmtime gates sockets by permission
+(without them the socket calls return errors, which surface as `nil`).
+`--optimize` is the habit worth keeping for WASM, though on THIS program it
+changes nothing (the two builds are byte-identical): the library pruner runs
+by default and the driver uses nearly everything it loads.
+
+**This does not complete a query yet.** The component connects, sends the
+startup message and reads the whole authentication and parameter stream
+correctly -- byte for byte what the JVM backend sees -- and then stops on the
+read that should return `ReadyForQuery`. Note also that a connection which
+negotiates SSL can never work here: TLS is interpreter/JVM only. Use plain TCP
+(the default `:no`) on WASM.

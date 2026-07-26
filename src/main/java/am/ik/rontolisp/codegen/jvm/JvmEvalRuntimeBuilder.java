@@ -923,9 +923,15 @@ final class JvmEvalRuntimeBuilder {
 
 	// === entry points ===
 
-	/** Builds the {@code _lookup} method body. */
-	static List<Integer> buildLookup(EvalConstants k) {
-		return new JvmEvalRuntimeBuilder(k).lookupBody();
+	/**
+	 * Builds the {@code _lookup} method body, split into chained segments
+	 * ({@code _lookup}, {@code _lookup$1}, ...) so the name-equals chain -- linear in the
+	 * number of named functions -- never grows one method past the JVM's 64 KB
+	 * method-code limit (60 KB at cl-postgres scale). Each segment falls through to the
+	 * next; the last answers null.
+	 */
+	static List<List<Integer>> buildLookupSegments(EvalConstants k, ConstantPool.ClassConstant thisClass) {
+		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass);
 	}
 
 	/** Builds the {@code _envLookup} method body. */
@@ -950,39 +956,63 @@ final class JvmEvalRuntimeBuilder {
 
 	// === _lookup(String name) -> Object[]{Integer funcId, Integer arity} or null ===
 
-	private List<Integer> lookupBody() {
-		Asm a = new Asm();
-		for (Map.Entry<String, JvmLispCompiler.FunctionInfo> e : this.k.functions().entrySet()) {
-			JvmLispCompiler.FunctionInfo fi = e.getValue();
-			if (fi.paramCount() > MAX_CALLABLE_ARITY) {
+	/** Segment budget in code bytes; see {@link #buildLookupSegments}. */
+	private static final int LOOKUP_SEGMENT_BUDGET = 24_000;
+
+	private List<List<Integer>> lookupSegments(ConstantPool.ClassConstant thisClass) {
+		List<Map.Entry<String, JvmLispCompiler.FunctionInfo>> entries = this.k.functions()
+			.entrySet()
+			.stream()
+			.filter(e -> e.getValue().paramCount() <= MAX_CALLABLE_ARITY)
+			.toList();
+		List<List<Integer>> segments = new ArrayList<>();
+		int index = 0;
+		while (true) {
+			Asm a = new Asm();
+			while (index < entries.size() && a.code.size() < LOOKUP_SEGMENT_BUDGET) {
+				Map.Entry<String, JvmLispCompiler.FunctionInfo> e = entries.get(index++);
+				JvmLispCompiler.FunctionInfo fi = e.getValue();
+				int next = a.label();
+				a.aload(0);
+				ldcStr(a, e.getKey());
+				a.invokevirtual(this.k.objectEquals());
+				a.branch(Opcode.IFEQ, next);
+				// return new Object[]{ Integer.valueOf(funcId), Integer.valueOf(arity)
+				// }; a variadic function is encoded as a negative arity
+				// (-physicalParamCount) so the eval call path evaluates every argument
+				// instead of exactly arity
+				a.iconst(2);
+				a.anewarray(this.k.objectClass());
+				a.dup();
+				a.iconst(0);
+				a.iconst(fi.funcId());
+				a.invokestatic(this.k.integerValueOf());
+				a.aastore();
+				a.dup();
+				a.iconst(1);
+				a.iconst(fi.variadic() ? -fi.paramCount() : fi.paramCount());
+				a.invokestatic(this.k.integerValueOf());
+				a.aastore();
+				a.areturn();
+				a.bind(next);
+			}
+			if (index < entries.size()) {
+				// Continue the chain in the next segment.
+				ConstantPool cp = this.k.cp();
+				ConstantPool.MethodrefConstant nextRef = cp.addMethodref(thisClass,
+						cp.addNameAndType(cp.addUtf8("_lookup$" + (segments.size() + 1)),
+								cp.addUtf8("(Ljava/lang/Object;)[Ljava/lang/Object;")));
+				a.aload(0);
+				a.invokestatic(nextRef);
+				a.areturn();
+				segments.add(a.finish());
 				continue;
 			}
-			int next = a.label();
-			a.aload(0);
-			ldcStr(a, e.getKey());
-			a.invokevirtual(this.k.objectEquals());
-			a.branch(Opcode.IFEQ, next);
-			// return new Object[]{ Integer.valueOf(funcId), Integer.valueOf(arity) };
-			// a variadic function is encoded as a negative arity (-physicalParamCount)
-			// so the eval call path evaluates every argument instead of exactly arity
-			a.iconst(2);
-			a.anewarray(this.k.objectClass());
-			a.dup();
-			a.iconst(0);
-			a.iconst(fi.funcId());
-			a.invokestatic(this.k.integerValueOf());
-			a.aastore();
-			a.dup();
-			a.iconst(1);
-			a.iconst(fi.variadic() ? -fi.paramCount() : fi.paramCount());
-			a.invokestatic(this.k.integerValueOf());
-			a.aastore();
+			a.aconstNull();
 			a.areturn();
-			a.bind(next);
+			segments.add(a.finish());
+			return segments;
 		}
-		a.aconstNull();
-		a.areturn();
-		return a.finish();
 	}
 
 	// === _envLookup(String name, Object env) -> binding cons or null ===

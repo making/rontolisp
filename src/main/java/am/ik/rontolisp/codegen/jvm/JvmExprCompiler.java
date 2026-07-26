@@ -820,6 +820,8 @@ final class JvmExprCompiler {
 					.compileExpr(LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry), ctx, className);
 				case LispNames.SIGNAL_COND_INTERNAL -> JvmSignalCondCompiler.compile(cons, ctx, className);
 				case LispNames.HANDLER_CASE -> JvmHandlerCaseCompiler.compile(cons, ctx, className);
+				case LispNames.HANDLER_BIND ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.handlerBindStub(), ctx, className);
 				case LispNames.IGNORE_ERRORS ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandIgnoreErrors(cons), ctx, className);
 				case LispNames.HC_DEPTH_DEC_INTERNAL -> JvmHandlerCaseCompiler.compileDepthDec(ctx, className);
@@ -953,8 +955,8 @@ final class JvmExprCompiler {
 					.compileExpr(LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx, className);
 				case LispNames.ETYPECASE -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx, className);
-				case LispNames.TYPEP ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandTypep(cons, ctx.closRegistry), ctx, className);
+				case LispNames.TYPEP -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandTypep(cons, ctx.closRegistry, false), ctx, className);
 				case LispNames.SUBTYPEP -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandSubtypep(cons, ctx.closRegistry), ctx, className);
 				case LispNames.CHECK_TYPE ->

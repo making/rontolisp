@@ -124,6 +124,12 @@ public class ByteCodeWriter {
 		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
 		new ByteCodeWriter(stream).write(code);
 		final byte[] bytes = stream.toByteArray();
+		if (bytes.length > 0xFFFF) {
+			// JVMS 4.7.3: code_length must be less than 65536. Writing a longer body
+			// produces a class every JVM rejects at load time with a message that no
+			// longer names the culprit; fail here instead.
+			throw new IllegalArgumentException("method code exceeds the JVM's 65535-byte limit: " + bytes.length);
+		}
 		return this.writeU4(bytes.length).write(bytes);
 	}
 

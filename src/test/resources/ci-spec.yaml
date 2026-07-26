@@ -1205,7 +1205,7 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
+      (AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY UNWIND-PROTECT WHILE)
       322
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
@@ -4903,3 +4903,45 @@ cases:
       T
       #(124 0)
       #(0 0 124 0)
+
+  - name: runtime-type-dispatch-and-symbol-designators
+    source: |
+      ;; A COMPUTED typep specifier goes through the shared %typep-runtime defun on
+      ;; the compile paths (data-table dispatch; the inline per-class expansion
+      ;; overflowed the JVM's 16-bit branch offsets at cl-postgres scale) and must
+      ;; answer exactly like the literal-specifier expansion.
+      (defclass rtd-animal () ((name :initarg :name)))
+      (defclass rtd-dog (rtd-animal) ())
+      (defstruct rtd-point x y)
+      (let ((rtd-d (make-instance 'rtd-dog)) (rtd-p (make-rtd-point :x 1 :y 2)))
+        (let ((rtd-ty 'rtd-dog)) (print (typep rtd-d rtd-ty)))
+        (let ((rtd-ty 'rtd-animal)) (print (typep rtd-d rtd-ty)))
+        (let ((rtd-ty 'rtd-point)) (print (typep rtd-p rtd-ty)))
+        (let ((rtd-ty 'integer)) (print (typep 42 rtd-ty)))
+        (let ((rtd-ty 'string)) (print (typep rtd-d rtd-ty)))
+        (let ((rtd-ty 'standard-object)) (print (typep rtd-d rtd-ty)))
+        (let ((rtd-ty 'structure-object)) (print (typep rtd-p rtd-ty)))
+        (let ((rtd-ty 'rtd-no-such-type)) (print (typep 1 rtd-ty))))
+      ;; A COMPUTED error condition type with initargs goes through the shared
+      ;; %error-runtime dispatch (cl-postgres' (error (get-error-type code) ...)).
+      (define-condition rtd-err (error) ((code :initarg :code :reader rtd-err-code)))
+      (defun rtd-boom (ty) (error ty :code 42))
+      (print (handler-case (rtd-boom 'rtd-err) (rtd-err (c) (list :caught (rtd-err-code c)))))
+      ;; A SYMBOL as a funcall designator resolves late, like the interpreter
+      ;; (cl-postgres passes 'list-row-reader through exec-query).
+      (defun rtd-add3 (a b c) (+ a b c))
+      (let ((rtd-f 'rtd-add3)) (print (funcall rtd-f 1 2 3)))
+      ;; (progn) is nil even in a value position (a case clause with an empty body).
+      (print (if (= 1 1) (progn) :else))
+    expected: |
+      T
+      T
+      T
+      T
+      NIL
+      T
+      T
+      NIL
+      (:CAUGHT 42)
+      6
+      NIL

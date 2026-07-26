@@ -638,6 +638,7 @@ final class WasmExprCompiler {
 							LispNames.PROGV + " is not supported on the WASM backend (interpreter only)");
 				case LispNames.UNWIND_PROTECT -> WasmUnwindProtectCompiler.compile(cons, ctx);
 				case LispNames.HANDLER_CASE -> WasmHandlerCaseCompiler.compile(cons, ctx);
+				case LispNames.HANDLER_BIND -> WasmExprCompiler.compileExpr(LispMacroExpander.handlerBindStub(), ctx);
 				case LispNames.IGNORE_ERRORS ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandIgnoreErrors(cons), ctx);
 				case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx);
@@ -1010,7 +1011,7 @@ final class WasmExprCompiler {
 				case LispNames.ETYPECASE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx);
 				case LispNames.TYPEP ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandTypep(cons, ctx.closRegistry), ctx);
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandTypep(cons, ctx.closRegistry, false), ctx);
 				case LispNames.SUBTYPEP ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSubtypep(cons, ctx.closRegistry), ctx);
 				case LispNames.CHECK_TYPE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCheckType(cons), ctx);

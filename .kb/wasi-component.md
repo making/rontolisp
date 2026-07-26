@@ -6,6 +6,22 @@ Opt-in (CLI `--component`; `WasmLispCompiler(dynamic, component)`; threaded as a
 
 **Gotchas to preserve**: `wasi:cli` and `wasi:filesystem` expose DISTINCT `error-code` types -> separate future built-ins (`future-read-cli`/`-fs`); the fs error-code is a string-bearing variant -> `future-read-fs` needs realloc.
 
+**Shared-memory map -- a KNOWN, UNFIXED collision (`.todo/178`)**: the component's ONE
+linear memory is shared by three writers -- the mem module's `cabi_realloc` bump (from
+page 1 up, monotonic), the adapter's fixed scratch (page 5: env/preopen buffers,
+stream/future handle cells, the 64-slot fd table), and the rontolisp core's static
+data/intern table/heap (from 256 up). Those regions OVERLAP for any program with more
+than ~64 KB of interned data, and past ~256 KB of cumulative ABI traffic the bump walks
+through the adapter's cells: cl-postgres (3.0 MB of static data) hits it as "unknown
+handle index" inside `fd_write`. Programs that work today do so because the bytes each
+side clobbers happen not to be re-read. A fix was attempted and REVERTED in the same
+session (2026-07-26): moving the core's data to page 6 and RINGING the ABI bump inside
+pages 1-2 fixed cl-postgres' symptom but broke the ci-spec corpus -- the ring recycles
+memory the adapter still points into (its cached preopen/environ buffers are canonical-ABI
+allocations that outlive the call that made them), so "every canonical-ABI allocation is
+per-call transient" is FALSE. Any real fix has to reason about which ABI allocations the
+adapter retains, and about two bump allocators growing in one memory; see `.todo/178`.
+
 **Index stability**: WASM static function-import indices and the `FUNC_*` constants in `WasmLispCompiler` are kept identical across modes (preview1-style `random_get`/`clock_time_get`/`environ_*` imports exist in both modes; `WasmRandomCompiler` calls `random_get` in both modes (real host entropy in Preview 1, the adapter's `wasi:random` in component); `WasmTimeCompiler` branches on `Ctx.component`; the 0.2-era `FUNC_FETCH_*` reserved slots and the retired `FUNC_TCP_*` trap stubs are both deleted, so `FUNC_START` is `IMPORT_FUNC_COUNT` = 8).
 
 Assembly lives in `WasmComponentBuilder` (codegen.wasm) over `am.ik.wasm.ComponentWriter` (general async-canon-ABI encoder, reusable for future language-level async). The fixed byte blobs (`import-block.bin`, `mem.wasm`, `adapter.wasm`) are loaded from classpath resources under `.../codegen/wasm/component/` and registered for native image in `resource-config.json` (wildcard). **The blobs are generated** from sources under `src/wasm-component/` — to change them follow `src/wasm-component/README.md` (edit sources, run `regen.sh`, re-derive the wiring constants from `wasm-tools dump`, re-test).

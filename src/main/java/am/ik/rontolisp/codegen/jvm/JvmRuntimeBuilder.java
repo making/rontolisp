@@ -20,15 +20,25 @@ final class JvmRuntimeBuilder {
 	private JvmRuntimeBuilder() {
 	}
 
-	static JvmLispCompiler.DispatchMethod buildDispatchMethod(int arity,
+	/**
+	 * The dispatch-case byte budget after which an {@code _invoke_<arity>} body is
+	 * continued in a chained {@code _invoke_<arity>$<n>} segment. The if-else chain grows
+	 * linearly with the number of callables of that arity (every variadic function
+	 * matches every arity above its required count), and one segment holding them all
+	 * crossed the JVM's 64 KB method-code limit at cl-postgres scale (66 KB of arity-9
+	 * cases).
+	 */
+	private static final int DISPATCH_SEGMENT_BUDGET = 24_000;
+
+	static List<JvmLispCompiler.DispatchMethod> buildDispatchMethods(int arity,
 			Map<String, JvmLispCompiler.FunctionInfo> functions, List<JvmLispCompiler.LambdaInfo> lambdaDecls,
 			List<JvmLispCompiler.FunctionInfo> lambdaFuncInfos, ConstantPool cp, ClassConstant thisClass,
 			ClassConstant objectArrayClass, ClassConstant integerClass, MethodrefConstant integerValue,
-			ClassConstant objectClass, @org.jspecify.annotations.Nullable MethodrefConstant applyRef) {
-		String name = "_invoke_" + arity;
+			ClassConstant objectClass, ClassConstant stringClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant applyRef,
+			@org.jspecify.annotations.Nullable MethodrefConstant lookupRef) {
 		// Descriptor: (Object funcval, Object a0, ..., Object aN-1) -> Object
 		String desc = "(" + "Ljava/lang/Object;".repeat(arity + 1) + ")Ljava/lang/Object;";
-		Utf8Constant nameUtf8 = cp.addUtf8(name);
 		Utf8Constant descUtf8 = cp.addUtf8(desc);
 		// Params: slot 0=funcval, slot 1..arity=args
 		// Extra locals: fvSlot=arity+1 (Object[] fv), idSlot=arity+2 (int id),
@@ -37,83 +47,174 @@ final class JvmRuntimeBuilder {
 		int idSlot = arity + 2;
 		int restSlot = arity + 3;
 		int maxLocals = arity + 4;
-		List<Integer> code = new ArrayList<>();
-		// Object[] fv = (Object[]) funcval;
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ASTORE);
-		code.add(fvSlot);
-		// int id = ((Integer) fv[0]).intValue();
-		code.add(Opcode.ALOAD);
-		code.add(fvSlot);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, integerClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, integerValue.index());
-		code.add(Opcode.ISTORE);
-		code.add(idSlot);
-		// Interpreted closure (funcId == -1, created by the eval runtime's lambda):
-		// delegate to _apply with the arguments collected into a cons list
-		if (applyRef != null) {
-			code.add(Opcode.ILOAD);
-			code.add(idSlot);
-			code.add(Opcode.ICONST_M1);
-			int ifPos = code.size();
-			code.add(Opcode.IF_ICMPNE);
-			emitU2(code, 0);
-			code.add(Opcode.ACONST_NULL);
-			code.add(Opcode.ASTORE);
-			code.add(restSlot);
-			for (int j = arity - 1; j >= 0; j--) {
-				code.add(Opcode.ICONST_2);
-				code.add(Opcode.ANEWARRAY);
-				emitU2(code, objectClass.index());
-				code.add(Opcode.DUP);
-				code.add(Opcode.ICONST_0);
-				code.add(Opcode.ALOAD);
-				code.add(j + 1);
-				code.add(Opcode.AASTORE);
-				code.add(Opcode.DUP);
-				code.add(Opcode.ICONST_1);
-				code.add(Opcode.ALOAD);
-				code.add(restSlot);
-				code.add(Opcode.AASTORE);
-				code.add(Opcode.ASTORE);
-				code.add(restSlot);
-			}
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.ALOAD);
-			code.add(restSlot);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, applyRef.index());
-			code.add(Opcode.ARETURN);
-			patchBranch(code, ifPos, code.size());
+		// The matching callables, in dispatch order: named functions, then lambdas
+		// (the closure env is passed as the first argument). A variadic function
+		// (physical params = required + rest list) matches every dispatch arity >=
+		// required; its case links the surplus args into a cons list.
+		record Case(JvmLispCompiler.FunctionInfo fi, boolean closure) {
 		}
-		// Generate if-else chain for each function with matching arity. A variadic
-		// function (physical params = required + rest list) matches every dispatch
-		// arity >= required; its case links the surplus args into a cons list.
-		// Named functions (non-closure)
+		List<Case> cases = new ArrayList<>();
 		for (Map.Entry<String, JvmLispCompiler.FunctionInfo> entry : functions.entrySet()) {
 			JvmLispCompiler.FunctionInfo fi = entry.getValue();
 			if (!fi.isClosure() && dispatchMatches(fi.paramCount(), fi.variadic(), arity)) {
-				emitDispatchCase(code, fi, arity, idSlot, restSlot, -1, objectClass);
+				cases.add(new Case(fi, false));
 			}
 		}
-		// Lambda functions (closure): the closure env is passed as the first argument
 		for (int i = 0; i < lambdaDecls.size(); i++) {
 			JvmLispCompiler.LambdaInfo lambda = lambdaDecls.get(i);
-			JvmLispCompiler.FunctionInfo fi = lambdaFuncInfos.get(i);
 			if (dispatchMatches(lambda.paramNames().size(), lambda.variadic(), arity)) {
-				emitDispatchCase(code, fi, arity, idSlot, restSlot, fvSlot, objectClass);
+				cases.add(new Case(lambdaFuncInfos.get(i), true));
 			}
 		}
-		// Default: return null
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		return new JvmLispCompiler.DispatchMethod(nameUtf8, descUtf8, code, maxLocals);
+		List<JvmLispCompiler.DispatchMethod> segments = new ArrayList<>();
+		int caseIndex = 0;
+		int segment = 0;
+		while (true) {
+			String name = segment == 0 ? "_invoke_" + arity : "_invoke_" + arity + "$" + segment;
+			Utf8Constant nameUtf8 = cp.addUtf8(name);
+			List<Integer> code = new ArrayList<>();
+			if (segment == 0 && lookupRef != null) {
+				// A String funcval is a SYMBOL used as a function designator (the
+				// interpreter's late binding): resolve it through _lookup, whose
+				// Object[]{funcId, arity} result carries the id in slot 0 exactly like
+				// a function value. An unknown name answers null like the default arm.
+				// A chained segment receives the already-resolved fv.
+				code.add(Opcode.ALOAD_0);
+				code.add(Opcode.INSTANCEOF);
+				emitU2(code, stringClass.index());
+				int ifNotStringPos = code.size();
+				code.add(Opcode.IFEQ);
+				emitU2(code, 0);
+				code.add(Opcode.ALOAD_0);
+				code.add(Opcode.INVOKESTATIC);
+				emitU2(code, lookupRef.index());
+				code.add(Opcode.ASTORE);
+				code.add(fvSlot);
+				code.add(Opcode.ALOAD);
+				code.add(fvSlot);
+				int ifResolvedPos = code.size();
+				code.add(Opcode.IFNONNULL);
+				emitU2(code, 0);
+				// throw new RuntimeException("The function " + name + " is
+				// undefined") -- the interpreter's late-binding failure, catchable by
+				// handler-case like any signalled error.
+				ClassConstant runtimeEx = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+				MethodrefConstant exCtor = cp.addMethodref(runtimeEx,
+						cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+				MethodrefConstant stringConcat = cp.addMethodref(stringClass,
+						cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+				code.add(Opcode.NEW);
+				emitU2(code, runtimeEx.index());
+				code.add(Opcode.DUP);
+				code.add(Opcode.LDC_W);
+				emitU2(code, cp.addString("The function ").index());
+				code.add(Opcode.ALOAD_0);
+				code.add(Opcode.CHECKCAST);
+				emitU2(code, stringClass.index());
+				code.add(Opcode.INVOKEVIRTUAL);
+				emitU2(code, stringConcat.index());
+				code.add(Opcode.LDC_W);
+				emitU2(code, cp.addString(" is undefined").index());
+				code.add(Opcode.INVOKEVIRTUAL);
+				emitU2(code, stringConcat.index());
+				code.add(Opcode.INVOKESPECIAL);
+				emitU2(code, exCtor.index());
+				code.add(Opcode.ATHROW);
+				patchBranch(code, ifNotStringPos, code.size());
+				// Object[] fv = (Object[]) funcval;
+				code.add(Opcode.ALOAD_0);
+				code.add(Opcode.CHECKCAST);
+				emitU2(code, objectArrayClass.index());
+				code.add(Opcode.ASTORE);
+				code.add(fvSlot);
+				patchBranch(code, ifResolvedPos, code.size());
+			}
+			else {
+				// Object[] fv = (Object[]) funcval;
+				code.add(Opcode.ALOAD_0);
+				code.add(Opcode.CHECKCAST);
+				emitU2(code, objectArrayClass.index());
+				code.add(Opcode.ASTORE);
+				code.add(fvSlot);
+			}
+			// int id = ((Integer) fv[0]).intValue();
+			code.add(Opcode.ALOAD);
+			code.add(fvSlot);
+			code.add(Opcode.ICONST_0);
+			code.add(Opcode.AALOAD);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, integerClass.index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, integerValue.index());
+			code.add(Opcode.ISTORE);
+			code.add(idSlot);
+			// Interpreted closure (funcId == -1, created by the eval runtime's
+			// lambda): delegate to _apply with the arguments collected into a cons
+			// list. Segment 0 only: a chained segment sees the same id.
+			if (segment == 0 && applyRef != null) {
+				code.add(Opcode.ILOAD);
+				code.add(idSlot);
+				code.add(Opcode.ICONST_M1);
+				int ifPos = code.size();
+				code.add(Opcode.IF_ICMPNE);
+				emitU2(code, 0);
+				code.add(Opcode.ACONST_NULL);
+				code.add(Opcode.ASTORE);
+				code.add(restSlot);
+				for (int j = arity - 1; j >= 0; j--) {
+					code.add(Opcode.ICONST_2);
+					code.add(Opcode.ANEWARRAY);
+					emitU2(code, objectClass.index());
+					code.add(Opcode.DUP);
+					code.add(Opcode.ICONST_0);
+					code.add(Opcode.ALOAD);
+					code.add(j + 1);
+					code.add(Opcode.AASTORE);
+					code.add(Opcode.DUP);
+					code.add(Opcode.ICONST_1);
+					code.add(Opcode.ALOAD);
+					code.add(restSlot);
+					code.add(Opcode.AASTORE);
+					code.add(Opcode.ASTORE);
+					code.add(restSlot);
+				}
+				code.add(Opcode.ALOAD_0);
+				code.add(Opcode.ALOAD);
+				code.add(restSlot);
+				code.add(Opcode.INVOKESTATIC);
+				emitU2(code, applyRef.index());
+				code.add(Opcode.ARETURN);
+				patchBranch(code, ifPos, code.size());
+			}
+			while (caseIndex < cases.size() && code.size() < DISPATCH_SEGMENT_BUDGET) {
+				Case c = cases.get(caseIndex++);
+				emitDispatchCase(code, c.fi(), arity, idSlot, restSlot, c.closure() ? fvSlot : -1, objectClass);
+			}
+			if (caseIndex < cases.size()) {
+				// Continue in the next segment: pass the RESOLVED fv (so a
+				// String-designator lookup happens once) and the arguments unchanged.
+				String nextName = "_invoke_" + arity + "$" + (segment + 1);
+				MethodrefConstant nextRef = cp.addMethodref(thisClass,
+						cp.addNameAndType(cp.addUtf8(nextName), descUtf8));
+				code.add(Opcode.ALOAD);
+				code.add(fvSlot);
+				for (int i = 0; i < arity; i++) {
+					code.add(Opcode.ALOAD);
+					code.add(i + 1);
+				}
+				code.add(Opcode.INVOKESTATIC);
+				emitU2(code, nextRef.index());
+				code.add(Opcode.ARETURN);
+				segments.add(new JvmLispCompiler.DispatchMethod(nameUtf8, descUtf8, code, maxLocals));
+				segment++;
+				continue;
+			}
+			// Default: return null
+			code.add(Opcode.ACONST_NULL);
+			code.add(Opcode.ARETURN);
+			segments.add(new JvmLispCompiler.DispatchMethod(nameUtf8, descUtf8, code, maxLocals));
+			return segments;
+		}
 	}
 
 	private static boolean dispatchMatches(int paramCount, boolean variadic, int arity) {
@@ -1337,6 +1438,15 @@ final class JvmRuntimeBuilder {
 
 	static void patchBranch(List<Integer> code, int branchPos, int targetPos) {
 		int offset = targetPos - branchPos;
+		if (offset < Short.MIN_VALUE || offset > Short.MAX_VALUE) {
+			// A silently wrapped offset produces a class the verifier rejects with an
+			// unrelated-looking error (or worse, wrong control flow); fail loudly at
+			// the source instead. A body this large needs its dispatch outlined or
+			// split -- see the shared %typep-runtime/%subtypep-runtime/%error-runtime
+			// defuns and the segmented _invoke_N/_lookup builders.
+			throw new IllegalStateException("branch offset " + offset + " at position " + branchPos
+					+ " overflows the signed 16-bit branch encoding (method body too large)");
+		}
 		byte[] bytes = ByteBuffer.allocate(2).putShort((short) offset).array();
 		code.set(branchPos + 1, (int) bytes[0]);
 		code.set(branchPos + 2, (int) bytes[1]);

@@ -806,11 +806,16 @@ public final class JvmLispCompiler implements LispCompiler {
 					}
 				}
 			}
-			for (int i = 0; i < defun.bodyExprs.size(); i++) {
-				if (i > 0) {
-					funcCtx.emit(Opcode.POP);
+			try {
+				for (int i = 0; i < defun.bodyExprs.size(); i++) {
+					if (i > 0) {
+						funcCtx.emit(Opcode.POP);
+					}
+					JvmExprCompiler.compileExpr(defun.bodyExprs.get(i), funcCtx, this.className);
 				}
-				JvmExprCompiler.compileExpr(defun.bodyExprs.get(i), funcCtx, this.className);
+			}
+			catch (IllegalStateException ex) {
+				throw new IllegalStateException("while compiling defun " + defun.name + ": " + ex.getMessage(), ex);
 			}
 			funcCtx.emit(Opcode.ARETURN);
 			funcCtxs.add(funcCtx);
@@ -925,11 +930,22 @@ public final class JvmLispCompiler implements LispCompiler {
 					}
 				}
 			}
-			for (int i = 0; i < lambda.bodyExprs.size(); i++) {
-				if (i > 0) {
-					lambdaCtx.emit(Opcode.POP);
+			try {
+				for (int i = 0; i < lambda.bodyExprs.size(); i++) {
+					if (i > 0) {
+						lambdaCtx.emit(Opcode.POP);
+					}
+					JvmExprCompiler.compileExpr(lambda.bodyExprs.get(i), lambdaCtx, this.className);
 				}
-				JvmExprCompiler.compileExpr(lambda.bodyExprs.get(i), lambdaCtx, this.className);
+			}
+			catch (IllegalStateException ex) {
+				if (Boolean.getBoolean("rontolisp.jvm.debug-method-sizes")) {
+					for (LispVal bodyExpr : lambda.bodyExprs) {
+						System.err.println("[lambda-body " + lambda.methodName + "] " + bodyExpr.print());
+					}
+				}
+				throw new IllegalStateException("while compiling lambda " + lambda.methodName + ": " + ex.getMessage(),
+						ex);
 			}
 			if (lambda.bodyExprs.isEmpty()) {
 				// An empty-body (lambda ()) returns nil.
@@ -940,22 +956,28 @@ public final class JvmLispCompiler implements LispCompiler {
 			lambdaIdx++;
 		}
 
-		// Build dispatch functions for each needed arity. When the eval runtime is
-		// present, the dispatcher falls back to _apply for interpreted closures
-		// (funcId == -1) created by the runtime's lambda.
-		MethodrefConstant applyRefForDispatch = usesEval
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_apply"),
-						cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")))
-				: null;
-		List<DispatchMethod> dispatchMethods = new ArrayList<>();
-		for (int arity : indirectCallArities) {
-			DispatchMethod dm = JvmRuntimeBuilder.buildDispatchMethod(arity, functions, lambdaDecls, lambdaFuncInfos,
-					cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, applyRefForDispatch);
-			dispatchMethods.add(dm);
+		// Debug hook (-Drontolisp.jvm.debug-method-sizes=true): rank the emitted
+		// method bodies by code size. The JVM caps a method at 65535 code bytes and
+		// a branch at a signed 16-bit offset, so this is the first thing to run when
+		// a large program trips either limit.
+		if (Boolean.getBoolean("rontolisp.jvm.debug-method-sizes")) {
+			record Sized(String name, int size) {
+			}
+			List<Sized> sized = new ArrayList<>();
+			for (int i = 0; i < defuns.size(); i++) {
+				sized.add(new Sized(defuns.get(i).name, funcCtxs.get(i).code.size()));
+			}
+			for (int i = 0; i < lambdaCtxs.size(); i++) {
+				sized.add(new Sized(lambdaDecls.get(i).methodName, lambdaCtxs.get(i).code.size()));
+			}
+			sized.stream()
+				.sorted(java.util.Comparator.comparingInt(Sized::size).reversed())
+				.limit(40)
+				.forEach(s -> System.err.println("[method-size] " + s.size() + "\t" + s.name()));
 		}
 
-		// Build the eval runtime methods and the global-environment field (only when
-		// used)
+		// Names of the eval runtime methods and the global-environment field (the
+		// constants are cheap; the method bodies are built only when used)
 		Utf8Constant evalName = cp.addUtf8("_eval");
 		Utf8Constant evalDesc = cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 		Utf8Constant applyName = cp.addUtf8("_apply");
@@ -975,8 +997,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> applyCode = List.of();
 		List<Integer> storeCode = List.of();
 		List<Integer> envLookupCode = List.of();
-		List<Integer> lookupCode = List.of();
-		if (usesEval) {
+		List<List<Integer>> lookupSegments = List.of();
+		List<Utf8Constant> lookupSegmentNames = new ArrayList<>();
+		// _lookup (the name-to-funcId registry) is needed by the eval runtime AND by
+		// the indirect-call dispatchers: a funcall whose designator is a SYMBOL at run
+		// time (cl-postgres passes 'list-row-reader through exec-query) resolves
+		// through it, matching the interpreter's late binding. Gated on the program
+		// actually having such a call so a program without one keeps its previous
+		// output (the registry names every defun, so it is not size-neutral).
+		boolean needsLookup = usesEval || LispMacroExpander.usesRuntimeFunctionDesignator(program);
+		if (needsLookup) {
 			MethodrefConstant evalRef = cp.addMethodref(thisClass, cp.addNameAndType(evalName, evalDesc));
 			MethodrefConstant applyRef = cp.addMethodref(thisClass, cp.addNameAndType(applyName, evalDesc));
 			MethodrefConstant storeRef = cp.addMethodref(thisClass, cp.addNameAndType(storeName, storeDesc));
@@ -1016,11 +1046,33 @@ public final class JvmLispCompiler implements LispCompiler {
 				.invoke(invoke)
 				.functions(functions)
 				.build();
-			evalCode = JvmEvalRuntimeBuilder.buildEval(ec);
-			applyCode = JvmEvalRuntimeBuilder.buildApply(ec);
-			storeCode = JvmEvalRuntimeBuilder.buildStore(ec);
-			envLookupCode = JvmEvalRuntimeBuilder.buildEnvLookup(ec);
-			lookupCode = JvmEvalRuntimeBuilder.buildLookup(ec);
+			if (usesEval) {
+				evalCode = JvmEvalRuntimeBuilder.buildEval(ec);
+				applyCode = JvmEvalRuntimeBuilder.buildApply(ec);
+				storeCode = JvmEvalRuntimeBuilder.buildStore(ec);
+				envLookupCode = JvmEvalRuntimeBuilder.buildEnvLookup(ec);
+			}
+			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass);
+			for (int g = 1; g < lookupSegments.size(); g++) {
+				lookupSegmentNames.add(cp.addUtf8("_lookup$" + g));
+			}
+		}
+
+		// Build dispatch functions for each needed arity. When the eval runtime is
+		// present, the dispatcher falls back to _apply for interpreted closures
+		// (funcId == -1) created by the runtime's lambda; a String funcval (a symbol
+		// used as a function designator) resolves through _lookup.
+		MethodrefConstant applyRefForDispatch = usesEval
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_apply"),
+						cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")))
+				: null;
+		MethodrefConstant lookupRefForDispatch = needsLookup
+				? cp.addMethodref(thisClass, cp.addNameAndType(lookupName, lookupDesc)) : null;
+		List<DispatchMethod> dispatchMethods = new ArrayList<>();
+		for (int arity : indirectCallArities) {
+			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls,
+					lambdaFuncInfos, cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass,
+					stringClass, applyRefForDispatch, lookupRefForDispatch));
 		}
 
 		// Build the runtime reader methods (read/load), only when used
@@ -1270,7 +1322,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<Integer> applyBody = applyCode;
 		final List<Integer> storeBody = storeCode;
 		final List<Integer> envLookupBody = envLookupCode;
-		final List<Integer> lookupBody = lookupCode;
+		final List<List<Integer>> lookupBodies = lookupSegments;
 
 		// The layout half of <clinit>, assembled HERE because it mints CONSTANT_String
 		// entries and the constant pool is serialized by .writeConstantPool(cp) below,
@@ -1816,14 +1868,18 @@ public final class JvmLispCompiler implements LispCompiler {
 								.writeU2(0)
 								.writeU2(0);
 						})));
-				if (usesEval) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lookupName, lookupDesc,
+				for (int g = 0; g < lookupBodies.size(); g++) {
+					final List<Integer> segBody = lookupBodies.get(g);
+					Utf8Constant segName = g == 0 ? lookupName : lookupSegmentNames.get(g - 1);
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, segName, lookupDesc,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
 									attr -> attr.writeU2(8)
 										.writeU2(2)
-										.writeCode((Object[]) lookupBody.toArray(new Integer[0]))
+										.writeCode((Object[]) segBody.toArray(new Integer[0]))
 										.writeU2(0)
 										.writeU2(0))));
+				}
+				if (usesEval) {
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, envLookupName, envLookupDesc,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
 									attr -> attr.writeU2(8)

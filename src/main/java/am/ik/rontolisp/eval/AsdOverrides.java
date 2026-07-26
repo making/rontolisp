@@ -28,7 +28,13 @@ public final class AsdOverrides {
 	 * The {@code .asd} file name (as computed from the primary system name by
 	 * {@code locate}) to the classpath resource holding the replacement source.
 	 */
-	private static final Map<String, String> RESOURCES = Map.of("ironclad.asd", "ironclad-slice.asd");
+	private static final Map<String, String> RESOURCES = Map.of("ironclad.asd", "ironclad-slice.asd",
+			// Not unparseable but UNDER-DECLARED: sql-string.lisp needs alexandria and
+			// data-types.lisp needs cl-ppcre, neither in the upstream :depends-on (a
+			// full CL image nearly always has them loaded already). The replacement
+			// declares the true set so one (ql:quickload "cl-postgres") resolves on
+			// the eagerly-resolving compile paths too.
+			"cl-postgres.asd", "cl-postgres-deps.asd");
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

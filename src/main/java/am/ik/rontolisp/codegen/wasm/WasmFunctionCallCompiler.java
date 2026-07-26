@@ -32,6 +32,16 @@ final class WasmFunctionCallCompiler {
 	static void compileFuncall(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 2; // (funcall f arg0 ...) -> arity = num_args
+		if (arity > WasmLispCompiler.MAX_CALLABLE_ARITY) {
+			// The dispatch functions occupy a FIXED index range (FUNC_DISPATCH_BASE +
+			// 0..MAX_CALLABLE_ARITY); an over-arity index would silently call the
+			// NEXT runtime helper (cl-postgres' 9-argument make-ssl-stream funcall
+			// produced an invalid module this way). The site stays compilable as a
+			// call-time signal, so an over-arity funcall on a dead branch (SSL is
+			// interpreter/JVM-only anyway) never blocks a build.
+			WasmExprCompiler.compileExpr(LispMacroExpander.overArityFuncallStub(arity), ctx);
+			return;
+		}
 		ctx.indirectCallArities.add(arity);
 		int dispatchFuncIdx = WasmLispCompiler.FUNC_DISPATCH_BASE + arity;
 
@@ -110,7 +120,11 @@ final class WasmFunctionCallCompiler {
 				WasmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx);
 				return;
 			}
-			throw new UnsupportedOperationException("Cannot compile: " + name);
+			// An undefined function: keep the interpreter's late binding -- signal
+			// when the call is EXECUTED, so a library whose error path references a
+			// function rontolisp does not provide stays compilable.
+			System.err.println("warning: the function " + name + " is undefined; compiled as a call-time error");
+			WasmExprCompiler.compileExpr(LispMacroExpander.undefinedFunctionCallStub(name), ctx);
 		}
 	}
 

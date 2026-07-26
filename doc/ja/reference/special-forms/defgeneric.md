@@ -16,7 +16,7 @@
 (list (area :unit-square) (area :dot) (funcall #'area :unit-square)) ; => (1 0 1)
 ```
 
-適用可能なメソッドがない総称関数の呼び出しはエラー（`No applicable method: g`）を通知するため、ここでは実行例ではなく静的に示します:
+適用可能なメソッドがない総称関数の呼び出しはエラー（`No applicable method: G on INTEGER`）を通知するため、ここでは実行例ではなく静的に示します:
 
 ```console
 (defgeneric g (x))

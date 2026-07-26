@@ -1493,6 +1493,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunEmptyPrognIsNilInValuePosition() throws Exception {
+		// (progn) is nil; in an if-arm it must still push a value (a case clause
+		// with an empty body -- cl-postgres' message-case CloseComplete arm --
+		// expands to exactly this shape).
+		assertThat(compileAndRun("(print (if (= 1 1) (progn) :else))")).isEqualTo("NIL");
+	}
+
+	@Test
 	void compileAndRunSetqReassign() throws Exception {
 		assertThat(compileAndRun("(print (progn (setq x 10) (setq x 20) x))")).isEqualTo("20");
 	}
@@ -3703,6 +3711,60 @@ class JvmLispCompilerTest {
 			.isEqualTo("T\nNIL");
 	}
 
+	@Test
+	void compileAndRunTypepWithComputedSpecifier() throws Exception {
+		// A computed specifier lowers to the shared %typep-runtime defun (its data
+		// table is a top-level defvar): the inline per-class dispatch overflowed the
+		// JVM's 16-bit branch offsets at cl-postgres scale (ironclad's pbkdf1
+		// shared-initialize). The answers must match the literal-specifier expansion.
+		assertThat(compileAndRun("""
+				(defclass animal () ((name :initarg :name)))
+				(defclass dog (animal) ())
+				(defstruct point x y)
+				(let ((d (make-instance 'dog)) (p (make-point :x 1 :y 2)))
+				  (let ((ty 'dog)) (print (typep d ty)))
+				  (let ((ty 'animal)) (print (typep d ty)))
+				  (let ((ty 'point)) (print (typep p ty)))
+				  (let ((ty 'integer)) (print (typep 42 ty)))
+				  (let ((ty 'string)) (print (typep d ty)))
+				  (let ((ty 'standard-object)) (print (typep d ty)))
+				  (let ((ty 'structure-object)) (print (typep p ty)))
+				  (let ((ty 'no-such-type)) (print (typep 1 ty)))
+				  (let ((ty t)) (print (typep 1 ty))))
+				""")).isEqualTo("T\nT\nT\nT\nNIL\nT\nT\nNIL\nT");
+	}
+
+	@Test
+	void compileAndRunSlotValueOfANameTwoUnrelatedClassesPlaceDifferently() throws Exception {
+		// A slot name at DIFFERENT indexes in unrelated classes reads through an
+		// instance-tag dispatch. It used to route through a same-named READER generic
+		// instead, which is wrong when that generic belongs to an unrelated class: with
+		// ironclad and cl-postgres both loaded, (slot-value <protocol-error> 'message)
+		// dispatched into IRONCLAD::MESSAGE and died with "No applicable method" while
+		// rendering the protocol error's own report.
+		assertThat(compileAndRun("""
+				(defclass other () ((filler :initarg :filler) (message :initarg :message :reader message)))
+				(define-condition my-proto-error (error) ((message :initarg :message)))
+				(print (message (make-instance 'other :filler 1 :message "from-other")))
+				(print (slot-value (make-instance 'other :filler 1 :message "read-other") 'message))
+				(print (slot-value (make-condition 'my-proto-error :message "from-condition") 'message))
+				""")).isEqualTo("\"from-other\"\n\"read-other\"\n\"from-condition\"");
+	}
+
+	@Test
+	void compileAndRunErrorWithComputedConditionType() throws Exception {
+		// A computed condition-type datum WITH initargs lowers to the shared
+		// %error-runtime dispatch (one construction helper per condition class):
+		// inlining every class's typed expansion at the call site grew cl-postgres'
+		// get-error to 90 KB, past the JVM's 64 KB hard method limit.
+		assertThat(compileAndRun("""
+				(define-condition my-err (error) ((code :initarg :code :reader my-err-code)))
+				(defun boom (ty) (error ty :code 42))
+				(print (handler-case (boom 'my-err) (my-err (c) (list :caught (my-err-code c)))))
+				(print (handler-case (boom 'type-error) (type-error (c) :caught-type-error)))
+				""")).isEqualTo("(:CAUGHT 42)\n:CAUGHT-TYPE-ERROR");
+	}
+
 	// define-setf-expander / defsetf are handled by the compile-path pass
 	// (eval.UserMacroExpander): the definition is consumed and each (setf (place ...) v)
 	// call site is rewritten to primitives, so the compiler never sees the expander.
@@ -4833,7 +4895,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test

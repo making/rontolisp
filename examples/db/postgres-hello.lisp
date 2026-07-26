@@ -6,13 +6,24 @@
 ;; It needs a server. The one-liner this example is written against:
 ;;   docker run --rm -p 54329:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine
 ;;
-;; INTERPRETER ONLY today. The driver loads through ql:quickload, which pulls
-;; md5, split-sequence, ironclad, cl-base64, cl-ppcre, uax-15 and alexandria --
-;; expect the first run to take minutes (uax-15 parses UnicodeData.txt at load
-;; time). trust, password and md5 authentication all complete; SCRAM-SHA-256
-;; also completes, but only if the server allows enough time: its 4096-round
-;; PBKDF2 outruns the default 60-second authentication_timeout in interpreted
-;; Lisp, so start the server with -c authentication_timeout=600 for it.
+;; Runs on the interpreter and on the JVM backend:
+;;   rontolisp examples/db/postgres-hello.lisp -o Prog.class && java Prog
+;;
+;; The driver loads through ql:quickload, which pulls md5, split-sequence,
+;; ironclad, cl-base64, cl-ppcre, uax-15 and alexandria -- expect the first run
+;; to take minutes either way (uax-15 parses UnicodeData.txt at load time).
+;; trust, password and md5 authentication all complete; SCRAM-SHA-256 also
+;; completes, but on the INTERPRETER only if the server allows enough time: its
+;; 4096-round PBKDF2 outruns the default 60-second authentication_timeout in
+;; interpreted Lisp, so start the server with -c authentication_timeout=600 for
+;; it. The compiled backend is fast enough for the default.
+;;
+;; On WASM the driver needs --component (TCP is WASI 0.3 sockets; Preview 1 has
+;; no host socket API):
+;;   rontolisp examples/db/postgres-hello.lisp -o postgres-hello.wasm --component --optimize
+;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y postgres-hello.wasm
+;; That build connects and authenticates but does not complete a query yet; see
+;; examples/db/README.md. TLS (sslmode) is interpreter/JVM only either way.
 
 (ql:quickload "cl-postgres")
 

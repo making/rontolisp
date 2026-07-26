@@ -16,7 +16,7 @@ Lite subset: `&key` in the generic's lambda list, `:method-combination` and the 
 (list (area :unit-square) (area :dot) (funcall #'area :unit-square)) ; => (1 0 1)
 ```
 
-Calling a generic that has no applicable method signals an error (`No applicable method: g`), so it is shown here statically rather than as a runnable example:
+Calling a generic that has no applicable method signals an error (`No applicable method: G on INTEGER`), so it is shown here statically rather than as a runnable example:
 
 ```console
 (defgeneric g (x))

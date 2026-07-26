@@ -123,7 +123,11 @@ final class JvmFunctionCallCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughVariable(cons), ctx, className);
 				return;
 			}
-			throw new UnsupportedOperationException("Cannot compile: " + name);
+			// An undefined function: keep the interpreter's late binding -- signal
+			// when the call is EXECUTED, so a library whose error path references a
+			// function rontolisp does not provide stays compilable.
+			System.err.println("warning: the function " + name + " is undefined; compiled as a call-time error");
+			JvmExprCompiler.compileExpr(LispMacroExpander.undefinedFunctionCallStub(name), ctx, className);
 		}
 	}
 
