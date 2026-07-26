@@ -22,6 +22,12 @@ import org.jspecify.annotations.Nullable;
  */
 public final class ConstantPool {
 
+	/**
+	 * The largest usable constant pool index: {@code constant_pool_count} is a u2 holding
+	 * the entry count plus one, so the last index is 65534.
+	 */
+	public static final int MAX_INDEX = 0xFFFE;
+
 	private final ByteArrayOutputStream out = new ByteArrayOutputStream();
 
 	private final Map<ByteBuffer, Constant> dedup = new HashMap<>();
@@ -70,6 +76,14 @@ public final class ConstantPool {
 		Constant existing = this.dedup.get(ByteBuffer.wrap(bytes));
 		if (existing != null) {
 			return existing;
+		}
+		if (this.size + (twoSlots ? 2 : 1) > MAX_INDEX) {
+			// Refuse here rather than at serialization: an index past u2 is truncated by
+			// every emit site that writes one (`(short) index`), so the FIRST symptom of
+			// an overflowing pool is an instruction whose operand points at an unrelated
+			// entry -- diagnosed downstream as a bogus operand-stack model failure.
+			throw new IllegalStateException("constant pool overflow: this class needs more than " + MAX_INDEX
+					+ " constant pool entries, the JVM class-format limit; split the program");
 		}
 		try {
 			this.out.write(bytes);
@@ -234,13 +248,14 @@ public final class ConstantPool {
 	/**
 	 * Serialize this constant pool to a byte array.
 	 * @return the serialized bytes
-	 * @throws IllegalStateException when the pool exceeds the class-format limit of 65535
-	 * entries (the u2 count would silently wrap, producing a corrupt class)
+	 * @throws IllegalStateException when the pool exceeds the class-format limit of 65534
+	 * entries (the u2 count would silently wrap, producing a corrupt class) --
+	 * {@code add} already refuses to cross it, so this is a backstop
 	 */
 	public byte[] toByteArray() {
-		if (this.size + 1 > 0xFFFF) {
+		if (this.size > MAX_INDEX) {
 			throw new IllegalStateException("constant pool overflow: " + this.size
-					+ " entries exceed the JVM class-format limit of 65534; split the program");
+					+ " entries exceed the JVM class-format limit of " + MAX_INDEX + "; split the program");
 		}
 		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
 		final ByteCodeWriter out = new ByteCodeWriter(stream);

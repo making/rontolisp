@@ -1,4 +1,4 @@
-# JVM backend: no emitted method may outgrow the 16-bit branch / 64 KB code limits
+# JVM backend: no emitted method may outgrow the 16-bit branch / 64 KB code limits, and no class its 65534-entry constant pool
 
 Scope: the **JVM backend** (`codegen.jvm`). The WASM sibling constraint (one
 function body's superlinear compile cost) is
@@ -55,6 +55,34 @@ A single enormous USER defun still hits the guards — same stance as the WASM
 sibling: there is no way to outline what the user wrote as one function. The
 loudly-thrown error now names the real cause.
 
+## The third ceiling: 65534 constant pool entries per class
+
+`constant_pool_count` is a u2, so the last usable index is 65534
+(`ConstantPool.MAX_INDEX`). This one is NOT per method — it is per class, and it
+is the limit a data-heavy program reaches first, because **every distinct
+integer literal costs TWO entries** (an integer is a boxed `long`, i.e. a
+`CONSTANT_Long`, and a long takes two pool slots). Roughly 25,000 distinct
+numbers in one program is enough on top of a library like cl-postgres.
+
+Crossing it used to be diagnosed at the WRONG place. Every emit site writes an
+index as `(short) index`, so index 65832 was written as 296 and the instruction
+silently referenced an unrelated entry; the first thing to notice was the
+operand-stack model, which read a `Fieldref`'s `Ljava/lang/Object;` as if it
+were an argument list and reported `operand-stack model: underflow at 31`
+inside an unrelated cl-ppcre lambda. `ConstantPool.add` now refuses the entry
+that would cross the limit (counting both slots of a long/double before
+accepting it), so the failure names the real cause; `OperandStack.invoke` also
+rejects an operand whose entry is not a method descriptor, as a backstop for any
+other way an index could go wrong. `toByteArray`'s check is now unreachable and
+kept only as a serialization-time backstop.
+
+The design consequence for generated data: encode bulk numeric tables as a few
+long STRING literals parsed at load time, not as thousands of numeric literals.
+The `--optimize` chunking that keeps a data form under the 64 KB METHOD limit
+(one `defun` per 250 entries) does nothing for the pool — it makes it worse, by
+adding a name and descriptor per chunk. `ShimLibraries`' uax-15 leaf modules are
+built this way for exactly this reason (`.kb/asdf.md`).
+
 ## Symbol function designators (same session, adjacent seam)
 
 `(funcall f args...)` where `f` holds a SYMBOL at run time (cl-postgres passes
@@ -79,4 +107,6 @@ calling the neighboring runtime helper (which produced an invalid module).
 scale witness — the cl-postgres full stack (quickloads + all driver files)
 compiling and running a live query on the JVM backend (todo 115's session
 records). The 255-local-slot ceiling is the remaining unguarded sibling
-(`.todo/137`).
+(`.todo/137`). The pool ceiling is pinned by
+`am.ik.jvm.ConstantPoolTest#refusesTheEntryThatWouldCrossTheFormatLimit` /
+`#refusesATwoSlotEntryThatWouldStraddleTheFormatLimit`.

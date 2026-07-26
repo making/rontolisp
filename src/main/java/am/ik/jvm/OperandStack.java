@@ -384,6 +384,15 @@ public final class OperandStack {
 	 */
 	private @Nullable Slot invoke(boolean hasReceiver) {
 		String descriptor = this.descriptor();
+		if (!descriptor.startsWith("(")) {
+			// The operand names an entry that is not a method: the emitted index is
+			// corrupt (a u2 that was truncated, a wrong constant handed to the emitter),
+			// and reading a field descriptor as an argument list would report the damage
+			// as an operand-stack underflow instead.
+			throw new IllegalStateException("operand-stack model: the invoke at " + this.opcodePc
+					+ " references the constant-pool entry " + ((this.operands[0] << 8) | this.operands[1])
+					+ ", whose descriptor " + descriptor + " is not a method descriptor");
+		}
 		for (int i = 0; i < argumentCount(descriptor); i++) {
 			this.pop();
 		}
