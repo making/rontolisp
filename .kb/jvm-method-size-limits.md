@@ -76,12 +76,19 @@ rejects an operand whose entry is not a method descriptor, as a backstop for any
 other way an index could go wrong. `toByteArray`'s check is now unreachable and
 kept only as a serialization-time backstop.
 
-The design consequence for generated data: encode bulk numeric tables as a few
-long STRING literals parsed at load time, not as thousands of numeric literals.
-The `--optimize` chunking that keeps a data form under the 64 KB METHOD limit
-(one `defun` per 250 entries) does nothing for the pool — it makes it worse, by
-adding a name and descriptor per chunk. `ShimLibraries`' uax-15 leaf modules are
-built this way for exactly this reason (`.kb/asdf.md`).
+The design consequence for generated data: encode bulk numeric tables as STRING
+literals scanned at run time, not as thousands of numeric literals. The
+`--optimize` chunking that keeps a data form under the 64 KB METHOD limit (one
+`defun` per 250 entries) does nothing for the pool — it makes it worse, by
+adding a name and descriptor per chunk. `Uax15Tables`' derived forms are built
+this way for exactly this reason (`.kb/asdf.md`; they are derived forms, not
+`ShimLibraries` leaf modules — uax-15 has none of those).
+
+Two follow-on constraints that came out of the same data, both in `.kb/asdf.md`:
+the literals are **many short chunks, not a few long ones** — `(char s i)` is
+O(i) on the compile paths, so scanning one long literal is quadratic — and the
+scan runs on **first read of the table, not at load**, so a program that never
+normalizes never pays for it.
 
 ## Symbol function designators (same session, adjacent seam)
 

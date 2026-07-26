@@ -4,8 +4,9 @@
 ;; It is the one demo here whose library has dependencies of its own, so the
 ;; system path carries three directories. Runs on all four backends: the tables
 ;; the library builds by parsing 2.7 MB of bundled Unicode text are DERIVED from
-;; the same files at compile/load time and emitted as data, so every backend
-;; loads in seconds instead of minutes with identical results.
+;; the same files at compile/load time, emitted as data, and built only when one
+;; is first read -- so the load itself is milliseconds where the real library
+;; takes minutes, and the results are identical.
 
 (asdf:load-system :uax-15)
 
@@ -37,7 +38,7 @@
 
 ;; unicode-letter-p over a Latin letter, a hiragana, a digit and a CJK ideograph.
 ;; rontolisp answers T for the letters; the upstream load answers NIL for every
-;; character outside four hardcoded ranges (its key computation reads #+utf-32,
+;; character outside nine hardcoded ranges (its key computation reads #+utf-32,
 ;; a feature a file's own pushnew never gets to the reader).
 (print (mapcar (lambda (code) (uax-15:unicode-letter-p (code-char code)))
                (list #x41 #x3042 #x30 #x4E00)))

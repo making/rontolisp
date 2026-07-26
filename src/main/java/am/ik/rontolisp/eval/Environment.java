@@ -3849,9 +3849,12 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.SCHAR_SET + " expects a string, got " + args.get(0).print());
 			}
 			int index = requireIndex(LispNames.SCHAR_SET, args.get(1));
-			if (index < 0 || index >= str.length()) {
+			// Capacity, not the fill pointer: a (setf (char s i) c) past the fill pointer
+			// writes an inactive slot in CL and on all three compile backends, and the
+			// fill pointer bounds the sequence view only (.kb/adjustable-arrays.md).
+			if (index < 0 || index >= str.capacity()) {
 				throw new LispEvalException(LispNames.SCHAR_SET + ": index " + index
-						+ " out of bounds for string of length " + str.length());
+						+ " out of bounds for string of length " + str.capacity());
 			}
 			LispChar c = requireChar(LispNames.SCHAR_SET, args.get(2));
 			str.setCharAt(index, c.codePoint());
@@ -4059,17 +4062,29 @@ public final class Environment implements Scope {
 
 	private static LispVal charRef(String name, java.util.List<LispVal> args) {
 		requireArgCount(name, args, 2);
-		String s = requireString(name, args.get(0));
+		if (!(args.get(0) instanceof LispString s)) {
+			throw new LispEvalException(name + " expects a string, got: " + args.get(0).print());
+		}
 		int index = requireIndex(name, args.get(1));
 		// Indexing is by CHARACTER (Unicode code point), not by UTF-16 code unit -- a
 		// supplementary code point is one indexed character, not two, matching every
-		// other backend and Common Lisp's contract.
-		int cpLen = s.codePointCount(0, s.length());
+		// other backend and Common Lisp's contract. The backing store is already one code
+		// point per slot, so this reads the slot: going through the Java String (rebuild
+		// the whole string, count its code points, walk to the index) made a single
+		// (char s i) cost O(length), and any left-to-right scan of a long string
+		// quadratic -- 64,000 characters took 3.3 s that way.
+		//
+		// The bound is the CAPACITY, not the fill pointer: char / schar / aref all
+		// ignore fill pointers in CL ("it is permissible to use aref to access any
+		// array element, whether active or not"), which is the invariant
+		// .kb/adjustable-arrays.md states and all three compile backends already
+		// honour. Reading `value()` made this the fill pointer and left the
+		// interpreter the only backend that could not see an inactive slot.
+		int cpLen = s.capacity();
 		if (index < 0 || index >= cpLen) {
 			throw new LispEvalException(name + ": index " + index + " out of bounds for string of length " + cpLen);
 		}
-		int codeUnit = s.offsetByCodePoints(0, index);
-		return new LispChar(s.codePointAt(codeUnit));
+		return new LispChar(s.codePointAt(index));
 	}
 
 	private static LispChar requireChar(String name, LispVal val) {

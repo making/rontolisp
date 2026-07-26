@@ -38,8 +38,9 @@ argument BY CODE POINT, not by UTF-16 code unit. A supplementary code point
 `(char "aé😀b" 2) == #\😀` on every backend.
 
 - **Interpreter** (`Environment.java`) -- `LENGTH` reads `str.codePointCount()`
-  (equivalent to `length()` under the new int[] storage), `charRef` /
-  `sequenceRef` walk `String.offsetByCodePoints(0, i)` +
+  (equivalent to `length()` under the new int[] storage), `charRef` reads
+  `LispString.codePointAt(i)` -- ONE array slot -- , `sequenceRef` walks
+  `String.offsetByCodePoints(0, i)` +
   `String.codePointAt(codeUnit)` on the reassembled `value()`, `SUBSEQ` translates
   a character range to a code-unit range through the same walk, `seqAsList` builds
   one `LispChar` per code point via `String.codePointBefore(codeUnit)`.
@@ -62,6 +63,23 @@ argument BY CODE POINT, not by UTF-16 code unit. A supplementary code point
   counts UTF-8 lead bytes, `_str_char_at` decodes the sequence at a walked
   position, `_str_char_byte_offset` translates a character index to a byte
   offset for `subseq`. Length / char / subseq lower through those helpers.
+
+**COST, and it is not uniform.** A character index is O(1) on the interpreter
+and O(i) on all three compile backends -- the JVM's `offsetByCodePoints` and
+wasm's UTF-8 decode both walk from the start -- so a left-to-right `dotimes` scan
+is linear interpreted and QUADRATIC compiled. Measured 2026-07-26 over one
+48,000-character literal, forward scan: interpreter 23 ms, JVM 195 ms, wasm
+Preview 1 1045 ms, component 981 ms; 20,000 accesses at a fixed index cost
+10/10/10 ms interpreted against 5/96/147 (JVM) and 1/435/867 (wasm P1) at index
+0 / 24,000 / 47,999. The interpreter used to be the WORST of the four (632 ms at
+index 0, because `charRef` rebuilt the whole Java `String` from the `int[]` on
+every call, then counted its code points, then walked to the index); that is
+fixed. Generated bulk data must therefore be emitted as MANY SHORT string
+literals rather than a few long ones -- `eval/Uax15Tables` cuts its derived runs
+at 1,000 characters for exactly this reason, worth ~15x on either WASM backend and
+~10x on the JVM over a 56 KB run ([[asdf]]). It is worth nothing on the
+interpreter, which is the point: chunking buys the COMPILE paths, the `charRef`
+fix bought the interpreter. Making the compile paths O(1) is `.todo/185`.
 
 ## String comparison family = ONE code-point walk
 

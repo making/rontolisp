@@ -183,6 +183,26 @@ fill-pointer vector prints only up to the fill pointer. `length` (in
 `aref` / `row-major-aref` still reach the FULL backing store (CL semantics: the
 fill pointer bounds the sequence view, not element access).
 
+That holds for STRINGS too, and the interpreter was the odd one out until
+2026-07-26: `Environment.charRef` (which backs `char` / `schar` / `aref` on a
+string) and `%schar-set` bounded the index by `LispString.length()`, i.e. the
+fill pointer, so `(aref s 5)` on a `:fill-pointer 3` string of capacity 8
+signalled on the interpreter and returned the inactive slot on all three compile
+backends. Both now bound by `capacity()`. CL is explicit that `char`, `schar` and
+`aref` ignore fill pointers ("it is permissible to use `aref` to access any array
+element, whether active or not"), so the compile backends were right and the
+divergence was silent -- no test covered an inactive string slot. Pinned now by
+the `string-fill-pointer-inactive-slots` ci-spec case (read AND write through
+`aref`, all four backends byte-identical).
+
+**`char` / `schar` past the fill pointer are still three-way divergent, and the
+ci-spec case deliberately does not cover them**: the interpreter now returns the
+slot, the JVM throws a raw `String.offsetByCodePoints` exception, and both WASM
+backends return `#\Nul` (they materialize the string at its fill-pointer length
+and have no bounds check at all -- writing past the end silently APPENDS there).
+That is the general missing-bounds-check gap, not a fill-pointer question;
+`.todo/186` holds it with the measurements.
+
 Displacement: `displacedTo` (a `LispArray` or null) + `displacedOffset` fields;
 a displaced array's `data` is a shared empty array and all element access goes
 through `readFlat`/`writeFlat`, which walk the chain adding each hop's offset

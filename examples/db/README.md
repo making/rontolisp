@@ -22,8 +22,8 @@ rontolisp examples/db/postgres-hello.lisp -o Prog.class && java Prog
 
 `ql:quickload` pulls md5, split-sequence, ironclad, cl-base64, cl-ppcre, uax-15
 and alexandria; the first run also downloads them into `~/.rontolisp/quicklisp`.
-Compiling takes a few seconds, and every backend -- the interpreter included --
-runs it in a few seconds. `trust`, `password` and
+Compiling takes a couple of seconds, and every backend -- the interpreter
+included -- runs it in well under a second. `trust`, `password` and
 `md5` authentication all complete on both. SCRAM-SHA-256 completes too, but on the INTERPRETER only when
 the server allows enough time: its 4096-round PBKDF2 outruns the default
 60-second `authentication_timeout` in interpreted Lisp, so start the server with

@@ -11,8 +11,10 @@
 ;;
 ;; The driver loads through ql:quickload, which pulls md5, split-sequence,
 ;; ironclad, cl-base64, cl-ppcre, uax-15 and alexandria (downloaded once into
-;; ~/.rontolisp/quicklisp). Compiling takes a few seconds, and so does a run on
-;; any backend, the interpreter included.
+;; ~/.rontolisp/quicklisp). Compiling takes a couple of seconds, and a run is
+;; well under a second on any backend, the interpreter included -- the library
+;; tables uax-15 would otherwise build at load time are derived at compile time
+;; and built only if something asks for one, and nothing here does.
 ;; trust, password and md5 authentication all complete; SCRAM-SHA-256 also
 ;; completes, but on the INTERPRETER only if the server allows enough time: its
 ;; 4096-round PBKDF2 outruns the default 60-second authentication_timeout in

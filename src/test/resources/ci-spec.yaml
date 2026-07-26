@@ -2306,6 +2306,30 @@ cases:
   # vector-push/vector-pop/vector-push-extend, first-class wrappers, and the
   # verbatim cl-utilities copy-array. Side effects are sequenced through let*
   # bindings (the compilers evaluate list arguments right-to-left).
+  # A STRING's inactive slots (between the fill pointer and the capacity) are reachable
+  # by aref and writable through (setf (aref ...)) on every backend: CL says aref ignores
+  # fill pointers, and the fill pointer bounds the sequence view only
+  # (.kb/adjustable-arrays.md). The interpreter used to bound the index by the fill
+  # pointer and signal here, where all three compile backends served the slot.
+  # char / schar past the fill pointer are deliberately NOT covered: the compile backends
+  # have no bounds check there at all and disagree with each other -- see the string
+  # indexing section of .kb/adjustable-arrays.md.
+  - name: string-fill-pointer-inactive-slots
+    source: |
+      (defun ci-string-inactive-aref ()
+        (let ((s (make-array 6 :element-type 'character :fill-pointer 3 :initial-element #\.)))
+          (setf (char s 0) #\a)
+          (setf (char s 1) #\b)
+          (setf (char s 2) #\c)
+          (print (list (length s) s (aref s 4) (aref s 5)))
+          (setf (aref s 4) #\Z)
+          (setf (fill-pointer s) 6)
+          (print s)))
+      (ci-string-inactive-aref)
+    expected: |
+      (3 "abc" #\. #\.)
+      "abc.Z."
+
   - name: fill-pointer-arrays-cross-backend
     source: |
       (defun ci-copy-array (array &key

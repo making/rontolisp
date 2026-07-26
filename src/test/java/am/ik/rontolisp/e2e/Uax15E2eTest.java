@@ -8,10 +8,10 @@ import java.util.List;
  * (vendored unmodified under {@code src/test/resources/uax-15}, MIT license) load via
  * {@code asdf:load-system} and run the four Unicode normalization forms on all four
  * backends via {@link AsdfLibraryE2eSupport}. The library transitively pulls
- * split-sequence and cl-ppcre, then loads the 34k-line UnicodeData.txt,
+ * split-sequence and cl-ppcre, then reads the 34k-line UnicodeData.txt,
  * CompositionExclusions.txt and DerivedNormalizationProps.txt into precomputed hash
- * tables at load time via {@code with-open-file :external-format :UTF-8}. This exercises
- * the {@code asdf:find-system} / {@code asdf:system-source-directory} pair (the runtime
+ * tables via {@code with-open-file :external-format :UTF-8}. This exercises the
+ * {@code asdf:find-system} / {@code asdf:system-source-directory} pair (the runtime
  * system registry, folded at compile time by
  * {@link am.ik.rontolisp.cli.CompileTimePathnameFolder}), {@code uiop:merge-pathnames*} +
  * {@code make-pathname} (namestring composition, also folded), per-line {@code read-line}
@@ -23,13 +23,14 @@ import java.util.List;
  * <p>
  * It is also the pin for {@link am.ik.rontolisp.eval.Uax15Tables}: those load-time table
  * builds are the ones rontolisp DERIVES from the same bundled data files while loading or
- * compiling and emits as data, so the combining-class map, the illegal-character list
- * (length and both endpoints, i.e. the whole ordered list) and {@code unicode-letter-p}
- * are asserted here alongside the normalizations. {@code unicode-letter-p} answering T
- * for {@code #\A} is the derived table's doing: upstream's own letter loop keys every
- * data-derived entry on {@code nil}, because a file's {@code pushnew} onto
- * {@code *features*} never reaches the reader that would enable {@code #+utf-32} in
- * {@code char-from-hexstring}.
+ * compiling, emits as data and materializes on FIRST READ, so the combining-class map,
+ * the illegal-character list (length and both endpoints, i.e. the whole ordered list) and
+ * {@code unicode-letter-p} are asserted here alongside the normalizations -- and the
+ * exercise leads with the two lines that pin the deferral itself (see the comment on
+ * {@code EXERCISE}). {@code unicode-letter-p} answering T for {@code #\A} is the derived
+ * table's doing: upstream's own letter loop keys every data-derived entry on {@code nil},
+ * because a file's {@code pushnew} onto {@code *features*} never reaches the reader that
+ * would enable {@code #+utf-32} in {@code char-from-hexstring}.
  *
  * <p>
  * All four backends produce the same code-point sequences: the WASM GC string byte data
@@ -45,6 +46,15 @@ class Uax15E2eTest extends AsdfLibraryE2eSupport {
 
 	private static final String SYSTEM_DIR = Path.of("src", "test", "resources", "uax-15").toAbsolutePath().toString();
 
+	// The first two lines pin the LAZINESS, and both are load-bearing. The `null` row
+	// is the whole claim of Uax15Tables' deferral: after loading the system every one of
+	// the five derived tables is still NIL, so nothing in the load built one. The second
+	// line then forces the COMPOSITION map first, through the one route that reaches it
+	// without going through the canonical decomposition map (uax-15::compose, which the
+	// normalize entry points never reach until nfd has run) -- the builder relocated into
+	// precomputed-tables.lisp maphashes that map, and without its explicit force every
+	// backend dies on NIL. Putting them after a normalize would hide both.
+	//
 	// The uax-15 API is stringly-typed and the returned strings contain combining
 	// marks / decomposed sequences that are hard to eyeball, so the exercise prints
 	// codepoint LISTS rather than the raw normalized strings. NFC composes: A + U+030A
@@ -55,6 +65,14 @@ class Uax15E2eTest extends AsdfLibraryE2eSupport {
 	private static final String EXERCISE = """
 			(asdf:load-system :uax-15)
 			(defun codes (s) (map 'list #'char-code s))
+			(print (list (null uax-15::*canonical-combining-class*)
+			             (null uax-15::*canonical-decomp-map*)
+			             (null uax-15::*compatible-decomp-map*)
+			             (null uax-15::*canonical-comp-map*)
+			             (null uax-15::*unicode-letters*)))
+			(print (codes (uax-15::from-unicode-string
+			               (uax-15::compose
+			                (uax-15::to-unicode-string (format nil "A~C" (code-char #x030A)))))))
 			(print (codes (uax-15:normalize (format nil "A~C" (code-char #x030A)) :nfc)))
 			(print (codes (uax-15:normalize (string (code-char #x00C5)) :nfd)))
 			(print (codes (uax-15:normalize (format nil "~C~C" (code-char #x2460) (code-char #x00BD)) :nfkc)))
@@ -67,8 +85,8 @@ class Uax15E2eTest extends AsdfLibraryE2eSupport {
 			               (list #x41 #x3042 #x30 #x4E00)))
 			""";
 
-	private static final List<String> EXPECTED = List.of("(197)", "(65 778)", "(49 49 8260 50)", "(102 102)", "(197)",
-			"230", "(1231 (832 NIL) (71984 T))", "(T T NIL T)");
+	private static final List<String> EXPECTED = List.of("(T T T T T)", "(197)", "(197)", "(65 778)", "(49 49 8260 50)",
+			"(102 102)", "(197)", "230", "(1231 (832 NIL) (71984 T))", "(T T NIL T)");
 
 	@Override
 	protected String systemDir() {
