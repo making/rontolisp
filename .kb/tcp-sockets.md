@@ -201,6 +201,18 @@ output is byte-identical), inside the handle call's task context, so a
 top-level suspension drives through the blocking event loop exactly as under
 `wasmtime run`. Pinned by `httpHandlerReadsATopLevelGlobalUnderWasmtimeServe`.
 
+**"Once per instance" is a HOST decision, and the two hosts differ** (measured
+2026-07-27 with `examples/db/postgres-web.lisp`, a served handler over a
+top-level PostgreSQL connection): `wasmtime serve` keeps ONE instance for the
+whole server run, so the top level runs once; wasmCloud `wash dev` (2.5.2)
+gives each request a FRESH instance, so the top level runs again on every
+request and its side effects repeat. A `drop table` + `create table` startup
+pair therefore emptied the table on each wasmCloud request while accumulating
+normally under wasmtime -- the example uses `create table if not exists` for
+exactly this reason. The rule for a served program: treat top-level side
+effects as idempotent-or-per-request, and keep durable state in the store, not
+in a global. External state (a PostgreSQL row) survives; a defvar does not.
+
 - **Plumbing (sockets.lisp `%sock-plumb`, the old adapter's `$plumb` in
   Lisp)**: at connect/accept time `receive()` yields the recv stream (its
   future dropped immediately -- EOF is the stream status), `sock-stream-new`

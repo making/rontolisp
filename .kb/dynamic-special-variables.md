@@ -60,6 +60,21 @@ gets a backing store.
 
 ## JVM (`JvmLetCompiler`) -- shallow binding over the static field
 
+**NOT thread-scoped, unlike the interpreter above -- measured 2026-07-27.** The
+static field is one process-global location, so two HTTP-handler requests that
+bind the same special clobber each other and one restores the other's saved
+value. Eight concurrent requests to a handler that binds a special and does real
+work: the interpreter answers all eight correctly, the JVM loses one and answers
+another with the GLOBAL default. Real-world bite: cl-postgres'
+`initiate-connection` binds `*connection-params*`, so concurrent `open-database`
+calls fill each other's hash table and the connection dies on
+`(string= (gethash "integer_datetimes" ...) "on")` with a null. The same shape
+The same shape applies to the WASM module global, but the repro is CLEAN on both
+wasm hosts (8/8 under `wasmtime serve` and under `wash dev`) -- which is not the
+same as "the wasm backends are concurrency-safe", see `.todo/190` for a
+concurrency trap there with a different cause. Repro, per-backend numbers and
+the fix options: `.todo/189`.
+
 - `Ctx.specialVars` threaded from `SpecialVarCollector.collect` (unioned into
   `globals` in `JvmLispCompiler` so each special has a `_g$*` static field).
 - A special binding in `let` is a **DUAL-BIND** (2026-07-19, the cl-ppcre
