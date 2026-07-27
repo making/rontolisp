@@ -8,11 +8,14 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispPackageException;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A small prelude of standard functions implemented once in rontolisp source, so a single
@@ -562,6 +565,12 @@ public final class LispPreludeLibrary {
 
 	private static final Map<String, List<LispVal>> CACHE = new ConcurrentHashMap<>();
 
+	// Entry key (member name) -> the name its own defun defines, in the spelling the
+	// program's resolved copy uses for the same symbol: RONTOLISP:ALIST-HASH-TABLE for a
+	// rontolisp: entry, bare EQUALP for a cl one (a bundled library source is a resolver
+	// fixed point, so its raw spelling IS the canonical one).
+	private static final Map<String, String> DEFINED_NAMES = new ConcurrentHashMap<>();
+
 	private LispPreludeLibrary() {
 	}
 
@@ -599,10 +608,32 @@ public final class LispPreludeLibrary {
 	 * The compile-path pre-pass: for each prelude function the program references but
 	 * does not define itself, prepends its {@code defun}. A program that uses none is
 	 * returned unchanged.
+	 *
+	 * <p>
+	 * Selection runs on a {@link PackageResolver#resolveProgram(List) resolved} copy of
+	 * the program, so a reference and a definition are matched as the SYMBOLS they are,
+	 * not by member name: {@code alexandria:alist-hash-table} (a real defun in the
+	 * alexandria every second quicklisp system pulls in) is a different function from
+	 * {@code rontolisp:alist-hash-table}, and neither one shadows the other. Matching by
+	 * member name made the alexandria defun suppress the splice, and the program's
+	 * {@code rl:alist-hash-table} call then compiled to a call-time "undefined function"
+	 * error. When the program does not resolve (a package error is not this pass's to
+	 * report -- the backends run the identical resolution first thing) selection falls
+	 * back to the member-name matching.
 	 * @param program the top-level forms (after load inlining and user-macro expansion)
 	 * @return the program with the referenced prelude definitions spliced in
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
+		List<LispVal> resolved;
+		boolean canonical;
+		try {
+			resolved = new PackageResolver().resolveProgram(program);
+			canonical = true;
+		}
+		catch (LispPackageException ex) {
+			resolved = program;
+			canonical = false;
+		}
 		// A prelude definition may itself call another one (string< and its nine
 		// siblings all go through %string-compare), so the selection runs to a fixpoint:
 		// a name pulled in for its own sake drags in whatever IT references. The
@@ -613,12 +644,16 @@ public final class LispPreludeLibrary {
 		while (grew) {
 			grew = false;
 			for (String name : SOURCES.keySet()) {
-				if (referenced.contains(name) || definesName(program, name)) {
+				String defined = definedName(name);
+				if (referenced.contains(name) || definesName(resolved, defined, canonical)) {
 					continue;
 				}
-				boolean used = referencesName(program, name);
+				boolean used = referencesName(resolved, defined, canonical);
 				for (String pulled : referenced) {
-					used = used || referencesName(formsFor(pulled), name);
+					// Prelude sources spell each other exactly as they define
+					// themselves, so the entry-to-entry edges stay member-matched:
+					// they carry no package ambiguity to resolve.
+					used = used || referencesName(formsFor(pulled), name, false);
 				}
 				if (used) {
 					referenced.add(name);
@@ -640,33 +675,66 @@ public final class LispPreludeLibrary {
 		return out;
 	}
 
-	private static boolean definesName(List<LispVal> program, String name) {
+	/**
+	 * The name an entry's own {@code defun} defines, cached per entry.
+	 */
+	private static String definedName(String key) {
+		return DEFINED_NAMES.computeIfAbsent(key, k -> {
+			for (LispVal form : formsFor(k)) {
+				String name = defunName(form);
+				if (name != null && k.equals(member(name))) {
+					return name;
+				}
+			}
+			// Defensive: an entry whose source does not define its own key.
+			return k;
+		});
+	}
+
+	@Nullable private static String defunName(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& (LispNames.DEFUN.equals(member(op.name())) || LispNames.ASYNC_DEFUN.equals(member(op.name())))
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol defName) {
+			return defName.name();
+		}
+		return null;
+	}
+
+	private static boolean definesName(List<LispVal> program, String name, boolean canonical) {
 		for (LispVal form : program) {
-			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
-					&& (LispNames.DEFUN.equals(member(op.name())) || LispNames.ASYNC_DEFUN.equals(member(op.name())))
-					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol defName
-					&& name.equals(member(defName.name()))) {
+			String defined = defunName(form);
+			if (defined != null && matches(defined, name, canonical)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean referencesName(List<LispVal> program, String name) {
+	private static boolean referencesName(List<LispVal> program, String name, boolean canonical) {
 		for (LispVal form : program) {
-			if (referencesName(form, name)) {
+			if (referencesName(form, name, canonical)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean referencesName(LispVal form, String name) {
+	private static boolean referencesName(LispVal form, String name, boolean canonical) {
 		return switch (form) {
-			case LispSymbol sym -> name.equals(member(sym.name()));
-			case LispCons cons -> referencesName(cons.car(), name) || referencesName(cons.cdr(), name);
+			case LispSymbol sym -> matches(sym.name(), name, canonical);
+			case LispCons cons ->
+				referencesName(cons.car(), name, canonical) || referencesName(cons.cdr(), name, canonical);
 			default -> false;
 		};
+	}
+
+	/**
+	 * Whether a symbol occurrence names the prelude entry: the symbols themselves when
+	 * the program resolved (so a same-member symbol of another package is a different
+	 * function), member names otherwise.
+	 */
+	private static boolean matches(String symbolName, String definedName, boolean canonical) {
+		return canonical ? symbolName.equals(definedName) : member(symbolName).equals(member(definedName));
 	}
 
 	private static String member(String name) {

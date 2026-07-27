@@ -3289,6 +3289,23 @@ cases:
       "{"x":1}"
       (("k" . 7))
       "{"status":200,"headers":{"content-type":"application/json"},"items":[1,2,3]}"
+  # A user package defining a function with the same MEMBER name as a prelude
+  # entry does not suppress the splice: the compile path selects the prelude
+  # defuns on a package-RESOLVED copy of the program, so
+  # CI-PRELUDE-SHADOW:ALIST-HASH-TABLE and RONTOLISP:ALIST-HASH-TABLE are two
+  # different functions. Not hypothetical: alexandria (spliced by half of
+  # quicklisp, e.g. (ql:quickload "cl-postgres")) defines its own.
+  - name: prelude-splice-vs-same-member-name
+    source: |
+      (defpackage :ci-prelude-shadow (:use :cl) (:export #:alist-hash-table))
+      (in-package :ci-prelude-shadow)
+      (defun alist-hash-table (alist) (length alist))
+      (in-package :cl-user)
+      (print (rontolisp:json-stringify (rontolisp:alist-hash-table (list (cons "x" 1)))))
+      (print (ci-prelude-shadow:alist-hash-table (list 1 2 3)))
+    expected: |
+      "{"x":1}"
+      3
   # equal on strings compares content on every backend (the WASM _equal/_hash
   # runtime folds string bytes), so runtime-built strings work as hash-table
   # keys and equal partners of interned literals.
