@@ -48,27 +48,19 @@ eval -> rontolisp (AST types only), compiler
 reader -> rontolisp (AST types only)
 ```
 
-`compiler` holds the backend-shared, backend-FREE directive front-ends, so anything that
-must behave identically on every backend may depend on it: `eval` does (`WitExportInliner`
-and `LispEvaluator.evalWitExport` both run the `wit-export` contract check through
-`WitExportDirective`) and so does `cli` (`WitScaffolder` -> `am.ik.wit` directly). The
-direction stays one-way -- `compiler` imports neither, and depends on no backend.
+`compiler` holds the backend-shared, backend-FREE directive front-ends: anything that must
+behave identically on every backend (both `eval` and `cli` do) depends on it, never the
+other way -- `compiler` depends on no backend.
 
 **A compile-time AST pass that reads a file belongs in `eval`, not `cli`, and must read
-through `SourceLoader`** (`WitExportInliner` is the model): the browser playground has its
-own front-end (`RontoPlayground.frontend`, `src/web/java`) which never touches `cli` and
-has no filesystem, so a pass living in `cli` or calling `Files` directly is simply absent
-there -- which is how `wit-export` first shipped, working in the playground's REPL but
-dying with `Cannot compile` on its Compile buttons.
+through `SourceLoader`.** The browser playground (`RontoPlayground.frontend`, `src/web/java`)
+never touches `cli` and has no filesystem, so a pass living in `cli` or calling `Files`
+directly is simply absent there. Mechanics and history: `.kb/wit.md`.
 
 ## Key Design Constraints
 
-The language semantics, the core value representation, and every per-backend /
-per-flag invariant are documented **one topic per file** under `.kb/*.md` -- they are
-deliberately NOT enumerated here. `.kb/README.md` is the index (one line per topic).
-
-**Before you change behavior in any of these areas, grep `.kb/` for the feature and read
-the matching file.** The topics group as:
+Grouped pointers into `.kb/*.md` (full index: `.kb/README.md`) -- see the intro above for
+the "grep before you change behavior" rule:
 
 - Core value model, three-pass compilation, JVM method mangling -> `.kb/core-representation.md`
 - Language semantics -- Lisp-2, lambda lists, `do`/`return`/`block`/`tagbody`/`go`, CLOS,
