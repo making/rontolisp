@@ -12,10 +12,10 @@ against a live PostgreSQL:
 
 The verbatim upstream sources run -- nothing is vendored or patched.
 
-## Status (2026-07-26)
+## Status (2026-07-27)
 
 The driver runs a live query round-trip on every backend that can open a TCP
-socket:
+socket, pinned by `ClPostgresE2eTest` (opt-in, see below):
 
 - **Interpreter** -- `dc8bc14c`. The full auth ladder (`trust`, `password`,
   `md5`, SCRAM-SHA-256) completes against `postgres:17-alpine`.
@@ -35,34 +35,48 @@ messages -> ieee-floats -> interpret -> saslprep -> scram -> protocol -> public
 -> bulk-copy, with `md5`, `split-sequence`, `ironclad`, `cl-base64`, `cl-ppcre`,
 `uax-15` and `alexandria` quickloaded first.
 
-## What is left
+## The automated end-to-end test -- DONE 2026-07-27
 
-### The automated end-to-end test
+`ClPostgresE2eTest`, opt-in via `RONTOLISP_POSTGRES_E2E=1`: a Testcontainers
+`postgres:17-alpine` (user instruction) started with a per-role `pg_hba.conf` --
+`trustuser`/`passuser`/`md5user`/`scramuser`, one role per method, so a broken
+rung cannot succeed through another one. Three exercises, each run on the
+interpreter, the JVM and the `--component` backend and asserted to produce
+byte-identical output: the `trust`/`password`/`md5` ladder (each probe also asks
+`current_user`, the proof of which role got in), SCRAM-SHA-256, and CRUD
+(create/insert/select/update/delete/drop plus a parameterised `prepare-query` +
+`exec-prepared` run twice, so the extended protocol is covered; each backend
+owns its own table). A tenth test pins the Preview 1 compile error.
 
-Testcontainers PostgreSQL (user instruction). All four auth methods are verified
-BY HAND on the interpreter and the query round-trip by hand on all three
-backends; what is missing is the automated, opt-in env-gated test (the
-`RONTOLISP_HTTP_E2E` pattern). `examples/db/postgres-hello.lisp` + its README
-already exist.
+**The three SCRAM legs are separately opt-in** (`RONTOLISP_POSTGRES_SCRAM_E2E=1`,
+skipped by default): they cost 2m20s / 20 s / 25 s and every second of that is
+PBKDF2. `.todo/188` owns making it fast and lists the gate and the raised
+`authentication_timeout` as the things to delete when it lands. Without the SCRAM
+legs the whole class is well under a minute plus container startup.
 
-**Two measured performance facts to plan the E2E around** (neither is a
-correctness problem):
+Unlike the other library E2Es it drives the real CLI in a subprocess (the
+component leg needs the socket library splices only `RontoLispCli` wires up, and
+the JVM leg needs a path-free `-o Probe.class`), running the test's own
+classpath -- so no packaged jar is required.
 
-1. `uax-15` alone takes ~10 minutes to load on the interpreter (34k lines of
-   UnicodeData.txt parsed in interpreted Lisp), and cl-postgres pulls it through
-   `saslprep`. ASCII credentials never call `uax-15:normalize`
-   (`saslprep-normalize` short-circuits on printable ASCII), so only the LOAD
-   costs, not the run -- but an E2E that quickloads per backend is not viable as
-   written.
-2. **SCRAM-SHA-256 needs a raised `authentication_timeout` on the interpreter.**
-   With the 60-second default it fails as `READ-BYTE: end of file` while the
-   server log says `FATAL: canceling authentication due to timeout` -- the
-   4096-round PBKDF2 (two HMAC-SHA256 per round, in interpreted Lisp) does not
-   finish in time. With `postgres -c authentication_timeout=600` the same
-   program authenticates and queries successfully. The E2E must either raise
-   that setting or run SCRAM on a compiled backend.
+Three things the test had to encode:
 
-### TLS / `sslmode`
+1. `postgres -c authentication_timeout=600`. With the 60-second default the
+   interpreter's SCRAM rung fails as `READ-BYTE: end of file` while the server
+   log says `FATAL: canceling authentication due to timeout` -- the 4096-round
+   PBKDF2 does not finish in time interpreted.
+2. The component leg connects to the container's IP ADDRESS, not its network
+   alias: `tcp-connect` takes only IPv4 literals on WASM (`.todo/048`, which now
+   also records the ugly failure mode a hostname produces through a library).
+3. The wasm leg gets its own wasmtime container on the PostgreSQL container's
+   network, rather than the shared `WasmtimeSupport` one -- container to
+   container, so no host-port bridging is involved.
+
+The load-cost worry this section used to carry is gone: `uax-15` gained derived
+compile-time tables (todo-179), so the whole quickload is ~0.2 s interpreted and
+a trust-auth connect-query-close program runs in 0.7 s wall.
+
+## What is left: TLS / `sslmode`
 
 **TLS is interpreter/JVM only** (`.kb/tcp-sockets.md`), so a connection that
 negotiates SSL cannot complete on WASM; a plain-TCP connection can. The auth

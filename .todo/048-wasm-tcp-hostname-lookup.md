@@ -24,6 +24,20 @@ stream's kind-2 handle lift, which is currently the ONE non-u8 stream lift
 (`.kb/tcp-sockets.md`). wasmtime hosts the interface behind
 `-S allow-ip-name-lookup=y`.
 
+## How it fails today, measured 2026-07-27
+
+Through the BUILT-IN the failure is graceful: `(rontolisp:tcp-connect
+"a-host-name" 5432)` on a component prints `NIL` (the `wit-error` is caught and
+surfaces as nil, like every other permission/socket failure). Through a LIBRARY
+it is not: the same hostname handed to cl-postgres (usocket shim -> `%sock-addr`)
+dies as `wasm trap: cast failure` with only a numeric backtrace -- the nil socket
+flows on into the driver, which casts it. So a user who hands a compiled
+component a hostname gets an unreadable trap, not "not an IPv4 literal", and that
+error-quality gap is the second reason to wire the lookup (the first is the
+feature itself). Encountered while writing `ClPostgresE2eTest`, whose component
+leg therefore connects to the container's IP address rather than its network
+alias.
+
 ## Status
 
 Still open, but SMALLER than originally written. The old plan (import into

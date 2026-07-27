@@ -394,7 +394,11 @@ splice). Key mechanics:
 loopback echo runs deterministically inside the wasmtime container — no opt-in
 env var needed), `PackageResolverTest#usocketLibraryFormsAreAResolverFixedPoint`,
 `LoadInlinerTest` (built-in system splice/dedup/quickload-skip) and
-`LispEvaluatorAsdfTest` (built-in system on the interpreter). The
+`LispEvaluatorAsdfTest` (built-in system on the interpreter). The one test that
+takes the shim all the way to a real server is `ClPostgresE2eTest` (opt-in
+`RONTOLISP_POSTGRES_E2E=1`): the verbatim cl-postgres over the usocket shim
+against a Testcontainers PostgreSQL, on the interpreter, the JVM and a
+component, with the Preview 1 compile error pinned alongside. The
 self-contained single-threaded echo choreography (listen 0 → tcp-local-port →
 connect → write → accept → read) never deadlocks because the connection waits
 in the listen backlog and small payloads sit in kernel/stream buffers. The
