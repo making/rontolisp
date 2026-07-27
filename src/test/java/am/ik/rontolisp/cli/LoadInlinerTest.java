@@ -188,11 +188,13 @@ class LoadInlinerTest {
 				               (:file "package")))""", //
 				"package.lisp", "(defpackage :my-lib (:use :cl) (:export :greet))", //
 				"main.lisp", "(in-package :my-lib) (defun greet () 1)"));
-		// main.lisp selects a package, so it is bracketed with package save/restore
-		// markers (package.lisp has no in-package, so it is spliced verbatim).
-		assertThat(result.stream().map(LispVal::print)).containsExactly(
+		// The system's forms are bracketed with provenance markers (the tree-shaker's
+		// only record of which forms came from a library); main.lisp additionally selects
+		// a package, so it is bracketed with package save/restore markers (package.lisp
+		// has no in-package, so it is spliced verbatim).
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"my-lib\")",
 				"(DEFPACKAGE :MY-LIB (:USE :CL) (:EXPORT :GREET))", "(%PUSH-PACKAGE)", "(IN-PACKAGE :MY-LIB)",
-				"(DEFUN GREET NIL 1)", "(%POP-PACKAGE)", "(QUOTE my-lib)", "(PRINT (MY-LIB:GREET))");
+				"(DEFUN GREET NIL 1)", "(%POP-PACKAGE)", "(%END-SYSTEM)", "(QUOTE my-lib)", "(PRINT (MY-LIB:GREET))");
 	}
 
 	@Test
@@ -202,9 +204,12 @@ class LoadInlinerTest {
 						"base.asd", "(defsystem :base :components ((:file \"base\")))", //
 						"base.lisp", "(defun base () 1)", //
 						"app.lisp", "(defun app () (base))"));
-		// base splices once, before app; the second load-system is consumed.
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN BASE NIL 1)", "(DEFUN APP NIL (BASE))",
-				"(QUOTE app)", "(QUOTE base)");
+		// base splices once, before app; the second load-system is consumed. base's
+		// provenance bracket nests inside app's, so the tree-shaker attributes each defun
+		// to the system whose file it came from.
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"app\")",
+				"(%BEGIN-SYSTEM \"base\")", "(DEFUN BASE NIL 1)", "(%END-SYSTEM)", "(DEFUN APP NIL (BASE))",
+				"(%END-SYSTEM)", "(QUOTE app)", "(QUOTE base)");
 	}
 
 	@Test
@@ -212,8 +217,8 @@ class LoadInlinerTest {
 		List<LispVal> result = inline("""
 				(asdf:defsystem :inline-sys :components ((:file "main")))
 				(asdf:load-system :inline-sys)""", Map.of("main.lisp", "(defun f () 42)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE inline-sys)", "(DEFUN F NIL 42)",
-				"(QUOTE inline-sys)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(QUOTE inline-sys)",
+				"(%BEGIN-SYSTEM \"inline-sys\")", "(DEFUN F NIL 42)", "(%END-SYSTEM)", "(QUOTE inline-sys)");
 	}
 
 	@Test
@@ -225,7 +230,8 @@ class LoadInlinerTest {
 						"(defsystem :lib :components ((:module \"src\" :components ((:file \"main\")))))",
 						"registry/src/main.lisp", "(defun f () 1)")),
 				"proj", List.of("registry"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN F NIL 1)", "(QUOTE lib)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"lib\")", "(DEFUN F NIL 1)",
+				"(%END-SYSTEM)", "(QUOTE lib)");
 	}
 
 	@Test
@@ -234,8 +240,8 @@ class LoadInlinerTest {
 				Map.of("lib.asd", "(defsystem :lib :components ((:file \"main\")))", //
 						"main.lisp", "(load \"helper.lisp\") (defun f () (h))", //
 						"helper.lisp", "(defun h () 7)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN H NIL 7)", "(DEFUN F NIL (H))",
-				"(QUOTE lib)");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"lib\")", "(DEFUN H NIL 7)",
+				"(DEFUN F NIL (H))", "(%END-SYSTEM)", "(QUOTE lib)");
 	}
 
 	@Test
@@ -383,8 +389,8 @@ class LoadInlinerTest {
 				LispReader.readAllFromString("(ql:quickload \"mylib\") (print (mylib-answer))"),
 				SourceLoader.fileSystem(), null, List.of(), Features.INTERPRETER,
 				quicklispClient(home, "(defun mylib-answer () 42)"));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFUN MYLIB-ANSWER NIL 42)", "(QUOTE mylib)",
-				"(PRINT (MYLIB-ANSWER))");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-SYSTEM \"mylib\")",
+				"(DEFUN MYLIB-ANSWER NIL 42)", "(%END-SYSTEM)", "(QUOTE mylib)", "(PRINT (MYLIB-ANSWER))");
 	}
 
 	@Test

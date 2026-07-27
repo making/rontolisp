@@ -370,10 +370,11 @@ public final class RontoLispCli {
 		program = WitExportInliner.inline(program, baseDir, witBackend, SourceLoader.fileSystem());
 		// Drop spliced library definitions unreachable from the user program (the AST
 		// tree-shaker; see LibraryDefunPruner). Skipped under --dynamic (late binding
-		// can resolve any name at runtime) and --no-prune (the explicit escape hatch).
-		if (!dynamic && !noPrune) {
-			program = LibraryDefunPruner.prune(program);
-		}
+		// can resolve any name at runtime) and --no-prune (the explicit escape hatch) --
+		// but the ASDF provenance markers the pruner reads are dropped either way, so
+		// those two flags emit the artifact they emitted before the markers existed.
+		program = (!dynamic && !noPrune) ? LibraryDefunPruner.prune(program)
+				: LibraryDefunPruner.stripSystemMarkers(program);
 		byte[] bytes;
 		String witText = null;
 		if (outputFile.endsWith(".wasm")) {

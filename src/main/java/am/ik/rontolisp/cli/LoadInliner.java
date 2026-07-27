@@ -370,7 +370,14 @@ public final class LoadInliner {
 			// loaded -- a dependent library may reach the package through defpackage
 			// :import-from + bare names, which the UsocketLibrary.process Walker
 			// (running before PackageResolver) cannot detect.
+			// Bracketed like any other system, and the pruner reads the name: a built-in
+			// system must NOT be pruned (usocket's with-* built-in macros synthesize
+			// socket-close/%usock-guard calls after the pruner runs), and the bracket is
+			// what stops it inheriting the provenance of a third-party system that
+			// :depends-on it.
+			out.add(beginSystem(name));
 			out.addAll(BuiltinSystems.forms(name));
+			out.add(marker(LispNames.END_SYSTEM));
 			ctx.loadedSystems().add(name);
 			return;
 		}
@@ -392,6 +399,11 @@ public final class LoadInliner {
 			}
 		}
 		ctx.loadingSystems().addLast(name);
+		// Everything spliced from here on belongs to this system. A dependency opens its
+		// own bracket inside this one, so the pruner's innermost-wins rule attributes
+		// each
+		// form to the system whose file it actually came from.
+		out.add(beginSystem(name));
 		try {
 			for (String dependency : system.dependsOn()) {
 				// A dependency's .asd most likely sits next to this system's (or on the
@@ -414,6 +426,7 @@ public final class LoadInliner {
 		finally {
 			ctx.loadingSystems().removeLast();
 		}
+		out.add(marker(LispNames.END_SYSTEM));
 		ctx.loadedSystems().add(name);
 	}
 
@@ -612,11 +625,21 @@ public final class LoadInliner {
 	}
 
 	/**
-	 * A bare {@code (%push-package)} / {@code (%pop-package)} directive consumed by the
-	 * package resolver (see {@link #spliceFile}).
+	 * A bare {@code (%push-package)} / {@code (%pop-package)} / {@code (%end-system)}
+	 * directive consumed by the package resolver (see {@link #spliceFile}).
 	 */
 	private static LispVal marker(String name) {
 		return new LispCons(new LispSymbol(name), LispNil.INSTANCE);
+	}
+
+	/**
+	 * A {@code (%begin-system "NAME")} provenance marker (see {@link #spliceSystem}). The
+	 * payload is a string rather than a symbol on purpose: every reference-collecting
+	 * pass downstream walks symbols, so a string name pollutes no name set.
+	 */
+	private static LispVal beginSystem(String name) {
+		return new LispCons(new LispSymbol(LispNames.BEGIN_SYSTEM),
+				new LispCons(new LispString(name), LispNil.INSTANCE));
 	}
 
 	private record RequireForm(String name, @Nullable String path) {

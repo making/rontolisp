@@ -131,6 +131,14 @@ public final class PackageResolver {
 				popPackage();
 				return quotedSymbol(this.currentPackage);
 			}
+			// The ASDF provenance brackets are consumed here too, so a marker never
+			// survives into a backend as a call to an undefined %END-SYSTEM in whatever
+			// package the spliced file selected. Unlike the package markers they carry no
+			// state: the pruner reads them from the UNRESOLVED program (which is
+			// index-aligned with the resolved copy) and drops them from its output.
+			if (LispNames.BEGIN_SYSTEM.equals(member) || LispNames.END_SYSTEM.equals(member)) {
+				return quotedSymbol(this.currentPackage);
+			}
 			// A literal top-level (uiop:add-package-local-nickname 'nick 'pkg) is
 			// consumed like a defpackage clause: the nickname registers here (so it
 			// works on every backend -- the compiled runtimes have no uiop function)

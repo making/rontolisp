@@ -50,12 +50,20 @@ function directly), and the `java:` interop bridge's reflective entry point surv
 as an explicit root. The same flag also tree-shakes the
 [WASM output](wasm.md).
 
-Independently of `--optimize`, compilation always tree-shakes the bundled
-Lisp-source libraries (`linalg:`, `vec:`, JSON, URL, `equalp`/`string<`): a
-library function your program never mentions -- by name anywhere in the source,
-including quoted symbols and string literals -- is not compiled in. The one
-consequence: a library function whose name is only assembled at runtime from
-computed strings and called through `eval`/`apply` signals the usual
+Independently of `--optimize`, compilation always tree-shakes the libraries it
+splices in: the bundled Lisp-source ones (`linalg:`, `vec:`, JSON, URL,
+`equalp`/`string<`) and every system loaded with
+[`asdf:load-system` / `ql:quickload`](../guides/asdf-systems.md). A function,
+variable or constant your program never mentions -- by name anywhere in the
+source, including quoted symbols and string literals -- is not compiled in. Your
+own code is never pruned, and neither is anything a `load`/`require` splices in:
+only a library that came from a system is subject to it.
+
+Classes, generic functions, methods, conditions and structures always stay,
+because a `make-instance` can reach a method no source line names.
+
+The one consequence: a library function whose name is only assembled at runtime
+from computed strings and called through `eval`/`apply` signals the usual
 "undefined function" error. Compile with `--no-prune` (or `--dynamic`) to keep
 every library definition in that case.
 

@@ -46,11 +46,18 @@ chain. Call sites:
   pipeline; the shakers now decode exactly what the CLI emits -- the per-backend
   unit tests keep full-library codegen coverage).
 
-NOT in: the interpreter (lazy-loads libraries whole at runtime), the
-per-library compiler unit tests (they deliberately compile the full splice),
-`AsdfLibraryE2eSupport` (splices only prelude/usocket -- a provable no-op).
+- `AsdfLibraryE2eSupport.compileProgram` -- the 12 real-library E2E subclasses
+  (cl-ppcre, ironclad, uax-15, jzon, md5, cl-base64, cl-who, ...) each exercise
+  their own API on the JVM and both WASM backends WITH the pruner, which is the
+  coverage for pruning a real third-party tree. It was deliberately absent while
+  the scope was rontolisp's own libraries (a provable no-op there); it went in
+  with the third-party extension, and adding it alone was verified green first.
 
-**Prunable set**: top-level `defun`/`defparameter`/`defvar` forms whose name is
+NOT in: the interpreter (lazy-loads libraries whole at runtime), the
+per-library compiler unit tests (they deliberately compile the full splice).
+
+**Prunable set, part 1 -- rontolisp's own libraries**: top-level
+`defun`/`defparameter`/`defvar`/`defconstant` forms whose name is
 defined by linalg, vec, json (+ its `#'` wrapper defuns), url, or the prelude
 (`equalp`/`string<`/... -- note `LispPreludeLibrary.process` selects the entries
 to splice to a fixpoint, so a prelude defun pulled in only by ANOTHER prelude
@@ -61,6 +68,11 @@ accessors). **usocket is excluded entirely**: its `with-*` built-in macros
 (`LispMacroExpander`) synthesize `usocket:socket-close` /
 `usocket::%usock-guard` / `%usock-resignal` calls that are not textually
 present in the pre-expansion AST, and it is only ~13 defuns.
+
+**Prunable set, part 2 -- an ASDF-spliced third-party tree**: the same four
+definition kinds, for every form `LoadInliner` spliced for a system. See
+"Third-party provenance" below for how the pass knows, and for the definition
+kinds that stay roots.
 
 **Reachability (carve-out semantics, user-confirmed 2026-07-12)**: a reference
 is ANY occurrence of the name anywhere in a kept form -- operator position,
@@ -75,18 +87,48 @@ whole codebase where a library-qualified name is synthesized rather than
 written (verified by grep; re-verify if a new built-in macro expansion ever
 emits a `linalg:`/`vec:`/`rontolisp::%json`/url/prelude name).
 
+Two spellings widen this, for THIRD-PARTY names only (see "Third-party
+provenance" for why the substring rule does not): an uninterned `'#:foo`
+designator and a string literal whose WHOLE content is a definition's canonical
+or member name. Both are hash lookups, not scans.
+
+A top-level `declaim`/`proclaim` is NOT a reference source. Both expand to
+`LispNil` on every backend (`LispMacroExpander.expandDeclaim`/`expandProclaim`),
+so nothing they name can be called through them, but `(declaim (inline F))` /
+`(declaim (ftype (function ...) F))` would otherwise anchor F. The FORM STAYS in
+the program -- `SpecialVarCollector.collectForm` reads a top-level
+`(declaim (special ...))` -- only its symbol occurrences stop counting. Worth 26
+definitions in the ironclad slice and 98 in the cl-postgres stack.
+
 **Safety valves**:
 
 - analysis runs on a `PackageResolver.resolveProgram` copy (index-aligned 1:1),
-  so `in-package`/nickname/bare-exported spellings match the libraries'
-  canonical fixed-point names; removal happens by index on the ORIGINAL list,
-  so surviving forms are byte-identical (the `PackageResolverTest` fixed-point
-  invariants are untouched);
+  so `in-package`/nickname/bare-exported spellings match canonical names.
+  Definition NAMES are read from that resolved copy too (a third-party
+  `(defun scan ...)` under `(in-package :cl-ppcre)` is only `CL-PPCRE:SCAN`
+  there); removal happens by index on the pre-resolution list, so surviving
+  forms are byte-identical (the `PackageResolverTest` fixed-point invariants are
+  untouched);
+- the pass first runs `LispMacroExpander.flattenTopLevel`, so a `progn` a macro
+  produced does not hide its definitions. `UserMacroExpander` flattens BEFORE
+  expanding, and nothing between it and the pruner flattens again, so without
+  this the 71 defuns cl-postgres' `deferror`/`define-message` macros emit inside
+  a `progn` are all roots. Every backend flattens as the first step of
+  `compile()`, so this only aligns the pruner with what is actually compiled --
+  but it does relax "surviving forms are byte-identical" to "byte-identical,
+  progn-spliced";
 - bail (prune nothing) when a runtime `load`/`require` survives the
   `LoadInliner` (loaded code can call anything by name), when resolution throws
-  (the compiler reports it), or when no prunable definition is present;
+  (the compiler reports it), or when no prunable definition is present. NOTE the
+  bail is a cliff, not a gradient: ONE quoted `'load` anywhere reverts the whole
+  optimization with no diagnostic (measured on a linalg program: 218,886 ->
+  567,014 bytes). No vendored library contains one today (grep-verified), but the
+  surface grew with the third-party extension;
 - the CLI skips the pass under `--dynamic` (late binding resolves names at
-  runtime) and `--no-prune` (pure escape hatch, no other codegen change).
+  runtime) and `--no-prune` (pure escape hatch, no other codegen change), and
+  runs `LibraryDefunPruner.stripSystemMarkers` instead so those two paths emit
+  the artifact they emitted before the provenance markers existed (verified
+  byte-identical on the cl-ppcre program).
 
 **Documented limitation**: a program that forges a library function's qualified
 name at runtime from computed strings (no textual/string-literal occurrence)
@@ -100,25 +142,144 @@ symbols and string literals are counted as references instead.
 
 Pinned by `LibraryDefunPrunerTest` (closure, RNG-seed defparameters,
 vec:aset edge, `#'`/quoted/string references, in-package resolution, load
-bail, usocket exclusion, order preservation) and the corpus tests' behavior
-identity + constant-pool headroom guard (<= 52,000).
+bail, usocket exclusion, order preservation; and for third-party trees: the
+provenance-survives-macro-expansion case, the macro-produced `progn`, the
+exported-but-dead tripwire, `'#:`/whole-string designators, the declaim rule,
+the built-in-dependency exclusion and the vendored cl-ppcre) plus the corpus
+tests' behavior identity + constant-pool headroom guard (<= 52,000) and the 12
+`AsdfLibraryE2eSupport` subclasses.
 
-## Scope: rontolisp's OWN libraries only, and why the "dead top-level `let`" rule was rejected
+## Third-party provenance: how the pass knows, and where the line is
 
-`prunableNames()` is the whole scope decision: linalg, vec, json (+ its `#'`
-wrappers), url and the prelude. **An ASDF-spliced third-party tree is never
-pruned** -- its definitions are not in the prunable set, so they are roots, and
-they additionally keep alive whatever rontolisp-library names they mention.
+`LoadInliner.spliceSystem` brackets everything it splices for a system with
+`(%begin-system "NAME")` / `(%end-system)`, the same in-stream marker idiom as
+`%push-package` (`LispNames.BEGIN_SYSTEM`/`END_SYSTEM`, consumed by
+`PackageResolver.resolve`, dropped by the pruner). **The provenance has to ride
+IN the form list**, and that is the whole reason for the markers rather than a
+side table:
+
+- an identity map dies at `UserMacroExpander.expand`, which returns a FRESH cons
+  for any form containing a macro call (and `JsonLibrary.process` rebuilds every
+  form in a json-using program) -- i.e. it would silently lose provenance for
+  exactly the library defuns worth pruning, with no way to detect the loss;
+- an index map dies too: five passes between the inliner and the pruner insert
+  at the front, expand 1->N, delete, and splice N->M.
+
+Brackets NEST with `:depends-on` and the innermost wins; a `BuiltinSystems`
+splice (usocket, uiop, closer-mop, flexi-streams, ...) gets its own bracket
+precisely so it does NOT inherit the prunability of a third-party system that
+depends on it -- measured: without that, `USOCKET::%USOCK-RESIGNAL` is pruned
+and a cl-postgres program dies with `Cannot compile: USOCKET::%USOCK-RESIGNAL`
+at the `with-*` guard expansion. Unbalanced brackets disable third-party
+pruning rather than guess.
+
+**What stays a root, and why it is not just caution**:
+`defclass`/`defgeneric`/`defmethod`/`define-condition`/`defstruct`/`deftype` are
+expanded into defuns, dispatchers and type tables by
+`LispMacroExpander.expandTopLevelDefinitions` INSIDE the backends, after this
+pass -- and `expandMakeInstance` synthesizes a call to whatever generic is
+registered as `initialize-instance`/`shared-initialize` with NO textual
+occurrence at the `(make-instance 'c)` site. `(satisfies F)` in a `deftype`
+likewise expands to a literal `(F value)` call. Making the four CLOS forms
+non-roots individually buys 0-13 extra dead definitions across the whole
+vendored corpus; only `defmethod` is a big anchor (it would roughly double the
+yield) and it is exactly the one that cannot move. A CLOS-aware shaker is a
+separate item, not a tweak here.
+
+`defmacro`, `define-compiler-macro`, `define-modify-macro`, `defsetf`,
+`define-setf-expander` and `macrolet` need no rule at all: `UserMacroExpander`
+registers and drops them before this pass, measured to 0 occurrences
+post-expansion in every corpus.
+
+**A third-party variable definition is pruned only when its initform is provably
+a pure value computation** (`hasPrunableInitform`/`isPureValue`: a literal, a
+variable read, a `quote`/`function`, or a call to a small allocation/arithmetic
+/reader set, with pure arguments -- deny by default). This is the one place the
+pass could otherwise produce SILENT wrong output rather than the loud "undefined
+function" the carve-out documents: dropping a definition drops its initform, and
+a `(defvar *registered* (register-all-types))` whose value nobody reads would
+lose the registration. Every dead variable measured across the vendored corpus
+IS pure -- the `(setf (gethash oid *sql-readtable*) ...)` registration idiom the
+filed item worried about lives in separate top-level `setf`/`set-sql-reader`
+forms, which are roots and name their table textually -- so the guard costs
+almost nothing (it keeps `md5::*t*`, whose `loop` the judgment cannot see
+through) while the 61 dead literal `defconstant`s of the cl-postgres stack still
+go. The BUNDLED libraries keep the unconditional rule they were audited under.
+
+**The matching rule, and the two things the filed item got wrong.** The item
+predicted that allowing member-level matching would let every `defpackage`
+`:export` keyword anchor a library's whole API, collapsing the dead-code figures
+from 6/23/34% to 3/4/11%. It does not: the scan runs on the resolved copy, where
+`PackageResolver.resolveDefpackage` has already replaced the entire form with
+`(quote PKG)`, so an `:export` clause is physically absent. The measured
+collapse came from an unbounded `endsWith` test (`"CL-PPCRE::PARSE-STRING"`
+ends with `"STRING"`), and no boundary-respecting rule reproduces it. **This is
+load-bearing**: 62% of the dead cl-postgres defuns are exported, so if
+`resolveDefpackage` ever preserved its clause list the yield would drop 38% ->
+14%. `LibraryDefunPrunerTest.anExportedButUnreferencedThirdPartyFunctionIsStillPruned`
+is the tripwire.
+
+The item also predicted the prunable set would reach ~3,000 names and need a
+trie / Aho-Corasick for the string-literal carve-out. It does not, because the
+substring rule is NOT extended to third-party names -- measured over the
+vendored trees its only hits there are docstring coincidences ("...use
+md5sum-string instead..." keeps `md5:md5sum-string` and, transitively, 16 more
+definitions; 34 such names in a 10-system program, not one of them a real
+reference). Third-party names get exact / `#:`-stripped / whole-string hash
+lookups instead, all O(1) per literal, and the ~230-name substring scan stays as
+it was (measured 1.6 ms on the cl-ppcre program). If a future library ever DOES
+bundle megabytes of literals AND the substring scan is widened, an array-based
+Aho-Corasick was prototyped at ~14x the loop's speed with a byte-identical hit
+set -- but nothing today needs it.
+
+**Keywords deliberately do not widen** (re-evaluation trigger): `(string :foo)`
+is as valid a designator as `(string '#:foo)`, so this is a judgment, not a
+principle. Measured price of reversing it: it would rescue exactly ONE
+definition across the whole vendored corpus while colliding with 7 unrelated
+keyword spellings (`:of-type` is the LOOP keyword, `:nfc`/`:nfd`/... are uax-15
+API keywords). Flip it in one line in `collectReferences` if a library is ever
+found dispatching a defun purely off a keyword.
+
+**What it is worth** (2026-07-27, `.class` via the CLI, default vs `--no-prune`,
+output byte-identical in every row):
+
+| demo program | before | after |
+| --- | --- | --- |
+| cl-base64 | 0.0% | **-14.0%** |
+| cl-who | -1.3% | **-12.7%** |
+| ironclad | -0.3% | **-9.0%** |
+| jzon | 0.0% | **-6.2%** |
+| uax-15 | -0.2% | **-5.7%** |
+| cl-utilities | -0.8% | **-4.5%** |
+| md5 | -3.3% | **-4.0%** |
+| cl-ppcre | -0.2% | **-2.8%** |
+| assoc-utils | 0.0% | **-0.8%** |
+| parse-number | -4.1% | -4.1% |
+| split-sequence | 0.0% | 0.0% |
+
+`(asdf:load-system :cl-ppcre)` + one `scan`: wasm 1,551,268 -> 1,468,585
+(-5.3%), `.class` 2,043,896 -> 1,945,286 (-4.8%), constant pool 6,527 -> 6,282.
+The filed item predicted -3.0% from hand-removing cl-ppcre's 13 statically dead
+forms; the extra came from `defconstant`, the `declaim` rule and the
+`progn` flattening, none of which were in the plan. split-sequence stays 0% and
+that is correct -- all 18 of its definitions are genuinely reachable.
+
+`--optimize` cannot substitute for any of this: the WASM/JVM shakers root at
+exports and every compiled Lisp defun is reachable from the funcall dispatcher,
+so the reduction they achieve is the same with and without the dead defuns
+present.
+
+### Why the "dead top-level `let`" rule was rejected
 
 A rule was proposed for the top-level `(let ((x ...)) (defun ...))` idiom -- delete
 the block when every definition inside it is dead -- on the premise that the pruner
-"already knows" uax-15's `get-illegal-char-list` is unreachable. **The premise is
-false and the rule was measured and rejected (2026-07-26).** Three findings, kept
-here so the idea is not re-proposed:
+"already knows" uax-15's `get-illegal-char-list` is unreachable. **The premise was
+false and the rule was measured and rejected (2026-07-26).** Kept here so the idea
+is not re-proposed:
 
-- The pruner cannot know it. `definitionName` returns null for a `let`, so a defun
-  inside one is not a definition at all; and uax-15 is third-party, so nothing in
-  that file was ever in scope. The motivating block is also gone -- `eval/Uax15Tables`
+- The pruner could not know it. `definitionName` returns null for a `let`, so a defun
+  inside one is not a definition at all; and uax-15 is third-party, which at the time
+  was out of scope entirely. The motivating block is also gone -- `eval/Uax15Tables`
   replaces that whole `let` at the source level (`.kb/asdf.md`).
 - Across every loadable library (vendored + the quicklisp cache) the idiom occurs 14
   times and only TWO blocks are dead: cl-ppcre's and cl-who's `hyperdoc-lookup`,
@@ -127,16 +288,10 @@ here so the idea is not re-proposed:
   module (0.05%)**. Worse, neither passes the existing purity judgment
   (`UserMacroExpander.isPure` rejects `loop` and any user call), so collecting the
   771 bytes would first require widening that allow-list.
-- What IS worth measuring is the premise, not the rule: extending the pruner to
-  third-party trees. Removing cl-ppcre's 13 statically dead top-level forms by hand
-  cut the wasm module 3.0% (46.7 KB) and the `.class` 3.2%, and 20-23% of the
-  SOURCE LINES of cl-postgres and the ironclad slice are unreachable. `--optimize`
-  cannot reach any of it -- the WASM/JVM shakers root at exports and every compiled
-  Lisp defun is reachable from the funcall dispatcher, so the reduction they achieve
-  is the same with and without the dead defuns present. That extension needs a
-  provenance marker from `LoadInliner`, a trie for the string-literal carve-out (the
-  prunable set grows from ~230 to ~3,000 names) and a conservative
-  CLOS/`defsetf`-stay-root line; it is filed separately.
+
+Note that a top-level `let` is STILL opaque to the pass -- the third-party
+extension changed which forms are prunable, not which shapes are recognized as
+definitions. The 771 bytes are still on the table and still not worth it.
 
 ## The constant-pool dedup
 

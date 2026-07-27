@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.cli.LoadInliner;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.SourceLoader;
@@ -135,12 +136,17 @@ abstract class AsdfLibraryE2eSupport {
 
 	// The CLI compile pipeline for the given feature set: inline the system's component
 	// files, expand the user macros they define, then splice the rontolisp-source prelude
-	// (equalp/string<), the Gray-stream dispatch and the usocket shim when referenced --
-	// mirroring RontoLispCli -- before the backend compiler runs.
+	// (equalp/string<), the Gray-stream dispatch and the usocket shim when referenced.
+	// Finally tree-shake -- mirroring RontoLispCli -- before the backend compiler runs.
+	// The pruner belongs here, not only in the CLI: these tests are the coverage for
+	// pruning a real third-party tree. Each library below exercises its own API on three
+	// compile backends, so a definition the pass drops that the program still needs fails
+	// here rather than in a user's build.
 	private List<LispVal> compileProgram(Features features) {
-		return UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispPreludeLibrary
-			.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(exercise(), features),
-					SourceLoader.fileSystem(), null, systemPath(), features)))));
+		return LibraryDefunPruner
+			.prune(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispPreludeLibrary
+				.process(UserMacroExpander.expand(LoadInliner.inline(LispReader.readAllFromString(exercise(), features),
+						SourceLoader.fileSystem(), null, systemPath(), features))))));
 	}
 
 	// Defines the compiled class from its bytes and runs main, capturing UTF-8 stdout.

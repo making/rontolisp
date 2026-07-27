@@ -2457,6 +2457,24 @@ public final class LispNames {
 	 */
 	public static final String POP_PACKAGE = "%POP-PACKAGE";
 
+	/**
+	 * Internal marker inserted by {@code LoadInliner} before the forms it splices for an
+	 * ASDF system, carrying the system's name as a string: it is the provenance the
+	 * {@code LibraryDefunPruner} tree-shakes a third-party tree by, since no other pass
+	 * records which file a top-level form came from. Brackets nest with
+	 * {@code :depends-on}, and the innermost one wins. Consumed by the resolver like
+	 * {@link #PUSH_PACKAGE} (without touching the package stack), never reaching the
+	 * backends. Paired with {@link #END_SYSTEM}.
+	 */
+	public static final String BEGIN_SYSTEM = "%BEGIN-SYSTEM";
+
+	/**
+	 * Internal marker inserted by {@code LoadInliner} after the forms it splices for an
+	 * ASDF system, closing the innermost {@link #BEGIN_SYSTEM}. Consumed by the resolver,
+	 * never reaching the backends.
+	 */
+	public static final String END_SYSTEM = "%END-SYSTEM";
+
 	/** The {@code :use} clause keyword of {@code defpackage}. */
 	public static final String USE_KEYWORD = ":USE";
 

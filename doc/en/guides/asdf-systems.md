@@ -128,6 +128,13 @@ below.
   detected and reported.
 - The compile path requires a literal, top-level `(asdf:load-system NAME)`;
   the interpreter also accepts a computed name at runtime.
+- **Compiling tree-shakes the system.** A function, variable or constant a
+  loaded system defines but your program never reaches — following names
+  through the source, including quoted symbols and whole string literals — is
+  left out of the `.class`/`.wasm`. Classes, generic functions, methods,
+  conditions and structures always stay. Compile with `--no-prune` (or
+  `--dynamic`) to keep every definition; see
+  [Compiling to the JVM](../compiling/jvm.md) for the one consequence.
 
 ## Built-in shim systems
 
