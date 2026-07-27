@@ -56,6 +56,13 @@ public final class LispEvaluator {
 	 */
 	private static final java.util.Set<String> SPECIAL_OPERATORS = PackageRegistry.specialOperatorNames();
 
+	/**
+	 * The "this operator is not mine" answer of {@link #evalConsRareOperator}, compared
+	 * by identity. A freshly built symbol that appears in no AST and is returned by no
+	 * evaluation, so it can never collide with a real value.
+	 */
+	private static final LispVal UNHANDLED = new LispSymbol("%unhandled-operator%");
+
 	private final Environment globalEnv;
 
 	private final PackageResolver packageResolver = new PackageResolver();
@@ -2263,244 +2270,12 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandCopyReadtable(cons), env);
 				case LispNames.SET_DISPATCH_MACRO_CHARACTER:
 					return eval(LispMacroExpander.expandSetDispatchMacroCharacter(cons), env);
-				case LispNames.COMPLEX:
-					return eval(LispMacroExpander.expandComplexLite(cons), env);
-				case LispNames.NE:
-					return eval(LispMacroExpander.expandNumericNotEqual(cons), env);
-				case LispNames.PARSE_INTEGER:
-					// The shared expansion carries the full keyword set and the second
-					// return value; the Environment function remains for first-class
-					// use (#'parse-integer).
-					return eval(LispMacroExpander.expandParseInteger(cons), env);
-				case LispNames.READ: {
-					// The full CL tail (eof-error-p / eof-value / recursive-p) lowers to
-					// the 0/1-argument call the Environment function implements, so the
-					// same shape loads on every backend.
-					LispVal readCompat = LispMacroExpander.expandReadCompat(cons);
-					if (readCompat != null) {
-						return eval(readCompat, env);
-					}
-					break;
-				}
-				case LispNames.READ_SEQUENCE:
-					return eval(LispMacroExpander.expandReadSequence(cons), env);
-				case LispNames.WRITE_SEQUENCE:
-					return eval(LispMacroExpander.expandWriteSequence(cons), env);
-				case LispNames.MAKE_STRING:
-					return eval(LispMacroExpander.expandMakeString(cons), env);
-				// REPLACE is intentionally NOT expanded here: the interpreter uses the
-				// destructive built-in (Environment) so a make-string buffer filled by
-				// successive replaces (cl-who's string-list-to-string) mutates in place.
-				// The compilers still expand it to a fresh concatenate (no runtime string
-				// mutation there; cl-who resolves it at macro-expansion time).
-				case LispNames.LOWER_CASE_P:
-					return eval(LispMacroExpander.expandLowerCaseP(cons), env);
-				case LispNames.UPPER_CASE_P:
-					return eval(LispMacroExpander.expandUpperCaseP(cons), env);
-				case LispNames.CONSTANTP:
-					return eval(LispMacroExpander.expandConstantp(cons), env);
-				case LispNames.STREAMP:
-					return eval(LispMacroExpander.expandStreamp(cons), env);
-				case LispNames.SIMPLE_STRING_P:
-					return eval(LispMacroExpander.expandSimpleStringP(cons), env);
-				case LispNames.PROG2:
-					return eval(LispMacroExpander.expandProg2(cons), env);
-				case LispNames.PSETQ:
-					return eval(LispMacroExpander.expandPsetq(cons), env);
-				case LispNames.PSETF:
-					return eval(LispMacroExpander.expandPsetf(cons), env);
-				case LispNames.TYPECASE:
-					return eval(LispMacroExpander.expandTypecase(cons, this.closRegistry), env);
-				case LispNames.ETYPECASE:
-					return eval(LispMacroExpander.expandEtypecase(cons, this.closRegistry), env);
-				case LispNames.CHECK_TYPE:
-					return eval(LispMacroExpander.expandCheckType(cons), env);
-				case LispNames.ASSERT:
-					return eval(LispMacroExpander.expandAssert(cons), env);
-				case LispNames.DECLARE:
-					return eval(LispMacroExpander.expandDeclare(cons), env);
-				case LispNames.DECLAIM:
-					// (declaim (special ...)) proclaims specialness before the form
-					// collapses to nil; other declarations remain no-ops.
-					SpecialVarCollector.collectForm(cons, this.specialVars);
-					return eval(LispMacroExpander.expandDeclaim(cons), env);
-				case LispNames.PROCLAIM:
-					SpecialVarCollector.collectForm(cons, this.specialVars);
-					return eval(LispMacroExpander.expandProclaim(cons), env);
-				case LispNames.THE:
-					return eval(LispMacroExpander.expandThe(cons), env);
-				case LispNames.EVAL_WHEN:
-					return eval(LispMacroExpander.expandEvalWhen(cons), env);
-				case LispNames.WRITE_CHAR:
-					return eval(LispMacroExpander.expandWriteChar(cons), env);
-				case LispNames.LOCALLY:
-					return eval(LispMacroExpander.expandLocally(cons), env);
-				case LispNames.WITH_STANDARD_IO_SYNTAX:
-					return eval(LispMacroExpander.expandWithStandardIoSyntax(cons), env);
-				case LispNames.FLET:
-					return eval(LispMacroExpander.expandFlet(preExpandLocalMacros(cons)), env);
-				case LispNames.LABELS:
-					return eval(LispMacroExpander.expandLabels(preExpandLocalMacros(cons)), env);
-				case LispNames.MULTIPLE_VALUE_BIND:
-					return eval(LispMacroExpander.expandMultipleValueBind(cons), env);
-				case LispNames.MULTIPLE_VALUE_LIST:
-					return eval(LispMacroExpander.expandMultipleValueList(cons), env);
-				case LispNames.MULTIPLE_VALUE_CALL:
-					return eval(LispMacroExpander.expandMultipleValueCall(cons), env);
-				case LispNames.NTH_VALUE:
-					return eval(LispMacroExpander.expandNthValue(cons), env);
-				case LispNames.MULTIPLE_VALUE_SETQ:
-					return eval(LispMacroExpander.expandMultipleValueSetq(cons), env);
-				case LispNames.MULTIPLE_VALUE_PROG1:
-					return eval(LispMacroExpander.expandMultipleValueProg1(cons), env);
-				case LispNames.ROTATEF:
-					return eval(LispMacroExpander.expandRotatef(cons), env);
-				case LispNames.SHIFTF:
-					return eval(LispMacroExpander.expandShiftf(cons), env);
-				case LispNames.LOAD_TIME_VALUE:
-					return evalLoadTimeValue(cons, env);
-				case LispNames.TYPEP:
-					return eval(LispMacroExpander.expandTypep(cons, this.closRegistry), env);
-				case LispNames.PRINT_UNREADABLE_OBJECT:
-					return eval(LispMacroExpander.expandPrintUnreadableObject(cons), env);
-				case LispNames.WITH_OPEN_STREAM:
-					return eval(LispMacroExpander.expandWithOpenStream(cons, true), env);
-				case LispNames.WITH_PACKAGE_ITERATOR:
-					return eval(LispMacroExpander.expandWithPackageIterator(cons), env);
-				case LispNames.DO_EXTERNAL_SYMBOLS:
-					return evalDoExternalSymbols(cons, env);
-				case LispNames.PROG:
-					return eval(LispMacroExpander.expandProg(cons, false), env);
-				case LispNames.PROG_STAR:
-					return eval(LispMacroExpander.expandProg(cons, true), env);
-				case LispNames.TAGBODY:
-					return evalTagbody(cons, env);
-				case LispNames.GO: {
-					if (!(cons.cdr() instanceof LispCons tagCons) || !(tagCons.car() instanceof LispSymbol tagSym)) {
-						throw new LispEvalException(LispNames.GO + " expects a tag: " + cons.print());
-					}
-					throw new GoSignal(plainName(tagSym.name()));
-				}
-				case LispNames.BYTE:
-					return eval(LispMacroExpander.expandByte(cons), env);
-				case LispNames.BYTE_SIZE:
-					return eval(LispMacroExpander.expandByteSize(cons), env);
-				case LispNames.BYTE_POSITION:
-					return eval(LispMacroExpander.expandBytePosition(cons), env);
-				case LispNames.LDB:
-					return eval(LispMacroExpander.expandLdb(cons), env);
-				case LispNames.MAKE_SEQUENCE:
-					return eval(LispMacroExpander.expandMakeSequence(cons), env);
-				case LispNames.DPB:
-					return eval(LispMacroExpander.expandDpb(cons), env);
-				case LispNames.DESTRUCTURING_BIND:
-					return eval(LispMacroExpander.expandDestructuringBind(cons), env);
-				case LispNames.FLOOR:
-				case LispNames.CEILING:
-				case LispNames.ROUND:
-				case LispNames.TRUNCATE: {
-					// (floor a b) -> (floor (/ a b)); the one-argument form falls
-					// through to the ordinary built-in function.
-					LispVal withDivisor = LispMacroExpander.expandFloorFamilyDivisor(cons);
-					if (withDivisor != null) {
-						return eval(withDivisor, env);
-					}
-					break;
-				}
-				case LispNames.LIST_STAR:
-					return eval(LispMacroExpander.expandListStar(cons), env);
-				case LispNames.ACONS:
-					return eval(LispMacroExpander.expandAcons(cons), env);
-				case LispNames.ENDP:
-					return eval(LispMacroExpander.expandEndp(cons), env);
-				case LispNames.ELT:
-					return eval(LispMacroExpander.expandElt(cons), env);
-				case LispNames.VECTOR:
-					return eval(LispMacroExpander.expandVector(cons), env);
-				case LispNames.SVREF:
-					return eval(LispMacroExpander.expandSvref(cons), env);
-				case LispNames.ARRAY_RANK:
-					return eval(LispMacroExpander.expandArrayRank(cons), env);
-				case LispNames.ARRAY_DIMENSION:
-					return eval(LispMacroExpander.expandArrayDimension(cons), env);
-				case LispNames.ARRAY_TOTAL_SIZE:
-					return eval(LispMacroExpander.expandArrayTotalSize(cons), env);
-				case LispNames.ARRAY_ROW_MAJOR_INDEX:
-					return eval(LispMacroExpander.expandArrayRowMajorIndex(cons), env);
-				case LispNames.COERCE:
-					return eval(LispMacroExpander.expandCoerce(cons), env);
-				case LispNames.MAP_INTO:
-					return eval(LispMacroExpander.expandMapInto(cons), env);
-				case LispNames.RASSOC:
-					return eval(LispMacroExpander.expandRassoc(cons), env);
-				// The sequence/alist functions taking :test/:key evaluate through the
-				// shared macro expansion (like rassoc) so keyword handling matches the
-				// compilers exactly; the Environment/LispEvaluator registrations remain
-				// for first-class use (#'find etc.).
-				case LispNames.FIND:
-					return eval(LispMacroExpander.expandFind(cons), env);
-				case LispNames.POSITION:
-					return eval(LispMacroExpander.expandPosition(cons), env);
-				case LispNames.POSITION_IF:
-					return eval(LispMacroExpander.expandPositionIf(cons), env);
-				case LispNames.POSITION_IF_NOT:
-					return eval(LispMacroExpander.expandPositionIfNot(cons), env);
-				case LispNames.COMPLEMENT:
-					return eval(LispMacroExpander.expandComplement(cons), env);
-				case LispNames.COUNT:
-					return eval(LispMacroExpander.expandCount(cons), env);
-				case LispNames.REMOVE:
-					return eval(LispMacroExpander.expandRemove(cons), env);
-				case LispNames.DELETE:
-					return eval(LispMacroExpander.expandDelete(cons), env);
-				case LispNames.REMOVE_DUPLICATES:
-					return eval(LispMacroExpander.expandRemoveDuplicates(cons), env);
-				case LispNames.UNION:
-					return eval(LispMacroExpander.expandUnion(cons), env);
-				case LispNames.INTERSECTION:
-					return eval(LispMacroExpander.expandIntersection(cons), env);
-				case LispNames.SET_DIFFERENCE:
-					return eval(LispMacroExpander.expandSetDifference(cons), env);
-				case LispNames.ADJOIN:
-					return eval(LispMacroExpander.expandAdjoin(cons), env);
-				case LispNames.SUBSTITUTE:
-					return eval(LispMacroExpander.expandSubstitute(cons), env);
-				case LispNames.NSUBSTITUTE:
-					return eval(LispMacroExpander.expandNsubstitute(cons), env);
-				case LispNames.REVAPPEND:
-					return eval(LispMacroExpander.expandRevappend(cons), env);
-				case LispNames.NRECONC:
-					return eval(LispMacroExpander.expandNreconc(cons), env);
-				case LispNames.MAP:
-					return eval(LispMacroExpander.expandMap(cons), env);
-				case LispNames.MAPLIST:
-					return eval(LispMacroExpander.expandMaplist(cons), env);
-				case LispNames.MAPCON:
-					return eval(LispMacroExpander.expandMapcon(cons), env);
-				case LispNames.MAPL:
-					return eval(LispMacroExpander.expandMapl(cons), env);
-				case LispNames.NOTANY:
-					return eval(LispMacroExpander.expandNotany(cons), env);
-				case LispNames.NOTEVERY:
-					return eval(LispMacroExpander.expandNotevery(cons), env);
-				case LispNames.REDUCE: {
-					// :from-end/:key lower to a plain reduce; other forms fall through to
-					// the native reduce builtin resolved below.
-					LispVal expandedReduce = LispMacroExpander.expandReduce(cons);
-					if (expandedReduce != null) {
-						return eval(expandedReduce, env);
-					}
-					break;
-				}
-				case LispNames.SORT: {
-					// (sort seq pred :key ...) routes through stable-sort; a plain
-					// (sort seq pred) falls through to the native 2-argument builtin.
-					LispVal expandedSort = LispMacroExpander.expandSortWithKey(cons);
-					if (expandedSort != null) {
-						return eval(expandedSort, env);
-					}
-					break;
-				}
+			}
+			// The operator table is split so that neither half crosses HotSpot's
+			// 8000-bytecode HugeMethodLimit; see evalConsRareOperator.
+			LispVal rare = evalConsRareOperator(cons, env, sym.name());
+			if (rare != UNHANDLED) {
+				return rare;
 			}
 			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);
@@ -2530,6 +2305,269 @@ public final class LispEvaluator {
 		LispVal function = eval(head, env);
 		List<LispVal> args = evalArgs(cons, env);
 		return apply(function, args, env);
+	}
+
+	/**
+	 * The second half of {@link #evalCons}'s operator table, answering {@link #UNHANDLED}
+	 * for an operator it does not claim (and for the handful of arms that deliberately
+	 * fall through to the ordinary function call, e.g. a one-argument {@code floor} or a
+	 * {@code sort} without {@code :key}).
+	 *
+	 * <p>
+	 * The split exists for one reason: {@code evalCons} is the interpreter's innermost
+	 * method, and at 8209 bytecodes it sat just past HotSpot's {@code HugeMethodLimit}
+	 * (8000, enforced by the default {@code -XX:+DontCompileHugeMethods}), so it was
+	 * never JIT-compiled and every evaluated form ran through the bytecode interpreter --
+	 * worth 2.7x on an arithmetic-heavy workload. Keep BOTH halves clear of that limit
+	 * when adding operators; {@code LispEvaluatorHotMethodSizeTest} fails the build if
+	 * either crosses it.
+	 * @param cons the form being evaluated
+	 * @param env the environment
+	 * @param name the operator name
+	 * @return the value, or {@link #UNHANDLED}
+	 */
+	private LispVal evalConsRareOperator(LispCons cons, Environment env, String name) {
+		switch (name) {
+			case LispNames.COMPLEX:
+				return eval(LispMacroExpander.expandComplexLite(cons), env);
+			case LispNames.NE:
+				return eval(LispMacroExpander.expandNumericNotEqual(cons), env);
+			case LispNames.PARSE_INTEGER:
+				// The shared expansion carries the full keyword set and the second
+				// return value; the Environment function remains for first-class
+				// use (#'parse-integer).
+				return eval(LispMacroExpander.expandParseInteger(cons), env);
+			case LispNames.READ: {
+				// The full CL tail (eof-error-p / eof-value / recursive-p) lowers to
+				// the 0/1-argument call the Environment function implements, so the
+				// same shape loads on every backend.
+				LispVal readCompat = LispMacroExpander.expandReadCompat(cons);
+				if (readCompat != null) {
+					return eval(readCompat, env);
+				}
+				break;
+			}
+			case LispNames.READ_SEQUENCE:
+				return eval(LispMacroExpander.expandReadSequence(cons), env);
+			case LispNames.WRITE_SEQUENCE:
+				return eval(LispMacroExpander.expandWriteSequence(cons), env);
+			case LispNames.MAKE_STRING:
+				return eval(LispMacroExpander.expandMakeString(cons), env);
+			// REPLACE is intentionally NOT expanded here: the interpreter uses the
+			// destructive built-in (Environment) so a make-string buffer filled by
+			// successive replaces (cl-who's string-list-to-string) mutates in place.
+			// The compilers still expand it to a fresh concatenate (no runtime string
+			// mutation there; cl-who resolves it at macro-expansion time).
+			case LispNames.LOWER_CASE_P:
+				return eval(LispMacroExpander.expandLowerCaseP(cons), env);
+			case LispNames.UPPER_CASE_P:
+				return eval(LispMacroExpander.expandUpperCaseP(cons), env);
+			case LispNames.CONSTANTP:
+				return eval(LispMacroExpander.expandConstantp(cons), env);
+			case LispNames.STREAMP:
+				return eval(LispMacroExpander.expandStreamp(cons), env);
+			case LispNames.SIMPLE_STRING_P:
+				return eval(LispMacroExpander.expandSimpleStringP(cons), env);
+			case LispNames.PROG2:
+				return eval(LispMacroExpander.expandProg2(cons), env);
+			case LispNames.PSETQ:
+				return eval(LispMacroExpander.expandPsetq(cons), env);
+			case LispNames.PSETF:
+				return eval(LispMacroExpander.expandPsetf(cons), env);
+			case LispNames.TYPECASE:
+				return eval(LispMacroExpander.expandTypecase(cons, this.closRegistry), env);
+			case LispNames.ETYPECASE:
+				return eval(LispMacroExpander.expandEtypecase(cons, this.closRegistry), env);
+			case LispNames.CHECK_TYPE:
+				return eval(LispMacroExpander.expandCheckType(cons), env);
+			case LispNames.ASSERT:
+				return eval(LispMacroExpander.expandAssert(cons), env);
+			case LispNames.DECLARE:
+				return eval(LispMacroExpander.expandDeclare(cons), env);
+			case LispNames.DECLAIM:
+				// (declaim (special ...)) proclaims specialness before the form
+				// collapses to nil; other declarations remain no-ops.
+				SpecialVarCollector.collectForm(cons, this.specialVars);
+				return eval(LispMacroExpander.expandDeclaim(cons), env);
+			case LispNames.PROCLAIM:
+				SpecialVarCollector.collectForm(cons, this.specialVars);
+				return eval(LispMacroExpander.expandProclaim(cons), env);
+			case LispNames.THE:
+				return eval(LispMacroExpander.expandThe(cons), env);
+			case LispNames.EVAL_WHEN:
+				return eval(LispMacroExpander.expandEvalWhen(cons), env);
+			case LispNames.WRITE_CHAR:
+				return eval(LispMacroExpander.expandWriteChar(cons), env);
+			case LispNames.LOCALLY:
+				return eval(LispMacroExpander.expandLocally(cons), env);
+			case LispNames.WITH_STANDARD_IO_SYNTAX:
+				return eval(LispMacroExpander.expandWithStandardIoSyntax(cons), env);
+			case LispNames.FLET:
+				return eval(LispMacroExpander.expandFlet(preExpandLocalMacros(cons)), env);
+			case LispNames.LABELS:
+				return eval(LispMacroExpander.expandLabels(preExpandLocalMacros(cons)), env);
+			case LispNames.MULTIPLE_VALUE_BIND:
+				return eval(LispMacroExpander.expandMultipleValueBind(cons), env);
+			case LispNames.MULTIPLE_VALUE_LIST:
+				return eval(LispMacroExpander.expandMultipleValueList(cons), env);
+			case LispNames.MULTIPLE_VALUE_CALL:
+				return eval(LispMacroExpander.expandMultipleValueCall(cons), env);
+			case LispNames.NTH_VALUE:
+				return eval(LispMacroExpander.expandNthValue(cons), env);
+			case LispNames.MULTIPLE_VALUE_SETQ:
+				return eval(LispMacroExpander.expandMultipleValueSetq(cons), env);
+			case LispNames.MULTIPLE_VALUE_PROG1:
+				return eval(LispMacroExpander.expandMultipleValueProg1(cons), env);
+			case LispNames.ROTATEF:
+				return eval(LispMacroExpander.expandRotatef(cons), env);
+			case LispNames.SHIFTF:
+				return eval(LispMacroExpander.expandShiftf(cons), env);
+			case LispNames.LOAD_TIME_VALUE:
+				return evalLoadTimeValue(cons, env);
+			case LispNames.TYPEP:
+				return eval(LispMacroExpander.expandTypep(cons, this.closRegistry), env);
+			case LispNames.PRINT_UNREADABLE_OBJECT:
+				return eval(LispMacroExpander.expandPrintUnreadableObject(cons), env);
+			case LispNames.WITH_OPEN_STREAM:
+				return eval(LispMacroExpander.expandWithOpenStream(cons, true), env);
+			case LispNames.WITH_PACKAGE_ITERATOR:
+				return eval(LispMacroExpander.expandWithPackageIterator(cons), env);
+			case LispNames.DO_EXTERNAL_SYMBOLS:
+				return evalDoExternalSymbols(cons, env);
+			case LispNames.PROG:
+				return eval(LispMacroExpander.expandProg(cons, false), env);
+			case LispNames.PROG_STAR:
+				return eval(LispMacroExpander.expandProg(cons, true), env);
+			case LispNames.TAGBODY:
+				return evalTagbody(cons, env);
+			case LispNames.GO: {
+				if (!(cons.cdr() instanceof LispCons tagCons) || !(tagCons.car() instanceof LispSymbol tagSym)) {
+					throw new LispEvalException(LispNames.GO + " expects a tag: " + cons.print());
+				}
+				throw new GoSignal(plainName(tagSym.name()));
+			}
+			case LispNames.BYTE:
+				return eval(LispMacroExpander.expandByte(cons), env);
+			case LispNames.BYTE_SIZE:
+				return eval(LispMacroExpander.expandByteSize(cons), env);
+			case LispNames.BYTE_POSITION:
+				return eval(LispMacroExpander.expandBytePosition(cons), env);
+			case LispNames.LDB:
+				return eval(LispMacroExpander.expandLdb(cons), env);
+			case LispNames.MAKE_SEQUENCE:
+				return eval(LispMacroExpander.expandMakeSequence(cons), env);
+			case LispNames.DPB:
+				return eval(LispMacroExpander.expandDpb(cons), env);
+			case LispNames.DESTRUCTURING_BIND:
+				return eval(LispMacroExpander.expandDestructuringBind(cons), env);
+			case LispNames.FLOOR:
+			case LispNames.CEILING:
+			case LispNames.ROUND:
+			case LispNames.TRUNCATE: {
+				// (floor a b) -> (floor (/ a b)); the one-argument form falls
+				// through to the ordinary built-in function.
+				LispVal withDivisor = LispMacroExpander.expandFloorFamilyDivisor(cons);
+				if (withDivisor != null) {
+					return eval(withDivisor, env);
+				}
+				break;
+			}
+			case LispNames.LIST_STAR:
+				return eval(LispMacroExpander.expandListStar(cons), env);
+			case LispNames.ACONS:
+				return eval(LispMacroExpander.expandAcons(cons), env);
+			case LispNames.ENDP:
+				return eval(LispMacroExpander.expandEndp(cons), env);
+			case LispNames.ELT:
+				return eval(LispMacroExpander.expandElt(cons), env);
+			case LispNames.VECTOR:
+				return eval(LispMacroExpander.expandVector(cons), env);
+			case LispNames.SVREF:
+				return eval(LispMacroExpander.expandSvref(cons), env);
+			case LispNames.ARRAY_RANK:
+				return eval(LispMacroExpander.expandArrayRank(cons), env);
+			case LispNames.ARRAY_DIMENSION:
+				return eval(LispMacroExpander.expandArrayDimension(cons), env);
+			case LispNames.ARRAY_TOTAL_SIZE:
+				return eval(LispMacroExpander.expandArrayTotalSize(cons), env);
+			case LispNames.ARRAY_ROW_MAJOR_INDEX:
+				return eval(LispMacroExpander.expandArrayRowMajorIndex(cons), env);
+			case LispNames.COERCE:
+				return eval(LispMacroExpander.expandCoerce(cons), env);
+			case LispNames.MAP_INTO:
+				return eval(LispMacroExpander.expandMapInto(cons), env);
+			case LispNames.RASSOC:
+				return eval(LispMacroExpander.expandRassoc(cons), env);
+			// The sequence/alist functions taking :test/:key evaluate through the
+			// shared macro expansion (like rassoc) so keyword handling matches the
+			// compilers exactly; the Environment/LispEvaluator registrations remain
+			// for first-class use (#'find etc.).
+			case LispNames.FIND:
+				return eval(LispMacroExpander.expandFind(cons), env);
+			case LispNames.POSITION:
+				return eval(LispMacroExpander.expandPosition(cons), env);
+			case LispNames.POSITION_IF:
+				return eval(LispMacroExpander.expandPositionIf(cons), env);
+			case LispNames.POSITION_IF_NOT:
+				return eval(LispMacroExpander.expandPositionIfNot(cons), env);
+			case LispNames.COMPLEMENT:
+				return eval(LispMacroExpander.expandComplement(cons), env);
+			case LispNames.COUNT:
+				return eval(LispMacroExpander.expandCount(cons), env);
+			case LispNames.REMOVE:
+				return eval(LispMacroExpander.expandRemove(cons), env);
+			case LispNames.DELETE:
+				return eval(LispMacroExpander.expandDelete(cons), env);
+			case LispNames.REMOVE_DUPLICATES:
+				return eval(LispMacroExpander.expandRemoveDuplicates(cons), env);
+			case LispNames.UNION:
+				return eval(LispMacroExpander.expandUnion(cons), env);
+			case LispNames.INTERSECTION:
+				return eval(LispMacroExpander.expandIntersection(cons), env);
+			case LispNames.SET_DIFFERENCE:
+				return eval(LispMacroExpander.expandSetDifference(cons), env);
+			case LispNames.ADJOIN:
+				return eval(LispMacroExpander.expandAdjoin(cons), env);
+			case LispNames.SUBSTITUTE:
+				return eval(LispMacroExpander.expandSubstitute(cons), env);
+			case LispNames.NSUBSTITUTE:
+				return eval(LispMacroExpander.expandNsubstitute(cons), env);
+			case LispNames.REVAPPEND:
+				return eval(LispMacroExpander.expandRevappend(cons), env);
+			case LispNames.NRECONC:
+				return eval(LispMacroExpander.expandNreconc(cons), env);
+			case LispNames.MAP:
+				return eval(LispMacroExpander.expandMap(cons), env);
+			case LispNames.MAPLIST:
+				return eval(LispMacroExpander.expandMaplist(cons), env);
+			case LispNames.MAPCON:
+				return eval(LispMacroExpander.expandMapcon(cons), env);
+			case LispNames.MAPL:
+				return eval(LispMacroExpander.expandMapl(cons), env);
+			case LispNames.NOTANY:
+				return eval(LispMacroExpander.expandNotany(cons), env);
+			case LispNames.NOTEVERY:
+				return eval(LispMacroExpander.expandNotevery(cons), env);
+			case LispNames.REDUCE: {
+				// :from-end/:key lower to a plain reduce; other forms fall through to
+				// the native reduce builtin resolved below.
+				LispVal expandedReduce = LispMacroExpander.expandReduce(cons);
+				if (expandedReduce != null) {
+					return eval(expandedReduce, env);
+				}
+				break;
+			}
+			case LispNames.SORT: {
+				// (sort seq pred :key ...) routes through stable-sort; a plain
+				// (sort seq pred) falls through to the native 2-argument builtin.
+				LispVal expandedSort = LispMacroExpander.expandSortWithKey(cons);
+				if (expandedSort != null) {
+					return eval(expandedSort, env);
+				}
+				break;
+			}
+		}
+		return UNHANDLED;
 	}
 
 	/**

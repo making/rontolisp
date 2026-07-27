@@ -115,6 +115,27 @@ final class JvmNumericRuntimeBuilder {
 	/** Rounds a rational to the nearest integer, ties to even. */
 	static final String RAT_ROUND = "_rround";
 
+	/** Bitwise AND ({@code logand}) with a {@code long} fast path. */
+	static final String LOGAND = "_logand";
+
+	/** Bitwise inclusive OR ({@code logior}) with a {@code long} fast path. */
+	static final String LOGIOR = "_logior";
+
+	/** Bitwise exclusive OR ({@code logxor}) with a {@code long} fast path. */
+	static final String LOGXOR = "_logxor";
+
+	/** Bitwise complement ({@code lognot}) with a {@code long} fast path. */
+	static final String LOGNOT = "_lognot";
+
+	/** Arithmetic shift ({@code ash}) with a {@code long} fast path. */
+	static final String ASH = "_ash";
+
+	/** {@code integer-length} with a {@code long} fast path. */
+	static final String INTEGER_LENGTH = "_intlen";
+
+	/** {@code logbitp} with a {@code long} fast path; answers an {@code int} 0/1. */
+	static final String LOGBITP = "_lbitp";
+
 	private static final String OBJ = "Ljava/lang/Object;";
 
 	private static final String BIG = "Ljava/math/BigInteger;";
@@ -240,6 +261,16 @@ final class JvmNumericRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("shiftLeft"), cp.addUtf8("(I)" + BIG)));
 		MethodrefConstant biTestBit = cp.addMethodref(bigClass,
 				cp.addNameAndType(cp.addUtf8("testBit"), cp.addUtf8("(I)Z")));
+		MethodrefConstant biAnd = cp.addMethodref(bigClass,
+				cp.addNameAndType(cp.addUtf8("and"), cp.addUtf8("(" + BIG + ")" + BIG)));
+		MethodrefConstant biOr = cp.addMethodref(bigClass,
+				cp.addNameAndType(cp.addUtf8("or"), cp.addUtf8("(" + BIG + ")" + BIG)));
+		MethodrefConstant biXor = cp.addMethodref(bigClass,
+				cp.addNameAndType(cp.addUtf8("xor"), cp.addUtf8("(" + BIG + ")" + BIG)));
+		MethodrefConstant biNot = cp.addMethodref(bigClass,
+				cp.addNameAndType(cp.addUtf8("not"), cp.addUtf8("()" + BIG)));
+		MethodrefConstant longNlz = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("numberOfLeadingZeros"), cp.addUtf8("(J)I")));
 		FieldrefConstant biOne = cp.addFieldref(bigClass, cp.addNameAndType(cp.addUtf8("ONE"), cp.addUtf8(BIG)));
 
 		MethodrefConstant objEquals = cp.addMethodref(objectClass,
@@ -302,6 +333,13 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant nRatFloor = cp.addUtf8(RAT_FLOOR);
 		Utf8Constant nRatCeil = cp.addUtf8(RAT_CEIL);
 		Utf8Constant nRatRound = cp.addUtf8(RAT_ROUND);
+		Utf8Constant nLogand = cp.addUtf8(LOGAND);
+		Utf8Constant nLogior = cp.addUtf8(LOGIOR);
+		Utf8Constant nLogxor = cp.addUtf8(LOGXOR);
+		Utf8Constant nLognot = cp.addUtf8(LOGNOT);
+		Utf8Constant nAsh = cp.addUtf8(ASH);
+		Utf8Constant nIntLen = cp.addUtf8(INTEGER_LENGTH);
+		Utf8Constant nLogbitp = cp.addUtf8(LOGBITP);
 		Utf8Constant dBinary = cp.addUtf8(BINARY_DESC);
 		Utf8Constant dUnary = cp.addUtf8(UNARY_DESC);
 		Utf8Constant dCmp = cp.addUtf8("(" + OBJ + OBJ + ")I");
@@ -332,6 +370,13 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rRatFloor = cp.addMethodref(thisClass, cp.addNameAndType(nRatFloor, dUnary));
 		MethodrefConstant rRatCeil = cp.addMethodref(thisClass, cp.addNameAndType(nRatCeil, dUnary));
 		MethodrefConstant rRatRound = cp.addMethodref(thisClass, cp.addNameAndType(nRatRound, dUnary));
+		MethodrefConstant rLogand = cp.addMethodref(thisClass, cp.addNameAndType(nLogand, dBinary));
+		MethodrefConstant rLogior = cp.addMethodref(thisClass, cp.addNameAndType(nLogior, dBinary));
+		MethodrefConstant rLogxor = cp.addMethodref(thisClass, cp.addNameAndType(nLogxor, dBinary));
+		MethodrefConstant rLognot = cp.addMethodref(thisClass, cp.addNameAndType(nLognot, dUnary));
+		MethodrefConstant rAsh = cp.addMethodref(thisClass, cp.addNameAndType(nAsh, dBinary));
+		MethodrefConstant rIntLen = cp.addMethodref(thisClass, cp.addNameAndType(nIntLen, dUnary));
+		MethodrefConstant rLogbitp = cp.addMethodref(thisClass, cp.addNameAndType(nLogbitp, dCmp));
 
 		List<NumericMethod> methods = new ArrayList<>();
 		methods.add(buildBig(nBig, dBig, longClass, bigClass, longValue, biValueOf));
@@ -381,6 +426,13 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildRatFloor(nRatCeil, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, biOne, biAdd));
 		methods.add(buildRatRound(nRatRound, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, biMul, biShiftLeft,
 				biCompareTo, biTestBit, biOne, biAdd));
+		methods.add(buildLogOp(nLogand, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biAnd, Opcode.LAND));
+		methods.add(buildLogOp(nLogior, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biOr, Opcode.LOR));
+		methods.add(buildLogOp(nLogxor, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biXor, Opcode.LXOR));
+		methods.add(buildLogNot(nLognot, dUnary, longClass, longValue, longValueOf, rBig, rNorm, biNot));
+		methods.add(buildAsh(nAsh, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biShiftLeft));
+		methods.add(buildIntegerLength(nIntLen, dUnary, longClass, longValue, longValueOf, rBig, biBitLength, longNlz));
+		methods.add(buildLogbitp(nLogbitp, dCmp, longClass, longValue, rBig, biTestBit));
 
 		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
 		ops.put(ADD, rAdd);
@@ -412,6 +464,13 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(RAT_FLOOR, rRatFloor);
 		ops.put(RAT_CEIL, rRatCeil);
 		ops.put(RAT_ROUND, rRatRound);
+		ops.put(LOGAND, rLogand);
+		ops.put(LOGIOR, rLogior);
+		ops.put(LOGXOR, rLogxor);
+		ops.put(LOGNOT, rLognot);
+		ops.put(ASH, rAsh);
+		ops.put(INTEGER_LENGTH, rIntLen);
+		ops.put(LOGBITP, rLogbitp);
 		return new NumericRuntime(methods, ops);
 	}
 
@@ -1800,6 +1859,278 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.IFNE);
 		JvmRuntimeBuilder.emitU2(c, 0);
 		return new int[] { ifRat1, ifRat2 };
+	}
+
+	// _logand/_logior/_logxor(Object a, Object b): the two's-complement bitwise op. Two
+	// Longs answer with the matching long opcode -- 64-bit two's complement agrees with
+	// BigInteger's infinite two's complement on every value a long can hold -- so a
+	// (unsigned-byte 32) mask costs no BigInteger allocation. Any other operand mix
+	// falls back to the exact BigInteger operation.
+	private static NumericMethod buildLogOp(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
+			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
+			MethodrefConstant biOp, int longOpcode) {
+		List<Integer> c = new ArrayList<>();
+		int[] slowJumps = emitLongLongGuard(c, longClass);
+		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
+		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
+		c.add(longOpcode);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		int slow = c.size();
+		JvmRuntimeBuilder.patchBranch(c, slowJumps[0], slow);
+		JvmRuntimeBuilder.patchBranch(c, slowJumps[1], slow);
+		emitBigBinary(c, rBig, biOp, rNorm);
+		return new NumericMethod(name, desc, c, 4, 2, List.of());
+	}
+
+	// _lognot(Object a): ~a for a Long (emitted as `a xor -1`), BigInteger.not otherwise.
+	private static NumericMethod buildLogNot(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
+			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
+			MethodrefConstant biNot) {
+		List<Integer> c = new ArrayList<>();
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, longClass.index());
+		int ifSlow = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
+		c.add(Opcode.ICONST_M1);
+		c.add(Opcode.I2L);
+		c.add(Opcode.LXOR);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifSlow, c.size());
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rBig.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biNot.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rNorm.index());
+		c.add(Opcode.ARETURN);
+		return new NumericMethod(name, desc, c, 4, 1, List.of());
+	}
+
+	// _ash(Object a, Object count): shift left for a non-negative count, arithmetic right
+	// shift otherwise. Both operands Long: a right shift always fits (>= 64 saturates to
+	// 0 or -1), a left shift is taken only when it round-trips back through the shift, so
+	// an overflowing one falls to BigInteger.shiftLeft like every other operand mix. The
+	// count is narrowed to an int up front, exactly as the BigInteger path does.
+	//
+	// Locals: 0=a, 1=count, 2/3=long a, 4=int count, 6/7=long result. The three are
+	// pre-initialized so every path reaching the slow tail carries the same frame.
+	private static NumericMethod buildAsh(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
+			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
+			MethodrefConstant biShiftLeft) {
+		List<Integer> c = new ArrayList<>();
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LSTORE_2);
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.ISTORE);
+		c.add(4);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LSTORE);
+		c.add(6);
+		int[] slowJumps = emitLongLongGuard(c, longClass);
+		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
+		c.add(Opcode.LSTORE_2);
+		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
+		c.add(Opcode.L2I);
+		c.add(Opcode.ISTORE);
+		c.add(4);
+		// if (count > 0) goto left
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		int ifLeft = c.size();
+		c.add(Opcode.IFGT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// count <= -64: the whole value shifts out, leaving 0 (or -1 when negative)
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		JvmRuntimeBuilder.emitIntConstStatic(c, -64);
+		int ifRightShift = c.size();
+		c.add(Opcode.IF_ICMPGT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.LLOAD_2);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LCMP);
+		int ifNegative = c.size();
+		c.add(Opcode.IFLT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNegative, c.size());
+		c.add(Opcode.ICONST_M1);
+		c.add(Opcode.I2L);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		// -64 < count <= 0: a >> -count
+		JvmRuntimeBuilder.patchBranch(c, ifRightShift, c.size());
+		c.add(Opcode.LLOAD_2);
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		c.add(Opcode.ISUB);
+		c.add(Opcode.LSHR);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		// count > 0: shift left when the result round-trips (i.e. did not overflow)
+		JvmRuntimeBuilder.patchBranch(c, ifLeft, c.size());
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		JvmRuntimeBuilder.emitIntConstStatic(c, 64);
+		int ifWide = c.size();
+		c.add(Opcode.IF_ICMPGE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.LLOAD_2);
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		c.add(Opcode.LSHL);
+		c.add(Opcode.LSTORE);
+		c.add(6);
+		c.add(Opcode.LLOAD);
+		c.add(6);
+		c.add(Opcode.ILOAD);
+		c.add(4);
+		c.add(Opcode.LSHR);
+		c.add(Opcode.LLOAD_2);
+		c.add(Opcode.LCMP);
+		int ifOverflow = c.size();
+		c.add(Opcode.IFNE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.LLOAD);
+		c.add(6);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		int slow = c.size();
+		JvmRuntimeBuilder.patchBranch(c, slowJumps[0], slow);
+		JvmRuntimeBuilder.patchBranch(c, slowJumps[1], slow);
+		JvmRuntimeBuilder.patchBranch(c, ifWide, slow);
+		JvmRuntimeBuilder.patchBranch(c, ifOverflow, slow);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rBig.index());
+		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
+		c.add(Opcode.L2I);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biShiftLeft.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rNorm.index());
+		c.add(Opcode.ARETURN);
+		return new NumericMethod(name, desc, c, 6, 8, List.of());
+	}
+
+	// _intlen(Object a): integer-length, i.e. BigInteger.bitLength -- the bit count of
+	// the minimal two's-complement representation, sign bit excluded. For a Long that is
+	// 64 - numberOfLeadingZeros of the value (of its complement when negative).
+	// Locals: 0=a, 1/2=long a (pre-initialized so both paths share a frame).
+	private static NumericMethod buildIntegerLength(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
+			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig,
+			MethodrefConstant biBitLength, MethodrefConstant longNlz) {
+		List<Integer> c = new ArrayList<>();
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LSTORE_1);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, longClass.index());
+		int ifSlow = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
+		c.add(Opcode.LSTORE_1);
+		c.add(Opcode.LLOAD_1);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LCMP);
+		int ifNonNegative = c.size();
+		c.add(Opcode.IFGE);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.LLOAD_1);
+		c.add(Opcode.ICONST_M1);
+		c.add(Opcode.I2L);
+		c.add(Opcode.LXOR);
+		c.add(Opcode.LSTORE_1);
+		JvmRuntimeBuilder.patchBranch(c, ifNonNegative, c.size());
+		JvmRuntimeBuilder.emitIntConstStatic(c, 64);
+		c.add(Opcode.LLOAD_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longNlz.index());
+		c.add(Opcode.ISUB);
+		c.add(Opcode.I2L);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifSlow, c.size());
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rBig.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biBitLength.index());
+		c.add(Opcode.I2L);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
+		c.add(Opcode.ARETURN);
+		return new NumericMethod(name, desc, c, 4, 3, List.of());
+	}
+
+	// _lbitp(Object n, Object index): logbitp as an int 0/1. Both operands Long and the
+	// index non-negative: an index at or beyond 63 reads the sign, anything below reads
+	// the bit. A negative index (which BigInteger.testBit signals on) and every other
+	// operand mix keep the BigInteger path, so the signalling behavior is unchanged.
+	// Locals: 0=n, 1=index, 2=int index, 3/4=long n (pre-initialized to share a frame).
+	private static NumericMethod buildLogbitp(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
+			MethodrefConstant longValue, MethodrefConstant rBig, MethodrefConstant biTestBit) {
+		List<Integer> c = new ArrayList<>();
+		c.add(Opcode.ICONST_0);
+		c.add(Opcode.ISTORE_2);
+		c.add(Opcode.LCONST_0);
+		c.add(Opcode.LSTORE_3);
+		int[] slowJumps = emitLongLongGuard(c, longClass);
+		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
+		c.add(Opcode.L2I);
+		c.add(Opcode.ISTORE_2);
+		emitUnboxLong(c, Opcode.ALOAD_0, longClass, longValue);
+		c.add(Opcode.LSTORE_3);
+		c.add(Opcode.ILOAD_2);
+		int ifNegativeIndex = c.size();
+		c.add(Opcode.IFLT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		// An index at or past the sign bit reads the sign: clamp it to 63.
+		c.add(Opcode.ILOAD_2);
+		JvmRuntimeBuilder.emitIntConstStatic(c, 63);
+		int ifInRange = c.size();
+		c.add(Opcode.IF_ICMPLT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		JvmRuntimeBuilder.emitIntConstStatic(c, 63);
+		c.add(Opcode.ISTORE_2);
+		JvmRuntimeBuilder.patchBranch(c, ifInRange, c.size());
+		c.add(Opcode.LLOAD_3);
+		c.add(Opcode.ILOAD_2);
+		c.add(Opcode.LUSHR);
+		c.add(Opcode.LCONST_1);
+		c.add(Opcode.LAND);
+		c.add(Opcode.L2I);
+		c.add(Opcode.IRETURN);
+		int slow = c.size();
+		JvmRuntimeBuilder.patchBranch(c, slowJumps[0], slow);
+		JvmRuntimeBuilder.patchBranch(c, slowJumps[1], slow);
+		JvmRuntimeBuilder.patchBranch(c, ifNegativeIndex, slow);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rBig.index());
+		emitUnboxLong(c, Opcode.ALOAD_1, longClass, longValue);
+		c.add(Opcode.L2I);
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, biTestBit.index());
+		c.add(Opcode.IRETURN);
+		return new NumericMethod(name, desc, c, 4, 5, List.of());
 	}
 
 	// Emits the two `instanceof Long` guards shared by _mod and _cmp, returning the two

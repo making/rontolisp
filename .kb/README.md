@@ -7,6 +7,8 @@ cases, and the tests that pin the behavior. Read the CLAUDE.md summary first;
 come here only when you need the "why exactly" behind a constraint.
 
 - [core-representation.md](core-representation.md) -- core value model: symbolp/stringp & consp encodings, three-pass compilation, `%` prefix, `BuiltinFunctionWrappers`, JVM method mangling + the JVMCI `%` gotcha, WASM rec-group rule (the "no `.kb` file" core-representation bullets, relocated)
+- [hot-path-method-size.md](hot-path-method-size.md) -- HotSpot's HugeMethodLimit (8000 bytecodes, silently uncompiled past it): the `evalCons` split and the `_invoke_<arity>` segment budget + binary-search dispatch, with the measurement that pins both
+- [integer-bitwise-fast-paths.md](integer-bitwise-fast-paths.md) -- `logand`/`logior`/`logxor`/`lognot`/`ash`/`integer-length`/`logbitp` fixnum fast paths (interpreter + JVM; WASM already had one) and the literal-byte-specifier fold in `ldb`/`dpb`/`mask-field`
 - [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split across all backends
 - [lambda-lists.md](lambda-lists.md) -- lambda list extensions (`&optional`/`&rest`/`&key`/`&aux`) desugared to "required + `&rest`"
 - [do-return-block.md](do-return-block.md) -- `do`/`return` and the `%block` non-local exit boundary; named `block`/`return-from`; `tagbody`/`go` + `prog`/`prog*`

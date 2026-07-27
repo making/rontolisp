@@ -68,9 +68,116 @@ import org.jspecify.annotations.Nullable;
  */
 public final class Environment implements Scope {
 
-	private final Map<String, LispVal> bindings;
+	/**
+	 * A name-to-value map tuned for the scope an interpreted call actually creates: a
+	 * handful of entries, read a few times, then discarded. Up to {@link #LINEAR_MAX}
+	 * entries live in two parallel arrays scanned linearly -- cheaper than hashing and,
+	 * more importantly, allocation-free until the first {@code put} -- and a scope that
+	 * outgrows that (the global environment, with its hundreds of built-ins) is promoted
+	 * to a {@link HashMap} once and behaves exactly as before. A binding's value is never
+	 * {@code null}, so {@code get} returning {@code null} is the same answer as
+	 * {@code containsKey} returning false.
+	 */
+	private static final class NameMap {
 
-	private final Map<String, LispVal> functions;
+		private static final int LINEAR_MAX = 8;
+
+		private static final String[] NO_KEYS = new String[0];
+
+		private static final LispVal[] NO_VALUES = new LispVal[0];
+
+		private String[] keys = NO_KEYS;
+
+		private LispVal[] values = NO_VALUES;
+
+		private int size;
+
+		@Nullable private Map<String, LispVal> overflow;
+
+		@Nullable LispVal get(String name) {
+			Map<String, LispVal> map = this.overflow;
+			if (map != null) {
+				return map.get(name);
+			}
+			for (int i = 0; i < this.size; i++) {
+				if (this.keys[i].equals(name)) {
+					return this.values[i];
+				}
+			}
+			return null;
+		}
+
+		boolean containsKey(String name) {
+			return get(name) != null;
+		}
+
+		void put(String name, LispVal value) {
+			Map<String, LispVal> map = this.overflow;
+			if (map != null) {
+				map.put(name, value);
+				return;
+			}
+			for (int i = 0; i < this.size; i++) {
+				if (this.keys[i].equals(name)) {
+					this.values[i] = value;
+					return;
+				}
+			}
+			if (this.size == LINEAR_MAX) {
+				map = new HashMap<>();
+				for (int i = 0; i < this.size; i++) {
+					map.put(this.keys[i], this.values[i]);
+				}
+				map.put(name, value);
+				this.overflow = map;
+				this.keys = NO_KEYS;
+				this.values = NO_VALUES;
+				this.size = 0;
+				return;
+			}
+			if (this.size == this.keys.length) {
+				int grown = this.size == 0 ? 4 : LINEAR_MAX;
+				this.keys = java.util.Arrays.copyOf(this.keys, grown);
+				this.values = java.util.Arrays.copyOf(this.values, grown);
+			}
+			this.keys[this.size] = name;
+			this.values[this.size] = value;
+			this.size++;
+		}
+
+		void remove(String name) {
+			Map<String, LispVal> map = this.overflow;
+			if (map != null) {
+				map.remove(name);
+				return;
+			}
+			for (int i = 0; i < this.size; i++) {
+				if (this.keys[i].equals(name)) {
+					this.keys[i] = this.keys[this.size - 1];
+					this.values[i] = this.values[this.size - 1];
+					this.size--;
+					return;
+				}
+			}
+		}
+
+		Set<String> names() {
+			Map<String, LispVal> map = this.overflow;
+			if (map != null) {
+				return Set.copyOf(map.keySet());
+			}
+			Set<String> result = new java.util.HashSet<>();
+			for (int i = 0; i < this.size; i++) {
+				result.add(this.keys[i]);
+			}
+			return Set.copyOf(result);
+		}
+
+	}
+
+	private final NameMap bindings = new NameMap();
+
+	private final NameMap functions = new NameMap();
 
 	/**
 	 * Value expressions registered by {@link #defineLazy} that have not been forced yet.
@@ -86,8 +193,6 @@ public final class Environment implements Scope {
 	 * @param parent the parent environment, or {@code null} for a top-level scope
 	 */
 	public Environment(@Nullable Environment parent) {
-		this.bindings = new HashMap<>();
-		this.functions = new HashMap<>();
 		this.parent = parent;
 	}
 
@@ -240,7 +345,7 @@ public final class Environment implements Scope {
 	 * @return a snapshot of the function names
 	 */
 	public Set<String> globalFunctionNames() {
-		return Set.copyOf(this.functions.keySet());
+		return this.functions.names();
 	}
 
 	/**
@@ -1766,9 +1871,20 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(Long.signum(asLong(arg)));
 		}));
-		// Bitwise integer operations, computed on exact BigInteger values.
-		// logand/logior/logxor are variadic with identities -1/0/0.
+		// Bitwise integer operations. logand/logior/logxor are variadic with identities
+		// -1/0/0. Values inside the long range answer with the matching long operator --
+		// 64-bit two's complement agrees with BigInteger's infinite two's complement on
+		// every value a long can hold -- so masking (unsigned-byte 32) arithmetic, which
+		// is what a SHA-256 style loop does for every operation, allocates nothing. Any
+		// operand outside the range falls back to the exact BigInteger operation.
 		env.defineFunction(LispNames.LOGAND, new LispFunction(LispNames.LOGAND, args -> {
+			if (allFixnums(args)) {
+				long result = -1;
+				for (LispVal arg : args) {
+					result &= ((LispInteger) arg).value();
+				}
+				return new LispInteger(result);
+			}
 			BigInteger result = BigInteger.valueOf(-1);
 			for (LispVal arg : args) {
 				result = result.and(asBigInteger(arg));
@@ -1776,6 +1892,13 @@ public final class Environment implements Scope {
 			return normalizeBig(result);
 		}));
 		env.defineFunction(LispNames.LOGIOR, new LispFunction(LispNames.LOGIOR, args -> {
+			if (allFixnums(args)) {
+				long result = 0;
+				for (LispVal arg : args) {
+					result |= ((LispInteger) arg).value();
+				}
+				return new LispInteger(result);
+			}
 			BigInteger result = BigInteger.ZERO;
 			for (LispVal arg : args) {
 				result = result.or(asBigInteger(arg));
@@ -1783,6 +1906,13 @@ public final class Environment implements Scope {
 			return normalizeBig(result);
 		}));
 		env.defineFunction(LispNames.LOGXOR, new LispFunction(LispNames.LOGXOR, args -> {
+			if (allFixnums(args)) {
+				long result = 0;
+				for (LispVal arg : args) {
+					result ^= ((LispInteger) arg).value();
+				}
+				return new LispInteger(result);
+			}
 			BigInteger result = BigInteger.ZERO;
 			for (LispVal arg : args) {
 				result = result.xor(asBigInteger(arg));
@@ -1791,6 +1921,9 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.LOGNOT, new LispFunction(LispNames.LOGNOT, args -> {
 			requireArgCount(LispNames.LOGNOT, args, 1);
+			if (args.get(0) instanceof LispInteger i) {
+				return new LispInteger(~i.value());
+			}
 			return normalizeBig(asBigInteger(args.get(0)).not());
 		}));
 		env.defineFunction(LispNames.LOGANDC1, new LispFunction(LispNames.LOGANDC1, args -> {
@@ -1812,17 +1945,41 @@ public final class Environment implements Scope {
 		// ash: shift left for a non-negative count, arithmetic right shift otherwise.
 		env.defineFunction(LispNames.ASH, new LispFunction(LispNames.ASH, args -> {
 			requireArgCount(LispNames.ASH, args, 2);
-			BigInteger value = asBigInteger(args.get(0));
 			long count = asLong(args.get(1));
-			return normalizeBig(value.shiftLeft((int) count));
+			if (args.get(0) instanceof LispInteger i) {
+				long value = i.value();
+				int shift = (int) count;
+				if (shift <= 0) {
+					// Shifting past the sign bit leaves 0 (or -1 for a negative value).
+					return new LispInteger(shift <= -64 ? value >> 63 : value >> -shift);
+				}
+				if (shift < 64) {
+					long shifted = value << shift;
+					if (shifted >> shift == value) {
+						return new LispInteger(shifted);
+					}
+				}
+			}
+			return normalizeBig(asBigInteger(args.get(0)).shiftLeft((int) count));
 		}));
 		env.defineFunction(LispNames.INTEGER_LENGTH, new LispFunction(LispNames.INTEGER_LENGTH, args -> {
 			requireArgCount(LispNames.INTEGER_LENGTH, args, 1);
+			if (args.get(0) instanceof LispInteger i) {
+				// integer-length is BigInteger.bitLength: the minimal two's-complement
+				// width without the sign bit, so a negative value measures its
+				// complement.
+				long value = i.value();
+				return new LispInteger(64 - Long.numberOfLeadingZeros(value < 0 ? ~value : value));
+			}
 			return new LispInteger(asBigInteger(args.get(0)).bitLength());
 		}));
 		env.defineFunction(LispNames.LOGBITP, new LispFunction(LispNames.LOGBITP, args -> {
 			requireArgCount(LispNames.LOGBITP, args, 2);
 			int index = (int) asLong(args.get(0));
+			if (index >= 0 && args.get(1) instanceof LispInteger i) {
+				// An index at or past the sign bit reads the sign.
+				return (i.value() >>> Math.min(index, 63) & 1) == 1 ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
 			return asBigInteger(args.get(1)).testBit(index) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// byte specifier: a plain (size position) list, matching the compile-path
@@ -4566,6 +4723,16 @@ public final class Environment implements Scope {
 			return r.doubleValue();
 		}
 		throw new LispEvalException("Expected number, got: " + val.print());
+	}
+
+	/** Whether every argument is a {@code long}-range integer (the bitwise fast path). */
+	private static boolean allFixnums(List<LispVal> args) {
+		for (LispVal arg : args) {
+			if (!(arg instanceof LispInteger)) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private static BigInteger asBigInteger(LispVal val) {

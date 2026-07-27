@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -21,14 +22,31 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * The dispatch-case byte budget after which an {@code _invoke_<arity>} body is
-	 * continued in a chained {@code _invoke_<arity>$<n>} segment. The if-else chain grows
-	 * linearly with the number of callables of that arity (every variadic function
-	 * matches every arity above its required count), and one segment holding them all
+	 * The byte budget of one {@code _invoke_<arity>} dispatch segment. The case bodies
+	 * grow linearly with the number of callables of that arity (every variadic function
+	 * matches every arity above its required count), so one method holding them all
 	 * crossed the JVM's 64 KB method-code limit at cl-postgres scale (66 KB of arity-9
 	 * cases).
+	 * <p>
+	 * The value is set below HotSpot's {@code HugeMethodLimit} (8000 bytecodes), NOT just
+	 * below the class-file limit: {@code -XX:+DontCompileHugeMethods} is on by default,
+	 * so a dispatcher past that size is never JIT-compiled and every indirect call
+	 * through it runs in the bytecode interpreter. That cliff -- not the branch count --
+	 * is what made a hot loop several times slower merely because the program also loaded
+	 * a class-defining library: one more library pushed the shared dispatcher past 8000
+	 * bytecodes. Measured on PBKDF2-SHA256 inside the cl-postgres stack, crossing it cost
+	 * 2.8x (`-XX:-DontCompileHugeMethods` recovered exactly that).
+	 * <p>
+	 * It also keeps every branch inside a segment -- the search tree's forward jumps and
+	 * the default arm at its end -- well within the signed 16-bit branch offset.
 	 */
-	private static final int DISPATCH_SEGMENT_BUDGET = 24_000;
+	private static final int DISPATCH_SEGMENT_BUDGET = 6_000;
+
+	/**
+	 * Bytes reserved per case on top of its body for the search tree that reaches it: one
+	 * leaf comparison plus the amortized share of the internal nodes above it.
+	 */
+	private static final int DISPATCH_CASE_OVERHEAD = 24;
 
 	static List<JvmLispCompiler.DispatchMethod> buildDispatchMethods(int arity,
 			Map<String, JvmLispCompiler.FunctionInfo> functions, List<JvmLispCompiler.LambdaInfo> lambdaDecls,
@@ -47,30 +65,43 @@ final class JvmRuntimeBuilder {
 		int idSlot = arity + 2;
 		int restSlot = arity + 3;
 		int maxLocals = arity + 4;
-		// The matching callables, in dispatch order: named functions, then lambdas
-		// (the closure env is passed as the first argument). A variadic function
-		// (physical params = required + rest list) matches every dispatch arity >=
-		// required; its case links the surplus args into a cons list.
-		record Case(JvmLispCompiler.FunctionInfo fi, boolean closure) {
-		}
+		// The matching callables: named functions plus lambdas (whose closure env is
+		// passed as the first argument). A variadic function (physical params =
+		// required + rest list) matches every dispatch arity >= required; its case
+		// links the surplus args into a cons list. Each case body is rendered ONCE,
+		// branch-free and ending in areturn, so it can be spliced anywhere; funcIds
+		// are globally unique (one shared counter over defuns and lambdas), so
+		// sorting by id gives the search tree below a total order to bisect.
 		List<Case> cases = new ArrayList<>();
 		for (Map.Entry<String, JvmLispCompiler.FunctionInfo> entry : functions.entrySet()) {
 			JvmLispCompiler.FunctionInfo fi = entry.getValue();
 			if (!fi.isClosure() && dispatchMatches(fi.paramCount(), fi.variadic(), arity)) {
-				cases.add(new Case(fi, false));
+				cases.add(renderCase(fi, arity, restSlot, -1, objectClass));
 			}
 		}
 		for (int i = 0; i < lambdaDecls.size(); i++) {
 			JvmLispCompiler.LambdaInfo lambda = lambdaDecls.get(i);
 			if (dispatchMatches(lambda.paramNames().size(), lambda.variadic(), arity)) {
-				cases.add(new Case(lambdaFuncInfos.get(i), true));
+				cases.add(renderCase(lambdaFuncInfos.get(i), arity, restSlot, fvSlot, objectClass));
+			}
+		}
+		cases.sort(Comparator.comparingInt(Case::funcId));
+		// Split the id-sorted cases into segments small enough to stay JIT-compilable
+		// (see DISPATCH_SEGMENT_BUDGET). With more than one segment, _invoke_<arity>
+		// becomes a router that binary-searches the segment boundaries and tail-calls
+		// the one segment that can hold the id.
+		List<int[]> ranges = partitionCases(cases);
+		boolean routed = ranges.size() > 1;
+		List<MethodrefConstant> segmentRefs = new ArrayList<>();
+		if (routed) {
+			for (int k = 0; k < ranges.size(); k++) {
+				segmentRefs.add(cp.addMethodref(thisClass,
+						cp.addNameAndType(cp.addUtf8("_invoke_" + arity + "$" + k), descUtf8)));
 			}
 		}
 		List<JvmLispCompiler.DispatchMethod> segments = new ArrayList<>();
-		int caseIndex = 0;
-		int segment = 0;
-		while (true) {
-			String name = segment == 0 ? "_invoke_" + arity : "_invoke_" + arity + "$" + segment;
+		for (int segment = 0; segment <= (routed ? ranges.size() : 0); segment++) {
+			String name = segment == 0 ? "_invoke_" + arity : "_invoke_" + arity + "$" + (segment - 1);
 			Utf8Constant nameUtf8 = cp.addUtf8(name);
 			List<Integer> code = new ArrayList<>();
 			if (segment == 0 && lookupRef != null) {
@@ -186,54 +217,143 @@ final class JvmRuntimeBuilder {
 				code.add(Opcode.ARETURN);
 				patchBranch(code, ifPos, code.size());
 			}
-			while (caseIndex < cases.size() && code.size() < DISPATCH_SEGMENT_BUDGET) {
-				Case c = cases.get(caseIndex++);
-				emitDispatchCase(code, c.fi(), arity, idSlot, restSlot, c.closure() ? fvSlot : -1, objectClass);
+			if (routed && segment == 0) {
+				// The router: bisect the segment boundaries and pass the RESOLVED fv on
+				// (so a String-designator lookup happens once) with the arguments
+				// unchanged. An id below the first segment's range, or above the last
+				// one's, lands in a real segment whose tree answers null for it.
+				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, idSlot, fvSlot, arity, segmentRefs);
 			}
-			if (caseIndex < cases.size()) {
-				// Continue in the next segment: pass the RESOLVED fv (so a
-				// String-designator lookup happens once) and the arguments unchanged.
-				String nextName = "_invoke_" + arity + "$" + (segment + 1);
-				MethodrefConstant nextRef = cp.addMethodref(thisClass,
-						cp.addNameAndType(cp.addUtf8(nextName), descUtf8));
-				code.add(Opcode.ALOAD);
-				code.add(fvSlot);
-				for (int i = 0; i < arity; i++) {
-					code.add(Opcode.ALOAD);
-					code.add(i + 1);
+			else {
+				int[] range = routed ? ranges.get(segment - 1) : new int[] { 0, cases.size() - 1 };
+				List<Integer> defaultJumps = new ArrayList<>();
+				emitDispatchTree(code, cases, range[0], range[1], idSlot, defaultJumps);
+				// Default: an id no case of this arity claims.
+				int defaultPos = code.size();
+				for (int jump : defaultJumps) {
+					patchBranch(code, jump, defaultPos);
 				}
-				code.add(Opcode.INVOKESTATIC);
-				emitU2(code, nextRef.index());
+				code.add(Opcode.ACONST_NULL);
 				code.add(Opcode.ARETURN);
-				segments.add(new JvmLispCompiler.DispatchMethod(nameUtf8, descUtf8, code, maxLocals));
-				segment++;
-				continue;
 			}
-			// Default: return null
-			code.add(Opcode.ACONST_NULL);
-			code.add(Opcode.ARETURN);
 			segments.add(new JvmLispCompiler.DispatchMethod(nameUtf8, descUtf8, code, maxLocals));
-			return segments;
 		}
+		return segments;
+	}
+
+	/**
+	 * Splits the id-sorted cases into contiguous runs whose emitted code stays inside
+	 * {@link #DISPATCH_SEGMENT_BUDGET}. Returns {@code {firstIndex, lastIndex}} pairs; an
+	 * empty case list yields a single empty-but-valid range.
+	 */
+	private static List<int[]> partitionCases(List<Case> cases) {
+		List<int[]> ranges = new ArrayList<>();
+		if (cases.isEmpty()) {
+			return List.of(new int[] { 0, -1 });
+		}
+		int first = 0;
+		int used = 0;
+		for (int i = 0; i < cases.size(); i++) {
+			int cost = cases.get(i).body().size() + DISPATCH_CASE_OVERHEAD;
+			if (i > first && used + cost > DISPATCH_SEGMENT_BUDGET) {
+				ranges.add(new int[] { first, i - 1 });
+				first = i;
+				used = 0;
+			}
+			used += cost;
+		}
+		ranges.add(new int[] { first, cases.size() - 1 });
+		return ranges;
+	}
+
+	/**
+	 * Emits the router's search tree over {@code ranges[lo..hi]}: each internal node
+	 * compares the id against the largest id its left half holds, each leaf tail-calls
+	 * that segment.
+	 */
+	private static void emitSegmentRouter(List<Integer> code, List<Case> cases, List<int[]> ranges, int lo, int hi,
+			int idSlot, int fvSlot, int arity, List<MethodrefConstant> segmentRefs) {
+		if (lo == hi) {
+			code.add(Opcode.ALOAD);
+			code.add(fvSlot);
+			for (int i = 0; i < arity; i++) {
+				code.add(Opcode.ALOAD);
+				code.add(i + 1);
+			}
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, segmentRefs.get(lo).index());
+			code.add(Opcode.ARETURN);
+			return;
+		}
+		int mid = (lo + hi) >>> 1;
+		code.add(Opcode.ILOAD);
+		code.add(idSlot);
+		emitIntConstStatic(code, cases.get(ranges.get(mid)[1]).funcId());
+		int ifRight = code.size();
+		code.add(Opcode.IF_ICMPGT);
+		emitU2(code, 0);
+		emitSegmentRouter(code, cases, ranges, lo, mid, idSlot, fvSlot, arity, segmentRefs);
+		patchBranch(code, ifRight, code.size());
+		emitSegmentRouter(code, cases, ranges, mid + 1, hi, idSlot, fvSlot, arity, segmentRefs);
 	}
 
 	private static boolean dispatchMatches(int paramCount, boolean variadic, int arity) {
 		return variadic ? arity >= paramCount - 1 : paramCount == arity;
 	}
 
-	// Emits one "if (id == funcId) { ...; return f(...); }" dispatch case. For a
-	// variadic target the args beyond the required count are linked into a cons list
-	// (built in restSlot) passed as the trailing rest parameter; fvSlot >= 0 marks a
-	// closure whose env array is passed first.
-	private static void emitDispatchCase(List<Integer> code, JvmLispCompiler.FunctionInfo fi, int arity, int idSlot,
-			int restSlot, int fvSlot, ClassConstant objectClass) {
-		int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
+	/**
+	 * One dispatch target: the funcId to match and the branch-free body that calls it,
+	 * ending in {@code areturn}. The body contains no branches, so it can be spliced at
+	 * any position in the search tree without re-patching.
+	 */
+	private record Case(int funcId, List<Integer> body) {
+	}
+
+	/**
+	 * Emits the search tree over {@code cases[lo..hi]} (sorted by funcId): each internal
+	 * node compares the id against the midpoint and jumps to the right half, each leaf
+	 * compares for equality and splices the case body. A leaf's mismatch branch position
+	 * is collected in {@code defaultJumps} for the caller to patch to the default arm.
+	 * This is what keeps an indirect call's cost logarithmic in the number of callables
+	 * of that arity rather than linear in it: the previous if-else chain walked an
+	 * average of half the callables per call, so merely loading another class-defining
+	 * library taxed every hot indirect call in the program.
+	 */
+	private static void emitDispatchTree(List<Integer> code, List<Case> cases, int lo, int hi, int idSlot,
+			List<Integer> defaultJumps) {
+		if (lo > hi) {
+			return;
+		}
+		if (lo == hi) {
+			code.add(Opcode.ILOAD);
+			code.add(idSlot);
+			emitIntConstStatic(code, cases.get(lo).funcId());
+			defaultJumps.add(code.size());
+			code.add(Opcode.IF_ICMPNE);
+			emitU2(code, 0);
+			code.addAll(cases.get(lo).body());
+			return;
+		}
+		int mid = (lo + hi) >>> 1;
 		code.add(Opcode.ILOAD);
 		code.add(idSlot);
-		emitIntConstStatic(code, fi.funcId());
-		int ifPos = code.size();
-		code.add(Opcode.IF_ICMPNE);
+		emitIntConstStatic(code, cases.get(mid).funcId());
+		int ifRight = code.size();
+		code.add(Opcode.IF_ICMPGT);
 		emitU2(code, 0);
+		emitDispatchTree(code, cases, lo, mid, idSlot, defaultJumps);
+		patchBranch(code, ifRight, code.size());
+		emitDispatchTree(code, cases, mid + 1, hi, idSlot, defaultJumps);
+	}
+
+	// Renders one dispatch case body: "...; return f(...)". For a variadic target the
+	// args beyond the required count are linked into a cons list (built in restSlot)
+	// passed as the trailing rest parameter; fvSlot >= 0 marks a closure whose env array
+	// is passed first.
+	private static Case renderCase(JvmLispCompiler.FunctionInfo fi, int arity, int restSlot, int fvSlot,
+			ClassConstant objectClass) {
+		List<Integer> code = new ArrayList<>();
+		int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
 		if (fi.variadic()) {
 			// rest = null; for (j = arity-1 .. required) rest = new Object[]{a_j, rest}
 			code.add(Opcode.ACONST_NULL);
@@ -272,7 +392,7 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, fi.methodref().index());
 		code.add(Opcode.ARETURN);
-		patchBranch(code, ifPos, code.size());
+		return new Case(fi.funcId(), code);
 	}
 
 	/**

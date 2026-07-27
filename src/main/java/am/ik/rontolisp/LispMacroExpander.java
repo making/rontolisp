@@ -14536,6 +14536,62 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The largest byte-specifier size or position the literal fast paths of
+	 * {@code ldb}/{@code dpb}/{@code mask-field} fold. Past it the general expansion runs
+	 * instead, so a pathological {@code (byte 1000000000 0)} cannot make the expander
+	 * build a gigabyte-wide mask constant.
+	 */
+	private static final int LITERAL_BYTESPEC_LIMIT = 1024;
+
+	/**
+	 * The {@code {size, position}} of a byte specifier written with literal integers --
+	 * {@code (byte 32 0)}, or the {@code (list 32 0)} it lowers to -- or {@code null}
+	 * when either component is computed. A literal one lets {@code ldb}/{@code dpb}/
+	 * {@code mask-field} fold their mask arithmetic at expansion time instead of
+	 * rebuilding a bytespec list and two lexical scopes per evaluation: SHA-256's
+	 * {@code (ldb (byte 32 0) ...)} is ~25 interpreted nodes in the general shape and 3
+	 * in the folded one.
+	 * @param spec the byte-specifier argument form
+	 * @return the size and position, or {@code null}
+	 */
+	/** A byte specifier whose size and position are both literal integers. */
+	private record ByteSpec(long size, long position) {
+	}
+
+	@Nullable private static ByteSpec literalByteSpec(LispVal spec) {
+		if (!(spec instanceof LispCons call) || !call.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = call.toList();
+		if (parts.size() != 3 || !(parts.get(0) instanceof LispSymbol op)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		String member = qn == null ? op.name() : qn.member();
+		if (!LispNames.BYTE.equals(member) && !LispNames.LIST.equals(member)) {
+			return null;
+		}
+		if (!(parts.get(1) instanceof LispInteger size) || !(parts.get(2) instanceof LispInteger position)) {
+			return null;
+		}
+		if (size.value() < 0 || position.value() < 0 || size.value() > LITERAL_BYTESPEC_LIMIT
+				|| position.value() > LITERAL_BYTESPEC_LIMIT) {
+			return null;
+		}
+		return new ByteSpec(size.value(), position.value());
+	}
+
+	/** {@code 2^size - 1}, the right-justified mask of a byte specifier of that size. */
+	private static java.math.BigInteger lowBitMask(long size) {
+		return java.math.BigInteger.ONE.shiftLeft((int) size).subtract(java.math.BigInteger.ONE);
+	}
+
+	/** The integer literal for a value, demoted to a {@code long} when it fits. */
+	private static LispVal integerLiteral(java.math.BigInteger value) {
+		return value.bitLength() < 64 ? new LispInteger(value.longValueExact()) : new LispBigInteger(value);
+	}
+
+	/**
 	 * Expands {@code (ldb bytespec integer)} (load byte) over the bit primitives: the
 	 * {@code size}-bit field at {@code position} of the integer, right-justified.
 	 *
@@ -14552,6 +14608,16 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new IllegalArgumentException("ldb expects 2 arguments (bytespec integer): " + cons.print());
+		}
+		ByteSpec literal = literalByteSpec(parts.get(1));
+		if (literal != null) {
+			// (ldb (byte 32 0) n) -> (logand n #xFFFFFFFF): no bytespec list, no
+			// let* scopes, no arithmetic to rebuild the mask. The integer is still
+			// evaluated exactly once, and the specifier's forms have no side effects
+			// to preserve (they are literals).
+			LispVal shifted = literal.position() == 0 ? parts.get(2)
+					: mvCall(LispNames.ASH, parts.get(2), new LispInteger(-literal.position()));
+			return mvCall(LispNames.LOGAND, shifted, integerLiteral(lowBitMask(literal.size())));
 		}
 		String prefix = "__ldb" + MV_COUNTER.getAndIncrement();
 		LispSymbol s = new LispSymbol(prefix + "_s");
@@ -14583,6 +14649,17 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 4) {
 			throw new IllegalArgumentException("dpb expects 3 arguments (newbyte bytespec integer): " + cons.print());
+		}
+		ByteSpec literal = literalByteSpec(parts.get(2));
+		if (literal != null) {
+			// The new-bits operand comes FIRST in the logior so the newbyte form is
+			// still evaluated before the integer form, as the general expansion's
+			// let* order does; logior over integers does not care about the order.
+			java.math.BigInteger mask = lowBitMask(literal.size()).shiftLeft((int) literal.position());
+			LispVal placed = literal.position() == 0 ? parts.get(1)
+					: mvCall(LispNames.ASH, parts.get(1), new LispInteger(literal.position()));
+			return mvCall(LispNames.LOGIOR, mvCall(LispNames.LOGAND, placed, integerLiteral(mask)),
+					mvCall(LispNames.LOGAND, parts.get(3), integerLiteral(mask.not())));
 		}
 		String prefix = "__dpb" + MV_COUNTER.getAndIncrement();
 		LispSymbol nb = new LispSymbol(prefix + "_b");
@@ -14616,6 +14693,11 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new IllegalArgumentException("mask-field expects 2 arguments (bytespec integer): " + cons.print());
+		}
+		ByteSpec literal = literalByteSpec(parts.get(1));
+		if (literal != null) {
+			return mvCall(LispNames.LOGAND, parts.get(2),
+					integerLiteral(lowBitMask(literal.size()).shiftLeft((int) literal.position())));
 		}
 		String prefix = "__mf" + MV_COUNTER.getAndIncrement();
 		LispSymbol s = new LispSymbol(prefix + "_s");
