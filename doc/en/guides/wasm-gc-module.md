@@ -30,7 +30,7 @@ An exported function is a **raw core function**: scalars
 `memory`, together with a `__ronto_alloc(size)` bump allocator the host uses
 to stage argument bytes — that protocol needs a host that can read and write
 memory (JavaScript, not `wasmtime --invoke`), and is walked through end to
-end in the [browser guide's calling-from-JS appendix](wasm-browser.md#appendix-calling-a-module-from-javascript).
+end in the [browser guide's reactor section](wasm-browser.md#reactor-modules-by-hand).
 Instantiating the module still needs the eight WASI imports satisfied;
 `wasmtime run` provides them automatically, a browser host can supply no-op
 stubs for a pure-compute function, or add [`--no-wasi`](#no-wasi-reactor-mode)
@@ -135,7 +135,7 @@ A reactor is just as easy to drive from JavaScript: there is **no import
 object**, so the host side is just "instantiate, then call the exports"
 (`WebAssembly.instantiate(bytes).then(({ instance }) => instance.exports.fact(5))`).
 A complete, copy-paste runnable Node + browser example is in the
-[browser guide's appendix](wasm-browser.md#appendix-calling-a-module-from-javascript).
+[browser guide's reactor section](wasm-browser.md#reactor-modules-by-hand).
 
 The eight WASI import slots are filled with internal trap stubs so every
 function index stays fixed (no other codegen changes). This mode is for

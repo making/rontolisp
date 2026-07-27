@@ -12,7 +12,7 @@ wasmtime run -W gc hello.wasm
 # 3
 ```
 
-エクスポートされた関数は**生のコア関数**です: スカラー(`:int`/`:float`/`:bool`)は素の数値として境界を渡るため、`wasmtime --invoke` や `instance.exports.fact(5)` が直接使えます。メモリ経由の `:string` と `:s-expr` はモジュールのエクスポートする `memory` を通じて `(ptr, len)` ペアを渡し、ホストが引数バイト列を書き込むための `__ronto_alloc(size)` バンプアロケータも併せてエクスポートされます — このプロトコルはメモリを読み書きできるホスト(JavaScript であって `wasmtime --invoke` ではない)を必要とし、[ブラウザガイドの「JavaScript からのモジュール呼び出し」付録](wasm-browser.md#appendix-calling-a-module-from-javascript)で端から端まで解説します。モジュールのインスタンス化には依然として 8 つの WASI インポートを満たす必要があります。`wasmtime run` は自動で提供し、ブラウザホストは純粋計算関数に対して no-op スタブを供給できます。あるいは [`--no-wasi`](#no-wasi-reactor-mode) で丸ごと取り除けます。
+エクスポートされた関数は**生のコア関数**です: スカラー(`:int`/`:float`/`:bool`)は素の数値として境界を渡るため、`wasmtime --invoke` や `instance.exports.fact(5)` が直接使えます。メモリ経由の `:string` と `:s-expr` はモジュールのエクスポートする `memory` を通じて `(ptr, len)` ペアを渡し、ホストが引数バイト列を書き込むための `__ronto_alloc(size)` バンプアロケータも併せてエクスポートされます — このプロトコルはメモリを読み書きできるホスト(JavaScript であって `wasmtime --invoke` ではない)を必要とし、[ブラウザガイドの「リアクターモジュールを手書きで呼ぶ」節](wasm-browser.md#リアクターモジュールを手書きで呼ぶ)で端から端まで解説します。モジュールのインスタンス化には依然として 8 つの WASI インポートを満たす必要があります。`wasmtime run` は自動で提供し、ブラウザホストは純粋計算関数に対して no-op スタブを供給できます。あるいは [`--no-wasi`](#no-wasi-reactor-mode) で丸ごと取り除けます。
 
 この形状での `wasm-export` の全体像(運ばれる型、`:as` による改名、アリティ一致、void 戻り値)は、[ホスト境界ガイド](wasm-host-boundary.md)を参照してください。
 
@@ -66,7 +66,7 @@ rontolisp fact.lisp --no-wasi -o fact.wasm
 wasmtime run --invoke fact -W gc fact.wasm 5      # => 120
 ```
 
-リアクターは JavaScript からも同様に簡単に駆動できます: **インポートオブジェクトがない**ため、ホスト側は「インスタンス化してからエクスポートを呼び出す」だけです(`WebAssembly.instantiate(bytes).then(({ instance }) => instance.exports.fact(5))`)。コピー＆ペーストして実行できる完全な Node + ブラウザの例は、[ブラウザガイドの付録](wasm-browser.md#appendix-calling-a-module-from-javascript)にあります。
+リアクターは JavaScript からも同様に簡単に駆動できます: **インポートオブジェクトがない**ため、ホスト側は「インスタンス化してからエクスポートを呼び出す」だけです(`WebAssembly.instantiate(bytes).then(({ instance }) => instance.exports.fact(5))`)。コピー＆ペーストして実行できる完全な Node + ブラウザの例は、[ブラウザガイドのリアクターモジュールの節](wasm-browser.md#リアクターモジュールを手書きで呼ぶ)にあります。
 
 8 つの WASI インポートスロットは内部のトラップスタブで埋められるため、すべての関数インデックスは固定のままです(他のコード生成に変更はありません)。このモードは**純粋計算**のエクスポート専用です: あらゆる I/O(`print`/`read`/`open`/`getenv`/時刻/`random`、印字するトップレベルフォームを含む)はスタブに当たって**トラップ**します。Preview 1 専用です — `--no-wasi` は `--component` のもとでは無視されます。
 

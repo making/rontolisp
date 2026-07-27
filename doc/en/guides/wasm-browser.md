@@ -4,9 +4,11 @@ Two paths deliver a rontolisp WASM build to a browser:
 
 - **Components via `jco transpile`** — turns a component into plain
   JavaScript modules whose exports become JavaScript functions.
-- **Reactor modules by hand** — a `--no-wasi` or `--no-gc` core module has
-  no imports, so `WebAssembly.instantiate` + `instance.exports` is the whole
-  host side. Node and the browser use the same code.
+- **Reactor modules by hand** — a `--no-wasi` (wasm-GC, full language) or
+  `--no-gc` (scalar-only) core module has no imports either way, so
+  `WebAssembly.instantiate` + `instance.exports` is the whole host side, byte
+  for byte the same JavaScript for both backends. Node and the browser use
+  the same code.
 
 ## Running a Component in a Browser (jco)
 
@@ -67,7 +69,7 @@ the same jco gaps as the GC component below (jco cannot call an
 async-lifted export, and its `future` runtime is incomplete) — and the
 WASI 0.3 shim is Node-only anyway. Keep the program print-free if the
 component's destination is jco or a browser; the
-[plain module path](#appendix-calling-a-module-from-javascript) with a
+[plain module path](#reactor-modules-by-hand) with a
 hand-written import object is unaffected.
 
 **A wasm-GC `--component` loads and computes, but cannot print there yet.**
@@ -97,7 +99,7 @@ Node is the weaker host here: Node 22 has no JSPI
 (`WebAssembly.Suspending is not a constructor`), so it cannot even
 instantiate a transpiled GC component, while Chrome can.
 
-## Appendix: Calling a Module from JavaScript
+## Reactor Modules by Hand
 
 A reactor module (`--no-wasi` or `--no-gc`) imports nothing, so the whole
 host side is "instantiate, then call the exports" — and it is the same code
@@ -167,6 +169,28 @@ A few boundary details worth knowing:
   **`--no-wasi`** module needs a wasm-GC-capable one (Node 22+, current
   browsers). The JavaScript above is byte-for-byte identical for both —
   swap the compile flag and nothing else changes.
+
+Proof, not just assertion — recompile the same source with `--no-wasi` and
+run the unchanged `run.mjs`:
+
+```bash
+rontolisp mathkit.lisp --no-wasi --optimize -o mathkit.wasm
+node run.mjs
+```
+
+```
+3628800
+12.566370614359172
+true
+false
+```
+
+Nothing above was `--no-gc`-specific: `mathkit.lisp` never leaves the
+non-GC subset, so it is one of the (many) programs that compile cleanly
+under either backend. A program that needs the full language — `cons`,
+`string-upcase`, `hash-table`s, `defstruct`, ... — simply **requires**
+`--no-wasi`; it is not a fallback or a lesser path, only the backend a
+wasm-GC-capable engine (Node 22+, every current browser) runs.
 
 ### Passing strings (`:string`)
 

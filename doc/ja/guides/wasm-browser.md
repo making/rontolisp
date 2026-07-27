@@ -3,7 +3,7 @@
 rontolisp の WASM ビルドをブラウザへ届ける経路は 2 つあります:
 
 - **`jco transpile` によるコンポーネント** — コンポーネントを、エクスポートがそのまま JavaScript 関数になる普通の JavaScript モジュールに変換します。
-- **リアクターモジュールを手書きで呼ぶ** — `--no-wasi` や `--no-gc` のコアモジュールはインポートを持たないので、`WebAssembly.instantiate` + `instance.exports` がホスト側のすべてです。Node とブラウザで同じコードです。
+- **リアクターモジュールを手書きで呼ぶ** — `--no-wasi`(wasm-GC、言語フル機能)であれ `--no-gc`(スカラーのみ)であれ、コアモジュールはどちらもインポートを持たないので、`WebAssembly.instantiate` + `instance.exports` がホスト側のすべてです。しかも両バックエンドでバイト単位まで同じ JavaScript になります。Node とブラウザで同じコードです。
 
 ## ブラウザでコンポーネントを実行する(jco)
 
@@ -45,7 +45,7 @@ npx @bytecodealliance/jco transpile cv.wasm -o dist
 </script>
 ```
 
-**印字する `--no-gc --component` はまだ jco では実行できません。** その[印字マイクロアダプタ](wasm-nogc.md#compact-component-output---no-gc---component)は `wasi:cli/stdout@0.3.0` をインポートし、すべてのエクスポートを async リフトするため、下記の GC コンポーネントと同じ jco のギャップ(jco は async リフトされたエクスポートを呼び出せず、`future` ランタイムも未完成)に当たります — そして WASI 0.3 シムはそもそも Node 専用です。コンポーネントの行き先が jco やブラウザであれば、プログラムを印字なしに保ってください。手書きのインポートオブジェクトを使う[素のモジュールパス](#appendix-calling-a-module-from-javascript)は影響を受けません。
+**印字する `--no-gc --component` はまだ jco では実行できません。** その[印字マイクロアダプタ](wasm-nogc.md#compact-component-output---no-gc---component)は `wasi:cli/stdout@0.3.0` をインポートし、すべてのエクスポートを async リフトするため、下記の GC コンポーネントと同じ jco のギャップ(jco は async リフトされたエクスポートを呼び出せず、`future` ランタイムも未完成)に当たります — そして WASI 0.3 シムはそもそも Node 専用です。コンポーネントの行き先が jco やブラウザであれば、プログラムを印字なしに保ってください。手書きのインポートオブジェクトを使う[素のモジュールパス](#リアクターモジュールを手書きで呼ぶ)は影響を受けません。
 
 **wasm-GC の `--component` はロードされ計算もできますが、まだ印字はできません。** Chrome は wasm-GC、JSPI、正準 ABI のいずれにも対応しており、コンポーネントの同期エクスポートは正しい値を返します。残りを阻んでいるのは 2 つのギャップで、どちらも JavaScript 側にあります(wasmtime はすべて実行できます):
 
@@ -54,7 +54,7 @@ npx @bytecodealliance/jco transpile cv.wasm -o dist
 
 ここでは Node の方が弱いホストです: Node 22 には JSPI がなく(`WebAssembly.Suspending is not a constructor`)、トランスパイルされた GC コンポーネントをインスタンス化することすらできません。Chrome にはできます。
 
-## 付録: JavaScript からのモジュール呼び出し
+## リアクターモジュールを手書きで呼ぶ
 
 リアクターモジュール(`--no-wasi` または `--no-gc`)は何もインポートしないため、ホスト側は丸ごと「インスタンス化してからエクスポートを呼び出す」だけです — そして Node とブラウザで同じコードです。端から端まで、コピー＆ペーストで動く完全な例を示します。3 つのエクスポートからなる小さなキットから始めます:
 
@@ -113,6 +113,22 @@ false
 - `in-range` のようなハイフン付きの Lisp 名は有効な JavaScript 識別子ではないため、ブラケットアクセスで参照します: `ex['in-range'](...)`。
 - `:int`/`:float` は素の JS 数値として届きます。`:bool` は `i32`(`0`/`1`)として渡るため、本物の JS ブールが欲しければ `Boolean(...)` で包んでください。
 - **`--no-gc`** モジュールは**任意の** WebAssembly エンジンで動きます。GC の **`--no-wasi`** モジュールは wasm-GC 対応のエンジン(Node 22+、現行ブラウザ)を必要とします。上記の JavaScript はどちらでもバイト単位で同一です — コンパイルフラグを差し替えるだけで、他には何も変わりません。
+
+言葉だけでなく、実際に確かめます — 同じソースを `--no-wasi` で再コンパイルし、`run.mjs` はそのまま変更せずに実行します:
+
+```bash
+rontolisp mathkit.lisp --no-wasi --optimize -o mathkit.wasm
+node run.mjs
+```
+
+```
+3628800
+12.566370614359172
+true
+false
+```
+
+上記のどれも `--no-gc` 固有の話ではありません: `mathkit.lisp` はそもそも非 GC サブセットから外れていないので、どちらのバックエンドでも問題なくコンパイルできる(数多くある)プログラムの一つに過ぎません。`cons`、`string-upcase`、ハッシュテーブル、`defstruct` など言語のフル機能を必要とするプログラムは、単純に `--no-wasi` を**必要とする**だけです — それはフォールバックでも劣った経路でもなく、wasm-GC 対応のエンジン(Node 22+、現行のあらゆるブラウザ)が動かすバックエンドというだけのことです。
 
 ### 文字列の受け渡し(`:string`)
 
