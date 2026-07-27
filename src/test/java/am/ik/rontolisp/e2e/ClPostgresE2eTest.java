@@ -40,11 +40,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link #HBA_CONF}), so a broken rung fails to connect rather than quietly succeeding
  * through another one. Each probe also asks for {@code current_user}, which is the proof
  * of which role actually got in;</li>
- * <li><b>SCRAM-SHA-256</b> -- the same probe against the SCRAM-only role, but OPT-IN
- * ({@code RONTOLISP_POSTGRES_SCRAM_E2E=1}) because it is slow: its 4096-round PBKDF2 runs
- * for over two minutes in interpreted Lisp (~20 s compiled). The gate goes away once
- * PBKDF2 is fast enough to sit inside the default 60-second
- * {@code authentication_timeout} -- see {@code .kb/asdf.md};</li>
+ * <li><b>SCRAM-SHA-256</b> -- the same probe against the SCRAM-only role. It used to be
+ * separately opt-in because its 4096-round PBKDF2 ran for over two minutes interpreted;
+ * todo 188 made that ~50 s (and ~1 s on the JVM), so it is an ordinary leg again. The
+ * server still runs with a raised {@code authentication_timeout} -- see {@link #POSTGRES}
+ * for why;</li>
  * <li><b>CRUD</b> -- create / insert / select / update / delete / drop through
  * {@code exec-query}, plus a parameterised statement run twice through
  * {@code prepare-query} + {@code exec-prepared} so the extended protocol is covered too.
@@ -78,9 +78,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <pre>{@code
  * RONTOLISP_POSTGRES_E2E=1 ./mvnw -Dtest=ClPostgresE2eTest -DfailIfNoTests=false test
- * # ...adding the slow SCRAM legs:
- * RONTOLISP_POSTGRES_E2E=1 RONTOLISP_POSTGRES_SCRAM_E2E=1 \
- *   ./mvnw -Dtest=ClPostgresE2eTest -DfailIfNoTests=false test
  * }</pre>
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -196,11 +193,15 @@ class ClPostgresE2eTest {
 		.withCopyToContainer(Transferable.of(HBA_CONF), "/etc/postgresql/pg_hba.conf")
 		.withCopyToContainer(Transferable.of(INIT_SQL), "/docker-entrypoint-initdb.d/10-auth-ladder.sql")
 		// hba_file rather than an edit of the generated one: the entrypoint passes these
-		// args to the bootstrap server too, so the ladder is in force from the start. The
-		// raised authentication_timeout is for the opt-in SCRAM legs -- with the
-		// 60-second default the interpreter's PBKDF2 outruns it and the connection dies
-		// as "READ-BYTE: end of file" while the server logs "canceling authentication due
-		// to timeout".
+		// args to the bootstrap server too, so the ladder is in force from the start.
+		//
+		// The raised authentication_timeout is for the SCRAM legs. With the 60-second
+		// default a connection that outruns it dies as "READ-BYTE: end of file" while the
+		// server logs "canceling authentication due to timeout". After todo 188 the
+		// interpreter's 4096-round PBKDF2 takes ~50 s and the WASM component ~28 s here,
+		// so the default would leave under 20% of margin on the slowest leg -- and the
+		// component's share is the module-size tax todo 188 has NOT closed yet. Drop this
+		// flag when that lands, not before: the failure it prevents is a flaky test.
 		.withCommand("postgres", "-c", "hba_file=/etc/postgresql/pg_hba.conf", "-c", "authentication_timeout=600")
 		// Twice: once for the bootstrap server that runs the init script, once for real.
 		.waitingFor(Wait.forLogMessage(".*database system is ready to accept connections.*\\s", 2));
@@ -233,21 +234,18 @@ class ClPostgresE2eTest {
 	}
 
 	@Test
-	@EnabledIfEnvironmentVariable(named = "RONTOLISP_POSTGRES_SCRAM_E2E", matches = "1")
 	void scramAuthOnTheInterpreter(@TempDir Path workDir) throws Exception {
 		assertThat(runOn(Backend.INTERPRETER, workDir, ClPostgresE2eTest::scram))
 			.isEqualToNormalizingWhitespace(SCRAM_EXPECTED);
 	}
 
 	@Test
-	@EnabledIfEnvironmentVariable(named = "RONTOLISP_POSTGRES_SCRAM_E2E", matches = "1")
 	void scramAuthOnJvm(@TempDir Path workDir) throws Exception {
 		assertThat(runOn(Backend.JVM, workDir, ClPostgresE2eTest::scram))
 			.isEqualToNormalizingWhitespace(SCRAM_EXPECTED);
 	}
 
 	@Test
-	@EnabledIfEnvironmentVariable(named = "RONTOLISP_POSTGRES_SCRAM_E2E", matches = "1")
 	void scramAuthOnWasmComponent(@TempDir Path workDir) throws Exception {
 		assertThat(runOn(Backend.COMPONENT, workDir, ClPostgresE2eTest::scram))
 			.isEqualToNormalizingWhitespace(SCRAM_EXPECTED);

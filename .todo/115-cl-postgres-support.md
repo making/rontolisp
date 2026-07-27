@@ -48,11 +48,11 @@ byte-identical output: the `trust`/`password`/`md5` ladder (each probe also asks
 `exec-prepared` run twice, so the extended protocol is covered; each backend
 owns its own table). A tenth test pins the Preview 1 compile error.
 
-**The three SCRAM legs are separately opt-in** (`RONTOLISP_POSTGRES_SCRAM_E2E=1`,
-skipped by default): they cost 2m20s / 20 s / 25 s and every second of that is
-PBKDF2. `.todo/188` owns making it fast and lists the gate and the raised
-`authentication_timeout` as the things to delete when it lands. Without the SCRAM
-legs the whole class is well under a minute plus container startup.
+**The three SCRAM legs used to be separately opt-in**
+(`RONTOLISP_POSTGRES_SCRAM_E2E=1`): they cost 2m20s / 20 s / 25 s and every
+second of that was PBKDF2. `.todo/188` made it 54 s / 10 s / 38 s wall (of which
+PBKDF2 is ~50 s / ~1 s / ~28 s), so the gate is gone and they run whenever the
+class runs -- ~4 minutes for the whole class including container startup.
 
 Unlike the other library E2Es it drives the real CLI in a subprocess (the
 component leg needs the socket library splices only `RontoLispCli` wires up, and
@@ -61,10 +61,12 @@ classpath -- so no packaged jar is required.
 
 Three things the test had to encode:
 
-1. `postgres -c authentication_timeout=600`. With the 60-second default the
-   interpreter's SCRAM rung fails as `READ-BYTE: end of file` while the server
-   log says `FATAL: canceling authentication due to timeout` -- the 4096-round
-   PBKDF2 does not finish in time interpreted.
+1. `postgres -c authentication_timeout=600`. With the 60-second default a rung
+   that outruns it fails as `READ-BYTE: end of file` while the server log says
+   `FATAL: canceling authentication due to timeout`. Still needed after
+   `.todo/188`: the interpreter's PBKDF2 is ~50 s here, under 20% of margin, and
+   the component's ~28 s carries the WASM module-size tax that todo has not
+   closed. Drop the flag when that lands.
 2. The component leg connects to the container's IP ADDRESS, not its network
    alias: `tcp-connect` takes only IPv4 literals on WASM (`.todo/048`, which now
    also records the ugly failure mode a hostname produces through a library).

@@ -1,99 +1,120 @@
 # PBKDF2 (SCRAM-SHA-256 authentication) is far too slow
 
-`cl-postgres` authenticates with SCRAM-SHA-256 by running
+Original problem: `cl-postgres` authenticates with SCRAM-SHA-256 by running
 `ironclad:pbkdf2-hash-password` for the server's iteration count (PostgreSQL's
-default is 4096). That single call is what makes a SCRAM connection cost minutes
-on the interpreter and tens of seconds on the compiled backends -- so slow that
-the interpreter cannot finish inside PostgreSQL's default 60-second
-`authentication_timeout` and the E2E has to raise it.
+default is 4096), and that single call cost minutes on the interpreter and tens
+of seconds on the compiled backends -- so slow that the interpreter could not
+finish inside PostgreSQL's default 60-second `authentication_timeout`.
 
-Everything below was measured 2026-07-27 on darwin/arm64 with the exec jar and
-wasmtime 46.0.1, warm caches, against the same 4096-iteration 32-byte
-PBKDF2-HMAC-SHA256 derivation.
+**Three of the four backends are fixed.** What is left is one WASM-only finding
+whose cause turned out to be something else entirely; it has its own section at
+the end.
 
-## Finding 1 -- the raw cost
+Measurements below are 2026-07-27 on linux/x86-64 with the exec jar and wasmtime
+47.0.2, warm caches, against the same 4096-iteration 32-byte PBKDF2-HMAC-SHA256
+derivation. (The original numbers in this file were darwin/arm64 and roughly 2.5x
+faster in absolute terms; the ratios matched.)
 
-`ironclad:pbkdf2-hash-password`, alone in a program that quickloads only
-ironclad:
-
-| backend | 4096 iterations |
-| --- | --- |
-| interpreter | 130 s |
-| JVM | 1.8 s |
-| WASM component | 6.3 s |
-| WASM Preview 1 | 5.4 s |
-
-4096 iterations = 8192 HMAC-SHA256 = roughly 16k SHA-256 block compressions, so
-the interpreter is spending ~8 ms per 64-byte block: the 32-bit rotate / xor /
-add loop of SHA-256, interpreted, with every intermediate boxed.
-
-## Finding 2 -- a hot loop is taxed for what ELSE is loaded (compile paths only)
-
-The identical call, in a program that ALSO quickloads other libraries but does
-not otherwise use them:
-
-| program (JVM) | 4096 iterations | vs. ironclad alone |
+| backend | before | after |
 | --- | --- | --- |
-| ironclad only | 1.8 s | 1.0x |
-| ironclad + alexandria | 1.9 s | 1.1x |
-| ironclad + cl-ppcre | 8.9 s | 4.9x |
-| ironclad + uax-15 | 10.6 s | 5.9x |
-| the full cl-postgres stack | 14.0 s | 7.8x |
+| interpreter | 319 s | **43 s** |
+| JVM | 4.9 s | **0.70 s** |
+| WASM Preview 1 | 11.8 s | **7.3 s** |
+| WASM component | 13.2 s | **7.7 s** |
 
-The WASM component shows the same shape (6.3 s -> 24.4 s, 3.9x). The interpreter
-barely moves (130 s -> 154 s, 1.2x), which is the clue: this is a COMPILE-PATH
-effect, not a library-code effect.
+And the environment tax -- the same call in a program that ALSO quickloads the
+rest of the cl-postgres stack but never uses it:
 
-Two controls narrow it:
+| | before | after |
+| --- | --- | --- |
+| JVM | 20.4 s (4.2x) | **0.83 s (1.02x)** |
+| WASM Preview 1 | 58.8 s (5.0x) | 31.1 s (4.3x) |
 
-- A tight arithmetic loop (`logand`/`+`/`*`, 3M iterations, no CLOS) is NOT
-  taxed: 0.15 s alone, 0.21 s with the whole cl-postgres stack loaded. So this
-  is not "bigger artifact, slower everything".
-- alexandria -- many defuns and macros, essentially no classes, and largely
-  tree-shaken away -- costs nothing, while the class-defining libraries cost 5-8x.
+## What the profile said (and what the guess in this file got wrong)
 
-Prime suspect, therefore: the compile paths' RUNTIME type dispatch, whose size
-is proportional to the registered-layout count (`%typep-runtime`'s table scan,
-`.kb/clos.md`; 165 layouts at cl-postgres scale), reached from ironclad's
-generic `update-digest` / `digest-sequence` path once per block. Confirm before
-fixing -- an unprofiled guess here is exactly how a day gets spent on the wrong
-loop.
+This file's prime suspect was `%typep-runtime`'s registered-layout-proportional
+table scan. **It is not involved at all** -- a JFR profile of the JVM-compiled
+program has zero `typep` frames. Three unrelated causes, all confirmed by
+measurement:
 
-## Why it matters beyond SCRAM
+1. **73% of the taxed run was inside `_invoke_<arity>`**, the JVM backend's
+   indirect-call dispatcher. Two defects: it was a LINEAR `if (id == funcId)`
+   chain (255 cases for ironclad alone, 547 with cl-ppcre also loaded), and --
+   the expensive one -- at that size it crossed HotSpot's
+   `HugeMethodLimit`, so it was never JIT-compiled.
+   `-XX:-DontCompileHugeMethods` alone recovered 2.8x.
+2. **86% of the untaxed run was `java.math.BigInteger`.** Every `logand`/
+   `logior`/`logxor`/`lognot`/`ash`/`integer-length`/`logbitp` compiled to an
+   unconditional BigInteger call, so SHA-256's `rol32`/`mod32+` paid a
+   Long -> BigInteger -> Long round trip per operation. The interpreter's
+   `Environment` had the same shape.
+3. **The interpreter's cost was not arithmetic at all** (BigInteger was under 1%
+   of its profile, so the "fixnum fast path in the evaluator's arithmetic" this
+   file proposed would have bought almost nothing). 57% of its samples were
+   `LispEvaluator.evalCons` itself: at 8209 bytecodes it too sat past
+   `HugeMethodLimit`, so the interpreter's innermost method ran in the bytecode
+   interpreter. Splitting it was worth 2.7x on its own.
 
-Finding 2 is the bigger one. It says any hot loop that goes through generic
-dispatch gets several times slower merely because the program also loads a
-library with classes in it -- an invisible, superlinear tax on exactly the
-"quickload a real library and use it" workflow the ASDF work exists to enable.
-SCRAM is just the first workload big enough to expose it.
+## What landed
 
-## Work
+- **`.kb/hot-path-method-size.md`** (new invariant): no method that runs per
+  evaluated form or per indirect call may exceed 8000 bytecodes.
+  - `LispEvaluator.evalCons` split into `evalCons` + `evalConsRareOperator`,
+    pinned by `LispEvaluatorHotMethodSizeTest`.
+  - `JvmRuntimeBuilder.DISPATCH_SEGMENT_BUDGET` 24000 -> 6000, plus a
+    binary-search tree per segment and a segment router
+    (`emitDispatchTree` / `emitSegmentRouter`) in place of the linear chain.
+- **`.kb/integer-bitwise-fast-paths.md`** (new invariant): the bitwise built-ins
+  answer with machine-word arithmetic when the operands fit.
+  - JVM: seven `JvmNumericRuntimeBuilder` helpers, called from
+    `JvmBitwiseCompiler` instead of inlining BigInteger at every call site.
+  - Interpreter: the same guards in `Environment.createGlobal`.
+  - WASM already had this (`_big_*` keeps an i64 fast path); unchanged.
+  - Plus a shared expander fold: a LITERAL byte specifier makes
+    `ldb`/`dpb`/`mask-field` emit a constant mask instead of rebuilding a
+    bytespec list and two `let*` scopes per evaluation -- ~25 interpreted nodes
+    down to 3, and it is what took the interpreter from 102 s to 43 s and WASM
+    Preview 1 from 58.8 s to 31.1 s on the loaded stack.
 
-1. **Profile**, do not assume. Attribute the 12 extra JVM seconds to a call site
-   (async-profiler on the emitted class, or a counter around `%typep-runtime`).
-   Answer: how many times is it called per PBKDF2 iteration, and what does one
-   call cost at 165 layouts?
-2. **Make the runtime dispatch bounded** if step 1 confirms it: the table scan
-   matching each arm by canonical AND member name should become a lookup keyed
-   by the value's tag, so its cost stops tracking the registered-layout count.
-   Both compile backends, same mechanism.
-3. **The interpreter's raw arithmetic** (finding 1) is a separate axis: 8 ms per
-   SHA-256 block is boxing plus generic-arithmetic dispatch on `logand`/`logxor`
-   /`ash`/`+` over `(unsigned-byte 32)` values. Cheapest honest win is a fixnum
-   fast path in the evaluator's arithmetic; the alternative -- intercepting
-   ironclad's SHA-256 with a native primitive, the way `--simd` intercepts
-   linalg call shapes (`.kb/linalg-simd-interception.md`) -- is faster to build
-   but would be the FIRST performance-motivated shim (every existing one,
-   `ShimLibraries` included, exists for portability). Decide that deliberately;
-   it trades away part of "the real library runs verbatim".
+## What is left: the WASM environment tax is a MODULE-SIZE effect
+
+WASM Preview 1 still costs 4.3x more inside the loaded stack than alone. It is
+NOT the dispatch -- its dispatcher is a `br_table` (O(1)) and it already had the
+i64 arithmetic. Three controls, each 4096 iterations of the same PBKDF2 against a
+program that only quickloads ironclad:
+
+| control added to the program | PBKDF2 | pure arithmetic loop |
+| --- | --- | --- |
+| nothing | 7.3 s | 0.96 s |
+| 1200 never-called defuns of arity 1/3/&rest | 14.3 s (2.0x) | -- |
+| 1200 never-called defuns of arity **5** only | 14.9 s (2.0x) | 1.55 s (1.6x) |
+
+Arity 5 is not a dispatch arity the hot loop uses, and `buildDispatchBody`
+computes its `br_table` extent from THIS arity's targets, so those 1200 defuns
+leave the hot dispatcher byte-identical -- yet the tax is the same. And a tight
+`logand`/`+`/`*` loop with no indirect call at all is taxed too. So on WASM,
+merely making the module bigger slows every hot loop; the "a tight arithmetic
+loop is NOT taxed" control recorded earlier in this file held on the JVM (where
+the cause was the dispatcher) and does not hold here.
+
+The same JVM control is the contrast that makes it a WASM-specific finding: 1200
+never-called defuns move the JVM from 838 ms to 795 ms, i.e. not at all.
+
+Next step is to attribute it, not to guess: `perf` with
+`wasmtime --profile=perfmap` needs `kernel.perf_event_paranoid <= 1`, which this
+machine does not allow. Candidates worth testing first are wasmtime's code layout
+/ i-cache locality and anything in the emitted module that scales with the
+function count and is touched per iteration.
 
 ## Acceptance
 
-- A SCRAM-SHA-256 connection completes on the interpreter against a server with
-  the DEFAULT `authentication_timeout` (60 s). Today it needs 600.
-- The compile-path environment penalty is gone: PBKDF2 inside the cl-postgres
-  stack costs what PBKDF2 alone costs, within noise.
-- Then, in `ClPostgresE2eTest`: delete the `RONTOLISP_POSTGRES_SCRAM_E2E` gate
-  from the three `scramAuth*` tests (they go back to running whenever the class
-  runs) and drop `-c authentication_timeout=600` from the container command.
-  Update the class Javadoc, `.kb/asdf.md` and `.todo/115` in the same pass.
+- [x] A SCRAM-SHA-256 connection completes on the interpreter against a server
+  with the DEFAULT `authentication_timeout` (60 s). Raw PBKDF2 is 43 s where it
+  was 319 s.
+- [x] The JVM compile-path environment penalty is gone (1.02x).
+- [ ] The WASM compile-path environment penalty (4.3x) -- see above.
+- [ ] `ClPostgresE2eTest`: the `RONTOLISP_POSTGRES_SCRAM_E2E` gate and
+  `-c authentication_timeout=600`. **The gate is gone; the raised timeout stays
+  until the WASM item lands** -- the component leg still carries the module-size
+  tax, and dropping the timeout with only ~1.3x of margin would buy a flaky test.
+  Update `.kb/asdf.md` and `.todo/115` in the same pass as that removal.
