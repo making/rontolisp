@@ -623,6 +623,15 @@ public final class JvmLispCompiler implements LispCompiler {
 			globalFieldNameUtfs.add(fieldNameUtf);
 			globalFields.put(g, cp.addFieldref(thisClass, cp.addNameAndType(fieldNameUtf, globalFieldDescUtf)));
 		}
+		// A special that is DYNAMICALLY BOUND somewhere additionally gets a per-thread
+		// store (a _d$ ThreadLocal next to its _g$ global default), so concurrent
+		// http-handler requests binding the same special do not clobber each other --
+		// interpreter parity (its DynamicBindings is a ThreadLocal for the same reason).
+		// A special never let-bound keeps the bare static field, so its reads stay a
+		// single getstatic and a binding-free program compiles byte-identically.
+		Set<String> boundSpecialVars = SpecialVarCollector.collectDynamicallyBound(program, specialVars);
+		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty() ? null
+				: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars);
 
 		// Assign funcIds and register in CP
 		int[] nextFuncId = { 0 };
@@ -781,6 +790,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.globals(globals)
 			.specialVars(specialVars)
 			.globalFields(globalFields)
+			.dynVars(dynVarRuntime)
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry);
 
@@ -1402,6 +1412,17 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(globalFieldDescUtf)
 						.writeU2(0));
 				}
+				if (dynVarRuntime != null) {
+					// One static ThreadLocal per dynamically-bound special: the thread's
+					// innermost dynamic binding as a one-element Object[] cell (see
+					// JvmDynVarRuntimeBuilder); created in <clinit>.
+					for (Utf8Constant dfName : dynVarRuntime.fieldNameUtfs()) {
+						f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+							.writeU2(dfName)
+							.writeU2(dynVarRuntime.fieldDescUtf())
+							.writeU2(0));
+					}
+				}
 				if (javaRuntime != null) {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(javaRuntime.initedFieldName())
@@ -1531,7 +1552,7 @@ public final class JvmLispCompiler implements LispCompiler {
 							})));
 				}
 				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || !mainCtx.layoutPool.isEmpty()
-						|| !structTableClinitFinal.isEmpty()) {
+						|| !structTableClinitFinal.isEmpty() || dynVarRuntime != null) {
 					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 					// on a thread with no pending condition returns null). The async
 					// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -1564,6 +1585,14 @@ public final class JvmLispCompiler implements LispCompiler {
 						clinitCode.add(Opcode.PUTSTATIC);
 						JvmRuntimeBuilder.emitU2(clinitCode, tlField.index());
 					}
+					if (dynVarRuntime != null) {
+						// The dynamic-binding ThreadLocals (one per bound special) join
+						// the
+						// same initializer -- never lazily: a racy first binding from two
+						// request threads would mint two ThreadLocals and lose one
+						// binding.
+						clinitCode.addAll(dynVarRuntime.clinitCode());
+					}
 					clinitCode.addAll(layoutClinitCode);
 					clinitCode.addAll(structTableClinitFinal);
 					clinitCode.add(Opcode.RETURN);
@@ -1576,11 +1605,15 @@ public final class JvmLispCompiler implements LispCompiler {
 					final int clinitMaxStack = !structTableClinitFinal.isEmpty() ? 10
 							: (mainCtx.layoutPool.isEmpty() ? 2 : 4);
 					// A layout-only program never runs ensureThreadLocalInfra, so the
-					// channel's <clinit> name constants are null there.
+					// channel's <clinit> name constants are null there; a
+					// bound-special-only
+					// program has neither, so the dyn-var runtime carries its own.
 					Utf8Constant clinitNameUtf = channel.clinitName != null ? channel.clinitName
-							: java.util.Objects.requireNonNull(mainCtx.layoutPool.clinitName);
+							: mainCtx.layoutPool.clinitName != null ? mainCtx.layoutPool.clinitName
+									: java.util.Objects.requireNonNull(dynVarRuntime).clinitName();
 					Utf8Constant clinitDescUtf = channel.clinitDesc != null ? channel.clinitDesc
-							: java.util.Objects.requireNonNull(mainCtx.layoutPool.clinitDesc);
+							: mainCtx.layoutPool.clinitDesc != null ? mainCtx.layoutPool.clinitDesc
+									: java.util.Objects.requireNonNull(dynVarRuntime).clinitDesc();
 					methods.add(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(clinitMaxStack)
@@ -1589,6 +1622,20 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0)
 									.writeU2(0);
 							})));
+				}
+				if (dynVarRuntime != null) {
+					// _dget/_dbind/_dset: the shared thread-scoped dynamic-binding
+					// helpers.
+					for (JvmDynVarRuntimeBuilder.HelperMethod hm : dynVarRuntime.methods()) {
+						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.nameUtf8(), hm.descUtf8(),
+								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+									attr.writeU2(hm.maxStack())
+										.writeU2(hm.maxLocals())
+										.writeCode((Object[]) hm.code().toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0);
+								})));
+					}
 				}
 				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName, lispToStringDescUtf,
 						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
@@ -2934,6 +2981,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<String, FieldrefConstant> globalFields = Map.of();
 
 		/**
+		 * The thread-scoped dynamic-binding runtime for the specials that are dynamically
+		 * bound somewhere in the program (a {@code _d$} ThreadLocal per name next to the
+		 * {@code _g$} global default, plus the {@code _dget}/{@code _dbind}/{@code _dset}
+		 * helpers), or {@code null} when no special is ever {@code let}-bound. Shared
+		 * across every context.
+		 */
+		JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars;
+
+		/**
 		 * Top-level globals already initialized by a {@code defvar}/{@code defparameter}
 		 * in this compilation, used to implement {@code defvar}'s "bind only if not
 		 * already bound" idempotence at compile time. Per-context (only the top-level
@@ -2970,11 +3026,12 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		/**
 		 * Active special-variable dynamic bindings, innermost on top:
-		 * {@code {globalFieldIndex, saveSlot, blockDepth}} per binding (see
-		 * JvmLetCompiler). A {@code return}/{@code return-from} that exits a block
-		 * entered before the binding ({@code blockDepth >=} the target's depth) restores
-		 * the saved value on its way out, so a named exit from a scan closure does not
-		 * leak the bound value into the global (cl-ppcre's *reg-starts*).
+		 * {@code {tlFieldIndex, saveSlot, blockDepth}} per binding (see JvmLetCompiler;
+		 * the save slot holds the thread's previous binding CELL, possibly null). A
+		 * {@code return}/{@code return-from} that exits a block entered before the
+		 * binding ({@code blockDepth >=} the target's depth) restores the saved cell on
+		 * its way out, so a named exit from a scan closure does not leak the bound value
+		 * into this thread's dynamic store (cl-ppcre's *reg-starts*).
 		 */
 		final Deque<int[]> specialBindScopes = new ArrayDeque<>();
 
@@ -3015,6 +3072,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.globals = builder.globals;
 			this.specialVars = builder.specialVars;
 			this.globalFields = builder.globalFields;
+			this.dynVars = builder.dynVars;
 			this.cp = Objects.requireNonNull(builder.cp);
 			this.stack = new OperandStack(this.cp);
 			this.systemOut = Objects.requireNonNull(builder.systemOut);
@@ -3245,6 +3303,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Set<String> specialVars = Set.of();
 
 			private Map<String, FieldrefConstant> globalFields = Map.of();
+
+			private JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars;
 
 			private Map<String, MethodrefConstant> numOps = Map.of();
 
@@ -3609,6 +3669,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder specialVars(Set<String> specialVars) {
 				this.specialVars = specialVars;
+				return this;
+			}
+
+			Builder dynVars(JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars) {
+				this.dynVars = dynVars;
 				return this;
 			}
 

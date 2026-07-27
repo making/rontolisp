@@ -7174,6 +7174,44 @@ class JvmLispCompilerTest {
 			.hasMessageContaining("PROGV");
 	}
 
+	@Test
+	void specialVarBindingIsThreadScoped() throws Exception {
+		// Interpreter parity (LispEvaluatorTest.specialVariablesAreThreadScoped): a
+		// dynamic binding belongs to the thread that established it. A thread spawned
+		// during the extent reads the GLOBAL value, its own binding is invisible to the
+		// spawner, and its exit restore must not clobber the spawner's still-active
+		// binding. Thread.start/join make every step deterministic (no sleeps).
+		assertThat(compileAndRun("""
+				(defvar *v* :none)
+				(defun peek () *v*)
+				(defun run-thread (f)
+				  (let ((th (java:new "java.lang.Thread" f)))
+				    (java:call th "start")
+				    (java:call th "join")))
+				(let ((*v* :outer))
+				  (run-thread (lambda (m) (print (list :spawned (peek)))))
+				  (run-thread (lambda (m) (let ((*v* :inner)) (print (list :rebound (peek))))))
+				  (print (list :outer (peek))))
+				(print (list :global (peek)))
+				""")).isEqualTo("""
+				(:SPAWNED :NONE)
+				(:REBOUND :INNER)
+				(:OUTER :OUTER)
+				(:GLOBAL :NONE)""");
+	}
+
+	@Test
+	void specialVarSetqOutsideAnyBindingReachesTheGlobal() throws Exception {
+		// A setq of a dynamically-bound special with NO binding active must write the
+		// global cell (and a later binding still save/restores over it).
+		assertThat(compileAndRun("""
+				(defvar *w* 1)
+				(defun poke (v) (setq *w* v))
+				(poke 2)
+				(print (list *w* (let ((*w* 3)) (poke 4) *w*) *w*))
+				""")).isEqualTo("(2 4 2)");
+	}
+
 	// ---- IEEE-754 float edge semantics: literal-path and comparison groups ----
 
 	@Test

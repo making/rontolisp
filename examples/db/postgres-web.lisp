@@ -33,9 +33,9 @@
 (defun connect ()
   "A connection to the database. One per request: a connection is a single
    conversation with the server, and the interpreter/JVM servers run every
-   request on its own thread. (Requests that genuinely overlap are served
-   correctly by the interpreter today; see the README for where the compiled
-   backends still fall down.)"
+   request on its own thread with its own dynamic bindings, so requests that
+   genuinely overlap stay isolated. (See the README for how each host holds
+   up under a concurrent load test.)"
   (cl-postgres:open-database "postgres" "postgres" nil "127.0.0.1" 54329))
 
 ;; if not exists, not drop + create: this top level runs once per INSTANCE, and

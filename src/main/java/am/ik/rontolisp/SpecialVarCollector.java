@@ -86,6 +86,81 @@ public final class SpecialVarCollector {
 	}
 
 	/**
+	 * Returns the subset of {@code specials} that is <em>dynamically bound</em> somewhere
+	 * in the program -- appears as a binding name of a {@code let}/{@code let*}
+	 * (directly, or inside the expansion of a built-in binding macro such as
+	 * {@code do}/{@code
+	 * dolist}/{@code loop}/{@code multiple-value-bind}; user macros are already expanded
+	 * in the compile-path program this runs on). The JVM compiler gives only these names
+	 * a thread-scoped (ThreadLocal) dynamic store; a special never bound keeps its plain
+	 * static-field representation, so the common read stays a single {@code getstatic}.
+	 * Over-collection is harmless (the bound representation is correct, just slower);
+	 * under-collection is a loud compile error in {@code JvmLetCompiler}, never a silent
+	 * process-global binding.
+	 * @param topLevelExprs the fully macro-expanded top-level forms
+	 * @param specials the special-variable names ({@link #collect})
+	 * @return the names that are dynamically bound, in first-binding order
+	 */
+	public static LinkedHashSet<String> collectDynamicallyBound(List<LispVal> topLevelExprs, Set<String> specials) {
+		LinkedHashSet<String> bound = new LinkedHashSet<>();
+		if (specials.isEmpty()) {
+			return bound;
+		}
+		for (LispVal expr : topLevelExprs) {
+			collectBoundForm(expr, specials, bound);
+		}
+		return bound;
+	}
+
+	private static void collectBoundForm(LispVal form, Set<String> specials, Set<String> out) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			String h = head.name();
+			if (LispNames.QUOTE.equals(h)) {
+				return;
+			}
+			if (LispNames.LET.equals(h) || LispNames.LET_STAR.equals(h)) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() >= 2) {
+					LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
+					if (bindings instanceof LispCons bindingsCons) {
+						for (LispVal binding : bindingsCons.toList()) {
+							if (binding instanceof LispCons pair && pair.car() instanceof LispSymbol name) {
+								if (specials.contains(name.name())) {
+									out.add(name.name());
+								}
+								collectBoundForm(pair.cdr(), specials, out);
+							}
+						}
+					}
+					for (int i = 2; i < parts.size(); i++) {
+						collectBoundForm(parts.get(i), specials, out);
+					}
+				}
+				return;
+			}
+			// Binding sugar (do/dolist/dotimes/loop/multiple-value-bind/with-*/...)
+			// reveals its lets one expansion step at a time; a form the expander
+			// rejects (it may validate shapes the compiler checks later) is walked
+			// raw instead -- no binding macro both fails to expand AND binds.
+			LispVal expansion = null;
+			try {
+				expansion = LispMacroExpander.expandBuiltinMacro(cons);
+			}
+			catch (RuntimeException ignored) {
+			}
+			if (expansion != null && expansion != cons) {
+				collectBoundForm(expansion, specials, out);
+				return;
+			}
+		}
+		collectBoundForm(cons.car(), specials, out);
+		collectBoundForm(cons.cdr(), specials, out);
+	}
+
+	/**
 	 * Walks the form for local {@code (declare (special ...))} clauses (skipping quoted
 	 * data) and records their names -- pessimistically program-wide, see the class
 	 * comment.

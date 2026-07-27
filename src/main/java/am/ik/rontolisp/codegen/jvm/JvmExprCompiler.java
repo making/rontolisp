@@ -68,14 +68,13 @@ final class JvmExprCompiler {
 		String name = sym.name();
 		// DYNAMIC-FIRST read of a dual-bound special (see JvmLetCompiler): in the
 		// binding method the lexical slot exists only so nested lambdas can capture
-		// it -- reads go to the global static field, so a called function's dynamic
+		// it -- reads go to the dynamic store, so a called function's dynamic
 		// rebinding or setq is visible (cl-ppcre's starts-with accumulation). Inside a
 		// closure, the CAPTURE wins: the closure may run after the extent ended and
-		// restored the global (cl-ppcre's end-string).
+		// restored the previous binding (cl-ppcre's end-string).
 		if (ctx.specialVars.contains(name) && !ctx.captures.containsKey(name) && ctx.locals.containsKey(name)
 				&& ctx.globals.contains(name)) {
-			ctx.emit(Opcode.GETSTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
+			compileSpecialRead(name, ctx);
 			return;
 		}
 		Integer slot = ctx.locals.get(name);
@@ -107,9 +106,9 @@ final class JvmExprCompiler {
 		else if (ctx.globals.contains(name)) {
 			// A top-level global variable: read from its dedicated static field. Works
 			// from any method body (main, defun, lambda), so a function can reference a
-			// defvar/defparameter global.
-			ctx.emit(Opcode.GETSTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
+			// defvar/defparameter global. A dynamically-bound special reads its
+			// thread's binding first (compileSpecialRead).
+			compileSpecialRead(name, ctx);
 		}
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileVarRef(name, ctx);
@@ -124,6 +123,30 @@ final class JvmExprCompiler {
 			// referenced via (function name) / #'name.
 			throw new UnsupportedOperationException("Cannot compile symbol reference: " + name);
 		}
+	}
+
+	/**
+	 * Reads a global variable. A special that is dynamically bound somewhere in the
+	 * program reads DYNAMIC-FIRST through {@code _dget} (this thread's binding when one
+	 * is active, else the {@code _g$} global default); every other global -- including a
+	 * special that is never {@code let}-bound -- stays a single {@code getstatic}.
+	 */
+	static void compileSpecialRead(String name, JvmLispCompiler.Ctx ctx) {
+		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
+		if (dyn != null) {
+			am.ik.jvm.ConstantPool.FieldrefConstant tlField = dyn.fields().get(name);
+			if (tlField != null) {
+				ctx.emit(Opcode.GETSTATIC);
+				ctx.emitU2(tlField.index());
+				ctx.emit(Opcode.GETSTATIC);
+				ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
+				ctx.emit(Opcode.INVOKESTATIC);
+				ctx.emitU2(dyn.dget().index());
+				return;
+			}
+		}
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
 	}
 
 	private static void compileCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {

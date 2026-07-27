@@ -76,15 +76,18 @@ final class JvmReturnCompiler {
 		compileEscapedCleanups(ctx, className, targetDepth);
 		// Restore every special-variable dynamic binding this exit escapes (the
 		// bindings established inside the target block), innermost first -- so a named
-		// exit from a scan closure does not leak the bound value into the global.
+		// exit from a scan closure does not leak the bound value into this thread's
+		// dynamic store (getstatic tl; aload saved cell; ThreadLocal.set).
 		for (int[] scope : ctx.specialBindScopes) {
 			if (scope[2] < targetDepth) {
 				break;
 			}
+			ctx.emit(Opcode.GETSTATIC);
+			ctx.emitU2(scope[0]);
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(scope[1]);
-			ctx.emit(Opcode.PUTSTATIC);
-			ctx.emitU2(scope[0]);
+			ctx.emit(Opcode.INVOKEVIRTUAL);
+			ctx.emitU2(java.util.Objects.requireNonNull(ctx.dynVars).tlSet().index());
 		}
 		emitStackUnwind(ctx, target, targetDepth);
 		int gotoPos = ctx.code.size();

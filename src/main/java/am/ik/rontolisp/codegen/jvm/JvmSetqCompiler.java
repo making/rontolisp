@@ -77,9 +77,9 @@ final class JvmSetqCompiler {
 			// its
 			// dedicated static field. Works from any method body, so a defun/lambda can
 			// assign a global. The eval mirror still runs at top level (no-op elsewhere).
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.PUTSTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
+			// A dynamically-bound special assigns this thread's active binding instead
+			// when one exists (emitGlobalStore).
+			emitGlobalStore(name, ctx);
 			mirrorTopLevelGlobal(name, ctx);
 		}
 		else {
@@ -96,10 +96,42 @@ final class JvmSetqCompiler {
 		// binding too, so a called function reading the special sees it.
 		if (ctx.specialVars.contains(name) && (ctx.locals.containsKey(name) || ctx.captures.containsKey(name))
 				&& ctx.globalFields.containsKey(name)) {
+			emitGlobalStore(name, ctx);
+		}
+	}
+
+	/**
+	 * Stores the value on the stack into the global variable, leaving the value there. A
+	 * special that is dynamically bound somewhere in the program writes this thread's
+	 * active binding when one exists ({@code _dset}) and only falls through to the
+	 * {@code _g$} global default when none does -- the CL rule that {@code setq} of a
+	 * special assigns the current dynamic binding. Every other global stays a plain
+	 * {@code putstatic}.
+	 */
+	private static void emitGlobalStore(String name, JvmLispCompiler.Ctx ctx) {
+		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
+		am.ik.jvm.ConstantPool.FieldrefConstant tlField = dyn == null ? null : dyn.fields().get(name);
+		int globalFieldIndex = java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index();
+		if (dyn == null || tlField == null) {
 			ctx.emit(Opcode.DUP);
 			ctx.emit(Opcode.PUTSTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
+			ctx.emitU2(globalFieldIndex);
+			return;
 		}
+		// stack: v -> v v tl -> v tl v -> v wrote? ; when 0, fall through to the global.
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(tlField.index());
+		ctx.emit(Opcode.SWAP);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(dyn.dset().index());
+		int ifWrotePos = ctx.code.size();
+		ctx.emit(Opcode.IFNE);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.PUTSTATIC);
+		ctx.emitU2(globalFieldIndex);
+		JvmEmitHelper.patchBranch(ctx, ifWrotePos, ctx.code.size());
 	}
 
 	/**

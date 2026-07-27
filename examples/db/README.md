@@ -36,13 +36,16 @@ query string goes through. It takes **a connection per request** and hands it
 back in an `unwind-protect`: a connection is one conversation with the server,
 and the interpreter/JVM servers put every request on its own thread.
 
-That is the right shape, and today only the interpreter delivers on it under
-load. Twelve concurrent POSTs: the interpreter and a `wasmtime serve` component
-insert all twelve, wasmCloud inserts ten (two `wasm trap: cast failure`), and
-the **JVM class inserts one** -- concurrent requests there corrupt each other's
-dynamic bindings, which is what cl-postgres' `initiate-connection` needs to
-survive a connect. Sequentially all four are 12/12. Driving the demo from a
-browser tab never touches this; a load test does.
+That is the right shape, and it holds up under load. Twelve concurrent POSTs:
+the interpreter, the JVM class and a `wasmtime serve` component insert all
+twelve (the JVM class since special-variable bindings became thread-scoped
+there -- before that, concurrent requests corrupted each other's dynamic
+bindings, which is what cl-postgres' `initiate-connection` needs to survive a
+connect, and eleven of twelve answered 500); wasmCloud inserts ten (two `wasm
+trap: cast failure`). Sustained bursts can still drop an occasional connect
+INSIDE the auth handshake on any host (backend-independent; raw parallel
+`psql` against the same server is clean). Driving the demo from a browser tab
+never touches any of this; a load test does.
 
 Non-ASCII notes work: cl-who escapes them as numeric
 character references (`&#x304a;`) the way it escapes everything above ASCII by

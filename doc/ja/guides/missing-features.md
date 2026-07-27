@@ -123,9 +123,11 @@ read/コンパイル時ディレクティブです（`:documentation`/`:size` �
 `let`/`let*` による動的束縛はサポートされていますが、**コンパイル済み**
 バックエンドには 2 つの制限があります（インタプリタには影響しません）。実行時に
 計算されるシンボルのリストを束縛する
-[`progv`](../reference/special-forms/progv.md) はコンパイルエラーになり、
-special な `let` の境界を**越えて**脱出する `return`/`return-from` は、そこで
-グローバルを復元しません（通常の脱出とエラーによる中断は問題ありません）。
+[`progv`](../reference/special-forms/progv.md) はコンパイルエラーになり、また
+通常の脱出と special な `let` の境界を**越えて**脱出する
+`return`/`return-from` は束縛を復元しますが、`let` の外側のハンドラで捕捉される
+エラー（および境界を越える `go`、WASM バックエンドで `unwind-protect` /
+`handler-case` も同時に越える `return`）では復元されません。
 
 ## 数値タワー
 

@@ -125,9 +125,11 @@ order wins instead of signaling a conflict.
 Dynamic binding through `let`/`let*` is supported, with two limitations on the
 **compiled** backends (the interpreter is unaffected):
 [`progv`](../reference/special-forms/progv.md) (runtime-computed lists of
-symbols) is a compile error, and a `return`/`return-from` that unwinds *across*
-a special `let` boundary does not restore the global there (normal exit and
-error abort are fine).
+symbols) is a compile error, and while normal exit and a
+`return`/`return-from` that unwinds *across* a special `let` boundary both
+restore the binding, an error caught by a handler outside the `let` (a `go`
+across it, and on the WASM backends a `return` that also crosses an
+`unwind-protect`/`handler-case`) does not.
 
 ## Numeric tower
 

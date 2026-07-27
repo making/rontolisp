@@ -13,20 +13,24 @@ import am.ik.rontolisp.LispMacroExpander;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code let} special form.
  *
  * <p>
- * A binding whose name is a special (dynamically bound) variable is not given a lexical
- * slot: instead the special's global static field is saved, set to the init value, and
- * restored to its previous value when the body exits normally -- a dynamic binding, whose
- * new value is visible (via {@code getstatic}) to any function called during the body.
- * Restore fires on normal completion and, for an error, is moot (the error aborts the
- * program). A {@code return}/{@code return-from} that unwinds across the {@code let}
- * boundary does not restore the field (a known compile-path limitation; the interpreter
- * restores on every exit).
+ * A binding whose name is a special (dynamically bound) variable establishes a
+ * THREAD-SCOPED dynamic binding over the special's {@code _d$} ThreadLocal (interpreter
+ * parity: two http-handler request threads binding the same special must not clobber each
+ * other): {@code _dbind} installs a fresh cell holding the init value and answers the
+ * previous cell, saved in a temp and put back with {@code ThreadLocal.set} when the body
+ * exits normally. The new value is visible (via the dynamic-first {@code _dget} read) to
+ * any function called during the body on THIS thread; other threads keep reading the
+ * {@code _g$} global default. A {@code return}/{@code return-from} that unwinds across
+ * the {@code let} boundary restores through {@link JvmLispCompiler.Ctx#specialBindScopes}
+ * (a plain WASM {@code return} through a trampoline and {@code go} across the binding
+ * remain the known compile-path holes; the interpreter restores on every exit).
  */
 final class JvmLetCompiler {
 
@@ -53,7 +57,7 @@ final class JvmLetCompiler {
 		Set<String> capturedInLet = FreeVarAnalyzer.findCapturedVars(parts.subList(2, parts.size()), letVarNames,
 				ctx.functions.keySet());
 		ctx.boxedVars = new HashSet<>(ctx.boxedVars);
-		// Each dynamic (special) binding established here: {globalFieldIndex, saveSlot}.
+		// Each dynamic (special) binding established here: {tlFieldIndex, saveSlot}.
 		// Restored (reverse order) after the body, before the scope is popped.
 		List<int[]> dynamicRestores = null;
 		if (bindings instanceof LispCons bindingsCons) {
@@ -62,29 +66,38 @@ final class JvmLetCompiler {
 				List<LispVal> pairList = pair.toList();
 				String name = ((LispSymbol) pairList.get(0)).name();
 				if (ctx.specialVars.contains(name)) {
-					// DUAL-BIND (interpreter parity): the global static field is saved
-					// and overwritten with the init (the dynamic binding a called
-					// function reads), AND the same value gets a lexical slot so a
-					// closure built in the body captures it -- the closure may run
-					// after this extent ended and restored the global (cl-ppcre's
-					// end-string). Body reads resolve to the local, which equals the
-					// global within the extent; a setq of the name writes BOTH
+					// DUAL-BIND (interpreter parity): the thread's dynamic binding is
+					// pushed via _dbind (the binding a called function reads through
+					// _dget), AND the same value gets a lexical slot so a closure built
+					// in the body captures it -- the closure may run after this extent
+					// ended and restored the previous binding (cl-ppcre's end-string).
+					// Body reads resolve dynamic-first; a setq of the name writes BOTH
 					// (JvmSetqCompiler).
-					int fieldIndex = Objects.requireNonNull(ctx.globalFields.get(name)).index();
+					JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
+					FieldrefConstant tlField = dyn == null ? null : dyn.fields().get(name);
+					if (dyn == null || tlField == null) {
+						// The pre-pass promised every dynamically-bound special a
+						// ThreadLocal; a miss here must fail the compile loudly, never
+						// fall back to a silently process-global binding.
+						throw new IllegalStateException(
+								"special variable " + name + " is dynamically bound here but has no thread-local store"
+										+ " (SpecialVarCollector.collectDynamicallyBound missed this binding form)");
+					}
 					JvmExprCompiler.compileExpr(pairList.get(1), ctx, className);
 					ctx.emit(Opcode.DUP);
 					ctx.emit(Opcode.GETSTATIC);
-					ctx.emitU2(fieldIndex);
+					ctx.emitU2(tlField.index());
+					ctx.emit(Opcode.SWAP);
+					ctx.emit(Opcode.INVOKESTATIC);
+					ctx.emitU2(dyn.dbind().index());
 					int saveSlot = ctx.allocTemp();
 					ctx.emit(Opcode.ASTORE);
 					ctx.emit(saveSlot);
-					ctx.emit(Opcode.PUTSTATIC);
-					ctx.emitU2(fieldIndex);
 					if (dynamicRestores == null) {
 						dynamicRestores = new ArrayList<>();
 					}
-					dynamicRestores.add(new int[] { fieldIndex, saveSlot });
-					ctx.specialBindScopes.push(new int[] { fieldIndex, saveSlot, ctx.blockTargets.size() });
+					dynamicRestores.add(new int[] { tlField.index(), saveSlot });
+					ctx.specialBindScopes.push(new int[] { tlField.index(), saveSlot, ctx.blockTargets.size() });
 					if (capturedInLet.contains(name)) {
 						int tmpSlot = ctx.allocTemp();
 						ctx.emit(Opcode.ASTORE);
@@ -144,17 +157,20 @@ final class JvmLetCompiler {
 			}
 			JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
 		}
-		// Restore each dynamically bound special to its saved value. This runs with the
-		// body's result on top of the stack; each restore is stack-neutral (aload;
-		// putstatic)
-		// so the result is preserved.
+		// Restore each dynamically bound special to its saved previous cell (possibly
+		// null = no binding on this thread). This runs with the body's result on top of
+		// the stack; each restore is stack-neutral (getstatic tl; aload cell;
+		// ThreadLocal.set) so the result is preserved.
 		if (dynamicRestores != null) {
+			int tlSetIndex = Objects.requireNonNull(ctx.dynVars).tlSet().index();
 			for (int i = dynamicRestores.size() - 1; i >= 0; i--) {
 				int[] restore = dynamicRestores.get(i);
+				ctx.emit(Opcode.GETSTATIC);
+				ctx.emitU2(restore[0]);
 				ctx.emit(Opcode.ALOAD);
 				ctx.emit(restore[1]);
-				ctx.emit(Opcode.PUTSTATIC);
-				ctx.emitU2(restore[0]);
+				ctx.emit(Opcode.INVOKEVIRTUAL);
+				ctx.emitU2(tlSetIndex);
 				ctx.specialBindScopes.pop();
 			}
 		}
