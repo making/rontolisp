@@ -455,6 +455,64 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void fusedIntegerExpressionTreesMatchTheGenericPath() throws Exception {
+		// Integer expression-tree fusion (WasmIntFusionCompiler, todo 194): a nested
+		// arithmetic/bitwise tree keeps its intermediates as raw i64 on the wasm stack
+		// and boxes only at the root, bailing per leaf / per overflow to a fallback
+		// that recomputes through the generic helpers. These pin the equivalences the
+		// fast path must preserve: i64 overflow still promotes to the limb tier
+		// (.kb/wasm-bignum.md's narrowest-tier invariant), a float or ratio leaf takes
+		// the generic result, CL mod/rem/ash sign semantics survive the raw path
+		// (including the mod-by-2^k mask and literal-negative-count ash shortcuts),
+		// and the leaves' side effects run exactly once, left to right.
+		String program = """
+				(print (logand (+ 3 4) 5))
+				(print (logxor (logand 255 170) (logior 15 240)))
+				(print (+ (* 3 5) (- 10 4) (mod 17 5)))
+				(print (mod (+ -10 3) 3))
+				(print (rem (- 3 10) 3))
+				(print (lognot (+ 5 5)))
+				(print (+ (* 4611686018427387904 4) 1))
+				(print (* (+ 4294967296 1) (+ 4294967296 1)))
+				(print (logand (ash 1 100) (ash 3 99)))
+				(print (ash (+ 5 5) -70))
+				(print (ash (+ -5 0) -70))
+				(print (ash (* 1 0) 100))
+				(print (mod (- 0 4294967297) 4294967296))
+				(let ((f 1.5)) (print (+ (logand 3 1) f)))
+				(print (+ (/ 1 2) (+ 1 0) 1))
+				(let ((n 0))
+				  (print (+ (progn (setq n (+ n 1)) n)
+				            (progn (setq n (+ n 10)) n)
+				            (progn (setq n (+ n 100)) n)))
+				  (print n))
+				(defun rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
+				(print (rol32 2882400001 8))
+				(print (mod (ash 1 62) 1000000007))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("""
+				5
+				85
+				23
+				2
+				-1
+				-11
+				18446744073709551617
+				18446744082299486209
+				1267650600228229401496703205376
+				0
+				-1
+				0
+				4294967295
+				2.5
+				5/2
+				123
+				111
+				3454992811
+				145586002""");
+	}
+
+	@Test
 	void floatModAndRemComputeCorrectly() throws Exception {
 		// Regression: float mod/rem on the GC backend used to miscompile. A literal float
 		// operand wrote an invalid f64 opcode (byte 0xff, there is no f64.rem), and a

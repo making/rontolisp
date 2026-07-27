@@ -29,11 +29,18 @@ boxes; Cranelift does neither.
 
 ## Candidate stages (independent, in effort order)
 
-1. **Expression-tree fusion** (medium): inside a nested arithmetic expression,
-   keep the intermediate as a raw i64 on the wasm stack and box only at the
-   root. `(logand (+ a b) mask)` becomes one box instead of three. Limited by
-   function boundaries -- ironclad's `rol32`/`mod32+` are defuns, so their
-   results still box. Estimated 1.5-2x on this benchmark.
+1. **Expression-tree fusion** (medium): DONE 2026-07-27 (`WasmIntFusionCompiler`
+   + `WasmFxRuntimeBuilder`, `.kb/wasm-int-fusion.md`). Measured: 2.9 s ->
+   **~2.0 s on both wasm backends** (~1.45x; the estimate's 2x needed defun
+   inlining that wasmtime 47 does not do -- helper calls for the checked ops
+   and the per-leaf guard remain). Post-stage-1 profile (perf + perfmap):
+   `_int_new` root boxing 9.2%, `_charvec_to_str` + `_str_build` 11% (hmac
+   re-keying runs `replace`/`subseq`/`copy-seq` through the sequence
+   normalizers every iteration), `_rat_add`/`_rat_cmp` singles ~6% (loop
+   counters/bounds -- single ops, correctly unfused), dispatch helpers ~5%,
+   rest = user defuns whose leaves are still boxed `aref` results and params.
+   The remaining 2x is exactly stage 2: unboxed locals/arrays would erase the
+   leaf guards, the root re-box and the aref boxing at once.
 2. **Unboxed i64 locals + typed integer arrays** (large, the real fix): a
    per-function dataflow pass that keeps provably-integer locals as raw i64
    (box only at escape points: calls, stores into refs, returns), plus
@@ -76,11 +83,15 @@ perf report --no-children --stdio
 - [ ] The PBKDF2 benchmark above runs in under ~1 s on WASM Preview 1 and the
   component (or the session records why the wasmtime codegen floor makes a
   higher number the honest limit, with a profile showing no box/unbox traffic
-  left).
+  left). Stage 1 got to ~2.0 s on both; needs stage 2.
 - [ ] `logand`/`logior`/`logxor`/`ash`/`+`/`*` on fixnum-range values allocate
   nothing in a hot loop (pin however the implementation allows -- e.g. a
   wasmtime `-O gc-zeal`-style counter run, or a profile assertion documented in
-  the todo's close-out).
-- [ ] All four backends still agree on `ci-spec.yaml` (bignum promotion at the
+  the todo's close-out). Stage 1 partial: INTERMEDIATES of a fused tree
+  allocate nothing, but each out-of-i31 root result and every boxed leaf still
+  do.
+- [x] All four backends still agree on `ci-spec.yaml` (bignum promotion at the
   i64 overflow boundary is the risky edge -- `.kb/wasm-bignum.md`'s
-  narrowest-tier invariant must survive the raw path).
+  narrowest-tier invariant must survive the raw path). Stage 1 pinned by the
+  `fused-integer-expression-trees` case +
+  `WasmLispCompilerIntegrationTest.fusedIntegerExpressionTreesMatchTheGenericPath`.

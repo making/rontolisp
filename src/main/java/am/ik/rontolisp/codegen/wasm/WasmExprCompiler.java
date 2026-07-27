@@ -413,16 +413,33 @@ final class WasmExprCompiler {
 				}
 			}
 			switch (sym.name()) {
-				case LispNames.ADD ->
-					WasmArithCompiler.compile(cons, ctx, Instruction.F64_ADD, WasmLispCompiler.FUNC_RAT_ADD);
-				case LispNames.SUB ->
-					WasmArithCompiler.compile(cons, ctx, Instruction.F64_SUB, WasmLispCompiler.FUNC_RAT_SUB);
-				case LispNames.MUL ->
-					WasmArithCompiler.compile(cons, ctx, Instruction.F64_MUL, WasmLispCompiler.FUNC_RAT_MUL);
+				case LispNames.ADD -> {
+					if (!WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+						WasmArithCompiler.compile(cons, ctx, Instruction.F64_ADD, WasmLispCompiler.FUNC_RAT_ADD);
+					}
+				}
+				case LispNames.SUB -> {
+					if (!WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+						WasmArithCompiler.compile(cons, ctx, Instruction.F64_SUB, WasmLispCompiler.FUNC_RAT_SUB);
+					}
+				}
+				case LispNames.MUL -> {
+					if (!WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+						WasmArithCompiler.compile(cons, ctx, Instruction.F64_MUL, WasmLispCompiler.FUNC_RAT_MUL);
+					}
+				}
 				case LispNames.DIV ->
 					WasmArithCompiler.compile(cons, ctx, Instruction.F64_DIV, WasmLispCompiler.FUNC_RAT_DIV);
-				case LispNames.MOD -> WasmArithCompiler.compileModRem(cons, ctx, WasmLispCompiler.FUNC_RAT_MOD);
-				case LispNames.REM -> WasmArithCompiler.compileModRem(cons, ctx, WasmLispCompiler.FUNC_RAT_REM);
+				case LispNames.MOD -> {
+					if (!WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+						WasmArithCompiler.compileModRem(cons, ctx, WasmLispCompiler.FUNC_RAT_MOD);
+					}
+				}
+				case LispNames.REM -> {
+					if (!WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+						WasmArithCompiler.compileModRem(cons, ctx, WasmLispCompiler.FUNC_RAT_REM);
+					}
+				}
 				case LispNames.EQ -> compileComparison(cons, ctx, Instruction.I32_EQ, Instruction.F64_EQ);
 				case LispNames.LT -> compileComparison(cons, ctx, Instruction.I32_LT_S, Instruction.F64_LT);
 				case LispNames.GT -> compileComparison(cons, ctx, Instruction.I32_GT_S, Instruction.F64_GT);
@@ -979,7 +996,10 @@ final class WasmExprCompiler {
 				case LispNames.ISQRT -> WasmIsqrtCompiler.compile(cons, ctx);
 				case LispNames.SIGNUM -> WasmSignumCompiler.compile(cons, ctx);
 				case LispNames.LOGAND -> {
-					if (isBinaryCall(cons)) {
+					if (WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+						// compiled as a fused integer expression tree
+					}
+					else if (isBinaryCall(cons)) {
 						WasmBitwiseCompiler.compileLogand(cons, ctx);
 					}
 					else {
@@ -987,7 +1007,10 @@ final class WasmExprCompiler {
 					}
 				}
 				case LispNames.LOGIOR -> {
-					if (isBinaryCall(cons)) {
+					if (WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+						// compiled as a fused integer expression tree
+					}
+					else if (isBinaryCall(cons)) {
 						WasmBitwiseCompiler.compileLogior(cons, ctx);
 					}
 					else {
@@ -995,15 +1018,26 @@ final class WasmExprCompiler {
 					}
 				}
 				case LispNames.LOGXOR -> {
-					if (isBinaryCall(cons)) {
+					if (WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+						// compiled as a fused integer expression tree
+					}
+					else if (isBinaryCall(cons)) {
 						WasmBitwiseCompiler.compileLogxor(cons, ctx);
 					}
 					else {
 						WasmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx);
 					}
 				}
-				case LispNames.LOGNOT -> WasmBitwiseCompiler.compileLognot(cons, ctx);
-				case LispNames.ASH -> WasmBitwiseCompiler.compileAsh(cons, ctx);
+				case LispNames.LOGNOT -> {
+					if (!WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+						WasmBitwiseCompiler.compileLognot(cons, ctx);
+					}
+				}
+				case LispNames.ASH -> {
+					if (!WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+						WasmBitwiseCompiler.compileAsh(cons, ctx);
+					}
+				}
 				case LispNames.INTEGER_LENGTH -> WasmBitwiseCompiler.compileIntegerLength(cons, ctx);
 				case LispNames.LOGBITP -> WasmBitwiseCompiler.compileLogbitp(cons, ctx);
 				case LispNames.LIST_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandListStar(cons), ctx);

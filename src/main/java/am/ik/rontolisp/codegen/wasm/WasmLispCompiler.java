@@ -213,7 +213,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * after the fixed and {@code --simd} types in {@code asyncMode} only.
 	 */
 	private int asyncTypeBase() {
-		return BIGINT_TYPE_LAST + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
+		return FX_TYPE_LAST + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
 	}
 
 	/**
@@ -757,12 +757,38 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int BIGINT_FUNC_LAST = FUNC_BIG_FDIV;
 
+	// The unboxed-fixnum fusion helpers (WasmFxRuntimeBuilder, always present, appended
+	// after the limb runtime so every constant above keeps its value). Inside a fused
+	// integer expression tree (WasmIntFusionCompiler) the intermediates stay raw i64;
+	// these carry the guarded leaf unbox and the overflow checks, each answering an
+	// (i64, i32 flag) pair -- a non-zero flag bails the fast path to its boxed fallback.
+
+	// _fx_val ((ref null eq)) -> (i64, i32 ok): guarded unbox of an i31 / TYPE_BIGNUM.
+	static final int FUNC_FX_VAL = FUNC_BIG_FDIV + 1;
+
+	// _fx_add/_fx_sub/_fx_mul (i64, i64) -> (i64, i32 ovf): checked i64 arithmetic.
+	static final int FUNC_FX_ADD = FUNC_FX_VAL + 1;
+
+	static final int FUNC_FX_SUB = FUNC_FX_ADD + 1;
+
+	static final int FUNC_FX_MUL = FUNC_FX_SUB + 1;
+
+	// _fx_ash (i64 v, i64 s) -> (i64, i32 ovf): CL ash on the i64 range.
+	static final int FUNC_FX_ASH = FUNC_FX_MUL + 1;
+
+	// _fx_mod/_fx_rem (i64, i64) -> i64: CL mod / truncating rem (trap on 0 divisor).
+	static final int FUNC_FX_MOD = FUNC_FX_ASH + 1;
+
+	static final int FUNC_FX_REM = FUNC_FX_MOD + 1;
+
+	static final int FX_FUNC_LAST = FUNC_FX_REM;
+
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
-	// under --simd. Fixed indices relative to BIGINT_FUNC_LAST, so every constant
+	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = BIGINT_FUNC_LAST + 1;
+	static final int FUNC_VEC_BASE = FX_FUNC_LAST + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -772,10 +798,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// character-vector normalizer (_charvec_to_str), the three UTF-8 walking helpers
 	// (_str_char_count, _str_char_at, _str_char_byte_offset) and the two case-fold
 	// helpers (_char_upcase, _char_downcase), the thirteen reader # dispatch
-	// helpers, the three bignum helpers (_int_new, _int_val, _print_i64_no_nl) and the
-	// limb bigint runtime (_limb_* / _big_*, WasmBigIntRuntimeBuilder) -- plus, under
+	// helpers, the three bignum helpers (_int_new, _int_val, _print_i64_no_nl), the
+	// limb bigint runtime (_limb_* / _big_*, WasmBigIntRuntimeBuilder) and the
+	// unboxed-fixnum fusion helpers (_fx_*, WasmFxRuntimeBuilder) -- plus, under
 	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = BIGINT_FUNC_LAST + 1;
+	static final int FUNC_USER_BASE = FX_FUNC_LAST + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -991,6 +1018,23 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int BIGINT_TYPE_LAST = TYPE_BIG_TO_F64;
 
+	// --- the unboxed-fixnum fusion helper signatures (always present) --------------
+	//
+	// The _fx_* helpers of WasmFxRuntimeBuilder (integer expression-tree fusion). The
+	// checked shapes return an (i64, i32 flag) pair -- multi-value results, so they
+	// need their own entries.
+
+	// _fx_val ((ref null eq)) -> (i64, i32)
+	static final int TYPE_FX_VAL = BIGINT_TYPE_LAST + 1; // 54
+
+	// _fx_add/_fx_sub/_fx_mul/_fx_ash (i64, i64) -> (i64, i32)
+	static final int TYPE_FX_BIN = TYPE_FX_VAL + 1; // 55
+
+	// _fx_mod/_fx_rem (i64, i64) -> i64
+	static final int TYPE_FX_DIV = TYPE_FX_BIN + 1; // 56
+
+	static final int FX_TYPE_LAST = TYPE_FX_DIV;
+
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
 	// Four types, emitted ONLY under --simd, appended after the reader signatures and
@@ -1002,7 +1046,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// array (mut v128) -- the lane-group storage of a packed float array under --simd.
 	// A bare array comptype (implicitly sub final), so a subtype of eq. array.new_default
 	// zeroes every lane, which is what lets the kernels drop their scalar tails.
-	static final int TYPE_V128ARR = BIGINT_TYPE_LAST + 1; // 54
+	static final int TYPE_V128ARR = FX_TYPE_LAST + 1; // 57
 
 	// struct {i32 count, i32 kind, (ref null eq) groups} -- the --simd replacement for
 	// the
@@ -1014,13 +1058,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_V128ARR, and `groups` holds ceil(count / lanes) + 1 groups -- the trailing one
 	// a
 	// zero sentinel so matvec's shuffle window can always read one group past its last.
-	static final int TYPE_VBLOCK = BIGINT_TYPE_LAST + 2; // 55
+	static final int TYPE_VBLOCK = FX_TYPE_LAST + 2; // 58
 
 	// _v_get ((ref null eq) vblock, i32 index) -> f64
-	static final int TYPE_V_GET = BIGINT_TYPE_LAST + 3; // 56
+	static final int TYPE_V_GET = FX_TYPE_LAST + 3; // 59
 
 	// _v_set ((ref null eq) vblock, i32 index, f64 value) -> f64 (the value AS STORED)
-	static final int TYPE_V_SET = BIGINT_TYPE_LAST + 4; // 57
+	static final int TYPE_V_SET = FX_TYPE_LAST + 4; // 60
 
 	// How many type entries the --simd block appends.
 	static final int SIMD_TYPE_COUNT = 4;
@@ -3012,6 +3056,29 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.write(Type.F64);
 				});
+				// type 54 (TYPE_FX_VAL): _fx_val ((ref null eq)) -> (i64, i32)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(2);
+					w.write(Type.I64);
+					w.write(Type.I32);
+				});
+				// type 55 (TYPE_FX_BIN): _fx_add/_fx_sub/_fx_mul/_fx_ash (i64, i64) ->
+				// (i64, i32)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(2);
+					w.write(Type.I64);
+					w.write(Type.I64);
+					w.write(2);
+					w.write(Type.I64);
+					w.write(Type.I32);
+				});
+				// type 56 (TYPE_FX_DIV): _fx_mod/_fx_rem (i64, i64) -> i64
+				types.addFunc(new Type[] { Type.I64, Type.I64 }, new Type[] { Type.I64 });
 				if (this.simd) {
 					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
@@ -3389,6 +3456,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_RAT_CMP); // _big_eq
 				fnDef.addFunction(TYPE_RAT_GET); // _big_hash
 				fnDef.addFunction(TYPE_BIG_TRIPLE); // _big_fdiv
+				fnDef.addFunction(TYPE_FX_VAL); // _fx_val
+				fnDef.addFunction(TYPE_FX_BIN); // _fx_add
+				fnDef.addFunction(TYPE_FX_BIN); // _fx_sub
+				fnDef.addFunction(TYPE_FX_BIN); // _fx_mul
+				fnDef.addFunction(TYPE_FX_BIN); // _fx_ash
+				fnDef.addFunction(TYPE_FX_DIV); // _fx_mod
+				fnDef.addFunction(TYPE_FX_DIV); // _fx_rem
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -3839,6 +3913,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigEqBody());
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigHashBody());
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigFdivBody());
+				// the unboxed-fixnum fusion helper bodies (FUNC_FX_VAL .. FUNC_FX_REM)
+				code.addFunction(WasmFxRuntimeBuilder.buildFxValBody());
+				code.addFunction(WasmFxRuntimeBuilder.buildFxAddBody(false));
+				code.addFunction(WasmFxRuntimeBuilder.buildFxAddBody(true));
+				code.addFunction(WasmFxRuntimeBuilder.buildFxMulBody());
+				code.addFunction(WasmFxRuntimeBuilder.buildFxAshBody());
+				code.addFunction(WasmFxRuntimeBuilder.buildFxModBody());
+				code.addFunction(WasmFxRuntimeBuilder.buildFxRemBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

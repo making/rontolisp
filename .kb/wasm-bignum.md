@@ -133,12 +133,14 @@ the `exact-integers-beyond-the-i64-range` ci-spec case.
 ## Index bookkeeping
 
 The limb block appends after the boxed-i64 helpers exactly like the bignum block
-did: functions `FUNC_LIMB_OF .. FUNC_BIG_FDIV` (then
-`FUNC_VEC_BASE`/`FUNC_USER_BASE` rebase on `BIGINT_FUNC_LAST`), types
+did: functions `FUNC_LIMB_OF .. FUNC_BIG_FDIV`, then the unboxed-fixnum fusion
+helpers `FUNC_FX_VAL .. FUNC_FX_REM` (`.kb/wasm-int-fusion.md`; then
+`FUNC_VEC_BASE`/`FUNC_USER_BASE` rebase on `FX_FUNC_LAST`), types
 `TYPE_LIMBS`/`TYPE_BIGINT` (one rec group, 48-49) plus the four helper
 signatures (`TYPE_BIG_SHIFT`/`TYPE_BIG_TRIPLE`/`TYPE_BIG_GROW`/
-`TYPE_BIG_TO_F64`, 50-53) after `TYPE_PRINT_I64`; the conditional
-`--simd`/async/instance blocks shift past them via `BIGINT_TYPE_LAST`. Every
+`TYPE_BIG_TO_F64`, 50-53) after `TYPE_PRINT_I64` and the three fusion
+signatures (`TYPE_FX_VAL`/`TYPE_FX_BIN`/`TYPE_FX_DIV`, 54-56); the conditional
+`--simd`/async/instance blocks shift past them via `FX_TYPE_LAST`. Every
 module carries the block (arithmetic on ANY module can overflow into the limb
 tier at runtime), like the reader helpers; the remaining signatures reuse
 existing type entries (`TYPE_CALLABLE_BASE`(+1), `TYPE_RAT_CMP`, `TYPE_RAT_GET`,
