@@ -42,9 +42,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * of which role actually got in;</li>
  * <li><b>SCRAM-SHA-256</b> -- the same probe against the SCRAM-only role. It used to be
  * separately opt-in because its 4096-round PBKDF2 ran for over two minutes interpreted;
- * todo 188 made that ~50 s (and ~1 s on the JVM), so it is an ordinary leg again. The
- * server still runs with a raised {@code authentication_timeout} -- see {@link #POSTGRES}
- * for why;</li>
+ * todo 188 made that ~50 s (~1 s on the JVM, ~3 s on the component), so it is an ordinary
+ * leg again and the server runs with the DEFAULT {@code authentication_timeout} (60
+ * s);</li>
  * <li><b>CRUD</b> -- create / insert / select / update / delete / drop through
  * {@code exec-query}, plus a parameterised statement run twice through
  * {@code prepare-query} + {@code exec-prepared} so the extended protocol is covered too.
@@ -195,14 +195,14 @@ class ClPostgresE2eTest {
 		// hba_file rather than an edit of the generated one: the entrypoint passes these
 		// args to the bootstrap server too, so the ladder is in force from the start.
 		//
-		// The raised authentication_timeout is for the SCRAM legs. With the 60-second
-		// default a connection that outruns it dies as "READ-BYTE: end of file" while the
-		// server logs "canceling authentication due to timeout". After todo 188 the
-		// interpreter's 4096-round PBKDF2 takes ~50 s and the WASM component ~28 s here,
-		// so the default would leave under 20% of margin on the slowest leg -- and the
-		// component's share is the module-size tax todo 188 has NOT closed yet. Drop this
-		// flag when that lands, not before: the failure it prevents is a flaky test.
-		.withCommand("postgres", "-c", "hba_file=/etc/postgresql/pg_hba.conf", "-c", "authentication_timeout=600")
+		// The SCRAM legs run against the DEFAULT authentication_timeout (60 s). A leg
+		// that outruns it dies as "READ-BYTE: end of file" while the server logs
+		// "canceling authentication due to timeout"; the slowest leg is the
+		// interpreter's 4096-round PBKDF2 at ~50 s (~1 s on the JVM, ~3 s on the
+		// component since the WASM module-size tax fell -- final GC types plus the
+		// _start heap pre-grow, .kb/wasm-gc-final-types.md /
+		// .kb/wasm-gc-heap-pregrow.md).
+		.withCommand("postgres", "-c", "hba_file=/etc/postgresql/pg_hba.conf")
 		// Twice: once for the bootstrap server that runs the init script, once for real.
 		.waitingFor(Wait.forLogMessage(".*database system is ready to accept connections.*\\s", 2));
 

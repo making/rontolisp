@@ -1094,6 +1094,14 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int HEAP_PTR_ADDR = 84;
 
+	// Size of the transient _start-prologue allocation that forces the engine to grow
+	// its GC heap once, up front (see the emission site in compile() and
+	// .kb/wasm-gc-heap-pregrow.md). 16 MiB comfortably dwarfs the live set of the
+	// largest library stack shipped today (the cl-postgres stack is low single-digit
+	// MB); the array is garbage immediately, so the cost is a one-time zeroing plus
+	// the retained heap capacity, not a live copy on every collection.
+	static final int GC_HEAP_PREGROW_BYTES = 16 * 1024 * 1024;
+
 	// Reader cursor/end (absolute byte offsets) used by the read/load runtime.
 	static final int READ_CURSOR_ADDR = 88;
 
@@ -1891,6 +1899,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The heap pointer (HEAP_PTR_ADDR) is seeded by an active data segment at
 		// instantiation (see writeDataSection below), not here: its value depends on
 		// the final static-data size, which is unknown while this body is built.
+
+		// Pre-grow the engine's GC heap before any user code runs: one large,
+		// immediately-dropped byte-array allocation. wasmtime's copying collector
+		// only grows the heap when a single allocation cannot fit in the space a
+		// collection frees, so a program whose long-lived environment (symbols,
+		// wrappers, library data) occupies a sizable share of the heap otherwise
+		// collects -- copying the entire live set -- every few hundred KB of
+		// allocation, and the cost of every hot loop scales with the amount of code
+		// loaded. The heap never shrinks, so this single allocation permanently buys
+		// headroom instead. See .kb/wasm-gc-heap-pregrow.md.
+		startWriter.write(Instruction.I32_CONST);
+		startWriter.writeSignedLeb128(GC_HEAP_PREGROW_BYTES);
+		startWriter.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		startWriter.writeSignedLeb128(TYPE_STR_BYTES);
+		startWriter.write(Instruction.DROP);
 
 		// EH mode: an uncaught $lisp-cond throw escaping the top level must keep
 		// today's trap shape (host-visible exit class), so the whole body runs inside

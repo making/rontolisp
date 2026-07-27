@@ -15,11 +15,11 @@
 ;; well under a second on any backend, the interpreter included -- the library
 ;; tables uax-15 would otherwise build at load time are derived at compile time
 ;; and built only if something asks for one, and nothing here does.
-;; trust, password and md5 authentication all complete; SCRAM-SHA-256 also
-;; completes, but on the INTERPRETER only if the server allows enough time: its
-;; 4096-round PBKDF2 outruns the default 60-second authentication_timeout in
-;; interpreted Lisp, so start the server with -c authentication_timeout=600 for
-;; it. The compiled backend is fast enough for the default.
+;; trust, password, md5 and SCRAM-SHA-256 authentication all complete within
+;; the default 60-second authentication_timeout. The INTERPRETER cuts it
+;; closest: its 4096-round PBKDF2 takes ~50 s, so on a slow machine start the
+;; server with -c authentication_timeout=600 for headroom. The compiled
+;; backends finish in seconds.
 ;;
 ;; On WASM the driver needs --component (TCP is WASI 0.3 sockets; Preview 1 has
 ;; no host socket API):

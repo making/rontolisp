@@ -51,10 +51,10 @@ public enum Type implements Codable {
 	// Type group
 	/** Rec group marker. */
 	REC(0x4E), //
-	/** Sub type marker. */
-	SUB(0x4F), //
+	/** Sub type marker (open, may have subtypes). */
+	SUB(0x50), //
 	/** Sub-final type marker. */
-	SUB_FINAL(0x50) //
+	SUB_FINAL(0x4F) //
 	;
 
 	private final int code;

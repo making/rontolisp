@@ -61,12 +61,13 @@ classpath -- so no packaged jar is required.
 
 Three things the test had to encode:
 
-1. `postgres -c authentication_timeout=600`. With the 60-second default a rung
+1. The DEFAULT `authentication_timeout` (60 s) is enough on every backend. A leg
    that outruns it fails as `READ-BYTE: end of file` while the server log says
-   `FATAL: canceling authentication due to timeout`. Still needed after
-   `.todo/188`: the interpreter's PBKDF2 is ~50 s here, under 20% of margin, and
-   the component's ~28 s carries the WASM module-size tax that todo has not
-   closed. Drop the flag when that lands.
+   `FATAL: canceling authentication due to timeout`; the slowest leg is the
+   interpreter's PBKDF2 at ~50 s. The test used to raise the timeout to 600 s
+   while the component leg carried the WASM module-size tax (~28 s); todo-188
+   closed that (final GC types + `_start` heap pre-grow, ~3 s), so the raise is
+   gone.
 2. The component leg connects to the container's IP ADDRESS, not its network
    alias: `tcp-connect` takes only IPv4 literals on WASM (`.todo/048`, which now
    also records the ugly failure mode a hostname produces through a library).

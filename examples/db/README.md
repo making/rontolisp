@@ -51,10 +51,11 @@ wasmCloud runs the same component under `wash dev` with
 
 ## Notes
 
-- **SCRAM-SHA-256** completes on all backends, but on the interpreter only if the
-  server allows enough time (`-c authentication_timeout=600`): its 4096-round
-  PBKDF2 outruns the default 60s timeout when interpreted. `trust`, `password`
-  and `md5` auth are unaffected.
+- **SCRAM-SHA-256** completes on all backends within PostgreSQL's default
+  60-second `authentication_timeout`. The interpreter is the slow one: its
+  4096-round PBKDF2 takes ~50 s, so on a slow machine give the server headroom
+  with `-c authentication_timeout=600`. The compiled backends finish in seconds;
+  `trust`, `password` and `md5` auth are unaffected.
 - **TLS is interpreter/JVM only.** A connection that negotiates SSL cannot work
   under WASM; use plain TCP (the default `:no`).
 - **wasmCloud addressing.** wash routes loopback to a per-workload virtual
