@@ -124,12 +124,18 @@ public final class WasmWriter {
 	}
 
 	/**
-	 * Write a heap type (abstract or concrete index).
+	 * Write a heap type (abstract or concrete index). The two share one int parameter,
+	 * disambiguated by range: every abstract heap type code lives in {@code 0x60-0x7F}
+	 * ({@code exn}=0x69 through {@code none}=0x71 today), so values there encode as the
+	 * negative single-byte form and anything below is a concrete type index. A module
+	 * whose {@code ref.test}/{@code ref.cast}/{@code ref.null} targets ever reach type
+	 * index 0x60 (96) would collide with the abstract range -- the emitter keeps its
+	 * runtime types well below that.
 	 * @param heapType the heap type code or index
 	 * @return this instance for chaining
 	 */
 	public WasmWriter writeHeapType(int heapType) {
-		if (heapType >= 0x40) {
+		if (heapType >= 0x60) {
 			// Abstract heap type (e.g. i31=0x6C, eq=0x6D, any=0x6E)
 			// Convert to signed value so LEB128 produces the correct single byte
 			return this.writeSignedLeb128(heapType - 0x80);

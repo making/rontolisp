@@ -17,6 +17,11 @@ public enum Type implements Codable {
 	F64(0x7C), //
 	/** 128-bit SIMD vector type. */
 	V128(0x7B), //
+	// wasm-GC packed storage types (valid only as array/struct FIELD storage types)
+	/** 8-bit packed storage type (wasm-GC field storage only). */
+	I8_STORAGE(0x78), //
+	/** 16-bit packed storage type (wasm-GC field storage only). */
+	I16_STORAGE(0x77), //
 	/** Function reference type. */
 	FUNCREF(0x70), //
 	/** External reference type. */
