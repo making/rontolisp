@@ -76,6 +76,15 @@ final class WasmLengthCompiler {
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		ctx.writer.write(Instruction.ELSE);
 
+		// A packed integer vector: rank-1 by construction, so its length is array.len.
+		WasmArrayCompiler.testIntVector(ctx, valSlot);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		WasmArrayCompiler.emitPackedIntLen(ctx, valSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.ELSE);
+
 		// if (val is a TYPE_STRING struct)
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(valSlot);
@@ -263,6 +272,7 @@ final class WasmLengthCompiler {
 
 		ctx.writer.write(Instruction.END); // array/hash-table-vs-list if
 		ctx.writer.write(Instruction.END); // outer if (string)
+		ctx.writer.write(Instruction.END); // packed integer vector if
 		ctx.writer.write(Instruction.END); // outermost if (packed farray)
 	}
 

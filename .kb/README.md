@@ -27,6 +27,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [reader-features.md](reader-features.md) -- `#+`/`#-` feature conditionals, `*features*`, `#|...|#` block comments, `#.` handling, `#N@(...)` + the readtable no-ops
 - [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams runtime; component stdin (stdin.lisp)
 - [load-inliner.md](load-inliner.md) -- compile-time `load` inlining (`LoadInliner`)
+- [packed-integer-vectors.md](packed-integer-vectors.md) -- `(unsigned-byte 8|16|32)` rank-1 make-array packs (mask-store / unsigned-read semantics on every backend, `#N@(...)` literal, `%array-alike` subseq lowering, the wasm `TYPE_I8ARR..TYPE_I32ARR` bare arrays + fused aref/aset raw paths + defun inlining, the JVM `long[]` `_iv*` runtime, and the `writeHeapType` index>=64 encoding fix)
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
 - [wasi-component.md](wasi-component.md) -- `--component` WASI 0.3 component output
 - [wit.md](wit.md) -- `am.ik.wit` WIT parser/printer library + `WitResolver`, the model-based `--emit-wit` emission (`WasiWitDefinitions` + fixtures + generator), the blob-variant renaming, the settled `WitTypeMapper` table (the `result<T,E>` = condition-everywhere decision record), `rontolisp:wit-export` (a world as the authoritative export list) and `rontolisp:wit-import` (calling a WIT interface: the per-backend lowering, the provider decision record, `wit.lisp`)

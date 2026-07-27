@@ -844,6 +844,15 @@ public final class LispNames {
 	public static final String ARRAY_BECOME = "%ARRAY-BECOME";
 
 	/**
+	 * {@code (%array-alike seq n)} allocates a fresh zero-filled rank-1 array of length
+	 * {@code n} with the SAME representation as {@code seq}: a packed integer vector
+	 * yields a packed vector of the same width, anything else a general (boxed) vector.
+	 * The {@code subseq} vector lowering allocates through it so a subsequence of a
+	 * packed vector stays packed on every backend.
+	 */
+	public static final String ARRAY_ALIKE = "%ARRAY-ALIKE";
+
+	/**
 	 * The {@code fill-pointer} built-in function (the fill pointer of a vector). Also a
 	 * {@code setf} place (target {@link #SET_FILL_POINTER}).
 	 */

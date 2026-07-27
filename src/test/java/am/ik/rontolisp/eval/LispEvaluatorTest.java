@@ -8460,4 +8460,85 @@ class LispEvaluatorTest {
 		assertThat(evalUpcase("(WITH-INPUT-FROM-STRING (S \"foo\") (READ S))").print()).isEqualTo("FOO");
 	}
 
+	@Test
+	void packedIntVectorMakeArrayMasksAndReadsUnsigned() {
+		// .kb/packed-integer-vectors.md: stores mask to the width, reads widen
+		// unsigned, setf returns the value AS STORED.
+		// let* sequencing keeps the program order-independent, matching the wasm test
+		// (compiled list arguments evaluate right-to-left, .todo/014).
+		assertThat(eval("""
+				(let* ((a (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				       (stored (setf (aref a 1) 300))
+				       (readback (aref a 1)))
+				  (list stored readback (aref a 0) (length a) a))
+				""").print()).isEqualTo("(44 44 7 4 #(7 44 7 7))");
+		assertThat(eval("(make-array 3 :element-type '(unsigned-byte 16) :initial-contents '(1 70000 3))").print())
+			.isEqualTo("#(1 4464 3)");
+		assertThat(eval("""
+				(let ((a (make-array 2 :element-type '(unsigned-byte 32))))
+				  (setf (aref a 0) 4294967295)
+				  (setf (aref a 1) 4294967296)
+				  a)
+				""").print()).isEqualTo("#(4294967295 0)");
+	}
+
+	@Test
+	void packedIntVectorIntrospection() {
+		assertThat(eval("""
+				(let ((a (make-array 3 :element-type '(unsigned-byte 8))))
+				  (list (array-element-type a) (arrayp a) (vectorp a) (array-dimensions a)
+				        (typep a '(simple-array (unsigned-byte 8) (*)))))
+				""").print()).isEqualTo("((UNSIGNED-BYTE 8) T T (3) T)");
+		// A rank-n / fill-pointer / adjustable combination keeps the general boxed
+		// representation (element type reads back t).
+		assertThat(eval("(array-element-type (make-array '(2 2) :element-type '(unsigned-byte 8)))").print())
+			.isEqualTo("T");
+		assertThat(eval("(array-element-type (make-array 4 :element-type '(unsigned-byte 8) :fill-pointer 2))").print())
+			.isEqualTo("T");
+	}
+
+	@Test
+	void packedIntVectorSubseqCopySeqReplacePreserveThePackedType() {
+		assertThat(eval("""
+				(let* ((a (make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(9 8 7 6)))
+				       (s (subseq a 1 3)))
+				  (setf (aref s 0) 300)
+				  (list s (array-element-type s) a))
+				""").print()).isEqualTo("(#(44 7) (UNSIGNED-BYTE 8) #(9 8 7 6))");
+		assertThat(eval("""
+				(let* ((a (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3)))
+				       (c (copy-seq a)))
+				  (list c (array-element-type c)))
+				""").print()).isEqualTo("(#(1 2 3) (UNSIGNED-BYTE 8))");
+		// replace mask-stores element-wise into a packed target.
+		assertThat(eval("""
+				(let ((dst (make-array 3 :element-type '(unsigned-byte 8)))
+				      (src #(300 2 3)))
+				  (replace dst src)
+				  dst)
+				""").print()).isEqualTo("#(44 2 3)");
+	}
+
+	@Test
+	void packedIntVectorReaderLiteralAndRowMajor() {
+		// ironclad's #N@(...) table syntax reads packed for the 8/16/32 widths.
+		assertThat(eval("(list #8@(1 2 300) (array-element-type #32@(1 2)))").print())
+			.isEqualTo("(#(1 2 44) (UNSIGNED-BYTE 32))");
+		assertThat(eval("""
+				(let ((a #8@(1 2 3)))
+				  (%row-major-aset a 1 999)
+				  (list (row-major-aref a 1) a))
+				""").print()).isEqualTo("(231 #(1 231 3))");
+	}
+
+	@Test
+	void packedIntVectorRejectsNonIntegerStoresAndFillPointerSurface() {
+		assertThatThrownBy(() -> eval("(setf (aref (make-array 2 :element-type '(unsigned-byte 8)) 0) 1.5)"))
+			.hasMessageContaining("integer");
+		assertThatThrownBy(() -> eval("(aref (make-array 2 :element-type '(unsigned-byte 8)) 5)"))
+			.hasMessageContaining("out of range");
+		assertThatThrownBy(() -> eval("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
+			.hasMessageContaining("packed integer vector");
+	}
+
 }

@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
@@ -8,9 +9,14 @@ import am.ik.jvm.Opcode;
 
 /**
  * Compiles the internal {@code %arrayp} predicate used by the {@code vector}/
- * {@code array}/{@code sequence} type specifiers. An array is a
+ * {@code array}/{@code sequence} type specifiers. A general array is a
  * {@code java.util.ArrayList} at runtime (see {@link JvmArrayRuntimeBuilder}), and no
- * other value uses that class, so a plain {@code instanceof} suffices.
+ * other value uses that class, so a plain {@code instanceof} suffices. When the program
+ * uses a packed representation, the packed shapes are arrays too: a {@code long[]}
+ * (packed integer vector, {@link JvmIntArrayRuntimeBuilder}) and a
+ * {@code double[]}/{@code float[]} (packed float array,
+ * {@link JvmFloatArrayRuntimeBuilder}) each get a preceding {@code instanceof} branch;
+ * without the gates the default build is byte-identical.
  */
 final class JvmArraypCompiler {
 
@@ -20,65 +26,46 @@ final class JvmArraypCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		// When the program uses packed float arrays, a packed double[]/float[] is also an
-		// array: if (v instanceof double[] || v instanceof float[]) return t; else the
-		// general ArrayList check below.
-		if (ctx.usesFloatArray) {
-			// if (v instanceof double[]) { pop; return t; }
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("[D")).index());
-			int ifNotDoublePos = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.POP);
-			JvmEmitHelper.compileTrue(ctx);
-			int gotoEndDouble = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifNotDoublePos, ctx.code.size());
-			// if (v instanceof float[]) { pop; return t; }
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("[F")).index());
-			int ifNotFloatPos = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.POP);
-			JvmEmitHelper.compileTrue(ctx);
-			int gotoEndFloat = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifNotFloatPos, ctx.code.size());
-			// fall through with the value still on the stack for the ArrayList check
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).index());
-			int ifNotListPos = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			JvmEmitHelper.compileTrue(ctx);
-			int gotoEnd2 = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifNotListPos, ctx.code.size());
-			ctx.emit(Opcode.ACONST_NULL);
-			JvmEmitHelper.patchBranch(ctx, gotoEndDouble, ctx.code.size());
-			JvmEmitHelper.patchBranch(ctx, gotoEndFloat, ctx.code.size());
-			JvmEmitHelper.patchBranch(ctx, gotoEnd2, ctx.code.size());
-			return;
+		// The packed representations in dispatch order (iv then fv, matching the
+		// accessor chain); each emits "if (v instanceof <cls>) { pop; return t; }".
+		List<String> packedClasses = new ArrayList<>();
+		if (ctx.usesIntArray) {
+			packedClasses.add("[J");
 		}
+		if (ctx.usesFloatArray) {
+			packedClasses.add("[D");
+			packedClasses.add("[F");
+		}
+		List<Integer> gotoEnds = new ArrayList<>();
+		for (String cls : packedClasses) {
+			ctx.emit(Opcode.DUP);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8(cls)).index());
+			int ifNotPackedPos = ctx.code.size();
+			ctx.emit(Opcode.IFEQ);
+			ctx.emitU2(0);
+			ctx.emit(Opcode.POP);
+			JvmEmitHelper.compileTrue(ctx);
+			gotoEnds.add(ctx.code.size());
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, ifNotPackedPos, ctx.code.size());
+		}
+		// fall through with the value still on the stack for the ArrayList check
 		ctx.emit(Opcode.INSTANCEOF);
 		ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).index());
 		int ifNotListPos = ctx.code.size();
 		ctx.emit(Opcode.IFEQ);
 		ctx.emitU2(0);
 		JvmEmitHelper.compileTrue(ctx);
-		int gotoEndPos = ctx.code.size();
+		gotoEnds.add(ctx.code.size());
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
 		JvmEmitHelper.patchBranch(ctx, ifNotListPos, ctx.code.size());
 		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		for (int gotoEnd : gotoEnds) {
+			JvmEmitHelper.patchBranch(ctx, gotoEnd, ctx.code.size());
+		}
 	}
 
 }

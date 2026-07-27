@@ -95,6 +95,18 @@ public sealed interface Token {
 	}
 
 	/**
+	 * Packed integer-vector literal open token ({@code #8@(} / {@code #16@(} /
+	 * {@code #32@(} -- ironclad's array-reader dispatch syntax); closed by the
+	 * {@link RightParen} matching the opening parenthesis. Read into a rank-1
+	 * {@code LispIntVector} of the given element width; any other width reads as a plain
+	 * {@code #(...)} vector.
+	 *
+	 * @param width the element width in bits (8, 16 or 32)
+	 */
+	record IntVectorOpen(int width) implements Token {
+	}
+
+	/**
 	 * Integer number token.
 	 *
 	 * @param value the integer value

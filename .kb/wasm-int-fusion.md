@@ -1,5 +1,16 @@
 # WASM integer expression-tree fusion (the unboxed fast path)
 
+> Stage-2 additions (2026-07-27, todo 194): `(aref a i)` leaves read packed
+> integer vectors raw, `%aset` values compile raw through `tryCompileRaw` +
+> `_iv_set`, statement-position stores skip the value-as-stored box entirely,
+> `(ldb (byte s p) x)` literal specs classify through their expansion, and
+> calls to fusion-inlinable defuns (closed one-liner integer wrappers like
+> ironclad's `mod32+`/`rol32`) substitute their bodies -- see
+> `.kb/packed-integer-vectors.md` for the packed representation and the
+> inlining criteria. The invariants below are unchanged; leaf registration
+> moved from tree-walk order to classify (source) order to keep argument
+> evaluation order under substitution.
+
 **Invariant: fusing an integer expression tree must never change a result, an
 observable side effect, or an error shape -- the fast path is an optimization
 with a total fallback, not a semantic variant.** The wasm-GC backend (Preview 1

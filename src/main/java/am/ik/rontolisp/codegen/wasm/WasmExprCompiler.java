@@ -79,8 +79,31 @@ final class WasmExprCompiler {
 			case am.ik.rontolisp.LispInstance inst -> WasmQuoteCompiler.compileLiteralInstance(inst, ctx);
 			case am.ik.rontolisp.LispDoubleFloatArray fa -> WasmQuoteCompiler.compilePackedLiteral(fa, ctx);
 			case am.ik.rontolisp.LispSingleFloatArray fa -> WasmQuoteCompiler.compileSinglePackedLiteral(fa, ctx);
+			case am.ik.rontolisp.LispIntVector iv -> WasmQuoteCompiler.compileIntVectorLiteral(iv, ctx);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}
+	}
+
+	/**
+	 * Compiles a statement-position expression (its value is discarded): a
+	 * {@code setf}/{@code %aset} store into a packed integer vector skips materializing
+	 * the value-as-stored entirely (the hot-loop store allocates nothing); anything else
+	 * compiles normally and DROPs. The caller must NOT emit its own DROP.
+	 */
+	static void compileForEffect(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		if (ctx.asyncResume == null && expr instanceof LispCons cons && cons.isProperList()
+				&& cons.car() instanceof LispSymbol sym) {
+			if (LispNames.SETF.equals(sym.name())) {
+				compileForEffect(LispMacroExpander.expandSetf(cons, ctx.structAccessors, ctx.closRegistry), ctx);
+				return;
+			}
+			if (LispNames.ASET.equals(sym.name())) {
+				WasmArrayCompiler.compileAset(cons, ctx, false);
+				return;
+			}
+		}
+		compileExpr(expr, ctx);
+		ctx.writer.write(Instruction.DROP);
 	}
 
 	static void compileSymbolRef(LispSymbol sym, WasmLispCompiler.Ctx ctx) {
@@ -831,6 +854,7 @@ final class WasmExprCompiler {
 				case LispNames.ADJUST_ARRAY ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandAdjustArray(cons), ctx);
 				case LispNames.ARRAY_BECOME -> WasmArrayCompiler.compileArrayBecome(cons, ctx);
+				case LispNames.ARRAY_ALIKE -> WasmArrayCompiler.compileArrayAlike(cons, ctx);
 				case LispNames.ARRAY_DISPLACEMENT ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx);
 				case LispNames.ARRAY_DISP_TARGET -> WasmArrayCompiler.compileDispTarget(cons, ctx);
@@ -1134,7 +1158,12 @@ final class WasmExprCompiler {
 					if (LispMacroExpander.isCarCdrComposition(sym.name())) {
 						WasmExprCompiler.compileExpr(LispMacroExpander.expandCarCdrComposition(cons), ctx);
 					}
-					else {
+					// A direct call to a fusion-inlinable defun (mod32+/rol32-style
+					// arithmetic wrapper) in a non-fused position: substitute and fuse
+					// the body right here, so the call boundary's box/unbox round trip
+					// disappears even outside a larger expression tree.
+					else if (!ctx.inlinableDefuns.containsKey(sym.name())
+							|| !WasmIntFusionCompiler.tryCompile(cons, ctx)) {
 						WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
 					}
 				}

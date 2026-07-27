@@ -42,6 +42,47 @@ final class JvmQuoteCompiler {
 	}
 
 	/**
+	 * Emits a packed integer-vector literal (ironclad's {@code #N@(...)}, or a macro-time
+	 * {@code LispIntVector} value) as a bare {@code long[]} with a width header:
+	 * {@code [width, e_0, ..., e_{n-1}]} -- the native packed representation
+	 * ({@link JvmIntArrayRuntimeBuilder}). The elements arrive pre-masked from the
+	 * reader. The array reference is kept on the stack and {@code DUP}ed for each store,
+	 * so the operand stack stays shallow regardless of the element count.
+	 * @param iv the packed integer-vector literal
+	 * @param ctx the compilation context
+	 * @param className the enclosing class name
+	 */
+	static void compileLiteralIntVector(am.ik.rontolisp.LispIntVector iv, JvmLispCompiler.Ctx ctx, String className) {
+		long[] data = iv.data();
+		JvmEmitHelper.emitIntConst(ctx, 1 + data.length);
+		ctx.emit(Opcode.NEWARRAY);
+		ctx.emit(11); // T_LONG
+		emitRawLongStore(ctx, 0, iv.width());
+		for (int i = 0; i < data.length; i++) {
+			emitRawLongStore(ctx, 1 + i, data[i]);
+		}
+	}
+
+	// Assumes the long[] is on top of the stack; stores value at index (DUP; index;
+	// raw long; LASTORE), leaving the array on the stack.
+	private static void emitRawLongStore(JvmLispCompiler.Ctx ctx, int index, long value) {
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.emitIntConst(ctx, index);
+		if (value == 0L) {
+			ctx.emit(Opcode.LCONST_0);
+		}
+		else if (value == 1L) {
+			ctx.emit(Opcode.LCONST_1);
+		}
+		else {
+			am.ik.jvm.ConstantPool.LongConstant lc = ctx.cp.addLong(value);
+			ctx.emit(Opcode.LDC2_W);
+			ctx.emitU2(lc.index());
+		}
+		ctx.emit(Opcode.LASTORE);
+	}
+
+	/**
 	 * Emits a packed float-array literal ({@code #d(...)}) as a bare {@code double[]}
 	 * with an embedded dimension header: {@code [rank, dim_0, ..., dim_{rank-1}, e_0,
 	 * ..., e_{total-1}]} (rank and dims stored as doubles, exact for realistic sizes).
@@ -177,6 +218,10 @@ final class JvmQuoteCompiler {
 			// the
 			// general array and from the double[] packed representation.
 			case am.ik.rontolisp.LispSingleFloatArray fa -> compileSinglePackedLiteral(fa, ctx);
+			// A packed integer-vector literal (ironclad's #N@(...)) compiles to a
+			// native long[] with a width header -- the packed representation, disjoint
+			// from the general array and the packed float shapes.
+			case am.ik.rontolisp.LispIntVector iv -> compileLiteralIntVector(iv, ctx, className);
 			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
 		}
 	}

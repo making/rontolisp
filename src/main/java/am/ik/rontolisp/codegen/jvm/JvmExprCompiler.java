@@ -60,6 +60,9 @@ final class JvmExprCompiler {
 			// the
 			// general array and from the double[] packed representation.
 			case am.ik.rontolisp.LispSingleFloatArray fa -> JvmQuoteCompiler.compileSinglePackedLiteral(fa, ctx);
+			// A packed integer-vector literal compiles to its boxed general-array
+			// equivalent for now (todo 194 stage 2 follow-up on this backend).
+			case am.ik.rontolisp.LispIntVector iv -> JvmQuoteCompiler.compileLiteralIntVector(iv, ctx, className);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}
 	}
@@ -696,7 +699,7 @@ final class JvmExprCompiler {
 				case LispNames.ARRAY_HAS_FILL_POINTER_P -> JvmArrayCompiler.compileHasFillPointer(cons, ctx, className);
 				case LispNames.ADJUSTABLE_ARRAY_P -> JvmArrayCompiler.compileAdjustableArrayP(cons, ctx, className);
 				case LispNames.ARRAY_ELEMENT_TYPE -> {
-					if (ctx.usesFloatArray) {
+					if (ctx.usesFloatArray || ctx.usesIntArray) {
 						JvmArrayCompiler.compileElementType(cons, ctx, className);
 					}
 					else {
@@ -709,6 +712,17 @@ final class JvmExprCompiler {
 				case LispNames.ADJUST_ARRAY ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandAdjustArray(cons), ctx, className);
 				case LispNames.ARRAY_BECOME -> JvmArrayCompiler.compileArrayBecome(cons, ctx, className);
+				case LispNames.ARRAY_ALIKE -> {
+					// The type-preserving allocator (_ivAlike) when the program can
+					// build a packed integer vector; otherwise every array is general
+					// and the shared general lowering applies.
+					if (ctx.usesIntArray) {
+						JvmArrayCompiler.compileArrayAlike(cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayAlikeGeneral(cons), ctx, className);
+					}
+				}
 				case LispNames.ARRAY_DISPLACEMENT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx, className);
 				case LispNames.ARRAY_DISP_TARGET -> JvmArrayCompiler.compileDispTarget(cons, ctx, className);

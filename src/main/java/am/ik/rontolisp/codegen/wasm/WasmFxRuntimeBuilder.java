@@ -257,6 +257,53 @@ final class WasmFxRuntimeBuilder {
 		return b.toByteArray();
 	}
 
+	// _iv_set(arr, idx, val): the packed integer-vector raw store -- width dispatch via
+	// ref.test, then array.set with the i64 value wrapped to i32 (array.set itself
+	// truncates further for the i8/i16 widths: the mask-to-width store semantics).
+	// Traps (ref.cast) when arr is not a packed integer vector; the compiler only calls
+	// it behind a testIntVector guard.
+	static byte[] buildIvSetBody() {
+		BodyWriter b = new BodyWriter();
+		WasmWriter w = b.w;
+		w.write(0); // no extra locals
+
+		b.get(0);
+		b.refTestHeap(WasmLispCompiler.TYPE_I8ARR);
+		b.ifVoid();
+		b.get(0);
+		b.refCastHeap(WasmLispCompiler.TYPE_I8ARR);
+		b.get(1);
+		b.get(2);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.RETURN);
+		b.end();
+
+		b.get(0);
+		b.refTestHeap(WasmLispCompiler.TYPE_I16ARR);
+		b.ifVoid();
+		b.get(0);
+		b.refCastHeap(WasmLispCompiler.TYPE_I16ARR);
+		b.get(1);
+		b.get(2);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_I16ARR);
+		w.write(Instruction.RETURN);
+		b.end();
+
+		b.get(0);
+		b.refCastHeap(WasmLispCompiler.TYPE_I32ARR);
+		b.get(1);
+		b.get(2);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_I32ARR);
+		b.end();
+		return b.toByteArray();
+	}
+
 	// Pushes clz(x ^ (x >> 63)) for the i64 in the given local (64 minus the magnitude
 	// bit length), the same probe as WasmBigIntRuntimeBuilder.emitClzMag.
 	private static void emitClzMag(BodyWriter b, int slot) {

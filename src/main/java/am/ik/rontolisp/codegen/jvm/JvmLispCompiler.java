@@ -691,12 +691,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		// print or index correctly.
 		boolean usesFloatArray = programUsesFloatArray(program) || usesRead;
 
+		// Whether the program can produce a packed integer vector (a #N@(...) literal
+		// or make-array :element-type '(unsigned-byte 8|16|32)). When true, the rank-1
+		// array op compilers route through the _iv* dispatch helpers (which handle the
+		// packed long[] and delegate any other shape down the fv/general chain); when
+		// false the default build is byte-identical. The runtime reader does not read
+		// #N@(...), so usesRead does not force this gate.
+		boolean usesIntArray = programUsesIntArray(program);
+
 		// Whether the array runtime helper group is emitted (the same test that gates
 		// its emission below). The mutable-character-vector consumers -- the _eqv
 		// normalization, the stringp extension, the per-site _strv calls and the print
 		// branch -- all key off this one gate, so an array-free program compiles
 		// byte-identically to a build that never knew character vectors.
-		boolean usesArrays = programUsesAnyArrayOp(program) || usesFloatArray;
+		boolean usesArrays = programUsesAnyArrayOp(program) || usesFloatArray || usesIntArray;
 		MethodrefConstant strvMethod = usesArrays ? cp.addMethodref(thisClass, cp
 			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
 				: null;
@@ -782,6 +790,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.dynamic(this.dynamic)
 			.crossLambdaExit(crossLambdaExit)
 			.usesFloatArray(usesFloatArray)
+			.usesIntArray(usesIntArray)
 			.usesArrays(usesArrays)
 			.mayUseInstances(mayUseInstances)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
@@ -1140,6 +1149,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (usesFloatArray) {
 				built.addAll(JvmFloatArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass));
 			}
+			// The packed integer-vector helpers (_iv*) dispatch on instanceof long[]
+			// and delegate any other array shape down the chain (to the _fv* tier when
+			// it is emitted, else straight to the general helpers).
+			if (usesIntArray) {
+				built.addAll(
+						JvmIntArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass, usesFloatArray));
+			}
 			arrayMethods = built;
 		}
 		else {
@@ -1161,6 +1177,16 @@ public final class JvmLispCompiler implements LispCompiler {
 							cp.addNameAndType(cp.addUtf8("replaceFirst"),
 									cp.addUtf8("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"))),
 					cp.addString("^#\\d*A?\\("), cp.addString("#d("), cp.addString("#f("));
+		}
+		// The packed integer-vector print branch: a long[] renders as a plain #(...)
+		// vector (CL prints specialized vectors this way) by converting to a general
+		// array (_ivToGeneral) and reusing the general renderer -- no prefix rewrite,
+		// unlike the #d/#f float syntax.
+		JvmRuntimeBuilder.@Nullable PackedIntPrint packedIntPrint = null;
+		if (usesIntArray) {
+			packedIntPrint = new JvmRuntimeBuilder.PackedIntPrint(cp.addClass(cp.addUtf8("[J")),
+					cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmIntArrayRuntimeBuilder.TO_GENERAL),
+							cp.addUtf8(JvmIntArrayRuntimeBuilder.TO_GENERAL_DESC))));
 		}
 		ClassConstant arrayListClassForPrint = usesArrays ? cp.addClass(cp.addUtf8("java/util/ArrayList")) : null;
 		MethodrefConstant arrayToStringMethod = usesArrays
@@ -1219,7 +1245,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
 				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, charBoxClass, charPrin1Method,
 				arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, futurePrint, packedPrint,
-				instPrint);
+				packedIntPrint, instPrint);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
@@ -1227,7 +1253,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
 				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
 				charBoxClass, characterToString, arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod,
-				javaPrint, futurePrint, packedPrint, instPrint);
+				javaPrint, futurePrint, packedPrint, packedIntPrint, instPrint);
 		List<Integer> instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
 				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
 				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
@@ -2186,6 +2212,46 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
+	// True when the program can produce a packed integer vector: a #N@(...) literal
+	// (LispIntVector, which also arrives as a macro-time value) or a
+	// (make-array ... :element-type '(unsigned-byte 8|16|32) ...) form. Gates the _iv*
+	// dispatch helpers and their routing; when false the array op compilers keep the
+	// fv/general dispatch, so the default build is byte-identical.
+	private static boolean programUsesIntArray(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (usesIntArray(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesIntArray(LispVal val) {
+		if (val instanceof am.ik.rontolisp.LispIntVector) {
+			return true;
+		}
+		if (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())
+					&& makeArrayIsPackedInt(cons)) {
+				return true;
+			}
+			return usesIntArray(cons.car()) || usesIntArray(cons.cdr());
+		}
+		return false;
+	}
+
+	// Whether a (make-array ...) call carries :element-type '(unsigned-byte 8|16|32)
+	// (a literal quoted list at the call site) -- the packed integer-vector shape.
+	private static boolean makeArrayIsPackedInt(LispCons makeArray) {
+		List<LispVal> args = makeArray.toList();
+		for (int i = 2; i + 1 < args.size(); i++) {
+			if (args.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
+				return JvmArrayCompiler.packedIntElementWidth(args.get(i + 1)) > 0;
+			}
+		}
+		return false;
+	}
+
 	// Whether a (make-array ...) call carries :element-type 'double-float or
 	// 'single-float (a literal quoted symbol at the call site, package qualifier ignored)
 	// --
@@ -2910,6 +2976,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesFloatArray = false;
 
 		/**
+		 * True when the program can produce a packed integer vector (a {@code #N@(...)}
+		 * literal or {@code make-array :element-type '(unsigned-byte 8|16|32)}). When
+		 * set, the rank-1 array op compilers route through the {@code _iv*} dispatch
+		 * helpers (which handle the packed {@code long[]} and delegate any other shape
+		 * down the fv/general chain); the default build is byte-identical. Shared across
+		 * every context.
+		 */
+		boolean usesIntArray = false;
+
+		/**
 		 * True when the array runtime helper group ({@link JvmArrayRuntimeBuilder}) is
 		 * emitted for this program. Gates the mutable-character-vector consumers (the
 		 * {@code stringp} extension and the per-site {@code _strv} normalization), so an
@@ -3063,6 +3139,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.dynamic = builder.dynamic;
 			this.crossLambdaExit = builder.crossLambdaExit;
 			this.usesFloatArray = builder.usesFloatArray;
+			this.usesIntArray = builder.usesIntArray;
 			this.usesArrays = builder.usesArrays;
 			this.mayUseInstances = builder.mayUseInstances;
 			this.className = builder.className;
@@ -3285,6 +3362,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean crossLambdaExit = false;
 
 			private boolean usesFloatArray = false;
+
+			private boolean usesIntArray = false;
 
 			private boolean usesArrays = false;
 
@@ -3629,6 +3708,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesFloatArray(boolean usesFloatArray) {
 				this.usesFloatArray = usesFloatArray;
+				return this;
+			}
+
+			Builder usesIntArray(boolean usesIntArray) {
+				this.usesIntArray = usesIntArray;
 				return this;
 			}
 

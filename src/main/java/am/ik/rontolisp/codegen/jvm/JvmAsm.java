@@ -256,6 +256,40 @@ final class JvmAsm {
 		this.code.add(Opcode.D2I);
 	}
 
+	// --- long / long[] support (used by the packed integer-vector runtime) ---
+
+	/** The {@code newarray long} instruction (atype 11 = {@code T_LONG}). */
+	void newarrayLong() {
+		this.code.add(Opcode.NEWARRAY);
+		this.code.add(11);
+	}
+
+	void laload() {
+		this.code.add(Opcode.LALOAD);
+	}
+
+	void lastore() {
+		this.code.add(Opcode.LASTORE);
+	}
+
+	void lload(int slot) {
+		this.code.add(Opcode.LLOAD);
+		this.code.add(slot);
+	}
+
+	void lstore(int slot) {
+		this.code.add(Opcode.LSTORE);
+		this.code.add(slot);
+	}
+
+	void l2i() {
+		this.code.add(Opcode.L2I);
+	}
+
+	void i2l() {
+		this.code.add(Opcode.I2L);
+	}
+
 	// --- float / float[] support (used by the packed single-float array runtime) ---
 
 	/** The {@code newarray float} instruction (atype 6 = {@code T_FLOAT}). */

@@ -6060,7 +6060,9 @@ public final class LispMacroExpander {
 		LispVal endInit = parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE;
 		LispVal effectiveEnd = makeIf(endVar, endVar, callOf(LispNames.LENGTH, seqVar));
 		LispVal length = listToCons(List.of(new LispSymbol(LispNames.SUB), lenVar, startVar));
-		LispVal makeOut = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), nVar));
+		// %array-alike, not make-array: the output keeps the input's representation, so
+		// a subsequence of a packed integer vector stays packed at the same width.
+		LispVal makeOut = listToCons(List.of(new LispSymbol(LispNames.ARRAY_ALIKE), seqVar, nVar));
 		LispVal readSrc = listToCons(List.of(new LispSymbol(LispNames.AREF), seqVar,
 				listToCons(List.of(new LispSymbol(LispNames.ADD), startVar, iVar))));
 		LispVal writeDst = listToCons(List.of(new LispSymbol(LispNames.ASET), outVar, iVar, readSrc));
@@ -6087,6 +6089,23 @@ public final class LispMacroExpander {
 		LispVal outerBindings = listToCons(List.of(listToCons(List.of(seqVar, parts.get(1))),
 				listToCons(List.of(startVar, parts.get(2))), listToCons(List.of(endVar, endInit))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, dispatch));
+	}
+
+	/**
+	 * The general-representation fallback of {@code %array-alike}: {@code (progn seq
+	 * (make-array n))} -- a fresh general (boxed) vector, evaluation order preserved.
+	 * Used by a backend that has no packed integer-vector representation (currently the
+	 * JVM, pending its todo-194 stage-2 half).
+	 * @param cons the {@code (%array-alike seq n)} call
+	 * @return the lowered expression
+	 */
+	public static LispVal expandArrayAlikeGeneral(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new UnsupportedOperationException("%array-alike expects a sequence and a length");
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.PROGN), parts.get(1),
+				listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), parts.get(2)))));
 	}
 
 	/**

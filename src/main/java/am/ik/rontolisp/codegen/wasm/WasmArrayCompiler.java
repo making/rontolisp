@@ -112,6 +112,14 @@ final class WasmArrayCompiler {
 			compilePackedMake(args, ctx, singleFloat);
 			return;
 		}
+		int packedIntWidth = packedIntElementWidth(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
+		if (packedIntWidth > 0 && fpArg == null && adjArg == null) {
+			// A plain :element-type '(unsigned-byte 8|16|32) array packs when the
+			// runtime rank is 1 (a rank-n shape keeps the general boxed representation,
+			// matching the interpreter's rank-1-only packing).
+			compilePackedIntMake(args, ctx, packedIntWidth);
+			return;
+		}
 		// dims -> dimsSlot, init -> initSlot
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int dimsSlot = setTemp(ctx);
@@ -376,6 +384,155 @@ final class WasmArrayCompiler {
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
 
+	// (make-array dims :element-type '(unsigned-byte 8|16|32) [:initial-element x]): a
+	// packed integer vector when the RUNTIME rank is 1, else the general boxed shape
+	// (matching the interpreter's rank-1-only packing). The packed arm allocates
+	// array.new_default (all zero) and runs a mask-store fill loop only for a non-zero
+	// init; the general arm mirrors the ordinary make-array construction with the same
+	// evaluated init (nil default).
+	private static void compilePackedIntMake(List<LispVal> args, WasmLispCompiler.Ctx ctx, int width) {
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int dimsSlot = setTemp(ctx);
+		int dimsArrSlot = ctx.allocTemp();
+		int totalSlot = ctx.allocTemp();
+		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot);
+		LispVal init = findInitialElement(args);
+		int initSlot = -1;
+		if (init != null) {
+			WasmExprCompiler.compileExpr(init, ctx);
+			initSlot = setTemp(ctx);
+		}
+		int type = intArrType(width);
+		// rank == 1?
+		getBuckets(ctx, dimsArrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_EQ);
+		emitIfEq(ctx);
+		// packed: arr = array.new_default (zero-filled), plus a mask-store fill loop
+		// for a non-zero :initial-element.
+		getLocal(ctx, totalSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		intArrNewDefault(ctx, type);
+		int arrSlot = setTemp(ctx);
+		if (init != null && !(init instanceof LispInteger zero && zero.value() == 0)) {
+			int iSlot = ctx.allocTemp();
+			i32Const(ctx, 0);
+			boxI31(ctx);
+			setLocal(ctx, iSlot);
+			ctx.writer.write(Instruction.BLOCK, 0x40);
+			ctx.writer.write(Instruction.LOOP, 0x40);
+			getLocal(ctx, iSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+			getLocal(ctx, totalSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.I32_GE_S);
+			ctx.writer.write(Instruction.BR_IF, 1);
+			emitIntArrSet(ctx, arrSlot, iSlot, initSlot, type);
+			getLocal(ctx, iSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+			i32Const(ctx, 1);
+			ctx.writer.write(Instruction.I32_ADD);
+			boxI31(ctx);
+			setLocal(ctx, iSlot);
+			ctx.writer.write(Instruction.BR, 0);
+			ctx.writer.write(Instruction.END); // loop
+			ctx.writer.write(Instruction.END); // block
+		}
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.ELSE);
+		// general: data = array.new buckets(init-or-nil, total); header; cell.
+		if (initSlot >= 0) {
+			getLocal(ctx, initSlot);
+		}
+		else {
+			refNull(ctx);
+		}
+		getLocal(ctx, totalSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		arrayNew(ctx);
+		int dataArrSlot = setTemp(ctx);
+		getLocal(ctx, dimsArrSlot);
+		refNull(ctx);
+		refNull(ctx);
+		i32Const(ctx, 0);
+		boxI31(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		getLocal(ctx, dataArrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.END);
+	}
+
+	// (%array-alike seq n): a fresh zero-filled rank-1 array of length n with the SAME
+	// representation as seq -- a packed integer vector yields a packed vector of the
+	// same width, anything else a general (nil-filled) vector. The subseq vector
+	// lowering allocates through this.
+	static void compileArrayAlike(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		requireArgs(cons, 3, "%array-alike expects a sequence and a length");
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int seqSlot = setTemp(ctx);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		int nSlot = setTemp(ctx);
+		testIntVector(ctx, seqSlot);
+		emitIfEq(ctx);
+		getLocal(ctx, seqSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		emitIfEq(ctx);
+		getLocal(ctx, nSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		intArrNewDefault(ctx, WasmLispCompiler.TYPE_I8ARR);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, seqSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		emitIfEq(ctx);
+		getLocal(ctx, nSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		intArrNewDefault(ctx, WasmLispCompiler.TYPE_I16ARR);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, nSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		intArrNewDefault(ctx, WasmLispCompiler.TYPE_I32ARR);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		// general: array.new buckets(nil, n) under a fresh 1-dim header cell.
+		refNull(ctx);
+		getLocal(ctx, nSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		arrayNew(ctx);
+		int dataArrSlot = setTemp(ctx);
+		getLocal(ctx, nSlot);
+		i32Const(ctx, 1);
+		arrayNew(ctx);
+		refNull(ctx);
+		refNull(ctx);
+		i32Const(ctx, 0);
+		boxI31(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		getLocal(ctx, dataArrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.END);
+	}
+
 	// The --simd lowering of compilePackedMake: the data is a _v_new'd TYPE_VBLOCK stored
 	// in the SAME (ref null eq) data field. _v_new zero-fills, so the ubiquitous
 	// zero-initial-element case (make-array without :initial-element, linalg:zeros,
@@ -608,19 +765,12 @@ final class WasmArrayCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
 		if (rank == 1) {
-			// A string is a rank-1 character array in CL: (aref s i) reads like
-			// (char s i), walking the UTF-8 byte data with _str_char_at to decode
-			// the i-th character's 1-4 byte sequence.
-			getLocal(ctx, arrSlot);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-			emitIfEq(ctx);
-			getLocal(ctx, arrSlot);
+			// Rank 1: evaluate the index once, then dispatch from the slots (the shape
+			// WasmIntFusionCompiler reuses for its aref leaves).
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
-			WasmEmitHelper.castI31GetS(ctx);
-			WasmEmitHelper.emitStrCharAtCall(ctx);
-			WasmCharCompiler.makeChar(ctx);
-			ctx.writer.write(Instruction.ELSE);
+			int idxSlot = setTemp(ctx);
+			emitAref1FromSlots(ctx, arrSlot, idxSlot);
+			return;
 		}
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
@@ -642,9 +792,52 @@ final class WasmArrayCompiler {
 		emitResolveDataAndIndex(ctx, headerSlot);
 		arrayGet(ctx);
 		ctx.writer.write(Instruction.END);
-		if (rank == 1) {
-			ctx.writer.write(Instruction.END);
-		}
+	}
+
+	// The rank-1 aref dispatch over pre-evaluated slots (array as eq, index boxed):
+	// string -> character decode, packed float -> boxed f64, packed integer vector ->
+	// boxed unsigned element, general -> displacement-resolved buckets read. Leaves the
+	// boxed element on the stack. Shared by compileAref and the fused-tree fallback in
+	// WasmIntFusionCompiler.
+	static void emitAref1FromSlots(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot) {
+		// A string is a rank-1 character array in CL: (aref s i) reads like (char s i),
+		// walking the UTF-8 byte data with _str_char_at to decode the i-th character's
+		// 1-4 byte sequence.
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		emitIfEq(ctx);
+		getLocal(ctx, arrSlot);
+		getLocal(ctx, idxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		WasmEmitHelper.emitStrCharAtCall(ctx);
+		WasmCharCompiler.makeChar(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		testFarray(ctx, arrSlot);
+		emitIfEq(ctx);
+		// packed float: box(data[idx]), reading the f64/f32 store per width.
+		emitPackedReadF64(ctx, arrSlot, idxSlot);
+		boxFloat(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		// packed integer vector: box(_int_new(data[idx])), reading the raw i8/i16/i32
+		// store unsigned.
+		testIntVector(ctx, arrSlot);
+		emitIfEq(ctx);
+		emitPackedIntRead(ctx, arrSlot, idxSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.write(Instruction.ELSE);
+		// general: arr -> header (the (dims . (meta . data)) cons), then data[idx].
+		getLocal(ctx, arrSlot);
+		castCellGet0(ctx);
+		int headerSlot = setTemp(ctx);
+		getLocal(ctx, idxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		emitResolveDataAndIndex(ctx, headerSlot);
+		arrayGet(ctx);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
 	}
 
 	static void compileRowMajorAref(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -667,6 +860,16 @@ final class WasmArrayCompiler {
 		emitPackedReadF64(ctx, arrSlot, pIdxSlot);
 		boxFloat(ctx);
 		ctx.writer.write(Instruction.ELSE);
+		// packed integer vector: the data array is flat and rank-1, so this is exactly
+		// the aref shape.
+		testIntVector(ctx, arrSlot);
+		emitIfEq(ctx);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		int iIdxSlot = setTemp(ctx);
+		emitPackedIntRead(ctx, arrSlot, iIdxSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.write(Instruction.ELSE);
 		// general: resolve the displacement chain, then data[index].
 		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
@@ -675,6 +878,7 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.castI31GetS(ctx);
 		emitResolveDataAndIndex(ctx, headerSlot);
 		arrayGet(ctx);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -704,6 +908,11 @@ final class WasmArrayCompiler {
 		int pBoxSlot = setTemp(ctx);
 		emitPackedWriteF64(ctx, arrSlot, pIdxSlot, pBoxSlot);
 		ctx.writer.write(Instruction.ELSE);
+		// packed integer vector: raw mask-store, returning the value AS STORED.
+		testIntVector(ctx, arrSlot);
+		emitIfEq(ctx);
+		emitPackedIntStore(ctx, arrSlot, args.get(2), args.get(3), true);
+		ctx.writer.write(Instruction.ELSE);
 		// general: resolve the displacement chain, store, and leave the value.
 		int valSlot = ctx.allocTemp();
 		getLocal(ctx, arrSlot);
@@ -717,6 +926,7 @@ final class WasmArrayCompiler {
 		ctx.writer.writeSignedLeb128(valSlot);
 		arraySet(ctx);
 		getLocal(ctx, valSlot);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -733,9 +943,19 @@ final class WasmArrayCompiler {
 		emitIfEq(ctx);
 		farrayField(ctx, arrSlot, 0);
 		ctx.writer.write(Instruction.ELSE);
+		// packed integer vector: a fresh 1-length buckets array of the boxed length
+		// (rank-1 by construction), feeding the shared cons-list build below.
+		testIntVector(ctx, arrSlot);
+		emitIfEq(ctx);
+		emitPackedIntLen(ctx, arrSlot);
+		boxI31(ctx);
+		i32Const(ctx, 1);
+		arrayNew(ctx);
+		ctx.writer.write(Instruction.ELSE);
 		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
 		castConsGet(ctx, 0);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		int dimsSlot = setTemp(ctx);
 		int resultSlot = ctx.allocTemp();
@@ -779,6 +999,16 @@ final class WasmArrayCompiler {
 	}
 
 	static void compileAset(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileAset(cons, ctx, true);
+	}
+
+	/**
+	 * Compiles {@code (%aset array subscript... value)}. With {@code resultNeeded} false
+	 * (a statement position, see {@code WasmExprCompiler.compileForEffect}) the
+	 * value-as-stored is not materialized: the packed integer-vector arm skips its
+	 * read-back {@code _int_new} box entirely -- the hot-loop store allocates nothing.
+	 */
+	static void compileAset(LispCons cons, WasmLispCompiler.Ctx ctx, boolean resultNeeded) {
 		// (%aset array subscript... value)
 		List<LispVal> args = cons.toList();
 		int rank = args.size() - 3;
@@ -802,6 +1032,15 @@ final class WasmArrayCompiler {
 		int pBoxSlot = setTemp(ctx);
 		emitPackedWriteF64(ctx, arrSlot, pIdxSlot, pBoxSlot);
 		ctx.writer.write(Instruction.ELSE);
+		if (rank == 1) {
+			// packed integer vector: raw mask-store (no box on the value's fast path,
+			// see emitPackedIntStore), returning the value AS STORED when needed. A
+			// rank > 1 subscript set never targets one (rank-1 by construction).
+			testIntVector(ctx, arrSlot);
+			emitIfEq(ctx);
+			emitPackedIntStore(ctx, arrSlot, args.get(2), args.get(args.size() - 1), resultNeeded);
+			ctx.writer.write(Instruction.ELSE);
+		}
 		// general: data[flat] = val, leaving val as the result. tee keeps the value on
 		// the
 		// stack for array.set.
@@ -816,7 +1055,43 @@ final class WasmArrayCompiler {
 		ctx.writer.writeSignedLeb128(valSlot);
 		arraySet(ctx);
 		getLocal(ctx, valSlot);
+		if (rank == 1) {
+			ctx.writer.write(Instruction.END);
+		}
 		ctx.writer.write(Instruction.END);
+		if (!resultNeeded) {
+			ctx.writer.write(Instruction.DROP);
+		}
+	}
+
+	// The packed integer-vector store: [arr, idx-i32, raw i64 value] -> _iv_set (width
+	// dispatch + wrap-to-width in the helper). The value stays a RAW i64 when it is an
+	// integer operation tree (WasmIntFusionCompiler.tryCompileRaw -- no _int_new box at
+	// all on the fast path); otherwise it evaluates boxed and unboxes with the store
+	// semantics. The result -- the value AS STORED, read back unsigned -- boxes only
+	// when the caller consumes it; a statement-position store allocates nothing.
+	private static void emitPackedIntStore(WasmLispCompiler.Ctx ctx, int arrSlot, LispVal idxExpr, LispVal valueExpr,
+			boolean resultNeeded) {
+		WasmExprCompiler.compileExpr(idxExpr, ctx);
+		int idxSlot = setTemp(ctx);
+		getLocal(ctx, arrSlot);
+		getLocal(ctx, idxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		if (!WasmIntFusionCompiler.tryCompileRaw(valueExpr, ctx)) {
+			WasmExprCompiler.compileExpr(valueExpr, ctx);
+			int valSlot = setTemp(ctx);
+			emitUnboxIntForStore(ctx, valSlot);
+		}
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_IV_SET);
+		if (resultNeeded) {
+			emitPackedIntRead(ctx, arrSlot, idxSlot);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		}
+		else {
+			refNull(ctx);
+		}
 	}
 
 	// Resolves the displacement chain: expects the i32 flat index on the stack; leaves
@@ -938,7 +1213,35 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.compileStringLiteral(LispNames.DOUBLE_FLOAT, ctx);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.ELSE);
+		// packed integer vector: the list (unsigned-byte 8|16|32) by the value's width;
+		// general array: t (the lite element type).
+		testIntVector(ctx, arrSlot);
+		emitIfEq(ctx);
+		WasmEmitHelper.compileStringLiteral(LispNames.UNSIGNED_BYTE, ctx);
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		i32Const(ctx, 8);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		i32Const(ctx, 16);
+		ctx.writer.write(Instruction.ELSE);
+		i32Const(ctx, 32);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		boxI31(ctx);
+		refNull(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.ELSE);
 		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -1406,6 +1709,28 @@ final class WasmArrayCompiler {
 		return LispNames.SINGLE_FLOAT.equals(elementTypeLocalName(elementType));
 	}
 
+	// The packed integer-vector width (8/16/32) a make-array :element-type value
+	// designates: the literal quoted list '(unsigned-byte 8|16|32). Anything else --
+	// including a runtime-computed element type -- answers 0 and keeps the general boxed
+	// representation, like the float widths. Mirrors the interpreter's
+	// packedIntElementWidth.
+	static int packedIntElementWidth(@Nullable LispVal elementType) {
+		if (elementType instanceof LispCons quote && quote.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quote.cdr() instanceof LispCons rest
+				&& rest.cdr() instanceof LispNil && rest.car() instanceof LispCons spec
+				&& spec.car() instanceof LispSymbol head && spec.cdr() instanceof LispCons widthCell
+				&& widthCell.car() instanceof LispInteger width && widthCell.cdr() instanceof LispNil) {
+			String name = head.name();
+			int colon = name.lastIndexOf(':');
+			String local = colon >= 0 ? name.substring(colon + 1) : name;
+			if (local.equals(LispNames.UNSIGNED_BYTE)
+					&& (width.value() == 8 || width.value() == 16 || width.value() == 32)) {
+				return (int) width.value();
+			}
+		}
+		return 0;
+	}
+
 	// The local (package-qualifier-stripped) symbol name of a literal quoted
 	// :element-type
 	// value, or null when it is not a quoted symbol.
@@ -1757,6 +2082,167 @@ final class WasmArrayCompiler {
 	private static boolean nonNilKeyword(List<LispVal> args, String keyword) {
 		LispVal value = findKeywordValue(args, keyword);
 		return value != null && !(value instanceof am.ik.rontolisp.LispNil);
+	}
+
+	// --- packed integer-vector (TYPE_I8ARR/I16ARR/I32ARR) helpers ---------------------
+	//
+	// A packed integer vector is the BARE (array (mut i8|i16|i32)) value (rank-1, no
+	// struct wrapper; array.len is the length). Elements store masked to the width
+	// (array.set / i32.wrap_i64 truncation) and read back unsigned (array.get_u /
+	// i64.extend_i32_u). See WasmLispCompiler.TYPE_I8ARR.
+
+	// Pushes an i32: whether the value in slot is a packed integer vector (any width).
+	static void testIntVector(WasmLispCompiler.Ctx ctx, int slot) {
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		ctx.writer.write(Instruction.I32_OR);
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I32ARR);
+		ctx.writer.write(Instruction.I32_OR);
+	}
+
+	// Pushes the i32 length of the packed integer vector in slot (width dispatch via
+	// ref.test; array.len needs the concrete array type for the cast).
+	static void emitPackedIntLen(WasmLispCompiler.Ctx ctx, int slot) {
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		castIntArrLen(ctx, slot, WasmLispCompiler.TYPE_I8ARR);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		castIntArrLen(ctx, slot, WasmLispCompiler.TYPE_I16ARR);
+		ctx.writer.write(Instruction.ELSE);
+		castIntArrLen(ctx, slot, WasmLispCompiler.TYPE_I32ARR);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+	}
+
+	private static void castIntArrLen(WasmLispCompiler.Ctx ctx, int slot, int type) {
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(type);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+	}
+
+	// Reads data[idx] of the packed integer vector in arrSlot as an UNSIGNED i64,
+	// dispatching on the width. idxSlot holds the i31-boxed index; array.get traps on an
+	// out-of-range index (the interpreter/JVM signal an error on the same condition).
+	// Leaves one i64 on the stack.
+	static void emitPackedIntRead(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot) {
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I64);
+		emitIntArrGetU(ctx, arrSlot, idxSlot, WasmLispCompiler.TYPE_I8ARR);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I64);
+		emitIntArrGetU(ctx, arrSlot, idxSlot, WasmLispCompiler.TYPE_I16ARR);
+		ctx.writer.write(Instruction.ELSE);
+		emitIntArrGetU(ctx, arrSlot, idxSlot, WasmLispCompiler.TYPE_I32ARR);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+	}
+
+	// [ ] -> [i64]: data[idx] zero-extended (array.get_u for the sub-i32 widths, a plain
+	// array.get for i32 -- its element IS the raw 32 bits -- then i64.extend_i32_u).
+	private static void emitIntArrGetU(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot, int type) {
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(type);
+		getLocal(ctx, idxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		if (type == WasmLispCompiler.TYPE_I32ARR) {
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		}
+		else {
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		}
+		ctx.writer.writeSignedLeb128(type);
+		ctx.writer.write(Instruction.I64_EXTEND_U_I32);
+	}
+
+	// Unboxes the exact integer in valSlot to an i64: an i31 sign-extends, a TYPE_BIGNUM
+	// reads its i64 field, a TYPE_BIGINT reads its LOW 32 BITS (limb 0 -- enough for
+	// every packed width, matching the interpreter's low-bits masking), anything else
+	// (float, ratio, ...) traps -- the interpreter/JVM signal a type error there.
+	static void emitUnboxIntForStore(WasmLispCompiler.Ctx ctx, int valSlot) {
+		getLocal(ctx, valSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I64);
+		getLocal(ctx, valSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I64_EXTEND_S_I32);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, valSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I64);
+		getLocal(ctx, valSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.ELSE);
+		// TYPE_BIGINT: low limb (32 bits) via _limb_get(limbs, 0); the ref.cast traps
+		// on a non-integer, preserving the exact-or-trap boundary.
+		getLocal(ctx, valSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGINT);
+		ctx.writer.writeSignedLeb128(0);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_LIMB_GET);
+		ctx.writer.write(Instruction.I64_EXTEND_U_I32);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+	}
+
+	private static void emitIntArrSet(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot, int valSlot, int type) {
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(type);
+		getLocal(ctx, idxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		emitUnboxIntForStore(ctx, valSlot);
+		ctx.writer.write(Instruction.I32_WRAP_I64);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeSignedLeb128(type);
+	}
+
+	// array.new_default of the packed width for TYPE_I8ARR/I16ARR/I32ARR (all elements
+	// zero): [i32 size] -> [array].
+	static void intArrNewDefault(WasmLispCompiler.Ctx ctx, int type) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		ctx.writer.writeSignedLeb128(type);
+	}
+
+	// The TYPE_* index of a packed integer-vector width.
+	static int intArrType(int width) {
+		return switch (width) {
+			case 8 -> WasmLispCompiler.TYPE_I8ARR;
+			case 16 -> WasmLispCompiler.TYPE_I16ARR;
+			default -> WasmLispCompiler.TYPE_I32ARR;
+		};
 	}
 
 }

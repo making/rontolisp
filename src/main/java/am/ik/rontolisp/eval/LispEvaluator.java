@@ -1921,6 +1921,7 @@ public final class LispEvaluator {
 			case LispHashTable h -> h;
 			case LispArray a -> a;
 			case LispFloatArray fa -> fa;
+			case am.ik.rontolisp.LispIntVector iv -> iv;
 			case LispJavaObject j -> j;
 			case LispFuture f -> f;
 			case LispStream s -> s;

@@ -7552,4 +7552,92 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (read-from-string \"(x . 9)\"))")).isEqualTo("(X . 9)");
 	}
 
+	@Test
+	void compilePackedIntVectorMakeArrayMasksAndReadsUnsigned() throws Exception {
+		// .kb/packed-integer-vectors.md: stores mask to the width, reads widen
+		// unsigned, setf returns the value AS STORED -- matching the interpreter.
+		// let* sequencing, not (list (setf ...) (aref ...)): compiled list arguments
+		// evaluate right-to-left (.todo/014), so the store must be ordered explicitly.
+		assertThat(compileAndRun("""
+				(let* ((a (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				       (stored (setf (aref a 1) 300))
+				       (readback (aref a 1)))
+				  (print (list stored readback (aref a 0) (length a) a)))
+				""")).isEqualTo("(44 44 7 4 #(7 44 7 7))");
+		assertThat(compileAndRun(
+				"(print (make-array 3 :element-type '(unsigned-byte 16) :initial-contents '(1 70000 3)))"))
+			.isEqualTo("#(1 4464 3)");
+		assertThat(compileAndRun("""
+				(let ((a (make-array 2 :element-type '(unsigned-byte 32))))
+				  (setf (aref a 0) 4294967295)
+				  (setf (aref a 1) 4294967296)
+				  (print a))
+				""")).isEqualTo("#(4294967295 0)");
+	}
+
+	@Test
+	void compilePackedIntVectorIntrospection() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((a (make-array 3 :element-type '(unsigned-byte 8))))
+				  (print (list (array-element-type a) (arrayp a) (vectorp a) (array-dimensions a)
+				               (typep a '(simple-array (unsigned-byte 8) (*))))))
+				""")).isEqualTo("((UNSIGNED-BYTE 8) T T (3) T)");
+		// A rank-n shape (runtime-detected) and a fill-pointer combination keep the
+		// general boxed representation.
+		assertThat(compileAndRun("(print (array-element-type (make-array '(2 2) :element-type '(unsigned-byte 8))))"))
+			.isEqualTo("T");
+		assertThat(compileAndRun("""
+				(let ((a (make-array '(2 2) :element-type '(unsigned-byte 8) :initial-element 3)))
+				  (setf (aref a 1 1) 9)
+				  (print (list (aref a 0 0) (aref a 1 1))))
+				""")).isEqualTo("(3 9)");
+	}
+
+	@Test
+	void compilePackedIntVectorSubseqCopySeqReplacePreserveThePackedType() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((a (make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(9 8 7 6)))
+				       (s (subseq a 1 3)))
+				  (setf (aref s 0) 300)
+				  (print (list s (array-element-type s) a)))
+				""")).isEqualTo("(#(44 7) (UNSIGNED-BYTE 8) #(9 8 7 6))");
+		assertThat(compileAndRun("""
+				(let* ((a (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3)))
+				       (c (copy-seq a)))
+				  (print (list c (array-element-type c))))
+				""")).isEqualTo("(#(1 2 3) (UNSIGNED-BYTE 8))");
+		// replace mask-stores element-wise into a packed target.
+		assertThat(compileAndRun("""
+				(let ((dst (make-array 3 :element-type '(unsigned-byte 8)))
+				      (src #(300 2 3)))
+				  (replace dst src)
+				  (print dst))
+				""")).isEqualTo("#(44 2 3)");
+	}
+
+	@Test
+	void compilePackedIntVectorReaderLiteralAndRowMajor() throws Exception {
+		// ironclad's #N@(...) table syntax bakes as a native packed long[] for the
+		// 8/16/32 widths.
+		assertThat(compileAndRun("(print (list #8@(1 2 300) (array-element-type #32@(1 2))))"))
+			.isEqualTo("(#(1 2 44) (UNSIGNED-BYTE 32))");
+		assertThat(compileAndRun("""
+				(let ((a #8@(1 2 3)))
+				  (%row-major-aset a 1 999)
+				  (print (list (row-major-aref a 1) a)))
+				""")).isEqualTo("(231 #(1 231 3))");
+	}
+
+	@Test
+	void compilePackedIntVectorRejectsNonIntegerStoresAndFillPointerSurface() {
+		assertThatThrownBy(() -> compileAndRun("(setf (aref (make-array 2 :element-type '(unsigned-byte 8)) 0) 1.5)"))
+			.rootCause()
+			.hasMessageContaining("integer");
+		assertThatThrownBy(() -> compileAndRun("(aref (make-array 2 :element-type '(unsigned-byte 8)) 5)")).rootCause()
+			.hasMessageContaining("out of range");
+		assertThatThrownBy(() -> compileAndRun("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
+			.rootCause()
+			.hasMessageContaining("packed integer vector");
+	}
+
 }

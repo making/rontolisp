@@ -213,7 +213,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * after the fixed and {@code --simd} types in {@code asyncMode} only.
 	 */
 	private int asyncTypeBase() {
-		return FX_TYPE_LAST + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
+		return IARR_TYPE_LAST + 1 + (this.simd ? SIMD_TYPE_COUNT : 0);
 	}
 
 	/**
@@ -781,7 +781,12 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_FX_REM = FUNC_FX_MOD + 1;
 
-	static final int FX_FUNC_LAST = FUNC_FX_REM;
+	// _iv_set ((ref null eq) arr, i32 idx, i64 val): the packed integer-vector raw
+	// store -- width dispatch and the wrap-to-width truncation in one place, so a fused
+	// aset value can stay a raw i64 on the stack (todo 194 stage 2).
+	static final int FUNC_IV_SET = FUNC_FX_REM + 1;
+
+	static final int FX_FUNC_LAST = FUNC_IV_SET;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -1035,10 +1040,35 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FX_TYPE_LAST = TYPE_FX_DIV;
 
+	// --- the packed integer-vector types (always present) -------------------------
+	//
+	// A rank-1 (unsigned-byte 8|16|32) vector (todo 194 stage 2) is the BARE
+	// (array (mut i8|i16|i32)) value itself -- no struct wrapper and no dims (rank-1
+	// only; array.len is the length). Elements store masked to the width and read back
+	// unsigned (array.get_u; the i32 width widens with i64.extend_i32_u), which is what
+	// keeps the SHA-256 working buffers unboxed. The three share ONE rec group, which
+	// keeps them structurally distinct from TYPE_LIMBS (also an array (mut i32)) and
+	// from every other bare array under wasm-GC's structural canonicalization, so
+	// ref.test discriminates the width directly.
+
+	// array (mut i8) -- an (unsigned-byte 8) vector.
+	static final int TYPE_I8ARR = FX_TYPE_LAST + 1; // 57
+
+	// array (mut i16) -- an (unsigned-byte 16) vector.
+	static final int TYPE_I16ARR = TYPE_I8ARR + 1; // 58
+
+	// array (mut i32) -- an (unsigned-byte 32) vector.
+	static final int TYPE_I32ARR = TYPE_I16ARR + 1; // 59
+
+	// _iv_set ((ref null eq), i32, i64) -> (): the packed integer-vector raw store.
+	static final int TYPE_IV_SET = TYPE_I32ARR + 1; // 60
+
+	static final int IARR_TYPE_LAST = TYPE_IV_SET;
+
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
-	// Four types, emitted ONLY under --simd, appended after the reader signatures and
-	// before the export/import wrapper signatures (which shift past them via
+	// Four types, emitted ONLY under --simd, appended after the packed integer-vector
+	// types and before the export/import wrapper signatures (which shift past them via
 	// fixedTypeCount()). Declaring an (array (mut v128)) at all requires the SIMD
 	// proposal, so the default module keeps validating on a runtime that has it turned
 	// off -- which is exactly the dead-flag guard WasmLispCompilerIntegrationTest runs.
@@ -1046,7 +1076,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// array (mut v128) -- the lane-group storage of a packed float array under --simd.
 	// A bare array comptype (implicitly sub final), so a subtype of eq. array.new_default
 	// zeroes every lane, which is what lets the kernels drop their scalar tails.
-	static final int TYPE_V128ARR = FX_TYPE_LAST + 1; // 57
+	static final int TYPE_V128ARR = IARR_TYPE_LAST + 1; // 60
 
 	// struct {i32 count, i32 kind, (ref null eq) groups} -- the --simd replacement for
 	// the
@@ -1058,13 +1088,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_V128ARR, and `groups` holds ceil(count / lanes) + 1 groups -- the trailing one
 	// a
 	// zero sentinel so matvec's shuffle window can always read one group past its last.
-	static final int TYPE_VBLOCK = FX_TYPE_LAST + 2; // 58
+	static final int TYPE_VBLOCK = IARR_TYPE_LAST + 2; // 61
 
 	// _v_get ((ref null eq) vblock, i32 index) -> f64
-	static final int TYPE_V_GET = FX_TYPE_LAST + 3; // 59
+	static final int TYPE_V_GET = IARR_TYPE_LAST + 3; // 62
 
 	// _v_set ((ref null eq) vblock, i32 index, f64 value) -> f64 (the value AS STORED)
-	static final int TYPE_V_SET = FX_TYPE_LAST + 4; // 60
+	static final int TYPE_V_SET = IARR_TYPE_LAST + 4; // 63
 
 	// How many type entries the --simd block appends.
 	static final int SIMD_TYPE_COUNT = 4;
@@ -1783,6 +1813,25 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Assign funcIds and build function info map
 		int[] nextFuncId = { 0 };
 		Map<String, WasmFunctionInfo> functions = new HashMap<>();
+		// The fusion-inlinable defuns (todo 194 stage 2): a UNIQUELY-defined,
+		// fixed-arity defun whose single body expression is a closed integer-operation
+		// tree over its parameters (WasmIntFusionCompiler.isInlinableDefun). A call to
+		// one inside a fused expression tree substitutes the body, so ironclad-style
+		// one-liner arithmetic wrappers (mod32+, rol32) stop chopping hot expression
+		// trees into boxed call boundaries. Never under --dynamic (late binding must
+		// keep observing redefinition).
+		Map<String, DefunDecl> inlinableDefuns = new HashMap<>();
+		if (!this.dynamic) {
+			Map<String, Integer> defunCounts = new HashMap<>();
+			for (DefunDecl defun : defuns) {
+				defunCounts.merge(defun.name(), 1, Integer::sum);
+			}
+			for (DefunDecl defun : defuns) {
+				if (defunCounts.getOrDefault(defun.name(), 0) == 1 && WasmIntFusionCompiler.isInlinableDefun(defun)) {
+					inlinableDefuns.put(defun.name(), defun);
+				}
+			}
+		}
 		for (int i = 0; i < defuns.size(); i++) {
 			DefunDecl defun = defuns.get(i);
 			int funcId = nextFuncId[0]++;
@@ -1794,6 +1843,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			functions.put(defun.name, new WasmFunctionInfo(defun.name, arity, defun.variadic, funcId,
 					TYPE_CALLABLE_BASE + arity, userFuncBase() + i));
+			if (Boolean.getBoolean("rontolisp.debug.functable")) {
+				// Profiling aid: map a perf "wasm[0]::function[N]" index back to its
+				// defun (the emitted module carries no name section).
+				System.err.println("[functable] " + (userFuncBase() + i) + "\t" + defun.name);
+			}
 		}
 
 		// Shared state for lambda discovery
@@ -1833,6 +1887,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.crossLambdaExit(crossLambdaExit)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
 			.functions(functions)
+			.inlinableDefuns(inlinableDefuns)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
 			.nextFuncId(nextFuncId)
@@ -3079,6 +3134,34 @@ public final class WasmLispCompiler implements LispCompiler {
 				});
 				// type 56 (TYPE_FX_DIV): _fx_mod/_fx_rem (i64, i64) -> i64
 				types.addFunc(new Type[] { Type.I64, Type.I64 }, new Type[] { Type.I64 });
+				// types 57-59 (TYPE_I8ARR/TYPE_I16ARR/TYPE_I32ARR): the packed
+				// integer-vector storage -- bare array (mut i8|i16|i32) values (rank-1,
+				// no struct wrapper). ONE rec group, so the i32 width stays structurally
+				// distinct from TYPE_LIMBS under wasm-GC canonicalization.
+				types.addRecGroup(rec -> {
+					rec.addSubFinalArray(w -> {
+						w.write(Type.I8_STORAGE);
+						w.write(am.ik.wasm.Mutability.VAR);
+					});
+					rec.addSubFinalArray(w -> {
+						w.write(Type.I16_STORAGE);
+						w.write(am.ik.wasm.Mutability.VAR);
+					});
+					rec.addSubFinalArray(w -> {
+						w.write(Type.I32);
+						w.write(am.ik.wasm.Mutability.VAR);
+					});
+				});
+				// type 60 (TYPE_IV_SET): _iv_set ((ref null eq), i32, i64) -> ()
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(3);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I32);
+					w.write(Type.I64);
+					w.write(0);
+				});
 				if (this.simd) {
 					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
@@ -3463,6 +3546,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_FX_BIN); // _fx_ash
 				fnDef.addFunction(TYPE_FX_DIV); // _fx_mod
 				fnDef.addFunction(TYPE_FX_DIV); // _fx_rem
+				fnDef.addFunction(TYPE_IV_SET); // _iv_set
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -3921,6 +4005,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmFxRuntimeBuilder.buildFxAshBody());
 				code.addFunction(WasmFxRuntimeBuilder.buildFxModBody());
 				code.addFunction(WasmFxRuntimeBuilder.buildFxRemBody());
+				code.addFunction(WasmFxRuntimeBuilder.buildIvSetBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
@@ -4421,6 +4506,14 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		Map<String, WasmFunctionInfo> functions;
 
+		/**
+		 * Uniquely-defined fixed-arity defuns whose single body expression is a closed
+		 * integer-operation tree over the parameters -- the fusion compiler substitutes
+		 * their bodies at fused call sites (todo 194 stage 2). Empty under
+		 * {@code --dynamic}.
+		 */
+		Map<String, DefunDecl> inlinableDefuns = Map.of();
+
 		Map<String, Integer> captures = Map.of();
 
 		Set<String> boxedVars = Set.of();
@@ -4703,6 +4796,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.currentTaskGlobalIndex = builder.currentTaskGlobalIndex;
 			this.serveInitGlobalIndex = builder.serveInitGlobalIndex;
 			this.callbackExports = builder.callbackExports;
+			this.inlinableDefuns = builder.inlinableDefuns;
 		}
 
 		static Builder builder() {
@@ -4718,6 +4812,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private @Nullable StringTable stringTable;
 
 			private Map<String, WasmFunctionInfo> functions = Map.of();
+
+			private Map<String, DefunDecl> inlinableDefuns = Map.of();
 
 			private List<LambdaInfo> lambdaDecls = new ArrayList<>();
 
@@ -4790,6 +4886,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder functions(Map<String, WasmFunctionInfo> functions) {
 				this.functions = functions;
+				return this;
+			}
+
+			Builder inlinableDefuns(Map<String, DefunDecl> inlinableDefuns) {
+				this.inlinableDefuns = inlinableDefuns;
 				return this;
 			}
 

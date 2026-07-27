@@ -11117,4 +11117,125 @@ class WasmLispCompilerIntegrationTest {
 		return body.toByteArray();
 	}
 
+	@Test
+	void compilePackedIntVectorMakeArrayMasksAndReadsUnsigned() throws Exception {
+		// .kb/packed-integer-vectors.md: stores mask to the width, reads widen
+		// unsigned, setf returns the value AS STORED -- matching the interpreter.
+		// let* sequencing, not (list (setf ...) (aref ...)): compiled list arguments
+		// evaluate right-to-left (.todo/014), so the store must be ordered explicitly.
+		assertThat(compileAndRun("""
+				(let* ((a (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+				       (stored (setf (aref a 1) 300))
+				       (readback (aref a 1)))
+				  (print (list stored readback (aref a 0) (length a) a)))
+				""")).isEqualTo("(44 44 7 4 #(7 44 7 7))");
+		assertThat(compileAndRun(
+				"(print (make-array 3 :element-type '(unsigned-byte 16) :initial-contents '(1 70000 3)))"))
+			.isEqualTo("#(1 4464 3)");
+		assertThat(compileAndRun("""
+				(let ((a (make-array 2 :element-type '(unsigned-byte 32))))
+				  (setf (aref a 0) 4294967295)
+				  (setf (aref a 1) 4294967296)
+				  (print a))
+				""")).isEqualTo("#(4294967295 0)");
+	}
+
+	@Test
+	void compilePackedIntVectorIntrospection() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((a (make-array 3 :element-type '(unsigned-byte 8))))
+				  (print (list (array-element-type a) (arrayp a) (vectorp a) (array-dimensions a)
+				               (typep a '(simple-array (unsigned-byte 8) (*))))))
+				""")).isEqualTo("((UNSIGNED-BYTE 8) T T (3) T)");
+		// A rank-n shape (runtime-detected) and a fill-pointer combination keep the
+		// general boxed representation.
+		assertThat(compileAndRun("(print (array-element-type (make-array '(2 2) :element-type '(unsigned-byte 8))))"))
+			.isEqualTo("T");
+		assertThat(compileAndRun("""
+				(let ((a (make-array '(2 2) :element-type '(unsigned-byte 8) :initial-element 3)))
+				  (setf (aref a 1 1) 9)
+				  (print (list (aref a 0 0) (aref a 1 1))))
+				""")).isEqualTo("(3 9)");
+	}
+
+	@Test
+	void compilePackedIntVectorSubseqCopySeqReplacePreserveThePackedType() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((a (make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(9 8 7 6)))
+				       (s (subseq a 1 3)))
+				  (setf (aref s 0) 300)
+				  (print (list s (array-element-type s) a)))
+				""")).isEqualTo("(#(44 7) (UNSIGNED-BYTE 8) #(9 8 7 6))");
+		assertThat(compileAndRun("""
+				(let ((dst (make-array 3 :element-type '(unsigned-byte 8)))
+				      (src #(300 2 3)))
+				  (replace dst src)
+				  (print dst))
+				""")).isEqualTo("#(44 2 3)");
+	}
+
+	@Test
+	void compilePackedIntVectorReaderLiteralAndRowMajor() throws Exception {
+		assertThat(compileAndRun("(print (list #8@(1 2 300) (array-element-type #32@(1 2))))"))
+			.isEqualTo("(#(1 2 44) (UNSIGNED-BYTE 32))");
+		assertThat(compileAndRun("""
+				(let ((a #8@(1 2 3)))
+				  (%row-major-aset a 1 999)
+				  (print (list (row-major-aref a 1) a)))
+				""")).isEqualTo("(231 #(1 231 3))");
+	}
+
+	@Test
+	void compilePackedIntVectorFusedArefAndStoreMatchTheGenericPath() throws Exception {
+		// The SHA-256 shape: fused trees whose leaves are packed aref reads, storing
+		// raw through _iv_set. The rolling loop crosses the i31 boundary in both
+		// directions and must match the interpreter's boxed arithmetic bit for bit.
+		assertThat(compileAndRun("""
+				(let ((w (make-array 8 :element-type '(unsigned-byte 32))))
+				  (setf (aref w 0) 1732584193)
+				  (setf (aref w 1) 4023233417)
+				  (dotimes (i 6)
+				    (setf (aref w (+ i 2))
+				          (logand 4294967295
+				                  (+ (logxor (aref w i) (ash (aref w (+ i 1)) -3))
+				                     (* 31 (aref w (+ i 1)))))))
+				  (print w))
+				"""))
+			.isEqualTo("#(1732584193 4023233417 2225363975 255870178 1578413049 1761846468 178639645 2993401642)");
+		// A GENERAL array reaching a fused aref leaf bails to the ordinary aref
+		// dispatch; a string element likewise (and makes the whole tree fall back).
+		assertThat(compileAndRun("""
+				(let ((v (vector 10 20 3.5)))
+				  (print (+ (aref v 0) (aref v 1) 100))
+				  (print (+ (aref v 2) (aref v 0) 1)))
+				""")).isEqualTo("130\n14.5");
+	}
+
+	@Test
+	void compileInlinableDefunsFuseWithoutChangingResults() throws Exception {
+		// mod32+/rol32-style one-liner wrappers substitute into fused trees AND at
+		// direct call sites; results (including bignum promotion through the boxed
+		// fallback and argument side effects run once) must be unchanged.
+		assertThat(compileAndRun("""
+				(defun mod32+ (a b) (ldb (byte 32 0) (+ a b)))
+				(defun rol32 (a s)
+				  (logior (ldb (byte 32 0) (ash a s)) (ash a (- s 32))))
+				(print (mod32+ 4294967295 2))
+				(print (rol32 2864434397 8))
+				(print (mod32+ (rol32 305419896 4) (mod32+ 1 2)))
+				""")).isEqualTo("1\n3150765482\n591751044");
+		// A side-effecting argument bound to a multi-use parameter evaluates once.
+		assertThat(compileAndRun("""
+				(defun twice (x) (+ x x))
+				(defvar *n* 0)
+				(print (twice (setq *n* (+ *n* 5))))
+				(print *n*)
+				""")).isEqualTo("10\n5");
+		// Out-of-i64 promotion inside an inlined body takes the generic fallback.
+		assertThat(compileAndRun("""
+				(defun sq (x) (* x x))
+				(print (sq 4294967295))
+				""")).isEqualTo("18446744065119617025");
+	}
+
 }

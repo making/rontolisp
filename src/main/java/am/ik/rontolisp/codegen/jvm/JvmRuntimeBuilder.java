@@ -411,6 +411,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
+			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
 			@org.jspecify.annotations.Nullable InstPrint instPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
@@ -428,10 +429,12 @@ final class JvmRuntimeBuilder {
 		emitFutureBranch(code, futurePrint);
 		// if (val instanceof double[]) return
 		// _arrayToString(_fvToGeneral(val)).replaceFirst(...#d...); and
+		// if (val instanceof long[]) return _arrayToString(_ivToGeneral(val)); and
 		// if (val instanceof ArrayList) return _arrayToString(val); (only when arrays
 		// used; a mutable character vector instead renders via _strv, quote-framed like
 		// the String branch)
-		emitArrayBranch(code, arrayListClass, arrayToStringMethod, packedPrint, strvMethod, stringClass, null, null);
+		emitArrayBranch(code, arrayListClass, arrayToStringMethod, packedPrint, packedIntPrint, strvMethod, stringClass,
+				null, null);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -739,6 +742,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
+			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
 			@org.jspecify.annotations.Nullable InstPrint instPrint) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
@@ -755,11 +759,12 @@ final class JvmRuntimeBuilder {
 		emitFutureBranch(code, futurePrint);
 		// if (val instanceof double[]) return
 		// _arrayToDisplayString(_fvToGeneral(val)).replaceFirst(...#d...); and
+		// if (val instanceof long[]) return _arrayToDisplayString(_ivToGeneral(val)); and
 		// if (val instanceof ArrayList) return _arrayToDisplayString(val); (arrays only;
 		// a mutable character vector instead renders via _strv with the surrounding
 		// quotes stripped, like the String branch)
-		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, packedPrint, strvMethod, stringClass,
-				stringLength, stringSubstring);
+		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, packedPrint, packedIntPrint, strvMethod,
+				stringClass, stringLength, stringSubstring);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -1116,6 +1121,18 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
+	 * Constant-pool references for printing a packed integer vector (a {@code long[]}
+	 * with a width header at runtime) as a plain {@code #(...)} vector -- CL prints
+	 * specialized vectors this way, so unlike the {@code #d}/{@code #f} float syntax
+	 * there is no prefix rewrite: the value is boxed to a general array
+	 * ({@code ivToGeneralMethod}) and rendered by the ordinary array renderer. Threaded
+	 * into the two lisp-to-string builders only when the program uses packed integer
+	 * vectors.
+	 */
+	record PackedIntPrint(ClassConstant longArrayClass, MethodrefConstant ivToGeneralMethod) {
+	}
+
+	/**
 	 * Constant-pool references for printing an instance -- {@code #S(NAME :SLOT v ...)}
 	 * for a struct layout, {@code #&lt;NAME :SLOT v ...&gt;} for a class one. Threaded
 	 * into the two lisp-to-string builders only when the program can build an instance,
@@ -1469,6 +1486,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
+			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod, ClassConstant stringClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant stringLength,
 			@org.jspecify.annotations.Nullable MethodrefConstant stringSubstring) {
@@ -1482,6 +1500,23 @@ final class JvmRuntimeBuilder {
 					packedPrint.prefixRepl());
 			emitPackedPrintBranch(code, packedPrint.floatArrayClass(), arrayToStringMethod, packedPrint,
 					packedPrint.prefixReplSingle());
+		}
+		if (packedIntPrint != null) {
+			// if (val instanceof long[]) return arrayToString(_ivToGeneral(val)); -- a
+			// plain #(...) vector, no prefix rewrite.
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, packedIntPrint.longArrayClass().index());
+			int ifNotPackedIntPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, packedIntPrint.ivToGeneralMethod().index());
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, arrayToStringMethod.index());
+			code.add(Opcode.ARETURN);
+			patchBranch(code, ifNotPackedIntPos, code.size());
 		}
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);

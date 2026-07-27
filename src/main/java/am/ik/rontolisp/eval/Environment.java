@@ -41,6 +41,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispHashTable;
+import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispMacroExpander;
@@ -556,24 +557,26 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.ARRAYP_INTERNAL, new LispFunction(LispNames.ARRAYP_INTERNAL, args -> {
 			requireArgCount(LispNames.ARRAYP_INTERNAL, args, 1);
-			return (args.get(0) instanceof LispArray || args.get(0) instanceof LispFloatArray) ? LispTrue.INSTANCE
-					: LispNil.INSTANCE;
+			return (args.get(0) instanceof LispArray || args.get(0) instanceof LispFloatArray
+					|| args.get(0) instanceof LispIntVector) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// arrayp: the standard spelling -- a string is an array in CL, so the public
 		// predicate is the internal one widened by stringp.
 		env.defineFunction(LispNames.ARRAYP, new LispFunction(LispNames.ARRAYP, args -> {
 			requireArgCount(LispNames.ARRAYP, args, 1);
 			return (args.get(0) instanceof LispString || args.get(0) instanceof LispArray
-					|| args.get(0) instanceof LispDoubleFloatArray || args.get(0) instanceof LispSingleFloatArray)
-							? LispTrue.INSTANCE : LispNil.INSTANCE;
+					|| args.get(0) instanceof LispDoubleFloatArray || args.get(0) instanceof LispSingleFloatArray
+					|| args.get(0) instanceof LispIntVector) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// vectorp: strings are vectors in CL. Like the vector type specifier, the rank
 		// is NOT checked (a rank-n array passes too) -- see makeTypeTest. A packed
-		// double-float array is a vector on the same terms as a general array.
+		// double-float array or integer vector is a vector on the same terms as a
+		// general array.
 		env.defineFunction(LispNames.VECTORP, new LispFunction(LispNames.VECTORP, args -> {
 			requireArgCount(LispNames.VECTORP, args, 1);
 			return (args.get(0) instanceof LispString || args.get(0) instanceof LispArray
-					|| args.get(0) instanceof LispFloatArray) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+					|| args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector)
+							? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 	}
 
@@ -655,6 +658,30 @@ public final class Environment implements Scope {
 				}
 				return new LispDoubleFloatArray(fdata, dims);
 			}
+			int packedIntWidth = packedIntElementWidth(elementTypeArg);
+			if (packedIntWidth > 0 && dims.length == 1 && !hasFillPointer && !adjustable) {
+				// :element-type '(unsigned-byte 8|16|32) on a rank-1 array selects the
+				// packed integer-vector representation (todo 194 stage 2). Stores mask to
+				// the width (what raw i8/i16/i32 storage does on the compiled backends);
+				// reads widen unsigned. A non-integer element is a type error. Rank-n /
+				// fill-pointer / adjustable / displaced combinations keep the general
+				// boxed representation, like the packed float fallback.
+				long[] idata = new long[total];
+				if (initialContents != null) {
+					LispVal[] tmp = new LispVal[total];
+					fillInitialContents(initialContents, dims, 0, tmp, 0);
+					for (int i = 0; i < total; i++) {
+						idata[i] = exactIntElement(LispNames.MAKE_ARRAY, tmp[i]);
+					}
+				}
+				else if (initGiven) {
+					long fill = exactIntElement(LispNames.MAKE_ARRAY, init) & LispIntVector.mask(packedIntWidth);
+					if (fill != 0) {
+						java.util.Arrays.fill(idata, fill);
+					}
+				}
+				return new LispIntVector(packedIntWidth, idata);
+			}
 			// A rank-1 :element-type 'character array is a string in CL, so build a
 			// mutable LispString (the make-string result shape; space-filled unless
 			// :initial-element says otherwise). :fill-pointer/:adjustable carry over --
@@ -717,6 +744,12 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispFloatArray fa) {
 				return fa.aref(subs);
 			}
+			if (args.get(0) instanceof LispIntVector iv) {
+				if (subs.length != 1) {
+					throw new LispEvalException(LispNames.AREF + ": a packed integer vector is rank 1");
+				}
+				return new LispInteger(intVectorRead(LispNames.AREF, iv, subs[0]));
+			}
 			// A string is a rank-1 array of characters in CL, so (aref s i) reads like
 			// (char s i). Writing still goes through %schar-set (the schar setf place).
 			if (args.get(0) instanceof LispString && subs.length == 1) {
@@ -731,7 +764,8 @@ public final class Environment implements Scope {
 			// fill pointer only limits the effective length).
 			int[] sizes = (args.get(0) instanceof LispString str) ? new int[] { str.capacity() }
 					: (args.get(0) instanceof LispFloatArray fa) ? fa.dims()
-							: requireArray(LispNames.ARRAY_DIMENSIONS, args.get(0)).dimensions();
+							: (args.get(0) instanceof LispIntVector iv) ? new int[] { iv.length() }
+									: requireArray(LispNames.ARRAY_DIMENSIONS, args.get(0)).dimensions();
 			LispVal dims = LispNil.INSTANCE;
 			for (int i = sizes.length - 1; i >= 0; i--) {
 				dims = new LispCons(new LispInteger(sizes[i]), dims);
@@ -757,6 +791,15 @@ public final class Environment implements Scope {
 				fa.aset(asDouble(value), subs);
 				return fa.aref(subs);
 			}
+			if (args.get(0) instanceof LispIntVector iv) {
+				// Mask-store to the element width and return the value AS STORED, so the
+				// effective element value is consistent across backends and widths.
+				if (subs.length != 1) {
+					throw new LispEvalException(LispNames.ASET + ": a packed integer vector is rank 1");
+				}
+				intVectorRead(LispNames.ASET, iv, subs[0]);
+				return new LispInteger(iv.setElement(subs[0], exactIntElement(LispNames.ASET, value)));
+			}
 			// A string is a rank-1 character array: (setf (aref s i) c) mutates in
 			// place like the schar setf place (cl-ppcre builds two-char strings with
 			// make-array + aset).
@@ -772,6 +815,9 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispFloatArray fa) {
 				return fa.readFlat(rowMajorIndex(LispNames.ROW_MAJOR_AREF, fa.totalSize(), args.get(1)));
 			}
+			if (args.get(0) instanceof LispIntVector iv) {
+				return new LispInteger(intVectorRead(LispNames.ROW_MAJOR_AREF, iv, (int) asLong(args.get(1))));
+			}
 			LispArray array = requireArray(LispNames.ROW_MAJOR_AREF, args.get(0));
 			return array.readFlat(rowMajorIndex(LispNames.ROW_MAJOR_AREF, array.totalSize(), args.get(1)));
 		}));
@@ -785,6 +831,11 @@ public final class Environment implements Scope {
 				// returned value matches what is stored across widths and backends.
 				fa.setElement(flat, asDouble(value));
 				return fa.readFlat(flat);
+			}
+			if (args.get(0) instanceof LispIntVector iv) {
+				int flat = (int) asLong(args.get(1));
+				intVectorRead(LispNames.ROW_MAJOR_ASET, iv, flat);
+				return new LispInteger(iv.setElement(flat, exactIntElement(LispNames.ROW_MAJOR_ASET, value)));
 			}
 			if (args.get(0) instanceof LispString str) {
 				return storeStringChar(LispNames.ROW_MAJOR_ASET, str, (int) asLong(args.get(1)), value);
@@ -837,7 +888,7 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.ARRAY_HAS_FILL_POINTER_P,
 				new LispFunction(LispNames.ARRAY_HAS_FILL_POINTER_P, args -> {
 					requireArgCount(LispNames.ARRAY_HAS_FILL_POINTER_P, args, 1);
-					if (args.get(0) instanceof LispFloatArray) {
+					if (args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector) {
 						return LispNil.INSTANCE;
 					}
 					if (args.get(0) instanceof LispString str) {
@@ -851,12 +902,15 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispFloatArray fa) {
 				return new LispSymbol(fa.elementType());
 			}
+			if (args.get(0) instanceof LispIntVector iv) {
+				return iv.elementTypeSpec();
+			}
 			requireArray(LispNames.ARRAY_ELEMENT_TYPE, args.get(0));
 			return new LispSymbol("T");
 		}));
 		env.defineFunction(LispNames.ADJUSTABLE_ARRAY_P, new LispFunction(LispNames.ADJUSTABLE_ARRAY_P, args -> {
 			requireArgCount(LispNames.ADJUSTABLE_ARRAY_P, args, 1);
-			if (args.get(0) instanceof LispFloatArray) {
+			if (args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector) {
 				return LispNil.INSTANCE;
 			}
 			if (args.get(0) instanceof LispString str) {
@@ -947,6 +1001,16 @@ public final class Environment implements Scope {
 			}
 			return adjustArray(array, parseDimensions(args.get(1)), init, fillPointerArg);
 		}));
+		env.defineFunction(LispNames.ARRAY_ALIKE, new LispFunction(LispNames.ARRAY_ALIKE, args -> {
+			requireArgCount(LispNames.ARRAY_ALIKE, args, 2);
+			int n = (int) asLong(args.get(1));
+			if (args.get(0) instanceof LispIntVector iv) {
+				return new LispIntVector(iv.width(), new long[n]);
+			}
+			LispVal[] data = new LispVal[n];
+			java.util.Arrays.fill(data, LispNil.INSTANCE);
+			return new LispArray(new int[] { n }, data);
+		}));
 		env.defineFunction(LispNames.ARRAY_BECOME, new LispFunction(LispNames.ARRAY_BECOME, args -> {
 			requireArgCount(LispNames.ARRAY_BECOME, args, 2);
 			LispArray old = requireGeneralArray(LispNames.ARRAY_BECOME, args.get(0));
@@ -955,7 +1019,7 @@ public final class Environment implements Scope {
 		}));
 		LispFunction dispTarget = new LispFunction(LispNames.ARRAY_DISPLACEMENT, args -> {
 			requireArgCount(LispNames.ARRAY_DISPLACEMENT, args, 1);
-			if (args.get(0) instanceof LispFloatArray) {
+			if (args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector) {
 				return LispNil.INSTANCE;
 			}
 			LispArray array = requireArray(LispNames.ARRAY_DISPLACEMENT, args.get(0));
@@ -967,7 +1031,7 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.ARRAY_DISP_TARGET, dispTarget);
 		env.defineFunction(LispNames.ARRAY_DISP_OFFSET, new LispFunction(LispNames.ARRAY_DISP_OFFSET, args -> {
 			requireArgCount(LispNames.ARRAY_DISP_OFFSET, args, 1);
-			if (args.get(0) instanceof LispFloatArray) {
+			if (args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector) {
 				return new LispInteger(0);
 			}
 			return new LispInteger(requireArray(LispNames.ARRAY_DISP_OFFSET, args.get(0)).displacedOffset());
@@ -1090,7 +1154,53 @@ public final class Environment implements Scope {
 		if (val instanceof LispFloatArray) {
 			throw new LispEvalException(fn + ": not applicable to a packed float array");
 		}
+		if (val instanceof LispIntVector) {
+			throw new LispEvalException(fn + ": not applicable to a packed integer vector");
+		}
 		return requireArray(fn, val);
+	}
+
+	// A bounds-checked packed integer-vector element read (the compiled backends trap on
+	// the same condition).
+	private static long intVectorRead(String fn, LispIntVector iv, int index) {
+		if (index < 0 || index >= iv.length()) {
+			throw new LispEvalException(
+					fn + ": index " + index + " out of range for packed integer vector of length " + iv.length());
+		}
+		return iv.elementAt(index);
+	}
+
+	// The packed integer-vector element width a make-array :element-type argument
+	// designates: 8/16/32 for the literal list (unsigned-byte 8|16|32), else 0. The
+	// symbol name is matched ignoring any package qualifier, like the float widths.
+	private static int packedIntElementWidth(@Nullable LispVal elementType) {
+		if (elementType instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& cons.cdr() instanceof LispCons widthCell && widthCell.car() instanceof LispInteger width
+				&& widthCell.cdr() instanceof LispNil) {
+			String name = head.name();
+			int colon = name.lastIndexOf(':');
+			String local = colon >= 0 ? name.substring(colon + 1) : name;
+			if (local.equals(LispNames.UNSIGNED_BYTE)
+					&& (width.value() == 8 || width.value() == 16 || width.value() == 32)) {
+				return (int) width.value();
+			}
+		}
+		return 0;
+	}
+
+	// A packed integer-vector element: an exact integer, masked by the caller. Anything
+	// else (float, ratio, character, ...) is a type error -- there is no degrade path,
+	// matching the packed float arrays.
+	private static long exactIntElement(String fn, @Nullable LispVal val) {
+		if (val instanceof LispInteger i) {
+			return i.value();
+		}
+		if (val instanceof LispBigInteger b) {
+			// longValue() keeps the low 64 bits; the width mask below keeps fewer.
+			return b.value().longValue();
+		}
+		throw new LispEvalException(
+				fn + ": a packed integer vector stores integers, got " + (val == null ? "nil" : val.print()));
 	}
 
 	// The packed float-array element type a make-array :element-type argument designates:
@@ -2149,6 +2259,13 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}
+		if (val instanceof LispIntVector iv) {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = iv.length() - 1; i >= 0; i--) {
+				result = new LispCons(new LispInteger(iv.elementAt(i)), result);
+			}
+			return result;
+		}
 		return val;
 	}
 
@@ -2183,6 +2300,20 @@ public final class Environment implements Scope {
 			LispVal[] data = flat.toArray(new LispVal[0]);
 			return new LispArray(new int[] { data.length }, data);
 		}
+		if (original instanceof LispIntVector) {
+			// A general vector, NOT a packed rebuild: the compile backends' sequence
+			// expansions produce general vectors here, and the cheap consistent contract
+			// is "vector in, vector out" with packing preserved only by the dedicated
+			// subseq/copy-seq/replace arms (which every backend implements).
+			List<LispVal> flat = new ArrayList<>();
+			LispVal cur = list;
+			while (cur instanceof LispCons cell) {
+				flat.add(cell.car());
+				cur = cell.cdr();
+			}
+			LispVal[] data = flat.toArray(new LispVal[0]);
+			return new LispArray(new int[] { data.length }, data);
+		}
 		return list;
 	}
 
@@ -2197,6 +2328,12 @@ public final class Environment implements Scope {
 		if (seq instanceof LispFloatArray packed && packed.rank() == 1) {
 			for (int i = 0; i < packed.totalSize(); i++) {
 				out.add(packed.readFlat(i));
+			}
+			return;
+		}
+		if (seq instanceof LispIntVector iv) {
+			for (int i = 0; i < iv.length(); i++) {
+				out.add(new LispInteger(iv.elementAt(i)));
 			}
 			return;
 		}
@@ -2232,6 +2369,9 @@ public final class Environment implements Scope {
 							LispNames.LENGTH + ": argument is not a sequence (rank-" + fa.rank() + " array)");
 				}
 				return new LispInteger(fa.totalSize());
+			}
+			if (args.get(0) instanceof LispIntVector iv) {
+				return new LispInteger(iv.length());
 			}
 			long count = 0;
 			LispVal cur = args.get(0);
@@ -2777,6 +2917,19 @@ public final class Environment implements Scope {
 				}
 				return new LispArray(new int[] { copy.length }, copy);
 			}
+			if (args.get(0) instanceof LispIntVector iv) {
+				// Type-preserving: a subsequence of a packed integer vector stays packed
+				// at the same width (ironclad's pbkdf1 subseqs its byte-vector key).
+				int len = iv.length();
+				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : len;
+				if (start < 0 || end > len || start > end) {
+					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
+							+ " for vector of length " + len);
+				}
+				long[] copy = new long[end - start];
+				System.arraycopy(iv.data(), start, copy, 0, copy.length);
+				return new LispIntVector(iv.width(), copy);
+			}
 			throw new LispEvalException(
 					LispNames.SUBSEQ + " expects a string, list, or vector, got: " + args.get(0).print());
 		}));
@@ -2786,6 +2939,9 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.COPY_SEQ, args, 1);
 			if (args.get(0) instanceof LispString str) {
 				return new LispString(str.value());
+			}
+			if (args.get(0) instanceof LispIntVector iv) {
+				return new LispIntVector(iv.width(), iv.data().clone());
 			}
 			if (args.get(0) instanceof LispCons || args.get(0) instanceof LispNil) {
 				List<LispVal> elements = new ArrayList<>();
@@ -2845,6 +3001,9 @@ public final class Environment implements Scope {
 		if (val instanceof LispArray arr && arr.dimensions().length == 1) {
 			return arr.effectiveLength();
 		}
+		if (val instanceof LispIntVector iv) {
+			return iv.length();
+		}
 		if (val instanceof LispNil) {
 			return 0;
 		}
@@ -2874,6 +3033,9 @@ public final class Environment implements Scope {
 		}
 		if (val instanceof LispArray arr) {
 			return arr.readFlat(index);
+		}
+		if (val instanceof LispIntVector iv) {
+			return new LispInteger(iv.elementAt(index));
 		}
 		LispVal cur = val;
 		int i = 0;
@@ -4197,6 +4359,14 @@ public final class Environment implements Scope {
 					targetArr.writeFlat(start1 + k, sequenceRef(source, start2 + k));
 				}
 				return targetArr;
+			}
+			if (target instanceof LispIntVector targetIv) {
+				// Mask-store each element (a non-integer source element is a type error).
+				for (int k = 0; k < copied; k++) {
+					targetIv.setElement(start1 + k,
+							exactIntElement(LispNames.REPLACE, sequenceRef(source, start2 + k)));
+				}
+				return targetIv;
 			}
 			if (target instanceof LispCons || target instanceof LispNil) {
 				// A list target: walk to start1 and destructively rewrite copied cars.

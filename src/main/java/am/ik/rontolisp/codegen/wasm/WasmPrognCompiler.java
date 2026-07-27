@@ -27,12 +27,12 @@ final class WasmPrognCompiler {
 			WasmAsyncEmit.compileGuardedProgn(parts.subList(1, parts.size()), ctx);
 			return;
 		}
-		for (int i = 1; i < parts.size(); i++) {
-			if (i > 1) {
-				ctx.writer.write(Instruction.DROP);
-			}
-			WasmExprCompiler.compileExpr(parts.get(i), ctx);
+		for (int i = 1; i < parts.size() - 1; i++) {
+			// Statement position: compileForEffect lets a packed integer-vector store
+			// skip materializing its (discarded) value-as-stored.
+			WasmExprCompiler.compileForEffect(parts.get(i), ctx);
 		}
+		WasmExprCompiler.compileExpr(parts.get(parts.size() - 1), ctx);
 	}
 
 }

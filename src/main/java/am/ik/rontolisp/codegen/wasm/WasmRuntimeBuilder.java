@@ -3050,6 +3050,70 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(0);
 	}
 
+	// Pushes an i32: whether the value in slot is a packed integer vector (any width).
+	private static void emitIntVectorTest(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		w.write(Instruction.I32_OR);
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I32ARR);
+		w.write(Instruction.I32_OR);
+	}
+
+	// Pushes the i32 length of the packed integer vector in slot (width dispatch; the
+	// abstract-array cast keeps array.len width-agnostic).
+	private static void emitIntVectorLen(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.ARRAY_HT.code());
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+	}
+
+	// Pushes data[idx] of the packed integer vector in slot as an UNSIGNED i64,
+	// dispatching on the width.
+	private static void emitIntVectorGetU(WasmWriter w, int slot, int idxSlot) {
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		getLocal(w, idxSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.ELSE);
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		getLocal(w, idxSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_I16ARR);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.ELSE);
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I32ARR);
+		getLocal(w, idxSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_I32ARR);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
 	// Pushes the header cons (cell.field0) of the TYPE_CELL value in param 0.
 	private static void cellHeader(WasmWriter w) {
 		getLocal(w, 0);
@@ -3211,6 +3275,76 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
 		setLocal(w, 0);
 		w.write(Instruction.END); // if (farray)
+
+		// A packed integer vector (TYPE_I8ARR/I16ARR/I32ARR) converts in place the same
+		// way: boxed integer elements (through _int_new) under a fresh rank-1 dims,
+		// printing as a plain #(...) vector (packedSlot stays 0).
+		emitIntVectorTest(w, 0);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 0);
+		setLocal(w, dataSlot);
+		// lenSlot = array.len, dispatching on the width
+		emitIntVectorLen(w, dataSlot);
+		setLocal(w, lenSlot);
+		// dimsSlot = newBuckets = array.new $hash_buckets (null, len)
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		getLocal(w, lenSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		setLocal(w, dimsSlot);
+		// for (idx = 0; idx < len; idx++) newBuckets[idx] = _int_new(data[idx])
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, idxSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, idxSlot);
+		getLocal(w, lenSlot);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		getBucketsLocal(w, dimsSlot);
+		getLocal(w, idxSlot);
+		emitIntVectorGetU(w, dataSlot, idxSlot);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		getLocal(w, idxSlot);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, idxSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// param0 = cell(cons([len], cons(cons(null, cons(null, i31 0)), newBuckets)))
+		getLocal(w, lenSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		getBucketsLocal(w, dimsSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		setLocal(w, 0);
+		w.write(Instruction.END); // if (packed integer vector)
 
 		// if (param0 is TYPE_CELL)
 		getLocal(w, 0);

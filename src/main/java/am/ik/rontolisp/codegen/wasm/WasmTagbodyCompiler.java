@@ -98,8 +98,8 @@ final class WasmTagbodyCompiler {
 				ctx.wasmCtrlDepth--;
 			}
 			else {
-				WasmExprCompiler.compileExpr(part, ctx);
-				ctx.writer.write(Instruction.DROP);
+				// Statement position (a tagbody form's value is discarded).
+				WasmExprCompiler.compileForEffect(part, ctx);
 			}
 		}
 		ctx.tagbodyScopes.pop();

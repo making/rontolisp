@@ -94,6 +94,39 @@ final class WasmQuoteCompiler {
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
 
+	/**
+	 * Compiles a packed integer-vector literal (ironclad's {@code #N@(...)} table syntax,
+	 * or a macro-time value) into its native representation: a bare
+	 * {@code TYPE_I8ARR/I16ARR/I32ARR} array of the pre-masked elements, allocated zeroed
+	 * with {@code array.new_default} and filled with {@code array.set} (zero elements
+	 * skip their store). Shared by the {@code quote} path and the bare-literal path in
+	 * {@link WasmExprCompiler}.
+	 * @param iv the packed literal
+	 * @param ctx the compilation context
+	 */
+	static void compileIntVectorLiteral(am.ik.rontolisp.LispIntVector iv, WasmLispCompiler.Ctx ctx) {
+		long[] data = iv.data();
+		int type = WasmArrayCompiler.intArrType(iv.width());
+		i32Const(ctx, data.length);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		ctx.writer.writeSignedLeb128(type);
+		int dataSlot = ctx.allocTemp();
+		setLocal(ctx, dataSlot);
+		for (int i = 0; i < data.length; i++) {
+			if (data[i] == 0) {
+				continue;
+			}
+			getLocal(ctx, dataSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(type);
+			i32Const(ctx, i);
+			i32Const(ctx, (int) data[i]);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			ctx.writer.writeSignedLeb128(type);
+		}
+		getLocal(ctx, dataSlot);
+	}
+
 	// --- --simd packed literals (v128 lane groups) --------------------------------
 	//
 	// Under --simd a packed literal allocates a zeroed TYPE_VBLOCK at the point of
@@ -270,6 +303,7 @@ final class WasmQuoteCompiler {
 			case LispArray array -> compileQuotedArray(array, ctx);
 			case am.ik.rontolisp.LispDoubleFloatArray fa -> compilePackedLiteral(fa, ctx);
 			case am.ik.rontolisp.LispSingleFloatArray fa -> compileSinglePackedLiteral(fa, ctx);
+			case am.ik.rontolisp.LispIntVector iv -> compileIntVectorLiteral(iv, ctx);
 			// An instance inside quoted data (a #S(...) literal) builds the same
 			// TYPE_INSTANCE struct %obj-new does; it is self-evaluating, so it also
 			// reaches here from the bare-literal arm of compileExpr.

@@ -41,16 +41,39 @@ boxes; Cranelift does neither.
    rest = user defuns whose leaves are still boxed `aref` results and params.
    The remaining 2x is exactly stage 2: unboxed locals/arrays would erase the
    leaf guards, the root re-box and the aref boxing at once.
-2. **Unboxed i64 locals + typed integer arrays** (large, the real fix): a
-   per-function dataflow pass that keeps provably-integer locals as raw i64
-   (box only at escape points: calls, stores into refs, returns), plus
-   `(unsigned-byte 8/16/32)` vectors stored as raw `(array (mut i8/i16/i32))`
-   instead of ref arrays so `aref` stops boxing. This is what makes the SHA
-   inner loop pure i64 arithmetic. Design questions a session must answer
-   before coding: representation joins (an if-branch yielding boxed vs raw),
-   bignum overflow escape (i64 arithmetic that overflows must promote, so the
-   raw path needs the same overflow checks `_big_*` has), and `--dynamic` /
-   eval interop (late-bound calls always take the boxed representation).
+2. **Unboxed i64 locals + typed integer arrays** (large, the real fix):
+   PARTIALLY DONE 2026-07-27 -- the typed-array half plus fused-call defun
+   inlining landed (`.kb/packed-integer-vectors.md`); measured 2.0 s ->
+   **~1.45 s** on both wasm backends. What landed: packed
+   `(unsigned-byte 8/16/32)` rank-1 vectors on interpreter + wasm
+   (`LispIntVector` / bare `(array (mut i8|i16|i32))` types 57-59, `_iv_set`),
+   `#N@(...)` reads packed, `%array-alike` keeps subseq/copy-seq
+   type-preserving, fused `ArefLeaf` raw reads, raw `%aset` stores
+   (statement-position stores allocate nothing), literal-`ldb` classification,
+   and substitution of closed one-liner integer defuns (mod32+/rol32) into
+   fused trees and at direct call sites (never under `--dynamic`).
+   The design questions answered: representation joins avoided entirely (no
+   raw locals yet -- dual-representation design sketched below), overflow
+   escape = the existing fused-fallback recomputation, `--dynamic`/eval =
+   inlining and raw paths disabled under `--dynamic`, boxed on-demand
+   elsewhere.
+   The JVM packed `long[]` half landed the same day (`JvmIntArrayRuntimeBuilder`
+   `_iv*` helpers under the `usesIntArray` gate) -- all FOUR backends now share
+   the mask-store/unsigned-read semantics, pinned by the `packedIntVector*`
+   tests and the `packed-integer-vectors` ci-spec case.
+   STILL OPEN (stage 3 candidates, in profile order at ~1.45 s):
+   - **flet inlining** (~15%: dispatch_N 6% + sigma/ch/maj lambda bodies +
+     their boxed boundaries): beta-substitute single-expression closed flet
+     bodies with pure (symbol/constant) args at expansion time, or teach the
+     fusion classifier the `(funcall __fletN_x ...)` shape.
+   - **unboxed i64 locals** (the round temps x/d/h, ~8% `_int_new` residue):
+     dual-representation design -- each eligible local gets an i64 slot + a
+     boxed shadow slot with "shadow non-null => boxed (bigint promotion)"
+     invariant; eligibility = never captured/special, every assignment a fused
+     tree root. Needs typed local declarations (today every local is
+     `(ref null eq)`).
+   - `_str_build`/`_charvec_to_str` ~6% (hmac re-keying string traffic) and
+     single-op loop-counter `+` through `_rat_add` ~4%.
 3. NOT worth doing for this: SIMD (SHA-256 is serially dependent) and further
    wasmtime flags (nothing engine-level is left in the profile).
 
@@ -83,13 +106,17 @@ perf report --no-children --stdio
 - [ ] The PBKDF2 benchmark above runs in under ~1 s on WASM Preview 1 and the
   component (or the session records why the wasmtime codegen floor makes a
   higher number the honest limit, with a profile showing no box/unbox traffic
-  left). Stage 1 got to ~2.0 s on both; needs stage 2.
+  left). Stage 1 got to ~2.0 s; stage 2 (typed arrays + defun inlining) to
+  **~1.45 s** on Preview 1 (2026-07-27). Remaining traffic is the flet
+  boundary, the round-temp locals and hmac string re-keying (see the stage-2
+  residue list above), not engine overhead.
 - [ ] `logand`/`logior`/`logxor`/`ash`/`+`/`*` on fixnum-range values allocate
   nothing in a hot loop (pin however the implementation allows -- e.g. a
   wasmtime `-O gc-zeal`-style counter run, or a profile assertion documented in
-  the todo's close-out). Stage 1 partial: INTERMEDIATES of a fused tree
-  allocate nothing, but each out-of-i31 root result and every boxed leaf still
-  do.
+  the todo's close-out). Stage 2 partial: fused-tree intermediates, packed
+  `aref` leaf reads and statement-position packed stores allocate nothing;
+  out-of-i31 roots that feed LOCALS (the round temps) and flet-boundary
+  values still box.
 - [x] All four backends still agree on `ci-spec.yaml` (bignum promotion at the
   i64 overflow boundary is the risky edge -- `.kb/wasm-bignum.md`'s
   narrowest-tier invariant must survive the raw path). Stage 1 pinned by the

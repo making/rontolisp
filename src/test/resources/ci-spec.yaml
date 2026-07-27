@@ -156,6 +156,55 @@ cases:
       123
       111
       3454992811
+  - name: packed-integer-vectors
+    source: |
+      (let* ((piv-a (make-array 4 :element-type '(unsigned-byte 8) :initial-element 7))
+             (piv-stored (setf (aref piv-a 1) 300))
+             (piv-read (aref piv-a 1)))
+        (print (list piv-stored piv-read (aref piv-a 0) (length piv-a)))
+        (print piv-a)
+        (print (array-element-type piv-a))
+        (print (list (arrayp piv-a) (vectorp piv-a) (array-dimensions piv-a)
+                     (typep piv-a '(simple-array (unsigned-byte 8) (*))))))
+      (print (make-array 3 :element-type '(unsigned-byte 16) :initial-contents '(1 70000 3)))
+      (let ((piv-w (make-array 2 :element-type '(unsigned-byte 32))))
+        (setf (aref piv-w 0) 4294967295)
+        (setf (aref piv-w 1) 4294967296)
+        (print piv-w))
+      (let* ((piv-src (make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(9 8 7 6)))
+             (piv-sub (subseq piv-src 1 3)))
+        (setf (aref piv-sub 0) 300)
+        (print (list piv-sub (array-element-type piv-sub) piv-src)))
+      (let ((piv-dst (make-array 3 :element-type '(unsigned-byte 8))))
+        (replace piv-dst #(300 2 3))
+        (print piv-dst))
+      (print (list #8@(1 2 300) (array-element-type #32@(1 2))))
+      (let ((piv-lit #8@(1 2 3)))
+        (%row-major-aset piv-lit 1 999)
+        (print (list (row-major-aref piv-lit 1) piv-lit)))
+      (print (array-element-type (make-array '(2 2) :element-type '(unsigned-byte 8))))
+      (let ((piv-hot (make-array 8 :element-type '(unsigned-byte 32))))
+        (setf (aref piv-hot 0) 1732584193)
+        (setf (aref piv-hot 1) 4023233417)
+        (dotimes (piv-i 6)
+          (setf (aref piv-hot (+ piv-i 2))
+                (logand 4294967295
+                        (+ (logxor (aref piv-hot piv-i) (ash (aref piv-hot (+ piv-i 1)) -3))
+                           (* 31 (aref piv-hot (+ piv-i 1)))))))
+        (print piv-hot))
+    expected: |
+      (44 44 7 4)
+      #(7 44 7 7)
+      (UNSIGNED-BYTE 8)
+      (T T (4) T)
+      #(1 4464 3)
+      #(4294967295 0)
+      (#(44 7) (UNSIGNED-BYTE 8) #(9 8 7 6))
+      #(44 2 3)
+      (#(1 2 44) (UNSIGNED-BYTE 32))
+      (231 #(1 231 3))
+      T
+      #(1732584193 4023233417 2225363975 255870178 1578413049 1761846468 178639645 2993401642)
   - name: comparison-operators-verified-via-if
     source: |
       (print (if (= 1 1) 42 99))

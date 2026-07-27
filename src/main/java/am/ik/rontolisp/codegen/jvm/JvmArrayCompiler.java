@@ -38,6 +38,27 @@ final class JvmArrayCompiler {
 		return ctx.usesFloatArray ? fvName : generalName;
 	}
 
+	// The rank-1 dispatch chain head: the packed integer-vector helper when the program
+	// uses packed integer vectors (it delegates iv -> fv -> general internally), else
+	// the fv/general choice. All three tiers share the same descriptor.
+	private static String ivOr(JvmLispCompiler.Ctx ctx, String ivName, String fvName, String generalName) {
+		return ctx.usesIntArray ? ivName : fvOr(ctx, fvName, generalName);
+	}
+
+	// Emits an invokestatic _ivRequireGeneral guard rejecting a packed integer vector
+	// with a clear "not applicable" error (the fill-pointer / adjustability /
+	// displacement surface never applies to one -- it is always a simple array,
+	// mirroring the interpreter's requireGeneralArray; the wasm backend traps on the
+	// same shapes). Any other value passes through unchanged. A no-op unless the
+	// program uses packed integer vectors, keeping the default build byte-identical.
+	private static void emitRequireGeneralIfPacked(JvmLispCompiler.Ctx ctx, String className) {
+		if (!ctx.usesIntArray) {
+			return;
+		}
+		invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.REQUIRE_GENERAL,
+				JvmIntArrayRuntimeBuilder.REQUIRE_GENERAL_DESC);
+	}
+
 	static void compileMake(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		if (args.size() < 2) {
@@ -94,6 +115,19 @@ final class JvmArrayCompiler {
 			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.CHAR_VEC_MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
 			return;
 		}
+		int packedIntWidth = packedIntElementWidth(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
+		if (ctx.usesIntArray && packedIntWidth > 0 && fillPointer == null && adjustable == null) {
+			// A plain :element-type '(unsigned-byte 8|16|32) array (no fill pointer /
+			// adjustable / displacement) is a packed long[] with a width header:
+			// _ivMake(dims, init, width) allocates it when dims designates rank 1 and
+			// falls back to the general representation for rank n (the interpreter's
+			// runtime rank check).
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			compileKeywordValueOrNull(initValue, ctx, className);
+			JvmEmitHelper.emitIntConst(ctx, packedIntWidth);
+			invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.MAKE, JvmIntArrayRuntimeBuilder.MAKE_DESC);
+			return;
+		}
 		if (ctx.usesFloatArray && isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
 				&& fillPointer == null && adjustable == null) {
 			// A plain :element-type 'single-float array (no fill pointer / adjustable /
@@ -138,7 +172,9 @@ final class JvmArrayCompiler {
 					"%array-become expects 2 arguments, got " + (args.size() - 1) + " argument(s)");
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitRequireGeneralIfPacked(ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		emitRequireGeneralIfPacked(ctx, className);
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ARRAY_BECOME, JvmArrayRuntimeBuilder.ARRAY_BECOME_DESC);
 	}
 
@@ -165,6 +201,7 @@ final class JvmArrayCompiler {
 					"%set-fill-pointer expects an array and a value, got " + (args.size() - 1) + " argument(s)");
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitRequireGeneralIfPacked(ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.SET_FILL_POINTER,
 				JvmArrayRuntimeBuilder.SET_FILL_POINTER_DESC);
@@ -189,6 +226,7 @@ final class JvmArrayCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		emitRequireGeneralIfPacked(ctx, className);
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_PUSH, JvmArrayRuntimeBuilder.VECTOR_PUSH_DESC);
 	}
 
@@ -206,6 +244,7 @@ final class JvmArrayCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		emitRequireGeneralIfPacked(ctx, className);
 		if (args.size() == 4) {
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 		}
@@ -223,6 +262,9 @@ final class JvmArrayCompiler {
 			throw new UnsupportedOperationException(lispName + " expects 1 argument, got " + (args.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		// Every unary caller is part of the fill-pointer / adjustability / displacement
+		// surface, none of which applies to a packed integer vector.
+		emitRequireGeneralIfPacked(ctx, className);
 		invokeHelper(ctx, className, helper, desc);
 	}
 
@@ -243,8 +285,8 @@ final class JvmArrayCompiler {
 		if (rank == 1) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1),
-					JvmArrayRuntimeBuilder.AREF1_DESC);
+			invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1, JvmFloatArrayRuntimeBuilder.AREF1,
+					JvmArrayRuntimeBuilder.AREF1), JvmArrayRuntimeBuilder.AREF1_DESC);
 		}
 		else if (rank == 2) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
@@ -271,8 +313,8 @@ final class JvmArrayCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1),
-				JvmArrayRuntimeBuilder.AREF1_DESC);
+		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1, JvmFloatArrayRuntimeBuilder.AREF1,
+				JvmArrayRuntimeBuilder.AREF1), JvmArrayRuntimeBuilder.AREF1_DESC);
 	}
 
 	static void compileRowMajorAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -285,21 +327,44 @@ final class JvmArrayCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
-		invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1),
-				JvmArrayRuntimeBuilder.ASET1_DESC);
+		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
+				JvmArrayRuntimeBuilder.ASET1), JvmArrayRuntimeBuilder.ASET1_DESC);
 	}
 
 	static void compileElementType(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		// (array-element-type array): double-float for a packed array, else t. Only used
-		// when the program uses packed float arrays; otherwise array-element-type expands
-		// to the lite (progn array t).
+		// (array-element-type array): the list (unsigned-byte n) for a packed integer
+		// vector, double-float/single-float for a packed float array, else t. Only used
+		// when the program uses a packed representation; otherwise array-element-type
+		// expands to the lite (progn array t). _ivElementType delegates the non-long[]
+		// case to _fvElementType when both gates are on.
 		List<LispVal> args = cons.toList();
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("array-element-type expects 1 argument, got " + (args.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE,
-				JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
+		if (ctx.usesIntArray) {
+			invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.ELEMENT_TYPE,
+					JvmIntArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
+		}
+		else {
+			invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE,
+					JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
+		}
+	}
+
+	static void compileArrayAlike(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-alike seq n): a fresh zero-filled rank-1 array with the SAME
+		// representation as seq (packed at the same width, else general) -- the
+		// type-preserving allocator behind the shared subseq/copy-seq lowering. Only
+		// used when the program uses packed integer vectors; otherwise the shared
+		// expandArrayAlikeGeneral lowering applies. Evaluation order: seq then n.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException("%array-alike expects a sequence and a length");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.ALIKE, JvmIntArrayRuntimeBuilder.ALIKE_DESC);
 	}
 
 	static void compileDims(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -308,8 +373,8 @@ final class JvmArrayCompiler {
 			throw new UnsupportedOperationException("array-dimensions expects 1 argument, got " + (args.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.DIMS, JvmArrayRuntimeBuilder.DIMS),
-				JvmArrayRuntimeBuilder.DIMS_DESC);
+		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.DIMS, JvmFloatArrayRuntimeBuilder.DIMS,
+				JvmArrayRuntimeBuilder.DIMS), JvmArrayRuntimeBuilder.DIMS_DESC);
 	}
 
 	static void compileAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -321,8 +386,8 @@ final class JvmArrayCompiler {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
-			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1),
-					JvmArrayRuntimeBuilder.ASET1_DESC);
+			invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
+					JvmArrayRuntimeBuilder.ASET1), JvmArrayRuntimeBuilder.ASET1_DESC);
 		}
 		else if (rank == 2) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
@@ -368,6 +433,29 @@ final class JvmArrayCompiler {
 	// float[]). Same literal quoted-symbol unwrap as isDoubleFloatElementType.
 	private static boolean isSingleFloatElementType(@Nullable LispVal elementType) {
 		return LispNames.SINGLE_FLOAT.equals(elementTypeLocalName(elementType));
+	}
+
+	// The packed integer-vector element width a make-array :element-type argument
+	// designates: 8/16/32 for the literal quoted list '(unsigned-byte 8|16|32), else 0.
+	// The head symbol name is matched ignoring any package qualifier, like the float
+	// widths. Shared with JvmLispCompiler's usesIntArray program scan.
+	static int packedIntElementWidth(@Nullable LispVal elementType) {
+		LispVal spec = elementType;
+		if (spec instanceof LispCons quote && quote.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quote.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
+			spec = rest.car();
+		}
+		if (spec instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& cons.cdr() instanceof LispCons widthCell && widthCell.car() instanceof am.ik.rontolisp.LispInteger w
+				&& widthCell.cdr() instanceof LispNil) {
+			String name = head.name();
+			int colon = name.lastIndexOf(':');
+			String local = colon >= 0 ? name.substring(colon + 1) : name;
+			if (local.equals(LispNames.UNSIGNED_BYTE) && (w.value() == 8 || w.value() == 16 || w.value() == 32)) {
+				return (int) w.value();
+			}
+		}
+		return 0;
 	}
 
 	// The local (package-qualifier-stripped) symbol name of a literal quoted

@@ -33,10 +33,10 @@ final class WasmWhileCompiler {
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.BR_IF, 1);
-		// Body: every expression leaves a value, which is dropped.
+		// Body: statement position (values discarded; a packed integer-vector store
+		// skips its value-as-stored box, see compileForEffect).
 		for (int i = 2; i < parts.size(); i++) {
-			WasmExprCompiler.compileExpr(parts.get(i), ctx);
-			ctx.writer.write(Instruction.DROP);
+			WasmExprCompiler.compileForEffect(parts.get(i), ctx);
 		}
 		// Jump back to the top of the loop (depth 0).
 		ctx.writer.write(Instruction.BR, 0);

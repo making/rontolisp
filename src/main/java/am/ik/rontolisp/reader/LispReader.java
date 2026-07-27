@@ -168,6 +168,7 @@ public final class LispReader {
 			case Token.ArrayOpen array -> readArray(array.rank());
 			case Token.StructOpen ignored -> readStruct();
 			case Token.FloatArrayOpen open -> readFloatArray(open.single());
+			case Token.IntVectorOpen open -> readIntVector(open.width());
 			case Token.Quote ignored -> readQuote();
 			case Token.FunctionQuote ignored -> readFunctionQuote();
 			case Token.Backquote ignored -> readBackquote();
@@ -373,6 +374,25 @@ public final class LispReader {
 			data[i] = coerceFloatLeaf(flat.get(i));
 		}
 		return new LispDoubleFloatArray(data, dims);
+	}
+
+	// Reads a #N@(...) packed integer-vector literal (ironclad's array-reader syntax)
+	// into
+	// a self-evaluating rank-1 LispIntVector of the given width. Leaves must be integers;
+	// each is masked to the width (the packed store semantics).
+	private LispVal readIntVector(int width) {
+		List<LispVal> elements = readGroupedElements();
+		long[] data = new long[elements.size()];
+		for (int i = 0; i < data.length; i++) {
+			LispVal leaf = elements.get(i);
+			data[i] = switch (leaf) {
+				case LispInteger n -> n.value();
+				case am.ik.rontolisp.LispBigInteger b -> b.value().longValue();
+				default ->
+					throw new LispReadException("#" + width + "@: expected an integer element, got " + leaf.print());
+			};
+		}
+		return new am.ik.rontolisp.LispIntVector(width, data);
 	}
 
 	// Reads a #S(NAME :SLOT value ...) structure literal into a LispStructLiteral

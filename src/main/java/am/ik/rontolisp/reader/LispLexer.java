@@ -241,10 +241,20 @@ public final class LispLexer {
 					// #N@( is ironclad's s-box literal (its array-reader dispatch macro):
 					// a (make-array LEN :element-type '(unsigned-byte N)
 					// :initial-contents
-					// '(...)) form. rontolisp arrays are generic, so the element width is
-					// dropped and the contents read as a plain vector literal -- the same
-					// value the ironclad form evaluates to.
-					tokens.add(new Token.VectorOpen());
+					// '(...)) form. For the packed widths (8/16/32) it reads into the
+					// packed integer-vector representation -- the same value the ironclad
+					// form evaluates to now that make-array packs those element types;
+					// any
+					// other width reads as a plain vector literal.
+					int width;
+					try {
+						width = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+					}
+					catch (NumberFormatException overflow) {
+						throw new LispReadException("Invalid packed width: " + this.input.substring(this.pos, probe));
+					}
+					tokens.add(width == 8 || width == 16 || width == 32 ? new Token.IntVectorOpen(width)
+							: new Token.VectorOpen());
 					this.pos = probe + 2;
 				}
 				else if (probe < this.input.length()
