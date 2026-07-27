@@ -77,7 +77,45 @@ final class WasmSetqCompiler {
 		}
 	}
 
+	/**
+	 * Statement-position {@code setq} (the value is discarded): an unboxed-local pair
+	 * skips the boxed re-read entirely -- the hot-loop store of a round temp then
+	 * allocates nothing (todo 194 stage 3). Every other pair compiles normally with its
+	 * value dropped.
+	 */
+	static void compileForEffect(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		if (ctx.asyncResume != null || (parts.size() - 1) % 2 != 0) {
+			compile(cons, ctx);
+			ctx.writer.write(Instruction.DROP);
+			return;
+		}
+		if (parts.size() == 1) {
+			return;
+		}
+		for (int p = 0; p < (parts.size() - 1) / 2; p++) {
+			String name = ((LispSymbol) parts.get(1 + 2 * p)).name();
+			LispVal valueExpr = parts.get(2 + 2 * p);
+			WasmIntFusionCompiler.RawLocal raw = ctx.rawLocals.get(name);
+			if (raw != null) {
+				WasmIntFusionCompiler.compileRawStore(valueExpr, ctx, raw);
+			}
+			else {
+				compilePair(name, valueExpr, ctx);
+				ctx.writer.write(Instruction.DROP);
+			}
+		}
+	}
+
 	private static void compilePair(String name, LispVal valueExpr, WasmLispCompiler.Ctx ctx) {
+		// An unboxed (dual-representation) local: raw store, then re-read boxed as the
+		// form's value (i31 for the fixnum range -- allocation-free).
+		WasmIntFusionCompiler.RawLocal raw = ctx.rawLocals.get(name);
+		if (raw != null) {
+			WasmIntFusionCompiler.compileRawStore(valueExpr, ctx, raw);
+			WasmIntFusionCompiler.emitRawLocalBoxedRead(raw, ctx);
+			return;
+		}
 		// Check if variable is a boxed local
 		Integer slot = ctx.locals.get(name);
 		if (slot != null && ctx.boxedVars.contains(name)) {

@@ -136,7 +136,7 @@ arrays as before), byte-identical on the parity matrix and pinned by the
 `packedIntVector*` tests in `LispEvaluatorTest` / `JvmLispCompilerTest` /
 `WasmLispCompilerIntegrationTest` and the `packed-integer-vectors` ci-spec
 case. PBKDF2-HMAC-SHA256 4096 rounds: 2.0 s -> **~1.45-1.5 s** on both wasm
-backends (JVM 0.69 s), hashes identical everywhere. Remaining wasm profile:
-flet-lambda dispatch + bodies (sigma/ch/maj, ~15%), `_str_build` (~6%),
-single-op loop-counter `+` via `_rat_add` (~4%), `_int_new` residue (~8%) --
-the todo-194 stage-3 candidates (flet inlining, unboxed locals).
+backends (JVM 0.69 s), hashes identical everywhere. Stage 3 (flet inlining,
+unboxed dual-representation locals, the masked-wrap peephole, the cached-`t`
+global) then took it to **~0.93 s** -- see `.kb/wasm-int-fusion.md` and
+`.kb/wasm-unboxed-locals.md`.

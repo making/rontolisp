@@ -59,3 +59,11 @@ Both are `LispMacroExpander` expansions (CL_MACROS; no per-backend codegen).
   `(funcall __flet0_f ...)` instead of `(f ...)`. The compile path is unaffected
   (UserMacroExpander runs first). `macrolet`/`symbol-macrolet` stay in
   `.todo/034-local-function-definition.md`.
+- **wasm-GC fusion rides this lowering** (todo 194 stage 3): `WasmLetCompiler`
+  registers a `__FLET*`-named binding whose init lambda has plain params and a
+  single closed integer-tree body (the `(block name expr)` wrapper is unwrapped;
+  an exit form could never pass the closed-tree check), and the fusion
+  classifier substitutes it at `(funcall __FLETn_f ...)` sites -- see
+  `.kb/wasm-int-fusion.md`. The lambda itself still compiles normally, so
+  `#'f`-as-value and non-fusable call sites are untouched; `labels` bindings
+  (nil-then-setq) never register.

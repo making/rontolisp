@@ -53,8 +53,23 @@ final class WasmIntFusionCompiler {
 	private WasmIntFusionCompiler() {
 	}
 
-	private sealed interface Node permits OpNode, ConstLeaf, ExprLeaf, ArefLeaf {
+	private sealed interface Node permits OpNode, ConstLeaf, ExprLeaf, ArefLeaf, RawLeaf {
 
+	}
+
+	/**
+	 * An unboxed (dual-representation) local variable, todo 194 stage 3: {@code
+	 * i64Slot} holds the raw value and {@code shadowSlot} (an ordinary eqref local) holds
+	 * the module's raw-local SENTINEL (a private TYPE_CELL instance,
+	 * {@code Ctx.rawSentinelGlobalIndex}) while the raw value is authoritative. An
+	 * assignment whose fused fast path succeeds stores raw and sets the shadow to the
+	 * sentinel; a bailing assignment (overflow promotion, a non-integer value) stores the
+	 * boxed result into the shadow instead -- so "shadow != sentinel" means "use the
+	 * shadow, whatever it is, INCLUDING nil/null" (null cannot be the marker: nil IS
+	 * null, and a local assigned nil must read back as nil, not as the stale raw slot).
+	 * Registered per eligible {@code let} binding by {@link WasmLetCompiler}.
+	 */
+	record RawLocal(int i64Slot, int shadowSlot) {
 	}
 
 	private record OpNode(String op, List<Node> args) implements Node {
@@ -68,6 +83,8 @@ final class WasmIntFusionCompiler {
 		final LispVal expr;
 
 		int slot = -1;
+
+		int i64Slot = -1;
 
 		ExprLeaf(LispVal expr) {
 			this.expr = expr;
@@ -93,9 +110,73 @@ final class WasmIntFusionCompiler {
 
 		int idxSlot = -1;
 
+		int i64Slot = -1;
+
 		ArefLeaf(LispVal arrayExpr, LispVal indexExpr) {
 			this.arrayExpr = arrayExpr;
 			this.indexExpr = indexExpr;
+		}
+
+	}
+
+	/**
+	 * A read of an unboxed local ({@link RawLocal}) inside a fused tree. Registered as a
+	 * leaf so the leaf-evaluation loop SNAPSHOTS the pair at the read's source position
+	 * (a later leaf's side effect may reassign the local); the unbox hoist then resolves
+	 * the snapshot into a single i64 ({@code snapI64}): the raw value when the shadow is
+	 * null, the shadow's guarded unbox otherwise (bailing to the fallback on a
+	 * non-i64-integer shadow).
+	 */
+	private static final class RawLeaf implements Node {
+
+		final RawLocal src;
+
+		int snapI64 = -1;
+
+		int snapShadow = -1;
+
+		RawLeaf(RawLocal src) {
+			this.src = src;
+		}
+
+	}
+
+	/**
+	 * Per-fused-site classification state: the registered leaves, plus what makes
+	 * raw-local reads shareable -- a local that NO leaf of this site can reassign (no
+	 * setq/setf of the name anywhere in the site's expression) snapshots once and is read
+	 * at every occurrence, instead of paying a snapshot + resolve per occurrence.
+	 */
+	private static final class Site {
+
+		final List<Node> leaves = new ArrayList<>();
+
+		final java.util.Map<String, RawLeaf> sharedRawLeaves = new java.util.HashMap<>();
+
+		final java.util.Set<String> assignedNames = new java.util.HashSet<>();
+
+		Site(LispVal expr) {
+			collectAssignedNames(expr, this.assignedNames);
+		}
+
+		private static void collectAssignedNames(LispVal form, java.util.Set<String> out) {
+			if (!(form instanceof LispCons cons)) {
+				return;
+			}
+			if (cons.car() instanceof LispSymbol head && cons.isProperList()
+					&& (LispNames.SETQ.equals(head.name()) || LispNames.SETF.equals(head.name()))) {
+				List<LispVal> parts = cons.toList();
+				for (int i = 1; i + 1 < parts.size(); i += 2) {
+					if (parts.get(i) instanceof LispSymbol target) {
+						out.add(target.name());
+					}
+				}
+			}
+			LispVal cur = cons;
+			while (cur instanceof LispCons cell) {
+				collectAssignedNames(cell.car(), out);
+				cur = cell.cdr();
+			}
 		}
 
 	}
@@ -109,8 +190,9 @@ final class WasmIntFusionCompiler {
 		if (ctx.asyncResume != null) {
 			return false;
 		}
-		List<Node> leaves = new ArrayList<>();
-		Node root = classify(cons, ctx, java.util.Map.of(), leaves, 0);
+		Site site = new Site(cons);
+		List<Node> leaves = site.leaves;
+		Node root = classify(cons, ctx, java.util.Map.of(), site, 0);
 		if (!(root instanceof OpNode)) {
 			return false;
 		}
@@ -119,36 +201,17 @@ final class WasmIntFusionCompiler {
 			return false;
 		}
 
-		// Evaluate every non-constant leaf ONCE, left to right (the same observable
-		// order as the generic path's argument evaluation), into scratch locals both
-		// paths read. An aref leaf evaluates its array then its index, exactly like the
-		// generic aref argument order.
-		for (Node node : leaves) {
-			if (node instanceof ExprLeaf leaf) {
-				WasmExprCompiler.compileExpr(leaf.expr, ctx);
-				leaf.slot = ctx.allocTemp();
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(leaf.slot);
-			}
-			else if (node instanceof ArefLeaf aref) {
-				WasmExprCompiler.compileExpr(aref.arrayExpr, ctx);
-				aref.arrSlot = ctx.allocTemp();
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(aref.arrSlot);
-				WasmExprCompiler.compileExpr(aref.indexExpr, ctx);
-				aref.idxSlot = ctx.allocTemp();
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(aref.idxSlot);
-			}
-		}
-
-		// block $done (result eqref) { block $bail { fast path; _int_new; br $done }
-		// boxed fallback } -- a bail (guard or overflow) discards the partial i64
-		// stack on its way to $bail and recomputes generically.
+		// block $done (result eqref) { block $bail { guard+unbox each leaf once into
+		// an i64 scratch local; fast path; _int_new; br $done } boxed fallback } -- a
+		// bail (guard or overflow) discards the partial i64 stack on its way to $bail
+		// and recomputes generically.
+		int savedI64 = ctx.nextI64Local;
+		evalLeaves(leaves, ctx);
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
 		ctx.writer.write(Instruction.BLOCK, 0x40);
+		emitLeafUnboxes(leaves, ctx);
 		emitFast(root, ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
@@ -156,6 +219,7 @@ final class WasmIntFusionCompiler {
 		ctx.writer.write(Instruction.END);
 		emitFallback(root, ctx);
 		ctx.writer.write(Instruction.END);
+		ctx.nextI64Local = savedI64;
 		return true;
 	}
 
@@ -173,8 +237,9 @@ final class WasmIntFusionCompiler {
 		if (ctx.asyncResume != null) {
 			return false;
 		}
-		List<Node> leaves = new ArrayList<>();
-		Node root = classify(expr, ctx, java.util.Map.of(), leaves, 0);
+		Site site = new Site(expr);
+		List<Node> leaves = site.leaves;
+		Node root = classify(expr, ctx, java.util.Map.of(), site, 0);
 		if (!(root instanceof OpNode)) {
 			return false;
 		}
@@ -182,29 +247,14 @@ final class WasmIntFusionCompiler {
 		if (ops > MAX_OPS || leaves.size() > MAX_EXPR_LEAVES) {
 			return false;
 		}
-		for (Node node : leaves) {
-			if (node instanceof ExprLeaf leaf) {
-				WasmExprCompiler.compileExpr(leaf.expr, ctx);
-				leaf.slot = ctx.allocTemp();
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(leaf.slot);
-			}
-			else if (node instanceof ArefLeaf aref) {
-				WasmExprCompiler.compileExpr(aref.arrayExpr, ctx);
-				aref.arrSlot = ctx.allocTemp();
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(aref.arrSlot);
-				WasmExprCompiler.compileExpr(aref.indexExpr, ctx);
-				aref.idxSlot = ctx.allocTemp();
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(aref.idxSlot);
-			}
-		}
-		// block $done (result i64) { block $bail { fast; br $done } fallback -> boxed;
-		// unbox with the store semantics } end
+		// block $done (result i64) { block $bail { leaf unboxes; fast; br $done }
+		// fallback -> boxed; unbox with the store semantics } end
+		int savedI64 = ctx.nextI64Local;
+		evalLeaves(leaves, ctx);
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.write(Type.I64);
 		ctx.writer.write(Instruction.BLOCK, 0x40);
+		emitLeafUnboxes(leaves, ctx);
 		emitFast(root, ctx);
 		ctx.writer.write(Instruction.BR, 1);
 		ctx.writer.write(Instruction.END);
@@ -214,11 +264,213 @@ final class WasmIntFusionCompiler {
 		ctx.writer.writeSignedLeb128(boxedSlot);
 		WasmArrayCompiler.emitUnboxIntForStore(ctx, boxedSlot);
 		ctx.writer.write(Instruction.END);
+		ctx.nextI64Local = savedI64;
 		return true;
 	}
 
-	/** How many nested defun-body substitutions a fused tree may perform. */
+	/**
+	 * How many nested defun/local-function body substitutions a fused tree may perform.
+	 */
 	private static final int MAX_INLINE_DEPTH = 4;
+
+	/**
+	 * A let-bound local function eligible for fused-call substitution: the {@code (let
+	 * ((__FLETn_f (lambda ...))) ...)} shape {@code flet} lowers to
+	 * ({@code .kb/flet-labels.md}), with fixed plain parameters and a single body
+	 * expression that is a closed integer-operation tree over them (the
+	 * {@code isClosedIntTree} whitelist widened with calls to fusion-inlinable defuns, so
+	 * a {@code sigma0}-style wrapper over {@code rol32} qualifies). Registered by
+	 * {@link WasmLetCompiler} for the extent of the binding's body, consumed by
+	 * {@code classify} at {@code (funcall __FLETn_f ...)} sites -- todo 194 stage 3.
+	 */
+	record LocalIntLambda(List<String> params, LispVal body) {
+	}
+
+	/**
+	 * Classifies a {@code let}-init lambda form as an inlinable local function, or
+	 * returns {@code null}. The flet lowering wraps the body in {@code (block name
+	 * expr)}; the block is transparent here because an exit form ({@code return-from})
+	 * could never pass the closed-integer-tree check.
+	 */
+	@org.jspecify.annotations.Nullable
+	static LocalIntLambda eligibleLocalLambda(LispCons lambdaCons, WasmLispCompiler.Ctx ctx) {
+		if (!lambdaCons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = lambdaCons.toList();
+		if (parts.size() < 3 || !(parts.get(0) instanceof LispSymbol head) || !LispNames.LAMBDA.equals(head.name())) {
+			return null;
+		}
+		List<String> params = new ArrayList<>();
+		if (parts.get(1) instanceof LispCons paramCons) {
+			if (!paramCons.isProperList()) {
+				return null;
+			}
+			for (LispVal p : paramCons.toList()) {
+				if (!(p instanceof LispSymbol ps) || ps.name().startsWith("&")) {
+					return null;
+				}
+				params.add(ps.name());
+			}
+		}
+		else if (!(parts.get(1) instanceof am.ik.rontolisp.LispNil)) {
+			return null;
+		}
+		LispVal body = singleBodyExpr(parts.subList(2, parts.size()));
+		if (body instanceof LispCons bodyCons && bodyCons.isProperList() && bodyCons.car() instanceof LispSymbol h
+				&& LispNames.BLOCK.equals(h.name())) {
+			List<LispVal> blockParts = bodyCons.toList();
+			body = blockParts.size() == 3 ? blockParts.get(2) : null;
+		}
+		if (body == null || !isClosedIntTree(body, params, ctx)) {
+			return null;
+		}
+		return new LocalIntLambda(params, body);
+	}
+
+	/**
+	 * The {@code funcall} entry point: compiles {@code (funcall var args...)} of a
+	 * registered local function as a fused tree (the substituted body becomes the root),
+	 * or returns {@code false} (emitting nothing) for anything else.
+	 */
+	static boolean tryCompileLocalCall(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		return cons.cdr() instanceof LispCons fnCell && fnCell.car() instanceof LispSymbol fvar
+				&& ctx.localIntLambdas.containsKey(fvar.name()) && tryCompile(cons, ctx);
+	}
+
+	/**
+	 * A quick syntactic filter for {@link WasmLetCompiler}'s unboxed-local eligibility:
+	 * does this assignment value LOOK like an integer-operation root (so a raw store has
+	 * a fast path worth having)? Precision does not matter for correctness --
+	 * {@link #compileRawStore} falls back to a boxed shadow store for anything that does
+	 * not actually classify.
+	 */
+	static boolean isRawAssignShaped(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		if (expr instanceof LispInteger) {
+			return true;
+		}
+		if (!(expr instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return false;
+		}
+		return switch (head.name()) {
+			case LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.MOD, LispNames.REM, LispNames.LOGAND,
+					LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.ONE_PLUS,
+					LispNames.ONE_MINUS, LispNames.LDB ->
+				true;
+			default -> ctx.inlinableDefuns.containsKey(head.name());
+		};
+	}
+
+	/**
+	 * Compiles an assignment into an unboxed local: the fused fast path stores the raw
+	 * i64 into {@code target.i64Slot()} and NULLS the shadow; a bail (or a value that
+	 * does not classify as an integer tree at all) stores the BOXED result into the
+	 * shadow instead -- the raw slot is then stale and the non-null shadow is
+	 * authoritative, whatever tier or type the value is. Leaves NOTHING on the stack; the
+	 * caller re-reads through {@link #emitRawLocalBoxedRead} when the assignment's value
+	 * is needed.
+	 */
+	static void compileRawStore(LispVal expr, WasmLispCompiler.Ctx ctx, RawLocal target) {
+		if (expr instanceof LispInteger lit) {
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(lit.value());
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writeI64LocalIndex(target.i64Slot());
+			emitNullShadow(target, ctx);
+			return;
+		}
+		if (ctx.asyncResume == null) {
+			Site site = new Site(expr);
+			List<Node> leaves = site.leaves;
+			Node root = classify(expr, ctx, java.util.Map.of(), site, 0);
+			if (root instanceof OpNode && countOps(root) <= MAX_OPS && leaves.size() <= MAX_EXPR_LEAVES) {
+				int savedI64 = ctx.nextI64Local;
+				evalLeaves(leaves, ctx);
+				// block $done { block $bail { unboxes; fast; raw store; null shadow;
+				// br $done } fallback -> shadow store } end
+				ctx.writer.write(Instruction.BLOCK, 0x40);
+				ctx.writer.write(Instruction.BLOCK, 0x40);
+				emitLeafUnboxes(leaves, ctx);
+				emitFast(root, ctx);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writeI64LocalIndex(target.i64Slot());
+				emitNullShadow(target, ctx);
+				ctx.writer.write(Instruction.BR, 1);
+				ctx.writer.write(Instruction.END);
+				emitFallback(root, ctx);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeSignedLeb128(target.shadowSlot());
+				ctx.writer.write(Instruction.END);
+				ctx.nextI64Local = savedI64;
+				return;
+			}
+		}
+		WasmExprCompiler.compileExpr(expr, ctx);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(target.shadowSlot());
+	}
+
+	// Marks the raw i64 slot authoritative: shadow := the module's raw-local
+	// sentinel (a private TYPE_CELL instance). Null cannot be the marker -- nil IS
+	// null, and a local assigned nil must read back as nil.
+	private static void emitNullShadow(RawLocal target, WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(ctx.rawSentinelGlobalIndex);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(target.shadowSlot());
+	}
+
+	// Pushes i32 1 when the shadow in `slot` is the sentinel (raw value valid).
+	private static void emitShadowIsSentinel(int slot, WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(ctx.rawSentinelGlobalIndex);
+		ctx.writer.write(Instruction.REF_EQ);
+	}
+
+	/**
+	 * Reads an unboxed local as an ordinary boxed value: the shadow when non-null, else
+	 * the raw i64 through {@code _int_new} (an i31 in the fixnum range, so a loop-counter
+	 * read allocates nothing).
+	 */
+	static void emitRawLocalBoxedRead(RawLocal raw, WasmLispCompiler.Ctx ctx) {
+		emitShadowIsSentinel(raw.shadowSlot(), ctx);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		// The i31 range boxes inline (ref.i31, allocation- and call-free -- a raw
+		// loop counter's every non-fused read takes this arm); only an out-of-range
+		// value pays the _int_new call and its TYPE_BIGNUM allocation.
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(raw.i64Slot());
+		ctx.writer.write(Instruction.I64_CONST);
+		ctx.writer.writeSignedLeb128(33);
+		ctx.writer.write(Instruction.I64_SHL);
+		ctx.writer.write(Instruction.I64_CONST);
+		ctx.writer.writeSignedLeb128(33);
+		ctx.writer.write(Instruction.I64_SHR_S);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(raw.i64Slot());
+		ctx.writer.write(Instruction.I64_EQ);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(raw.i64Slot());
+		ctx.writer.write(Instruction.I32_WRAP_I64);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(raw.i64Slot());
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(raw.shadowSlot());
+		ctx.writer.write(Instruction.END);
+	}
 
 	/**
 	 * Whether a defun qualifies for fused-call substitution: fixed arity (no lambda-list
@@ -263,6 +515,18 @@ final class WasmIntFusionCompiler {
 	}
 
 	private static boolean isClosedIntTree(LispVal expr, List<String> params) {
+		return isClosedIntTree(expr, params, null);
+	}
+
+	/**
+	 * With a non-null {@code ctx}, a call to a fusion-inlinable defun also qualifies as a
+	 * tree node (a local function like sigma0 wraps {@code rol32}); the defun's own body
+	 * was validated when it was collected. Defun eligibility itself always passes
+	 * {@code null} -- it is decided before any {@code Ctx} exists, and keeping defun
+	 * bodies self-contained avoids order dependence between their definitions.
+	 */
+	private static boolean isClosedIntTree(LispVal expr, List<String> params,
+			WasmLispCompiler.@org.jspecify.annotations.Nullable Ctx ctx) {
 		if (expr instanceof LispInteger) {
 			return true;
 		}
@@ -283,10 +547,16 @@ final class WasmIntFusionCompiler {
 			default -> false;
 		};
 		if (!headOk) {
-			return false;
+			if (ctx == null) {
+				return false;
+			}
+			WasmLispCompiler.DefunDecl defun = ctx.inlinableDefuns.get(head.name());
+			if (defun == null || arity != defun.paramNames().size()) {
+				return false;
+			}
 		}
 		for (int i = 1; i < parts.size(); i++) {
-			if (!isClosedIntTree(parts.get(i), params)) {
+			if (!isClosedIntTree(parts.get(i), params, ctx)) {
 				return false;
 			}
 		}
@@ -312,8 +582,9 @@ final class WasmIntFusionCompiler {
 	 * call chain would: the same operations over the same values.
 	 */
 	@org.jspecify.annotations.Nullable
-	private static Node classify(LispVal expr, WasmLispCompiler.Ctx ctx, java.util.Map<String, Node> env,
-			List<Node> leaves, int depth) {
+	private static Node classify(LispVal expr, WasmLispCompiler.Ctx ctx, java.util.Map<String, Node> env, Site site,
+			int depth) {
+		List<Node> leaves = site.leaves;
 		if (expr instanceof LispInteger i) {
 			return new ConstLeaf(i.value());
 		}
@@ -321,6 +592,27 @@ final class WasmIntFusionCompiler {
 			Node bound = env.get(sym.name());
 			if (bound != null) {
 				return bound;
+			}
+			if (!env.isEmpty()) {
+				// A free symbol inside an inlined body would compile in the CALLER's
+				// scope -- a hygiene violation. Bodies are pre-checked closed, so this
+				// is a defensive bail, not a reachable path.
+				return null;
+			}
+			RawLocal raw = ctx.rawLocals.get(sym.name());
+			if (raw != null) {
+				if (!site.assignedNames.contains(sym.name())) {
+					// No leaf in this site can reassign the local, so every occurrence
+					// may share ONE snapshot/resolve instead of paying its own.
+					RawLeaf shared = site.sharedRawLeaves.get(sym.name());
+					if (shared == null) {
+						shared = new RawLeaf(raw);
+						site.sharedRawLeaves.put(sym.name(), shared);
+						registerLeaf(shared, leaves);
+					}
+					return shared;
+				}
+				return registerLeaf(new RawLeaf(raw), leaves);
 			}
 		}
 		if (!(expr instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol sym)) {
@@ -346,32 +638,30 @@ final class WasmIntFusionCompiler {
 					&& LispNames.BYTE.equals(specHead.name()) && spec.cdr() instanceof LispCons sCell
 					&& sCell.car() instanceof LispInteger && sCell.cdr() instanceof LispCons pCell
 					&& pCell.car() instanceof LispInteger && pCell.cdr() instanceof am.ik.rontolisp.LispNil) {
-				return classify(LispMacroExpander.expandLdb(cons), ctx, env, leaves, depth);
+				return classify(LispMacroExpander.expandLdb(cons), ctx, env, site, depth);
 			}
 			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
 		}
+		if (LispNames.FUNCALL.equals(op) && arity >= 1 && parts.get(1) instanceof LispSymbol fvar
+				&& !env.containsKey(fvar.name()) && depth < MAX_INLINE_DEPTH) {
+			// (funcall __FLETn_f args...) of a let-bound local function (the flet
+			// lowering): substitute its body exactly like an inlinable defun's. The
+			// function-position read of the variable is pure, so eliding it is
+			// unobservable.
+			LocalIntLambda lambda = ctx.localIntLambdas.get(fvar.name());
+			if (lambda != null && arity - 1 == lambda.params().size()) {
+				Node substituted = substituteCall(lambda.params(), lambda.body(), parts.subList(2, parts.size()), ctx,
+						env, site, depth);
+				if (substituted != null) {
+					return substituted;
+				}
+			}
+		}
 		WasmLispCompiler.DefunDecl inlinable = ctx.inlinableDefuns.get(op);
 		if (inlinable != null && arity == inlinable.paramNames().size() && depth < MAX_INLINE_DEPTH) {
-			LispVal body = singleBodyExpr(inlinable.bodyExprs());
-			java.util.Map<String, Node> callEnv = new java.util.HashMap<>();
-			for (int i = 0; i < arity; i++) {
-				String param = inlinable.paramNames().get(i);
-				LispVal arg = parts.get(i + 1);
-				Node argNode;
-				if (countOccurrences(body, param) > 1) {
-					// Used more than once: a shared leaf, evaluated exactly once.
-					argNode = arg instanceof LispInteger n ? new ConstLeaf(n.value())
-							: registerLeaf(new ExprLeaf(arg), leaves);
-				}
-				else {
-					argNode = classify(arg, ctx, env, leaves, depth);
-					if (argNode == null) {
-						return null;
-					}
-				}
-				callEnv.put(param, argNode);
-			}
-			Node substituted = classify(java.util.Objects.requireNonNull(body), ctx, callEnv, leaves, depth + 1);
+			LispVal body = java.util.Objects.requireNonNull(singleBodyExpr(inlinable.bodyExprs()));
+			Node substituted = substituteCall(inlinable.paramNames(), body, parts.subList(1, parts.size()), ctx, env,
+					site, depth);
 			if (substituted != null) {
 				return substituted;
 			}
@@ -402,17 +692,106 @@ final class WasmIntFusionCompiler {
 		}
 		List<Node> args = new ArrayList<>(arity);
 		for (int i = 1; i < parts.size(); i++) {
-			Node arg = classify(parts.get(i), ctx, env, leaves, depth);
+			Node arg = classify(parts.get(i), ctx, env, site, depth);
 			if (arg == null) {
 				return null;
 			}
 			args.add(arg);
 		}
 		return switch (op) {
-			case LispNames.ONE_PLUS -> new OpNode(LispNames.ADD, List.of(args.get(0), new ConstLeaf(1)));
-			case LispNames.ONE_MINUS -> new OpNode(LispNames.SUB, List.of(args.get(0), new ConstLeaf(1)));
-			default -> new OpNode(op, args);
+			case LispNames.ONE_PLUS -> makeOp(LispNames.ADD, List.of(args.get(0), new ConstLeaf(1)));
+			case LispNames.ONE_MINUS -> makeOp(LispNames.SUB, List.of(args.get(0), new ConstLeaf(1)));
+			default -> makeOp(op, args);
 		};
+	}
+
+	/**
+	 * Builds an operation node, folding it to a constant when every argument is a literal
+	 * and the exact result fits an i64 -- inlined bodies produce shapes like
+	 * {@code (ash a (- s 32))} with both shift operands literal, where folding turns a
+	 * checked {@code _fx_sub} + {@code _fx_ash} helper pair into a plain shift. Folding
+	 * never changes a result: it computes exactly what the fast path would (and bails to
+	 * the ordinary node on overflow or a zero divisor, so the runtime's promotion/trap
+	 * behavior is preserved).
+	 */
+	private static Node makeOp(String op, List<Node> args) {
+		for (Node arg : args) {
+			if (!(arg instanceof ConstLeaf)) {
+				return new OpNode(op, args);
+			}
+		}
+		try {
+			long acc = ((ConstLeaf) args.get(0)).value();
+			if (LispNames.LOGNOT.equals(op)) {
+				return new ConstLeaf(~acc);
+			}
+			for (int i = 1; i < args.size(); i++) {
+				long v = ((ConstLeaf) args.get(i)).value();
+				acc = switch (op) {
+					case LispNames.ADD -> Math.addExact(acc, v);
+					case LispNames.SUB -> Math.subtractExact(acc, v);
+					case LispNames.MUL -> Math.multiplyExact(acc, v);
+					case LispNames.LOGAND -> acc & v;
+					case LispNames.LOGIOR -> acc | v;
+					case LispNames.LOGXOR -> acc ^ v;
+					case LispNames.MOD -> Math.floorMod(acc, v);
+					case LispNames.REM -> acc % v;
+					case LispNames.ASH -> foldAsh(acc, v);
+					default -> throw new ArithmeticException("not foldable");
+				};
+			}
+			return new ConstLeaf(acc);
+		}
+		catch (ArithmeticException overflowOrZeroDivide) {
+			return new OpNode(op, args);
+		}
+	}
+
+	private static long foldAsh(long value, long count) {
+		if (count <= 0) {
+			return value >> Math.min(-count, 63);
+		}
+		if (count > 62) {
+			throw new ArithmeticException("shift out of i64");
+		}
+		long shifted = value << count;
+		if ((shifted >> count) != value) {
+			throw new ArithmeticException("shift out of i64");
+		}
+		return shifted;
+	}
+
+	/**
+	 * Substitutes an inlinable body with the parameters bound to the classified
+	 * arguments. Each argument is classified ONCE (registering its leaves in source
+	 * order, so evaluation order and once-only side effects are preserved) and the
+	 * resulting node is shared across every occurrence of its parameter -- a shared
+	 * interior node re-emits its pure arithmetic, a shared leaf re-reads its scratch
+	 * slot. On failure the leaves registered by this attempt are rolled back, so the
+	 * caller's fall-through leaf treatment does not ALSO evaluate them (evaluating a
+	 * side-effecting argument twice).
+	 */
+	@org.jspecify.annotations.Nullable
+	private static Node substituteCall(List<String> params, LispVal body, List<LispVal> args, WasmLispCompiler.Ctx ctx,
+			java.util.Map<String, Node> env, Site site, int depth) {
+		List<Node> leaves = site.leaves;
+		int mark = leaves.size();
+		java.util.Map<String, Node> callEnv = new java.util.HashMap<>();
+		Node substituted = null;
+		for (int i = 0; i < params.size(); i++) {
+			Node argNode = classify(args.get(i), ctx, env, site, depth);
+			if (argNode == null) {
+				break;
+			}
+			callEnv.put(params.get(i), argNode);
+		}
+		if (callEnv.size() == params.size()) {
+			substituted = classify(body, ctx, callEnv, site, depth + 1);
+		}
+		if (substituted == null) {
+			leaves.subList(mark, leaves.size()).clear();
+		}
+		return substituted;
 	}
 
 	private static Node registerLeaf(Node leaf, List<Node> leaves) {
@@ -420,27 +799,12 @@ final class WasmIntFusionCompiler {
 		return leaf;
 	}
 
-	private static int countOccurrences(@org.jspecify.annotations.Nullable LispVal expr, String name) {
-		if (expr instanceof LispSymbol sym) {
-			return name.equals(sym.name()) ? 1 : 0;
-		}
-		if (expr instanceof LispCons cons) {
-			int count = 0;
-			LispVal cur = cons;
-			while (cur instanceof LispCons cell) {
-				count += countOccurrences(cell.car(), name);
-				cur = cell.cdr();
-			}
-			return count + countOccurrences(cur, name);
-		}
-		return 0;
-	}
-
 	/** Counts fused operations (an n-ary node left-folds into arity - 1 binary ops). */
 	private static int countOps(Node node) {
 		return switch (node) {
 			case ExprLeaf ignored -> 0;
 			case ArefLeaf ignored -> 0;
+			case RawLeaf ignored -> 0;
 			case ConstLeaf ignored -> 0;
 			case OpNode op -> {
 				int ops = Math.max(1, op.args().size() - 1);
@@ -453,22 +817,60 @@ final class WasmIntFusionCompiler {
 	}
 
 	/**
-	 * The raw-i64 fast path. Straight-line code directly inside the bail block except for
-	 * the per-leaf guard's own {@code if} -- ops branch to the bail block at depth 0, the
-	 * guard's not-an-i64-integer branch at depth 1; a taken branch discards whatever
-	 * partial i64 stack the tree has built so far.
+	 * Evaluates every non-constant leaf ONCE, left to right (the same observable order as
+	 * the generic path's argument evaluation), into scratch locals both paths read. An
+	 * aref leaf evaluates its array then its index, exactly like the generic aref
+	 * argument order; a raw-local leaf snapshots its (i64, shadow) pair so a later leaf's
+	 * side effect cannot change what this read observes.
 	 */
-	private static void emitFast(Node node, WasmLispCompiler.Ctx ctx) {
-		switch (node) {
-			case ConstLeaf c -> {
-				ctx.writer.write(Instruction.I64_CONST);
-				ctx.writer.writeSignedLeb128(c.value());
+	private static void evalLeaves(List<Node> leaves, WasmLispCompiler.Ctx ctx) {
+		for (Node node : leaves) {
+			if (node instanceof ExprLeaf leaf) {
+				WasmExprCompiler.compileExpr(leaf.expr, ctx);
+				leaf.slot = ctx.allocTemp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeSignedLeb128(leaf.slot);
 			}
+			else if (node instanceof ArefLeaf aref) {
+				WasmExprCompiler.compileExpr(aref.arrayExpr, ctx);
+				aref.arrSlot = ctx.allocTemp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeSignedLeb128(aref.arrSlot);
+				WasmExprCompiler.compileExpr(aref.indexExpr, ctx);
+				aref.idxSlot = ctx.allocTemp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeSignedLeb128(aref.idxSlot);
+			}
+			else if (node instanceof RawLeaf raw) {
+				raw.snapI64 = ctx.allocI64Temp();
+				raw.snapShadow = ctx.allocTemp();
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writeI64LocalIndex(raw.src.i64Slot());
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writeI64LocalIndex(raw.snapI64);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(raw.src.shadowSlot());
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeSignedLeb128(raw.snapShadow);
+			}
+		}
+	}
+
+	/**
+	 * Guards and unboxes every non-constant leaf ONCE, in registration (source) order,
+	 * into an i64 scratch local -- the fast path re-reads the local at every occurrence.
+	 * Before todo 194 stage 3 the guard was re-emitted at every occurrence of a shared
+	 * leaf, which made inlined local-function bodies (whose parameters are used
+	 * repeatedly) pay more in guards than they saved in dispatch. Emitted directly inside
+	 * the bail block: a failed guard branches to the fallback ({@code br_if} at depth 0,
+	 * or depth 1 from inside the ExprLeaf guard's own {@code if}).
+	 */
+	private static void emitLeafUnboxes(List<Node> leaves, WasmLispCompiler.Ctx ctx) {
+		for (Node node : leaves) {
 			// The _fx_val semantics inlined (an i31's value, a TYPE_BIGNUM's field,
-			// anything else bails): the leaf guard runs once per leaf per evaluation,
-			// and the profile showed the call wrapper alone costing more than the two
-			// type tests it performs.
-			case ExprLeaf leaf -> {
+			// anything else bails): the profile showed the call wrapper alone costing
+			// more than the two type tests it performs.
+			if (node instanceof ExprLeaf leaf) {
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeSignedLeb128(leaf.slot);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -494,12 +896,13 @@ final class WasmIntFusionCompiler {
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
 				ctx.writer.writeSignedLeb128(0);
 				ctx.writer.write(Instruction.END);
+				leaf.i64Slot = ctx.allocI64Temp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writeI64LocalIndex(leaf.i64Slot);
 			}
 			// The raw element read: bail unless the array is a packed integer vector
-			// AND the index an i31 (the guards run at depth 0 relative to the bail
-			// block -- leaf-guard ifs are self-contained, so every operand position
-			// sits directly inside it); then read data[idx] unsigned as an i64.
-			case ArefLeaf leaf -> {
+			// AND the index an i31; then read data[idx] unsigned as an i64.
+			else if (node instanceof ArefLeaf leaf) {
 				WasmArrayCompiler.testIntVector(ctx, leaf.arrSlot);
 				ctx.writer.write(Instruction.I32_EQZ);
 				ctx.writer.write(Instruction.BR_IF, 0);
@@ -510,14 +913,80 @@ final class WasmIntFusionCompiler {
 				ctx.writer.write(Instruction.I32_EQZ);
 				ctx.writer.write(Instruction.BR_IF, 0);
 				WasmArrayCompiler.emitPackedIntRead(ctx, leaf.arrSlot, leaf.idxSlot);
+				leaf.i64Slot = ctx.allocI64Temp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writeI64LocalIndex(leaf.i64Slot);
 			}
+			// A raw-local snapshot resolves to snapI64: the raw value when the shadow
+			// is null (the common case, no guard at all), else the shadow's guarded
+			// unbox (i31 / TYPE_BIGNUM; anything else -- a float or limb-tier shadow
+			// -- bails at depth 2: past the inner guard if and the outer if).
+			else if (node instanceof RawLeaf raw) {
+				emitShadowIsSentinel(raw.snapShadow, ctx);
+				ctx.writer.write(Instruction.IF);
+				ctx.writer.write(Type.I64);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writeI64LocalIndex(raw.snapI64);
+				ctx.writer.write(Instruction.ELSE);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(raw.snapShadow);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+				ctx.writer.writeHeapType(Type.I31.code());
+				ctx.writer.write(Instruction.IF);
+				ctx.writer.write(Type.I64);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(raw.snapShadow);
+				WasmEmitHelper.castI31GetS(ctx);
+				ctx.writer.write(Instruction.I64_EXTEND_S_I32);
+				ctx.writer.write(Instruction.ELSE);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(raw.snapShadow);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+				ctx.writer.write(Instruction.I32_EQZ);
+				ctx.writer.write(Instruction.BR_IF, 2);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(raw.snapShadow);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+				ctx.writer.writeSignedLeb128(0);
+				ctx.writer.write(Instruction.END);
+				ctx.writer.write(Instruction.END);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writeI64LocalIndex(raw.snapI64);
+			}
+		}
+	}
+
+	private static void writeI64LocalRead(int i64Slot, WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(i64Slot);
+	}
+
+	/**
+	 * The raw-i64 fast path over the pre-unboxed leaves. Straight-line code directly
+	 * inside the bail block -- checked ops branch to it at depth 0; a taken branch
+	 * discards whatever partial i64 stack the tree has built so far.
+	 */
+	private static void emitFast(Node node, WasmLispCompiler.Ctx ctx) {
+		switch (node) {
+			case ConstLeaf c -> {
+				ctx.writer.write(Instruction.I64_CONST);
+				ctx.writer.writeSignedLeb128(c.value());
+			}
+			case ExprLeaf leaf -> writeI64LocalRead(leaf.i64Slot, ctx);
+			case ArefLeaf leaf -> writeI64LocalRead(leaf.i64Slot, ctx);
+			case RawLeaf leaf -> writeI64LocalRead(leaf.snapI64, ctx);
 			case OpNode op -> {
 				// (mod x 2^k) with a positive power-of-two literal is a plain mask --
 				// two's complement makes x & (2^k - 1) the CL mod (divisor-signed
-				// result) for ANY i64 x, with no overflow and no helper call.
+				// result) for ANY i64 x, with no overflow and no helper call. The
+				// masked subtree may compute WRAPPED (its low k bits are exact).
 				if (LispNames.MOD.equals(op.op()) && op.args().get(1) instanceof ConstLeaf c && c.value() > 0
 						&& Long.bitCount(c.value()) == 1) {
-					emitFast(op.args().get(0), ctx);
+					emitFastWrapped(op.args().get(0), ctx);
 					ctx.writer.write(Instruction.I64_CONST);
 					ctx.writer.writeSignedLeb128(c.value() - 1);
 					ctx.writer.write(Instruction.I64_AND);
@@ -533,6 +1002,21 @@ final class WasmIntFusionCompiler {
 					ctx.writer.write(Instruction.I64_SHR_S);
 					return;
 				}
+				// (logand X mask) with a non-negative literal: the masked result keeps
+				// only low bits, which wrap-around i64 arithmetic computes EXACTLY --
+				// the whole add/sub/mul/shl-const subtree under the mask can run
+				// unchecked (mod32+/rol32-style code pays no _fx_* calls at all).
+				if (LispNames.LOGAND.equals(op.op()) && op.args().size() == 2) {
+					ConstLeaf mask = op.args().get(1) instanceof ConstLeaf m && m.value() >= 0 ? m
+							: op.args().get(0) instanceof ConstLeaf m0 && m0.value() >= 0 ? m0 : null;
+					if (mask != null) {
+						emitFastWrapped(op.args().get(op.args().get(1) == mask ? 0 : 1), ctx);
+						ctx.writer.write(Instruction.I64_CONST);
+						ctx.writer.writeSignedLeb128(mask.value());
+						ctx.writer.write(Instruction.I64_AND);
+						return;
+					}
+				}
 				emitFast(op.args().get(0), ctx);
 				for (int i = 1; i < op.args().size(); i++) {
 					emitFast(op.args().get(i), ctx);
@@ -544,6 +1028,64 @@ final class WasmIntFusionCompiler {
 					ctx.writer.write(Instruction.I64_XOR);
 				}
 			}
+		}
+	}
+
+	/**
+	 * Emits a subtree whose consumer only keeps LOW bits (it sits under a literal
+	 * {@code logand} mask or a power-of-two {@code mod}): {@code + - *} and
+	 * left-{@code ash} by a literal emit as plain wrap-around i64 ops with NO overflow
+	 * check -- the low {@code k <= 63} bits of a wrapped result equal the
+	 * infinite-precision ones -- and the bitwise ops pass the wrapping license through.
+	 * Anything whose value depends on HIGH bits (a right shift, a general mod/rem, a
+	 * leaf) emits through the ordinary checked path, whose value is exact.
+	 */
+	private static void emitFastWrapped(Node node, WasmLispCompiler.Ctx ctx) {
+		if (!(node instanceof OpNode op)) {
+			emitFast(node, ctx);
+			return;
+		}
+		switch (op.op()) {
+			case LispNames.ADD, LispNames.SUB, LispNames.MUL -> {
+				emitFastWrapped(op.args().get(0), ctx);
+				for (int i = 1; i < op.args().size(); i++) {
+					emitFastWrapped(op.args().get(i), ctx);
+					ctx.writer.write(switch (op.op()) {
+						case LispNames.ADD -> Instruction.I64_ADD;
+						case LispNames.SUB -> Instruction.I64_SUB;
+						default -> Instruction.I64_MUL;
+					});
+				}
+			}
+			case LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR -> {
+				emitFastWrapped(op.args().get(0), ctx);
+				for (int i = 1; i < op.args().size(); i++) {
+					emitFastWrapped(op.args().get(i), ctx);
+					ctx.writer.write(switch (op.op()) {
+						case LispNames.LOGAND -> Instruction.I64_AND;
+						case LispNames.LOGIOR -> Instruction.I64_OR;
+						default -> Instruction.I64_XOR;
+					});
+				}
+			}
+			case LispNames.LOGNOT -> {
+				emitFastWrapped(op.args().get(0), ctx);
+				ctx.writer.write(Instruction.I64_CONST);
+				ctx.writer.writeSignedLeb128(-1);
+				ctx.writer.write(Instruction.I64_XOR);
+			}
+			case LispNames.ASH -> {
+				if (op.args().get(1) instanceof ConstLeaf c && c.value() > 0 && c.value() < 64) {
+					emitFastWrapped(op.args().get(0), ctx);
+					ctx.writer.write(Instruction.I64_CONST);
+					ctx.writer.writeSignedLeb128(c.value());
+					ctx.writer.write(Instruction.I64_SHL);
+				}
+				else {
+					emitFast(node, ctx);
+				}
+			}
+			default -> emitFast(node, ctx);
 		}
 	}
 
@@ -590,6 +1132,22 @@ final class WasmIntFusionCompiler {
 			// unfused (aref a i) call would (the read is pure, so recomputing it in
 			// the fallback is safe).
 			case ArefLeaf leaf -> WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, leaf.idxSlot);
+			// The snapshot re-boxed: the shadow when non-null, else the raw value
+			// through _int_new (an i31 for the fixnum range -- allocation-free).
+			case RawLeaf leaf -> {
+				emitShadowIsSentinel(leaf.snapShadow, ctx);
+				ctx.writer.write(Instruction.IF);
+				ctx.writer.write(Type.REFNULL.code());
+				ctx.writer.writeHeapType(Type.EQ.code());
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writeI64LocalIndex(leaf.snapI64);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+				ctx.writer.write(Instruction.ELSE);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(leaf.snapShadow);
+				ctx.writer.write(Instruction.END);
+			}
 			case OpNode op -> {
 				emitFallback(op.args().get(0), ctx);
 				for (int i = 1; i < op.args().size(); i++) {

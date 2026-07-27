@@ -10,6 +10,7 @@ import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
@@ -55,6 +56,47 @@ final class WasmLetCompiler {
 			}
 		}
 		Set<String> capturedInLet = FreeVarAnalyzer.findCapturedVars(bodyExprs, letVarNames, ctx.functions.keySet());
+
+		// Unboxed (dual-representation) locals, todo 194 stage 3: a binding that is
+		// never captured or special and has at least one integer-tree-shaped assignment
+		// (its init, or a setq/setf pair in the body) gets an i64 slot + a boxed shadow
+		// slot instead of an ordinary local. Every assignment funnels through
+		// WasmSetqCompiler (psetq/rotatef/incf/... all expand to setq), which stores
+		// raw on the fused fast path and boxes into the shadow otherwise. Gated off at
+		// top level (the eval-mirror writes boxed slots), under --dynamic and in async
+		// bodies, like the rest of the fusion machinery.
+		Set<String> rawEligible = new HashSet<>();
+		int savedNextI64Local = ctx.nextI64Local;
+		if (!ctx.dynamic && !ctx.topLevel && !async && ctx.asyncResume == null
+				&& !Boolean.getBoolean("rontolisp.debug.norawlocals") && bindings instanceof LispCons rawScan) {
+			Map<String, List<LispVal>> assignedValues = new HashMap<>();
+			for (LispVal bodyForm : bodyExprs) {
+				collectAssignedValues(bodyForm, assignedValues);
+			}
+			Set<String> seenNames = new HashSet<>();
+			Set<String> duplicateNames = new HashSet<>();
+			for (LispVal binding : rawScan.toList()) {
+				String name = ((LispSymbol) ((LispCons) binding).toList().get(0)).name();
+				if (!seenNames.add(name)) {
+					duplicateNames.add(name);
+				}
+			}
+			for (LispVal binding : rawScan.toList()) {
+				List<LispVal> pairList = ((LispCons) binding).toList();
+				String name = ((LispSymbol) pairList.get(0)).name();
+				if (ctx.specialVars.contains(name) || capturedInLet.contains(name) || duplicateNames.contains(name)) {
+					continue;
+				}
+				boolean anyRaw = WasmIntFusionCompiler.isRawAssignShaped(pairList.get(1), ctx);
+				for (LispVal value : assignedValues.getOrDefault(name, List.of())) {
+					anyRaw = anyRaw || WasmIntFusionCompiler.isRawAssignShaped(value, ctx);
+				}
+				if (anyRaw) {
+					rawEligible.add(name);
+				}
+			}
+		}
+		Map<String, WasmIntFusionCompiler.RawLocal> rawRegistrations = new HashMap<>();
 
 		// Each dynamic (special) binding established here: {globalIndex, saveSlot}.
 		// Restored
@@ -109,6 +151,14 @@ final class WasmLetCompiler {
 					ctx.writer.writeSignedLeb128(lexSlot);
 					continue;
 				}
+				if (rawEligible.contains(name)) {
+					// Unboxed dual-representation binding: no ordinary local at all.
+					WasmIntFusionCompiler.RawLocal raw = new WasmIntFusionCompiler.RawLocal(ctx.allocI64Temp(),
+							ctx.allocTemp());
+					WasmIntFusionCompiler.compileRawStore(pairList.get(1), ctx, raw);
+					rawRegistrations.put(name, raw);
+					continue;
+				}
 				WasmExprCompiler.compileExpr(pairList.get(1), ctx);
 				if (capturedInLet.contains(name)) {
 					// Box in a cell
@@ -119,6 +169,77 @@ final class WasmLetCompiler {
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeSignedLeb128(slot);
 			}
+		}
+
+		// Register let-bound local functions (the __FLETn_f lambdas the flet lowering
+		// produces, .kb/flet-labels.md) whose bodies are closed integer-operation
+		// trees, so fused sites in the body substitute them instead of paying the
+		// funcall dispatch + box round trip (todo 194 stage 3). The binding is
+		// immutable by construction (generated unique names, and the lowering never
+		// assigns them); the setf-family scan guards against a hand-written collision.
+		// Shadowed outer registrations are removed whatever the new binding's shape.
+		Map<String, WasmIntFusionCompiler.LocalIntLambda> savedLocalLambdas = ctx.localIntLambdas;
+		Map<String, WasmIntFusionCompiler.LocalIntLambda> newLocalLambdas = null;
+		for (String name : letVarNames) {
+			if (savedLocalLambdas.containsKey(name)) {
+				if (newLocalLambdas == null) {
+					newLocalLambdas = new HashMap<>(savedLocalLambdas);
+				}
+				newLocalLambdas.remove(name);
+			}
+		}
+		if (!ctx.dynamic && !async && bindings instanceof LispCons lambdaBindings) {
+			Set<String> assignedInBody = null;
+			for (LispVal binding : lambdaBindings.toList()) {
+				List<LispVal> pairList = ((LispCons) binding).toList();
+				String name = ((LispSymbol) pairList.get(0)).name();
+				if (!name.startsWith("__FLET") || ctx.specialVars.contains(name)
+						|| !(pairList.get(1) instanceof LispCons init)) {
+					continue;
+				}
+				WasmIntFusionCompiler.LocalIntLambda lambda = WasmIntFusionCompiler.eligibleLocalLambda(init, ctx);
+				if (lambda == null) {
+					continue;
+				}
+				if (assignedInBody == null) {
+					assignedInBody = new HashSet<>();
+					for (LispVal bodyForm : bodyExprs) {
+						collectAssignedNames(bodyForm, assignedInBody);
+					}
+				}
+				if (assignedInBody.contains(name)) {
+					continue;
+				}
+				if (newLocalLambdas == null) {
+					newLocalLambdas = new HashMap<>(savedLocalLambdas);
+				}
+				newLocalLambdas.put(name, lambda);
+			}
+		}
+		if (newLocalLambdas != null) {
+			ctx.localIntLambdas = newLocalLambdas;
+		}
+
+		// Register the unboxed bindings for the body (and unregister every outer raw
+		// local this let shadows, whatever the new binding's representation).
+		Map<String, WasmIntFusionCompiler.RawLocal> savedRawLocals = ctx.rawLocals;
+		Map<String, WasmIntFusionCompiler.RawLocal> newRawLocals = null;
+		for (String name : letVarNames) {
+			if (savedRawLocals.containsKey(name)) {
+				if (newRawLocals == null) {
+					newRawLocals = new HashMap<>(savedRawLocals);
+				}
+				newRawLocals.remove(name);
+			}
+		}
+		if (!rawRegistrations.isEmpty()) {
+			if (newRawLocals == null) {
+				newRawLocals = new HashMap<>(savedRawLocals);
+			}
+			newRawLocals.putAll(rawRegistrations);
+		}
+		if (newRawLocals != null) {
+			ctx.rawLocals = newRawLocals;
 		}
 
 		// Save and adjust boxedVars for the let body. The set tracks names, so each
@@ -135,11 +256,15 @@ final class WasmLetCompiler {
 			WasmAsyncEmit.compileGuardedProgn(parts.subList(2, parts.size()), ctx);
 		}
 		else {
+			// Non-tail statements compile for effect: a statement-position setq of an
+			// unboxed local (or a packed-array setf) then materializes no value.
 			for (int i = 2; i < parts.size(); i++) {
-				if (i > 2) {
-					ctx.writer.write(Instruction.DROP);
+				if (i < parts.size() - 1) {
+					WasmExprCompiler.compileForEffect(parts.get(i), ctx);
 				}
-				WasmExprCompiler.compileExpr(parts.get(i), ctx);
+				else {
+					WasmExprCompiler.compileExpr(parts.get(i), ctx);
+				}
 			}
 		}
 
@@ -159,6 +284,78 @@ final class WasmLetCompiler {
 
 		ctx.boxedVars = savedBoxed;
 		ctx.locals = savedLocals;
+		ctx.localIntLambdas = savedLocalLambdas;
+		ctx.rawLocals = savedRawLocals;
+		ctx.nextI64Local = savedNextI64Local;
+	}
+
+	/**
+	 * Collects the value expression of every {@code setq}/{@code setf} pair whose
+	 * assignment target is a plain symbol, anywhere in the tree (shadowing-blind: an
+	 * inner binding's setq also lands here, which only widens the eligibility heuristic,
+	 * never the compiled scoping). Feeds the unboxed-local eligibility check above.
+	 */
+	private static void collectAssignedValues(LispVal form, Map<String, List<LispVal>> out) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head && cons.isProperList()) {
+			String name = head.name();
+			if (LispNames.SETQ.equals(name) || LispNames.SETF.equals(name)) {
+				List<LispVal> parts = cons.toList();
+				for (int i = 1; i + 1 < parts.size(); i += 2) {
+					if (parts.get(i) instanceof LispSymbol target) {
+						out.computeIfAbsent(target.name(), k -> new java.util.ArrayList<>()).add(parts.get(i + 1));
+					}
+				}
+			}
+		}
+		LispVal cur = cons;
+		while (cur instanceof LispCons cell) {
+			collectAssignedValues(cell.car(), out);
+			cur = cell.cdr();
+		}
+	}
+
+	/**
+	 * Collects every name that appears in an assignment position of a setf-family form
+	 * ({@code setq}/{@code psetq}/{@code setf}/{@code psetf}/
+	 * {@code multiple-value-setq}) anywhere in the tree -- conservatively including
+	 * quoted data. Used to refuse local-function registration for a name that the body
+	 * could reassign.
+	 */
+	private static void collectAssignedNames(LispVal form, Set<String> out) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head && cons.isProperList()) {
+			List<LispVal> parts = cons.toList();
+			switch (head.name()) {
+				case LispNames.SETQ, LispNames.PSETQ, LispNames.SETF, LispNames.PSETF -> {
+					for (int i = 1; i < parts.size(); i += 2) {
+						if (parts.get(i) instanceof LispSymbol name) {
+							out.add(name.name());
+						}
+					}
+				}
+				case LispNames.MULTIPLE_VALUE_SETQ -> {
+					if (parts.size() > 1 && parts.get(1) instanceof LispCons names) {
+						for (LispVal name : names.toList()) {
+							if (name instanceof LispSymbol sym) {
+								out.add(sym.name());
+							}
+						}
+					}
+				}
+				default -> {
+				}
+			}
+		}
+		LispVal cur = cons;
+		while (cur instanceof LispCons cell) {
+			collectAssignedNames(cell.car(), out);
+			cur = cell.cdr();
+		}
 	}
 
 	/**

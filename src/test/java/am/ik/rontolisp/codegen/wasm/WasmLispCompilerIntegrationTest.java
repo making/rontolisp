@@ -513,6 +513,81 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath() throws Exception {
+		// Todo 194 stage 3. Pins, in order: (1) flet one-liner bodies (over params and
+		// inlinable defuns like rol32b) substitute into fused trees -- results identical
+		// to the generic call chain; (2) an flet function used as a VALUE (#'add2 via
+		// funcall and reduce) still exists as a closure; (3) labels recursion is
+		// untouched by the inliner; (4) an unboxed (dual-representation) local promotes
+		// through its boxed shadow when the raw i64 overflows (3^45 needs the limb
+		// tier) and (5) accepts a non-integer assignment (a list, a float) through the
+		// same shadow; (6)/(7) the masked-wrap peephole (+/*/ash under a literal logand
+		// or ldb mask compile as unchecked wrap-around i64) keeps exact low bits at and
+		// beyond the i64 edge; (8) a comparison's t is the cached shared symbol, still
+		// eq to a quoted 't; (9) a side-effecting argument of an inlinable-defun call
+		// whose body substitution FAILS (the parameter-shaped aref) still runs exactly
+		// once -- the failed attempt's registered leaves must be rolled back, or the
+		// argument evaluates once as a discarded leaf and once in the call.
+		String program = """
+				(defun rol32b (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
+				(defun mix (a b c)
+				  (flet ((ch (x y z) (logxor z (logand x (logxor y z))))
+				         (sigma0 (x) (logxor (rol32b x 30) (rol32b x 19) (rol32b x 10))))
+				    (logand (+ (sigma0 a) (ch a b c)) 4294967295)))
+				(print (mix 1779033703 3144134277 1013904242))
+				(flet ((add2 (x y) (+ x y)))
+				  (print (funcall #'add2 40 2))
+				  (print (reduce #'add2 (list 1 2 3 4))))
+				(labels ((fact (n) (if (< n 2) 1 (* n (fact (- n 1))))))
+				  (print (fact 25)))
+				(let ((x 1) (i 0))
+				  (tagbody top (setq x (* x 3)) (setq i (+ i 1)) (if (< i 45) (go top)))
+				  (print x))
+				(let ((y 5))
+				  (setq y (+ y 1))
+				  (setq y (list y))
+				  (print y))
+				(print (logand (* 123456789123 987654321987) 4294967295))
+				(print (ldb (byte 32 0) (+ 9223372036854775807 9223372036854775807)))
+				(print (eq (< 1 2) 't))
+				(defun g8 (a i) (aref a i))
+				(let ((arr (make-array 3 :element-type '(unsigned-byte 8))) (n 0))
+				  (setf (aref arr 0) 7)
+				  (print (+ (g8 arr (progn (setq n (+ n 1)) 0)) 1))
+				  (print n))
+				(let ((f 2.5) (k 3))
+				  (setq f (+ f 0.5))
+				  (setq k (+ k 1))
+				  (print (list f k)))
+				(let ((fs nil) (fe nil) (k 7))
+				  (when (> k 5) (setq fs (+ k 1)))
+				  (print (list fs fe (if fe fe k) (if fs fs k)))
+				  (setq fs nil)
+				  (print (if fs 'set 'unset)))
+				""";
+		// The last let is the jzon %json-number shape: a local INITIALIZED to nil
+		// whose only assignments are integer trees. nil is ref.null, so "shadow
+		// null = raw valid" cannot be the unboxed-local invariant -- the sentinel
+		// scheme must read the untouched fe (and the re-nil'd fs) as nil, never as
+		// the stale raw i64 slot.
+		assertThat(compileAndRun(program)).isEqualTo("""
+				210267027
+				42
+				10
+				15511210043330985984000000
+				2954312706550833698643
+				(6)
+				754865481
+				4294967294
+				T
+				8
+				1
+				(3.0 4)
+				(8 NIL 7 8)
+				UNSET""");
+	}
+
+	@Test
 	void floatModAndRemComputeCorrectly() throws Exception {
 		// Regression: float mod/rem on the GC backend used to miscompile. A literal float
 		// operand wrote an invalid f64 opcode (byte 0xff, there is no f64.rem), and a

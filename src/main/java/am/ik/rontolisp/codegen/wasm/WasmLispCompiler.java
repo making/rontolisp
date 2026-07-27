@@ -786,7 +786,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// aset value can stay a raw i64 on the stack (todo 194 stage 2).
 	static final int FUNC_IV_SET = FUNC_FX_REM + 1;
 
-	static final int FX_FUNC_LAST = FUNC_IV_SET;
+	// _t_sym () -> eqref: the symbol t, built once (lazily) into a module global and
+	// returned on every subsequent call. Every emitTrue site (comparisons, predicates)
+	// used to rebuild it through _str_build, which ALLOCATED a fresh $str_bytes per
+	// true result -- a loop's termination test allocated on every iteration (todo 194
+	// stage 3). The cached instance has the same id (the intern offset of "T") and the
+	// same bytes as a per-site build, so eq/eql/print behavior is unchanged.
+	static final int FUNC_T_SYM = FUNC_IV_SET + 1;
+
+	static final int FX_FUNC_LAST = FUNC_T_SYM;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -1063,7 +1071,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// _iv_set ((ref null eq), i32, i64) -> (): the packed integer-vector raw store.
 	static final int TYPE_IV_SET = TYPE_I32ARR + 1; // 60
 
-	static final int IARR_TYPE_LAST = TYPE_IV_SET;
+	// _t_sym () -> eqref: the cached-t helper's signature.
+	static final int TYPE_T_SYM = TYPE_IV_SET + 1; // 61
+
+	static final int IARR_TYPE_LAST = TYPE_T_SYM;
 
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
@@ -1797,10 +1808,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		// every other global so non-serve output is byte-identical (serve implies
 		// asyncMode, so taskSeqGlobalIndex is always valid here).
 		int serveInitGlobalIndex = this.serve ? taskSeqGlobalIndex + 1 : -1;
+		// The cached symbol t (built lazily by _t_sym) and the raw-local sentinel (a
+		// private TYPE_CELL instance no user value can be ref.eq to; "shadow ==
+		// sentinel" marks an unboxed local's raw i64 as authoritative -- null cannot
+		// mark it, because nil IS null), always the LAST globals so every mode-gated
+		// index above keeps its value.
+		int tSymGlobalIndex = 1 + (this.serve ? serveInitGlobalIndex
+				: this.asyncMode ? taskSeqGlobalIndex : ehMode ? ehDepthGlobalIndex : GLOBAL_FENV + globalCount);
+		int rawSentinelGlobalIndex = tSymGlobalIndex + 1;
 
 		// Create string table
 		int dataBase = this.component ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
 		StringTable stringTable = new StringTable(dataBase);
+		StringTable.StringEntry tSymEntry = stringTable.addString("T");
 		// Bake the instance layouts into the data segment BEFORE Pass 2a: %obj-new
 		// emits a record's address as an i32.const inside an ordinary function body, so
 		// unlike the eval registry, the intern table and the case-fold tables -- all of
@@ -1886,6 +1906,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.ehMode(ehMode)
 			.crossLambdaExit(crossLambdaExit)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
+			.rawSentinelGlobalIndex(rawSentinelGlobalIndex)
 			.functions(functions)
 			.inlinableDefuns(inlinableDefuns)
 			.lambdaDecls(lambdaDecls)
@@ -1972,20 +1993,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			funcWriter.write(Instruction.END);
 
 			// Rebuild with correct local declarations (extra locals beyond env+params)
-			ByteArrayOutputStream finalFuncBody = new ByteArrayOutputStream();
-			WasmWriter finalFuncWriter = new WasmWriter(finalFuncBody);
-			int extraLocals = funcCtx.nextLocal - (defun.paramNames.size() + 1);
-			if (extraLocals > 0) {
-				finalFuncWriter.write(1);
-				finalFuncWriter.writeUnsignedLeb128(extraLocals);
-				finalFuncWriter.write(Type.REFNULL.code());
-				finalFuncWriter.writeHeapType(Type.EQ.code());
-			}
-			else {
-				finalFuncWriter.write(0);
-			}
-			finalFuncWriter.write((Object) funcBody.toByteArray());
-			userFunctionBodies.add(finalFuncBody.toByteArray());
+			userFunctionBodies.add(buildLocalsAndPatch(funcCtx, defun.paramNames.size() + 1, funcBody));
 		}
 
 		// Pass 2b: Build _start function body
@@ -2053,19 +2061,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		startWriter.write(Instruction.END);
 
-		ByteArrayOutputStream finalStartBody = new ByteArrayOutputStream();
-		WasmWriter finalStartWriter = new WasmWriter(finalStartBody);
-		int numLocals = ctx.nextLocal;
-		if (numLocals > 0) {
-			finalStartWriter.write(1);
-			finalStartWriter.writeUnsignedLeb128(numLocals);
-			finalStartWriter.write(Type.REFNULL.code());
-			finalStartWriter.writeHeapType(Type.EQ.code());
-		}
-		else {
-			finalStartWriter.write(0);
-		}
-		finalStartWriter.write((Object) startBody.toByteArray());
+		byte[] finalStartBytes = buildLocalsAndPatch(ctx, 0, startBody);
 
 		// Pass 2c: Compile lambda bodies iteratively
 		List<byte[]> lambdaFunctionBodies = new ArrayList<>();
@@ -2130,20 +2126,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			lambdaWriter.write(Instruction.END);
 
-			ByteArrayOutputStream finalLambdaBody = new ByteArrayOutputStream();
-			WasmWriter finalLambdaWriter = new WasmWriter(finalLambdaBody);
-			int extraLocals = lambdaCtx.nextLocal - (lambda.paramNames.size() + 1);
-			if (extraLocals > 0) {
-				finalLambdaWriter.write(1);
-				finalLambdaWriter.writeUnsignedLeb128(extraLocals);
-				finalLambdaWriter.write(Type.REFNULL.code());
-				finalLambdaWriter.writeHeapType(Type.EQ.code());
-			}
-			else {
-				finalLambdaWriter.write(0);
-			}
-			finalLambdaWriter.write((Object) lambdaBody.toByteArray());
-			lambdaFunctionBodies.add(finalLambdaBody.toByteArray());
+			lambdaFunctionBodies.add(buildLocalsAndPatch(lambdaCtx, lambda.paramNames.size() + 1, lambdaBody));
 			lambdaIdx++;
 		}
 
@@ -3162,6 +3145,14 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.I64);
 					w.write(0);
 				});
+				// type 61 (TYPE_T_SYM): _t_sym () -> (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(0);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
 				if (this.simd) {
 					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
@@ -3547,6 +3538,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_FX_DIV); // _fx_mod
 				fnDef.addFunction(TYPE_FX_DIV); // _fx_rem
 				fnDef.addFunction(TYPE_IV_SET); // _iv_set
+				fnDef.addFunction(TYPE_T_SYM); // _t_sym
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -3738,6 +3730,30 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(Instruction.END);
 					});
 				}
+				// The cached symbol t at tSymGlobalIndex, a (mut (ref null eq)) = null,
+				// built lazily by _t_sym; then the raw-local sentinel at
+				// rawSentinelGlobalIndex, an immutable (ref null eq) initialized by the
+				// constant expression (struct.new TYPE_CELL (ref.null eq)) -- a private
+				// instance nothing else can hold. Always last, so every other index is
+				// stable.
+				gs.add(g -> {
+					g.write(Type.REFNULL.code());
+					g.writeHeapType(Type.EQ.code());
+					g.write(am.ik.wasm.Mutability.VAR.code());
+					g.write(Instruction.REF_NULL);
+					g.writeHeapType(Type.EQ.code());
+					g.write(Instruction.END);
+				});
+				gs.add(g -> {
+					g.write(Type.REFNULL.code());
+					g.writeHeapType(Type.EQ.code());
+					g.write(am.ik.wasm.Mutability.CONST.code());
+					g.write(Instruction.REF_NULL);
+					g.writeHeapType(Type.EQ.code());
+					g.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+					g.writeSignedLeb128(TYPE_CELL);
+					g.write(Instruction.END);
+				});
 			})
 			// Export section -- component mode exports `run` (the i32-returning _start)
 			// for
@@ -3830,7 +3846,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
 					}
 				}
-				code.addFunction(finalStartBody.toByteArray())
+				code.addFunction(finalStartBytes)
 					.addFunction(printI32Body)
 					.addFunction(writeStrBody)
 					.addFunction(printValBody)
@@ -4006,6 +4022,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmFxRuntimeBuilder.buildFxModBody());
 				code.addFunction(WasmFxRuntimeBuilder.buildFxRemBody());
 				code.addFunction(WasmFxRuntimeBuilder.buildIvSetBody());
+				code.addFunction(
+						WasmFxRuntimeBuilder.buildTSymBody(tSymEntry.offset(), tSymEntry.length(), tSymGlobalIndex));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
@@ -4494,6 +4512,46 @@ public final class WasmLispCompiler implements LispCompiler {
 	record BlockMarker(int depth, @Nullable String name, boolean catchesPlain, boolean functionBoundary) {
 	}
 
+	/**
+	 * Builds a function body's locals declaration and appends the body, patching the i64
+	 * scratch-local references the fusion compiler emitted as placeholders
+	 * ({@link Ctx#writeI64LocalIndex}): the declaration is one {@code (ref null eq)} run
+	 * for everything past {@code predeclaredSlots} followed by one {@code i64} run, so an
+	 * i64 local's absolute index is {@code ctx.nextLocal + slot}. A body with no i64
+	 * locals is byte-identical to the pre-stage-3 emission.
+	 * @param ctx the function's compilation context after its body was emitted
+	 * @param predeclaredSlots slots covered by the signature (params, closure env),
+	 * excluded from the declared runs
+	 * @param funcBody the emitted body instructions (including the terminating END)
+	 * @return the complete code-section entry
+	 */
+	static byte[] buildLocalsAndPatch(Ctx ctx, int predeclaredSlots, ByteArrayOutputStream funcBody) {
+		byte[] body = funcBody.toByteArray();
+		for (int[] ref : ctx.i64LocalRefs) {
+			int index = ctx.nextLocal + ref[1];
+			int offset = ref[0];
+			body[offset] = (byte) (0x80 | (index & 0x7f));
+			body[offset + 1] = (byte) (0x80 | ((index >>> 7) & 0x7f));
+			body[offset + 2] = (byte) ((index >>> 14) & 0x7f);
+		}
+		int extraEq = ctx.nextLocal - predeclaredSlots;
+		int numI64 = ctx.maxI64Locals;
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		WasmWriter writer = new WasmWriter(out);
+		writer.write((extraEq > 0 ? 1 : 0) + (numI64 > 0 ? 1 : 0));
+		if (extraEq > 0) {
+			writer.writeUnsignedLeb128(extraEq);
+			writer.write(Type.REFNULL.code());
+			writer.writeHeapType(Type.EQ.code());
+		}
+		if (numI64 > 0) {
+			writer.writeUnsignedLeb128(numI64);
+			writer.write(Type.I64);
+		}
+		writer.write((Object) body);
+		return out.toByteArray();
+	}
+
 	static final class Ctx {
 
 		final WasmWriter writer;
@@ -4513,6 +4571,31 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * {@code --dynamic}.
 		 */
 		Map<String, DefunDecl> inlinableDefuns = Map.of();
+
+		/**
+		 * Let-bound local functions (the {@code __FLETn_f} lambdas flet lowers to) in
+		 * scope whose bodies are closed integer-operation trees -- the fusion compiler
+		 * substitutes them at {@code (funcall __FLETn_f ...)} sites (todo 194 stage 3).
+		 * Scoped by {@link WasmLetCompiler} (registered for the binding's body, restored
+		 * on exit); empty under {@code --dynamic}, like {@link #inlinableDefuns}.
+		 */
+		Map<String, WasmIntFusionCompiler.LocalIntLambda> localIntLambdas = Map.of();
+
+		/**
+		 * Unboxed (dual-representation) locals in scope: name to its (i64 slot, boxed
+		 * shadow slot) pair -- see {@link WasmIntFusionCompiler.RawLocal}. Scoped by
+		 * {@link WasmLetCompiler} exactly like {@link #locals}; a name in this map has NO
+		 * entry in {@link #locals}.
+		 */
+		Map<String, WasmIntFusionCompiler.RawLocal> rawLocals = Map.of();
+
+		/**
+		 * The module global holding the raw-local sentinel (a private TYPE_CELL
+		 * instance): a shadow slot ref.eq to it means "the raw i64 is authoritative". A
+		 * null shadow cannot carry that meaning -- nil IS null, and a local holding nil
+		 * must read as nil, not as the stale raw slot.
+		 */
+		int rawSentinelGlobalIndex = -1;
 
 		Map<String, Integer> captures = Map.of();
 
@@ -4778,6 +4861,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.ehMode = builder.ehMode;
 			this.crossLambdaExit = builder.crossLambdaExit;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
+			this.rawSentinelGlobalIndex = builder.rawSentinelGlobalIndex;
 			this.simd = builder.simd;
 			this.userFuncBase = builder.userFuncBase;
 			this.userDefunNames = builder.userDefunNames;
@@ -4832,6 +4916,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean crossLambdaExit = false;
 
 			private int ehDepthGlobalIndex = -1;
+
+			private int rawSentinelGlobalIndex = -1;
 
 			private boolean simd = false;
 
@@ -4931,6 +5017,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder crossLambdaExit(boolean crossLambdaExit) {
 				this.crossLambdaExit = crossLambdaExit;
+				return this;
+			}
+
+			Builder rawSentinelGlobalIndex(int rawSentinelGlobalIndex) {
+				this.rawSentinelGlobalIndex = rawSentinelGlobalIndex;
 				return this;
 			}
 
@@ -5043,6 +5134,41 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		int allocTemp() {
 			return this.nextLocal++;
+		}
+
+		/**
+		 * Count of i64 scratch locals live in the CURRENT fused site (todo 194 stage 3:
+		 * the fusion compiler unboxes each expression leaf ONCE into an i64 local and
+		 * re-reads it, instead of re-running the guard at every occurrence). Sites
+		 * save/restore this watermark so slots are reused across sites;
+		 * {@link #maxI64Locals} keeps the high-water mark the declaration needs.
+		 */
+		int nextI64Local = 0;
+
+		int maxI64Locals = 0;
+
+		/**
+		 * Patch sites for i64 local references: {bodyStream offset, site-relative slot}.
+		 * An i64 local's absolute index is {@code nextLocal + slot}, unknown until the
+		 * function body is complete (every eqref local precedes the i64 run), so
+		 * references are emitted as 3-byte padded LEB placeholders and patched by
+		 * {@link WasmLispCompiler#buildLocalsAndPatch}.
+		 */
+		List<int[]> i64LocalRefs = new ArrayList<>();
+
+		int allocI64Temp() {
+			int slot = this.nextI64Local++;
+			this.maxI64Locals = Math.max(this.maxI64Locals, this.nextI64Local);
+			return slot;
+		}
+
+		/**
+		 * Writes a reference to i64 scratch local {@code slot} as a 3-byte padded LEB
+		 * placeholder (valid up to index 2^21 - 1) and records it for patching.
+		 */
+		void writeI64LocalIndex(int slot) {
+			this.i64LocalRefs.add(new int[] { this.bodyStream.size(), slot });
+			this.writer.write(0x80, 0x80, 0x00);
 		}
 
 	}

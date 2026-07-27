@@ -46,7 +46,8 @@ final class WasmDefvarCompiler {
 				ctx.definedGlobals.add(name.name());
 			}
 		}
-		else if (parts.size() > 2 && (force || !ctx.locals.containsKey(name.name()))) {
+		else if (parts.size() > 2
+				&& (force || !(ctx.locals.containsKey(name.name()) || ctx.rawLocals.containsKey(name.name())))) {
 			WasmAsyncEmit.spine(parts.get(2), ctx);
 			int slot = ctx.allocLocal(name.name());
 			ctx.writer.write(Instruction.SET_LOCAL);

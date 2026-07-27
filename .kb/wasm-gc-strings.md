@@ -106,7 +106,14 @@ in `WasmStringRuntimeBuilder`):
 - `FUNC_STR_BUILD` `_str_build(off,len)` -- id = off. INTERNED names: literals
   (`compileStringLiteral`), `t`/`nil`/`quote`/`function`/`lambda`/keyword symbols,
   reader symbols (via `_intern`), `intern`. Two occurrences share a dedup/intern
-  offset -> `eq`.
+  offset -> `eq`. **The boolean `t` no longer builds per site**: `emitTrue`
+  calls `_t_sym` (`FUNC_T_SYM`), which lazily builds the "T" literal ONCE into
+  a dedicated module global (always the last global) and returns the cached
+  instance -- same id (the intern offset of "T"), same bytes, so eq/print are
+  unchanged, but a comparison returning true allocates nothing (todo 194
+  stage 3: loop termination tests used to allocate a `$str_bytes` per
+  iteration, ~8% of the PBKDF2 profile). Quoted `'t` sites still build through
+  `compileStringLiteral` (id-equal, so `eq` holds across both paths).
 - `FUNC_STR_FRESH` `_str_fresh(off,len)` -- id = counter++. RUNTIME strings:
   concatenate/subseq/case/trim, read string literals, read-line, the capture path
   (`princ-to-string`/`prin1-to-string`/`concatenate`), `gensym`/`make-symbol`, getenv,

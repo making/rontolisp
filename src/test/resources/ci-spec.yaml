@@ -205,6 +205,43 @@ cases:
       (231 #(1 231 3))
       T
       #(1732584193 4023233417 2225363975 255870178 1578413049 1761846468 178639645 2993401642)
+  - name: flet-fusion-and-unboxed-locals
+    source: |
+      (defun s3-rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
+      (defun s3-mix (a b c)
+        (flet ((ch (x y z) (logxor z (logand x (logxor y z))))
+               (sigma0 (x) (logxor (s3-rol32 x 30) (s3-rol32 x 19) (s3-rol32 x 10))))
+          (logand (+ (sigma0 a) (ch a b c)) 4294967295)))
+      (print (s3-mix 1779033703 3144134277 1013904242))
+      (flet ((s3-add2 (x y) (+ x y)))
+        (print (funcall #'s3-add2 40 2))
+        (print (reduce #'s3-add2 (list 1 2 3 4))))
+      (let ((s3-x 1) (s3-i 0))
+        (tagbody s3-top
+          (setq s3-x (* s3-x 3))
+          (setq s3-i (+ s3-i 1))
+          (if (< s3-i 45) (go s3-top)))
+        (print s3-x))
+      (let ((s3-y 5))
+        (setq s3-y (+ s3-y 1))
+        (setq s3-y (list s3-y))
+        (print s3-y))
+      (print (logand (* 123456789123 987654321987) 4294967295))
+      (print (ldb (byte 32 0) (+ 9223372036854775807 9223372036854775807)))
+      (print (eq (< 1 2) 't))
+      (let ((s3-fs nil) (s3-fe nil) (s3-k 7))
+        (when (> s3-k 5) (setq s3-fs (+ s3-k 1)))
+        (print (list s3-fs s3-fe (if s3-fe s3-fe s3-k) (if s3-fs s3-fs s3-k))))
+    expected: |
+      210267027
+      42
+      10
+      2954312706550833698643
+      (6)
+      754865481
+      4294967294
+      T
+      (8 NIL 7 8)
   - name: comparison-operators-verified-via-if
     source: |
       (print (if (= 1 1) 42 99))

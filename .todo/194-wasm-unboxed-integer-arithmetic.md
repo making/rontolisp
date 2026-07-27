@@ -61,19 +61,42 @@ boxes; Cranelift does neither.
    `_iv*` helpers under the `usesIntArray` gate) -- all FOUR backends now share
    the mask-store/unsigned-read semantics, pinned by the `packedIntVector*`
    tests and the `packed-integer-vectors` ci-spec case.
-   STILL OPEN (stage 3 candidates, in profile order at ~1.45 s):
-   - **flet inlining** (~15%: dispatch_N 6% + sigma/ch/maj lambda bodies +
-     their boxed boundaries): beta-substitute single-expression closed flet
-     bodies with pure (symbol/constant) args at expansion time, or teach the
-     fusion classifier the `(funcall __fletN_x ...)` shape.
-   - **unboxed i64 locals** (the round temps x/d/h, ~8% `_int_new` residue):
-     dual-representation design -- each eligible local gets an i64 slot + a
-     boxed shadow slot with "shadow non-null => boxed (bigint promotion)"
-     invariant; eligibility = never captured/special, every assignment a fused
-     tree root. Needs typed local declarations (today every local is
-     `(ref null eq)`).
-   - `_str_build`/`_charvec_to_str` ~6% (hmac re-keying string traffic) and
-     single-op loop-counter `+` through `_rat_add` ~4%.
+   Stage 3: DONE 2026-07-27 (~1.45 s -> **~0.93 s** on BOTH wasm backends,
+   Preview 1 and `--component`; hash identical). What landed (all wasm-only,
+   semantics-preserving; `.kb/wasm-int-fusion.md`, `.kb/wasm-unboxed-locals.md`):
+   - **flet inlining** via the fusion classifier: `(funcall __FLETn_f ...)` of
+     a let-bound closed-integer-lambda substitutes like an inlinable defun
+     (`Ctx.localIntLambdas`, registered by `WasmLetCompiler`; the `(block name
+     expr)` wrapper unwraps; `#'f`-as-value and labels untouched). Erased
+     dispatch_1/dispatch_3 + the sigma/ch/maj lambda bodies from the profile.
+   - **guard-once leaf hoisting**: every leaf unboxes ONCE into an i64 scratch
+     local at the top of the bail block (new second locals run, padded-LEB
+     index patching via `buildLocalsAndPatch`); previously the guard re-emitted
+     per occurrence, which made inlined bodies pay more in guards than they
+     saved in dispatch.
+   - **unboxed i64 locals** (the dual-representation design as sketched): i64
+     slot + boxed shadow, "shadow non-null => use shadow"; raw stores on the
+     fused fast path, total boxed escape on bail (limb promotion, floats,
+     lists); non-fused reads box on demand with INLINE `ref.i31` for the i31
+     range. ~13% by A/B (`-Drontolisp.debug.norawlocals=true` re-measures).
+   - **masked-wrap peephole**: under a literal `logand` mask / power-of-two
+     `mod`, `+ - *` and left-`ash`-by-literal emit as UNCHECKED wrap-around
+     i64 (low bits exact) -- mod32+/rol32 pay no `_fx_*` calls at all. This
+     was the single biggest stage-3 item (~1.15 -> ~0.93 s).
+   - **cached `t`** (`_t_sym` + always-last module global): every comparison's
+     true result used to `_str_build` a fresh "T" (~8% of the profile -- loop
+     termination tests allocated per iteration). Same id/bytes, eq unchanged.
+   - Bugfix found on the way: a failed defun-body substitution left its
+     already-registered leaves in the site (side-effecting args evaluated
+     TWICE); `substituteCall` now rolls back. Pinned in the stage-3 test.
+   Post-stage-3 profile (~0.93 s plain, ~1.18 s under perf): UPDATE-SHA256-BLOCK
+   self ~20% (the fused rounds themselves), SHA256-EXPAND-BLOCK ~8.5%,
+   %UPDATE-DIGEST--m1 ~7% (mdx buffer traffic), `_int_new` ~5.5% (out-of-i31
+   boundary crossings), XOR-BLOCK ~3%, `_rat_add`/`_rat_sub`/`_rat_cmp` singles
+   (loop index math `(- i 2)`, `(< i 64)`) ~8.5%, `_charvec_to_str` ~3%.
+   Plausible next levers if anyone needs more: raw comparisons over unboxed
+   locals (kills `_rat_cmp` + the boxed counter reads), fusing the single-op
+   index math, and the mdx-updater `replace` traffic.
 3. NOT worth doing for this: SIMD (SHA-256 is serially dependent) and further
    wasmtime flags (nothing engine-level is left in the profile).
 
@@ -103,22 +126,25 @@ perf report --no-children --stdio
 
 ## Acceptance
 
-- [ ] The PBKDF2 benchmark above runs in under ~1 s on WASM Preview 1 and the
-  component (or the session records why the wasmtime codegen floor makes a
-  higher number the honest limit, with a profile showing no box/unbox traffic
-  left). Stage 1 got to ~2.0 s; stage 2 (typed arrays + defun inlining) to
-  **~1.45 s** on Preview 1 (2026-07-27). Remaining traffic is the flet
-  boundary, the round-temp locals and hmac string re-keying (see the stage-2
-  residue list above), not engine overhead.
-- [ ] `logand`/`logior`/`logxor`/`ash`/`+`/`*` on fixnum-range values allocate
-  nothing in a hot loop (pin however the implementation allows -- e.g. a
-  wasmtime `-O gc-zeal`-style counter run, or a profile assertion documented in
-  the todo's close-out). Stage 2 partial: fused-tree intermediates, packed
-  `aref` leaf reads and statement-position packed stores allocate nothing;
-  out-of-i31 roots that feed LOCALS (the round temps) and flet-boundary
-  values still box.
+- [x] The PBKDF2 benchmark above runs in under ~1 s on WASM Preview 1 and the
+  component: **~0.93 s on both** (2026-07-27, stage 3; stage 1 ~2.0 s, stage 2
+  ~1.45 s). JVM comparison point: 0.69 s -- the remaining gap is wasmtime
+  codegen vs C2 plus the mdx/string traffic listed in the stage-3 profile
+  above, not box/unbox traffic in the rounds.
+- [x] `logand`/`logior`/`logxor`/`ash`/`+`/`*` on fixnum-range values allocate
+  nothing in a hot loop: fused-tree intermediates stay raw i64, round temps
+  live in unboxed locals (raw stores allocate nothing, statement-position
+  stores materialize nothing), masked `+ - * ash` run unchecked, packed aref
+  reads/stores are raw, and a comparison's `t` is the cached shared instance.
+  Evidence: the stage-3 profile has no `_int_new`-dominated frame left
+  (~5.5% residue = out-of-i31 boundary crossings such as struct stores and
+  `ub32ref/be` composition), and the A/B toggles
+  (`-Drontolisp.debug.norawlocals=true`, stage-2/3 jars) reproduce the step
+  changes.
 - [x] All four backends still agree on `ci-spec.yaml` (bignum promotion at the
   i64 overflow boundary is the risky edge -- `.kb/wasm-bignum.md`'s
   narrowest-tier invariant must survive the raw path). Stage 1 pinned by the
   `fused-integer-expression-trees` case +
-  `WasmLispCompilerIntegrationTest.fusedIntegerExpressionTreesMatchTheGenericPath`.
+  `WasmLispCompilerIntegrationTest.fusedIntegerExpressionTreesMatchTheGenericPath`;
+  stage 3 by the `flet-fusion-and-unboxed-locals` case +
+  `fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`.

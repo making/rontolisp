@@ -325,6 +325,35 @@ final class WasmFxRuntimeBuilder {
 		b.end();
 	}
 
+	/**
+	 * {@code _t_sym () -> eqref}: returns the symbol {@code t}, building it through
+	 * {@code _str_build} on the first call and caching it in the module global at
+	 * {@code tSymGlobalIndex}. The cached instance carries the same id (the intern offset
+	 * of "T") and bytes as a per-site build, so identity and printing are unchanged --
+	 * what changes is that a comparison returning true no longer allocates (todo 194
+	 * stage 3).
+	 */
+	static byte[] buildTSymBody(int tOffset, int tLength, int tSymGlobalIndex) {
+		BodyWriter b = new BodyWriter();
+		WasmWriter w = b.w;
+		w.write(0); // no extra locals
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(tSymGlobalIndex);
+		w.write(Instruction.REF_IS_NULL);
+		b.ifVoid();
+		b.i32c(tOffset);
+		b.i32c(tLength);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(tSymGlobalIndex);
+		b.end();
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(tSymGlobalIndex);
+		b.end();
+		return b.toByteArray();
+	}
+
 	private static final class BodyWriter {
 
 		final ByteArrayOutputStream out = new ByteArrayOutputStream();

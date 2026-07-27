@@ -500,21 +500,8 @@ final class WasmAsyncEmit {
 		bodyWriter.write(Instruction.REF_NULL);
 		bodyWriter.writeHeapType(Type.EQ.code());
 		bodyWriter.write(Instruction.END);
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		WasmWriter w = new WasmWriter(out);
-		int extraLocals = ctx.nextLocal - 1;
-		if (extraLocals > 0) {
-			w.write(1);
-			w.writeUnsignedLeb128(extraLocals);
-			w.write(Type.REFNULL.code());
-			w.writeHeapType(Type.EQ.code());
-		}
-		else {
-			w.write(0);
-		}
-		w.write((Object) bodyBuf.toByteArray());
 		proto.lambdaDecls.set(lambdaIdx, new WasmLispCompiler.LambdaInfo(funcId, "_toplevel_chunk_" + funcId, List.of(),
-				false, List.of(), List.of(), funcIndex, out.toByteArray()));
+				false, List.of(), List.of(), funcIndex, WasmLispCompiler.buildLocalsAndPatch(ctx, 1, bodyBuf)));
 		return funcIndex;
 	}
 

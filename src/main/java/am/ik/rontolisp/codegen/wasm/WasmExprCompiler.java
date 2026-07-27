@@ -101,6 +101,10 @@ final class WasmExprCompiler {
 				WasmArrayCompiler.compileAset(cons, ctx, false);
 				return;
 			}
+			if (LispNames.SETQ.equals(sym.name())) {
+				WasmSetqCompiler.compileForEffect(cons, ctx);
+				return;
+			}
 		}
 		compileExpr(expr, ctx);
 		ctx.writer.write(Instruction.DROP);
@@ -117,6 +121,13 @@ final class WasmExprCompiler {
 				&& ctx.globalIndices.containsKey(name)) {
 			ctx.writer.write(Instruction.GET_GLOBAL);
 			ctx.writer.writeUnsignedLeb128(java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
+			return;
+		}
+		// An unboxed (dual-representation) local: box on demand (an i31 for the fixnum
+		// range -- allocation-free), or hand out the shadow.
+		WasmIntFusionCompiler.RawLocal raw = ctx.rawLocals.get(name);
+		if (raw != null) {
+			WasmIntFusionCompiler.emitRawLocalBoxedRead(raw, ctx);
 			return;
 		}
 		// Check local variables
@@ -862,7 +873,14 @@ final class WasmExprCompiler {
 				case LispNames.COERCE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons), ctx);
 				case LispNames.MAP_INTO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons), ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
-				case LispNames.FUNCALL -> WasmFunctionCallCompiler.compileFuncall(cons, ctx);
+				case LispNames.FUNCALL -> {
+					// A direct (funcall __FLETn_f ...) of a registered local function in
+					// a non-fused position: substitute and fuse the body right here,
+					// mirroring the inlinable-defun direct-call path below.
+					if (!WasmIntFusionCompiler.tryCompileLocalCall(cons, ctx)) {
+						WasmFunctionCallCompiler.compileFuncall(cons, ctx);
+					}
+				}
 				case LispNames.FUNCTION -> WasmFunctionFormCompiler.compile(cons, ctx);
 				case LispNames.SYMBOL_FUNCTION -> WasmFunctionFormCompiler.compileSymbolFunction(cons, ctx);
 				case LispNames.MAP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons), ctx);

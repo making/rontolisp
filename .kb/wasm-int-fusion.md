@@ -11,6 +11,33 @@
 > moved from tree-walk order to classify (source) order to keep argument
 > evaluation order under substitution.
 
+> Stage-3 additions (2026-07-27, todo 194; 1.45 s -> **~0.93 s** on the PBKDF2
+> benchmark, both wasm backends): (1) `(funcall __FLETn_f ...)` of a let-bound
+> local function whose body is a closed integer tree substitutes like an
+> inlinable defun (`Ctx.localIntLambdas`, registered by `WasmLetCompiler`,
+> `.kb/flet-labels.md`); (2) each leaf is guarded/unboxed ONCE into an **i64
+> scratch local** at the top of the bail block and re-read at every occurrence
+> (previously the guard re-emitted per occurrence -- inlined bodies made that
+> quadratic-ish); the i64 locals ride a new second locals run patched in by
+> `WasmLispCompiler.buildLocalsAndPatch` (3-byte padded-LEB placeholder
+> indices, since every eqref local precedes the run); (3) all-literal subtrees
+> constant-fold exactly (overflow/zero-divisor aborts the fold); (4) unboxed
+> dual-representation LOCALS (`.kb/wasm-unboxed-locals.md`) read as `RawLeaf`
+> snapshots; (5) the **masked-wrap peephole**: under a non-negative literal
+> `logand` mask or power-of-two `mod`, the whole `+ - *`/left-`ash`-by-literal
+> subtree emits as UNCHECKED wrap-around i64 (`emitFastWrapped`; low `k <= 63`
+> bits of a wrapped result equal the infinite-precision ones), so
+> `mod32+`/`rol32`-shaped code pays no `_fx_*` calls at all; (6) `substituteCall`
+> ROLLS BACK leaves registered by a failed substitution attempt -- without it a
+> side-effecting argument of a call whose body fails to classify (the
+> parameter-shaped aref) evaluated twice (a latent stage-2 bug); (7) the symbol
+> `t` is built once and cached in a module global (`_t_sym`, FUNC_T_SYM /
+> TYPE_T_SYM / the always-last global) -- every comparison used to allocate a
+> fresh `$str_bytes` per true result, ~8% of the profile (same id = the intern
+> offset of "T", so eq/print are unchanged). Pinned by
+> `fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath` and the
+> `flet-fusion-and-unboxed-locals` ci-spec case.
+
 **Invariant: fusing an integer expression tree must never change a result, an
 observable side effect, or an error shape -- the fast path is an optimization
 with a total fallback, not a semantic variant.** The wasm-GC backend (Preview 1

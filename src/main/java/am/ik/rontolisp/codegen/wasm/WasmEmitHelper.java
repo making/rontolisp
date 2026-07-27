@@ -274,9 +274,13 @@ final class WasmEmitHelper {
 	 * Emits the Lisp boolean true. It is the symbol {@code t} (represented at runtime as
 	 * a TYPE_STRING struct pointing at {@code "t"}, like any other symbol), so it prints
 	 * as {@code t} and is {@code eq} to a quoted {@code 't}, matching the interpreter.
+	 * Loaded through the {@code _t_sym} cache helper -- one shared instance with the
+	 * interned id, instead of a fresh {@code _str_build} allocation per true result (todo
+	 * 194 stage 3: a loop's termination test allocated every iteration).
 	 */
 	static void emitTrue(WasmLispCompiler.Ctx ctx) {
-		compileStringLiteral("T", ctx);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_T_SYM);
 	}
 
 	/**

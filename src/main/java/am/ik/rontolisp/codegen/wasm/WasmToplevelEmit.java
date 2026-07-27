@@ -109,20 +109,8 @@ final class WasmToplevelEmit {
 		chunk.writer.writeHeapType(Type.EQ.code());
 		chunk.writer.write(Instruction.END);
 
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		WasmWriter w = new WasmWriter(out);
-		int extraLocals = chunk.ctx.nextLocal - 1;
-		if (extraLocals > 0) {
-			w.write(1);
-			w.writeUnsignedLeb128(extraLocals);
-			w.write(Type.REFNULL.code());
-			w.writeHeapType(Type.EQ.code());
-		}
-		else {
-			w.write(0);
-		}
-		w.write((Object) chunk.body.toByteArray());
-		start.lambdaDecls.set(chunk.lambdaIdx, body(chunk.funcId, chunk.funcIndex, out.toByteArray()));
+		start.lambdaDecls.set(chunk.lambdaIdx,
+				body(chunk.funcId, chunk.funcIndex, WasmLispCompiler.buildLocalsAndPatch(chunk.ctx, 1, chunk.body)));
 
 		WasmWriter s = start.writer;
 		s.write(Instruction.REF_NULL);
