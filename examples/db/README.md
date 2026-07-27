@@ -6,15 +6,24 @@ a rontolisp-specific binding.
 | Program | Library | Upstream |
 | --- | --- | --- |
 | [`postgres-hello.lisp`](postgres-hello.lisp) | cl-postgres 1.33.11 (zlib), Postmodern's low-level PostgreSQL driver | <https://github.com/marijnh/Postmodern> |
+| [`postgres-crud.lisp`](postgres-crud.lisp) | the same driver: the full CRUD cycle | <https://github.com/marijnh/Postmodern> |
 
 Start a server first:
 
 ```bash
 docker run --rm -p 54329:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine
 rontolisp examples/db/postgres-hello.lisp
+rontolisp examples/db/postgres-crud.lisp
 ```
 
-Runs on the **interpreter and the JVM backend**:
+`postgres-crud.lisp` walks create / insert / select / update / delete and adds
+the two things the hello program leaves out: a parameterised statement through
+the extended query protocol (`prepare-query` + `exec-prepared`) and a second row
+reader shape (`alist-row-reader`, which labels each column with its name). It
+runs inside one transaction that it rolls back at the end, so it leaves the
+server exactly as it found it and can be re-run as often as you like.
+
+Both run on the **interpreter and the JVM backend**:
 
 ```bash
 rontolisp examples/db/postgres-hello.lisp -o Prog.class && java Prog
@@ -49,7 +58,9 @@ representation, `exceptions` because the driver uses `handler-case`, and
 changes nothing (the two builds are byte-identical): the library pruner runs
 by default and the driver uses nearly everything it loads.
 
-The component completes the full query round-trip and prints the same results
-as the interpreter and the JVM. One limitation remains: a connection which
+`postgres-crud.lisp` builds and runs the same way -- swap the two filenames.
+
+Both components complete their round-trips and print the same results as the
+interpreter and the JVM. One limitation remains: a connection which
 negotiates SSL can never work here -- TLS is interpreter/JVM only. Use plain
 TCP (the default `:no`) on WASM.

@@ -47,6 +47,31 @@ caught by type. Mechanics, per-backend details and pinning tests:
 | `condition-format-arguments` | Function | condition accessor |
 | `typep` | Function | exists only as the compile-time type test, not as a function |
 
+## `:format-arguments` is never applied (measured 2026-07-27)
+
+`(warn 'some-condition :format-control "..." :format-arguments (list a b))` --
+and the `error` spelling of it -- renders the CONTROL STRING VERBATIM: the
+arguments are dropped and the tildes are never expanded. The condition
+designator expansion takes "a supplied `:format-control` for `simple-*`-style
+classes" as the message and stops there (`.kb/error-handling.md`), so nothing
+calls `format`.
+
+Reproduce with a fresh database and any `drop table if exists` through
+cl-postgres, whose `get-warning` uses exactly this idiom: the server NOTICE
+prints as
+
+```
+WARNING: PostgreSQL warning: ~A~@[~%~A~]
+```
+
+instead of the message and detail it carries -- the diagnostic is not merely
+ugly, it is entirely absent. The fix belongs in the shared expansion
+(`LispMacroExpander`), so all four backends move together: when
+`:format-arguments` is supplied, build the message with `format` instead of
+using the control string as-is. Both accessors in the table above
+(`condition-format-control` / `condition-format-arguments`) belong to the same
+slice.
+
 `restart-case` exists (`LispNames.java:1129`) but only as a lite lowering to its
 primary form: the restart clauses are dead code, reachable only through an
 `invoke-restart` that does not exist. A signaling primary form signals as usual.
