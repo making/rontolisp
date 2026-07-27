@@ -5,7 +5,7 @@ Postmodern's low-level driver) rather than a rontolisp-specific binding.
 
 | Program | Description | Upstream |
 | --- | --- | --- |
-| [`postgres-hello.lisp`](postgres-hello.lisp) | connect, create a table, insert, select | <https://github.com/marijnh/Postmodern> |
+| [`postgres-hello.lisp`](postgres-hello.lisp) | connect and run two select queries | <https://github.com/marijnh/Postmodern> |
 | [`postgres-crud.lisp`](postgres-crud.lisp) | full CRUD cycle: prepared statements (`prepare-query` + `exec-prepared`), an alist row reader, all inside a rolled-back transaction so it is safe to re-run | <https://github.com/marijnh/Postmodern> |
 | [`postgres-web.lisp`](postgres-web.lisp) | notes app: PostgreSQL storage + `rontolisp:http-handler` + cl-who for HTML | <https://github.com/edicl/cl-who> |
 
