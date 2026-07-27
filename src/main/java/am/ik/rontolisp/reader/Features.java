@@ -13,21 +13,28 @@ import am.ik.rontolisp.LispVal;
  * conditionals in {@link LispLexer}, the {@code *features*} read-time substitution in
  * {@link LispReader}, and the {@code :if-feature} component option of the ASDF subset.
  * Every backend has {@code :rontolisp} plus one backend-identifying feature
- * ({@code :rontolisp-interpreter}, {@code :rontolisp-jvm} or {@code :rontolisp-wasm});
- * {@code :common-lisp} is deliberately absent (rontolisp is not a conforming
- * implementation). Reading happens once, at the frontend, so the feature set of a
- * compiled program is fixed at compile time.
+ * ({@code :rontolisp-interpreter}, {@code :rontolisp-jvm} or {@code :rontolisp-wasm}) and
+ * {@code :unicode}; {@code :common-lisp} is deliberately absent (rontolisp is not a
+ * conforming implementation). Reading happens once, at the frontend, so the feature set
+ * of a compiled program is fixed at compile time.
+ * <p>
+ * {@code :unicode} is the portable spelling (CLISP / ECL / CMUCL / LispWorks) of "this
+ * implementation's characters are Unicode code points, not octets", which is true of
+ * every rontolisp backend. A library that branches on it selects its UTF-8 string path --
+ * cl-postgres, whose non-unicode branch would talk {@code SQL_ASCII} to the server and
+ * send one octet per code point.
  */
 public final class Features {
 
 	/** The features active when interpreting (and in the REPL). */
-	public static final Features INTERPRETER = new Features(List.of("rontolisp", "rontolisp-interpreter"), false);
+	public static final Features INTERPRETER = new Features(List.of("rontolisp", "rontolisp-interpreter", "unicode"),
+			false);
 
 	/** The features active when compiling to JVM bytecode. */
-	public static final Features JVM = new Features(List.of("rontolisp", "rontolisp-jvm"), true);
+	public static final Features JVM = new Features(List.of("rontolisp", "rontolisp-jvm", "unicode"), true);
 
 	/** The features active when compiling to WASM (Preview 1, component and no-gc). */
-	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm"), true);
+	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm", "unicode"), true);
 
 	private final List<String> names;
 

@@ -14,8 +14,12 @@
 ;;;; Component paths resolve against the directory of the located
 ;;;; cl-postgres.asd, so the REAL library sources are loaded; only the system
 ;;;; metadata is redeclared. The #.*string-file* component of the original is
-;;;; pinned to "strings-ascii" -- rontolisp's feature set selects the
-;;;; non-unicode branch (the reader has no sb-unicode/unicode/ics features).
+;;;; pinned to "strings-utf-8", the branch upstream's own #+(or sb-unicode
+;;;; unicode ...) test selects here: rontolisp advertises :unicode because its
+;;;; characters are code points on every backend. The other branch,
+;;;; "strings-ascii", announces client_encoding SQL_ASCII in the startup packet
+;;;; and then writes one octet per code point, so any non-ASCII parameter is
+;;;; truncated into a byte sequence the server rejects.
 
 (defsystem "cl-postgres"
   :description "Low-level client library for PostgreSQL"
@@ -32,7 +36,7 @@
                  (:file "data-types")
                  (:file "sql-string")
                  (:file "trivial-utf-8")
-                 (:file "strings-ascii")
+                 (:file "strings-utf-8")
                  (:file "communicate")
                  (:file "messages")
                  (:file "ieee-floats")

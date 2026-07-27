@@ -98,7 +98,9 @@ name or an `(and ...)`/`(or ...)`/`(not ...)` combination (spelled bare or as
 keywords, case-insensitive). The active features are `:rontolisp` on every
 backend plus one backend-identifying feature — `:rontolisp-interpreter`,
 `:rontolisp-jvm` or `:rontolisp-wasm` — so one source file can select
-per-backend code. The variable `*features*` reads as the active feature list
+per-backend code, and `:unicode`, the portable spelling of "characters are
+Unicode code points" (true on every backend, so a library that branches on it
+takes its UTF-8 path). The variable `*features*` reads as the active feature list
 (a quoted list of keywords; it cannot be assigned). On the interpreter it is a
 real global variable; on the JVM/WASM compile path it is substituted at read
 time like `pi` -- a constant, so binding the name (e.g. a lambda parameter

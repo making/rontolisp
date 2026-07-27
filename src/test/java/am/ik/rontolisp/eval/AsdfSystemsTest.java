@@ -282,8 +282,8 @@ class AsdfSystemsTest {
 	void parsesTheClPostgresAsdHeaderShape() {
 		// The verbatim cl-postgres.asd header shape: defpackage +
 		// in-package, #+/#- conditional defparameters feeding #. component names, and
-		// (:feature ...) clauses inside :depends-on. Under rontolisp's feature set
-		// *unicode* is nil, so #.*string-file* resolves to "strings-ascii".
+		// (:feature ...) clauses inside :depends-on. rontolisp advertises :unicode, so
+		// *unicode* is true and #.*string-file* resolves to "strings-utf-8".
 		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
 				(defpackage :cl-postgres-system
 				  (:use :common-lisp :asdf))
@@ -319,7 +319,7 @@ class AsdfSystemsTest {
 		// sockets and the (:require ...) clause to sbcl; both drop here.
 		assertThat(system.dependsOn()).containsExactly("md5", "split-sequence", "ironclad", "cl-base64", "uax-15");
 		assertThat(system.files()).containsExactly("cl-postgres/package.lisp", "cl-postgres/trivial-utf-8.lisp",
-				"cl-postgres/strings-ascii.lisp", "cl-postgres/communicate.lisp");
+				"cl-postgres/strings-utf-8.lisp", "cl-postgres/communicate.lisp");
 	}
 
 	@Test

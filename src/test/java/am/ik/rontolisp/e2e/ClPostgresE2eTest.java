@@ -49,6 +49,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code exec-query}, plus a parameterised statement run twice through
  * {@code prepare-query} + {@code exec-prepared} so the extended protocol is covered too.
  * Each backend owns its own table, so the three legs never collide.</li>
+ * <li><b>non-ASCII text</b> -- the same round trip with Japanese (and one non-BMP
+ * character), written both as a literal in the query text and as a bound parameter, then
+ * read back and cross-checked against the server's own {@code length()}. This is what
+ * selects the driver's UTF-8 string implementation rather than its {@code SQL_ASCII} one
+ * -- see the {@code :unicode} feature in {@code .kb/reader-features.md}. Before it
+ * existed, a bound {@code "お茶"} reached the server as an invalid byte sequence and
+ * desynced the connection, so a passing CRUD leg proved nothing about this one.</li>
  * </ol>
  *
  * WASM Preview 1 is the fourth backend and is deliberately absent from all three: TCP is
@@ -163,6 +170,13 @@ class ClPostgresE2eTest {
 			NIL
 			""";
 
+	// The second row's characters are 2 + 1, and the 1 is non-BMP: PostgreSQL counts
+	// code points, so a driver that miscounted UTF-16 units would answer 4 here.
+	private static final String UNICODE_EXPECTED = """
+			((1 "こんにちは") (2 "お茶🍵"))
+			((1 5) (2 3))
+			""";
+
 	/** Generous: an opted-in SCRAM leg runs for over two minutes on the interpreter. */
 	private static final int TIMEOUT_MINUTES = 15;
 
@@ -257,6 +271,24 @@ class ClPostgresE2eTest {
 	}
 
 	@Test
+	void unicodeTextOnTheInterpreter(@TempDir Path workDir) throws Exception {
+		assertThat(runOn(Backend.INTERPRETER, workDir, unicodeText(Backend.INTERPRETER)))
+			.isEqualToNormalizingWhitespace(UNICODE_EXPECTED);
+	}
+
+	@Test
+	void unicodeTextOnJvm(@TempDir Path workDir) throws Exception {
+		assertThat(runOn(Backend.JVM, workDir, unicodeText(Backend.JVM)))
+			.isEqualToNormalizingWhitespace(UNICODE_EXPECTED);
+	}
+
+	@Test
+	void unicodeTextOnWasmComponent(@TempDir Path workDir) throws Exception {
+		assertThat(runOn(Backend.COMPONENT, workDir, unicodeText(Backend.COMPONENT)))
+			.isEqualToNormalizingWhitespace(UNICODE_EXPECTED);
+	}
+
+	@Test
 	void failsToCompileOnWasmPreview1(@TempDir Path workDir) throws Exception {
 		// The documented fourth-backend gap: Preview 1 has no host socket API, so the
 		// driver's tcp-connect is a compile error there -- a loud one naming the built-in
@@ -314,6 +346,29 @@ class ClPostgresE2eTest {
 				  (cl-postgres:close-database conn))
 				""".formatted(DATABASE, host, port, table, table, table, table, table, table, table, table, table,
 				table, table);
+	}
+
+	// Both directions of the encoding, and both ways a string can reach the server: a
+	// literal inside the query text (simple protocol) and a bound parameter (extended
+	// protocol, the one the SQL_ASCII implementation corrupted). length() is the
+	// server's own count, so it disagrees with the round trip if either side re-encoded.
+	private static Exercise unicodeText(Backend backend) {
+		String table = "kanji_" + backend.name().toLowerCase(Locale.ROOT);
+		return (host, port) -> """
+				(ql:quickload "cl-postgres")
+				(let ((conn (cl-postgres:open-database "%s" "trustuser" nil "%s" %d)))
+				  (cl-postgres:exec-query conn "drop table if exists %s")
+				  (cl-postgres:exec-query conn "create table %s (id integer primary key, body text)")
+				  (cl-postgres:exec-query conn "insert into %s values (1, 'こんにちは')")
+				  (cl-postgres:prepare-query conn "add" "insert into %s values ($1, $2)")
+				  (cl-postgres:exec-prepared conn "add" (list 2 "お茶🍵"))
+				  (print (cl-postgres:exec-query conn "select id, body from %s order by id"
+				                                 'cl-postgres:list-row-reader))
+				  (print (cl-postgres:exec-query conn "select id, length(body) from %s order by id"
+				                                 'cl-postgres:list-row-reader))
+				  (cl-postgres:exec-query conn "drop table %s")
+				  (cl-postgres:close-database conn))
+				""".formatted(DATABASE, host, port, table, table, table, table, table, table, table);
 	}
 
 	/** Compiles (where the backend needs it) and runs the exercise, returning stdout. */

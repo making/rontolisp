@@ -3702,9 +3702,11 @@ cases:
     source: |
       (print (length *features*))
       (print (car *features*))
+      (print #+unicode :unicode #-unicode :octets)
     expected: |
-      2
+      3
       :RONTOLISP
+      :UNICODE
   - name: declarations-eval-when-check-type-assert
     source: |
       (declaim (optimize (speed 3)))
