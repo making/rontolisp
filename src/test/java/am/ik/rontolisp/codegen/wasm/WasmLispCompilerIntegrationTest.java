@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.wasm;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -14,6 +15,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.testcontainers.containers.Container.ExecResult;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.images.builder.Transferable;
@@ -10064,19 +10067,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	// --- linalg: kernel interception under --simd ------------------------------------
+	//
+	// Each source below is compiled and run TWICE (--simd and scalar) as its own module:
+	// what is under test is how one call shape compiles, so the sources cannot be folded
+	// into a single program the way the vec: surface tests above are. That makes this
+	// section the bulk of the class's work, and it is spread two ways -- the sources come
+	// from @MethodSource factories so JUnit schedules them individually (a plain @Test
+	// looping over them is one unit of work, and a class's wall clock is its longest
+	// method), and the two halves of a comparison run at once, see below.
 
 	/**
 	 * Asserts the accelerated wasm-GC module prints exactly what the scalar one prints.
 	 * Both go through {@code LinalgLibrary.process}, so the only difference is the flag.
-	 *
-	 * <p>
 	 * The two halves are independent by construction, so the accelerated one is staged
-	 * and run on a {@link #PAIRS} worker while this thread does the scalar one. That
-	 * matters because JUnit's parallel executor can only spread whole METHODS: the
-	 * kernel-interception methods below drive dozens of sources each -- every one its own
-	 * module, since what is under test is how a single call shape compiles -- which made
-	 * them the longest methods in the class by an order of magnitude, and the class's
-	 * wall clock is exactly the longest method.
+	 * and run on a {@link #PAIRS} worker while this thread does the scalar one.
 	 * @param lispCode the program to compile both ways
 	 */
 	private static void assertLinalgMatchesTheScalarPath(String lispCode) throws Exception {
@@ -10085,153 +10089,178 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(await(accelerated)).as(lispCode).isEqualTo(scalar);
 	}
 
-	@Test
-	void wasmGcSimdLinalgElementWiseAndShapeKernelsAreByteIdenticalToTheScalarPath() throws Exception {
-		// Guards the interception fix: before it, --simd switched the packed repr to a
-		// vblock and every linalg row-major-aref paid _v_get/_v_set for no v128 in
-		// return. Both widths, rank 1 and rank 2 (the case vec: never had), the scalar
-		// broadcast on either side, and above/below any lane-group boundary.
+	// Guards the interception fix: before it, --simd switched the packed repr to a
+	// vblock and every linalg row-major-aref paid _v_get/_v_set for no v128 in
+	// return. Both widths, rank 1 and rank 2 (the case vec: never had), the scalar
+	// broadcast on either side, and above/below any lane-group boundary.
+	static List<String> elementWiseAndShapeKernelSources() {
+		List<String> sources = new ArrayList<>();
 		for (String op : List.of("add", "sub", "mul", "div")) {
-			assertLinalgMatchesTheScalarPath("(print (linalg:%s #d(1.0 2.0 3.0) #d(4.0 5.0 8.0)))".formatted(op));
-			assertLinalgMatchesTheScalarPath("(print (linalg:%s #f(1.0 2.0 3.0) #f(4.0 5.0 8.0)))".formatted(op));
-			assertLinalgMatchesTheScalarPath(
-					"(print (linalg:%s #d((1.0 2.0) (3.0 4.0)) #d((5.0 6.0) (7.0 8.0))))".formatted(op));
-			assertLinalgMatchesTheScalarPath("(print (linalg:%s #d(1.0 2.0 4.0) 2.0))".formatted(op));
-			assertLinalgMatchesTheScalarPath("(print (linalg:%s 2.0 #d(1.0 2.0 4.0)))".formatted(op));
-			assertLinalgMatchesTheScalarPath("(print (linalg:%s #f(1.0 2.0 4.0) 2))".formatted(op));
+			sources.add("(print (linalg:%s #d(1.0 2.0 3.0) #d(4.0 5.0 8.0)))".formatted(op));
+			sources.add("(print (linalg:%s #f(1.0 2.0 3.0) #f(4.0 5.0 8.0)))".formatted(op));
+			sources.add("(print (linalg:%s #d((1.0 2.0) (3.0 4.0)) #d((5.0 6.0) (7.0 8.0))))".formatted(op));
+			sources.add("(print (linalg:%s #d(1.0 2.0 4.0) 2.0))".formatted(op));
+			sources.add("(print (linalg:%s 2.0 #d(1.0 2.0 4.0)))".formatted(op));
+			sources.add("(print (linalg:%s #f(1.0 2.0 4.0) 2))".formatted(op));
 			// A single-float array against a scalar that is not representable in f32: the
 			// kernel must widen, compute in f64 and narrow, exactly as emap does.
 			// Splatting
 			// (f32) 0.1 into f32 lanes would print different numbers here.
-			assertLinalgMatchesTheScalarPath("(print (linalg:%s #f(1.0 3.0 7.0) 0.1))".formatted(op));
-			assertLinalgMatchesTheScalarPath("(print (linalg:%s 0.1 #f(1.0 3.0 7.0)))".formatted(op));
+			sources.add("(print (linalg:%s #f(1.0 3.0 7.0) 0.1))".formatted(op));
+			sources.add("(print (linalg:%s 0.1 #f(1.0 3.0 7.0)))".formatted(op));
 			// 5 elements: a partial last lane group at both widths, whose zero padding
 			// must
 			// not leak into the result (0 - s = -s, s / 0 = inf).
-			assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:%s (linalg:ones 5) 3.0)))".formatted(op));
-			assertLinalgMatchesTheScalarPath(
-					"(print (linalg:sum (linalg:%s 3.0 (linalg:ones 5 'single-float))))".formatted(op));
+			sources.add("(print (linalg:sum (linalg:%s (linalg:ones 5) 3.0)))".formatted(op));
+			sources.add("(print (linalg:sum (linalg:%s 3.0 (linalg:ones 5 'single-float))))".formatted(op));
 		}
-		assertLinalgMatchesTheScalarPath("(print (linalg:transpose #d((1.0 2.0 3.0) (4.0 5.0 6.0))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:transpose #f((1.0 2.0) (3.0 4.0))))");
-		assertLinalgMatchesTheScalarPath("(let ((v #d(1.0 2.0))) (print (eq v (linalg:transpose v))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:reshape (linalg:arange 12) '(3 4)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:reshape (linalg:arange 12) '(2 3 2)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:reshape (linalg:arange 0 12 'single-float) 12))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:flatten #d((1.0 2.0) (3.0 4.0))))");
+		sources.add("(print (linalg:transpose #d((1.0 2.0 3.0) (4.0 5.0 6.0))))");
+		sources.add("(print (linalg:transpose #f((1.0 2.0) (3.0 4.0))))");
+		sources.add("(let ((v #d(1.0 2.0))) (print (eq v (linalg:transpose v))))");
+		sources.add("(print (linalg:reshape (linalg:arange 12) '(3 4)))");
+		sources.add("(print (linalg:reshape (linalg:arange 12) '(2 3 2)))");
+		sources.add("(print (linalg:reshape (linalg:arange 0 12 'single-float) 12))");
+		sources.add("(print (linalg:flatten #d((1.0 2.0) (3.0 4.0))))");
+		return sources;
+	}
+
+	@ParameterizedTest
+	@MethodSource("elementWiseAndShapeKernelSources")
+	void wasmGcSimdLinalgElementWiseAndShapeKernelsAreByteIdenticalToTheScalarPath(String lispCode) throws Exception {
+		assertLinalgMatchesTheScalarPath(lispCode);
+	}
+
+	// The axis forms are intercepted call shapes: an axis call
+	// routes to the SUM_AXIS/AMAX_AXIS/ARGMAX_AXIS kernels (a 2-argument call
+	// padded with a null keepdims), whose folds mirror %la-fold-axis /
+	// %la-argfold-axis exactly; a 1-arg call still hits the base kernel whose
+	// decline branch passes an extra null rest to the variadic defun, and a
+	// declined AXIS call links the surplus locals into the rest list.
+	static List<String> axisFormSources() {
+		return List.of("(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 0))",
+				"(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 1 t))",
+				"(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) -1))",
+				"(print (linalg:sum (linalg:arange 5) 0))",
+				"(print (linalg:sum (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 0))",
+				"(print (linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 0))",
+				"(print (linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) 1))",
+				"(print (linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) 0 t))",
+				"(print (linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) 1))",
+				"(print (linalg:argmin (linalg:from-list '(3.0 9.0 2.0)) 0))",
+				"(print (linalg:amax (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 1))",
+				// 1-arg over a general (boxed) array exercises the decline branch itself;
+				// an axis call over one exercises the extended decline's rest packaging.
+				"(print (linalg:sum #(1 2 3)))", "(print (linalg:argmax #(1 9 3)))",
+				"(print (linalg:sum #2A((1 2) (3 4)) 0))", "(print (linalg:sum #d((1.0 2.0)) nil))",
+				// reshape keeps its fixed arity 2; a -1 extent declines inside the
+				// kernel.
+				"(print (linalg:reshape (linalg:arange 12) '(3 -1)))");
+	}
+
+	@ParameterizedTest
+	@MethodSource("axisFormSources")
+	void wasmGcSimdLinalgAxisFormsRunTheAxisKernelsAndMatchTheScalarPath(String lispCode) throws Exception {
+		assertLinalgMatchesTheScalarPath(lispCode);
 	}
 
 	@Test
-	void wasmGcSimdLinalgAxisFormsRunTheAxisKernelsAndMatchTheScalarPath() throws Exception {
-		// The axis forms are intercepted call shapes: an axis call
-		// routes to the SUM_AXIS/AMAX_AXIS/ARGMAX_AXIS kernels (a 2-argument call
-		// padded with a null keepdims), whose folds mirror %la-fold-axis /
-		// %la-argfold-axis exactly; a 1-arg call still hits the base kernel whose
-		// decline branch passes an extra null rest to the variadic defun, and a
-		// declined AXIS call links the surplus locals into the rest list.
-		assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 0))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:reshape (linalg:arange 6) '(2 3)) 1 t))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) -1))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sum (linalg:arange 5) 0))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:sum (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 0))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:mean (linalg:reshape (linalg:arange 6) '(2 3)) 0))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:amax (linalg:reshape (linalg:arange 6) '(2 3)) 1))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:amin (linalg:reshape (linalg:arange 6) '(2 3)) 0 t))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:argmax (linalg:reshape (linalg:arange 6) '(2 3)) 1))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:argmin (linalg:from-list '(3.0 9.0 2.0)) 0))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:amax (linalg:from-list '((0.5 0.25) (0.125 2.0)) 'single-float) 1))");
+	void wasmGcSimdLinalgAxisFoldComparesStrictly() throws Exception {
 		// The fold's strict comparison: the accumulator (first element) wins ties, and
 		// an all-negative axis never answers 0.
 		assertThat(compileAndRunVec("(print (linalg:amax #d((-0.0 0.0)) 1))", true)).isEqualTo("#d(-0.0)");
 		assertThat(compileAndRunVec("(print (linalg:amax #d((-3.0 -1.0) (-5.0 -2.0)) 1))", true))
 			.isEqualTo("#d(-1.0 -2.0)");
-		// 1-arg over a general (boxed) array exercises the decline branch itself; an
-		// axis call over one exercises the extended decline's rest packaging.
-		assertLinalgMatchesTheScalarPath("(print (linalg:sum #(1 2 3)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:argmax #(1 9 3)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sum #2A((1 2) (3 4)) 0))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sum #d((1.0 2.0)) nil))");
-		// reshape keeps its fixed arity 2; a -1 extent declines inside the kernel.
-		assertLinalgMatchesTheScalarPath("(print (linalg:reshape (linalg:arange 12) '(3 -1)))");
+	}
+
+	// The general numpy broadcast (BCAST, reached from the element-wise kernels'
+	// unequal-dims branch) and the rank-n axes permutation (TRANSPOSE_AXES), both
+	// vget/_v_set element walks -- widen, compute in f64, narrow on store, the
+	// oracle's own rule, so byte-identical at both widths.
+	static List<String> broadcastAndTransposeAxesSources() {
+		return List.of("(print (linalg:add (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:arange 3)))",
+				"(print (linalg:mul (linalg:reshape (linalg:arange 8) '(4 2))"
+						+ " (linalg:reshape (linalg:from-list '(5.0 6.0 7.0 8.0)) '(4 1))))",
+				"(print (linalg:div (linalg:reshape (linalg:arange 24) '(2 3 4))"
+						+ " (linalg:add (linalg:reshape (linalg:arange 12) '(3 4)) 1)))",
+				"(print (linalg:sub (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
+						+ " (linalg:arange 0 2 'single-float)))",
+				"(print (linalg:maximum (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:from-list '(2.0 4.0 1.0))))",
+				// A mixed-width broadcast still declines to the defun (first operand's
+				// width).
+				"(print (array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0))))",
+				"(print (linalg:transpose (linalg:reshape (linalg:arange 24) '(2 3 2 2)) '(0 3 1 2)))",
+				"(print (linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) '(1 0)))",
+				"(print (linalg:transpose (linalg:reshape (linalg:from-list '(1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0)"
+						+ " 'single-float) '(2 2 2)) '(2 0 1)))",
+				"(print (linalg:transpose (linalg:arange 3) '(0)))",
+				"(print (linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) nil))");
+	}
+
+	@ParameterizedTest
+	@MethodSource("broadcastAndTransposeAxesSources")
+	void wasmGcSimdLinalgBroadcastAndTransposeAxesMatchTheScalarPath(String lispCode) throws Exception {
+		assertLinalgMatchesTheScalarPath(lispCode);
 	}
 
 	@Test
-	void wasmGcSimdLinalgBroadcastAndTransposeAxesMatchTheScalarPath() throws Exception {
-		// The general numpy broadcast (BCAST, reached from the element-wise kernels'
-		// unequal-dims branch) and the rank-n axes permutation (TRANSPOSE_AXES), both
-		// vget/_v_set element walks -- widen, compute in f64, narrow on store, the
-		// oracle's own rule, so byte-identical at both widths.
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:add (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:arange 3)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:mul (linalg:reshape (linalg:arange 8) '(4 2))"
-				+ " (linalg:reshape (linalg:from-list '(5.0 6.0 7.0 8.0)) '(4 1))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:div (linalg:reshape (linalg:arange 24) '(2 3 4))"
-				+ " (linalg:add (linalg:reshape (linalg:arange 12) '(3 4)) 1)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sub (linalg:reshape (linalg:arange 0 4 'single-float) '(2 2))"
-				+ " (linalg:arange 0 2 'single-float)))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:maximum (linalg:reshape (linalg:arange 6) '(2 3)) (linalg:from-list '(2.0 4.0 1.0))))");
+	void wasmGcSimdLinalgBroadcastKeepsTheSecondOperandOnASignedZeroTie() throws Exception {
 		assertThat(compileAndRunVec("(print (linalg:maximum #d((0.0 -0.0)) #d(-0.0 0.0)))", true))
 			.isEqualTo("#d((-0.0 0.0))");
-		// A mixed-width broadcast still declines to the defun (first operand's width).
-		assertLinalgMatchesTheScalarPath(
-				"(print (array-element-type (linalg:div (linalg:ones '(2 2) 'single-float) #d(1.0 2.0))))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:transpose (linalg:reshape (linalg:arange 24) '(2 3 2 2)) '(0 3 1 2)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) '(1 0)))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:transpose (linalg:reshape (linalg:from-list '(1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0)"
-						+ " 'single-float) '(2 2 2)) '(2 0 1)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:transpose (linalg:arange 3) '(0)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:transpose (linalg:reshape (linalg:arange 6) '(2 3)) nil))");
+	}
+
+	static List<String> reductionAndProductSources() {
+		List<String> sources = new ArrayList<>();
+		for (String member : List.of("sum", "mean", "amax", "amin", "norm", "argmax", "argmin")) {
+			sources.add("(print (linalg:%s #d(3.0 1.0 4.0 1.0 5.0)))".formatted(member));
+			sources.add("(print (linalg:%s #f(3.0 1.0 4.0 1.0 5.0)))".formatted(member));
+		}
+		sources.add("(print (linalg:sum #d((1.0 2.0) (3.0 4.0))))");
+		sources.add("(print (linalg:trace #d((1.0 2.0) (3.0 4.0))))");
+		sources.add("(print (linalg:trace (linalg:eye 5 'single-float)))");
+		// dot's four rank combinations, plus matmul and outer.
+		sources.add("(print (linalg:dot #d(1.0 2.0) #d(3.0 4.0)))");
+		sources.add("(print (linalg:dot #d((1.0 2.0) (3.0 4.0)) #d(1.0 1.0)))");
+		sources.add("(print (linalg:dot #d(1.0 1.0) #d((1.0 2.0) (3.0 4.0))))");
+		sources.add("(print (linalg:dot #d((1.0 2.0) (3.0 4.0)) #d((5.0 6.0) (7.0 8.0))))");
+		sources.add("(print (linalg:dot #f((1.0 2.0)) #f((1.0) (2.0))))");
+		sources.add("(print (linalg:matmul (linalg:eye 3) (linalg:reshape (linalg:arange 9) '(3 3))))");
+		sources.add("(print (linalg:dot #d(1.0 2.0) 3.0))");
+		sources.add("(print (linalg:outer #d(1.0 2.0) #d(3.0 4.0)))");
+		sources.add("(print (linalg:outer #f(1.0 2.0 3.0) #f(3.0 4.0)))");
+		sources.add("(print (linalg:outer (linalg:reshape (linalg:arange 6) '(2 3)) #d(1.0 2.0)))");
+		// Gaussian elimination is never intercepted, but it calls the intercepted dot.
+		sources.add("(print (linalg:inv #d((2.0 0.0) (0.0 4.0))))");
+		sources.add("(print (linalg:solve #d((2.0 0.0) (0.0 4.0)) #d(2.0 4.0)))");
+		return sources;
+	}
+
+	@ParameterizedTest
+	@MethodSource("reductionAndProductSources")
+	void wasmGcSimdLinalgReductionsAndProductsAreByteIdenticalToTheScalarPath(String lispCode) throws Exception {
+		assertLinalgMatchesTheScalarPath(lispCode);
 	}
 
 	@Test
-	void wasmGcSimdLinalgReductionsAndProductsAreByteIdenticalToTheScalarPath() throws Exception {
-		for (String member : List.of("sum", "mean", "amax", "amin", "norm", "argmax", "argmin")) {
-			assertLinalgMatchesTheScalarPath("(print (linalg:%s #d(3.0 1.0 4.0 1.0 5.0)))".formatted(member));
-			assertLinalgMatchesTheScalarPath("(print (linalg:%s #f(3.0 1.0 4.0 1.0 5.0)))".formatted(member));
-		}
+	void wasmGcSimdLinalgReductionsWalkElementsRatherThanLaneReducing() throws Exception {
 		// An all-negative array is the trap a lane MAX reduce over the zero-padded last
 		// group would fall into; these walk elements instead.
 		assertThat(compileAndRunVec("(print (linalg:amax #d(-3.0 -1.0 -4.0 -1.0 -5.0)))", true)).isEqualTo("-1.0");
 		assertThat(compileAndRunVec("(print (linalg:amin #f(-3.0 -1.0 -4.0)))", true)).isEqualTo("-4.0");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sum #d((1.0 2.0) (3.0 4.0))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:trace #d((1.0 2.0) (3.0 4.0))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:trace (linalg:eye 5 'single-float)))");
-		// dot's four rank combinations, plus matmul and outer.
-		assertLinalgMatchesTheScalarPath("(print (linalg:dot #d(1.0 2.0) #d(3.0 4.0)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:dot #d((1.0 2.0) (3.0 4.0)) #d(1.0 1.0)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:dot #d(1.0 1.0) #d((1.0 2.0) (3.0 4.0))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:dot #d((1.0 2.0) (3.0 4.0)) #d((5.0 6.0) (7.0 8.0))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:dot #f((1.0 2.0)) #f((1.0) (2.0))))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:matmul (linalg:eye 3) (linalg:reshape (linalg:arange 9) " + "'(3 3))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:dot #d(1.0 2.0) 3.0))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:outer #d(1.0 2.0) #d(3.0 4.0)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:outer #f(1.0 2.0 3.0) #f(3.0 4.0)))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:outer (linalg:reshape (linalg:arange 6) '(2 3)) #d(1.0 2.0)))");
-		// Gaussian elimination is never intercepted, but it calls the intercepted dot.
-		assertLinalgMatchesTheScalarPath("(print (linalg:inv #d((2.0 0.0) (0.0 4.0))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:solve #d((2.0 0.0) (0.0 4.0)) #d(2.0 4.0)))");
 	}
 
-	@Test
-	void wasmGcSimdLinalgLaneProductsMatchTheScalarPathAtEveryRowLaneOffset() throws Exception {
-		// The v.M / M.M lane loop (and the outer / transpose lane paths) read matrix rows
-		// through the same i8x16.shuffle window as matvec, so every compile-time lane
-		// offset variant must be exercised: a 7-column #f matrix puts row k at offset
-		// (k * 7) mod 4 = 0, 3, 2, 1 and an odd p also drives the f32 high-half
-		// accumulator into the scratch row's sentinel group; the #d sibling covers both
-		// f64 offsets. arange values make any misplaced lane visible.
-		String mk = """
-				(defun mk (r c et) (linalg:reshape (linalg:add (linalg:arange 0 (* r c) et) 0.5) (list r c)))
-				(defun mkv (n et) (linalg:add (linalg:arange 0 n et) 0.25))
-				""";
-		for (String probe : List.of( //
+	// The v.M / M.M lane loop (and the outer / transpose lane paths) read matrix rows
+	// through the same i8x16.shuffle window as matvec, so every compile-time lane
+	// offset variant must be exercised: a 7-column #f matrix puts row k at offset
+	// (k * 7) mod 4 = 0, 3, 2, 1 and an odd p also drives the f32 high-half
+	// accumulator into the scratch row's sentinel group; the #d sibling covers both
+	// f64 offsets. arange values make any misplaced lane visible.
+	private static final String LANE_PRODUCT_MATRICES = """
+			(defun mk (r c et) (linalg:reshape (linalg:add (linalg:arange 0 (* r c) et) 0.5) (list r c)))
+			(defun mkv (n et) (linalg:add (linalg:arange 0 n et) 0.25))
+			""";
+
+	static List<String> laneProductSources() {
+		return List.of( //
 				"(print (linalg:dot (mk 3 5 'single-float) (mk 5 7 'single-float)))", // off
 																						// 0,3,2,1
 				"(print (linalg:dot (mk 3 5 'double-float) (mk 5 7 'double-float)))", // off
@@ -10269,9 +10298,13 @@ class WasmLispCompilerIntegrationTest {
 				"(print (linalg:transpose (mk 5 8 'single-float)))", // r misaligned
 				"(print (linalg:transpose (mk 4 7 'single-float)))", // c misaligned
 				"(print (linalg:transpose (mk 4 6 'double-float)))", // 2x2 blocks
-				"(print (linalg:transpose (mk 3 6 'double-float)))")) { // r misaligned
-			assertLinalgMatchesTheScalarPath(mk + probe);
-		}
+				"(print (linalg:transpose (mk 3 6 'double-float)))"); // r misaligned
+	}
+
+	@ParameterizedTest
+	@MethodSource("laneProductSources")
+	void wasmGcSimdLinalgLaneProductsMatchTheScalarPathAtEveryRowLaneOffset(String probe) throws Exception {
+		assertLinalgMatchesTheScalarPath(LANE_PRODUCT_MATRICES + probe);
 	}
 
 	@Test
@@ -10297,26 +10330,28 @@ class WasmLispCompilerIntegrationTest {
 				""", true)).isEqualTo("1");
 	}
 
-	@Test
-	void wasmGcSimdLinalgIm2colAndCol2imAreByteIdenticalToTheScalarPath() throws Exception {
-		// The internal CNN window unfolding pair. Batch > 1, channels > 1,
-		// stride > 1 and pad > 0 exercise the skipped padding rows and the clipped
-		// filter columns; col2im's overlapping windows (stride < filter) accumulate
-		// through the promoting _v_get / _v_set round trip, exactly the defun's
-		// widen-add-narrow, so both widths stay byte-identical.
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg::%la-im2col (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 2 2 1 0))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg::%la-im2col (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 3 3 2 1))");
-		assertLinalgMatchesTheScalarPath("(print (linalg::%la-im2col"
-				+ " (linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4)) 3 3 2 1))");
-		assertLinalgMatchesTheScalarPath("(print (linalg::%la-col2im (linalg::%la-im2col"
-				+ " (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 3 3 1 1) '(2 3 4 4) 3 3 1 1))");
-		assertLinalgMatchesTheScalarPath("(print (linalg::%la-col2im (linalg::%la-im2col"
-				+ " (linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4)) 3 3 1 1) '(2 3 4 4) 3 3 1 1))");
-		// A general boxed rank-4 operand declines to the defun on both paths.
-		assertLinalgMatchesTheScalarPath(
+	// The internal CNN window unfolding pair. Batch > 1, channels > 1,
+	// stride > 1 and pad > 0 exercise the skipped padding rows and the clipped
+	// filter columns; col2im's overlapping windows (stride < filter) accumulate
+	// through the promoting _v_get / _v_set round trip, exactly the defun's
+	// widen-add-narrow, so both widths stay byte-identical.
+	static List<String> im2colAndCol2imSources() {
+		return List.of("(print (linalg::%la-im2col (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 2 2 1 0))",
+				"(print (linalg::%la-im2col (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 3 3 2 1))",
+				"(print (linalg::%la-im2col"
+						+ " (linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4)) 3 3 2 1))",
+				"(print (linalg::%la-col2im (linalg::%la-im2col"
+						+ " (linalg:reshape (linalg:arange 96) '(2 3 4 4)) 3 3 1 1) '(2 3 4 4) 3 3 1 1))",
+				"(print (linalg::%la-col2im (linalg::%la-im2col"
+						+ " (linalg:reshape (linalg:arange 0 96 1 'single-float) '(2 3 4 4)) 3 3 1 1) '(2 3 4 4) 3 3 1 1))",
+				// A general boxed rank-4 operand declines to the defun on both paths.
 				"(print (linalg::%la-im2col (make-array '(1 1 2 2) :initial-element 1) 2 2 1 0))");
+	}
+
+	@ParameterizedTest
+	@MethodSource("im2colAndCol2imSources")
+	void wasmGcSimdLinalgIm2colAndCol2imAreByteIdenticalToTheScalarPath(String lispCode) throws Exception {
+		assertLinalgMatchesTheScalarPath(lispCode);
 	}
 
 	@Test
@@ -10365,96 +10400,83 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunLinalgSimdOptimized(source)).isEqualTo(compileAndRunVec(source, false));
 	}
 
-	@Test
-	void wasmGcSimdLinalgUnaryUfuncsAreByteIdenticalToTheScalarPath() throws Exception {
-		// The named element-wise unary ufuncs: both widths, rank 1 and rank 2,
-		// exp over reciprocal's bounded range, the wasm defun's own signed-zero edges,
-		// and the declined inputs (general boxed arrays, plain numbers) running the
-		// defun. square / reciprocal are accelerated transitively through mul / div.
-		assertLinalgMatchesTheScalarPath("(print (linalg:sqrt (linalg:reshape (linalg:arange 12) '(3 4))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:abs (linalg:sub (linalg:arange 7) 3)))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:negative (linalg:reshape (linalg:arange 0 6 'single-float) '(2 3))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sign (linalg:sub (linalg:arange 0 9 'single-float) 4)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:square (linalg:sub (linalg:arange 5) 2)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:square (linalg:arange 0 5 'single-float)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:reciprocal (linalg:add (linalg:arange 6) 1)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 200) 1))))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 0 8 'single-float) 1))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:log (linalg:add (linalg:arange 200) 1)))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:log (linalg:reshape (linalg:add (linalg:arange 12) 1) '(3 4))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:log (linalg:add (linalg:arange 0 8 'single-float) 1)))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:tanh (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.03)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:tanh (linalg:arange 0 8 'single-float)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:tanh #d(-25.0 -0.0 0.0 25.0)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sin (linalg:sub (linalg:arange 200) 100)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:cos (linalg:reshape (linalg:arange 12) '(3 4))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:tan (linalg:sub (linalg:arange 0 8 'single-float) 4)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sin #d(0.0 -0.0 1.0 -2.5 100.0)))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:asin (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.005)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:acos (linalg:mul (linalg:arange 0 8 'single-float) 0.005)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:atan (linalg:sub (linalg:arange 200) 100)))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:atan (linalg:reshape (linalg:arange 0 12 'single-float) '(3 4))))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:sinh (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.05)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:cosh (linalg:mul (linalg:arange 0 8 'single-float) 0.05)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:asin #d(0.0 -0.0 1.0 -1.0 0.5)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:acos #d(1.0 -1.0 0.0 0.5)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sinh #d(0.0 -0.0 0.25 -0.25 0.3)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:cosh #d(0.0 -0.0 1.0)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:negative #d(0.0 -0.0 1.5)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:abs #d(-0.0 0.0 -2.5)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sign #d(-0.0 0.0 -3.5 3.5)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sqrt #(4 9)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:abs #(-1 2)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:log #(1 4 9)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:tanh #(-1 0 1)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:sin #(-1 0 1)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:asin #(0 1)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:atan #(-1 0 1)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:cosh #(0 1)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:square 3))");
+	// The named element-wise unary ufuncs: both widths, rank 1 and rank 2,
+	// exp over reciprocal's bounded range, the wasm defun's own signed-zero edges,
+	// and the declined inputs (general boxed arrays, plain numbers) running the
+	// defun. square / reciprocal are accelerated transitively through mul / div.
+	static List<String> unaryUfuncSources() {
+		return List.of("(print (linalg:sqrt (linalg:reshape (linalg:arange 12) '(3 4))))",
+				"(print (linalg:abs (linalg:sub (linalg:arange 7) 3)))",
+				"(print (linalg:negative (linalg:reshape (linalg:arange 0 6 'single-float) '(2 3))))",
+				"(print (linalg:sign (linalg:sub (linalg:arange 0 9 'single-float) 4)))",
+				"(print (linalg:square (linalg:sub (linalg:arange 5) 2)))",
+				"(print (linalg:square (linalg:arange 0 5 'single-float)))",
+				"(print (linalg:reciprocal (linalg:add (linalg:arange 6) 1)))",
+				"(print (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 200) 1))))",
+				"(print (linalg:exp (linalg:reciprocal (linalg:add (linalg:arange 0 8 'single-float) 1))))",
+				"(print (linalg:log (linalg:add (linalg:arange 200) 1)))",
+				"(print (linalg:log (linalg:reshape (linalg:add (linalg:arange 12) 1) '(3 4))))",
+				"(print (linalg:log (linalg:add (linalg:arange 0 8 'single-float) 1)))",
+				"(print (linalg:tanh (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.03)))",
+				"(print (linalg:tanh (linalg:arange 0 8 'single-float)))",
+				"(print (linalg:tanh #d(-25.0 -0.0 0.0 25.0)))",
+				"(print (linalg:sin (linalg:sub (linalg:arange 200) 100)))",
+				"(print (linalg:cos (linalg:reshape (linalg:arange 12) '(3 4))))",
+				"(print (linalg:tan (linalg:sub (linalg:arange 0 8 'single-float) 4)))",
+				"(print (linalg:sin #d(0.0 -0.0 1.0 -2.5 100.0)))",
+				"(print (linalg:asin (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.005)))",
+				"(print (linalg:acos (linalg:mul (linalg:arange 0 8 'single-float) 0.005)))",
+				"(print (linalg:atan (linalg:sub (linalg:arange 200) 100)))",
+				"(print (linalg:atan (linalg:reshape (linalg:arange 0 12 'single-float) '(3 4))))",
+				"(print (linalg:sinh (linalg:mul (linalg:sub (linalg:arange 200) 100) 0.05)))",
+				"(print (linalg:cosh (linalg:mul (linalg:arange 0 8 'single-float) 0.05)))",
+				"(print (linalg:asin #d(0.0 -0.0 1.0 -1.0 0.5)))", "(print (linalg:acos #d(1.0 -1.0 0.0 0.5)))",
+				"(print (linalg:sinh #d(0.0 -0.0 0.25 -0.25 0.3)))", "(print (linalg:cosh #d(0.0 -0.0 1.0)))",
+				"(print (linalg:negative #d(0.0 -0.0 1.5)))", "(print (linalg:abs #d(-0.0 0.0 -2.5)))",
+				"(print (linalg:sign #d(-0.0 0.0 -3.5 3.5)))", "(print (linalg:sqrt #(4 9)))",
+				"(print (linalg:abs #(-1 2)))", "(print (linalg:log #(1 4 9)))", "(print (linalg:tanh #(-1 0 1)))",
+				"(print (linalg:sin #(-1 0 1)))", "(print (linalg:asin #(0 1)))", "(print (linalg:atan #(-1 0 1)))",
+				"(print (linalg:cosh #(0 1)))", "(print (linalg:square 3))");
 	}
 
-	@Test
-	void wasmGcSimdLinalgComparisonSelectsAreByteIdenticalToTheScalarPath() throws Exception {
-		// The comparison-select ufuncs: array-array at both widths
-		// and rank 2 (lane gt/lt + bitselect), the f64 scalar broadcast on either side
-		// (the lane select), the f32 scalar broadcast against a NOT-f32-representable
-		// bound (the widened element loop), the strict-comparison ties/NaN edges, the
-		// declined inputs, and clip / relu riding maximum/minimum transitively.
-		assertLinalgMatchesTheScalarPath(
-				"(let ((a (linalg:sub (linalg:arange 200) 100))) (print (linalg:maximum a (linalg:negative a))))");
-		assertLinalgMatchesTheScalarPath(
-				"(let ((a (linalg:sub (linalg:arange 0 8 'single-float) 4))) (print (linalg:minimum a (linalg:negative a))))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:maximum (linalg:reshape (linalg:arange 12) '(3 4)) (linalg:negative (linalg:reshape (linalg:arange 12) '(3 4)))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:maximum (linalg:sub (linalg:arange 200) 100) 3.0))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:minimum 3.0 (linalg:sub (linalg:arange 200) 100)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:maximum (linalg:arange 0 8 'single-float) 4.3))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:minimum 4.3 (linalg:arange 0 8 'single-float)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:maximum #d(-0.0 0.0) #d(0.0 -0.0)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:minimum #d(-0.0 0.0) #d(0.0 -0.0)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:maximum #d(-0.0) 0.0))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:maximum (linalg:mul (linalg:ones 2) (/ 0.0 0.0)) #d(1.0 2.0)))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:maximum #d(1.0 2.0) (linalg:mul (linalg:ones 2) (/ 0.0 0.0))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:clip (linalg:sub (linalg:arange 200) 100) -50.0 50.0))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:clip (linalg:arange 0 8 'single-float) 1.3 5.3))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:relu (linalg:sub (linalg:arange 200) 100)))");
-		assertLinalgMatchesTheScalarPath(
-				"(print (linalg:relu (linalg:reshape (linalg:sub (linalg:arange 0 12 'single-float) 6) '(3 4))))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:relu #d(-0.0 0.0)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:clip (linalg:mul (linalg:ones 1) (/ 0.0 0.0)) -1.0 1.0))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:maximum #(1 5 3) #(4 2 3)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:minimum #d(1.0 5.0) #f(4.0 2.0)))");
-		assertLinalgMatchesTheScalarPath("(print (linalg:maximum 2 3))");
+	@ParameterizedTest
+	@MethodSource("unaryUfuncSources")
+	void wasmGcSimdLinalgUnaryUfuncsAreByteIdenticalToTheScalarPath(String lispCode) throws Exception {
+		assertLinalgMatchesTheScalarPath(lispCode);
+	}
+
+	// The comparison-select ufuncs: array-array at both widths
+	// and rank 2 (lane gt/lt + bitselect), the f64 scalar broadcast on either side
+	// (the lane select), the f32 scalar broadcast against a NOT-f32-representable
+	// bound (the widened element loop), the strict-comparison ties/NaN edges, the
+	// declined inputs, and clip / relu riding maximum/minimum transitively.
+	static List<String> comparisonSelectSources() {
+		return List.of(
+				"(let ((a (linalg:sub (linalg:arange 200) 100))) (print (linalg:maximum a (linalg:negative a))))",
+				"(let ((a (linalg:sub (linalg:arange 0 8 'single-float) 4))) (print (linalg:minimum a (linalg:negative a))))",
+				"(print (linalg:maximum (linalg:reshape (linalg:arange 12) '(3 4)) (linalg:negative (linalg:reshape (linalg:arange 12) '(3 4)))))",
+				"(print (linalg:maximum (linalg:sub (linalg:arange 200) 100) 3.0))",
+				"(print (linalg:minimum 3.0 (linalg:sub (linalg:arange 200) 100)))",
+				"(print (linalg:maximum (linalg:arange 0 8 'single-float) 4.3))",
+				"(print (linalg:minimum 4.3 (linalg:arange 0 8 'single-float)))",
+				"(print (linalg:maximum #d(-0.0 0.0) #d(0.0 -0.0)))",
+				"(print (linalg:minimum #d(-0.0 0.0) #d(0.0 -0.0)))", "(print (linalg:maximum #d(-0.0) 0.0))",
+				"(print (linalg:maximum (linalg:mul (linalg:ones 2) (/ 0.0 0.0)) #d(1.0 2.0)))",
+				"(print (linalg:maximum #d(1.0 2.0) (linalg:mul (linalg:ones 2) (/ 0.0 0.0))))",
+				"(print (linalg:clip (linalg:sub (linalg:arange 200) 100) -50.0 50.0))",
+				"(print (linalg:clip (linalg:arange 0 8 'single-float) 1.3 5.3))",
+				"(print (linalg:relu (linalg:sub (linalg:arange 200) 100)))",
+				"(print (linalg:relu (linalg:reshape (linalg:sub (linalg:arange 0 12 'single-float) 6) '(3 4))))",
+				"(print (linalg:relu #d(-0.0 0.0)))",
+				"(print (linalg:clip (linalg:mul (linalg:ones 1) (/ 0.0 0.0)) -1.0 1.0))",
+				"(print (linalg:maximum #(1 5 3) #(4 2 3)))", "(print (linalg:minimum #d(1.0 5.0) #f(4.0 2.0)))",
+				"(print (linalg:maximum 2 3))");
+	}
+
+	@ParameterizedTest
+	@MethodSource("comparisonSelectSources")
+	void wasmGcSimdLinalgComparisonSelectsAreByteIdenticalToTheScalarPath(String lispCode) throws Exception {
+		assertLinalgMatchesTheScalarPath(lispCode);
 	}
 
 	/** {@code --simd --optimize} over the linalg library, run under wasm-GC. */
