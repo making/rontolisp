@@ -295,14 +295,14 @@ public final class AsdfSystems {
 	/**
 	 * Parses a {@code defsystem} form into a {@link LispSystem}, ordering the components
 	 * by their {@code :depends-on}/{@code :serial} constraints. A component whose
-	 * {@code :if-feature} expression is not satisfied by {@code features} still
+	 * {@code :if-feature} expression is not satisfied by {@code givenFeatures} still
 	 * participates in the ordering but contributes no source files (this is how libraries
 	 * gate CLOS-only files behind {@code (:or :sbcl ...)}). Any option or component shape
 	 * outside the supported subset is a hard error naming the clause.
 	 * @param form the {@code defsystem} form
 	 * @param baseDir the directory the component files resolve against, or {@code null}
 	 * for working-directory-relative
-	 * @param features the features the {@code :if-feature} component option tests
+	 * @param givenFeatures the features the {@code :if-feature} component option tests
 	 * @return the parsed system
 	 */
 	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures) {

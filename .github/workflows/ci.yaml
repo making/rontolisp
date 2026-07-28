@@ -30,11 +30,13 @@ jobs:
     - name: Unit Tests
       # The intra-class parallelism default in junit-platform.properties targets a
       # development machine; this runner has 4 vCPU shared by two surefire forks.
-      # Oversubscribed on purpose: each case in the dominating class alternates CPU
-      # (compile the module, run wasmtime) with a Docker round trip it spends idle,
-      # and at parallelism=4 the class only sped up 1.4x on 4 vCPU -- well short of
-      # what a CPU-bound job would give, so the threads are waiting, not computing.
-      run: ./mvnw -V --no-transfer-progress -Djunit.jupiter.execution.parallel.config.fixed.parallelism=8 clean test
+      # Keep this at the vCPU count. Oversubscribing was measured and is a loss, not
+      # a wash: the dominating class takes 1525 s at 4 and 2215 s at 8 -- worse than
+      # the 2170 s it took before it was made concurrent at all, and it drags the
+      # other fork with it (IroncladE2eTest 85 s -> 165 s). The idle-looking Docker
+      # round trips are not free capacity; the work is CPU-bound and the runner is
+      # already saturated at 4.
+      run: ./mvnw -V --no-transfer-progress -Djunit.jupiter.execution.parallel.config.fixed.parallelism=4 clean test
   native-image:
     needs: test
     strategy:
