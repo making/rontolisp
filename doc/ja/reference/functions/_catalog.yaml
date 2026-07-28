@@ -315,6 +315,7 @@ categories:
     functions:
       - { slug: open, name: "open" }
       - { slug: close, name: "close" }
+      - { slug: probe-file, name: "probe-file" }
       - { slug: open-stream-p, name: "open-stream-p" }
       - { slug: force-output, name: "force-output" }
       - { slug: finish-output, name: "finish-output" }

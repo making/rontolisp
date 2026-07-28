@@ -47,10 +47,11 @@ this milestone:
   `:postmodern-thread-safe` OFF, so the connection pool and the
   prepared-statement id counter are racy under concurrent handlers. Fine for
   the single-threaded milestone program; not fine for a `serve` handler.
-- `.todo/205-probe-file-and-uiop-file-exists-p.md` -- `uiop:file-exists-p`
-  resolves but errors at call time, so `pomo:execute-file` does not run
-  (it also needs `.todo/196`'s `restart-case`). The milestone program does not
-  use it.
+- ~~`.todo/205-probe-file-and-uiop-file-exists-p.md`~~ -- DONE: `probe-file` is
+  a real primitive on all four backends and `uiop:file-exists-p` lowers onto it
+  (`.kb/read-load-streams.md`). `pomo:execute-file` still needs `.todo/196`'s
+  `restart-case` and `alexandria:read-file-into-string`. The milestone program
+  does not use it.
 
 ## Milestone-level work (not covered by the prerequisites)
 

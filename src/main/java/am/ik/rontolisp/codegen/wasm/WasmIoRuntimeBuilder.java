@@ -117,6 +117,85 @@ final class WasmIoRuntimeBuilder {
 	}
 
 	/**
+	 * Builds the _probe_file(path) function body: the path when it names an existing
+	 * file, {@code ref.null eq} (nil) otherwise. Same staging and {@code path_open} call
+	 * as {@link #buildOpenBody()} in read mode, with the two differences that make it a
+	 * probe rather than an open: a non-zero errno answers nil instead of trapping (a wasm
+	 * trap is not catchable, which is exactly why {@code (handler-case (open ...))}
+	 * cannot stand in for this on WASM), and a successful open is closed again via
+	 * {@code fd_close} so probing leaks no descriptor.
+	 * @return the function body bytes
+	 */
+	static byte[] buildProbeFileBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2
+		w.write(1);
+		w.write(2);
+		w.write(Type.I32);
+		final int PATH = 0, OFF = 1, PLEN = 2;
+
+		// Stage the path bytes into linear scratch exactly as _open does (see there for
+		// why HEAP_PTR is advanced over the staging for the duration of the call).
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// HEAP_PTR = align8(off + plen + 2)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// path_open(dirfd=3, dirflags=0, path_ptr=off+1, path_len=plen, oflags=0,
+		// fs_rights_base=FD_READ=2, fs_rights_inheriting=0, fdflags=0,
+		// fd_out=OPEN_FD_ADDR)
+		i32(w, 3);
+		i32(w, 0);
+		getLocal(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PLEN);
+		i32(w, 0);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
+		i32(w, 0);
+		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		// pop the staged path (PLEN is free now: reuse it for the errno)
+		setLocal(w, PLEN);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// if errno != 0: return nil
+		getLocal(w, PLEN);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// close the descriptor the probe just opened, then answer with the path itself
+		loadMem32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
+		w.write(Instruction.DROP);
+		getLocal(w, PATH);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
 	 * Builds the _close(stream) function body. Closes the file descriptor via WASI
 	 * fd_close and returns the symbol {@code T}.
 	 * @param st the string table (for the {@code T} symbol)

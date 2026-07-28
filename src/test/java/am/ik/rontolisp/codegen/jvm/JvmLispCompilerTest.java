@@ -1084,6 +1084,32 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void probeFileAnswersThePathOrNil() throws Exception {
+		String file = tempDir.resolve("probe.txt").toString().replace("\\", "\\\\");
+		String missing = tempDir.resolve("absent.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output) (write-line "x" out))
+				(print (probe-file "%s"))
+				(print (probe-file "%s"))
+				(print (if (probe-file "%s") 'yes 'no))
+				""".formatted(file, file, missing, missing)))
+			.isEqualTo("\"" + tempDir.resolve("probe.txt") + "\"\nNIL\nNO");
+	}
+
+	@Test
+	void probeFileAsFunctionValueAndViaUiop() throws Exception {
+		String file = tempDir.resolve("fc.txt").toString().replace("\\", "\\\\");
+		String missing = tempDir.resolve("fc-absent.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output) (write-line "x" out))
+				(print (mapcar #'probe-file (list "%s" "%s")))
+				(print (uiop:file-exists-p "%s"))
+				(print (uiop:file-exists-p "%s"))
+				""".formatted(file, file, missing, file, missing)))
+			.isEqualTo("(\"" + tempDir.resolve("fc.txt") + "\" NIL)\n\"" + tempDir.resolve("fc.txt") + "\"\nNIL");
+	}
+
+	@Test
 	void withOpenFileReturnsBodyValue() throws Exception {
 		String file = tempDir.resolve("wof-ret.txt").toString().replace("\\", "\\\\");
 		assertThat(compileAndRun(
@@ -4924,12 +4950,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("322");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("323");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("322");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("323");
 	}
 
 	@Test

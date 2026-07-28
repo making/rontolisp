@@ -56,6 +56,7 @@ page.
 | `read-line` | `(read-line)`, `(read-line stream)` | Read one line from stdin (or from an input stream), return as string. `nil` on EOF |
 | `open` | `(open "f.txt")`, `(open "f.txt" :output)`, `(open "f.bin" :input '(unsigned-byte 8))` | Open a file and return a stream. The direction must be the literal `:input` (default, read) or `:output` (create/truncate, write); the optional element type must be the literal `'character` (default, text) or `'(unsigned-byte 8)` (binary) |
 | `close` | `(close stream)` | Close a stream opened by `open`. Returns `t` |
+| `probe-file` | `(probe-file "f.txt")` | The pathname when the file exists, `nil` otherwise. The only file operation that does not fail on a missing path (`open` traps on WASM, which `handler-case` cannot catch). `uiop:file-exists-p` is the same operation |
 | `open-stream-p` | `(open-stream-p stream)` | `t` while the handle names an open stream, `nil` after `close` (exact for sockets on the interpreter/JVM and on `--component`) |
 | `force-output` | `(force-output stream)` | Flush an output stream (no argument = standard output). Returns nil |
 | `finish-output` | `(finish-output stream)` | The same operation as `force-output` -- every write here is synchronous once flushed |

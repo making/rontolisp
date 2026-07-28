@@ -2281,6 +2281,17 @@ public final class LispNames {
 	/** The {@code close} built-in function. */
 	public static final String CLOSE = "CLOSE";
 
+	/**
+	 * The {@code probe-file} built-in function: the pathname when the file exists,
+	 * {@code nil} otherwise. The one file primitive that does NOT signal on a missing
+	 * path, so it is the only way to ask the question on WASM (where a failed
+	 * {@code open} traps rather than signalling, which no {@code handler-case} can
+	 * catch). rontolisp represents a pathname as its namestring, so the "truename" it
+	 * answers with is the argument string itself -- no backend resolves symlinks or makes
+	 * the path absolute.
+	 */
+	public static final String PROBE_FILE = "PROBE-FILE";
+
 	/** The {@code write-line} built-in function. */
 	public static final String WRITE_LINE = "WRITE-LINE";
 
@@ -4178,11 +4189,10 @@ public final class LispNames {
 	public static final String MERGE_PATHNAMES_STAR = "MERGE-PATHNAMES*";
 
 	/**
-	 * {@code uiop:file-exists-p} (stub: resolves, undefined when called -- uniformly on
-	 * every backend). Registered so a library that merely CONTAINS the call still loads:
-	 * postmodern's {@code execute-file.lisp} has five of them, and a name that does not
-	 * resolve fails the whole file at read time. A real implementation needs a runtime
-	 * file-probe primitive rontolisp does not have; see the {@code probe-file} todo.
+	 * {@code uiop:file-exists-p} -- not a stub: its contract is {@link #PROBE_FILE}'s
+	 * (the truename on success, nil otherwise), so the 1-argument call lowers onto
+	 * {@code probe-file} in {@code LispMacroExpander.expandUiopStubCall} and runs on
+	 * every backend. postmodern's {@code execute-file.lisp} has five of them.
 	 */
 	public static final String FILE_EXISTS_P = "FILE-EXISTS-P";
 

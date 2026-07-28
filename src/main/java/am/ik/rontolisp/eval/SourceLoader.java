@@ -24,11 +24,49 @@ public interface SourceLoader {
 	String load(String path) throws IOException;
 
 	/**
+	 * Whether a file exists at the given path -- what {@code probe-file} answers. The
+	 * default derives it from {@link #load} (a failed read means "not there"), the same
+	 * "attempt to read" pattern {@code AsdfSystems.locate} uses, so an alternative loader
+	 * (the browser playground's in-memory map) answers correctly without implementing
+	 * anything. A loader backed by a real filesystem should override it: reading is both
+	 * wasteful and WRONG for a file that exists but is not decodable text, which the
+	 * default would report as missing.
+	 * @param path the path to probe
+	 * @return {@code true} when the path names an existing file
+	 */
+	default boolean exists(String path) {
+		try {
+			load(path);
+			return true;
+		}
+		catch (IOException | RuntimeException ex) {
+			return false;
+		}
+	}
+
+	/**
 	 * Returns a loader that reads files from the local filesystem.
 	 * @return a filesystem-backed loader
 	 */
 	static SourceLoader fileSystem() {
-		return path -> Files.readString(Path.of(path));
+		return new SourceLoader() {
+			@Override
+			public String load(String path) throws IOException {
+				return Files.readString(Path.of(path));
+			}
+
+			@Override
+			public boolean exists(String path) {
+				try {
+					return Files.exists(Path.of(path));
+				}
+				catch (RuntimeException ex) {
+					// An unrepresentable path (a NUL byte, say) is not an existing
+					// file -- probe-file answers nil rather than signalling.
+					return false;
+				}
+			}
+		};
 	}
 
 	/**

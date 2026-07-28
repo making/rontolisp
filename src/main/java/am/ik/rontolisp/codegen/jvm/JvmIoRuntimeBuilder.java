@@ -49,6 +49,10 @@ final class JvmIoRuntimeBuilder {
 
 	static final String CLOSE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String PROBE_FILE_METHOD = "_probeFile";
+
+	static final String PROBE_FILE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String WRITE_LINE_METHOD = "_writeLine";
 
 	static final String WRITE_LINE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
@@ -249,6 +253,12 @@ final class JvmIoRuntimeBuilder {
 
 	private final MethodrefConstant socketIsClosed;
 
+	private final ClassConstant fileClass;
+
+	private final MethodrefConstant fileInit;
+
+	private final MethodrefConstant fileExists;
+
 	/**
 	 * Socket-runtime constants, non-null only when the program uses a tcp built-in; the
 	 * stream built-ins then grow socket branches (a socket entry is a raw
@@ -384,6 +394,12 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("available"), cp.addUtf8("()I")));
 		this.socketIsClosed = cp.addMethodref(cp.addClass(cp.addUtf8("java/net/Socket")),
 				cp.addNameAndType(cp.addUtf8("isClosed"), cp.addUtf8("()Z")));
+		// probe-file support: java.io.File.exists() -- the one file question that must
+		// not open (and therefore must not signal) on a missing path.
+		this.fileClass = cp.addClass(cp.addUtf8("java/io/File"));
+		this.fileInit = cp.addMethodref(this.fileClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		this.fileExists = cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("exists"), cp.addUtf8("()Z")));
 	}
 
 	static JvmIoRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
@@ -400,6 +416,8 @@ final class JvmIoRuntimeBuilder {
 		List<IoMethod> ms = new ArrayList<>();
 		ms.add(new IoMethod(this.cp.addUtf8(OPEN_METHOD), this.cp.addUtf8(OPEN_DESC), 6, 6, buildOpen()));
 		ms.add(new IoMethod(this.cp.addUtf8(CLOSE_METHOD), this.cp.addUtf8(CLOSE_DESC), 4, 3, buildClose()));
+		ms.add(new IoMethod(this.cp.addUtf8(PROBE_FILE_METHOD), this.cp.addUtf8(PROBE_FILE_DESC), 4, 2,
+				buildProbeFile()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_LINE_METHOD), this.cp.addUtf8(WRITE_LINE_DESC), 5, 4,
 				buildWriteLine()));
 		ms.add(new IoMethod(this.cp.addUtf8(READ_LINE_STREAM_METHOD), this.cp.addUtf8(READ_LINE_STREAM_DESC), 4, 2,
@@ -864,6 +882,52 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.I2L);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, this.longValueOf.index());
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _probeFile(Object path) -> path | null}. Whether the path names an existing
+	 * file: the quotes are stripped the way {@code _open} does, and the answer is the
+	 * ORIGINAL (still quoted) path value so the caller gets a Lisp string back --
+	 * rontolisp's namestring stands in for the truename. Unlike {@code _open} this never
+	 * throws on a missing path; that is the whole point of the primitive.
+	 */
+	private List<Integer> buildProbeFile() {
+		// Slots: 0=path (Object), 1=p (String)
+		List<Integer> code = new ArrayList<>();
+		// p = ((String) path).substring(1, length - 1);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.stringClass.index());
+		code.add(Opcode.ASTORE_1);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringLength.index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringSubstring.index());
+		code.add(Opcode.ASTORE_1);
+		// if (!new File(p).exists()) return null;
+		code.add(Opcode.NEW);
+		emitU2(code, this.fileClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.fileInit.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.fileExists.index());
+		int ifMissingPos = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifMissingPos, code.size());
+		// return path;
+		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.ARETURN);
 		return code;
 	}

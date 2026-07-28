@@ -5889,6 +5889,13 @@ public final class LispMacroExpander {
 			// silently discarding the argument.
 			return new LispString("");
 		}
+		if (LispNames.FILE_EXISTS_P.equals(qn.member()) && parts.size() == 2) {
+			// Not a stub either: uiop:file-exists-p IS probe-file (same contract -- the
+			// truename on success, nil otherwise), so it lowers onto the primitive on
+			// every backend. Only the 1-argument shape (the one real uiop exports) is
+			// answered.
+			return listToCons(List.of(new LispSymbol(LispNames.PROBE_FILE), parts.get(1)));
+		}
 		List<LispVal> progn = new java.util.ArrayList<>();
 		progn.add(new LispSymbol(LispNames.PROGN));
 		progn.addAll(parts.subList(1, parts.size()));

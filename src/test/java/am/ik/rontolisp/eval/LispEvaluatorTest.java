@@ -4006,6 +4006,59 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void probeFileAnswersThePathOrNil(@TempDir Path tempDir) throws Exception {
+		Path present = tempDir.resolve("there.txt");
+		Files.writeString(present, "x\n");
+		String there = present.toString().replace("\\", "\\\\");
+		String missing = tempDir.resolve("nope.txt").toString().replace("\\", "\\\\");
+		assertThat(eval("(probe-file \"" + there + "\")")).isEqualTo(new LispString(present.toString()));
+		assertThat(eval("(probe-file \"" + missing + "\")")).isEqualTo(LispNil.INSTANCE);
+		// The whole point of the primitive: a missing path answers, it does not signal.
+		assertThat(eval("(if (probe-file \"" + missing + "\") 1 2)")).isEqualTo(new LispInteger(2));
+	}
+
+	@Test
+	void probeFileSeesADirectoryAndABinaryFile(@TempDir Path tempDir) throws Exception {
+		// A file that is not decodable text still exists -- the SourceLoader-mediated
+		// probe must not degrade to "can I read this as a string?".
+		Path binary = tempDir.resolve("blob.bin");
+		Files.write(binary, new byte[] { (byte) 0xFF, (byte) 0xFE, 0x00, (byte) 0x80 });
+		assertThat(eval("(probe-file \"" + binary.toString().replace("\\", "\\\\") + "\")"))
+			.isEqualTo(new LispString(binary.toString()));
+		assertThat(eval("(probe-file \"" + tempDir.toString().replace("\\", "\\\\") + "\")"))
+			.isEqualTo(new LispString(tempDir.toString()));
+	}
+
+	@Test
+	void probeFileIsFirstClassAndDrivesUiopFileExistsP(@TempDir Path tempDir) throws Exception {
+		Path present = tempDir.resolve("f.txt");
+		Files.writeString(present, "x\n");
+		String there = present.toString().replace("\\", "\\\\");
+		String missing = tempDir.resolve("g.txt").toString().replace("\\", "\\\\");
+		assertThat(eval("(mapcar #'probe-file (list \"" + there + "\" \"" + missing + "\"))").print())
+			.isEqualTo("(\"" + present + "\" NIL)");
+		assertThat(eval("(uiop:file-exists-p \"" + there + "\")")).isEqualTo(new LispString(present.toString()));
+		assertThat(eval("(uiop:file-exists-p \"" + missing + "\")")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void probeFileGoesThroughTheInstalledSourceLoader() {
+		// A host with no filesystem (the browser playground) answers from its own
+		// in-memory map, and never from java.nio.file.Files.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.setSourceLoader(path -> {
+			if ("mem.lisp".equals(path)) {
+				return "(defun f () 1)";
+			}
+			throw new java.io.FileNotFoundException(path);
+		});
+		assertThat(evaluator.eval(LispReader.readFromString("(probe-file \"mem.lisp\")")))
+			.isEqualTo(new LispString("mem.lisp"));
+		assertThat(evaluator.eval(LispReader.readFromString("(probe-file \"/etc/hosts\")")))
+			.isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
 	void withOpenFileNonLiteralElementTypeThrows(@TempDir Path tempDir) {
 		String file = tempDir.resolve("nl.dat").toString().replace("\\", "\\\\");
 		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :element-type (list 'unsigned-byte 8)) s)"))
@@ -4284,7 +4337,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer", "%string-compare")
 			.isSorted()
-			.hasSize(322);
+			.hasSize(323);
 	}
 
 	@Test

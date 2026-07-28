@@ -794,7 +794,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// same bytes as a per-site build, so eq/eql/print behavior is unchanged.
 	static final int FUNC_T_SYM = FUNC_IV_SET + 1;
 
-	static final int FX_FUNC_LAST = FUNC_T_SYM;
+	// _probe_file ((ref null eq) path) -> (ref null eq): the path when it names an
+	// existing file, null otherwise. Deliberately NOT part of the _open block above:
+	// _open TRAPS on a non-zero path_open errno, which no handler-case can catch, so
+	// the probe needs its own body whose errno branch answers nil instead.
+	static final int FUNC_PROBE_FILE = FUNC_T_SYM + 1;
+
+	static final int FX_FUNC_LAST = FUNC_PROBE_FILE;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -3547,6 +3553,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_FX_DIV); // _fx_rem
 				fnDef.addFunction(TYPE_IV_SET); // _iv_set
 				fnDef.addFunction(TYPE_T_SYM); // _t_sym
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _probe_file
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -4032,6 +4039,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmFxRuntimeBuilder.buildIvSetBody());
 				code.addFunction(
 						WasmFxRuntimeBuilder.buildTSymBody(tSymEntry.offset(), tSymEntry.length(), tSymGlobalIndex));
+				// probe-file runtime helper body (FUNC_PROBE_FILE)
+				code.addFunction(WasmIoRuntimeBuilder.buildProbeFileBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

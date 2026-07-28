@@ -5728,6 +5728,55 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void probeFileAnswersThePathOrNil() throws Exception {
+		// The missing-path branch is the load-bearing one: _open TRAPS on a non-zero
+		// path_open errno (and a trap is not catchable), so the program only survives to
+		// print anything if _probe_file has its own errno-to-nil branch.
+		String code = """
+				(with-open-file (out "probe.txt" :direction :output) (write-line "x" out))
+				(print (probe-file "probe.txt"))
+				(print (probe-file "absent.txt"))
+				(print (if (probe-file "absent.txt") 'yes 'no))
+				""";
+		assertThat(compileAndRunWithDir(code)).isEqualTo("\"probe.txt\"\nNIL\nNO");
+	}
+
+	@Test
+	void probeFileLeaksNoDescriptor() throws Exception {
+		// A probe must close what it opened: 300 probes with a leak exhaust the
+		// descriptor table and the subsequent open fails (traps).
+		String code = """
+				(with-open-file (out "probe-fd.txt" :direction :output) (write-line "x" out))
+				(dotimes (i 300) (probe-file "probe-fd.txt"))
+				(with-open-file (in "probe-fd.txt") (print (read-line in)))
+				""";
+		assertThat(compileAndRunWithDir(code)).isEqualTo("\"x\"");
+	}
+
+	@Test
+	void probeFileAsFunctionValueAndViaUiop() throws Exception {
+		String code = """
+				(with-open-file (out "probe-fc.txt" :direction :output) (write-line "x" out))
+				(print (mapcar #'probe-file (list "probe-fc.txt" "probe-nope.txt")))
+				(print (uiop:file-exists-p "probe-fc.txt"))
+				(print (uiop:file-exists-p "probe-nope.txt"))
+				""";
+		assertThat(compileAndRunWithDir(code)).isEqualTo("(\"probe-fc.txt\" NIL)\n\"probe-fc.txt\"\nNIL");
+	}
+
+	@Test
+	void componentProbeFile() throws Exception {
+		// The component path opens over wasi:filesystem@0.3.0 through a different
+		// adapter, so the errno-to-nil branch is verified there too.
+		String code = """
+				(with-open-file (out "cprobe.txt" :direction :output) (write-line "x" out))
+				(print (probe-file "cprobe.txt"))
+				(print (probe-file "cabsent.txt"))
+				""";
+		assertThat(compileAndRunComponentWithDir(code)).isEqualTo("\"cprobe.txt\"\nNIL");
+	}
+
+	@Test
 	void openCloseExplicitStreams() throws Exception {
 		String code = """
 				(setq out (open "manual.txt" :output))
@@ -6630,7 +6679,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("322");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("323");
 	}
 
 	@Test

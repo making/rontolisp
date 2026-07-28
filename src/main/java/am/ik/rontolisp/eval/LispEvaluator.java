@@ -617,6 +617,20 @@ public final class LispEvaluator {
 			}
 			return apply(baseWriteString, args, this.globalEnv);
 		}));
+		// probe-file: mediated by the SourceLoader rather than java.nio.file.Files, so a
+		// host without a filesystem (the browser playground's in-memory loader) answers
+		// from whatever IT can load. Working-directory-relative like open, not resolved
+		// against the load stack.
+		this.globalEnv.defineFunction(LispNames.PROBE_FILE, new LispFunction(LispNames.PROBE_FILE, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.PROBE_FILE + " expects 1 argument, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispString path)) {
+				throw new LispEvalException(LispNames.PROBE_FILE + " expects a string pathname");
+			}
+			// The truename is the namestring itself (see LispNames.PROBE_FILE).
+			return this.sourceLoader.exists(path.value()) ? path : LispNil.INSTANCE;
+		}));
 		// uiop:add-package-local-nickname -- lite: registers a GLOBAL nickname (no
 		// per-package scoping); the mechanism libraries recommend for shortening long
 		// package names (jzon's README: (uiop:add-package-local-nickname '#:jzon
@@ -1242,6 +1256,17 @@ public final class LispEvaluator {
 			String defaults = args.size() > 1 ? PathnameOps.namestring(LispNames.UIOP_MERGE_PATHNAMES_STAR, args.get(1))
 					: "";
 			return new LispString(PathnameOps.mergePathnames(specified, defaults));
+		}));
+		// uiop:file-exists-p == probe-file (same contract: the truename on success, nil
+		// otherwise). Kept identical to the compile paths' lowering in
+		// LispMacroExpander.expandUiopStubCall.
+		String fileExistsPName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.FILE_EXISTS_P);
+		LispVal probeFile = this.globalEnv.lookupFunction(LispNames.PROBE_FILE);
+		this.globalEnv.defineFunction(fileExistsPName, new LispFunction(fileExistsPName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(fileExistsPName + " expects 1 argument, got " + args.size());
+			}
+			return apply(probeFile, args, this.globalEnv);
 		}));
 		// uiop::get-pathname-defaults (internal in real UIOP too) -- the pathname
 		// relative names resolve against. Every backend resolves a relative path

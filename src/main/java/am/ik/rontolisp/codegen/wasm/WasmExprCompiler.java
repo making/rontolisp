@@ -510,6 +510,7 @@ final class WasmExprCompiler {
 				case LispNames.READ_CHAR -> WasmReadCharCompiler.compile(cons, ctx);
 				case LispNames.OPEN -> WasmOpenCompiler.compile(cons, ctx);
 				case LispNames.CLOSE -> WasmCloseCompiler.compile(cons, ctx);
+				case LispNames.PROBE_FILE -> WasmProbeFileCompiler.compile(cons, ctx);
 				case LispNames.WRITE_LINE -> WasmWriteLineCompiler.compile(cons, ctx);
 				case LispNames.WRITE_STRING -> {
 					LispVal bounded = LispMacroExpander.lowerWriteStringBounds(cons);
