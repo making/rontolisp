@@ -1,5 +1,13 @@
 # Default I/O streams must resolve through *standard-output* / *standard-input*
 
+> **Status 2026-07-28 (todo-195): the `*standard-output*` OUTPUT side is DONE**
+> on the interpreter, the JVM and both wasm-GC backends, exactly per the
+> proposal below -- mechanics and the bind-activated special rule in
+> `.kb/standard-output-redirect.md`, pinned by the
+> `s-sql-enablement-language-group` ci-spec case. Still open here:
+> `*error-output*` (same machinery, not wired) and the whole INPUT side
+> (`*standard-input*` for `read-line`/`read-char`/`read`).
+
 `*standard-output*` / `*error-output*` exist as global variables bound to
 the designator `t` (`Environment.java:248`, registered in
 `PackageRegistry.java:118`), but the stream-arg-less print family ignores

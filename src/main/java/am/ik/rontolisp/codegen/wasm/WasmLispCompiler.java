@@ -800,7 +800,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// the probe needs its own body whose errno branch answers nil instead.
 	static final int FUNC_PROBE_FILE = FUNC_T_SYM + 1;
 
-	static final int FX_FUNC_LAST = FUNC_PROBE_FILE;
+	// _fresh_line_stream ((ref null eq) dest) -> (ref null eq): fresh-line for an
+	// explicit or redirected (*standard-output*) destination -- nil/t = stdout via the
+	// LINE_START tracking, a negative i31 inspects the string-stream record's last
+	// byte, a non-negative i31 (WASI fd) always writes a newline. Returns nil.
+	static final int FUNC_FRESH_LINE_STREAM = FUNC_PROBE_FILE + 1;
+
+	static final int FX_FUNC_LAST = FUNC_FRESH_LINE_STREAM;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -2032,6 +2038,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		startWriter.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
 		startWriter.writeSignedLeb128(TYPE_STR_BYTES);
 		startWriter.write(Instruction.DROP);
+
+		// A program that redirects *standard-output* (the variable has a module global
+		// only then) seeds its global default with the designator t (stdout), matching
+		// the interpreter's permanent value.
+		Integer standardOutputGlobal = ctx.globalIndices.get(LispNames.STANDARD_OUTPUT_VAR);
+		if (standardOutputGlobal != null) {
+			startWriter.write(Instruction.CALL);
+			startWriter.writeSignedLeb128(FUNC_T_SYM);
+			startWriter.write(Instruction.SET_GLOBAL);
+			startWriter.writeUnsignedLeb128(standardOutputGlobal);
+		}
 
 		// EH mode: an uncaught $lisp-cond throw escaping the top level must keep
 		// today's trap shape (host-visible exit class), so the whole body runs inside
@@ -3554,6 +3571,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_IV_SET); // _iv_set
 				fnDef.addFunction(TYPE_T_SYM); // _t_sym
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _probe_file
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fresh_line_stream
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -4041,6 +4059,8 @@ public final class WasmLispCompiler implements LispCompiler {
 						WasmFxRuntimeBuilder.buildTSymBody(tSymEntry.offset(), tSymEntry.length(), tSymGlobalIndex));
 				// probe-file runtime helper body (FUNC_PROBE_FILE)
 				code.addFunction(WasmIoRuntimeBuilder.buildProbeFileBody());
+				// fresh-line stream helper body (FUNC_FRESH_LINE_STREAM)
+				code.addFunction(WasmStringStreamRuntimeBuilder.buildFreshLineStreamBody(stringTable.newline.offset()));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

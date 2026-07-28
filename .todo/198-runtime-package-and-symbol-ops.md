@@ -12,10 +12,14 @@ Blocks `.todo/195-s-sql-support.md` (one site) and
 
 ## Call sites and what they need
 
-- `s-sql/s-sql.lisp:243-247`: `(intern (map 'string ...) (find-package
-  :keyword))` -- `intern` with a NON-LITERAL package argument (hard error
-  today). Minimal: `find-package` returns a designator and `intern` accepts
-  any designator that resolves to `:keyword` (and the current package).
+- DONE (2026-07-28, todo-195) `s-sql/s-sql.lisp:243-247`: `(intern (map
+  'string ...) (find-package :keyword))` works on every backend -- the
+  interpreter already resolved general designators, and
+  `LispMacroExpander.isKeywordPackageDesignator` now unwraps the quoted
+  keyword that `PackageResolver.resolveCons` folds a literal `(find-package
+  :keyword)` into, so the compile paths take the `internKeywordForm` lowering.
+  A TRULY runtime package argument (a variable) still errs on the compile
+  paths.
 - `postmodern/util.lisp`: `(values (intern (string-upcase name) "KEYWORD"))`
   -- STRING package designator for `intern`.
 - `postmodern/json-encoder.lisp` (5 sites) and `deftable.lisp:60`: runtime

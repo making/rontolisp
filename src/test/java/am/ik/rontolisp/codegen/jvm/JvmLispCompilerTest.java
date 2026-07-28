@@ -554,6 +554,37 @@ class JvmLispCompilerTest {
 		}
 	}
 
+	// A loop destructuring pattern with a dotted sublist is data, not a call form; the
+	// expansion pass (active because a user defmacro exists) must leave it intact
+	// (s-sql's `loop for ((x . y) . rest) on args`).
+	@Test
+	void compileAndRunLoopDottedPatternWithUserMacroPresent() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro my-id (x) x)
+				(print (my-id (loop for ((x . y) . rest) on '((1 . 2) (3 . 4))
+				                    append (list x y (length rest)))))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("(1 2 1 3 4 0)");
+		}
+	}
+
 	// once-only exercises three levels of read-time backquote through the compile
 	// path: the nested backquote is fully expanded by the reader, so the JVM
 	// compiler only sees ordinary list/cons/quote calls.
@@ -1150,6 +1181,28 @@ class JvmLispCompilerTest {
 	@Test
 	void withOutputToStringEmptyBodyIsEmptyString() throws Exception {
 		assertThat(compileAndRun("(print (with-output-to-string (s)))")).isEqualTo("\"\"");
+	}
+
+	@Test
+	void withOutputToStringBindingStandardOutputCapturesStreamlessPrints() throws Exception {
+		// Binding *standard-output* as the target variable redirects the whole
+		// stream-argument-less print family, including inside called functions
+		// (s-sql's to-sql-name / sql-escape-string shape).
+		assertThat(compileAndRun("""
+				(defun emit-name () (princ "foo") (write-char #\\.) (write-string "bar"))
+				(princ (with-output-to-string (*standard-output*)
+				  (emit-name)
+				  (format t "~a" 42)))
+				(princ "|")
+				(let ((*standard-output* (%make-string-output-stream)))
+				  (princ "hidden"))
+				(princ "visible")""")).isEqualTo("foo.bar42|visible");
+	}
+
+	@Test
+	void readtableCaseIsConstantUpcaseAndInternAcceptsFoundKeywordPackage() throws Exception {
+		assertThat(compileAndRun("(print (readtable-case *readtable*))")).isEqualTo(":UPCASE");
+		assertThat(compileAndRun("(print (intern \"ZAP\" (find-package :keyword)))")).isEqualTo(":ZAP");
 	}
 
 	@Test
@@ -1757,6 +1810,13 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunFormatArgumentJump() throws Exception {
 		assertThat(compileAndRun("(format t \"~a ~2* ~a ~2:* ~a\" 1 2 3 4)")).isEqualTo("1  4  3");
+	}
+
+	@Test
+	void compileAndRunFormatIterationEscape() throws Exception {
+		assertThat(compileAndRun("(format t \"~{~a~^, ~}|~@{~a~^, ~}\" '(1 2 3) 4 5)")).isEqualTo("1, 2, 3|4, 5");
+		assertThat(compileAndRun("(format t \"~:['{}'~;ARRAY[~:*~{~A~^, ~}]~]\" '(1 2 3))"))
+			.isEqualTo("ARRAY[1, 2, 3]");
 	}
 
 	@Test
@@ -4950,12 +5010,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("323");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("324");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("323");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("324");
 	}
 
 	@Test

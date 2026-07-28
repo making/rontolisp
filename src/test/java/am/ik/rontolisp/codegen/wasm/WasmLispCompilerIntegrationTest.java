@@ -3397,6 +3397,13 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void formatIterationEscape() throws Exception {
+		assertThat(compileAndRun("(format t \"~{~a~^, ~}|~@{~a~^, ~}\" '(1 2 3) 4 5)")).isEqualTo("1, 2, 3|4, 5");
+		assertThat(compileAndRun("(format t \"~:['{}'~;ARRAY[~:*~{~A~^, ~}]~]\" '(1 2 3))"))
+			.isEqualTo("ARRAY[1, 2, 3]");
+	}
+
+	@Test
 	void formatRuntimePadCharAndExponentParams() throws Exception {
 		assertThat(compileAndRun("(format t \"~v,vd [~15,5,3e] [~8,4,,,'*e]\" 6 #\\0 42 pi pi)"))
 			.isEqualTo("000042 [   3.14159e+000] [********]");
@@ -5818,6 +5825,28 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void readtableCaseIsConstantUpcaseAndInternAcceptsFoundKeywordPackage() throws Exception {
+		assertThat(compileAndRun("(print (readtable-case *readtable*))")).isEqualTo(":UPCASE");
+		assertThat(compileAndRun("(print (intern \"ZAP\" (find-package :keyword)))")).isEqualTo(":ZAP");
+	}
+
+	@Test
+	void withOutputToStringBindingStandardOutputCapturesStreamlessPrints() throws Exception {
+		// Binding *standard-output* as the target variable redirects the whole
+		// stream-argument-less print family, including inside called functions
+		// (s-sql's to-sql-name / sql-escape-string shape).
+		assertThat(compileAndRun("""
+				(defun emit-name () (princ "foo") (write-char #\\.) (write-string "bar"))
+				(princ (with-output-to-string (*standard-output*)
+				  (emit-name)
+				  (format t "~a" 42)))
+				(princ "|")
+				(let ((*standard-output* (%make-string-output-stream)))
+				  (princ "hidden"))
+				(princ "visible")""")).isEqualTo("foo.bar42|visible");
+	}
+
+	@Test
 	void formatStreamDestinationWritesToStringStream() throws Exception {
 		assertThat(compileAndRun("(princ (with-output-to-string (s) (format s \"x=~a, y=~s~%\" 1 \"two\")))"))
 			.isEqualTo("x=1, y=\"two\"");
@@ -6679,7 +6708,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("323");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("324");
 	}
 
 	@Test

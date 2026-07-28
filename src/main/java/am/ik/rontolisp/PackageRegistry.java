@@ -128,8 +128,8 @@ public final class PackageRegistry {
 			LispNames.PATHNAMEP, LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P, LispNames.OPEN_STREAM_P,
 			LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF, LispNames.SIMPLE_CONDITION_FORMAT_CONTROL,
 			LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, LispNames.MAKE_PATHNAME, LispNames.COPY_READTABLE,
-			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE,
-			LispNames.TYPE_OF);
+			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE, LispNames.FIND_PACKAGE,
+			LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,

@@ -1375,6 +1375,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// before the writeFields/writeMethods lambdas run.
 		final List<Integer> layoutClinitCode = new ArrayList<>();
 		mainCtx.layoutPool.emitClinitInit(layoutClinitCode, cp);
+		// A program that redirects *standard-output* (the variable is in globals only
+		// then) seeds its global default with the designator t = stdout, matching the
+		// interpreter's permanent value; the constants are minted here for the same
+		// serialization-order reason as above.
+		final FieldrefConstant standardOutputGlobalField = globalFields.get(LispNames.STANDARD_OUTPUT_VAR);
+		final ConstantPool.StringConstant standardOutputTStr = standardOutputGlobalField != null ? cp.addString("T")
+				: null;
+		final Utf8Constant standardOutputClinitName = standardOutputGlobalField != null ? cp.addUtf8("<clinit>") : null;
+		final Utf8Constant standardOutputClinitDesc = standardOutputGlobalField != null ? cp.addUtf8("()V") : null;
 
 		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
 		new ByteCodeWriter(classOut) //
@@ -1588,7 +1597,8 @@ public final class JvmLispCompiler implements LispCompiler {
 							})));
 				}
 				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || !mainCtx.layoutPool.isEmpty()
-						|| !structTableClinitFinal.isEmpty() || dynVarRuntime != null) {
+						|| !structTableClinitFinal.isEmpty() || dynVarRuntime != null
+						|| standardOutputGlobalField != null) {
 					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 					// on a thread with no pending condition returns null). The async
 					// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -1629,6 +1639,15 @@ public final class JvmLispCompiler implements LispCompiler {
 						// binding.
 						clinitCode.addAll(dynVarRuntime.clinitCode());
 					}
+					if (standardOutputGlobalField != null) {
+						// *standard-output*'s global default is the designator t
+						// (stdout).
+						clinitCode.add(Opcode.LDC_W);
+						JvmRuntimeBuilder.emitU2(clinitCode,
+								java.util.Objects.requireNonNull(standardOutputTStr).index());
+						clinitCode.add(Opcode.PUTSTATIC);
+						JvmRuntimeBuilder.emitU2(clinitCode, standardOutputGlobalField.index());
+					}
 					clinitCode.addAll(layoutClinitCode);
 					clinitCode.addAll(structTableClinitFinal);
 					clinitCode.add(Opcode.RETURN);
@@ -1646,10 +1665,12 @@ public final class JvmLispCompiler implements LispCompiler {
 					// program has neither, so the dyn-var runtime carries its own.
 					Utf8Constant clinitNameUtf = channel.clinitName != null ? channel.clinitName
 							: mainCtx.layoutPool.clinitName != null ? mainCtx.layoutPool.clinitName
-									: java.util.Objects.requireNonNull(dynVarRuntime).clinitName();
+									: dynVarRuntime != null ? dynVarRuntime.clinitName()
+											: java.util.Objects.requireNonNull(standardOutputClinitName);
 					Utf8Constant clinitDescUtf = channel.clinitDesc != null ? channel.clinitDesc
 							: mainCtx.layoutPool.clinitDesc != null ? mainCtx.layoutPool.clinitDesc
-									: java.util.Objects.requireNonNull(dynVarRuntime).clinitDesc();
+									: dynVarRuntime != null ? dynVarRuntime.clinitDesc()
+											: java.util.Objects.requireNonNull(standardOutputClinitDesc);
 					methods.add(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(clinitMaxStack)

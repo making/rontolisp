@@ -548,6 +548,39 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void variableNamedQuoteDoesNotSwallowTheFollowingArgument() {
+		// A call tail beginning with a variable named `quote` must not be re-read as
+		// the (quote DATUM) special form: the following argument is code (s-sql's
+		// :copy op binds a `quote` group and does (when quote (sql-expand ...))).
+		PackageRegistry registry = new PackageRegistry();
+		registry.define(new LispPackage("RP", List.of(LispNames.CL_PKG), Set.of()));
+		PackageResolver resolver = new PackageResolver(registry);
+		resolve(resolver, "(in-package rp)");
+		assertThat(resolve(resolver, "(when quote (my-fn (car quote)))"))
+			.isEqualTo("(WHEN QUOTE (RP::MY-FN (CAR QUOTE)))");
+		// A lambda list (quote) is data in binding position, not a quote form.
+		assertThat(resolve(resolver, "(defun use-q (quote) (my-fn (car quote)))"))
+			.isEqualTo("(DEFUN RP::USE-Q (QUOTE) (RP::MY-FN (CAR QUOTE)))");
+		// A genuine (quote DATUM) element keeps the data exemption.
+		assertThat(resolve(resolver, "(my-fn 'some-list)")).isEqualTo("(RP::MY-FN (QUOTE RP::SOME-LIST))");
+	}
+
+	@Test
+	void doubleColonReachesTheInheritedClSymbol() {
+		// pkg::name reaches any symbol ACCESSIBLE in pkg, including one inherited
+		// from cl: cl-postgres::write-string IS cl:write-string (s-sql spells it so).
+		PackageRegistry registry = new PackageRegistry();
+		registry.define(new LispPackage("RP", List.of(LispNames.CL_PKG), Set.of()));
+		PackageResolver resolver = new PackageResolver(registry);
+		assertThat(resolve(resolver, "(rp::write-string s)")).isEqualTo("(WRITE-STRING S)");
+		// A member the package owns stays its own internal symbol.
+		resolve(resolver, "(in-package rp)");
+		resolve(resolver, "(defun my-own (x) x)");
+		resolve(resolver, "(in-package cl-user)");
+		assertThat(resolve(resolver, "(rp::my-own 1)")).isEqualTo("(RP::MY-OWN 1)");
+	}
+
+	@Test
 	void newPackageInRegistryResolvesViaUseListAndQualifiesOwnSymbols() {
 		// Extensibility: registering a package that uses rontolisp makes its symbols
 		// (version) visible unqualified, and the resolution logic is unchanged.

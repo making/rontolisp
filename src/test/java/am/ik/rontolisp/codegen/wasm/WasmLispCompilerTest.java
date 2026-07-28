@@ -169,18 +169,16 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void tcpBuiltinsInPreview1ModeAreCompileErrors() {
-		assertThatThrownBy(() -> compile("(rontolisp:tcp-connect \"127.0.0.1\" 7777)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("component");
-		assertThatThrownBy(() -> compile("(rontolisp:tcp-listen 7777)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("component");
-		assertThatThrownBy(() -> compile("(rontolisp:tcp-accept 0)")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("component");
-		assertThatThrownBy(() -> compile("(rontolisp:tcp-local-port 0)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("component");
+	void tcpBuiltinsInPreview1ModeAreCallTimeErrors() {
+		// Preview 1 has no host sockets, but the call sites compile to CALL-TIME
+		// errors (not compile errors) so a spliced library whose socket layer is
+		// dead code still builds -- s-sql drags in cl-postgres without ever
+		// opening a connection, and the pruner cannot drop cl-postgres'
+		// defmethod-anchored socket chain.
+		assertThat(compile("(rontolisp:tcp-connect \"127.0.0.1\" 7777)")).isNotEmpty();
+		assertThat(compile("(rontolisp:tcp-listen 7777)")).isNotEmpty();
+		assertThat(compile("(rontolisp:tcp-accept 0)")).isNotEmpty();
+		assertThat(compile("(rontolisp:tcp-local-port 0)")).isNotEmpty();
 	}
 
 	@Test
@@ -234,16 +232,11 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void tcpAddressAccessorsInPreview1ModeAreCompileErrors() {
-		assertThatThrownBy(() -> compile("(rontolisp:tcp-peer-address 0)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("component");
-		assertThatThrownBy(() -> compile("(rontolisp:tcp-peer-port 0)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("component");
-		assertThatThrownBy(() -> compile("(rontolisp:tcp-local-address 0)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("component");
+	void tcpAddressAccessorsInPreview1ModeAreCallTimeErrors() {
+		// Same call-time policy as the tcp builtins above.
+		assertThat(compile("(rontolisp:tcp-peer-address 0)")).isNotEmpty();
+		assertThat(compile("(rontolisp:tcp-peer-port 0)")).isNotEmpty();
+		assertThat(compile("(rontolisp:tcp-local-address 0)")).isNotEmpty();
 	}
 
 	@Test
@@ -264,15 +257,14 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void usocketSpliceIsCompileErrorInPreview1Mode() {
+	void usocketSpliceCompilesInPreview1ModeWithCallTimeSocketErrors() {
 		// The usocket shim (usocket.lisp, spliced by UsocketLibrary.process) calls
-		// rontolisp:tcp-connect in its defun bodies, so a Preview 1 build fails with
-		// the existing component-only tcp error -- the same behavior as direct tcp use.
+		// rontolisp:tcp-connect in its defun bodies; on Preview 1 those calls
+		// compile to call-time errors -- the same policy as direct tcp use -- so a
+		// program that never reaches a socket still builds.
 		List<LispVal> program = am.ik.rontolisp.eval.UsocketLibrary
 			.process(LispReader.readAllFromString("(print (usocket:socket-stream 1))"));
-		assertThatThrownBy(() -> new WasmLispCompiler().compile(program))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("component");
+		assertThat(new WasmLispCompiler().compile(program)).isNotEmpty();
 	}
 
 	@Test

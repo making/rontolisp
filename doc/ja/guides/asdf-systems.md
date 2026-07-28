@@ -150,7 +150,7 @@ API は提供しません。
 
 ## 実際に何がロードできるか
 
-現在、実世界の 11 のライブラリが無改変でロードできます。**バックエンド**列は
+現在、実世界の 12 のライブラリが無改変でロードできます。**バックエンド**列は
 それぞれの検証済み範囲を示します — 「4 つ全て」はインタプリタ、JVM、WASM
 Preview 1、`--component` を意味します。
 
@@ -167,6 +167,7 @@ Preview 1、`--component` を意味します。
 | [com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4 | 4 つ全て | README のウォークスルーを含む JSON のパースと文字列化 — ハッシュテーブル / ベクタのラウンドトリップ、`:key-fn`/`jzon:coerce-key`、可変文字列へ書き込む Gray ストリームクラス経由の `:stream` ライタ API、インクリメンタルな `jzon:writer`、`closer-mop` シムの実スロットリストによる CLOS インスタンスの文字列化。依存システム (`closer-mop`、`flexi-streams`、`float-features`、`trivial-gray-streams`、`uiop`) は上記の組み込みシムシステムに解決されます | 3 つの数値リーフコンポーネント (`eisel-lemire.lisp`/`ratio-to-double.lisp`/`schubfach.lisp` — eisel-lemire の float リーダと Schubfach の float プリンタ。u64/u128 ビット演算が WASM の数値モデルを超えます) はロード時に rontolisp ネイティブの float 演算・プリンタによる組み込みシムに置き換えられます。そのため float のテキストは Schubfach の最短ラウンドトリップ文字列ではなく rontolisp のバックエンド間で同一な形になり、極端な指数のパースは正確な丸めから数 ulp ずれることがあります (よく使う範囲である絶対値 22 以下の 10 進指数はちょうど 1 回の丸めです)。WASM バックエンドでは通常の WASM の注意点 (巨大 float の印字形、ハッシュテーブルの巡回順、非 ASCII `\u` エスケープ — `code-char` がバイト単位) が適用されます |
 | [ironclad](https://github.com/sharplispers/ironclad) v0.61 (SHA-256 / HMAC / PBKDF2 / HKDF / SCRAM のスライス) | 4 つ全て | Nathan Froyd と Guillaume LE VAILLANT による暗号ツールキットを、実物の未改変ソースからロードします。`:sha256`/`:sha224` への `digest-sequence`、インクリメンタルな `make-digest`/`update-digest`/`produce-digest` API、`make-mac`/`update-mac`/`produce-mac` と旧 API の `make-hmac` 三点セットの双方による HMAC、`:pbkdf2` または `:hmac-kdf` (HKDF) を指定した `make-kdf` + `derive-key`、`pbkdf2-hash-password`、`octets-to-integer`/`integer-to-octets` の変換関数、`byte-array-to-hex-string`/`hex-string-to-byte-array`/`ascii-string-to-byte-array` の各ヘルパが、公開されている FIPS 180-2・RFC 4231・RFC 5869・RFC 7677 のテストベクタを再現します — PostgreSQL クライアントが認証に使う一連の流れ、RFC 7677 の SCRAM-SHA-256 クライアントプルーフを端から端まで含みます | ironclad 自身の `.asd` は実行可能なプログラム (コンポーネントクラス、defsystem を生成するマクロ) のため、rontolisp はロード可能なスライスを宣言した同梱の代替 `.asd` に差し替えます — ロードされるソースはライブラリ本物のものですが、そのスライスのみです: **暗号方式 (cipher)、公開鍵演算、AEAD モード、その他のダイジェストは利用できません**。存在しないアルゴリズムを要求すると呼び出し時に通知されます。2 つのファイルは限定的な差し替えとしてのみ存在します: `public-key.lisp` は `octets-to-integer`/`integer-to-octets` だけを (原文のまま) 提供し、`prng.lisp` は OS エントロピーの表面 (`*prng*`、`make-prng`、`random-data`、`random-bits`、`strong-random`) を `rontolisp:random-bytes` の上に提供します。そのためクライアントノンスや既定のソルトはどのバックエンドでも暗号論的に強くなりますが、`:fortuna` とシードファイル操作はありません |
 | [uax-15](https://github.com/sabracrolleton/uax-15) v0.1.3 | 4 つ全て | Chris Bagley と Sabra Crolleton による Unicode 正規化 (UAX #15) を、実物の未改変ソースからロードします。4 つの形式すべて (`:nfc`/`:nfd`/`:nfkc`/`:nfkd`) の `normalize` — 正準・互換分解、結合クラスの並べ替え、ハングル字母の合成 — に加えて `get-canonical-combining-class-map`、`get-illegal-char-list`、`unicode-letter-p` が動作します。この表で唯一自身の依存を持つため、**`--system-path` には 3 ディレクトリが必要です** (uax-15、split-sequence、cl-ppcre を `:` で連結) | このライブラリはロード時に同梱の 2.7 MB の Unicode テキストを cl-ppcre で解析してテーブルを構築するため、インタプリタでは数分、WASM バックエンドでは実行あたり約 30 秒かかっていました。rontolisp はコンパイル/ロード時に**同じ同梱ファイルから同じテーブルを導出**してデータとして出力し、さらに**各テーブルを最初に読まれた時点で初めて構築**します。正規化を計算する関数はすべて上流のまま残ります。したがってシステムのロード自体はほぼ無償で、正規化を一度も行わないプログラムはテーブルの代金を一切払いません。行うプログラムは、その形式が必要とするテーブルの分だけを最初の呼び出し時に一度払います。テーブルの内容は同一ですが、1 点だけ意図的な差があり、それは修正です: `(uax-15:unicode-letter-p #\A)` は `T` を返しますが、実際のロードでは 9 つのハードコードされた CJK/ハングル/西夏文字範囲の外のすべての文字に `NIL` を返します (上流の letter ループは `#+utf-32` を読みますが、ファイル自身の `*features*` への `pushnew` はリーダに届かないため、キー計算が `nil` に潰れます)。別件として `uax-15:get-mapping` は全バックエンドで通知します — 分解マップの整数キーを `string` で変換しており、これは Common Lisp でも型エラーです。つまり上流の時点で壊れており、呼び出し元はどこにもありません |
+| [s-sql](https://github.com/marijnh/Postmodern) (postmodern 20260101-git) | 4 つ全て | Marijn Haverbeke と Sabra Crolleton による Lisp 風 SQL DSL — Postmodern スタックの第 1 層で、`(ql:quickload "s-sql")` で無改変の上流ソースからロードされます（`:depends-on ("cl-postgres" "alexandria")` も同じ quickload 経路で解決されます）。`(sql (:select ...))` マクロは展開時にクエリを生成し、`sql-escape`/`sql-escape-string`（`*standard-output*` を束縛する `with-output-to-string` に基づく）、`to-sql-name`/`from-sql-name`（`readtable-case` と、見つけた keyword パッケージへの `intern` を経由）、そして約 230 個の `(eql :keyword)` 特化 `expand-sql-op` メソッド — 中置演算子、`:insert-into`、`~^` format エスケープによる `ARRAY[...]` 描画 — がすべてのバックエンドで同一の文字列を生成します | s-sql 自体はソケットを開かないため 4 つ全てのバックエンドで動作しますが、実際に PostgreSQL へ**接続**するには cl-postgres のソケット層が必要で、Preview 1 WASM にはありません（そこではソケット呼び出しはコール時エラーにコンパイルされます）。`enable-s-sql-syntax`（`#Q` リーダーマクロ）は no-op の登録のままです |
 
 cl-ppcre のロードはこれまでで最大の機能バッチ — ローカル
 `(declare (special ...))`、ジェネリック化された CLOS スロットアクセサ、
@@ -179,7 +180,7 @@ uax-15 のロードは 2 番目に大きなバッチ — ASDF/UIOP のパス名�
 インライン化、`LOOP` マクロの節単位への書き換え、WASM GC 文字列の背後にある
 UTF-8 バイトモデル — を牽引しました。
 
-11 ライブラリ全ての実行可能なデモ — バックエンド別の実行コマンドと期待
+そのうち 11 ライブラリの実行可能なデモ（s-sql のデモは postmodern ツリーの同梱が必要なため保留中） — バックエンド別の実行コマンドと期待
 出力付き — は
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf)
 にあります。

@@ -1036,6 +1036,17 @@ public final class LispMacroExpander {
 		// form once xs runs out).
 		private final List<LispVal> driverEndTests = new java.util.ArrayList<>();
 
+		// Per for-group (source order): the group's user-visible DRIVER variables
+		// (in/on/across/numeric vars; `=` records excluded). Consulted by
+		// retargetSequentialEqualsSteps to detect an `=` form referencing a LATER
+		// clause's driver variable.
+		private final List<java.util.Set<String>> groupDriverVars = new java.util.ArrayList<>();
+
+		// The sequential `=`-only groups, with everything needed to re-time their
+		// step evaluation after the whole clause list is parsed; see
+		// retargetSequentialEqualsSteps.
+		private final List<SeqEqualsGroup> seqEqualsGroups = new java.util.ArrayList<>();
+
 		private final List<LispVal> finallyForms = new java.util.ArrayList<>();
 
 		private final List<LispVal> postLoop = new java.util.ArrayList<>();
@@ -1083,6 +1094,7 @@ public final class LispMacroExpander {
 
 		LispVal build() {
 			parse();
+			retargetSequentialEqualsSteps();
 			LispVal epilogue = epilogueExit();
 			substituteEpilogueExits(initially, epilogue);
 			substituteEpilogueExits(iterationHeads, epilogue);
@@ -1203,6 +1215,17 @@ public final class LispMacroExpander {
 		 * re-evaluated on every iteration).
 		 */
 		private record ForEqualsRecord(LispSymbol var, LispVal init, @Nullable LispVal then) {
+		}
+
+		/**
+		 * A sequential {@code for X = init [then step]} group's retarget data:
+		 * {@code headIndex}/{@code stepInsertPos} locate its iteration head and its
+		 * position in the end-of-body step order, {@code earlierDriverEndTests} are the
+		 * termination tests of the groups BEFORE it, and {@code groupIndex} its index in
+		 * {@link #groupDriverVars}. See {@link #retargetSequentialEqualsSteps}.
+		 */
+		private record SeqEqualsGroup(int headIndex, int stepInsertPos, List<ForEqualsRecord> records,
+				List<LispVal> earlierDriverEndTests, int groupIndex) {
 		}
 
 		/**
@@ -1348,6 +1371,25 @@ public final class LispMacroExpander {
 				}
 				groupBodyPrefix.clear();
 				groupSteps.addAll(stripped);
+			}
+			// Track this group's user-visible driver variables (in/on/across/numeric
+			// vars; `=` records excluded) and, for a sequential `=`-only group, the
+			// data retargetSequentialEqualsSteps needs to re-time its step forms once
+			// the WHOLE clause list is known (see that method).
+			java.util.LinkedHashSet<String> userDriverVars = new java.util.LinkedHashSet<>();
+			for (ForPiece piece : group) {
+				if (piece.bodyPrefix.isEmpty()) {
+					for (ForBinding b : piece.binds) {
+						if (b.user()) {
+							userDriverVars.add(b.var().name());
+						}
+					}
+				}
+			}
+			groupDriverVars.add(userDriverVars);
+			if (!parallel && !groupBodyPrefix.isEmpty() && groupDriverEndTests.isEmpty()) {
+				seqEqualsGroups.add(new SeqEqualsGroup(iterationHeads.size(), steps.size(),
+						List.copyOf(groupBodyPrefix), List.copyOf(driverEndTests), groupDriverVars.size() - 1));
 			}
 			// Emit one iterationHead for this group: check its drivers, then run
 			// its (sequential) bodyPrefix. A later group's iterationHead runs
@@ -2176,6 +2218,97 @@ public final class LispMacroExpander {
 		// Sequential body-prefix: emit `(setq X init)` (or `(setq X (if __first
 		// init then))` when a `then` is present) in source order, so a later
 		// clause's init sees the earlier clause's just-assigned value.
+		/**
+		 * Re-times sequential {@code for X = init [then step]} groups whose form
+		 * references a driver variable of a LATER clause. CL steps clauses in source
+		 * order at the top of each iteration, so such a form must see the PREVIOUS
+		 * element of the later driver (s-sql's strcat:
+		 * {@code for pos = 0 then (+ pos (length arg)) for arg in args}); the default
+		 * head-time evaluation runs after every end-of-body cursor advance and would see
+		 * the new one. The fix computes the form into a temp at the group's own position
+		 * in the end-of-body step order -- earlier groups' cursors advanced, later ones
+		 * not, exactly CL's clause order -- and re-assigns the variable from the temp in
+		 * the iteration head (so a driver terminating in an earlier clause still skips
+		 * the assignment). The computation is guarded by the earlier groups' termination
+		 * tests, which at that point already reflect the next iteration, so a step after
+		 * an exhausted driver never runs. Within a group, later records' forms read
+		 * earlier records' temps (a destructured {@code (a b) = ... then ...} chain).
+		 * Groups whose forms only reference other {@code =} variables (or nothing later)
+		 * keep the head-time evaluation, which is already CL's order for them.
+		 */
+		private void retargetSequentialEqualsSteps() {
+			for (int i = this.seqEqualsGroups.size() - 1; i >= 0; i--) {
+				SeqEqualsGroup g = this.seqEqualsGroups.get(i);
+				java.util.Set<String> laterDrivers = new java.util.HashSet<>();
+				for (int j = g.groupIndex() + 1; j < this.groupDriverVars.size(); j++) {
+					laterDrivers.addAll(this.groupDriverVars.get(j));
+				}
+				if (laterDrivers.isEmpty()) {
+					continue;
+				}
+				boolean references = false;
+				for (ForEqualsRecord rec : g.records()) {
+					if (formReferences(rec.then() != null ? rec.then() : rec.init(), laterDrivers)) {
+						references = true;
+						break;
+					}
+				}
+				if (!references) {
+					continue;
+				}
+				List<ForEqualsRecord> viaTemps = new java.util.ArrayList<>(g.records().size());
+				List<LispVal> tempSetqs = new java.util.ArrayList<>(g.records().size());
+				java.util.Map<String, LispSymbol> ownTemps = new java.util.HashMap<>();
+				for (ForEqualsRecord rec : g.records()) {
+					LispSymbol temp = gensym("then");
+					bindings.add(pair(temp, LispNil.INSTANCE));
+					LispVal form = rec.then() != null ? rec.then() : rec.init();
+					tempSetqs.add(setq(temp, substituteSymbols(form, ownTemps)));
+					viaTemps.add(new ForEqualsRecord(rec.var(), rec.init(), temp));
+					ownTemps.put(rec.var().name(), temp);
+				}
+				LispVal stepForm = tempSetqs.size() == 1 ? tempSetqs.get(0) : makeProgn(tempSetqs);
+				if (!g.earlierDriverEndTests().isEmpty()) {
+					stepForm = makeIf(makeNot(orOf(g.earlierDriverEndTests())), stepForm, LispNil.INSTANCE);
+				}
+				steps.add(g.stepInsertPos(), stepForm);
+				iterationHeads.set(g.headIndex(), prognT(sequentialBodyPrefix(viaTemps)));
+			}
+		}
+
+		/** Whether the form references (outside quote) any symbol in the name set. */
+		private static boolean formReferences(LispVal form, java.util.Set<String> names) {
+			if (form instanceof LispSymbol sym) {
+				return names.contains(sym.name());
+			}
+			if (form instanceof LispCons cons) {
+				if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+					return false;
+				}
+				return formReferences(cons.car(), names) || formReferences(cons.cdr(), names);
+			}
+			return false;
+		}
+
+		/** Replaces bare symbol references (outside quote) per the given map. */
+		private static LispVal substituteSymbols(LispVal form, java.util.Map<String, LispSymbol> replacements) {
+			if (replacements.isEmpty()) {
+				return form;
+			}
+			if (form instanceof LispSymbol sym) {
+				LispSymbol replacement = replacements.get(sym.name());
+				return replacement != null ? replacement : form;
+			}
+			if (form instanceof LispCons cons) {
+				if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+					return form;
+				}
+				return new LispCons(substituteSymbols(cons.car(), replacements),
+						substituteSymbols(cons.cdr(), replacements));
+			}
+			return form;
+		}
+
 		private List<LispVal> sequentialBodyPrefix(List<ForEqualsRecord> records) {
 			List<LispVal> forms = new java.util.ArrayList<>(records.size());
 			for (ForEqualsRecord rec : records) {
@@ -3821,6 +3954,27 @@ public final class LispMacroExpander {
 	public static LispVal expandSetDispatchMacroCharacter(LispCons cons) {
 		List<LispVal> forms = new java.util.ArrayList<>(cons.toList().subList(1, cons.toList().size()));
 		forms.add(LispTrue.INSTANCE);
+		return makeProgn(forms);
+	}
+
+	/**
+	 * Expands {@code (readtable-case readtable)} into a constant {@code :upcase} progn
+	 * over its argument: the reader always upcases unescaped symbol names -- the standard
+	 * readtable's {@code :upcase} mode -- and there is no readtable object to consult
+	 * (see {@link #expandCopyReadtable}).
+	 * @param cons the readtable-case expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandReadtableCase(LispCons cons) {
+		List<LispVal> forms = new java.util.ArrayList<>();
+		for (LispVal arg : cons.toList().subList(1, cons.toList().size())) {
+			// Only a call can have an effect worth keeping; an atom argument -- usually
+			// the bare *readtable*, which has no compiled global cell -- is dropped.
+			if (arg instanceof LispCons) {
+				forms.add(arg);
+			}
+		}
+		forms.add(new LispSymbol(":UPCASE"));
 		return makeProgn(forms);
 	}
 
@@ -9139,7 +9293,7 @@ public final class LispMacroExpander {
 		}
 		List<FmtOp> parsed;
 		try {
-			parsed = new FmtParser(control.value()).parseTop(FmtArgs.forTemps(argSyms));
+			parsed = truncateAtCut(new FmtParser(control.value()).parseTop(FmtArgs.forTemps(argSyms)));
 		}
 		catch (UnsupportedOperationException unsupportedDirective) {
 			// A directive shape the static expansion cannot lower (an uneven ~[
@@ -9312,7 +9466,7 @@ public final class LispMacroExpander {
 	 * A parsed unit of a format control string: either a literal text run, a
 	 * string-valued expression to emit, a run of newlines, or a fresh-line.
 	 */
-	private sealed interface FmtOp permits FmtLiteral, FmtString, FmtNewline, FmtFreshLine {
+	private sealed interface FmtOp permits FmtLiteral, FmtString, FmtNewline, FmtFreshLine, FmtCut {
 
 	}
 
@@ -9326,6 +9480,18 @@ public final class LispMacroExpander {
 	}
 
 	private record FmtFreshLine(int count) implements FmtOp {
+	}
+
+	/**
+	 * A {@code ~^} escape point. Inside a {@code ~{ ... ~}} body (a runtime item source)
+	 * {@code consumed} is the number of items the body has consumed so far: at run time
+	 * the escape fires when the list holds no element beyond them, skipping the rest of
+	 * the body and (for a flat iteration) ending the loop. Against a static source the
+	 * argument count is known at expansion time, so a {@code ~^} with arguments left is
+	 * dropped where it is parsed and only the firing case is recorded (as a terminating
+	 * cut that truncates the remaining ops).
+	 */
+	private record FmtCut(int consumed) implements FmtOp {
 	}
 
 	/**
@@ -9343,6 +9509,13 @@ public final class LispMacroExpander {
 		@Nullable private final String runtimePrefix;
 
 		private int index;
+
+		/**
+		 * Set when a {@code ~^} fired against this (static) source: the remaining
+		 * directives are parsed for syntax but their ops are truncated, so an exhausted
+		 * cursor hands out throwaway temporaries instead of failing the parse.
+		 */
+		private boolean cutTerminated;
 
 		private FmtArgs(List<LispSymbol> syms, @Nullable String runtimePrefix, int index) {
 			this.syms = syms;
@@ -9364,6 +9537,11 @@ public final class LispMacroExpander {
 
 		LispSymbol next(char directive) {
 			if (this.runtimePrefix == null && this.index >= this.syms.size()) {
+				if (this.cutTerminated) {
+					// Everything after the fired ~^ is truncated; this temp is never
+					// emitted, it only keeps the syntax-parse of the remainder alive.
+					return new LispSymbol("__fmtcut_dropped");
+				}
 				throw new IllegalArgumentException("format: not enough arguments for directive ~" + directive);
 			}
 			while (this.syms.size() <= this.index) {
@@ -9393,11 +9571,15 @@ public final class LispMacroExpander {
 		}
 
 		FmtArgs branch() {
-			return new FmtArgs(this.syms, this.runtimePrefix, this.index);
+			FmtArgs branched = new FmtArgs(this.syms, this.runtimePrefix, this.index);
+			branched.cutTerminated = this.cutTerminated;
+			return branched;
 		}
 
 		FmtArgs branchAt(int index) {
-			return new FmtArgs(this.syms, this.runtimePrefix, index);
+			FmtArgs branched = new FmtArgs(this.syms, this.runtimePrefix, index);
+			branched.cutTerminated = this.cutTerminated;
+			return branched;
 		}
 
 		void adoptIndex(int index) {
@@ -9754,6 +9936,30 @@ public final class LispMacroExpander {
 					ops.add(new FmtString(listToCons(
 							List.of(new LispSymbol(LispNames.FUNCALL), formatRuntimeLambda(), innerCtrl, innerArgs))));
 				}
+				case '^' -> {
+					if (colon || at) {
+						throw new UnsupportedOperationException("format: ~:^ and ~@^ are not supported");
+					}
+					for (LispVal p : params) {
+						if (!(p instanceof LispNil)) {
+							throw new UnsupportedOperationException("format: ~^ prefix parameters are not supported");
+						}
+					}
+					flushFmtLiteral(lit, ops);
+					if (args.isStatic()) {
+						// The argument count is known at expansion time: with arguments
+						// left the escape can never fire and is dropped; with none left
+						// it fires here, truncating everything after it (the cursor
+						// keeps handing out throwaway temps so the rest still parses).
+						if (args.remaining('^') == 0) {
+							args.cutTerminated = true;
+							ops.add(new FmtCut(0));
+						}
+					}
+					else {
+						ops.add(new FmtCut(args.position()));
+					}
+				}
 				case ';', ']', '}', ')' -> throw new IllegalArgumentException("format: misplaced ~" + directive);
 				default -> throw new UnsupportedOperationException("format: unsupported directive ~" + directive);
 			}
@@ -9894,13 +10100,15 @@ public final class LispMacroExpander {
 						this.pos = bodyStart;
 						List<FmtOp> body = parseOps(items, "}");
 						bodyEnd = this.pos;
-						ops.add(new FmtString(letItems(items.items(), sub, opsToExpr(body))));
+						ops.add(new FmtString(letItems(items.items(), sub, cutBodyExpr(body, sub, null))));
 						passes++;
 					}
 					else {
 						int before = args.position();
 						this.pos = bodyStart;
-						ops.addAll(parseOps(args, "}"));
+						// A ~^ in the pass fires only when it exhausted the arguments,
+						// so truncating the pass also ends the unroll (remaining is 0).
+						ops.addAll(truncateAtCut(parseOps(args, "}")));
 						bodyEnd = this.pos;
 						passes++;
 						if (args.position() == before) {
@@ -9925,8 +10133,8 @@ public final class LispMacroExpander {
 			if (!colon && items.position() == 0) {
 				throw new UnsupportedOperationException("format: the ~{ body must consume at least one argument");
 			}
-			LispVal loop = colon ? sublistLoopExpr(listSym, items, opsToExpr(body), maxExpr, id)
-					: flatLoopExpr(listSym, items, opsToExpr(body), maxExpr, id);
+			LispVal loop = colon ? sublistLoopExpr(listSym, items, body, maxExpr, id)
+					: flatLoopExpr(listSym, items, body, maxExpr, id);
 			ops.add(new FmtString(loop));
 		}
 
@@ -10258,6 +10466,20 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Truncates a statically-parsed op run at its first {@code ~^} cut (a cut recorded
+	 * against a static source only exists when it fires -- see the {@code ^} dispatch
+	 * case). Used for the top-level control and for each unrolled {@code ~@&#123;} pass.
+	 */
+	private static List<FmtOp> truncateAtCut(List<FmtOp> ops) {
+		for (int i = 0; i < ops.size(); i++) {
+			if (ops.get(i) instanceof FmtCut) {
+				return ops.subList(0, i);
+			}
+		}
+		return ops;
+	}
+
+	/**
 	 * Renders the parsed ops into output forms for the {@code t} destination: literals
 	 * and string-valued directives become {@code (princ ...)}, {@code ~%} becomes
 	 * {@code (terpri)}, and {@code ~&} becomes {@code (fresh-line)}.
@@ -10279,6 +10501,10 @@ public final class LispMacroExpander {
 						forms.add(listToCons(List.of(new LispSymbol(LispNames.TERPRI))));
 					}
 				}
+				// ~{ bodies and ~@{ passes handle their cuts before rendering; a cut
+				// leaking into any other composite body cannot be lowered statically.
+				case FmtCut ignored -> throw new UnsupportedOperationException(
+						"format: ~^ is only supported at the top level and inside ~{ ... ~}");
 			}
 		}
 		return forms;
@@ -10316,9 +10542,48 @@ public final class LispMacroExpander {
 					}
 					atLineStart = true;
 				}
+				// ~{ bodies and ~@{ passes handle their cuts before rendering; a cut
+				// leaking into any other composite body cannot be lowered statically.
+				case FmtCut ignored -> throw new UnsupportedOperationException(
+						"format: ~^ is only supported at the top level and inside ~{ ... ~}");
 			}
 		}
 		return pieces;
+	}
+
+	/**
+	 * Folds a {@code ~&#123;} body that may carry {@code ~^} cuts into one string-valued
+	 * expression over {@code base} (the unconsumed tail for a flat pass, the current
+	 * sublist for a sublist pass). Each cut checks whether an element remains beyond the
+	 * items consumed before it and, when none does, skips the rest of the body; a
+	 * non-null {@code doneSym} is additionally set so the enclosing flat loop stops.
+	 */
+	private static LispVal cutBodyExpr(List<FmtOp> body, LispVal base, @Nullable LispSymbol doneSym) {
+		List<List<FmtOp>> segments = new java.util.ArrayList<>();
+		List<Integer> cuts = new java.util.ArrayList<>();
+		List<FmtOp> current = new java.util.ArrayList<>();
+		for (FmtOp op : body) {
+			if (op instanceof FmtCut cut) {
+				segments.add(current);
+				cuts.add(cut.consumed());
+				current = new java.util.ArrayList<>();
+			}
+			else {
+				current.add(op);
+			}
+		}
+		if (segments.isEmpty()) {
+			return opsToExpr(current);
+		}
+		segments.add(current);
+		LispVal expr = opsToExpr(segments.get(segments.size() - 1));
+		for (int i = segments.size() - 2; i >= 0; i--) {
+			LispVal exhausted = fmtCall(LispNames.NULL, fmtCall(LispNames.NTHCDR, new LispInteger(cuts.get(i)), base));
+			LispVal fired = (doneSym == null) ? new LispString("")
+					: makeProgn(List.of(fmtCall(LispNames.SETQ, doneSym, LispTrue.INSTANCE), new LispString("")));
+			expr = fmtCall(LispNames.STRING_CONCAT, opsToExpr(segments.get(i)), makeIf(exhausted, fired, expr));
+		}
+		return expr;
 	}
 
 	/**
@@ -10476,20 +10741,28 @@ public final class LispMacroExpander {
 	 * an accumulator, and advances the cursor by {@code m}; an optional {@code maxExpr}
 	 * caps the number of passes.
 	 */
-	private static LispVal flatLoopExpr(LispSymbol listSym, FmtArgs items, LispVal bodyExpr, @Nullable LispVal maxExpr,
+	private static LispVal flatLoopExpr(LispSymbol listSym, FmtArgs items, List<FmtOp> body, @Nullable LispVal maxExpr,
 			int id) {
 		int m = items.position();
 		LispSymbol l = new LispSymbol("__fmtl" + id);
 		LispSymbol o = new LispSymbol("__fmto" + id);
 		LispSymbol c = new LispSymbol("__fmtc" + id);
+		boolean hasCut = body.stream().anyMatch(op -> op instanceof FmtCut);
+		LispSymbol done = new LispSymbol("__fmtdone" + id);
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		bindings.add(listToCons(List.of(l, listSym)));
 		bindings.add(listToCons(List.of(o, new LispString(""))));
 		LispVal test = fmtCall(LispNames.CONSP, l);
+		if (hasCut) {
+			// A fired ~^ ends the whole flat iteration, not just the current pass.
+			bindings.add(listToCons(List.of(done, LispNil.INSTANCE)));
+			test = fmtCall(LispNames.AND, test, fmtCall(LispNames.NOT, done));
+		}
 		if (maxExpr != null) {
 			bindings.add(listToCons(List.of(c, new LispInteger(0))));
 			test = fmtCall(LispNames.AND, test, fmtCall(LispNames.LT, c, maxExpr));
 		}
+		LispVal bodyExpr = hasCut ? cutBodyExpr(body, l, done) : opsToExpr(body);
 		LispVal append = letItems(items.items(), l,
 				fmtCall(LispNames.SETQ, o, fmtCall(LispNames.STRING_CONCAT, o, bodyExpr)));
 		LispVal advance = fmtCall(LispNames.SETQ, l,
@@ -10507,7 +10780,7 @@ public final class LispMacroExpander {
 	 * the body's item temporaries to the elements of the next sublist and advances by
 	 * one.
 	 */
-	private static LispVal sublistLoopExpr(LispSymbol listSym, FmtArgs items, LispVal bodyExpr,
+	private static LispVal sublistLoopExpr(LispSymbol listSym, FmtArgs items, List<FmtOp> body,
 			@Nullable LispVal maxExpr, int id) {
 		LispSymbol l = new LispSymbol("__fmtl" + id);
 		LispSymbol o = new LispSymbol("__fmto" + id);
@@ -10527,6 +10800,8 @@ public final class LispMacroExpander {
 		for (int k = 0; k < syms.size(); k++) {
 			innerBindings.add(listToCons(List.of(syms.get(k), carChain(sub, k))));
 		}
+		// A ~^ here ends the current sublist's body only, so no loop-exit flag.
+		LispVal bodyExpr = cutBodyExpr(body, sub, null);
 		LispVal append = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(innerBindings),
 				fmtCall(LispNames.SETQ, o, fmtCall(LispNames.STRING_CONCAT, o, bodyExpr))));
 		LispVal advance = fmtCall(LispNames.SETQ, l, fmtCall(LispNames.CDR, l));
@@ -12887,18 +13162,34 @@ public final class LispMacroExpander {
 				// (simple-array ELEMENT-TYPE DIMS): the dimensions are not checked (the
 				// rank read would drag the gated array helpers in, like the atomic
 				// case). A character element type keeps strings in the test; any other
-				// declared element type excludes them (a string is not a u8 vector).
+				// declared element type names a SPECIALIZED array and matches only an
+				// array whose element type upgraded to the same one -- a packed
+				// (unsigned-byte 8|16|32) spec its packed vectors, anything else the
+				// general (element-type t) array. A general #(...) is never a
+				// (vector (unsigned-byte 8)) (s-sql's sql-escape dispatches on this).
 				boolean characterElements = true;
+				LispVal packedElement = null;
 				if (parts.size() > 1 && !(parts.get(1) instanceof LispSymbol star && "*".equals(plainTypeName(star)))) {
 					LispVal elementType = parts.get(1);
 					String elementName = elementType instanceof LispSymbol s ? canonicalElementTypeName(s) : "";
 					characterElements = "CHARACTER".equals(elementName) || "T".equals(elementName);
+					if (!characterElements && elementType instanceof LispCons ub
+							&& ub.car() instanceof LispSymbol ubHead && "UNSIGNED-BYTE".equals(plainTypeName(ubHead))
+							&& ub.cdr() instanceof LispCons widthCons && widthCons.car() instanceof LispInteger width
+							&& widthCons.cdr() instanceof LispNil
+							&& (width.value() == 8 || width.value() == 16 || width.value() == 32)) {
+						packedElement = listToCons(
+								List.of(new LispSymbol("UNSIGNED-BYTE"), new LispInteger(width.value())));
+					}
 				}
 				if (characterElements) {
 					return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, value),
 							callOf(LispNames.ARRAYP_INTERNAL, value)));
 				}
-				return callOf(LispNames.ARRAYP_INTERNAL, value);
+				LispVal expectedElementType = packedElement != null ? packedElement : LispTrue.INSTANCE;
+				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.ARRAYP_INTERNAL, value),
+						listToCons(List.of(new LispSymbol(LispNames.EQUAL), callOf(LispNames.ARRAY_ELEMENT_TYPE, value),
+								listToCons(List.of(new LispSymbol(LispNames.QUOTE), expectedElementType))))));
 			}
 			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING":
 				// (simple-string SIZE): the size is not checked.
@@ -13235,6 +13526,14 @@ public final class LispMacroExpander {
 	 * @return true if it designates the keyword package
 	 */
 	public static boolean isKeywordPackageDesignator(LispVal designator) {
+		// A literal (find-package :keyword) folds to the quoted keyword ':KEYWORD on
+		// the compile path (PackageResolver.resolveCons); unwrap the quote so the
+		// fold's result is recognized like the literal designator it stands for
+		// (s-sql's from-sql-name).
+		if (designator instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoted.cdr() instanceof LispCons rest) {
+			designator = rest.car();
+		}
 		String name;
 		if (designator instanceof LispSymbol s) {
 			name = s.name();
@@ -13384,6 +13683,17 @@ public final class LispMacroExpander {
 	public static LispVal undefinedFunctionCallStub(String name) {
 		return listToCons(
 				List.of(new LispSymbol(LispNames.ERROR), new LispString("The function " + name + " is undefined")));
+	}
+
+	/**
+	 * The call-time stub for a built-in a backend cannot provide: signals the given
+	 * message when the call EXECUTES, so a spliced library whose unsupported branch is
+	 * dead code still compiles (cl-postgres' socket layer under s-sql on Preview 1 WASM).
+	 * @param message the error message
+	 * @return the signaling expression
+	 */
+	public static LispVal callTimeUnsupportedStub(String message) {
+		return listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(message)));
 	}
 
 	/**

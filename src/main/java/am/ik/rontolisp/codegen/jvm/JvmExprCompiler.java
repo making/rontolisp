@@ -499,6 +499,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopyReadtable(cons), ctx, className);
 				case LispNames.SET_DISPATCH_MACRO_CHARACTER -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandSetDispatchMacroCharacter(cons), ctx, className);
+				case LispNames.READTABLE_CASE ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReadtableCase(cons), ctx, className);
 				case LispNames.COMPLEX ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandComplexLite(cons), ctx, className);
 				case LispNames.NE ->

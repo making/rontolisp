@@ -474,8 +474,14 @@ public final class PackageResolver {
 	}
 
 	private LispVal resolveCons(LispCons cons) {
-		if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(operatorMember(op))) {
-			LispVal datum = ((LispCons) cons.cdr()).car();
+		if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(operatorMember(op))
+				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
+			// Only the well-formed (quote DATUM) shape is the special form; a
+			// one-element (quote) or longer list is data in some other position -- a
+			// lambda list or let binding whose variable is NAMED quote (s-sql's :copy
+			// op binds a `quote` group via split-on-keywords) -- and falls through to
+			// the generic walk.
+			LispVal datum = datumCons.car();
 			// (quote DATUM): the operator is exempt and quoted LISTS are left untouched
 			// -- except inside a defmacro/macrolet definition, where quoted data comes
 			// from backquote templates (the reader expands every backquote level into
@@ -531,6 +537,40 @@ public final class PackageResolver {
 			}
 			return new LispCons(resolveForm(cons.car()), new LispCons(defs, resolveForm(defsCell.cdr())));
 		}
+		if (cons.car() instanceof LispSymbol caseOp && (LispNames.CASE.equals(operatorMember(caseOp))
+				|| LispNames.ECASE.equals(operatorMember(caseOp)) || LispNames.CCASE.equals(operatorMember(caseOp)))
+				&& cons.cdr() instanceof LispCons caseRest) {
+			// (case KEYFORM (KEYS body...)...): the KEYS are unevaluated data. A clause
+			// head spelled `quote` is a KEY like any other -- NOT the quote special form
+			// -- so the clause body must still resolve as code (s-sql's
+			// expand-table-name dispatches on `(case (car name) (quote (concatenate
+			// ...)))`; the generic walk would treat that clause as quoted data and leave
+			// its variable references unresolved). Keys resolve like quoted data: a lone
+			// symbol through resolveSymbol (so it stays eql to a data symbol), a key
+			// LIST untouched.
+			List<LispVal> resolvedParts = new ArrayList<>();
+			resolvedParts.add(resolveForm(cons.car()));
+			resolvedParts.add(resolveForm(caseRest.car()));
+			LispVal clauses = caseRest.cdr();
+			while (clauses instanceof LispCons clauseCell) {
+				if (clauseCell.car() instanceof LispCons clauseCons) {
+					List<LispVal> newClause = new ArrayList<>();
+					LispVal key = clauseCons.car();
+					newClause.add(key instanceof LispSymbol keySym ? resolveSymbol(keySym) : key);
+					LispVal body = clauseCons.cdr();
+					while (body instanceof LispCons bodyCell) {
+						newClause.add(resolveForm(bodyCell.car()));
+						body = bodyCell.cdr();
+					}
+					resolvedParts.add(properListOf(newClause));
+				}
+				else {
+					resolvedParts.add(resolveForm(clauseCell.car()));
+				}
+				clauses = clauseCell.cdr();
+			}
+			return properListOf(resolvedParts);
+		}
 		if (cons.car() instanceof LispSymbol findPkgOp && LispNames.FIND_PACKAGE.equals(operatorMember(findPkgOp))
 				&& cons.cdr() instanceof LispCons argCell && argCell.cdr() instanceof LispNil) {
 			// (find-package LITERAL) folds here, the one place with the registry: the
@@ -568,8 +608,22 @@ public final class PackageResolver {
 				}
 			}
 		}
-		LispVal cdr = resolveForm(cons.cdr());
-		return new LispCons(car, cdr);
+		// Walk the argument tail ELEMENT-WISE, never re-reading a tail as a form of its
+		// own: a variable named `quote` followed by exactly one argument -- s-sql's
+		// :copy op binds a `quote` group, so its body has (when quote (sql-expand
+		// ...)) -- would otherwise make the tail look like (quote DATUM) and leave the
+		// following argument unresolved.
+		List<LispVal> rest = new ArrayList<>();
+		LispVal tail = cons.cdr();
+		while (tail instanceof LispCons tailCons) {
+			rest.add(resolveForm(tailCons.car()));
+			tail = tailCons.cdr();
+		}
+		LispVal result = tail instanceof LispNil ? LispNil.INSTANCE : resolveForm(tail);
+		for (int i = rest.size() - 1; i >= 0; i--) {
+			result = new LispCons(rest.get(i), result);
+		}
+		return new LispCons(car, result);
 	}
 
 	/**
@@ -701,6 +755,18 @@ public final class PackageResolver {
 		String importSource = this.registry.get(pkg).imports().get(member);
 		if (importSource != null) {
 			pkg = importSource;
+		}
+		// In CL, pkg::name reaches any symbol ACCESSIBLE in pkg -- including one
+		// inherited from cl -- so `cl-postgres::write-string` IS `cl:write-string`
+		// (s-sql's to-s-sql-string spells it that way). A member the package neither
+		// owns, exports, shadows, nor imports, but inherits from a used cl, resolves
+		// to the bare canonical CL name instead of minting a distinct internal symbol.
+		if (!LispNames.CL_PKG.equals(pkg) && !LispNames.CL_USER_PKG.equals(pkg)) {
+			LispPackage p = this.registry.get(pkg);
+			if (p.uses(LispNames.CL_PKG) && !p.owns(member) && !p.exports(member) && !p.shadows(member)
+					&& PackageRegistry.isClSymbol(member)) {
+				return new LispSymbol(member);
+			}
 		}
 		// cl and cl-user are normalized to bare names; other packages keep the qualified
 		// canonical name.
@@ -981,6 +1047,15 @@ public final class PackageResolver {
 	private static String operatorMember(LispSymbol op) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 		return qn == null ? op.name() : qn.member();
+	}
+
+	/** Builds a proper list from the given elements. */
+	private static LispVal properListOf(List<LispVal> elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return result;
 	}
 
 	private static LispVal quotedSymbol(String name) {

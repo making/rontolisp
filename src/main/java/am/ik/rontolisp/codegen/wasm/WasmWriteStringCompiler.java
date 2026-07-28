@@ -27,8 +27,11 @@ final class WasmWriteStringCompiler {
 		// A mutable character vector normalizes to a string first.
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		WasmEmitHelper.emitCharvecToStrCall(ctx);
-		if (parts.size() == 3) {
-			WasmExprCompiler.compileExpr(parts.get(2), ctx);
+		// An explicit stream argument, or the current *standard-output* value when the
+		// program redirects it (WasmEmitHelper.defaultStreamArg).
+		LispVal stream = parts.size() == 3 ? parts.get(2) : WasmEmitHelper.defaultStreamArg(ctx);
+		if (stream != null) {
+			WasmExprCompiler.compileExpr(stream, ctx);
 		}
 		else {
 			ctx.writer.write(Instruction.REF_NULL);

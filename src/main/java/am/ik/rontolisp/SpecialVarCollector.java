@@ -58,6 +58,13 @@ public final class SpecialVarCollector {
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
 			return;
 		}
+		// The seeded stream special: `*standard-output*` is special by contract (the
+		// stream-argument-less print family reads it at call time), but registering it
+		// unconditionally would force the dynamic-binding machinery onto every program.
+		// So it becomes special exactly when the program binds it somewhere -- directly
+		// or via `(with-output-to-string (*standard-output*) ...)` -- which is also the
+		// only case whose behavior differs from the plain-stdout default.
+		out.addAll(collectDynamicallyBound(List.of(form), Set.of(LispNames.STANDARD_OUTPUT_VAR)));
 		List<LispVal> parts = cons.toList();
 		switch (head.name()) {
 			case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> {

@@ -394,11 +394,16 @@ final class WasmExprCompiler {
 					// defuns (over the wit-imported wasi:sockets@0.3.0) -- the symbol
 					// falls
 					// through to the ordinary call path, which resolves the defun (the
-					// wait-for pattern). Preview 1 keeps the compile error (no host
-					// sockets).
-					throw new UnsupportedOperationException(
+					// wait-for pattern). Preview 1 has no host sockets; the call site
+					// compiles to a call-time error (not a compile error) so a spliced
+					// library whose socket layer is dead code still compiles -- s-sql
+					// depends on cl-postgres but never opens a connection, and the
+					// pruner cannot drop cl-postgres' defmethod-anchored socket chain.
+					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(
 							"rontolisp:" + qn.member() + " requires the interpreter, the JVM backend or --component"
-									+ " (no host socket API is wired on Preview 1 WASM)");
+									+ " (no host socket API is wired on Preview 1 WASM)"),
+							ctx);
+					return;
 				}
 				if (LispNames.WITH_ARENA.equals(qn.member())) {
 					// A reclamation boundary for --no-gc; the wasm-GC heap is
@@ -691,6 +696,8 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandCopyReadtable(cons), ctx);
 				case LispNames.SET_DISPATCH_MACRO_CHARACTER ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSetDispatchMacroCharacter(cons), ctx);
+				case LispNames.READTABLE_CASE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandReadtableCase(cons), ctx);
 				case LispNames.COMPLEX -> WasmExprCompiler.compileExpr(LispMacroExpander.expandComplexLite(cons), ctx);
 				case LispNames.NE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNumericNotEqual(cons), ctx);
 				case LispNames.READ_FROM_STRING -> WasmReadFromStringCompiler.compile(cons, ctx);

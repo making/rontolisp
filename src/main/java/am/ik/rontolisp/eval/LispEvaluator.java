@@ -431,6 +431,18 @@ public final class LispEvaluator {
 	}
 
 	private void registerEval() {
+		// The stream-argument-less print family resolves its destination through the
+		// current -- dynamic-first -- value of *standard-output*, so a
+		// (let ((*standard-output* stream)) ...) redirects it (the t default keeps the
+		// process standard output). Environment holds no dynamic store, so the read is
+		// layered on here.
+		this.globalEnv.setDefaultOutput(() -> {
+			if ((!this.specialVars.isEmpty() || this.progvUsed)
+					&& this.dynamicBindings.isBound(LispNames.STANDARD_OUTPUT_VAR)) {
+				return this.dynamicBindings.get(LispNames.STANDARD_OUTPUT_VAR);
+			}
+			return this.globalEnv.lookupOrNull(LispNames.STANDARD_OUTPUT_VAR);
+		});
 		// The runtime readers return DATA, and a #S(...) datum must be the instance it
 		// denotes exactly as a source literal is. Environment holds no registry, so the
 		// fold is layered on here, where this evaluator's registry is in scope; wrapping
@@ -2330,6 +2342,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandCopyReadtable(cons), env);
 				case LispNames.SET_DISPATCH_MACRO_CHARACTER:
 					return eval(LispMacroExpander.expandSetDispatchMacroCharacter(cons), env);
+				case LispNames.READTABLE_CASE:
+					return eval(LispMacroExpander.expandReadtableCase(cons), env);
 			}
 			// The operator table is split so that neither half crosses HotSpot's
 			// 8000-bytecode HugeMethodLimit; see evalConsRareOperator.

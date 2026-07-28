@@ -71,6 +71,7 @@ page.
 | `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | Parse an integer from a string. Supports `:start`/`:end`/`:radix`/`:junk-allowed` on all backends; the stop position is the second value, observable through `multiple-value-bind`. Without `:junk-allowed`, trailing non-whitespace is an error |
 | `copy-readtable` | `(copy-readtable nil)` | Lite stub: always `nil` -- the reader is not readtable-driven, so there is no readtable object (`*readtable*` exists but is seeded to `nil`) |
 | `set-dispatch-macro-character` | `(set-dispatch-macro-character #\# #\7 fn)` | Lite stub: accepted and ignored, returns `t` (user dispatch macros cannot extend the reader) |
+| `readtable-case` | `(readtable-case *readtable*)` | Lite stub: always `:upcase` -- the reader always upcases unescaped symbol names, the standard readtable's mode |
 | `char` `schar` | `(char "hello" 1)` | `#\e` -- the character at a 0-based string index |
 | `char-code` | `(char-code #\A)` | `65` -- the code point of a character |
 | `code-char` | `(code-char 66)` | `#\B` -- the character with a given code point |

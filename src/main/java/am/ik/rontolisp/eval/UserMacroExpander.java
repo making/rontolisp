@@ -234,9 +234,29 @@ public final class UserMacroExpander {
 			}
 			return;
 		}
-		if (isOperator(form, LispNames.DEFUN) || isOperator(form, LispNames.DEFCLASS)
-				|| isOperator(form, LispNames.DEFGENERIC) || isOperator(form, LispNames.DEFMETHOD)
-				|| isOperator(form, LispNames.DEFINE_CONDITION) || isOperator(form, LispNames.DEFSTRUCT)) {
+		// A top-level (let/let* (...) definition...) wraps definitions in a shared
+		// lexical environment (s-sql's register-sql-operators closes each
+		// expand-sql-op method over its make-expander expander). Replaying the WHOLE
+		// let gives the macro-time definitions the same closure. Gated on every body
+		// form being a definition, so an unrelated top-level side effect is never
+		// double-run; the binding inits do run here as well as at run time, the same
+		// scaffolding-only assumption the definition replay itself makes.
+		if ((isOperator(form, LispNames.LET) || isOperator(form, LispNames.LET_STAR)) && form instanceof LispCons let
+				&& let.isProperList()) {
+			List<LispVal> parts = let.toList();
+			boolean allDefinitions = parts.size() >= 3;
+			for (int i = 2; i < parts.size(); i++) {
+				if (!isDefinitionForm(parts.get(i))) {
+					allDefinitions = false;
+					break;
+				}
+			}
+			if (allDefinitions) {
+				macroEval.evalResolved(form);
+			}
+			return;
+		}
+		if (isDefinitionForm(form)) {
 			macroEval.evalResolved(form);
 			return;
 		}
@@ -244,6 +264,13 @@ public final class UserMacroExpander {
 				|| isOperator(form, LispNames.DEFCONSTANT)) {
 			macroEval.registerLazyGlobal(form);
 		}
+	}
+
+	/** A definition form the macro-time evaluator replays; see the caller above. */
+	private static boolean isDefinitionForm(LispVal form) {
+		return isOperator(form, LispNames.DEFUN) || isOperator(form, LispNames.DEFCLASS)
+				|| isOperator(form, LispNames.DEFGENERIC) || isOperator(form, LispNames.DEFMETHOD)
+				|| isOperator(form, LispNames.DEFINE_CONDITION) || isOperator(form, LispNames.DEFSTRUCT);
 	}
 
 	/** Whether the form contains a {@code %read-eval} marker symbol anywhere. */
@@ -755,6 +782,21 @@ public final class UserMacroExpander {
 						return form; // malformed; the expansion reports it
 					}
 					return rebuild(parts, 2, macroEval, parts.get(1));
+				}
+				case LispNames.LOOP: {
+					// (loop clause...): clause keywords and expressions are walked, but a
+					// destructuring pattern is data -- an improper or cons-headed element
+					// (`for ((x . y) . rest) on args`) must survive verbatim, where the
+					// generic walk would reject it as a call form.
+					List<LispVal> newParts = new ArrayList<>();
+					newParts.add(parts.get(0));
+					for (int i = 1; i < parts.size(); i++) {
+						LispVal part = parts.get(i);
+						boolean pattern = part instanceof LispCons pc
+								&& (!pc.isProperList() || !(pc.car() instanceof LispSymbol));
+						newParts.add(pattern ? part : expandAll(part, macroEval));
+					}
+					return properList(newParts);
 				}
 				case LispNames.DOLIST, LispNames.DOTIMES: {
 					// (dolist (var listform result) body...): var stays.

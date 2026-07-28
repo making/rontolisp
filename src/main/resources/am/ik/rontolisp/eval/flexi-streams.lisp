@@ -11,26 +11,37 @@
 ;; UTF-8 is the only external format the shim implements: callers reaching it
 ;; pass :utf-8 or :default (md5's md5sum-string does), and rontolisp strings
 ;; hold full code points, so the encoder covers the whole Unicode range.
+;; The result is a PACKED (non-adjustable) (unsigned-byte 8) array, like the
+;; real flexi-streams' simple-array: an adjustable array does not carry its
+;; declared element type here, and md5's etypecase dispatches the result on
+;; (typep x '(array (unsigned-byte 8) (*))), which tests the element type.
 (defun flexi-streams:string-to-octets (string &key (external-format :utf-8) (start 0) end)
   (declare (ignore external-format))
   (let ((limit (or end (length string)))
-        (out (make-array 0 :element-type '(unsigned-byte 8) :adjustable t :fill-pointer 0)))
+        (bytes nil))
     (do ((i start (+ i 1)))
-        ((>= i limit) out)
+        ((>= i limit))
       (let ((c (char-code (char string i))))
-        (cond ((< c #x80) (vector-push-extend c out))
+        (cond ((< c #x80) (push c bytes))
               ((< c #x800)
-               (vector-push-extend (logior #xC0 (ash c -6)) out)
-               (vector-push-extend (logior #x80 (logand c #x3F)) out))
+               (push (logior #xC0 (ash c -6)) bytes)
+               (push (logior #x80 (logand c #x3F)) bytes))
               ((< c #x10000)
-               (vector-push-extend (logior #xE0 (ash c -12)) out)
-               (vector-push-extend (logior #x80 (logand (ash c -6) #x3F)) out)
-               (vector-push-extend (logior #x80 (logand c #x3F)) out))
+               (push (logior #xE0 (ash c -12)) bytes)
+               (push (logior #x80 (logand (ash c -6) #x3F)) bytes)
+               (push (logior #x80 (logand c #x3F)) bytes))
               (t
-               (vector-push-extend (logior #xF0 (ash c -18)) out)
-               (vector-push-extend (logior #x80 (logand (ash c -12) #x3F)) out)
-               (vector-push-extend (logior #x80 (logand (ash c -6) #x3F)) out)
-               (vector-push-extend (logior #x80 (logand c #x3F)) out)))))))
+               (push (logior #xF0 (ash c -18)) bytes)
+               (push (logior #x80 (logand (ash c -12) #x3F)) bytes)
+               (push (logior #x80 (logand (ash c -6) #x3F)) bytes)
+               (push (logior #x80 (logand c #x3F)) bytes)))))
+    (setq bytes (nreverse bytes))
+    (let ((out (make-array (length bytes) :element-type '(unsigned-byte 8))))
+      (let ((i 0))
+        (dolist (b bytes)
+          (setf (aref out i) b)
+          (setq i (+ i 1))))
+      out)))
 
 (defun flexi-streams:octets-to-string (octets &key (external-format :utf-8) (start 0) end)
   (declare (ignore external-format))

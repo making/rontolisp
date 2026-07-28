@@ -15,10 +15,13 @@ final class WasmTerpriCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		java.util.List<am.ik.rontolisp.LispVal> args = cons.toList();
-		if (args.size() > 1) {
+		// An explicit stream argument, or the current *standard-output* value when the
+		// program redirects it (WasmEmitHelper.defaultStreamArg).
+		am.ik.rontolisp.LispVal stream = args.size() > 1 ? args.get(1) : WasmEmitHelper.defaultStreamArg(ctx);
+		if (stream != null) {
 			// (terpri stream): route a newline via _write_stream_str.
 			emitNewlineStringStruct(ctx);
-			WasmExprCompiler.compileExpr(args.get(1), ctx);
+			WasmExprCompiler.compileExpr(stream, ctx);
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STREAM_STR);
 			ctx.writer.write(Instruction.DROP);

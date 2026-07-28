@@ -19,7 +19,10 @@ final class WasmPrin1Compiler {
 		// prin1 returns its argument (CL semantics); stash the object in a temp so it can
 		// be returned after printing, not nil.
 		int objSlot = ctx.allocTemp();
-		if (args.size() > 2) {
+		// An explicit stream argument, or the current *standard-output* value when the
+		// program redirects it (WasmEmitHelper.defaultStreamArg).
+		LispVal stream = args.size() > 2 ? args.get(2) : WasmEmitHelper.defaultStreamArg(ctx);
+		if (stream != null) {
 			// (prin1 value stream): render to a string, then route via
 			// _write_stream_str.
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
@@ -27,7 +30,7 @@ final class WasmPrin1Compiler {
 			ctx.writer.writeSignedLeb128(objSlot);
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
-			WasmExprCompiler.compileExpr(args.get(2), ctx);
+			WasmExprCompiler.compileExpr(stream, ctx);
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STREAM_STR);
 			ctx.writer.write(Instruction.DROP);

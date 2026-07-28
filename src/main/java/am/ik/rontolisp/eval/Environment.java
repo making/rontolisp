@@ -184,6 +184,25 @@ public final class Environment implements Scope {
 	private final NameMap functions = new NameMap();
 
 	/**
+	 * Resolves the print family's default destination at call time. Set by the evaluator
+	 * (on the global environment) to read the current -- dynamic-first -- value of
+	 * {@code *standard-output*}, so a {@code (let ((*standard-output* stream)) ...)} or
+	 * {@code (with-output-to-string (*standard-output*) ...)} redirects the
+	 * stream-argument-less print family. A {@code null}/{@code t}/{@code nil} result
+	 * keeps the process standard output.
+	 */
+	@Nullable private Supplier<@Nullable LispVal> defaultOutput;
+
+	/**
+	 * Installs the default-output resolver consulted by the stream-argument-less print
+	 * family; see {@link #defaultOutput}.
+	 * @param supplier resolves the current {@code *standard-output*} value
+	 */
+	public void setDefaultOutput(Supplier<@Nullable LispVal> supplier) {
+		this.defaultOutput = supplier;
+	}
+
+	/**
 	 * Value expressions registered by {@link #defineLazy} that have not been forced yet.
 	 * Allocated on first use: only the compile path's macro-time environment ever has
 	 * one, so an ordinary (per-call) environment pays a null check and no map.
@@ -3257,10 +3276,14 @@ public final class Environment implements Scope {
 		// family so their optional stream argument can route into it.
 		Map<Long, Closeable> streams = new HashMap<>();
 		long[] nextStreamHandle = { 0 };
-		// Routes print-family output: an absent, nil, or t destination is standard
-		// output; an integer handle selects a Writer entry in the stream table (file
-		// output streams and string streams).
+		// Routes print-family output: an absent destination reads the evaluator's
+		// *standard-output* hook (dynamic-first; null when no evaluator installed it);
+		// nil or t is standard output; an integer handle selects a Writer entry in the
+		// stream table (file output streams and string streams).
 		java.util.function.BiConsumer<String, @Nullable LispVal> emitTo = (text, dest) -> {
+			if (dest == null && env.defaultOutput != null) {
+				dest = env.defaultOutput.get();
+			}
 			if (dest == null || dest == LispNil.INSTANCE || dest instanceof LispTrue) {
 				emit.accept(text);
 				return;
@@ -3423,9 +3446,27 @@ public final class Environment implements Scope {
 					return new LispString(writer.toString());
 				}));
 		env.defineFunction(LispNames.FRESH_LINE, new LispFunction(LispNames.FRESH_LINE, args -> {
-			requireArgCount(LispNames.FRESH_LINE, args, 0);
-			if (!atLineStart[0]) {
-				emit.accept("\n");
+			requireArgCountBetween(LispNames.FRESH_LINE, args, 0, 1);
+			LispVal dest = args.isEmpty() ? null : args.get(0);
+			if (dest == null && env.defaultOutput != null) {
+				dest = env.defaultOutput.get();
+			}
+			if (dest == null || dest == LispNil.INSTANCE || dest instanceof LispTrue) {
+				if (!atLineStart[0]) {
+					emit.accept("\n");
+				}
+			}
+			else if (dest instanceof LispInteger handle && streams.get(handle.value()) instanceof Writer writer) {
+				// A string stream exposes its contents, so the line start is exact; a
+				// file stream's column is unknown, so a newline is always written (the
+				// same rule on every backend).
+				if (!(writer instanceof StringWriter sw)
+						|| (!sw.getBuffer().isEmpty() && sw.getBuffer().charAt(sw.getBuffer().length() - 1) != '\n')) {
+					emitTo.accept("\n", dest);
+				}
+			}
+			else {
+				throw new LispEvalException("not an output stream: " + dest.print());
 			}
 			return LispNil.INSTANCE;
 		}));

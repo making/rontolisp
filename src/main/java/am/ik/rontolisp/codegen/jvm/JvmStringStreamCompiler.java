@@ -5,7 +5,10 @@ import java.util.List;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles the string-stream built-ins behind with-output-to-string /
@@ -22,6 +25,19 @@ final class JvmStringStreamCompiler {
 	private static MethodrefConstant methodRef(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
 		return ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
+	}
+
+	/**
+	 * The print family's default destination expression: the current value of
+	 * {@code *standard-output*} when the program gives it a global cell (it binds or
+	 * assigns it somewhere -- the redirect contract of
+	 * {@code (with-output-to-string (*standard-output*) ...)}), else {@code null} so a
+	 * redirect-free program keeps the hard-coded standard output and compiles
+	 * byte-identically to before.
+	 */
+	static @Nullable LispVal defaultStreamArg(JvmLispCompiler.Ctx ctx) {
+		return ctx.globals.contains(LispNames.STANDARD_OUTPUT_VAR) ? new LispSymbol(LispNames.STANDARD_OUTPUT_VAR)
+				: null;
 	}
 
 	/**
@@ -44,8 +60,9 @@ final class JvmStringStreamCompiler {
 		}
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		if (parts.size() == 3) {
-			JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
+		LispVal stream = parts.size() == 3 ? parts.get(2) : defaultStreamArg(ctx);
+		if (stream != null) {
+			JvmExprCompiler.compileExpr(stream, ctx, className);
 		}
 		else {
 			ctx.emit(Opcode.ACONST_NULL);

@@ -15,6 +15,17 @@ final class WasmFreshLineCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		java.util.List<am.ik.rontolisp.LispVal> args = cons.toList();
+		// An explicit stream argument, or the current *standard-output* value when the
+		// program redirects it (WasmEmitHelper.defaultStreamArg); either goes through
+		// the handle-aware _fresh_line_stream runtime helper.
+		am.ik.rontolisp.LispVal stream = args.size() > 1 ? args.get(1) : WasmEmitHelper.defaultStreamArg(ctx);
+		if (stream != null) {
+			WasmExprCompiler.compileExpr(stream, ctx);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_FRESH_LINE_STREAM);
+			return;
+		}
 		// if (memory[LINE_START_ADDR] != 0) write "\n"
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.LINE_START_ADDR);

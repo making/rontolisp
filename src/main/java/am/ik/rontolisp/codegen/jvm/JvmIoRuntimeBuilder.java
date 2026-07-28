@@ -93,6 +93,10 @@ final class JvmIoRuntimeBuilder {
 
 	static final String STRING_STREAM_CONTENTS_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String FRESH_LINE_METHOD = "_freshLine";
+
+	static final String FRESH_LINE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String FORCE_OUTPUT_METHOD = "_forceOutput";
 
 	static final String FORCE_OUTPUT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
@@ -435,12 +439,113 @@ final class JvmIoRuntimeBuilder {
 				this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_DESC), 7, 4, buildMakeStringInputStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(STRING_STREAM_CONTENTS_METHOD),
 				this.cp.addUtf8(STRING_STREAM_CONTENTS_DESC), 3, 2, buildStringStreamContents()));
+		ms.add(new IoMethod(this.cp.addUtf8(FRESH_LINE_METHOD), this.cp.addUtf8(FRESH_LINE_DESC), 4, 3,
+				buildFreshLine()));
 		ms.add(new IoMethod(this.cp.addUtf8(FORCE_OUTPUT_METHOD), this.cp.addUtf8(FORCE_OUTPUT_DESC), 4, 2,
 				buildForceOutput()));
 		ms.add(new IoMethod(this.cp.addUtf8(LISTEN_METHOD), this.cp.addUtf8(LISTEN_DESC), 4, 2, buildListen()));
 		ms.add(new IoMethod(this.cp.addUtf8(OPEN_STREAM_P_METHOD), this.cp.addUtf8(OPEN_STREAM_P_DESC), 4, 2,
 				buildOpenStreamP()));
 		return ms;
+	}
+
+	/**
+	 * {@code _freshLine(Object dest) -> null}. Emits a newline unless the destination is
+	 * already at the start of a line: a non-handle designator ({@code null}/T) is
+	 * standard output (the {@code _col} tracking); a string-stream entry exposes its
+	 * contents, so the check is exact; any other writer's column is unknown, so a newline
+	 * is always written (the same rule on every backend).
+	 */
+	private List<Integer> buildFreshLine() {
+		// Slots: 0=dest, 1=entry, 2=contents (String)
+		List<Integer> code = new ArrayList<>();
+		// if (!(dest instanceof Long)) { if (_col != 0) { print "\n"; _col = 0; } }
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
+		int ifHandlePos = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.colField.index());
+		int ifAtStartPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.systemOut.index());
+		code.add(Opcode.LDC_W);
+		emitU2(code, this.newlineStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.printStr.index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, this.colField.index());
+		patchBranch(code, ifAtStartPos, code.size());
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifHandlePos, code.size());
+		// entry = _streams[(int) ((Long) dest).longValue()];
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ASTORE_1);
+		// if (entry instanceof StringWriter) { newline only when mid-line }
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.stringWriterClass.index());
+		int ifNotStringWriterPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.stringWriterClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringWriterToString.index());
+		code.add(Opcode.ASTORE_2);
+		// if (contents.length() == 0 || contents.charAt(len - 1) == '\n') return null;
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringLength.index());
+		int ifEmptyPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringLength.index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringCharAt.index());
+		code.add(Opcode.BIPUSH);
+		code.add(10);
+		int ifNewlinePos = code.size();
+		code.add(Opcode.IF_ICMPEQ);
+		emitU2(code, 0);
+		int gotoWritePos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifEmptyPos, code.size());
+		patchBranch(code, ifNewlinePos, code.size());
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, gotoWritePos, code.size());
+		patchBranch(code, ifNotStringWriterPos, code.size());
+		// _writeStr("\n", dest); return null;
+		code.add(Opcode.LDC_W);
+		emitU2(code, this.newlineStr.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.writeStrMethod.index());
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		return code;
 	}
 
 	/**
@@ -1105,16 +1210,22 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.stringSubstring.index());
 		code.add(Opcode.ASTORE_2);
-		// if (handle == null) { System.out.println(content); return str; }
+		// if (!(handle instanceof Long)) { System.out.println(content); _col = 0;
+		// return str; } -- null and the designator t both mean standard output.
 		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
 		int ifStreamPos = code.size();
-		code.add(Opcode.IFNONNULL);
+		code.add(Opcode.IFNE);
 		emitU2(code, 0);
 		code.add(Opcode.GETSTATIC);
 		emitU2(code, this.systemOut.index());
 		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.printlnStr.index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, this.colField.index());
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.ARETURN);
 		patchBranch(code, ifStreamPos, code.size());

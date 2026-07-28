@@ -457,6 +457,140 @@ final class WasmStringStreamRuntimeBuilder {
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 	}
 
+	/**
+	 * Builds the {@code _fresh_line_stream(dest)} body: fresh-line for an explicit or
+	 * redirected destination. nil / the symbol t is standard output (the
+	 * {@code LINE_START_ADDR} tracking); a negative i31 handle (a string-stream record)
+	 * writes a newline chunk only when the last written byte is not one, walking the
+	 * chunk chain so empty writes are skipped (an empty record is at a line start); a
+	 * non-negative i31 handle (a WASI fd) always writes a newline -- its column is
+	 * unknown (the same rule on every backend). Returns nil.
+	 * @param newlineOff the linear-memory offset of the static {@code "\n"} literal
+	 * @return the function body bytes
+	 */
+	static byte[] buildFreshLineStreamBody(int newlineOff) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: DEST=0 (ref) ; i32 locals: H=1, REC=2, CUR=3, LASTB=4, CHUNK=5, TAIL=6
+		w.write(1);
+		w.write(6);
+		w.write(Type.I32);
+		final int DEST = 0, H = 1, REC = 2, CUR = 3, LASTB = 4, CHUNK = 5, TAIL = 6;
+		final int IOV = WasmLispCompiler.IOV_OFFSET;
+		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
+		// if (dest is a non-null i31)
+		getLocal(w, DEST);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, DEST);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, DEST);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, H);
+		// negative handle: the string-stream record
+		getLocal(w, H);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		getLocal(w, H);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, REC);
+		// Walk the chunk chain for the last byte of the last non-empty chunk.
+		getLocal(w, REC);
+		i32(w, 4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, CUR);
+		i32(w, -1);
+		setLocal(w, LASTB);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, CUR);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeSignedLeb128(1);
+		// len = chunk.len ; if (len != 0) LASTB = mem8[chunk.off + len - 1]
+		getLocal(w, CUR);
+		i32(w, 4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, TAIL);
+		getLocal(w, TAIL);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		getLocal(w, TAIL);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, LASTB);
+		w.write(Instruction.END);
+		// cur = chunk.next
+		getLocal(w, CUR);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, CUR);
+		w.write(Instruction.BR);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// if (LASTB >= 0 && LASTB != '\n') append a "\n" chunk
+		getLocal(w, LASTB);
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, LASTB);
+		i32(w, 10);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		emitAppendChunk(w, REC, CHUNK, TAIL, () -> i32(w, newlineOff), () -> i32(w, 1));
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// non-negative handle: a real WASI fd -- its column is unknown, always newline
+		i32(w, IOV);
+		i32(w, newlineOff);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, IOV + 4);
+		i32(w, 1);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, H);
+		i32(w, IOV);
+		i32(w, 1);
+		i32(w, NWRITTEN);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
+		w.write(Instruction.DROP);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// nil or the symbol t: standard output via the LINE_START tracking
+		i32(w, WasmLispCompiler.LINE_START_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.IF, 0x40);
+		i32(w, newlineOff);
+		i32(w, 1);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.END);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
 	// === low-level emit helpers ===
 
 	private static void getLocal(WasmWriter w, int slot) {

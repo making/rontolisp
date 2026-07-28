@@ -68,6 +68,7 @@
 | `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | 文字列から整数をパースします。すべてのバックエンドで `:start`/`:end`/`:radix`/`:junk-allowed` をサポートします。パース停止位置が 2 番目の値になり、`multiple-value-bind` で観測できます。`:junk-allowed` がない場合、末尾の非空白文字はエラーです |
 | `copy-readtable` | `(copy-readtable nil)` | ライト版スタブ: 常に `nil` -- リーダーはリードテーブル駆動ではないため、リードテーブルオブジェクトは存在しません (`*readtable*` は存在しますが `nil` に初期化されています) |
 | `set-dispatch-macro-character` | `(set-dispatch-macro-character #\# #\7 fn)` | ライト版スタブ: 受け付けますが無視し、`t` を返します (ユーザーのディスパッチマクロでリーダーを拡張することはできません) |
+| `readtable-case` | `(readtable-case *readtable*)` | ライト版スタブ: 常に `:upcase` -- リーダーはエスケープされていないシンボル名を常に大文字化します。標準リードテーブルのモードです |
 | `char` `schar` | `(char "hello" 1)` | `#\e` -- 0始まりの文字列インデックスの文字 |
 | `char-code` | `(char-code #\A)` | `65` -- 文字のコードポイント |
 | `code-char` | `(code-char 66)` | `#\B` -- 指定したコードポイントの文字 |

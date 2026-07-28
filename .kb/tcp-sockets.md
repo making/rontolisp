@@ -37,8 +37,11 @@ matches fetch: interpreter/JVM signal, the WASM component returns `nil`.
   `_writeLine`/`_readLineStream`/`_readByte`/`_writeByte`/`_closeStream` ONLY
   when the program uses a tcp built-in (`usesTcp` in `JvmLispCompiler`) —
   non-socket programs keep byte-identical stream runtime bodies.
-- **WASM**: component-only (Preview 1 = compile error, inline in
-  `WasmExprCompiler`; under `--component` the tcp names FALL THROUGH to the
+- **WASM**: component-only (Preview 1 lowers each tcp call site to a
+  CALL-TIME error via `LispMacroExpander.callTimeUnsupportedStub` -- since
+  2026-07-28/todo-195, so a spliced library whose socket layer is dead code
+  still compiles (s-sql over cl-postgres); before that it was a compile
+  error. Under `--component` the tcp names FALL THROUGH to the
   ordinary call path -- the wait-for pattern -- and resolve against the
   spliced sockets.lisp defuns). The whole implementation is
   `eval/sockets.lisp` over a wit-imported `wasi:sockets/types@0.3.0`
@@ -330,7 +333,7 @@ variant→record→tuple lift) and formats the dotted quad in Lisp; a wrong-kind
 handle or a host error yields `nil` (the component's error convention), so
 spliced usocket programs keep compiling AND now report real peers. `tcp-local-port`
 reads the real bound port the same way (ephemeral `tcp-listen 0` included).
-Preview 1 keeps the compile error like the other tcp built-ins.
+Preview 1 lowers to the call-time error like the other tcp built-ins.
 
 ## The usocket shim (`usocket` package, `usocket.lisp` + `UsocketLibrary`)
 
@@ -410,7 +413,7 @@ env var needed), `PackageResolverTest#usocketLibraryFormsAreAResolverFixedPoint`
 takes the shim all the way to a real server is `ClPostgresE2eTest` (opt-in
 `RONTOLISP_POSTGRES_E2E=1`): the verbatim cl-postgres over the usocket shim
 against a Testcontainers PostgreSQL, on the interpreter, the JVM and a
-component, with the Preview 1 compile error pinned alongside. The
+component, with the Preview 1 behavior (call-time errors since todo-195) pinned alongside in `WasmLispCompilerTest`. The
 self-contained single-threaded echo choreography (listen 0 → tcp-local-port →
 connect → write → accept → read) never deadlocks because the connection waits
 in the listen backlog and small payloads sit in kernel/stream buffers. The

@@ -82,6 +82,20 @@ final class JvmFreshLineCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		java.util.List<am.ik.rontolisp.LispVal> args = cons.toList();
+		// An explicit stream argument, or the current *standard-output* value when the
+		// program redirects it (JvmStringStreamCompiler.defaultStreamArg); either goes
+		// through the handle-aware _freshLine runtime helper.
+		am.ik.rontolisp.LispVal stream = args.size() > 1 ? args.get(1) : JvmStringStreamCompiler.defaultStreamArg(ctx);
+		if (stream != null) {
+			JvmExprCompiler.compileExpr(stream, ctx, className);
+			MethodrefConstant freshLineRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+					ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmIoRuntimeBuilder.FRESH_LINE_METHOD),
+							ctx.cp.addUtf8(JvmIoRuntimeBuilder.FRESH_LINE_DESC)));
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(freshLineRef.index());
+			return;
+		}
 		FieldrefConstant col = colField(ctx, className);
 		ctx.emit(Opcode.GETSTATIC);
 		ctx.emitU2(col.index());

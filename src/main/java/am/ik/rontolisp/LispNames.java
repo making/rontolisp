@@ -442,6 +442,15 @@ public final class LispNames {
 	public static final String SET_DISPATCH_MACRO_CHARACTER = "SET-DISPATCH-MACRO-CHARACTER";
 
 	/**
+	 * The {@code readtable-case} standard function, lowered to a constant {@code :upcase}
+	 * (its argument still evaluated for effect): rontolisp's reader is not
+	 * readtable-driven and always upcases unescaped symbol names (see
+	 * {@code .kb/reader-case-upcase.md}), which is exactly what the standard readtable's
+	 * {@code :upcase} mode does -- s-sql's {@code from-sql-name} branches on it.
+	 */
+	public static final String READTABLE_CASE = "READTABLE-CASE";
+
+	/**
 	 * The {@code *readtable*} standard variable, seeded nil so the
 	 * {@code (setq *readtable* ...)} idiom loads (the assigned value is an opaque no-op
 	 * token -- see {@link #COPY_READTABLE}).

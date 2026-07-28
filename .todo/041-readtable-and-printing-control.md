@@ -14,7 +14,7 @@ pretty printing are advanced features. Done since: `read-char`
 |----------|---------|
 | `*readtable*` | Current readtable |
 | `readtablep` | Predicate |
-| `readtable-case` | Case mode (`:upper`, `:infer`, `:preserve`, `:normalize`) |
+| `readtable-case` | DONE (2026-07-28, todo-195): a constant-`:upcase` stub on every backend |
 | `set-dispatch-macro-character` | Dispatch macro |
 | `set-macro-character` | Single-character macro |
 | `get-macro-character` | Query macro char |

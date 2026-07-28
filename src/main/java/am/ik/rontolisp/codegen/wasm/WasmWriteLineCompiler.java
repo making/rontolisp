@@ -22,8 +22,11 @@ final class WasmWriteLineCompiler {
 			throw new UnsupportedOperationException("write-line expects 1 or 2 arguments, got " + (parts.size() - 1));
 		}
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
-		if (parts.size() == 3) {
-			WasmExprCompiler.compileExpr(parts.get(2), ctx);
+		// An explicit stream argument, or the current *standard-output* value when the
+		// program redirects it (WasmEmitHelper.defaultStreamArg).
+		LispVal stream = parts.size() == 3 ? parts.get(2) : WasmEmitHelper.defaultStreamArg(ctx);
+		if (stream != null) {
+			WasmExprCompiler.compileExpr(stream, ctx);
 		}
 		else {
 			ctx.writer.write(Instruction.REF_NULL);

@@ -70,6 +70,7 @@ default). `~a`/`~s` pad on the right (left with `@`); numbers pad on the left.
 (format t "~(~a~) ~:(~a~)~%" "FOO BAR" "foo bar")
 (format t "~[zero~;one~:;many~] ~:[no~;yes~] ~@[x=~a~]~%" 1 t 42)
 (format t "~{<~a>~} ~:{(~a,~a)~}~@{ ~a~}~%" '(1 2) '((x 1) (y 2)) 'a 'b)
+(format t "~{~a~^, ~}~%" '(1 2 3))
 (format t "~a ~:* ~a~%" 1)
 ```
 
@@ -85,14 +86,18 @@ a #\b Newline
 foo bar Foo Bar
 one yes x=42
 <1><2> (X,1)(Y,2) A B
+1, 2, 3
 1  1
 ```
 
 ## Limitations
 
 Other destinations (strings with fill pointers) are not supported, and the
-column-control directives (`~t`, `~<...~>`), the loop escape `~^`, and `~r`
-without a radix parameter are not implemented. A control string that is a
+column-control directives (`~t`, `~<...~>`) and `~r`
+without a radix parameter are not implemented. The loop escape `~^` is
+supported at the top level and inside `~{ ... ~}` / `~@{ ... ~}` bodies (the
+join idiom `"~{~a~^, ~}"`; inside `~:{ ... ~}` it ends the current sublist's
+body), but its `~:^`/`~@^` variants and prefix parameters are not. A control string that is a
 runtime value -- a computed control expression, or a call through the function
 value `#'format` (`funcall`/`apply`) -- renders through a runtime fallback that
 supports only the basic directives `~a ~s ~d ~x ~c ~%` and `~~` (an unknown

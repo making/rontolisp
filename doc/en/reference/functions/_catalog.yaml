@@ -291,6 +291,7 @@ categories:
       - { slug: parse-integer, name: "parse-integer" }
       - { slug: copy-readtable, name: "copy-readtable" }
       - { slug: set-dispatch-macro-character, name: "set-dispatch-macro-character" }
+      - { slug: readtable-case, name: "readtable-case" }
       - { slug: eval, name: "eval" }
       - { slug: load, name: "load" }
       - { slug: require, name: "require" }

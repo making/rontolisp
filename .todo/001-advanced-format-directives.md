@@ -43,7 +43,12 @@ three backends already share; covered by `LispEvaluatorTest` /
 Still not implemented (possible future work):
 
 - Column control: `~t` (tabulate), `~<...~>` (justification).
-- The loop escape `~^` (terminate a `~{` iteration early).
+- The `~:^`/`~@^` variants and prefix parameters of the loop escape (plain
+  `~^` landed 2026-07-28 with todo-195: supported at the top level -- where
+  the static argument count decides it at expansion time -- and inside
+  `~{`/`~@{`/`~:{` bodies via the `FmtCut` segment lowering; pinned by
+  `LispEvaluatorTest.evalFormatIterationEscape` and the
+  `s-sql-enablement-language-group` ci-spec case).
 - `~r` without a radix (English cardinal/ordinal, Roman numerals `~@r`).
 - A runtime `v` count for `~%`/`~&`/`~~`, and accurate column tracking for
   `~&` with destination `nil` and inside composite bodies (still a static

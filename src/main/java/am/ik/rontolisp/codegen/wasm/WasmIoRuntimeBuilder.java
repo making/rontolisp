@@ -265,16 +265,26 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, OFF);
 		WasmEmitHelper.emitStrToMemCall(w);
 		setLocal(w, LEN);
-		// fd = stream is nil ? 1 (stdout) : i31.get_s(stream)
+		// fd = stream is an i31 handle ? i31.get_s(stream) : 1 (stdout) -- nil and the
+		// designator t (a redirected *standard-output*'s default) both mean stdout.
 		getLocal(w, FD_VAL);
 		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
-		i32(w, 1);
-		w.write(Instruction.ELSE);
+		getLocal(w, FD_VAL);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
 		getLocal(w, FD_VAL);
 		refCast(w, Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		i32(w, 1);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		i32(w, 1);
 		w.write(Instruction.END);
 		setLocal(w, FD);
 		// A negative handle is a string output stream: append the content and a newline

@@ -14,6 +14,19 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * The print family's default destination expression: the current value of
+	 * {@code *standard-output*} when the program gives it a module global (it binds or
+	 * assigns it somewhere -- the redirect contract of
+	 * {@code (with-output-to-string (*standard-output*) ...)}), else {@code null} so a
+	 * redirect-free program keeps the hard-coded standard output and compiles
+	 * byte-identically to before.
+	 */
+	static am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal defaultStreamArg(WasmLispCompiler.Ctx ctx) {
+		return ctx.globalIndices.containsKey(am.ik.rontolisp.LispNames.STANDARD_OUTPUT_VAR)
+				? new am.ik.rontolisp.LispSymbol(am.ik.rontolisp.LispNames.STANDARD_OUTPUT_VAR) : null;
+	}
+
+	/**
 	 * Emits a "grow linear memory if it does not yet cover {@code top}" guard. The GC
 	 * backend's heap is a bump allocator over {@code HEAP_PTR_ADDR}; without this guard a
 	 * large allocation walks past the initial memory size and any access traps with

@@ -13,10 +13,13 @@ final class JvmTerpriCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		java.util.List<am.ik.rontolisp.LispVal> args = cons.toList();
-		if (args.size() > 1) {
+		// An explicit stream argument, or the current *standard-output* value when the
+		// program redirects it (JvmStringStreamCompiler.defaultStreamArg).
+		am.ik.rontolisp.LispVal stream = args.size() > 1 ? args.get(1) : JvmStringStreamCompiler.defaultStreamArg(ctx);
+		if (stream != null) {
 			// (terpri stream): route a newline through _writeStr.
 			JvmEmitHelper.compileStringLiteral("\n", ctx);
-			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			JvmExprCompiler.compileExpr(stream, ctx, className);
 			JvmStringStreamCompiler.emitWriteStr(ctx, className);
 			ctx.emit(Opcode.ACONST_NULL);
 			return;

@@ -509,6 +509,70 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalWithOutputToStringBindingStandardOutputCapturesStreamlessPrints() {
+		// Binding *standard-output* as the target variable redirects the whole
+		// stream-argument-less print family, including inside called functions
+		// (s-sql's to-sql-name / sql-escape-string shape).
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("""
+				(progn
+				  (defun emit-name () (princ "foo") (write-char #\\.) (write-string "bar"))
+				  (with-output-to-string (*standard-output*)
+				    (emit-name)
+				    (format t "~a" 42)))"""));
+		assertThat(result).isEqualTo(new LispString("foo.bar42"));
+		assertThat(baos.toString()).isEmpty();
+	}
+
+	@Test
+	void evalLetBoundStandardOutputRedirectsAndRestores() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("""
+				(let ((str (%make-string-output-stream)))
+				  (let ((*standard-output* str))
+				    (princ "in"))
+				  (princ "out")
+				  (%string-stream-contents str))"""));
+		assertThat(result).isEqualTo(new LispString("in"));
+		assertThat(baos.toString()).isEqualTo("out");
+	}
+
+	@Test
+	void evalLoopSequentialForEqualsSeesPreviousLaterClauseValues() {
+		// CL steps sequential for-clauses in source order at the top of each
+		// iteration: a `for X = ... then` BEFORE a `for Y in ...` computes its step
+		// against the PREVIOUS iteration's Y (s-sql's strcat position loop).
+		assertThat(eval("(loop :for pos = 0 :then (+ pos (length arg)) "
+				+ ":for arg :in '(\"ab\" \"cde\" \"f\") :collect pos)"))
+			.isEqualTo(LispReader.readFromString("(0 2 5)"));
+		// The other direction: a `for ... = ... then` AFTER a `for Y in` sees the
+		// CURRENT iteration's Y (the previous-element idiom needs `and` for old Y).
+		assertThat(eval("(loop for x in '(1 2 3) for prev = nil then x collect (list prev x))"))
+			.isEqualTo(LispReader.readFromString("((nil 1) (2 2) (3 3))"));
+		// A step AFTER an exhausted driver must not run at all (its form may not be
+		// safe on the exhausted state).
+		assertThat(eval("(loop for x in '(1 2) for a = 0 then (+ a (car (list x))) collect a)"))
+			.isEqualTo(LispReader.readFromString("(0 2)"));
+	}
+
+	@Test
+	void evalReadtableCaseIsConstantUpcase() {
+		// The reader always upcases unescaped names (the standard readtable's :upcase
+		// mode); s-sql's from-sql-name branches on this.
+		assertThat(eval("(readtable-case *readtable*)")).isEqualTo(new LispSymbol(":UPCASE"));
+		assertThat(eval("(readtable-case (copy-readtable))")).isEqualTo(new LispSymbol(":UPCASE"));
+	}
+
+	@Test
+	void evalInternIntoFoundKeywordPackage() {
+		// (find-package :keyword) answers the keyword-package designator; intern must
+		// accept it like the literal :keyword (s-sql's from-sql-name).
+		assertThat(eval("(intern \"ZAP\" (find-package :keyword))")).isEqualTo(new LispSymbol(":ZAP"));
+	}
+
+	@Test
 	void evalWithArenaIsAPlainProgn() {
 		// rontolisp:with-arena names a reclamation boundary for --no-gc; the interpreter
 		// heap is garbage-collected, so it is observationally a progn.
@@ -833,6 +897,39 @@ class LispEvaluatorTest {
 		assertThat(eval("(format nil \"~{~{~a~}|~}\" '((1 2) (3)))")).isEqualTo(new LispString("12|3|"));
 		// An iteration whose body holds a conditional.
 		assertThat(eval("(format nil \"~{~:[n~;y~]~}\" '(t nil t))")).isEqualTo(new LispString("yny"));
+	}
+
+	@Test
+	void evalFormatIterationEscape() {
+		// ~^ terminates the iteration when no items remain, so the separator after
+		// it is not emitted on the last pass (the s-sql/join idiom).
+		assertThat(eval("(format nil \"~{~a~^, ~}\" '(1 2 3))")).isEqualTo(new LispString("1, 2, 3"));
+		assertThat(eval("(format nil \"~{~a~^, ~}\" '(1))")).isEqualTo(new LispString("1"));
+		assertThat(eval("(format nil \"~{~a~^, ~}\" nil)")).isEqualTo(new LispString(""));
+		// Two items per pass: ~^ checks the elements beyond those already consumed.
+		assertThat(eval("(format nil \"~{~a=~a~^&~}\" '(a 1 b 2))")).isEqualTo(new LispString("A=1&B=2"));
+		// Inside ~:{ the escape ends the current sublist's body only -- including
+		// the text after it, as in standard CL (SBCL prints "(1,2)(3" here too).
+		assertThat(eval("(format nil \"~:{(~a~^,~a)~}\" '((1 2) (3)))")).isEqualTo(new LispString("(1,2)(3"));
+		// Over the remaining top-level arguments (~@{ unrolls at expansion time).
+		assertThat(eval("(format nil \"~@{~a~^, ~}\" 1 2 3)")).isEqualTo(new LispString("1, 2, 3"));
+	}
+
+	@Test
+	void evalFormatEscapeAtTopLevel() {
+		// At the top level the argument count is known statically: ~^ with
+		// arguments left is dropped, with none left it truncates the control.
+		assertThat(eval("(format nil \"~a~^, ~a\" 1 2)")).isEqualTo(new LispString("1, 2"));
+		assertThat(eval("(format nil \"~a~^, ~a\" 1)")).isEqualTo(new LispString("1"));
+	}
+
+	@Test
+	void evalFormatEscapeInsideConditionalIteration() {
+		// The s-sql ARRAY[...] shape: ~:* backs up to re-read the tested argument
+		// as the ~{ list, and ~^ joins its elements.
+		assertThat(eval("(format nil \"~:['{}'~;ARRAY[~:*~{~A~^, ~}]~]\" '(1 2 3))"))
+			.isEqualTo(new LispString("ARRAY[1, 2, 3]"));
+		assertThat(eval("(format nil \"~:['{}'~;ARRAY[~:*~{~A~^, ~}]~]\" nil)")).isEqualTo(new LispString("'{}'"));
 	}
 
 	@Test
@@ -4337,7 +4434,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer", "%string-compare")
 			.isSorted()
-			.hasSize(323);
+			.hasSize(324);
 	}
 
 	@Test
@@ -8227,6 +8324,19 @@ class LispEvaluatorTest {
 		assertThat(
 				eval("(list (typep 5 '(unsigned-byte 8)) (typep 500 '(unsigned-byte 8)) (typep -1 'integer))").print())
 			.isEqualTo("(T NIL T)");
+	}
+
+	@Test
+	void typepVectorWithPackedElementTypeMatchesOnlyPackedArrays() {
+		// (vector (unsigned-byte 8)) names the SPECIALIZED byte vector: a general
+		// vector or a string is not one (s-sql's sql-escape dispatches on this).
+		assertThat(evalMulti("""
+				(list (typep #("a" "b") '(vector (unsigned-byte 8)))
+				      (typep (make-array 2 :element-type '(unsigned-byte 8)) '(vector (unsigned-byte 8)))
+				      (typep "ab" '(vector (unsigned-byte 8)))
+				      (typep #(1 2) '(vector (unsigned-byte 8)))
+				      (typep (make-array 2 :element-type '(unsigned-byte 16)) '(vector (unsigned-byte 8))))
+				""").print()).isEqualTo("(NIL T NIL NIL NIL)");
 	}
 
 	@Test

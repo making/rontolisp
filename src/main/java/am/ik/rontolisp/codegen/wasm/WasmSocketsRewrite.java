@@ -270,6 +270,17 @@ final class WasmSocketsRewrite {
 		}
 		String dispatch = SYNC_DISPATCH.get(head);
 		if (dispatch != null) {
+			// A stream-argument-less write keeps following the current
+			// *standard-output* through the dispatch defun: the redirect
+			// (.kb/standard-output-redirect.md) resolves at the ORIGINAL call site,
+			// while %io-write-* passes its optional stream straight to the raw
+			// builtin (nil = hard stdout). A non-redirecting program compiles the
+			// bare symbol to the constant t (= stdout), so this is always safe.
+			if ((LispNames.WRITE_STRING.equals(head) || LispNames.WRITE_LINE.equals(head)) && parts.size() == 2) {
+				List<LispVal> withDefault = new java.util.ArrayList<>(parts);
+				withDefault.add(new LispSymbol(LispNames.STANDARD_OUTPUT_VAR));
+				parts = withDefault;
+			}
 			return replaceHead(parts, dispatch, asyncContext);
 		}
 		return null;
