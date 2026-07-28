@@ -5216,6 +5216,60 @@ public final class LispMacroExpander {
 		return prognOrNil(parts.subList(2, parts.size()));
 	}
 
+	private static final String MUTEX_ACQUIRE_QUALIFIED = LispNames.RONTOLISP_PKG + ":" + LispNames.MUTEX_ACQUIRE;
+
+	private static final String MUTEX_RELEASE_QUALIFIED = LispNames.RONTOLISP_PKG + ":" + LispNames.MUTEX_RELEASE;
+
+	private static final String MUTEX_VAR = "__mutex_lock";
+
+	private static final String MUTEX_RESULT_VAR = "__mutex_result";
+
+	/**
+	 * Expands {@code (rontolisp:with-mutex (mutex-form) body...)} into a {@code let} that
+	 * evaluates the mutex form ONCE, acquires it, runs the body and releases it on every
+	 * exit. {@code (bordeaux-threads:with-lock-held (lock) body...)} has the same shape
+	 * and expands through here.
+	 * @param cons the with-mutex / with-lock-held expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithMutex(LispCons cons) {
+		return expandWithMutex(cons, true);
+	}
+
+	/**
+	 * Expands (rontolisp:with-mutex ...) with the backend switch. Without
+	 * {@code unwind-protect} the release runs on normal exit only -- exact on the WASM
+	 * backends, where acquire and release are no-ops (single-threaded by construction),
+	 * and the reason {@code with-mutex} does NOT flip a WASM module into EH mode: paying
+	 * the EH lowering to guarantee a no-op runs would buy nothing.
+	 * @param cons the with-mutex / with-lock-held expression
+	 * @param unwindProtect whether the expansion may use {@code unwind-protect}
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithMutex(LispCons cons, boolean unwindProtect) {
+		List<LispVal> parts = cons.toList();
+		String name = parts.get(0).print();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || !(spec.cdr() instanceof LispNil)) {
+			throw new UnsupportedOperationException(
+					name + " expects a one-element lock spec: (" + name + " (mutex-form) body...)");
+		}
+		LispSymbol var = new LispSymbol(MUTEX_VAR);
+		LispVal bindings = new LispCons(listToCons(List.of(var, spec.car())), LispNil.INSTANCE);
+		List<LispVal> body = parts.subList(2, parts.size());
+		LispVal release = callOf(MUTEX_RELEASE_QUALIFIED, var);
+		LispVal guarded;
+		if (unwindProtect) {
+			guarded = unwindProtectAround(prognOrNil(body), release);
+		}
+		else {
+			LispSymbol result = new LispSymbol(MUTEX_RESULT_VAR);
+			guarded = listToCons(List.of(new LispSymbol(LispNames.LET),
+					new LispCons(listToCons(List.of(result, prognOrNil(body))), LispNil.INSTANCE), release, result));
+		}
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET), bindings, callOf(MUTEX_ACQUIRE_QUALIFIED, var), guarded));
+	}
+
 	private static final String USOCKET_SOCKET_CONNECT_QUALIFIED = LispNames.USOCKET_PKG + ":"
 			+ LispNames.USOCKET_SOCKET_CONNECT;
 

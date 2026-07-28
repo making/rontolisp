@@ -48,6 +48,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [fetch-http.md](fetch-http.md) -- `rontolisp:fetch` outgoing HTTP
 - [async-await.md](async-await.md) -- async-defun/await, futures and asynchronous streams
 - [error-handling.md](error-handling.md) -- unwind-protect (interpreter try/finally, JVM exception tables + return-escape cleanups), condition objects (define-condition over the CLOS subset, seeded hierarchy, error/signal/warn designators, with-slots) and handler-case/ignore-errors (typed catching, ThreadLocal condition/depth channels; WASM rejects catching)
+- [mutexes.md](mutexes.md) -- `rontolisp:make-mutex`/`mutex-acquire`/`mutex-release`/`with-mutex` (a `ReentrantLock` on the interpreter and the JVM, no-ops on WASM; the handle is opaque and differs per backend) and the `bordeaux-threads` shim system + the per-backend `Features` now threaded into every shim source
 - [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` TCP sockets, `rontolisp:tls-connect`/`tls-listen` (stream-handle integration + the wasi:sockets component variant) and the `usocket` compatibility shim (usocket.lisp + the built-in ASDF system)
 - [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify` Lisp-source library + splice
 - [linalg.md](linalg.md) -- `linalg` package (numpy-style vector/matrix ops) Lisp-source library + the standard array functions

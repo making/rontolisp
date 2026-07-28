@@ -344,6 +344,9 @@ categories:
     functions:
       - { slug: rontolisp-version, name: "rontolisp:version" }
       - { slug: rontolisp-random-bytes, name: "rontolisp:random-bytes" }
+      - { slug: rontolisp-make-mutex, name: "rontolisp:make-mutex" }
+      - { slug: rontolisp-mutex-acquire, name: "rontolisp:mutex-acquire" }
+      - { slug: rontolisp-mutex-release, name: "rontolisp:mutex-release" }
       - { slug: rontolisp-list-functions, name: "rontolisp:list-functions" }
       - { slug: rontolisp-list-macros, name: "rontolisp:list-macros" }
       - { slug: rontolisp-list-special-forms, name: "rontolisp:list-special-forms" }

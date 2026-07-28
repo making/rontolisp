@@ -62,6 +62,7 @@ description and a runnable example you can evaluate in your browser.
 | `slot-value` | `(slot-value object 'slot-name)` | Read a slot of a [`defclass`](special-forms/defclass.md) instance; a `setf`-able place. The slot name must be a literal quoted symbol |
 | `with-slots` | `(with-slots (x (v y)) instance body...)` | Bind slot names as symbol-macro-style places for the body: reads see the slots, and `setf`/`push`/`incf` of a bound name writes back to the slot |
 | `rontolisp:with-arena` | `(rontolisp:with-arena () body...)` | Run the body and return its value, naming a memory-reclamation boundary for the non-GC WASM backend (`--no-gc`): everything allocated inside is popped at the end, keeping only the body's value. A plain `progn` on the other backends (a real GC already reclaims) |
+| `rontolisp:with-mutex` | `(rontolisp:with-mutex (mutex-form) body...)` | Acquire the mutex, run the body, and release it on every exit (a signalled error included). Real mutual exclusion on the interpreter and the JVM backend, where a served handler runs one virtual thread per request; a no-op on the single-threaded WASM backends |
 | `prog` | `(prog ((v init)...) tag-or-form...)` | `let` + `tagbody` inside a block: `go` jumps between the body's tags and `(return x)` exits with `x` |
 | `prog*` | `(prog* ((v init)...) tag-or-form...)` | Like `prog` with sequential (`let*`-style) bindings |
 | `shiftf` | `(shiftf a b 9)` | Shift place values left, store the last value into the last place, return the first place's old value |

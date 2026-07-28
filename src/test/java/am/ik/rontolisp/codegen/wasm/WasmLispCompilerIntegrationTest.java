@@ -6802,7 +6802,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listFunctionsForRontolisp() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-functions :rontolisp))")).isEqualTo(
-				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
+				"(AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)");
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms :cl-user))")).isEqualTo("NIL");
 	}
 
@@ -11436,6 +11436,25 @@ class WasmLispCompilerIntegrationTest {
 				(defun sq (x) (* x x))
 				(print (sq 4294967295))
 				""")).isEqualTo("18446744065119617025");
+	}
+
+	// The mutex primitives exist on WASM as no-ops (single-threaded by construction) so
+	// that a library taking a lock on a path this program never runs still COMPILES --
+	// an undefined function is a compile-time error here, not a call-time one. The
+	// handle is opaque, so only its identity through acquire/release is asserted.
+	@Test
+	void mutexPrimitivesAreNoOpsThatStillCompose() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *m* (rontolisp:make-mutex))
+				(defvar *c* 0)
+				(defun bump (n)
+				  (dotimes (i n)
+				    (rontolisp:with-mutex (*m*) (setq *c* (+ *c* 1)))))
+				(bump 3)
+				(print *c*)
+				(print (rontolisp:with-mutex ((rontolisp:make-mutex)) 'held))
+				(print (eq (rontolisp:mutex-release (rontolisp:mutex-acquire *m*)) *m*))
+				""")).isEqualTo("3\nHELD\nT");
 	}
 
 }

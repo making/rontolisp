@@ -1,5 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.util.List;
+
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
@@ -246,6 +248,17 @@ final class JvmExprCompiler {
 					compileExpr(LispMacroExpander.expandWithArena(cons), ctx, className);
 					return;
 				}
+				if (LispNames.WITH_MUTEX.equals(qn.member())) {
+					compileExpr(LispMacroExpander.expandWithMutex(cons), ctx, className);
+					return;
+				}
+				if (LispNames.MAKE_MUTEX.equals(qn.member()) || LispNames.MUTEX_ACQUIRE.equals(qn.member())
+						|| LispNames.MUTEX_RELEASE.equals(qn.member())) {
+					// A real ReentrantLock, handed out as the handle itself
+					// (JvmMutexRuntimeBuilder, emitted because the reference gated it).
+					compileMutex(qn.member(), cons, ctx, className);
+					return;
+				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			if (qn != null && LispNames.JAVA_PKG.equals(qn.pkg()) && JvmJavaInteropCompiler.handles(qn.member())) {
@@ -278,6 +291,14 @@ final class JvmExprCompiler {
 						// the ordinary qualified-call path.
 					}
 				}
+			}
+			// bordeaux-threads:with-lock-held is the same built-in expansion as
+			// rontolisp:with-mutex; the rest of the bt shim is bordeaux-threads.lisp
+			// defuns, which fall through to the ordinary qualified-call path.
+			if (qn != null && LispNames.BORDEAUX_THREADS_PKG.equals(qn.pkg())
+					&& LispNames.WITH_LOCK_HELD.equals(qn.member())) {
+				compileExpr(LispMacroExpander.expandWithMutex(cons), ctx, className);
+				return;
 			}
 			// --vec: route the six vectorizable vec: kernels to the embedded Vector API
 			// bridge instead of the scalar vec.lisp defun. Only when the runtime was
@@ -1100,6 +1121,35 @@ final class JvmExprCompiler {
 	 */
 	private static boolean isBinaryCall(LispCons cons) {
 		return cons.toList().size() == 3;
+	}
+
+	/**
+	 * Compiles one of the three mutex primitives onto its {@link JvmMutexRuntimeBuilder}
+	 * helper. {@code make-mutex} takes no arguments and yields a fresh
+	 * {@code ReentrantLock}; acquire and release take the handle and return it, so a
+	 * value-position call is still well typed.
+	 */
+	private static void compileMutex(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		int arity = LispNames.MAKE_MUTEX.equals(member) ? 0 : 1;
+		if (args.size() != arity + 1) {
+			throw new UnsupportedOperationException(
+					"rontolisp:" + member + " expects " + arity + " argument(s), got " + (args.size() - 1));
+		}
+		String method = switch (member) {
+			case LispNames.MAKE_MUTEX -> JvmMutexRuntimeBuilder.NEW_METHOD;
+			case LispNames.MUTEX_ACQUIRE -> JvmMutexRuntimeBuilder.ACQUIRE_METHOD;
+			default -> JvmMutexRuntimeBuilder.RELEASE_METHOD;
+		};
+		String desc = arity == 0 ? JvmMutexRuntimeBuilder.NEW_DESC : JvmMutexRuntimeBuilder.UNARY_DESC;
+		if (arity == 1) {
+			compileExpr(args.get(1), ctx, className);
+		}
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.cp
+			.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+					ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8(desc)))
+			.index());
 	}
 
 }

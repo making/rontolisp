@@ -402,6 +402,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// java.security and keeps byte-identical output.
 		boolean usesSecureRandom = programUsesSymbol(program,
 				PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.RANDOM_BYTE_INTERNAL));
+		// Mutex helpers: emitted only when the program references one of the three
+		// rontolisp:*-mutex primitives, so a lock-free program keeps byte-identical
+		// output.
+		boolean usesMutexes = programUsesSymbol(program,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_MUTEX))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MUTEX_ACQUIRE))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MUTEX_RELEASE));
 		MethodrefConstant tcpConnectHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_DESC)))
@@ -1279,6 +1287,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// built-ins can grow socket branches.
 		final JvmSecureRandomRuntimeBuilder.@Nullable SecureRandomRuntime secureRandomRuntime = usesSecureRandom
 				? JvmSecureRandomRuntimeBuilder.build(cp, thisClass, longValueOf) : null;
+		final List<JvmMutexRuntimeBuilder.MutexMethod> mutexMethods = usesMutexes ? JvmMutexRuntimeBuilder.build(cp)
+				: List.of();
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
 				? JvmSocketRuntimeBuilder.build(cp, thisClass, objectClass, stringClass, longClass, longValueOf,
 						longValue, stringLengthForIo, stringSubstring, stringConcat)
@@ -1788,6 +1798,16 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(secureRandomRuntime.maxStack())
 									.writeU2(secureRandomRuntime.maxLocals())
 									.writeCode((Object[]) secureRandomRuntime.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				for (JvmMutexRuntimeBuilder.MutexMethod mm : mutexMethods) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mm.name(), mm.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(mm.maxStack())
+									.writeU2(mm.maxLocals())
+									.writeCode((Object[]) mm.code().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));

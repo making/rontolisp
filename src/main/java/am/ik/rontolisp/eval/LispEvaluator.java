@@ -1332,6 +1332,16 @@ public final class LispEvaluator {
 	 * bundled data files resolve against is the system's, already on the load-dir stack.
 	 */
 	private void loadFile(String operator, String rawPath, @Nullable String systemName) {
+		loadFile(operator, rawPath, systemName, Features.INTERPRETER);
+	}
+
+	/**
+	 * Loads one file with an explicit feature set. Only an ASDF component passes anything
+	 * but {@link Features#INTERPRETER}: a system that declares
+	 * {@code :rontolisp-features} has its own components read with the interpreter's
+	 * features WIDENED by that declaration (see {@code AsdfSystems.LispSystem#features}).
+	 */
+	private void loadFile(String operator, String rawPath, @Nullable String systemName, Features features) {
 		String baseDir = this.loadDirStack.peekLast();
 		String resolved = SourceLoader.resolve(baseDir, rawPath);
 		String source;
@@ -1354,12 +1364,12 @@ public final class LispEvaluator {
 			// Only a file that textually contains #. pays for the marker read + the
 			// per-form substitution walk; every other file keeps the plain read.
 			if (source.contains("#.")) {
-				for (LispVal form : LispReader.readAllWithReadEvalMarkers(source, Features.INTERPRETER)) {
+				for (LispVal form : LispReader.readAllWithReadEvalMarkers(source, features)) {
 					eval(resolveReadTimeEval(form));
 				}
 			}
 			else {
-				for (LispVal form : LispReader.readAllFromString(source, Features.INTERPRETER)) {
+				for (LispVal form : LispReader.readAllFromString(source, features)) {
 					eval(form);
 				}
 			}
@@ -1682,7 +1692,7 @@ public final class LispEvaluator {
 				ensureUsocketLoaded();
 			}
 			else if (!this.loadedSystems.contains(name)) {
-				for (LispVal form : BuiltinSystems.forms(name)) {
+				for (LispVal form : BuiltinSystems.forms(name, Features.INTERPRETER)) {
 					eval(form, this.globalEnv);
 				}
 			}
@@ -1709,6 +1719,10 @@ public final class LispEvaluator {
 			}
 		}
 		this.loadingSystems.addLast(name);
+		// A system that declares :rontolisp-features has its own component files read
+		// with the interpreter's features widened by that declaration -- the static
+		// encoding of the eval-when *features* push a real .asd would do.
+		Features systemFeatures = Features.INTERPRETER.with(system.features());
 		// Component paths (and a dependency's .asd lookup) resolve against the system's
 		// base directory, not the caller's.
 		this.loadDirStack.addLast(system.baseDir());
@@ -1727,7 +1741,7 @@ public final class LispEvaluator {
 					}
 					continue;
 				}
-				loadFile(LispNames.ASDF_LOAD_SYSTEM, file, name);
+				loadFile(LispNames.ASDF_LOAD_SYSTEM, file, name, systemFeatures);
 			}
 		}
 		finally {
@@ -2267,6 +2281,11 @@ public final class LispEvaluator {
 					// A reclamation boundary for --no-gc; a real GC already reclaims, so
 					// the interpreter runs the body as a plain progn.
 					return eval(LispMacroExpander.expandWithArena(cons), env);
+				case LispNames.WITH_MUTEX_QUALIFIED:
+				case LispNames.WITH_LOCK_HELD_QUALIFIED:
+					// Acquire / body / release-on-every-exit; bordeaux-threads'
+					// with-lock-held is the same shape over the same primitives.
+					return eval(LispMacroExpander.expandWithMutex(cons), env);
 				case LispNames.WIT_EXPORT_QUALIFIED:
 					return evalWitExport(cons);
 				case LispNames.WIT_IMPORT_QUALIFIED:

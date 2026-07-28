@@ -68,6 +68,29 @@ public final class Features {
 	}
 
 	/**
+	 * Returns this feature set widened by the given names, or {@code this} when they are
+	 * all present already. This is the static encoding of a {@code .asd} that pushes onto
+	 * {@code *features*} from an {@code eval-when} before its {@code defsystem}: such a
+	 * push never reaches the reader here, so a replacement {@code .asd} declares the
+	 * features with {@code :rontolisp-features} and the system's component files are read
+	 * with the widened set (see {@code AsdfSystems}). Deliberately additive only --
+	 * nothing may switch OFF a backend feature and claim to be that backend.
+	 * @param extra the feature names to add, without the leading colon
+	 * @return the widened feature set
+	 */
+	public Features with(List<String> extra) {
+		List<String> widened = new java.util.ArrayList<>(this.names);
+		for (String name : extra) {
+			String canonical = featureName(name);
+			if (widened.stream().noneMatch(canonical::equalsIgnoreCase)) {
+				widened.add(canonical);
+			}
+		}
+		return widened.size() == this.names.size() ? this
+				: new Features(List.copyOf(widened), this.substituteFeaturesVar);
+	}
+
+	/**
 	 * Returns the active feature names (without the leading colon), in a fixed order.
 	 * @return the feature names
 	 */

@@ -142,6 +142,7 @@ Quicklisp ライブラリの中には、rontolisp 側を知り得ない実装ご
 | `closer-mop` | 実スロットメタデータを返す `class-slots` (クラスレジストリからの `(name declared-type)` ペア。「スロットメタオブジェクト」はこのペアで、`slot-definition-name`/`-type` がそれを読む) |
 | `flexi-streams` | パススルーのストリーム (flexi ストリームは基底ストリームそのもの) |
 | `float-features` | IEEE 754 ビットプリミティブ上の `single-float-bits`/`bits-single-float` と double 版 (インタープリタ + JVM。WASM の数値モデルは 64 ビットのビットパターンを保持できない) |
+| `bordeaux-threads` (ニックネーム `bt`) | ロック関連のサブセット — `make-lock`、`acquire-lock`、`release-lock`、`with-lock-held`、`*supports-threads-p*` — を [`rontolisp:make-mutex`](../reference/functions/rontolisp-make-mutex.md) などの上に実装しています。スレッド生成は意図的にありません: Lisp からスレッドを生成できるバックエンドはないため、あるふりをするシムはビルドに失敗する代わりにプログラムを黙って逐次化してしまいます。`make-lock` は再入可能なロックを返し (上流のものは再入不可)、`acquire-lock` の `:wait-p` は無視されます — 獲得は常にブロックします |
 | `uiop` | パッケージスタブと [`uiop:add-package-local-nickname`](../reference/functions/add-package-local-nickname.md) |
 
 シムは意図的に薄く作られています: ロード可能なライブラリが実際に呼ぶものだけを満たし、上流の完全な

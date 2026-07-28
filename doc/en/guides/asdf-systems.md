@@ -150,6 +150,7 @@ real library) resolve the name to a bundled shim instead of downloading it.
 | `closer-mop` | `class-slots` returning real slot metadata (`(name declared-type)` pairs from the class registry; a "slot metaobject" is that pair, `slot-definition-name`/`-type` read it) |
 | `flexi-streams` | pass-through streams (a flexi stream IS the underlying stream) |
 | `float-features` | `single-float-bits`/`bits-single-float` and the double variants over the IEEE 754 bit primitives (interpreter + JVM; the WASM numeric model cannot carry 64-bit bit patterns) |
+| `bordeaux-threads` (nickname `bt`) | the locking subset — `make-lock`, `acquire-lock`, `release-lock`, `with-lock-held`, `*supports-threads-p*` — over [`rontolisp:make-mutex`](../reference/functions/rontolisp-make-mutex.md) and friends. Thread creation is deliberately absent: no backend can spawn one from Lisp, so a shim that pretended otherwise would silently sequentialize a program instead of failing to build. `make-lock` returns a reentrant lock (upstream's is not) and `acquire-lock`'s `:wait-p` is ignored — the acquisition always blocks |
 | `uiop` | a package stub plus [`uiop:add-package-local-nickname`](../reference/functions/add-package-local-nickname.md) |
 
 The shims are deliberately thin: they satisfy what the loadable libraries

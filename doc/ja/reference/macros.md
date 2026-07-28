@@ -61,6 +61,7 @@
 | `slot-value` | `(slot-value object 'slot-name)` | [`defclass`](special-forms/defclass.md) インスタンスのスロットを読み取ります。`setf` 可能な place です。スロット名はリテラルのクォートされたシンボルでなければなりません |
 | `with-slots` | `(with-slots (x (v y)) instance body...)` | スロット名を本体のシンボルマクロ的な場所として束縛します。読み取りはスロットを参照し、束縛名への `setf`/`push`/`incf` はスロットへ書き戻されます |
 | `rontolisp:with-arena` | `(rontolisp:with-arena () body...)` | ボディを実行してその値を返し、非 GC WASM バックエンド(`--no-gc`)のメモリ再利用境界を名付けます。内部で確保されたものは終端でポップされ、ボディの値だけが残ります。他のバックエンドでは実際の GC が回収するため、単なる `progn` です |
+| `rontolisp:with-mutex` | `(rontolisp:with-mutex (mutex-form) body...)` | mutex を獲得し、ボディを実行し、あらゆる脱出時(シグナルされたエラーを含む)に解放します。サーブされるハンドラがリクエストごとに 1 つの仮想スレッドで動くインタプリタと JVM バックエンドでは実際の相互排他になり、単一スレッドの WASM バックエンドでは no-op です |
 | `prog` | `(prog ((v init)...) tag-or-form...)` | ブロック内の `let` + `tagbody`: `go` が本体のタグ間をジャンプし、`(return x)` が `x` を返して抜けます |
 | `prog*` | `(prog* ((v init)...) tag-or-form...)` | `prog` と同様で束縛が逐次的(`let*` 方式) |
 | `shiftf` | `(shiftf a b 9)` | 場所の値を左へシフトし、最後の場所に新しい値を格納し、最初の場所の古い値を返します |

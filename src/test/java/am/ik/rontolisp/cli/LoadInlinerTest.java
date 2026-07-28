@@ -429,6 +429,28 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void aDeclaredRontolispFeatureWidensTheBackendSetForThatSystemOnly() throws Exception {
+		// :rontolisp-features is the static encoding of a .asd that pushes onto
+		// *features* from an eval-when (invisible to the reader, .todo/181). It must
+		// WIDEN the backend set rather than replace it -- the backend feature is still
+		// the compile target's -- and it must not reach a dependency, which declares its
+		// own.
+		List<LispVal> program = LoadInliner.inline(
+				LispReader.readAllFromString("(asdf:load-system :app) (print (which)) (print (dep-which))",
+						Features.JVM),
+				loaderOf(Map.of("app.asd",
+						"(defsystem :app :rontolisp-features (:app-fancy) :depends-on (\"dep\")"
+								+ " :components ((:file \"main\") (:file \"fancy\" :if-feature :app-fancy)))", //
+						"main.lisp", "#+(and rontolisp-jvm app-fancy) (defun which () \"jvm+fancy\")", //
+						"fancy.lisp", "(defun app-fancy-marker () t)", //
+						"dep.asd", "(defsystem :dep :components ((:file \"dep\")))", //
+						"dep.lisp", "(defun dep-which () #+app-fancy \"leaked\" #-app-fancy \"clean\")")),
+				null, List.of(), Features.JVM);
+		byte[] classBytes = new JvmLispCompiler("TestSystemFeatures").compile(program);
+		assertThat(runMain(classBytes, "TestSystemFeatures")).isEqualTo("\"jvm+fancy\"\n\"clean\"");
+	}
+
+	@Test
 	void loadedFileWithReadEvalCompilesAndRunsOnJvm() throws Exception {
 		// #. in a loaded file rides the marker read; the markers resolve in
 		// UserMacroExpander against the macro-time evaluator, mirroring the runtime

@@ -27,6 +27,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.DoubleUnaryOperator;
 import java.util.function.Supplier;
 
@@ -426,6 +429,7 @@ public final class Environment implements Scope {
 		registerHashTables(env);
 		registerArrays(env);
 		registerPackages(env);
+		registerMutexes(env);
 		// The multiple-value spill channel (see LispNames.MV_SPILL): the compilers
 		// inject an equivalent top-level (setq %mv-spill nil) when needed.
 		env.define(LispNames.MV_SPILL, LispNil.INSTANCE);
@@ -1280,6 +1284,61 @@ public final class Environment implements Scope {
 			return table;
 		}
 		throw new LispEvalException(fn + " expects a hash table, got " + val.print());
+	}
+
+	/**
+	 * Registers the {@code rontolisp:make-mutex} / {@code mutex-acquire} /
+	 * {@code mutex-release} primitives: real mutual exclusion for the concurrency the
+	 * interpreter really runs (one virtual thread per request under
+	 * {@code rontolisp:http-handler}). The handle is an OPAQUE integer index into this
+	 * environment's lock table, matching the socket handles' convention -- the JVM
+	 * backend hands out the {@code ReentrantLock} itself and WASM a constant, so nothing
+	 * portable may print or compare one.
+	 *
+	 * <p>
+	 * The lock is a {@code ReentrantLock} rather than an object monitor because
+	 * {@code with-mutex} lowers to acquire / body / release as three separate calls, and
+	 * a monitor cannot be released by a different {@code synchronized} region than the
+	 * one that took it. Reentrancy is a deliberate superset of bordeaux-threads'
+	 * {@code make-lock} (non-reentrant upstream, so a program that deadlocks there merely
+	 * proceeds here).
+	 * @param env the global environment
+	 */
+	private static void registerMutexes(Environment env) {
+		Map<Long, ReentrantLock> mutexes = new ConcurrentHashMap<>();
+		AtomicLong nextHandle = new AtomicLong(1);
+		String makeMutex = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_MUTEX);
+		env.defineFunction(makeMutex, new LispFunction(makeMutex, args -> {
+			requireArgCount(LispNames.MAKE_MUTEX, args, 0);
+			long handle = nextHandle.getAndIncrement();
+			mutexes.put(handle, new ReentrantLock());
+			return new LispInteger(handle);
+		}));
+		String acquire = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MUTEX_ACQUIRE);
+		env.defineFunction(acquire, new LispFunction(acquire, args -> {
+			requireArgCount(LispNames.MUTEX_ACQUIRE, args, 1);
+			requireMutex(LispNames.MUTEX_ACQUIRE, mutexes, args.get(0)).lock();
+			return args.get(0);
+		}));
+		String release = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MUTEX_RELEASE);
+		env.defineFunction(release, new LispFunction(release, args -> {
+			requireArgCount(LispNames.MUTEX_RELEASE, args, 1);
+			ReentrantLock lock = requireMutex(LispNames.MUTEX_RELEASE, mutexes, args.get(0));
+			if (!lock.isHeldByCurrentThread()) {
+				throw new LispEvalException(
+						LispNames.MUTEX_RELEASE + ": the mutex is not held by this thread: " + args.get(0).print());
+			}
+			lock.unlock();
+			return args.get(0);
+		}));
+	}
+
+	private static ReentrantLock requireMutex(String fn, Map<Long, ReentrantLock> mutexes, LispVal handle) {
+		ReentrantLock lock = handle instanceof LispInteger index ? mutexes.get(index.value()) : null;
+		if (lock == null) {
+			throw new LispEvalException(fn + " expects a mutex handle, got " + handle.print());
+		}
+		return lock;
 	}
 
 	private static void registerPackages(Environment env) {
@@ -2653,7 +2712,7 @@ public final class Environment implements Scope {
 		// has no uninterned symbols) whose "#:" prefix keeps it out of the way of
 		// user-written names. The compilers require a literal string prefix; here the
 		// prefix is any runtime string.
-		java.util.concurrent.atomic.AtomicLong gensymCounter = new java.util.concurrent.atomic.AtomicLong();
+		AtomicLong gensymCounter = new AtomicLong();
 		env.defineFunction(LispNames.GENSYM, new LispFunction(LispNames.GENSYM, args -> {
 			if (args.size() > 1) {
 				throw new LispEvalException(LispNames.GENSYM + " expects at most 1 argument, got " + args.size());

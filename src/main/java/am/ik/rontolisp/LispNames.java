@@ -3575,6 +3575,45 @@ public final class LispNames {
 	public static final String WITH_ARENA_QUALIFIED = RONTOLISP_PKG + ":" + WITH_ARENA;
 
 	/**
+	 * The {@code rontolisp:make-mutex} function: a fresh mutual-exclusion lock, returned
+	 * as an OPAQUE handle -- print it, compare it or do arithmetic on it and the answer
+	 * is backend-dependent by design (a {@code ReentrantLock} object on the JVM backend,
+	 * an integer handle on the interpreter, a constant on WASM). The lock is REENTRANT:
+	 * the thread holding it may acquire it again, and must release it as many times.
+	 */
+	public static final String MAKE_MUTEX = "MAKE-MUTEX";
+
+	/**
+	 * The {@code rontolisp:mutex-acquire} function: blocks until the calling thread holds
+	 * the mutex, then returns it. A no-op returning its argument on the WASM backends,
+	 * which are single-threaded by construction (see {@link #MAKE_MUTEX}).
+	 */
+	public static final String MUTEX_ACQUIRE = "MUTEX-ACQUIRE";
+
+	/**
+	 * The {@code rontolisp:mutex-release} function: releases one acquisition of the mutex
+	 * and returns it. Releasing a mutex the calling thread does not hold is an error on
+	 * the interpreter and the JVM backend, and unnoticed on WASM.
+	 */
+	public static final String MUTEX_RELEASE = "MUTEX-RELEASE";
+
+	/**
+	 * The {@code with-mutex} macro provided by the {@code rontolisp} package. Used as
+	 * {@code (rontolisp:with-mutex (mutex-form) body...)}: acquires the mutex, runs the
+	 * body and releases it on every exit. The release rides {@code unwind-protect} on the
+	 * interpreter, the JVM backend and a WASM module already in EH mode; a non-EH WASM
+	 * module gets the normal-exit-only shape, which is exact there because
+	 * acquire/release are no-ops on a single-threaded backend.
+	 */
+	public static final String WITH_MUTEX = "WITH-MUTEX";
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:with-mutex}, as it
+	 * appears in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String WITH_MUTEX_QUALIFIED = RONTOLISP_PKG + ":" + WITH_MUTEX;
+
+	/**
 	 * The canonical package-qualified spelling of {@code rontolisp:async}, as it appears
 	 * in call position after {@code PackageResolver} resolution.
 	 */
@@ -4157,6 +4196,44 @@ public final class LispNames {
 
 	/** The {@code trivial-gray-streams} shim package (and built-in ASDF system) name. */
 	public static final String TRIVIAL_GRAY_STREAMS_PKG = "TRIVIAL-GRAY-STREAMS";
+
+	/**
+	 * The {@code bordeaux-threads} shim package (and built-in ASDF system) name;
+	 * {@code bt} is its built-in nickname, exactly as upstream's
+	 * {@code apiv1/pkgdcl.lisp} declares it. Upstream's own {@code .asd} hard-errors on
+	 * an unknown implementation, so a shim is the only route: it is a portability layer
+	 * that cannot support rontolisp from its side.
+	 */
+	public static final String BORDEAUX_THREADS_PKG = "BORDEAUX-THREADS";
+
+	/** {@code bt:make-lock} -- a fresh lock over {@link #MAKE_MUTEX}. */
+	public static final String MAKE_LOCK = "MAKE-LOCK";
+
+	/** {@code bt:acquire-lock} -- over {@link #MUTEX_ACQUIRE}; returns {@code t}. */
+	public static final String ACQUIRE_LOCK = "ACQUIRE-LOCK";
+
+	/** {@code bt:release-lock} -- over {@link #MUTEX_RELEASE}; returns {@code t}. */
+	public static final String RELEASE_LOCK = "RELEASE-LOCK";
+
+	/**
+	 * {@code bt:*supports-threads-p*} -- {@code t} on the interpreter and the JVM backend
+	 * (one virtual thread per request under {@code serve}), {@code nil} on the WASM
+	 * backends.
+	 */
+	public static final String SUPPORTS_THREADS_P = "*SUPPORTS-THREADS-P*";
+
+	/**
+	 * {@code bt:with-lock-held} -- a built-in {@code LispMacroExpander} expansion onto
+	 * {@link #WITH_MUTEX} (the {@code usocket:with-*} pattern), dispatched on its
+	 * qualified name, not a shim {@code defun}.
+	 */
+	public static final String WITH_LOCK_HELD = "WITH-LOCK-HELD";
+
+	/**
+	 * The canonical package-qualified spelling of
+	 * {@code bordeaux-threads:with-lock-held}.
+	 */
+	public static final String WITH_LOCK_HELD_QUALIFIED = BORDEAUX_THREADS_PKG + ":" + WITH_LOCK_HELD;
 
 	/** The {@code uiop} stub package (and built-in ASDF system) name. */
 	public static final String UIOP_PKG = "UIOP";

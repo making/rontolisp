@@ -406,6 +406,19 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithArena(cons), ctx);
 					return;
 				}
+				if (LispNames.WITH_MUTEX.equals(qn.member())) {
+					// unwindProtect = ctx.ehMode, like the usocket with-* family --
+					// except that with-mutex does NOT flip the module into EH mode (see
+					// programUsesEhForm): the release it would guarantee is a no-op here.
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithMutex(cons, ctx.ehMode), ctx);
+					return;
+				}
+				if (LispNames.MAKE_MUTEX.equals(qn.member()) || LispNames.MUTEX_ACQUIRE.equals(qn.member())
+						|| LispNames.MUTEX_RELEASE.equals(qn.member())) {
+					// No-ops: both WASM backends are single-threaded by construction.
+					WasmMutexCompiler.compile(qn.member(), cons, ctx);
+					return;
+				}
 				if (LispNames.TLS_CONNECT.equals(qn.member()) || LispNames.TLS_LISTEN.equals(qn.member())
 						|| LispNames.TLS_LISTEN_PEM.equals(qn.member())
 						|| LispNames.TLS_LISTEN_P12.equals(qn.member())) {
@@ -454,6 +467,14 @@ final class WasmExprCompiler {
 						// the ordinary qualified-call path.
 					}
 				}
+			}
+			// bordeaux-threads:with-lock-held is the same built-in expansion as
+			// rontolisp:with-mutex; the rest of the bt shim is bordeaux-threads.lisp
+			// defuns, which fall through to the ordinary qualified-call path.
+			if (qn != null && LispNames.BORDEAUX_THREADS_PKG.equals(qn.pkg())
+					&& LispNames.WITH_LOCK_HELD.equals(qn.member())) {
+				compileExpr(LispMacroExpander.expandWithMutex(cons, ctx.ehMode), ctx);
+				return;
 			}
 			switch (sym.name()) {
 				case LispNames.ADD -> {

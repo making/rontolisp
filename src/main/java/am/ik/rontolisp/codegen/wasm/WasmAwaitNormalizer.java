@@ -112,11 +112,16 @@ final class WasmAwaitNormalizer {
 				// defuns (fetch, then, tcp-*, ...) are strict calls.
 				return switch (qn.member()) {
 					case LispNames.AWAIT, LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.ASYNC_RUN,
-							LispNames.WITH_ARENA, LispNames.HTTP_HANDLER, LispNames.WASM_EXPORT, LispNames.WASM_IMPORT,
-							LispNames.WIT_EXPORT, LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE ->
+							LispNames.WITH_ARENA, LispNames.WITH_MUTEX, LispNames.HTTP_HANDLER, LispNames.WASM_EXPORT,
+							LispNames.WASM_IMPORT, LispNames.WIT_EXPORT, LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE ->
 						false;
 					default -> true;
 				};
+			}
+			if (LispNames.BORDEAUX_THREADS_PKG.equals(qn.pkg())) {
+				// with-lock-held takes a lock SPEC and a body; the rest of the bt shim
+				// (make-lock, acquire-lock, release-lock) are strict defuns.
+				return !LispNames.WITH_LOCK_HELD.equals(qn.member());
 			}
 			if (LispNames.USOCKET_PKG.equals(qn.pkg())) {
 				// the with-*/guard convenience macros bind variables

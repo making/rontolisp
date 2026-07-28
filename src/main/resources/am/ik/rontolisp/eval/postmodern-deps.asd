@@ -16,29 +16,30 @@
 ;;;; except the DAO layer. The :if-feature clause is kept verbatim rather than
 ;;;; deleted so the MOP build is a feature flip, not a re-edit of this file.
 ;;;;
-;;;; :postmodern-thread-safe -- OFF, and this one is a genuine narrowing rather
-;;;; than a scope choice. rontolisp DOES run concurrent handlers (one virtual
-;;;; thread per request under `serve`), so postmodern's three locks guard state
-;;;; that can really be raced here: the connection pool, the prepared-statement
-;;;; id counter and class finalization. Turning the feature ON would need a
-;;;; mutex primitive rontolisp does not have -- bordeaux-threads' `with-lock-
-;;;; held` must actually serialize on the interpreter and the JVM to be worth
-;;;; declaring, and `java:` monitors are not an option (the native binary's
-;;;; interpreter has no reflection metadata). With the feature off, the lock
-;;;; sites take their #-postmodern-thread-safe branch and compile to
-;;;; (progn ...) -- three of them in this build (connect.lisp, query.lisp,
-;;;; prepare.lisp), five more in the MOP-only table.lisp -- which is correct
-;;;; for a single-threaded program and racy for a concurrent one. See
-;;;; `.kb/asdf.md` and `.todo/204` for the flip.
+;;;; :postmodern-thread-safe -- ON (.todo/204). rontolisp DOES run concurrent
+;;;; handlers (one virtual thread per request under `serve`), so postmodern's
+;;;; three locks guard state that can really be raced here: the connection pool
+;;;; (connect.lisp), the prepared-statement id counter (prepare.lisp) and class
+;;;; finalization (query.lisp), plus five more in the MOP-only table.lisp. The
+;;;; feature is declared through :rontolisp-features below, which is what makes
+;;;; it visible to the READER for this system's own component files -- a
+;;;; *features* push from an eval-when never is (.todo/181). It is honest to
+;;;; declare because bordeaux-threads' `with-lock-held` now really serializes:
+;;;; the bt shim is a built-in system over the rontolisp:*-mutex primitives,
+;;;; which are a ReentrantLock on the interpreter and the JVM and no-ops on the
+;;;; two WASM backends (single-threaded by construction, so exclusion there is
+;;;; a tautology, not a lie). `java:` monitors were never an option -- the
+;;;; native binary has no reflection metadata.
 ;;;;
 ;;;; :depends-on -- "global-vars" is dropped: upstream declares it but has ZERO
 ;;;; call sites (it is a bordeaux-threads dependency that leaked into this
 ;;;; list), and its non-SBCL branch needs define-symbol-macro and remprop,
-;;;; neither of which exists here. "bordeaux-threads" goes with the feature
-;;;; decision above. "cl-ppcre" (roles.lisp, execute-file.lisp) and "uax-15"
-;;;; (util.lisp) are undeclared upstream and added here: they load transitively
-;;;; through cl-postgres today, so leaving them out would make the eagerly
-;;;; resolving compile paths depend on the order of somebody else's .asd.
+;;;; neither of which exists here. "bordeaux-threads" is declared, matching the
+;;;; feature decision above. "cl-ppcre" (roles.lisp, execute-file.lisp) and
+;;;; "uax-15" (util.lisp) are undeclared upstream and added here: they load
+;;;; transitively through cl-postgres today, so leaving them out would make the
+;;;; eagerly resolving compile paths depend on the order of somebody else's
+;;;; .asd.
 ;;;;
 ;;;; Component paths resolve against the directory of the located postmodern.asd,
 ;;;; so the REAL library sources are loaded; only the system metadata is
@@ -47,8 +48,9 @@
 
 (defsystem "postmodern"
   :description "PostgreSQL programming API"
-  :depends-on ("alexandria" "cl-postgres" "s-sql" "split-sequence" "uiop"
-               "cl-ppcre" "uax-15")
+  :rontolisp-features (:postmodern-thread-safe)
+  :depends-on ("alexandria" "bordeaux-threads" "cl-postgres" "s-sql"
+               "split-sequence" "uiop" "cl-ppcre" "uax-15")
   :components
   ((:module "postmodern"
     :components ((:file "package")

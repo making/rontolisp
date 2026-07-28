@@ -59,8 +59,15 @@ public final class AsdfSystems {
 	 * @param baseDir the directory the component files resolve against (the directory of
 	 * the {@code .asd} file, or of the source that defined the system inline; empty for
 	 * working-directory-relative)
+	 * @param features the feature names the system's {@code :rontolisp-features} option
+	 * declares: the static encoding of a {@code .asd} that pushes onto {@code *features*}
+	 * from an {@code eval-when}. They hold while THIS system's own clauses are parsed and
+	 * while its component files are read, and each loader widens its own base set with
+	 * them ({@code Features.with}) -- so the backend feature stays the loader's, and a
+	 * dependency (parsed from its own {@code .asd}) never inherits them
 	 */
-	public record LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir) {
+	public record LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
+			List<String> features) {
 	}
 
 	/**
@@ -298,7 +305,7 @@ public final class AsdfSystems {
 	 * @param features the features the {@code :if-feature} component option tests
 	 * @return the parsed system
 	 */
-	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features features) {
+	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures) {
 		if (!(form instanceof LispCons cons)) {
 			throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " expects a system definition form");
 		}
@@ -311,6 +318,12 @@ public final class AsdfSystems {
 			throw new IllegalStateException(
 					LispNames.ASDF_DEFSYSTEM + " " + name + " expects :option value pairs: " + form.print());
 		}
+		// :rontolisp-features is read BEFORE the option loop: upstream pushes such a
+		// feature from an eval-when ahead of its defsystem, so it must already hold for
+		// this system's own :if-feature / (:feature ...) clauses, whatever order the
+		// options happen to appear in.
+		List<String> declaredFeatures = declaredFeatures(name, items);
+		Features features = declaredFeatures.isEmpty() ? givenFeatures : givenFeatures.with(declaredFeatures);
 		List<String> dependsOn = new ArrayList<>();
 		boolean serial = false;
 		LispVal components = null;
@@ -342,13 +355,43 @@ public final class AsdfSystems {
 				}
 				case ":SERIAL" -> serial = !(value instanceof LispNil);
 				case ":COMPONENTS" -> components = value;
+				// Already consumed by declaredFeatures above.
+				case ":RONTOLISP-FEATURES" -> {
+				}
 				default -> throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
 						+ ": unsupported option " + key.name() + " (supported: :name :description :long-description"
-						+ " :version :author :maintainer :license :depends-on :serial :components)");
+						+ " :version :author :maintainer :license :depends-on :serial :components"
+						+ " :rontolisp-features)");
 			}
 		}
 		List<String> files = components == null ? List.of() : orderComponents(name, components, serial, "", features);
-		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir);
+		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir, declaredFeatures);
+	}
+
+	/**
+	 * Reads the {@code :rontolisp-features} option's list of feature designators, ahead
+	 * of the option loop. rontolisp's own extension, not an ASDF option: a real
+	 * {@code .asd} pushes such a feature onto {@code *features*} from an
+	 * {@code eval-when} before its {@code defsystem}, which never reaches the reader here
+	 * (the push happens at load time, the conditionals at read time), so the replacement
+	 * declares it statically. The declaration is additive only -- there is no way to turn
+	 * a feature OFF, since that would let a system claim to be a backend it is not.
+	 */
+	private static List<String> declaredFeatures(String systemName, List<LispVal> items) {
+		List<String> declared = new ArrayList<>();
+		for (int i = 2; i + 1 < items.size(); i += 2) {
+			if (items.get(i) instanceof LispSymbol key && key.isKeyword() && ":RONTOLISP-FEATURES".equals(key.name())) {
+				for (LispVal feature : properList(LispNames.ASDF_DEFSYSTEM + " " + systemName + " :rontolisp-features",
+						items.get(i + 1))) {
+					if (!(feature instanceof LispSymbol sym)) {
+						throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + systemName
+								+ " :rontolisp-features expects feature names, got " + feature.print());
+					}
+					declared.add(symbolName(sym));
+				}
+			}
+		}
+		return List.copyOf(declared);
 	}
 
 	/**

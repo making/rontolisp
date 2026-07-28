@@ -282,7 +282,7 @@ public final class PackageRegistry {
 	private static final Map<String, String> BUILTIN_NICKNAMES = Map.of("COMMON-LISP", LispNames.CL_PKG,
 			"COMMON-LISP-USER", LispNames.CL_USER_PKG, "RL", LispNames.RONTOLISP_PKG, "LA", LispNames.LINALG_PKG,
 			"QUICKLISP", LispNames.QL_PKG, "C2MOP", LispNames.CLOSER_MOP_PKG, "C2CL", LispNames.CLOSER_MOP_PKG,
-			"FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG);
+			"FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG, "BT", LispNames.BORDEAUX_THREADS_PKG);
 
 	/**
 	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
@@ -299,7 +299,8 @@ public final class PackageRegistry {
 	private static final Set<String> BUILTIN_PACKAGE_NAMES = Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
 			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
 			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
-			LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG, "KEYWORD");
+			LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
+			LispNames.BORDEAUX_THREADS_PKG, "KEYWORD");
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -320,7 +321,8 @@ public final class PackageRegistry {
 				LispNames.HASH_TABLE_ALIST, LispNames.URL_DECODE, LispNames.URL_ENCODE, LispNames.QUERY_PARAMS,
 				LispNames.QUERY_PARAM, LispNames.URL_PATH, LispNames.URL_QUERY, LispNames.WASM_EXPORT,
 				LispNames.WASM_IMPORT, LispNames.WIT_EXPORT, LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE,
-				LispNames.WIT_ERROR, LispNames.WIT_ERROR_PAYLOAD, LispNames.WITH_ARENA, LispNames.HTTP_HANDLER,
+				LispNames.WIT_ERROR, LispNames.WIT_ERROR_PAYLOAD, LispNames.WITH_ARENA, LispNames.MAKE_MUTEX,
+				LispNames.MUTEX_ACQUIRE, LispNames.MUTEX_RELEASE, LispNames.WITH_MUTEX, LispNames.HTTP_HANDLER,
 				LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT,
 				LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT,
 				LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12, LispNames.RANDOM_BYTES,
@@ -387,6 +389,15 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.TRIVIAL_GRAY_STREAMS_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
 						LispNames.GRAY_STREAM_WRITE_CHAR, LispNames.GRAY_STREAM_WRITE_STRING))));
+		// bordeaux-threads (nickname bt): the locking subset over the rontolisp:*-mutex
+		// primitives, implemented in bordeaux-threads.lisp (eval.ShimLibraries) except
+		// with-lock-held, which is a built-in LispMacroExpander expansion dispatched on
+		// its qualified name (the usocket:with-* pattern). Thread CREATION is out: no
+		// backend can spawn one from Lisp, and a library that asked would be broken by a
+		// shim that pretended otherwise.
+		define(new LispPackage(LispNames.BORDEAUX_THREADS_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK,
+						LispNames.WITH_LOCK_HELD, LispNames.SUPPORTS_THREADS_P))));
 	}
 
 	/**

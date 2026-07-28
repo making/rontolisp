@@ -66,7 +66,7 @@ public final class ShimLibraries {
 	 */
 	private static final Map<String, String> RESOURCES = Map.of("closer-mop", "closer-mop.lisp", "flexi-streams",
 			"flexi-streams.lisp", "float-features", "float-features.lisp", "trivial-gray-streams",
-			"trivial-gray-streams.lisp");
+			"trivial-gray-streams.lisp", "bordeaux-threads", "bordeaux-threads.lisp");
 
 	/**
 	 * Leaf-module substitutions: system name to (component file relative to the system's
@@ -95,18 +95,25 @@ public final class ShimLibraries {
 	/**
 	 * Returns the parsed library definitions of the named shim system. The source is in
 	 * canonical shape (qualified public names), so it needs no package resolution. Parsed
-	 * once and cached.
+	 * once per feature set and cached.
+	 *
+	 * <p>
+	 * The shim is read with the TARGET backend's features, not the interpreter's, so a
+	 * {@code #+}/{@code #-} conditional in a shim source says what it means on the
+	 * backend the program is being built for -- {@code bordeaux-threads}'
+	 * {@code *supports-threads-p*} is the first such branch.
 	 * @param name a name for which {@link #isShim} is true
+	 * @param features the reader features of the target backend
 	 * @return the library forms
 	 */
-	public static List<LispVal> forms(String name) {
+	public static List<LispVal> forms(String name, Features features) {
 		String resource = RESOURCES.get(name);
 		if (resource == null) {
 			throw new IllegalArgumentException("Not a shim system: " + name);
 		}
-		return CACHE.computeIfAbsent(name, key -> {
-			List<LispVal> parsed = LispReader.readAllFromString(readSource(resource), Features.INTERPRETER);
-			if ("trivial-gray-streams".equals(key)) {
+		return CACHE.computeIfAbsent(name + "#" + String.join(",", features.names()), ignored -> {
+			List<LispVal> parsed = LispReader.readAllFromString(readSource(resource), features);
+			if ("trivial-gray-streams".equals(name)) {
 				// The adapter's superclasses and delegation targets are rontolisp's
 				// own Gray protocol: its definitions must precede the adapter's.
 				List<LispVal> combined = new java.util.ArrayList<>(GrayStreamsLibrary.forms());

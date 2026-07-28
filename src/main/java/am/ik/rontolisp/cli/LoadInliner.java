@@ -376,7 +376,7 @@ public final class LoadInliner {
 			// what stops it inheriting the provenance of a third-party system that
 			// :depends-on it.
 			out.add(beginSystem(name));
-			out.addAll(BuiltinSystems.forms(name));
+			out.addAll(BuiltinSystems.forms(name, ctx.features()));
 			out.add(marker(LispNames.END_SYSTEM));
 			ctx.loadedSystems().add(name);
 			return;
@@ -399,6 +399,15 @@ public final class LoadInliner {
 			}
 		}
 		ctx.loadingSystems().addLast(name);
+		// A system that declares :rontolisp-features has its OWN component files read
+		// with the target backend's features widened by that declaration (the static
+		// encoding of the eval-when *features* push a real .asd would do). The record
+		// copy shares every mutable field, so the registries stay one set of state; a
+		// dependency keeps the outer ctx, since it declares its own.
+		Ctx systemCtx = system.features().isEmpty() ? ctx
+				: new Ctx(ctx.loader(), ctx.loading(), ctx.provided(), ctx.systems(), ctx.loadedSystems(),
+						ctx.loadingSystems(), ctx.systemPath(), ctx.features().with(system.features()), ctx.quicklisp(),
+						ctx.entryBaseDir());
 		// Everything spliced from here on belongs to this system. A dependency opens its
 		// own bracket inside this one, so the pruner's innermost-wins rule attributes
 		// each
@@ -419,8 +428,8 @@ public final class LoadInliner {
 					out.addAll(leafShim);
 					continue;
 				}
-				spliceFile(LispNames.ASDF_LOAD_SYSTEM, SourceLoader.resolve(system.baseDir(), file), out, ctx, name,
-						file, system.baseDir());
+				spliceFile(LispNames.ASDF_LOAD_SYSTEM, SourceLoader.resolve(system.baseDir(), file), out, systemCtx,
+						name, file, system.baseDir());
 			}
 		}
 		finally {

@@ -56,6 +56,48 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void aDeclaredRontolispFeatureIsVisibleToTheReaderOfTheSystemsOwnComponents() {
+		// The static encoding of a .asd that pushes onto *features* from an eval-when:
+		// the push would happen at LOAD time and the conditionals are resolved at READ
+		// time, so only a declaration can reach them (.todo/181). It must reach BOTH the
+		// system's own :if-feature clauses and the component sources.
+		String output = run("(asdf:load-system \"feat-lib\") (print (feat-lib-mode))", Map.of(//
+				"feat-lib.asd", """
+						(defsystem :feat-lib
+						  :rontolisp-features (:feat-lib-fancy)
+						  :serial t
+						  :components ((:file "main")
+						               (:file "fancy" :if-feature :feat-lib-fancy)))""", //
+				"main.lisp", """
+						(defun feat-lib-mode ()
+						  #+feat-lib-fancy :fancy
+						  #-feat-lib-fancy :plain)""", //
+				"fancy.lisp", "(print :fancy-component-loaded)"), List.of());
+		assertThat(output).contains(":FANCY-COMPONENT-LOADED").contains(":FANCY");
+	}
+
+	@Test
+	void aDeclaredRontolispFeatureDoesNotLeakToAnotherSystem() {
+		// The declaration is recorded per system and each loader widens its own base
+		// set, so a dependency parsed from its own .asd never inherits it.
+		String output = run("(asdf:load-system \"feat-app\") (print (feat-dep-mode))", Map.of(//
+				"feat-app.asd", """
+						(defsystem :feat-app
+						  :rontolisp-features (:feat-lib-fancy)
+						  :depends-on ("feat-dep")
+						  :components ((:file "app")))""", //
+				"app.lisp", "(defun feat-app-mode () :app)", //
+				"feat-dep.asd", """
+						(defsystem :feat-dep
+						  :components ((:file "dep")))""", //
+				"dep.lisp", """
+						(defun feat-dep-mode ()
+						  #+feat-lib-fancy :leaked
+						  #-feat-lib-fancy :clean)"""), List.of());
+		assertThat(output).contains(":CLEAN");
+	}
+
+	@Test
 	void loadSystemResolvesBuiltinUsocketWithoutAnAsdFile() {
 		// "usocket" is a built-in system (BuiltinSystems): no usocket.asd is looked
 		// up -- the empty loader would throw FileNotFoundException if it were.

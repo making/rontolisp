@@ -344,8 +344,12 @@ class AsdfSystemsTest {
 		assertThat(systems).hasSize(1);
 		AsdfSystems.LispSystem system = systems.get(0);
 		assertThat(system.name()).isEqualTo("postmodern");
-		assertThat(system.dependsOn()).containsExactly("alexandria", "cl-postgres", "s-sql", "split-sequence", "uiop",
-				"cl-ppcre", "uax-15");
+		assertThat(system.dependsOn()).containsExactly("alexandria", "bordeaux-threads", "cl-postgres", "s-sql",
+				"split-sequence", "uiop", "cl-ppcre", "uax-15");
+		// :postmodern-thread-safe is declared statically (upstream pushes it from an
+		// eval-when, which the reader never sees), so the lock sites take their
+		// #+postmodern-thread-safe branch.
+		assertThat(system.features()).containsExactly("postmodern-thread-safe");
 		assertThat(system.files()).containsExactly("postmodern/package.lisp", "postmodern/config.lisp",
 				"postmodern/connect.lisp", "postmodern/json-encoder.lisp", "postmodern/query.lisp",
 				"postmodern/prepare.lisp", "postmodern/roles.lisp", "postmodern/util.lisp",
