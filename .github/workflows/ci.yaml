@@ -28,7 +28,9 @@ jobs:
         distribution: 'graalvm'
         cache: maven
     - name: Unit Tests
-      run: ./mvnw -V --no-transfer-progress clean test
+      # The intra-class parallelism default in junit-platform.properties targets a
+      # development machine; this runner has 4 vCPU shared by two surefire forks.
+      run: ./mvnw -V --no-transfer-progress -Djunit.jupiter.execution.parallel.config.fixed.parallelism=4 clean test
   native-image:
     needs: test
     strategy:

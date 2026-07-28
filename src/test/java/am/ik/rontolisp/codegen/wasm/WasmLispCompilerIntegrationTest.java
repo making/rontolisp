@@ -1,12 +1,19 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.WasmtimeSupport;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.testcontainers.containers.Container.ExecResult;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.images.builder.Transferable;
@@ -19,8 +26,19 @@ import static org.assertj.core.api.Assertions.within;
 /**
  * Integration tests that compile Lisp to WASM and run it with wasmtime inside a
  * container.
+ *
+ * <p>
+ * This is by far the longest class in the build: every case is a serial chain of compile
+ * the module, stage it in the container, run wasmtime (roughly 250 ms / 20 ms / 150 ms
+ * for a linalg program), and there are thousands of them. None of that chain is shared
+ * between cases, so the methods run concurrently inside the surefire fork -- the thread
+ * cap lives in {@code junit-platform.properties}. Everything a test writes into the
+ * container therefore has to be private to the running test: stage modules and
+ * guest-visible data files through {@link #path(String)}, never at a fixed
+ * {@code /tmp/...} literal shared with another method.
  */
 @Testcontainers(disabledWithoutDocker = true)
+@Execution(ExecutionMode.CONCURRENT)
 class WasmLispCompilerIntegrationTest {
 
 	// The wasmtime container comes from a prebuilt GHCR image (see WasmtimeSupport); it
@@ -30,9 +48,73 @@ class WasmLispCompilerIntegrationTest {
 	// only contacted) from @BeforeAll, which never runs for a disabled class.
 	static GenericContainer<?> wasmtime;
 
+	// Scratch directory in the container, one per test worker thread (created on that
+	// thread's first use). Scoping by thread rather than by test keeps the container's
+	// /tmp to one file set per worker, and gives the `--dir .` tests -- whose guest
+	// programs open relative names like "lib.lisp" or "wof.txt" -- a working directory
+	// no concurrently running test can write into.
+	private static final ConcurrentHashMap<Long, String> WORK_DIRS = new ConcurrentHashMap<>();
+
+	// Workers for the second half of a two-module comparison (see
+	// assertLinalgMatchesTheScalarPath). A fixed pool rather than a virtual-thread
+	// executor: a worker pays one mkdir exec for its scratch directory on first use, so
+	// the threads are worth reusing. Daemon threads, so a pool idling at the end of the
+	// class never holds the JVM open.
+	private static final ExecutorService PAIRS = Executors
+		.newFixedThreadPool(Math.max(4, Runtime.getRuntime().availableProcessors()), runnable -> {
+			Thread thread = new Thread(runnable, "wasm-compare");
+			thread.setDaemon(true);
+			return thread;
+		});
+
 	@BeforeAll
 	static void startWasmtime() {
 		wasmtime = WasmtimeSupport.container();
+	}
+
+	/**
+	 * Waits for a {@link #PAIRS} task, unwrapping the {@link ExecutionException} so an
+	 * assertion that failed on the worker surfaces as itself.
+	 * @param <T> the task's result type
+	 * @param task the submitted task
+	 * @return its result
+	 * @throws Exception whatever the task threw
+	 */
+	private static <T> T await(Future<T> task) throws Exception {
+		try {
+			return task.get();
+		}
+		catch (ExecutionException failed) {
+			switch (failed.getCause()) {
+				case Exception cause -> throw cause;
+				case Error cause -> throw cause;
+				case null, default -> throw failed;
+			}
+		}
+	}
+
+	/**
+	 * Returns a container path under the calling thread's scratch directory. Use it for
+	 * every file a test stages or the guest program opens; a fixed path would be raced by
+	 * the tests running concurrently on the other threads.
+	 * @param name the file name inside the scratch directory
+	 * @return the absolute container path
+	 */
+	private static String path(String name) {
+		return workDir() + "/" + name;
+	}
+
+	private static String workDir() {
+		return WORK_DIRS.computeIfAbsent(Thread.currentThread().threadId(), id -> {
+			String dir = "/tmp/w" + id;
+			try {
+				wasmtime.execInContainer("mkdir", "-p", dir);
+			}
+			catch (Exception e) {
+				throw new IllegalStateException("cannot create the container scratch dir " + dir, e);
+			}
+			return dir;
+		});
 	}
 
 	private static String compileAndRun(String lispCode) throws Exception {
@@ -78,9 +160,9 @@ class WasmLispCompilerIntegrationTest {
 
 	private static String compileAndRunProgram(List<LispVal> program) throws Exception {
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", program, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -91,9 +173,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunEh(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -132,9 +214,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunEhExpectTrap(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("expected a trap for: %s\nstdout: %s", lispCode, result.getStdout())
 			.isNotZero();
 		return result.getStderr();
@@ -145,9 +227,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunJson(String lispCode) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.JsonLibrary.process(LispReader.readAllFromString(lispCode));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -157,9 +239,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunLinalg(String lispCode) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -169,9 +251,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunUrl(String lispCode) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.UrlLibrary.process(LispReader.readAllFromString(lispCode));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -182,9 +264,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunRawWithEnv(String lispCode, String env) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", "--env", env,
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout();
 	}
@@ -195,9 +277,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndInvoke(String lispCode, String function, String... args) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(
-				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "-W", "exceptions=y", "/tmp/test.wasm"));
+				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "-W", "exceptions=y", path("test.wasm")));
 		command.addAll(List.of(args));
 		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
 		assertThat(result.getExitCode())
@@ -244,9 +326,9 @@ class WasmLispCompilerIntegrationTest {
 	// signature (`name(arg, ...)`), the form an interface member is reached by.
 	private static String compileComponentAndInvoke(String lispCode, String invocation) throws Exception {
 		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(lispCode));
-		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke", invocation,
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -706,9 +788,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileNoWasiAndInvoke(String lispCode, String function, String... args) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler(false, false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(
-				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "-W", "exceptions=y", "/tmp/test.wasm"));
+				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "-W", "exceptions=y", path("test.wasm")));
 		command.addAll(List.of(args));
 		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
 		assertThat(result.getExitCode())
@@ -738,10 +820,10 @@ class WasmLispCompilerIntegrationTest {
 		byte[] host = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(hostCode));
 		byte[] main = new WasmLispCompiler(false, false, false, optimize)
 			.compile(LispReader.readAllFromString(mainCode));
-		wasmtime.copyFileToContainer(Transferable.of(host), "/tmp/host.wasm");
-		wasmtime.copyFileToContainer(Transferable.of(main), "/tmp/main.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(host), path("host.wasm"));
+		wasmtime.copyFileToContainer(Transferable.of(main), path("main.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y", "--preload",
-				"host=/tmp/host.wasm", "/tmp/main.wasm");
+				"host=" + path("host.wasm"), path("main.wasm"));
 		assertThat(result.getExitCode()).as("exit code for preload run: %s\nstderr: %s", mainCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -859,9 +941,9 @@ class WasmLispCompilerIntegrationTest {
 			String... args) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new NoGcWasmCompiler(optimize, simd).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(
-				List.of("wasmtime", "run", "--invoke", function, "/tmp/test.wasm"));
+				List.of("wasmtime", "run", "--invoke", function, path("test.wasm")));
 		command.addAll(List.of(args));
 		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
 		assertThat(result.getExitCode())
@@ -920,9 +1002,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileNoGcComponentAndInvoke(String lispCode, String waveInvocation) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new NoGcWasmCompiler(false, false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", waveInvocation,
-				"/tmp/test.component.wasm");
+				path("test.component.wasm"));
 		assertThat(result.getExitCode())
 			.as("exit code for no-gc component invoke %s: %s\nstderr: %s", waveInvocation, lispCode, result.getStderr())
 			.isZero();
@@ -990,10 +1072,10 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'down :params '(:s32) :returns :u32)
 				(rontolisp:wasm-export 'wide :params '(:s32) :returns :s32)
 				"""));
-		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(component), path("test.component.wasm"));
 		for (String invocation : new String[] { "down(5)", "wide(1000000)" }) {
 			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", invocation,
-					"/tmp/test.component.wasm");
+					path("test.component.wasm"));
 			assertThat(result.getExitCode()).as(invocation).isNotZero();
 			assertThat(result.getStderr()).as(invocation).contains("wasm trap");
 		}
@@ -1010,9 +1092,9 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		assertThat(compileNoGcComponentAndInvoke(program, "sum-squared(2, 3)")).isEqualTo("25");
 		byte[] optimized = new NoGcWasmCompiler(true, false, true).compile(LispReader.readAllFromString(program));
-		wasmtime.copyFileToContainer(Transferable.of(optimized), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(optimized), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "sum-squared(2, 3)",
-				"/tmp/test.component.wasm");
+				path("test.component.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("25");
 	}
@@ -1226,9 +1308,9 @@ class WasmLispCompilerIntegrationTest {
 	// assert growth (an out-of-bounds trap) as well as flatness (a clean exit).
 	private static ExecResult invokeNoGcWithMemoryCap(byte[] wasmBytes, long capBytes, String function, String... args)
 			throws Exception {
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(List.of("wasmtime", "run", "-W", "max-memory-size=" + capBytes,
-				"--invoke", function, "/tmp/test.wasm"));
+				"--invoke", function, path("test.wasm")));
 		command.addAll(List.of(args));
 		return wasmtime.execInContainer(command.toArray(new String[0]));
 	}
@@ -1947,9 +2029,9 @@ class WasmLispCompilerIntegrationTest {
 			throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler(false, false, noWasi, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(
-				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "-W", "exceptions=y", "/tmp/test.wasm"));
+				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "-W", "exceptions=y", path("test.wasm")));
 		command.addAll(List.of(args));
 		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
 		assertThat(result.getExitCode())
@@ -1989,9 +2071,9 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		byte[] wasmBytes = new WasmLispCompiler(false, false, false, true)
 			.compile(LispReader.readAllFromString(program));
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("3\n\"HI\"");
 	}
@@ -2007,9 +2089,9 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		byte[] wasmBytes = new WasmLispCompiler(false, false, false, true)
 			.compile(LispReader.readAllFromString(program));
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("81");
 	}
@@ -2024,9 +2106,9 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'shout :params '(:int))
 				""";
 		byte[] wasmBytes = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(program));
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "shout", "-W", "gc", "-W",
-				"exceptions=y", "/tmp/test.wasm", "7");
+				"exceptions=y", path("test.wasm"), "7");
 		assertThat(result.getExitCode()).isNotZero();
 		assertThat(result.getStderr()).contains("unreachable");
 	}
@@ -2039,9 +2121,9 @@ class WasmLispCompilerIntegrationTest {
 		for (String form : List.of("(mapcar #'identity \"abc\")", "(mapc #'identity \"abc\")",
 				"(mapcan #'list \"abc\")", "(maplist #'identity \"abc\")", "(mapcon #'list \"abc\")")) {
 			byte[] wasmBytes = new WasmLispCompiler().compile(LispReader.readAllFromString(form));
-			wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+			wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 			ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-					"/tmp/test.wasm");
+					path("test.wasm"));
 			assertThat(result.getExitCode()).as("expected a trap for: %s", form).isNotZero();
 			assertThat(result.getStderr()).as("trap message for: %s", form).contains("unreachable");
 		}
@@ -2107,9 +2189,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunComponent(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
-				"/tmp/test.component.wasm");
+				path("test.component.wasm"));
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -2152,9 +2234,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndInvokeComponent(String lispCode, String waveInvocation) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--invoke",
-				waveInvocation, "/tmp/test.component.wasm");
+				waveInvocation, path("test.component.wasm"));
 		assertThat(result.getExitCode())
 			.as("exit code for component invoke %s: %s\nstderr: %s", waveInvocation, lispCode, result.getStderr())
 			.isZero();
@@ -2226,9 +2308,9 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndInvokeComponent(program, "bump(-9007199254740995)")).isEqualTo("-9007199254740994");
 		assertThat(compileAndInvokeComponent(program, "scale(9000000000000)")).isEqualTo("9000000000000000000");
 		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(program));
-		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke",
-				"scale(9300000000000000000)", "/tmp/test.wasm");
+				"scale(9300000000000000000)", path("test.wasm"));
 		assertThat(result.getExitCode()).isNotZero();
 		assertThat(result.getStderr()).contains("wasm trap");
 	}
@@ -2245,10 +2327,10 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'down :params '(:s32) :returns :u32)
 				(rontolisp:wasm-export 'wide :params '(:u8) :returns :u8)
 				"""));
-		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
 		for (String invocation : new String[] { "down(5)", "wide(7)" }) {
 			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke", invocation,
-					"/tmp/test.wasm");
+					path("test.wasm"));
 			assertThat(result.getExitCode()).as(invocation).isNotZero();
 			assertThat(result.getStderr()).as(invocation).contains("wasm trap");
 		}
@@ -2376,9 +2458,9 @@ class WasmLispCompilerIntegrationTest {
 		// removes that residual risk.
 		List<LispVal> program = LispReader.readAllFromString(COMPONENT_ASYNC_PROGRAM.replace(":async t", ":async nil"));
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--invoke",
-				"noisy-add(20, 22)", "/tmp/test.component.wasm");
+				"noisy-add(20, 22)", path("test.component.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout()).contains("42");
 	}
@@ -2396,9 +2478,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunComponentWithEnv(String lispCode, String env) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--env",
-				env, "/tmp/test.component.wasm");
+				env, path("test.component.wasm"));
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -2468,9 +2550,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunComponentWithDir(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime run -W gc=y -W exceptions=y --dir . test.component.wasm");
+				"cd " + workDir() + " && wasmtime run -W gc=y -W exceptions=y --dir . test.component.wasm");
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -2763,12 +2845,12 @@ class WasmLispCompilerIntegrationTest {
 		// runtime, so the program is compiled in --dynamic mode.
 		List<LispVal> program = LispReader.readAllFromString("(load \"clib.lisp\")\n(print (sq 9))");
 		byte[] componentBytes = new WasmLispCompiler(true, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		wasmtime.copyFileToContainer(
 				Transferable.of("(defun SQ (x) (* x x))".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-				"/tmp/clib.lisp");
+				path("clib.lisp"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime run -W gc=y -W exceptions=y --dir . test.component.wasm");
+				"cd " + workDir() + " && wasmtime run -W gc=y -W exceptions=y --dir . test.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("81");
 	}
@@ -2776,11 +2858,11 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunComponentWithStdin(String lispCode, String stdin) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-				"/tmp/stdin.txt");
+				path("stdin.txt"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime run -W gc=y /tmp/test.component.wasm < /tmp/stdin.txt");
+				"wasmtime run -W gc=y " + path("test.component.wasm") + " < " + path("stdin.txt"));
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -5008,9 +5090,9 @@ class WasmLispCompilerIntegrationTest {
 	private static void compileAndExpectTrap(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("expected a trap for: %s\nstdout: %s", lispCode, result.getStdout())
 			.isNotZero();
 	}
@@ -5101,9 +5183,9 @@ class WasmLispCompilerIntegrationTest {
 				(print (apply-in-body 4))
 				"""));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("35\n(4 16)");
 	}
@@ -5131,9 +5213,9 @@ class WasmLispCompilerIntegrationTest {
 				(print *calls*)
 				"""));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("25\n1");
 	}
@@ -5155,9 +5237,9 @@ class WasmLispCompilerIntegrationTest {
 				(print (restart-case (+ 1 2) (continue () 99)))
 				"""));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("110\n9\n3");
 	}
@@ -5646,9 +5728,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunWithStdin(String lispCode, String stdin) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"echo '" + stdin + "' | wasmtime --wasm gc /tmp/test.wasm");
+				"echo '" + stdin + "' | wasmtime --wasm gc " + path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -5662,8 +5744,9 @@ class WasmLispCompilerIntegrationTest {
 	void readLineEof() throws Exception {
 		List<LispVal> program = LispReader.readAllFromString("(print (null (read-line)))");
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
-		ExecResult result = wasmtime.execInContainer("bash", "-c", "echo -n '' | wasmtime --wasm gc /tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"echo -n '' | wasmtime --wasm gc " + path("test.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("T");
 	}
@@ -5720,11 +5803,11 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunWithStdinFile(String lispCode, String stdin) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(stdin.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-				"/tmp/stdin.txt");
+				path("stdin.txt"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"wasmtime --wasm gc /tmp/test.wasm < /tmp/stdin.txt");
+				"wasmtime --wasm gc " + path("test.wasm") + " < " + path("stdin.txt"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -5763,11 +5846,11 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunLoad(String lispCode, String libContent) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(libContent.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-				"/tmp/lib.lisp");
+				path("lib.lisp"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime --wasm gc --wasm exceptions=y --dir . test.wasm");
+				"cd " + workDir() + " && wasmtime --wasm gc --wasm exceptions=y --dir . test.wasm");
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -5777,9 +5860,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunWithDir(String lispCode) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime --wasm gc --wasm exceptions=y --dir . test.wasm");
+				"cd " + workDir() + " && wasmtime --wasm gc --wasm exceptions=y --dir . test.wasm");
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -6136,9 +6219,9 @@ class WasmLispCompilerIntegrationTest {
 				return "(provide :util) (defun u-sq (x) (* x x))";
 			});
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("64");
 	}
@@ -6157,11 +6240,11 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunLoadDynamic(String lispCode, String libContent) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new WasmLispCompiler(true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		wasmtime.copyFileToContainer(Transferable.of(libContent.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-				"/tmp/lib.lisp");
+				path("lib.lisp"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
-				"cd /tmp && wasmtime --wasm gc --wasm exceptions=y --dir . test.wasm");
+				"cd " + workDir() + " && wasmtime --wasm gc --wasm exceptions=y --dir . test.wasm");
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -7207,9 +7290,9 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> forms = am.ik.rontolisp.eval.WaitForLibrary.process(LispReader.readAllFromString(lispCode),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(forms);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
-				"/tmp/test.component.wasm");
+				path("test.component.wasm"));
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -7258,9 +7341,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunCombinatorsP1(String lispCode) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -7268,9 +7351,9 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunCombinatorsComponent(String lispCode) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/test.component.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
-				"/tmp/test.component.wasm");
+				path("test.component.wasm"));
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
@@ -9576,10 +9659,10 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
 			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
 		byte[] wasmBytes = new WasmLispCompiler(false, false, false, false, false, simd).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(List.of("wasmtime", "run", "--wasm", "gc"));
 		command.addAll(List.of(extraFlags));
-		command.add("/tmp/test.wasm");
+		command.add(path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
 		assertThat(result.getExitCode()).as("exit code (simd=%s): %s\nstderr: %s", simd, lispCode, result.getStderr())
 			.isZero();
@@ -9728,8 +9811,8 @@ class WasmLispCompilerIntegrationTest {
 				+ "(print (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0)))";
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
 		byte[] optimized = new WasmLispCompiler(false, false, false, true, false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(optimized), "/tmp/test.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(optimized), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", path("test.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo(compileAndRunVec(source, false));
 	}
@@ -9749,9 +9832,9 @@ class WasmLispCompilerIntegrationTest {
 
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
 		byte[] simdBytes = new WasmLispCompiler(false, false, false, false, false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(simdBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(simdBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", "--wasm", "simd=n", "--wasm",
-				"relaxed-simd=n", "/tmp/test.wasm");
+				"relaxed-simd=n", path("test.wasm"));
 		assertThat(result.getExitCode()).as("a --simd module must not validate without the SIMD proposal").isNotZero();
 	}
 
@@ -9956,8 +10039,8 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
 			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
 		byte[] wasmBytes = new WasmLispCompiler(false, false, false, false, false, simd).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
-		return wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", "/tmp/test.wasm").getExitCode();
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		return wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", path("test.wasm")).getExitCode();
 	}
 
 	@Test
@@ -9985,9 +10068,21 @@ class WasmLispCompilerIntegrationTest {
 	/**
 	 * Asserts the accelerated wasm-GC module prints exactly what the scalar one prints.
 	 * Both go through {@code LinalgLibrary.process}, so the only difference is the flag.
+	 *
+	 * <p>
+	 * The two halves are independent by construction, so the accelerated one is staged
+	 * and run on a {@link #PAIRS} worker while this thread does the scalar one. That
+	 * matters because JUnit's parallel executor can only spread whole METHODS: the
+	 * kernel-interception methods below drive dozens of sources each -- every one its own
+	 * module, since what is under test is how a single call shape compiles -- which made
+	 * them the longest methods in the class by an order of magnitude, and the class's
+	 * wall clock is exactly the longest method.
+	 * @param lispCode the program to compile both ways
 	 */
-	private void assertLinalgMatchesTheScalarPath(String lispCode) throws Exception {
-		assertThat(compileAndRunVec(lispCode, true)).as(lispCode).isEqualTo(compileAndRunVec(lispCode, false));
+	private static void assertLinalgMatchesTheScalarPath(String lispCode) throws Exception {
+		Future<String> accelerated = PAIRS.submit(() -> compileAndRunVec(lispCode, true));
+		String scalar = compileAndRunVec(lispCode, false);
+		assertThat(await(accelerated)).as(lispCode).isEqualTo(scalar);
 	}
 
 	@Test
@@ -10367,8 +10462,8 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
 			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
 		byte[] wasmBytes = new WasmLispCompiler(false, false, false, true, false, true).compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
 	}
@@ -10546,9 +10641,9 @@ class WasmLispCompilerIntegrationTest {
 		// condition escapes the top level and keeps the trap shape.
 		List<LispVal> program = LispReader.readAllFromString("(unwind-protect (error \"up-boom\") (print :cleaned))");
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
-		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), "/tmp/test.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y",
-				"/tmp/test.wasm");
+				path("test.wasm"));
 		assertThat(result.getExitCode()).isNotZero();
 		assertThat(result.getStdout().trim()).isEqualTo(":CLEANED");
 		assertThat(result.getStderr()).contains("unreachable");
