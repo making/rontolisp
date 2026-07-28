@@ -531,6 +531,12 @@ final class WasmExprCompiler {
 				case LispNames.BOUNDP -> WasmSymbolApiCompiler.compileBoundp(cons, ctx);
 				case LispNames.FBOUNDP -> WasmSymbolApiCompiler.compileFboundp(cons, ctx);
 				case LispNames.SYMBOL_VALUE -> WasmSymbolApiCompiler.compileSymbolValue(cons, ctx);
+				case LispNames.FMAKUNBOUND -> WasmSymbolApiCompiler.compileFmakunbound(cons, ctx);
+				// Only a COMPUTED designator reaches here: PackageResolver folds a
+				// literal
+				// one to the quoted package keyword before the compiler ever sees it.
+				case LispNames.FIND_PACKAGE -> WasmExprCompiler.compileExpr(
+						LispMacroExpander.expandRuntimeFindPackage(cons.toList().get(1), ctx.packageTable), ctx);
 				case LispNames.CONCATENATE -> WasmExprCompiler.compileExpr(ConcatenateForms.expand(cons), ctx);
 				case LispNames.READ_LINE -> WasmReadLineCompiler.compile(cons, ctx);
 				case LispNames.READ_CHAR -> WasmReadCharCompiler.compile(cons, ctx);

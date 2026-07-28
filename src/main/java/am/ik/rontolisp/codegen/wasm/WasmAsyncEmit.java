@@ -800,6 +800,8 @@ final class WasmAsyncEmit {
 			.simd(proto.simd)
 			.userFuncBase(proto.userFuncBase)
 			.userDefunNames(proto.userDefunNames)
+			.usesFmakunbound(proto.usesFmakunbound)
+			.packageTable(proto.packageTable)
 			.structAccessors(proto.structAccessors)
 			.closRegistry(proto.closRegistry)
 			.globals(proto.globals)

@@ -6166,28 +6166,40 @@ public final class LispMacroExpander {
 	 * symbol instead of nil (harmless where find-symbol feeds a plist/dispatch lookup
 	 * that then answers nil anyway), and the qualifier is the single-colon EXTERNAL
 	 * spelling, which is what a library's exported API uses. The {@code keyword},
-	 * {@code cl} and {@code cl-user} packages need no qualifier work. Returns
+	 * {@code cl} and {@code cl-user} packages need no qualifier work, and a literal
+	 * designator naming NO package folds straight to nil -- the backend's baked package
+	 * table knows which those are, so the compile paths agree with the interpreter on
+	 * postmodern's {@code (find-symbol "TIMESTAMP" :simple-date)} probe. Returns
 	 * {@code null} when the package argument is not a literal designator.
 	 * @param cons the find-symbol call
+	 * @param packageTable the backend's baked package table
+	 * ({@code PackageResolver.runtimePackageTable()})
 	 * @return the lowered expression, or {@code null}
 	 */
-	@Nullable public static LispVal expandFindSymbolInPackage(LispCons cons) {
+	@Nullable public static LispVal expandFindSymbolInPackage(LispCons cons, java.util.Map<String, String> packageTable) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			return null;
 		}
 		LispVal name = parts.get(1);
 		String pkg = literalPackageDesignator(parts.get(2));
+		if (pkg != null && !packageTable.isEmpty() && !packageTable.containsKey(pkg)
+				&& !packageTable.containsKey(pkg.toUpperCase(java.util.Locale.ROOT))) {
+			// No such package: it provides no symbol. (An empty table means the caller
+			// has none -- keep the pre-table behavior rather than folding everything
+			// away.)
+			return LispNil.INSTANCE;
+		}
 		if (pkg == null) {
-			// A computed package value (ironclad's massage-symbol holds one in a local):
-			// build the qualified spelling from it at run time. A package value prints as
-			// its name, so (string PKG) is the qualifier. The keyword package would need
-			// the ":NAME" shape instead, so only a LITERAL keyword designator gets that
-			// (see below) -- a computed one is out of scope.
-			LispVal pkgName = listToCons(List.of(new LispSymbol(LispNames.STRING), parts.get(2)));
-			LispVal runtimeQualified = listToCons(List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"),
-					pkgName, new LispString(":"), name));
-			return listToCons(List.of(new LispSymbol(LispNames.INTERN), runtimeQualified));
+			// A computed package value (ironclad's massage-symbol holds one in a local,
+			// postmodern's json-intern reads one out of *json-symbols-package*): build
+			// the
+			// qualified spelling from it at run time. A package value prints as its name,
+			// so (string PKG) is the qualifier -- except for the three packages whose
+			// members are spelled WITHOUT a qualifier, which the literal path folds away
+			// and this one must test for at run time, or a computed :keyword designator
+			// would build KEYWORD:X instead of the keyword :X.
+			return computedPackageFindSymbol(name, parts.get(2));
 		}
 		if ("KEYWORD".equalsIgnoreCase(pkg)) {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name, new LispSymbol(":KEYWORD")));
@@ -6198,6 +6210,89 @@ public final class LispMacroExpander {
 		LispVal qualified = listToCons(
 				List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), new LispString(pkg + ":"), name));
 		return listToCons(List.of(new LispSymbol(LispNames.INTERN), qualified));
+	}
+
+	/**
+	 * The compiled backends' lowering of a {@code (find-package X)} whose designator is
+	 * COMPUTED (a literal one is folded by {@code PackageResolver.resolveCons}, which is
+	 * the one pass holding the registry): an {@code assoc} against the package table the
+	 * backend baked in from the resolver's FINAL registry, keyed by the upcased
+	 * designator, yielding the same {@code :UPCASED-NAME} keyword the fold produces and
+	 * nil for a name no package answers to. Frozen at compile time, so a package a
+	 * compiled program creates later is invisible here -- only the interpreter, which
+	 * keeps the live registry, sees those.
+	 * @param designatorForm the (unevaluated) package designator expression
+	 * @param table the designator-to-package-name table
+	 * ({@code PackageResolver.runtimePackageTable()})
+	 * @return the equivalent lookup expression
+	 */
+	public static LispVal expandRuntimeFindPackage(LispVal designatorForm, java.util.Map<String, String> table) {
+		List<LispVal> entries = new java.util.ArrayList<>(table.size());
+		table.forEach((designator, canonical) -> entries
+			.add(new LispCons(new LispString(designator), new LispSymbol(":" + canonical))));
+		// Verbatim, not upcased: package names are case-sensitive, and the table already
+		// carries every spelling the resolver's findPackageName would accept.
+		LispVal key = listToCons(List.of(new LispSymbol(LispNames.STRING), designatorForm));
+		LispVal quotedTable = listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(entries)));
+		LispVal lookup = listToCons(List.of(new LispSymbol(LispNames.ASSOC), key, quotedTable, new LispSymbol(":TEST"),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.STRING_EQ)))));
+		return listToCons(List.of(new LispSymbol(LispNames.CDR), lookup));
+	}
+
+	/**
+	 * The compiled backends' lowering of a one-argument {@code (find-symbol NAME)} whose
+	 * NAME is not a literal string: {@code (intern NAME)}. A symbol IS its canonical
+	 * spelling there, so interning the name IS the lookup -- with the same deviation the
+	 * two-argument lowering already carries: an unknown name yields a symbol instead of
+	 * nil, because "already interned" is knowledge only an intern table could hold and
+	 * rontolisp has none ({@code .kb/symbol-runtime-api.md}). A LITERAL name still folds
+	 * against the compile-time view of the image and can answer nil.
+	 * {@code postmodern/prepare.lisp} reaches this with
+	 * {@code (find-symbol (string-upcase x))}.
+	 * @param nameForm the (unevaluated) name expression
+	 * @return the equivalent intern form
+	 */
+	public static LispVal computedFindSymbol(LispVal nameForm) {
+		return listToCons(List.of(new LispSymbol(LispNames.INTERN), nameForm));
+	}
+
+	/** The temporaries {@link #computedPackageFindSymbol} binds its two arguments to. */
+	private static final String FIND_SYMBOL_PKG_VAR = "%FIND-SYMBOL-PKG";
+
+	private static final String FIND_SYMBOL_NAME_VAR = "%FIND-SYMBOL-NAME";
+
+	/**
+	 * The runtime form of {@code (find-symbol NAME PKG)} for a COMPUTED package
+	 * designator: bind both arguments (each evaluated once), answer nil for a nil
+	 * designator (the interpreter's answer for a package that does not exist -- see
+	 * {@code .kb/symbol-runtime-api.md}), and otherwise intern the qualified spelling,
+	 * treating {@code keyword} / {@code cl} / {@code cl-user} exactly as the literal path
+	 * does. The two binding names are fixed rather than generated: {@code let} evaluates
+	 * its inits in the enclosing scope, so a nested expansion in an argument position
+	 * cannot capture them, and fixed names keep the emitted output deterministic.
+	 */
+	private static LispVal computedPackageFindSymbol(LispVal name, LispVal packageForm) {
+		LispSymbol pkgVar = new LispSymbol(FIND_SYMBOL_PKG_VAR);
+		LispSymbol nameVar = new LispSymbol(FIND_SYMBOL_NAME_VAR);
+		LispVal pkgString = listToCons(List.of(new LispSymbol(LispNames.STRING), pkgVar));
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		clauses.add(new LispSymbol(LispNames.COND));
+		clauses.add(listToCons(
+				List.of(listToCons(List.of(new LispSymbol(LispNames.STRING_EQ), pkgString, new LispString("KEYWORD"))),
+						listToCons(List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"),
+								new LispString(":"), nameVar)))));
+		for (String bare : List.of(LispNames.CL_PKG, LispNames.CL_USER_PKG)) {
+			clauses.add(listToCons(List.of(listToCons(List.of(new LispSymbol(LispNames.STRING_EQ), pkgString,
+					new LispString(bare.toUpperCase(java.util.Locale.ROOT)))), nameVar)));
+		}
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, listToCons(List.of(new LispSymbol(LispNames.CONCATENATE),
+				quoteOf("STRING"), pkgString, new LispString(":"), nameVar)))));
+		LispVal interned = listToCons(List.of(new LispSymbol(LispNames.INTERN), listToCons(clauses)));
+		LispVal guarded = listToCons(List.of(new LispSymbol(LispNames.IF),
+				listToCons(List.of(new LispSymbol(LispNames.NULL), pkgVar)), LispNil.INSTANCE, interned));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(pkgVar, packageForm)), listToCons(List.of(nameVar, name))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, guarded));
 	}
 
 	/**

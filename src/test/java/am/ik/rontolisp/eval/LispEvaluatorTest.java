@@ -4464,13 +4464,14 @@ class LispEvaluatorTest {
 			.contains("REQUIRE", "PROVIDE")
 			.contains("READ-BYTE", "WRITE-BYTE", "READ-SEQUENCE", "WRITE-SEQUENCE")
 			.contains("WRITE-STRING", "WRITE-TO-STRING")
-			.contains("SYMBOL-NAME", "INTERN", "FIND-SYMBOL", "MAKE-SYMBOL", "BOUNDP", "FBOUNDP", "SYMBOL-VALUE")
+			.contains("SYMBOL-NAME", "INTERN", "FIND-SYMBOL", "MAKE-SYMBOL", "BOUNDP", "FBOUNDP", "FMAKUNBOUND",
+					"SYMBOL-VALUE")
 			.contains("BYTE", "BYTE-SIZE", "BYTE-POSITION", "LDB", "DPB")
 			.contains("STRING")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer", "%string-compare")
 			.isSorted()
-			.hasSize(324);
+			.hasSize(325);
 	}
 
 	@Test
@@ -6584,6 +6585,39 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(fboundp 'no-such-fn)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(evalMulti("(defun fb-fn (x) x) (fboundp 'fb-fn)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(defmacro fb-mac (x) x) (fboundp 'fb-mac)")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void fmakunboundMakesTheNameUndefinedAgain() {
+		assertThat(evalMulti("(defun fmk-fn (x) x) (fmakunbound 'fmk-fn)").print()).isEqualTo("FMK-FN");
+		assertThat(evalMulti("(defun fmk-fn2 (x) x) (fmakunbound 'fmk-fn2) (fboundp 'fmk-fn2)"))
+			.isEqualTo(LispNil.INSTANCE);
+		assertThatThrownBy(() -> evalMulti("(defun fmk-fn3 (x) x) (fmakunbound 'fmk-fn3) (fmk-fn3 1)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("The function FMK-FN3 is undefined");
+		// a user macro of the same name goes too, and an unknown name is a no-op
+		assertThat(evalMulti("(defmacro fmk-mac (x) x) (fmakunbound 'fmk-mac) (fboundp 'fmk-mac)"))
+			.isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(fmakunbound 'fmk-never-defined)").print()).isEqualTo("FMK-NEVER-DEFINED");
+	}
+
+	@Test
+	void findSymbolAnswersNilForAPackageThatDoesNotExist() {
+		// CL signals a package-error; the compile paths cannot (no registry at run
+		// time), and probing an OPTIONAL system this way is what libraries do
+		// (postmodern's json-encoder), so all four backends answer nil.
+		assertThat(evalMulti("(find-symbol \"TIMESTAMP\" :simple-date)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(find-symbol \"TIMESTAMP\" \"SIMPLE-DATE\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(find-symbol \"CAR\" nil)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(find-package :simple-date)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(find-package nil)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void findSymbolTakesAStringPackageDesignator() {
+		// postmodern's to-sql-name: (intern (string-upcase name) "KEYWORD")
+		assertThat(evalMulti("(intern (string-upcase \"some-col\") \"KEYWORD\")").print()).isEqualTo(":SOME-COL");
+		assertThat(evalMulti("(find-symbol \"CAR\" \"CL\")").print()).isEqualTo("CAR");
 	}
 
 	@Test

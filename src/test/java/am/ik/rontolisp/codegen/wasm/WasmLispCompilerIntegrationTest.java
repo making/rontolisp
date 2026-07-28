@@ -6776,7 +6776,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("324");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("325");
 	}
 
 	@Test
@@ -6849,10 +6849,13 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void findSymbolRejectsAComputedArgument() {
-		assertThatThrownBy(() -> new WasmLispCompiler()
-			.compile(LispReader.readAllFromString("(setq n \"car\") (print (find-symbol n))")))
-			.hasMessageContaining("literal string");
+	void findSymbolWithAComputedArgumentInterns() throws Exception {
+		// A computed name cannot be folded, so it lowers to intern: a symbol IS its
+		// canonical spelling here, and "already interned" is knowledge only an intern
+		// table could hold (.kb/symbol-runtime-api.md).
+		assertThat(compileAndRun(
+				"(setq n \"CAR\") (print (find-symbol n))" + "(setq m \"NO-SUCH-NAME\") (print (find-symbol m))"))
+			.isEqualTo("CAR\nNO-SUCH-NAME");
 	}
 
 	@Test
@@ -6883,6 +6886,44 @@ class WasmLispCompilerIntegrationTest {
 				+ "(print (fboundp (intern \"FB-FN\"))) (print (fboundp (intern \"car\")))"
 				+ "(print (fboundp (intern \"nothing\")))"))
 			.isEqualTo("T\nT\nT\nT\nNIL\nT\nT\nNIL\nNIL");
+	}
+
+	@Test
+	void fmakunboundMakesTheNameUndefinedAgain() throws Exception {
+		// The tombstone in GLOBAL_FENV shadows the compiled-function registry, so a
+		// retired name answers nil at a LITERAL fboundp too (that fold is emitted behind
+		// the probe whenever the program calls fmakunbound); an unknown name is a no-op.
+		assertThat(compileAndRun("(defun fmk-fn (x) x) (print (fboundp 'fmk-fn))"
+				+ "(print (fmakunbound 'fmk-fn)) (print (fboundp 'fmk-fn))"
+				+ "(print (fboundp (intern \"FMK-FN\"))) (print (fmakunbound 'fmk-never-defined))"))
+			.isEqualTo("T\nFMK-FN\nNIL\nNIL\nFMK-NEVER-DEFINED");
+	}
+
+	@Test
+	void findPackageAnswersNilForAPackageThatDoesNotExist() throws Exception {
+		assertThat(compileAndRun("(print (find-package :simple-date))"
+				+ "(defun probe (p) (find-package p)) (print (probe :simple-date)) (print (probe nil))"
+				+ "(print (probe :cl)) (print (probe :keyword))"))
+			.isEqualTo("NIL\nNIL\nNIL\n:CL\n:KEYWORD");
+	}
+
+	@Test
+	void findPackageWithAComputedDesignator() throws Exception {
+		// A literal designator folds in PackageResolver; a computed one is answered from
+		// the package table the backend bakes in from the resolver's final registry.
+		assertThat(
+				compileAndRun("(defpackage :mypkg (:use :cl) (:nicknames :mp))" + "(defun probe (p) (find-package p))"
+						+ "(print (probe :mypkg)) (print (probe \"MP\")) (print (probe \"mypkg\"))"))
+			.isEqualTo(":MYPKG\n:MYPKG\nNIL");
+	}
+
+	@Test
+	void findSymbolWithAComputedPackageDesignator() throws Exception {
+		// (find-symbol name pkg) with pkg in a variable: keyword/cl/cl-user need no
+		// qualifier, anything else gets the external "PKG:" spelling.
+		assertThat(compileAndRun("(defun fs (n p) (find-symbol n p))"
+				+ "(print (fs \"FOO\" :keyword)) (print (fs \"CAR\" :cl)) (print (fs \"BAR\" nil))"))
+			.isEqualTo(":FOO\nCAR\nNIL");
 	}
 
 	@Test

@@ -68,7 +68,7 @@ Seven CL functions (`PackageRegistry.CL_FUNCTIONS`, cl function count 210 -> 217
 
 **WASM** (`WasmSymbolApiCompiler` + `WasmSymbolApiRuntimeBuilder`): five always-present unary helpers `FUNC_MAKE_SYMBOL`..`FUNC_FBOUNDP` (type `TYPE_CALLABLE_BASE`, appended before `FUNC_USER_BASE` like gensym); symbol-name reuses `FUNC_PRINC_TO_STR`. `_intern_sym` interns the content range (verbatim) through the reader runtime's `_intern` so the result's string-table offset matches literals in the offset-based `_env_lookup`/`eq` — a new `usesIntern` gate (`usesRead || program uses intern`) emits the real `_intern` body + blob without the rest of the reader, and gates the intern wrapper (read-from-string precedent). The helper bodies embed the offset of the symbol `t` (interned before the blob snapshot). boundp/symbol-value/fboundp force `usesEval` like on the JVM; unbound symbol-value traps (`unreachable`, no message — the `%error` convention).
 
-**Compile-path folds and limits (both compilers)**: `find-symbol` requires a literal string and matches its VERBATIM name against `isClSymbol` + keyword + Pass-1 `userDefunNames` (so `(find-symbol "car")` is nil, `(find-symbol "CAR")` names `CAR`; runtime-defined globals and defmacro macros are interpreter-only knowledge); a literal `(fboundp 'x)` folds with full knowledge (specialOperatorNames + clFunctionNames + carcdr + userDefunNames + ctx.functions), a computed one sees functions only (`(fboundp (intern "COND"))` = nil compiled, t interpreted — the macro `COND` is interpreter-only knowledge; `(intern "cond")` is the distinct unbound symbol `cond`, nil on both). `#'symbol-name`/`#'intern`/`#'make-symbol` have wrappers; find-symbol/boundp/fboundp/symbol-value deliberately have none (macroexpand precedent: fold-only or eval-runtime-dependent). On compiled backends symbol-name is princ-to-string-lenient on non-symbols (the interpreter type-errors); JVM intern/make-symbol don't type-check their argument either.
+**Compile-path folds and limits (both compilers)**: `find-symbol` requires a literal string and matches its VERBATIM name against `isClSymbol` + keyword + Pass-1 `userDefunNames` (so `(find-symbol "car")` is nil, `(find-symbol "CAR")` names `CAR`; runtime-defined globals and defmacro macros are interpreter-only knowledge); a literal `(fboundp 'x)` folds with full knowledge (specialOperatorNames + clFunctionNames + carcdr + userDefunNames + ctx.functions), a computed one sees functions only (`(fboundp (intern "COND"))` = nil compiled, t interpreted — the macro `COND` is interpreter-only knowledge; `(intern "cond")` is the distinct unbound symbol `cond`, nil on both). `#'symbol-name`/`#'intern`/`#'make-symbol` have wrappers; find-symbol/boundp/fboundp/fmakunbound/symbol-value deliberately have none (macroexpand precedent: fold-only or eval-runtime-dependent). On compiled backends symbol-name is princ-to-string-lenient on non-symbols (the interpreter type-errors); JVM intern/make-symbol don't type-check their argument either.
 
 Tests: the *SymbolName/Intern/MakeSymbol/FindSymbol/Boundp/SymbolValue/Fboundp* groups in the three backend tests, the `symbol-runtime-api` ci-spec case, and the 217 count pinned in ci-spec + LispEvaluatorTest + JvmLispCompilerTest (x2) + WasmLispCompilerIntegrationTest. Package-mutation functions (`export`/`use-package`/runtime `find-package`) remain in `.todo/038-symbol-and-package-extensions.md`.
 
@@ -79,3 +79,80 @@ Yes — nothing on the roadmap (split-sequence, CLOS subset, condition system, d
 1. **WASM canonical-offset discipline (the recurring one)**: env lookup and `eq` compare string-table offsets, so EVERY future primitive that builds a symbol at runtime must route the bytes through `_intern` (reuse the `usesIntern` gate + `_intern_sym` rail) or it princs correctly but fails lookups/`eq`. This is a per-feature tax, not a one-time fix.
 2. **True uninterned identity is unrepresentable**: `(make-symbol "x")` twice is `eq`, hand-written `#:x` literals in two independent macros collide, `copy-symbol` cannot exist. Only affects code that bypasses `gensym`; accepted.
 3. **`unintern` and shadowing can never be implemented** (an intern table is the thing you'd unintern from) — the same deliberate line as `defpackage` rejecting `:shadow`. A library depending on either is where this design hits its wall (`.todo/038`).
+
+## Runtime (COMPUTED) package/symbol operations — `fmakunbound`, computed `find-package`/`find-symbol` (todo-198, 2026-07-28)
+
+The section above covers the LITERAL forms, which fold. postmodern reaches the same
+API through variables, so the computed forms had to grow real answers rather than the
+compile errors they used to be. Eight CL functions in the group now (cl function count
+324 -> 325 with `fmakunbound`).
+
+**`fmakunbound`: the name becomes call-time-undefined again.** Interpreter — the global
+function binding AND any user macro of the same name are dropped outright
+(`Environment.undefineFunction` + `userMacros.remove`), so `fboundp` answers nil and a
+later call signals `The function X is undefined`. Compiled backends — a **TOMBSTONE**
+is installed in the eval runtime's function namespace (`_fenv` on the JVM,
+`GLOBAL_FENV` on WASM): a binding whose value cell is nil. That namespace is probed
+BEFORE the compiled-function registry, so it shadows it, and both lookups already read
+"no value" as "undefined". `fboundp` had to learn the same rule (a binding decides the
+answer on its own instead of merely existing) or a retired name answered t again.
+Returns the name on every backend.
+
+- **`(fboundp 'x)` stops being a bare constant when the program calls
+  `fmakunbound`.** The fold is emitted BEHIND the tombstone probe (`Ctx.usesFmakunbound`
+  in both compilers: `JvmSymbolApiCompiler.emitTombstoneGuard`,
+  `WasmSymbolApiCompiler.emitTombstoneGuardedFold` — inline `_env_lookup` on the
+  literal's string-table offset, no helper call). A program without `fmakunbound` is
+  byte-identical to before.
+- **The divergence, and its reason**: a call site the compiler already bound directly
+  (an `invokestatic`/`call` to the defun) keeps working after `fmakunbound` — eager
+  compilation cannot be undone, so only LATE-bound references (`fboundp`, `funcall` /
+  `#'name` / `eval` through the symbol) see the retirement. `symbol-function` /
+  `fdefinition` of a LITERAL name are folded the same way and are likewise not
+  tombstone-aware: the interpreter signals there, the compiled backends return the
+  function. **Re-evaluate when** literal `symbol-function`/`fdefinition` gains a
+  runtime probe, or if a library starts round-tripping a retired name through it —
+  the guard shape above is exactly what it would need.
+
+**Computed `find-package` is answered from a BAKED table.** A literal designator is
+folded by `PackageResolver.resolveCons` (the one pass holding the registry); a computed
+one now lowers to `(cdr (assoc (string x) '(("CL" . :CL) ...) :test #'string=))` built
+by `LispMacroExpander.expandRuntimeFindPackage` from
+`PackageResolver.runtimePackageTable()` — read AFTER `resolveProgram`, so it covers
+every `defpackage` in the program — and threaded to both backends as `Ctx.packageTable`.
+Keys are matched VERBATIM, and the table carries both the registered spelling and its
+uppercase form because that is exactly what `findPackageName` accepts (a built-in is
+registered lowercase and answers to both cases; a user `defpackage` is registered as the
+reader upcased it and answers only to that). The lowering is pure AST, so no per-backend
+codegen exists. **The divergence, and its reason**: the table is frozen at compile time,
+so a package a compiled program creates later (interpreter-only `(eval '(defpackage ...))`)
+is invisible to a computed `find-package` there. **Re-evaluate when** runtime
+`defpackage` becomes a thing on the compiled backends (`.todo/038`).
+
+**Computed `find-symbol`.** A computed NAME lowers to `(intern name)`
+(`LispMacroExpander.computedFindSymbol`) — a symbol IS its canonical spelling on the
+compiled backends, so interning it IS the lookup, carrying the deviation the two-argument
+lowering already had: an unknown name yields a symbol instead of nil, because "already
+interned" is knowledge only an intern table could hold. A computed PACKAGE designator
+now builds the spelling through a runtime test of the three packages whose members carry
+no qualifier (`computedPackageFindSymbol`: `keyword` -> `:NAME`, `cl`/`cl-user` -> bare,
+anything else -> `PKG:NAME`), instead of unconditionally prefixing `(string PKG)` —
+without it postmodern's `json-intern`, which reads its package out of
+`*json-symbols-package*` (a `(find-package 'keyword)` value), built `KEYWORD:X` instead
+of the keyword `:X`.
+
+**A package that does not exist provides no symbol: `find-symbol` answers nil, not an
+error.** A LITERAL designator naming no package folds straight to nil on the compile
+paths (the same baked table `find-package` uses), so the four backends agree on
+postmodern's `(find-symbol "TIMESTAMP" :simple-date)` probe and on ironclad's
+`(find-symbol "EA" :sb-vm)`, which used to build the symbol `SB-VM:EA` there. CL signals a `package-error`; the interpreter used to as well
+(`PackageResolver.memberSpelling` throws), which made it the only backend that did — the
+compile paths have no registry at run time and cannot. Probing an OPTIONAL system with
+`(find-symbol "TIMESTAMP" :simple-date)` is exactly what libraries do (postmodern's
+json-encoder, five sites), so all four backends now answer nil. `nil` itself is accepted
+as the designator naming the package `"NIL"` (`packageDesignator`), so `(find-package nil)`
+is nil rather than a type error, matching CL.
+
+Tests: the *Fmakunbound* / *FindPackage* / *FindSymbol* groups in the three backend
+tests, the `runtime-package-symbol-ops` ci-spec case, and the 325 count pinned in
+ci-spec + LispEvaluatorTest + JvmLispCompilerTest (x2) + WasmLispCompilerIntegrationTest.

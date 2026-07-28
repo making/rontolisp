@@ -985,6 +985,35 @@ public final class PackageResolver {
 	}
 
 	/**
+	 * The table a compiled backend bakes in so a COMPUTED {@code (find-package x)} can be
+	 * answered without a registry: every designator that names a package (canonical names
+	 * and nicknames, upcased) mapped to the upcased canonical name the "package value"
+	 * keyword is built from. Read AFTER {@link #resolveProgram}, so it covers every
+	 * {@code defpackage} in the program. The interpreter does not use it -- it keeps the
+	 * live registry and therefore also sees packages created after compilation would have
+	 * frozen this snapshot.
+	 * @return the designator-to-package-name table, in a deterministic order
+	 */
+	public Map<String, String> runtimePackageTable() {
+		Map<String, String> table = new java.util.TreeMap<>();
+		Map<String, String> designators = new java.util.HashMap<>(this.registry.designatorTable());
+		// The keyword pseudo-package is not a registration (its "symbols" are the
+		// keywords), so findPackageName special-cases it and so must this table.
+		designators.put("keyword", "keyword");
+		designators.forEach((designator, canonical) -> {
+			// findPackageName matches a designator against the registered spelling either
+			// verbatim or after lowercasing it -- never the other way round, which is why
+			// a built-in (registered lowercase) answers to both cases while a user
+			// defpackage (registered as the reader upcased it) answers only to its own.
+			// Both accepted spellings go in so the lookup can stay a verbatim match.
+			String value = canonical.toUpperCase(java.util.Locale.ROOT);
+			table.put(designator, value);
+			table.put(designator.toUpperCase(java.util.Locale.ROOT), value);
+		});
+		return table;
+	}
+
+	/**
 	 * The canonical name of the package a symbol lives in: the qualifier of a qualified
 	 * spelling, {@code "keyword"} for a keyword, {@code cl} for a standard symbol,
 	 * {@code cl-user} otherwise; null for an uninterned ({@code #:}) symbol. The runtime

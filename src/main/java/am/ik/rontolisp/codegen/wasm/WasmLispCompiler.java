@@ -507,11 +507,13 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_FBOUNDP = FUNC_SYMBOL_VALUE + 1;
 
+	static final int FUNC_FMAKUNBOUND = FUNC_FBOUNDP + 1;
+
 	// read-char runtime helper (WasmIoRuntimeBuilder.buildReadCharBody): one byte from
 	// stdin, a WASI fd or a string input stream, boxed as a character struct. Appended
 	// before FUNC_USER_BASE like the mod/rem helpers, so no import/FUNC_START index
 	// shifts and the component blobs are unaffected.
-	static final int FUNC_READ_CHAR = FUNC_FBOUNDP + 1;
+	static final int FUNC_READ_CHAR = FUNC_FMAKUNBOUND + 1;
 
 	// _str_build (off, len) -> (ref null eq): allocates a $str_bytes GC array of
 	// length len, copies linear[off..off+len) into it, and returns a TYPE_STRING
@@ -1386,7 +1388,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Resolve packages (in-package directives, qualified symbols, *package*) up front
 		// so
 		// the rest of compilation sees canonical names.
-		program = new PackageResolver().resolveProgram(program);
+		PackageResolver packageResolver = new PackageResolver();
+		program = packageResolver.resolveProgram(program);
 		// Splice top-level (progn ...)/(eval-when ...) so Pass 1 collects the defuns
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
@@ -1486,6 +1489,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
+				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL);
 		// A funcall/apply through a RUNTIME designator resolves a symbol late through
 		// the name registry (see the _lookup emission gate below).
@@ -1933,6 +1937,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.simd(this.simd)
 			.userFuncBase(userFuncBase())
 			.userDefunNames(Set.copyOf(userDefinedNames))
+			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
+			.packageTable(packageResolver.runtimePackageTable())
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry)
 			.globals(globals)
@@ -2735,13 +2741,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			rdInferBody = WasmReadRuntimeBuilder.buildRdI32Stub();
 			rdMemeqBody = WasmReadRuntimeBuilder.buildRdI32Stub();
 		}
-		// Symbol-API helper bodies (FUNC_MAKE_SYMBOL .. FUNC_FBOUNDP), built before the
+		// Symbol-API helper bodies (FUNC_MAKE_SYMBOL .. FUNC_FMAKUNBOUND), built before
+		// the
 		// string table is serialized because they embed the offset of the symbol t.
 		final byte[] makeSymbolBody = WasmSymbolApiRuntimeBuilder.buildMakeSymbol();
 		final byte[] internSymBody = WasmSymbolApiRuntimeBuilder.buildInternSym();
 		final byte[] boundpBody = WasmSymbolApiRuntimeBuilder.buildBoundp(symbolTOffset);
 		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset);
 		final byte[] fboundpBody = WasmSymbolApiRuntimeBuilder.buildFboundp(symbolTOffset);
+		final byte[] fmakunboundBody = WasmSymbolApiRuntimeBuilder.buildFmakunbound();
 
 		// Case-fold tables. Two compressed (from, to, delta) triple tables, generated
 		// from Character.toUpperCase(int) / toLowerCase(int) so char-upcase /
@@ -3492,6 +3500,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _boundp (sym)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _symbol_value (sym)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fboundp (sym)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fmakunbound (sym)
 				// read-char runtime helper
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _read_char (stream,
 															// eof-error-p, eof-value) ->
@@ -3955,12 +3964,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeOutputStreamBody());
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeInputStreamBody());
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildContentsBody());
-				// symbol-API helper bodies (FUNC_MAKE_SYMBOL .. FUNC_FBOUNDP)
+				// symbol-API helper bodies (FUNC_MAKE_SYMBOL .. FUNC_FMAKUNBOUND)
 				code.addFunction(makeSymbolBody);
 				code.addFunction(internSymBody);
 				code.addFunction(boundpBody);
 				code.addFunction(symbolValueBody);
 				code.addFunction(fboundpBody);
+				code.addFunction(fmakunboundBody);
 				// read-char runtime helper body (FUNC_READ_CHAR)
 				code.addFunction(WasmIoRuntimeBuilder.buildReadCharBody());
 				// _str_build helper body (FUNC_STR_BUILD): linear[off..off+len) -> a
@@ -4716,6 +4726,22 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> userDefunNames = Set.of();
 
 		/**
+		 * Whether the program calls {@code fmakunbound} anywhere. When it does, a LITERAL
+		 * {@code (fboundp 'x)} may no longer be folded to a bare constant: the retired
+		 * name must answer nil, so the fold is emitted behind a runtime tombstone probe
+		 * of {@code GLOBAL_FENV} ({@link WasmSymbolApiCompiler#compileFboundp}).
+		 */
+		boolean usesFmakunbound = false;
+
+		/**
+		 * The package designators the program's {@code defpackage}s and the built-in
+		 * registry make resolvable, mapped to the canonical package name -- the table a
+		 * COMPUTED {@code (find-package x)} is answered from, since the compiled runtime
+		 * has no registry ({@link LispMacroExpander#expandRuntimeFindPackage}).
+		 */
+		Map<String, String> packageTable = Map.of();
+
+		/**
 		 * {@code defstruct} accessor names to their 1-based slot position, collected by
 		 * the pre-pass in {@link WasmLispCompiler#compile}; {@code setf} expansion treats
 		 * these as places. Shared across every context.
@@ -4907,6 +4933,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.simd = builder.simd;
 			this.userFuncBase = builder.userFuncBase;
 			this.userDefunNames = builder.userDefunNames;
+			this.usesFmakunbound = builder.usesFmakunbound;
+			this.packageTable = builder.packageTable;
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry;
 			this.globals = builder.globals;
@@ -4966,6 +4994,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int userFuncBase = FUNC_USER_BASE;
 
 			private Set<String> userDefunNames = Set.of();
+
+			private boolean usesFmakunbound = false;
+
+			private Map<String, String> packageTable = Map.of();
 
 			private Map<String, Integer> structAccessors = Map.of();
 
@@ -5084,6 +5116,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder usesFmakunbound(boolean usesFmakunbound) {
+				this.usesFmakunbound = usesFmakunbound;
+				return this;
+			}
+
+			Builder packageTable(Map<String, String> packageTable) {
+				this.packageTable = packageTable;
 				return this;
 			}
 

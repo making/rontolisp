@@ -308,6 +308,7 @@ categories:
       - { slug: symbol-value, name: "symbol-value" }
       - { slug: boundp, name: "boundp" }
       - { slug: fboundp, name: "fboundp" }
+      - { slug: fmakunbound, name: "fmakunbound" }
       - { slug: macroexpand-1, name: "macroexpand-1" }
       - { slug: macroexpand, name: "macroexpand" }
       - { slug: fdefinition, name: "fdefinition" }

@@ -20,6 +20,26 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void pipeAndBackslashEscapedSymbolsSurviveCanonicalization() {
+		// postmodern exports symbol names starting with an escaped "!" and s-sql
+		// dispatches on pipe-escaped keywords, including the empty-name one. The
+		// resolver must leave every escaped spelling alone: an escaped character keeps
+		// its case and is never treated as a package marker.
+		assertThat(resolvedSymbol(":|a b|").name()).isEqualTo(":a b");
+		assertThat(resolvedSymbol("|foo bar|").name()).isEqualTo("foo bar");
+		assertThat(resolvedSymbol(":||").name()).isEqualTo(":");
+		assertThat(resolvedSymbol(":|\\||").name()).isEqualTo(":|");
+		assertThat(resolvedSymbol("\\!dao-def").name()).isEqualTo("!DAO-DEF");
+		assertThat(resolvedSymbol("\\!index").name()).isEqualTo("!INDEX");
+		// and a defun of such a name resolves its head the same way
+		assertThat(resolve("(defun \\!index (x) x)")).isEqualTo("(DEFUN !INDEX (X) X)");
+	}
+
+	private static LispSymbol resolvedSymbol(String src) {
+		return (LispSymbol) new PackageResolver().resolve(LispReader.readFromString(src));
+	}
+
+	@Test
 	void clQualifiedSymbolNormalizesToBare() {
 		assertThat(resolve("(cl:car x)")).isEqualTo("(CAR X)");
 	}

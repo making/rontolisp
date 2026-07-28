@@ -252,10 +252,13 @@ final class WasmSymbolApiRuntimeBuilder {
 	static byte[] buildFboundp(int tOffset) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		final int SYM = 0, OFF = 1;
-		w.write(1);
+		final int SYM = 0, OFF = 1, BIND = 2;
+		w.write(2);
 		w.writeUnsignedLeb128(1);
 		w.write(Type.I32);
+		w.writeUnsignedLeb128(1);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
 		// nil or a non-string value is not a function name
 		get(w, SYM);
 		w.write(Instruction.REF_IS_NULL);
@@ -279,15 +282,30 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.writeSignedLeb128(0);
 		set(w, OFF);
-		// _env_lookup(off, GLOBAL_FENV) != null -> t
+		// bind = _env_lookup(off, GLOBAL_FENV). A binding decides the answer on its own:
+		// fmakunbound leaves a TOMBSTONE here (cdr nil) that must SHADOW the compiled
+		// registry probed below, or a retired name would answer t again.
 		get(w, OFF);
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		set(w, BIND);
+		get(w, BIND);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
+		get(w, BIND);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		emitNull(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 		emitTrue(w, tOffset);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -302,6 +320,82 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		emitNull(w);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * {@code _fmakunbound(sym) -> (ref null eq)}: installs a TOMBSTONE binding (cdr nil)
+	 * for the name in the runtime function namespace {@code GLOBAL_FENV}, which is probed
+	 * before the compiled-function registry -- so every LATE-bound reference sees the
+	 * name undefined again, while a call site the compiler already bound directly keeps
+	 * working (eager compilation cannot be undone). Returns the symbol, like CL.
+	 */
+	static byte[] buildFmakunbound() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		final int SYM = 0, OFF = 1, BIND = 2;
+		w.write(2);
+		w.writeUnsignedLeb128(1);
+		w.write(Type.I32);
+		w.writeUnsignedLeb128(1);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		// nil or a non-string value names no function: hand it back untouched
+		get(w, SYM);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		emitNull(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		get(w, SYM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, SYM);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// off = struct.get string 0
+		get(w, SYM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeSignedLeb128(0);
+		set(w, OFF);
+		// bind = _env_lookup(off, GLOBAL_FENV)
+		get(w, OFF);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		set(w, BIND);
+		get(w, BIND);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		// $fenv = cons(cons(sym, nil), $fenv)
+		get(w, SYM);
+		emitNull(w);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		w.write(Instruction.ELSE);
+		// bind.cdr = nil
+		get(w, BIND);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		emitNull(w);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.END);
+		get(w, SYM);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

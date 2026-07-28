@@ -93,12 +93,13 @@ final class JvmSymbolApiCompiler {
 	}
 
 	/**
-	 * find-symbol: folded at compile time against the compile-time view of the image (cl
-	 * symbols, keywords, Pass-1 user defuns). The argument must be a literal string.
+	 * find-symbol: a LITERAL name folds at compile time against the compile-time view of
+	 * the image (cl symbols, keywords, Pass-1 user defuns); a computed one lowers to
+	 * {@code intern}, which is the lookup under the name-based symbol model.
 	 */
 	static void compileFindSymbol(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		if (cons.toList().size() == 3) {
-			LispVal inPackage = LispMacroExpander.expandFindSymbolInPackage(cons);
+			LispVal inPackage = LispMacroExpander.expandFindSymbolInPackage(cons, ctx.packageTable);
 			if (inPackage == null) {
 				throw new UnsupportedOperationException(LispNames.FIND_SYMBOL
 						+ " needs a literal package designator in compiled mode: " + cons.print());
@@ -108,8 +109,8 @@ final class JvmSymbolApiCompiler {
 		}
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.FIND_SYMBOL);
 		if (!(parts.get(1) instanceof LispString str)) {
-			throw new UnsupportedOperationException(
-					"Cannot compile: " + cons.print() + " (find-symbol requires a literal string in compiled mode)");
+			JvmExprCompiler.compileExpr(LispMacroExpander.computedFindSymbol(parts.get(1)), ctx, className);
+			return;
 		}
 		String name = str.value();
 		boolean known = PackageRegistry.isClSymbol(name) || (!name.isEmpty() && name.charAt(0) == ':')
@@ -193,6 +194,12 @@ final class JvmSymbolApiCompiler {
 	 * forms, car/cdr compositions, user defuns); a computed argument probes the runtime
 	 * {@code _fenv} then the compiled-function registry {@code _lookup} (so it sees
 	 * functions only -- built-in macros and special forms exist solely at compile time).
+	 *
+	 * <p>
+	 * When the program calls {@code fmakunbound} the fold is emitted BEHIND a tombstone
+	 * probe of {@code _fenv}: a retired name must answer nil even at a literal call site,
+	 * and only the runtime knows which names were retired. Programs without
+	 * {@code fmakunbound} keep the bare constant.
 	 */
 	static void compileFboundp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.FBOUNDP);
@@ -202,11 +209,16 @@ final class JvmSymbolApiCompiler {
 			boolean bound = PackageRegistry.specialOperatorNames().contains(name)
 					|| PackageRegistry.clFunctionNames().contains(name) || LispMacroExpander.isCarCdrComposition(name)
 					|| ctx.userDefunNames.contains(name) || ctx.functions.containsKey(name);
+			int[] foldEnd = ctx.usesFmakunbound ? emitTombstoneGuard(name, ctx, className) : null;
 			if (bound) {
 				JvmEmitHelper.compileTrue(ctx);
 			}
 			else {
 				ctx.emit(Opcode.ACONST_NULL);
+			}
+			if (foldEnd != null) {
+				JvmEmitHelper.patchBranch(ctx, foldEnd[0], ctx.code.size());
+				JvmEmitHelper.patchBranch(ctx, foldEnd[1], ctx.code.size());
 			}
 			return;
 		}
@@ -218,17 +230,29 @@ final class JvmSymbolApiCompiler {
 		ctx.emit(Opcode.ACONST_NULL);
 		int gotoEnd1 = emitBranch(ctx, Opcode.GOTO);
 		JvmEmitHelper.patchBranch(ctx, ifNotNil, ctx.code.size());
-		// _envLookup(name, _fenv) != null -> t
+		// binding = _envLookup(name, _fenv). A binding decides the answer on its own --
+		// fmakunbound leaves a TOMBSTONE here (value cell null) that must SHADOW the
+		// compiled registry probed below, or a retired name would answer t again.
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(tempSlot);
 		ctx.emit(Opcode.GETSTATIC);
 		ctx.emitU2(evalField(ctx, className, "_fenv").index());
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(envLookupRef(ctx, className).index());
+		ctx.emit(Opcode.DUP);
 		int fenvMiss = emitBranch(ctx, Opcode.IFNULL);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.AALOAD);
+		int tombstone = emitBranch(ctx, Opcode.IFNULL);
 		JvmEmitHelper.compileTrue(ctx);
 		int gotoEnd2 = emitBranch(ctx, Opcode.GOTO);
+		JvmEmitHelper.patchBranch(ctx, tombstone, ctx.code.size());
+		ctx.emit(Opcode.ACONST_NULL);
+		int gotoEnd4 = emitBranch(ctx, Opcode.GOTO);
 		JvmEmitHelper.patchBranch(ctx, fenvMiss, ctx.code.size());
+		ctx.emit(Opcode.POP);
 		// _lookup(name) != null -> t
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(tempSlot);
@@ -245,6 +269,93 @@ final class JvmSymbolApiCompiler {
 		JvmEmitHelper.patchBranch(ctx, gotoEnd1, ctx.code.size());
 		JvmEmitHelper.patchBranch(ctx, gotoEnd2, ctx.code.size());
 		JvmEmitHelper.patchBranch(ctx, gotoEnd3, ctx.code.size());
+		JvmEmitHelper.patchBranch(ctx, gotoEnd4, ctx.code.size());
+	}
+
+	/**
+	 * Emits the tombstone half of {@code fboundp} for a literal name: when {@code _fenv}
+	 * holds a binding for it, the answer is decided here (t when the value cell is set,
+	 * nil when {@code fmakunbound} cleared it) and the caller's folded constant is
+	 * skipped. Returns the GOTO positions the caller must patch to the end of the fold.
+	 */
+	private static int[] emitTombstoneGuard(String name, JvmLispCompiler.Ctx ctx, String className) {
+		JvmEmitHelper.compileStringLiteral(name, ctx);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(evalField(ctx, className, "_fenv").index());
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(envLookupRef(ctx, className).index());
+		ctx.emit(Opcode.DUP);
+		int noBinding = emitBranch(ctx, Opcode.IFNULL);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.AALOAD);
+		int cleared = emitBranch(ctx, Opcode.IFNULL);
+		JvmEmitHelper.compileTrue(ctx);
+		int end = emitBranch(ctx, Opcode.GOTO);
+		JvmEmitHelper.patchBranch(ctx, cleared, ctx.code.size());
+		ctx.emit(Opcode.ACONST_NULL);
+		int end2 = emitBranch(ctx, Opcode.GOTO);
+		JvmEmitHelper.patchBranch(ctx, noBinding, ctx.code.size());
+		ctx.emit(Opcode.POP);
+		// The caller's folded constant follows; both tombstone answers jump past it.
+		return new int[] { end, end2 };
+	}
+
+	/**
+	 * fmakunbound: installs a TOMBSTONE binding (value cell {@code null}) for the name in
+	 * the eval runtime's function namespace {@code _fenv}. That namespace is probed
+	 * before the compiled-function registry, so every LATE-bound reference -- a computed
+	 * {@code fboundp}, {@code #'name} through {@code eval}, {@code funcall} on the symbol
+	 * -- sees the name undefined again, while a call site the compiler already bound
+	 * directly (an {@code invokestatic} to the defun) keeps working: eager compilation
+	 * cannot be undone. Returns the name, like CL.
+	 */
+	static void compileFmakunbound(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = requireArgs(cons, 1, LispNames.FMAKUNBOUND);
+		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(evalField(ctx, className, "_fenv").index());
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(envLookupRef(ctx, className).index());
+		ctx.emit(Opcode.DUP);
+		int create = emitBranch(ctx, Opcode.IFNULL);
+		// existing binding: clear its value cell
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.ACONST_NULL);
+		ctx.emit(Opcode.AASTORE);
+		int done = emitBranch(ctx, Opcode.GOTO);
+		JvmEmitHelper.patchBranch(ctx, create, ctx.code.size());
+		ctx.emit(Opcode.POP);
+		// _fenv = new Object[]{new Object[]{name, null}, _fenv}
+		ctx.emit(Opcode.ICONST_2);
+		ctx.emit(Opcode.ANEWARRAY);
+		ctx.emitU2(ctx.objectClass.index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.ICONST_2);
+		ctx.emit(Opcode.ANEWARRAY);
+		ctx.emitU2(ctx.objectClass.index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(evalField(ctx, className, "_fenv").index());
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.PUTSTATIC);
+		ctx.emitU2(evalField(ctx, className, "_fenv").index());
+		JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
 	}
 
 	private static List<LispVal> requireArgs(LispCons cons, int count, String name) {

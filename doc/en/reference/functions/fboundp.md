@@ -6,6 +6,8 @@ Returns `t` when `symbol` names something callable or expandable: a function (bu
 
 On the compiled backends a **literal** quoted argument is decided at compile time with full knowledge (macros and special forms included); a computed argument is checked at runtime against the function registries, which only know real functions — so `(fboundp (intern "cond"))` is nil in compiled code but `t` in the interpreter, and `defmacro` macros are likewise compile-time-only there.
 
+A name retired by [`fmakunbound`](fmakunbound.md) answers `nil` again, at a literal call site too.
+
 ```lisp
 (fboundp 'car) ; => T
 ```

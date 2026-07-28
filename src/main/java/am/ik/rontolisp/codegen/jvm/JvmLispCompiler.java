@@ -131,7 +131,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Resolve packages (in-package directives, qualified symbols, *package*) up front
 		// so
 		// the rest of compilation sees canonical names.
-		program = new PackageResolver().resolveProgram(program);
+		PackageResolver packageResolver = new PackageResolver();
+		program = packageResolver.resolveProgram(program);
 		// Splice top-level (progn ...)/(eval-when ...) so Pass 1 collects the defuns
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
@@ -672,12 +673,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// built-in reuses _apply, so it forces the eval runtime to be emitted as well.
 		// boundp/symbol-value/fboundp resolve symbols at runtime against the eval
 		// runtime's global env mirror (_genv) and function registry (_lookup/_fenv), so
-		// they force the eval runtime like apply does.
+		// they force the eval runtime like apply does. fmakunbound writes the tombstone
+		// into that same _fenv.
 		// multiple-value-call forces apply too: its expansion spreads a spill
 		// producer's dynamic value count with (apply fn (append ...)).
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJava
 				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
+				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL);
 		if (usesEval) {
 			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
@@ -807,6 +810,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
+			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
+			.packageTable(packageResolver.runtimePackageTable())
 			.globals(globals)
 			.specialVars(specialVars)
 			.globalFields(globalFields)
@@ -3065,6 +3070,22 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<String> userDefunNames = Set.of();
 
 		/**
+		 * Whether the program calls {@code fmakunbound} anywhere. When it does, a LITERAL
+		 * {@code (fboundp 'x)} may no longer be folded to a bare constant: the retired
+		 * name must answer nil, so the fold is emitted behind a runtime tombstone probe
+		 * of {@code _fenv} ({@link JvmSymbolApiCompiler#compileFboundp}).
+		 */
+		boolean usesFmakunbound = false;
+
+		/**
+		 * The package designators the program's {@code defpackage}s and the built-in
+		 * registry make resolvable, mapped to the canonical package name -- the table a
+		 * COMPUTED {@code (find-package x)} is answered from, since the compiled runtime
+		 * has no registry ({@link LispMacroExpander#expandRuntimeFindPackage}).
+		 */
+		Map<String, String> packageTable = Map.of();
+
+		/**
 		 * {@code defstruct} accessor names to their 1-based slot position, collected by
 		 * the pre-pass in {@link JvmLispCompiler#compile}; {@code setf} expansion treats
 		 * these as places. Shared across every context.
@@ -3188,6 +3209,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mayUseInstances = builder.mayUseInstances;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
+			this.usesFmakunbound = builder.usesFmakunbound;
+			this.packageTable = builder.packageTable;
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry;
 			this.globals = builder.globals;
@@ -3416,6 +3439,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			private String className = "";
 
 			private Set<String> userDefunNames = Set.of();
+
+			private boolean usesFmakunbound = false;
+
+			private Map<String, String> packageTable = Map.of();
 
 			private Map<String, Integer> structAccessors = Map.of();
 
@@ -3777,6 +3804,16 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder usesFmakunbound(boolean usesFmakunbound) {
+				this.usesFmakunbound = usesFmakunbound;
+				return this;
+			}
+
+			Builder packageTable(Map<String, String> packageTable) {
+				this.packageTable = packageTable;
 				return this;
 			}
 

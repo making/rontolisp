@@ -4023,6 +4023,17 @@ public final class LispNames {
 	public static final String FDEFINITION = "FDEFINITION";
 
 	/**
+	 * The {@code fmakunbound} built-in function: makes the name call-time-undefined
+	 * again. On the interpreter the global function binding (and any macro of the same
+	 * name) is dropped outright; on the compiled backends a tombstone shadows the name in
+	 * the eval runtime's function namespace, so every LATE-bound reference
+	 * ({@code funcall}/{@code fboundp}/{@code eval} through the symbol) sees it undefined
+	 * while call sites the compiler already bound directly keep working
+	 * ({@code .kb/symbol-runtime-api.md}).
+	 */
+	public static final String FMAKUNBOUND = "FMAKUNBOUND";
+
+	/**
 	 * The {@code file-position} built-in function -- lite: always {@code nil} (streams do
 	 * not support repositioning), so callers take their non-seeking fallback.
 	 */

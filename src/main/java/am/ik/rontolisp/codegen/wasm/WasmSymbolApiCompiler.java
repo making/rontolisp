@@ -79,12 +79,13 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
-	 * find-symbol: folded at compile time against the compile-time view of the image (cl
-	 * symbols, keywords, Pass-1 user defuns). The argument must be a literal string.
+	 * find-symbol: a LITERAL name folds at compile time against the compile-time view of
+	 * the image (cl symbols, keywords, Pass-1 user defuns); a computed one lowers to
+	 * {@code intern}, which is the lookup under the name-based symbol model.
 	 */
 	static void compileFindSymbol(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (cons.toList().size() == 3) {
-			LispVal inPackage = LispMacroExpander.expandFindSymbolInPackage(cons);
+			LispVal inPackage = LispMacroExpander.expandFindSymbolInPackage(cons, ctx.packageTable);
 			if (inPackage == null) {
 				throw new UnsupportedOperationException(LispNames.FIND_SYMBOL
 						+ " needs a literal package designator in compiled mode: " + cons.print());
@@ -94,8 +95,8 @@ final class WasmSymbolApiCompiler {
 		}
 		List<LispVal> parts = requireArgs(cons, LispNames.FIND_SYMBOL);
 		if (!(parts.get(1) instanceof LispString str)) {
-			throw new UnsupportedOperationException(
-					"Cannot compile: " + cons.print() + " (find-symbol requires a literal string in compiled mode)");
+			WasmExprCompiler.compileExpr(LispMacroExpander.computedFindSymbol(parts.get(1)), ctx);
+			return;
 		}
 		String name = str.value();
 		boolean known = PackageRegistry.isClSymbol(name) || (!name.isEmpty() && name.charAt(0) == ':')
@@ -112,6 +113,12 @@ final class WasmSymbolApiCompiler {
 	 * fboundp: a literal quoted symbol folds at compile time (functions, macros, special
 	 * forms, car/cdr compositions, user defuns); a computed argument probes the runtime
 	 * {@code _fenv} then the compiled-function registry (functions only).
+	 *
+	 * <p>
+	 * When the program calls {@code fmakunbound} the fold is emitted BEHIND a tombstone
+	 * probe of {@code GLOBAL_FENV}: a retired name must answer nil even at a literal call
+	 * site, and only the runtime knows which names were retired. Programs without
+	 * {@code fmakunbound} keep the bare constant.
 	 */
 	static void compileFboundp(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = requireArgs(cons, LispNames.FBOUNDP);
@@ -121,6 +128,10 @@ final class WasmSymbolApiCompiler {
 			boolean bound = PackageRegistry.specialOperatorNames().contains(name)
 					|| PackageRegistry.clFunctionNames().contains(name) || LispMacroExpander.isCarCdrComposition(name)
 					|| ctx.userDefunNames.contains(name) || ctx.functions.containsKey(name);
+			if (ctx.usesFmakunbound) {
+				emitTombstoneGuardedFold(name, bound, ctx);
+				return;
+			}
 			if (bound) {
 				WasmEmitHelper.emitTrue(ctx);
 			}
@@ -130,6 +141,65 @@ final class WasmSymbolApiCompiler {
 			return;
 		}
 		compileUnaryCall(cons, LispNames.FBOUNDP, WasmLispCompiler.FUNC_FBOUNDP, ctx);
+	}
+
+	/**
+	 * fmakunbound: installs a tombstone in the runtime function namespace, so a
+	 * late-bound reference sees the name undefined again
+	 * ({@link WasmSymbolApiRuntimeBuilder#buildFmakunbound}).
+	 */
+	static void compileFmakunbound(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileUnaryCall(cons, LispNames.FMAKUNBOUND, WasmLispCompiler.FUNC_FMAKUNBOUND, ctx);
+	}
+
+	/**
+	 * Emits {@code fboundp}'s literal answer for a program that also calls
+	 * {@code fmakunbound}: when {@code GLOBAL_FENV} holds a binding for the name it
+	 * decides (t when the value cell is set, nil when {@code fmakunbound} cleared it),
+	 * otherwise the compile-time fold stands. The literal's string-table offset is known
+	 * here, so the probe is {@code _env_lookup} inline rather than a helper call.
+	 */
+	private static void emitTombstoneGuardedFold(String name, boolean folded, WasmLispCompiler.Ctx ctx) {
+		int offset = ctx.stringTable.addString(name).offset();
+		int bind = ctx.allocTemp();
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(offset);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(bind);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(bind);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		if (folded) {
+			WasmEmitHelper.emitTrue(ctx);
+		}
+		else {
+			emitNil(ctx);
+		}
+		ctx.writer.write(Instruction.ELSE);
+		// A binding exists: its value cell answers, normalized to t/nil.
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(bind);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.REFNULL.code());
+		ctx.writer.writeHeapType(Type.EQ.code());
+		emitNil(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
 	}
 
 	private static void compileUnaryCall(LispCons cons, String name, int funcIndex, WasmLispCompiler.Ctx ctx) {

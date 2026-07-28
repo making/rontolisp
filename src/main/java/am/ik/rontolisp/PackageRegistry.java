@@ -117,20 +117,20 @@ public final class PackageRegistry {
 			LispNames.ROW_MAJOR_AREF, LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.COERCE, LispNames.GENSYM,
 			LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.VALUES, LispNames.WRITE_STRING,
 			LispNames.WRITE_TO_STRING, LispNames.SYMBOL_NAME, LispNames.INTERN, LispNames.FIND_SYMBOL,
-			LispNames.MAKE_SYMBOL, LispNames.BOUNDP, LispNames.FBOUNDP, LispNames.SYMBOL_VALUE, LispNames.FUNCTIONP,
-			LispNames.VALUES_LIST, LispNames.NE, LispNames.FILL_POINTER, LispNames.ARRAY_HAS_FILL_POINTER_P,
-			LispNames.ADJUSTABLE_ARRAY_P, LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND,
-			LispNames.ARRAY_ELEMENT_TYPE, LispNames.ADJUST_ARRAY, LispNames.ARRAY_DISPLACEMENT, LispNames.STABLE_SORT,
-			LispNames.COPY_SEQ, LispNames.READ_CHAR, LispNames.VECTORP, LispNames.ARRAYP, LispNames.MAKE_STRING,
-			LispNames.REPLACE, LispNames.LOWER_CASE_P, LispNames.UPPER_CASE_P, LispNames.CONSTANTP,
-			LispNames.GET_SETF_EXPANSION, LispNames.STREAMP, LispNames.SIMPLE_STRING_P, LispNames.MASK_FIELD,
-			LispNames.SCALE_FLOAT, LispNames.DECODE_FLOAT, LispNames.SUBTYPEP, LispNames.CHAR_NAME,
-			LispNames.FDEFINITION, LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.MAKE_BROADCAST_STREAM,
-			LispNames.PATHNAMEP, LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P, LispNames.OPEN_STREAM_P,
-			LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF, LispNames.SIMPLE_CONDITION_FORMAT_CONTROL,
-			LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, LispNames.MAKE_PATHNAME, LispNames.COPY_READTABLE,
-			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE, LispNames.FIND_PACKAGE,
-			LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF);
+			LispNames.MAKE_SYMBOL, LispNames.BOUNDP, LispNames.FBOUNDP, LispNames.FMAKUNBOUND, LispNames.SYMBOL_VALUE,
+			LispNames.FUNCTIONP, LispNames.VALUES_LIST, LispNames.NE, LispNames.FILL_POINTER,
+			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.VECTOR_PUSH,
+			LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ARRAY_ELEMENT_TYPE, LispNames.ADJUST_ARRAY,
+			LispNames.ARRAY_DISPLACEMENT, LispNames.STABLE_SORT, LispNames.COPY_SEQ, LispNames.READ_CHAR,
+			LispNames.VECTORP, LispNames.ARRAYP, LispNames.MAKE_STRING, LispNames.REPLACE, LispNames.LOWER_CASE_P,
+			LispNames.UPPER_CASE_P, LispNames.CONSTANTP, LispNames.GET_SETF_EXPANSION, LispNames.STREAMP,
+			LispNames.SIMPLE_STRING_P, LispNames.MASK_FIELD, LispNames.SCALE_FLOAT, LispNames.DECODE_FLOAT,
+			LispNames.SUBTYPEP, LispNames.CHAR_NAME, LispNames.FDEFINITION, LispNames.FILE_POSITION,
+			LispNames.FILE_LENGTH, LispNames.MAKE_BROADCAST_STREAM, LispNames.PATHNAMEP, LispNames.INPUT_STREAM_P,
+			LispNames.OUTPUT_STREAM_P, LispNames.OPEN_STREAM_P, LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF,
+			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
+			LispNames.MAKE_PATHNAME, LispNames.COPY_READTABLE, LispNames.SET_DISPATCH_MACRO_CHARACTER,
+			LispNames.READTABLE_CASE, LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
@@ -523,6 +523,27 @@ public final class PackageRegistry {
 			throw new LispPackageException("No such package: " + name);
 		}
 		return pkg;
+	}
+
+	/**
+	 * Every designator that names a registered package -- each canonical name plus every
+	 * nickname pointing at one -- mapped to that package's canonical name. Backs the
+	 * runtime {@code find-package} table the compile paths bake in: the compiled runtimes
+	 * have no registry, so the answer for a COMPUTED designator has to be carried over
+	 * from compile time.
+	 * @return the designator-to-canonical-name table
+	 */
+	public Map<String, String> designatorTable() {
+		Map<String, String> table = new HashMap<>();
+		for (String name : this.packages.keySet()) {
+			table.put(name, name);
+		}
+		this.nicknames.forEach((nickname, target) -> {
+			if (this.packages.containsKey(target)) {
+				table.put(nickname, target);
+			}
+		});
+		return table;
 	}
 
 	/**

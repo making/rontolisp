@@ -363,6 +363,16 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Removes a binding from the function namespace of this environment, if present. The
+	 * {@code fmakunbound} primitive; parent scopes are untouched, so calling it on the
+	 * global environment makes the name undefined image-wide.
+	 * @param name the function name
+	 */
+	public void undefineFunction(String name) {
+		this.functions.remove(name);
+	}
+
+	/**
 	 * Returns the names bound in the function namespace of this environment (not
 	 * including parent scopes).
 	 * @return a snapshot of the function names

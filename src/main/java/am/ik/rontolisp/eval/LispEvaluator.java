@@ -722,6 +722,22 @@ public final class LispEvaluator {
 					|| this.globalEnv.lookupFunctionOrNull(name) != null || LispMacroExpander.isCarCdrComposition(name);
 			return bound ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		// fmakunbound: drop the global function binding AND any user macro of the same
+		// name, so the name is undefined again for every later reference (fboundp, a
+		// call, funcall through the symbol). Built-in macros and special operators are
+		// part of the language, not of the image's function namespace, so removing them
+		// is not attempted -- fboundp keeps answering t for those. The name is returned,
+		// like CL. postmodern's deallocate-prepared-statement retires the functions
+		// defprepared generated this way.
+		this.globalEnv.defineFunction(LispNames.FMAKUNBOUND, new LispFunction(LispNames.FMAKUNBOUND, args -> {
+			requireSingleArg(LispNames.FMAKUNBOUND, args);
+			if (!(args.get(0) instanceof LispSymbol sym)) {
+				throw new LispEvalException(LispNames.FMAKUNBOUND + " expects a symbol, got " + args.get(0).print());
+			}
+			this.globalEnv.undefineFunction(sym.name());
+			this.userMacros.remove(sym.name());
+			return sym;
+		}));
 		// find-symbol never creates: the symbol comes back only when the name is already
 		// known to the image (a cl symbol, a keyword, or a user definition). The
 		// compilers
@@ -737,8 +753,19 @@ public final class LispEvaluator {
 					throw new LispEvalException(
 							LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
 				}
-				String spelling = this.packageResolver
-					.memberSpelling(packageDesignator(LispNames.FIND_SYMBOL, args.get(1)), str.value());
+				// A package that does not exist provides no symbol: nil, not an error.
+				// CL signals a package-error here, but the compile paths cannot (they
+				// have no registry at run time), and probing an OPTIONAL system with
+				// (find-symbol "TIMESTAMP" :simple-date) is exactly what libraries do
+				// (postmodern's json-encoder) -- so all four backends answer nil.
+				if (args.get(1) instanceof LispNil) {
+					return LispNil.INSTANCE;
+				}
+				String designator = packageDesignator(LispNames.FIND_SYMBOL, args.get(1));
+				if (this.packageResolver.findPackageName(designator) == null) {
+					return LispNil.INSTANCE;
+				}
+				String spelling = this.packageResolver.memberSpelling(designator, str.value());
 				return spelling == null ? LispNil.INSTANCE : new LispSymbol(spelling);
 			}
 			requireSingleArg(LispNames.FIND_SYMBOL, args);
@@ -3790,6 +3817,9 @@ public final class LispEvaluator {
 		return switch (val) {
 			case LispString str -> str.value();
 			case LispSymbol sym -> LispSymbol.displayName(sym.name());
+			// nil is the symbol named "NIL", so it designates a package by that name --
+			// which no image has, so (find-package nil) is nil rather than a type error.
+			case LispNil ignored -> "NIL";
 			default -> throw new LispEvalException(operator + " expects a package designator, got " + val.print());
 		};
 	}
