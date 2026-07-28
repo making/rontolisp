@@ -514,11 +514,25 @@ public final class LispEvaluator {
 			if (layout == null) {
 				throw new LispEvalException(LispNames.OBJ_NEW + ": unknown instance type " + tag.name());
 			}
-			LispVal[] slots = new LispVal[layout.slotCount()];
+			// capacity, not slotCount: a change-class target's ancestors reserve room
+			// for the wider layout (LispLayout.capacity).
+			LispVal[] slots = new LispVal[layout.capacity()];
 			for (int i = 0; i < slots.length; i++) {
-				slots[i] = i + 1 < args.size() ? args.get(i + 1) : LispNil.INSTANCE;
+				slots[i] = i + 1 < args.size() && i < layout.slotCount() ? args.get(i + 1) : LispNil.INSTANCE;
 			}
 			return new LispInstance(layout, slots);
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_BECOME, new LispFunction(LispNames.OBJ_BECOME, args -> {
+			if (args.size() != 2 || !(args.get(1) instanceof LispSymbol tag)) {
+				throw new LispEvalException(LispNames.OBJ_BECOME + " expects (obj 'tag), got " + args.size());
+			}
+			LispInstance inst = requireInstance(LispNames.OBJ_BECOME, args);
+			LispLayout layout = this.closRegistry.findLayoutByTag(tag.name());
+			if (layout == null) {
+				throw new LispEvalException(LispNames.OBJ_BECOME + ": unknown instance type " + tag.name());
+			}
+			inst.becomeLayout(layout);
+			return inst;
 		}));
 		this.globalEnv.defineFunction(LispNames.OBJ_REF, new LispFunction(LispNames.OBJ_REF, args -> {
 			LispInstance inst = requireInstance(LispNames.OBJ_REF, args);
@@ -609,9 +623,11 @@ public final class LispEvaluator {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.SLOT_BOUNDP + " expects 2 arguments, got " + args.size());
 			}
-			// Lite: slots are always initialized (nil default), so a slot the class has
-			// is bound; see slot-makunbound.
-			return instanceSlotRef(args.get(0), args.get(1)) != null ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			// Bound = the type declares the slot AND it does not hold the unbound
+			// marker (a slot written with no :initform, or emptied by
+			// slot-makunbound, holds one).
+			SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
+			return slot != null && !isUnboundMarker(slot.read()) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// Gray-stream dispatch: write-string (and write-char, which lowers to it)
 		// handed an INSTANCE as its stream calls rontolisp's own Gray protocol
@@ -663,12 +679,11 @@ public final class LispEvaluator {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.SLOT_MAKUNBOUND + " expects 2 arguments, got " + args.size());
 			}
-			// Lite: stores nil into the slot (there is no distinct unbound state).
 			SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
 			if (slot == null) {
 				throw new LispEvalException(LispNames.SLOT_MAKUNBOUND + ": no such slot " + args.get(1).print());
 			}
-			slot.write(LispNil.INSTANCE);
+			slot.write(unboundMarkerValue());
 			return args.get(0);
 		}));
 		// boundp/symbol-value read the GLOBAL variable namespace only (like CL, where
@@ -1577,6 +1592,20 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Whether a value is the slot-unbound marker -- one layout-tag compare, the same test
+	 * the compiled backends' {@code %obj-is} performs.
+	 */
+	private static boolean isUnboundMarker(LispVal value) {
+		return value instanceof LispInstance instance && instance.hasTag(ClosRegistry.UNBOUND_TAG);
+	}
+
+	/** A fresh slot-unbound marker instance (what {@code slot-makunbound} stores). */
+	private LispVal unboundMarkerValue() {
+		LispLayout layout = this.closRegistry.findLayoutByTag(ClosRegistry.UNBOUND_TAG);
+		return LispInstance.ofNilSlots(java.util.Objects.requireNonNull(layout));
+	}
+
+	/**
 	 * The slot of an instance named by a (runtime) symbol, or null when the value is not
 	 * an instance or its layout has no slot of that name. The layout rides on the value,
 	 * so this resolves a {@code defstruct} instance as readily as a CLOS one.
@@ -2184,10 +2213,14 @@ public final class LispEvaluator {
 					return evalDefmethod(cons, env);
 				case LispNames.MAKE_INSTANCE:
 					return eval(LispMacroExpander.expandMakeInstance(cons, this.closRegistry), env);
+				case LispNames.CHANGE_CLASS:
+					return eval(LispMacroExpander.expandChangeClass(cons, this.closRegistry, false), env);
 				case LispNames.SLOT_VALUE:
 					return evalSlotValue(cons, env);
 				case LispNames.WITH_SLOTS:
 					return eval(LispMacroExpander.expandWithSlots(cons), env);
+				case LispNames.WITH_ACCESSORS:
+					return eval(LispMacroExpander.expandWithAccessors(cons), env);
 				case LispNames.DEFVAR:
 					return evalDefvar(cons, env, false);
 				case LispNames.DEFPARAMETER:
@@ -2444,6 +2477,19 @@ public final class LispEvaluator {
 	 */
 	private LispVal evalConsRareOperator(LispCons cons, Environment env, String name) {
 		switch (name) {
+			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
+					LispNames.PRIN1_TO_STRING: {
+				// Routed through print-object only when the program defines a method on
+				// it; otherwise the ordinary Environment function runs, unchanged. The
+				// renderer is INLINED here rather than called as a generated defun: the
+				// interpreter re-expands per call, so it always sees the current method
+				// set (a defmethod may follow the first print).
+				LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, this.closRegistry, true);
+				if (hooked != null) {
+					return eval(hooked, env);
+				}
+				break;
+			}
 			case LispNames.COMPLEX:
 				return eval(LispMacroExpander.expandComplexLite(cons), env);
 			case LispNames.NE:
@@ -3967,6 +4013,20 @@ public final class LispEvaluator {
 		// loaded on first resolution like the linalg/url libraries.
 		if (LispPreludeLibrary.isPreludeFunction(name) && this.loadedPreludeNames.add(name)) {
 			for (LispVal form : LispPreludeLibrary.formsFor(name)) {
+				eval(form, this.globalEnv);
+			}
+			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+			if (loaded != null) {
+				return loaded;
+			}
+		}
+		// %slot-read / %slot-bound-p are the out-of-line halves of the boundness-checked
+		// slot reads. They are GENERATED, not written anywhere, so the compile path emits
+		// their defuns into the program and the interpreter defines them here, from the
+		// same AST.
+		if ((LispNames.SLOT_READ_INTERNAL.equals(name) || LispNames.SLOT_BOUND_P_INTERNAL.equals(name))
+				&& this.loadedPreludeNames.add(name)) {
+			for (LispVal form : LispMacroExpander.slotUnboundDefuns()) {
 				eval(form, this.globalEnv);
 			}
 			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

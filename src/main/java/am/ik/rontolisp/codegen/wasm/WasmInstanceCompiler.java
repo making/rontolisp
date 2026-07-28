@@ -44,10 +44,12 @@ final class WasmInstanceCompiler {
 		}
 		int address = layoutAddress(ctx, tag);
 		int slotCount = layout.slotCount();
-		// slots = array.new $buckets (ref.null eq) slotCount -- every element nil, so
-		// missing trailing values need no store.
+		// slots = array.new $buckets (ref.null eq) capacity -- every element nil, so
+		// missing trailing values need no store. capacity, not slotCount: a class a
+		// change-class can widen reserves the target's slot count up front, so the ONE
+		// allocation shape serves both layouts (LispLayout.capacity).
 		refNull(ctx);
-		i32Const(ctx, slotCount);
+		i32Const(ctx, layout.capacity());
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		int slotsSlot = ctx.allocTemp();
@@ -89,6 +91,30 @@ final class WasmInstanceCompiler {
 		i32Const(ctx, literalIndex(args.get(2), LispNames.OBJ_REF));
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	/**
+	 * {@code (%obj-become obj '<tag>)}: stores the new layout address into field 0, so
+	 * the instance IS one of the new type from here on, and yields the instance. The
+	 * slots array is untouched -- construction reserved
+	 * {@link am.ik.rontolisp.LispLayout#capacity()} elements for exactly this, which is
+	 * why field 0 is mutable (see {@code WasmLispCompiler.INSTANCE_TYPE_COUNT}).
+	 */
+	static void compileBecome(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		requireGate(ctx, LispNames.OBJ_BECOME);
+		List<LispVal> args = cons.toList();
+		int address = layoutAddress(ctx, quotedTag(args.get(2), LispNames.OBJ_BECOME));
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int objSlot = ctx.allocTemp();
+		setLocal(ctx, objSlot);
+		getLocal(ctx, objSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		i32Const(ctx, address);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		ctx.writer.writeSignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeSignedLeb128(0);
+		getLocal(ctx, objSlot);
 	}
 
 	/** {@code (%obj-set obj <k> v)}, returning the value written. */
@@ -208,9 +234,11 @@ final class WasmInstanceCompiler {
 		ctx.writer.writeHeapType(Type.EQ.code());
 		refNull(ctx);
 		setLocal(ctx, listSlot);
+		// The cursor starts at the LAYOUT's slot count, not at array.len: a
+		// change-class-reserved slots array is longer than the layout describes.
 		getLocal(ctx, objSlot);
-		pushSlots(ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		pushLayoutAddress(ctx);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, WasmInstanceLayouts.OFF_SLOT_COUNT);
 		i32Const(ctx, 1);
 		ctx.writer.write(Instruction.I32_SUB);
 		refI31(ctx);

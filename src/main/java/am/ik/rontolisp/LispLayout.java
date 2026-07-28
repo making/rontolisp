@@ -31,8 +31,12 @@ import java.util.List;
  * inherited slots first)
  * @param initforms the per-slot default expressions, in the same order as
  * {@code slotNames}
+ * @param capacity how many slots an instance RESERVES room for -- normally
+ * {@code slotNames.size()}, but wider when {@code change-class} can turn an instance of
+ * this type into one of a descendant (see {@link #withCapacity})
  */
-public record LispLayout(String tag, String printName, Kind kind, List<String> slotNames, List<LispVal> initforms) {
+public record LispLayout(String tag, String printName, Kind kind, List<String> slotNames, List<LispVal> initforms,
+		int capacity) {
 
 	/** Whether a layout describes a {@code defstruct} type or a CLOS class. */
 	public enum Kind {
@@ -62,10 +66,12 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * @param kind the printing kind
 	 * @param slotNames the slot base names in layout order
 	 * @param initforms the slot initforms in layout order
+	 * @param capacity the reserved slot count (at least {@code slotNames.size()})
 	 */
 	public LispLayout {
 		slotNames = List.copyOf(slotNames);
 		initforms = List.copyOf(initforms);
+		capacity = Math.max(capacity, slotNames.size());
 	}
 
 	/**
@@ -76,7 +82,8 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * @return the struct layout
 	 */
 	public static LispLayout ofStruct(String structName, List<String> slotNames, List<LispVal> initforms) {
-		return new LispLayout(STRUCT_TAG_PREFIX + structName, structName, Kind.STRUCT, slotNames, initforms);
+		return new LispLayout(STRUCT_TAG_PREFIX + structName, structName, Kind.STRUCT, slotNames, initforms,
+				slotNames.size());
 	}
 
 	/**
@@ -87,7 +94,24 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * @return the class layout
 	 */
 	public static LispLayout ofClass(String className, List<String> slotNames, List<LispVal> initforms) {
-		return new LispLayout(CLASS_TAG_PREFIX + className, className, Kind.CLASS, slotNames, initforms);
+		return new LispLayout(CLASS_TAG_PREFIX + className, className, Kind.CLASS, slotNames, initforms,
+				slotNames.size());
+	}
+
+	/**
+	 * The same layout with a wider reserved slot count. {@code change-class} turns an
+	 * instance into one of a DESCENDANT class in place, and on the JVM the instance IS
+	 * its {@code Object[]}, which cannot grow without losing object identity -- so every
+	 * class a {@code change-class} target descends from reserves the target's slot count
+	 * up front. The reservation is per program: only classes actually named by a
+	 * {@code change-class} in the source widen anything.
+	 * @param reserved the new reserved slot count (ignored when narrower than the
+	 * current)
+	 * @return the widened layout
+	 */
+	public LispLayout withCapacity(int reserved) {
+		return reserved <= this.capacity ? this
+				: new LispLayout(this.tag, this.printName, this.kind, this.slotNames, this.initforms, reserved);
 	}
 
 	/**

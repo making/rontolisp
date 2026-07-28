@@ -60,7 +60,9 @@ description and a runnable example you can evaluate in your browser.
 | `nth-value` | `(nth-value n values-form)` | The n-th (0-based) value of the producer, or nil; expands to `nth` over `multiple-value-list` |
 | `make-instance` | `(make-instance 'class-name :initarg value ...)` | Create an instance of a [`defclass`](special-forms/defclass.md) class (static CLOS subset). The class name must be a literal quoted symbol |
 | `slot-value` | `(slot-value object 'slot-name)` | Read a slot of a [`defclass`](special-forms/defclass.md) instance; a `setf`-able place. The slot name must be a literal quoted symbol |
-| `with-slots` | `(with-slots (x (v y)) instance body...)` | Bind slot names as symbol-macro-style places for the body: reads see the slots, and `setf`/`push`/`incf` of a bound name writes back to the slot |
+| `with-slots` | `(with-slots (x (v y)) instance body...)` | Bind slot names as symbol-macro-style places for the body: reads see the slots, and `setf`/`push`/`incf` of a bound name writes back to the slot. Resolves `defstruct` slots too |
+| `with-accessors` | `(with-accessors ((x pt-x)) instance body...)` | Bind variables as symbol-macro-style places standing for accessor calls on the instance |
+| `change-class` | `(change-class obj 'class :initarg v)` | Change an instance's class in place (identity kept, shared slots kept, new slots from their `:initform`s) and return it |
 | `rontolisp:with-arena` | `(rontolisp:with-arena () body...)` | Run the body and return its value, naming a memory-reclamation boundary for the non-GC WASM backend (`--no-gc`): everything allocated inside is popped at the end, keeping only the body's value. A plain `progn` on the other backends (a real GC already reclaims) |
 | `rontolisp:with-mutex` | `(rontolisp:with-mutex (mutex-form) body...)` | Acquire the mutex, run the body, and release it on every exit (a signalled error included). Real mutual exclusion on the interpreter and the JVM backend, where a served handler runs one virtual thread per request; a no-op on the single-threaded WASM backends |
 | `prog` | `(prog ((v init)...) tag-or-form...)` | `let` + `tagbody` inside a block: `go` jumps between the body's tags and `(return x)` exits with `x` |
@@ -69,9 +71,9 @@ description and a runnable example you can evaluate in your browser.
 | `load-time-value` | `(load-time-value form)` | Evaluates `form` once per occurrence in the source (lazily, on first use), not once per use |
 | `define-compiler-macro` | `(define-compiler-macro name (params...) body...)` | Rewrite calls to `name` at compile time; returning the `&whole` form declines. A hint: it is ignored when the body signals, when `name` is a standard operator, or under `apply`/`funcall` |
 | `typep` | `(typep x '(unsigned-byte 8))` | Type test over the `typecase` specifier set; the specifier must be a literal (quoted) type |
-| `slot-boundp` | `(slot-boundp obj 'slot)` | `t` for every slot the instance's class defines (lite: slots are always initialized, no unbound state) |
-| `slot-makunbound` | `(slot-makunbound obj 'slot)` | Lite: stores nil into the slot and returns the instance |
-| `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | Writes `#<[class ]...>` around the body's output; returns nil (`:identity` accepted, not printed) |
+| `slot-boundp` | `(slot-boundp obj 'slot)` | Whether the slot holds a value: `nil` for an unknown slot, one written with no `:initform` and never supplied, or one `slot-makunbound` emptied |
+| `slot-makunbound` | `(slot-makunbound obj 'slot)` | Makes the slot unbound and returns the instance; a later read signals `unbound-slot` |
+| `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | Writes `#<[type ]...>` around the body's output; returns nil (`:identity` accepted, prints no address) |
 | `with-package-iterator` | `(with-package-iterator (next pkgs :external) body...)` | Lite: binds the iterator name to a local FUNCTION always reporting no more symbols (no intern table) |
 | `do-external-symbols` | `(do-external-symbols (s :rontolisp) (print s))` | Iterate a package's exported symbols (interpreter only: the compiled backends carry no package registry) |
 

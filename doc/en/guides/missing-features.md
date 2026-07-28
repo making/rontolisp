@@ -102,10 +102,16 @@ CLOS is a **static subset**
 [`defmethod`](../reference/special-forms/defmethod.md) dispatching on the first
 argument, [`make-instance`](../reference/macros/make-instance.md) and
 [`slot-value`](../reference/macros/slot-value.md) with literal quoted names).
-Out of scope: multiple inheritance, specializers on later arguments,
-`slot-boundp`, and the MOP / runtime class operations (`find-class`,
-`change-class`, `add-method`, class redefinition) — the class and method sets of
-a compiled program are fixed at compile time.
+A slot written with no `:initform` starts UNBOUND, as in CL:
+[`slot-boundp`](../reference/macros/slot-boundp.md) reports it,
+[`slot-makunbound`](../reference/macros/slot-makunbound.md) restores it, and a
+read signals `unbound-slot`.
+[`change-class`](../reference/macros/change-class.md) changes an instance's class
+in place, both classes being literal. Out of scope: multiple inheritance,
+specializers on later arguments, and the MOP / runtime class operations
+(`find-class`, `add-method`, `compute-applicable-methods`, class redefinition,
+`update-instance-for-different-class`) — the class and method sets of a compiled
+program are fixed at compile time.
 
 ## User-defined packages
 

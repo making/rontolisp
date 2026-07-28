@@ -49,10 +49,11 @@ public final class PackageRegistry {
 			LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET, LispNames.MAKE_CONDITION,
 			LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN, LispNames.SIGNAL,
 			LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE, LispNames.WITH_SLOTS,
-			LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.HANDLER_BIND, LispNames.WRITE_CHAR,
-			LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE,
-			LispNames.TYPEP, LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.PRINT_UNREADABLE_OBJECT,
-			LispNames.WITH_PACKAGE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS);
+			LispNames.WITH_ACCESSORS, LispNames.CHANGE_CLASS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS,
+			LispNames.HANDLER_BIND, LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR,
+			LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP,
+			LispNames.SLOT_MAKUNBOUND, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR,
+			LispNames.DO_EXTERNAL_SYMBOLS);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -129,8 +130,10 @@ public final class PackageRegistry {
 			LispNames.FILE_LENGTH, LispNames.MAKE_BROADCAST_STREAM, LispNames.PATHNAMEP, LispNames.INPUT_STREAM_P,
 			LispNames.OUTPUT_STREAM_P, LispNames.OPEN_STREAM_P, LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF,
 			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
-			LispNames.MAKE_PATHNAME, LispNames.COPY_READTABLE, LispNames.SET_DISPATCH_MACRO_CHARACTER,
-			LispNames.READTABLE_CASE, LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF);
+			LispNames.TYPE_ERROR_DATUM, LispNames.TYPE_ERROR_EXPECTED_TYPE, LispNames.CELL_ERROR_NAME,
+			LispNames.UNBOUND_SLOT_INSTANCE, LispNames.MAKE_PATHNAME, LispNames.COPY_READTABLE,
+			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE, LispNames.FIND_PACKAGE,
+			LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,

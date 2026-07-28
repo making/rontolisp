@@ -4429,7 +4429,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
@@ -4471,7 +4471,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer", "%string-compare")
 			.isSorted()
-			.hasSize(325);
+			.hasSize(329);
 	}
 
 	@Test
@@ -7660,6 +7660,83 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> evalMulti("(defgeneric g (x y)) (defmethod g (x) x)"))
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("does not match the generic function");
+	}
+
+	@Test
+	void defclassSlotWithoutInitformStartsUnbound() {
+		assertThat(evalMulti("""
+				(defclass ub-box () ((a :initarg :a) (b :initform 7)))
+				(let ((o (make-instance 'ub-box)))
+				  (list (slot-boundp o 'a) (slot-boundp o 'b)
+				        (progn (setf (slot-value o 'a) 1) (slot-boundp o 'a))
+				        (progn (slot-makunbound o 'a) (slot-boundp o 'a))
+				        (handler-case (slot-value o 'a)
+				          (unbound-slot (e) (list (cell-error-name e) (type-of (unbound-slot-instance e)))))))
+				""").print()).isEqualTo("(NIL T T NIL (A UB-BOX))");
+	}
+
+	@Test
+	void defclassSubclassShadowsAnInheritedSlot() {
+		// The storage stays the ONE inherited slot: the superclass reader and the
+		// subclass accessor see the same value, at the same index.
+		assertThat(evalMulti("""
+				(defclass sh-base () ((open-p :initform t :reader sh-open-p) (conn :initarg :conn :reader sh-conn)))
+				(defclass sh-sub (sh-base) ((open-p :initform :maybe :accessor sh-sub-open-p)))
+				(let ((o (make-instance 'sh-sub :conn "c")))
+				  (setf (sh-sub-open-p o) :closed)
+				  (list (sh-open-p o) (sh-sub-open-p o) (sh-conn o)))
+				""").print()).isEqualTo("(:CLOSED :CLOSED \"c\")");
+	}
+
+	@Test
+	void changeClassMutatesTheInstanceInPlace() {
+		assertThat(evalMulti("""
+				(defclass cc-conn () ((host :initarg :host :accessor cc-host)))
+				(defclass cc-pooled (cc-conn) ((kind :initarg :kind :accessor cc-kind :initform :none)))
+				(let* ((c (make-instance 'cc-conn :host "db")) (alias c))
+				  (change-class c 'cc-pooled :kind :shared)
+				  (list (eq c alias) (type-of alias) (cc-host alias) (cc-kind alias)))
+				""").print()).isEqualTo("(T CC-POOLED \"db\" :SHARED)");
+	}
+
+	@Test
+	void withAccessorsReadsAndWritesThroughTheAccessors() {
+		assertThat(evalMulti("""
+				(defclass wa-pt () ((x :initarg :x :accessor wa-x) (y :initarg :y :accessor wa-y)))
+				(let ((p (make-instance 'wa-pt :x 3 :y 4)))
+				  (with-accessors ((x wa-x) (y wa-y)) p (setf x (+ x y)))
+				  (list (wa-x p) (wa-y p)))
+				""").print()).isEqualTo("(7 4)");
+	}
+
+	@Test
+	void withSlotsResolvesDefstructSlots() {
+		assertThat(evalMulti("""
+				(defstruct ws-parser (pos 0) (text "ab"))
+				(let ((p (make-ws-parser)))
+				  (with-slots (pos text) p (incf pos) (list pos text)))
+				""").print()).isEqualTo("(1 \"ab\")");
+	}
+
+	@Test
+	void printObjectIsConsultedByThePrinter() {
+		assertThat(evalMulti("""
+				(defstruct po-node value)
+				(defmethod print-object ((n po-node) stream)
+				  (print-unreadable-object (n stream :type t) (princ (po-node-value n) stream)))
+				(list (princ-to-string (make-po-node :value 42))
+				      (format nil "~a|~s" (make-po-node :value 1) (make-po-node :value 2)))
+				""").print()).isEqualTo("(\"#<PO-NODE 42>\" \"#<PO-NODE 1>|#<PO-NODE 2>\")");
+	}
+
+	@Test
+	void defineConditionDefaultInitargsReachTheTypedSignal() {
+		assertThat(evalMulti("""
+				(define-condition di-err (error) ((v :initarg :v :reader di-v))
+				  (:default-initargs :v 7)
+				  (:report (lambda (c s) (format s "di-err: ~a" (di-v c)))))
+				(handler-case (error 'di-err) (di-err (e) (di-v e)))
+				""").print()).isEqualTo("7");
 	}
 
 	@Test

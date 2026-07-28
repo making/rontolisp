@@ -34,6 +34,14 @@ public final class ClosRegistry {
 	 * membership.
 	 */
 	public ClosRegistry() {
+		// The slot-unbound marker is a LAYOUT ONLY -- never a class. It must be
+		// distinguishable from every user value with one layout-identity compare (that is
+		// what makes the per-read boundness check cheap on all four backends), but it
+		// must
+		// NOT appear in classes(), or it would join every typep tag table,
+		// class-slot-defs
+		// answer and standard-object descendant set.
+		this.layoutsByTag.put(UNBOUND_TAG, LispLayout.ofClass(UNBOUND_CLASS_NAME, List.of(), List.of()));
 		seedConditionClass("CONDITION", null);
 		seedConditionClass("SERIOUS-CONDITION", "CONDITION");
 		seedConditionClass("ERROR", "SERIOUS-CONDITION");
@@ -57,16 +65,59 @@ public final class ClosRegistry {
 		seedConditionClass("CONTROL-ERROR", "ERROR");
 		seedConditionClass("PROGRAM-ERROR", "ERROR");
 		seedConditionClass("PACKAGE-ERROR", "ERROR");
-		seedConditionClass("CELL-ERROR", "ERROR");
+		seedConditionClass("CELL-ERROR", "ERROR", "NAME");
 		seedConditionClass("UNBOUND-VARIABLE", "CELL-ERROR");
 		seedConditionClass("UNDEFINED-FUNCTION", "CELL-ERROR");
+		// The condition a read of an unbound slot signals (CLHS 7.7.2): name = the slot,
+		// instance = the object it was read from.
+		seedConditionClass("UNBOUND-SLOT", "CELL-ERROR", "INSTANCE");
+		registerConditionReport("UNBOUND-SLOT", unboundSlotReport());
 	}
+
+	/**
+	 * The {@code :report} of the seeded {@code unbound-slot}, as the AST a
+	 * {@code define-condition} would have registered:
+	 * {@code (lambda (c s) (format s "The slot ~S is unbound in ~S" (%obj-ref c 0) (%obj-ref c 1)))}.
+	 * The slot indexes are baked rather than read through {@code slot-value} because they
+	 * are fixed by the seeding above ({@code name} from {@code cell-error}, then
+	 * {@code instance}) and a {@code slot-value} would drag the whole ambiguous-name
+	 * dispatch into every program that mentions the condition.
+	 */
+	private static LispVal unboundSlotReport() {
+		LispSymbol condition = new LispSymbol("__c");
+		LispSymbol stream = new LispSymbol("__s");
+		LispVal format = list(new LispSymbol("FORMAT"), stream, new LispString("The slot ~S is unbound in ~S"),
+				list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(0)),
+				list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(1)));
+		return list(new LispSymbol(LispNames.LAMBDA), list(condition, stream), format);
+	}
+
+	/** Builds a proper list of the given elements. */
+	private static LispVal list(LispVal... elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.length - 1; i >= 0; i--) {
+			result = new LispCons(elements[i], result);
+		}
+		return result;
+	}
+
+	/**
+	 * The type name of the internal slot-unbound marker. A slot holding an instance of it
+	 * is UNBOUND: reading it signals {@code unbound-slot}, {@code slot-boundp} is nil,
+	 * and {@code slot-makunbound} stores a fresh one. It is spelled with the {@code %}
+	 * fences of an internal name so no source symbol collides with it.
+	 */
+	public static final String UNBOUND_CLASS_NAME = "%UNBOUND%";
+
+	/** The instance tag of the slot-unbound marker ({@link #UNBOUND_CLASS_NAME}). */
+	public static final String UNBOUND_TAG = LispLayout.CLASS_TAG_PREFIX + UNBOUND_CLASS_NAME;
 
 	private void seedConditionClass(String name, @Nullable String parent, String... slotNames) {
 		ClassInfo parentInfo = parent == null ? null : this.classes.get(parent);
 		java.util.List<SlotSpec> slots = new java.util.ArrayList<>(parentInfo == null ? List.of() : parentInfo.slots());
 		for (String slotName : slotNames) {
-			slots.add(new SlotSpec(slotName, slotName, LispNil.INSTANCE, ":" + slotName, List.of(), List.of(), "T"));
+			slots.add(new SlotSpec(slotName, slotName, LispNil.INSTANCE, true, ":" + slotName, List.of(), List.of(),
+					"T"));
 		}
 		java.util.Set<String> ancestors = new java.util.LinkedHashSet<>();
 		if (parentInfo != null) {
@@ -89,14 +140,18 @@ public final class ClosRegistry {
 	 *
 	 * @param name the canonical slot symbol name
 	 * @param baseName the package-stripped slot name (constructor keywords use it)
-	 * @param initform the default value expression ({@code nil} when omitted)
+	 * @param initform the default value expression -- the unbound-marker construction
+	 * when no {@code :initform} was written (CLHS: such a slot starts UNBOUND)
+	 * @param initformSupplied whether the slot specification wrote an {@code :initform};
+	 * false means {@code initform} is the unbound marker, which is also what makes a
+	 * shadowing subclass slot inherit the superclass initform instead of overriding it
 	 * @param initargKeyword the keyword accepted by the constructor, with the colon
 	 * @param readers the {@code :reader} function names
 	 * @param accessors the {@code :accessor} function names (also setf places)
 	 * @param type the package-stripped {@code :type} option name ({@code "t"} if none)
 	 */
-	public record SlotSpec(String name, String baseName, LispVal initform, String initargKeyword, List<String> readers,
-			List<String> accessors, String type) {
+	public record SlotSpec(String name, String baseName, LispVal initform, boolean initformSupplied,
+			String initargKeyword, List<String> readers, List<String> accessors, String type) {
 	}
 
 	/**
@@ -354,6 +409,13 @@ public final class ClosRegistry {
 	 * spellings resolve exactly as they do everywhere else.
 	 */
 	private final Map<String, LispLayout> layoutsByTag = new LinkedHashMap<>();
+
+	/**
+	 * The classes a {@code change-class} in the program turns instances into
+	 * (normalized). Their ancestors reserve their slot count; see
+	 * {@link #applyChangeClassCapacities()}.
+	 */
+	private final Set<String> changeClassTargets = new java.util.LinkedHashSet<>();
 
 	/**
 	 * User {@code deftype} name (normalized) to its expansion -- the literal type
@@ -754,6 +816,44 @@ public final class ClosRegistry {
 	 */
 	public Map<String, LispLayout> layouts() {
 		return this.layoutsByTag;
+	}
+
+	/**
+	 * Records that a {@code change-class} in the program turns instances INTO this class,
+	 * so every class it descends from must reserve room for its slots
+	 * ({@link LispLayout#withCapacity}). Call before the layouts are consumed; the
+	 * reservation is applied by {@link #applyChangeClassCapacities()} once the whole
+	 * program is registered.
+	 * @param className the target class name as spelled in the change-class
+	 */
+	public void registerChangeClassTarget(String className) {
+		this.changeClassTargets.add(normalize(className));
+	}
+
+	/**
+	 * Applies every recorded {@link #registerChangeClassTarget} reservation: each
+	 * target's ancestors (and the target itself) widen to the target's slot count.
+	 * Idempotent, and a no-op for a program with no {@code change-class}.
+	 */
+	public void applyChangeClassCapacities() {
+		for (String target : this.changeClassTargets) {
+			ClassInfo info = findClass(target);
+			if (info == null) {
+				continue;
+			}
+			int reserved = info.slots().size();
+			for (String ancestor : info.ancestors()) {
+				ClassInfo owner = findClass(ancestor);
+				if (owner == null) {
+					continue;
+				}
+				String tag = LispLayout.CLASS_TAG_PREFIX + owner.name();
+				LispLayout layout = this.layoutsByTag.get(tag);
+				if (layout != null) {
+					this.layoutsByTag.put(tag, layout.withCapacity(reserved));
+				}
+			}
+		}
 	}
 
 	void registerGeneric(GenericInfo info) {

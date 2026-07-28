@@ -257,6 +257,124 @@ name make the bare spelling unresolvable (qualify it). `slot-value` matches by
 slot base name for the same reason. `defmethod` stores the specializer as the
 FOUND class's canonical name (not the spelling at the method site).
 
+## Real slot unboundness (todo-199)
+
+**A slot written with no `:initform` starts UNBOUND, not nil.** Reading it signals
+`unbound-slot`; `slot-boundp` says nil; `slot-makunbound` puts it back. This is CL
+semantics and it is what the DAO/serializer idiom ("this column was not fetched")
+rests on -- jzon's `coerced-fields` and `json.lisp`'s `%json-out-instance` both SKIP
+an unbound slot rather than writing `null`.
+
+- The marker is an instance of a LAYOUT-ONLY internal type, `ClosRegistry.UNBOUND_TAG`
+  = `%class-%UNBOUND%` (registered in the `ClosRegistry` constructor, deliberately NOT
+  in `classes()`: a class there would join every typep tag table, `class-slot-defs`
+  answer and `standard-object` descendant set). Testing for it is therefore the same
+  one-compare `%obj-is` every instance-of test is, on all four backends. It prints
+  `#<%UNBOUND%>` if it ever escapes -- printing an instance does not hide unbound
+  slots.
+- `SlotSpec.initformSupplied` records whether the source wrote an `:initform`;
+  `initform` then holds `(%obj-new '%class-%UNBOUND%)`.
+- Every read goes through ONE out-of-line helper, `(%slot-read value instance 'NAME)`,
+  with `(%slot-bound-p value)` for the `slot-boundp` arms
+  (`LispMacroExpander.slotUnboundDefuns`, emitted by `expandTopLevelDefinitions` when
+  `needsSlotUnboundHelper`; the interpreter defines them on first resolution of either
+  name). **They are calls, not inlined `%obj-is` + `if`, for a size reason**: an inline
+  instance-of test is ~60 bytes of JVM bytecode, and one per accessor and per
+  `slot-value` ran the ci-spec corpus past the 64 KB method limit
+  ([jvm-method-size-limits.md](jvm-method-size-limits.md)).
+- `expandSlotValue` is the CHECKED read; `expandSlotValueRaw` is the unchecked one the
+  `setf` place expansion needs (a write must reach the `%obj-ref` place, and storing
+  into an unbound slot is how it becomes bound). A RUNTIME (non-literal) slot name
+  keeps the raw read -- the wrapper needs the name at expansion time.
+- `unbound-slot` is seeded under `cell-error` (which gained CL's `name` slot, so
+  `cell-error-name` works and `unbound-variable`/`undefined-function` inherit it) with
+  an extra `instance` slot and a `:report` LAMBDA built in Java
+  (`ClosRegistry.unboundSlotReport`, over `%obj-ref` indexes rather than `slot-value`,
+  which would drag the ambiguous-name dispatch into every program). `type-error-datum`,
+  `type-error-expected-type`, `cell-error-name` and `unbound-slot-instance` are prelude
+  defuns (`LispPreludeLibrary`), so one definition serves all four backends.
+
+## Inherited-slot shadowing, `:default-initargs`, `with-accessors` (todo-199)
+
+- **A subclass may re-declare an inherited slot** (CLHS 7.5.3): the STORAGE stays the
+  one inherited slot -- so every descendant keeps the index its ancestors baked -- while
+  the subclass specification overrides the initform/initarg it writes and ADDS its
+  readers/accessors to the inherited ones (`LispMacroExpander.shadowSlot`; "written or
+  not" survives parsing as `ParsedSlot.initargSupplied` +
+  `SlotSpec.initformSupplied`). postmodern's `savepoint-handle` re-declares
+  `transaction-handle`'s `open-p`/`connection` this way.
+- **`(:default-initargs :arg form)` overrides the matching slot's effective initform**,
+  which is where BOTH construction paths read it: the generated constructor's keyword
+  default and the registry initform `buildTypedConstruct` fills unsupplied slots from.
+  Before this it only reached the constructor, so `(error 'my-cond)` ignored it.
+- **`with-accessors`** is the accessor-call twin of `with-slots`, same substitution
+  machinery (`expandWithAccessors`), and needs no registry: an accessor is an ordinary
+  generic and an ordinary `setf` place.
+- **`with-slots` now resolves `defstruct` slots too**: `expandSlotValueRaw` picks the
+  index out of the LAYOUT registry (`uniqueLayoutSlotIndex`, both kinds) instead of the
+  class-only `slotPosition` map, falling back to the tag dispatch when types disagree.
+
+## `change-class` -- in place, on all four backends (todo-199)
+
+`(change-class instance 'name initarg value ...)` mutates the instance IN PLACE: the
+object identity and every slot the two layouts share survive, the slots the new class
+adds are filled from their initforms, the supplied initargs are stored, and the
+instance is the value. postmodern's connection pool needs the identity to survive
+(`connect` changes a local and returns it; a copy would strand every other reference).
+
+- `expandChangeClass` emits: capture the OLD tag -> `(%obj-become obj '%class-T)` ->
+  a `cond` on the captured tag filling `[slotCount(source), slotCount(target))` from
+  the target's initforms -> the initarg stores -> the instance. The tag is captured
+  BEFORE the swap because the fill has to know which class the instance WAS but can
+  only store into the WIDER layout, i.e. after it.
+- **`LispLayout.capacity()` is why this works on the JVM**, where an instance IS its
+  `Object[]` and cannot grow without losing identity: every ancestor of a
+  `change-class` target reserves the target's slot count at construction.
+  `expandTopLevelDefinitions` scans the whole program for change-class targets
+  (`registerChangeClassTargets`, the form lives in a body, not at top level) and calls
+  `applyChangeClassCapacities()` once the registry is complete. Only classes a program
+  actually names widen anything. `%obj-slots` and the printers bound themselves by the
+  LAYOUT's slot count, never by the array length.
+- **The WASM instance struct's field 0 became MUTABLE** for this, which makes it
+  structurally identical to `TYPE_P1_FUTURE` `{mut i32, mut eq}` -- so its rec group
+  carries a second, never-instantiated empty struct: wasm canonicalizes a rec GROUP as
+  a whole, and a 2-member group can never equal a 1-member one, so `ref.test` keeps
+  telling an instance from a future (`INSTANCE_TYPE_COUNT = 2`). Do not "simplify" it.
+- The interpreter needs no reservation at all (`LispInstance.becomeLayout` grows the
+  array; the LispInstance, not the array, is the identity) -- the reservation is
+  harmless there and keeps ONE expansion for all four backends.
+
+## `print-object` -- the printer consults it (todo-199)
+
+A `defmethod print-object` makes the printing operators render that type through the
+generic. **Gated on the program defining a method**: with none, every printing operator
+compiles exactly as before and every existing artifact stays byte-identical.
+
+- `printObjectTags(registry)` is the gate AND the routed tag set (class specializers
+  and `defstruct` ones -- a struct name parses as a TYPE specializer carrying the
+  struct name, so both descendant-tag families are collected).
+- `expandPrintObjectHook` rewrites `princ-to-string`/`prin1-to-string` to
+  `(%print-object-str x escape)` and `print`/`princ`/`prin1` to a
+  `write-string` of it (+ `terpri` for `print`). `format`'s `~A`/`~S` need no case of
+  their own: they lower to those two conversions.
+- The generated `%print-object-str` falls back to `%princ-to-string` /
+  `%prin1-to-string` -- INTERNAL ALIASES of the same two functions. Without them the
+  fallback would re-enter the very rewrite that produced it. The interpreter INLINES
+  the renderer instead of calling the defun, because it re-expands per call and must
+  see a `defmethod` that follows the first print.
+- **LITE: the method is consulted for the value the operator is HANDED, not for one
+  nested inside a printed list/vector** -- `(print (list obj))` still shows the built-in
+  syntax. Making it recursive means hooking each backend's list renderer (hand-emitted
+  bytecode / wasm), not the shared expander; revisit only if a library needs it.
+- `print-unreadable-object`'s `:type t` prints the type NAME with the
+  `%struct-`/`%class-` tag prefix stripped INLINE (`typeNameOf`), not by calling the
+  prelude's `type-of`: this expansion runs inside the compilers, long after the prelude
+  pre-pass that would have spliced that defun -- a direct compiler invocation (every
+  backend unit test) has no prelude pass at all. The separating space is written only
+  when a body follows. `:identity` is accepted and prints NO address: there
+  is no object-identity token in the value model, and a per-backend one would break the
+  byte-identical cross-backend output the suite rests on.
+
 ## Out of scope / known gaps
 
 - Qualifiers (`:before`/`:after`/`:around`) + `call-next-method`/`next-method-p`:
@@ -264,12 +382,13 @@ FOUND class's canonical name (not the spelling at the method site).
   eql/type-specialized qualified methods combine only with same-specializer
   primaries + the default method (cross-type subtyping among specializers is not
   computed).
-- MOP / runtime class ops (`find-class`, `change-class`, `add-method`,
+- MOP / runtime class ops (`find-class`, `add-method`,
   `compute-applicable-methods`, class redefinition, `update-instance-for-*`):
   permanently out (contradicts the static compile model + `--optimize`).
+  `change-class` is the ONE exception and is not MOP: both classes are literal, so
+  the whole change is a static expansion (see above).
 - Multiple inheritance, `:allocation`/`:writer` slot options, eql specializers
-  on strings. `slot-boundp`/`slot-makunbound` exist as LITE interpreter
-  built-ins (slots are always initialized -- nil default, no unbound state).
+  on strings.
   The `:type` slot option is RECORDED since 2026-07-18 (`SlotSpec.type`, plain
   name, `"t"` when omitted; still a checking no-op) so introspection can
   report it.
@@ -278,9 +397,9 @@ FOUND class's canonical name (not the spelling at the method site).
   (doc/en/guides/eval-limitations.md).
 - `--no-gc` rejects via its generic top-level error, like defstruct.
 - `defclass`/`defgeneric`/`defmethod` are in `PackageRegistry.CL_SPECIAL_FORMS`,
-  `make-instance`/`slot-value` in `CL_MACROS` — pinned in ci-spec
-  (`rontolisp-package-introspection`), the three backend tests, and the doc
-  pages; update all together if those sets change again.
+  `make-instance`/`slot-value`/`with-slots`/`with-accessors`/`change-class` in
+  `CL_MACROS` — pinned in ci-spec (`rontolisp-package-introspection`), the three
+  backend tests, and the doc pages; update all together if those sets change again.
 
 Pinning tests: `LispEvaluatorTest#defgeneric*`/`defclass*`/`defmethod*`/
 `closInUserPackage`, `JvmLispCompilerTest#compileAndRunDefgeneric*`/

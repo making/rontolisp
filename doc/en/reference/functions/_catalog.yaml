@@ -491,4 +491,9 @@ categories:
   - title: "Conditions"
     functions:
       - { slug: simple-condition-format-control, name: "simple-condition-format-control" }
+      - { slug: type-error-datum, name: "type-error-datum" }
+      - { slug: type-error-expected-type, name: "type-error-expected-type" }
+      - { slug: cell-error-name, name: "cell-error-name" }
+      - { slug: unbound-slot-instance, name: "unbound-slot-instance" }
+      - { slug: print-object, name: "print-object" }
       - { slug: simple-condition-format-arguments, name: "simple-condition-format-arguments" }

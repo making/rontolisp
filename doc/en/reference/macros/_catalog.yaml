@@ -77,6 +77,8 @@ categories:
       - { slug: make-condition, name: make-condition }
       - { slug: make-instance, name: make-instance }
       - { slug: slot-value, name: slot-value }
+      - { slug: with-accessors, name: with-accessors }
+      - { slug: change-class, name: change-class }
       - { slug: documentation, name: documentation }
       - { slug: rontolisp-with-arena, name: "rontolisp:with-arena" }
       - { slug: rontolisp-with-mutex, name: "rontolisp:with-mutex" }

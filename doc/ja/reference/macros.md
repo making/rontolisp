@@ -59,7 +59,9 @@
 | `nth-value` | `(nth-value n values-form)` | プロデューサの n 番目（0 始まり）の値、なければ nil。`multiple-value-list` の上の `nth` に展開されます |
 | `make-instance` | `(make-instance 'class-name :initarg value ...)` | [`defclass`](special-forms/defclass.md) クラスのインスタンスを生成します(静的 CLOS サブセット)。クラス名はリテラルのクォートされたシンボルでなければなりません |
 | `slot-value` | `(slot-value object 'slot-name)` | [`defclass`](special-forms/defclass.md) インスタンスのスロットを読み取ります。`setf` 可能な place です。スロット名はリテラルのクォートされたシンボルでなければなりません |
-| `with-slots` | `(with-slots (x (v y)) instance body...)` | スロット名を本体のシンボルマクロ的な場所として束縛します。読み取りはスロットを参照し、束縛名への `setf`/`push`/`incf` はスロットへ書き戻されます |
+| `with-slots` | `(with-slots (x (v y)) instance body...)` | スロット名を本体のシンボルマクロ的な場所として束縛します。読み取りはスロットを参照し、束縛名への `setf`/`push`/`incf` はスロットへ書き戻されます。`defstruct` のスロットも解決します |
+| `with-accessors` | `(with-accessors ((x pt-x)) instance body...)` | 変数を、インスタンスに対するアクセサ呼び出しを表すシンボルマクロ的な場所として束縛します |
+| `change-class` | `(change-class obj 'class :initarg v)` | インスタンスのクラスをその場で変更して返します(同一性と共通スロットは保たれ、新しいスロットは `:initform` で埋まります) |
 | `rontolisp:with-arena` | `(rontolisp:with-arena () body...)` | ボディを実行してその値を返し、非 GC WASM バックエンド(`--no-gc`)のメモリ再利用境界を名付けます。内部で確保されたものは終端でポップされ、ボディの値だけが残ります。他のバックエンドでは実際の GC が回収するため、単なる `progn` です |
 | `rontolisp:with-mutex` | `(rontolisp:with-mutex (mutex-form) body...)` | mutex を獲得し、ボディを実行し、あらゆる脱出時(シグナルされたエラーを含む)に解放します。サーブされるハンドラがリクエストごとに 1 つの仮想スレッドで動くインタプリタと JVM バックエンドでは実際の相互排他になり、単一スレッドの WASM バックエンドでは no-op です |
 | `prog` | `(prog ((v init)...) tag-or-form...)` | ブロック内の `let` + `tagbody`: `go` が本体のタグ間をジャンプし、`(return x)` が `x` を返して抜けます |
@@ -68,9 +70,9 @@
 | `load-time-value` | `(load-time-value form)` | `form` をソース中の出現ごとに一度だけ評価します(初回使用時に遅延評価)。使用のたびではありません |
 | `define-compiler-macro` | `(define-compiler-macro name (params...) body...)` | `name` の呼び出しをコンパイル時に書き換えます。`&whole` フォームを返すと辞退します。ヒントであり、本体がシグナルした場合・`name` が標準演算子の場合・`apply`/`funcall` 経由の場合は無視されます |
 | `typep` | `(typep x '(unsigned-byte 8))` | `typecase` の指定子集合に対する型判定。指定子はリテラル(クオートされた)型に限られます |
-| `slot-boundp` | `(slot-boundp obj 'slot)` | インスタンスのクラスが定義するすべてのスロットに `t`(lite: スロットは常に初期化され unbound 状態なし) |
-| `slot-makunbound` | `(slot-makunbound obj 'slot)` | lite 版: スロットに nil を格納し、インスタンスを返します |
-| `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | 本体出力を `#<[class ]...>` で囲んで書き、nil を返します(`:identity` は受理のみ) |
+| `slot-boundp` | `(slot-boundp obj 'slot)` | スロットが値を保持しているか: 未知のスロット、`:initform` なしで書かれ値も与えられていないスロット、`slot-makunbound` で空にしたスロットは `nil` |
+| `slot-makunbound` | `(slot-makunbound obj 'slot)` | スロットを未束縛にしてインスタンスを返します。以後の読み取りは `unbound-slot` をシグナルします |
+| `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | 本体出力を `#<[type ]...>` で囲んで書き、nil を返します(`:identity` は受理のみでアドレスは出力しません) |
 | `with-package-iterator` | `(with-package-iterator (next pkgs :external) body...)` | ライト版: イテレータ名を「もうシンボルはない」と常に返すローカル関数に束縛(intern テーブルなし) |
 | `do-external-symbols` | `(do-external-symbols (s :rontolisp) (print s))` | パッケージのエクスポート済みシンボルを反復 (インタプリタ専用。コンパイル済みバックエンドはパッケージレジストリを持たない) |
 

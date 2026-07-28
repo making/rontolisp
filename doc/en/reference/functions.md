@@ -298,6 +298,11 @@ page.
 | `type-of` | `(type-of 42)` | `integer` -- like `class-of`, but a struct/CLOS instance answers its structure/class NAME symbol, not the instance tag |
 | `simple-condition-format-control` | `(simple-condition-format-control c)` | the condition's `:format-control` slot, or `nil` |
 | `simple-condition-format-arguments` | `(simple-condition-format-arguments c)` | the condition's `:format-arguments` slot, or `nil` |
+| `type-error-datum` | `(type-error-datum c)` | the `datum` slot of a `type-error` -- the object whose type was wrong |
+| `type-error-expected-type` | `(type-error-expected-type c)` | the `expected-type` slot of a `type-error` |
+| `cell-error-name` | `(cell-error-name c)` | the `name` slot of a `cell-error` (`unbound-variable`, `undefined-function`, `unbound-slot`) |
+| `unbound-slot-instance` | `(unbound-slot-instance c)` | the object whose slot was unbound |
+| `print-object` | `(print-object obj stream)` | the generic function the printer consults; define a method to control how instances of a type print |
 
 ## rontolisp Package Functions
 

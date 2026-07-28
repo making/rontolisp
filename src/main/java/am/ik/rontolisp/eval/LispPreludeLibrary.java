@@ -156,6 +156,21 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.FUNCTION_LAMBDA_EXPRESSION, """
 				(defun function-lambda-expression (function) (values nil t nil))
 				""");
+		// The standard condition readers over the seeded hierarchy's slots. They are
+		// prelude defuns rather than Java built-ins so one definition serves all four
+		// backends, exactly like the slot readers a define-condition generates.
+		SOURCES.put(LispNames.TYPE_ERROR_DATUM, """
+				(defun type-error-datum (condition) (slot-value condition 'datum))
+				""");
+		SOURCES.put(LispNames.TYPE_ERROR_EXPECTED_TYPE, """
+				(defun type-error-expected-type (condition) (slot-value condition 'expected-type))
+				""");
+		SOURCES.put(LispNames.CELL_ERROR_NAME, """
+				(defun cell-error-name (condition) (slot-value condition 'name))
+				""");
+		SOURCES.put(LispNames.UNBOUND_SLOT_INSTANCE, """
+				(defun unbound-slot-instance (condition) (slot-value condition 'instance))
+				""");
 		SOURCES.put(LispNames.LIST_ALL_PACKAGES, """
 				(defun list-all-packages () nil)
 				""");

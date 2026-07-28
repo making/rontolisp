@@ -90,6 +90,7 @@ public final class LispMacroExpander {
 			case LispNames.RESTART_CASE -> expandRestartCase(cons);
 			case LispNames.MAKE_CONDITION -> expandMakeCondition(cons);
 			case LispNames.WITH_SLOTS -> expandWithSlots(cons);
+			case LispNames.WITH_ACCESSORS -> expandWithAccessors(cons);
 			case LispNames.IGNORE_ERRORS -> expandIgnoreErrors(cons);
 			case LispNames.DOCUMENTATION -> expandDocumentation(cons);
 			case LispNames.COMPLEMENT -> expandComplement(cons);
@@ -3220,7 +3221,10 @@ public final class LispMacroExpander {
 						// generic would only work when the class declares an :accessor.)
 						yield expandAmbiguousSlotSet(placeParts.get(1), litSlot, value, closRegistry);
 					}
-					LispVal expandedPlace = expandSlotValue(placeCons, closRegistry);
+					// The RAW read: a write must reach the %obj-ref place, and storing
+					// into
+					// an unbound slot is legal (that is how it becomes bound).
+					LispVal expandedPlace = expandSlotValueRaw(placeCons, closRegistry);
 					yield expandSetf(
 							(LispCons) listToCons(List.of(new LispSymbol(LispNames.SETF), expandedPlace, value)),
 							structAccessors, closRegistry);
@@ -7162,7 +7166,7 @@ public final class LispMacroExpander {
 			throw new UnsupportedOperationException(
 					LispNames.DEFCLASS + " option is not supported: " + parts.get(i).print());
 		}
-		List<ClosRegistry.SlotSpec> ownSlots = new java.util.ArrayList<>();
+		List<ParsedSlot> ownSlots = new java.util.ArrayList<>();
 		if (parts.size() > 3 && parts.get(3) instanceof LispCons slotsCons) {
 			for (LispVal spec : slotsCons.toList()) {
 				ownSlots.add(parseDefclassSlot(spec, cons));
@@ -7173,12 +7177,44 @@ public final class LispMacroExpander {
 		}
 		List<ClosRegistry.SlotSpec> slots = new java.util.ArrayList<>(
 				superInfo == null ? List.of() : superInfo.slots());
-		for (ClosRegistry.SlotSpec own : ownSlots) {
-			if (slots.stream().anyMatch(s -> s.baseName().equals(own.baseName()))) {
-				throw new IllegalArgumentException(LispNames.DEFCLASS + ": slot " + own.baseName()
-						+ " is already defined in a superclass: " + cons.print());
+		// index in `slots` -> the OWN specification contributing there. A slot name the
+		// superclass already declares SHADOWS it (CLHS 7.5.3): the storage stays the one
+		// inherited slot -- so every descendant keeps the index its ancestors baked --
+		// while
+		// the subclass specification overrides the initform and the initarg it writes and
+		// ADDS its readers/accessors to the inherited ones. postmodern's savepoint-handle
+		// re-declares transaction-handle's open-p/connection this way.
+		java.util.Map<Integer, ClosRegistry.SlotSpec> ownAt = new java.util.LinkedHashMap<>();
+		for (ParsedSlot parsed : ownSlots) {
+			ClosRegistry.SlotSpec own = parsed.spec();
+			int inheritedAt = -1;
+			for (int i = 0; i < slots.size(); i++) {
+				if (slots.get(i).baseName().equals(own.baseName())) {
+					inheritedAt = i;
+					break;
+				}
 			}
-			slots.add(own);
+			if (inheritedAt < 0) {
+				ownAt.put(slots.size(), own);
+				slots.add(own);
+				continue;
+			}
+			slots.set(inheritedAt, shadowSlot(slots.get(inheritedAt), parsed));
+			ownAt.put(inheritedAt, own);
+		}
+		// (:default-initargs :initarg form) overrides the matching slot's effective
+		// initform, which is where BOTH construction paths read it: the generated
+		// constructor's keyword default and the registry initform the typed-signal
+		// (error 'cond ...) instance builder fills unsupplied slots from.
+		if (!defaultInitargs.isEmpty()) {
+			for (int i = 0; i < slots.size(); i++) {
+				LispVal override = defaultInitargs.get(slots.get(i).initargKeyword());
+				if (override != null) {
+					ClosRegistry.SlotSpec slot = slots.get(i);
+					slots.set(i, new ClosRegistry.SlotSpec(slot.name(), slot.baseName(), override, true,
+							slot.initargKeyword(), slot.readers(), slot.accessors(), slot.type()));
+				}
+			}
 		}
 		java.util.Set<String> ancestors = new java.util.LinkedHashSet<>();
 		if (superInfo != null) {
@@ -7203,8 +7239,7 @@ public final class LispMacroExpander {
 			for (ClosRegistry.SlotSpec slot : slots) {
 				LispVal keywordAndVar = listToCons(
 						List.of(new LispSymbol(slot.initargKeyword()), new LispSymbol(slot.name())));
-				LispVal initform = defaultInitargs.getOrDefault(slot.initargKeyword(), slot.initform());
-				lambdaList.add(listToCons(List.of(keywordAndVar, initform)));
+				lambdaList.add(listToCons(List.of(keywordAndVar, slot.initform())));
 			}
 			// A non-slot initarg is consumed by an initialize-instance/shared-initialize
 			// method, not the constructor (ironclad's (make-instance 'hmac :key ...));
@@ -7233,12 +7268,10 @@ public final class LispMacroExpander {
 		LispSymbol obj = new LispSymbol(CLOS_OBJ_VAR);
 		LispSymbol newVal = new LispSymbol(CLOS_NEW_VAL_VAR);
 		LispVal specialized = listToCons(List.<LispVal>of(listToCons(List.of(obj, new LispSymbol(className)))));
-		for (int i = 0; i < slots.size(); i++) {
-			ClosRegistry.SlotSpec slot = slots.get(i);
-			if (!ownSlots.contains(slot)) {
-				continue;
-			}
-			LispVal body = objRef(obj, i);
+		for (java.util.Map.Entry<Integer, ClosRegistry.SlotSpec> entry : ownAt.entrySet()) {
+			int i = entry.getKey();
+			ClosRegistry.SlotSpec slot = entry.getValue();
+			LispVal body = checkedSlotRead(obj, i, slots.get(i).baseName());
 			LispVal writeBody = objSet(obj, i, newVal);
 			LispVal writerParams = listToCons(List.of(newVal, listToCons(List.of(obj, new LispSymbol(className)))));
 			for (String reader : slot.readers()) {
@@ -7259,10 +7292,102 @@ public final class LispMacroExpander {
 	/** Parameter holding the new value in a generated {@code %setf-} writer method. */
 	private static final String CLOS_NEW_VAL_VAR = "__new";
 
+	/**
+	 * One parsed {@code defclass} slot specification plus the options it EXPLICITLY
+	 * wrote. A shadowing subclass slot inherits every option it does not write (CLHS
+	 * 7.5.3), so "written or not" has to survive parsing -- {@code SlotSpec} alone cannot
+	 * tell an omitted {@code :initarg} from one that happens to equal the default.
+	 */
+	private record ParsedSlot(ClosRegistry.SlotSpec spec, boolean initargSupplied) {
+	}
+
+	/**
+	 * Merges a subclass slot specification onto the inherited one it shadows: the STORAGE
+	 * (name, index) stays the superclass's, the initform/initarg/type are overridden only
+	 * where the subclass wrote them, and the readers/accessors accumulate (CL computes
+	 * the effective slot definition this way, which is why a shadowing slot does not lose
+	 * the superclass's accessor).
+	 */
+	private static ClosRegistry.SlotSpec shadowSlot(ClosRegistry.SlotSpec inherited, ParsedSlot parsed) {
+		ClosRegistry.SlotSpec own = parsed.spec();
+		List<String> readers = new java.util.ArrayList<>(inherited.readers());
+		own.readers().stream().filter(r -> !readers.contains(r)).forEach(readers::add);
+		List<String> accessors = new java.util.ArrayList<>(inherited.accessors());
+		own.accessors().stream().filter(a -> !accessors.contains(a)).forEach(accessors::add);
+		return new ClosRegistry.SlotSpec(inherited.name(), inherited.baseName(),
+				own.initformSupplied() ? own.initform() : inherited.initform(),
+				own.initformSupplied() || inherited.initformSupplied(),
+				parsed.initargSupplied() ? own.initargKeyword() : inherited.initargKeyword(), List.copyOf(readers),
+				List.copyOf(accessors), "T".equals(own.type()) ? inherited.type() : own.type());
+	}
+
+	/**
+	 * Builds a fresh slot-unbound marker, the value a slot with no {@code :initform} (and
+	 * one {@code slot-makunbound} emptied) holds. It is an instance of a layout-only
+	 * internal type, so testing for it is the same one-compare {@code %obj-is} every
+	 * instance-of test is, on all four backends.
+	 * @return the {@code (%obj-new '%class-%UNBOUND%)} expression
+	 */
+	public static LispVal unboundMarker() {
+		return objNew(ClosRegistry.UNBOUND_TAG, List.of());
+	}
+
+	/**
+	 * Builds a BOUNDNESS-CHECKED read of slot {@code index} of {@code objVar}: the value
+	 * unless it is the unbound marker, in which case {@code unbound-slot} is signalled.
+	 * {@code objVar} must be a variable (or another expression safe to evaluate twice) --
+	 * the helper is handed it again as the condition's {@code instance}.
+	 */
+	private static LispVal checkedSlotRead(LispVal objVar, int index, String baseName) {
+		return slotReadCall(objRef(objVar, index), objVar, baseName);
+	}
+
+	/**
+	 * Builds {@code (%slot-read value instance 'NAME)}. The test is a CALL, not the
+	 * inlined {@code %obj-is} + {@code if}: an inline instance-of test is ~60 bytes of
+	 * JVM bytecode, and with one per accessor and per {@code slot-value} the ci-spec
+	 * corpus ran the top-level method past the 64 KB method limit
+	 * ({@code .kb/jvm-method-size-limits.md}).
+	 */
+	private static LispVal slotReadCall(LispVal value, LispVal objVar, String baseName) {
+		return listToCons(List.of(new LispSymbol(LispNames.SLOT_READ_INTERNAL), value, objVar,
+				quoteOf(baseName.toUpperCase(java.util.Locale.ROOT))));
+	}
+
+	/** Builds {@code (%slot-bound-p value)} -- the out-of-line unbound-marker test. */
+	private static LispVal boundValueTest(LispVal value) {
+		return listToCons(List.of(new LispSymbol(LispNames.SLOT_BOUND_P_INTERNAL), value));
+	}
+
+	/**
+	 * The two one-line helpers every boundness-checked slot read and every
+	 * {@code slot-boundp} arm calls, kept out of line so a read stays ONE call no matter
+	 * how large the instance-of test and the typed-signal expansion are. The compile path
+	 * emits them once per program that needs them ({@code expandTopLevelDefinitions});
+	 * the interpreter evaluates them on the first resolution of either name.
+	 * @return the {@code %slot-read} and {@code %slot-bound-p} defuns
+	 */
+	public static List<LispVal> slotUnboundDefuns() {
+		LispSymbol value = new LispSymbol("__value");
+		LispSymbol instance = new LispSymbol("__instance");
+		LispSymbol name = new LispSymbol("__name");
+		LispVal isUnbound = objIs(value, List.of(ClosRegistry.UNBOUND_TAG));
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR), quoteOf("UNBOUND-SLOT"),
+				new LispSymbol(":NAME"), name, new LispSymbol(":INSTANCE"), instance));
+		LispVal read = listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SLOT_READ_INTERNAL),
+				listToCons(List.of(value, instance, name)), makeIf(isUnbound, signal, value)));
+		LispVal boundp = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
+				new LispSymbol(LispNames.SLOT_BOUND_P_INTERNAL), listToCons(List.of(value)),
+				makeIf(objIs(value, List.of(ClosRegistry.UNBOUND_TAG)), LispNil.INSTANCE, LispTrue.INSTANCE)));
+		return List.of(read, boundp);
+	}
+
 	/** Parses one defclass slot specification; see {@link #expandDefclass}. */
-	private static ClosRegistry.SlotSpec parseDefclassSlot(LispVal spec, LispCons defclassForm) {
+	private static ParsedSlot parseDefclassSlot(LispVal spec, LispCons defclassForm) {
 		LispSymbol slotSym;
-		LispVal initform = LispNil.INSTANCE;
+		// No :initform means the slot starts UNBOUND (CLHS 7.5.3), not nil.
+		LispVal initform = unboundMarker();
+		boolean initformSupplied = false;
 		String initarg = null;
 		String type = "T";
 		List<String> readers = new java.util.ArrayList<>();
@@ -7291,7 +7416,10 @@ public final class LispMacroExpander {
 						}
 						initarg = kw.name();
 					}
-					case ":INITFORM" -> initform = optValue;
+					case ":INITFORM" -> {
+						initform = optValue;
+						initformSupplied = true;
+					}
 					case ":READER" -> readers.add(requireSlotFunctionName(optValue, spec));
 					case ":ACCESSOR" -> accessors.add(requireSlotFunctionName(optValue, spec));
 					case ":DOCUMENTATION" -> {
@@ -7317,8 +7445,10 @@ public final class LispMacroExpander {
 		}
 		PackageRegistry.QualifiedName slotQn = PackageRegistry.splitQualified(slotSym.name());
 		String baseName = slotQn == null ? slotSym.name() : slotQn.member();
-		return new ClosRegistry.SlotSpec(slotSym.name(), baseName, initform, initarg == null ? ":" + baseName : initarg,
-				List.copyOf(readers), List.copyOf(accessors), type);
+		return new ParsedSlot(
+				new ClosRegistry.SlotSpec(slotSym.name(), baseName, initform, initformSupplied,
+						initarg == null ? ":" + baseName : initarg, List.copyOf(readers), List.copyOf(accessors), type),
+				initarg != null);
 	}
 
 	private static String requireSlotFunctionName(LispVal value, LispVal spec) {
@@ -7449,6 +7579,37 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandSlotValue(LispCons cons, ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
+		LispSymbol slotSym = parts.size() == 3 ? quotedSymbol(parts.get(2)) : null;
+		LispVal raw = expandSlotValueRaw(cons, closRegistry);
+		if (slotSym == null) {
+			// A runtime slot name already dispatches per layout; wrapping the whole
+			// dispatch would need the name at expansion time, so those reads keep the raw
+			// value (an unbound slot reads as the marker there -- documented in
+			// .kb/clos).
+			return raw;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
+		String baseName = qn == null ? slotSym.name() : qn.member();
+		// The read is boundness-checked: the instance expression is hoisted so the
+		// unbound-slot signal can name it without evaluating it twice.
+		LispSymbol objVar = new LispSymbol("__sv" + MV_COUNTER.getAndIncrement() + "_o");
+		LispVal rawOverVar = expandSlotValueRaw((LispCons) listToCons(List.of(parts.get(0), objVar, parts.get(2))),
+				closRegistry);
+		return makeLet(objVar.name(), parts.get(1), slotReadCall(rawOverVar, objVar, baseName));
+	}
+
+	/**
+	 * The UNCHECKED half of {@link #expandSlotValue(LispCons, ClosRegistry)}: the plain
+	 * slot read, without the unbound-marker test. It is what the {@code setf} place
+	 * expansion needs (a write must reach the {@code %obj-ref} place, and writing an
+	 * unbound slot is legal) and what the checked read is built on.
+	 * @param cons the slot-value expression
+	 * @param closRegistry the class registry
+	 * @return the {@code (%obj-ref obj position)} expression, or the dispatch standing in
+	 * for it
+	 */
+	public static LispVal expandSlotValueRaw(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new IllegalArgumentException(
 					LispNames.SLOT_VALUE + " expects (slot-value obj 'slot): " + cons.print());
@@ -7460,23 +7621,65 @@ public final class LispMacroExpander {
 			return expandRuntimeSlotValue(parts.get(1), parts.get(2), closRegistry);
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
-		String baseName = qn == null ? slotSym.name() : qn.member();
-		Integer position = closRegistry.slotPosition(baseName);
-		if (position == null) {
-			throw new IllegalArgumentException(LispNames.SLOT_VALUE + ": unknown slot " + baseName);
+		String baseName = resolveSlotBaseName(qn == null ? slotSym.name() : qn.member(), closRegistry);
+		if (baseName == null) {
+			throw new IllegalArgumentException(
+					LispNames.SLOT_VALUE + ": unknown slot " + (qn == null ? slotSym.name() : qn.member()));
 		}
-		if (position == -1) {
-			// Classes disagree on the position: dispatch on the instance TAG and read
-			// the type-correct index -- the read-side twin of expandAmbiguousSlotSet.
-			// The old route read through a same-named READER generic instead, which is
-			// wrong whenever that generic belongs to an UNRELATED class: with ironclad
-			// and cl-postgres both loaded, (slot-value <protocol-error> 'message)
-			// dispatched into IRONCLAD::MESSAGE (whose one method specializes an
-			// ironclad condition) and died with "No applicable method" while rendering
-			// the protocol error's own report.
+		Integer index = uniqueLayoutSlotIndex(baseName, closRegistry);
+		if (index == null) {
+			// Types disagree on the position: dispatch on the instance TAG and read the
+			// type-correct index -- the read-side twin of expandAmbiguousSlotSet. The old
+			// route read through a same-named READER generic instead, which is wrong
+			// whenever that generic belongs to an UNRELATED class: with ironclad and
+			// cl-postgres both loaded, (slot-value <protocol-error> 'message) dispatched
+			// into IRONCLAD::MESSAGE (whose one method specializes an ironclad condition)
+			// and died with "No applicable method" while rendering the protocol error's
+			// own report.
 			return expandAmbiguousSlotRead(parts.get(1), baseName, closRegistry);
 		}
-		return objRef(parts.get(1), position - 1);
+		return objRef(parts.get(1), index);
+	}
+
+	/**
+	 * The spelling under which the registered layouts declare a slot base name, or null
+	 * when none does. A Java-side reader asks with the canonical lowercase name
+	 * ({@code simple-condition-format-control} -> {@code "format-control"}) while an
+	 * upcase-read user class registered it upcased, so both cases are tried.
+	 */
+	@Nullable private static String resolveSlotBaseName(String baseName, ClosRegistry closRegistry) {
+		for (String candidate : List.of(baseName, baseName.toUpperCase(java.util.Locale.ROOT),
+				baseName.toLowerCase(java.util.Locale.ROOT))) {
+			for (LispLayout layout : closRegistry.layouts().values()) {
+				if (layout.slotNames().contains(candidate)) {
+					return candidate;
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The 0-based index EVERY registered layout declaring the slot places it at, or null
+	 * when they disagree (or none declares it). The layouts are the one truth here --
+	 * {@code ClosRegistry.slotPosition} knows CLOS classes only, and a {@code with-slots}
+	 * over a {@code defstruct} instance has to resolve against the struct layout too.
+	 */
+	@Nullable private static Integer uniqueLayoutSlotIndex(String baseName, ClosRegistry closRegistry) {
+		Integer found = null;
+		for (LispLayout layout : closRegistry.layouts().values()) {
+			int index = layout.slotIndex(baseName);
+			if (index < 0) {
+				continue;
+			}
+			if (found == null) {
+				found = index;
+			}
+			else if (found != index) {
+				return null;
+			}
+		}
+		return found;
 	}
 
 	/**
@@ -7505,13 +7708,13 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether the registry places the named slot at different indexes in unrelated types
-	 * (the {@code -1} marker).
+	 * Whether the registered layouts place the named slot at different indexes in
+	 * unrelated types, so no single index can be baked into a read or a write.
 	 */
 	private static boolean ambiguousSlotPosition(LispSymbol slotSym, ClosRegistry closRegistry) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
-		Integer position = closRegistry.slotPosition(qn == null ? slotSym.name() : qn.member());
-		return position != null && position == -1;
+		String baseName = resolveSlotBaseName(qn == null ? slotSym.name() : qn.member(), closRegistry);
+		return baseName != null && uniqueLayoutSlotIndex(baseName, closRegistry) == null;
 	}
 
 	/**
@@ -7640,9 +7843,10 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (slot-boundp obj 'slot)} (literal slot name) into a membership test
-	 * of the instance's class tag against the classes declaring that slot -- the lite
-	 * semantics: slots are always initialized, so a slot the class has is bound.
+	 * Expands {@code (slot-boundp obj 'slot)} (literal slot name) into "the instance's
+	 * type declares the slot AND the slot does not hold the unbound marker" -- the real
+	 * CL semantics since todo-199 (a slot written without an {@code :initform}, or
+	 * emptied by {@code slot-makunbound}, answers nil).
 	 * @param cons the slot-boundp expression
 	 * @param closRegistry the class registry
 	 * @return the expanded expression
@@ -7655,33 +7859,42 @@ public final class LispMacroExpander {
 		}
 		LispSymbol slotSym = quotedSymbol(parts.get(2));
 		if (slotSym == null) {
-			// A runtime slot name: the lite semantics (a slot the instance's class
-			// declares is bound) become a class-tag dispatch over a per-class slot-name
-			// membership test.
+			// A runtime slot name: a class-tag dispatch over a per-class slot-name
+			// membership test, each arm reading that type's index to test the marker.
 			return expandRuntimeSlotBoundp(parts.get(1), parts.get(2), closRegistry);
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
-		String baseName = qn == null ? slotSym.name() : qn.member();
-		List<String> tags = new java.util.ArrayList<>();
-		for (LispLayout layout : closRegistry.layouts().values()) {
-			if (layout.slotNames().contains(baseName)) {
-				tags.add(layout.tag());
-			}
-		}
-		if (tags.isEmpty()) {
+		String asked = qn == null ? slotSym.name() : qn.member();
+		String baseName = resolveSlotBaseName(asked, closRegistry);
+		if (baseName == null) {
 			return expandConstantResult((LispCons) fmtCall(LispNames.SLOT_BOUNDP, parts.get(1)), LispNil.INSTANCE);
+		}
+		// One clause per distinct index, so a slot every type places at the same position
+		// (the common case) costs a single tag membership test.
+		java.util.Map<Integer, List<String>> byIndex = new java.util.LinkedHashMap<>();
+		for (LispLayout layout : closRegistry.layouts().values()) {
+			int index = layout.slotIndex(baseName);
+			if (index >= 0) {
+				byIndex.computeIfAbsent(index, k -> new java.util.ArrayList<>()).add(layout.tag());
+			}
 		}
 		String prefix = "__sb" + MV_COUNTER.getAndIncrement();
 		LispSymbol v = new LispSymbol(prefix + "_v");
-		LispVal test = makeIf(objIs(v, tags), LispTrue.INSTANCE, LispNil.INSTANCE);
-		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))), test);
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		byIndex.forEach(
+				(index, tags) -> clauses.add(listToCons(List.of(objIs(v, tags), boundValueTest(objRef(v, index))))));
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return makeLet(v.name(), parts.get(1), listToCons(condParts));
 	}
 
 	/**
 	 * Expands a {@code slot-boundp} whose slot name is a runtime value: a class-tag
-	 * dispatch over the registered classes, each testing the runtime name against the
-	 * class's declared slot names -- the lite always-initialized semantics of the literal
-	 * expansion.
+	 * dispatch over the registered layouts, each arm testing the runtime name against
+	 * that type's declared slot names and, when it matches, the slot against the unbound
+	 * marker.
 	 */
 	private static LispVal expandRuntimeSlotBoundp(LispVal objExpr, LispVal nameExpr, ClosRegistry closRegistry) {
 		String prefix = "__sbn" + MV_COUNTER.getAndIncrement();
@@ -7692,9 +7905,17 @@ public final class LispMacroExpander {
 			if (layout.slotCount() == 0) {
 				continue;
 			}
-			LispVal nameTest = makeIf(mvCall(LispNames.MEMBER, n, quotedSymbolList(layout.slotNames())),
-					LispTrue.INSTANCE, LispNil.INSTANCE);
-			clauses.add(listToCons(List.of(objIs(v, List.of(layout.tag())), nameTest)));
+			List<LispVal> inner = new java.util.ArrayList<>();
+			for (int i = 0; i < layout.slotCount(); i++) {
+				inner.add(listToCons(
+						List.of(mvCall(LispNames.MEMBER, n, quotedSymbolList(List.of(layout.slotNames().get(i)))),
+								boundValueTest(objRef(v, i)))));
+			}
+			inner.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
+			List<LispVal> innerCond = new java.util.ArrayList<>();
+			innerCond.add(new LispSymbol(LispNames.COND));
+			innerCond.addAll(inner);
+			clauses.add(listToCons(List.of(objIs(v, List.of(layout.tag())), listToCons(innerCond))));
 		}
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
 		List<LispVal> condParts = new java.util.ArrayList<>();
@@ -7704,9 +7925,9 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (slot-makunbound obj 'slot)} (literal slot name) into a nil store
-	 * through the slot's {@code setf slot-value} place, yielding the instance -- the lite
-	 * semantics: there is no distinct unbound state.
+	 * Expands {@code (slot-makunbound obj 'slot)} into a store of a fresh unbound marker
+	 * through the slot's {@code setf slot-value} place, yielding the instance: the slot
+	 * then reads as {@code unbound-slot} and {@code slot-boundp} answers nil.
 	 * @param cons the slot-makunbound expression
 	 * @param closRegistry the class registry
 	 * @return the expanded expression
@@ -7719,7 +7940,7 @@ public final class LispMacroExpander {
 		}
 		String prefix = "__sm" + MV_COUNTER.getAndIncrement();
 		LispSymbol v = new LispSymbol(prefix + "_v");
-		LispVal write = fmtCall(LispNames.SETF, fmtCall(LispNames.SLOT_VALUE, v, parts.get(2)), LispNil.INSTANCE);
+		LispVal write = fmtCall(LispNames.SETF, fmtCall(LispNames.SLOT_VALUE, v, parts.get(2)), unboundMarker());
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.PROGN), write, v));
 		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))), body);
 	}
@@ -7868,6 +8089,124 @@ public final class LispMacroExpander {
 			parts.add(quoteOf(tag));
 		}
 		return listToCons(parts);
+	}
+
+	/** Builds {@code (%obj-become obj '<tag>)} -- the in-place layout swap. */
+	private static LispVal objBecome(LispVal obj, String tag) {
+		return listToCons(List.of(new LispSymbol(LispNames.OBJ_BECOME), obj, quoteOf(tag)));
+	}
+
+	/**
+	 * Expands {@code (change-class instance 'name initarg value ...)} into an IN-PLACE
+	 * class change: the instance keeps its identity and every slot the old and the new
+	 * layout share (single inheritance makes the shared part a prefix), the slots the new
+	 * class adds are filled from their {@code :initform}s, the supplied initargs are
+	 * stored, and the instance is the value.
+	 *
+	 * <p>
+	 * The source class is a RUNTIME property, so the initform fill is a {@code cond} over
+	 * the statically-known classes of the target's inheritance chain -- exactly the set
+	 * whose instances a change to this class is defined for. An instance of any other
+	 * class keeps its slot values and only changes layout, which is what CL's "slots with
+	 * the same name are retained" degrades to when the two classes share no chain.
+	 * @param cons the change-class expression
+	 * @param closRegistry the class registry
+	 * @param coldBranchOk whether an unknown target lowers to a runtime error instead of
+	 * failing the compile (the compile paths pass true, like {@code make-instance})
+	 * @return the expanded expression
+	 */
+	public static LispVal expandChangeClass(LispCons cons, ClosRegistry closRegistry, boolean coldBranchOk) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(LispNames.CHANGE_CLASS
+					+ " expects (change-class instance 'class initarg value ...): " + cons.print());
+		}
+		LispSymbol classSym = quotedSymbol(parts.get(2));
+		if (classSym == null) {
+			throw new UnsupportedOperationException(
+					LispNames.CHANGE_CLASS + " requires a literal quoted class name: " + cons.print());
+		}
+		ClosRegistry.ClassInfo target = closRegistry.findClass(classSym.name());
+		if (target == null) {
+			if (coldBranchOk) {
+				return listToCons(List.of(new LispSymbol(LispNames.ERROR),
+						new LispString(LispNames.CHANGE_CLASS + ": unknown class " + classSym.name())));
+			}
+			throw new IllegalArgumentException(LispNames.CHANGE_CLASS + ": unknown class " + classSym.name());
+		}
+		String prefix = "__cc" + MV_COUNTER.getAndIncrement();
+		LispSymbol objVar = new LispSymbol(prefix + "_o");
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(List.of(objVar, parts.get(1))));
+		// Initarg values are hoisted into temps in argument order, so they evaluate once
+		// and BEFORE the layout swap, like every other initarg-taking expansion.
+		java.util.Map<String, LispVal> byInitarg = new java.util.LinkedHashMap<>();
+		for (int i = 3; i + 1 < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
+				throw new IllegalArgumentException(
+						LispNames.CHANGE_CLASS + " expects keyword/value initarg pairs: " + cons.print());
+			}
+			LispSymbol temp = new LispSymbol(prefix + "_a" + i);
+			bindings.add(listToCons(List.of(temp, parts.get(i + 1))));
+			byInitarg.put(key.name(), temp);
+		}
+		// The old tag is captured BEFORE the swap: the initform fill has to know which
+		// class the instance WAS, but it can only store into the WIDER layout, i.e. after
+		// the swap. (A symbol compares with equal, which is content-safe on WASM.)
+		LispSymbol tagVar = new LispSymbol(prefix + "_t");
+		bindings.add(1, listToCons(List.of(tagVar, objTag(objVar))));
+		List<LispVal> body = new java.util.ArrayList<>();
+		body.add(objBecome(objVar, LispLayout.CLASS_TAG_PREFIX + target.name()));
+		LispVal fill = changeClassInitformFill(objVar, tagVar, target, closRegistry);
+		if (fill != null) {
+			body.add(fill);
+		}
+		List<ClosRegistry.SlotSpec> slots = target.slots();
+		for (int i = 0; i < slots.size(); i++) {
+			LispVal supplied = byInitarg.get(slots.get(i).initargKeyword());
+			if (supplied != null) {
+				body.add(objSet(objVar, i, supplied));
+			}
+		}
+		body.add(objVar);
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET_STAR));
+		letParts.add(listToCons(bindings));
+		letParts.addAll(body);
+		return listToCons(letParts);
+	}
+
+	/**
+	 * The {@code cond} filling the slots the target class adds beyond the instance's
+	 * CURRENT class, from the target's initforms -- one arm per class of the target's
+	 * inheritance chain that is narrower than it. Null when no class in the chain is
+	 * narrower (nothing to fill).
+	 */
+	@Nullable private static LispVal changeClassInitformFill(LispSymbol objVar, LispSymbol oldTagVar,
+			ClosRegistry.ClassInfo target, ClosRegistry closRegistry) {
+		String targetKey = ClosRegistry.normalize(target.name());
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		for (ClosRegistry.ClassInfo source : closRegistry.classes().values()) {
+			boolean sameChain = source.ancestors().contains(targetKey)
+					|| target.ancestors().contains(ClosRegistry.normalize(source.name()));
+			if (!sameChain || source.slots().size() >= target.slots().size()) {
+				continue;
+			}
+			List<LispVal> stores = new java.util.ArrayList<>();
+			for (int i = source.slots().size(); i < target.slots().size(); i++) {
+				stores.add(objSet(objVar, i, target.slots().get(i).initform()));
+			}
+			clauses.add(listToCons(concatForms(
+					List.of(fmtCall(LispNames.EQUAL, oldTagVar, quoteOf(LispLayout.CLASS_TAG_PREFIX + source.name()))),
+					stores)));
+		}
+		if (clauses.isEmpty()) {
+			return null;
+		}
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		return listToCons(condParts);
 	}
 
 	/**
@@ -8049,6 +8388,64 @@ public final class LispMacroExpander {
 		LispVal inner = letBindings.isEmpty() ? prognOrNil(body)
 				: listToCons(concatForms(List.of(new LispSymbol(LispNames.LET), listToCons(letBindings)), body));
 		return makeLet(WITH_SLOTS_OBJ_VAR, parts.get(2), inner);
+	}
+
+	private static final String WITH_ACCESSORS_OBJ_VAR = "__with_accessors_obj";
+
+	/**
+	 * Expands {@code (with-accessors ((var accessor)...) instance body...)} the way
+	 * {@link #expandWithSlots} expands its slot variables: each variable is substituted
+	 * in the body with a call of its accessor on a once-evaluated instance temp, so a
+	 * read is the accessor call and a {@code setf}/{@code incf} of the variable becomes a
+	 * {@code setf} of the accessor place -- the symbol-macro semantics CL specifies.
+	 *
+	 * <pre>
+	 * (with-accessors ((x pt-x) (y pt-y)) p (setf x (+ x y))) -&gt;
+	 *   (let ((__with_accessors_obj p))
+	 *     (setf (pt-x __with_accessors_obj) (+ (pt-x __with_accessors_obj) (pt-y __with_accessors_obj))))
+	 * </pre>
+	 *
+	 * Unlike {@code with-slots} this needs no registry: an accessor is an ordinary
+	 * generic function and (through {@code structAccessors}) an ordinary {@code setf}
+	 * place.
+	 * @param cons the with-accessors expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithAccessors(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(LispNames.WITH_ACCESSORS
+					+ " expects (with-accessors ((var accessor)...) instance body...): " + cons.print());
+		}
+		LispSymbol obj = new LispSymbol(WITH_ACCESSORS_OBJ_VAR);
+		java.util.Map<String, LispVal> substitutions = new java.util.LinkedHashMap<>();
+		List<LispVal> letBindings = new java.util.ArrayList<>();
+		if (parts.get(1) instanceof LispCons entryList) {
+			for (LispVal entry : entryList.toList()) {
+				if (!(entry instanceof LispCons pair) || pair.toList().size() != 2
+						|| !(pair.toList().get(0) instanceof LispSymbol var)
+						|| !(pair.toList().get(1) instanceof LispSymbol accessor)) {
+					throw new IllegalArgumentException(
+							LispNames.WITH_ACCESSORS + " expects (var accessor) pairs: " + cons.print());
+				}
+				LispVal read = listToCons(List.of(accessor, obj));
+				substitutions.put(var.name(), read);
+				letBindings.add(listToCons(List.of(var, read)));
+			}
+		}
+		else if (!(parts.get(1) instanceof LispNil)) {
+			throw new IllegalArgumentException(
+					LispNames.WITH_ACCESSORS + " expects an accessor list as the first argument: " + cons.print());
+		}
+		List<LispVal> body = new java.util.ArrayList<>();
+		for (LispVal form : parts.subList(3, parts.size())) {
+			body.add(substituteSymbols(form, substitutions));
+		}
+		// Same fallback let as with-slots: code GENERATED at run time inside the body
+		// still resolves the variables, as entry-time reads.
+		LispVal inner = letBindings.isEmpty() ? prognOrNil(body)
+				: listToCons(concatForms(List.of(new LispSymbol(LispNames.LET), listToCons(letBindings)), body));
+		return makeLet(WITH_ACCESSORS_OBJ_VAR, parts.get(2), inner);
 	}
 
 	/** Concatenates a form-list head with body forms into one list. */
@@ -9083,10 +9480,13 @@ public final class LispMacroExpander {
 		// The one whole-program pass both compilers already run, so the load-time-value
 		// hoist rides along instead of needing its own registration in every pipeline.
 		program = hoistLoadTimeValues(program);
+		// Every change-class target, recorded BEFORE the walk so the capacity reservation
+		// below can widen its ancestors the moment the whole registry is known.
+		registerChangeClassTargets(program, closRegistry);
 		boolean runtimeSubtypep = needsRuntimeSubtypep(program);
 		boolean runtimeTypep = needsRuntimeTypep(program);
 		boolean runtimeError = needsRuntimeErrorDispatch(program);
-		if (!runtimeSubtypep && !runtimeTypep && !runtimeError
+		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !readsSlots(program)
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
 							|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
@@ -9187,7 +9587,71 @@ public final class LispMacroExpander {
 		if (runtimeError) {
 			out.addAll(runtimeErrorDefuns(closRegistry));
 		}
+		if (needsSlotUnboundHelper(program, out)) {
+			out.addAll(slotUnboundDefuns());
+		}
+		// The print-object renderer, once per program that defines a print-object method.
+		// Emitted here so the tag list is the COMPLETE method set, whatever order the
+		// defmethods came in.
+		if (!printObjectTags(closRegistry).isEmpty()) {
+			out.add(printObjectStrDefun(closRegistry));
+		}
+		// The registry is complete: reserve, in every ancestor of a change-class target,
+		// room for the target's slots. %obj-new reads the reservation at backend-compile
+		// time, which is after this pass, so widening here reaches every allocation site.
+		closRegistry.applyChangeClassCapacities();
 		return out;
+	}
+
+	/**
+	 * Records the target class of every {@code (change-class x 'name ...)} the program
+	 * contains, wherever it sits (the form lives in a body, not at top level, so the
+	 * definition walk would never see it).
+	 */
+	private static void registerChangeClassTargets(List<LispVal> program, ClosRegistry closRegistry) {
+		for (LispVal form : program) {
+			collectChangeClassTargets(form, closRegistry);
+		}
+	}
+
+	private static void collectChangeClassTargets(LispVal form, ClosRegistry closRegistry) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.CHANGE_CLASS.equals(head.name())
+				&& cons.isProperList()) {
+			List<LispVal> parts = cons.toList();
+			if (parts.size() >= 3 && quotedSymbol(parts.get(2)) instanceof LispSymbol target) {
+				closRegistry.registerChangeClassTarget(target.name());
+			}
+		}
+		for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
+			collectChangeClassTargets(cell.car(), closRegistry);
+		}
+	}
+
+	/**
+	 * Whether the program can reach a boundness-checked slot read whose {@code
+	 * %slot-unbound} branch the compile path must therefore define. The generated
+	 * accessors that call it are already in the OUTPUT, but a {@code slot-value} /
+	 * {@code with-slots} inside a body is expanded much later, by the ExprCompilers, so
+	 * the SOURCE has to be consulted for those.
+	 */
+	private static boolean needsSlotUnboundHelper(List<LispVal> program, List<LispVal> out) {
+		return readsSlots(program) || out.stream()
+			.anyMatch(
+					f -> usesSymbol(f, LispNames.SLOT_READ_INTERNAL) || usesSymbol(f, LispNames.SLOT_BOUND_P_INTERNAL));
+	}
+
+	/**
+	 * Whether any form mentions an operator whose expansion calls the out-of-line
+	 * boundness helpers -- a checked read ({@code slot-value}, {@code with-slots}) or a
+	 * boundness test ({@code slot-boundp}).
+	 */
+	private static boolean readsSlots(List<LispVal> program) {
+		return program.stream()
+			.anyMatch(f -> usesSymbol(f, LispNames.SLOT_VALUE) || usesSymbol(f, LispNames.WITH_SLOTS)
+					|| usesSymbol(f, LispNames.SLOT_BOUNDP));
 	}
 
 	/**
@@ -12847,6 +13311,168 @@ public final class LispMacroExpander {
 		return listToCons(out);
 	}
 
+	/**
+	 * The instance tags a user {@code print-object} method specializes on, in
+	 * registration order -- the exact set the printer has to route through the generic.
+	 * Empty when the program defines no {@code print-object} method, which is the gate:
+	 * with no method, every printing operator keeps the shape (and the output bytes) it
+	 * always had.
+	 * @param closRegistry the class registry
+	 * @return the instance tags with a user print-object method
+	 */
+	public static List<String> printObjectTags(ClosRegistry closRegistry) {
+		ClosRegistry.GenericInfo generic = closRegistry.generics()
+			.values()
+			.stream()
+			.filter(g -> LispNames.PRINT_OBJECT.equals(plainName(g.name())))
+			.findFirst()
+			.orElse(null);
+		if (generic == null) {
+			return List.of();
+		}
+		List<String> tags = new java.util.ArrayList<>();
+		for (ClosRegistry.MethodInfo method : generic.methods().values()) {
+			for (ClosRegistry.Specializer specializer : method.specializers()) {
+				// A defclass name is a CLASS specializer, a defstruct name a TYPE one
+				// carrying the struct name (parseSpecializer); both route the printer, so
+				// both descendant-tag families are collected.
+				if (specializer.name() == null || (specializer.kind() != ClosRegistry.SpecializerKind.CLASS
+						&& specializer.kind() != ClosRegistry.SpecializerKind.TYPE)) {
+					continue;
+				}
+				List<String> descendants = new java.util.ArrayList<>(closRegistry.descendantTags(specializer.name()));
+				descendants.addAll(closRegistry.descendantStructTags(specializer.name()));
+				for (String tag : descendants) {
+					if (tag != null && !tags.contains(tag)) {
+						tags.add(tag);
+					}
+				}
+			}
+		}
+		return tags;
+	}
+
+	/**
+	 * The generated {@code (%print-object-str x escape)} renderer: the text the printer
+	 * writes for a value. An instance of a type some {@code print-object} method
+	 * specializes on is rendered by calling the generic into a string stream; everything
+	 * else falls back to the RAW ({@code print-object}-free) conversions, which is what
+	 * makes the recursion terminate.
+	 * @param closRegistry the class registry
+	 * @return the {@code %print-object-str} defun
+	 */
+	public static LispVal printObjectStrDefun(ClosRegistry closRegistry) {
+		LispSymbol value = new LispSymbol("__pox");
+		LispSymbol escape = new LispSymbol("__poe");
+		LispVal fallback = makeIf(escape, listToCons(List.of(new LispSymbol(LispNames.PRIN1_TO_STRING_RAW), value)),
+				listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING_RAW), value)));
+		LispVal body = makeIf(objIs(value, printObjectTags(closRegistry)), printObjectCall(value), fallback);
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL),
+				listToCons(List.of(value, escape)), body));
+	}
+
+	/** Builds {@code (with-output-to-string (s) (print-object value s))}. */
+	private static LispVal printObjectCall(LispVal value) {
+		LispSymbol stream = new LispSymbol("__pos");
+		return listToCons(List.of(new LispSymbol(LispNames.WITH_OUTPUT_TO_STRING), listToCons(List.of(stream)),
+				listToCons(List.of(new LispSymbol(LispNames.PRINT_OBJECT), value, stream))));
+	}
+
+	/**
+	 * Rewrites one printing operator so it consults {@code print-object}, or null when
+	 * the program defines no {@code print-object} method (then the operator keeps its own
+	 * compilation and every existing program stays byte-identical).
+	 *
+	 * <pre>
+	 * (princ-to-string x)  -&gt; (%print-object-str x nil)
+	 * (prin1-to-string x)  -&gt; (%print-object-str x t)
+	 * (princ x s)          -&gt; (let ((v x)) (write-string (%print-object-str v nil) s) v)
+	 * (prin1 x s)          -&gt; (let ((v x)) (write-string (%print-object-str v t) s) v)
+	 * (print x s)          -&gt; (let ((v x)) (write-string (%print-object-str v t) s) (terpri s) v)
+	 * </pre>
+	 *
+	 * The fallback inside {@code %print-object-str} uses the RAW conversions, so nothing
+	 * here re-enters itself. {@code format}'s {@code ~A}/{@code ~S} need no case of their
+	 * own: they lower to {@code princ-to-string}/{@code prin1-to-string}, which do.
+	 * @param cons the printing-operator form
+	 * @param closRegistry the class registry
+	 * @param inline whether to inline the renderer instead of calling the generated defun
+	 * (the interpreter re-expands per call, so it always has the current registry; the
+	 * compile paths emit the defun once)
+	 * @return the rewritten form, or null when the program has no print-object method
+	 */
+	@Nullable public static LispVal expandPrintObjectHook(LispCons cons, ClosRegistry closRegistry, boolean inline) {
+		if (printObjectTags(closRegistry).isEmpty() || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		String op = ((LispSymbol) parts.get(0)).name();
+		boolean escape = !LispNames.PRINC.equals(op) && !LispNames.PRINC_TO_STRING.equals(op);
+		if (LispNames.PRINC_TO_STRING.equals(op) || LispNames.PRIN1_TO_STRING.equals(op)) {
+			return parts.size() == 2 ? printObjectStr(parts.get(1), escape, inline, closRegistry) : null;
+		}
+		if (parts.size() < 2 || parts.size() > 3) {
+			return null;
+		}
+		LispSymbol valueVar = new LispSymbol("__po" + MV_COUNTER.getAndIncrement() + "_v");
+		List<LispVal> write = new java.util.ArrayList<>();
+		write.add(new LispSymbol(LispNames.WRITE_STRING));
+		write.add(printObjectStr(valueVar, escape, inline, closRegistry));
+		List<LispVal> terpri = new java.util.ArrayList<>();
+		terpri.add(new LispSymbol(LispNames.TERPRI));
+		if (parts.size() == 3) {
+			write.add(parts.get(2));
+			terpri.add(parts.get(2));
+		}
+		List<LispVal> body = new java.util.ArrayList<>();
+		body.add(listToCons(write));
+		if (LispNames.PRINT.equals(op)) {
+			body.add(listToCons(terpri));
+		}
+		body.add(valueVar);
+		return makeLet(valueVar.name(), parts.get(1), makeProgn(body));
+	}
+
+	/** The renderer call (or its inlined body) for one value. */
+	private static LispVal printObjectStr(LispVal value, boolean escape, boolean inline, ClosRegistry closRegistry) {
+		LispVal escapeArg = escape ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		if (!inline) {
+			return listToCons(List.of(new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL), value, escapeArg));
+		}
+		LispVal fallback = listToCons(
+				List.of(new LispSymbol(escape ? LispNames.PRIN1_TO_STRING_RAW : LispNames.PRINC_TO_STRING_RAW), value));
+		return makeIf(objIs(value, printObjectTags(closRegistry)), printObjectCall(value), fallback);
+	}
+
+	/**
+	 * The type NAME of a value as a string: the {@code class-of} designator with the
+	 * {@code %struct-}/{@code %class-} instance-tag prefix stripped (the prelude
+	 * {@code type-of}'s rule, minus the {@code intern} a printed name does not need). The
+	 * tag spelling is read with {@code prin1-to-string}, since {@code symbol-name} would
+	 * drop the package qualifier a canonical type name carries.
+	 */
+	private static LispVal typeNameOf(LispVal obj) {
+		String prefix = "__ptn" + MV_COUNTER.getAndIncrement();
+		LispSymbol text = new LispSymbol(prefix + "_s");
+		LispSymbol size = new LispSymbol(prefix + "_n");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		clauses.add(new LispSymbol(LispNames.COND));
+		for (String tagPrefix : List.of(LispLayout.STRUCT_TAG_PREFIX, LispLayout.CLASS_TAG_PREFIX)) {
+			int length = tagPrefix.length();
+			LispVal test = listToCons(
+					List.of(new LispSymbol(LispNames.AND), fmtCall(LispNames.GT, size, new LispInteger(length)),
+							fmtCall(LispNames.STRING_EQ,
+									fmtCall(LispNames.SUBSEQ, text, new LispInteger(0), new LispInteger(length)),
+									new LispString(tagPrefix))));
+			clauses.add(listToCons(List.of(test, fmtCall(LispNames.SUBSEQ, text, new LispInteger(length)))));
+		}
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, text)));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(text, fmtCall(LispNames.PRIN1_TO_STRING, fmtCall(LispNames.CLASS_OF, obj)))),
+						listToCons(List.of(size, fmtCall(LispNames.LENGTH, text)))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, listToCons(clauses)));
+	}
+
 	private static final String PUO_OBJ_VAR = "__puo_obj";
 
 	private static final String PUO_STREAM_VAR = "__puo_stream";
@@ -12854,9 +13480,11 @@ public final class LispMacroExpander {
 	/**
 	 * Expands {@code (print-unreadable-object (object stream &key type identity)
 	 * body...)} into writes of {@code #<}...{@code >} around the body over once-evaluated
-	 * temps: a literal truthy {@code :type} prints the {@code class-of} designator (+ a
-	 * space) first, {@code :identity} is evaluated for effect but not printed (there is
-	 * no printable address), and the whole form yields nil, like CL.
+	 * temps: a literal truthy {@code :type} prints the {@code type-of} designator first
+	 * (followed by a space when a body follows it), {@code :identity} is accepted but
+	 * prints NO address -- there is no object-identity token in the value model, and a
+	 * per-backend one would break the byte-identical cross-backend output the whole test
+	 * suite rests on. The whole form yields nil, like CL.
 	 * @param cons the print-unreadable-object expression
 	 * @return the expanded expression
 	 */
@@ -12884,9 +13512,16 @@ public final class LispMacroExpander {
 		body.add(listToCons(List.of(listToCons(List.of(obj, spec.get(0))), listToCons(List.of(stream, spec.get(1))))));
 		body.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), new LispString("#<"), stream)));
 		if (!(typeArg instanceof LispNil)) {
-			body.add(listToCons(List.of(new LispSymbol(LispNames.PRINC),
-					listToCons(List.of(new LispSymbol(LispNames.CLASS_OF), obj)), stream)));
-			body.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), new LispString(" "), stream)));
+			// The printed designator is the TYPE NAME (PARSER), not the internal instance
+			// tag class-of yields (%struct-PARSER). The strip is INLINED rather than
+			// delegated to the prelude's type-of, because this expansion runs inside the
+			// compilers -- long after the prelude pre-pass that would have spliced it.
+			body.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), typeNameOf(obj), stream)));
+			if (parts.size() > 2) {
+				// CL separates the type from the body with a space; with no body (and no
+				// printable identity) there is nothing to separate, so none is written.
+				body.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), new LispString(" "), stream)));
+			}
 		}
 		body.addAll(parts.subList(2, parts.size()));
 		body.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), new LispString(">"), stream)));

@@ -31,8 +31,10 @@ unwind-protect knot + `retry-transaction`), the connection pool
 - `.todo/196-restart-system.md` -- handler-bind + restart stack (largest gate)
 - `.todo/197-catch-throw.md` -- json-encoder
 - `.todo/198-runtime-package-and-symbol-ops.md`
-- `.todo/199-clos-gaps-for-postmodern-non-mop.md` -- slot shadowing,
-  change-class, real slot-boundp, print-object, with-accessors
+- ~~`.todo/199-clos-gaps-for-postmodern-non-mop.md`~~ -- DONE: inherited-slot
+  shadowing, real slot unboundness (`unbound-slot` on every backend),
+  in-place `change-class`, `print-object`, `with-accessors`, `with-slots` over
+  a struct, `:default-initargs` on a typed signal (`.kb/clos.md`)
 - `.todo/200-postmodern-language-incidentals.md` -- format nesting, features
   visibility, float subtypep, stream captures
 

@@ -294,6 +294,11 @@
 | `type-of` | `(type-of 42)` | `integer` -- `class-of` と同様ですが、構造体/CLOS インスタンスにはインスタンスタグではなく構造体/クラスの「名前」のシンボルを返します |
 | `simple-condition-format-control` | `(simple-condition-format-control c)` | コンディションの `:format-control` スロット、なければ `nil` |
 | `simple-condition-format-arguments` | `(simple-condition-format-arguments c)` | コンディションの `:format-arguments` スロット、なければ `nil` |
+| `type-error-datum` | `(type-error-datum c)` | `type-error` の `datum` スロット — 型が誤っていたオブジェクト |
+| `type-error-expected-type` | `(type-error-expected-type c)` | `type-error` の `expected-type` スロット |
+| `cell-error-name` | `(cell-error-name c)` | `cell-error`(`unbound-variable`、`undefined-function`、`unbound-slot`)の `name` スロット |
+| `unbound-slot-instance` | `(unbound-slot-instance c)` | スロットが未束縛だったオブジェクト |
+| `print-object` | `(print-object obj stream)` | プリンタが参照するジェネリック関数。メソッドを定義すると、その型のインスタンスの出力を制御できます |
 
 ## rontolisp パッケージの関数
 

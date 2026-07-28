@@ -135,9 +135,11 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 				"\"[", "\"second\",", "\"Lupin the third\"", "]\"",
 				// a |...|-escaped symbol hash key (verbatim case)
 				"{", "\"noChange\": \"when used\"", "}",
-				// CLOS instance serialized as an object (alias is nil-bound, so null)
-				"{", "\"name\": \"Anya\",", "\"alias\": null,", "\"job\": null,", "\"married\": false,",
-				"\"children\": []", "}",
+				// CLOS instance serialized as an object. The never-initialized alias slot
+				// is UNBOUND (todo-199), so jzon's coerced-fields skips it -- exactly
+				// what
+				// the README shows on a real CL.
+				"{", "\"name\": \"Anya\",", "\"job\": null,", "\"married\": false,", "\"children\": []", "}",
 				// stringify into a user-supplied fill-pointered adjustable string
 				"\"{\"k\":[1,true]}\"", ":CAUGHT-EOF");
 	}
@@ -145,9 +147,8 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 	// The README walkthrough pieces the four-backend exercise cannot carry -- a
 	// non-ASCII \\u escape (code-char is byte-oriented on WASM), a large-float print
 	// (the WASM print shape differs) and a multi-key hash table (iteration order is
-	// backend-local) -- pinned on the interpreter. Known deviations from the README's
-	// output: symbol values keep rontolisp's verbatim case, and the never-initialized
-	// alias slot appears as null (slots have no unbound state -- they default to nil).
+	// backend-local) -- pinned on the interpreter. Known deviation from the README's
+	// output: symbol values keep rontolisp's verbatim case.
 	private static final String INTERPRETER_RESIDUE_EXERCISE = """
 			(asdf:load-system :com.inuoe.jzon)
 			(print (com.inuoe.jzon:parse "\\"a\\\\nb\\\\u00e9\\""))

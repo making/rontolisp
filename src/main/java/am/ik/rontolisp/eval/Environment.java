@@ -3501,6 +3501,16 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.PRIN1_TO_STRING, args, 1);
 			return new LispString(printString(args.get(0)));
 		}));
+		// The print-object-free aliases the print-object renderer's fallback calls -- the
+		// same two functions under internal names, so the rewrite cannot re-enter itself.
+		env.defineFunction(LispNames.PRINC_TO_STRING_RAW, new LispFunction(LispNames.PRINC_TO_STRING_RAW, args -> {
+			requireArgCount(LispNames.PRINC_TO_STRING_RAW, args, 1);
+			return new LispString(displayString(args.get(0)));
+		}));
+		env.defineFunction(LispNames.PRIN1_TO_STRING_RAW, new LispFunction(LispNames.PRIN1_TO_STRING_RAW, args -> {
+			requireArgCount(LispNames.PRIN1_TO_STRING_RAW, args, 1);
+			return new LispString(printString(args.get(0)));
+		}));
 		// concatenate: the string, list and vector result families (ConcatenateForms is
 		// the shared contract the compilers lower through as well).
 		env.defineFunction(LispNames.CONCATENATE, new LispFunction(LispNames.CONCATENATE, args -> {

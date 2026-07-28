@@ -91,7 +91,11 @@ final class JvmObjCompiler {
 		LispLayout layout = requireLayout(ctx, literalTag(args.get(1)));
 		FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, layout);
 		int slots = layout.slotCount();
-		JvmEmitHelper.emitIntConst(ctx, 1 + slots);
+		// capacity, not slotCount: an instance IS its Object[] here, so a change-class
+		// into a wider class of the same chain can only keep the object identity if the
+		// room was reserved at construction (LispLayout.capacity). The surplus cells stay
+		// null (= nil) until %obj-become hands them to the wider layout.
+		JvmEmitHelper.emitIntConst(ctx, 1 + layout.capacity());
 		ctx.emit(Opcode.ANEWARRAY);
 		ctx.emitU2(ctx.objectClass.index());
 		ctx.emit(Opcode.DUP);
@@ -132,6 +136,27 @@ final class JvmObjCompiler {
 		ctx.emitU2(ctx.objectArrayClass.index());
 		JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
 		ctx.emit(Opcode.AALOAD);
+	}
+
+	/**
+	 * {@code (%obj-become obj '<tag>)}: swaps the layout constant in slot 0, so the
+	 * instance IS one of the new type from here on, and yields the instance. The slot
+	 * storage is untouched -- construction reserved
+	 * {@link am.ik.rontolisp.LispLayout#capacity()} cells for exactly this.
+	 */
+	static void compileBecome(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		requireGate(ctx, LispNames.OBJ_BECOME);
+		List<LispVal> args = cons.toList();
+		LispLayout layout = requireLayout(ctx, literalTag(args.get(2)));
+		FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, layout);
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(lf.index());
+		ctx.emit(Opcode.AASTORE);
 	}
 
 	/** {@code (%obj-set obj <k> v)}, returning the value written. */
@@ -255,20 +280,22 @@ final class JvmObjCompiler {
 		int hdrSlot = ctx.allocTemp();
 		List<Integer> toFalse = new ArrayList<>();
 		emitInstanceGuard(ctx, objSlot, hdrSlot, toFalse);
-		// list = null; for (i = obj.length - 1; i >= 1; i--) list = new Object[]{obj[i],
-		// list}. The cursor stops at 1, not 0: slot 0 of the instance array is the
-		// layout, not a slot value.
+		// list = null; for (i = layout.length - 3; i >= 1; i--) list = new
+		// Object[]{obj[i], list}. The cursor stops at 1, not 0: slot 0 of the instance
+		// array is the layout, not a slot value. It starts at the LAYOUT's slot count
+		// (its String[] is {tag, printName, kind, slot...}), not at the array length,
+		// because a change-class-reserved array is longer than the layout describes.
 		int listSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ACONST_NULL);
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(listSlot);
 		int idxSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ALOAD);
-		ctx.emit(objSlot);
+		ctx.emit(hdrSlot);
 		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emitU2(ctx.layoutPool.stringArrayClass(ctx.cp).index());
 		ctx.emit(Opcode.ARRAYLENGTH);
-		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.ICONST_3);
 		ctx.emit(Opcode.ISUB);
 		ctx.emit(Opcode.ISTORE);
 		ctx.emit(idxSlot);

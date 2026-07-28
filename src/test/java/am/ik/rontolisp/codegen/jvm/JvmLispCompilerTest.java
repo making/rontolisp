@@ -4137,12 +4137,35 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSlotShadowingChangeClassWithAccessorsAndPrintObject() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass jc-base () ((open-p :initform t :reader jc-open-p) (conn :initarg :conn :reader jc-conn)))
+				(defclass jc-sub (jc-base) ((open-p :initform :maybe :accessor jc-sub-open-p)
+				                            (extra :initarg :extra :initform :none :accessor jc-extra)))
+				(defstruct jc-node value)
+				(defmethod print-object ((n jc-node) stream)
+				  (print-unreadable-object (n stream :type t) (princ (jc-node-value n) stream)))
+				(let* ((b (make-instance 'jc-base :conn "c")) (alias b))
+				  (print (jc-open-p b))
+				  (change-class b 'jc-sub :extra :pooled)
+				  (print (list (type-of alias) (jc-conn alias) (jc-extra alias) (jc-sub-open-p alias)))
+				  (with-accessors ((e jc-extra)) alias (setf e (list e :seen)))
+				  (print (jc-extra alias)))
+				(print (format nil "~a|~s" (make-jc-node :value 1) (make-jc-node :value 2)))
+				""")).isEqualTo("T\n(JC-SUB \"c\" :POOLED T)\n(:POOLED :SEEN)\n\"#<JC-NODE 1>|#<JC-NODE 2>\"");
+	}
+
+	@Test
 	void compileAndRunSlotBoundpAndSlotMakunbound() throws Exception {
-		assertThat(compileAndRun(
-				"(defclass sb-pt () ((x :initarg :x) (y :initarg :y)))" + " (let ((p (make-instance 'sb-pt :x 1 :y 2)))"
-						+ " (print (slot-boundp p 'x)) (print (slot-boundp p 'z))"
-						+ " (slot-makunbound p 'x) (print (slot-value p 'x)) (print (slot-boundp p 'x)))"))
-			.isEqualTo("T\nNIL\nNIL\nT");
+		// Real unboundness (todo-199): a slot written with no :initform starts UNBOUND,
+		// slot-makunbound puts it back, and a read of an unbound slot signals
+		// unbound-slot.
+		assertThat(compileAndRun("(defclass sb-pt () ((x :initarg :x) (y :initform 9)))"
+				+ " (let ((p (make-instance 'sb-pt)))" + " (print (slot-boundp p 'x)) (print (slot-boundp p 'y))"
+				+ " (print (slot-boundp p 'sb-absent))" + " (setf (slot-value p 'x) 1) (print (slot-boundp p 'x))"
+				+ " (slot-makunbound p 'x) (print (slot-boundp p 'x))"
+				+ " (print (handler-case (slot-value p 'x) (unbound-slot (e) (list :unbound (slot-value e 'name))))))"))
+			.isEqualTo("NIL\nT\nNIL\nT\nNIL\n(:UNBOUND X)");
 	}
 
 	@Test
@@ -5109,7 +5132,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
@@ -5120,12 +5143,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("325");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("329");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("325");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("329");
 	}
 
 	@Test

@@ -26,6 +26,20 @@ final class WasmExprCompiler {
 	private WasmExprCompiler() {
 	}
 
+	/**
+	 * Compiles a printing operator, routed through {@code print-object} when the program
+	 * defines a method on it and compiled as it always was otherwise -- the gate that
+	 * keeps every print-object-free module byte-identical.
+	 */
+	private static void compilePrintOperator(LispCons cons, WasmLispCompiler.Ctx ctx, Runnable plain) {
+		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, false);
+		if (hooked == null) {
+			plain.run();
+			return;
+		}
+		compileExpr(hooked, ctx);
+	}
+
 	static void compileExpr(LispVal expr, WasmLispCompiler.Ctx ctx) {
 		if (ctx.asyncResume != null) {
 			// Consume the spine marker set by the async-aware form compilers: it
@@ -514,13 +528,18 @@ final class WasmExprCompiler {
 				case LispNames.GT -> compileComparison(cons, ctx, Instruction.I32_GT_S, Instruction.F64_GT);
 				case LispNames.LE -> compileComparison(cons, ctx, Instruction.I32_LE_S, Instruction.F64_LE);
 				case LispNames.GE -> compileComparison(cons, ctx, Instruction.I32_GE_S, Instruction.F64_GE);
-				case LispNames.PRINT -> WasmPrintCompiler.compile(cons, ctx);
-				case LispNames.PRIN1 -> WasmPrin1Compiler.compile(cons, ctx);
-				case LispNames.PRINC -> WasmPrincCompiler.compile(cons, ctx);
+				case LispNames.PRINT -> compilePrintOperator(cons, ctx, () -> WasmPrintCompiler.compile(cons, ctx));
+				case LispNames.PRIN1 -> compilePrintOperator(cons, ctx, () -> WasmPrin1Compiler.compile(cons, ctx));
+				case LispNames.PRINC -> compilePrintOperator(cons, ctx, () -> WasmPrincCompiler.compile(cons, ctx));
 				case LispNames.TERPRI -> WasmTerpriCompiler.compile(cons, ctx);
 				case LispNames.FRESH_LINE -> WasmFreshLineCompiler.compile(cons, ctx);
-				case LispNames.PRINC_TO_STRING -> WasmPrincToStringCompiler.compile(cons, ctx);
-				case LispNames.PRIN1_TO_STRING -> WasmPrin1ToStringCompiler.compile(cons, ctx);
+				case LispNames.PRINC_TO_STRING ->
+					compilePrintOperator(cons, ctx, () -> WasmPrincToStringCompiler.compile(cons, ctx));
+				case LispNames.PRIN1_TO_STRING ->
+					compilePrintOperator(cons, ctx, () -> WasmPrin1ToStringCompiler.compile(cons, ctx));
+				// The print-object-free aliases the generated renderer's fallback calls.
+				case LispNames.PRINC_TO_STRING_RAW -> WasmPrincToStringCompiler.compile(cons, ctx);
+				case LispNames.PRIN1_TO_STRING_RAW -> WasmPrin1ToStringCompiler.compile(cons, ctx);
 				case LispNames.STRING_CONCAT -> WasmStringConcatCompiler.compile(cons, ctx);
 				case LispNames.GENSYM -> WasmGensymCompiler.compile(cons, ctx);
 				case LispNames.STRING -> WasmSymbolApiCompiler.compileString(cons, ctx);
@@ -785,6 +804,10 @@ final class WasmExprCompiler {
 				case LispNames.SLOT_VALUE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx);
 				case LispNames.WITH_SLOTS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWithSlots(cons), ctx);
+				case LispNames.WITH_ACCESSORS ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithAccessors(cons), ctx);
+				case LispNames.CHANGE_CLASS -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandChangeClass(cons, ctx.closRegistry, true), ctx);
 				case LispNames.DEFVAR -> WasmDefvarCompiler.compile(cons, ctx, false);
 				case LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> WasmDefvarCompiler.compile(cons, ctx, true);
 				case LispNames.LIST -> WasmListCompiler.compile(cons, ctx);
@@ -992,6 +1015,7 @@ final class WasmExprCompiler {
 				case LispNames.LISTP -> WasmListpCompiler.compile(cons, ctx);
 				case LispNames.CONSP -> WasmConspCompiler.compile(cons, ctx);
 				case LispNames.OBJ_NEW -> WasmInstanceCompiler.compileNew(cons, ctx);
+				case LispNames.OBJ_BECOME -> WasmInstanceCompiler.compileBecome(cons, ctx);
 				case LispNames.OBJ_REF -> WasmInstanceCompiler.compileRef(cons, ctx);
 				case LispNames.OBJ_SET -> WasmInstanceCompiler.compileSet(cons, ctx);
 				case LispNames.OBJ_IS -> WasmInstanceCompiler.compileIs(cons, ctx);

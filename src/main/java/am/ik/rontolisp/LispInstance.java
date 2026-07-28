@@ -21,9 +21,9 @@ import java.util.Arrays;
  */
 public final class LispInstance implements LispVal {
 
-	private final LispLayout layout;
+	private LispLayout layout;
 
-	private final LispVal[] slots;
+	private LispVal[] slots;
 
 	/**
 	 * Creates an instance over the given layout. The array is taken by reference: the
@@ -42,7 +42,7 @@ public final class LispInstance implements LispVal {
 	 * @return the fresh instance
 	 */
 	public static LispInstance ofNilSlots(LispLayout layout) {
-		LispVal[] slots = new LispVal[layout.slotCount()];
+		LispVal[] slots = new LispVal[layout.capacity()];
 		Arrays.fill(slots, LispNil.INSTANCE);
 		return new LispInstance(layout, slots);
 	}
@@ -56,11 +56,31 @@ public final class LispInstance implements LispVal {
 	}
 
 	/**
-	 * The number of slots.
+	 * The number of slots this instance's TYPE declares. The backing array may be longer
+	 * ({@link LispLayout#capacity()} reserves room for a {@code change-class}); nothing
+	 * outside {@link #becomeLayout} may look past this count.
 	 * @return the slot count
 	 */
 	public int slotCount() {
-		return this.slots.length;
+		return this.layout.slotCount();
+	}
+
+	/**
+	 * Changes this instance's type IN PLACE ({@code change-class}): the object identity,
+	 * and every slot the two layouts share by position, survive. Slots the new layout
+	 * adds start nil -- the {@code change-class} expansion fills them from the target's
+	 * initforms right after. The backing array grows when the reserved capacity was not
+	 * enough, which the interpreter can do (the LispInstance is the identity) and the JVM
+	 * backend cannot -- hence {@link LispLayout#capacity()}.
+	 * @param newLayout the layout to adopt
+	 */
+	public void becomeLayout(LispLayout newLayout) {
+		if (this.slots.length < newLayout.capacity()) {
+			LispVal[] grown = Arrays.copyOf(this.slots, newLayout.capacity());
+			Arrays.fill(grown, this.slots.length, grown.length, LispNil.INSTANCE);
+			this.slots = grown;
+		}
+		this.layout = newLayout;
 	}
 
 	/**
@@ -120,7 +140,7 @@ public final class LispInstance implements LispVal {
 	 */
 	private String render(boolean escape) {
 		StringBuilder sb = new StringBuilder(this.layout.openDelimiter()).append(this.layout.printName());
-		for (int i = 0; i < this.slots.length; i++) {
+		for (int i = 0; i < this.layout.slotCount(); i++) {
 			sb.append(" :")
 				.append(this.layout.slotNames().get(i))
 				.append(' ')
@@ -132,17 +152,22 @@ public final class LispInstance implements LispVal {
 	@Override
 	public boolean equals(Object o) {
 		return o instanceof LispInstance other && this.layout.tag().equals(other.layout.tag())
-				&& Arrays.equals(this.slots, other.slots);
+				&& Arrays.equals(this.slots, 0, slotCount(), other.slots, 0, other.slotCount());
 	}
 
 	@Override
 	public int hashCode() {
-		return 31 * this.layout.tag().hashCode() + Arrays.hashCode(this.slots);
+		int hash = this.layout.tag().hashCode();
+		for (int i = 0; i < slotCount(); i++) {
+			hash = 31 * hash + this.slots[i].hashCode();
+		}
+		return hash;
 	}
 
 	@Override
 	public String toString() {
-		return "LispInstance[" + this.layout.tag() + ", slots=" + Arrays.toString(this.slots) + "]";
+		return "LispInstance[" + this.layout.tag() + ", slots="
+				+ Arrays.toString(Arrays.copyOf(this.slots, slotCount())) + "]";
 	}
 
 }

@@ -1146,14 +1146,19 @@ public final class WasmLispCompiler implements LispCompiler {
 	// linear-memory record WasmInstanceLayouts bakes, which is what makes an instance
 	// self-describing to the printer.
 	//
-	// The shape is deliberately 2 fields with field 1 MUTABLE. Two other struct types
-	// share the {i32, eqref} shape: TYPE_CLOSURE {const i32, const eqref}, kept apart
-	// by field-1 mutability AND by rec-group identity (it is member 3 of the 5-member
-	// group), and TYPE_P1_FUTURE {mut i32, mut eqref}, kept apart by field-0
-	// mutability alone. Do NOT "simplify" this to three fields: {i32, i32, eqref} with
-	// an immutable tail would canonicalize equal to TYPE_VBLOCK under --simd and
-	// ref.test could no longer tell an instance from a packed-array block.
-	static final int INSTANCE_TYPE_COUNT = 1;
+	// The shape is 2 fields, BOTH mutable: field 1 because slots are written, field 0
+	// because change-class swaps an instance's layout in place (todo-199). Two other
+	// struct types share the {i32, eqref} shape: TYPE_CLOSURE {const i32, const eqref},
+	// kept apart by rec-group identity (it is member 3 of the 5-member group), and
+	// TYPE_P1_FUTURE {mut i32, mut eqref} -- which a MUTABLE field 0 makes structurally
+	// IDENTICAL to this one. The rec group therefore carries a second, never
+	// instantiated member: wasm canonicalizes a rec GROUP as a whole, so a 2-member
+	// group can never equal the 1-member group TYPE_P1_FUTURE sits in, and ref.test
+	// keeps telling an instance from a future. Do NOT "simplify" this to three fields
+	// either: {i32, i32, eqref} with an immutable tail would canonicalize equal to
+	// TYPE_VBLOCK under --simd and ref.test could no longer tell an instance from a
+	// packed-array block.
+	static final int INSTANCE_TYPE_COUNT = 2;
 
 	// The exception tag index of the one Lisp condition tag ($lisp-cond), emitted only
 	// in EH mode (the program uses handler-case/ignore-errors/unwind-protect). Its
@@ -3286,15 +3291,23 @@ public final class WasmLispCompiler implements LispCompiler {
 					});
 				}
 				if (this.usesInstances) {
-					// TYPE_INSTANCE {i32 layout address (const), (ref null eq) slots
-					// (mut)} in its OWN rec group, so it can never canonicalize into
-					// TYPE_CLOSURE (member 3 of the group opened above). Field 1 is
-					// mutable, which is also what keeps it apart from TYPE_P1_FUTURE
-					// {mut i32, mut eq}. The slots array is a TYPE_HASH_BUCKETS.
-					types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
-						fields.addField(false, w -> w.write(Type.I32));
-						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
-					}));
+					// TYPE_INSTANCE {i32 layout address (MUT -- change-class swaps it),
+					// (ref null eq) slots (mut)} in its OWN rec group, so it can never
+					// canonicalize into TYPE_CLOSURE (member 3 of the group opened
+					// above). The group's SECOND member is a never-instantiated empty
+					// struct: it exists only to give the group a size TYPE_P1_FUTURE's
+					// 1-member group cannot match, since the two structs are otherwise
+					// structurally identical ({mut i32, mut eq}) and ref.test would stop
+					// telling an instance from a future. The slots array is a
+					// TYPE_HASH_BUCKETS.
+					types.addRecGroup(rec -> {
+						rec.addSubFinalStruct(fields -> {
+							fields.addField(true, w -> w.write(Type.I32));
+							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+						});
+						rec.addSubFinalStruct(fields -> {
+						});
+					});
 				}
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed type (TYPE_F32ARR, or the --simd block's TYPE_V_SET). One per

@@ -101,9 +101,16 @@ CLOS は**静的なサブセット**です
 ディスパッチする [`defgeneric`](../reference/special-forms/defgeneric.md) /
 [`defmethod`](../reference/special-forms/defmethod.md)、リテラルのクォートされた
 名前を取る [`make-instance`](../reference/macros/make-instance.md) と
-[`slot-value`](../reference/macros/slot-value.md)）。対象外: 多重継承、
-第 2 引数以降の specializer、`slot-boundp`、MOP / 実行時クラス操作
-（`find-class`、`change-class`、`add-method`、クラス再定義）—
+[`slot-value`](../reference/macros/slot-value.md)）。`:initform` なしで書かれた
+スロットは CL と同様に未束縛で始まります:
+[`slot-boundp`](../reference/macros/slot-boundp.md) がそれを報告し、
+[`slot-makunbound`](../reference/macros/slot-makunbound.md) が元に戻し、
+読み取りは `unbound-slot` をシグナルします。
+[`change-class`](../reference/macros/change-class.md) は、両方のクラスが
+リテラルであれば、インスタンスのクラスをその場で変更します。対象外: 多重継承、
+第 2 引数以降の specializer、MOP / 実行時クラス操作
+（`find-class`、`add-method`、`compute-applicable-methods`、クラス再定義、
+`update-instance-for-different-class`）—
 コンパイルされたプログラムのクラスとメソッドの集合はコンパイル時に固定されます。
 
 ## ユーザー定義パッケージ

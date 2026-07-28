@@ -5316,11 +5316,13 @@ class WasmLispCompilerIntegrationTest {
 				+ " (defclass co-pt () ((x :initarg :x))) (print (class-of (make-instance 'co-pt :x 1)))"))
 			.isEqualTo(
 					"INTEGER\nSTRING\nSYMBOL\nKEYWORD\nFLOAT\nCONS\nNULL\nBOOLEAN\nHASH-TABLE\nFUNCTION\n%class-CO-PT");
+		// Real unboundness (todo-199): the supplied slot is bound, an unknown one is
+		// not, and slot-makunbound puts it back to unbound.
 		assertThat(compileAndRun(
 				"(defclass sb-pt () ((x :initarg :x) (y :initarg :y)))" + " (let ((p (make-instance 'sb-pt :x 1 :y 2)))"
-						+ " (print (slot-boundp p 'x)) (print (slot-boundp p 'z))"
-						+ " (slot-makunbound p 'x) (print (slot-value p 'x)) (print (slot-boundp p 'x)))"))
-			.isEqualTo("T\nNIL\nNIL\nT");
+						+ " (print (slot-boundp p 'x)) (print (slot-boundp p 'sb-absent))"
+						+ " (slot-makunbound p 'x) (print (slot-boundp p 'x)))"))
+			.isEqualTo("T\nNIL\nNIL");
 	}
 
 	@Test
@@ -6765,7 +6767,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
@@ -6776,7 +6778,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("325");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("329");
 	}
 
 	@Test
@@ -9360,6 +9362,41 @@ class WasmLispCompilerIntegrationTest {
 				(print (list (describe-it 5) (describe-it :br)))
 				(print (funcall #'describe-it 9))
 				""")).isEqualTo("((:DEFAULT 5) (:SPECIAL :BR))\n(:DEFAULT 9)");
+	}
+
+	@Test
+	void compileAndRunSlotShadowingChangeClassWithAccessorsAndPrintObject() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass wc-base () ((open-p :initform t :reader wc-open-p) (conn :initarg :conn :reader wc-conn)))
+				(defclass wc-sub (wc-base) ((open-p :initform :maybe :accessor wc-sub-open-p)
+				                            (extra :initarg :extra :initform :none :accessor wc-extra)))
+				(defstruct wc-node value)
+				(defmethod print-object ((n wc-node) stream)
+				  (print-unreadable-object (n stream :type t) (princ (wc-node-value n) stream)))
+				(let* ((b (make-instance 'wc-base :conn "c")) (alias b))
+				  (print (list (wc-open-p b) (slot-boundp b 'conn)))
+				  (change-class b 'wc-sub :extra :pooled)
+				  (print (list (class-of alias) (wc-conn alias) (wc-extra alias) (wc-sub-open-p alias)))
+				  (with-accessors ((e wc-extra)) alias (setf e (list e :seen)))
+				  (print (wc-extra alias)))
+				(print (format nil "~a|~s" (make-wc-node :value 1) (make-wc-node :value 2)))
+				"""))
+			.isEqualTo("(T T)\n(%class-WC-SUB \"c\" :POOLED T)\n(:POOLED :SEEN)" + "\n\"#<WC-NODE 1>|#<WC-NODE 2>\"");
+	}
+
+	@Test
+	void compileAndRunUnboundSlotSignalsUnboundSlot() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass wu-box () ((a :initarg :a) (b :initform 7)))
+				(let ((o (make-instance 'wu-box)))
+				  (print (list (slot-boundp o 'a) (slot-boundp o 'b)))
+				  (print (handler-case (slot-value o 'a)
+				           (unbound-slot (e) (list (slot-value e 'name) (class-of (slot-value e 'instance))))))
+				  (setf (slot-value o 'a) 1)
+				  (print (list (slot-boundp o 'a) (slot-value o 'a)))
+				  (slot-makunbound o 'a)
+				  (print (slot-boundp o 'a)))
+				""")).isEqualTo("(NIL T)\n(A %class-WU-BOX)\n(T 1)\nNIL");
 	}
 
 	@Test

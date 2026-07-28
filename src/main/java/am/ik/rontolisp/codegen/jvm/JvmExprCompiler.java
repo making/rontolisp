@@ -29,6 +29,20 @@ final class JvmExprCompiler {
 	private JvmExprCompiler() {
 	}
 
+	/**
+	 * Compiles a printing operator, routed through {@code print-object} when the program
+	 * defines a method on it and compiled as it always was otherwise -- the gate that
+	 * keeps every print-object-free program byte-identical.
+	 */
+	private static void compilePrintOperator(LispCons cons, JvmLispCompiler.Ctx ctx, String className, Runnable plain) {
+		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, false);
+		if (hooked == null) {
+			plain.run();
+			return;
+		}
+		compileExpr(hooked, ctx, className);
+	}
+
 	static void compileExpr(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
 		switch (expr) {
 			case LispInteger i -> JvmEmitHelper.compileLong(i.value(), ctx);
@@ -336,13 +350,21 @@ final class JvmExprCompiler {
 				case LispNames.GT -> compileComparison(cons, ctx, className, Opcode.IFGT);
 				case LispNames.LE -> compileComparison(cons, ctx, className, Opcode.IFLE);
 				case LispNames.GE -> compileComparison(cons, ctx, className, Opcode.IFGE);
-				case LispNames.PRINT -> JvmPrintCompiler.compile(cons, ctx, className);
-				case LispNames.PRIN1 -> JvmPrin1Compiler.compile(cons, ctx, className);
-				case LispNames.PRINC -> JvmPrincCompiler.compile(cons, ctx, className);
+				case LispNames.PRINT ->
+					compilePrintOperator(cons, ctx, className, () -> JvmPrintCompiler.compile(cons, ctx, className));
+				case LispNames.PRIN1 ->
+					compilePrintOperator(cons, ctx, className, () -> JvmPrin1Compiler.compile(cons, ctx, className));
+				case LispNames.PRINC ->
+					compilePrintOperator(cons, ctx, className, () -> JvmPrincCompiler.compile(cons, ctx, className));
 				case LispNames.TERPRI -> JvmTerpriCompiler.compile(cons, ctx, className);
 				case LispNames.FRESH_LINE -> JvmFreshLineCompiler.compile(cons, ctx, className);
-				case LispNames.PRINC_TO_STRING -> JvmPrincToStringCompiler.compile(cons, ctx, className);
-				case LispNames.PRIN1_TO_STRING -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
+				case LispNames.PRINC_TO_STRING -> compilePrintOperator(cons, ctx, className,
+						() -> JvmPrincToStringCompiler.compile(cons, ctx, className));
+				case LispNames.PRIN1_TO_STRING -> compilePrintOperator(cons, ctx, className,
+						() -> JvmPrin1ToStringCompiler.compile(cons, ctx, className));
+				// The print-object-free aliases the generated renderer's fallback calls.
+				case LispNames.PRINC_TO_STRING_RAW -> JvmPrincToStringCompiler.compile(cons, ctx, className);
+				case LispNames.PRIN1_TO_STRING_RAW -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
 				case LispNames.STRING_CONCAT -> JvmStringConcatCompiler.compile(cons, ctx, className);
 				case LispNames.GENSYM -> JvmGensymCompiler.compile(cons, ctx, className);
 				case LispNames.STRING -> JvmSymbolApiCompiler.compileString(cons, ctx, className);
@@ -581,6 +603,10 @@ final class JvmExprCompiler {
 					.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx, className);
 				case LispNames.WITH_SLOTS ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithSlots(cons), ctx, className);
+				case LispNames.WITH_ACCESSORS ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithAccessors(cons), ctx, className);
+				case LispNames.CHANGE_CLASS -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandChangeClass(cons, ctx.closRegistry, true), ctx, className);
 				case LispNames.DEFVAR -> JvmDefvarCompiler.compile(cons, ctx, className, false);
 				case LispNames.DEFPARAMETER, LispNames.DEFCONSTANT ->
 					JvmDefvarCompiler.compile(cons, ctx, className, true);
@@ -846,6 +872,7 @@ final class JvmExprCompiler {
 				case LispNames.OBJ_NEW -> JvmObjCompiler.compileNew(cons, ctx, className);
 				case LispNames.OBJ_REF -> JvmObjCompiler.compileRef(cons, ctx, className);
 				case LispNames.OBJ_SET -> JvmObjCompiler.compileSet(cons, ctx, className);
+				case LispNames.OBJ_BECOME -> JvmObjCompiler.compileBecome(cons, ctx, className);
 				case LispNames.OBJ_IS -> JvmObjCompiler.compileIs(cons, ctx, className);
 				case LispNames.OBJ_TAG -> JvmObjCompiler.compileTag(cons, ctx, className);
 				case LispNames.OBJ_P -> JvmObjCompiler.compileP(cons, ctx, className);

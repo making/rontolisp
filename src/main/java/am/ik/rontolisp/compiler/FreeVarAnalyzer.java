@@ -170,6 +170,8 @@ public final class FreeVarAnalyzer {
 						// the default walk would misread as free references.
 						case LispNames.WITH_SLOTS -> collectFreeVars(LispMacroExpander.expandWithSlots(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
+						case LispNames.WITH_ACCESSORS -> collectFreeVars(LispMacroExpander.expandWithAccessors(cons),
+								boundVars, knownFunctions, globals, specialNames, freeVars);
 						case LispNames.DOLIST -> collectFreeVars(LispMacroExpander.expandDolist(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.DOTIMES -> collectFreeVars(LispMacroExpander.expandDotimes(cons), boundVars,

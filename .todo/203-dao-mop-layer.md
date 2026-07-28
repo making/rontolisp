@@ -67,7 +67,8 @@ principles require:
 
 Prerequisite hard features either way: real class objects behind
 `find-class`/`class-of` (today: nil / tag symbol), `allocate-instance` with
-unbound slots (needs `.todo/199`'s unboundness), method definition ordered
+unbound slots (LANDED with `.todo/199`: a slot with no `:initform` starts
+unbound, see `.kb/clos.md`), method definition ordered
 after class finalization, and `defmethod ... :around ((class (eql 'name)))`
 from `define-dao-finalization`.
 

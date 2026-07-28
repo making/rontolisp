@@ -1382,9 +1382,9 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (AND ASSERT BLOCK CASE CCASE CERROR CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
+      (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      325
+      329
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -3747,6 +3747,44 @@ cases:
     expected: |
       (:AROUND :DONE T)
       (:BEFORE-DOG :BEFORE-ANIMAL :PRIMARY-DOG :PRIMARY-ANIMAL :AFTER-ANIMAL :AFTER-DOG)
+  - name: clos-unbound-slots-shadowing-change-class-and-print-object
+    source: |
+      (defclass clos-u-base ()
+        ((open-p :initform t :accessor clos-u-open-p)
+         (conn :initarg :conn :reader clos-u-conn)
+         (tag)))
+      (defclass clos-u-sub (clos-u-base)
+        ((open-p :initform :maybe :accessor clos-u-sub-open-p)
+         (extra :initarg :extra :initform :none :accessor clos-u-extra)))
+      (setq clos-u-b (make-instance 'clos-u-base :conn "c"))
+      (print (list (clos-u-open-p clos-u-b) (slot-boundp clos-u-b 'tag) (slot-boundp clos-u-b 'conn)))
+      (print (handler-case (slot-value clos-u-b 'tag)
+               (unbound-slot (e) (list :unbound (cell-error-name e) (type-of (unbound-slot-instance e))))))
+      (setf (slot-value clos-u-b 'tag) 7)
+      (print (list (slot-boundp clos-u-b 'tag) (slot-value clos-u-b 'tag)))
+      (slot-makunbound clos-u-b 'tag)
+      (print (slot-boundp clos-u-b 'tag))
+      (setq clos-u-s (make-instance 'clos-u-sub :conn "d"))
+      (print (list (clos-u-open-p clos-u-s) (clos-u-sub-open-p clos-u-s) (clos-u-conn clos-u-s)))
+      (with-accessors ((o clos-u-open-p) (x clos-u-extra)) clos-u-s
+        (setf x (list o x))
+        (print (clos-u-extra clos-u-s)))
+      (setq clos-u-alias clos-u-b)
+      (change-class clos-u-b 'clos-u-sub :extra :pooled)
+      (print (list (type-of clos-u-alias) (clos-u-conn clos-u-alias) (clos-u-extra clos-u-alias)
+                   (clos-u-open-p clos-u-alias) (slot-boundp clos-u-alias 'tag)))
+      (defmethod print-object ((b clos-u-base) stream)
+        (print-unreadable-object (b stream :type t) (princ (clos-u-conn b) stream)))
+      (print (list (princ-to-string clos-u-s) (format nil "~a|~s" clos-u-s clos-u-s)))
+    expected: |
+      (T NIL T)
+      (:UNBOUND TAG CLOS-U-BASE)
+      (T 7)
+      NIL
+      (:MAYBE :MAYBE "d")
+      (:MAYBE :NONE)
+      (CLOS-U-SUB "c" :POOLED T NIL)
+      ("#<CLOS-U-SUB d>" "#<CLOS-U-SUB d>|#<CLOS-U-SUB d>")
   - name: binary-file-round-trip-with-read-byte-write-byte
     source: |
       (with-open-file (out "bin.dat" :direction :output :element-type '(unsigned-byte 8))
@@ -4810,7 +4848,7 @@ cases:
         (print (class-of lbr-p))
         (print (list (slot-boundp lbr-p 'lbr-x) (slot-boundp lbr-p 'lbr-z)))
         (slot-makunbound lbr-p 'lbr-x)
-        (print (slot-value lbr-p 'lbr-x)))
+        (print (slot-boundp lbr-p 'lbr-x)))
       (handler-case (error "lbr ~a" 7)
         (error (lbr-c) (print (simple-condition-format-control lbr-c))
                        (print (simple-condition-format-arguments lbr-c))))

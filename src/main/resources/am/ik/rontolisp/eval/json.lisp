@@ -378,15 +378,17 @@
   ;; definition order -- matching jzon's standard-object serialization. A slot
   ;; may itself hold a hash table (a nested object), a list/vector (an array), or
   ;; any serializable value. Both shapes answer %class-slot-defs and slot-value,
-  ;; so one walk covers them.
+  ;; so one walk covers them. An UNBOUND slot is skipped, not written as null --
+  ;; jzon's coerced-fields does the same, and reading it would signal.
   (let ((a (cons "{" acc)) (firstp t))
     (do ((defs (%class-slot-defs (class-of v)) (cdr defs)))
         ((null defs))
       (let ((name (car (car defs))))
-        (if firstp (setq firstp nil) (setq a (cons "," a)))
-        (setq a (rontolisp::%json-out-string (rontolisp::%json-key-name name) a))
-        (setq a (cons ":" a))
-        (setq a (rontolisp::%json-out (slot-value v name) a))))
+        (when (slot-boundp v name)
+          (if firstp (setq firstp nil) (setq a (cons "," a)))
+          (setq a (rontolisp::%json-out-string (rontolisp::%json-key-name name) a))
+          (setq a (cons ":" a))
+          (setq a (rontolisp::%json-out (slot-value v name) a)))))
     (cons "}" a)))
 
 (defun rontolisp::%json-out (v acc)
