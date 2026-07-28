@@ -1858,6 +1858,14 @@ public final class LispEvaluator {
 			// extent already ended) surfaces as an ordinary error, not a raw signal.
 			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
 		}
+		catch (ThrowSignal signal) {
+			throw new LispEvalException(unmatchedThrowMessage(signal));
+		}
+	}
+
+	/** The error a {@code throw} with no matching {@code catch} surfaces as. */
+	private static String unmatchedThrowMessage(ThrowSignal signal) {
+		return LispNames.THROW + ": no enclosing catch for tag " + signal.tag().print();
 	}
 
 	/**
@@ -1903,6 +1911,9 @@ public final class LispEvaluator {
 		}
 		catch (BlockReturnSignal signal) {
 			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
+		}
+		catch (ThrowSignal signal) {
+			throw new LispEvalException(unmatchedThrowMessage(signal));
 		}
 	}
 
@@ -2226,6 +2237,10 @@ public final class LispEvaluator {
 					return evalNamedBlock(cons, env);
 				case LispNames.RETURN_FROM:
 					return evalReturnFrom(cons, env);
+				case LispNames.CATCH:
+					return evalCatch(cons, env);
+				case LispNames.THROW:
+					return evalThrow(cons, env);
 				case LispNames.UNWIND_PROTECT:
 					return evalUnwindProtect(cons, env);
 				case LispNames.RETURN:
@@ -4354,6 +4369,49 @@ public final class LispEvaluator {
 			throw new LispReturnSignal(value);
 		}
 		throw new BlockReturnSignal(name, value);
+	}
+
+	/**
+	 * Evaluates {@code (catch tag body...)}: evaluates the tag ONCE, runs the body as an
+	 * implicit {@code progn} and yields its value -- unless a {@code throw} to an
+	 * {@code eq} tag fires within the body's dynamic extent, in which case the thrown
+	 * value becomes the form's value. A throw to a different tag propagates, so the
+	 * innermost matching catcher wins.
+	 */
+	private LispVal evalCatch(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new LispEvalException(LispNames.CATCH + " expects (catch tag body...)");
+		}
+		LispVal tag = eval(parts.get(1), env);
+		try {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = 2; i < parts.size(); i++) {
+				result = eval(parts.get(i), env);
+			}
+			return result;
+		}
+		catch (ThrowSignal signal) {
+			if (Environment.isEqStrict(signal.tag(), tag)) {
+				return signal.value();
+			}
+			throw signal;
+		}
+	}
+
+	/**
+	 * Evaluates {@code (throw tag [result])}: throws the dynamic non-local exit the
+	 * matching {@code catch} yields. CL requires the result form; it defaults to
+	 * {@code nil} here for symmetry with {@code return-from}.
+	 */
+	private LispVal evalThrow(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			throw new LispEvalException(LispNames.THROW + " expects (throw tag result)");
+		}
+		LispVal tag = eval(parts.get(1), env);
+		LispVal value = parts.size() == 3 ? eval(parts.get(2), env) : LispNil.INSTANCE;
+		throw new ThrowSignal(tag, value);
 	}
 
 	/** The block name a designator form denotes: null for the {@code nil} block. */

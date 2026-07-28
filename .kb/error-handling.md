@@ -10,7 +10,12 @@ uses the WebAssembly exception-handling proposal and is gated: only a program
 containing one of the three catching forms is compiled in "EH mode" (one
 `$lisp-cond` tag, `try_table`/`throw`), and only such a program needs
 `wasmtime -W exceptions=y` (37+) — anything else is byte-identical to a build
-that never knew about EH. See "WASM (todo-129)" below. The condition-OBJECT
+that never knew about EH. See "WASM (todo-129)" below. A NON-LOCAL EXIT is not a
+condition and must pass through a `handler-case` uncaught while still running every
+`unwind-protect` cleanup — that holds for a cross-lambda `return-from` and for
+`catch`/`throw`, which share one exit channel; the mechanics (and the
+`ctx.blockExitTag`/`blockExitChannel` gate this file's handler-case sections read) live in
+`.kb/do-return-block.md`. The condition-OBJECT
 layer (`define-condition`, `make-condition`, typed `error`/`warn`,
 `signal`-returns-nil, `with-slots`, `typecase` on condition classes) compiles
 everywhere except `--no-gc`.

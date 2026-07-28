@@ -2463,6 +2463,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				throw new UnsupportedOperationException(LispNames.UNWIND_PROTECT
 						+ " is not supported under --no-gc (its contract is a zero-flag MVP module without condition"
 						+ " objects); use the default wasm-GC backend, the interpreter or the JVM backend");
+			case LispNames.CATCH, LispNames.THROW ->
+				// Same rejection, same reason: the dynamic exit rides the
+				// exception-handling
+				// proposal (a tagged throw whose payload is a cons), which --no-gc has
+				// neither the tag section nor the heap values for.
+				throw new UnsupportedOperationException(name
+						+ " is not supported under --no-gc (its contract is a zero-flag MVP module, and a dynamic"
+						+ " non-local exit needs the exception-handling proposal); use the default wasm-GC backend,"
+						+ " the interpreter or the JVM backend");
 			case LispNames.ADD -> compileVariadic(cons, args, fn, 0, Instruction.I64_ADD, Instruction.F64_ADD);
 			case LispNames.MUL -> compileVariadic(cons, args, fn, 1, Instruction.I64_MUL, Instruction.F64_MUL);
 			case LispNames.SUB -> compileSub(cons, args, fn);

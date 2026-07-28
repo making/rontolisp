@@ -102,7 +102,7 @@ final class WasmHandlerCaseCompiler {
 		// see it and its depth increment would leak; catching it here restores the depth
 		// and rethrows, matching the JVM (whose catch-any handler already does).
 		int blockExitDepth = -1;
-		if (ctx.crossLambdaExit) {
+		if (ctx.blockExitTag) {
 			ctx.writer.write(Instruction.BLOCK);
 			ctx.writer.write(Type.REFNULL.code());
 			ctx.writer.writeHeapType(Type.EQ.code());
@@ -123,11 +123,11 @@ final class WasmHandlerCaseCompiler {
 		ctx.writer.write(Instruction.TRY_TABLE);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
-		ctx.writer.writeUnsignedLeb128(ctx.crossLambdaExit ? 2 : 1);
+		ctx.writer.writeUnsignedLeb128(ctx.blockExitTag ? 2 : 1);
 		ctx.writer.write(Instruction.CATCH);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 		ctx.writer.writeUnsignedLeb128(ctx.wasmCtrlDepth - handlerDepth);
-		if (ctx.crossLambdaExit) {
+		if (ctx.blockExitTag) {
 			ctx.writer.write(Instruction.CATCH);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_BLOCK_EXIT);
 			ctx.writer.writeUnsignedLeb128(ctx.wasmCtrlDepth - blockExitDepth);
@@ -210,7 +210,7 @@ final class WasmHandlerCaseCompiler {
 		ctx.writer.writeSignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.THROW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
-		if (ctx.crossLambdaExit) {
+		if (ctx.blockExitTag) {
 			ctx.wasmCtrlDepth--;
 			ctx.writer.write(Instruction.END); // block $bx
 			// Block-exit landing: the (id . value) payload is on the stack; a

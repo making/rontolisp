@@ -102,7 +102,7 @@ final class JvmHandlerCaseCompiler {
 		// synthesized condition. Rethrow it (identity-checked against the pending _nleTl)
 		// before dispatching, so return-from is never intercepted by handler-case. Gated
 		// so a program without a cross-lambda exit stays byte-identical.
-		if (ctx.crossLambdaExit) {
+		if (ctx.blockExitChannel) {
 			emitRethrowPendingNle(ctx, className, excSlot);
 		}
 		ctx.emit(Opcode.GETSTATIC);

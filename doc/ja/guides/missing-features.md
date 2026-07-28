@@ -13,7 +13,6 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 | 機能 | 状況 |
 | --- | --- |
-| `catch` / `throw` | 利用不可（`block`/`return-from`/`tagbody`/`go` は利用可能） |
 | リスタート（`handler-bind`、`restart-case`、`invoke-restart`、`cerror` など） | 利用不可 |
 | `symbol-macrolet` | 利用不可（`macrolet` は利用可能） |
 | `&whole` / `&environment` | 利用不可。`defmacro` のラムダリストは必須パラメータと末尾の `&rest`/`&body` 1 つのみ |
@@ -28,7 +27,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `#:name` | 普通のシンボルとして読まれ、gensym 的な新規性はない |
 | `*modules*` | 利用不可（`require`/`provide` は利用可能） |
 | 複素数 | 利用不可 |
-| `--no-gc` での `unwind-protect` / 条件 | コンパイルエラー（他のバックエンドでは利用可能） |
+| `--no-gc` での `catch` / `throw` / `unwind-protect` / 条件 | コンパイルエラー（他のバックエンドでは利用可能） |
 
 ## 多値
 
@@ -47,8 +46,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 ## 非局所脱出
 
-`catch` / `throw` — 動的スコープの脱出はありません。
-
+[`catch`](../reference/special-forms/catch.md) /
+[`throw`](../reference/special-forms/throw.md)、
 [`block`](../reference/macros/block.md) /
 [`return-from`](../reference/macros/return-from.md) と
 [`tagbody`](../reference/special-forms/tagbody.md) /
@@ -60,10 +59,11 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 - `go` は同一関数内のレキシカルに囲む `tagbody` のタグのみを対象にできます。
   インタプリタはさらに関数境界を越える動的 `go` をサポートします。
 
-`lambda` をまたぐ `return-from`、`unwind-protect`、条件の捕捉はいずれも例外
-処理モードでコンパイルされるため、出力される wasm-GC モジュールの実行には
-`wasmtime -W exceptions=y`（37+）が必要です。`--no-gc` では `unwind-protect` と
-条件系のフォームはコンパイルエラーになります。
+`lambda` をまたぐ `return-from`、`catch`/`throw`、`unwind-protect`、条件の捕捉は
+いずれも例外処理モードでコンパイルされるため、出力される wasm-GC モジュールの
+実行には `wasmtime -W exceptions=y`（37+）が必要です。`--no-gc` では
+`catch`/`throw`、`unwind-protect` と条件系のフォームはコンパイルエラーに
+なります。
 
 ## リスタート
 

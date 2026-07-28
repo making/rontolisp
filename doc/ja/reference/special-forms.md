@@ -30,6 +30,8 @@
 | `rontolisp:await` | `(rontolisp:await value)` | future が確定するまで現在の非同期関数をサスペンドし、確定値を返します。future 以外はそのまま通過します。`async-defun`/`async-lambda` の本体内とトップレベルでのみ使えます |
 | `tagbody` | `(tagbody tag-or-form...)` | go タグ付きの本体フォーム: `go` がタグへ(前方・後方を問わず)ジャンプし、末尾到達で nil を返します |
 | `go` | `(go tag)` | 囲んでいる `tagbody` のタグへ制御を移します(コンパイルされた `go` は字句的: 同一関数内のみ) |
+| `catch` | `(catch tag body...)` | `tag`(`eq` で比較されるランタイム値)で名前を付けた動的な脱出点を確立します。フォームの値は本体の値、またはその動的エクステント内で発生した一致する `throw` の値です(wasm-GC では `wasmtime -W exceptions=y` が必要、`--no-gc` ではコンパイルエラー) |
+| `throw` | `(throw tag result)` | タグが `eq` であるもっとも内側のアクティブな `catch` へ制御(と `result`)を移します。途中の `unwind-protect` の cleanup はすべて実行され、間にある `handler-case` はこれを捕捉しません |
 
 rontolispはCommon Lispのような **Lisp-2** です。関数と変数は別々の名前空間に存在します。裸のシンボルは変数として評価され(`car`
 単独は未束縛変数エラー)、呼び出し位置のシンボルは関数名前空間のみで解決され(`car`

@@ -31,6 +31,8 @@ and a runnable example you can evaluate in your browser.
 | `rontolisp:await` | `(rontolisp:await value)` | Suspend the current asynchronous function until a future settles and return its value; a non-future passes through unchanged. Legal only in `async-defun`/`async-lambda` bodies and at top level |
 | `tagbody` | `(tagbody tag-or-form...)` | Body forms with go tags: `go` jumps to a tag (forward or backward), falling off the end returns nil |
 | `go` | `(go tag)` | Transfer control to a tag of the enclosing `tagbody` (compiled `go` is lexical: same function only) |
+| `catch` | `(catch tag body...)` | Establish a dynamic exit point named by `tag` (an `eq`-compared runtime value): the form's value is the body's, or the value of a matching `throw` fired in its dynamic extent (on wasm-GC needs `wasmtime -W exceptions=y`; compile error under `--no-gc`) |
+| `throw` | `(throw tag result)` | Transfer control (and `result`) to the innermost active `catch` with an `eq` tag, running every intervening `unwind-protect` cleanup; a `handler-case` in between does not catch it |
 
 rontolisp is a **Lisp-2** like Common Lisp: functions and variables live in separate
 namespaces. A bare symbol evaluates as a variable (`car` alone is an unbound-variable

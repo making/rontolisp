@@ -795,7 +795,7 @@ final class WasmAsyncEmit {
 			.component(proto.component)
 			.serve(proto.serve)
 			.ehMode(proto.ehMode)
-			.crossLambdaExit(proto.crossLambdaExit)
+			.blockExitTag(proto.blockExitTag)
 			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)
 			.simd(proto.simd)
 			.userFuncBase(proto.userFuncBase)

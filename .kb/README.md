@@ -11,7 +11,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [integer-bitwise-fast-paths.md](integer-bitwise-fast-paths.md) -- `logand`/`logior`/`logxor`/`lognot`/`ash`/`integer-length`/`logbitp` fixnum fast paths (interpreter + JVM; WASM already had one) and the literal-byte-specifier fold in `ldb`/`dpb`/`mask-field`
 - [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split across all backends
 - [lambda-lists.md](lambda-lists.md) -- lambda list extensions (`&optional`/`&rest`/`&key`/`&aux`) desugared to "required + `&rest`"
-- [do-return-block.md](do-return-block.md) -- `do`/`return` and the `%block` non-local exit boundary; named `block`/`return-from`; `tagbody`/`go` + `prog`/`prog*`
+- [do-return-block.md](do-return-block.md) -- `do`/`return` and the `%block` non-local exit boundary; named `block`/`return-from`; `catch`/`throw` (dynamic tag-keyed exits over the same machinery); `tagbody`/`go` + `prog`/`prog*`
 - [jzon-cl-additions.md](jzon-cl-additions.md) -- the jzon-driven all-backend CL additions (shiftf/typep/subtypep/`|...|`/`#'format`/mutable strings/runtime type-dispatch sweep &c), pinned by `runtime-type-dispatch-residue` + `JzonE2eTest`
 - [defmacro-backquote.md](defmacro-backquote.md) -- `defmacro`, read-time backquote, compile-time macro expansion
 - [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`

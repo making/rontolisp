@@ -2870,6 +2870,42 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalCatchAndThrow() {
+		// The catch value is the body's, or the thrown one; the tag is a runtime value
+		// compared with eq, so the throw only has to be in the catch's DYNAMIC extent.
+		assertThat(eval("(catch 'done (+ 1 2))").print()).isEqualTo("3");
+		assertThat(eval("(catch 'done (throw 'done :thrown) :not-reached)").print()).isEqualTo(":THROWN");
+		assertThat(eval("(catch 'outer (catch 'inner (throw 'outer :to-outer)) :not-reached)").print())
+			.isEqualTo(":TO-OUTER");
+		assertThat(evalMulti("""
+				(defun probe (xs)
+				  (catch 'found
+				    (map nil (lambda (x) (if (evenp x) (throw 'found x))) xs)
+				    :none))
+				(list (probe '(1 3 4 5)) (probe '(1 3 5)))
+				""").print()).isEqualTo("(4 :NONE)");
+		// A computed tag: eq, so a fresh cons matches only itself.
+		assertThat(eval("(let ((tag (list 1))) (catch tag (throw tag :computed)))").print()).isEqualTo(":COMPUTED");
+		assertThat(eval("(catch 'outer (catch (list 1) (throw 'outer :not-eq-to-inner)))").print())
+			.isEqualTo(":NOT-EQ-TO-INNER");
+		// Intervening unwind-protect cleanups run, innermost first.
+		assertThat(evalMulti("""
+				(let ((log nil))
+				  (list (catch 'z
+				          (unwind-protect
+				              (unwind-protect (throw 'z :deep) (setq log (cons :inner log)))
+				            (setq log (cons :outer log))))
+				        log))
+				""").print()).isEqualTo("(:DEEP (:OUTER :INNER))");
+		// A throw is not a condition: handler-case must not intercept it.
+		assertThat(eval("(catch 'up (handler-case (throw 'up :through) (error (e) :caught)))").print())
+			.isEqualTo(":THROUGH");
+		// An unmatched throw is an ordinary error, not a raw signal.
+		assertThatThrownBy(() -> eval("(throw 'nope 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("no enclosing catch for tag NOPE");
+	}
+
+	@Test
 	void evalCharComparisonExtensions() {
 		assertThat(eval("(char> #\\c #\\b #\\a)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(char> #\\a #\\b)")).isEqualTo(LispNil.INSTANCE);
@@ -4399,7 +4435,7 @@ class LispEvaluatorTest {
 	@Test
 	void listSpecialFormsReturnsSortedClSpecialForms() {
 		assertThat(eval("(rontolisp:list-special-forms)").print()).isEqualTo(
-				"(DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY UNWIND-PROTECT WHILE)");
+				"(CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)");
 	}
 
 	@Test

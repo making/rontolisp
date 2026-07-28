@@ -603,6 +603,8 @@ final class JvmExprCompiler {
 				case LispNames.NLX_TAG_INTERNAL -> JvmNlxCompiler.compileTag(ctx);
 				case LispNames.NLX_CATCH_INTERNAL -> JvmNlxCompiler.compileCatch(cons, ctx, className);
 				case LispNames.NLX_THROW_INTERNAL -> JvmNlxCompiler.compileThrow(cons, ctx, className);
+				case LispNames.CATCH -> JvmNlxCompiler.compileTagCatch(cons, ctx, className);
+				case LispNames.THROW -> JvmNlxCompiler.compileTagThrow(cons, ctx, className);
 				case LispNames.RETURN_FROM -> JvmReturnFromCompiler.compile(cons, ctx, className);
 				case LispNames.UNWIND_PROTECT -> JvmUnwindProtectCompiler.compile(cons, ctx, className);
 				case LispNames.RETURN -> JvmReturnCompiler.compile(cons, ctx, className);

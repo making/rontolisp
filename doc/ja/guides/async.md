@@ -169,7 +169,8 @@ rontolisp:await is only allowed inside rontolisp:async-defun/async-lambda or at 
 
 四つのいずれも、第1引数が future でない場合は `type-error` です — JavaScript 風の
 解決済みプロミスへの自動変換はありません。また `rontolisp:catch` は Common Lisp の
-`cl:catch`/`throw` (タグベースの非局所脱出の特殊形式) では *ありません*: 別の
+[`catch`](../reference/special-forms/catch.md)/[`throw`](../reference/special-forms/throw.md)
+(タグベースの非局所脱出の特殊形式) では *ありません*: 別の
 パッケージにあり、修飾名は決して衝突しません (命名の詳細は
 [catch のリファレンスページ](../reference/functions/rontolisp-catch.md)を参照)。
 

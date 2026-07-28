@@ -109,6 +109,58 @@ Needed by cl-utilities' `rotate-byte`/`read-delimited` (function-scoped early re
 now exact) and cl-ppcre (`ClPpcreE2eTest`, all four backends: `(block scan ...)` in the
 generated scanner closures, `collect-char-class` returning across a `loop`).
 
+## `catch`/`throw` (dynamic, tag-keyed exits)
+
+`(catch tag body...)` / `(throw tag result)` are the DYNAMIC counterpart of
+`block`/`return-from`: the target is an ordinary runtime value compared with `eq`, not a
+lexically visible name, so the thrower only has to run inside the catcher's dynamic
+extent. Both are `cl` SPECIAL FORMS (`LispNames.CATCH`/`THROW`,
+`PackageRegistry.CL_SPECIAL_FORMS`). `LispNames.CATCH` is ONE constant serving two
+operators: bare `catch` is this special form, `rontolisp:catch`
+(`LispNames.CATCH_QUALIFIED`) is the unrelated future combinator -- the package
+qualification, not the constant, tells them apart.
+
+- **Interpreter**: `evalCatch`/`evalThrow`. `throw` raises a `ThrowSignal(tag, value)`;
+  the catch evaluates its tag ONCE on entry and rethrows a signal whose tag is not
+  `Environment.isEqStrict` to it, so the innermost matching catcher wins. `ThrowSignal` is
+  deliberately NOT a `LispEvalException`, which is exactly why `handler-case` (which
+  catches only that) lets it through; `unwind-protect` is `try`/`finally`, so cleanups run.
+  An unmatched throw is turned into an ordinary `LispEvalException`
+  ("no enclosing catch for tag X") at the top-level `eval`/`evalResolved` entry, the same
+  place a stray `BlockReturnSignal` is.
+- **COMPILE PATH (JVM + wasm-GC)**: they REUSE the cross-lambda-exit machinery above --
+  `JvmNlxCompiler.compileTagCatch`/`compileTagThrow` and
+  `WasmNlxCompiler.compileTagCatch`/`compileTagThrow`, i.e. the same `_nleTl` channel /
+  `$block-exit` tag, hence the same unwind-protect interplay and the same `handler-case`
+  passthrough. Two differences from `%nlx-catch`: the tag is an arbitrary expression
+  evaluated once BEFORE the protected region (a snapshot local -- CL evaluates it on
+  entry, not on the unwind), and the landing compares with `eq`
+  (`WasmEmitHelper.emitEqComparison`; on the JVM the compare is built as an `(eq a b)`
+  form over two pseudo-locals so the nil-safe `JvmEqGeneralCompiler` is reused).
+- **Why the two exit kinds never collide.** On the JVM a block-instance id is a fresh
+  `new Object()`: never `eq` to a Lisp tag, never identical to one, so both landing pads
+  reject the other's payload for free. On wasm the ids are i31 VALUES and `ref.eq` on an
+  i31 is value equality, so a `(catch 3 ...)` WOULD have swallowed the exit of a block
+  whose minted id is 3 (verified: it did). The payload shape is therefore the
+  discriminator -- a block exit throws `(id . value)`, a user throw
+  `((tag) . value)` with a wrapper cons -- and the user landing pad `ref.test`s for that
+  wrapper before comparing. Pinned by `catchThrowAndCrossLambdaExitDoNotCollide` (wasm +
+  JVM) and the `catch-throw` ci-spec case.
+- **EH-mode / tag gating**: `catch`/`throw` join the `usesEhForm` list and widen the
+  block-exit gate, renamed to what it now means -- `Ctx.blockExitTag` (wasm) /
+  `Ctx.blockExitChannel` (JVM), true when EITHER a cross-lambda exit is lowered OR the
+  program uses `catch`/`throw`. So a program using them needs `wasmtime -W exceptions=y`
+  like every other EH form, and a program using neither stays byte-identical.
+- **Limits**: `--no-gc` rejects both with a compile error (its contract is a zero-flag MVP
+  module). An unmatched `throw` surfaces per backend: an error message on the interpreter,
+  `RuntimeException: THROW: no enclosing catch for the tag` (a compile-time constant
+  message -- the tag is not printed, so a caught throw costs nothing) on the JVM, a trap
+  on wasm-GC, exactly like an uncaught `error` there. In wasm state-machine (async) mode
+  the tag snapshot is skipped -- a resume re-enters past the region's entry code -- so a
+  NON-CONSTANT catch tag inside an `async-defun` is re-evaluated on the unwind; the normal
+  quoted-symbol tag is unaffected. The runtime `_eval` interpreters do not know
+  `catch`/`throw`, like the rest of this file's forms.
+
 ## `tagbody`/`go` + `prog`/`prog*`
 
 `tagbody`/`go` and `prog`/`prog*` work on all three backends (interpreter, JVM,

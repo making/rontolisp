@@ -8,6 +8,7 @@ import am.ik.jvm.ConstantPool;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
 /**
@@ -34,6 +35,13 @@ import am.ik.rontolisp.LispVal;
  * threw a new exception) never misfires. {@link JvmHandlerCaseCompiler} rethrows a
  * matching NLE before dispatching, so a cross-lambda exit is never swallowed as a
  * synthesized condition.
+ * <p>
+ * The user-level {@code catch}/{@code throw} pair rides the same channel through
+ * {@link #compileTagCatch}/{@link #compileTagThrow}, differing only in the tag test: the
+ * carried value is an ordinary Lisp tag compared with {@code eq} instead of a
+ * block-instance id compared by identity. The two kinds pass through each other because a
+ * block-instance id is a fresh {@code new Object()} -- never {@code eq} to a Lisp value,
+ * and never identical to one.
  */
 final class JvmNlxCompiler {
 
@@ -57,17 +65,48 @@ final class JvmNlxCompiler {
 		if (parts.size() != 3) {
 			throw new IllegalArgumentException(LispNames.NLX_THROW_INTERNAL + " expects (%nlx-throw id value)");
 		}
+		emitThrow(parts.get(1), parts.get(2), null, ctx, className);
+	}
+
+	/**
+	 * {@code (throw tag [result])} -- the user-level dynamic non-local exit, riding the
+	 * same channel and plain {@code RuntimeException} as {@code %nlx-throw}. The two
+	 * never confuse each other: a block-instance id is a fresh {@code new Object()}, so
+	 * an {@code eq} tag test against it is always false, and the identity test a
+	 * {@code %nlx-catch} runs is always false against a Lisp tag value.
+	 */
+	static void compileTagThrow(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			throw new IllegalArgumentException(LispNames.THROW + " expects (throw tag result)");
+		}
+		emitThrow(parts.get(1), parts.size() == 3 ? parts.get(2) : am.ik.rontolisp.LispNil.INSTANCE,
+				UNMATCHED_THROW_MESSAGE, ctx, className);
+	}
+
+	/**
+	 * What an uncaught {@code throw} reports. A constant (the tag is not printed): the
+	 * message is built at COMPILE time, so a caught throw -- the whole point of the form
+	 * -- costs nothing at runtime.
+	 */
+	private static final String UNMATCHED_THROW_MESSAGE = LispNames.THROW + ": no enclosing catch for the tag";
+
+	private static void emitThrow(LispVal tagForm, LispVal valueForm, @org.jspecify.annotations.Nullable String message,
+			JvmLispCompiler.Ctx ctx, String className) {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensureNle(ctx.cp, className);
 		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
-		ConstantPool.MethodrefConstant exCtor = ctx.cp.addMethodref(runtimeEx,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("()V")));
+		ConstantPool.MethodrefConstant exCtor = ctx.cp.addMethodref(runtimeEx, ctx.cp.addNameAndType(
+				ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8(message == null ? "()V" : "(Ljava/lang/String;)V")));
 		int savedNextLocal = ctx.nextLocal;
 		int exSlot = ctx.allocTemp();
-		// ex = new RuntimeException()
+		// ex = new RuntimeException([message])
 		ctx.emit(Opcode.NEW);
 		ctx.emitU2(runtimeEx.index());
 		ctx.emit(Opcode.DUP);
+		if (message != null) {
+			JvmEmitHelper.compileStringLiteral(message, ctx);
+		}
 		ctx.emit(Opcode.INVOKESPECIAL);
 		ctx.emitU2(exCtor.index());
 		ctx.emit(Opcode.ASTORE);
@@ -85,11 +124,11 @@ final class JvmNlxCompiler {
 		ctx.emit(Opcode.AASTORE);
 		ctx.emit(Opcode.DUP);
 		ctx.emit(Opcode.ICONST_1);
-		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(tagForm, ctx, className);
 		ctx.emit(Opcode.AASTORE);
 		ctx.emit(Opcode.DUP);
 		ctx.emit(Opcode.ICONST_2);
-		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
+		JvmExprCompiler.compileExpr(valueForm, ctx, className);
 		ctx.emit(Opcode.AASTORE);
 		ctx.emit(Opcode.INVOKEVIRTUAL);
 		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
@@ -108,6 +147,25 @@ final class JvmNlxCompiler {
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(LispNames.NLX_CATCH_INTERNAL + " expects (%nlx-catch id body...)");
 		}
+		emitCatch(parts, ctx, className, false);
+	}
+
+	/**
+	 * {@code (catch tag body...)} -- the user-level dynamic catcher. Same region shape as
+	 * {@code %nlx-catch}, with two differences: the tag is an arbitrary expression
+	 * evaluated ONCE before the protected region (CL evaluates it on entry, not on the
+	 * unwind), and the landing compares it to the thrown tag with {@code eq} instead of
+	 * object identity.
+	 */
+	static void compileTagCatch(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException(LispNames.CATCH + " expects (catch tag body...)");
+		}
+		emitCatch(parts, ctx, className, true);
+	}
+
+	private static void emitCatch(List<LispVal> parts, JvmLispCompiler.Ctx ctx, String className, boolean eqTags) {
 		LispVal idForm = parts.get(1);
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensureNle(ctx.cp, className);
@@ -120,6 +178,20 @@ final class JvmNlxCompiler {
 		int resultSlot = ctx.allocTemp();
 		int excSlot = ctx.allocTemp();
 		int arrSlot = ctx.allocTemp();
+		// A user catch tag is an arbitrary expression CL evaluates ONCE, on entry:
+		// snapshot
+		// it into a slot outside the protected region (so a throw raised while evaluating
+		// it is not caught here) and compare the landing against the snapshot. The
+		// internal
+		// id form is a plain lexical read, kept re-evaluated on the unwind so an existing
+		// %nlx-catch stays byte-identical.
+		int tagSlot = -1;
+		if (eqTags) {
+			tagSlot = ctx.allocTemp();
+			JvmExprCompiler.compileExpr(idForm, ctx, className);
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(tagSlot);
+		}
 		if (!spill.live().isEmpty()) {
 			ctx.spillScopes.push(new JvmLispCompiler.SpillScope(spill, ctx.blockTargets.size()));
 		}
@@ -166,12 +238,38 @@ final class JvmNlxCompiler {
 		int ifNotSameExPos = ctx.code.size();
 		ctx.emit(Opcode.IF_ACMPNE);
 		ctx.emitU2(0);
-		// if (triple[1] != id) rethrow -- an outer block's exit
-		emitArrayElement(ctx, arrSlot, objectArrayClass, 1);
-		JvmExprCompiler.compileExpr(idForm, ctx, className);
-		int ifNotSameIdPos = ctx.code.size();
-		ctx.emit(Opcode.IF_ACMPNE);
-		ctx.emitU2(0);
+		// if the carried tag is not ours, rethrow -- an outer catcher's exit. The
+		// internal
+		// form compares the block-instance id by identity; a user catch compares the tag
+		// with eq, through pseudo-locals so the nil-safe eq compiler is reused verbatim.
+		int ifNotSameIdPos;
+		if (eqTags) {
+			int thrownSlot = ctx.allocTemp();
+			emitArrayElement(ctx, arrSlot, objectArrayClass, 1);
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(thrownSlot);
+			String thrownVar = "__throw_tag$" + thrownSlot;
+			String wantVar = "__catch_tag$" + tagSlot;
+			ctx.locals.put(thrownVar, thrownSlot);
+			ctx.locals.put(wantVar, tagSlot);
+			try {
+				JvmExprCompiler.compileExpr(eqForm(thrownVar, wantVar), ctx, className);
+			}
+			finally {
+				ctx.locals.remove(thrownVar);
+				ctx.locals.remove(wantVar);
+			}
+			ifNotSameIdPos = ctx.code.size();
+			ctx.emit(Opcode.IFNULL);
+			ctx.emitU2(0);
+		}
+		else {
+			emitArrayElement(ctx, arrSlot, objectArrayClass, 1);
+			JvmExprCompiler.compileExpr(idForm, ctx, className);
+			ifNotSameIdPos = ctx.code.size();
+			ctx.emit(Opcode.IF_ACMPNE);
+			ctx.emitU2(0);
+		}
 		// Matched: clear the channel, deliver triple[2].
 		ctx.emit(Opcode.GETSTATIC);
 		ctx.emitU2(Objects.requireNonNull(channel.nleTlField).index());
@@ -204,6 +302,12 @@ final class JvmNlxCompiler {
 		ctx.emit(resultSlot);
 		ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(start, end, handler, 0));
 		ctx.nextLocal = savedNextLocal;
+	}
+
+	/** The form {@code (eq <thrownVar> <wantVar>)} over two pseudo-locals. */
+	private static LispVal eqForm(String thrownVar, String wantVar) {
+		return new LispCons(new LispSymbol(LispNames.EQ_GENERAL), new LispCons(new LispSymbol(thrownVar),
+				new LispCons(new LispSymbol(wantVar), am.ik.rontolisp.LispNil.INSTANCE)));
 	}
 
 	/** Loads {@code ((Object[]) arrSlot)[index]} onto the stack. */

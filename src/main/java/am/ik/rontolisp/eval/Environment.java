@@ -2262,11 +2262,23 @@ public final class Environment implements Scope {
 	// eq: object identity. Like eql, but floats and ratios (which are distinct boxed
 	// objects, not interned like small integers or symbols) are never eq.
 	private static LispVal eqValue(LispVal a, LispVal b) {
+		return isEqStrict(a, b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+	}
+
+	/**
+	 * The {@code eq} predicate as a Java boolean, for evaluator internals that compare
+	 * with {@code eq} without building a Lisp value -- the {@code catch}/{@code throw}
+	 * tag match.
+	 * @param a the first value
+	 * @param b the second value
+	 * @return whether the two values are {@code eq}
+	 */
+	static boolean isEqStrict(LispVal a, LispVal b) {
 		if ((a instanceof LispDouble && b instanceof LispDouble)
 				|| (a instanceof LispRatio && b instanceof LispRatio)) {
-			return LispNil.INSTANCE;
+			return false;
 		}
-		return eqlValue(a, b);
+		return isEq(a, b);
 	}
 
 	// eql: like eq, but numbers of the same type and value are eql. Cons cells (and other

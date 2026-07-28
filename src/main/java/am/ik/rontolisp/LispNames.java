@@ -1705,6 +1705,20 @@ public final class LispNames {
 	 */
 	public static final String NLX_THROW_INTERNAL = "%NLX-THROW";
 
+	/**
+	 * The {@code throw} special form: {@code (throw tag result)} transfers control (and
+	 * the value of {@code result}) to the most recent {@code catch} whose tag is
+	 * {@code eq} to {@code tag}, unwinding the stack and running every intervening
+	 * {@code unwind-protect} cleanup. Unlike {@code return-from}/{@code go} the target is
+	 * DYNAMIC -- the tag is an ordinary runtime value, so the catcher need not be
+	 * lexically visible. A {@code throw} with no matching {@code catch} is an error. On
+	 * the compile path it rides the same non-local-exit machinery as a cross-lambda
+	 * {@code return-from} ({@code .kb/do-return-block.md}), so a program using it
+	 * compiles in EH mode on the wasm-GC backends.
+	 * @see #CATCH
+	 */
+	public static final String THROW = "THROW";
+
 	// Type predicates
 
 	/** The {@code null} built-in function. */
@@ -2697,14 +2711,22 @@ public final class LispNames {
 	public static final String THEN_STAR = "THEN*";
 
 	/**
-	 * The {@code catch} future-as-value combinator provided by the {@code rontolisp}
-	 * package: {@code (rontolisp:catch future handler)} returns a fresh future that, on
-	 * the input's error, invokes {@code handler} on the condition and settles to its
+	 * The name {@code CATCH}, which two unrelated operators share -- the package
+	 * qualification tells them apart, and both spellings are canonical symbol names, so
+	 * one constant serves both:
+	 * <ul>
+	 * <li>BARE ({@code catch}, or {@code cl:}-qualified): the CL {@code catch} special
+	 * form {@code (catch tag body...)}. It evaluates {@code tag}, runs {@code body} as an
+	 * implicit {@code progn} and returns its value -- unless a {@code throw} to an
+	 * {@code eq} tag fires within its dynamic extent, in which case the thrown value
+	 * becomes the form's value. See {@link #THROW}.</li>
+	 * <li>{@link #CATCH_QUALIFIED} ({@code rontolisp:catch}): the future-as-value
+	 * combinator {@code (rontolisp:catch future handler)}, returning a fresh future that,
+	 * on the input's error, invokes {@code handler} on the condition and settles to its
 	 * return value; on success it passes the value through. Deliberately named
-	 * {@code catch}: it is the JavaScript {@code .catch} shape, not the CL
-	 * {@code catch}/{@code throw} tag-based non-local exit. Users writing in the
-	 * {@code cl-user} package (or with {@code cl:} qualified) still get the CL sense; a
-	 * program that qualifies with {@code rontolisp:}/{@code rl:} gets this operator.
+	 * {@code catch}: it is the JavaScript {@code .catch} shape, not the tag-based
+	 * non-local exit.</li>
+	 * </ul>
 	 */
 	public static final String CATCH = "CATCH";
 

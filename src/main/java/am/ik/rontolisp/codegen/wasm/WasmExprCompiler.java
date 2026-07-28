@@ -804,6 +804,8 @@ final class WasmExprCompiler {
 				case LispNames.NLX_TAG_INTERNAL -> WasmNlxCompiler.compileTag(ctx);
 				case LispNames.NLX_CATCH_INTERNAL -> WasmNlxCompiler.compileCatch(cons, ctx);
 				case LispNames.NLX_THROW_INTERNAL -> WasmNlxCompiler.compileThrow(cons, ctx);
+				case LispNames.CATCH -> WasmNlxCompiler.compileTagCatch(cons, ctx);
+				case LispNames.THROW -> WasmNlxCompiler.compileTagThrow(cons, ctx);
 				case LispNames.RETURN_FROM -> WasmReturnFromCompiler.compile(cons, ctx);
 				case LispNames.RETURN -> WasmReturnCompiler.compile(cons, ctx);
 				case LispNames.INCF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx);

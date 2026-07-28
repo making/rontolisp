@@ -12,7 +12,6 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 
 | Feature | Status |
 | --- | --- |
-| `catch` / `throw` | not available (`block`/`return-from`/`tagbody`/`go` are) |
 | restarts (`handler-bind`, `restart-case`, `invoke-restart`, `cerror`, ...) | not available |
 | `symbol-macrolet` | not available (`macrolet` is) |
 | `&whole` / `&environment` | not available; a `defmacro` lambda list takes required parameters plus one trailing `&rest`/`&body` |
@@ -27,7 +26,7 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 | `#:name` | reads as a plain symbol, without gensym-style freshness |
 | `*modules*` | not available (`require`/`provide` are) |
 | complex numbers | not available |
-| `unwind-protect` / conditions under `--no-gc` | compile error (available on every other backend) |
+| `catch` / `throw` / `unwind-protect` / conditions under `--no-gc` | compile error (available on every other backend) |
 
 ## Multiple values
 
@@ -47,8 +46,8 @@ Lisp:
 
 ## Non-local exit
 
-`catch` / `throw` — no dynamically scoped exits.
-
+[`catch`](../reference/special-forms/catch.md) /
+[`throw`](../reference/special-forms/throw.md),
 [`block`](../reference/macros/block.md) /
 [`return-from`](../reference/macros/return-from.md) and
 [`tagbody`](../reference/special-forms/tagbody.md) /
@@ -61,10 +60,10 @@ Lisp:
   function; the interpreter additionally supports dynamic `go` across function
   boundaries.
 
-A cross-`lambda` `return-from`, `unwind-protect`, and condition catching all
-compile in exception-handling mode, so the emitted wasm-GC modules need
-`wasmtime -W exceptions=y` (37+); under `--no-gc` `unwind-protect` and the
-condition forms are a compile error.
+A cross-`lambda` `return-from`, `catch`/`throw`, `unwind-protect`, and condition
+catching all compile in exception-handling mode, so the emitted wasm-GC modules
+need `wasmtime -W exceptions=y` (37+); under `--no-gc` `catch`/`throw`,
+`unwind-protect` and the condition forms are a compile error.
 
 ## Restarts
 

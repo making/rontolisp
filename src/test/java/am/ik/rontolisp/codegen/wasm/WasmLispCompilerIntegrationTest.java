@@ -4869,6 +4869,74 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void catchThrow() throws Exception {
+		// catch/throw: a DYNAMIC non-local exit riding the block-exit tag -- the throw
+		// need not be lexically inside the catch, only within its dynamic extent, and the
+		// tag is a runtime value compared with eq.
+		assertThat(compileAndRun("""
+				(print (catch 'done (+ 1 2)))
+				(print (catch 'done (throw 'done :thrown) :not-reached))
+				(defun deep (n) (if (= n 0) (throw 'bottom :hit) (deep (- n 1))))
+				(print (catch 'bottom (deep 5)))
+				(print (catch 'outer (catch 'inner (throw 'outer :to-outer)) :not-reached))
+				(print (list :a (catch 'k (throw 'k :b)) :c))
+				(let ((tag (list 1)))
+				  (print (catch tag (throw tag :computed-tag))))
+				(print (catch 'outer (catch (list 1) (throw 'outer :not-eq-to-inner))))
+				""")).isEqualTo("3\n:THROWN\n:HIT\n:TO-OUTER\n(:A :B :C)\n:COMPUTED-TAG\n:NOT-EQ-TO-INNER");
+	}
+
+	@Test
+	void catchThrowRunsUnwindProtectCleanups() throws Exception {
+		// A throw unwinds the real wasm stack, so every intervening unwind-protect
+		// cleanup (a catch_all_ref that reraises with throw_ref) runs -- innermost first.
+		assertThat(compileAndRun("""
+				(let ((log nil))
+				  (print (catch 'z
+				           (unwind-protect
+				               (unwind-protect (throw 'z :deep) (setq log (cons :inner log)))
+				             (setq log (cons :outer log)))))
+				  (print log))
+				(print (catch 'c (unwind-protect :body (throw 'c :from-cleanup))))
+				""")).isEqualTo(":DEEP\n(:OUTER :INNER)\n:FROM-CLEANUP");
+	}
+
+	@Test
+	void throwIsNotCaughtByHandlerCase() throws Exception {
+		// A throw is a non-local exit, not a signaled condition: the handler-case
+		// block-exit passthrough must let it through AND restore the handler-depth
+		// global,
+		// so a later unhandled signal still yields nil instead of trapping.
+		assertThat(compileAndRun("""
+				(defun hc-throw (xs)
+				  (handler-case (mapcar (lambda (x) (if (evenp x) (throw 'up :hit) x)) xs)
+				    (error (e) :caught)))
+				(print (catch 'up (hc-throw '(1 2 3))))
+				(print (hc-throw '(1 3)))
+				(print (signal "quiet"))
+				(print (catch 'up (handler-case (error "boom") (error (e) :caught))))
+				""")).isEqualTo(":HIT\n(1 3)\nNIL\n:CAUGHT");
+	}
+
+	@Test
+	void catchThrowAndCrossLambdaExitDoNotCollide() throws Exception {
+		// Both kinds throw on the block-exit tag, so each must pass through the other's
+		// landing pad untouched. The payload shape is what tells them apart: a block exit
+		// carries (id . value) with an i31 id, a user throw ((tag) . value). Without the
+		// wrapper cons the fixnum tag 1 below would ref.eq a live block-instance id and
+		// the catch would swallow the return-from (it did, before the wrapper).
+		assertThat(compileAndRun("""
+				(defun probe2 (xs)
+				  (list :after (catch 1 (mapcar #'(lambda (x) (if (evenp x) (return-from probe2 :exited) x)) xs))))
+				(print (probe2 '(1 2)))
+				(defun probe3 (xs)
+				  (list :from-probe
+				        (mapcar #'(lambda (x) (if (evenp x) (return-from probe3 :nlx) (throw 1 :thrown))) xs)))
+				(print (catch 1 (list :outer (probe3 '(1 2)))))
+				""")).isEqualTo(":EXITED\n:THROWN");
+	}
+
+	@Test
 	void charComparisonExtensions() throws Exception {
 		assertThat(compileAndRun("""
 				(print (char> #\\c #\\b #\\a))
@@ -6703,7 +6771,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void listSpecialForms() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-special-forms))")).isEqualTo(
-				"(DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY UNWIND-PROTECT WHILE)");
+				"(CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)");
 	}
 
 	@Test

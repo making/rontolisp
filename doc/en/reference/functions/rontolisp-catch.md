@@ -30,14 +30,16 @@ A non-future first argument is a `type-error`.
 
 ### Name collision with `cl:catch`
 
-Common Lisp's `catch` / `throw` is a tag-based non-local exit special form.
-This operator is `rontolisp:catch`, in a different package: qualified names
-never collide (`cl:catch` still names the CL special form), and the
-`rontolisp` package does not `:use` `cl`, so a bare `catch` inside
-`(in-package :rontolisp)` reaches this operator. A user in `cl-user` (or in
-a package that `:use`s both) needs the explicit `rontolisp:` / `rl:` prefix
-to get this operator, and the explicit `cl:` prefix (or an unqualified
-bare name in `cl-user`) to get the tag-based special form.
+Common Lisp's [`catch`](../special-forms/catch.md) /
+[`throw`](../special-forms/throw.md) is a tag-based non-local exit special
+form. This operator is `rontolisp:catch`, in a different package: qualified
+names never collide (`cl:catch` still names the CL special form). A user in
+`cl-user` (or in a package that `:use`s both) needs the explicit
+`rontolisp:` / `rl:` prefix to get this operator, and the explicit `cl:`
+prefix (or an unqualified bare name in `cl-user`) to get the tag-based
+special form. Inside `(in-package :rontolisp)` a bare `catch` is neither:
+the name belongs to `cl`, which that package does not `:use`, so it is an
+"Undefined symbol: CATCH (use CL:CATCH)" error until you qualify it.
 
 ## Backend support
 

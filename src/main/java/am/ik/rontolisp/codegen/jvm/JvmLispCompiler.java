@@ -172,7 +172,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// return-from naturally nests around the injected let/%nlx-catch).
 		CrossLambdaExitLowering.Result crossLambda = CrossLambdaExitLowering.lower(program);
 		program = crossLambda.program();
-		boolean crossLambdaExit = crossLambda.used();
+		// catch/throw ride the same _nleTl channel as a lowered cross-lambda exit, so
+		// either one makes handler-case non-local-exit aware.
+		boolean blockExitChannel = crossLambda.used() || programUsesSymbol(program, LispNames.CATCH)
+				|| programUsesSymbol(program, LispNames.THROW);
 		program = LambdaLists.desugarProgram(program);
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
@@ -796,7 +799,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.httpHandlerRuntime(httpHandlerRuntime)
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
-			.crossLambdaExit(crossLambdaExit)
+			.blockExitChannel(blockExitChannel)
 			.usesFloatArray(usesFloatArray)
 			.usesIntArray(usesIntArray)
 			.usesArrays(usesArrays)
@@ -2999,12 +3002,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean dynamic = false;
 
 		/**
-		 * True when the program lowers a cross-lambda {@code return-from} (a
-		 * {@code %nlx-*} form is emitted). Gates the {@code handler-case} handler's
-		 * non-local-exit awareness so a program without a cross-lambda exit stays
-		 * byte-identical.
+		 * True when the program can put a non-local exit on the {@code _nleTl} channel --
+		 * it lowers a cross-lambda {@code return-from} (a {@code %nlx-*} form is emitted)
+		 * or uses {@code catch}/{@code throw}. Gates the {@code handler-case} handler's
+		 * non-local-exit awareness so a program with neither stays byte-identical.
 		 */
-		boolean crossLambdaExit = false;
+		boolean blockExitChannel = false;
 
 		/**
 		 * True when the program can produce a packed float array (a {@code #d(...)}
@@ -3178,7 +3181,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.conditionChannel = builder.conditionChannel;
 			this.layoutPool = builder.layoutPool;
 			this.dynamic = builder.dynamic;
-			this.crossLambdaExit = builder.crossLambdaExit;
+			this.blockExitChannel = builder.blockExitChannel;
 			this.usesFloatArray = builder.usesFloatArray;
 			this.usesIntArray = builder.usesIntArray;
 			this.usesArrays = builder.usesArrays;
@@ -3400,7 +3403,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			private boolean dynamic = false;
 
-			private boolean crossLambdaExit = false;
+			private boolean blockExitChannel = false;
 
 			private boolean usesFloatArray = false;
 
@@ -3742,8 +3745,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder crossLambdaExit(boolean crossLambdaExit) {
-				this.crossLambdaExit = crossLambdaExit;
+			Builder blockExitChannel(boolean blockExitChannel) {
+				this.blockExitChannel = blockExitChannel;
 				return this;
 			}
 

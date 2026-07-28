@@ -29,3 +29,5 @@ categories:
       - { slug: rontolisp-await, name: "rontolisp:await" }
       - { slug: tagbody, name: tagbody }
       - { slug: go, name: go }
+      - { slug: catch, name: catch }
+      - { slug: throw, name: throw }

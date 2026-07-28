@@ -175,9 +175,11 @@ a future *as a value*, each returning a fresh future:
 
 A non-future first argument to any of the four is a `type-error` — there is no
 JavaScript-style auto-coercion to a resolved promise. And note that
-`rontolisp:catch` is *not* Common Lisp's `cl:catch`/`throw` tag-based special
-form: they live in different packages and qualified names never collide (see
-the [catch reference page](../reference/functions/rontolisp-catch.md) for the
+`rontolisp:catch` is *not* Common Lisp's
+[`catch`](../reference/special-forms/catch.md)/[`throw`](../reference/special-forms/throw.md)
+tag-based special form: they live in different packages and qualified names
+never collide (see the
+[catch reference page](../reference/functions/rontolisp-catch.md) for the
 naming details).
 
 ## Asynchronous streams

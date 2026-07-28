@@ -33,6 +33,14 @@ import am.ik.wasm.Type;
  * {@code handler-case} ({@code catch $lisp-cond}) never intercepts a cross-lambda exit;
  * only the handler-depth bookkeeping needs the {@link WasmHandlerCaseCompiler} block-exit
  * passthrough.
+ * <p>
+ * The user-level {@code catch}/{@code throw} pair rides the SAME tag
+ * ({@link #compileTagCatch}/{@link #compileTagThrow}), so one passthrough keeps covering
+ * both and each kind's landing pad forwards the other's payload untouched. They are told
+ * apart by the payload shape: a block exit carries {@code (id . value)} with an i31 id, a
+ * user throw {@code ((tag) . value)} with a wrapper cons. Without the wrapper the two
+ * would collide -- {@code ref.eq} on an i31 is VALUE equality, so a {@code (catch 3 ...)}
+ * would swallow the exit of a block whose minted id happens to be 3.
  */
 final class WasmNlxCompiler {
 
@@ -77,20 +85,74 @@ final class WasmNlxCompiler {
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_BLOCK_EXIT);
 	}
 
+	/**
+	 * {@code (throw tag [result])} -- the user-level dynamic non-local exit, sharing the
+	 * {@code $block-exit} tag with {@code %nlx-throw} (so the two pass through each
+	 * other's landing pads and a single handler-case passthrough covers both). The
+	 * payload is {@code ((tag) . value)}: the extra wrapper cons is what makes the two
+	 * kinds distinguishable, since a block-instance id is an i31 and {@code ref.eq} would
+	 * otherwise report a match for a fixnum catch tag that happens to equal a live id.
+	 */
+	static void compileTagThrow(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			throw new IllegalArgumentException(LispNames.THROW + " expects (throw tag result)");
+		}
+		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		if (parts.size() == 3) {
+			WasmExprCompiler.compileExpr(parts.get(2), ctx);
+		}
+		else {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+		}
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.THROW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_BLOCK_EXIT);
+	}
+
 	/** {@code (%nlx-catch id body...)} -- catch a matching block exit; else rethrow. */
 	static void compileCatch(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(LispNames.NLX_CATCH_INTERNAL + " expects (%nlx-catch id body...)");
 		}
+		emitCatch(parts, ctx, false);
+	}
+
+	/**
+	 * {@code (catch tag body...)} -- the user-level dynamic catcher. Same region shape as
+	 * {@code %nlx-catch}, with two differences: the tag is an arbitrary expression
+	 * evaluated ONCE before the protected region (CL evaluates it on entry, not on the
+	 * unwind), and the landing accepts only the wrapped {@code ((tag) . value)} payload
+	 * {@link #compileTagThrow} builds, comparing the tag with {@code eq}.
+	 */
+	static void compileTagCatch(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException(LispNames.CATCH + " expects (catch tag body...)");
+		}
+		emitCatch(parts, ctx, true);
+	}
+
+	private static void emitCatch(List<LispVal> parts, WasmLispCompiler.Ctx ctx, boolean eqTags) {
 		LispVal idForm = parts.get(1);
 		int payloadSlot = ctx.allocTemp();
-		// Snapshot the block-instance id into a dedicated local BEFORE the protected
-		// region, and compare the landing against the snapshot instead of re-reading
-		// the (boxed) id variable after the unwind. The id is minted immediately
-		// before this form and never assigned again, so the snapshot is exact; it
-		// keeps the landing's compare independent of the capture/box read path. Not
-		// used in state-machine mode, where a resume re-enters past this entry code.
+		// Snapshot the block-instance id (a user catch's tag) into a dedicated local
+		// BEFORE the protected region, and compare the landing against the snapshot
+		// instead of re-reading the (boxed) id variable after the unwind. The id is
+		// minted immediately before this form and never assigned again, so the snapshot
+		// is exact; it keeps the landing's compare independent of the capture/box read
+		// path. For a user catch the snapshot is also what makes the tag expression
+		// evaluate exactly ONCE, on entry, as CL requires. Not used in state-machine
+		// mode, where a resume re-enters past this entry code -- there a non-constant
+		// catch tag is re-evaluated on the unwind (a quoted-symbol tag, the normal case,
+		// is unaffected).
 		int idSlot = -1;
 		if (ctx.asyncResume == null) {
 			idSlot = ctx.allocTemp();
@@ -144,8 +206,25 @@ final class WasmNlxCompiler {
 		ctx.writer.write(Instruction.END); // block $h -- the payload cons is on the stack
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeSignedLeb128(payloadSlot);
-		// tag = car(payload); if it ref.eq the id, deliver cdr(payload); else rethrow.
-		emitConsField(ctx, payloadSlot, 0);
+		// car(payload) is the block-instance id (an i31) for %nlx-catch and the (tag)
+		// wrapper cons for catch; either way, when it is ours deliver cdr(payload).
+		if (eqTags) {
+			// A bare id means a cross-lambda return-from is passing through: not ours.
+			int wrapSlot = ctx.allocTemp();
+			emitConsField(ctx, payloadSlot, 0);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(wrapSlot);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(wrapSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			ctx.wasmCtrlDepth++;
+			emitConsField(ctx, wrapSlot, 0);
+		}
+		else {
+			emitConsField(ctx, payloadSlot, 0);
+		}
 		if (idSlot >= 0) {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeSignedLeb128(idSlot);
@@ -153,13 +232,23 @@ final class WasmNlxCompiler {
 		else {
 			WasmExprCompiler.compileExpr(idForm, ctx);
 		}
-		ctx.writer.write(Instruction.REF_EQ);
+		if (eqTags) {
+			// A user tag is an ordinary value compared with eq, not a unique id.
+			WasmEmitHelper.emitEqComparison(ctx);
+		}
+		else {
+			ctx.writer.write(Instruction.REF_EQ);
+		}
 		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		ctx.wasmCtrlDepth++;
 		emitConsField(ctx, payloadSlot, 1);
 		ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - doneDepth);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // if
+		if (eqTags) {
+			ctx.wasmCtrlDepth--;
+			ctx.writer.write(Instruction.END); // if (the payload is a catch wrapper)
+		}
 		// No match: rethrow the same payload for an outer establishing block.
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(payloadSlot);

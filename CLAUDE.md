@@ -178,8 +178,8 @@ java -jar $JAR test.lisp -o test-comp.wasm --component && \
   wasmtime run -W gc=y test-comp.wasm
 ```
 
-A program using `handler-case`/`ignore-errors`/`unwind-protect` compiles in EH
-mode, an ASYNC component (async-defun/async-lambda/await, incl. every
+A program using `handler-case`/`ignore-errors`/`unwind-protect`/`catch`/`throw`
+compiles in EH mode, an ASYNC component (async-defun/async-lambda/await, incl. every
 fetch/serve program) forces EH mode too, and so does a **cross-lambda
 `return-from`** (one inside a lambda that names an enclosing block, lowered to a
 block-exit throw/catch): add `-W exceptions=y` to BOTH wasm run commands

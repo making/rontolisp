@@ -1455,7 +1455,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// return-from naturally nests around the injected let/%nlx-catch).
 		CrossLambdaExitLowering.Result crossLambda = CrossLambdaExitLowering.lower(program);
 		program = crossLambda.program();
-		boolean crossLambdaExit = crossLambda.used();
+		// catch/throw throw on the same block-exit tag (a wrapped payload tells the two
+		// kinds apart), so either one emits the tag and makes handler-case aware of it.
+		boolean blockExitTag = crossLambda.used() || programUsesSymbol(program, LispNames.CATCH)
+				|| programUsesSymbol(program, LispNames.THROW);
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		program = LambdaLists.desugarProgram(program);
@@ -1507,7 +1510,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// so it forces EH mode (and the `wasmtime -W exceptions=y` run flag) exactly like
 		// a
 		// catching form. A program without one stays byte-identical and flag-free.
-		boolean ehMode = programUsesEhForm(program) || this.asyncMode || crossLambdaExit;
+		boolean ehMode = programUsesEhForm(program) || this.asyncMode || blockExitTag;
 		// The rontolisp:tcp-* built-ins are component-only the same way: they are the
 		// spliced sockets.lisp defuns over a wit-imported wasi:sockets@0.3.0 (an
 		// ordinary user import -- the base variant; the dedicated sockets blob variant
@@ -1916,7 +1919,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.stringTable(stringTable)
 			.ehMode(ehMode)
-			.crossLambdaExit(crossLambdaExit)
+			.blockExitTag(blockExitTag)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
 			.rawSentinelGlobalIndex(rawSentinelGlobalIndex)
 			.functions(functions)
@@ -3647,9 +3650,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			mainWriter.writeTagSection(tags -> {
 				tags.addTag(TYPE_PRINT_VAL);
 				// The block-exit tag (index 1), only when a cross-lambda return-from is
-				// lowered -- so a handler-case-only program keeps exactly one tag and
-				// stays byte-identical.
-				if (crossLambdaExit) {
+				// lowered or catch/throw is used -- so a handler-case-only program keeps
+				// exactly one tag and stays byte-identical.
+				if (blockExitTag) {
 					tags.addTag(TYPE_PRINT_VAL);
 				}
 			});
@@ -4314,7 +4317,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (cons.car() instanceof LispSymbol sym) {
 			switch (sym.name()) {
 				case LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.UNWIND_PROTECT,
-						LispNames.WITH_OPEN_FILE, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING -> {
+						LispNames.WITH_OPEN_FILE, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
+						LispNames.CATCH, LispNames.THROW -> {
 					return true;
 				}
 				default -> {
@@ -4665,12 +4669,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean ehMode = false;
 
 		/**
-		 * True when the program lowers a cross-lambda {@code return-from}: the block-exit
-		 * tag (index 1) exists and {@code handler-case} is made block-exit aware (it lets
-		 * a block-exit unwind through, decrementing the handler depth). Gated so a
-		 * program without a cross-lambda exit stays byte-identical.
+		 * True when the program throws on the block-exit tag -- it lowers a cross-lambda
+		 * {@code return-from}, or it uses {@code catch}/{@code throw}, which share the
+		 * tag. The tag (index 1) is then emitted and {@code handler-case} is made
+		 * block-exit aware (it lets such an unwind through, decrementing the handler
+		 * depth). Gated so a program with neither stays byte-identical.
 		 */
-		boolean crossLambdaExit = false;
+		boolean blockExitTag = false;
 
 		/**
 		 * The wasm global index of the handler-depth counter (a {@code (mut i32)} = 0
@@ -4896,7 +4901,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.component = builder.component;
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
-			this.crossLambdaExit = builder.crossLambdaExit;
+			this.blockExitTag = builder.blockExitTag;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
 			this.rawSentinelGlobalIndex = builder.rawSentinelGlobalIndex;
 			this.simd = builder.simd;
@@ -4950,7 +4955,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private boolean ehMode = false;
 
-			private boolean crossLambdaExit = false;
+			private boolean blockExitTag = false;
 
 			private int ehDepthGlobalIndex = -1;
 
@@ -5052,8 +5057,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder crossLambdaExit(boolean crossLambdaExit) {
-				this.crossLambdaExit = crossLambdaExit;
+			Builder blockExitTag(boolean blockExitTag) {
+				this.blockExitTag = blockExitTag;
 				return this;
 			}
 

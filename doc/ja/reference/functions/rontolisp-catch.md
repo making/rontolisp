@@ -30,14 +30,16 @@ future が値として境界を越え、JavaScript の `.catch` 風の単一ハ�
 
 ### `cl:catch` との名前衝突
 
-Common Lisp の `catch` / `throw` はタグベースの非局所脱出の特殊形式です。
-本操作は別パッケージの `rontolisp:catch` です: 修飾名は衝突しません
-(`cl:catch` は依然として CL 特殊形式)。また `rontolisp` パッケージは
-`cl` を `:use` していないので、`(in-package :rontolisp)` 内での裸の
-`catch` は本操作に解決されます。`cl-user` (または両方を `:use` する
+Common Lisp の [`catch`](../special-forms/catch.md) /
+[`throw`](../special-forms/throw.md) はタグベースの非局所脱出の特殊形式
+です。本操作は別パッケージの `rontolisp:catch` です: 修飾名は衝突しません
+(`cl:catch` は依然として CL 特殊形式)。`cl-user` (または両方を `:use` する
 パッケージ) のユーザーは、本操作を得るには明示的に `rontolisp:` /
 `rl:` 接頭辞が必要で、タグベースの特殊形式を得るには明示的な `cl:`
 接頭辞 (または `cl-user` 内での裸の名前) が必要です。
+`(in-package :rontolisp)` 内での裸の `catch` はそのどちらでもありません:
+この名前は `cl` に属し、当該パッケージは `cl` を `:use` していないため、
+修飾するまで "Undefined symbol: CATCH (use CL:CATCH)" エラーになります。
 
 ## バックエンドのサポート
 
