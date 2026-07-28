@@ -7632,16 +7632,18 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void componentAsyncStdinReadDoesNotStallTheInstance() throws Exception {
 		// The stdin migration's promotion goal: a pending stdin read in an async body
-		// suspends the task, so a concurrent 100ms timer fires BEFORE the line the
-		// pipe delivers much later. The preview1 adapter's blocking stdin branch
-		// could never do this -- it parks the whole instance.
+		// suspends the task, so a concurrent timer fires while the pipe is still empty.
+		// The preview1 adapter's blocking stdin branch could never do this -- it parks
+		// the whole instance.
 		//
-		// The pipe delay must comfortably exceed wasmtime's cold-start: `sleep` starts
-		// with the subshell, in parallel with wasmtime launch, so any startup latency
-		// (heavier under a loaded/shared-container CI runner) eats into the margin. Too
-		// tight and the line is already buffered by the time the body reaches read-line,
-		// inverting the order ("hello" before "timer fired"). 2s vs a 100ms timer keeps
-		// a ~1.9s cushion while still proving the timer wins.
+		// The feeder is driven by the guest's own output, not by a wall clock: a FIFO
+		// held open with nothing in it is stdin, and "hello" is written only once
+		// "timer fired" has appeared on stdout. That makes the expected order the only
+		// possible one when the read suspends, and unreachable when it does not -- a
+		// sleep-vs-cold-start race could invert it whenever the runner was loaded
+		// enough for the line to be buffered before the body reached read-line. A
+		// stalled instance never prints the marker, so the poll times out and reports
+		// it rather than passing on a lucky interleaving.
 		String program = """
 				(rontolisp:async-defun reader ()
 				  (print (read-line)))
@@ -7653,10 +7655,33 @@ class WasmLispCompilerIntegrationTest {
 				  (rontolisp:await r))
 				""";
 		byte[] componentBytes = compileFetchComponent(program);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/stdin-async.component.wasm");
-		ExecResult result = wasmtime.execInContainer("sh", "-c",
-				"(sleep 2; echo hello) | wasmtime run -W gc=y -W exceptions=y /tmp/stdin-async.component.wasm");
-		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("stdin-async.component.wasm"));
+		// Opening the FIFO read-write keeps a writer attached for the whole run, so
+		// wasmtime's own open of it for reading returns at once and never sees EOF.
+		ExecResult result = wasmtime.execInContainer("sh", "-c", """
+				cd %s || exit 1
+				rm -f stdin-async.fifo stdin-async.out
+				mkfifo stdin-async.fifo && : > stdin-async.out || exit 1
+				exec 3<> stdin-async.fifo
+				wasmtime run -W gc=y -W exceptions=y stdin-async.component.wasm < stdin-async.fifo > stdin-async.out &
+				runner=$!
+				polls=0
+				until grep -q 'timer fired' stdin-async.out; do
+				  polls=$((polls + 1))
+				  if [ $polls -gt 300 ]; then
+				    echo 'TIMED OUT waiting for the timer while the stdin read was pending'
+				    kill $runner 2>/dev/null
+				    break
+				  fi
+				  sleep 0.1
+				done
+				echo hello >&3
+				wait $runner
+				status=$?
+				cat stdin-async.out
+				exit $status
+				""".formatted(workDir()));
+		assertThat(result.getExitCode()).as("stdout: %s stderr: %s", result.getStdout(), result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("\"timer fired\"\n\"hello\"");
 	}
 

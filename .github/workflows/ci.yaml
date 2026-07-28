@@ -30,7 +30,11 @@ jobs:
     - name: Unit Tests
       # The intra-class parallelism default in junit-platform.properties targets a
       # development machine; this runner has 4 vCPU shared by two surefire forks.
-      run: ./mvnw -V --no-transfer-progress -Djunit.jupiter.execution.parallel.config.fixed.parallelism=4 clean test
+      # Oversubscribed on purpose: each case in the dominating class alternates CPU
+      # (compile the module, run wasmtime) with a Docker round trip it spends idle,
+      # and at parallelism=4 the class only sped up 1.4x on 4 vCPU -- well short of
+      # what a CPU-bound job would give, so the threads are waiting, not computing.
+      run: ./mvnw -V --no-transfer-progress -Djunit.jupiter.execution.parallel.config.fixed.parallelism=8 clean test
   native-image:
     needs: test
     strategy:
