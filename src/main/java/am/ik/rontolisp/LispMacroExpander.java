@@ -5652,9 +5652,18 @@ public final class LispMacroExpander {
 		LispVal tail = fmtCall(LispNames.SUBSEQ, r1, fmtCall(LispNames.ADD, vs1, n), fmtCall(LispNames.LENGTH, r1));
 		LispVal functional = fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), head, mid, tail);
 		LispSymbol k = new LispSymbol("__rpl_k");
-		LispVal copyLoop = listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(k, n)),
+		// The source reads with aref when seq2 is an array (a string included: aref
+		// reads a string's character on every backend) and elt only for a list. The
+		// aref shape lets the wasm backend's fused store read a packed integer
+		// vector's element raw -- an elt call boxed every byte of a
+		// vector-to-vector copy (ironclad's copy-digest, ~7% of the PBKDF2 profile).
+		LispVal eltLoop = listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(k, n)),
 				fmtCall(LispNames.ROW_MAJOR_ASET, r1, fmtCall(LispNames.ADD, vs1, k),
 						fmtCall(LispNames.ELT, r2, fmtCall(LispNames.ADD, vs2, k)))));
+		LispVal arefLoop = listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(k, n)),
+				fmtCall(LispNames.ROW_MAJOR_ASET, r1, fmtCall(LispNames.ADD, vs1, k),
+						fmtCall(LispNames.AREF, r2, fmtCall(LispNames.ADD, vs2, k)))));
+		LispVal copyLoop = makeIf(callOf(LispNames.LISTP, r2), eltLoop, arefLoop);
 		LispVal mutating = makeProgn(List.of(copyLoop, r1));
 		LispVal body = makeIf(callOf(LispNames.ARRAYP_INTERNAL, r1), mutating, functional);
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));

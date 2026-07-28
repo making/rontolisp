@@ -97,6 +97,33 @@ boxes; Cranelift does neither.
    Plausible next levers if anyone needs more: raw comparisons over unboxed
    locals (kills `_rat_cmp` + the boxed counter reads), fusing the single-op
    index math, and the mdx-updater `replace` traffic.
+   Stage 4 (close-out): DONE 2026-07-27 (~0.93 s -> **~0.70 s** on BOTH wasm
+   backends -- JVM parity, 0.69 s). All the "plausible next levers" above,
+   plus what the re-profile actually showed (`.kb/wasm-int-fusion.md` stage-4
+   note has the mechanics):
+   - **fused raw comparisons** (`tryCompileCompare`): killed `_rat_cmp` /
+     `_rat_cmp_bits` / `_big_cmp` (~7%) -- loop tests run as inline i64
+     compares with the generic-fallback recompute.
+   - **single-op fusion** for raw-reading leaves OR a literal operand: killed
+     the `_rat_add`/`_rat_sub` singles (index math, incf-of-local).
+   - **inline i31 root boxing** at fused sites (only out-of-i31 pays
+     `_int_new`).
+   - **raw leaf-root stores** (aset value = bare packed aref / raw local /
+     constant) + `expandReplace` reading array sources with `aref`: the
+     mdx/copy-digest `replace` loops move bytes raw (~7% -> ~5% self, no
+     boxing).
+   - **statement-position literals emit nothing** (defun/lambda bodies through
+     `compileForEffect`): ironclad's DOCSTRINGS cost a `_str_build` per call.
+   - **stringp without the unconditional `_charvec_to_str` call** (the
+     setf-aref string dispatch runs it per store).
+   Post-stage-4 profile: UPDATE-SHA256-BLOCK ~31% / SHA256-EXPAND-BLOCK ~11%
+   self (the fused rounds themselves -- wasmtime codegen vs C2 is the floor),
+   `_int_new` ~4.5% boundary crossings, `_iv_set` ~2.5%, residual `_rat_add`
+   ~2% = incf of eqref PARAMETERS (params have no raw representation; a raw
+   param copy is the documented follow-up trigger in
+   `.kb/wasm-unboxed-locals.md`). Pinned by
+   `fusedComparisonsAndRawLeafStoresMatchTheGenericPath` + the
+   `fused-comparisons-and-raw-leaf-stores` ci-spec case.
 3. NOT worth doing for this: SIMD (SHA-256 is serially dependent) and further
    wasmtime flags (nothing engine-level is left in the profile).
 

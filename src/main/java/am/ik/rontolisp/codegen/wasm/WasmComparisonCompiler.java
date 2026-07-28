@@ -23,6 +23,11 @@ final class WasmComparisonCompiler {
 			WasmEmitHelper.castFloatGetF64(ctx);
 			ctx.writer.write(f64Opcode);
 		}
+		else if (WasmIntFusionCompiler.tryCompileCompare(cons, ctx, i64OpcodeFor(i32Opcode), maskFor(i32Opcode))) {
+			// Fused raw i64 compare over integer expression trees (boxes its own
+			// t/nil result; a non-integer operand falls back to _rat_cmp_bits).
+			return;
+		}
 		else {
 			// _rat_cmp_bits returns the comparison as a bitmask (1 = lt, 2 = eq,
 			// 4 = gt, 0 = unordered), so a NaN operand fails every operator. The old
@@ -36,6 +41,17 @@ final class WasmComparisonCompiler {
 			ctx.writer.write(am.ik.wasm.Instruction.I32_AND);
 		}
 		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
+	private static int i64OpcodeFor(int i32Opcode) {
+		return switch (i32Opcode) {
+			case am.ik.wasm.Instruction.I32_EQ -> am.ik.wasm.Instruction.I64_EQ;
+			case am.ik.wasm.Instruction.I32_LT_S -> am.ik.wasm.Instruction.I64_LT_S;
+			case am.ik.wasm.Instruction.I32_GT_S -> am.ik.wasm.Instruction.I64_GT_S;
+			case am.ik.wasm.Instruction.I32_LE_S -> am.ik.wasm.Instruction.I64_LE_S;
+			case am.ik.wasm.Instruction.I32_GE_S -> am.ik.wasm.Instruction.I64_GE_S;
+			default -> throw new IllegalArgumentException("unexpected comparison opcode: " + i32Opcode);
+		};
 	}
 
 	private static int maskFor(int i32Opcode) {

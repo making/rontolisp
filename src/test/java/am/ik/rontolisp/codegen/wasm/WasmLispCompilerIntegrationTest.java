@@ -588,6 +588,82 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void fusedComparisonsAndRawLeafStoresMatchTheGenericPath() throws Exception {
+		// Todo 194 stage 4. Pins, in order: (1) fused raw i64 comparisons agree with
+		// the generic _rat_cmp_bits path across the i64 promotion boundary (the +1 on
+		// most-positive-fixnum overflows into the limb tier, so the fast path bails)
+		// and (2) bail for a float / ratio operand, including through an unboxed
+		// local's shadow; (3) a single fused op with a literal operand (the incf of a
+		// PARAMETER) promotes exactly at the i64 edge; (4) a raw-to-raw local copy
+		// carries a degraded tier (float) through the shadow; (5) a packed aref as the
+		// WHOLE stored value stays raw (out-of-i31 u32 element round-trips), and a
+		// general-array source bails to the boxed read; (6) replace copies
+		// packed-to-packed with offsets, from a list, and from a string, and an
+		// immutable string target still takes the functional branch; (7) stringp
+		// answers nil for a packed vector with no normalization call, t for a string;
+		// (8) a docstring in defun statement position materializes nothing but a
+		// docstring in TAIL position is still the return value.
+		String program = """
+				(print (< 9223372036854775807 (+ 9223372036854775807 1)))
+				(print (> (* 3037000500 3037000500) 9223372036854775807))
+				(print (= (+ 4611686018427387904 4611686018427387904) 9223372036854775808))
+				(let ((f 2.5) (r 7/2) (i 0))
+				  (setq i (+ i 1))
+				  (print (list (< f 3) (< 3 f) (<= r 7/2) (< i 64) (>= i 1) (= i 2.0))))
+				(let ((x 1))
+				  (setq x (+ x 1))
+				  (setq x 2.5)
+				  (print (< x 3)))
+				(defun inc-edge (n) (+ n 1))
+				(print (inc-edge 9223372036854775807))
+				(let ((a 1) (b 0))
+				  (setq a (+ a 41))
+				  (setq b a)
+				  (setq a 1.5)
+				  (setq b a)
+				  (print b))
+				(let ((u (make-array 3 :element-type '(unsigned-byte 32) :initial-element 0))
+				      (g (make-array 2 :initial-element 4000000001)))
+				  (setf (aref u 0) 4000000000)
+				  (setf (aref u 1) (aref u 0))
+				  (setf (aref u 2) (aref g 0))
+				  (print u))
+				(let ((dst (make-array 8 :element-type '(unsigned-byte 8) :initial-element 0))
+				      (src (make-array 8 :element-type '(unsigned-byte 8) :initial-element 9)))
+				  (setf (aref src 1) 250)
+				  (replace dst src :start1 2 :end1 6 :start2 1)
+				  (print dst)
+				  (replace dst '(1 2 3))
+				  (print dst)
+				  (print (replace (make-array 3 :initial-element 0) "ab"))
+				  (print (replace "xyz" "AB")))
+				(print (stringp (make-array 2 :element-type '(unsigned-byte 8) :initial-element 0)))
+				(print (stringp "s"))
+				(defun doc-mid () "doc" 42)
+				(defun doc-tail () "only-doc")
+				(print (doc-mid))
+				(print (doc-tail))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("""
+				T
+				T
+				T
+				(T NIL T T T NIL)
+				T
+				9223372036854775808
+				1.5
+				#(4000000000 4000000000 4000000001)
+				#(0 0 250 9 9 9 0 0)
+				#(1 2 3 9 9 9 0 0)
+				#(#\\a #\\b 0)
+				"ABz"
+				NIL
+				T
+				42
+				"only-doc\"""");
+	}
+
+	@Test
 	void floatModAndRemComputeCorrectly() throws Exception {
 		// Regression: float mod/rem on the GC backend used to miscompile. A literal float
 		// operand wrote an invalid f64 opcode (byte 0xff, there is no f64.rem), and a

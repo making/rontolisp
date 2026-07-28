@@ -1985,10 +1985,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 
 			for (int i = 0; i < defun.bodyExprs.size(); i++) {
-				if (i > 0) {
-					funcWriter.write(Instruction.DROP);
+				// Non-tail statements compile for effect: a docstring materializes
+				// nothing (it used to _str_build a fresh string per call), and a
+				// statement-position aset/setq skips its value box.
+				if (i < defun.bodyExprs.size() - 1) {
+					WasmExprCompiler.compileForEffect(defun.bodyExprs.get(i), funcCtx);
 				}
-				WasmExprCompiler.compileExpr(defun.bodyExprs.get(i), funcCtx);
+				else {
+					WasmExprCompiler.compileExpr(defun.bodyExprs.get(i), funcCtx);
+				}
 			}
 			funcWriter.write(Instruction.END);
 
@@ -2114,10 +2119,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 
 			for (int i = 0; i < lambda.bodyExprs.size(); i++) {
-				if (i > 0) {
-					lambdaWriter.write(Instruction.DROP);
+				// Non-tail statements compile for effect, like a defun body's.
+				if (i < lambda.bodyExprs.size() - 1) {
+					WasmExprCompiler.compileForEffect(lambda.bodyExprs.get(i), lambdaCtx);
 				}
-				WasmExprCompiler.compileExpr(lambda.bodyExprs.get(i), lambdaCtx);
+				else {
+					WasmExprCompiler.compileExpr(lambda.bodyExprs.get(i), lambdaCtx);
+				}
 			}
 			if (lambda.bodyExprs.isEmpty()) {
 				// An empty-body (lambda ()) returns nil.

@@ -197,14 +197,17 @@ final class WasmIntFusionCompiler {
 			return false;
 		}
 		int ops = countOps(root);
-		if (ops < 2 || ops > MAX_OPS || leaves.size() > MAX_EXPR_LEAVES) {
+		if (ops > MAX_OPS || leaves.size() > MAX_EXPR_LEAVES) {
+			return false;
+		}
+		if (ops < 2 && !hasRawRead(leaves) && !hasConstOperand(root)) {
 			return false;
 		}
 
 		// block $done (result eqref) { block $bail { guard+unbox each leaf once into
-		// an i64 scratch local; fast path; _int_new; br $done } boxed fallback } -- a
-		// bail (guard or overflow) discards the partial i64 stack on its way to $bail
-		// and recomputes generically.
+		// an i64 scratch local; fast path; box (inline i31 / _int_new); br $done }
+		// boxed fallback } -- a bail (guard or overflow) discards the partial i64
+		// stack on its way to $bail and recomputes generically.
 		int savedI64 = ctx.nextI64Local;
 		evalLeaves(leaves, ctx);
 		ctx.writer.write(Instruction.BLOCK);
@@ -213,12 +216,102 @@ final class WasmIntFusionCompiler {
 		ctx.writer.write(Instruction.BLOCK, 0x40);
 		emitLeafUnboxes(leaves, ctx);
 		emitFast(root, ctx);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		int rootI64 = ctx.allocI64Temp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writeI64LocalIndex(rootI64);
+		emitBoxI64FromSlot(rootI64, ctx);
 		ctx.writer.write(Instruction.BR, 1);
 		ctx.writer.write(Instruction.END);
 		emitFallback(root, ctx);
 		ctx.writer.write(Instruction.END);
+		ctx.nextI64Local = savedI64;
+		return true;
+	}
+
+	/**
+	 * Whether any leaf reads raw (an unboxed local's snapshot or a packed element). A
+	 * SINGLE fused operation is only worth the double emission when it does: the raw read
+	 * plus one i64 op beats the generic helper's dispatch there ({@code (- i 2)}
+	 * loop-index math over an unboxed counter paid a {@code _rat_sub} call per
+	 * evaluation), where a single op over plain boxed leaves would not.
+	 */
+	private static boolean hasRawRead(List<Node> leaves) {
+		for (Node leaf : leaves) {
+			if (leaf instanceof RawLeaf || leaf instanceof ArefLeaf) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the root operation has a literal operand. A single op with one, like the
+	 * {@code (+ start 1)} an {@code incf} of a plain local or parameter expands to, also
+	 * fuses: the i64 constant plus a checked {@code _fx_*} (or plain bitwise) op beats
+	 * the generic helper's full tier dispatch. A single op over two plain boxed leaves
+	 * keeps the generic call -- nothing about it would run leaner fused.
+	 */
+	private static boolean hasConstOperand(Node root) {
+		return root instanceof OpNode op && op.args().stream().anyMatch(arg -> arg instanceof ConstLeaf);
+	}
+
+	/**
+	 * Compiles a binary numeric comparison ({@code = < > <= >=}) whose operands are
+	 * integer expression trees as ONE raw i64 compare: the operands evaluate/unbox
+	 * through the shared leaf machinery, the compare runs on the wasm stack, and the i32
+	 * result boxes once into the cached {@code t} / nil -- no {@code _rat_cmp_bits}
+	 * dispatch (which itself calls {@code _rat_cmp}) and no boxed operand reads, which is
+	 * what every loop-termination test ({@code (< i 64)}) paid per iteration. A bail (a
+	 * float or ratio operand, i64 overflow inside a subtree) recomputes the SAME leaves
+	 * through the generic {@code _rat_cmp_bits} fallback with the operator's mask, so NaN
+	 * and cross-tier comparisons keep the generic result exactly. Skips the
+	 * both-plain-leaves shape ({@code (< x y)} with nothing fusable on either side) to
+	 * keep the emission of generic code unchanged; returns {@code false} (emitting
+	 * nothing) when it does not apply.
+	 */
+	static boolean tryCompileCompare(LispCons cons, WasmLispCompiler.Ctx ctx, int i64Opcode, int cmpMask) {
+		if (ctx.asyncResume != null) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		Site site = new Site(cons);
+		List<Node> leaves = site.leaves;
+		Node left = classify(parts.get(1), ctx, java.util.Map.of(), site, 0);
+		if (left == null) {
+			return false;
+		}
+		Node right = classify(parts.get(2), ctx, java.util.Map.of(), site, 0);
+		if (right == null) {
+			return false;
+		}
+		if (countOps(left) + countOps(right) > MAX_OPS || leaves.size() > MAX_EXPR_LEAVES) {
+			return false;
+		}
+		if (left instanceof ExprLeaf && right instanceof ExprLeaf) {
+			return false;
+		}
+		// block $done (result i32) { block $bail { leaf unboxes; fast left; fast
+		// right; i64 compare; br $done } boxed fallback -> _rat_cmp_bits & mask } end;
+		// then the shared i32 -> t/nil boxing.
+		int savedI64 = ctx.nextI64Local;
+		evalLeaves(leaves, ctx);
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.write(Type.I32);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		emitLeafUnboxes(leaves, ctx);
+		emitFast(left, ctx);
+		emitFast(right, ctx);
+		ctx.writer.write(i64Opcode);
+		ctx.writer.write(Instruction.BR, 1);
+		ctx.writer.write(Instruction.END);
+		emitFallback(left, ctx);
+		emitFallback(right, ctx);
+		emitCall(WasmLispCompiler.FUNC_RAT_CMP_BITS, ctx);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(cmpMask);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.END);
+		WasmEmitHelper.emitBoolFromI32(ctx);
 		ctx.nextI64Local = savedI64;
 		return true;
 	}
@@ -230,8 +323,11 @@ final class WasmIntFusionCompiler {
 	 * unboxes the result with the store semantics (an out-of-i64 fallback value
 	 * contributes its low 32 bits, exactly what the masked store keeps). A single
 	 * operation qualifies here (unlike the boxed entry point: the raw result saves the
-	 * box even for one op). Returns {@code false} (emitting nothing) when the expression
-	 * is not an integer operation tree.
+	 * box even for one op), and so does a bare raw READ -- a packed {@code (aref b i)} or
+	 * an unboxed local as the whole stored value ({@code copy-to-buffer}-style
+	 * vector-to-vector copy loops), which previously boxed every element through the
+	 * generic read only for the store to unbox it again. Returns {@code false} (emitting
+	 * nothing) when the expression is not an integer operation tree.
 	 */
 	static boolean tryCompileRaw(LispVal expr, WasmLispCompiler.Ctx ctx) {
 		if (ctx.asyncResume != null) {
@@ -240,8 +336,14 @@ final class WasmIntFusionCompiler {
 		Site site = new Site(expr);
 		List<Node> leaves = site.leaves;
 		Node root = classify(expr, ctx, java.util.Map.of(), site, 0);
-		if (!(root instanceof OpNode)) {
+		if (root == null || root instanceof ExprLeaf) {
 			return false;
+		}
+		if (root instanceof ConstLeaf c) {
+			// A literal (or a tree folded to one): the raw value directly, no blocks.
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(c.value());
+			return true;
 		}
 		int ops = countOps(root);
 		if (ops > MAX_OPS || leaves.size() > MAX_EXPR_LEAVES) {
@@ -349,13 +451,17 @@ final class WasmIntFusionCompiler {
 		if (expr instanceof LispInteger) {
 			return true;
 		}
+		if (expr instanceof LispSymbol sym) {
+			// An outer unboxed local: the assignment is a raw-to-raw slot copy.
+			return ctx.rawLocals.containsKey(sym.name());
+		}
 		if (!(expr instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
 			return false;
 		}
 		return switch (head.name()) {
 			case LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.MOD, LispNames.REM, LispNames.LOGAND,
 					LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.ONE_PLUS,
-					LispNames.ONE_MINUS, LispNames.LDB ->
+					LispNames.ONE_MINUS, LispNames.LDB, LispNames.AREF ->
 				true;
 			default -> ctx.inlinableDefuns.containsKey(head.name());
 		};
@@ -380,10 +486,34 @@ final class WasmIntFusionCompiler {
 			return;
 		}
 		if (ctx.asyncResume == null) {
+			if (expr instanceof LispSymbol sym && ctx.rawLocals.get(sym.name()) instanceof RawLocal src) {
+				// A raw-to-raw copy ((setq a b) with both unboxed) transfers BOTH
+				// slots: total for every tier -- whatever the source holds, its shadow
+				// (sentinel or boxed value) carries it -- so no guard and no bail.
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writeI64LocalIndex(src.i64Slot());
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writeI64LocalIndex(target.i64Slot());
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeSignedLeb128(src.shadowSlot());
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeSignedLeb128(target.shadowSlot());
+				return;
+			}
 			Site site = new Site(expr);
 			List<Node> leaves = site.leaves;
 			Node root = classify(expr, ctx, java.util.Map.of(), site, 0);
-			if (root instanceof OpNode && countOps(root) <= MAX_OPS && leaves.size() <= MAX_EXPR_LEAVES) {
+			if (root instanceof ConstLeaf c) {
+				// A tree folded to a literal: the raw value directly, no blocks.
+				ctx.writer.write(Instruction.I64_CONST);
+				ctx.writer.writeSignedLeb128(c.value());
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writeI64LocalIndex(target.i64Slot());
+				emitNullShadow(target, ctx);
+				return;
+			}
+			if ((root instanceof OpNode || root instanceof ArefLeaf) && countOps(root) <= MAX_OPS
+					&& leaves.size() <= MAX_EXPR_LEAVES) {
 				int savedI64 = ctx.nextI64Local;
 				evalLeaves(leaves, ctx);
 				// block $done { block $bail { unboxes; fast; raw store; null shadow;
@@ -439,11 +569,22 @@ final class WasmIntFusionCompiler {
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
-		// The i31 range boxes inline (ref.i31, allocation- and call-free -- a raw
-		// loop counter's every non-fused read takes this arm); only an out-of-range
-		// value pays the _int_new call and its TYPE_BIGNUM allocation.
+		emitBoxI64FromSlot(raw.i64Slot(), ctx);
+		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writeI64LocalIndex(raw.i64Slot());
+		ctx.writer.writeSignedLeb128(raw.shadowSlot());
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * Boxes the raw i64 held in an i64 scratch/raw local into an eqref: the i31 range
+	 * boxes inline ({@code ref.i31}, allocation- and call-free -- a loop counter's every
+	 * read and most fused-site roots take this arm); only an out-of-range value pays the
+	 * {@code _int_new} call and its TYPE_BIGNUM allocation.
+	 */
+	private static void emitBoxI64FromSlot(int i64Slot, WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(i64Slot);
 		ctx.writer.write(Instruction.I64_CONST);
 		ctx.writer.writeSignedLeb128(33);
 		ctx.writer.write(Instruction.I64_SHL);
@@ -451,24 +592,20 @@ final class WasmIntFusionCompiler {
 		ctx.writer.writeSignedLeb128(33);
 		ctx.writer.write(Instruction.I64_SHR_S);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writeI64LocalIndex(raw.i64Slot());
+		ctx.writeI64LocalIndex(i64Slot);
 		ctx.writer.write(Instruction.I64_EQ);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.REFNULL.code());
 		ctx.writer.writeHeapType(Type.EQ.code());
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writeI64LocalIndex(raw.i64Slot());
+		ctx.writeI64LocalIndex(i64Slot);
 		ctx.writer.write(Instruction.I32_WRAP_I64);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writeI64LocalIndex(raw.i64Slot());
+		ctx.writeI64LocalIndex(i64Slot);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.ELSE);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(raw.shadowSlot());
 		ctx.writer.write(Instruction.END);
 	}
 

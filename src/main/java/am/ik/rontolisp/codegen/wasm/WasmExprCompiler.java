@@ -91,6 +91,15 @@ final class WasmExprCompiler {
 	 * compiles normally and DROPs. The caller must NOT emit its own DROP.
 	 */
 	static void compileForEffect(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		// A self-evaluating literal in statement position (a defun docstring, a bare
+		// number in a progn) has no effect and no consumer: emit nothing. A string
+		// literal otherwise BUILDS its runtime string on every evaluation only to
+		// drop it -- ironclad's docstring'd hot loops paid a _str_build per call.
+		if (ctx.asyncResume == null && (expr instanceof am.ik.rontolisp.LispString || expr instanceof LispInteger
+				|| expr instanceof am.ik.rontolisp.LispDouble || expr instanceof am.ik.rontolisp.LispChar
+				|| expr instanceof am.ik.rontolisp.LispBigInteger || expr instanceof am.ik.rontolisp.LispRatio)) {
+			return;
+		}
 		if (ctx.asyncResume == null && expr instanceof LispCons cons && cons.isProperList()
 				&& cons.car() instanceof LispSymbol sym) {
 			if (LispNames.SETF.equals(sym.name())) {

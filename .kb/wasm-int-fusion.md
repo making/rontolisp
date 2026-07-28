@@ -38,6 +38,45 @@
 > `fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath` and the
 > `flet-fusion-and-unboxed-locals` ci-spec case.
 
+> Stage-4 additions (2026-07-27, todo 194 close-out; ~0.93 s -> **~0.70 s** on
+> the PBKDF2 benchmark, both wasm backends -- JVM parity at 0.69 s):
+> (1) **fused comparisons**: a binary `= < > <= >=` whose operands classify as
+> integer trees emits a raw i64 compare (`tryCompileCompare`, hooked in
+> `WasmComparisonCompiler`) with the generic `_rat_cmp_bits`-with-mask fallback
+> from the same leaves -- NaN/float/ratio/limb-tier operands bail and keep the
+> generic result; the both-plain-`ExprLeaf` shape (`(< x y)`, nothing fusable)
+> keeps the generic emission unchanged. Erased `_rat_cmp`/`_rat_cmp_bits`/
+> `_big_cmp` (~7%) from the profile.
+> (2) **single-op fusion**: one fused op qualifies when a leaf reads raw
+> (RawLeaf/ArefLeaf) or the root has a literal operand -- `(- i 2)` index math
+> and the `(+ start 1)` an incf of a parameter expands to no longer pay a
+> `_rat_add`/`_rat_sub` dispatch. Two plain boxed leaves still keep the generic
+> single call.
+> (3) **inline root boxing**: a fused site's root boxes through an i31-range
+> test + `ref.i31` inline; only out-of-i31 results call `_int_new`.
+> (4) **raw leaf-root stores**: `tryCompileRaw`/`compileRawStore` accept a bare
+> ArefLeaf/ConstLeaf root (and a raw-local SYMBOL copies both slots directly),
+> so `(setf (aref dst i) (aref src j))` copy loops move bytes without boxing.
+> (5) **statement-position literals emit nothing** (defun/lambda bodies now
+> compile non-tail statements via `compileForEffect`): a DOCSTRING in a hot
+> defun used to `_str_build` a fresh string per call (ironclad's
+> fill-block-ub8-be, ~1.6%).
+> (6) **stringp tests inline**: quote-framed `TYPE_STRING` and `TYPE_CELL` test
+> first; only a TYPE_CELL pays the `_charvec_to_str` normalization call --
+> `(setf (aref v i) x)` on a variable place runs a stringp per store and paid
+> the call unconditionally (~2%).
+> (7) `expandReplace` (shared by BOTH compile backends; the interpreter keeps
+> its native replace) branches the copy loop on `(listp seq2)`: an array source
+> reads with `aref` (raw for packed vectors under (4)) instead of boxing every
+> element through `elt`.
+> Pinned by `fusedComparisonsAndRawLeafStoresMatchTheGenericPath` and the
+> `fused-comparisons-and-raw-leaf-stores` ci-spec case. Post-stage-4 profile:
+> UPDATE-SHA256-BLOCK ~31% + SHA256-EXPAND-BLOCK ~11% self (the fused rounds --
+> wasmtime codegen is the floor), `_int_new` ~4.5% (out-of-i31 boundary
+> crossings), `_iv_set` ~2.5%, residual `_rat_add` ~2% (incf of eqref
+> PARAMETERS -- params have no raw representation; see the unboxed-locals
+> re-evaluation trigger).
+
 **Invariant: fusing an integer expression tree must never change a result, an
 observable side effect, or an error shape -- the fast path is an optimization
 with a total fallback, not a semantic variant.** The wasm-GC backend (Preview 1
@@ -87,15 +126,20 @@ an arithmetic right shift clamped at 63.
 
 ## When fusion does NOT trigger (and must keep not triggering)
 
-- Fewer than two fusable operations (a single op is already one generic call),
-  more than 64 ops or 32 expression leaves (the site emits the tree twice, and
+- A single fusable operation with neither a raw-reading leaf (unboxed local /
+  packed aref) nor a literal operand -- two plain boxed leaves under one op run
+  no leaner fused, so the generic call keeps owning that shape (and the
+  emission of existing generic code stays byte-stable). More than 64 ops or 32
+  expression leaves (the site emits the tree twice, and
   `.kb/wasm-function-body-size.md` bounds body growth).
 - A node whose immediate argument is a literal double -- the node becomes an
   unfused leaf so the `hasDoubleLiteral` f64 literal path keeps owning it
   (same for literal ratios / big integers).
 - Async resume bodies (`ctx.asyncResume != null`): the await spine/hoist
   analysis owns argument shapes there.
-- Division (`/`) is never fused (exact ratios), nor are comparisons.
+- Division (`/`) is never fused (exact ratios). Binary comparisons fuse through
+  their own entry point (`tryCompileCompare`, stage 4) -- but only when a side
+  is fusable; `(< x y)` over two plain leaves stays generic.
 
 ## Mechanics
 

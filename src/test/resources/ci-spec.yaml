@@ -242,6 +242,60 @@ cases:
       4294967294
       T
       (8 NIL 7 8)
+  - name: fused-comparisons-and-raw-leaf-stores
+    source: |
+      (print (< 9223372036854775807 (+ 9223372036854775807 1)))
+      (print (> (* 3037000500 3037000500) 9223372036854775807))
+      (let ((s4-f 2.5) (s4-r 7/2) (s4-i 0))
+        (setq s4-i (+ s4-i 1))
+        (print (list (< s4-f 3) (< 3 s4-f) (<= s4-r 7/2) (< s4-i 64) (= s4-i 2.0))))
+      (let ((s4-x 1))
+        (setq s4-x (+ s4-x 1))
+        (setq s4-x 2.5)
+        (print (< s4-x 3)))
+      (defun s4-inc-edge (n) (+ n 1))
+      (print (s4-inc-edge 9223372036854775807))
+      (let ((s4-a 1) (s4-b 0))
+        (setq s4-a (+ s4-a 41))
+        (setq s4-b s4-a)
+        (setq s4-a 1.5)
+        (setq s4-b s4-a)
+        (print s4-b))
+      (let ((s4-u (make-array 3 :element-type '(unsigned-byte 32) :initial-element 0))
+            (s4-g (make-array 2 :initial-element 4000000001)))
+        (setf (aref s4-u 0) 4000000000)
+        (setf (aref s4-u 1) (aref s4-u 0))
+        (setf (aref s4-u 2) (aref s4-g 0))
+        (print s4-u))
+      (let ((s4-dst (make-array 8 :element-type '(unsigned-byte 8) :initial-element 0))
+            (s4-src (make-array 8 :element-type '(unsigned-byte 8) :initial-element 9)))
+        (setf (aref s4-src 1) 250)
+        (replace s4-dst s4-src :start1 2 :end1 6 :start2 1)
+        (print s4-dst)
+        (replace s4-dst '(1 2 3))
+        (print s4-dst)
+        (print (replace (make-array 3 :initial-element 0) "ab"))
+        (print (replace "xyz" "AB")))
+      (print (stringp (make-array 2 :element-type '(unsigned-byte 8) :initial-element 0)))
+      (defun s4-doc-mid () "doc" 42)
+      (defun s4-doc-tail () "only-doc")
+      (print (s4-doc-mid))
+      (print (s4-doc-tail))
+    expected: |
+      T
+      T
+      (T NIL T T NIL)
+      T
+      9223372036854775808
+      1.5
+      #(4000000000 4000000000 4000000001)
+      #(0 0 250 9 9 9 0 0)
+      #(1 2 3 9 9 9 0 0)
+      #(#\a #\b 0)
+      "ABz"
+      NIL
+      42
+      "only-doc"
   - name: comparison-operators-verified-via-if
     source: |
       (print (if (= 1 1) 42 99))

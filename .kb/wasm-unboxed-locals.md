@@ -83,6 +83,12 @@ sites save/restore `Ctx.nextI64Local` (slots are reused across sites;
 `maxI64Locals` keeps the declaration's high-water mark); let-scope raw locals
 allocate below the sites' watermark and restore at scope end.
 
+Stage-4 additions (2026-07-27): an assignment whose value is a bare raw-local
+SYMBOL copies BOTH slots directly (total for every tier, no guard); a value
+that classifies to a folded constant stores `i64.const` with no blocks; `aref`
+and an outer raw-local symbol count as raw-shaped for eligibility
+(`isRawAssignShaped`), so byte-copy temporaries qualify.
+
 ## Pinning tests
 
 `WasmLispCompilerIntegrationTest.fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`
