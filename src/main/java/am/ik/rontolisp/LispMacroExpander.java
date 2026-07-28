@@ -5881,6 +5881,14 @@ public final class LispMacroExpander {
 			return null;
 		}
 		List<LispVal> parts = cons.toList();
+		if (LispNames.GET_PATHNAME_DEFAULTS.equals(qn.member()) && parts.size() == 1) {
+			// Not a stub: the one uiop pathname accessor with a real cross-backend
+			// answer. See LispNames.GET_PATHNAME_DEFAULTS for why it is "". Only the
+			// no-argument shape (the one every call site uses) is answered; the
+			// &optional defaults shape falls through to the stub error rather than
+			// silently discarding the argument.
+			return new LispString("");
+		}
 		List<LispVal> progn = new java.util.ArrayList<>();
 		progn.add(new LispSymbol(LispNames.PROGN));
 		progn.addAll(parts.subList(1, parts.size()));

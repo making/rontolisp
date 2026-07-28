@@ -27,8 +27,9 @@ probes the float lattice with `subtypep` and pushes
 lines later in the SAME file. This is exactly
 `.todo/181-features-pushes-are-invisible-to-the-reader.md` -- postmodern is
 its first hard consumer. (The `postmodern.asd` eval-when feature pushes are
-handled differently -- via the replacement `.asd`,
-`.todo/201-postmodern-asd-and-dependency-plumbing.md`.) If 181 stays open, a
+handled differently -- the replacement `.asd` takes those two decisions
+statically instead; see the postmodern section of `.kb/asdf.md`.) If 181 stays
+open, a
 Tier-4 form rewrite of json-encoder.lisp is the fallback; prefer fixing 181.
 
 ## `subtypep` float lattice is dishonest

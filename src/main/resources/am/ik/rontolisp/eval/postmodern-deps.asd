@@ -1,0 +1,68 @@
+;;;; Hand-authored replacement for postmodern.asd (the PostgreSQL programming
+;;;; API on top of cl-postgres) that MAKES THE TWO FEATURE DECISIONS STATICALLY
+;;;; and declares the dependencies the sources actually reference.
+;;;;
+;;;; The upstream .asd opens with a top-level eval-when pushing
+;;;; :postmodern-thread-safe / :postmodern-use-mop onto *features* per
+;;;; implementation. AsdfSystems never evaluates a system definition (only
+;;;; defsystem/defpackage/in-package/pure-data defparameter are recognized), so
+;;;; that form makes the file unreadable -- and a push would be invisible to the
+;;;; reader anyway (.todo/181). Both decisions are therefore taken here, once:
+;;;;
+;;;; :postmodern-use-mop -- OFF. Nothing activates the feature, so table.lisp
+;;;; (the :if-feature component below) contributes no source and postmodern's
+;;;; own defpackage takes its #-postmodern-use-mop branch, using :common-lisp
+;;;; rather than :closer-common-lisp. That is the non-MOP build: everything
+;;;; except the DAO layer. The :if-feature clause is kept verbatim rather than
+;;;; deleted so the MOP build is a feature flip, not a re-edit of this file.
+;;;;
+;;;; :postmodern-thread-safe -- OFF, and this one is a genuine narrowing rather
+;;;; than a scope choice. rontolisp DOES run concurrent handlers (one virtual
+;;;; thread per request under `serve`), so postmodern's three locks guard state
+;;;; that can really be raced here: the connection pool, the prepared-statement
+;;;; id counter and class finalization. Turning the feature ON would need a
+;;;; mutex primitive rontolisp does not have -- bordeaux-threads' `with-lock-
+;;;; held` must actually serialize on the interpreter and the JVM to be worth
+;;;; declaring, and `java:` monitors are not an option (the native binary's
+;;;; interpreter has no reflection metadata). With the feature off, the lock
+;;;; sites take their #-postmodern-thread-safe branch and compile to
+;;;; (progn ...) -- three of them in this build (connect.lisp, query.lisp,
+;;;; prepare.lisp), five more in the MOP-only table.lisp -- which is correct
+;;;; for a single-threaded program and racy for a concurrent one. See
+;;;; `.kb/asdf.md` and `.todo/204` for the flip.
+;;;;
+;;;; :depends-on -- "global-vars" is dropped: upstream declares it but has ZERO
+;;;; call sites (it is a bordeaux-threads dependency that leaked into this
+;;;; list), and its non-SBCL branch needs define-symbol-macro and remprop,
+;;;; neither of which exists here. "bordeaux-threads" goes with the feature
+;;;; decision above. "cl-ppcre" (roles.lisp, execute-file.lisp) and "uax-15"
+;;;; (util.lisp) are undeclared upstream and added here: they load transitively
+;;;; through cl-postgres today, so leaving them out would make the eagerly
+;;;; resolving compile paths depend on the order of somebody else's .asd.
+;;;;
+;;;; Component paths resolve against the directory of the located postmodern.asd,
+;;;; so the REAL library sources are loaded; only the system metadata is
+;;;; redeclared. The postmodern/tests system is not reproduced -- it needs
+;;;; fiveam, simple-date and local-time, none of which load here.
+
+(defsystem "postmodern"
+  :description "PostgreSQL programming API"
+  :depends-on ("alexandria" "cl-postgres" "s-sql" "split-sequence" "uiop"
+               "cl-ppcre" "uax-15")
+  :components
+  ((:module "postmodern"
+    :components ((:file "package")
+                 (:file "config")
+                 (:file "connect" :depends-on ("package" "config"))
+                 (:file "json-encoder" :depends-on ("package" "config"))
+                 (:file "query" :depends-on ("connect" "json-encoder" "config"))
+                 (:file "prepare" :depends-on ("query" "config"))
+                 (:file "roles" :depends-on ("query" "config"))
+                 (:file "util" :depends-on ("query" "roles" "config"))
+                 (:file "transaction" :depends-on ("query" "config"))
+                 (:file "namespace" :depends-on ("query" "config"))
+                 (:file "execute-file" :depends-on ("query" "config"))
+                 (:file "table" :depends-on ("util" "transaction" "query" "config")
+                  :if-feature :postmodern-use-mop)
+                 (:file "deftable" :depends-on
+                        ("query" (:feature :postmodern-use-mop "table" "config")))))))

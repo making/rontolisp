@@ -34,7 +34,13 @@ public final class AsdOverrides {
 			// full CL image nearly always has them loaded already). The replacement
 			// declares the true set so one (ql:quickload "cl-postgres") resolves on
 			// the eagerly-resolving compile paths too.
-			"cl-postgres.asd", "cl-postgres-deps.asd");
+			"cl-postgres.asd", "cl-postgres-deps.asd",
+			// Unparseable AND under-declared: a top-level eval-when pushes the
+			// :postmodern-thread-safe / :postmodern-use-mop features per
+			// implementation. The replacement takes both decisions statically (a
+			// *features* push would be invisible to the reader anyway) and declares
+			// cl-ppcre + uax-15, which the sources call but the .asd never names.
+			"postmodern.asd", "postmodern-deps.asd");
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

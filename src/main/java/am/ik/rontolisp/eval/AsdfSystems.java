@@ -8,6 +8,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
@@ -399,16 +400,8 @@ public final class AsdfSystems {
 	@Nullable private static String dependencyName(String systemName, LispVal dep, Features features) {
 		if (dep instanceof LispCons cons && cons.car() instanceof LispSymbol op && cons.isProperList()) {
 			if (":FEATURE".equals(op.name())) {
-				List<LispVal> items = cons.toList();
-				if (items.size() != 3) {
-					throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + systemName
-							+ " :depends-on (:feature ...) expects (:feature FEATURE-EXPR DEPENDENCY-DEF): "
-							+ dep.print());
-				}
-				if (!features.isEnabled(items.get(1))) {
-					return null;
-				}
-				return dependencyName(systemName, items.get(2), features);
+				return featureDependency(LispNames.ASDF_DEFSYSTEM + " " + systemName + " :depends-on", cons, features,
+						(spec) -> dependencyName(systemName, spec, features));
 			}
 			if (":REQUIRE".equals(op.name())) {
 				throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + systemName
@@ -417,6 +410,47 @@ public final class AsdfSystems {
 			}
 		}
 		return designator(":depends-on", dep);
+	}
+
+	/**
+	 * Resolves one component-level {@code :depends-on} entry to a sibling component name,
+	 * or {@code null} when a {@code (:feature ...)} entry is dropped. Component
+	 * dependencies take the same {@code (:feature FEATURE-EXPR DEPENDENCY-DEF)} form as
+	 * system dependencies -- postmodern's {@code deftable} depends on {@code "table"}
+	 * only in the MOP build.
+	 */
+	@Nullable private static String componentDependency(String systemName, String componentName, LispVal dep, Features features) {
+		if (dep instanceof LispCons cons && cons.car() instanceof LispSymbol op && cons.isProperList()
+				&& ":FEATURE".equals(op.name())) {
+			return featureDependency("system " + systemName + ": component " + componentName + " :depends-on", cons,
+					features, (spec) -> designator(":depends-on", spec));
+		}
+		return designator(":depends-on", dep);
+	}
+
+	/**
+	 * Resolves a {@code (:feature FEATURE-EXPR DEPENDENCY-DEF ...)} dependency entry:
+	 * {@code null} when the feature expression is not satisfied, otherwise the dependency
+	 * resolved by {@code resolve}.
+	 * <p>
+	 * Elements past the dependency are IGNORED rather than rejected, matching real ASDF
+	 * ({@code resolve-dependency-combination} for {@code :feature} reads exactly the
+	 * first and second argument). Upstream postmodern's {@code deftable} carries
+	 * {@code (:feature :postmodern-use-mop "table" "config")}, whose trailing
+	 * {@code "config"} real ASDF silently drops; erroring on it would make a
+	 * widely-deployed {@code .asd} unreadable over a clause that has never had an effect.
+	 */
+	@Nullable private static String featureDependency(String context, LispCons cons, Features features,
+			Function<LispVal, @Nullable String> resolve) {
+		List<LispVal> items = cons.toList();
+		if (items.size() < 3) {
+			throw new IllegalStateException(
+					context + " (:feature ...) expects (:feature FEATURE-EXPR DEPENDENCY-DEF): " + cons.print());
+		}
+		if (!features.isEnabled(items.get(1))) {
+			return null;
+		}
+		return resolve.apply(items.get(2));
 	}
 
 	/**
@@ -555,7 +589,10 @@ public final class AsdfSystems {
 			switch (key.name()) {
 				case ":DEPENDS-ON" -> {
 					for (LispVal dep : properList("component " + name + " :depends-on", value)) {
-						dependsOn.add(designator(":depends-on", dep));
+						String resolved = componentDependency(systemName, name, dep, features);
+						if (resolved != null) {
+							dependsOn.add(resolved);
+						}
 					}
 				}
 				case ":IF-FEATURE" -> featureEnabled = features.isEnabled(value);

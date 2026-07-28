@@ -73,9 +73,16 @@ from `define-dao-finalization`.
 
 ## Also in this milestone
 
-- Flip the replacement `postmodern-deps.asd` to include `table.lisp` +
-  `closer-mop` dep and switch the package `:use` to `closer-common-lisp`
-  (`.todo/201`); widen the closer-mop shim accordingly.
+- Turn `:postmodern-use-mop` ON. The replacement `postmodern-deps.asd` keeps
+  upstream's `:if-feature` / `(:feature ...)` clauses verbatim exactly so this
+  is a feature flip and not a re-edit -- `table.lisp` rejoins the build,
+  `deftable` depends on it, and postmodern's own `defpackage` switches its
+  `:use` to `:closer-common-lisp` on its own. What is missing is the MECHANISM
+  to make a reader feature true for one system's component files, which is
+  scoped in `.todo/204` (§3) alongside the same problem for
+  `:postmodern-thread-safe`. Then add the `closer-mop` dependency and widen
+  the closer-mop shim accordingly. Pinned today by
+  `AsdfSystemsTest.thePostmodernMopBuildIsAFeatureFlip`.
 - `save-dao/transaction`, `do-select-dao`, `with-column-writers`,
   `dao-row-reader-with-body`; `handler-case` on `unique-violation` /
   `columns-error` / `unbound-slot`.

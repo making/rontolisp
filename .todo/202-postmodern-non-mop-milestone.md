@@ -35,7 +35,22 @@ unwind-protect knot + `retry-transaction`), the connection pool
   change-class, real slot-boundp, print-object, with-accessors
 - `.todo/200-postmodern-language-incidentals.md` -- format nesting, features
   visibility, float subtypep, stream captures
-- `.todo/201-postmodern-asd-and-dependency-plumbing.md` -- land FIRST
+
+The `.asd` override and dependency plumbing (old `.todo/201`) has LANDED:
+`(ql:quickload "postmodern")` resolves and orders the whole graph and stops in
+`postmodern/config.lisp` on `make-synonym-stream`, which is `.todo/200`'s
+territory. See the postmodern section of `.kb/asdf.md` for what the replacement
+`.asd` decided. Two pieces were split out of it and are NOT prerequisites of
+this milestone:
+
+- `.todo/204-mutex-primitive-and-postmodern-thread-safe.md` -- the build is
+  `:postmodern-thread-safe` OFF, so the connection pool and the
+  prepared-statement id counter are racy under concurrent handlers. Fine for
+  the single-threaded milestone program; not fine for a `serve` handler.
+- `.todo/205-probe-file-and-uiop-file-exists-p.md` -- `uiop:file-exists-p`
+  resolves but errors at call time, so `pomo:execute-file` does not run
+  (it also needs `.todo/196`'s `restart-case`). The milestone program does not
+  use it.
 
 ## Milestone-level work (not covered by the prerequisites)
 

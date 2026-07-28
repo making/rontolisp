@@ -4178,6 +4178,32 @@ public final class LispNames {
 	public static final String MERGE_PATHNAMES_STAR = "MERGE-PATHNAMES*";
 
 	/**
+	 * {@code uiop:file-exists-p} (stub: resolves, undefined when called -- uniformly on
+	 * every backend). Registered so a library that merely CONTAINS the call still loads:
+	 * postmodern's {@code execute-file.lisp} has five of them, and a name that does not
+	 * resolve fails the whole file at read time. A real implementation needs a runtime
+	 * file-probe primitive rontolisp does not have; see the {@code probe-file} todo.
+	 */
+	public static final String FILE_EXISTS_P = "FILE-EXISTS-P";
+
+	/**
+	 * {@code uiop:run-program} (stub: resolves, undefined when called). Spawning an
+	 * external process is outside every backend's sandbox by design, so the honest answer
+	 * is a call-time error rather than a silent no-op.
+	 */
+	public static final String RUN_PROGRAM = "RUN-PROGRAM";
+
+	/**
+	 * {@code uiop::get-pathname-defaults} (internal in real UIOP too, hence the double
+	 * colon at every call site) -- the pathname relative names are resolved against.
+	 * rontolisp answers with the empty namestring on every backend: a relative path is
+	 * resolved by the host against its own working directory, and {@code ""} is exactly
+	 * the pathname designating that, so
+	 * {@code (merge-pathnames X (get-pathname-defaults))} yields {@code X} unchanged.
+	 */
+	public static final String GET_PATHNAME_DEFAULTS = "GET-PATHNAME-DEFAULTS";
+
+	/**
 	 * The {@code defpackage} {@code :local-nicknames} clause keyword -- lite: each
 	 * {@code (nickname actual-package)} pair registers a GLOBAL nickname.
 	 */

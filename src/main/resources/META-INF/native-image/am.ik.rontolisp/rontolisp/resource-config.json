@@ -201,6 +201,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/postmodern-deps\\.asd"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.GrayStreamsLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/gray\\.lisp"

@@ -1243,6 +1243,21 @@ public final class LispEvaluator {
 					: "";
 			return new LispString(PathnameOps.mergePathnames(specified, defaults));
 		}));
+		// uiop::get-pathname-defaults (internal in real UIOP too) -- the pathname
+		// relative names resolve against. Every backend resolves a relative path
+		// against the host's working directory, and "" is the namestring designating
+		// exactly that, so (merge-pathnames X (get-pathname-defaults)) yields X.
+		// Kept identical to the compile paths' lowering in
+		// LispMacroExpander.expandUiopStubCall.
+		String pathnameDefaultsName = PackageRegistry.qualifyInternal(LispNames.UIOP_PKG,
+				LispNames.GET_PATHNAME_DEFAULTS);
+		this.globalEnv.defineFunction(pathnameDefaultsName, new LispFunction(pathnameDefaultsName, args -> {
+			if (!args.isEmpty()) {
+				throw new LispEvalException(
+						pathnameDefaultsName + " expects no arguments, got " + args.size() + " arguments");
+			}
+			return new LispString("");
+		}));
 		// ql:quickload = auto-download (real Quicklisp dist) + asdf:load-system. It
 		// accepts a single system name or a list of names, downloads each (with its
 		// dependencies) into the cache, adds the extracted .asd directories to the search

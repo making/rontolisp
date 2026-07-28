@@ -331,6 +331,91 @@ class AsdfSystemsTest {
 	}
 
 	@Test
+	void parsesTheBundledPostmodernReplacementAsd() {
+		// The .asd upstream postmodern ships opens with an eval-when that pushes its two
+		// features, which the data-only front end cannot read; AsdOverrides substitutes
+		// this replacement. Pin the resolved graph: the non-MOP build drops table.lisp,
+		// global-vars (declared upstream, zero call sites) is gone, and cl-ppcre +
+		// uax-15 (called by the sources, never declared upstream) are present.
+		String source = AsdOverrides.replacementSource("postmodern.asd");
+		assertThat(source).isNotNull();
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "sw/postmodern.asd",
+				Features.INTERPRETER);
+		assertThat(systems).hasSize(1);
+		AsdfSystems.LispSystem system = systems.get(0);
+		assertThat(system.name()).isEqualTo("postmodern");
+		assertThat(system.dependsOn()).containsExactly("alexandria", "cl-postgres", "s-sql", "split-sequence", "uiop",
+				"cl-ppcre", "uax-15");
+		assertThat(system.files()).containsExactly("postmodern/package.lisp", "postmodern/config.lisp",
+				"postmodern/connect.lisp", "postmodern/json-encoder.lisp", "postmodern/query.lisp",
+				"postmodern/prepare.lisp", "postmodern/roles.lisp", "postmodern/util.lisp",
+				"postmodern/transaction.lisp", "postmodern/namespace.lisp", "postmodern/execute-file.lisp",
+				"postmodern/deftable.lisp");
+	}
+
+	@Test
+	void thePostmodernMopBuildIsAFeatureFlip() {
+		// The :if-feature / (:feature ...) clauses are kept verbatim in the replacement
+		// so the DAO layer arrives by activating the feature, not by re-editing the
+		// file: table.lisp joins the build and deftable depends on it.
+		String source = AsdOverrides.replacementSource("postmodern.asd");
+		assertThat(source).isNotNull();
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "sw/postmodern.asd",
+				Features.of("rontolisp", "postmodern-use-mop"));
+		assertThat(systems.get(0).files()).contains("postmodern/table.lisp")
+			.containsSubsequence("postmodern/table.lisp", "postmodern/deftable.lisp");
+	}
+
+	@Test
+	void componentFeatureDependencyIsDroppedWhenTheFeatureIsOff() {
+		// postmodern's deftable depends on the DAO layer only in the MOP build. The
+		// gated component keeps its place in the graph (it is :if-feature'd, so it
+		// contributes no source) and the dependency simply disappears, so the
+		// remaining components still order.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:file "query")
+				               (:file "table" :depends-on ("query") :if-feature :postmodern-use-mop)
+				               (:file "deftable" :depends-on
+				                      ("query" (:feature :postmodern-use-mop "table")))))""");
+		assertThat(system.files()).containsExactly("query.lisp", "deftable.lisp");
+	}
+
+	@Test
+	void componentFeatureDependencyContributesWhenTheFeatureIsOn() {
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:file "deftable" :depends-on ((:feature :rontolisp "table")))
+				               (:file "table")))""");
+		// deftable really depends on table now, so the declaration order is reversed.
+		assertThat(system.files()).containsExactly("table.lisp", "deftable.lisp");
+	}
+
+	@Test
+	void featureDependencyIgnoresElementsPastTheDependency() {
+		// Real ASDF's :feature combinator reads exactly the feature expression and the
+		// first dependency; upstream postmodern's deftable carries a third element
+		// ("config") that has never had an effect. Erroring on it would make a
+		// widely-deployed .asd unreadable.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :depends-on ((:feature :rontolisp "base" "ignored"))
+				  :components ((:file "deftable" :depends-on
+				                      ("query" (:feature :rontolisp "table" "ignored")))
+				               (:file "query")
+				               (:file "table")))""");
+		assertThat(system.dependsOn()).containsExactly("base");
+		assertThat(system.files()).containsExactly("query.lisp", "table.lisp", "deftable.lisp");
+	}
+
+	@Test
+	void featureDependencyWithoutADependencyIsAHardError() {
+		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :depends-on ((:feature :rontolisp)))"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("(:feature FEATURE-EXPR DEPENDENCY-DEF)");
+	}
+
+	@Test
 	void requireDependencyIsAHardError() {
 		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :depends-on ((:require :sb-bsd-sockets)))"))
 			.isInstanceOf(IllegalStateException.class)

@@ -364,10 +364,15 @@ public final class PackageRegistry {
 		// uiop:native-namestring on a pathname branch). add-package-local-nickname is
 		// the one function with a real definition (LispEvaluator, lite: a GLOBAL
 		// nickname); the rest resolve but are undefined-function errors when called.
-		define(new LispPackage(LispNames.UIOP_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING, LispNames.GETENV,
-						LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
-						LispNames.MERGE_PATHNAMES_STAR))));
+		Set<String> uiopExternals = Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING, LispNames.GETENV,
+				LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
+				LispNames.MERGE_PATHNAMES_STAR, LispNames.FILE_EXISTS_P, LispNames.RUN_PROGRAM);
+		Set<String> uiopSymbols = new HashSet<>(uiopExternals);
+		// Internal in real UIOP too: every call site spells it
+		// uiop::get-pathname-defaults. Owned by the package rather than reached by
+		// the resolver's tolerance for an unknown :: member.
+		uiopSymbols.add(LispNames.GET_PATHNAME_DEFAULTS);
+		define(new LispPackage(LispNames.UIOP_PKG, List.of(), uiopSymbols, uiopExternals));
 		// The dependency-shim packages behind the built-in ASDF systems of the same
 		// names (see eval.ShimLibraries): closer-mop (nicknames c2mop/c2cl),
 		// flexi-streams, org.shirakumo.float-features (nickname float-features) and
