@@ -384,8 +384,37 @@ final class JvmExprCompiler {
 						className);
 				case LispNames.CONCATENATE ->
 					JvmExprCompiler.compileExpr(ConcatenateForms.expand(cons), ctx, className);
-				case LispNames.READ_LINE -> JvmReadLineCompiler.compile(cons, ctx, className);
-				case LispNames.READ_CHAR -> JvmReadCharCompiler.compile(cons, ctx, className);
+				case LispNames.READ_LINE -> {
+					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, false);
+					if (typed != null) {
+						JvmExprCompiler.compileExpr(typed, ctx, className);
+					}
+					else {
+						JvmReadLineCompiler.compile(cons, ctx, className);
+					}
+				}
+				case LispNames.READ_CHAR -> {
+					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
+					if (typed != null) {
+						JvmExprCompiler.compileExpr(typed, ctx, className);
+					}
+					else {
+						JvmReadCharCompiler.compile(cons, ctx, className);
+					}
+				}
+				case LispNames.PEEK_CHAR ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPeekChar(cons), ctx, className);
+				case LispNames.PEEK_CHAR_INTERNAL -> {
+					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
+					if (typed != null) {
+						JvmExprCompiler.compileExpr(typed, ctx, className);
+					}
+					else {
+						JvmPeekCharCompiler.compile(cons, ctx, className);
+					}
+				}
+				case LispNames.MAKE_SYNONYM_STREAM ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx, className);
 				case LispNames.OPEN -> JvmOpenCompiler.compile(cons, ctx, className);
 				case LispNames.CLOSE -> JvmCloseCompiler.compile(cons, ctx, className);
 				case LispNames.PROBE_FILE -> JvmProbeFileCompiler.compile(cons, ctx, className);
@@ -400,11 +429,16 @@ final class JvmExprCompiler {
 					}
 				}
 				case LispNames.WRITE_TO_STRING -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
-				case LispNames.MAKE_STRING_OUTPUT_STREAM ->
+				case LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL ->
 					JvmStringStreamCompiler.compileMakeOutputStream(cons, ctx, className);
-				case LispNames.MAKE_STRING_INPUT_STREAM ->
+				case LispNames.MAKE_STRING_OUTPUT_STREAM ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringOutputStream(cons), ctx, className);
+				case LispNames.GET_OUTPUT_STREAM_STRING ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandGetOutputStreamString(cons), ctx, className);
+				case LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL ->
 					JvmStringStreamCompiler.compileMakeInputStream(cons, ctx, className);
-				case LispNames.STRING_STREAM_CONTENTS -> JvmStringStreamCompiler.compileContents(cons, ctx, className);
+				case LispNames.STRING_STREAM_CONTENTS_INTERNAL ->
+					JvmStringStreamCompiler.compileContents(cons, ctx, className);
 				case LispNames.WITH_OUTPUT_TO_STRING ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOutputToString(cons), ctx, className);
 				case LispNames.WITH_INPUT_FROM_STRING ->
@@ -433,7 +467,15 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenStream(cons, true), ctx, className);
 				case LispNames.WITH_OPEN_FILE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons), ctx, className);
-				case LispNames.READ_BYTE -> JvmReadByteCompiler.compile(cons, ctx, className);
+				case LispNames.READ_BYTE -> {
+					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
+					if (typed != null) {
+						JvmExprCompiler.compileExpr(typed, ctx, className);
+					}
+					else {
+						JvmReadByteCompiler.compile(cons, ctx, className);
+					}
+				}
 				case LispNames.WRITE_BYTE -> JvmWriteByteCompiler.compile(cons, ctx, className);
 				case LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT ->
 					JvmForceOutputCompiler.compile(cons, ctx, className);

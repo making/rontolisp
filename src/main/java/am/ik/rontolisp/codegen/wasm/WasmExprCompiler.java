@@ -337,6 +337,21 @@ final class WasmExprCompiler {
 						throw new UnsupportedOperationException(
 								"rontolisp::" + qn.member() + " is an internal --component binding");
 					}
+					// The socket rewrite maps a 0/1-argument (read-char s) to
+					// (%io-read-char s), whose non-socket arm lands here -- so the typed
+					// end-of-file lowering has to apply under the alias too, or a
+					// component would keep the old uncatchable TRAP for exactly the
+					// programs that splice sockets.lisp.
+					LispVal typedRaw = switch (qn.member()) {
+						case LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL ->
+							LispMacroExpander.expandReadEofSignal(cons, true);
+						case LispNames.READ_LINE_RAW_INTERNAL -> LispMacroExpander.expandReadEofSignal(cons, false);
+						default -> null;
+					};
+					if (typedRaw != null) {
+						WasmExprCompiler.compileExpr(typedRaw, ctx);
+						return;
+					}
 					switch (qn.member()) {
 						case LispNames.READ_LINE_RAW_INTERNAL -> WasmReadLineCompiler.compile(cons, ctx);
 						case LispNames.READ_CHAR_RAW_INTERNAL -> WasmReadCharCompiler.compile(cons, ctx);
@@ -557,8 +572,36 @@ final class WasmExprCompiler {
 				case LispNames.FIND_PACKAGE -> WasmExprCompiler.compileExpr(
 						LispMacroExpander.expandRuntimeFindPackage(cons.toList().get(1), ctx.packageTable), ctx);
 				case LispNames.CONCATENATE -> WasmExprCompiler.compileExpr(ConcatenateForms.expand(cons), ctx);
-				case LispNames.READ_LINE -> WasmReadLineCompiler.compile(cons, ctx);
-				case LispNames.READ_CHAR -> WasmReadCharCompiler.compile(cons, ctx);
+				case LispNames.READ_LINE -> {
+					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, false);
+					if (typed != null) {
+						WasmExprCompiler.compileExpr(typed, ctx);
+					}
+					else {
+						WasmReadLineCompiler.compile(cons, ctx);
+					}
+				}
+				case LispNames.READ_CHAR -> {
+					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
+					if (typed != null) {
+						WasmExprCompiler.compileExpr(typed, ctx);
+					}
+					else {
+						WasmReadCharCompiler.compile(cons, ctx);
+					}
+				}
+				case LispNames.PEEK_CHAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPeekChar(cons), ctx);
+				case LispNames.PEEK_CHAR_INTERNAL -> {
+					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
+					if (typed != null) {
+						WasmExprCompiler.compileExpr(typed, ctx);
+					}
+					else {
+						WasmPeekCharCompiler.compile(cons, ctx);
+					}
+				}
+				case LispNames.MAKE_SYNONYM_STREAM ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx);
 				case LispNames.OPEN -> WasmOpenCompiler.compile(cons, ctx);
 				case LispNames.CLOSE -> WasmCloseCompiler.compile(cons, ctx);
 				case LispNames.PROBE_FILE -> WasmProbeFileCompiler.compile(cons, ctx);
@@ -573,9 +616,15 @@ final class WasmExprCompiler {
 					}
 				}
 				case LispNames.WRITE_TO_STRING -> WasmPrin1ToStringCompiler.compile(cons, ctx);
-				case LispNames.MAKE_STRING_OUTPUT_STREAM -> WasmWriteStringCompiler.compileMakeOutputStream(cons, ctx);
-				case LispNames.MAKE_STRING_INPUT_STREAM -> WasmWriteStringCompiler.compileMakeInputStream(cons, ctx);
-				case LispNames.STRING_STREAM_CONTENTS -> WasmWriteStringCompiler.compileContents(cons, ctx);
+				case LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL ->
+					WasmWriteStringCompiler.compileMakeOutputStream(cons, ctx);
+				case LispNames.MAKE_STRING_OUTPUT_STREAM ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringOutputStream(cons), ctx);
+				case LispNames.GET_OUTPUT_STREAM_STRING ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandGetOutputStreamString(cons), ctx);
+				case LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL ->
+					WasmWriteStringCompiler.compileMakeInputStream(cons, ctx);
+				case LispNames.STRING_STREAM_CONTENTS_INTERNAL -> WasmWriteStringCompiler.compileContents(cons, ctx);
 				// unwindProtect = ctx.ehMode: a literal with-* flips the
 				// module into EH mode via the gate, so these expansions ride
 				// unwind-protect like the interpreter/JVM (close on EVERY exit); the flag
@@ -608,7 +657,15 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenStream(cons, ctx.ehMode), ctx);
 				case LispNames.WITH_OPEN_FILE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons, ctx.ehMode), ctx);
-				case LispNames.READ_BYTE -> WasmReadByteCompiler.compile(cons, ctx);
+				case LispNames.READ_BYTE -> {
+					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
+					if (typed != null) {
+						WasmExprCompiler.compileExpr(typed, ctx);
+					}
+					else {
+						WasmReadByteCompiler.compile(cons, ctx);
+					}
+				}
 				case LispNames.WRITE_BYTE -> WasmWriteByteCompiler.compile(cons, ctx);
 				case LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT -> {
 					// Every WASM write goes out synchronously (fd_write / the component's

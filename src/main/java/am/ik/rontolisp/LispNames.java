@@ -1893,6 +1893,22 @@ public final class LispNames {
 	 */
 	public static final String READ_CHAR = "READ-CHAR";
 
+	/**
+	 * The {@code peek-char} built-in function
+	 * ({@code (peek-char [peek-type [stream [eof-error-p [eof-value]]]])}): the next
+	 * character of a stream WITHOUT consuming it. A literal {@code peek-type} of
+	 * {@code t} skips whitespace first, a literal character skips up to that character;
+	 * both are lowered to a {@code read-char} loop over the {@code nil} form.
+	 */
+	public static final String PEEK_CHAR = "PEEK-CHAR";
+
+	/**
+	 * The internal one-argument {@code %peek-char} primitive: the next character of a
+	 * stream, left in place. The {@code peek-type} handling of {@link #PEEK_CHAR} lowers
+	 * onto it.
+	 */
+	public static final String PEEK_CHAR_INTERNAL = "%PEEK-CHAR";
+
 	// String operations
 
 	/** The {@code string} built-in function (string-designator coercion). */
@@ -2492,16 +2508,37 @@ public final class LispNames {
 	public static final String WITH_STANDARD_IO_SYNTAX = "WITH-STANDARD-IO-SYNTAX";
 
 	/** The internal {@code %make-string-output-stream} helper (string-builder stream). */
-	public static final String MAKE_STRING_OUTPUT_STREAM = "%MAKE-STRING-OUTPUT-STREAM";
+	public static final String MAKE_STRING_OUTPUT_STREAM_INTERNAL = "%MAKE-STRING-OUTPUT-STREAM";
 
 	/** The internal {@code %make-string-input-stream} helper (read from a string). */
-	public static final String MAKE_STRING_INPUT_STREAM = "%MAKE-STRING-INPUT-STREAM";
+	public static final String MAKE_STRING_INPUT_STREAM_INTERNAL = "%MAKE-STRING-INPUT-STREAM";
 
 	/**
-	 * The internal {@code %string-stream-contents} helper (the string accumulated by a
-	 * {@code %make-string-output-stream} stream).
+	 * The internal {@code %string-stream-contents} helper: the string accumulated by a
+	 * {@code %make-string-output-stream} stream, which it also CLEARS (CL's
+	 * {@code get-output-stream-string} contract -- {@link #GET_OUTPUT_STREAM_STRING} is
+	 * its public spelling).
 	 */
-	public static final String STRING_STREAM_CONTENTS = "%STRING-STREAM-CONTENTS";
+	public static final String STRING_STREAM_CONTENTS_INTERNAL = "%STRING-STREAM-CONTENTS";
+
+	/**
+	 * The {@code make-string-output-stream} built-in function: a fresh string output
+	 * stream, the public spelling of {@link #MAKE_STRING_OUTPUT_STREAM_INTERNAL}.
+	 */
+	public static final String MAKE_STRING_OUTPUT_STREAM = "MAKE-STRING-OUTPUT-STREAM";
+
+	/**
+	 * The {@code get-output-stream-string} built-in function: the string a
+	 * {@code make-string-output-stream} stream has accumulated so far, CLEARING the
+	 * stream so the next call answers only what was written after this one.
+	 */
+	public static final String GET_OUTPUT_STREAM_STRING = "GET-OUTPUT-STREAM-STRING";
+
+	/**
+	 * The {@code make-synonym-stream} built-in function: a stream that forwards every
+	 * operation to the CURRENT value of the symbol it names.
+	 */
+	public static final String MAKE_SYNONYM_STREAM = "MAKE-SYNONYM-STREAM";
 
 	// Packages
 

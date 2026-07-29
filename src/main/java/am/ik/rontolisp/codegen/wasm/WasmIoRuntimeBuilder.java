@@ -550,7 +550,23 @@ final class WasmIoRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// WASI fd branch: read the lead byte via fd_read, then per-byte follow-ups.
+		// WASI fd branch. A peek on this fd may have parked a whole code point in the
+		// one-slot pushback (a fd cannot be un-read): drain it before touching the fd.
+		loadMem32(w, WasmLispCompiler.PEEK_FD_ADDR);
+		getLocal(w, FD);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.PEEK_FD_ADDR);
+		i32(w, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		loadMem32(w, WasmLispCompiler.PEEK_CP_ADDR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// Read the lead byte via fd_read, then per-byte follow-ups.
 		// iov.ptr = SCRATCH ; iov.len = 1
 		i32(w, IOV);
 		i32(w, SCRATCH);
@@ -657,6 +673,162 @@ final class WasmIoRuntimeBuilder {
 		emitUtf8DecodeFromLocals(w, NEEDED, B0, B1, B2, B3);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _peek_char(stream, eof-error-p, eof-value) function body: the next
+	 * character of the stream, LEFT IN PLACE. A string input stream (a negative i31
+	 * handle) decodes the UTF-8 sequence at its record's cursor WITHOUT advancing it, so
+	 * peeking there is exact and unlimited. A WASI fd cannot be un-read, so the code
+	 * point is read through {@code _read_char} and parked in the one-slot pushback
+	 * ({@code PEEK_FD_ADDR}/{@code PEEK_CP_ADDR}) that {@code _read_char} drains first --
+	 * keyed on the fd, so a peek on one stream is never consumed by a read on another. A
+	 * repeated peek answers the parked code point.
+	 * @return the function body bytes
+	 */
+	static byte[] buildPeekCharBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: STREAM=0 (ref), EOF_ERROR_P=1 (ref), EOF_VALUE=2 (ref) ; i32 locals:
+		// FD=3, REC=4, CUR=5, END=6, NEEDED=7, B0=8, B1=9, B2=10, B3=11 ; ref local:
+		// C=12
+		w.write(2);
+		w.write(9);
+		w.write(Type.I32);
+		w.write(1);
+		w.write(Type.REFNULL);
+		w.writeHeapType(Type.EQ.code());
+		final int STREAM = 0, EOF_ERROR_P = 1, EOF_VALUE = 2, FD = 3, REC = 4, CUR = 5, END = 6, NEEDED = 7, B0 = 8,
+				B1 = 9, B2 = 10, B3 = 11, C = 12;
+
+		// fd = stream is nil ? 0 (stdin) : i31.get_s(stream)
+		getLocal(w, STREAM);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 0);
+		w.write(Instruction.ELSE);
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.END);
+		setLocal(w, FD);
+		// A negative handle is a string input stream: decode at the cursor, leave it.
+		getLocal(w, FD);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		getLocal(w, FD);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, REC);
+		getLocal(w, REC);
+		i32(w, 4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, CUR);
+		getLocal(w, REC);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, END);
+		getLocal(w, CUR);
+		getLocal(w, END);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		emitReadCharEof(w, EOF_ERROR_P, EOF_VALUE);
+		w.write(Instruction.END);
+		getLocal(w, CUR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B0);
+		emitUtf8ByteCount(w, B0);
+		setLocal(w, NEEDED);
+		// If cur + needed > end: needed = 1 (truncated tail -- bare lead byte).
+		getLocal(w, CUR);
+		getLocal(w, NEEDED);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, END);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 1);
+		setLocal(w, NEEDED);
+		w.write(Instruction.END);
+		getLocal(w, NEEDED);
+		i32(w, 2);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B1);
+		w.write(Instruction.END);
+		getLocal(w, NEEDED);
+		i32(w, 3);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B2);
+		w.write(Instruction.END);
+		getLocal(w, NEEDED);
+		i32(w, 4);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B3);
+		w.write(Instruction.END);
+		// The cursor is NOT advanced -- that is the whole difference from _read_char.
+		emitUtf8DecodeFromLocals(w, NEEDED, B0, B1, B2, B3);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// WASI fd: answer the parked code point when this fd already has one.
+		loadMem32(w, WasmLispCompiler.PEEK_FD_ADDR);
+		getLocal(w, FD);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		loadMem32(w, WasmLispCompiler.PEEK_CP_ADDR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// c = _read_char(stream, nil, nil) -- nil eof-error-p, so end of file is null.
+		getLocal(w, STREAM);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_CHAR);
+		setLocal(w, C);
+		getLocal(w, C);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		emitReadCharEof(w, EOF_ERROR_P, EOF_VALUE);
+		w.write(Instruction.END);
+		// Park it: mem[PEEK_FD] = fd + 1 ; mem[PEEK_CP] = code point.
+		i32(w, WasmLispCompiler.PEEK_FD_ADDR);
+		getLocal(w, FD);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, WasmLispCompiler.PEEK_CP_ADDR);
+		getLocal(w, C);
+		refCast(w, WasmLispCompiler.TYPE_CHAR);
+		structGet(w, WasmLispCompiler.TYPE_CHAR, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, C);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

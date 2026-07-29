@@ -504,6 +504,54 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalStringOutputStreamNamesClearOnRead() {
+		// CL's get-output-stream-string answers what has accumulated AND empties the
+		// stream, so the second fetch sees only the writes that followed the first.
+		assertThat(evalMulti("""
+				(defvar *s* (make-string-output-stream))
+				(write-string "ab" *s*)
+				(list (get-output-stream-string *s*)
+				      (progn (write-string "cd" *s*) (get-output-stream-string *s*))
+				      (get-output-stream-string *s*))""").print()).isEqualTo("(\"ab\" \"cd\" \"\")");
+	}
+
+	@Test
+	void evalPeekCharLeavesTheCharacterInTheStream() {
+		assertThat(eval("""
+				(with-input-from-string (s "ab")
+				  (list (peek-char nil s) (peek-char nil s) (read-char s) (read-char s)
+				        (peek-char nil s nil :eof)))""").print()).isEqualTo("(#\\a #\\a #\\a #\\b :EOF)");
+	}
+
+	@Test
+	void evalPeekCharSkipsWhitespaceAndUpToACharacter() {
+		assertThat(eval("""
+				(with-input-from-string (s "   xy")
+				  (list (peek-char t s) (read-char s) (peek-char #\\y s) (read-char s)))""").print())
+			.isEqualTo("(#\\x #\\x #\\y #\\y)");
+	}
+
+	@Test
+	void evalReadCharEndOfFileIsCatchableAsEndOfFile() {
+		// The read family signals the REGISTERED end-of-file class, which is what makes
+		// a CL lexer's (handler-case ... (end-of-file (e) ...)) loop terminate.
+		assertThat(eval("""
+				(with-input-from-string (s "")
+				  (handler-case (read-char s) (end-of-file () :caught)))""").print()).isEqualTo(":CAUGHT");
+		assertThat(eval("""
+				(with-input-from-string (s "")
+				  (handler-case (read-char s) (error () :as-error)))""").print()).isEqualTo(":AS-ERROR");
+	}
+
+	@Test
+	void evalMakeSynonymStreamResolvesTheNamedVariable() {
+		// Lite: the symbol resolves ONCE, where the stream is built -- unbound
+		// *standard-output* is the t designator, and a string stream bound around the
+		// construction is what the synonym answers.
+		assertThat(eval("(make-synonym-stream '*standard-output*)")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
 	void evalWithOutputToStringEmptyBody() {
 		assertThat(eval("(with-output-to-string (s))")).isEqualTo(new LispString(""));
 	}
@@ -4538,10 +4586,12 @@ class LispEvaluatorTest {
 					"SYMBOL-VALUE")
 			.contains("BYTE", "BYTE-SIZE", "BYTE-POSITION", "LDB", "DPB")
 			.contains("STRING")
+			.contains("PEEK-CHAR", "MAKE-STRING-OUTPUT-STREAM", "GET-OUTPUT-STREAM-STRING", "MAKE-SYNONYM-STREAM")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
-					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer", "%string-compare")
+					"%make-string-input-stream", "%string-stream-contents", "%peek-char", "%set-fill-pointer",
+					"%string-compare")
 			.isSorted()
-			.hasSize(330);
+			.hasSize(334);
 	}
 
 	@Test

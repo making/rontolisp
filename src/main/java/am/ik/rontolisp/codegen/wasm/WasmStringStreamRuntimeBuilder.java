@@ -349,12 +349,26 @@ final class WasmStringStreamRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
-		// memory[cur] = '"' ; return _str_fresh(start, total) -- the contents is a
-		// runtime
-		// string, so it gets a fresh counter id.
+		// memory[cur] = '"'
 		getLocal(w, CUR);
 		i32(w, 0x22);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		// CLEAR the record (head = tail = 0): CL's get-output-stream-string answers what
+		// was accumulated AND empties the stream, so a second call sees only what was
+		// written after the first. The chunk bytes stay where the bump allocator put
+		// them -- nothing references them once the chain head is gone.
+		getLocal(w, REC);
+		i32(w, 4);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, REC);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// return _str_fresh(start, total) -- the contents is a runtime string, so it
+		// gets a fresh counter id.
 		getLocal(w, START);
 		getLocal(w, TOTAL);
 		WasmEmitHelper.emitStrFreshCall(w);

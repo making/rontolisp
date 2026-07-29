@@ -51,6 +51,7 @@
 | `string-left-trim` | `(string-left-trim "x" "xxhi")` | `"hi"` |
 | `string-right-trim` | `(string-right-trim "x" "hixx")` | `"hi"` |
 | `read-line` | `(read-line)`, `(read-line stream)` | 標準入力(または入力ストリーム)から1行読み込み、文字列として返します。EOFでは `nil` |
+| `peek-char` | `(peek-char nil s)`, `(peek-char t s)`, `(peek-char #\; s)` | ストリームの次の文字を消費せずに返します。`peek-type` が `nil` なら何も読み飛ばさず、`t` なら空白を、文字ならその文字までを読み飛ばします。返した文字はストリームに残ります。EOF では `end-of-file` を通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
 | `open` | `(open "f.txt")`, `(open "f.txt" :output)`, `(open "f.bin" :input '(unsigned-byte 8))` | ファイルを開いてストリームを返します。方向はリテラルの `:input`(デフォルト、読み込み)または `:output`(作成/切り詰め、書き込み)でなければなりません。省略可能な要素型はリテラルの `'character`(デフォルト、テキスト)または `'(unsigned-byte 8)`(バイナリ)でなければなりません |
 | `close` | `(close stream)` | `open` で開いたストリームを閉じます。`t` を返します |
 | `probe-file` | `(probe-file "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil`。存在しないパスで失敗しない唯一のファイル操作です（`open` は WASM でトラップし、`handler-case` では捕捉できません）。`uiop:file-exists-p` は同じ操作です |
@@ -59,7 +60,7 @@
 | `finish-output` | `(finish-output stream)` | `force-output` と同じ操作。ここでは書き出し後の書き込みはすべて同期的 |
 | `listen` | `(listen stream)` | ブロックせずに入力を読めるなら `t`。Preview 1 の WASM にはこの問い合わせ手段がない |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | 文字列と改行を出力ストリーム(または標準出力)に書き込みます。文字列を返します |
-| `read-byte` | `(read-byte stream)`, `(read-byte stream nil -1)` | バイナリ入力ストリームから 1 バイト(0-255)を読み込みます。EOF ではエラーを通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
+| `read-byte` | `(read-byte stream)`, `(read-byte stream nil -1)` | バイナリ入力ストリームから 1 バイト(0-255)を読み込みます。EOF では `end-of-file` コンディションを通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
 | `write-byte` | `(write-byte 255 stream)` | バイナリ出力ストリームに生の 1 バイト(0-255)を書き込みます。バイトを返します |
 | `read-sequence` | `(read-sequence buf stream)`, `(read-sequence buf stream :start 2 :end 4)` | バイナリ入力ストリームのバイトでベクタを埋めます。充填位置を返します。`:start`/`:end` はリテラルのキーワードでなければなりません |
 | `write-sequence` | `(write-sequence "abcd" s :start 1 :end 3)`, `(write-sequence buf stream)` | シーケンスをストリームに書き込み、それを返します。文字列は（`write-string` と同様に）文字として書き込まれ、バイト(0-255)のベクタはバイナリ出力ストリームに書き込まれます。`:start`/`:end` はリテラルのキーワードでなければなりません |
@@ -286,6 +287,9 @@
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録（lite: グローバル、パッケージごとのスコープなし） |
 | `file-position` | `(file-position s)` | 常に `nil`(lite: ストリームはシーク非対応) |
 | `file-length` | `(file-length s)` | 常に `nil`(lite) |
+| `make-string-output-stream` | `(make-string-output-stream)` | 新しい文字列出力ストリーム。`with-output-to-string` が内部で作るものを明示的に作ります |
+| `get-output-stream-string` | `(get-output-stream-string s)` | 文字列出力ストリームにこれまで書き込まれた内容を返し、ストリームを空にします (CL の仕様どおり) |
+| `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | 指定した変数が保持するストリーム指定子。ライト実装: 操作ごとではなく、ストリームを作った時点で一度だけ解決します |
 | `make-broadcast-stream` | `(make-broadcast-stream)` | 書き込みを捨てるシンクストリーム(コンポーネントストリーム非対応) |
 | `pathnamep` | `(pathnamep "/tmp/x")` | 常に `nil` -- rontolisp に pathname 型はありません |
 | `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t` |

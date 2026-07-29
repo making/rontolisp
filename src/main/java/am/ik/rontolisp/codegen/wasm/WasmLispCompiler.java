@@ -808,7 +808,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// byte, a non-negative i31 (WASI fd) always writes a newline. Returns nil.
 	static final int FUNC_FRESH_LINE_STREAM = FUNC_PROBE_FILE + 1;
 
-	static final int FX_FUNC_LAST = FUNC_FRESH_LINE_STREAM;
+	// _peek_char ((ref null eq) stream, eof-error-p, eof-value) -> (ref null eq): the
+	// next character LEFT IN PLACE. A string input record simply decodes at its cursor
+	// without advancing it; a WASI fd cannot un-read, so the code point goes into the
+	// one-slot pushback cell (PEEK_FD_ADDR / PEEK_CP_ADDR) that _read_char drains first.
+	// Appended before FUNC_USER_BASE like the mod/rem helpers, so no import/FUNC_START
+	// index shifts and the component adapter blobs are unaffected.
+	static final int FUNC_PEEK_CHAR = FUNC_FRESH_LINE_STREAM + 1;
+
+	static final int FX_FUNC_LAST = FUNC_PEEK_CHAR;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -1311,6 +1319,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	// VALUE equality on i31 (ref.eq of equal i31s is true by spec), never GC-struct
 	// identity. Zero-initialized memory starts the ids at 1.
 	static final int NLX_ID_CTR_ADDR = 196;
+
+	// peek-char's ONE-SLOT pushback for WASI file descriptors. A fd cannot be un-read,
+	// so _peek_char reads a whole code point and parks it here; _read_char drains the
+	// cell before touching the fd. PEEK_FD_ADDR holds fd+1 (0 = empty, so the
+	// zero-initialized memory starts out drained) and PEEK_CP_ADDR the parked code
+	// point. Keying on the fd is what keeps a peek on one stream from being consumed by
+	// a read on another. String input streams never use it -- their record carries a
+	// cursor, so peeking there is just "decode without advancing".
+	static final int PEEK_FD_ADDR = 200;
+
+	static final int PEEK_CP_ADDR = 204;
 
 	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
 	// and
@@ -3597,6 +3616,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_T_SYM); // _t_sym
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _probe_file
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fresh_line_stream
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _peek_char (stream,
+															// eof-error-p, eof-value) ->
+															// (ref null eq)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -4087,6 +4109,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmIoRuntimeBuilder.buildProbeFileBody());
 				// fresh-line stream helper body (FUNC_FRESH_LINE_STREAM)
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildFreshLineStreamBody(stringTable.newline.offset()));
+				// peek-char runtime helper body (FUNC_PEEK_CHAR)
+				code.addFunction(WasmIoRuntimeBuilder.buildPeekCharBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

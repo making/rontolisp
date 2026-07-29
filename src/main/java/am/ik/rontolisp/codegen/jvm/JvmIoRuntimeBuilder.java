@@ -69,6 +69,10 @@ final class JvmIoRuntimeBuilder {
 
 	static final String READ_CHAR_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String PEEK_CHAR_METHOD = "_peekChar";
+
+	static final String PEEK_CHAR_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String WRITE_BYTE_METHOD = "_writeByte";
 
 	static final String WRITE_BYTE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
@@ -208,6 +212,10 @@ final class JvmIoRuntimeBuilder {
 	private final MethodrefConstant stringWriterInit;
 
 	private final MethodrefConstant stringWriterToString;
+
+	private final MethodrefConstant stringWriterGetBuffer;
+
+	private final MethodrefConstant stringBufferSetLength;
 
 	private final ClassConstant stringReaderClass;
 
@@ -357,6 +365,12 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
 		this.stringWriterToString = cp.addMethodref(this.stringWriterClass,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		// get-output-stream-string CLEARS the stream as it answers (CL 21.2), which on
+		// this backend is StringWriter.getBuffer().setLength(0).
+		this.stringWriterGetBuffer = cp.addMethodref(this.stringWriterClass,
+				cp.addNameAndType(cp.addUtf8("getBuffer"), cp.addUtf8("()Ljava/lang/StringBuffer;")));
+		this.stringBufferSetLength = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/StringBuffer")),
+				cp.addNameAndType(cp.addUtf8("setLength"), cp.addUtf8("(I)V")));
 		this.stringReaderClass = cp.addClass(cp.addUtf8("java/io/StringReader"));
 		this.stringReaderInit = cp.addMethodref(this.stringReaderClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
@@ -364,7 +378,7 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8(WRITE_STR_METHOD), cp.addUtf8(WRITE_STR_DESC)));
 		// read-char support: the lazily initialized _stdinReader field (shared with the
 		// _readLine helper), BufferedReader.read() and the boxed Character result.
-		this.charEofStr = cp.addString("read-char: end of file");
+		this.charEofStr = cp.addString(am.ik.rontolisp.ClosRegistry.END_OF_FILE_MESSAGE);
 		this.stdinReaderField = cp.addFieldref(thisClass,
 				cp.addNameAndType(cp.addUtf8("_stdinReader"), cp.addUtf8("Ljava/io/BufferedReader;")));
 		this.systemIn = cp.addFieldref(cp.addClass(cp.addUtf8("java/lang/System")),
@@ -428,6 +442,7 @@ final class JvmIoRuntimeBuilder {
 				buildReadLineStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(READ_BYTE_METHOD), this.cp.addUtf8(READ_BYTE_DESC), 4, 5, buildReadByte()));
 		ms.add(new IoMethod(this.cp.addUtf8(READ_CHAR_METHOD), this.cp.addUtf8(READ_CHAR_DESC), 5, 6, buildReadChar()));
+		ms.add(new IoMethod(this.cp.addUtf8(PEEK_CHAR_METHOD), this.cp.addUtf8(PEEK_CHAR_DESC), 5, 6, buildPeekChar()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_BYTE_METHOD), this.cp.addUtf8(WRITE_BYTE_DESC), 4, 3,
 				buildWriteByte()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STR_METHOD), this.cp.addUtf8(WRITE_STR_DESC), 4, 3, buildWriteStr()));
@@ -438,7 +453,7 @@ final class JvmIoRuntimeBuilder {
 		ms.add(new IoMethod(this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_METHOD),
 				this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_DESC), 7, 4, buildMakeStringInputStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(STRING_STREAM_CONTENTS_METHOD),
-				this.cp.addUtf8(STRING_STREAM_CONTENTS_DESC), 3, 2, buildStringStreamContents()));
+				this.cp.addUtf8(STRING_STREAM_CONTENTS_DESC), 3, 3, buildStringStreamContents()));
 		ms.add(new IoMethod(this.cp.addUtf8(FRESH_LINE_METHOD), this.cp.addUtf8(FRESH_LINE_DESC), 4, 3,
 				buildFreshLine()));
 		ms.add(new IoMethod(this.cp.addUtf8(FORCE_OUTPUT_METHOD), this.cp.addUtf8(FORCE_OUTPUT_DESC), 4, 2,
@@ -1447,55 +1462,7 @@ final class JvmIoRuntimeBuilder {
 		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=r (BufferedReader), 4=c (int),
 		// 5=low (int)
 		List<Integer> code = new ArrayList<>();
-		// if (handle != null) goto STREAM;
-		code.add(Opcode.ALOAD_0);
-		int ifStreamPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		// if (_stdinReader == null) _stdinReader = new BufferedReader(new
-		// InputStreamReader(System.in));
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.stdinReaderField.index());
-		int ifHavePos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.NEW);
-		emitU2(code, this.bufferedReaderClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.NEW);
-		emitU2(code, this.inputStreamReaderClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.systemIn.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.inputStreamReaderInit.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.bufferedReaderInit.index());
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.stdinReaderField.index());
-		patchBranch(code, ifHavePos, code.size());
-		// r = _stdinReader; goto READ;
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.stdinReaderField.index());
-		code.add(Opcode.ASTORE_3);
-		int gotoReadPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifStreamPos, code.size());
-		// STREAM: r = (BufferedReader) _streams[(int) ((Long) handle).longValue()];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.bufferedReaderClass.index());
-		code.add(Opcode.ASTORE_3);
-		patchBranch(code, gotoReadPos, code.size());
+		emitResolveReader(code);
 		// READ: c = r.read();
 		code.add(Opcode.ALOAD_3);
 		code.add(Opcode.INVOKEVIRTUAL);
@@ -1566,17 +1533,123 @@ final class JvmIoRuntimeBuilder {
 		patchBranch(code, ifNotHighPos, code.size());
 		patchBranch(code, ifLowEofPos, code.size());
 		patchBranch(code, gotoBoxAfterCombinePos, code.size());
+		emitBoxCodePoint(code, 4);
+		// EOF: if (eofErrorP == null) return eofValue;
+		patchBranch(code, ifEofPos, code.size());
+		emitCharEof(code);
+		return code;
+	}
+
+	/**
+	 * {@code _peekChar(Object handle, Object eofErrorP, Object eofValue) -> Object}. The
+	 * next character of the stream, LEFT IN PLACE: a {@code mark(2)} before the read and
+	 * a {@code reset()} after it put the position back, and the budget of 2 covers a
+	 * surrogate pair, so a supplementary code point peeks whole. Matches
+	 * {@code Environment}'s {@code %peek-char} on the interpreter and
+	 * {@code _peek_char}'s pushback cell on WASM.
+	 */
+	private List<Integer> buildPeekChar() {
+		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=r (BufferedReader), 4=c (int),
+		// 5=low (int)
+		List<Integer> code = new ArrayList<>();
+		emitResolveReader(code);
+		// r.mark(2);
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.ICONST_2);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.bufferedReaderMark.index());
+		// c = r.read();
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.bufferedReaderRead.index());
+		code.add(Opcode.ISTORE);
+		code.add(4);
+		// if (c < 0) goto EOF;
+		code.add(Opcode.ILOAD);
+		code.add(4);
+		int ifEofPos = code.size();
+		code.add(Opcode.IFLT);
+		emitU2(code, 0);
+		// if (!Character.isHighSurrogate((char) c)) goto BOX;
+		code.add(Opcode.ILOAD);
+		code.add(4);
+		code.add(Opcode.I2C);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.characterIsHighSurrogate.index());
+		int ifNotHighPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		// low = r.read();
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.bufferedReaderRead.index());
+		code.add(Opcode.ISTORE);
+		code.add(5);
+		// if (low < 0) goto BOX;
+		code.add(Opcode.ILOAD);
+		code.add(5);
+		int ifLowEofPos = code.size();
+		code.add(Opcode.IFLT);
+		emitU2(code, 0);
+		// if (!Character.isLowSurrogate((char) low)) goto BOX;
+		code.add(Opcode.ILOAD);
+		code.add(5);
+		code.add(Opcode.I2C);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.characterIsLowSurrogate.index());
+		int ifNotLowPos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		// c = Character.toCodePoint((char) c, (char) low);
+		code.add(Opcode.ILOAD);
+		code.add(4);
+		code.add(Opcode.I2C);
+		code.add(Opcode.ILOAD);
+		code.add(5);
+		code.add(Opcode.I2C);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.characterToCodePoint.index());
+		code.add(Opcode.ISTORE);
+		code.add(4);
+		// BOX: r.reset(); return int[1]{c}.
+		patchBranch(code, ifNotHighPos, code.size());
+		patchBranch(code, ifLowEofPos, code.size());
+		patchBranch(code, ifNotLowPos, code.size());
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.bufferedReaderReset.index());
+		emitBoxCodePoint(code, 4);
+		// EOF: rewind (the mark is still live) and take the eof branch.
+		patchBranch(code, ifEofPos, code.size());
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.bufferedReaderReset.index());
+		emitCharEof(code);
+		return code;
+	}
+
+	/** {@code return int[1]{slot}} -- the runtime CHARACTER representation. */
+	private static void emitBoxCodePoint(List<Integer> code, int slot) {
 		code.add(Opcode.ICONST_1);
 		code.add(Opcode.NEWARRAY);
 		code.add(10); // T_INT
 		code.add(Opcode.DUP);
 		code.add(Opcode.ICONST_0);
 		code.add(Opcode.ILOAD);
-		code.add(4);
+		code.add(slot);
 		code.add(Opcode.IASTORE);
 		code.add(Opcode.ARETURN);
-		// EOF: if (eofErrorP == null) return eofValue;
-		patchBranch(code, ifEofPos, code.size());
+	}
+
+	/**
+	 * The shared end-of-file tail of {@code _readChar}/{@code _peekChar}: return
+	 * {@code eofValue} when {@code eofErrorP} is nil, otherwise throw. The throw is a
+	 * BACKSTOP -- every compiled call site whose eof-error-p can be true is rewritten to
+	 * the typed {@code end-of-file} signal by
+	 * {@code LispMacroExpander.expandReadEofSignal}, which reaches the helper with a nil
+	 * eof-error-p and decides in Lisp.
+	 */
+	private void emitCharEof(List<Integer> code) {
 		code.add(Opcode.ALOAD_1);
 		int ifThrowPos = code.size();
 		code.add(Opcode.IFNONNULL);
@@ -1584,7 +1657,6 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.ARETURN);
 		patchBranch(code, ifThrowPos, code.size());
-		// throw new RuntimeException("read-char: end of file");
 		code.add(Opcode.NEW);
 		emitU2(code, this.runtimeExceptionClass.index());
 		code.add(Opcode.DUP);
@@ -1592,7 +1664,63 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.INVOKESPECIAL);
 		emitU2(code, this.runtimeExceptionInit.index());
 		code.add(Opcode.ATHROW);
-		return code;
+	}
+
+	/**
+	 * Resolves the stream argument in slot 0 into a {@code BufferedReader} in slot 3: a
+	 * null handle is standard input (lazily initializing the {@code _stdinReader} field
+	 * the {@code _readLine} helper shares), otherwise the table entry.
+	 */
+	private void emitResolveReader(List<Integer> code) {
+		// if (handle != null) goto STREAM;
+		code.add(Opcode.ALOAD_0);
+		int ifStreamPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		// if (_stdinReader == null) _stdinReader = new BufferedReader(new
+		// InputStreamReader(System.in));
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.stdinReaderField.index());
+		int ifHavePos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		code.add(Opcode.NEW);
+		emitU2(code, this.bufferedReaderClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.NEW);
+		emitU2(code, this.inputStreamReaderClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.systemIn.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.inputStreamReaderInit.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.bufferedReaderInit.index());
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, this.stdinReaderField.index());
+		patchBranch(code, ifHavePos, code.size());
+		// r = _stdinReader; goto READ;
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.stdinReaderField.index());
+		code.add(Opcode.ASTORE_3);
+		int gotoReadPos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifStreamPos, code.size());
+		// STREAM: r = (BufferedReader) _streams[(int) ((Long) handle).longValue()];
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.bufferedReaderClass.index());
+		code.add(Opcode.ASTORE_3);
+		patchBranch(code, gotoReadPos, code.size());
 	}
 
 	/**
@@ -1905,12 +2033,14 @@ final class JvmIoRuntimeBuilder {
 	/**
 	 * {@code _stringStreamContents(Object handle) -> String}. Returns the string
 	 * accumulated by a {@code StringWriter} table entry, wrapped in the internal
-	 * {@code '"'} prefix/suffix string format.
+	 * {@code '"'} prefix/suffix string format, and CLEARS the entry -- CL's
+	 * {@code get-output-stream-string} contract, which {@code with-output-to-string}
+	 * cannot tell apart because it fetches once and then closes.
 	 */
 	private List<Integer> buildStringStreamContents() {
-		// Slots: 0=handle, 1=content (String)
+		// Slots: 0=handle, 1=content (String), 2=writer (StringWriter)
 		List<Integer> code = new ArrayList<>();
-		// content = ((StringWriter) _streams[idx]).toString();
+		// writer = (StringWriter) _streams[idx];
 		code.add(Opcode.GETSTATIC);
 		emitU2(code, this.streamsField.index());
 		code.add(Opcode.ALOAD_0);
@@ -1922,9 +2052,19 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.AALOAD);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.stringWriterClass.index());
+		code.add(Opcode.ASTORE_2);
+		// content = writer.toString();
+		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.stringWriterToString.index());
 		code.add(Opcode.ASTORE_1);
+		// writer.getBuffer().setLength(0);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringWriterGetBuffer.index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringBufferSetLength.index());
 		// return "\"".concat(content).concat("\"");
 		emitLdc(code, this.quoteStr.index());
 		code.add(Opcode.ALOAD_1);

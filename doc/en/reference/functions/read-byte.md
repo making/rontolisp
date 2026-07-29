@@ -2,7 +2,7 @@
 
 `(read-byte stream &optional eof-error-p eof-value)`
 
-Reads one byte from a binary input stream -- a stream opened with `:element-type '(unsigned-byte 8)` -- and returns it as an integer between 0 and 255. At end of file it signals an error by default; passing `nil` as `eof-error-p` makes it return `eof-value` (default `nil`) instead. Works in all three backends. Bytes pass through raw: values such as 0 (NUL), 10 (LF) and 34 (`"`) are not interpreted.
+Reads one byte from a binary input stream -- a stream opened with `:element-type '(unsigned-byte 8)` -- and returns it as an integer between 0 and 255. At end of file it signals an `end-of-file` condition by default (catchable as `end-of-file`, or as `error`); passing `nil` as `eof-error-p` makes it return `eof-value` (default `nil`) instead. Works in all three backends. Bytes pass through raw: values such as 0 (NUL), 10 (LF) and 34 (`"`) are not interpreted.
 
 Because it touches the filesystem, `read-byte` is shown here statically rather than as a runnable example:
 

@@ -54,6 +54,7 @@ page.
 | `string-left-trim` | `(string-left-trim "x" "xxhi")` | `"hi"` |
 | `string-right-trim` | `(string-right-trim "x" "hixx")` | `"hi"` |
 | `read-line` | `(read-line)`, `(read-line stream)` | Read one line from stdin (or from an input stream), return as string. `nil` on EOF |
+| `peek-char` | `(peek-char nil s)`, `(peek-char t s)`, `(peek-char #\; s)` | The next character of a stream WITHOUT consuming it. `peek-type` `nil` skips nothing, `t` skips whitespace, a character skips up to that character; the character returned is left in the stream. At EOF, signal `end-of-file`, or return `eof-value` when `eof-error-p` is `nil` |
 | `open` | `(open "f.txt")`, `(open "f.txt" :output)`, `(open "f.bin" :input '(unsigned-byte 8))` | Open a file and return a stream. The direction must be the literal `:input` (default, read) or `:output` (create/truncate, write); the optional element type must be the literal `'character` (default, text) or `'(unsigned-byte 8)` (binary) |
 | `close` | `(close stream)` | Close a stream opened by `open`. Returns `t` |
 | `probe-file` | `(probe-file "f.txt")` | The pathname when the file exists, `nil` otherwise. The only file operation that does not fail on a missing path (`open` traps on WASM, which `handler-case` cannot catch). `uiop:file-exists-p` is the same operation |
@@ -62,7 +63,7 @@ page.
 | `finish-output` | `(finish-output stream)` | The same operation as `force-output` -- every write here is synchronous once flushed |
 | `listen` | `(listen stream)` | `t` when input is immediately available without blocking; Preview 1 WASM has no such probe |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | Write the string plus a newline to an output stream (or to standard output). Returns the string |
-| `read-byte` | `(read-byte stream)`, `(read-byte stream nil -1)` | Read one byte (0-255) from a binary input stream. At EOF, signal an error, or return `eof-value` when `eof-error-p` is `nil` |
+| `read-byte` | `(read-byte stream)`, `(read-byte stream nil -1)` | Read one byte (0-255) from a binary input stream. At EOF, signal an `end-of-file` condition, or return `eof-value` when `eof-error-p` is `nil` |
 | `write-byte` | `(write-byte 255 stream)` | Write one raw byte (0-255) to a binary output stream. Returns the byte |
 | `read-sequence` | `(read-sequence buf stream)`, `(read-sequence buf stream :start 2 :end 4)` | Fill a vector with bytes from a binary input stream. Returns the fill position. `:start`/`:end` must be literal keywords |
 | `write-sequence` | `(write-sequence "abcd" s :start 1 :end 3)`, `(write-sequence buf stream)` | Write a sequence to a stream and return it. A string is written as characters (like `write-string`); a vector of bytes (0-255) is written to a binary output stream. `:start`/`:end` must be literal keywords |
@@ -290,6 +291,9 @@ page.
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping) |
 | `file-position` | `(file-position s)` | always `nil` (lite: streams do not support repositioning) |
 | `file-length` | `(file-length s)` | always `nil` (lite) |
+| `make-string-output-stream` | `(make-string-output-stream)` | a fresh string output stream -- the explicit form of what `with-output-to-string` builds |
+| `get-output-stream-string` | `(get-output-stream-string s)` | everything written to a string output stream so far, CLEARING it (CL's contract) |
+| `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | the designator the named variable holds. Lite: resolved ONCE, where the stream is built, not on every operation |
 | `make-broadcast-stream` | `(make-broadcast-stream)` | a discarding sink stream (no component streams) |
 | `pathnamep` | `(pathnamep "/tmp/x")` | always `nil` -- rontolisp has no pathname type |
 | `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle |

@@ -288,6 +288,7 @@ categories:
       - { slug: read, name: "read" }
       - { slug: read-line, name: "read-line" }
       - { slug: read-char, name: "read-char" }
+      - { slug: peek-char, name: "peek-char" }
       - { slug: read-from-string, name: "read-from-string" }
       - { slug: parse-integer, name: "parse-integer" }
       - { slug: copy-readtable, name: "copy-readtable" }
@@ -331,6 +332,9 @@ categories:
       - { slug: write-sequence, name: "write-sequence" }
       - { slug: file-position, name: "file-position" }
       - { slug: file-length, name: "file-length" }
+      - { slug: make-string-output-stream, name: "make-string-output-stream" }
+      - { slug: get-output-stream-string, name: "get-output-stream-string" }
+      - { slug: make-synonym-stream, name: "make-synonym-stream" }
       - { slug: make-broadcast-stream, name: "make-broadcast-stream" }
       - { slug: input-stream-p, name: "input-stream-p" }
       - { slug: output-stream-p, name: "output-stream-p" }

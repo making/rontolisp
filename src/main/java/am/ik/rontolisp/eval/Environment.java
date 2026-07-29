@@ -40,6 +40,7 @@ import am.ik.rontolisp.LispFuture;
 import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
@@ -3417,18 +3418,25 @@ public final class Environment implements Scope {
 		// with-input-from-string. An output string stream is a StringWriter entry; an
 		// input string stream is a BufferedReader over the string, so read/read-line
 		// consume it like any file stream.
-		env.defineFunction(LispNames.MAKE_STRING_OUTPUT_STREAM,
-				new LispFunction(LispNames.MAKE_STRING_OUTPUT_STREAM, args -> {
-					requireArgCount(LispNames.MAKE_STRING_OUTPUT_STREAM, args, 0);
-					long handle = nextStreamHandle[0]++;
-					streams.put(handle, new StringWriter());
-					return new LispInteger(handle);
+		java.util.function.Function<List<LispVal>, LispVal> makeStringOutputStream = args -> {
+			long handle = nextStreamHandle[0]++;
+			streams.put(handle, new StringWriter());
+			return new LispInteger(handle);
+		};
+		env.defineFunction(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL,
+				new LispFunction(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL, args -> {
+					requireArgCount(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL, args, 0);
+					return makeStringOutputStream.apply(args);
 				}));
-		env.defineFunction(LispNames.MAKE_STRING_INPUT_STREAM,
-				new LispFunction(LispNames.MAKE_STRING_INPUT_STREAM, args -> {
-					requireArgCount(LispNames.MAKE_STRING_INPUT_STREAM, args, 1);
+		// The public spelling. CL's lambda list is (&key element-type); every rontolisp
+		// stream is a character stream, so the option is accepted and dropped.
+		env.defineFunction(LispNames.MAKE_STRING_OUTPUT_STREAM,
+				new LispFunction(LispNames.MAKE_STRING_OUTPUT_STREAM, makeStringOutputStream));
+		env.defineFunction(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL,
+				new LispFunction(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL, args -> {
+					requireArgCount(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL, args, 1);
 					if (!(args.get(0) instanceof LispString str)) {
-						throw new LispEvalException(LispNames.MAKE_STRING_INPUT_STREAM + " expects a string");
+						throw new LispEvalException(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL + " expects a string");
 					}
 					long handle = nextStreamHandle[0]++;
 					streams.put(handle, new BufferedReader(new StringReader(str.value())));
@@ -3484,16 +3492,24 @@ public final class Environment implements Scope {
 			// Every stream is a character stream.
 			return new LispSymbol("CHARACTER");
 		}));
-		env.defineFunction(LispNames.STRING_STREAM_CONTENTS,
-				new LispFunction(LispNames.STRING_STREAM_CONTENTS, args -> {
-					requireArgCount(LispNames.STRING_STREAM_CONTENTS, args, 1);
-					if (!(args.get(0) instanceof LispInteger handle)
-							|| !(streams.get(handle.value()) instanceof StringWriter writer)) {
-						throw new LispEvalException(
-								LispNames.STRING_STREAM_CONTENTS + " expects a string output stream");
-					}
-					return new LispString(writer.toString());
-				}));
+		// CL's get-output-stream-string CLEARS the stream as it answers, so a second call
+		// sees only what was written after the first; with-output-to-string fetches once
+		// and then closes, so it cannot tell the difference.
+		java.util.function.Function<List<LispVal>, LispVal> streamContents = args -> {
+			requireArgCount(LispNames.STRING_STREAM_CONTENTS_INTERNAL, args, 1);
+			if (!(args.get(0) instanceof LispInteger handle)
+					|| !(streams.get(handle.value()) instanceof StringWriter writer)) {
+				throw new LispEvalException(
+						LispNames.STRING_STREAM_CONTENTS_INTERNAL + " expects a string output stream");
+			}
+			LispString contents = new LispString(writer.toString());
+			writer.getBuffer().setLength(0);
+			return contents;
+		};
+		env.defineFunction(LispNames.STRING_STREAM_CONTENTS_INTERNAL,
+				new LispFunction(LispNames.STRING_STREAM_CONTENTS_INTERNAL, streamContents));
+		env.defineFunction(LispNames.GET_OUTPUT_STREAM_STRING,
+				new LispFunction(LispNames.GET_OUTPUT_STREAM_STRING, streamContents));
 		env.defineFunction(LispNames.FRESH_LINE, new LispFunction(LispNames.FRESH_LINE, args -> {
 			requireArgCountBetween(LispNames.FRESH_LINE, args, 0, 1);
 			LispVal dest = args.isEmpty() ? null : args.get(0);
@@ -3767,7 +3783,11 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.WRITE_LINE + " expects a string");
 			}
-			if (args.size() == 1) {
+			// nil and t are the standard-output DESIGNATORS, not stream handles -- the
+			// same rule the JVM and both wasm backends already applied (their stdout
+			// test is "not a handle"). A synonym stream over *standard-output* resolves
+			// to exactly this t when nothing has rebound it.
+			if (args.size() == 1 || args.get(1) instanceof LispNil || args.get(1) instanceof LispTrue) {
 				out.println(str.value());
 				return str;
 			}
@@ -3833,7 +3853,7 @@ public final class Environment implements Scope {
 				boolean eofError = args.size() >= 2 && args.get(1) != LispNil.INSTANCE
 						&& !(args.get(1) instanceof LispSymbol sym && "NIL".equals(sym.name()));
 				if (eofError) {
-					throw new LispEvalException(LispNames.READ_LINE + ": end of file");
+					throw endOfFile();
 				}
 				return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
 			}
@@ -3847,30 +3867,30 @@ public final class Environment implements Scope {
 		// point read as a UTF-16 surrogate pair combines into the full code point via a
 		// mark/reset peek on the low half. The interpreter's stream table only holds
 		// BufferedReader instances (mark is supported).
-		env.defineFunction(LispNames.READ_CHAR, new LispFunction(LispNames.READ_CHAR, args -> {
+		java.util.function.BiFunction<String, List<LispVal>, Reader> inputReader = (name, args) -> {
+			if (args.isEmpty() || args.get(0) instanceof LispNil) {
+				// Drain buffered output so any prompt is visible before we block on
+				// stdin.
+				out.flush();
+				return stdinReader;
+			}
+			if (!(args.get(0) instanceof LispInteger handle)
+					|| !(streams.get(handle.value()) instanceof BufferedReader r)) {
+				throw new LispEvalException(name + " expects an input stream");
+			}
+			return r;
+		};
+		java.util.function.Function<List<LispVal>, LispVal> readChar = args -> {
 			if (args.size() > 3) {
 				throw new LispEvalException(LispNames.READ_CHAR + " expects 0 to 3 arguments");
 			}
 			try {
-				Reader reader;
-				if (args.isEmpty() || args.get(0) instanceof LispNil) {
-					// Drain buffered output so any prompt is visible before we block on
-					// stdin.
-					out.flush();
-					reader = stdinReader;
-				}
-				else {
-					if (!(args.get(0) instanceof LispInteger handle)
-							|| !(streams.get(handle.value()) instanceof BufferedReader r)) {
-						throw new LispEvalException(LispNames.READ_CHAR + " expects an input stream");
-					}
-					reader = r;
-				}
+				Reader reader = inputReader.apply(LispNames.READ_CHAR, args);
 				int c = reader.read();
 				if (c < 0) {
 					boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
 					if (eofError) {
-						throw new LispEvalException(LispNames.READ_CHAR + ": end of file");
+						throw endOfFile();
 					}
 					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
 				}
@@ -3888,6 +3908,69 @@ public final class Environment implements Scope {
 			}
 			catch (IOException ex) {
 				throw new UncheckedIOException(ex);
+			}
+		};
+		env.defineFunction(LispNames.READ_CHAR, new LispFunction(LispNames.READ_CHAR, readChar::apply));
+		// (%peek-char [stream [eof-error-p [eof-value]]]): the next character, LEFT IN
+		// THE STREAM. A mark/reset around the read is what makes it a peek -- the stream
+		// table holds BufferedReader instances only, and the mark budget of 2 covers a
+		// surrogate pair, so the position after the reset is exactly the position before.
+		java.util.function.Function<List<LispVal>, LispVal> peekChar = args -> {
+			if (args.size() > 3) {
+				throw new LispEvalException(LispNames.PEEK_CHAR + " expects 0 to 3 arguments");
+			}
+			try {
+				Reader reader = inputReader.apply(LispNames.PEEK_CHAR, args);
+				reader.mark(2);
+				int c = reader.read();
+				if (c < 0) {
+					reader.reset();
+					boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
+					if (eofError) {
+						throw endOfFile();
+					}
+					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
+				}
+				if (Character.isHighSurrogate((char) c)) {
+					int low = reader.read();
+					if (low >= 0 && Character.isLowSurrogate((char) low)) {
+						c = Character.toCodePoint((char) c, (char) low);
+					}
+				}
+				reader.reset();
+				return new LispChar(c);
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+		};
+		env.defineFunction(LispNames.PEEK_CHAR_INTERNAL, new LispFunction(LispNames.PEEK_CHAR_INTERNAL, peekChar));
+		// (peek-char [peek-type [stream [eof-error-p [eof-value]]]]): the peek-type
+		// skipping forms of CL 21.2 -- nil peeks, t skips whitespace, a character skips
+		// up to that character; the character stopped on stays in the stream in every
+		// case. The compiled backends reach the same behavior through
+		// LispMacroExpander.expandPeekChar, which lowers the loop onto %peek-char.
+		env.defineFunction(LispNames.PEEK_CHAR, new LispFunction(LispNames.PEEK_CHAR, args -> {
+			if (args.size() > 4) {
+				throw new LispEvalException(LispNames.PEEK_CHAR + " expects 0 to 4 arguments");
+			}
+			LispVal peekType = args.isEmpty() ? LispNil.INSTANCE : args.get(0);
+			if (!(peekType instanceof LispNil || peekType instanceof LispTrue || peekType instanceof LispChar)) {
+				throw new LispEvalException(LispNames.PEEK_CHAR + " expects nil, t or a character as the peek type");
+			}
+			List<LispVal> rest = args.isEmpty() ? List.of() : args.subList(1, args.size());
+			while (true) {
+				LispVal peeked = peekChar.apply(rest);
+				if (peekType instanceof LispNil || !(peeked instanceof LispChar ch)) {
+					return peeked;
+				}
+				boolean stop = (peekType instanceof LispTrue) ? !isLispWhitespace(ch.codePoint())
+						: (peekType instanceof LispChar want && want.codePoint() == ch.codePoint());
+				if (stop) {
+					return peeked;
+				}
+				readChar.apply(
+						List.of(rest.isEmpty() ? LispNil.INSTANCE : rest.get(0), LispNil.INSTANCE, LispNil.INSTANCE));
 			}
 		}));
 		env.defineFunction(LispNames.READ_BYTE, new LispFunction(LispNames.READ_BYTE, args -> {
@@ -3917,7 +4000,7 @@ public final class Environment implements Scope {
 			if (b < 0) {
 				boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
 				if (eofError) {
-					throw new LispEvalException(LispNames.READ_BYTE + ": end of file on stream " + handle.value());
+					throw endOfFile();
 				}
 				return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
 			}
@@ -5286,6 +5369,26 @@ public final class Environment implements Scope {
 		}
 		throw new LispEvalException(
 				LispNames.OPEN + " supports only the 'character or '(unsigned-byte 8) element type");
+	}
+
+	/**
+	 * The five characters CL's standard readtable calls whitespace -- the set
+	 * {@code peek-char}'s {@code t} peek-type skips. Kept in step with
+	 * {@code LispMacroExpander.whitespaceCharTest}, which is the compiled backends' copy.
+	 */
+	private static boolean isLispWhitespace(int codePoint) {
+		return codePoint == ' ' || codePoint == '\t' || codePoint == '\n' || codePoint == '\r' || codePoint == '\f';
+	}
+
+	/**
+	 * The end-of-file signal of the read family: a TYPED condition, so a
+	 * {@code (handler-case ... (end-of-file (e) ...))} around a reader loop fires -- the
+	 * shape real CL lexers are written in. The compiled backends reach the same class
+	 * through {@code LispMacroExpander.expandReadEofSignal}, so the message and the
+	 * catchable type are identical everywhere.
+	 */
+	private static LispEvalException endOfFile() {
+		return new LispEvalException(ClosRegistry.END_OF_FILE_MESSAGE, ClosRegistry.newEndOfFileCondition());
 	}
 
 	private static void requireArgCount(String name, List<LispVal> args, int expected) {

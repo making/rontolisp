@@ -35,24 +35,24 @@ unwind-protect knot + `retry-transaction`), the connection pool
   shadowing, real slot unboundness (`unbound-slot` on every backend),
   in-place `change-class`, `print-object`, `with-accessors`, `with-slots` over
   a struct, `:default-initargs` on a typed signal (`.kb/clos.md`)
-- `.todo/200-postmodern-language-incidentals.md` -- MOSTLY DONE (2026-07-29):
-  the `~[` argument-divergent nesting of `deftable`'s constraint strings, `getf`
-  with a default, `rassoc-if`, and a LIST character bag for the `string-trim`
-  family all landed on all four backends; the `~V,V,'0R` / `~:@(~S~)` / `~^` /
-  `#.` / `eval-when`-at-macroexpansion / toplevel-`let`-around-`defun` items
-  verified as already working, and the "float `subtypep` is dishonest" premise
-  turned out to be false (one float format, so `T` is right). What is LEFT there
-  is one coherent group, the string/character stream additions -- and
-  `make-synonym-stream` below is part of it: `make-string-output-stream` /
-  `get-output-stream-string` (unexposed public names over existing `%` internals;
-  mind CL's clear-on-read), `peek-char` (absent), and `read-char` signalling a
-  typed `end-of-file` rather than a plain error (`execute-file.lisp`'s lexer
-  catches `end-of-file`, so it would never fire today).
+- ~~`.todo/200-postmodern-language-incidentals.md`~~ -- DONE (2026-07-29). The
+  format/`getf`/`rassoc-if`/`string-trim` half landed first; the remaining
+  string/character stream group landed with it: `make-string-output-stream` /
+  `get-output-stream-string` (public names over the existing `%` internals, with
+  CL's clear-on-read), `peek-char` (all three peek types), a TYPED `end-of-file`
+  from `read-char`/`read-byte`/explicit-eof-error-p `read-line` -- which is what
+  makes `execute-file.lisp`'s lexer `handler-case` fire -- and
+  `make-synonym-stream` (lite: resolved once, at construction; the reason and the
+  re-evaluation trigger are in `.kb/read-load-streams.md`). All on four backends,
+  pinned by the `postmodern-language-incidentals` ci-spec case. Still open in that
+  area, owned elsewhere: `.todo/181` (`*features*` pushes invisible to the reader,
+  a FIDELITY gap for json-encoder, not a correctness one) and `.todo/149`'s
+  "an explicit nil stream argument must mean `*standard-output*`".
 
 The `.asd` override and dependency plumbing (old `.todo/201`) has LANDED:
-`(ql:quickload "postmodern")` resolves and orders the whole graph and stops in
-`postmodern/config.lisp` on `make-synonym-stream`, which is `.todo/200`'s
-territory. See the postmodern section of `.kb/asdf.md` for what the replacement
+`(ql:quickload "postmodern")` resolves and orders the whole graph; the
+`postmodern/config.lisp` stop on `make-synonym-stream` is gone with `.todo/200`,
+so the next probe of where the load stops has to be re-run. See the postmodern section of `.kb/asdf.md` for what the replacement
 `.asd` decided. Two pieces were split out of it and are NOT prerequisites of
 this milestone:
 

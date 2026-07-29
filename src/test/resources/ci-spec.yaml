@@ -1384,7 +1384,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      330
+      334
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -5456,6 +5456,32 @@ cases:
       ;; same type and subtypep says so (CLHS permits it); json-encoder's
       ;; eval-when probe therefore selects its "only one float type" branch.
       (print (list (subtypep 'long-float 'single-float) (subtypep 'single-float 'double-float)))
+      ;; The string/character stream group: the public string-output-stream
+      ;; names (execute-file.lisp), with CL's clear-on-read contract.
+      (defvar pm-out (make-string-output-stream))
+      (write-string "ab" pm-out)
+      (print (get-output-stream-string pm-out))
+      (write-string "cd" pm-out)
+      (print (get-output-stream-string pm-out))
+      (print (get-output-stream-string pm-out))
+      ;; peek-char's three peek types; the character it stops on stays in the
+      ;; stream in every case.
+      (with-input-from-string (pm-in "  xy")
+        (print (peek-char t pm-in))
+        (print (read-char pm-in))
+        (print (peek-char #\y pm-in))
+        (print (read-char pm-in))
+        (print (peek-char nil pm-in nil :eof)))
+      ;; A TYPED end-of-file from the read family -- what makes execute-file's
+      ;; (handler-case ... (end-of-file (e) ...)) lexer loop terminate.
+      (print (with-input-from-string (pm-in "")
+               (handler-case (read-char pm-in) (end-of-file () :eof-condition))))
+      (print (with-input-from-string (pm-in "")
+               (handler-case (read-char pm-in) (error () :also-an-error))))
+      ;; make-synonym-stream (config.lisp's *json-output*): the designator the
+      ;; named variable holds, resolved where the stream is built.
+      (defvar pm-json-output (make-synonym-stream '*standard-output*))
+      (write-line "synonym" pm-json-output)
     expected: |
       "NOT DEFERRABLE"
       "DEFERRABLE INITIALLY IMMEDIATE"
@@ -5476,3 +5502,14 @@ cases:
       "a_b_c"
       :OK
       (T T)
+      "ab"
+      "cd"
+      ""
+      #\x
+      #\x
+      #\y
+      #\y
+      :EOF
+      :EOF-CONDITION
+      :ALSO-AN-ERROR
+      synonym

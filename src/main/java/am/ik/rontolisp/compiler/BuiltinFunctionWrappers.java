@@ -94,6 +94,13 @@ public final class BuiltinFunctionWrappers {
 		gated.add(LispNames.FORMAT);
 		gated.add(LispNames.CONCATENATE);
 		gated.add(LispNames.OPEN);
+		// The read family whose end of file SIGNALS: their wrappers construct the
+		// end-of-file condition, which is machinery a program that never takes them as
+		// values should not carry (and which the mayCreateInstances gate would not see
+		// coming -- it scans the source program, not the injected wrappers).
+		gated.add(LispNames.READ_CHAR);
+		gated.add(LispNames.PEEK_CHAR);
+		gated.add(LispNames.READ_BYTE);
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
 	}
 
@@ -645,7 +652,13 @@ public final class BuiltinFunctionWrappers {
 			new WrapperDef(LispNames.FRESH_LINE, List.of(), List.of(call(LispNames.FRESH_LINE))),
 			// read-line: 0-arity
 			new WrapperDef(LispNames.READ_LINE, List.of(), List.of(call(LispNames.READ_LINE))),
+			// The signalling read family (all three REFERENCE_GATED_FUNCTIONS): read-char
+			// keeps its 0-arity stdin shape, peek-char carries the peek-type + stream a
+			// funcall would pass, read-byte's stream argument is mandatory.
 			new WrapperDef(LispNames.READ_CHAR, List.of(), List.of(call(LispNames.READ_CHAR))),
+			new WrapperDef(LispNames.PEEK_CHAR, List.of(LispNames.LAMBDA_OPTIONAL, "a", "b"),
+					List.of(call(LispNames.PEEK_CHAR, "a", "b"))),
+			unary(LispNames.READ_BYTE),
 			// gensym: 0-arity (the literal-prefix form cannot be a first-class value;
 			// macroexpand/macroexpand-1 have no wrapper at all -- the macro table does
 			// not exist at runtime in compiled output)

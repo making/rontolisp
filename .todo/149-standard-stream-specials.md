@@ -5,8 +5,19 @@
 > proposal below -- mechanics and the bind-activated special rule in
 > `.kb/standard-output-redirect.md`, pinned by the
 > `s-sql-enablement-language-group` ci-spec case. Still open here:
-> `*error-output*` (same machinery, not wired) and the whole INPUT side
-> (`*standard-input*` for `read-line`/`read-char`/`read`).
+> `*error-output*` (same machinery, not wired), the whole INPUT side
+> (`*standard-input*` for `read-line`/`read-char`/`read`), and -- added
+> 2026-07-29 by `.todo/200` -- **an explicit `nil` stream ARGUMENT must mean
+> `*standard-output*`** (CL's stream designator), which today reaches the raw
+> stdout path on every backend. That last one is what a per-operation
+> `make-synonym-stream` needs: with it, a synonym stream over
+> `*standard-output*` IS the nil designator, and the lite construct-once
+> expansion in `.kb/read-load-streams.md` can be retired. It needs the runtime
+> write helpers (`_writeStr`/`_writeLine`/`_freshLine`,
+> `_write_stream_str`/`_write_line`/`_fresh_line_stream`) to resolve a null
+> handle through the `*standard-output*` global when the redirect is active --
+> gated exactly like `defaultStreamArg`, so a program that never binds it stays
+> byte-identical.
 
 `*standard-output*` / `*error-output*` exist as global variables bound to
 the designator `t` (`Environment.java:248`, registered in

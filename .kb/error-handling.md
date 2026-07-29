@@ -247,6 +247,53 @@ everywhere except `--no-gc`.
   + JVM. The re-signal always uses `socket-error` (subtypes defined but not
   auto-selected).
 
+## The read family signals a TYPED end-of-file (todo-200)
+
+`read-char` / `read-byte`, and `read-line` with an explicit non-nil `eof-error-p`,
+signal the SEEDED `end-of-file` condition class -- not a plain error -- on all four
+backends. That is what makes the shape every real CL lexer is written in,
+`(handler-case (loop ... (read-char s) ...) (end-of-file (e) ...))`, terminate
+(postmodern's `execute-file.lisp`, cl-postgres' `protocol.lisp:473` reconnect guard).
+`ClosRegistry` seeds a `:report` for the class (`END_OF_FILE_MESSAGE`, `"end of file"`)
+so the message an uncaught end of file prints is the same everywhere and no call site
+has to invent one.
+
+- **Interpreter**: `Environment.endOfFile()` throws a `LispEvalException` carrying
+  `ClosRegistry.newEndOfFileCondition()` -- a static factory, because `Environment` has no
+  registry in scope. It is sound precisely because the class is SEEDED (same slot-less
+  layout in every registry) and `handler-case` dispatches on the instance TAG, not on
+  layout identity.
+- **Compiled backends**: one shared CALL-SITE lowering,
+  `LispMacroExpander.expandReadEofSignal`, applied by `Jvm/WasmExprCompiler` -- the
+  built-in is called with the backend's own `(nil nil)` eof parameters and the expansion
+  tests the nil result. It is sound for exactly these three operators because a
+  successful read answers a character / a string / an integer and never nil. The runtime
+  helpers keep their old throw as a BACKSTOP only. Returns null (no lowering, byte-identical
+  output) when the call cannot signal: a literally nil `eof-error-p`, or an omitted one on
+  `read-line`, whose rontolisp default is nil by long-standing convention.
+- Two gates this had to touch, both easy to miss: `mayCreateInstances` scans the SOURCE
+  program, so the read family is listed in `constructsInstance` (peek-char under its own
+  name, its eof-error-p one argument later); and `#'read-char`/`#'peek-char`/`#'read-byte`
+  joined `BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS`, because their wrappers now
+  construct a condition and were previously injected into EVERY program -- which the gate,
+  scanning only the source, could not see coming.
+- **The `--component` socket rewrite needed the same lowering under its ALIAS.**
+  `WasmSocketsRewrite` maps a 0/1-argument `(read-char s)` to `(%io-read-char s)`, whose
+  non-socket arm falls through to `rontolisp::%read-char-raw`; lowering only the public
+  name would have left every sockets.lisp-splicing component with the OLD uncatchable
+  `unreachable` trap at end of file -- which is what the ci-spec case caught, on the
+  component leg only, after Preview 1 was already green. `WasmExprCompiler` therefore
+  applies `expandReadEofSignal` to the `%read-char-raw`/`%read-byte-raw`/`%read-line-raw`
+  aliases too, and `constructsInstance` lists their qualified spellings.
+- **`read` is deliberately NOT in this family** and neither is the default `read-line`:
+  both answer nil at end of input (a pre-existing rontolisp convention a great deal of
+  code depends on), and `read`'s datum may legitimately BE nil, so the nil-result test
+  the lowering relies on would be ambiguous there. `read` has no `eof-error-p` parameter
+  at all.
+- Pinned by `readCharEndOfFileIsCatchableAsEndOfFile` in all three per-backend suites
+  (both the `end-of-file` and the `error` clause) and the `postmodern-language-incidentals`
+  ci-spec case.
+
 ## cerror + signal-operator function values (todo-085, cl-base64)
 
 `cerror` exists as a lite lowering: `(cerror continue-format datum args...)` ->

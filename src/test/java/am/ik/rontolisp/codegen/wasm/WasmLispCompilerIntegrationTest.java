@@ -6105,6 +6105,54 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void stringOutputStreamNamesClearOnRead() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((s (make-string-output-stream)))
+				  (write-string "ab" s)
+				  (princ (get-output-stream-string s))
+				  (write-string "cd" s)
+				  (princ (get-output-stream-string s))
+				  (princ (list (length (get-output-stream-string s)))))""")).isEqualTo("abcd(0)");
+	}
+
+	@Test
+	void peekCharLeavesTheCharacterInTheStream() throws Exception {
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "ab")
+				  (princ (peek-char nil s))
+				  (princ (peek-char nil s))
+				  (princ (read-char s))
+				  (princ (read-char s))
+				  (princ (peek-char nil s nil 'eof)))""")).isEqualTo("aaabEOF");
+	}
+
+	@Test
+	void peekCharSkipsWhitespaceAndUpToACharacter() throws Exception {
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "   xy")
+				  (princ (peek-char t s))
+				  (princ (read-char s))
+				  (princ (peek-char #\\y s))
+				  (princ (read-char s)))""")).isEqualTo("xxyy");
+	}
+
+	@Test
+	void readCharEndOfFileIsCatchableAsEndOfFile() throws Exception {
+		assertThat(compileAndRunEh("""
+				(with-input-from-string (s "")
+				  (princ (handler-case (read-char s) (end-of-file () 'caught))))
+				(with-input-from-string (s "")
+				  (princ (handler-case (read-char s) (error () 'as-error))))""")).isEqualTo("CAUGHTAS-ERROR");
+	}
+
+	@Test
+	void makeSynonymStreamResolvesTheNamedVariable() throws Exception {
+		assertThat(
+				compileAndRun("(defvar *sink* (make-synonym-stream '*standard-output*)) (write-string \"via\" *sink*)"))
+			.isEqualTo("via");
+	}
+
+	@Test
 	void writeStringWithoutStreamPrintsToStdoutWithoutNewline() throws Exception {
 		assertThat(compileAndRun("(write-string \"no\") (write-string \" newline\")")).isEqualTo("no newline");
 	}
@@ -6902,7 +6950,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("330");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("334");
 	}
 
 	@Test

@@ -724,6 +724,26 @@ public final class LispEvaluator {
 						LispNames.SYMBOL_VALUE + " expects a symbol, got " + args.get(0).print());
 			};
 		}));
+		// (make-synonym-stream 'sym): the stream designator the symbol currently names.
+		// Lite -- the symbol is resolved HERE, not on every operation through the
+		// resulting stream (see LispMacroExpander.expandMakeSynonymStream, which is the
+		// compiled backends' half of the same contract).
+		this.globalEnv.defineFunction(LispNames.MAKE_SYNONYM_STREAM,
+				new LispFunction(LispNames.MAKE_SYNONYM_STREAM, args -> {
+					requireSingleArg(LispNames.MAKE_SYNONYM_STREAM, args);
+					if (!(args.get(0) instanceof LispSymbol sym) || sym.isKeyword()) {
+						throw new LispEvalException(
+								LispNames.MAKE_SYNONYM_STREAM + " expects a symbol, got " + args.get(0).print());
+					}
+					if (this.dynamicBindings.isBound(sym.name())) {
+						return this.dynamicBindings.get(sym.name());
+					}
+					LispVal value = this.globalEnv.lookupOrNull(sym.name());
+					if (value == null) {
+						throw new LispEvalException("The variable " + sym.name() + " is unbound");
+					}
+					return value;
+				}));
 		// fboundp is t for anything callable or expandable: functions, user macros, and
 		// the built-in macros/special forms (CL: fboundp is true of macros and special
 		// operators too).

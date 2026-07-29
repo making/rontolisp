@@ -5370,7 +5370,8 @@ public final class LispMacroExpander {
 					LispNames.WITH_OUTPUT_TO_STRING + " supports only a nil string-form (fresh-string) spec");
 		}
 		LispVal bindings = new LispCons(
-				listToCons(List.of(var, listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_OUTPUT_STREAM))))),
+				listToCons(List.of(var,
+						listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL))))),
 				LispNil.INSTANCE);
 		if (unwindProtect) {
 			// (let ((var (%make-string-output-stream)))
@@ -5378,15 +5379,15 @@ public final class LispMacroExpander {
 			List<LispVal> protectedParts = new java.util.ArrayList<>();
 			protectedParts.add(new LispSymbol(LispNames.PROGN));
 			protectedParts.addAll(parts.subList(2, parts.size()));
-			protectedParts.add(callOf(LispNames.STRING_STREAM_CONTENTS, var));
+			protectedParts.add(callOf(LispNames.STRING_STREAM_CONTENTS_INTERNAL, var));
 			return listToCons(List.of(new LispSymbol(LispNames.LET), bindings,
 					unwindProtectAround(listToCons(protectedParts), callOf(LispNames.CLOSE, var))));
 		}
 		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
 		LispSymbol result = new LispSymbol(WOTS_RESULT_VAR);
 		// (let ((__wots_result (%string-stream-contents var))) (close var) __wots_result)
-		LispVal innerBindings = new LispCons(listToCons(List.of(result, callOf(LispNames.STRING_STREAM_CONTENTS, var))),
-				LispNil.INSTANCE);
+		LispVal innerBindings = new LispCons(
+				listToCons(List.of(result, callOf(LispNames.STRING_STREAM_CONTENTS_INTERNAL, var))), LispNil.INSTANCE);
 		LispVal innerLet = listToCons(
 				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, bodyExpr, innerLet));
@@ -5441,7 +5442,7 @@ public final class LispMacroExpander {
 		}
 		LispVal string = specParts.get(1);
 		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
-		LispVal openCall = listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_INPUT_STREAM), string));
+		LispVal openCall = listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL), string));
 		LispVal outerBindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
 		if (unwindProtect) {
 			// (let ((var (%make-string-input-stream string)))
@@ -5458,6 +5459,244 @@ public final class LispMacroExpander {
 	}
 
 	private static final String WIFS_RESULT_VAR = "__wifs_result";
+
+	/**
+	 * Expands {@code (make-string-output-stream)} -- CL's public spelling of the internal
+	 * {@code (%make-string-output-stream)} that {@code with-output-to-string} is built
+	 * on. CL's lambda list is {@code (&key element-type)}; every rontolisp stream is a
+	 * character stream, so the option is accepted and dropped (the
+	 * {@code with-output-to-string} precedent).
+	 * @param cons the make-string-output-stream expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMakeStringOutputStream(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		for (int i = 1; i < parts.size(); i += 2) {
+			if (i + 1 >= parts.size() || !(parts.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
+				throw new UnsupportedOperationException(
+						LispNames.MAKE_STRING_OUTPUT_STREAM + " expects keyword arguments only");
+			}
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL)));
+	}
+
+	/**
+	 * Expands {@code (get-output-stream-string stream)} into the internal
+	 * {@code (%string-stream-contents stream)}, which answers what the string output
+	 * stream has accumulated AND clears it -- CL's contract, so a second call sees only
+	 * what was written after the first.
+	 * @param cons the get-output-stream-string expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandGetOutputStreamString(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new UnsupportedOperationException(
+					LispNames.GET_OUTPUT_STREAM_STRING + " expects 1 argument, got " + (parts.size() - 1));
+		}
+		return callOf(LispNames.STRING_STREAM_CONTENTS_INTERNAL, parts.get(1));
+	}
+
+	/** Fixed temporaries of the {@code peek-char} skip-loop expansion. */
+	private static final String PEEK_TYPE_VAR = "__pc_type";
+
+	private static final String PEEK_STREAM_VAR = "__pc_stream";
+
+	private static final String PEEK_ERRP_VAR = "__pc_errp";
+
+	private static final String PEEK_VALUE_VAR = "__pc_value";
+
+	private static final String PEEK_CHAR_VAR = "__pc_char";
+
+	/**
+	 * Expands {@code (peek-char [peek-type [stream [eof-error-p [eof-value]]]])}. The
+	 * {@code peek-type} nil form -- the one that just looks at the next character --
+	 * lowers straight onto the {@code %peek-char} primitive every backend implements. The
+	 * two SKIPPING forms are lowered here instead of per backend, so all four share one
+	 * loop: {@code t} skips whitespace and a character skips up to that character, in
+	 * both cases leaving the character it stopped on in the stream (CL 21.2).
+	 *
+	 * <pre>
+	 * (peek-char t s) ->
+	 *   (do ((__pc_char (%peek-char s t nil) (%peek-char s t nil)))
+	 *       ((or (not (characterp __pc_char)) (not &lt;whitespace __pc_char&gt;)) __pc_char)
+	 *     (read-char s nil nil))
+	 * </pre>
+	 *
+	 * A non-literal {@code peek-type} keeps the same shape behind a runtime
+	 * {@code (null __pc_type)} test, so {@code #'peek-char} works as a first-class value
+	 * too. The {@code characterp} guard is what ends the loop when {@code eof-error-p} is
+	 * nil: the eof-value is returned rather than skipped over forever.
+	 * @param cons the peek-char expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPeekChar(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() > 5) {
+			throw new UnsupportedOperationException(
+					LispNames.PEEK_CHAR + " expects 0 to 4 arguments, got " + (parts.size() - 1));
+		}
+		LispVal peekType = parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE;
+		LispVal stream = parts.size() > 2 ? parts.get(2) : LispNil.INSTANCE;
+		LispVal eofErrorP = parts.size() > 3 ? parts.get(3) : LispTrue.INSTANCE;
+		LispVal eofValue = parts.size() > 4 ? parts.get(4) : LispNil.INSTANCE;
+		if (isLiteralNil(peekType)) {
+			return fmtCall(LispNames.PEEK_CHAR_INTERNAL, stream, eofErrorP, eofValue);
+		}
+		LispSymbol streamVar = new LispSymbol(PEEK_STREAM_VAR);
+		LispSymbol errpVar = new LispSymbol(PEEK_ERRP_VAR);
+		LispSymbol valueVar = new LispSymbol(PEEK_VALUE_VAR);
+		LispSymbol charVar = new LispSymbol(PEEK_CHAR_VAR);
+		LispSymbol typeVar = new LispSymbol(PEEK_TYPE_VAR);
+		boolean literalType = peekType == LispTrue.INSTANCE || peekType instanceof LispChar;
+		List<LispVal> bindings = new ArrayList<>();
+		if (!literalType) {
+			bindings.add(listToCons(List.of(typeVar, peekType)));
+		}
+		bindings.add(listToCons(List.of(streamVar, stream)));
+		bindings.add(listToCons(List.of(errpVar, eofErrorP)));
+		bindings.add(listToCons(List.of(valueVar, eofValue)));
+		LispVal peek = fmtCall(LispNames.PEEK_CHAR_INTERNAL, streamVar, errpVar, valueVar);
+		LispVal stop;
+		if (peekType == LispTrue.INSTANCE) {
+			stop = callOf(LispNames.NOT, whitespaceCharTest(charVar));
+		}
+		else if (peekType instanceof LispChar) {
+			stop = fmtCall(LispNames.CHAR_EQ, charVar, peekType);
+		}
+		else {
+			stop = listToCons(List.of(new LispSymbol(LispNames.IF),
+					fmtCall(LispNames.EQ_GENERAL, typeVar, LispTrue.INSTANCE),
+					callOf(LispNames.NOT, whitespaceCharTest(charVar)), fmtCall(LispNames.CHAR_EQ, charVar, typeVar)));
+		}
+		LispVal endTest = fmtCall(LispNames.OR, callOf(LispNames.NOT, callOf(LispNames.CHARACTERP, charVar)), stop);
+		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(listToCons(List.of(charVar, peek, peek)))), listToCons(List.of(endTest, charVar)),
+				fmtCall(LispNames.READ_CHAR, streamVar, LispNil.INSTANCE, LispNil.INSTANCE)));
+		LispVal body = literalType ? loop
+				: listToCons(List.of(new LispSymbol(LispNames.IF), callOf(LispNames.NULL, typeVar),
+						fmtCall(LispNames.PEEK_CHAR_INTERNAL, streamVar, errpVar, valueVar), loop));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
+	}
+
+	/**
+	 * {@code (or (char= c #\Space) ...)} over the five characters CL calls whitespace in
+	 * the standard readtable -- the set {@code peek-char}'s {@code t} peek-type skips.
+	 */
+	private static LispVal whitespaceCharTest(LispSymbol charVar) {
+		List<LispVal> tests = new ArrayList<>();
+		for (int code : new int[] { ' ', '\t', '\n', '\r', '\f' }) {
+			tests.add(fmtCall(LispNames.CHAR_EQ, charVar, new LispChar(code)));
+		}
+		return fmtCall(LispNames.OR, tests.toArray(new LispVal[0]));
+	}
+
+	/**
+	 * Expands {@code (make-synonym-stream 'sym)} into a READ of the variable the symbol
+	 * names -- {@code (make-synonym-stream '*standard-output*)} is literally
+	 * {@code *standard-output*}, so the result is whatever stream designator that
+	 * variable holds, and a program that never binds it gets the constant {@code t}
+	 * (standard output) with no new machinery on any backend.
+	 *
+	 * <p>
+	 * LITE, and the divergence is deliberate: CL's synonym stream forwards EVERY
+	 * operation to the symbol's value at the time of that operation, while this one
+	 * resolves the symbol ONCE, where the stream is constructed. The reason is that a
+	 * per-operation synonym needs a stream-designator kind that the write helpers of all
+	 * four backends resolve at run time, which is the same missing seam as "an explicit
+	 * nil stream argument must mean {@code *standard-output*}" -- both belong to
+	 * {@code .todo/149}, and neither is reachable by the construct-once idiom every known
+	 * consumer uses (postmodern's {@code *json-output*} defvar). RE-EVALUATION TRIGGER:
+	 * once a nil stream designator resolves through {@code *standard-output*} at write
+	 * time, this expansion should answer that designator instead of a snapshot.
+	 * @param cons the make-synonym-stream expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMakeSynonymStream(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new UnsupportedOperationException(
+					LispNames.MAKE_SYNONYM_STREAM + " expects 1 argument, got " + (parts.size() - 1));
+		}
+		LispSymbol quoted = quotedSymbol(parts.get(1));
+		return quoted != null ? new LispSymbol(quoted.name()) : callOf(LispNames.SYMBOL_VALUE, parts.get(1));
+	}
+
+	/** Fixed temporaries of the read-family end-of-file lowering. */
+	private static final String EOF_STREAM_VAR = "__eof_stream";
+
+	private static final String EOF_ERRP_VAR = "__eof_errp";
+
+	private static final String EOF_VALUE_VAR = "__eof_value";
+
+	private static final String EOF_RESULT_VAR = "__eof_result";
+
+	/**
+	 * Rewrites a {@code read-char} / {@code read-line} / {@code read-byte} call whose
+	 * end-of-file must SIGNAL so that it signals the registered {@code end-of-file}
+	 * condition class rather than a plain error -- CL 21.2, and the reason
+	 * {@code (handler-case ... (end-of-file () ...))} around a lexer loop fires at all.
+	 * The three operators share one shape, because on every backend a successful read
+	 * answers a character / a string / an integer and NEVER nil: passing the built-in's
+	 * own {@code (nil nil)} eof parameters turns end-of-file into a nil result the
+	 * expansion can test.
+	 *
+	 * <pre>
+	 * (read-char s) ->
+	 *   (let* ((__eof_stream s)
+	 *          (__eof_result (read-char __eof_stream nil nil)))
+	 *     (if (null __eof_result) (error 'end-of-file) __eof_result))
+	 * </pre>
+	 *
+	 * Returns {@code null} when the call cannot signal (an eof-error-p that is literally
+	 * nil, or an omitted one on the operators whose rontolisp default is nil), so the
+	 * caller compiles the form unchanged and every such program keeps its existing output
+	 * byte for byte. A NON-literal eof-error-p keeps the same shape with the eof-value /
+	 * signal choice made at run time.
+	 * @param cons the read-family call
+	 * @param signalsByDefault whether an omitted eof-error-p means "signal" for this
+	 * operator ({@code read-char} / {@code read-byte} yes, {@code read-line} no)
+	 * @return the lowered form, or null when the call cannot reach the signalling branch
+	 */
+	public static @Nullable LispVal expandReadEofSignal(LispCons cons, boolean signalsByDefault) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() > 4 || !(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		LispVal eofErrorP = parts.size() > 2 ? parts.get(2) : (signalsByDefault ? LispTrue.INSTANCE : LispNil.INSTANCE);
+		if (isLiteralNil(eofErrorP)) {
+			return null;
+		}
+		LispVal stream = parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE;
+		LispVal eofValue = parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE;
+		LispSymbol streamVar = new LispSymbol(EOF_STREAM_VAR);
+		LispSymbol errpVar = new LispSymbol(EOF_ERRP_VAR);
+		LispSymbol valueVar = new LispSymbol(EOF_VALUE_VAR);
+		LispSymbol resultVar = new LispSymbol(EOF_RESULT_VAR);
+		boolean staticSignal = eofErrorP == LispTrue.INSTANCE;
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(listToCons(List.of(streamVar, stream)));
+		if (!staticSignal) {
+			bindings.add(listToCons(List.of(errpVar, eofErrorP)));
+			bindings.add(listToCons(List.of(valueVar, eofValue)));
+		}
+		bindings.add(listToCons(List.of(resultVar, fmtCall(op.name(), streamVar, LispNil.INSTANCE, LispNil.INSTANCE))));
+		LispVal signal = endOfFileSignal();
+		LispVal onEof = staticSignal ? signal
+				: listToCons(List.of(new LispSymbol(LispNames.IF), errpVar, signal, valueVar));
+		LispVal test = listToCons(
+				List.of(new LispSymbol(LispNames.IF), callOf(LispNames.NULL, resultVar), onEof, resultVar));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), test));
+	}
+
+	/**
+	 * {@code (error 'end-of-file)} -- the seeded condition class, whose {@code :report}
+	 * renders the message every backend prints when nothing catches it.
+	 * @return the signalling form
+	 */
+	public static LispVal endOfFileSignal() {
+		return callOf(LispNames.ERROR, quoteOf(ClosRegistry.END_OF_FILE_CLASS_NAME));
+	}
 
 	/**
 	 * Expands {@code (rontolisp:with-arena () body...)} into {@code (progn body...)}.
@@ -6152,7 +6391,7 @@ public final class LispMacroExpander {
 			throw new UnsupportedOperationException(
 					LispNames.MAKE_BROADCAST_STREAM + " with component streams is not supported: " + cons.print());
 		}
-		return fmtCall(LispNames.MAKE_STRING_OUTPUT_STREAM);
+		return fmtCall(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL);
 	}
 
 	/**
@@ -8395,11 +8634,33 @@ public final class LispMacroExpander {
 			case LispNames.OBJ_NEW, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.SIGNAL,
 					LispNames.MAKE_CONDITION:
 				return true;
+			case LispNames.READ_CHAR, LispNames.READ_BYTE, LispNames.PEEK_CHAR_INTERNAL:
+				// A read whose end of file SIGNALS builds the end-of-file condition
+				// instance (expandReadEofSignal).
+				return expandReadEofSignal(form, true) != null;
+			case LispNames.READ_LINE:
+				return expandReadEofSignal(form, false) != null;
+			case "RONTOLISP::" + LispNames.READ_CHAR_RAW_INTERNAL, "RONTOLISP::" + LispNames.READ_BYTE_RAW_INTERNAL:
+				// Same, under the internal alias sockets.lisp's %io-* dispatchers fall
+				// back through on the --component path.
+				return expandReadEofSignal(form, true) != null;
+			case "RONTOLISP::" + LispNames.READ_LINE_RAW_INTERNAL:
+				return expandReadEofSignal(form, false) != null;
+			case LispNames.PEEK_CHAR: {
+				// Same, one argument later: peek-char's peek-type comes first, and the
+				// scan runs on the source program, before expandPeekChar rewrites it.
+				List<LispVal> peekParts = form.toList();
+				return peekParts.size() <= 3 || !isLiteralNil(peekParts.get(3));
+			}
 			case LispNames.FUNCTION:
 				// #'signal: the generated first-class wrapper re-enters the designator
 				// expansion, whose every signal arm builds a simple-condition.
+				// #'read-char / #'peek-char / #'read-byte: their wrappers signal
+				// end-of-file, and (being REFERENCE_GATED_FUNCTIONS) are injected only
+				// because of this very reference.
 				return form.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol fn
-						&& LispNames.SIGNAL.equals(fn.name());
+						&& (LispNames.SIGNAL.equals(fn.name()) || LispNames.READ_CHAR.equals(fn.name())
+								|| LispNames.PEEK_CHAR.equals(fn.name()) || LispNames.READ_BYTE.equals(fn.name()));
 			case LispNames.ERROR, LispNames.WARN, LispNames.CERROR: {
 				List<LispVal> parts = form.toList();
 				// (cerror continue-control datum args...) drops its first argument.

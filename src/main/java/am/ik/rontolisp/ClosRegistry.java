@@ -58,7 +58,12 @@ public final class ClosRegistry {
 		// sequence bounds checks signal it).
 		seedConditionClass("SIMPLE-TYPE-ERROR", "TYPE-ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
 		seedConditionClass("STREAM-ERROR", "ERROR");
-		seedConditionClass("END-OF-FILE", "STREAM-ERROR");
+		seedConditionClass(END_OF_FILE_CLASS_NAME, "STREAM-ERROR");
+		// The read family signals this class when it runs out of input, so its report is
+		// the message every backend prints for an uncaught end of file. It is a plain
+		// string (no stream slot to name) so that the interpreter can raise the same
+		// message from Java without evaluating a report lambda.
+		registerConditionReport(END_OF_FILE_CLASS_NAME, new LispString(END_OF_FILE_MESSAGE));
 		seedConditionClass("FILE-ERROR", "ERROR");
 		seedConditionClass("ARITHMETIC-ERROR", "ERROR");
 		seedConditionClass("DIVISION-BY-ZERO", "ARITHMETIC-ERROR");
@@ -108,6 +113,33 @@ public final class ClosRegistry {
 	 * fences of an internal name so no source symbol collides with it.
 	 */
 	public static final String UNBOUND_CLASS_NAME = "%UNBOUND%";
+
+	/**
+	 * The condition class the read family signals at end of input
+	 * ({@code read-char}/{@code read-byte}, and {@code read-line} with an explicit
+	 * eof-error-p). Seeded under {@code stream-error}, so an {@code (error () ...)}
+	 * handler-case clause catches it too.
+	 */
+	public static final String END_OF_FILE_CLASS_NAME = "END-OF-FILE";
+
+	/**
+	 * The registered {@code :report} of {@link #END_OF_FILE_CLASS_NAME} -- the message an
+	 * uncaught end of file prints on every backend.
+	 */
+	public static final String END_OF_FILE_MESSAGE = "end of file";
+
+	/**
+	 * A fresh {@code end-of-file} condition instance, for the interpreter's read family
+	 * -- which runs inside {@code Environment}, where no registry is in scope. The class
+	 * is SEEDED, so its layout is the same slot-less shape in every registry and can be
+	 * built without one; {@code handler-case} dispatches on the instance TAG, not on
+	 * layout identity, so the instance is indistinguishable from one
+	 * {@code (error 'end-of-file)} would have constructed.
+	 * @return the condition instance
+	 */
+	public static LispVal newEndOfFileCondition() {
+		return new LispInstance(LispLayout.ofClass(END_OF_FILE_CLASS_NAME, List.of(), List.of()), new LispVal[0]);
+	}
 
 	/** The instance tag of the slot-unbound marker ({@link #UNBOUND_CLASS_NAME}). */
 	public static final String UNBOUND_TAG = LispLayout.CLASS_TAG_PREFIX + UNBOUND_CLASS_NAME;
