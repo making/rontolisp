@@ -154,4 +154,57 @@ class JvmClassShakerTest {
 		assertThat(twice).isEqualTo(once);
 	}
 
+	@Test
+	void aWellFormedClassHasNoUnresolvedSelfMethods() {
+		// The compiler runs this check on every build (an unresolved own-class call is
+		// how a mispredicted runtime-helper gate shows up), so anything it emits must
+		// come back clean.
+		assertThat(JvmClassShaker.unresolvedSelfMethods(compile("""
+				(defun add1 (x) (+ x 1))
+				(let ((s "abc")) (setf (elt s 0) #\\z) (print s))
+				(print (funcall #'funcall #'add1 41))
+				(print (mapcar #'class-of (list 1)))
+				""", false))).isEmpty();
+	}
+
+	@Test
+	void unresolvedSelfMethodsNamesTheCallAndItsCallers() {
+		// A class whose main() invokestatics an own _helper that is never declared --
+		// exactly the shape a mispredicted runtime-helper gate produces, and one the
+		// JVM accepts until the branch actually runs.
+		ConstantPool cp = new ConstantPool();
+		ConstantPool.ClassConstant thisClass = cp.addClass(cp.addUtf8("Dangling"));
+		ConstantPool.ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
+		ConstantPool.MethodrefConstant helper = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8("_helper"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
+		ConstantPool.Utf8Constant mainName = cp.addUtf8("main");
+		ConstantPool.Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
+		ConstantPool.Utf8Constant codeAttr = cp.addUtf8("Code");
+		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
+		new ByteCodeWriter(classOut).write(0xCA, 0xFE, 0xBA, 0xBE)
+			.writeVersion(0, 50)
+			.writeConstantPool(cp)
+			.writeClass(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, thisClass, objectClass)
+			.writeInterfaces(i -> {
+			})
+			.writeFields(f -> {
+			})
+			.writeMethods(methods -> methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainName, mainDesc,
+					method -> method.writeAttributes(attrs -> attrs.add(codeAttr,
+							attr -> attr.writeU2(1)
+								.writeU2(1)
+								.writeCode(Opcode.ACONST_NULL, Opcode.INVOKESTATIC, helper.indexAsU2(), Opcode.POP,
+										Opcode.RETURN)
+								.writeU2(0)
+								.writeU2(0)))))
+			.writeAttributes(a -> {
+			});
+
+		assertThat(JvmClassShaker.unresolvedSelfMethods(classOut.toByteArray())).singleElement().satisfies(missing -> {
+			assertThat(missing.name()).isEqualTo("_helper");
+			assertThat(missing.descriptor()).isEqualTo("(Ljava/lang/Object;)Ljava/lang/Object;");
+			assertThat(missing.callers()).containsExactly("main");
+		});
+	}
+
 }

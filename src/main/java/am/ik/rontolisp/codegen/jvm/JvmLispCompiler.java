@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -69,6 +70,56 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	private final boolean simdAccel;
 
+	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
+	private static final String GROUP_ARRAYS = "arrays";
+
+	/** The hash-table runtime helper group ({@link JvmHashRuntimeBuilder}). */
+	private static final String GROUP_HASH = "hash-tables";
+
+	/** The embedded eval/apply runtime group ({@link JvmEvalRuntimeBuilder}). */
+	private static final String GROUP_EVAL = "eval";
+
+	/**
+	 * The eval runtime's own methods; {@code _lookup$N} segments hang off
+	 * {@code _lookup}.
+	 */
+	private static final Set<String> EVAL_METHOD_NAMES = Set.of("_eval", "_apply", "_store", "_envLookup", "_lookup");
+
+	/**
+	 * Which gate emits a given runtime helper, i.e. which gate to force on when the
+	 * finished class turns out to call that helper without it having been emitted. A
+	 * helper absent from this table is not recoverable and makes the compile fail loudly
+	 * instead.
+	 */
+	private static @Nullable String gateGroupFor(String helperName) {
+		if (JvmArrayRuntimeBuilder.METHOD_NAMES.contains(helperName)) {
+			return GROUP_ARRAYS;
+		}
+		if (JvmHashRuntimeBuilder.METHOD_NAMES.contains(helperName)) {
+			return GROUP_HASH;
+		}
+		if (EVAL_METHOD_NAMES.contains(helperName)) {
+			return GROUP_EVAL;
+		}
+		return null;
+	}
+
+	/**
+	 * Thrown by the compile pass when the finished class calls an own-class helper the
+	 * run decided not to emit, and the missing helper belongs to a gate the next run can
+	 * force on. Never escapes {@link #compile(List)}.
+	 */
+	private static final class GateUnderpredicted extends RuntimeException {
+
+		private final Set<String> groups;
+
+		private GateUnderpredicted(Set<String> groups) {
+			super(null, null, false, false);
+			this.groups = groups;
+		}
+
+	}
+
 	/**
 	 * Create a new JVM compiler targeting the given class name.
 	 * @param className the fully qualified class name for the generated class
@@ -128,6 +179,34 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	@Override
 	public byte[] compile(List<LispVal> program) {
+		// Runtime helper GROUPS are gated on a scan of the SOURCE program, but several
+		// lowerings introduce the primitive that calls a helper only during compileExpr,
+		// after that scan has run (`(setf (elt s i) v)` -> %aset / %schar-set is the
+		// worked example). The gate is therefore a prediction, and a wrong one used to
+		// ship an invokestatic to a method that was never generated -- JVM resolution is
+		// lazy, so it survived verification and failed at run time only if the branch was
+		// taken. So the prediction is checked against the emitted bytecode (see the
+		// unresolvedSelfMethods call at the end of the pass) and a mispredicted gate is
+		// simply re-run with that group forced on: the build is then identical to one
+		// whose source did mention an array operator, rather than merely not crashing.
+		// Each retry strictly grows `forced`, so the loop terminates.
+		// See .kb/adjustable-arrays.md ("The array gate is a consequence, not a
+		// prediction").
+		Set<String> forced = new LinkedHashSet<>();
+		while (true) {
+			try {
+				return compile(program, forced);
+			}
+			catch (GateUnderpredicted signal) {
+				if (!forced.addAll(signal.groups)) {
+					throw new IllegalStateException(
+							"JvmLispCompiler: runtime helper gate " + signal.groups + " stayed under-predicted");
+				}
+			}
+		}
+	}
+
+	private byte[] compile(List<LispVal> program, Set<String> forcedGroups) {
 		// Resolve packages (in-package directives, qualified symbols, *package*) up front
 		// so
 		// the rest of compilation sees canonical names.
@@ -481,7 +560,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// marshals the request/response plists through the _invoke_1 dispatcher.
 		// The async runtime is a third user: the class implements Runnable and
 		// _async_run does `new Prog()` per spawned body.
-		boolean needsInstanceCtor = usesTlsConnect || usesHttpHandler || usesAsyncRuntime;
+		// The whole socket group is emitted together, and _tlsConnect's body instantiates
+		// the generated class as its trust-all X509TrustManager -- so the constructor is
+		// part of the SOCKET gate, not the narrower tls-connect one. Only the interface
+		// and its three trust methods stay on usesTlsConnect (nothing calls them from
+		// bytecode; JSSE does, and only a tls-connect call site can reach _tlsConnect).
+		boolean needsInstanceCtor = usesSockets || usesHttpHandler || usesAsyncRuntime;
 		ClassConstant x509TrustManagerClass = usesTlsConnect ? cp.addClass(cp.addUtf8("javax/net/ssl/X509TrustManager"))
 				: null;
 		ClassConstant x509CertificateClass = usesTlsConnect
@@ -562,6 +646,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// computed here, before the wrappers are generated, and threaded into Ctx so the
 		// lowering only emits calls to a helper that is actually present.
 		boolean usesSeqString = ConcatenateForms.needsSeqString(program);
+		// The hash-table runtime gate. Like the array gate it is a source scan that a
+		// lowering can outrun -- (class-of x) expands into a hash-table-p test, so a
+		// hash-free program can still reference _hashP -- and forcedGroups carries the
+		// previous run's verdict when it did (see compile(List)).
+		boolean usesHashTables = programUsesAnyHashOp(program) || forcedGroups.contains(GROUP_HASH);
 		// parse-integer / read-from-string wrappers reference runtime helpers that are
 		// emitted only when the program itself uses the operator (_parseInt; the reader
 		// runtime). Exclude each wrapper unless the program references the symbol, so the
@@ -574,15 +663,26 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.LOAD))) {
 			wrapperExcludes.add(LispNames.READ_FROM_STRING);
 		}
+		// #'funcall's wrapper body is (apply f r), which compiles to the eval runtime's
+		// _apply -- a helper emitted only when the program uses eval. The wrapper is dead
+		// weight unless the program takes #'funcall as a value, so it is injected exactly
+		// then, and that same reference forces the eval runtime on (usesEval below).
+		// Without the pairing the wrapper referenced _apply in EVERY class and
+		// (reduce #'funcall fns) died with NoSuchMethodError the moment it ran.
+		boolean usesFuncallValue = program.stream()
+			.anyMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, LispNames.FUNCALL));
+		if (!usesFuncallValue) {
+			wrapperExcludes.add(LispNames.FUNCALL);
+		}
 		// Hash-table wrappers reference helpers (JvmHashRuntimeBuilder) emitted only when
 		// the program uses a hash table; gate the whole group together.
-		if (!programUsesAnyHashOp(program)) {
+		if (!usesHashTables) {
 			wrapperExcludes.addAll(BuiltinFunctionWrappers.HASH_FUNCTIONS);
 		}
 		// Fill-pointer array wrappers reference the array runtime helpers
 		// (JvmArrayRuntimeBuilder), emitted only when the program uses an array
 		// operator; gate the group the same way.
-		if (!programUsesAnyArrayOp(program)) {
+		if (!(programUsesAnyArrayOp(program) || forcedGroups.contains(GROUP_ARRAYS))) {
 			wrapperExcludes.addAll(BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS);
 		}
 		// %seq-string is the concatenate 'string argument normalizer, not a first-class
@@ -606,8 +706,15 @@ public final class JvmLispCompiler implements LispCompiler {
 				wrapperExcludes.add(op);
 			}
 		}
+		// The mangled method names of the injected built-in wrappers. They are needed by
+		// the gate check at the end of the pass: a wrapper is injected in EVERY class
+		// regardless of the program, so what its body references says nothing about the
+		// program and must not drive a program-dependent gate (see compile(List)).
+		Set<String> wrapperMethodNames = new HashSet<>();
 		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes)) {
-			defuns.add(extractSetqLambda(wrapper));
+			DefunDecl decl = extractSetqLambda(wrapper);
+			wrapperMethodNames.add(mangleMethodName(decl.name()));
+			defuns.add(decl);
 		}
 
 		// Collect top-level global variables and give each a dedicated static field.
@@ -702,7 +809,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
-				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL);
+				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL)
+				// #'funcall's injected wrapper body is (apply f r): the wrapper and the
+				// runtime it calls are gated on the same reference (see wrapperExcludes).
+				|| usesFuncallValue || forcedGroups.contains(GROUP_EVAL);
 		if (usesEval) {
 			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
 				indirectCallArities.add(arity);
@@ -739,7 +849,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// normalization, the stringp extension, the per-site _strv calls and the print
 		// branch -- all key off this one gate, so an array-free program compiles
 		// byte-identically to a build that never knew character vectors.
-		boolean usesArrays = programUsesAnyArrayOp(program) || usesFloatArray || usesIntArray;
+		// forcedGroups carries the verdict of a previous run whose source scan
+		// under-predicted this gate (see compile(List)); it never turns the gate OFF.
+		boolean usesArrays = programUsesAnyArrayOp(program) || usesFloatArray || usesIntArray
+				|| forcedGroups.contains(GROUP_ARRAYS);
 		MethodrefConstant strvMethod = usesArrays ? cp.addMethodref(thisClass, cp
 			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
 				: null;
@@ -828,6 +941,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.usesFloatArray(usesFloatArray)
 			.usesIntArray(usesIntArray)
 			.usesArrays(usesArrays)
+			.usesHashTables(usesHashTables)
 			.usesSeqString(usesSeqString)
 			.mayUseInstances(mayUseInstances)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
@@ -909,10 +1023,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// plus the trailing RETURN; a single form larger than the difference still
 		// cannot be split (a pre-existing per-form limit: chunking happens BETWEEN
 		// top-level forms, so one form whose bytecode passes the 64 KB per-method cap
-		// has no split point). 40000 leaves ~25 KB of per-form headroom -- the reader's
-		// usesFloatArray forcing widened the array call sites enough that the ci-spec
-		// corpus overflowed the old 48000 budget's ~17 KB headroom.
-		final int chunkCodeBudget = 40000;
+		// has no split point). 24000 leaves ~41 KB of per-form headroom. It has been
+		// lowered twice for the same reason -- a lowering got wider and the ci-spec
+		// corpus's biggest single form grew with it: first the reader's usesFloatArray
+		// forcing (48000 -> 40000, ~17 KB of headroom left), then the (setf (elt s i) v)
+		// string arm, which costs ~6 KB per site and took the corpus's largest form to
+		// ~39 KB. Measure before re-tuning: compiling with a budget of 1 puts every
+		// top-level form in its own chunk, so the debug hook above then ranks the forms
+		// themselves.
+		final int chunkCodeBudget = 24000;
 		Ctx chunkCtx = null;
 		for (LispVal expr : topLevelExprs) {
 			if (chunkCtx == null || chunkCtx.code.size() >= chunkCodeBudget) {
@@ -1027,6 +1146,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			for (int i = 0; i < lambdaCtxs.size(); i++) {
 				sized.add(new Sized(lambdaDecls.get(i).methodName, lambdaCtxs.get(i).code.size()));
+			}
+			// The top-level chunks are subject to the same 64 KB cap, and unlike a defun
+			// they cannot be split by the author -- chunking happens BETWEEN top-level
+			// forms, so one oversized form has no split point (see chunkCodeBudget).
+			for (int i = 0; i < topChunks.size(); i++) {
+				sized.add(new Sized("_top$" + i, topChunks.get(i).code.size()));
 			}
 			sized.stream()
 				.sorted(java.util.Comparator.comparingInt(Sized::size).reversed())
@@ -1167,7 +1292,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<Integer> structTableClinitFinal = structTableClinit;
 
 		// Build the hash-table runtime helpers, only when the program uses hash tables.
-		boolean usesHashTables = programUsesAnyHashOp(program);
 		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables ? JvmHashRuntimeBuilder.build(cp,
 				thisClass, objectClass, objectArrayClass, longValueOf, lispToStringMethod) : List.of();
 
@@ -2058,6 +2182,41 @@ public final class JvmLispCompiler implements LispCompiler {
 			.writeAttributes(a -> {
 			});
 		byte[] classBytes = classOut.toByteArray();
+		// Check the runtime-helper gates against what the bodies turned out to reference,
+		// rather than trusting the source scans that predicted them (see compile(List)).
+		// An unresolved own-class call is either a mispredicted gate -- re-run with that
+		// group forced on -- or an internal inconsistency no re-run can fix, and then it
+		// is far better to say so here than to hand the user a class that throws
+		// NoSuchMethodError the first time the branch is taken.
+		List<JvmClassShaker.UnresolvedSelfMethod> unresolved = JvmClassShaker.unresolvedSelfMethods(classBytes);
+		Set<String> underpredicted = new LinkedHashSet<>();
+		List<JvmClassShaker.UnresolvedSelfMethod> unrecoverable = new ArrayList<>();
+		for (JvmClassShaker.UnresolvedSelfMethod missing : unresolved) {
+			if (wrapperMethodNames.containsAll(missing.callers())) {
+				// Only built-in wrappers reference it. They are injected unconditionally,
+				// so this says nothing about the program (see wrapperMethodNames), and
+				// every such reference sits behind a runtime type test for a value the
+				// absent runtime cannot construct -- an array, a hash table. A wrapper
+				// body that needs a gated runtime UNCONDITIONALLY does not get this pass:
+				// it is reference-gated instead, so wrapper and runtime are decided by
+				// the same fact (#'funcall above).
+				continue;
+			}
+			String group = gateGroupFor(missing.name());
+			if (group == null || forcedGroups.contains(group)) {
+				unrecoverable.add(missing);
+			}
+			else {
+				underpredicted.add(group);
+			}
+		}
+		if (!unrecoverable.isEmpty()) {
+			throw new IllegalStateException(
+					"JvmLispCompiler: the generated class calls own methods it does not declare: " + unrecoverable);
+		}
+		if (!underpredicted.isEmpty()) {
+			throw new GateUnderpredicted(underpredicted);
+		}
 		if (this.optimize) {
 			// Drop every method unreachable from main (and compact the constant pool).
 			// Dispatch methods contain real invokestatic calls to every registered
@@ -3080,6 +3239,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesArrays = false;
 
 		/**
+		 * True when the hash-table runtime helper group ({@link JvmHashRuntimeBuilder})
+		 * is emitted for this program. Gates the {@code hash-table-p} clause of the
+		 * {@code class-of} lowering: without the runtime no hash table can exist, so the
+		 * clause would only be a call to a {@code _hashP} that was never generated.
+		 * Shared across every context.
+		 */
+		boolean usesHashTables = false;
+
+		/**
 		 * True when the {@code %seq-string} helper is injected for this program, i.e. the
 		 * program itself writes a {@code (concatenate 'string ...)} with an argument that
 		 * is not a literal string. Only then does the string-family lowering normalize
@@ -3255,6 +3423,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.usesFloatArray = builder.usesFloatArray;
 			this.usesIntArray = builder.usesIntArray;
 			this.usesArrays = builder.usesArrays;
+			this.usesHashTables = builder.usesHashTables;
 			this.usesSeqString = builder.usesSeqString;
 			this.mayUseInstances = builder.mayUseInstances;
 			this.className = builder.className;
@@ -3485,6 +3654,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesIntArray = false;
 
 			private boolean usesArrays = false;
+
+			private boolean usesHashTables = false;
 
 			private boolean usesSeqString = false;
 
@@ -3848,6 +4019,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesArrays(boolean usesArrays) {
 				this.usesArrays = usesArrays;
+				return this;
+			}
+
+			Builder usesHashTables(boolean usesHashTables) {
+				this.usesHashTables = usesHashTables;
 				return this;
 			}
 

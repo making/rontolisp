@@ -6594,6 +6594,42 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileSetfEltOnAStringMutatesIt() throws Exception {
+		// (setf (elt seq i) v) dispatches at run time over all three sequence
+		// representations: rplaca for a list, the schar-set rebuild for a string,
+		// %aset for a vector. The string arm is what makes this the worked example of
+		// .todo/209: NOTHING in the source is an array operator, yet the expansion
+		// reaches the array runtime (%arrayp / %row-major-aset inside the schar-set
+		// rebuild). With the gate still a source scan the class called _aset1 without
+		// declaring it and died with NoSuchMethodError; the gate is now a consequence
+		// of what the bodies reference (.kb/adjustable-arrays.md).
+		assertThat(compileAndRun("""
+				(let ((s "abc")) (setf (elt s 0) #\\z) (print s))
+				""")).isEqualTo("\"zbc\"");
+	}
+
+	@Test
+	void compileSetfEltOnAVectorAndAList() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((v (vector 1 2 3))) (setf (elt v 0) 9) (print v))
+				(let ((l (list 1 2 3))) (setf (elt l 0) 8) (print l))
+				(let ((s (make-string 3 :initial-element #\\a))) (setf (elt s 1) #\\z) (print s))
+				""")).isEqualTo("#(9 2 3)\n(8 2 3)\n\"aza\"");
+	}
+
+	@Test
+	void compileFuncallAsAFirstClassValue() throws Exception {
+		// #'funcall's injected wrapper body is (apply f r), which needs the eval
+		// runtime's _apply. The wrapper used to be emitted in every class while _apply
+		// stayed gated on the source mentioning eval/apply, so this died with
+		// NoSuchMethodError; wrapper and runtime are now gated on the same reference.
+		assertThat(compileAndRun("""
+				(print (funcall #'funcall #'+ 1 2))
+				(print (mapcar #'funcall (list #'car #'cdr) (list (list 1 2) (list 3 4))))
+				""")).isEqualTo("3\n(1 (4))");
+	}
+
+	@Test
 	void compileCharVectorEltAndCoerce() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *s* (make-array 3 :element-type 'character :fill-pointer 0))

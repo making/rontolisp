@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
@@ -65,6 +66,14 @@ final class JvmHashRuntimeBuilder {
 	static final String VALUES = "_hashValues";
 
 	static final String VALUES_DESC = "(Ljava/lang/Object;)[Ljava/lang/Object;";
+
+	/**
+	 * Every method name {@link #build} emits, i.e. exactly the group the hash gate
+	 * switches on and off; {@code JvmLispCompiler} matches an unresolved own-class call
+	 * against it to recognize an under-predicted gate. Pinned by
+	 * {@code JvmRuntimeGroupNamesTest}.
+	 */
+	static final Set<String> METHOD_NAMES = Set.of(MAKE, GET, PUT, REM, CLR, COUNT, P, VALUES);
 
 	/** A hash-table helper method body ready to be emitted into the generated class. */
 	record HashMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {

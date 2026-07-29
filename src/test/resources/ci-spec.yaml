@@ -2761,6 +2761,24 @@ cases:
       "---"
       ("あb" 2)
       "xyz"
+  - name: setf-elt-cross-backend
+    source: |
+      (defun ci-setf-elt ()
+        (let ((s "abc")) (setf (elt s 0) #\z) (print s))
+        (let ((v (vector 1 2 3))) (setf (elt v 0) 9) (print v))
+        (let ((l (list 1 2 3))) (setf (elt l 0) 8) (print l))
+        (let ((s (make-string 3 :initial-element #\a))) (setf (elt s 1) #\z) (print s))
+        (let ((s "abcd")) (print (setf (elt s 1) #\Y)) (print s))
+        (let ((v (vector 1 2 3)) (i 2)) (setf (elt v i) (* 10 (elt v 0))) (print v)))
+      (ci-setf-elt)
+    expected: |
+      "zbc"
+      #(9 2 3)
+      (8 2 3)
+      "aza"
+      #\Y
+      "aYcd"
+      #(1 2 10)
   - name: array-literals-cross-backend
     source: |
       (defun ci-array-literals ()

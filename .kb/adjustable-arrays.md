@@ -113,8 +113,9 @@ the interpreter, the JVM and the component.
 Consequences of the lowering, all decided rather than inherited:
 
 - **The JVM array gate now includes `make-string`.** `Ctx.usesArrays` is
-  `programUsesAnyArrayOp(program) || usesFloatArray || usesIntArray`, and
-  both backends' `programUsesAnyArrayOp` list `MAKE-STRING` and
+  `programUsesAnyArrayOp(program) || usesFloatArray || usesIntArray`
+  (plus the forced-group term below), and both backends'
+  `programUsesAnyArrayOp` list `MAKE-STRING` and
   `MAKE-SEQUENCE` alongside `MAKE-ARRAY` (they lower to it during
   `compileExpr`, after the scan runs). So a string-only program that
   allocates a buffer does pull in the array runtime and grows. That is
@@ -140,6 +141,126 @@ Consequences of the lowering, all decided rather than inherited:
 - **The functional branches stay.** A LITERAL string is still immutable, so
   `expandReplace` / `expandScharSetFunctional` keep their `%arrayp`-false
   paths for `(replace "abc" ...)`; what changed is which values reach them.
+
+## The JVM array gate is a CONSEQUENCE, not a prediction (todo-209)
+
+**The invariant: on the JVM the array runtime is emitted whenever the emitted
+bytecode calls it, no matter which lowering introduced the call.** Before
+2026-07-29 it was emitted when `programUsesAnyArrayOp` -- a scan of the SOURCE
+program for a hand-maintained list of operator names -- said so. Several
+lowerings introduce an array primitive only during `compileExpr`, i.e. AFTER
+that scan, and when one of those was a program's only array use the class
+carried an `invokestatic` to a method that was never generated. JVM method
+resolution is lazy, so it survived verification and threw `NoSuchMethodError`
+the first time the branch ran. The list was right up to whichever lowering was
+added last without a matching entry, and it could not be right by construction.
+
+How it works now, in `JvmLispCompiler`:
+
+1. The scan stays -- it is still what decides `Ctx.usesArrays`, and that flag
+   changes CODE, not just emission (the `_strv` normalization at the string-op
+   sites, the character-vector arm of `stringp`, the array print branch), so it
+   has to be known before any body is compiled.
+2. After the class bytes are assembled, `JvmClassShaker.unresolvedSelfMethods`
+   (in `am.ik.jvm`, language-independent) walks every emitted body and reports
+   each own-class method that some `invoke*` names but the class does not
+   declare.
+3. A reported name is matched against the per-group rosters
+   (`JvmArrayRuntimeBuilder.METHOD_NAMES`, `JvmHashRuntimeBuilder.METHOD_NAMES`,
+   the eval runtime's four methods + `_lookup`). A match means that gate
+   under-predicted, so `compile` RE-RUNS itself with the group forced on: the
+   result is the build a source that DID mention an array operator would have
+   produced, not merely one that no longer crashes. Each retry strictly grows
+   the forced set, so the loop terminates.
+4. Anything left unmatched is an internal inconsistency no re-run can fix, and
+   the compile fails loudly naming the call and its callers instead of handing
+   the user a class that dies later.
+
+**One exclusion, and the reason it is not arbitrary.** A call referenced ONLY by
+injected built-in wrappers is skipped. A wrapper is injected in every class
+whether or not the program mentions the operator, so what its body references
+carries no information about the program and must not drive a program-dependent
+gate -- and in practice most of them reference the array runtime (`#'+`,
+`#'reverse`, `#'sort`, `#'subseq`, `#'string=`, ... all carry an array arm), so
+without the exclusion every class would drag in the whole array and hash
+runtimes, ~35 KB. It is sound because each such reference sits behind a runtime
+type test for a value the absent runtime cannot construct: with no array runtime
+no array exists, with no hash runtime no hash table exists. A wrapper body that
+needs a gated runtime UNCONDITIONALLY gets no such pass -- see `#'funcall`
+below, which is reference-gated so the wrapper and the runtime it calls are
+decided by the same fact. A reference from anywhere else -- user code, a defun,
+a lowering -- is program-dependent evidence and does force the gate, even where
+the branch would have been dead; conservative in the safe direction.
+
+`(class-of x)` was the one lowering whose gated call was NOT behind such a test
+from the gate's point of view: its `cond` chain included a `hash-table-p` clause
+unconditionally, so every class that compiled a `class-of` referenced `_hashP`.
+`expandClassOf` now takes a `hashTablesExist` flag (the interpreter and both
+WASM backends pass `true`; the JVM passes `Ctx.usesHashTables`) and drops the
+clause when no hash table can exist -- the same reasoning that keeps the
+character-vector arm out of a compiled `stringp`.
+
+Why this shape and not the alternatives: scanning the expanded program is not
+available (the expansions are lazy, per-site, inside `compileExpr`), and
+emitting the group unconditionally would end the byte-identity of array-free
+programs (`.kb/emitted-output-determinism.md`). Step 2 costs one linear pass
+over the class on every build; step 3 costs a second compile only for a program
+that actually trips a gate.
+
+`(setf (elt s i) v)` is the worked example, and it needed a semantic fix too:
+`expandSetf`'s `ELT` branch yielded `(%aset seq i v)` for everything non-`consp`,
+so a STRING target reached `%aset` -- `NoSuchMethodError` on the JVM (no gate
+name in the source at all), `cast failure` trap on both WASM backends, and only
+the interpreter got it right. The branch now carries the same three-way dispatch
+`(setf (aref s i) v)` has -- `consp` -> `rplaca`, `stringp` -> the `schar-set`
+rebuild, else `%aset` -- with the same lite restriction: only a VARIABLE place
+takes the string arm (the rebuild of an immutable string `setq`s the result
+back), so a variable place dispatches on the variable itself and any other place
+expression keeps the two-way list/array dispatch over a temp. Pinned by the
+`setf-elt-cross-backend` ci-spec case, `LispEvaluatorTest`'s
+`evalSetfEltDispatchesOverListStringAndVector`, `JvmLispCompilerTest`'s
+`compileSetfEltOnAStringMutatesIt` (the gate) plus
+`compileSetfEltOnAVectorAndAList`, and
+`WasmLispCompilerIntegrationTest.compileSetfEltDispatchesOverListStringAndVector`.
+
+Two long-latent bugs of the same family surfaced the moment step 2 ran over the
+corpus, both now fixed at the source rather than by a retry:
+
+- **`#'funcall` died with `NoSuchMethodError` on the JVM.** Its injected wrapper
+  body is `(apply f r)`, which compiles to the eval runtime's `_apply`, but the
+  wrapper was emitted in EVERY class while `_apply` stayed gated on the SOURCE
+  mentioning `eval`/`apply`. `(reduce #'funcall fns)` -- cl-utilities' `compose`
+  -- was the shape that hit it. The rule the parse-integer / read-from-string
+  wrappers already followed now covers it: a wrapper whose body needs a gated
+  runtime is injected exactly when the program references the operator as a
+  value, and that same reference forces the runtime on. Pinned by
+  `JvmLispCompilerTest.compileFuncallAsAFirstClassValue`.
+- **`_tlsConnect` instantiated a constructor that was not always emitted.** The
+  whole socket group is emitted for any TCP/TLS operator, but `<init>` was gated
+  on `tls-connect` alone; a `tcp-connect`- or `tls-listen`-only program declared
+  no constructor. `needsInstanceCtor` follows the socket gate now. (The
+  X509TrustManager interface and its three methods stay on `usesTlsConnect`:
+  nothing calls them from bytecode -- JSSE does -- and only a `tls-connect` call
+  site can reach `_tlsConnect`.)
+
+Costs that came with it, both deliberate:
+
+- Any program using `(setf (elt ...))` now pulls in the array runtime, because
+  the string arm's `schar-set` rebuild reaches `%arrayp`/`%row-major-aset`. Same
+  trade as `make-string` above.
+- The `_top$N` chunk budget dropped from 40000 to 24000. The string arm costs
+  ~6 KB per `(setf (elt ...))` site, which took the ci-spec corpus's largest
+  single top-level form to ~39 KB -- and a single form cannot be split, so the
+  budget has to leave room for it under the JVM's 65535-byte method cap. To
+  re-measure, compile with the budget set to 1 (every top-level form gets its own
+  chunk) and read `-Drontolisp.jvm.debug-method-sizes=true`, which now ranks the
+  top-level chunks alongside the defuns and lambdas.
+
+The rosters in step 3 are the one thing still written by hand, so
+`JvmRuntimeGroupNamesTest` pins each against what its builder actually emits, in
+both directions. WASM has no equivalent gap: it emits the array builtins inline,
+so there is no group to under-predict -- its `programUsesAnyArrayOp` only
+excludes wrapper groups.
 
 ## adjust-array
 

@@ -2,7 +2,7 @@
 
 `(setf place value [place2 value2 ...])`
 
-Generalized assignment: stores `value` into the location named by `place` and returns the value. Beyond plain variables, the supported places are the list accessors `car`, `cdr`, `nth`, `first` through `fourth`, `rest`, and the `caXXXr` compositions, plus `elt` (a runtime list/array dispatch; a string allocated by [`make-string`](../functions/make-string.md) is written in place, a string literal is not), so you can mutate a specific slot of an existing structure in place. It expands into the appropriate primitive mutator (such as `rplaca`/`rplacd`). Place subforms are evaluated before the value, so the tail-collection idiom `(setf (cdr tail) (setf tail (list x)))` links the old tail.
+Generalized assignment: stores `value` into the location named by `place` and returns the value. Beyond plain variables, the supported places are the list accessors `car`, `cdr`, `nth`, `first` through `fourth`, `rest`, and the `caXXXr` compositions, plus `elt` (a runtime list/string/vector dispatch: a list cell and a vector -- including a mutable buffer from [`make-string`](../functions/make-string.md) -- are written in place, while a string literal is rebuilt and rebound like [`(setf (char ...))`](../functions/char.md), so its place must be a **variable** and an alias made before the write still sees the old content), so you can mutate a specific slot of an existing structure in place. It expands into the appropriate primitive mutator (such as `rplaca`/`rplacd`). Place subforms are evaluated before the value, so the tail-collection idiom `(setf (cdr tail) (setf tail (list x)))` links the old tail.
 
 ```lisp
 (let ((x (list 1 2 3))) (setf (second x) 99) x) ; => (1 99 3)

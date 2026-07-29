@@ -11,6 +11,8 @@ import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -49,6 +51,11 @@ import org.jspecify.annotations.Nullable;
  * registered function. The one edge invisible to bytecode is a reflective call by name;
  * the caller lists such methods as extra roots (rontolisp: {@code _apply}, looked up
  * reflectively by the embedded {@code java:} bridge).
+ * <p>
+ * The same class-file walk answers the opposite question, and
+ * {@link #unresolvedSelfMethods(byte[])} exposes it: which own-class methods does the
+ * emitted bytecode call that the class never declares? That one runs on every build, not
+ * just under {@code --optimize}.
  */
 public final class JvmClassShaker {
 
@@ -111,69 +118,17 @@ public final class JvmClassShaker {
 	 * unchanged when nothing can be dropped
 	 */
 	public static byte[] shake(byte[] classFile, Set<String> rootMethodNames) {
-		int[] p = { 0 };
-		int magic = readU4(classFile, p);
-		if (magic != 0xCAFEBABE) {
-			throw new IllegalStateException("JvmClassShaker: not a class file");
-		}
-		int minor = readU2(classFile, p);
-		int major = readU2(classFile, p);
-
-		// Constant pool. Long/Double entries occupy two slots; the second is left null.
-		int cpCount = readU2(classFile, p);
-		@Nullable CpEntry[] cp = new CpEntry[cpCount];
-		for (int i = 1; i < cpCount; i++) {
-			int tag = classFile[p[0]++] & 0xff;
-			int bodyLen = switch (tag) {
-				case TAG_UTF8 -> 2 + ((classFile[p[0]] & 0xff) << 8 | (classFile[p[0] + 1] & 0xff));
-				case TAG_INTEGER, TAG_FLOAT, TAG_FIELDREF, TAG_METHODREF, TAG_INTERFACE_METHODREF, TAG_NAME_AND_TYPE ->
-					4;
-				case TAG_LONG, TAG_DOUBLE -> 8;
-				case TAG_CLASS, TAG_STRING -> 2;
-				default -> throw new IllegalStateException("JvmClassShaker: unhandled constant tag " + tag);
-			};
-			cp[i] = new CpEntry(tag, slice(classFile, p[0], p[0] + bodyLen));
-			p[0] += bodyLen;
-			if (tag == TAG_LONG || tag == TAG_DOUBLE) {
-				i++; // second slot stays null
-			}
-		}
-
-		int accessFlags = readU2(classFile, p);
-		int thisIdx = readU2(classFile, p);
-		int superIdx = readU2(classFile, p);
-		int interfacesCount = readU2(classFile, p);
-		int[] interfaces = new int[interfacesCount];
-		for (int i = 0; i < interfacesCount; i++) {
-			interfaces[i] = readU2(classFile, p);
-		}
-
-		int fieldsCount = readU2(classFile, p);
-		List<FieldInfo> fields = new ArrayList<>(fieldsCount);
-		for (int i = 0; i < fieldsCount; i++) {
-			int access = readU2(classFile, p);
-			int nameIdx = readU2(classFile, p);
-			int descIdx = readU2(classFile, p);
-			int attrCount = readU2(classFile, p);
-			if (attrCount != 0) {
-				throw new IllegalStateException("JvmClassShaker: unsupported field attribute");
-			}
-			fields.add(new FieldInfo(access, nameIdx, descIdx));
-		}
-
-		int methodsCount = readU2(classFile, p);
-		List<MethodInfo> methods = new ArrayList<>(methodsCount);
-		for (int i = 0; i < methodsCount; i++) {
-			methods.add(parseMethod(classFile, p, cp));
-		}
-
-		int classAttrCount = readU2(classFile, p);
-		if (classAttrCount != 0) {
-			throw new IllegalStateException("JvmClassShaker: unsupported class attribute");
-		}
-		if (p[0] != classFile.length) {
-			throw new IllegalStateException("JvmClassShaker: trailing bytes after class structure");
-		}
+		ParsedClass parsed = parse(classFile);
+		int minor = parsed.minor();
+		int major = parsed.major();
+		@Nullable CpEntry[] cp = parsed.cp();
+		int cpCount = cp.length;
+		int accessFlags = parsed.accessFlags();
+		int thisIdx = parsed.thisIdx();
+		int superIdx = parsed.superIdx();
+		int[] interfaces = parsed.interfaces();
+		List<FieldInfo> fields = parsed.fields();
+		List<MethodInfo> methods = parsed.methods();
 
 		String thisClassName = className(cp, thisIdx);
 
@@ -364,6 +319,150 @@ public final class JvmClassShaker {
 
 		byte[] result = out.toByteArray();
 		return Arrays.equals(result, classFile) ? classFile : result;
+	}
+
+	// --- Whole-class parsing ---
+
+	/**
+	 * Everything {@link #shake} and {@link #unresolvedSelfMethods} read out of a class.
+	 */
+	private record ParsedClass(int minor, int major, @Nullable CpEntry[] cp, int accessFlags, int thisIdx, int superIdx,
+			int[] interfaces, List<FieldInfo> fields, List<MethodInfo> methods) {
+	}
+
+	private static ParsedClass parse(byte[] classFile) {
+		int[] p = { 0 };
+		int magic = readU4(classFile, p);
+		if (magic != 0xCAFEBABE) {
+			throw new IllegalStateException("JvmClassShaker: not a class file");
+		}
+		int minor = readU2(classFile, p);
+		int major = readU2(classFile, p);
+
+		// Constant pool. Long/Double entries occupy two slots; the second is left null.
+		int cpCount = readU2(classFile, p);
+		@Nullable CpEntry[] cp = new CpEntry[cpCount];
+		for (int i = 1; i < cpCount; i++) {
+			int tag = classFile[p[0]++] & 0xff;
+			int bodyLen = switch (tag) {
+				case TAG_UTF8 -> 2 + ((classFile[p[0]] & 0xff) << 8 | (classFile[p[0] + 1] & 0xff));
+				case TAG_INTEGER, TAG_FLOAT, TAG_FIELDREF, TAG_METHODREF, TAG_INTERFACE_METHODREF, TAG_NAME_AND_TYPE ->
+					4;
+				case TAG_LONG, TAG_DOUBLE -> 8;
+				case TAG_CLASS, TAG_STRING -> 2;
+				default -> throw new IllegalStateException("JvmClassShaker: unhandled constant tag " + tag);
+			};
+			cp[i] = new CpEntry(tag, slice(classFile, p[0], p[0] + bodyLen));
+			p[0] += bodyLen;
+			if (tag == TAG_LONG || tag == TAG_DOUBLE) {
+				i++; // second slot stays null
+			}
+		}
+
+		int accessFlags = readU2(classFile, p);
+		int thisIdx = readU2(classFile, p);
+		int superIdx = readU2(classFile, p);
+		int interfacesCount = readU2(classFile, p);
+		int[] interfaces = new int[interfacesCount];
+		for (int i = 0; i < interfacesCount; i++) {
+			interfaces[i] = readU2(classFile, p);
+		}
+
+		int fieldsCount = readU2(classFile, p);
+		List<FieldInfo> fields = new ArrayList<>(fieldsCount);
+		for (int i = 0; i < fieldsCount; i++) {
+			int access = readU2(classFile, p);
+			int nameIdx = readU2(classFile, p);
+			int descIdx = readU2(classFile, p);
+			int attrCount = readU2(classFile, p);
+			if (attrCount != 0) {
+				throw new IllegalStateException("JvmClassShaker: unsupported field attribute");
+			}
+			fields.add(new FieldInfo(access, nameIdx, descIdx));
+		}
+
+		int methodsCount = readU2(classFile, p);
+		List<MethodInfo> methods = new ArrayList<>(methodsCount);
+		for (int i = 0; i < methodsCount; i++) {
+			methods.add(parseMethod(classFile, p, cp));
+		}
+
+		int classAttrCount = readU2(classFile, p);
+		if (classAttrCount != 0) {
+			throw new IllegalStateException("JvmClassShaker: unsupported class attribute");
+		}
+		if (p[0] != classFile.length) {
+			throw new IllegalStateException("JvmClassShaker: trailing bytes after class structure");
+		}
+		return new ParsedClass(minor, major, cp, accessFlags, thisIdx, superIdx, interfaces, fields, methods);
+	}
+
+	/**
+	 * Returns every own-class method that some emitted body actually {@code invoke}s but
+	 * the class does not declare, as {@code name:descriptor} keys in first-reference
+	 * order (empty when the class is self-consistent).
+	 * <p>
+	 * JVM method resolution is lazy, so such a reference survives verification and class
+	 * loading and throws {@link NoSuchMethodError} only if the branch containing it is
+	 * ever taken. That makes it the exact failure mode of a code generator whose
+	 * runtime-helper emission is decided by a PREDICTION (a source scan) rather than by
+	 * what the bodies turned out to reference: the mismatch is invisible until a user's
+	 * program takes the branch. Scanning the finished class turns it back into a
+	 * compile-time fact -- see {@code .kb/adjustable-arrays.md} for the rontolisp gate
+	 * this exists for. The scan reads only what the bytecode references, so a
+	 * constant-pool entry minted speculatively and never emitted is not reported.
+	 * @param classFile a JVM class file as produced by {@link ByteCodeWriter} (before
+	 * {@link StackMapAugmenter} runs; the same structural restrictions as
+	 * {@link #shake(byte[], Set)} apply)
+	 * @return the unresolved own-class calls, in first-reference order
+	 */
+	public static List<UnresolvedSelfMethod> unresolvedSelfMethods(byte[] classFile) {
+		ParsedClass parsed = parse(classFile);
+		@Nullable CpEntry[] cp = parsed.cp();
+		String thisClassName = className(cp, parsed.thisIdx());
+		Set<String> declared = new HashSet<>();
+		for (MethodInfo m : parsed.methods()) {
+			declared.add(methodKey(cp, m.nameIdx, m.descIdx));
+		}
+		Map<String, Set<String>> missing = new LinkedHashMap<>();
+		for (MethodInfo m : parsed.methods()) {
+			for (CpSite site : m.cpSites) {
+				CpEntry e = entry(cp, readIndex(m.code, site));
+				if (e.tag != TAG_METHODREF && e.tag != TAG_INTERFACE_METHODREF) {
+					continue;
+				}
+				if (!thisClassName.equals(className(cp, u2(e.body, 0)))) {
+					continue;
+				}
+				String key = refKey(cp, e);
+				if (!declared.contains(key)) {
+					missing.computeIfAbsent(key, k -> new LinkedHashSet<>()).add(utf8(cp, m.nameIdx));
+				}
+			}
+		}
+		List<UnresolvedSelfMethod> result = new ArrayList<>(missing.size());
+		missing.forEach((key, callers) -> {
+			int colon = key.indexOf(':');
+			result
+				.add(new UnresolvedSelfMethod(key.substring(0, colon), key.substring(colon + 1), List.copyOf(callers)));
+		});
+		return List.copyOf(result);
+	}
+
+	/**
+	 * An own-class method some emitted body invokes but the class never declares.
+	 *
+	 * @param name the called method's name
+	 * @param descriptor its descriptor
+	 * @param callers the names of the declared methods whose bodies reference it, in
+	 * declaration order
+	 */
+	public record UnresolvedSelfMethod(String name, String descriptor, List<String> callers) {
+
+		@Override
+		public String toString() {
+			return this.name + this.descriptor + " (called from " + String.join(", ", this.callers) + ")";
+		}
 	}
 
 	// --- Method / Code attribute parsing ---

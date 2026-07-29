@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
@@ -153,6 +154,19 @@ final class JvmArrayRuntimeBuilder {
 	static final String STRV = "_strv";
 
 	static final String STRV_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * Every method name {@link #build} and {@link #buildToStringMethods} emit, i.e.
+	 * exactly the group the array gate switches on and off. {@code JvmLispCompiler}
+	 * matches an unresolved own-class call against this set to tell "the gate
+	 * under-predicted" from "some other internal inconsistency", so a name missing here
+	 * would make the under-prediction unrecoverable; {@code JvmArrayRuntimeBuilderTest}
+	 * pins the set against what the two builders actually produce.
+	 */
+	static final Set<String> METHOD_NAMES = Set.of(MAKE, AREF1, AREF2, AREFN, ASET1, ASET2, ASETN, DIMS, TO_STRING,
+			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
+			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET, DISP_OFFSET,
+			CHAR_VEC_MAKE, STRV);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {

@@ -520,8 +520,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMaskField(cons), ctx, className);
 				case LispNames.SCALE_FLOAT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandScaleFloat(cons), ctx, className);
-				case LispNames.CLASS_OF ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandClassOf(cons), ctx, className);
+				case LispNames.CLASS_OF -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandClassOf(cons, ctx.usesHashTables), ctx, className);
 				case LispNames.CLASS_SLOT_DEFS_INTERNAL -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandClassSlotDefs(cons, ctx.closRegistry), ctx, className);
 				case LispNames.SLOT_BOUNDP -> JvmExprCompiler

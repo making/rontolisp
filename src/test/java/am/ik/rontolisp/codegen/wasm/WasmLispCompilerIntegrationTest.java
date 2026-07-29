@@ -9105,6 +9105,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileSetfEltDispatchesOverListStringAndVector() throws Exception {
+		// (setf (elt seq i) v) has a three-way runtime dispatch: rplaca for a list,
+		// the schar-set rebuild for a string, %aset for a vector. The string arm used
+		// to be missing, so an IMMUTABLE string target reached %aset and trapped here
+		// (cast failure) while the interpreter mutated it -- see .todo/209.
+		assertThat(compileAndRun("""
+				(let ((s "abc")) (setf (elt s 0) #\\z) (print s))
+				(let ((v (vector 1 2 3))) (setf (elt v 0) 9) (print v))
+				(let ((l (list 1 2 3))) (setf (elt l 0) 8) (print l))
+				(let ((s (make-string 3 :initial-element #\\a))) (setf (elt s 1) #\\z) (print s))
+				""")).isEqualTo("\"zbc\"\n#(9 2 3)\n(8 2 3)\n\"aza\"");
+	}
+
+	@Test
 	void compileCharVectorEltAndCoerce() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *s* (make-array 3 :element-type 'character :fill-pointer 0))

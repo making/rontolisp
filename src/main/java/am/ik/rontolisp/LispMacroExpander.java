@@ -3142,19 +3142,35 @@ public final class LispMacroExpander {
 					listToCons(List.of(new LispSymbol(LispNames.VEC_QUALIFIED_ASET), placeParts.get(1),
 							placeParts.get(2), value));
 				case LispNames.ELT -> {
-					// (setf (elt seq i) val): elt reads from lists and arrays, so the
-					// place dispatches at runtime -- rplaca into the nthcdr cell of a
-					// list, %aset into an array. Strings stay immutable (%aset rejects
-					// them, like the rest of the string representation).
-					LispSymbol seqVar = new LispSymbol("__setf_seq");
+					// (setf (elt seq i) val): elt reads from lists, arrays AND strings,
+					// so
+					// the place dispatches at run time -- rplaca into the nthcdr cell of
+					// a
+					// list, the schar-set rebuild for a string, %aset for an array. The
+					// string arm is the same one (setf (aref s i) v) has above, and
+					// carries
+					// the same lite restriction: only a VARIABLE place can take it,
+					// because
+					// the rebuild of an immutable string setq's the result back into the
+					// place. So a variable place is dispatched on the variable itself
+					// (evaluating a symbol twice is free, and only one arm ever runs);
+					// any
+					// other place expression is bound to a temp and keeps the two-way
+					// list/array dispatch it always had.
 					LispSymbol idxVar = new LispSymbol("__setf_idx");
 					LispSymbol valVar = new LispSymbol(SETF_VAR);
+					boolean varPlace = stringsExist && placeParts.get(1) instanceof LispSymbol;
+					LispSymbol seqVar = varPlace ? (LispSymbol) placeParts.get(1) : new LispSymbol("__setf_seq");
 					LispVal listSet = listToCons(List.of(new LispSymbol(LispNames.RPLACA),
 							listToCons(List.of(new LispSymbol(LispNames.NTHCDR), idxVar, seqVar)), valVar));
 					LispVal arraySet = listToCons(List.of(new LispSymbol(LispNames.ASET), seqVar, idxVar, valVar));
-					LispVal dispatch = makeIf(callOf(LispNames.CONSP, seqVar), listSet, arraySet);
-					yield makeLet(seqVar.name(), placeParts.get(1), makeLet(idxVar.name(), placeParts.get(2),
-							makeLet(valVar.name(), value, makeProgn(List.of(dispatch, valVar)))));
+					LispVal nonList = varPlace ? makeIf(callOf(LispNames.STRINGP, seqVar),
+							listToCons(List.of(new LispSymbol(LispNames.SCHAR_SET), seqVar, idxVar, valVar)), arraySet)
+							: arraySet;
+					LispVal dispatch = makeIf(callOf(LispNames.CONSP, seqVar), listSet, nonList);
+					LispVal body = makeLet(idxVar.name(), placeParts.get(2),
+							makeLet(valVar.name(), value, makeProgn(List.of(dispatch, valVar))));
+					yield varPlace ? body : makeLet(seqVar.name(), placeParts.get(1), body);
 				}
 				case LispNames.FILL_POINTER ->
 					// (setf (fill-pointer vector) val) -> (%set-fill-pointer vector val).
@@ -8167,6 +8183,26 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandClassOf(LispCons cons) {
+		return expandClassOf(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandClassOf(LispCons)}, but lets a backend drop the
+	 * {@code hash-table-p} clause when no hash table can exist in the program at all.
+	 * <p>
+	 * The JVM emits its hash-table runtime only for a program that uses a hash-table
+	 * operator, so in every other program the clause is a call to a {@code _hashP} that
+	 * was never generated -- a dangling reference that survives verification and would
+	 * throw {@code NoSuchMethodError} if it could ever be reached (it cannot: with no
+	 * runtime to build one, no hash table exists). Dropping it is the same reasoning that
+	 * keeps the character-vector arm out of a compiled {@code stringp} when the array
+	 * runtime is absent. The interpreter and both WASM backends always pass {@code true}
+	 * -- their hash primitives are unconditional.
+	 * @param cons the class-of expression
+	 * @param hashTablesExist whether a hash table can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandClassOf(LispCons cons, boolean hashTablesExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(LispNames.CLASS_OF + " expects exactly one argument: " + cons.print());
@@ -8184,7 +8220,9 @@ public final class LispMacroExpander {
 		clauses.add(listToCons(List.of(mvCall(LispNames.CHARACTERP, v), quoteOf("CHARACTER"))));
 		clauses.add(listToCons(List.of(mvCall(LispNames.KEYWORDP, v), quoteOf("KEYWORD"))));
 		clauses.add(listToCons(List.of(mvCall(LispNames.SYMBOLP, v), quoteOf("SYMBOL"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.HASH_TABLE_P, v), quoteOf("HASH-TABLE"))));
+		if (hashTablesExist) {
+			clauses.add(listToCons(List.of(mvCall(LispNames.HASH_TABLE_P, v), quoteOf("HASH-TABLE"))));
+		}
 		clauses.add(listToCons(List.of(mvCall(LispNames.FUNCTIONP, v), quoteOf("FUNCTION"))));
 		clauses.add(listToCons(List.of(mvCall(LispNames.CONSP, v), quoteOf("CONS"))));
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, quoteOf("T"))));

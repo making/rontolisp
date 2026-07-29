@@ -1190,6 +1190,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSetfEltDispatchesOverListStringAndVector() {
+		// (setf (elt seq i) v) reaches all three sequence representations; the string
+		// arm is the one the compile backends were missing (.todo/209).
+		assertThat(evalMulti("(let ((s \"abc\")) (setf (elt s 0) #\\z) s)")).isEqualTo(new LispString("zbc"));
+		assertThat(evalMulti("(let ((l (list 1 2 3))) (setf (elt l 0) 8) l)").print()).isEqualTo("(8 2 3)");
+		assertThat(evalMulti("(let ((v (vector 1 2 3))) (setf (elt v 0) 9) v)").print()).isEqualTo("#(9 2 3)");
+		assertThat(evalMulti("(let ((s (make-string 3 :initial-element #\\a))) (setf (elt s 1) #\\z) s)"))
+			.isEqualTo(new LispString("aza"));
+	}
+
+	@Test
 	void evalReplace() {
 		assertThat(eval("(replace (make-string 5 :initial-element #\\a) \"XY\" :start1 1)"))
 			.isEqualTo(new LispString("aXYaa"));
