@@ -39,6 +39,30 @@ jobs:
       run: |
         wasmtime --version
         test "$(wasmtime --version | awk '{print $2}' | cut -d. -f1)" -ge 46
+    # Compiling each module -- not the Java-side codegen -- is where this job's time
+    # goes: the class's summed case time is 2997 s against a cold cache and 171 s
+    # against a warm one. wasmtime already parallelises that compile across every
+    # core, which is why raising the JUnit thread count never moved the job: one
+    # wasmtime process alone saturates a 4 vCPU runner. The corpus is stable between
+    # runs, so carrying its cache is the way to stop paying for it.
+    #
+    # Restore the newest previous cache even when the key misses: entries are keyed
+    # per module, so a commit that changed codegen still hits for every module it did
+    # not change.
+    #
+    # Keying on the sources that decide what the modules are, rather than on the sha,
+    # keeps this from hoarding: a commit that leaves them alone hits exactly and
+    # uploads nothing. Do NOT try to bound the directory with wasmtime's own size
+    # limit -- measured, it left the 1.5 GB unchanged and only cost hit rate (a warm
+    # re-run went from 10.5 s to 46.8 s). Watch the size step below instead; the
+    # budget shared with the Maven caches is 10 GB.
+    - name: Cache the wasmtime compiled modules
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/wasmtime
+        key: wasmtime-modules-${{ runner.os }}-${{ hashFiles('src/main/**', 'src/test/java/am/ik/rontolisp/codegen/wasm/**') }}
+        restore-keys: |
+          wasmtime-modules-${{ runner.os }}-
     - name: Unit Tests
       # The intra-class parallelism default in junit-platform.properties targets a
       # development machine; this runner has 4 vCPU shared by two surefire forks.
@@ -48,6 +72,11 @@ jobs:
       # came out at 2186 s and 2215 s -- indistinguishable). Compare only runs whose
       # parallelism-independent classes agree, e.g. JvmLispCompilerTest.
       run: ./mvnw -V --no-transfer-progress -Djunit.jupiter.execution.parallel.config.fixed.parallelism=4 clean test
+    # What the next run will have to restore, and the number to watch if this job
+    # ever starts evicting the Maven caches.
+    - name: Report the wasmtime cache size
+      if: always()
+      run: du -sh ~/.cache/wasmtime || true
   native-image:
     needs: test
     strategy:
