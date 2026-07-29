@@ -2779,7 +2779,13 @@ cases:
         (print (concatenate 'vector))
         (print (let ((a (list 1 2))) (eq a (concatenate 'list a))))
         (print (apply #'concatenate '(vector (unsigned-byte 8)) (list #(1) #(2 3))))
-        (print (apply #'concatenate 'string (list "a" "b"))))
+        (print (apply #'concatenate 'string (list "a" "b")))
+        ;; The string family takes any character SEQUENCE, nil (the empty list)
+        ;; included -- s-sql's expand-table-name builds "CREATE TABLE person"
+        ;; as (concatenate 'string (unless tableset "TABLE ") name).
+        (print (concatenate 'string "a" '(#\b #\c) #(#\d) nil "e"))
+        (print (concatenate 'string (unless t "TABLE ") "person"))
+        (print (apply #'concatenate 'string (list nil "x" '(#\y)))))
       (ci-concatenate)
     expected: |
       "foobarbaz"
@@ -2791,6 +2797,9 @@ cases:
       NIL
       #(1 2 3)
       "ab"
+      "abcde"
+      "person"
+      "xy"
   # The linalg package is a Lisp-source library (linalg.lisp) spliced by
   # LinalgLibrary.process on the compile path and loaded lazily by the interpreter,
   # so one implementation must behave identically on every backend. linalg computes in
@@ -5566,3 +5575,66 @@ cases:
       :EOF-CONDITION
       :ALSO-AN-ERROR
       synonym
+
+  - name: postmodern-non-mop-milestone
+    source: |
+      ;; .todo/202 -- the four language mechanics the non-MOP postmodern build
+      ;; needed on top of .todo/195-200, each in the shape the library uses it.
+      ;; 1. A quoted DATA TABLE resolves against the package that read it, so a
+      ;; symbol it holds names the macro/function of that package. postmodern's
+      ;; config.lisp defines *result-styles* as a defparameter of triples and
+      ;; query.lisp's `query` macro splices the third element into its
+      ;; expansion, where it has to be POSTMODERN::ALL-ROWS.
+      (defpackage :pm-styles (:use :cl) (:export #:pm-run))
+      (in-package :pm-styles)
+      (defparameter *pm-table* '((:rows pm-list-reader pm-all-rows)
+                                 (:single pm-list-reader pm-single-row)))
+      (defmacro pm-all-rows (form) form)
+      (defmacro pm-single-row (form) `(car ,form))
+      (defun pm-list-reader () (list 10 20))
+      (defmacro pm-run (style)
+        (let ((spec (cdr (assoc style *pm-table*))))
+          (list (second spec) (list (first spec)))))
+      (in-package :cl-user)
+      (print (pm-styles:pm-run :rows))
+      (print (pm-styles:pm-run :single))
+      ;; 2. An :export of a name the package INHERITS re-exports the used
+      ;; package's symbol, it does not mint a new one. postmodern (:use :s-sql)
+      ;; re-exports #:sql and #:sql-compile, both defined in s-sql.
+      (defpackage :pm-base (:use :cl) (:export #:pm-render))
+      (in-package :pm-base)
+      (defun pm-render (x) (list :rendered x))
+      (in-package :cl-user)
+      (defpackage :pm-front (:use :cl :pm-base) (:export #:pm-render #:pm-front-only))
+      (in-package :pm-front)
+      (defun pm-front-only (x) (pm-render x))
+      (in-package :cl-user)
+      (print (pm-front:pm-render 1))
+      (print (pm-front:pm-front-only 2))
+      ;; 3. A defun closing over a top-level let-bound LOCK: with-mutex puts a
+      ;; VALUE in its one-element spec (the opposite of the with-* stream
+      ;; macros), so the free-variable analysis has to expand it before it can
+      ;; see the capture. prepare.lisp's next-statement-id is exactly this.
+      (let ((pm-next 0)
+            (pm-lock (rontolisp:make-mutex)))
+        (defun pm-statement-id ()
+          (rontolisp:with-mutex (pm-lock)
+            (setf pm-next (1+ pm-next))
+            (format nil "STATEMENT_~A" pm-next))))
+      (print (pm-statement-id))
+      (print (pm-statement-id))
+      ;; 4. concatenate 'string over a nil branch -- s-sql's expand-table-name.
+      ;; (The family's full contract is the concatenate-result-families case.)
+      (defun pm-table-name (name tableset)
+        (concatenate 'string (unless tableset "TABLE ") name))
+      (print (pm-table-name "person" nil))
+      (print (pm-table-name "person" t))
+    expected: |
+      (10 20)
+      10
+      (:RENDERED 1)
+      (:RENDERED 2)
+      "STATEMENT_1"
+      "STATEMENT_2"
+      "TABLE person"
+      "person"

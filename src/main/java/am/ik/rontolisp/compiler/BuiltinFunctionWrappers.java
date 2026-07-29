@@ -410,15 +410,25 @@ public final class BuiltinFunctionWrappers {
 	// #'concatenate wrapper (gated by REFERENCE_GATED_FUNCTIONS): the result type is a
 	// RUNTIME value here, so the family dispatch that ConcatenateForms performs at
 	// expansion time is re-done with member over the designator (its head, for a compound
-	// spec like '(vector (unsigned-byte 8))). The string family folds the arguments with
-	// %string-concat exactly like the call-position lowering -- so, there as here, its
-	// arguments must be strings; the list / vector families walk elements through
+	// spec like '(vector (unsigned-byte 8))). Every family accepts any sequence argument,
+	// exactly like the call-position lowering: the string family normalizes each argument
+	// before the %string-concat fold, the list / vector families walk elements through
 	// (coerce x 'list). An unsupported designator signals, matching the interpreter.
 	private static WrapperDef concatenateWrapper() {
 		LispSymbol head = new LispSymbol("__cc_head");
 		LispVal headOfSpec = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.CONSP, "type"),
 				call(LispNames.CAR, "type"), new LispSymbol("type")));
-		LispVal strings = foldReduce(LispNames.STRING_CONCAT, new LispSymbol("seqs"), new LispString(""));
+		// (reduce (lambda (a x) (%string-concat a (if (stringp x) x (coerce x 'string))))
+		// seqs :initial-value ""): the same "any character sequence" contract the
+		// call-position lowering gets from %seq-string, spelled inline here because the
+		// wrapper must stand alone (its own injection is gated separately).
+		LispVal step = listToCons(
+				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(new LispSymbol("a"), new LispSymbol("x"))),
+						callV(LispNames.STRING_CONCAT, new LispSymbol("a"),
+								listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.STRINGP, "x"),
+										new LispSymbol("x"), coerceTo("x", "STRING"))))));
+		LispVal strings = listToCons(List.of(new LispSymbol(LispNames.REDUCE), step, new LispSymbol("seqs"),
+				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), new LispString("")));
 		LispVal vector = listToCons(List.of(new LispSymbol(LispNames.COERCE), concatenatedElements(),
 				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("VECTOR")))));
 		LispVal unsupported = listToCons(
@@ -435,6 +445,19 @@ public final class BuiltinFunctionWrappers {
 		LispVal bindings = listToCons(List.of((LispVal) listToCons(List.of(head, headOfSpec))));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, dispatch));
 		return new WrapperDef(LispNames.CONCATENATE, List.of("type", LispNames.LAMBDA_REST, "seqs"), List.of(body));
+	}
+
+	// %seq-string (gated by ConcatenateForms.needsSeqString in the backend compilers):
+	// one
+	// character sequence as a string. It exists so the concatenate 'string lowering can
+	// normalize an argument with a CALL rather than an inlined (coerce x 'string) loop --
+	// json.lisp / url.lisp alone hold dozens of concatenate sites, and no single emitted
+	// body may grow without bound (.kb/wasm-function-body-size.md). A string passes
+	// through untouched, so the fast path is one stringp test.
+	private static WrapperDef seqStringWrapper() {
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.STRINGP, "x"),
+				new LispSymbol("x"), coerceTo("x", "STRING")));
+		return new WrapperDef(LispNames.SEQ_STRING, List.of("x"), List.of(body));
 	}
 
 	// Every argument's elements, in order, in a FRESH list:
@@ -497,6 +520,9 @@ public final class BuiltinFunctionWrappers {
 			// backend compilers)
 			signalDatum(LispNames.ERROR, LispNames.ERROR), signalDatum(LispNames.SIGNAL, LispNames.SIGNAL),
 			signalDatum(LispNames.WARN, LispNames.WARN), cerrorWrapper(), formatWrapper(), concatenateWrapper(),
+			// %seq-string: injected only when a concatenate 'string lowering needs it
+			// (gated on ConcatenateForms.needsSeqString, not on a #'name reference).
+			seqStringWrapper(),
 			// #'open (reference-gated): dispatches an option plist onto the four literal
 			// direction/element-type shapes the compiled open needs.
 			openWrapper(),

@@ -2154,6 +2154,46 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunConcatenateStringTakesAnySequence() throws Exception {
+		// The string family walks any character sequence, and nil -- the empty list -- is
+		// the one real code leans on: s-sql builds "CREATE TABLE x" as
+		// (concatenate 'string (unless tableset "TABLE ") name). Each non-literal
+		// argument goes through the injected %seq-string helper, never an inlined coerce
+		// loop (.kb/concatenate-result-families.md).
+		assertThat(compileAndRun("(print (concatenate 'string \"a\" '(#\\b #\\c) #(#\\d) nil \"e\"))"))
+			.isEqualTo("\"abcde\"");
+		assertThat(compileAndRun("(print (concatenate 'string (unless t \"TABLE \") \"person\"))"))
+			.isEqualTo("\"person\"");
+		assertThat(compileAndRun("(print (apply #'concatenate 'string (list nil \"x\" '(#\\y))))")).isEqualTo("\"xy\"");
+	}
+
+	@Test
+	void compileAndRunErrorOutputInsideALambda() throws Exception {
+		// The two standard stream variables are GLOBAL, not lexicals a lambda captures:
+		// postmodern's generate-prepared reports its reconnect with
+		// (format *error-output* ...) from inside a handler-bind handler, which used to
+		// fail the compile with "Cannot capture variable: *ERROR-OUTPUT*".
+		assertThat(compileAndRun("""
+				(defun report (f) (funcall f "x"))
+				(report (lambda (m) (format *error-output* "seen ~a" m)))
+				""")).isEqualTo("seen x");
+	}
+
+	@Test
+	void compileAndRunDefunClosingOverAWithMutexLock() throws Exception {
+		// with-mutex puts a VALUE in its one-element spec, the opposite of the with-*
+		// stream macros, so FreeVarAnalyzer has to expand it before it can see that the
+		// defun captures the top-level let's lock. postmodern's prepare.lisp guards its
+		// statement-id counter exactly this way.
+		assertThat(compileAndRun("""
+				(let ((n 0) (lock (rontolisp:make-mutex)))
+				  (defun next-id () (rontolisp:with-mutex (lock) (setf n (1+ n)) n)))
+				(next-id)
+				(print (next-id))
+				""")).isEqualTo("2");
+	}
+
+	@Test
 	void compileAndRunConcatenateAsFunctionValue() throws Exception {
 		assertThat(compileAndRun("(print (apply #'concatenate '(vector (unsigned-byte 8)) (list #(1) #(2 3))))"))
 			.isEqualTo("#(1 2 3)");

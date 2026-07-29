@@ -440,6 +440,48 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void concatenateStringTakesAnySequence() throws Exception {
+		// The string family walks any character sequence, nil (the empty list) included:
+		// s-sql builds "CREATE TABLE x" as
+		// (concatenate 'string (unless tableset "TABLE ") name). Each non-literal
+		// argument goes through the injected %seq-string helper -- one call, never an
+		// inlined coerce loop (.kb/concatenate-result-families.md).
+		String program = """
+				(print (concatenate 'string "a" '(#\\b #\\c) #(#\\d) nil "e"))
+				(print (concatenate 'string (unless t "TABLE ") "person"))
+				(print (apply #'concatenate 'string (list nil "x" '(#\\y))))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("""
+				"abcde"
+				"person"
+				"xy\"""");
+	}
+
+	@Test
+	void defunClosingOverAWithMutexLockAndAnErrorOutputLambda() throws Exception {
+		// Two closure-analysis shapes postmodern needs. with-mutex puts a VALUE in its
+		// one-element spec (the opposite of the with-* stream macros), so FreeVarAnalyzer
+		// has to expand it before it can see that the defun captures the top-level let's
+		// lock -- prepare.lisp guards its statement-id counter exactly this way. And the
+		// two standard stream variables are globals, not lexicals a lambda could capture:
+		// generate-prepared reports its reconnect with (format *error-output* ...) from
+		// inside a handler-bind handler. (The mutex itself is a no-op on WASM --
+		// single-threaded by construction, .kb/mutexes.md -- so what is under test here
+		// is only the analysis.)
+		String program = """
+				(let ((n 0) (lock (rontolisp:make-mutex)))
+				  (defun next-id () (rontolisp:with-mutex (lock) (setf n (1+ n)) n)))
+				(next-id)
+				(print (next-id))
+				(defun report (f) (funcall f "x"))
+				(report (lambda (m) (format *error-output* "seen ~a" m)))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("""
+				2
+				seen x""");
+	}
+
+	@Test
 	void exactIntegersBeyondI31PromoteToBoxedI64() throws Exception {
 		// The boxed exact-integer overflow path (TYPE_BIGNUM, .kb/wasm-bignum.md): an
 		// arithmetic or shift result outside the i31 fixnum range promotes to a boxed

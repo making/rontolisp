@@ -162,8 +162,8 @@ public final class PackageRegistry {
 	 * introspection listings.
 	 */
 	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL, LispNames.STRING_CONCAT,
-			LispNames.BLOCK_INTERNAL, LispNames.FN_BLOCK_INTERNAL, LispNames.ERROR_INTERNAL, LispNames.PUTHASH,
-			LispNames.ASET, LispNames.ROW_MAJOR_ASET, LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL,
+			LispNames.SEQ_STRING, LispNames.BLOCK_INTERNAL, LispNames.FN_BLOCK_INTERNAL, LispNames.ERROR_INTERNAL,
+			LispNames.PUTHASH, LispNames.ASET, LispNames.ROW_MAJOR_ASET, LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL,
 			LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL, LispNames.STRING_STREAM_CONTENTS_INTERNAL,
 			LispNames.PEEK_CHAR_INTERNAL, LispNames.ARRAYP_INTERNAL, LispNames.MV_SPILL, LispNames.SET_FILL_POINTER,
 			LispNames.ARRAY_BECOME, LispNames.ARRAY_ALIKE, LispNames.ARRAY_DISP_TARGET, LispNames.ARRAY_DISP_OFFSET,

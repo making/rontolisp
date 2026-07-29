@@ -558,6 +558,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (DefunDecl defun : defuns) {
 			userDefinedNames.add(defun.name);
 		}
+		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer:
+		// computed here, before the wrappers are generated, and threaded into Ctx so the
+		// lowering only emits calls to a helper that is actually present.
+		boolean usesSeqString = ConcatenateForms.needsSeqString(program);
 		// parse-integer / read-from-string wrappers reference runtime helpers that are
 		// emitted only when the program itself uses the operator (_parseInt; the reader
 		// runtime). Exclude each wrapper unless the program references the symbol, so the
@@ -580,6 +584,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// operator; gate the group the same way.
 		if (!programUsesAnyArrayOp(program)) {
 			wrapperExcludes.addAll(BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS);
+		}
+		// %seq-string is the concatenate 'string argument normalizer, not a first-class
+		// value: inject it exactly when a lowering will call it
+		// (.kb/concatenate-result-families.md).
+		if (!usesSeqString) {
+			wrapperExcludes.add(LispNames.SEQ_STRING);
 		}
 		// #'error/#'cerror/#'signal/#'warn wrappers forward the datum only (lite), and
 		// #'format renders via the runtime control renderer; inject each only when the
@@ -818,6 +828,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.usesFloatArray(usesFloatArray)
 			.usesIntArray(usesIntArray)
 			.usesArrays(usesArrays)
+			.usesSeqString(usesSeqString)
 			.mayUseInstances(mayUseInstances)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.className(this.className)
@@ -3065,6 +3076,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesArrays = false;
 
 		/**
+		 * True when the {@code %seq-string} helper is injected for this program, i.e. the
+		 * program itself writes a {@code (concatenate 'string ...)} with an argument that
+		 * is not a literal string. Only then does the string-family lowering normalize
+		 * its arguments through it; the {@code concatenate 'string} forms this compiler's
+		 * own macro expansions produce during codegen already hold strings, so they keep
+		 * the bare {@code %string-concat} chain and every other program stays
+		 * byte-identical. Shared across every context.
+		 */
+		boolean usesSeqString = false;
+
+		/**
 		 * True when an instance value can exist in this class (see
 		 * {@code LispMacroExpander.mayCreateInstances}). Gates the instance exclusion in
 		 * the cons-shaped predicates, so a program that cannot build one compiles
@@ -3229,6 +3251,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.usesFloatArray = builder.usesFloatArray;
 			this.usesIntArray = builder.usesIntArray;
 			this.usesArrays = builder.usesArrays;
+			this.usesSeqString = builder.usesSeqString;
 			this.mayUseInstances = builder.mayUseInstances;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
@@ -3458,6 +3481,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesIntArray = false;
 
 			private boolean usesArrays = false;
+
+			private boolean usesSeqString = false;
 
 			private boolean mayUseInstances = false;
 
@@ -3819,6 +3844,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesArrays(boolean usesArrays) {
 				this.usesArrays = usesArrays;
+				return this;
+			}
+
+			Builder usesSeqString(boolean usesSeqString) {
+				this.usesSeqString = usesSeqString;
 				return this;
 			}
 

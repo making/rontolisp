@@ -111,3 +111,10 @@ path.
 Postmodern proper (s-sql, the `postmodern` system) is a SEPARATE follow-up on
 top -- it adds heavy CLOS/MOP usage and is where the real restart-system gate
 lives.
+
+> **Closed 2026-07-29.** Both follow-ups landed: s-sql in `.todo/195` and the
+> non-MOP `postmodern` build in `.todo/202` -- the milestone program completes a
+> live round trip on the interpreter, the JVM and the WASM component
+> (`PostmodernE2eTest`), and the restart system it gated is driven end to end
+> there (reconnect under `defprepared`, `retry-transaction` rolling an insert
+> back). What is still out of scope is the DAO/MOP layer, `.todo/203`.

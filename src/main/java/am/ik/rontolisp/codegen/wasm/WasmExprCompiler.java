@@ -571,7 +571,8 @@ final class WasmExprCompiler {
 				// one to the quoted package keyword before the compiler ever sees it.
 				case LispNames.FIND_PACKAGE -> WasmExprCompiler.compileExpr(
 						LispMacroExpander.expandRuntimeFindPackage(cons.toList().get(1), ctx.packageTable), ctx);
-				case LispNames.CONCATENATE -> WasmExprCompiler.compileExpr(ConcatenateForms.expand(cons), ctx);
+				case LispNames.CONCATENATE ->
+					WasmExprCompiler.compileExpr(ConcatenateForms.expand(cons, ctx.usesSeqString), ctx);
 				case LispNames.READ_LINE -> {
 					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, false);
 					if (typed != null) {

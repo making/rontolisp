@@ -26,6 +26,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
@@ -1479,6 +1480,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Computed before expandTopLevelDefinitions, which runs the same scan to
 		// inject the restart-runtime defuns.
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
+		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer
+		// (see Ctx.usesSeqString); computed before the wrappers so the lowering only
+		// calls
+		// a helper that is actually injected.
+		boolean usesSeqString = ConcatenateForms.needsSeqString(program);
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry);
 		// Every struct/class layout is registered by the pass above, so the instance gate
 		// can be decided here -- it must be, because the struct type index and the baked
@@ -1800,6 +1806,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (!programUsesAnyArrayOp(program)) {
 			wrapperExcludes.addAll(BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS);
 		}
+		// %seq-string is the concatenate 'string argument normalizer, not a first-class
+		// value: inject it exactly when a lowering will call it
+		// (.kb/concatenate-result-families.md).
+		if (!usesSeqString) {
+			wrapperExcludes.add(LispNames.SEQ_STRING);
+		}
 		// #'error/#'cerror/#'signal/#'warn wrappers forward the datum only (lite), and
 		// #'format renders via the runtime control renderer; inject each only when the
 		// program takes the operator as a first-class value, so every other program
@@ -1961,6 +1973,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.ehMode(ehMode)
 			.blockExitTag(blockExitTag)
 			.restartMode(restartMode)
+			.usesSeqString(usesSeqString)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
 			.rawSentinelGlobalIndex(rawSentinelGlobalIndex)
 			.functions(functions)
@@ -4748,6 +4761,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean restartMode = false;
 
 		/**
+		 * True when the {@code %seq-string} helper is injected for this program, i.e. the
+		 * program itself writes a {@code (concatenate 'string ...)} with an argument that
+		 * is not a literal string. Only then does the string-family lowering normalize
+		 * its arguments through it -- the {@code concatenate 'string} forms the macro
+		 * expander produces during codegen already hold strings, so every other program
+		 * stays byte-identical.
+		 */
+		boolean usesSeqString = false;
+
+		/**
 		 * The wasm global index of the handler-depth counter (a {@code (mut i32)} = 0
 		 * appended after the user-variable globals), or -1 outside EH mode. The
 		 * {@code handler-case} region increments/decrements it (the JVM
@@ -4989,6 +5012,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.ehMode = builder.ehMode;
 			this.blockExitTag = builder.blockExitTag;
 			this.restartMode = builder.restartMode;
+			this.usesSeqString = builder.usesSeqString;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
 			this.rawSentinelGlobalIndex = builder.rawSentinelGlobalIndex;
 			this.simd = builder.simd;
@@ -5047,6 +5071,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean blockExitTag = false;
 
 			private boolean restartMode = false;
+
+			private boolean usesSeqString = false;
 
 			private int ehDepthGlobalIndex = -1;
 
@@ -5154,6 +5180,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder blockExitTag(boolean blockExitTag) {
 				this.blockExitTag = blockExitTag;
+				return this;
+			}
+
+			Builder usesSeqString(boolean usesSeqString) {
+				this.usesSeqString = usesSeqString;
 				return this;
 			}
 

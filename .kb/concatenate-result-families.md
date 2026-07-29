@@ -14,13 +14,15 @@ there so the interpreter and the compilers cannot drift:
   are DROPPED, so `'(vector (unsigned-byte 8))` is just the vector family
   (rontolisp vectors are generic) — the same rule `expandCoerce` follows for
   `coerce`/`map`.
-- `expand(cons)` — the compile-path lowering, called from the `CONCATENATE` case
-  of `Jvm/WasmExprCompiler`. String family → the nested binary `%string-concat`
-  chain (a lone argument concatenates with `""`, so the result is always fresh).
-  List family → `(append (coerce a 'list) (coerce b 'list) ... nil)`; the
-  trailing `nil` is what makes `append` copy the LAST argument too. Vector family
-  → that same list, wrapped in `(coerce ... 'vector)`. Nothing new is emitted per
-  backend: the lowering is entirely over primitives both compilers already have.
+- `expand(cons, normalizeArguments)` — the compile-path lowering, called from the
+  `CONCATENATE` case of `Jvm/WasmExprCompiler`. String family → the nested binary
+  `%string-concat` chain (a lone argument concatenates with `""`, so the result is
+  always fresh), each argument that is not a literal string wrapped in
+  `(%seq-string arg)` when `normalizeArguments` is set (see below). List family →
+  `(append (coerce a 'list) (coerce b 'list) ... nil)`; the trailing `nil` is what
+  makes `append` copy the LAST argument too. Vector family → that same list,
+  wrapped in `(coerce ... 'vector)`. Nothing new is emitted per backend: the
+  lowering is entirely over primitives both compilers already have.
 - `literalResultFamily(typeForm)` — `expand`'s entry (and `--no-gc`'s check):
   normalizes the type argument AS WRITTEN, i.e. only a literal `(quote ...)`.
 
@@ -30,20 +32,45 @@ COMPUTED result type — the one deliberate interpreter-only extra (a compiler h
 to resolve the family statically; `coerce` has the same split and the reference
 pages say so).
 
-## Why the string family takes string arguments
+## The string family takes any character sequence (`%seq-string`, todo-202)
 
-`(concatenate 'string "a" '(#\b))` signals on every backend — the string family
-lowers to `%string-concat`, whose operands are strings (a marked mutable
-character vector normalizes first, a cons list does not). The list and vector
-families walk elements and therefore accept any mix of sequences.
+`(concatenate 'string "a" '(#\b #\c) #(#\d) nil "e")` is `"abcde"` on every
+backend, and `nil` — the empty list — is the case real code leans on: s-sql's
+`expand-table-name` builds `"CREATE TABLE person"` as
+`(concatenate 'string (unless tableset "TABLE ") (to-sql-name name))`. An element
+that is not a character is an error, not a silent `princ`.
 
-Re-evaluation trigger: widening the string family means wrapping every argument
-in a coercion. Inline `(coerce arg 'string)` per argument was rejected because it
-plants two loops per argument at every `concatenate 'string` site — json.lisp /
-url.lisp alone have dozens, and `.kb/wasm-function-body-size.md` is why one
-emitted body must not grow without bound. If a real library needs it, add a
-single cheap per-backend "sequence → string" primitive and wrap arguments in
-THAT, rather than inlining the coercion.
+The string family used to take STRINGS only, because it lowers straight to
+`%string-concat` (whose operands are strings; a marked mutable character vector
+normalizes first, a cons list does not). Widening it the obvious way — an inline
+`(coerce arg 'string)` per argument — was rejected then and is still rejected:
+it plants two loops per argument at every `concatenate 'string` site, and
+`.kb/wasm-function-body-size.md` is why one emitted body must not grow without
+bound. What landed instead is the alternative that file named: ONE cheap helper,
+called once per argument.
+
+- **`%seq-string`** (`LispNames.SEQ_STRING`, a `cl` internal) is
+  `(lambda (x) (if (stringp x) x (coerce x 'string)))` — a
+  `BuiltinFunctionWrappers` entry, i.e. an ordinary injected defun, so NO backend
+  needed a new primitive: the `coerce` loop is emitted once, inside it. The fast
+  path is a single `stringp` test. The interpreter has the equivalent Java
+  builtin, and its `concatenate` walks elements directly.
+- **The injection is gated** on `ConcatenateForms.needsSeqString(program)`: true
+  when the PROGRAM ITSELF writes a `(concatenate 'string ...)` with an argument
+  that is not a literal string. The flag rides on `Ctx.usesSeqString` in both
+  compilers (and must be copied by `WasmAsyncEmit.freshCtx`, which also builds
+  the synchronous top level), and `expand` only wraps when it is set. That is not
+  an optimization but a correctness constraint on the gate: `LispMacroExpander`
+  emits `(concatenate 'string ...)` of its own during CODEGEN — `format`,
+  `with-output-to-string`, the string-stream builders — long after the scan, and
+  those operands are strings the expansion just built. Wrapping them would call a
+  helper the gate did not inject; not wrapping them keeps every program that
+  never wrote a widening `concatenate` byte-identical.
+- `#'concatenate`'s wrapper spells the same contract inline
+  (`(if (stringp x) x (coerce x 'string))` inside its fold) rather than calling
+  `%seq-string`, because its own injection is gated separately.
+- `--no-gc` is unchanged: `NoGcWasmCompiler.compileConcatenate` builds strings in
+  linear memory and never goes through `expand`.
 
 ## `#'concatenate` as a first-class value
 
@@ -67,7 +94,8 @@ producing a string (`.kb/no-gc-scalar-wasm.md`).
 
 ## Pinning
 
-`ci-spec.yaml` `concatenate-result-families` (all four backends),
+`ci-spec.yaml` `concatenate-result-families` (all four backends, including the
+mixed-sequence string family),
 `LispEvaluatorTest#evalConcatenate*`,
 `JvmLispCompilerTest#compileAndRunConcatenate*` +
 `compileConcatenateWithComputedResultTypeFails`,

@@ -1976,6 +1976,14 @@ public final class LispNames {
 	/** The {@code %string-concat} built-in function. */
 	public static final String STRING_CONCAT = "%STRING-CONCAT";
 
+	/**
+	 * The {@code %seq-string} internal helper: one character sequence (a string, a cons
+	 * list, a vector, or nil -- the empty list) as a string. It is what makes the
+	 * {@code concatenate 'string} family take any sequence argument without planting a
+	 * {@code coerce} loop at every call site (see {@code compiler/ConcatenateForms}).
+	 */
+	public static final String SEQ_STRING = "%SEQ-STRING";
+
 	/** The {@code read-line} built-in function. */
 	public static final String READ_LINE = "READ-LINE";
 

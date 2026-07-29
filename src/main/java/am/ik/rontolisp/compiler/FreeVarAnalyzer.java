@@ -23,7 +23,17 @@ public final class FreeVarAnalyzer {
 			LispNames.READ_LINE, LispNames.QUOTE, LispNames.IF, LispNames.LET, LispNames.PROGN, LispNames.SETQ,
 			LispNames.DEFUN, LispNames.LAMBDA, LispNames.NULL, LispNames.LIST, LispNames.CAR, LispNames.CDR,
 			LispNames.CONS, LispNames.FUNCALL, LispNames.ATOM, LispNames.NUMBERP, LispNames.INTEGERP, LispNames.FLOATP,
-			LispNames.SYMBOLP, LispNames.STRINGP, LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP);
+			LispNames.SYMBOLP, LispNames.STRINGP, LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP,
+			// The two standard stream variables are GLOBAL, never a lexical the enclosing
+			// scope could hand down: compileSymbolRef renders each as the designator t
+			// (or, once the program binds *standard-output* somewhere, as the special
+			// SpecialVarCollector then registers). Without them here, a lambda that
+			// merely writes to one -- postmodern's generate-prepared reports its
+			// reconnect with (format *error-output* ...) inside a handler-bind handler --
+			// counted it as a free variable and failed to compile with "Cannot capture
+			// variable: *ERROR-OUTPUT*". A program that DOES bind one lexically still
+			// captures it: findFreeVars subtracts enclosingLexicals from this set.
+			LispNames.STANDARD_OUTPUT_VAR, LispNames.ERROR_OUTPUT_VAR);
 
 	private FreeVarAnalyzer() {
 	}
@@ -294,6 +304,15 @@ public final class FreeVarAnalyzer {
 						case LispNames.WITH_OPEN_STREAM ->
 							collectFreeVars(LispMacroExpander.expandWithOpenStream(cons, true), boundVars,
 									knownFunctions, globals, specialNames, freeVars);
+						// with-mutex / with-lock-held is the OPPOSITE shape of the with-*
+						// stream macros: its one-element spec holds a VALUE, not a
+						// binding, so the default walk would read (lock) as a call and
+						// never see the variable -- postmodern's statement-id counter
+						// closes over exactly such a lock, and the missing capture made
+						// the enclosing defun fail to compile.
+						case LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED ->
+							collectFreeVars(LispMacroExpander.expandWithMutex(cons), boundVars, knownFunctions, globals,
+									specialNames, freeVars);
 						case LispNames.FUNCTION -> {
 							// (function name) names the function namespace, not a
 							// variable; (function (lambda ...)) is analyzed like lambda
@@ -447,6 +466,11 @@ public final class FreeVarAnalyzer {
 						case LispNames.WITH_OPEN_STREAM ->
 							collectCapturedVars(LispMacroExpander.expandWithOpenStream(cons, true), localVars,
 									knownFunctions, captured, insideLambda);
+						// The lock spec holds a VALUE, not a binding (same reason as in
+						// collectFreeVars).
+						case LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED ->
+							collectCapturedVars(LispMacroExpander.expandWithMutex(cons), localVars, knownFunctions,
+									captured, insideLambda);
 						// Expand before walking (same reason as collectFreeVars).
 						case LispNames.CHECK_TYPE -> collectCapturedVars(LispMacroExpander.expandCheckType(cons),
 								localVars, knownFunctions, captured, insideLambda);

@@ -3565,14 +3565,25 @@ public final class Environment implements Scope {
 			}
 			List<LispVal> rest = args.subList(1, args.size());
 			if (family == ConcatenateForms.ResultFamily.STRING) {
-				// The string family lowers to %string-concat on the compile paths, so it
-				// takes string arguments there and here alike.
+				// Like the other two families, the string family takes any character
+				// SEQUENCE -- a string, a cons list, a vector, or nil, the empty list.
+				// The compile paths reach the same contract by sending each non-literal
+				// argument through %seq-string before the %string-concat fold.
 				StringBuilder sb = new StringBuilder();
 				for (LispVal arg : rest) {
-					if (!(arg instanceof LispString str)) {
-						throw new LispEvalException("concatenate expects strings, got: " + arg.print());
+					if (arg instanceof LispString str) {
+						sb.append(str.value());
+						continue;
 					}
-					sb.append(str.value());
+					List<LispVal> chars = new ArrayList<>();
+					appendSequenceElements(arg, chars);
+					for (LispVal element : chars) {
+						if (!(element instanceof LispChar ch)) {
+							throw new LispEvalException(
+									"concatenate: a 'string result needs characters, got: " + element.print());
+						}
+						sb.appendCodePoint(ch.codePoint());
+					}
 				}
 				return new LispString(sb.toString());
 			}
@@ -3599,6 +3610,26 @@ public final class Environment implements Scope {
 						"%string-concat expects strings, got: " + args.get(0).print() + ", " + args.get(1).print());
 			}
 			return new LispString(a.value() + b.value());
+		}));
+		// %seq-string: one character sequence as a string. The compile paths generate
+		// calls to it around every non-literal concatenate 'string argument; the
+		// interpreter never sees those, but the name is a cl internal, so it answers
+		// here too (and an interpreted (funcall '%seq-string x) behaves the same).
+		env.defineFunction(LispNames.SEQ_STRING, new LispFunction(LispNames.SEQ_STRING, args -> {
+			requireArgCount(LispNames.SEQ_STRING, args, 1);
+			if (args.get(0) instanceof LispString s) {
+				return s;
+			}
+			List<LispVal> chars = new ArrayList<>();
+			appendSequenceElements(args.get(0), chars);
+			StringBuilder sb = new StringBuilder();
+			for (LispVal element : chars) {
+				if (!(element instanceof LispChar ch)) {
+					throw new LispEvalException("%seq-string expects characters, got: " + element.print());
+				}
+				sb.appendCodePoint(ch.codePoint());
+			}
+			return new LispString(sb.toString());
 		}));
 		// %error: internal single-argument primitive that signals an error with a
 		// pre-built message string. Produced by the error macro expansion.

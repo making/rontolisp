@@ -67,6 +67,16 @@ public final class PackageResolver {
 	private boolean inHostFacingData = false;
 
 	/**
+	 * Whether resolution is inside a quoted datum. Data position is more permissive than
+	 * code position: Common Lisp's reader interns whatever it reads in the current
+	 * package, so {@code '(car x)} under a package that does not use {@code cl} is the
+	 * pair of that package's own symbols -- not the error the same names would be in
+	 * operator position -- and a quoted {@code *package*} is the SYMBOL, not the current
+	 * package's name (see {@link #resolveUnqualified}).
+	 */
+	private boolean inQuotedData = false;
+
+	/**
 	 * Creates a resolver with a fresh registry of the built-in packages.
 	 */
 	public PackageResolver() {
@@ -397,6 +407,25 @@ public final class PackageResolver {
 						"Unsupported " + LispNames.DEFPACKAGE + " clause: " + keyword.name());
 			}
 		}
+		// An :export of a name the package does not define but INHERITS through its use
+		// list is a re-export of the used package's symbol -- in Common Lisp the very
+		// same symbol object, so postmodern's (:use :s-sql) + (:export #:sql) exports
+		// S-SQL:SQL rather than minting a POSTMODERN:SQL of its own. Resolution here is
+		// textual, so record it as an import: both resolveUnqualified and
+		// resolveQualified already redirect through that map to the source package.
+		// (A re-exported cl symbol needs no entry -- the isClSymbol branch of
+		// resolveUnqualified runs before the owns() check and yields the bare name.)
+		for (String exported : exports) {
+			if (shadows.contains(exported) || imports.containsKey(exported) || PackageRegistry.isClSymbol(exported)) {
+				continue;
+			}
+			for (String used : useList) {
+				if (!LispNames.CL_PKG.equals(used) && this.registry.get(used).exports(exported)) {
+					imports.put(exported, used);
+					break;
+				}
+			}
+		}
 		Set<String> owned = new HashSet<>(exports);
 		owned.addAll(shadows);
 		this.registry.define(new LispPackage(name, List.copyOf(useList), Set.copyOf(owned), Set.copyOf(exports),
@@ -482,20 +511,21 @@ public final class PackageResolver {
 			// op binds a `quote` group via split-on-keywords) -- and falls through to
 			// the generic walk.
 			LispVal datum = datumCons.car();
-			// (quote DATUM): the operator is exempt and quoted LISTS are left untouched
-			// -- except inside a defmacro/macrolet definition, where quoted data comes
-			// from backquote templates (the reader expands every backquote level into
-			// list/cons/quote calls before this pass runs) and belongs to the defining
-			// package. A quoted LONE SYMBOL resolves in ordinary code too (CL interns
-			// it in the current package at read time): a '%indicator in a defun body
-			// must name the same canonical symbol as the one a defmacro template in the
-			// same package stores (ironclad's defdigest writes plist entries under
-			// template-resolved indicators that digestp reads back via a body quote).
-			if (this.inMacroDefinition) {
+			// (quote DATUM): the operator is exempt, and every SYMBOL inside the datum
+			// resolves against the current package -- exactly what Common Lisp's reader
+			// does when it interns the datum's symbols at read time. That covers the
+			// backquote templates of a defmacro/macrolet (the reader has already
+			// expanded every backquote level into list/cons/quote calls by now), a
+			// '%indicator in a defun body (ironclad's defdigest writes plist entries
+			// under template-resolved indicators that digestp reads back via a body
+			// quote), and a quoted DATA TABLE whose symbols name functions or macros:
+			// postmodern's *result-styles* is a defparameter list of (:rows
+			// list-row-reader all-rows) triples that its `query` macro splices into the
+			// expansion, so ALL-ROWS has to be the same POSTMODERN::ALL-ROWS the
+			// defmacro registers. The one exemption is host-facing data (a WIT type, an
+			// export field name), which never names a Lisp symbol.
+			if (this.inMacroDefinition || !this.inHostFacingData) {
 				datum = resolveQuotedData(datum);
-			}
-			else if (datum instanceof LispSymbol loneSym && !this.inHostFacingData) {
-				datum = resolveSymbol(loneSym);
 			}
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE));
 		}
@@ -695,13 +725,26 @@ public final class PackageResolver {
 		return new LispCons(op, new LispCons(new LispSymbol(":" + name), LispNil.INSTANCE));
 	}
 
-	// Resolves every symbol inside a quoted backquote-template datum (recursively
-	// through conses); non-symbol atoms pass through. Only used inside
-	// defmacro/macrolet definitions -- see resolveCons.
+	// Resolves every symbol inside a quoted datum (recursively through conses);
+	// non-symbol atoms pass through. Data position is more permissive than code
+	// position -- Common Lisp's reader simply INTERNS what it reads, so a name that
+	// would be an error to call here is still a perfectly good symbol (see
+	// this.inQuotedData).
 	private LispVal resolveQuotedData(LispVal datum) {
+		boolean saved = this.inQuotedData;
+		this.inQuotedData = true;
+		try {
+			return resolveQuotedDatum(datum);
+		}
+		finally {
+			this.inQuotedData = saved;
+		}
+	}
+
+	private LispVal resolveQuotedDatum(LispVal datum) {
 		return switch (datum) {
 			case LispSymbol sym -> resolveSymbol(sym);
-			case LispCons c -> new LispCons(resolveQuotedData(c.car()), resolveQuotedData(c.cdr()));
+			case LispCons c -> new LispCons(resolveQuotedDatum(c.car()), resolveQuotedDatum(c.cdr()));
 			default -> datum;
 		};
 	}
@@ -791,7 +834,9 @@ public final class PackageResolver {
 	}
 
 	private LispVal resolveUnqualified(String name) {
-		if (LispNames.PACKAGE_VAR.equals(name)) {
+		// *package* stands for the current package -- but only where it is READ as a
+		// variable. Quoted, it is the ordinary symbol cl:*package*.
+		if (LispNames.PACKAGE_VAR.equals(name) && !this.inQuotedData) {
 			if (currentUsesCl()) {
 				return quotedSymbol(this.currentPackage);
 			}
@@ -818,6 +863,12 @@ public final class PackageResolver {
 		if (PackageRegistry.isClSymbol(name)) {
 			if (currentUsesCl()) {
 				return new LispSymbol(name);
+			}
+			// In DATA position the name is not a call, so there is nothing to reject:
+			// the reader interns it in the current package, exactly like any other
+			// unknown name below.
+			if (this.inQuotedData) {
+				return canonical(this.currentPackage, name);
 			}
 			throw new LispPackageException(
 					"Undefined symbol: " + name + " (use " + PackageRegistry.qualify(LispNames.CL_PKG, name) + ")");

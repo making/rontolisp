@@ -22,11 +22,10 @@ import am.ik.rontolisp.PackageRegistry;
  * Three result families are supported -- {@code list}, {@code vector} and {@code string},
  * each with its "simple" / compound spellings, so
  * {@code (concatenate '(vector (unsigned-byte 8)) a b)} is the vector family (element
- * types are dropped: rontolisp vectors are generic). A {@code list} or {@code vector}
- * result accepts any sequence arguments, mixed freely; a {@code string} result takes
- * string arguments (a character LIST is not a string here -- coerce it first), because it
- * lowers straight to the binary {@code %string-concat} primitive instead of walking
- * elements.
+ * types are dropped: rontolisp vectors are generic). Every family accepts any sequence
+ * arguments, mixed freely: the list and vector families walk elements, and the string
+ * family sends each argument that is not a literal string through {@code %seq-string}
+ * (one call, never an inlined loop) before the binary {@code %string-concat} fold.
  *
  * <p>
  * The compilers additionally require the result type to be written as a literal quoted
@@ -116,6 +115,23 @@ public final class ConcatenateForms {
 	}
 
 	public static LispVal expand(LispCons cons) {
+		return expand(cons, false);
+	}
+
+	/**
+	 * {@link #expand(LispCons)} with control over the string family's argument
+	 * normalization.
+	 * @param cons the concatenate expression
+	 * @param normalizeArguments whether each string-family argument goes through
+	 * {@code %seq-string} first. True for the concatenate calls the PROGRAM wrote (the
+	 * ones {@link #needsSeqString} saw, so the helper is injected); false for the ones
+	 * this compiler's own macro expansions produce during codegen -- {@code format},
+	 * {@code with-output-to-string} and the string-stream builders all concatenate
+	 * strings they just built, so wrapping them would cost a call per site and pull the
+	 * helper into every program.
+	 * @return the expanded expression
+	 */
+	public static LispVal expand(LispCons cons, boolean normalizeArguments) {
 		List<LispVal> parts = cons.toList();
 		ResultFamily family = (parts.size() >= 2) ? literalResultFamily(parts.get(1)) : null;
 		if (family == null) {
@@ -125,7 +141,7 @@ public final class ConcatenateForms {
 		}
 		List<LispVal> args = parts.subList(2, parts.size());
 		return switch (family) {
-			case STRING -> stringChain(args);
+			case STRING -> stringChain(args, normalizeArguments);
 			case LIST -> appendedElements(args);
 			case VECTOR -> coerceCall(appendedElements(args), "VECTOR");
 		};
@@ -141,17 +157,67 @@ public final class ConcatenateForms {
 				? parts.get(1) : null;
 	}
 
+	/**
+	 * Whether the program contains a {@code (concatenate 'string ...)} whose lowering
+	 * needs the {@code %seq-string} helper -- i.e. one with an argument that is not
+	 * already a string literal. The backends gate the helper's injection on this, so a
+	 * program that only concatenates literals (or none at all) stays byte-identical.
+	 * @param program the top-level forms
+	 * @return {@code true} when at least one argument has to be normalized at run time
+	 */
+	public static boolean needsSeqString(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (needsSeqString(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean needsSeqString(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() >= 3 && parts.get(0) instanceof LispSymbol op && LispNames.CONCATENATE.equals(op.name())
+				&& literalResultFamily(parts.get(1)) == ResultFamily.STRING) {
+			for (LispVal arg : parts.subList(2, parts.size())) {
+				if (!isKnownString(arg)) {
+					return true;
+				}
+			}
+		}
+		return needsSeqString(cons.car()) || needsSeqString(cons.cdr());
+	}
+
 	// Nested binary %string-concat calls; a lone argument is concatenated with "" so the
-	// result is always a fresh string.
-	private static LispVal stringChain(List<LispVal> args) {
+	// result is always a fresh string. Every argument that is not already a string
+	// literal goes through %seq-string first: Common Lisp's string family takes any
+	// character SEQUENCE, and nil -- the empty list -- is the one that shows up in real
+	// code (s-sql builds "CREATE TABLE x" as (concatenate 'string (unless tableset
+	// "TABLE ") name)). One call per argument, never an inlined coerce loop: see the
+	// "Why the string family takes string arguments" re-evaluation trigger in
+	// .kb/concatenate-result-families.md.
+	private static LispVal stringChain(List<LispVal> args, boolean normalize) {
 		if (args.isEmpty()) {
 			return new LispString("");
 		}
-		LispVal acc = (args.size() == 1) ? concatCall(args.get(0), new LispString("")) : args.get(0);
+		LispVal acc = (args.size() == 1) ? concatCall(normalized(args.get(0), normalize), new LispString(""))
+				: normalized(args.get(0), normalize);
 		for (int i = 1; i < args.size(); i++) {
-			acc = concatCall(acc, args.get(i));
+			acc = concatCall(acc, normalized(args.get(i), normalize));
 		}
 		return acc;
+	}
+
+	// (%seq-string arg), unless the argument is already a literal string.
+	private static LispVal normalized(LispVal arg, boolean normalize) {
+		return (!normalize || isKnownString(arg)) ? arg
+				: listToCons(List.of(new LispSymbol(LispNames.SEQ_STRING), arg));
+	}
+
+	private static boolean isKnownString(LispVal arg) {
+		return arg instanceof LispString;
 	}
 
 	// (append (coerce a 'list) (coerce b 'list) ... nil) -- every argument's elements in

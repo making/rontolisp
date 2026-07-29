@@ -797,6 +797,7 @@ final class WasmAsyncEmit {
 			.ehMode(proto.ehMode)
 			.blockExitTag(proto.blockExitTag)
 			.restartMode(proto.restartMode)
+			.usesSeqString(proto.usesSeqString)
 			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)
 			.simd(proto.simd)
 			.userFuncBase(proto.userFuncBase)

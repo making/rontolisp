@@ -184,15 +184,20 @@ class PackageResolverTest {
 	}
 
 	@Test
-	void quoteDatumIsLeftUntouched() {
+	void quoteDatumInClUserKeepsBareNames() {
+		// Quoted data resolves like any other symbol position; in cl-user (which uses cl
+		// and whose own canonical spelling is bare) that is the identity.
 		assertThat(resolve("'(car x if)")).isEqualTo("(QUOTE (CAR X IF))");
 	}
 
+	// Data position is more permissive than code position: the same two names are an
+	// error to CALL in a package that does not use cl (the test below), but reading them
+	// quoted just interns them in that package, as Common Lisp's reader does.
 	@Test
-	void quoteDatumUntouchedEvenInRontolisp() {
+	void quoteDatumInRontolispInternsInRontolisp() {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(in-package :rontolisp)");
-		assertThat(resolve(resolver, "'(car x)")).isEqualTo("(QUOTE (CAR X))");
+		assertThat(resolve(resolver, "'(car x)")).isEqualTo("(QUOTE (RONTOLISP::CAR RONTOLISP::X))");
 	}
 
 	@Test
@@ -498,6 +503,39 @@ class PackageResolverTest {
 		// spelling, and client:pub redirects there too.
 		assertThat(resolve(resolver, "(pub)")).isEqualTo("(BASE:PUB)");
 		assertThat(resolve(resolver, "(client::pub)")).isEqualTo("(BASE:PUB)");
+	}
+
+	@Test
+	void defpackageExportOfAnInheritedNameReExportsTheSourceSymbol() {
+		// Common Lisp's (:use :base) + (:export #:pub) re-exports the very same BASE:PUB.
+		// Resolution here is textual and resolveUnqualified checks the package's own
+		// export list BEFORE the use list, so without the defpackage-time redirect
+		// FRONT:PUB was a distinct name and every call to it was undefined -- which is
+		// what postmodern (:use :s-sql) + (:export #:sql #:sql-compile) hit.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :base (:use :cl) (:export :pub))");
+		resolve(resolver, "(defpackage :front (:use :cl :base) (:export :pub :own))");
+		resolve(resolver, "(in-package :front)");
+		assertThat(resolve(resolver, "(pub)")).isEqualTo("(BASE:PUB)");
+		assertThat(resolve(resolver, "(front:pub)")).isEqualTo("(BASE:PUB)");
+		// A name the package really owns is unaffected.
+		assertThat(resolve(resolver, "(own)")).isEqualTo("(FRONT:OWN)");
+	}
+
+	@Test
+	void quotedDataResolvesAgainstTheCurrentPackage() {
+		// The reader interns a quoted datum's symbols in the current package, so a data
+		// TABLE naming a macro of that package still names it after resolution.
+		// postmodern's *result-styles* is exactly this: a defparameter of triples whose
+		// third element the `query` macro splices into its own expansion.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :styles (:use :cl) (:export :run))");
+		resolve(resolver, "(in-package :styles)");
+		assertThat(resolve(resolver, "(defparameter *table* '((:rows reader all-rows)))"))
+			.isEqualTo("(DEFPARAMETER STYLES::*TABLE* (QUOTE ((:ROWS STYLES::READER STYLES::ALL-ROWS))))");
+		assertThat(resolve(resolver, "(defmacro all-rows (form) form)")).startsWith("(DEFMACRO STYLES::ALL-ROWS");
+		// Keywords, t/nil and cl symbols keep their canonical spelling.
+		assertThat(resolve(resolver, "'(:a nil t car)")).isEqualTo("(QUOTE (:A NIL T CAR))");
 	}
 
 	@Test

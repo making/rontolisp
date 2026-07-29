@@ -1122,10 +1122,21 @@ class LispEvaluatorTest {
 	void evalConcatenateRejectsUnsupportedResultType() {
 		assertThatThrownBy(() -> eval("(concatenate 'hash-table \"a\" \"b\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("string, list and vector result types");
-		// The string family lowers to the binary string primitive on the compile paths,
-		// so a non-string argument is rejected here too (coerce it first).
-		assertThatThrownBy(() -> eval("(concatenate 'string \"a\" '(#\\b))")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("concatenate expects strings");
+		// A 'string result needs CHARACTERS: the sequence may be any kind, but an
+		// element that is not a character is an error, not a silent princ.
+		assertThatThrownBy(() -> eval("(concatenate 'string \"a\" '(7))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("a 'string result needs characters");
+	}
+
+	@Test
+	void evalConcatenateStringTakesAnySequence() {
+		// Common Lisp's string family walks any character sequence, and nil -- the empty
+		// list -- is the one real code leans on: s-sql builds "CREATE TABLE x" as
+		// (concatenate 'string (unless tableset "TABLE ") name).
+		assertThat(eval("(concatenate 'string \"a\" '(#\\b #\\c) #(#\\d) nil \"e\")"))
+			.isEqualTo(new LispString("abcde"));
+		assertThat(eval("(concatenate 'string nil nil)")).isEqualTo(new LispString(""));
+		assertThat(eval("(concatenate 'string (unless t \"TABLE \") \"person\")")).isEqualTo(new LispString("person"));
 	}
 
 	@Test
