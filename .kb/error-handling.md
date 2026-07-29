@@ -295,6 +295,101 @@ has to invent one.
   (both the `end-of-file` and the `error` clause) and the `postmodern-language-incidentals`
   ci-spec case.
 
+## A condition's `:report` is what PRINTS it, not just what signals it (todo-206)
+
+**The invariant: the text a condition REPORTS has exactly one implementation,
+`%condition-report-str`, and both the printer and the signal message go through
+it.** `princ` / `princ-to-string` / `format ~A` of a condition instance answer its
+report; `prin1` / `~S` keep the `#<TYPE :SLOT value ...>` instance syntax
+(`.kb/instance-syntax.md`) — CLHS's escape-mode split, matching SBCL. Before this
+the report was applied only inside `expandSignalDesignator`, to build the *message
+string*, so the OBJECT kept the generic instance rendering and
+`(format t "~a" e)` on a caught condition printed `#<MY-E :MSG boom>`; a
+`simple-warning` printed its raw `~A`-bearing control string where the arguments
+belonged (cl-postgres surfaces every server NOTICE that way).
+
+- **It rides the `print-object` seam, it does not sit beside it**
+  (`.kb/clos.md`, todo-199). `expandPrintObjectHook` now fires when the program
+  defines a `print-object` method **or** can build a condition; the escape-off arm
+  of `%print-object-str` becomes, in effect, `(if (%obj-p x) (or
+  (%condition-report-str x) (%princ-to-string x)) (%princ-to-string x))`. A
+  `print-object` method on a condition class therefore still wins, in BOTH escape
+  modes, because the method route is tested first.
+- **`%condition-report-str` answers nil when the value's class reports nothing**,
+  and every caller supplies its own fallback. That is what makes the routing safe
+  to bolt onto sites that predate it: an under-approximating gate, or a class the
+  renderer does not cover, degrades to the pre-report text instead of failing.
+- **The class partition** (`conditionReportGroups`): a class's report is its own
+  `:report`, else the nearest ancestor's along the SLOT-LAYOUT parent chain
+  (`define-condition`'s inheritance, which the signal path did NOT walk before —
+  `(error 'sub-of-reporting-class)` used to print the legacy shape), else — when it
+  carries `format-control`/`format-arguments` — CLHS's specified
+  `simple-condition` report, `(apply #'format stream control arguments)`. The
+  groups are keyed by report owner / slot-index pair, NOT one clause per class:
+  cl-postgres registers 100+ condition classes and a per-class dispatch is the same
+  90 KB-in-one-method trap the runtime type dispatch hit
+  ([jvm-method-size-limits.md](jvm-method-size-limits.md)).
+- **`%format-condition` renders through `formatRuntimeLambda()`** — the same
+  runtime control renderer a computed `(format nil ctrl args)` and `#'format` use,
+  so the supported directive set is identical on all four backends (`~~ ~% ~a ~s ~d
+  ~x ~c`; an unknown directive such as cl-postgres' `~@[` is emitted verbatim). A
+  control that is a FUNCTION (legal per the standard) is called on the stream
+  through FIXED-ARITY `funcall`s for 0-3 arguments: `apply` would drag the whole
+  wasm eval runtime into every program that prints a condition. A nil control is no
+  report and answers nil.
+- **The gate is `mayCreateConditions(program, registry)`**, the CONDITION half of
+  `mayCreateInstances` sharing its `constructsInstance` case split (plus
+  `#'error`/`#'warn`/`#'cerror`, whose wrappers reach the object-designator
+  expansion, and `%obj-new` restricted to `%class-` tags descending from
+  `condition`). It is answered TWICE in `expandTopLevelDefinitions` — once on the
+  source program, because a program whose only condition is the `simple-error` a
+  `handler-case` synthesizes has no definition to splice and would take the
+  no-definitions fast path, and once on the expanded program, where a
+  `define-condition` has become a `%obj-new` constructor. The answer is recorded in
+  `ClosRegistry.routesConditionReports()` rather than in a `Ctx` flag: the registry
+  is already threaded through every expansion and both backends' `Ctx`, so this
+  needs no `WasmAsyncEmit.freshCtx` line (the trap Phase 4's `restartMode` hit).
+  A program that cannot build a condition is byte-identical — verified by the
+  stash-dance on a defstruct program and a `(error "literal")` program.
+- **The generated defuns must not contain the SYMBOL `with-output-to-string`.**
+  The wasm-GC EH-mode gate (`programUsesEhForm`) scans the program for it — its
+  interpreter/JVM expansion rides `unwind-protect` — and that scan runs AFTER
+  `expandTopLevelDefinitions` splices these defuns in, so leaving the macro there
+  forced EH mode, and the `wasmtime -W exceptions=y` flag, on every program that
+  merely signals a typed condition. `renderedToString` therefore pre-expands it to
+  the close-after-body shape; the pin that caught it is
+  `WasmLispCompilerTest.typedErrorWithLambdaReportCompilesOutsideEhMode`.
+- **The interpreter loads the same generated AST** (`ensureConditionReportRuntimeLoaded`)
+  on the `slotUnboundDefuns`/restart-runtime precedent — but it also
+  RE-loads whenever the registry it partitions has changed (a stamp over the class
+  and report counts), because a `define-condition` can follow the first print. The
+  condition forms are where the routing turns ON: before one of them is evaluated
+  no condition value can exist, so every printing operator keeps its historical
+  shape.
+- Cost, recorded deliberately: a program that can build a condition grows by the
+  renderer plus the runtime format lambda (~11.6 KB of wasm on a 300 KB module).
+  It is not removable by tree-shaking — the renderer is reachable from every print
+  site — and it is the price of the feature; the gate is what keeps every other
+  program at zero.
+- **Lite, inherited from the seam**: the rewrite is per CALL FORM, so a condition
+  reached through a FUNCTION VALUE (`(mapcar #'princ conditions)`) still gets the
+  raw conversion, exactly as a `print-object` method does. A `~A` with a COMPUTED
+  control string does route, because `formatRuntimeLambda`'s `~a` arm is an
+  ordinary `(princ-to-string ...)` form in the program and gets rewritten with
+  everything else.
+- **Known lite deviation**: rontolisp's string-designator signal path renders the
+  message EAGERLY, so a `handler-case`-synthesized `simple-error` carries an
+  already-rendered message in `format-control`. Printing it renders it a second
+  time, which is invisible unless the rendered text still contains a live directive
+  (`(error "~a" "~a")` prints `NIL` where CL prints `~a`). Rendering unconditionally
+  is the CLHS-specified report and keeps `~%`-bearing controls with no arguments
+  correct, which is the commoner shape.
+- Pinned by `conditionReport*`/`simpleConditionFamily*`/`warnRenders*`/
+  `aPrintObjectMethodStillWins*`/`aConditionWithNoReport*` in `LispEvaluatorTest`,
+  their `compileAndRun*` twins in `JvmLispCompilerTest`, the `ehConditionReport*`
+  block of `WasmLispCompilerIntegrationTest`, and the cross-backend ci-spec case
+  `condition-report-printing`.
+
 ## cerror + signal-operator function values (todo-085, cl-base64)
 
 `cerror` has TWO lowerings, selected by the restart-mode gate (Phase 4 above).

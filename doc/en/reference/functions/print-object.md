@@ -6,6 +6,8 @@ The generic function the printer consults. Defining a [`defmethod`](../special-f
 
 There is no system method: a type no method specializes on keeps the built-in rendering, and a program that defines no `print-object` method prints exactly as it did before.
 
+The one built-in rendering that is not `#S(...)`/`#<...>` is a CONDITION's: `princ`/`princ-to-string`/`~A` write its [`:report`](../macros/define-condition.md) instead. A `print-object` method on a condition class wins over that report, in both escape modes.
+
 Lite: the method is consulted for the value the printing operator is given, not for one nested inside a printed list or vector — `(print (list obj))` still shows the built-in syntax for `obj`.
 
 ```lisp

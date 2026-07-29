@@ -395,6 +395,12 @@ public final class ClosRegistry {
 	private final Map<String, LispVal> conditionReports = new LinkedHashMap<>();
 
 	/**
+	 * Whether this compilation routes condition printing through
+	 * {@code %condition-report-str} (see {@link #routesConditionReports()}).
+	 */
+	private boolean routesConditionReports;
+
+	/**
 	 * Class name (normalized) to the extra parent types beyond the first -- the lite
 	 * multiple-inheritance support of {@code define-condition}: the first parent provides
 	 * the slot layout (single inheritance), the remaining parents contribute to the
@@ -675,6 +681,30 @@ public final class ClosRegistry {
 	 */
 	public Map<String, LispVal> conditionReports() {
 		return this.conditionReports;
+	}
+
+	/**
+	 * Whether this compilation renders a printed condition through its {@code :report},
+	 * i.e. whether the generated {@code %condition-report-str} renderer is available. It
+	 * is a PROGRAM fact, not a class one -- a program that can never build a condition
+	 * keeps every printing operator (and every signal message) in the shape it always had
+	 * -- but it lives here because the registry is the one compile-scoped object already
+	 * threaded through every expansion and both backends' {@code Ctx}. Set by
+	 * {@code LispMacroExpander.expandTopLevelDefinitions} on the compile path and by the
+	 * interpreter when it loads the same generated defuns.
+	 * @return whether the condition-report renderer is in the artifact
+	 */
+	public boolean routesConditionReports() {
+		return this.routesConditionReports;
+	}
+
+	/**
+	 * Records that the generated {@code %condition-report-str} renderer is available; see
+	 * {@link #routesConditionReports()}.
+	 * @param routes whether the renderer is in the artifact
+	 */
+	public void setRoutesConditionReports(boolean routes) {
+		this.routesConditionReports = routes;
 	}
 
 	/**

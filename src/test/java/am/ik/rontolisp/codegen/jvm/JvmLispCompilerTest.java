@@ -79,6 +79,20 @@ class JvmLispCompilerTest {
 		}
 	}
 
+	// warn writes its "WARNING: ..." line to standard ERROR, which compileAndRun drops.
+	private String compileAndRunCapturingErr(String lispCode) throws Exception {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err));
+		try {
+			compileAndRun(lispCode);
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		return err.toString().trim();
+	}
+
 	@Test
 	void compileAndRunHandlerCaseCatchesTypedErrorByClass() throws Exception {
 		assertThat(compileAndRun("""
@@ -513,6 +527,62 @@ class JvmLispCompilerTest {
 				  (:report (lambda (c s) (format s "bad value ~a" (my-cond-lam-v c)))))
 				(error 'my-cond-lam :v 42)
 				""")).hasRootCauseMessage("bad value 42");
+	}
+
+	@Test
+	void compileAndRunConditionReportRendersUnderPrincButNotUnderPrin1() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition cr-lam (error) ((msg :initarg :msg :reader cr-msg))
+				  (:report (lambda (c s) (format s "cr-lam: ~a" (cr-msg c)))))
+				(define-condition cr-str (error) () (:report "fixed text"))
+				(handler-case (error 'cr-lam :msg "boom")
+				  (error (e) (print (list (format nil "~a" e) (format nil "~s" e)
+				                          (princ-to-string (make-condition 'cr-str))))))
+				""")).isEqualTo("(\"cr-lam: boom\" \"#<CR-LAM :MSG \"boom\">\" \"fixed text\")");
+	}
+
+	@Test
+	void compileAndRunConditionReportIsInheritedBySubtypes() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition cri-base (error) ((n :initarg :n :reader cri-n))
+				  (:report (lambda (c s) (format s "base ~a" (cri-n c)))))
+				(define-condition cri-sub (cri-base) ())
+				(print (handler-case (error 'cri-sub :n 3) (error (e) (princ-to-string e))))
+				""")).isEqualTo("\"base 3\"");
+	}
+
+	@Test
+	void compileAndRunSimpleConditionFamilyReportsThroughFormatControl() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition cr-pg (simple-warning) ())
+				(print (list (princ-to-string
+				               (make-condition 'cr-pg :format-control "pg ~A/~A" :format-arguments (list 1 2)))
+				             (handler-case (error "plain ~a" 7) (error (e) (princ-to-string e)))))
+				""")).isEqualTo("(\"pg 1/2\" \"plain 7\")");
+	}
+
+	@Test
+	void compileAndRunWarnRendersTheFormatControlArguments() throws Exception {
+		assertThat(compileAndRunCapturingErr(
+				"(warn 'simple-warning :format-control \"sw ~A/~A\" :format-arguments (list 1 2))"))
+			.isEqualTo("WARNING: sw 1/2");
+	}
+
+	@Test
+	void compileAndRunPrintObjectMethodWinsOverTheConditionReport() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition cr-po (error) () (:report "report text"))
+				(defmethod print-object ((c cr-po) s) (format s "PO"))
+				(print (list (princ-to-string (make-condition 'cr-po)) (prin1-to-string (make-condition 'cr-po))))
+				""")).isEqualTo("(\"PO\" \"PO\")");
+	}
+
+	@Test
+	void compileAndRunConditionWithNoReportKeepsTheInstanceRendering() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition cr-bare (error) ((v :initarg :v)))
+				(print (princ-to-string (make-condition 'cr-bare :v 1)))
+				""")).isEqualTo("\"#<CR-BARE :V 1>\"");
 	}
 
 	@Test

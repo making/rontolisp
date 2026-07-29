@@ -8031,6 +8031,71 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void conditionReportRendersUnderPrincButNotUnderPrin1() {
+		assertThat(evalMulti("""
+				(define-condition cr-lam (error) ((msg :initarg :msg :reader cr-msg))
+				  (:report (lambda (c s) (format s "cr-lam: ~a" (cr-msg c)))))
+				(define-condition cr-str (error) () (:report "fixed text"))
+				(handler-case (error 'cr-lam :msg "boom")
+				  (error (e) (list (format nil "~a" e) (format nil "~s" e)
+				                   (princ-to-string (make-condition 'cr-str)))))
+				""").print()).isEqualTo("(\"cr-lam: boom\" \"#<CR-LAM :MSG \"boom\">\" \"fixed text\")");
+	}
+
+	@Test
+	void conditionReportIsInheritedByASubtypeThatDoesNotOverrideIt() {
+		assertThat(evalMulti("""
+				(define-condition cri-base (error) ((n :initarg :n :reader cri-n))
+				  (:report (lambda (c s) (format s "base ~a" (cri-n c)))))
+				(define-condition cri-sub (cri-base) ())
+				(handler-case (error 'cri-sub :n 3) (error (e) (princ-to-string e)))
+				""").print()).isEqualTo("\"base 3\"");
+	}
+
+	@Test
+	void simpleConditionFamilyReportsThroughFormatControlAndArguments() {
+		assertThat(evalMulti("""
+				(define-condition cr-pg (simple-warning) ())
+				(list (princ-to-string
+				        (make-condition 'cr-pg :format-control "pg ~A/~A" :format-arguments (list 1 2)))
+				      (handler-case (error "plain ~a" 7) (error (e) (princ-to-string e))))
+				""").print()).isEqualTo("(\"pg 1/2\" \"plain 7\")");
+	}
+
+	@Test
+	void warnRendersTheFormatControlArgumentsOfItsCondition() {
+		// warn's line goes to standard ERROR, so it needs a capture of its own.
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err));
+		try {
+			new LispEvaluator(new PrintStream(new ByteArrayOutputStream())).eval(LispReader
+				.readFromString("(warn 'simple-warning :format-control \"sw ~A/~A\" :format-arguments (list 1 2))"));
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		assertThat(err.toString()).contains("WARNING: sw 1/2");
+	}
+
+	@Test
+	void aPrintObjectMethodStillWinsOverTheConditionReport() {
+		assertThat(evalMulti("""
+				(define-condition cr-po (error) () (:report "report text"))
+				(defmethod print-object ((c cr-po) s) (format s "PO"))
+				(list (princ-to-string (make-condition 'cr-po)) (prin1-to-string (make-condition 'cr-po)))
+				""").print()).isEqualTo("(\"PO\" \"PO\")");
+	}
+
+	@Test
+	void aConditionWithNoReportKeepsTheGenericInstanceRendering() {
+		assertThat(evalMulti("""
+				(define-condition cr-bare (error) ((v :initarg :v)))
+				(princ-to-string (make-condition 'cr-bare :v 1))
+				""").print()).isEqualTo("\"#<CR-BARE :V 1>\"");
+	}
+
+	@Test
 	void defineConditionDefaultInitargsReachTheTypedSignal() {
 		assertThat(evalMulti("""
 				(define-condition di-err (error) ((v :initarg :v :reader di-v))

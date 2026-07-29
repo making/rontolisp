@@ -347,12 +347,13 @@ instance is the value. postmodern's connection pool needs the identity to surviv
 ## `print-object` -- the printer consults it (todo-199)
 
 A `defmethod print-object` makes the printing operators render that type through the
-generic. **Gated on the program defining a method**: with none, every printing operator
-compiles exactly as before and every existing artifact stays byte-identical.
+generic. **Gated on the program defining a method**: with none -- and with no condition
+in reach either, see the second gate below -- every printing operator compiles exactly as
+before and every existing artifact stays byte-identical.
 
-- `printObjectTags(registry)` is the gate AND the routed tag set (class specializers
-  and `defstruct` ones -- a struct name parses as a TYPE specializer carrying the
-  struct name, so both descendant-tag families are collected).
+- `printObjectTags(registry)` is ONE of the two gates and the routed tag set (class
+  specializers and `defstruct` ones -- a struct name parses as a TYPE specializer
+  carrying the struct name, so both descendant-tag families are collected).
 - `expandPrintObjectHook` rewrites `princ-to-string`/`prin1-to-string` to
   `(%print-object-str x escape)` and `print`/`princ`/`prin1` to a
   `write-string` of it (+ `terpri` for `print`). `format`'s `~A`/`~S` need no case of
@@ -362,6 +363,13 @@ compiles exactly as before and every existing artifact stays byte-identical.
   fallback would re-enter the very rewrite that produced it. The interpreter INLINES
   the renderer instead of calling the defun, because it re-expands per call and must
   see a `defmethod` that follows the first print.
+- **The SECOND gate is a condition's `:report`** (`.kb/error-handling.md`, todo-206):
+  the same rewrite fires for a program that can build a condition, and the
+  escape-off arm of `%print-object-str` renders one through
+  `%condition-report-str`. A `print-object` method on a condition class still wins,
+  because the method route is tested first. The two share this seam rather than
+  sitting beside each other -- there is exactly one place that decides what text a
+  printing operator writes.
 - **LITE: the method is consulted for the value the operator is HANDED, not for one
   nested inside a printed list/vector** -- `(print (list obj))` still shows the built-in
   syntax. Making it recursive means hooking each backend's list renderer (hand-emitted

@@ -225,6 +225,17 @@ class WasmLispCompilerIntegrationTest {
 		return new WasmLispCompiler(false, true, false, false, true).compile(program);
 	}
 
+	// warn writes its "WARNING: ..." line to standard ERROR, which the stdout helpers
+	// drop.
+	private static String compileAndRunStderr(String lispCode) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", path("test.wasm"));
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStderr().trim();
+	}
+
 	// EH-mode variant asserting an ABNORMAL exit: an uncaught condition must keep the
 	// trap shape (`unreachable`), so the run fails and the stderr is returned.
 	private static String compileAndRunEhExpectTrap(String lispCode) throws Exception {
@@ -10723,6 +10734,62 @@ class WasmLispCompilerIntegrationTest {
 				(print (handler-case (error "boom ~a" 1)
 				         (error (e) (list :caught (simple-condition-format-control e)))))
 				""")).isEqualTo("(:CAUGHT \"boom 1\")");
+	}
+
+	@Test
+	void ehConditionReportRendersUnderPrincButNotUnderPrin1() throws Exception {
+		assertThat(compileAndRunEh("""
+				(define-condition cr-lam (error) ((msg :initarg :msg :reader cr-msg))
+				  (:report (lambda (c s) (format s "cr-lam: ~a" (cr-msg c)))))
+				(define-condition cr-str (error) () (:report "fixed text"))
+				(handler-case (error 'cr-lam :msg "boom")
+				  (error (e) (print (list (format nil "~a" e) (format nil "~s" e)
+				                          (princ-to-string (make-condition 'cr-str))))))
+				""")).isEqualTo("(\"cr-lam: boom\" \"#<CR-LAM :MSG \"boom\">\" \"fixed text\")");
+	}
+
+	@Test
+	void ehConditionReportIsInheritedBySubtypes() throws Exception {
+		assertThat(compileAndRunEh("""
+				(define-condition cri-base (error) ((n :initarg :n :reader cri-n))
+				  (:report (lambda (c s) (format s "base ~a" (cri-n c)))))
+				(define-condition cri-sub (cri-base) ())
+				(print (handler-case (error 'cri-sub :n 3) (error (e) (princ-to-string e))))
+				""")).isEqualTo("\"base 3\"");
+	}
+
+	@Test
+	void ehSimpleConditionFamilyReportsThroughFormatControl() throws Exception {
+		assertThat(compileAndRunEh("""
+				(define-condition cr-pg (simple-warning) ())
+				(print (list (princ-to-string
+				               (make-condition 'cr-pg :format-control "pg ~A/~A" :format-arguments (list 1 2)))
+				             (handler-case (error "plain ~a" 7) (error (e) (princ-to-string e)))))
+				""")).isEqualTo("(\"pg 1/2\" \"plain 7\")");
+	}
+
+	@Test
+	void warnRendersTheFormatControlArgumentsOfItsCondition() throws Exception {
+		assertThat(
+				compileAndRunStderr("(warn 'simple-warning :format-control \"sw ~A/~A\" :format-arguments (list 1 2))"))
+			.isEqualTo("WARNING: sw 1/2");
+	}
+
+	@Test
+	void printObjectMethodWinsOverTheConditionReport() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition cr-po (error) () (:report "report text"))
+				(defmethod print-object ((c cr-po) s) (format s "PO"))
+				(print (list (princ-to-string (make-condition 'cr-po)) (prin1-to-string (make-condition 'cr-po))))
+				""")).isEqualTo("(\"PO\" \"PO\")");
+	}
+
+	@Test
+	void conditionWithNoReportKeepsTheInstanceRendering() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition cr-bare (error) ((v :initarg :v)))
+				(print (princ-to-string (make-condition 'cr-bare :v 1)))
+				""")).isEqualTo("\"#<CR-BARE :V 1>\"");
 	}
 
 	@Test

@@ -8868,6 +8868,82 @@ public final class LispMacroExpander {
 		}
 	}
 
+	/**
+	 * Whether a CONDITION instance can exist in this program -- the gate for the
+	 * generated {@code %condition-report-str} renderer and, with it, for routing
+	 * {@code princ}/{@code ~A} of a condition through its {@code :report}. A program that
+	 * can never build a condition keeps every printing operator (and every signal
+	 * message) byte-identical to a build that never knew about reports.
+	 *
+	 * <p>
+	 * It is the CONDITION half of {@link #mayCreateInstances}, sharing its
+	 * {@code constructsInstance} case split so the two cannot drift: a struct or plain
+	 * CLOS instance does not count, a spliced condition-class constructor
+	 * ({@code %obj-new} of a {@code %class-} tag whose class descends from
+	 * {@code condition}) does, and every signal site with a non-string datum does --
+	 * including a bare {@code #'error} reference, whose generated wrapper reaches the
+	 * same object-designator expansion. Over-approximating costs an unused renderer;
+	 * under-approximating cannot break a build, because every site that calls the
+	 * renderer falls back to its pre-report message when it is absent.
+	 * @param program the top-level forms, AFTER the library splices
+	 * @param closRegistry the class registry
+	 * @return whether a condition instance can exist
+	 */
+	public static boolean mayCreateConditions(List<LispVal> program, ClosRegistry closRegistry) {
+		for (LispVal form : program) {
+			if (mayCreateCondition(form, closRegistry)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mayCreateCondition(LispVal form, ClosRegistry closRegistry) {
+		if (form instanceof LispArray array) {
+			for (LispVal element : array.data()) {
+				if (mayCreateCondition(element, closRegistry)) {
+					return true;
+				}
+			}
+			return false;
+		}
+		if (!(form instanceof LispCons cons)) {
+			// A folded #S(...) literal is a struct instance -- #S reads defstruct types
+			// only -- so it can never be a condition.
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head && constructsCondition(head.name(), cons, closRegistry)) {
+			return true;
+		}
+		return mayCreateCondition(cons.car(), closRegistry) || mayCreateCondition(cons.cdr(), closRegistry);
+	}
+
+	/** The per-operator half of {@link #mayCreateConditions}. */
+	private static boolean constructsCondition(String head, LispCons form, ClosRegistry closRegistry) {
+		if (LispNames.OBJ_NEW.equals(head)) {
+			// The spliced constructor of a class: a condition only when the tag names a
+			// class descending from condition (a defstruct/defclass one does not).
+			return form.cdr() instanceof LispCons rest && quotedSymbol(rest.car()) instanceof LispSymbol tag
+					&& tag.name().startsWith(LispLayout.CLASS_TAG_PREFIX)
+					&& isConditionClass(closRegistry, tag.name().substring(LispLayout.CLASS_TAG_PREFIX.length()));
+		}
+		if (LispNames.FUNCTION.equals(head)) {
+			// #'error / #'warn / #'cerror join the #'signal of constructsInstance: their
+			// generated wrappers reach the object-designator expansion, which renders the
+			// datum's report.
+			return form.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol fn
+					&& (LispNames.ERROR.equals(fn.name()) || LispNames.WARN.equals(fn.name())
+							|| LispNames.CERROR.equals(fn.name()) || constructsInstance(head, form));
+		}
+		return constructsInstance(head, form);
+	}
+
+	/** Whether the named class is registered and descends from {@code condition}. */
+	private static boolean isConditionClass(ClosRegistry closRegistry, String className) {
+		ClosRegistry.ClassInfo cls = closRegistry.findClass(className);
+		return cls != null && cls.ancestors().contains("CONDITION");
+	}
+
 	private static final String WITH_SLOTS_OBJ_VAR = "__with_slots_obj";
 
 	/**
@@ -10036,7 +10112,14 @@ public final class LispMacroExpander {
 		boolean runtimeTypep = needsRuntimeTypep(program);
 		boolean runtimeError = needsRuntimeErrorDispatch(program);
 		boolean restartMode = usesRestartSystem(program);
+		// The condition-report gate, answered TWICE: here on the source program (a
+		// program whose only condition is the simple-error a handler-case synthesizes
+		// has no definition to splice and would take the fast path below), and again on
+		// the expanded program, where a define-condition has become a %obj-new
+		// constructor.
+		closRegistry.setRoutesConditionReports(mayCreateConditions(program, closRegistry));
 		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !readsSlots(program)
+				&& !closRegistry.routesConditionReports()
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
 							|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
@@ -10119,6 +10202,10 @@ public final class LispMacroExpander {
 		// Same phase, same reason as the dispatchers: a struct predicate emitted before
 		// its :include children were registered tests too few tags.
 		refreshStructPredicates(out, closRegistry);
+		// The registry is complete and every class constructor is spliced, so this is the
+		// final answer: everything injected below (the runtime-error helpers, the print
+		// renderer) reads it, and so does every signal site compiled in Pass 2.
+		closRegistry.setRoutesConditionReports(mayCreateConditions(out, closRegistry));
 		if (runtimeSubtypep) {
 			// Injected once the registry is complete; defuns are collected in a
 			// position-independent pass, so appending is safe. The data table is a
@@ -10156,10 +10243,15 @@ public final class LispMacroExpander {
 		if (needsSlotUnboundHelper(program, out)) {
 			out.addAll(slotUnboundDefuns());
 		}
-		// The print-object renderer, once per program that defines a print-object method.
-		// Emitted here so the tag list is the COMPLETE method set, whatever order the
-		// defmethods came in.
-		if (!printObjectTags(closRegistry).isEmpty()) {
+		// The condition-report renderer, once per program that can build a condition.
+		// Emitted here so its class partition is the COMPLETE registry.
+		if (closRegistry.routesConditionReports()) {
+			out.addAll(conditionReportDefuns(closRegistry));
+		}
+		// The print-object renderer, once per program that defines a print-object method
+		// or routes condition reports. Emitted here so the tag list is the COMPLETE
+		// method set, whatever order the defmethods came in.
+		if (!printObjectTags(closRegistry).isEmpty() || closRegistry.routesConditionReports()) {
 			out.add(printObjectStrDefun(closRegistry));
 		}
 		// The registry is complete: reserve, in every ancestor of a change-class target,
@@ -12312,7 +12404,7 @@ public final class LispMacroExpander {
 			LispVal symbolCase = listToCons(List.of(new LispSymbol(LispNames.APPLY),
 					listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(opName))), datumVar,
 					listToCons(argList)));
-			LispVal objectCase = expandObjectSignal(internalName, datumVar, signalHook);
+			LispVal objectCase = expandObjectSignal(internalName, datumVar, closRegistry, signalHook);
 			LispVal symbolTest = listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.SYMBOLP, datumVar),
 					callOf(LispNames.NOT, callOf(LispNames.NULL, datumVar))));
 			return makeLet(datumVar.name(), datum, makeIf(symbolTest, symbolCase, objectCase));
@@ -12332,7 +12424,7 @@ public final class LispMacroExpander {
 			listParts.addAll(parts.subList(2, parts.size()));
 			return listToCons(List.of(new LispSymbol(LispNames.ERROR_RUNTIME), datum, listToCons(listParts)));
 		}
-		return expandObjectSignal(internalName, datum, signalHook);
+		return expandObjectSignal(internalName, datum, closRegistry, signalHook);
 	}
 
 	/**
@@ -12433,8 +12525,15 @@ public final class LispMacroExpander {
 		LispVal construct = buildTypedConstruct(typeSym, args, cls, bindings, items);
 		LispVal report = cls == null ? null : closRegistry.findConditionReport(cls.name());
 		boolean warn = LispNames.WARN_INTERNAL.equals(internalName);
+		// A class with no report of its OWN still reports -- through an ancestor's, or
+		// through the simple-condition family's format-control -- and the generated
+		// renderer is what knows which. Routing the message through it here is what keeps
+		// an uncaught signal's text and (format t "~a" c) identical for the same
+		// condition.
+		boolean routeReport = report == null && closRegistry.routesConditionReports();
 		LispSymbol condVar = new LispSymbol(SIGNAL_COND_VAR);
-		boolean needsInstance = !warn || signalHook || (report != null && !(report instanceof LispString));
+		boolean needsInstance = !warn || signalHook || routeReport
+				|| (report != null && !(report instanceof LispString));
 		if (needsInstance) {
 			bindings.add(listToCons(List.of(condVar, construct)));
 		}
@@ -12452,6 +12551,18 @@ public final class LispMacroExpander {
 							List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), rendered))
 					: rendered;
 		}
+		else if (routeReport) {
+			// The fallback is the same text this site signalled before there was a
+			// renderer, so a class the renderer does not cover (no report anywhere, no
+			// format-control) is unchanged, and so is a covered one whose format-control
+			// is nil at runtime.
+			LispVal rendered = conditionReportOr(condVar, suppliedFormatControl(cls, items) instanceof LispVal supplied
+					? supplied : legacySignalMessage(typeSym, items, bindings, false));
+			message = warn
+					? listToCons(
+							List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), rendered))
+					: rendered;
+		}
 		else if (suppliedFormatControl(cls, items) instanceof LispVal formatControl) {
 			// A simple-* style class with a supplied :format-control: the message is
 			// its value (lite: :format-arguments are carried in the instance but not
@@ -12462,16 +12573,7 @@ public final class LispMacroExpander {
 					: formatControl;
 		}
 		else {
-			// Legacy fallback, byte-identical to the pre-condition-system stopgap:
-			// "Condition ~s was signalled." formatted over (list 'type args...).
-			List<LispVal> msgListParts = new java.util.ArrayList<>();
-			msgListParts.add(new LispSymbol(LispNames.LIST));
-			msgListParts.add(listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym)));
-			msgListParts.addAll(items);
-			LispSymbol msgVar = new LispSymbol(ERROR_ARG_VAR + "m");
-			bindings.add(listToCons(List.of(msgVar, listToCons(msgListParts))));
-			String control = warn ? "WARNING: Condition ~s was signalled." : "Condition ~s was signalled.";
-			message = formatMessagePieces(control, List.of(msgVar));
+			message = legacySignalMessage(typeSym, items, bindings, warn);
 		}
 		// The two-argument condition-carrying internal: %error maps to %error-cond
 		// (signal already is %signal-cond; warn stays the one-argument %warn).
@@ -12493,6 +12595,24 @@ public final class LispMacroExpander {
 		letParts.add(listToCons(bindings));
 		letParts.add(signalCall);
 		return listToCons(letParts);
+	}
+
+	/**
+	 * The pre-condition-system stopgap message of a typed signal whose class reports
+	 * nothing: {@code "Condition ~s was signalled."} formatted over
+	 * {@code (list 'type args...)}. Kept byte-identical because it is the message every
+	 * report-less condition has always signalled.
+	 */
+	private static LispVal legacySignalMessage(LispSymbol typeSym, List<LispVal> items, List<LispVal> bindings,
+			boolean warn) {
+		List<LispVal> msgListParts = new java.util.ArrayList<>();
+		msgListParts.add(new LispSymbol(LispNames.LIST));
+		msgListParts.add(listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym)));
+		msgListParts.addAll(items);
+		LispSymbol msgVar = new LispSymbol(ERROR_ARG_VAR + "m");
+		bindings.add(listToCons(List.of(msgVar, listToCons(msgListParts))));
+		String control = warn ? "WARNING: Condition ~s was signalled." : "Condition ~s was signalled.";
+		return formatMessagePieces(control, List.of(msgVar));
 	}
 
 	private static final String IGNORE_ERRORS_COND_VAR = "__ignore_errors_cond";
@@ -12561,16 +12681,13 @@ public final class LispMacroExpander {
 	 * a plain message when it is a string at runtime, and otherwise signals the instance
 	 * with its carried message -- slot 0 for the simple-* classes, the
 	 * {@code Condition of type ... was signalled.} shape derived from the instance tag
-	 * otherwise. Lite: a {@code :report} registered for the object's class is not
-	 * consulted here (the type is not statically known); construct through
-	 * {@code (error 'type ...)} or a literal {@code (make-condition ...)} argument for
-	 * report-aware messages.
+	 * otherwise. When the program routes condition reports the message is the datum's
+	 * REPORT, rendered by the generated renderer -- the type is not statically known
+	 * here, so a runtime dispatch is the only thing that can consult it -- with the
+	 * shapes above as the fallback for a class that reports nothing.
 	 */
-	private static LispVal expandObjectSignal(String internalName, LispVal datumExpr) {
-		return expandObjectSignal(internalName, datumExpr, false);
-	}
-
-	private static LispVal expandObjectSignal(String internalName, LispVal datumExpr, boolean signalHook) {
+	private static LispVal expandObjectSignal(String internalName, LispVal datumExpr, ClosRegistry closRegistry,
+			boolean signalHook) {
 		boolean warn = LispNames.WARN_INTERNAL.equals(internalName);
 		LispSymbol condVar = new LispSymbol(SIGNAL_COND_VAR);
 		LispVal tag = objTag(condVar);
@@ -12587,6 +12704,9 @@ public final class LispMacroExpander {
 		LispVal fallback = makeIf(listToCons(List.of(new LispSymbol(LispNames.OBJ_P), condVar)), typeMessage,
 				callOf(LispNames.PRINC_TO_STRING, condVar));
 		LispVal message = makeIf(isSimpleWithMessage, slotMsg, fallback);
+		if (closRegistry.routesConditionReports()) {
+			message = conditionReportOr(condVar, message);
+		}
 		LispVal stringCase;
 		LispVal conditionCase;
 		if (warn) {
@@ -14252,10 +14372,41 @@ public final class LispMacroExpander {
 		LispSymbol value = new LispSymbol("__pox");
 		LispSymbol escape = new LispSymbol("__poe");
 		LispVal fallback = makeIf(escape, listToCons(List.of(new LispSymbol(LispNames.PRIN1_TO_STRING_RAW), value)),
-				listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING_RAW), value)));
-		LispVal body = makeIf(objIs(value, printObjectTags(closRegistry)), printObjectCall(value), fallback);
+				princRendering(value, closRegistry.routesConditionReports()));
+		LispVal body = printObjectRouting(value, fallback, closRegistry);
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL),
 				listToCons(List.of(value, escape)), body));
+	}
+
+	/**
+	 * Wraps the escape-mode rendering in the {@code print-object} route, or returns it
+	 * unchanged when no method specializes on anything: with an empty tag set the
+	 * {@code %obj-is} test is a constant nil, but its dead {@code print-object} branch
+	 * would still have to compile, and a program routed here only for its CONDITION
+	 * reports has no such generic at all.
+	 */
+	private static LispVal printObjectRouting(LispVal value, LispVal fallback, ClosRegistry closRegistry) {
+		List<String> tags = printObjectTags(closRegistry);
+		return tags.isEmpty() ? fallback : makeIf(objIs(value, tags), printObjectCall(value), fallback);
+	}
+
+	/**
+	 * The {@code princ} (escape-off) rendering: a condition instance answers its
+	 * {@code :report}, everything else the RAW conversion. This is the whole of CLHS's
+	 * "{@code princ} of a condition runs its report, {@code prin1} prints the unreadable
+	 * {@code #<...>} form" -- the escape-on arm is deliberately untouched.
+	 */
+	private static LispVal princRendering(LispVal value, boolean routesConditionReports) {
+		LispVal raw = listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING_RAW), value));
+		if (!routesConditionReports) {
+			return raw;
+		}
+		// The %obj-p guard keeps every non-instance print (the overwhelming majority) one
+		// test away from the raw conversion instead of walking the renderer's tag cond.
+		LispSymbol reportVar = new LispSymbol("__cr" + MV_COUNTER.getAndIncrement());
+		LispVal reported = makeLet(reportVar.name(), callOf(LispNames.CONDITION_REPORT_STR_INTERNAL, value),
+				makeIf(reportVar, reportVar, raw));
+		return makeIf(callOf(LispNames.OBJ_P, value), reported, raw);
 	}
 
 	/** Builds {@code (with-output-to-string (s) (print-object value s))}. */
@@ -14263,6 +14414,209 @@ public final class LispMacroExpander {
 		LispSymbol stream = new LispSymbol("__pos");
 		return listToCons(List.of(new LispSymbol(LispNames.WITH_OUTPUT_TO_STRING), listToCons(List.of(stream)),
 				listToCons(List.of(new LispSymbol(LispNames.PRINT_OBJECT), value, stream))));
+	}
+
+	/**
+	 * One set of condition tags that render their report the same way: either a class's
+	 * registered {@code :report} (inherited by every descendant that does not override
+	 * it), or the {@code simple-condition} family's specified
+	 * {@code format-control}/{@code format-arguments} rendering at a fixed pair of slot
+	 * indices.
+	 *
+	 * @param report the registered report form, or null for the format-control family
+	 * @param controlIndex the {@code format-control} slot index (format-control family)
+	 * @param argumentsIndex the {@code format-arguments} slot index (format-control
+	 * family)
+	 * @param tags the instance tags rendered this way
+	 */
+	private record ConditionReportGroup(@Nullable LispVal report, int controlIndex, int argumentsIndex,
+			List<String> tags) {
+	}
+
+	/**
+	 * Partitions every registered CONDITION class by how its report renders. A class with
+	 * no {@code :report} of its own inherits the nearest ancestor's (walking the
+	 * slot-layout parent chain, which is the one {@code define-condition} inherits slots
+	 * through); a class with neither its own nor an inherited report reports through
+	 * {@code format-control}/{@code format-arguments} when it carries those slots, which
+	 * is exactly CLHS's specified report for the {@code simple-condition} family; a class
+	 * with none of that is left out entirely and keeps the generic {@code #<...>}
+	 * rendering.
+	 *
+	 * <p>
+	 * Grouping (rather than one clause per class) is what keeps the generated dispatch
+	 * small on a program with a large condition hierarchy -- cl-postgres alone registers
+	 * over a hundred -- and the groups partition the tags, so clause order carries no
+	 * meaning.
+	 */
+	private static List<ConditionReportGroup> conditionReportGroups(ClosRegistry closRegistry) {
+		java.util.Map<String, ConditionReportGroup> groups = new java.util.LinkedHashMap<>();
+		for (ClosRegistry.ClassInfo cls : closRegistry.classes().values()) {
+			if (!cls.ancestors().contains("CONDITION")) {
+				continue;
+			}
+			String tag = LispLayout.CLASS_TAG_PREFIX + cls.name();
+			String key = null;
+			LispVal report = null;
+			for (String walk = cls.name(); walk != null;) {
+				LispVal own = closRegistry.findConditionReport(walk);
+				if (own != null) {
+					key = "R:" + ClosRegistry.normalize(walk);
+					report = own;
+					break;
+				}
+				ClosRegistry.ClassInfo info = closRegistry.findClass(walk);
+				walk = info == null ? null : info.superclass();
+			}
+			int controlIndex = -1;
+			int argumentsIndex = -1;
+			if (report == null) {
+				controlIndex = slotIndexOf(cls, "FORMAT-CONTROL");
+				argumentsIndex = slotIndexOf(cls, "FORMAT-ARGUMENTS");
+				if (controlIndex < 0 || argumentsIndex < 0) {
+					continue;
+				}
+				key = "F:" + controlIndex + ":" + argumentsIndex;
+			}
+			ConditionReportGroup group = groups.get(key);
+			if (group == null) {
+				groups.put(key, new ConditionReportGroup(report, controlIndex, argumentsIndex,
+						new java.util.ArrayList<>(List.of(tag))));
+			}
+			else {
+				group.tags().add(tag);
+			}
+		}
+		return List.copyOf(groups.values());
+	}
+
+	/**
+	 * The 0-based index of a slot by base name, or -1 when the class has no such slot.
+	 */
+	private static int slotIndexOf(ClosRegistry.ClassInfo cls, String baseName) {
+		for (int i = 0; i < cls.slots().size(); i++) {
+			if (baseName.equals(cls.slots().get(i).baseName())) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	/**
+	 * The generated condition-report runtime: {@code (%condition-report-str c)}, which
+	 * answers the text a condition instance REPORTS -- what CL prints for it under
+	 * {@code princ}/{@code ~A} and what a signal puts in its message -- or nil when the
+	 * value's class has no report at all, and {@code (%format-condition control args)},
+	 * the {@code simple-condition} family's specified report.
+	 *
+	 * <p>
+	 * The nil answer is the contract that makes this safe to bolt onto every caller: a
+	 * value with no report falls back to whatever that caller printed before, so a
+	 * program whose gate ({@link #mayCreateConditions}) is off loses nothing but the
+	 * routing.
+	 *
+	 * <p>
+	 * A report is rendered exactly as the SIGNAL path renders it (a literal string
+	 * verbatim, a function funcalled on the condition and a string sink), so the message
+	 * an uncaught condition prints and the text {@code (format t "~a" c)} writes cannot
+	 * drift apart.
+	 * @param closRegistry the class registry
+	 * @return the two defuns, in dependency order
+	 */
+	public static List<LispVal> conditionReportDefuns(ClosRegistry closRegistry) {
+		LispSymbol value = new LispSymbol("__crv");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		clauses.add(new LispSymbol(LispNames.COND));
+		for (ConditionReportGroup group : conditionReportGroups(closRegistry)) {
+			LispVal rendered;
+			if (group.report() instanceof LispString text) {
+				rendered = text;
+			}
+			else if (group.report() != null) {
+				LispSymbol stream = new LispSymbol("__crs");
+				rendered = renderedToString(stream,
+						listToCons(List.of(new LispSymbol(LispNames.FUNCALL), group.report(), value, stream)));
+			}
+			else {
+				rendered = listToCons(List.of(new LispSymbol(LispNames.FORMAT_CONDITION_INTERNAL),
+						objRef(value, group.controlIndex()), objRef(value, group.argumentsIndex())));
+			}
+			clauses.add(listToCons(List.of(objIs(value, group.tags()), rendered)));
+		}
+		LispVal reportDefun = listToCons(
+				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.CONDITION_REPORT_STR_INTERNAL),
+						listToCons(List.<LispVal>of(value)), listToCons(clauses)));
+		return List.of(formatConditionDefun(), reportDefun);
+	}
+
+	/**
+	 * The {@code simple-condition} family's specified report,
+	 * {@code (apply #'format stream (simple-condition-format-control c)
+	 * (simple-condition-format-arguments c))}, as a defun over the two slot values.
+	 *
+	 * <p>
+	 * A string control goes through the same runtime renderer a computed
+	 * {@code (format nil control args)} uses, so the supported directive set is identical
+	 * everywhere. A control that is a FUNCTION (the standard allows it) is called on the
+	 * stream and the arguments -- through fixed-arity {@code funcall}s rather than
+	 * {@code apply}, which would drag the whole eval runtime into every program that
+	 * prints a condition. A nil control is no report at all, and answers nil so the
+	 * caller falls back.
+	 */
+	private static LispVal formatConditionDefun() {
+		LispSymbol control = new LispSymbol("__fcc");
+		LispSymbol args = new LispSymbol("__fca");
+		LispSymbol stream = new LispSymbol("__fcs");
+		LispVal first = callOf(LispNames.CAR, args);
+		LispVal rest = callOf(LispNames.CDR, args);
+		LispVal second = callOf(LispNames.CAR, rest);
+		LispVal third = callOf(LispNames.CAR, callOf(LispNames.CDR, rest));
+		List<LispVal> arity = new java.util.ArrayList<>();
+		arity.add(new LispSymbol(LispNames.COND));
+		arity.add(listToCons(List.of(callOf(LispNames.NULL, args),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), control, stream)))));
+		arity.add(listToCons(List.of(callOf(LispNames.NULL, rest),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), control, stream, first)))));
+		arity.add(listToCons(List.of(callOf(LispNames.NULL, callOf(LispNames.CDR, rest)),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), control, stream, first, second)))));
+		arity.add(listToCons(List.of(LispTrue.INSTANCE,
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), control, stream, first, second, third)))));
+		LispVal functionControl = renderedToString(stream, listToCons(arity));
+		LispVal body = makeIf(callOf(LispNames.STRINGP, control),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), formatRuntimeLambda(), control, args)),
+				makeIf(callOf(LispNames.NULL, control), LispNil.INSTANCE, functionControl));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.FORMAT_CONDITION_INTERNAL),
+				listToCons(List.of(control, args)), body));
+	}
+
+	/**
+	 * {@code (with-output-to-string (stream) body)}, PRE-EXPANDED to the close-after-body
+	 * shape. The macro symbol must not survive into the generated defuns: the wasm-GC
+	 * backend decides EH mode by scanning the program for it (its interpreter/JVM
+	 * expansion rides {@code unwind-protect}), and that scan runs AFTER these defuns are
+	 * spliced in -- so leaving the symbol here would force EH mode, and the
+	 * {@code wasmtime -W exceptions=y} flag, on every program that merely signals a typed
+	 * condition. The stream is a string sink with nothing to release, so dropping the
+	 * cleanup is behavior-identical on the other backends too.
+	 */
+	private static LispVal renderedToString(LispSymbol stream, LispVal body) {
+		return expandWithOutputToString((LispCons) listToCons(
+				List.of(new LispSymbol(LispNames.WITH_OUTPUT_TO_STRING), listToCons(List.<LispVal>of(stream)), body)),
+				false);
+	}
+
+	/**
+	 * The report rendering of a condition value, falling back to {@code fallback} when
+	 * its class has no report -- the shape every SIGNAL site uses so its message and the
+	 * text {@code princ} writes for the same condition agree.
+	 * @param value the (temp-bound) condition value form
+	 * @param fallback the message form to use when there is no report
+	 * @return the message form
+	 */
+	private static LispVal conditionReportOr(LispVal value, LispVal fallback) {
+		LispSymbol reportVar = new LispSymbol("__crm" + MV_COUNTER.getAndIncrement());
+		return makeLet(reportVar.name(), callOf(LispNames.CONDITION_REPORT_STR_INTERNAL, value),
+				makeIf(reportVar, reportVar, fallback));
 	}
 
 	/**
@@ -14281,15 +14635,23 @@ public final class LispMacroExpander {
 	 * The fallback inside {@code %print-object-str} uses the RAW conversions, so nothing
 	 * here re-enters itself. {@code format}'s {@code ~A}/{@code ~S} need no case of their
 	 * own: they lower to {@code princ-to-string}/{@code prin1-to-string}, which do.
+	 *
+	 * <p>
+	 * The SECOND reason to rewrite is a condition's {@code :report}
+	 * ({@link ClosRegistry#routesConditionReports()}): the escape-off conversions render
+	 * a condition through it. The two share this one seam rather than sitting beside each
+	 * other, so a {@code print-object} method on a condition class still wins.
 	 * @param cons the printing-operator form
 	 * @param closRegistry the class registry
 	 * @param inline whether to inline the renderer instead of calling the generated defun
 	 * (the interpreter re-expands per call, so it always has the current registry; the
 	 * compile paths emit the defun once)
-	 * @return the rewritten form, or null when the program has no print-object method
+	 * @return the rewritten form, or null when the program neither defines a print-object
+	 * method nor can build a condition
 	 */
 	@Nullable public static LispVal expandPrintObjectHook(LispCons cons, ClosRegistry closRegistry, boolean inline) {
-		if (printObjectTags(closRegistry).isEmpty() || !cons.isProperList()) {
+		if ((printObjectTags(closRegistry).isEmpty() && !closRegistry.routesConditionReports())
+				|| !cons.isProperList()) {
 			return null;
 		}
 		List<LispVal> parts = cons.toList();
@@ -14320,15 +14682,23 @@ public final class LispMacroExpander {
 		return makeLet(valueVar.name(), parts.get(1), makeProgn(body));
 	}
 
-	/** The renderer call (or its inlined body) for one value. */
+	/**
+	 * The renderer call (or its inlined body) for one value. The inlined form binds the
+	 * value to a temp first: it is tested before it is rendered, and the argument of a
+	 * {@code (princ-to-string (pop x))} must not be evaluated twice.
+	 */
 	private static LispVal printObjectStr(LispVal value, boolean escape, boolean inline, ClosRegistry closRegistry) {
 		LispVal escapeArg = escape ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		if (!inline) {
 			return listToCons(List.of(new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL), value, escapeArg));
 		}
-		LispVal fallback = listToCons(
-				List.of(new LispSymbol(escape ? LispNames.PRIN1_TO_STRING_RAW : LispNames.PRINC_TO_STRING_RAW), value));
-		return makeIf(objIs(value, printObjectTags(closRegistry)), printObjectCall(value), fallback);
+		if (!(value instanceof LispSymbol)) {
+			LispSymbol temp = new LispSymbol("__pos" + MV_COUNTER.getAndIncrement() + "_v");
+			return makeLet(temp.name(), value, printObjectStr(temp, escape, true, closRegistry));
+		}
+		LispVal fallback = escape ? listToCons(List.of(new LispSymbol(LispNames.PRIN1_TO_STRING_RAW), value))
+				: princRendering(value, closRegistry.routesConditionReports());
+		return printObjectRouting(value, fallback, closRegistry);
 	}
 
 	/**
@@ -18210,8 +18580,8 @@ public final class LispMacroExpander {
 			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, d, quotedSymbolList(spellings)),
 					listToCons(List.of(new LispSymbol(helperName), a)))));
 		}
-		clauses
-			.add(listToCons(List.of(LispTrue.INSTANCE, expandObjectSignal(LispNames.ERROR_INTERNAL, d, signalHook))));
+		clauses.add(listToCons(
+				List.of(LispTrue.INSTANCE, expandObjectSignal(LispNames.ERROR_INTERNAL, d, closRegistry, signalHook))));
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);

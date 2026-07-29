@@ -85,6 +85,12 @@ public final class LispEvaluator {
 	// evaluation, so later signals pick the hook up).
 	private boolean restartRuntimeLoaded = false;
 
+	// The registry shape (class count, report count) the loaded %condition-report-str
+	// was generated from, or -1 before the first load. The renderer PARTITIONS the
+	// registry, so a define-condition evaluated later makes it stale -- unlike the
+	// compile path, where the registry is complete before the renderer is emitted.
+	private int conditionReportRuntimeStamp = -1;
+
 	// Forms already verified against the rontolisp:await placement rules, by identity:
 	// a lambda form evaluated repeatedly (a closure created in a loop) is walked once.
 	private final java.util.Set<LispVal> awaitCheckedForms = java.util.Collections
@@ -2291,6 +2297,7 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandCcase(cons), env);
 				case LispNames.ERROR:
 					ensureWitLoadedForConditionClass(cons);
+					ensureConditionReportRuntimeLoaded();
 					// The signal hook (handler-bind handlers at the signal point) is on
 					// once the restart runtime is loaded: before the first
 					// restart-system form is evaluated no handler can be established,
@@ -2300,22 +2307,27 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandError(cons, this.closRegistry, true, this.restartRuntimeLoaded),
 							env);
 				case LispNames.CERROR:
+					ensureConditionReportRuntimeLoaded();
 					return eval(LispMacroExpander.expandCerror(cons, this.closRegistry, this.restartRuntimeLoaded),
 							env);
 				case LispNames.WARN:
 					ensureWitLoadedForConditionClass(cons);
+					ensureConditionReportRuntimeLoaded();
 					return eval(LispMacroExpander.expandWarn(cons, this.closRegistry, this.restartRuntimeLoaded), env);
 				case LispNames.SIGNAL:
 					ensureWitLoadedForConditionClass(cons);
+					ensureConditionReportRuntimeLoaded();
 					return eval(LispMacroExpander.expandSignalMacro(cons, this.closRegistry, this.restartRuntimeLoaded),
 							env);
 				case LispNames.SIGNAL_COND_INTERNAL:
 					return evalSignalCond(cons, env);
 				case LispNames.HANDLER_CASE:
 					ensureWitLoadedForConditionClass(cons);
+					ensureConditionReportRuntimeLoaded();
 					return evalHandlerCase(cons, env);
 				case LispNames.HANDLER_BIND:
 					ensureWitLoadedForConditionClass(cons);
+					ensureConditionReportRuntimeLoaded();
 					ensureRestartRuntimeLoaded();
 					return eval(LispMacroExpander.expandHandlerBind(cons, this.closRegistry), env);
 				case LispNames.RESTART_BIND:
@@ -2325,6 +2337,7 @@ public final class LispEvaluator {
 					ensureRestartRuntimeLoaded();
 					return eval(LispMacroExpander.expandWithSimpleRestart(cons), env);
 				case LispNames.IGNORE_ERRORS:
+					ensureConditionReportRuntimeLoaded();
 					return eval(LispMacroExpander.expandIgnoreErrors(cons), env);
 				case LispNames.STABLE_SORT:
 					return eval(LispMacroExpander.expandStableSort(cons), env);
@@ -2445,11 +2458,16 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandPushnew(cons), env);
 				case LispNames.DEFTYPE:
 					return evalDeftype(cons);
-				case LispNames.DEFINE_CONDITION:
+				case LispNames.DEFINE_CONDITION: {
 					// A condition type is an ordinary CLOS-subset class; the :report form
 					// is registered for the error/signal/warn message building.
-					return evalDefclass((LispCons) LispMacroExpander.defineConditionToDefclass(cons, this.closRegistry),
-							env);
+					LispVal defined = evalDefclass(
+							(LispCons) LispMacroExpander.defineConditionToDefclass(cons, this.closRegistry), env);
+					// The report renderer partitions the registry, so a new condition
+					// class makes the loaded one stale; rebuilding here keeps it in step.
+					ensureConditionReportRuntimeLoaded();
+					return defined;
+				}
 				case LispNames.DEFINE_MODIFY_MACRO:
 					return eval(LispMacroExpander.expandDefineModifyMacro(cons), env);
 				case LispNames.DEFINE_SETF_EXPANDER:
@@ -2464,6 +2482,7 @@ public final class LispEvaluator {
 				case LispNames.MACROLET:
 					return evalMacrolet(cons, env);
 				case LispNames.MAKE_CONDITION:
+					ensureConditionReportRuntimeLoaded();
 					return eval(LispMacroExpander.expandMakeCondition(cons, this.closRegistry), env);
 				case LispNames.DOCUMENTATION:
 					return eval(LispMacroExpander.expandDocumentation(cons), env);
@@ -2538,6 +2557,11 @@ public final class LispEvaluator {
 				// renderer is INLINED here rather than called as a generated defun: the
 				// interpreter re-expands per call, so it always sees the current method
 				// set (a defmethod may follow the first print).
+				if (this.closRegistry.routesConditionReports()) {
+					// Already routing: only the freshness check, so a condition class
+					// defined between two prints renders through its report too.
+					ensureConditionReportRuntimeLoaded();
+				}
 				LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, this.closRegistry, true);
 				if (hooked != null) {
 					return eval(hooked, env);
@@ -4088,8 +4112,18 @@ public final class LispEvaluator {
 				return loaded;
 			}
 		}
+		// The condition-report renderer is GENERATED like the slot helpers: a resolution
+		// that reaches it before any condition form ran loads the same defuns the
+		// compile path injects, rather than failing.
+		if (LispNames.CONDITION_REPORT_STR_INTERNAL.equals(name) || LispNames.FORMAT_CONDITION_INTERNAL.equals(name)) {
+			ensureConditionReportRuntimeLoaded();
+			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+			if (loaded != null) {
+				return loaded;
+			}
+		}
 		// The restart runtime (find-restart/invoke-restart/... and %run-handlers) is
-		// GENERATED like the slot helpers: the compile path injects the defuns via
+		// GENERATED the same way: the compile path injects the defuns via
 		// expandTopLevelDefinitions, the interpreter evaluates the same AST on the
 		// first resolution of one of the names (or on the first restart-system form,
 		// see ensureRestartRuntimeLoaded).
@@ -4108,6 +4142,28 @@ public final class LispEvaluator {
 			return new LispLambda(List.of(param), List.of(call), this.globalEnv);
 		}
 		throw new LispEvalException("The function " + name + " is undefined");
+	}
+
+	/**
+	 * Evaluates the generated condition-report runtime ({@code %condition-report-str} and
+	 * {@code %format-condition}) into the global environment, and re-evaluates it
+	 * whenever a later {@code define-condition} has changed the registry it partitions --
+	 * the compile path emits it once because {@code expandTopLevelDefinitions} runs with
+	 * a complete registry, which the interpreter never has. Called from the condition
+	 * forms (which is where the routing turns ON: before one of them runs, no condition
+	 * value can exist and every printing operator stays in its historical shape) and from
+	 * the printing operators once it is on.
+	 */
+	private void ensureConditionReportRuntimeLoaded() {
+		int stamp = this.closRegistry.classes().size() * 31 + this.closRegistry.conditionReports().size();
+		if (stamp == this.conditionReportRuntimeStamp) {
+			return;
+		}
+		this.conditionReportRuntimeStamp = stamp;
+		this.closRegistry.setRoutesConditionReports(true);
+		for (LispVal form : LispMacroExpander.conditionReportDefuns(this.closRegistry)) {
+			eval(form, this.globalEnv);
+		}
 	}
 
 	/**

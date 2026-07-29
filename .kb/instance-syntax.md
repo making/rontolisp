@@ -23,6 +23,9 @@ no registry lookup and all three backends can render it with one fixed loop.
   `print`, `prin1-to-string`, `princ-to-string`, `write-to-string` all agree.
 - `NAME` is the type name as spelled, keeping a package qualifier (`GEO::PT`).
 - A slot-less type prints `#S(EMPTY)` / `#<EMPTY>`.
+- The ONE exception is a CONDITION under `princ`/`~A`: it renders its `:report`
+  instead (`prin1`/`~S` keep the `#<...>` form). See
+  `.kb/error-handling.md`, "A condition's `:report` is what PRINTS it".
 
 A `#S(...)` literal in SOURCE reads back into the instance it denotes (see
 "Reading `#S(...)`" below), and so does one handed to the runtime `read` /

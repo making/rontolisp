@@ -1370,6 +1370,30 @@ cases:
       7
       9
       NIL
+  - name: condition-report-printing
+    source: |
+      (define-condition ci-rep-lam (error) ((msg :initarg :msg :reader ci-rep-msg))
+        (:report (lambda (c s) (format s "ci-rep: ~a" (ci-rep-msg c)))))
+      (define-condition ci-rep-str (error) () (:report "fixed text"))
+      (define-condition ci-rep-sub (ci-rep-lam) ())
+      (define-condition ci-rep-simple (simple-warning) ())
+      (define-condition ci-rep-bare (error) ((v :initarg :v)))
+      (print (princ-to-string (make-condition 'ci-rep-lam :msg "boom")))
+      (print (prin1-to-string (make-condition 'ci-rep-lam :msg "boom")))
+      (print (princ-to-string (make-condition 'ci-rep-str)))
+      (print (princ-to-string (make-condition 'ci-rep-sub :msg "sub")))
+      (print (format nil "~a"
+               (make-condition 'ci-rep-simple :format-control "pg ~A/~A" :format-arguments (list 1 2))))
+      (print (princ-to-string (make-condition 'ci-rep-bare :v 1)))
+      (print (handler-case (error "plain ~a" 7) (error (e) (princ-to-string e))))
+    expected: |
+      "ci-rep: boom"
+      "#<CI-REP-LAM :MSG "boom">"
+      "fixed text"
+      "ci-rep: sub"
+      "pg 1/2"
+      "#<CI-REP-BARE :V 1>"
+      "plain 7"
   - name: rontolisp-package-introspection
     source: |
       (print (rontolisp:list-macros))
