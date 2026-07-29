@@ -66,6 +66,7 @@ categories:
       - { slug: deftype, name: deftype }
       - { slug: handler-case, name: handler-case }
       - { slug: ignore-errors, name: ignore-errors }
+      - { slug: handler-bind, name: handler-bind }
       - { slug: signal, name: signal }
       - { slug: with-slots, name: with-slots }
       - { slug: define-condition, name: define-condition }
@@ -74,6 +75,8 @@ categories:
       - { slug: define-setf-expander, name: define-setf-expander }
       - { slug: defsetf, name: defsetf }
       - { slug: restart-case, name: restart-case }
+      - { slug: restart-bind, name: restart-bind }
+      - { slug: with-simple-restart, name: with-simple-restart }
       - { slug: make-condition, name: make-condition }
       - { slug: make-instance, name: make-instance }
       - { slug: slot-value, name: slot-value }

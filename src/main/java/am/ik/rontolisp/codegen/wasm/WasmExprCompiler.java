@@ -649,6 +649,10 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandDefineCompilerMacro(cons), ctx);
 				case LispNames.RESTART_CASE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandRestartCase(cons), ctx);
+				case LispNames.RESTART_BIND ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandRestartBind(cons), ctx);
+				case LispNames.WITH_SIMPLE_RESTART ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithSimpleRestart(cons), ctx);
 				case LispNames.MAKE_CONDITION ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeCondition(cons, ctx.closRegistry), ctx);
 				case LispNames.DOCUMENTATION ->
@@ -829,7 +833,8 @@ final class WasmExprCompiler {
 							LispNames.PROGV + " is not supported on the WASM backend (interpreter only)");
 				case LispNames.UNWIND_PROTECT -> WasmUnwindProtectCompiler.compile(cons, ctx);
 				case LispNames.HANDLER_CASE -> WasmHandlerCaseCompiler.compile(cons, ctx);
-				case LispNames.HANDLER_BIND -> WasmExprCompiler.compileExpr(LispMacroExpander.handlerBindStub(), ctx);
+				case LispNames.HANDLER_BIND ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandHandlerBind(cons, ctx.closRegistry), ctx);
 				case LispNames.IGNORE_ERRORS ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandIgnoreErrors(cons), ctx);
 				case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx);
@@ -1107,21 +1112,21 @@ final class WasmExprCompiler {
 				case LispNames.CASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCase(cons), ctx);
 				case LispNames.ECASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEcase(cons), ctx);
 				case LispNames.CCASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCcase(cons), ctx);
-				case LispNames.ERROR ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandError(cons, ctx.closRegistry), ctx);
-				case LispNames.CERROR ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandCerror(cons, ctx.closRegistry), ctx);
+				case LispNames.ERROR -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandError(cons, ctx.closRegistry, false, ctx.restartMode), ctx);
+				case LispNames.CERROR -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandCerror(cons, ctx.closRegistry, ctx.restartMode), ctx);
 				case LispNames.ERROR_INTERNAL -> WasmErrorCompiler.compile(cons, ctx);
 				case LispNames.ERROR_COND_INTERNAL ->
 					// Outside EH mode the condition-carrying variant traps like %error (a
 					// WASM trap is uncatchable and carries no payload; the arguments are
 					// not evaluated); in EH mode it throws the typed instance.
 					WasmErrorCompiler.compileCond(cons, ctx);
-				case LispNames.WARN ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandWarn(cons, ctx.closRegistry), ctx);
+				case LispNames.WARN -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandWarn(cons, ctx.closRegistry, ctx.restartMode), ctx);
 				case LispNames.WARN_INTERNAL -> WasmWarnCompiler.compile(cons, ctx);
-				case LispNames.SIGNAL ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry), ctx);
+				case LispNames.SIGNAL -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry, ctx.restartMode), ctx);
 				case LispNames.SIGNAL_COND_INTERNAL -> WasmSignalCondCompiler.compile(cons, ctx);
 				case LispNames.HC_DEPTH_DEC_INTERNAL -> WasmHandlerCaseCompiler.compileDepthDec(ctx);
 				case LispNames.AND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx);

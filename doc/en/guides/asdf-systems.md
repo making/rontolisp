@@ -197,11 +197,11 @@ A library qualifies today roughly when it stays inside: plain
 `values`-tailed functions, `check-type`/`etypecase` with the supported type
 specifiers, declarations (parsed no-ops, `deftype` included), the CLOS static
 subset (`defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value` with
-single dispatch, plus `(defun (setf name) ...)` setf functions), and the lite
-`define-condition`/`make-condition`/`warn`/`restart-case`/`return-from`
-idioms, and dynamic (special) variable binding (`let`/`let*` over a `defvar`
-special). Libraries built on the full metaobject protocol, the condition/restart
-system, or pathnames do not load yet (see
+single dispatch, plus `(defun (setf name) ...)` setf functions), the condition and
+restart system (`define-condition`/`handler-case`/`handler-bind`/`restart-case`/
+`invoke-restart`), `return-from`, and dynamic (special) variable binding (`let`/`let*` over a `defvar`
+special). Libraries built on the full metaobject protocol, the interactive
+debugger (`break`, `*debugger-hook*`), or pathnames do not load yet (see
 [Unsupported CL Features](missing-features.md)). For anything else, the
 practical use is structuring **your own** multi-file rontolisp projects —
 with `.asd` files that real ASDF can read too.

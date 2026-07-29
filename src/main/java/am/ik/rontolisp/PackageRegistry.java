@@ -53,7 +53,7 @@ public final class PackageRegistry {
 			LispNames.HANDLER_BIND, LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR,
 			LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP,
 			LispNames.SLOT_MAKUNBOUND, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR,
-			LispNames.DO_EXTERNAL_SYMBOLS);
+			LispNames.DO_EXTERNAL_SYMBOLS, LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -134,7 +134,9 @@ public final class PackageRegistry {
 			LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, LispNames.TYPE_ERROR_DATUM, LispNames.TYPE_ERROR_EXPECTED_TYPE,
 			LispNames.CELL_ERROR_NAME, LispNames.UNBOUND_SLOT_INSTANCE, LispNames.MAKE_PATHNAME,
 			LispNames.COPY_READTABLE, LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE,
-			LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF);
+			LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF, LispNames.INVOKE_RESTART,
+			LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING,
+			LispNames.ABORT, LispNames.CONTINUE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
@@ -170,7 +172,8 @@ public final class PackageRegistry {
 			LispNames.READ_EVAL, LispNames.READ_EVAL_TEMPLATE, LispNames.SUBSEQ_CORE, LispNames.NLX_TAG_INTERNAL,
 			LispNames.NLX_CATCH_INTERNAL, LispNames.NLX_THROW_INTERNAL, LispNames.STRING_COMPARE, LispNames.OBJ_NEW,
 			LispNames.OBJ_REF, LispNames.OBJ_SET, LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P,
-			LispNames.OBJ_SLOTS);
+			LispNames.OBJ_SLOTS, LispNames.RUN_HANDLERS_INTERNAL, LispNames.HANDLER_CLUSTERS_VAR,
+			LispNames.RESTART_CLUSTERS_VAR, LispNames.RESTART_RECORD_TAG);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

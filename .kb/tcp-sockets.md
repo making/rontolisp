@@ -396,8 +396,9 @@ splice). Key mechanics:
   a reader feature). The re-signal always uses `socket-error` (the subtypes
   are defined but not auto-selected). See `.kb/error-handling.md`.
 - **Not reproduced** (rontolisp has no substrate): UDP
-  (`socket-send`/`socket-receive`), `socket-shutdown`, `wait-for-input`,
-  `socket-server`, and restart-based retry (`handler-bind`/`restart-case`).
+  (`socket-send`/`socket-receive`), `socket-shutdown`, `wait-for-input`, and
+  `socket-server`. (Restart-based retry -- `handler-bind`/`restart-case` -- IS
+  available since todo-196; usocket.lisp simply does not use it.)
 
 ## Pinning tests
 

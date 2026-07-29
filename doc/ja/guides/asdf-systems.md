@@ -192,10 +192,11 @@ UTF-8 バイトモデル — を牽引しました。
 静的サブセット (単一ディスパッチの
 `defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value`、および
 `(defun (setf name) ...)` setf 関数)、そして
-簡易版 `define-condition`/`make-condition`/`warn`/`restart-case`/
-`return-from` のイディオム、そして動的 (スペシャル) 変数束縛 (`defvar` の
+コンディションとリスタートのシステム
+(`define-condition`/`handler-case`/`handler-bind`/`restart-case`/
+`invoke-restart`)、`return-from` のイディオム、そして動的 (スペシャル) 変数束縛 (`defvar` の
 スペシャル変数に対する `let`/`let*`)。完全なメタオブジェクトプロトコル、
-コンディション/リスタートシステム、パス名の上に
+対話的デバッガ (`break`、`*debugger-hook*`)、パス名の上に
 構築されたライブラリはまだロードできません
 ([未対応のCL機能](missing-features.md)を参照)。それ以外の場合の実用は、
 **自分自身の**複数ファイル rontolisp プロジェクトの構成です — その `.asd` は

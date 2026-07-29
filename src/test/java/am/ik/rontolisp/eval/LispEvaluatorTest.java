@@ -4547,7 +4547,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
@@ -4587,11 +4587,13 @@ class LispEvaluatorTest {
 			.contains("BYTE", "BYTE-SIZE", "BYTE-POSITION", "LDB", "DPB")
 			.contains("STRING")
 			.contains("PEEK-CHAR", "MAKE-STRING-OUTPUT-STREAM", "GET-OUTPUT-STREAM-STRING", "MAKE-SYNONYM-STREAM")
+			.contains("INVOKE-RESTART", "FIND-RESTART", "COMPUTE-RESTARTS", "RESTART-NAME", "MUFFLE-WARNING", "ABORT",
+					"CONTINUE")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%peek-char", "%set-fill-pointer",
-					"%string-compare")
+					"%string-compare", "%run-handlers")
 			.isSorted()
-			.hasSize(334);
+			.hasSize(341);
 	}
 
 	@Test
@@ -5167,6 +5169,163 @@ class LispEvaluatorTest {
 	void ignoreErrorsYieldsNilOnErrorAndValueOtherwise() {
 		assertThat(eval("(ignore-errors (error \"boom\"))")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(ignore-errors (+ 1 2))")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void restartCaseNormalCompletionReturnsPrimaryValues() {
+		assertThat(eval("(restart-case (+ 1 2) (retry () :retried))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(multiple-value-list (restart-case (values 1 2) (retry () nil)))").print()).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void handlerBindInvokesKeywordRestartAcrossFunctions() {
+		// The postmodern prepare.lisp shape: the restart is ESTABLISHED in one
+		// function and INVOKED (by keyword name, with an argument) from a
+		// handler-bind handler running in another, before unwinding.
+		assertThat(evalMulti("""
+				(defun rs-f ()
+				  (restart-case (progn (error "boom") :not-reached)
+				    (:reconnect (x) (list :reconnected x))))
+				(handler-bind ((error (lambda (c) (invoke-restart :reconnect 42))))
+				  (rs-f))
+				""").print()).isEqualTo("(:RECONNECTED 42)");
+	}
+
+	@Test
+	void handlerBindDecliningHandlerFallsThroughToHandlerCase() {
+		assertThat(eval("""
+				(let ((log nil))
+				  (handler-case
+				      (handler-bind ((error (lambda (c) (setq log (cons :seen log)))))
+				        (error "boom"))
+				    (error (e) (cons :caught log))))
+				""").print()).isEqualTo("(:CAUGHT :SEEN)");
+	}
+
+	@Test
+	void handlerBindReceivesTypedConditionWithSlots() {
+		assertThat(evalMulti("""
+				(define-condition hb-err (error) ((v :initarg :v :reader hb-err-v)))
+				(handler-bind ((hb-err (lambda (c) (invoke-restart :use (hb-err-v c)))))
+				  (restart-case (error 'hb-err :v 7)
+				    (:use (x) (list :slot x))))
+				""").print()).isEqualTo("(:SLOT 7)");
+	}
+
+	@Test
+	void findRestartReturnsObjectAndGoLeavesClauseIntoTagbody() {
+		// The postmodern transaction.lisp shape: find-restart with a condition
+		// argument returns a first-class restart object, invoke-restart on the
+		// object transfers to the clause, and the clause body (go start) re-enters
+		// the enclosing tagbody.
+		assertThat(evalMulti("""
+				(defun rs-retry (c)
+				  (let ((r (find-restart 'retry-me c)))
+				    (if (null r) :none (invoke-restart r))))
+				(handler-bind ((error (lambda (c) (rs-retry c))))
+				  (let ((n 0))
+				    (tagbody start
+				      (restart-case
+				          (progn (setq n (+ n 1)) (when (< n 3) (error "again")))
+				        (retry-me () (go start))))
+				    n))
+				""")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void restartsDisappearOutsideTheirExtent() {
+		assertThat(eval("(progn (restart-case 1 (gone () nil)) (find-restart 'gone))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(handler-case (invoke-restart :nope) (error (e) :no-restart))").print())
+			.isEqualTo(":NO-RESTART");
+	}
+
+	@Test
+	void computeRestartsListsInnermostFirstAndRestartNameReads() {
+		assertThat(eval("""
+				(restart-case
+				    (restart-case (mapcar (function restart-name) (compute-restarts))
+				      (aaa () nil)
+				      (bbb () nil))
+				  (ccc () nil))
+				""").print()).isEqualTo("(AAA BBB CCC)");
+	}
+
+	@Test
+	void restartCasePassesFiveArguments() {
+		// The postmodern roles.lisp shape: a restart taking 5 arguments.
+		assertThat(eval("""
+				(handler-bind ((error (lambda (c) (invoke-restart :five 1 2 3 4 5))))
+				  (restart-case (error "x")
+				    (:five (a b c d e) (list a b c d e))))
+				""").print()).isEqualTo("(1 2 3 4 5)");
+	}
+
+	@Test
+	void nestedHandlerBindLayersInnerDeclinesOuterInvokes() {
+		// The prepare.lisp shape: nested handler-bind layers around one
+		// restart-case; the inner cluster's handler declines (returns), the outer
+		// cluster's handler invokes the restart.
+		assertThat(eval("""
+				(let ((log nil))
+				  (handler-bind ((error (lambda (c) (invoke-restart :reconnect))))
+				    (handler-bind ((error (lambda (c) (setq log (cons :inner-saw log)))))
+				      (restart-case (error "conn lost")
+				        (:reconnect () (cons :reconnected log))))))
+				""").print()).isEqualTo("(:RECONNECTED :INNER-SAW)");
+	}
+
+	@Test
+	void handlerSignalingInsideHandlerDoesNotSeeOwnCluster() {
+		assertThat(eval("""
+				(handler-case
+				    (handler-bind ((error (lambda (c) (error "inner"))))
+				      (error "outer"))
+				  (error (e) (simple-condition-format-control e)))
+				""").print()).isEqualTo("\"inner\"");
+	}
+
+	@Test
+	void restartBindInvokesFunctionAtInvocationPoint() {
+		assertThat(eval("""
+				(let ((hit nil))
+				  (restart-bind ((poke (lambda (v) (setq hit v))))
+				    (invoke-restart 'poke 9)
+				    hit))
+				""")).isEqualTo(new LispInteger(9));
+	}
+
+	@Test
+	void withSimpleRestartReturnsNilAndT() {
+		assertThat(eval("""
+				(handler-bind ((error (lambda (c) (invoke-restart 'skip))))
+				  (multiple-value-list (with-simple-restart (skip "Skip it") (error "x"))))
+				""").print()).isEqualTo("(NIL T)");
+	}
+
+	@Test
+	void cerrorEstablishesContinueRestart() {
+		assertThat(eval("""
+				(handler-bind ((error (lambda (c) (continue))))
+				  (list :after (cerror "Continue." "problem")))
+				""").print()).isEqualTo("(:AFTER NIL)");
+	}
+
+	@Test
+	void signalRunsHandlerBindHandlersAndReturnsNil() {
+		assertThat(eval("""
+				(let ((log nil))
+				  (handler-bind ((condition (lambda (c) (setq log :ran))))
+				    (signal "s"))
+				  log)
+				""").print()).isEqualTo(":RAN");
+	}
+
+	@Test
+	void muffleWarningAbortsWarnOutput() {
+		assertThat(eval("""
+				(handler-bind ((warning (lambda (w) (muffle-warning))))
+				  (list :done (warn "noise")))
+				""").print()).isEqualTo("(:DONE NIL)");
 	}
 
 	@Test

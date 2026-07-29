@@ -5302,7 +5302,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// load-time-value here keeps the re-evaluating lowering (nothing in this
 			// backend's value model is expensive enough to compute once).
 			case LispNames.LOAD_TIME_VALUE -> LispMacroExpander.expandLoadTimeValue(cons);
-			case LispNames.RESTART_CASE -> LispMacroExpander.expandRestartCase(cons);
+			// --no-gc keeps the historical primary-form-only lowering: its value model
+			// has no condition objects (the catching forms are rejected outright), so
+			// restart records cannot exist and nothing can invoke a clause -- the lite
+			// lowering is behavior-identical here. Every other backend expands the real
+			// restart system (LispMacroExpander.expandRestartCase).
+			case LispNames.RESTART_CASE -> LispMacroExpander.expandRestartCaseLite(cons);
 			case LispNames.MAKE_CONDITION -> LispMacroExpander.expandMakeCondition(cons);
 			case LispNames.DOCUMENTATION -> LispMacroExpander.expandDocumentation(cons);
 			// Two-argument (floor a b) -> (floor (/ a b)); null (the one-argument

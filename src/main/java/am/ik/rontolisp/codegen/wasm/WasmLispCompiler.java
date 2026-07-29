@@ -1472,11 +1472,20 @@ public final class WasmLispCompiler implements LispCompiler {
 		// accessors setf-able places and resolve make-instance/slot-value/dispatch.
 		Map<String, Integer> structAccessors = new HashMap<>();
 		ClosRegistry closRegistry = new ClosRegistry();
+		// Whether the program uses the restart system (handler-bind / restart-case /
+		// invoke-restart & friends). Decided on the SURFACE program -- the expansions
+		// happen lazily during Pass 2, so the pre-scans below (block-exit tag, EH
+		// mode, instance gate) cannot see their catch/throw/%obj-new products.
+		// Computed before expandTopLevelDefinitions, which runs the same scan to
+		// inject the restart-runtime defuns.
+		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry);
 		// Every struct/class layout is registered by the pass above, so the instance gate
 		// can be decided here -- it must be, because the struct type index and the baked
-		// layout addresses are needed as constants before any body is compiled.
-		this.usesInstances = LispMacroExpander.mayCreateInstances(program, closRegistry);
+		// layout addresses are needed as constants before any body is compiled. Restart
+		// mode forces it on: the signal hook synthesizes simple-* instances for plain
+		// string signals.
+		this.usesInstances = LispMacroExpander.mayCreateInstances(program, closRegistry) || restartMode;
 		// Lower a return-from that crosses a lambda boundary into an EH-based non-local
 		// exit (before desugarProgram, so the %fn-block wrap for a same-function
 		// return-from naturally nests around the injected let/%nlx-catch).
@@ -1484,8 +1493,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		program = crossLambda.program();
 		// catch/throw throw on the same block-exit tag (a wrapped payload tells the two
 		// kinds apart), so either one emits the tag and makes handler-case aware of it.
+		// Restart mode rides it too: the restart-case expansion transfers through
+		// catch/throw, invisible to the surface scans (blockExitTag also implies EH
+		// mode below, which the expansions' unwind-protects need).
 		boolean blockExitTag = crossLambda.used() || programUsesSymbol(program, LispNames.CATCH)
-				|| programUsesSymbol(program, LispNames.THROW);
+				|| programUsesSymbol(program, LispNames.THROW) || restartMode;
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		program = LambdaLists.desugarProgram(program);
@@ -1948,6 +1960,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.stringTable(stringTable)
 			.ehMode(ehMode)
 			.blockExitTag(blockExitTag)
+			.restartMode(restartMode)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
 			.rawSentinelGlobalIndex(rawSentinelGlobalIndex)
 			.functions(functions)
@@ -4725,6 +4738,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean blockExitTag = false;
 
 		/**
+		 * True when the program uses the restart system
+		 * ({@code LispMacroExpander.usesRestartSystem}): the error/warn/signal/cerror
+		 * expansions gain the {@code %run-handlers} signal hook and the real
+		 * {@code cerror}, matching the restart-runtime defuns
+		 * {@code expandTopLevelDefinitions} injected. Off, every signal expansion is
+		 * byte-identical to the pre-restart build.
+		 */
+		boolean restartMode = false;
+
+		/**
 		 * The wasm global index of the handler-depth counter (a {@code (mut i32)} = 0
 		 * appended after the user-variable globals), or -1 outside EH mode. The
 		 * {@code handler-case} region increments/decrements it (the JVM
@@ -4965,6 +4988,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
 			this.blockExitTag = builder.blockExitTag;
+			this.restartMode = builder.restartMode;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
 			this.rawSentinelGlobalIndex = builder.rawSentinelGlobalIndex;
 			this.simd = builder.simd;
@@ -5021,6 +5045,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean ehMode = false;
 
 			private boolean blockExitTag = false;
+
+			private boolean restartMode = false;
 
 			private int ehDepthGlobalIndex = -1;
 
@@ -5128,6 +5154,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder blockExitTag(boolean blockExitTag) {
 				this.blockExitTag = blockExitTag;
+				return this;
+			}
+
+			Builder restartMode(boolean restartMode) {
+				this.restartMode = restartMode;
 				return this;
 			}
 

@@ -308,6 +308,13 @@ page.
 | `cell-error-name` | `(cell-error-name c)` | the `name` slot of a `cell-error` (`unbound-variable`, `undefined-function`, `unbound-slot`) |
 | `unbound-slot-instance` | `(unbound-slot-instance c)` | the object whose slot was unbound |
 | `print-object` | `(print-object obj stream)` | the generic function the printer consults; define a method to control how instances of a type print |
+| `find-restart` | `(find-restart 'retry c)` | the innermost active restart with that name as a first-class object, or `nil`. Lite: the condition argument is ignored |
+| `invoke-restart` | `(invoke-restart :reconnect host)` | invoke a restart by name (symbol or keyword) or object, with arguments; a `restart-case` restart transfers control to its clause |
+| `compute-restarts` | `(compute-restarts)` | every active restart record, innermost first |
+| `restart-name` | `(restart-name r)` | the name of a restart object |
+| `muffle-warning` | `(muffle-warning w)` | invoke the `muffle-warning` restart a `warn` establishes, aborting the warning before it prints |
+| `abort` | `(abort)` | invoke the innermost `abort` restart; an error when none is active |
+| `continue` | `(continue)` | invoke the innermost `continue` restart (a `cerror`'s); `nil` when none is active |
 
 ## rontolisp Package Functions
 

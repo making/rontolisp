@@ -88,6 +88,9 @@ public final class LispMacroExpander {
 			case LispNames.DEFINE_SETF_EXPANDER -> expandDefineSetfExpander(cons);
 			case LispNames.DEFINE_COMPILER_MACRO -> expandDefineCompilerMacro(cons);
 			case LispNames.RESTART_CASE -> expandRestartCase(cons);
+			case LispNames.HANDLER_BIND -> expandHandlerBind(cons, EMPTY_CLOS_REGISTRY);
+			case LispNames.RESTART_BIND -> expandRestartBind(cons);
+			case LispNames.WITH_SIMPLE_RESTART -> expandWithSimpleRestart(cons);
 			case LispNames.MAKE_CONDITION -> expandMakeCondition(cons);
 			case LispNames.WITH_SLOTS -> expandWithSlots(cons);
 			case LispNames.WITH_ACCESSORS -> expandWithAccessors(cons);
@@ -9853,7 +9856,8 @@ public final class LispMacroExpander {
 		boolean runtimeSubtypep = needsRuntimeSubtypep(program);
 		boolean runtimeTypep = needsRuntimeTypep(program);
 		boolean runtimeError = needsRuntimeErrorDispatch(program);
-		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !readsSlots(program)
+		boolean restartMode = usesRestartSystem(program);
+		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !readsSlots(program)
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
 							|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
@@ -9952,7 +9956,23 @@ public final class LispMacroExpander {
 			out.addAll(0, typepTagTableForms(closRegistry));
 		}
 		if (runtimeError) {
-			out.addAll(runtimeErrorDefuns(closRegistry));
+			out.addAll(runtimeErrorDefuns(closRegistry, restartMode));
+		}
+		if (restartMode) {
+			// The restart runtime: defuns are position-independent and appended; the
+			// two stack globals are top-level defvars and must run before any
+			// restart-establishing form, so they go FIRST (after the dispatcher slots
+			// above were filled by index). Names the program defines itself win.
+			java.util.Set<String> userDefinedNames = new java.util.HashSet<>();
+			for (LispVal form : out) {
+				if (form instanceof LispCons defun && defun.car() instanceof LispSymbol head
+						&& LispNames.DEFUN.equals(head.name()) && defun.cdr() instanceof LispCons nameCons
+						&& nameCons.car() instanceof LispSymbol nameSym) {
+					userDefinedNames.add(nameSym.name());
+				}
+			}
+			out.addAll(restartRuntimeDefunForms(userDefinedNames));
+			out.addAll(0, restartRuntimeGlobalForms());
 		}
 		if (needsSlotUnboundHelper(program, out)) {
 			out.addAll(slotUnboundDefuns());
@@ -11846,6 +11866,9 @@ public final class LispMacroExpander {
 
 	private static final String SIGNAL_STREAM_VAR = "__signal_stream";
 
+	/** The rendered-message temp of the restart-mode (signal hook) string designator. */
+	private static final String SIG_MSG_VAR = "__sig_msg";
+
 	/** The instance tag of the built-in {@code simple-condition} class. */
 	private static final String SIMPLE_CONDITION_TAG = LispLayout.CLASS_TAG_PREFIX + "SIMPLE-CONDITION";
 
@@ -11894,8 +11917,27 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandError(LispCons cons, ClosRegistry closRegistry, boolean runtimeTypeDispatch) {
+		return expandError(cons, closRegistry, runtimeTypeDispatch, false);
+	}
+
+	/**
+	 * Expands {@code (error ...)} like
+	 * {@link #expandError(LispCons, ClosRegistry, boolean)}, optionally with the
+	 * restart-mode signal hook: the expansion calls {@code %run-handlers} on the
+	 * condition instance BEFORE the throwing terminal, so {@code handler-bind} handlers
+	 * run at the signal point without unwinding. Only a restart-mode program (see
+	 * {@link #usesRestartSystem}) passes true -- every other program stays
+	 * byte-identical.
+	 * @param cons the error expression
+	 * @param closRegistry the class registry
+	 * @param runtimeTypeDispatch whether a runtime symbol datum re-dispatches
+	 * @param signalHook whether to run {@code handler-bind} handlers at the signal point
+	 * @return the expanded expression
+	 */
+	public static LispVal expandError(LispCons cons, ClosRegistry closRegistry, boolean runtimeTypeDispatch,
+			boolean signalHook) {
 		return expandSignalDesignator(cons, LispNames.ERROR, LispNames.ERROR_INTERNAL, closRegistry,
-				runtimeTypeDispatch);
+				runtimeTypeDispatch, signalHook);
 	}
 
 	/**
@@ -11919,6 +11961,35 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (cerror ...)} like {@link #expandCerror(LispCons, ClosRegistry)},
+	 * but in restart mode the error becomes REAL {@code cerror}: the equivalent
+	 * {@code (restart-case (error datum args...) (continue () :report cfc nil))}, so a
+	 * handler (or the {@code continue} function) can resume past it with nil. Outside
+	 * restart mode nothing can invoke the restart, so the lite lowering is
+	 * behavior-identical and keeps the program byte-identical.
+	 * @param cons the cerror expression
+	 * @param closRegistry the class registry
+	 * @param restartMode whether the program uses the restart system
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCerror(LispCons cons, ClosRegistry closRegistry, boolean restartMode) {
+		if (!restartMode) {
+			return expandCerror(cons, closRegistry);
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(
+					LispNames.CERROR + " expects a continue format control and a datum: " + cons.print());
+		}
+		List<LispVal> errorParts = new java.util.ArrayList<>();
+		errorParts.add(new LispSymbol(LispNames.ERROR));
+		errorParts.addAll(parts.subList(2, parts.size()));
+		LispVal clause = listToCons(List.of(new LispSymbol(LispNames.CONTINUE), LispNil.INSTANCE,
+				new LispSymbol(":REPORT"), parts.get(1), LispNil.INSTANCE));
+		return listToCons(List.of(new LispSymbol(LispNames.RESTART_CASE), listToCons(errorParts), clause));
+	}
+
+	/**
 	 * Expands {@code (warn datum args...)} with the same designator surface as
 	 * {@link #expandError}, delegating to {@code (%warn message)} which writes
 	 * {@code WARNING: message} to standard error and returns nil. Nothing can handle or
@@ -11939,6 +12010,21 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandWarn(LispCons cons, ClosRegistry closRegistry) {
 		return expandSignalDesignator(cons, LispNames.WARN, LispNames.WARN_INTERNAL, closRegistry);
+	}
+
+	/**
+	 * Expands {@code (warn ...)} like {@link #expandWarn(LispCons, ClosRegistry)}; in
+	 * restart mode ({@code signalHook}) the handlers run at the signal point and the
+	 * whole warning is wrapped in a {@code muffle-warning} restart, so
+	 * {@code (muffle-warning)} from a handler aborts the pending output (the CL
+	 * contract).
+	 * @param cons the warn expression
+	 * @param closRegistry the class registry
+	 * @param signalHook whether to run {@code handler-bind} handlers at the signal point
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWarn(LispCons cons, ClosRegistry closRegistry, boolean signalHook) {
+		return expandSignalDesignator(cons, LispNames.WARN, LispNames.WARN_INTERNAL, closRegistry, false, signalHook);
 	}
 
 	/**
@@ -11966,6 +12052,21 @@ public final class LispMacroExpander {
 		return expandSignalDesignator(cons, LispNames.SIGNAL, LispNames.SIGNAL_COND_INTERNAL, closRegistry);
 	}
 
+	/**
+	 * Expands {@code (signal ...)} like
+	 * {@link #expandSignalMacro(LispCons, ClosRegistry)}, optionally with the
+	 * restart-mode signal hook (see
+	 * {@link #expandError(LispCons, ClosRegistry, boolean, boolean)}).
+	 * @param cons the signal expression
+	 * @param closRegistry the class registry
+	 * @param signalHook whether to run {@code handler-bind} handlers at the signal point
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSignalMacro(LispCons cons, ClosRegistry closRegistry, boolean signalHook) {
+		return expandSignalDesignator(cons, LispNames.SIGNAL, LispNames.SIGNAL_COND_INTERNAL, closRegistry, false,
+				signalHook);
+	}
+
 	// The shared error/warn/signal expansion over the CL condition designators: a
 	// literal control string (format-machinery message, no condition object on the
 	// %error fast path), a quoted condition-type symbol (typed instance construction),
@@ -11973,11 +12074,31 @@ public final class LispMacroExpander {
 	// other expression (a runtime condition object).
 	private static LispVal expandSignalDesignator(LispCons cons, String opName, String internalName,
 			ClosRegistry closRegistry) {
-		return expandSignalDesignator(cons, opName, internalName, closRegistry, false);
+		return expandSignalDesignator(cons, opName, internalName, closRegistry, false, false);
 	}
 
 	private static LispVal expandSignalDesignator(LispCons cons, String opName, String internalName,
 			ClosRegistry closRegistry, boolean runtimeTypeDispatch) {
+		return expandSignalDesignator(cons, opName, internalName, closRegistry, runtimeTypeDispatch, false);
+	}
+
+	private static LispVal expandSignalDesignator(LispCons cons, String opName, String internalName,
+			ClosRegistry closRegistry, boolean runtimeTypeDispatch, boolean signalHook) {
+		LispVal expansion = expandSignalDesignatorInner(cons, opName, internalName, closRegistry, runtimeTypeDispatch,
+				signalHook);
+		if (signalHook && LispNames.WARN_INTERNAL.equals(internalName)) {
+			// Restart mode: every warn establishes the muffle-warning restart around
+			// the handler run and the output, so (muffle-warning) from a handler
+			// returns nil from the warn without printing.
+			LispVal clause = listToCons(
+					List.of(new LispSymbol(LispNames.MUFFLE_WARNING), LispNil.INSTANCE, LispNil.INSTANCE));
+			expansion = listToCons(List.of(new LispSymbol(LispNames.RESTART_CASE), expansion, clause));
+		}
+		return expansion;
+	}
+
+	private static LispVal expandSignalDesignatorInner(LispCons cons, String opName, String internalName,
+			ClosRegistry closRegistry, boolean runtimeTypeDispatch, boolean signalHook) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(opName + " expects a condition designator");
@@ -11989,14 +12110,15 @@ public final class LispMacroExpander {
 			// (error (make-condition 'type args...)): the type is statically known, so
 			// route through the typed path (construction + :report-aware message).
 			return expandTypedSignal(opName, internalName, java.util.Objects.requireNonNull(quotedSymbol(mcArgs.car())),
-					mc.toList().subList(2, mc.toList().size()), closRegistry);
+					mc.toList().subList(2, mc.toList().size()), closRegistry, signalHook);
 		}
 		LispSymbol typeSym = quotedSymbol(datum);
 		if (typeSym != null) {
-			return expandTypedSignal(opName, internalName, typeSym, parts.subList(2, parts.size()), closRegistry);
+			return expandTypedSignal(opName, internalName, typeSym, parts.subList(2, parts.size()), closRegistry,
+					signalHook);
 		}
 		if (datum instanceof LispString control) {
-			return expandStringSignal(opName, internalName, control, parts.subList(2, parts.size()));
+			return expandStringSignal(opName, internalName, control, parts.subList(2, parts.size()), signalHook);
 		}
 		if (runtimeTypeDispatch) {
 			// Interpreter only: the datum is a runtime value. A SYMBOL value is a
@@ -12011,7 +12133,7 @@ public final class LispMacroExpander {
 			LispVal symbolCase = listToCons(List.of(new LispSymbol(LispNames.APPLY),
 					listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(opName))), datumVar,
 					listToCons(argList)));
-			LispVal objectCase = expandObjectSignal(internalName, datumVar);
+			LispVal objectCase = expandObjectSignal(internalName, datumVar, signalHook);
 			LispVal symbolTest = listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.SYMBOLP, datumVar),
 					callOf(LispNames.NOT, callOf(LispNames.NULL, datumVar))));
 			return makeLet(datumVar.name(), datum, makeIf(symbolTest, symbolCase, objectCase));
@@ -12031,7 +12153,7 @@ public final class LispMacroExpander {
 			listParts.addAll(parts.subList(2, parts.size()));
 			return listToCons(List.of(new LispSymbol(LispNames.ERROR_RUNTIME), datum, listToCons(listParts)));
 		}
-		return expandObjectSignal(internalName, datum);
+		return expandObjectSignal(internalName, datum, signalHook);
 	}
 
 	/**
@@ -12043,6 +12165,11 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal expandStringSignal(String opName, String internalName, LispString control,
 			List<LispVal> args) {
+		return expandStringSignal(opName, internalName, control, args, false);
+	}
+
+	private static LispVal expandStringSignal(String opName, String internalName, LispString control,
+			List<LispVal> args, boolean signalHook) {
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispSymbol> argSyms = new java.util.ArrayList<>();
 		for (int i = 0; i < args.size(); i++) {
@@ -12050,21 +12177,48 @@ public final class LispMacroExpander {
 			argSyms.add(g);
 			bindings.add(listToCons(List.of(g, args.get(i))));
 		}
-		// warn prefixes the rendered message so %warn stays a plain write primitive.
-		String controlText = LispNames.WARN_INTERNAL.equals(internalName) ? "WARNING: " + control.value()
-				: control.value();
-		LispVal message = formatMessagePieces(controlText, argSyms);
 		LispVal signalCall;
-		if (LispNames.SIGNAL_COND_INTERNAL.equals(internalName)) {
+		if (signalHook) {
+			// Restart mode: bind the rendered (unprefixed) message, synthesize the
+			// simple-* instance the handlers see -- the same shape a handler-case
+			// synthesizes from a plain message -- run the handlers, then reach the
+			// unchanged throwing/printing terminal.
+			LispSymbol msgVar = new LispSymbol(SIG_MSG_VAR);
+			LispSymbol condVar = new LispSymbol(SIGNAL_COND_VAR);
+			LispVal message = formatMessagePieces(control.value(), argSyms);
+			String tag = switch (internalName) {
+				case LispNames.WARN_INTERNAL -> "%class-SIMPLE-WARNING";
+				case LispNames.SIGNAL_COND_INTERNAL -> SIMPLE_CONDITION_TAG;
+				default -> "%class-SIMPLE-ERROR";
+			};
+			LispVal terminal = switch (internalName) {
+				case LispNames.WARN_INTERNAL -> listToCons(List.of(new LispSymbol(internalName), listToCons(
+						List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), msgVar))));
+				case LispNames.SIGNAL_COND_INTERNAL ->
+					listToCons(List.of(new LispSymbol(internalName), condVar, msgVar));
+				default -> listToCons(List.of(new LispSymbol(internalName), msgVar));
+			};
+			signalCall = makeLet(SIG_MSG_VAR, message,
+					makeLet(SIGNAL_COND_VAR, objNew(tag, List.of(msgVar, LispNil.INSTANCE)),
+							listToCons(List.of(new LispSymbol(LispNames.PROGN),
+									callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), terminal))));
+		}
+		else if (LispNames.SIGNAL_COND_INTERNAL.equals(internalName)) {
 			// (let ((__signal_cond message)) (%signal-cond (%obj-new
 			// '%class-SIMPLE-CONDITION
 			// __signal_cond nil) __signal_cond))
+			LispVal message = formatMessagePieces(control.value(), argSyms);
 			LispSymbol msgVar = new LispSymbol(SIGNAL_COND_VAR);
 			LispVal instance = objNew(SIMPLE_CONDITION_TAG, List.of(msgVar, LispNil.INSTANCE));
 			signalCall = makeLet(SIGNAL_COND_VAR, message,
 					listToCons(List.of(new LispSymbol(internalName), instance, msgVar)));
 		}
 		else {
+			// warn prefixes the rendered message so %warn stays a plain write
+			// primitive.
+			String controlText = LispNames.WARN_INTERNAL.equals(internalName) ? "WARNING: " + control.value()
+					: control.value();
+			LispVal message = formatMessagePieces(controlText, argSyms);
 			signalCall = listToCons(List.of(new LispSymbol(internalName), message));
 		}
 		if (bindings.isEmpty()) {
@@ -12089,6 +12243,11 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal expandTypedSignal(String opName, String internalName, LispSymbol typeSym, List<LispVal> args,
 			ClosRegistry closRegistry) {
+		return expandTypedSignal(opName, internalName, typeSym, args, closRegistry, false);
+	}
+
+	private static LispVal expandTypedSignal(String opName, String internalName, LispSymbol typeSym, List<LispVal> args,
+			ClosRegistry closRegistry, boolean signalHook) {
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispVal> items = new java.util.ArrayList<>();
 		ClosRegistry.ClassInfo cls = closRegistry.findClass(typeSym.name());
@@ -12096,7 +12255,7 @@ public final class LispMacroExpander {
 		LispVal report = cls == null ? null : closRegistry.findConditionReport(cls.name());
 		boolean warn = LispNames.WARN_INTERNAL.equals(internalName);
 		LispSymbol condVar = new LispSymbol(SIGNAL_COND_VAR);
-		boolean needsInstance = !warn || (report != null && !(report instanceof LispString));
+		boolean needsInstance = !warn || signalHook || (report != null && !(report instanceof LispString));
 		if (needsInstance) {
 			bindings.add(listToCons(List.of(condVar, construct)));
 		}
@@ -12141,6 +12300,12 @@ public final class LispMacroExpander {
 				: internalName;
 		LispVal signalCall = warn ? listToCons(List.of(new LispSymbol(internalName), message))
 				: listToCons(List.of(new LispSymbol(condInternal), condVar, message));
+		if (signalHook) {
+			// Restart mode: run the handler-bind handlers on the instance at the
+			// signal point, before the throwing/printing terminal.
+			signalCall = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+					callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), signalCall));
+		}
 		if (bindings.isEmpty()) {
 			return signalCall;
 		}
@@ -12223,6 +12388,10 @@ public final class LispMacroExpander {
 	 * report-aware messages.
 	 */
 	private static LispVal expandObjectSignal(String internalName, LispVal datumExpr) {
+		return expandObjectSignal(internalName, datumExpr, false);
+	}
+
+	private static LispVal expandObjectSignal(String internalName, LispVal datumExpr, boolean signalHook) {
 		boolean warn = LispNames.WARN_INTERNAL.equals(internalName);
 		LispSymbol condVar = new LispSymbol(SIGNAL_COND_VAR);
 		LispVal tag = objTag(condVar);
@@ -12272,6 +12441,24 @@ public final class LispMacroExpander {
 		}
 		else {
 			symbolCase = listToCons(List.of(new LispSymbol(LispNames.ERROR_INTERNAL), symbolMessage));
+		}
+		if (signalHook) {
+			// Restart mode: run the handler-bind handlers at the signal point. The
+			// string/symbol arms synthesize the same simple-* instance a handler-case
+			// would (a fresh instance -- no identity requirement with the one an
+			// unhandled signal later carries); the condition arm passes the datum's
+			// instance itself.
+			String simpleTag = warn ? "%class-SIMPLE-WARNING" : LispNames.SIGNAL_COND_INTERNAL.equals(internalName)
+					? SIMPLE_CONDITION_TAG : "%class-SIMPLE-ERROR";
+			stringCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+					callOf(LispNames.RUN_HANDLERS_INTERNAL, objNew(simpleTag, List.of(condVar, LispNil.INSTANCE))),
+					stringCase));
+			symbolCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+					callOf(LispNames.RUN_HANDLERS_INTERNAL,
+							objNew(simpleTag, List.of(callOf(LispNames.PRINC_TO_STRING, condVar), LispNil.INSTANCE))),
+					symbolCase));
+			conditionCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+					callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), conditionCase));
 		}
 		return makeLet(SIGNAL_COND_VAR, datumExpr, makeIf(callOf(LispNames.STRINGP, condVar), stringCase,
 				makeIf(callOf(LispNames.SYMBOLP, condVar), symbolCase, conditionCase)));
@@ -14984,23 +15171,659 @@ public final class LispMacroExpander {
 		return LispNil.INSTANCE;
 	}
 
+	// ------------------------------------------------------------------
+	// The restart system (todo-196): handler-bind + the dynamic restart stack +
+	// find-restart/invoke-restart, shared by the interpreter and both compilers.
+	//
+	// Both stacks are TOP-LEVEL GLOBALS mutated with plain setq and restored
+	// through unwind-protect over a lexically saved value -- deliberately NOT
+	// special-let rebindings, because the compile paths skip the special-binding
+	// restore on the error/throw unwind channels (.todo/192) while unwind-protect
+	// cleanups run on every channel on every backend. The non-local transfer of an
+	// invoked restart-case clause rides catch/throw (runtime cons tag, eq
+	// identity), so it crosses functions, runs intervening unwind-protect cleanups
+	// and passes through handler-case regions -- all pinned existing behavior.
+	// Clause bodies are compiled INLINE in the dispatch (never wrapped in a
+	// lambda), so a lexical (go start) out of a clause into an enclosing tagbody
+	// stays a same-function go (postmodern's retry-transaction).
+
+	private static final String RC_TAG_VAR = "__rc_tag";
+
+	private static final String RC_RES_VAR = "__rc_res";
+
+	private static final String RC_SAVED_VAR = "__rc_saved";
+
+	private static final String RC_ARGS_VAR = "__rc_args";
+
+	private static final String RC_IDX_VAR = "__rc_idx";
+
+	private static final String HB_SAVED_VAR = "__hb_saved";
+
+	private static final String HB_COND_VAR = "__hb_cond";
+
 	/**
 	 * Expands
-	 * {@code (restart-case form (restart-name (args...) [options...] body...)...)} to
-	 * just {@code form}. Lite: there is no restart/condition system, so the restart
-	 * clauses are unreachable (nothing invokes them) and are discarded; a signaling
-	 * primary form signals as usual. Pairs with the lite
-	 * {@link #expandError}/{@link #expandAssert} and shares the "no condition system"
-	 * semantics documented for {@code check-type}.
+	 * {@code (restart-case form (restart-name (args...) [options...] body...)...)}: the
+	 * primary form runs with one restart record per clause pushed onto the dynamic
+	 * restart stack; an invoked restart throws {@code (index . args)} to a fresh
+	 * eq-unique catch tag, so control unwinds back to this frame (restoring the stack
+	 * through the unwind-protect cleanup) and the clause body runs INLINE in the
+	 * restart-case's own lexical environment with the invocation arguments bound
+	 * positionally. Normal completion carries the primary form's values through
+	 * {@code multiple-value-list}/{@code values-list}. Clause options: {@code :report}
+	 * (string or function), {@code :interactive} and {@code :test} are stored in the
+	 * record (nothing in-tree renders or invokes them interactively -- no debugger).
+	 * Lite: {@code &optional} clause parameters take nil instead of their default when
+	 * not supplied, and there is no condition-restart association.
 	 * @param cons the restart-case expression
-	 * @return the primary form (nil when absent)
+	 * @return the expanded expression
 	 */
 	public static LispVal expandRestartCase(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			return LispNil.INSTANCE;
 		}
+		LispVal primary = parts.get(1);
+		if (parts.size() == 2) {
+			return primary;
+		}
+		List<RestartClause> clauses = new java.util.ArrayList<>();
+		for (int i = 2; i < parts.size(); i++) {
+			clauses.add(parseRestartClause(parts.get(i), cons));
+		}
+		LispSymbol tagVar = new LispSymbol(RC_TAG_VAR);
+		LispSymbol resVar = new LispSymbol(RC_RES_VAR);
+		LispSymbol savedVar = new LispSymbol(RC_SAVED_VAR);
+		LispSymbol argsVar = new LispSymbol(RC_ARGS_VAR);
+		LispSymbol idxVar = new LispSymbol(RC_IDX_VAR);
+		LispSymbol clustersVar = new LispSymbol(LispNames.RESTART_CLUSTERS_VAR);
+		// (list (list '%restart 'name (lambda (__rc_args) (throw __rc_tag (cons i
+		// __rc_args))) report interactive test) ...)
+		List<LispVal> clusterParts = new java.util.ArrayList<>();
+		clusterParts.add(new LispSymbol(LispNames.LIST));
+		for (int i = 0; i < clauses.size(); i++) {
+			RestartClause clause = clauses.get(i);
+			LispVal invoker = listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
+					listToCons(List.<LispVal>of(argsVar)), listToCons(List.of(new LispSymbol(LispNames.THROW), tagVar,
+							listToCons(List.of(new LispSymbol(LispNames.CONS), new LispInteger(i), argsVar))))));
+			clusterParts.add(listToCons(List.of(new LispSymbol(LispNames.LIST), quoteOf(LispNames.RESTART_RECORD_TAG),
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), clause.name())), invoker, clause.report(),
+					clause.interactive(), clause.test())));
+		}
+		LispVal push = listToCons(List.of(new LispSymbol(LispNames.SETQ), clustersVar,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), listToCons(clusterParts), clustersVar))));
+		LispVal normal = listToCons(List.of(new LispSymbol(LispNames.CONS), new LispInteger(-1),
+				callOf(LispNames.MULTIPLE_VALUE_LIST, primary)));
+		LispVal restore = listToCons(List.of(new LispSymbol(LispNames.SETQ), clustersVar, savedVar));
+		LispVal catchForm = listToCons(List.of(new LispSymbol(LispNames.CATCH), tagVar,
+				makeLet(RC_SAVED_VAR, clustersVar, listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT),
+						listToCons(List.of(new LispSymbol(LispNames.PROGN), push, normal)), restore)))));
+		LispVal dispatch = callOf(LispNames.VALUES_LIST, argsVar);
+		for (int i = clauses.size() - 1; i >= 0; i--) {
+			dispatch = makeIf(listToCons(List.of(new LispSymbol(LispNames.EQL), idxVar, new LispInteger(i))),
+					clauses.get(i).bindParams(argsVar), dispatch);
+		}
+		LispVal inner = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(idxVar, callOf(LispNames.CAR, resVar))),
+						listToCons(List.of(argsVar, callOf(LispNames.CDR, resVar))))),
+				dispatch));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(
+						listToCons(List.of(tagVar, callOf(LispNames.LIST, quoteOf(LispNames.RESTART_RECORD_TAG)))),
+						listToCons(List.of(resVar, catchForm)))),
+				inner));
+	}
+
+	/**
+	 * The historical lite lowering of {@code restart-case} to its primary form only, kept
+	 * for {@code --no-gc}: its value model has no condition objects (it rejects the
+	 * catching forms outright), so restart records cannot exist there and nothing can
+	 * invoke a clause -- the lite lowering is behavior-identical for it. Every other
+	 * backend uses {@link #expandRestartCase}.
+	 * @param cons the restart-case expression
+	 * @return the primary form (nil when absent)
+	 */
+	public static LispVal expandRestartCaseLite(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			return LispNil.INSTANCE;
+		}
 		return parts.get(1);
+	}
+
+	/** One parsed {@code restart-case} clause; see {@link #parseRestartClause}. */
+	private record RestartClause(LispSymbol name, List<LispVal> params, LispVal report, LispVal interactive,
+			LispVal test, List<LispVal> body) {
+
+		/**
+		 * Builds the clause body with the parameters bound positionally from the
+		 * invocation-argument list: required (and {@code &optional}, lite: nil when
+		 * missing, defaults ignored) parameters read {@code (nth k args)}, a
+		 * {@code &rest} parameter reads {@code (nthcdr k args)}.
+		 */
+		LispVal bindParams(LispSymbol argsVar) {
+			List<LispVal> bindings = new java.util.ArrayList<>();
+			int pos = 0;
+			boolean rest = false;
+			for (LispVal p : this.params) {
+				if (p instanceof LispSymbol marker && LispNames.LAMBDA_OPTIONAL.equals(marker.name())) {
+					continue;
+				}
+				if (p instanceof LispSymbol marker && LispNames.LAMBDA_REST.equals(marker.name())) {
+					rest = true;
+					continue;
+				}
+				LispVal var = p instanceof LispCons pc ? pc.car() : p;
+				String reader = rest ? LispNames.NTHCDR : LispNames.NTH;
+				bindings.add(listToCons(
+						List.of(var, listToCons(List.of(new LispSymbol(reader), new LispInteger(pos), argsVar)))));
+				if (!rest) {
+					pos++;
+				}
+			}
+			LispVal bodyForm = prognOrNil(this.body);
+			if (bindings.isEmpty()) {
+				return bodyForm;
+			}
+			return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), bodyForm));
+		}
+	}
+
+	/**
+	 * Parses {@code (name (params...) [:report r] [:interactive i] [:test t] body...)}.
+	 */
+	private static RestartClause parseRestartClause(LispVal form, LispCons restartCase) {
+		if (!(form instanceof LispCons clause) || !(clause.car() instanceof LispSymbol nameSym)) {
+			throw new IllegalArgumentException(
+					LispNames.RESTART_CASE + " expects (name (params...) body...) clauses: " + restartCase.print());
+		}
+		List<LispVal> cp = clause.toList();
+		if (cp.size() < 2) {
+			throw new IllegalArgumentException(
+					LispNames.RESTART_CASE + " clause needs a lambda list: " + restartCase.print());
+		}
+		List<LispVal> params = cp.get(1) instanceof LispCons paramList ? paramList.toList() : List.of();
+		LispVal report = LispNil.INSTANCE;
+		LispVal interactive = LispNil.INSTANCE;
+		LispVal test = LispNil.INSTANCE;
+		int i = 2;
+		while (i + 1 < cp.size() && cp.get(i) instanceof LispSymbol kw && kw.isKeyword()
+				&& (":REPORT".equals(kw.name()) || ":INTERACTIVE".equals(kw.name()) || ":TEST".equals(kw.name()))) {
+			LispVal value = restartOptionValue(cp.get(i + 1));
+			switch (kw.name()) {
+				case ":REPORT" -> report = value;
+				case ":INTERACTIVE" -> interactive = value;
+				default -> test = value;
+			}
+			i += 2;
+		}
+		return new RestartClause(nameSym, params, report, interactive, test, cp.subList(i, cp.size()));
+	}
+
+	/**
+	 * A restart-clause option value as a stored expression: a string stays itself, a
+	 * function NAME becomes {@code (function name)}, anything else (a lambda expression)
+	 * is stored as written and evaluated at establishment.
+	 */
+	private static LispVal restartOptionValue(LispVal value) {
+		if (value instanceof LispSymbol sym && !sym.isKeyword()) {
+			return listToCons(List.of(new LispSymbol(LispNames.FUNCTION), sym));
+		}
+		return value;
+	}
+
+	/**
+	 * Expands {@code (handler-bind ((type handler)...) body...)}: the handler expressions
+	 * are evaluated on entry and pushed as one cluster of
+	 * {@code (type-test-closure . handler)} entries onto the dynamic handler stack,
+	 * restored through unwind-protect on every exit channel. The signal-designator
+	 * expansions call {@code %run-handlers} at the signal point BEFORE unwinding, so a
+	 * handler runs with the signaling frame's restarts still established; a handler that
+	 * returns declines. The type test is the {@code handler-case} clause test compiled
+	 * into a closure over the condition.
+	 * @param cons the handler-bind expression
+	 * @param closRegistry the class registry resolving the clause types
+	 * @return the expanded expression
+	 */
+	public static LispVal expandHandlerBind(LispCons cons, ClosRegistry closRegistry) {
+		return expandHandlerBind(cons, closRegistry, false);
+	}
+
+	/**
+	 * The {@code handler-bind} expansion {@code FreeVarAnalyzer} walks: the clause type
+	 * tests are replaced by {@code t}, so an unknown or compound type spec cannot reject
+	 * the analysis -- the variable structure (bound temps, handler expressions, body) is
+	 * identical to the compile-time expansion's.
+	 * @param cons the handler-bind expression
+	 * @return the analysis expansion
+	 */
+	public static LispVal expandHandlerBindForAnalysis(LispCons cons) {
+		return expandHandlerBind(cons, EMPTY_CLOS_REGISTRY, true);
+	}
+
+	private static LispVal expandHandlerBind(LispCons cons, ClosRegistry closRegistry, boolean analysisOnly) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException(
+					LispNames.HANDLER_BIND + " expects ((type handler)...) bindings: " + cons.print());
+		}
+		LispSymbol clustersVar = new LispSymbol(LispNames.HANDLER_CLUSTERS_VAR);
+		LispSymbol savedVar = new LispSymbol(HB_SAVED_VAR);
+		LispSymbol condVar = new LispSymbol(HB_COND_VAR);
+		List<LispVal> clusterParts = new java.util.ArrayList<>();
+		clusterParts.add(new LispSymbol(LispNames.LIST));
+		if (parts.get(1) instanceof LispCons bindingList) {
+			for (LispVal binding : bindingList.toList()) {
+				if (!(binding instanceof LispCons bindingCons) || bindingCons.toList().size() != 2) {
+					throw new IllegalArgumentException(
+							LispNames.HANDLER_BIND + " expects (type handler) bindings: " + cons.print());
+				}
+				List<LispVal> bp = bindingCons.toList();
+				LispVal test = analysisOnly ? LispTrue.INSTANCE : makeHandlerTypeTest(condVar, bp.get(0), closRegistry);
+				LispVal testLambda = listToCons(
+						List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.<LispVal>of(condVar)), test));
+				clusterParts.add(listToCons(List.of(new LispSymbol(LispNames.CONS), testLambda, bp.get(1))));
+			}
+		}
+		LispVal push = listToCons(List.of(new LispSymbol(LispNames.SETQ), clustersVar,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), listToCons(clusterParts), clustersVar))));
+		LispVal restore = listToCons(List.of(new LispSymbol(LispNames.SETQ), clustersVar, savedVar));
+		return makeLet(HB_SAVED_VAR, clustersVar,
+				listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT), listToCons(
+						List.of(new LispSymbol(LispNames.PROGN), push, prognOrNil(parts.subList(2, parts.size())))),
+						restore)));
+	}
+
+	/**
+	 * Expands {@code (restart-bind ((name function ...)...) body...)}: like
+	 * {@link #expandRestartCase} the records are pushed for the body's extent, but an
+	 * invoked restart CALLS the bound function at the invocation point (no non-local exit
+	 * -- the CL semantics; the function must transfer control itself if it wants to).
+	 * Trailing per-binding keyword options ({@code :report-function} etc.) are accepted;
+	 * {@code :report-function} is stored as the record's report. The bound function
+	 * receives the invocation arguments through an arity-dispatched {@code funcall} chain
+	 * (0..7 arguments, the WASM dispatch ceiling) -- NOT {@code apply}, whose runtime
+	 * helper is gated on a surface scan that cannot see this expansion (and which would
+	 * drag the WASM eval runtime into every restart-bind program).
+	 * @param cons the restart-bind expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRestartBind(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException(
+					LispNames.RESTART_BIND + " expects ((name function)...) bindings: " + cons.print());
+		}
+		LispSymbol clustersVar = new LispSymbol(LispNames.RESTART_CLUSTERS_VAR);
+		LispSymbol savedVar = new LispSymbol(RC_SAVED_VAR);
+		LispSymbol argsVar = new LispSymbol(RC_ARGS_VAR);
+		LispSymbol fnVar = new LispSymbol("__rb_fn");
+		List<LispVal> clusterParts = new java.util.ArrayList<>();
+		clusterParts.add(new LispSymbol(LispNames.LIST));
+		if (parts.get(1) instanceof LispCons bindingList) {
+			for (LispVal binding : bindingList.toList()) {
+				if (!(binding instanceof LispCons bindingCons) || !(bindingCons.car() instanceof LispSymbol nameSym)
+						|| !(bindingCons.cdr() instanceof LispCons fnCons)) {
+					throw new IllegalArgumentException(
+							LispNames.RESTART_BIND + " expects (name function ...) bindings: " + cons.print());
+				}
+				List<LispVal> bp = bindingCons.toList();
+				LispVal report = LispNil.INSTANCE;
+				for (int i = 2; i + 1 < bp.size(); i += 2) {
+					if (bp.get(i) instanceof LispSymbol kw && ":REPORT-FUNCTION".equals(kw.name())) {
+						report = bp.get(i + 1);
+					}
+				}
+				LispVal invoker = makeLet(fnVar.name(), fnCons.car(),
+						listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.<LispVal>of(argsVar)),
+								arityDispatchedCall(fnVar, argsVar))));
+				clusterParts
+					.add(listToCons(List.of(new LispSymbol(LispNames.LIST), quoteOf(LispNames.RESTART_RECORD_TAG),
+							listToCons(List.of(new LispSymbol(LispNames.QUOTE), nameSym)), invoker, report,
+							LispNil.INSTANCE, LispNil.INSTANCE)));
+			}
+		}
+		LispVal push = listToCons(List.of(new LispSymbol(LispNames.SETQ), clustersVar,
+				listToCons(List.of(new LispSymbol(LispNames.CONS), listToCons(clusterParts), clustersVar))));
+		LispVal restore = listToCons(List.of(new LispSymbol(LispNames.SETQ), clustersVar, savedVar));
+		return makeLet(RC_SAVED_VAR, clustersVar,
+				listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT), listToCons(
+						List.of(new LispSymbol(LispNames.PROGN), push, prognOrNil(parts.subList(2, parts.size())))),
+						restore)));
+	}
+
+	/**
+	 * Expands {@code (with-simple-restart (name format-control format-args...)
+	 * body...)} into the equivalent {@code restart-case} whose named clause returns
+	 * {@code (values nil t)} from the form (the CL contract). The format control (and
+	 * lite: its arguments, dropped) become the restart's report.
+	 * @param cons the with-simple-restart expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithSimpleRestart(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)
+				|| !(spec.car() instanceof LispSymbol nameSym)) {
+			throw new IllegalArgumentException(
+					LispNames.WITH_SIMPLE_RESTART + " expects (name format-control args...): " + cons.print());
+		}
+		List<LispVal> specParts = spec.toList();
+		LispVal report = specParts.size() > 1 ? specParts.get(1) : LispNil.INSTANCE;
+		LispVal valuesForm = listToCons(List.of(new LispSymbol(LispNames.VALUES), LispNil.INSTANCE, LispTrue.INSTANCE));
+		LispVal clause = listToCons(List.of(nameSym, LispNil.INSTANCE, new LispSymbol(":REPORT"), report, valuesForm));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.RESTART_CASE), prognOrNil(parts.subList(2, parts.size())), clause));
+	}
+
+	/**
+	 * Builds {@code (funcall fn args...)} dispatched on {@code (length args)} for 0..7
+	 * arguments (the WASM funcall dispatch ceiling); more signal a call-time error.
+	 */
+	private static LispVal arityDispatchedCall(LispSymbol fnVar, LispSymbol argsVar) {
+		LispVal dispatch = callTimeUnsupportedStub(
+				"a restart-bind function takes at most 7 invocation arguments on rontolisp");
+		LispSymbol lenVar = new LispSymbol("__rb_n");
+		for (int arity = 7; arity >= 0; arity--) {
+			List<LispVal> callParts = new java.util.ArrayList<>();
+			callParts.add(new LispSymbol(LispNames.FUNCALL));
+			callParts.add(fnVar);
+			for (int i = 0; i < arity; i++) {
+				callParts.add(listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i), argsVar)));
+			}
+			dispatch = makeIf(listToCons(List.of(new LispSymbol(LispNames.EQL), lenVar, new LispInteger(arity))),
+					listToCons(callParts), dispatch);
+		}
+		return makeLet(lenVar.name(), callOf(LispNames.LENGTH, argsVar), dispatch);
+	}
+
+	/** The surface operators that flip a program into restart mode. */
+	private static final java.util.Set<String> RESTART_SYSTEM_MACROS = java.util.Set.of(LispNames.HANDLER_BIND,
+			LispNames.RESTART_CASE, LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART);
+
+	/** The restart-runtime defun names (also restart-mode triggers when called). */
+	public static final java.util.Set<String> RESTART_RUNTIME_FUNCTION_NAMES = java.util.Set.of(
+			LispNames.INVOKE_RESTART, LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME,
+			LispNames.MUFFLE_WARNING, LispNames.ABORT, LispNames.CONTINUE);
+
+	/**
+	 * Whether the program uses the restart system: any {@code handler-bind} /
+	 * {@code restart-case} / {@code restart-bind} / {@code with-simple-restart} form, or
+	 * a call to (or {@code #'} reference of) a restart-runtime function. The compilers
+	 * consume this ONCE per program: it gates the restart-runtime defun injection
+	 * ({@code expandTopLevelDefinitions}), the {@code %run-handlers} call in the
+	 * signal-designator expansions, the real {@code cerror}, and forces the catch/throw
+	 * exit channel (JVM {@code blockExitChannel} / WASM {@code blockExitTag}, which
+	 * implies EH mode) because the expansions ride it. A program without any of the
+	 * operators stays byte-identical.
+	 * @param program the top-level forms (post library splice)
+	 * @return whether the restart machinery is needed
+	 */
+	public static boolean usesRestartSystem(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (usesRestartSystemForm(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesRestartSystemForm(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			String name = head.name();
+			int sep = name.lastIndexOf(':');
+			String plain = sep >= 0 ? name.substring(sep + 1) : name;
+			if (RESTART_SYSTEM_MACROS.contains(plain) || RESTART_RUNTIME_FUNCTION_NAMES.contains(plain)) {
+				return true;
+			}
+			if (LispNames.FUNCTION.equals(name) && cons.cdr() instanceof LispCons fnCons
+					&& fnCons.car() instanceof LispSymbol fnSym
+					&& RESTART_RUNTIME_FUNCTION_NAMES.contains(fnSym.name())) {
+				return true;
+			}
+		}
+		return usesRestartSystemForm(cons.car()) || usesRestartSystemForm(cons.cdr());
+	}
+
+	/**
+	 * The restart-runtime forms: the two stack globals plus the defuns
+	 * ({@code %run-handlers}, {@code find-restart}, {@code invoke-restart},
+	 * {@code compute-restarts}, {@code restart-name}, {@code muffle-warning},
+	 * {@code abort}, {@code continue}). The compile path injects them once per
+	 * restart-mode program ({@code expandTopLevelDefinitions}); the interpreter evaluates
+	 * them on the first restart-system form or the first resolution of one of the
+	 * function names (the {@code slotUnboundDefuns} pattern). A restart record is the
+	 * list {@code (%restart name invoker report interactive test)} whose invoker takes
+	 * the invocation-argument LIST (one fixed-arity funcall -- no apply, which would drag
+	 * the WASM eval runtime into every restart-mode program).
+	 * @return the defvar and defun forms, in evaluation order
+	 */
+	public static List<LispVal> restartRuntimeForms() {
+		List<LispVal> forms = new java.util.ArrayList<>(restartRuntimeGlobalForms());
+		forms.addAll(restartRuntimeDefunForms(java.util.Set.of()));
+		return forms;
+	}
+
+	/**
+	 * The two restart-runtime stack globals, nil-initialized (prepended on the compile
+	 * path).
+	 */
+	public static List<LispVal> restartRuntimeGlobalForms() {
+		return List.of(
+				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.HANDLER_CLUSTERS_VAR),
+						LispNil.INSTANCE)),
+				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.RESTART_CLUSTERS_VAR),
+						LispNil.INSTANCE)));
+	}
+
+	/**
+	 * The restart-runtime defuns, skipping names the user program defines itself.
+	 * @param userDefinedNames function names defined by the program
+	 * @return the defun forms
+	 */
+	public static List<LispVal> restartRuntimeDefunForms(java.util.Set<String> userDefinedNames) {
+		List<LispVal> forms = new java.util.ArrayList<>();
+		forms.add(runHandlersDefun());
+		if (!userDefinedNames.contains(LispNames.FIND_RESTART)) {
+			forms.add(findRestartDefun());
+		}
+		if (!userDefinedNames.contains(LispNames.INVOKE_RESTART)) {
+			forms.add(invokeRestartDefun());
+		}
+		if (!userDefinedNames.contains(LispNames.COMPUTE_RESTARTS)) {
+			forms.add(computeRestartsDefun());
+		}
+		if (!userDefinedNames.contains(LispNames.RESTART_NAME)) {
+			forms.add(restartNameDefun());
+		}
+		if (!userDefinedNames.contains(LispNames.MUFFLE_WARNING)) {
+			forms.add(muffleWarningDefun());
+		}
+		if (!userDefinedNames.contains(LispNames.ABORT)) {
+			forms.add(abortDefun());
+		}
+		if (!userDefinedNames.contains(LispNames.CONTINUE)) {
+			forms.add(continueDefun());
+		}
+		return forms;
+	}
+
+	// (defun %run-handlers (__rh_c)
+	// (let ((__rh_clusters %handler-clusters%))
+	// (while (consp __rh_clusters)
+	// (let ((__rh_cluster (car __rh_clusters)))
+	// (setq __rh_clusters (cdr __rh_clusters))
+	// (let ((__rh_saved %handler-clusters%))
+	// (unwind-protect
+	// (progn
+	// (setq %handler-clusters% __rh_clusters) ; CLHS: handlers run
+	// (let ((__rh_entries __rh_cluster)) ; outside their cluster
+	// (while (consp __rh_entries)
+	// (when (funcall (car (car __rh_entries)) __rh_c)
+	// (funcall (cdr (car __rh_entries)) __rh_c))
+	// (setq __rh_entries (cdr __rh_entries)))))
+	// (setq %handler-clusters% __rh_saved))))))
+	// nil)
+	private static LispVal runHandlersDefun() {
+		LispSymbol c = new LispSymbol("__rh_c");
+		LispSymbol clusters = new LispSymbol("__rh_clusters");
+		LispSymbol cluster = new LispSymbol("__rh_cluster");
+		LispSymbol saved = new LispSymbol("__rh_saved");
+		LispSymbol entries = new LispSymbol("__rh_entries");
+		LispSymbol globalVar = new LispSymbol(LispNames.HANDLER_CLUSTERS_VAR);
+		LispVal entry = callOf(LispNames.CAR, entries);
+		LispVal callEntry = makeIf(
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CAR, entry), c)),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CDR, entry), c)),
+				LispNil.INSTANCE);
+		LispVal entriesLoop = makeLet(entries.name(), cluster,
+				listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, entries), callEntry,
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), entries, callOf(LispNames.CDR, entries))))));
+		LispVal runCluster = makeLet(saved.name(), globalVar,
+				listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT),
+						listToCons(List.of(new LispSymbol(LispNames.PROGN),
+								listToCons(List.of(new LispSymbol(LispNames.SETQ), globalVar, clusters)), entriesLoop)),
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), globalVar, saved)))));
+		LispVal clustersLoop = makeLet(clusters.name(), globalVar, listToCons(List.of(new LispSymbol(LispNames.WHILE),
+				callOf(LispNames.CONSP, clusters),
+				makeLet(cluster.name(), callOf(LispNames.CAR, clusters),
+						listToCons(List.of(new LispSymbol(LispNames.PROGN), listToCons(
+								List.of(new LispSymbol(LispNames.SETQ), clusters, callOf(LispNames.CDR, clusters))),
+								runCluster))))));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.RUN_HANDLERS_INTERNAL),
+				listToCons(List.<LispVal>of(c)), clustersLoop, LispNil.INSTANCE));
+	}
+
+	// (defun find-restart (__fr_id &optional __fr_c)
+	// (if (and (consp __fr_id) (eq (car __fr_id) '%restart))
+	// __fr_id
+	// (let ((__fr_clusters %restart-clusters%) (__fr_found nil))
+	// (while (and (null __fr_found) (consp __fr_clusters))
+	// (let ((__fr_entries (car __fr_clusters)))
+	// (while (and (null __fr_found) (consp __fr_entries))
+	// (when (eq (car (cdr (car __fr_entries))) __fr_id)
+	// (setq __fr_found (car __fr_entries)))
+	// (setq __fr_entries (cdr __fr_entries))))
+	// (setq __fr_clusters (cdr __fr_clusters)))
+	// __fr_found)))
+	private static LispVal findRestartDefun() {
+		LispSymbol id = new LispSymbol("__fr_id");
+		LispSymbol cond = new LispSymbol("__fr_c");
+		LispSymbol clusters = new LispSymbol("__fr_clusters");
+		LispSymbol found = new LispSymbol("__fr_found");
+		LispSymbol entries = new LispSymbol("__fr_entries");
+		LispSymbol globalVar = new LispSymbol(LispNames.RESTART_CLUSTERS_VAR);
+		LispVal isRecord = listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.CONSP, id),
+				listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), callOf(LispNames.CAR, id),
+						quoteOf(LispNames.RESTART_RECORD_TAG)))));
+		LispVal entryName = callOf(LispNames.CAR, callOf(LispNames.CDR, callOf(LispNames.CAR, entries)));
+		LispVal innerLoop = makeLet(entries.name(), callOf(LispNames.CAR, clusters),
+				listToCons(List.of(new LispSymbol(LispNames.WHILE),
+						listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.NULL, found),
+								callOf(LispNames.CONSP, entries))),
+						makeIf(listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), entryName, id)),
+								listToCons(
+										List.of(new LispSymbol(LispNames.SETQ), found, callOf(LispNames.CAR, entries))),
+								LispNil.INSTANCE),
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), entries, callOf(LispNames.CDR, entries))))));
+		LispVal outerLoop = listToCons(List.of(new LispSymbol(LispNames.WHILE),
+				listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.NULL, found),
+						callOf(LispNames.CONSP, clusters))),
+				innerLoop,
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), clusters, callOf(LispNames.CDR, clusters)))));
+		LispVal search = listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(
+				List.of(listToCons(List.of(clusters, globalVar)), listToCons(List.of(found, LispNil.INSTANCE)))),
+				outerLoop, found));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.FIND_RESTART),
+				listToCons(List.of(id, new LispSymbol(LispNames.LAMBDA_OPTIONAL), cond)),
+				makeIf(isRecord, id, search)));
+	}
+
+	// (defun invoke-restart (__ir_r &rest __ir_args)
+	// (let ((__ir_restart (find-restart __ir_r)))
+	// (if (null __ir_restart)
+	// (error "No active restart: ~a" __ir_r)
+	// (funcall (car (cdr (cdr __ir_restart))) __ir_args))))
+	private static LispVal invokeRestartDefun() {
+		LispSymbol r = new LispSymbol("__ir_r");
+		LispSymbol args = new LispSymbol("__ir_args");
+		LispSymbol restart = new LispSymbol("__ir_restart");
+		LispVal invoker = callOf(LispNames.CAR, callOf(LispNames.CDR, callOf(LispNames.CDR, restart)));
+		LispVal body = makeLet(restart.name(), callOf(LispNames.FIND_RESTART, r),
+				makeIf(callOf(LispNames.NULL, restart),
+						listToCons(
+								List.of(new LispSymbol(LispNames.ERROR), new LispString("No active restart: ~a"), r)),
+						listToCons(List.of(new LispSymbol(LispNames.FUNCALL), invoker, args))));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.INVOKE_RESTART),
+				listToCons(List.of(r, new LispSymbol(LispNames.LAMBDA_REST), args)), body));
+	}
+
+	// (defun compute-restarts (&optional __cr_c)
+	// (let ((__cr_out nil) (__cr_clusters %restart-clusters%))
+	// (while (consp __cr_clusters)
+	// (let ((__cr_entries (car __cr_clusters)))
+	// (while (consp __cr_entries)
+	// (setq __cr_out (cons (car __cr_entries) __cr_out))
+	// (setq __cr_entries (cdr __cr_entries))))
+	// (setq __cr_clusters (cdr __cr_clusters)))
+	// (nreverse __cr_out)))
+	private static LispVal computeRestartsDefun() {
+		LispSymbol cond = new LispSymbol("__cr_c");
+		LispSymbol out = new LispSymbol("__cr_out");
+		LispSymbol clusters = new LispSymbol("__cr_clusters");
+		LispSymbol entries = new LispSymbol("__cr_entries");
+		LispSymbol globalVar = new LispSymbol(LispNames.RESTART_CLUSTERS_VAR);
+		LispVal innerLoop = makeLet(entries.name(), callOf(LispNames.CAR, clusters), listToCons(List.of(
+				new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, entries),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), out,
+						listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, entries), out)))),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), entries, callOf(LispNames.CDR, entries))))));
+		LispVal outerLoop = listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, clusters),
+				innerLoop,
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), clusters, callOf(LispNames.CDR, clusters)))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(
+						List.of(listToCons(List.of(out, LispNil.INSTANCE)), listToCons(List.of(clusters, globalVar)))),
+				outerLoop, callOf(LispNames.NREVERSE, out)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.COMPUTE_RESTARTS),
+				listToCons(List.of(new LispSymbol(LispNames.LAMBDA_OPTIONAL), cond)), body));
+	}
+
+	// (defun restart-name (__rn_r) (car (cdr __rn_r)))
+	private static LispVal restartNameDefun() {
+		LispSymbol r = new LispSymbol("__rn_r");
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.RESTART_NAME),
+				listToCons(List.<LispVal>of(r)), callOf(LispNames.CAR, callOf(LispNames.CDR, r))));
+	}
+
+	// (defun muffle-warning (&optional __mw_c) (invoke-restart 'muffle-warning))
+	private static LispVal muffleWarningDefun() {
+		LispSymbol cond = new LispSymbol("__mw_c");
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.MUFFLE_WARNING),
+				listToCons(List.of(new LispSymbol(LispNames.LAMBDA_OPTIONAL), cond)),
+				callOf(LispNames.INVOKE_RESTART, quoteOf(LispNames.MUFFLE_WARNING))));
+	}
+
+	// (defun abort (&optional __ab_c) (invoke-restart 'abort))
+	private static LispVal abortDefun() {
+		LispSymbol cond = new LispSymbol("__ab_c");
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.ABORT),
+				listToCons(List.of(new LispSymbol(LispNames.LAMBDA_OPTIONAL), cond)),
+				callOf(LispNames.INVOKE_RESTART, quoteOf(LispNames.ABORT))));
+	}
+
+	// (defun continue (&optional __ct_c)
+	// (let ((__ct_r (find-restart 'continue))) (if (null __ct_r) nil (invoke-restart
+	// __ct_r))))
+	private static LispVal continueDefun() {
+		LispSymbol cond = new LispSymbol("__ct_c");
+		LispSymbol r = new LispSymbol("__ct_r");
+		LispVal body = makeLet(r.name(), callOf(LispNames.FIND_RESTART, quoteOf(LispNames.CONTINUE)),
+				makeIf(callOf(LispNames.NULL, r), LispNil.INSTANCE, callOf(LispNames.INVOKE_RESTART, r)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.CONTINUE),
+				listToCons(List.of(new LispSymbol(LispNames.LAMBDA_OPTIONAL), cond)), body));
 	}
 
 	/**
@@ -17154,6 +17977,10 @@ public final class LispMacroExpander {
 	 * method limit.
 	 */
 	private static List<LispVal> runtimeErrorDefuns(ClosRegistry closRegistry) {
+		return runtimeErrorDefuns(closRegistry, false);
+	}
+
+	private static List<LispVal> runtimeErrorDefuns(ClosRegistry closRegistry, boolean signalHook) {
 		List<LispVal> defuns = new java.util.ArrayList<>();
 		LispSymbol d = new LispSymbol("%er_rd");
 		LispSymbol a = new LispSymbol("%er_ra");
@@ -17181,7 +18008,7 @@ public final class LispMacroExpander {
 				items.add(listToCons(getfParts));
 			}
 			LispVal body = expandTypedSignal(LispNames.ERROR, LispNames.ERROR_INTERNAL, new LispSymbol(info.name()),
-					items, closRegistry);
+					items, closRegistry, signalHook);
 			defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(helperName),
 					listToCons(List.<LispVal>of(ha)), body)));
 			List<String> spellings = new java.util.ArrayList<>();
@@ -17193,7 +18020,8 @@ public final class LispMacroExpander {
 			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, d, quotedSymbolList(spellings)),
 					listToCons(List.of(new LispSymbol(helperName), a)))));
 		}
-		clauses.add(listToCons(List.of(LispTrue.INSTANCE, expandObjectSignal(LispNames.ERROR_INTERNAL, d))));
+		clauses
+			.add(listToCons(List.of(LispTrue.INSTANCE, expandObjectSignal(LispNames.ERROR_INTERNAL, d, signalHook))));
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);

@@ -77,6 +77,14 @@ public final class LispEvaluator {
 
 	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
 
+	// Whether the GENERATED restart runtime (the two stack globals plus
+	// %run-handlers/find-restart/invoke-restart/...) has been evaluated into the
+	// global environment. Doubles as the signal-hook gate: before the first
+	// restart-system form no handler can be established, so error/warn/signal keep
+	// their historical expansions until then (the interpreter re-expands per
+	// evaluation, so later signals pick the hook up).
+	private boolean restartRuntimeLoaded = false;
+
 	// Forms already verified against the rontolisp:await placement rules, by identity:
 	// a lambda form evaluated repeatedly (a closure created in a loop) is walked once.
 	private final java.util.Set<LispVal> awaitCheckedForms = java.util.Collections
@@ -2283,20 +2291,39 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandCcase(cons), env);
 				case LispNames.ERROR:
 					ensureWitLoadedForConditionClass(cons);
-					return eval(LispMacroExpander.expandError(cons, this.closRegistry, true), env);
+					// The signal hook (handler-bind handlers at the signal point) is on
+					// once the restart runtime is loaded: before the first
+					// restart-system form is evaluated no handler can be established,
+					// so the historical expansion is behavior-identical -- and the
+					// interpreter re-expands per evaluation, so later signals see the
+					// hook.
+					return eval(LispMacroExpander.expandError(cons, this.closRegistry, true, this.restartRuntimeLoaded),
+							env);
 				case LispNames.CERROR:
-					return eval(LispMacroExpander.expandCerror(cons, this.closRegistry), env);
+					return eval(LispMacroExpander.expandCerror(cons, this.closRegistry, this.restartRuntimeLoaded),
+							env);
 				case LispNames.WARN:
 					ensureWitLoadedForConditionClass(cons);
-					return eval(LispMacroExpander.expandWarn(cons, this.closRegistry), env);
+					return eval(LispMacroExpander.expandWarn(cons, this.closRegistry, this.restartRuntimeLoaded), env);
 				case LispNames.SIGNAL:
 					ensureWitLoadedForConditionClass(cons);
-					return eval(LispMacroExpander.expandSignalMacro(cons, this.closRegistry), env);
+					return eval(LispMacroExpander.expandSignalMacro(cons, this.closRegistry, this.restartRuntimeLoaded),
+							env);
 				case LispNames.SIGNAL_COND_INTERNAL:
 					return evalSignalCond(cons, env);
 				case LispNames.HANDLER_CASE:
 					ensureWitLoadedForConditionClass(cons);
 					return evalHandlerCase(cons, env);
+				case LispNames.HANDLER_BIND:
+					ensureWitLoadedForConditionClass(cons);
+					ensureRestartRuntimeLoaded();
+					return eval(LispMacroExpander.expandHandlerBind(cons, this.closRegistry), env);
+				case LispNames.RESTART_BIND:
+					ensureRestartRuntimeLoaded();
+					return eval(LispMacroExpander.expandRestartBind(cons), env);
+				case LispNames.WITH_SIMPLE_RESTART:
+					ensureRestartRuntimeLoaded();
+					return eval(LispMacroExpander.expandWithSimpleRestart(cons), env);
 				case LispNames.IGNORE_ERRORS:
 					return eval(LispMacroExpander.expandIgnoreErrors(cons), env);
 				case LispNames.STABLE_SORT:
@@ -2432,6 +2459,7 @@ public final class LispEvaluator {
 				case LispNames.DEFINE_COMPILER_MACRO:
 					return evalDefineCompilerMacro(cons, env);
 				case LispNames.RESTART_CASE:
+					ensureRestartRuntimeLoaded();
 					return eval(LispMacroExpander.expandRestartCase(cons), env);
 				case LispNames.MACROLET:
 					return evalMacrolet(cons, env);
@@ -4060,6 +4088,19 @@ public final class LispEvaluator {
 				return loaded;
 			}
 		}
+		// The restart runtime (find-restart/invoke-restart/... and %run-handlers) is
+		// GENERATED like the slot helpers: the compile path injects the defuns via
+		// expandTopLevelDefinitions, the interpreter evaluates the same AST on the
+		// first resolution of one of the names (or on the first restart-system form,
+		// see ensureRestartRuntimeLoaded).
+		if (!this.restartRuntimeLoaded && (LispMacroExpander.RESTART_RUNTIME_FUNCTION_NAMES.contains(name)
+				|| LispNames.RUN_HANDLERS_INTERNAL.equals(name))) {
+			ensureRestartRuntimeLoaded();
+			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+			if (loaded != null) {
+				return loaded;
+			}
+		}
 		if (LispMacroExpander.isCarCdrComposition(name)) {
 			// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are first-class.
 			LispSymbol param = new LispSymbol("x");
@@ -4067,6 +4108,34 @@ public final class LispEvaluator {
 			return new LispLambda(List.of(param), List.of(call), this.globalEnv);
 		}
 		throw new LispEvalException("The function " + name + " is undefined");
+	}
+
+	/**
+	 * Evaluates the generated restart-runtime forms (the two stack globals plus the
+	 * restart defuns) into the global environment, once per evaluator -- the
+	 * {@code slotUnboundDefuns} pattern. Called by the restart-system special-form cases
+	 * BEFORE their expansion is evaluated (the expansions read the stack globals) and by
+	 * {@code resolveFunction} on the first resolution of a restart-runtime function name.
+	 * A name the program already defined itself is skipped, so a user redefinition wins
+	 * like it does on the compile path.
+	 */
+	private void ensureRestartRuntimeLoaded() {
+		if (this.restartRuntimeLoaded) {
+			return;
+		}
+		this.restartRuntimeLoaded = true;
+		for (LispVal form : LispMacroExpander.restartRuntimeGlobalForms()) {
+			eval(form, this.globalEnv);
+		}
+		java.util.Set<String> userDefinedNames = new java.util.HashSet<>();
+		for (String name : LispMacroExpander.RESTART_RUNTIME_FUNCTION_NAMES) {
+			if (this.globalEnv.lookupFunctionOrNull(name) != null) {
+				userDefinedNames.add(name);
+			}
+		}
+		for (LispVal form : LispMacroExpander.restartRuntimeDefunForms(userDefinedNames)) {
+			eval(form, this.globalEnv);
+		}
 	}
 
 	private LispVal evalQuote(LispCons cons) {

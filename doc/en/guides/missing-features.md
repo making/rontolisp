@@ -12,7 +12,7 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 
 | Feature | Status |
 | --- | --- |
-| restarts (`handler-bind`, `restart-case`, `invoke-restart`, `cerror`, ...) | not available |
+| restarts | available; no debugger integration (`break`, `*debugger-hook*`) and no condition-restart association |
 | `symbol-macrolet` | not available (`macrolet` is) |
 | `&whole` / `&environment` | not available; a `defmacro` lambda list takes required parameters plus one trailing `&rest`/`&body` |
 | `loop` (extended) | partial (see below) |
@@ -67,15 +67,28 @@ need `wasmtime -W exceptions=y` (37+); under `--no-gc` `catch`/`throw`,
 
 ## Restarts
 
-The condition-system core (`define-condition`, `handler-case`,
-`ignore-errors`, `signal`, typed `error`) is available, but the **restart
-system** is not: `handler-bind`, `restart-case` (accepted as a no-op that keeps
-only the primary form), `restart-bind`, `invoke-restart`,
-`with-simple-restart`, `cerror`, `abort`, `continue` and `break` are absent, and
+The condition system is complete through the restart layer:
+[`handler-bind`](../reference/macros/handler-bind.md) handlers run at the signal
+point before unwinding, [`restart-case`](../reference/macros/restart-case.md) /
+[`restart-bind`](../reference/macros/restart-bind.md) /
+[`with-simple-restart`](../reference/macros/with-simple-restart.md) establish
+restarts, and [`find-restart`](../reference/functions/find-restart.md) /
+[`invoke-restart`](../reference/functions/invoke-restart.md) /
+[`compute-restarts`](../reference/functions/compute-restarts.md) /
+[`muffle-warning`](../reference/functions/muffle-warning.md) /
+[`abort`](../reference/functions/abort.md) /
+[`continue`](../reference/functions/continue.md) drive them;
+[`cerror`](../reference/macros/cerror.md) is continuable. What is missing is the
+**interactive debugger**: `break` and `*debugger-hook*` do not exist, a restart's
+`:report` is stored but never rendered and its `:interactive` function never
+runs, and restarts are not associated with conditions (the optional condition
+argument of `find-restart`/`compute-restarts` is ignored).
 [`check-type`](../reference/macros/check-type.md) /
-[`assert`](../reference/macros/assert.md) signal without offering a re-store
-restart. On the wasm-GC backends only **signaled** conditions are catchable — a
-runtime trap still aborts.
+[`assert`](../reference/macros/assert.md) /
+[`ccase`](../reference/macros/ccase.md) still signal without offering a
+`store-value` restart. Under `--no-gc` the restart forms degrade to the primary
+form (that backend has no condition objects at all); on the wasm-GC backends
+only **signaled** conditions are catchable — a runtime trap still aborts.
 
 ## The `loop` macro
 

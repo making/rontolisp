@@ -24,7 +24,9 @@ codegen), classified in `PackageRegistry.CL_MACROS` (precedent: `error` is a
   value is a runtime `~s` argument. An optional third string replaces the
   "of type ..." part.
 - `assert` -> `(if test nil (error ...))`; with the full form the datum+args
-  become the error call and the places list is dropped (no restart system).
+  become the error call and the places list is dropped (it establishes no
+  `continue`/`store-value` restart, so there is nothing to re-store into --
+  the restart system itself exists, see `.kb/error-handling.md`).
 
 ## makeTypeTest (shared type-specifier tests)
 

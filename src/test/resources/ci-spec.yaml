@@ -1382,9 +1382,9 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
+      (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      334
+      341
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -4748,6 +4748,59 @@ cases:
       (:OUTER :INNER)
       NIL
       42
+  # The restart system (todo-196): handler-bind handlers run at the SIGNAL POINT
+  # (before unwinding) and can invoke a restart established in another function;
+  # the transfer lands back in the restart-case frame and runs the clause inline
+  # (so a (go start) clause re-enters the enclosing tagbody). This case's presence
+  # flips the whole concatenated program into restart mode, which every other
+  # case's expectations must survive -- the signal hook is a no-op without
+  # established handlers.
+  - name: restart-system
+    source: |
+      (defun ci-rs-f ()
+        (restart-case (progn (error "boom") :not-reached)
+          (:reconnect (x) (list :reconnected x))))
+      (print (handler-bind ((error (lambda (c) (invoke-restart :reconnect 42))))
+               (ci-rs-f)))
+      (defun ci-rs-retry (c)
+        (let ((r (find-restart 'ci-retry-me c)))
+          (if (null r) :none (invoke-restart r))))
+      (print (handler-bind ((error (lambda (c) (ci-rs-retry c))))
+               (let ((ci-rs-n 0))
+                 (tagbody start
+                   (restart-case
+                       (progn (setq ci-rs-n (+ ci-rs-n 1)) (when (< ci-rs-n 3) (error "again")))
+                     (ci-retry-me () (go start))))
+                 ci-rs-n)))
+      (print (handler-bind ((error (lambda (c) (invoke-restart :five 1 2 3 4 5))))
+               (restart-case (error "x")
+                 (:five (a b c d e) (list a b c d e)))))
+      (print (handler-bind ((error (lambda (c) (continue))))
+               (list :after (cerror "Continue." "problem"))))
+      (print (handler-bind ((error (lambda (c) (invoke-restart 'ci-skip))))
+               (multiple-value-list (with-simple-restart (ci-skip "Skip it") (error "x")))))
+      (print (handler-bind ((warning (lambda (w) (muffle-warning))))
+               (list :done (warn "noise"))))
+      (print (let ((ci-rs-hit nil))
+               (restart-bind ((ci-poke (lambda (v) (setq ci-rs-hit v))))
+                 (invoke-restart 'ci-poke 9)
+                 ci-rs-hit)))
+      (print (restart-case (mapcar (function restart-name) (compute-restarts))
+               (ci-aaa () nil)
+               (ci-bbb () nil)))
+      (print (restart-case (progn (abort) :not-reached) (abort () :aborted)))
+      (print (find-restart 'ci-retry-me))
+    expected: |
+      (:RECONNECTED 42)
+      3
+      (1 2 3 4 5)
+      (:AFTER NIL)
+      (NIL T)
+      (:DONE NIL)
+      9
+      (CI-AAA CI-BBB)
+      :ABORTED
+      NIL
   # A catching form in an ARGUMENT position: the enclosing call has operands live
   # when the protected region begins, and entering a handler discards them (on the
   # JVM the compiler spills them around the region). The float case keeps a raw

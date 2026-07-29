@@ -26,10 +26,14 @@
 | `typecase` | `(typecase x (integer body...) (string body...) (t default...))` | `x` の型によるディスパッチ。サポートされる型名: `integer`, `float`, `number`, `rational`, `string`, `symbol`, `keyword`, `cons`, `list`, `null`, `atom`, `character`, `hash-table`, `boolean`(および `t`/`otherwise`)と、複合指定子 `(or ...)`/`(and ...)`/`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` および `(integer 0 9)` のような範囲付き数値型。何もマッチしなければnilを返します |
 | `etypecase` | `(etypecase x (integer body...) (string body...))` | 網羅的な `typecase`。デフォルト節はなく、どの節にも型がマッチしないオブジェクトは `error` を通知します |
 | `error` | `(error "bad value: ~a" x)`, `(error 'my-error :v x)`, `(error obj)` | エラーを通知し、[`handler-case`](macros/handler-case.md) に捕捉されなければ実行を中止します。designator: リテラルの制御文字列(`format` と同じディレクティブ)、initarg 付きのクォートされたコンディション型シンボル(型付きコンディションを構築。`define-condition` の `:report` がメッセージになります)、またはコンディションオブジェクト。インタプリタとJVMはメッセージとコンディションを保持する例外をスローし、wasm-GC は捕捉フォームを含むプログラムでは WebAssembly 例外をスローし、含まなければトラップします。`format` と同様に関数値を持たないマクロです(`#'error` はサポートされません) |
-| `cerror` | `(cerror continue-format datum args...)` | `error` と同じ条件指定子の形でエラーを通知します。lite: リスタート機構がないためエラーは継続できず、continue フォーマット制御は受理された上で捨てられます |
+| `cerror` | `(cerror continue-format datum args...)` | **継続可能な**エラーを通知します: シグナルの周囲に `continue` リスタートが確立されるため、`handler-bind` ハンドラが [`continue`](functions/continue.md) を呼べば nil を返して先へ再開できます。誰も起動しなければ `error` と同じ動作です |
 | `signal` | `(signal 'my-condition :v x)` | **非致命的**なコンディションを通知します(designator は `error` と同じ): 確立済みの `handler-case` に送出され、なければ nil を返して継続します(`--no-gc` では常に nil) |
 | `handler-case` | `(handler-case expr (type (var) body...)... (:no-error (v) body...))` | `expr` を評価し、通知されたエラーをコンディション型がマッチする最初の節にディスパッチします(マッチしなければ再送出)。`:no-error` は正常終了時に実行。wasm-GC では `wasmtime -W exceptions=y` が必要。`--no-gc` ではコンパイルエラー |
 | `ignore-errors` | `(ignore-errors form...)` | フォームの値、エラー通知時は nil。`handler-case` の糖衣。wasm-GC では `wasmtime -W exceptions=y` が必要。`--no-gc` ではコンパイルエラー |
+| `handler-bind` | `(handler-bind ((type handler)...) body...)` | **シグナル点で、巻き戻しの前に**実行されるハンドラを確立します。ハンドラは [`restart-case`](macros/restart-case.md) のリスタートを起動できます。リターンしたハンドラは辞退します。`--no-gc` ではコンパイルエラー |
+| `restart-case` | `(restart-case form (name (args...) body...)...)` | 名前付きリスタートを確立して `form` を評価します。リスタートが起動されるとここまで巻き戻り、節本体がインラインで実行されます(節から外側の `tagbody` へ `go` できます)。`--no-gc` は主フォームのみの簡易展開を保ちます |
+| `restart-bind` | `(restart-bind ((name fn)...) body...)` | 関数が**起動点で**実行されるリスタートを確立します(巻き戻しなし) |
+| `with-simple-restart` | `(with-simple-restart (name fmt args...) body...)` | `restart-case` の糖衣: リスタートが起動されるとフォームから `(values nil t)` が返ります |
 | `setf` | `(setf place value)` | 一般化代入。placeとして `car`, `cdr`, `nth`, `first`..`fourth`, `rest`, `caXXXr` をサポートします |
 | `push` | `(push item place)` | placeにあるリストの先頭にitemを追加します。新しいリストを返します |
 | `pop` | `(pop place)` | placeにあるリストの先頭要素を取り除いて返します |

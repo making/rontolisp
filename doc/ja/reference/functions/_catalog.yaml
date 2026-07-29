@@ -502,3 +502,10 @@ categories:
       - { slug: unbound-slot-instance, name: "unbound-slot-instance" }
       - { slug: print-object, name: "print-object" }
       - { slug: simple-condition-format-arguments, name: "simple-condition-format-arguments" }
+      - { slug: find-restart, name: "find-restart" }
+      - { slug: invoke-restart, name: "invoke-restart" }
+      - { slug: compute-restarts, name: "compute-restarts" }
+      - { slug: restart-name, name: "restart-name" }
+      - { slug: muffle-warning, name: "muffle-warning" }
+      - { slug: abort, name: "abort" }
+      - { slug: continue, name: "continue" }

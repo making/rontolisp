@@ -28,7 +28,13 @@ unwind-protect knot + `retry-transaction`), the connection pool
 ## Prerequisites (the actual work lives there)
 
 - `.todo/195-s-sql-support.md` -- s-sql layer
-- `.todo/196-restart-system.md` -- handler-bind + restart stack (largest gate)
+- ~~`.todo/196-restart-system.md`~~ -- DONE (2026-07-29): handler-bind runs
+  handlers at the signal point, restart-case/restart-bind/with-simple-restart
+  establish restarts, find-restart returns a first-class object,
+  invoke-restart/compute-restarts/muffle-warning/abort/continue drive them and
+  `cerror` is continuable -- one shared lowering on all four backends
+  (`.kb/error-handling.md` "Phase 4"). Every postmodern shape the survey named
+  is pinned per backend and cross-backend (ci-spec `restart-system`).
 - `.todo/197-catch-throw.md` -- json-encoder
 - `.todo/198-runtime-package-and-symbol-ops.md`
 - ~~`.todo/199-clos-gaps-for-postmodern-non-mop.md`~~ -- DONE: inherited-slot
@@ -62,8 +68,9 @@ this milestone:
   the single-threaded milestone program; not fine for a `serve` handler.
 - ~~`.todo/205-probe-file-and-uiop-file-exists-p.md`~~ -- DONE: `probe-file` is
   a real primitive on all four backends and `uiop:file-exists-p` lowers onto it
-  (`.kb/read-load-streams.md`). `pomo:execute-file` still needs `.todo/196`'s
-  `restart-case` and `alexandria:read-file-into-string`. The milestone program
+  (`.kb/read-load-streams.md`). `pomo:execute-file` has its
+  `restart-case` now (todo-196) and still needs
+  `alexandria:read-file-into-string`. The milestone program
   does not use it.
 
 ## Milestone-level work (not covered by the prerequisites)

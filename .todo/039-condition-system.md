@@ -22,30 +22,36 @@
 > Only `--no-gc` rejects `unwind-protect`/`handler-case`/`ignore-errors` at
 > compile time. The catalog below is superseded by the residual list.
 
+> **Update 2026-07-29:** the RESTART layer shipped (`.todo/196`): `handler-bind`,
+> `restart-case`, `restart-bind`, `with-simple-restart`, `invoke-restart`,
+> `find-restart`, `compute-restarts`, `restart-name`, `muffle-warning`, `abort`,
+> `continue` and a continuable `cerror` are real on every backend but `--no-gc`.
+> Mechanics: the "Phase 4" section of `.kb/error-handling.md`.
+
 # Condition system — residuals
 
-**Status:** implemented except for the restart layer and the items below.
+**Status:** implemented except for the interactive debugger and the items below.
 `handler-case`, `ignore-errors`, `unwind-protect`, `signal`, `warn`,
-`define-condition`/`make-condition` and the condition class hierarchy are real
-on every backend but `--no-gc`; conditions are CLOS-subset instances and are
-caught by type. Mechanics, per-backend details and pinning tests:
-`.kb/error-handling.md`.
+`define-condition`/`make-condition`, the condition class hierarchy AND the
+restart layer are real on every backend but `--no-gc`; conditions are
+CLOS-subset instances and are caught by type. Mechanics, per-backend details and
+pinning tests: `.kb/error-handling.md`.
 
 ## Still missing
 
 | Operator | Kind | Note |
 |----------|------|------|
-| `handler-bind` | Macro | `.kb/error-handling.md` names it Phase 4 with `restart-case` |
-| `invoke-restart` | Function | the restart layer, none of which exists |
-| `with-simple-restart` | Macro | restart layer |
-| `cerror` | Function | restart layer (continuable error) |
-| `abort` | Function | restart layer |
-| `continue` | Function | restart layer |
-| `break` | Function | restart layer + REPL integration |
-| `muffle-warning` | Function | restart layer (the `warning` restart) |
+| `break` | Function | needs the interactive debugger (REPL integration) |
+| `*debugger-hook*` | Variable | same |
 | `condition-format-control` | Function | condition accessor |
 | `condition-format-arguments` | Function | condition accessor |
 | `typep` | Function | exists only as the compile-time type test, not as a function |
+
+Beyond the operator table, the restart layer's own lite deviations (a restart's
+`:report` is stored but never rendered, `:interactive` never runs, restarts are
+not associated with conditions, `check-type`/`assert`/`ccase` offer no
+`store-value` restart) are listed in `.kb/error-handling.md` and on the doc
+pages. They all reduce to "there is no interactive debugger".
 
 ## `:format-arguments` is never applied (measured 2026-07-27)
 
@@ -72,14 +78,10 @@ using the control string as-is. Both accessors in the table above
 (`condition-format-control` / `condition-format-arguments`) belong to the same
 slice.
 
-`restart-case` exists (`LispNames.java:1129`) but only as a lite lowering to its
-primary form: the restart clauses are dead code, reachable only through an
-`invoke-restart` that does not exist. A signaling primary form signals as usual.
-
-The restart layer is the lowest-priority piece and is deeply intertwined with
-the condition system; todo-116 records the
-Step-0 survey that deferred it (no library-side `invoke-restart` in the
-motivating corpus; the real gate is Postmodern proper).
+The restart layer is DONE (`.todo/196`, 2026-07-29). What survives of the old
+"no restarts" caveat is only the debugger-shaped part: `check-type`/`assert`/
+`ccase` still signal without establishing a `store-value` restart, so their
+places lists stay decorative.
 
 ### Related
 

@@ -13,7 +13,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 | 機能 | 状況 |
 | --- | --- |
-| リスタート（`handler-bind`、`restart-case`、`invoke-restart`、`cerror` など） | 利用不可 |
+| リスタート | 利用可。デバッガ統合（`break`、`*debugger-hook*`）とコンディションとの関連付けはありません |
 | `symbol-macrolet` | 利用不可（`macrolet` は利用可能） |
 | `&whole` / `&environment` | 利用不可。`defmacro` のラムダリストは必須パラメータと末尾の `&rest`/`&body` 1 つのみ |
 | `loop`（拡張版） | 一部対応（後述） |
@@ -67,15 +67,29 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 ## リスタート
 
-条件システムのコア（`define-condition`、`handler-case`、`ignore-errors`、
-`signal`、型付きの `error`）は利用できますが、**リスタートシステム**は利用
-できません: `handler-bind`、`restart-case`（主フォームだけを残す no-op として
-受理）、`restart-bind`、`invoke-restart`、`with-simple-restart`、`cerror`、
-`abort`、`continue`、`break` は存在せず、
+コンディションシステムはリスタート層まで揃っています:
+[`handler-bind`](../reference/macros/handler-bind.md) のハンドラは巻き戻しの
+前にシグナル点で実行され、[`restart-case`](../reference/macros/restart-case.md) /
+[`restart-bind`](../reference/macros/restart-bind.md) /
+[`with-simple-restart`](../reference/macros/with-simple-restart.md) が
+リスタートを確立し、[`find-restart`](../reference/functions/find-restart.md) /
+[`invoke-restart`](../reference/functions/invoke-restart.md) /
+[`compute-restarts`](../reference/functions/compute-restarts.md) /
+[`muffle-warning`](../reference/functions/muffle-warning.md) /
+[`abort`](../reference/functions/abort.md) /
+[`continue`](../reference/functions/continue.md) がそれらを駆動します。
+[`cerror`](../reference/macros/cerror.md) は継続可能です。欠けているのは
+**対話的デバッガ**です: `break` と `*debugger-hook*` は存在せず、リスタートの
+`:report` は保存されるだけで描画されず、`:interactive` 関数も実行されません。
+またリスタートはコンディションと関連付けられません
+(`find-restart`/`compute-restarts` の省略可能なコンディション引数は無視されます)。
 [`check-type`](../reference/macros/check-type.md) /
-[`assert`](../reference/macros/assert.md) は再格納リスタートを提供せずに
-エラーを通知します。wasm-GC バックエンドで捕捉できるのは**シグナルされた**
-コンディションのみです — ランタイムトラップは依然として中断させます。
+[`assert`](../reference/macros/assert.md) /
+[`ccase`](../reference/macros/ccase.md) は依然として `store-value` リスタートを
+提供せずにエラーを通知します。`--no-gc` ではリスタートフォームは主フォームへ
+退化します(そのバックエンドにはコンディションオブジェクトがありません)。
+wasm-GC バックエンドで捕捉できるのは**シグナルされた**コンディションのみです —
+ランタイムトラップは依然として中断させます。
 
 ## `loop` マクロ
 

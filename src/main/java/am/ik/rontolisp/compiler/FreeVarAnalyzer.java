@@ -260,6 +260,23 @@ public final class FreeVarAnalyzer {
 						}
 						case LispNames.IGNORE_ERRORS -> collectFreeVars(LispMacroExpander.expandIgnoreErrors(cons),
 								boundVars, knownFunctions, globals, specialNames, freeVars);
+						// Expand before walking: the default walk would misread the
+						// handler-bind clause types / restart-case clause parameter lists
+						// as call forms or free references. The expansions bind their
+						// temps and clause parameters inside, so the free set matches the
+						// compile-time expansion's (the registry-less handler-bind
+						// expansion differs only in the type-test shape, which references
+						// no variables beyond the bound condition temp).
+						case LispNames.HANDLER_BIND ->
+							collectFreeVars(LispMacroExpander.expandHandlerBindForAnalysis(cons), boundVars,
+									knownFunctions, globals, specialNames, freeVars);
+						case LispNames.RESTART_CASE -> collectFreeVars(LispMacroExpander.expandRestartCase(cons),
+								boundVars, knownFunctions, globals, specialNames, freeVars);
+						case LispNames.RESTART_BIND -> collectFreeVars(LispMacroExpander.expandRestartBind(cons),
+								boundVars, knownFunctions, globals, specialNames, freeVars);
+						case LispNames.WITH_SIMPLE_RESTART ->
+							collectFreeVars(LispMacroExpander.expandWithSimpleRestart(cons), boundVars, knownFunctions,
+									globals, specialNames, freeVars);
 						// The with-* stream macros BIND their stream variable; the
 						// default
 						// walk would read it as a free reference and try to capture a
@@ -468,6 +485,19 @@ public final class FreeVarAnalyzer {
 						// Expand before walking (same reason as collectFreeVars).
 						case LispNames.DESTRUCTURING_BIND ->
 							collectCapturedVars(LispMacroExpander.expandDestructuringBind(cons), localVars,
+									knownFunctions, captured, insideLambda);
+						// Expand before walking: the restart expansions introduce lambdas
+						// (restart invokers, handler type tests) whose captures of USER
+						// locals the surface form cannot show.
+						case LispNames.HANDLER_BIND ->
+							collectCapturedVars(LispMacroExpander.expandHandlerBindForAnalysis(cons), localVars,
+									knownFunctions, captured, insideLambda);
+						case LispNames.RESTART_CASE -> collectCapturedVars(LispMacroExpander.expandRestartCase(cons),
+								localVars, knownFunctions, captured, insideLambda);
+						case LispNames.RESTART_BIND -> collectCapturedVars(LispMacroExpander.expandRestartBind(cons),
+								localVars, knownFunctions, captured, insideLambda);
+						case LispNames.WITH_SIMPLE_RESTART ->
+							collectCapturedVars(LispMacroExpander.expandWithSimpleRestart(cons), localVars,
 									knownFunctions, captured, insideLambda);
 						case LispNames.FUNCTION -> {
 							List<LispVal> parts = cons.toList();

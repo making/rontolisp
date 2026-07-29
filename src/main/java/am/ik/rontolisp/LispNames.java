@@ -1337,13 +1337,105 @@ public final class LispNames {
 	public static final String DEFINE_COMPILER_MACRO = "DEFINE-COMPILER-MACRO";
 
 	/**
-	 * The {@code restart-case} macro. Lite lowering to its primary form only: there is no
-	 * restart/condition system, so the restart clauses are dead code (they can only be
-	 * reached by {@code invoke-restart}, which does not exist here). A signaling primary
-	 * form therefore signals as usual; see {@code .kb/declarations-type-checks.md} for
-	 * the lite semantics shared with {@code check-type}/{@code assert}.
+	 * The {@code restart-case} macro. Establishes named restart records on the dynamic
+	 * restart stack for the extent of the primary form; an invoked restart transfers
+	 * control non-locally back to the restart-case frame and runs the clause body in its
+	 * lexical environment (so a {@code (go start)} clause body works). Expanded by
+	 * {@code LispMacroExpander.expandRestartCase} over {@code catch}/{@code throw};
+	 * {@code --no-gc} keeps the historical lite lowering to the primary form.
 	 */
 	public static final String RESTART_CASE = "RESTART-CASE";
+
+	/**
+	 * The {@code restart-bind} macro. Pushes restart records for its body's dynamic
+	 * extent WITHOUT the non-local exit of {@link #RESTART_CASE}: an invoked restart
+	 * calls the bound function at the invocation point (the CL semantics). The bound
+	 * functions receive the invocation arguments via {@code apply}.
+	 */
+	public static final String RESTART_BIND = "RESTART-BIND";
+
+	/**
+	 * The {@code with-simple-restart} macro. Sugar over {@link #RESTART_CASE}: the named
+	 * restart takes no arguments and returns {@code (values nil t)} from the
+	 * with-simple-restart form.
+	 */
+	public static final String WITH_SIMPLE_RESTART = "WITH-SIMPLE-RESTART";
+
+	/**
+	 * The {@code invoke-restart} function (restart-runtime defun). Accepts a restart name
+	 * (symbol or keyword) or a restart object from {@link #FIND_RESTART}, plus invocation
+	 * arguments; signals when no matching restart is active.
+	 */
+	public static final String INVOKE_RESTART = "INVOKE-RESTART";
+
+	/**
+	 * The {@code find-restart} function (restart-runtime defun). Returns the innermost
+	 * active restart record with the given name, or the identifier itself when it already
+	 * is a restart object, or nil. Lite: the optional condition argument is accepted and
+	 * ignored (no condition-restart association).
+	 */
+	public static final String FIND_RESTART = "FIND-RESTART";
+
+	/**
+	 * The {@code compute-restarts} function (restart-runtime defun): all active restart
+	 * records, innermost first. Lite: the optional condition argument is ignored.
+	 */
+	public static final String COMPUTE_RESTARTS = "COMPUTE-RESTARTS";
+
+	/** The {@code restart-name} accessor on a restart record (restart-runtime defun). */
+	public static final String RESTART_NAME = "RESTART-NAME";
+
+	/**
+	 * The {@code muffle-warning} function (restart-runtime defun): invokes the
+	 * {@code muffle-warning} restart every {@code warn} establishes in restart mode,
+	 * aborting the pending warning output.
+	 */
+	public static final String MUFFLE_WARNING = "MUFFLE-WARNING";
+
+	/**
+	 * The {@code abort} function (restart-runtime defun): invokes the innermost
+	 * {@code abort} restart, signalling when none is active (the CL contract).
+	 */
+	public static final String ABORT = "ABORT";
+
+	/**
+	 * The {@code continue} function (restart-runtime defun): invokes the innermost
+	 * {@code continue} restart (the one a restart-mode {@code cerror} establishes) and
+	 * returns nil when none is active.
+	 */
+	public static final String CONTINUE = "CONTINUE";
+
+	/**
+	 * The internal {@code %run-handlers} defun (restart runtime): walks the dynamic
+	 * {@code handler-bind} cluster stack at the SIGNAL POINT, before unwinding, calling
+	 * each matching handler with the condition; a handler that returns declines and the
+	 * search resumes with outer clusters. Inserted by the signal-designator expansions
+	 * before the {@code %error-cond}/{@code %signal-cond}/{@code %warn} terminal when the
+	 * program uses the restart system.
+	 */
+	public static final String RUN_HANDLERS_INTERNAL = "%RUN-HANDLERS";
+
+	/**
+	 * The dynamic {@code handler-bind} cluster stack: a top-level global holding a list
+	 * of clusters, each a list of {@code (test-closure . handler-function)} entries.
+	 * Mutated with plain {@code setq} and restored through {@code unwind-protect} (never
+	 * {@code let}-rebound), so the compile-path special-binding restore holes do not
+	 * apply.
+	 */
+	public static final String HANDLER_CLUSTERS_VAR = "%HANDLER-CLUSTERS%";
+
+	/**
+	 * The dynamic restart stack: a top-level global holding a list of clusters, each a
+	 * list of restart records. Same setq + unwind-protect discipline as
+	 * {@link #HANDLER_CLUSTERS_VAR}.
+	 */
+	public static final String RESTART_CLUSTERS_VAR = "%RESTART-CLUSTERS%";
+
+	/**
+	 * The head tag of a restart record:
+	 * {@code (%restart name invoker report interactive test)}.
+	 */
+	public static final String RESTART_RECORD_TAG = "%RESTART";
 
 	/**
 	 * The {@code macrolet} macro (local, lexically scoped macro definitions). Expands its
@@ -1575,12 +1667,14 @@ public final class LispNames {
 	public static final String IGNORE_ERRORS = "IGNORE-ERRORS";
 
 	/**
-	 * The {@code handler-bind} operator. NOT implemented on any backend (its handlers run
-	 * at the signal point without unwinding, which the condition machinery does not
-	 * model); the compilers lower a defun merely containing it to a call-time signal so a
-	 * library carrying one in dead code stays compilable -- the same stub contract as a
-	 * 2-arg {@code intern}. The interpreter errors at call time on its own (the name
-	 * resolves to no function).
+	 * The {@code handler-bind} macro. Pushes a cluster of
+	 * {@code (type-test . handler-function)} entries onto the dynamic
+	 * {@link #HANDLER_CLUSTERS_VAR} stack for its body's extent; the signal-designator
+	 * expansions call {@link #RUN_HANDLERS_INTERNAL} at the signal point, BEFORE
+	 * unwinding, so a handler can {@code invoke-restart} into a still-established
+	 * {@code restart-case}. A handler that returns declines and the search resumes.
+	 * Expanded by {@code LispMacroExpander.expandHandlerBind}; {@code --no-gc} has no
+	 * condition objects and keeps the historical call-time stub.
 	 */
 	public static final String HANDLER_BIND = "HANDLER-BIND";
 

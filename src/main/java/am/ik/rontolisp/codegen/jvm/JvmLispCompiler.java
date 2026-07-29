@@ -159,13 +159,22 @@ public final class JvmLispCompiler implements LispCompiler {
 		// accessors setf-able places and resolve make-instance/slot-value/dispatch.
 		Map<String, Integer> structAccessors = new HashMap<>();
 		ClosRegistry closRegistry = new ClosRegistry();
+		// Whether the program uses the restart system (handler-bind / restart-case /
+		// invoke-restart & friends). Decided on the SURFACE program -- the expansions
+		// happen lazily during Pass 2, so the pre-scans below cannot see their
+		// products -- and threaded into the expression compiler (the signal hook, the
+		// real cerror) and the channel gates. Computed before
+		// expandTopLevelDefinitions, which runs the same scan to inject the
+		// restart-runtime defuns.
+		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry);
 		// Whether an instance value can exist in this class at all. The predicates and
 		// _equal need the answer BEFORE any body is compiled (their shape changes), and
 		// with the gate off nothing they would guard against can be constructed -- so an
 		// instance-free program stays byte-identical to a build that never knew about
-		// instances.
-		boolean mayUseInstances = LispMacroExpander.mayCreateInstances(program, closRegistry);
+		// instances. Restart mode forces it on: the signal hook synthesizes simple-*
+		// instances for plain string signals.
+		boolean mayUseInstances = LispMacroExpander.mayCreateInstances(program, closRegistry) || restartMode;
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		// Lower a return-from that crosses a lambda boundary into an EH-based non-local
@@ -174,9 +183,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		CrossLambdaExitLowering.Result crossLambda = CrossLambdaExitLowering.lower(program);
 		program = crossLambda.program();
 		// catch/throw ride the same _nleTl channel as a lowered cross-lambda exit, so
-		// either one makes handler-case non-local-exit aware.
+		// either one makes handler-case non-local-exit aware. Restart mode rides it
+		// too: the restart-case expansion transfers through catch/throw, which the
+		// surface scans cannot see (the expansion happens during Pass 2).
 		boolean blockExitChannel = crossLambda.used() || programUsesSymbol(program, LispNames.CATCH)
-				|| programUsesSymbol(program, LispNames.THROW);
+				|| programUsesSymbol(program, LispNames.THROW) || restartMode;
 		program = LambdaLists.desugarProgram(program);
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
@@ -803,6 +814,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
 			.dynamic(this.dynamic)
 			.blockExitChannel(blockExitChannel)
+			.restartMode(restartMode)
 			.usesFloatArray(usesFloatArray)
 			.usesIntArray(usesIntArray)
 			.usesArrays(usesArrays)
@@ -3015,6 +3027,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean blockExitChannel = false;
 
 		/**
+		 * True when the program uses the restart system
+		 * ({@code LispMacroExpander.usesRestartSystem}): the error/warn/signal/cerror
+		 * expansions gain the {@code %run-handlers} signal hook and the real
+		 * {@code cerror}, matching the restart-runtime defuns
+		 * {@code expandTopLevelDefinitions} injected. Off, every signal expansion is
+		 * byte-identical to the pre-restart build.
+		 */
+		boolean restartMode = false;
+
+		/**
 		 * True when the program can produce a packed float array (a {@code #d(...)}
 		 * literal or {@code make-array :element-type 'double-float}). When set, the array
 		 * op compilers route through the {@code _fv*} dispatch helpers (which handle both
@@ -3203,6 +3225,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.layoutPool = builder.layoutPool;
 			this.dynamic = builder.dynamic;
 			this.blockExitChannel = builder.blockExitChannel;
+			this.restartMode = builder.restartMode;
 			this.usesFloatArray = builder.usesFloatArray;
 			this.usesIntArray = builder.usesIntArray;
 			this.usesArrays = builder.usesArrays;
@@ -3427,6 +3450,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean dynamic = false;
 
 			private boolean blockExitChannel = false;
+
+			private boolean restartMode = false;
 
 			private boolean usesFloatArray = false;
 
@@ -3769,6 +3794,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder dynamic(boolean dynamic) {
 				this.dynamic = dynamic;
+				return this;
+			}
+
+			Builder restartMode(boolean restartMode) {
+				this.restartMode = restartMode;
 				return this;
 			}
 

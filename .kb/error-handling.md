@@ -1,7 +1,8 @@
-# Error handling: unwind-protect + condition objects + handler-case (todo-116, WASM catching todo-129)
+# Error handling: unwind-protect + condition objects + handler-case + restarts (todo-116, WASM catching todo-129, restarts todo-196)
 
-The error-path foundation (Phases 1-3 of todo-116; Phase 4 —
-`handler-bind`/`restart-case` — is not implemented). Backend contract:
+The error-path foundation (Phases 1-4 of todo-116; Phase 4 —
+`handler-bind` + the restart stack — shipped 2026-07-29, see "Phase 4" below).
+Backend contract:
 **interpreter, JVM and the wasm-GC backends (Preview 1 + `--component`, incl.
 serve) are full; only `--no-gc` rejects `unwind-protect` / `handler-case` /
 `ignore-errors` at compile time** (its value model has no condition objects and
@@ -296,11 +297,15 @@ has to invent one.
 
 ## cerror + signal-operator function values (todo-085, cl-base64)
 
-`cerror` exists as a lite lowering: `(cerror continue-format datum args...)` ->
-`(error datum args...)` (`LispMacroExpander.expandCerror`; no restarts, so the error is
-not continuable and the continue format control is dropped). Dispatched in the evaluator
-and both compilers like `error`; in `PackageRegistry.CL_MACROS` (pinned list-macros
-updated).
+`cerror` has TWO lowerings, selected by the restart-mode gate (Phase 4 above).
+Outside restart mode it keeps the lite `(cerror continue-format datum args...)` ->
+`(error datum args...)` collapse (`LispMacroExpander.expandCerror(cons, registry)`; the
+continue format control is dropped) — behavior-identical there, because with no restart
+runtime nothing could invoke a `continue` restart anyway, and it keeps such a program
+byte-identical. In restart mode `expandCerror(cons, registry, true)` emits the REAL
+`(restart-case (error datum args...) (continue () :report continue-format nil))`, so
+`(continue)` resumes past it with nil. Dispatched in the evaluator and both compilers
+like `error`; in `PackageRegistry.CL_MACROS` (pinned list-macros updated).
 
 `error`/`signal`/`warn` (and `cerror`) also have FUNCTION values, because cl-base64
 signals via `(apply #'error (list 'bad-base64-character :input ...))`:
@@ -352,24 +357,116 @@ Pinned by the `runtime-type-dispatch-residue` and
 `JvmLispCompilerTest#compileAndRunErrorWithComputedConditionType` and
 `JzonE2eTest`.
 
-## handler-bind: a call-time stub on the compile paths
+## Phase 4 — handler-bind + the restart stack (todo-196)
 
-`handler-bind` is NOT implemented on any backend (its handlers run at the
-signal point without unwinding, which the condition machinery does not model).
-The interpreter errors at call time on its own (the name resolves to no
-function) — which is why cl-postgres LOADS there (its one real site,
-public.lisp's `wait-for-notification`, is never called by the driver's normal
-paths). The compilers compile every defun body eagerly, so the name is now in
-`PackageRegistry.CL_MACROS` and both expression compilers lower the form to
-`LispMacroExpander.handlerBindStub()` — an unconditional `(error
-"handler-bind is not supported on compiled backends")`, the 2-arg `intern`
-stub contract: a library merely CONTAINING the form stays compilable and
-signals only if the site actually runs. The same session generalized the
-contract to UNDEFINED functions: a call to a name with no definition compiles
-to `The function X is undefined` at call time (plus a compile-time warning),
-matching the interpreter's late binding — cl-postgres references
-`stream-error-stream` (a CL condition accessor rontolisp does not provide) on
-an error path only.
+**The invariant: the restart system is ONE shared Lisp-level lowering in
+`LispMacroExpander`, identical on the interpreter, the JVM and both wasm-GC
+backends.** No backend has a per-form compiler class for it; every backend
+reaches the same expansions through its ordinary dispatch, so a divergence can
+only come from a difference in the primitives underneath (`catch`/`throw`,
+`unwind-protect`, globals, closures) — all of which are pinned cross-backend
+already. `--no-gc` is the one exception and keeps the historical lite lowering.
+
+- **Two dynamic stacks, both TOP-LEVEL GLOBALS** (`%HANDLER-CLUSTERS%`,
+  `%RESTART-CLUSTERS%`, injected as `defvar`s), mutated with plain `setq` and
+  restored through an `unwind-protect` cleanup over a LEXICALLY saved value.
+  **They are deliberately NOT special-`let` rebindings.** The compile paths skip
+  the special-binding restore on the error-throw, `catch`/`throw` and
+  cross-lambda `return-from` unwind channels (`.todo/192`,
+  `.kb/dynamic-special-variables.md` limitation 2), while `unwind-protect`
+  cleanups run on EVERY channel on EVERY backend (pinned by the ci-spec
+  `unwind-protect-cleanups-and-return-channel` and `catch-throw` cases). Using a
+  special binding here would have leaked a handler cluster on exactly the path
+  the feature exists for. **If you ever move these to `let`, the restore holes
+  come back.**
+- **The restart transfer rides `catch`/`throw`** with a FRESH cons as the tag
+  (`(list '%restart)`), so tag identity is `eq` and cannot collide with a user
+  tag. That buys, for free and already pinned: crossing function boundaries,
+  running intervening `unwind-protect` cleanups, and passing through
+  `handler-case` regions uncaught (`.kb/do-return-block.md`).
+- **Clause bodies are compiled INLINE in the dispatch, never wrapped in a
+  lambda.** That is what makes postmodern's `transaction.lisp` shape work: the
+  clause body `(go start)` targets a tagbody of the SAME function, and
+  cross-lambda `go` is unsupported on both compile paths. A lambda wrapper would
+  have turned every retry clause into that unsupported shape.
+- `restart-case` shape: `(let* ((tag (list '%restart)) (res (catch tag (let
+  ((saved %restart-clusters%)) (unwind-protect (progn <push> (cons -1
+  (multiple-value-list <form>))) (setq %restart-clusters% saved)))))) (let ((idx
+  (car res)) (args (cdr res))) <if idx = k then clause-k-with-args-bound ... else
+  (values-list args)>))`. Normal completion carries the primary form's values
+  through `multiple-value-list`/`values-list`, so `(restart-case (values 1 2)
+  ...)` still answers two values. A restart record is the list `(%restart name
+  invoker report interactive test)`; the invoker takes the argument LIST and is
+  called with ONE fixed-arity `funcall` — `apply` would drag the WASM eval
+  runtime into every restart program (its gate is a surface scan).
+- `handler-bind` pushes one cluster of `(type-test-closure . handler)` entries;
+  the test closure is `makeHandlerTypeTest` over the condition, i.e. the same
+  test a `handler-case` clause compiles to. `%run-handlers` walks the clusters
+  and, per CLHS, rebinds the global to the REMAINING clusters while a cluster
+  runs, so a handler that itself signals does not re-enter its own cluster
+  (pinned: `handlerSignalingInsideHandlerDoesNotSeeOwnCluster` in all three
+  suites). A handler that returns declines and the walk continues.
+- **The signal hook.** `expandError`/`expandWarn`/`expandSignalMacro` take a
+  `signalHook` boolean; when set they insert `(%run-handlers <instance>)` BEFORE
+  the `%error-cond`/`%signal-cond`/`%warn` terminal, so handlers run at the
+  signal point with the signaling frame's restarts still established. The
+  string-designator arms synthesize the same `simple-*` instance a
+  `handler-case` would. `cerror` in restart mode becomes real: `(restart-case
+  (error ...) (continue () :report cfc nil))`. Restart-mode `warn` is wrapped in
+  a `muffle-warning` `restart-case` so `(muffle-warning)` aborts the output.
+- **The gate is `LispMacroExpander.usesRestartSystem(program)`, computed on the
+  SURFACE program** (the four macros plus a call to / `#'` reference of a
+  restart-runtime function). It must be computed before
+  `expandTopLevelDefinitions` (which re-runs it to inject the runtime defuns and
+  the two globals) and threaded into: the JVM `blockExitChannel` / WASM
+  `blockExitTag` (the expansions ride `catch`/`throw`, and on WASM that also
+  implies EH mode, which their `unwind-protect`s need), `mayUseInstances` (the
+  hook constructs `simple-*` instances), and `Ctx.restartMode` (the signal hook +
+  real `cerror`). **All of these pre-scans run before Pass 2, where the
+  expansions actually happen, so none of them can see the expansion products —
+  that is why the gate is a separate surface scan and not a consequence.** A
+  program without a restart form keeps every one of these off and stays
+  byte-identical.
+  - The WASM chunked top level clones `Ctx` through `WasmAsyncEmit.freshCtx`,
+    which enumerates the flags EXPLICITLY. `restartMode` had to be added there
+    too: without it the top-level chunks compiled the signal hook OFF while
+    defun bodies had it ON, so a `handler-bind` at top level silently never ran
+    its handlers (measured, then fixed). Any future `Ctx` flag needs the same
+    line.
+- **Interpreter**: no injection pass, so `ensureRestartRuntimeLoaded()`
+  evaluates the same generated AST on the first restart-system form or the first
+  resolution of a restart-runtime name — the `slotUnboundDefuns` precedent. The
+  flag doubles as the signal-hook gate: before the first restart form no handler
+  can exist, so the historical expansions are behavior-identical, and the
+  interpreter re-expands per evaluation so later signals pick the hook up.
+- **`FreeVarAnalyzer` learned all four macros** (expand-before-walking).
+  `handler-bind` uses `expandHandlerBindForAnalysis`, which substitutes `t` for
+  the clause type tests so an unknown or compound type spec cannot reject the
+  analysis; the variable structure is otherwise identical.
+- Lite deviations (documented on the doc pages): `&optional` clause parameters
+  take nil rather than their default, no condition-restart association (the
+  optional condition argument of `find-restart`/`compute-restarts` is ignored),
+  restart records print as plain lists, `:report`/`:interactive` are stored but
+  never rendered/run (no debugger — `break`/`*debugger-hook*` remain absent), and
+  `check-type`/`assert`/`ccase` still offer no `store-value` restart.
+- Pinned by the restart block of `LispEvaluatorTest` / `JvmLispCompilerTest` /
+  the `ehRestart*`/`ehHandlerBind*` block of `WasmLispCompilerIntegrationTest`
+  (15-16 cases each, mirroring the postmodern site survey: keyword restart
+  invoked across functions, nested handler-bind layers, `find-restart` object +
+  `(go start)` clause, 5-argument restart, `restart-bind`,
+  `with-simple-restart`, `cerror`/`continue`, `muffle-warning`) and the
+  cross-backend ci-spec `restart-system` case. **That ci-spec case puts the whole
+  concatenated program into restart mode**, so every other case's expectations
+  now also exercise the signal hook — a hook regression shows up as an unrelated
+  case failing.
+
+### Undefined functions keep the call-time stub contract
+
+The same stub contract `handler-bind` used to use still covers UNDEFINED
+functions: a call to a name with no definition compiles to `The function X is
+undefined` at call time (plus a compile-time warning), matching the
+interpreter's late binding — cl-postgres references `stream-error-stream` (a CL
+condition accessor rontolisp does not provide) on an error path only.
 
 ## Pinned lists and tests
 
@@ -393,17 +490,23 @@ complaint and only failed at link time — and cross-backend by the ci-spec
 `ParseNumberE2eTest` now expects the `:report`-rendered `Invalid number: ...`
 message (the stopgap `Condition ... was signalled.` pin was updated).
 
-## Out of scope (Phase 4+ / future)
+## Out of scope (still)
 
-`handler-bind`, `restart-case`/`invoke-restart` (DEFERRED 2026-07-12 after the
-source survey below), `muffle-warning`, `cerror` (undefined; a lite `cerror` →
-`error` lowering is an M4/M5-sized item, see the survey), `break`, `--no-gc`
-catching (a scalar error-code data path would be the shape if ever needed; the
-GC path's `$lisp-cond` tag has no MVP equivalent, which is why `--no-gc` rejects
-the catching forms outright rather than degrading), and the
-special-`let`-restore-on-return compile-path limit.
+The interactive debugger (`break`, `*debugger-hook*`, rendering a restart's
+`:report`, running its `:interactive` function), condition-restart association,
+a `store-value` restart for `check-type`/`assert`/`ccase`, `--no-gc` catching (a
+scalar error-code data path would be the shape if ever needed; the GC path's
+`$lisp-cond` tag has no MVP equivalent, which is why `--no-gc` rejects the
+catching forms outright rather than degrading), and the
+special-`let`-restore-on-return compile-path limit (`.todo/192` — note the
+restart stacks deliberately avoid it, see Phase 4 above).
 
-### The Phase 4 survey (2026-07-12) — why restarts are deferred
+### The Phase 4 survey (2026-07-12) — the shapes Phase 4 had to satisfy
+
+**Superseded 2026-07-29**: Phase 4 shipped (see above); this survey is kept
+because it is the source-level justification for the design decisions the Phase
+4 section refers back to (why `restart-case` alone was not enough, and which
+postmodern shapes the tests mirror).
 
 Surveyed the cached `~/.rontolisp/quicklisp/software/postmodern-20260101-git`
 sources (cl-postgres v2026-01, the `.todo/115` target) for every real use of
