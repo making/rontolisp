@@ -131,9 +131,6 @@ public final class LispNames {
 	/** The {@code get-internal-run-time} built-in function. */
 	public static final String GET_INTERNAL_RUN_TIME = "GET-INTERNAL-RUN-TIME";
 
-	/** The {@code getenv} built-in function. */
-	public static final String GETENV = "GETENV";
-
 	/** The {@code sin} built-in function. */
 	public static final String SIN = "SIN";
 
@@ -4550,6 +4547,17 @@ public final class LispNames {
 
 	/** {@code uiop:namestring} (stub). */
 	public static final String NAMESTRING = "NAMESTRING";
+
+	/**
+	 * {@code uiop:getenv} -- not a stub: reading an environment variable is a real
+	 * built-in on every backend. Common Lisp has NO {@code getenv}, so this is the only
+	 * spelling rontolisp offers; the operator is dispatched on its qualified name
+	 * ({@link #UIOP_GETENV}) by both compilers, the way {@code usocket:with-*} is.
+	 */
+	public static final String GETENV = "GETENV";
+
+	/** The canonical package-qualified spelling of {@link #GETENV}. */
+	public static final String UIOP_GETENV = UIOP_PKG + ":" + GETENV;
 
 	/** {@code uiop:os-unix-p} (stub). */
 	public static final String OS_UNIX_P = "OS-UNIX-P";

@@ -139,8 +139,9 @@ A complete, copy-paste runnable Node + browser example is in the
 
 The eight WASI import slots are filled with internal trap stubs so every
 function index stays fixed (no other codegen changes). This mode is for
-**pure-compute** exports only: any I/O (`print`/`read`/`open`/`getenv`/time/
-`random`, including a top-level form that prints) hits a stub and **traps**.
+**pure-compute** exports only: any I/O (`print`/`read`/`open`/`uiop:getenv`/
+time/`random`, including a top-level form that prints) hits a stub and
+**traps**.
 It is Preview 1 only — `--no-wasi` is ignored under `--component`.
 
 Because the module is a reactor (not a WASI command), its top-level

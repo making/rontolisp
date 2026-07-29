@@ -121,7 +121,7 @@ examples/browser/wasm-browser/build.sh
 
 - **Input channels.** A WASI command cannot be handed arguments the way a
   function call can. To pass data in, use **stdin** (`read-line`), **environment
-  variables** (`getenv`), or compile the input into the program. This shim
+  variables** (`uiop:getenv`), or compile the input into the program. This shim
   supports stdin (demoed by `greet.wasm`) and env (pass `{ env: { NAME: "Ada" } }`
   to `runWasm`); command-line args are not wired (rontolisp's output does not
   import `args_get`).

@@ -63,7 +63,7 @@ wasmtime run -W gc=y --dir . fileio.wasm
 - `random` draws real entropy from `wasi:random@0.3.0` (Preview 1 uses the
   host's `random_get`), so `(random N)` differs each run.
   `get-universal-time` / `get-internal-real-time` / `get-internal-run-time`
-  read `wasi:clocks@0.3.0` (`system-clock`/`monotonic-clock`), and `getenv`
+  read `wasi:clocks@0.3.0` (`system-clock`/`monotonic-clock`), and `uiop:getenv`
   reads `wasi:cli/environment@0.3.0`.
 - Outgoing HTTP (`rontolisp:fetch` with the `rontolisp:await` /
   `rontolisp:futurep` future operations) works in component mode, including

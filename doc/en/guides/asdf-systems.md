@@ -151,7 +151,7 @@ real library) resolve the name to a bundled shim instead of downloading it.
 | `flexi-streams` | pass-through streams (a flexi stream IS the underlying stream) |
 | `float-features` | `single-float-bits`/`bits-single-float` and the double variants over the IEEE 754 bit primitives (interpreter + JVM; the WASM numeric model cannot carry 64-bit bit patterns) |
 | `bordeaux-threads` (nickname `bt`) | the locking subset — `make-lock`, `acquire-lock`, `release-lock`, `with-lock-held`, `*supports-threads-p*` — over [`rontolisp:make-mutex`](../reference/functions/rontolisp-make-mutex.md) and friends. Thread creation is deliberately absent: no backend can spawn one from Lisp, so a shim that pretended otherwise would silently sequentialize a program instead of failing to build. `make-lock` returns a reentrant lock (upstream's is not) and `acquire-lock`'s `:wait-p` is ignored — the acquisition always blocks |
-| `uiop` | a package stub plus [`uiop:add-package-local-nickname`](../reference/functions/add-package-local-nickname.md) |
+| `uiop` | mostly a package stub; the members with real definitions are [`uiop:getenv`](../reference/functions/getenv.md) (rontolisp's only spelling of it — Common Lisp has no `getenv`), `uiop:file-exists-p` (the same operation as [`probe-file`](../reference/functions/probe-file.md)), `uiop:merge-pathnames*` and [`uiop:add-package-local-nickname`](../reference/functions/add-package-local-nickname.md) |
 
 The shims are deliberately thin: they satisfy what the loadable libraries
 actually call, not the full upstream APIs.

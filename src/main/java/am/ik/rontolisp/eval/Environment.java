@@ -1998,11 +1998,14 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.GET_INTERNAL_RUN_TIME, args, 0);
 			return new LispInteger(System.nanoTime() / 1000000L);
 		}));
-		// getenv: the value of an environment variable as a string, or nil if unset.
-		env.defineFunction(LispNames.GETENV, new LispFunction(LispNames.GETENV, args -> {
-			requireArgCount(LispNames.GETENV, args, 1);
+		// uiop:getenv: the value of an environment variable as a string, or nil if unset.
+		// Homed in uiop, not cl: Common Lisp has no getenv, and uiop's is the portable
+		// spelling every implementation-independent library already uses.
+		String getenvName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.GETENV);
+		env.defineFunction(getenvName, new LispFunction(getenvName, args -> {
+			requireArgCount(getenvName, args, 1);
 			if (!(args.get(0) instanceof LispString name)) {
-				throw new LispEvalException("getenv expects a string, got: " + args.get(0).print());
+				throw new LispEvalException(getenvName + " expects a string, got: " + args.get(0).print());
 			}
 			String value = System.getenv(name.value());
 			return value == null ? LispNil.INSTANCE : new LispString(value);

@@ -288,7 +288,7 @@ and whose `%serve-handle` the core exports as `handle`. The one helper module is
 satisfy its `wasi_snapshot_preview1` imports: `random_get` over `get-random-u64`,
 `clock_time_get` over the 0.3 clocks, `fd_write` (fd 1/2) over `write-via-stream` + the
 stream/future built-ins (the base `adapter.wat`'s cli path), a zero environment for
-`environ_*` (`getenv` returns nil), EOF for `fd_read`, errno 76 for `path_open` (no
+`environ_*` (`uiop:getenv` returns nil), EOF for `fd_read`, errno 76 for `path_open` (no
 filesystem in the service world).
 
 `WasmServeComponentBuilder.build` wires mem -> bridge -> core, lowers the fixed

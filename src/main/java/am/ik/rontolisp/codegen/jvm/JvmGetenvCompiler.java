@@ -3,13 +3,14 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles {@code getenv}: returns the value of an environment variable as a string, or
- * {@code nil} (a {@code null} reference at runtime) when it is unset. The argument is a
- * runtime string, which carries surrounding quotes ({@code "PATH"}); the quotes are
+ * Compiles {@code uiop:getenv}: returns the value of an environment variable as a string,
+ * or {@code nil} (a {@code null} reference at runtime) when it is unset. The argument is
+ * a runtime string, which carries surrounding quotes ({@code "PATH"}); the quotes are
  * stripped before calling {@code System.getenv} and re-applied to a non-null result so it
  * is a proper Lisp string.
  */
@@ -21,7 +22,8 @@ final class JvmGetenvCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		if (args.size() != 2) {
-			throw new UnsupportedOperationException("getenv expects 1 argument, got " + (args.size() - 1));
+			throw new UnsupportedOperationException(
+					LispNames.UIOP_GETENV + " expects 1 argument, got " + (args.size() - 1));
 		}
 		final int length = JvmEmitHelper.stringMethod(ctx, "length", "()I").index();
 		final int substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();

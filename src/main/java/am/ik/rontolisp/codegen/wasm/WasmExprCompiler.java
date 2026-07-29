@@ -470,6 +470,13 @@ final class WasmExprCompiler {
 				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
+			// uiop:getenv is a real built-in, not part of the uiop stub lowering: Common
+			// Lisp has no getenv, so the qualified name is the only spelling. Dispatched
+			// here, ahead of WasmFunctionCallCompiler's expandUiopStubCall.
+			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.GETENV.equals(qn.member())) {
+				WasmGetenvCompiler.compile(cons, ctx);
+				return;
+			}
 			// The usocket with-* convenience macros are built-in LispMacroExpander
 			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.
 			if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
@@ -1164,7 +1171,6 @@ final class WasmExprCompiler {
 				case LispNames.RANDOM -> WasmRandomCompiler.compile(cons, ctx);
 				case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME ->
 					WasmTimeCompiler.compile(cons, ctx, sym.name());
-				case LispNames.GETENV -> WasmGetenvCompiler.compile(cons, ctx);
 				case LispNames.SQRT -> WasmSqrtCompiler.compile(cons, ctx);
 				case LispNames.EXP -> WasmExpCompiler.compile(cons, ctx);
 				case LispNames.LOG -> WasmLogCompiler.compile(cons, ctx);

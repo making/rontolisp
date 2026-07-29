@@ -1669,8 +1669,16 @@ class LispEvaluatorTest {
 	void evalGetenv() {
 		// An unset variable returns nil; a set one returns its value as a string. PATH is
 		// present in every CI/dev environment.
-		assertThat(eval("(getenv \"RONTOLISP_DEFINITELY_UNSET_VAR\")")).isEqualTo(LispNil.INSTANCE);
-		assertThat(eval("(stringp (getenv \"PATH\"))")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:getenv \"RONTOLISP_DEFINITELY_UNSET_VAR\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(stringp (uiop:getenv \"PATH\"))")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void bareGetenvIsNotACommonLispFunction() {
+		// Common Lisp has no getenv: the only spelling is uiop's. An unqualified call is
+		// an ordinary unknown symbol, not a built-in.
+		assertThatThrownBy(() -> eval("(getenv \"PATH\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("GETENV");
 	}
 
 	@Test
@@ -4592,8 +4600,10 @@ class LispEvaluatorTest {
 					"DELETE", "DELETE-IF", "DELETE-IF-NOT", "SUBSTITUTE", "NSUBSTITUTE", "FRESH-LINE", "EQUALP",
 					"STRING<", "STRING>", "STRING<=", "STRING>=", "STRING/=", "STRING-LESSP", "STRING-GREATERP",
 					"STRING-NOT-LESSP", "STRING-NOT-GREATERP", "STRING-NOT-EQUAL")
-			.doesNotContain("COND", "QUOTE", "DEFUN", "SETF", "%remf-tail", "CADR", "*package*", "ERROR", "%fmt-pad")
-			.contains("RANDOM", "GET-UNIVERSAL-TIME", "GET-INTERNAL-REAL-TIME", "GET-INTERNAL-RUN-TIME", "GETENV")
+			// GETENV is deliberately absent: it is uiop's, not Common Lisp's.
+			.doesNotContain("COND", "QUOTE", "DEFUN", "SETF", "%remf-tail", "CADR", "*package*", "ERROR", "%fmt-pad",
+					"GETENV")
+			.contains("RANDOM", "GET-UNIVERSAL-TIME", "GET-INTERNAL-REAL-TIME", "GET-INTERNAL-RUN-TIME")
 			.contains("READ-FROM-STRING", "PARSE-INTEGER", "CHAR", "SCHAR", "CHAR-CODE", "CODE-CHAR", "CHAR=", "CHAR<",
 					"CHAR<=", "CHAR-UPCASE", "CHAR-DOWNCASE", "CHARACTERP", "ALPHA-CHAR-P", "DIGIT-CHAR-P")
 			.contains("MAKE-HASH-TABLE", "GETHASH", "REMHASH", "CLRHASH", "HASH-TABLE-COUNT", "HASH-TABLE-P", "MAPHASH")
@@ -4615,7 +4625,7 @@ class LispEvaluatorTest {
 					"%make-string-input-stream", "%string-stream-contents", "%peek-char", "%set-fill-pointer",
 					"%string-compare", "%run-handlers")
 			.isSorted()
-			.hasSize(341);
+			.hasSize(340);
 	}
 
 	@Test

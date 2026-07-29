@@ -6563,12 +6563,14 @@ public final class LispMacroExpander {
 	 * @return the lowered expression
 	 */
 	/**
-	 * If {@code cons} calls a {@code uiop:} member (the package stub: names resolve, but
-	 * only {@code add-package-local-nickname} has a real definition), lowers the call
-	 * into an evaluate-args-then-signal form mirroring the interpreter's
-	 * undefined-function error at call time -- so a library carrying such a call on a
-	 * cold branch (jzon's pathname handling) still compiles. Returns null for any other
-	 * operator.
+	 * If {@code cons} calls a {@code uiop:} member with no real definition (the package
+	 * stub: the name resolves, but calling it is an error), lowers the call into an
+	 * evaluate-args-then-signal form mirroring the interpreter's undefined-function error
+	 * at call time -- so a library carrying such a call on a cold branch (jzon's pathname
+	 * handling) still compiles. Returns null for any other operator. The members that DO
+	 * have a definition either lower here ({@code file-exists-p},
+	 * {@code get-pathname-defaults}) or are dispatched by each backend's expression
+	 * compiler before this is consulted ({@code getenv}).
 	 * @param cons the call expression
 	 * @return the lowered expression, or null when the operator is not a uiop member
 	 */

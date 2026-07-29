@@ -2558,19 +2558,22 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void componentGetenvFromWasiEnvironment() throws Exception {
 		// Component mode reads environment variables through wasi:cli/environment.
-		assertThat(compileAndRunComponentWithEnv("(print (getenv \"RLENV\"))", "RLENV=hello")).isEqualTo("\"hello\"");
-		assertThat(compileAndRunComponentWithEnv("(print (stringp (getenv \"RLENV\")))", "RLENV=hello")).isEqualTo("T");
-		assertThat(compileAndRunComponentWithEnv("(print (getenv \"RL_UNSET\"))", "RLENV=hello")).isEqualTo("NIL");
+		assertThat(compileAndRunComponentWithEnv("(print (uiop:getenv \"RLENV\"))", "RLENV=hello"))
+			.isEqualTo("\"hello\"");
+		assertThat(compileAndRunComponentWithEnv("(print (stringp (uiop:getenv \"RLENV\")))", "RLENV=hello"))
+			.isEqualTo("T");
+		assertThat(compileAndRunComponentWithEnv("(print (uiop:getenv \"RL_UNSET\"))", "RLENV=hello")).isEqualTo("NIL");
 	}
 
 	@Test
 	void preview1GetenvDoesNotCorruptNewline() throws Exception {
-		// getenv calls environ_sizes_get with scratch addresses (ENV_COUNT_ADDR=136 ..)
+		// uiop:getenv calls environ_sizes_get with scratch addresses (ENV_COUNT_ADDR=136
+		// ..)
 		// that must NOT overlap the interned-string data segment. When they did
 		// (DATA_BASE_OFFSET=128), the host's count write at 136..139 clobbered the
 		// shared newline byte at offset 137, so every newline after a getenv printed as
 		// a NUL (0x00) instead of 0x0a. Assert the raw bytes keep real newlines.
-		assertThat(compileAndRunRawWithEnv("(getenv \"RLENV\") (format t \"X~%Y~%\")", "RLENV=hello"))
+		assertThat(compileAndRunRawWithEnv("(uiop:getenv \"RLENV\") (format t \"X~%Y~%\")", "RLENV=hello"))
 			.isEqualTo("X\nY\n");
 	}
 
@@ -7003,7 +7006,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("341");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("340");
 	}
 
 	@Test

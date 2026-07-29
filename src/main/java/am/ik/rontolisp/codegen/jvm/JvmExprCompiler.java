@@ -279,6 +279,13 @@ final class JvmExprCompiler {
 				JvmJavaInteropCompiler.compile(qn.member(), cons, ctx, className);
 				return;
 			}
+			// uiop:getenv is a real built-in, not part of the uiop stub lowering: Common
+			// Lisp has no getenv, so the qualified name is the only spelling. Dispatched
+			// here, ahead of JvmFunctionCallCompiler's expandUiopStubCall.
+			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.GETENV.equals(qn.member())) {
+				JvmGetenvCompiler.compile(cons, ctx, className);
+				return;
+			}
 			// The usocket with-* convenience macros are built-in LispMacroExpander
 			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.
 			if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
@@ -1021,7 +1028,6 @@ final class JvmExprCompiler {
 				case LispNames.RANDOM -> JvmRandomCompiler.compile(cons, ctx, className);
 				case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME ->
 					JvmTimeCompiler.compile(cons, ctx, sym.name());
-				case LispNames.GETENV -> JvmGetenvCompiler.compile(cons, ctx, className);
 				case LispNames.ISQRT -> JvmIsqrtCompiler.compile(cons, ctx, className);
 				case LispNames.EXPT -> JvmExptCompiler.compile(cons, ctx, className);
 				case LispNames.GCD -> {

@@ -346,7 +346,7 @@ categories:
       - { slug: decode-universal-time, name: "decode-universal-time" }
       - { slug: get-internal-real-time, name: "get-internal-real-time" }
       - { slug: get-internal-run-time, name: "get-internal-run-time" }
-      - { slug: getenv, name: "getenv" }
+      - { slug: getenv, name: "uiop:getenv" }
   - title: "rontolisp パッケージ"
     functions:
       - { slug: rontolisp-version, name: "rontolisp:version" }

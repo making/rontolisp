@@ -206,7 +206,7 @@ $ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
 serve コンポーネントのハンドラ内でも `random`、時刻系の組み込み関数、
 `print`（ホストの標準出力への出力）はすべて動作します — コンポーネントが
 これらを、すべての `wasi:http` ホストが提供する `wasi:random`・`wasi:clocks`・
-`wasi:cli` インタフェースへブリッジするためです。`getenv` は `nil` を返し
+`wasi:cli` インタフェースへブリッジするためです。`uiop:getenv` は `nil` を返し
 （サービングホストは環境変数を公開しません）、ファイルストリームは利用
 できません。
 詳細は

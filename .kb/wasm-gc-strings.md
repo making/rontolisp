@@ -116,7 +116,7 @@ in `WasmStringRuntimeBuilder`):
   `compileStringLiteral` (id-equal, so `eq` holds across both paths).
 - `FUNC_STR_FRESH` `_str_fresh(off,len)` -- id = counter++. RUNTIME strings:
   concatenate/subseq/case/trim, read string literals, read-line, the capture path
-  (`princ-to-string`/`prin1-to-string`/`concatenate`), `gensym`/`make-symbol`, getenv,
+  (`princ-to-string`/`prin1-to-string`/`concatenate`), `gensym`/`make-symbol`, `uiop:getenv`,
   fetch response, the host `:string` boundary, string-stream contents.
 - `FUNC_STR_TO_MEM` `_str_to_mem(str,ptr)->len` -- copies a string's array (quotes
   included) into `linear[ptr..)`; the array->linear bridge for the paths that still

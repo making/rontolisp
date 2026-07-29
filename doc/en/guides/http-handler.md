@@ -202,8 +202,8 @@ from the request and any `:headers` in the response is written back.
 Inside a served component handler, `random`, the time built-ins and `print`
 (to the host's stdout) all work — the component bridges them to the
 `wasi:random`, `wasi:clocks` and `wasi:cli` interfaces every `wasi:http` host
-provides. `getenv` returns `nil` (the serving host exposes no environment) and
-file streams are unavailable. See the
+provides. `uiop:getenv` returns `nil` (the serving host exposes no
+environment) and file streams are unavailable. See the
 [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
 reference page for the details.
 

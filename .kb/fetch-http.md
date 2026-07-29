@@ -231,7 +231,7 @@ lives in the URL library (`.kb/url.md`), not here.
   implements `random_get` over `wasi:random`, `clock_time_get` over `wasi:clocks`,
   and `fd_write` (fd 1/2) over the cli stdout/stderr path, so `random` / time
   built-ins / `print` work inside a served handler; `environ_*` report a zero
-  environment (`getenv` -> nil), `fd_read` is immediate EOF, `path_open` returns
+  environment (`uiop:getenv` -> nil), `fd_read` is immediate EOF, `path_open` returns
   errno 76 (file streams stay unavailable -- the serve world has no filesystem).
   The canonical-ABI allocator (`mem-http-client.wat`, bump pointer in the
   `CABI_HP_CELL_ADDR` = 0x10000 linear cell, base 0x10008) is reset at the top of

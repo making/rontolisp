@@ -101,10 +101,10 @@ public final class PackageRegistry {
 			LispNames.DELETE_IF, LispNames.DELETE_IF_NOT, LispNames.SUBSTITUTE, LispNames.SUBST, LispNames.NSUBSTITUTE,
 			LispNames.SEARCH, LispNames.MISMATCH, LispNames.GET_UNIVERSAL_TIME, LispNames.ENCODE_UNIVERSAL_TIME,
 			LispNames.DECODE_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME,
-			LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT, LispNames.LISTEN, LispNames.GETENV,
-			LispNames.READ_FROM_STRING, LispNames.PARSE_INTEGER, LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE,
-			LispNames.CODE_CHAR, LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_GT,
-			LispNames.CHAR_GE, LispNames.CHAR_NE, LispNames.CHAR_EQUAL, LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE,
+			LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT, LispNames.LISTEN, LispNames.READ_FROM_STRING,
+			LispNames.PARSE_INTEGER, LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR,
+			LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_GT, LispNames.CHAR_GE,
+			LispNames.CHAR_NE, LispNames.CHAR_EQUAL, LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE,
 			LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P, LispNames.ALPHANUMERICP,
 			LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT, LispNames.BIT,
 			LispNames.BOTH_CASE_P, LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION,
@@ -370,11 +370,13 @@ public final class PackageRegistry {
 		// spelling is ql; quicklisp is a built-in nickname. Does not use cl; the symbol
 		// is external.
 		define(new LispPackage(LispNames.QL_PKG, List.of(), new HashSet<>(Set.of(LispNames.QUICKLOAD))));
-		// A stub of ASDF's uiop utility package: real libraries name it in
-		// (:import-from #:uiop) clauses and call it on platform-only paths (e.g.
-		// uiop:native-namestring on a pathname branch). add-package-local-nickname is
-		// the one function with a real definition (LispEvaluator, lite: a GLOBAL
-		// nickname); the rest resolve but are undefined-function errors when called.
+		// A mostly-stub rendering of ASDF's uiop utility package: real libraries name it
+		// in (:import-from #:uiop) clauses and call it on platform-only paths (e.g.
+		// uiop:native-namestring on a pathname branch). Four members have real
+		// definitions -- getenv (the only spelling of "read an environment variable"
+		// rontolisp offers, since Common Lisp has none), file-exists-p (== probe-file),
+		// merge-pathnames* and add-package-local-nickname (lite: a GLOBAL nickname);
+		// the rest resolve but are undefined-function errors when called.
 		Set<String> uiopExternals = Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING, LispNames.GETENV,
 				LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
 				LispNames.MERGE_PATHNAMES_STAR, LispNames.FILE_EXISTS_P, LispNames.RUN_PROGRAM);

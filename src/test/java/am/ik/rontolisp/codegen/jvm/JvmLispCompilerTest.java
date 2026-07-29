@@ -2859,8 +2859,8 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunGetenv() throws Exception {
 		// PATH is set in the test environment; an unset variable yields nil.
-		assertThat(compileAndRun("(print (stringp (getenv \"PATH\")))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (getenv \"RONTOLISP_DEFINITELY_UNSET_VAR\"))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (stringp (uiop:getenv \"PATH\")))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (uiop:getenv \"RONTOLISP_DEFINITELY_UNSET_VAR\"))")).isEqualTo("NIL");
 	}
 
 	@Test
@@ -5500,12 +5500,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("341");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("340");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("341");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("340");
 	}
 
 	@Test
