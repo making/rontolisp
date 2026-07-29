@@ -1,5 +1,9 @@
 package am.ik.rontolisp.codegen.wasm;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -7,55 +11,58 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.stream.Stream;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
-import am.ik.rontolisp.testsupport.WasmtimeSupport;
-import org.junit.jupiter.api.BeforeAll;
+import am.ik.rontolisp.testsupport.HostWasmtime;
+import am.ik.rontolisp.testsupport.HostWasmtime.ExecResult;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.testcontainers.containers.Container.ExecResult;
-import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.images.builder.Transferable;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 /**
- * Integration tests that compile Lisp to WASM and run it with wasmtime inside a
- * container.
+ * Integration tests that compile Lisp to WASM and run it with wasmtime.
  *
  * <p>
  * This is by far the longest class in the build: every case is a serial chain of compile
- * the module, stage it in the container, run wasmtime (roughly 250 ms / 20 ms / 150 ms
- * for a linalg program), and there are thousands of them. None of that chain is shared
- * between cases, so the methods run concurrently inside the surefire fork -- the thread
- * cap lives in {@code junit-platform.properties}. Everything a test writes into the
- * container therefore has to be private to the running test: stage modules and
- * guest-visible data files through {@link #path(String)}, never at a fixed
- * {@code /tmp/...} literal shared with another method.
+ * the module, stage it on disk, run wasmtime, and there are thousands of them. None of
+ * that chain is shared between cases, so the methods run concurrently inside the surefire
+ * fork -- the thread cap lives in {@code junit-platform.properties}. Everything a test
+ * writes therefore has to be private to the running test: stage modules and guest-visible
+ * data files through {@link #path(String)}, never at a fixed {@code /tmp/...} literal
+ * shared with another method.
+ *
+ * <p>
+ * wasmtime runs as a host process ({@link HostWasmtime}) rather than in the shared
+ * container the other WASM test classes use, because the container's per-case exec and
+ * file copy stopped the concurrency above from paying off on a 4 vCPU CI runner -- the
+ * rationale, and what it costs in version pinning, is on that class.
  */
-@Testcontainers(disabledWithoutDocker = true)
+@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
 @Execution(ExecutionMode.CONCURRENT)
 class WasmLispCompilerIntegrationTest {
 
-	// The wasmtime container comes from a prebuilt GHCR image (see WasmtimeSupport); it
-	// is shared across every WASM test class and started once per JVM. The class-level
-	// @Testcontainers(disabledWithoutDocker = true) disables all of these Docker-only
-	// tests when no daemon is reachable, so the container is only obtained (and Docker
-	// only contacted) from @BeforeAll, which never runs for a disabled class.
-	static GenericContainer<?> wasmtime;
+	// Named and shaped like the GenericContainer the other WASM classes hold, so the two
+	// runners differ only in this declaration. The class-level @EnabledIf skips
+	// everything
+	// here when the host has no usable wasmtime, the way @Testcontainers used to skip it
+	// when no Docker daemon was reachable.
+	static final HostWasmtime wasmtime = HostWasmtime.INSTANCE;
 
-	// Scratch directory in the container, one per test worker thread (created on that
-	// thread's first use). Scoping by thread rather than by test keeps the container's
-	// /tmp to one file set per worker, and gives the `--dir .` tests -- whose guest
-	// programs open relative names like "lib.lisp" or "wof.txt" -- a working directory
-	// no concurrently running test can write into.
+	// Scratch directory, one per test worker thread (created on that thread's first use).
+	// Scoping by thread rather than by test keeps it to one file set per worker, and
+	// gives
+	// the `--dir .` tests -- whose guest programs open relative names like "lib.lisp" or
+	// "wof.txt" -- a working directory no concurrently running test can write into.
 	private static final ConcurrentHashMap<Long, String> WORK_DIRS = new ConcurrentHashMap<>();
 
 	// Workers for the second half of a two-module comparison (see
@@ -69,11 +76,6 @@ class WasmLispCompilerIntegrationTest {
 			thread.setDaemon(true);
 			return thread;
 		});
-
-	@BeforeAll
-	static void startWasmtime() {
-		wasmtime = WasmtimeSupport.container();
-	}
 
 	/**
 	 * Waits for a {@link #PAIRS} task, unwrapping the {@link ExecutionException} so an
@@ -97,26 +99,37 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	/**
-	 * Returns a container path under the calling thread's scratch directory. Use it for
-	 * every file a test stages or the guest program opens; a fixed path would be raced by
-	 * the tests running concurrently on the other threads.
+	 * Returns a path under the calling thread's scratch directory. Use it for every file
+	 * a test stages or the guest program opens; a fixed path would be raced by the tests
+	 * running concurrently on the other threads.
 	 * @param name the file name inside the scratch directory
-	 * @return the absolute container path
+	 * @return the absolute path
 	 */
 	private static String path(String name) {
 		return workDir() + "/" + name;
 	}
 
+	// Emptied rather than just created: unlike the container, which was new every run,
+	// the
+	// host directory outlives the JVM, and a stale file left by an earlier run is exactly
+	// the kind of thing a `--dir .` test would happily open.
 	private static String workDir() {
 		return WORK_DIRS.computeIfAbsent(Thread.currentThread().threadId(), id -> {
-			String dir = "/tmp/w" + id;
+			Path dir = Path.of(System.getProperty("java.io.tmpdir"), "rontolisp-wasmtime", "w" + id);
 			try {
-				wasmtime.execInContainer("mkdir", "-p", dir);
+				if (Files.isDirectory(dir)) {
+					try (Stream<Path> stale = Files.list(dir)) {
+						for (Path file : stale.toList()) {
+							Files.deleteIfExists(file);
+						}
+					}
+				}
+				Files.createDirectories(dir);
 			}
-			catch (Exception e) {
-				throw new IllegalStateException("cannot create the container scratch dir " + dir, e);
+			catch (IOException e) {
+				throw new UncheckedIOException("cannot create the scratch dir " + dir, e);
 			}
-			return dir;
+			return dir.toString();
 		});
 	}
 

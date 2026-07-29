@@ -27,15 +27,26 @@ jobs:
         java-version: '25'
         distribution: 'graalvm'
         cache: maven
+    # WasmLispCompilerIntegrationTest runs wasmtime as a host process instead of in the
+    # shared container (see HostWasmtime). Pin the same version the container image pins
+    # so the two runners stay comparable, and fail here rather than let the class skip:
+    # @EnabledIf would drop all 1010 of its tests silently, which reads as a speedup.
+    - name: Install wasmtime
+      uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: "v47.0.2"
+    - name: Verify wasmtime
+      run: |
+        wasmtime --version
+        test "$(wasmtime --version | awk '{print $2}' | cut -d. -f1)" -ge 46
     - name: Unit Tests
       # The intra-class parallelism default in junit-platform.properties targets a
       # development machine; this runner has 4 vCPU shared by two surefire forks.
-      # Keep this at the vCPU count. Oversubscribing was measured and is a loss, not
-      # a wash: the dominating class takes 1525 s at 4 and 2215 s at 8 -- worse than
-      # the 2170 s it took before it was made concurrent at all, and it drags the
-      # other fork with it (IroncladE2eTest 85 s -> 165 s). The idle-looking Docker
-      # round trips are not free capacity; the work is CPU-bound and the runner is
-      # already saturated at 4.
+      #
+      # Do not tune this against a single run: runner speed varies by up to 1.4x
+      # between runs, which is larger than any effect measured here so far (4 and 8
+      # came out at 2186 s and 2215 s -- indistinguishable). Compare only runs whose
+      # parallelism-independent classes agree, e.g. JvmLispCompilerTest.
       run: ./mvnw -V --no-transfer-progress -Djunit.jupiter.execution.parallel.config.fixed.parallelism=4 clean test
   native-image:
     needs: test

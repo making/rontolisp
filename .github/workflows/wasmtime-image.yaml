@@ -17,7 +17,7 @@ on:
 env:
   # The image tag = the wasmtime version (with its leading 'v'). Bump this, the
   # Dockerfile ARG default and WasmtimeSupport.IMAGE together.
-  WASMTIME_VERSION: v46.0.1
+  WASMTIME_VERSION: v47.0.2
 
 jobs:
   build:
