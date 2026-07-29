@@ -35,7 +35,7 @@ final class JvmSubseqCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		LispVal rewritten = LispMacroExpander.expandSubseqCompat(cons);
+		LispVal rewritten = LispMacroExpander.expandSubseqCompat(cons, ctx.usesArrays);
 		if (rewritten != null) {
 			JvmExprCompiler.compileExpr(rewritten, ctx, className);
 			return;

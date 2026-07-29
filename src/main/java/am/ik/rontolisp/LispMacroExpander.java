@@ -2459,8 +2459,17 @@ public final class LispMacroExpander {
 	 * a string is coerced to a list of its characters before the scan (built by
 	 * {@code algo} over the list variable), and the scan's result is coerced back to a
 	 * string. Non-string sequences run the scan unchanged.
+	 *
+	 * <p>
+	 * {@code arraysExist} false drops the whole vector arm -- the {@code __seq_vec}
+	 * binding and the {@code (coerce __seq_res 'vector)} rebuild. This is the one place
+	 * that may drop an array-BUILDING form: the rebuild runs only when the input was a
+	 * vector, and with no array runtime no vector can reach here, so the guard makes the
+	 * builder provably dead (see {@link #expandCoerce(LispCons, boolean)}, which gates
+	 * only the reading direction because it cannot see its guard).
 	 */
-	private static LispVal seqResultDispatchForm(LispVal seqExpr, java.util.function.UnaryOperator<LispVal> algo) {
+	private static LispVal seqResultDispatchForm(LispVal seqExpr, java.util.function.UnaryOperator<LispVal> algo,
+			boolean arraysExist) {
 		LispSymbol in = new LispSymbol(SEQ_IN_VAR);
 		LispSymbol isStr = new LispSymbol(SEQ_STR_VAR);
 		LispSymbol isVec = new LispSymbol(SEQ_VEC_VAR);
@@ -2474,11 +2483,13 @@ public final class LispMacroExpander {
 		// (let ((__seq_res <algo __seq_lst>))
 		// (if __seq_str (coerce __seq_res 'string)
 		// (if __seq_vec (coerce __seq_res 'vector) __seq_res)))))))
-		LispVal result = makeIf(isStr, coerceTo(res, "STRING"), makeIf(isVec, coerceTo(res, "VECTOR"), res));
+		LispVal result = arraysExist
+				? makeIf(isStr, coerceTo(res, "STRING"), makeIf(isVec, coerceTo(res, "VECTOR"), res))
+				: makeIf(isStr, coerceTo(res, "STRING"), res);
 		LispVal resLet = makeLet(SEQ_RES_VAR, algo.apply(lst), result);
-		LispVal orStrVec = listToCons(List.of(new LispSymbol(LispNames.OR), isStr, isVec));
-		LispVal lstLet = makeLet(SEQ_LIST_VAR, makeIf(orStrVec, coerceTo(in, "LIST"), in), resLet);
-		LispVal vecLet = makeLet(SEQ_VEC_VAR, callOf(LispNames.VECTORP, in), lstLet);
+		LispVal asList = arraysExist ? listToCons(List.of(new LispSymbol(LispNames.OR), isStr, isVec)) : isStr;
+		LispVal lstLet = makeLet(SEQ_LIST_VAR, makeIf(asList, coerceTo(in, "LIST"), in), resLet);
+		LispVal vecLet = arraysExist ? makeLet(SEQ_VEC_VAR, callOf(LispNames.VECTORP, in), lstLet) : lstLet;
 		LispVal strLet = makeLet(SEQ_STR_VAR, callOf(LispNames.STRINGP, in), vecLet);
 		return makeLet(SEQ_IN_VAR, seqExpr, strLet);
 	}
@@ -2498,6 +2509,18 @@ public final class LispMacroExpander {
 	 * @return the wrapped expression, or null when the call needs no wrapping
 	 */
 	public static @Nullable LispVal wrapSortForStringSeq(LispCons cons) {
+		return wrapSortForStringSeq(cons, true);
+	}
+
+	/**
+	 * Like {@link #wrapSortForStringSeq(LispCons)}, but lets a backend drop the vector
+	 * arm of the dispatch when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the sort expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the wrapped expression, or null when the call needs no wrapping
+	 */
+	public static @Nullable LispVal wrapSortForStringSeq(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || isSeqDispatchVar(parts.get(1))) {
 			return null;
@@ -2506,7 +2529,7 @@ public final class LispMacroExpander {
 			List<LispVal> inner = new java.util.ArrayList<>(parts);
 			inner.set(1, lst);
 			return listToCons(inner);
-		});
+		}, arraysExist);
 	}
 
 	/**
@@ -3698,13 +3721,25 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandReverse(LispCons cons) {
+		return expandReverse(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandReverse(LispCons)}, but lets a backend drop the vector arm of
+	 * the dispatch when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the reverse expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandReverse(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol acc = new LispSymbol("__reverse_acc");
 		LispSymbol x = new LispSymbol("__reverse_x");
 		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(acc, x)),
 				listToCons(List.of(new LispSymbol(LispNames.CONS), x, acc))));
 		return seqResultDispatchForm(parts.get(1), lst -> listToCons(List.of(new LispSymbol(LispNames.REDUCE), lambda,
-				lst, new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), LispNil.INSTANCE)));
+				lst, new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), LispNil.INSTANCE)), arraysExist);
 	}
 
 	/**
@@ -4552,6 +4587,18 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandRemoveDuplicates(LispCons cons) {
+		return expandRemoveDuplicates(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandRemoveDuplicates(LispCons)}, but lets a backend drop the vector
+	 * arm of the dispatch when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the remove-duplicates expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRemoveDuplicates(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.REMOVE_DUPLICATES, parts, 2);
 		LispVal testForm = keywordValue(parts, 2, LispNames.TEST_KEYWORD);
@@ -4572,7 +4619,7 @@ public final class LispMacroExpander {
 					listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
 			LispVal body = makeIf(dup, LispNil.INSTANCE, keep);
 			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
-		});
+		}, arraysExist);
 	}
 
 	/**
@@ -4904,6 +4951,18 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandRemove(LispCons cons) {
+		return expandRemove(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandRemove(LispCons)}, but lets a backend drop the vector arm of the
+	 * dispatch when no array can exist in this program (see {@code seqResultDispatchForm}
+	 * and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the remove expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRemove(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.REMOVE, parts, 3);
 		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
@@ -4912,7 +4971,7 @@ public final class LispMacroExpander {
 		// The item binds outside the string dispatch to keep the argument evaluation
 		// order (item, then sequence); the filter's do rebinds it to itself.
 		return makeLet(item.name(), parts.get(1), seqResultDispatchForm(parts.get(2), lst -> expandFilter(item, item,
-				lst, "__remove", elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), false)));
+				lst, "__remove", elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), false), arraysExist));
 	}
 
 	/**
@@ -4922,10 +4981,25 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandRemoveIf(LispCons cons) {
+		return expandRemoveIf(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandRemoveIf(LispCons)}, but lets a backend drop the vector arm of
+	 * the dispatch when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the remove-if expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRemoveIf(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__removeif_pred");
-		return makeLet(pred.name(), parts.get(1), seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred,
-				lst, "__removeif", elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), false)));
+		return makeLet(pred.name(), parts.get(1),
+				seqResultDispatchForm(parts.get(2),
+						lst -> expandFilter(pred, pred, lst, "__removeif",
+								elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), false),
+						arraysExist));
 	}
 
 	/**
@@ -4935,11 +5009,25 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandRemoveIfNot(LispCons cons) {
+		return expandRemoveIfNot(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandRemoveIfNot(LispCons)}, but lets a backend drop the vector arm
+	 * of the dispatch when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the remove-if-not expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRemoveIfNot(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol pred = new LispSymbol("__removeifnot_pred");
 		return makeLet(pred.name(), parts.get(1),
-				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeifnot",
-						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), true)));
+				seqResultDispatchForm(parts.get(2),
+						lst -> expandFilter(pred, pred, lst, "__removeifnot",
+								elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), true),
+						arraysExist));
 	}
 
 	/**
@@ -4951,6 +5039,18 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSubstitute(LispCons cons) {
+		return expandSubstitute(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandSubstitute(LispCons)}, but lets a backend drop the vector arm of
+	 * the dispatch when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the substitute expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSubstitute(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.SUBSTITUTE, parts, 4);
 		LispVal testForm = keywordValue(parts, 4, LispNames.TEST_KEYWORD);
@@ -4975,7 +5075,7 @@ public final class LispMacroExpander {
 			LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 					listToCons(List.of(new LispSymbol(LispNames.CONS), chosen, acc))));
 			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
-		});
+		}, arraysExist);
 		return makeLet(newItem.name(), parts.get(1), makeLet(oldItem.name(), parts.get(2), scan));
 	}
 
@@ -6192,6 +6292,20 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandReplace(LispCons cons) {
+		return expandReplace(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandReplace(LispCons)}, but lets a backend drop the destructive
+	 * array arm -- and with it the {@code aref} source read -- when no array can exist in
+	 * this program (see {@link #expandCoerce(LispCons, boolean)}). What is left is the
+	 * functional string rebuild, which is what the {@code %arrayp} test selects anyway
+	 * once no value can answer it.
+	 * @param cons the replace expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandReplace(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || parts.size() % 2 == 0) {
 			throw new IllegalArgumentException(
@@ -6231,6 +6345,12 @@ public final class LispMacroExpander {
 		LispVal mid = fmtCall(LispNames.SUBSEQ, r2, vs2, fmtCall(LispNames.ADD, vs2, n));
 		LispVal tail = fmtCall(LispNames.SUBSEQ, r1, fmtCall(LispNames.ADD, vs1, n), fmtCall(LispNames.LENGTH, r1));
 		LispVal functional = fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), head, mid, tail);
+		if (!arraysExist) {
+			// No array can exist, so seq1 is a string or a list and only the functional
+			// rebuild is reachable; the destructive loop would just drag the array
+			// runtime into every class through the injected #'replace wrapper.
+			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, functional));
+		}
 		LispSymbol k = new LispSymbol("__rpl_k");
 		// The source reads with aref when seq2 is an array (a string included: aref
 		// reads a string's character on every backend) and elt only for a list. The
@@ -6742,6 +6862,23 @@ public final class LispMacroExpander {
 	 * @return the lowered expression, or {@code null} when the shape is not handled here
 	 */
 	@Nullable public static LispVal expandSubseqCompat(LispCons cons) {
+		return expandSubseqCompat(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandSubseqCompat(LispCons)}, but a backend that cannot hold an array
+	 * ({@code arraysExist} false, see {@link #expandCoerce(LispCons, boolean)}) gets
+	 * {@code null}: the whole rewrite exists to reach the array arm, and with no array in
+	 * the program both arms of its dispatch are the plain {@code %subseq-core} call the
+	 * compiler emits anyway.
+	 * @param cons the call expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the lowered expression, or {@code null} when the shape is not handled here
+	 */
+	@Nullable public static LispVal expandSubseqCompat(LispCons cons, boolean arraysExist) {
+		if (!arraysExist) {
+			return null;
+		}
 		if (!(cons.car() instanceof LispSymbol op) || !LispNames.SUBSEQ.equals(op.name())) {
 			return null;
 		}
@@ -12747,6 +12884,18 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandElt(LispCons cons) {
+		return expandElt(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandElt(LispCons)}, but lets a backend drop the {@code aref} arm
+	 * when no array can exist in this program (see
+	 * {@link #expandCoerce(LispCons, boolean)} for the rule and who passes what).
+	 * @param cons the elt expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandElt(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol seq = new LispSymbol("__elt_seq");
 		LispSymbol idx = new LispSymbol("__elt_idx");
@@ -12755,9 +12904,11 @@ public final class LispMacroExpander {
 		LispVal stringCase = listToCons(List.of(new LispSymbol(LispNames.CHAR), seq, idx));
 		LispVal listCase = listToCons(List.of(new LispSymbol(LispNames.NTH), idx, seq));
 		// A non-string, non-list sequence is an array: read it with aref (nil counts as a
-		// list here, so listp -- not consp -- guards the list case).
+		// list here, so listp -- not consp -- guards the list case). With no array in the
+		// program that arm cannot be taken, so the dispatch collapses to the list read.
 		LispVal arrayCase = listToCons(List.of(new LispSymbol(LispNames.AREF), seq, idx));
-		LispVal listOrArray = makeIf(listToCons(List.of(new LispSymbol(LispNames.LISTP), seq)), listCase, arrayCase);
+		LispVal listOrArray = arraysExist
+				? makeIf(listToCons(List.of(new LispSymbol(LispNames.LISTP), seq)), listCase, arrayCase) : listCase;
 		LispVal body = makeIf(listToCons(List.of(new LispSymbol(LispNames.STRINGP), seq)), stringCase, listOrArray);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
 	}
@@ -13053,6 +13204,25 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCoerce(LispCons cons) {
+		return expandCoerce(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandCoerce(LispCons)}, but lets a backend drop the branch that READS
+	 * a general array when no array can exist in this program. The interpreter and both
+	 * WASM backends always pass {@code true} (their array primitives are unconditional);
+	 * the JVM backend passes {@code Ctx.usesArrays}, and with the array runtime absent
+	 * nothing can construct an array, so {@code (coerce x 'list)} /
+	 * {@code (coerce x 'string)} over a vector is dead code that would only drag
+	 * {@code _aref1} into every class through the injected built-in wrappers
+	 * ({@code .kb/adjustable-arrays.md}). The BUILDING direction ({@code 'vector}) is not
+	 * gated: it constructs an array rather than testing for one, so its deadness is not a
+	 * local fact -- {@code seqResultDispatchForm} drops it at the guard that knows it.
+	 * @param cons the coerce expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCoerce(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new UnsupportedOperationException("coerce expects a value and a result type");
@@ -13110,8 +13280,12 @@ public final class LispMacroExpander {
 		LispVal body;
 		if ("LIST".equals(type)) {
 			// (if (listp x) x (if (stringp x) (map 'list #'identity x) <vector scan>))
-			body = makeIf(callOf(LispNames.LISTP, x), x,
-					makeIf(callOf(LispNames.STRINGP, x), stringToList, coerceVectorToList(x)));
+			// With no array in the program the non-list value can only be a string, so
+			// the scan -- and the stringp test guarding it -- fall away.
+			body = arraysExist
+					? makeIf(callOf(LispNames.LISTP, x), x,
+							makeIf(callOf(LispNames.STRINGP, x), stringToList, coerceVectorToList(x)))
+					: makeIf(callOf(LispNames.LISTP, x), x, stringToList);
 		}
 		else if ("VECTOR".equals(type)) {
 			// (if (or (listp x) (stringp x))
@@ -13127,7 +13301,8 @@ public final class LispMacroExpander {
 		}
 		else if ("STRING".equals(type)) {
 			// (if (stringp x) x (map 'string #'identity (if (listp x) x <vector scan>)))
-			LispVal chars = makeIf(callOf(LispNames.LISTP, x), x, coerceVectorToList(x));
+			// The vector scan goes with the arrays, as in the LIST branch above.
+			LispVal chars = arraysExist ? makeIf(callOf(LispNames.LISTP, x), x, coerceVectorToList(x)) : x;
 			LispVal build = listToCons(List.of(new LispSymbol(LispNames.MAP),
 					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("STRING"))),
 					listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))),
@@ -13599,6 +13774,20 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandMap(LispCons cons) {
+		return expandMap(cons, true);
+	}
+
+	/**
+	 * Like {@link #expandMap(LispCons)}, but lets a backend drop the {@code aref} arm of
+	 * the per-element read when no array can exist in this program (see
+	 * {@link #expandCoerce(LispCons, boolean)} for the rule and who passes what). The
+	 * {@code 'vector} result type still builds through the ungated {@code coerce}: it
+	 * CONSTRUCTS an array, which is not a fact this expansion may assume away.
+	 * @param cons the map expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMap(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 4) {
 			throw new UnsupportedOperationException("map expects a result-type, a function, and at least one sequence");
@@ -13680,7 +13869,8 @@ public final class LispMacroExpander {
 			LispVal stringElt = listToCons(List.of(new LispSymbol(LispNames.CHAR), sv, iVar));
 			LispVal listElt = listToCons(List.of(new LispSymbol(LispNames.NTH), iVar, sv));
 			LispVal arrayElt = listToCons(List.of(new LispSymbol(LispNames.AREF), sv, iVar));
-			LispVal listOrArray = makeIf(listToCons(List.of(new LispSymbol(LispNames.LISTP), sv)), listElt, arrayElt);
+			LispVal listOrArray = arraysExist
+					? makeIf(listToCons(List.of(new LispSymbol(LispNames.LISTP), sv)), listElt, arrayElt) : listElt;
 			callParts.add(makeIf(listToCons(List.of(new LispSymbol(LispNames.STRINGP), sv)), stringElt, listOrArray));
 		}
 		LispVal call = listToCons(callParts);

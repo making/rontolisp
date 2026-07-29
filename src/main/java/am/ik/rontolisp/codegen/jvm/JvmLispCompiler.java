@@ -706,15 +706,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				wrapperExcludes.add(op);
 			}
 		}
-		// The mangled method names of the injected built-in wrappers. They are needed by
-		// the gate check at the end of the pass: a wrapper is injected in EVERY class
-		// regardless of the program, so what its body references says nothing about the
-		// program and must not drive a program-dependent gate (see compile(List)).
-		Set<String> wrapperMethodNames = new HashSet<>();
 		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes)) {
-			DefunDecl decl = extractSetqLambda(wrapper);
-			wrapperMethodNames.add(mangleMethodName(decl.name()));
-			defuns.add(decl);
+			defuns.add(extractSetqLambda(wrapper));
 		}
 
 		// Collect top-level global variables and give each a dedicated static field.
@@ -2187,21 +2180,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// An unresolved own-class call is either a mispredicted gate -- re-run with that
 		// group forced on -- or an internal inconsistency no re-run can fix, and then it
 		// is far better to say so here than to hand the user a class that throws
-		// NoSuchMethodError the first time the branch is taken.
+		// NoSuchMethodError the first time the branch is taken. Every caller counts,
+		// including the injected built-in wrappers: their bodies no longer carry an arm
+		// for a value the absent runtime cannot construct, because each lowering behind
+		// them is gated on Ctx.usesArrays (.kb/adjustable-arrays.md).
 		List<JvmClassShaker.UnresolvedSelfMethod> unresolved = JvmClassShaker.unresolvedSelfMethods(classBytes);
 		Set<String> underpredicted = new LinkedHashSet<>();
 		List<JvmClassShaker.UnresolvedSelfMethod> unrecoverable = new ArrayList<>();
 		for (JvmClassShaker.UnresolvedSelfMethod missing : unresolved) {
-			if (wrapperMethodNames.containsAll(missing.callers())) {
-				// Only built-in wrappers reference it. They are injected unconditionally,
-				// so this says nothing about the program (see wrapperMethodNames), and
-				// every such reference sits behind a runtime type test for a value the
-				// absent runtime cannot construct -- an array, a hash table. A wrapper
-				// body that needs a gated runtime UNCONDITIONALLY does not get this pass:
-				// it is reference-gated instead, so wrapper and runtime are decided by
-				// the same fact (#'funcall above).
-				continue;
-			}
 			String group = gateGroupFor(missing.name());
 			if (group == null || forcedGroups.contains(group)) {
 				unrecoverable.add(missing);

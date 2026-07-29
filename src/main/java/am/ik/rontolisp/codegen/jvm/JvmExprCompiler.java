@@ -492,7 +492,7 @@ final class JvmExprCompiler {
 				case LispNames.MAKE_STRING ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeString(cons), ctx, className);
 				case LispNames.REPLACE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons, ctx.usesArrays), ctx, className);
 				case LispNames.SCHAR_SET ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx, className);
 				case LispNames.LOWER_CASE_P ->
@@ -696,7 +696,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFormat(cons), ctx, className);
 				case LispNames.LENGTH -> JvmLengthCompiler.compile(cons, ctx, className);
 				case LispNames.REVERSE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons, ctx.usesArrays), ctx, className);
 				case LispNames.MEMBER ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMember(cons), ctx, className);
 				case LispNames.FIND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFind(cons), ctx, className);
@@ -729,23 +729,23 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvery(cons), ctx, className);
 				case LispNames.SOME -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSome(cons), ctx, className);
 				case LispNames.REMOVE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons, ctx.usesArrays), ctx, className);
 				case LispNames.REMOVE_IF ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons), ctx, className);
-				case LispNames.REMOVE_IF_NOT ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIfNot(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons, ctx.usesArrays), ctx, className);
+				case LispNames.REMOVE_IF_NOT -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandRemoveIfNot(cons, ctx.usesArrays), ctx, className);
 				case LispNames.DELETE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDelete(cons), ctx, className);
 				case LispNames.DELETE_IF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIf(cons), ctx, className);
 				case LispNames.DELETE_IF_NOT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIfNot(cons), ctx, className);
-				case LispNames.SUBSTITUTE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandSubstitute(cons), ctx, className);
+				case LispNames.SUBSTITUTE -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandSubstitute(cons, ctx.usesArrays), ctx, className);
 				case LispNames.NSUBSTITUTE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandNsubstitute(cons), ctx, className);
-				case LispNames.REMOVE_DUPLICATES ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons), ctx, className);
+				case LispNames.REMOVE_DUPLICATES -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons, ctx.usesArrays), ctx, className);
 				case LispNames.NCONC ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandNconc(cons), ctx, className);
 				case LispNames.LAST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx, className);
@@ -838,7 +838,7 @@ final class JvmExprCompiler {
 				case LispNames.ARRAY_DISP_TARGET -> JvmArrayCompiler.compileDispTarget(cons, ctx, className);
 				case LispNames.ARRAY_DISP_OFFSET -> JvmArrayCompiler.compileDispOffset(cons, ctx, className);
 				case LispNames.COERCE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons, ctx.usesArrays), ctx, className);
 				case LispNames.MAP_INTO ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons), ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
@@ -856,7 +856,8 @@ final class JvmExprCompiler {
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				case LispNames.FUNCTION -> JvmFunctionFormCompiler.compile(cons, ctx, className);
 				case LispNames.SYMBOL_FUNCTION -> JvmFunctionFormCompiler.compileSymbolFunction(cons, ctx, className);
-				case LispNames.MAP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons), ctx, className);
+				case LispNames.MAP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons, ctx.usesArrays), ctx, className);
 				case LispNames.MAPCAR -> JvmMapcarCompiler.compile(cons, ctx, className);
 				case LispNames.MAPC -> JvmMapcCompiler.compile(cons, ctx, className);
 				case LispNames.MAPCAN -> JvmMapcanCompiler.compile(cons, ctx, className);
@@ -890,7 +891,7 @@ final class JvmExprCompiler {
 						JvmExprCompiler.compileExpr(keyedSort, ctx, className);
 					}
 					else {
-						LispVal wrappedSort = LispMacroExpander.wrapSortForStringSeq(cons);
+						LispVal wrappedSort = LispMacroExpander.wrapSortForStringSeq(cons, ctx.usesArrays);
 						if (wrappedSort != null) {
 							JvmExprCompiler.compileExpr(wrappedSort, ctx, className);
 						}
@@ -1073,7 +1074,8 @@ final class JvmExprCompiler {
 				case LispNames.ACONS ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandAcons(cons), ctx, className);
 				case LispNames.ENDP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandEndp(cons), ctx, className);
-				case LispNames.ELT -> JvmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons), ctx, className);
+				case LispNames.ELT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons, ctx.usesArrays), ctx, className);
 				case LispNames.RASSOC ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRassoc(cons), ctx, className);
 				case LispNames.PAIRLIS ->

@@ -176,21 +176,60 @@ How it works now, in `JvmLispCompiler`:
    the compile fails loudly naming the call and its callers instead of handing
    the user a class that dies later.
 
-**One exclusion, and the reason it is not arbitrary.** A call referenced ONLY by
-injected built-in wrappers is skipped. A wrapper is injected in every class
-whether or not the program mentions the operator, so what its body references
-carries no information about the program and must not drive a program-dependent
-gate -- and in practice most of them reference the array runtime (`#'+`,
-`#'reverse`, `#'sort`, `#'subseq`, `#'string=`, ... all carry an array arm), so
-without the exclusion every class would drag in the whole array and hash
-runtimes, ~35 KB. It is sound because each such reference sits behind a runtime
-type test for a value the absent runtime cannot construct: with no array runtime
-no array exists, with no hash runtime no hash table exists. A wrapper body that
-needs a gated runtime UNCONDITIONALLY gets no such pass -- see `#'funcall`
-below, which is reference-gated so the wrapper and the runtime it calls are
-decided by the same fact. A reference from anywhere else -- user code, a defun,
-a lowering -- is program-dependent evidence and does force the gate, even where
-the branch would have been dead; conservative in the safe direction.
+**The check covers EVERY caller, wrappers included (todo-210).** It briefly did
+not: a call referenced only by injected built-in wrappers was skipped, because a
+wrapper is injected in every class whether or not the program mentions the
+operator and most of them dragged in the array runtime (`#'+`, `#'reverse`,
+`#'sort`, `#'subseq`, `#'string=`, ... ~33 of them called `_aref1`) -- without
+the skip every class carried the whole array runtime, ~35 KB. The skip was sound
+(each reference sat behind a runtime type test for a value the absent runtime
+cannot construct) but it cost the check its strength: a genuinely reachable
+dangling call inside a wrapper was invisible, and `#'funcall`'s `(apply f r)`
+was exactly that shape -- caught only because it needed the eval runtime
+UNCONDITIONALLY, which is reference-gated so wrapper and runtime are decided by
+the same fact.
+
+The skip is gone because its cause is: **each lowering that dispatches over the
+sequence representations now takes an `arraysExist` flag and drops the array arm
+when it is false** -- the same move as `expandClassOf`'s `hash-table-p` clause
+below and `JvmStringpCompiler`'s character-vector arm. The interpreter and both
+WASM backends pass `true` (their array primitives are unconditional); the JVM
+passes `Ctx.usesArrays`. The gated lowerings, all in `LispMacroExpander` unless
+noted:
+
+| lowering | what the flag drops |
+| --- | --- |
+| `expandCoerce` | the vector scan behind `'list` / `'string` (`coerceVectorToList`) |
+| `expandElt` | the `aref` arm of the string/list/array dispatch |
+| `expandMap` | the same `aref` arm in the per-element read |
+| `seqResultDispatchForm` (private; `wrapSortForStringSeq`, `expandReverse`, `expandRemoveDuplicates`, `expandRemove`, `expandRemoveIf`, `expandRemoveIfNot`, `expandSubstitute` forward the flag) | the `__seq_vec` binding and the `(coerce __seq_res 'vector)` rebuild |
+| `expandSubseqCompat` | the whole rewrite -- it exists only to reach the array arm, so it returns `null` and the compiler emits its plain `%subseq-core` |
+| `expandReplace` | the destructive `%row-major-aset` loop, leaving the functional string rebuild |
+
+Reading and BUILDING are gated differently, and the distinction is the reason
+this is sound. Dropping a READ of an array element is a local fact: no array
+exists, so no read of one can run. Dropping a form that CONSTRUCTS an array is
+not -- only the caller's guard can say it is dead. So `expandCoerce` gates the
+reading direction only, and the one place that drops a builder is
+`seqResultDispatchForm`, which rebuilds a vector result exactly when the INPUT
+was a vector. Every other coerce-to-vector keeps its builder and is therefore
+still caught by step 3: a source-level `coerce` raises the gate by name, and
+`(map 'vector ...)` expands to an ungated `expandCoerce` whose `_arrayMake` call
+comes from a real method and forces the re-run.
+
+`(print (+ 1 2))` went from 186,066 to 127,630 bytes (-31%) on this, and a
+reference from anywhere -- user code, a defun, a lowering, a wrapper -- is now
+program-dependent evidence that does force the gate, even where the branch would
+have been dead; conservative in the safe direction. Pinned by
+`JvmLispCompilerTest.anArrayFreeProgramReferencesNoArrayRuntimeHelper` (nothing
+dangles in an array-free class) plus
+`compileSequenceOperatorsWithoutTheArrayRuntime` (the survivors still answer for
+lists and strings).
+
+The packed `_fv*` / `_iv*` tiers need no equivalent: `Ctx.usesArrays` is true
+whenever `usesFloatArray` / `usesIntArray` is, and an `aref` only compiles to
+`_ivAref1` / `_fvAref1` when that tier is emitted, so a wrapper body can never
+name one the class lacks.
 
 `(class-of x)` was the one lowering whose gated call was NOT behind such a test
 from the gate's point of view: its `cond` chain included a `hash-table-p` clause

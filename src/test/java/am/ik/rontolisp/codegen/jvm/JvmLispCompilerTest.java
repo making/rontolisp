@@ -6618,6 +6618,39 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void anArrayFreeProgramReferencesNoArrayRuntimeHelper() {
+		// .todo/210: the injected built-in wrappers used to carry an array arm each
+		// (#'+ / #'reverse / #'sort / #'subseq / #'string= ... all fold or scan through
+		// the sequence dispatch), so a class as small as this one named _aref1 /
+		// _arrayMake / _aset1 without declaring them -- harmless at run time, but it
+		// forced the gate check to ignore every wrapper-only dangling call. Each of
+		// those lowerings is gated on Ctx.usesArrays now, so nothing dangles and the
+		// check applies to wrappers too (.kb/adjustable-arrays.md).
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("(print (+ 1 2))")));
+		assertThat(am.ik.jvm.JvmClassShaker.unresolvedSelfMethods(classBytes)).isEmpty();
+	}
+
+	@Test
+	void compileSequenceOperatorsWithoutTheArrayRuntime() throws Exception {
+		// The other half of the gate above: with the array arms dropped, every
+		// sequence operator whose lowering carried one still answers for the two
+		// representations that CAN exist in an array-free program (list and string).
+		assertThat(compileAndRun("""
+				(print (elt "abc" 1))
+				(print (elt '(10 20 30) 1))
+				(print (coerce "ab" 'list))
+				(print (map 'string (lambda (c) c) "xyz"))
+				(print (reverse "abc"))
+				(print (subseq '(1 2 3 4) 1 3))
+				(print (replace "abcdef" "XY" :start1 1))
+				(print (remove-duplicates '(1 2 1 3)))
+				(print (sort "cba" #'char<))
+				(print (reduce #'+ '(1 2 3)))
+				""")).isEqualTo("#\\b\n20\n(#\\a #\\b)\n\"xyz\"\n\"cba\"\n(2 3)\n\"aXYdef\"\n(2 1 3)\n\"abc\"\n6");
+	}
+
+	@Test
 	void compileFuncallAsAFirstClassValue() throws Exception {
 		// #'funcall's injected wrapper body is (apply f r), which needs the eval
 		// runtime's _apply. The wrapper used to be emitted in every class while _apply
