@@ -16,7 +16,7 @@ The programs are grouped by theme, one directory per group:
 | [`count-vowels/`](count-vowels), [`wit/world/`](wit/world) | Embedding a rontolisp Wasm module in a host; implementing a WIT world |
 | [`wit/keyvalue/`](wit/keyvalue) | The other direction: *calling* a WIT interface, with a different implementation behind it per backend |
 | [`wit/lisp-calls-rust/`](wit/lisp-calls-rust), [`wit/rust-calls-lisp/`](wit/rust-calls-lisp), [`wit/pipeline/`](wit/pipeline) | Across languages: Lisp and Rust components composed into one with `wac`, calling each other through WIT (a direction each, plus a three-component `wac compose` chain) |
-| [`db/`](db) | PostgreSQL over the real cl-postgres driver — queries, CRUD, and a cl-who web app |
+| [`db/`](db) | PostgreSQL over the real cl-postgres driver and postmodern on top of it — queries, CRUD, S-SQL, and a cl-who web app |
 | [`asdf/`](asdf), [`wasmcloud/`](wasmcloud) | Third-party libraries and platform templates |
 
 Assuming the executable JAR has been built

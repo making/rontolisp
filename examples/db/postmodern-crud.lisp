@@ -1,0 +1,78 @@
+;; The same CRUD cycle as postgres-crud.lisp, one layer up: the REAL
+;; postmodern (zlib, Marijn Haverbeke / Sabra Crolleton) loaded from its
+;; unmodified upstream sources. Where postgres-crud.lisp opens a connection by
+;; hand and writes SQL strings, everything here is a macro over the same
+;; driver: with-connection manages the connection, S-SQL writes the statements
+;; as s-expressions, with-transaction wraps the update, and defprepared turns a
+;; parameterised statement into an ordinary function.
+;;
+;; It needs a server. The one-liner this example is written against:
+;;   docker run --rm -p 54329:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine
+;;   rontolisp examples/db/postmodern-crud.lisp
+;;
+;; The other backends work exactly as in postgres-hello.lisp (see it, and the
+;; README beside it):
+;;   rontolisp examples/db/postmodern-crud.lisp -o Prog.class && java Prog
+;;   rontolisp examples/db/postmodern-crud.lisp -o postmodern-crud.wasm --component --optimize
+;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y postmodern-crud.wasm
+;;
+;; This is the non-MOP build of postmodern: the query, transaction and
+;; prepared-statement layers shown below. The DAO layer (defclass with
+;; :metaclass dao-class, get-dao / select-dao / insert-dao) needs the MOP and
+;; is not available.
+
+(ql:quickload "postmodern")
+
+;; S-SQL is a compile-time translation: the s-expression becomes an SQL string
+;; while the program is being read, not while it runs. pomo:sql shows the
+;; string a form turns into.
+(format t "sql: ~a~%" (pomo:sql (:select 'name :from 'fruits :where (:< 'price 100))))
+
+;; The connection is bound for the whole body -- every query below finds it
+;; through pomo:*database* -- and closed on the way out, however the body ends.
+(pomo:with-connection '("postgres" "postgres" nil "127.0.0.1" :port 54329)
+
+  ;; CREATE. execute is query with no result; the leading drop makes the
+  ;; example re-runnable.
+  (pomo:execute (:drop-table :if-exists 'fruits))
+  (pomo:execute (:create-table 'fruits ((id :type integer :primary-key t)
+                                        (name :type text)
+                                        (price :type integer))))
+
+  ;; INSERT. :set takes alternating column and value forms.
+  (pomo:execute (:insert-into 'fruits :set 'id 1 'name "apple" 'price 120))
+  (pomo:execute (:insert-into 'fruits :set 'id 2 'name "banana" 'price 80))
+  (pomo:execute (:insert-into 'fruits :set 'id 3 'name "cherry" 'price 300))
+
+  ;; READ. The result format is an argument: the default is a list of rows...
+  (format t "rows: ~a~%"
+          (pomo:query (:order-by (:select '* :from 'fruits) 'id)))
+  ;; ...:alists labels each column with its name...
+  (format t "alists: ~a~%"
+          (pomo:query (:select 'name 'price :from 'fruits :where (:= 'id 2)) :alists))
+  ;; ...and :single takes the one value out of a one-row, one-column result.
+  (format t "count: ~a~%"
+          (pomo:query (:select (:count '*) :from 'fruits) :single))
+
+  ;; UPDATE, in a transaction: the body commits on a normal return and rolls
+  ;; back if it signals.
+  (pomo:with-transaction ()
+    (pomo:execute (:update 'fruits :set 'price 150 :where (:= 'name "apple"))))
+  (format t "after update: ~a~%"
+          (pomo:query (:order-by (:select 'name 'price :from 'fruits) 'id)))
+
+  ;; DELETE
+  (pomo:execute (:delete-from 'fruits :where (:> 'price 200)))
+  (format t "after delete: ~a~%"
+          (pomo:query (:order-by (:select 'name :from 'fruits) 'name) :column))
+
+  ;; A parameterised statement, prepared once on the server and then called
+  ;; like any other function. $1 is the placeholder.
+  (pomo:defprepared cheaper-than
+      (:select 'name :from 'fruits :where (:< 'price '$1))
+    :column)
+  (format t "under 100: ~a~%" (cheaper-than 100))
+  (format t "under 200: ~a~%" (cheaper-than 200)))
+
+;; The table is left behind on purpose, so you can look at it with psql after
+;; the run; the drop at the top is what makes the next run start clean.

@@ -1,12 +1,14 @@
 # db
 
-Talking to PostgreSQL from rontolisp using the real upstream driver (cl-postgres,
-Postmodern's low-level driver) rather than a rontolisp-specific binding.
+Talking to PostgreSQL from rontolisp using the real upstream libraries
+(cl-postgres, the low-level driver, and postmodern on top of it) rather than a
+rontolisp-specific binding.
 
 | Program | Description | Upstream |
 | --- | --- | --- |
 | [`postgres-hello.lisp`](postgres-hello.lisp) | connect and run two select queries | <https://github.com/marijnh/Postmodern> |
 | [`postgres-crud.lisp`](postgres-crud.lisp) | full CRUD cycle: prepared statements (`prepare-query` + `exec-prepared`), an alist row reader, all inside a rolled-back transaction so it is safe to re-run | <https://github.com/marijnh/Postmodern> |
+| [`postmodern-crud.lisp`](postmodern-crud.lisp) | the same cycle one layer up: `with-connection`, statements written as S-SQL s-expressions, `with-transaction`, `defprepared`, and the result formats (`:alists`, `:single`, `:column`) | <https://github.com/marijnh/Postmodern> |
 | [`postgres-web.lisp`](postgres-web.lisp) | notes app: PostgreSQL storage + `rontolisp:http-handler` + cl-who for HTML | <https://github.com/edicl/cl-who> |
 
 ## Setup
@@ -20,14 +22,15 @@ docker run --rm -p 54329:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alp
 ```bash
 rontolisp examples/db/postgres-hello.lisp
 rontolisp examples/db/postgres-crud.lisp
+rontolisp examples/db/postmodern-crud.lisp
 rontolisp examples/db/postgres-web.lisp   # then open http://127.0.0.1:8080
 
 rontolisp examples/db/postgres-hello.lisp -o Prog.class && java Prog
 ```
 
 `ql:quickload` pulls md5, split-sequence, ironclad, cl-base64, cl-ppcre, uax-15,
-alexandria and (for the web app) cl-who, downloading them into
-`~/.rontolisp/quicklisp` on first run.
+alexandria, (for postmodern) s-sql, uiop and bordeaux-threads, and (for the web
+app) cl-who, downloading them into `~/.rontolisp/quicklisp` on first run.
 
 ## WASM
 
@@ -38,8 +41,9 @@ rontolisp examples/db/postgres-hello.lisp -o postgres-hello.wasm --component --o
 wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y postgres-hello.wasm
 ```
 
-`postgres-crud.lisp` builds and runs the same way. `postgres-web.lisp` runs under
-`wasmtime serve` and needs one more flag (`-S cli=y`):
+`postgres-crud.lisp` and `postmodern-crud.lisp` build and run the same way.
+`postgres-web.lisp` runs under `wasmtime serve` and needs one more flag
+(`-S cli=y`):
 
 ```bash
 rontolisp examples/db/postgres-web.lisp -o app.wasm --component --optimize
@@ -51,6 +55,17 @@ wasmCloud runs the same component under `wash dev` with
 
 ## Notes
 
+- **postmodern loads in its non-MOP build.** The query, transaction and
+  prepared-statement layers `postmodern-crud.lisp` shows all work; the DAO layer
+  (`:metaclass dao-class`, `get-dao` / `select-dao` / `insert-dao`) needs the
+  metaobject protocol and is not available.
+- **Pass runtime values as statement parameters, not inside the S-SQL form.**
+  When an S-SQL form carries a value that is not a literal (a variable, `(* 3
+  100)`, or `:insert-rows-into`), s-sql assembles the SQL string at run time,
+  and on the compiled backends that currently yields an EMPTY statement — the
+  server answers `WARNING: Empty query sent.` and the insert or update silently
+  does not happen (the interpreter is unaffected). Use `defprepared` with `$1`
+  placeholders, as `postmodern-crud.lisp` does; that is the right shape anyway.
 - **SCRAM-SHA-256** completes on all backends within PostgreSQL's default
   60-second `authentication_timeout`. The interpreter is the slow one: its
   4096-round PBKDF2 takes ~50 s, so on a slow machine give the server headroom
