@@ -859,6 +859,36 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalFormatNestedConditionalClauses() {
+		// A ~:[ nested INSIDE another ~:[ clause. The two outer clauses consume a
+		// different number of arguments, so the argument position after the conditional
+		// is only known at run time -- expandFormat distributes the remainder of the
+		// control string over both branches. postmodern's deftable constraint strings
+		// end with exactly this shape.
+		String deferrable = "~:[NOT DEFERRABLE~;DEFERRABLE INITIALLY ~:[IMMEDIATE~;DEFERRED~]~]";
+		assertThat(eval("(format nil \"" + deferrable + "\" nil nil)")).isEqualTo(new LispString("NOT DEFERRABLE"));
+		assertThat(eval("(format nil \"" + deferrable + "\" t nil)"))
+			.isEqualTo(new LispString("DEFERRABLE INITIALLY IMMEDIATE"));
+		assertThat(eval("(format nil \"" + deferrable + "\" t t)"))
+			.isEqualTo(new LispString("DEFERRABLE INITIALLY DEFERRED"));
+		// The whole \!unique control string, with ~{~^~} and the nested conditional.
+		String unique = "ALTER TABLE ~A ADD CONSTRAINT ~A UNIQUE (~{~A~^, ~}) " + deferrable;
+		assertThat(eval("(format nil \"" + unique + "\" \"t1\" \"c1\" '(\"a\" \"b\") t t)"))
+			.isEqualTo(new LispString("ALTER TABLE t1 ADD CONSTRAINT c1 UNIQUE (a, b) DEFERRABLE INITIALLY DEFERRED"));
+		assertThat(eval("(format nil \"" + unique + "\" \"t1\" \"c1\" '(\"a\") nil nil)"))
+			.isEqualTo(new LispString("ALTER TABLE t1 ADD CONSTRAINT c1 UNIQUE (a) NOT DEFERRABLE"));
+		// A directive AFTER an argument-divergent conditional: each branch continues
+		// from its OWN argument position, so the trailing ~a differs per branch.
+		assertThat(eval("(format nil \"[~:[x~;y~a~]|~a]\" nil \"P\" \"Q\")")).isEqualTo(new LispString("[x|P]"));
+		assertThat(eval("(format nil \"[~:[x~;y~a~]|~a]\" t \"P\" \"Q\")")).isEqualTo(new LispString("[yP|Q]"));
+		// Two divergent conditionals in sequence: the remainder distributes twice, so
+		// each of the four argument positions is reachable.
+		assertThat(eval("(format nil \"~:[~;~a~]~:[~;~a~]<~a>\" nil 2 \"B\" \"C\")")).isEqualTo(new LispString("B<C>"));
+		assertThat(eval("(format nil \"~:[~;~a~]~:[~;~a~]<~a>\" 1 \"A\" 2 \"B\" \"C\")"))
+			.isEqualTo(new LispString("AB<C>"));
+	}
+
+	@Test
 	void evalFormatConditionalStaticSelectors() {
 		// A literal selector picks the clause at expansion time.
 		assertThat(eval("(format nil \"~1[foo~a~;bar~a~:;baz~a~]\" 100)")).isEqualTo(new LispString("bar100"));
@@ -1243,6 +1273,19 @@ class LispEvaluatorTest {
 		assertThat(eval("(string-trim \" xy\" \"xyhelloyx \")")).isEqualTo(new LispString("hello"));
 		assertThat(eval("(string-left-trim \"x\" \"xxhello\")")).isEqualTo(new LispString("hello"));
 		assertThat(eval("(string-right-trim \"x\" \"helloxx\")")).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
+	void evalStringTrimAcceptsAListCharacterBag() {
+		// CL's character bag is any sequence of characters; a LIST bag is what libraries
+		// write (postmodern's execute-file lexer trims with '(#\Space #\Tab)).
+		assertThat(eval("(string-trim '(#\\Space #\\Tab) \"\tx y \t\")")).isEqualTo(new LispString("x y"));
+		assertThat(eval("(string-left-trim '(#\\Space) \"  z\")")).isEqualTo(new LispString("z"));
+		assertThat(eval("(string-right-trim '(#\\x #\\y) \"helloxy\")")).isEqualTo(new LispString("hello"));
+		assertThat(eval("(string-trim '() \" a \")")).isEqualTo(new LispString(" a "));
+		// A runtime (non-literal) bag goes through the same widening.
+		assertThat(eval("(let ((bag (list #\\Space))) (string-trim bag \" q \"))")).isEqualTo(new LispString("q"));
+		assertThat(eval("(funcall #'string-trim '(#\\Space) \"  w  \")")).isEqualTo(new LispString("w"));
 	}
 
 	@Test
@@ -2603,6 +2646,33 @@ class LispEvaluatorTest {
 		assertThat(eval("(getf '(:a 1) :x)")).isSameAs(LispNil.INSTANCE);
 		assertThat(eval("(getf nil :x)")).isSameAs(LispNil.INSTANCE);
 		assertThat(eval("(funcall #'getf '(:x 10 :y 20) :y)").print()).isEqualTo("20");
+	}
+
+	@Test
+	void evalGetfDefault() {
+		// (getf plist indicator default): postmodern's deftable reads its foreign-key
+		// options with (getf args :on-delete :restrict).
+		assertThat(eval("(getf '(:a 1) :on-delete :restrict)").print()).isEqualTo(":RESTRICT");
+		assertThat(eval("(getf '(:on-delete :cascade) :on-delete :restrict)").print()).isEqualTo(":CASCADE");
+		assertThat(eval("(getf nil :x 7)").print()).isEqualTo("7");
+		// A present indicator whose value is nil beats the default.
+		assertThat(eval("(getf '(:a nil) :a :fallback)")).isSameAs(LispNil.INSTANCE);
+		// getf is a FUNCTION, so the default is evaluated either way -- hit or miss.
+		// (The compile paths must agree: the expansion binds it in the do init list.)
+		assertThat(eval("(let ((n 0)) (getf '(:a 1) :a (setq n 1)) n)").print()).isEqualTo("1");
+		assertThat(eval("(let ((n 0)) (getf '(:a 1) :b (setq n 1)) n)").print()).isEqualTo("1");
+		assertThat(eval("(funcall #'getf '(:x 10) :y :none)").print()).isEqualTo(":NONE");
+	}
+
+	@Test
+	void evalRassocIf() {
+		// rassoc-if tests each pair's CDR; postmodern's json-encoder picks its unicode
+		// escape entry with (rassoc-if #'consp ...).
+		assertThat(eval("(rassoc-if #'consp '((1 . 2) (3 4 . 5)))").print()).isEqualTo("(3 4 . 5)");
+		assertThat(eval("(rassoc-if #'oddp '((a . 2) (b . 3)))").print()).isEqualTo("(B . 3)");
+		assertThat(eval("(rassoc-if #'evenp '((a . 1) (b . 3)))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(rassoc-if #'consp nil)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'rassoc-if #'consp '((1 . 2) (3 4 . 5)))").print()).isEqualTo("(3 4 . 5)");
 	}
 
 	@Test
@@ -4471,7 +4541,7 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%set-fill-pointer", "%string-compare")
 			.isSorted()
-			.hasSize(329);
+			.hasSize(330);
 	}
 
 	@Test

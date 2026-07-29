@@ -4392,24 +4392,130 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (getf plist key) into a do/return scan over a property list, returning the
-	 * value following the first key {@code eql} to the indicator, or nil. The cursor
-	 * advances two cells at a time ({@code cddr}). The partner of {@code remf}.
+	 * Normalizes the CHARACTER BAG of a {@code string-trim}/{@code string-left-trim}/
+	 * {@code string-right-trim} call to a string, which is the one shape the per-backend
+	 * trim compilers accept. CL lets the bag be any sequence of characters, and a LIST
+	 * bag is what libraries actually write -- postmodern's {@code execute-file} lexer
+	 * trims with {@code '(#\Space #\Tab)} at five sites.
+	 * <p>
+	 * A literal bag (a string, or a quoted list/vector of character literals) folds to a
+	 * string constant here, so the emitted code is exactly what a string bag would have
+	 * produced and existing programs stay byte-identical. Any other bag gets a
+	 * {@code (coerce bag 'string)} wrapper, which is identity on a string.
+	 * @param cons the trim expression
+	 * @return the same expression with a string-valued bag
+	 */
+	public static LispCons normalizeCharBag(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			return cons;
+		}
+		LispVal bag = parts.get(1);
+		if (bag instanceof LispString) {
+			return cons;
+		}
+		LispVal folded = literalCharBagString(bag);
+		List<LispVal> rewritten = new java.util.ArrayList<>(parts);
+		rewritten.set(1, folded != null ? folded : fmtCall(LispNames.COERCE, bag, quoteOf(LispNames.STRING)));
+		return (LispCons) listToCons(rewritten);
+	}
+
+	/**
+	 * The string a literal character-bag denotes, or null when the bag is not a literal
+	 * sequence of character literals.
+	 */
+	@Nullable private static LispVal literalCharBagString(LispVal bag) {
+		if (!(bag instanceof LispCons quoted) || !(quoted.car() instanceof LispSymbol q)
+				|| !LispNames.QUOTE.equals(q.name()) || !(quoted.cdr() instanceof LispCons rest)) {
+			return null;
+		}
+		LispVal datum = rest.car();
+		if (datum instanceof LispNil) {
+			return new LispString("");
+		}
+		if (!(datum instanceof LispCons list) || !list.isProperList()) {
+			return null;
+		}
+		StringBuilder chars = new StringBuilder();
+		for (LispVal element : list.toList()) {
+			if (!(element instanceof LispChar ch)) {
+				return null;
+			}
+			chars.appendCodePoint(ch.codePoint());
+		}
+		return new LispString(chars.toString());
+	}
+
+	/**
+	 * Expands (rassoc-if pred alist) into a do/return scan returning the first pair whose
+	 * CDR satisfies the predicate, or nil. The mirror of {@link #expandAssocIf}: it tests
+	 * {@code (funcall pred (cdr pair))}. postmodern's json-encoder picks its unicode
+	 * escape entry with {@code (rassoc-if #'consp ...)}.
+	 * @param cons the rassoc-if expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRassocIf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException(LispNames.RASSOC_IF + " expects a predicate and an alist");
+		}
+		LispSymbol pred = new LispSymbol("__rassocif_pred");
+		LispSymbol cur = new LispSymbol("__rassocif_cur");
+		LispVal pair = callOf(LispNames.CAR, cur);
+		// (do ((__rassocif_pred pred) (__rassocif_cur alist (cdr __rassocif_cur)))
+		// ((atom __rassocif_cur) nil)
+		// (if (and (consp (car __rassocif_cur))
+		// (funcall __rassocif_pred (cdr (car __rassocif_cur))))
+		// (return (car __rassocif_cur))))
+		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
+				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal match = listToCons(
+				List.of(new LispSymbol(LispNames.AND), listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)),
+						listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CDR, pair)))));
+		LispVal body = makeIf(match, makeReturn(pair), LispNil.INSTANCE);
+		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+	}
+
+	/**
+	 * Expands (getf plist key [default]) into a do/return scan over a property list,
+	 * returning the value following the first key {@code eql} to the indicator. When the
+	 * indicator is absent the optional DEFAULT is returned (nil when it is omitted).
+	 * {@code getf} is a FUNCTION in CL, so the default is evaluated whether or not the
+	 * indicator is found: it is bound in the {@code do} INIT list (evaluated once, before
+	 * the loop) rather than left in the result position, where a hit would skip it and
+	 * the compile paths would diverge from the interpreter's eager argument evaluation.
+	 * The cursor advances two cells at a time ({@code cddr}). The partner of
+	 * {@code remf}.
 	 * @param cons the getf expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandGetf(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || parts.size() > 4) {
+			throw new IllegalArgumentException(
+					LispNames.GETF + " expects a property list, an indicator and an" + " optional default");
+		}
 		LispSymbol key = new LispSymbol("__getf_key");
 		LispSymbol cur = new LispSymbol("__getf_cur");
-		// (getf plist key): plist is parts.get(1), the indicator is parts.get(2).
-		// (do ((__getf_key key) (__getf_cur plist (cddr __getf_cur)))
-		// ((atom __getf_cur) nil)
+		// (getf plist key default): plist is parts.get(1), the indicator is parts.get(2).
+		// (do ((__getf_key key) (__getf_cur plist (cddr __getf_cur)) (__getf_dflt
+		// default))
+		// ((atom __getf_cur) __getf_dflt)
 		// (if (eql __getf_key (car __getf_cur)) (return (cadr __getf_cur)) nil))
 		LispVal cddrStep = listToCons(List.of(new LispSymbol("CDDR"), cur));
-		LispVal bindings = listToCons(
+		List<LispVal> bindingList = new java.util.ArrayList<>(
 				List.of(listToCons(List.of(key, parts.get(2))), listToCons(List.of(cur, parts.get(1), cddrStep))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		// An omitted default stays the nil literal, so a 2-argument getf expands exactly
+		// as before and existing programs keep their bytes.
+		LispVal dflt = LispNil.INSTANCE;
+		if (parts.size() == 4) {
+			LispSymbol dfltVar = new LispSymbol("__getf_dflt");
+			bindingList.add(listToCons(List.of(dfltVar, parts.get(3))));
+			dflt = dfltVar;
+		}
+		LispVal bindings = listToCons(bindingList);
+		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), dflt));
 		LispVal match = listToCons(List.of(new LispSymbol(LispNames.EQL), key, callOf(LispNames.CAR, cur)));
 		LispVal value = listToCons(List.of(new LispSymbol("CADR"), cur));
 		LispVal body = makeIf(match, makeReturn(value), LispNil.INSTANCE);
@@ -10166,6 +10272,14 @@ public final class LispMacroExpander {
 	 */
 	private static final class FmtParser {
 
+		/**
+		 * How many argument-divergent {@code ~[} remainders one control string may
+		 * expand. The fan-out is multiplicative (each divergent conditional re-parses
+		 * everything after it once per clause), so this bounds a pathological control
+		 * string; real ones carry one or two.
+		 */
+		private static final int MAX_REMAINDER_EXPANSIONS = 16;
+
 		private final String src;
 
 		private int pos;
@@ -10177,6 +10291,16 @@ public final class LispMacroExpander {
 
 		/** Whether that terminator carried a {@code :} modifier (for {@code ~:;}). */
 		private boolean stopColon;
+
+		/**
+		 * Set by {@link #clauseExprs} when an argument-divergent {@code ~[} swallowed the
+		 * remainder of the enclosing {@link #parseOps} loop, which must therefore return
+		 * at once instead of parsing that remainder a second time.
+		 */
+		private boolean remainderTaken;
+
+		/** How many times a remainder has been re-parsed, to bound the fan-out. */
+		private int remainderExpansions;
 
 		FmtParser(String src) {
 			this.src = src;
@@ -10228,7 +10352,13 @@ public final class LispMacroExpander {
 					this.stopColon = colon;
 					return ops;
 				}
-				dispatch(directive, params, colon, at, args, ops, lit);
+				dispatch(directive, params, colon, at, args, ops, lit, stoppers);
+				if (this.remainderTaken) {
+					// An argument-divergent ~[ re-parsed everything after itself once per
+					// clause; stopChar/stopColon are already those of that tail parse.
+					this.remainderTaken = false;
+					return ops;
+				}
 			}
 			if (!stoppers.isEmpty()) {
 				throw new IllegalArgumentException(
@@ -10285,7 +10415,7 @@ public final class LispMacroExpander {
 		}
 
 		private void dispatch(char directive, List<LispVal> params, boolean colon, boolean at, FmtArgs args,
-				List<FmtOp> ops, StringBuilder lit) {
+				List<FmtOp> ops, StringBuilder lit, String stoppers) {
 			switch (Character.toLowerCase(directive)) {
 				case '~' -> {
 					int count = fmtCount(params, 0, 1, directive);
@@ -10475,7 +10605,7 @@ public final class LispMacroExpander {
 				}
 				case '[' -> {
 					flushFmtLiteral(lit, ops);
-					parseConditional(params, colon, at, args, ops);
+					parseConditional(params, colon, at, args, ops, stoppers);
 				}
 				case '{' -> {
 					flushFmtLiteral(lit, ops);
@@ -10542,23 +10672,93 @@ public final class LispMacroExpander {
 		}
 
 		/**
-		 * A runtime-selected conditional can only be expanded statically when every
-		 * clause consumes the same number of arguments (the selected clause is not known
-		 * until run time). Returns that common end position.
+		 * Folds each clause of a runtime-selected {@code ~[} into one string-valued
+		 * expression, in clause order.
+		 * <p>
+		 * When every clause consumes the same number of arguments the argument position
+		 * after the conditional is known statically and each clause folds on its own.
+		 * When the clauses consume DIFFERENT numbers -- CL leaves the argument pointer
+		 * wherever the selected clause left it, so the position after the conditional is
+		 * only known at run time -- the REMAINDER of the enclosing control string is
+		 * re-parsed once per clause, each against that clause's own argument position,
+		 * and folded into the clause. The conditional then covers everything after itself
+		 * and the enclosing {@link #parseOps} loop stops ({@link #remainderTaken}).
+		 * postmodern's {@code deftable} constraint strings end with
+		 * {@code ~:[NOT DEFERRABLE~;DEFERRABLE INITIALLY ~:[IMMEDIATE~;DEFERRED~]~]},
+		 * whose two clauses consume one argument apart.
+		 * <p>
+		 * Two consequences of folding the tail into a branch: a {@code ~&} in it is
+		 * approximated from the branch's own literal text (as in any composite body), and
+		 * the fan-out is multiplicative in the number of divergent conditionals, so it is
+		 * bounded by {@link #MAX_REMAINDER_EXPANSIONS}.
 		 */
-		private static int requireEqualConsumption(List<FmtClause> clauses) {
+		private List<LispVal> clauseExprs(List<FmtClause> clauses, FmtArgs args, String stoppers) {
 			int end = clauses.get(0).end();
+			boolean diverges = false;
 			for (FmtClause clause : clauses) {
-				if (clause.end() != end) {
-					throw new UnsupportedOperationException(
-							"format: every ~[ clause must consume the same number of arguments"
-									+ " (use a literal or # selector for uneven clauses)");
-				}
+				diverges |= clause.end() != end;
 			}
-			return end;
+			if (!diverges) {
+				args.adoptIndex(end);
+				return clauses.stream().map(clause -> opsToExpr(clause.ops())).toList();
+			}
+			if (++this.remainderExpansions > MAX_REMAINDER_EXPANSIONS) {
+				throw new UnsupportedOperationException(
+						"format: too many argument-divergent ~[ conditionals to expand statically");
+			}
+			int remainderStart = this.pos;
+			List<LispVal> exprs = new java.util.ArrayList<>();
+			int tailEnd = -1;
+			int tailPos = -1;
+			char tailStop = 0;
+			boolean tailStopColon = false;
+			boolean tailDiverges = false;
+			IllegalArgumentException lastFailure = null;
+			for (FmtClause clause : clauses) {
+				this.pos = remainderStart;
+				FmtArgs branch = args.branchAt(clause.end());
+				List<FmtOp> whole = new java.util.ArrayList<>(clause.ops());
+				try {
+					whole.addAll(parseOps(branch, stoppers));
+				}
+				catch (IllegalArgumentException shortOfArguments) {
+					// This branch consumes more arguments than were supplied. CL only
+					// notices when the branch actually RUNS, so the clause folds to a
+					// call that signals then, and the others still expand statically.
+					lastFailure = shortOfArguments;
+					String message = shortOfArguments.getMessage();
+					exprs.add(fmtCall(LispNames.ERROR,
+							new LispString(message == null ? "format: bad control string" : message)));
+					continue;
+				}
+				exprs.add(opsToExpr(whole));
+				tailDiverges |= tailEnd >= 0 && branch.position() != tailEnd;
+				tailEnd = Math.max(tailEnd, branch.position());
+				tailPos = this.pos;
+				tailStop = this.stopChar;
+				tailStopColon = this.stopColon;
+			}
+			if (tailPos < 0) {
+				// No clause parsed: the control string itself is bad, not the argument
+				// count of one branch.
+				throw lastFailure;
+			}
+			if (tailDiverges && !stoppers.isEmpty()) {
+				// Nested inside another composite directive, whose own end position would
+				// then be branch-dependent too; the runtime renderer takes it instead.
+				throw new UnsupportedOperationException(
+						"format: an argument-divergent ~[ inside another composite directive is not supported");
+			}
+			this.pos = tailPos;
+			this.stopChar = tailStop;
+			this.stopColon = tailStopColon;
+			args.adoptIndex(tailEnd);
+			this.remainderTaken = true;
+			return exprs;
 		}
 
-		private void parseConditional(List<LispVal> params, boolean colon, boolean at, FmtArgs args, List<FmtOp> ops) {
+		private void parseConditional(List<LispVal> params, boolean colon, boolean at, FmtArgs args, List<FmtOp> ops,
+				String stoppers) {
 			if (at) {
 				// ~@[str~]: the tested argument is re-used by the clause when non-nil
 				// and consumed outright when nil, so the clause must consume exactly it.
@@ -10578,8 +10778,8 @@ public final class LispMacroExpander {
 				if (clauses.size() != 2) {
 					throw new IllegalArgumentException("format: ~:[ requires exactly two clauses");
 				}
-				args.adoptIndex(requireEqualConsumption(clauses));
-				ops.add(new FmtString(makeIf(sel, opsToExpr(clauses.get(1).ops()), opsToExpr(clauses.get(0).ops()))));
+				List<LispVal> exprs = clauseExprs(clauses, args, stoppers);
+				ops.add(new FmtString(makeIf(sel, exprs.get(1), exprs.get(0))));
 				return;
 			}
 			LispVal selParam = params.isEmpty() ? LispNil.INSTANCE : params.get(0);
@@ -10621,13 +10821,20 @@ public final class LispMacroExpander {
 			}
 			LispVal sel = (selParam instanceof LispNil) ? args.next('[') : selParam;
 			List<FmtClause> clauses = parseClauses(args);
-			args.adoptIndex(requireEqualConsumption(clauses));
-			List<FmtClause> numbered = clauses.stream().filter(c -> !c.isDefault()).toList();
-			FmtClause dflt = clauses.stream().filter(FmtClause::isDefault).findFirst().orElse(null);
-			LispVal chain = (dflt != null) ? opsToExpr(dflt.ops()) : new LispString("");
+			List<LispVal> exprs = clauseExprs(clauses, args, stoppers);
+			List<LispVal> numbered = new java.util.ArrayList<>();
+			LispVal dflt = null;
+			for (int i = 0; i < clauses.size(); i++) {
+				if (clauses.get(i).isDefault()) {
+					dflt = exprs.get(i);
+				}
+				else {
+					numbered.add(exprs.get(i));
+				}
+			}
+			LispVal chain = (dflt != null) ? dflt : new LispString("");
 			for (int i = numbered.size() - 1; i >= 0; i--) {
-				chain = makeIf(fmtCall(LispNames.EQL, sel, new LispInteger(i)), opsToExpr(numbered.get(i).ops()),
-						chain);
+				chain = makeIf(fmtCall(LispNames.EQL, sel, new LispInteger(i)), numbered.get(i), chain);
 			}
 			ops.add(new FmtString(chain));
 		}

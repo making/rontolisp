@@ -61,6 +61,25 @@ heads accept the same specs as `check-type`:
   the name reaches RUNTIME data, e.g. parse-number's `'double-float` compared
   by the runtime `coerce` dispatch (symbols compare by name, so a qualified
   spelling would never match).
+- **The four float type names are ONE type, and `subtypep` says so on purpose**
+  (`LispMacroExpander.canonicalSubtypeName` collapses `single-float`/
+  `double-float`/`short-float`/`long-float` to `FLOAT`). rontolisp has exactly
+  one float format -- `1.0s0`, `1.0f0`, `1.0d0` and `1.0l0` all read to the same
+  value, `type-of` answers `FLOAT` for each and a float is `typep` of all four
+  names -- and CLHS explicitly permits an implementation to have as few as one
+  distinct float format, in which case the four names denote the same type and
+  `(subtypep 'single-float 'double-float)` is genuinely `T`. So this is NOT the
+  "dishonest lattice" `.todo/200` suspected: postmodern's
+  `json-encoder.lisp` `eval-when` probes exactly these pairs and, answered this
+  way, takes its `:cl-json-only-one-float-type` branch, which is the correct one
+  here. **Re-evaluation trigger**: this stays right only while there is one float
+  representation. If a distinct single-float ever lands, `canonicalSubtypeName`
+  must stop collapsing the names and the lattice must gain the real
+  `single-float <= double-float <= long-float` edges in the SAME pass, or every
+  library that probes the float lattice silently takes the wrong branch. Pinned
+  by the `postmodern-language-incidentals` ci-spec case, which asserts the pair
+  `(T T)`. Separately, `subtypep` returns ONE value here (CL returns a second
+  "certain?" value); every known consumer uses only the primary.
 - `deftype` is a parsed no-op returning nil (the name is NOT registered;
   using it in a later type test errors) -- enough for the library shape
   where the type only appears in no-op declaim/declare declarations.

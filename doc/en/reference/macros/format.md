@@ -115,10 +115,17 @@ any other destination is written with one `write-string` call. Further notes:
   output column for destination `t`, but from the surrounding literal text (a
   static approximation) for destination `nil` and inside composite
   (`~(`/`~[`/`~{`) bodies.
-- Because `format` expands statically, a runtime-selected `~[` requires every
-  clause to consume the same number of arguments (a literal or `#` selector
-  lifts that restriction), a `~@[` clause must consume exactly the tested
-  argument, and `#` and `~@{` are not available inside a `~{ ... ~}` body.
+- Composite directives nest freely: a `~[` conditional may hold another `~[` (or
+  a `~{ ... ~}` iteration) in any of its clauses. When a runtime-selected `~[`
+  has clauses that consume DIFFERENT numbers of arguments, the rest of the
+  control string is expanded once per clause so each branch continues from its
+  own argument position, exactly as Common Lisp's argument pointer would. A
+  branch that would need more arguments than were supplied signals only if it is
+  actually selected.
+- Because `format` expands statically, a `~@[` clause must consume exactly the
+  tested argument, `#` and `~@{` are not available inside a `~{ ... ~}` body, and
+  an argument-divergent `~[` nested inside another composite directive
+  (`~(`/`~{`) is not supported.
 - `~:d` grouping and the radix directives `~x`/`~o`/`~b`/`~r` are exact for integers of any magnitude on every backend.
 
 Like the other macros, `format` is not recognized by the embedded `eval` runtime

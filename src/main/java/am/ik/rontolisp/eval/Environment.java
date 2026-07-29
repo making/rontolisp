@@ -2668,8 +2668,8 @@ public final class Environment implements Scope {
 			return result;
 		}));
 		env.defineFunction(LispNames.GETF, new LispFunction(LispNames.GETF, args -> {
-			requireArgCount(LispNames.GETF, args, 2);
-			// (getf plist indicator): the property list is the first argument.
+			requireArgCountBetween(LispNames.GETF, args, 2, 3);
+			// (getf plist indicator [default]): the property list is the first argument.
 			LispVal cur = args.get(0);
 			LispVal key = args.get(1);
 			// Walk the property list two cells at a time, returning the value after the
@@ -2680,7 +2680,8 @@ public final class Environment implements Scope {
 				}
 				cur = valueCell.cdr();
 			}
-			return LispNil.INSTANCE;
+			// Absent: the optional default, nil when it was not supplied.
+			return (args.size() == 3) ? args.get(2) : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.REMOVE_DUPLICATES, new LispFunction(LispNames.REMOVE_DUPLICATES, args -> {
 			requireArgCount(LispNames.REMOVE_DUPLICATES, args, 1);
@@ -3235,12 +3236,38 @@ public final class Environment implements Scope {
 		return sb.toString();
 	}
 
+	// The characters of a trim CHARACTER BAG as a string. CL allows any sequence of
+	// characters, and a LIST bag is what libraries write (postmodern's execute-file lexer
+	// trims with '(#\Space #\Tab)); the compile paths fold the same widening in
+	// LispMacroExpander.normalizeCharBag.
+	private static String charBagString(String name, LispVal bagVal) {
+		if (bagVal instanceof LispString s) {
+			return s.value();
+		}
+		if (bagVal instanceof LispNil) {
+			return "";
+		}
+		StringBuilder chars = new StringBuilder();
+		LispVal cur = bagVal;
+		while (cur instanceof LispCons cell) {
+			if (!(cell.car() instanceof LispChar ch)) {
+				throw new LispEvalException(name + " expects a string or a list of characters, got: " + bagVal);
+			}
+			chars.appendCodePoint(ch.codePoint());
+			cur = cell.cdr();
+		}
+		if (!(cur instanceof LispNil)) {
+			throw new LispEvalException(name + " expects a string or a list of characters, got: " + bagVal);
+		}
+		return chars.toString();
+	}
+
 	// Removes characters that appear in the bag string from the requested ends. Walks by
 	// CODE POINT so a supplementary character is one indexed step and its surrogate
 	// halves
 	// are not compared against the bag as individual characters.
 	private static String trimString(String name, LispVal bagVal, LispVal strVal, boolean left, boolean right) {
-		String bag = requireString(name, bagVal);
+		String bag = charBagString(name, bagVal);
 		String s = requireString(name, strVal);
 		int start = 0;
 		int end = s.length();

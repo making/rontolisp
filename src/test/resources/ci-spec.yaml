@@ -1384,7 +1384,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      329
+      330
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -5403,3 +5403,76 @@ cases:
       (:CAUGHT 42)
       6
       NIL
+
+  - name: postmodern-language-incidentals
+    source: |
+      ;; .todo/200 -- the language incidentals postmodern proper needs, all of
+      ;; which must answer identically on every backend.
+      ;; A ~:[ nested INSIDE another ~:[ clause, whose two clauses consume a
+      ;; different number of arguments: the argument position after the
+      ;; conditional is only known at run time, so expandFormat distributes the
+      ;; remainder of the control string over both branches. This is the tail of
+      ;; postmodern's deftable \!foreign / \!unique constraint strings.
+      (print (format nil "~:[NOT DEFERRABLE~;DEFERRABLE INITIALLY ~:[IMMEDIATE~;DEFERRED~]~]" nil nil))
+      (print (format nil "~:[NOT DEFERRABLE~;DEFERRABLE INITIALLY ~:[IMMEDIATE~;DEFERRED~]~]" t nil))
+      (print (format nil "~:[NOT DEFERRABLE~;DEFERRABLE INITIALLY ~:[IMMEDIATE~;DEFERRED~]~]" t t))
+      (print (format nil "ALTER TABLE ~A ADD CONSTRAINT ~A UNIQUE (~{~A~^, ~}) ~:[NOT DEFERRABLE~;DEFERRABLE INITIALLY ~:[IMMEDIATE~;DEFERRED~]~]" "t1" "c1" '("a" "b") t t))
+      ;; A directive AFTER the divergent conditional: each branch continues from
+      ;; its own argument position.
+      (print (format nil "[~:[x~;y~a~]|~a]" nil "P" "Q"))
+      (print (format nil "[~:[x~;y~a~]|~a]" t "P" "Q"))
+      ;; ~V parameter-from-argument twice plus a '0 pad character on ~R
+      ;; (json-encoder's unicode escape writer).
+      (print (format nil "\\~C~V,V,'0R" #\u 16 4 10))
+      ;; getf with a default (deftable's foreign-key options).
+      (print (getf '(:a 1) :on-delete :restrict))
+      (print (getf '(:on-delete :cascade) :on-delete :restrict))
+      (print (getf '(:a nil) :a :fallback))
+      ;; rassoc-if (json-encoder's escape-table lookup, under #. read-time eval).
+      (print (rassoc-if #'consp '((1 . 2) (3 4 . 5))))
+      (print '#.(rassoc-if #'consp '((#\a . #\b) (#\u . (4 . 16)))))
+      ;; string-trim with a LIST character bag (execute-file's lexer).
+      (print (string-trim '(#\Space #\Tab) "	 xy 	"))
+      (print (string-left-trim '(#\Space) "  z"))
+      (let ((pm-bag (list #\Space))) (print (string-trim pm-bag " q ")))
+      ;; A toplevel (let ...) / (labels ...) wrapping defuns must hoist on every
+      ;; backend (prepare.lisp's next-statement-id, deftable.lisp's \!index).
+      (let ((pm-counter 0))
+        (defun pm-next-id () (setf pm-counter (1+ pm-counter)) pm-counter))
+      (let* ((pm-a (pm-next-id)) (pm-b (pm-next-id)) (pm-c (pm-next-id)))
+        (print (list pm-a pm-b pm-c)))
+      (labels ((pm-join (parts) (format nil "~{~a~^_~}" parts)))
+        (defun pm-index-name (fields) (pm-join fields)))
+      (print (pm-index-name '("a" "b" "c")))
+      ;; An eval-when defun called AT MACROEXPANSION time (transaction.lisp's
+      ;; isolation-level-p, called while with-transaction expands).
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defun pm-isolation-level-p (x) (member x '(:serializable :read-committed))))
+      (defmacro pm-with-tx ((&optional (level :read-committed)) &body body)
+        (unless (pm-isolation-level-p level) (error "bad isolation level ~a" level))
+        `(progn ,@body))
+      (print (pm-with-tx (:serializable) :ok))
+      ;; rontolisp has ONE float format, so all four float type names denote the
+      ;; same type and subtypep says so (CLHS permits it); json-encoder's
+      ;; eval-when probe therefore selects its "only one float type" branch.
+      (print (list (subtypep 'long-float 'single-float) (subtypep 'single-float 'double-float)))
+    expected: |
+      "NOT DEFERRABLE"
+      "DEFERRABLE INITIALLY IMMEDIATE"
+      "DEFERRABLE INITIALLY DEFERRED"
+      "ALTER TABLE t1 ADD CONSTRAINT c1 UNIQUE (a, b) DEFERRABLE INITIALLY DEFERRED"
+      "[x|P]"
+      "[yP|Q]"
+      "\u000A"
+      :RESTRICT
+      :CASCADE
+      NIL
+      (3 4 . 5)
+      (#\u 4 . 16)
+      "xy"
+      "z"
+      "q"
+      (1 2 3)
+      "a_b_c"
+      :OK
+      (T T)

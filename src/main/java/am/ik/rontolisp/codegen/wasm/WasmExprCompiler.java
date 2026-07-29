@@ -744,9 +744,12 @@ final class WasmExprCompiler {
 						WasmStringEqCompiler.compileEqual(cons, ctx);
 					}
 				}
-				case LispNames.STRING_TRIM -> WasmStringTrimCompiler.compileTrim(cons, ctx);
-				case LispNames.STRING_LEFT_TRIM -> WasmStringTrimCompiler.compileLeft(cons, ctx);
-				case LispNames.STRING_RIGHT_TRIM -> WasmStringTrimCompiler.compileRight(cons, ctx);
+				case LispNames.STRING_TRIM ->
+					WasmStringTrimCompiler.compileTrim(LispMacroExpander.normalizeCharBag(cons), ctx);
+				case LispNames.STRING_LEFT_TRIM ->
+					WasmStringTrimCompiler.compileLeft(LispMacroExpander.normalizeCharBag(cons), ctx);
+				case LispNames.STRING_RIGHT_TRIM ->
+					WasmStringTrimCompiler.compileRight(LispMacroExpander.normalizeCharBag(cons), ctx);
 				case LispNames.READ -> WasmReadCompiler.compile(cons, ctx);
 				case LispNames.LOAD -> WasmLoadCompiler.compile(cons, ctx);
 				// A literal top-level require/provide (and the asdf directives) was
@@ -859,6 +862,7 @@ final class WasmExprCompiler {
 				case LispNames.COUNT_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCountIf(cons), ctx);
 				case LispNames.ASSOC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAssoc(cons), ctx);
 				case LispNames.ASSOC_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAssocIf(cons), ctx);
+				case LispNames.RASSOC_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRassocIf(cons), ctx);
 				case LispNames.GETF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandGetf(cons), ctx);
 				case LispNames.EVERY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvery(cons), ctx);
 				case LispNames.SOME -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSome(cons), ctx);

@@ -1059,6 +1059,12 @@ public final class LispEvaluator {
 			}
 			return assocIfValues(args.get(0), args.get(1));
 		}));
+		this.globalEnv.defineFunction(LispNames.RASSOC_IF, new LispFunction(LispNames.RASSOC_IF, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.RASSOC_IF + " expects 2 arguments, got " + args.size());
+			}
+			return rassocIfValues(args.get(0), args.get(1));
+		}));
 		this.globalEnv.defineFunction(LispNames.ASSOC, new LispFunction(LispNames.ASSOC, args -> {
 			if (args.size() < 2) {
 				throw new LispEvalException(LispNames.ASSOC + " expects at least 2 arguments, got " + args.size());
@@ -4888,6 +4894,19 @@ public final class LispEvaluator {
 		while (alist instanceof LispCons cell) {
 			if (cell.car() instanceof LispCons pair
 					&& isTruthy(apply(predicate, List.of(pair.car()), this.globalEnv))) {
+				return pair;
+			}
+			alist = cell.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Return the first pair whose cdr satisfies the predicate (Common Lisp rassoc-if), or
+	// nil. The mirror of assocIfValues.
+	private LispVal rassocIfValues(LispVal predicate, LispVal alist) {
+		while (alist instanceof LispCons cell) {
+			if (cell.car() instanceof LispCons pair
+					&& isTruthy(apply(predicate, List.of(pair.cdr()), this.globalEnv))) {
 				return pair;
 			}
 			alist = cell.cdr();

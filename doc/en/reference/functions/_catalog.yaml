@@ -199,6 +199,7 @@ categories:
       - { slug: assoc, name: "assoc" }
       - { slug: assoc-if, name: "assoc-if" }
       - { slug: rassoc, name: "rassoc" }
+      - { slug: rassoc-if, name: "rassoc-if" }
       - { slug: pairlis, name: "pairlis" }
       - { slug: copy-alist, name: "copy-alist" }
       - { slug: getf, name: "getf" }

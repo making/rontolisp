@@ -35,8 +35,19 @@ unwind-protect knot + `retry-transaction`), the connection pool
   shadowing, real slot unboundness (`unbound-slot` on every backend),
   in-place `change-class`, `print-object`, `with-accessors`, `with-slots` over
   a struct, `:default-initargs` on a typed signal (`.kb/clos.md`)
-- `.todo/200-postmodern-language-incidentals.md` -- format nesting, features
-  visibility, float subtypep, stream captures
+- `.todo/200-postmodern-language-incidentals.md` -- MOSTLY DONE (2026-07-29):
+  the `~[` argument-divergent nesting of `deftable`'s constraint strings, `getf`
+  with a default, `rassoc-if`, and a LIST character bag for the `string-trim`
+  family all landed on all four backends; the `~V,V,'0R` / `~:@(~S~)` / `~^` /
+  `#.` / `eval-when`-at-macroexpansion / toplevel-`let`-around-`defun` items
+  verified as already working, and the "float `subtypep` is dishonest" premise
+  turned out to be false (one float format, so `T` is right). What is LEFT there
+  is one coherent group, the string/character stream additions -- and
+  `make-synonym-stream` below is part of it: `make-string-output-stream` /
+  `get-output-stream-string` (unexposed public names over existing `%` internals;
+  mind CL's clear-on-read), `peek-char` (absent), and `read-char` signalling a
+  typed `end-of-file` rather than a plain error (`execute-file.lisp`'s lexer
+  catches `end-of-file`, so it would never fire today).
 
 The `.asd` override and dependency plumbing (old `.todo/201`) has LANDED:
 `(ql:quickload "postmodern")` resolves and orders the whole graph and stops in

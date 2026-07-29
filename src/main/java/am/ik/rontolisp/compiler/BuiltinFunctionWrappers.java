@@ -210,6 +210,8 @@ public final class BuiltinFunctionWrappers {
 
 	// (name a b &optional c) dispatching on c's presence -- the CL subseq shape, whose
 	// wrapper must accept the optional end (cl-ppcre funcalls #'subseq with 3 args).
+	// Also getf's default, where the nil dispatch is exact: an omitted default and an
+	// explicit nil one both answer nil on a miss.
 	private static WrapperDef binaryOptionalThird(String name) {
 		LispVal dispatch = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("c"),
 				call(name, "a", "b", "c"), call(name, "a", "b")));
@@ -515,14 +517,15 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.FIND_IF_NOT), positionFamily(LispNames.POSITION, true),
 			positionFamily(LispNames.POSITION_IF, false), positionFamily(LispNames.POSITION_IF_NOT, false),
 			binary(LispNames.COUNT), binary(LispNames.COUNT_IF), binary(LispNames.ASSOC), binary(LispNames.ASSOC_IF),
-			binary(LispNames.RASSOC), ternary(LispNames.ACONS), binary(LispNames.PAIRLIS), unary(LispNames.COPY_ALIST),
-			binary(LispNames.GETF), unary(LispNames.REMOVE_DUPLICATES), variadicNconc(), unary(LispNames.IDENTITY),
-			unary(LispNames.COPY_LIST), unary(LispNames.NREVERSE), unary(LispNames.MAKE_LIST), binary(LispNames.UNION),
-			binary(LispNames.INTERSECTION), binary(LispNames.SET_DIFFERENCE), binary(LispNames.ADJOIN),
-			binary(LispNames.EVERY), binary(LispNames.SOME), binary(LispNames.REMOVE), binary(LispNames.REMOVE_IF),
-			binary(LispNames.REMOVE_IF_NOT), binary(LispNames.DELETE), binary(LispNames.DELETE_IF),
-			binary(LispNames.DELETE_IF_NOT), ternary(LispNames.SUBSTITUTE), ternary(LispNames.NSUBSTITUTE),
-			binary(LispNames.MAPCAN), binary(LispNames.SORT), variadicStableSort(), unary(LispNames.COPY_SEQ),
+			binary(LispNames.RASSOC), binary(LispNames.RASSOC_IF), ternary(LispNames.ACONS), binary(LispNames.PAIRLIS),
+			unary(LispNames.COPY_ALIST), binaryOptionalThird(LispNames.GETF), unary(LispNames.REMOVE_DUPLICATES),
+			variadicNconc(), unary(LispNames.IDENTITY), unary(LispNames.COPY_LIST), unary(LispNames.NREVERSE),
+			unary(LispNames.MAKE_LIST), binary(LispNames.UNION), binary(LispNames.INTERSECTION),
+			binary(LispNames.SET_DIFFERENCE), binary(LispNames.ADJOIN), binary(LispNames.EVERY), binary(LispNames.SOME),
+			binary(LispNames.REMOVE), binary(LispNames.REMOVE_IF), binary(LispNames.REMOVE_IF_NOT),
+			binary(LispNames.DELETE), binary(LispNames.DELETE_IF), binary(LispNames.DELETE_IF_NOT),
+			ternary(LispNames.SUBSTITUTE), ternary(LispNames.NSUBSTITUTE), binary(LispNames.MAPCAN),
+			binary(LispNames.SORT), variadicStableSort(), unary(LispNames.COPY_SEQ),
 			// The mapping family as first-class values (alexandria hands #'mapcar to
 			// its own combinators). Two-list shapes are the ones a wrapper can carry:
 			// the expansions take a fixed sequence count.

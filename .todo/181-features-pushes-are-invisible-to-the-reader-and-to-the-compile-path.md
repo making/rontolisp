@@ -48,6 +48,17 @@ so all 21,765 data-derived letter entries collapsed onto one `nil` hash key and
 calls `unicode-letter-p`, and Postmodern proper is the declared follow-up to
 `.todo/115`.
 
+**Update 2026-07-29 (`.todo/200`)**: postmodern's `json-encoder.lisp:500` was
+billed as this item's first hard consumer -- an `eval-when` that probes the float
+lattice with `subtypep` and pushes `:cl-json-only-one-float-type` etc., read back
+by `#+`/`#-` fifteen lines later. Measured: rontolisp has exactly ONE float
+format, so those probes answer `T` and the file's `#-` branches select the
+"only one float type" path, which is the CORRECT one here. The invisible push
+therefore costs json-encoder nothing; it is a fidelity gap there, not a
+correctness one, and no Tier-4 rewrite of that file is needed. This item stays
+open on its own merits (the next library to push and read back a feature still
+gets the silent wrong branch) but has no known broken consumer today.
+
 That specific victim is no longer broken -- `.todo/179`'s derived uax-15 tables
 sidestep `char-from-hexstring` entirely (`eval/Uax15Tables`, and the pin in
 `Uax15E2eTest` asserts `T` for `#\A`) -- but that is luck, not a fix. The next

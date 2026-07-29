@@ -647,6 +647,13 @@ public final class LispNames {
 	public static final String RASSOC = "RASSOC";
 
 	/**
+	 * The {@code rassoc-if} built-in function (the first pair of an alist whose CDR
+	 * satisfies the predicate, or nil) -- {@code rassoc}'s predicate form, the mirror of
+	 * {@link #ASSOC_IF}.
+	 */
+	public static final String RASSOC_IF = "RASSOC-IF";
+
+	/**
 	 * The {@code pairlis} built-in function (pair up a list of keys and a list of values
 	 * into an association list, prepended to an optional existing alist).
 	 */

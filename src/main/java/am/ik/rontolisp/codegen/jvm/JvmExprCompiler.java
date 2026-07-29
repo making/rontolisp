@@ -555,9 +555,12 @@ final class JvmExprCompiler {
 						JvmStringEqCompiler.compileEqual(cons, ctx, className);
 					}
 				}
-				case LispNames.STRING_TRIM -> JvmStringTrimCompiler.compileTrim(cons, ctx, className);
-				case LispNames.STRING_LEFT_TRIM -> JvmStringTrimCompiler.compileLeft(cons, ctx, className);
-				case LispNames.STRING_RIGHT_TRIM -> JvmStringTrimCompiler.compileRight(cons, ctx, className);
+				case LispNames.STRING_TRIM ->
+					JvmStringTrimCompiler.compileTrim(LispMacroExpander.normalizeCharBag(cons), ctx, className);
+				case LispNames.STRING_LEFT_TRIM ->
+					JvmStringTrimCompiler.compileLeft(LispMacroExpander.normalizeCharBag(cons), ctx, className);
+				case LispNames.STRING_RIGHT_TRIM ->
+					JvmStringTrimCompiler.compileRight(LispMacroExpander.normalizeCharBag(cons), ctx, className);
 				case LispNames.QUOTE -> JvmQuoteCompiler.compile(cons, ctx, className);
 				case LispNames.IF -> JvmIfCompiler.compile(cons, ctx, className);
 				case LispNames.WHILE -> JvmWhileCompiler.compile(cons, ctx, className);
@@ -673,6 +676,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandAssoc(cons), ctx, className);
 				case LispNames.ASSOC_IF ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandAssocIf(cons), ctx, className);
+				case LispNames.RASSOC_IF ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRassocIf(cons), ctx, className);
 				case LispNames.GETF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandGetf(cons), ctx, className);
 				case LispNames.EVERY ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandEvery(cons), ctx, className);

@@ -1843,6 +1843,46 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFormatNestedConditionalClauses() throws Exception {
+		// A ~:[ nested inside another ~:[ clause, whose two clauses consume a different
+		// number of arguments -- expandFormat distributes the control string remainder
+		// over both branches. postmodern's deftable constraint strings end with this.
+		String deferrable = "~:[NOT DEFERRABLE~;DEFERRABLE INITIALLY ~:[IMMEDIATE~;DEFERRED~]~]";
+		assertThat(compileAndRun("(format t \"" + deferrable + "\" nil nil)")).isEqualTo("NOT DEFERRABLE");
+		assertThat(compileAndRun("(format t \"" + deferrable + "\" t nil)"))
+			.isEqualTo("DEFERRABLE INITIALLY IMMEDIATE");
+		assertThat(compileAndRun("(format t \"" + deferrable + "\" t t)")).isEqualTo("DEFERRABLE INITIALLY DEFERRED");
+		// A directive after the divergent conditional: each branch continues from its
+		// own argument position.
+		assertThat(compileAndRun("(format t \"[~:[x~;y~a~]|~a]\" nil \"P\" \"Q\")")).isEqualTo("[x|P]");
+		assertThat(compileAndRun("(format t \"[~:[x~;y~a~]|~a]\" t \"P\" \"Q\")")).isEqualTo("[yP|Q]");
+	}
+
+	@Test
+	void compileAndRunGetfDefaultAndRassocIf() throws Exception {
+		assertThat(compileAndRun("(princ (getf '(:a 1) :on-delete :restrict))")).isEqualTo("RESTRICT");
+		assertThat(compileAndRun("(princ (getf '(:on-delete :cascade) :on-delete :restrict))")).isEqualTo("CASCADE");
+		assertThat(compileAndRun("(princ (getf '(:a nil) :a :fallback))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(princ (funcall #'getf '(:x 10) :y :none))")).isEqualTo("NONE");
+		// getf is a FUNCTION: the default is evaluated hit OR miss, like the
+		// interpreter's eager argument evaluation (so it cannot live in the do result).
+		assertThat(compileAndRun("(let ((n 0)) (getf '(:a 1) :a (setq n 1)) (princ n))")).isEqualTo("1");
+		assertThat(compileAndRun("(let ((n 0)) (getf '(:a 1) :b (setq n 1)) (princ n))")).isEqualTo("1");
+		assertThat(compileAndRun("(princ (rassoc-if #'consp '((1 . 2) (3 4 . 5))))")).isEqualTo("(3 4 . 5)");
+		assertThat(compileAndRun("(princ (funcall #'rassoc-if #'consp '((1 . 2) (3 4 . 5))))")).isEqualTo("(3 4 . 5)");
+	}
+
+	@Test
+	void compileAndRunStringTrimListCharacterBag() throws Exception {
+		// A literal list bag folds to a string constant; a runtime bag goes through the
+		// same (coerce bag 'string) widening.
+		assertThat(compileAndRun("(princ (string-trim '(#\\Space #\\Tab) \"\tx y \t\"))")).isEqualTo("x y");
+		assertThat(compileAndRun("(princ (string-left-trim '(#\\Space) \"  z\"))")).isEqualTo("z");
+		assertThat(compileAndRun("(princ (string-right-trim '(#\\x #\\y) \"helloxy\"))")).isEqualTo("hello");
+		assertThat(compileAndRun("(let ((bag (list #\\Space))) (princ (string-trim bag \" q \")))")).isEqualTo("q");
+	}
+
+	@Test
 	void compileAndRunFormatIteration() throws Exception {
 		assertThat(compileAndRun("(format t \"~{<~a>~}|~2{ ~a~}|~:{(~a,~a)~}\" '(1 2) '(a b c d) '((x 1) (y 2)))"))
 			.isEqualTo("<1><2>| A B|(X,1)(Y,2)");
@@ -5143,12 +5183,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("329");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("330");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("329");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("330");
 	}
 
 	@Test
