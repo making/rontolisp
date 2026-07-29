@@ -2699,6 +2699,68 @@ cases:
       "QXYz"
       QXYz|"QXYz"
       QXYz
+  # A PLAIN (make-string n) -- no :fill-pointer, no :adjustable -- is mutable too:
+  # it lowers to the same character vector (.kb/adjustable-arrays.md). The first
+  # four lines are the .todo/208 table; before that fix the compile backends
+  # printed "[    ]" for the subseq / replace / alias rows because make-string
+  # built an IMMUTABLE string and every write took its functional branch. The
+  # rest walks what a make-string buffer is actually passed to.
+  - name: make-string-mutability-cross-backend
+    source: |
+      (defun ci-make-string-mutability ()
+        (let ((s (make-string 4))) (setf (char s 0) #\a) (format t "[~a]~%" s))
+        (let ((s (make-string 4))) (setf (subseq s 1 3) "xy") (format t "[~a]~%" s))
+        (let ((s (make-string 4))) (replace s "ab") (format t "[~a]~%" s))
+        (let* ((s (make-string 4)) (alias s))
+          (setf (char s 0) #\a)
+          (format t "[~a]~%" alias))
+        (let ((buf (make-string 5)))
+          (replace buf "ab")
+          (replace buf "cde" :start1 2)
+          (print buf)
+          (print (list (stringp buf) (length buf) (simple-string-p buf))))
+        (let ((s (make-string 3)))
+          (replace s "abc")
+          (print (list (string= s "abc") (string-upcase s) (subseq s 1)))
+          (print (concatenate 'string s "!"))
+          (print (list (char s 1) (aref s 1) (elt s 1) (search "bc" s) (position #\b s)))
+          (print (list (equal s "abc") (equalp s "ABC") (reverse s) (coerce s 'list)))
+          (print (symbol-name (intern s)))
+          (print (read-from-string s))
+          (let ((h (make-hash-table :test 'equal)))
+            (setf (gethash s h) 42)
+            (print (gethash "abc" h)))
+          (format t "~a|~s~%" s s)
+          (write-string s)
+          (terpri))
+        (print (make-string 3 :initial-element #\-))
+        (let ((s (make-string 2)))
+          (setf (char s 0) #\あ)
+          (setf (char s 1) #\b)
+          (print (list s (length s))))
+        (let ((s (make-sequence 'string 3)))
+          (replace s "xyz")
+          (print s)))
+      (ci-make-string-mutability)
+    expected: |
+      [a   ]
+      [ xy ]
+      [ab  ]
+      [a   ]
+      "abcde"
+      (T 5 T)
+      (T "ABC" "bc")
+      "abc!"
+      (#\b #\b #\b 1 1)
+      (T T "cba" (#\a #\b #\c))
+      "abc"
+      ABC
+      42
+      abc|"abc"
+      abc
+      "---"
+      ("あb" 2)
+      "xyz"
   - name: array-literals-cross-backend
     source: |
       (defun ci-array-literals ()

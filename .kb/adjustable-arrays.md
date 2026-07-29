@@ -27,8 +27,8 @@ through the same default path), satisfying the todo-71 "gate explicitly"
 acceptance without a dedicated gate.
 
 **Fill-pointered STRINGS (mutable character vectors, ALL backends
-2026-07-18)**: `make-array :element-type 'character` WITH
-`:fill-pointer`/`:adjustable` builds a mutable string everywhere. On the
+2026-07-18)**: `make-array :element-type 'character` — with or without
+`:fill-pointer`/`:adjustable` — builds a mutable string everywhere. On the
 interpreter it is a mutable `LispString` (char[] buffer + fill pointer +
 adjustable flag). On the COMPILED backends it is the GENERAL array
 representation holding character elements, marked "character vector" —
@@ -51,8 +51,11 @@ the same array gate) renders the active prefix quote-framed; WASM
 reusing the unary `TYPE_CALLABLE_BASE + 0` signature, capture-aware scratch
 so mid-capture normalization cannot clobber `*-to-string` output). Insert
 points: the string-op compile sites (char/schar, subseq, string=/-equal,
-case/trim/concat, write-string, string designator, WASM also
-read-from-string / make-string-input-stream / intern / make-symbol), plus
+case/trim/concat, write-string, string designator, read-from-string,
+make-string-input-stream, intern, make-symbol — the last four were WASM-only
+until todo-208 made a plain `make-string` result reach them on the JVM too,
+where `_readFromString` and `intern`/`make-symbol`'s quote strip both
+`checkcast String` and so threw `ClassCastException` on a char vector), plus
 the shared runtime bodies — JVM `emitArrayBranch` of
 `_lispToString`/`_lispToDisplayString` (which also covers equal-hash-table
 keys, keyed by rendered string) and `_eqv`'s equals fallback; WASM the
@@ -74,12 +77,69 @@ else `coerce 'string`) — both compilers try it BEFORE the general
 is `#\Space`. Lite residue: `adjust-array` on a NON-adjustable char vector
 returns a general (unmarked) vector; `#'make-array`'s variadic wrapper
 (`apply` path) has no `:element-type` cue, so it builds an unmarked vector;
-char reads past the fill pointer see the rendered (fp-bounded) content;
-`eq`/`eql` of a char vector vs an equal-content string is content-true on
-the JVM (`_eqv` normalizes) but nil on WASM (string identity = id field).
+char reads past the fill pointer see the rendered (fp-bounded) content.
 E2E: ci-spec `mutable-strings-cross-backend`; unit: the
 `compileCharVector*` / `compileScharSetfMutatesCharVectorInPlace` /
 `compileJzonAccumulatorPattern` sets in both compiler tests.
+
+**A PLAIN `(make-string n)` is a character vector too (all backends,
+todo-208)**. `LispMacroExpander.expandMakeString` — shared by the
+interpreter and both compilers — lowers to
+`(make-array n :element-type 'character :initial-element c)`, so every
+make-string result IS the mutable representation above. `make-sequence`
+reaches it through the same door (`expandMakeSequence` maps the string
+family onto `make-string`).
+
+Why, and the trigger to revisit: the old lowering was a `dotimes` that
+`concatenate`d ONE character per iteration into a fresh IMMUTABLE string.
+That was O(n^2) to allocate, and — because the result was immutable — the
+`(%arrayp seq)` test in `expandReplace` / `expandScharSetFunctional` was
+false, so `(replace buf x)` and `(setf (subseq buf ...) x)` took their
+FUNCTIONAL branch, built the right string, and had it discarded in statement
+position. `(setf (char buf i) c)` only appeared to work because the
+functional branch `setq`s the rebuild back into the variable, which an alias
+never sees. The visible casualty was s-sql's verbatim `strcat` ("allocate a
+`make-string` buffer, `replace` into it, return it"): every S-SQL form
+carrying a non-literal value — `:insert-rows-into`, a variable, `(* 3 100)`
+— reached PostgreSQL as a BLANK string of exactly the right length. Nothing
+signalled; the server answered `WARNING: Empty query sent.` and the row was
+not inserted. If a future change makes make-string build anything other than
+the character vector, that whole class of "allocate a buffer, write into it"
+CL code silently regresses again. Pinned by the ci-spec case
+`make-string-mutability-cross-backend` (the four write shapes plus what a
+buffer is read through) and by `PostmodernE2eTest`'s `runtimeSql*` leg on
+the interpreter, the JVM and the component.
+
+Consequences of the lowering, all decided rather than inherited:
+
+- **The JVM array gate now includes `make-string`.** `Ctx.usesArrays` is
+  `programUsesAnyArrayOp(program) || usesFloatArray || usesIntArray`, and
+  both backends' `programUsesAnyArrayOp` list `MAKE-STRING` and
+  `MAKE-SEQUENCE` alongside `MAKE-ARRAY` (they lower to it during
+  `compileExpr`, after the scan runs). So a string-only program that
+  allocates a buffer does pull in the array runtime and grows. That is
+  deliberate: the alternative — lowering conditionally on a scan for "does
+  this program mutate the string" — cannot see mutation through a call
+  (`strcat` mutates its own local), which is precisely the bug. Array-free
+  programs that never mention make-string are still byte-identical
+  (`.kb/emitted-output-determinism.md`). `make-string` also joined
+  `BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS` so its wrapper is
+  injected exactly when the runtime it calls is emitted.
+- **`eq`/`eql` on a make-string result answers like any other computed
+  string** — content on the interpreter and the JVM, identity on WASM — and
+  that is the pre-existing general string divergence, not a character-vector
+  one: `(eq "abc" (concatenate 'string "ab" "c"))` is already `T` on the
+  interpreter/JVM and `NIL` on both WASM backends (WASM strings carry an id
+  field; `_eq` compares it). `(eq s s)` is `T` everywhere. CL leaves `eq` on
+  strings unspecified, so no backend is wrong and the ci-spec case
+  deliberately does not cover it; the trigger to revisit is WASM gaining
+  content-`eq` for strings generally, which would close this row with it.
+- **`--no-gc` is unaffected**: `make-string` was already an unsupported
+  operation on the scalar backend and still is (its `make-array` takes float
+  element types only).
+- **The functional branches stay.** A LITERAL string is still immutable, so
+  `expandReplace` / `expandScharSetFunctional` keep their `%arrayp`-false
+  paths for `(replace "abc" ...)`; what changed is which values reach them.
 
 ## adjust-array
 

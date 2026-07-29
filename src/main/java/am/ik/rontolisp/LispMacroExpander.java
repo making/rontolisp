@@ -6100,18 +6100,27 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (make-string size &key initial-element element-type)} into a fill
-	 * loop that appends {@code initial-element} {@code size} times over
-	 * {@code concatenate}. {@code initial-element} defaults to a space (implementation
-	 * defined); {@code element-type} is parsed and ignored (single string
+	 * Expands {@code (make-string size &key initial-element element-type)} into the
+	 * equivalent rank-1 character {@code make-array} -- a string IS a character vector in
+	 * CL, and that representation is the MUTABLE one on every backend
+	 * ({@code .kb/adjustable-arrays.md}): the interpreter builds a {@code LispString}
+	 * natively, both compilers build the marked character vector that
+	 * {@code expandReplace} / {@code expandScharSetFunctional} write into in place.
+	 * {@code initial-element} defaults to a space (implementation defined);
+	 * {@code element-type} is parsed and ignored (a character vector is the one string
 	 * representation). The keywords must be literal.
 	 *
 	 * <pre>
 	 * (make-string n :initial-element c) ->
-	 * (let ((__ms_r "") (__ms_c (string c)))
-	 *   (dotimes (__ms_i n) (setq __ms_r (concatenate 'string __ms_r __ms_c)))
-	 *   __ms_r)
+	 * (make-array n :element-type 'character :initial-element c)
 	 * </pre>
+	 *
+	 * The previous lowering was a {@code dotimes} that {@code concatenate}d ONE character
+	 * per iteration into a fresh immutable string. That made the buffer O(n^2) to
+	 * allocate, and -- because the result was immutable -- it silently dropped every
+	 * in-place write: {@code (replace buf x)} and {@code (setf (subseq buf ...) x)} took
+	 * their functional branch and the rebuilt string was discarded in statement position
+	 * (s-sql's {@code strcat} sent BLANK statements to the server). Do not restore it.
 	 * @param cons the make-string expression
 	 * @return the expanded expression
 	 */
@@ -6135,14 +6144,9 @@ public final class LispMacroExpander {
 						"make-string supports only the literal :initial-element and :element-type keywords");
 			}
 		}
-		LispSymbol r = new LispSymbol("__ms_r");
-		LispSymbol c = new LispSymbol("__ms_c");
-		LispSymbol idx = new LispSymbol("__ms_i");
-		LispVal concat = fmtCall(LispNames.SETQ, r, fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), r, c));
-		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(idx, size)), concat));
-		LispVal bindings = listToCons(List.of(listToCons(List.of(r, new LispString(""))),
-				listToCons(List.of(c, fmtCall(LispNames.STRING, init)))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, loop, r));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.MAKE_ARRAY), size, new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD),
+						quoteOf("CHARACTER"), new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD), init));
 	}
 
 	/**
@@ -15970,48 +15974,6 @@ public final class LispMacroExpander {
 					.of(new LispSymbol(LispNames.ASET), arrVar, idxVar, fmtCall(LispNames.ELT, contentsVar, idxVar)))));
 		return makeLet(arrVar.name(), listToCons(inner), makeLet(contentsVar.name(), contents,
 				makeLet(lenVar.name(), callOf(LispNames.LENGTH, contentsVar), fill)));
-	}
-
-	/**
-	 * Lowers {@code (make-array n :element-type 'character [:initial-element c])} to the
-	 * equivalent {@code make-string} call for the compiled backends -- a rank-1 character
-	 * array IS a string in CL (the interpreter builds the string natively in
-	 * {@code make-array}). Returns {@code null} when the form is not that shape
-	 * (different element type, or a fill pointer / adjustability / displacement / initial
-	 * contents, which keep the general-array path).
-	 * @param cons the make-array expression
-	 * @return the make-string lowering, or null
-	 */
-	@org.jspecify.annotations.Nullable
-	public static LispVal lowerCharacterMakeArray(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2) {
-			return null;
-		}
-		LispVal elementType = null;
-		LispVal initialElement = null;
-		for (int i = 2; i + 1 < parts.size(); i += 2) {
-			if (!(parts.get(i) instanceof LispSymbol kw)) {
-				return null;
-			}
-			switch (kw.name()) {
-				case LispNames.ELEMENT_TYPE_KEYWORD -> elementType = parts.get(i + 1);
-				case LispNames.INITIAL_ELEMENT_KEYWORD -> initialElement = parts.get(i + 1);
-				default -> {
-					return null;
-				}
-			}
-		}
-		if (!isCharacterElementType(elementType)) {
-			return null;
-		}
-		List<LispVal> makeString = new java.util.ArrayList<>(
-				List.of(new LispSymbol(LispNames.MAKE_STRING), parts.get(1)));
-		if (initialElement != null) {
-			makeString.add(new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD));
-			makeString.add(initialElement);
-		}
-		return listToCons(makeString);
 	}
 
 	/**

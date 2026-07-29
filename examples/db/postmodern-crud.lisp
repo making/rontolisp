@@ -23,10 +23,12 @@
 
 (ql:quickload "postmodern")
 
-;; S-SQL is a compile-time translation: the s-expression becomes an SQL string
-;; while the program is being read, not while it runs. pomo:sql shows the
-;; string a form turns into.
+;; S-SQL turns an s-expression into an SQL string. When every value in the form
+;; is a literal the whole translation happens while the program is being read,
+;; and the statement reaches the server as a constant; when one is not, s-sql
+;; assembles the string while the program runs. pomo:sql shows either.
 (format t "sql: ~a~%" (pomo:sql (:select 'name :from 'fruits :where (:< 'price 100))))
+(format t "sql: ~a~%" (pomo:sql (:insert-rows-into 'fruits :columns 'id :values '((1) (2)))))
 
 ;; The connection is bound for the whole body -- every query below finds it
 ;; through pomo:*database* -- and closed on the way out, however the body ends.
@@ -42,7 +44,16 @@
   ;; INSERT. :set takes alternating column and value forms.
   (pomo:execute (:insert-into 'fruits :set 'id 1 'name "apple" 'price 120))
   (pomo:execute (:insert-into 'fruits :set 'id 2 'name "banana" 'price 80))
-  (pomo:execute (:insert-into 'fruits :set 'id 3 'name "cherry" 'price 300))
+  ;; A value that is not a literal -- here an expression, but a variable reads
+  ;; the same -- is what makes s-sql assemble the statement while the program
+  ;; runs rather than while it is read. pomo:sql shows the difference.
+  (pomo:execute (:insert-into 'fruits :set 'id 3 'name "cherry" 'price (* 3 100)))
+
+  ;; :insert-rows-into writes several rows at once, and is likewise assembled
+  ;; at run time.
+  (pomo:execute (:insert-rows-into 'fruits
+                                   :columns 'id 'name 'price
+                                   :values '((4 "durian" 900) (5 "elderberry" 60))))
 
   ;; READ. The result format is an argument: the default is a list of rows...
   (format t "rows: ~a~%"

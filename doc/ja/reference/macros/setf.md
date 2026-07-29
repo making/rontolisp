@@ -2,7 +2,7 @@
 
 `(setf place value [place2 value2 ...])`
 
-汎用的な代入です。`value` を `place` で指定した場所に格納し、その値を返します。単純な変数のほかに、サポートされる place としてリストのアクセサ `car`、`cdr`、`nth`、`first` から `fourth`、`rest`、および `caXXXr` の合成、さらに `elt` (実行時にリスト/配列をディスパッチします。文字列は不変のままです) があり、既存の構造の特定のスロットをその場で変更できます。適切なプリミティブな変更操作（`rplaca`／`rplacd` など）に展開されます。place の部分フォームは値より先に評価されるため、末尾収集イディオム `(setf (cdr tail) (setf tail (list x)))` は古い tail に連結します。
+汎用的な代入です。`value` を `place` で指定した場所に格納し、その値を返します。単純な変数のほかに、サポートされる place としてリストのアクセサ `car`、`cdr`、`nth`、`first` から `fourth`、`rest`、および `caXXXr` の合成、さらに `elt` (実行時にリスト/配列をディスパッチします。[`make-string`](../functions/make-string.md) で確保した文字列はその場で書き換えられますが、文字列リテラルは書き換えられません) があり、既存の構造の特定のスロットをその場で変更できます。適切なプリミティブな変更操作（`rplaca`／`rplacd` など）に展開されます。place の部分フォームは値より先に評価されるため、末尾収集イディオム `(setf (cdr tail) (setf tail (list x)))` は古い tail に連結します。
 
 ```lisp
 (let ((x (list 1 2 3))) (setf (second x) 99) x) ; => (1 99 3)

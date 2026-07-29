@@ -2177,8 +2177,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// vector/svref/coerce/array-rank/array-dimension/array-total-size/
 		// row-major-aref/array-row-major-index expand into make-array/aref/%aset/
 		// array-dimensions/_aref1 during compileExpr, after this scan runs, so the
-		// derived names gate the helpers too.
-		return programUsesSymbol(program, LispNames.MAKE_ARRAY) || programUsesSymbol(program, LispNames.AREF)
+		// derived names gate the helpers too. make-string is on the list for the same
+		// reason: it lowers to (make-array n :element-type 'character ...) -- the
+		// mutable character vector -- so a string-only program that allocates a buffer
+		// does pull in the array runtime (.kb/adjustable-arrays.md).
+		return programUsesSymbol(program, LispNames.MAKE_ARRAY) || programUsesSymbol(program, LispNames.MAKE_STRING)
+				|| programUsesSymbol(program, LispNames.MAKE_SEQUENCE) || programUsesSymbol(program, LispNames.AREF)
 				|| programUsesSymbol(program, LispNames.ASET) || programUsesSymbol(program, LispNames.ARRAY_DIMENSIONS)
 				|| programUsesSymbol(program, LispNames.VECTOR) || programUsesSymbol(program, LispNames.SVREF)
 				|| programUsesSymbol(program, LispNames.ARRAY_RANK)

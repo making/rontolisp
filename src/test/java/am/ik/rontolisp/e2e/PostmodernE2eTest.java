@@ -42,6 +42,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code query :single}, all written as S-SQL. Every one of those is expanded at
  * MACROEXPANSION time through {@code *result-styles*}, so the leg is as much a test of
  * the compile-time query machinery as of the wire protocol;</li>
+ * <li><b>the run-time SQL</b> -- the other half of that: {@code :insert-rows-into} and a
+ * computed column value, which s-sql can only assemble while the program RUNS. It is
+ * exactly what the milestone's all-literal forms cannot reach, and it is why
+ * {@code .todo/208} went unnoticed until an example was written;</li>
  * <li><b>the reconnect</b> -- the only honest end-to-end exercise of the restart system
  * ({@code .todo/196}), because postmodern is where it is load-bearing rather than
  * decorative. The server terminates the connection under a {@code defprepared} function;
@@ -107,6 +111,11 @@ class PostmodernE2eTest {
 			"bob"
 			""";
 
+	private static final String RUNTIME_SQL_EXPECTED = """
+			INSERT INTO fruits (id) VALUES (1), (2)
+			((1 10) (2 20) (3 300))
+			""";
+
 	private static final String RECONNECT_EXPECTED = """
 			10
 			10
@@ -159,6 +168,24 @@ class PostmodernE2eTest {
 	void milestoneOnWasmComponent(@TempDir Path workDir) throws Exception {
 		assertThat(runOn(Backend.COMPONENT, workDir, milestone(Backend.COMPONENT)))
 			.isEqualToNormalizingWhitespace(MILESTONE_EXPECTED);
+	}
+
+	@Test
+	void runtimeSqlOnTheInterpreter(@TempDir Path workDir) throws Exception {
+		assertThat(runOn(Backend.INTERPRETER, workDir, runtimeSql(Backend.INTERPRETER)))
+			.isEqualToNormalizingWhitespace(RUNTIME_SQL_EXPECTED);
+	}
+
+	@Test
+	void runtimeSqlOnJvm(@TempDir Path workDir) throws Exception {
+		assertThat(runOn(Backend.JVM, workDir, runtimeSql(Backend.JVM)))
+			.isEqualToNormalizingWhitespace(RUNTIME_SQL_EXPECTED);
+	}
+
+	@Test
+	void runtimeSqlOnWasmComponent(@TempDir Path workDir) throws Exception {
+		assertThat(runOn(Backend.COMPONENT, workDir, runtimeSql(Backend.COMPONENT)))
+			.isEqualToNormalizingWhitespace(RUNTIME_SQL_EXPECTED);
 	}
 
 	@Test
@@ -219,6 +246,33 @@ class PostmodernE2eTest {
 				  (pomo:with-transaction ()
 				    (pomo:execute (:update '%s :set 'name "bob" :where (:= 'id 1))))
 				  (print (pomo:query (:select 'name :from '%s) :single)))
+				""".formatted(DATABASE, USER, PASSWORD, host, port, table, table, table, table, table, table);
+	}
+
+	// The RUN-TIME SQL leg (.todo/208). Every S-SQL form in the milestone above carries
+	// literal values only, so s-sql resolves it entirely at macroexpansion time and the
+	// statement reaches the wire as a constant. The two forms here do not:
+	// :insert-rows-into and a computed (* 3 100) both make s-sql assemble the string at
+	// RUN time, through its `strcat` -- "allocate a (make-string n) buffer, `replace`
+	// into it, return it". While make-string built an IMMUTABLE string on the compile
+	// backends every one of those writes was silently discarded, so the server got a
+	// BLANK statement of exactly the right length: it answered "WARNING: Empty query
+	// sent.", the row was not inserted, and nothing signalled. The first line pins the
+	// assembled SQL itself (no server involved, hence the fixed table name), the second
+	// proves both statements actually landed.
+	private static Exercise runtimeSql(Backend backend) {
+		String table = "runtime_sql_" + backend.name().toLowerCase(Locale.ROOT);
+		return (host, port) -> """
+				(ql:quickload "postmodern")
+				(format t "~a~%" (pomo:sql (:insert-rows-into 'fruits :columns 'id :values '((1) (2)))))
+				(pomo:with-connection '("%s" "%s" "%s" "%s" :port %d)
+				  (pomo:execute (:drop-table :if-exists '%s))
+				  (pomo:execute (:create-table '%s ((id :type integer :primary-key t)
+				                                    (price :type integer))))
+				  (pomo:execute (:insert-rows-into '%s :columns 'id 'price :values '((1 10) (2 20))))
+				  (pomo:execute (:insert-into '%s :set 'id 3 'price (* 3 100)))
+				  (print (pomo:query (:order-by (:select '* :from '%s) 'id)))
+				  (pomo:execute (:drop-table '%s)))
 				""".formatted(DATABASE, USER, PASSWORD, host, port, table, table, table, table, table, table);
 	}
 

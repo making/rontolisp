@@ -59,13 +59,6 @@ wasmCloud runs the same component under `wash dev` with
   prepared-statement layers `postmodern-crud.lisp` shows all work; the DAO layer
   (`:metaclass dao-class`, `get-dao` / `select-dao` / `insert-dao`) needs the
   metaobject protocol and is not available.
-- **Pass runtime values as statement parameters, not inside the S-SQL form.**
-  When an S-SQL form carries a value that is not a literal (a variable, `(* 3
-  100)`, or `:insert-rows-into`), s-sql assembles the SQL string at run time,
-  and on the compiled backends that currently yields an EMPTY statement — the
-  server answers `WARNING: Empty query sent.` and the insert or update silently
-  does not happen (the interpreter is unaffected). Use `defprepared` with `$1`
-  placeholders, as `postmodern-crud.lisp` does; that is the right shape anyway.
 - **SCRAM-SHA-256** completes on all backends within PostgreSQL's default
   60-second `authentication_timeout`. The interpreter is the slow one: its
   4096-round PBKDF2 takes ~50 s, so on a slow machine give the server headroom

@@ -24,6 +24,9 @@ final class JvmReadFromStringCompiler {
 			throw new UnsupportedOperationException("read-from-string expects at least 1 argument");
 		}
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// The source may be a mutable character vector (a filled make-string buffer);
+		// _readFromString casts to String, so normalize first.
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp.addNameAndType(
 				ctx.cp.addUtf8("_readFromString"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
 		ctx.emit(Opcode.INVOKESTATIC);

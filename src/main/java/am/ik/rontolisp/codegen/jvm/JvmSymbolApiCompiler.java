@@ -78,6 +78,9 @@ final class JvmSymbolApiCompiler {
 		}
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.INTERN);
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// A mutable character vector is a string here ((intern (make-string n)) after
+		// the buffer is filled), so normalize before the quote strip casts to String.
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		emitStripQuotes(ctx);
 	}
 
@@ -87,6 +90,7 @@ final class JvmSymbolApiCompiler {
 		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
 		JvmEmitHelper.compileStringLiteral("#:", ctx);
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		emitStripQuotes(ctx);
 		ctx.emit(Opcode.INVOKEVIRTUAL);
 		ctx.emitU2(concat);

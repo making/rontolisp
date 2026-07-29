@@ -4426,7 +4426,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// literal), matching the JVM backend's predicate. Gates the first-class
 	// fill-pointer wrappers so they are injected only for array-using programs.
 	private static boolean programUsesAnyArrayOp(List<LispVal> program) {
-		return programUsesSymbol(program, LispNames.MAKE_ARRAY) || programUsesSymbol(program, LispNames.AREF)
+		// make-string / (make-sequence 'string|'vector ...) lower to make-array during
+		// compileExpr, after this scan runs, so they gate the wrapper group too -- see
+		// the JVM twin for the full reasoning.
+		return programUsesSymbol(program, LispNames.MAKE_ARRAY) || programUsesSymbol(program, LispNames.MAKE_STRING)
+				|| programUsesSymbol(program, LispNames.MAKE_SEQUENCE) || programUsesSymbol(program, LispNames.AREF)
 				|| programUsesSymbol(program, LispNames.ASET) || programUsesSymbol(program, LispNames.ARRAY_DIMENSIONS)
 				|| programUsesSymbol(program, LispNames.VECTOR) || programUsesSymbol(program, LispNames.SVREF)
 				|| programUsesSymbol(program, LispNames.ARRAY_RANK)

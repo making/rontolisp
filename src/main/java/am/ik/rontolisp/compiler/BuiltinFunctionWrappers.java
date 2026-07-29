@@ -60,11 +60,14 @@ public final class BuiltinFunctionWrappers {
 	 * program uses an array operator, so each backend injects them only for programs that
 	 * do. {@code %set-fill-pointer} is internal and intentionally excluded;
 	 * {@code vector-push-extend} is exposed in its 2-argument form (no extension).
+	 * {@code make-string} is on the list because it lowers to the character-vector
+	 * {@code make-array} ({@code .kb/adjustable-arrays.md}); both backends' array gate
+	 * names it, so the wrapper is injected exactly when the runtime it calls is emitted.
 	 */
 	public static final Set<String> ARRAY_FILL_POINTER_FUNCTIONS = Set.of(LispNames.FILL_POINTER,
 			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE,
 			LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
-			LispNames.ARRAY_DISPLACEMENT, LispNames.MAKE_ARRAY, LispNames.AREF);
+			LispNames.ARRAY_DISPLACEMENT, LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.MAKE_STRING);
 
 	/**
 	 * Signal-operator wrappers ({@code #'error}/{@code #'cerror}/{@code #'signal}/
