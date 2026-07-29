@@ -111,6 +111,7 @@ jobs:
         # is no positional expected file to keep in sync.
         ./mvnw -V --no-transfer-progress \
           -Dtest=CiSpecE2eTest -DfailIfNoTests=false \
+          -Djunit.jupiter.execution.parallel.config.fixed.parallelism=4 \
           -Drontolisp.binary="$PWD/target/rontolisp" \
           test
     - name: Rename binary
