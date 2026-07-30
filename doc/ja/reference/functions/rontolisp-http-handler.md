@@ -113,9 +113,12 @@ serve コンポーネントは非同期の `wasi:http@0.3.0`（`service` world�
 `wasmtime serve` にゲートされた機能フラグは不要です。wasmCloud もホスト
 します: リリース版の `wash`（2.5.2）が、
 `dev.wasm_proposals: [gc, exception-handling, component-model-async]` を
-指定した `wash dev` で実行します。jco は 0.3 の非同期 ABI を実装しておらず、
-Spin の組み込み wasmtime は rontolisp のすべてのコンポーネントが必要とする
-WebAssembly GC プロポーザルを有効化していません。
+指定した `wash dev` で実行します。**Spin** も
+[canary ビルド](https://github.com/spinframework/spin/releases/tag/canary)
+（4.1.0-pre0）以降なら、素の `spin.toml` だけでフラグ無しに実行できます。リリース版の
+Spin 4.0.2 では動作しません — 組み込みの wasmtime 44 がリリース版の 0.3.0 では
+なく `wasi:http@0.3.0-rc-2026-03-15` スナップショットを話すためです。
+jco は 0.3 の非同期 ABI を実装していません。
 
 完全な例とランタイムごとのコマンドは
 [HTTP サーバガイド](../../guides/http-handler.md)を参照してください。

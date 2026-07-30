@@ -24,7 +24,15 @@
 ;;   rontolisp examples/db/postgres-web.lisp -o app.wasm --component --optimize
 ;;   wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y --env DATABASE_URL app.wasm
 ;; wasmCloud runs the same component (wash dev; its startup log lists 0.2
-;; interfaces but it does provide wasi:sockets 0.3).
+;; interfaces but it does provide wasi:sockets 0.3), and so does Spin (the
+;; canary build, https://github.com/spinframework/spin/releases/tag/canary --
+;; 4.1.0-pre0+), which needs no flags but does need the environment and the
+;; database address spelled out in spin.toml -- its sandbox is deny-by-default:
+;;   [component.notes]
+;;   source = "app.wasm"
+;;   allowed_outbound_hosts = ["tcp://127.0.0.1:54329"]
+;;   environment = { DATABASE_URL = "postgresql://postgres@127.0.0.1:54329/postgres" }
+;; See README.md for the whole manifest.
 ;; The component reaches the server over the network it is given, so DATABASE_URL
 ;; has to name an address that is reachable from inside it -- a container IP
 ;; under wasmtime-in-Docker, and under wash a NON-loopback address, because wash

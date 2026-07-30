@@ -249,8 +249,27 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   WASM output is a compile error ("requires --component"). Hosts: wasmtime 46+; wasmCloud
   hosts it (released wash 2.5.2, `wash dev` with `dev.wasm_proposals:
   [gc, exception-handling, component-model-async]` -- verified 2026-07-16 on
-  examples/wasmcloud/http-handler); jco cannot run the 0.3 async ABI; Spin has
-  no wasm-GC.
+  examples/wasmcloud/http-handler); Spin hosts it from the canary build
+  (https://github.com/spinframework/spin/releases/tag/canary -- 4.1.0-pre0,
+  wasmtime 47 -- gc + exceptions default-on, `wasi:http@0.3.0`
+  final) with a plain `spin.toml`, verified 2026-07-30 on
+  examples/net/http-handler (plus magic-8-ball for wasi:random and dog-fetcher
+  for outbound fetch, the latter needing `allowed_outbound_hosts`); jco cannot
+  run the 0.3 async ABI. Spin is the host that actually EXERCISES the allocator
+  reset above -- it serves 128 requests per instance by default (measured, and
+  the count is `--max-instance-reuse-count`; `.kb/tcp-sockets.md` has the
+  three-host instance-lifetime comparison), so the "hosts that reuse one
+  instance across requests" clause is no longer hypothetical.
+  Why released Spin 4.0.2 cannot host it, and the re-evaluation trigger: it
+  embeds wasmtime 44, whose p3 WIT is the `0.3.0-rc-2026-03-15` SNAPSHOT of
+  every WASI package (`wasi:http`, `wasi:cli`, `wasi:clocks`, `wasi:random`),
+  not the released `0.3.0` we emit -- so the imports fail to link
+  ("instance export `fields` has the wrong type") even with GC forced on. The
+  gate is the wasmtime version a host embeds, NOT the GC proposal any more:
+  a host on wasmtime 46+ needs no flags at all. (4.0.2's
+  `--experimental-wasm-feature gc` exists in the source but is behind the
+  `experimental-wasm-features` cargo feature, which spin's release workflow
+  passes only for canary builds, so the released binary has no such option.)
   Tests: the serve cases in `WasmLispCompilerIntegrationTest` (echo / big
   response / random-clock-print / keyvalue / fetch-inside-serve proxy, all
   through the `compileServeComponent` CLI-path helper).

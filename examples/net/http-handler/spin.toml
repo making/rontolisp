@@ -1,18 +1,22 @@
 # Spin manifest for the rontolisp:http-handler component.
 #
-# NOTE: `spin up` does not run this yet -- Spin's embedded wasmtime does not
-# enable the WebAssembly GC proposal, which every rontolisp component requires,
-# and has no flag to turn it on. Use `wasmtime serve -W gc=y -W exceptions=y app.wasm`, jco
-# (`npx @bytecodealliance/jco serve app.wasm`) or wasmCloud (`wash` with the gc
-# proposal enabled) instead (see examples/net/http-handler.lisp).
-# Build the component first:
-#   rontolisp ../http-handler.lisp -o app.wasm --component
+#   spin build && spin up
+#
+# `spin build` runs the `rontolisp` binary (expected on the PATH) to compile
+# ../http-handler.lisp into app.wasm, and `spin up` serves it on :3000.
+#
+# Needs a Spin whose embedded wasmtime is 46 or newer -- currently the canary
+# build (4.1.0-pre0; https://github.com/spinframework/spin/releases/tag/canary),
+# which enables the WebAssembly GC and exception-handling proposals by default.
+# Released 4.0.2 cannot run it: its wasmtime 44 speaks the
+# wasi:http@0.3.0-rc-2026-03-15 snapshot, so it rejects the component's
+# wasi:http@0.3.0 imports whether or not GC is turned on.
 spin_manifest_version = 2
 
 [application]
 name = "rontolisp-http-handler"
 version = "0.1.0"
-description = "A rontolisp:http-handler served as a wasi:http/incoming-handler component."
+description = "A rontolisp:http-handler served as a wasi:http/handler@0.3.0 component."
 
 [[trigger.http]]
 route = "/..."
@@ -20,3 +24,7 @@ component = "hello"
 
 [component.hello]
 source = "app.wasm"
+
+[component.hello.build]
+command = "rontolisp ../http-handler.lisp -o app.wasm --component"
+watch = ["../http-handler.lisp"]

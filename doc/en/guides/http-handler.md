@@ -85,9 +85,58 @@ The component asks its host for `wasi:http` **0.3** (async) plus wasm-GC.
 wasmtime 46+ serves it, and so does **wasmCloud**: the released `wash` (2.5.2)
 runs it with `wash dev`, given
 `dev.wasm_proposals: [gc, exception-handling, component-model-async]` in the
-project manifest. **jco** and **Spin** cannot run it yet: jco does not
-implement the 0.3 async ABI, and Spin's embedded wasmtime does not enable the
-WebAssembly GC proposal that every rontolisp component needs.
+project manifest.
+
+**Spin** runs it too, from the
+[canary build](https://github.com/spinframework/spin/releases/tag/canary)
+(4.1.0-pre0) on — its embedded
+wasmtime is 47, which enables the WebAssembly GC and exception-handling
+proposals by default, so no flag is needed. Drop a `spin.toml` beside the
+program:
+
+```toml
+spin_manifest_version = 2
+
+[application]
+name = "rontolisp-http-handler"
+version = "0.1.0"
+
+[[trigger.http]]
+route = "/..."
+component = "hello"
+
+[component.hello]
+source = "app.wasm"
+
+[component.hello.build]
+command = "rontolisp app.lisp -o app.wasm --component"
+```
+
+```console
+$ spin build && spin up
+Serving http://127.0.0.1:3000
+$ curl http://127.0.0.1:3000/hello
+Hello from rontolisp!
+GET /hello
+```
+
+Spin owns the socket and listens on **3000**, so the `port` argument is ignored
+here as well. A handler that calls [`rontolisp:fetch`](http-fetch.md) also needs
+the upstream host on the component's `allowed_outbound_hosts` — Spin denies
+outbound HTTP by default:
+
+```toml
+[component.dog]
+source = "app.wasm"
+allowed_outbound_hosts = ["https://dog.ceo"]
+```
+
+Released Spin **4.0.2 cannot** run the component. Its embedded wasmtime is 44,
+which speaks the `wasi:http@0.3.0-rc-2026-03-15` snapshot rather than the
+released `wasi:http@0.3.0`, so the imports fail to link even with GC turned on
+(and the released 4.0.2 binary has no switch to turn GC on: the
+`--experimental-wasm-feature` option is compiled into canary builds only).
+**jco** cannot run it either — it does not implement the 0.3 async ABI.
 
 ## Query strings
 

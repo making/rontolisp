@@ -101,6 +101,44 @@ clear. Either way this reaches `uiop:getenv` unmodified — wash links the
 same `wasi:cli/environment@0.3.0` interface `wasmtime serve --env` satisfies,
 just supplied from this block rather than a CLI flag.
 
+**Spin**
+([canary build](https://github.com/spinframework/spin/releases/tag/canary),
+4.1.0-pre0+ — its wasmtime 47 enables the GC and
+exception-handling proposals by default) runs the same component with no
+flags at all, and serves it on `:3000`. Its sandbox is deny-by-default, so
+the manifest carries both the environment and the database address:
+
+```toml
+spin_manifest_version = 2
+
+[application]
+name = "rontolisp-postgres-web"
+version = "0.1.0"
+
+[[trigger.http]]
+route = "/..."
+component = "notes"
+
+[component.notes]
+source = "app.wasm"
+allowed_outbound_hosts = ["tcp://127.0.0.1:54329"]
+environment = { DATABASE_URL = "postgresql://postgres@127.0.0.1:54329/postgres" }
+```
+
+```bash
+rontolisp examples/db/postgres-web.lisp -o app.wasm --component --optimize
+spin up
+```
+
+`allowed_outbound_hosts` takes `<scheme>://<host>:<port>`, and the driver's
+plain TCP connect is checked under the **`tcp`** scheme — not `postgres` or
+`tcp`-less. Omit the entry and every request 500s with the destination named
+in the log (`Outbound network destination not allowed: tcp://127.0.0.1:54329`,
+plus the exact line to paste into the manifest); omit `environment` and you
+get the same bare `unreachable` trap `--env`-less wasmtime gives. Unlike wash,
+Spin does not virtualize the loopback: `127.0.0.1` in `DATABASE_URL` reaches a
+server on the developer's own machine.
+
 **A served component imports the environment interface itself.** The WASI 0.3
 service world carries no `wasi:cli/environment`, so the preview1 bridge answers
 the `environ_*` calls with a zero-entry environment — reading `DATABASE_URL`
@@ -126,10 +164,17 @@ provides only the service world.
   under WASM; use plain TCP (the default `:no`).
 - **wasmCloud addressing.** wash routes loopback to a per-workload virtual
   network, so the host in `DATABASE_URL` must be a non-loopback address there.
-- **Instance lifetime.** The program's top level runs once per instance.
-  `wasmtime serve` keeps one instance for the whole run, but wasmCloud gives
-  each request a fresh instance — this is why `postgres-web.lisp` uses
-  `create table if not exists` instead of dropping and recreating the table.
+  `wasmtime serve` and Spin both use the real loopback, so `127.0.0.1` works.
+- **Instance lifetime.** The program's top level runs once per instance, and
+  every host draws that line differently. `wasmtime serve` keeps one instance
+  for the whole run; wasmCloud gives each request a fresh instance — this is
+  why `postgres-web.lisp` uses `create table if not exists` instead of dropping
+  and recreating the table. Spin sits between the two: it reuses an instance
+  for 128 requests and then retires it (`--max-instance-reuse-count`, and
+  `--max-instance-concurrent-reuse-count` — 16 by default — lets that many
+  requests share one instance at a time). Write the top level so that all three
+  are fine: idempotent, and with durable state in the database rather than in a
+  global.
 - **Non-ASCII.** cl-who escapes characters above ASCII as numeric character
   references by default; bind `cl-who:*escape-char-p*` to a predicate matching
   only `<>&'"` to emit raw UTF-8 instead.

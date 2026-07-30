@@ -107,8 +107,12 @@ handler is a callback async lift over the base component-model async ABI,
 default-on in wasmtime 46+, so `wasmtime serve` needs no gated feature flags.
 wasmCloud hosts it too: the released `wash` (2.5.2) runs it with `wash dev`,
 given `dev.wasm_proposals: [gc, exception-handling, component-model-async]`.
-jco does not implement the 0.3 async ABI, and Spin's embedded wasmtime does
-not enable the WebAssembly GC proposal that every rontolisp component needs.
+So does **Spin**, from the
+[canary build](https://github.com/spinframework/spin/releases/tag/canary)
+(4.1.0-pre0) on, with a plain
+`spin.toml` and no flags; released Spin 4.0.2 cannot, because its wasmtime 44
+speaks the `wasi:http@0.3.0-rc-2026-03-15` snapshot instead of the released
+0.3.0. jco does not implement the 0.3 async ABI.
 
 See the [Serving HTTP guide](../../guides/http-handler.md) for the full
 example and the per-runtime commands.

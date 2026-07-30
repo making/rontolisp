@@ -85,10 +85,57 @@ ABI の一部であり、ゲートされた機能フラグは不要です。レ�
 wasm-GC です。wasmtime 46+ がこれをホストし、**wasmCloud** もホストします:
 リリース版の `wash`（2.5.2）が、プロジェクトマニフェストに
 `dev.wasm_proposals: [gc, exception-handling, component-model-async]` を
-指定した `wash dev` で実行します。**jco** と **Spin** ではまだ動作
-しません: jco は 0.3 の非同期 ABI を実装しておらず、Spin の組み込み wasmtime
-は rontolisp のすべてのコンポーネントが必要とする WebAssembly GC
-プロポーザルを有効化していません。
+指定した `wash dev` で実行します。
+
+**Spin** も
+[canary ビルド](https://github.com/spinframework/spin/releases/tag/canary)
+（4.1.0-pre0）以降で実行できます — 組み込みの
+wasmtime が 47 になり、WebAssembly GC と例外処理のプロポーザルがデフォルトで
+有効なので、フラグは不要です。プログラムの隣に `spin.toml` を置きます:
+
+```toml
+spin_manifest_version = 2
+
+[application]
+name = "rontolisp-http-handler"
+version = "0.1.0"
+
+[[trigger.http]]
+route = "/..."
+component = "hello"
+
+[component.hello]
+source = "app.wasm"
+
+[component.hello.build]
+command = "rontolisp app.lisp -o app.wasm --component"
+```
+
+```console
+$ spin build && spin up
+Serving http://127.0.0.1:3000
+$ curl http://127.0.0.1:3000/hello
+Hello from rontolisp!
+GET /hello
+```
+
+ソケットは Spin が所有し **3000** 番で待ち受けるため、ここでも `port` 引数は
+無視されます。ハンドラが [`rontolisp:fetch`](http-fetch.md) を呼ぶ場合は、
+接続先ホストをコンポーネントの `allowed_outbound_hosts` に登録する必要が
+あります — Spin はデフォルトで外向き HTTP を拒否します:
+
+```toml
+[component.dog]
+source = "app.wasm"
+allowed_outbound_hosts = ["https://dog.ceo"]
+```
+
+リリース版の Spin **4.0.2 では動作しません**。組み込みの wasmtime が 44 で、
+リリース版の `wasi:http@0.3.0` ではなく `wasi:http@0.3.0-rc-2026-03-15`
+スナップショットを話すため、GC を有効にしてもインポートのリンクに失敗します
+（そもそもリリース版 4.0.2 のバイナリには GC を有効にする手段がありません:
+`--experimental-wasm-feature` オプションは canary ビルドにのみ組み込まれて
+います）。**jco** もまだ実行できません — 0.3 の非同期 ABI が未実装です。
 
 ## クエリ文字列
 

@@ -51,3 +51,7 @@ examples/browser/hiragana/data/
 
 ### Compiled-program scratch: the docs' `rontolisp prog.lisp -o Prog.class` writes to the CWD ###
 /*.class
+
+### Spin manifest example: `spin build` compiles app.wasm, `spin up` writes .spin/logs ###
+examples/net/http-handler/app.wasm
+examples/net/http-handler/.spin/

@@ -7,7 +7,9 @@
 ;; one virtual thread per request) and the WASI component backend (--component),
 ;; which compiles the handler into an async wasi:http/handler@0.3.0 component
 ;; served by wasmtime 46+ and hosted by wasmCloud (`wash dev`, wash 2.5.2+ --
-;; see examples/wasmcloud/); jco and Spin cannot run it yet.
+;; see examples/wasmcloud/) and by Spin (the canary build,
+;; https://github.com/spinframework/spin/releases/tag/canary -- see
+;; http-handler/spin.toml). jco cannot run it yet.
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   java -jar $JAR examples/net/http-handler.lisp
@@ -17,6 +19,8 @@
 ;; Run (WASI component under wasmtime serve):
 ;;   java -jar $JAR examples/net/http-handler.lisp -o app.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y app.wasm
+;; Run (the same component under Spin, which owns the socket on :3000):
+;;   cd examples/net/http-handler && spin build && spin up
 ;; Talk to it with:  curl http://127.0.0.1:8080/hello
 
 (defun handle (request)

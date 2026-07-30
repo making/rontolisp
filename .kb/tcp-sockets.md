@@ -210,17 +210,27 @@ output is byte-identical), inside the handle call's task context, so a
 top-level suspension drives through the blocking event loop exactly as under
 `wasmtime run`. Pinned by `httpHandlerReadsATopLevelGlobalUnderWasmtimeServe`.
 
-**"Once per instance" is a HOST decision, and the two hosts differ** (measured
-2026-07-27 with `examples/db/postgres-web.lisp`, a served handler over a
-top-level PostgreSQL connection): `wasmtime serve` keeps ONE instance for the
-whole server run, so the top level runs once; wasmCloud `wash dev` (2.5.2)
-gives each request a FRESH instance, so the top level runs again on every
-request and its side effects repeat. A `drop table` + `create table` startup
-pair therefore emptied the table on each wasmCloud request while accumulating
-normally under wasmtime -- the example uses `create table if not exists` for
-exactly this reason. The rule for a served program: treat top-level side
-effects as idempotent-or-per-request, and keep durable state in the store, not
-in a global. External state (a PostgreSQL row) survives; a defvar does not.
+**"Once per instance" is a HOST decision, and the three hosts all differ**
+(measured 2026-07-27 with `examples/db/postgres-web.lisp`, a served handler over
+a top-level PostgreSQL connection; Spin added 2026-07-30 with a top-level
+`defvar` hit counter): `wasmtime serve` keeps ONE instance for the whole server
+run, so the top level runs once; wasmCloud `wash dev` (2.5.2) gives each request
+a FRESH instance, so the top level runs again on every request and its side
+effects repeat. A `drop table` + `create table` startup pair therefore emptied
+the table on each wasmCloud request while accumulating normally under wasmtime
+-- the example uses `create table if not exists` for exactly this reason.
+**Spin (canary, https://github.com/spinframework/spin/releases/tag/canary) is a
+third point: BOUNDED reuse.** It runs a p3 component's
+instance for exactly 128 requests and then retires it -- the counter climbed
+1..128, then reset to 1 on a visibly newer instance -- so a global neither
+persists for the run nor resets every request. The bound is
+`--max-instance-reuse-count` (`1` reproduces the wash shape exactly, verified;
+`DEFAULT_WASIP3_MAX_INSTANCE_REUSE_COUNT` in spin's `trigger-http`), and
+`--max-instance-concurrent-reuse-count` (default 16) lets 16 requests share one
+instance concurrently, which wasmtime serve and wash do not.
+The rule for a served program: treat top-level side effects as
+idempotent-or-per-request, and keep durable state in the store, not in a global.
+External state (a PostgreSQL row) survives; a defvar does not.
 
 - **Plumbing (sockets.lisp `%sock-plumb`, the old adapter's `$plumb` in
   Lisp)**: at connect/accept time `receive()` yields the recv stream (its
