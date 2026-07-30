@@ -83,34 +83,37 @@ public final class PackageRegistry {
 			LispNames.POSITION, LispNames.POSITION_IF, LispNames.POSITION_IF_NOT, LispNames.COUNT, LispNames.COUNT_IF,
 			LispNames.ASSOC, LispNames.ASSOC_IF, LispNames.LAST, LispNames.BUTLAST, LispNames.GETF,
 			LispNames.REMOVE_DUPLICATES, LispNames.NCONC, LispNames.REST, LispNames.PRINC_TO_STRING,
-			LispNames.PRIN1_TO_STRING, LispNames.CONCATENATE, LispNames.STRING, LispNames.STRING_UPCASE,
-			LispNames.STRING_DOWNCASE, LispNames.STRING_CAPITALIZE, LispNames.SUBSEQ, LispNames.STRING_EQ,
-			LispNames.STRING_LT, LispNames.STRING_GT, LispNames.STRING_LE, LispNames.STRING_GE, LispNames.STRING_NE,
-			LispNames.STRING_EQUAL, LispNames.STRING_LESSP, LispNames.STRING_GREATERP, LispNames.STRING_NOT_GREATERP,
-			LispNames.STRING_NOT_LESSP, LispNames.STRING_NOT_EQUAL, LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM,
-			LispNames.STRING_RIGHT_TRIM, LispNames.OPEN, LispNames.CLOSE, LispNames.PROBE_FILE, LispNames.WRITE_LINE,
-			LispNames.READ_BYTE, LispNames.WRITE_BYTE, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE,
-			LispNames.IDENTITY, LispNames.COPY_LIST, LispNames.COPY_TREE, LispNames.NREVERSE, LispNames.MAKE_LIST,
-			LispNames.UNION, LispNames.INTERSECTION, LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.LOGAND,
-			LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.LOGANDC1, LispNames.LOGANDC2,
-			LispNames.LOGORC1, LispNames.LOGORC2, LispNames.ASH, LispNames.INTEGER_LENGTH, LispNames.LOGBITP,
-			LispNames.BYTE, LispNames.BYTE_SIZE, LispNames.BYTE_POSITION, LispNames.LDB, LispNames.DPB,
-			LispNames.LIST_STAR, LispNames.ACONS, LispNames.ENDP, LispNames.ELT, LispNames.RASSOC, LispNames.RASSOC_IF,
-			LispNames.PAIRLIS, LispNames.COPY_ALIST, LispNames.REVAPPEND, LispNames.NRECONC, LispNames.MAPLIST,
-			LispNames.MAPCON, LispNames.MAPL, LispNames.NOTANY, LispNames.NOTEVERY, LispNames.DELETE,
-			LispNames.DELETE_IF, LispNames.DELETE_IF_NOT, LispNames.SUBSTITUTE, LispNames.SUBST, LispNames.NSUBSTITUTE,
-			LispNames.SEARCH, LispNames.MISMATCH, LispNames.GET_UNIVERSAL_TIME, LispNames.ENCODE_UNIVERSAL_TIME,
-			LispNames.DECODE_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME,
-			LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT, LispNames.LISTEN, LispNames.READ_FROM_STRING,
-			LispNames.PARSE_INTEGER, LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR,
-			LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_GT, LispNames.CHAR_GE,
-			LispNames.CHAR_NE, LispNames.CHAR_EQUAL, LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE,
-			LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P, LispNames.ALPHANUMERICP,
-			LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT, LispNames.BIT,
-			LispNames.BOTH_CASE_P, LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION,
-			LispNames.COMPILED_FUNCTION_P, LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.LIST_ALL_PACKAGES,
-			LispNames.FIND_CLASS, LispNames.GET, LispNames.DIGIT_CHAR_P, LispNames.DIGIT_CHAR,
-			LispNames.MAKE_HASH_TABLE, LispNames.GETHASH, LispNames.REMHASH, LispNames.CLRHASH,
+			// The printer generic: a defmethod on it belongs to cl, so a method defined
+			// inside a package that uses cl specializes CL:PRINT-OBJECT rather than
+			// minting that package's own (quri's uri method).
+			LispNames.PRINT_OBJECT, LispNames.PRIN1_TO_STRING, LispNames.CONCATENATE, LispNames.STRING,
+			LispNames.STRING_UPCASE, LispNames.STRING_DOWNCASE, LispNames.STRING_CAPITALIZE, LispNames.SUBSEQ,
+			LispNames.STRING_EQ, LispNames.STRING_LT, LispNames.STRING_GT, LispNames.STRING_LE, LispNames.STRING_GE,
+			LispNames.STRING_NE, LispNames.STRING_EQUAL, LispNames.STRING_LESSP, LispNames.STRING_GREATERP,
+			LispNames.STRING_NOT_GREATERP, LispNames.STRING_NOT_LESSP, LispNames.STRING_NOT_EQUAL,
+			LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM, LispNames.STRING_RIGHT_TRIM, LispNames.OPEN,
+			LispNames.CLOSE, LispNames.PROBE_FILE, LispNames.WRITE_LINE, LispNames.READ_BYTE, LispNames.WRITE_BYTE,
+			LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.IDENTITY, LispNames.COPY_LIST,
+			LispNames.COPY_TREE, LispNames.NREVERSE, LispNames.MAKE_LIST, LispNames.UNION, LispNames.INTERSECTION,
+			LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR,
+			LispNames.LOGNOT, LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2,
+			LispNames.ASH, LispNames.INTEGER_LENGTH, LispNames.LOGBITP, LispNames.BYTE, LispNames.BYTE_SIZE,
+			LispNames.BYTE_POSITION, LispNames.LDB, LispNames.DPB, LispNames.LIST_STAR, LispNames.ACONS, LispNames.ENDP,
+			LispNames.ELT, LispNames.RASSOC, LispNames.RASSOC_IF, LispNames.PAIRLIS, LispNames.COPY_ALIST,
+			LispNames.REVAPPEND, LispNames.NRECONC, LispNames.MAPLIST, LispNames.MAPCON, LispNames.MAPL,
+			LispNames.NOTANY, LispNames.NOTEVERY, LispNames.DELETE, LispNames.DELETE_IF, LispNames.DELETE_IF_NOT,
+			LispNames.SUBSTITUTE, LispNames.SUBST, LispNames.NSUBSTITUTE, LispNames.SEARCH, LispNames.MISMATCH,
+			LispNames.GET_UNIVERSAL_TIME, LispNames.ENCODE_UNIVERSAL_TIME, LispNames.DECODE_UNIVERSAL_TIME,
+			LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME, LispNames.FORCE_OUTPUT,
+			LispNames.FINISH_OUTPUT, LispNames.LISTEN, LispNames.READ_FROM_STRING, LispNames.PARSE_INTEGER,
+			LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.CHAR_EQ,
+			LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_GT, LispNames.CHAR_GE, LispNames.CHAR_NE,
+			LispNames.CHAR_EQUAL, LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP,
+			LispNames.ALPHA_CHAR_P, LispNames.ALPHANUMERICP, LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH,
+			LispNames.SBIT, LispNames.BIT, LispNames.BOTH_CASE_P, LispNames.SPECIAL_OPERATOR_P,
+			LispNames.MACRO_FUNCTION, LispNames.COMPILED_FUNCTION_P, LispNames.FUNCTION_LAMBDA_EXPRESSION,
+			LispNames.LIST_ALL_PACKAGES, LispNames.FIND_CLASS, LispNames.GET, LispNames.DIGIT_CHAR_P,
+			LispNames.DIGIT_CHAR, LispNames.MAKE_HASH_TABLE, LispNames.GETHASH, LispNames.REMHASH, LispNames.CLRHASH,
 			LispNames.HASH_TABLE_COUNT, LispNames.HASH_TABLE_TEST, LispNames.HASH_TABLE_SIZE,
 			LispNames.HASH_TABLE_REHASH_SIZE, LispNames.HASH_TABLE_REHASH_THRESHOLD, LispNames.HASH_TABLE_P,
 			LispNames.MAPHASH, LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.VECTOR, LispNames.SVREF,
@@ -141,9 +144,9 @@ public final class PackageRegistry {
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
 			LispNames.ARRAY_DIMENSION_LIMIT, LispNames.ARRAY_TOTAL_SIZE_LIMIT, LispNames.CHAR_CODE_LIMIT,
-			LispNames.INTERNAL_TIME_UNITS_PER_SECOND, LispNames.PRINT_CIRCLE_VAR, LispNames.FEATURES_VAR,
-			LispNames.STANDARD_OUTPUT_VAR, LispNames.ERROR_OUTPUT_VAR, LispNames.READTABLE_VAR,
-			LispNames.LAMBDA_LIST_KEYWORDS);
+			LispNames.INTERNAL_TIME_UNITS_PER_SECOND, LispNames.PRINT_CIRCLE_VAR, LispNames.PRINT_ESCAPE_VAR,
+			LispNames.PRINT_READABLY_VAR, LispNames.FEATURES_VAR, LispNames.STANDARD_OUTPUT_VAR,
+			LispNames.ERROR_OUTPUT_VAR, LispNames.READTABLE_VAR, LispNames.LAMBDA_LIST_KEYWORDS);
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also
@@ -309,7 +312,7 @@ public final class PackageRegistry {
 			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
 			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
 			LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
-			LispNames.BORDEAUX_THREADS_PKG, "KEYWORD");
+			LispNames.BORDEAUX_THREADS_PKG, LispNames.BABEL_PKG, LispNames.BABEL_ENCODINGS_PKG, "KEYWORD");
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -362,8 +365,9 @@ public final class PackageRegistry {
 		// A limited, API-compatible subset of ASDF (system definitions parsed from .asd
 		// files as plain data -- see eval.AsdfSystems). Does not use cl; both symbols
 		// are external.
-		define(new LispPackage(LispNames.ASDF_PKG, List.of(), new HashSet<>(Set.of(LispNames.DEFSYSTEM,
-				LispNames.LOAD_SYSTEM, LispNames.FIND_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY))));
+		define(new LispPackage(LispNames.ASDF_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.DEFSYSTEM, LispNames.LOAD_SYSTEM, LispNames.FIND_SYSTEM,
+						LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME))));
 		// A limited, API-compatible subset of Quicklisp: ql:quickload downloads a system
 		// (and its dependencies) from the real Quicklisp distribution into a local cache
 		// and then defers to the asdf subset (see eval.QuicklispClient). Its canonical
@@ -379,7 +383,8 @@ public final class PackageRegistry {
 		// the rest resolve but are undefined-function errors when called.
 		Set<String> uiopExternals = Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING, LispNames.GETENV,
 				LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
-				LispNames.MERGE_PATHNAMES_STAR, LispNames.FILE_EXISTS_P, LispNames.RUN_PROGRAM);
+				LispNames.MERGE_PATHNAMES_STAR, LispNames.FILE_EXISTS_P, LispNames.RUN_PROGRAM, LispNames.EMPTYP,
+				LispNames.FIRST_CHAR, LispNames.LAST_CHAR);
 		Set<String> uiopSymbols = new HashSet<>(uiopExternals);
 		// Internal in real UIOP too: every call site spells it
 		// uiop::get-pathname-defaults. Owned by the package rather than reached by
@@ -409,6 +414,24 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.BORDEAUX_THREADS_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK,
 						LispNames.WITH_LOCK_HELD, LispNames.SUPPORTS_THREADS_P))));
+		// babel + babel-encodings: the UTF-8 slice of the charset-conversion library,
+		// implemented in babel.lisp (eval.ShimLibraries). Real babel carries 40+ code
+		// pages; rontolisp has one character model (a character IS a code point, the
+		// wire form is UTF-8), so the shim implements that codec and SIGNALS on any
+		// other :encoding rather than mis-coding silently. Both packages export
+		// *default-character-encoding* -- real babel's babel package inherits it by
+		// :use-ing babel-encodings, and callers spell both.
+		define(new LispPackage(LispNames.BABEL_ENCODINGS_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.DEFAULT_CHARACTER_ENCODING, LispNames.LIST_CHARACTER_ENCODINGS))));
+		Set<String> babelExternals = Set.of(LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING,
+				LispNames.STRING_SIZE_IN_OCTETS, LispNames.DEFAULT_CHARACTER_ENCODING,
+				LispNames.LIST_CHARACTER_ENCODINGS);
+		Set<String> babelSymbols = new HashSet<>(babelExternals);
+		// Internal: the shim's own encoding-name normalizer, spelled
+		// babel::normalize-encoding by its two call sites. Owned by the package rather
+		// than left to the resolver's tolerance for an unknown :: member.
+		babelSymbols.add(LispNames.NORMALIZE_ENCODING);
+		define(new LispPackage(LispNames.BABEL_PKG, List.of(), babelSymbols, babelExternals));
 	}
 
 	/**

@@ -183,6 +183,16 @@ public final class LispLexer {
 				tokens.add(new Token.StructOpen());
 				this.pos += 3;
 			}
+			else if (c == '#' && this.pos + 2 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'P' || this.input.charAt(this.pos + 1) == 'p')
+					&& this.input.charAt(this.pos + 2) == '"') {
+				// #P"foo/bar" is a pathname literal. A pathname IS its namestring here
+				// (every pathname primitive -- make-pathname, merge-pathnames*,
+				// native-namestring -- takes and returns strings), so the dispatch
+				// contributes no token of its own and the string that follows becomes the
+				// datum. #P not followed by a string falls through to symbol reading.
+				this.pos += 2;
+			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '*') {
 				// #*1010 is a bit-vector literal; #* alone is the empty bit vector
 				// (cl-ppcre's charmap slot default #*0).

@@ -143,9 +143,17 @@ public final class GrayStreamsLibrary {
 			if (LispNames.FORMAT.equals(opName) && parts.size() >= 3 && streamArgMayBeInstance(parts.get(1))) {
 				// (format STREAM ctrl args...) with a possibly-CLOS destination: render
 				// with (format nil ...) and route the string through the write-string
-				// dispatch (whose fallback handles handles and the t designator). The
-				// destination is bound first, preserving CL's evaluation order; the form
-				// yields nil like format-to-stream.
+				// dispatch (whose fallback handles stream handles and the t designator).
+				// The destination is bound first, preserving CL's evaluation order.
+				//
+				// The destination is then tested at RUN time, exactly as the ordinary
+				// format lowering does (LispMacroExpander.formatDestinationDispatch):
+				// nil is not a stream but the "return the string" destination, so a
+				// caller forwarding its own &optional stream must get a string back. A
+				// nil destination reaching the dispatch instead printed to standard
+				// output -- and this rewrite runs on the whole program whenever ANY of
+				// it uses the Gray protocol, so that turned an unrelated
+				// (format stream ...) into the wrong answer.
 				List<LispVal> fmtNil = new java.util.ArrayList<>();
 				fmtNil.add(new am.ik.rontolisp.LispSymbol(LispNames.FORMAT));
 				fmtNil.add(am.ik.rontolisp.LispNil.INSTANCE);
@@ -153,11 +161,17 @@ public final class GrayStreamsLibrary {
 					fmtNil.add(rewrite(parts.get(i)));
 				}
 				am.ik.rontolisp.LispSymbol temp = new am.ik.rontolisp.LispSymbol("__gray_fmt_stream");
+				am.ik.rontolisp.LispSymbol result = new am.ik.rontolisp.LispSymbol("__gray_fmt_result");
 				LispVal dispatch = listOf(
-						new am.ik.rontolisp.LispSymbol(LispNames.RONTOLISP_PKG + "::" + WRITE_STRING_DISPATCH),
-						listOf(fmtNil.toArray(LispVal[]::new)), temp);
+						new am.ik.rontolisp.LispSymbol(LispNames.RONTOLISP_PKG + "::" + WRITE_STRING_DISPATCH), result,
+						temp);
+				LispVal wrote = listOf(new am.ik.rontolisp.LispSymbol(LispNames.PROGN), dispatch,
+						am.ik.rontolisp.LispNil.INSTANCE);
+				LispVal tested = listOf(new am.ik.rontolisp.LispSymbol(LispNames.IF), temp, wrote, result);
+				LispVal bindResult = listOf(new am.ik.rontolisp.LispSymbol(LispNames.LET),
+						listOf(listOf(result, listOf(fmtNil.toArray(LispVal[]::new)))), tested);
 				return listOf(new am.ik.rontolisp.LispSymbol(LispNames.LET),
-						listOf(listOf(temp, rewrite(parts.get(1)))), dispatch, am.ik.rontolisp.LispNil.INSTANCE);
+						listOf(listOf(temp, rewrite(parts.get(1)))), bindResult);
 			}
 		}
 		// Generic: rewrite the operator/elements individually. The tail is walked

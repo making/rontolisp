@@ -4682,7 +4682,7 @@ class LispEvaluatorTest {
 					"%make-string-input-stream", "%string-stream-contents", "%peek-char", "%set-fill-pointer",
 					"%string-compare", "%run-handlers")
 			.isSorted()
-			.hasSize(340);
+			.hasSize(341);
 	}
 
 	@Test
@@ -6845,12 +6845,144 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void setfGetfMutatesAnExistingPairInPlace() {
+		// CL's plist place: an indicator that already has a cell is updated through
+		// rplaca, so an alias of the same list observes the change.
+		assertThat(evalMulti("""
+				(let* ((p (list :a 1 :b 2)) (alias (cdr (cdr p))))
+				  (setf (getf p :b) 20)
+				  (list p alias))
+				""").print()).isEqualTo("((:A 1 :B 20) (:B 20))");
+	}
+
+	@Test
+	void setfGetfPushesAMissingPairAndStoresItBack() {
+		assertThat(evalMulti("(let ((p nil)) (setf (getf p :x) 7) p)").print()).isEqualTo("(:X 7)");
+		// setf returns the VALUE, not the plist.
+		assertThat(evalMulti("(let ((p (list :a 1))) (setf (getf p :a) 9))").print()).isEqualTo("9");
+		// The optional default in the place is read by getf only, and dropped here.
+		assertThat(evalMulti("(let ((p nil)) (setf (getf p :x 99) 7) p)").print()).isEqualTo("(:X 7)");
+	}
+
+	@Test
+	void formatDestinationNilReturnsTheStringEvenThroughAVariable() {
+		// nil as a format destination is not a stream but the "return the string"
+		// destination, so a destination arriving through a variable has to be tested at
+		// run time -- quri's (render-uri uri &optional stream) passes its optional
+		// straight through.
+		assertThat(evalMulti("""
+				(progn (defun f (&optional s) (format s "~a-~a" 1 2)) (list (f) (f nil)))
+				""").print()).isEqualTo("(\"1-2\" \"1-2\")");
+		// A stream destination still writes and answers nil.
+		assertThat(evalMulti("""
+				(progn (defun g (s) (format s "~a" 5))
+				       (let ((out (with-output-to-string (o) (setq %r (g o))))) (list out %r)))
+				""").print()).isEqualTo("(\"5\" NIL)");
+	}
+
+	@Test
+	void makeListTakesAnInitialElement() {
+		// quri's ip-addr= pads an abbreviated IPv6 address with
+		// (make-list (- 9 len) :initial-element 0).
+		assertThat(evalMulti("(make-list 3 :initial-element 0)").print()).isEqualTo("(0 0 0)");
+		assertThat(evalMulti("(make-list 0 :initial-element :x)").print()).isEqualTo("NIL");
+		assertThat(evalMulti("(make-list 2)").print()).isEqualTo("(NIL NIL)");
+		assertThatThrownBy(() -> evalMulti("(make-list 2 :bogus 1)")).hasMessageContaining(":initial-element");
+	}
+
+	@Test
+	void nilAndTAreStringDesignators() {
+		// Both are SYMBOLS, so they designate their upcase-canonical names -- quri's
+		// scheme-constructor asks (string= scheme "http") of a relative reference whose
+		// scheme is nil, and CL answers false rather than signalling.
+		assertThat(evalMulti("(string= nil \"http\")").print()).isEqualTo("NIL");
+		assertThat(evalMulti("(string= nil \"NIL\")").print()).isEqualTo("T");
+		assertThat(evalMulti("(string-equal t \"t\")").print()).isEqualTo("T");
+		assertThat(evalMulti("(string-upcase nil)").print()).isEqualTo("\"NIL\"");
+	}
+
+	@Test
+	void princWritesASymbolNameWithoutItsPackageQualifier() {
+		// CLHS 22.1.3.3: with *print-escape* false only the characters of the name are
+		// output. Load-bearing beyond printing -- a library that synthesizes a function
+		// name with (intern (format nil "~:@(~a-~a~)" name :string)) would otherwise
+		// intern the qualifier INTO the name (quri's defun-with-array-parsing).
+		assertThat(evalMulti("(princ-to-string 'rontolisp:version)").print()).isEqualTo("\"VERSION\"");
+		assertThat(evalMulti("(prin1-to-string 'rontolisp:version)").print()).isEqualTo("\"RONTOLISP:VERSION\"");
+		assertThat(evalMulti("(format nil \"~a\" 'rontolisp:version)").print()).isEqualTo("\"VERSION\"");
+	}
+
+	@Test
+	void aDefstructInAPackageThatExportsItsGeneratedNamesDefinesThem() {
+		// The generated constructor/predicate/accessor land in the struct's package
+		// spelled the way a CALL SITE resolves them: one colon for an exported member.
+		// Reading that wrong is not a package error but an undefined function.
+		assertThat(evalMulti("""
+				(defpackage :ci-pt-pkg (:use :cl) (:export :pt :make-pt :pt-p :pt-x))
+				(in-package :ci-pt-pkg)
+				(defstruct pt x)
+				(in-package :cl-user)
+				(list (ci-pt-pkg:pt-p (ci-pt-pkg:make-pt :x 1))
+				      (ci-pt-pkg:pt-x (ci-pt-pkg:make-pt :x 7)))
+				""").print()).isEqualTo("(T 7)");
+	}
+
+	@Test
+	void defstructIncludeOverridesAnInheritedSlotDefault() {
+		// quri's shape: uri-http re-defaults the inherited scheme/port slots while
+		// keeping their inherited indices, so the parent's accessors still read them.
+		assertThat(evalMulti("""
+				(progn
+				  (defstruct base (scheme nil) (port nil))
+				  (defstruct (child (:include base (scheme "http") (port 80))))
+				  (let ((c (make-child)))
+				    (list (base-scheme c) (base-port c) (base-scheme (make-base)))))
+				""").print()).isEqualTo("(\"http\" 80 NIL)");
+	}
+
+	@Test
+	void defstructIncludeRejectsAnOverrideOfAnUnknownSlot() {
+		assertThatThrownBy(() -> evalMulti("""
+				(progn (defstruct base a)
+				       (defstruct (child (:include base (nope 1)))))
+				""")).hasMessageContaining("NOPE");
+	}
+
+	@Test
+	void printObjectSeesThePrinterModeThroughPrintEscape() {
+		// *print-escape* is bound around the method call, so a portable print-object
+		// method can tell prin1 from princ exactly as it does in CL.
+		assertThat(evalMulti("""
+				(progn
+				  (defstruct pe x)
+				  (defmethod print-object ((p pe) stream)
+				    (if (and (null *print-readably*) (null *print-escape*))
+				        (format stream "bare-~a" (pe-x p))
+				        (format stream "#<PE ~a>" (pe-x p))))
+				  (list (prin1-to-string (make-pe :x 1)) (princ-to-string (make-pe :x 1))))
+				""").print()).isEqualTo("(\"#<PE 1>\" \"bare-1\")");
+	}
+
+	@Test
+	void applyThroughAComputedDesignatorTakesAnyArgumentCount() {
+		// The per-arity dispatch the compile backends use stops at seven; apply must
+		// not, and the interpreter is the reference the ci-spec case compares against.
+		assertThat(evalMulti("""
+				(progn (defun r (&rest xs) (length xs))
+				       (defun f () (function r))
+				       (list (apply (f) (list 1 2 3 4 5 6 7 8))
+				             (apply (f) 1 2 3 4 5 6 (list 7 8 9 10))))
+				""").print()).isEqualTo("(8 10)");
+	}
+
+	@Test
 	void symbolNameStripsThePackageMarker() {
 		assertThat(evalMulti("(symbol-name 'foo)").print()).isEqualTo("\"FOO\"");
 		assertThat(evalMulti("(symbol-name :bar)").print()).isEqualTo("\"BAR\"");
 		assertThat(evalMulti("(symbol-name (gensym))").print()).isEqualTo("\"g1\"");
-		assertThat(evalMulti("(symbol-name t)").print()).isEqualTo("\"t\"");
-		assertThat(evalMulti("(symbol-name nil)").print()).isEqualTo("\"nil\"");
+		// nil and t are the symbols NIL and T; CL upcases their names like any other.
+		assertThat(evalMulti("(symbol-name t)").print()).isEqualTo("\"T\"");
+		assertThat(evalMulti("(symbol-name nil)").print()).isEqualTo("\"NIL\"");
 	}
 
 	@Test
@@ -6870,8 +7002,8 @@ class LispEvaluatorTest {
 		// relies on (string :html) being "html" so it emits <html>, not <:html>.
 		assertThat(evalMulti("(string :bar)").print()).isEqualTo("\"BAR\"");
 		assertThat(evalMulti("(string #\\a)").print()).isEqualTo("\"a\"");
-		assertThat(evalMulti("(string t)").print()).isEqualTo("\"t\"");
-		assertThat(evalMulti("(string nil)").print()).isEqualTo("\"nil\"");
+		assertThat(evalMulti("(string t)").print()).isEqualTo("\"T\"");
+		assertThat(evalMulti("(string nil)").print()).isEqualTo("\"NIL\"");
 		assertThat(evalMulti("(gensym (string 'x))").print()).isEqualTo("#:X1");
 	}
 

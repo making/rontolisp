@@ -429,10 +429,17 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int MAX_CALLABLE_ARITY = 7;
 
+	// The SPREAD dispatcher: one function over every callable, taking the argument list
+	// as a single cons list (the arity-1 signature). _apply calls it, because the
+	// per-arity dispatchers take one WASM parameter per Lisp argument and so stop at
+	// MAX_CALLABLE_ARITY -- an apply through a computed designator past that used to
+	// trap. Always declared (the body is unreachable without the eval runtime).
+	static final int FUNC_DISPATCH_SPREAD = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1;
+
 	// Plist runtime helper (always emitted, just after the dispatch functions): look up
 	// a plist key by interned offset. The component import compiler uses it to lower a
 	// record parameter written as a keyword plist.
-	static final int FUNC_PLIST_GET = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1;
+	static final int FUNC_PLIST_GET = FUNC_DISPATCH_SPREAD + 1;
 
 	// Structural hash (agrees with _equal): walks conses and folds i31 ints / interned
 	// string offsets / char codes / float bits / ratio components into an i32. Always
@@ -1485,7 +1492,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// calls
 		// a helper that is actually injected.
 		boolean usesSeqString = ConcatenateForms.needsSeqString(program);
-		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry);
+		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
+				packageResolver::spellsAsExternal);
 		// Every struct/class layout is registered by the pass above, so the instance gate
 		// can be decided here -- it must be, because the struct type index and the baked
 		// layout addresses are needed as constants before any body is compiled. Restart
@@ -2590,6 +2598,21 @@ public final class WasmLispCompiler implements LispCompiler {
 				dispatchBodies.add(db.toByteArray());
 			}
 		}
+		// The spread dispatcher (FUNC_DISPATCH_SPREAD): only _apply calls it, so it is
+		// built only with the eval runtime; otherwise its body is unreachable like an
+		// unused arity's.
+		if (usesEval) {
+			dispatchBodies.add(WasmRuntimeBuilder.buildDispatchBody(0, defuns, lambdaDecls, numDefuns, stringTable,
+					usesEval, userFuncBase(), true));
+		}
+		else {
+			ByteArrayOutputStream db = new ByteArrayOutputStream();
+			WasmWriter dw = new WasmWriter(db);
+			dw.write(0);
+			dw.write(Instruction.UNREACHABLE);
+			dw.write(Instruction.END);
+			dispatchBodies.add(db.toByteArray());
+		}
 
 		// Build helper function bodies
 		byte[] printI32Body = WasmRuntimeBuilder.buildPrintI32Core(true);
@@ -3521,10 +3544,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				// getenv runtime
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _getenv ((ref null eq)) ->
 															// (ref null eq)
-				// Dispatch functions (arities 0-7)
+				// Dispatch functions (arities 0-7) plus the spread one, which reuses the
+				// arity-1 signature ((funcval, argList) -> value).
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
 				}
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _invoke_v
 				// plist runtime helper (FUNC_PLIST_GET)
 				fnDef.addFunction(TYPE_OPEN); // _plist_get ((ref null eq), i32) ->
 												// (ref null eq)

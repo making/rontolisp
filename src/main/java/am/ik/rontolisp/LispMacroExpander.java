@@ -3159,6 +3159,55 @@ public final class LispMacroExpander {
 					}
 					yield aset;
 				}
+				case LispNames.GETF -> {
+					// (setf (getf place indicator [default]) value): CL's plist place.
+					// The
+					// indicator either already has a cell -- then the VALUE cell is
+					// rplaca'd, so an alias of the same list sees the update -- or the
+					// pair
+					// is consed onto the front and stored back through `place`. The
+					// optional default is read by getf only and is dropped here (the
+					// gethash place does the same).
+					//
+					// Lowered inline rather than onto a runtime helper: the expansion
+					// happens during expression compilation, long after the pass that
+					// splices prelude defuns, so a synthesized call to one would never be
+					// resolved. `place` is evaluated twice (the search and the
+					// push-back);
+					// for the variable place every caller uses that is free.
+					if (placeParts.size() < 3) {
+						throw new IllegalArgumentException("setf getf expects (getf place indicator): " + cons.print());
+					}
+					LispVal plistPlace = placeParts.get(1);
+					LispSymbol indVar = new LispSymbol("__setf_getf_ind");
+					LispSymbol valVar = new LispSymbol("__setf_getf_val");
+					LispSymbol cellVar = new LispSymbol("__setf_getf_cell");
+					LispSymbol walkVar = new LispSymbol("__setf_getf_tail");
+					// (do ((tail place (cddr tail))) ((or (null tail) (eq (car tail)
+					// ind))
+					// tail))
+					LispVal walk = expandDo((LispCons) listToCons(List
+						.of(new LispSymbol(LispNames.DO),
+								listToCons(List
+									.of(listToCons(List.of(walkVar, plistPlace, callOf(CDDR_COMPOSITION, walkVar))))),
+								listToCons(List.of(
+										listToCons(
+												List.of(new LispSymbol(LispNames.OR), callOf(LispNames.NULL, walkVar),
+														listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL),
+																callOf(LispNames.CAR, walkVar), indVar)))),
+										walkVar)))));
+					LispVal update = makeProgn(List.of(
+							listToCons(
+									List.of(new LispSymbol(LispNames.RPLACA), callOf(LispNames.CDR, cellVar), valVar)),
+							valVar));
+					LispVal pushed = listToCons(List.of(new LispSymbol(LispNames.CONS), indVar,
+							listToCons(List.of(new LispSymbol(LispNames.CONS), valVar, plistPlace))));
+					LispVal store = makeProgn(List.of(expandSetf(
+							(LispCons) listToCons(List.of(new LispSymbol(LispNames.SETF), plistPlace, pushed)),
+							structAccessors, closRegistry, stringsExist), valVar));
+					yield makeLet(indVar.name(), placeParts.get(2), makeLet(valVar.name(), value,
+							makeLet(cellVar.name(), walk, makeIf(cellVar, update, store))));
+				}
 				case LispNames.ROW_MAJOR_AREF ->
 					// (setf (row-major-aref array k) val) -> (%row-major-aset array k
 					// val).
@@ -3353,6 +3402,12 @@ public final class LispMacroExpander {
 		}
 		throw new UnsupportedOperationException("setf expects a symbol or accessor form as place");
 	}
+
+	/**
+	 * The {@code cdr}-composition name the {@code setf getf} plist walk steps with; a
+	 * car/cdr composition is recognized generically rather than being a named builtin.
+	 */
+	private static final String CDDR_COMPOSITION = "CDDR";
 
 	private static final String SETF_VAR = "__setf";
 
@@ -4770,15 +4825,45 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		LispSymbol i = new LispSymbol("__ml_i");
 		LispSymbol acc = new LispSymbol("__ml_acc");
-		// (do ((__ml_i n (- __ml_i 1)) (__ml_acc nil (cons nil __ml_acc)))
+		LispSymbol elem = new LispSymbol("__ml_elem");
+		// The element is bound OUTSIDE the loop so its form runs once, like CL's
+		// single evaluation of :initial-element -- every cell shares that one value.
+		LispVal element = makeListInitialElement(cons, parts);
+		// (do ((__ml_i n (- __ml_i 1)) (__ml_acc nil (cons ELEM __ml_acc)))
 		// ((<= __ml_i 0) __ml_acc))
 		LispVal iStep = listToCons(List.of(new LispSymbol(LispNames.SUB), i, new LispInteger(1)));
-		LispVal accStep = listToCons(List.of(new LispSymbol(LispNames.CONS), LispNil.INSTANCE, acc));
+		LispVal accStep = listToCons(
+				List.of(new LispSymbol(LispNames.CONS), element == null ? LispNil.INSTANCE : elem, acc));
 		LispVal bindings = listToCons(List.of(listToCons(List.of(i, parts.get(1), iStep)),
 				listToCons(List.of(acc, LispNil.INSTANCE, accStep))));
 		LispVal endTest = listToCons(List.of(new LispSymbol(LispNames.LE), i, new LispInteger(0)));
 		LispVal endClause = listToCons(List.of(endTest, acc));
-		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause)));
+		LispVal loop = expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause)));
+		return element == null ? loop : makeLet(elem.name(), element, loop);
+	}
+
+	/**
+	 * The {@code :initial-element} value form of a {@code make-list} call, or null when
+	 * the call has none (then every cell is nil, CL's default). Any other keyword is a
+	 * hard error: {@code make-list} has exactly this one.
+	 */
+	@Nullable private static LispVal makeListInitialElement(LispCons cons, List<LispVal> parts) {
+		if (parts.size() == 2) {
+			return null;
+		}
+		if ((parts.size() - 2) % 2 != 0) {
+			throw new IllegalArgumentException(
+					LispNames.MAKE_LIST + " expects (size &key initial-element): " + cons.print());
+		}
+		LispVal element = null;
+		for (int k = 2; k + 1 < parts.size(); k += 2) {
+			if (!(parts.get(k) instanceof LispSymbol key) || !LispNames.INITIAL_ELEMENT_KEYWORD.equals(key.name())) {
+				throw new IllegalArgumentException(LispNames.MAKE_LIST + ": unsupported keyword " + parts.get(k).print()
+						+ " (only :initial-element): " + cons.print());
+			}
+			element = parts.get(k + 1);
+		}
+		return element;
 	}
 
 	/**
@@ -7182,6 +7267,31 @@ public final class LispMacroExpander {
 	 */
 	public static List<LispVal> expandDefstruct(LispCons cons, java.util.Map<String, Integer> structAccessors,
 			@org.jspecify.annotations.Nullable ClosRegistry closRegistry) {
+		return expandDefstruct(cons, structAccessors, closRegistry, null);
+	}
+
+	/**
+	 * As {@link #expandDefstruct(LispCons, java.util.Map, ClosRegistry)}, with the export
+	 * oracle that decides how a SYNTHESIZED name is spelled.
+	 *
+	 * <p>
+	 * A generated name lands in the struct's package, and the string it is defined under
+	 * has to be the one a call site resolves to -- {@code PKG:NAME} for an exported
+	 * member, {@code PKG::NAME} otherwise ({@link PackageResolver#spellsAsExternal}).
+	 * Without the oracle every generated name takes the internal spelling, which is right
+	 * only for a struct whose {@code defpackage} exports none of them; quri's does export
+	 * {@code uri-p}/{@code uri-scheme}/{@code make-uri-http}/..., and those resolved to a
+	 * name nothing had defined.
+	 * @param cons the defstruct expression
+	 * @param structAccessors mutated: accessor name to 1-based slot position
+	 * @param closRegistry mutated when non-null: the struct type and its layout
+	 * @param exported {@code (package, member) -> is it external}, or {@code null} to
+	 * spell every generated name internally (the pre-oracle behavior)
+	 * @return the generated top-level forms, in definition order
+	 */
+	public static List<LispVal> expandDefstruct(LispCons cons, java.util.Map<String, Integer> structAccessors,
+			@org.jspecify.annotations.Nullable ClosRegistry closRegistry,
+			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(LispNames.DEFSTRUCT + " expects a struct name: " + cons.print());
@@ -7201,6 +7311,9 @@ public final class LispMacroExpander {
 		String customCopier = null;
 		boolean suppressCopier = false;
 		String includeParent = null;
+		// (:include parent (slot new-default) ...): the child's initform overrides for
+		// inherited slots, keyed by the slot's unqualified name.
+		java.util.Map<String, LispVal> includeOverrides = new java.util.LinkedHashMap<>();
 		boolean typedVector = false;
 		if (parts.get(1) instanceof LispSymbol plain) {
 			nameSym = plain;
@@ -7264,13 +7377,26 @@ public final class LispMacroExpander {
 						}
 					}
 					case ":INCLUDE" -> {
-						// (:include parent): slot overrides ((:include parent (slot new
-						// -default))) are not supported.
-						if (optParts.size() != 2 || !(optValue instanceof LispSymbol inc)) {
+						// (:include parent (slot new-default [options...]) ...): each
+						// trailing spec re-defaults ONE inherited slot in this child's
+						// layout (the parent's own default is untouched). The slot keeps
+						// its inherited index, so the parent's accessors still read it.
+						if (optParts.size() < 2 || !(optValue instanceof LispSymbol inc)) {
 							throw new UnsupportedOperationException(
 									LispNames.DEFSTRUCT + " option is not supported: " + option.print());
 						}
 						includeParent = inc.name();
+						for (LispVal override : optParts.subList(2, optParts.size())) {
+							if (!(override instanceof LispCons ovCons)
+									|| !(ovCons.car() instanceof LispSymbol ovSlot)) {
+								throw new UnsupportedOperationException(LispNames.DEFSTRUCT
+										+ " :include slot override must be (slot default): " + option.print());
+							}
+							List<LispVal> ovParts = ovCons.toList();
+							PackageRegistry.QualifiedName ovQn = PackageRegistry.splitQualified(ovSlot.name());
+							includeOverrides.put(ovQn == null ? ovSlot.name() : ovQn.member(),
+									ovParts.size() >= 2 ? ovParts.get(1) : LispNil.INSTANCE);
+						}
 					}
 					case ":TYPE" -> {
 						// Only the vector shape: the struct is a plain vector (no
@@ -7297,9 +7423,15 @@ public final class LispMacroExpander {
 		}
 		String structName = nameSym.name();
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(structName);
-		// Generated names of a qualified struct are interned as internal symbols
-		// (double colon), matching how the resolver canonicalizes their call sites.
-		String prefix = qn == null ? "" : qn.pkg() + "::";
+		// A generated name of a qualified struct lands in the struct's package, spelled
+		// exactly as the resolver spells that symbol at a CALL site: one colon when the
+		// defpackage exports it, two otherwise. Without the oracle (a direct
+		// expandDefstruct caller that has no resolver) every generated name takes the
+		// internal spelling -- correct for a struct whose names are not exported, which
+		// is what every caller before quri had.
+		java.util.function.UnaryOperator<String> inPackage = member -> qn == null ? member
+				: exported != null && exported.test(qn.pkg(), member) ? PackageRegistry.qualify(qn.pkg(), member)
+						: PackageRegistry.qualifyInternal(qn.pkg(), member);
 		String base = qn == null ? structName : qn.member();
 		String concName = concNameGiven ? (concNameOverride == null ? "" : concNameOverride) : base + "-";
 		// Synthesized affixes follow the base name's case: an upcased-reader struct PT
@@ -7369,9 +7501,15 @@ public final class LispMacroExpander {
 			List<String> mergedBases = new java.util.ArrayList<>();
 			List<LispVal> mergedDefaults = new java.util.ArrayList<>();
 			for (int i = 0; i < parentLayout.slotNames().size(); i++) {
-				mergedSyms.add(new LispSymbol(parentLayout.slotNames().get(i)));
-				mergedBases.add(parentLayout.slotNames().get(i));
-				mergedDefaults.add(parentLayout.initforms().get(i));
+				String inherited = parentLayout.slotNames().get(i);
+				mergedSyms.add(new LispSymbol(inherited));
+				mergedBases.add(inherited);
+				LispVal override = includeOverrides.remove(inherited);
+				mergedDefaults.add(override != null ? override : parentLayout.initforms().get(i));
+			}
+			if (!includeOverrides.isEmpty()) {
+				throw new IllegalArgumentException(LispNames.DEFSTRUCT + " :include " + includeParent
+						+ " overrides slots it does not define: " + includeOverrides.keySet());
 			}
 			mergedSyms.addAll(slotSyms);
 			mergedBases.addAll(slotBases);
@@ -7401,7 +7539,7 @@ public final class LispMacroExpander {
 			}
 		}
 		if (!suppressConstructor) {
-			String constructorName = customConstructor != null ? customConstructor : prefix + makeAffix + base;
+			String constructorName = customConstructor != null ? customConstructor : inPackage.apply(makeAffix + base);
 			if (boaLambdaList != null) {
 				// (defun name (<boa lambda list>) (%obj-new '%struct-<name> value...)):
 				// a slot bound by the lambda list reads that parameter, the rest
@@ -7431,7 +7569,7 @@ public final class LispMacroExpander {
 		LispSymbol obj = new LispSymbol(STRUCT_VAR);
 		LispVal params = listToCons(List.<LispVal>of(obj));
 		if (!suppressPredicate && !typedVector) {
-			String predicateName = customPredicate != null ? customPredicate : prefix + base + pAffix;
+			String predicateName = customPredicate != null ? customPredicate : inPackage.apply(base + pAffix);
 			forms.add(structPredicateDefun(structName, predicateName, closRegistry));
 			if (closRegistry != null) {
 				closRegistry.registerStructPredicate(structName, predicateName);
@@ -7441,7 +7579,7 @@ public final class LispMacroExpander {
 		// ...)): a shallow copy, like copy-structure -- the slot values are shared. A
 		// :type vector struct copies with copy-seq (it IS a vector).
 		if (!suppressCopier) {
-			String copierName = customCopier != null ? customCopier : prefix + copyAffix + base;
+			String copierName = customCopier != null ? customCopier : inPackage.apply(copyAffix + base);
 			if (typedVector) {
 				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(copierName), params,
 						callOf(LispNames.COPY_SEQ, obj))));
@@ -7463,7 +7601,7 @@ public final class LispMacroExpander {
 		// generated %setf-<accessor> writer defun (the setf-function protocol), since
 		// there is no instance object to %obj-set.
 		for (int i = 0; i < slotSyms.size(); i++) {
-			String accessor = prefix + concName + affixFor(slotBases.get(i), base);
+			String accessor = inPackage.apply(concName + affixFor(slotBases.get(i), base));
 			if (typedVector) {
 				LispVal arefRead = listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(i)));
 				forms.add(listToCons(
@@ -10112,6 +10250,24 @@ public final class LispMacroExpander {
 	 */
 	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry) {
+		return expandTopLevelDefinitions(program, structAccessors, closRegistry, null);
+	}
+
+	/**
+	 * As {@link #expandTopLevelDefinitions(List, java.util.Map, ClosRegistry)}, threading
+	 * the export oracle a {@code defstruct} needs to spell its generated names the way
+	 * the program's call sites do -- see
+	 * {@link #expandDefstruct(LispCons, java.util.Map, ClosRegistry, java.util.function.BiPredicate)}.
+	 * Each compiler passes the {@link PackageResolver} it just resolved the program with.
+	 * @param program the top-level forms
+	 * @param structAccessors mutated: accessor name to 1-based slot position
+	 * @param closRegistry mutated: classes, generics, and methods
+	 * @param exported {@code (package, member) -> is it external}, or {@code null}
+	 * @return the program with each definition replaced by its generated defuns
+	 */
+	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
+			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
+			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported) {
 		// The one whole-program pass both compilers already run, so the load-time-value
 		// hoist rides along instead of needing its own registration in every pipeline.
 		program = hoistLoadTimeValues(program);
@@ -10155,7 +10311,7 @@ public final class LispMacroExpander {
 				out.add(rewriteSetfFunctionDefun((LispCons) form, structAccessors));
 			}
 			else if (isDefstructForm(form)) {
-				out.addAll(expandDefstruct((LispCons) form, structAccessors, closRegistry));
+				out.addAll(expandDefstruct((LispCons) form, structAccessors, closRegistry, exported));
 			}
 			else if (isNamedForm(form, LispNames.DEFCLASS)) {
 				// The expansion mixes plain defuns (constructor) with synthesized
@@ -10537,13 +10693,12 @@ public final class LispMacroExpander {
 				result = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), result, forms.get(i)));
 			}
 			if (streamDest != null) {
-				// (write-string <string> __format_stream) nil -- the stream temp is
-				// bound first so the destination is evaluated before the arguments.
+				// A computed destination: dispatched at RUN TIME, because nil there is
+				// not a stream but the "return the string" destination. The stream temp
+				// is bound first so the destination is evaluated before the arguments.
 				LispSymbol streamVar = new LispSymbol(FORMAT_STREAM_VAR);
 				bindings.add(0, listToCons(List.of(streamVar, streamDest)));
-				forms = new java.util.ArrayList<>(
-						List.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), result, streamVar)),
-								LispNil.INSTANCE));
+				forms = new java.util.ArrayList<>(List.of(formatDestinationDispatch(result, streamVar)));
 			}
 			else {
 				forms = new java.util.ArrayList<>(List.of(result));
@@ -10577,8 +10732,8 @@ public final class LispMacroExpander {
 		LispVal rendered = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), formatRuntimeLambda(), parts.get(2),
 				fargs.isEmpty() ? LispNil.INSTANCE : listToCons(listCall)));
 		if (streamDest != null) {
-			return makeProgn(List.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), rendered, streamDest)),
-					LispNil.INSTANCE));
+			LispSymbol streamVar = new LispSymbol(FORMAT_STREAM_VAR);
+			return makeLet(streamVar.name(), streamDest, formatDestinationDispatch(rendered, streamVar));
 		}
 		if (toString) {
 			return rendered;
@@ -10688,6 +10843,38 @@ public final class LispMacroExpander {
 	private static final String FORMAT_ARG_VAR = "__format_arg";
 
 	private static final String FORMAT_STREAM_VAR = "__format_stream";
+
+	/**
+	 * The run-time dispatch on a {@code format} destination that is neither the literal
+	 * {@code nil} nor the literal {@code t}: {@code (if dest (progn (write-string STR
+	 * dest) nil) STR)}, with a {@code t} destination writing to the default stream.
+	 *
+	 * <p>
+	 * It has to be a run-time test. {@code nil} as a {@code format} destination does not
+	 * name a stream -- it is the "build and return the string" destination -- so a call
+	 * whose destination is a VARIABLE cannot be lowered to a write: quri's
+	 * {@code (render-uri uri &optional stream)} passes its optional straight through, and
+	 * lowering the nil case to a write printed the URI to stdout and returned nil where
+	 * CL returns the string. The rendered string is bound to a temp so it is built once
+	 * whichever branch consumes it.
+	 * @param result the form that builds the rendered string
+	 * @param streamVar the symbol already bound to the evaluated destination
+	 * @return the dispatching form
+	 */
+	private static LispVal formatDestinationDispatch(LispVal result, LispSymbol streamVar) {
+		LispSymbol resultVar = new LispSymbol("__format_result");
+		LispVal writeToStream = makeProgn(List
+			.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), resultVar, streamVar)), LispNil.INSTANCE));
+		// A t destination is *standard-output*: the one-argument write-string reads it at
+		// call time, so a surrounding with-output-to-string capture still applies.
+		LispVal writeToDefault = makeProgn(
+				List.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), resultVar)), LispNil.INSTANCE));
+		LispVal nonNil = listToCons(List.of(new LispSymbol(LispNames.IF),
+				listToCons(List.of(new LispSymbol(LispNames.EQL), streamVar, LispTrue.INSTANCE)), writeToDefault,
+				writeToStream));
+		return makeLet(resultVar.name(), result,
+				listToCons(List.of(new LispSymbol(LispNames.IF), streamVar, nonNil, resultVar)));
+	}
 
 	/**
 	 * A parsed unit of a format control string: either a literal text run, a
@@ -13788,6 +13975,44 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Normalizes the two operands of a {@code string=}/{@code string-equal} call through
+	 * the shared {@code string} designator coercion when they are not already literal
+	 * strings.
+	 *
+	 * <p>
+	 * A CL string designator is a string, a symbol (including {@code nil} and {@code t})
+	 * or a character, and the compile backends' equality intrinsic takes strings -- so a
+	 * runtime symbol reached it unconverted, and {@code nil} reached it as the
+	 * null/absent value and crashed. quri's {@code scheme-constructor} asks
+	 * {@code (string= scheme "http")} of a relative reference, whose scheme is nil; CL
+	 * answers false. Routing through {@code (string ...)} rather than teaching each
+	 * intrinsic keeps ONE definition of the coercion. A literal string argument is left
+	 * alone, so the common two-literal-strings shape is unchanged.
+	 * @param cons the string= / string-equal expression (no bounding keywords)
+	 * @return the expression with non-literal operands wrapped in {@code (string ...)}
+	 */
+	public static LispVal normalizeStringComparisonDesignators(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			return cons;
+		}
+		List<LispVal> out = new java.util.ArrayList<>();
+		out.add(parts.get(0));
+		for (int i = 1; i < 3; i++) {
+			LispVal arg = parts.get(i);
+			out.add(arg instanceof LispString || isStringDesignatorCoercion(arg) ? arg : callOf(LispNames.STRING, arg));
+		}
+		return listToCons(out);
+	}
+
+	// Whether the form is already a (string ...) coercion, so the normalizer does not
+	// stack a second one on a hand-written designator call.
+	private static boolean isStringDesignatorCoercion(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.STRING.equals(op.name()) && cons.isProperList() && cons.toList().size() == 2;
+	}
+
+	/**
 	 * Expands (string= s1 s2 :start1 a :end1 b :start2 c :end2 d) -- and the identical
 	 * {@code string-equal} shape -- into (string= (subseq s1 a b) (subseq s2 c d)), so
 	 * the compile backends keep their two-argument string-equality intrinsic and the
@@ -14383,7 +14608,7 @@ public final class LispMacroExpander {
 		LispSymbol escape = new LispSymbol("__poe");
 		LispVal fallback = makeIf(escape, listToCons(List.of(new LispSymbol(LispNames.PRIN1_TO_STRING_RAW), value)),
 				princRendering(value, closRegistry.routesConditionReports()));
-		LispVal body = printObjectRouting(value, fallback, closRegistry);
+		LispVal body = printObjectRouting(value, fallback, closRegistry, escape);
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL),
 				listToCons(List.of(value, escape)), body));
 	}
@@ -14395,9 +14620,10 @@ public final class LispMacroExpander {
 	 * would still have to compile, and a program routed here only for its CONDITION
 	 * reports has no such generic at all.
 	 */
-	private static LispVal printObjectRouting(LispVal value, LispVal fallback, ClosRegistry closRegistry) {
+	private static LispVal printObjectRouting(LispVal value, LispVal fallback, ClosRegistry closRegistry,
+			LispVal escapeArg) {
 		List<String> tags = printObjectTags(closRegistry);
-		return tags.isEmpty() ? fallback : makeIf(objIs(value, tags), printObjectCall(value), fallback);
+		return tags.isEmpty() ? fallback : makeIf(objIs(value, tags), printObjectCall(value, escapeArg), fallback);
 	}
 
 	/**
@@ -14420,10 +14646,15 @@ public final class LispMacroExpander {
 	}
 
 	/** Builds {@code (with-output-to-string (s) (print-object value s))}. */
-	private static LispVal printObjectCall(LispVal value) {
+	private static LispVal printObjectCall(LispVal value, LispVal escapeArg) {
 		LispSymbol stream = new LispSymbol("__pos");
-		return listToCons(List.of(new LispSymbol(LispNames.WITH_OUTPUT_TO_STRING), listToCons(List.of(stream)),
+		// *print-escape* is bound around the method call, so a portable print-object
+		// method sees which of prin1/princ is rendering -- CL binds it the same way, and
+		// a method that branches on it (quri's uri) is otherwise stuck in one mode.
+		LispVal call = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(new LispSymbol(LispNames.PRINT_ESCAPE_VAR), escapeArg)))),
 				listToCons(List.of(new LispSymbol(LispNames.PRINT_OBJECT), value, stream))));
+		return listToCons(List.of(new LispSymbol(LispNames.WITH_OUTPUT_TO_STRING), listToCons(List.of(stream)), call));
 	}
 
 	/**
@@ -14708,7 +14939,7 @@ public final class LispMacroExpander {
 		}
 		LispVal fallback = escape ? listToCons(List.of(new LispSymbol(LispNames.PRIN1_TO_STRING_RAW), value))
 				: princRendering(value, closRegistry.routesConditionReports());
-		return printObjectRouting(value, fallback, closRegistry);
+		return printObjectRouting(value, fallback, closRegistry, escapeArg);
 	}
 
 	/**
@@ -16921,6 +17152,16 @@ public final class LispMacroExpander {
 		if (fns.isEmpty() || !(form instanceof LispCons cons)) {
 			return form;
 		}
+		if (!cons.isProperList()) {
+			// An improper list is never a call form; the legitimate appearances are
+			// data patterns (a loop destructuring pattern like (value . remaining))
+			// whose elements are plain variables, so they pass through verbatim.
+			// Tested BEFORE the non-symbol-head branch below: that branch rebuilds the
+			// form from cons.toList(), which DROPS an improper tail -- a nested loop
+			// pattern ((field . value) . rest) came back as ((field . value)) and the
+			// body's reference to rest was unbound (quri's url-encode-params).
+			return form;
+		}
 		if (!(cons.car() instanceof LispSymbol sym)) {
 			// Non-symbol head, e.g. ((lambda (x) ...) arg...): every element is an
 			// expression (also reached for cond-style clauses via the generic walk).
@@ -16930,12 +17171,6 @@ public final class LispMacroExpander {
 		if (LispNames.QUOTE.equals(name) || LispNames.DEFMACRO.equals(name) || LispNames.DEFPACKAGE.equals(name)) {
 			// quote is data; defmacro bodies run at macro-expansion time where local
 			// functions do not exist; defpackage clauses are data.
-			return form;
-		}
-		if (!cons.isProperList()) {
-			// An improper list is never a call form; the legitimate appearances are
-			// data patterns (a loop destructuring pattern like (value . remaining))
-			// whose elements are plain variables, so they pass through verbatim.
 			return form;
 		}
 		List<LispVal> parts = cons.toList();
@@ -19303,14 +19538,30 @@ public final class LispMacroExpander {
 	public static List<LispVal> injectMvSpillGlobal(List<LispVal> program) {
 		boolean usesMv = false;
 		boolean usesFloatFormat = false;
+		boolean usesPrintEscape = false;
+		boolean usesPrintReadably = false;
 		for (LispVal form : program) {
 			usesMv = usesMv || usesMvOperator(form);
 			usesFloatFormat = usesFloatFormat || usesSymbol(form, LispNames.READ_DEFAULT_FLOAT_FORMAT);
+			usesPrintEscape = usesPrintEscape || usesSymbol(form, LispNames.PRINT_ESCAPE_VAR);
+			usesPrintReadably = usesPrintReadably || usesSymbol(form, LispNames.PRINT_READABLY_VAR);
 		}
-		if (!usesMv && !usesFloatFormat) {
+		if (!usesMv && !usesFloatFormat && !usesPrintEscape && !usesPrintReadably) {
 			return program;
 		}
-		List<LispVal> out = new java.util.ArrayList<>(program.size() + 2);
+		List<LispVal> out = new java.util.ArrayList<>(program.size() + 4);
+		// The printer-mode variables: declared with defvar (not setq) because the
+		// print-object route BINDS *print-escape* around the method call, and only a
+		// proclaimed-special name gets a dynamic binding. This pass runs AFTER
+		// expandTopLevelDefinitions, so the route's own reference is already in view.
+		if (usesPrintEscape) {
+			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
+					LispTrue.INSTANCE)));
+		}
+		if (usesPrintReadably) {
+			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.PRINT_READABLY_VAR),
+					LispNil.INSTANCE)));
+		}
 		if (usesMv) {
 			out.add(listToCons(
 					List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.MV_SPILL), LispNil.INSTANCE)));

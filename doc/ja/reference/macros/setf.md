@@ -14,6 +14,12 @@
 (let ((x (list 1 2 3))) (setf (car x) 9 (second x) 8) x) ; => (9 8 3)
 ```
 
+`(setf (getf place indicator) value)` はプロパティリストに書き込みます。指示子に対応するセルが既にあればその**値セル**を直接書き換え (同じリストのエイリアスからも更新が見えます)、なければ対を先頭に cons して結果を `place` へ書き戻します。place の 3 番目の部分フォームは `getf` のデフォルト値であり、書き込み時には無視されます。
+
+```lisp
+(let ((p (list :a 1))) (setf (getf p :b) 2) p) ; => (:B 2 :A 1)
+```
+
 組み込みの place のほかに、`defstruct` のアクセサ、CLOS の `:accessor`、そしてユーザー定義の *setf 関数* (`(defun (setf name) ...)`) も place になります。`(setf (name arg...) value)` は新しい値を先頭にして書き込み関数を呼び出します。setf 関数の定義については [defun](../special-forms/defun.md) を参照してください。
 
 ```lisp

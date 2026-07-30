@@ -371,6 +371,51 @@ class AsdfSystemsTest {
 	}
 
 	@Test
+	void aModulePathnameDecouplesTheComponentNameFromItsDirectory() {
+		// quri's shape: the module is NAMED uri-classes (so a sibling can depend on
+		// that name) but its files live in src/uri/.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:module "src"
+				                :components ((:file "uri")
+				                             (:module "uri-classes"
+				                              :pathname "uri"
+				                              :depends-on ("uri")
+				                              :components ((:file "http")))))))
+				""");
+		assertThat(system.files()).containsExactly("src/uri.lisp", "src/uri/http.lisp");
+	}
+
+	@Test
+	void anEmptyModulePathnameAddsNoDirectoryLevel() {
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:module "flat" :pathname "" :components ((:file "a")))))
+				""");
+		assertThat(system.files()).containsExactly("a.lisp");
+	}
+
+	@Test
+	void aFilePathnameNamesTheSourceFile() {
+		// With an extension the namestring is used verbatim; without one, .lisp is
+		// appended exactly as the component name would have been.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:file "one" :pathname "strings-utf-8.lisp")
+				               (:file "two" :pathname "other")))
+				""");
+		assertThat(system.files()).containsExactly("strings-utf-8.lisp", "other.lisp");
+	}
+
+	@Test
+	void aComputedComponentPathnameIsAHardError() {
+		assertThatThrownBy(() -> parse("""
+				(asdf:defsystem :lib
+				  :components ((:module "m" :pathname (foo) :components ((:file "a")))))
+				""")).isInstanceOf(IllegalStateException.class).hasMessageContaining(":pathname");
+	}
+
+	@Test
 	void componentFeatureDependencyIsDroppedWhenTheFeatureIsOff() {
 		// postmodern's deftable depends on the DAO layer only in the MOP build. The
 		// gated component keeps its place in the graph (it is :if-feature'd, so it

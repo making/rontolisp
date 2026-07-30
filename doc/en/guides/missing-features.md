@@ -17,7 +17,7 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 | `&whole` / `&environment` | not available; a `defmacro` lambda list takes required parameters plus one trailing `&rest`/`&body` |
 | `loop` (extended) | partial (see below) |
 | CLOS | partial (static subset; no MOP) |
-| `defstruct` `:include` | single inheritance only; a slot-override `(:include parent (slot default))` is not available |
+| `defstruct` `:include` | single inheritance only; slot-overrides `(:include parent (slot default) ...)` work |
 | `declare` / `declaim` / `proclaim` / `the` | parsed no-ops (no effect on compilation) |
 | `typep` / `subtypep` / `coerce` / `concatenate` | literal (quoted) type specifiers only; `coerce` targets `'list` / `'vector` / `'string` (or a float type), `concatenate` builds those same three sequence families |
 | `make-package` / `export` / `import` / `use-package` / `find-package` / `rename-package` (runtime) | not available; `defpackage` `:shadow` / `:shadowing-import-from` are errors |
@@ -59,7 +59,13 @@ Lisp:
   supported (one crossing a `lambda` is, as a non-local exit);
 - `go` must target a tag of a lexically enclosing `tagbody` in the same
   function; the interpreter additionally supports dynamic `go` across function
-  boundaries.
+  boundaries. The shape that runs into this in real code is a
+  [`handler-bind`](../reference/macros/handler-bind.md) handler that resumes the
+  protected loop with a `go` -- the handler is a `lambda`, so the tag is in the
+  enclosing function (quri's `:lenient` percent-decoding does exactly this, and
+  crashes on the compiled backends once the input really is malformed). A
+  `return-from` in the same position works, because one crossing a `lambda` IS
+  lowered.
 
 A cross-`lambda` `return-from`, `catch`/`throw`, `unwind-protect`, and condition
 catching all compile in exception-handling mode, so the emitted wasm-GC modules
@@ -104,8 +110,10 @@ and `thereis`/`always`/`never`.
 ## Structures and objects
 
 [`defstruct`](../reference/special-forms/defstruct.md) supports `:include`
-inheritance in its single-inheritance form only -- a slot-override
-`(:include parent (slot new-default))` is not available. An instance prints in the standard `#S(...)` syntax, and
+inheritance in its single-inheritance form only. Slot-overrides work:
+`(:include parent (slot new-default) ...)` re-defaults an inherited slot in the
+child's layout while it keeps its inherited index, so the parent's accessors
+still read it. An instance prints in the standard `#S(...)` syntax, and
 a `#S(...)` literal reads back into an instance -- in source and through the
 runtime `read` / `read-from-string` on every backend (a compiled program's
 reader has frontend parity; only `#.`, `#+`/`#-` and `#n=`/`#n#` signal there).

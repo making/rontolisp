@@ -66,3 +66,23 @@ column tracking only some backends could afford. Stdout keeps the existing
 `WasmLispCompilerIntegrationTest.withOutputToStringBindingStandardOutputCapturesStreamlessPrints`,
 and the `s-sql-enablement-language-group` ci-spec case (all four backends,
 including the after-the-binding "still goes to stdout" assertion).
+
+## `format`'s destination is decided at RUN time when it is not a literal
+
+`format` with the literal `t` lowers to the `princ`/`terpri` family above and the
+literal `nil` folds into a string concatenation, both at compile time. Any OTHER
+destination expression builds the string the same way and then tests the value at
+run time: a stream takes one `write-string` and the call answers nil, a `t` value
+takes the stream-argument-less `write-string` (so the redirect above still
+applies), and a **nil value returns the string**.
+
+That test cannot be hoisted, and the reason is the whole point: `nil` as a
+`format` destination does not name a stream -- it IS the "build and return the
+string" destination -- so a call whose destination is a VARIABLE has no compile-time
+answer. The CL convention that makes this ordinary is a renderer forwarding its own
+optional: `(defun render-uri (uri &optional stream) (format stream ...))`, quri's
+exact shape. Lowering the nil case to a write printed the URI to stdout and
+returned nil where CL returns the string. `LispMacroExpander.formatDestinationDispatch`;
+the rendered string is bound to a temp so it is built once whichever branch consumes
+it. Pinned by the `quri-enablement-language-group` ci-spec case (all four backends)
+and `LispEvaluatorTest.formatDestinationNilReturnsTheStringEvenThroughAVariable`.

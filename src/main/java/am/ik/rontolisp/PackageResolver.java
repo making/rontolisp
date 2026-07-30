@@ -833,6 +833,23 @@ public final class PackageResolver {
 		return this.registry.get(pkg).exports(member);
 	}
 
+	/**
+	 * Whether {@code member} is external in {@code pkg} -- i.e. whether this resolver
+	 * spells that symbol with ONE colon. A macro expansion that SYNTHESIZES a name (the
+	 * only one is {@code defstruct}: its constructor/predicate/copier/accessors are
+	 * derived from the struct name, not written down) must ask, because the name it emits
+	 * has to be the same string a call site resolves to. Reading it wrong is not a
+	 * package error but an undefined function: an interpreted {@code (quri:uri-p x)} used
+	 * to look for {@code QURI.URI:URI-P} while the {@code defstruct} had defined
+	 * {@code QURI.URI::URI-P}.
+	 * @param pkg the canonical package name
+	 * @param member the unqualified symbol name
+	 * @return {@code true} when the package exports the name
+	 */
+	public boolean spellsAsExternal(String pkg, String member) {
+		return this.registry.contains(pkg) && isExternal(pkg, member);
+	}
+
 	private LispVal resolveUnqualified(String name) {
 		// *package* stands for the current package -- but only where it is READ as a
 		// variable. Quoted, it is the ordinary symbol cl:*package*.

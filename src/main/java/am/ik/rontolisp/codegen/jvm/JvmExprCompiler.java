@@ -596,7 +596,9 @@ final class JvmExprCompiler {
 								className);
 					}
 					else {
-						JvmStringEqCompiler.compileEq(cons, ctx, className);
+						JvmStringEqCompiler.compileEq(
+								(LispCons) LispMacroExpander.normalizeStringComparisonDesignators(cons), ctx,
+								className);
 					}
 				}
 				case LispNames.STRING_EQUAL -> {
@@ -605,7 +607,9 @@ final class JvmExprCompiler {
 								className);
 					}
 					else {
-						JvmStringEqCompiler.compileEqual(cons, ctx, className);
+						JvmStringEqCompiler.compileEqual(
+								(LispCons) LispMacroExpander.normalizeStringComparisonDesignators(cons), ctx,
+								className);
 					}
 				}
 				case LispNames.STRING_TRIM ->

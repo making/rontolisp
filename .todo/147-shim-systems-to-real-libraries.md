@@ -30,6 +30,23 @@ Current built-in systems (`eval.BuiltinSystems` + `eval.ShimLibraries`):
   (`make-flexi-stream` = the stream) stays -- semantically consistent with
   character-only streams, but a lie for binary re-encoding.
 
+- `bordeaux-threads` -- KEEP as shim (its own `.asd` hard-errors on an
+  unknown implementation, so there is no route to loading it for real;
+  rontolisp's locking subset rides the `rontolisp:*-mutex` primitives).
+- `babel` -- KEEP as shim, and unusually the reason is not portability but
+  that the library's PURPOSE does not exist here. babel converts between an
+  implementation's internal string representation and 40+ external
+  encodings; rontolisp has exactly ONE character model (a character IS a
+  Unicode code point, the external form is UTF-8 on every backend), so
+  there is nothing for the other 39 to convert between. Loading it for real
+  would splice ~20,000 lines of code-page tables (jpn-table.lisp alone is
+  17,637) that no rontolisp program can use into every artifact -- an
+  ASDF-spliced third-party tree is not tree-shaken. The shim therefore
+  implements the UTF-8 codec plus the Latin-1/ASCII aliases and SIGNALS on
+  any other `:encoding` rather than mis-coding silently. It becomes
+  reviewable only if the string model ever grows a second external
+  encoding; until then "real babel" would be cost with no capability.
+
 Also: the shim `.lisp` sources live next to the core libraries in
 `src/main/resources/am/ik/rontolisp/eval/`; if the shim set grows, consider
 a dedicated `shims/` subfolder to keep the core/shim distinction visible.

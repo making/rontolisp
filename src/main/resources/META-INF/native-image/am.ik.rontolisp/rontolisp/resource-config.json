@@ -149,6 +149,12 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
         },
+        "pattern": "am/ik/rontolisp/eval/babel\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
         "pattern": "am/ik/rontolisp/eval/bordeaux-threads\\.lisp"
       },
       {

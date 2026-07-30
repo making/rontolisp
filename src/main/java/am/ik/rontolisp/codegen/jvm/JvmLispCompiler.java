@@ -246,7 +246,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// expandTopLevelDefinitions, which runs the same scan to inject the
 		// restart-runtime defuns.
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
-		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry);
+		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
+				packageResolver::spellsAsExternal);
 		// Whether an instance value can exist in this class at all. The predicates and
 		// _equal need the answer BEFORE any body is compiled (their shape changes), and
 		// with the gate off nothing they would guard against can be constructed -- so an
@@ -333,6 +334,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
 		MethodrefConstant stringSubstring = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
+		// Used by _lispToDisplayString to cut a symbol's package qualifier / marker: the
+		// princ spelling is everything after the last colon.
+		MethodrefConstant stringLastIndexOf = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("lastIndexOf"), cp.addUtf8("(I)I")));
 		MethodrefConstant objectEquals = cp.addMethodref(objectClass,
 				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
 		// CHARACTER runtime representation references (used by _lispToString /
@@ -1195,6 +1200,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				Utf8Constant invDesc = cp.addUtf8("(" + "Ljava/lang/Object;".repeat(n + 1) + ")Ljava/lang/Object;");
 				invoke[n] = cp.addMethodref(thisClass, cp.addNameAndType(invName, invDesc));
 			}
+			// _invoke_v(funcval, argList): the spread dispatcher _apply hands the whole
+			// argument list to (see JvmRuntimeBuilder.buildDispatchMethods).
+			MethodrefConstant invokeSpread = cp.addMethodref(thisClass,
+					cp.addNameAndType(cp.addUtf8(JvmRuntimeBuilder.dispatcherName(0, true)),
+							cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
 			MethodrefConstant stringLengthRef = cp.addMethodref(stringClass,
 					cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
 			JvmEvalRuntimeBuilder.EvalConstants ec = JvmEvalRuntimeBuilder.EvalConstants.builder()
@@ -1220,6 +1230,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				.genvField(genvField)
 				.fenvField(fenvField)
 				.invoke(invoke)
+				.invokeSpread(invokeSpread)
 				.functions(functions)
 				.build();
 			if (usesEval) {
@@ -1249,6 +1260,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls,
 					lambdaFuncInfos, cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass,
 					stringClass, applyRefForDispatch, lookupRefForDispatch));
+		}
+		// The spread dispatcher _apply calls: it takes the argument list whole, so an
+		// apply through a COMPUTED designator has no arity ceiling. Emitted with the eval
+		// runtime, which is what apply forces.
+		if (usesEval) {
+			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos,
+					cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
+					applyRefForDispatch, lookupRefForDispatch, true));
 		}
 
 		// Build the runtime reader methods (read/load), only when used
@@ -1407,9 +1426,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				ratioArrayClass);
 		List<Integer> ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToDisplayStringMethod,
-				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, ratioArrayClass, stringConcat, slashStr,
-				charBoxClass, characterToString, arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod,
-				javaPrint, futurePrint, packedPrint, packedIntPrint, instPrint);
+				nilStr, funcStr, stringCharAt, stringLength, stringSubstring, stringLastIndexOf, ratioArrayClass,
+				stringConcat, slashStr, charBoxClass, characterToString, arrayListClassForPrint,
+				arrayToDisplayStringMethod, strvMethod, javaPrint, futurePrint, packedPrint, packedIntPrint, instPrint);
 		List<Integer> instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
 				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
 				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),

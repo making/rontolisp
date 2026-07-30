@@ -476,6 +476,11 @@ public final class Environment implements Scope {
 		env.define(LispNames.ARRAY_DIMENSION_LIMIT, new LispInteger(2147483639L));
 		// Accepted and ignored: the printer does no circle detection.
 		env.define(LispNames.PRINT_CIRCLE_VAR, LispNil.INSTANCE);
+		// The two printer-mode variables a portable print-object method tests. Their
+		// global values are CL's; *print-escape* is REBOUND around a print-object call
+		// so the method can tell prin1 from princ (LispMacroExpander.printObjectCall).
+		env.define(LispNames.PRINT_ESCAPE_VAR, LispTrue.INSTANCE);
+		env.define(LispNames.PRINT_READABLY_VAR, LispNil.INSTANCE);
 		// Accepted and ignored: the reader is not readtable-driven, a "readtable" is an
 		// opaque nil token (see LispNames.COPY_READTABLE).
 		env.define(LispNames.READTABLE_VAR, LispNil.INSTANCE);
@@ -2787,8 +2792,11 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.SYMBOL_NAME, args, 1);
 			return switch (args.get(0)) {
 				case LispSymbol sym -> new LispString(LispSymbol.memberName(sym.name()));
-				case LispTrue ignored -> new LispString("t");
-				case LispNil ignored -> new LispString("nil");
+				// nil and t are the SYMBOLS NIL and T, so they coerce like any other
+				// symbol -- upcase-canonical, matching CL and the three compile backends
+				// (the interpreter used to answer "t"/"nil").
+				case LispTrue ignored -> new LispString("T");
+				case LispNil ignored -> new LispString("NIL");
 				default -> throw new LispEvalException(
 						LispNames.SYMBOL_NAME + " expects a symbol, got " + args.get(0).print());
 			};
@@ -2807,8 +2815,11 @@ public final class Environment implements Scope {
 				// <html> not <:html>). Same spelling as symbol-name.
 				case LispSymbol sym -> new LispString(LispSymbol.memberName(sym.name()));
 				case LispChar c -> new LispString(new String(Character.toChars(c.codePoint())));
-				case LispTrue ignored -> new LispString("t");
-				case LispNil ignored -> new LispString("nil");
+				// nil and t are the SYMBOLS NIL and T: they coerce upcase-canonical like
+				// any other symbol, matching CL and the three compile backends (the
+				// interpreter used to answer "t"/"nil").
+				case LispTrue ignored -> new LispString("T");
+				case LispNil ignored -> new LispString("NIL");
 				default -> throw new LispEvalException(
 						LispNames.STRING + " cannot coerce " + args.get(0).print() + " to a string");
 			};
@@ -2864,12 +2875,25 @@ public final class Environment implements Scope {
 			return prev;
 		}));
 		env.defineFunction(LispNames.MAKE_LIST, new LispFunction(LispNames.MAKE_LIST, args -> {
-			requireArgCount(LispNames.MAKE_LIST, args, 1);
-			// (make-list n): a list of n nil elements (:initial-element not supported).
+			requireMinArgCount(LispNames.MAKE_LIST, args, 1);
+			// (make-list n &key initial-element): n cells sharing the ONE element value
+			// (nil by default). quri's ip-addr= pads an abbreviated IPv6 address with
+			// (make-list (- 9 len) :initial-element 0).
 			long n = asLong(args.get(0));
+			LispVal element = LispNil.INSTANCE;
+			if ((args.size() - 1) % 2 != 0) {
+				throw new LispEvalException(LispNames.MAKE_LIST + " expects (size &key initial-element)");
+			}
+			for (int i = 1; i + 1 < args.size(); i += 2) {
+				if (!(args.get(i) instanceof LispSymbol key) || !LispNames.INITIAL_ELEMENT_KEYWORD.equals(key.name())) {
+					throw new LispEvalException(LispNames.MAKE_LIST + ": unsupported keyword " + args.get(i).print()
+							+ " (only :initial-element)");
+				}
+				element = args.get(i + 1);
+			}
 			LispVal result = LispNil.INSTANCE;
 			for (long i = 0; i < n; i++) {
-				result = new LispCons(LispNil.INSTANCE, result);
+				result = new LispCons(element, result);
 			}
 			return result;
 		}));
@@ -3171,6 +3195,12 @@ public final class Environment implements Scope {
 			// of the name.
 			case LispSymbol sym -> LispSymbol.memberName(sym.name());
 			case LispChar c -> new String(Character.toChars(c.codePoint()));
+			// nil and t are SYMBOLS, so they designate strings like any other -- the same
+			// spelling the (string ...) builtin above gives them. quri's
+			// scheme-constructor asks (string= scheme "http") of a relative reference,
+			// whose scheme is nil, and CL answers false rather than signalling.
+			case LispNil ignored -> "NIL";
+			case LispTrue ignored -> "T";
 			default -> throw new LispEvalException(name + " expects a string designator, got: " + val.print());
 		};
 	}

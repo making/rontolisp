@@ -44,10 +44,20 @@ against the portable API (jzon) run unchanged.
 **format rewrite (todo-146, jzon's `(format %stream "~D" value)`)**: the
 pre-pass also rewrites `(format STREAM ctrl args...)` with a possibly-instance
 destination into `(let ((__gray_fmt_stream STREAM))
-(%gray-write-string-dispatch (format nil ctrl args...) __gray_fmt_stream) nil)`
-— render to a string, route through the write-string dispatch (whose fallback
-handles handles and the `t` designator), destination bound first to keep CL's
-evaluation order, nil like format-to-stream. TWO walker rules exist because the
+(let ((__gray_fmt_result (format nil ctrl args...)))
+(if __gray_fmt_stream (progn (%gray-write-string-dispatch __gray_fmt_result
+__gray_fmt_stream) nil) __gray_fmt_result)))` — render to a string, then test the
+destination at RUN time: a non-nil one routes through the write-string dispatch
+(whose fallback handles stream handles and the `t` designator) and the form yields
+nil like format-to-stream, a nil one returns the string. Destination bound first,
+keeping CL's evaluation order. **The run-time test is not optional and this pass is
+where it is easiest to get wrong**: nil is not a stream but format's "return the
+string" destination ([standard-output-redirect.md](standard-output-redirect.md)),
+and this rewrite fires over the WHOLE program as soon as ANY part of it uses the
+Gray protocol — so writing unconditionally turned an unrelated
+`(format stream ...)` in a completely different function into the wrong answer
+(quri's `(render-uri uri &optional stream)`, caught only by the concatenated
+ci-spec program, where a Gray case sits 18 cases upstream of the quri one). TWO walker rules exist because the
 walk has no position awareness: (1) a lambda-list keyword is never a stream arg
 (`streamArgMayBeInstance` rejects `&`-prefixed symbols — jzon's `(defun %raise
 (type pos format &rest args) ...)` parameter tail read as a format call), and
@@ -61,8 +71,10 @@ and the compiled dispatch key on "is this an instance", so they agree; a plain
 cons handed as a stream falls through to the built-in either way. A bounded
 `(write-string s instance :start ...)` is NOT rewritten (interpreter ignores
 the bounds for instances; both are edge behavior). A runtime-nil `format`
-destination reached through the rewrite writes like a designator instead of
-returning the string (jzon never does; scope is Gray-activated programs only).
+destination used to write like a designator here instead of returning the string;
+that divergence is RETIRED (see the run-time test in the rewrite above) — the
+reason it was tolerable, "jzon never does it", stopped holding the moment a
+program combined a Gray stream with an ordinary optional-stream renderer.
 
 Pinning tests: `LispEvaluatorTest#grayStreamInstanceReceivesWriteCharAndWriteString`
 (shim), `#grayBaseClassSuperclassLoadsGrayStreamsEagerly` (bare protocol),

@@ -102,6 +102,22 @@ public final class LispPreludeLibrary {
 				(defun make-load-form-saving-slots (object &key slot-names environment)
 				  (error "make-load-form-saving-slots is not supported (no fasl dumper)"))
 				""");
+		// Three real UIOP sequence/character utilities, bodies VERBATIM from upstream
+		// utility.lisp. They join the uiop package rather than the stub lowering
+		// because they are pure Lisp one-liners over primitives every backend has --
+		// quri's render-uri calls all three to decide whether to insert a path slash.
+		SOURCES.put(LispNames.EMPTYP, """
+				(defun uiop:emptyp (x)
+				  (or (null x) (and (vectorp x) (zerop (length x)))))
+				""");
+		SOURCES.put(LispNames.FIRST_CHAR, """
+				(defun uiop:first-char (s)
+				  (and (stringp s) (plusp (length s)) (char s 0)))
+				""");
+		SOURCES.put(LispNames.LAST_CHAR, """
+				(defun uiop:last-char (s)
+				  (and (stringp s) (plusp (length s)) (char s (1- (length s)))))
+				""");
 		SOURCES.put(LispNames.SXHASH, """
 				(defun sxhash (obj)
 				  (cond ((integerp obj) (logand obj most-positive-fixnum))

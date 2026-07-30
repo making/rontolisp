@@ -483,6 +483,7 @@ categories:
     functions:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }
       - { slug: asdf-load-system, name: "asdf:load-system" }
+      - { slug: asdf-system-relative-pathname, name: "asdf:system-relative-pathname" }
   - title: "ql Package (Quicklisp)"
     functions:
       - { slug: ql-quickload, name: "ql:quickload" }

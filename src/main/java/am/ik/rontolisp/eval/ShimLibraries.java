@@ -66,7 +66,7 @@ public final class ShimLibraries {
 	 */
 	private static final Map<String, String> RESOURCES = Map.of("closer-mop", "closer-mop.lisp", "flexi-streams",
 			"flexi-streams.lisp", "float-features", "float-features.lisp", "trivial-gray-streams",
-			"trivial-gray-streams.lisp", "bordeaux-threads", "bordeaux-threads.lisp");
+			"trivial-gray-streams.lisp", "bordeaux-threads", "bordeaux-threads.lisp", "babel", "babel.lisp");
 
 	/**
 	 * Leaf-module substitutions: system name to (component file relative to the system's
@@ -148,9 +148,10 @@ public final class ShimLibraries {
 	/**
 	 * Returns the source of the given component of the named system, REWRITTEN when the
 	 * component is one whose load-time table building rontolisp derives at compile time
-	 * instead ({@code uax-15}, see {@link Uax15Tables}). Unlike {@link #leafModuleForms},
-	 * which substitutes a whole component with canonical-shape forms, this rewrites the
-	 * real source in place and hands it back to the caller's normal read: everything the
+	 * instead ({@code uax-15}, see {@link Uax15Tables}) or defers to first read
+	 * ({@code quri}, see {@link QuriEtldTables}). Unlike {@link #leafModuleForms}, which
+	 * substitutes a whole component with canonical-shape forms, this rewrites the real
+	 * source in place and hands it back to the caller's normal read: everything the
 	 * rewrite does not touch stays verbatim upstream, and it keeps the package resolution
 	 * a real component file gets.
 	 * @param systemName the ASDF system name (canonical lower-case)
@@ -163,10 +164,13 @@ public final class ShimLibraries {
 	 */
 	public static String rewriteComponentSource(String systemName, String componentFile, String source,
 			@Nullable String baseDir, SourceLoader loader) {
-		if (!Uax15Tables.SYSTEM.equals(systemName)) {
-			return source;
+		String rewritten = null;
+		if (Uax15Tables.SYSTEM.equals(systemName)) {
+			rewritten = Uax15Tables.rewrite(componentFile, source, baseDir, loader);
 		}
-		String rewritten = Uax15Tables.rewrite(componentFile, source, baseDir, loader);
+		else if (QuriEtldTables.SYSTEM.equals(systemName)) {
+			rewritten = QuriEtldTables.rewrite(componentFile, source, baseDir);
+		}
 		return rewritten == null ? source : rewritten;
 	}
 

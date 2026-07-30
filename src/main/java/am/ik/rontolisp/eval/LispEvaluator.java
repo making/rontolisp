@@ -312,6 +312,15 @@ public final class LispEvaluator {
 	 */
 	private final java.util.Set<String> specialVars = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+	{
+		// Seeded: *print-escape* is proclaimed special without a defvar in user code,
+		// because the print-object route BINDS it around the method call so a method can
+		// tell prin1 from princ. *print-readably* joins it so a program may bind that
+		// too (nothing here does).
+		this.specialVars.add(LispNames.PRINT_ESCAPE_VAR);
+		this.specialVars.add(LispNames.PRINT_READABLY_VAR);
+	}
+
 	/**
 	 * The thread-scoped dynamic bindings of special variables (see
 	 * {@link DynamicBindings}).
@@ -1349,6 +1358,33 @@ public final class LispEvaluator {
 				return new LispString("./");
 			}
 			return new LispString(base.endsWith("/") ? base : base + "/");
+		}));
+		// asdf:system-relative-pathname: the one-call form of
+		// (merge-pathnames* relative (system-source-directory system)). A library that
+		// bundles a data file next to its .asd names it this way -- quri's etld.lisp
+		// reads its 152 KB effective-TLD list through it.
+		String systemRelativePathnameName = PackageRegistry.qualify(LispNames.ASDF_PKG,
+				LispNames.SYSTEM_RELATIVE_PATHNAME);
+		this.globalEnv.defineFunction(systemRelativePathnameName, new LispFunction(systemRelativePathnameName, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME + " expects (system relative), got "
+						+ args.size() + " arguments");
+			}
+			String name = AsdfSystems.designator(LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME, args.get(0));
+			AsdfSystems.LispSystem system = this.asdfSystems.get(name);
+			if (system == null) {
+				throw new LispEvalException(
+						LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME + ": system not registered: " + name);
+			}
+			if (!(args.get(1) instanceof LispString relative)) {
+				throw new LispEvalException(LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME
+						+ " expects a namestring as its second argument, got " + args.get(1).print());
+			}
+			String base = system.baseDir();
+			if (base == null || base.isEmpty()) {
+				base = "./";
+			}
+			return new LispString(PathnameOps.mergePathnames(relative.value(), base.endsWith("/") ? base : base + "/"));
 		}));
 		// uiop:merge-pathnames* -- the safer defaults-aware merge, portable across
 		// ASDF-loaded libraries. See PathnameOps for the string-level semantics.
@@ -3008,7 +3044,8 @@ public final class LispEvaluator {
 	private LispVal evalDefstruct(LispCons cons, Environment env) {
 		// Expand into the generated defuns (constructor, predicate, copier, accessors)
 		// and evaluate each; the accessor registry makes them setf-able places.
-		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors, this.closRegistry)) {
+		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors, this.closRegistry,
+				this.packageResolver::spellsAsExternal)) {
 			eval(form, env);
 		}
 		// A struct predicate bakes the descendant tags known when it was generated, so

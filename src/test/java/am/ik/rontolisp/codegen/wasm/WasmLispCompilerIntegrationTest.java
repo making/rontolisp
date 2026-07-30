@@ -7040,7 +7040,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("340");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("341");
 	}
 
 	@Test

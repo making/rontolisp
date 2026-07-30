@@ -1902,30 +1902,15 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 
-		for (int n = 0; n <= WasmLispCompiler.MAX_CALLABLE_ARITY; n++) {
-			getLocal(w, LEN);
-			i32(w, n);
-			w.write(Instruction.I32_EQ);
-			w.write(Instruction.IF, 0x40);
-			getLocal(w, ARGLIST);
-			setLocal(w, ARGCUR);
-			for (int k = 0; k < n; k++) {
-				emitCarOf(w, ARGCUR);
-				setLocal(w, ARG0 + k);
-				emitCdrOf(w, ARGCUR);
-				setLocal(w, ARGCUR);
-			}
-			getLocal(w, FN);
-			for (int k = 0; k < n; k++) {
-				getLocal(w, ARG0 + k);
-			}
-			w.write(Instruction.CALL);
-			w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + n);
-			w.write(Instruction.RETURN);
-			w.write(Instruction.END);
-		}
-		// arity out of range -> nil
-		emitNull(w);
+		// One call, any argument count: the SPREAD dispatcher takes the list whole and
+		// each case reads its target's required parameters out of it, handing a variadic
+		// target the remaining tail. The per-arity dispatchers cannot serve apply -- they
+		// take one WASM parameter per Lisp argument, so they stop at MAX_CALLABLE_ARITY,
+		// and an apply past it used to fall off the ladder and trap.
+		getLocal(w, FN);
+		getLocal(w, ARGLIST);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_SPREAD);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // if closure
 

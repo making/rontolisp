@@ -1025,19 +1025,68 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 	}
 
+	// Pushes car (head = true) or cdr (head = false) of the cons in `slot`, answering
+	// null for null so a short argument list binds the missing parameters to nil instead
+	// of trapping on the ref.cast.
+	private static void emitNullSafeCell(WasmWriter w, int slot, boolean head) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(slot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeSignedLeb128(head ? 0 : 1);
+		w.write(Instruction.END);
+	}
+
 	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase) {
+		return buildDispatchBody(arity, defuns, lambdaDecls, numDefuns, st, usesEval, userFuncBase, false);
+	}
+
+	/**
+	 * As above, with {@code spread} selecting the SPREAD dispatcher: one function over
+	 * EVERY callable, taking the argument list as a single cons list (the arity-1
+	 * signature) rather than one parameter per argument.
+	 *
+	 * <p>
+	 * {@code _apply} calls it. The per-arity dispatchers cannot serve {@code apply}: they
+	 * take one WASM parameter per Lisp argument, so they stop at
+	 * {@link WasmLispCompiler#MAX_CALLABLE_ARITY}, and an {@code apply} whose designator
+	 * is COMPUTED has to go through them -- quri's
+	 * {@code (apply (scheme-constructor s) :scheme s ... )} passes fourteen arguments to
+	 * a {@code &key} constructor and used to trap on the ladder's fall-through. Each
+	 * spread case walks its target's required parameters out of the list and hands a
+	 * variadic target the remaining TAIL, which is the callee's physical rest parameter.
+	 * @param arity ignored when {@code spread} is true
+	 * @param spread whether to build the spread dispatcher instead of an arity one
+	 * @return the encoded function body
+	 */
+	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
+			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
+			boolean usesEval, int userFuncBase, boolean spread) {
 		// Collect all functions with matching arity. A variadic function (physical
 		// params = required + rest list) matches every dispatch arity >= required; its
-		// case links the surplus args into a cons list before the call.
+		// case links the surplus args into a cons list before the call. The spread
+		// dispatcher takes them all: its cases read the parameters out of the list.
 		record Target(int funcId, int funcIndex, int required, boolean variadic) {
 		}
+		int dispatchArgs = spread ? 1 : arity;
 		List<Target> targets = new ArrayList<>();
 		for (int i = 0; i < defuns.size(); i++) {
 			WasmLispCompiler.DefunDecl defun = defuns.get(i);
 			int paramCount = defun.paramNames().size();
-			if (defun.variadic() ? arity >= paramCount - 1 : paramCount == arity) {
+			if (spread || (defun.variadic() ? arity >= paramCount - 1 : paramCount == arity)) {
 				targets.add(new Target(i, userFuncBase + i, defun.variadic() ? paramCount - 1 : paramCount,
 						defun.variadic()));
 			}
@@ -1045,7 +1094,7 @@ final class WasmRuntimeBuilder {
 		for (int i = 0; i < lambdaDecls.size(); i++) {
 			WasmLispCompiler.LambdaInfo lambda = lambdaDecls.get(i);
 			int paramCount = lambda.paramNames().size();
-			if (lambda.variadic() ? arity >= paramCount - 1 : paramCount == arity) {
+			if (spread || (lambda.variadic() ? arity >= paramCount - 1 : paramCount == arity)) {
 				targets.add(new Target(lambda.funcId(), lambda.funcIndex(),
 						lambda.variadic() ? paramCount - 1 : paramCount, lambda.variadic()));
 			}
@@ -1063,8 +1112,8 @@ final class WasmRuntimeBuilder {
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(Type.EQ.code());
 
-		int funcIdLocal = arity + 1; // after params
-		int argListLocal = arity + 2;
+		int funcIdLocal = dispatchArgs + 1; // after params
+		int argListLocal = dispatchArgs + 2;
 
 		// A SYMBOL funcval (a TYPE_STRING) is a function designator resolved through
 		// the eval registry's _lookup by its interned offset -- the interpreter's
@@ -1127,7 +1176,7 @@ final class WasmRuntimeBuilder {
 
 		// Interpreted closure (funcId == -1, created by the eval runtime's lambda):
 		// delegate to _apply with the arguments collected into a cons list
-		if (usesEval) {
+		if (usesEval && !spread) {
 			w.write(Instruction.GET_LOCAL);
 			w.writeSignedLeb128(funcIdLocal);
 			w.write(Instruction.I32_CONST);
@@ -1211,7 +1260,15 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.END); // end of $case_{numCases-1-k}
 			int targetIdx = numCases - 1 - k;
 			Target target = targets.get(targetIdx);
-			if (target.variadic) {
+			if (spread) {
+				// cursor = argList; the required parameters come off the front and a
+				// variadic target takes what is left.
+				w.write(Instruction.GET_LOCAL);
+				w.writeSignedLeb128(1);
+				w.write(Instruction.SET_LOCAL);
+				w.writeSignedLeb128(argListLocal);
+			}
+			else if (target.variadic) {
 				// Link args required+1..arity into a cons list (right to left)
 				w.write(Instruction.REF_NULL);
 				w.writeHeapType(Type.EQ.code());
@@ -1236,19 +1293,35 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 			w.writeSignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
 			w.writeSignedLeb128(1); // field 1: env
-			// Push args (for a variadic target, the required ones plus the rest list)
-			for (int a = 1; a <= target.required; a++) {
-				w.write(Instruction.GET_LOCAL);
-				w.writeSignedLeb128(a);
-			}
-			if (target.variadic) {
-				w.write(Instruction.GET_LOCAL);
-				w.writeSignedLeb128(argListLocal);
+			if (spread) {
+				// Push car(cursor) per required parameter, stepping the cursor; a short
+				// argument list yields nil rather than trapping, like car/cdr do.
+				for (int a = 0; a < target.required; a++) {
+					emitNullSafeCell(w, argListLocal, true);
+					emitNullSafeCell(w, argListLocal, false);
+					w.write(Instruction.SET_LOCAL);
+					w.writeSignedLeb128(argListLocal);
+				}
+				if (target.variadic) {
+					w.write(Instruction.GET_LOCAL);
+					w.writeSignedLeb128(argListLocal);
+				}
 			}
 			else {
-				for (int a = target.required + 1; a <= arity; a++) {
+				// Push args (for a variadic target, the required ones plus the rest list)
+				for (int a = 1; a <= target.required; a++) {
 					w.write(Instruction.GET_LOCAL);
 					w.writeSignedLeb128(a);
+				}
+				if (target.variadic) {
+					w.write(Instruction.GET_LOCAL);
+					w.writeSignedLeb128(argListLocal);
+				}
+				else {
+					for (int a = target.required + 1; a <= arity; a++) {
+						w.write(Instruction.GET_LOCAL);
+						w.writeSignedLeb128(a);
+					}
 				}
 			}
 			// Call target function
@@ -2542,50 +2615,69 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_SUB);
 		WasmEmitHelper.emitWriteStrGcCall(w);
 		w.write(Instruction.ELSE);
-		// Bare symbol name: the display spelling drops the package marker — a
-		// keyword's leading ':' and a gensym's "#:" are markers, not name bytes
-		// (the readable _print_val form keeps them).
-		// if (bytes[0] == ':') _write_str_gc(str, 1, len) -- the third argument is
-		// the exclusive end position, not a count.
-		emitSymbolByteEquals(w, 0, ':');
-		w.write(Instruction.IF, 0x40);
+		// Bare symbol name: the display spelling is the symbol NAME alone -- no package
+		// qualifier and no keyword/gensym marker (CLHS 22.1.3.3: with *print-escape*
+		// false only the characters of the name are output). All three cases are
+		// "everything after the LAST colon", so one backward-free byte scan covers
+		// QURI:URI -> URI, :KW -> KW and #:G1 -> G1. ':' is 0x3A, which cannot occur as
+		// a UTF-8 continuation byte, so scanning bytes is safe on a non-ASCII name.
+		// _print_val keeps the spelling verbatim.
+		// local 6 = scan index, local 7 = start (last colon + 1); both are otherwise
+		// the array branch's scratch, which this branch never reaches.
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(7);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(6);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(6);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
+		WasmEmitHelper.emitStrBytesArray(w);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(6);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(':');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(6);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(7);
+		w.write(Instruction.END);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(3);
-		WasmEmitHelper.emitWriteStrGcCall(w);
-		w.write(Instruction.ELSE);
-		// else if (len >= 2 && bytes[0] == '#' && bytes[1] == ':')
-		// _write_str_gc(str, 2, len)
-		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(3);
+		w.writeSignedLeb128(6);
 		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(2);
-		w.write(Instruction.I32_GE_S);
-		w.write(Instruction.IF, 0x40);
-		emitSymbolByteEquals(w, 0, '#');
-		w.write(Instruction.IF, 0x40);
-		emitSymbolByteEquals(w, 1, ':');
-		w.write(Instruction.IF, 0x40);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(6);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// _write_str_gc(str, start, len) -- the third argument is the exclusive end
+		// position, not a count.
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(7);
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(3);
 		WasmEmitHelper.emitWriteStrGcCall(w);
-		w.write(Instruction.ELSE);
-		emitWriteWholeSymbol(w);
-		w.write(Instruction.END);
-		w.write(Instruction.ELSE);
-		emitWriteWholeSymbol(w);
-		w.write(Instruction.END);
-		w.write(Instruction.ELSE);
-		emitWriteWholeSymbol(w);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -2721,33 +2813,6 @@ final class WasmRuntimeBuilder {
 
 		w.write(Instruction.END);
 		return body.toByteArray();
-	}
-
-	// Pushes bytes[index] == expected for the symbol string in param 0 (used by the
-	// _princ_val package-marker strip).
-	private static void emitSymbolByteEquals(WasmWriter w, int index, char expected) {
-		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(0);
-		WasmEmitHelper.emitStrBytesArray(w);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(index);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(expected);
-		w.write(Instruction.I32_EQ);
-	}
-
-	// Emits _write_str_gc(str, 0, len) for the marker-free symbol case of _princ_val
-	// (param 0 = the string, local 3 = its length).
-	private static void emitWriteWholeSymbol(WasmWriter w) {
-		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(3);
-		WasmEmitHelper.emitWriteStrGcCall(w);
 	}
 
 	// Emits the character branch shared by _print_val (readable = true, prints the

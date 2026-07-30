@@ -39,6 +39,19 @@ defuns/lambdas — where every one of these had crossed or neared a limit):
   count; 66 KB at arity 9): `JvmRuntimeBuilder.buildDispatchMethods` splits the
   case chain into chained segments (`_invoke_9`, `_invoke_9$1`, ...) of ~24 KB,
   each falling through to the next with the already-resolved function value.
+- **`_invoke_v`** (the SPREAD dispatcher, one case per callable — no per-arity
+  duplication, because the case reads its target's required parameters out of the
+  argument LIST): the same `buildDispatchMethods` with `spread` set, so it is
+  segmented by the same budget. It exists because `_apply` cannot be expressed
+  with the per-arity family: those take one physical parameter per Lisp argument
+  and therefore stop at `MAX_CALLABLE_ARITY` (7), and `_apply` used to walk the
+  argument list, count it and fall off the end of that ladder — silently
+  answering nil for an 8+-argument `apply` through a COMPUTED designator (the
+  WASM sibling, `FUNC_DISPATCH_SPREAD`, trapped instead). A variadic target gets
+  the remaining TAIL verbatim, which is its physical rest parameter. Note the
+  size argument: it is CHEAPER than raising the per-arity ceiling would be, since
+  a variadic function matches every arity at or above its required count and so
+  costs one case PER ARITY in the old family.
 - **`_lookup`** (the eval registry's name-to-funcId chain, one string-equals
   per defun; 60 KB): `JvmEvalRuntimeBuilder.buildLookupSegments` splits it the
   same way (`_lookup`, `_lookup$1`, ...).

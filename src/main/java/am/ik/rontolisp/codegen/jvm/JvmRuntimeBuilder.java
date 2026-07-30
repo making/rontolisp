@@ -55,16 +55,50 @@ final class JvmRuntimeBuilder {
 			ClassConstant objectClass, ClassConstant stringClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant applyRef,
 			@org.jspecify.annotations.Nullable MethodrefConstant lookupRef) {
-		// Descriptor: (Object funcval, Object a0, ..., Object aN-1) -> Object
-		String desc = "(" + "Ljava/lang/Object;".repeat(arity + 1) + ")Ljava/lang/Object;";
+		return buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos, cp, thisClass, objectArrayClass,
+				integerClass, integerValue, objectClass, stringClass, applyRef, lookupRef, false);
+	}
+
+	/**
+	 * As above, with {@code spread} selecting the SPREAD dispatcher {@code _invoke_v}:
+	 * one method over EVERY callable, taking the argument list as a single cons list
+	 * instead of one parameter per argument.
+	 *
+	 * <p>
+	 * It exists because {@code _apply} cannot be expressed with the per-arity
+	 * dispatchers. Those take one JVM parameter per Lisp argument, so they stop at
+	 * {@link JvmEvalRuntimeBuilder#MAX_CALLABLE_ARITY} -- and an {@code apply} whose
+	 * designator is COMPUTED has to go through them, so
+	 * {@code (apply (scheme-constructor s) :scheme s :userinfo u ... )} (quri's
+	 * {@code uri}: fourteen arguments into a {@code &key} constructor) silently answered
+	 * nil. A spread dispatcher has no such ceiling: each case car/cdr-walks its required
+	 * parameters out of the list and hands a variadic target the remaining TAIL verbatim,
+	 * which is the callee's physical rest parameter. It is also cheaper than raising the
+	 * per-arity ceiling would be -- one case per function, not one per (function, arity)
+	 * pair, since a variadic function matches every arity at or above its required count.
+	 * @param arity ignored when {@code spread} is true
+	 * @param spread whether to build the spread dispatcher instead of an arity one
+	 * @return the dispatcher method(s): one, or a router plus segments
+	 */
+	static List<JvmLispCompiler.DispatchMethod> buildDispatchMethods(int arity,
+			Map<String, JvmLispCompiler.FunctionInfo> functions, List<JvmLispCompiler.LambdaInfo> lambdaDecls,
+			List<JvmLispCompiler.FunctionInfo> lambdaFuncInfos, ConstantPool cp, ClassConstant thisClass,
+			ClassConstant objectArrayClass, ClassConstant integerClass, MethodrefConstant integerValue,
+			ClassConstant objectClass, ClassConstant stringClass,
+			@org.jspecify.annotations.Nullable MethodrefConstant applyRef,
+			@org.jspecify.annotations.Nullable MethodrefConstant lookupRef, boolean spread) {
+		// Descriptor: (Object funcval, Object a0, ..., Object aN-1) -> Object, or
+		// (Object funcval, Object argList) -> Object for the spread dispatcher.
+		int dispatchArgs = spread ? 1 : arity;
+		String desc = "(" + "Ljava/lang/Object;".repeat(dispatchArgs + 1) + ")Ljava/lang/Object;";
 		Utf8Constant descUtf8 = cp.addUtf8(desc);
 		// Params: slot 0=funcval, slot 1..arity=args
 		// Extra locals: fvSlot=arity+1 (Object[] fv), idSlot=arity+2 (int id),
 		// restSlot=arity+3 (arg list for the _apply fallback)
-		int fvSlot = arity + 1;
-		int idSlot = arity + 2;
-		int restSlot = arity + 3;
-		int maxLocals = arity + 4;
+		int fvSlot = dispatchArgs + 1;
+		int idSlot = dispatchArgs + 2;
+		int restSlot = dispatchArgs + 3;
+		int maxLocals = dispatchArgs + 4;
 		// The matching callables: named functions plus lambdas (whose closure env is
 		// passed as the first argument). A variadic function (physical params =
 		// required + rest list) matches every dispatch arity >= required; its case
@@ -75,13 +109,24 @@ final class JvmRuntimeBuilder {
 		List<Case> cases = new ArrayList<>();
 		for (Map.Entry<String, JvmLispCompiler.FunctionInfo> entry : functions.entrySet()) {
 			JvmLispCompiler.FunctionInfo fi = entry.getValue();
-			if (!fi.isClosure() && dispatchMatches(fi.paramCount(), fi.variadic(), arity)) {
+			if (fi.isClosure()) {
+				continue;
+			}
+			// The spread dispatcher takes EVERY callable: its case reads the parameters
+			// out of the list, so no arity has to match and no ceiling applies.
+			if (spread) {
+				cases.add(renderSpreadCase(fi, -1, objectArrayClass));
+			}
+			else if (dispatchMatches(fi.paramCount(), fi.variadic(), arity)) {
 				cases.add(renderCase(fi, arity, restSlot, -1, objectClass));
 			}
 		}
 		for (int i = 0; i < lambdaDecls.size(); i++) {
 			JvmLispCompiler.LambdaInfo lambda = lambdaDecls.get(i);
-			if (dispatchMatches(lambda.paramNames().size(), lambda.variadic(), arity)) {
+			if (spread) {
+				cases.add(renderSpreadCase(lambdaFuncInfos.get(i), fvSlot, objectArrayClass));
+			}
+			else if (dispatchMatches(lambda.paramNames().size(), lambda.variadic(), arity)) {
 				cases.add(renderCase(lambdaFuncInfos.get(i), arity, restSlot, fvSlot, objectClass));
 			}
 		}
@@ -96,12 +141,13 @@ final class JvmRuntimeBuilder {
 		if (routed) {
 			for (int k = 0; k < ranges.size(); k++) {
 				segmentRefs.add(cp.addMethodref(thisClass,
-						cp.addNameAndType(cp.addUtf8("_invoke_" + arity + "$" + k), descUtf8)));
+						cp.addNameAndType(cp.addUtf8(dispatcherName(arity, spread) + "$" + k), descUtf8)));
 			}
 		}
 		List<JvmLispCompiler.DispatchMethod> segments = new ArrayList<>();
 		for (int segment = 0; segment <= (routed ? ranges.size() : 0); segment++) {
-			String name = segment == 0 ? "_invoke_" + arity : "_invoke_" + arity + "$" + (segment - 1);
+			String name = segment == 0 ? dispatcherName(arity, spread)
+					: dispatcherName(arity, spread) + "$" + (segment - 1);
 			Utf8Constant nameUtf8 = cp.addUtf8(name);
 			List<Integer> code = new ArrayList<>();
 			if (segment == 0 && lookupRef != null) {
@@ -182,7 +228,7 @@ final class JvmRuntimeBuilder {
 			// Interpreted closure (funcId == -1, created by the eval runtime's
 			// lambda): delegate to _apply with the arguments collected into a cons
 			// list. Segment 0 only: a chained segment sees the same id.
-			if (segment == 0 && applyRef != null) {
+			if (segment == 0 && applyRef != null && !spread) {
 				code.add(Opcode.ILOAD);
 				code.add(idSlot);
 				code.add(Opcode.ICONST_M1);
@@ -222,7 +268,7 @@ final class JvmRuntimeBuilder {
 				// (so a String-designator lookup happens once) with the arguments
 				// unchanged. An id below the first segment's range, or above the last
 				// one's, lands in a real segment whose tree answers null for it.
-				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, idSlot, fvSlot, arity, segmentRefs);
+				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, idSlot, fvSlot, dispatchArgs, segmentRefs);
 			}
 			else {
 				int[] range = routed ? ranges.get(segment - 1) : new int[] { 0, cases.size() - 1 };
@@ -350,6 +396,60 @@ final class JvmRuntimeBuilder {
 	// args beyond the required count are linked into a cons list (built in restSlot)
 	// passed as the trailing rest parameter; fvSlot >= 0 marks a closure whose env array
 	// is passed first.
+	/** The dispatcher method name: per-arity, or the single spread one. */
+	static String dispatcherName(int arity, boolean spread) {
+		return spread ? "_invoke_v" : "_invoke_" + arity;
+	}
+
+	/**
+	 * One case of the spread dispatcher {@code _invoke_v(funcval, argList)}: reads the
+	 * target's required parameters out of the argument list (slot 1) and hands a variadic
+	 * target the remaining tail, which IS its physical rest parameter. Needs no scratch
+	 * local -- each parameter is re-walked from the head of the list, which costs a few
+	 * instructions per parameter and keeps the case body self-contained so it can be
+	 * spliced into any segment.
+	 */
+	private static Case renderSpreadCase(JvmLispCompiler.FunctionInfo fi, int fvSlot, ClassConstant objectArrayClass) {
+		List<Integer> code = new ArrayList<>();
+		int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
+		if (fvSlot >= 0) {
+			code.add(Opcode.ALOAD);
+			code.add(fvSlot);
+		}
+		for (int i = 0; i < required; i++) {
+			code.add(Opcode.ALOAD_1);
+			for (int step = 0; step < i; step++) {
+				emitCell(code, objectArrayClass, 1);
+			}
+			emitCell(code, objectArrayClass, 0);
+		}
+		if (fi.variadic()) {
+			code.add(Opcode.ALOAD_1);
+			for (int step = 0; step < required; step++) {
+				emitCell(code, objectArrayClass, 1);
+			}
+		}
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, fi.methodref().index());
+		code.add(Opcode.ARETURN);
+		return new Case(fi.funcId(), code);
+	}
+
+	// Replaces the cons on the stack with its car (field 0) or cdr (field 1); nil passes
+	// through, like the car/cdr built-ins, so a short argument list binds the missing
+	// parameters to nil instead of trapping.
+	private static void emitCell(List<Integer> code, ClassConstant objectArrayClass, int field) {
+		code.add(Opcode.DUP);
+		int ifNullPos = code.size();
+		code.add(Opcode.IFNULL);
+		emitU2(code, 0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, objectArrayClass.index());
+		code.add(field == 0 ? Opcode.ICONST_0 : Opcode.ICONST_1);
+		code.add(Opcode.AALOAD);
+		patchBranch(code, ifNullPos, code.size());
+	}
+
 	private static Case renderCase(JvmLispCompiler.FunctionInfo fi, int arity, int restSlot, int fvSlot,
 			ClassConstant objectClass) {
 		List<Integer> code = new ArrayList<>();
@@ -727,16 +827,17 @@ final class JvmRuntimeBuilder {
 
 	/**
 	 * Builds bytecode for _lispToDisplayString. Same as _lispToString but strips quotes
-	 * from strings (charAt(0)=='"' -> substring(1, length-1)).
+	 * from strings (charAt(0)=='"' -> substring(1, length-1)) and renders a symbol as its
+	 * NAME alone -- no package qualifier, no keyword/gensym marker.
 	 */
 	static List<Integer> buildLispToDisplayStringBody(ClassConstant longClass, ClassConstant doubleClass,
 			ClassConstant stringClass, ClassConstant objectArrayClass, ClassConstant integerClass,
 			MethodrefConstant longToString, MethodrefConstant doubleToString, MethodrefConstant objectToString,
 			MethodrefConstant consToDisplayStringMethod, ConstantPool.StringConstant nilStr,
 			ConstantPool.StringConstant funcStr, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring, ClassConstant ratioArrayClass, MethodrefConstant stringConcat,
-			ConstantPool.StringConstant slashStr, ClassConstant charBoxClass, MethodrefConstant characterToString,
-			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
+			MethodrefConstant stringSubstring, MethodrefConstant stringLastIndexOf, ClassConstant ratioArrayClass,
+			MethodrefConstant stringConcat, ConstantPool.StringConstant slashStr, ClassConstant charBoxClass,
+			MethodrefConstant characterToString, @org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod,
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
@@ -825,64 +926,25 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, stringSubstring.index());
 		code.add(Opcode.ARETURN);
-		// Not a quoted string: a symbol. Its display spelling drops the package
-		// marker — a gensym's "#:" and a keyword's ':' (prin1 keeps them).
-		// if (charAt(0)=='#' && length()>=2 && charAt(1)==':') return substring(2);
+		// Not a quoted string: a symbol. Its display spelling is the symbol NAME with
+		// no package qualifier and no marker (CLHS 22.1.3.3: with *print-escape* false
+		// only the characters of the name are output) -- so QURI:URI princes as URI, a
+		// keyword :KW as KW and a gensym #:G1 as G1. All three are "everything after the
+		// last colon": return s.substring(s.lastIndexOf(':') + 1, s.length()). prin1
+		// keeps the spelling verbatim (_lispToString).
 		patchBranch(code, ifNotQuotePos, code.size());
 		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringCharAt.index());
-		emitIntConstStatic(code, '#');
-		int ifNotHashPos = code.size();
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
 		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringLength.index());
-		code.add(Opcode.ICONST_2);
-		int ifTooShortPos = code.size();
-		code.add(Opcode.IF_ICMPLT);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringCharAt.index());
 		emitIntConstStatic(code, ':');
-		int ifNotHashColonPos = code.size();
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_2);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, stringLastIndexOf.index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.IADD);
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, stringLength.index());
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, stringSubstring.index());
-		code.add(Opcode.ARETURN);
-		// if (charAt(0)==':') return substring(1);
-		patchBranch(code, ifNotHashPos, code.size());
-		patchBranch(code, ifTooShortPos, code.size());
-		patchBranch(code, ifNotHashColonPos, code.size());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringCharAt.index());
-		emitIntConstStatic(code, ':');
-		int ifNotColonPos = code.size();
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringLength.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringSubstring.index());
-		code.add(Opcode.ARETURN);
-		// Plain symbol, return as-is
-		patchBranch(code, ifNotColonPos, code.size());
-		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.ARETURN);
 
 		// if (val instanceof int[]) return Character.toString(((int[])val)[0]);

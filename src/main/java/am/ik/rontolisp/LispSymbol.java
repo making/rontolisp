@@ -38,11 +38,10 @@ public record LispSymbol(String name) implements LispVal {
 	 * Returns the CL {@code symbol-name} spelling: the member part of a package-qualified
 	 * name ({@code (symbol-name 'foo::bar)} is {@code "BAR"} -- the qualifier is where
 	 * the symbol lives, not part of its name), and otherwise the {@link #displayName}
-	 * marker-stripped spelling. {@code princ}/{@code ~A} keep the qualifier (see
-	 * {@link #display()}); {@code symbol-name} and the string-designator coercions must
-	 * not, or name surgery like ironclad's
-	 * {@code (intern (concatenate ... (string digest-name) ...))} re-qualifies an
-	 * already-qualified spelling.
+	 * marker-stripped spelling. This is also what {@code princ}/{@code ~A} yield (see
+	 * {@link #display()}, CLHS 22.1.3.3: with {@code *print-escape*} false, only the
+	 * characters of the symbol's name are output); {@code prin1} keeps the qualifier via
+	 * {@link #print()}.
 	 * @param name the stored symbol name
 	 * @return the package-stripped, marker-stripped name
 	 */
@@ -59,9 +58,19 @@ public record LispSymbol(String name) implements LispVal {
 		return this.name;
 	}
 
+	/**
+	 * The {@code princ}/{@code ~A} spelling: the symbol's NAME, with neither the package
+	 * qualifier nor a keyword/gensym marker. CLHS 22.1.3.3 -- with {@code *print-escape*}
+	 * false only the characters of the name are output -- so {@code (princ 'quri:uri)}
+	 * writes {@code URI}, not {@code QURI:URI}. This is load-bearing beyond printing: a
+	 * library that synthesizes a function name with
+	 * {@code (intern (format nil "~:@(~a-~a~)" name :string))} (quri's
+	 * {@code defun-with-array-parsing}) interns the qualifier into the NAME when
+	 * {@code ~A} leaks it, defining its function under a name no call site resolves to.
+	 */
 	@Override
 	public String display() {
-		return displayName(this.name);
+		return memberName(this.name);
 	}
 
 }

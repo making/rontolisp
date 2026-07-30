@@ -18,7 +18,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `&whole` / `&environment` | 利用不可。`defmacro` のラムダリストは必須パラメータと末尾の `&rest`/`&body` 1 つのみ |
 | `loop`（拡張版） | 一部対応（後述） |
 | CLOS | 一部対応（静的サブセット、MOP なし） |
-| `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default))` は利用不可 |
+| `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default) ...)` は利用可能 |
 | `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op（コンパイルには影響しない） |
 | `typep` / `subtypep` / `coerce` / `concatenate` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型）、`concatenate` はこの 3 つのシーケンス系統を構築 |
 | `make-package` / `export` / `import` / `use-package` / `find-package` / `rename-package`（ランタイム） | 利用不可。`defpackage` の `:shadow` / `:shadowing-import-from` はエラー |
@@ -59,6 +59,11 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 - `flet`/`labels` のローカル関数をまたぐ必要がある `return-from` はまだ
   未対応です（`lambda` をまたぐものは非局所脱出として対応済みです）。
 - `go` は同一関数内のレキシカルに囲む `tagbody` のタグのみを対象にできます。
+  実際のコードでこれに当たる典型は、[`handler-bind`](../reference/macros/handler-bind.md)
+  のハンドラが `go` で保護対象のループを再開する形です — ハンドラは `lambda` なので
+  タグは外側の関数にあります (quri の `:lenient` なパーセントデコードがまさにこの形で、
+  入力が実際に不正な場合コンパイル済みバックエンドでクラッシュします)。同じ位置の
+  `return-from` は動作します。ラムダ境界を越える `return-from` は下位変換されるためです。
   インタプリタはさらに関数境界を越える動的 `go` をサポートします。
 
 `lambda` をまたぐ `return-from`、`catch`/`throw`、`unwind-protect`、条件の捕捉は
@@ -105,8 +110,10 @@ wasm-GC バックエンドで捕捉できるのは**シグナルされた**コ�
 ## 構造体とオブジェクト
 
 [`defstruct`](../reference/special-forms/defstruct.md) は `:include` による継承を
-単一継承の形でのみサポートします — スロットのデフォルトを上書きする
-`(:include parent (slot new-default))` は利用できません。インスタンスは標準の
+単一継承の形でのみサポートします。スロットの上書きは利用可能です:
+`(:include parent (slot new-default) ...)` は継承したスロットのデフォルトを
+子のレイアウトでのみ差し替え、インデックスは継承したまま保つため、親のアクセサから
+そのまま読めます。インスタンスは標準の
 `#S(...)` 構文で印字され、`#S(...)`
 リテラルはインスタンスとして読み戻されます — ソース中でも、すべてのバックエンド
 のランタイム `read` / `read-from-string` を通しても（コンパイルされたリーダーは

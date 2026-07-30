@@ -20,7 +20,14 @@ Both are `LispMacroExpander` expansions (CL_MACROS; no per-backend codegen).
   map for the inner body; flet defs are walked with the outer map, labels defs
   with the shadowed one). `loop` clauses are walked generically, so `for`
   destructuring patterns colliding with a local function name would misrewrite
-  (same pre-existing limitation as UserMacroExpander).
+  (same pre-existing limitation as UserMacroExpander). **The improper-list test
+  runs BEFORE the non-symbol-head test**, and the order is load-bearing: the
+  non-symbol-head branch rebuilds the form from `cons.toList()`, which DROPS an
+  improper tail, so a nested loop destructuring pattern `((field . value) . rest)`
+  (whose car is a cons, hence a non-symbol head) came back as
+  `((field . value))` and the body's reference to `rest` was unbound. An improper
+  list is never a call form, so testing for it first costs nothing. Found via
+  quri's `url-encode-params`, whose loop pattern sits inside an `flet` body.
 - **labels = letrec lowering**: bind vars to nil, `setq` each to its lambda; the
   lambdas capture the vars, `FreeVarAnalyzer.findCapturedVars` boxes them, so
   mutual recursion works in all backends (verified on all four).

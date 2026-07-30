@@ -814,7 +814,8 @@ final class WasmExprCompiler {
 						WasmExprCompiler.compileExpr(LispMacroExpander.expandStringComparisonBounds(cons), ctx);
 					}
 					else {
-						WasmStringEqCompiler.compileEq(cons, ctx);
+						WasmStringEqCompiler
+							.compileEq((LispCons) LispMacroExpander.normalizeStringComparisonDesignators(cons), ctx);
 					}
 				}
 				case LispNames.STRING_EQUAL -> {
@@ -822,7 +823,8 @@ final class WasmExprCompiler {
 						WasmExprCompiler.compileExpr(LispMacroExpander.expandStringComparisonBounds(cons), ctx);
 					}
 					else {
-						WasmStringEqCompiler.compileEqual(cons, ctx);
+						WasmStringEqCompiler
+							.compileEqual((LispCons) LispMacroExpander.normalizeStringComparisonDesignators(cons), ctx);
 					}
 				}
 				case LispNames.STRING_TRIM ->

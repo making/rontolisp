@@ -14,6 +14,12 @@ Multiple place/value pairs assign sequentially (each pair sees the effects of th
 (let ((x (list 1 2 3))) (setf (car x) 9 (second x) 8) x) ; => (9 8 3)
 ```
 
+`(setf (getf place indicator) value)` writes a property list: when the indicator already has a cell its VALUE cell is written in place (so an alias of the same list sees the update), otherwise the pair is consed onto the front and the result stored back through `place`. A third subform in the place is `getf`'s default and is ignored by the write.
+
+```lisp
+(let ((p (list :a 1))) (setf (getf p :b) 2) p) ; => (:B 2 :A 1)
+```
+
 Beyond the built-in places, a `defstruct` accessor, a CLOS `:accessor`, and a user-defined *setf-function* (`(defun (setf name) ...)`) are also places: `(setf (name arg...) value)` calls the writer with the new value first. See [defun](../special-forms/defun.md) for setf-function definitions.
 
 ```lisp

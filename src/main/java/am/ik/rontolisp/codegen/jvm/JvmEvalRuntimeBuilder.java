@@ -92,6 +92,8 @@ final class JvmEvalRuntimeBuilder {
 
 		private final MethodrefConstant[] invoke;
 
+		private final MethodrefConstant invokeSpread;
+
 		private final Map<String, JvmLispCompiler.FunctionInfo> functions;
 
 		private EvalConstants(Builder b) {
@@ -117,6 +119,7 @@ final class JvmEvalRuntimeBuilder {
 			this.genvField = Objects.requireNonNull(b.genvField);
 			this.fenvField = Objects.requireNonNull(b.fenvField);
 			this.invoke = Objects.requireNonNull(b.invoke);
+			this.invokeSpread = Objects.requireNonNull(b.invokeSpread);
 			this.functions = Objects.requireNonNull(b.functions);
 		}
 
@@ -208,6 +211,10 @@ final class JvmEvalRuntimeBuilder {
 			return this.invoke;
 		}
 
+		MethodrefConstant invokeSpread() {
+			return this.invokeSpread;
+		}
+
 		Map<String, JvmLispCompiler.FunctionInfo> functions() {
 			return this.functions;
 		}
@@ -261,6 +268,8 @@ final class JvmEvalRuntimeBuilder {
 			private @Nullable FieldrefConstant fenvField;
 
 			private MethodrefConstant @Nullable [] invoke;
+
+			private @Nullable MethodrefConstant invokeSpread;
 
 			private @Nullable Map<String, JvmLispCompiler.FunctionInfo> functions;
 
@@ -371,6 +380,11 @@ final class JvmEvalRuntimeBuilder {
 
 			Builder invoke(MethodrefConstant[] invoke) {
 				this.invoke = invoke;
+				return this;
+			}
+
+			Builder invokeSpread(MethodrefConstant invokeSpread) {
+				this.invokeSpread = invokeSpread;
 				return this;
 			}
 
@@ -1205,29 +1219,14 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(ARGCUR);
 		a.branch(Opcode.GOTO, lloop);
 		a.bind(lend);
-		for (int n = 0; n <= MAX_CALLABLE_ARITY; n++) {
-			int nextN = a.label();
-			a.iload(LEN);
-			a.iconst(n);
-			a.branch(Opcode.IF_ICMPNE, nextN);
-			a.aload(ARGLIST);
-			a.astore(ARGCUR);
-			for (int j = 0; j < n; j++) {
-				car(a, ARGCUR);
-				a.astore(ARG0 + j);
-				cdr(a, ARGCUR);
-				a.astore(ARGCUR);
-			}
-			a.aload(FN);
-			for (int j = 0; j < n; j++) {
-				a.aload(ARG0 + j);
-			}
-			a.invokestatic(this.k.invoke()[n]);
-			a.areturn();
-			a.bind(nextN);
-		}
-		// arity out of range -> nil
-		a.aconstNull();
+		// One call, any argument count: the SPREAD dispatcher takes the list whole and
+		// each case reads its target's required parameters out of it, handing a variadic
+		// target the remaining tail. The per-arity dispatchers cannot serve apply -- they
+		// take one JVM parameter per Lisp argument, so they stop at MAX_CALLABLE_ARITY,
+		// and an apply past it used to fall off the ladder and answer nil.
+		a.aload(FN);
+		a.aload(ARGLIST);
+		a.invokestatic(this.k.invokeSpread());
 		a.areturn();
 
 		a.bind(notArr);

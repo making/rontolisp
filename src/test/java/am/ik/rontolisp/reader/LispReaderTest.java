@@ -31,6 +31,21 @@ class LispReaderTest {
 	}
 
 	@Test
+	void readPathnameLiteralYieldsItsNamestring() {
+		// A pathname IS its namestring here (every pathname primitive takes and returns
+		// strings), so #P contributes no value of its own -- quri's etld.lisp names its
+		// bundled data file this way.
+		assertThat(LispReader.readFromString("#P\"data/x.dat\"")).isEqualTo(new LispString("data/x.dat"));
+		assertThat(LispReader.readFromString("#p\"/abs/path\"")).isEqualTo(new LispString("/abs/path"));
+	}
+
+	@Test
+	void readPathnameDispatchNotFollowedByAStringStaysASymbol() {
+		// The pre-#P tokenization: only #P" is the dispatch.
+		assertThat(LispReader.readFromString("#PFOO")).isEqualTo(new LispSymbol("#PFOO"));
+	}
+
+	@Test
 	void readSymbol() {
 		LispVal result = LispReader.readFromString("foo");
 		assertThat(result).isEqualTo(new LispSymbol("FOO"));

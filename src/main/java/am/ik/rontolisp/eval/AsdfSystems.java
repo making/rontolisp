@@ -622,6 +622,7 @@ public final class AsdfSystems {
 		boolean moduleSerial = false;
 		boolean featureEnabled = true;
 		LispVal nested = null;
+		String pathname = null;
 		for (int i = 2; i < parts.size(); i += 2) {
 			if (!(parts.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
 				throw new IllegalStateException("system " + systemName + ": component " + name
@@ -639,6 +640,10 @@ public final class AsdfSystems {
 					}
 				}
 				case ":IF-FEATURE" -> featureEnabled = features.isEnabled(value);
+				// :pathname decouples a component's NAME (its identity in the sibling
+				// dependency graph) from the path it contributes. quri's uri-classes
+				// module is exactly this: named uri-classes, living in src/uri/.
+				case ":PATHNAME" -> pathname = componentPathname(systemName, name, value);
 				case ":SERIAL" -> {
 					if (!module) {
 						throw unsupportedComponentOption(systemName, type, name, key);
@@ -655,7 +660,8 @@ public final class AsdfSystems {
 			}
 		}
 		List<String> files = switch (type.name()) {
-			case ":FILE" -> List.of(prefix + name + ".lisp");
+			case ":FILE" -> List.of(prefix
+					+ (pathname == null ? name + ".lisp" : pathname.indexOf('.') < 0 ? pathname + ".lisp" : pathname));
 			// A static file participates in ordering but contributes no source.
 			case ":STATIC-FILE" -> List.of();
 			case ":MODULE" -> {
@@ -663,7 +669,10 @@ public final class AsdfSystems {
 					throw new IllegalStateException(
 							"system " + systemName + ": module " + name + " expects a :components option");
 				}
-				yield orderComponents(systemName, nested, moduleSerial, prefix + name + "/", features);
+				// An empty :pathname is ASDF's "this module adds no directory level".
+				String dir = pathname == null ? name : pathname;
+				yield orderComponents(systemName, nested, moduleSerial, dir.isEmpty() ? prefix : prefix + dir + "/",
+						features);
 			}
 			default -> throw new IllegalStateException("system " + systemName + ": unsupported component type "
 					+ type.name() + " (supported: :file :module :static-file)");
@@ -671,6 +680,21 @@ public final class AsdfSystems {
 		// A feature-disabled component keeps its place in the dependency graph (a
 		// sibling may :depends-on it) but contributes no source files.
 		return new Component(name, dependsOn, featureEnabled ? files : List.of());
+	}
+
+	/**
+	 * Reads a component's {@code :pathname} value. Only a literal namestring is accepted
+	 * ({@code "uri"}, or the {@code #P"uri"} the reader hands over as a string): a
+	 * computed pathname would need the pathname machinery ASDF-as-data deliberately does
+	 * not have. A trailing slash is dropped so the module case composes one separator.
+	 */
+	private static String componentPathname(String systemName, String name, LispVal value) {
+		if (!(value instanceof LispString str)) {
+			throw new IllegalStateException("system " + systemName + ": component " + name
+					+ " :pathname expects a namestring literal, got " + value.print());
+		}
+		String path = str.value();
+		return path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
 	}
 
 	private static IllegalStateException unsupportedComponentOption(String systemName, LispSymbol type, String name,

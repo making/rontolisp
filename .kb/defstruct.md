@@ -67,8 +67,17 @@ ancestor chain (`structAncestors`, the struct-side twin of
 `ClassInfo.ancestors`); `descendantStructTags(name)` gives the tag set that
 `typep`, the generated predicate and a struct method specializer all test, and
 `structAncestorCount` ranks a struct specializer for dispatch (band 100-199,
-between classes and built-in types, deeper `:include` first). Slot-override
-syntax (`(:include parent (slot new-default))`) is NOT supported.
+between classes and built-in types, deeper `:include` first).
+
+**Slot overrides** — `(:include parent (slot new-default) ...)` — re-default one
+inherited slot in THIS child's layout; the parent's own initform is untouched and
+the slot keeps its inherited INDEX, so the parent's baked `%obj-ref` accessors
+still read it. Overriding a slot the parent does not define throws, naming the
+slot. Overrides are matched on the UNQUALIFIED slot name, because a resolved
+source form spells them package-qualified (`(:include quri.uri:uri
+(quri.uri::scheme "http"))`) while a layout records base names. quri's
+`uri-http`/`uri-https`/`uri-ftp`/`uri-ldap`/`uri-file`/`urn` are all built this
+way, which is what made this arrive.
 
 **The predicate is REGENERATED as later children appear**: a predicate defun can
 only bake the descendant tags registered at the point it is built, and a child's

@@ -5500,12 +5500,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("340");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("341");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("340");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("341");
 	}
 
 	@Test

@@ -321,8 +321,9 @@ final class CompileTimePathnameFolder {
 		if (LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.MERGE_PATHNAMES_STAR.equals(qn.member())) {
 			return true;
 		}
-		if (LispNames.ASDF_PKG.equals(qn.pkg()) && (LispNames.FIND_SYSTEM.equals(qn.member())
-				|| LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member()))) {
+		if (LispNames.ASDF_PKG.equals(qn.pkg())
+				&& (LispNames.FIND_SYSTEM.equals(qn.member()) || LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())
+						|| LispNames.SYSTEM_RELATIVE_PATHNAME.equals(qn.member()))) {
 			return true;
 		}
 		return false;
@@ -396,6 +397,9 @@ final class CompileTimePathnameFolder {
 			}
 			if (LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())) {
 				return reduceSystemSourceDirectory(args, systems, parameters);
+			}
+			if (LispNames.SYSTEM_RELATIVE_PATHNAME.equals(qn.member())) {
+				return reduceSystemRelativePathname(args, systems, parameters);
 			}
 		}
 		return null;
@@ -496,6 +500,38 @@ final class CompileTimePathnameFolder {
 			return new LispString(name);
 		}
 		return errorP ? null : LispNil.INSTANCE;
+	}
+
+	/**
+	 * {@code (asdf:system-relative-pathname SYSTEM RELATIVE)} -> the merged namestring:
+	 * the system's recorded base directory with {@code RELATIVE} merged onto it. The
+	 * one-call form of source-directory + merge, and the shape a library uses to name a
+	 * data file bundled next to its {@code .asd} (quri's effective-TLD list). Trailing
+	 * {@code :type}/{@code :name} keywords are not reduced -- no caller passes them and
+	 * guessing would silently build the wrong path.
+	 */
+	private static @Nullable LispVal reduceSystemRelativePathname(List<LispVal> args,
+			Map<String, AsdfSystems.LispSystem> systems, Map<String, LispVal> parameters) {
+		if (args.size() != 2) {
+			return null;
+		}
+		String name = literalDesignator(args.get(0), parameters);
+		if (name == null) {
+			return null;
+		}
+		AsdfSystems.LispSystem system = systems.get(name);
+		if (system == null) {
+			return null;
+		}
+		LispVal relative = reduce(args.get(1), systems, parameters);
+		if (!(relative instanceof LispString relativeStr)) {
+			return null;
+		}
+		String base = system.baseDir();
+		if (base == null || base.isEmpty()) {
+			base = "./";
+		}
+		return new LispString(PathnameOps.mergePathnames(relativeStr.value(), base.endsWith("/") ? base : base + "/"));
 	}
 
 	private static @Nullable LispVal reduceSystemSourceDirectory(List<LispVal> args,

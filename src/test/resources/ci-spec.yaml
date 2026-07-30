@@ -1408,7 +1408,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      340
+      341
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -5750,3 +5750,63 @@ cases:
       "STATEMENT_2"
       "TABLE person"
       "person"
+  - name: quri-enablement-language-group
+    source: |
+      ;; (setf (getf place indicator) value): rplaca's the existing value cell, or
+      ;; conses the pair onto the front and stores it back through the place.
+      (defun ci-quri-getf ()
+        (let ((p (list :a 1 :b 2)))
+          (setf (getf p :b) 20)
+          (setf (getf p :c) 3)
+          (list p (getf p :a) (getf p :c) (getf p :zz 99))))
+      (print (ci-quri-getf))
+      ;; format's destination is decided at RUN time: nil returns the string even
+      ;; when it arrives through a variable, t and a stream write.
+      (defun ci-quri-render (&optional stream) (format stream "~a/~a" 1 2))
+      (print (ci-quri-render))
+      (print (ci-quri-render nil))
+      (print (with-output-to-string (s) (ci-quri-render s)))
+      ;; *print-escape* is bound around a print-object method, so the method can tell
+      ;; prin1 (T) from princ (NIL) exactly as it does in Common Lisp.
+      (defstruct ci-quri-pt x)
+      (defmethod print-object ((p ci-quri-pt) stream)
+        (if (and (null *print-readably*) (null *print-escape*))
+            (format stream "bare-~a" (ci-quri-pt-x p))
+            (format stream "#<PT ~a>" (ci-quri-pt-x p))))
+      (format t "~s|~a~%" (make-ci-quri-pt :x 7) (make-ci-quri-pt :x 7))
+      ;; nil and t are SYMBOLS: string designators like any other, upcase-canonical.
+      (defun ci-quri-desig (s) (list (string= s "http") (string= s "NIL") (string s)))
+      (print (ci-quri-desig nil))
+      (print (ci-quri-desig "http"))
+      (print (list (string t) (symbol-name nil)))
+      ;; princ / ~A write a symbol's NAME with no package qualifier; prin1 keeps it.
+      (print (list (princ-to-string 'rontolisp:version) (prin1-to-string 'rontolisp:version)))
+      ;; A defstruct in a package that EXPORTS its generated names defines them under
+      ;; the same spelling a call site resolves to.
+      (print (list (rontolisp:query-param "a=1&b=2" "b") (rontolisp:url-encode "a b")))
+      ;; apply through a COMPUTED designator, past the per-arity dispatch ceiling.
+      (defun ci-quri-keys (&key a b c d e f g h) (list a b c d e f g h))
+      (defun ci-quri-fn () (function ci-quri-keys))
+      (print (apply (ci-quri-fn) :a 1 :b 2 :c 3 :d 4 :e 5 :f 6 (list :g 7 :h 8)))
+      ;; uiop's three real sequence/character utilities.
+      (print (list (uiop:emptyp nil) (uiop:emptyp "") (uiop:emptyp "x")
+                   (uiop:first-char "abc") (uiop:last-char "abc") (uiop:first-char "")))
+      ;; make-list's :initial-element -- one evaluation, shared by every cell.
+      (print (list (make-list 3 :initial-element 0) (make-list 2) (make-list 0 :initial-element :x)))
+      ;; #P"..." is a pathname literal; a pathname IS its namestring here.
+      (print #P"data/effective_tld_names.dat")
+    expected: |
+      ((:C 3 :A 1 :B 20) 1 3 99)
+      "1/2"
+      "1/2"
+      "1/2"
+      #<PT 7>|bare-7
+      (NIL T "NIL")
+      (T NIL "http")
+      ("T" "NIL")
+      ("VERSION" "RONTOLISP:VERSION")
+      ("2" "a%20b")
+      (1 2 3 4 5 6 7 8)
+      (T T NIL #\a #\c NIL)
+      ((0 0 0) (NIL NIL) NIL)
+      "data/effective_tld_names.dat"

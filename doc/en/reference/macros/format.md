@@ -8,9 +8,14 @@ destination `t` the form expands into `princ`/`prin1`/`terpri` calls, writes to
 standard output, and returns nil; with destination `nil` it builds and returns
 the formatted string (expanding into `princ-to-string`/`prin1-to-string` calls
 folded with the internal string concatenation); with any other destination
-expression it builds the string the same way, writes it to the stream with one
-`write-string` call, and returns nil (a `with-output-to-string` string stream or
-a file stream). All arguments are evaluated left to right before any output.
+expression it builds the string the same way and then DISPATCHES on the value at
+run time -- a stream is written with one `write-string` call and nil is returned
+(a `with-output-to-string` string stream or a file stream), a `t` value writes to
+`*standard-output*`, and a nil value returns the string. That test has to happen
+at run time because nil does not name a stream: it is the "return the string"
+destination, so a function that forwards its own `&optional stream` argument
+(`(defun render (x &optional stream) (format stream ...))`, the Common Lisp
+convention) answers a string when called without one. All arguments are evaluated left to right before any output.
 
 ```lisp
 (format t "Hello ~a, you are ~d!~%" 'world 42)

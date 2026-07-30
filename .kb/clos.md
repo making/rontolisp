@@ -363,6 +363,18 @@ before and every existing artifact stays byte-identical.
   fallback would re-enter the very rewrite that produced it. The interpreter INLINES
   the renderer instead of calling the defun, because it re-expands per call and must
   see a `defmethod` that follows the first print.
+- **`*print-escape*` is BOUND around the method call** (`printObjectCall` wraps it in a
+  `let`), `t` for prin1/print/`~S` and `nil` for princ/`~A` -- the escape flag the hook
+  already threads through `%print-object-str` is exactly the value CL binds there, so a
+  portable method that branches on `(and (null *print-readably*) (null *print-escape*))`
+  (quri's `uri` method: bare URI under princ, `#<TYPE uri>` under prin1) behaves as it
+  does in CL. `*print-escape*`/`*print-readably*` are `CL_VARIABLES` holding CL's
+  defaults; the interpreter seeds both into `specialVars` (nothing in user code declares
+  them, yet the route binds one), and the compile path injects `(defvar ...)` from
+  `LispMacroExpander.injectMvSpillGlobal`, which runs AFTER `expandTopLevelDefinitions`
+  and therefore sees the route's own reference. That ORDER is the load-bearing part: a
+  `setq` would not proclaim the name special, and injecting before the expansion would
+  miss the reference the expansion creates.
 - **The SECOND gate is a condition's `:report`** (`.kb/error-handling.md`, todo-206):
   the same rewrite fires for a program that can build a condition, and the
   escape-off arm of `%print-object-str` renders one through
