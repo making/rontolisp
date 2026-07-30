@@ -6,7 +6,11 @@
 ;; built-in stream<u8> / future<T> types, so fd_write/fd_read/path_open/fd_close are
 ;; implemented with stream.new/read/write/drop + future.read over wasi:cli + wasi:filesystem
 ;; 0.3; random_get/clock_time_get/environ_* bridge wasi:random / wasi:clocks
-;; (system-clock, renamed from 0.2's wall-clock) / wasi:cli/environment.
+;; (system-clock, renamed from 0.2's wall-clock) / wasi:cli/environment. The environ_*
+;; pair is UNREACHABLE from Lisp since todo 217: uiop:getenv under --component is
+;; environment.lisp, which binds get-environment straight off this block's own
+;; wasi:cli/environment instance (see ../../.kb/time-environment-builtins.md), so these
+;; two stay only because the core's eight preview1 import slots are index-pinned.
 ;;
 ;; Straight-line synchronous code is fine WITHOUT any gated feature: the stream/future
 ;; built-ins are the ASYNC (non-blocking) variants of base component-model-async, and a

@@ -1,8 +1,44 @@
 # Time / environment built-ins (`get-universal-time`, `get-internal-real-time`, `get-internal-run-time`, `uiop:getenv`)
 
-Implemented in all three backends, returning an **integer everywhere** (the three time built-ins). Interpreter/JVM: `JvmTimeCompiler` via a `systemOps` methodref map on `Ctx`; `JvmGetenvCompiler`. WASM (`WasmTimeCompiler`) reads WASI `clock_time_get`, computes in i64 and normalizes through `_int_new`, so the value is an exact boxed integer (`TYPE_BIGNUM`, `.kb/wasm-bignum.md`) and `integerp` answers like the other backends. (Historical: before the boxed exact-integer path existed the WASM value was a FLOAT because the magnitudes exceed the `i31` range; that divergence is retired.) `uiop:getenv` on WASM uses a `_getenv` runtime helper (`WasmGetenvRuntimeBuilder`) scanning the WASI environ buffer. `get-universal-time` is seconds since the 1900 CL epoch (Unix + 2208988800). The three time built-ins are registered in `LispNames`/`PackageRegistry.CL_FUNCTIONS`. The WASM clock/environ imports exist in both modes (Preview 1 -> real host; component -> adapter over `wasi:clocks@0.3.0`/`wasi:cli/environment@0.3.0`), keeping import indices identical.
+Implemented in all three backends, returning an **integer everywhere** (the three time built-ins). Interpreter/JVM: `JvmTimeCompiler` via a `systemOps` methodref map on `Ctx`; `JvmGetenvCompiler`. WASM (`WasmTimeCompiler`) reads WASI `clock_time_get`, computes in i64 and normalizes through `_int_new`, so the value is an exact boxed integer (`TYPE_BIGNUM`, `.kb/wasm-bignum.md`) and `integerp` answers like the other backends. (Historical: before the boxed exact-integer path existed the WASM value was a FLOAT because the magnitudes exceed the `i31` range; that divergence is retired.) `uiop:getenv` on **Preview 1** uses a `_getenv` runtime helper (`WasmGetenvRuntimeBuilder`) scanning the host-filled WASI environ buffer; **every component variant** instead reads `wasi:cli/environment@0.3.0` through the `environment.lisp` library (see below). `get-universal-time` is seconds since the 1900 CL epoch (Unix + 2208988800). The three time built-ins are registered in `LispNames`/`PackageRegistry.CL_FUNCTIONS`. The WASM clock/environ *imports* exist in both modes (Preview 1 -> real host; component -> adapter over `wasi:clocks@0.3.0`/`wasi:cli/environment@0.3.0`), keeping import indices identical -- but since 2026-07-30 the component's `environ_*` imports are DEAD WEIGHT on every variant (`_getenv` is no longer the component getenv; the base adapter's environ decode and the serve bridge's zero-entry stub are both unreachable from Lisp), kept only because the eight preview1 import slots are index-pinned.
 
-**Reading an environment variable is spelled `uiop:getenv`, and ONLY that (2026-07-29)**: ANSI Common Lisp has no `getenv`, so homing one in `cl` would have shipped a name no other implementation answers to and that a portability `#-`/`#+` could not see coming. It lives in the `uiop` package instead -- the spelling implementation-independent libraries already use -- alongside `file-exists-p`/`merge-pathnames*`/`add-package-local-nickname` as one of the four uiop members with a real definition (`.kb/asdf.md`). Mechanics: `LispNames.GETENV` is the member name and `LispNames.UIOP_GETENV` (`"UIOP:GETENV"`) the canonical qualified spelling; `PackageRegistry` lists it in `uiopExternals` and NOT in `CL_FUNCTIONS` (so `rontolisp:list-functions` and `symbol-function` do not know a bare `GETENV`); the interpreter registers it in `Environment.createGlobal` under the qualified name; both compilers dispatch on the qualified name in their `compileCons` package block (the `usocket:with-*` pattern) **before** the function-call path consults `LispMacroExpander.expandUiopStubCall`, which would otherwise lower it to the uiop stub's undefined-function error. There is deliberately no `cl:getenv` alias: a compatibility alias would keep the non-standard spelling alive in user code, which is the thing being retired. Pinned by `LispEvaluatorTest#evalGetenv` + `#bareGetenvIsNotACommonLispFunction`, `JvmLispCompilerTest#compileAndRunGetenv`, `WasmLispCompilerIntegrationTest#componentGetenvFromWasiEnvironment`/`#preview1GetenvDoesNotCorruptNewline`, and the ci-spec case `getenv-does-not-corrupt-newline`.
+**Reading an environment variable is spelled `uiop:getenv`, and ONLY that (2026-07-29)**: ANSI Common Lisp has no `getenv`, so homing one in `cl` would have shipped a name no other implementation answers to and that a portability `#-`/`#+` could not see coming. It lives in the `uiop` package instead -- the spelling implementation-independent libraries already use -- alongside `file-exists-p`/`merge-pathnames*`/`add-package-local-nickname` as one of the four uiop members with a real definition (`.kb/asdf.md`). Mechanics: `LispNames.GETENV` is the member name and `LispNames.UIOP_GETENV` (`"UIOP:GETENV"`) the canonical qualified spelling; `PackageRegistry` lists it in `uiopExternals` and NOT in `CL_FUNCTIONS` (so `rontolisp:list-functions` and `symbol-function` do not know a bare `GETENV`); the interpreter registers it in `Environment.createGlobal` under the qualified name; both compilers dispatch on the qualified name in their `compileCons` package block (the `usocket:with-*` pattern) **before** the function-call path consults `LispMacroExpander.expandUiopStubCall`, which would otherwise lower it to the uiop stub's undefined-function error. There is deliberately no `cl:getenv` alias: a compatibility alias would keep the non-standard spelling alive in user code, which is the thing being retired. Pinned by `LispEvaluatorTest#evalGetenv` + `#bareGetenvIsNotACommonLispFunction`, `JvmLispCompilerTest#compileAndRunGetenv`, `WasmLispCompilerIntegrationTest#componentGetenvFromWasiEnvironment`/`#httpHandlerReadsTheEnvironmentUnderWasmtimeServe`/`#preview1GetenvDoesNotCorruptNewline`, and the ci-spec case `getenv-does-not-corrupt-newline`.
+
+**On `--component` getenv is a Lisp library, not an adapter path (todo 217, 2026-07-30)**:
+`uiop:getenv` under `--component` is `environment.lisp` over a wit-imported
+`wasi:cli/environment@0.3.0` (`src/main/resources/am/ik/rontolisp/eval/environment.{lisp,wit}`,
+spliced by `eval/EnvironmentLibrary` when the program references the name -- the
+sockets.lisp / wait.lisp pattern), and `WasmExprCompiler` therefore does NOT dispatch the
+name in component mode: the call resolves to that defun (with an explicit compile error if
+the splice was skipped, so a pipeline that forgets it cannot fall through to the uiop stub's
+runtime "undefined function"). `get-environment` hands back the whole environment as
+`list<tuple<string,string>>` -- a Lisp list of two-element lists -- and the defun walks it,
+so unset answers nil and an empty value answers "".
+
+Why it is ONE binding for base AND serve, and why that mattered: the served component was
+the broken case (`uiop:getenv` -> nil for every variable, silently, whatever
+`wasmtime serve --env` / `-S inherit-env=y` said) because the WASI 0.3 **service** world
+carries no `wasi:cli/environment`, so `adapter-http-server-p1.wat` answers `environ_*` with
+a zero-entry environment and `import-block-http-server.bin` declares no such interface. The
+fix is deliberately NOT a second copy of the base adapter's environ decode: the base /
+sockets blocks already declare the interface, so `WasmComponentBuilder` binds
+`get-environment` FROM the block (`FIXED_BLOCK_IFACES` + the `INST_ENVIRON` entry in
+`lowerFixedFromBlock`'s `instanceOf` map -- a user's own `rontolisp:wit-import` of the
+interface now rides the same path instead of being rejected), while serve, whose block has
+none, gets the same binding as an appended `appendUserImports` instance. Two consequences to
+keep: the import is **conditional** on the program actually calling `uiop:getenv` (a
+getenv-free component declares nothing extra and still runs on a host that provides only the
+service world -- wasmCloud is the case that motivated the conditionality; verified
+byte-identical output across preview1 / base / serve / fetch / sockets / keyvalue-serve /
+`--no-gc` before-and-after), and the base path no longer has the adapter's FIXED 16 KiB
+environ window (`ENV_BUF_ADDR`), since the canonical ABI allocates the lifted strings --
+Preview 1 keeps that window, and a >16 KiB environment there is still the old hazard.
+Re-evaluation trigger: if the service world ever gains `wasi:cli/environment` (or the base
+block is regenerated), the adapter/bridge `environ_*` bodies and `_getenv` become removable
+in component mode -- they are already unreachable from Lisp. Compile-level pins:
+`WasmLispCompilerTest#getenvInServeModeImportsWasiCliEnvironment` (the serve user import +
+the emitted WIT line) and `#getenvInBaseComponentBindsTheBlocksEnvironmentInstance` (exactly
+ONE import of the name off serve).
 
 **The universal-time codec (`encode-universal-time` / `decode-universal-time`,
 2026-07-26)**: both are `LispPreludeLibrary` defuns -- pure era-based proleptic

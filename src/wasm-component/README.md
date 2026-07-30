@@ -288,8 +288,13 @@ and whose `%serve-handle` the core exports as `handle`. The one helper module is
 satisfy its `wasi_snapshot_preview1` imports: `random_get` over `get-random-u64`,
 `clock_time_get` over the 0.3 clocks, `fd_write` (fd 1/2) over `write-via-stream` + the
 stream/future built-ins (the base `adapter.wat`'s cli path), a zero environment for
-`environ_*` (`uiop:getenv` returns nil), EOF for `fd_read`, errno 76 for `path_open` (no
-filesystem in the service world).
+`environ_*`, EOF for `fd_read`, errno 76 for `path_open` (no filesystem in the service
+world). The `environ_*` pair is unreachable from Lisp: a serve program calling
+`uiop:getenv` binds `wasi:cli/environment@0.3.0` itself through `environment.lisp` (an
+appended user import, since the service world declares no such interface), so the stub
+stays only because the core's eight preview1 import slots are index-pinned. Off serve the
+same library binds the interface FROM the base block, which already declares it, leaving
+`adapter.wat`'s environ decode equally unreachable (`../../.kb/time-environment-builtins.md`).
 
 `WasmServeComponentBuilder.build` wires mem -> bridge -> core, lowers the fixed
 `wasi:http` surface FROM the import block (sync decls, the async-lowered `send`, drops,

@@ -30,13 +30,12 @@
 ;; under wasmtime-in-Docker, and under wash a NON-loopback address, because wash
 ;; routes loopback to a per-workload virtual network.
 ;;
-;; CAVEAT on that serve line today: a SERVED component reads no environment at
-;; all. uiop:getenv answers nil there whatever --env or -S inherit-env=y say,
-;; because the WASI 0.3 service world carries no wasi:cli/environment and the
-;; serve adapter stubs it out -- so this program gets as far as "no database URL
-;; given", which an uncaught error on WASM turns into a bare unreachable trap.
-;; The other three backends (interpreter, JVM, base --component) read it
-;; correctly; postgres-hello.lisp is the one to run under wasmtime run.
+;; --env DATABASE_URL is what puts the variable inside the component: the WASI
+;; 0.3 service world carries no wasi:cli/environment, so a program that calls
+;; uiop:getenv imports the interface itself and the served component declares it
+;; (visible in `wasm-tools component wit app.wasm`). Drop the flag and this
+;; program stops on "no database URL given" -- which an uncaught error on WASM
+;; turns into a bare unreachable trap, so the missing flag reads as a crash.
 
 (ql:quickload "cl-postgres")
 (ql:quickload "cl-who")

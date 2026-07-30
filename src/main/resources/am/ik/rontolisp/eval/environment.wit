@@ -1,0 +1,23 @@
+package root:environment;
+
+// The wasi:cli@0.3.0 environment surface environment.lisp binds (vendored from the
+// official WASI 0.3.0 WIT, trimmed to the bound member). Keep in lockstep with the
+// regen source in src/wasm-component/deps/cli: on the base / sockets variants the
+// member set here must stay a subset of what src/wasm-component/core.wat imports,
+// because the component binds the interface FROM the fixed import block's
+// already-declared instance there. The serve variant's block declares no
+// environment interface, so there the same binding becomes an appended user import.
+
+package wasi:cli@0.3.0 {
+  interface environment {
+    /// Get the POSIX-style environment variables.
+    ///
+    /// Each environment variable is provided as a pair of string variable names
+    /// and string value.
+    ///
+    /// Morally, these are a value import, but until value imports are available
+    /// in the component model, this import function should return the same
+    /// values each time it is called.
+    get-environment: func() -> list<tuple<string, string>>;
+  }
+}

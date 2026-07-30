@@ -86,7 +86,10 @@ GET /hello
 serve コンポーネントのハンドラ内でも `random`、時刻系の組み込み関数、
 `print`（ホストの標準出力への出力）は動作します — すべての `wasi:http`
 ホストが提供する `wasi:random` / `wasi:clocks` / `wasi:cli` へブリッジ
-されるためです。`uiop:getenv` は `nil` を返し、ファイルストリームは利用できません。
+されるためです。`uiop:getenv` はコンポーネント自身の
+`wasi:cli/environment@0.3.0` インポート経由でホストの環境変数を読みます
+（`wasmtime serve --env NAME=value` または `-S inherit-env=y`）。
+ファイルストリームは利用できません。
 [`rontolisp:fetch`](rontolisp-fetch.md) もサービング中のハンドラ内で動作します
 — serve と serve+fetch は 1 つのコンポーネント形状で、その
 `wasi:http/client@0.3.0` インポートは `wasmtime serve` がデフォルトで提供します

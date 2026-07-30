@@ -206,8 +206,10 @@ $ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
 serve コンポーネントのハンドラ内でも `random`、時刻系の組み込み関数、
 `print`（ホストの標準出力への出力）はすべて動作します — コンポーネントが
 これらを、すべての `wasi:http` ホストが提供する `wasi:random`・`wasi:clocks`・
-`wasi:cli` インタフェースへブリッジするためです。`uiop:getenv` は `nil` を返し
-（サービングホストは環境変数を公開しません）、ファイルストリームは利用
+`wasi:cli` インタフェースへブリッジするためです。`uiop:getenv` もホストの
+環境変数を読みます — serve コンポーネントは `wasi:cli/environment@0.3.0` を
+インポートするので、`wasmtime serve --env NAME=value`（または
+`-S inherit-env=y`）がハンドラに届きます。ファイルストリームは利用
 できません。
 詳細は
 [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)

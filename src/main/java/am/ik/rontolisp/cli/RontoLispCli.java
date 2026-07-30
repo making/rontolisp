@@ -24,6 +24,7 @@ import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
@@ -343,6 +344,14 @@ public final class RontoLispCli {
 		// preview1 adapter's stdin branch, byte-identical. Must run AFTER
 		// SocketsLibrary (it keys on sockets.lisp's dispatchers being present).
 		loaded = StdinLibrary.process(loaded, witBackend, serve);
+		// uiop:getenv on the --component path is environment.lisp over a wit-imported
+		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
+		// sockets variants and as an appended user import under serve, whose service
+		// world declares no environment interface. Spliced like the libraries above; a
+		// no-op elsewhere (the interpreter/JVM keep System.getenv, Preview 1 keeps the
+		// host-filled environ buffer scan). Runs after them so a getenv call any of them
+		// spliced in would be seen too.
+		loaded = EnvironmentLibrary.process(loaded, witBackend);
 		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
 		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
 		// any

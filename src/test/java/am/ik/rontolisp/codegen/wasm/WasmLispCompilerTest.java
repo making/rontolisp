@@ -36,6 +36,9 @@ class WasmLispCompilerTest {
 		// by the stdin machinery its dispatchers fall through to.
 		program = SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = StdinLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
+		// uiop:getenv is environment.lisp over wit-imported wasi:cli/environment on this
+		// path (a no-op for every program that never reads the environment).
+		program = am.ik.rontolisp.eval.EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		// fetch.lisp's result wrappers call rontolisp::%wit-result, backed by wit.lisp --
 		// spliced by WitLibrary, the same order the CLI runs them in.
 		program = WitLibrary.process(program);
@@ -374,7 +377,48 @@ class WasmLispCompilerTest {
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		loaded = SocketsLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT);
 		loaded = StdinLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT, true);
+		loaded = am.ik.rontolisp.eval.EnvironmentLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT);
 		return am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
+	}
+
+	@Test
+	void getenvInServeModeImportsWasiCliEnvironment() {
+		// A served handler reads the environment through environment.lisp's wit-imported
+		// wasi:cli/environment@0.3.0. The serve import block declares no environment
+		// interface (the wasi:http service world carries none -- which is why the
+		// preview1 bridge answers environ_* with a zero environment), so the binding
+		// joins as an APPENDED USER IMPORT, and the emitted WIT must say so. The
+		// `wasmtime serve --env` round trip is
+		// WasmLispCompilerIntegrationTest#httpHandlerReadsTheEnvironmentUnderWasmtimeServe.
+		List<LispVal> program = serveProgram("""
+				(defun handle (r)
+				  (list :status 200 :body (or (uiop:getenv "RLENV") "unset")))
+				(rontolisp:http-handler 'handle)
+				""");
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, true);
+		byte[] component = compiler.compile(program);
+		assertThat(new String(component, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.contains("wasi:cli/environment@0.3.0");
+		assertThat(compiler.componentWit()).contains("import wasi:cli/environment@0.3.0;");
+	}
+
+	@Test
+	void getenvInBaseComponentBindsTheBlocksEnvironmentInstance() {
+		// Off serve the import block ALREADY declares wasi:cli/environment (the preview1
+		// adapter's own get-environment alias rides it), so the very same binding is
+		// lowered FROM the block instead of re-imported: a component importing one
+		// interface name twice is invalid. So the emitted world declares the import
+		// EXACTLY ONCE -- the unchanged fixed world, with nothing appended for the
+		// binding -- and the component still instantiates (the wasmtime leg is
+		// WasmLispCompilerIntegrationTest#componentGetenvFromWasiEnvironment).
+		List<LispVal> program = am.ik.rontolisp.eval.EnvironmentLibrary.process(
+				LispReader.readAllFromString("(print (uiop:getenv \"RLENV\"))"),
+				WitExportDirective.Backend.WASM_COMPONENT);
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
+		assertThat(compiler.compile(program)).isNotEmpty();
+		String wit = compiler.componentWit();
+		assertThat(wit).isNotNull();
+		assertThat(wit.split("import wasi:cli/environment@0\\.3\\.0;", -1)).hasSize(2);
 	}
 
 	@Test

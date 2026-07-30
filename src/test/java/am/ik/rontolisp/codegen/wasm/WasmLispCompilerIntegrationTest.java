@@ -218,6 +218,7 @@ class WasmLispCompilerIntegrationTest {
 		loaded = am.ik.rontolisp.eval.WaitForLibrary.process(loaded, witBackend);
 		loaded = am.ik.rontolisp.eval.SocketsLibrary.process(loaded, witBackend);
 		loaded = am.ik.rontolisp.eval.StdinLibrary.process(loaded, witBackend, true);
+		loaded = am.ik.rontolisp.eval.EnvironmentLibrary.process(loaded, witBackend);
 		// The prelude splice mirrors the CLI: a handler draining a body stream calls
 		// the prelude's rontolisp:read-all.
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary.process(
@@ -2544,8 +2545,12 @@ class WasmLispCompilerIntegrationTest {
 				""", "sum*of*(1, 2)")).hasMessageContaining("not a valid component-model export name");
 	}
 
+	// uiop:getenv under --component is the spliced environment.lisp binding over
+	// wit-imported wasi:cli/environment (eval/EnvironmentLibrary), so this helper runs
+	// that splice the way the CLI pipeline does.
 	private static String compileAndRunComponentWithEnv(String lispCode, String env) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		List<LispVal> program = am.ik.rontolisp.eval.EnvironmentLibrary.process(LispReader.readAllFromString(lispCode),
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--env",
@@ -2804,6 +2809,35 @@ class WasmLispCompilerIntegrationTest {
 						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-kv.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve keyvalue round trip; log: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("/hits 42");
+	}
+
+	@Test
+	void httpHandlerReadsTheEnvironmentUnderWasmtimeServe() throws Exception {
+		// A served handler reads environment variables like every other backend: the
+		// serve leg of componentGetenvFromWasiEnvironment. uiop:getenv under --component
+		// is environment.lisp over wit-imported wasi:cli/environment@0.3.0, which the
+		// serve variant carries as an appended user import (its import block has no
+		// environment interface -- the wasi:http service world does not carry one, and
+		// the preview1 bridge's environ_* stubs answer with a zero environment). Before
+		// that binding existed every variable read back nil here while the interpreter,
+		// the JVM, Preview 1 and the run-mode component all answered.
+		byte[] componentBytes = compileServeComponent("""
+				(defun handle (request)
+				  (list :status 200
+				        :body (concatenate 'string
+				                           (or (uiop:getenv "RLENV") "unset")
+				                           " "
+				                           (if (uiop:getenv "RL_UNSET") "leaked" "nil"))))
+				(rontolisp:http-handler 'handle)
+				""", null);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-env.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime serve -W gc=y -W exceptions=y --env RLENV=hello"
+						+ " --addr 127.0.0.1:8092 /tmp/serve-env.wasm >/tmp/serve-env.log 2>&1 &"
+						+ " for i in $(seq 1 60); do out=$(curl -sf http://127.0.0.1:8092/) && [ -n \"$out\" ]"
+						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-env.log 1>&2; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve getenv; log: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("hello nil");
 	}
 
 	@Test

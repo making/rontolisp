@@ -99,6 +99,18 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.EnvironmentLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/environment\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.EnvironmentLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/environment\\.wit"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.SocketsLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/sockets\\.lisp"

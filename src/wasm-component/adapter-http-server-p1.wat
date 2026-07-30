@@ -10,8 +10,13 @@
 ;;                       stream<u8> built-ins: one stream per call, every iovec pushed
 ;;                       through it, EOF by dropping the writable end, then the write
 ;;                       future awaited (the base adapter.wat's cli path).
-;;   environ_sizes_get / environ_get -> a zero-entry environment, so getenv returns nil
-;;                       (the service world has no wasi:cli/environment)
+;;   environ_sizes_get / environ_get -> a zero-entry environment (the service world has no
+;;                       wasi:cli/environment). UNREACHABLE from Lisp since todo 217: a
+;;                       serve program calling uiop:getenv binds
+;;                       wasi:cli/environment@0.3.0 itself (environment.lisp, an appended
+;;                       user import) instead of going through the preview1 imports. These
+;;                       two stay only because the core's eight preview1 import slots are
+;;                       index-pinned.
 ;;   fd_read          -> immediate EOF (nread 0, errno 0; a served handler has no stdin)
 ;;   path_open        -> errno 76 (file streams stay unavailable; the core traps on a
 ;;                       nonzero open errno, matching the run-variant failure mode)

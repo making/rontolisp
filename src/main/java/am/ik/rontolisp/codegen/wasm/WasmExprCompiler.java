@@ -474,8 +474,20 @@ final class WasmExprCompiler {
 			// Lisp has no getenv, so the qualified name is the only spelling. Dispatched
 			// here, ahead of WasmFunctionCallCompiler's expandUiopStubCall.
 			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.GETENV.equals(qn.member())) {
-				WasmGetenvCompiler.compile(cons, ctx);
-				return;
+				// Under --component getenv is the spliced environment.lisp defun over
+				// wit-imported wasi:cli/environment (eval/EnvironmentLibrary): fall
+				// through to the ordinary call path, which resolves it -- there is no
+				// preview1 host to fill the environ buffer _getenv scans. Reaching here
+				// with no such defun means the pipeline skipped the splice, which the
+				// stub lowering would otherwise turn into a runtime "undefined function".
+				if (!ctx.component) {
+					WasmGetenvCompiler.compile(cons, ctx);
+					return;
+				}
+				if (!ctx.functions.containsKey(LispNames.UIOP_GETENV)) {
+					throw new UnsupportedOperationException(LispNames.UIOP_GETENV
+							+ " under --component is the spliced environment.lisp binding, but the program was compiled without it (eval/EnvironmentLibrary.process must run on the compile path)");
+				}
 			}
 			// The usocket with-* convenience macros are built-in LispMacroExpander
 			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.

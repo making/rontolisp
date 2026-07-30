@@ -73,9 +73,8 @@ wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y --env DATABAS
 
 `postgres-crud.lisp` and `postmodern-crud.lisp` build and run the same way.
 `postgres-web.lisp` runs under `wasmtime serve` and needs one more flag
-(`-S cli=y`) — but see the caveat below it: a served component reads no
-environment, so this is the one backend on which the program cannot pick up
-`DATABASE_URL`.
+(`-S cli=y`); `--env DATABASE_URL` reaches a served handler exactly like it
+reaches the others.
 
 ```bash
 rontolisp examples/db/postgres-web.lisp -o app.wasm --component --optimize
@@ -85,15 +84,15 @@ wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y --
 wasmCloud runs the same component under `wash dev` with
 `wasm_proposals: [gc, exception-handling, component-model-async]`.
 
-**A served component reads no environment.** `uiop:getenv` answers `nil` inside
-one no matter what `--env` or `-S inherit-env=y` say: the WASI 0.3 service world
-carries no `wasi:cli/environment`, and the serve adapter stubs the preview1
-`environ_*` calls out to a zero-entry environment accordingly
-(`wasm-tools component wit app.wasm` lists the imports and shows it missing). So
-`postgres-web.lisp` gets as far as `no database URL given` there — a bare
-`unreachable` trap, per the note above — while the other three backends read the
-variable correctly. Closing the gap means teaching the serve adapter and
-`WasmServeComponentBuilder` the interface the base component already imports.
+**A served component imports the environment interface itself.** The WASI 0.3
+service world carries no `wasi:cli/environment`, so the preview1 bridge answers
+the `environ_*` calls with a zero-entry environment — reading `DATABASE_URL`
+there is not the bridge's job. A program that calls `uiop:getenv` instead binds
+`wasi:cli/environment@0.3.0` directly and the component declares that import
+(`wasm-tools component wit app.wasm` lists it, next to `wasi:sockets`), which is
+what `wasmtime serve --env DATABASE_URL` then satisfies. A program that never
+reads the environment declares nothing extra, so it still runs on any host that
+provides only the service world.
 
 ## Notes
 

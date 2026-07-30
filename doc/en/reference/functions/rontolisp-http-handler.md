@@ -83,7 +83,9 @@ included: the handler reads `:headers` (an alist of `(name . value)` string pair
 and any `:headers` in the response is written back. Inside a served
 handler `random`, the time built-ins and `print` (to the host's stdout) work —
 they are bridged to `wasi:random` / `wasi:clocks` / `wasi:cli`, which every
-`wasi:http` host provides; `uiop:getenv` returns `nil` and file streams are
+`wasi:http` host provides; `uiop:getenv` reads the host environment through the
+component's own `wasi:cli/environment@0.3.0` import (`wasmtime serve
+--env NAME=value` or `-S inherit-env=y`), and file streams are
 unavailable. [`rontolisp:fetch`](rontolisp-fetch.md) also works inside a
 served handler — serve and serve+fetch are one component shape, whose
 `wasi:http/client@0.3.0` import `wasmtime serve` provides by default — so

@@ -134,14 +134,15 @@ public final class WasmComponentBuilder {
 
 	/**
 	 * The interfaces of the base/sockets blocks a {@code %component-import} may bind FROM
-	 * THE BLOCK (the wait.lisp shim's wasi:clocks/monotonic-clock): they are part of the
-	 * fixed WASI surface, so importing them again as user instances would be invalid.
-	 * Maps each interface to the member fields the block actually declares -- binding
-	 * anything else would only fail component validation with a byte offset.
+	 * THE BLOCK (the wait.lisp shim's wasi:clocks/monotonic-clock, environment.lisp's
+	 * wasi:cli/environment): they are part of the fixed WASI surface, so importing them
+	 * again as user instances would be invalid. Maps each interface to the member fields
+	 * the block actually declares -- binding anything else would only fail component
+	 * validation with a byte offset.
 	 */
 	private static final java.util.Map<String, java.util.Set<String>> FIXED_BLOCK_IFACES = java.util.Map.of(
 			"wasi:clocks/monotonic-clock@0.3.0", java.util.Set.of("now", "wait-for"), "wasi:cli/stdin@0.3.0",
-			java.util.Set.of("read-via-stream"));
+			java.util.Set.of("read-via-stream"), "wasi:cli/environment@0.3.0", java.util.Set.of("get-environment"));
 
 	private WasmComponentBuilder() {
 	}
@@ -1176,12 +1177,13 @@ public final class WasmComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
 		// Block-declared interfaces the program binds (wait.lisp's monotonic-clock,
-		// stdin.lisp's wasi:cli/stdin): lowered FROM the block's own import instances
-		// (component funcs 11.., core funcs 25.., core instances 3..). Emits nothing
-		// when there are none.
-		final FixedIo io = lowerFixedFromBlock(c, fixed, java.util.Map.of("wasi:clocks/monotonic-clock@0.3.0",
-				INST_MONO_CLOCK, "wasi:cli/stdin@0.3.0", INST_STDIN), new java.util.LinkedHashMap<>(), 11, 25,
-				T_RUN_FUNC + 1, 3);
+		// stdin.lisp's wasi:cli/stdin, environment.lisp's wasi:cli/environment): lowered
+		// FROM the block's own import instances (component funcs 11.., core funcs 25..,
+		// core instances 3..). Emits nothing when there are none.
+		final FixedIo io = lowerFixedFromBlock(c, fixed,
+				java.util.Map.of("wasi:clocks/monotonic-clock@0.3.0", INST_MONO_CLOCK, "wasi:cli/stdin@0.3.0",
+						INST_STDIN, "wasi:cli/environment@0.3.0", INST_ENVIRON),
+				new java.util.LinkedHashMap<>(), 11, 25, T_RUN_FUNC + 1, 3);
 		// User WIT-interface imports (rontolisp:wit-import): instance types, import
 		// instances (from 11, right after the block's 0-10), function aliases and
 		// lowered core funcs continue after the fixed surface. Emits nothing when there
