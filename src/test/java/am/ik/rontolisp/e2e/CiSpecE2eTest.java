@@ -100,11 +100,11 @@ class CiSpecE2eTest {
 
 		Spec spec = loadSpec();
 		Path program = writeProgram(spec);
-		String wasmGuardFailure = wasmCompileMemoryGuard(bin, program);
+		WasmGuard guard = wasmCompileMemoryGuard(bin, program);
 
 		List<DynamicNode> backends = new ArrayList<>();
 		for (Backend backend : Backend.values()) {
-			backends.add(backendNode(backend, bin, program, spec, wasmGuardFailure));
+			backends.add(backendNode(backend, bin, program, spec, guard));
 		}
 		return backends.stream();
 	}
@@ -117,21 +117,46 @@ class CiSpecE2eTest {
 	 * does not fail here, it gets the whole CI runner OOM-killed ("The runner has
 	 * received a shutdown signal", no stderr, no timeout, every other backend in the run
 	 * cancelled as a fail-fast peer). The bound and its measurements are pinned in
-	 * {@code WasmToplevelChunkingTest}.
+	 * {@code WasmToplevelChunkingTest}, and it is checked for BOTH WASM builds (see
+	 * {@link WasmGuard}).
 	 */
 	private static final int MAX_WASM_FUNCTION_BODY_BYTES = 256 * 1024;
 
 	/**
-	 * Compiles the corpus to a core module and reports why the WASM backends must not be
-	 * run, or {@code null} when they are safe to run. Returning a message rather than
-	 * launching wasmtime is the whole point: it turns a machine-killing OOM into an
-	 * ordinary test failure that names its own cause.
+	 * Why each WASM backend must not be run, or {@code null} per backend when it is safe.
+	 * The two are measured separately because the {@code --component} build is NOT the
+	 * Preview 1 module plus a wrapper: an async top level (which the corpus has, and
+	 * every fetch/serve program has) compiles as an entry+resume pair, so the component's
+	 * bodies are cut differently and either one can be the larger. Guarding only the core
+	 * build let a 650 KB component body through while the core build's largest was 214
+	 * KB, and the runner was OOM-killed on the component leg.
 	 */
-	private static @Nullable String wasmCompileMemoryGuard(Path bin, Path program) {
+	private record WasmGuard(@Nullable String wasm, @Nullable String component) {
+
+		@Nullable String forBackend(Backend backend) {
+			return backend == Backend.WASM_COMPONENT ? this.component : this.wasm;
+		}
+	}
+
+	/**
+	 * Compiles the corpus both ways and reports why each WASM backend must not be run, or
+	 * {@code null} for one that is safe to run. Returning a message rather than launching
+	 * wasmtime is the whole point: it turns a machine-killing OOM into an ordinary test
+	 * failure that names its own cause.
+	 */
+	private static WasmGuard wasmCompileMemoryGuard(Path bin, Path program) {
+		return new WasmGuard(guardOne(bin, program, "compile-wasm-guard", "guard.wasm", List.of()),
+				guardOne(bin, program, "compile-wasm-component-guard", "guard.component.wasm", List.of("--component")));
+	}
+
+	private static @Nullable String guardOne(Path bin, Path program, String label, String output,
+			List<String> extraFlags) {
 		byte[] module;
 		try {
-			execLabeled("compile-wasm-guard", List.of(bin.toString(), program.toString(), "-o", "guard.wasm"));
-			module = Files.readAllBytes(workDir.resolve("guard.wasm"));
+			List<String> command = new ArrayList<>(List.of(bin.toString(), program.toString(), "-o", output));
+			command.addAll(extraFlags);
+			execLabeled(label, command);
+			module = Files.readAllBytes(workDir.resolve(output));
 		}
 		catch (Exception ex) {
 			// Not this guard's job to report a compile failure; the backend legs run
@@ -142,23 +167,23 @@ class CiSpecE2eTest {
 		if (largest <= MAX_WASM_FUNCTION_BODY_BYTES) {
 			return null;
 		}
-		return ("refusing to run wasmtime: largest emitted function body is %d bytes, over the %d byte bound. "
+		return ("refusing to run wasmtime: largest emitted function body of %s is %d bytes, over the %d byte bound. "
 				+ "A wasmtime cold compile needs memory superlinear in that number (850 KB of body -> 25.8 GB), "
 				+ "so running this module would OOM-kill the CI runner instead of failing. "
 				+ "See WasmToplevelChunkingTest.")
-			.formatted(largest, MAX_WASM_FUNCTION_BODY_BYTES);
+			.formatted(output, largest, MAX_WASM_FUNCTION_BODY_BYTES);
 	}
 
-	private static DynamicContainer backendNode(Backend backend, Path bin, Path program, Spec spec,
-			@Nullable String wasmGuardFailure) {
+	private static DynamicContainer backendNode(Backend backend, Path bin, Path program, Spec spec, WasmGuard guard) {
 		if (backend == Backend.WASM || backend == Backend.WASM_COMPONENT) {
 			if (!onPath("wasmtime")) {
 				return dynamicContainer(backend.name(),
 						Stream.of(dynamicTest("(skipped)", () -> abort("wasmtime not on PATH"))));
 			}
-			if (wasmGuardFailure != null) {
+			String guardFailure = guard.forBackend(backend);
+			if (guardFailure != null) {
 				return dynamicContainer(backend.name(),
-						Stream.of(dynamicTest("(module too large to run)", () -> fail(wasmGuardFailure))));
+						Stream.of(dynamicTest("(module too large to run)", () -> fail(guardFailure))));
 			}
 		}
 

@@ -383,14 +383,16 @@ final class WasmAsyncEmit {
 	/**
 	 * Compiles a body sequence with resume-routing guards, leaving the last statement's
 	 * value (nil when empty). A sequence without awaits compiles exactly as the plain
-	 * emission would. The implicit TOP-LEVEL resume instead outlines every await-free run
-	 * of statements into its own plain function ({@link #compileTopLevelChunk}): a
-	 * program's top level is unbounded (the ci-spec corpus concatenates hundreds of
-	 * cases), and a single resume carrying all of it -- with the spill-mirrored locals
-	 * and per-statement guards -- grows past what Cranelift compiles in sane time
-	 * (superlinear; the full corpus never finished). The chunks are the traditional plain
-	 * shape the non-async {@code _start} always had, and the resume keeps only the await
-	 * statements plus one guarded direct call per chunk.
+	 * emission would. The implicit TOP-LEVEL resume instead outlines its await-free runs
+	 * into plain functions ({@link WasmToplevelEmit}): a program's top level is unbounded
+	 * (the ci-spec corpus concatenates hundreds of cases), and a single resume carrying
+	 * all of it -- with the spill-mirrored locals and per-statement guards -- grows past
+	 * what Cranelift compiles in sane time (superlinear; the full corpus never finished).
+	 * The chunks are the traditional plain shape the non-async {@code _start} always had,
+	 * and the resume keeps only the await statements plus one guarded direct call per
+	 * chunk. Cutting only at the awaits does not bound anything by itself -- an
+	 * await-free run is as long as the program -- so the runs go through the same
+	 * size-bounded chunker the synchronous top level uses.
 	 * @param stmts the statements
 	 * @param ctx the resume compilation context
 	 */
@@ -445,64 +447,18 @@ final class WasmAsyncEmit {
 		ctx.writer.writeHeapType(Type.EQ.code());
 	}
 
-	// Outlines the gathered await-free run into a chunk function and emits the
-	// guarded call ($rt == 0 only: a resume targeting a later state skips it).
+	// Outlines the gathered await-free run into size-bounded chunk functions, each
+	// called under the $rt == 0 guard (a resume targeting a later state skips it).
+	// The run's boxed-variable set is computed ONCE, over the whole run, so where
+	// WasmToplevelEmit chooses to cut cannot change how a variable is stored.
 	private static void flushTopLevelChunk(List<LispVal> run, WasmLispCompiler.Ctx ctx) {
 		if (run.isEmpty()) {
 			return;
 		}
-		int funcIndex = compileTopLevelChunk(new ArrayList<>(run), ctx);
+		List<LispVal> stmts = new ArrayList<>(run);
 		run.clear();
-		WasmWriter w = ctx.writer;
-		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(RT_SLOT);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
-		ctx.wasmCtrlDepth++;
-		w.write(Instruction.REF_NULL);
-		w.writeHeapType(Type.EQ.code());
-		w.write(Instruction.CALL);
-		w.writeSignedLeb128(funcIndex);
-		w.write(Instruction.DROP);
-		ctx.wasmCtrlDepth--;
-		w.write(Instruction.END);
-	}
-
-	/**
-	 * Compiles an await-free run of top-level statements into its own arity-0
-	 * lambda-table function ({@code (env) -> eq}, called directly -- never through the
-	 * dispatch), preserving the top-level compilation context ({@code topLevel} /
-	 * {@code usesEval}, so eval-global mirroring keeps working inside a chunk).
-	 * @param stmts the run
-	 * @param proto the resume context (supplies the shared module state)
-	 * @return the chunk's function index
-	 */
-	private static int compileTopLevelChunk(List<LispVal> stmts, WasmLispCompiler.Ctx proto) {
-		int funcId = proto.nextFuncId[0]++;
-		int funcIndex = proto.userFuncBase + proto.functions.size() + proto.lambdaDecls.size();
-		int lambdaIdx = proto.lambdaDecls.size();
-		// Reserve the slot first, like compileResume: lambdas discovered while
-		// compiling the chunk body append after it.
-		proto.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(funcId, "_toplevel_chunk_" + funcId, List.of(), false,
-				List.of(), List.of(), funcIndex, new byte[] { 0x00, 0x00, 0x0b }));
-		ByteArrayOutputStream bodyBuf = new ByteArrayOutputStream();
-		WasmWriter bodyWriter = new WasmWriter(bodyBuf);
-		WasmLispCompiler.Ctx ctx = freshCtx(proto, bodyWriter, bodyBuf);
-		ctx.topLevel = true;
-		ctx.usesEval = proto.usesEval;
-		ctx.closureEnvSlot = 0;
-		ctx.nextLocal = 1;
-		ctx.boxedVars = FreeVarAnalyzer.findCapturedVars(stmts, new HashSet<>(), proto.functions.keySet());
-		for (LispVal stmt : stmts) {
-			WasmExprCompiler.compileExpr(stmt, ctx);
-			bodyWriter.write(Instruction.DROP);
-		}
-		bodyWriter.write(Instruction.REF_NULL);
-		bodyWriter.writeHeapType(Type.EQ.code());
-		bodyWriter.write(Instruction.END);
-		proto.lambdaDecls.set(lambdaIdx, new WasmLispCompiler.LambdaInfo(funcId, "_toplevel_chunk_" + funcId, List.of(),
-				false, List.of(), List.of(), funcIndex, WasmLispCompiler.buildLocalsAndPatch(ctx, 1, bodyBuf)));
-		return funcIndex;
+		Set<String> boxedVars = FreeVarAnalyzer.findCapturedVars(stmts, new HashSet<>(), ctx.functions.keySet());
+		WasmToplevelEmit.emit(stmts, ctx, boxedVars, true);
 	}
 
 	/**

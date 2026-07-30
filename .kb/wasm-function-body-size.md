@@ -23,13 +23,29 @@ Linux amd64:
 | 850 KB (before chunking) | 25.8 GB | 36 s |
 | **75 KB (after chunking)** | **3.7 GB** | **1.8 s** |
 
+Peak RSS also scales with how many bodies wasmtime has in flight, which is one per
+core, so the numbers above are a 4-core-runner shape. Measured on a 64-core host the
+same corpus costs more in absolute terms but the ratio is what carries: the
+`--component` build of the corpus went from **23.2 GB / 19.2 s** (largest body
+650 KB, async top level un-chunked) to **9.0 GB / 5.1 s** (largest body 214 KB) --
+the latter being exactly what the Preview 1 module of the same corpus costs.
+
 The last row is the same corpus after `WasmToplevelEmit` split the top level: the
 module is byte-for-byte equivalent in behaviour (identical 1405 lines of output on
 all four backends) and costs 7x less memory and 20x less time to compile.
 
-Pinned by `WasmToplevelChunkingTest` (bound: 256 KiB) and guarded before the fact by
+Pinned by `WasmToplevelChunkingTest` (bound: 256 KiB) -- one case per top-level shape,
+synchronous and async -- and guarded before the fact by
 `CiSpecE2eTest.wasmCompileMemoryGuard`, which refuses to launch wasmtime on a module
 over that bound.
+
+**The guard must measure the `--component` build too, separately.** A component is not
+the Preview 1 module plus a wrapper: an async top level compiles as an entry+resume
+pair, so its bodies are cut differently and either build can be the larger one.
+`WasmModuleInspector.largestFunctionBodySize` therefore accepts a component binary and
+walks the core modules it embeds. Guarding only the core build is what let a 650 KB
+component body through while the core build's largest was 214 KB -- the guard passed,
+the Preview 1 leg passed, and the runner died on the component leg.
 
 ## Why this is easy to miss
 
@@ -69,11 +85,25 @@ emits `ref.null eq; call <chunk>; drop` per chunk into `_start`. Each chunk is a
 arity-0 callable registered as a `LambdaInfo` with a precompiled body, called
 directly, never through the dispatch.
 
-The **async top level already chunked** for the same reason:
-`WasmAsyncEmit.compileTopLevelChunk` outlines each await-free run, and its doc comment
-records that the un-chunked form "grows past what Cranelift compiles in sane time
-(superlinear; the full corpus never finished)". The synchronous path is the one that
-was left behind; both are now bounded.
+The **async top level** (`--component` with any `async-defun`/`async-lambda`/`await`,
+i.e. every fetch/serve program and the component leg of the ci-spec corpus) reaches the
+same chunker. Its resume outlines each await-free RUN of statements
+(`WasmAsyncEmit.compileTopLevelChunkedProgn`) and keeps only the await statements plus
+one guarded direct call per chunk -- but **cutting at the awaits bounds nothing**: an
+await-free run is as long as the program. It used to outline each run *whole*, which is
+how the ci-spec corpus got a 650 KB body on the component path while the synchronous
+path of the identical program stayed at 214 KB. The runs now go through
+`WasmToplevelEmit.emit(exprs, ctx, boxedVars, guarded=true)`, the same size-bounded
+chunker, with each chunk call wrapped in the resume's `$rt == 0` guard.
+
+Two things the async path needs that the synchronous one does not:
+
+- Its chunk contexts carry a `boxedVars` set (a captured top-level variable must be
+  boxed the same way in every chunk). It is computed ONCE over the whole run and handed
+  to every chunk cut from it, so **where the run is cut cannot change how a variable is
+  stored** -- the bodies are byte-identical to the single outlined run they replace.
+- Each chunk call sits under `$rt == 0`, so a resume targeting a later suspend state
+  skips the already-executed chunks. One guard per chunk, not per run.
 
 Why the pieces are where they are:
 
@@ -102,14 +132,20 @@ Why the pieces are where they are:
 - Chunks are registered during Pass 2b: Pass 2c iterates `lambdaDecls` by index and
   picks up entries appended while it runs, but the function section (built later) will
   not.
-- A chunk context leaves `boxedVars` at its default, which is what `_start` itself
-  uses, so a chunk's body is byte-identical to the run it was cut from.
+- A chunk context on the synchronous path leaves `boxedVars` at its default, which is
+  what `_start` itself uses, so a chunk's body is byte-identical to the run it was cut
+  from. The async path passes its run's set for the same reason (above).
 
 ## Re-evaluation trigger
 
 Raise the 256 KiB bound only with fresh cold-cache measurements on the smallest CI
 runner in use, and update the table above in the same change. The bound is a statement
 about how much memory a user needs to run their own program, not a test detail.
+
+A new emission path that outlines code into functions must be asked the same question
+the async top level failed: *is the piece it cuts bounded in BYTES, or only by where
+some syntactic marker happens to fall?* An await, a `handler-case`, a `tagbody` tag are
+all syntactic markers, and none of them bound anything.
 
 Chunking bounds the TOP LEVEL, which is the body that grows with program length. One
 enormous user `defun` is still one function and still pays the superlinear cost --
