@@ -43,6 +43,22 @@ when the data slot IS a cell). The whole fill-pointer surface
 runs on it unchanged, and the marker survives `adjust-array` because become
 mutates the existing header in place.
 
+**A COMPUTED `:element-type` (`.todo/219`, 2026-07-30)**: the recognizers
+above read the designator at EXPANSION time, so a `:element-type` held in a
+variable or produced by a call (`(stream-element-type s)`) used to fall
+straight through to the general array — and with `stringp` false, a
+`read-sequence` into it read BYTES from a character stream.
+`LispMacroExpander.lowerRuntimeElementTypeMakeArray` (tried first by
+`Jvm/WasmArrayCompiler`, before the `:initial-contents` lowerings) turns such
+a call into a runtime `member` dispatch: the character designators pick the
+`:element-type 'character` allocation above, anything else drops the keyword
+and takes the general one — the packed float / `(unsigned-byte N)` arrays are
+OPTIMIZATIONS of the general array, so that is always a correct answer, just
+not always the packed one. "Literal" here means a `(quote ...)` form, the
+unquoted `(unsigned-byte 8)` compound shape, or a bare symbol in
+`LITERAL_ELEMENT_TYPE_NAMES`; the interpreter needs no lowering because its
+`make-array` reads the designator at run time already.
+
 String behavior comes from ON-DEMAND NORMALIZATION into the immutable
 runtime string: JVM `_strv(Object)` (JvmArrayRuntimeBuilder, emitted under
 the same array gate) renders the active prefix quote-framed; WASM

@@ -62,7 +62,7 @@
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | 文字列と改行を出力ストリーム(または標準出力)に書き込みます。文字列を返します |
 | `read-byte` | `(read-byte stream)`, `(read-byte stream nil -1)` | バイナリ入力ストリームから 1 バイト(0-255)を読み込みます。EOF では `end-of-file` コンディションを通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
 | `write-byte` | `(write-byte 255 stream)` | バイナリ出力ストリームに生の 1 バイト(0-255)を書き込みます。バイトを返します |
-| `read-sequence` | `(read-sequence buf stream)`, `(read-sequence buf stream :start 2 :end 4)` | バイナリ入力ストリームのバイトでベクタを埋めます。充填位置を返します。`:start`/`:end` はリテラルのキーワードでなければなりません |
+| `read-sequence` | `(read-sequence buf stream)`, `(read-sequence buf stream :start 2 :end 4)` | 入力ストリームからベクタを埋めます。バッファが文字ベクタなら文字、それ以外はバイトです。充填位置を返します。`:start`/`:end` はリテラルのキーワードでなければなりません |
 | `write-sequence` | `(write-sequence "abcd" s :start 1 :end 3)`, `(write-sequence buf stream)` | シーケンスをストリームに書き込み、それを返します。文字列は（`write-string` と同様に）文字として書き込まれ、バイト(0-255)のベクタはバイナリ出力ストリームに書き込まれます。`:start`/`:end` はリテラルのキーワードでなければなりません |
 | `read` | `(read)`, `(read stream)` | 標準入力(または `open`/`with-open-file` で開いた入力ストリーム)からS式を1つ読み込みます(3つのバックエンドすべて)。EOFでは `nil` |
 | `read-from-string` | `(read-from-string "(+ 1 2)")` | 文字列からデータを1つパースします(3つのバックエンドすべて)。省略可能な `eof-error-p`/`eof-value` および `:start`/`:end` 引数はサポートされません |
@@ -152,7 +152,7 @@
 | `assoc` | `(assoc 'b '((a . 1) (b . 2)))` | `(b . 2)`(carがキーに一致する最初のペア、またはnil。既定では `eql` で比較し、省略可能な `:test`/`:key` キーワードを取ります。例: `(assoc "b" '(("a" . 1) ("b" . 2)) :test #'equal)`) |
 | `assoc-if` | `(assoc-if #'oddp '((2 a) (3 b)))` | `(3 b)`(carが述語を満たす最初のペア、またはnil) |
 | `getf` | `(getf '(:a 1 :b 2) :b)` | `2`(プロパティリスト中で指標に続く値、またはnil。`remf` の相棒。引数は2つのみで `&optional default` はありません) |
-| `last` | `(last '(1 2 3))` | `(3)`(最後のconsセル、空リストではnil) |
+| `last` | `(last '(1 2 3))`, `(last '(1 2 3) 2)` | `(3)`、`(2 3)`(最後のconsセル、または最後の `n` 個のcons。空リストではnil) |
 | `butlast` | `(butlast '(1 2 3))` | `(1 2)`(最後の要素を除いたコピー。空または単一要素のリストではnil) |
 | `remove` | `(remove 2 '(1 2 3 2))` | `(1 3)`(指定した要素と `eql` になる要素を除いた新しいリスト。省略可能な `:test`/`:key` キーワードを取ります) |
 | `remove-if` | `(remove-if #'evenp '(1 2 3 4))` | `(1 3)`(述語を満たす要素を除いた新しいリスト) |
@@ -241,10 +241,10 @@
 | `apply` | `(apply #'+ 1 2 '(3 4))` | `10`(先頭の引数と展開された最終リストに関数を適用します) |
 | `values` | `(values 1 2 3)`, `(multiple-value-list (values 1 2 3))` | `1`, `(1 2 3)` -- 通常の文脈では主値だけが残ります。`multiple-value-bind`/`-list`/`-call`/`nth-value` はリテラルの `(values ...)` 呼び出し、多値の組み込み関数（`floor` ファミリ、`gethash`、`parse-integer`、`values-list`）、`(values ...)` を返すユーザ関数の全ての値を受け取ります |
 | `reduce` | `(reduce #'+ '(1 2 3) :initial-value 0)` | 左畳み込み: `(f (f (f init a) b) c)`。素の形式 `(reduce f list)` は最初の要素を初期値に使います。`:initial-value` キーワード(リテラル)は明示的な初期値を与えます |
-| `every` | `(every #'evenp '(2 4 6))` | すべての要素で述語が非nilなら `t`、そうでなければ `nil`(単一リスト形式) |
-| `some` | `(some #'oddp '(2 4 5))` | 最初の非nilな述語結果、すべての要素が失敗すれば `nil`(単一リスト形式) |
-| `notany` | `(notany #'evenp '(1 3 5))` | すべての要素で述語がnilなら `t`、そうでなければ `nil`(`some` の補) |
-| `notevery` | `(notevery #'evenp '(2 4 5))` | いずれかの要素で述語がnilなら `t`、そうでなければ `nil`(`every` の補) |
+| `every` | `(every #'evenp '(2 4 6))`, `(every #'< '(1 2) '(3 4))` | すべての要素(の組)で述語が非nilなら `t`、そうでなければ `nil`。シーケンスは何個でも渡せ、最短で打ち切ります |
+| `some` | `(some #'oddp '(2 4 5))`, `(some #'> '(1 5) '(3 4))` | 最初の非nilな述語結果、すべての要素(の組)が失敗すれば `nil`。シーケンスは何個でも渡せます |
+| `notany` | `(notany #'evenp '(1 3 5))` | すべての要素(の組)で述語がnilなら `t`、そうでなければ `nil`(`some` の補) |
+| `notevery` | `(notevery #'evenp '(2 4 5))` | いずれかの要素(の組)で述語がnilなら `t`、そうでなければ `nil`(`every` の補) |
 | `symbol-function` | `(symbol-function 'car)` | シンボルが指す関数を返します(コンパイラ: 引数は引用されたシンボルリテラルでなければなりません) |
 | `identity` | `(identity 42)` | `42`(引数をそのまま返します) |
 | `make-hash-table` | `(make-hash-table)`, `(make-hash-table :test 'equal)` | 空のハッシュテーブルを作成します。`:test` は受け付けられますが情報的なものです(下記の注記を参照)。`:size` などの他のキーワードは無視されます |
@@ -259,7 +259,7 @@
 | `hash-table-rehash-threshold` | `(hash-table-rehash-threshold table)` | 標準の既定値 `1.0` |
 | `hash-table-p` | `(hash-table-p x)` | `x` がハッシュテーブルなら `t`、そうでなければ `nil` |
 | `maphash` | `(maphash (lambda (k v) ...) table)` | 副作用のために各キー/値ペアに関数を呼びます。nilを返します |
-| `make-array` | `(make-array 5 :initial-element 0)`, `(make-array (list 2 3))` | 任意の階数の配列を作成します。`:initial-element` はすべてのセルを設定します(省略時はnil) |
+| `make-array` | `(make-array 5 :initial-element 0)`, `(make-array (list 2 3))` | 任意の階数の配列を作成します。`:initial-element` はすべてのセルを設定します(省略時はnil)。`:element-type` は計算された値でも構いません |
 | `aref` | `(aref a i)`, `(aref a i j)` | 指定した添字の要素を返します |
 | `(setf (aref a i j) v)` | `(setf (aref a 0 0) 1)` | 添字の位置に `v` を格納します。placeに対する `incf`/`decf`/`push` と組み合わせて使えます |
 | `vector` | `(vector 1 2 3)` | `#(1 2 3)`(引数からなる新しい階数1の配列) |
@@ -270,7 +270,7 @@
 | `array-total-size` | `(array-total-size (make-array (list 2 3)))` | `6`(要素の総数) |
 | `row-major-aref` | `(row-major-aref (make-array (list 2 3)) 4)` | フラットな行優先インデックスの要素。階数に依存せず、`setf` の場所としても使えます |
 | `array-row-major-index` | `(array-row-major-index (make-array (list 2 3)) 1 1)` | `4`(添字のフラットな行優先インデックス) |
-| `coerce` | `(coerce '(1 2 3) 'vector)`, `(coerce "ab" 'list)` | `#(1 2 3)`、`(#\a #\b)`(結果型はリテラルの `'list`/`'vector`/`'string` のみ) |
+| `coerce` | `(coerce '(1 2 3) 'vector)`, `(coerce "ab" 'list)` | `#(1 2 3)`、`(#\a #\b)`。`'list`/`'vector`/`'string` と浮動小数点数のファミリ、`t`、および計算された結果型 |
 | `fill-pointer` | `(fill-pointer v)` | `:fill-pointer` ベクタのフィルポインタ(実効長)。`setf` 可能な場所でもある |
 | `array-has-fill-pointer-p` | `(array-has-fill-pointer-p a)` | 配列がフィルポインタを持てば `t`、そうでなければ `nil` |
 | `adjustable-array-p` | `(adjustable-array-p a)` | 配列が `:adjustable` で作成されていれば `t`、そうでなければ `nil` |

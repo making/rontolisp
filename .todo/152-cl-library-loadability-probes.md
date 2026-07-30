@@ -62,9 +62,10 @@ verification against the actual Quicklisp dist at probe time)
     `alexandria:mappend` is `(apply #'mapcar function lists)`). Fixed in the same
     pass (`BuiltinFunctionWrappers.mapcarWrapper`); the rest of the map family
     stays divergent, `.todo/218`.
-  - Four missing primitives still keep part of the API dark (`coerce` to a
-    computed result type, `(last list n)`, multi-sequence `every`, `read-sequence`
-    into a character buffer): `.todo/219`.
+  - Those four missing primitives (`coerce` to a computed result type,
+    `(last list n)`, multi-sequence `every`, `read-sequence` into a character
+    buffer) are CLOSED -- `.todo/219`, 2026-07-30. Only `type=` is still dark
+    (`subtypep`'s secondary value, `.todo/214`).
 - **`cl-ppcre`, `ironclad` — DONE** (see `.kb/asdf.md`); both are on the guide's
   loadable list.
 

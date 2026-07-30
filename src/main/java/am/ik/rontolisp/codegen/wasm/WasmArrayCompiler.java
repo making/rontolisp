@@ -74,6 +74,14 @@ final class WasmArrayCompiler {
 		if (findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD) != null) {
 			throw new UnsupportedOperationException("make-array: :displaced-index-offset requires :displaced-to");
 		}
+		LispVal runtimeElementTypeLowering = am.ik.rontolisp.LispMacroExpander.lowerRuntimeElementTypeMakeArray(cons);
+		if (runtimeElementTypeLowering != null) {
+			// A :element-type held in a VARIABLE picks the representation at run time
+			// (character vector vs. general array), since no expansion-time recognizer
+			// can see it.
+			WasmExprCompiler.compileExpr(runtimeElementTypeLowering, ctx);
+			return;
+		}
 		LispVal charContentsLowering = am.ik.rontolisp.LispMacroExpander.lowerCharacterInitialContentsMakeArray(cons);
 		if (charContentsLowering != null) {
 			// A rank-1 character array built from :initial-contents is a fresh string

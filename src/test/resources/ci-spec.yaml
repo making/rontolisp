@@ -5910,3 +5910,120 @@ cases:
       (1)
       (1 2)
       (1 2)
+
+  - name: last-with-a-count
+    source: |
+      ;; (last list &optional n): the last n conses. n beyond the length answers
+      ;; the whole list, n of 0 the terminating atom -- alexandria:rotate wants
+      ;; both. As a VALUE the count is optional, so the wrapper dispatches on it.
+      (print (last '(1 2 3)))
+      (print (last '(1 2 3) 2))
+      (print (last '(1 2 3) 0))
+      (print (last '(1 2 3) 5))
+      (print (last '(1 2 . 3) 1))
+      (print (last nil 2))
+      (print (funcall (function last) '(1 2 3) 2))
+      (print (funcall (function last) '(1 2 3)))
+    expected: |
+      (3)
+      (2 3)
+      NIL
+      (1 2 3)
+      (2 . 3)
+      NIL
+      (2 3)
+      (3)
+
+  - name: every-some-over-many-sequences
+    source: |
+      ;; (every predicate &rest sequences): one argument per sequence, the walk
+      ;; stops at the SHORTEST. notany/notevery ride on some/every, and the
+      ;; first-class wrappers forward the extra sequences the same way.
+      (print (every (function <) '(1 2) '(3 4)))
+      (print (every (function <) '(1 2) '(3 0)))
+      (print (every (function <) '(1 2 3) '(9 9)))
+      (print (every (function char=) "abc" "abd"))
+      (print (every (lambda (a b c) (= (+ a b) c)) '(1 2) '(3 4) '(4 6)))
+      (print (some (function >) '(1 5) '(3 4)))
+      (print (some (function >) '(1 2) '(3 4)))
+      (print (notany (function >) '(1 2) '(3 4)))
+      (print (notevery (function <) '(1 2) '(3 0)))
+      (print (funcall (function every) (function <) '(1 2) '(3 4)))
+      (print (funcall (function some) (function >) '(1 5) '(3 4)))
+      (print (apply (function every) (list (function <) '(1 2) '(3 4))))
+    expected: |
+      T
+      NIL
+      T
+      NIL
+      T
+      T
+      NIL
+      T
+      T
+      T
+      T
+      T
+
+  - name: coerce-to-a-computed-result-type
+    source: |
+      ;; The result type in a VARIABLE dispatches at run time over the same
+      ;; families the literal path handles (alexandria:copy-sequence / median /
+      ;; coercef). A computed COMPOUND spec dispatches on its head; t is the
+      ;; identity.
+      (defun coerce-cs (type seq) (coerce seq type))
+      (print (coerce-cs 'list (vector 1 2)))
+      (print (coerce-cs 'list "ab"))
+      (print (coerce-cs 'vector '(1 2)))
+      (print (coerce-cs 'string '(#\a #\b)))
+      (print (coerce-cs 'simple-string '(#\a #\b)))
+      (print (coerce-cs '(vector t) '(1 2)))
+      (print (coerce-cs t '(1 2)))
+      (print (coerce-cs 'double-float 3))
+    expected: |
+      (1 2)
+      (#\a #\b)
+      #(1 2)
+      "ab"
+      "ab"
+      #(1 2)
+      (1 2)
+      3.0
+
+  - name: read-sequence-into-a-character-buffer
+    source: |
+      ;; The BUFFER decides which element is read: a character vector -- the one
+      ;; rank-1 array that answers stringp -- reads characters, not bytes. The
+      ;; element type may be COMPUTED, which is how alexandria allocates it.
+      (print (with-input-from-string (s "abcdef")
+               (let ((buf (make-array 4 :element-type 'character)))
+                 (list (read-sequence buf s) buf))))
+      (print (with-input-from-string (s "ab")
+               (let ((buf (make-array 4 :element-type 'character)))
+                 (let ((n (read-sequence buf s))) (list n (subseq buf 0 n))))))
+      (print (with-input-from-string (s "xyz")
+               (let ((buf (make-array 3 :element-type (stream-element-type s))))
+                 (list (read-sequence buf s) buf))))
+    expected: |
+      (4 "abcd")
+      (2 "ab")
+      (3 "xyz")
+
+  - name: apply-using-wrapper-reached-by-funcall
+    source: |
+      ;; The map* / every / some wrappers forward a RUNTIME number of arguments
+      ;; with apply, so a backend gating its apply runtime on the source program
+      ;; must count the injected wrappers too -- on WASM this answered (NIL NIL)
+      ;; before the gate learned about them. This case pins the cross-backend
+      ;; ANSWER only: the driver concatenates every case into one program, which
+      ;; uses apply elsewhere, so the isolated gate lives in
+      ;; WasmLispCompilerIntegrationTest.applyUsingWrapperReachedByFuncall...
+      (print (funcall (function mapcar) (function list) '(1 2) '(3 4)))
+      (print (funcall (function mapcan) (function list) '(1 2) '(3 4)))
+      (print (funcall (function every) (function <) '(1 2) '(3 4)))
+      (print (funcall (function some) (function >) '(1 5) '(3 4)))
+    expected: |
+      ((1 3) (2 4))
+      (1 3 2 4)
+      T
+      T

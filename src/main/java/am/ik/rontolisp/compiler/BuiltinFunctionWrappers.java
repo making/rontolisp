@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 
 /**
@@ -105,6 +106,39 @@ public final class BuiltinFunctionWrappers {
 		gated.add(LispNames.PEEK_CHAR);
 		gated.add(LispNames.READ_BYTE);
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
+	}
+
+	/**
+	 * The wrappers whose BODY calls {@code apply}: the {@code map*} family, {@code every}
+	 * / {@code some} and {@code funcall} itself. All of them forward a runtime number of
+	 * arguments, which is what {@code apply} is for.
+	 *
+	 * <p>
+	 * They are injected ungated, but a backend that GATES its {@code apply} runtime on
+	 * the source program using {@code apply} would not see them -- the gate scans the
+	 * program, not the injected wrappers. On WASM that gate is {@code usesEval}, and
+	 * missing it did not fail loudly: {@code _apply} degrades to a stub answering nil, so
+	 * {@code (funcall #'mapcar #'list '(1 2) '(3 4))} answered {@code (NIL NIL)} in a
+	 * program that used {@code apply} nowhere else. Use
+	 * {@link #referencesApplyingWrapper(LispVal)} in such a gate.
+	 */
+	public static final Set<String> APPLY_USING_FUNCTIONS = Set.of(LispNames.MAPCAR, LispNames.MAPC, LispNames.MAPCAN,
+			LispNames.MAPLIST, LispNames.MAPCON, LispNames.MAPL, LispNames.EVERY, LispNames.SOME, LispNames.FUNCALL);
+
+	/**
+	 * Whether the expression takes any {@link #APPLY_USING_FUNCTIONS} member as a
+	 * first-class function value, i.e. whether an injected wrapper body calling
+	 * {@code apply} can actually be reached at run time.
+	 * @param expr the expression to scan
+	 * @return true when one of those wrappers is reachable
+	 */
+	public static boolean referencesApplyingWrapper(LispVal expr) {
+		for (String name : APPLY_USING_FUNCTIONS) {
+			if (referencesFunctionValue(expr, name)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -280,6 +314,57 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(name, List.of("f", "l", LispNames.LAMBDA_REST, "more"), List.of(dispatch));
 	}
 
+	/**
+	 * The {@code #'every} / {@code #'some} wrapper. Like the {@code map*} family, the
+	 * sequence count is a RUNTIME property here, so a fixed-arity wrapper cannot forward
+	 * the extra sequences -- and unlike the {@code map*} family the arguments are
+	 * SEQUENCES, so each is coerced to a list before the lockstep walk.
+	 *
+	 * <pre>
+	 * (lambda (p s &amp;rest more)
+	 *   (if (null more)
+	 *       (every p s)                                        ; one sequence: the primitive
+	 *       (do ((ss (mapcar (lambda (x) (coerce x 'list)) (cons s more)))
+	 *            (r nil))
+	 *           ((member nil ss) t)                            ; shortest-sequence exit
+	 *         (setq r (apply p (mapcar (lambda (x) (car x)) ss)))
+	 *         (if r nil (return nil))                          ; some: (if r (return r) nil)
+	 *         (setq ss (mapcar (lambda (x) (cdr x)) ss)))))
+	 * </pre>
+	 * @param name the operator, called in the single-sequence case and named by the
+	 * wrapper
+	 * @param every true for {@code every}, false for {@code some}
+	 */
+	private static WrapperDef everySomeWrapper(String name, boolean every) {
+		LispVal asLists = callV(LispNames.MAPCAR, coerceToListLambda(),
+				callV(LispNames.CONS, new LispSymbol("s"), new LispSymbol("more")));
+		List<LispVal> bindings = List.of(callV("ss", asLists), callV("r", LispNil.INSTANCE));
+		LispVal exit = listToCons(List.of(callV(LispNames.MEMBER, LispNil.INSTANCE, new LispSymbol("ss")),
+				every ? LispTrue.INSTANCE : LispNil.INSTANCE));
+		LispVal apply = callV(LispNames.APPLY, new LispSymbol("p"),
+				callV(LispNames.MAPCAR, projection(LispNames.CAR), new LispSymbol("ss")));
+		LispVal record = callV(LispNames.SETQ, new LispSymbol("r"), apply);
+		LispVal check = every
+				? listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"), LispNil.INSTANCE,
+						listToCons(List.of(new LispSymbol(LispNames.RETURN), LispNil.INSTANCE))))
+				: listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"),
+						listToCons(List.of(new LispSymbol(LispNames.RETURN), new LispSymbol("r"))), LispNil.INSTANCE));
+		LispVal advance = callV(LispNames.SETQ, new LispSymbol("ss"),
+				callV(LispNames.MAPCAR, projection(LispNames.CDR), new LispSymbol("ss")));
+		LispVal walk = listToCons(
+				List.of(new LispSymbol(LispNames.DO), listToCons(bindings), exit, record, check, advance));
+		LispVal dispatch = listToCons(
+				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "more"), call(name, "p", "s"), walk));
+		return new WrapperDef(name, List.of("p", "s", LispNames.LAMBDA_REST, "more"), List.of(dispatch));
+	}
+
+	// (lambda (x) (coerce x 'list)) -- a string or vector sequence becomes a list of its
+	// elements, a list passes through.
+	private static LispVal coerceToListLambda() {
+		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of((LispVal) new LispSymbol("x"))),
+				coerceTo("x", "LIST")));
+	}
+
 	// (lambda (x) (op x)) -- spelled inline rather than as #'car / #'cdr so the wrapper
 	// body does not depend on another wrapper's setq having run first.
 	private static LispVal projection(String op) {
@@ -297,6 +382,16 @@ public final class BuiltinFunctionWrappers {
 
 	private static WrapperDef ternary(String name) {
 		return new WrapperDef(name, List.of("a", "b", "c"), List.of(call(name, "a", "b", "c")));
+	}
+
+	// (name a &optional b) dispatching on b's presence -- the CL (last list &optional n)
+	// shape. The dispatch is on b being non-nil, which is exact here: an omitted count
+	// and an explicit nil one are not both legal, and 0 -- the one count that could be
+	// mistaken for "absent" in another language -- is true in Lisp.
+	private static WrapperDef unaryOptionalSecond(String name) {
+		LispVal dispatch = listToCons(
+				List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"), call(name, "a", "b"), call(name, "a")));
+		return new WrapperDef(name, List.of("a", LispNames.LAMBDA_OPTIONAL, "b"), List.of(dispatch));
 	}
 
 	// (name a b &optional c) dispatching on c's presence -- the CL subseq shape, whose
@@ -629,20 +724,21 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.CAR), unary(LispNames.CDR), unary(LispNames.FIRST), unary(LispNames.REST),
 			unary(LispNames.SECOND), unary(LispNames.THIRD), unary(LispNames.FOURTH), binary(LispNames.NTH),
 			// Sequence operations (compiled via macro expansion in call position)
-			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unary(LispNames.LAST), unary(LispNames.BUTLAST),
-			binary(LispNames.MEMBER), binary(LispNames.MEMBER_IF), binary(LispNames.FIND), binary(LispNames.FIND_IF),
-			binary(LispNames.FIND_IF_NOT), positionFamily(LispNames.POSITION, true),
+			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unaryOptionalSecond(LispNames.LAST),
+			unary(LispNames.BUTLAST), binary(LispNames.MEMBER), binary(LispNames.MEMBER_IF), binary(LispNames.FIND),
+			binary(LispNames.FIND_IF), binary(LispNames.FIND_IF_NOT), positionFamily(LispNames.POSITION, true),
 			positionFamily(LispNames.POSITION_IF, false), positionFamily(LispNames.POSITION_IF_NOT, false),
 			binary(LispNames.COUNT), binary(LispNames.COUNT_IF), binary(LispNames.ASSOC), binary(LispNames.ASSOC_IF),
 			binary(LispNames.RASSOC), binary(LispNames.RASSOC_IF), ternary(LispNames.ACONS), binary(LispNames.PAIRLIS),
 			unary(LispNames.COPY_ALIST), binaryOptionalThird(LispNames.GETF), unary(LispNames.REMOVE_DUPLICATES),
 			variadicNconc(), unary(LispNames.IDENTITY), unary(LispNames.COPY_LIST), unary(LispNames.NREVERSE),
 			unary(LispNames.MAKE_LIST), binary(LispNames.UNION), binary(LispNames.INTERSECTION),
-			binary(LispNames.SET_DIFFERENCE), binary(LispNames.ADJOIN), binary(LispNames.EVERY), binary(LispNames.SOME),
-			binary(LispNames.REMOVE), binary(LispNames.REMOVE_IF), binary(LispNames.REMOVE_IF_NOT),
-			binary(LispNames.DELETE), binary(LispNames.DELETE_IF), binary(LispNames.DELETE_IF_NOT),
-			ternary(LispNames.SUBSTITUTE), ternary(LispNames.NSUBSTITUTE), binary(LispNames.SORT), variadicStableSort(),
-			unary(LispNames.COPY_SEQ),
+			binary(LispNames.SET_DIFFERENCE), binary(LispNames.ADJOIN),
+			// every/some carry ANY number of sequences, the same as in call position.
+			everySomeWrapper(LispNames.EVERY, true), everySomeWrapper(LispNames.SOME, false), binary(LispNames.REMOVE),
+			binary(LispNames.REMOVE_IF), binary(LispNames.REMOVE_IF_NOT), binary(LispNames.DELETE),
+			binary(LispNames.DELETE_IF), binary(LispNames.DELETE_IF_NOT), ternary(LispNames.SUBSTITUTE),
+			ternary(LispNames.NSUBSTITUTE), binary(LispNames.SORT), variadicStableSort(), unary(LispNames.COPY_SEQ),
 			// The mapping family as first-class values (alexandria hands #'mapcar to
 			// its own combinators). Every member carries ANY number of lists, the same
 			// as in call position -- see mapFamilyWrapper.

@@ -100,8 +100,11 @@ static in call position).
   documented user-visible behavior (`doc/*/reference/functions/mapcan.md`), not an
   oversight; a caller that relies on the argument lists being spliced sees fresh conses
   instead.
-- `every`/`some` remain SINGLE-list (`doc/*/reference/functions.md` says so). They are a
-  different family; widening them is not covered here.
+- `every`/`some` are a different family (they take SEQUENCES, so each argument is coerced
+  to a list first, and there is no listp guard). They take any number of sequences too
+  since `.todo/219` -- `LispMacroExpander.expandEverySomeFamily` plus
+  `BuiltinFunctionWrappers.everySomeWrapper` -- but the lowerings are their own; nothing
+  here is shared with them beyond the shape.
 
 ## Pinning tests
 
@@ -116,7 +119,9 @@ static in call position).
   `compileAndRunMapcarAsValueOverMultipleLists`.
 - `WasmLispCompilerIntegrationTest`: `mapFamilyMultipleListsCompilesAndRuns`,
   `mapFamilyAsValuesOverMultipleListsCompilesAndRuns`,
-  `mapcarAsValueOverMultipleListsCompilesAndRuns`, `mapFamilyTrapsOnNonList`.
+  `mapcarAsValueOverMultipleListsCompilesAndRuns`, `mapFamilyTrapsOnNonList`,
+  `applyUsingWrapperReachedByFuncallCompilesAndRuns` (see the WASM `apply`-gate note below;
+  each of its assertions must be the ONLY form in its program).
 
 ## History
 
@@ -130,3 +135,22 @@ silently empty walk returning `(1 2)` on the JVM, an `unreachable` trap on WASM 
 `mapcan`/`maplist`/`mapcon` silently ignored the extra lists in CALL position too. Closing
 it widened all three implementations above at once rather than making the wrong answers
 loud and stopping there, because the wrong answers only existed for a count CL specifies.
+
+## The wrapper's `apply` and the WASM emission gate
+
+`mapFamilyWrapper` forwards a RUNTIME number of lists, so its body calls `apply`. On WASM
+the `apply` runtime (`_apply`, pulled in with the eval runtime) is gated on `usesEval`,
+which scans the SOURCE program -- and the wrappers are injected AFTER that scan. So a
+program that took `#'mapcar` as a value but used `apply` nowhere else got a wrapper calling
+an `_apply` that had degraded to a nil-answering stub: `(funcall #'mapcar #'list '(1 2)
+'(3 4))` answered `(NIL NIL)` where the interpreter and the JVM answered `((1 3) (2 4))`.
+Not a trap -- the same silent-wrong-list failure mode this file exists to prevent, and it
+survived `.todo/218` because no test spread the lists across a `funcall` (the existing
+value-path cases all used `apply`, which forces the gate on by itself).
+
+`BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS` is the set of wrappers whose bodies call
+`apply` -- the `map*` six, `every`/`some`, and `funcall` itself -- and
+`referencesApplyingWrapper` answers "is one of them reachable as a first-class value here".
+`WasmLispCompiler`'s `usesEval` consults it. **Any new wrapper whose body calls `apply` must
+join that set**, and any backend that gates a runtime on a program scan has the same trap:
+the scan does not see the injected wrappers.

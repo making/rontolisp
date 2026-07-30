@@ -1540,7 +1540,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
-				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL);
+				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL)
+				// An INJECTED wrapper whose body calls apply -- the map* family,
+				// every/some, funcall -- is reachable as soon as the program takes that
+				// operator as a first-class value. The wrappers are added after this
+				// scan, so without this clause _apply stayed a nil-answering stub and
+				// (funcall #'mapcar #'list '(1 2) '(3 4)) answered (NIL NIL) here while
+				// the interpreter and the JVM answered ((1 3) (2 4)).
+				|| program.stream().anyMatch(BuiltinFunctionWrappers::referencesApplyingWrapper);
 		// A funcall/apply through a RUNTIME designator resolves a symbol late through
 		// the name registry (see the _lookup emission gate below).
 		boolean usesRuntimeDesignator = LispMacroExpander.usesRuntimeFunctionDesignator(program);

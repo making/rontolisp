@@ -34,15 +34,22 @@ import java.util.List;
  * dotted {@code #.} read-time-eval form).
  *
  * <p>
+ * The members {@code .todo/219} lit up are here too, one per primitive it widened:
+ * {@code copy-sequence}/{@code coercef}/{@code median} ({@code coerce} to a COMPUTED
+ * result type), {@code rotate} ({@code (last list n)}), alexandria-2's
+ * {@code dim-in-bounds-p}/{@code row-major-index}/{@code rmajor-to-indices}
+ * ({@code every} over two sequences) and {@code read-stream-content-into-string}
+ * ({@code read-sequence} into a character buffer, over a {@code make-array} whose
+ * {@code :element-type} is computed).
+ *
+ * <p>
  * The exercise is {@code examples/asdf/alexandria-demo.lisp} verbatim (minus its header
  * comment); keep the two in sync. Deliberately absent -- each one a gap owned elsewhere,
- * listed in {@code doc/*&#47;guides/asdf-systems.md}:
- * {@code copy-sequence}/{@code median} ({@code coerce} with a computed result type),
- * {@code rotate} ({@code (last list n)}), {@code type=} ({@code subtypep}'s secondary
- * value, {@code .todo/214}), {@code read-file-into-string} ({@code read-sequence} into a
- * character buffer), {@code format-symbol}/{@code ensure-symbol} ({@code intern} with a
- * runtime package) and alexandria-2's {@code dim-in-bounds-p} family ({@code every} over
- * two sequences).
+ * listed in {@code doc/*&#47;guides/asdf-systems.md}: {@code type=} ({@code subtypep}'s
+ * secondary value, {@code .todo/214}), {@code format-symbol}/{@code ensure-symbol}
+ * ({@code intern} with a runtime package) and {@code read-file-into-string} (it works,
+ * but it wants a work file this harness has no place for -- its stream half is covered
+ * above).
  */
 class AlexandriaE2eTest extends AsdfLibraryE2eSupport {
 
@@ -133,6 +140,15 @@ class AlexandriaE2eTest extends AsdfLibraryE2eSupport {
 			(let* ((a (vector 1 2 3)) (b (alexandria:copy-array a)))
 			  (setf (aref b 0) 99)
 			  (print (list (aref a 0) (aref b 0))))
+			(print (alexandria:copy-sequence 'list #(1 2 3)))
+			(print (alexandria:copy-sequence 'vector '(1 2 3)))
+			(print (alexandria:rotate (list 1 2 3 4 5) 2))
+			(print (alexandria:rotate (list 1 2 3 4 5) -2))
+			(print (let ((x '(1 2))) (alexandria:coercef x 'vector) x))
+
+			;; io
+			(print (with-input-from-string (s "stream content")
+			         (alexandria:read-stream-content-into-string s)))
 
 			;; hash tables (results sorted -- iteration order is unspecified)
 			(let ((h (alexandria:alist-hash-table '((:a . 1) (:b . 2)) :test #'eq)))
@@ -153,6 +169,7 @@ class AlexandriaE2eTest extends AsdfLibraryE2eSupport {
 			(print (alexandria:factorial 10))
 			(print (alexandria:binomial-coefficient 10 3))
 			(print (list (alexandria:subfactorial 5) (alexandria:count-permutations 5 2)))
+			(print (alexandria:median '(3 1 4 1 5)))
 
 			;; symbols
 			(print (alexandria:symbolicate 'foo '- 'bar))
@@ -175,6 +192,10 @@ class AlexandriaE2eTest extends AsdfLibraryE2eSupport {
 			(print (alexandria-2:line-up-first 5 (+ 1) (* 2)))
 			(print (alexandria-2:line-up-last 5 (+ 1) (- 20)))
 			(print (alexandria-2:delete-from-plist* (list :a 1 :b 2) :a))
+			(print (list (alexandria-2:dim-in-bounds-p '(2 3) 1 2)
+			             (alexandria-2:dim-in-bounds-p '(2 3) 2 2)))
+			(print (alexandria-2:row-major-index '(2 3) 1 2))
+			(print (alexandria-2:rmajor-to-indices '(2 3) 5))
 			""";
 
 	private static final List<String> EXPECTED = List.of("30", ":NONE", "10", "(1 2)", ":THREE", ":GOT-A", ":TWO", "3",
@@ -182,9 +203,10 @@ class AlexandriaE2eTest extends AsdfLibraryE2eSupport {
 			"(2 5)", "(4 40)", "6", "9", "T", "NIL", "1", "(0 1 2 3 4)", "(1 3 5 7)", "(1 2 3 4 5)", "(1 3 2 4)",
 			"(T NIL)", "(3 (1) (1 2))", "(:A 1 :B 2)", "((:A . 1) (:B . 2))", "(:A 1 :C 3)", "(:B 2)", "(2 :A)",
 			"(T NIL)", "(:A 1)", "(:B 2)", ":DONE", "((1 3 4) 4)", "(T NIL)", "T", "(#\\a #\\c 3)", "(T T)", "(T T)",
-			"1", "5", "T", "(1 2)", "(1 3)", "(2 3)", "(1 2)", "(2 1)", "(1 99)", "(:A :B)", "(1 2)", "3", "3",
-			"(:X 1)", "((:X . 1))", ":X", "1", "(10 0 5)", "5.0", "5/2", "5/4", "3628800", "120", "(44 20)", "FOO-BAR",
-			":HELLO", ":SIGNALLED", ":PARSE-ERROR", "NIL", ":BODY", ":NORMAL", "T", "\"world\"", "12", "14", "(:B 2)");
+			"1", "5", "T", "(1 2)", "(1 3)", "(2 3)", "(1 2)", "(2 1)", "(1 99)", "(1 2 3)", "#(1 2 3)", "(4 5 1 2 3)",
+			"(3 4 5 1 2)", "#(1 2)", "\"stream content\"", "(:A :B)", "(1 2)", "3", "3", "(:X 1)", "((:X . 1))", ":X",
+			"1", "(10 0 5)", "5.0", "5/2", "5/4", "3628800", "120", "(44 20)", "3", "FOO-BAR", ":HELLO", ":SIGNALLED",
+			":PARSE-ERROR", "NIL", ":BODY", ":NORMAL", "T", "\"world\"", "12", "14", "(:B 2)", "(T NIL)", "5", "(1 2)");
 
 	@Override
 	protected String systemDir() {

@@ -86,6 +86,14 @@ final class JvmArrayCompiler {
 		LispVal fillPointer = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
 		LispVal adjustable = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
 		LispVal initValue = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
+		LispVal runtimeElementTypeLowering = LispMacroExpander.lowerRuntimeElementTypeMakeArray(cons);
+		if (runtimeElementTypeLowering != null) {
+			// A :element-type held in a VARIABLE picks the representation at run time
+			// (character vector vs. general array), since no expansion-time recognizer
+			// can see it.
+			JvmExprCompiler.compileExpr(runtimeElementTypeLowering, ctx, className);
+			return;
+		}
 		LispVal charContentsLowering = LispMacroExpander.lowerCharacterInitialContentsMakeArray(cons);
 		if (charContentsLowering != null) {
 			// A rank-1 character array built from :initial-contents is a fresh string

@@ -86,6 +86,15 @@
 (let* ((a (vector 1 2 3)) (b (alexandria:copy-array a)))
   (setf (aref b 0) 99)
   (print (list (aref a 0) (aref b 0))))
+(print (alexandria:copy-sequence 'list #(1 2 3)))
+(print (alexandria:copy-sequence 'vector '(1 2 3)))
+(print (alexandria:rotate (list 1 2 3 4 5) 2))
+(print (alexandria:rotate (list 1 2 3 4 5) -2))
+(print (let ((x '(1 2))) (alexandria:coercef x 'vector) x))
+
+;; io
+(print (with-input-from-string (s "stream content")
+         (alexandria:read-stream-content-into-string s)))
 
 ;; hash tables (results sorted -- iteration order is unspecified)
 (let ((h (alexandria:alist-hash-table '((:a . 1) (:b . 2)) :test #'eq)))
@@ -106,6 +115,7 @@
 (print (alexandria:factorial 10))
 (print (alexandria:binomial-coefficient 10 3))
 (print (list (alexandria:subfactorial 5) (alexandria:count-permutations 5 2)))
+(print (alexandria:median '(3 1 4 1 5)))
 
 ;; symbols
 (print (alexandria:symbolicate 'foo '- 'bar))
@@ -128,3 +138,7 @@
 (print (alexandria-2:line-up-first 5 (+ 1) (* 2)))
 (print (alexandria-2:line-up-last 5 (+ 1) (- 20)))
 (print (alexandria-2:delete-from-plist* (list :a 1 :b 2) :a))
+(print (list (alexandria-2:dim-in-bounds-p '(2 3) 1 2)
+             (alexandria-2:dim-in-bounds-p '(2 3) 2 2)))
+(print (alexandria-2:row-major-index '(2 3) 1 2))
+(print (alexandria-2:rmajor-to-indices '(2 3) 5))

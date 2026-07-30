@@ -1147,6 +1147,63 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (mapcar #'cons '(1 2 3) '(a b)))")).isEqualTo("((1 . A) (2 . B))");
 	}
 
+	// The four primitives .todo/219 widened, each one a CL conformance gap that failed
+	// identically on all four backends (so none was a backend divergence). They are
+	// grouped because one library -- alexandria -- is the first caller of all four.
+	@Test
+	void compileAndRunLastWithACount() throws Exception {
+		assertThat(compileAndRun("(print (last '(1 2 3) 2))")).isEqualTo("(2 3)");
+		assertThat(compileAndRun("(print (last '(1 2 3) 0))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (last '(1 2 3) 5))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (last '(1 2 . 3) 1))")).isEqualTo("(2 . 3)");
+		assertThat(compileAndRun("(print (last '(1 2 3)))")).isEqualTo("(3)");
+		// As a value the count is optional, so the wrapper dispatches on its presence.
+		assertThat(compileAndRun("(print (funcall #'last '(1 2 3) 2))")).isEqualTo("(2 3)");
+		assertThat(compileAndRun("(print (funcall #'last '(1 2 3)))")).isEqualTo("(3)");
+	}
+
+	@Test
+	void compileAndRunEverySomeOverMultipleSequences() throws Exception {
+		assertThat(compileAndRun("(print (every #'< '(1 2) '(3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (every #'< '(1 2) '(3 0)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (every #'< '(1 2 3) '(9 9)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (every #'char= \"abc\" \"abd\"))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (some #'> '(1 5) '(3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (notany #'> '(1 2) '(3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (notevery #'< '(1 2) '(3 0)))")).isEqualTo("T");
+		// The value path forwards the extra sequences too.
+		assertThat(compileAndRun("(print (funcall #'every #'< '(1 2) '(3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (funcall #'some #'> '(1 5) '(3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (funcall #'every #'evenp '(2 4)))")).isEqualTo("T");
+	}
+
+	@Test
+	void compileAndRunCoerceWithAComputedResultType() throws Exception {
+		String cs = "(defun cs (type seq) (coerce seq type))\n";
+		assertThat(compileAndRun(cs + "(print (cs 'list (vector 1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs 'vector '(1 2)))")).isEqualTo("#(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs 'string '(#\\a #\\b)))")).isEqualTo("\"ab\"");
+		assertThat(compileAndRun(cs + "(print (cs '(vector t) '(1 2)))")).isEqualTo("#(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs t '(1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs 'double-float 3))")).isEqualTo("3.0");
+	}
+
+	@Test
+	void compileAndRunReadSequenceIntoACharacterBuffer() throws Exception {
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "abcdef")
+				  (let ((buf (make-array 4 :element-type 'character)))
+				    (print (list (read-sequence buf s) buf))))
+				""")).isEqualTo("(4 \"abcd\")");
+		// The element type may be COMPUTED, which is how alexandria allocates the buffer
+		// -- make-array then picks the character-vector representation at run time.
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "xyz")
+				  (let ((buf (make-array 3 :element-type (stream-element-type s))))
+				    (print (list (read-sequence buf s) buf))))
+				""")).isEqualTo("(3 \"xyz\")");
+	}
+
 	// The REST of the family over more than one list. Until .todo/218 only mapcar walked
 	// N lists here: mapc/mapcan/maplist/mapcon/mapl compiled the first two arguments and
 	// dropped the rest, so the answer was a silently wrong list (the interpreter

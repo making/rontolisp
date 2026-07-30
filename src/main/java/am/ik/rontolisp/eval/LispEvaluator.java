@@ -1035,18 +1035,10 @@ public final class LispEvaluator {
 			throw new LispEvalException(
 					LispNames.REDUCE + " expects (reduce fn list) or (reduce fn list :initial-value init)");
 		}));
-		this.globalEnv.defineFunction(LispNames.EVERY, new LispFunction(LispNames.EVERY, args -> {
-			if (args.size() != 2) {
-				throw new LispEvalException(LispNames.EVERY + " expects 2 arguments, got " + args.size());
-			}
-			return everyValues(args.get(0), Environment.seqAsList(args.get(1)));
-		}));
-		this.globalEnv.defineFunction(LispNames.SOME, new LispFunction(LispNames.SOME, args -> {
-			if (args.size() != 2) {
-				throw new LispEvalException(LispNames.SOME + " expects 2 arguments, got " + args.size());
-			}
-			return someValues(args.get(0), Environment.seqAsList(args.get(1)));
-		}));
+		this.globalEnv.defineFunction(LispNames.EVERY, new LispFunction(LispNames.EVERY,
+				args -> everyValues(args.get(0), predicateSequences(LispNames.EVERY, args))));
+		this.globalEnv.defineFunction(LispNames.SOME, new LispFunction(LispNames.SOME,
+				args -> someValues(args.get(0), predicateSequences(LispNames.SOME, args))));
 		this.globalEnv.defineFunction(LispNames.FIND_IF, new LispFunction(LispNames.FIND_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.FIND_IF + " expects 2 arguments, got " + args.size());
@@ -5008,27 +5000,62 @@ public final class LispEvaluator {
 		return lists.get(0);
 	}
 
-	// Return t when the predicate is non-nil for every element, nil at the first failure
-	// (Common Lisp every semantics, single-list form).
-	private LispVal everyValues(LispVal predicate, LispVal list) {
-		while (list instanceof LispCons cell) {
-			if (!isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
+	// The argument sequences of an every/some call, each coerced to a list once. CL
+	// specifies (every predicate &rest sequences) with at least one sequence; the walk
+	// below stops as soon as the SHORTEST one runs out. This is the interpreter's
+	// reference implementation, which the compile backends' shared macro expansion
+	// (LispMacroExpander.expandEverySomeFamily) is diffed against.
+	private static List<LispVal> predicateSequences(String name, List<LispVal> args) {
+		if (args.size() < 2) {
+			throw new LispEvalException(
+					name + " expects at least 2 arguments (a predicate and one sequence), got " + args.size());
+		}
+		List<LispVal> lists = new ArrayList<>(args.size() - 1);
+		for (int i = 1; i < args.size(); i++) {
+			lists.add(Environment.seqAsList(args.get(i)));
+		}
+		return lists;
+	}
+
+	// The element tuple at the current position, or null once any cursor has run out.
+	// Advances every cursor past the returned tuple.
+	private static @Nullable List<LispVal> nextElementTuple(List<LispVal> cursors) {
+		List<LispVal> callArgs = new ArrayList<>(cursors.size());
+		for (LispVal cursor : cursors) {
+			if (!(cursor instanceof LispCons cell)) {
+				return null;
+			}
+			callArgs.add(cell.car());
+		}
+		for (int i = 0; i < cursors.size(); i++) {
+			cursors.set(i, ((LispCons) cursors.get(i)).cdr());
+		}
+		return callArgs;
+	}
+
+	// Return t when the predicate is non-nil for every element tuple, nil at the first
+	// failure (Common Lisp every semantics, over any number of sequences).
+	private LispVal everyValues(LispVal predicate, List<LispVal> lists) {
+		List<LispVal> cursors = new ArrayList<>(lists);
+		List<LispVal> callArgs;
+		while ((callArgs = nextElementTuple(cursors)) != null) {
+			if (!isTruthy(apply(predicate, callArgs, this.globalEnv))) {
 				return LispNil.INSTANCE;
 			}
-			list = cell.cdr();
 		}
 		return LispTrue.INSTANCE;
 	}
 
-	// Return the first non-nil predicate result, or nil when every element fails
-	// (Common Lisp some semantics, single-list form).
-	private LispVal someValues(LispVal predicate, LispVal list) {
-		while (list instanceof LispCons cell) {
-			LispVal result = apply(predicate, List.of(cell.car()), this.globalEnv);
+	// Return the first non-nil predicate result, or nil when every element tuple fails
+	// (Common Lisp some semantics, over any number of sequences).
+	private LispVal someValues(LispVal predicate, List<LispVal> lists) {
+		List<LispVal> cursors = new ArrayList<>(lists);
+		List<LispVal> callArgs;
+		while ((callArgs = nextElementTuple(cursors)) != null) {
+			LispVal result = apply(predicate, callArgs, this.globalEnv);
 			if (isTruthy(result)) {
 				return result;
 			}
-			list = cell.cdr();
 		}
 		return LispNil.INSTANCE;
 	}

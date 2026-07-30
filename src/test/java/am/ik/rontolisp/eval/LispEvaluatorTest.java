@@ -2705,6 +2705,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalLastWithACount() {
+		// (last list &optional n): the last n conses. n beyond the length answers the
+		// whole list, n of 0 the terminating atom -- alexandria:rotate needs both.
+		assertThat(eval("(last '(1 2 3) 2)").print()).isEqualTo("(2 3)");
+		assertThat(eval("(last '(1 2 3) 1)").print()).isEqualTo("(3)");
+		assertThat(eval("(last '(1 2 3) 0)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(last '(1 2 3) 5)").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(last nil 2)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(last '(1 2 . 3) 1)").print()).isEqualTo("(2 . 3)");
+		assertThat(evalMulti("(funcall #'last '(1 2 3) 2)").print()).isEqualTo("(2 3)");
+		assertThat(evalMulti("(funcall #'last '(1 2 3))").print()).isEqualTo("(3)");
+		assertThat(evalMulti("(apply #'last (list '(1 2 3) 2))").print()).isEqualTo("(2 3)");
+	}
+
+	@Test
 	void evalMemberIf() {
 		assertThat(eval("(member-if #'oddp '(2 4 5 6))").print()).isEqualTo("(5 6)");
 		assertThat(eval("(member-if #'evenp '(1 3 5))")).isSameAs(LispNil.INSTANCE);
@@ -3858,6 +3873,25 @@ class LispEvaluatorTest {
 		assertThat(eval("(every #'evenp '(2 3 6))")).isSameAs(LispNil.INSTANCE);
 		assertThat(eval("(every #'evenp '())")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(every (lambda (x) (> x 0)) '(1 2 3))")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalEverySomeOverMultipleSequences() {
+		// CL's (every predicate &rest sequences): one argument per sequence, walk stops
+		// at the SHORTEST. alexandria-2:dim-in-bounds-p is the two-sequence caller.
+		assertThat(eval("(every #'< '(1 2) '(3 4))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(every #'< '(1 2) '(3 0))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(every #'< '(1 2 3) '(9 9))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(every (lambda (a b c) (= (+ a b) c)) '(1 2) '(3 4) '(4 6))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(every #'char= \"abc\" \"abd\")")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(some #'> '(1 5) '(3 4))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(some #'> '(1 2) '(3 4))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(notany #'> '(1 2) '(3 4))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(notevery #'< '(1 2) '(3 0))")).isEqualTo(LispTrue.INSTANCE);
+		// The value path forwards the extra sequences too (a fixed-arity wrapper cannot).
+		assertThat(evalMulti("(funcall #'every #'< '(1 2) '(3 4))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(funcall #'some #'> '(1 5) '(3 4))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(apply #'every (list #'< '(1 2) '(3 4)))")).isEqualTo(LispTrue.INSTANCE);
 	}
 
 	@Test
@@ -7294,6 +7328,49 @@ class LispEvaluatorTest {
 		// A value already of the requested type is returned unchanged.
 		assertThat(eval("(coerce '(1 2) 'list)").print()).isEqualTo("(1 2)");
 		assertThat(eval("(coerce \"hi\" 'string)").print()).isEqualTo("\"hi\"");
+	}
+
+	@Test
+	void coerceAcceptsAComputedResultType() {
+		// The result type in a VARIABLE dispatches at run time over the same families
+		// the literal path handles -- alexandria:copy-sequence / median / coercef.
+		String cs = "(defun cs (type seq) (coerce seq type))\n";
+		assertThat(evalMulti(cs + "(cs 'list (vector 1 2))").print()).isEqualTo("(1 2)");
+		assertThat(evalMulti(cs + "(cs 'list \"ab\")").print()).isEqualTo("(#\\a #\\b)");
+		assertThat(evalMulti(cs + "(cs 'vector '(1 2))").print()).isEqualTo("#(1 2)");
+		assertThat(evalMulti(cs + "(cs 'string '(#\\a #\\b))").print()).isEqualTo("\"ab\"");
+		assertThat(evalMulti(cs + "(cs 'simple-string '(#\\a #\\b))").print()).isEqualTo("\"ab\"");
+		// A computed COMPOUND spec dispatches on its head, and t is the identity.
+		assertThat(evalMulti(cs + "(cs '(vector t) '(1 2))").print()).isEqualTo("#(1 2)");
+		assertThat(evalMulti(cs + "(cs t '(1 2))").print()).isEqualTo("(1 2)");
+		assertThat(evalMulti(cs + "(cs 'double-float 3)").print()).isEqualTo("3.0");
+		assertThatThrownBy(() -> evalMulti(cs + "(cs 'hash-table '(1 2))"))
+			.hasMessageContaining("unsupported result type");
+	}
+
+	@Test
+	void readSequenceFillsACharacterBuffer() {
+		// The BUFFER decides which element is read: a character vector -- the one rank-1
+		// array that answers stringp -- reads characters, not bytes
+		// (alexandria:read-stream-content-into-string).
+		assertThat(evalMulti("""
+				(with-input-from-string (s "abcdef")
+				  (let ((buf (make-array 4 :element-type 'character)))
+				    (list (read-sequence buf s) buf)))
+				""").print()).isEqualTo("(4 \"abcd\")");
+		// A short read answers the fill position, as for the byte form.
+		assertThat(evalMulti("""
+				(with-input-from-string (s "ab")
+				  (let ((buf (make-array 4 :element-type 'character)))
+				    (let ((n (read-sequence buf s))) (list n (subseq buf 0 n)))))
+				""").print()).isEqualTo("(2 \"ab\")");
+		// The element type may be COMPUTED: make-array then picks the character-vector
+		// representation at run time.
+		assertThat(evalMulti("""
+				(with-input-from-string (s "xyz")
+				  (let ((buf (make-array 3 :element-type (stream-element-type s))))
+				    (list (read-sequence buf s) buf)))
+				""").print()).isEqualTo("(3 \"xyz\")");
 	}
 
 	@Test

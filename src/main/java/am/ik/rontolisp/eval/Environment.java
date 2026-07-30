@@ -2579,12 +2579,31 @@ public final class Environment implements Scope {
 			return result;
 		}));
 		env.defineFunction(LispNames.LAST, new LispFunction(LispNames.LAST, args -> {
-			requireArgCount(LispNames.LAST, args, 1);
+			requireArgCountBetween(LispNames.LAST, args, 1, 2);
 			LispVal cur = args.get(0);
-			while (cur instanceof LispCons cell && cell.cdr() instanceof LispCons) {
-				cur = cell.cdr();
+			if (args.size() == 1) {
+				while (cur instanceof LispCons cell && cell.cdr() instanceof LispCons) {
+					cur = cell.cdr();
+				}
+				return cur instanceof LispCons ? cur : LispNil.INSTANCE;
 			}
-			return cur instanceof LispCons ? cur : LispNil.INSTANCE;
+			// (last list n): the last n conses. A lead cursor runs n cells ahead, then
+			// both advance until it falls off the end. n beyond the length answers the
+			// whole list; n of 0 answers the terminating atom.
+			long n = asLong(args.get(1));
+			if (n < 0) {
+				throw new LispEvalException(LispNames.LAST + ": the count must be a non-negative integer");
+			}
+			LispVal lead = cur;
+			while (n > 0 && lead instanceof LispCons cell) {
+				lead = cell.cdr();
+				n--;
+			}
+			while (lead instanceof LispCons cell) {
+				lead = cell.cdr();
+				cur = ((LispCons) cur).cdr();
+			}
+			return cur;
 		}));
 		env.defineFunction(LispNames.REMOVE, new LispFunction(LispNames.REMOVE, args -> {
 			requireArgCount(LispNames.REMOVE, args, 2);

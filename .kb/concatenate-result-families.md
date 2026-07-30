@@ -85,6 +85,17 @@ This is what makes ironclad's HKDF
 `(apply #'concatenate '(vector (unsigned-byte 8)) blocks)` work
 (`.kb/asdf.md`).
 
+## `coerce` re-uses the same runtime dispatch
+
+`coerce`'s own result type may be computed too (`(coerce seq type)` with `type`
+in a variable — `alexandria:copy-sequence`/`coercef`/`median`). It was FLOAT-ONLY
+until `.todo/219`; `LispMacroExpander.expandComputedCoerce` now dispatches on the
+designator's head over the same families this file describes, with each arm being
+the SAME body the literal path emits (`coerceToListBody`/`coerceToVectorBody`/
+`coerceToStringBody`, extracted for exactly that reason), plus `t` as the
+identity. So a computed result type can never mean something a literal one does
+not. The shape is `concatenateWrapper`'s above, not a second design.
+
 ## `--no-gc`
 
 `NoGcWasmCompiler.compileConcatenate` builds strings in linear memory and that

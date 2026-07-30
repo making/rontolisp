@@ -2196,6 +2196,75 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (funcall #'mapcar #'1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
 	}
 
+	// The map* family reached through funcall with the lists SPREAD OUT, in a program
+	// that uses apply nowhere else. The wrapper body is (apply f ...), and usesEval --
+	// which gates the _apply runtime here -- scans the SOURCE program, not the injected
+	// wrappers: without the wrapper clause in that gate _apply stayed a nil-answering
+	// stub and this answered (NIL NIL) while the interpreter and the JVM answered
+	// ((1 3) (2 4)). Every assertion below must be the ONLY form in its program.
+	@Test
+	void applyUsingWrapperReachedByFuncallCompilesAndRuns() throws Exception {
+		assertThat(compileAndRun("(print (funcall #'mapcar #'list '(1 2) '(3 4)))")).isEqualTo("((1 3) (2 4))");
+		assertThat(compileAndRun("(print (funcall #'mapcan #'list '(1 2) '(3 4)))")).isEqualTo("(1 3 2 4)");
+		assertThat(compileAndRun("(print (funcall #'every #'< '(1 2) '(3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (funcall #'some #'> '(1 5) '(3 4)))")).isEqualTo("T");
+	}
+
+	// The four primitives .todo/219 widened: (last list n), every/some over N sequences,
+	// coerce to a COMPUTED result type, and read-sequence into a character buffer. Each
+	// failed identically on all four backends before, so they are conformance gaps rather
+	// than divergences -- but they are pinned per backend all the same.
+	@Test
+	void lastWithACountCompilesAndRuns() throws Exception {
+		assertThat(compileAndRun("(print (last '(1 2 3) 2))")).isEqualTo("(2 3)");
+		assertThat(compileAndRun("(print (last '(1 2 3) 0))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (last '(1 2 3) 5))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (last '(1 2 . 3) 1))")).isEqualTo("(2 . 3)");
+		assertThat(compileAndRun("(print (last '(1 2 3)))")).isEqualTo("(3)");
+		assertThat(compileAndRun("(print (funcall #'last '(1 2 3) 2))")).isEqualTo("(2 3)");
+		assertThat(compileAndRun("(print (funcall #'last '(1 2 3)))")).isEqualTo("(3)");
+	}
+
+	@Test
+	void everySomeOverMultipleSequencesCompilesAndRuns() throws Exception {
+		assertThat(compileAndRun("(print (every #'< '(1 2) '(3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (every #'< '(1 2) '(3 0)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (every #'< '(1 2 3) '(9 9)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (every #'char= \"abc\" \"abd\"))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (some #'> '(1 5) '(3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (notany #'> '(1 2) '(3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (notevery #'< '(1 2) '(3 0)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (funcall #'every #'< '(1 2) '(3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (funcall #'some #'> '(1 5) '(3 4)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (funcall #'every #'evenp '(2 4)))")).isEqualTo("T");
+	}
+
+	@Test
+	void coerceWithAComputedResultTypeCompilesAndRuns() throws Exception {
+		String cs = "(defun cs (type seq) (coerce seq type))\n";
+		assertThat(compileAndRun(cs + "(print (cs 'list (vector 1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs 'vector '(1 2)))")).isEqualTo("#(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs 'string '(#\\a #\\b)))")).isEqualTo("\"ab\"");
+		assertThat(compileAndRun(cs + "(print (cs '(vector t) '(1 2)))")).isEqualTo("#(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs t '(1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs 'double-float 3))")).isEqualTo("3.0");
+	}
+
+	@Test
+	void readSequenceIntoACharacterBufferCompilesAndRuns() throws Exception {
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "abcdef")
+				  (let ((buf (make-array 4 :element-type 'character)))
+				    (print (list (read-sequence buf s) buf))))
+				""")).isEqualTo("(4 \"abcd\")");
+		// The element type may be COMPUTED, which is how alexandria allocates the buffer.
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "xyz")
+				  (let ((buf (make-array 3 :element-type (stream-element-type s))))
+				    (print (list (read-sequence buf s) buf))))
+				""")).isEqualTo("(3 \"xyz\")");
+	}
+
 	// The rest of the family over N lists, in call position and as values. Until
 	// .todo/218 a multi-list mapc trapped here (dispatch arity mismatch) and
 	// mapcan/maplist/mapcon silently dropped every list but the first.

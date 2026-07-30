@@ -4989,50 +4989,94 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (every pred lst) into a do/return scan that yields t when the predicate
-	 * holds for every element and nil at the first element for which it fails.
+	 * Expands (every pred seq...) into a do/return scan that yields t when the predicate
+	 * holds for every element tuple and nil at the first tuple for which it fails. Any
+	 * number of sequences is accepted, as Common Lisp specifies ({@code every predicate
+	 * &amp;rest sequences}); the walk stops as soon as the SHORTEST one runs out.
 	 * @param cons the every expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandEvery(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		LispSymbol pred = new LispSymbol("__every_pred");
-		LispSymbol cur = new LispSymbol("__every_cur");
-		// (do ((__every_pred pred) (__every_cur <seq-as-list lst> (cdr __every_cur)))
-		// ((atom __every_cur) t)
-		// (if (funcall __every_pred (car __every_cur)) nil (return nil)))
-		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
-				listToCons(List.of(cur, seqAsListForm(parts.get(2)), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispTrue.INSTANCE));
-		LispVal test = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CAR, cur)));
-		LispVal body = makeIf(test, LispNil.INSTANCE, makeReturn(LispNil.INSTANCE));
-		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		return expandEverySomeFamily(cons, LispNames.EVERY, true);
 	}
 
 	/**
-	 * Expands (some pred lst) into a do/return scan that yields the first non-nil
-	 * predicate result, or nil when the predicate fails for every element.
+	 * Expands (some pred seq...) into a do/return scan that yields the first non-nil
+	 * predicate result, or nil when the predicate fails for every element tuple. Any
+	 * number of sequences is accepted, as with {@link #expandEvery(LispCons)}.
 	 * @param cons the some expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSome(LispCons cons) {
+		return expandEverySomeFamily(cons, LispNames.SOME, false);
+	}
+
+	/**
+	 * Expands {@code every} / {@code some} over ANY number of sequences -- the two differ
+	 * only in what they answer, so they share one lockstep walk rather than two
+	 * hand-written ones. Each sequence is coerced to a list once (so strings and vectors
+	 * work, unlike the {@code map*} family), then one cursor per sequence advances
+	 * together and the walk ends as soon as any cursor hits a non-cons.
+	 *
+	 * <pre>
+	 * (do ((#pred P) (#res nil)?                      ; #res: the some arm only
+	 *      (#c0 (coerce S0 'list) (cdr #c0))          ; left-to-right: predicate, then
+	 *      (#c1 (coerce S1 'list) (cdr #c1)))         ; the sequences
+	 *     ((or (atom #c0) (atom #c1)) DEFAULT)         ; shortest-sequence termination
+	 *   BODY)
+	 * </pre>
+	 *
+	 * With one sequence the end test is the bare {@code (atom #c0)}, so the
+	 * single-sequence expansion every backend already compiled is unchanged in shape.
+	 * @param cons the every / some expression
+	 * @param name the operator name, for the arity-error message
+	 * @param every true for {@code every} (answer t, fail fast on a false result), false
+	 * for {@code some} (answer nil, succeed fast on a true result)
+	 * @return the expanded expression
+	 */
+	private static LispVal expandEverySomeFamily(LispCons cons, String name, boolean every) {
 		List<LispVal> parts = cons.toList();
-		LispSymbol pred = new LispSymbol("__some_pred");
-		LispSymbol res = new LispSymbol("__some_res");
-		LispSymbol cur = new LispSymbol("__some_cur");
-		// (do ((__some_pred pred) (__some_res nil) (__some_cur lst (cdr __some_cur)))
-		// ((atom __some_cur) nil)
-		// (setq __some_res (funcall __some_pred (car __some_cur)))
-		// (if __some_res (return __some_res) nil))
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(pred, parts.get(1))), listToCons(List.of(res, LispNil.INSTANCE)),
-						listToCons(List.of(cur, seqAsListForm(parts.get(2)), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, callOf(LispNames.CAR, cur)));
-		LispVal assign = listToCons(List.of(new LispSymbol(LispNames.SETQ), res, call));
-		LispVal check = makeIf(res, makeReturn(res), LispNil.INSTANCE);
-		return expandDo(
-				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, assign, check)));
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(
+					name + " expects at least 2 arguments (a predicate and one sequence), got " + (parts.size() - 1));
+		}
+		int nSeqs = parts.size() - 2;
+		String prefix = "__" + name.toLowerCase(java.util.Locale.ROOT) + "_";
+		LispSymbol pred = new LispSymbol(prefix + "pred");
+		LispSymbol res = new LispSymbol(prefix + "res");
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(List.of(pred, parts.get(1))));
+		if (!every) {
+			bindings.add(listToCons(List.of(res, LispNil.INSTANCE)));
+		}
+		List<LispVal> exhausted = new java.util.ArrayList<>();
+		List<LispVal> callArgs = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.FUNCALL), pred));
+		for (int i = 0; i < nSeqs; i++) {
+			LispSymbol cursor = new LispSymbol(prefix + "c" + i);
+			bindings.add(listToCons(List.of(cursor, seqAsListForm(parts.get(i + 2)), callOf(LispNames.CDR, cursor))));
+			exhausted.add(callOf(LispNames.ATOM, cursor));
+			callArgs.add(callOf(LispNames.CAR, cursor));
+		}
+		LispVal endTest = exhausted.get(0);
+		if (nSeqs > 1) {
+			List<LispVal> orParts = new java.util.ArrayList<>();
+			orParts.add(new LispSymbol(LispNames.OR));
+			orParts.addAll(exhausted);
+			endTest = listToCons(orParts);
+		}
+		LispVal call = listToCons(callArgs);
+		List<LispVal> form = new java.util.ArrayList<>();
+		form.add(new LispSymbol(LispNames.DO));
+		form.add(listToCons(bindings));
+		form.add(listToCons(List.of(endTest, every ? LispTrue.INSTANCE : LispNil.INSTANCE)));
+		if (every) {
+			form.add(makeIf(call, LispNil.INSTANCE, makeReturn(LispNil.INSTANCE)));
+		}
+		else {
+			form.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), res, call)));
+			form.add(makeIf(res, makeReturn(res), LispNil.INSTANCE));
+		}
+		return expandDo((LispCons) listToCons(form));
 	}
 
 	/**
@@ -5333,13 +5377,21 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (last lst) into a let/while walk returning the last cons cell (or nil for
-	 * an empty list).
+	 * Expands (last lst [n]) into a let/while walk returning the last cons cell -- or,
+	 * with the optional count, the last {@code n} conses (CL's {@code last list
+	 * &amp;optional n}). Without the count this is the one-cell walk; with it, the
+	 * two-cursor walk of {@link #expandLastN}.
 	 * @param cons the last expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandLast(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			throw new UnsupportedOperationException("last expects 1 or 2 arguments, got " + (parts.size() - 1));
+		}
+		if (parts.size() == 3) {
+			return expandLastN(parts.get(1), parts.get(2));
+		}
 		LispSymbol cur = new LispSymbol("__last_cur");
 		// (while (and (consp __cur) (consp (cdr __cur))) (setq __cur (cdr __cur)))
 		LispVal test = listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.CONSP, cur),
@@ -5348,6 +5400,47 @@ public final class LispMacroExpander {
 		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, step));
 		LispVal bindings = new LispCons(listToCons(List.of(cur, parts.get(1))), LispNil.INSTANCE);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, cur));
+	}
+
+	/**
+	 * Expands (last lst n) into the two-cursor walk that yields the last {@code n}
+	 * conses: a lead cursor runs {@code n} cells ahead, then both advance until the lead
+	 * falls off the end, leaving the trailing cursor on the answer.
+	 *
+	 * <pre>
+	 * (let* ((__last_cur lst) (__last_lead __last_cur) (__last_n n))
+	 *   (while (and (&gt; __last_n 0) (consp __last_lead))
+	 *     (setq __last_lead (cdr __last_lead)) (setq __last_n (- __last_n 1)))
+	 *   (while (consp __last_lead)
+	 *     (setq __last_lead (cdr __last_lead)) (setq __last_cur (cdr __last_cur)))
+	 *   __last_cur)
+	 * </pre>
+	 *
+	 * {@code n} larger than the list answers the whole list, {@code n} of 0 answers the
+	 * terminating atom (nil for a proper list, the dotted tail otherwise) -- both are
+	 * CL's behavior, and both fall out of the shape rather than needing their own branch.
+	 * @param listForm the list expression
+	 * @param countForm the count expression
+	 * @return the expanded expression
+	 */
+	private static LispVal expandLastN(LispVal listForm, LispVal countForm) {
+		LispSymbol cur = new LispSymbol("__last_cur");
+		LispSymbol lead = new LispSymbol("__last_lead");
+		LispSymbol n = new LispSymbol("__last_n");
+		LispVal stepLead = listToCons(List.of(new LispSymbol(LispNames.SETQ), lead, callOf(LispNames.CDR, lead)));
+		LispVal skipTest = listToCons(List.of(new LispSymbol(LispNames.AND),
+				listToCons(List.of(new LispSymbol(LispNames.GT), n, new LispInteger(0))),
+				callOf(LispNames.CONSP, lead)));
+		LispVal decrement = listToCons(List.of(new LispSymbol(LispNames.SETQ), n,
+				listToCons(List.of(new LispSymbol(LispNames.SUB), n, new LispInteger(1)))));
+		LispVal skip = listToCons(List.of(new LispSymbol(LispNames.WHILE), skipTest, stepLead, decrement));
+		LispVal stepBoth = listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, lead), stepLead,
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)))));
+		// let* so the list is evaluated before the count (left-to-right argument order)
+		// and the lead cursor starts from the already-evaluated list.
+		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, listForm)), listToCons(List.of(lead, cur)),
+				listToCons(List.of(n, countForm))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, skip, stepBoth, cur));
 	}
 
 	private static final String DOLIST_CURSOR_VAR = "__dolist";
@@ -6216,17 +6309,29 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (read-sequence seq stream [:start s] [:end e])} into a
-	 * {@code read-byte} loop over the vector, yielding the position of the first element
-	 * not filled (the fill position). The keywords must be literal; their values are
-	 * arbitrary expressions. The sequence must be a rank-1 array.
+	 * Expands {@code (read-sequence seq stream [:start s] [:end e])} into a read loop
+	 * over the sequence, yielding the position of the first element not filled (the fill
+	 * position). The keywords must be literal; their values are arbitrary expressions.
+	 * The sequence must be a rank-1 array.
+	 *
+	 * <p>
+	 * CL fills ANY sequence from a stream of the matching element type, so the element
+	 * read is chosen by the BUFFER: a character vector -- what {@code (make-array n
+	 * :element-type 'character)} and {@code make-string} build, and the one rank-1 array
+	 * that answers {@code stringp} on every backend ({@code .kb/adjustable-arrays.md}) --
+	 * reads characters, anything else reads bytes. The test is a runtime one because the
+	 * buffer arrives in a variable: {@code alexandria:read-stream-content-into-string}
+	 * allocates it from {@code (stream-element-type stream)}, so no expansion-time
+	 * inspection could see it ({@code .todo/219}).
 	 *
 	 * <pre>
 	 * (read-sequence seq stream) ->
 	 * (let ((__rseq_seq seq) (__rseq_st stream))
-	 *   (let ((__rseq_i 0) (__rseq_end (length __rseq_seq)) (__rseq_b nil) (__rseq_eof nil))
+	 *   (let ((__rseq_i 0) (__rseq_end (length __rseq_seq)) (__rseq_b nil) (__rseq_eof nil)
+	 *         (__rseq_ch (stringp __rseq_seq)))
 	 *     (while (if __rseq_eof nil (&lt; __rseq_i __rseq_end))
-	 *       (setq __rseq_b (read-byte __rseq_st nil nil))
+	 *       (setq __rseq_b (if __rseq_ch (read-char __rseq_st nil nil)
+	 *                                    (read-byte __rseq_st nil nil)))
 	 *       (if __rseq_b
 	 *           (progn (%aset __rseq_seq __rseq_i __rseq_b) (setq __rseq_i (+ __rseq_i 1)))
 	 *           (setq __rseq_eof t)))
@@ -6243,21 +6348,26 @@ public final class LispMacroExpander {
 		LispSymbol end = new LispSymbol("__rseq_end");
 		LispSymbol b = new LispSymbol("__rseq_b");
 		LispSymbol eof = new LispSymbol("__rseq_eof");
+		LispSymbol chars = new LispSymbol("__rseq_ch");
 		LispVal test = listToCons(List.of(new LispSymbol(LispNames.IF), eof, LispNil.INSTANCE,
 				listToCons(List.of(new LispSymbol(LispNames.LT), i, end))));
 		LispVal readByte = listToCons(
 				List.of(new LispSymbol(LispNames.READ_BYTE), st, LispNil.INSTANCE, LispNil.INSTANCE));
+		LispVal readChar = listToCons(
+				List.of(new LispSymbol(LispNames.READ_CHAR), st, LispNil.INSTANCE, LispNil.INSTANCE));
+		LispVal readElement = makeIf(chars, readChar, readByte);
 		LispVal store = listToCons(
 				List.of(new LispSymbol(LispNames.PROGN), listToCons(List.of(new LispSymbol(LispNames.ASET), seq, i, b)),
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), i,
 								listToCons(List.of(new LispSymbol(LispNames.ADD), i, new LispInteger(1)))))));
 		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.WHILE), test,
-				listToCons(List.of(new LispSymbol(LispNames.SETQ), b, readByte)),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), b, readElement)),
 				listToCons(List.of(new LispSymbol(LispNames.IF), b, store,
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), eof, LispTrue.INSTANCE))))));
 		LispVal innerBindings = listToCons(
 				List.of(listToCons(List.of(i, args.start())), listToCons(List.of(end, args.end())),
-						listToCons(List.of(b, LispNil.INSTANCE)), listToCons(List.of(eof, LispNil.INSTANCE))));
+						listToCons(List.of(b, LispNil.INSTANCE)), listToCons(List.of(eof, LispNil.INSTANCE)),
+						listToCons(List.of(chars, callOf(LispNames.STRINGP, seq)))));
 		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, loop, i));
 		LispVal outerBindings = listToCons(
 				List.of(listToCons(List.of(seq, args.seq())), listToCons(List.of(st, args.stream()))));
@@ -13573,71 +13683,25 @@ public final class LispMacroExpander {
 			return mvCall(LispNames.FLOAT, parts.get(1));
 		}
 		if (type == null && !(parts.get(2) instanceof LispString)) {
-			// A computed result type (e.g. parse-number's (coerce x type) where type
-			// comes from the exponent marker): dispatch at runtime among the float
-			// designators; the collection types need a literal (their conversions
-			// expand structurally), so anything else signals.
-			LispSymbol x = new LispSymbol("__coerce_x");
-			LispSymbol t = new LispSymbol("__coerce_t");
-			List<LispVal> floats = new java.util.ArrayList<>();
-			for (String name : FLOAT_TYPE_NAMES) {
-				floats.add(new LispSymbol(name));
-			}
-			LispVal isFloatType = mvCall(LispNames.MEMBER, t,
-					listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(floats))));
-			LispVal errorCall = listToCons(List.of(new LispSymbol(LispNames.ERROR),
-					new LispString("coerce: a computed result type must be a float type, got ~s"), t));
-			LispVal body = makeIf(isFloatType, mvCall(LispNames.FLOAT, x), errorCall);
-			return makeLet(x.name(), parts.get(1), makeLet(t.name(), parts.get(2), body));
+			return expandComputedCoerce(parts.get(1), parts.get(2), arraysExist);
 		}
 		LispSymbol x = new LispSymbol("__coerce_x");
-		LispVal stringToList = listToCons(List.of(new LispSymbol(LispNames.MAP),
-				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("LIST"))),
-				listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))), x));
 		LispVal body;
 		if ("LIST".equals(type)) {
-			// (if (listp x) x (if (stringp x) (map 'list #'identity x) <vector scan>))
-			// With no array in the program the non-list value can only be a string, so
-			// the scan -- and the stringp test guarding it -- fall away.
-			body = arraysExist
-					? makeIf(callOf(LispNames.LISTP, x), x,
-							makeIf(callOf(LispNames.STRINGP, x), stringToList, coerceVectorToList(x)))
-					: makeIf(callOf(LispNames.LISTP, x), x, stringToList);
+			body = coerceToListBody(x, arraysExist);
 		}
 		else if ("VECTOR".equals(type)) {
-			// (if (or (listp x) (stringp x))
-			// (let ((__coerce_l (if (stringp x) (map 'list #'identity x) x))) <fill>)
-			// x)
-			LispSymbol l = new LispSymbol("__coerce_l");
-			LispVal asList = makeIf(callOf(LispNames.STRINGP, x), stringToList, x);
-			LispVal fill = listToCons(List.of(new LispSymbol(LispNames.LET),
-					listToCons(List.of(listToCons(List.of(l, asList)))), coerceListToVector(l)));
-			LispVal sequencep = listToCons(
-					List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, x), callOf(LispNames.STRINGP, x)));
-			body = makeIf(sequencep, fill, x);
+			body = coerceToVectorBody(x);
 		}
 		else if ("STRING".equals(type)) {
-			// (if (stringp x) x (map 'string #'identity (if (listp x) x <vector scan>)))
-			// The vector scan goes with the arrays, as in the LIST branch above.
-			LispVal chars = arraysExist ? makeIf(callOf(LispNames.LISTP, x), x, coerceVectorToList(x)) : x;
-			LispVal build = listToCons(List.of(new LispSymbol(LispNames.MAP),
-					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("STRING"))),
-					listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))),
-					chars));
-			body = makeIf(callOf(LispNames.STRINGP, x), x, build);
+			body = coerceToStringBody(x, arraysExist);
 		}
 		else if (type != null) {
 			// A user deftype name we cannot resolve at expansion time (no deftype
 			// registry from here). Common shape in real libraries: the deftype expands
 			// to a (vector ...) subtype -- uax-15's unicode-string is `(vector
 			// unicode-point)` -- so default to the vector conversion.
-			LispSymbol l = new LispSymbol("__coerce_l");
-			LispVal asList = makeIf(callOf(LispNames.STRINGP, x), stringToList, x);
-			LispVal fill = listToCons(List.of(new LispSymbol(LispNames.LET),
-					listToCons(List.of(listToCons(List.of(l, asList)))), coerceListToVector(l)));
-			LispVal sequencep = listToCons(
-					List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, x), callOf(LispNames.STRINGP, x)));
-			body = makeIf(sequencep, fill, x);
+			body = coerceToVectorBody(x);
 		}
 		else {
 			throw new UnsupportedOperationException(
@@ -13645,6 +13709,119 @@ public final class LispMacroExpander {
 		}
 		LispVal bindings = listToCons(List.of(listToCons(List.of(x, parts.get(1)))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
+	}
+
+	/**
+	 * Expands (coerce value type) where {@code type} is a COMPUTED result type into a
+	 * runtime dispatch over the same families the literal path handles: the float
+	 * designators, then {@code list}, {@code string} and {@code vector} with their
+	 * "simple"/compound spellings.
+	 *
+	 * <pre>
+	 * (let* ((__coerce_x value)
+	 *        (__coerce_spec type)
+	 *        (__coerce_t (if (consp __coerce_spec) (car __coerce_spec) __coerce_spec)))
+	 *   (if (member __coerce_t '(float single-float ...)) (float __coerce_x)
+	 *     (if (member __coerce_t '(list cons))            &lt;list conversion&gt;
+	 *       (if (member __coerce_t '(string ...))         &lt;string conversion&gt;
+	 *         (if (member __coerce_t '(vector ...))       &lt;vector conversion&gt;
+	 *           (if (eq __coerce_t t) __coerce_x
+	 *             (error "coerce: unsupported result type ~s" __coerce_spec)))))))
+	 * </pre>
+	 *
+	 * The dispatch is on the HEAD of the designator, so a computed compound spec
+	 * ({@code (vector t)}, {@code (string 8)}) lands in the same arm as its bare name --
+	 * the shape {@code concatenate}'s runtime designator already uses
+	 * ({@code BuiltinFunctionWrappers.concatenateWrapper},
+	 * {@code .kb/concatenate-result-families.md}), and the sequence families are the same
+	 * set. Each arm is the SAME body the literal path emits, so a computed type can never
+	 * mean something a literal one does not.
+	 *
+	 * <p>
+	 * The float-only restriction this replaced is what kept
+	 * {@code alexandria:copy-sequence} / {@code median} / {@code coercef} dark: they are
+	 * all {@code (coerce sequence type)} with the type in a variable ({@code .todo/219}).
+	 * @param valueForm the value expression
+	 * @param typeForm the result-type expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the expanded expression
+	 */
+	private static LispVal expandComputedCoerce(LispVal valueForm, LispVal typeForm, boolean arraysExist) {
+		LispSymbol x = new LispSymbol("__coerce_x");
+		LispSymbol spec = new LispSymbol("__coerce_spec");
+		LispSymbol t = new LispSymbol("__coerce_t");
+		LispVal errorCall = listToCons(
+				List.of(new LispSymbol(LispNames.ERROR), new LispString("coerce: unsupported result type ~s"), spec));
+		// (coerce x t) is the identity in CL; t is the value LispTrue, not a symbol, so
+		// it needs its own eq test rather than a member of the name lists.
+		LispVal identity = makeIf(mvCall(LispNames.EQ_GENERAL, t, LispTrue.INSTANCE), x, errorCall);
+		LispVal vectorArm = makeIf(memberOfTypeNames(t, "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
+				"BIT-VECTOR", "SIMPLE-BIT-VECTOR"), coerceToVectorBody(x), identity);
+		LispVal stringArm = makeIf(memberOfTypeNames(t, "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING"),
+				coerceToStringBody(x, arraysExist), vectorArm);
+		LispVal listArm = makeIf(memberOfTypeNames(t, "LIST", "CONS"), coerceToListBody(x, arraysExist), stringArm);
+		LispVal body = makeIf(memberOfTypeNames(t, FLOAT_TYPE_NAMES.toArray(new String[0])), mvCall(LispNames.FLOAT, x),
+				listArm);
+		LispVal head = makeIf(callOf(LispNames.CONSP, spec), callOf(LispNames.CAR, spec), spec);
+		LispVal bindings = listToCons(List.of(listToCons(List.of(x, valueForm)), listToCons(List.of(spec, typeForm)),
+				listToCons(List.of(t, head))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
+	}
+
+	/** {@code (member sym '(NAME...))} over type-designator names. */
+	private static LispVal memberOfTypeNames(LispSymbol sym, String... names) {
+		List<LispVal> symbols = new java.util.ArrayList<>();
+		for (String name : names) {
+			symbols.add(new LispSymbol(name));
+		}
+		return mvCall(LispNames.MEMBER, sym, listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(symbols))));
+	}
+
+	/** {@code (map 'list #'identity x)} -- a string's characters as a list. */
+	private static LispVal coerceStringToList(LispSymbol x) {
+		return listToCons(List.of(new LispSymbol(LispNames.MAP),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("LIST"))),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))), x));
+	}
+
+	/**
+	 * The {@code 'list} conversion body:
+	 * {@code (if (listp x) x (if (stringp x) (map 'list
+	 * #'identity x) <vector scan>))}. With no array in the program the non-list value can
+	 * only be a string, so the scan -- and the stringp test guarding it -- fall away.
+	 */
+	private static LispVal coerceToListBody(LispSymbol x, boolean arraysExist) {
+		return arraysExist
+				? makeIf(callOf(LispNames.LISTP, x), x,
+						makeIf(callOf(LispNames.STRINGP, x), coerceStringToList(x), coerceVectorToList(x)))
+				: makeIf(callOf(LispNames.LISTP, x), x, coerceStringToList(x));
+	}
+
+	/**
+	 * The {@code 'vector} conversion body: {@code (if (or (listp x) (stringp x)) (let
+	 * ((__coerce_l (if (stringp x) (map 'list #'identity x) x))) <fill>) x)}.
+	 */
+	private static LispVal coerceToVectorBody(LispSymbol x) {
+		LispSymbol l = new LispSymbol("__coerce_l");
+		LispVal asList = makeIf(callOf(LispNames.STRINGP, x), coerceStringToList(x), x);
+		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(l, asList)))), coerceListToVector(l)));
+		LispVal sequencep = listToCons(
+				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, x), callOf(LispNames.STRINGP, x)));
+		return makeIf(sequencep, fill, x);
+	}
+
+	/**
+	 * The {@code 'string} conversion body: {@code (if (stringp x) x (map 'string
+	 * #'identity (if (listp x) x <vector scan>)))}. The vector scan goes with the arrays,
+	 * as in {@link #coerceToListBody}.
+	 */
+	private static LispVal coerceToStringBody(LispSymbol x, boolean arraysExist) {
+		LispVal chars = arraysExist ? makeIf(callOf(LispNames.LISTP, x), x, coerceVectorToList(x)) : x;
+		LispVal build = listToCons(List.of(new LispSymbol(LispNames.MAP),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("STRING"))),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))), chars));
+		return makeIf(callOf(LispNames.STRINGP, x), x, build);
 	}
 
 	/**
@@ -14404,25 +14581,42 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (notany pred lst) into (not (some pred lst)).
+	 * Expands (notany pred seq...) into (not (some pred seq...)) -- every sequence is
+	 * forwarded, so the multi-sequence form rides on {@link #expandSome(LispCons)}.
 	 * @param cons the notany expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNotany(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		LispVal some = listToCons(List.of(new LispSymbol(LispNames.SOME), parts.get(1), parts.get(2)));
-		return makeNot(some);
+		return makeNot(replaceOperator(cons, LispNames.NOTANY, LispNames.SOME));
 	}
 
 	/**
-	 * Expands (notevery pred lst) into (not (every pred lst)).
+	 * Expands (notevery pred seq...) into (not (every pred seq...)) -- every sequence is
+	 * forwarded, so the multi-sequence form rides on {@link #expandEvery(LispCons)}.
 	 * @param cons the notevery expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandNotevery(LispCons cons) {
+		return makeNot(replaceOperator(cons, LispNames.NOTEVERY, LispNames.EVERY));
+	}
+
+	/**
+	 * Rebuilds a call form with a different operator name, keeping every argument.
+	 * @param cons the call form
+	 * @param name the operator name, for the arity-error message
+	 * @param replacement the operator to call instead
+	 * @return the rebuilt call form
+	 */
+	private static LispVal replaceOperator(LispCons cons, String name, String replacement) {
 		List<LispVal> parts = cons.toList();
-		LispVal every = listToCons(List.of(new LispSymbol(LispNames.EVERY), parts.get(1), parts.get(2)));
-		return makeNot(every);
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(
+					name + " expects at least 2 arguments (a predicate and one sequence), got " + (parts.size() - 1));
+		}
+		List<LispVal> rebuilt = new java.util.ArrayList<>();
+		rebuilt.add(new LispSymbol(replacement));
+		rebuilt.addAll(parts.subList(1, parts.size()));
+		return listToCons(rebuilt);
 	}
 
 	/**
@@ -16908,6 +17102,105 @@ public final class LispMacroExpander {
 		int colon = name.lastIndexOf(':');
 		String local = colon >= 0 ? name.substring(colon + 1) : name;
 		return local.equals("CHARACTER") || local.equals("BASE-CHAR") || local.equals("STANDARD-CHAR");
+	}
+
+	/**
+	 * The bare (unquoted) symbols the compile backends' {@code make-array} recognizers
+	 * accept as literal {@code :element-type} designators. Any OTHER bare symbol in that
+	 * position is a VARIABLE holding a designator computed at run time -- the distinction
+	 * {@link #lowerRuntimeElementTypeMakeArray(LispCons)} needs.
+	 */
+	private static final java.util.Set<String> LITERAL_ELEMENT_TYPE_NAMES = java.util.Set.of("CHARACTER", "BASE-CHAR",
+			"STANDARD-CHAR", "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "BIT", "FIXNUM",
+			"INTEGER", "NUMBER", "ATOM");
+
+	/**
+	 * Whether a {@code make-array :element-type} value is computed at RUN time rather
+	 * than being one of the literal designators every backend's expansion-time
+	 * recognizers accept: a {@code (quote ...)} form, the unquoted compound shape
+	 * ({@code (unsigned-byte 8)} -- a type name plus an integer), and the bare symbols in
+	 * {@link #LITERAL_ELEMENT_TYPE_NAMES} are all literal; anything else evaluable (a
+	 * variable, a call like {@code (stream-element-type s)}) is not.
+	 * @param elementType the {@code :element-type} value expression
+	 * @return true when the designator is only known at run time
+	 */
+	private static boolean isRuntimeElementType(LispVal elementType) {
+		if (elementType instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())) {
+				return false;
+			}
+			return !(cons.cdr() instanceof LispCons rest && rest.car() instanceof LispInteger);
+		}
+		if (elementType instanceof LispSymbol sym) {
+			String name = sym.name();
+			int colon = name.lastIndexOf(':');
+			return !LITERAL_ELEMENT_TYPE_NAMES.contains(colon >= 0 ? name.substring(colon + 1) : name);
+		}
+		return false;
+	}
+
+	/**
+	 * Lowers {@code (make-array n :element-type et ...)} whose {@code :element-type} is a
+	 * VARIABLE into a runtime dispatch between the character-vector allocation and the
+	 * general one. Returns null when the designator is literal (every backend's existing
+	 * expansion-time recognizers handle those) or absent.
+	 *
+	 * <pre>
+	 * (make-array n :element-type et) ->
+	 * (let* ((__mae_n n) (__mae_et et))
+	 *   (if (member __mae_et '(character base-char standard-char))
+	 *       (make-array __mae_n :element-type 'character)
+	 *       (make-array __mae_n)))
+	 * </pre>
+	 *
+	 * The character arm matters because a character vector is the ONE rank-1 array that
+	 * answers {@code stringp}, which is what {@code read-sequence} /
+	 * {@code write-sequence} dispatch on.
+	 * {@code alexandria:read-stream-content-into-string} allocates its buffer as
+	 * {@code (make-array size :element-type (stream-element-type stream))}, so without
+	 * this the buffer was a general vector on the compile backends and the read fell to
+	 * {@code read-byte} against a character stream ({@code .todo/219}). The interpreter
+	 * needs no lowering: its {@code make-array} already reads the designator at run time.
+	 *
+	 * <p>
+	 * A non-character runtime designator drops the keyword entirely rather than guessing
+	 * a packed representation: the packed float / {@code (unsigned-byte N)} arrays are
+	 * OPTIMIZATIONS of the general one, so the general array is always a correct answer.
+	 * @param cons the make-array expression
+	 * @return the lowered expression, or null when the element type is literal or absent
+	 */
+	public static @Nullable LispVal lowerRuntimeElementTypeMakeArray(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			return null;
+		}
+		LispVal elementType = null;
+		List<LispVal> others = new java.util.ArrayList<>();
+		for (int i = 2; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
+				elementType = parts.get(i + 1);
+			}
+			else {
+				others.add(parts.get(i));
+				others.add(parts.get(i + 1));
+			}
+		}
+		if (elementType == null || !isRuntimeElementType(elementType)) {
+			return null;
+		}
+		LispSymbol size = new LispSymbol("__mae_n");
+		LispSymbol et = new LispSymbol("__mae_et");
+		List<LispVal> charCall = new java.util.ArrayList<>(
+				List.of(new LispSymbol(LispNames.MAKE_ARRAY), size, new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD),
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("CHARACTER")))));
+		charCall.addAll(others);
+		List<LispVal> generalCall = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), size));
+		generalCall.addAll(others);
+		LispVal body = makeIf(memberOfTypeNames(et, "CHARACTER", "BASE-CHAR", "STANDARD-CHAR"), listToCons(charCall),
+				listToCons(generalCall));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(size, parts.get(1))), listToCons(List.of(et, elementType))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
 	}
 
 	/**
