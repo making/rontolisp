@@ -5,24 +5,36 @@
 ;; parameterised statement through the extended query protocol
 ;; (prepare-query + exec-prepared), and a second row reader shape.
 ;;
-;; It needs a server. The one-liner this example is written against:
+;; It needs a server, and reads where to find it out of DATABASE_URL
+;; (database-url.lisp beside this file parses the URL). The one-liner this
+;; example is written against, and the URL that reaches it:
 ;;   docker run --rm -p 54329:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine
+;;   export DATABASE_URL=postgresql://postgres@127.0.0.1:54329/postgres
 ;;   rontolisp examples/db/postgres-crud.lisp
 ;;
 ;; Connecting, authenticating and the other backends work exactly as in
 ;; postgres-hello.lisp (see it, and the README beside it):
 ;;   rontolisp examples/db/postgres-crud.lisp -o Prog.class && java Prog
 ;;   rontolisp examples/db/postgres-crud.lisp -o postgres-crud.wasm --component --optimize
-;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y postgres-crud.wasm
+;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y --env DATABASE_URL postgres-crud.wasm
 
 (ql:quickload "cl-postgres")
+
+(load "database-url.lisp")
 
 (defun fruits (conn)
   "Every row, as a list of (id name price) lists."
   (cl-postgres:exec-query conn "select id, name, price from fruits order by id"
                           'cl-postgres:list-row-reader))
 
-(let ((conn (cl-postgres:open-database "postgres" "postgres" nil "127.0.0.1" 54329)))
+(defun connect ()
+  "A connection to the server DATABASE_URL names. The five values arrive in the
+   order open-database takes them."
+  (multiple-value-bind (database user password host port)
+      (database-url-parts (uiop:getenv "DATABASE_URL"))
+    (cl-postgres:open-database database user password host port)))
+
+(let ((conn (connect)))
   ;; close-database in the cleanup, so the connection goes back even if a query
   ;; signals.
   (unwind-protect

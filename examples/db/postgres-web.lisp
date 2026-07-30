@@ -5,8 +5,11 @@
 ;; serves it. Two routes: GET / lists the notes and shows a form, POST /add
 ;; inserts one and redirects back.
 ;;
-;; It needs a server. The one-liner this example is written against:
+;; It needs a server, and reads where to find it out of DATABASE_URL
+;; (database-url.lisp beside this file parses the URL). The one-liner this
+;; example is written against, and the URL that reaches it:
 ;;   docker run --rm -p 54329:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine
+;;   export DATABASE_URL=postgresql://postgres@127.0.0.1:54329/postgres
 ;;   rontolisp examples/db/postgres-web.lisp
 ;; Then open http://127.0.0.1:8080 in a browser.
 ;;
@@ -19,16 +22,26 @@
 ;; it the linker rejects the module with "resource implementation is missing",
 ;; which reads like the host has no sockets at all:
 ;;   rontolisp examples/db/postgres-web.lisp -o app.wasm --component --optimize
-;;   wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y app.wasm
+;;   wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y --env DATABASE_URL app.wasm
 ;; wasmCloud runs the same component (wash dev; its startup log lists 0.2
 ;; interfaces but it does provide wasi:sockets 0.3).
-;; The component reaches the server over the network it is given, so point
-;; open-database at an address that is reachable from inside it -- a container
-;; IP under wasmtime-in-Docker, and under wash a NON-loopback address, because
-;; wash routes loopback to a per-workload virtual network.
+;; The component reaches the server over the network it is given, so DATABASE_URL
+;; has to name an address that is reachable from inside it -- a container IP
+;; under wasmtime-in-Docker, and under wash a NON-loopback address, because wash
+;; routes loopback to a per-workload virtual network.
+;;
+;; CAVEAT on that serve line today: a SERVED component reads no environment at
+;; all. uiop:getenv answers nil there whatever --env or -S inherit-env=y say,
+;; because the WASI 0.3 service world carries no wasi:cli/environment and the
+;; serve adapter stubs it out -- so this program gets as far as "no database URL
+;; given", which an uncaught error on WASM turns into a bare unreachable trap.
+;; The other three backends (interpreter, JVM, base --component) read it
+;; correctly; postgres-hello.lisp is the one to run under wasmtime run.
 
 (ql:quickload "cl-postgres")
 (ql:quickload "cl-who")
+
+(load "database-url.lisp")
 
 (defun connect ()
   "A connection to the database. One per request: a connection is a single
@@ -36,7 +49,9 @@
    request on its own thread with its own dynamic bindings, so requests that
    genuinely overlap stay isolated. (See the README for how each host holds
    up under a concurrent load test.)"
-  (cl-postgres:open-database "postgres" "postgres" nil "127.0.0.1" 54329))
+  (multiple-value-bind (database user password host port)
+      (database-url-parts (uiop:getenv "DATABASE_URL"))
+    (cl-postgres:open-database database user password host port)))
 
 ;; if not exists, not drop + create: this top level runs once per INSTANCE, and
 ;; how long an instance lives is the host's business -- wasmtime serve keeps one

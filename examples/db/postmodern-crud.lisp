@@ -6,15 +6,18 @@
 ;; as s-expressions, with-transaction wraps the update, and defprepared turns a
 ;; parameterised statement into an ordinary function.
 ;;
-;; It needs a server. The one-liner this example is written against:
+;; It needs a server, and reads where to find it out of DATABASE_URL
+;; (database-url.lisp beside this file parses the URL). The one-liner this
+;; example is written against, and the URL that reaches it:
 ;;   docker run --rm -p 54329:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine
+;;   export DATABASE_URL=postgresql://postgres@127.0.0.1:54329/postgres
 ;;   rontolisp examples/db/postmodern-crud.lisp
 ;;
 ;; The other backends work exactly as in postgres-hello.lisp (see it, and the
 ;; README beside it):
 ;;   rontolisp examples/db/postmodern-crud.lisp -o Prog.class && java Prog
 ;;   rontolisp examples/db/postmodern-crud.lisp -o postmodern-crud.wasm --component --optimize
-;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y postmodern-crud.wasm
+;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y --env DATABASE_URL postmodern-crud.wasm
 ;;
 ;; This is the non-MOP build of postmodern: the query, transaction and
 ;; prepared-statement layers shown below. The DAO layer (defclass with
@@ -22,6 +25,16 @@
 ;; is not available.
 
 (ql:quickload "postmodern")
+
+(load "database-url.lisp")
+
+(defun connection-spec ()
+  "What DATABASE_URL says, in the shape with-connection wants: the four
+   positional values, then :port. The same five values postgres-crud.lisp hands
+   to open-database -- with-connection is a macro over that same driver."
+  (multiple-value-bind (database user password host port)
+      (database-url-parts (uiop:getenv "DATABASE_URL"))
+    (list database user password host :port port)))
 
 ;; S-SQL turns an s-expression into an SQL string. When every value in the form
 ;; is a literal the whole translation happens while the program is being read,
@@ -32,7 +45,7 @@
 
 ;; The connection is bound for the whole body -- every query below finds it
 ;; through pomo:*database* -- and closed on the way out, however the body ends.
-(pomo:with-connection '("postgres" "postgres" nil "127.0.0.1" :port 54329)
+(pomo:with-connection (connection-spec)
 
   ;; CREATE. execute is query with no result; the leading drop makes the
   ;; example re-runnable.

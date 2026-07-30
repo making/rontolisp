@@ -10,12 +10,37 @@ rontolisp-specific binding.
 | [`postgres-crud.lisp`](postgres-crud.lisp) | full CRUD cycle: prepared statements (`prepare-query` + `exec-prepared`), an alist row reader, all inside a rolled-back transaction so it is safe to re-run | <https://github.com/marijnh/Postmodern> |
 | [`postmodern-crud.lisp`](postmodern-crud.lisp) | the same cycle one layer up: `with-connection`, statements written as S-SQL s-expressions, `with-transaction`, `defprepared`, and the result formats (`:alists`, `:single`, `:column`) | <https://github.com/marijnh/Postmodern> |
 | [`postgres-web.lisp`](postgres-web.lisp) | notes app: PostgreSQL storage + `rontolisp:http-handler` + cl-who for HTML | <https://github.com/edicl/cl-who> |
+| [`database-url.lisp`](database-url.lisp) | not a program: the `DATABASE_URL` parser the four above share, `(load)`ed by each of them | — |
 
 ## Setup
 
 ```bash
 docker run --rm -p 54329:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine
+export DATABASE_URL=postgresql://postgres@127.0.0.1:54329/postgres
 ```
+
+No program here holds a connection string. Each calls
+`(database-url-parts (uiop:getenv "DATABASE_URL"))` — `uiop:getenv` being
+rontolisp's one spelling of "read an environment variable", ANSI CL having none
+— where `database-url-parts` comes from [`database-url.lisp`](database-url.lisp),
+pulled in with a top-level `(load "database-url.lisp")` and so spliced in at
+compile time: the parser compiles natively on every backend rather than needing
+`--dynamic`. It takes a URL and knows nothing about the environment, so the same
+five values can come from a config file or a command-line argument instead.
+
+```
+postgresql://user:password@host:port/database
+```
+
+`postgres://` works as an alias for `postgresql://`. The password is optional
+(what the trust-auth server above wants), so is the port (5432), and so is a
+trailing query string — an `?sslmode=…`, which these examples recognise and
+drop, `use-ssl` not being wired up here. `%XX` escapes in the user and the
+password are decoded, so a password holding an `@` travels as `%40`; a `+` stays
+a literal plus, this being URI userinfo rather than a query string. Anything
+else — an unset variable, a missing host, a port that is not a number — is an
+error naming what is wrong, never a silent default: a fallback address would be
+the hardcoded connection this file exists to remove.
 
 ## Interpreter / JVM
 
@@ -35,23 +60,40 @@ app) cl-who, downloading them into `~/.rontolisp/quicklisp` on first run.
 ## WASM
 
 TCP requires `--component` (WASI 0.3 sockets); Preview 1 has no host socket API.
+`--env DATABASE_URL` is what puts the variable inside the component: wasmtime
+passes no environment through unless asked. Forget it and the program stops on
+`no database URL given` — except that an uncaught error on WASM surfaces as a
+bare `unreachable` trap with the message lost, so on that backend the missing
+flag looks like a crash rather than a diagnostic.
 
 ```bash
 rontolisp examples/db/postgres-hello.lisp -o postgres-hello.wasm --component --optimize
-wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y postgres-hello.wasm
+wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y --env DATABASE_URL postgres-hello.wasm
 ```
 
 `postgres-crud.lisp` and `postmodern-crud.lisp` build and run the same way.
 `postgres-web.lisp` runs under `wasmtime serve` and needs one more flag
-(`-S cli=y`):
+(`-S cli=y`) — but see the caveat below it: a served component reads no
+environment, so this is the one backend on which the program cannot pick up
+`DATABASE_URL`.
 
 ```bash
 rontolisp examples/db/postgres-web.lisp -o app.wasm --component --optimize
-wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y app.wasm
+wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y --env DATABASE_URL app.wasm
 ```
 
 wasmCloud runs the same component under `wash dev` with
 `wasm_proposals: [gc, exception-handling, component-model-async]`.
+
+**A served component reads no environment.** `uiop:getenv` answers `nil` inside
+one no matter what `--env` or `-S inherit-env=y` say: the WASI 0.3 service world
+carries no `wasi:cli/environment`, and the serve adapter stubs the preview1
+`environ_*` calls out to a zero-entry environment accordingly
+(`wasm-tools component wit app.wasm` lists the imports and shows it missing). So
+`postgres-web.lisp` gets as far as `no database URL given` there — a bare
+`unreachable` trap, per the note above — while the other three backends read the
+variable correctly. Closing the gap means teaching the serve adapter and
+`WasmServeComponentBuilder` the interface the base component already imports.
 
 ## Notes
 
@@ -67,7 +109,7 @@ wasmCloud runs the same component under `wash dev` with
 - **TLS is interpreter/JVM only.** A connection that negotiates SSL cannot work
   under WASM; use plain TCP (the default `:no`).
 - **wasmCloud addressing.** wash routes loopback to a per-workload virtual
-  network, so the database must be reachable at a non-loopback address.
+  network, so the host in `DATABASE_URL` must be a non-loopback address there.
 - **Instance lifetime.** The program's top level runs once per instance.
   `wasmtime serve` keeps one instance for the whole run, but wasmCloud gives
   each request a fresh instance — this is why `postgres-web.lisp` uses
