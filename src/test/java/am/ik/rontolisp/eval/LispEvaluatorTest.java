@@ -2937,6 +2937,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void mapcarAsValueOverMultipleLists() {
+		// #'mapcar as a VALUE, applied to a list-of-lists (alexandria:mappend's shape).
+		// The interpreter has always been right here; the case pins it as the reference
+		// the compile backends' wrapper (BuiltinFunctionWrappers.mapcarWrapper) matches.
+		assertThat(eval("(apply #'mapcar #'list '((1 2) (3 4)))").print()).isEqualTo("((1 3) (2 4))");
+		assertThat(eval("(apply #'mapcar #'+ '((1 2) (10 20) (100 200)))").print()).isEqualTo("(111 222)");
+		assertThat(eval("(apply #'mapcar #'list '((1 2 3) (3 4)))").print()).isEqualTo("((1 3) (2 4))");
+		assertThat(eval("(funcall #'mapcar #'1+ '(1 2 3))").print()).isEqualTo("(2 3 4)");
+	}
+
+	@Test
 	void mapFamilySignalsErrorOnNonList() {
 		// The map* family operates on lists; passing a non-list (e.g. a string) signals
 		// an

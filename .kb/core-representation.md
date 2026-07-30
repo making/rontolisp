@@ -44,6 +44,26 @@ Internal helpers outside the public API are `%`-prefixed (e.g. `%remf-tail`).
 `#'+`/`#'car` work as first-class values -- internal encoding, not a real user
 definition (Lisp-2).
 
+**The invariant a wrapper must not break: a wrapper's arity is the OPERATOR's
+arity, not the shape that was convenient to write.** The body puts the operator
+in call position, where the backends inline it -- so anything the operator
+decides STATICALLY (an argument count, a result type, a file mode) is fixed in
+the wrapper while the caller's real arguments are runtime values. A wrapper
+narrower than its operator does not signal: the surplus arguments simply go
+nowhere, which is a wrong answer on the compile backends and a correct one on
+the interpreter (the same call reaches a real variadic built-in there). Three
+worked answers to that, in ascending cost: a `&rest` fold
+(`variadicIdentity`/`variadicNonEmpty` for `+`/`min`), a `&rest` dispatch onto
+the literal shapes the operator needs (`openWrapper`'s direction/element-type
+plist, `concatenateWrapper`'s result-type family --
+[concatenate-result-families.md](concatenate-result-families.md)), and the
+wrapper implementing the general case itself (`mapcarWrapper` walks the
+list-of-lists in a `do` loop, because `mapcar`'s list COUNT is static in call
+position; `alexandria:mappend` is `(apply #'mapcar f lists)` and used to get
+every list but the first dropped). When adding a wrapper, check the operator's
+CL lambda list first; the rest of the map family is still narrow on purpose and
+tracked in `.todo/218`.
+
 ## JVM method name mangling
 
 `JvmLispCompiler.mangleMethodName()` maps `/ < > : .` to

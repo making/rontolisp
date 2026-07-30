@@ -206,6 +206,51 @@ public final class BuiltinFunctionWrappers {
 		return listToCons(List.of(new LispSymbol(LispNames.DO), bindings, exit, step, stepDs, stepIs));
 	}
 
+	/**
+	 * The {@code #'mapcar} wrapper. In CALL position {@code mapcar} takes any number of
+	 * lists, but the expansion needs that count STATICALLY, so a fixed-arity wrapper
+	 * cannot forward the extra lists -- and dropping them silently returned a one-list
+	 * result for {@code (apply #'mapcar f lists)}, alexandria's
+	 * {@code mappend}/{@code map-product} shape (the interpreter answered correctly, both
+	 * compile backends did not). The wrapper therefore walks the list-of-lists itself:
+	 *
+	 * <pre>
+	 * (lambda (f l &amp;rest more)
+	 *   (if (null more)
+	 *       (mapcar f l)                              ; one list: the primitive
+	 *       (do ((ls (cons l more)) (acc nil))         ; N lists: shortest-list walk
+	 *           ((member nil ls) (reverse acc))
+	 *         (setq acc (cons (apply f (mapcar (lambda (x) (car x)) ls)) acc))
+	 *         (setq ls (mapcar (lambda (x) (cdr x)) ls)))))
+	 * </pre>
+	 *
+	 * The inner {@code mapcar}s are single-list, so they compile as the primitive;
+	 * {@code (member nil ls)} is exactly "some list is exhausted", CL's termination rule.
+	 */
+	private static WrapperDef mapcarWrapper() {
+		LispVal bindings = listToCons(
+				List.of(callV("ls", callV(LispNames.CONS, new LispSymbol("l"), new LispSymbol("more"))),
+						callV("acc", LispNil.INSTANCE)));
+		LispVal exit = listToCons(List.of(callV(LispNames.MEMBER, LispNil.INSTANCE, new LispSymbol("ls")),
+				call(LispNames.REVERSE, "acc")));
+		LispVal heads = callV(LispNames.MAPCAR, projection(LispNames.CAR), new LispSymbol("ls"));
+		LispVal tails = callV(LispNames.MAPCAR, projection(LispNames.CDR), new LispSymbol("ls"));
+		LispVal collect = callV(LispNames.SETQ, new LispSymbol("acc"),
+				callV(LispNames.CONS, callV(LispNames.APPLY, new LispSymbol("f"), heads), new LispSymbol("acc")));
+		LispVal advance = callV(LispNames.SETQ, new LispSymbol("ls"), tails);
+		LispVal walk = listToCons(List.of(new LispSymbol(LispNames.DO), bindings, exit, collect, advance));
+		LispVal dispatch = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "more"),
+				call(LispNames.MAPCAR, "f", "l"), walk));
+		return new WrapperDef(LispNames.MAPCAR, List.of("f", "l", LispNames.LAMBDA_REST, "more"), List.of(dispatch));
+	}
+
+	// (lambda (x) (op x)) -- spelled inline rather than as #'car / #'cdr so the wrapper
+	// body does not depend on another wrapper's setq having run first.
+	private static LispVal projection(String op) {
+		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of((LispVal) new LispSymbol("x"))),
+				call(op, "x")));
+	}
+
 	private static WrapperDef unary(String name) {
 		return new WrapperDef(name, List.of("a"), List.of(call(name, "a")));
 	}
@@ -563,9 +608,10 @@ public final class BuiltinFunctionWrappers {
 			ternary(LispNames.SUBSTITUTE), ternary(LispNames.NSUBSTITUTE), binary(LispNames.MAPCAN),
 			binary(LispNames.SORT), variadicStableSort(), unary(LispNames.COPY_SEQ),
 			// The mapping family as first-class values (alexandria hands #'mapcar to
-			// its own combinators). Two-list shapes are the ones a wrapper can carry:
-			// the expansions take a fixed sequence count.
-			binary(LispNames.MAPCAR), binary(LispNames.MAPC), binary(LispNames.MAPLIST), binary(LispNames.MAPCON),
+			// its own combinators). #'mapcar carries ANY number of lists (see
+			// mapcarWrapper); the rest stay one-list, matching what the interpreter's
+			// own built-ins accept.
+			mapcarWrapper(), binary(LispNames.MAPC), binary(LispNames.MAPLIST), binary(LispNames.MAPCON),
 			binary(LispNames.MAPL),
 			// funcall is variadic: (lambda (f &rest r) (apply f r)) -- e.g.
 			// cl-utilities' compose folds with (reduce #'funcall fns ...).

@@ -2183,6 +2183,18 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(result.getStderr()).contains("unreachable");
 	}
 
+	// #'mapcar AS A VALUE over more than one list: the list count is a runtime property
+	// there, so the wrapper walks the list-of-lists itself (BuiltinFunctionWrappers.
+	// mapcarWrapper) instead of dropping every list but the first. alexandria:mappend is
+	// (apply #'mapcar function lists), so this is the shape a real library takes.
+	@Test
+	void mapcarAsValueOverMultipleListsCompilesAndRuns() throws Exception {
+		assertThat(compileAndRun("(print (apply #'mapcar #'list '((1 2) (3 4))))")).isEqualTo("((1 3) (2 4))");
+		assertThat(compileAndRun("(print (apply #'mapcar #'+ '((1 2) (10 20) (100 200))))")).isEqualTo("(111 222)");
+		assertThat(compileAndRun("(print (apply #'mapcar #'list '((1 2 3) (3 4))))")).isEqualTo("((1 3) (2 4))");
+		assertThat(compileAndRun("(print (funcall #'mapcar #'1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
+	}
+
 	@Test
 	void mapFamilyTrapsOnNonList() throws Exception {
 		// The map* family operates on lists; a non-list (e.g. a string) traps rather than

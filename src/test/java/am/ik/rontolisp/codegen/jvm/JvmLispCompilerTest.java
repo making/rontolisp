@@ -1147,6 +1147,19 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (mapcar #'cons '(1 2 3) '(a b)))")).isEqualTo("((1 . A) (2 . B))");
 	}
 
+	// #'mapcar AS A VALUE over more than one list: the list count is a runtime property
+	// there, so the wrapper walks the list-of-lists itself (BuiltinFunctionWrappers.
+	// mapcarWrapper). It used to drop every list but the first and answer ((1) (2)) --
+	// silently, and only on the compile backends. alexandria:mappend is (apply #'mapcar
+	// function lists), so this is the shape a real library takes.
+	@Test
+	void compileAndRunMapcarAsValueOverMultipleLists() throws Exception {
+		assertThat(compileAndRun("(print (apply #'mapcar #'list '((1 2) (3 4))))")).isEqualTo("((1 3) (2 4))");
+		assertThat(compileAndRun("(print (apply #'mapcar #'+ '((1 2) (10 20) (100 200))))")).isEqualTo("(111 222)");
+		assertThat(compileAndRun("(print (apply #'mapcar #'list '((1 2 3) (3 4))))")).isEqualTo("((1 3) (2 4))");
+		assertThat(compileAndRun("(print (funcall #'mapcar #'1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
+	}
+
 	@Test
 	void compileAndRunMapIntoList() throws Exception {
 		assertThat(compileAndRun("(print (map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40)))"))

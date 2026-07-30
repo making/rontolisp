@@ -5810,3 +5810,22 @@ cases:
       (T T NIL #\a #\c NIL)
       ((0 0 0) (NIL NIL) NIL)
       "data/effective_tld_names.dat"
+
+  - name: mapcar-as-a-first-class-value-over-many-lists
+    source: |
+      ;; #'mapcar AS A VALUE: the list count is a runtime property, so the
+      ;; first-class wrapper walks the list-of-lists itself instead of dropping
+      ;; every list but the first (which used to answer ((1) (2)) on the compile
+      ;; backends only, silently). alexandria:mappend is exactly this shape --
+      ;; (apply #'mapcar function lists).
+      (print (apply (function mapcar) (function list) '((1 2) (3 4))))
+      (print (apply (function mapcar) (function +) '((1 2) (10 20) (100 200))))
+      ;; The walk stops at the SHORTEST list, CL's termination rule.
+      (print (apply (function mapcar) (function list) '((1 2 3) (3 4))))
+      ;; One list still goes straight to the primitive.
+      (print (funcall (function mapcar) (function 1+) '(1 2 3)))
+    expected: |
+      ((1 3) (2 4))
+      (111 222)
+      ((1 3) (2 4))
+      (2 3 4)
