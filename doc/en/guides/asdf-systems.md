@@ -159,12 +159,13 @@ actually call, not the full upstream APIs.
 
 ## What can I actually load?
 
-Thirteen real-world libraries load unmodified today. The **Backends** column says
+Fourteen real-world libraries load unmodified today. The **Backends** column says
 where each one is verified — "all four" means the interpreter, the JVM, WASM
 Preview 1 and `--component`.
 
 | Library | Backends | What works | Lite limitations |
 |---------|----------|------------|------------------|
+| [alexandria](https://gitlab.common-lisp.net/alexandria/alexandria) 1.0.1 | all four | the ecosystem's most-depended-on utility library, loaded from its real unmodified sources — both of its packages (`alexandria`, nicknamed `alexandria-1`, and `alexandria-2`). The binding and control-flow macros (`if-let`/`when-let`/`when-let*`, `switch`/`eswitch`/`cswitch`, `xor`, `whichever`, `nth-value-or`), the macro-writing macros (`with-gensyms`/`once-only`/`named-lambda`/`destructuring-case`/`parse-body`) usable from your own `defmacro`, `define-constant`, the function combinators (`compose`/`multiple-value-compose`/`curry`/`rcurry`/`conjoin`/`disjoin`/`ensure-function`), the list and plist/alist utilities (`iota`, `flatten`, `mappend`, `lastcar`, `ensure-list`/`ensure-cons`, `alist-plist`/`plist-alist`, `remove-from-plist`/`delete-from-plist`, `assoc-value`/`rassoc-value`, `set-equal`/`setp`, `doplist`, `proper-list-p`/`circular-list-p`), the modify macros over `setf` places (`appendf`/`removef`/`maxf`/`minf`), the sequence helpers (`emptyp`, `length=`, `first-elt`/`last-elt`, `starts-with`/`ends-with` and their `-subseq` pair, `extremum`, `sequence-of-length-p`, `map-combinations`/`map-permutations`, `copy-array`), the hash-table conversions (`alist-hash-table`/`plist-hash-table`, `hash-table-keys`/`-values`/`-alist`/`-plist`, `ensure-gethash`, `copy-hash-table`, `maphash-keys`/`-values`), the number helpers (`clamp`, `lerp`, `mean`, `variance`, `standard-deviation`, `factorial`, `binomial-coefficient`, `subfactorial`, `count-permutations`), `symbolicate`/`make-keyword`, the condition helpers (`required-argument`, `simple-parse-error`, `ignore-some-conditions`, `unwind-protect-case`), `featurep`, and alexandria-2's `subseq*`/`line-up-first`/`line-up-last`/`delete-from-plist*` | the members that stand on a primitive still missing here: `copy-sequence` and `median` (they `coerce` to a **computed** result type, which is float-only), `rotate` (`(last list n)` — the count argument), `type=` (`subtypep` returns no secondary "was it certain" value), `read-file-into-string`/`read-stream-content-into-string` (`read-sequence` into a character buffer), and alexandria-2's `dim-in-bounds-p`/`row-major-index`/`rmajor-to-indices` (`every` over two sequences at once). Two more work on the interpreter only, so they are compile-backend errors rather than wrong answers: `format-symbol`/`ensure-symbol` (`intern` with a runtime package designator) and `ensure-function` on a **symbol** (`symbol-function` with a runtime name). `shuffle`/`random-elt`/`gaussian-random` do work, each drawing from its own backend's entropy, so their output is not comparable across backends. `standard-deviation` computes the same value everywhere but PRINTS in each WASM backend's own float shape (`1.118033` where the interpreter and the JVM say `1.118033988749895`) -- the usual WASM float-text caveat, not an alexandria one |
 | [split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1 | all four | `split-sequence`/`split-sequence-if`/`split-sequence-if-not` on strings and lists — including the second return value (the resume index), which crosses the function boundary through the multiple-value channel | none — its CLOS-only `extended-sequence.lisp` is gated behind `:if-feature (:or :sbcl :abcl)` and drops out automatically |
 | [parse-number](https://github.com/sharplispers/parse-number) v1.8 | all four | `parse-number`/`parse-real-number`/`parse-positive-real-number` over integers, ratios, floats, radix-prefixed literals (`#xFF`, `#3r12`) and exponent markers | none — the `(error 'invalid-number :value ... :reason ...)` idiom signals with the intended diagnostics through the lite condition stand-ins |
 | [cl-utilities](https://common-lisp.net/project/cl-utilities/) v1.2.4 | all four | the whole public API — its own `split-sequence`, the `extremum` family (`extremum`/`extremum-fastkey`/`extrema`/`n-most-extreme`), `read-delimited`, `expt-mod`, `collecting`/`with-collectors`, `with-unique-names`/`with-gensyms`/`once-only` (three-level nested backquote) usable from your own macros, `rotate-byte`, `copy-array` and `compose` | none |
@@ -191,7 +192,15 @@ pathname primitives, inlining a bundled data file read with `with-open-file`
 into the artifact, a per-clause rewrite of the `LOOP` macro, and the UTF-8 byte
 model behind WASM GC strings.
 
-Runnable demos for eleven of them (the s-sql demo needs a vendored postmodern tree and is pending) — with the per-backend commands and
+alexandria's is the batch every other library inherits, because everything above
+that has dependencies depends on it: `&whole` in `defmacro`/`destructuring-bind`,
+a destructuring pattern after `&rest`/`&body` (`if-let`), `lambda-list-keywords`,
+`do-external-symbols`, `intern` with a package designator, the hash-table
+introspection readers (`hash-table-test`/`-size`/`-rehash-size`/`-rehash-threshold`),
+`mismatch`, `arrayp`, `with-open-stream` and `#'open` as a first-class value —
+plus, for `mappend`, `#'mapcar` as a value over more than one list.
+
+Runnable demos for twelve of them (the s-sql demo needs a vendored postmodern tree and is pending) — with the per-backend commands and
 expected output — live in
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf).
 

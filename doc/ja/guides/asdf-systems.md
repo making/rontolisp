@@ -151,12 +151,13 @@ API は提供しません。
 
 ## 実際に何がロードできるか
 
-現在、実世界の 13 のライブラリが無改変でロードできます。**バックエンド**列は
+現在、実世界の 14 のライブラリが無改変でロードできます。**バックエンド**列は
 それぞれの検証済み範囲を示します — 「4 つ全て」はインタプリタ、JVM、WASM
 Preview 1、`--component` を意味します。
 
 | ライブラリ | バックエンド | 動作する範囲 | 簡易版の制限 |
 |------------|--------------|--------------|--------------|
+| [alexandria](https://gitlab.common-lisp.net/alexandria/alexandria) 1.0.1 | 4 つ全て | エコシステムで最も依存されているユーティリティライブラリを、実物の未改変ソースからロードします — 2 つのパッケージ (`alexandria`、ニックネーム `alexandria-1`、および `alexandria-2`) の両方が動作します。束縛と制御フローのマクロ (`if-let`/`when-let`/`when-let*`、`switch`/`eswitch`/`cswitch`、`xor`、`whichever`、`nth-value-or`)、自分の `defmacro` から使えるマクロ記述用マクロ (`with-gensyms`/`once-only`/`named-lambda`/`destructuring-case`/`parse-body`)、`define-constant`、関数コンビネータ (`compose`/`multiple-value-compose`/`curry`/`rcurry`/`conjoin`/`disjoin`/`ensure-function`)、リストと plist/alist ユーティリティ (`iota`、`flatten`、`mappend`、`lastcar`、`ensure-list`/`ensure-cons`、`alist-plist`/`plist-alist`、`remove-from-plist`/`delete-from-plist`、`assoc-value`/`rassoc-value`、`set-equal`/`setp`、`doplist`、`proper-list-p`/`circular-list-p`)、`setf` プレースに対する変更マクロ (`appendf`/`removef`/`maxf`/`minf`)、シーケンスヘルパ (`emptyp`、`length=`、`first-elt`/`last-elt`、`starts-with`/`ends-with` とその `-subseq` 対、`extremum`、`sequence-of-length-p`、`map-combinations`/`map-permutations`、`copy-array`)、ハッシュテーブル変換 (`alist-hash-table`/`plist-hash-table`、`hash-table-keys`/`-values`/`-alist`/`-plist`、`ensure-gethash`、`copy-hash-table`、`maphash-keys`/`-values`)、数値ヘルパ (`clamp`、`lerp`、`mean`、`variance`、`standard-deviation`、`factorial`、`binomial-coefficient`、`subfactorial`、`count-permutations`)、`symbolicate`/`make-keyword`、コンディションヘルパ (`required-argument`、`simple-parse-error`、`ignore-some-conditions`、`unwind-protect-case`)、`featurep`、そして alexandria-2 の `subseq*`/`line-up-first`/`line-up-last`/`delete-from-plist*` | まだ無いプリミティブに依存しているメンバーは動きません: `copy-sequence` と `median` (**計算された**結果型への `coerce` は浮動小数点型のみ)、`rotate` (`(last list n)` の個数引数)、`type=` (`subtypep` が「確実に判定できたか」の第 2 返り値を返さない)、`read-file-into-string`/`read-stream-content-into-string` (文字バッファへの `read-sequence`)、および alexandria-2 の `dim-in-bounds-p`/`row-major-index`/`rmajor-to-indices` (2 つのシーケンスを同時に取る `every`)。さらに 2 つはインタプリタでのみ動作し、コンパイルバックエンドでは誤った値ではなくエラーになります: `format-symbol`/`ensure-symbol` (実行時のパッケージ指定子による `intern`) と、**シンボル**を渡した `ensure-function` (実行時の名前による `symbol-function`)。`shuffle`/`random-elt`/`gaussian-random` は動作しますが、それぞれのバックエンド固有のエントロピーを引くため、出力はバックエンド間で比較できません。`standard-deviation` はどのバックエンドでも同じ値を計算しますが、**表示**は各 WASM バックエンド固有の浮動小数点形式になります (インタプリタと JVM が `1.118033988749895` を出すところで `1.118033`) — これは alexandria 固有ではなく、WASM の浮動小数点テキストに関する通常の注意点です |
 | [split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1 | 4 つ全て | `split-sequence`/`split-sequence-if`/`split-sequence-if-not` が文字列とリストに対して動作します — 関数境界を多値チャネル経由で越える第 2 戻り値 (再開インデックス) を含めて | なし — CLOS 専用の `extended-sequence.lisp` は `:if-feature (:or :sbcl :abcl)` でゲートされており自動的に除外されます |
 | [parse-number](https://github.com/sharplispers/parse-number) v1.8 | 4 つ全て | `parse-number`/`parse-real-number`/`parse-positive-real-number` が整数、有理数、浮動小数点数、基数プレフィクス付きリテラル (`#xFF`、`#3r12`)、指数マーカーを扱います | なし — `(error 'invalid-number :value ... :reason ...)` イディオムは簡易コンディション代替を通じて意図した診断情報付きでシグナルされます |
 | [cl-utilities](https://common-lisp.net/project/cl-utilities/) v1.2.4 | 4 つ全て | 公開 API 全体 — 独自の `split-sequence`、`extremum` ファミリー (`extremum`/`extremum-fastkey`/`extrema`/`n-most-extreme`)、`read-delimited`、`expt-mod`、`collecting`/`with-collectors`、自作マクロから使える `with-unique-names`/`with-gensyms`/`once-only` (3 段のネストバッククォート)、`rotate-byte`、`copy-array`、`compose` | なし |
@@ -183,7 +184,16 @@ uax-15 のロードは 2 番目に大きなバッチ — ASDF/UIOP のパス名�
 インライン化、`LOOP` マクロの節単位への書き換え、WASM GC 文字列の背後にある
 UTF-8 バイトモデル — を牽引しました。
 
-そのうち 11 ライブラリの実行可能なデモ（s-sql のデモは postmodern ツリーの同梱が必要なため保留中） — バックエンド別の実行コマンドと期待
+alexandria のバッチは、他のすべてのライブラリが受け継いだものです。依存を持つ
+ライブラリはすべて alexandria に依存しているからです:
+`defmacro`/`destructuring-bind` の `&whole`、`&rest`/`&body` の後の分配パターン
+(`if-let`)、`lambda-list-keywords`、`do-external-symbols`、パッケージ指定子付きの
+`intern`、ハッシュテーブルの内部情報リーダ
+(`hash-table-test`/`-size`/`-rehash-size`/`-rehash-threshold`)、`mismatch`、
+`arrayp`、`with-open-stream`、第一級の値としての `#'open` — さらに `mappend` の
+ために、複数リストを取る第一級の値としての `#'mapcar`。
+
+そのうち 12 ライブラリの実行可能なデモ（s-sql のデモは postmodern ツリーの同梱が必要なため保留中） — バックエンド別の実行コマンドと期待
 出力付き — は
 [`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf)
 にあります。

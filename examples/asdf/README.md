@@ -4,9 +4,10 @@ These demos load REAL third-party Common Lisp libraries -- unmodified
 upstream sources -- through `asdf:load-system` and exercise their public API.
 All of them run identically on all four backends (interpreter, JVM,
 WASM Preview 1 and `--component`); they are the programs the cross-backend E2E
-tests pin (`SplitSequenceE2eTest` / `ParseNumberE2eTest` / `ClUtilitiesE2eTest`
-/ `ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest` / `JzonE2eTest`
-/ `Md5E2eTest` / `ClPpcreE2eTest` / `IroncladE2eTest` / `Uax15E2eTest`).
+tests pin (`AlexandriaE2eTest` / `SplitSequenceE2eTest` / `ParseNumberE2eTest`
+/ `ClUtilitiesE2eTest` / `ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest`
+/ `JzonE2eTest` / `Md5E2eTest` / `ClPpcreE2eTest` / `IroncladE2eTest`
+/ `Uax15E2eTest`).
 jzon's three numeric leaf components (the eisel-lemire float reader and
 Schubfach float printer) are replaced at load time by built-in shims over
 rontolisp's native float arithmetic, so float text takes rontolisp's
@@ -19,6 +20,7 @@ rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src
 
 | Demo | Library | Upstream |
 | --- | --- | --- |
+| [`alexandria-demo.lisp`](alexandria-demo.lisp) | alexandria 1.0.1 (public domain / 0-clause MIT) | <https://gitlab.common-lisp.net/alexandria/alexandria> |
 | [`split-sequence-demo.lisp`](split-sequence-demo.lisp) | split-sequence v2.0.1 (MIT) | <https://github.com/sharplispers/split-sequence> |
 | [`parse-number-demo.lisp`](parse-number-demo.lisp) | parse-number v1.8 (BSD 3-Clause) | <https://github.com/sharplispers/parse-number> |
 | [`cl-utilities-demo.lisp`](cl-utilities-demo.lisp) | cl-utilities v1.2.4 (public domain) | <https://common-lisp.net/project/cl-utilities/> |
@@ -36,6 +38,7 @@ rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src
 The library sources are vendored in this repository for the test suite, so
 the demos run out of the box from the repository root:
 
+- `src/test/resources/alexandria/`
 - `src/test/resources/split-sequence/`
 - `src/test/resources/parse-number/`
 - `src/test/resources/cl-utilities/`
@@ -100,6 +103,16 @@ rontolisp examples/asdf/uax-15-demo.lisp --system-path $SYS
 The compile path splices the system's component files in at compile time
 (the `.asd` must be on disk when compiling), so the produced `.class`/`.wasm`
 is self-contained -- running it needs no library files.
+
+A demo that uses `handler-case`/`unwind-protect` compiles in EH mode, so BOTH
+wasm run commands need `-W exceptions=y` (wasmtime 37+) -- `alexandria-demo.lisp`
+is one:
+
+```bash
+SYS=src/test/resources/alexandria
+rontolisp examples/asdf/alexandria-demo.lisp -o demo.wasm --system-path $SYS && \
+  wasmtime run -W gc -W exceptions=y demo.wasm
+```
 
 ## Expected output
 

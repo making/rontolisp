@@ -46,6 +46,28 @@ verification against the actual Quicklisp dist at probe time)
 - Gray streams — `GrayStreamsLibrary` exists (jzon work); flexi-streams
   would test its generality.
 
+## Probe results
+
+- **`alexandria` — DONE (2026-07-30).** It became loadable during the
+  cl-postgres pass (`.todo/115`) and every dependent since (cl-postgres, s-sql,
+  postmodern, quri) has ridden on it, but nothing pinned it on its own. The
+  integration checklist above is now complete: the sources are vendored
+  unmodified under `src/test/resources/alexandria`, `AlexandriaE2eTest` runs the
+  public API of both packages on all four backends via `AsdfLibraryE2eSupport`,
+  `examples/asdf/alexandria-demo.lisp` + the README row are the same program, and
+  the guide (en+ja) carries the row with its limitation list. Full account:
+  `.kb/asdf.md`'s alexandria entry.
+  - One correctness bug fell out of it: **`#'mapcar` as a first-class value
+    dropped every list but the first on both compile backends** (silently --
+    `alexandria:mappend` is `(apply #'mapcar function lists)`). Fixed in the same
+    pass (`BuiltinFunctionWrappers.mapcarWrapper`); the rest of the map family
+    stays divergent, `.todo/218`.
+  - Four missing primitives still keep part of the API dark (`coerce` to a
+    computed result type, `(last list n)`, multi-sequence `every`, `read-sequence`
+    into a character buffer): `.todo/219`.
+- **`cl-ppcre`, `ironclad` — DONE** (see `.kb/asdf.md`); both are on the guide's
+  loadable list.
+
 ## Deliverable
 
 Per probe: either the library loads end-to-end (checklist complete), or a

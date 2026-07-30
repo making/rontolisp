@@ -13,6 +13,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AsdfSystemsTest {
 
+	// The component order the vendored alexandria.asd resolves to: package first, then
+	// the topological sort of its per-file :depends-on, modules staying contiguous.
+	private static final String[] ALEXANDRIA_FILES = { "alexandria-1/package.lisp", "alexandria-1/definitions.lisp",
+			"alexandria-1/binding.lisp", "alexandria-1/strings.lisp", "alexandria-1/conditions.lisp",
+			"alexandria-1/symbols.lisp", "alexandria-1/macros.lisp", "alexandria-1/hash-tables.lisp",
+			"alexandria-1/control-flow.lisp", "alexandria-1/functions.lisp", "alexandria-1/lists.lisp",
+			"alexandria-1/types.lisp", "alexandria-1/arrays.lisp", "alexandria-1/sequences.lisp",
+			"alexandria-1/numbers.lisp", "alexandria-1/features.lisp", "alexandria-1/io.lisp",
+			"alexandria-2/package.lisp", "alexandria-2/arrays.lisp", "alexandria-2/control-flow.lisp",
+			"alexandria-2/sequences.lisp", "alexandria-2/lists.lisp" };
+
 	private static LispVal form(String source) {
 		return LispReader.readFromString(source);
 	}
@@ -320,6 +331,38 @@ class AsdfSystemsTest {
 		assertThat(system.dependsOn()).containsExactly("md5", "split-sequence", "ironclad", "cl-base64", "uax-15");
 		assertThat(system.files()).containsExactly("cl-postgres/package.lisp", "cl-postgres/trivial-utf-8.lisp",
 				"cl-postgres/strings-utf-8.lisp", "cl-postgres/communicate.lisp");
+	}
+
+	@Test
+	void parsesTheVendoredAlexandriaAsd() throws Exception {
+		// The verbatim alexandria.asd (vendored under src/test/resources/alexandria) is
+		// the richest ORDERING case on the loadable list: two :modules, a :static-file
+		// per module that must contribute no source while keeping its place, per-file
+		// :depends-on in an order that is NOT the declared one (io comes before the
+		// macros/lists/types it needs), and an :in-order-to test-op clause the data-only
+		// front end tolerates and ignores. Pinned as data, so a regression in the
+		// topological sort shows up here rather than as a mid-load "undefined function"
+		// in AlexandriaE2eTest.
+		String source = java.nio.file.Files
+			.readString(java.nio.file.Path.of("src", "test", "resources", "alexandria", "alexandria.asd"));
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "alexandria/alexandria.asd",
+				Features.INTERPRETER);
+		// The file defines two systems: alexandria and the secondary alexandria/tests
+		// (whose own :depends-on carries the #+sbcl/#-sbcl pair -- :rt survives here).
+		assertThat(systems).extracting(AsdfSystems.LispSystem::name).containsExactly("alexandria", "alexandria/tests");
+		assertThat(systems.get(1).dependsOn()).containsExactly("alexandria", "rt");
+		AsdfSystems.LispSystem system = systems.get(0);
+		assertThat(system.name()).isEqualTo("alexandria");
+		assertThat(system.dependsOn()).isEmpty();
+		assertThat(system.files()).containsExactly(ALEXANDRIA_FILES);
+		// Every dependency of every component precedes it, and no :static-file
+		// (LICENCE, the two tests.lisp) contributes a source file.
+		assertThat(system.files()).doesNotContain("alexandria-1/tests.lisp", "alexandria-2/tests.lisp", "LICENCE");
+		assertThat(system.files().indexOf("alexandria-1/package.lisp")).isZero();
+		assertThat(system.files().indexOf("alexandria-1/macros.lisp"))
+			.isLessThan(system.files().indexOf("alexandria-1/io.lisp"));
+		assertThat(system.files().indexOf("alexandria-1/functions.lisp"))
+			.isLessThan(system.files().indexOf("alexandria-1/lists.lisp"));
 	}
 
 	@Test
