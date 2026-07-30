@@ -991,22 +991,20 @@ public final class LispEvaluator {
 			}
 			return applyJsonHelper(JsonLibrary.HELPER_STRINGIFY, List.of(args.get(0)));
 		}));
-		this.globalEnv.defineFunction(LispNames.MAPCAR, new LispFunction(LispNames.MAPCAR, args -> {
-			if (args.size() < 2) {
-				throw new LispEvalException(LispNames.MAPCAR + " expects at least 2 arguments, got " + args.size());
-			}
-			for (int i = 1; i < args.size(); i++) {
-				requireList(LispNames.MAPCAR, args.get(i));
-			}
-			return mapValues(args.get(0), args.subList(1, args.size()));
-		}));
-		this.globalEnv.defineFunction(LispNames.MAPC, new LispFunction(LispNames.MAPC, args -> {
-			if (args.size() != 2) {
-				throw new LispEvalException(LispNames.MAPC + " expects 2 arguments, got " + args.size());
-			}
-			requireList(LispNames.MAPC, args.get(1));
-			return mapForEffect(args.get(0), args.get(1));
-		}));
+		this.globalEnv.defineFunction(LispNames.MAPCAR, new LispFunction(LispNames.MAPCAR,
+				args -> mapValues(args.get(0), requireMapLists(LispNames.MAPCAR, args), false)));
+		this.globalEnv.defineFunction(LispNames.MAPC, new LispFunction(LispNames.MAPC,
+				args -> mapForEffect(args.get(0), requireMapLists(LispNames.MAPC, args), false)));
+		// maplist/mapcon/mapl are macro-expanded in call position (evalCons), but a
+		// first-class #'maplist has to resolve to something: without these the value path
+		// answered "The function MAPLIST is undefined" while both compile backends
+		// happily wrapped it.
+		this.globalEnv.defineFunction(LispNames.MAPLIST, new LispFunction(LispNames.MAPLIST,
+				args -> mapValues(args.get(0), requireMapLists(LispNames.MAPLIST, args), true)));
+		this.globalEnv.defineFunction(LispNames.MAPCON, new LispFunction(LispNames.MAPCON,
+				args -> mapcanValues(args.get(0), requireMapLists(LispNames.MAPCON, args), true)));
+		this.globalEnv.defineFunction(LispNames.MAPL, new LispFunction(LispNames.MAPL,
+				args -> mapForEffect(args.get(0), requireMapLists(LispNames.MAPL, args), true)));
 		this.globalEnv.defineFunction(LispNames.MAPHASH, new LispFunction(LispNames.MAPHASH, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.MAPHASH + " expects 2 arguments, got " + args.size());
@@ -1194,13 +1192,8 @@ public final class LispEvaluator {
 			}
 			return deleteIfValues(args.get(0), args.get(1), false);
 		}));
-		this.globalEnv.defineFunction(LispNames.MAPCAN, new LispFunction(LispNames.MAPCAN, args -> {
-			if (args.size() != 2) {
-				throw new LispEvalException(LispNames.MAPCAN + " expects 2 arguments, got " + args.size());
-			}
-			requireList(LispNames.MAPCAN, args.get(1));
-			return mapcanValues(args.get(0), args.get(1));
-		}));
+		this.globalEnv.defineFunction(LispNames.MAPCAN, new LispFunction(LispNames.MAPCAN,
+				args -> mapcanValues(args.get(0), requireMapLists(LispNames.MAPCAN, args), false)));
 		this.globalEnv.defineFunction(LispNames.SORT, new LispFunction(LispNames.SORT, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.SORT + " expects 2 arguments, got " + args.size());
@@ -4956,29 +4949,51 @@ public final class LispEvaluator {
 		}
 	}
 
-	// mapcar over one or more lists in parallel, stopping at the shortest list
-	// (Common Lisp semantics).
-	private LispVal mapValues(LispVal function, List<LispVal> lists) {
+	// Validates a map* family call's arguments -- a function designator plus at least one
+	// list, every one of which must be a list -- and returns just the lists. Every member
+	// of the family takes N lists in Common Lisp, so the arity check is a lower bound for
+	// all of them, not just mapcar.
+	private List<LispVal> requireMapLists(String name, List<LispVal> args) {
+		if (args.size() < 2) {
+			throw new LispEvalException(name + " expects at least 2 arguments, got " + args.size());
+		}
+		List<LispVal> lists = args.subList(1, args.size());
+		for (LispVal list : lists) {
+			requireList(name, list);
+		}
+		return lists;
+	}
+
+	// The shared walk behind the whole map* family: call the function once per position
+	// with one argument per list, stopping as soon as the SHORTEST list runs out (Common
+	// Lisp's termination rule). 'tails' passes the successive cdrs themselves
+	// (maplist/mapcon/mapl) instead of their cars (mapcar/mapc/mapcan); every member
+	// differs only in that axis and in what its caller does with the collected values,
+	// so one walker keeps the six in step -- they are the reference the compile backends
+	// are diffed against.
+	private List<LispVal> mapFamilyValues(LispVal function, List<LispVal> lists, boolean tails) {
 		List<LispVal> cursors = new ArrayList<>(lists);
 		List<LispVal> results = new ArrayList<>();
 		while (true) {
 			List<LispVal> callArgs = new ArrayList<>(cursors.size());
-			boolean exhausted = false;
-			for (int i = 0; i < cursors.size(); i++) {
-				if (cursors.get(i) instanceof LispCons cell) {
-					callArgs.add(cell.car());
-					cursors.set(i, cell.cdr());
+			for (LispVal cursor : cursors) {
+				if (cursor instanceof LispCons cell) {
+					callArgs.add(tails ? cell : cell.car());
 				}
 				else {
-					exhausted = true;
-					break;
+					return results;
 				}
 			}
-			if (exhausted) {
-				break;
+			for (int i = 0; i < cursors.size(); i++) {
+				cursors.set(i, ((LispCons) cursors.get(i)).cdr());
 			}
 			results.add(apply(function, callArgs, this.globalEnv));
 		}
+	}
+
+	// Collect the walk's values into a fresh list (mapcar / maplist).
+	private LispVal mapValues(LispVal function, List<LispVal> lists, boolean tails) {
+		List<LispVal> results = mapFamilyValues(function, lists, tails);
 		LispVal result = LispNil.INSTANCE;
 		for (int i = results.size() - 1; i >= 0; i--) {
 			result = new LispCons(results.get(i), result);
@@ -4986,15 +5001,11 @@ public final class LispEvaluator {
 		return result;
 	}
 
-	// Apply the function to each element for its side effects and return the
-	// original list (Common Lisp mapc semantics).
-	private LispVal mapForEffect(LispVal function, LispVal list) {
-		LispVal cursor = list;
-		while (cursor instanceof LispCons cell) {
-			apply(function, List.of(cell.car()), this.globalEnv);
-			cursor = cell.cdr();
-		}
-		return list;
+	// Apply the function for its side effects only and return the first list (Common Lisp
+	// mapc / mapl semantics).
+	private LispVal mapForEffect(LispVal function, List<LispVal> lists, boolean tails) {
+		mapFamilyValues(function, lists, tails);
+		return lists.get(0);
 	}
 
 	// Return t when the predicate is non-nil for every element, nil at the first failure
@@ -5238,14 +5249,10 @@ public final class LispEvaluator {
 		return accumulator;
 	}
 
-	// Apply the function to each element and concatenate the resulting lists (Common Lisp
-	// mapcan semantics; the concatenation is non-destructive append rather than nconc).
-	private LispVal mapcanValues(LispVal function, LispVal list) {
-		List<LispVal> pieces = new ArrayList<>();
-		while (list instanceof LispCons cell) {
-			pieces.add(apply(function, List.of(cell.car()), this.globalEnv));
-			list = cell.cdr();
-		}
+	// Apply the function and concatenate the resulting lists (Common Lisp mapcan / mapcon
+	// semantics; the concatenation is non-destructive append rather than nconc).
+	private LispVal mapcanValues(LispVal function, List<LispVal> lists, boolean tails) {
+		List<LispVal> pieces = mapFamilyValues(function, lists, tails);
 		LispVal result = LispNil.INSTANCE;
 		for (int i = pieces.size() - 1; i >= 0; i--) {
 			result = appendTwo(pieces.get(i), result);

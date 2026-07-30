@@ -2940,11 +2940,74 @@ class LispEvaluatorTest {
 	void mapcarAsValueOverMultipleLists() {
 		// #'mapcar as a VALUE, applied to a list-of-lists (alexandria:mappend's shape).
 		// The interpreter has always been right here; the case pins it as the reference
-		// the compile backends' wrapper (BuiltinFunctionWrappers.mapcarWrapper) matches.
+		// the compile backends' wrapper (BuiltinFunctionWrappers.mapFamilyWrapper)
+		// matches.
 		assertThat(eval("(apply #'mapcar #'list '((1 2) (3 4)))").print()).isEqualTo("((1 3) (2 4))");
 		assertThat(eval("(apply #'mapcar #'+ '((1 2) (10 20) (100 200)))").print()).isEqualTo("(111 222)");
 		assertThat(eval("(apply #'mapcar #'list '((1 2 3) (3 4)))").print()).isEqualTo("((1 3) (2 4))");
 		assertThat(eval("(funcall #'mapcar #'1+ '(1 2 3))").print()).isEqualTo("(2 3 4)");
+	}
+
+	@Test
+	void mapFamilyOverMultipleLists() {
+		// Every member of the map* family takes N lists in Common Lisp, not just mapcar:
+		// the function is called with one argument per list and the walk stops at the
+		// SHORTEST list. Until .todo/218 mapcar was the only one -- the interpreter
+		// signalled an arity error here and the compile backends silently dropped every
+		// list but the first.
+		assertThat(eval("(mapcan #'list '(1 2) '(3 4))").print()).isEqualTo("(1 3 2 4)");
+		assertThat(eval("(maplist #'list '(1 2) '(3 4))").print()).isEqualTo("(((1 2) (3 4)) ((2) (4)))");
+		assertThat(eval("(mapcon #'list '(1 2) '(3 4))").print()).isEqualTo("((1 2) (3 4) (2) (4))");
+		// mapc/mapl run for effect and answer the FIRST list.
+		assertThat(eval("(mapc #'list '(1 2) '(3 4))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(mapl #'list '(1 2) '(3 4))").print()).isEqualTo("(1 2)");
+		assertThat(eval("""
+				(let ((acc nil))
+				  (mapc (lambda (a b) (setq acc (cons (list a b) acc))) '(1 2) '(3 4))
+				  (reverse acc))""").print()).isEqualTo("((1 3) (2 4))");
+		assertThat(eval("""
+				(let ((acc nil))
+				  (mapl (lambda (a b) (setq acc (cons (list a b) acc))) '(1 2) '(3 4))
+				  (reverse acc))""").print()).isEqualTo("(((1 2) (3 4)) ((2) (4)))");
+		// The shortest list stops the walk, whichever argument it is.
+		assertThat(eval("(mapcan #'list '(1 2 3) '(3 4))").print()).isEqualTo("(1 3 2 4)");
+		assertThat(eval("(mapc #'list nil '(1 2))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(maplist (lambda (a b) (+ (length a) (length b))) '(1 2 3) '(a b c d))").print())
+			.isEqualTo("(7 5 3)");
+		// Three lists work the same as two.
+		assertThat(eval("(mapcan #'list '(1 2) '(3 4) '(5 6))").print()).isEqualTo("(1 3 5 2 4 6)");
+	}
+
+	@Test
+	void mapFamilyAsValuesOverMultipleLists() {
+		// The whole family as first-class VALUES, the (apply #'op function lists) shape.
+		// maplist/mapcon/mapl are macro-expanded in call position, so the interpreter
+		// used
+		// to have no function object for them at all ("The function MAPLIST is
+		// undefined")
+		// while both compile backends wrapped a one-list version: .todo/218.
+		assertThat(eval("(apply #'mapcan #'list '((1 2) (3 4)))").print()).isEqualTo("(1 3 2 4)");
+		assertThat(eval("(apply #'maplist #'list '((1 2) (3 4)))").print()).isEqualTo("(((1 2) (3 4)) ((2) (4)))");
+		assertThat(eval("(apply #'mapcon #'list '((1 2) (3 4)))").print()).isEqualTo("((1 2) (3 4) (2) (4))");
+		assertThat(eval("(apply #'mapc #'list '((1 2) (3 4)))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(apply #'mapl #'list '((1 2) (3 4)))").print()).isEqualTo("(1 2)");
+		// One list still answers what the call-position form answers.
+		assertThat(eval("(funcall #'maplist #'identity '(1 2 3))").print()).isEqualTo("((1 2 3) (2 3) (3))");
+		assertThat(eval("(funcall #'mapcan #'list '(1 2 3))").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(funcall #'mapl #'car '(1 2))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(funcall #'mapc #'1+ '(1 2))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(funcall #'mapcon (lambda (x) (list (car x))) '(1 2 3))").print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void mapFamilyRejectsACallWithNoList() {
+		// A count the operator cannot walk is rejected, not silently taken for one list.
+		assertThatThrownBy(() -> eval("(mapcar #'1+)")).hasMessageContaining("MAPCAR expects at least 2 arguments");
+		assertThatThrownBy(() -> eval("(mapc #'1+)")).hasMessageContaining("MAPC expects at least 2 arguments");
+		assertThatThrownBy(() -> eval("(mapcan #'list)")).hasMessageContaining("MAPCAN expects at least 2 arguments");
+		assertThatThrownBy(() -> eval("(maplist #'car)")).hasMessageContaining("MAPLIST expects at least 2 arguments");
+		assertThatThrownBy(() -> eval("(mapcon #'list)")).hasMessageContaining("MAPCON expects at least 2 arguments");
+		assertThatThrownBy(() -> eval("(mapl #'car)")).hasMessageContaining("MAPL expects at least 2 arguments");
 	}
 
 	@Test
@@ -2963,8 +3026,17 @@ class LispEvaluatorTest {
 			.hasMessageContaining("MAPLIST: argument is not a list");
 		assertThatThrownBy(() -> eval("(mapcon #'list \"abc\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("MAPCON: argument is not a list");
+		assertThatThrownBy(() -> eval("(mapl #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("MAPL: argument is not a list");
 		assertThatThrownBy(() -> eval("(mapcar #'1+ 5)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("MAPCAR: argument is not a list: 5");
+		// Every list position is guarded, not just the first.
+		assertThatThrownBy(() -> eval("(mapcar #'list '(1) \"ab\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("MAPCAR: argument is not a list: \"ab\"");
+		assertThatThrownBy(() -> eval("(mapc #'list '(1) \"ab\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("MAPC: argument is not a list: \"ab\"");
+		assertThatThrownBy(() -> eval("(maplist #'list '(1) \"ab\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("MAPLIST: argument is not a list: \"ab\"");
 		// nil (the empty list) stays accepted across the family.
 		assertThat(eval("(mapcar #'1+ nil)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(maplist #'identity nil)")).isEqualTo(LispNil.INSTANCE);

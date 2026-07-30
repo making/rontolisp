@@ -5829,3 +5829,84 @@ cases:
       (111 222)
       ((1 3) (2 4))
       (2 3 4)
+
+  - name: mapc-over-many-lists
+    source: |
+      ;; The whole map* family takes N lists in CL, not just mapcar. mapc used to
+      ;; be three different answers for one form: an arity error in the
+      ;; interpreter, a silently empty walk returning (1 2) on the JVM, an
+      ;; unreachable trap on WASM.
+      (print (mapc (lambda (a b) (print (list a b))) '(1 2) '(3 4)))
+      ;; mapc answers its FIRST list, and the walk stops at the shortest one.
+      (print (mapc (function list) '(1 2 3) '(3 4)))
+      (print (mapc (function list) nil '(1 2)))
+      ;; ... including as a first-class value, where the count is only known at
+      ;; runtime and the wrapper walks the list-of-lists itself.
+      (print (apply (function mapc) (function list) '((1 2) (3 4))))
+      (print (funcall (function mapc) (function 1+) '(1 2)))
+    expected: |
+      (1 3)
+      (2 4)
+      (1 2)
+      (1 2 3)
+      NIL
+      (1 2)
+      (1 2)
+
+  - name: mapcan-over-many-lists
+    source: |
+      ;; mapcan concatenates the pieces; with N lists the function is called with
+      ;; one element from each. The JVM used to answer (1 2) here -- the first
+      ;; list, no diagnostic.
+      (print (mapcan (function list) '(1 2) '(3 4)))
+      (print (mapcan (function list) '(1 2) '(3 4) '(5 6)))
+      (print (mapcan (lambda (a b) (if (> b 2) (list a) nil)) '(1 2 3) '(1 2 3 4)))
+      (print (apply (function mapcan) (function list) '((1 2) (3 4))))
+      (print (funcall (function mapcan) (function list) '(1 2 3)))
+    expected: |
+      (1 3 2 4)
+      (1 3 5 2 4 6)
+      (3)
+      (1 3 2 4)
+      (1 2 3)
+
+  - name: maplist-over-many-lists
+    source: |
+      ;; maplist hands the function the successive CDRs, one per list -- the
+      ;; second list used to be ignored on both compile backends.
+      (print (maplist (function list) '(1 2) '(3 4)))
+      (print (maplist (lambda (a b) (+ (length a) (length b))) '(1 2 3) '(a b c d)))
+      (print (apply (function maplist) (function list) '((1 2) (3 4))))
+      (print (funcall (function maplist) (function identity) '(1 2 3)))
+    expected: |
+      (((1 2) (3 4)) ((2) (4)))
+      (7 5 3)
+      (((1 2) (3 4)) ((2) (4)))
+      ((1 2 3) (2 3) (3))
+
+  - name: mapcon-over-many-lists
+    source: |
+      ;; mapcon is maplist plus the concatenation (append, not nconc -- rontolisp
+      ;; is non-destructive here).
+      (print (mapcon (function list) '(1 2) '(3 4)))
+      (print (apply (function mapcon) (function list) '((1 2) (3 4))))
+      (print (funcall (function mapcon) (lambda (x) (list (car x))) '(1 2 3)))
+    expected: |
+      ((1 2) (3 4) (2) (4))
+      ((1 2) (3 4) (2) (4))
+      (1 2 3)
+
+  - name: mapl-over-many-lists
+    source: |
+      ;; mapl walks the CDRs for effect and answers its FIRST list.
+      (print (mapl (lambda (a b) (print (list a b))) '(1 2) '(3 4)))
+      (print (mapl (function list) '(1) nil))
+      (print (apply (function mapl) (function list) '((1 2) (3 4))))
+      (print (funcall (function mapl) (function car) '(1 2)))
+    expected: |
+      ((1 2) (3 4))
+      ((2) (4))
+      (1 2)
+      (1)
+      (1 2)
+      (1 2)

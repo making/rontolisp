@@ -57,12 +57,14 @@ worked answers to that, in ascending cost: a `&rest` fold
 the literal shapes the operator needs (`openWrapper`'s direction/element-type
 plist, `concatenateWrapper`'s result-type family --
 [concatenate-result-families.md](concatenate-result-families.md)), and the
-wrapper implementing the general case itself (`mapcarWrapper` walks the
-list-of-lists in a `do` loop, because `mapcar`'s list COUNT is static in call
-position; `alexandria:mappend` is `(apply #'mapcar f lists)` and used to get
-every list but the first dropped). When adding a wrapper, check the operator's
-CL lambda list first; the rest of the map family is still narrow on purpose and
-tracked in `.todo/218`.
+wrapper implementing the general case itself (`mapFamilyWrapper` walks the
+list-of-lists in a `do` loop for all six of `mapcar`/`mapc`/`mapcan`/`maplist`/
+`mapcon`/`mapl`, because their list COUNT is static in call position but a
+runtime property here; `alexandria:mappend` is `(apply #'mapcar f lists)` and
+used to get every list but the first dropped --
+[map-family.md](map-family.md)). When adding a wrapper, check the operator's CL
+lambda list first: a wrapper narrower than the operator is a silent wrong answer
+waiting for the first caller that needs the wide form.
 
 ## JVM method name mangling
 

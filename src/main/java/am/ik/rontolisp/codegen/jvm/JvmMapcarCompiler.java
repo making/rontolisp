@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
@@ -22,6 +23,10 @@ final class JvmMapcarCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		int nLists = args.size() - 2;
+		if (nLists < 1) {
+			throw new UnsupportedOperationException(LispNames.MAPCAR
+					+ " expects at least 2 arguments (a function and one list), got " + (args.size() - 1));
+		}
 		ctx.indirectCallArities.add(nLists);
 
 		// Compile function expression

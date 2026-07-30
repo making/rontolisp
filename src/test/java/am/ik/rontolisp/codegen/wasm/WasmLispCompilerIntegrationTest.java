@@ -2185,7 +2185,8 @@ class WasmLispCompilerIntegrationTest {
 
 	// #'mapcar AS A VALUE over more than one list: the list count is a runtime property
 	// there, so the wrapper walks the list-of-lists itself (BuiltinFunctionWrappers.
-	// mapcarWrapper) instead of dropping every list but the first. alexandria:mappend is
+	// mapFamilyWrapper) instead of dropping every list but the first. alexandria:mappend
+	// is
 	// (apply #'mapcar function lists), so this is the shape a real library takes.
 	@Test
 	void mapcarAsValueOverMultipleListsCompilesAndRuns() throws Exception {
@@ -2195,13 +2196,50 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (funcall #'mapcar #'1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
 	}
 
+	// The rest of the family over N lists, in call position and as values. Until
+	// .todo/218 a multi-list mapc trapped here (dispatch arity mismatch) and
+	// mapcan/maplist/mapcon silently dropped every list but the first.
+	@Test
+	void mapFamilyMultipleListsCompilesAndRuns() throws Exception {
+		assertThat(compileAndRun("(print (mapcan #'list '(1 2) '(3 4)))")).isEqualTo("(1 3 2 4)");
+		assertThat(compileAndRun("(print (maplist #'list '(1 2) '(3 4)))")).isEqualTo("(((1 2) (3 4)) ((2) (4)))");
+		assertThat(compileAndRun("(print (mapcon #'list '(1 2) '(3 4)))")).isEqualTo("((1 2) (3 4) (2) (4))");
+		// mapc/mapl run for effect and answer the FIRST list.
+		assertThat(compileAndRun("(print (mapc (lambda (a b) (print (list a b))) '(1 2) '(3 4)))"))
+			.isEqualTo("(1 3)\n(2 4)\n(1 2)");
+		assertThat(compileAndRun("(print (mapl (lambda (a b) (print (list a b))) '(1 2) '(3 4)))"))
+			.isEqualTo("((1 2) (3 4))\n((2) (4))\n(1 2)");
+		// The walk stops at the shortest list, and three lists work like two.
+		assertThat(compileAndRun("(print (mapcan #'list '(1 2 3) '(3 4)))")).isEqualTo("(1 3 2 4)");
+		assertThat(compileAndRun("(print (mapcan #'list '(1 2) '(3 4) '(5 6)))")).isEqualTo("(1 3 5 2 4 6)");
+		assertThat(compileAndRun("(print (mapc #'list nil '(1 2)))")).isEqualTo("NIL");
+	}
+
+	@Test
+	void mapFamilyAsValuesOverMultipleListsCompilesAndRuns() throws Exception {
+		assertThat(compileAndRun("(print (apply #'mapcan #'list '((1 2) (3 4))))")).isEqualTo("(1 3 2 4)");
+		assertThat(compileAndRun("(print (apply #'maplist #'list '((1 2) (3 4))))"))
+			.isEqualTo("(((1 2) (3 4)) ((2) (4)))");
+		assertThat(compileAndRun("(print (apply #'mapcon #'list '((1 2) (3 4))))")).isEqualTo("((1 2) (3 4) (2) (4))");
+		assertThat(compileAndRun("(print (apply #'mapc #'list '((1 2) (3 4))))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun("(print (apply #'mapl #'list '((1 2) (3 4))))")).isEqualTo("(1 2)");
+		// One list still answers what the call-position form answers.
+		assertThat(compileAndRun("(print (funcall #'maplist #'identity '(1 2 3)))")).isEqualTo("((1 2 3) (2 3) (3))");
+		assertThat(compileAndRun("(print (funcall #'mapcan #'list '(1 2 3)))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (funcall #'mapc #'1+ '(1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun("(print (funcall #'mapl #'car '(1 2)))")).isEqualTo("(1 2)");
+	}
+
 	@Test
 	void mapFamilyTrapsOnNonList() throws Exception {
 		// The map* family operates on lists; a non-list (e.g. a string) traps rather than
 		// silently returning nil, matching the interpreter. WASM error is an
 		// unreachable trap (it carries no message).
 		for (String form : List.of("(mapcar #'identity \"abc\")", "(mapc #'identity \"abc\")",
-				"(mapcan #'list \"abc\")", "(maplist #'identity \"abc\")", "(mapcon #'list \"abc\")")) {
+				"(mapcan #'list \"abc\")", "(maplist #'identity \"abc\")", "(mapcon #'list \"abc\")",
+				"(mapl #'identity \"abc\")",
+				// Every list position is guarded, not just the first.
+				"(mapcar #'list '(1) \"ab\")", "(mapc #'list '(1) \"ab\")", "(maplist #'list '(1) \"ab\")")) {
 			byte[] wasmBytes = new WasmLispCompiler().compile(LispReader.readAllFromString(form));
 			wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 			ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",

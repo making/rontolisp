@@ -207,12 +207,22 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
-	 * The {@code #'mapcar} wrapper. In CALL position {@code mapcar} takes any number of
-	 * lists, but the expansion needs that count STATICALLY, so a fixed-arity wrapper
-	 * cannot forward the extra lists -- and dropping them silently returned a one-list
-	 * result for {@code (apply #'mapcar f lists)}, alexandria's
-	 * {@code mappend}/{@code map-product} shape (the interpreter answered correctly, both
-	 * compile backends did not). The wrapper therefore walks the list-of-lists itself:
+	 * What a map* family wrapper does with the value of each call. See mapFamilyWrapper.
+	 */
+	private enum MapAccumulation {
+
+		COLLECT, CONCATENATE, DISCARD
+
+	}
+
+	/**
+	 * The first-class wrapper for one member of the {@code map*} family. In CALL position
+	 * every member takes any number of lists, but the expansion needs that count
+	 * STATICALLY, so a fixed-arity wrapper cannot forward the extra lists -- and dropping
+	 * them silently returned a one-list result for {@code (apply #'mapcar f lists)},
+	 * alexandria's {@code mappend}/{@code map-product} shape (the interpreter answered
+	 * correctly, both compile backends did not). The wrapper therefore walks the
+	 * list-of-lists itself, here in its {@code mapcar} instance:
 	 *
 	 * <pre>
 	 * (lambda (f l &amp;rest more)
@@ -225,23 +235,49 @@ public final class BuiltinFunctionWrappers {
 	 * </pre>
 	 *
 	 * The inner {@code mapcar}s are single-list, so they compile as the primitive;
-	 * {@code (member nil ls)} is exactly "some list is exhausted", CL's termination rule.
+	 * {@code (member nil ls)} is exactly "some list is exhausted", CL's termination rule
+	 * for proper lists.
+	 *
+	 * <p>
+	 * The six members differ only in the two axes below, which is why they share one
+	 * wrapper: {@code mapcar}/{@code maplist} collect the values,
+	 * {@code mapcan}/{@code mapcon} concatenate them, {@code mapc}/{@code mapl} discard
+	 * them and answer the first list; and the {@code -l}/{@code -list}/{@code -con}
+	 * members hand the function the successive cdrs themselves rather than their cars.
+	 * @param name the operator, called in the single-list case and named by the wrapper
+	 * @param tails whether the function receives the successive cdrs ({@code maplist})
+	 * rather than their cars ({@code mapcar})
+	 * @param accumulation what to do with each call's value
 	 */
-	private static WrapperDef mapcarWrapper() {
-		LispVal bindings = listToCons(
-				List.of(callV("ls", callV(LispNames.CONS, new LispSymbol("l"), new LispSymbol("more"))),
-						callV("acc", LispNil.INSTANCE)));
-		LispVal exit = listToCons(List.of(callV(LispNames.MEMBER, LispNil.INSTANCE, new LispSymbol("ls")),
-				call(LispNames.REVERSE, "acc")));
-		LispVal heads = callV(LispNames.MAPCAR, projection(LispNames.CAR), new LispSymbol("ls"));
-		LispVal tails = callV(LispNames.MAPCAR, projection(LispNames.CDR), new LispSymbol("ls"));
-		LispVal collect = callV(LispNames.SETQ, new LispSymbol("acc"),
-				callV(LispNames.CONS, callV(LispNames.APPLY, new LispSymbol("f"), heads), new LispSymbol("acc")));
-		LispVal advance = callV(LispNames.SETQ, new LispSymbol("ls"), tails);
-		LispVal walk = listToCons(List.of(new LispSymbol(LispNames.DO), bindings, exit, collect, advance));
-		LispVal dispatch = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "more"),
-				call(LispNames.MAPCAR, "f", "l"), walk));
-		return new WrapperDef(LispNames.MAPCAR, List.of("f", "l", LispNames.LAMBDA_REST, "more"), List.of(dispatch));
+	private static WrapperDef mapFamilyWrapper(String name, boolean tails, MapAccumulation accumulation) {
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(callV("ls", callV(LispNames.CONS, new LispSymbol("l"), new LispSymbol("more"))));
+		if (accumulation != MapAccumulation.DISCARD) {
+			bindings.add(callV("acc", LispNil.INSTANCE));
+		}
+		LispVal result = switch (accumulation) {
+			case COLLECT -> call(LispNames.REVERSE, "acc");
+			case CONCATENATE -> new LispSymbol("acc");
+			case DISCARD -> new LispSymbol("l");
+		};
+		LispVal exit = listToCons(List.of(callV(LispNames.MEMBER, LispNil.INSTANCE, new LispSymbol("ls")), result));
+		// The arguments of one call: the cursors themselves, or their cars.
+		LispVal callArgs = tails ? new LispSymbol("ls")
+				: callV(LispNames.MAPCAR, projection(LispNames.CAR), new LispSymbol("ls"));
+		LispVal apply = callV(LispNames.APPLY, new LispSymbol("f"), callArgs);
+		LispVal step = switch (accumulation) {
+			case COLLECT ->
+				callV(LispNames.SETQ, new LispSymbol("acc"), callV(LispNames.CONS, apply, new LispSymbol("acc")));
+			case CONCATENATE ->
+				callV(LispNames.SETQ, new LispSymbol("acc"), callV(LispNames.APPEND, new LispSymbol("acc"), apply));
+			case DISCARD -> apply;
+		};
+		LispVal advance = callV(LispNames.SETQ, new LispSymbol("ls"),
+				callV(LispNames.MAPCAR, projection(LispNames.CDR), new LispSymbol("ls")));
+		LispVal walk = listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(bindings), exit, step, advance));
+		LispVal dispatch = listToCons(
+				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "more"), call(name, "f", "l"), walk));
+		return new WrapperDef(name, List.of("f", "l", LispNames.LAMBDA_REST, "more"), List.of(dispatch));
 	}
 
 	// (lambda (x) (op x)) -- spelled inline rather than as #'car / #'cdr so the wrapper
@@ -605,14 +641,17 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.SET_DIFFERENCE), binary(LispNames.ADJOIN), binary(LispNames.EVERY), binary(LispNames.SOME),
 			binary(LispNames.REMOVE), binary(LispNames.REMOVE_IF), binary(LispNames.REMOVE_IF_NOT),
 			binary(LispNames.DELETE), binary(LispNames.DELETE_IF), binary(LispNames.DELETE_IF_NOT),
-			ternary(LispNames.SUBSTITUTE), ternary(LispNames.NSUBSTITUTE), binary(LispNames.MAPCAN),
-			binary(LispNames.SORT), variadicStableSort(), unary(LispNames.COPY_SEQ),
+			ternary(LispNames.SUBSTITUTE), ternary(LispNames.NSUBSTITUTE), binary(LispNames.SORT), variadicStableSort(),
+			unary(LispNames.COPY_SEQ),
 			// The mapping family as first-class values (alexandria hands #'mapcar to
-			// its own combinators). #'mapcar carries ANY number of lists (see
-			// mapcarWrapper); the rest stay one-list, matching what the interpreter's
-			// own built-ins accept.
-			mapcarWrapper(), binary(LispNames.MAPC), binary(LispNames.MAPLIST), binary(LispNames.MAPCON),
-			binary(LispNames.MAPL),
+			// its own combinators). Every member carries ANY number of lists, the same
+			// as in call position -- see mapFamilyWrapper.
+			mapFamilyWrapper(LispNames.MAPCAR, false, MapAccumulation.COLLECT),
+			mapFamilyWrapper(LispNames.MAPC, false, MapAccumulation.DISCARD),
+			mapFamilyWrapper(LispNames.MAPCAN, false, MapAccumulation.CONCATENATE),
+			mapFamilyWrapper(LispNames.MAPLIST, true, MapAccumulation.COLLECT),
+			mapFamilyWrapper(LispNames.MAPCON, true, MapAccumulation.CONCATENATE),
+			mapFamilyWrapper(LispNames.MAPL, true, MapAccumulation.DISCARD),
 			// funcall is variadic: (lambda (f &rest r) (apply f r)) -- e.g.
 			// cl-utilities' compose folds with (reduce #'funcall fns ...).
 			new WrapperDef(LispNames.FUNCALL, List.of("f", LispNames.LAMBDA_REST, "r"),

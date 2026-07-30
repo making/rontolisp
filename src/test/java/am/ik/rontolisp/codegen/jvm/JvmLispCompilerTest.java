@@ -1147,9 +1147,30 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (mapcar #'cons '(1 2 3) '(a b)))")).isEqualTo("((1 . A) (2 . B))");
 	}
 
+	// The REST of the family over more than one list. Until .todo/218 only mapcar walked
+	// N lists here: mapc/mapcan/maplist/mapcon/mapl compiled the first two arguments and
+	// dropped the rest, so the answer was a silently wrong list (the interpreter
+	// signalled
+	// instead -- three answers for one form).
+	@Test
+	void compileAndRunMapFamilyMultipleLists() throws Exception {
+		assertThat(compileAndRun("(print (mapcan #'list '(1 2) '(3 4)))")).isEqualTo("(1 3 2 4)");
+		assertThat(compileAndRun("(print (maplist #'list '(1 2) '(3 4)))")).isEqualTo("(((1 2) (3 4)) ((2) (4)))");
+		assertThat(compileAndRun("(print (mapcon #'list '(1 2) '(3 4)))")).isEqualTo("((1 2) (3 4) (2) (4))");
+		// mapc/mapl run for effect and answer the FIRST list.
+		assertThat(compileAndRun("(print (mapc (lambda (a b) (print (list a b))) '(1 2) '(3 4)))"))
+			.isEqualTo("(1 3)\n(2 4)\n(1 2)");
+		assertThat(compileAndRun("(print (mapl (lambda (a b) (print (list a b))) '(1 2) '(3 4)))"))
+			.isEqualTo("((1 2) (3 4))\n((2) (4))\n(1 2)");
+		// The walk stops at the shortest list, and three lists work like two.
+		assertThat(compileAndRun("(print (mapcan #'list '(1 2 3) '(3 4)))")).isEqualTo("(1 3 2 4)");
+		assertThat(compileAndRun("(print (mapcan #'list '(1 2) '(3 4) '(5 6)))")).isEqualTo("(1 3 5 2 4 6)");
+		assertThat(compileAndRun("(print (mapc #'list nil '(1 2)))")).isEqualTo("NIL");
+	}
+
 	// #'mapcar AS A VALUE over more than one list: the list count is a runtime property
 	// there, so the wrapper walks the list-of-lists itself (BuiltinFunctionWrappers.
-	// mapcarWrapper). It used to drop every list but the first and answer ((1) (2)) --
+	// mapFamilyWrapper). It used to drop every list but the first and answer ((1) (2)) --
 	// silently, and only on the compile backends. alexandria:mappend is (apply #'mapcar
 	// function lists), so this is the shape a real library takes.
 	@Test
@@ -1158,6 +1179,23 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (apply #'mapcar #'+ '((1 2) (10 20) (100 200))))")).isEqualTo("(111 222)");
 		assertThat(compileAndRun("(print (apply #'mapcar #'list '((1 2 3) (3 4))))")).isEqualTo("((1 3) (2 4))");
 		assertThat(compileAndRun("(print (funcall #'mapcar #'1+ '(1 2 3)))")).isEqualTo("(2 3 4)");
+	}
+
+	// The same wrapper shape for the rest of the family, so no member of it answers a
+	// one-list result for a list-of-lists (.todo/218).
+	@Test
+	void compileAndRunMapFamilyAsValuesOverMultipleLists() throws Exception {
+		assertThat(compileAndRun("(print (apply #'mapcan #'list '((1 2) (3 4))))")).isEqualTo("(1 3 2 4)");
+		assertThat(compileAndRun("(print (apply #'maplist #'list '((1 2) (3 4))))"))
+			.isEqualTo("(((1 2) (3 4)) ((2) (4)))");
+		assertThat(compileAndRun("(print (apply #'mapcon #'list '((1 2) (3 4))))")).isEqualTo("((1 2) (3 4) (2) (4))");
+		assertThat(compileAndRun("(print (apply #'mapc #'list '((1 2) (3 4))))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun("(print (apply #'mapl #'list '((1 2) (3 4))))")).isEqualTo("(1 2)");
+		// One list still answers what the call-position form answers.
+		assertThat(compileAndRun("(print (funcall #'maplist #'identity '(1 2 3)))")).isEqualTo("((1 2 3) (2 3) (3))");
+		assertThat(compileAndRun("(print (funcall #'mapcan #'list '(1 2 3)))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (funcall #'mapc #'1+ '(1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun("(print (funcall #'mapl #'car '(1 2)))")).isEqualTo("(1 2)");
 	}
 
 	@Test

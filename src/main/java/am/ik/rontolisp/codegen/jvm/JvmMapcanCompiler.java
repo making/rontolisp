@@ -1,17 +1,19 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code mapcan} built-in function. Generates an inline loop that applies a
- * function to each element of a list and concatenates the resulting lists. The
- * concatenation reuses the shared {@code _append} runtime helper (non-destructive append
- * rather than nconc).
+ * function to the parallel elements of one or more lists and concatenates the resulting
+ * lists; with multiple lists the loop stops at the shortest one. The concatenation reuses
+ * the shared {@code _append} runtime helper (non-destructive append rather than nconc).
  */
 final class JvmMapcanCompiler {
 
@@ -20,7 +22,12 @@ final class JvmMapcanCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		ctx.indirectCallArities.add(1);
+		int nLists = args.size() - 2;
+		if (nLists < 1) {
+			throw new UnsupportedOperationException(LispNames.MAPCAN
+					+ " expects at least 2 arguments (a function and one list), got " + (args.size() - 1));
+		}
+		ctx.indirectCallArities.add(nLists);
 
 		// Compile function expression
 		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
@@ -28,15 +35,20 @@ final class JvmMapcanCompiler {
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(funcSlot);
 
-		// Compile list expression
-		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		int listSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(listSlot);
-
-		// mapcan operates on lists; a non-list (e.g. a string) signals an error.
-		JvmEmitHelper.emitRequireListGuard(ctx, listSlot,
-				"MAPCAN: argument is not a list (use map for strings/vectors)");
+		// Compile each list expression, guarding it is a list. mapcan operates on lists;
+		// a
+		// non-list (e.g. a string) signals an error. The slots double as the cursors --
+		// only the concatenation is returned, so no list has to survive the walk.
+		List<Integer> listSlots = new ArrayList<>();
+		for (int i = 0; i < nLists; i++) {
+			JvmExprCompiler.compileExpr(args.get(2 + i), ctx, className);
+			int listSlot = ctx.allocTemp();
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(listSlot);
+			JvmEmitHelper.emitRequireListGuard(ctx, listSlot,
+					"MAPCAN: argument is not a list (use map for strings/vectors)");
+			listSlots.add(listSlot);
+		}
 
 		// result = null
 		int resultSlot = ctx.allocTemp();
@@ -46,23 +58,29 @@ final class JvmMapcanCompiler {
 
 		// loop:
 		int loopPos = ctx.code.size();
-		// if list == null, goto exit
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
+		// if any list == null, goto exit (stop at the shortest list)
+		List<Integer> exitBranches = new ArrayList<>();
+		for (int listSlot : listSlots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(listSlot);
+			exitBranches.add(ctx.code.size());
+			ctx.emit(Opcode.IFNULL);
+			ctx.emitU2(0);
+		}
 
-		// mapped = _invoke_1(func, car(list))
+		// mapped = _invoke_<nLists>(func, car(list)...)
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(funcSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.AALOAD);
-		JvmFunctionCallCompiler.emitDispatchCall(1, ctx, className);
+		for (int listSlot : listSlots) {
+			// car(list) = ((Object[]) list)[0]
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(listSlot);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(ctx.objectArrayClass.index());
+			ctx.emit(Opcode.ICONST_0);
+			ctx.emit(Opcode.AALOAD);
+		}
+		JvmFunctionCallCompiler.emitDispatchCall(nLists, ctx, className);
 		int mappedSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(mappedSlot);
@@ -77,15 +95,17 @@ final class JvmMapcanCompiler {
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(resultSlot);
 
-		// list = cdr(list) = ((Object[]) list)[1]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(listSlot);
+		// advance each list: list = cdr(list) = ((Object[]) list)[1]
+		for (int listSlot : listSlots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(listSlot);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(ctx.objectArrayClass.index());
+			ctx.emit(Opcode.ICONST_1);
+			ctx.emit(Opcode.AALOAD);
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(listSlot);
+		}
 
 		// goto loop
 		int gotoPos = ctx.code.size();
@@ -94,7 +114,10 @@ final class JvmMapcanCompiler {
 		ctx.emitU2(offset & 0xFFFF);
 
 		// exit: load result
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
+		int exitPos = ctx.code.size();
+		for (int branchPos : exitBranches) {
+			JvmEmitHelper.patchBranch(ctx, branchPos, exitPos);
+		}
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(resultSlot);
 	}

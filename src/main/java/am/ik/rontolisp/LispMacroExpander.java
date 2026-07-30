@@ -13916,50 +13916,121 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (maplist fn lst) into a do scan that applies the function to successive
-	 * cdrs (tails) of the list, accumulating the results and reversing them at the end.
-	 * Single-list only.
+	 * Expands (maplist fn lst...) into a do scan that applies the function to successive
+	 * cdrs (tails) of the lists, accumulating the results and reversing them at the end.
 	 * @param cons the maplist expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandMaplist(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		LispSymbol fn = new LispSymbol("__maplist_fn");
-		LispSymbol lst = new LispSymbol("__maplist_lst");
-		LispSymbol acc = new LispSymbol("__maplist_acc");
-		LispSymbol cur = new LispSymbol("__maplist_cur");
-		LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
-				listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
-		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fn, cur));
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
-				listToCons(List.of(new LispSymbol(LispNames.CONS), call, acc))));
-		LispVal loop = expandDo(
-				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
-		return wrapMapListGuard(LispNames.MAPLIST, fn, parts.get(1), lst, parts.get(2), loop);
+		return expandMapFamily(cons, LispNames.MAPLIST, true, MapAccumulation.COLLECT);
 	}
 
 	/**
-	 * Expands (mapcon fn lst) like {@code maplist} but concatenates the result lists with
-	 * {@code append} rather than collecting them. Single-list only.
+	 * Expands (mapcon fn lst...) like {@code maplist} but concatenates the result lists
+	 * with {@code append} rather than collecting them.
 	 * @param cons the mapcon expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandMapcon(LispCons cons) {
+		return expandMapFamily(cons, LispNames.MAPCON, true, MapAccumulation.CONCATENATE);
+	}
+
+	/**
+	 * What a {@code map*} family walk does with the value of each call: collect the
+	 * values into a fresh list ({@code maplist}), concatenate them ({@code mapcon}), or
+	 * discard them and answer the first list ({@code mapl}, {@code mapc}).
+	 */
+	private enum MapAccumulation {
+
+		COLLECT, CONCATENATE, DISCARD
+
+	}
+
+	/**
+	 * Expands one member of the tail-walking {@code map*} family
+	 * ({@code maplist}/{@code mapcon}/{@code mapl}) over ANY number of lists, which is
+	 * what Common Lisp specifies for all of them: the function is called with one
+	 * argument per list, and the walk stops as soon as the shortest list runs out.
+	 *
+	 * <p>
+	 * The three differ only in the two axes this method takes, so they share one
+	 * expansion rather than three hand-written ones -- widening a single walk is what let
+	 * the N-list case land on all four backends at once ({@code .todo/218}; before it,
+	 * every list but the first was silently dropped on the compile backends).
+	 *
+	 * <pre>
+	 * (let ((#fn F) (#l0 L0) (#l1 L1))            ; left-to-right: function, then lists
+	 *   (if (listp #l0) nil (error ...))          ; nil is a valid empty list
+	 *   (if (listp #l1) nil (error ...))
+	 *   (do ((#acc nil)                            ; COLLECT / CONCATENATE only
+	 *        (#c0 #l0 (cdr #c0)) (#c1 #l1 (cdr #c1)))
+	 *       ((or (atom #c0) (atom #c1)) RESULT)     ; shortest-list termination
+	 *     BODY))
+	 * </pre>
+	 *
+	 * With one list the end test is the bare {@code (atom #c0)}, so the single-list
+	 * expansion every backend already compiled is unchanged.
+	 * @param cons the map* expression
+	 * @param name the operator name, for the type-error message
+	 * @param tails whether the function receives the successive cdrs themselves
+	 * ({@code maplist}) or their cars ({@code mapcar}'s element view)
+	 * @param accumulation what to do with each call's value
+	 * @return the expanded expression
+	 */
+	private static LispVal expandMapFamily(LispCons cons, String name, boolean tails, MapAccumulation accumulation) {
 		List<LispVal> parts = cons.toList();
-		LispSymbol fn = new LispSymbol("__mapcon_fn");
-		LispSymbol lst = new LispSymbol("__mapcon_lst");
-		LispSymbol acc = new LispSymbol("__mapcon_acc");
-		LispSymbol cur = new LispSymbol("__mapcon_cur");
-		LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
-				listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), acc));
-		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fn, cur));
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
-				listToCons(List.of(new LispSymbol(LispNames.APPEND), acc, call))));
-		LispVal loop = expandDo(
-				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
-		return wrapMapListGuard(LispNames.MAPCON, fn, parts.get(1), lst, parts.get(2), loop);
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(
+					name + " expects at least 2 arguments (a function and one list), got " + (parts.size() - 1));
+		}
+		int nLists = parts.size() - 2;
+		// The expansion's own variables, named after the operator (nesting is safe: an
+		// inner expansion's let/do shadows only inside its own scope).
+		String prefix = "__" + name.toLowerCase(java.util.Locale.ROOT) + "_";
+		LispSymbol fn = new LispSymbol(prefix + "fn");
+		LispSymbol acc = new LispSymbol(prefix + "acc");
+		List<LispSymbol> lists = new java.util.ArrayList<>();
+		List<LispSymbol> cursors = new java.util.ArrayList<>();
+		for (int i = 0; i < nLists; i++) {
+			lists.add(new LispSymbol(prefix + "l" + i));
+			cursors.add(new LispSymbol(prefix + "c" + i));
+		}
+
+		// (do ((#acc nil)? (#ci #li (cdr #ci))...) ((or (atom #ci)...) RESULT) BODY)
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		if (accumulation != MapAccumulation.DISCARD) {
+			bindings.add(listToCons(List.of(acc, LispNil.INSTANCE)));
+		}
+		List<LispVal> exhausted = new java.util.ArrayList<>();
+		List<LispVal> callArgs = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.FUNCALL), fn));
+		for (int i = 0; i < nLists; i++) {
+			bindings.add(listToCons(List.of(cursors.get(i), lists.get(i), callOf(LispNames.CDR, cursors.get(i)))));
+			exhausted.add(callOf(LispNames.ATOM, cursors.get(i)));
+			callArgs.add(tails ? cursors.get(i) : callOf(LispNames.CAR, cursors.get(i)));
+		}
+		LispVal endTest = exhausted.get(0);
+		if (nLists > 1) {
+			List<LispVal> orParts = new java.util.ArrayList<>();
+			orParts.add(new LispSymbol(LispNames.OR));
+			orParts.addAll(exhausted);
+			endTest = listToCons(orParts);
+		}
+		LispVal call = listToCons(callArgs);
+		LispVal result = switch (accumulation) {
+			case COLLECT -> callOf(LispNames.NREVERSE, acc);
+			case CONCATENATE -> acc;
+			case DISCARD -> lists.get(0);
+		};
+		LispVal body = switch (accumulation) {
+			case COLLECT -> listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+					listToCons(List.of(new LispSymbol(LispNames.CONS), call, acc))));
+			case CONCATENATE -> listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+					listToCons(List.of(new LispSymbol(LispNames.APPEND), acc, call))));
+			case DISCARD -> call;
+		};
+		LispVal loop = expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(bindings),
+				listToCons(List.of(endTest, result)), body)));
+		return wrapMapListGuard(name, fn, parts.get(1), lists, parts.subList(2, parts.size()), loop);
 	}
 
 	/**
@@ -14060,45 +14131,46 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (mapl fn lst) like {@code maplist} but applies the function to successive
-	 * cdrs (tails) of the list for its side effects only, returning the original list
-	 * rather than collecting the results. Single-list only.
+	 * Expands (mapl fn lst...) like {@code maplist} but applies the function to
+	 * successive cdrs (tails) of the lists for its side effects only, returning the first
+	 * list rather than collecting the results.
 	 * @param cons the mapl expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandMapl(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		LispSymbol fn = new LispSymbol("__mapl_fn");
-		LispSymbol lst = new LispSymbol("__mapl_lst");
-		LispSymbol cur = new LispSymbol("__mapl_cur");
-		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), lst));
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fn, cur));
-		LispVal loop = expandDo(
-				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
-		return wrapMapListGuard(LispNames.MAPL, fn, parts.get(1), lst, parts.get(2), loop);
+		return expandMapFamily(cons, LispNames.MAPL, true, MapAccumulation.DISCARD);
 	}
 
 	/**
-	 * Wraps a {@code maplist}/{@code mapcon} loop in a guard that binds the function and
-	 * list arguments once (preserving left-to-right evaluation: function then list) and
-	 * signals an error when the list argument is not a list. The list value is bound to
-	 * {@code lstSym}, which the loop walks. nil is a valid empty list.
+	 * Wraps a {@code maplist}/{@code mapcon}/{@code mapl} loop in a guard that binds the
+	 * function and every list argument once (preserving left-to-right evaluation:
+	 * function first, then the lists in order) and signals an error for a list argument
+	 * that is not a list. Each list value is bound to the matching symbol, which the loop
+	 * walks. nil is a valid empty list.
 	 * @param name the operator name (for the error message)
 	 * @param fnSym the symbol the function argument is bound to
 	 * @param fnArg the (unevaluated) function argument form
-	 * @param lstSym the symbol the list argument is bound to
-	 * @param listArg the (unevaluated) list argument form
-	 * @param loop the expanded loop that walks {@code lstSym}
+	 * @param lstSyms the symbols the list arguments are bound to
+	 * @param listArgs the (unevaluated) list argument forms, one per symbol
+	 * @param loop the expanded loop that walks the bound lists
 	 * @return the guarded expression
 	 */
-	private static LispVal wrapMapListGuard(String name, LispSymbol fnSym, LispVal fnArg, LispSymbol lstSym,
-			LispVal listArg, LispVal loop) {
-		LispVal letBindings = listToCons(
-				List.of(listToCons(List.of(fnSym, fnArg)), listToCons(List.of(lstSym, listArg))));
-		LispVal guard = makeIf(listToCons(List.of(new LispSymbol(LispNames.LISTP), lstSym)), loop,
-				mapNotAListError(name, lstSym));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), letBindings, guard));
+	private static LispVal wrapMapListGuard(String name, LispSymbol fnSym, LispVal fnArg, List<LispSymbol> lstSyms,
+			List<LispVal> listArgs, LispVal loop) {
+		List<LispVal> letBindings = new java.util.ArrayList<>();
+		letBindings.add(listToCons(List.of(fnSym, fnArg)));
+		for (int i = 0; i < lstSyms.size(); i++) {
+			letBindings.add(listToCons(List.of(lstSyms.get(i), listArgs.get(i))));
+		}
+		List<LispVal> letForm = new java.util.ArrayList<>();
+		letForm.add(new LispSymbol(LispNames.LET));
+		letForm.add(listToCons(letBindings));
+		for (LispSymbol lstSym : lstSyms) {
+			letForm.add(makeIf(listToCons(List.of(new LispSymbol(LispNames.LISTP), lstSym)), LispNil.INSTANCE,
+					mapNotAListError(name, lstSym)));
+		}
+		letForm.add(loop);
+		return listToCons(letForm);
 	}
 
 	/**
