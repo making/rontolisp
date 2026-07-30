@@ -1,0 +1,17 @@
+spin_manifest_version = 2
+
+[application]
+name = "httpbin"
+version = "0.1.0"
+description = "A rontolisp:http-handler served as a wasi:http/handler@0.3.0 component."
+
+[[trigger.http]]
+route = "/..."
+component = "httpbin"
+
+[component.httpbin]
+source = "app.wasm"
+
+[component.httpbin.build]
+command = "rontolisp ../httpbin-clos.lisp -o app.wasm --component"
+watch = ["../httpbin-clos.lisp"]

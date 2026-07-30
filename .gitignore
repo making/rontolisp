@@ -53,5 +53,5 @@ examples/browser/hiragana/data/
 /*.class
 
 ### Spin manifest example: `spin build` compiles app.wasm, `spin up` writes .spin/logs ###
-examples/net/http-handler/app.wasm
-examples/net/http-handler/.spin/
+app.wasm
+.spin/
