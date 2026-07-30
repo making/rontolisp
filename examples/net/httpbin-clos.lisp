@@ -7,9 +7,15 @@
 ;; a standard-object, so switching rontolisp:json-stringify to
 ;; com.inuoe.jzon:stringify keeps the same output (see httpbin-jzon.lisp).
 ;;
+;;   GET    /         -> an HTML index page (rendered with cl-who) listing the routes below
 ;;   GET    /get      -> {"args": {...}, "headers": {...}, "method": "GET",  "path": "/get"}
 ;;   POST   /post     -> the same plus {"data": "<raw body>", "json": <parsed body or null>}
 ;;   PUT/PATCH/DELETE  -> ditto ; a wrong method 405, an unknown path 404.
+;;
+;; The index page is the real upstream cl-who ((X)HTML markup library), pulled
+;; in with ql:quickload like postgres-web.lisp -- with-html-output-to-string
+;; expands the template below at macro-expansion time, so it compiles to
+;; ordinary string building on every backend, JVM and WASM included.
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   java -jar $JAR examples/net/httpbin-clos.lisp
@@ -19,8 +25,11 @@
 ;;   java -jar $JAR examples/net/httpbin-clos.lisp -o httpbin-clos.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y httpbin-clos.wasm
 ;; Talk to it with:
+;;   curl http://127.0.0.1:8080/
 ;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'
 ;;   curl -X POST -d '{"name":"rontolisp"}' http://127.0.0.1:8080/post
+
+(ql:quickload "cl-who")
 
 ;; --- request helpers ------------------------------------------------------
 
@@ -58,6 +67,27 @@
         :headers (list (cons "content-type" "application/json"))
         :body (format nil "~a~%" (rontolisp:json-stringify obj))))
 
+;; The index page: a plain cl-who template, no request data to escape.
+(defun index-page ()
+  (list :status 200
+        :headers (list (cons "content-type" "text/html; charset=utf-8"))
+        :body (cl-who:with-html-output-to-string (s)
+                (:html
+                 (:head (:title "rontolisp httpbin"))
+                 (:body
+                  (:h1 "rontolisp httpbin")
+                  (:p "A miniature httpbin: every route below echoes the "
+                      "request back as JSON.")
+                  (:ul
+                   (:li (:code "GET /get") " -- args, headers, method, path")
+                   (:li (:code "POST /post") " -- ditto, plus the request body (raw and parsed JSON)")
+                   (:li (:code "PUT /put") " -- ditto")
+                   (:li (:code "PATCH /patch") " -- ditto")
+                   (:li (:code "DELETE /delete") " -- ditto"))
+                  (:p "Try it:")
+                  (:pre (:code (cl-who:esc "curl 'http://127.0.0.1:8080/get?a=1&b=two'")))
+                  (:pre (:code (cl-who:esc "curl -X POST -d '{\"name\":\"rontolisp\"}' http://127.0.0.1:8080/post"))))))))
+
 (defun echo (request)
   (json-response 200
                  (make-instance 'echo-response
@@ -91,7 +121,8 @@
 
 (defun route (request)
   (let ((path (getf request :path)))
-    (cond ((string= path "/get") (echo-when request "GET" nil))
+    (cond ((string= path "/") (index-page))
+          ((string= path "/get") (echo-when request "GET" nil))
           ((string= path "/post") (echo-when request "POST" t))
           ((string= path "/put") (echo-when request "PUT" t))
           ((string= path "/patch") (echo-when request "PATCH" t))
