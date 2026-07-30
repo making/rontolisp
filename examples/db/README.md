@@ -82,7 +82,24 @@ wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y --
 ```
 
 wasmCloud runs the same component under `wash dev` with
-`wasm_proposals: [gc, exception-handling, component-model-async]`.
+`wasm_proposals: [gc, exception-handling, component-model-async]`. There is
+no `--env` flag there; `.wash/config.yaml` needs a top-level `workload:`
+block instead (a sibling of `build:`/`dev:`, not nested under `dev:`):
+
+```yaml
+workload:
+  environment:
+    config:
+      DATABASE_URL: postgresql://postgres@192.168.11.76:54329/postgres
+```
+
+`workload.environment.config` is inline values; `workload.environment.configFrom`
+/ `secretFrom` instead name entries of a top-level `configs:` / `secrets:`
+block (a `file:` path or `fromEnv:` list of names to read from the
+developer's own shell) for values that should not sit in the YAML in the
+clear. Either way this reaches `uiop:getenv` unmodified — wash links the
+same `wasi:cli/environment@0.3.0` interface `wasmtime serve --env` satisfies,
+just supplied from this block rather than a CLI flag.
 
 **A served component imports the environment interface itself.** The WASI 0.3
 service world carries no `wasi:cli/environment`, so the preview1 bridge answers
