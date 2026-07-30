@@ -33,6 +33,21 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void replEchoesEveryValueOnItsOwnLine() {
+		// As in any CL REPL: (floor 10 3) echoes the quotient AND the remainder.
+		assertThat(runCli("(floor 10 3)\n")).contains("3\n1\n");
+		assertThat(runCli("(values 1 2 3)\n")).contains("1\n2\n3\n");
+		assertThat(runCli("(defun f () (values 1 2))\n(f)\n")).contains("1\n2\n");
+		// No values at all echoes nothing, and a single value stays a single line.
+		assertThat(runCli("(values)\n")).isEqualTo("> > ");
+		assertThat(runCli("(+ 1 2)\n")).isEqualTo("> 3\n> ");
+		// Two forms on one line echo twice, as SBCL does reading them one at a time,
+		// and each form's own output precedes its own value.
+		assertThat(runCli("(values 1 2) (+ 3 4)\n")).isEqualTo("> 1\n2\n7\n> ");
+		assertThat(runCli("(print 'a) (print 'b)\n")).isEqualTo("> A\nA\nB\nB\n> ");
+	}
+
+	@Test
 	void replWithSimdInterceptsVecKernels() {
 		// A vec.lisp defun prints as #<lambda>; the installed Vector API kernel prints
 		// as #<function vec:dot>. The surefire JVM has jdk.incubator.vector on the

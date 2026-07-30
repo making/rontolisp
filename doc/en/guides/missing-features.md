@@ -36,7 +36,8 @@ Lisp:
 
 - a producer that calls `values` in a **non-tail** position and then returns
   normally may leave stale extra values behind, so keep `values` in result
-  position;
+  position (a consumer clears the values it received, so only a `values` call
+  that nothing consumes can leave leftovers);
 - `funcall #'values` (the first-class value) yields the primary value only in
   compiled programs;
 - `multiple-value-call` with a built-in `#'name` keeps the wrapper's fixed

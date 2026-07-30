@@ -4283,6 +4283,12 @@ cases:
       (print (ceiling 7 2))
       (print (round 7 2))
       (print (truncate -7 2))
+      ; A consumer clears the values it took: a function that internally consumes
+      ; a callee's values is single-valued to ITS caller.
+      (defun ci-mv-inner () (values 7 8))
+      (defun ci-mv-outer () (multiple-value-bind (a b) (ci-mv-inner) (+ a b)))
+      (multiple-value-bind (a b) (ci-mv-outer) (print (list a b)))
+      (print (multiple-value-list (ci-mv-outer)))
     expected: |
       1
       NIL
@@ -4310,6 +4316,8 @@ cases:
       4
       4
       -3
+      (15 NIL)
+      (15)
   - name: multiple-value-setq-and-rotatef
     source: |
       (let (a b) (multiple-value-setq (a b) (values 1 2)) (print (list a b)))

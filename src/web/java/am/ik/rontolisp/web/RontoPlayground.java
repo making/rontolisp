@@ -13,7 +13,6 @@ import java.util.function.Function;
 import org.graalvm.webimage.api.JS;
 import org.graalvm.webimage.api.JSString;
 
-import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
@@ -100,12 +99,27 @@ public final class RontoPlayground {
 		replBuffer.reset();
 		try {
 			List<LispVal> exprs = LispReader.readAllFromString(source);
-			LispVal result = LispNil.INSTANCE;
-			for (LispVal expr : exprs) {
-				result = evaluator.eval(expr);
+			// The last form's values are echoed one per line: (floor 10 3) echoes 3
+			// then 1. Deliberately only the LAST form, unlike the CLI REPL (which
+			// echoes every form, as SBCL does reading them one at a time): this same
+			// entry point backs the documentation site's "Run" cells, whose blocks are
+			// a setup-plus-expression whose FINAL value is the annotated one.
+			// See .kb/multiple-values.md.
+			List<LispVal> values = List.of();
+			for (int i = 0; i < exprs.size(); i++) {
+				if (i == exprs.size() - 1) {
+					values = evaluator.evalValues(exprs.get(i));
+				}
+				else {
+					evaluator.eval(exprs.get(i));
+				}
 			}
 			replOut.flush();
-			return replBuffer.toString() + result.print();
+			StringBuilder echoed = new StringBuilder(replBuffer.toString());
+			for (int i = 0; i < values.size(); i++) {
+				echoed.append(i == 0 ? "" : "\n").append(values.get(i).print());
+			}
+			return echoed.toString();
 		}
 		catch (RuntimeException ex) {
 			return ERROR_PREFIX + ex.getMessage();

@@ -60,7 +60,13 @@ so the syntactic tier alone was not enough. `values` now PUBLISHES its extra
 values to the `%mv-spill` global (a fresh list; nil when there are none) as it
 returns its primary, and a consumer whose producer form is an unrecognized
 CALL clears the spill, evaluates the producer, and snapshots the spill
-immediately (`MvProducer.rest`): value i>0 reads `(nth i-1 rest)`. Atom
+immediately (`MvProducer.rest`): value i>0 reads `(nth i-1 rest)`. The
+snapshot itself is `(prog1 %mv-spill (setq %mv-spill nil))` -- it CLEARS the
+channel, so values one consumer took cannot be read a second time by an
+enclosing consumer (added 2026-07-30 with the REPL echo below: without it a
+function that internally consumes a callee's values looked multi-valued to its
+own caller, e.g. `(defun outer () (multiple-value-bind (a b) (inner) (+ a b)))`
+leaked `inner`'s second value). Atom
 producers skip the spill (single-value for sure). `multiple-value-list` on a
 spill producer is `(cons primary rest)`; `multiple-value-call` with any spill
 producer spreads at runtime via `(apply fn (append seg...))` -- which is why
@@ -78,12 +84,54 @@ on the interpreter; classified CL_FUNCTIONS with a unary wrapper). The
 `parse-integer` expansion returns its stop position as a literal second value,
 so PARSE_INTEGER and VALUES_LIST are part of the `injectMvSpillGlobal` scan.
 
+## The REPL echo is a consumer (added 2026-07-30)
+
+The top level of a CL REPL is a multiple-value consumer -- `(floor 10 3)` echoes
+`3` then `1`, one value per line, and `(values)` echoes nothing. Ours is
+`LispEvaluator.evalValues(form) -> List<LispVal>`, which routes by producer kind
+and is the ONLY multiple-value entry point outside the macro expander:
+
+- a SYNTACTIC producer (`LispMacroExpander.isSyntacticMultipleValueProducer`, the
+  public face of `isMvProducerForm`: literal `values`, floor-family, `gethash`,
+  `array-displacement`) is echoed by wrapping it in `(multiple-value-list ...)`,
+  because those extra values only exist inside a consumer's expansion;
+- anything else is evaluated UNWRAPPED (`evalResolved`) with the spill cleared
+  first and read back after -- so a user function's tail `(values ...)`,
+  `values-list` and `parse-integer` echo all their values, while a top-level
+  `defun`/`in-package`/... still evaluates at top level. Wrapping every form in
+  `multiple-value-list` would have buried definition forms inside a `let`.
+
+Resolution runs ONCE (`resolvePackages` + `evalResolved`, not `eval`): package
+resolution is not idempotent under a `:shadow` package.
+
+Callers: `RontoLispCli.evalBuffer` (both the JLine and the piped REPL go through
+it) echoes EVERY form of the buffer, right after it runs -- so a form's own output
+precedes its own value and two forms on one line echo twice, which is what SBCL
+does reading them one at a time. An empty buffer now echoes nothing instead of
+`NIL`. `RontoPlayground.evalLine` (`src/web/java`) deliberately echoes the LAST
+form only: the same entry point backs the documentation site's "Run" cells
+(`doc/assets/docs.js`), whose blocks are setup-plus-expression and whose annotated
+`; =>` value is the final one.
+
+Verified against SBCL 2.2.9 (installed on the dev host) by diffing transcripts --
+identical for `floor`/`values`/`values-list`/`parse-integer`/`gethash`, a user
+function's tail values, `values` through `cond`/`let`/`if`, `(values)` (no echo),
+an empty line, and two forms on one line. The four remaining differences are all
+pre-existing and each has a todo: `.todo/212` (floor-family/gethash secondary
+values do not cross a function boundary), `.todo/213` (a non-tail `values` nobody
+consumes leaks), `.todo/214` (`read-from-string`/`macroexpand-1`/... are
+single-valued), `.todo/215` (`print` omits CL's leading newline / trailing space,
+and the prompt-per-form difference). Re-run the diff harness in `.todo/214` after
+touching this area.
+
 ## Semantics consequences (documented deviations)
 
 - A `(values ...)` tail in a USER function now DOES reach the caller's
   consumer through the spill. Deviations: a producer that calls `values` in a
-  NON-tail position and then returns normally leaves a stale spill (extra
-  vars may read leftovers instead of nil), and `funcall #'values` through the
+  NON-tail position with NO consumer of its own and then returns normally leaves
+  a stale spill (extra vars may read leftovers instead of nil -- a consumer
+  clears what it took, so only unconsumed `values` calls leak), and
+  `funcall #'values` through the
   compiled first-class wrapper yields the primary only (the interpreter's
   function does spill).
 - Producers are recognized before user-macro expansion on the interpreter but
@@ -108,7 +156,9 @@ compilers); `NoGcWasmCompiler.expandMacro` (mv forms then fail on
 both walks (expand-before-walking, flet precedent -- the raw var list would
 misread as a call form); `UserMacroExpander.expandAll` +
 `LispMacroExpander.rewriteLocalCalls` cases keeping the mv-bind variable list
-verbatim; `BuiltinFunctionWrappers` (`values`).
+verbatim; `BuiltinFunctionWrappers` (`values`). REPL echo:
+`LispEvaluator.evalValues` + `LispMacroExpander.isSyntacticMultipleValueProducer`,
+consumed by `RontoLispCli.evalBuffer` and `RontoPlayground.evalLine`.
 
 ## Pinning tests
 
@@ -118,7 +168,12 @@ verbatim; `BuiltinFunctionWrappers` (`values`).
   `evalMultipleValueBindGethash`, `evalMultipleValueList`, `evalNthValue`,
   `evalMultipleValueCall`,
   `evalMultipleValueUserFunctionTailValuesCrossTheCallBoundary`,
-  `evalMultipleValueBindErrors`.
+  `evalMultipleValueBindErrors`; the REPL-echo tier:
+  `evalValuesAtTopLevelYieldsEveryValue`,
+  `evalValuesAtTopLevelIgnoresValuesConsumedInsideTheForm`,
+  `evalMultipleValueConsumerClearsTheSpillChannel`.
+- `RontoLispCliTest`: `replEchoesEveryValueOnItsOwnLine` (the echo through the
+  piped REPL, including `(values)` echoing nothing).
 - `JvmLispCompilerTest`: `compileAndRunValuesInSingleValueContext`,
   `compileAndRunMultipleValueBind`, `compileAndRunMultipleValueBindGethash`,
   `compileAndRunMultipleValueListAndNthValue`,

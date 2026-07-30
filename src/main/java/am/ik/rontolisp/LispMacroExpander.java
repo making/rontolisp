@@ -2816,6 +2816,14 @@ public final class LispMacroExpander {
 		return listToCons(all);
 	}
 
+	private static LispVal makeProg1(LispVal value, LispVal... rest) {
+		List<LispVal> all = new java.util.ArrayList<>();
+		all.add(new LispSymbol(LispNames.PROG1));
+		all.add(value);
+		all.addAll(List.of(rest));
+		return listToCons(all);
+	}
+
 	private static LispVal makeNot(LispVal expr) {
 		return listToCons(List.of(new LispSymbol(LispNames.NOT), expr));
 	}
@@ -17211,11 +17219,27 @@ public final class LispMacroExpander {
 	 * the callee stores its extra values in the spill as a fresh list), and {@code rest}
 	 * snapshots the spill -- the consumer reads value {@code i > 0} as
 	 * {@code (nth i-1 rest)}. This is how {@code multiple-value-bind} over a user
-	 * function sees the callee's tail values. Deviation from CL: a producer that calls
-	 * {@code values} in a NON-tail position and then returns normally leaves a stale
-	 * spill behind, so the extra variables may read leftover values instead of nil.
+	 * function sees the callee's tail values. Snapshotting also CLEARS the channel, so
+	 * values one consumer took cannot be read a second time by an enclosing one.
+	 * Deviation from CL: a producer that calls {@code values} in a NON-tail position with
+	 * no consumer of its own and then returns normally leaves a stale spill behind, so
+	 * the extra variables may read leftover values instead of nil.
 	 */
 	private record MvProducer(List<MvBinding> bindings, List<LispVal> values, @Nullable LispSymbol rest) {
+	}
+
+	/**
+	 * True when the form is one of the SYNTACTIC multiple-value producers -- the ones
+	 * whose extra values exist only inside a consumer's expansion (see
+	 * {@code MvProducer}), so a caller that merely evaluates the form sees the primary
+	 * value alone. Every other producer publishes through the {@code %mv-spill} runtime
+	 * channel and needs no rewrite. Used by {@code LispEvaluator.evalValues} to decide
+	 * which route the REPL's echo takes.
+	 * @param form the form to test
+	 * @return {@code true} when the form is a syntactic multiple-value producer
+	 */
+	public static boolean isSyntacticMultipleValueProducer(LispVal form) {
+		return isMvProducerForm(form);
 	}
 
 	/** True when the form is recognized as a multi-value producer (see MvProducer). */
@@ -17318,12 +17342,16 @@ public final class LispMacroExpander {
 		// spill. The spill is cleared FIRST so a producer that never calls values
 		// leaves the extras nil, and snapshotted IMMEDIATELY after so a later
 		// producer (multiple-value-call) cannot overwrite it before the values are
-		// read.
+		// read. The snapshot also CLEARS the channel: values that this consumer has
+		// taken are consumed, so they cannot resurface as an enclosing consumer's
+		// (the REPL echo is one -- see LispEvaluator.evalValues -- and a function
+		// that internally consumes a callee's values must still look single-valued
+		// to ITS caller).
 		LispSymbol tmp = new LispSymbol(prefix + "_0");
 		bindings.add(new MvBinding(tmp, makeProgn(List.of(setMvSpill(LispNil.INSTANCE), producer))));
 		values.add(tmp);
 		LispSymbol rest = new LispSymbol(prefix + "_rest");
-		bindings.add(new MvBinding(rest, new LispSymbol(LispNames.MV_SPILL)));
+		bindings.add(new MvBinding(rest, makeProg1(new LispSymbol(LispNames.MV_SPILL), setMvSpill(LispNil.INSTANCE))));
 		return new MvProducer(bindings, values, rest);
 	}
 

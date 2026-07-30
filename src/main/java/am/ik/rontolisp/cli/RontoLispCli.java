@@ -18,7 +18,6 @@ import java.util.List;
 import java.util.Objects;
 
 import am.ik.rontolisp.LispMacroExpander;
-import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
@@ -186,12 +185,18 @@ public final class RontoLispCli {
 	static void evalBuffer(LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
 		try {
 			List<LispVal> exprs = LispReader.readAllFromString(buffer.toString());
-			LispVal result = LispNil.INSTANCE;
+			// EVERY form in the buffer is echoed, right after it runs, and as a
+			// multiple-value consumer would see it: one value per line, as in any CL
+			// REPL ((floor 10 3) echoes 3 then 1; (values) echoes nothing). A form's
+			// own output therefore precedes its own value, and two forms typed on one
+			// line echo twice -- what SBCL does reading them one at a time.
 			for (LispVal expr : exprs) {
-				result = evaluator.eval(expr);
+				List<LispVal> values = evaluator.evalValues(expr);
+				freshLine(evaluator);
+				for (LispVal value : values) {
+					out.println(value.print());
+				}
 			}
-			freshLine(evaluator);
-			out.println(result.print());
 		}
 		catch (RuntimeException ex) {
 			freshLine(evaluator);

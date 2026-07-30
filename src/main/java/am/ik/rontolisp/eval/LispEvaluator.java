@@ -1959,6 +1959,48 @@ public final class LispEvaluator {
 		}
 	}
 
+	/**
+	 * Evaluates a top-level form as a MULTIPLE-VALUE consumer: returns every value the
+	 * form produced, which is what a CL REPL echoes one value per line. {@code (floor 10
+	 * 3)} yields the quotient AND the remainder, {@code (values)} yields no value at all,
+	 * and an ordinary form yields exactly its single value.
+	 * <p>
+	 * The two producer routes of the multiple-value tier are both covered: a SYNTACTIC
+	 * producer (a literal {@code values}, the {@code floor} family with a divisor,
+	 * {@code gethash}, {@code array-displacement}) is echoed through
+	 * {@code multiple-value-list}, since its extra values only exist inside a consumer's
+	 * expansion; every other form is evaluated with the {@code %mv-spill} channel cleared
+	 * first and its extra values read back from the channel afterwards, which is how a
+	 * user function's tail {@code (values ...)} reaches the echo. The form is NOT wrapped
+	 * in that case: an ordinary {@link #eval(LispVal)} runs, so a top-level definition
+	 * form still evaluates at top level.
+	 * @param expr the top-level form
+	 * @return the form's values, primary first (empty for {@code (values)})
+	 */
+	public List<LispVal> evalValues(LispVal expr) {
+		// Resolution is not idempotent under a :shadow package (see evalResolved), so the
+		// form is resolved once here and evaluated through evalResolved.
+		LispVal resolved = this.packageResolver.resolve(expr);
+		if (LispMacroExpander.isSyntacticMultipleValueProducer(resolved)) {
+			LispVal capture = new LispCons(new LispSymbol(LispNames.MULTIPLE_VALUE_LIST),
+					new LispCons(resolved, LispNil.INSTANCE));
+			return spilledValues(evalResolved(capture));
+		}
+		this.globalEnv.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+		LispVal primary = evalResolved(resolved);
+		List<LispVal> values = new ArrayList<>();
+		values.add(primary);
+		values.addAll(spilledValues(this.globalEnv.lookup(LispNames.MV_SPILL)));
+		// The values have been consumed: leave no leftovers for the next form's echo.
+		this.globalEnv.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+		return values;
+	}
+
+	/** The elements of a value list (nil -- no values -- included). */
+	private static List<LispVal> spilledValues(LispVal list) {
+		return list instanceof LispCons cons ? cons.toList() : List.of();
+	}
+
 	/** The error a {@code throw} with no matching {@code catch} surfaces as. */
 	private static String unmatchedThrowMessage(ThrowSignal signal) {
 		return LispNames.THROW + ": no enclosing catch for tag " + signal.tag().print();

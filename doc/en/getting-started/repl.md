@@ -25,6 +25,26 @@ echoed back. Definitions persist across inputs: a `defun`, `defvar`, or `setq`
 entered at one prompt is visible at every later one, so you can build up state
 incrementally within a session.
 
+A form that returns [multiple values](../reference/functions/values.md)
+echoes every value, one per line -- the quotient and the remainder of `floor`, the
+value and the present-p flag of `gethash`. `(values)` returns no value at all and
+echoes nothing:
+
+```console
+> (floor 10 3)
+3
+1
+> (gethash 'b (make-hash-table))
+NIL
+NIL
+> (values 1 2 3)
+1
+2
+3
+> (values)
+>
+```
+
 The prompt accepts multi-line input -- if an expression has unbalanced
 parentheses, the REPL keeps reading until it is closed before evaluating. It also
 supports line editing, history navigation with the up/down arrow keys, and Ctrl-C

@@ -2202,9 +2202,11 @@ public final class LispNames {
 	 * values across a function boundary: every {@code (values ...)} call stores its extra
 	 * values here (a fresh list) as it returns its primary, and a multiple-value consumer
 	 * whose producer form is not syntactically recognized clears the spill, evaluates the
-	 * producer, and reads the extras back. This is what makes {@code multiple-value-bind}
-	 * over a user function work; the compilers inject a top-level
-	 * {@code (setq %mv-spill nil)} to create the global when a program uses any
+	 * producer, and reads the extras back -- clearing the spill again as it does, since
+	 * values one consumer took must not resurface as an enclosing consumer's (the REPL
+	 * echo, {@code LispEvaluator.evalValues}, is one such consumer). This is what makes
+	 * {@code multiple-value-bind} over a user function work; the compilers inject a
+	 * top-level {@code (setq %mv-spill nil)} to create the global when a program uses any
 	 * multiple-value operator (the interpreter predefines it).
 	 */
 	public static final String MV_SPILL = "%MV-SPILL";

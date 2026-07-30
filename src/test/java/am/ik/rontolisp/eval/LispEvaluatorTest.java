@@ -24,6 +24,7 @@ import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import static java.util.stream.Collectors.joining;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -3566,6 +3567,62 @@ class LispEvaluatorTest {
 		assertThat(eval("(multiple-value-list (values))").print()).isEqualTo("NIL");
 		assertThat(eval("(multiple-value-list (floor 17 5))").print()).isEqualTo("(3 2)");
 		assertThat(eval("(multiple-value-list (+ 1 2))").print()).isEqualTo("(3)");
+	}
+
+	// Renders the values of one top-level form the way the REPL echoes them.
+	private static String topLevelValues(LispEvaluator evaluator, String input) {
+		return evaluator.evalValues(LispReader.readFromString(input))
+			.stream()
+			.map(LispVal::print)
+			.collect(joining(" "));
+	}
+
+	@Test
+	void evalValuesAtTopLevelYieldsEveryValue() {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		// The syntactic producers: every value, in order.
+		assertThat(topLevelValues(evaluator, "(floor 10 3)")).isEqualTo("3 1");
+		assertThat(topLevelValues(evaluator, "(truncate -7 2)")).isEqualTo("-3 -1");
+		assertThat(topLevelValues(evaluator, "(values 1 2 3)")).isEqualTo("1 2 3");
+		// (values) yields NO value at all -- the REPL echoes nothing.
+		assertThat(topLevelValues(evaluator, "(values)")).isEmpty();
+		assertThat(topLevelValues(evaluator, "(values-list '(1 2))")).isEqualTo("1 2");
+		assertThat(topLevelValues(evaluator, "(parse-integer \"12abc\" :junk-allowed t)")).isEqualTo("12 2");
+		// A single-value form keeps yielding exactly one value.
+		assertThat(topLevelValues(evaluator, "(+ 1 2)")).isEqualTo("3");
+		assertThat(topLevelValues(evaluator, "'(1 2)")).isEqualTo("(1 2)");
+		assertThat(topLevelValues(evaluator, "(defun tlv-f () (values 1 2))")).isEqualTo("TLV-F");
+		// A user function's tail (values ...) crosses the call boundary.
+		assertThat(topLevelValues(evaluator, "(tlv-f)")).isEqualTo("1 2");
+		assertThat(topLevelValues(evaluator, "(funcall #'tlv-f)")).isEqualTo("1 2");
+		// gethash's present-p.
+		evaluator.evalValues(LispReader.readFromString("(setq tlv-h (make-hash-table))"));
+		evaluator.evalValues(LispReader.readFromString("(setf (gethash 'x tlv-h) 42)"));
+		assertThat(topLevelValues(evaluator, "(gethash 'x tlv-h)")).isEqualTo("42 T");
+		assertThat(topLevelValues(evaluator, "(gethash 'z tlv-h)")).isEqualTo("NIL NIL");
+	}
+
+	@Test
+	void evalValuesAtTopLevelIgnoresValuesConsumedInsideTheForm() {
+		// A callee that CONSUMES another function's values returns a single value: the
+		// consumer clears the spill channel once it has snapshotted it, so the
+		// consumed extra values do not surface as the caller's (here: the REPL's).
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("(defun tlv-inner () (values 7 8))"));
+		evaluator
+			.eval(LispReader.readFromString("(defun tlv-outer () (multiple-value-bind (a b) (tlv-inner) (+ a b)))"));
+		assertThat(topLevelValues(evaluator, "(tlv-outer)")).isEqualTo("15");
+		assertThat(topLevelValues(evaluator, "(list (tlv-inner) (tlv-outer))")).isEqualTo("(7 15)");
+	}
+
+	@Test
+	void evalMultipleValueConsumerClearsTheSpillChannel() {
+		// Pins the clear-after-snapshot half of the %mv-spill protocol.
+		assertThat(evalMulti(
+				"(defun mvs-f () (values 1 2))" + " (progn (multiple-value-bind (a b) (mvs-f) (list a b)) %mv-spill)"))
+			.isSameAs(LispNil.INSTANCE);
+		assertThat(evalMulti("(defun mvs-g () (values 1 2))" + " (progn (multiple-value-list (mvs-g)) %mv-spill)"))
+			.isSameAs(LispNil.INSTANCE);
 	}
 
 	@Test
