@@ -67,6 +67,18 @@ public final class LispEvaluator {
 
 	private final PackageResolver packageResolver = new PackageResolver();
 
+	/**
+	 * Serializes every lazy load of a Lisp-source library / generated runtime into the
+	 * global environment, and every read of the flag that guards one. The evaluator is
+	 * SHARED across concurrently served requests (one virtual thread per request, see
+	 * {@link HttpHandlerSupport}), and the flags are set before the definitions are
+	 * installed -- so without this a request arriving mid-load skips the loader and then
+	 * fails to resolve the very function that is being defined (.todo/193). Reentrant:
+	 * loading a library evaluates its forms, which resolve further names through the same
+	 * gates.
+	 */
+	private final Object libraryLoadLock = new Object();
+
 	private boolean jsonLibraryLoaded = false;
 
 	private boolean linalgLibraryLoaded = false;
@@ -2186,12 +2198,14 @@ public final class LispEvaluator {
 	 * ASDF system {@code "usocket"} ({@code asdf:load-system}/{@code ql:quickload}).
 	 */
 	private void ensureUsocketLoaded() {
-		if (this.usocketLibraryLoaded) {
-			return;
-		}
-		this.usocketLibraryLoaded = true;
-		for (LispVal form : UsocketLibrary.forms()) {
-			eval(form, this.globalEnv);
+		synchronized (this.libraryLoadLock) {
+			if (this.usocketLibraryLoaded) {
+				return;
+			}
+			this.usocketLibraryLoaded = true;
+			for (LispVal form : UsocketLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
 		}
 	}
 
@@ -2222,12 +2236,14 @@ public final class LispEvaluator {
 	}
 
 	private void ensureGrayStreamsLoaded() {
-		if (this.grayStreamsLoaded) {
-			return;
-		}
-		this.grayStreamsLoaded = true;
-		for (LispVal form : GrayStreamsLibrary.forms()) {
-			eval(form, this.globalEnv);
+		synchronized (this.libraryLoadLock) {
+			if (this.grayStreamsLoaded) {
+				return;
+			}
+			this.grayStreamsLoaded = true;
+			for (LispVal form : GrayStreamsLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
 		}
 	}
 
@@ -2239,12 +2255,14 @@ public final class LispEvaluator {
 	 * first resolution of one of the runtime's own names.
 	 */
 	private void ensureWitLoaded() {
-		if (this.witLibraryLoaded) {
-			return;
-		}
-		this.witLibraryLoaded = true;
-		for (LispVal form : WitLibrary.forms()) {
-			eval(form, this.globalEnv);
+		synchronized (this.libraryLoadLock) {
+			if (this.witLibraryLoaded) {
+				return;
+			}
+			this.witLibraryLoaded = true;
+			for (LispVal form : WitLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
 		}
 	}
 
@@ -2259,7 +2277,7 @@ public final class LispEvaluator {
 	 * the same source.
 	 */
 	private void ensureWitLoadedForConditionClass(LispCons cons) {
-		if (!this.witLibraryLoaded && WitLibrary.referencesWitRuntime(cons)) {
+		if (WitLibrary.referencesWitRuntime(cons)) {
 			ensureWitLoaded();
 		}
 	}
@@ -4057,133 +4075,154 @@ public final class LispEvaluator {
 		if (SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)) {
 			throw new LispEvalException(name + " is a macro or special operator, not a function");
 		}
-		// The linalg package is a Lisp-source library (linalg.lisp): evaluate its
-		// definitions into the global environment the first time a linalg:-qualified
-		// function is resolved, then retry the lookup.
-		if (!this.linalgLibraryLoaded && LinalgLibrary.isLinalgQualified(name)) {
-			this.linalgLibraryLoaded = true;
-			for (LispVal form : LinalgLibrary.forms()) {
-				eval(form, this.globalEnv);
+		// Everything below LOADS something into the shared global environment, so it runs
+		// under the library lock: a concurrently served request must either see the load
+		// finished or wait for it, never fall through a gate whose flag is already set
+		// while the definitions it guards are still being evaluated (.todo/193).
+		synchronized (this.libraryLoadLock) {
+			// Another thread may have finished the load while this one waited.
+			LispVal loadedElsewhere = this.globalEnv.lookupFunctionOrNull(name);
+			if (loadedElsewhere != null) {
+				return loadedElsewhere;
 			}
-			// Opt-in --simd: override the accelerated defuns just evaluated with the
-			// Vector API natives. Each native captures the defun it replaces and falls
-			// back to it for the inputs it does not handle (general arrays, mixed
-			// widths, shape errors), so linalg.lisp stays the single source of truth.
-			if (this.simd) {
-				LinalgSimd.install(this.globalEnv, this);
+			// The linalg package is a Lisp-source library (linalg.lisp): evaluate its
+			// definitions into the global environment the first time a linalg:-qualified
+			// function is resolved, then retry the lookup.
+			if (!this.linalgLibraryLoaded && LinalgLibrary.isLinalgQualified(name)) {
+				this.linalgLibraryLoaded = true;
+				for (LispVal form : LinalgLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
+				// Opt-in --simd: override the accelerated defuns just evaluated with the
+				// Vector API natives. Each native captures the defun it replaces and
+				// falls
+				// back to it for the inputs it does not handle (general arrays, mixed
+				// widths, shape errors), so linalg.lisp stays the single source of truth.
+				if (this.simd) {
+					LinalgSimd.install(this.globalEnv, this);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
 			}
-			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
-			if (loaded != null) {
-				return loaded;
+			// The vec package is a Lisp-source library (vec.lisp), the scalar reference
+			// over the packed double-float array type: load it the same way on the first
+			// resolution of a vec:-qualified function.
+			if (!this.vecLibraryLoaded && VecLibrary.isVecQualified(name)) {
+				this.vecLibraryLoaded = true;
+				for (LispVal form : VecLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
+				// Opt-in --simd: override the vectorizable defuns just evaluated with the
+				// Vector API natives. mean/norm keep their scalar bodies and pick the
+				// natives up through the global function namespace (Lisp-2).
+				if (this.simd) {
+					VecSimd.install(this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
 			}
+			// The URL library (url.lisp) loads the same way on the first resolution of
+			// one
+			// of its public rontolisp: functions.
+			if (!this.urlLibraryLoaded && UrlLibrary.isUrlFunction(name)) {
+				this.urlLibraryLoaded = true;
+				for (LispVal form : UrlLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The usocket package (usocket.lisp, the usocket-compatible shim over the
+			// rontolisp:tcp-* built-ins) loads the same way on the first resolution of a
+			// usocket:-qualified function.
+			if (!this.usocketLibraryLoaded && UsocketLibrary.isUsocketQualified(name)) {
+				ensureUsocketLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and
+			// the
+			// rontolisp:wit-error condition) loads on the first resolution of one of its
+			// names, so a program may bind a provider before the wit-import directive
+			// that
+			// uses it.
+			if (!this.witLibraryLoaded && WitLibrary.isWitRuntimeName(name)) {
+				ensureWitLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// equalp/string< are recursive rontolisp-source defuns (LispPreludeLibrary),
+			// loaded on first resolution like the linalg/url libraries.
+			if (LispPreludeLibrary.isPreludeFunction(name) && this.loadedPreludeNames.add(name)) {
+				for (LispVal form : LispPreludeLibrary.formsFor(name)) {
+					eval(form, this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// %slot-read / %slot-bound-p are the out-of-line halves of the
+			// boundness-checked
+			// slot reads. They are GENERATED, not written anywhere, so the compile path
+			// emits
+			// their defuns into the program and the interpreter defines them here, from
+			// the
+			// same AST.
+			if ((LispNames.SLOT_READ_INTERNAL.equals(name) || LispNames.SLOT_BOUND_P_INTERNAL.equals(name))
+					&& this.loadedPreludeNames.add(name)) {
+				for (LispVal form : LispMacroExpander.slotUnboundDefuns()) {
+					eval(form, this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The condition-report renderer is GENERATED like the slot helpers: a
+			// resolution
+			// that reaches it before any condition form ran loads the same defuns the
+			// compile path injects, rather than failing.
+			if (LispNames.CONDITION_REPORT_STR_INTERNAL.equals(name)
+					|| LispNames.FORMAT_CONDITION_INTERNAL.equals(name)) {
+				ensureConditionReportRuntimeLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The restart runtime (find-restart/invoke-restart/... and %run-handlers) is
+			// GENERATED the same way: the compile path injects the defuns via
+			// expandTopLevelDefinitions, the interpreter evaluates the same AST on the
+			// first resolution of one of the names (or on the first restart-system form,
+			// see ensureRestartRuntimeLoaded).
+			if (!this.restartRuntimeLoaded && (LispMacroExpander.RESTART_RUNTIME_FUNCTION_NAMES.contains(name)
+					|| LispNames.RUN_HANDLERS_INTERNAL.equals(name))) {
+				ensureRestartRuntimeLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			if (LispMacroExpander.isCarCdrComposition(name)) {
+				// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are
+				// first-class.
+				LispSymbol param = new LispSymbol("x");
+				LispVal call = new LispCons(new LispSymbol(name), new LispCons(param, LispNil.INSTANCE));
+				return new LispLambda(List.of(param), List.of(call), this.globalEnv);
+			}
+			throw new LispEvalException("The function " + name + " is undefined");
 		}
-		// The vec package is a Lisp-source library (vec.lisp), the scalar reference
-		// over the packed double-float array type: load it the same way on the first
-		// resolution of a vec:-qualified function.
-		if (!this.vecLibraryLoaded && VecLibrary.isVecQualified(name)) {
-			this.vecLibraryLoaded = true;
-			for (LispVal form : VecLibrary.forms()) {
-				eval(form, this.globalEnv);
-			}
-			// Opt-in --simd: override the vectorizable defuns just evaluated with the
-			// Vector API natives. mean/norm keep their scalar bodies and pick the
-			// natives up through the global function namespace (Lisp-2).
-			if (this.simd) {
-				VecSimd.install(this.globalEnv);
-			}
-			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
-			if (loaded != null) {
-				return loaded;
-			}
-		}
-		// The URL library (url.lisp) loads the same way on the first resolution of one
-		// of its public rontolisp: functions.
-		if (!this.urlLibraryLoaded && UrlLibrary.isUrlFunction(name)) {
-			this.urlLibraryLoaded = true;
-			for (LispVal form : UrlLibrary.forms()) {
-				eval(form, this.globalEnv);
-			}
-			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
-			if (loaded != null) {
-				return loaded;
-			}
-		}
-		// The usocket package (usocket.lisp, the usocket-compatible shim over the
-		// rontolisp:tcp-* built-ins) loads the same way on the first resolution of a
-		// usocket:-qualified function.
-		if (!this.usocketLibraryLoaded && UsocketLibrary.isUsocketQualified(name)) {
-			ensureUsocketLoaded();
-			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
-			if (loaded != null) {
-				return loaded;
-			}
-		}
-		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
-		// rontolisp:wit-error condition) loads on the first resolution of one of its
-		// names, so a program may bind a provider before the wit-import directive that
-		// uses it.
-		if (!this.witLibraryLoaded && WitLibrary.isWitRuntimeName(name)) {
-			ensureWitLoaded();
-			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
-			if (loaded != null) {
-				return loaded;
-			}
-		}
-		// equalp/string< are recursive rontolisp-source defuns (LispPreludeLibrary),
-		// loaded on first resolution like the linalg/url libraries.
-		if (LispPreludeLibrary.isPreludeFunction(name) && this.loadedPreludeNames.add(name)) {
-			for (LispVal form : LispPreludeLibrary.formsFor(name)) {
-				eval(form, this.globalEnv);
-			}
-			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
-			if (loaded != null) {
-				return loaded;
-			}
-		}
-		// %slot-read / %slot-bound-p are the out-of-line halves of the boundness-checked
-		// slot reads. They are GENERATED, not written anywhere, so the compile path emits
-		// their defuns into the program and the interpreter defines them here, from the
-		// same AST.
-		if ((LispNames.SLOT_READ_INTERNAL.equals(name) || LispNames.SLOT_BOUND_P_INTERNAL.equals(name))
-				&& this.loadedPreludeNames.add(name)) {
-			for (LispVal form : LispMacroExpander.slotUnboundDefuns()) {
-				eval(form, this.globalEnv);
-			}
-			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
-			if (loaded != null) {
-				return loaded;
-			}
-		}
-		// The condition-report renderer is GENERATED like the slot helpers: a resolution
-		// that reaches it before any condition form ran loads the same defuns the
-		// compile path injects, rather than failing.
-		if (LispNames.CONDITION_REPORT_STR_INTERNAL.equals(name) || LispNames.FORMAT_CONDITION_INTERNAL.equals(name)) {
-			ensureConditionReportRuntimeLoaded();
-			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
-			if (loaded != null) {
-				return loaded;
-			}
-		}
-		// The restart runtime (find-restart/invoke-restart/... and %run-handlers) is
-		// GENERATED the same way: the compile path injects the defuns via
-		// expandTopLevelDefinitions, the interpreter evaluates the same AST on the
-		// first resolution of one of the names (or on the first restart-system form,
-		// see ensureRestartRuntimeLoaded).
-		if (!this.restartRuntimeLoaded && (LispMacroExpander.RESTART_RUNTIME_FUNCTION_NAMES.contains(name)
-				|| LispNames.RUN_HANDLERS_INTERNAL.equals(name))) {
-			ensureRestartRuntimeLoaded();
-			LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
-			if (loaded != null) {
-				return loaded;
-			}
-		}
-		if (LispMacroExpander.isCarCdrComposition(name)) {
-			// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are first-class.
-			LispSymbol param = new LispSymbol("x");
-			LispVal call = new LispCons(new LispSymbol(name), new LispCons(param, LispNil.INSTANCE));
-			return new LispLambda(List.of(param), List.of(call), this.globalEnv);
-		}
-		throw new LispEvalException("The function " + name + " is undefined");
 	}
 
 	/**
@@ -4197,14 +4236,16 @@ public final class LispEvaluator {
 	 * the printing operators once it is on.
 	 */
 	private void ensureConditionReportRuntimeLoaded() {
-		int stamp = this.closRegistry.classes().size() * 31 + this.closRegistry.conditionReports().size();
-		if (stamp == this.conditionReportRuntimeStamp) {
-			return;
-		}
-		this.conditionReportRuntimeStamp = stamp;
-		this.closRegistry.setRoutesConditionReports(true);
-		for (LispVal form : LispMacroExpander.conditionReportDefuns(this.closRegistry)) {
-			eval(form, this.globalEnv);
+		synchronized (this.libraryLoadLock) {
+			int stamp = this.closRegistry.classes().size() * 31 + this.closRegistry.conditionReports().size();
+			if (stamp == this.conditionReportRuntimeStamp) {
+				return;
+			}
+			this.conditionReportRuntimeStamp = stamp;
+			this.closRegistry.setRoutesConditionReports(true);
+			for (LispVal form : LispMacroExpander.conditionReportDefuns(this.closRegistry)) {
+				eval(form, this.globalEnv);
+			}
 		}
 	}
 
@@ -4218,21 +4259,23 @@ public final class LispEvaluator {
 	 * like it does on the compile path.
 	 */
 	private void ensureRestartRuntimeLoaded() {
-		if (this.restartRuntimeLoaded) {
-			return;
-		}
-		this.restartRuntimeLoaded = true;
-		for (LispVal form : LispMacroExpander.restartRuntimeGlobalForms()) {
-			eval(form, this.globalEnv);
-		}
-		java.util.Set<String> userDefinedNames = new java.util.HashSet<>();
-		for (String name : LispMacroExpander.RESTART_RUNTIME_FUNCTION_NAMES) {
-			if (this.globalEnv.lookupFunctionOrNull(name) != null) {
-				userDefinedNames.add(name);
+		synchronized (this.libraryLoadLock) {
+			if (this.restartRuntimeLoaded) {
+				return;
 			}
-		}
-		for (LispVal form : LispMacroExpander.restartRuntimeDefunForms(userDefinedNames)) {
-			eval(form, this.globalEnv);
+			this.restartRuntimeLoaded = true;
+			for (LispVal form : LispMacroExpander.restartRuntimeGlobalForms()) {
+				eval(form, this.globalEnv);
+			}
+			java.util.Set<String> userDefinedNames = new java.util.HashSet<>();
+			for (String name : LispMacroExpander.RESTART_RUNTIME_FUNCTION_NAMES) {
+				if (this.globalEnv.lookupFunctionOrNull(name) != null) {
+					userDefinedNames.add(name);
+				}
+			}
+			for (LispVal form : LispMacroExpander.restartRuntimeDefunForms(userDefinedNames)) {
+				eval(form, this.globalEnv);
+			}
 		}
 	}
 
@@ -5399,10 +5442,12 @@ public final class LispEvaluator {
 	// Evaluates the Lisp-source JSON library into the global environment on first
 	// use, then applies the named fixed-arity helper.
 	private LispVal applyJsonHelper(String helperName, List<LispVal> args) {
-		if (!this.jsonLibraryLoaded) {
-			this.jsonLibraryLoaded = true;
-			for (LispVal form : JsonLibrary.forms()) {
-				eval(form, this.globalEnv);
+		synchronized (this.libraryLoadLock) {
+			if (!this.jsonLibraryLoaded) {
+				this.jsonLibraryLoaded = true;
+				for (LispVal form : JsonLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
 			}
 		}
 		return apply(resolveFunction(helperName), args, this.globalEnv);

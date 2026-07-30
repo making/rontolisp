@@ -151,6 +151,13 @@ the first `?` is VALUE EXTRACTION, not shape, so it remains per-backend code:
 `%serve-read-request` in `http.lisp` on the component path. Decoding policy
 lives in the URL library (`.kb/url.md`), not here.
 
+ONE VIRTUAL THREAD PER REQUEST is a correctness constraint on everything a handler
+touches, not just an implementation note: process-wide mutable state reached from a
+handler must be thread-safe. The rule, the bugs it has already produced (the stream
+table, the interpreter's lazy library loads) and the shape new code must follow are in
+`.kb/concurrent-served-requests.md`; locks for program-level state are in
+`.kb/mutexes.md`.
+
 - **Interpreter (implemented)** -- `HttpHandlerSupport` (eval pkg, `public` for
   the future web substitution): a blocking JDK `com.sun.net.httpserver.HttpServer`,
   ONE VIRTUAL THREAD PER REQUEST (`Executors.newVirtualThreadPerTaskExecutor`).

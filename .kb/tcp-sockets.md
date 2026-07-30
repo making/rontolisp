@@ -22,6 +22,12 @@ matches fetch: interpreter/JVM signal, the WASM component returns `nil`.
 
 ## Per-backend mechanics
 
+- **Handle allocation is CONCURRENT** on the interpreter and the JVM: a served
+  request runs on its own virtual thread, so two `tcp-connect`s can allocate at
+  the same instant. Both backends allocate through a thread-safe table (a
+  `ConcurrentHashMap` + `AtomicLong`; the synchronized `_addStream`) -- the
+  invariant, the failure it fixes (.todo/193: crossed PostgreSQL handshakes) and
+  the rule for new socket built-ins live in `.kb/read-load-streams.md`.
 - **Interpreter** (`eval/SocketSupport.java`, registered in `Environment`'s
   stream section because the handle table is a local there): the raw
   `java.net.Socket` / `ServerSocket` is stored directly in the

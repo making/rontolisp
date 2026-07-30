@@ -80,10 +80,6 @@ final class JvmSocketRuntimeBuilder {
 
 	static final String TCP_PEER_PORT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
-	private static final String ADD_STREAM_METHOD = "_addStream";
-
-	private static final String ADD_STREAM_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
-
 	private static final String SOCK_READ_LINE_METHOD = "_sockReadLine";
 
 	private static final String SOCK_READ_LINE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
@@ -95,10 +91,6 @@ final class JvmSocketRuntimeBuilder {
 	private final ConstantPool cp;
 
 	private final FieldrefConstant streamsField;
-
-	private final FieldrefConstant streamCountField;
-
-	private final ClassConstant objectClass;
 
 	private final ClassConstant stringClass;
 
@@ -113,8 +105,6 @@ final class JvmSocketRuntimeBuilder {
 	private final MethodrefConstant stringSubstring;
 
 	private final MethodrefConstant stringConcat;
-
-	private final MethodrefConstant arraysCopyOf;
 
 	private final ClassConstant socketClass;
 
@@ -246,12 +236,10 @@ final class JvmSocketRuntimeBuilder {
 
 	private final ConstantPool.StringConstant newlineStr;
 
-	private JvmSocketRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
-			ClassConstant stringClass, ClassConstant longClass, MethodrefConstant longValueOf,
-			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
-			MethodrefConstant stringConcat) {
+	private JvmSocketRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant stringClass,
+			ClassConstant longClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
+			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat) {
 		this.cp = cp;
-		this.objectClass = objectClass;
 		this.stringClass = stringClass;
 		this.longClass = longClass;
 		this.longValueOf = longValueOf;
@@ -261,11 +249,6 @@ final class JvmSocketRuntimeBuilder {
 		this.stringConcat = stringConcat;
 		this.streamsField = cp.addFieldref(thisClass, cp.addNameAndType(cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD),
 				cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC)));
-		this.streamCountField = cp.addFieldref(thisClass, cp.addNameAndType(
-				cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_FIELD), cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_DESC)));
-		ClassConstant arraysClass = cp.addClass(cp.addUtf8("java/util/Arrays"));
-		this.arraysCopyOf = cp.addMethodref(arraysClass,
-				cp.addNameAndType(cp.addUtf8("copyOf"), cp.addUtf8("([Ljava/lang/Object;I)[Ljava/lang/Object;")));
 		this.socketClass = cp.addClass(cp.addUtf8("java/net/Socket"));
 		this.serverSocketClass = cp.addClass(cp.addUtf8("java/net/ServerSocket"));
 		this.socketInit = cp.addMethodref(this.socketClass,
@@ -382,8 +365,11 @@ final class JvmSocketRuntimeBuilder {
 		ClassConstant standardCharsetsClass = cp.addClass(cp.addUtf8("java/nio/charset/StandardCharsets"));
 		this.utf8Field = cp.addFieldref(standardCharsetsClass,
 				cp.addNameAndType(cp.addUtf8("UTF_8"), cp.addUtf8("Ljava/nio/charset/Charset;")));
-		this.addStreamRef = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(ADD_STREAM_METHOD), cp.addUtf8(ADD_STREAM_DESC)));
+		// The stream table's ONE allocator, emitted by JvmIoRuntimeBuilder
+		// (synchronized):
+		// every socket constructor here registers its socket through it.
+		this.addStreamRef = cp.addMethodref(thisClass, cp.addNameAndType(
+				cp.addUtf8(JvmIoRuntimeBuilder.ADD_STREAM_METHOD), cp.addUtf8(JvmIoRuntimeBuilder.ADD_STREAM_DESC)));
 		this.sockReadLineRef = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(SOCK_READ_LINE_METHOD), cp.addUtf8(SOCK_READ_LINE_DESC)));
 		this.sockWriteLineRef = cp.addMethodref(thisClass,
@@ -392,12 +378,11 @@ final class JvmSocketRuntimeBuilder {
 		this.newlineStr = cp.addString("\n");
 	}
 
-	static SocketRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
-			ClassConstant stringClass, ClassConstant longClass, MethodrefConstant longValueOf,
-			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
-			MethodrefConstant stringConcat) {
-		JvmSocketRuntimeBuilder builder = new JvmSocketRuntimeBuilder(cp, thisClass, objectClass, stringClass,
-				longClass, longValueOf, longValue, stringLength, stringSubstring, stringConcat);
+	static SocketRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant stringClass,
+			ClassConstant longClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
+			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat) {
+		JvmSocketRuntimeBuilder builder = new JvmSocketRuntimeBuilder(cp, thisClass, stringClass, longClass,
+				longValueOf, longValue, stringLength, stringSubstring, stringConcat);
 		List<SocketMethod> methods = new ArrayList<>();
 		methods.add(new SocketMethod(cp.addUtf8(TCP_CONNECT_METHOD), cp.addUtf8(TCP_CONNECT_DESC), 5, 3,
 				builder.buildTcpConnect()));
@@ -419,8 +404,6 @@ final class JvmSocketRuntimeBuilder {
 				builder.buildTcpPeerAddress()));
 		methods.add(new SocketMethod(cp.addUtf8(TCP_PEER_PORT_METHOD), cp.addUtf8(TCP_PEER_PORT_DESC), 3, 2,
 				builder.buildTcpPeerPort()));
-		methods.add(new SocketMethod(cp.addUtf8(ADD_STREAM_METHOD), cp.addUtf8(ADD_STREAM_DESC), 3, 3,
-				builder.buildAddStream()));
 		methods.add(new SocketMethod(cp.addUtf8(SOCK_READ_LINE_METHOD), cp.addUtf8(SOCK_READ_LINE_DESC), 7, 6,
 				builder.buildSockReadLine()));
 		methods.add(new SocketMethod(cp.addUtf8(SOCK_WRITE_LINE_METHOD), cp.addUtf8(SOCK_WRITE_LINE_DESC), 4, 3,
@@ -892,70 +875,6 @@ final class JvmSocketRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.stringConcat.index());
 		code.add(Opcode.ARETURN);
-	}
-
-	/**
-	 * {@code _addStream(Object stream) -> Long handle}. Stores an entry in the (lazily
-	 * created, growable) {@code _streams} table and returns its index -- the same table
-	 * logic as the tail of {@code _open}, factored here so the socket constructors share
-	 * it without touching {@code _open}'s emitted bytes.
-	 */
-	private List<Integer> buildAddStream() {
-		// Slots: 0=stream, 1=arr, 2=count
-		List<Integer> code = new ArrayList<>();
-		// if (_streams == null) _streams = new Object[16];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		int ifInitPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.BIPUSH);
-		code.add(16);
-		code.add(Opcode.ANEWARRAY);
-		emitU2(code, this.objectClass.index());
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.streamsField.index());
-		patchBranch(code, ifInitPos, code.size());
-		// arr = _streams; count = _streamCount;
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ASTORE_1);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamCountField.index());
-		code.add(Opcode.ISTORE_2);
-		// if (count >= arr.length) { arr = Arrays.copyOf(arr, count * 2); _streams = arr;
-		// }
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ARRAYLENGTH);
-		int ifGrowPos = code.size();
-		code.add(Opcode.IF_ICMPLT);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.IMUL);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.arraysCopyOf.index());
-		code.add(Opcode.ASTORE_1);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.streamsField.index());
-		patchBranch(code, ifGrowPos, code.size());
-		// arr[count] = stream; _streamCount = count + 1; return Long.valueOf(count);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.AASTORE);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.IADD);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.streamCountField.index());
-		code.add(Opcode.ILOAD_2);
-		emitBoxLong(code);
-		code.add(Opcode.ARETURN);
-		return code;
 	}
 
 	/**

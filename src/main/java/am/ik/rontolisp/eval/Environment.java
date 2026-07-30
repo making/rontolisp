@@ -129,7 +129,13 @@ public final class Environment implements Scope {
 				}
 			}
 			if (this.size == LINEAR_MAX) {
-				map = new HashMap<>();
+				// ConcurrentHashMap, not HashMap: the scope that outgrows the linear
+				// arrays is above all the GLOBAL environment, which concurrently served
+				// requests read while a lazy library load writes into it (.todo/193). A
+				// binding's value is never null, so the map's no-null rule costs
+				// nothing. Local scopes are thread-confined and rarely reach the
+				// promotion at all.
+				map = new ConcurrentHashMap<>();
 				for (int i = 0; i < this.size; i++) {
 					map.put(this.keys[i], this.values[i]);
 				}
@@ -3327,8 +3333,14 @@ public final class Environment implements Scope {
 		// table, matching the compiled backends (JVM: a static stream table; WASM: the
 		// WASI file descriptor, negative for string streams). Declared before the print
 		// family so their optional stream argument can route into it.
-		Map<Long, Closeable> streams = new HashMap<>();
-		long[] nextStreamHandle = { 0 };
+		//
+		// CONCURRENT: http-handler serves one virtual thread per request, so several
+		// requests allocate handles at the same time. A plain map plus a `long[]`
+		// counter handed two of them the SAME handle -- one stream was dropped and the
+		// two conversations crossed on the survivor (.todo/193). The table and the
+		// counter must therefore stay thread-safe; see .kb/tcp-sockets.md.
+		Map<Long, Closeable> streams = new ConcurrentHashMap<>();
+		AtomicLong nextStreamHandle = new AtomicLong();
 		// Routes print-family output: an absent destination reads the evaluator's
 		// *standard-output* hook (dynamic-first; null when no evaluator installed it);
 		// nil or t is standard output; an integer handle selects a Writer entry in the
@@ -3422,7 +3434,7 @@ public final class Environment implements Scope {
 		// input string stream is a BufferedReader over the string, so read/read-line
 		// consume it like any file stream.
 		java.util.function.Function<List<LispVal>, LispVal> makeStringOutputStream = args -> {
-			long handle = nextStreamHandle[0]++;
+			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, new StringWriter());
 			return new LispInteger(handle);
 		};
@@ -3441,7 +3453,7 @@ public final class Environment implements Scope {
 					if (!(args.get(0) instanceof LispString str)) {
 						throw new LispEvalException(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL + " expects a string");
 					}
-					long handle = nextStreamHandle[0]++;
+					long handle = nextStreamHandle.getAndIncrement();
 					streams.put(handle, new BufferedReader(new StringReader(str.value())));
 					return new LispInteger(handle);
 				}));
@@ -3453,7 +3465,7 @@ public final class Environment implements Scope {
 				throw new LispEvalException(
 						LispNames.MAKE_BROADCAST_STREAM + " supports the zero-argument (sink) form only");
 			}
-			long handle = nextStreamHandle[0]++;
+			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, new StringWriter());
 			return new LispInteger(handle);
 		}));
@@ -3719,7 +3731,7 @@ public final class Environment implements Scope {
 					stream = output ? Files.newBufferedWriter(Path.of(path.value()))
 							: Files.newBufferedReader(Path.of(path.value()));
 				}
-				long handle = nextStreamHandle[0]++;
+				long handle = nextStreamHandle.getAndIncrement();
 				streams.put(handle, stream);
 				return new LispInteger(handle);
 			}
@@ -4082,7 +4094,7 @@ public final class Environment implements Scope {
 						LispNames.TCP_CONNECT + " expects an integer port, got: " + args.get(1).print());
 			}
 			Socket socket = SocketSupport.connect(host.value(), (int) port.value());
-			long handle = nextStreamHandle[0]++;
+			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, socket);
 			return new LispInteger(handle);
 		}));
@@ -4109,7 +4121,7 @@ public final class Environment implements Scope {
 				insecure = !(args.get(3) instanceof LispNil);
 			}
 			Socket socket = SocketSupport.connectTls(host.value(), (int) port.value(), insecure);
-			long handle = nextStreamHandle[0]++;
+			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, socket);
 			return new LispInteger(handle);
 		}));
@@ -4131,7 +4143,7 @@ public final class Environment implements Scope {
 				host = hostString.value();
 			}
 			ServerSocket listener = SocketSupport.listen((int) port.value(), host);
-			long handle = nextStreamHandle[0]++;
+			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, listener);
 			return new LispInteger(handle);
 		}));
@@ -4162,7 +4174,7 @@ public final class Environment implements Scope {
 			}
 			ServerSocket listener = SocketSupport.listenTls(keyStore.value(), password.value(), (int) port.value(),
 					host);
-			long handle = nextStreamHandle[0]++;
+			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, listener);
 			return new LispInteger(handle);
 		}));
@@ -4193,7 +4205,7 @@ public final class Environment implements Scope {
 			}
 			ServerSocket listener = SocketSupport.listenTlsPem(certPath.value(), keyPath.value(), (int) port.value(),
 					host);
-			long handle = nextStreamHandle[0]++;
+			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, listener);
 			return new LispInteger(handle);
 		}));
@@ -4224,7 +4236,7 @@ public final class Environment implements Scope {
 			}
 			ServerSocket listener = SocketSupport.listenTlsP12(base64.value(), password.value(), (int) port.value(),
 					host);
-			long handle = nextStreamHandle[0]++;
+			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, listener);
 			return new LispInteger(handle);
 		}));
@@ -4236,7 +4248,7 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.TCP_ACCEPT + " expects a listener handle");
 			}
 			Socket socket = SocketSupport.accept(listener);
-			long acceptedHandle = nextStreamHandle[0]++;
+			long acceptedHandle = nextStreamHandle.getAndIncrement();
 			streams.put(acceptedHandle, socket);
 			return new LispInteger(acceptedHandle);
 		}));

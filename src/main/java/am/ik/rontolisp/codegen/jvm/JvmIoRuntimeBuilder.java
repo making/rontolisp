@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
@@ -29,8 +30,18 @@ import org.jspecify.annotations.Nullable;
  */
 final class JvmIoRuntimeBuilder {
 
-	/** A stream-runtime method body ready to be emitted into the generated class. */
-	record IoMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	/**
+	 * A stream-runtime method body ready to be emitted into the generated class.
+	 * {@code extraFlags} is OR-ed into the emitted access flags --
+	 * {@code ACC_SYNCHRONIZED} for the two methods that mutate the stream table (see
+	 * {@link #ADD_STREAM_METHOD}).
+	 */
+	record IoMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
+			int extraFlags) {
+
+		IoMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+			this(name, desc, maxStack, maxLocals, code, 0);
+		}
 	}
 
 	static final String STREAMS_FIELD = "_streams";
@@ -44,6 +55,19 @@ final class JvmIoRuntimeBuilder {
 	static final String OPEN_METHOD = "_open";
 
 	static final String OPEN_DESC = "(Ljava/lang/Object;I)Ljava/lang/Object;";
+
+	/**
+	 * The ONE allocator of the stream table: it appends an already-constructed entry and
+	 * returns its handle. Every producer -- {@code _open}, the string-stream makers and
+	 * the socket constructors in {@code JvmSocketRuntimeBuilder} -- goes through it, and
+	 * it is emitted {@code synchronized}, because {@code http-handler} serves one virtual
+	 * thread per request: a non-atomic "reserve a slot, then store" handed two concurrent
+	 * requests the same handle, dropping one stream and crossing the two conversations on
+	 * the survivor (.todo/193).
+	 */
+	static final String ADD_STREAM_METHOD = "_addStream";
+
+	static final String ADD_STREAM_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	static final String CLOSE_METHOD = "_closeStream";
 
@@ -150,6 +174,8 @@ final class JvmIoRuntimeBuilder {
 	private final ClassConstant runtimeExceptionClass;
 
 	private final MethodrefConstant arraysCopyOf;
+
+	private final MethodrefConstant addStreamRef;
 
 	private final MethodrefConstant stringLength;
 
@@ -304,6 +330,8 @@ final class JvmIoRuntimeBuilder {
 		ClassConstant arraysClass = cp.addClass(cp.addUtf8("java/util/Arrays"));
 		this.arraysCopyOf = cp.addMethodref(arraysClass,
 				cp.addNameAndType(cp.addUtf8("copyOf"), cp.addUtf8("([Ljava/lang/Object;I)[Ljava/lang/Object;")));
+		this.addStreamRef = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(ADD_STREAM_METHOD), cp.addUtf8(ADD_STREAM_DESC)));
 		this.bufferedReaderClass = cp.addClass(cp.addUtf8("java/io/BufferedReader"));
 		this.bufferedWriterClass = cp.addClass(cp.addUtf8("java/io/BufferedWriter"));
 		this.fileReaderClass = cp.addClass(cp.addUtf8("java/io/FileReader"));
@@ -432,8 +460,13 @@ final class JvmIoRuntimeBuilder {
 	/** Returns all stream-runtime method bodies to emit. */
 	List<IoMethod> methods() {
 		List<IoMethod> ms = new ArrayList<>();
-		ms.add(new IoMethod(this.cp.addUtf8(OPEN_METHOD), this.cp.addUtf8(OPEN_DESC), 6, 6, buildOpen()));
-		ms.add(new IoMethod(this.cp.addUtf8(CLOSE_METHOD), this.cp.addUtf8(CLOSE_DESC), 4, 3, buildClose()));
+		ms.add(new IoMethod(this.cp.addUtf8(ADD_STREAM_METHOD), this.cp.addUtf8(ADD_STREAM_DESC), 3, 3,
+				buildAddStream(), AccessFlag.ACC_SYNCHRONIZED));
+		ms.add(new IoMethod(this.cp.addUtf8(OPEN_METHOD), this.cp.addUtf8(OPEN_DESC), 6, 4, buildOpen()));
+		// synchronized with _addStream: the entry is nulled out on the CURRENT table, so
+		// a close racing a table growth must not write into the array being replaced.
+		ms.add(new IoMethod(this.cp.addUtf8(CLOSE_METHOD), this.cp.addUtf8(CLOSE_DESC), 4, 3, buildClose(),
+				AccessFlag.ACC_SYNCHRONIZED));
 		ms.add(new IoMethod(this.cp.addUtf8(PROBE_FILE_METHOD), this.cp.addUtf8(PROBE_FILE_DESC), 4, 2,
 				buildProbeFile()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_LINE_METHOD), this.cp.addUtf8(WRITE_LINE_DESC), 5, 4,
@@ -449,9 +482,9 @@ final class JvmIoRuntimeBuilder {
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STRING_METHOD), this.cp.addUtf8(WRITE_STRING_DESC), 4, 3,
 				buildWriteString()));
 		ms.add(new IoMethod(this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_METHOD),
-				this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_DESC), 5, 2, buildMakeStringOutputStream()));
+				this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_DESC), 3, 1, buildMakeStringOutputStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_METHOD),
-				this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_DESC), 7, 4, buildMakeStringInputStream()));
+				this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_DESC), 5, 2, buildMakeStringInputStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(STRING_STREAM_CONTENTS_METHOD),
 				this.cp.addUtf8(STRING_STREAM_CONTENTS_DESC), 3, 3, buildStringStreamContents()));
 		ms.add(new IoMethod(this.cp.addUtf8(FRESH_LINE_METHOD), this.cp.addUtf8(FRESH_LINE_DESC), 4, 3,
@@ -881,70 +914,28 @@ final class JvmIoRuntimeBuilder {
 	 * {@code _open(Object path, int mode) -> Long handle}. Strips the surrounding quotes
 	 * from the path string, opens a {@code BufferedReader} (mode 0), a
 	 * {@code BufferedWriter} (mode 1), a {@code BufferedInputStream} (mode 2, binary) or
-	 * a {@code BufferedOutputStream} (mode 3, binary), stores it in the (lazily created,
-	 * growable) {@code _streams} table, and returns the index as the stream handle.
+	 * a {@code BufferedOutputStream} (mode 3, binary) and hands it to
+	 * {@link #ADD_STREAM_METHOD}, which returns the handle. The file is opened BEFORE the
+	 * table is touched, so the slow part stays outside the allocator's lock.
 	 */
 	private List<Integer> buildOpen() {
-		// Slots: 0=path (Object), 1=mode (int), 2=arr, 3=count, 4=p (String), 5=stream
+		// Slots: 0=path (Object), 1=mode (int), 2=p (String), 3=stream
 		List<Integer> code = new ArrayList<>();
-		// if (_streams == null) _streams = new Object[16];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		int ifInitPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.BIPUSH);
-		code.add(16);
-		code.add(Opcode.ANEWARRAY);
-		emitU2(code, this.objectClass.index());
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.streamsField.index());
-		patchBranch(code, ifInitPos, code.size());
-		// arr = _streams; count = _streamCount;
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamCountField.index());
-		code.add(Opcode.ISTORE_3);
-		// if (count >= arr.length) { arr = Arrays.copyOf(arr, count * 2); _streams = arr;
-		// }
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ARRAYLENGTH);
-		int ifGrowPos = code.size();
-		code.add(Opcode.IF_ICMPLT);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.IMUL);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.arraysCopyOf.index());
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.streamsField.index());
-		patchBranch(code, ifGrowPos, code.size());
 		// p = ((String) path).substring(1, length - 1);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.stringClass.index());
-		code.add(Opcode.ASTORE);
-		code.add(4);
-		code.add(Opcode.ALOAD);
-		code.add(4);
+		code.add(Opcode.ASTORE_2);
+		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ALOAD);
-		code.add(4);
+		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.stringLength.index());
 		code.add(Opcode.ICONST_1);
 		code.add(Opcode.ISUB);
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.stringSubstring.index());
-		code.add(Opcode.ASTORE);
-		code.add(4);
+		code.add(Opcode.ASTORE_2);
 		// stream = switch (mode) { case 0 -> new BufferedReader(new FileReader(p));
 		// case 1 -> new BufferedWriter(new FileWriter(p));
 		// case 2 -> new BufferedInputStream(new FileInputStream(p));
@@ -986,22 +977,10 @@ final class JvmIoRuntimeBuilder {
 		patchBranch(code, gotoStorePos, code.size());
 		patchBranch(code, gotoStorePos1, code.size());
 		patchBranch(code, gotoStorePos2, code.size());
-		// arr[count] = stream; _streamCount = count + 1;
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ALOAD);
-		code.add(5);
-		code.add(Opcode.AASTORE);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.IADD);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.streamCountField.index());
-		// return Long.valueOf((long) count);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.I2L);
+		// return _addStream(stream);
+		code.add(Opcode.ALOAD_3);
 		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.longValueOf.index());
+		emitU2(code, this.addStreamRef.index());
 		code.add(Opcode.ARETURN);
 		return code;
 	}
@@ -1053,8 +1032,8 @@ final class JvmIoRuntimeBuilder {
 	}
 
 	/**
-	 * Emits {@code slot5 = new <buffered>(new <file>(p))} where {@code p} is the path in
-	 * slot 4 -- one arm of the {@code _open} mode branch.
+	 * Emits {@code slot3 = new <buffered>(new <file>(p))} where {@code p} is the path in
+	 * slot 2 -- one arm of the {@code _open} mode branch.
 	 */
 	private void emitOpenStream(List<Integer> code, ClassConstant bufferedClass, ClassConstant fileClass,
 			MethodrefConstant fileInit, MethodrefConstant bufferedInit) {
@@ -1064,14 +1043,12 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.NEW);
 		emitU2(code, fileClass.index());
 		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD);
-		code.add(4);
+		code.add(Opcode.ALOAD_2);
 		code.add(Opcode.INVOKESPECIAL);
 		emitU2(code, fileInit.index());
 		code.add(Opcode.INVOKESPECIAL);
 		emitU2(code, bufferedInit.index());
-		code.add(Opcode.ASTORE);
-		code.add(5);
+		code.add(Opcode.ASTORE_3);
 	}
 
 	/**
@@ -1891,11 +1868,17 @@ final class JvmIoRuntimeBuilder {
 	}
 
 	/**
-	 * Emits the shared stream-table prologue: lazy-init {@code _streams}, load the array
-	 * into {@code arrSlot} and the count into {@code countSlot}, growing the table when
-	 * full (the same shape as the {@code _open} prologue).
+	 * {@code _addStream(Object stream) -> Long handle}. The ONE allocator of the stream
+	 * table (lazily created, growable): it appends the entry and returns its index. It is
+	 * emitted {@code synchronized} -- reserving a slot and filling it must be one atomic
+	 * step, or two concurrent request threads take the same index and one stream is lost
+	 * (.todo/193). The {@code _streams} field is written back on EVERY call, not just on
+	 * a growth, and is volatile: that store is what publishes the new element to a reader
+	 * thread, which reaches the table through the same volatile field.
 	 */
-	private void emitEnsureTableCapacity(List<Integer> code, int arrSlot, int countSlot) {
+	private List<Integer> buildAddStream() {
+		// Slots: 0=stream, 1=arr, 2=count
+		List<Integer> code = new ArrayList<>();
 		// if (_streams == null) _streams = new Object[16];
 		code.add(Opcode.GETSTATIC);
 		emitU2(code, this.streamsField.index());
@@ -1912,58 +1895,45 @@ final class JvmIoRuntimeBuilder {
 		// arr = _streams; count = _streamCount;
 		code.add(Opcode.GETSTATIC);
 		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ASTORE);
-		code.add(arrSlot);
+		code.add(Opcode.ASTORE_1);
 		code.add(Opcode.GETSTATIC);
 		emitU2(code, this.streamCountField.index());
-		code.add(Opcode.ISTORE);
-		code.add(countSlot);
-		// if (count >= arr.length) { arr = Arrays.copyOf(arr, count * 2); _streams = arr;
-		// }
-		code.add(Opcode.ILOAD);
-		code.add(countSlot);
-		code.add(Opcode.ALOAD);
-		code.add(arrSlot);
+		code.add(Opcode.ISTORE_2);
+		// if (count >= arr.length) arr = Arrays.copyOf(arr, count * 2);
+		code.add(Opcode.ILOAD_2);
+		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.ARRAYLENGTH);
 		int ifGrowPos = code.size();
 		code.add(Opcode.IF_ICMPLT);
 		emitU2(code, 0);
-		code.add(Opcode.ALOAD);
-		code.add(arrSlot);
-		code.add(Opcode.ILOAD);
-		code.add(countSlot);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ILOAD_2);
 		code.add(Opcode.ICONST_2);
 		code.add(Opcode.IMUL);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, this.arraysCopyOf.index());
-		code.add(Opcode.ASTORE);
-		code.add(arrSlot);
-		code.add(Opcode.ALOAD);
-		code.add(arrSlot);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ASTORE_1);
 		patchBranch(code, ifGrowPos, code.size());
-	}
-
-	/**
-	 * Emits {@code arr[count] = <stream in stack top>; _streamCount = count + 1; return
-	 * Long.valueOf((long) count);} -- the shared stream-table epilogue. The caller must
-	 * have pushed {@code arr}, {@code count} and the new entry.
-	 */
-	private void emitStoreAndReturnHandle(List<Integer> code, int countSlot) {
+		// arr[count] = stream; _streamCount = count + 1; _streams = arr;
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ILOAD_2);
+		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.AASTORE);
-		code.add(Opcode.ILOAD);
-		code.add(countSlot);
+		code.add(Opcode.ILOAD_2);
 		code.add(Opcode.ICONST_1);
 		code.add(Opcode.IADD);
 		code.add(Opcode.PUTSTATIC);
 		emitU2(code, this.streamCountField.index());
-		code.add(Opcode.ILOAD);
-		code.add(countSlot);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, this.streamsField.index());
+		// return Long.valueOf((long) count);
+		code.add(Opcode.ILOAD_2);
 		code.add(Opcode.I2L);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, this.longValueOf.index());
 		code.add(Opcode.ARETURN);
+		return code;
 	}
 
 	/**
@@ -1972,18 +1942,17 @@ final class JvmIoRuntimeBuilder {
 	 * with-output-to-string.
 	 */
 	private List<Integer> buildMakeStringOutputStream() {
-		// Slots: 0=arr, 1=count
+		// No slots: the entry is built on the stack and handed to _addStream.
 		List<Integer> code = new ArrayList<>();
-		emitEnsureTableCapacity(code, 0, 1);
-		// arr[count] = new StringWriter();
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ILOAD_1);
+		// return _addStream(new StringWriter());
 		code.add(Opcode.NEW);
 		emitU2(code, this.stringWriterClass.index());
 		code.add(Opcode.DUP);
 		code.add(Opcode.INVOKESPECIAL);
 		emitU2(code, this.stringWriterInit.index());
-		emitStoreAndReturnHandle(code, 1);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.addStreamRef.index());
+		code.add(Opcode.ARETURN);
 		return code;
 	}
 
@@ -1994,39 +1963,38 @@ final class JvmIoRuntimeBuilder {
 	 * string-backed stream behind with-input-from-string.
 	 */
 	private List<Integer> buildMakeStringInputStream() {
-		// Slots: 0=str, 1=arr, 2=count, 3=content (String)
+		// Slots: 0=str, 1=content (String)
 		List<Integer> code = new ArrayList<>();
 		// content = ((String) str).substring(1, length - 1);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.stringClass.index());
-		code.add(Opcode.ASTORE_3);
-		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.ASTORE_1);
+		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.stringLength.index());
 		code.add(Opcode.ICONST_1);
 		code.add(Opcode.ISUB);
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.stringSubstring.index());
-		code.add(Opcode.ASTORE_3);
-		emitEnsureTableCapacity(code, 1, 2);
-		// arr[count] = new BufferedReader(new StringReader(content));
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ILOAD_2);
+		code.add(Opcode.ASTORE_1);
+		// return _addStream(new BufferedReader(new StringReader(content)));
 		code.add(Opcode.NEW);
 		emitU2(code, this.bufferedReaderClass.index());
 		code.add(Opcode.DUP);
 		code.add(Opcode.NEW);
 		emitU2(code, this.stringReaderClass.index());
 		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.INVOKESPECIAL);
 		emitU2(code, this.stringReaderInit.index());
 		code.add(Opcode.INVOKESPECIAL);
 		emitU2(code, this.bufferedReaderInit.index());
-		emitStoreAndReturnHandle(code, 2);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.addStreamRef.index());
+		code.add(Opcode.ARETURN);
 		return code;
 	}
 

@@ -1438,8 +1438,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmMutexRuntimeBuilder.MutexMethod> mutexMethods = usesMutexes ? JvmMutexRuntimeBuilder.build(cp)
 				: List.of();
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
-				? JvmSocketRuntimeBuilder.build(cp, thisClass, objectClass, stringClass, longClass, longValueOf,
-						longValue, stringLengthForIo, stringSubstring, stringConcat)
+				? JvmSocketRuntimeBuilder.build(cp, thisClass, stringClass, longClass, longValueOf, longValue,
+						stringLengthForIo, stringSubstring, stringConcat)
 				: null;
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
@@ -1561,7 +1561,10 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(secureRandomRuntime.fieldDesc())
 						.writeU2(0));
 				}
-				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+				// VOLATILE: the synchronized _addStream writes the table back on every
+				// call, and that store is what publishes a new entry to the reader
+				// threads (one virtual thread per served request) -- see .todo/193.
+				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
 					.writeU2(streamsFieldName)
 					.writeU2(streamsFieldDesc)
 					.writeU2(0));
@@ -1897,7 +1900,7 @@ public final class JvmLispCompiler implements LispCompiler {
 								.writeU2(0);
 						})));
 				for (JvmIoRuntimeBuilder.IoMethod im : ioMethods) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, im.name(), im.desc(),
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | im.extraFlags(), im.name(), im.desc(),
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(im.maxStack())
 									.writeU2(im.maxLocals())

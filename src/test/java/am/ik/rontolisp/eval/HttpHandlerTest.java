@@ -231,6 +231,20 @@ class HttpHandlerTest {
 	}
 
 	@Test
+	void concurrentRequestsGetTheirOwnSocketHandle() throws Exception {
+		// One virtual thread per request means the global stream table is allocated from
+		// concurrently: a non-atomic handle counter (and an unsynchronized map) hands two
+		// requests the same handle, so one socket is dropped and the two conversations
+		// cross -- the shape that lost PostgreSQL connections inside auth (.todo/193).
+		try (ServerSocket echo = StreamHandleConcurrencySupport.startEchoServer()) {
+			int port = freePort();
+			serveInBackground(StreamHandleConcurrencySupport.echoingHandlerProgram(echo.getLocalPort(), port), port);
+			StreamHandleConcurrencySupport
+				.assertHandlesAreUnshared(StreamHandleConcurrencySupport.probeConcurrently(port));
+		}
+	}
+
+	@Test
 	void directiveRejectsWrongArgCount() {
 		assertThatThrownBy(() -> {
 			LispEvaluator evaluator = evaluator();

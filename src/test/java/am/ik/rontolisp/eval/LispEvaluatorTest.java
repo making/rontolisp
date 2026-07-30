@@ -9284,4 +9284,44 @@ class LispEvaluatorTest {
 			.hasMessageContaining("packed integer vector");
 	}
 
+	@Test
+	void concurrentFirstCallsOfALazyLoadedLibraryAllResolve() throws Exception {
+		// A Lisp-source library (url.lisp here, through rontolisp:query-param) is
+		// evaluated into the global environment on its FIRST resolution, and http-handler
+		// puts one virtual thread per request on that environment -- so the first burst
+		// of
+		// requests resolves the same library from many threads at once. The loader must
+		// not publish "loaded" before the definitions are installed, or the threads that
+		// arrive in between see "The function ... is undefined" (.todo/193: what a 12-way
+		// POST burst against examples/db/postgres-web.lisp lost requests to). Several
+		// rounds with a FRESH evaluator each: the load is a cold library exactly once per
+		// evaluator, and the window only opens once the JIT has warmed the loader up.
+		int rounds = 5;
+		int threads = 16;
+		java.util.List<String> results = new java.util.ArrayList<>();
+		for (int round = 0; round < rounds; round++) {
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+			java.util.concurrent.CyclicBarrier startTogether = new java.util.concurrent.CyclicBarrier(threads);
+			java.util.List<java.util.concurrent.Callable<String>> calls = new java.util.ArrayList<>();
+			for (int i = 0; i < threads; i++) {
+				calls.add(() -> {
+					startTogether.await();
+					try {
+						return evaluator.eval(LispReader.readFromString("(rontolisp:query-param \"q=tok\" \"q\")"))
+							.print();
+					}
+					catch (RuntimeException ex) {
+						return "FAILED: " + ex.getMessage();
+					}
+				});
+			}
+			try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+				for (var result : pool.invokeAll(calls)) {
+					results.add(result.get());
+				}
+			}
+		}
+		assertThat(results).allSatisfy(value -> assertThat(value).isEqualTo("\"tok\""));
+	}
+
 }

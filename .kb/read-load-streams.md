@@ -102,3 +102,38 @@ test is "not a handle"). Pinned by `makeSynonymStreamResolvesTheNamedVariable` /
 **Component stdin (stdin.lisp over wit-imported `wasi:cli/stdin@0.3.0`)**: on the `--component` path an ASYNC program that reads stdin (`read-line`/`read-char`/`read-byte` referenced + an async form referenced + not serve mode) gets `stdin.lisp` + `stdin-dispatch.lisp` spliced by `eval/StdinLibrary` (runs right after `SocketsLibrary` in the CLI; test helpers mirror it). The interface is bound FROM the fixed import block (`WasmComponentBuilder.FIXED_BLOCK_IFACES`, instance `INST_STDIN` -- the wait.lisp model; `validateFixedMembers` admits async type-alias built-ins, whose component-level stream/future types alias nothing out of the block instance, while drops/task-returns stay rejected), so the program's emitted WIT world is unchanged and no new `-S` flag exists. Mechanics = the preview1 adapter's stdin cache in Lisp: ONE `read-via-stream` stream cached in a defvar (its result future dropped immediately; EOF is the stream status), a chunk buffer + cursor + eof defvars, `%stdin-read-line-f`/`-read-char-f` async-defuns so the compiler rewrite's promotion (`WasmSocketsRewrite`, gated on the spliced `%io-read-line`) makes a pending stdin read SUSPEND the task -- a concurrent `wait-for` timer fires while the read waits (`componentAsyncStdinReadDoesNotStallTheInstance`). The `%stdin-*-or-raw-f` helpers dispatch nil designator -> stdin, else the `%...-raw` native built-ins; EOF parity: `read-line` -> nil, the 0/1-arg `read-char` signals "read-char: end of file" (the interpreter's message), `read-byte` on nil errors (a stream argument is mandatory everywhere). **A NON-async stdin program is deliberately NOT migrated**: it keeps the preview1 adapter's `fd_read` stdin branch, so its component is byte-identical and still runs without `-W exceptions=y` (`componentNonAsyncStdinKeepsTheAdapterPathAndItsFlags`); an async program already needed that flag, so migration changes no flags either. When sockets.lisp is spliced, `StdinLibrary` supplies only the or-raw helpers' backing (real `stdin.lisp`, or `stdin-stub.lisp` raw passthroughs under serve -- the wasi:http service world has no stdin and the bridge's `fd_read` is EOF by construction) and sockets.lisp's own dispatchers keep the `%io-*` names. Known limits, documented not fixed: reads buffer one host chunk (the sockets.lisp divergence from byte-at-a-time), and a migrated program that ALSO consumes stdin through forms the rewrite leaves native (`read`, the 2/3-arg eof-parameter `read-char`/`read-byte` forms) would hold TWO host stdin streams (the adapter's cache + stdin.lisp's) with implementation-specific interleaving -- don't mix them on stdin in one async program.
 
 **`read-char` (one character, all three backends)**: `(read-char [stream [eof-error-p [eof-value]]])` over the same handle space as `read-line` (default stream nil = standard input; file streams and string input streams). EOF semantics mirror `read-byte` (`eof-error-p` default t = throw/trap, nil = return `eof-value`). Interpreter: an `Environment` registration reading one UTF-16 code unit from the `stdinReader` or a `BufferedReader` table entry. JVM: `_readChar(handle, eofErrorP, eofValue)` in `JvmIoRuntimeBuilder` (lazily initializes the shared `_stdinReader` field on a null handle; `BufferedReader.read()`, boxed `Character`), called by `JvmReadCharCompiler`. WASM: `_read_char` (`WasmIoRuntimeBuilder.buildReadCharBody`, `FUNC_READ_CHAR` appended after `FUNC_FBOUNDP` before `FUNC_USER_BASE` — the mod/rem pattern, so no import index shifts and the component blobs are unaffected) reads ONE BYTE — WASM strings are byte-indexed like `char`/`schar`, so a character read is a byte read — from fd 0 / a WASI fd via the `BYTE_SCRATCH_ADDR` cell / a negative string-stream handle's `[cursor,end)` range (advancing the cursor), boxed as a `TYPE_CHAR` struct. 0-arg `#'read-char` wrapper like `#'read-line`. The compilers evaluate multi-argument call forms right-to-left (.todo/014), so sequence consecutive `(read-char s)` calls through `let*`, not `(list ...)`. Needed by cl-utilities' `read-delimited`.
+
+**The stream table is CONCURRENT on the interpreter and the JVM -- one allocator, and it
+is atomic** (.todo/193): `http-handler`/`serve` put one virtual thread per request on both
+backends (`.kb/mutexes.md`), so several requests allocate handles at the same instant, and
+the table is process-wide, not per-request. The old shape -- reserve `count`, then store
+the entry -- handed two concurrent requests the SAME handle: one stream was dropped
+(leaked, never closed) and both Lisp handles denoted the survivor, so the two
+conversations interleaved on one connection. Against PostgreSQL that read as random
+connection loss inside the trust-auth handshake ("read-byte: end of file",
+"Unexpected message received: 0" -- 10 of 12 connects surviving a burst), which looked
+like server-side churn and is not. Per backend:
+- **Interpreter** (`Environment.createGlobal`): the table is a `ConcurrentHashMap` and the
+  counter an `AtomicLong`. Never put a `null` value in it -- the map forbids it (every
+  entry is a live `Closeable`; `close` REMOVES instead of nulling).
+- **JVM**: every producer -- `_open`, `_makeStringOutputStream`, `_makeStringInputStream`
+  and every socket constructor in `JvmSocketRuntimeBuilder` -- appends through the ONE
+  allocator `_addStream(Object) -> Long` (`JvmIoRuntimeBuilder`, emitted
+  `ACC_SYNCHRONIZED`), so a new stream-producing built-in MUST call it rather than grow
+  its own reserve/store pair. `_closeStream` is synchronized with it (its null-out must
+  not land in an array a concurrent growth is replacing) and `_streams` is `ACC_VOLATILE`:
+  `_addStream` writes the field back on EVERY call, and that store is what publishes the
+  new element to the reader threads. The producers build their stream BEFORE calling the
+  allocator, so the blocking part (a connect, a file open) stays outside the lock.
+- **WASM**: both backends are single-threaded by construction (the component's
+  `rontolisp::*sock-table*` included), so nothing to do -- the same reason mutexes are a
+  no-op there.
+
+The wider rule this is one instance of (what else a served request may reach, and the
+other two bugs in the family) is `.kb/concurrent-served-requests.md`.
+
+Pinned by `HttpHandlerTest#concurrentRequestsGetTheirOwnSocketHandle` and
+`HttpHandlerJvmTest#concurrentRequestsGetTheirOwnSocketHandle` (shared fixture
+`StreamHandleConcurrencySupport`: 24 simultaneous requests x 3 rounds, each opening its
+own socket to an echo server; the assertion is both "no handle handed out twice" and "the
+echo that came back is my own").
