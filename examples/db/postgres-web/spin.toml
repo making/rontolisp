@@ -1,0 +1,19 @@
+spin_manifest_version = 2
+
+[application]
+name = "postgres-web"
+version = "0.1.0"
+description = "A rontolisp:http-handler served as a wasi:http/handler@0.3.0 component."
+
+[[trigger.http]]
+route = "/..."
+component = "postgres-web"
+
+[component.postgres-web]
+source = "app.wasm"
+allowed_outbound_hosts = ["tcp://127.0.0.1:54329"]
+environment = { DATABASE_URL = "postgresql://postgres@127.0.0.1:54329/postgres" }
+
+[component.postgres-web.build]
+command = "rontolisp ../postgres-web.lisp -o app.wasm --component --optimize"
+watch = ["../postgres-web.lisp"]
