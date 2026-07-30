@@ -15,7 +15,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | --- | --- |
 | リスタート | 利用可。デバッガ統合（`break`、`*debugger-hook*`）とコンディションとの関連付けはありません |
 | `symbol-macrolet` | 利用不可（`macrolet` は利用可能） |
-| `&whole` / `&environment` | 利用不可。`defmacro` のラムダリストは必須パラメータと末尾の `&rest`/`&body` 1 つのみ |
+| `&environment` | `defmacro` のラムダリストで受け付けますが、常に `nil` に束縛されます（マクロ展開環境オブジェクトは存在しません）。`&whole` は `defmacro`・`destructuring-bind` の双方で動作します |
 | `loop`（拡張版） | 一部対応（後述） |
 | CLOS | 一部対応（静的サブセット、MOP なし） |
 | `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default) ...)` は利用可能 |
@@ -172,9 +172,10 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
 
 ## その他の省略事項
 
-- ラムダリスト: `&whole` は利用できず、`defmacro` のラムダリストは必須
-  パラメータと末尾の `&rest`/`&body` 1 つのみを取り、funcall/apply 経由の
-  呼び出しでは関数の物理パラメータは 7 個までです。
+- ラムダリスト: 拡張された `defmacro` のラムダリスト（`&whole`、`&optional`、
+  `&key`、`&aux`、入れ子の分配パターン）は `destructuring-bind` を経由します。
+  これは意図的に寛容で、引数の不足は `nil`、余剰は無視となりエラーになりません。
+  また funcall/apply 経由の呼び出しでは関数の物理パラメータは 7 個までです。
 - ユーザーマクロはコンパイル済みプログラムの実行時 `eval` では認識されず、
   その `eval` がランタイムに構築する `lambda` はラムダリストキーワードを
   解釈しません（[コンパイル済み eval の制限](eval-limitations.md)を参照）。

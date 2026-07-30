@@ -14,7 +14,7 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 | --- | --- |
 | restarts | available; no debugger integration (`break`, `*debugger-hook*`) and no condition-restart association |
 | `symbol-macrolet` | not available (`macrolet` is) |
-| `&whole` / `&environment` | not available; a `defmacro` lambda list takes required parameters plus one trailing `&rest`/`&body` |
+| `&environment` | accepted in a `defmacro` lambda list but always bound to `nil` (there is no macro-expansion environment object). `&whole` works, in `defmacro` and `destructuring-bind` alike |
 | `loop` (extended) | partial (see below) |
 | CLOS | partial (static subset; no MOP) |
 | `defstruct` `:include` | single inheritance only; slot-overrides `(:include parent (slot default) ...)` work |
@@ -171,8 +171,10 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
 
 ## Other omissions
 
-- lambda lists: `&whole` is unavailable, a `defmacro` lambda list accepts only
-  required parameters plus one trailing `&rest`/`&body`, and a function is
+- lambda lists: an extended `defmacro` lambda list (`&whole`, `&optional`,
+  `&key`, `&aux`, nested destructuring patterns) routes through
+  `destructuring-bind`, which is deliberately lenient -- a missing argument is
+  `nil` and a surplus one is ignored rather than signalling; and a function is
   limited to 7 physical parameters on the funcall/apply path.
 - user macros are unknown to the runtime `eval` of compiled programs, and a
   `lambda` built at runtime by that `eval` does not parse lambda-list keywords
