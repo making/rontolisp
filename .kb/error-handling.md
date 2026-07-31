@@ -13,7 +13,7 @@ containing one of the three catching forms is compiled in "EH mode" (one
 `wasmtime -W exceptions=y` (37+) — anything else is byte-identical to a build
 that never knew about EH. See "WASM (todo-129)" below. A NON-LOCAL EXIT is not a
 condition and must pass through a `handler-case` uncaught while still running every
-`unwind-protect` cleanup — that holds for a cross-lambda `return-from` and for
+`unwind-protect` cleanup — that holds for a cross-lambda `return-from`/`go` and for
 `catch`/`throw`, which share one exit channel; the mechanics (and the
 `ctx.blockExitTag`/`blockExitChannel` gate this file's handler-case sections read) live in
 `.kb/do-return-block.md`. The condition-OBJECT
@@ -481,9 +481,11 @@ already. `--no-gc` is the one exception and keeps the historical lite lowering.
   `handler-case` regions uncaught (`.kb/do-return-block.md`).
 - **Clause bodies are compiled INLINE in the dispatch, never wrapped in a
   lambda.** That is what makes postmodern's `transaction.lisp` shape work: the
-  clause body `(go start)` targets a tagbody of the SAME function, and
-  cross-lambda `go` is unsupported on both compile paths. A lambda wrapper would
-  have turned every retry clause into that unsupported shape.
+  clause body `(go start)` targets a tagbody of the SAME function, so it stays a
+  plain goto/br. A lambda wrapper would push every retry clause onto the
+  cross-lambda `go` lowering (`.kb/do-return-block.md`) — correct since
+  `.todo/217`, but an EH region and a tagbody re-entry loop per `restart-case`
+  instead of a jump.
 - `restart-case` shape: `(let* ((tag (list '%restart)) (res (catch tag (let
   ((saved %restart-clusters%)) (unwind-protect (progn <push> (cons -1
   (multiple-value-list <form>))) (setq %restart-clusters% saved)))))) (let ((idx

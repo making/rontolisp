@@ -102,8 +102,10 @@ compiled function. Machinery:
   name-dropping `expandBlock` lowering and has no `return-from` at all (it never ran
   `desugarProgram`), so this does not apply there; the interpreter was already correct and
   is untouched.
-- **Still lexical-only** (a follow-up, same root cause): a **non-lexical `go`** (see
-  below).
+- **Cross-lambda `go`** rides the same machinery with one extra move; see the
+  `tagbody`/`go` section below. Still unsupported on the compile path: a `go` whose tag
+  is not LEXICALLY visible at all (the interpreter's dynamic `go` into a *caller's*
+  tagbody).
 
 Needed by cl-utilities' `rotate-byte`/`read-delimited` (function-scoped early returns,
 now exact) and cl-ppcre (`ClPpcreE2eTest`, all four backends: `(block scan ...)` in the
@@ -166,19 +168,49 @@ qualification, not the constant, tells them apart.
 `tagbody`/`go` and `prog`/`prog*` work on all three backends (interpreter, JVM,
 wasm-GC).
 
-- **Interpreter = dynamic `go`**: `go` throws a `GoSignal` exception; `evalTagbody`
+- **Interpreter = dynamic `go`** (a superset of CL, which makes `go` lexical): `go` throws a `GoSignal` exception; `evalTagbody`
   catches it and re-enters at the target label via label-indexed re-entry. Because it
   is a thrown signal, a dynamic `go` **crosses function boundaries** (the target need
   not be lexically enclosing).
-- **Compilers = LEXICAL subset only**: a `go` must target a lexically enclosing
-  `tagbody` in the SAME compiled function; a non-lexical `go` (inside a lambda, targeting
-  an enclosing `tagbody`) is unsupported on the compile path. It is the deferred sibling of
-  the cross-lambda `return-from` EH crossing above: the same `%nlx-tag`/throw/catch scheme
-  could carry a `(tag . pc-index)` payload, but the establishing tagbody's dispatch loop
-  must be re-entered at the caught pc, which needs the JVM `tagbody` restructured into a
-  pc-dispatch loop (wasm already is one). Split out to keep the `return-from` crossing
-  focused; the lowering is designed not to foreclose it (`CrossLambdaExitLowering` handles
-  `return-from` only, leaving `go` to be added the same way).
+- **Compilers = LEXICAL, with a lowered lambda crossing**: a `go` compiles to a
+  goto/br when its tag belongs to a `tagbody` in the SAME compiled function. A `go`
+  whose tag is established OUTSIDE the nested lambda it sits in (a `handler-bind`
+  handler resuming its loop -- quri's `:lenient` percent-decoding) is lowered by
+  `compiler/CrossLambdaExitLowering` exactly like the cross-lambda `return-from` above,
+  plus one move: a block exit LEAVES its block, but a `go` RE-ENTERS its tagbody at a
+  label and keeps running. The establishing `tagbody` is therefore rewritten into a
+  re-entry loop **built from ordinary forms**, so NEITHER backend's `tagbody`/`go`
+  compiler knows about any of this:
+
+  ```lisp
+  (let ((id (%nlx-tag)) (pc 0) (r nil))
+    (tagbody
+     retry
+       (setq r (%nlx-catch id (tagbody (if (= pc 1) (go t1)) ... ORIGINAL-ITEMS)))
+       (if r (progn (setq pc r) (go retry)))))
+  ```
+
+  The crossing `(go t1)` becomes `(%nlx-throw id 1)` -- the payload is the target
+  label's **1-based re-entry index**, not the tag name, and the `id` is the same
+  per-activation `%nlx-tag` lexical, so a recursive function's inner activation cannot
+  catch an outer one's `go`. Normal completion of the inner tagbody yields nil (a
+  tagbody's value), which is what stops the loop: indices start at 1 precisely so nil
+  is unambiguous. Only labels an actual crossing `go` targets get a dispatch entry, and
+  a tagbody with no crossing `go` is emitted verbatim (byte-identical). Keyword labels
+  count -- quri's `with-array-parsing` names its end-of-input segment `:eof`.
+  `prog`/`prog*` establish tags the same way (their body IS a tagbody body): the
+  re-entry loop is spliced in as their single body item, leaving the `%block` a plain
+  `(return)` exits in place. Same EH gating as the `return-from` crossing (it sets the
+  same `crossLambda.used()` flag), so such a program needs `wasmtime -W exceptions=y`.
+  Pinned by `JvmLispCompilerTest.compileAndRunGoInsideLambdaReentersOuterTagbody`, the
+  wasm `goInsideLambdaReentersOuterTagbody`, and the `cross-lambda-go` ci-spec case.
+  **Reason the lowering lives at the AST level**: restructuring the JVM `tagbody` into a
+  runtime pc-dispatch loop (what an in-backend fix needs; wasm already is one) would
+  change every tagbody's emitted code, including the vast majority with no crossing
+  `go`. Revisit only if a shape appears that the AST rewrite cannot express.
+  Still unsupported: a `go` whose tag is not lexically visible at all -- the
+  interpreter's dynamic `go` into a *caller's* tagbody -- which keeps the loud
+  `GO tag X has no lexically enclosing tagbody` stub.
   - **JVM**: `JvmTagbodyCompiler` lowers to goto/patch, with every label emitted as a
     `joinShape` join point at the tagbody's entry stack shape. `JvmGoCompiler` performs
     the escaped-cleanup/spill unwind (inlining escaped `unwind-protect` cleanups,

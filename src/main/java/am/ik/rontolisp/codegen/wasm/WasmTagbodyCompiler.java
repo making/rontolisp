@@ -26,11 +26,14 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * A {@code go} resolves its tag against the innermost lexically enclosing tagbody that
- * declares it -- unlike the interpreter's dynamic {@code go}, a jump cannot cross a
- * function boundary. A {@code go} escaping {@code unwind-protect} scopes entered inside
- * the tagbody compiles their cleanup forms inline before the branch, innermost first
- * (lite: unlike the trampolined {@code return} path, a throw from such an inlined cleanup
- * can re-enter its own scope's handler).
+ * declares it. One whose tag belongs to a tagbody OUTSIDE the nested lambda it sits in is
+ * rewritten by {@code compiler/CrossLambdaExitLowering} into a throw the tagbody's
+ * generated re-entry loop catches, before this compiler ever sees it
+ * ({@code .kb/do-return-block.md}); only the interpreter's dynamic {@code go} into a
+ * CALLER's tagbody is out of reach. A {@code go} escaping {@code unwind-protect} scopes
+ * entered inside the tagbody compiles their cleanup forms inline before the branch,
+ * innermost first (lite: unlike the trampolined {@code return} path, a throw from such an
+ * inlined cleanup can re-enter its own scope's handler).
  */
 final class WasmTagbodyCompiler {
 
@@ -124,10 +127,12 @@ final class WasmTagbodyCompiler {
 			}
 		}
 		if (scope == null) {
-			// The interpreter's dynamic go can cross a function boundary (a go inside
-			// an flet local targeting the enclosing function's tagbody -- cl-ppcre's
-			// charset rehash); the compilers cannot, so the jump becomes a cold-path
-			// runtime signal and the library still compiles.
+			// No lexically visible tagbody declares the tag. A go crossing a nested
+			// lambda/flet into an ENCLOSING one never reaches here -- the shared
+			// CrossLambdaExitLowering rewrote it into a %nlx-throw the tagbody's
+			// re-entry loop catches. What is left is the interpreter's DYNAMIC go into
+			// a caller's tagbody, which the compilers cannot express, so the jump
+			// becomes a cold-path runtime signal and the library still compiles.
 			WasmExprCompiler.compileExpr(new LispCons(new LispSymbol(LispNames.ERROR),
 					new LispCons(new am.ik.rontolisp.LispString(LispNames.GO + " tag " + tag
 							+ " has no lexically enclosing tagbody: the compilers support go within the same function only"),

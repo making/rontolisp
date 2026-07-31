@@ -57,20 +57,19 @@ Lisp:
 
 - a `return-from` that would cross an `flet`/`labels` local function is not yet
   supported (one crossing a `lambda` is, as a non-local exit);
-- `go` must target a tag of a lexically enclosing `tagbody` in the same
-  function; the interpreter additionally supports dynamic `go` across function
-  boundaries. The shape that runs into this in real code is a
+- `go` must target a tag of a `tagbody` that lexically encloses it; the
+  interpreter additionally supports dynamic `go` across function-call
+  boundaries, i.e. a tag established by the *caller*. A tag reached from inside
+  a nested `lambda` -- the shape a
   [`handler-bind`](../reference/macros/handler-bind.md) handler that resumes the
-  protected loop with a `go` -- the handler is a `lambda`, so the tag is in the
-  enclosing function (quri's `:lenient` percent-decoding does exactly this, and
-  crashes on the compiled backends once the input really is malformed). A
-  `return-from` in the same position works, because one crossing a `lambda` IS
-  lowered.
+  protected loop with a `go` produces, and what quri's `:lenient`
+  percent-decoding does -- is lowered like a cross-`lambda` `return-from`: a
+  non-local exit that re-enters the `tagbody` at the tag and carries on.
 
-A cross-`lambda` `return-from`, `catch`/`throw`, `unwind-protect`, and condition
-catching all compile in exception-handling mode, so the emitted wasm-GC modules
-need `wasmtime -W exceptions=y` (37+); under `--no-gc` `catch`/`throw`,
-`unwind-protect` and the condition forms are a compile error.
+A cross-`lambda` `return-from` or `go`, `catch`/`throw`, `unwind-protect`, and
+condition catching all compile in exception-handling mode, so the emitted
+wasm-GC modules need `wasmtime -W exceptions=y` (37+); under `--no-gc`
+`catch`/`throw`, `unwind-protect` and the condition forms are a compile error.
 
 ## Restarts
 

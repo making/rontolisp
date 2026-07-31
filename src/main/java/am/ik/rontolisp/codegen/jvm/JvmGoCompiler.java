@@ -38,10 +38,12 @@ final class JvmGoCompiler {
 			}
 		}
 		if (scope == null) {
-			// The interpreter's dynamic go can cross a function boundary (a go inside
-			// an flet local targeting the enclosing function's tagbody -- cl-ppcre's
-			// charset rehash); the compilers cannot, so the jump becomes a cold-path
-			// runtime signal and the library still compiles.
+			// No lexically visible tagbody declares the tag. A go crossing a nested
+			// lambda/flet into an ENCLOSING one never reaches here -- the shared
+			// CrossLambdaExitLowering rewrote it into a %nlx-throw the tagbody's
+			// re-entry loop catches. What is left is the interpreter's DYNAMIC go into
+			// a caller's tagbody, which the compilers cannot express, so the jump
+			// becomes a cold-path runtime signal and the library still compiles.
 			JvmExprCompiler.compileExpr(new LispCons(new LispSymbol(LispNames.ERROR),
 					new LispCons(new am.ik.rontolisp.LispString(LispNames.GO + " tag " + tag
 							+ " has no lexically enclosing tagbody: the compilers support go within the same function only"),

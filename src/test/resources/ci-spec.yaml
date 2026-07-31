@@ -5264,6 +5264,61 @@ cases:
       NIL
       :HIT
       NIL
+  - name: cross-lambda-go
+    source: |
+      ;; A go whose tag belongs to a tagbody in the ENCLOSING function -- the shape a
+      ;; handler-bind handler resuming its loop produces (quri's :lenient percent-
+      ;; decoding). The lowering re-enters the tagbody at the tag and carries on.
+      (define-condition clg-err (error) ())
+      (defun clg-f (x)
+        (tagbody
+         top
+           (handler-bind ((clg-err (lambda (e) (declare (ignore e)) (go done))))
+             (when (> x 0) (error 'clg-err))
+             (princ "no-error"))
+         done)
+        :ok)
+      (print (clg-f 1))
+      (print (clg-f 0))
+      ;; A backward crossing go keeps the tagbody looping.
+      (defun clg-countdown (n)
+        (let ((out nil))
+          (tagbody
+           again
+             (setq out (cons n out))
+             (setq n (- n 1))
+             (funcall (lambda () (if (> n 0) (go again)))))
+          (reverse out)))
+      (print (clg-countdown 4))
+      ;; The id is per-activation, so recursion targets the right frame; an escaped
+      ;; unwind-protect cleanup still runs on the way out.
+      (defun clg-rec (n)
+        (let ((hit nil))
+          (tagbody
+           top
+             (if (= n 0) (go fin))
+             (setq hit (clg-rec (- n 1)))
+             (funcall (lambda () (go fin)))
+             (setq hit :never)
+           fin)
+          (list n hit)))
+      (print (clg-rec 2))
+      ;; prog establishes the tags AND the nil block a (return) exits.
+      (defun clg-prog (x)
+        (prog ((acc nil))
+           (funcall (lambda () (if (eq x :jump) (go later))))
+           (return (cons :early acc))
+         later
+           (return (cons :later acc))))
+      (print (clg-prog :plain))
+      (print (clg-prog :jump))
+    expected: |
+      :OK
+      no-error:OK
+      (4 3 2 1)
+      (2 (1 (0 NIL)))
+      (:EARLY)
+      (:LATER)
   - name: catch-throw
     source: |
       ;; catch/throw: a DYNAMIC non-local exit -- the throw only has to run inside the

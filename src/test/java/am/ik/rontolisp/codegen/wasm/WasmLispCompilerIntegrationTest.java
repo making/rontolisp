@@ -5269,6 +5269,78 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void goInsideLambdaReentersOuterTagbody() throws Exception {
+		// A go whose tag belongs to a tagbody in the ENCLOSING function -- the shape a
+		// handler-bind handler resuming its loop produces (quri's :lenient
+		// percent-decoding). The lowering throws the target label's re-entry index on
+		// the block-exit tag; the tagbody's catch re-dispatches into it at that label
+		// and carries on. Also covers the backward case (the loop keeps running) and a
+		// prog, which establishes the tags AND the nil block a (return) exits.
+		// (Was an `unreachable` trap.)
+		assertThat(compileAndRun("""
+				(define-condition my-err (error) ())
+				(defun f (x)
+				  (tagbody
+				   top
+				     (handler-bind ((my-err (lambda (e) (declare (ignore e)) (go done))))
+				       (when (> x 0) (error 'my-err))
+				       (princ "no-error"))
+				   done)
+				  :ok)
+				(print (f 1))
+				(print (f 0))
+				(defun countdown (n)
+				  (let ((out nil))
+				    (tagbody
+				     again
+				       (setq out (cons n out))
+				       (setq n (- n 1))
+				       (funcall (lambda () (if (> n 0) (go again)))))
+				    (reverse out)))
+				(print (countdown 4))
+				(defun via-prog (x)
+				  (prog ((acc nil))
+				     (funcall (lambda () (if (eq x :jump) (go later))))
+				     (return (cons :early acc))
+				   later
+				     (return (cons :later acc))))
+				(print (via-prog :plain))
+				(print (via-prog :jump))
+				""")).isEqualTo(":OK\nno-error:OK\n(4 3 2 1)\n(:EARLY)\n(:LATER)");
+	}
+
+	@Test
+	void crossLambdaGoRecursiveTargetsCorrectFrame() throws Exception {
+		// The thrown id is the per-activation %nlx-tag lexical (an i31 VALUE on wasm),
+		// so a recursive function's inner activation cannot catch an outer one's go; an
+		// escaped unwind-protect cleanup still runs on the way out.
+		assertThat(compileAndRun("""
+				(defun rec (n)
+				  (let ((hit nil))
+				    (tagbody
+				     top
+				       (if (= n 0) (go fin))
+				       (setq hit (rec (- n 1)))
+				       (funcall (lambda () (go fin)))
+				       (setq hit :never)
+				     fin)
+				    (list n hit)))
+				(print (rec 2))
+				(defun cleaned ()
+				  (let ((log nil))
+				    (tagbody
+				     top
+				       (unwind-protect (funcall (lambda () (go out)))
+				         (setq log (cons :cleanup log)))
+				       (setq log (cons :never log))
+				     out
+				       (setq log (cons :out log)))
+				    (reverse log)))
+				(print (cleaned))
+				""")).isEqualTo("(2 (1 (0 NIL)))\n(:CLEANUP :OUT)");
+	}
+
+	@Test
 	void charComparisonExtensions() throws Exception {
 		assertThat(compileAndRun("""
 				(print (char> #\\c #\\b #\\a))

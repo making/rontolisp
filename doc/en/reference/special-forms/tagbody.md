@@ -4,7 +4,7 @@
 
 Evaluates its body forms in order for effect. A bare symbol (or integer) in the body is a *go tag*: [`go`](go.md) transfers control to the form after that tag, forward or backward, so loops and state machines can be written with explicit jumps. Falling off the end returns nil.
 
-On the JVM and WASM compilers `go` is lexical: it must target a tag of a lexically enclosing `tagbody` in the same function (the interpreter additionally supports dynamic `go` across function boundaries).
+On the JVM and WASM compilers `go` is lexical: it must target a tag of a `tagbody` that lexically encloses it (the interpreter additionally supports dynamic `go` across function-call boundaries, i.e. a tag established by the *caller*). A tag reached from inside a nested `lambda` -- what a [`handler-bind`](../macros/handler-bind.md) handler that resumes its loop with a `go` produces -- is lowered to a non-local exit that re-enters the `tagbody` at the tag, so it works on every backend; such a program compiles in exception-handling mode, so the wasm runs need `wasmtime -W exceptions=y`.
 
 ```lisp
 (let ((n 0))

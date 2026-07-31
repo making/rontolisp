@@ -17,8 +17,11 @@ import org.jspecify.annotations.Nullable;
 /**
  * Compiles the {@code tagbody} special form. Body atoms (symbols or integers) are labels;
  * other forms are compiled for effect in order. A {@code go} (see {@link JvmGoCompiler})
- * jumps to a label of the innermost lexically enclosing tagbody that declares its tag --
- * unlike the interpreter's dynamic {@code go}, a jump cannot cross a function boundary.
+ * jumps to a label of the innermost lexically enclosing tagbody that declares its tag.
+ * One whose tag belongs to a tagbody OUTSIDE the nested lambda it sits in is rewritten by
+ * {@code compiler/CrossLambdaExitLowering} into a throw the tagbody's generated re-entry
+ * loop catches, before this compiler ever sees it ({@code .kb/do-return-block.md}); only
+ * the interpreter's dynamic {@code go} into a CALLER's tagbody is out of reach.
  *
  * <p>
  * Every label is a join point reached with the operand stack the tagbody was entered with

@@ -181,8 +181,9 @@ java -jar $JAR test.lisp -o test-comp.wasm --component && \
 A program using `handler-case`/`ignore-errors`/`unwind-protect`/`catch`/`throw`
 compiles in EH mode, an ASYNC component (async-defun/async-lambda/await, incl. every
 fetch/serve program) forces EH mode too, and so does a **cross-lambda
-`return-from`** (one inside a lambda that names an enclosing block, lowered to a
-block-exit throw/catch): add `-W exceptions=y` to BOTH wasm run commands
+`return-from` or `go`** (one inside a lambda naming an enclosing block, or
+targeting an enclosing `tagbody`'s tag -- lowered to a block-exit throw/catch):
+add `-W exceptions=y` to BOTH wasm run commands
 (wasmtime 37+; without it the module fails to parse). A fetch component
 additionally needs `-S http=y`. Programs without those forms are byte-identical
 to pre-EH output and keep the flags above.

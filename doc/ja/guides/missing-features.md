@@ -58,17 +58,18 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 - `flet`/`labels` のローカル関数をまたぐ必要がある `return-from` はまだ
   未対応です（`lambda` をまたぐものは非局所脱出として対応済みです）。
-- `go` は同一関数内のレキシカルに囲む `tagbody` のタグのみを対象にできます。
-  実際のコードでこれに当たる典型は、[`handler-bind`](../reference/macros/handler-bind.md)
-  のハンドラが `go` で保護対象のループを再開する形です — ハンドラは `lambda` なので
-  タグは外側の関数にあります (quri の `:lenient` なパーセントデコードがまさにこの形で、
-  入力が実際に不正な場合コンパイル済みバックエンドでクラッシュします)。同じ位置の
-  `return-from` は動作します。ラムダ境界を越える `return-from` は下位変換されるためです。
-  インタプリタはさらに関数境界を越える動的 `go` をサポートします。
+- `go` はレキシカルに囲む `tagbody` のタグのみを対象にできます。インタプリタは
+  さらに関数呼び出しの境界を越える動的 `go`、つまり*呼び出し元*が確立したタグへの
+  ジャンプもサポートします。ネストした `lambda` の内側から囲む関数のタグへ
+  ジャンプする形 — [`handler-bind`](../reference/macros/handler-bind.md) の
+  ハンドラが `go` で保護対象のループを再開する形であり、quri の `:lenient` な
+  パーセントデコードがまさにこれです — は `lambda` をまたぐ `return-from` と
+  同じく下位変換されます: そのタグで `tagbody` に再入して実行を続ける
+  非局所脱出になります。
 
-`lambda` をまたぐ `return-from`、`catch`/`throw`、`unwind-protect`、条件の捕捉は
-いずれも例外処理モードでコンパイルされるため、出力される wasm-GC モジュールの
-実行には `wasmtime -W exceptions=y`（37+）が必要です。`--no-gc` では
+`lambda` をまたぐ `return-from` と `go`、`catch`/`throw`、`unwind-protect`、
+条件の捕捉はいずれも例外処理モードでコンパイルされるため、出力される wasm-GC
+モジュールの実行には `wasmtime -W exceptions=y`（37+）が必要です。`--no-gc` では
 `catch`/`throw`、`unwind-protect` と条件系のフォームはコンパイルエラーに
 なります。
 

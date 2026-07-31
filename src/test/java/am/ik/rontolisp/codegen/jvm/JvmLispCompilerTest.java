@@ -3982,6 +3982,106 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunGoInsideLambdaReentersOuterTagbody() throws Exception {
+		// A go whose tag belongs to a tagbody in the ENCLOSING function -- the shape a
+		// handler-bind handler resuming its loop produces (quri's :lenient
+		// percent-decoding). The lowering throws the target label's re-entry index to
+		// the tagbody's catch, which re-dispatches into the tagbody at that label and
+		// carries on. (Was a call-time "no lexically enclosing tagbody" error.)
+		assertThat(compileAndRun("""
+				(define-condition my-err (error) ())
+				(defun f (x)
+				  (tagbody
+				   top
+				     (handler-bind ((my-err (lambda (e) (declare (ignore e)) (go done))))
+				       (when (> x 0) (error 'my-err))
+				       (princ "no-error"))
+				   done)
+				  :ok)
+				(print (f 1))
+				(print (f 0))
+				""")).isEqualTo(":OK\nno-error:OK");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaGoResumesAndLoops() throws Exception {
+		// The re-entry keeps the tagbody running: a crossing go lands on its label and
+		// falls through the rest of the body, and a BACKWARD one re-runs the loop.
+		assertThat(compileAndRun("""
+				(defun scan (items)
+				  (let ((seen nil) (skipped 0))
+				    (tagbody
+				     start
+				       (mapcar (lambda (x) (if (eq x :skip) (go bump)) (setq seen (cons x seen))) items)
+				       (go done)
+				     bump
+				       (setq skipped (+ skipped 1))
+				     done)
+				    (list (reverse seen) skipped)))
+				(print (scan '(1 2 3)))
+				(print (scan '(1 :skip 3)))
+				(defun countdown (n)
+				  (let ((out nil))
+				    (tagbody
+				     again
+				       (setq out (cons n out))
+				       (setq n (- n 1))
+				       (funcall (lambda () (if (> n 0) (go again)))))
+				    (reverse out)))
+				(print (countdown 4))
+				""")).isEqualTo("((1 2 3) 0)\n((1) 1)\n(4 3 2 1)");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaGoRecursiveTargetsCorrectFrame() throws Exception {
+		// The thrown id is the per-activation %nlx-tag lexical, so a recursive
+		// function's inner activation cannot catch an outer one's go; an escaped
+		// unwind-protect cleanup still runs on the way.
+		assertThat(compileAndRun("""
+				(defun rec (n)
+				  (let ((hit nil))
+					(tagbody
+					 top
+					   (if (= n 0) (go fin))
+					   (setq hit (rec (- n 1)))
+					   (funcall (lambda () (go fin)))
+					   (setq hit :never)
+					 fin)
+					(list n hit)))
+				(print (rec 2))
+				(defun cleaned ()
+				  (let ((log nil))
+					(tagbody
+					 top
+					   (unwind-protect (funcall (lambda () (go out)))
+						 (setq log (cons :cleanup log)))
+					   (setq log (cons :never log))
+					 out
+					   (setq log (cons :out log)))
+					(reverse log)))
+				(print (cleaned))
+				""")).isEqualTo("(2 (1 (0 NIL)))\n(:CLEANUP :OUT)");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaGoInProgKeepsTheReturnBlock() throws Exception {
+		// prog establishes BOTH the tags a go targets and the nil block a (return)
+		// exits: the re-entry loop replaces the body items, so both still work.
+		assertThat(compileAndRun("""
+				(defun via-prog (x)
+				  (prog ((acc nil))
+					 (funcall (lambda () (if (eq x :jump) (go later))))
+					 (setq acc (cons :first acc))
+					 (return (cons :early acc))
+				   later
+					 (setq acc (cons :later acc))
+					 (return acc)))
+				(print (via-prog :plain))
+				(print (via-prog :jump))
+				""")).isEqualTo("(:EARLY :FIRST)\n(:LATER)");
+	}
+
+	@Test
 	void compileAndRunCatchThrow() throws Exception {
 		// catch/throw: a DYNAMIC non-local exit -- the throw need not be lexically inside
 		// the catch, only within its dynamic extent, and the tag is a runtime value
