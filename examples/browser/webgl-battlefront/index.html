@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>battlefront.lisp — a one-arena snow-battle skirmish, in Lisp</title>
     <style>
       :root {
@@ -23,6 +23,9 @@
         margin: 0;
         height: 100%;
         overflow: hidden;
+        overscroll-behavior: none;
+        touch-action: none;
+        -webkit-touch-callout: none;
         background: var(--void);
         color: var(--ink);
         font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -300,6 +303,90 @@
         .bar { width: 10rem; }
         .boss-bar { width: 14rem; }
       }
+
+      /* safe-area clearance so the HUD stays clear of a notch / home indicator */
+      .hud.top-left, .hud.top-right { padding-top: env(safe-area-inset-top); }
+      .hud.bottom-left, .hud.bottom-centre { padding-bottom: env(safe-area-inset-bottom); }
+
+      /* ---- touch controls (phones/tablets — no mouse, no keyboard) ---------
+         A left-half drag zone drives a floating joystick (move), a right-half
+         drag zone orbits the camera (aim), and a button cluster covers attack
+         / jump / weapon-swap. Hidden entirely on mouse/trackpad devices; see
+         the `touchMode` check in the script below. */
+      #touch-ui { display: none; }
+      #touch-ui.on { display: contents; }
+
+      .t-zone {
+        position: fixed;
+        inset: 0 50% 0 0;
+        z-index: 4;
+        touch-action: none;
+        -webkit-touch-callout: none;
+        user-select: none;
+      }
+      #zone-look { inset: 0 0 0 50%; }
+
+      .joy-base {
+        position: fixed;
+        left: max(2rem, env(safe-area-inset-left));
+        bottom: max(2.2rem, env(safe-area-inset-bottom));
+        width: 7.6rem;
+        height: 7.6rem;
+        border-radius: 50%;
+        background: #ffffff14;
+        border: 1px solid var(--line);
+        z-index: 4;
+        pointer-events: none;
+      }
+      .joy-knob {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 3.2rem;
+        height: 3.2rem;
+        margin: -1.6rem 0 0 -1.6rem;
+        border-radius: 50%;
+        background: #ffffff3a;
+        border: 1px solid #ffffff55;
+      }
+
+      .t-cluster {
+        position: fixed;
+        right: max(1.4rem, env(safe-area-inset-right));
+        bottom: max(2.2rem, env(safe-area-inset-bottom));
+        z-index: 5;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.85rem;
+      }
+
+      .t-btn {
+        border-radius: 50%;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        backdrop-filter: blur(6px);
+        color: var(--ink);
+        font: inherit;
+        font-weight: 700;
+        display: grid;
+        place-items: center;
+        touch-action: none;
+        -webkit-touch-callout: none;
+        user-select: none;
+        padding: 0;
+      }
+      .t-btn:active { background: #ffffff2a; }
+
+      #btn-jump, #btn-weapon { width: 3.5rem; height: 3.5rem; font-size: 0.95rem; }
+      #btn-fire {
+        width: 5.4rem;
+        height: 5.4rem;
+        font-size: 0.66rem;
+        letter-spacing: 0.08em;
+        color: var(--blaster);
+        border-color: #57ff7a55;
+      }
     </style>
   </head>
   <body>
@@ -334,7 +421,7 @@
       </div>
     </div>
 
-    <aside class="hud bottom-left">
+    <aside class="hud bottom-left" id="kb-hint">
       <p class="panel keys">
         <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move ·
         <kbd>Space</kbd> jump ·
@@ -347,16 +434,42 @@
       </p>
     </aside>
 
+    <aside class="hud bottom-left" id="touch-hint" style="display: none;">
+      <p class="panel keys">
+        left thumb moves · drag the right side to aim ·
+        <b>FIRE</b> attacks · small buttons jump &amp; swap weapon —
+        blast the troopers &amp; walkers, then finish Vader with the saber ·
+        <a href="https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-battlefront">source</a>
+      </p>
+    </aside>
+
     <div class="overlay on" id="start">
       <div class="card" id="start-card">
         <h2>HOTH</h2>
-        <p>
+        <p id="start-text-kb">
           Move with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, aim with the mouse,
           click to attack.<br />
           <kbd>F</kbd> swaps the lightsaber and the blaster — Vader's blade deflects
           blaster bolts,<br />so cut the boss down with your own.
         </p>
+        <p id="start-text-touch" style="display: none;">
+          Left thumb moves, drag the right side of the screen to aim,
+          <b>FIRE</b> attacks.<br />
+          The small button swaps the lightsaber and the blaster — Vader's blade
+          deflects blaster bolts,<br />so cut the boss down with your own.
+        </p>
         <button id="start-btn" type="button">click to deploy</button>
+      </div>
+    </div>
+
+    <div id="touch-ui">
+      <div class="t-zone" id="zone-move"></div>
+      <div class="t-zone" id="zone-look"></div>
+      <div class="joy-base" id="joy-base"><div class="joy-knob" id="joy-knob"></div></div>
+      <div class="t-cluster">
+        <button class="t-btn" id="btn-weapon" type="button" aria-label="swap weapon">F</button>
+        <button class="t-btn" id="btn-jump" type="button" aria-label="jump">JUMP</button>
+        <button class="t-btn" id="btn-fire" type="button" aria-label="attack">FIRE</button>
       </div>
     </div>
 
@@ -513,7 +626,8 @@
       lisp._initialize();          // builds the pipeline and bakes the snow field
       window.lisp = lisp;          // poke it from the console: lisp.getHp(), ...
 
-      // ---- input: Minecraft-style mouse-look via Pointer Lock ---------------
+      // ---- input: Minecraft-style mouse-look via Pointer Lock, or a touch
+      // layer on devices with no mouse/keyboard ------------------------------
       //
       // The page only measures gestures and maps keys to small integers; held
       // state, the aim, the weapon and every rule are Lisp's business.
@@ -528,15 +642,59 @@
 
       const locked = () => document.pointerLockElement === canvas;
 
-      function requestPlay() {
-        canvas.requestPointerLock?.();
+      // A touch-primary device (phone/tablet, no mouse) gets the on-screen
+      // joystick + drag-to-aim + button cluster instead of Pointer Lock --
+      // iOS/iPadOS Safari has no Pointer Lock API at all. `pointer: coarse`
+      // reflects the CURRENT primary pointer, so an iPad with a trackpad or
+      // mouse attached correctly reports fine/hover and stays on the desktop
+      // path.
+      const coarseMQ = matchMedia("(pointer: coarse)");
+      let touchMode = coarseMQ.matches;
+      let touchPlaying = false;
+      const touchUi = document.getElementById("touch-ui");
+      const kbHint = document.getElementById("kb-hint");
+      const touchHint = document.getElementById("touch-hint");
+      const startTextKb = document.getElementById("start-text-kb");
+      const startTextTouch = document.getElementById("start-text-touch");
+
+      function applyTouchMode() {
+        kbHint.style.display = touchMode ? "none" : "";
+        touchHint.style.display = touchMode ? "" : "none";
+        startTextKb.style.display = touchMode ? "none" : "";
+        startTextTouch.style.display = touchMode ? "" : "none";
       }
+      applyTouchMode();
+      coarseMQ.addEventListener("change", (e) => { touchMode = e.matches; applyTouchMode(); });
+
+      const isPlaying = () => (touchMode ? touchPlaying : locked());
+
+      function requestPlay() {
+        if (touchMode) {
+          touchPlaying = true;
+          touchUi.classList.add("on");
+          startOv.classList.remove("on");
+        } else {
+          canvas.requestPointerLock?.();
+        }
+      }
+
+      function exitPlay() {
+        if (touchMode) {
+          touchPlaying = false;
+          touchUi.classList.remove("on");
+          for (const c of new Set(keyCodes.values())) lisp.setKey(c, 0);
+          lisp.setAttack(0);
+        } else {
+          document.exitPointerLock?.();
+        }
+      }
+
       document.getElementById("start-btn").addEventListener("click", requestPlay);
       // Only (re)lock to play from a live/menu state -- never while a win/lose
       // banner is up, so a stray attack click can't grab the pointer back and
       // the cursor stays free to reach the redeploy button.
       canvas.addEventListener("click", () => {
-        if (lisp.getState() === 0 && !locked()) requestPlay();
+        if (lisp.getState() === 0 && !isPlaying()) requestPlay();
       });
 
       document.addEventListener("pointerlockchange", () => {
@@ -571,6 +729,99 @@
         e.preventDefault();
         lisp.zoom(e.deltaY * 0.003);
       }, { passive: false });
+
+      // ---- touch controls: left-half floating joystick (move), right-half
+      // drag (aim), and a fire/jump/weapon button cluster --------------------
+
+      const zoneMove = document.getElementById("zone-move");
+      const zoneLook = document.getElementById("zone-look");
+      const joyBase = document.getElementById("joy-base");
+      const joyKnob = document.getElementById("joy-knob");
+      const JOY_RADIUS = 44; // px; matches .joy-base's (7.6rem - knob) / 2
+
+      let moveTouchId = null;
+      let joyCenter = { x: 0, y: 0 };
+
+      function setMoveKeys(nx, ny) {
+        const dead = 0.28;
+        lisp.setKey(0, nx < -dead ? 1 : 0); // left
+        lisp.setKey(1, nx > dead ? 1 : 0);  // right
+        lisp.setKey(2, ny < -dead ? 1 : 0); // forward
+        lisp.setKey(3, ny > dead ? 1 : 0);  // back
+      }
+
+      function updateJoy(cx, cy) {
+        let dx = cx - joyCenter.x, dy = cy - joyCenter.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        if (dist > JOY_RADIUS) { dx = (dx / dist) * JOY_RADIUS; dy = (dy / dist) * JOY_RADIUS; }
+        joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+        setMoveKeys(dx / JOY_RADIUS, dy / JOY_RADIUS);
+      }
+
+      function endMoveTouch() {
+        moveTouchId = null;
+        joyKnob.style.transform = "";
+        setMoveKeys(0, 0);
+      }
+
+      zoneMove.addEventListener("pointerdown", (e) => {
+        if (moveTouchId !== null) return;
+        moveTouchId = e.pointerId;
+        const r = joyBase.getBoundingClientRect();
+        joyCenter = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        updateJoy(e.clientX, e.clientY);
+        // best-effort: keeps the drag tracking even if the browser declines
+        // capture (older Safari has been flaky here)
+        try { zoneMove.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      });
+      zoneMove.addEventListener("pointermove", (e) => {
+        if (e.pointerId !== moveTouchId) return;
+        updateJoy(e.clientX, e.clientY);
+      });
+      for (const type of ["pointerup", "pointercancel"]) {
+        zoneMove.addEventListener(type, (e) => {
+          if (e.pointerId === moveTouchId) endMoveTouch();
+        });
+      }
+
+      // aim: same movementX/Y-relative scheme as the mouse path, but touch
+      // gives absolute coordinates so the delta is tracked by hand.
+      let lookTouchId = null;
+      let lookLast = { x: 0, y: 0 };
+
+      zoneLook.addEventListener("pointerdown", (e) => {
+        if (lookTouchId !== null) return;
+        lookTouchId = e.pointerId;
+        lookLast = { x: e.clientX, y: e.clientY };
+        try { zoneLook.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      });
+      zoneLook.addEventListener("pointermove", (e) => {
+        if (e.pointerId !== lookTouchId) return;
+        const dx = e.clientX - lookLast.x, dy = e.clientY - lookLast.y;
+        lookLast = { x: e.clientX, y: e.clientY };
+        lisp.orbit(dx / canvas.clientHeight, dy / canvas.clientHeight);
+      });
+      for (const type of ["pointerup", "pointercancel"]) {
+        zoneLook.addEventListener(type, (e) => {
+          if (e.pointerId === lookTouchId) lookTouchId = null;
+        });
+      }
+
+      const btnFire = document.getElementById("btn-fire");
+      const btnJump = document.getElementById("btn-jump");
+      const btnWeapon = document.getElementById("btn-weapon");
+
+      btnFire.addEventListener("pointerdown", (e) => { e.preventDefault(); lisp.setAttack(1); });
+      for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
+        btnFire.addEventListener(type, () => lisp.setAttack(0));
+      }
+
+      btnJump.addEventListener("pointerdown", (e) => { e.preventDefault(); lisp.setKey(4, 1); });
+      for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
+        btnJump.addEventListener(type, () => lisp.setKey(4, 0));
+      }
+
+      btnWeapon.addEventListener("pointerdown", (e) => { e.preventDefault(); lisp.switchWeapon(); });
 
       window.addEventListener("keydown", (e) => {
         if (e.code === "KeyR" && !e.repeat) {
@@ -620,7 +871,7 @@
         lisp.restart();
         winOv.classList.remove("on");
         loseOv.classList.remove("on");
-        if (!locked()) requestPlay();
+        if (!isPlaying()) requestPlay();
       }
       winBtn.addEventListener("click", restartRound);
       loseBtn.addEventListener("click", restartRound);
@@ -679,11 +930,11 @@
               `${lisp.getTroopers()} troopers still standing · Vader is no more.`;
             winOv.classList.add("on");
             armRestartCooldown(now);
-            document.exitPointerLock?.();
+            exitPlay();
           } else if (state === 2) {
             loseOv.classList.add("on");
             armRestartCooldown(now);
-            document.exitPointerLock?.();
+            exitPlay();
           } else {
             winOv.classList.remove("on");
             loseOv.classList.remove("on");
@@ -694,11 +945,12 @@
       function tick(now) {
         const real = (now - lastNow) / 1000;
         lastNow = now;
-        // Advance the world clock while playing (locked) OR whenever a round has
-        // ended (state !== 0), so the victory fireworks and the aftermath keep
-        // animating even though the pointer is released. Only the opening/paused
-        // menu (state 0, unlocked) stays a frozen diorama.
-        if (lisp.getState() !== 0 || locked()) simTime += real;
+        // Advance the world clock while playing (pointer-locked, or deployed on
+        // touch) OR whenever a round has ended (state !== 0), so the victory
+        // fireworks and the aftermath keep animating even after play stops.
+        // Only the opening/paused menu (state 0, not playing) stays a frozen
+        // diorama.
+        if (lisp.getState() !== 0 || isPlaying()) simTime += real;
         lisp.frame(simTime);               // Lisp steps the world and draws
         framesSince++;
         updateHud(now);

@@ -9,6 +9,13 @@ down, and once the walkers are gone **Vader** strides in — his red blade
 deflects blaster fire, so finish the boss with your own lightsaber and light up
 the sky.
 
+On a touch-primary device (iPad, iPhone — anything the page detects via
+`(pointer: coarse)`, no mouse required) the page swaps in a touch layer
+instead: a floating joystick on the left half of the screen moves, dragging
+the right half aims, and a FIRE / JUMP / F button cluster covers attack, jump
+and weapon-swap. Deploying skips Pointer Lock entirely (iOS/iPadOS Safari
+doesn't implement it) and just hides the start card.
+
 Everything that makes it a game lives in `battlefront.lisp`, compiled ahead of
 time to WebAssembly:
 
