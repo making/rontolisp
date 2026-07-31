@@ -350,6 +350,8 @@
 | `rontolisp:hash-table-plist` | `(rontolisp:hash-table-plist h)` | ハッシュテーブルのペアのプロパティリスト（`alexandria:hash-table-plist` のサブセット） |
 | `rontolisp:alist-hash-table` | `(rontolisp:alist-hash-table al)` | 連想リストからハッシュテーブルを構築します（`alexandria:alist-hash-table` のサブセット） |
 | `rontolisp:hash-table-alist` | `(rontolisp:hash-table-alist h)` | ハッシュテーブルのペアの連想リスト（`alexandria:hash-table-alist` のサブセット） |
+| `rontolisp:alist-plist` | `(rontolisp:alist-plist al)` | 連想リストのキー・値を順序を保ったままプロパティリストにします（`alexandria:alist-plist` のサブセット） |
+| `rontolisp:plist-alist` | `(rontolisp:plist-alist pl)` | プロパティリストのキー・値を順序を保ったまま連想リストにします（`alexandria:plist-alist` のサブセット） |
 | `rontolisp:tcp-connect` | `(rontolisp:tcp-connect "127.0.0.1" 7777)` | ブロッキングTCP接続を開きます。双方向ストリームハンドルを返します |
 | `rontolisp:tcp-listen` | `(rontolisp:tcp-listen 7777)`, `(rontolisp:tcp-listen 0 "127.0.0.1")` | リスニングTCPソケットをバインドしてリスナーハンドルを返します。ポート `0` は空きエフェメラルポートを選びます |
 | `rontolisp:tcp-accept` | `(rontolisp:tcp-accept listener)` | クライアント接続を待ちます (ブロッキング)。双方向ストリームハンドルを返します |

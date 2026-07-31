@@ -7548,6 +7548,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAlistPlistAndPlistAlist() throws Exception {
+		// no hash table in between, so the order is deterministic on every backend
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (rontolisp:alist-plist (list (cons :a 1) (cons :b 2))))
+				(print (rontolisp:plist-alist (list :a 1 :b 2)))
+				(print (rontolisp:alist-plist (rontolisp:plist-alist (list :x 1 :y 2))))
+				"""));
+		assertThat(compileAndRun(program)).isEqualTo("(:A 1 :B 2)\n((:A . 1) (:B . 2))\n(:X 1 :Y 2)");
+	}
+
+	@Test
 	void compileAndRunJsonStringifyClosInstance() throws Exception {
 		// CLOS instance -> object (slots in definition order), a hash-table slot
 		// nests as an object, a list slot as an array -- matching jzon

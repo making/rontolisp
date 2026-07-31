@@ -3662,6 +3662,24 @@ cases:
       "{"x":1}"
       (("k" . 7))
       "{"status":200,"headers":{"content-type":"application/json"},"items":[1,2,3]}"
+  # rontolisp:alist-plist / plist-alist (subsets of the same-named alexandria
+  # utilities, prelude-spliced) convert between the two list shapes with no hash
+  # table in between, so unlike the *-hash-table pairs above both directions
+  # preserve the input order -- multi-key output is backend-stable, and duplicate
+  # keys survive rather than collapsing.
+  - name: alist-plist-conversions
+    source: |
+      (print (rontolisp:alist-plist (list (cons :a 1) (cons :b 2))))
+      (print (rontolisp:plist-alist (list :a 1 :b 2)))
+      (print (rontolisp:alist-plist (rontolisp:plist-alist (list :x 1 :y 2))))
+      (print (rontolisp:plist-alist (list :a 1 :a 9)))
+      (print (rontolisp:alist-plist nil))
+    expected: |
+      (:A 1 :B 2)
+      ((:A . 1) (:B . 2))
+      (:X 1 :Y 2)
+      ((:A . 1) (:A . 9))
+      NIL
   # A user package defining a function with the same MEMBER name as a prelude
   # entry does not suppress the splice: the compile path selects the prelude
   # defuns on a package-RESOLVED copy of the program, so

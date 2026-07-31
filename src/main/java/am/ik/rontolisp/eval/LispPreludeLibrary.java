@@ -63,6 +63,9 @@ import org.jspecify.annotations.Nullable;
  * subsets of the same-named {@code alexandria} utilities, converting a property list or
  * association list to a hash table (and back); the {@code *-hash-table} ones pair with
  * {@code rontolisp:json-stringify} for building JSON objects.</li>
+ * <li>{@code rontolisp:alist-plist} / {@code rontolisp:plist-alist} -- the same pair of
+ * lightweight {@code alexandria} subsets without the hash table in between, so both
+ * directions preserve the input order.</li>
  * </ul>
  */
 public final class LispPreludeLibrary {
@@ -362,6 +365,22 @@ public final class LispPreludeLibrary {
 				  (let ((%hta-acc nil))
 				    (maphash (lambda (k v) (setq %hta-acc (cons (cons k v) %hta-acc))) table)
 				    %hta-acc))
+				""");
+		// The alist <-> plist pair goes through no hash table, so unlike the four above
+		// it is order-preserving in both directions, exactly like alexandria's.
+		SOURCES.put(LispNames.ALIST_PLIST, """
+				(defun rontolisp:alist-plist (alist)
+				  (let ((%ap-acc nil))
+				    (dolist (%ap-cell alist)
+				      (setq %ap-acc (cons (cdr %ap-cell) (cons (car %ap-cell) %ap-acc))))
+				    (nreverse %ap-acc)))
+				""");
+		SOURCES.put(LispNames.PLIST_ALIST, """
+				(defun rontolisp:plist-alist (plist)
+				  (let ((%pa-acc nil))
+				    (do ((%pa-tail plist (cddr %pa-tail)))
+				        ((null %pa-tail) (nreverse %pa-acc))
+				      (setq %pa-acc (cons (cons (car %pa-tail) (cadr %pa-tail)) %pa-acc)))))
 				""");
 		SOURCES.put(LispNames.GET_SETF_EXPANSION, """
 				(defun get-setf-expansion (place &optional env)

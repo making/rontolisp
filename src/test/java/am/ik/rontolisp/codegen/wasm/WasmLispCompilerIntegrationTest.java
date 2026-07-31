@@ -9736,6 +9736,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void alistPlistAndPlistAlistInPreview1Mode() throws Exception {
+		// rontolisp:alist-plist / plist-alist (prelude, alexandria subsets) go
+		// through no hash table, so multi-key output is backend-stable too.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (rontolisp:alist-plist (list (cons :a 1) (cons :b 2))))
+				(print (rontolisp:plist-alist (list :a 1 :b 2)))
+				(print (rontolisp:alist-plist (rontolisp:plist-alist (list :x 1 :y 2))))
+				"""));
+		assertThat(compileAndRunProgram(program)).isEqualTo("(:A 1 :B 2)\n((:A . 1) (:B . 2))\n(:X 1 :Y 2)");
+	}
+
+	@Test
 	void equalAndHashTablesAcceptRuntimeBuiltStringKeys() throws Exception {
 		// Regression: _equal compares string content (via _string_eq) and _hash folds
 		// the content bytes, so a runtime-built string (concatenate/subseq/JSON parse)

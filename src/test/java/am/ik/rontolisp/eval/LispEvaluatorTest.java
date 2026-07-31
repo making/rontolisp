@@ -7615,6 +7615,24 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void alistPlistAndPlistAlist() {
+		// subsets of alexandria:alist-plist / plist-alist; no hash table in
+		// between, so both directions keep the input order
+		assertThat(eval("(rontolisp:alist-plist (list (cons :a 1) (cons :b 2)))").print()).isEqualTo("(:A 1 :B 2)");
+		assertThat(eval("(rontolisp:plist-alist (list :a 1 :b 2))").print()).isEqualTo("((:A . 1) (:B . 2))");
+		// round trips in both directions, order intact
+		assertThat(eval("(rontolisp:alist-plist (rontolisp:plist-alist (list :x 1 :y 2)))").print())
+			.isEqualTo("(:X 1 :Y 2)");
+		assertThat(eval("(rontolisp:plist-alist (rontolisp:alist-plist (list (cons \"k\" 7))))").print())
+			.isEqualTo("((\"k\" . 7))");
+		// duplicate keys are preserved -- neither direction dedupes, unlike the
+		// *-hash-table pair
+		assertThat(eval("(rontolisp:plist-alist (list :a 1 :a 9))").print()).isEqualTo("((:A . 1) (:A . 9))");
+		assertThat(eval("(rontolisp:alist-plist nil)").print()).isEqualTo("NIL");
+		assertThat(eval("(rontolisp:plist-alist nil)").print()).isEqualTo("NIL");
+	}
+
+	@Test
 	void jsonStringifySerializesClosInstancesAsObjects() {
 		// a CLOS instance serializes as an object (slots in definition order),
 		// matching jzon; a hash-table slot nests as an object, a list slot as an array

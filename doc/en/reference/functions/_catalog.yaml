@@ -378,6 +378,8 @@ categories:
       - { slug: rontolisp-hash-table-plist, name: "rontolisp:hash-table-plist" }
       - { slug: rontolisp-alist-hash-table, name: "rontolisp:alist-hash-table" }
       - { slug: rontolisp-hash-table-alist, name: "rontolisp:hash-table-alist" }
+      - { slug: rontolisp-alist-plist, name: "rontolisp:alist-plist" }
+      - { slug: rontolisp-plist-alist, name: "rontolisp:plist-alist" }
       - { slug: rontolisp-url-decode, name: "rontolisp:url-decode" }
       - { slug: rontolisp-url-encode, name: "rontolisp:url-encode" }
       - { slug: rontolisp-query-params, name: "rontolisp:query-params" }

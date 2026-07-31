@@ -325,25 +325,27 @@ public final class PackageRegistry {
 		// symbols are reachable as cl-user::name, never cl-user:name.
 		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>(), Set.of()));
 		// Its canonical spelling is rontolisp; rl is a built-in nickname.
-		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(), new HashSet<>(Set.of(LispNames.VERSION,
-				LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS, LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH,
-				LispNames.AWAIT, LispNames.ASYNC, LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.FUTUREP,
-				LispNames.ASYNC_STREAMP, LispNames.MAKE_STREAM, LispNames.STREAM_READ, LispNames.STREAM_WRITE,
-				LispNames.STREAM_CLOSE, LispNames.READ_ALL, LispNames.WAIT_FOR, LispNames.THEN, LispNames.THEN_STAR,
-				LispNames.CATCH, LispNames.FINALLY, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY,
-				LispNames.PLIST_HASH_TABLE, LispNames.HASH_TABLE_PLIST, LispNames.ALIST_HASH_TABLE,
-				LispNames.HASH_TABLE_ALIST, LispNames.URL_DECODE, LispNames.URL_ENCODE, LispNames.QUERY_PARAMS,
-				LispNames.QUERY_PARAM, LispNames.URL_PATH, LispNames.URL_QUERY, LispNames.WASM_EXPORT,
-				LispNames.WASM_IMPORT, LispNames.WIT_EXPORT, LispNames.WIT_IMPORT, LispNames.WIT_PROVIDE,
-				LispNames.WIT_ERROR, LispNames.WIT_ERROR_PAYLOAD, LispNames.WITH_ARENA, LispNames.MAKE_MUTEX,
-				LispNames.MUTEX_ACQUIRE, LispNames.MUTEX_RELEASE, LispNames.WITH_MUTEX, LispNames.HTTP_HANDLER,
-				LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT, LispNames.TCP_LOCAL_PORT,
-				LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS, LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT,
-				LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12, LispNames.RANDOM_BYTES,
-				// rontolisp's own Gray-stream extension
-				// (eval.GrayStreamsLibrary).
-				LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_STREAM_WRITE_CHAR,
-				LispNames.GRAY_STREAM_WRITE_STRING))));
+		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.VERSION, LispNames.LIST_FUNCTIONS, LispNames.LIST_MACROS,
+						LispNames.LIST_SPECIAL_FORMS, LispNames.FETCH, LispNames.AWAIT, LispNames.ASYNC,
+						LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.FUTUREP, LispNames.ASYNC_STREAMP,
+						LispNames.MAKE_STREAM, LispNames.STREAM_READ, LispNames.STREAM_WRITE, LispNames.STREAM_CLOSE,
+						LispNames.READ_ALL, LispNames.WAIT_FOR, LispNames.THEN, LispNames.THEN_STAR, LispNames.CATCH,
+						LispNames.FINALLY, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.PLIST_HASH_TABLE,
+						LispNames.HASH_TABLE_PLIST, LispNames.ALIST_HASH_TABLE, LispNames.HASH_TABLE_ALIST,
+						LispNames.ALIST_PLIST, LispNames.PLIST_ALIST, LispNames.URL_DECODE, LispNames.URL_ENCODE,
+						LispNames.QUERY_PARAMS, LispNames.QUERY_PARAM, LispNames.URL_PATH, LispNames.URL_QUERY,
+						LispNames.WASM_EXPORT, LispNames.WASM_IMPORT, LispNames.WIT_EXPORT, LispNames.WIT_IMPORT,
+						LispNames.WIT_PROVIDE, LispNames.WIT_ERROR, LispNames.WIT_ERROR_PAYLOAD, LispNames.WITH_ARENA,
+						LispNames.MAKE_MUTEX, LispNames.MUTEX_ACQUIRE, LispNames.MUTEX_RELEASE, LispNames.WITH_MUTEX,
+						LispNames.HTTP_HANDLER, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT,
+						LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS,
+						LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM,
+						LispNames.TLS_LISTEN_P12, LispNames.RANDOM_BYTES,
+						// rontolisp's own Gray-stream extension
+						// (eval.GrayStreamsLibrary).
+						LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
+						LispNames.GRAY_STREAM_WRITE_CHAR, LispNames.GRAY_STREAM_WRITE_STRING))));
 		// numpy-style vector/matrix operations, implemented once in linalg.lisp and
 		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
 		// is external. Its canonical spelling is linalg; la is a built-in nickname.

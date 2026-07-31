@@ -3113,6 +3113,22 @@ public final class LispNames {
 	public static final String HASH_TABLE_ALIST = "HASH-TABLE-ALIST";
 
 	/**
+	 * The {@code alist-plist} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:alist-plist}: returns a property list
+	 * holding the same keys and values as an association list, in the same order (the
+	 * inverse of {@link #PLIST_ALIST}).
+	 */
+	public static final String ALIST_PLIST = "ALIST-PLIST";
+
+	/**
+	 * The {@code plist-alist} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:plist-alist}: returns an association list
+	 * holding the same keys and values as a property list, in the same order (the inverse
+	 * of {@link #ALIST_PLIST}).
+	 */
+	public static final String PLIST_ALIST = "PLIST-ALIST";
+
+	/**
 	 * The {@code url-decode} function provided by the {@code rontolisp} package. Decodes
 	 * a percent-encoded (URL-encoded) string: {@code %XX} byte sequences are decoded as
 	 * UTF-8 and {@code +} becomes a space.

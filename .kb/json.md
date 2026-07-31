@@ -38,7 +38,12 @@ backend) and default-`eql` like alexandria, which is exactly what the httpbin
 examples' request headers / `query-params` alists want -- so the hand-rolled
 `args-table`/`headers-table` helpers are gone. The alexandria names (not a
 bespoke helper) keep the switch-to-alexandria path clean, mirroring the
-json-*/jzon relationship.
+json-*/jzon relationship. `rontolisp:alist-plist` / `rontolisp:plist-alist`
+complete the quartet with the hash-table-free leg of the same alexandria API:
+they convert between the two list shapes directly, so unlike the four above they
+are ORDER-PRESERVING in both directions and keep duplicate keys -- which is why
+their multi-key output is pinned in `ci-spec.yaml`
+(`alist-plist-conversions`) while the hash-table ones only pin single-key cases.
 
 **Single Lisp-source implementation.** The parser/serializer is hand-written
 in rontolisp itself: `src/main/resources/am/ik/rontolisp/eval/json.lisp`
