@@ -2193,6 +2193,13 @@ public final class LispNames {
 	 */
 	public static final String ARRAYP = "ARRAYP";
 
+	/**
+	 * The internal {@code %arrayp} predicate: true for the general / packed array
+	 * representations only. Strings are arrays in CL but not one of those
+	 * representations, so {@link #ARRAYP} is {@code (or (stringp x) (%arrayp x))}; the
+	 * {@code vector} / {@code array} / {@code sequence} type specifiers dispatch on this
+	 * half.
+	 */
 	public static final String ARRAYP_INTERNAL = "%ARRAYP";
 
 	/**
@@ -2311,6 +2318,10 @@ public final class LispNames {
 	 */
 	public static final String BIT = "BIT";
 
+	/**
+	 * The {@code sbit} prelude function: a SIMPLE bit-array element (and its {@code setf}
+	 * writer), the simple-array twin of {@link #BIT}.
+	 */
 	public static final String SBIT = "SBIT";
 
 	/**
@@ -2403,6 +2414,11 @@ public final class LispNames {
 	 */
 	public static final String DIGIT_CHAR = "DIGIT-CHAR";
 
+	/**
+	 * The {@code digit-char-p} built-in function: the weight of a character as a digit in
+	 * a radix (10 unless a second argument gives one), or nil -- the inverse of
+	 * {@link #DIGIT_CHAR}.
+	 */
 	public static final String DIGIT_CHAR_P = "DIGIT-CHAR-P";
 
 	/** The {@code :radix} keyword recognized by {@code parse-integer}. */
@@ -4169,6 +4185,11 @@ public final class LispNames {
 	 */
 	public static final String DECODE_FLOAT = "DECODE-FLOAT";
 
+	/**
+	 * The {@code scale-float} built-in function: a float scaled by a power of two
+	 * ({@code (scale-float f n)} is {@code f * 2^n}), the recomposing counterpart of
+	 * {@link #DECODE_FLOAT}.
+	 */
 	public static final String SCALE_FLOAT = "SCALE-FLOAT";
 
 	/**

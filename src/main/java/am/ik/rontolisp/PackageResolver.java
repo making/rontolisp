@@ -1105,6 +1105,16 @@ public final class PackageResolver {
 		return out;
 	}
 
+	/**
+	 * {@link #internSpelling(String)} against an EXPLICIT package instead of the current
+	 * one, backing the two-argument {@code (intern name package)}. The {@code keyword}
+	 * pseudo-package answers with the {@code :}-prefixed spelling directly, since it has
+	 * no registration to intern into.
+	 * @param packageDesignator the package to intern into
+	 * @param name the bare name to intern
+	 * @return the canonical spelling for that package
+	 * @throws LispPackageException if no such package exists
+	 */
 	public String internSpellingIn(String packageDesignator, String name) {
 		String pkg = findPackageName(packageDesignator);
 		if (pkg == null) {

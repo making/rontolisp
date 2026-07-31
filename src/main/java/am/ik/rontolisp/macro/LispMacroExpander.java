@@ -571,6 +571,12 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.ASYNC_RUN_QUALIFIED), listToCons(thunk)));
 	}
 
+	/**
+	 * Expands {@code (when test body...)} to {@code (if test <body> nil)}, wrapping a
+	 * multi-form body in a {@code progn}.
+	 * @param cons the when expression
+	 * @return the expanded expression
+	 */
 	public static LispVal expandWhen(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		LispVal condition = parts.get(1);
@@ -2704,6 +2710,14 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.IF), parts.get(1), LispTrue.INSTANCE, LispNil.INSTANCE));
 	}
 
+	/**
+	 * Expands {@code (arrayp x)} to {@code (or (stringp x) (%arrayp x))} over a let-bound
+	 * temporary, so the argument is evaluated once. A string is an array in CL but is not
+	 * one of the array representations {@link am.ik.rontolisp.LispNames#ARRAYP_INTERNAL}
+	 * knows, hence the two-part test.
+	 * @param cons the arrayp expression
+	 * @return the expanded expression
+	 */
 	public static LispVal expandArrayp(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
@@ -2715,6 +2729,13 @@ public final class LispMacroExpander {
 		return makeLet(v.name(), parts.get(1), test);
 	}
 
+	/**
+	 * Expands {@code (vectorp x)} the same way {@link #expandArrayp(LispCons)} expands
+	 * {@code arrayp}: strings count, and the argument is let-bound so the two-part test
+	 * evaluates it once.
+	 * @param cons the vectorp expression
+	 * @return the expanded expression
+	 */
 	public static LispVal expandVectorp(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
@@ -7224,6 +7245,14 @@ public final class LispMacroExpander {
 		return listToCons(progn);
 	}
 
+	/**
+	 * The compiled-backend stub for {@code (symbol-function s)} on a symbol that is not a
+	 * compile-time literal: the argument still evaluates (for its effects), then the form
+	 * signals. The compiled backends have no runtime symbol-to-function table, so only a
+	 * literal name can be resolved at compile time.
+	 * @param cons the symbol-function expression
+	 * @return the expanded expression
+	 */
 	public static LispVal expandRuntimeSymbolFunctionError(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
@@ -16203,6 +16232,12 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.PROGN), parts.get(1), new LispDouble(value)));
 	}
 
+	/**
+	 * Expands a {@code gensym} whose prefix is COMPUTED (not a literal string) into the
+	 * intern of an assembled name, for the backends that have no runtime gensym.
+	 * @param prefixForm the expression producing the prefix
+	 * @return the expression producing the fresh symbol
+	 */
 	public static LispVal expandComputedGensym(LispVal prefixForm) {
 		// The suffix comes from an EMPTY-prefix gensym, so princ-to-string (which drops
 		// the "#:" marker, LispSymbol.displayName) yields the bare counter -- the same
@@ -16217,6 +16252,13 @@ public final class LispMacroExpander {
 				listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), head, freshSuffix))));
 	}
 
+	/**
+	 * The expression that interns a computed name as a KEYWORD: the name concatenated
+	 * after {@code ":"} and handed to {@code intern}, which is how the keyword spelling
+	 * is written throughout.
+	 * @param nameForm the expression producing the bare name
+	 * @return the expression producing the keyword
+	 */
 	public static LispVal internKeywordForm(LispVal nameForm) {
 		LispVal concat = listToCons(List.of(new LispSymbol(LispNames.CONCATENATE),
 				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.STRING))),
@@ -16249,6 +16291,12 @@ public final class LispMacroExpander {
 		return null;
 	}
 
+	/**
+	 * The compiled-backend stub for the two-argument {@code (intern name package)} with a
+	 * RUNTIME package: it signals. The compiled backends resolve package spellings at
+	 * compile time, so only the interpreter can honor a package computed at run time.
+	 * @return the expression that signals the unsupported-use error
+	 */
 	public static LispVal internPackageArgumentStub() {
 		return listToCons(List.of(new LispSymbol(LispNames.ERROR),
 				new LispString("intern with a runtime package argument is not supported on compiled backends")));
@@ -16822,6 +16870,7 @@ public final class LispMacroExpander {
 	/**
 	 * The two restart-runtime stack globals, nil-initialized (prepended on the compile
 	 * path).
+	 * @return the defvar forms for the handler and restart cluster stacks
 	 */
 	public static List<LispVal> restartRuntimeGlobalForms() {
 		return List.of(
@@ -17468,6 +17517,14 @@ public final class LispMacroExpander {
 		return makeProgn(body);
 	}
 
+	/**
+	 * Expands {@code (eval-when (situations...) body...)} to the body wrapped in a
+	 * {@code progn} (nil for an empty body). The situation list is validated but not
+	 * consulted here -- the compile-time situations are handled where the form is read,
+	 * not where it is expanded.
+	 * @param cons the eval-when expression
+	 * @return the expanded expression
+	 */
 	public static LispVal expandEvalWhen(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {

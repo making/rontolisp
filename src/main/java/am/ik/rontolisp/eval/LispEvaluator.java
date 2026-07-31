@@ -1825,6 +1825,14 @@ public final class LispEvaluator {
 		}));
 	}
 
+	/**
+	 * Replaces the reader's {@code #.} markers in an already-read form by the value of
+	 * the marked datum, rebuilding only the conses that actually change. The reader
+	 * leaves the marker in place instead of evaluating it, because read-time evaluation
+	 * needs an evaluator; this is where it happens.
+	 * @param form the form as read
+	 * @return the form with every read-time-eval marker resolved
+	 */
 	public LispVal resolveReadTimeEval(LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return form;

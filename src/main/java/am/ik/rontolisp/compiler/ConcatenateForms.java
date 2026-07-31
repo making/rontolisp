@@ -85,6 +85,19 @@ public final class ConcatenateForms {
 	}
 
 	/**
+	 * Normalizes a result-type designator as WRITTEN in a call -- a literal
+	 * {@code (quote designator)} form -- to its family. A computed (non-quoted) type form
+	 * yields {@code null}: only the interpreter can resolve one, at runtime.
+	 * @param typeForm the result-type argument as written
+	 * @return the family, or {@code null} when the form is not a literal designator of a
+	 * supported family
+	 */
+	public static @Nullable ResultFamily literalResultFamily(LispVal typeForm) {
+		LispVal designator = unquoted(typeForm);
+		return (designator == null) ? null : resultFamily(designator);
+	}
+
+	/**
 	 * Expands {@code (concatenate 'type args...)} into existing primitives:
 	 *
 	 * <pre>
@@ -101,19 +114,6 @@ public final class ConcatenateForms {
 	 * @param cons the concatenate expression
 	 * @return the expanded expression
 	 */
-	/**
-	 * Normalizes a result-type designator as WRITTEN in a call -- a literal
-	 * {@code (quote designator)} form -- to its family. A computed (non-quoted) type form
-	 * yields {@code null}: only the interpreter can resolve one, at runtime.
-	 * @param typeForm the result-type argument as written
-	 * @return the family, or {@code null} when the form is not a literal designator of a
-	 * supported family
-	 */
-	public static @Nullable ResultFamily literalResultFamily(LispVal typeForm) {
-		LispVal designator = unquoted(typeForm);
-		return (designator == null) ? null : resultFamily(designator);
-	}
-
 	public static LispVal expand(LispCons cons) {
 		return expand(cons, false);
 	}

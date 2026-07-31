@@ -36,7 +36,10 @@ public final class StreamDesignators {
 	private StreamDesignators() {
 	}
 
-	/** The {@code *standard-output*} read an omitted stream argument denotes. */
+	/**
+	 * The {@code *standard-output*} read an omitted stream argument denotes.
+	 * @return the {@code *standard-output*} variable reference
+	 */
 	public static LispVal standardOutput() {
 		return new LispSymbol(LispNames.STANDARD_OUTPUT_VAR);
 	}
@@ -86,12 +89,18 @@ public final class StreamDesignators {
 		return new LispInteger(STANDARD_ERROR_HANDLE);
 	}
 
-	/** The {@code *error-output*} read {@code warn} sends its report to. */
+	/**
+	 * The {@code *error-output*} read {@code warn} sends its report to.
+	 * @return the {@code *error-output*} variable reference
+	 */
 	public static LispVal errorOutput() {
 		return new LispSymbol(LispNames.ERROR_OUTPUT_VAR);
 	}
 
-	/** The {@code *standard-input*} read an omitted stream argument denotes. */
+	/**
+	 * The {@code *standard-input*} read an omitted stream argument denotes.
+	 * @return the {@code *standard-input*} variable reference
+	 */
 	public static LispVal standardInput() {
 		return new LispSymbol(LispNames.STANDARD_INPUT_VAR);
 	}
