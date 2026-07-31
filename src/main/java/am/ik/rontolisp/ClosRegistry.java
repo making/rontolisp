@@ -42,41 +42,71 @@ public final class ClosRegistry {
 		// class-slot-defs
 		// answer and standard-object descendant set.
 		this.layoutsByTag.put(UNBOUND_TAG, LispLayout.ofClass(UNBOUND_CLASS_NAME, List.of(), List.of()));
-		seedConditionClass("CONDITION", null);
-		seedConditionClass("SERIOUS-CONDITION", "CONDITION");
-		seedConditionClass("ERROR", "SERIOUS-CONDITION");
-		seedConditionClass("SIMPLE-ERROR", "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
-		seedConditionClass("SIMPLE-CONDITION", "CONDITION", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
-		seedConditionClass("WARNING", "CONDITION");
-		seedConditionClass("SIMPLE-WARNING", "WARNING", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
-		seedConditionClass("STYLE-WARNING", "WARNING");
-		seedConditionClass("PARSE-ERROR", "ERROR");
-		seedConditionClass("TYPE-ERROR", "ERROR", "DATUM", "EXPECTED-TYPE");
+		seedClass("CONDITION", null);
+		seedClass("SERIOUS-CONDITION", "CONDITION");
+		seedClass("ERROR", "SERIOUS-CONDITION");
+		seedClass("SIMPLE-ERROR", "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
+		seedClass("SIMPLE-CONDITION", "CONDITION", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
+		seedClass("WARNING", "CONDITION");
+		seedClass("SIMPLE-WARNING", "WARNING", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
+		seedClass("STYLE-WARNING", "WARNING");
+		seedClass("PARSE-ERROR", "ERROR");
+		seedClass("TYPE-ERROR", "ERROR", "DATUM", "EXPECTED-TYPE");
 		// simple-type-error carries BOTH the type-error slots and the simple-condition
 		// report slots -- CL's multiple inheritance flattened onto the type-error
 		// branch, which is the branch a handler-case clause tests (alexandria's
 		// sequence bounds checks signal it).
-		seedConditionClass("SIMPLE-TYPE-ERROR", "TYPE-ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
-		seedConditionClass("STREAM-ERROR", "ERROR");
-		seedConditionClass(END_OF_FILE_CLASS_NAME, "STREAM-ERROR");
+		seedClass("SIMPLE-TYPE-ERROR", "TYPE-ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
+		seedClass("STREAM-ERROR", "ERROR");
+		seedClass(END_OF_FILE_CLASS_NAME, "STREAM-ERROR");
 		// The read family signals this class when it runs out of input, so its report is
 		// the message every backend prints for an uncaught end of file. It is a plain
 		// string (no stream slot to name) so that the interpreter can raise the same
 		// message from Java without evaluating a report lambda.
 		registerConditionReport(END_OF_FILE_CLASS_NAME, new LispString(END_OF_FILE_MESSAGE));
-		seedConditionClass("FILE-ERROR", "ERROR");
-		seedConditionClass("ARITHMETIC-ERROR", "ERROR");
-		seedConditionClass("DIVISION-BY-ZERO", "ARITHMETIC-ERROR");
-		seedConditionClass("CONTROL-ERROR", "ERROR");
-		seedConditionClass("PROGRAM-ERROR", "ERROR");
-		seedConditionClass("PACKAGE-ERROR", "ERROR");
-		seedConditionClass("CELL-ERROR", "ERROR", "NAME");
-		seedConditionClass("UNBOUND-VARIABLE", "CELL-ERROR");
-		seedConditionClass("UNDEFINED-FUNCTION", "CELL-ERROR");
+		seedClass("FILE-ERROR", "ERROR");
+		seedClass("ARITHMETIC-ERROR", "ERROR");
+		seedClass("DIVISION-BY-ZERO", "ARITHMETIC-ERROR");
+		seedClass("CONTROL-ERROR", "ERROR");
+		seedClass("PROGRAM-ERROR", "ERROR");
+		seedClass("PACKAGE-ERROR", "ERROR");
+		seedClass("CELL-ERROR", "ERROR", "NAME");
+		seedClass("UNBOUND-VARIABLE", "CELL-ERROR");
+		seedClass("UNDEFINED-FUNCTION", "CELL-ERROR");
 		// The condition a read of an unbound slot signals (CLHS 7.7.2): name = the slot,
 		// instance = the object it was read from.
-		seedConditionClass("UNBOUND-SLOT", "CELL-ERROR", "INSTANCE");
+		seedClass("UNBOUND-SLOT", "CELL-ERROR", "INSTANCE");
 		registerConditionReport("UNBOUND-SLOT", unboundSlotReport());
+	}
+
+	/**
+	 * Seeds the MOP base classes the static metaobject layer rests on: {@code find-class}
+	 * answers with an INSTANCE of {@code standard-class} (or of a user metaclass derived
+	 * from it), and a user metaclass protocol (postmodern's {@code dao-class}) subclasses
+	 * the two slot-definition classes. Idempotent, and deliberately NOT run from the
+	 * constructor: a registered class joins every {@code typep} tag table, runtime
+	 * slot-name dispatch and {@code %class-slot-defs} answer a compilation emits, so
+	 * unconditional seeding grows every program that uses runtime dispatch (the ci-spec
+	 * corpus sits close enough to the JVM's 64 KB method ceiling that three extra classes
+	 * pushed it over). Triggered instead where the MOP surface actually appears:
+	 * {@link #classMetaobject} (the interpreter's {@code find-class}), the closer-mop
+	 * shim load on both loaders, and (later) a {@code defclass} naming a
+	 * {@code :metaclass}.
+	 *
+	 * <p>
+	 * The slot ORDER here is a contract: readers over these metaobjects (the closer-mop
+	 * library, {@link #classMetaobject}) bake {@code %obj-ref} indexes, exactly like the
+	 * seeded condition hierarchy's report lambda does. Append new slots, never reorder.
+	 */
+	public void ensureMopClassesSeeded() {
+		if (this.mopClassesSeeded) {
+			return;
+		}
+		this.mopClassesSeeded = true;
+		seedClass(STANDARD_CLASS_NAME, null, "NAME", "DIRECT-SUPERCLASSES", "DIRECT-SLOTS", "EFFECTIVE-SLOTS",
+				"FINALIZED-P");
+		seedClass(STANDARD_DIRECT_SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS");
+		seedClass(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS");
 	}
 
 	/**
@@ -144,7 +174,34 @@ public final class ClosRegistry {
 	/** The instance tag of the slot-unbound marker ({@link #UNBOUND_CLASS_NAME}). */
 	public static final String UNBOUND_TAG = LispLayout.CLASS_TAG_PREFIX + UNBOUND_CLASS_NAME;
 
-	private void seedConditionClass(String name, @Nullable String parent, String... slotNames) {
+	/**
+	 * The seeded metaclass every plain class metaobject is an instance of (see
+	 * {@link #classMetaobject}). Slot order (an index contract, see
+	 * {@code seedMopClasses}): name, direct-superclasses, direct-slots, effective-slots,
+	 * finalized-p.
+	 */
+	public static final String STANDARD_CLASS_NAME = "STANDARD-CLASS";
+
+	/**
+	 * The seeded direct-slot-definition base class a user metaclass protocol subclasses
+	 * (postmodern's {@code direct-column-slot}). Slot order: name, initargs, initform,
+	 * type, readers.
+	 */
+	public static final String STANDARD_DIRECT_SLOT_DEFINITION_NAME = "STANDARD-DIRECT-SLOT-DEFINITION";
+
+	/**
+	 * The seeded effective-slot-definition class {@link #classMetaobject} builds the
+	 * {@code class-slots} entries from. Slot order: name, initargs, initform, type,
+	 * readers.
+	 */
+	public static final String STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME = "STANDARD-EFFECTIVE-SLOT-DEFINITION";
+
+	/**
+	 * Registers a built-in class (a condition of the seeded hierarchy, or one of the MOP
+	 * base classes) with nil-defaulted slots: parent slots first, then the given ones,
+	 * each accepting its {@code :slot-name} initarg.
+	 */
+	private void seedClass(String name, @Nullable String parent, String... slotNames) {
 		ClassInfo parentInfo = parent == null ? null : this.classes.get(parent);
 		java.util.List<SlotSpec> slots = new java.util.ArrayList<>(parentInfo == null ? List.of() : parentInfo.slots());
 		for (String slotName : slotNames) {
@@ -418,6 +475,9 @@ public final class ClosRegistry {
 	 */
 	private boolean routesConditionReports;
 
+	/** Whether {@link #ensureMopClassesSeeded()} has run. */
+	private boolean mopClassesSeeded;
+
 	/**
 	 * Class name (normalized) to the extra parent types beyond the first -- the lite
 	 * multiple-inheritance support of {@code define-condition}: the first parent provides
@@ -472,6 +532,16 @@ public final class ClosRegistry {
 	 * {@link #applyChangeClassCapacities()}.
 	 */
 	private final Set<String> changeClassTargets = new java.util.LinkedHashSet<>();
+
+	/**
+	 * Class name (normalized) to its memoized class METAOBJECT -- the
+	 * {@code standard-class} instance {@code find-class} answers with. Built on demand
+	 * ({@link #classMetaobject}) so programs that never touch the MOP surface allocate
+	 * none; invalidated when the class is re-registered. A metaclass'd class's metaobject
+	 * (an instance of the user metaclass) will be registered here by the class-definition
+	 * protocol driver instead of being built generically.
+	 */
+	private final Map<String, LispInstance> classMetaobjects = new LinkedHashMap<>();
 
 	/**
 	 * User {@code deftype} name (normalized) to its expansion -- the literal type
@@ -783,6 +853,87 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * The class METAOBJECT of a registered class: an instance of
+	 * {@link #STANDARD_CLASS_NAME} holding the name, the direct-superclass metaobject
+	 * list, the direct slots (nil until a metaclass protocol fills them), the effective
+	 * slots as {@link #STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME} instances, and
+	 * finalized-p (t -- a plain registered class is always complete). Memoized, so
+	 * {@code eq} identity holds across calls ({@code (eq (find-class 'a) (find-class
+	 * 'a))} is true) and {@code class-of} can answer with the same object.
+	 * @param name the class name as spelled
+	 * @return the metaobject, or null when no such class is registered
+	 */
+	@Nullable public LispInstance classMetaobject(String name) {
+		ensureMopClassesSeeded();
+		ClassInfo info = findClass(name);
+		if (info == null) {
+			return null;
+		}
+		String key = normalize(info.name());
+		LispInstance cached = this.classMetaobjects.get(key);
+		if (cached != null) {
+			return cached;
+		}
+		LispVal supers = LispNil.INSTANCE;
+		if (info.superclass() != null) {
+			LispInstance superMetaobject = classMetaobject(info.superclass());
+			if (superMetaobject != null) {
+				supers = new LispCons(superMetaobject, LispNil.INSTANCE);
+			}
+		}
+		LispVal effectiveSlots = LispNil.INSTANCE;
+		List<SlotSpec> slots = info.slots();
+		for (int i = slots.size() - 1; i >= 0; i--) {
+			SlotSpec slot = slots.get(i);
+			List<String> readerNames = new java.util.ArrayList<>(slot.readers());
+			readerNames.addAll(slot.accessors());
+			LispVal readers = LispNil.INSTANCE;
+			for (int r = readerNames.size() - 1; r >= 0; r--) {
+				readers = new LispCons(new LispSymbol(readerNames.get(r)), readers);
+			}
+			LispInstance slotDefinition = newSeededInstance(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
+					new LispSymbol(slot.baseName()),
+					new LispCons(new LispSymbol(slot.initargKeyword()), LispNil.INSTANCE),
+					slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()), readers);
+			effectiveSlots = new LispCons(slotDefinition, effectiveSlots);
+		}
+		LispInstance metaobject = newSeededInstance(STANDARD_CLASS_NAME, new LispSymbol(info.name()), supers,
+				LispNil.INSTANCE, effectiveSlots, LispTrue.INSTANCE);
+		this.classMetaobjects.put(key, metaobject);
+		return metaobject;
+	}
+
+	/**
+	 * Whether a value is a class metaobject -- an instance of
+	 * {@link #STANDARD_CLASS_NAME} or of a class derived from it (a user metaclass). This
+	 * is what {@code closer-mop:classp} tests.
+	 * @param value the value to test
+	 * @return true for a class metaobject
+	 */
+	public boolean isClassMetaobject(LispVal value) {
+		if (!(value instanceof LispInstance inst)) {
+			return false;
+		}
+		String typeName = LispLayout.printNameOfTag(inst.layout().tag());
+		if (typeName == null) {
+			return false;
+		}
+		ClassInfo info = findClass(typeName);
+		return info != null && info.ancestors().contains(STANDARD_CLASS_NAME);
+	}
+
+	// A fresh instance of a seeded class, with the trailing slots nil-filled up to the
+	// layout capacity.
+	private LispInstance newSeededInstance(String className, LispVal... values) {
+		LispLayout layout = java.util.Objects
+			.requireNonNull(this.layoutsByTag.get(LispLayout.CLASS_TAG_PREFIX + className), className);
+		LispVal[] slots = new LispVal[Math.max(layout.capacity(), values.length)];
+		java.util.Arrays.fill(slots, LispNil.INSTANCE);
+		System.arraycopy(values, 0, slots, 0, values.length);
+		return new LispInstance(layout, slots);
+	}
+
+	/**
 	 * Looks up a generic function by name (single- and double-colon spellings match).
 	 * @param name the generic-function name as spelled
 	 * @return the generic, or null
@@ -855,6 +1006,10 @@ public final class ClosRegistry {
 			info = new ClassInfo(info.name(), info.superclass(), info.slots(), Set.copyOf(merged));
 		}
 		this.classes.put(key, info);
+		// A redefinition invalidates the memoized metaobject; descendants keep theirs
+		// (their slot lists are unchanged -- redefinition does not propagate in the
+		// static subset).
+		this.classMetaobjects.remove(key);
 		// Every class -- seeded condition or user defclass -- gets its layout here, so
 		// the instance shape can never disagree with the slot list it was built from.
 		LispLayout layout = LispLayout.ofClass(info.name(), info.slots().stream().map(SlotSpec::baseName).toList(),

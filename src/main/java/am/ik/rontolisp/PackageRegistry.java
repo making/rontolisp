@@ -407,8 +407,11 @@ public final class PackageRegistry {
 		// names (see eval.ShimLibraries): closer-mop (nicknames c2mop/c2cl),
 		// flexi-streams, org.shirakumo.float-features (nickname float-features) and
 		// trivial-gray-streams.
-		define(new LispPackage(LispNames.CLOSER_MOP_PKG, List.of(), new HashSet<>(Set.of(LispNames.CLASS_SLOTS,
-				LispNames.ENSURE_FINALIZED, LispNames.SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_TYPE))));
+		define(new LispPackage(LispNames.CLOSER_MOP_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.CLASS_SLOTS, LispNames.ENSURE_FINALIZED, LispNames.CLASSP,
+						LispNames.CLASS_NAME, LispNames.CLASS_DIRECT_SUPERCLASSES, LispNames.CLASS_FINALIZED_P,
+						LispNames.SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_INITARGS,
+						LispNames.SLOT_DEFINITION_TYPE))));
 		define(new LispPackage(LispNames.FLEXI_STREAMS_PKG, List.of(), new HashSet<>(
 				Set.of(LispNames.MAKE_FLEXI_STREAM, LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING))));
 		define(new LispPackage(LispNames.FLOAT_FEATURES_PKG, List.of(),

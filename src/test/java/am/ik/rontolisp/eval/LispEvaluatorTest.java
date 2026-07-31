@@ -8384,6 +8384,27 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void closerMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators() {
+		// The shim serves BOTH generations: real metaobjects (find-class) answer with
+		// effective-slot-definition instances; a class-of TAG symbol keeps the legacy
+		// (name type) pairs so slot-walking serializers (jzon) are unchanged.
+		assertThat(evalMulti("""
+				(asdf:load-system "closer-mop")
+				(defclass cmm-p () ((name :initarg :name) (age :initarg :age :type integer)))
+				(let ((c (find-class 'cmm-p)))
+				  (list (closer-mop:classp c)
+				        (closer-mop:classp 42)
+				        (closer-mop:class-name c)
+				        (closer-mop:class-finalized-p c)
+				        (mapcar #'closer-mop:slot-definition-name (closer-mop:class-slots c))
+				        (mapcar #'closer-mop:slot-definition-type (closer-mop:class-slots c))
+				        (mapcar #'closer-mop:slot-definition-initargs (closer-mop:class-slots c))
+				        (mapcar #'closer-mop:slot-definition-name
+				                (closer-mop:class-slots (class-of (make-instance 'cmm-p :name "x"))))))
+				""").print()).isEqualTo("(T NIL CMM-P T (NAME AGE) (T INTEGER) ((:NAME) (:AGE)) (NAME AGE))");
+	}
+
+	@Test
 	void macroletLocalMacroExpandsInsideCapturedDefgenericMethodBody() {
 		// The macrolet body is pre-expanded before evaluation, so a method body that
 		// only CAPTURES code still bakes the local macro in (jzon defines its
@@ -8569,6 +8590,54 @@ class LispEvaluatorTest {
 				  (setf (sh-sub-open-p o) :closed)
 				  (list (sh-open-p o) (sh-sub-open-p o) (sh-conn o)))
 				""").print()).isEqualTo("(:CLOSED :CLOSED \"c\")");
+	}
+
+	@Test
+	void findClassReturnsAnEqStableClassMetaobject() {
+		// The metaobject is memoized (eq across calls), carries the class name at slot
+		// 0, the direct-superclass metaobjects at slot 1 and finalized-p at slot 4.
+		assertThat(evalMulti("""
+				(defclass fc-animal () ((legs :initarg :legs :accessor fc-legs :type integer)))
+				(defclass fc-dog (fc-animal) ((name :initarg :name)))
+				(let ((c (find-class 'fc-dog)))
+				  (list (eq c (find-class 'fc-dog))
+				        (%obj-ref c 0)
+				        (eq (car (%obj-ref c 1)) (find-class 'fc-animal))
+				        (%obj-ref c 4)))
+				""").print()).isEqualTo("(T FC-DOG T T)");
+	}
+
+	@Test
+	void findClassMetaobjectCarriesEffectiveSlotDefinitions() {
+		// Slot 3 of the metaobject is the effective-slot-definition list: each entry
+		// holds (name initargs initform type readers), inherited slots first.
+		assertThat(evalMulti("""
+				(defclass fc-box () ((w :initarg :w :accessor fc-w :type integer) (h :initform 2)))
+				(let* ((c (find-class 'fc-box))
+				       (slots (%obj-ref c 3)))
+				  (list (length slots)
+				        (mapcar (lambda (s) (%obj-ref s 0)) slots)
+				        (%obj-ref (car slots) 1)
+				        (%obj-ref (car slots) 3)
+				        (%obj-ref (car slots) 4)
+				        (%obj-ref (car (cdr slots)) 2)))
+				""").print()).isEqualTo("(2 (W H) (:W) INTEGER (FC-W) 2)");
+	}
+
+	@Test
+	void findClassUnknownSignalsUnlessErrorpNil() {
+		assertThat(evalMulti("""
+				(list (find-class 'fc-no-such nil)
+				      (handler-case (find-class 'fc-no-such) (error (e) :signaled)))
+				""").print()).isEqualTo("(NIL :SIGNALED)");
+	}
+
+	@Test
+	void findClassAnswersForSeededConditionClasses() {
+		assertThat(evalMulti("""
+				(let ((c (find-class 'type-error)))
+				  (list (%obj-ref c 0) (%obj-ref (car (%obj-ref c 1)) 0)))
+				""").print()).isEqualTo("(TYPE-ERROR ERROR)");
 	}
 
 	@Test

@@ -4701,14 +4701,33 @@ public final class LispNames {
 	/** The {@code closer-mop} shim package (and built-in ASDF system) name. */
 	public static final String CLOSER_MOP_PKG = "CLOSER-MOP";
 
-	/** {@code closer-mop:class-slots} -- lite: always nil (no slot metaobjects). */
+	/**
+	 * {@code closer-mop:class-slots} -- the effective-slot-definition metaobjects of a
+	 * class metaobject, or the legacy {@code (name type)} pairs of a class-of TAG symbol
+	 * ({@code %class-slot-defs}).
+	 */
 	public static final String CLASS_SLOTS = "CLASS-SLOTS";
 
-	/** {@code closer-mop:ensure-finalized} -- lite: identity. */
+	/** {@code closer-mop:ensure-finalized} -- identity (metaobjects are born final). */
 	public static final String ENSURE_FINALIZED = "ENSURE-FINALIZED";
+
+	/** {@code closer-mop:classp} -- whether a value is a class metaobject. */
+	public static final String CLASSP = "CLASSP";
+
+	/** {@code closer-mop:class-name} -- the name symbol of a class metaobject. */
+	public static final String CLASS_NAME = "CLASS-NAME";
+
+	/** {@code closer-mop:class-direct-superclasses} over a class metaobject. */
+	public static final String CLASS_DIRECT_SUPERCLASSES = "CLASS-DIRECT-SUPERCLASSES";
+
+	/** {@code closer-mop:class-finalized-p} over a class metaobject. */
+	public static final String CLASS_FINALIZED_P = "CLASS-FINALIZED-P";
 
 	/** {@code closer-mop:slot-definition-name}. */
 	public static final String SLOT_DEFINITION_NAME = "SLOT-DEFINITION-NAME";
+
+	/** {@code closer-mop:slot-definition-initargs}. */
+	public static final String SLOT_DEFINITION_INITARGS = "SLOT-DEFINITION-INITARGS";
 
 	/** {@code closer-mop:slot-definition-type}. */
 	public static final String SLOT_DEFINITION_TYPE = "SLOT-DEFINITION-TYPE";

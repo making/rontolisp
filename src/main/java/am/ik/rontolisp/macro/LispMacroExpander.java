@@ -10388,6 +10388,26 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Whether the program defines a function in the {@code closer-mop} package -- the
+	 * mark of the spliced closer-mop shim library, whose {@code classp} needs the MOP
+	 * base classes registered before its {@code (typep x 'standard-class)} expands.
+	 * @param program the top-level forms
+	 * @return true when a closer-mop defun is present
+	 */
+	private static boolean definesCloserMopFunction(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (isNamedForm(form, LispNames.DEFUN) && form instanceof LispCons cons
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name.name());
+				if (qn != null && LispNames.CLOSER_MOP_PKG.equals(qn.pkg())) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * As {@link #expandTopLevelDefinitions(List, java.util.Map, ClosRegistry)}, threading
 	 * the export oracle a {@code defstruct} needs to spell its generated names the way
 	 * the program's call sites do -- see
@@ -10405,6 +10425,15 @@ public final class LispMacroExpander {
 		// The one whole-program pass both compilers already run, so the load-time-value
 		// hoist rides along instead of needing its own registration in every pipeline.
 		program = hoistLoadTimeValues(program);
+		// The closer-mop library's classp is (typep x 'standard-class): when its defuns
+		// are in the program (spliced by the system loaders, which have no registry in
+		// scope), the MOP base classes must register before any type test over them
+		// expands -- including on the fast path below, whose forms still get their
+		// bodies compiled. Keyed on the defun package so only closer-mop programs pay
+		// the three extra registry classes in their runtime dispatch tables.
+		if (definesCloserMopFunction(program)) {
+			closRegistry.ensureMopClassesSeeded();
+		}
 		// Every change-class target, recorded BEFORE the walk so the capacity reservation
 		// below can widen its ancestors the moment the whole registry is known.
 		registerChangeClassTargets(program, closRegistry);

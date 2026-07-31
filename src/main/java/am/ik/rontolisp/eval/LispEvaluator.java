@@ -651,6 +651,27 @@ public final class LispEvaluator {
 			// too).
 			return new LispSymbol(builtinTypeName(v).toUpperCase(java.util.Locale.ROOT));
 		}));
+		this.globalEnv.defineFunction(LispNames.FIND_CLASS, new LispFunction(LispNames.FIND_CLASS, args -> {
+			// (find-class symbol &optional (errorp t) environment) -- a registered class
+			// answers with its memoized metaobject (eq-stable across calls), anything
+			// else signals unless errorp is nil. Defined here, ahead of the prelude's
+			// always-nil stub, because the answer needs the class registry.
+			if (args.isEmpty() || args.size() > 3) {
+				throw new LispEvalException(LispNames.FIND_CLASS + " expects 1 to 3 arguments, got " + args.size());
+			}
+			boolean errorp = args.size() < 2 || !(args.get(1) instanceof LispNil);
+			if (args.get(0) instanceof LispSymbol sym) {
+				LispVal metaobject = this.closRegistry.classMetaobject(sym.name());
+				if (metaobject != null) {
+					return metaobject;
+				}
+			}
+			if (errorp) {
+				throw new LispEvalException(LispNames.FIND_CLASS + ": there is no class named "
+						+ (args.get(0) instanceof LispSymbol s ? s.name() : args.get(0).print()));
+			}
+			return LispNil.INSTANCE;
+		}));
 		this.globalEnv.defineFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL,
 				new LispFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL, args -> {
 					requireSingleArg(LispNames.CLASS_SLOT_DEFS_INTERNAL, args);
@@ -1938,6 +1959,11 @@ public final class LispEvaluator {
 				ensureUsocketLoaded();
 			}
 			else if (!this.loadedSystems.contains(name)) {
+				if (LispNames.CLOSER_MOP_PKG.equalsIgnoreCase(name)) {
+					// The shim's classp is (typep x 'standard-class): the MOP base
+					// classes must be registered before that type test expands.
+					this.closRegistry.ensureMopClassesSeeded();
+				}
 				for (LispVal form : BuiltinSystems.forms(name, Features.INTERPRETER)) {
 					eval(form, this.globalEnv);
 				}
