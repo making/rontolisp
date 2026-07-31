@@ -215,7 +215,6 @@
 | `decode-universal-time` | `(decode-universal-time 2208988800 0)` | 9 個の分解値 (秒・分・時・日・月・年・曜日・夏時間・ゾーン)。`daylight-p` は常に nil |
 | `get-internal-real-time` | `(get-internal-real-time)` | 経過実時間(ミリ秒)(すべてのバックエンドで整数) |
 | `get-internal-run-time` | `(get-internal-run-time)` | 消費した実行時間(ミリ秒)(すべてのバックエンドで整数) |
-| `uiop:getenv` | `(uiop:getenv "PATH")` | 環境変数の値を文字列として、未設定の場合は `nil` を返します。Common Lisp に `getenv` はないため `uiop` パッケージに置かれており、修飾なしの綴りはありません。3つのバックエンドすべて。WASMはPreview 1では実際のホスト環境を、`--component` モードでは `wasi:cli/environment@0.3.0` を読みます(wasmtimeに `--env`/`-S inherit-env` を渡してください) |
 | `exp` | `(exp 0)` | `1.0`(インタプリタ/JVMは `Math.exp` を使用。WASMはソフトウェア近似を使用) |
 | `log` | `(log 1)` | `0.0`(自然対数。インタプリタ/JVM は `Math.log`、WASM はソフトウェア近似) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0`(インタプリタ/JVM は `Math.sin`/`cos`/`tan`、WASM はソフトウェア近似) |
@@ -285,7 +284,6 @@
 | `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil` |
 | `fdefinition` | `(fdefinition 'car)` | 関数値を返します。`symbol-function` と同じ |
 | `use-package` | `(use-package :mypkg)` | パッケージを use リストに追加し、その外部シンボルを修飾なしで見えるようにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
-| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録（lite: グローバル、パッケージごとのスコープなし） |
 | `file-position` | `(file-position s)` | 常に `nil`(lite: ストリームはシーク非対応) |
 | `file-length` | `(file-length s)` | 常に `nil`(lite) |
 | `make-string-output-stream` | `(make-string-output-stream)` | 新しい文字列出力ストリーム。`with-output-to-string` が内部で作るものを明示的に作ります |
@@ -509,6 +507,35 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `asdf:defsystem` | `(asdf:defsystem :my-lib :components ((:file "main")))` | システムを定義する (名前・`:depends-on`・`:serial`・`:components`)。後続の `load-system` 用 |
 | `asdf:load-system` | `(asdf:load-system :my-lib)` | システムをロードする: まず依存システム、次にコンポーネントファイルを順に (コンパイルパスではリテラルかつトップレベルのフォーム) |
 | `asdf:system-relative-pathname` | `(asdf:system-relative-pathname :my-lib "data/tlds.dat")` | システムのソースディレクトリを基準に解決した名前文字列 (コンパイルパスではリテラルへ畳み込まれる) |
+
+## uiop パッケージの関数
+
+`uiop` パッケージは ASDF の移植性レイヤであり、Common Lisp が標準化しなかった操作に
+対して処理系非依存のライブラリがすでに使っている綴りです。**Common Lisp の一部では
+ありません**。シンボルは `uiop:` 修飾子付きで参照します — 修飾なしの綴りはありません。
+rontolisp が実装しているメンバは以下のとおりで、各名前は個別のページにリンクしています。
+
+| 関数 | 例 | 結果 |
+|----------|---------|--------|
+| `uiop:getenv` | `(uiop:getenv "PATH")` | 環境変数の値を文字列として、未設定の場合は `nil` を返します。Common Lisp に `getenv` がないためここに置かれています。すべてのバックエンドで動作します。WASM は Preview 1 では実際のホスト環境を、`--component` モードでは `wasi:cli/environment@0.3.0` を読みます (wasmtime に `--env`/`-S inherit-env` を渡してください) |
+| `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil` — `probe-file` と同じ契約であり、すべてのバックエンドでその基本操作へ落とされます |
+| `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `"/tmp/b.txt"` — デフォルトを考慮したパス名のマージ (ここではパス名は名前文字列そのものです)。インタプリタでは実行時の関数、コンパイル済みバックエンドではコンパイラがリテラルへ畳み込める呼び出しのみ |
+| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録 (lite: グローバル、パッケージごとのスコープなし)。リテラルなトップレベル呼び出しはコンパイル時ディレクティブなので、すべてのバックエンドで動作します |
+| `uiop:emptyp` | `(uiop:emptyp "")` | `nil` および長さ 0 のベクタ・文字列に対して `t`、それ以外は `nil` |
+| `uiop:first-char` | `(uiop:first-char "hello")` | `#\h` — 空でない文字列の最初の文字。空文字列や文字列以外では `nil` |
+| `uiop:last-char` | `(uiop:last-char "hello")` | `#\o` — 空でない文字列の最後の文字。空文字列や文字列以外では `nil` |
+
+`uiop::get-pathname-defaults` (本物の UIOP でも内部シンボルなので二重コロンで綴ります)
+も実装されており、すべてのバックエンドで `""` を返します。相対パスはホストの作業
+ディレクトリを基準に解決され、`""` はまさにそれを指す名前文字列なので、
+`(merge-pathnames x (uiop::get-pathname-defaults))` は `x` になります。
+
+パッケージの残りは**名前解決のためのスタブ**です。`uiop:native-namestring`、
+`uiop:namestring`、`uiop:os-unix-p`、`uiop:os-macosx-p`、`uiop:run-program` は解決は
+される (ので `(:import-from #:uiop)` 句でこれらを挙げるライブラリは読み込め、コンパイル
+できる) ものの、呼び出すと undefined-function エラーになります。`run-program` について
+これは意図的です: 外部プロセスの起動はどのバックエンドのサンドボックスの外にあり、
+黙って何もしないより エラーを返す方が誠実だからです。
 
 ## ql パッケージの関数
 

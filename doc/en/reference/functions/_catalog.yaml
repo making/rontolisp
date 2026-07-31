@@ -315,7 +315,6 @@ categories:
       - { slug: macroexpand, name: "macroexpand" }
       - { slug: fdefinition, name: "fdefinition" }
       - { slug: use-package, name: "use-package" }
-      - { slug: add-package-local-nickname, name: "uiop:add-package-local-nickname" }
   - title: "Streams & Files"
     functions:
       - { slug: open, name: "open" }
@@ -347,7 +346,6 @@ categories:
       - { slug: decode-universal-time, name: "decode-universal-time" }
       - { slug: get-internal-real-time, name: "get-internal-real-time" }
       - { slug: get-internal-run-time, name: "get-internal-run-time" }
-      - { slug: getenv, name: "uiop:getenv" }
   - title: "rontolisp Package"
     functions:
       - { slug: rontolisp-version, name: "rontolisp:version" }
@@ -487,6 +485,15 @@ categories:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }
       - { slug: asdf-load-system, name: "asdf:load-system" }
       - { slug: asdf-system-relative-pathname, name: "asdf:system-relative-pathname" }
+  - title: "uiop Package (ASDF portability layer)"
+    functions:
+      - { slug: uiop-getenv, name: "uiop:getenv" }
+      - { slug: uiop-file-exists-p, name: "uiop:file-exists-p" }
+      - { slug: uiop-merge-pathnames-star, name: "uiop:merge-pathnames*" }
+      - { slug: uiop-add-package-local-nickname, name: "uiop:add-package-local-nickname" }
+      - { slug: uiop-emptyp, name: "uiop:emptyp" }
+      - { slug: uiop-first-char, name: "uiop:first-char" }
+      - { slug: uiop-last-char, name: "uiop:last-char" }
   - title: "ql Package (Quicklisp)"
     functions:
       - { slug: ql-quickload, name: "ql:quickload" }

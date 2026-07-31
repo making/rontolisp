@@ -219,7 +219,6 @@ page.
 | `decode-universal-time` | `(decode-universal-time 2208988800 0)` | the nine decoded values (second, minute, hour, date, month, year, day-of-week, daylight-p, zone); `daylight-p` is always nil |
 | `get-internal-real-time` | `(get-internal-real-time)` | elapsed real time in milliseconds (integer on every backend) |
 | `get-internal-run-time` | `(get-internal-run-time)` | consumed run time in milliseconds (integer on every backend) |
-| `uiop:getenv` | `(uiop:getenv "PATH")` | the value of an environment variable as a string, or `nil` if unset. Homed in `uiop` because Common Lisp has no `getenv`; there is no unqualified spelling. All three backends; WASM reads the real host environment in Preview 1 and `wasi:cli/environment@0.3.0` in `--component` mode (pass `--env`/`-S inherit-env` to wasmtime) |
 | `exp` | `(exp 0)` | `1.0` (interpreter/JVM use `Math.exp`; WASM uses a software approximation) |
 | `log` | `(log 1)` | `0.0` (natural log; interpreter/JVM use `Math.log`, WASM a software approximation) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM use `Math.sin`/`cos`/`tan`, WASM a software approximation) |
@@ -289,7 +288,6 @@ page.
 | `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters |
 | `fdefinition` | `(fdefinition 'car)` | the function value, like `symbol-function` |
 | `use-package` | `(use-package :mypkg)` | add packages to a package's use list, so their external symbols are visible unqualified (a literal top-level call is a compile-time directive) |
-| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping) |
 | `file-position` | `(file-position s)` | always `nil` (lite: streams do not support repositioning) |
 | `file-length` | `(file-length s)` | always `nil` (lite) |
 | `make-string-output-stream` | `(make-string-output-stream)` | a fresh string output stream -- the explicit form of what `with-output-to-string` builds |
@@ -554,6 +552,37 @@ layout and the search-path details.
 | `asdf:defsystem` | `(asdf:defsystem :my-lib :components ((:file "main")))` | define a system (name, `:depends-on`, `:serial`, `:components`) for a later `load-system` |
 | `asdf:load-system` | `(asdf:load-system :my-lib)` | load a system: its dependency systems first, then its component files in order (a literal, top-level form on the compile path) |
 | `asdf:system-relative-pathname` | `(asdf:system-relative-pathname :my-lib "data/tlds.dat")` | the namestring of a path resolved against the system's source directory (folded to a literal on the compile path) |
+
+## uiop Package Functions
+
+The `uiop` package is ASDF's portability layer, the spelling
+implementation-independent libraries already use for the operations Common Lisp
+never standardized. It is **not part of Common Lisp**; reference its symbols
+with the `uiop:` qualifier — there are no unqualified spellings. rontolisp
+implements the members below; each name links to its own page.
+
+| Function | Example | Result |
+|----------|---------|--------|
+| `uiop:getenv` | `(uiop:getenv "PATH")` | the value of an environment variable as a string, or `nil` if unset. Homed here because Common Lisp has no `getenv`. All backends; WASM reads the real host environment in Preview 1 and `wasi:cli/environment@0.3.0` in `--component` mode (pass `--env`/`-S inherit-env` to wasmtime) |
+| `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | the pathname when the file exists, `nil` otherwise — the same contract as `probe-file`, which it lowers onto on every backend |
+| `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `"/tmp/b.txt"` — the defaults-aware pathname merge (a pathname is its namestring here). A real runtime function on the interpreter; on the compiled backends only the calls the compiler folds to a literal |
+| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping). A literal top-level call is a compile-time directive, so it works on every backend |
+| `uiop:emptyp` | `(uiop:emptyp "")` | `t` for `nil` and for a zero-length vector or string, `nil` otherwise |
+| `uiop:first-char` | `(uiop:first-char "hello")` | `#\h` — the first character of a non-empty string, `nil` for an empty string or a non-string |
+| `uiop:last-char` | `(uiop:last-char "hello")` | `#\o` — the last character of a non-empty string, `nil` for an empty string or a non-string |
+
+`uiop::get-pathname-defaults` (internal in real UIOP too, so it is spelled with
+the double colon) is implemented as well and answers `""` on every backend: a
+relative path resolves against the host's working directory, and `""` is the
+namestring designating exactly that, so `(merge-pathnames x
+(uiop::get-pathname-defaults))` yields `x`.
+
+The rest of the package is a **name-resolution stub**: `uiop:native-namestring`,
+`uiop:namestring`, `uiop:os-unix-p`, `uiop:os-macosx-p` and `uiop:run-program`
+resolve — so a library naming them in an `(:import-from #:uiop)` clause reads and
+compiles — but calling one signals an undefined-function error. That is
+deliberate for `run-program`: spawning an external process is outside every
+backend's sandbox, and an error is a more honest answer than a silent no-op.
 
 ## ql Package Functions
 
