@@ -1435,6 +1435,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void noGcPrintEscapesQuotesAndBackslashesInStrings() throws Exception {
+		// The readable renderer owes the reader its escapes here too (todo 216):
+		// emitWriteStringEscaped writes the content as runs, one __write_stdout per
+		// unescaped stretch plus the single '\' literal, so nothing is allocated.
+		// princ stays the no-escape half.
+		String program = """
+				(defun show ()
+				  (print "{\\"hello\\":\\"aaa\\"}")
+				  (print "a\\"b\\\\c")
+				  (princ "a\\"b\\\\c")
+				  (terpri)
+				  (print "plain")
+				  (print (concatenate 'string "x" "\\"" "y")))
+				(rontolisp:wasm-export 'show :params '() :returns :void)
+				""";
+		String expected = """
+				"{\\"hello\\":\\"aaa\\"}"
+				"a\\"b\\\\c"
+				a"b\\c
+				"plain"
+				"x\\"y\"""";
+		assertThat(compileNoGcAndInvoke(false, program, "show")).isEqualTo(expected);
+		assertThat(compileNoGcAndInvoke(true, program, "show")).isEqualTo(expected);
+	}
+
+	@Test
 	void noGcPrintLoopKeepsTheHeapFlat() throws Exception {
 		// Each print renders a transient digit string inside an internal heap-pointer
 		// mark/reset bracket, so 20000 prints stay within a 2-page memory cap -- a
@@ -3773,6 +3799,28 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void prin1ToString() throws Exception {
 		assertThat(compileAndRun("(princ (prin1-to-string \"abc\"))")).isEqualTo("\"abc\"");
+	}
+
+	@Test
+	void prin1EscapesQuotesAndBackslashesInStrings() throws Exception {
+		// *print-escape* = t escapes the embedded " and \ (todo 216); princ / ~a do not.
+		// A bare SYMBOL still prints verbatim -- the leading quote is the discriminator.
+		assertThat(compileAndRun("(prin1 \"{\\\"hello\\\":\\\"aaa\\\"}\")"))
+			.isEqualTo("\"{\\\"hello\\\":\\\"aaa\\\"}\"");
+		assertThat(compileAndRun("(prin1 (list \"x\\\"y\" 'foo))")).isEqualTo("(\"x\\\"y\" FOO)");
+		assertThat(compileAndRun("(princ (prin1-to-string \"a\\\"b\\\\c\"))")).isEqualTo("\"a\\\"b\\\\c\"");
+		assertThat(compileAndRun("(princ (format nil \"~s|~a\" \"a\\\"b\" \"a\\\"b\"))")).isEqualTo("\"a\\\"b\"|a\"b");
+		assertThat(compileAndRun("(princ \"{\\\"hello\\\":\\\"aaa\\\"}\")")).isEqualTo("{\"hello\":\"aaa\"}");
+	}
+
+	@Test
+	void prin1OutputReadsBackAsTheSameString() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((s (concatenate 'string "a" (string (code-char 34)) "b"
+				                      (string (code-char 92)) "c"
+				                      (string #\\Newline) "d")))
+				  (prin1 (list (equal (read-from-string (prin1-to-string s)) s) (length s))))
+				""")).isEqualTo("(T 7)");
 	}
 
 	@Test
@@ -6301,7 +6349,7 @@ class WasmLispCompilerIntegrationTest {
 				  (terpri s)
 				  (prin1 "q" s)
 				  (write-line " end" s)
-				  (write-string "tail" s)))""")).isEqualTo("\"a=42\n\"q\" end\ntail\"");
+				  (write-string "tail" s)))""")).isEqualTo("\"a=42\n\\\"q\\\" end\ntail\"");
 	}
 
 	@Test
@@ -8628,7 +8676,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (try "#.(+ 1 2)"))
 				(print (try "#1=(a b)"))
 				""")).isEqualTo("""
-				"Unknown character name after #\\"
+				"Unknown character name after #\\\\"
 				"Invalid digits after #x/#o/#b"
 				"#S: not a defined structure type"
 				"#S: no slot with that name"
@@ -9710,7 +9758,8 @@ class WasmLispCompilerIntegrationTest {
 						(print (rontolisp:json-stringify (rontolisp:json-parse "{\\"deep\\": {\\"list\\": [{\\"k\\": \\"v\\"}, 2.5, true]}}")))
 						(print (funcall #'rontolisp:json-stringify (list 1 2)))
 						"""))
-			.isEqualTo("\"[1,[2,3],false]\"\n\"{\"deep\":{\"list\":[{\"k\":\"v\"},2.5,true]}}\"\n\"[1,2]\"");
+			.isEqualTo(
+					"\"[1,[2,3],false]\"\n\"{\\\"deep\\\":{\\\"list\\\":[{\\\"k\\\":\\\"v\\\"},2.5,true]}}\"\n\"[1,2]\"");
 	}
 
 	@Test
@@ -9731,8 +9780,8 @@ class WasmLispCompilerIntegrationTest {
 							  (print (rontolisp:json-stringify
 							          (make-instance 'json-resp :status 200 :headers h :items (list 1 2 3)))))
 							""")));
-		assertThat(compileAndRunProgram(program)).isEqualTo(
-				"\"{\"msg\":\"hi\"}\"\n(:A 1)\n\"{\"x\":1}\"\n\"{\"status\":200,\"headers\":{\"content-type\":\"application/json\"},\"items\":[1,2,3]}\"");
+		assertThat(compileAndRunProgram(program)).isEqualTo("\"{\\\"msg\\\":\\\"hi\\\"}\"\n(:A 1)\n\"{\\\"x\\\":1}\"\n"
+				+ "\"{\\\"status\\\":200,\\\"headers\\\":{\\\"content-type\\\":\\\"application/json\\\"},\\\"items\\\":[1,2,3]}\"");
 	}
 
 	@Test
@@ -10071,7 +10120,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (apply #'format nil "x=~a y=~d" '(5 7)))
 				(funcall #'format t "to-stdout ~a~%" "ok")
 				(print (funcall #'format nil "~s" "q"))
-				""")).isEqualTo("\"x=5 y=7\"\nto-stdout ok\n\"\"q\"\"");
+				""")).isEqualTo("\"x=5 y=7\"\nto-stdout ok\n\"\\\"q\\\"\"");
 	}
 
 	@Test
@@ -11095,7 +11144,7 @@ class WasmLispCompilerIntegrationTest {
 				(handler-case (error 'cr-lam :msg "boom")
 				  (error (e) (print (list (format nil "~a" e) (format nil "~s" e)
 				                          (princ-to-string (make-condition 'cr-str))))))
-				""")).isEqualTo("(\"cr-lam: boom\" \"#<CR-LAM :MSG \"boom\">\" \"fixed text\")");
+				""")).isEqualTo("(\"cr-lam: boom\" \"#<CR-LAM :MSG \\\"boom\\\">\" \"fixed text\")");
 	}
 
 	@Test

@@ -24,6 +24,42 @@ struct goes inside a rec group.
 Quoted symbols and string literals share a runtime representation, distinguished by
 a leading `"`.
 
+### The quote framing is STORAGE; the escaping belongs to the printer
+
+Because the frame quotes are part of the stored value on both compile backends, the
+`*print-escape*` escaping can only be applied at PRINT time, on the content between
+them. The split is explicit in the API:
+
+- `LispString.literal()` -- the raw `"` + content + `"` spelling. This is what every
+  compile-path STORAGE site emits (`Jvm/WasmExprCompiler`'s `LispString` case,
+  `Jvm/WasmQuoteCompiler`, the keyword-name path of `Jvm/WasmSymbolApiCompiler`). A
+  storage site that used `print()` would bake the escapes into the value itself, so
+  `length`/`char` would see them.
+- `LispString.print()` -- the readable form: the frame quotes plus every embedded `"`
+  and `\` of the content preceded by a `\` (`LispString.escape`). CLHS 22.1.3.4
+  escapes exactly the string terminator and the single-escape character; a newline is
+  printed LITERALLY. Our reader also accepts `\n` / `\t` on input, so the writer
+  deliberately covers less than the reader -- writing `\n` back would be a different
+  string than the one printed.
+
+Per backend the same rule is emitted, and the same discriminator decides string vs
+symbol (a symbol never escapes):
+
+| backend | where |
+| --- | --- |
+| interpreter | `LispString.print()` -- everything above it (`Environment.printString`, `prin1-to-string`, `write-to-string`, `format ~s`, `LispCons`/`LispArray`/`LispInstance` element rendering, the `%print-object-str` seam) inherits it |
+| JVM | `_strEsc` (`JvmRuntimeBuilder.buildStrEscBody`), called from the `String` branch of `_lispToString` and from the character-vector prin1 branch of `emitArrayBranch`. `_lispToString` is also the hash-table key function, hence `_strEsc`'s no-op fast path |
+| WASM GC / component | `_write_str_gc(str, from, to, esc)` with `esc = 1` (`WasmStringRuntimeBuilder`), from the string branch of `_print_val`; the branch now makes the same leading-`"` test `_princ_val` does, and passes the CONTENT range so the frame quotes it writes are not themselves escaped. [wasm-gc-strings.md](wasm-gc-strings.md) |
+| `--no-gc` | `NoGcWasmCompiler.emitWriteStringEscaped`, a run-based writer at the `(print <string>)` site (no allocation: `print` must not move the bump heap). [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) |
+
+`princ` / `~A` / `princ-to-string` / `write-line` are the no-escape half BY DEFINITION
+and must stay untouched. The reader's un-escaping (`\"` / `\\`, plus `\n` / `\t`) is
+the mirror: `WasmReadRuntimeBuilder`'s string scanner and `LispReader` on the
+interpreter. Pinned by `prin1EscapesQuotesAndBackslashesInStrings` +
+`prin1OutputReadsBackAsTheSameString` in `LispEvaluatorTest`, `JvmLispCompilerTest`
+and `WasmLispCompilerIntegrationTest`, and the `prin1-escapes-quotes-and-backslashes`
+case in `ci-spec.yaml`.
+
 ## consp in JVM
 
 Cons cells and function references are both `Object[]`, distinguished by

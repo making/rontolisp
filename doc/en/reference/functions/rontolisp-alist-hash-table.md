@@ -12,7 +12,7 @@ turning an alist (like a
 headers) into a JSON object.
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:alist-hash-table '(("n" . 1))))   ; => "{"n":1}"
+(rontolisp:json-stringify (rontolisp:alist-hash-table '(("n" . 1))))   ; => "{\"n\":1}"
 ```
 
 The default hash-table test is `eql`, like `alexandria:alist-hash-table`; pass

@@ -822,9 +822,12 @@ final class WasmEmitHelper {
 	}
 
 	/**
-	 * Emits {@code call FUNC_WRITE_STR_GC}: consumes a {@code (str, from, to)} triple and
-	 * writes bytes {@code [from, to)} of the string value to the current print sink from
-	 * its GC array (capture buffer append or stdout). The print path for string values.
+	 * Emits {@code call FUNC_WRITE_STR_GC}: consumes a {@code (str, from, to, esc)}
+	 * quadruple and writes bytes {@code [from, to)} of the string value to the current
+	 * print sink from its GC array (capture buffer append or stdout). The print path for
+	 * string values. With {@code esc = 1} the range is the string's CONTENT and the
+	 * callee writes the readable form around it -- the frame quotes plus a {@code \}
+	 * before every embedded {@code "} / {@code \}.
 	 * @param w the writer for the function body being emitted
 	 */
 	static void emitWriteStrGcCall(WasmWriter w) {

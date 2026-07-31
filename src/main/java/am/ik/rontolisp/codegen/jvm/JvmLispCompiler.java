@@ -1415,12 +1415,26 @@ public final class JvmLispCompiler implements LispCompiler {
 						cp.addNameAndType(Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf)))
 				: null;
 
+		// _strEsc: the *print-escape* escaping the readable renderer applies to a string
+		// value's content (todo 216). Always emitted -- _lispToString is unconditional.
+		Utf8Constant strEscName = cp.addUtf8("_strEsc");
+		Utf8Constant strEscDescUtf = cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;");
+		MethodrefConstant strEscMethod = cp.addMethodref(thisClass, cp.addNameAndType(strEscName, strEscDescUtf));
+		MethodrefConstant stringIndexOf = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("indexOf"), cp.addUtf8("(I)I")));
+		MethodrefConstant stringIndexOfFrom = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("indexOf"), cp.addUtf8("(II)I")));
+		MethodrefConstant stringReplace = cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("replace"),
+				cp.addUtf8("(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;")));
+		List<Integer> strEscCode = JvmRuntimeBuilder.buildStrEscBody(cp, stringLength, stringCharAt, stringIndexOf,
+				stringIndexOfFrom, stringSubstring, stringReplace, stringConcat);
+
 		// Build _lispToString and _consToString helper method bodies
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, objectToString, consToStringMethod,
 				nilStr, funcStr, ratioArrayClass, stringConcat, slashStr, charBoxClass, charPrin1Method,
 				arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, futurePrint, packedPrint,
-				packedIntPrint, instPrint);
+				packedIntPrint, instPrint, strEscMethod);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass);
@@ -1889,6 +1903,14 @@ public final class JvmLispCompiler implements LispCompiler {
 								})));
 					}
 				}
+				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, strEscName, strEscDescUtf,
+						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+							attr.writeU2(6)
+								.writeU2(2)
+								.writeCode((Object[]) strEscCode.toArray(new Integer[0]))
+								.writeU2(0)
+								.writeU2(0);
+						})));
 				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName, lispToStringDescUtf,
 						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 							attr.writeU2(3)

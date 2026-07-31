@@ -1017,6 +1017,27 @@ cases:
       hello
       (1 hello 3)
       12
+  - name: prin1-escapes-quotes-and-backslashes
+    source: |
+      (print "{\"hello\":\"aaa\"}")
+      (princ "{\"hello\":\"aaa\"}")
+      (terpri)
+      (princ (prin1-to-string "a\"b\\c"))
+      (terpri)
+      (format t "~s|~a~%" "a\"b" "a\"b")
+      (print (list "x\"y" 'foo))
+      (print (write-to-string "a\\b"))
+      (let ((s (concatenate 'string "a" (string (code-char 34)) "b"
+                            (string (code-char 92)) "c" (string #\Newline) "d")))
+        (print (list (equal (read-from-string (prin1-to-string s)) s) (length s))))
+    expected: |
+      "{\"hello\":\"aaa\"}"
+      {"hello":"aaa"}
+      "a\"b\\c"
+      "a\"b"|a"b
+      ("x\"y" FOO)
+      "\"a\\\\b\""
+      (T 7)
   - name: print-family-returns-its-argument
     source: |
       (print (print 11))
@@ -1388,7 +1409,7 @@ cases:
       (print (handler-case (error "plain ~a" 7) (error (e) (princ-to-string e))))
     expected: |
       "ci-rep: boom"
-      "#<CI-REP-LAM :MSG "boom">"
+      "#<CI-REP-LAM :MSG \"boom\">"
       "fixed text"
       "ci-rep: sub"
       "pg 1/2"
@@ -3586,10 +3607,10 @@ cases:
       1
       "[1,[2,3],false]"
       "[true,null,1.5]"
-      ""a\"b""
+      "\"a\\\"b\""
       "1.5"
-      "{"x":[1,2]}"
-      "{"deep":{"list":[{"k":"v"},2.5,true]}}"
+      "{\"x\":[1,2]}"
+      "{\"deep\":{\"list\":[{\"k\":\"v\"},2.5,true]}}"
       "[7]"
   # The URL / query-string library (url.lisp, spliced by UrlLibrary): percent
   # decoding/encoding must agree across the UTF-16-indexed backends
@@ -3657,11 +3678,11 @@ cases:
         (print (rontolisp:json-stringify
                 (make-instance 'ci-json-resp :status 200 :headers h :items (list 1 2 3)))))
     expected: |
-      "{"msg":"hi"}"
+      "{\"msg\":\"hi\"}"
       (:A 1)
-      "{"x":1}"
+      "{\"x\":1}"
       (("k" . 7))
-      "{"status":200,"headers":{"content-type":"application/json"},"items":[1,2,3]}"
+      "{\"status\":200,\"headers\":{\"content-type\":\"application/json\"},\"items\":[1,2,3]}"
   # rontolisp:alist-plist / plist-alist (subsets of the same-named alexandria
   # utilities, prelude-spliced) convert between the two list shapes with no hash
   # table in between, so unlike the *-hash-table pairs above both directions
@@ -3695,7 +3716,7 @@ cases:
       (print (rontolisp:json-stringify (rontolisp:alist-hash-table (list (cons "x" 1)))))
       (print (ci-prelude-shadow:alist-hash-table (list 1 2 3)))
     expected: |
-      "{"x":1}"
+      "{\"x\":1}"
       3
   # equal on strings compares content on every backend (the WASM _equal/_hash
   # runtime folds string bytes), so runtime-built strings work as hash-table
@@ -3840,7 +3861,7 @@ cases:
       %struct-IPS-PT
       "#<IPS-BOX :W 1 :H 2>"
       :IPS-V
-      "{"x":1,"y":"s"}"
+      "{\"x\":1,\"y\":\"s\"}"
   - name: struct-literal-read-syntax
     source: |
       (defstruct slr-pt (x 10) y)
@@ -4029,7 +4050,7 @@ cases:
       (print (with-output-to-string (ss-empty)))
     expected: |
       "a=42
-      "q" end
+      \"q\" end
       tail"
       ""
   - name: format-stream-destination
@@ -4037,7 +4058,7 @@ cases:
       (print (with-output-to-string (ss-fmt) (format ss-fmt "x=~a, y=~s~%" 1 "two")))
       (print (with-output-to-string (ss-fmt2) (print 42 ss-fmt2)))
     expected: |
-      "x=1, y="two"
+      "x=1, y=\"two\"
       "
       "42
       "
@@ -4076,7 +4097,7 @@ cases:
       (terpri)
     expected: |
       no newline
-      "(A "b" 3)"
+      "(A \"b\" 3)"
       x
       done
   - name: sequence-and-alist-test-key-keywords
@@ -5256,7 +5277,7 @@ cases:
     expected: |
       "x=5 y=7"
       to-stdout ok
-      ""q""
+      "\"q\""
   - name: reader-pipe-escaped-symbols
     source: |
       (print (symbol-name '|when used|))
@@ -5812,7 +5833,7 @@ cases:
       "ALTER TABLE t1 ADD CONSTRAINT c1 UNIQUE (a, b) DEFERRABLE INITIALLY DEFERRED"
       "[x|P]"
       "[yP|Q]"
-      "\u000A"
+      "\\u000A"
       :RESTRICT
       :CASCADE
       NIL

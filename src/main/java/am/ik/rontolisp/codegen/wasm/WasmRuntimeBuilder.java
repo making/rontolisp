@@ -2327,12 +2327,8 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.IF, 0x40);
-		// _write_str_gc(str, 0, len): the readable form keeps the surrounding quotes, so
-		// the whole array [0, len) is printed straight from the GC heap.
-		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
+		// Get length -> local 5 (the len field; local 5 is the array printer's i32 index
+		// scratch, which this branch always returns before reaching).
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -2340,7 +2336,47 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL);
+		w.writeSignedLeb128(5);
+		// A leading '"' (0x22) discriminates a real string from a bare symbol name (the
+		// same test _princ_val makes). A STRING prints its readable form:
+		// _write_str_gc(str, 1, len - 1, esc = 1) re-frames the CONTENT in quotes and
+		// escapes every embedded " / \ on the way out, so the reader can read it back
+		// (todo 216). A SYMBOL has no frame and no escaping: (0, len, esc = 0).
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		WasmEmitHelper.emitStrBytesArray(w);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x22);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
 		WasmEmitHelper.emitWriteStrGcCall(w);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL);
+		w.writeSignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		WasmEmitHelper.emitWriteStrGcCall(w);
+		w.write(Instruction.END);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
@@ -2603,7 +2639,8 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(0x22);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
-		// Strip quotes: _write_str_gc(str, 1, len - 1)
+		// Strip quotes: _write_str_gc(str, 1, len - 1, esc = 0) -- princ is the
+		// no-escape half by definition.
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.I32_CONST);
@@ -2613,6 +2650,8 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
 		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
 		WasmEmitHelper.emitWriteStrGcCall(w);
 		w.write(Instruction.ELSE);
 		// Bare symbol name: the display spelling is the symbol NAME alone -- no package
@@ -2669,14 +2708,16 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
-		// _write_str_gc(str, start, len) -- the third argument is the exclusive end
-		// position, not a count.
+		// _write_str_gc(str, start, len, esc = 0) -- the third argument is the exclusive
+		// end position, not a count.
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(7);
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(3);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
 		WasmEmitHelper.emitWriteStrGcCall(w);
 		w.write(Instruction.END);
 		w.write(Instruction.RETURN);

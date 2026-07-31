@@ -20,7 +20,7 @@ rontolisp.
 (rontolisp:json-stringify (list 1 (list 2 3) nil))   ; => "[1,[2,3],false]"
 (let ((h (make-hash-table :test 'equal)))
   (setf (gethash "name" h) "rontolisp")
-  (rontolisp:json-stringify h))   ; => "{"name":"rontolisp"}"
+  (rontolisp:json-stringify h))   ; => "{\"name\":\"rontolisp\"}"
 ```
 
 ## Value mapping
@@ -50,20 +50,20 @@ object), a list or vector (an array), or another instance:
 (defclass response () ((status :initarg :status) (body :initarg :body)))
 (let ((h (make-hash-table :test 'equal)))
   (setf (gethash "content-type" h) "text/plain")
-  (rontolisp:json-stringify (make-instance 'response :status 200 :body h)))   ; => "{"status":200,"body":{"content-type":"text/plain"}}"
+  (rontolisp:json-stringify (make-instance 'response :status 200 :body h)))   ; => "{\"status\":200,\"body\":{\"content-type\":\"text/plain\"}}"
 ```
 
 ```lisp
-(rontolisp:json-stringify :key)   ; => ""key""
+(rontolisp:json-stringify :key)   ; => "\"key\""
 (rontolisp:json-stringify 3/2)   ; => "1.5"
-(rontolisp:json-stringify "a\"b")   ; => ""a\"b""
+(rontolisp:json-stringify "a\"b")   ; => "\"a\\\"b\""
 ```
 
 A value parsed from JSON round-trips structurally:
 
 ```lisp
 (rontolisp:json-stringify
- (rontolisp:json-parse "{\"deep\": {\"list\": [{\"k\": \"v\"}, 2.5, true]}}"))   ; => "{"deep":{"list":[{"k":"v"},2.5,true]}}"
+ (rontolisp:json-parse "{\"deep\": {\"list\": [{\"k\": \"v\"}, 2.5, true]}}"))   ; => "{\"deep\":{\"list\":[{\"k\":\"v\"},2.5,true]}}"
 ```
 
 ## Limitations

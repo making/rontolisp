@@ -60,7 +60,7 @@ class ClPpcreE2eTest extends AsdfLibraryE2eSupport {
 	private static final List<String> EXPECTED = List.of("(1 5 #(3) #(4))", "(NIL NIL)", "(\"123\" #())",
 			"(\"a\" \"b\" \"c\")", "(\"foo\" \"bar\" \"baz\")", "\"frob bar\"", "\"bonono\"",
 			"(\"one\" \"three\" \"five\")", "(\"03-1234\" #(\"03\" \"1234\"))", "\"HELLO\"", "(\"1\" \"22\" \"333\")",
-			"(\"03\" \"1234\")", "\"a\\.b\\*c\"", "3", "(1 3 3 5)", "\"baaa\"", "(\"a\" \",\" \"b\")");
+			"(\"03\" \"1234\")", "\"a\\\\.b\\\\*c\"", "3", "(1 3 3 5)", "\"baaa\"", "(\"a\" \",\" \"b\")");
 
 	@Override
 	protected String systemDir() {

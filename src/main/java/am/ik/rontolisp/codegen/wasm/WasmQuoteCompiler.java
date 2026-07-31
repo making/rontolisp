@@ -291,7 +291,7 @@ final class WasmQuoteCompiler {
 				ctx.writer.writeHeapType(Type.EQ.code());
 			}
 			case LispTrue ignored -> WasmEmitHelper.emitTrue(ctx);
-			case LispString s -> WasmEmitHelper.compileStringLiteral(s.print(), ctx);
+			case LispString s -> WasmEmitHelper.compileStringLiteral(s.literal(), ctx);
 			case am.ik.rontolisp.LispChar c -> {
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(c.codePoint());

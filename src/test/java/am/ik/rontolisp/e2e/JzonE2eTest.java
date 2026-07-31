@@ -123,8 +123,8 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 
 	@Override
 	protected List<String> expected() {
-		return List.of("3.14", "#(1 2 3)", "\"a", "bA\"", "#(1.5 \"z\")", "\"0.1\"", "\"\"he\\\"llo\"\"",
-				"\"{\"a\":[1,2.5,\"x\",true,null]}\"", "\"[", "1,", "2,", "3", "]\"",
+		return List.of("3.14", "#(1 2 3)", "\"a", "bA\"", "#(1.5 \"z\")", "\"0.1\"", "\"\\\"he\\\\\\\"llo\\\"\"",
+				"\"{\\\"a\\\":[1,2.5,\\\"x\\\",true,null]}\"", "\"[", "1,", "2,", "3", "]\"",
 				// the README hash-table equalp series
 				"T", "T", "T", "T", "T", "T", "T",
 				// stringify #(null nil t 42 3.14 "Hello, world!") :stream t :pretty t
@@ -132,7 +132,7 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 				// allow-multiple-content signals json-parse-error
 				":CAUGHT-MULTIPLE-CONTENT",
 				// :replacer (returned string, echoed via print)
-				"\"[", "\"second\",", "\"Lupin the third\"", "]\"",
+				"\"[", "\\\"second\\\",", "\\\"Lupin the third\\\"", "]\"",
 				// a |...|-escaped symbol hash key (verbatim case)
 				"{", "\"noChange\": \"when used\"", "}",
 				// CLOS instance serialized as an object. The never-initialized alias slot
@@ -141,7 +141,7 @@ class JzonE2eTest extends AsdfLibraryE2eSupport {
 				// the README shows on a real CL.
 				"{", "\"name\": \"Anya\",", "\"job\": null,", "\"married\": false,", "\"children\": []", "}",
 				// stringify into a user-supplied fill-pointered adjustable string
-				"\"{\"k\":[1,true]}\"", ":CAUGHT-EOF");
+				"\"{\\\"k\\\":[1,true]}\"", ":CAUGHT-EOF");
 	}
 
 	// The README walkthrough pieces the four-backend exercise cannot carry -- a

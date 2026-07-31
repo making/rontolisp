@@ -38,7 +38,7 @@ With destination `nil` the result is returned as a string instead of printed:
 | Directive | Meaning |
 |-----------|---------|
 | `~a`, `~A` | Aesthetic: prints the argument like `princ` (strings without quotes). With `:`, nil prints as `()` |
-| `~s`, `~S` | Standard: prints the argument like `prin1` (readable, strings quoted). With `:`, nil prints as `()` |
+| `~s`, `~S` | Standard: prints the argument like `prin1` (readable; a string is quoted and its embedded `"` / `\` escaped). With `:`, nil prints as `()` |
 | `~d`, `~D` | Decimal integer. With `:`, digits are grouped with commas; with `@`, a `+` sign precedes non-negative values |
 | `~x`, `~o`, `~b` | Hexadecimal / octal / binary integer (uppercase digits), with the same parameters and modifiers as `~d` |
 | `~R` | Radix: `~NR` prints the integer in radix `N` (2-36). Without the radix parameter the decimal digits are printed (English cardinal/ordinal output is not implemented) |

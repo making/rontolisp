@@ -10,7 +10,7 @@ alexandria unchanged. It pairs with
 objects: keyword keys are down-cased, so `:name` becomes `"name"`.
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "rontolisp")))   ; => "{"name":"rontolisp"}"
+(rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "rontolisp")))   ; => "{\"name\":\"rontolisp\"}"
 ```
 
 Objects with several keys work the same way (the key order in the JSON output is

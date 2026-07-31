@@ -18,7 +18,7 @@ The report is what `princ`/`~A` prints; `prin1`/`~S` still shows the instance:
   (:report (lambda (c s) (format s "did not parse: ~a" (dc-report-demo-input c)))))
 (list (princ-to-string (make-condition 'dc-report-demo :input "x"))
       (prin1-to-string (make-condition 'dc-report-demo :input "x")))
-; => ("did not parse: x" "#<DC-REPORT-DEMO :INPUT "x">")
+; => ("did not parse: x" "#<DC-REPORT-DEMO :INPUT \"x\">")
 ```
 
 ```console

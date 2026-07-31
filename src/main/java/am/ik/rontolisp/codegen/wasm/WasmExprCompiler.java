@@ -71,7 +71,7 @@ final class WasmExprCompiler {
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			}
-			case LispString s -> WasmEmitHelper.compileStringLiteral(s.print(), ctx);
+			case LispString s -> WasmEmitHelper.compileStringLiteral(s.literal(), ctx);
 			case am.ik.rontolisp.LispChar c -> {
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(c.codePoint());

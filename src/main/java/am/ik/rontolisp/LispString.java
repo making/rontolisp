@@ -220,9 +220,60 @@ public final class LispString implements LispVal {
 		return this.chars[index];
 	}
 
+	/**
+	 * Returns the quote-framed spelling WITHOUT the {@code *print-escape*} escapes -- the
+	 * COMPILE-PATH STORAGE form, not a printed representation.
+	 *
+	 * <p>
+	 * Both compile backends encode a string value as its content framed in {@code "}
+	 * bytes, and use the leading {@code "} as the discriminator that tells a string from
+	 * a symbol name (see {@code .kb/core-representation.md}, "symbolp/stringp"). That
+	 * framing is part of the VALUE, so it must stay verbatim: the escaping belongs to the
+	 * printer ({@link #print()}) and is applied by the emitted runtime at print time, on
+	 * the content only. A storage site that used {@link #print()} would bake the escapes
+	 * into the value itself and make {@code length}/{@code char} see them.
+	 * @return the raw quote-framed content
+	 */
+	public String literal() {
+		return "\"" + this.value() + "\"";
+	}
+
+	/**
+	 * Escapes a string's content for the {@code *print-escape*} = {@code t} renderers
+	 * ({@code print}/{@code prin1}/{@code ~S}/{@code write-to-string}/
+	 * {@code prin1-to-string}), so that the reader can read the result back.
+	 *
+	 * <p>
+	 * CLHS 22.1.3.4: only the characters whose syntax type is single-escape ({@code \})
+	 * and the string terminator ({@code "}) are preceded by a {@code \}; every other
+	 * character -- a newline included -- is printed literally. Our reader ALSO accepts
+	 * {@code \n} / {@code \t} on input, but writing those back would be a different
+	 * string than the one printed (CL prints a literal newline), so the writer
+	 * deliberately covers less than the reader.
+	 * @param content the raw string content
+	 * @return the content with every {@code "} and {@code \} preceded by a {@code \}
+	 */
+	public static String escape(String content) {
+		int n = content.length();
+		StringBuilder sb = null;
+		for (int i = 0; i < n; i++) {
+			char c = content.charAt(i);
+			if (c == '"' || c == '\\') {
+				if (sb == null) {
+					sb = new StringBuilder(n + 8).append(content, 0, i);
+				}
+				sb.append('\\');
+			}
+			if (sb != null) {
+				sb.append(c);
+			}
+		}
+		return sb == null ? content : sb.toString();
+	}
+
 	@Override
 	public String print() {
-		return "\"" + this.value() + "\"";
+		return "\"" + escape(this.value()) + "\"";
 	}
 
 	@Override

@@ -23,6 +23,8 @@ final class WasmStringRuntimeBuilder {
 
 	private static final int QUOTE = 0x22;
 
+	private static final int BACKSLASH = 0x5C;
+
 	private static final int COLON = 0x3A;
 
 	// Transform modes for the shared build core.
@@ -246,32 +248,54 @@ final class WasmStringRuntimeBuilder {
 	 * alias the capture buffer -- the reason the print path reads the array rather than
 	 * going through {@code _str_to_mem}); otherwise it stages the slice into heap scratch
 	 * at {@code HEAP_PTR} (not advanced -- pure scratch) and hands it to
-	 * {@code _write_str} for stdout. {@code princ} passes {@code (1, len-1)} to strip the
-	 * quotes; {@code prin1} passes {@code (0, len)} to keep them.
-	 * @return the function body (signature {@code ((ref null eq),i32,i32)->()},
+	 * {@code _write_str} for stdout.
+	 *
+	 * <p>
+	 * {@code esc} selects the two printer modes. With {@code esc = 0} the slice goes out
+	 * verbatim: {@code princ} passes {@code (1, len-1)} to strip a string's frame quotes,
+	 * and a SYMBOL passes {@code (start, len)} (it has no frame). With {@code esc = 1}
+	 * the range is the string's CONTENT ({@code (1, len-1)}) and this function writes the
+	 * readable form around it -- an opening {@code "}, the content with every {@code "}
+	 * and {@code \} preceded by a {@code \} (the {@code *print-escape*} rule of CLHS
+	 * 22.1.3.4, mirroring {@code LispString.escape} on the interpreter and the reader's
+	 * un-escaping in {@code WasmReadRuntimeBuilder}), then a closing {@code "}. Framing
+	 * inside rather than at the call site is what keeps the two frame quotes from being
+	 * escaped themselves.
+	 * @return the function body (signature {@code ((ref null eq),i32,i32,i32)->()},
 	 * TYPE_WRITE_STR_GC)
 	 */
 	static byte[] buildWriteStrGcBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: str = 0, from = 1, to = 2. locals: arr = 3 ($str_bytes),
-		// dst = 4, i = 5, n = 6 (i32).
+		// params: str = 0, from = 1, to = 2, esc = 3. locals: arr = 4 ($str_bytes),
+		// dst = 5, i = 6, n = 7, b = 8 (i32). `n` is the worst-case byte count while
+		// growing the scratch, then the running OUTPUT count.
 		w.write(2);
 		w.write(1);
 		w.write(Type.REFNULL.code());
 		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
-		w.write(3);
+		w.write(4);
 		w.write(Type.I32);
-		int str = 0, from = 1, to = 2, arr = 3, dst = 4, i = 5, n = 6;
+		int str = 0, from = 1, to = 2, esc = 3, arr = 4, dst = 5, i = 6, n = 7, b = 8;
 		// arr = str.data
 		get(w, str);
 		WasmEmitHelper.emitStrBytesArray(w);
 		set(w, arr);
-		// n = to - from
+		// n = to - from; if (esc) n = n * 2 + 2 -- every content byte may take a
+		// backslash, plus the two frame quotes.
 		get(w, to);
 		get(w, from);
 		w.write(Instruction.I32_SUB);
 		set(w, n);
+		get(w, esc);
+		w.write(Instruction.IF, 0x40);
+		get(w, n);
+		i32(w, 2);
+		w.write(Instruction.I32_MUL);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		set(w, n);
+		w.write(Instruction.END);
 		// dst = (CAPTURE_FLAG ? CAPTURE_CUR : HEAP_PTR)
 		i32(w, WasmLispCompiler.CAPTURE_FLAG_ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
@@ -290,7 +314,20 @@ final class WasmStringRuntimeBuilder {
 			get(w, n);
 			w.write(Instruction.I32_ADD);
 		});
-		// i = from; while (i < to) { mem[dst + (i-from)] = array.get_u(arr, i); i++ }
+		// n = 0 (the output cursor from here on); if (esc) mem[dst + n++] = '"'
+		i32(w, 0);
+		set(w, n);
+		get(w, esc);
+		w.write(Instruction.IF, 0x40);
+		emitStoreByteAt(w, dst, n, QUOTE);
+		emitBump(w, n);
+		w.write(Instruction.END);
+		// i = from;
+		// while (i < to) {
+		// b = arr[i];
+		// if (esc && (b == '"' || b == '\\')) mem[dst + n++] = '\\';
+		// mem[dst + n++] = b; i++;
+		// }
 		get(w, from);
 		set(w, i);
 		w.write(Instruction.BLOCK, 0x40);
@@ -299,13 +336,28 @@ final class WasmStringRuntimeBuilder {
 		get(w, to);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF, 1);
-		get(w, dst);
-		get(w, i);
-		w.write(Instruction.I32_ADD);
-		get(w, from);
-		w.write(Instruction.I32_SUB);
 		arrGetLocal(w, arr, i);
+		set(w, b);
+		get(w, esc);
+		w.write(Instruction.IF, 0x40);
+		get(w, b);
+		i32(w, QUOTE);
+		w.write(Instruction.I32_EQ);
+		get(w, b);
+		i32(w, BACKSLASH);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		emitStoreByteAt(w, dst, n, BACKSLASH);
+		emitBump(w, n);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		get(w, dst);
+		get(w, n);
+		w.write(Instruction.I32_ADD);
+		get(w, b);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		emitBump(w, n);
 		get(w, i);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -313,6 +365,12 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
+		// if (esc) mem[dst + n++] = '"'
+		get(w, esc);
+		w.write(Instruction.IF, 0x40);
+		emitStoreByteAt(w, dst, n, QUOTE);
+		emitBump(w, n);
+		w.write(Instruction.END);
 		// Capture mode: CAPTURE_CUR = dst + n, then return. Stdout: _write_str(dst, n).
 		i32(w, WasmLispCompiler.CAPTURE_FLAG_ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
@@ -330,6 +388,23 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.END);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
+	}
+
+	// mem[base + offset] = literal byte.
+	private static void emitStoreByteAt(WasmWriter w, int baseLocal, int offsetLocal, int value) {
+		get(w, baseLocal);
+		get(w, offsetLocal);
+		w.write(Instruction.I32_ADD);
+		i32(w, value);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+	}
+
+	// local++
+	private static void emitBump(WasmWriter w, int local) {
+		get(w, local);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, local);
 	}
 
 	/**

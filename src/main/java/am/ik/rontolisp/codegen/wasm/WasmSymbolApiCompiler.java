@@ -40,7 +40,7 @@ final class WasmSymbolApiCompiler {
 		// "html" (matches CL; cl-who relies on it to emit <html>, not <:html>).
 		List<LispVal> parts = requireArgs(cons, LispNames.STRING);
 		if (parts.get(1) instanceof LispSymbol sym && sym.isKeyword()) {
-			WasmEmitHelper.compileStringLiteral(new LispString(sym.name().substring(1)).print(), ctx);
+			WasmEmitHelper.compileStringLiteral(new LispString(sym.name().substring(1)).literal(), ctx);
 			return;
 		}
 		compileUnaryCall(cons, LispNames.STRING, WasmLispCompiler.FUNC_PRINC_TO_STR, ctx);

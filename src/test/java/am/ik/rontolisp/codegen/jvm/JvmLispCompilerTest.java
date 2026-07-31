@@ -538,7 +538,7 @@ class JvmLispCompilerTest {
 				(handler-case (error 'cr-lam :msg "boom")
 				  (error (e) (print (list (format nil "~a" e) (format nil "~s" e)
 				                          (princ-to-string (make-condition 'cr-str))))))
-				""")).isEqualTo("(\"cr-lam: boom\" \"#<CR-LAM :MSG \"boom\">\" \"fixed text\")");
+				""")).isEqualTo("(\"cr-lam: boom\" \"#<CR-LAM :MSG \\\"boom\\\">\" \"fixed text\")");
 	}
 
 	@Test
@@ -1574,7 +1574,7 @@ class JvmLispCompilerTest {
 				  (terpri s)
 				  (prin1 "q" s)
 				  (write-line " end" s)
-				  (write-string "tail" s)))""")).isEqualTo("\"a=42\n\"q\" end\ntail\"");
+				  (write-string "tail" s)))""")).isEqualTo("\"a=42\n\\\"q\\\" end\ntail\"");
 	}
 
 	@Test
@@ -2437,6 +2437,28 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunPrin1ToString() throws Exception {
 		assertThat(compileAndRun("(princ (prin1-to-string \"abc\"))")).isEqualTo("\"abc\"");
+	}
+
+	@Test
+	void compileAndRunPrin1EscapesQuotesAndBackslashesInStrings() throws Exception {
+		// *print-escape* = t escapes the embedded " and \ (todo 216); princ / ~a do not.
+		// A bare SYMBOL still prints verbatim -- the leading quote is the discriminator.
+		assertThat(compileAndRun("(prin1 \"{\\\"hello\\\":\\\"aaa\\\"}\")"))
+			.isEqualTo("\"{\\\"hello\\\":\\\"aaa\\\"}\"");
+		assertThat(compileAndRun("(prin1 (list \"x\\\"y\" 'foo))")).isEqualTo("(\"x\\\"y\" FOO)");
+		assertThat(compileAndRun("(princ (prin1-to-string \"a\\\"b\\\\c\"))")).isEqualTo("\"a\\\"b\\\\c\"");
+		assertThat(compileAndRun("(princ (format nil \"~s|~a\" \"a\\\"b\" \"a\\\"b\"))")).isEqualTo("\"a\\\"b\"|a\"b");
+		assertThat(compileAndRun("(princ \"{\\\"hello\\\":\\\"aaa\\\"}\")")).isEqualTo("{\"hello\":\"aaa\"}");
+	}
+
+	@Test
+	void compileAndRunPrin1OutputReadsBackAsTheSameString() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((s (concatenate 'string "a" (string (code-char 34)) "b"
+				                      (string (code-char 92)) "c"
+				                      (string #\\Newline) "d")))
+				  (prin1 (list (equal (read-from-string (prin1-to-string s)) s) (length s))))
+				""")).isEqualTo("(T 7)");
 	}
 
 	@Test
@@ -6561,7 +6583,7 @@ class JvmLispCompilerTest {
 				(print (try "#1=(a b)"))
 				""")).isEqualTo(
 				"""
-						"Unknown character name: #\\Foo"
+						"Unknown character name: #\\\\Foo"
 						"Invalid digits after #x: Z"
 						"#S(NOSUCH ...): NOSUCH is not a defined structure type"
 						"#S(SIMPLE-ERROR ...): SIMPLE-ERROR is not a defined structure type (it names a class; #S reads defstruct types only)"
@@ -7498,14 +7520,14 @@ class JvmLispCompilerTest {
 				(let ((h (make-hash-table :test 'equal)))
 				  (setf (gethash "x" h) (list 1 2))
 				  (print (rontolisp:json-stringify h)))
-				""")).isEqualTo("\"[1,[2,3],false]\"\n\"[true,null,1.5]\"\n\"1.5\"\n\"{\"x\":[1,2]}\"");
+				""")).isEqualTo("\"[1,[2,3],false]\"\n\"[true,null,1.5]\"\n\"1.5\"\n\"{\\\"x\\\":[1,2]}\"");
 	}
 
 	@Test
 	void compileAndRunJsonRoundTrip() throws Exception {
 		assertThat(compileAndRunJson(
 				"(print (rontolisp:json-stringify (rontolisp:json-parse \"{\\\"deep\\\": {\\\"list\\\": [{\\\"k\\\": \\\"v\\\"}, 2.5, true]}}\")))"))
-			.isEqualTo("\"{\"deep\":{\"list\":[{\"k\":\"v\"},2.5,true]}}\"");
+			.isEqualTo("\"{\\\"deep\\\":{\\\"list\\\":[{\\\"k\\\":\\\"v\\\"},2.5,true]}}\"");
 	}
 
 	@Test
@@ -7544,7 +7566,7 @@ class JvmLispCompilerTest {
 					(print (rontolisp:hash-table-alist (rontolisp:alist-hash-table (list (cons "k" 7)))))
 					""")));
 		assertThat(compileAndRun(program))
-			.isEqualTo("\"{\"name\":\"x\"}\"\n(:A 5)\n\"{\"msg\":\"hi\"}\"\n((\"k\" . 7))");
+			.isEqualTo("\"{\\\"name\\\":\\\"x\\\"}\"\n(:A 5)\n\"{\\\"msg\\\":\\\"hi\\\"}\"\n((\"k\" . 7))");
 	}
 
 	@Test
@@ -7568,8 +7590,8 @@ class JvmLispCompilerTest {
 				  (setf (gethash "content-type" h) "application/json")
 				  (print (rontolisp:json-stringify
 				          (make-instance 'json-resp :status 200 :headers h :items (list 1 2 3)))))
-				"""))
-			.isEqualTo("\"{\"status\":200,\"headers\":{\"content-type\":\"application/json\"},\"items\":[1,2,3]}\"");
+				""")).isEqualTo(
+				"\"{\\\"status\\\":200,\\\"headers\\\":{\\\"content-type\\\":\\\"application/json\\\"},\\\"items\\\":[1,2,3]}\"");
 	}
 
 	@Test
@@ -8011,7 +8033,7 @@ class JvmLispCompilerTest {
 				(print (apply #'format nil "x=~a y=~d" '(5 7)))
 				(funcall #'format t "to-stdout ~a~%" "ok")
 				(print (funcall #'format nil "~s" "q"))
-				""")).isEqualTo("\"x=5 y=7\"\nto-stdout ok\n\"\"q\"\"");
+				""")).isEqualTo("\"x=5 y=7\"\nto-stdout ok\n\"\\\"q\\\"\"");
 	}
 
 	@Test

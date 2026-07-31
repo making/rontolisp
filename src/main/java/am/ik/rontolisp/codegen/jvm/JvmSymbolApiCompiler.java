@@ -52,7 +52,7 @@ final class JvmSymbolApiCompiler {
 		// A keyword's package colon is a marker, not part of its name: (string :html) is
 		// "html" (matches CL; cl-who relies on it to emit <html>, not <:html>).
 		if (parts.get(1) instanceof LispSymbol sym && sym.isKeyword()) {
-			JvmEmitHelper.compileStringLiteral(new LispString(sym.name().substring(1)).print(), ctx);
+			JvmEmitHelper.compileStringLiteral(new LispString(sym.name().substring(1)).literal(), ctx);
 			return;
 		}
 		JvmPrincToStringCompiler.emitToString(parts.get(1), ctx.lispToDisplayString.index(), ctx, className);

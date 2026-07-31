@@ -115,7 +115,7 @@ alist)、`:body` (文字列) を指定できます:
 ```lisp
 (let ((h (make-hash-table :test 'equal)))
   (setf (gethash "name" h) "rontolisp")
-  (rontolisp:json-stringify h))   ; => "{"name":"rontolisp"}"
+  (rontolisp:json-stringify h))   ; => "{\"name\":\"rontolisp\"}"
 ```
 
 ```lisp
@@ -140,11 +140,11 @@ alist)、`:body` (文字列) を指定できます:
 リテラルから1つの式で書けます:
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:plist-hash-table '(:name "rontolisp" :stars 1)))   ; => "{"name":"rontolisp","stars":1}"
+(rontolisp:json-stringify (rontolisp:plist-hash-table '(:name "rontolisp" :stars 1)))   ; => "{\"name\":\"rontolisp\",\"stars\":1}"
 ```
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:alist-hash-table '(("name" . "rontolisp") ("stars" . 1))))   ; => "{"name":"rontolisp","stars":1}"
+(rontolisp:json-stringify (rontolisp:alist-hash-table '(("name" . "rontolisp") ("stars" . 1))))   ; => "{\"name\":\"rontolisp\",\"stars\":1}"
 ```
 
 逆変換の

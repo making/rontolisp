@@ -125,11 +125,21 @@ in `WasmStringRuntimeBuilder`):
   stack above the unparsed input), `intern`, the host `:string` boundary
   (`WasmExportCompiler.emitStringResult`, reused by imports), the fetch wire, `tcp`
   host, and the string-stream copies.
-- `FUNC_WRITE_STR_GC` `_write_str_gc(str,from,to)` -- the print path for a string
+- `FUNC_WRITE_STR_GC` `_write_str_gc(str,from,to,esc)` -- the print path for a string
   value: appends `[from,to)` straight from the GC array to `CAPTURE_CUR` in capture
   mode (no linear staging, so it can never alias the capture buffer while printing
   inside a `*-to-string` capture) or stages into HEAP_PTR scratch + `_write_str` for
-  stdout. `princ` passes `(1,len-1)` to strip quotes, `prin1` `(0,len)`.
+  stdout. `princ` passes `(1,len-1,0)` to strip quotes; a symbol (no frame) passes
+  `(start,len,0)`. **`prin1` passes `(1,len-1,1)`**: with `esc = 1` the callee writes
+  the frame quotes ITSELF around the content and precedes every embedded `"` / `\`
+  with a `\` (the `*print-escape*` rule -- todo 216). Framing inside the callee is
+  what keeps the two frame quotes from being escaped as content; the scratch is grown
+  to the worst case `n*2+2` and the actual output count is what `CAPTURE_CUR` /
+  `_write_str` sees. The string branch of `_print_val` therefore makes the same
+  leading-`"` string-vs-symbol test `_princ_val` does. The reader's un-escaping in
+  `WasmReadRuntimeBuilder` is the mirror; the escape set is the reader's minus
+  `\n`/`\t` (CL prints a newline literally). See
+  [core-representation.md](core-representation.md) for the all-backend table.
 
 ## String streams (eager copy)
 

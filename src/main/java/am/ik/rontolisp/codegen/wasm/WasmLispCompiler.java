@@ -546,8 +546,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	// into linear[ptr..) and returns its length. See the type comment.
 	static final int FUNC_STR_TO_MEM = FUNC_STR_FRESH + 1;
 
-	// _write_str_gc (str, from, to) -> () (TYPE_WRITE_STR_GC): prints bytes [from, to)
-	// of a string value straight from its GC array. See the type comment.
+	// _write_str_gc (str, from, to, esc) -> () (TYPE_WRITE_STR_GC): prints bytes
+	// [from, to) of a string value straight from its GC array; esc = 1 frames the range
+	// in quotes and escapes the embedded " / \. See the type comment.
 	static final int FUNC_WRITE_STR_GC = FUNC_STR_TO_MEM + 1;
 
 	// _charvec_to_str (v) -> (ref null eq): normalizes a mutable character vector (the
@@ -3065,13 +3066,14 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.write(Type.I32);
 				});
-				// type 36 (TYPE_WRITE_STR_GC): _write_str_gc ((ref null eq), i32, i32) ->
-				// ()
+				// type 36 (TYPE_WRITE_STR_GC): _write_str_gc ((ref null eq), i32, i32,
+				// i32) -> () -- the trailing i32 is the *print-escape* flag.
 				types.add(w -> {
 					w.write(Type.FUNC);
-					w.write(3);
+					w.write(4);
 					w.write(Type.REFNULL.code());
 					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I32);
 					w.write(Type.I32);
 					w.write(Type.I32);
 					w.write(0);

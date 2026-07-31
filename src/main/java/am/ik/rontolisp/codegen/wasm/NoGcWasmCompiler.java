@@ -990,6 +990,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (printUsed) {
 			literals.add("\n");
 			literals.add("\"");
+			// The single-escape byte print emits before an embedded " / \ (todo 216).
+			literals.add("\\");
 			literals.add("T");
 			literals.add("NIL");
 		}
@@ -4753,17 +4755,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			case STRING -> {
 				// A string argument is passthrough -- nothing allocated, no bracket.
-				// print (prin1 semantics) frames it in quotes; princ writes it bare.
+				// print (prin1 semantics) frames it in quotes and escapes the embedded
+				// " / \ so the text reads back; princ writes it bare.
 				int s = fn.allocLocal(Ty.STRING);
 				compileCoerced(arg, fn, Ty.STRING);
 				w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
 				if (print) {
 					emitWriteLiteral(fn, "\"");
-				}
-				emitWriteString(fn, s);
-				if (print) {
+					emitWriteStringEscaped(fn, s);
 					emitWriteLiteral(fn, "\"");
 					emitWriteLiteral(fn, "\n");
+				}
+				else {
+					emitWriteString(fn, s);
 				}
 				w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
 				return Ty.STRING;
@@ -4791,6 +4795,77 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		fn.writer.write(Instruction.I32_CONST)
 			.writeSignedLeb128(content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
 		fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.writeStdoutIndex());
+	}
+
+	// Writes the [len][bytes] string held in the given local to stdout with the
+	// *print-escape* escaping the readable renderer owes the reader: every embedded '"'
+	// and '\' is preceded by a '\' (CLHS 22.1.3.4; a newline stays literal). The
+	// surrounding frame quotes are the caller's -- they must NOT be escaped.
+	//
+	// --no-gc has no allocation here by design (a print must not move the bump heap), so
+	// the escaped text is written as RUNS: the unescaped stretch since the last escape
+	// goes out in one __write_stdout, then the single '\' literal. A string with no
+	// escapable byte therefore costs exactly one write, as before.
+	private void emitWriteStringEscaped(Fn fn, int strLocal) {
+		WasmWriter w = fn.writer;
+		int len = fn.allocLocal(Ty.STRING);
+		int i = fn.allocLocal(Ty.STRING);
+		int run = fn.allocLocal(Ty.STRING);
+		int b = fn.allocLocal(Ty.STRING);
+		emitStrLen(w, strLocal);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(run);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		// b = mem[strLocal + 4 + i]
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(strLocal);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(b);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(b);
+		w.write(Instruction.I32_CONST).writeSignedLeb128('"');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(b);
+		w.write(Instruction.I32_CONST).writeSignedLeb128('\\');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		emitWriteRun(fn, strLocal, run, i);
+		emitWriteLiteral(fn, "\\");
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(run);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		emitWriteRun(fn, strLocal, run, len);
+	}
+
+	// __write_stdout(strLocal + 4 + from, to - from): one unescaped stretch of a string's
+	// bytes.
+	private void emitWriteRun(Fn fn, int strLocal, int fromLocal, int toLocal) {
+		WasmWriter w = fn.writer;
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(strLocal);
+		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(fromLocal);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(toLocal);
+		w.write(Instruction.GET_LOCAL).writeSignedLeb128(fromLocal);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.writeStdoutIndex());
 	}
 
 	// Writes the [len][bytes] string held in the given local to stdout via the

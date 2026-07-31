@@ -11,7 +11,7 @@
 [`rontolisp:json-stringify`](rontolisp-json-stringify.md) と組み合わせられます。
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:alist-hash-table '(("n" . 1))))   ; => "{"n":1}"
+(rontolisp:json-stringify (rontolisp:alist-hash-table '(("n" . 1))))   ; => "{\"n\":1}"
 ```
 
 デフォルトのハッシュテーブルのテストは `alexandria:alist-hash-table` と同じく

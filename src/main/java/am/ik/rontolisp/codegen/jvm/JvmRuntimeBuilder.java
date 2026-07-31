@@ -512,7 +512,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
 			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
-			@org.jspecify.annotations.Nullable InstPrint instPrint) {
+			@org.jspecify.annotations.Nullable InstPrint instPrint, MethodrefConstant strEscMethod) {
 		List<Integer> code = new ArrayList<>();
 		// if (val == null) return "nil";
 		code.add(Opcode.ALOAD_0);
@@ -534,7 +534,7 @@ final class JvmRuntimeBuilder {
 		// used; a mutable character vector instead renders via _strv, quote-framed like
 		// the String branch)
 		emitArrayBranch(code, arrayListClass, arrayToStringMethod, packedPrint, packedIntPrint, strvMethod, stringClass,
-				null, null);
+				null, null, strEscMethod);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -563,7 +563,10 @@ final class JvmRuntimeBuilder {
 		emitU2(code, doubleToString.index());
 		code.add(Opcode.ARETURN);
 
-		// if (val instanceof String) return (String)val;
+		// if (val instanceof String) return _strEsc((String)val);
+		//
+		// The quote-framed content still needs its embedded " and \ escaped before it can
+		// be read back; _strEsc passes a bare symbol name through untouched (todo 216).
 		patchBranch(code, ifNotDoublePos, code.size());
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
@@ -574,6 +577,8 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, stringClass.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, strEscMethod.index());
 		code.add(Opcode.ARETURN);
 
 		// if (val instanceof int[]) return _charPrin1(((int[])val)[0]);
@@ -652,6 +657,90 @@ final class JvmRuntimeBuilder {
 		emitDefaultTail(code, objectToString, javaPrint);
 
 		return code;
+	}
+
+	/**
+	 * Builds {@code _strEsc(String s) -> String}: the {@code *print-escape*} = {@code t}
+	 * rendering of one quote-framed string value.
+	 *
+	 * <p>
+	 * The JVM compile path stores a string as its content framed in {@code "} characters
+	 * and a symbol as its bare name, so the leading {@code "} is the discriminator: a
+	 * value that does not start with one is a symbol and is returned verbatim. For a real
+	 * string every {@code "} and {@code \} of the CONTENT is preceded by a {@code \}
+	 * (CLHS 22.1.3.4 -- the two syntax types the reader would otherwise choke on; a
+	 * newline stays literal), so {@code (read-from-string (prin1-to-string s))} is
+	 * {@code s} again. The escape set is the one {@code LispString.escape} applies on the
+	 * interpreter.
+	 *
+	 * <p>
+	 * The scan that decides whether anything needs escaping returns the argument
+	 * unchanged in the common case; that fast path matters because {@code _lispToString}
+	 * is also the JVM hash-table runtime's key function, not just the printer.
+	 */
+	static List<Integer> buildStrEscBody(ConstantPool cp, MethodrefConstant stringLength,
+			MethodrefConstant stringCharAt, MethodrefConstant stringIndexOf, MethodrefConstant stringIndexOfFrom,
+			MethodrefConstant stringSubstring, MethodrefConstant stringReplace, MethodrefConstant stringConcat) {
+		JvmAsm a = new JvmAsm();
+		int slotS = 0, slotN = 1;
+		int framed = a.label();
+		int returnAsIs = a.label();
+		int escape = a.label();
+		// int n = s.length(); if (n < 2) return s;
+		a.aload(slotS);
+		a.invokevirtual(stringLength);
+		a.istore(slotN);
+		a.iload(slotN);
+		a.iconst(2);
+		a.branch(Opcode.IF_ICMPGE, framed);
+		a.branch(Opcode.GOTO, returnAsIs);
+		// if (s.charAt(0) != '"') return s; -- a symbol name, printed verbatim
+		a.bind(framed);
+		a.aload(slotS);
+		a.iconst(0);
+		a.invokevirtual(stringCharAt);
+		a.iconst('"');
+		a.branch(Opcode.IF_ICMPNE, returnAsIs);
+		// Nothing to escape when the content holds no '\' and the only '"' at or after
+		// index 1 is the closing frame: if (s.indexOf('\\') >= 0) goto escape;
+		a.aload(slotS);
+		a.iconst('\\');
+		a.invokevirtual(stringIndexOf);
+		a.branch(Opcode.IFGE, escape);
+		// if (s.indexOf('"', 1) != n - 1) goto escape;
+		a.aload(slotS);
+		a.iconst('"');
+		a.iconst(1);
+		a.invokevirtual(stringIndexOfFrom);
+		a.iload(slotN);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.branch(Opcode.IF_ICMPNE, escape);
+		a.bind(returnAsIs);
+		a.aload(slotS);
+		a.areturn();
+		// return "\"" + s.substring(1, n - 1).replace("\\", "\\\\").replace("\"", "\\\"")
+		// + "\"" -- the backslash first, or the backslashes this very step introduces
+		// would be escaped again.
+		a.bind(escape);
+		a.ldcString(cp.addString("\""));
+		a.aload(slotS);
+		a.iconst(1);
+		a.iload(slotN);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.invokevirtual(stringSubstring);
+		a.ldcString(cp.addString("\\"));
+		a.ldcString(cp.addString("\\\\"));
+		a.invokevirtual(stringReplace);
+		a.ldcString(cp.addString("\""));
+		a.ldcString(cp.addString("\\\""));
+		a.invokevirtual(stringReplace);
+		a.invokevirtual(stringConcat);
+		a.ldcString(cp.addString("\""));
+		a.invokevirtual(stringConcat);
+		a.areturn();
+		return a.finish();
 	}
 
 	/**
@@ -865,7 +954,7 @@ final class JvmRuntimeBuilder {
 		// a mutable character vector instead renders via _strv with the surrounding
 		// quotes stripped, like the String branch)
 		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, packedPrint, packedIntPrint, strvMethod,
-				stringClass, stringLength, stringSubstring);
+				stringClass, stringLength, stringSubstring, null);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -1551,7 +1640,8 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod, ClassConstant stringClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant stringLength,
-			@org.jspecify.annotations.Nullable MethodrefConstant stringSubstring) {
+			@org.jspecify.annotations.Nullable MethodrefConstant stringSubstring,
+			@org.jspecify.annotations.Nullable MethodrefConstant strEscMethod) {
 		if (arrayListClass == null || arrayToStringMethod == null) {
 			return;
 		}
@@ -1602,7 +1692,9 @@ final class JvmRuntimeBuilder {
 			code.add(Opcode.CHECKCAST);
 			emitU2(code, stringClass.index());
 			if (stringLength == null || stringSubstring == null) {
-				// prin1: the quote-framed string, exactly what the String branch returns
+				// prin1: the quote-framed string, escaped exactly like the String branch
+				code.add(Opcode.INVOKESTATIC);
+				emitU2(code, java.util.Objects.requireNonNull(strEscMethod).index());
 				code.add(Opcode.ARETURN);
 			}
 			else {

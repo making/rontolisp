@@ -110,7 +110,7 @@ vector or list an array, and `nil`/`t`/the symbol `null` become
 ```lisp
 (let ((h (make-hash-table :test 'equal)))
   (setf (gethash "name" h) "rontolisp")
-  (rontolisp:json-stringify h))   ; => "{"name":"rontolisp"}"
+  (rontolisp:json-stringify h))   ; => "{\"name\":\"rontolisp\"}"
 ```
 
 ```lisp
@@ -134,11 +134,11 @@ like `:name` down-cases to `"name"`), so a JSON object is one expression from a
 quoted literal:
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:plist-hash-table '(:name "rontolisp" :stars 1)))   ; => "{"name":"rontolisp","stars":1}"
+(rontolisp:json-stringify (rontolisp:plist-hash-table '(:name "rontolisp" :stars 1)))   ; => "{\"name\":\"rontolisp\",\"stars\":1}"
 ```
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:alist-hash-table '(("name" . "rontolisp") ("stars" . 1))))   ; => "{"name":"rontolisp","stars":1}"
+(rontolisp:json-stringify (rontolisp:alist-hash-table '(("name" . "rontolisp") ("stars" . 1))))   ; => "{\"name\":\"rontolisp\",\"stars\":1}"
 ```
 
 The inverses

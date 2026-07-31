@@ -10,7 +10,7 @@ alexandria へ切り替えられます。JSON オブジェクトの構築では
 キーワードのキーは小文字化されるため、`:name` は `"name"` になります。
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "rontolisp")))   ; => "{"name":"rontolisp"}"
+(rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "rontolisp")))   ; => "{\"name\":\"rontolisp\"}"
 ```
 
 複数のキーを持つオブジェクトも同様に動作します(JSON 出力のキー順序は

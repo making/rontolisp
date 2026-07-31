@@ -52,7 +52,7 @@ final class JvmExprCompiler {
 			case LispDouble d -> JvmEmitHelper.compileDouble(d.value(), ctx);
 			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
 			case LispTrue ignored -> JvmEmitHelper.compileTrue(ctx);
-			case LispString s -> JvmEmitHelper.compileStringLiteral(s.print(), ctx);
+			case LispString s -> JvmEmitHelper.compileStringLiteral(s.literal(), ctx);
 			case LispChar c -> JvmEmitHelper.compileCharLiteral(c.codePoint(), ctx);
 			case LispSymbol sym -> {
 				if (sym.isKeyword()) {

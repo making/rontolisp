@@ -200,7 +200,7 @@ final class JvmQuoteCompiler {
 			case LispDouble d -> JvmEmitHelper.compileDouble(d.value(), ctx);
 			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
 			case LispTrue ignored -> JvmEmitHelper.compileTrue(ctx);
-			case LispString s -> JvmEmitHelper.compileStringLiteral(s.print(), ctx);
+			case LispString s -> JvmEmitHelper.compileStringLiteral(s.literal(), ctx);
 			case am.ik.rontolisp.LispChar c -> JvmEmitHelper.compileCharLiteral(c.codePoint(), ctx);
 			case LispSymbol sym -> JvmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx, className);

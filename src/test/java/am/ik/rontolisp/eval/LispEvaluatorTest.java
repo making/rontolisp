@@ -1186,6 +1186,33 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void prin1EscapesQuotesAndBackslashesInStrings() {
+		// *print-escape* = t: an embedded " or \ is preceded by a \, so the output reads
+		// back. A NEWLINE is deliberately NOT escaped -- CLHS escapes only the string
+		// terminator and the single-escape character (todo 216).
+		assertThat(capture("(prin1 \"{\\\"hello\\\":\\\"aaa\\\"}\")")).isEqualTo("\"{\\\"hello\\\":\\\"aaa\\\"}\"");
+		assertThat(capture("(prin1 \"a\\\"b\\\\c\")")).isEqualTo("\"a\\\"b\\\\c\"");
+		assertThat(capture("(prin1 (list \"x\\\"y\" 'foo))")).isEqualTo("(\"x\\\"y\" FOO)");
+		assertThat(eval("(format nil \"~s\" \"a\\\"b\")")).isEqualTo(new LispString("\"a\\\"b\""));
+		assertThat(eval("(write-to-string \"a\\\\b\")")).isEqualTo(new LispString("\"a\\\\b\""));
+		// princ / ~a stay the no-escape half by definition.
+		assertThat(capture("(princ \"{\\\"hello\\\":\\\"aaa\\\"}\")")).isEqualTo("{\"hello\":\"aaa\"}");
+		assertThat(eval("(princ-to-string \"a\\\"b\\\\c\")")).isEqualTo(new LispString("a\"b\\c"));
+	}
+
+	@Test
+	void prin1OutputReadsBackAsTheSameString() {
+		// The defining contract of prin1: (read-from-string (prin1-to-string s)) == s,
+		// for a string carrying a quote, a backslash and a literal newline (todo 216).
+		assertThat(evalMulti("""
+				(let ((s (concatenate 'string "a" (string (code-char 34)) "b"
+				                      (string (code-char 92)) "c"
+				                      (string #\\Newline) "d")))
+				  (list (equal (read-from-string (prin1-to-string s)) s) (length s)))
+				""").print()).isEqualTo("(T 7)");
+	}
+
+	@Test
 	void evalConcatenateStrings() {
 		assertThat(eval("(concatenate 'string \"foo\" \"bar\" \"baz\")")).isEqualTo(new LispString("foobarbaz"));
 		assertThat(eval("(concatenate 'string)")).isEqualTo(new LispString(""));
@@ -7559,21 +7586,21 @@ class LispEvaluatorTest {
 		// nil is false, the symbol null is null, a list or vector is an array
 		assertThat(eval("(rontolisp:json-stringify (list 1 (list 2 3) nil))").print()).isEqualTo("\"[1,[2,3],false]\"");
 		assertThat(eval("(rontolisp:json-stringify (vector t 'null 1.5))").print()).isEqualTo("\"[true,null,1.5]\"");
-		assertThat(eval("(rontolisp:json-stringify \"a\\\"b\")").print()).isEqualTo("\"\"a\\\"b\"\"");
-		assertThat(eval("(rontolisp:json-stringify :key)").print()).isEqualTo("\"\"KEY\"\"");
+		assertThat(eval("(rontolisp:json-stringify \"a\\\"b\")").print()).isEqualTo("\"\\\"a\\\\\\\"b\\\"\"");
+		assertThat(eval("(rontolisp:json-stringify :key)").print()).isEqualTo("\"\\\"KEY\\\"\"");
 		assertThat(eval("(rontolisp:json-stringify 3/2)").print()).isEqualTo("\"1.5\"");
 		// a hash table becomes an object
 		assertThat(eval("""
 				(let ((h (make-hash-table :test 'equal)))
 				  (setf (gethash "x" h) (list 1 2))
-				  (rontolisp:json-stringify h))""").print()).isEqualTo("\"{\"x\":[1,2]}\"");
+				  (rontolisp:json-stringify h))""").print()).isEqualTo("\"{\\\"x\\\":[1,2]}\"");
 	}
 
 	@Test
 	void jsonRoundTripPreservesStructure() {
 		assertThat(eval(
 				"(rontolisp:json-stringify (rontolisp:json-parse \"{\\\"deep\\\": {\\\"list\\\": [{\\\"k\\\": \\\"v\\\"}, 2.5, true]}}\"))")
-			.print()).isEqualTo("\"{\"deep\":{\"list\":[{\"k\":\"v\"},2.5,true]}}\"");
+			.print()).isEqualTo("\"{\\\"deep\\\":{\\\"list\\\":[{\\\"k\\\":\\\"v\\\"},2.5,true]}}\"");
 	}
 
 	@Test
@@ -7589,7 +7616,7 @@ class LispEvaluatorTest {
 		assertThat(eval("""
 				(rontolisp:json-stringify
 				 (rontolisp:plist-hash-table (list :name "rontolisp" :ok t :ver 1.5)))""").print())
-			.isEqualTo("\"{\"name\":\"rontolisp\",\"ok\":true,\"ver\":1.5}\"");
+			.isEqualTo("\"{\\\"name\\\":\\\"rontolisp\\\",\\\"ok\\\":true,\\\"ver\\\":1.5}\"");
 		assertThat(eval("(rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 5)))").print())
 			.isEqualTo("(:A 5)");
 		// trailing arguments pass through to make-hash-table, like alexandria
@@ -7604,7 +7631,7 @@ class LispEvaluatorTest {
 		assertThat(eval("""
 				(rontolisp:json-stringify
 				 (rontolisp:alist-hash-table (list (cons "host" "localhost") (cons "n" 2))))""").print())
-			.isEqualTo("\"{\"host\":\"localhost\",\"n\":2}\"");
+			.isEqualTo("\"{\\\"host\\\":\\\"localhost\\\",\\\"n\\\":2}\"");
 		assertThat(eval("(rontolisp:hash-table-alist (rontolisp:alist-hash-table (list (cons \"k\" 7))))").print())
 			.isEqualTo("((\"k\" . 7))");
 		// first occurrence of a key wins, like alexandria
@@ -7641,8 +7668,8 @@ class LispEvaluatorTest {
 				(let ((h (make-hash-table :test 'equal)))
 				  (setf (gethash "content-type" h) "application/json")
 				  (rontolisp:json-stringify
-				   (make-instance 'json-resp :status 200 :headers h :items (list 1 2 3))))""").print())
-			.isEqualTo("\"{\"status\":200,\"headers\":{\"content-type\":\"application/json\"},\"items\":[1,2,3]}\"");
+				   (make-instance 'json-resp :status 200 :headers h :items (list 1 2 3))))""").print()).isEqualTo(
+				"\"{\\\"status\\\":200,\\\"headers\\\":{\\\"content-type\\\":\\\"application/json\\\"},\\\"items\\\":[1,2,3]}\"");
 	}
 
 	@Test
@@ -8043,7 +8070,7 @@ class LispEvaluatorTest {
 				  (handler-case (read-from-string "#S(NOSUCH :X 1)") (error (e) (simple-condition-format-control e)))
 				  (handler-case (read-from-string "#S(POINT :Z 1)") (error (e) (simple-condition-format-control e)))
 				  (handler-case (read-from-string "1/0") (error (e) (simple-condition-format-control e))))
-				""").print()).isEqualTo("(\"Unknown character name: #\\Foo\" \"Invalid digits after #x: Z\" "
+				""").print()).isEqualTo("(\"Unknown character name: #\\\\Foo\" \"Invalid digits after #x: Z\" "
 				+ "\"#S(NOSUCH ...): NOSUCH is not a defined structure type\" "
 				+ "\"#S(POINT ...): POINT has no slot named :Z\" \"Division by zero in ratio literal: 1/0\")");
 	}
@@ -8507,7 +8534,7 @@ class LispEvaluatorTest {
 				(handler-case (error 'cr-lam :msg "boom")
 				  (error (e) (list (format nil "~a" e) (format nil "~s" e)
 				                   (princ-to-string (make-condition 'cr-str)))))
-				""").print()).isEqualTo("(\"cr-lam: boom\" \"#<CR-LAM :MSG \"boom\">\" \"fixed text\")");
+				""").print()).isEqualTo("(\"cr-lam: boom\" \"#<CR-LAM :MSG \\\"boom\\\">\" \"fixed text\")");
 	}
 
 	@Test
