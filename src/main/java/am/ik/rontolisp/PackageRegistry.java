@@ -93,7 +93,8 @@ public final class PackageRegistry {
 			LispNames.STRING_NE, LispNames.STRING_EQUAL, LispNames.STRING_LESSP, LispNames.STRING_GREATERP,
 			LispNames.STRING_NOT_GREATERP, LispNames.STRING_NOT_LESSP, LispNames.STRING_NOT_EQUAL,
 			LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM, LispNames.STRING_RIGHT_TRIM, LispNames.OPEN,
-			LispNames.CLOSE, LispNames.PROBE_FILE, LispNames.WRITE_LINE, LispNames.READ_BYTE, LispNames.WRITE_BYTE,
+			LispNames.CLOSE, LispNames.PROBE_FILE, LispNames.DIRECTORY, LispNames.PATHNAME_DIRECTORY,
+			LispNames.CONSTANTLY, LispNames.WRITE_LINE, LispNames.READ_BYTE, LispNames.WRITE_BYTE,
 			LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.IDENTITY, LispNames.COPY_LIST,
 			LispNames.COPY_TREE, LispNames.NREVERSE, LispNames.MAKE_LIST, LispNames.UNION, LispNames.INTERSECTION,
 			LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR,
@@ -180,7 +181,8 @@ public final class PackageRegistry {
 			LispNames.NLX_CATCH_INTERNAL, LispNames.NLX_THROW_INTERNAL, LispNames.STRING_COMPARE, LispNames.OBJ_NEW,
 			LispNames.OBJ_REF, LispNames.OBJ_SET, LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P,
 			LispNames.OBJ_SLOTS, LispNames.RUN_HANDLERS_INTERNAL, LispNames.HANDLER_CLUSTERS_VAR,
-			LispNames.RESTART_CLUSTERS_VAR, LispNames.RESTART_RECORD_TAG);
+			LispNames.RESTART_CLUSTERS_VAR, LispNames.RESTART_RECORD_TAG, LispNames.LIST_DIRECTORY,
+			LispNames.DIR_NAMESTRING, LispNames.WILD_MATCH, LispNames.PATHNAME_TYPED_P);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
@@ -386,13 +388,15 @@ public final class PackageRegistry {
 		// uiop:native-namestring on a pathname branch). Four members have real
 		// definitions -- getenv (the only spelling of "read an environment variable"
 		// rontolisp offers, since Common Lisp has none), file-exists-p (== probe-file),
-		// merge-pathnames* and add-package-local-nickname (lite: a GLOBAL nickname);
-		// the rest resolve but are undefined-function errors when called.
+		// merge-pathnames*, add-package-local-nickname (lite: a GLOBAL nickname) and
+		// the directory-listing trio (directory-files / subdirectories /
+		// collect-sub*directories, Lisp source over cl:directory); the rest resolve but
+		// are undefined-function errors when called.
 		Set<String> uiopExternals = Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING, LispNames.GETENV,
 				LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
 				LispNames.MERGE_PATHNAMES_STAR, LispNames.FILE_EXISTS_P, LispNames.RUN_PROGRAM, LispNames.EMPTYP,
 				LispNames.FIRST_CHAR, LispNames.LAST_CHAR, LispNames.DIRECTORY_EXISTS_P,
-				LispNames.COLLECT_SUB_DIRECTORIES, LispNames.DIRECTORY_FILES);
+				LispNames.COLLECT_SUB_DIRECTORIES, LispNames.DIRECTORY_FILES, LispNames.SUBDIRECTORIES);
 		Set<String> uiopSymbols = new HashSet<>(uiopExternals);
 		// Internal in real UIOP too: every call site spells it
 		// uiop::get-pathname-defaults. Owned by the package rather than reached by

@@ -1429,7 +1429,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      344
+      347
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -4038,6 +4038,35 @@ cases:
       NIL
       YES
       ("probe.dat" NIL)
+  - name: directory-listing-and-uiop-walkers
+    source: |
+      ;; The whole matching family over the one %list-directory primitive: ANSI wild
+      ;; components, sorted, the pathspec's own directory prefix kept, subdirectories
+      ;; carrying a trailing "/". The entries are written by this case so the answer does
+      ;; not depend on what else the run directory holds.
+      (with-open-file (out "dls-b.txt" :direction :output) (write-line "b" out))
+      (with-open-file (out "dls-a.txt" :direction :output) (write-line "a" out))
+      (defun dls-ours (names)
+        (remove-if-not (lambda (n) (and (> (length n) 6) (string= (subseq n 0 6) "./dls-"))) names))
+      (print (directory "./dls-*.txt"))
+      (print (directory "./dls-?.txt"))
+      (print (dls-ours (directory "./*.*")))
+      (print (dls-ours (uiop:directory-files ".")))
+      (print (uiop:directory-exists-p "."))
+      (print (uiop:directory-exists-p "dls-a.txt"))
+      (print (uiop:directory-exists-p "no-such-directory"))
+      (print (directory "no-such-directory/*.*"))
+      (print (uiop:subdirectories "no-such-directory/"))
+    expected: |
+      ("./dls-a.txt" "./dls-b.txt")
+      ("./dls-a.txt" "./dls-b.txt")
+      ("./dls-a.txt" "./dls-b.txt")
+      ("./dls-a.txt" "./dls-b.txt")
+      "./"
+      NIL
+      NIL
+      NIL
+      NIL
   - name: with-output-to-string-print-family
     source: |
       (print (with-output-to-string (ss-out)

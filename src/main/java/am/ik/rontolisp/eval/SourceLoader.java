@@ -3,6 +3,7 @@ package am.ik.rontolisp.eval;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
@@ -45,16 +46,23 @@ public interface SourceLoader {
 	}
 
 	/**
-	 * Whether a DIRECTORY exists at the given path -- what
-	 * {@code uiop:directory-exists-p} answers. The default is {@code false}: a loader
-	 * that is not a filesystem (the browser playground's in-memory map) has no
-	 * directories, and answering "no" is both true and the answer that makes a caller
-	 * fall back rather than fail.
-	 * @param path the path to probe
-	 * @return {@code true} when the path names an existing directory
+	 * Lists a DIRECTORY -- what the {@code %list-directory} primitive behind
+	 * {@code directory} / {@code uiop:directory-exists-p} answers. Returns the entry
+	 * NAMES (no path prefix), a subdirectory's carrying a trailing {@code /}, in whatever
+	 * order the host gives them (the caller sorts); or {@code null} when the path is not
+	 * a readable directory. An EMPTY directory is an empty list, which is why the return
+	 * is nullable rather than just empty -- "no entries" and "not a directory" are
+	 * different answers and the one probe has to carry both.
+	 * <p>
+	 * The default is {@code null}: a loader that is not a filesystem (the browser
+	 * playground's in-memory map) has no directories, and answering "not there" is both
+	 * true and the answer that makes a caller fall back rather than fail. Like
+	 * {@link #exists} it must never throw.
+	 * @param path the directory to list
+	 * @return the entry names, or {@code null} when the path is not a readable directory
 	 */
-	default boolean directoryExists(String path) {
-		return false;
+	@Nullable default List<String> listDirectory(String path) {
+		return null;
 	}
 
 	/**
@@ -81,12 +89,15 @@ public interface SourceLoader {
 			}
 
 			@Override
-			public boolean directoryExists(String path) {
-				try {
-					return Files.isDirectory(Path.of(path));
+			@Nullable public List<String> listDirectory(String path) {
+				try (java.util.stream.Stream<Path> entries = Files.list(Path.of(path))) {
+					return entries.map(p -> Files.isDirectory(p) ? p.getFileName() + "/" : p.getFileName().toString())
+						.toList();
 				}
-				catch (RuntimeException ex) {
-					return false;
+				catch (IOException | RuntimeException ex) {
+					// Not a directory, gone, or unreadable -- all "not there", the
+					// answer probe-file gives for the file case.
+					return null;
 				}
 			}
 		};

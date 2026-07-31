@@ -433,6 +433,7 @@ final class JvmExprCompiler {
 				case LispNames.OPEN -> JvmOpenCompiler.compile(cons, ctx, className);
 				case LispNames.CLOSE -> JvmCloseCompiler.compile(cons, ctx, className);
 				case LispNames.PROBE_FILE -> JvmProbeFileCompiler.compile(cons, ctx, className);
+				case LispNames.LIST_DIRECTORY -> JvmListDirectoryCompiler.compile(cons, ctx, className);
 				case LispNames.WRITE_LINE -> JvmWriteLineCompiler.compile(cons, ctx, className);
 				case LispNames.WRITE_STRING -> {
 					LispVal bounded = LispMacroExpander.lowerWriteStringBounds(cons);

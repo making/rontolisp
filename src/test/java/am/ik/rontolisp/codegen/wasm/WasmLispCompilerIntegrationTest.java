@@ -2404,7 +2404,7 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	private static String compileAndRunComponent(String lispCode) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
@@ -2772,7 +2772,7 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	private static String compileAndRunComponentWithDir(String lispCode) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
@@ -2826,7 +2826,9 @@ class WasmLispCompilerIntegrationTest {
 						+ " && { echo \"$code $(wc -c < /tmp/big.out)\"; exit 0; }; sleep 0.25; done;"
 						+ " cat /tmp/serve-big.log; exit 1");
 		assertThat(result.getExitCode()).as("wasmtime serve large response; log: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo("200 8192");
+		// wc -c right-pads its count on some coreutils builds, so the two fields are
+		// compared with the run of spaces between them collapsed.
+		assertThat(result.getStdout().trim().replaceAll("\\s+", " ")).isEqualTo("200 8192");
 	}
 
 	@Test
@@ -6246,7 +6248,9 @@ class WasmLispCompilerIntegrationTest {
 	// file I/O tests (with-open-file/open/close/write-line/read-line)
 
 	private static String compileAndRunWithDir(String lispCode) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		// The prelude splice mirrors the CLI pipeline; it emits nothing for a program
+		// that references no prelude name, so every pre-existing case is unaffected.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
@@ -6322,6 +6326,70 @@ class WasmLispCompilerIntegrationTest {
 				(print (probe-file "cabsent.txt"))
 				""";
 		assertThat(compileAndRunComponentWithDir(code)).isEqualTo("\"cprobe.txt\"\nNIL");
+	}
+
+	// One program for both WASM modes: the entries are created by the program itself so
+	// the listing is exactly what it wrote, whatever the run directory holds.
+	private static final String DIRECTORY_LISTING_PROGRAM = """
+			(with-open-file (out "dl-b.txt" :direction :output) (write-line "b" out))
+			(with-open-file (out "dl-a.txt" :direction :output) (write-line "a" out))
+			(print (directory "./dl-*.txt"))
+			(print (remove-if-not (lambda (x) (and (> (length x) 5) (string= (subseq x 0 5) "./dl-")))
+			                      (directory "./*.*")))
+			(print (uiop:directory-exists-p "."))
+			(print (uiop:directory-exists-p "dl-a.txt"))
+			(print (uiop:directory-exists-p "no-such-dir"))
+			(print (directory "no-such-dir/*.*"))
+			""";
+
+	private static final String DIRECTORY_LISTING_EXPECTED = """
+			("./dl-a.txt" "./dl-b.txt")
+			("./dl-a.txt" "./dl-b.txt")
+			"./"
+			NIL
+			NIL
+			NIL""";
+
+	@Test
+	void directoryListsEntriesOverFdReaddir() throws Exception {
+		// The ninth preview1 import. "." and ".." come back from a preview1 fd_readdir
+		// and must be dropped -- Files.list and wasi:filesystem's read-directory both
+		// omit them, so keeping them would be a one-backend divergence (and would make
+		// collect-sub*directories walk its own parent forever).
+		assertThat(compileAndRunWithDir(DIRECTORY_LISTING_PROGRAM)).isEqualTo(DIRECTORY_LISTING_EXPECTED);
+	}
+
+	@Test
+	void directoryListingResumesPastOneReaddirRound() throws Exception {
+		// The listing buffer is 8 KiB, so a directory this size spans several fd_readdir
+		// rounds and only the cookie resume gets all of it back.
+		String code = """
+				(dotimes (i 400)
+				  (with-open-file (out (concatenate 'string "many-" (princ-to-string (+ 1000 i)) ".txt")
+				                       :direction :output)
+				    (write-line "x" out)))
+				(let ((all (directory "./many-*.txt")))
+				  (print (length all))
+				  (print (first all))
+				  (print (car (last all))))
+				""";
+		assertThat(compileAndRunWithDir(code)).isEqualTo("400\n\"./many-1000.txt\"\n\"./many-1399.txt\"");
+	}
+
+	@Test
+	void componentDirectoryListing() throws Exception {
+		// The component path lists over wasi:filesystem's read-directory through a
+		// different adapter (a stream<directory-entry>, not a byte stream), so the whole
+		// family is verified there too.
+		assertThat(compileAndRunComponentWithDir(DIRECTORY_LISTING_PROGRAM)).isEqualTo(DIRECTORY_LISTING_EXPECTED);
+	}
+
+	@Test
+	void componentDirectoryListingWithoutAPreopenAnswersNil() throws Exception {
+		// No --dir at all: path_open cannot even name a directory, and the answer must
+		// be nil rather than the trap an unguarded preopen lookup used to produce.
+		assertThat(compileAndRunComponent("(print (directory \"./*.*\")) (print (uiop:directory-exists-p \".\"))"))
+			.isEqualTo("NIL\nNIL");
 	}
 
 	@Test
@@ -7429,7 +7497,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("344");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("347");
 	}
 
 	@Test
@@ -12273,7 +12341,7 @@ class WasmLispCompilerIntegrationTest {
 		return c.toByteArray();
 	}
 
-	// The eight wasi_snapshot_preview1 imports of a component-mode core, as trap stubs:
+	// The nine wasi_snapshot_preview1 imports of a component-mode core, as trap stubs:
 	// the probe never does I/O, so reaching one is a probe bug worth trapping on.
 	private static byte[] probePreview1Stub() {
 		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
@@ -12293,6 +12361,11 @@ class WasmLispCompilerIntegrationTest {
 					new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 3
 			types.addFunc(new am.ik.wasm.Type[] { am.ik.wasm.Type.I32, am.ik.wasm.Type.I64, am.ik.wasm.Type.I32 },
 					new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 4
+			types
+				.addFunc(
+						new am.ik.wasm.Type[] { am.ik.wasm.Type.I32, am.ik.wasm.Type.I32, am.ik.wasm.Type.I32,
+								am.ik.wasm.Type.I64, am.ik.wasm.Type.I32 },
+						new am.ik.wasm.Type[] { am.ik.wasm.Type.I32 }); // 5 fd_readdir
 		});
 		w.writeFunction(f -> f.addFunction(0) // fd_write
 			.addFunction(0) // fd_read
@@ -12301,7 +12374,8 @@ class WasmLispCompilerIntegrationTest {
 			.addFunction(3) // random_get
 			.addFunction(4) // clock_time_get
 			.addFunction(3) // environ_sizes_get
-			.addFunction(3)); // environ_get
+			.addFunction(3) // environ_get
+			.addFunction(5)); // fd_readdir
 		w.writeExport(e -> e.addExport("fd_write", am.ik.wasm.ExternalKind.FUNCTION, 0)
 			.addExport("fd_read", am.ik.wasm.ExternalKind.FUNCTION, 1)
 			.addExport("path_open", am.ik.wasm.ExternalKind.FUNCTION, 2)
@@ -12309,9 +12383,10 @@ class WasmLispCompilerIntegrationTest {
 			.addExport("random_get", am.ik.wasm.ExternalKind.FUNCTION, 4)
 			.addExport("clock_time_get", am.ik.wasm.ExternalKind.FUNCTION, 5)
 			.addExport("environ_sizes_get", am.ik.wasm.ExternalKind.FUNCTION, 6)
-			.addExport("environ_get", am.ik.wasm.ExternalKind.FUNCTION, 7));
+			.addExport("environ_get", am.ik.wasm.ExternalKind.FUNCTION, 7)
+			.addExport("fd_readdir", am.ik.wasm.ExternalKind.FUNCTION, 8));
 		w.writeCode(codes -> {
-			for (int i = 0; i < 8; i++) {
+			for (int i = 0; i < 9; i++) {
 				codes.addFunction(new byte[] { 0x00, 0x00, 0x0b }); // unreachable
 			}
 		});

@@ -50,6 +50,11 @@ import org.jspecify.annotations.Nullable;
  * (a rontolisp pathname IS its namestring), and {@code probe-file} plus a signal on a
  * missing file, which is what makes the {@code (ignore-errors (truename x))}
  * existence-probe idiom work.</li>
+ * <li>{@code directory} plus {@code uiop:directory-exists-p} /
+ * {@code uiop:directory-files} / {@code uiop:subdirectories} /
+ * {@code uiop:collect-sub*directories} -- the directory-LISTING family, one rendering of
+ * the pattern / prefix / kind / ordering rules over the single {@code %list-directory}
+ * primitive each backend implements.</li>
  * <li>{@code char-name} -- the standard character names ({@code Space}, {@code Newline},
  * ...), a {@code U+XXXX} label for other non-printing code points, nil for graphic
  * characters; mirrors the interpreter's Java primitive.</li>
@@ -279,10 +284,119 @@ public final class LispPreludeLibrary {
 				                    (t (concatenate 'string ddir pdir)))))
 				    (concatenate 'string dir (if (string= pfile "") dfile pfile))))
 				""");
+		SOURCES.put(LispNames.CONSTANTLY, """
+				(defun constantly (%ct-value)
+				  (lambda (&rest %ct-args) %ct-value))
+				""");
 		SOURCES.put(LispNames.TRUENAME, """
 				(defun truename (%tn-path)
 				  (or (probe-file %tn-path)
 				      (error "TRUENAME: no such file")))
+				""");
+		// The directory-LISTING family: one Lisp rendering of the pattern, prefix,
+		// kind and ordering rules over the single per-backend primitive
+		// (%list-directory), so the four backends cannot drift. %list-directory
+		// answers nil for anything that is not a readable directory and (t . names)
+		// otherwise -- the leading t is what tells an EMPTY directory from a missing
+		// one, which a bare list cannot. Names come back in the host's order and are
+		// sorted here, so the same program prints the same listing everywhere.
+		SOURCES.put(LispNames.PATHNAME_DIRECTORY, """
+				(defun pathname-directory (%pd-path)
+				  (let* ((%pd-p (if (stringp %pd-path) %pd-path ""))
+				         (%pd-s (position #\\/ %pd-p :from-end t)))
+				    (if (null %pd-s)
+				        nil
+				        (let ((%pd-acc nil) (%pd-start 0))
+				          (dotimes (%pd-i (+ %pd-s 1))
+				            (when (char= (char %pd-p %pd-i) #\\/)
+				              (when (> %pd-i %pd-start)
+				                (setq %pd-acc (cons (subseq %pd-p %pd-start %pd-i) %pd-acc)))
+				              (setq %pd-start (+ %pd-i 1))))
+				          (cons (if (char= (char %pd-p 0) #\\/) :absolute :relative)
+				                (reverse %pd-acc))))))
+				""");
+		SOURCES.put(LispNames.PATHNAME_TYPED_P, """
+				(defun %pathname-typed-p (%pt-name)
+				  (let ((%pt-d (position #\\. %pt-name)))
+				    (and %pt-d (> %pt-d 0) t)))
+				""");
+		SOURCES.put(LispNames.WILD_MATCH, """
+				(defun %wild-match (%wm-pat %wm-str)
+				  (let ((%wm-pn (length %wm-pat)) (%wm-sn (length %wm-str)))
+				    (labels ((m (p s)
+				               (cond ((>= p %wm-pn) (>= s %wm-sn))
+				                     ((char= (char %wm-pat p) #\\*)
+				                      (or (m (+ p 1) s)
+				                          (and (< s %wm-sn) (m p (+ s 1)))))
+				                     ((>= s %wm-sn) nil)
+				                     ((or (char= (char %wm-pat p) #\\?)
+				                          (char= (char %wm-pat p) (char %wm-str s)))
+				                      (m (+ p 1) (+ s 1)))
+				                     (t nil))))
+				      (m 0 0))))
+				""");
+		SOURCES.put(LispNames.DIR_NAMESTRING, """
+				(defun %dir-namestring (%dn-path)
+				  (let ((%dn-p (if (stringp %dn-path) %dn-path "")))
+				    (if (or (string= %dn-p "")
+				            (char= (char %dn-p (- (length %dn-p) 1)) #\\/))
+				        %dn-p
+				        (concatenate 'string %dn-p "/"))))
+				""");
+		SOURCES.put(LispNames.DIRECTORY, """
+				(defun directory (%dir-spec)
+				  (let* ((%dir-p (if (stringp %dir-spec) %dir-spec ""))
+				         (%dir-s (position #\\/ %dir-p :from-end t))
+				         (%dir-d (if %dir-s (subseq %dir-p 0 (+ %dir-s 1)) ""))
+				         (%dir-n (if %dir-s (subseq %dir-p (+ %dir-s 1)) %dir-p)))
+				    (if (or (position #\\* %dir-n) (position #\\? %dir-n))
+				        (let ((%dir-e (%list-directory (if (string= %dir-d "") "." %dir-d)))
+				              (%dir-acc nil))
+				          (dolist (%dir-x (cdr %dir-e))
+				            (let ((%dir-b (if (char= (char %dir-x (- (length %dir-x) 1)) #\\/)
+				                              (subseq %dir-x 0 (- (length %dir-x) 1))
+				                              %dir-x)))
+				              (when (or (string= %dir-n "*.*")
+				                        (and (%wild-match %dir-n %dir-b)
+				                             (or (%pathname-typed-p %dir-n)
+				                                 (not (%pathname-typed-p %dir-b)))))
+				                (setq %dir-acc (cons (concatenate 'string %dir-d %dir-x) %dir-acc)))))
+				          (sort %dir-acc #'string<))
+				        (let ((%dir-f (%dir-namestring %dir-p)))
+				          (cond ((%list-directory (if (string= %dir-f "") "." %dir-f)) (list %dir-f))
+				                ((and (string/= %dir-n "") (probe-file %dir-p)) (list %dir-p))
+				                (t nil))))))
+				""");
+		SOURCES.put(LispNames.DIRECTORY_EXISTS_P, """
+				(defun uiop:directory-exists-p (%de-path)
+				  (let ((%de-d (%dir-namestring %de-path)))
+				    (if (%list-directory (if (string= %de-d "") "." %de-d)) %de-d nil)))
+				""");
+		SOURCES.put(LispNames.DIRECTORY_FILES, """
+				(defun uiop:directory-files (%df-dir)
+				  (let ((%df-acc nil))
+				    (dolist (%df-e (directory (concatenate 'string (%dir-namestring %df-dir) "*.*")))
+				      (unless (char= (char %df-e (- (length %df-e) 1)) #\\/)
+				        (setq %df-acc (cons %df-e %df-acc))))
+				    (nreverse %df-acc)))
+				""");
+		SOURCES.put(LispNames.SUBDIRECTORIES, """
+				(defun uiop:subdirectories (%sd-dir)
+				  (let ((%sd-acc nil))
+				    (dolist (%sd-e (directory (concatenate 'string (%dir-namestring %sd-dir) "*.*")))
+				      (when (char= (char %sd-e (- (length %sd-e) 1)) #\\/)
+				        (setq %sd-acc (cons %sd-e %sd-acc))))
+				    (nreverse %sd-acc)))
+				""");
+		SOURCES.put(LispNames.COLLECT_SUB_DIRECTORIES, """
+				(defun uiop:collect-sub*directories (%cd-dir %cd-collectp %cd-recursep %cd-collector)
+				  (let ((%cd-d (%dir-namestring %cd-dir)))
+				    (when (funcall %cd-collectp %cd-d)
+				      (funcall %cd-collector %cd-d))
+				    (dolist (%cd-sub (uiop:subdirectories %cd-d))
+				      (when (funcall %cd-recursep %cd-sub)
+				        (uiop:collect-sub*directories %cd-sub %cd-collectp %cd-recursep %cd-collector))))
+				  nil)
 				""");
 		SOURCES.put(LispNames.CHAR_NAME, """
 				(defun char-name (c)

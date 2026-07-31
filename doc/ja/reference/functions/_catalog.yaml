@@ -247,6 +247,7 @@ categories:
       - { slug: notany, name: "notany" }
       - { slug: notevery, name: "notevery" }
       - { slug: identity, name: "identity" }
+      - { slug: constantly, name: "constantly" }
       - { slug: symbol-function, name: "symbol-function" }
   - title: "ハッシュテーブル"
     functions:
@@ -320,8 +321,10 @@ categories:
       - { slug: open, name: "open" }
       - { slug: close, name: "close" }
       - { slug: probe-file, name: "probe-file" }
+      - { slug: directory, name: "directory" }
       - { slug: truename, name: "truename" }
       - { slug: merge-pathnames, name: "merge-pathnames" }
+      - { slug: pathname-directory, name: "pathname-directory" }
       - { slug: open-stream-p, name: "open-stream-p" }
       - { slug: force-output, name: "force-output" }
       - { slug: finish-output, name: "finish-output" }
@@ -493,6 +496,9 @@ categories:
       - { slug: uiop-getenv, name: "uiop:getenv" }
       - { slug: uiop-file-exists-p, name: "uiop:file-exists-p" }
       - { slug: uiop-directory-exists-p, name: "uiop:directory-exists-p" }
+      - { slug: uiop-directory-files, name: "uiop:directory-files" }
+      - { slug: uiop-subdirectories, name: "uiop:subdirectories" }
+      - { slug: uiop-collect-sub-directories, name: "uiop:collect-sub*directories" }
       - { slug: uiop-merge-pathnames-star, name: "uiop:merge-pathnames*" }
       - { slug: uiop-add-package-local-nickname, name: "uiop:add-package-local-nickname" }
       - { slug: uiop-emptyp, name: "uiop:emptyp" }

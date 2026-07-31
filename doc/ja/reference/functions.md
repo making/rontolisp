@@ -56,6 +56,8 @@
 | `close` | `(close stream)` | `open` で開いたストリームを閉じます。`t` を返します |
 | `probe-file` | `(probe-file "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil`。存在しないパスで失敗しない唯一のファイル操作です（`open` は通知します）。`uiop:file-exists-p` は同じ操作です |
 | `truename` | `(truename "f.txt")` | ファイルが存在すればそのパス名、存在しなければエラー — `probe-file` の通知する版であり、`(ignore-errors (truename p))` が可搬な存在検査になる理由です |
+| `directory` | `(directory "src/*.lisp")` | pathspec に一致するパス名をソートして返します。そのディレクトリ接頭辞を保ち、サブディレクトリには末尾に `/` を付けます。ワイルドな**名前**コンポーネントは照合され (`*` は任意個、`?` は 1 文字、`*` 単独は CL と同じく「型なし」の意味)、ワイルドでない場合は自分自身を指すので、ディレクトリの一覧は `"src/"` ではなく `"src/*.*"` です。ディレクトリコンポーネントはワイルドになりません |
+| `pathname-directory` | `(pathname-directory "a/b/c.txt")` | `(:RELATIVE "a" "b")` — パス名のディレクトリ部分を CL のリスト形式 (`:absolute`/`:relative` と階層ごとの文字列) で返し、無ければ `nil`。純粋な文字列処理で、ファイルシステムは読みません |
 | `merge-pathnames` | `(merge-pathnames "zoneinfo/" "/opt/lt/")` | 第 1 の名前文字列の欠けている部分を第 2 のもので補います。絶対ディレクトリが優先され、相対ディレクトリは連結され、無い場合は defaults のものが使われます。`uiop:merge-pathnames*` は同じマージです |
 | `open-stream-p` | `(open-stream-p stream)` | ハンドルが開いているストリームを指す間は `t`、`close` 後は `nil` (インタプリタ/JVM と `--component` のソケットでは正確) |
 | `force-output` | `(force-output stream)` | 出力ストリームを書き出す (引数なしは標準出力)。nil を返す |
@@ -248,6 +250,7 @@
 | `notevery` | `(notevery #'evenp '(2 4 5))` | いずれかの要素(の組)で述語がnilなら `t`、そうでなければ `nil`(`every` の補) |
 | `symbol-function` | `(symbol-function 'car)` | シンボルが指す関数を返します(コンパイラ: 引数は引用されたシンボルリテラルでなければなりません) |
 | `identity` | `(identity 42)` | `42`(引数をそのまま返します) |
+| `constantly` | `(mapcar (constantly 7) '(a b c))` | `(7 7 7)`(引数を何個受け取っても 1 つの固定値を返す関数) |
 | `make-hash-table` | `(make-hash-table)`, `(make-hash-table :test 'equal)` | 空のハッシュテーブルを作成します。`:test` は受け付けられますが情報的なものです(下記の注記を参照)。`:size` などの他のキーワードは無視されます |
 | `gethash` | `(gethash key table)`, `(gethash key table default)` | `key` に格納された値、なければ `default`(省略時はnil)を返します |
 | `(setf (gethash key table) v)` | `(setf (gethash "a" h) 1)` | `key` の下に `v` を格納します。placeに対する `incf`/`decf`/`push` と組み合わせて使えます |
@@ -522,7 +525,10 @@ rontolisp が実装しているメンバは以下のとおりで、各名前は�
 |----------|---------|--------|
 | `uiop:getenv` | `(uiop:getenv "PATH")` | 環境変数の値を文字列として、未設定の場合は `nil` を返します。Common Lisp に `getenv` がないためここに置かれています。すべてのバックエンドで動作します。WASM は Preview 1 では実際のホスト環境を、`--component` モードでは `wasi:cli/environment@0.3.0` を読みます (wasmtime に `--env`/`-S inherit-env` を渡してください) |
 | `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil` — `probe-file` と同じ契約であり、すべてのバックエンドでその基本操作へ落とされます |
-| `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | ディレクトリが存在すれば（末尾に `/` を付けた）そのパス名、存在しなければ `nil` — `file-exists-p` のディレクトリ版です。インタプリタのみで、コンパイルバックエンドでは呼び出し時に通知します |
+| `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | ディレクトリが存在すれば（末尾に `/` を付けた）そのパス名、存在しなければ `nil` — `file-exists-p` のディレクトリ版であり、空のディレクトリと存在しないディレクトリを区別できる唯一の手段です |
+| `uiop:directory-files` | `(uiop:directory-files "src/")` | ディレクトリのうちディレクトリでないエントリ — `(directory "src/*.*")` からサブディレクトリを除いたものです。本家 UIOP の省略可能なワイルドカード引数は提供しません |
+| `uiop:subdirectories` | `(uiop:subdirectories "src/")` | ディレクトリのサブディレクトリを、それぞれ末尾に `/` を付けて返します |
+| `uiop:collect-sub*directories` | `(uiop:collect-sub*directories "src/" (constantly t) (constantly t) #'print)` | ディレクトリツリーを走査します。`collectp` が `collector` へ渡すものを、`recursep` が降りていく先を決めます。渡されるディレクトリはルートも含めてすべてディレクトリ形式です |
 | `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `"/tmp/b.txt"` — デフォルトを考慮したパス名のマージ (ここではパス名は名前文字列そのものです)。インタプリタでは実行時の関数、コンパイル済みバックエンドではコンパイラがリテラルへ畳み込める呼び出しのみ |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録 (lite: グローバル、パッケージごとのスコープなし)。リテラルなトップレベル呼び出しはコンパイル時ディレクティブなので、すべてのバックエンドで動作します |
 | `uiop:emptyp` | `(uiop:emptyp "")` | `nil` および長さ 0 のベクタ・文字列に対して `t`、それ以外は `nil` |
@@ -535,14 +541,11 @@ rontolisp が実装しているメンバは以下のとおりで、各名前は�
 `(merge-pathnames x (uiop::get-pathname-defaults))` は `x` になります。
 
 パッケージの残りは**名前解決のためのスタブ**です。`uiop:native-namestring`、
-`uiop:namestring`、`uiop:os-unix-p`、`uiop:os-macosx-p`、`uiop:run-program`、
-`uiop:collect-sub*directories`、`uiop:directory-files` は解決はされる (ので
-`(:import-from #:uiop)` 句でこれらを挙げるライブラリは読み込め、コンパイルできる) ものの、
-呼び出すと undefined-function エラーになります。いずれも未実装ではなく意図的です:
-外部プロセスの起動 (`run-program`) はどのバックエンドのサンドボックスの外にあり、
-ディレクトリの一覧 (`collect-sub*directories`、`directory-files`) はどのバックエンドでも
-rontolisp が公開するファイルシステム機能の一部ではありません。その機能とは「*名前を指定した*
-ファイルの読み書き」であり、WASM バックエンドにはそもそもファイルシステムがありません。
+`uiop:namestring`、`uiop:os-unix-p`、`uiop:os-macosx-p`、`uiop:run-program` は
+解決はされる (ので `(:import-from #:uiop)` 句でこれらを挙げるライブラリは読み込め、
+コンパイルできる) ものの、呼び出すと undefined-function エラーになります。未実装ではなく
+意図的です: 外部プロセスの起動 (`run-program`) はどのバックエンドのサンドボックスの外に
+あり、黙って何もしないよりエラーの方が正直な答えだからです。
 黙って何もしなかったり空リストを返したりするより、エラーを返す方が誠実だからです。
 
 ## ql パッケージの関数

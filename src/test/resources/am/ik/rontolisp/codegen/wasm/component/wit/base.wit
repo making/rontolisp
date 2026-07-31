@@ -76,6 +76,7 @@ package wasi:filesystem@0.3.0 {
     resource descriptor {
       read-via-stream: func(offset: filesize) -> tuple<stream<u8>, future<result<_, error-code>>>;
       append-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+      read-directory: func() -> tuple<stream<directory-entry>, future<result<_, error-code>>>;
       open-at: async func(path-flags: path-flags, path: string, open-flags: open-flags, %flags: descriptor-flags) -> result<descriptor, error-code>;
     }
 
@@ -139,6 +140,22 @@ package wasi:filesystem@0.3.0 {
       data-integrity-sync,
       requested-write-sync,
       mutate-directory,
+    }
+
+    variant descriptor-type {
+      block-device,
+      character-device,
+      directory,
+      fifo,
+      symbolic-link,
+      regular-file,
+      socket,
+      other(option<string>),
+    }
+
+    record directory-entry {
+      %type: descriptor-type,
+      name: string,
     }
   }
   interface preopens {

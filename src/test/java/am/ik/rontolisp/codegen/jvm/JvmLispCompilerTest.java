@@ -1540,6 +1540,40 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void directoryMatchesPathnamesAndDrivesTheUiopWalkers() throws Exception {
+		// A subdirectory of its own: the compiled class lands in tempDir and would
+		// otherwise show up in the listing.
+		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("tree"));
+		String dir = root.toString().replace("\\", "\\\\");
+		java.nio.file.Files.writeString(root.resolve("b.txt"), "b\n");
+		java.nio.file.Files.writeString(root.resolve("a.txt"), "a\n");
+		java.nio.file.Files.createDirectory(root.resolve("sub"));
+		java.nio.file.Files.writeString(root.resolve("sub/c.txt"), "c\n");
+		String d = root + "/";
+		// Same shape as the interpreter test, whose expectations were checked against
+		// SBCL.
+		assertThat(compileAndRun("""
+				(print (directory "%s/*.*"))
+				(print (directory "%s/*.txt"))
+				(print (directory "%s/*"))
+				(print (directory "%s"))
+				(print (directory "%s/nope/*.*"))
+				(print (uiop:directory-exists-p "%s"))
+				(print (uiop:directory-exists-p "%s/a.txt"))
+				(print (uiop:directory-files "%s"))
+				(print (uiop:subdirectories "%s"))
+				(let ((acc nil))
+				  (uiop:collect-sub*directories "%s" (constantly t) (constantly t)
+				                                (lambda (x) (setq acc (cons x acc))))
+				  (print (reverse acc)))
+				""".formatted(dir, dir, dir, dir, dir, dir, dir, dir, dir, dir)))
+			.isEqualTo(("(\"%sa.txt\" \"%sb.txt\" \"%ssub/\")\n" + "(\"%sa.txt\" \"%sb.txt\")\n" + "(\"%ssub/\")\n"
+					+ "(\"%s\")\n" + "NIL\n" + "\"%s\"\n" + "NIL\n" + "(\"%sa.txt\" \"%sb.txt\")\n" + "(\"%ssub/\")\n"
+					+ "(\"%s\" \"%ssub/\")")
+				.formatted(d, d, d, d, d, d, d, d, d, d, d, d, d));
+	}
+
+	@Test
 	void withOpenFileReturnsBodyValue() throws Exception {
 		String file = tempDir.resolve("wof-ret.txt").toString().replace("\\", "\\\\");
 		assertThat(compileAndRun(
@@ -5869,12 +5903,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("344");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("347");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("344");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("347");
 	}
 
 	@Test

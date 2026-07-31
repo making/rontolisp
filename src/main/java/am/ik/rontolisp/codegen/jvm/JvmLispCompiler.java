@@ -1479,10 +1479,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the stream built-ins' stderr branch and the reserved table handles; one that
 		// never mentions it keeps its original bytes.
 		final boolean usesErrorOutput = programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR);
+		// The directory-LISTING helper joins the stream runtime only for a program that
+		// calls the primitive, so every artifact compiled without one keeps its bytes.
+		final boolean usesListDirectory = programUsesSymbol(program, LispNames.LIST_DIRECTORY);
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
-					usesErrorOutput)
+					usesErrorOutput, usesListDirectory)
 			.methods();
 		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
 		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);

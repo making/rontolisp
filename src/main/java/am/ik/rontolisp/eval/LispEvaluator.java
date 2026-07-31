@@ -721,23 +721,29 @@ public final class LispEvaluator {
 			// The truename is the namestring itself (see LispNames.PROBE_FILE).
 			return this.sourceLoader.exists(path.value()) ? path : LispNil.INSTANCE;
 		}));
-		// uiop:directory-exists-p -- probe-file's directory twin, answered through the
-		// same SourceLoader so a host without a filesystem simply says nil.
-		String directoryExistsPName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.DIRECTORY_EXISTS_P);
-		this.globalEnv.defineFunction(directoryExistsPName, new LispFunction(directoryExistsPName, args -> {
+		// %list-directory: the one directory-LISTING primitive, mediated by the same
+		// SourceLoader as probe-file so a host without a filesystem simply says nil.
+		// Answers (t . names) for a readable directory -- the leading t is what tells
+		// an EMPTY directory from a missing one -- and nil otherwise; everything
+		// user-facing (directory, uiop:directory-exists-p / directory-files /
+		// subdirectories / collect-sub*directories) is Lisp source over it, in
+		// LispPreludeLibrary, so no listing rule can drift between backends.
+		this.globalEnv.defineFunction(LispNames.LIST_DIRECTORY, new LispFunction(LispNames.LIST_DIRECTORY, args -> {
 			if (args.size() != 1) {
-				throw new LispEvalException(directoryExistsPName + " expects 1 argument, got " + args.size());
+				throw new LispEvalException(LispNames.LIST_DIRECTORY + " expects 1 argument, got " + args.size());
 			}
 			if (!(args.get(0) instanceof LispString path)) {
-				throw new LispEvalException(directoryExistsPName + " expects a string pathname");
+				throw new LispEvalException(LispNames.LIST_DIRECTORY + " expects a string pathname");
 			}
-			if (!this.sourceLoader.directoryExists(path.value())) {
+			List<String> entries = this.sourceLoader.listDirectory(path.value());
+			if (entries == null) {
 				return LispNil.INSTANCE;
 			}
-			// UIOP answers with a pathname in DIRECTORY form; rontolisp's namestring
-			// equivalent is the trailing slash, which callers concatenate onto.
-			String value = path.value();
-			return value.endsWith("/") ? path : new LispString(value + "/");
+			LispVal names = LispNil.INSTANCE;
+			for (int i = entries.size() - 1; i >= 0; i--) {
+				names = new LispCons(new LispString(entries.get(i)), names);
+			}
+			return new LispCons(LispTrue.INSTANCE, names);
 		}));
 		// uiop:add-package-local-nickname -- lite: registers a GLOBAL nickname (no
 		// per-package scoping); the mechanism libraries recommend for shortening long

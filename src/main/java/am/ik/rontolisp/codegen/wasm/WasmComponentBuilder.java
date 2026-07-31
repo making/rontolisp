@@ -118,19 +118,28 @@ public final class WasmComponentBuilder {
 
 	private static final int T_DESCRIPTOR = 18;
 
-	private static final int T_STREAM = 19;
+	// wasi:filesystem's directory-entry record ({descriptor-type type, string name}),
+	// the element of the read-directory stream behind %list-directory.
+	private static final int T_DIRENT = 19;
 
-	private static final int T_CLI_RESULT = 20;
+	private static final int T_STREAM = 20;
 
-	private static final int T_CLI_FUTURE = 21;
+	// stream<directory-entry>: structurally distinct from the u8 byte stream, so it
+	// needs its own read / drop built-ins -- and its elements own a string, so the read
+	// carries the realloc option the byte-stream read does not.
+	private static final int T_DE_STREAM = 21;
 
-	private static final int T_FS_RESULT = 22;
+	private static final int T_CLI_RESULT = 22;
 
-	private static final int T_FS_FUTURE = 23;
+	private static final int T_CLI_FUTURE = 23;
 
-	private static final int T_RUN_RESULT = 24;
+	private static final int T_FS_RESULT = 24;
 
-	private static final int T_RUN_FUNC = 25;
+	private static final int T_FS_FUTURE = 25;
+
+	private static final int T_RUN_RESULT = 26;
+
+	private static final int T_RUN_FUNC = 27;
 
 	/**
 	 * The interfaces of the base/sockets blocks a {@code %component-import} may bind FROM
@@ -1087,13 +1096,15 @@ public final class WasmComponentBuilder {
 		// Alias the shared memory (core memory 0) and cabi_realloc (core func 0).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
 			.of(ComponentWriter.aliasCoreMemory(0, "memory"), ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
-		// Alias the resource/enum types we need (component types 14-16) and the WASI
-		// functions (component funcs 0-10), all in one alias section.
+		// Alias the resource/record types we need (component types 16-19) and the WASI
+		// functions (component funcs 0-11), all in one alias section.
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(
 				// types 14 cli error-code, 15 fs error-code, 16 descriptor
 				ComponentWriter.aliasInstanceType(INST_CLI_TYPES, "error-code"),
 				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "error-code"),
 				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "descriptor"),
+				// type 19 directory-entry (the read-directory stream's element)
+				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "directory-entry"),
 				// funcs 0 write-via-stream, 1 read-via-stream(stdin), 2 get-environment,
 				// 3 system-clock.now, 4 monotonic.now
 				ComponentWriter.aliasInstanceFunc(INST_STDOUT, "write-via-stream"),
@@ -1108,25 +1119,28 @@ public final class WasmComponentBuilder {
 				ComponentWriter.aliasInstanceFunc(INST_FS_TYPES, "[method]descriptor.open-at"),
 				ComponentWriter.aliasInstanceFunc(INST_FS_PREOPENS, "get-directories"),
 				ComponentWriter.aliasInstanceFunc(INST_RANDOM, "get-random-u64"),
-				// func 10 stderr write-via-stream (appended last, for warn on fd 2)
-				ComponentWriter.aliasInstanceFunc(INST_STDERR, "write-via-stream"))));
-		// Define the async value/function types (component types 17-23). stream<u8> is
-		// structural; the futures differ by their error-code (cli vs filesystem).
+				// func 10 stderr write-via-stream, func 11 descriptor.read-directory
+				// (both appended last, so every index above keeps its value)
+				ComponentWriter.aliasInstanceFunc(INST_STDERR, "write-via-stream"),
+				ComponentWriter.aliasInstanceFunc(INST_FS_TYPES, "[method]descriptor.read-directory"))));
+		// Define the async value/function types (component types 20-27). The two streams
+		// are structural; the futures differ by their error-code (cli vs filesystem).
 		c.rawSection(ComponentWriter.SEC_TYPE,
-				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8), // 17
-						ComponentWriter.definedResultErr(T_CLI_ERRCODE), // 18
-						ComponentWriter.definedFuture(T_CLI_RESULT), // 19
-						ComponentWriter.definedResultErr(T_FS_ERRCODE), // 20
-						ComponentWriter.definedFuture(T_FS_RESULT), // 21
-						ComponentWriter.definedResultVoid(), // 22 result<_,_> (run
+				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8), // 20
+						ComponentWriter.definedStreamOfType(T_DIRENT), // 21
+						ComponentWriter.definedResultErr(T_CLI_ERRCODE), // 22
+						ComponentWriter.definedFuture(T_CLI_RESULT), // 23
+						ComponentWriter.definedResultErr(T_FS_ERRCODE), // 24
+						ComponentWriter.definedFuture(T_FS_RESULT), // 25
+						ComponentWriter.definedResultVoid(), // 26 result<_,_> (run
 																// result)
-						ComponentWriter.asyncFuncTypeResultType(T_RUN_RESULT)))); // 23
+						ComponentWriter.asyncFuncTypeResultType(T_RUN_RESULT)))); // 27
 		// Lower the WASI functions (component funcs 0-9) to core funcs 1-10 and drop the
 		// descriptor resource (core func 11); canonical options mirror wasm-tools'
 		// choices.
 		// Then the async built-ins: stream (core funcs 12-16), futures (core funcs
-		// 17-20), and finally stderr write-via-stream (component func 10 -> core func
-		// 21).
+		// 17-20), stderr write-via-stream (component func 10 -> core func 21), the
+		// waitable trio (22-24) and finally the directory-listing trio (25-27).
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLower(0), // 1
 																											// write-via-stream
 				ComponentWriter.canonLowerMemory(1, 0), // 2 read-via-stream (stdin)
@@ -1162,8 +1176,15 @@ public final class WasmComponentBuilder {
 				ComponentWriter.canonLower(10), // 21 stderr write-via-stream
 				ComponentWriter.canonWaitableSetNew(), // 22
 				ComponentWriter.canonWaitableJoin(), // 23
-				ComponentWriter.canonWaitableSetWait(0)))); // 24
-		// Group the 24 lowered/built-in core funcs (1-24) for the adapter's "w" import
+				ComponentWriter.canonWaitableSetWait(0), // 24
+				// 25 descriptor.read-directory: the result is a (stream, future) handle
+				// pair, two flat values, so it returns through a memory retptr.
+				ComponentWriter.canonLowerMemory(11, 0), // 25 read-directory
+				// 26/27 the directory-entry stream's own read / drop. The read needs
+				// realloc: each element owns its name string.
+				ComponentWriter.canonStreamReadAsync(T_DE_STREAM, 0, 0), // 26
+				ComponentWriter.canonStreamDropReadable(T_DE_STREAM)))); // 27
+		// Group the 27 lowered/built-in core funcs (1-27) for the adapter's "w" import
 		// (core instance 1). Names match adapter.wat's imports.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
@@ -1171,19 +1192,20 @@ public final class WasmComponentBuilder {
 							"file-append", "open-at", "get-directories", "get-random-u64", "drop-desc", "stream-new",
 							"stream-read", "stream-write", "stream-drop-r", "stream-drop-w", "future-read-cli",
 							"future-drop-cli", "future-read-fs", "future-drop-fs", "stderr-write", "waitable-set-new",
-							"waitable-join", "waitable-set-wait"),
-					List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)))));
+							"waitable-join", "waitable-set-wait", "read-dir", "stream-read-de", "stream-drop-r-de"),
+					List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+							26, 27)))));
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
 		// Block-declared interfaces the program binds (wait.lisp's monotonic-clock,
 		// stdin.lisp's wasi:cli/stdin, environment.lisp's wasi:cli/environment): lowered
-		// FROM the block's own import instances (component funcs 11.., core funcs 25..,
+		// FROM the block's own import instances (component funcs 12.., core funcs 28..,
 		// core instances 3..). Emits nothing when there are none.
 		final FixedIo io = lowerFixedFromBlock(c, fixed,
 				java.util.Map.of("wasi:clocks/monotonic-clock@0.3.0", INST_MONO_CLOCK, "wasi:cli/stdin@0.3.0",
 						INST_STDIN, "wasi:cli/environment@0.3.0", INST_ENVIRON),
-				new java.util.LinkedHashMap<>(), 11, 25, T_RUN_FUNC + 1, 3);
+				new java.util.LinkedHashMap<>(), 12, 28, T_RUN_FUNC + 1, 3);
 		// User WIT-interface imports (rontolisp:wit-import): instance types, import
 		// instances (from 11, right after the block's 0-10), function aliases and
 		// lowered core funcs continue after the fixed surface. Emits nothing when there
@@ -1205,14 +1227,14 @@ public final class WasmComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(rontolispInstantiate(2, coreNames, coreInstances, imports, io.nextCoreInstance()))));
 		final int rontolisp = io.nextCoreInstance() + userIfaces;
-		// Alias rontolisp's run (core func 25 = cabi_realloc + 24 lowered/built-in
+		// Alias rontolisp's run (core func 28 = cabi_realloc + 27 lowered/built-in
 		// funcs, + the fixed and user-import lowers).
 		c.rawSection(ComponentWriter.SEC_ALIAS,
 				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp, "run"))));
-		// Lift run into component func 11 (+ the fixed/user-import aliases) with the
-		// async function type 25 (an async-typed sync-ABI lift: the task may block, no
-		// gated feature involved). Component func 11 follows the 11 aliased WASI funcs
-		// (0-10).
+		// Lift run into component func 12 (+ the fixed/user-import aliases) with the
+		// async function type 27 (an async-typed sync-ABI lift: the task may block, no
+		// gated feature involved). Component func 12 follows the 12 aliased WASI funcs
+		// (0-11).
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter
 			.vec(List.of(ComponentWriter.canonLift(io.nextCoreFunc() + user.coreFuncs(), T_RUN_FUNC))));
 		// Component instance 11 (after import instances 0-10 + the user imports)

@@ -1,6 +1,6 @@
 ;; Preview-1 bridge core module for serve components (rontolisp:http-handler +
 ;; --component), on WASI 0.3. Instantiated between the shared memory and the rontolisp
-;; core, it exports the eight preview1 functions the core imports, implemented over the
+;; core, it exports the nine preview1 functions the core imports, implemented over the
 ;; interfaces the wasi:http@0.3 service world provides:
 ;;
 ;;   random_get       -> wasi:random/random@0.3.0 get-random-u64 (8 bytes at a time)
@@ -15,12 +15,13 @@
 ;;                       serve program calling uiop:getenv binds
 ;;                       wasi:cli/environment@0.3.0 itself (environment.lisp, an appended
 ;;                       user import) instead of going through the preview1 imports. These
-;;                       two stay only because the core's eight preview1 import slots are
+;;                       two stay only because the core's preview1 import slots are
 ;;                       index-pinned.
 ;;   fd_read          -> immediate EOF (nread 0, errno 0; a served handler has no stdin)
 ;;   path_open        -> errno 76 (file streams stay unavailable; the core traps on a
 ;;                       nonzero open errno, matching the run-variant failure mode)
 ;;   fd_close         -> errno 0
+;;   fd_readdir       -> errno 76 (no filesystem; %list-directory reads it as nil)
 ;;
 ;; Scratch: 0x50000-0x5002F -- each cell but the waitable-set handle is written and
 ;; read back within a single export call.
@@ -139,6 +140,14 @@
   (func $fd_close (param $fd i32) (result i32)
     (i32.const 0))
 
+  ;; fd_readdir(...) -> errno 76: no filesystem in the service world, same answer as
+  ;; path_open. %list-directory turns a nonzero errno into nil, so a served handler that
+  ;; walks an OPTIONAL directory sees "not there" rather than failing.
+  (func $fd_readdir (param $fd i32) (param $buf i32) (param $buflen i32) (param $cookie i64)
+    (param $used i32) (result i32)
+    (i32.store (local.get $used) (i32.const 0))
+    (i32.const 76))
+
   ;; random_get(buf, len) -> errno. Fills buf with wasi:random bytes (8 at a time, like
   ;; adapter.wat).
   (func $random_get (param $buf i32) (param $len i32) (result i32)
@@ -181,4 +190,5 @@
   (export "random_get" (func $random_get))
   (export "clock_time_get" (func $clock_time_get))
   (export "environ_sizes_get" (func $environ_sizes_get))
-  (export "environ_get" (func $environ_get)))
+  (export "environ_get" (func $environ_get))
+  (export "fd_readdir" (func $fd_readdir)))

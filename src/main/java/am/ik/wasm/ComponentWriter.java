@@ -1384,6 +1384,26 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode the asynchronous (non-blocking) {@code canon stream.read} with the realloc
+	 * option too -- required when the element type carries a variable-length value (a
+	 * {@code stream<directory-entry>}, whose elements each own a {@code string} name).
+	 * @param streamTypeIndex the component type index of the {@code stream<T>} type
+	 * @param memoryIndex the core memory index the elements are read into
+	 * @param reallocFuncIndex the core function index of {@code cabi_realloc}
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonStreamReadAsync(int streamTypeIndex, int memoryIndex, int reallocFuncIndex) {
+		return enc(w -> w.write(0x0f)
+			.writeUnsignedLeb128(streamTypeIndex)
+			.writeUnsignedLeb128(3)
+			.write(0x06)
+			.write(0x03)
+			.writeUnsignedLeb128(memoryIndex)
+			.write(0x04)
+			.writeUnsignedLeb128(reallocFuncIndex));
+	}
+
+	/**
 	 * Encode the asynchronous (non-blocking) {@code canon stream.write}; see
 	 * {@link #canonStreamReadAsync}.
 	 * @param streamTypeIndex the component type index of the {@code stream<u8>} type

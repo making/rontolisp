@@ -308,10 +308,17 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_ENVIRON_GET = 7; // imported
 
-	/** Number of preview1-style imported functions (fd_write..environ_get). */
-	static final int IMPORT_FUNC_COUNT = 8;
+	// The directory-LISTING import, in both modes like the four above: Preview 1 binds
+	// the real wasi_snapshot_preview1 fd_readdir, component mode the adapter's
+	// implementation over wasi:filesystem's read-directory. It is the ONE call rontolisp
+	// cannot express with path_open/fd_read, and the ninth slot is what
+	// %list-directory -- and therefore `directory` and the uiop: spellings -- run on.
+	static final int FUNC_FD_READDIR = 8; // imported
 
-	static final int FUNC_START = IMPORT_FUNC_COUNT; // 8
+	/** Number of preview1-style imported functions (fd_write..fd_readdir). */
+	static final int IMPORT_FUNC_COUNT = 9;
+
+	static final int FUNC_START = IMPORT_FUNC_COUNT; // 9
 
 	static final int FUNC_PRINT_I32 = FUNC_START + 1;
 
@@ -825,7 +832,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// index shifts and the component adapter blobs are unaffected.
 	static final int FUNC_PEEK_CHAR = FUNC_FRESH_LINE_STREAM + 1;
 
-	static final int FX_FUNC_LAST = FUNC_PEEK_CHAR;
+	// _list_directory ((ref null eq) path) -> (ref null eq): (t . names) for a readable
+	// directory, null otherwise -- the ONE directory-listing primitive (everything
+	// user-facing is Lisp source over it, LispPreludeLibrary). Opens the path as a
+	// directory through path_open and drains fd_readdir's preview1 dirent stream,
+	// skipping the "." / ".." entries a preview1 host yields but Files.list and
+	// wasi:filesystem's read-directory both omit. The names come back in the host's
+	// order; `directory` sorts, so every backend prints the same listing.
+	static final int FUNC_LIST_DIRECTORY = FUNC_PEEK_CHAR + 1;
+
+	static final int FX_FUNC_LAST = FUNC_LIST_DIRECTORY;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -1105,7 +1121,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// _t_sym () -> eqref: the cached-t helper's signature.
 	static final int TYPE_T_SYM = TYPE_IV_SET + 1; // 61
 
-	static final int IARR_TYPE_LAST = TYPE_T_SYM;
+	// fd_readdir(fd, buf, buf_len, cookie, retptr) -> errno:
+	// (i32, i32, i32, i64, i32) -> i32. Appended after the last fixed type rather than
+	// slotted next to TYPE_PATH_OPEN so every type index above keeps its value; the
+	// conditional --simd / async / instance blocks follow it through IARR_TYPE_LAST.
+	static final int TYPE_FD_READDIR = TYPE_T_SYM + 1; // 62
+
+	static final int IARR_TYPE_LAST = TYPE_FD_READDIR;
 
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
@@ -1339,6 +1361,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int PEEK_FD_ADDR = 200;
 
 	static final int PEEK_CP_ADDR = 204;
+
+	// Scratch word where fd_readdir reports how many bytes it wrote into the listing
+	// buffer (%list-directory). Still below the DATA_BASE_OFFSET=256 headroom, so no
+	// interned string bytes are clobbered.
+	static final int READDIR_USED_ADDR = 208;
 
 	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
 	// and
@@ -3290,6 +3317,19 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.REFNULL.code());
 					w.writeHeapType(Type.EQ.code());
 				});
+				// type 62 (TYPE_FD_READDIR): fd_readdir
+				// (i32 fd, i32 buf, i32 buf_len, i64 cookie, i32 retptr) -> i32 errno
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(5);
+					w.write(Type.I32);
+					w.write(Type.I32);
+					w.write(Type.I32);
+					w.write(Type.I64);
+					w.write(Type.I32);
+					w.write(1);
+					w.write(Type.I32);
+				});
 				if (this.simd) {
 					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
@@ -3447,7 +3487,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// Import section
 			.writeImportSection(imports -> {
 				// No-wasi (reactor) mode: emit no wasi_snapshot_preview1 imports so the
-				// module instantiates with no import object. Function indices 0-7 are
+				// module instantiates with no import object. Function indices 0-8 are
 				// filled
 				// with internal trap stubs in the function/code sections below, keeping
 				// every
@@ -3473,7 +3513,11 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addImport("wasi_snapshot_preview1", "clock_time_get", ExternalKind.FUNCTION,
 								TYPE_CLOCK_TIME_GET)
 						.addImport("wasi_snapshot_preview1", "environ_sizes_get", ExternalKind.FUNCTION, TYPE_INTERN)
-						.addImport("wasi_snapshot_preview1", "environ_get", ExternalKind.FUNCTION, TYPE_INTERN);
+						.addImport("wasi_snapshot_preview1", "environ_get", ExternalKind.FUNCTION, TYPE_INTERN)
+						// fd_readdir backs %list-directory. Preview 1 binds the real host
+						// function; component mode binds the adapter's implementation
+						// over wasi:filesystem's read-directory.
+						.addImport("wasi_snapshot_preview1", "fd_readdir", ExternalKind.FUNCTION, TYPE_FD_READDIR);
 				}
 				if (this.component) {
 					// Import the linear memory from the shared canonical-memory module so
@@ -3494,11 +3538,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Function section
 			.writeFunction(fnDef -> {
-				// No-wasi mode: the eight wasi imports were omitted, so define eight trap
-				// stubs at function indices 0-7 with the SAME type indices the imports
+				// No-wasi mode: the nine wasi imports were omitted, so define nine trap
+				// stubs at function indices 0-8 with the SAME type indices the imports
 				// used
 				// (fd_write, fd_read, path_open, fd_close, random_get, clock_time_get,
-				// environ_sizes_get, environ_get). This keeps every FUNC_* constant
+				// environ_sizes_get, environ_get, fd_readdir). This keeps every FUNC_*
+				// constant
 				// valid.
 				if (this.noWasi) {
 					fnDef.addFunction(TYPE_FD_WRITE) // 0: fd_write
@@ -3508,7 +3553,8 @@ public final class WasmLispCompiler implements LispCompiler {
 						.addFunction(TYPE_INTERN) // 4: random_get
 						.addFunction(TYPE_CLOCK_TIME_GET) // 5: clock_time_get
 						.addFunction(TYPE_INTERN) // 6: environ_sizes_get
-						.addFunction(TYPE_INTERN); // 7: environ_get
+						.addFunction(TYPE_INTERN) // 7: environ_get
+						.addFunction(TYPE_FD_READDIR); // 8: fd_readdir
 				}
 				fnDef.addFunction(TYPE_START) // _start
 					.addFunction(TYPE_PRINT_I32) // print_i32
@@ -3692,6 +3738,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _peek_char (stream,
 															// eof-error-p, eof-value) ->
 															// (ref null eq)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _list_directory
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -3991,7 +4038,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Code section
 			.writeCode(code -> {
-				// No-wasi mode: bodies for the eight trap stubs at indices 0-7. Each is
+				// No-wasi mode: bodies for the nine trap stubs at indices 0-8. Each is
 				// `unreachable; end` (no locals); unreachable is stack-polymorphic so one
 				// shape satisfies every WASI signature. Calling one (i.e. any I/O) traps.
 				if (this.noWasi) {
@@ -4184,6 +4231,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildFreshLineStreamBody(stringTable.newline.offset()));
 				// peek-char runtime helper body (FUNC_PEEK_CHAR)
 				code.addFunction(WasmIoRuntimeBuilder.buildPeekCharBody());
+				// %list-directory runtime helper body (FUNC_LIST_DIRECTORY)
+				code.addFunction(WasmIoRuntimeBuilder.buildListDirectoryBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

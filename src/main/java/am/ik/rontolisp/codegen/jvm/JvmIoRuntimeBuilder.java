@@ -78,6 +78,15 @@ final class JvmIoRuntimeBuilder {
 
 	static final String PROBE_FILE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
+	/**
+	 * The directory-LISTING primitive behind {@code directory} and the {@code uiop:}
+	 * spellings. Emitted only for a program that calls it (the {@code listDirectory}
+	 * gate), so every artifact compiled before it stays byte-identical.
+	 */
+	static final String LIST_DIRECTORY_METHOD = "_listDirectory";
+
+	static final String LIST_DIRECTORY_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String WRITE_LINE_METHOD = "_writeLine";
 
 	static final String WRITE_LINE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
@@ -299,6 +308,26 @@ final class JvmIoRuntimeBuilder {
 	private final MethodrefConstant fileExists;
 
 	/**
+	 * {@code %list-directory} support, minted only when the program calls it:
+	 * {@code File.list()} (null for anything that is not a readable directory, which is
+	 * exactly the primitive's "not there" answer), {@code File.isDirectory()} for the
+	 * per-entry kind, and the {@code File(File, String)} constructor that joins the two.
+	 */
+	@Nullable private final MethodrefConstant fileList;
+
+	@Nullable private final MethodrefConstant fileIsDirectory;
+
+	@Nullable private final MethodrefConstant fileInitChild;
+
+	private final ConstantPool.@Nullable StringConstant slashQuoteStr;
+
+	/**
+	 * Whether the program calls {@code %list-directory}; see
+	 * {@link #LIST_DIRECTORY_METHOD}.
+	 */
+	private final boolean listDirectory;
+
+	/**
 	 * Socket-runtime constants, non-null only when the program uses a tcp built-in; the
 	 * stream built-ins then grow socket branches (a socket entry is a raw
 	 * {@code java.net.Socket}/{@code ServerSocket}, not a reader/writer). Non-socket
@@ -326,9 +355,10 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
-			boolean errorOutput) {
+			boolean errorOutput, boolean listDirectory) {
 		this.sockets = sockets;
 		this.errorOutput = errorOutput;
+		this.listDirectory = listDirectory;
 		this.systemErr = errorOutput ? cp.addFieldref(cp.addClass(cp.addUtf8("java/lang/System")),
 				cp.addNameAndType(cp.addUtf8("err"), cp.addUtf8("Ljava/io/PrintStream;"))) : null;
 		this.cp = cp;
@@ -466,6 +496,18 @@ final class JvmIoRuntimeBuilder {
 		this.fileInit = cp.addMethodref(this.fileClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 		this.fileExists = cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("exists"), cp.addUtf8("()Z")));
+		// %list-directory support, minted only for a program that calls it so every
+		// other artifact keeps its original bytes.
+		this.fileList = listDirectory ? cp.addMethodref(this.fileClass,
+				cp.addNameAndType(cp.addUtf8("list"), cp.addUtf8("()[Ljava/lang/String;"))) : null;
+		this.fileIsDirectory = listDirectory
+				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("isDirectory"), cp.addUtf8("()Z")))
+				: null;
+		this.fileInitChild = listDirectory
+				? cp.addMethodref(this.fileClass,
+						cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/File;Ljava/lang/String;)V")))
+				: null;
+		this.slashQuoteStr = listDirectory ? cp.addString("/\"") : null;
 	}
 
 	static JvmIoRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
@@ -473,10 +515,10 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
-			boolean errorOutput) {
+			boolean errorOutput, boolean listDirectory) {
 		return new JvmIoRuntimeBuilder(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue,
 				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets,
-				errorOutput);
+				errorOutput, listDirectory);
 	}
 
 	/**
@@ -526,6 +568,10 @@ final class JvmIoRuntimeBuilder {
 				AccessFlag.ACC_SYNCHRONIZED));
 		ms.add(new IoMethod(this.cp.addUtf8(PROBE_FILE_METHOD), this.cp.addUtf8(PROBE_FILE_DESC), 4, 2,
 				buildProbeFile()));
+		if (this.listDirectory) {
+			ms.add(new IoMethod(this.cp.addUtf8(LIST_DIRECTORY_METHOD), this.cp.addUtf8(LIST_DIRECTORY_DESC), 5, 7,
+					buildListDirectory()));
+		}
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_LINE_METHOD), this.cp.addUtf8(WRITE_LINE_DESC), 5, 4,
 				buildWriteLine()));
 		ms.add(new IoMethod(this.cp.addUtf8(READ_LINE_STREAM_METHOD), this.cp.addUtf8(READ_LINE_STREAM_DESC), 4, 2,
@@ -1110,6 +1156,120 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.ARETURN);
 		return code;
+	}
+
+	/**
+	 * {@code _listDirectory(Object path) -> (t . names) | null}. The one
+	 * directory-LISTING primitive: the quotes are stripped like {@code _probeFile} does,
+	 * {@code File.list()} answers {@code null} for anything that is not a readable
+	 * directory (which is exactly the primitive's "not there"), and each surviving name
+	 * comes back as a quoted Lisp string with a trailing {@code /} when it is itself a
+	 * directory. The result is {@code (t . names)} rather than a bare list because an
+	 * EMPTY directory and a missing one would otherwise both be nil. The host's order is
+	 * kept -- the caller ({@code directory}, in the prelude) sorts, so every backend
+	 * answers alike.
+	 */
+	private List<Integer> buildListDirectory() {
+		// Slots: 0=path, 1=p (String), 2=dir (File), 3=names (String[]), 4=i (int),
+		// 5=acc (Object), 6=entry (String)
+		JvmAsm a = new JvmAsm();
+		int notADirectory = a.label();
+		int loop = a.label();
+		int done = a.label();
+		int notSubdir = a.label();
+		int joined = a.label();
+		// p = ((String) path).substring(1, length - 1);
+		a.aload(0);
+		a.checkcast(this.stringClass);
+		a.astore(1);
+		a.aload(1);
+		a.iconst(1);
+		a.aload(1);
+		a.invokevirtual(this.stringLength);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.invokevirtual(this.stringSubstring);
+		a.astore(1);
+		// dir = new File(p); names = dir.list(); if (names == null) return null;
+		a.anew(this.fileClass);
+		a.dup();
+		a.aload(1);
+		a.invokespecial(this.fileInit);
+		a.astore(2);
+		a.aload(2);
+		a.invokevirtual(java.util.Objects.requireNonNull(this.fileList));
+		a.astore(3);
+		a.aload(3);
+		a.branch(Opcode.IFNULL, notADirectory);
+		// acc = null; for (i = names.length - 1; i >= 0; i--)
+		a.aconstNull();
+		a.astore(5);
+		a.aload(3);
+		a.arraylength();
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.istore(4);
+		a.bind(loop);
+		a.iload(4);
+		a.branch(Opcode.IFLT, done);
+		// entry = "\"" + names[i]; then + "/\"" for a subdirectory, + "\"" otherwise
+		a.ldcString(this.quoteStr);
+		a.aload(3);
+		a.iload(4);
+		a.aaload();
+		a.invokevirtual(this.stringConcat);
+		a.astore(6);
+		a.anew(this.fileClass);
+		a.dup();
+		a.aload(2);
+		a.aload(3);
+		a.iload(4);
+		a.aaload();
+		a.invokespecial(java.util.Objects.requireNonNull(this.fileInitChild));
+		a.invokevirtual(java.util.Objects.requireNonNull(this.fileIsDirectory));
+		a.branch(Opcode.IFEQ, notSubdir);
+		a.aload(6);
+		a.ldcString(java.util.Objects.requireNonNull(this.slashQuoteStr));
+		a.invokevirtual(this.stringConcat);
+		a.astore(6);
+		a.branch(Opcode.GOTO, joined);
+		a.bind(notSubdir);
+		a.aload(6);
+		a.ldcString(this.quoteStr);
+		a.invokevirtual(this.stringConcat);
+		a.astore(6);
+		a.bind(joined);
+		// acc = new Object[] { entry, acc };
+		a.iconst(2);
+		a.anewarray(this.objectClass);
+		a.dup();
+		a.iconst(0);
+		a.aload(6);
+		a.aastore();
+		a.dup();
+		a.iconst(1);
+		a.aload(5);
+		a.aastore();
+		a.astore(5);
+		a.iinc(4, -1);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(done);
+		// return new Object[] { "T", acc };
+		a.iconst(2);
+		a.anewarray(this.objectClass);
+		a.dup();
+		a.iconst(0);
+		a.ldcString(this.tStr);
+		a.aastore();
+		a.dup();
+		a.iconst(1);
+		a.aload(5);
+		a.aastore();
+		a.areturn();
+		a.bind(notADirectory);
+		a.aconstNull();
+		a.areturn();
+		return a.finish();
 	}
 
 	/**

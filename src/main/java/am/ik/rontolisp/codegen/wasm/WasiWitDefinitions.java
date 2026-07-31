@@ -107,6 +107,8 @@ final class WasiWitDefinitions {
 								param("offset", named("filesize")))),
 				func("append-via-stream",
 						funcType(future(result(null, named("error-code"))), param("data", stream(u8())))),
+				func("read-directory",
+						funcType(tuple(stream(named("directory-entry")), future(result(null, named("error-code")))))),
 				func("open-at",
 						asyncFuncType(result(named("descriptor"), named("error-code")),
 								param("path-flags", named("path-flags")), param("path", string()),
@@ -125,7 +127,11 @@ final class WasiWitDefinitions {
 				flags("path-flags", "symlink-follow"),
 				flags("open-flags", "create", "directory", "exclusive", "truncate"),
 				flags("descriptor-flags", "read", "write", "file-integrity-sync", "data-integrity-sync",
-						"requested-write-sync", "mutate-directory")),
+						"requested-write-sync", "mutate-directory"),
+				variant("descriptor-type", vcase("block-device"), vcase("character-device"), vcase("directory"),
+						vcase("fifo"), vcase("symbolic-link"), vcase("regular-file"), vcase("socket"),
+						vcase("other", option(string()))),
+				record("directory-entry", field("type", named("descriptor-type")), field("name", string()))),
 				iface("preopens", use(localRef("types"), useName("descriptor")),
 						func("get-directories", funcType(list(tuple(named("descriptor"), string()))))));
 	}

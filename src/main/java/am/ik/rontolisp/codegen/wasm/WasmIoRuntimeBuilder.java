@@ -203,6 +203,366 @@ final class WasmIoRuntimeBuilder {
 	}
 
 	/**
+	 * The listing buffer handed to {@code fd_readdir}, and the scratch that follows it
+	 * where each entry's quoted name is assembled before {@code _str_fresh} copies it
+	 * onto the GC heap. Both live above HEAP_PTR (transient scratch, never advanced --
+	 * nothing between them allocates in linear memory), so the pair costs no permanent
+	 * heap. 8 KiB holds ~340 typical dirents per round trip and the loop resumes through
+	 * the cookie anyway; the 512-byte tail covers preview1's 255-byte name ceiling plus
+	 * the quotes and the directory slash.
+	 */
+	private static final int READDIR_BUF_BYTES = 8192;
+
+	private static final int READDIR_NAME_SCRATCH_BYTES = 512;
+
+	/**
+	 * Builds the _list_directory(path) function body: {@code (t . names)} for a readable
+	 * directory, {@code ref.null eq} (nil) otherwise -- the one directory-LISTING
+	 * primitive, over which {@code directory} and the {@code uiop:} spellings are Lisp
+	 * source (LispPreludeLibrary). The path is staged into linear scratch and opened as a
+	 * DIRECTORY through {@code path_open} exactly as {@link #buildProbeFileBody()} opens
+	 * a file, then {@code fd_readdir}'s preview1 dirent stream is drained in
+	 * {@value #READDIR_BUF_BYTES}-byte rounds, resuming through the cookie of the last
+	 * COMPLETE entry (a round can end mid-entry, and the truncated tail must not be
+	 * decoded).
+	 *
+	 * <p>
+	 * Two rules keep the answer identical to the other three backends. A failed open -- a
+	 * missing path, a plain file, a host with no preopened directory -- answers nil
+	 * rather than trapping, like {@code probe-file}, so a library walking an OPTIONAL
+	 * tree degrades instead of aborting. And the {@code "."} / {@code ".."} entries a
+	 * preview1 host yields are SKIPPED: {@code Files.list} and wasi:filesystem's
+	 * {@code read-directory} both omit them, so emitting them here would be the one
+	 * backend that walks its own parent forever.
+	 * @return the function body bytes
+	 */
+	static byte[] buildListDirectoryBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: PATH=0 (ref) ; i32 locals 1..9, i64 local 10, ref local 11
+		final int PATH = 0, OFF = 1, PLEN = 2, FD = 3, BUF = 4, END = 5, P = 6, NAMLEN = 7, DST = 8, I = 9;
+		final int COOKIE = 10, ACC = 11;
+		w.write(3);
+		w.write(9);
+		w.write(Type.I32);
+		w.write(1);
+		w.write(Type.I64);
+		w.write(1);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+
+		// Stage the path bytes into linear scratch exactly as _open / _probe_file do.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// HEAP_PTR = align8(off + plen + 2)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// path_open(dirfd=3, dirflags=0, path_ptr=off+1, path_len=plen,
+		// oflags=DIRECTORY=2, fs_rights_base=FD_READDIR=1<<14, fs_rights_inheriting=0,
+		// fdflags=0, fd_out=OPEN_FD_ADDR)
+		i32(w, 3);
+		i32(w, 0);
+		getLocal(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PLEN);
+		i32(w, 2);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(1 << 14);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
+		i32(w, 0);
+		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		// pop the staged path (PLEN is free now: reuse it for the errno)
+		setLocal(w, PLEN);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// if errno != 0: not a readable directory -> nil
+		getLocal(w, PLEN);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		loadMem32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		setLocal(w, FD);
+		// buf = HEAP_PTR (transient; the name scratch follows it), grown to cover both.
+		// HEAP_PTR is then ADVANCED over the pair for the duration of the walk and popped
+		// back at the end -- the same discipline _open uses for its staged path, and here
+		// it is load-bearing under --component: every directory-entry NAME the canonical
+		// ABI lifts is allocated through cabi_realloc, which bumps this very cell, so an
+		// un-advanced buffer would be overwritten by the names being read into it.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, BUF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, BUF);
+			i32(w, READDIR_BUF_BYTES + READDIR_NAME_SCRATCH_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		i32(w, READDIR_BUF_BYTES + READDIR_NAME_SCRATCH_BYTES + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// acc = nil ; cookie = 0
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		setLocal(w, ACC);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, COOKIE);
+		// outer: block { loop { ... } }
+		w.write(Instruction.BLOCK);
+		w.write(0x40);
+		w.write(Instruction.LOOP);
+		w.write(0x40);
+		// errno = fd_readdir(fd, buf, BUF_BYTES, cookie, READDIR_USED_ADDR)
+		getLocal(w, FD);
+		getLocal(w, BUF);
+		i32(w, READDIR_BUF_BYTES);
+		getLocal(w, COOKIE);
+		i32(w, WasmLispCompiler.READDIR_USED_ADDR);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_READDIR);
+		// a non-zero errno ends the walk with whatever was collected (break outer)
+		w.write(Instruction.BR_IF);
+		w.writeSignedLeb128(1);
+		// end = buf + bufused ; nothing written means the directory is exhausted
+		getLocal(w, BUF);
+		loadMem32(w, WasmLispCompiler.READDIR_USED_ADDR);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, END);
+		getLocal(w, END);
+		getLocal(w, BUF);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.BR_IF);
+		w.writeSignedLeb128(1);
+		// p = buf
+		getLocal(w, BUF);
+		setLocal(w, P);
+		// inner: block { loop { ... } } over the dirents in this round
+		w.write(Instruction.BLOCK);
+		w.write(0x40);
+		w.write(Instruction.LOOP);
+		w.write(0x40);
+		// a 24-byte dirent header must fit, and its name after it
+		getLocal(w, P);
+		i32(w, 24);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, END);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF);
+		w.writeSignedLeb128(1);
+		// namlen = u32 at p+16 (d_namlen)
+		getLocal(w, P);
+		i32(w, 16);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, NAMLEN);
+		getLocal(w, P);
+		i32(w, 24);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NAMLEN);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, END);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF);
+		w.writeSignedLeb128(1);
+		// cookie = d_next (u64 at p+0): the resume point of the last COMPLETE entry
+		getLocal(w, P);
+		w.write(Instruction.I64_LOAD, 0x03, 0x00);
+		setLocal(w, COOKIE);
+		// skip "." and ".." -- see the class comment on why they must not be collected
+		emitDotEntryTest(w, P, NAMLEN);
+		w.write(Instruction.IF, 0x40);
+		// dst = buf + BUF_BYTES ; memory[dst] = '"'
+		getLocal(w, BUF);
+		i32(w, READDIR_BUF_BYTES);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, DST);
+		getLocal(w, DST);
+		i32(w, 0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		// copy the name bytes: for (i = 0; i < namlen; i++) dst[1+i] = p[24+i]
+		i32(w, 0);
+		setLocal(w, I);
+		w.write(Instruction.BLOCK);
+		w.write(0x40);
+		w.write(Instruction.LOOP);
+		w.write(0x40);
+		getLocal(w, I);
+		getLocal(w, NAMLEN);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeSignedLeb128(1);
+		getLocal(w, DST);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, P);
+		i32(w, 24);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, I);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, I);
+		w.write(Instruction.BR);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// a directory entry (preview1 filetype 3) carries the trailing '/'
+		getLocal(w, P);
+		i32(w, 20);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 3);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, DST);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NAMLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0x2f);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, NAMLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, NAMLEN);
+		w.write(Instruction.END);
+		// memory[dst+1+namlen] = '"' ; acc = cons(_str_fresh(dst, namlen + 2), acc)
+		getLocal(w, DST);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NAMLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, DST);
+		getLocal(w, NAMLEN);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrFreshCall(w);
+		getLocal(w, ACC);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		setLocal(w, ACC);
+		// namlen may have grown by the slash; restore it for the p advance below
+		getLocal(w, P);
+		i32(w, 16);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, NAMLEN);
+		w.write(Instruction.END); // if (not a dot entry)
+		// p += 24 + namlen
+		getLocal(w, P);
+		i32(w, 24);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NAMLEN);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, P);
+		w.write(Instruction.BR);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END); // inner loop
+		w.write(Instruction.END); // inner block
+		// Only an EMPTY round ends the walk (the test at the top of the loop). A short
+		// one does not: a preview1 host fills the buffer and truncates the last entry,
+		// so "used < buflen" reads as "exhausted" there -- but the --component adapter
+		// stops at the last record that fits WHOLE, which makes a full directory look
+		// short and silently truncated the listing on that backend alone.
+		// A round that decoded no complete entry would spin forever: bail out.
+		getLocal(w, P);
+		getLocal(w, BUF);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.BR_IF);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.BR);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END); // outer loop
+		w.write(Instruction.END); // outer block
+		// pop the listing buffer, close the descriptor and answer (t . names)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, FD);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
+		w.write(Instruction.DROP);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_T_SYM);
+		getLocal(w, ACC);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Pushes 1 when the dirent at {@code pSlot} is NOT the {@code "."} / {@code ".."}
+	 * self/parent entry, i.e. when it should be collected.
+	 */
+	private static void emitDotEntryTest(WasmWriter w, int pSlot, int namlenSlot) {
+		// !(namlen <= 2 && name[0] == '.' && (namlen == 1 || name[1] == '.'))
+		getLocal(w, namlenSlot);
+		i32(w, 2);
+		w.write(Instruction.I32_LE_U);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, pSlot);
+		i32(w, 24);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 0x2e);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, namlenSlot);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 1);
+		w.write(Instruction.ELSE);
+		getLocal(w, pSlot);
+		i32(w, 25);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 0x2e);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.I32_EQZ);
+	}
+
+	/**
 	 * Builds the _close(stream) function body. Closes the file descriptor via WASI
 	 * fd_close and returns the symbol {@code T}.
 	 * @param st the string table (for the {@code T} symbol)

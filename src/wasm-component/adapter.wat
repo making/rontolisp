@@ -1,10 +1,10 @@
 ;; preview1-to-WASI-0.3 adapter core module.
 ;;
 ;; Imports the shared memory and the lowered WASI 0.3 functions plus the async canonical
-;; built-ins (under "w"); exports the eight wasi_snapshot_preview1 functions rontolisp
+;; built-ins (under "w"); exports the nine wasi_snapshot_preview1 functions rontolisp
 ;; imports. In WASI 0.3 the wasi:io package is gone and all byte I/O flows through the
-;; built-in stream<u8> / future<T> types, so fd_write/fd_read/path_open/fd_close are
-;; implemented with stream.new/read/write/drop + future.read over wasi:cli + wasi:filesystem
+;; built-in stream<u8> / future<T> types, so fd_write/fd_read/path_open/fd_close/fd_readdir
+;; are implemented with stream.new/read/write/drop + future.read over wasi:cli + wasi:filesystem
 ;; 0.3; random_get/clock_time_get/environ_* bridge wasi:random / wasi:clocks
 ;; (system-clock, renamed from 0.2's wall-clock) / wasi:cli/environment. The environ_*
 ;; pair is UNREACHABLE from Lisp since todo 217: uiop:getenv under --component is
@@ -33,6 +33,8 @@
 ;;   0x50080 stdin cache {flag@0x50080, stream@0x50084}
 ;;   0x50090 waitable-set event scratch {waitable@0x50090, payload@0x50094}
 ;;   0x5009c cached waitable-set handle (0 = not yet created)
+;;   0x500a0 read-directory result tuple {stream@0x500a0, future@0x500a4}
+;;   0x500b0 one lowered directory-entry (24 bytes: type variant @0, name ptr@16 len@20)
 ;;   0x50100 fd table: 64 slots x 16 bytes {descriptor@0, read-stream@4, valid@12}
 ;; A preview1 file fd is 100 + slotIndex (so it never clashes with stdout=1 or dirfd=3).
 ;; Writes use append-via-stream (each fd_write is a full append cycle, so no per-fd write
@@ -60,6 +62,7 @@
   (import "w" "file-append" (func $file_append (param i32 i32) (result i32)))
   (import "w" "open-at" (func $open_at (param i32 i32 i32 i32 i32 i32 i32)))
   (import "w" "get-directories" (func $get_directories (param i32)))
+  (import "w" "read-dir" (func $read_dir (param i32 i32)))
   (import "w" "get-random-u64" (func $rand_u64 (result i64)))
   (import "w" "drop-desc" (func $drop_desc (param i32)))
   ;; async canonical built-ins (the non-blocking variants; BLOCKED completes through
@@ -78,6 +81,10 @@
   (import "w" "waitable-set-new" (func $ws_new (result i32)))
   (import "w" "waitable-join" (func $w_join (param i32 i32)))
   (import "w" "waitable-set-wait" (func $ws_wait (param i32 i32) (result i32)))
+  ;; the directory-entry stream is a DISTINCT stream type from stream<u8> (elements own
+  ;; a string), so it gets its own read / drop built-ins.
+  (import "w" "stream-read-de" (func $stream_read_de_a (param i32 i32 i32) (result i32)))
+  (import "w" "stream-drop-r-de" (func $stream_drop_r_de (param i32)))
 
   ;; The adapter's one waitable-set, created on first blocking completion.
   (func $ensure_ws (result i32)
@@ -100,6 +107,12 @@
   (func $stream_read (param $h i32) (param $ptr i32) (param $len i32) (result i32)
     (local $ret i32)
     (local.set $ret (call $stream_read_a (local.get $h) (local.get $ptr) (local.get $len)))
+    (if (i32.eq (local.get $ret) (i32.const -1))
+      (then (local.set $ret (call $await_waitable (local.get $h)))))
+    (local.get $ret))
+  (func $stream_read_de (param $h i32) (param $ptr i32) (param $len i32) (result i32)
+    (local $ret i32)
+    (local.set $ret (call $stream_read_de_a (local.get $h) (local.get $ptr) (local.get $len)))
     (if (i32.eq (local.get $ret) (i32.const -1))
       (then (local.set $ret (call $await_waitable (local.get $h)))))
     (local.get $ret))
@@ -231,8 +244,12 @@
     (local.set $pre (call $ensure_preopen))
     ;; No preopened directory: nothing can be opened, so report the failure as an errno.
     (if (i32.eq (local.get $pre) (i32.const -1)) (then (return (i32.const 76))))
-    (local.set $df (if (result i32) (i32.eqz (local.get $oflags))
-      (then (i32.const 1)) (else (i32.const 2))))
+    ;; descriptor-flags: write only when the caller asked to create or truncate
+    ;; (oflags 9). A plain read is 1, and so is a DIRECTORY open (oflags 2) -- asking
+    ;; for write on a directory fails, which is what an `(i32.eqz oflags)` test used to
+    ;; do the moment %list-directory started opening one.
+    (local.set $df (if (result i32) (i32.and (local.get $oflags) (i32.const 9))
+      (then (i32.const 2)) (else (i32.const 1))))
     (call $open_at (local.get $pre) (i32.const 0) (local.get $pptr) (local.get $plen)
       (local.get $oflags) (local.get $df) (i32.const 0x50050))
     (if (i32.load8_u (i32.const 0x50050)) (then (return (i32.const 76))))
@@ -262,6 +279,74 @@
       (then (call $stream_drop_r (local.get $h))))
     (call $drop_desc (i32.load (local.get $sl)))
     (i32.store offset=12 (local.get $sl) (i32.const 0))
+    (i32.const 0))
+
+  ;; fd_readdir(fd, buf, buflen, cookie, used) -> errno. The preview1 shape over WASI
+  ;; 0.3's read-directory, which always hands back a stream positioned at the START of
+  ;; the directory -- so the cookie is simply "how many entries to skip", and each
+  ;; emitted dirent's d_next is its 1-based index. Entries are read one at a time into
+  ;; the 0x500b0 element scratch (the canonical ABI allocates each name through
+  ;; cabi_realloc, which bumps the core's own HEAP_PTR -- the core advances HEAP_PTR
+  ;; over its listing buffer for exactly that reason) and re-encoded into the caller's
+  ;; buffer as {d_next u64, d_ino u64, d_namlen u32, d_type u8, pad} + the name bytes.
+  ;; The walk stops when the next record would not fit whole, which is the signal the
+  ;; core resumes on. "." and ".." never appear: read-directory omits them by contract.
+  (func $fd_readdir (param $fd i32) (param $buf i32) (param $buflen i32) (param $cookie i64)
+    (param $used i32) (result i32)
+    (local $sl i32) (local $sr i32) (local $fut i32) (local $ret i32)
+    (local $idx i64) (local $out i32) (local $np i32) (local $nl i32) (local $i i32)
+    (i32.store (local.get $used) (i32.const 0))
+    ;; only a real file fd names a descriptor (100 + slot); anything else is EBADF.
+    (if (i32.lt_u (local.get $fd) (i32.const 100)) (then (return (i32.const 8))))
+    (local.set $sl (call $slot (local.get $fd)))
+    (call $read_dir (i32.load (local.get $sl)) (i32.const 0x500a0))
+    (local.set $sr (i32.load (i32.const 0x500a0)))
+    (local.set $fut (i32.load offset=4 (i32.const 0x500a0)))
+    (local.set $out (local.get $buf))
+    (block $done
+      (loop $l
+        (local.set $ret (call $stream_read_de (local.get $sr) (i32.const 0x500b0) (i32.const 1)))
+        ;; (count << 4) | status; count 0 = the directory is exhausted
+        (br_if $done (i32.eqz (i32.shr_u (local.get $ret) (i32.const 4))))
+        (local.set $idx (i64.add (local.get $idx) (i64.const 1)))
+        ;; skip everything the caller has already seen
+        (if (i64.le_u (local.get $idx) (local.get $cookie)) (then (br $l)))
+        (local.set $np (i32.load offset=16 (i32.const 0x500b0)))
+        (local.set $nl (i32.load offset=20 (i32.const 0x500b0)))
+        ;; a record must fit WHOLE or the caller could not decode it
+        (br_if $done (i32.gt_u
+          (i32.add (i32.sub (local.get $out) (local.get $buf)) (i32.add (i32.const 24) (local.get $nl)))
+          (local.get $buflen)))
+        (i64.store (local.get $out) (local.get $idx))
+        (i64.store offset=8 (local.get $out) (i64.const 0))
+        (i32.store offset=16 (local.get $out) (local.get $nl))
+        (i32.store offset=20 (local.get $out) (call $p1_filetype (i32.load8_u (i32.const 0x500b0))))
+        (local.set $i (i32.const 0))
+        (block $copied
+          (loop $cl
+            (br_if $copied (i32.ge_u (local.get $i) (local.get $nl)))
+            (i32.store8 (i32.add (i32.add (local.get $out) (i32.const 24)) (local.get $i))
+              (i32.load8_u (i32.add (local.get $np) (local.get $i))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $cl)))
+        (local.set $out (i32.add (local.get $out) (i32.add (i32.const 24) (local.get $nl))))
+        (br $l)))
+    (call $stream_drop_r_de (local.get $sr))
+    (drop (call $future_read_fs (local.get $fut) (i32.const 0x50000)))
+    (call $future_drop_fs (local.get $fut))
+    (i32.store (local.get $used) (i32.sub (local.get $out) (local.get $buf)))
+    (i32.const 0))
+
+  ;; wasi:filesystem descriptor-type case index -> preview1 filetype. Only "directory"
+  ;; (case 2 -> 3) is load-bearing for %list-directory, but the whole table is mapped so
+  ;; a caller reading d_type gets the preview1 answer it expects.
+  (func $p1_filetype (param $t i32) (result i32)
+    (if (i32.eq (local.get $t) (i32.const 0)) (then (return (i32.const 1))))  ;; block-device
+    (if (i32.eq (local.get $t) (i32.const 1)) (then (return (i32.const 2))))  ;; character-device
+    (if (i32.eq (local.get $t) (i32.const 2)) (then (return (i32.const 3))))  ;; directory
+    (if (i32.eq (local.get $t) (i32.const 4)) (then (return (i32.const 7))))  ;; symbolic-link
+    (if (i32.eq (local.get $t) (i32.const 5)) (then (return (i32.const 4))))  ;; regular-file
+    (if (i32.eq (local.get $t) (i32.const 6)) (then (return (i32.const 6))))  ;; socket
     (i32.const 0))
 
   ;; random_get(buf, len) -> errno. Fills buf with wasi:random bytes (8 at a time).
@@ -352,6 +437,7 @@
   (export "fd_write" (func $fd_write))
   (export "fd_read" (func $fd_read))
   (export "path_open" (func $path_open))
+  (export "fd_readdir" (func $fd_readdir))
   (export "fd_close" (func $fd_close))
   (export "random_get" (func $random_get))
   (export "clock_time_get" (func $clock_time_get))

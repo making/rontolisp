@@ -356,6 +356,14 @@ public final class LispNames {
 	public static final String COMPLEMENT = "COMPLEMENT";
 
 	/**
+	 * The {@code constantly} built-in: a function of any arguments answering the one
+	 * value it was given. Prelude Lisp source, so unlike {@link #COMPLEMENT} it IS usable
+	 * as {@code #'constantly}. The idiomatic "accept everything" filter argument --
+	 * {@code uiop:collect-sub*directories} takes two of them.
+	 */
+	public static final String CONSTANTLY = "CONSTANTLY";
+
+	/**
 	 * The {@code count} built-in function (return the number of elements {@code eql} to
 	 * the given item).
 	 */
@@ -2518,6 +2526,83 @@ public final class LispNames {
 	 * the path absolute.
 	 */
 	public static final String PROBE_FILE = "PROBE-FILE";
+
+	/**
+	 * The {@code %list-directory} internal primitive: the one directory-LISTING call each
+	 * backend implements. Takes a directory namestring and answers a list of the entry
+	 * NAMES it contains (no path prefix), a subdirectory's name carrying a trailing
+	 * {@code /} so the caller can tell the two kinds apart without a second probe. The
+	 * order is the host's; {@link #DIRECTORY} sorts it. Like {@link #PROBE_FILE} it never
+	 * signals -- a missing path, a plain file, or a host with no filesystem all answer
+	 * nil -- so a library that walks an OPTIONAL tree degrades instead of failing.
+	 * Everything user-facing ({@link #DIRECTORY}, {@code uiop:directory-files},
+	 * {@code uiop:subdirectories}, {@code uiop:collect-sub*directories}) is Lisp source
+	 * over this one call, so the pattern/prefix/sort rules cannot drift between backends.
+	 */
+	public static final String LIST_DIRECTORY = "%LIST-DIRECTORY";
+
+	/**
+	 * The {@code %dir-namestring} internal helper: a pathname in DIRECTORY form, i.e. the
+	 * namestring with a trailing {@code /} added unless it already ends in one (and the
+	 * empty namestring, which designates the working directory, left alone). The one rule
+	 * shared by {@link #DIRECTORY}, {@code uiop:directory-exists-p} and
+	 * {@code uiop:collect-sub*directories}, so a walk hands its collector the same shape
+	 * at the root as at every level below it. Lisp source, like everything else in the
+	 * listing family.
+	 */
+	public static final String DIR_NAMESTRING = "%DIR-NAMESTRING";
+
+	/**
+	 * The {@code %wild-match} internal helper: glob matching of ONE pathname component,
+	 * {@code *} standing for any sequence of characters and {@code ?} for exactly one --
+	 * the wild-component matching {@link #DIRECTORY} needs to be ANSI's {@code directory}
+	 * rather than a bare listing. Deliberately one component only: a wild DIRECTORY
+	 * component ({@code "src/**} + {@code /*.lisp"}) is not matched, because rontolisp
+	 * has no structured pathname to walk with.
+	 */
+	public static final String WILD_MATCH = "%WILD-MATCH";
+
+	/**
+	 * The {@code %pathname-typed-p} internal helper: whether a pathname's NAME component
+	 * carries a type, i.e. holds a {@code .} anywhere but at the front (a leading dot is
+	 * part of the name, as every Unix pathname parser has it). What makes
+	 * {@link #DIRECTORY}'s {@code "*"} mean what CL means by it -- a wild name with NO
+	 * type, so {@code "d/*"} matches {@code sub} and {@code README} but not
+	 * {@code a.txt}, while {@code "d/*.*"} matches everything.
+	 */
+	public static final String PATHNAME_TYPED_P = "%PATHNAME-TYPED-P";
+
+	/**
+	 * The {@code pathname-directory} built-in: the directory component of a namestring as
+	 * CL's list, {@code (:absolute "usr" "share")} / {@code (:relative "sub")}, or nil
+	 * when the namestring has no directory part. Prelude Lisp over the primitives every
+	 * backend has, like {@link #DIRECTORY}. The consumer that asked for it is a directory
+	 * WALK deciding what to do per entry -- local-time's timezone reader skips the
+	 * {@code Etc} subtree with it.
+	 */
+	public static final String PATHNAME_DIRECTORY = "PATHNAME-DIRECTORY";
+
+	/**
+	 * The {@code directory} built-in, in ANSI's shape: the pathnames MATCHING the
+	 * pathspec, sorted with {@code string<} so every backend answers in the same order
+	 * whatever the host's readdir order is, and nil when nothing matches (it never
+	 * signals). Lisp source over {@link #LIST_DIRECTORY}.
+	 * <ul>
+	 * <li>A wild NAME component -- {@code "src/*.lisp"}, {@code "src/*"},
+	 * {@code "src/*.*"} -- lists the directory and keeps the entries the pattern matches
+	 * ({@link #WILD_MATCH}; {@code "*.*"} matches every entry, including one with no
+	 * type, which is what CL means by it). Each answer keeps the pathspec's own directory
+	 * prefix, so it is directly openable, and a subdirectory carries a trailing
+	 * {@code /}.</li>
+	 * <li>A non-wild pathspec designates ITSELF, as in CL: {@code "src/f.lisp"} answers
+	 * {@code ("src/f.lisp")} when the file exists, and a directory answers itself in
+	 * directory form ({@code "src"} and {@code "src/"} both give {@code ("src/")}) --
+	 * listing it is {@code "src/*.*"}, not {@code "src/"}.</li>
+	 * </ul>
+	 * The DIRECTORY components are never wild: rontolisp has no structured pathname to
+	 * walk, so {@code "src/*}{@code /f.lisp"} matches nothing.
+	 */
+	public static final String DIRECTORY = "DIRECTORY";
 
 	/** The {@code write-line} built-in function. */
 	public static final String WRITE_LINE = "WRITE-LINE";
@@ -4803,21 +4888,29 @@ public final class LispNames {
 	public static final String DIRECTORY_EXISTS_P = "DIRECTORY-EXISTS-P";
 
 	/**
-	 * {@code uiop:collect-sub*directories} (stub: resolves, undefined when called).
-	 * Walking a directory tree needs a listing primitive no backend has -- rontolisp's
-	 * whole filesystem surface is "read/write a named file" -- and the WASM sandbox has
-	 * no filesystem at all, so the honest answer is a call-time error. local-time's
-	 * {@code reread-timezone-repository} is the only caller in the loadable-library set;
-	 * naming an individual zone file with {@code define-timezone} works everywhere.
+	 * {@code uiop:collect-sub*directories directory collectp recursep collector} -- the
+	 * recursive directory walk, Lisp source over {@link #DIRECTORY} like its two
+	 * siblings, so it runs on every backend. {@code collectp} decides whether a directory
+	 * is handed to {@code collector}, {@code recursep} whether its subdirectories are
+	 * visited; both are called with the directory's namestring. local-time's
+	 * {@code reread-timezone-repository} is the caller that asked for it.
 	 */
 	public static final String COLLECT_SUB_DIRECTORIES = "COLLECT-SUB*DIRECTORIES";
 
 	/**
-	 * {@code uiop:directory-files} (stub: resolves, undefined when called) -- same reason
-	 * as {@link #COLLECT_SUB_DIRECTORIES}: listing a directory is not part of rontolisp's
-	 * filesystem surface on any backend.
+	 * {@code uiop:directory-files} -- the non-directory entries of a directory, Lisp
+	 * source over {@link #DIRECTORY}. UIOP's second optional argument is a wildcard
+	 * pathname, which rontolisp has no machinery for, so only the 1-argument shape is
+	 * offered.
 	 */
 	public static final String DIRECTORY_FILES = "DIRECTORY-FILES";
+
+	/**
+	 * {@code uiop:subdirectories} -- the {@link #DIRECTORY_FILES} twin that keeps only
+	 * the subdirectories (each with its trailing {@code /}). Lisp source over
+	 * {@link #DIRECTORY}, and what {@link #COLLECT_SUB_DIRECTORIES} recurses through.
+	 */
+	public static final String SUBDIRECTORIES = "SUBDIRECTORIES";
 
 	/**
 	 * {@code uiop::get-pathname-defaults} (internal in real UIOP too, hence the double

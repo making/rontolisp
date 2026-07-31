@@ -105,9 +105,9 @@ class WasmImportCompilerTest {
 				(print (draw 1.0 2.0))
 				""");
 		List<String[]> imports = functionImports(module);
-		// The two host imports occupy function indices 0 and 1, ahead of the eight
+		// The two host imports occupy function indices 0 and 1, ahead of the nine
 		// wasi_snapshot_preview1 imports.
-		assertThat(imports).hasSize(10);
+		assertThat(imports).hasSize(11);
 		assertThat(imports.get(0)).containsExactly("gl", "beginFrame");
 		assertThat(imports.get(1)).containsExactly("gl", "draw");
 		assertThat(imports.get(2)[0]).isEqualTo("wasi_snapshot_preview1");

@@ -59,6 +59,8 @@ page.
 | `close` | `(close stream)` | Close a stream opened by `open`. Returns `t` |
 | `probe-file` | `(probe-file "f.txt")` | The pathname when the file exists, `nil` otherwise. The only file operation that does not fail on a missing path (`open` signals). `uiop:file-exists-p` is the same operation |
 | `truename` | `(truename "f.txt")` | The pathname when the file exists, an error otherwise — the signalling twin of `probe-file`, which is what makes `(ignore-errors (truename p))` a portable existence probe |
+| `directory` | `(directory "src/*.lisp")` | The pathnames matching the pathspec, sorted, keeping its directory prefix and giving each subdirectory a trailing `/`. A wild NAME component matches (`*` any sequence, `?` one character, `*` alone meaning "no type" as in CL); a non-wild one designates itself, so listing a directory is `"src/*.*"`, not `"src/"`. Directory components are never wild |
+| `pathname-directory` | `(pathname-directory "a/b/c.txt")` | `(:RELATIVE "a" "b")` — the directory component of a namestring as CL's list (`:absolute`/`:relative` plus one string per level), `nil` when there is none. Pure string work; nothing is read |
 | `merge-pathnames` | `(merge-pathnames "zoneinfo/" "/opt/lt/")` | Fills the gaps in the first namestring from the second: an absolute directory wins, a relative one is appended, an absent one is taken from the defaults. `uiop:merge-pathnames*` is the same merge |
 | `open-stream-p` | `(open-stream-p stream)` | `t` while the handle names an open stream, `nil` after `close` (exact for sockets on the interpreter/JVM and on `--component`) |
 | `force-output` | `(force-output stream)` | Flush an output stream (no argument = standard output). Returns nil |
@@ -252,6 +254,7 @@ page.
 | `notevery` | `(notevery #'evenp '(2 4 5))` | `t` if the predicate is nil for some element (tuple), else `nil` (the complement of `every`) |
 | `symbol-function` | `(symbol-function 'car)` | Return the function named by a symbol (compilers: the argument must be a quoted symbol literal) |
 | `identity` | `(identity 42)` | `42` (return the argument unchanged) |
+| `constantly` | `(mapcar (constantly 7) '(a b c))` | `(7 7 7)` (a function of any arguments answering one fixed value) |
 | `make-hash-table` | `(make-hash-table)`, `(make-hash-table :test 'equal)` | Create an empty hash table. `:test` is accepted but informational (see the note below); other keywords such as `:size` are ignored |
 | `gethash` | `(gethash key table)`, `(gethash key table default)` | Return the value stored under `key`, or `default` (nil if omitted) when absent |
 | `(setf (gethash key table) v)` | `(setf (gethash "a" h) 1)` | Store `v` under `key`; works with `incf`/`decf`/`push` on the place |
@@ -568,7 +571,10 @@ implements the members below; each name links to its own page.
 |----------|---------|--------|
 | `uiop:getenv` | `(uiop:getenv "PATH")` | the value of an environment variable as a string, or `nil` if unset. Homed here because Common Lisp has no `getenv`. All backends; WASM reads the real host environment in Preview 1 and `wasi:cli/environment@0.3.0` in `--component` mode (pass `--env`/`-S inherit-env` to wasmtime) |
 | `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | the pathname when the file exists, `nil` otherwise — the same contract as `probe-file`, which it lowers onto on every backend |
-| `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | the pathname (with a trailing `/`) when the DIRECTORY exists, `nil` otherwise — the directory twin of `file-exists-p`. Interpreter only; the compiled backends signal at the call |
+| `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | the pathname (with a trailing `/`) when the DIRECTORY exists, `nil` otherwise — the directory twin of `file-exists-p`, and what tells an empty directory from a missing one |
+| `uiop:directory-files` | `(uiop:directory-files "src/")` | the non-directory entries of a directory — `(directory "src/*.*")` with the subdirectories dropped. Real UIOP's optional wildcard argument is not offered |
+| `uiop:subdirectories` | `(uiop:subdirectories "src/")` | the subdirectories of a directory, each with its trailing `/` |
+| `uiop:collect-sub*directories` | `(uiop:collect-sub*directories "src/" (constantly t) (constantly t) #'print)` | walk a directory tree: `collectp` decides what reaches `collector`, `recursep` what is descended into. Every directory handed over is in directory form, root included |
 | `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `"/tmp/b.txt"` — the defaults-aware pathname merge (a pathname is its namestring here). A real runtime function on the interpreter; on the compiled backends only the calls the compiler folds to a literal |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping). A literal top-level call is a compile-time directive, so it works on every backend |
 | `uiop:emptyp` | `(uiop:emptyp "")` | `t` for `nil` and for a zero-length vector or string, `nil` otherwise |
@@ -582,16 +588,12 @@ namestring designating exactly that, so `(merge-pathnames x
 (uiop::get-pathname-defaults))` yields `x`.
 
 The rest of the package is a **name-resolution stub**: `uiop:native-namestring`,
-`uiop:namestring`, `uiop:os-unix-p`, `uiop:os-macosx-p`, `uiop:run-program`,
-`uiop:collect-sub*directories` and `uiop:directory-files` resolve — so a library
-naming them in an `(:import-from #:uiop)` clause reads and compiles — but calling
-one signals an undefined-function error. Each is deliberate rather than
-unfinished: spawning an external process (`run-program`) is outside every
-backend's sandbox, and LISTING a directory (`collect-sub*directories`,
-`directory-files`) is not part of rontolisp's filesystem surface on any backend —
-that surface is "read or write a NAMED file", and the WASM backends have no
-filesystem at all. An error is a more honest answer than a silent no-op or an
-empty list.
+`uiop:namestring`, `uiop:os-unix-p`, `uiop:os-macosx-p` and `uiop:run-program`
+resolve — so a library naming them in an `(:import-from #:uiop)` clause reads and
+compiles — but calling one signals an undefined-function error. That is
+deliberate rather than unfinished: spawning an external process (`run-program`)
+is outside every backend's sandbox, and an error is a more honest answer than a
+silent no-op.
 
 ## ql Package Functions
 

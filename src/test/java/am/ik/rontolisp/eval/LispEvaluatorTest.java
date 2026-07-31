@@ -4653,6 +4653,70 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void directoryMatchesPathnamesTheWayAnsiDoes(@TempDir Path tempDir) throws Exception {
+		// Every expectation here was checked against SBCL on the same tree: `directory`
+		// MATCHES a pathspec, it does not simply list a directory. A wild name component
+		// with no type ("*") therefore matches only untyped entries, which is why the
+		// two subdirectories come back and the two .txt files do not.
+		Files.writeString(tempDir.resolve("b.txt"), "b\n");
+		Files.writeString(tempDir.resolve("a.txt"), "a\n");
+		Files.createDirectory(tempDir.resolve("sub"));
+		Files.createDirectory(tempDir.resolve("empty"));
+		String dir = tempDir.toString().replace("\\", "\\\\");
+		assertThat(eval("(directory \"" + dir + "/*.*\")").print()).isEqualTo("(\"" + tempDir + "/a.txt\" \"" + tempDir
+				+ "/b.txt\" \"" + tempDir + "/empty/\" \"" + tempDir + "/sub/\")");
+		assertThat(eval("(directory \"" + dir + "/*\")").print())
+			.isEqualTo("(\"" + tempDir + "/empty/\" \"" + tempDir + "/sub/\")");
+		assertThat(eval("(directory \"" + dir + "/*.txt\")").print())
+			.isEqualTo("(\"" + tempDir + "/a.txt\" \"" + tempDir + "/b.txt\")");
+		assertThat(eval("(directory \"" + dir + "/?.txt\")").print())
+			.isEqualTo("(\"" + tempDir + "/a.txt\" \"" + tempDir + "/b.txt\")");
+		assertThat(eval("(directory \"" + dir + "/a*\")")).isEqualTo(LispNil.INSTANCE);
+		// A non-wild pathspec designates ITSELF: a directory in directory form, a file
+		// as given, and nothing at all when it does not exist.
+		assertThat(eval("(directory \"" + dir + "/\")").print()).isEqualTo("(\"" + tempDir + "/\")");
+		assertThat(eval("(directory \"" + dir + "\")").print()).isEqualTo("(\"" + tempDir + "/\")");
+		assertThat(eval("(directory \"" + dir + "/a.txt\")").print()).isEqualTo("(\"" + tempDir + "/a.txt\")");
+		assertThat(eval("(directory \"" + dir + "/nope.txt\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(directory \"" + dir + "/empty/*.*\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(directory \"" + dir + "/nope/*.*\")")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void uiopDirectoryWalkersRunOverTheSamePrimitive(@TempDir Path tempDir) throws Exception {
+		Files.writeString(tempDir.resolve("a.txt"), "a\n");
+		Files.createDirectory(tempDir.resolve("sub"));
+		Files.writeString(tempDir.resolve("sub/c.txt"), "c\n");
+		Files.createDirectory(tempDir.resolve("sub/deep"));
+		String dir = tempDir.toString().replace("\\", "\\\\");
+		assertThat(eval("(uiop:directory-exists-p \"" + dir + "\")")).isEqualTo(new LispString(tempDir + "/"));
+		assertThat(eval("(uiop:directory-exists-p \"" + dir + "/a.txt\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:directory-exists-p \"" + dir + "/nope\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:directory-files \"" + dir + "\")").print()).isEqualTo("(\"" + tempDir + "/a.txt\")");
+		assertThat(eval("(uiop:subdirectories \"" + dir + "\")").print()).isEqualTo("(\"" + tempDir + "/sub/\")");
+		assertThat(evalMulti("""
+				(let ((acc nil))
+				  (uiop:collect-sub*directories "%s" (constantly t) (constantly t)
+				                                (lambda (d) (setq acc (cons d acc))))
+				  (reverse acc))
+				""".formatted(dir)).print())
+			.isEqualTo("(\"" + tempDir + "/\" \"" + tempDir + "/sub/\" \"" + tempDir + "/sub/deep/\")");
+	}
+
+	@Test
+	void directoryGoesThroughTheInstalledSourceLoader() {
+		// A host with no filesystem (the browser playground) has no directories, so the
+		// whole family answers rather than failing.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.setSourceLoader(path -> {
+			throw new java.io.FileNotFoundException(path);
+		});
+		assertThat(evaluator.eval(LispReader.readFromString("(directory \"/etc/*.*\")"))).isEqualTo(LispNil.INSTANCE);
+		assertThat(evaluator.eval(LispReader.readFromString("(uiop:directory-exists-p \"/etc\")")))
+			.isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
 	void withOpenFileNonLiteralElementTypeThrows(@TempDir Path tempDir) {
 		String file = tempDir.resolve("nl.dat").toString().replace("\\", "\\\\");
 		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :element-type (list 'unsigned-byte 8)) s)"))
@@ -4937,9 +5001,10 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%peek-char", "%set-fill-pointer",
 					"%string-compare", "%run-handlers")
-			.contains("MAKE-PATHNAME", "MERGE-PATHNAMES", "TRUENAME", "PROBE-FILE")
+			.contains("MAKE-PATHNAME", "MERGE-PATHNAMES", "TRUENAME", "PROBE-FILE", "DIRECTORY", "PATHNAME-DIRECTORY")
+			.doesNotContain("%list-directory", "%wild-match", "%dir-namestring", "%pathname-typed-p")
 			.isSorted()
-			.hasSize(344);
+			.hasSize(347);
 	}
 
 	@Test
