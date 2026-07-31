@@ -25,18 +25,30 @@ time to WebAssembly:
   walkers, and Vader, who stays dormant at the far edge until both walkers fall,
   then chases and swings in melee (and is immune to blaster fire).
 - **The win/lose state, and every triangle** — you, the enemies, the walkers,
-  the glowing blades and bolts are all tessellated from yaw-rotated boxes each
-  frame; struck enemies flash red, and beating Vader sets off a sky of
-  fireworks. The blades, bolts, damage flashes and fireworks are a second
-  **additive-blended pass** over the same vertex buffer, so they bloom against
-  the snow.
+  the glowing blades and bolts are tessellated each frame from yaw-rotated
+  boxes for the angular parts (armor plates, packs, belts — genuinely flat in
+  the source designs) and from smooth-normaled **cylinders and ellipsoids**
+  (`emit-cylinder` / `emit-cyl-beam` / `emit-ellipsoid`, and the `part-cyl` /
+  `part-cyl-beam` / `part-ellipsoid` wrappers that mirror `part`) for the round
+  ones — heads, helmet domes, limbs, gun barrels, saber/blade rods, ice
+  boulders and clouds. A low-poly prism still reads as round because its
+  per-vertex normal is the true radial direction, not a flat per-face one, so
+  the lit shader gradient does the rest. Struck enemies flash red, and beating
+  Vader sets off a sky of fireworks. The blades, bolts, damage flashes and
+  fireworks are a second **additive-blended pass** over the same vertex
+  buffer, so they bloom against the snow.
+- **Materials** — every part also carries a **shine** value (matte cloth/snow
+  vs. polished helmet domes, gun and saber metal), driving a Blinn-Phong
+  specular highlight plus a soft sky-tinted rim light in the fragment shader,
+  so the rounded surfaces read as lit from the low Hoth sun rather than flat.
 
 The JavaScript side is the same one-line WebGL2 host boundary as the other
 `webgl-*` demos — bindings generated from the shared `gl.wit` (see
-[`../webgl-common/`](../webgl-common)), plus one extra staging entry
-(`setEmissive`) so a vertex can glow — plus the Pointer-Lock mouse and keyboard
-forwarding (the page only maps input to small integers; the aim, the held state
-and every rule are Lisp's business) and the HUD.
+[`../webgl-common/`](../webgl-common)), plus two extra staging entries
+(`setEmissive`, `setShine`) so a vertex can glow or take a specular highlight —
+plus the Pointer-Lock mouse and keyboard forwarding (the page only maps input
+to small integers; the aim, the held state and every rule are Lisp's business)
+and the HUD.
 
 **Live demo:** <https://making.github.io/rontolisp/webgl-battlefront/> (this
 directory is published as a subpath of the GitHub Pages site by
@@ -58,7 +70,7 @@ only imports are host functions (`gl`, `canvas`, `math` — the ones
 `battlefront.lisp` declares with `rontolisp:wasm-import` plus the WebGL2 entries
 the shared `gl` package binds from `../webgl-common/gl.wit`); `--optimize`
 tree-shakes the runtime and the unused WebGL entries, leaving `battlefront.wasm`
-importing the ~39 functions it actually reaches. The page instantiates the
+importing only the ~40 functions it actually reaches. The page instantiates the
 module, calls `_initialize()` (which compiles the shaders and bakes the snow
 field — from Lisp), then calls the exported `frame` once per animation tick.
 
@@ -77,4 +89,8 @@ yaw rotation against a `(3 8)` local-corner matrix, then a broadcast `linalg:add
 of the center; the view-projection is `linalg:matmul` of two `(4 4)` matrices,
 and `upload-vp` flattens its **transpose** (`linalg:flatten` of
 `linalg:transpose`) into the column-major run `gl:uniform-matrix4fv` wants. There
-are no bespoke vector helpers — the `linalg:` calls are the vector algebra.
+are no bespoke vector helpers for any of that — the `linalg:` calls are the
+vector algebra. The cylinder/ellipsoid primitives are the one exception: each
+vertex is a handful of scalar `sin`/`cos` calls (a ring or a lat/long grid),
+cheap enough per-vertex that packing them into `linalg` arrays would only add
+allocation.

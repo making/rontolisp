@@ -435,15 +435,16 @@
         return [ptr, bytes.length];
       };
 
-      // Staging: Lisp fills one 10-float vertex (position, normal, color,
-      // emissive) at a time and uploads slices with uploadVertices; `floats`
-      // carries the mat4 uniform.
-      const FLOATS_PER_VERT = 10;
-      const MAX_VERTS = 16384;
+      // Staging: Lisp fills one 11-float vertex (position, normal, color,
+      // emissive, shine) at a time and uploads slices with uploadVertices;
+      // `floats` carries the mat4 uniform.
+      const FLOATS_PER_VERT = 11;
+      const MAX_VERTS = 40000;
       const staging = new Float32Array(FLOATS_PER_VERT * MAX_VERTS);
       const floats = new Float32Array(16);
       const curColor = [1, 1, 1];  // latched by setColor
       let curEmit = 0;             // latched by setEmissive
+      let curShine = 0;            // latched by setShine
 
       const ui = {
         fail: (message) => {
@@ -461,6 +462,7 @@
             gl2.bufferSubData(gl2.ARRAY_BUFFER, off * 4, staging, off, count),
           setColor: (r, g, b) => { curColor[0] = r; curColor[1] = g; curColor[2] = b; },
           setEmissive: (e) => { curEmit = e; },
+          setShine: (s) => { curShine = s; },
           setVertex: (i, x, y, z, nx, ny, nz) => {
             const o = i * FLOATS_PER_VERT;
             staging[o] = x;
@@ -473,6 +475,7 @@
             staging[o + 7] = curColor[1];
             staging[o + 8] = curColor[2];
             staging[o + 9] = curEmit;
+            staging[o + 10] = curShine;
           },
           setFloat: (i, v) => { floats[i] = v; },
         },
