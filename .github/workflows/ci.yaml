@@ -156,11 +156,32 @@ jobs:
         path: artifacts
     - name: Build executable JAR
       run: ./mvnw -V --no-transfer-progress -DskipTests clean package
-    - name: Delete existing snapshot release
+    # Move the snapshot tag onto this commit and leave the release itself alone, so
+    # the action below UPDATES it in place (it overwrites the assets) instead of the
+    # release being recreated from scratch.
+    #
+    # Do NOT go back to `gh release delete --cleanup-tag` + create: that is a
+    # non-atomic replace, and the create half failing takes the published release
+    # with it. It did (run 30629526919: the delete succeeded, the create got a
+    # spurious 403 that the action refuses to retry), which left the repo with no
+    # release and no tag at all -- and the install commands in README.md and
+    # doc/{en,ja}/getting-started/build.md point at
+    # releases/download/<version>/rontolisp-*, so they 404 for as long as that
+    # lasts. Updating in place makes a failed run degrade to "assets are one commit
+    # stale" rather than "the download links are dead".
+    - name: Move the snapshot tag to this commit
       if: steps.version.outputs.is_snapshot == 'true'
       env:
         GH_TOKEN: ${{ github.token }}
-      run: gh release delete ${{ steps.version.outputs.version }} --yes --cleanup-tag || true
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        set -e
+        # Force-update the ref; if the tag does not exist yet (first run, or a
+        # previous run deleted it), create it.
+        gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/${VERSION}" \
+          -f "sha=${{ github.sha }}" -F force=true \
+        || gh api -X POST "repos/${{ github.repository }}/git/refs" \
+             -f "ref=refs/tags/${VERSION}" -f "sha=${{ github.sha }}"
     - name: Create release
       uses: softprops/action-gh-release@v2
       with:
