@@ -68,14 +68,17 @@ jobs:
         restore-keys: |
           wasmtime-modules-${{ runner.os }}-
     - name: Unit Tests
-      # The intra-class parallelism default in junit-platform.properties targets a
-      # development machine; this runner has 4 vCPU shared by two surefire forks.
+      # No parallelism flag: CoreCountParallelismStrategy derives the intra-class
+      # parallelism from the runner's core count, which is the 4 this step used to
+      # pass by hand, and follows the runner if that ever changes. The run prints
+      # the value it picked ("[rontolisp] JUnit parallelism = ...").
       #
       # Do not tune this against a single run: runner speed varies by up to 1.4x
       # between runs, which is larger than any effect measured here so far (4 and 8
       # came out at 2186 s and 2215 s -- indistinguishable). Compare only runs whose
-      # parallelism-independent classes agree, e.g. JvmLispCompilerTest.
-      run: ./mvnw -V --no-transfer-progress -Djunit.jupiter.execution.parallel.config.fixed.parallelism=4 clean test
+      # parallelism-independent classes agree, e.g. JvmLispCompilerTest, and whose
+      # printed parallelism matches.
+      run: ./mvnw -V --no-transfer-progress clean test
     # What the next run will have to restore, and the number to watch if this job
     # ever starts evicting the Maven caches.
     - name: Report the wasmtime cache size
@@ -111,7 +114,6 @@ jobs:
         # is no positional expected file to keep in sync.
         ./mvnw -V --no-transfer-progress \
           -Dtest=CiSpecE2eTest -DfailIfNoTests=false \
-          -Djunit.jupiter.execution.parallel.config.fixed.parallelism=4 \
           -Drontolisp.binary="$PWD/target/rontolisp" \
           test
     - name: Rename binary

@@ -36,10 +36,12 @@ import static org.assertj.core.api.Assertions.within;
  * This is by far the longest class in the build: every case is a serial chain of compile
  * the module, stage it on disk, run wasmtime, and there are thousands of them. None of
  * that chain is shared between cases, so the methods run concurrently inside the surefire
- * fork -- the thread cap lives in {@code junit-platform.properties}. Everything a test
- * writes therefore has to be private to the running test: stage modules and guest-visible
- * data files through {@link #path(String)}, never at a fixed {@code /tmp/...} literal
- * shared with another method.
+ * fork -- the thread cap is derived from the machine's core count by
+ * {@link am.ik.rontolisp.testsupport.CoreCountParallelismStrategy}, wired in from
+ * {@code junit-platform.properties}. Everything a test writes therefore has to be private
+ * to the running test: stage modules and guest-visible data files through
+ * {@link #path(String)}, never at a fixed {@code /tmp/...} literal shared with another
+ * method.
  *
  * <p>
  * wasmtime runs as a host process ({@link HostWasmtime}) rather than in the shared
