@@ -3,6 +3,12 @@
     "includes": [
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.Version"
+        },
+        "pattern": "am/ik/rontolisp/version\\.properties"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.codegen.wasm.WasmComponentBuilder"
         },
         "pattern": "am/ik/rontolisp/codegen/wasm/component/.*\\.bin"

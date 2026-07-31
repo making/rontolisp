@@ -4,9 +4,9 @@ import java.util.List;
 
 /**
  * Builds the version information property list returned by the {@code rontolisp:version}
- * function. The values are taken from the build-time generated {@link Version} class, so
- * they match the output of {@code rontolisp --version}. Shared by the interpreter and
- * both compilers (the constants are baked in at build time / compile time).
+ * function. The values are taken from {@link Version}, so they match the output of
+ * {@code rontolisp --version}. Shared by the interpreter and both compilers (the values
+ * are baked into the generated code at compile time).
  */
 public final class VersionInfo {
 
