@@ -416,6 +416,60 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void usePackageMakesTheExternalSymbolsOfAPackageVisibleUnqualified() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :mypkg (:use :cl) (:export #:foo))");
+		resolve(resolver, "(in-package :mypkg)");
+		resolve(resolver, "(defun foo () 1)");
+		resolve(resolver, "(in-package :cl-user)");
+		// Before the use-package the bare name is a cl-user symbol of its own.
+		assertThat(resolve(resolver, "(foo)")).isEqualTo("(FOO)");
+		assertThat(resolve(resolver, "(use-package :mypkg)")).isEqualTo("T");
+		assertThat(resolve(resolver, "(foo)")).isEqualTo("(MYPKG:FOO)");
+		// An internal symbol stays invisible: only externals are inherited.
+		assertThat(resolve(resolver, "(bar)")).isEqualTo("(BAR)");
+	}
+
+	@Test
+	void usePackageAcceptsADesignatorListAndATargetPackage() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :apkg (:use :cl) (:export #:af))");
+		resolve(resolver, "(defpackage :bpkg (:use :cl) (:export #:bf))");
+		resolve(resolver, "(defpackage :cpkg (:use :cl))");
+		assertThat(resolve(resolver, "(use-package '(:apkg \"BPKG\") :cpkg)")).isEqualTo("T");
+		// The target package took both, and the current package (cl-user) took none.
+		assertThat(resolve(resolver, "(af)")).isEqualTo("(AF)");
+		resolve(resolver, "(in-package :cpkg)");
+		assertThat(resolve(resolver, "(list (af) (bf))")).isEqualTo("(LIST (APKG:AF) (BPKG:BF))");
+	}
+
+	@Test
+	void usePackageIsIdempotentAndAcceptsNicknames() {
+		PackageResolver resolver = new PackageResolver();
+		assertThat(resolve(resolver, "(use-package :common-lisp)")).isEqualTo("T");
+		assertThat(resolve(resolver, "(use-package :cl)")).isEqualTo("T");
+		assertThat(resolve(resolver, "(car x)")).isEqualTo("(CAR X)");
+	}
+
+	@Test
+	void usePackageUnknownPackageIsRejected() {
+		assertThatThrownBy(() -> resolve("(use-package :nosuch)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("No such package: NOSUCH");
+		assertThatThrownBy(() -> resolve("(use-package :cl :nosuch)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("No such package: NOSUCH");
+		assertThatThrownBy(() -> resolve("(use-package :cl-user)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Cannot USE-PACKAGE CL-USER in itself");
+		assertThatThrownBy(() -> resolve("(use-package)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("USE-PACKAGE expects a package designator");
+	}
+
+	@Test
+	void usePackageWithAComputedDesignatorStaysARuntimeCall() {
+		// Nothing to consume at compile time: the call is left for the interpreter.
+		assertThat(resolve("(use-package (find-my-package))")).isEqualTo("(USE-PACKAGE (FIND-MY-PACKAGE))");
+	}
+
+	@Test
 	void defpackageUnknownUsedPackageIsRejected() {
 		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:use :nosuch))")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("No such package: NOSUCH");

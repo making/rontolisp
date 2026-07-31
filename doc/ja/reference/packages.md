@@ -127,9 +127,14 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
   名前はソースパッケージの正規表記に解決されるため、import して re-export した
   シンボルの `mypkg:name` は元の定義を参照します。
 
-ランタイムのパッケージ操作はありません: `make-package`、`export`、`import`、
-`use-package`、`find-package` などは利用できず、(トップレベルでない)他の
-フォームの中の `defpackage` はエラーです。
+[`use-package`](functions/use-package.md) は `:use` clause の実行時版で、
+`in-package` と同じ読み込み/コンパイル時のルールに従います: リテラルな
+トップレベルの `(use-package :mypkg)` は、それ以降のフォームに対して現在の
+パッケージの use リストを広げます(すべてのバックエンドで動作します)。
+
+それ以外のランタイムのパッケージ操作はありません: `make-package`、`export`、
+`import`、`rename-package` は利用できず、(トップレベルでない)他のフォームの中の
+`defpackage` はエラーです。
 
 ## パッケージのイントロスペクション
 
@@ -143,7 +148,7 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
 (print (rontolisp:list-special-forms))
 ; => (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
 (print (length (rontolisp:list-functions)))
-; => 322
+; => 342
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (SQUARE)

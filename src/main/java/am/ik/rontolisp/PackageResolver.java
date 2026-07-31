@@ -133,6 +133,17 @@ public final class PackageResolver {
 			if (LispNames.DEFPACKAGE.equals(member)) {
 				return resolveDefpackage(cons);
 			}
+			// A literal top-level (use-package P) is consumed like in-package: the use
+			// list is a read/compile-time notion here, so the directive has to take
+			// effect on THIS pass for the forms that follow -- and consuming it is what
+			// makes it work on the compiled backends, which have no registry at runtime.
+			// A computed designator stays a runtime call (interpreter only).
+			if (LispNames.USE_PACKAGE.equals(member)) {
+				LispVal consumed = tryConsumeUsePackage(cons);
+				if (consumed != null) {
+					return consumed;
+				}
+			}
 			if (LispNames.PUSH_PACKAGE.equals(member)) {
 				pushPackage();
 				return quotedSymbol(this.currentPackage);
@@ -187,6 +198,95 @@ public final class PackageResolver {
 		}
 		registerLocalNickname(nickname, actual);
 		return quotedSymbol(this.registry.canonicalName(actual));
+	}
+
+	/**
+	 * Consumes a literal top-level {@code (use-package PACKAGES [PACKAGE])} call: widens
+	 * the use list of the target package (the current one by default) and returns
+	 * {@code t}, the standard function's return value. Returns null when an argument is
+	 * not a literal designator -- a runtime call only the interpreter can serve.
+	 */
+	private @Nullable LispVal tryConsumeUsePackage(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			throw new LispPackageException(
+					LispNames.USE_PACKAGE + " expects a package designator (and optionally a target package)");
+		}
+		List<String> used = literalDesignatorList(parts.get(1));
+		String target = this.currentPackage;
+		if (parts.size() == 3) {
+			target = literalDesignator(parts.get(2));
+		}
+		if (used == null || target == null) {
+			return null;
+		}
+		usePackage(used, target);
+		return LispTrue.INSTANCE;
+	}
+
+	/**
+	 * A literal package-designator LIST: a single designator, or a quoted list of them
+	 * ({@code (use-package '(:a :b))} -- {@code use-package} takes a designator or a list
+	 * of designators). Null when any element is not literal.
+	 */
+	private static @Nullable List<String> literalDesignatorList(LispVal arg) {
+		LispVal datum = LispNil.INSTANCE;
+		if (arg instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
+			// Only a QUOTED list is a designator list; an unquoted one is a call that
+			// computes the argument, which this pass cannot see through.
+			datum = rest.car();
+		}
+		if (datum instanceof LispCons list) {
+			List<String> names = new ArrayList<>();
+			for (LispVal element : list.toList()) {
+				// The elements of a QUOTED list are data: a bare symbol names a package
+				// there, so re-wrap it as the quoted shape literalDesignator accepts.
+				String name = literalDesignator(element instanceof LispSymbol sym && !sym.isKeyword()
+						? new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(sym, LispNil.INSTANCE)) : element);
+				if (name == null) {
+					return null;
+				}
+				names.add(name);
+			}
+			return names;
+		}
+		String single = literalDesignator(arg);
+		return single == null ? null : List.of(single);
+	}
+
+	/**
+	 * Adds the named packages to the use list of the target package -- the shared
+	 * machinery behind the {@code use-package} directive and its interpreter-side runtime
+	 * function. Only EXTERNAL symbols of a used package become visible unqualified (see
+	 * {@link #resolveUnqualified}), and a package that is already used is a no-op, as in
+	 * Common Lisp.
+	 * @param used the package names to use (any case, nicknames allowed)
+	 * @param targetPackage the package whose use list grows
+	 */
+	public void usePackage(List<String> used, String targetPackage) {
+		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		if (!this.registry.contains(target)) {
+			throw new LispPackageException("No such package: " + targetPackage);
+		}
+		LispPackage pkg = this.registry.get(target);
+		List<String> useList = new ArrayList<>(pkg.useList());
+		for (String name : used) {
+			String canonical = registeredPackageName(this.registry.canonicalName(name));
+			if (!this.registry.contains(canonical)) {
+				throw new LispPackageException("No such package: " + name);
+			}
+			// A package always sees its own symbols; CL rejects using a package in
+			// itself, and so does the equivalent shape here.
+			if (canonical.equals(target)) {
+				throw new LispPackageException("Cannot " + LispNames.USE_PACKAGE + " " + target + " in itself");
+			}
+			if (!useList.contains(canonical)) {
+				useList.add(canonical);
+			}
+		}
+		this.registry.define(new LispPackage(pkg.name(), List.copyOf(useList), pkg.symbols(), pkg.externals(),
+				pkg.imports(), pkg.shadows()));
 	}
 
 	/** A literal package designator: a string, keyword/#: symbol, or quoted symbol. */

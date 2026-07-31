@@ -20,7 +20,7 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 | `defstruct` `:include` | single inheritance only; slot-overrides `(:include parent (slot default) ...)` work |
 | `declare` / `declaim` / `proclaim` / `the` | parsed no-ops (no effect on compilation) |
 | `typep` / `subtypep` / `coerce` / `concatenate` | literal (quoted) type specifiers only; `coerce` targets `'list` / `'vector` / `'string` (or a float type), `concatenate` builds those same three sequence families |
-| `make-package` / `export` / `import` / `use-package` / `find-package` / `rename-package` (runtime) | not available; `defpackage` `:shadow` / `:shadowing-import-from` are errors |
+| `make-package` / `export` / `import` / `rename-package` (runtime) | not available; `use-package` is a read/compile-time directive like `in-package`; `defpackage` `:shadow` / `:shadowing-import-from` are errors |
 | `progv` | interpreter only (compile error on the JVM/WASM backends) |
 | `eval-when` | treated as `progn` (no phase distinction) |
 | `#:name` | reads as a plain symbol, without gensym-style freshness |
@@ -140,9 +140,11 @@ program are fixed at compile time.
 top-level, read/compile-time directive supporting `:use`, `:export`,
 `:nicknames` and `:import-from` (`:documentation`/`:size` are accepted and
 ignored). `:shadow` and `:shadowing-import-from` are errors (there is no symbol
-shadowing), and there is no **runtime** package manipulation: `make-package`,
-`export`, `import`, `use-package`, `find-package`, and `rename-package` are not
-available, so a package's set of exported symbols is fixed when it is defined.
+shadowing). `use-package` exists as the same kind of read/compile-time
+directive `in-package` is (a literal top-level call widens the current package's
+use list), but there is no other **runtime** package manipulation:
+`make-package`, `export`, `import` and `rename-package` are not available, so a
+package's set of exported symbols is fixed when it is defined.
 When several used packages export the same name, the first package in `:use`
 order wins instead of signaling a conflict.
 

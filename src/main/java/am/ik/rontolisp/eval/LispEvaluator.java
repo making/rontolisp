@@ -737,6 +737,30 @@ public final class LispEvaluator {
 			this.packageResolver.registerLocalNickname(nickname, actual);
 			return new LispSymbol(actual);
 		}));
+		// use-package: a literal top-level call is consumed by the PackageResolver (so it
+		// works on every backend); this runtime binding serves the computed calls only
+		// the
+		// interpreter can run -- and, resolving against the very same resolver, it takes
+		// effect for the forms read after it, as it does in Common Lisp.
+		this.globalEnv.defineFunction(LispNames.USE_PACKAGE, new LispFunction(LispNames.USE_PACKAGE, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.USE_PACKAGE + " expects 1 or 2 arguments, got " + args.size());
+			}
+			List<String> used = new ArrayList<>();
+			// A designator or a LIST of designators, like CL.
+			if (args.get(0) instanceof LispCons list) {
+				for (LispVal element : list.toList()) {
+					used.add(packageNameDesignator(LispNames.USE_PACKAGE, element));
+				}
+			}
+			else if (!(args.get(0) instanceof LispNil)) {
+				used.add(packageNameDesignator(LispNames.USE_PACKAGE, args.get(0)));
+			}
+			String target = args.size() == 2 ? packageNameDesignator(LispNames.USE_PACKAGE, args.get(1))
+					: this.packageResolver.currentPackageName();
+			this.packageResolver.usePackage(used, target);
+			return LispTrue.INSTANCE;
+		}));
 		this.globalEnv.defineFunction(LispNames.SLOT_MAKUNBOUND, new LispFunction(LispNames.SLOT_MAKUNBOUND, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.SLOT_MAKUNBOUND + " expects 2 arguments, got " + args.size());

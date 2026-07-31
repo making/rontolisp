@@ -284,6 +284,7 @@
 | `decode-float` | `(decode-float 6.5)` | `0.8125`、`3`、`1.0` -- [1/2, 1) の仮数部、2 進指数部、符号 |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil` |
 | `fdefinition` | `(fdefinition 'car)` | 関数値を返します。`symbol-function` と同じ |
+| `use-package` | `(use-package :mypkg)` | パッケージを use リストに追加し、その外部シンボルを修飾なしで見えるようにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録（lite: グローバル、パッケージごとのスコープなし） |
 | `file-position` | `(file-position s)` | 常に `nil`(lite: ストリームはシーク非対応) |
 | `file-length` | `(file-length s)` | 常に `nil`(lite) |

@@ -4898,6 +4898,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUsePackage() throws Exception {
+		// The literal top-level (use-package P) is consumed by the PackageResolver, so
+		// the inherited bare names resolve at compile time -- nothing reaches runtime.
+		assertThat(compileAndRun("""
+				(defpackage #:up-greeter (:use #:cl) (:export #:up-hello))
+				(in-package #:up-greeter)
+				(defun up-hello () "hi")
+				(in-package #:cl-user)
+				(use-package '#:up-greeter)
+				(print (up-hello))
+				""")).isEqualTo("\"hi\"");
+	}
+
+	@Test
 	void compileAndRunGrayStreamInstanceDispatch() throws Exception {
 		// The GrayStreamsLibrary pre-pass splices gray.lisp and rewrites the
 		// write-string/write-char call sites onto the dispatch helpers, mirroring the
@@ -5833,12 +5847,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("341");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("342");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("341");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("342");
 	}
 
 	@Test

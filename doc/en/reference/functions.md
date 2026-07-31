@@ -288,6 +288,7 @@ page.
 | `decode-float` | `(decode-float 6.5)` | `0.8125`, `3`, `1.0` -- significand in [1/2, 1), binary exponent, sign |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters |
 | `fdefinition` | `(fdefinition 'car)` | the function value, like `symbol-function` |
+| `use-package` | `(use-package :mypkg)` | add packages to a package's use list, so their external symbols are visible unqualified (a literal top-level call is a compile-time directive) |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping) |
 | `file-position` | `(file-position s)` | always `nil` (lite: streams do not support repositioning) |
 | `file-length` | `(file-length s)` | always `nil` (lite) |

@@ -4890,7 +4890,7 @@ class LispEvaluatorTest {
 					"%make-string-input-stream", "%string-stream-contents", "%peek-char", "%set-fill-pointer",
 					"%string-compare", "%run-handlers")
 			.isSorted()
-			.hasSize(341);
+			.hasSize(342);
 	}
 
 	@Test
@@ -9495,6 +9495,55 @@ class LispEvaluatorTest {
 				(uiop:add-package-local-nickname '#:nick '#:com.example.deeply.nested)
 				(nick:answer)
 				""").print()).isEqualTo("42");
+	}
+
+	@Test
+	void usePackageMakesAPackagesExternalSymbolsVisibleUnqualified() {
+		assertThat(evalMulti("""
+				(defpackage #:greeter (:use #:cl) (:export #:hello))
+				(in-package #:greeter)
+				(defun hello () "hi")
+				(defun secret () "shh")
+				(in-package #:cl-user)
+				(use-package '#:greeter)
+				(hello)
+				""").print()).isEqualTo("\"hi\"");
+	}
+
+	@Test
+	void usePackageDoesNotInheritInternalSymbols() {
+		assertThatThrownBy(() -> evalMulti("""
+				(defpackage #:greeter2 (:use #:cl) (:export #:hello))
+				(in-package #:greeter2)
+				(defun secret () "shh")
+				(in-package #:cl-user)
+				(use-package '#:greeter2)
+				(secret)
+				""")).hasMessageContaining("SECRET");
+	}
+
+	@Test
+	void usePackageAcceptsAListAndATargetPackageAtRuntime() {
+		// A computed call: the resolver leaves it alone and the runtime function widens
+		// the use list of the named package, in time for the forms read after it.
+		assertThat(evalMulti("""
+				(defpackage #:m1 (:use #:cl) (:export #:one))
+				(defpackage #:m2 (:use #:cl) (:export #:two))
+				(defpackage #:host (:use #:cl))
+				(in-package #:m1)
+				(defun one () 1)
+				(in-package #:m2)
+				(defun two () 2)
+				(in-package #:cl-user)
+				(use-package (list :m1 :m2) :host)
+				(in-package #:host)
+				(list (one) (two))
+				""").print()).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void usePackageRejectsAnUnknownPackage() {
+		assertThatThrownBy(() -> eval("(use-package :nosuch)")).hasMessageContaining("No such package: NOSUCH");
 	}
 
 	@Test

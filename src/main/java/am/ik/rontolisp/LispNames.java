@@ -2659,6 +2659,16 @@ public final class LispNames {
 	public static final String DEFPACKAGE = "DEFPACKAGE";
 
 	/**
+	 * The {@code use-package} standard function, which adds packages to a package's use
+	 * list so their external symbols are visible unqualified. Packages are resolved at
+	 * read/compile time here, so a literal top-level call is consumed by the
+	 * {@code PackageResolver} exactly like {@code in-package} (and therefore works on
+	 * every backend); the interpreter additionally binds it as a runtime function for
+	 * computed calls.
+	 */
+	public static final String USE_PACKAGE = "USE-PACKAGE";
+
+	/**
 	 * Internal marker inserted by {@code LoadInliner} before the spliced forms of a
 	 * loaded file: it makes the {@code PackageResolver} save the current package so a
 	 * file's internal {@code in-package} cannot leak past the load, mirroring Common Lisp

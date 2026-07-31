@@ -45,7 +45,7 @@ blocks them.
 | `package-shadowing-symbols` | Shadowed symbols (would always be empty) | Easy |
 | `export` | Runtime function form only — the `defpackage` `:export` clause already exists | Medium |
 | `import` | Runtime function form only — the `defpackage` `:import-from` clause already exists | Medium |
-| `use-package` | Runtime function form only — the `defpackage` `:use` clause already exists | Medium |
+| ~~`use-package`~~ | DONE (2026-07-31): a read/compile-time directive like `in-package` (`PackageResolver.usePackage`), plus an interpreter-side runtime function for computed calls -- see `.kb/packages.md` | -- |
 
 ## Non-goals (by design)
 
@@ -69,8 +69,12 @@ blocks them.
 **Package functions**:
 5. `find-package`, `list-all-packages` — package registry queries.
 6. `package-name`, `package-use-list`, `package-used-by-list` — metadata.
-7. `export`, `import`, `use-package` — the runtime forms of clauses
-   `defpackage` already implements declaratively.
+7. `export`, `import` — the runtime forms of clauses `defpackage` already
+   implements declaratively. (`use-package` shipped 2026-07-31 as a
+   read/compile-time directive: the use list is consulted while the resolver
+   walks the program, so a purely runtime effect would be invisible to the forms
+   it must affect. `export`/`import` have the same constraint and should follow
+   the same shape.)
 
 **Compiler considerations**:
 - `symbol-value` at compile time vs runtime needs disambiguation.

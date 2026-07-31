@@ -116,9 +116,14 @@ an existing package, or using a package that does not exist yet.
   resolves to the source package's canonical spelling, so importing and then
   re-exporting a symbol makes `mypkg:name` refer to the original definition.
 
-There is no runtime package manipulation: `make-package`, `export`, `import`,
-`use-package`, `find-package` and friends are not available, and a `defpackage`
-inside another form (not top-level) is an error.
+[`use-package`](functions/use-package.md) is the runtime form of the `:use`
+clause, and follows the same read/compile-time rule as `in-package`: a literal
+top-level `(use-package :mypkg)` widens the current package's use list for the
+forms that follow it, on every backend.
+
+Beyond it there is no runtime package manipulation: `make-package`, `export`,
+`import` and `rename-package` are not available, and a `defpackage` inside
+another form (not top-level) is an error.
 
 ## Package introspection
 
@@ -130,7 +135,7 @@ inside another form (not top-level) is an error.
 (print (rontolisp:list-special-forms))
 ; => (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
 (print (length (rontolisp:list-functions)))
-; => 322
+; => 342
 (defun square (x) (* x x))
 (print (rontolisp:list-functions :cl-user))
 ; => (SQUARE)

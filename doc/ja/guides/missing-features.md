@@ -21,7 +21,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default) ...)` は利用可能 |
 | `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op（コンパイルには影響しない） |
 | `typep` / `subtypep` / `coerce` / `concatenate` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型）、`concatenate` はこの 3 つのシーケンス系統を構築 |
-| `make-package` / `export` / `import` / `use-package` / `find-package` / `rename-package`（ランタイム） | 利用不可。`defpackage` の `:shadow` / `:shadowing-import-from` はエラー |
+| `make-package` / `export` / `import` / `rename-package`（ランタイム） | 利用不可。`use-package` は `in-package` と同様の読み込み/コンパイル時ディレクティブ。`defpackage` の `:shadow` / `:shadowing-import-from` はエラー |
 | `progv` | インタプリタのみ（JVM/WASM ではコンパイルエラー） |
 | `eval-when` | `progn` として扱う（フェーズの区別なし） |
 | `#:name` | 普通のシンボルとして読まれ、gensym 的な新規性はない |
@@ -143,8 +143,10 @@ CLOS は**静的なサブセット**です
 `:nicknames`、`:import-from` をサポートする、リテラルなトップレベルの
 read/コンパイル時ディレクティブです（`:documentation`/`:size` は受理されるが
 無視されます）。`:shadow` と `:shadowing-import-from` はエラーで（シンボルの
-シャドウイングはありません）、**ランタイム**のパッケージ操作はありません:
-`make-package`、`export`、`import`、`use-package`、`find-package`、
+シャドウイングはありません）。`use-package` は `in-package` と同じ読み込み/
+コンパイル時ディレクティブとして存在します（リテラルなトップレベル呼び出しが
+現在のパッケージの use リストを広げます）が、それ以外の**ランタイム**の
+パッケージ操作はありません: `make-package`、`export`、`import`、
 `rename-package` は利用できないため、パッケージの export シンボルの集合は
 定義時に固定されます。複数の使用先パッケージが同じ名前を export している場合、
 コンフリクトをシグナルする代わりに `:use` 順で最初のパッケージが優先されます。
