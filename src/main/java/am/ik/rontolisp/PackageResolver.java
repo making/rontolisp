@@ -1018,6 +1018,30 @@ public final class PackageResolver {
 				}
 			}
 		}
+		// The mirror image: `name` itself already arrives lower-kebab (a wit-import
+		// directive's OWN quoted binding name is built directly as `new
+		// LispSymbol(member)` from the WIT label, bypassing the reader entirely --
+		// unlike a call site's `gl:create-shader`, which the reader upcases before this
+		// method ever sees it). When the surrounding package was declared with an
+		// ordinary hand-written `defpackage` (gl.lisp exports CREATE-SHADER precisely
+		// because ITS `:export` clause IS read through the normal upcasing reader), the
+		// lower-kebab retry above never fires -- lower.equals(name) is already true --
+		// so without this the binding would resolve to the internal, lowercase
+		// GL::create-shader while every call site resolves to the external
+		// GL:CREATE-SHADER: the function compiles under one name and is called under
+		// another (undefined-function, silently downgraded to a WASM call-time-error
+		// stub that traps at runtime instead of failing to compile).
+		String upper = name.toUpperCase(java.util.Locale.ROOT);
+		if (!upper.equals(name)) {
+			if (current.owns(upper) || current.exports(upper)) {
+				return canonical(this.currentPackage, upper);
+			}
+			for (String used : current.useList()) {
+				if (!LispNames.CL_PKG.equals(used) && this.registry.get(used).exports(upper)) {
+					return canonical(used, upper);
+				}
+			}
+		}
 		// Unknown symbol: a user definition or forward reference in the current package.
 		return canonical(this.currentPackage, name);
 	}

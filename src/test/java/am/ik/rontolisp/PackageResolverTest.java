@@ -707,4 +707,26 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(cl:car x)")).isEqualTo("(CAR MYPKG::X)");
 	}
 
+	@Test
+	void bareLowerKebabWitImportNameResolvesAgainstAHandWrittenUppercaseExport() {
+		// gl.lisp's actual shape (examples/browser/webgl-common/gl.lisp): a HAND-WRITTEN
+		// defpackage -- read through the normal upcasing reader, so its :export entry is
+		// CREATE-SHADER -- followed by a `(rontolisp:wit-import "gl.wit" :interface
+		// "local:webgl/gl")` with NO :package option. WitImportDirective then
+		// synthesizes the binding's quoted name directly as `new LispSymbol(member)`
+		// from the WIT file's raw lower-kebab label ("create-shader"), bypassing the
+		// reader entirely -- unlike wasmImportQuotedNameResolvesInCurrentPackage above,
+		// whose `'create-shader` is SOURCE TEXT and therefore already upcased by the
+		// time PackageResolver sees it. A call site `(gl:create-shader ...)` elsewhere
+		// in the program resolves to GL:CREATE-SHADER (external, uppercase member); the
+		// binding's bare reference must resolve to the exact same symbol, or the
+		// compiled function is defined under one name and called under another --
+		// undefined-function silently downgraded to a WASM "call-time error" stub that
+		// traps at runtime.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :gl (:use :cl) (:export :create-shader))");
+		resolve(resolver, "(in-package :gl)");
+		assertThat(resolver.resolve(new LispSymbol("create-shader"))).isEqualTo(new LispSymbol("GL:CREATE-SHADER"));
+	}
+
 }

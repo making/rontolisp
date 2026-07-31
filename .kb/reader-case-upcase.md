@@ -65,6 +65,30 @@ args; keep them):
 - `PackageResolver.resolveUnqualified`/`resolveQualified` one-shot lowercase retry:
   bridges an upcased reference to a `wit-import` package's lower-kebab member once the
   member is bound (`GL:CREATE-SHADER` reaching a wit-imported `gl:create-shader` defun).
+  `resolveUnqualified` ALSO retries the mirror direction -- one-shot UPPERCASE -- for a
+  `wit-import` directive's OWN synthesized quoted name: `WitImportDirective` builds it
+  as `new LispSymbol(member)` straight from the WIT file's lower-kebab label, bypassing
+  the reader entirely (pinned by `WitImportDirectiveTest#lowersAFreestandingInterfaceWithTheDefaultCamelCaseFields`),
+  so unlike a call site's `gl:create-shader` it never arrives already-upcased. That is a
+  non-issue when `:package` is given, since `WitImportDirective` auto-generates ITS OWN
+  lowercase-consistent `defpackage` alongside it (both sides bypass the reader). It broke
+  a program with NO `:package` -- a HAND-WRITTEN `defpackage` instead (gl.lisp's own
+  doc comment: "it has to export the constants and helpers too, which no directive
+  knows about"), whose `:export` clause IS ordinary source text and upcases like
+  anything else. The lower-kebab retry never fired (the input was already lowercase --
+  nothing to retry down TO), so the binding resolved to the internal `GL::create-shader`
+  while every call site resolved to the external `GL:CREATE-SHADER`: two different
+  symbols, so the function compiled under one name and was called under another --
+  silently downgraded to a WASM "call-time error" stub that only traps at `unreachable`
+  when the game actually runs. Found via `examples/browser/webgl-battlefront` (shares
+  `webgl-common/gl.lisp` with every other `webgl-*` demo): the compiled `.wasm`
+  committed to the repo kept working, but recompiling the UNCHANGED source with a
+  current compiler produced a module that crashed in `_initialize` on every backend.
+  Fixed 2026-07-31, pinned by
+  `PackageResolverTest#bareLowerKebabWitImportNameResolvesAgainstAHandWrittenUppercaseExport`.
+  **Re-evaluation trigger**: if `WitImportDirective` ever starts upcasing its own
+  synthesized names (matching the reader instead of relying on this retry), this
+  symmetric branch becomes dead code, not wrong -- safe to delete once confirmed unused.
 - HTTP plist keys are UPPERCASE (`compiler/HttpPlistShape`: keyword = `:` + upcased field):
   all four backends emit/read `:STATUS`/`:HEADERS`/`:BODY`..., a host-ABI decision (see
   `http-plist-shape` in the kb index), kept.
