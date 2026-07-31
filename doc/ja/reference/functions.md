@@ -522,7 +522,7 @@ rontolisp が実装しているメンバは以下のとおりで、各名前は�
 |----------|---------|--------|
 | `uiop:getenv` | `(uiop:getenv "PATH")` | 環境変数の値を文字列として、未設定の場合は `nil` を返します。Common Lisp に `getenv` がないためここに置かれています。すべてのバックエンドで動作します。WASM は Preview 1 では実際のホスト環境を、`--component` モードでは `wasi:cli/environment@0.3.0` を読みます (wasmtime に `--env`/`-S inherit-env` を渡してください) |
 | `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil` — `probe-file` と同じ契約であり、すべてのバックエンドでその基本操作へ落とされます |
-| `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | ディレクトリが存在すればそのパス名、存在しなければ `nil`（インタプリタのみ）。ディレクトリの一覧は提供されません: `uiop:collect-sub*directories` / `uiop:directory-files` は解決されますが呼び出すと通知します |
+| `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | ディレクトリが存在すれば（末尾に `/` を付けた）そのパス名、存在しなければ `nil` — `file-exists-p` のディレクトリ版です。インタプリタのみで、コンパイルバックエンドでは呼び出し時に通知します |
 | `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `"/tmp/b.txt"` — デフォルトを考慮したパス名のマージ (ここではパス名は名前文字列そのものです)。インタプリタでは実行時の関数、コンパイル済みバックエンドではコンパイラがリテラルへ畳み込める呼び出しのみ |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録 (lite: グローバル、パッケージごとのスコープなし)。リテラルなトップレベル呼び出しはコンパイル時ディレクティブなので、すべてのバックエンドで動作します |
 | `uiop:emptyp` | `(uiop:emptyp "")` | `nil` および長さ 0 のベクタ・文字列に対して `t`、それ以外は `nil` |
@@ -535,11 +535,15 @@ rontolisp が実装しているメンバは以下のとおりで、各名前は�
 `(merge-pathnames x (uiop::get-pathname-defaults))` は `x` になります。
 
 パッケージの残りは**名前解決のためのスタブ**です。`uiop:native-namestring`、
-`uiop:namestring`、`uiop:os-unix-p`、`uiop:os-macosx-p`、`uiop:run-program` は解決は
-される (ので `(:import-from #:uiop)` 句でこれらを挙げるライブラリは読み込め、コンパイル
-できる) ものの、呼び出すと undefined-function エラーになります。`run-program` について
-これは意図的です: 外部プロセスの起動はどのバックエンドのサンドボックスの外にあり、
-黙って何もしないより エラーを返す方が誠実だからです。
+`uiop:namestring`、`uiop:os-unix-p`、`uiop:os-macosx-p`、`uiop:run-program`、
+`uiop:collect-sub*directories`、`uiop:directory-files` は解決はされる (ので
+`(:import-from #:uiop)` 句でこれらを挙げるライブラリは読み込め、コンパイルできる) ものの、
+呼び出すと undefined-function エラーになります。いずれも未実装ではなく意図的です:
+外部プロセスの起動 (`run-program`) はどのバックエンドのサンドボックスの外にあり、
+ディレクトリの一覧 (`collect-sub*directories`、`directory-files`) はどのバックエンドでも
+rontolisp が公開するファイルシステム機能の一部ではありません。その機能とは「*名前を指定した*
+ファイルの読み書き」であり、WASM バックエンドにはそもそもファイルシステムがありません。
+黙って何もしなかったり空リストを返したりするより、エラーを返す方が誠実だからです。
 
 ## ql パッケージの関数
 

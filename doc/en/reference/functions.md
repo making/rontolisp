@@ -568,7 +568,7 @@ implements the members below; each name links to its own page.
 |----------|---------|--------|
 | `uiop:getenv` | `(uiop:getenv "PATH")` | the value of an environment variable as a string, or `nil` if unset. Homed here because Common Lisp has no `getenv`. All backends; WASM reads the real host environment in Preview 1 and `wasi:cli/environment@0.3.0` in `--component` mode (pass `--env`/`-S inherit-env` to wasmtime) |
 | `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | the pathname when the file exists, `nil` otherwise — the same contract as `probe-file`, which it lowers onto on every backend |
-| `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | the pathname when the DIRECTORY exists, `nil` otherwise (interpreter only). Listing a directory is not offered: `uiop:collect-sub*directories` / `uiop:directory-files` resolve but signal when called |
+| `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | the pathname (with a trailing `/`) when the DIRECTORY exists, `nil` otherwise — the directory twin of `file-exists-p`. Interpreter only; the compiled backends signal at the call |
 | `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `"/tmp/b.txt"` — the defaults-aware pathname merge (a pathname is its namestring here). A real runtime function on the interpreter; on the compiled backends only the calls the compiler folds to a literal |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping). A literal top-level call is a compile-time directive, so it works on every backend |
 | `uiop:emptyp` | `(uiop:emptyp "")` | `t` for `nil` and for a zero-length vector or string, `nil` otherwise |
@@ -582,11 +582,16 @@ namestring designating exactly that, so `(merge-pathnames x
 (uiop::get-pathname-defaults))` yields `x`.
 
 The rest of the package is a **name-resolution stub**: `uiop:native-namestring`,
-`uiop:namestring`, `uiop:os-unix-p`, `uiop:os-macosx-p` and `uiop:run-program`
-resolve — so a library naming them in an `(:import-from #:uiop)` clause reads and
-compiles — but calling one signals an undefined-function error. That is
-deliberate for `run-program`: spawning an external process is outside every
-backend's sandbox, and an error is a more honest answer than a silent no-op.
+`uiop:namestring`, `uiop:os-unix-p`, `uiop:os-macosx-p`, `uiop:run-program`,
+`uiop:collect-sub*directories` and `uiop:directory-files` resolve — so a library
+naming them in an `(:import-from #:uiop)` clause reads and compiles — but calling
+one signals an undefined-function error. Each is deliberate rather than
+unfinished: spawning an external process (`run-program`) is outside every
+backend's sandbox, and LISTING a directory (`collect-sub*directories`,
+`directory-files`) is not part of rontolisp's filesystem surface on any backend —
+that surface is "read or write a NAMED file", and the WASM backends have no
+filesystem at all. An error is a more honest answer than a silent no-op or an
+empty list.
 
 ## ql Package Functions
 
