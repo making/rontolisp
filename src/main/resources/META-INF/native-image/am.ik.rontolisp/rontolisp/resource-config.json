@@ -39,6 +39,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.FormatRenderer"
+        },
+        "pattern": "am/ik/rontolisp/macro/format-render\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.JsonLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/json\\.lisp"

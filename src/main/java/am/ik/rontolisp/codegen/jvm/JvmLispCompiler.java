@@ -15,15 +15,15 @@ import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
-import am.ik.rontolisp.LispAsync;
+import am.ik.rontolisp.macro.LispAsync;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.SpecialVarCollector;
+import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;

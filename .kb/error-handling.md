@@ -329,10 +329,13 @@ belonged (cl-postgres surfaces every server NOTICE that way).
   cl-postgres registers 100+ condition classes and a per-class dispatch is the same
   90 KB-in-one-method trap the runtime type dispatch hit
   ([jvm-method-size-limits.md](jvm-method-size-limits.md)).
-- **`%format-condition` renders through `formatRuntimeLambda()`** — the same
-  runtime control renderer a computed `(format nil ctrl args)` and `#'format` use,
-  so the supported directive set is identical on all four backends (`~~ ~% ~a ~s ~d
-  ~x ~c`; an unknown directive such as cl-postgres' `~@[` is emitted verbatim). A
+- **`%format-condition` renders through `%fmt-render`** — the shared runtime
+  control renderer a computed `(format nil ctrl args)` and `#'format` use, so the
+  supported directive set is identical on all four backends AND identical to the
+  literal expansion's ([format.md](format.md)). It was a cut-down lambda
+  (`~~ ~% ~a ~s ~d ~x ~c`, everything else emitted verbatim while still consuming
+  its argument) until todo-216, which is why cl-postgres' `~@[` reports printed
+  the directive and a stray `NIL`. A
   control that is a FUNCTION (legal per the standard) is called on the stream
   through FIXED-ARITY `funcall`s for 0-3 arguments: `apply` would drag the whole
   wasm eval runtime into every program that prints a condition. A nil control is no
@@ -367,16 +370,18 @@ belonged (cl-postgres surfaces every server NOTICE that way).
   no condition value can exist, so every printing operator keeps its historical
   shape.
 - Cost, recorded deliberately: a program that can build a condition grows by the
-  renderer plus the runtime format lambda (~11.6 KB of wasm on a 300 KB module).
+  renderer plus the runtime format defuns (~11.6 KB of wasm on a 300 KB module
+  when the format renderer was the cut-down lambda; the shared renderer is bigger,
+  and is injected exactly once per program).
   It is not removable by tree-shaking — the renderer is reachable from every print
   site — and it is the price of the feature; the gate is what keeps every other
   program at zero.
 - **Lite, inherited from the seam**: the rewrite is per CALL FORM, so a condition
   reached through a FUNCTION VALUE (`(mapcar #'princ conditions)`) still gets the
   raw conversion, exactly as a `print-object` method does. A `~A` with a COMPUTED
-  control string does route, because `formatRuntimeLambda`'s `~a` arm is an
-  ordinary `(princ-to-string ...)` form in the program and gets rewritten with
-  everything else.
+  control string does route, because the renderer's `~a` arm is an ordinary
+  `(princ-to-string ...)` form in the injected `format-render.lisp` defuns and gets
+  rewritten with everything else.
 - **Known lite deviation**: rontolisp's string-designator signal path renders the
   message EAGERLY, so a `handler-case`-synthesized `simple-error` carries an
   already-rendered message in `format-control`. Printing it renders it a second

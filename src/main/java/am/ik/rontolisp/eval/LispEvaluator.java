@@ -21,7 +21,8 @@ import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispLambda;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.FormatRenderer;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispFuture;
 import am.ik.rontolisp.LispNil;
@@ -35,7 +36,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.SpecialVarCollector;
+import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.compiler.HttpPlistShape;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
@@ -97,6 +98,13 @@ public final class LispEvaluator {
 	// evaluation, so later signals pick the hook up).
 	private boolean restartRuntimeLoaded = false;
 
+	// Whether the runtime format renderer (FormatRenderer.defuns(), the same forms the
+	// compile path injects) has been evaluated into the global environment. The
+	// interpreter cannot inject a top-level defun the way expandTopLevelDefinitions does,
+	// so the renderer is loaded on the first resolution of one of its names -- which is
+	// what a runtime-control (format ...) call and #'format both go through.
+	private boolean formatRendererLoaded = false;
+
 	// The registry shape (class count, report count) the loaded %condition-report-str
 	// was generated from, or -1 before the first load. The renderer PARTITIONS the
 	// registry, so a define-condition evaluated later makes it stale -- unlike the
@@ -120,11 +128,11 @@ public final class LispEvaluator {
 			return;
 		}
 		try {
-			am.ik.rontolisp.LispAsync.check(cons, false);
+			am.ik.rontolisp.macro.LispAsync.check(cons, false);
 		}
 		catch (IllegalArgumentException ex) {
 			throw new LispEvalException(java.util.Objects.requireNonNullElse(ex.getMessage(),
-					am.ik.rontolisp.LispAsync.AWAIT_PLACEMENT_MESSAGE));
+					am.ik.rontolisp.macro.LispAsync.AWAIT_PLACEMENT_MESSAGE));
 		}
 		preapproveAsyncRunThunks(cons);
 	}
@@ -789,7 +797,7 @@ public final class LispEvaluator {
 			}
 			String name = sym.name();
 			boolean bound = SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)
-					|| this.globalEnv.lookupFunctionOrNull(name) != null || LispMacroExpander.isCarCdrComposition(name);
+					|| this.globalEnv.lookupFunctionOrNull(name) != null || LispNames.isCarCdrComposition(name);
 			return bound ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// fmakunbound: drop the global function binding AND any user macro of the same
@@ -916,14 +924,28 @@ public final class LispEvaluator {
 		}
 		// format is a lowered operator in call position, but also a real CL function
 		// (jzon's condition reports run (apply #'format stream control args)). The
-		// function value rebuilds the literal call from the evaluated arguments and
-		// re-enters the evaluator: the control string is a literal there, so the full
-		// compile-time directive parser handles it.
+		// control string is a RUNTIME value here, so the function value renders it with
+		// the shared runtime renderer -- the very code the compiled #'format wrapper
+		// calls, so a control string reaching format through a function value renders
+		// identically on all four backends. The destination dispatch mirrors
+		// formatDestinationDispatch: nil answers the string, t writes to the default
+		// stream (so a with-output-to-string capture applies), anything else is a stream.
 		this.globalEnv.defineFunction(LispNames.FORMAT, new LispFunction(LispNames.FORMAT, args -> {
 			if (args.size() < 2) {
 				throw new LispEvalException(LispNames.FORMAT + " expects a destination and a control string");
 			}
-			return eval(rebuildSignalForm(LispNames.FORMAT, args), this.globalEnv);
+			LispVal destination = args.get(0);
+			LispVal rendered = eval(
+					FormatRenderer.call(quotedValue(args.get(1)), quotedValue(valueList(args.subList(2, args.size())))),
+					this.globalEnv);
+			if (destination instanceof LispNil) {
+				return rendered;
+			}
+			LispVal writeArgs = (destination instanceof LispTrue) ? LispNil.INSTANCE
+					: new LispCons(quotedValue(destination), LispNil.INSTANCE);
+			eval(new LispCons(new LispSymbol(LispNames.WRITE_STRING), new LispCons(quotedValue(rendered), writeArgs)),
+					this.globalEnv);
+			return LispNil.INSTANCE;
 		}));
 		// cerror (lite): no restart machinery exists, so the "continuable" part is
 		// dropped -- (cerror continue-format datum args...) signals like
@@ -2580,7 +2602,7 @@ public final class LispEvaluator {
 			if (rare != UNHANDLED) {
 				return rare;
 			}
-			if (LispMacroExpander.isCarCdrComposition(sym.name())) {
+			if (LispNames.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);
 			}
 			// User macros defined with defmacro: expand (evaluating the macro body with
@@ -2996,7 +3018,7 @@ public final class LispEvaluator {
 		LispVal nameForm = parts.get(1);
 		// (defun (setf name) ...): a setf-function. Install it under the mangled internal
 		// name %setf-name and register the place so (setf (name ...) v) dispatches to it.
-		LispSymbol setfPlace = LispMacroExpander.setfFunctionPlaceName(nameForm);
+		LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(nameForm);
 		String funcName;
 		if (setfPlace != null) {
 			funcName = LispMacroExpander.setfFunctionName(setfPlace.name());
@@ -3995,7 +4017,7 @@ public final class LispEvaluator {
 			return evalLambdaForm(lambdaForm, env);
 		}
 		// #'(setf name): the writer function installed by (defun (setf name) ...).
-		LispSymbol setfPlace = LispMacroExpander.setfFunctionPlaceName(designator);
+		LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(designator);
 		if (setfPlace != null) {
 			return resolveFunction(LispMacroExpander.setfFunctionName(setfPlace.name()));
 		}
@@ -4064,6 +4086,20 @@ public final class LispEvaluator {
 	 * stay literal so the designator matchers see the same shape a source-level call has;
 	 * anything else is quoted to survive re-evaluation.
 	 */
+	// (quote value) -- how an already-evaluated value is handed back to the evaluator.
+	private static LispVal quotedValue(LispVal value) {
+		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+	}
+
+	// The values as a Lisp list VALUE (not a form): the argument list %fmt-render walks.
+	private static LispVal valueList(List<LispVal> values) {
+		LispVal list = LispNil.INSTANCE;
+		for (int i = values.size() - 1; i >= 0; i--) {
+			list = new LispCons(values.get(i), list);
+		}
+		return list;
+	}
+
 	private static LispVal rebuildSignalForm(String opName, List<LispVal> args) {
 		LispVal form = LispNil.INSTANCE;
 		for (int i = args.size() - 1; i >= 0; i--) {
@@ -4236,7 +4272,19 @@ public final class LispEvaluator {
 					return loaded;
 				}
 			}
-			if (LispMacroExpander.isCarCdrComposition(name)) {
+			// The runtime format renderer is Lisp source the compile path injects as
+			// defuns; the interpreter evaluates the same forms on the first resolution of
+			// one of its names (a runtime-control format call, #'format, ~?, a condition
+			// report). The prefix test keeps an ordinary undefined name from parsing it.
+			if (!this.formatRendererLoaded && name.startsWith(FormatRenderer.NAME_PREFIX)
+					&& FormatRenderer.definesFunction(name)) {
+				ensureFormatRendererLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			if (LispNames.isCarCdrComposition(name)) {
 				// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are
 				// first-class.
 				LispSymbol param = new LispSymbol("x");
@@ -4266,6 +4314,24 @@ public final class LispEvaluator {
 			this.conditionReportRuntimeStamp = stamp;
 			this.closRegistry.setRoutesConditionReports(true);
 			for (LispVal form : LispMacroExpander.conditionReportDefuns(this.closRegistry)) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * Evaluates the runtime format renderer into the global environment, once per
+	 * evaluator. The forms are the ones {@code expandTopLevelDefinitions} injects on the
+	 * compile path, so the interpreter and every compiled backend render a runtime
+	 * control string with the same code.
+	 */
+	private void ensureFormatRendererLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.formatRendererLoaded) {
+				return;
+			}
+			this.formatRendererLoaded = true;
+			for (LispVal form : FormatRenderer.defuns()) {
 				eval(form, this.globalEnv);
 			}
 		}

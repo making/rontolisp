@@ -6,7 +6,7 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 
 /**

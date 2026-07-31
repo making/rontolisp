@@ -45,9 +45,13 @@ class ClWhoE2eTest extends AsdfLibraryE2eSupport {
 			(terpri)
 			""";
 
+	// The numeric entity's hex digits are UPPERCASE: cl-who's escape-char renders it with
+	// (format nil "&#x~x;" code) over a control string it picks at run time, and ~x
+	// answers uppercase digits like Common Lisp (and like the literal-control expansion).
+	// It read lowercase while the runtime control path had its own cut-down renderer.
 	private static final List<String> EXPECTED = List.of(
 			"<html><head><title>Hi</title></head><body><p>Hello<a href='/x'>link</a></p></body></html>",
-			"<div><span>3</span><span>&lt;a&amp;b&gt;</span><span>3-4</span></div>", "<br />", "<br>", "<p>&#xe9;</p>");
+			"<div><span>3</span><span>&lt;a&amp;b&gt;</span><span>3-4</span></div>", "<br />", "<br>", "<p>&#xE9;</p>");
 
 	@Override
 	protected String systemDir() {

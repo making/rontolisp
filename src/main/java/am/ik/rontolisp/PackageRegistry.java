@@ -29,9 +29,10 @@ public final class PackageRegistry {
 			LispNames.CATCH, LispNames.THROW);
 
 	/**
-	 * The {@code cl} macros: operators expanded by {@link LispMacroExpander} that have no
-	 * function value. Names that expand internally but are also usable as function values
-	 * ({@code first}, {@code length}, {@code 1+}, ...) are classified as functions.
+	 * The {@code cl} macros: operators expanded by
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander} that have no function value. Names
+	 * that expand internally but are also usable as function values ({@code first},
+	 * {@code length}, {@code 1+}, ...) are classified as functions.
 	 */
 	private static final Set<String> CL_MACROS = Set.of(LispNames.BLOCK, LispNames.COND, LispNames.CASE, LispNames.AND,
 			LispNames.OR, LispNames.WHEN, LispNames.UNLESS, LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH,
@@ -58,7 +59,7 @@ public final class PackageRegistry {
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
 	 * {@code #'name}. Car/cdr compositions ({@code cadr}, {@code cddr}, ...) are
-	 * recognized separately by {@link LispMacroExpander#isCarCdrComposition} and are not
+	 * recognized separately by {@link LispNames#isCarCdrComposition} and are not
 	 * enumerated here.
 	 */
 	private static final Set<String> CL_FUNCTIONS = Set.of(LispNames.FUNCALL, LispNames.ADD, LispNames.SUB,
@@ -188,7 +189,7 @@ public final class PackageRegistry {
 	/**
 	 * The exported {@code cl} symbols: everything but the {@code %}-prefixed internals
 	 * (car/cdr compositions are recognized separately by
-	 * {@link LispMacroExpander#isCarCdrComposition} and are also external).
+	 * {@link LispNames#isCarCdrComposition} and are also external).
 	 */
 	private static final Set<String> CL_EXTERNALS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
 			CL_TYPES);
@@ -596,14 +597,13 @@ public final class PackageRegistry {
 	 * @return {@code true} if the name is a {@code cl} symbol
 	 */
 	public static boolean isClSymbol(String name) {
-		return CL_SYMBOLS.contains(name) || LispMacroExpander.isCarCdrComposition(name);
+		return CL_SYMBOLS.contains(name) || LispNames.isCarCdrComposition(name);
 	}
 
 	/**
 	 * Returns the fixed set of {@code cl}-package symbol names (functions, macros,
 	 * special forms, variables, type specifiers). Excludes the car/cdr compositions,
-	 * which are a pattern rather than a set (see
-	 * {@link LispMacroExpander#isCarCdrComposition}).
+	 * which are a pattern rather than a set (see {@link LispNames#isCarCdrComposition}).
 	 * @return the {@code cl} symbol names
 	 */
 	public static Set<String> clSymbols() {

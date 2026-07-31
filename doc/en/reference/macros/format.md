@@ -2,8 +2,10 @@
 
 `(format destination control-string args...)`
 
-A minimal subset of Common Lisp's `format`, implemented as a macro shared by the
-interpreter and both compilers. The `control-string` must be a literal: with
+A subset of Common Lisp's `format`, implemented as a macro shared by the
+interpreter and both compilers. A literal `control-string` is expanded at compile
+time; a computed one is rendered at run time (see [Runtime control
+strings](#runtime-control-strings)), with the same directives either way. With
 destination `t` the form expands into `princ`/`prin1`/`terpri` calls, writes to
 standard output, and returns nil; with destination `nil` it builds and returns
 the formatted string (expanding into `princ-to-string`/`prin1-to-string` calls
@@ -39,7 +41,7 @@ With destination `nil` the result is returned as a string instead of printed:
 | `~s`, `~S` | Standard: prints the argument like `prin1` (readable, strings quoted). With `:`, nil prints as `()` |
 | `~d`, `~D` | Decimal integer. With `:`, digits are grouped with commas; with `@`, a `+` sign precedes non-negative values |
 | `~x`, `~o`, `~b` | Hexadecimal / octal / binary integer (uppercase digits), with the same parameters and modifiers as `~d` |
-| `~R` | Radix: `~NR` prints the integer in radix `N` (2-36). The radix parameter is required (English cardinal/ordinal output is not implemented) |
+| `~R` | Radix: `~NR` prints the integer in radix `N` (2-36). Without the radix parameter the decimal digits are printed (English cardinal/ordinal output is not implemented) |
 | `~c`, `~C` | Character: prints the glyph like `write-char`. With `@`, the `#\` reader syntax (like `prin1`); with `:`, non-graphic characters print their name (`Newline`, `Space`, ...) |
 | `~f`, `~F` | Fixed-format floating point. `~,Df` prints `D` digits after the decimal point (rounded); with `@`, a leading `+`. Full parameters: `~w,d,k,overflowchar,padchar F` |
 | `~e`, `~E` | Exponential (scientific) floating point: `[-]d.ddde[+/-]xx`. `~,De` prints `D` digits after the decimal point (default 6, rounded); with `@`, a leading `+`. Full parameters: `~w,d,e,k,overflowchar,padchar,exponentchar E` (`k` must be 1) |
@@ -51,7 +53,7 @@ With destination `nil` the result is returned as a string instead of printed:
 | `~(str~)` | Case conversion of the processed `str`: downcase; `~:(` capitalizes every word, `~@(` capitalizes only the first word, `~:@(` upcases |
 | `~[str0~;str1~:;default~]` | Conditional: the argument (an integer) selects a clause; `~:;` introduces the default. `~N[` / `~#[` select by a literal / by the number of remaining arguments; `~:[false~;true~]` tests nil; `~@[str~]` processes `str` (re-using the tested argument) only when it is non-nil |
 | `~{str~}` | Iteration: applies `str` repeatedly to the elements of the list argument. `~N{` caps the passes at `N`; `~:{` iterates over a list of sublists; `~@{` iterates over the remaining arguments; `~:@{` treats each remaining argument as a sublist |
-| `~?` | Recursive format: consumes a control string and a list of its arguments, rendered through the runtime renderer (its directive subset applies); `~@?` is not supported |
+| `~?` | Recursive format: consumes a control string and a list of its arguments, rendered through the runtime renderer. `~@?` takes the inner control's arguments from the remaining arguments instead of a list |
 | `~*` | Argument jump: `~N*` skips `N` arguments (default 1), `~N:*` moves back `N`, `~N@*` jumps to argument `N` (default 0) |
 
 Directives accept prefix parameters (written after the `~`, comma-separated) and
@@ -97,17 +99,11 @@ one yes x=42
 
 ## Limitations
 
-Other destinations (strings with fill pointers) are not supported, and the
-column-control directives (`~t`, `~<...~>`) and `~r`
-without a radix parameter are not implemented. The loop escape `~^` is
+Other destinations (strings with fill pointers) are not supported, and
+`~<...~>` justification is not implemented. The loop escape `~^` is
 supported at the top level and inside `~{ ... ~}` / `~@{ ... ~}` bodies (the
 join idiom `"~{~a~^, ~}"`; inside `~:{ ... ~}` it ends the current sublist's
-body), but its `~:^`/`~@^` variants and prefix parameters are not. A control string that is a
-runtime value -- a computed control expression, or a call through the function
-value `#'format` (`funcall`/`apply`) -- renders through a runtime fallback that
-supports only the basic directives `~a ~s ~d ~x ~c ~%` and `~~` (an unknown
-directive is emitted verbatim); with a nil destination it returns the string,
-any other destination is written with one `write-string` call. Further notes:
+body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes:
 
 - A `~f` (and the fixed branch of `~g`) without a digit count falls back to each
   backend's native float printing, so its exact form is backend-specific; supply
@@ -132,6 +128,30 @@ any other destination is written with one `write-string` call. Further notes:
   an argument-divergent `~[` nested inside another composite directive
   (`~(`/`~{`) is not supported.
 - `~:d` grouping and the radix directives `~x`/`~o`/`~b`/`~r` are exact for integers of any magnitude on every backend.
+
+## Runtime control strings
+
+A control string that is a runtime value -- a computed control expression, a
+call through the function value `#'format` (`funcall`/`apply`), the inner
+control of `~?`, or a condition's `format-control` slot -- is rendered by a
+runtime renderer instead of being expanded statically. It understands the same
+directives as the table above, so the same control string and arguments produce
+the same text whichever way `format` reaches them (on every backend). Two
+differences follow from the control being data rather than source:
+
+- The renderer never signals: a malformed control (`"abc~"`), an unknown
+  directive (`~Q`), an unterminated `~{`, and a missing argument render as text
+  (the directive verbatim, `NIL` for the missing argument) rather than raising an
+  error. A literal control reports the same problems at expansion time, where a
+  diagnostic belongs; a runtime control usually arrives with the data being
+  reported, and a report must not fail while reporting.
+- The column-control directive `~t` (`~n,mT`, `~n@T`) and the plural directive
+  `~p` are available here but not in the literal expansion -- a literal control
+  using one falls back to this renderer, so both work either way. `~t` measures
+  the column from the text rendered so far.
+
+`~r` without a radix parameter prints the decimal digits; English cardinals and
+ordinals are not implemented.
 
 Like the other macros, `format` is not recognized by the embedded `eval` runtime
 in compiled output (see [Compiled `eval` limitations](../../guides/eval-limitations.md)).

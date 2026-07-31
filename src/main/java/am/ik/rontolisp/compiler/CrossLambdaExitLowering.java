@@ -10,7 +10,7 @@ import java.util.Map;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
@@ -636,7 +636,7 @@ public final class CrossLambdaExitLowering {
 		}
 
 		private static @Nullable String defunBlockName(LispVal nameForm) {
-			LispSymbol setfPlace = LispMacroExpander.setfFunctionPlaceName(nameForm);
+			LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(nameForm);
 			if (setfPlace != null) {
 				return LispMacroExpander.blockName(setfPlace);
 			}

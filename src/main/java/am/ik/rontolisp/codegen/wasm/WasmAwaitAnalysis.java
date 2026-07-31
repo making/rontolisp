@@ -11,11 +11,12 @@ import am.ik.rontolisp.LispVal;
 /**
  * Counts the {@code rontolisp:await} suspend points a subtree contributes to the
  * ENCLOSING async function's state machine (the {@code --component} backend). The
- * traversal mirrors {@link am.ik.rontolisp.LispAsync#check}: quoted data and the bodies
- * of plain functions ({@code defun}/{@code lambda}/{@code defmethod}, {@code flet}/
- * {@code labels} definitions) contribute nothing (an await there is a placement error
- * caught up front), and a nested {@code rontolisp:async-lambda} compiles its own state
- * machine, so its body's awaits belong to it, not to the enclosing function.
+ * traversal mirrors {@link am.ik.rontolisp.macro.LispAsync#check}: quoted data and the
+ * bodies of plain functions ({@code defun}/{@code lambda}/{@code defmethod},
+ * {@code flet}/ {@code labels} definitions) contribute nothing (an await there is a
+ * placement error caught up front), and a nested {@code rontolisp:async-lambda} compiles
+ * its own state machine, so its body's awaits belong to it, not to the enclosing
+ * function.
  *
  * <p>
  * The count is what sizes each structure's contiguous state range: emission assigns state

@@ -3,7 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 

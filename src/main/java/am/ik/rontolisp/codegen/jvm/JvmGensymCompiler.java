@@ -43,7 +43,7 @@ final class JvmGensymCompiler {
 		if (args.size() == 2 && !(args.get(1) instanceof LispString)) {
 			// A computed prefix: the shared string-construction lowering (the interned
 			// prefix text below is a compile-time constant, so it has no place here).
-			JvmExprCompiler.compileExpr(am.ik.rontolisp.LispMacroExpander.expandComputedGensym(args.get(1)), ctx,
+			JvmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.expandComputedGensym(args.get(1)), ctx,
 					className);
 			return;
 		}

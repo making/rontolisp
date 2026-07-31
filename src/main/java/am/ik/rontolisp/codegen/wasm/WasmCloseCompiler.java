@@ -16,7 +16,7 @@ final class WasmCloseCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		LispVal stripped = am.ik.rontolisp.LispMacroExpander.stripCloseAbort(cons);
+		LispVal stripped = am.ik.rontolisp.macro.LispMacroExpander.stripCloseAbort(cons);
 		if (stripped instanceof LispCons strippedCons) {
 			cons = strippedCons;
 		}

@@ -245,8 +245,26 @@ public final class LambdaLists {
 	 * the PLACE name for a {@code (defun (setf name) ...)} setf-function -- mirroring the
 	 * interpreter's {@code evalDefun} block naming.
 	 */
+	/**
+	 * If {@code nameForm} is a {@code (setf NAME)} function-name designator (as used in
+	 * {@code defun} and {@code #'}), returns the place {@code NAME} symbol; otherwise
+	 * {@code null}. It is a pure shape test on a function-name designator, so it lives
+	 * with the other lambda-list/name-shape helpers rather than in the expander (which
+	 * sits above the reader and must stay unreachable from this package).
+	 * @param nameForm the candidate function-name designator
+	 * @return the place symbol, or {@code null} if not a setf-function designator
+	 */
+	public static @Nullable LispSymbol setfFunctionPlaceName(LispVal nameForm) {
+		if (nameForm instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.SETF.equals(op.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol place
+				&& rest.cdr() instanceof LispNil) {
+			return place;
+		}
+		return null;
+	}
+
 	private static @Nullable LispVal defunBlockName(LispVal nameForm) {
-		LispSymbol setfPlace = LispMacroExpander.setfFunctionPlaceName(nameForm);
+		LispSymbol setfPlace = setfFunctionPlaceName(nameForm);
 		if (setfPlace != null) {
 			return setfPlace;
 		}
@@ -356,7 +374,7 @@ public final class LambdaLists {
 	 * @param restVar the variable holding the remaining list
 	 * @param out the binding list to append to
 	 */
-	static void appendTailBindings(List<LispVal> tailParams, LispSymbol restVar, List<LispVal> out) {
+	public static void appendTailBindings(List<LispVal> tailParams, LispSymbol restVar, List<LispVal> out) {
 		Parsed parsed = parse(tailParams);
 		appendPrologueBindings(parsed, restVar, true, out);
 		if (!parsed.keys().isEmpty() && !parsed.allowOtherKeys()) {

@@ -40,17 +40,26 @@ Source string
 Package dependency direction (no cycles allowed):
 
 ```
-cli -> eval, compiler, codegen.*, am.ik.wit
-codegen.jvm -> compiler, am.ik.jvm
-codegen.wasm -> compiler, am.ik.wasm, am.ik.wit
-compiler -> rontolisp (AST types only), am.ik.wit
-eval -> rontolisp (AST types only), compiler
+cli -> eval, compiler, codegen.*, macro, reader, am.ik.wit
+codegen.jvm -> compiler, macro, am.ik.jvm
+codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
+compiler -> macro, rontolisp (AST types only), am.ik.wit
+eval -> macro, compiler, reader, rontolisp (AST types only)
+macro -> reader, rontolisp (AST types only)
 reader -> rontolisp (AST types only)
 ```
 
 `compiler` holds the backend-shared, backend-FREE directive front-ends: anything that must
 behave identically on every backend (both `eval` and `cli` do) depends on it, never the
 other way -- `compiler` depends on no backend.
+
+`macro` (`LispMacroExpander`, `LispAsync`, `SpecialVarCollector`) sits ABOVE `reader`, and
+that direction is the point: an expander pass may build the AST it injects by READING Lisp
+source (`LispReader`) instead of hand-assembling `LispCons` nodes in Java. `rontolisp`
+(the AST types plus the name/package/registry tables) must therefore never reference
+`macro` -- a root-package helper that wants an expander predicate gets the predicate moved
+down to it (`LispNames.isCarCdrComposition`, `LambdaLists.setfFunctionPlaceName`), never an
+import back up.
 
 **A compile-time AST pass that reads a file belongs in `eval`, not `cli`, and must read
 through `SourceLoader`.** The browser playground (`RontoPlayground.frontend`, `src/web/java`)
@@ -127,7 +136,7 @@ When adding a new built-in function or special form:
 
 ### Adding a New Macro
 
-Macros expand into existing primitives (`if`, `let`, `progn`, `rplaca`, `rplacd`) at the AST level. `LispMacroExpander` (in `am.ik.rontolisp`) is shared by the evaluator and both compilers. No per-compiler class is needed.
+Macros expand into existing primitives (`if`, `let`, `progn`, `rplaca`, `rplacd`) at the AST level. `LispMacroExpander` (in `am.ik.rontolisp.macro`) is shared by the evaluator and both compilers. No per-compiler class is needed.
 
 1. **LispMacroExpander.java**: Add `public static LispVal expand<Name>(LispCons cons)`. Add the name to `LispNames` and `PackageRegistry.CL_SYMBOLS`.
 2. **LispEvaluator.java**: `evalCons()` case -> `return eval(LispMacroExpander.expand<Name>(cons), env);`

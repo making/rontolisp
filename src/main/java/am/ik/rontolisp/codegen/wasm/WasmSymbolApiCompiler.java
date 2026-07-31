@@ -3,7 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -126,7 +126,7 @@ final class WasmSymbolApiCompiler {
 				&& LispNames.QUOTE.equals(op.name()) && ((LispCons) quoteForm.cdr()).car() instanceof LispSymbol sym) {
 			String name = sym.name();
 			boolean bound = PackageRegistry.specialOperatorNames().contains(name)
-					|| PackageRegistry.clFunctionNames().contains(name) || LispMacroExpander.isCarCdrComposition(name)
+					|| PackageRegistry.clFunctionNames().contains(name) || LispNames.isCarCdrComposition(name)
 					|| ctx.userDefunNames.contains(name) || ctx.functions.containsKey(name);
 			if (ctx.usesFmakunbound) {
 				emitTombstoneGuardedFold(name, bound, ctx);

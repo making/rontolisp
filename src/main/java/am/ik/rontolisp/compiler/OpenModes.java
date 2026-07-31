@@ -54,7 +54,8 @@ public final class OpenModes {
 				case ":DIRECTION" -> direction = parts.get(i + 1);
 				case ":ELEMENT-TYPE" -> elementType = parts.get(i + 1);
 				case ":EXTERNAL-FORMAT", ":IF-EXISTS", ":IF-DOES-NOT-EXIST" -> {
-					if (!am.ik.rontolisp.LispMacroExpander.ignorableOpenOptionValue(key.name(), parts.get(i + 1))) {
+					if (!am.ik.rontolisp.macro.LispMacroExpander.ignorableOpenOptionValue(key.name(),
+							parts.get(i + 1))) {
 						throw new UnsupportedOperationException(
 								"open: " + key.name() + " supports only the native default value");
 					}

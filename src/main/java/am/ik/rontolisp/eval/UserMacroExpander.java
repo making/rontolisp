@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;

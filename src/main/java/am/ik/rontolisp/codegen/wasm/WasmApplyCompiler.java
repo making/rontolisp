@@ -57,11 +57,11 @@ final class WasmApplyCompiler {
 		// re-bundle it). This bypasses _apply, whose per-arity dispatch stops at
 		// MAX_CALLABLE_ARITY (a variadic CLOS dispatcher forwarding 8+ apply
 		// arguments silently yielded nil there).
-		String target = n >= 3 ? am.ik.rontolisp.LispMacroExpander.applyLiteralTargetName(args.get(1)) : null;
+		String target = n >= 3 ? am.ik.rontolisp.macro.LispMacroExpander.applyLiteralTargetName(args.get(1)) : null;
 		if (target != null) {
 			WasmLispCompiler.WasmFunctionInfo fi = ctx.functions.get(target);
 			if (fi != null) {
-				WasmExprCompiler.compileExpr(am.ik.rontolisp.LispMacroExpander.applyArgumentListExpr(cons), ctx);
+				WasmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyArgumentListExpr(cons), ctx);
 				int argsSlot = ctx.allocTemp();
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeSignedLeb128(argsSlot);

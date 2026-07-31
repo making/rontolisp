@@ -16,7 +16,7 @@ import java.util.List;
  * {@link am.ik.rontolisp.cli.CompileTimePathnameFolder}), {@code uiop:merge-pathnames*} +
  * {@code make-pathname} (namestring composition, also folded), per-line {@code read-line}
  * over 34k lines (2/3-arg CL form lowered by
- * {@link am.ik.rontolisp.LispMacroExpander#expandReadLineCompat}), and
+ * {@link am.ik.rontolisp.macro.LispMacroExpander#expandReadLineCompat}), and
  * {@code (subseq unicode-string ...)}/{@code (stable-sort unicode-string ...)} on
  * mutable-character vectors (subseq's vector arm added in this integration).
  *

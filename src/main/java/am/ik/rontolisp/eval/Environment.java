@@ -48,7 +48,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;

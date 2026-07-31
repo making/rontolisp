@@ -3,7 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;

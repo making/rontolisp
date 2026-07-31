@@ -8,7 +8,7 @@ import am.ik.jvm.ByteCodeWriter;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;

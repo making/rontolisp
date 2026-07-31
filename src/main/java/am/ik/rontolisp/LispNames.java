@@ -793,8 +793,8 @@ public final class LispNames {
 	/**
 	 * The {@code array-row-major-index} built-in function (the flat row-major index of
 	 * the given subscripts). Expanded by
-	 * {@link LispMacroExpander#expandArrayRowMajorIndex} into a Horner fold over
-	 * {@code array-dimensions}.
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandArrayRowMajorIndex} into a
+	 * Horner fold over {@code array-dimensions}.
 	 */
 	public static final String ARRAY_ROW_MAJOR_INDEX = "ARRAY-ROW-MAJOR-INDEX";
 
@@ -825,14 +825,16 @@ public final class LispNames {
 	 * The {@code adjust-array} built-in function: resize an array preserving the elements
 	 * at common subscripts. Adjusts an {@code :adjustable} array in place (returning it),
 	 * otherwise returns a fresh array. Expanded by
-	 * {@link LispMacroExpander#expandAdjustArray} on the compile path.
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandAdjustArray} on the compile
+	 * path.
 	 */
 	public static final String ADJUST_ARRAY = "ADJUST-ARRAY";
 
 	/**
 	 * The {@code array-displacement} built-in function: the {@code :displaced-to} target
 	 * and offset as two values ({@code nil} and 0 for a non-displaced array). Expanded by
-	 * {@link LispMacroExpander#expandArrayDisplacement} on the compile path.
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandArrayDisplacement} on the
+	 * compile path.
 	 */
 	public static final String ARRAY_DISPLACEMENT = "ARRAY-DISPLACEMENT";
 
@@ -910,14 +912,16 @@ public final class LispNames {
 
 	/**
 	 * The {@code vector} built-in function (build a fresh rank-1 array from the
-	 * arguments). Expanded by {@link LispMacroExpander#expandVector} into
+	 * arguments). Expanded by
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandVector} into
 	 * {@code make-array} + {@code %aset}.
 	 */
 	public static final String VECTOR = "VECTOR";
 
 	/**
 	 * The {@code svref} built-in function (simple-vector element access). Expanded by
-	 * {@link LispMacroExpander#expandSvref} into {@code aref}; also a {@code setf} place.
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandSvref} into {@code aref}; also
+	 * a {@code setf} place.
 	 */
 	public static final String SVREF = "SVREF";
 
@@ -940,7 +944,7 @@ public final class LispNames {
 	/**
 	 * The {@code coerce} built-in function. Supports the literal result types
 	 * {@code 'list}, {@code 'vector}, and {@code 'string}; expanded by
-	 * {@link LispMacroExpander#expandCoerce}.
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandCoerce}.
 	 */
 	public static final String COERCE = "COERCE";
 
@@ -1744,7 +1748,8 @@ public final class LispNames {
 	/**
 	 * The {@code loop} macro. Only the "simple loop" subset is supported (numeric/list
 	 * stepping, accumulation, simple control clauses); see
-	 * {@link LispMacroExpander#expandLoop} for the exact grammar and limitations.
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandLoop} for the exact grammar
+	 * and limitations.
 	 */
 	public static final String LOOP = "LOOP";
 
@@ -2028,8 +2033,8 @@ public final class LispNames {
 	/**
 	 * The internal {@code %subseq-core} operator (compile-path only): the JVM/WASM subseq
 	 * compilers, without the arrayp dispatch that
-	 * {@link am.ik.rontolisp.LispMacroExpander#expandSubseqCompat} injects to route a
-	 * vector argument through {@code make-array} + {@code aref}. Never appears in user
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandSubseqCompat} injects to route
+	 * a vector argument through {@code make-array} + {@code aref}. Never appears in user
 	 * source (the expansion is only re-entered internally through the same subseq
 	 * compilers).
 	 */
@@ -4716,6 +4721,30 @@ public final class LispNames {
 
 	/** The {@code *error-output*} variable -- also the {@code t} designator (lite). */
 	public static final String ERROR_OUTPUT_VAR = "*ERROR-OUTPUT*";
+
+	/**
+	 * Checks if the given name matches the c[ad]{2,4}r pattern (e.g., caar, cadr, cddr,
+	 * caddr, cdddr, etc.). The family is not enumerated in a constant table -- the
+	 * package classification ({@code PackageRegistry}/{@code PackageResolver}) and the
+	 * expander both derive membership from the spelling, so it lives here with the names
+	 * rather than in the expander (which sits above the reader and must stay unreachable
+	 * from this package).
+	 * @param name the function name to check
+	 * @return {@code true} if the name matches the pattern
+	 */
+	public static boolean isCarCdrComposition(String name) {
+		int len = name.length();
+		if (len < 4 || len > 6 || name.charAt(0) != 'C' || name.charAt(len - 1) != 'R') {
+			return false;
+		}
+		for (int i = 1; i < len - 1; i++) {
+			char ch = name.charAt(i);
+			if (ch != 'A' && ch != 'D') {
+				return false;
+			}
+		}
+		return true;
+	}
 
 	private LispNames() {
 	}

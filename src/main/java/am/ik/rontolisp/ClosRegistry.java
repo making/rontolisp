@@ -12,7 +12,7 @@ import org.jspecify.annotations.Nullable;
  * {@code defgeneric} / {@code defmethod} / {@code make-instance} / {@code slot-value}).
  * Mirrors the {@code defstruct} accessor registry: one instance lives per evaluator
  * ({@code LispEvaluator}) and one per compilation ({@code Jvm/WasmLispCompiler.Ctx}),
- * populated by the {@link LispMacroExpander} expansions.
+ * populated by the {@link am.ik.rontolisp.macro.LispMacroExpander} expansions.
  *
  * <p>
  * An instance is a tagged proper list {@code (%class-<name> v1 v2 ...)} like a defstruct
@@ -288,7 +288,12 @@ public final class ClosRegistry {
 
 		private int methodCounter = 0;
 
-		GenericInfo(String name, List<String> paramNames) {
+		/**
+		 * Creates a generic-function record.
+		 * @param name the generic function name
+		 * @param paramNames the parameter names of its lambda list
+		 */
+		public GenericInfo(String name, List<String> paramNames) {
 			this.name = name;
 			this.paramNames = List.copyOf(paramNames);
 		}
@@ -309,7 +314,11 @@ public final class ClosRegistry {
 			return this.paramNames;
 		}
 
-		void paramNames(List<String> paramNames) {
+		/**
+		 * Replaces the recorded parameter names.
+		 * @param paramNames the parameter names
+		 */
+		public void paramNames(List<String> paramNames) {
 			this.paramNames = List.copyOf(paramNames);
 		}
 
@@ -324,7 +333,8 @@ public final class ClosRegistry {
 			return this.variadic;
 		}
 
-		void markVariadic() {
+		/** Records that at least one method of this generic takes a rest parameter. */
+		public void markVariadic() {
 			this.variadic = true;
 		}
 
@@ -336,7 +346,11 @@ public final class ClosRegistry {
 			return this.documentation;
 		}
 
-		void documentation(@Nullable String documentation) {
+		/**
+		 * Records the generic's documentation string.
+		 * @param documentation the documentation string, or {@code null}
+		 */
+		public void documentation(@Nullable String documentation) {
 			this.documentation = documentation;
 		}
 
@@ -348,7 +362,11 @@ public final class ClosRegistry {
 			return this.methods;
 		}
 
-		int nextMethodIndex() {
+		/**
+		 * Allocates the index of the next method defined on this generic.
+		 * @return the method index
+		 */
+		public int nextMethodIndex() {
 			return this.methodCounter++;
 		}
 
@@ -816,7 +834,11 @@ public final class ClosRegistry {
 		}
 	}
 
-	void registerClass(ClassInfo info) {
+	/**
+	 * Registers a class definition.
+	 * @param info the class record
+	 */
+	public void registerClass(ClassInfo info) {
 		String key = normalize(info.name());
 		Set<String> extras = this.pendingExtraAncestors.get(key);
 		if (extras != null) {
@@ -918,7 +940,11 @@ public final class ClosRegistry {
 		}
 	}
 
-	void registerGeneric(GenericInfo info) {
+	/**
+	 * Registers a generic function definition.
+	 * @param info the generic record
+	 */
+	public void registerGeneric(GenericInfo info) {
 		this.generics.put(normalize(info.name()), info);
 	}
 
@@ -942,7 +968,12 @@ public final class ClosRegistry {
 		return this.conditionReports.get(normalize(className));
 	}
 
-	void registerSlotPosition(String baseName, int position) {
+	/**
+	 * Records the instance-slot position a struct/class accessor reads.
+	 * @param baseName the accessor name
+	 * @param position the slot index
+	 */
+	public void registerSlotPosition(String baseName, int position) {
 		Integer existing = this.slotPositions.get(baseName);
 		if (existing == null) {
 			this.slotPositions.put(baseName, position);

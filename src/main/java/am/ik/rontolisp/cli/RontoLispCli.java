@@ -17,7 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;

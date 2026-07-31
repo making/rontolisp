@@ -17,13 +17,13 @@ import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
-import am.ik.rontolisp.SpecialVarCollector;
+import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -1438,7 +1438,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// async-defun/async-lambda forms.
 		try {
 			program = LispMacroExpander.rewriteAsyncSugar(program);
-			am.ik.rontolisp.LispAsync.checkTopLevel(program);
+			am.ik.rontolisp.macro.LispAsync.checkTopLevel(program);
 		}
 		catch (IllegalArgumentException ex) {
 			throw new UnsupportedOperationException(ex.getMessage());
@@ -1472,7 +1472,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			program = rewriteTopLevelAsyncDefuns(program, asyncDefunNames);
 		}
 		else {
-			program = am.ik.rontolisp.LispAsync.lowerProgram(program);
+			program = am.ik.rontolisp.macro.LispAsync.lowerProgram(program);
 		}
 		// Splice top-level defstructs/defclasses/defgenerics/defmethods into their
 		// generated defuns before lambda-list desugaring (the generated constructors

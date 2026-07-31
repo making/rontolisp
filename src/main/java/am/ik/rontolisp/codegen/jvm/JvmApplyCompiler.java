@@ -32,11 +32,11 @@ final class JvmApplyCompiler {
 		// re-bundle it). This bypasses _apply, whose per-arity dispatch stops at
 		// MAX_CALLABLE_ARITY (a variadic CLOS dispatcher forwarding 8+ apply
 		// arguments silently yielded nil there).
-		String target = n >= 3 ? am.ik.rontolisp.LispMacroExpander.applyLiteralTargetName(args.get(1)) : null;
+		String target = n >= 3 ? am.ik.rontolisp.macro.LispMacroExpander.applyLiteralTargetName(args.get(1)) : null;
 		if (target != null) {
 			JvmLispCompiler.FunctionInfo fi = ctx.functions.get(target);
 			if (fi != null) {
-				JvmExprCompiler.compileExpr(am.ik.rontolisp.LispMacroExpander.applyArgumentListExpr(cons), ctx,
+				JvmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyArgumentListExpr(cons), ctx,
 						className);
 				int argsSlot = ctx.allocTemp();
 				ctx.emit(Opcode.ASTORE);

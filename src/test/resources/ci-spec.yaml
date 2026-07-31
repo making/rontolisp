@@ -1639,6 +1639,20 @@ cases:
     expected: |
       3.141593e+0|3.1416e+0|1.2345e+3|1.00e+1|0.0e+0
       -1.2345e+3|+4.2e+1
+  - name: format-runtime-control-string
+    source: |
+      (defun ci-fmt-runtime (c) (format nil c 1 "s" 42 7 (list 1 2) "c"))
+      (princ (ci-fmt-runtime "A=~A S=~S D=~D ~5,'0D% ~{~A~^,~} ~@[cond=~A~] ~~ end"))
+      (terpri)
+      (princ (apply #'format nil (list "~{~a~^ | ~} (~5,'0d) ~:d" (list 'a 'b) 7 1234567)))
+      (terpri)
+      (let ((ci-fmt-c "&#x~x;"))
+        (princ (format nil ci-fmt-c 233)))
+      (terpri)
+    expected: |
+      A=1 S="s" D=42 00007% 1,2 cond=c ~ end
+      A | B (00007) 1,234,567
+      &#xE9;
   - name: format-directives-radix-character-case
     source: |
       (format t "~x ~o ~b ~8r ~x [~8,'0x]~%" 255 256 10 4096 -255 255)

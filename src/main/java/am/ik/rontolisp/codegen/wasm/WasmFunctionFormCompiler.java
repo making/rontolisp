@@ -2,8 +2,9 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.util.List;
 
+import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
@@ -36,7 +37,7 @@ final class WasmFunctionFormCompiler {
 			WasmLambdaCompiler.compileValue(lambdaForm, ctx);
 			return;
 		}
-		LispSymbol setfPlace = LispMacroExpander.setfFunctionPlaceName(designator);
+		LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(designator);
 		if (setfPlace != null) {
 			// #'(setf name): the writer defun installed under the mangled internal name.
 			compileNamed(LispMacroExpander.setfFunctionName(setfPlace.name()), ctx);
@@ -62,7 +63,7 @@ final class WasmFunctionFormCompiler {
 	}
 
 	static void compileNamed(String name, WasmLispCompiler.Ctx ctx) {
-		if (!ctx.functions.containsKey(name) && LispMacroExpander.isCarCdrComposition(name)) {
+		if (!ctx.functions.containsKey(name) && LispNames.isCarCdrComposition(name)) {
 			// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are first-class
 			WasmLambdaCompiler.compileValue(carCdrLambda(name), ctx);
 			return;

@@ -7,7 +7,7 @@ import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;
@@ -1186,7 +1186,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx, className);
 				case LispNames.NOT -> JvmNullPredCompiler.compile(cons, ctx, className);
 				default -> {
-					if (LispMacroExpander.isCarCdrComposition(sym.name())) {
+					if (LispNames.isCarCdrComposition(sym.name())) {
 						JvmExprCompiler.compileExpr(LispMacroExpander.expandCarCdrComposition(cons), ctx, className);
 					}
 					else {

@@ -1,4 +1,25 @@
-package am.ik.rontolisp;
+package am.ik.rontolisp.macro;
+
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LambdaLists;
+import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInstance;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispLayout;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.StructLiteralFolder;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -2829,26 +2850,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Checks if the given name matches the c[ad]{2,4}r pattern (e.g., caar, cadr, cddr,
-	 * caddr, cdddr, etc.).
-	 * @param name the function name to check
-	 * @return {@code true} if the name matches the pattern
-	 */
-	public static boolean isCarCdrComposition(String name) {
-		int len = name.length();
-		if (len < 4 || len > 6 || name.charAt(0) != 'C' || name.charAt(len - 1) != 'R') {
-			return false;
-		}
-		for (int i = 1; i < len - 1; i++) {
-			char ch = name.charAt(i);
-			if (ch != 'A' && ch != 'D') {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	/**
 	 * Expands car/cdr composition functions into nested car/cdr calls.
 	 *
 	 * <pre>
@@ -3392,7 +3393,7 @@ public final class LispMacroExpander {
 						// (setf (point-x p) val) -> (%obj-set p <index> val)
 						yield objSet(placeParts.get(1), structSlot - 1, value);
 					}
-					if (isCarCdrComposition(accessor)) {
+					if (LispNames.isCarCdrComposition(accessor)) {
 
 						yield expandSetfCarCdr(accessor, placeParts.get(1), value);
 					}
@@ -3440,22 +3441,6 @@ public final class LispMacroExpander {
 	 */
 	public static String setfFunctionName(String placeName) {
 		return "%setf-" + placeName;
-	}
-
-	/**
-	 * If {@code nameForm} is a {@code (setf NAME)} function-name designator (as used in
-	 * {@code defun} and {@code #'}), returns the place {@code NAME} symbol; otherwise
-	 * {@code null}.
-	 * @param nameForm the candidate function-name designator
-	 * @return the place symbol, or {@code null} if not a setf-function designator
-	 */
-	public static @Nullable LispSymbol setfFunctionPlaceName(LispVal nameForm) {
-		if (nameForm instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.SETF.equals(op.name())
-				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol place
-				&& rest.cdr() instanceof LispNil) {
-			return place;
-		}
-		return null;
 	}
 
 	private static LispVal expandSetfWithRplaca(LispVal target, LispVal value) {
@@ -10403,7 +10388,9 @@ public final class LispMacroExpander {
 			// literal
 			// here can only name an unregistered structure type and the fold says so. It
 			// returns the program itself when there is no literal, keeping the fast path.
-			return StructLiteralFolder.foldProgram(program, closRegistry);
+			// The format renderer is still injected here when the program reaches it:
+			// this path carries the plainest runtime-control (format ...) programs.
+			return withFormatRenderer(StructLiteralFolder.foldProgram(program, closRegistry));
 		}
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		java.util.Map<Integer, String> dispatcherSlots = new java.util.LinkedHashMap<>();
@@ -10530,11 +10517,112 @@ public final class LispMacroExpander {
 		if (!printObjectTags(closRegistry).isEmpty() || closRegistry.routesConditionReports()) {
 			out.add(printObjectStrDefun(closRegistry));
 		}
+		// The runtime format renderer, once per program that can reach it. Emitted here
+		// so the scan sees the definitions injected above (the condition report renders a
+		// simple-condition's format-control THROUGH the renderer), and gated so a program
+		// whose every format call has a literal control -- the overwhelming majority --
+		// carries none of it.
+		out = withFormatRenderer(out);
 		// The registry is complete: reserve, in every ancestor of a change-class target,
 		// room for the target's slots. %obj-new reads the reservation at backend-compile
 		// time, which is after this pass, so widening here reaches every allocation site.
 		closRegistry.applyChangeClassCapacities();
 		return out;
+	}
+
+	/**
+	 * Appends the runtime format renderer's definitions when the program can reach it,
+	 * and answers the program unchanged when it cannot.
+	 *
+	 * <p>
+	 * Three ways in, and the scan has to answer for all of them BEFORE the expressions
+	 * are expanded (that happens per form, much later, and cannot add a top-level defun):
+	 * <ul>
+	 * <li>a renderer call is already present -- the condition-report runtime injected
+	 * just above, or a library form spliced with one;</li>
+	 * <li>{@code #'format} is taken as a value, whose wrapper renders through it;</li>
+	 * <li>a {@code (format ...)} call whose control the static expansion will decline --
+	 * see {@link #formatUsesRenderer}.</li>
+	 * </ul>
+	 * @param forms the program to scan
+	 * @return the program, with the renderer definitions appended when it needs them
+	 */
+	private static List<LispVal> withFormatRenderer(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (FormatRenderer.isUsed(form) || reachesFormatRenderer(form)) {
+				List<LispVal> withRenderer = new java.util.ArrayList<>(forms);
+				withRenderer.addAll(FormatRenderer.defuns());
+				return withRenderer;
+			}
+		}
+		return forms;
+	}
+
+	private static boolean reachesFormatRenderer(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.FUNCTION.equals(head.name()) && cons.cdr() instanceof LispCons quoted
+					&& quoted.car() instanceof LispSymbol named && LispNames.FORMAT.equals(named.name())) {
+				return true;
+			}
+			if (LispNames.FORMAT.equals(head.name()) && formatUsesRenderer(cons)) {
+				return true;
+			}
+		}
+		return reachesFormatRenderer(cons.car()) || reachesFormatRenderer(cons.cdr());
+	}
+
+	/**
+	 * Whether {@link #expandFormat} will lower this call through the runtime renderer:
+	 * the control string is not a literal (a variable, a slot read, a function call), or
+	 * it is a literal the static parser declines, or it carries a {@code ~?} (which is a
+	 * renderer call by definition). The decision is made by running the SAME parser the
+	 * expansion runs, so the two cannot answer differently.
+	 * @param cons the {@code (format destination control args...)} call
+	 * @return true when the expansion of this call contains a renderer call
+	 */
+	private static boolean formatUsesRenderer(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			// Malformed: the expansion signals rather than rendering.
+			return false;
+		}
+		LispVal control = parts.get(2);
+		if (control instanceof LispCons ctrl && ctrl.car() instanceof LispSymbol ifSym
+				&& LispNames.IF.equals(ifSym.name())) {
+			List<LispVal> ifParts = ctrl.toList();
+			if (ifParts.size() == 4) {
+				// Distributed over the branches, so each branch decides for itself.
+				return formatUsesRenderer((LispCons) replaceFormatControl(parts, ifParts.get(2)))
+						|| formatUsesRenderer((LispCons) replaceFormatControl(parts, ifParts.get(3)));
+			}
+		}
+		if (!(control instanceof LispString literal)) {
+			return true;
+		}
+		List<LispSymbol> temps = new java.util.ArrayList<>();
+		for (int i = 3; i < parts.size(); i++) {
+			temps.add(new LispSymbol(FORMAT_ARG_VAR + (i - 3)));
+		}
+		List<FmtOp> parsed;
+		try {
+			parsed = truncateAtCut(new FmtParser(literal.value()).parseTop(FmtArgs.forTemps(temps)));
+		}
+		catch (UnsupportedOperationException declined) {
+			return true;
+		}
+		catch (RuntimeException malformed) {
+			// A control the parser rejects outright: the expansion signals the same way.
+			return false;
+		}
+		for (FmtOp op : parsed) {
+			if (op instanceof FmtString piece && FormatRenderer.isUsed(piece.expr())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -10630,7 +10718,7 @@ public final class LispMacroExpander {
 
 	private static boolean isSetfFunctionDefun(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
-				&& cons.cdr() instanceof LispCons rest && setfFunctionPlaceName(rest.car()) != null;
+				&& cons.cdr() instanceof LispCons rest && LambdaLists.setfFunctionPlaceName(rest.car()) != null;
 	}
 
 	/**
@@ -10690,7 +10778,7 @@ public final class LispMacroExpander {
 
 	private static LispVal rewriteSetfFunctionDefun(LispCons cons, java.util.Map<String, Integer> structAccessors) {
 		List<LispVal> parts = cons.toList();
-		LispSymbol place = java.util.Objects.requireNonNull(setfFunctionPlaceName(parts.get(1)));
+		LispSymbol place = java.util.Objects.requireNonNull(LambdaLists.setfFunctionPlaceName(parts.get(1)));
 		structAccessors.put(place.name(), SETF_FUNCTION_MARKER);
 		List<LispVal> rewritten = new java.util.ArrayList<>(parts);
 		rewritten.set(1, new LispSymbol(setfFunctionName(place.name())));
@@ -10829,18 +10917,17 @@ public final class LispMacroExpander {
 		return listToCons(letParts);
 	}
 
-	// The inline runtime-renderer fallback for a control the static expansion cannot
-	// lower: a computed (non-literal) control string (cl-who's escape-string binds its
-	// control to a local variable) or a literal one using a directive shape outside the
-	// static subset. Supports the common directives ~~ ~% ~a ~s ~d ~x ~c; an unknown
-	// directive is emitted verbatim.
+	// The runtime-renderer fallback for a control the static expansion cannot lower: a
+	// computed (non-literal) control string (cl-who's escape-string binds its control to
+	// a local variable) or a literal one using a directive shape outside the static
+	// subset. It calls the shared %fmt-render defuns (FormatRenderer), which understand
+	// the whole directive set -- the same renderer #'format and a condition report reach.
 	private static LispVal runtimeRenderFallback(List<LispVal> parts, boolean toString, @Nullable LispVal streamDest) {
 		List<LispVal> fargs = parts.subList(3, parts.size());
 		List<LispVal> listCall = new java.util.ArrayList<>();
 		listCall.add(new LispSymbol(LispNames.LIST));
 		listCall.addAll(fargs);
-		LispVal rendered = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), formatRuntimeLambda(), parts.get(2),
-				fargs.isEmpty() ? LispNil.INSTANCE : listToCons(listCall)));
+		LispVal rendered = FormatRenderer.call(parts.get(2), fargs.isEmpty() ? LispNil.INSTANCE : listToCons(listCall));
 		if (streamDest != null) {
 			LispSymbol streamVar = new LispSymbol(FORMAT_STREAM_VAR);
 			return makeLet(streamVar.name(), streamDest, formatDestinationDispatch(rendered, streamVar));
@@ -10857,97 +10944,6 @@ public final class LispMacroExpander {
 		List<LispVal> rebuilt = new java.util.ArrayList<>(parts);
 		rebuilt.set(2, newControl);
 		return listToCons(rebuilt);
-	}
-
-	@Nullable private static volatile LispVal formatRuntimeLambda;
-
-	/**
-	 * A self-contained {@code (lambda (ctrl args) ...)} that renders a format control
-	 * string at runtime, used when the control is not a literal (see
-	 * {@link #expandFormat}) and by the first-class {@code #'format} wrapper
-	 * ({@code BuiltinFunctionWrappers}). Built as AST because this package must not
-	 * depend on the reader. Handles {@code ~~ ~% ~a ~s ~d ~x ~c}; an unknown directive is
-	 * emitted verbatim. Cached after first construction.
-	 * @return the renderer lambda expression
-	 */
-	public static LispVal formatRuntimeLambda() {
-		LispVal cached = formatRuntimeLambda;
-		if (cached != null) {
-			return cached;
-		}
-		LispSymbol ctrl = new LispSymbol("__fmt_ctrl");
-		LispSymbol args = new LispSymbol("__fmt_args");
-		LispSymbol out = new LispSymbol("__fmt_out");
-		LispSymbol i = new LispSymbol("__fmt_i");
-		LispSymbol len = new LispSymbol("__fmt_len");
-		LispSymbol c = new LispSymbol("__fmt_c");
-		LispSymbol d = new LispSymbol("__fmt_d");
-		LispSymbol hex = new LispSymbol("__fmt_hex");
-		LispSymbol hn = new LispSymbol("__fmt_n");
-		LispVal one = new LispInteger(1);
-		// (labels ((__fmt_hex (n) (if (< n 16) (string (char "0..f" n))
-		// (concatenate 'string (__fmt_hex (floor n 16)) (string (char "0..f" (mod n
-		// 16)))))))
-		LispVal hexBody = makeIf(fmtCall(LispNames.LT, hn, new LispInteger(16)),
-				fmtCall(LispNames.STRING, fmtCall(LispNames.CHAR, new LispString("0123456789abcdef"), hn)),
-				fmtCall(LispNames.CONCATENATE, quoteOf("STRING"),
-						fmtCall(hex.name(), fmtCall(LispNames.FLOOR, hn, new LispInteger(16))),
-						fmtCall(LispNames.STRING, fmtCall(LispNames.CHAR, new LispString("0123456789abcdef"),
-								fmtCall(LispNames.MOD, hn, new LispInteger(16))))));
-		LispVal hexDef = listToCons(List.of(hex, listToCons(List.of(hn)), hexBody));
-		// setq helpers
-		LispVal popArg = fmtCall(LispNames.SETQ, args, fmtCall(LispNames.CDR, args));
-		// cond over the downcased directive char
-		LispVal condForm = listToCons(List.of(new LispSymbol(LispNames.COND),
-				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('~')), new LispString("~"), null),
-				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('%')),
-						fmtCall(LispNames.STRING, new LispChar('\n')), null),
-				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('a')),
-						fmtCall(LispNames.PRINC_TO_STRING, fmtCall(LispNames.CAR, args)), popArg),
-				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('d')),
-						fmtCall(LispNames.PRINC_TO_STRING, fmtCall(LispNames.CAR, args)), popArg),
-				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('s')),
-						fmtCall(LispNames.PRIN1_TO_STRING, fmtCall(LispNames.CAR, args)), popArg),
-				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('x')),
-						fmtCall(hex.name(), fmtCall(LispNames.CAR, args)), popArg),
-				appendClause(out, fmtCall(LispNames.CHAR_EQ, d, new LispChar('c')),
-						fmtCall(LispNames.STRING, fmtCall(LispNames.CAR, args)), popArg),
-				// (t (setq out (concatenate 'string out "~" (string (char ctrl i)))))
-				listToCons(List.of(LispTrue.INSTANCE,
-						fmtCall(LispNames.SETQ, out, fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), out,
-								new LispString("~"), fmtCall(LispNames.STRING, fmtCall(LispNames.CHAR, ctrl, i))))))));
-		// (progn (setq i (+ i 1)) (let ((d (char-downcase (char ctrl i)))) cond))
-		LispVal directive = makeProgn(List.of(fmtCall(LispNames.SETQ, i, fmtCall(LispNames.ADD, i, one)),
-				listToCons(List.of(new LispSymbol(LispNames.LET),
-						listToCons(List.of(listToCons(
-								List.of(d, fmtCall(LispNames.CHAR_DOWNCASE, fmtCall(LispNames.CHAR, ctrl, i)))))),
-						condForm))));
-		LispVal charBranch = makeIf(fmtCall(LispNames.CHAR_EQ, c, new LispChar('~')), directive, fmtCall(LispNames.SETQ,
-				out, fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), out, fmtCall(LispNames.STRING, c))));
-		// (let ((c (char ctrl i))) charBranch (setq i (+ i 1)))
-		LispVal whileBody = listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(c, fmtCall(LispNames.CHAR, ctrl, i))))), charBranch,
-				fmtCall(LispNames.SETQ, i, fmtCall(LispNames.ADD, i, one))));
-		LispVal whileForm = listToCons(
-				List.of(new LispSymbol(LispNames.WHILE), fmtCall(LispNames.LT, i, len), whileBody));
-		// (let ((out "") (i 0) (len (length ctrl))) while out)
-		LispVal mainLet = listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(out, new LispString(""))),
-						listToCons(List.of(i, new LispInteger(0))),
-						listToCons(List.of(len, fmtCall(LispNames.LENGTH, ctrl))))),
-				whileForm, out));
-		LispVal labelsForm = listToCons(
-				List.of(new LispSymbol(LispNames.LABELS), listToCons(List.of(hexDef)), mainLet));
-		LispVal lambda = listToCons(
-				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(ctrl, args)), labelsForm));
-		formatRuntimeLambda = lambda;
-		return lambda;
-	}
-
-	// Builds a cond clause (test (setq out (concatenate 'string out value)) [extra]).
-	private static LispVal appendClause(LispSymbol out, LispVal test, LispVal value, @Nullable LispVal extra) {
-		LispVal append = fmtCall(LispNames.SETQ, out, fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), out, value));
-		return extra == null ? listToCons(List.of(test, append)) : listToCons(List.of(test, append, extra));
 	}
 
 	private static final String FORMAT_ARG_VAR = "__format_arg";
@@ -11481,8 +11477,7 @@ public final class LispMacroExpander {
 					flushFmtLiteral(lit, ops);
 					LispVal innerCtrl = args.next(directive);
 					LispVal innerArgs = args.next(directive);
-					ops.add(new FmtString(listToCons(
-							List.of(new LispSymbol(LispNames.FUNCALL), formatRuntimeLambda(), innerCtrl, innerArgs))));
+					ops.add(new FmtString(FormatRenderer.call(innerCtrl, innerArgs)));
 				}
 				case '^' -> {
 					if (colon || at) {
@@ -13147,8 +13142,7 @@ public final class LispMacroExpander {
 			List<LispVal> renderArgs = new java.util.ArrayList<>();
 			renderArgs.add(new LispSymbol(LispNames.LIST));
 			renderArgs.addAll(argSyms);
-			return listToCons(List.of(new LispSymbol(LispNames.FUNCALL), formatRuntimeLambda(),
-					new LispString(controlText), listToCons(renderArgs)));
+			return FormatRenderer.call(new LispString(controlText), listToCons(renderArgs));
 		}
 		List<LispVal> pieces = opsToPieces(parsed);
 		LispVal message = pieces.isEmpty() ? new LispString("") : pieces.get(0);
@@ -15089,8 +15083,7 @@ public final class LispMacroExpander {
 		arity.add(listToCons(List.of(LispTrue.INSTANCE,
 				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), control, stream, first, second, third)))));
 		LispVal functionControl = renderedToString(stream, listToCons(arity));
-		LispVal body = makeIf(callOf(LispNames.STRINGP, control),
-				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), formatRuntimeLambda(), control, args)),
+		LispVal body = makeIf(callOf(LispNames.STRINGP, control), FormatRenderer.call(control, args),
 				makeIf(callOf(LispNames.NULL, control), LispNil.INSTANCE, functionControl));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.FORMAT_CONDITION_INTERNAL),
 				listToCons(List.of(control, args)), body));

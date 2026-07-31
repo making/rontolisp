@@ -1605,6 +1605,24 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void formatRuntimeControlStringHonorsEveryDirective() throws Exception {
+		// A control string the compiler cannot see through renders with the shared
+		// runtime renderer, whose directive set is the literal expansion's: the padded,
+		// iterated and conditional directives here are rendered, not copied out
+		// verbatim while still eating their arguments.
+		assertThat(compileAndRun("""
+				(let ((c "A=~A S=~S D=~D ~5,'0D% ~{~A~^,~} ~@[cond=~A~] ~~ end"))
+				  (princ (format nil c 1 "s" 42 7 (list 1 2) "c")))
+				""")).isEqualTo("A=1 S=\"s\" D=42 00007% 1,2 cond=c ~ end");
+	}
+
+	@Test
+	void formatAsAFunctionValueHonorsEveryDirective() throws Exception {
+		assertThat(compileAndRun("(princ (apply #'format nil (list \"~{~a~^ | ~} (~5,'0d)\" (list 'a 'b) 7)))"))
+			.isEqualTo("A | B (00007)");
+	}
+
+	@Test
 	void printToStringStream() throws Exception {
 		assertThat(compileAndRun("(princ (with-output-to-string (s) (print 42 s)))")).isEqualTo("42");
 	}

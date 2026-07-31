@@ -3,7 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
-import am.ik.rontolisp.LispMacroExpander;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -1330,7 +1330,7 @@ final class WasmExprCompiler {
 				case LispNames.FOURTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx);
 				case LispNames.NOT -> WasmNullPredCompiler.compile(cons, ctx);
 				default -> {
-					if (LispMacroExpander.isCarCdrComposition(sym.name())) {
+					if (LispNames.isCarCdrComposition(sym.name())) {
 						WasmExprCompiler.compileExpr(LispMacroExpander.expandCarCdrComposition(cons), ctx);
 					}
 					// A direct call to a fusion-inlinable defun (mod32+/rol32-style

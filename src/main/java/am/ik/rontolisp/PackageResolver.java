@@ -827,7 +827,7 @@ public final class PackageResolver {
 	}
 
 	private boolean isExternal(String pkg, String member) {
-		if (LispNames.CL_PKG.equals(pkg) && LispMacroExpander.isCarCdrComposition(member)) {
+		if (LispNames.CL_PKG.equals(pkg) && LispNames.isCarCdrComposition(member)) {
 			return true;
 		}
 		return this.registry.get(pkg).exports(member);

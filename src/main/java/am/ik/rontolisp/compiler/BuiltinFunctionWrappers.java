@@ -575,8 +575,7 @@ public final class BuiltinFunctionWrappers {
 	// call and nil.
 	private static WrapperDef formatWrapper() {
 		LispSymbol strVar = new LispSymbol("__fmt_str");
-		LispVal rendered = listToCons(List.of(new LispSymbol(LispNames.FUNCALL),
-				am.ik.rontolisp.LispMacroExpander.formatRuntimeLambda(), new LispSymbol("ctrl"), new LispSymbol("r")));
+		LispVal rendered = am.ik.rontolisp.macro.FormatRenderer.call(new LispSymbol("ctrl"), new LispSymbol("r"));
 		LispVal bindings = listToCons(List.of((LispVal) listToCons(List.of(strVar, rendered))));
 		LispVal writeForm = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 				callV(LispNames.WRITE_STRING, strVar, new LispSymbol("dest")), LispNil.INSTANCE));

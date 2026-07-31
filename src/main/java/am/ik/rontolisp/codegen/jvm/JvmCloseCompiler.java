@@ -18,7 +18,7 @@ final class JvmCloseCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		LispVal stripped = am.ik.rontolisp.LispMacroExpander.stripCloseAbort(cons);
+		LispVal stripped = am.ik.rontolisp.macro.LispMacroExpander.stripCloseAbort(cons);
 		if (stripped instanceof LispCons strippedCons) {
 			cons = strippedCons;
 		}

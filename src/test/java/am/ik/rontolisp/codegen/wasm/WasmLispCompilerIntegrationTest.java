@@ -3610,6 +3610,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void formatRuntimeControlStringHonorsEveryDirective() throws Exception {
+		// The runtime renderer (format-render.lisp, injected once) understands the whole
+		// directive set, so a computed control renders like the literal one would.
+		assertThat(compileAndRun("""
+				(let ((c "A=~A S=~S D=~D ~5,'0D% ~{~A~^,~} ~@[cond=~A~] ~~ end"))
+				  (princ (format nil c 1 "s" 42 7 (list 1 2) "c")))
+				""")).isEqualTo("A=1 S=\"s\" D=42 00007% 1,2 cond=c ~ end");
+	}
+
+	@Test
+	void formatAsAFunctionValueHonorsEveryDirective() throws Exception {
+		assertThat(compileAndRun("(princ (apply #'format nil (list \"~{~a~^ | ~} (~5,'0d)\" (list 'a 'b) 7)))"))
+			.isEqualTo("A | B (00007)");
+	}
+
+	@Test
 	void formatInsideDefun() throws Exception {
 		assertThat(compileAndRun("(defun greet (name) (format t \"Hi, ~a!~%\" name)) (greet 'alice) (greet \"bob\")"))
 			.isEqualTo("Hi, ALICE!\nHi, bob!");

@@ -1,4 +1,10 @@
-package am.ik.rontolisp;
+package am.ik.rontolisp.macro;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 
 import java.util.LinkedHashSet;
 import java.util.List;

@@ -74,7 +74,8 @@ final class WasmArrayCompiler {
 		if (findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD) != null) {
 			throw new UnsupportedOperationException("make-array: :displaced-index-offset requires :displaced-to");
 		}
-		LispVal runtimeElementTypeLowering = am.ik.rontolisp.LispMacroExpander.lowerRuntimeElementTypeMakeArray(cons);
+		LispVal runtimeElementTypeLowering = am.ik.rontolisp.macro.LispMacroExpander
+			.lowerRuntimeElementTypeMakeArray(cons);
 		if (runtimeElementTypeLowering != null) {
 			// A :element-type held in a VARIABLE picks the representation at run time
 			// (character vector vs. general array), since no expansion-time recognizer
@@ -82,7 +83,8 @@ final class WasmArrayCompiler {
 			WasmExprCompiler.compileExpr(runtimeElementTypeLowering, ctx);
 			return;
 		}
-		LispVal charContentsLowering = am.ik.rontolisp.LispMacroExpander.lowerCharacterInitialContentsMakeArray(cons);
+		LispVal charContentsLowering = am.ik.rontolisp.macro.LispMacroExpander
+			.lowerCharacterInitialContentsMakeArray(cons);
 		if (charContentsLowering != null) {
 			// A rank-1 character array built from :initial-contents is a fresh string
 			// copy of the contents (a mutable character vector normalizes through the
@@ -90,7 +92,7 @@ final class WasmArrayCompiler {
 			WasmExprCompiler.compileExpr(charContentsLowering, ctx);
 			return;
 		}
-		LispVal contentsLowering = am.ik.rontolisp.LispMacroExpander.lowerInitialContentsMakeArray(cons);
+		LispVal contentsLowering = am.ik.rontolisp.macro.LispMacroExpander.lowerInitialContentsMakeArray(cons);
 		if (contentsLowering != null) {
 			// :initial-contents lowers to the allocation plus an element-wise fill.
 			WasmExprCompiler.compileExpr(contentsLowering, ctx);
@@ -109,7 +111,7 @@ final class WasmArrayCompiler {
 		// now takes this route (matching the JVM), so setf-aref writes always land in
 		// place -- the previous immutable TYPE_STRING branch dropped high bytes on
 		// downstream read even for programs that never called mutation.
-		boolean charVector = am.ik.rontolisp.LispMacroExpander
+		boolean charVector = am.ik.rontolisp.macro.LispMacroExpander
 			.isCharacterElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
 		if ((doubleFloat || singleFloat) && fpArg == null && adjArg == null) {
 			// A plain :element-type 'double-float / 'single-float array (no fill pointer

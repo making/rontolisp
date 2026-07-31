@@ -1367,10 +1367,12 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalFormatNonLiteralControlString() {
-		// A computed (non-literal) control string is rendered at runtime by the fallback
-		// renderer (used by cl-who's escape-string) rather than being an error.
+		// A computed (non-literal) control string is rendered at runtime by the shared
+		// runtime renderer (used by cl-who's escape-string) rather than being an error,
+		// with the same directive semantics the literal expansion has -- ~x answers
+		// uppercase digits on both.
 		assertThat(eval("(let ((c \"~a-~a\")) (format nil c 1 2))")).isEqualTo(new LispString("1-2"));
-		assertThat(eval("(let ((c \"&#x~x;\")) (format nil c 233))")).isEqualTo(new LispString("&#xe9;"));
+		assertThat(eval("(let ((c \"&#x~x;\")) (format nil c 233))")).isEqualTo(new LispString("&#xE9;"));
 	}
 
 	@Test
