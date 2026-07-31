@@ -26,7 +26,11 @@ final class JvmReadCharCompiler {
 		if (parts.size() > 4) {
 			throw new UnsupportedOperationException("read-char expects 0 to 3 arguments, got " + (parts.size() - 1));
 		}
-		JvmExprCompiler.compileExpr(parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE, ctx, className);
+		// The source designator: an omitted argument and an explicit nil both mean the
+		// current *standard-input* (JvmStringStreamCompiler.inputStreamArg); the runtime
+		// helper reads standard input for any non-handle value.
+		LispVal stream = JvmStringStreamCompiler.inputStreamArg(ctx, parts.size() > 1 ? parts.get(1) : null);
+		JvmExprCompiler.compileExpr(stream != null ? stream : LispNil.INSTANCE, ctx, className);
 		JvmExprCompiler.compileExpr(parts.size() > 2 ? parts.get(2) : LispTrue.INSTANCE, ctx, className);
 		if (parts.size() > 3) {
 			JvmExprCompiler.compileExpr(parts.get(3), ctx, className);

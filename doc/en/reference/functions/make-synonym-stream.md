@@ -2,9 +2,11 @@
 
 `(make-synonym-stream symbol)`
 
-Returns the stream designator that `symbol` -- a special variable naming a stream, such as `*standard-output*` -- currently holds. The usual shape is a `defvar` whose default output goes wherever the standard stream goes.
+Returns a stream designator that forwards to the stream `symbol` -- a special variable naming a stream, such as `*standard-output*` -- holds. The usual shape is a `defvar` whose default output goes wherever the standard stream goes.
 
-Lite, and worth knowing before you rely on it: Common Lisp's synonym stream forwards every operation to the symbol's value *at the time of that operation*, whereas rontolisp resolves the symbol **once**, where the stream is built. Rebinding the variable afterwards therefore does not redirect a synonym stream that was constructed earlier; pass the stream explicitly, or bind `*standard-output*` and use the stream-argument-less print family, when you need the redirect.
+`(make-synonym-stream '*standard-output*)` and `(make-synonym-stream '*standard-input*)` are the full Common Lisp behaviour: each answers the `nil` designator, and every output (resp. input) operation resolves `nil` through the *current* `*standard-output*` / `*standard-input*`, so rebinding the variable afterwards **does** redirect a synonym stream that was constructed earlier.
+
+For any other symbol the result is lite: rontolisp resolves the symbol **once**, where the stream is built, instead of on every operation. Rebinding that variable afterwards therefore does not redirect the synonym stream; pass the stream explicitly, or bind `*standard-output*` and use the stream-argument-less print family, when you need the redirect.
 
 ```lisp
 (defvar *report-output* (make-synonym-stream '*standard-output*))

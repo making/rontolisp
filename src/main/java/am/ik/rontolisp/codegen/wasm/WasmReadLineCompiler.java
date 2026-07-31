@@ -26,16 +26,20 @@ final class WasmReadLineCompiler {
 			return;
 		}
 		List<LispVal> parts = cons.toList();
-		if (parts.size() == 1) {
+		if (parts.size() > 2) {
+			throw new UnsupportedOperationException("read-line expects 0 or 1 arguments, got " + (parts.size() - 1));
+		}
+		// The source, under CL's stream designator rule: an explicit stream, or -- for an
+		// omitted argument AND for an explicit nil -- the current *standard-input*
+		// (WasmEmitHelper.inputStreamArg). A program that never binds it keeps fd 0.
+		LispVal stream = WasmEmitHelper.inputStreamArg(ctx, parts.size() == 2 ? parts.get(1) : null);
+		if (stream == null) {
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(0); // fd = 0 (stdin)
 		}
-		else if (parts.size() == 2) {
-			WasmExprCompiler.compileExpr(parts.get(1), ctx);
-			WasmEmitHelper.castI31GetS(ctx);
-		}
 		else {
-			throw new UnsupportedOperationException("read-line expects 0 or 1 arguments, got " + (parts.size() - 1));
+			WasmExprCompiler.compileExpr(stream, ctx);
+			WasmEmitHelper.streamFdOrStdin(ctx);
 		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ_LINE);

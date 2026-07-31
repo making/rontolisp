@@ -24,3 +24,15 @@ binds `*standard-output*` to an output stream.
     (greet)
     (format t " ~a" 42))) ; => "hello 42"
 ```
+
+A `nil` stream argument means the same thing as an omitted one -- it is the
+`*standard-output*` designator, not "raw standard output". That is what makes
+the common Common Lisp shape of a renderer forwarding its own optional
+argument work under the redirect:
+
+```lisp
+(progn
+  (defun emit (x &optional stream) (princ x stream))
+  (with-output-to-string (*standard-output*)
+    (emit "forwarded"))) ; => "forwarded"
+```

@@ -147,7 +147,8 @@ public final class PackageRegistry {
 			LispNames.ARRAY_DIMENSION_LIMIT, LispNames.ARRAY_TOTAL_SIZE_LIMIT, LispNames.CHAR_CODE_LIMIT,
 			LispNames.INTERNAL_TIME_UNITS_PER_SECOND, LispNames.PRINT_CIRCLE_VAR, LispNames.PRINT_ESCAPE_VAR,
 			LispNames.PRINT_READABLY_VAR, LispNames.FEATURES_VAR, LispNames.STANDARD_OUTPUT_VAR,
-			LispNames.ERROR_OUTPUT_VAR, LispNames.READTABLE_VAR, LispNames.LAMBDA_LIST_KEYWORDS);
+			LispNames.ERROR_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR, LispNames.READTABLE_VAR,
+			LispNames.LAMBDA_LIST_KEYWORDS);
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also

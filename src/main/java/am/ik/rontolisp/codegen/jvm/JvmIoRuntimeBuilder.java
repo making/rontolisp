@@ -1267,16 +1267,19 @@ final class JvmIoRuntimeBuilder {
 
 	/**
 	 * {@code _readLineStream(Object handle) -> Object}. Reads one line from the stream
-	 * (standard input when the handle is {@code null}) and wraps it with the internal
+	 * (standard input for a non-handle designator -- {@code null} = nil and {@code "T"} =
+	 * t, what {@code *standard-input*} holds by default) and wraps it with the internal
 	 * {@code '"'} prefix/suffix string format; returns {@code null} (nil) on EOF.
 	 */
 	private List<Integer> buildReadLineStream() {
 		// Slots: 0=handle, 1=line (String)
 		List<Integer> code = new ArrayList<>();
-		// if (handle == null) return _readLine();
+		// if (!(handle instanceof Long)) return _readLine();
 		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
 		int ifStreamPos = code.size();
-		code.add(Opcode.IFNONNULL);
+		code.add(Opcode.IFNE);
 		emitU2(code, 0);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, this.readLineHelper.index());
@@ -1645,14 +1648,17 @@ final class JvmIoRuntimeBuilder {
 
 	/**
 	 * Resolves the stream argument in slot 0 into a {@code BufferedReader} in slot 3: a
-	 * null handle is standard input (lazily initializing the {@code _stdinReader} field
-	 * the {@code _readLine} helper shares), otherwise the table entry.
+	 * non-handle designator ({@code null} = nil, {@code "T"} = t) is standard input
+	 * (lazily initializing the {@code _stdinReader} field the {@code _readLine} helper
+	 * shares), otherwise the table entry.
 	 */
 	private void emitResolveReader(List<Integer> code) {
-		// if (handle != null) goto STREAM;
+		// if (handle instanceof Long) goto STREAM;
 		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
 		int ifStreamPos = code.size();
-		code.add(Opcode.IFNONNULL);
+		code.add(Opcode.IFNE);
 		emitU2(code, 0);
 		// if (_stdinReader == null) _stdinReader = new BufferedReader(new
 		// InputStreamReader(System.in));

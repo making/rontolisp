@@ -24,16 +24,17 @@ public final class FreeVarAnalyzer {
 			LispNames.DEFUN, LispNames.LAMBDA, LispNames.NULL, LispNames.LIST, LispNames.CAR, LispNames.CDR,
 			LispNames.CONS, LispNames.FUNCALL, LispNames.ATOM, LispNames.NUMBERP, LispNames.INTEGERP, LispNames.FLOATP,
 			LispNames.SYMBOLP, LispNames.STRINGP, LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP,
-			// The two standard stream variables are GLOBAL, never a lexical the enclosing
-			// scope could hand down: compileSymbolRef renders each as the designator t
-			// (or, once the program binds *standard-output* somewhere, as the special
+			// The three standard stream variables are GLOBAL, never a lexical the
+			// enclosing scope could hand down: compileSymbolRef renders each as the
+			// designator t (or, once the program binds one of them somewhere, as the
+			// special
 			// SpecialVarCollector then registers). Without them here, a lambda that
 			// merely writes to one -- postmodern's generate-prepared reports its
 			// reconnect with (format *error-output* ...) inside a handler-bind handler --
 			// counted it as a free variable and failed to compile with "Cannot capture
 			// variable: *ERROR-OUTPUT*". A program that DOES bind one lexically still
 			// captures it: findFreeVars subtracts enclosingLexicals from this set.
-			LispNames.STANDARD_OUTPUT_VAR, LispNames.ERROR_OUTPUT_VAR);
+			LispNames.STANDARD_OUTPUT_VAR, LispNames.ERROR_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR);
 
 	private FreeVarAnalyzer() {
 	}

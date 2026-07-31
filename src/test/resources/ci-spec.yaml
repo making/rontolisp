@@ -5743,10 +5743,38 @@ cases:
                (handler-case (read-char pm-in) (end-of-file () :eof-condition))))
       (print (with-input-from-string (pm-in "")
                (handler-case (read-char pm-in) (error () :also-an-error))))
-      ;; make-synonym-stream (config.lisp's *json-output*): the designator the
-      ;; named variable holds, resolved where the stream is built.
+      ;; make-synonym-stream (config.lisp's *json-output*): a synonym over
+      ;; *standard-output* IS the nil designator, so it forwards PER OPERATION
+      ;; -- a binding established after the synonym was built still captures.
       (defvar pm-json-output (make-synonym-stream '*standard-output*))
       (write-line "synonym" pm-json-output)
+      (princ (with-output-to-string (*standard-output*)
+               (write-line "via-synonym" pm-json-output)))
+      ;; CL's stream DESIGNATOR rule: an explicit nil is *standard-output*, not
+      ;; raw stdout -- the shape of a renderer forwarding its own optional.
+      (defun pm-emit (x &optional stream) (princ x stream) (terpri stream))
+      (princ (with-output-to-string (*standard-output*) (pm-emit "forwarded")))
+      (pm-emit "direct")
+      ;; The INPUT mirror: binding *standard-input* redirects the whole
+      ;; stream-argument-less read family, an explicit nil is the same
+      ;; designator, and a synonym stream over it forwards per operation.
+      ;; Inside a plain defun on purpose: at the --component top level the
+      ;; sockets rewrite promotes a read to an await, and a special binding
+      ;; may not span a suspension there (.kb/standard-output-redirect.md).
+      (defun pm-next-line (&optional stream) (read-line stream))
+      (defvar pm-src (make-synonym-stream '*standard-input*))
+      (defun pm-input-designators ()
+        (list (with-input-from-string (*standard-input* "forwarded-in")
+                (pm-next-line))
+              (with-input-from-string (*standard-input* "explicit-nil")
+                (read-line nil))
+              (with-input-from-string (*standard-input* "via-synonym-in")
+                (read-line pm-src))
+              (princ-to-string (with-input-from-string (*standard-input* "abc")
+                                 (read-char)))
+              (princ-to-string (with-input-from-string (*standard-input* "(1 2 3)")
+                                 (read)))))
+      (dolist (pm-line (pm-input-designators)) (write-line pm-line))
     expected: |
       "NOT DEFERRABLE"
       "DEFERRABLE INITIALLY IMMEDIATE"
@@ -5778,6 +5806,14 @@ cases:
       :EOF-CONDITION
       :ALSO-AN-ERROR
       synonym
+      via-synonym
+      forwarded
+      direct
+      forwarded-in
+      explicit-nil
+      via-synonym-in
+      a
+      (1 2 3)
 
   - name: postmodern-non-mop-milestone
     source: |

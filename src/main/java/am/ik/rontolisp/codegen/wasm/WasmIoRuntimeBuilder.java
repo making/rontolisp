@@ -449,16 +449,19 @@ final class WasmIoRuntimeBuilder {
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 		final int SCRATCH = WasmLispCompiler.BYTE_SCRATCH_ADDR;
 
-		// fd = stream is nil ? 0 (stdin) : i31.get_s(stream)
+		// fd = stream is an i31 handle ? i31.get_s(stream) : 0 (stdin). The test is
+		// "is a handle", not "is nil": nil AND the t designator (what *standard-input*
+		// holds by default) are both standard input, and a ref.cast on t would trap.
 		getLocal(w, STREAM);
-		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.IF);
 		w.write(Type.I32);
-		i32(w, 0);
-		w.write(Instruction.ELSE);
 		getLocal(w, STREAM);
 		refCast(w, Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
 		w.write(Instruction.END);
 		setLocal(w, FD);
 		// A negative handle is a string input stream: decode a UTF-8 sequence within the
@@ -703,16 +706,19 @@ final class WasmIoRuntimeBuilder {
 		final int STREAM = 0, EOF_ERROR_P = 1, EOF_VALUE = 2, FD = 3, REC = 4, CUR = 5, END = 6, NEEDED = 7, B0 = 8,
 				B1 = 9, B2 = 10, B3 = 11, C = 12;
 
-		// fd = stream is nil ? 0 (stdin) : i31.get_s(stream)
+		// fd = stream is an i31 handle ? i31.get_s(stream) : 0 (stdin). The test is
+		// "is a handle", not "is nil": nil AND the t designator (what *standard-input*
+		// holds by default) are both standard input, and a ref.cast on t would trap.
 		getLocal(w, STREAM);
-		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.IF);
 		w.write(Type.I32);
-		i32(w, 0);
-		w.write(Instruction.ELSE);
 		getLocal(w, STREAM);
 		refCast(w, Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
 		w.write(Instruction.END);
 		setLocal(w, FD);
 		// A negative handle is a string input stream: decode at the cursor, leave it.

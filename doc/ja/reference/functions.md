@@ -289,7 +289,7 @@
 | `file-length` | `(file-length s)` | 常に `nil`(lite) |
 | `make-string-output-stream` | `(make-string-output-stream)` | 新しい文字列出力ストリーム。`with-output-to-string` が内部で作るものを明示的に作ります |
 | `get-output-stream-string` | `(get-output-stream-string s)` | 文字列出力ストリームにこれまで書き込まれた内容を返し、ストリームを空にします (CL の仕様どおり) |
-| `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | 指定した変数が保持するストリーム指定子。ライト実装: 操作ごとではなく、ストリームを作った時点で一度だけ解決します |
+| `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | 指定した変数のストリームへ転送する指定子。`*standard-output*` と `*standard-input*` は操作ごとに転送します (`nil` 指定子)。それ以外のシンボルはライト実装で、ストリームを作った時点で一度だけ解決します |
 | `make-broadcast-stream` | `(make-broadcast-stream)` | 書き込みを捨てるシンクストリーム(コンポーネントストリーム非対応) |
 | `pathnamep` | `(pathnamep "/tmp/x")` | 常に `nil` -- rontolisp に pathname 型はありません |
 | `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t` |

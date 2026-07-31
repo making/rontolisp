@@ -92,18 +92,23 @@
 ;;; defines the same three names as raw passthroughs for serve mode, where the
 ;;; service world has no stdin. ---
 
+;;; A non-handle designator (nil, or the t the unbound *standard-input* holds)
+;;; is the host stdin stream; a handle -- a WASI fd or a string input stream --
+;;; goes to the native built-in.
 (rontolisp:async-defun rontolisp::%stdin-read-line-or-raw-f (s)
-  (if (null s)
-      (rontolisp:await (rontolisp::%stdin-read-line-f))
-      (rontolisp::%read-line-raw s)))
+  (let ((in (or s *standard-input*)))
+    (if (integerp in)
+        (rontolisp::%read-line-raw in)
+        (rontolisp:await (rontolisp::%stdin-read-line-f)))))
 
 (rontolisp:async-defun rontolisp::%stdin-read-char-or-raw-f (s)
   ;; The native read-char's 0/1-arg form signals at EOF (eof-error-p defaults
   ;; to t), so the stdin path must too -- message parity with the interpreter.
-  (if (null s)
-      (let ((c (rontolisp:await (rontolisp::%stdin-read-char-f))))
-        (if c c (error "read-char: end of file")))
-      (rontolisp::%read-char-raw s)))
+  (let ((in (or s *standard-input*)))
+    (if (integerp in)
+        (rontolisp::%read-char-raw in)
+        (let ((c (rontolisp:await (rontolisp::%stdin-read-char-f))))
+          (if c c (error "read-char: end of file"))))))
 
 (rontolisp:async-defun rontolisp::%stdin-read-byte-or-raw-f (s)
   ;; read-byte has NO stdin designator (a stream argument is mandatory and must

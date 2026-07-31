@@ -4723,6 +4723,14 @@ public final class LispNames {
 	public static final String ERROR_OUTPUT_VAR = "*ERROR-OUTPUT*";
 
 	/**
+	 * The {@code *standard-input*} variable -- bound to the stream designator {@code t}
+	 * (standard input), which every read-family function accepts as "the standard
+	 * stream". Binding it redirects the stream-argument-less read family, the input
+	 * mirror of {@link #STANDARD_OUTPUT_VAR}.
+	 */
+	public static final String STANDARD_INPUT_VAR = "*STANDARD-INPUT*";
+
+	/**
 	 * Checks if the given name matches the c[ad]{2,4}r pattern (e.g., caar, cadr, cddr,
 	 * caddr, cdddr, etc.). The family is not enumerated in a constant table -- the
 	 * package classification ({@code PackageRegistry}/{@code PackageResolver}) and the

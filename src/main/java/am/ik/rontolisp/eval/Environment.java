@@ -210,6 +210,26 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Resolves the read family's default source at call time -- the input mirror of
+	 * {@link #defaultOutput}. Set by the evaluator to read the current -- dynamic-first
+	 * -- value of {@code *standard-input*}, so a
+	 * {@code (let ((*standard-input* stream)) ...)} or
+	 * {@code (with-input-from-string (*standard-input* s) ...)} redirects the
+	 * stream-argument-less read family. A {@code null}/{@code t}/{@code nil} result keeps
+	 * the process standard input.
+	 */
+	@Nullable private Supplier<@Nullable LispVal> defaultInput;
+
+	/**
+	 * Installs the default-input resolver consulted by the stream-argument-less read
+	 * family; see {@link #defaultInput}.
+	 * @param supplier resolves the current {@code *standard-input*} value
+	 */
+	public void setDefaultInput(Supplier<@Nullable LispVal> supplier) {
+		this.defaultInput = supplier;
+	}
+
+	/**
 	 * Value expressions registered by {@link #defineLazy} that have not been forced yet.
 	 * Allocated on first use: only the compile path's macro-time environment ever has
 	 * one, so an ordinary (per-call) environment pays a null check and no map.
@@ -495,10 +515,11 @@ public final class Environment implements Scope {
 					featureList);
 		}
 		env.define(LispNames.FEATURES_VAR, featureList);
-		// The standard streams are the t designator (standard output), which the whole
-		// print family accepts as a stream argument.
+		// The standard streams are the t designator (the process standard stream),
+		// which the whole print / read family accepts as a stream argument.
 		env.define(LispNames.STANDARD_OUTPUT_VAR, LispTrue.INSTANCE);
 		env.define(LispNames.ERROR_OUTPUT_VAR, LispTrue.INSTANCE);
+		env.define(LispNames.STANDARD_INPUT_VAR, LispTrue.INSTANCE);
 		// A #. marker that survives into code position (a backquote template splits the
 		// marker list into construction code, so the load-time substitution walk never
 		// sees it whole) is called as an ordinary function: its argument -- the datum
@@ -3390,14 +3411,32 @@ public final class Environment implements Scope {
 		// counter must therefore stay thread-safe; see .kb/tcp-sockets.md.
 		Map<Long, Closeable> streams = new ConcurrentHashMap<>();
 		AtomicLong nextStreamHandle = new AtomicLong();
-		// Routes print-family output: an absent destination reads the evaluator's
-		// *standard-output* hook (dynamic-first; null when no evaluator installed it);
-		// nil or t is standard output; an integer handle selects a Writer entry in the
-		// stream table (file output streams and string streams).
-		java.util.function.BiConsumer<String, @Nullable LispVal> emitTo = (text, dest) -> {
-			if (dest == null && env.defaultOutput != null) {
-				dest = env.defaultOutput.get();
+		// CL's output stream DESIGNATOR rule: an absent argument AND an explicit nil both
+		// denote *standard-output*, so both read the evaluator's hook (dynamic-first;
+		// null when no evaluator installed it) at call time -- that is what makes
+		// (let ((*standard-output* s)) (print x nil)) and a forwarded optional
+		// (defun p (&optional stream) (princ "x" stream)) reach s. Only t is hard-wired
+		// to the process standard output. Resolution happens ONCE, so a *standard-output*
+		// that is itself nil falls through to standard output instead of looping.
+		java.util.function.UnaryOperator<@Nullable LispVal> resolveOutputDest = dest -> {
+			if ((dest == null || dest == LispNil.INSTANCE) && env.defaultOutput != null) {
+				return env.defaultOutput.get();
 			}
+			return dest;
+		};
+		// The same rule on the input side: an absent argument AND an explicit nil both
+		// denote *standard-input*. Only t is hard-wired to the process standard input.
+		java.util.function.UnaryOperator<@Nullable LispVal> resolveInputSrc = src -> {
+			if ((src == null || src == LispNil.INSTANCE) && env.defaultInput != null) {
+				return env.defaultInput.get();
+			}
+			return src;
+		};
+		// Routes print-family output: the destination is resolved through the designator
+		// rule above; nil or t is standard output; an integer handle selects a Writer
+		// entry in the stream table (file output streams and string streams).
+		java.util.function.BiConsumer<String, @Nullable LispVal> emitTo = (text, rawDest) -> {
+			LispVal dest = resolveOutputDest.apply(rawDest);
 			if (dest == null || dest == LispNil.INSTANCE || dest instanceof LispTrue) {
 				emit.accept(text);
 				return;
@@ -3576,10 +3615,7 @@ public final class Environment implements Scope {
 				new LispFunction(LispNames.GET_OUTPUT_STREAM_STRING, streamContents));
 		env.defineFunction(LispNames.FRESH_LINE, new LispFunction(LispNames.FRESH_LINE, args -> {
 			requireArgCountBetween(LispNames.FRESH_LINE, args, 0, 1);
-			LispVal dest = args.isEmpty() ? null : args.get(0);
-			if (dest == null && env.defaultOutput != null) {
-				dest = env.defaultOutput.get();
-			}
+			LispVal dest = resolveOutputDest.apply(args.isEmpty() ? null : args.get(0));
 			if (dest == null || dest == LispNil.INSTANCE || dest instanceof LispTrue) {
 				if (!atLineStart[0]) {
 					emit.accept("\n");
@@ -3821,11 +3857,12 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.FORCE_OUTPUT + " expects 0 or 1 arguments");
 			}
 			try {
-				if (args.isEmpty() || args.get(0) instanceof LispNil || args.get(0) instanceof LispTrue) {
+				LispVal dest = resolveOutputDest.apply(args.isEmpty() ? null : args.get(0));
+				if (dest == null || dest instanceof LispNil || dest instanceof LispTrue) {
 					out.flush();
 					return LispNil.INSTANCE;
 				}
-				if (!(args.get(0) instanceof LispInteger handle)) {
+				if (!(dest instanceof LispInteger handle)) {
 					throw new LispEvalException(LispNames.FORCE_OUTPUT + " expects an output stream");
 				}
 				Closeable entry = streams.get(handle.value());
@@ -3834,7 +3871,7 @@ public final class Environment implements Scope {
 					case Writer writer -> writer.flush();
 					case OutputStream os -> os.flush();
 					case null, default -> throw new LispEvalException(
-							LispNames.FORCE_OUTPUT + " expects an output stream, got: " + args.get(0).print());
+							LispNames.FORCE_OUTPUT + " expects an output stream, got: " + dest.print());
 				}
 				return LispNil.INSTANCE;
 			}
@@ -3853,10 +3890,11 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.LISTEN + " expects 0 or 1 arguments");
 			}
 			try {
-				if (args.isEmpty() || args.get(0) instanceof LispNil || args.get(0) instanceof LispTrue) {
+				LispVal src = resolveInputSrc.apply(args.isEmpty() ? null : args.get(0));
+				if (src == null || src instanceof LispNil || src instanceof LispTrue) {
 					return stdinReader.ready() ? LispTrue.INSTANCE : LispNil.INSTANCE;
 				}
-				if (!(args.get(0) instanceof LispInteger handle)) {
+				if (!(src instanceof LispInteger handle)) {
 					throw new LispEvalException(LispNames.LISTEN + " expects an input stream");
 				}
 				Closeable entry = streams.get(handle.value());
@@ -3864,8 +3902,8 @@ public final class Environment implements Scope {
 					case Socket socket -> socket.getInputStream().available() > 0;
 					case BufferedReader reader -> reader.ready();
 					case InputStream in2 -> in2.available() > 0;
-					case null, default -> throw new LispEvalException(
-							LispNames.LISTEN + " expects an input stream, got: " + args.get(0).print());
+					case null, default ->
+						throw new LispEvalException(LispNames.LISTEN + " expects an input stream, got: " + src.print());
 				};
 				return ready ? LispTrue.INSTANCE : LispNil.INSTANCE;
 			}
@@ -3880,13 +3918,14 @@ public final class Environment implements Scope {
 			}
 			// nil and t are the standard-output DESIGNATORS, not stream handles -- the
 			// same rule the JVM and both wasm backends already applied (their stdout
-			// test is "not a handle"). A synonym stream over *standard-output* resolves
-			// to exactly this t when nothing has rebound it.
-			if (args.size() == 1 || args.get(1) instanceof LispNil || args.get(1) instanceof LispTrue) {
+			// test is "not a handle"). An absent argument and an explicit nil resolve
+			// through *standard-output*; t is the process standard output.
+			LispVal dest = resolveOutputDest.apply(args.size() == 1 ? null : args.get(1));
+			if (dest == null || dest instanceof LispNil || dest instanceof LispTrue) {
 				out.println(str.value());
 				return str;
 			}
-			if (!(args.get(1) instanceof LispInteger handle)) {
+			if (!(dest instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.WRITE_LINE + " expects an output stream");
 			}
 			Closeable entry = streams.get(handle.value());
@@ -3919,13 +3958,14 @@ public final class Environment implements Scope {
 			}
 			try {
 				String line;
-				if (args.isEmpty() || args.get(0) instanceof LispNil) {
+				LispVal src = resolveInputSrc.apply(args.isEmpty() ? null : args.get(0));
+				if (src == null || src instanceof LispNil || src instanceof LispTrue) {
 					// Drain buffered output so any prompt is visible before we block on
 					// stdin.
 					out.flush();
 					line = stdinReader.readLine();
 				}
-				else if (!(args.get(0) instanceof LispInteger handle)) {
+				else if (!(src instanceof LispInteger handle)) {
 					throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
 				}
 				else {
@@ -3963,14 +4003,14 @@ public final class Environment implements Scope {
 		// mark/reset peek on the low half. The interpreter's stream table only holds
 		// BufferedReader instances (mark is supported).
 		java.util.function.BiFunction<String, List<LispVal>, Reader> inputReader = (name, args) -> {
-			if (args.isEmpty() || args.get(0) instanceof LispNil) {
+			LispVal src = resolveInputSrc.apply(args.isEmpty() ? null : args.get(0));
+			if (src == null || src instanceof LispNil || src instanceof LispTrue) {
 				// Drain buffered output so any prompt is visible before we block on
 				// stdin.
 				out.flush();
 				return stdinReader;
 			}
-			if (!(args.get(0) instanceof LispInteger handle)
-					|| !(streams.get(handle.value()) instanceof BufferedReader r)) {
+			if (!(src instanceof LispInteger handle) || !(streams.get(handle.value()) instanceof BufferedReader r)) {
 				throw new LispEvalException(name + " expects an input stream");
 			}
 			return r;
@@ -4359,15 +4399,18 @@ public final class Environment implements Scope {
 				// stream. Both skip blank and comment-only lines and return one datum
 				// per call, or nil at end of input.
 				BufferedReader reader;
-				if (args.isEmpty()) {
+				if (args.size() > 1) {
+					requireArgCount(LispNames.READ, args, 1);
+				}
+				LispVal src = resolveInputSrc.apply(args.isEmpty() ? null : args.get(0));
+				if (src == null || src instanceof LispNil || src instanceof LispTrue) {
 					// Drain buffered output so any prompt is visible before we block on
 					// stdin.
 					out.flush();
 					reader = stdinReader;
 				}
 				else {
-					requireArgCount(LispNames.READ, args, 1);
-					if (!(args.get(0) instanceof LispInteger handle)
+					if (!(src instanceof LispInteger handle)
 							|| !(streams.get(handle.value()) instanceof BufferedReader streamReader)) {
 						throw new LispEvalException(LispNames.READ + " expects an input stream");
 					}

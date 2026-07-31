@@ -5889,16 +5889,25 @@ public final class LispMacroExpander {
 	 * (standard output) with no new machinery on any backend.
 	 *
 	 * <p>
-	 * LITE, and the divergence is deliberate: CL's synonym stream forwards EVERY
-	 * operation to the symbol's value at the time of that operation, while this one
-	 * resolves the symbol ONCE, where the stream is constructed. The reason is that a
-	 * per-operation synonym needs a stream-designator kind that the write helpers of all
-	 * four backends resolve at run time, which is the same missing seam as "an explicit
-	 * nil stream argument must mean {@code *standard-output*}" -- both belong to
-	 * {@code .todo/149}, and neither is reachable by the construct-once idiom every known
-	 * consumer uses (postmodern's {@code *json-output*} defvar). RE-EVALUATION TRIGGER:
-	 * once a nil stream designator resolves through {@code *standard-output*} at write
-	 * time, this expansion should answer that designator instead of a snapshot.
+	 * {@code (make-synonym-stream '*standard-output*)} and its {@code *standard-input*}
+	 * twin are the cases that are NOT snapshots: each answers the {@code nil} DESIGNATOR,
+	 * which every output (resp. input) operation resolves through
+	 * {@code *standard-output*} / {@code *standard-input*} at the time of that operation
+	 * ({@code StreamDesignators}, {@code .kb/standard-output-redirect.md}) -- so that
+	 * synonym forwards per-operation exactly like CL's, with no new stream kind.
+	 *
+	 * <p>
+	 * For any OTHER symbol the expansion stays LITE, and the divergence is deliberate:
+	 * CL's synonym stream forwards every operation to the symbol's value at the time of
+	 * that operation, while this one resolves the symbol ONCE, where the stream is
+	 * constructed. Reason for the divergence: a per-operation synonym over an ARBITRARY
+	 * symbol needs a stream-designator kind carrying that symbol which the write helpers
+	 * of all four backends resolve at run time -- {@code nil} is the only designator the
+	 * helpers already have, and it names exactly the standard streams. No known consumer
+	 * needs more (postmodern's {@code config.lisp:224} {@code *json-output*} defvar
+	 * constructs once and never rebinds). RE-EVALUATION TRIGGER: if a consumer ever
+	 * rebinds the symbol behind a non-standard synonym stream, the runtime needs that
+	 * designator kind and this whole expansion has to go.
 	 * @param cons the make-synonym-stream expression
 	 * @return the expanded expression
 	 */
@@ -5909,7 +5918,13 @@ public final class LispMacroExpander {
 					LispNames.MAKE_SYNONYM_STREAM + " expects 1 argument, got " + (parts.size() - 1));
 		}
 		LispSymbol quoted = quotedSymbol(parts.get(1));
-		return quoted != null ? new LispSymbol(quoted.name()) : callOf(LispNames.SYMBOL_VALUE, parts.get(1));
+		if (quoted == null) {
+			return callOf(LispNames.SYMBOL_VALUE, parts.get(1));
+		}
+		if (LispNames.STANDARD_OUTPUT_VAR.equals(quoted.name()) || LispNames.STANDARD_INPUT_VAR.equals(quoted.name())) {
+			return LispNil.INSTANCE;
+		}
+		return new LispSymbol(quoted.name());
 	}
 
 	/** Fixed temporaries of the read-family end-of-file lowering. */

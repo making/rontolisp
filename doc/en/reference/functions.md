@@ -293,7 +293,7 @@ page.
 | `file-length` | `(file-length s)` | always `nil` (lite) |
 | `make-string-output-stream` | `(make-string-output-stream)` | a fresh string output stream -- the explicit form of what `with-output-to-string` builds |
 | `get-output-stream-string` | `(get-output-stream-string s)` | everything written to a string output stream so far, CLEARING it (CL's contract) |
-| `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | the designator the named variable holds. Lite: resolved ONCE, where the stream is built, not on every operation |
+| `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | a designator forwarding to the named variable's stream. `*standard-output*` / `*standard-input*` forward per operation (the `nil` designator); any other symbol is lite -- resolved ONCE, where the stream is built |
 | `make-broadcast-stream` | `(make-broadcast-stream)` | a discarding sink stream (no component streams) |
 | `pathnamep` | `(pathnamep "/tmp/x")` | always `nil` -- rontolisp has no pathname type |
 | `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle |

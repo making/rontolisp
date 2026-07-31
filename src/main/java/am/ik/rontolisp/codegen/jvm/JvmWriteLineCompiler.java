@@ -24,9 +24,10 @@ final class JvmWriteLineCompiler {
 			throw new UnsupportedOperationException("write-line expects 1 or 2 arguments, got " + (parts.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
-		// An explicit stream argument, or the current *standard-output* value when the
-		// program redirects it (JvmStringStreamCompiler.defaultStreamArg).
-		LispVal stream = parts.size() == 3 ? parts.get(2) : JvmStringStreamCompiler.defaultStreamArg(ctx);
+		// The destination, under CL's stream designator rule: an explicit stream, or --
+		// for an omitted argument AND for an explicit nil -- the current
+		// *standard-output* (JvmStringStreamCompiler.streamArg).
+		LispVal stream = JvmStringStreamCompiler.streamArg(ctx, parts.size() == 3 ? parts.get(2) : null);
 		if (stream != null) {
 			JvmExprCompiler.compileExpr(stream, ctx, className);
 		}

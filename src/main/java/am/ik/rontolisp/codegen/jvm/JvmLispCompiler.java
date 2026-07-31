@@ -1547,10 +1547,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// interpreter's permanent value; the constants are minted here for the same
 		// serialization-order reason as above.
 		final FieldrefConstant standardOutputGlobalField = globalFields.get(LispNames.STANDARD_OUTPUT_VAR);
-		final ConstantPool.StringConstant standardOutputTStr = standardOutputGlobalField != null ? cp.addString("T")
-				: null;
-		final Utf8Constant standardOutputClinitName = standardOutputGlobalField != null ? cp.addUtf8("<clinit>") : null;
-		final Utf8Constant standardOutputClinitDesc = standardOutputGlobalField != null ? cp.addUtf8("()V") : null;
+		final FieldrefConstant standardInputGlobalField = globalFields.get(LispNames.STANDARD_INPUT_VAR);
+		final boolean seedsStandardStream = standardOutputGlobalField != null || standardInputGlobalField != null;
+		final ConstantPool.StringConstant standardOutputTStr = seedsStandardStream ? cp.addString("T") : null;
+		final Utf8Constant standardOutputClinitName = seedsStandardStream ? cp.addUtf8("<clinit>") : null;
+		final Utf8Constant standardOutputClinitDesc = seedsStandardStream ? cp.addUtf8("()V") : null;
 
 		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
 		new ByteCodeWriter(classOut) //
@@ -1767,8 +1768,7 @@ public final class JvmLispCompiler implements LispCompiler {
 							})));
 				}
 				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || !mainCtx.layoutPool.isEmpty()
-						|| !structTableClinitFinal.isEmpty() || dynVarRuntime != null
-						|| standardOutputGlobalField != null) {
+						|| !structTableClinitFinal.isEmpty() || dynVarRuntime != null || seedsStandardStream) {
 					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 					// on a thread with no pending condition returns null). The async
 					// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -1809,14 +1809,18 @@ public final class JvmLispCompiler implements LispCompiler {
 						// binding.
 						clinitCode.addAll(dynVarRuntime.clinitCode());
 					}
-					if (standardOutputGlobalField != null) {
-						// *standard-output*'s global default is the designator t
-						// (stdout).
+					for (FieldrefConstant streamGlobal : new FieldrefConstant[] { standardOutputGlobalField,
+							standardInputGlobalField }) {
+						if (streamGlobal == null) {
+							continue;
+						}
+						// *standard-output* / *standard-input*'s global default is the
+						// designator t (the process standard stream).
 						clinitCode.add(Opcode.LDC_W);
 						JvmRuntimeBuilder.emitU2(clinitCode,
 								java.util.Objects.requireNonNull(standardOutputTStr).index());
 						clinitCode.add(Opcode.PUTSTATIC);
-						JvmRuntimeBuilder.emitU2(clinitCode, standardOutputGlobalField.index());
+						JvmRuntimeBuilder.emitU2(clinitCode, streamGlobal.index());
 					}
 					clinitCode.addAll(layoutClinitCode);
 					clinitCode.addAll(structTableClinitFinal);

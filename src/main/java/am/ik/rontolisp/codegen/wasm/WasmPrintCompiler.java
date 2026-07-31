@@ -19,9 +19,10 @@ final class WasmPrintCompiler {
 		// print returns its argument (CL semantics); stash the object in a temp so it can
 		// be returned after printing, not nil.
 		int objSlot = ctx.allocTemp();
-		// An explicit stream argument, or the current *standard-output* value when the
-		// program redirects it (WasmEmitHelper.defaultStreamArg).
-		LispVal stream = args.size() > 2 ? args.get(2) : WasmEmitHelper.defaultStreamArg(ctx);
+		// The destination, under CL's stream designator rule: an explicit stream, or --
+		// for an omitted argument AND for an explicit nil -- the current
+		// *standard-output* (WasmEmitHelper.streamArg).
+		LispVal stream = WasmEmitHelper.streamArg(ctx, args.size() > 2 ? args.get(2) : null);
 		if (stream != null) {
 			// (print value stream): render to a string, route it and a newline via
 			// _write_stream_str (the stream is evaluated once into a temp).

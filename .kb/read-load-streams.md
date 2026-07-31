@@ -81,21 +81,26 @@ there (a string input stream has no such limit, and neither do the interpreter a
 Pinned by `peekCharLeavesTheCharacterInTheStream` / `peekCharSkipsWhitespaceAndUpToACharacter`
 in all three suites plus the ci-spec case.
 
-**`make-synonym-stream` is resolved ONCE, at construction** (`expandMakeSynonymStream`):
-`(make-synonym-stream '*standard-output*)` compiles to a READ of that variable, and a runtime
-symbol goes through `symbol-value`; the interpreter registers it next to `symbol-value` in
-`LispEvaluator` so the lookup is dynamic-binding-aware. CL's synonym stream instead forwards
-EVERY operation to the symbol's value at the time of that operation. **Reason for the
-divergence**: a per-operation synonym needs a stream-designator KIND that the write helpers of
-all four backends resolve at run time -- the same missing seam as "an explicit nil stream
-argument must mean `*standard-output*`", which is `.todo/149`'s open half -- and no known
-consumer needs it (postmodern's `config.lisp:224` `*json-output*` defvar constructs once and
-never rebinds). **RE-EVALUATION TRIGGER**: once a nil stream designator resolves through
-`*standard-output*` at write time, this expansion should answer that designator instead of a
-snapshot. Same session, one parity fix fell out of it: the interpreter's `write-line` now takes
-nil/t as the standard-output designator like the other three backends already did (its stdout
-test is "not a handle"). Pinned by `makeSynonymStreamResolvesTheNamedVariable` /
-`evalMakeSynonymStreamResolvesTheNamedVariable` and the ci-spec case.
+**`make-synonym-stream` over `*standard-output*` / `*standard-input*` forwards per
+operation; over any other symbol it is resolved ONCE, at construction** (`expandMakeSynonymStream`, and the
+`LispEvaluator` registration next to `symbol-value` so the interpreter's lookup is
+dynamic-binding-aware). `(make-synonym-stream '*standard-output*)` and its `*standard-input*` twin answer the `nil`
+DESIGNATOR, which every output (resp. input) operation resolves through the current
+`*standard-output*` / `*standard-input*` at operation time
+(`.kb/standard-output-redirect.md`) -- so those synonyms have CL's semantics with no new
+stream kind. Any other symbol compiles to a READ of that variable (a runtime symbol
+goes through `symbol-value`), i.e. a snapshot where CL would forward every operation.
+**Reason for the divergence**: a per-operation synonym over an ARBITRARY symbol needs a
+stream-designator KIND carrying that symbol which the write helpers of all four backends
+resolve at run time; `nil` is the only designator the helpers already have, and it names
+exactly the standard streams. No known consumer needs more (postmodern's `config.lisp:224`
+`*json-output*` defvar constructs once and never rebinds). **RE-EVALUATION TRIGGER**: if a
+consumer ever rebinds the symbol behind a NON-standard synonym stream, the runtime needs
+that designator kind and the whole expansion has to go. One parity fix fell out of the
+original pass: the interpreter's `write-line` takes nil/t as the standard-output designator
+like the other three backends already did (its stdout test is "not a handle"). Pinned by
+`makeSynonymStreamResolvesTheNamedVariable` / `synonymStreamOverStandardOutputFollowsALaterBinding`
+(JVM + WASM), their `eval*` twins, and the ci-spec case.
 
 **Binary streams (`:element-type '(unsigned-byte 8)`)**: `open` takes an optional third literal argument -- `'character` (default, text) or `'(unsigned-byte 8)` (binary) -- and `with-open-file` accepts a literal `:element-type` option that `expandWithOpenFile` rewrites into that positional form. The mode encoding is `0`=text-in, `1`=text-out, `2`=bin-in, `3`=bin-out (`OpenModes.OUTPUT_BIT`/`BINARY_BIT`). Interpreter: binary entries in the same `Map<Long, Closeable>` are `BufferedInputStream`/`BufferedOutputStream`; `read-byte`/`write-byte` are real `LispFunction`s (so `#'read-byte` works interpreted) with no `BuiltinFunctionWrappers` entries, matching `open`/`write-line`. JVM: `_open` grows a 4-way mode branch, `_closeStream` closes `InputStream`/`OutputStream` entries too, and new `_readByte(handle, eofErrorP, eofValue)`/`_writeByte(byte, handle)` helpers live in `JvmIoRuntimeBuilder`; a byte is a boxed `Long`. WASM: a WASI fd is element-type-agnostic, so `WasmOpenCompiler` masks the mode with `& OUTPUT_BIT` (passing raw 2/3 to `_open` would mis-select the write oflags/rights) and the `_open` body is untouched; `_read_byte`/`_write_byte` (`WasmIoRuntimeBuilder.buildReadByteBody`/`buildWriteByteBody`) move one raw byte through the `BYTE_SCRATCH_ADDR` (148) scratch cell via `fd_read`/`fd_write` -- no quote framing, no newline scan -- and a byte is an i31 fixnum. Their indices `FUNC_READ_BYTE`/`FUNC_WRITE_BYTE` are appended between `FUNC_P1_FUTURE_AWAIT` and `FUNC_USER_BASE` (the mod/rem/gensym pattern), so no import/`FUNC_START` index shifts and the `--component` adapter blobs are unaffected (the adapter's `fd_read`/`fd_write` are already byte-clean). Consequence of fds being untyped on WASM: `read-byte` on a text-opened stream "works" there while the interpreter/JVM signal a type error -- documented as out of contract. `read-byte`'s CL EOF semantics (`eof-error-p` default t = trap/throw, nil = return `eof-value`) are runtime arguments to the helpers. `read-sequence`/`write-sequence` are shared macro expansions (`LispMacroExpander.expandReadSequence`/`expandWriteSequence`) into a `while` loop over `aref`/`%aset`/`length` with fixed `__rseq_`/`__wseq_` temp names and literal-only `:start`/`:end` keywords, so no per-backend codegen exists; the sequence must be a rank-1 array. **The BUFFER, not the stream, picks the element read/written**: both dispatch on `(stringp seq)`, so a character vector -- what `(make-array n :element-type 'character)` and `make-string` build, and the one rank-1 array that answers `stringp` on every backend (`.kb/adjustable-arrays.md`) -- moves CHARACTERS (`read-char` / one `write-string` of the slice) and anything else moves bytes. The test is a RUNTIME one because the buffer arrives in a variable: `alexandria:read-stream-content-into-string` allocates it as `(make-array size :element-type (stream-element-type stream))`, which is also why `make-array`'s `:element-type` accepts a computed designator (`LispMacroExpander.lowerRuntimeElementTypeMakeArray`, wired into `Jvm/WasmArrayCompiler` -- the interpreter reads the designator at run time already). That character half is `.todo/219`; before it, a text stream read through a character buffer fell to `read-byte` and died on the stream cast. Like the other stream ops, none of this is known to the runtime `_eval` interpreters, and `--no-gc` has no stream support at all. The `CiSpecE2eTest` driver passes `--dir .` to both wasmtime invocations so file-stream ci-spec cases can open files in the shared work dir. WASM `open`/`load` resolve paths against the first preopened dir (fd 3), so they need `--dir` (in `--component` mode the same `path_open`/`fd_*` imports are satisfied by the adapter over `wasi:filesystem@0.3.0`). The runtime `_eval` interpreters do not know these forms (README). The runtime reader/`_eval` also do not know `require`/`provide` (compile-time directives consumed by `LoadInliner`; a file read by the runtime `load` of compiled output must not contain them — see load-inliner.md).
 

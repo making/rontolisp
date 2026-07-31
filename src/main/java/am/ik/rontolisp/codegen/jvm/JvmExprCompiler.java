@@ -132,9 +132,11 @@ final class JvmExprCompiler {
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileVarRef(name, ctx);
 		}
-		else if (LispNames.STANDARD_OUTPUT_VAR.equals(name) || LispNames.ERROR_OUTPUT_VAR.equals(name)) {
+		else if (LispNames.STANDARD_OUTPUT_VAR.equals(name) || LispNames.ERROR_OUTPUT_VAR.equals(name)
+				|| LispNames.STANDARD_INPUT_VAR.equals(name)) {
 			// The standard stream variables hold the designator t (the interpreter's
-			// permanent value; print-family redirection through them does not exist).
+			// permanent value; the program never binds this one, so print/read-family
+			// redirection through it does not exist here).
 			JvmEmitHelper.compileTrue(ctx);
 		}
 		else {

@@ -27,17 +27,21 @@ final class WasmReadCompiler {
 			return;
 		}
 		List<LispVal> parts = cons.toList();
-		if (parts.size() == 1) {
+		if (parts.size() > 2) {
+			throw new UnsupportedOperationException("read expects 0 or 1 arguments, got " + (parts.size() - 1));
+		}
+		// The source designator: an omitted argument and an explicit nil both mean the
+		// current *standard-input* (WasmEmitHelper.inputStreamArg).
+		LispVal stream = WasmEmitHelper.inputStreamArg(ctx, parts.size() == 2 ? parts.get(1) : null);
+		if (stream == null) {
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(0);
 		}
-		else if (parts.size() == 2) {
-			// The stream handle is the WASI fd, boxed as an i31 integer; unbox it.
-			WasmExprCompiler.compileExpr(parts.get(1), ctx);
-			WasmEmitHelper.castI31GetS(ctx);
-		}
 		else {
-			throw new UnsupportedOperationException("read expects 0 or 1 arguments, got " + (parts.size() - 1));
+			// The stream handle is the WASI fd, boxed as an i31 integer; unbox it (a
+			// designator resolves to fd 0).
+			WasmExprCompiler.compileExpr(stream, ctx);
+			WasmEmitHelper.streamFdOrStdin(ctx);
 		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ);

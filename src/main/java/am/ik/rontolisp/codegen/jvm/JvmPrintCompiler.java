@@ -19,9 +19,10 @@ final class JvmPrintCompiler {
 		// print returns its argument (CL semantics); stash the object so the value can be
 		// left on the stack after printing, not nil.
 		int objSlot = ctx.allocTemp();
-		// An explicit stream argument, or the current *standard-output* value when the
-		// program redirects it (JvmStringStreamCompiler.defaultStreamArg).
-		LispVal stream = args.size() > 2 ? args.get(2) : JvmStringStreamCompiler.defaultStreamArg(ctx);
+		// The destination, under CL's stream designator rule: an explicit stream, or --
+		// for an omitted argument AND for an explicit nil -- the current
+		// *standard-output* (JvmStringStreamCompiler.streamArg).
+		LispVal stream = JvmStringStreamCompiler.streamArg(ctx, args.size() > 2 ? args.get(2) : null);
 		if (stream != null) {
 			// (print value stream): render "value\n", then route through _writeStr.
 			int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();

@@ -1724,6 +1724,63 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void synonymStreamOverStandardOutputFollowsALaterBinding() throws Exception {
+		// The synonym IS the nil designator, so it resolves at WRITE time -- a binding
+		// established after the synonym was built still captures.
+		assertThat(compileAndRun("""
+				(defvar *sink* (make-synonym-stream '*standard-output*))
+				(princ (with-output-to-string (*standard-output*)
+				  (write-line "captured" *sink*)))
+				(princ "|")
+				(write-line "plain" *sink*)""")).isEqualTo("captured\n|plain"); // compileAndRun
+																				// strips
+																				// the
+																				// trailing
+																				// newline
+	}
+
+	@Test
+	void bindingStandardInputRedirectsTheStreamlessReadFamily() throws Exception {
+		// The input mirror of the *standard-output* redirect: binding *standard-input*
+		// redirects read-line / read-char / read, including inside called functions, and
+		// an explicit nil argument is the same designator.
+		assertThat(compileAndRun("""
+				(defun slurp (&optional stream) (princ (read-line stream)) (princ "|"))
+				(with-input-from-string (*standard-input* "one")
+				  (slurp))
+				(princ (with-input-from-string (*standard-input* "abc") (read-char)))
+				(princ (with-input-from-string (*standard-input* "(1 2 3)") (read)))
+				(princ (with-input-from-string (*standard-input* "x") (read-line nil)))""")).isEqualTo("one|a(1 2 3)x");
+	}
+
+	@Test
+	void makeSynonymStreamOverStandardInputIsTheNilDesignator() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *src* (make-synonym-stream '*standard-input*))
+				(princ (with-input-from-string (*standard-input* "later")
+				  (read-line *src*)))""")).isEqualTo("later");
+	}
+
+	@Test
+	void explicitNilStreamArgumentIsTheStandardOutputDesignator() throws Exception {
+		// CL's stream designator rule: a forwarded optional that arrives as nil reaches
+		// the CURRENT *standard-output*, not raw stdout.
+		assertThat(compileAndRun("""
+				(defun emit (x &optional stream)
+				  (princ x stream)
+				  (write-string "|" stream)
+				  (write-line "" stream)
+				  (fresh-line stream)
+				  (terpri stream))
+				(princ (with-output-to-string (*standard-output*)
+				  (emit "a")
+				  (print 1 nil)))
+				(princ "-")
+				(emit "b")""")).isEqualTo("a|\n\n1\n-b|"); // compileAndRun strips the
+															// trailing newlines
+	}
+
+	@Test
 	void writeStringWithoutStreamPrintsToStdoutWithoutNewline() throws Exception {
 		assertThat(compileAndRun("(write-string \"no\") (write-string \" newline\")")).isEqualTo("no newline");
 	}

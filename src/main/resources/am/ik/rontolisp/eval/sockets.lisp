@@ -312,15 +312,23 @@
         (rontolisp:await (rontolisp::%sock-read-byte-f e))
         (rontolisp:await (rontolisp::%stdin-read-byte-or-raw-f s)))))
 
+;;; The stream DESIGNATOR is resolved HERE, before the nil test: an omitted
+;;; argument and an explicit nil both mean the current *standard-input*, so a
+;;; (with-input-from-string (*standard-input* ...) ...) around a read reaches
+;;; the string stream instead of the host stdin cache. A program that never
+;;; binds the variable compiles the bare read to the constant t, so the
+;;; not-a-handle test below picks the same stdin path it always did.
 (defun rontolisp::%io-read-line (&optional s)
-  (if (or (rontolisp::%sock-entry s) (null s))
-      (rontolisp::%future-force (rontolisp::%read-line-future s))
-      (rontolisp::%read-line-raw s)))
+  (let ((in (or s *standard-input*)))
+    (if (or (rontolisp::%sock-entry in) (not (integerp in)))
+        (rontolisp::%future-force (rontolisp::%read-line-future in))
+        (rontolisp::%read-line-raw in))))
 
 (defun rontolisp::%io-read-char (&optional s)
-  (if (or (rontolisp::%sock-entry s) (null s))
-      (rontolisp::%future-force (rontolisp::%read-char-future s))
-      (rontolisp::%read-char-raw s)))
+  (let ((in (or s *standard-input*)))
+    (if (or (rontolisp::%sock-entry in) (not (integerp in)))
+        (rontolisp::%future-force (rontolisp::%read-char-future in))
+        (rontolisp::%read-char-raw in))))
 
 (defun rontolisp::%io-read-byte (&optional s)
   (if (or (rontolisp::%sock-entry s) (null s))

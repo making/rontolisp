@@ -30,15 +30,20 @@ final class JvmReadLineCompiler {
 			return;
 		}
 		List<LispVal> parts = cons.toList();
-		if (parts.size() == 1) {
+		if (parts.size() > 2) {
+			throw new UnsupportedOperationException("read-line expects 0 or 1 arguments, got " + (parts.size() - 1));
+		}
+		// The source, under CL's stream designator rule: an explicit stream, or -- for an
+		// omitted argument AND for an explicit nil -- the current *standard-input*
+		// (JvmStringStreamCompiler.inputStreamArg). A program that never binds it keeps
+		// the hard-coded standard input.
+		LispVal stream = JvmStringStreamCompiler.inputStreamArg(ctx, parts.size() == 2 ? parts.get(1) : null);
+		if (stream == null) {
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(ctx.readLineHelper.index());
 			return;
 		}
-		if (parts.size() != 2) {
-			throw new UnsupportedOperationException("read-line expects 0 or 1 arguments, got " + (parts.size() - 1));
-		}
-		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(stream, ctx, className);
 		Utf8Constant nameUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.READ_LINE_STREAM_METHOD);
 		Utf8Constant descUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.READ_LINE_STREAM_DESC);
 		MethodrefConstant readLineStreamRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),

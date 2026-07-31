@@ -15,9 +15,10 @@ final class WasmTerpriCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		java.util.List<am.ik.rontolisp.LispVal> args = cons.toList();
-		// An explicit stream argument, or the current *standard-output* value when the
-		// program redirects it (WasmEmitHelper.defaultStreamArg).
-		am.ik.rontolisp.LispVal stream = args.size() > 1 ? args.get(1) : WasmEmitHelper.defaultStreamArg(ctx);
+		// The destination, under CL's stream designator rule: an explicit stream, or --
+		// for an omitted argument AND for an explicit nil -- the current
+		// *standard-output* (WasmEmitHelper.streamArg).
+		am.ik.rontolisp.LispVal stream = WasmEmitHelper.streamArg(ctx, args.size() > 1 ? args.get(1) : null);
 		if (stream != null) {
 			// (terpri stream): route a newline via _write_stream_str.
 			emitNewlineStringStruct(ctx);

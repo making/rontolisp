@@ -21,15 +21,19 @@
 (rontolisp:async-defun rontolisp::%read-byte-future (&optional s)
   (rontolisp:await (rontolisp::%stdin-read-byte-or-raw-f s)))
 
+;;; The stream DESIGNATOR is resolved HERE, before the nil test -- see the same
+;;; comment in sockets.lisp.
 (defun rontolisp::%io-read-line (&optional s)
-  (if (null s)
-      (rontolisp::%future-force (rontolisp::%read-line-future s))
-      (rontolisp::%read-line-raw s)))
+  (let ((in (or s *standard-input*)))
+    (if (integerp in)
+        (rontolisp::%read-line-raw in)
+        (rontolisp::%future-force (rontolisp::%read-line-future in)))))
 
 (defun rontolisp::%io-read-char (&optional s)
-  (if (null s)
-      (rontolisp::%future-force (rontolisp::%read-char-future s))
-      (rontolisp::%read-char-raw s)))
+  (let ((in (or s *standard-input*)))
+    (if (integerp in)
+        (rontolisp::%read-char-raw in)
+        (rontolisp::%future-force (rontolisp::%read-char-future in)))))
 
 (defun rontolisp::%io-read-byte (&optional s)
   (if (null s)

@@ -28,18 +28,21 @@ final class JvmReadCompiler {
 			return;
 		}
 		List<LispVal> parts = cons.toList();
+		if (parts.size() > 2) {
+			throw new UnsupportedOperationException("read expects 0 or 1 arguments, got " + (parts.size() - 1));
+		}
+		// The source designator: an omitted argument and an explicit nil both mean the
+		// current *standard-input* (JvmStringStreamCompiler.inputStreamArg).
+		LispVal stream = JvmStringStreamCompiler.inputStreamArg(ctx, parts.size() == 2 ? parts.get(1) : null);
 		MethodrefConstant readRef;
-		if (parts.size() == 1) {
+		if (stream == null) {
 			readRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 					ctx.cp.addNameAndType(ctx.cp.addUtf8("_read"), ctx.cp.addUtf8("()Ljava/lang/Object;")));
 		}
-		else if (parts.size() == 2) {
-			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		else {
+			JvmExprCompiler.compileExpr(stream, ctx, className);
 			readRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp.addNameAndType(
 					ctx.cp.addUtf8("_readStream"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		}
-		else {
-			throw new UnsupportedOperationException("read expects 0 or 1 arguments, got " + (parts.size() - 1));
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(readRef.index());

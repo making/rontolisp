@@ -486,6 +486,15 @@ public final class LispEvaluator {
 			}
 			return this.globalEnv.lookupOrNull(LispNames.STANDARD_OUTPUT_VAR);
 		});
+		// The same rule on the input side: the stream-argument-less read family resolves
+		// its source through the current value of *standard-input*.
+		this.globalEnv.setDefaultInput(() -> {
+			if ((!this.specialVars.isEmpty() || this.progvUsed)
+					&& this.dynamicBindings.isBound(LispNames.STANDARD_INPUT_VAR)) {
+				return this.dynamicBindings.get(LispNames.STANDARD_INPUT_VAR);
+			}
+			return this.globalEnv.lookupOrNull(LispNames.STANDARD_INPUT_VAR);
+		});
 		// The runtime readers return DATA, and a #S(...) datum must be the instance it
 		// denotes exactly as a source literal is. Environment holds no registry, so the
 		// fold is layered on here, where this evaluator's registry is in scope; wrapping
@@ -768,15 +777,23 @@ public final class LispEvaluator {
 			};
 		}));
 		// (make-synonym-stream 'sym): the stream designator the symbol currently names.
-		// Lite -- the symbol is resolved HERE, not on every operation through the
-		// resulting stream (see LispMacroExpander.expandMakeSynonymStream, which is the
-		// compiled backends' half of the same contract).
+		// *standard-output* / *standard-input* answer the nil DESIGNATOR, which every
+		// output / input operation resolves through them at the time of that operation
+		// -- so THOSE synonyms forward per-operation like CL's. Any other symbol is
+		// lite: resolved
+		// HERE, not on every operation through the resulting stream (see
+		// LispMacroExpander.expandMakeSynonymStream, the compiled backends' half of the
+		// same contract).
 		this.globalEnv.defineFunction(LispNames.MAKE_SYNONYM_STREAM,
 				new LispFunction(LispNames.MAKE_SYNONYM_STREAM, args -> {
 					requireSingleArg(LispNames.MAKE_SYNONYM_STREAM, args);
 					if (!(args.get(0) instanceof LispSymbol sym) || sym.isKeyword()) {
 						throw new LispEvalException(
 								LispNames.MAKE_SYNONYM_STREAM + " expects a symbol, got " + args.get(0).print());
+					}
+					if (LispNames.STANDARD_OUTPUT_VAR.equals(sym.name())
+							|| LispNames.STANDARD_INPUT_VAR.equals(sym.name())) {
+						return LispNil.INSTANCE;
 					}
 					if (this.dynamicBindings.isBound(sym.name())) {
 						return this.dynamicBindings.get(sym.name());

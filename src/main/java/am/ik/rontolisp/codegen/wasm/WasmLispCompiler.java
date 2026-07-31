@@ -2113,15 +2113,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		startWriter.writeSignedLeb128(TYPE_STR_BYTES);
 		startWriter.write(Instruction.DROP);
 
-		// A program that redirects *standard-output* (the variable has a module global
-		// only then) seeds its global default with the designator t (stdout), matching
-		// the interpreter's permanent value.
-		Integer standardOutputGlobal = ctx.globalIndices.get(LispNames.STANDARD_OUTPUT_VAR);
-		if (standardOutputGlobal != null) {
-			startWriter.write(Instruction.CALL);
-			startWriter.writeSignedLeb128(FUNC_T_SYM);
-			startWriter.write(Instruction.SET_GLOBAL);
-			startWriter.writeUnsignedLeb128(standardOutputGlobal);
+		// A program that redirects *standard-output* / *standard-input* (the variable has
+		// a module global only then) seeds its global default with the designator t (the
+		// process standard stream), matching the interpreter's permanent value.
+		for (String streamVar : new String[] { LispNames.STANDARD_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR }) {
+			Integer streamGlobal = ctx.globalIndices.get(streamVar);
+			if (streamGlobal != null) {
+				startWriter.write(Instruction.CALL);
+				startWriter.writeSignedLeb128(FUNC_T_SYM);
+				startWriter.write(Instruction.SET_GLOBAL);
+				startWriter.writeUnsignedLeb128(streamGlobal);
+			}
 		}
 
 		// EH mode: an uncaught $lisp-cond throw escaping the top level must keep

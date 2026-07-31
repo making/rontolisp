@@ -26,7 +26,11 @@ final class WasmReadCharCompiler {
 		if (parts.size() > 4) {
 			throw new UnsupportedOperationException("read-char expects 0 to 3 arguments, got " + (parts.size() - 1));
 		}
-		WasmExprCompiler.compileExpr(parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE, ctx);
+		// The source designator: an omitted argument and an explicit nil both mean the
+		// current *standard-input* (WasmEmitHelper.inputStreamArg); the runtime helper
+		// reads standard input for any non-handle value.
+		LispVal stream = WasmEmitHelper.inputStreamArg(ctx, parts.size() > 1 ? parts.get(1) : null);
+		WasmExprCompiler.compileExpr(stream != null ? stream : LispNil.INSTANCE, ctx);
 		WasmExprCompiler.compileExpr(parts.size() > 2 ? parts.get(2) : LispTrue.INSTANCE, ctx);
 		if (parts.size() > 3) {
 			WasmExprCompiler.compileExpr(parts.get(3), ctx);

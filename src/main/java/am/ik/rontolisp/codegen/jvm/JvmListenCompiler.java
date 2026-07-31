@@ -24,8 +24,11 @@ final class JvmListenCompiler {
 		if (parts.size() > 2) {
 			throw new UnsupportedOperationException("listen expects 0 or 1 arguments, got " + (parts.size() - 1));
 		}
-		if (parts.size() == 2) {
-			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// The source designator: an omitted argument and an explicit nil both mean the
+		// current *standard-input* (JvmStringStreamCompiler.inputStreamArg).
+		LispVal stream = JvmStringStreamCompiler.inputStreamArg(ctx, parts.size() == 2 ? parts.get(1) : null);
+		if (stream != null) {
+			JvmExprCompiler.compileExpr(stream, ctx, className);
 		}
 		else {
 			ctx.emit(Opcode.ACONST_NULL);

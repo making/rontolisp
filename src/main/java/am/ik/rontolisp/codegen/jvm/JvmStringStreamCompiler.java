@@ -6,8 +6,8 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
-import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.StreamDesignators;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -36,8 +36,40 @@ final class JvmStringStreamCompiler {
 	 * byte-identically to before.
 	 */
 	static @Nullable LispVal defaultStreamArg(JvmLispCompiler.Ctx ctx) {
-		return ctx.globals.contains(LispNames.STANDARD_OUTPUT_VAR) ? new LispSymbol(LispNames.STANDARD_OUTPUT_VAR)
-				: null;
+		return streamArg(ctx, null);
+	}
+
+	/**
+	 * The destination expression of an output operation, applying CL's stream designator
+	 * rule ({@link StreamDesignators}) when the {@code *standard-output*} redirect is
+	 * active: an omitted argument and an explicit nil both denote the current
+	 * {@code *standard-output*}.
+	 * @param ctx the compile context
+	 * @param explicit the stream argument expression, or {@code null} if omitted
+	 * @return the expression to compile, or {@code null} for the hard-coded standard
+	 * output
+	 */
+	static @Nullable LispVal streamArg(JvmLispCompiler.Ctx ctx, @Nullable LispVal explicit) {
+		if (!ctx.globals.contains(LispNames.STANDARD_OUTPUT_VAR)) {
+			return explicit;
+		}
+		return StreamDesignators.resolveOutput(explicit);
+	}
+
+	/**
+	 * The source expression of an INPUT operation, the {@link #streamArg} mirror: an
+	 * omitted argument and an explicit nil both denote the current
+	 * {@code *standard-input*} when the program binds it somewhere.
+	 * @param ctx the compile context
+	 * @param explicit the stream argument expression, or {@code null} if omitted
+	 * @return the expression to compile, or {@code null} for the hard-coded standard
+	 * input
+	 */
+	static @Nullable LispVal inputStreamArg(JvmLispCompiler.Ctx ctx, @Nullable LispVal explicit) {
+		if (!ctx.globals.contains(LispNames.STANDARD_INPUT_VAR)) {
+			return explicit;
+		}
+		return StreamDesignators.resolveInput(explicit);
 	}
 
 	/**
@@ -60,7 +92,7 @@ final class JvmStringStreamCompiler {
 		}
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		LispVal stream = parts.size() == 3 ? parts.get(2) : defaultStreamArg(ctx);
+		LispVal stream = streamArg(ctx, parts.size() == 3 ? parts.get(2) : null);
 		if (stream != null) {
 			JvmExprCompiler.compileExpr(stream, ctx, className);
 		}

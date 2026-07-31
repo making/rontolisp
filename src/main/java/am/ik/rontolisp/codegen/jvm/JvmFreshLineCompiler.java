@@ -83,10 +83,11 @@ final class JvmFreshLineCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		java.util.List<am.ik.rontolisp.LispVal> args = cons.toList();
-		// An explicit stream argument, or the current *standard-output* value when the
-		// program redirects it (JvmStringStreamCompiler.defaultStreamArg); either goes
-		// through the handle-aware _freshLine runtime helper.
-		am.ik.rontolisp.LispVal stream = args.size() > 1 ? args.get(1) : JvmStringStreamCompiler.defaultStreamArg(ctx);
+		// The destination, under CL's stream designator rule: an explicit stream, or --
+		// for an omitted argument AND for an explicit nil -- the current
+		// *standard-output* (JvmStringStreamCompiler.streamArg); either goes through the
+		// handle-aware _freshLine runtime helper.
+		am.ik.rontolisp.LispVal stream = JvmStringStreamCompiler.streamArg(ctx, args.size() > 1 ? args.get(1) : null);
 		if (stream != null) {
 			JvmExprCompiler.compileExpr(stream, ctx, className);
 			MethodrefConstant freshLineRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),

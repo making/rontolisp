@@ -22,8 +22,42 @@ final class WasmEmitHelper {
 	 * byte-identically to before.
 	 */
 	static am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal defaultStreamArg(WasmLispCompiler.Ctx ctx) {
-		return ctx.globalIndices.containsKey(am.ik.rontolisp.LispNames.STANDARD_OUTPUT_VAR)
-				? new am.ik.rontolisp.LispSymbol(am.ik.rontolisp.LispNames.STANDARD_OUTPUT_VAR) : null;
+		return streamArg(ctx, null);
+	}
+
+	/**
+	 * The destination expression of an output operation, applying CL's stream designator
+	 * rule ({@link am.ik.rontolisp.compiler.StreamDesignators}) when the
+	 * {@code *standard-output*} redirect is active: an omitted argument and an explicit
+	 * nil both denote the current {@code *standard-output*}.
+	 * @param ctx the compile context
+	 * @param explicit the stream argument expression, or {@code null} if omitted
+	 * @return the expression to compile, or {@code null} for the hard-coded standard
+	 * output
+	 */
+	static am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal streamArg(WasmLispCompiler.Ctx ctx,
+			am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal explicit) {
+		if (!ctx.globalIndices.containsKey(am.ik.rontolisp.LispNames.STANDARD_OUTPUT_VAR)) {
+			return explicit;
+		}
+		return am.ik.rontolisp.compiler.StreamDesignators.resolveOutput(explicit);
+	}
+
+	/**
+	 * The source expression of an INPUT operation, the {@link #streamArg} mirror: an
+	 * omitted argument and an explicit nil both denote the current
+	 * {@code *standard-input*} when the program binds it somewhere.
+	 * @param ctx the compile context
+	 * @param explicit the stream argument expression, or {@code null} if omitted
+	 * @return the expression to compile, or {@code null} for the hard-coded standard
+	 * input
+	 */
+	static am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal inputStreamArg(WasmLispCompiler.Ctx ctx,
+			am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal explicit) {
+		if (!ctx.globalIndices.containsKey(am.ik.rontolisp.LispNames.STANDARD_INPUT_VAR)) {
+			return explicit;
+		}
+		return am.ik.rontolisp.compiler.StreamDesignators.resolveInput(explicit);
 	}
 
 	/**
@@ -157,6 +191,36 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(Type.I31.code());
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+	}
+
+	/**
+	 * Consumes a stream DESIGNATOR on the stack and leaves the {@code i32} the fd-taking
+	 * read runtimes ({@code _read_line}, {@code _read}) want: an i31 handle is unboxed (a
+	 * WASI fd, or the negative handle of a string input stream), and anything else -- nil
+	 * and the {@code t} designator {@code *standard-input*} holds by default -- is
+	 * standard input, fd 0. Replaces a bare {@link #castI31GetS} at the read call sites,
+	 * where a designator would otherwise TRAP the cast (that trap was the pre-existing
+	 * cross-backend divergence of {@code (read-line nil)}). Self-contained
+	 * {@code if}/{@code else}/{@code end}, so it needs no {@code wasmCtrlDepth}
+	 * bookkeeping.
+	 * @param ctx the compilation context
+	 */
+	static void streamFdOrStdin(WasmLispCompiler.Ctx ctx) {
+		int slot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.IF, 0x7F); // (result i32)
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(slot);
+		castI31GetS(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.END);
 	}
 
 	/**

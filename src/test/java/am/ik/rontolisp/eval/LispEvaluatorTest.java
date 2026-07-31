@@ -546,10 +546,74 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalMakeSynonymStreamResolvesTheNamedVariable() {
-		// Lite: the symbol resolves ONCE, where the stream is built -- unbound
-		// *standard-output* is the t designator, and a string stream bound around the
-		// construction is what the synonym answers.
-		assertThat(eval("(make-synonym-stream '*standard-output*)")).isEqualTo(LispTrue.INSTANCE);
+		// A synonym over *standard-output* IS the nil designator, so it forwards
+		// PER OPERATION (resolved at write time, not at construction).
+		assertThat(eval("(make-synonym-stream '*standard-output*)")).isEqualTo(LispNil.INSTANCE);
+		// Any other symbol stays lite: the value at construction time.
+		assertThat(eval("(let ((*x* 7)) (declare (special *x*)) (make-synonym-stream '*x*))"))
+			.isEqualTo(new LispInteger(7));
+	}
+
+	@Test
+	void evalSynonymStreamOverStandardOutputFollowsALaterBinding() {
+		// The construct-once snapshot could not see a binding established AFTER the
+		// synonym was built; the nil designator does.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("""
+				(progn
+				  (defvar *sink* (make-synonym-stream '*standard-output*))
+				  (with-output-to-string (*standard-output*)
+				    (write-line "captured" *sink*)))"""));
+		assertThat(result).isEqualTo(new LispString("captured\n"));
+		assertThat(baos.toString()).isEmpty();
+	}
+
+	@Test
+	void evalBindingStandardInputRedirectsTheStreamlessReadFamily() {
+		// The input mirror of the *standard-output* redirect: binding *standard-input*
+		// redirects read-line / read-char / read, including inside called functions, and
+		// an explicit nil argument is the same designator.
+		assertThat(eval("""
+				(progn
+				  (defun slurp (&optional stream) (read-line stream))
+				  (with-input-from-string (*standard-input* "one")
+				    (slurp)))""")).isEqualTo(new LispString("one"));
+		assertThat(eval("(with-input-from-string (*standard-input* \"abc\") (read-char))").print()).isEqualTo("#\\a");
+		assertThat(eval("(with-input-from-string (*standard-input* \"(1 2 3)\") (read))").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(with-input-from-string (*standard-input* \"x\") (read-line nil))"))
+			.isEqualTo(new LispString("x"));
+	}
+
+	@Test
+	void evalMakeSynonymStreamOverStandardInputIsTheNilDesignator() {
+		assertThat(eval("(make-synonym-stream '*standard-input*)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("""
+				(progn
+				  (defvar *src* (make-synonym-stream '*standard-input*))
+				  (with-input-from-string (*standard-input* "later")
+				    (read-line *src*)))""")).isEqualTo(new LispString("later"));
+	}
+
+	@Test
+	void evalExplicitNilStreamArgumentIsTheStandardOutputDesignator() {
+		// CL's stream designator rule: a forwarded optional that arrives as nil must
+		// reach the CURRENT *standard-output*, not raw stdout.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("""
+				(progn
+				  (defun emit (x &optional stream)
+				    (princ x stream)
+				    (write-string "|" stream)
+				    (write-line "" stream)
+				    (fresh-line stream)
+				    (terpri stream))
+				  (with-output-to-string (*standard-output*)
+				    (emit "a")
+				    (print 1 nil)))"""));
+		assertThat(result).isEqualTo(new LispString("a|\n\n1\n"));
+		assertThat(baos.toString()).isEmpty();
 	}
 
 	@Test

@@ -19,3 +19,15 @@
     (greet)
     (format t " ~a" 42))) ; => "hello 42"
 ```
+
+ストリーム引数に `nil` を渡すことは、引数を省略することと同じ意味です。これは
+「生の標準出力」ではなく `*standard-output*` 指定子です。そのため、自分の
+optional 引数をそのまま転送するレンダラーという Common Lisp でよくある形が、
+リダイレクト下でも期待どおりに動きます。
+
+```lisp
+(progn
+  (defun emit (x &optional stream) (princ x stream))
+  (with-output-to-string (*standard-output*)
+    (emit "forwarded"))) ; => "forwarded"
+```
