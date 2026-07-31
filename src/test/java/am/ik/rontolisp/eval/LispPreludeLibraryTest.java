@@ -107,6 +107,27 @@ class LispPreludeLibraryTest {
 	}
 
 	@Test
+	void thePreludeMergePathnamesAgreesWithPathnameOps() {
+		// merge-pathnames lives in the prelude (one definition, all four backends) while
+		// make-pathname :defaults and uiop:merge-pathnames* go through the Java
+		// PathnameOps helper. The two renderings of the same merge rule are pinned
+		// against each other here so neither can drift.
+		LispEvaluator evaluator = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		String[][] cases = { { "zoneinfo/", "/opt/local-time/" }, { "b.txt", "/opt/a.txt" }, { "/abs/x", "/opt/dir/" },
+				{ "x.txt", "" }, { "", "/opt/a.txt" }, { "sub/dir/f", "rel/base/" }, { "f", "nodir" }, { "d/", "" },
+				{ "", "" } };
+		for (String[] c : cases) {
+			LispVal actual = evaluator
+				.eval(LispReader.readFromString("(merge-pathnames \"" + c[0] + "\" \"" + c[1] + "\")"));
+			assertThat(actual.print()).as("(merge-pathnames %s %s)", c[0], c[1])
+				.isEqualTo("\"" + PathnameOps.mergePathnames(c[0], c[1]) + "\"");
+		}
+		// The one-argument shape merges against the empty (working-directory) defaults.
+		assertThat(evaluator.eval(LispReader.readFromString("(merge-pathnames \"a/b.txt\")")).print())
+			.isEqualTo("\"a/b.txt\"");
+	}
+
+	@Test
 	void anUnresolvableProgramStillGetsItsSplice() {
 		// A package error is not this pass's to report -- the compiler runs the identical
 		// resolution first thing -- so selection falls back to member-name matching.

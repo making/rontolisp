@@ -45,6 +45,19 @@ public interface SourceLoader {
 	}
 
 	/**
+	 * Whether a DIRECTORY exists at the given path -- what
+	 * {@code uiop:directory-exists-p} answers. The default is {@code false}: a loader
+	 * that is not a filesystem (the browser playground's in-memory map) has no
+	 * directories, and answering "no" is both true and the answer that makes a caller
+	 * fall back rather than fail.
+	 * @param path the path to probe
+	 * @return {@code true} when the path names an existing directory
+	 */
+	default boolean directoryExists(String path) {
+		return false;
+	}
+
+	/**
 	 * Returns a loader that reads files from the local filesystem.
 	 * @return a filesystem-backed loader
 	 */
@@ -63,6 +76,16 @@ public interface SourceLoader {
 				catch (RuntimeException ex) {
 					// An unrepresentable path (a NUL byte, say) is not an existing
 					// file -- probe-file answers nil rather than signalling.
+					return false;
+				}
+			}
+
+			@Override
+			public boolean directoryExists(String path) {
+				try {
+					return Files.isDirectory(Path.of(path));
+				}
+				catch (RuntimeException ex) {
 					return false;
 				}
 			}

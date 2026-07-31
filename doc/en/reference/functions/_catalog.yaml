@@ -320,6 +320,8 @@ categories:
       - { slug: open, name: "open" }
       - { slug: close, name: "close" }
       - { slug: probe-file, name: "probe-file" }
+      - { slug: truename, name: "truename" }
+      - { slug: merge-pathnames, name: "merge-pathnames" }
       - { slug: open-stream-p, name: "open-stream-p" }
       - { slug: force-output, name: "force-output" }
       - { slug: finish-output, name: "finish-output" }
@@ -485,10 +487,12 @@ categories:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }
       - { slug: asdf-load-system, name: "asdf:load-system" }
       - { slug: asdf-system-relative-pathname, name: "asdf:system-relative-pathname" }
+      - { slug: asdf-component-pathname, name: "asdf:component-pathname" }
   - title: "uiop Package (ASDF portability layer)"
     functions:
       - { slug: uiop-getenv, name: "uiop:getenv" }
       - { slug: uiop-file-exists-p, name: "uiop:file-exists-p" }
+      - { slug: uiop-directory-exists-p, name: "uiop:directory-exists-p" }
       - { slug: uiop-merge-pathnames-star, name: "uiop:merge-pathnames*" }
       - { slug: uiop-add-package-local-nickname, name: "uiop:add-package-local-nickname" }
       - { slug: uiop-emptyp, name: "uiop:emptyp" }

@@ -56,4 +56,4 @@ WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロー�
   インポートを提供する必要があります。`wasmtime run` ではインポートモジュール名
   ごとに `--preload <module>=<file>.wasm` が必要で、JavaScript ホストは
   インポートオブジェクトを渡します。
-- 引数は最大 7 個です (WASM バックエンド全般のアリティ制限)。
+- 引数は最大 10 個です (WASM バックエンド全般のアリティ制限)。

@@ -6,6 +6,23 @@ Opt-in (CLI `--component`; `WasmLispCompiler(dynamic, component)`; threaded as a
 
 **Gotchas to preserve**: `wasi:cli` and `wasi:filesystem` expose DISTINCT `error-code` types -> separate future built-ins (`future-read-cli`/`-fs`); the fs error-code is a string-bearing variant -> `future-read-fs` needs realloc.
 
+**No preopened directory is an ERRNO, not a trap** (2026-07-31). `adapter.wat`'s
+`$ensure_preopen` used to read the first element of the `wasi:filesystem/preopens`
+`get-directories` list unconditionally. Run a component with no `--dir` and that list is
+EMPTY, so it cached descriptor handle 0 and the first `path_open` trapped inside the host
+with `unknown handle index 0` -- before any errno existed for the caller to inspect, and
+so before `probe-file`'s "answer nil on a bad errno" branch or any `handler-case` could
+see it. **The one file primitive documented never to signal therefore aborted the whole
+program**, which is how a library that merely PROBES for an optional file (local-time
+reading `/etc/localtime` inside its own `handler-case`) could not even be loaded under a
+component. It now caches `-1` for "no preopen" and `$path_open` returns errno 76 for it.
+Re-evaluation trigger: this is the adapter compensating for the host, not a rontolisp
+policy -- if a future WASI 0.3 host makes an empty preopen list impossible, or gives
+`open-at` on an invalid descriptor a defined error result, the guard can go. Verified by
+running any `probe-file` program as a component WITHOUT `--dir`; with `--dir` the path was
+always fine, which is why the whole class stayed invisible (`CiSpecE2eTest` passes
+`--dir .`).
+
 **Shared-memory map (fixed for non-serve, 2026-07-26)**: the component's ONE linear
 memory is shared by three writers -- the canonical-ABI allocator, the adapter's fixed
 scratch (page 5: env/preopen buffers, stream/future handle cells, the 64-slot fd

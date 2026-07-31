@@ -3906,80 +3906,50 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (find item lst) into a do/return scan returning the first element
-	 * {@code eql} to the item, or nil. Like {@code member} but yields the element itself
-	 * rather than the tail. Accepts the same {@code :test}/{@code :key} keywords as
-	 * {@code member}; the returned element is the original one, not the keyed value.
+	 * Expands (find item seq) into the shared position-family scan, returning the
+	 * matching ELEMENT rather than its index (see {@code buildPositionScan}). Like
+	 * {@code member} but yields the element itself rather than the tail, and it takes the
+	 * position family's full keyword set --
+	 * {@code :test}/{@code :test-not}/{@code :key}/{@code :start}/{@code :end}/
+	 * {@code :from-end} -- because the two are the same scan; the returned element is the
+	 * original one, not the keyed value.
 	 * @param cons the find expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandFind(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		requireTestKeyKeywords(LispNames.FIND, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
-		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
-		LispSymbol item = new LispSymbol("__find_item");
-		LispSymbol cur = new LispSymbol("__find_cur");
-		// (do ((__find_item item) (__find_cur <seq-as-list lst> (cdr __find_cur)))
-		// ((atom __find_cur) nil)
-		// (if (eql __find_item (car __find_cur)) (return (car __find_cur)) nil))
-		LispVal bindings = listToCons(List.of(listToCons(List.of(item, parts.get(1))),
-				listToCons(List.of(cur, seqAsListForm(parts.get(2)), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal elem = callOf(LispNames.CAR, cur);
-		LispVal match = testMatchForm(testForm, item, keyedForm(keyForm, elem));
-		LispVal body = makeIf(match, makeReturn(elem), LispNil.INSTANCE);
-		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		requireKeywords(LispNames.FIND, parts, 3, LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD,
+				LispNames.KEY_KEYWORD, LispNames.START_KEYWORD, LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
+		return buildPositionScan(parts, PositionMode.ITEM, PositionResult.ELEMENT);
 	}
 
 	/**
-	 * Expands (find-if pred lst) into a do/return scan returning the first element for
-	 * which the predicate is true, or nil. Like {@code find} but tests each element with
-	 * {@code (funcall pred element)} rather than {@code eql}.
+	 * Expands (find-if pred seq) into the shared position-family scan returning the first
+	 * element for which the predicate is true, or nil. Like {@code find} but tests each
+	 * element with {@code (funcall pred element)} rather than {@code eql}; the same
+	 * {@code :key}/{@code :start}/{@code :end}/{@code :from-end} keywords apply.
 	 * @param cons the find-if expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandFindIf(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		LispSymbol pred = new LispSymbol("__findif_pred");
-		LispSymbol cur = new LispSymbol("__findif_cur");
-		// (do ((__findif_pred pred) (__findif_cur <seq-as-list lst> (cdr __findif_cur)))
-		// ((atom __findif_cur) nil)
-		// (if (funcall __findif_pred (car __findif_cur)) (return (car __findif_cur))
-		// nil))
-		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
-				listToCons(List.of(cur, seqAsListForm(parts.get(2)), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal elem = callOf(LispNames.CAR, cur);
-		LispVal test = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem));
-		LispVal body = makeIf(test, makeReturn(elem), LispNil.INSTANCE);
-		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		requireKeywords(LispNames.FIND_IF, parts, 3, LispNames.KEY_KEYWORD, LispNames.START_KEYWORD,
+				LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
+		return buildPositionScan(parts, PositionMode.PREDICATE, PositionResult.ELEMENT);
 	}
 
 	/**
-	 * Expands (find-if-not pred lst) into a do/return scan returning the first element
-	 * for which the predicate is false, or nil. The complement of {@code find-if}: the
-	 * test is {@code (not (funcall pred element))}.
+	 * Expands (find-if-not pred seq) into the shared position-family scan returning the
+	 * first element for which the predicate is false, or nil. The complement of
+	 * {@code find-if}, with the same keywords.
 	 * @param cons the find-if-not expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandFindIfNot(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		LispSymbol pred = new LispSymbol("__findifnot_pred");
-		LispSymbol cur = new LispSymbol("__findifnot_cur");
-		// (do ((__findifnot_pred pred)
-		// (__findifnot_cur <seq-as-list lst> (cdr __findifnot_cur)))
-		// ((atom __findifnot_cur) nil)
-		// (if (not (funcall __findifnot_pred (car __findifnot_cur)))
-		// (return (car __findifnot_cur)) nil))
-		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
-				listToCons(List.of(cur, seqAsListForm(parts.get(2)), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
-		LispVal elem = callOf(LispNames.CAR, cur);
-		LispVal call = listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem));
-		LispVal test = listToCons(List.of(new LispSymbol(LispNames.NOT), call));
-		LispVal body = makeIf(test, makeReturn(elem), LispNil.INSTANCE);
-		return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		requireKeywords(LispNames.FIND_IF_NOT, parts, 3, LispNames.KEY_KEYWORD, LispNames.START_KEYWORD,
+				LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
+		return buildPositionScan(parts, PositionMode.PREDICATE_NOT, PositionResult.ELEMENT);
 	}
 
 	/**
@@ -3995,7 +3965,7 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		requireKeywords(LispNames.POSITION, parts, 3, LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD,
 				LispNames.KEY_KEYWORD, LispNames.START_KEYWORD, LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
-		return buildPositionScan(parts, PositionMode.ITEM);
+		return buildPositionScan(parts, PositionMode.ITEM, PositionResult.INDEX);
 	}
 
 	/**
@@ -4011,7 +3981,7 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		requireKeywords(LispNames.POSITION_IF, parts, 3, LispNames.KEY_KEYWORD, LispNames.START_KEYWORD,
 				LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
-		return buildPositionScan(parts, PositionMode.PREDICATE);
+		return buildPositionScan(parts, PositionMode.PREDICATE, PositionResult.INDEX);
 	}
 
 	/**
@@ -4025,7 +3995,7 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		requireKeywords(LispNames.POSITION_IF_NOT, parts, 3, LispNames.KEY_KEYWORD, LispNames.START_KEYWORD,
 				LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD);
-		return buildPositionScan(parts, PositionMode.PREDICATE_NOT);
+		return buildPositionScan(parts, PositionMode.PREDICATE_NOT, PositionResult.INDEX);
 	}
 
 	/**
@@ -4268,6 +4238,20 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * What a {@code position}-family scan yields on a match: the 0-based INDEX (the
+	 * {@code position} family) or the matching ELEMENT (the {@code find} family). The two
+	 * families are the same scan over the same keyword set and differ only here.
+	 */
+	private enum PositionResult {
+
+		/** {@code position}/{@code position-if}/{@code position-if-not}. */
+		INDEX,
+		/** {@code find}/{@code find-if}/{@code find-if-not}. */
+		ELEMENT
+
+	}
+
+	/**
 	 * Builds the shared {@code position}/{@code position-if}/{@code position-if-not}
 	 * expansion: a single forward do-scan over the sequence (a string is coerced to its
 	 * character list first, like the other sequence scans) honoring {@code :start}/
@@ -4287,7 +4271,7 @@ public final class LispMacroExpander {
 	 *     (if __pos_hit __pos_hit __pos_found)))
 	 * </pre>
 	 */
-	private static LispVal buildPositionScan(List<LispVal> parts, PositionMode mode) {
+	private static LispVal buildPositionScan(List<LispVal> parts, PositionMode mode, PositionResult resultKind) {
 		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
 		LispVal testNotForm = keywordValue(parts, 3, LispNames.TEST_NOT_KEYWORD);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
@@ -4322,8 +4306,12 @@ public final class LispMacroExpander {
 			case PREDICATE -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), item, keyedElem));
 			case PREDICATE_NOT -> makeNot(listToCons(List.of(new LispSymbol(LispNames.FUNCALL), item, keyedElem)));
 		};
-		LispVal recordFound = listToCons(List.of(new LispSymbol(LispNames.SETQ), found, idx));
-		LispVal onHit = fromEndForm == null ? makeReturn(idx) : makeIf(fromv, recordFound, makeReturn(idx));
+		// The find family answers with the element; the position family with the index.
+		// A nil element is indistinguishable from "no match" in the (if hit hit found)
+		// join below, but both answers are nil either way, so the join stays correct.
+		LispVal yield = resultKind == PositionResult.ELEMENT ? callOf(LispNames.CAR, cur) : idx;
+		LispVal recordFound = listToCons(List.of(new LispSymbol(LispNames.SETQ), found, yield));
+		LispVal onHit = fromEndForm == null ? makeReturn(yield) : makeIf(fromv, recordFound, makeReturn(yield));
 		LispVal body = makeIf(match, onHit, LispNil.INSTANCE);
 		LispVal scan = expandDo(
 				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
@@ -6290,9 +6278,11 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Classifies a literal {@code :element-type} argument: {@code '(unsigned-byte 8)} is
-	 * binary, {@code 'character} is text; anything else (including a non-literal
-	 * expression) is rejected so the compilers can resolve the file mode at compile time.
+	 * Classifies a literal {@code :element-type} argument: {@code '(unsigned-byte 8)} --
+	 * or its unparameterized spelling {@code 'unsigned-byte}, which local-time's timezone
+	 * reader uses -- is binary, {@code 'character} is text; anything else (including a
+	 * non-literal expression) is rejected so the compilers can resolve the file mode at
+	 * compile time.
 	 * @param val the element-type argument as it appears in the source
 	 * @return true for the binary element type
 	 */
@@ -6304,6 +6294,11 @@ public final class LispMacroExpander {
 				LispVal spec = quoteParts.get(1);
 				if (spec instanceof LispSymbol sym && LispNames.CHARACTER_TYPE.equals(sym.name())) {
 					return false;
+				}
+				// (unsigned-byte) with no size is (unsigned-byte *); every CL opens such
+				// a stream as a byte stream, which for rontolisp is the one 8-bit shape.
+				if (spec instanceof LispSymbol sym && LispNames.UNSIGNED_BYTE.equals(sym.name())) {
+					return true;
 				}
 				if (spec instanceof LispCons specCons) {
 					List<LispVal> specParts = specCons.toList();
@@ -20070,16 +20065,34 @@ public final class LispMacroExpander {
 		boolean usesFloatFormat = false;
 		boolean usesPrintEscape = false;
 		boolean usesPrintReadably = false;
+		// The load-context pathname variables (LispNames.LOAD_TRUENAME_VAR &c). On the
+		// compile paths they are all nil and stay nil: a library file is SPLICED into the
+		// program at compile time, so nothing is being loaded -- nor compile-file'd -- at
+		// run time. Declared anyway so a library that reads one (local-time's
+		// (or *compile-file-truename* *load-truename*) zoneinfo lookup) compiles.
+		java.util.List<String> loadContextVars = new java.util.ArrayList<>();
 		for (LispVal form : program) {
 			usesMv = usesMv || usesMvOperator(form);
 			usesFloatFormat = usesFloatFormat || usesSymbol(form, LispNames.READ_DEFAULT_FLOAT_FORMAT);
 			usesPrintEscape = usesPrintEscape || usesSymbol(form, LispNames.PRINT_ESCAPE_VAR);
 			usesPrintReadably = usesPrintReadably || usesSymbol(form, LispNames.PRINT_READABLY_VAR);
 		}
-		if (!usesMv && !usesFloatFormat && !usesPrintEscape && !usesPrintReadably) {
+		for (String name : List.of(LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR,
+				LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR)) {
+			for (LispVal form : program) {
+				if (usesSymbol(form, name)) {
+					loadContextVars.add(name);
+					break;
+				}
+			}
+		}
+		if (!usesMv && !usesFloatFormat && !usesPrintEscape && !usesPrintReadably && loadContextVars.isEmpty()) {
 			return program;
 		}
-		List<LispVal> out = new java.util.ArrayList<>(program.size() + 4);
+		List<LispVal> out = new java.util.ArrayList<>(program.size() + 4 + loadContextVars.size());
+		for (String name : loadContextVars) {
+			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(name), LispNil.INSTANCE)));
+		}
 		// The printer-mode variables: declared with defvar (not setq) because the
 		// print-object route BINDS *print-escape* around the method call, and only a
 		// proclaimed-special name gets a dynamic binding. This pass runs AFTER

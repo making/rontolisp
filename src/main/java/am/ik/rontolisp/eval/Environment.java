@@ -522,6 +522,13 @@ public final class Environment implements Scope {
 		// Accepted and ignored: the reader is not readtable-driven, a "readtable" is an
 		// opaque nil token (see LispNames.COPY_READTABLE).
 		env.define(LispNames.READTABLE_VAR, LispNil.INSTANCE);
+		// The load-context pathname variables. *load-pathname* / *load-truename* are
+		// REBOUND around each loaded file (LispEvaluator.loadFile); the compile-file pair
+		// is permanently nil because rontolisp has no compile-file (see LispNames).
+		env.define(LispNames.LOAD_PATHNAME_VAR, LispNil.INSTANCE);
+		env.define(LispNames.LOAD_TRUENAME_VAR, LispNil.INSTANCE);
+		env.define(LispNames.COMPILE_FILE_PATHNAME_VAR, LispNil.INSTANCE);
+		env.define(LispNames.COMPILE_FILE_TRUENAME_VAR, LispNil.INSTANCE);
 		// The interpreter's *features* is a real global variable (the compile backends
 		// substitute the symbol at read time instead; see reader.Features).
 		LispVal featureList = LispNil.INSTANCE;
@@ -1325,6 +1332,23 @@ public final class Environment implements Scope {
 				List<LispVal> elements = new java.util.ArrayList<>(arr.effectiveLength());
 				for (int i = 0; i < arr.effectiveLength(); i++) {
 					elements.add(arr.aref(i));
+				}
+				yield elements;
+			}
+			// The packed vector representations are sequences too: a (unsigned-byte 8)
+			// buffer read with read-sequence is a perfectly good :initial-contents
+			// source (local-time re-packs one as a bit vector).
+			case am.ik.rontolisp.LispIntVector vec -> {
+				List<LispVal> elements = new java.util.ArrayList<>(vec.length());
+				for (int i = 0; i < vec.length(); i++) {
+					elements.add(new LispInteger(vec.elementAt(i)));
+				}
+				yield elements;
+			}
+			case am.ik.rontolisp.LispFloatArray arr -> {
+				List<LispVal> elements = new java.util.ArrayList<>(arr.totalSize());
+				for (int i = 0; i < arr.totalSize(); i++) {
+					elements.add(new LispDouble(arr.elementAt(i)));
 				}
 				yield elements;
 			}
@@ -2550,20 +2574,9 @@ public final class Environment implements Scope {
 		}));
 		// member is registered in LispEvaluator so the optional :test keyword designator
 		// can be applied through the evaluator (it may name a user function or lambda).
-		env.defineFunction(LispNames.FIND, new LispFunction(LispNames.FIND, args -> {
-			requireArgCount(LispNames.FIND, args, 2);
-			LispVal item = args.get(0);
-			LispVal cur = seqAsList(args.get(1));
-			while (cur instanceof LispCons cell) {
-				if (isEq(item, cell.car())) {
-					return cell.car();
-				}
-				cur = cell.cdr();
-			}
-			return LispNil.INSTANCE;
-		}));
-		// position (and position-if/-if-not) are registered in LispEvaluator so the
-		// :test/:test-not/:key keyword designators can be applied through the evaluator.
+		// find (and find-if/-if-not, position and its two) are registered in
+		// LispEvaluator so the :test/:test-not/:key keyword designators can be applied
+		// through the evaluator; the find family shares the position family's scan.
 		env.defineFunction(LispNames.COUNT, new LispFunction(LispNames.COUNT, args -> {
 			requireArgCount(LispNames.COUNT, args, 2);
 			LispVal item = args.get(0);

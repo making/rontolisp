@@ -3,6 +3,9 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.wasm.Instruction;
@@ -16,6 +19,13 @@ import am.ik.wasm.Instruction;
  * i31 integer. A WASI file descriptor is element-type-agnostic, so the binary bit of the
  * mode is dropped here ({@code & 1}) and {@code _open} only sees the direction -- passing
  * the raw binary modes 2/3 would mis-select the write oflags/rights.
+ *
+ * <p>
+ * {@code _open} answers nil when {@code path_open} failed, and the null check + signal
+ * live HERE rather than in the runtime helper: {@code %ERROR} compiles to a catchable
+ * {@code throw} in EH mode (and to the same trap as before outside it), so
+ * {@code (handler-case (open ...) (error () ...))} finally behaves on WASM the way it
+ * does on the other three backends. See {@code .kb/read-load-streams.md}.
  */
 final class WasmOpenCompiler {
 
@@ -33,6 +43,20 @@ final class WasmOpenCompiler {
 		ctx.writer.writeSignedLeb128(OpenModes.staticMode(parts) & OpenModes.OUTPUT_BIT);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_OPEN);
+		int fd = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeSignedLeb128(fd);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(fd);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF, 0x40);
+		// Stack-polymorphic in both modes (unreachable / throw), so the void block type
+		// is correct either way.
+		WasmErrorCompiler.compile(new LispCons(new LispSymbol(LispNames.ERROR_INTERNAL),
+				new LispCons(new LispString("open: cannot open file"), am.ik.rontolisp.LispNil.INSTANCE)), ctx);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeSignedLeb128(fd);
 	}
 
 }

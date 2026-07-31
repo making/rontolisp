@@ -45,6 +45,11 @@ import org.jspecify.annotations.Nullable;
  * time codec (seconds since 1900-01-01 00:00:00 GMT) as pure era-based Gregorian
  * arithmetic; lite: a nil time-zone means GMT, not the local zone (no backend-portable
  * local-zone source exists), and {@code daylight-p} decodes as nil.</li>
+ * <li>{@code merge-pathnames} / {@code truename} -- the two ANSI pathname functions that
+ * are pure namestring work: the merge rule {@code PathnameOps.mergePathnames} implements
+ * (a rontolisp pathname IS its namestring), and {@code probe-file} plus a signal on a
+ * missing file, which is what makes the {@code (ignore-errors (truename x))}
+ * existence-probe idiom work.</li>
  * <li>{@code char-name} -- the standard character names ({@code Space}, {@code Newline},
  * ...), a {@code U+XXXX} label for other non-printing code points, nil for graphic
  * characters; mirrors the interpreter's Java primitive.</li>
@@ -251,6 +256,33 @@ public final class LispPreludeLibrary {
 				      (when (eq (car tail) indicator)
 				        (rplaca (cdr tail) new-value)
 				        (return new-value)))))
+				""");
+		// merge-pathnames / truename: pure namestring work over primitives every
+		// backend has, so ONE Lisp definition serves all four -- unlike make-pathname
+		// and uiop:merge-pathnames*, which stay Java + compile-time folding because
+		// their keyword shapes are resolved at compile time (PathnameOps). The merge
+		// rule is the same one PathnameOps.mergePathnames implements; the two are
+		// pinned against each other by LispPreludeLibraryTest.
+		SOURCES.put(LispNames.MERGE_PATHNAMES, """
+				(defun merge-pathnames (%mp-path &optional %mp-defaults)
+				  (let* ((p (if (stringp %mp-path) %mp-path ""))
+				         (d (if (stringp %mp-defaults) %mp-defaults ""))
+				         (ps (position #\\/ p :from-end t))
+				         (ds (position #\\/ d :from-end t))
+				         (pdir (if ps (subseq p 0 (+ ps 1)) ""))
+				         (pfile (if ps (subseq p (+ ps 1)) p))
+				         (ddir (if ds (subseq d 0 (+ ds 1)) ""))
+				         (dfile (if ds (subseq d (+ ds 1)) d))
+				         (dir (cond ((string= pdir "") ddir)
+				                    ((char= (char pdir 0) #\\/) pdir)
+				                    ((string= ddir "") pdir)
+				                    (t (concatenate 'string ddir pdir)))))
+				    (concatenate 'string dir (if (string= pfile "") dfile pfile))))
+				""");
+		SOURCES.put(LispNames.TRUENAME, """
+				(defun truename (%tn-path)
+				  (or (probe-file %tn-path)
+				      (error "TRUENAME: no such file")))
 				""");
 		SOURCES.put(LispNames.CHAR_NAME, """
 				(defun char-name (c)

@@ -176,7 +176,7 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
   `&key`, `&aux`, nested destructuring patterns) routes through
   `destructuring-bind`, which is deliberately lenient -- a missing argument is
   `nil` and a surplus one is ignored rather than signalling; and a function is
-  limited to 7 physical parameters on the funcall/apply path.
+  limited to 10 physical parameters on the funcall/apply path.
 - user macros are unknown to the runtime `eval` of compiled programs, and a
   `lambda` built at runtime by that `eval` does not parse lambda-list keywords
   (see [Compiled eval Limitations](eval-limitations.md)).

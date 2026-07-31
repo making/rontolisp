@@ -1429,7 +1429,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      342
+      344
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -6238,3 +6238,103 @@ cases:
       (1 3 2 4)
       T
       T
+
+  - name: argument-evaluation-order-left-to-right
+    source: |
+      ;; Common Lisp evaluates argument forms LEFT TO RIGHT. list (and every
+      ;; form that lowers onto it -- backquote, make-array :initial-contents)
+      ;; has to LINK its cons chain from the last element backwards, and the
+      ;; compile backends used to emit the argument expressions in that
+      ;; consumption order, so the side effects ran right to left: a plist built
+      ;; as `(:a ,(read-a) :b ,(read-b)) off a byte stream read its fields in
+      ;; reverse (local-time's TZif header). The order is now pinned.
+      (defun ci-order-noter (buf pos)
+        (lambda (x)
+          (setf (aref buf (aref pos 0)) x)
+          (setf (aref pos 0) (+ 1 (aref pos 0)))
+          x))
+      (defparameter *ci-order-buf* (make-array 3 :initial-element 0))
+      (defparameter *ci-order-pos* (make-array 1 :initial-element 0))
+      (defparameter *ci-order-note* (ci-order-noter *ci-order-buf* *ci-order-pos*))
+      (defun ci-order-reset () (setf (aref *ci-order-pos* 0) 0))
+      (defun ci-order-seen ()
+        (list (aref *ci-order-buf* 0) (aref *ci-order-buf* 1) (aref *ci-order-buf* 2)))
+      (ci-order-reset)
+      (print (list (funcall *ci-order-note* 1) (funcall *ci-order-note* 2)
+                   (funcall *ci-order-note* 3)))
+      (print (ci-order-seen))
+      (ci-order-reset)
+      (print `(,(funcall *ci-order-note* 1) ,(funcall *ci-order-note* 2)
+               ,(funcall *ci-order-note* 3)))
+      (print (ci-order-seen))
+      (ci-order-reset)
+      (print (make-array 3 :initial-contents
+                         (list (funcall *ci-order-note* 1) (funcall *ci-order-note* 2)
+                               (funcall *ci-order-note* 3))))
+      (print (ci-order-seen))
+      ;; A direct call and funcall were already left-to-right; pinned so they stay.
+      (defun ci-order-three (a b c) (list a b c))
+      (ci-order-reset)
+      (print (ci-order-three (funcall *ci-order-note* 1) (funcall *ci-order-note* 2)
+                             (funcall *ci-order-note* 3)))
+      (print (ci-order-seen))
+    expected: |
+      (1 2 3)
+      (1 2 3)
+      (1 2 3)
+      (1 2 3)
+      #(1 2 3)
+      (1 2 3)
+      (1 2 3)
+      (1 2 3)
+
+  - name: local-time-enablement-language-group
+    source: |
+      ;; The language features (ql:quickload "local-time") needs, exercised
+      ;; without the asdf load -- local-time's own tree lives in the quicklisp
+      ;; cache, so the end-to-end run is manual (see .kb/asdf.md).
+      ;; 1. The load-context pathname variables. All four are nil on the compile
+      ;;    backends (nothing is loaded or compile-file'd at run time), which is
+      ;;    what local-time's (or *compile-file-truename* *load-truename*)
+      ;;    zoneinfo lookup reads.
+      (print (list *load-pathname* *load-truename*
+                   *compile-file-pathname* *compile-file-truename*))
+      ;; 2. merge-pathnames -- the ANSI spelling of the namestring merge.
+      (print (list (merge-pathnames "zoneinfo/" "/opt/local-time/")
+                   (merge-pathnames "b.txt" "/opt/a.txt")
+                   (merge-pathnames "/abs/x" "/opt/")))
+      ;; 3. find takes the position family's full keyword set (:start/:end/
+      ;;    :from-end), not just :test/:key -- local-time's timestring splitter
+      ;;    scans a bounded window of the string.
+      (print (list (find #\Z "2024-12-25T00:00:00Z" :test #'char-equal :start 10)
+                   (find #\Z "2024-12-25T00:00:00Z" :test #'char-equal :start 10 :end 15)
+                   (find 3 '(1 2 3 4 3) :from-end t)
+                   (find 30 '((1 10) (2 30) (3 30)) :key #'second)
+                   (find-if #'evenp '(1 3 4 6 7) :from-end t)))
+      ;; 4. make-array :initial-contents accepts ANY sequence, including a
+      ;;    packed (unsigned-byte 8) buffer filled by read-sequence. (An
+      ;;    :element-type 'bit array is a general vector here -- .todo/180.)
+      (print (let ((buf (make-array 4 :element-type '(unsigned-byte 8)
+                                      :initial-contents '(1 0 1 1))))
+               (list (make-array 4 :element-type 'bit :initial-contents buf)
+                     (make-array 3 :initial-contents #(7 8 9))
+                     (make-array 3 :initial-contents "abc"))))
+      ;; 5. A defun with more than seven parameters compiles on WASM too (the
+      ;;    callable-type ceiling is 10 now); local-time's
+      ;;    encode-timestamp-into-values is 7 required + &key.
+      (defun ci-lt-wide (a b c d e f g &key (h 0) (i 0)) (list a b c d e f g h i))
+      (print (ci-lt-wide 1 2 3 4 5 6 7 :i 9))
+      ;; 6. A failed open SIGNALS on every backend (it used to trap on WASM),
+      ;;    which is how local-time falls back to +utc-zone+ when it cannot read
+      ;;    /etc/localtime.
+      (print (handler-case (with-open-file (s "no-such-file-here.txt") (read-line s))
+               (error () :fell-back)))
+      (print (probe-file "no-such-file-here.txt"))
+    expected: |
+      (NIL NIL NIL NIL)
+      ("/opt/local-time/zoneinfo/" "/opt/b.txt" "/abs/x")
+      (#\Z NIL 3 (2 30) 6)
+      (#(1 0 1 1) #(7 8 9) #(#\a #\b #\c))
+      (1 2 3 4 5 6 7 0 9)
+      :FELL-BACK
+      NIL

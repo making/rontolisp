@@ -455,6 +455,40 @@ public final class LispNames {
 	public static final String READTABLE_VAR = "*READTABLE*";
 
 	/**
+	 * The {@code *load-pathname*} standard variable: the path {@code load} was CALLED
+	 * with, as a rontolisp pathname (a string), or nil outside a load. Bound by the
+	 * interpreter's {@code load} / {@code asdf:load-system} / {@code ql:quickload} and by
+	 * the compile-time {@code LoadInliner} around each spliced file, so a library that
+	 * locates its own data files relative to its source -- local-time's zoneinfo
+	 * repository is the motivating one -- resolves identically on every backend.
+	 */
+	public static final String LOAD_PATHNAME_VAR = "*LOAD-PATHNAME*";
+
+	/**
+	 * The {@code *load-truename*} standard variable: the RESOLVED absolute path of the
+	 * file being loaded (nil outside a load). Rontolisp has no filesystem truename
+	 * machinery -- no symlink resolution -- so this is the path
+	 * {@link #LOAD_PATHNAME_VAR} resolves to against the enclosing load directory, which
+	 * is what a library uses it for.
+	 */
+	public static final String LOAD_TRUENAME_VAR = "*LOAD-TRUENAME*";
+
+	/**
+	 * The {@code *compile-file-pathname*} standard variable. Rontolisp has no
+	 * {@code compile-file} -- the compile backends compile a whole program, and a spliced
+	 * library file is LOADED into that program -- so this is permanently nil on every
+	 * backend, which is exactly its value in a real CL that is loading source. Defined
+	 * because the {@code (or *compile-file-truename* *load-truename*)} idiom reads it.
+	 */
+	public static final String COMPILE_FILE_PATHNAME_VAR = "*COMPILE-FILE-PATHNAME*";
+
+	/**
+	 * The {@code *compile-file-truename*} standard variable -- permanently nil, for the
+	 * same reason as {@link #COMPILE_FILE_PATHNAME_VAR}.
+	 */
+	public static final String COMPILE_FILE_TRUENAME_VAR = "*COMPILE-FILE-TRUENAME*";
+
+	/**
 	 * The {@code remove} built-in function (return a copy without items eql to the given
 	 * one).
 	 */
@@ -4097,6 +4131,19 @@ public final class LispNames {
 	 */
 	public static final String SYSTEM_RELATIVE_PATHNAME = "SYSTEM-RELATIVE-PATHNAME";
 
+	/**
+	 * {@code asdf:component-pathname} -- in real ASDF the base pathname of ANY component
+	 * (system, module or file); rontolisp only ever materializes a SYSTEM as a component
+	 * object (its downcase-canonical name, a string), so here it is
+	 * {@link #SYSTEM_SOURCE_DIRECTORY} under the name a library actually calls.
+	 * local-time locates its bundled {@code zoneinfo/} repository with
+	 * {@code (asdf:component-pathname (asdf:find-system :local-time nil))}.
+	 */
+	public static final String COMPONENT_PATHNAME = "COMPONENT-PATHNAME";
+
+	/** The canonical qualified spelling of {@code asdf:component-pathname}. */
+	public static final String ASDF_COMPONENT_PATHNAME = ASDF_PKG + ":" + COMPONENT_PATHNAME;
+
 	/** The canonical qualified spelling of {@code asdf:find-system}. */
 	public static final String ASDF_FIND_SYSTEM = ASDF_PKG + ":" + FIND_SYSTEM;
 
@@ -4128,6 +4175,25 @@ public final class LispNames {
 	 * {@code :type} components.
 	 */
 	public static final String MAKE_PATHNAME = "MAKE-PATHNAME";
+
+	/**
+	 * {@code merge-pathnames} (CL) -- the ANSI spelling of the merge
+	 * {@link #MERGE_PATHNAMES_STAR} already performs (rontolisp's paths are namestrings,
+	 * so the two coincide: uiop's variant only differs in host/device/version components
+	 * that are not modelled). A library that locates a data file relative to its own
+	 * source spells it this way -- local-time's {@code zoneinfo/} lookup is the seed
+	 * case.
+	 */
+	public static final String MERGE_PATHNAMES = "MERGE-PATHNAMES";
+
+	/**
+	 * {@code truename} (CL) -- the canonical namestring of an EXISTING file, signalling a
+	 * {@code file-error} when it does not exist. Rontolisp resolves no symlinks and makes
+	 * nothing absolute (see {@link #PROBE_FILE}), so the value is the argument
+	 * namestring; the load-bearing half is the signal, which is how the
+	 * {@code (ignore-errors (truename ...))} existence-probe idiom works.
+	 */
+	public static final String TRUENAME = "TRUENAME";
 
 	/**
 	 * The {@code ql} package name (a limited, API-compatible subset of Quicklisp). Its
@@ -4724,6 +4790,34 @@ public final class LispNames {
 	 * is a call-time error rather than a silent no-op.
 	 */
 	public static final String RUN_PROGRAM = "RUN-PROGRAM";
+
+	/**
+	 * {@code uiop:directory-exists-p} -- the directory twin of {@link #FILE_EXISTS_P}:
+	 * the namestring (with a trailing {@code /}) when the path names an existing
+	 * DIRECTORY, nil otherwise. Answered through
+	 * {@link am.ik.rontolisp.eval.SourceLoader} like {@link #PROBE_FILE}, so a host
+	 * without a filesystem (the browser playground) answers nil rather than failing.
+	 * local-time's {@code reread-timezone-repository} validates its repository root with
+	 * it.
+	 */
+	public static final String DIRECTORY_EXISTS_P = "DIRECTORY-EXISTS-P";
+
+	/**
+	 * {@code uiop:collect-sub*directories} (stub: resolves, undefined when called).
+	 * Walking a directory tree needs a listing primitive no backend has -- rontolisp's
+	 * whole filesystem surface is "read/write a named file" -- and the WASM sandbox has
+	 * no filesystem at all, so the honest answer is a call-time error. local-time's
+	 * {@code reread-timezone-repository} is the only caller in the loadable-library set;
+	 * naming an individual zone file with {@code define-timezone} works everywhere.
+	 */
+	public static final String COLLECT_SUB_DIRECTORIES = "COLLECT-SUB*DIRECTORIES";
+
+	/**
+	 * {@code uiop:directory-files} (stub: resolves, undefined when called) -- same reason
+	 * as {@link #COLLECT_SUB_DIRECTORIES}: listing a directory is not part of rontolisp's
+	 * filesystem surface on any backend.
+	 */
+	public static final String DIRECTORY_FILES = "DIRECTORY-FILES";
 
 	/**
 	 * {@code uiop::get-pathname-defaults} (internal in real UIOP too, hence the double

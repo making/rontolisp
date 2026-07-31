@@ -3,6 +3,14 @@
 > `buildPositionScan`, and `position-if-not` exists. The other sequence
 > functions below still take :test/:key only.
 >
+> **Update 2026-07-31 (local-time):** the FIND family joined the position family
+> on the shared `buildPositionScan` -- `find`/`find-if`/`find-if-not` now take
+> `:test`/`:test-not`/`:key`/`:start`/`:end`/`:from-end`, in call position AND as
+> first-class values (`positionScanValues` grew an `elementResult` flag), because
+> the two families are the same scan differing only in what a match yields. That
+> closes the "the `-if`/`-if-not` variants take no `:key`" follow-up for the find
+> half; `count-if`, `member-if`, `delete-if` &c still take none.
+>
 > **Update 2026-07-06 (todo 65):** the position family's FIRST-CLASS values
 > now take the full keyword set too — variadic `BuiltinFunctionWrappers`
 > entries re-extract runtime keywords via getf and feed the call-position

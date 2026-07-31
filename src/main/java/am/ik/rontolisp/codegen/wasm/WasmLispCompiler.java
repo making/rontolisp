@@ -427,7 +427,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_DISPATCH_BASE = FUNC_GETENV + 1;
 
-	static final int MAX_CALLABLE_ARITY = 7;
+	static final int MAX_CALLABLE_ARITY = 10;
 
 	// The SPREAD dispatcher: one function over every callable, taking the argument list
 	// as a single cons list (the arity-1 signature). _apply calls it, because the

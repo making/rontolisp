@@ -2764,13 +2764,34 @@ class LispEvaluatorTest {
 	@Test
 	void evalSequenceFunctionsRejectUnknownKeywords() {
 		// Unsupported keywords (:from-end, :start, ...) are rejected loudly rather than
-		// silently ignored.
-		assertThatThrownBy(() -> eval("(find 1 '(1 2) :from-end t)")).isInstanceOf(RuntimeException.class)
-			.hasMessageContaining(":test/:key");
+		// silently ignored. The find family is NOT among them any more: it shares the
+		// position family's scan and so takes the whole keyword set (see
+		// evalFindFamilyTakesThePositionKeywordSet).
 		assertThatThrownBy(() -> eval("(assoc 1 '((1 . a)) :from-end t)")).isInstanceOf(RuntimeException.class)
 			.hasMessageContaining(":test/:key");
 		assertThatThrownBy(() -> eval("(remove 1 '(1 2) :count 1)")).isInstanceOf(RuntimeException.class)
 			.hasMessageContaining(":test/:key");
+		assertThatThrownBy(() -> eval("(find 1 '(1 2) :count 1)")).isInstanceOf(RuntimeException.class)
+			.hasMessageContaining(":FROM-END");
+	}
+
+	@Test
+	void evalFindFamilyTakesThePositionKeywordSet() {
+		// find/find-if/find-if-not ARE the position family's scan with the matching
+		// element as the answer, so they take :test/:test-not/:key/:start/:end/
+		// :from-end too -- local-time's timestring splitter scans a bounded window.
+		assertThat(eval("(find #\\Z \"2024-12-25T00:00:00Z\" :test #'char-equal :start 10)").print()).isEqualTo("#\\Z");
+		assertThat(eval("(find #\\Z \"2024-12-25T00:00:00Z\" :test #'char-equal :start 10 :end 15)").print())
+			.isEqualTo("NIL");
+		assertThat(eval("(find 3 '(1 2 3 4 3) :from-end t)").print()).isEqualTo("3");
+		assertThat(eval("(find 30 '((1 10) (2 30) (3 30)) :key #'second)").print()).isEqualTo("(2 30)");
+		assertThat(eval("(find-if #'evenp '(1 3 4 6 7) :from-end t)").print()).isEqualTo("6");
+		assertThat(eval("(find-if #'evenp '(1 3 4 6 7) :start 4)").print()).isEqualTo("NIL");
+		assertThat(eval("(find-if-not #'evenp '(2 4 5 7))").print()).isEqualTo("5");
+		assertThat(eval("(find-if #'oddp '((1 2) (2 3)) :key #'second)").print()).isEqualTo("(2 3)");
+		// ... including as first-class values, where the keywords arrive at run time.
+		assertThat(eval("(apply #'find 3 '(1 2 3 4 3) '(:from-end t))").print()).isEqualTo("3");
+		assertThat(eval("(funcall #'find-if #'evenp '(1 3 4 6 7) :from-end t)").print()).isEqualTo("6");
 	}
 
 	@Test
@@ -4916,8 +4937,9 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%peek-char", "%set-fill-pointer",
 					"%string-compare", "%run-handlers")
+			.contains("MAKE-PATHNAME", "MERGE-PATHNAMES", "TRUENAME", "PROBE-FILE")
 			.isSorted()
-			.hasSize(342);
+			.hasSize(344);
 	}
 
 	@Test

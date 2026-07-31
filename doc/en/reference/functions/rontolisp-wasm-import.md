@@ -55,4 +55,4 @@ buffer with the exported `__ronto_alloc`) and returned as a `(ptr, len)` pair
 - Instantiating the compiled module requires the host to provide every declared
   import; `wasmtime run` needs a `--preload <module>=<file>.wasm` for each
   import module name, and a JavaScript host passes an import object.
-- At most 7 parameters (the general WASM-backend arity limit).
+- At most 10 parameters (the general WASM-backend arity limit).

@@ -54,7 +54,9 @@
 | `peek-char` | `(peek-char nil s)`, `(peek-char t s)`, `(peek-char #\; s)` | ストリームの次の文字を消費せずに返します。`peek-type` が `nil` なら何も読み飛ばさず、`t` なら空白を、文字ならその文字までを読み飛ばします。返した文字はストリームに残ります。EOF では `end-of-file` を通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
 | `open` | `(open "f.txt")`, `(open "f.txt" :output)`, `(open "f.bin" :input '(unsigned-byte 8))` | ファイルを開いてストリームを返します。方向はリテラルの `:input`(デフォルト、読み込み)または `:output`(作成/切り詰め、書き込み)でなければなりません。省略可能な要素型はリテラルの `'character`(デフォルト、テキスト)または `'(unsigned-byte 8)`(バイナリ)でなければなりません |
 | `close` | `(close stream)` | `open` で開いたストリームを閉じます。`t` を返します |
-| `probe-file` | `(probe-file "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil`。存在しないパスで失敗しない唯一のファイル操作です（`open` は WASM でトラップし、`handler-case` では捕捉できません）。`uiop:file-exists-p` は同じ操作です |
+| `probe-file` | `(probe-file "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil`。存在しないパスで失敗しない唯一のファイル操作です（`open` は通知します）。`uiop:file-exists-p` は同じ操作です |
+| `truename` | `(truename "f.txt")` | ファイルが存在すればそのパス名、存在しなければエラー — `probe-file` の通知する版であり、`(ignore-errors (truename p))` が可搬な存在検査になる理由です |
+| `merge-pathnames` | `(merge-pathnames "zoneinfo/" "/opt/lt/")` | 第 1 の名前文字列の欠けている部分を第 2 のもので補います。絶対ディレクトリが優先され、相対ディレクトリは連結され、無い場合は defaults のものが使われます。`uiop:merge-pathnames*` は同じマージです |
 | `open-stream-p` | `(open-stream-p stream)` | ハンドルが開いているストリームを指す間は `t`、`close` 後は `nil` (インタプリタ/JVM と `--component` のソケットでは正確) |
 | `force-output` | `(force-output stream)` | 出力ストリームを書き出す (引数なしは標準出力)。nil を返す |
 | `finish-output` | `(finish-output stream)` | `force-output` と同じ操作。ここでは書き出し後の書き込みはすべて同期的 |
@@ -507,6 +509,7 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 | `asdf:defsystem` | `(asdf:defsystem :my-lib :components ((:file "main")))` | システムを定義する (名前・`:depends-on`・`:serial`・`:components`)。後続の `load-system` 用 |
 | `asdf:load-system` | `(asdf:load-system :my-lib)` | システムをロードする: まず依存システム、次にコンポーネントファイルを順に (コンパイルパスではリテラルかつトップレベルのフォーム) |
 | `asdf:system-relative-pathname` | `(asdf:system-relative-pathname :my-lib "data/tlds.dat")` | システムのソースディレクトリを基準に解決した名前文字列 (コンパイルパスではリテラルへ畳み込まれる) |
+| `asdf:component-pathname` | `(asdf:component-pathname (asdf:find-system :my-lib))` | 読み込まれたシステムが見つかったディレクトリ (末尾に `/`)。rontolisp がコンポーネントオブジェクトとして実体化するのはシステムだけなので、これはそのソースディレクトリです |
 
 ## uiop パッケージの関数
 
@@ -519,6 +522,7 @@ rontolisp が実装しているメンバは以下のとおりで、各名前は�
 |----------|---------|--------|
 | `uiop:getenv` | `(uiop:getenv "PATH")` | 環境変数の値を文字列として、未設定の場合は `nil` を返します。Common Lisp に `getenv` がないためここに置かれています。すべてのバックエンドで動作します。WASM は Preview 1 では実際のホスト環境を、`--component` モードでは `wasi:cli/environment@0.3.0` を読みます (wasmtime に `--env`/`-S inherit-env` を渡してください) |
 | `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil` — `probe-file` と同じ契約であり、すべてのバックエンドでその基本操作へ落とされます |
+| `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | ディレクトリが存在すればそのパス名、存在しなければ `nil`（インタプリタのみ）。ディレクトリの一覧は提供されません: `uiop:collect-sub*directories` / `uiop:directory-files` は解決されますが呼び出すと通知します |
 | `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `"/tmp/b.txt"` — デフォルトを考慮したパス名のマージ (ここではパス名は名前文字列そのものです)。インタプリタでは実行時の関数、コンパイル済みバックエンドではコンパイラがリテラルへ畳み込める呼び出しのみ |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録 (lite: グローバル、パッケージごとのスコープなし)。リテラルなトップレベル呼び出しはコンパイル時ディレクティブなので、すべてのバックエンドで動作します |
 | `uiop:emptyp` | `(uiop:emptyp "")` | `nil` および長さ 0 のベクタ・文字列に対して `t`、それ以外は `nil` |

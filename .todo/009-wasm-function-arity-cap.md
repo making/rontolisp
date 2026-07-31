@@ -1,6 +1,26 @@
 # WASM: raise the 7-parameter function limit
 
-**Status:** documented + guarded, not raised; **parked, not scheduled**
+**Status: RAISED to 10 (2026-07-31).** `MAX_CALLABLE_ARITY` = 10. The "What to do
+if raised" recipe below held exactly as written -- the `callable_arity_N` types,
+the dispatch bodies and the dependent `TYPE_*`/`FUNC_*` constants are all derived
+from the constant and followed on their own; the `--component` blobs were
+unaffected, confirming the "why not raised now" section's correction of the
+original blocker.
+
+What forced it: local-time's `encode-timestamp-into-values` is 7 required
+parameters plus `&key`, which desugars to 8 (required + `&rest`) -- and
+`WasmArityBundler` only bundles FIXED-arity defuns, so a VARIADIC definition past
+the ceiling still hard-errored. Raising the ceiling removes that whole class
+rather than widening the bundler.
+
+Still open at the new ceiling, with the same idiomatic workaround: an 11+
+parameter `lambda`, an 11+ parameter `&rest` defun, and `#'name` of a bundled
+function. The bundler is still live (it now triggers at 11 rather than 8) and
+`doc/{en,ja}/compiling/wasm.md` states the new number.
+
+The original text follows.
+
+**Status (historical):** documented + guarded, not raised; **parked, not scheduled**
 (re-checked 2026-07-17: the limit and both guards are still live, the stated
 blocker was not -- see "Why not raised now"). **Update 2026-07-05:** the
 practical pressure is off -- `WasmArityBundler` (a WASM-only AST pre-pass) now

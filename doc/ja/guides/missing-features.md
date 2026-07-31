@@ -178,7 +178,7 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
 - ラムダリスト: 拡張された `defmacro` のラムダリスト（`&whole`、`&optional`、
   `&key`、`&aux`、入れ子の分配パターン）は `destructuring-bind` を経由します。
   これは意図的に寛容で、引数の不足は `nil`、余剰は無視となりエラーになりません。
-  また funcall/apply 経由の呼び出しでは関数の物理パラメータは 7 個までです。
+  また funcall/apply 経由の呼び出しでは関数の物理パラメータは 10 個までです。
 - ユーザーマクロはコンパイル済みプログラムの実行時 `eval` では認識されず、
   その `eval` がランタイムに構築する `lambda` はラムダリストキーワードを
   解釈しません（[コンパイル済み eval の制限](eval-limitations.md)を参照）。

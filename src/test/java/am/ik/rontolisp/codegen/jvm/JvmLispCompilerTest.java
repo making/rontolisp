@@ -5869,12 +5869,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("342");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("344");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("342");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("344");
 	}
 
 	@Test
@@ -6722,6 +6722,44 @@ class JvmLispCompilerTest {
 				(defparameter *d* (funcall *bump* 1))
 				(print (list *a* *b* *d*))
 				""")).isEqualTo("(1 2 1)");
+	}
+
+	@Test
+	void compileArgumentFormsEvaluateLeftToRight() throws Exception {
+		// Common Lisp evaluates argument forms left to right. list (and everything that
+		// lowers onto it -- backquote, make-array :initial-contents) LINKS its cons
+		// chain from the last element backwards, and emitting the arguments in that
+		// consumption order used to run the side effects right to left (.todo/014):
+		// a `(:a ,(read-a) :b ,(read-b)) plist off a byte stream read its fields in
+		// reverse. compiler.ArgumentOrder decides which arguments need the temp.
+		assertThat(compileAndRun("""
+				(defun noter (buf pos)
+				  (lambda (x)
+				    (setf (aref buf (aref pos 0)) x)
+				    (setf (aref pos 0) (+ 1 (aref pos 0)))
+				    x))
+				(defparameter *buf* (make-array 3 :initial-element 0))
+				(defparameter *pos* (make-array 1 :initial-element 0))
+				(defparameter *note* (noter *buf* *pos*))
+				(defun reset () (setf (aref *pos* 0) 0))
+				(defun seen () (list (aref *buf* 0) (aref *buf* 1) (aref *buf* 2)))
+				(reset)
+				(print (list (funcall *note* 1) (funcall *note* 2) (funcall *note* 3)))
+				(print (seen))
+				(reset)
+				(print `(,(funcall *note* 1) ,(funcall *note* 2) ,(funcall *note* 3)))
+				(print (seen))
+				(reset)
+				(print (make-array 3 :initial-contents
+				                   (list (funcall *note* 1) (funcall *note* 2) (funcall *note* 3))))
+				(print (seen))
+				""")).isEqualTo("""
+				(1 2 3)
+				(1 2 3)
+				(1 2 3)
+				(1 2 3)
+				#(1 2 3)
+				(1 2 3)""");
 	}
 
 	@Test

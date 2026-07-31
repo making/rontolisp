@@ -123,11 +123,20 @@
     (local.get $ret))
 
   ;; Return the first preopened directory descriptor (cached).
+  ;; The preopened directory descriptor, cached. -1 when the host granted NO preopen
+  ;; (an empty get-directories list): reading the first element of an empty list would
+  ;; hand open-at descriptor handle 0 and TRAP ("unknown handle index 0"), which no
+  ;; handler-case can catch -- so the caller turns -1 into a plain errno instead, and a
+  ;; program that probes for an optional file under a component with no --dir simply
+  ;; sees "not there" like it does on Preview 1.
   (func $ensure_preopen (result i32)
     (if (i32.eqz (i32.load (i32.const 0x50040)))
       (then
         (call $get_directories (i32.const 0x50030))
-        (i32.store (i32.const 0x50044) (i32.load (i32.load (i32.const 0x50030))))
+        (i32.store (i32.const 0x50044)
+          (if (result i32) (i32.load (i32.const 0x50034))
+            (then (i32.load (i32.load (i32.const 0x50030))))
+            (else (i32.const -1))))
         (i32.store (i32.const 0x50040) (i32.const 1))))
     (i32.load (i32.const 0x50044)))
 
@@ -220,6 +229,8 @@
     (param $oflags i32) (param $rb i64) (param $ri i64) (param $fdflags i32) (param $fdout i32) (result i32)
     (local $pre i32) (local $df i32) (local $idx i32) (local $sl i32)
     (local.set $pre (call $ensure_preopen))
+    ;; No preopened directory: nothing can be opened, so report the failure as an errno.
+    (if (i32.eq (local.get $pre) (i32.const -1)) (then (return (i32.const 76))))
     (local.set $df (if (result i32) (i32.eqz (local.get $oflags))
       (then (i32.const 1)) (else (i32.const 2))))
     (call $open_at (local.get $pre) (i32.const 0) (local.get $pptr) (local.get $plen)

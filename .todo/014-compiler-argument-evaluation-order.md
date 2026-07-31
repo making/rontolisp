@@ -1,5 +1,24 @@
 # 14. Compilers evaluate call/`list` argument forms right-to-left
 
+**Status: DONE (2026-07-31)** -- all four backends evaluate argument forms left to
+right. Full account, including why only the cons-chain-linking emitters were
+affected and why `ArgumentOrder` refuses to treat a bare variable reference as
+reorderable: `.kb/argument-evaluation-order.md`. Pinned by the ci-spec case
+`argument-evaluation-order-left-to-right` and
+`Jvm/WasmLispCompilerTest#*ArgumentFormsEvaluateLeftToRight`.
+
+The "Where to look" guess below was half right: the JVM/WASM `list` emitters were
+indeed the culprit and the fix is indeed "evaluate into a temp, then load the
+temps". It was wrong about the scope -- direct calls, `funcall`, `+`, `format`,
+`vector` and `list*` were ALREADY left to right, because their emitters consume
+operands in the same order they push them. Only `list` (and what lowers onto it:
+backquote, `make-array :initial-contents`) has to consume its operands backwards.
+
+The third field sighting arrived before the fix: local-time's TZif reader builds
+its header plist with a backquote over six sequential `read-byte` groups, so
+`/etc/localtime` decoded with its six fields REVERSED and the failure surfaced
+three call levels away as an out-of-bounds `elt`.
+
 ## Problem
 
 Common Lisp specifies that the argument forms of a function call (and the

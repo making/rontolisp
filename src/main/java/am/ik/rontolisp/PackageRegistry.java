@@ -137,10 +137,11 @@ public final class PackageRegistry {
 			LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF, LispNames.SIMPLE_CONDITION_FORMAT_CONTROL,
 			LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, LispNames.TYPE_ERROR_DATUM, LispNames.TYPE_ERROR_EXPECTED_TYPE,
 			LispNames.CELL_ERROR_NAME, LispNames.UNBOUND_SLOT_INSTANCE, LispNames.MAKE_PATHNAME,
-			LispNames.COPY_READTABLE, LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE,
-			LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF, LispNames.INVOKE_RESTART,
-			LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING,
-			LispNames.ABORT, LispNames.CONTINUE);
+			LispNames.MERGE_PATHNAMES, LispNames.TRUENAME, LispNames.COPY_READTABLE,
+			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE, LispNames.FIND_PACKAGE,
+			LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF, LispNames.INVOKE_RESTART, LispNames.FIND_RESTART,
+			LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING, LispNames.ABORT,
+			LispNames.CONTINUE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
@@ -148,7 +149,8 @@ public final class PackageRegistry {
 			LispNames.INTERNAL_TIME_UNITS_PER_SECOND, LispNames.PRINT_CIRCLE_VAR, LispNames.PRINT_ESCAPE_VAR,
 			LispNames.PRINT_READABLY_VAR, LispNames.FEATURES_VAR, LispNames.STANDARD_OUTPUT_VAR,
 			LispNames.ERROR_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR, LispNames.READTABLE_VAR,
-			LispNames.LAMBDA_LIST_KEYWORDS);
+			LispNames.LAMBDA_LIST_KEYWORDS, LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR,
+			LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR);
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also
@@ -371,7 +373,8 @@ public final class PackageRegistry {
 		// are external.
 		define(new LispPackage(LispNames.ASDF_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.DEFSYSTEM, LispNames.LOAD_SYSTEM, LispNames.FIND_SYSTEM,
-						LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME))));
+						LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME,
+						LispNames.COMPONENT_PATHNAME))));
 		// A limited, API-compatible subset of Quicklisp: ql:quickload downloads a system
 		// (and its dependencies) from the real Quicklisp distribution into a local cache
 		// and then defers to the asdf subset (see eval.QuicklispClient). Its canonical
@@ -388,7 +391,8 @@ public final class PackageRegistry {
 		Set<String> uiopExternals = Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING, LispNames.GETENV,
 				LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
 				LispNames.MERGE_PATHNAMES_STAR, LispNames.FILE_EXISTS_P, LispNames.RUN_PROGRAM, LispNames.EMPTYP,
-				LispNames.FIRST_CHAR, LispNames.LAST_CHAR);
+				LispNames.FIRST_CHAR, LispNames.LAST_CHAR, LispNames.DIRECTORY_EXISTS_P,
+				LispNames.COLLECT_SUB_DIRECTORIES, LispNames.DIRECTORY_FILES);
 		Set<String> uiopSymbols = new HashSet<>(uiopExternals);
 		// Internal in real UIOP too: every call site spells it
 		// uiop::get-pathname-defaults. Owned by the package rather than reached by

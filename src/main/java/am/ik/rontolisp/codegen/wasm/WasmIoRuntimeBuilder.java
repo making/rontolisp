@@ -28,7 +28,12 @@ final class WasmIoRuntimeBuilder {
 	/**
 	 * Builds the _open(path, mode) function body. Opens the file named by the path string
 	 * via WASI path_open (mode 0 = read, 1 = create/truncate for write) and returns the
-	 * file descriptor as an i31 integer. Traps on a failed open.
+	 * file descriptor as an i31 integer, or {@code ref.null eq} (nil) when path_open
+	 * failed. The failure is answered rather than trapped so the CALL SITE can signal a
+	 * real Lisp error ({@link WasmOpenCompiler}) -- a trap is not catchable, and a
+	 * library that probes for an optional file by opening it inside {@code handler-case}
+	 * (local-time reading {@code /etc/localtime}) would otherwise abort the whole program
+	 * on the one backend that has no filesystem.
 	 * @return the function body bytes
 	 */
 	static byte[] buildOpenBody() {
@@ -104,10 +109,12 @@ final class WasmIoRuntimeBuilder {
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		getLocal(w, OFF);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// if errno != 0: trap
+		// if errno != 0: answer nil (the call site turns it into a Lisp error)
 		getLocal(w, PLEN);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// return ref.i31(mem[OPEN_FD_ADDR])
 		loadMem32(w, WasmLispCompiler.OPEN_FD_ADDR);

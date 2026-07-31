@@ -323,6 +323,7 @@ final class CompileTimePathnameFolder {
 		}
 		if (LispNames.ASDF_PKG.equals(qn.pkg())
 				&& (LispNames.FIND_SYSTEM.equals(qn.member()) || LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())
+						|| LispNames.COMPONENT_PATHNAME.equals(qn.member())
 						|| LispNames.SYSTEM_RELATIVE_PATHNAME.equals(qn.member()))) {
 			return true;
 		}
@@ -395,7 +396,10 @@ final class CompileTimePathnameFolder {
 			if (LispNames.FIND_SYSTEM.equals(qn.member())) {
 				return reduceFindSystem(args, systems, parameters);
 			}
-			if (LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())) {
+			if (LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())
+					|| LispNames.COMPONENT_PATHNAME.equals(qn.member())) {
+				// component-pathname of a SYSTEM is its source directory, and a system is
+				// the only component object rontolisp materializes.
 				return reduceSystemSourceDirectory(args, systems, parameters);
 			}
 			if (LispNames.SYSTEM_RELATIVE_PATHNAME.equals(qn.member())) {

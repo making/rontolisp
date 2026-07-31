@@ -721,6 +721,24 @@ public final class LispEvaluator {
 			// The truename is the namestring itself (see LispNames.PROBE_FILE).
 			return this.sourceLoader.exists(path.value()) ? path : LispNil.INSTANCE;
 		}));
+		// uiop:directory-exists-p -- probe-file's directory twin, answered through the
+		// same SourceLoader so a host without a filesystem simply says nil.
+		String directoryExistsPName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.DIRECTORY_EXISTS_P);
+		this.globalEnv.defineFunction(directoryExistsPName, new LispFunction(directoryExistsPName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(directoryExistsPName + " expects 1 argument, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispString path)) {
+				throw new LispEvalException(directoryExistsPName + " expects a string pathname");
+			}
+			if (!this.sourceLoader.directoryExists(path.value())) {
+				return LispNil.INSTANCE;
+			}
+			// UIOP answers with a pathname in DIRECTORY form; rontolisp's namestring
+			// equivalent is the trailing slash, which callers concatenate onto.
+			String value = path.value();
+			return value.endsWith("/") ? path : new LispString(value + "/");
+		}));
 		// uiop:add-package-local-nickname -- lite: registers a GLOBAL nickname (no
 		// per-package scoping); the mechanism libraries recommend for shortening long
 		// package names (jzon's README: (uiop:add-package-local-nickname '#:jzon
@@ -1112,18 +1130,14 @@ public final class LispEvaluator {
 				args -> everyValues(args.get(0), predicateSequences(LispNames.EVERY, args))));
 		this.globalEnv.defineFunction(LispNames.SOME, new LispFunction(LispNames.SOME,
 				args -> someValues(args.get(0), predicateSequences(LispNames.SOME, args))));
-		this.globalEnv.defineFunction(LispNames.FIND_IF, new LispFunction(LispNames.FIND_IF, args -> {
-			if (args.size() != 2) {
-				throw new LispEvalException(LispNames.FIND_IF + " expects 2 arguments, got " + args.size());
-			}
-			return findIfValues(args.get(0), Environment.seqAsList(args.get(1)));
-		}));
-		this.globalEnv.defineFunction(LispNames.FIND_IF_NOT, new LispFunction(LispNames.FIND_IF_NOT, args -> {
-			if (args.size() != 2) {
-				throw new LispEvalException(LispNames.FIND_IF_NOT + " expects 2 arguments, got " + args.size());
-			}
-			return findIfNotValues(args.get(0), Environment.seqAsList(args.get(1)));
-		}));
+		// The find family IS the position family's scan with the matching ELEMENT as
+		// the answer, so both share one runtime and take the same keyword set.
+		this.globalEnv.defineFunction(LispNames.FIND, new LispFunction(LispNames.FIND,
+				args -> positionScanValues(LispNames.FIND, args, PositionScanMode.ITEM, true)));
+		this.globalEnv.defineFunction(LispNames.FIND_IF, new LispFunction(LispNames.FIND_IF,
+				args -> positionScanValues(LispNames.FIND_IF, args, PositionScanMode.PREDICATE, true)));
+		this.globalEnv.defineFunction(LispNames.FIND_IF_NOT, new LispFunction(LispNames.FIND_IF_NOT,
+				args -> positionScanValues(LispNames.FIND_IF_NOT, args, PositionScanMode.PREDICATE_NOT, true)));
 		// The position family is registered here (not in Environment) so the
 		// :test/:test-not/:key designators can be applied through the evaluator; the
 		// full keyword set (:start/:end/:from-end too) is parsed at runtime so
@@ -1131,11 +1145,11 @@ public final class LispEvaluator {
 		// (apply #'position delimiter seq :end right other-keys)). The call position
 		// routes through the shared macro expansion instead.
 		this.globalEnv.defineFunction(LispNames.POSITION, new LispFunction(LispNames.POSITION,
-				args -> positionScanValues(LispNames.POSITION, args, PositionScanMode.ITEM)));
+				args -> positionScanValues(LispNames.POSITION, args, PositionScanMode.ITEM, false)));
 		this.globalEnv.defineFunction(LispNames.POSITION_IF, new LispFunction(LispNames.POSITION_IF,
-				args -> positionScanValues(LispNames.POSITION_IF, args, PositionScanMode.PREDICATE)));
+				args -> positionScanValues(LispNames.POSITION_IF, args, PositionScanMode.PREDICATE, false)));
 		this.globalEnv.defineFunction(LispNames.POSITION_IF_NOT, new LispFunction(LispNames.POSITION_IF_NOT,
-				args -> positionScanValues(LispNames.POSITION_IF_NOT, args, PositionScanMode.PREDICATE_NOT)));
+				args -> positionScanValues(LispNames.POSITION_IF_NOT, args, PositionScanMode.PREDICATE_NOT, false)));
 		this.globalEnv.defineFunction(LispNames.COUNT_IF, new LispFunction(LispNames.COUNT_IF, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.COUNT_IF + " expects 2 arguments, got " + args.size());
@@ -1392,31 +1406,26 @@ public final class LispEvaluator {
 			// string): system-source-directory accepts it back verbatim.
 			return new LispString(name);
 		}));
-		String systemSourceDirectoryName = PackageRegistry.qualify(LispNames.ASDF_PKG,
-				LispNames.SYSTEM_SOURCE_DIRECTORY);
-		this.globalEnv.defineFunction(systemSourceDirectoryName, new LispFunction(systemSourceDirectoryName, args -> {
-			if (args.size() != 1) {
-				throw new LispEvalException(
-						LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY + " expects 1 argument, got " + args.size());
-			}
-			String name;
-			if (args.get(0) instanceof LispString str) {
-				name = AsdfSystems.designator(LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY, str);
-			}
-			else {
-				name = AsdfSystems.designator(LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY, args.get(0));
-			}
-			AsdfSystems.LispSystem system = this.asdfSystems.get(name);
-			if (system == null) {
-				throw new LispEvalException(
-						LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY + ": system not registered: " + name);
-			}
-			String base = system.baseDir();
-			if (base == null || base.isEmpty()) {
-				return new LispString("./");
-			}
-			return new LispString(base.endsWith("/") ? base : base + "/");
-		}));
+		// asdf:component-pathname is the same lookup under the name a library actually
+		// calls: the only component object rontolisp materializes IS a system.
+		for (String member : List.of(LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.COMPONENT_PATHNAME)) {
+			String qualified = PackageRegistry.qualify(LispNames.ASDF_PKG, member);
+			this.globalEnv.defineFunction(qualified, new LispFunction(qualified, args -> {
+				if (args.size() != 1) {
+					throw new LispEvalException(qualified + " expects 1 argument, got " + args.size());
+				}
+				String name = AsdfSystems.designator(qualified, args.get(0));
+				AsdfSystems.LispSystem system = this.asdfSystems.get(name);
+				if (system == null) {
+					throw new LispEvalException(qualified + ": system not registered: " + name);
+				}
+				String base = system.baseDir();
+				if (base == null || base.isEmpty()) {
+					return new LispString("./");
+				}
+				return new LispString(base.endsWith("/") ? base : base + "/");
+			}));
+		}
 		// asdf:system-relative-pathname: the one-call form of
 		// (merge-pathnames* relative (system-source-directory system)). A library that
 		// bundles a data file next to its .asd names it this way -- quri's etld.lisp
@@ -1560,6 +1569,13 @@ public final class LispEvaluator {
 		// is scoped to the load and does not leak to the caller, like Common Lisp binding
 		// *package* for the duration of load.
 		this.packageResolver.pushPackage();
+		// *load-pathname* / *load-truename* for the duration of the file, so a library
+		// that locates a data directory relative to its own source finds it. Bound
+		// dynamically (not assigned) so a nested load restores the outer file's values.
+		this.specialVars.add(LispNames.LOAD_PATHNAME_VAR);
+		this.specialVars.add(LispNames.LOAD_TRUENAME_VAR);
+		this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR, new LispString(rawPath));
+		this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR, new LispString(resolved));
 		try {
 			// Only a file that textually contains #. pays for the marker read + the
 			// per-form substitution walk; every other file keeps the plain read.
@@ -1575,6 +1591,8 @@ public final class LispEvaluator {
 			}
 		}
 		finally {
+			this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
+			this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
 			this.packageResolver.popPackage();
 			this.loadDirStack.removeLast();
 		}
@@ -2906,6 +2924,10 @@ public final class LispEvaluator {
 			// for first-class use (#'find etc.).
 			case LispNames.FIND:
 				return eval(LispMacroExpander.expandFind(cons), env);
+			case LispNames.FIND_IF:
+				return eval(LispMacroExpander.expandFindIf(cons), env);
+			case LispNames.FIND_IF_NOT:
+				return eval(LispMacroExpander.expandFindIfNot(cons), env);
 			case LispNames.POSITION:
 				return eval(LispMacroExpander.expandPosition(cons), env);
 			case LispNames.POSITION_IF:
@@ -5185,51 +5207,34 @@ public final class LispEvaluator {
 		return LispNil.INSTANCE;
 	}
 
-	// Return the first element for which the predicate is true, or nil
-	// (Common Lisp find-if semantics, single-list form).
-	private LispVal findIfValues(LispVal predicate, LispVal list) {
-		while (list instanceof LispCons cell) {
-			if (isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
-				return cell.car();
-			}
-			list = cell.cdr();
-		}
-		return LispNil.INSTANCE;
-	}
-
-	// Return the first element for which the predicate is false, or nil
-	// (Common Lisp find-if-not semantics, single-list form; the complement of find-if).
-	private LispVal findIfNotValues(LispVal predicate, LispVal list) {
-		while (list instanceof LispCons cell) {
-			if (!isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv))) {
-				return cell.car();
-			}
-			list = cell.cdr();
-		}
-		return LispNil.INSTANCE;
-	}
-
 	// Return the 0-based index of the first element satisfying the predicate
 	// (Common Lisp position-if), or nil. Like position but tests with the predicate.
 	/** The matching flavor of a runtime {@code position}-family scan. */
 	private enum PositionScanMode {
 
 		/**
-		 * {@code position}: the first argument is an item compared by :test/:test-not.
+		 * {@code position}/{@code find}: the first argument is an item compared by
+		 * :test/:test-not.
 		 */
 		ITEM,
-		/** {@code position-if}: the first argument is a predicate. */
+		/** {@code position-if}/{@code find-if}: the first argument is a predicate. */
 		PREDICATE,
-		/** {@code position-if-not}: the first argument is a negated predicate. */
+		/**
+		 * {@code position-if-not}/{@code find-if-not}: the first argument is a negated
+		 * predicate.
+		 */
 		PREDICATE_NOT
 
 	}
 
 	// The runtime counterpart of LispMacroExpander.buildPositionScan for first-class
 	// use: a forward scan honoring :start/:end, where a :from-end match records the
-	// index and keeps scanning (the last match wins). :test/:test-not apply only to
-	// position (ITEM mode); a nil keyword value counts as absent, like the expansion.
-	private LispVal positionScanValues(String opName, List<LispVal> args, PositionScanMode mode) {
+	// match and keeps scanning (the last match wins). :test/:test-not apply only to
+	// position/find (ITEM mode); a nil keyword value counts as absent, like the
+	// expansion. elementResult selects the find family's answer (the matching element)
+	// over the position family's (its index) -- the two differ in nothing else.
+	private LispVal positionScanValues(String opName, List<LispVal> args, PositionScanMode mode,
+			boolean elementResult) {
 		if (args.size() < 2) {
 			throw new LispEvalException(opName + " expects at least 2 arguments, got " + args.size());
 		}
@@ -5280,10 +5285,11 @@ public final class LispEvaluator {
 					case PREDICATE_NOT -> !isTruthy(apply(item, List.of(elem), this.globalEnv));
 				};
 				if (match) {
+					LispVal answer = elementResult ? cell.car() : new LispInteger(index);
 					if (!fromEnd) {
-						return new LispInteger(index);
+						return answer;
 					}
-					found = new LispInteger(index);
+					found = answer;
 				}
 			}
 			index++;
