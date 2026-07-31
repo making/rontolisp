@@ -34,16 +34,19 @@ time to WebAssembly:
 - **The win/lose state, and every triangle** — you, the enemies, the walkers,
   the glowing blades and bolts are tessellated each frame from yaw-rotated
   boxes for the angular parts (armor plates, packs, belts — genuinely flat in
-  the source designs) and from smooth-normaled **cylinders and ellipsoids**
-  (`emit-cylinder` / `emit-cyl-beam` / `emit-ellipsoid`, and the `part-cyl` /
-  `part-cyl-beam` / `part-ellipsoid` wrappers that mirror `part`) for the round
-  ones — heads, helmet domes, limbs, gun barrels, saber/blade rods, ice
-  boulders and clouds. A low-poly prism still reads as round because its
-  per-vertex normal is the true radial direction, not a flat per-face one, so
-  the lit shader gradient does the rest. Struck enemies flash red, and beating
-  Vader sets off a sky of fireworks. The blades, bolts, damage flashes and
-  fireworks are a second **additive-blended pass** over the same vertex
-  buffer, so they bloom against the snow.
+  the source designs, plus the AT-AT's deliberately mechanical legs) and from
+  smooth-normaled **cylinders and ellipsoids** (`emit-cylinder` /
+  `emit-cyl-beam` / `emit-ellipsoid`, and the `part-cyl` / `part-cyl-beam` /
+  `part-ellipsoid` wrappers that mirror `part`) for the round ones — heads,
+  helmet domes, limbs, gun barrels, saber/blade rods, AT-AT hip joints,
+  blaster bolts, ground shadows, snow-drift mounds, ice boulders and clouds. A
+  low-poly prism still reads as round because its per-vertex normal is the
+  true radial direction, not a flat per-face one, so the lit shader gradient
+  does the rest. Struck enemies flash red, and beating Vader sets off a sky of
+  fireworks — the sparks and the muzzle/impact/damage flashes are all round
+  too. The blades, bolts, damage flashes and fireworks are a second
+  **additive-blended pass** over the same vertex buffer, so they bloom
+  against the snow.
 - **Materials** — every part also carries a **shine** value (matte cloth/snow
   vs. polished helmet domes, gun and saber metal), driving a Blinn-Phong
   specular highlight plus a soft sky-tinted rim light in the fragment shader,

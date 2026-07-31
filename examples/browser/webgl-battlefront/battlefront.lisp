@@ -12,10 +12,11 @@
 ;;;; troopers and the walkers) with their travel, lifetimes and collisions, the
 ;;;; lightsaber swing that both damages enemies and DEFLECTS incoming fire, the
 ;;;; trooper / AT-AT / Vader AI, the win/lose state machine, and every triangle
-;;;; of the world -- you, the enemies, the walkers, the glowing blades and
-;;;; bolts are all tessellated from rotated boxes each frame. The glowing
-;;;; lightsabers and bolts are a second additive-blended pass over the same
-;;;; buffer, so the blades bloom against the snow.
+;;;; of the world -- flat parts (armor plates, packs, belts) are tessellated
+;;;; from rotated boxes each frame, round ones (heads, limbs, gun/saber
+;;;; barrels, bolts, sparks) from smooth-normaled cylinders and ellipsoids.
+;;;; The glowing lightsabers and bolts are a second additive-blended pass over
+;;;; the same buffer, so the blades bloom against the snow.
 ;;;;
 ;;;; The geometry math is the linalg package throughout. Every position is a
 ;;;; packed single-float vector (#f(x y z)); movement, distances and headings
@@ -272,10 +273,11 @@ void main() {
 (defvar *vao* 0)
 (defvar *buf* 0)
 
-;; Rounded parts (ellipsoid heads, cylinder limbs/barrels/blades) cost more
-;; triangles per feature than a box, so the capacity is well above the old
-;; boxes-only budget; still trivial GPU memory (+max-verts+ * +stride+ bytes).
-(defconstant +max-verts+ 40000)         ; lit-triangle vertex capacity
+;; Rounded parts (ellipsoid heads, cylinder limbs/barrels/blades, and the
+;; round bolts/sparks/shadows) cost more triangles per feature than a box, so
+;; the capacity is well above the old boxes-only budget; still trivial GPU
+;; memory (+max-verts+ * +stride+ bytes).
+(defconstant +max-verts+ 60000)         ; lit-triangle vertex capacity
 (defconstant +stride+ 44)               ; 11 floats per vertex
 
 (defun setup-gl ()
@@ -555,13 +557,8 @@ void main() {
 
 (defconstant +scenery+
   '((-40.0 -1.5 -40.0 60.0 0.0 40.0 0.90 0.93 0.98)       ; the snow plate
-    ;; low snow drifts
-    (6.0 0.0 -14.0 12.0 0.7 -9.0 0.95 0.97 1.00)
-    (18.0 0.0 10.0 25.0 0.9 15.0 0.95 0.97 1.00)
-    (-8.0 0.0 6.0 -2.0 0.6 11.0 0.95 0.97 1.00)
-    (34.0 0.0 -10.0 41.0 1.0 -4.0 0.95 0.97 1.00)
-    (28.0 0.0 18.0 36.0 0.8 24.0 0.95 0.97 1.00)
-    ;; the ring of Hoth mountains on the horizon
+    ;; the ring of Hoth mountains on the horizon -- broken terrain reads fine
+    ;; as facets, so these stay boxes
     (-40.0 -1.0 -70.0 60.0 22.0 -46.0 0.80 0.86 0.94)
     (-40.0 -1.0 46.0 60.0 20.0 70.0 0.80 0.86 0.94)
     (-80.0 -1.0 -60.0 -46.0 24.0 60.0 0.80 0.86 0.94)
@@ -576,6 +573,28 @@ void main() {
             (* 0.5 (- (nth 4 b) (nth 1 b)))
             (* 0.5 (- (nth 5 b) (nth 2 b)))
             0.0))
+
+;; low snow drifts: smooth wind-blown mounds, not plateaus -- same
+;; (x0 y0 z0 x1 y1 z1 r g b) AABB shape as a +scenery+ block, but drawn as a
+;; squashed ellipsoid whose base sits at y0 (flush with the snow plate) and
+;; crests at y1, so it reads as a dome rather than a box. Baked once, so the
+;; extra triangles over emit-block are free.
+(defconstant +drifts+
+  '((6.0 0.0 -14.0 12.0 0.7 -9.0 0.95 0.97 1.00)
+    (18.0 0.0 10.0 25.0 0.9 15.0 0.95 0.97 1.00)
+    (-8.0 0.0 6.0 -2.0 0.6 11.0 0.95 0.97 1.00)
+    (34.0 0.0 -10.0 41.0 1.0 -4.0 0.95 0.97 1.00)
+    (28.0 0.0 18.0 36.0 0.8 24.0 0.95 0.97 1.00)))
+
+(defun emit-drift (b)
+  (col (nth 6 b) (nth 7 b) (nth 8 b))
+  (emit-ellipsoid (* 0.5 (+ (nth 0 b) (nth 3 b)))
+                   (nth 1 b)
+                   (* 0.5 (+ (nth 2 b) (nth 5 b)))
+                   (* 0.5 (- (nth 3 b) (nth 0 b)))
+                   (- (nth 4 b) (nth 1 b))
+                   (* 0.5 (- (nth 5 b) (nth 2 b)))
+                   0.0 12 6))
 
 ;; ice boulders (cold blue-grey): center + radius + a squash/yaw so a plain
 ;; sphere reads as a lumpy rock, not a ball-bearing.
@@ -613,6 +632,7 @@ void main() {
 (defun bake-static ()
   (setq *v* 0)
   (dolist (b +scenery+) (emit-block b))
+  (dolist (b +drifts+) (emit-drift b))
   (dolist (b +boulders+) (emit-boulder b))
   (dolist (c +clouds+) (emit-cloud c))
   (setq *static-verts* *v*)
@@ -1258,8 +1278,9 @@ void main() {
 ;; --- drawing the cast ---------------------------------------------------------
 
 (defun emit-shadow (x z r)
+  ;; a flattened ellipsoid reads as a soft round blob shadow, not a square
   (col 0.55 0.60 0.68)
-  (emit-box x 0.02 z r 0.006 r 0.0))
+  (emit-ellipsoid x 0.02 z r 0.006 r 0.0 10 3))
 
 ;; You, in Hoth (Echo Base) gear: tan jacket over dark trousers and boots,
 ;; the field backpack, a knit cap, holding either the glowing blue lightsaber
@@ -1511,6 +1532,14 @@ void main() {
           (part (* -0.35 walk) 1.6 0.9 0.16 1.6 0.16)
           (part (* -0.35 walk) 1.6 -0.9 0.16 1.6 0.16)
           (part (* 0.35 walk) 1.6 0.9 0.16 1.6 0.16)
+          ;; a rounded hip joint ball where each leg meets the hull --
+          ;; softens the hard box-on-box seam without redesigning the
+          ;; (deliberately mechanical/boxy) legs themselves
+          (metal 0.46 0.48 0.51)
+          (part-ellipsoid (* 0.35 walk) 3.05 -0.9 0.22 0.22 0.22 8 5)
+          (part-ellipsoid (* -0.35 walk) 3.05 0.9 0.22 0.22 0.22 8 5)
+          (part-ellipsoid (* -0.35 walk) 3.05 -0.9 0.22 0.22 0.22 8 5)
+          (part-ellipsoid (* 0.35 walk) 3.05 0.9 0.22 0.22 0.22 8 5)
           ;; the slab body
           (metal 0.62 0.64 0.67)
           (part 0.0 3.7 0.0 1.5 0.8 0.95)
@@ -1659,6 +1688,8 @@ void main() {
     (emit-cylinder *vsab-cx* *vsab-cy* *vsab-cz*
                    (glowh2 *vsab-hx*) (glowh2 *vsab-hy*) *vsab-yaw* 8)))
 
+;; round sparks (a low-segment sphere, cheap enough for a per-frame particle)
+;; instead of glowing cubes.
 (defun emit-firework-cores ()
   ;; the solid, self-lit spark -- drawn in the OPAQUE pass so it keeps its own
   ;; vivid color against the bright sky (an additive-only spark washes out white)
@@ -1666,7 +1697,7 @@ void main() {
     (when (> (aref *fwt* i) 0.0)
       (let ((p (aref *fwpos* i)))
         (glow-col (aref *fwr* i) (aref *fwg* i) (aref *fwb* i))
-        (emit-box (aref p 0) (aref p 1) (aref p 2) 0.14 0.14 0.14 0.0)))))
+        (emit-ellipsoid (aref p 0) (aref p 1) (aref p 2) 0.14 0.14 0.14 0.0 6 3)))))
 
 (defun emit-fireworks ()
   ;; an additive halo around each spark, fading as it dies -> the bloom
@@ -1675,16 +1706,18 @@ void main() {
       (let ((k (/ (aref *fwt* i) (aref *fwmax* i)))
             (p (aref *fwpos* i)))
         (glow-col (* 0.7 k (aref *fwr* i)) (* 0.7 k (aref *fwg* i)) (* 0.7 k (aref *fwb* i)))
-        (emit-box (aref p 0) (aref p 1) (aref p 2) 0.26 0.26 0.26 0.0)))))
+        (emit-ellipsoid (aref p 0) (aref p 1) (aref p 2) 0.26 0.26 0.26 0.0 6 3)))))
 
+;; a round beam instead of a box -- reads as a glowing capsule (per the
+;; README) rather than a spinning rectangular slab.
 (defun emit-bolt-core (i)
   (let* ((v (aref *bvel* i))
          (p (aref *bpos* i))
          (yaw (atan2 (- 0.0 (aref v 2)) (aref v 0)))
          (sz (aref *bsz* i)))
     (glow-col (aref *br* i) (aref *bg* i) (aref *bb* i))
-    (emit-box (aref p 0) (aref p 1) (aref p 2)
-              (* 0.30 sz) (* 0.05 sz) (* 0.05 sz) yaw)))
+    (emit-cyl-beam (aref p 0) (aref p 1) (aref p 2)
+                   (* 0.30 sz) (* 0.05 sz) yaw 6)))
 
 (defun emit-bolt-glow (i)
   (let* ((v (aref *bvel* i))
@@ -1692,15 +1725,15 @@ void main() {
          (yaw (atan2 (- 0.0 (aref v 2)) (aref v 0)))
          (sz (aref *bsz* i)))
     (glow-col (* 0.5 (aref *br* i)) (* 0.5 (aref *bg* i)) (* 0.5 (aref *bb* i)))
-    (emit-box (aref p 0) (aref p 1) (aref p 2)
-              (* 0.42 sz) (* 0.13 sz) (* 0.13 sz) yaw)))
+    (emit-cyl-beam (aref p 0) (aref p 1) (aref p 2)
+                   (* 0.42 sz) (* 0.13 sz) yaw 6)))
 
 (defun emit-flash (i)
   (let ((k (/ (aref *ft* i) (aref *fttl* i)))
         (p (aref *fpos* i)))
     (glow-col (* k (aref *fr* i)) (* k (aref *fg* i)) (* k (aref *fb* i)))
     (let ((r (* (aref *fsz* i) (+ 0.4 (* 0.6 (- 1.0 k))))))
-      (emit-box (aref p 0) (aref p 1) (aref p 2) r r r 0.0))))
+      (emit-ellipsoid (aref p 0) (aref p 1) (aref p 2) r r r 0.0 6 3))))
 
 ;; --- the frame ----------------------------------------------------------------
 
