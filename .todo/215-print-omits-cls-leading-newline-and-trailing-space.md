@@ -55,4 +55,6 @@ documented behavior.
   their order are identical (`RontoLispCliTest.replEchoesEveryValueOnItsOwnLine`);
   only the prompt count differs, and matching it would mean re-architecting the
   reader loop for no semantic gain.
-- `princ`/`prin1`/`format` -- those already match CL.
+- `princ`/`prin1`/`format` -- their SHAPE (no leading newline, no trailing space) matches
+  CL. Their string escaping does not: see
+  [216](216-prin1-family-does-not-escape-quotes-and-backslashes-in-strings.md).
