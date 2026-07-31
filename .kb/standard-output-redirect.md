@@ -1,4 +1,4 @@
-# `*standard-output*` / `*standard-input*` redirect of the stream DESIGNATOR
+# `*standard-output*` / `*standard-input*` / `*error-output*` redirect of the stream DESIGNATOR
 
 The print family (`print`/`prin1`/`princ`/`terpri`/`fresh-line`/`write-char`/
 `write-string`/`write-line`/`force-output`, and `format` with the `t`
@@ -10,7 +10,7 @@ routes through the same dispatch the explicit 2-argument forms use. This is
 what makes `(with-output-to-string (*standard-output*) ...)` capture output
 from CALLED functions -- s-sql's `to-sql-name`/`sql-escape-string`/
 `sql-template` shape, the direct trigger (todo-195); the general problem
-statement was `.todo/149` (whose remaining open half is `*error-output*`).
+statement was `.todo/149`, closed by the `*error-output*` section below.
 Landed 2026-07-28.
 
 **An OMITTED stream argument and an EXPLICIT `nil` are the same designator**
@@ -93,6 +93,69 @@ so `(with-input-from-string (*standard-input* ...) (read-line))` has to sit
 inside a plain `defun` (a sync context) there. That is why the ci-spec case
 wraps the input assertions in `pm-input-designators`.
 
+## `*error-output*` is a HANDLE, not the `t` designator (landed 2026-07-31, `.todo/149`)
+
+The third stream special closes `.todo/149`. `t` already names the process standard
+OUTPUT, so `*error-output*` cannot be seeded with it and still mean the error stream:
+its value is the reserved stream HANDLE `2` --
+`compiler.StreamDesignators.standardError()`, literally the WASI fd the wasm write
+helpers already send stderr through. So `(format *error-output* ...)` reaches stderr
+instead of stdout on every backend (before this it reached stdout everywhere, the
+deviation `PostmodernE2eTest.programOutput` used to filter out), and `warn`'s report
+DEFAULTS to the variable instead of hard-coding stderr, so
+`(with-output-to-string (*error-output*) (warn ...))` -- CL's warning-capture idiom --
+captures it.
+
+Because the interpreter and the JVM number their stream tables themselves (only the wasm
+backends' handles are real fds), both now **reserve handles 0/1/2** so no user stream can
+be handed the designator: `Environment.registerIO` starts `nextStreamHandle` at
+`StreamDesignators.FIRST_USER_HANDLE` and registers a write-through `Writer` over
+`System.err` at 2 -- which is why every interpreter stream operation (print family,
+`write-string`/`write-line`, `fresh-line`, `force-output`, `open-stream-p`) needs no
+special case -- and the JVM's `_addStream` starts `_streamCount` at 3.
+
+- **JVM**: there is no JDK `Writer` over `System.err` that writes THROUGH (a
+  `PrintWriter` buffers, and a warning lost at exit is worse than the branch), so the
+  handle is intercepted instead: `JvmIoRuntimeBuilder.emitStderrBranch` prepends
+  `if (handle instanceof Long && (int) handle == 2) { ... }` to `_writeStr`,
+  `_writeLine`, `_freshLine`, `_forceOutput`, `_close` and `_openStreamP`
+  (`_writeString` inherits it through `_writeStr`). The whole group -- branches AND the
+  table reservation -- is gated on `programUsesSymbol(program, *ERROR-OUTPUT*)`, so a
+  program that never mentions the variable is byte-identical to before.
+  `JvmWarnCompiler` keeps its direct `System.err.println` unless the program BINDS the
+  variable, in which case the report goes through `_writeLine` with the dynamic-first
+  read.
+- **WASM**: nothing to intercept -- fd 2 IS stderr for `_write_stream_str` /
+  `_write_line`, and in `--component` mode the adapter's `fd_write` fd 2 branch drives
+  `wasi:cli/stderr`. `WasmWarnCompiler` passes the constant i31 2 unless the program
+  binds the variable (then the global read), and `_start` seeds the global with i31 2
+  rather than `_t_sym`.
+- **`_close` on a standard stream is a no-op on every backend.** The wasm `_close`'s
+  guard is now `fd >= FIRST_USER_HANDLE` instead of `fd >= 0`: it used to `fd_close(2)`
+  for real, so a `(close *error-output*)` silenced every later `warn` on wasm-GC while
+  the interpreter and the JVM kept warning. Do not turn it back into a `>= 0` test.
+  This one is NOT gated -- closing stdout is a bug with or without `*error-output*` --
+  so it is the whole byte delta a redirect-free program sees on wasm: measured, a
+  module compiled before and after this pass differs in exactly ONE byte, that
+  constant. The JVM side stays byte-identical for such a program (the `System.err`
+  constant is minted only with the branches).
+- `--no-gc` rejects `warn` and a top-level `format` outright, so it has no share of this.
+
+**One pre-existing `--component` bug fell out of the ci-spec case** (the `(open-stream-p
+*error-output*)` assertion, but nothing about `*error-output*` caused it):
+`WasmSocketsRewrite` redirects `open-stream-p` onto `%IO-OPEN-STREAM-P` whenever it runs,
+and only `sockets.lisp` defined that name -- so in a SOCKET-FREE component (the
+`stdin-dispatch.lisp` splice) any `open-stream-p` call compiled to a call-time error and
+TRAPPED. `stdin-dispatch.lisp` now defines it as `(if s t nil)`, the same answer
+sockets.lisp gives a non-socket handle. **`%IO-LISTEN` is still missing there** -- the
+same landmine for `(listen ...)` in a socket-free component; it was not fixed here
+because nothing in this pass needed it, and `listen` is a documented WASM gap anyway (see
+the `listen` note above). Fix it the same way when something does.
+
+Out of scope deliberately: the CLI's own top-level `Error: ...` line stays on standard
+output. It is the driver's diagnostic, not a program-visible `*error-output*` write, and
+the compiled backends do not have it at all.
+
 ## The activation rule (do not regress it)
 
 `*standard-output*` (and `*standard-input*`) becomes a special variable exactly
@@ -103,8 +166,8 @@ binding macro like `with-output-to-string` / `with-input-from-string` via
 `expandBuiltinMacro`) implicitly proclaims it. A program that never binds it
 compiles BYTE-IDENTICALLY to before: the print and read compilers keep their
 hard-coded stdio paths, and the JVM/WASM ExprCompilers keep compiling a bare
-read of `*standard-output*`/`*error-output*`/`*standard-input*` to the constant
-`t`. Gate everywhere: the variable is in `ctx.globals` (JVM) /
+read of `*standard-output*`/`*standard-input*` to the constant `t` (and one of
+`*error-output*` to the constant handle 2). Gate everywhere: the variable is in `ctx.globals` (JVM) /
 `ctx.globalIndices` (WASM) only when the redirect is active.
 
 ## Per backend
@@ -154,6 +217,13 @@ suites, `evalExplicitNilStreamArgumentIsTheStandardOutputDesignator` /
 `evalSynonymStreamOverStandardOutputFollowsALaterBinding` /
 `evalMakeSynonymStreamResolvesTheNamedVariable` in `LispEvaluatorTest`, and the
 `postmodern-language-incidentals` ci-spec case (all four backends).
+
+The `*error-output*` half: `errorOutputIsTheProcessErrorStream` and
+`bindingErrorOutputCapturesWarnAndRestores` in the JVM and WASM suites,
+`evalErrorOutputIsTheProcessErrorStreamAndWarnFollowsARebinding` /
+`evalErrorOutputIsAnOpenStreamThatSurvivesAClose` in `LispEvaluatorTest`, and the
+`error-output-designator` ci-spec case (all four backends -- the driver compares stdout,
+so the case's first assertion is that the three stderr lines do NOT appear there).
 
 The input half: `bindingStandardInputRedirectsTheStreamlessReadFamily` and
 `makeSynonymStreamOverStandardInputIsTheNilDesignator` in the JVM and WASM

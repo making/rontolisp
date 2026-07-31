@@ -617,6 +617,31 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalErrorOutputIsTheProcessErrorStreamAndWarnFollowsARebinding() {
+		// *error-output* is the process standard ERROR (the reserved handle 2), not the
+		// t designator, so a diagnostic written through it stays off the program's
+		// standard output; warn's report defaults to it and follows a rebinding.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("""
+				(let ((str (%make-string-output-stream)))
+				  (let ((*error-output* str))
+				    (warn "captured")
+				    (format *error-output* "diag~%"))
+				  (princ "out")
+				  (%string-stream-contents str))"""));
+		assertThat(result).isEqualTo(new LispString("WARNING: captured\ndiag\n"));
+		assertThat(baos.toString()).isEqualTo("out");
+	}
+
+	@Test
+	void evalErrorOutputIsAnOpenStreamThatSurvivesAClose() {
+		assertThat(eval("(open-stream-p *error-output*)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(close *error-output*)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(open-stream-p *error-output*)")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
 	void evalWithOutputToStringEmptyBody() {
 		assertThat(eval("(with-output-to-string (s))")).isEqualTo(new LispString(""));
 	}

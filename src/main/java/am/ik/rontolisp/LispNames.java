@@ -4719,7 +4719,12 @@ public final class LispNames {
 	 */
 	public static final String STANDARD_OUTPUT_VAR = "*STANDARD-OUTPUT*";
 
-	/** The {@code *error-output*} variable -- also the {@code t} designator (lite). */
+	/**
+	 * The {@code *error-output*} variable -- bound to the stream designator for the
+	 * process standard ERROR (the handle {@code 2}, the WASI fd every backend agrees on),
+	 * so a write through it reaches stderr rather than stdout. Binding it redirects
+	 * {@code warn}, the same way {@link #STANDARD_OUTPUT_VAR} redirects the print family.
+	 */
 	public static final String ERROR_OUTPUT_VAR = "*ERROR-OUTPUT*";
 
 	/**

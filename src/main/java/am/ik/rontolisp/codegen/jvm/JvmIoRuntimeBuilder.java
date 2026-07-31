@@ -10,6 +10,7 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.compiler.StreamDesignators;
 
 import org.jspecify.annotations.Nullable;
 
@@ -305,12 +306,31 @@ final class JvmIoRuntimeBuilder {
 	 */
 	private final JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets;
 
+	/**
+	 * Whether the program can name {@code *error-output*}, whose value is the reserved
+	 * handle {@link StreamDesignators#STANDARD_ERROR_HANDLE}. Only then do the stream
+	 * built-ins grow their stderr branch and does the table reserve the standard-stream
+	 * handles; a program that never mentions the variable keeps its original bytes.
+	 */
+	private final boolean errorOutput;
+
+	/**
+	 * {@code System.err}, the sink of the {@link #errorOutput} branches -- minted only
+	 * with them, so a program that never names {@code *error-output*} does not even carry
+	 * the constant.
+	 */
+	@Nullable private final FieldrefConstant systemErr;
+
 	private JvmIoRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant stringClass, ClassConstant longClass, MethodrefConstant longValueOf,
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
-			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets) {
+			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
+			boolean errorOutput) {
 		this.sockets = sockets;
+		this.errorOutput = errorOutput;
+		this.systemErr = errorOutput ? cp.addFieldref(cp.addClass(cp.addUtf8("java/lang/System")),
+				cp.addNameAndType(cp.addUtf8("err"), cp.addUtf8("Ljava/io/PrintStream;"))) : null;
 		this.cp = cp;
 		this.objectClass = objectClass;
 		this.stringClass = stringClass;
@@ -452,9 +472,46 @@ final class JvmIoRuntimeBuilder {
 			ClassConstant stringClass, ClassConstant longClass, MethodrefConstant longValueOf,
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
-			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets) {
+			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
+			boolean errorOutput) {
 		return new JvmIoRuntimeBuilder(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue,
-				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets);
+				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets,
+				errorOutput);
+	}
+
+	/**
+	 * Emits {@code if (handle instanceof Long && (int) handle == 2) { <stderr> }} in
+	 * front of a stream built-in's table lookup, so the {@code *error-output*} designator
+	 * reaches the process standard error instead of a table slot. Emitted only when the
+	 * program can name {@code *error-output*} ({@link #errorOutput}), and the branch body
+	 * must return -- both tests fall through to the original code.
+	 * @param code the method body under construction
+	 * @param handleLoad the {@code aload} opcode that pushes the handle argument
+	 * @param stderrBody appends the branch body (which must end in a return)
+	 */
+	private void emitStderrBranch(List<Integer> code, int handleLoad, Runnable stderrBody) {
+		if (!this.errorOutput) {
+			return;
+		}
+		code.add(handleLoad);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
+		int ifNotHandlePos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(handleLoad);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.ICONST_2);
+		int ifNotStderrPos = code.size();
+		code.add(Opcode.IF_ICMPNE);
+		emitU2(code, 0);
+		stderrBody.run();
+		patchBranch(code, ifNotHandlePos, code.size());
+		patchBranch(code, ifNotStderrPos, code.size());
 	}
 
 	/** Returns all stream-runtime method bodies to emit. */
@@ -507,6 +564,16 @@ final class JvmIoRuntimeBuilder {
 	private List<Integer> buildFreshLine() {
 		// Slots: 0=dest, 1=entry, 2=contents (String)
 		List<Integer> code = new ArrayList<>();
+		// The *error-output* designator has no table entry (and stderr's column is
+		// unknown), so it takes the always-write rule through _writeStr.
+		emitStderrBranch(code, Opcode.ALOAD_0, () -> {
+			emitLdc(code, this.newlineStr.index());
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, this.writeStrMethod.index());
+			code.add(Opcode.ACONST_NULL);
+			code.add(Opcode.ARETURN);
+		});
 		// if (!(dest instanceof Long)) { if (_col != 0) { print "\n"; _col = 0; } }
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
@@ -605,6 +672,15 @@ final class JvmIoRuntimeBuilder {
 	private List<Integer> buildForceOutput() {
 		// Slots: 0=handle, 1=entry
 		List<Integer> code = new ArrayList<>();
+		// The *error-output* designator: System.err.flush(); return null;
+		emitStderrBranch(code, Opcode.ALOAD_0, () -> {
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, java.util.Objects.requireNonNull(this.systemErr).index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.printStreamFlush.index());
+			code.add(Opcode.ACONST_NULL);
+			code.add(Opcode.ARETURN);
+		});
 		// if (!(handle instanceof Long)) { System.out.flush(); return null; }
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
@@ -698,6 +774,11 @@ final class JvmIoRuntimeBuilder {
 	private List<Integer> buildOpenStreamP() {
 		// Slots: 0=handle, 1=idx (int)
 		List<Integer> code = new ArrayList<>();
+		// The *error-output* designator names no table slot but is always open.
+		emitStderrBranch(code, Opcode.ALOAD_0, () -> {
+			emitLdc(code, this.tStr.index());
+			code.add(Opcode.ARETURN);
+		});
 		List<Integer> gotoNils = new ArrayList<>();
 		// A non-Long designator: T for the t stream designator, nil for anything else.
 		code.add(Opcode.ALOAD_0);
@@ -1058,6 +1139,12 @@ final class JvmIoRuntimeBuilder {
 	private List<Integer> buildClose() {
 		// Slots: 0=handle, 1=idx (int), 2=stream
 		List<Integer> code = new ArrayList<>();
+		// The process standard error outlives a close of it (CL lets a program try), so
+		// a later warn still reaches stderr.
+		emitStderrBranch(code, Opcode.ALOAD_0, () -> {
+			emitLdc(code, this.tStr.index());
+			code.add(Opcode.ARETURN);
+		});
 		// idx = (int) ((Long) handle).longValue();
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.CHECKCAST);
@@ -1202,6 +1289,16 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.stringSubstring.index());
 		code.add(Opcode.ASTORE_2);
+		// The *error-output* designator: System.err.println(content); return str;
+		emitStderrBranch(code, Opcode.ALOAD_1, () -> {
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, java.util.Objects.requireNonNull(this.systemErr).index());
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.printlnStr.index());
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.ARETURN);
+		});
 		// if (!(handle instanceof Long)) { System.out.println(content); _col = 0;
 		// return str; } -- null and the designator t both mean standard output.
 		code.add(Opcode.ALOAD_1);
@@ -1778,6 +1875,15 @@ final class JvmIoRuntimeBuilder {
 	private List<Integer> buildWriteStr() {
 		// Slots: 0=content (String), 1=handle
 		List<Integer> code = new ArrayList<>();
+		// The *error-output* designator: System.err.print(content); return;
+		emitStderrBranch(code, Opcode.ALOAD_1, () -> {
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, java.util.Objects.requireNonNull(this.systemErr).index());
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.printStr.index());
+			code.add(Opcode.RETURN);
+		});
 		// if (handle instanceof Long) { ((Writer) _streams[idx]).write(content); return;
 		// }
 		code.add(Opcode.ALOAD_1);
@@ -1897,6 +2003,14 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.objectClass.index());
 		code.add(Opcode.PUTSTATIC);
 		emitU2(code, this.streamsField.index());
+		if (this.errorOutput) {
+			// Reserve the standard-stream handles (0/1/2, the WASI file descriptors the
+			// wasm backends use), so no user stream can be handed the *error-output*
+			// designator's handle 2 and be diverted to stderr by the branches above.
+			code.add(Opcode.ICONST_3);
+			code.add(Opcode.PUTSTATIC);
+			emitU2(code, this.streamCountField.index());
+		}
 		patchBranch(code, ifInitPos, code.size());
 		// arr = _streams; count = _streamCount;
 		code.add(Opcode.GETSTATIC);

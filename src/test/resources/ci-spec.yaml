@@ -5815,6 +5815,39 @@ cases:
       a
       (1 2 3)
 
+  - name: error-output-designator
+    source: |
+      ;; .todo/149 -- *error-output* is the process standard ERROR designator
+      ;; (the reserved handle 2), NOT the t designator: a diagnostic written
+      ;; through it stays off the program's standard output on every backend,
+      ;; so none of the three lines below may appear in the expected stdout.
+      (format *error-output* "eo-diag ~a~%" 1)
+      (write-line "eo-line" *error-output*)
+      (warn "eo-warn")
+      (write-line "eo-stdout-only")
+      ;; warn's report DEFAULTS to *error-output*, so CL's warning-capture
+      ;; idiom captures it -- and the diagnostic written explicitly follows the
+      ;; same binding. Inside a plain defun on purpose, for the same reason the
+      ;; input designators above are: at the --component top level a special
+      ;; binding may not span a promoted await.
+      (defun eo-capture ()
+        (with-output-to-string (*error-output*)
+          (warn "eo-captured")
+          (format *error-output* "eo-in-binding~%")))
+      (princ (eo-capture))
+      ;; The designator names an always-open stream, and closing a process
+      ;; standard stream does not take it away.
+      (print (open-stream-p *error-output*))
+      (print (close *error-output*))
+      (print (open-stream-p *error-output*))
+    expected: |
+      eo-stdout-only
+      WARNING: eo-captured
+      eo-in-binding
+      T
+      T
+      T
+
   - name: postmodern-non-mop-milestone
     source: |
       ;; .todo/202 -- the four language mechanics the non-MOP postmodern build

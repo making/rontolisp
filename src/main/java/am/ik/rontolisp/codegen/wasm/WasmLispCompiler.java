@@ -2125,6 +2125,17 @@ public final class WasmLispCompiler implements LispCompiler {
 				startWriter.writeUnsignedLeb128(streamGlobal);
 			}
 		}
+		// *error-output*'s default is the handle 2 instead -- the process standard ERROR,
+		// which the t designator does not name; here it is literally the WASI fd the
+		// write helpers send stderr to.
+		Integer errorOutputGlobal = ctx.globalIndices.get(LispNames.ERROR_OUTPUT_VAR);
+		if (errorOutputGlobal != null) {
+			startWriter.write(Instruction.I32_CONST);
+			startWriter.writeSignedLeb128((int) am.ik.rontolisp.compiler.StreamDesignators.STANDARD_ERROR_HANDLE);
+			startWriter.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			startWriter.write(Instruction.SET_GLOBAL);
+			startWriter.writeUnsignedLeb128(errorOutputGlobal);
+		}
 
 		// EH mode: an uncaught $lisp-cond throw escaping the top level must keep
 		// today's trap shape (host-visible exit class), so the whole body runs inside

@@ -63,6 +63,7 @@ import am.ik.rontolisp.Scope;
 import am.ik.rontolisp.VersionInfo;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.HttpPlistShape;
+import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -207,6 +208,23 @@ public final class Environment implements Scope {
 	 */
 	public void setDefaultOutput(Supplier<@Nullable LispVal> supplier) {
 		this.defaultOutput = supplier;
+	}
+
+	/**
+	 * Resolves {@code warn}'s destination at call time: the current -- dynamic-first --
+	 * value of {@code *error-output*}, so {@code (let ((*error-output* s)) (warn ...))}
+	 * captures the report. A {@code null} resolver (no evaluator installed one) falls
+	 * back to the global cell, whose seeded value is the process standard error.
+	 */
+	@Nullable private Supplier<@Nullable LispVal> defaultError;
+
+	/**
+	 * Installs the resolver {@code warn} sends its report through; see
+	 * {@link #defaultError}.
+	 * @param supplier resolves the current {@code *error-output*} value
+	 */
+	public void setDefaultError(Supplier<@Nullable LispVal> supplier) {
+		this.defaultError = supplier;
 	}
 
 	/**
@@ -515,10 +533,13 @@ public final class Environment implements Scope {
 					featureList);
 		}
 		env.define(LispNames.FEATURES_VAR, featureList);
-		// The standard streams are the t designator (the process standard stream),
-		// which the whole print / read family accepts as a stream argument.
+		// The standard streams are the t designator (the process standard stream), which
+		// the whole print / read family accepts as a stream argument. The exception is
+		// *error-output*: t already names the process standard OUTPUT, so the error
+		// stream is the reserved HANDLE 2 instead (the WASI fd every backend writes
+		// stderr through) -- see StreamDesignators.
 		env.define(LispNames.STANDARD_OUTPUT_VAR, LispTrue.INSTANCE);
-		env.define(LispNames.ERROR_OUTPUT_VAR, LispTrue.INSTANCE);
+		env.define(LispNames.ERROR_OUTPUT_VAR, StreamDesignators.standardError());
 		env.define(LispNames.STANDARD_INPUT_VAR, LispTrue.INSTANCE);
 		// A #. marker that survives into code position (a backquote template splits the
 		// marker list into construction code, so the load-time substitution walk never
@@ -3410,7 +3431,30 @@ public final class Environment implements Scope {
 		// two conversations crossed on the survivor (.todo/193). The table and the
 		// counter must therefore stay thread-safe; see .kb/tcp-sockets.md.
 		Map<Long, Closeable> streams = new ConcurrentHashMap<>();
-		AtomicLong nextStreamHandle = new AtomicLong();
+		// Handles 0/1/2 are the process standard streams (the WASI file descriptors the
+		// wasm backends use), so a user stream never collides with the *error-output*
+		// designator; the table entry for 2 makes every stream operation -- print family,
+		// write-string/line, fresh-line, force-output -- reach stderr with no special
+		// case of its own. It writes THROUGH on every call (System.err is autoflush, and
+		// a buffered writer would reorder warnings against stdout).
+		AtomicLong nextStreamHandle = new AtomicLong(StreamDesignators.FIRST_USER_HANDLE);
+		streams.put(StreamDesignators.STANDARD_ERROR_HANDLE, new Writer() {
+			@Override
+			public void write(char[] cbuf, int off, int len) {
+				System.err.print(new String(cbuf, off, len));
+				System.err.flush();
+			}
+
+			@Override
+			public void flush() {
+				System.err.flush();
+			}
+
+			@Override
+			public void close() {
+				// The process standard error outlives any close of it.
+			}
+		});
 		// CL's output stream DESIGNATOR rule: an absent argument AND an explicit nil both
 		// denote *standard-output*, so both read the evaluator's hook (dynamic-first;
 		// null when no evaluator installed it) at call time -- that is what makes
@@ -3423,6 +3467,16 @@ public final class Environment implements Scope {
 				return env.defaultOutput.get();
 			}
 			return dest;
+		};
+		// warn's destination: the current -- dynamic-first -- value of *error-output*,
+		// so (let ((*error-output* s)) (warn ...)) captures the report the way CL does.
+		// Without an evaluator hook (a bare Environment) the seeded global answers, which
+		// is the process standard error.
+		java.util.function.Supplier<@Nullable LispVal> resolveErrorDest = () -> {
+			if (env.defaultError != null) {
+				return env.defaultError.get();
+			}
+			return env.lookupOrNull(LispNames.ERROR_OUTPUT_VAR);
 		};
 		// The same rule on the input side: an absent argument AND an explicit nil both
 		// denote *standard-input*. Only t is hard-wired to the process standard input.
@@ -3747,12 +3801,13 @@ public final class Environment implements Scope {
 			throw new LispEvalException(message, args.get(0));
 		}));
 		// %warn: internal single-argument primitive that writes a pre-built
-		// "WARNING: ..." message to standard error and returns nil. Produced by the warn
-		// macro expansion.
+		// "WARNING: ..." message to the current *error-output* -- the seeded handle 2
+		// (the process standard error) unless the program rebound it -- and returns nil.
+		// Produced by the warn macro expansion.
 		env.defineFunction(LispNames.WARN_INTERNAL, new LispFunction(LispNames.WARN_INTERNAL, args -> {
 			requireArgCount(LispNames.WARN_INTERNAL, args, 1);
 			String message = (args.get(0) instanceof LispString s) ? s.value() : args.get(0).display();
-			System.err.println(message);
+			emitTo.accept(message + "\n", resolveErrorDest.get());
 			return LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.OPEN, new LispFunction(LispNames.OPEN, args -> {
@@ -3835,6 +3890,11 @@ public final class Environment implements Scope {
 			}
 			if (!(args.get(0) instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.CLOSE + " expects a stream");
+			}
+			if (handle.value() < StreamDesignators.FIRST_USER_HANDLE) {
+				// CL lets a program close a standard stream; the process ones survive it
+				// here, so a later warn still reaches stderr.
+				return LispTrue.INSTANCE;
 			}
 			Closeable stream = streams.remove(handle.value());
 			if (stream == null) {

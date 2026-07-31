@@ -486,6 +486,16 @@ public final class LispEvaluator {
 			}
 			return this.globalEnv.lookupOrNull(LispNames.STANDARD_OUTPUT_VAR);
 		});
+		// warn resolves its destination through the current value of *error-output* (the
+		// seeded handle 2 = the process standard error unless the program rebound it),
+		// so (let ((*error-output* s)) (warn ...)) captures the report.
+		this.globalEnv.setDefaultError(() -> {
+			if ((!this.specialVars.isEmpty() || this.progvUsed)
+					&& this.dynamicBindings.isBound(LispNames.ERROR_OUTPUT_VAR)) {
+				return this.dynamicBindings.get(LispNames.ERROR_OUTPUT_VAR);
+			}
+			return this.globalEnv.lookupOrNull(LispNames.ERROR_OUTPUT_VAR);
+		});
 		// The same rule on the input side: the stream-argument-less read family resolves
 		// its source through the current value of *standard-input*.
 		this.globalEnv.setDefaultInput(() -> {

@@ -477,9 +477,10 @@ class WasmLispCompilerIntegrationTest {
 		// lock -- prepare.lisp guards its statement-id counter exactly this way. And the
 		// two standard stream variables are globals, not lexicals a lambda could capture:
 		// generate-prepared reports its reconnect with (format *error-output* ...) from
-		// inside a handler-bind handler. (The mutex itself is a no-op on WASM --
-		// single-threaded by construction, .kb/mutexes.md -- so what is under test here
-		// is only the analysis.)
+		// inside a handler-bind handler -- and that report lands on standard ERROR (the
+		// designator's default), not on standard output. (The mutex itself is a no-op on
+		// WASM -- single-threaded by construction, .kb/mutexes.md -- so what is under
+		// test here is only the analysis.)
 		String program = """
 				(let ((n 0) (lock (rontolisp:make-mutex)))
 				  (defun next-id () (rontolisp:with-mutex (lock) (setf n (1+ n)) n)))
@@ -488,9 +489,8 @@ class WasmLispCompilerIntegrationTest {
 				(defun report (f) (funcall f "x"))
 				(report (lambda (m) (format *error-output* "seen ~a" m)))
 				""";
-		assertThat(compileAndRun(program)).isEqualTo("""
-				2
-				seen x""");
+		assertThat(compileAndRun(program)).isEqualTo("2");
+		assertThat(compileAndRunStderr(program)).isEqualTo("seen x");
 	}
 
 	@Test
@@ -6335,6 +6335,35 @@ class WasmLispCompilerIntegrationTest {
 				(let ((*standard-output* (%make-string-output-stream)))
 				  (princ "hidden"))
 				(princ "visible")""")).isEqualTo("foo.bar42|visible");
+	}
+
+	@Test
+	void errorOutputIsTheProcessErrorStream() throws Exception {
+		// *error-output* is the standard ERROR designator (the handle 2, here literally
+		// the WASI fd), so a diagnostic written through it stays off standard output.
+		assertThat(compileAndRunStderr("""
+				(format *error-output* "diag ~a~%" 1)
+				(write-line "line" *error-output*)
+				(princ "on-stdout")""")).isEqualTo("diag 1\nline");
+		assertThat(compileAndRun("""
+				(format *error-output* "diag~%")
+				(princ "on-stdout")""")).isEqualTo("on-stdout");
+	}
+
+	@Test
+	void bindingErrorOutputCapturesWarnAndRestores() throws Exception {
+		// CL's warning-capture idiom: warn's report defaults to *error-output*, so a
+		// binding captures it -- and the unbound default still reaches stderr.
+		assertThat(compileAndRun("""
+				(princ (with-output-to-string (*error-output*)
+				  (warn "captured")
+				  (format *error-output* "diag~%")))
+				(princ "|")
+				(princ (open-stream-p *error-output*))""")).isEqualTo("WARNING: captured\ndiag\n|T");
+		assertThat(compileAndRunStderr("""
+				(let ((s (%make-string-output-stream)))
+				  (let ((*error-output* s)) (warn "hidden")))
+				(warn "visible")""")).isEqualTo("WARNING: visible");
 	}
 
 	@Test

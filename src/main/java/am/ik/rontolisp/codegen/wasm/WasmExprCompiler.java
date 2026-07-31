@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.ConcatenateForms;
+import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -187,12 +188,19 @@ final class WasmExprCompiler {
 			WasmDynamicCallCompiler.compileVarRef(name, ctx);
 			return;
 		}
-		if (LispNames.STANDARD_OUTPUT_VAR.equals(name) || LispNames.ERROR_OUTPUT_VAR.equals(name)
-				|| LispNames.STANDARD_INPUT_VAR.equals(name)) {
+		if (LispNames.STANDARD_OUTPUT_VAR.equals(name) || LispNames.STANDARD_INPUT_VAR.equals(name)) {
 			// The standard stream variables hold the designator t (the interpreter's
 			// permanent value; the program never binds this one, so print/read-family
 			// redirection through it does not exist here).
 			compileExpr(LispTrue.INSTANCE, ctx);
+			return;
+		}
+		if (LispNames.ERROR_OUTPUT_VAR.equals(name)) {
+			// *error-output* is the process standard ERROR, which t does not name: it is
+			// the handle 2 -- here literally the WASI fd the write helpers already send
+			// stderr to (the program never binds this one, so warn's redirect does not
+			// exist here).
+			compileExpr(StreamDesignators.standardError(), ctx);
 			return;
 		}
 		// Lisp-2: a bare symbol is a variable reference only; functions must be

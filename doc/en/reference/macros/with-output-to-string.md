@@ -36,3 +36,7 @@ argument work under the redirect:
   (with-output-to-string (*standard-output*)
     (emit "forwarded"))) ; => "forwarded"
 ```
+
+Binding `*error-output*` the same way captures the reports of
+[`warn`](warn.md) instead; that variable's default is the process standard
+error, so an unredirected warning never lands on standard output.

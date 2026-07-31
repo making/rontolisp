@@ -326,12 +326,12 @@ class PostmodernE2eTest {
 	/**
 	 * The program's own output, with postmodern's reconnect DIAGNOSTIC dropped. That line
 	 * is {@code (format *error-output* "~%Database-connection-error ~a~%" condition)} and
-	 * is excluded because BOTH halves of it are known deviations owned elsewhere, neither
-	 * this test's subject: {@code *error-output*} reaches stdout rather than the error
-	 * stream ({@code .todo/149}), and the condition renders as a slot dump rather than
-	 * through its {@code :report} ({@code .todo/206}) -- with one slot ({@code :QUERY})
-	 * that the interpreter and the compile paths fill differently. Delete this filter
-	 * when those land.
+	 * now goes to the error stream on every backend ({@code .todo/149} landed --
+	 * {@code .kb/standard-output-redirect.md}), so this filter should no longer match
+	 * anything on stdout; it stays as a guard until the OTHER half is owned: the
+	 * condition renders as a slot dump rather than through its {@code :report}
+	 * ({@code .todo/206}), with one slot ({@code :QUERY}) that the interpreter and the
+	 * compile paths fill differently. Delete it when that lands.
 	 */
 	private static String programOutput(String stdout) {
 		return stdout.lines()

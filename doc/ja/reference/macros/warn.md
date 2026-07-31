@@ -11,3 +11,15 @@
 ```
 
 この呼び出しは (`x` = 42 のとき) `WARNING: unexpected value: 42` を標準エラーに出力し、`nil` に評価されます。
+
+## レポートのリダイレクト: `*error-output*`
+
+出力先は呼び出し時点の `*error-output*` の値です。そのデフォルト値はプロセスの標準エラーを表す designator であり (標準*出力*を表す `*standard-output*` の `t` とは異なります)、リダイレクトされていない `warn` は標準エラーに届きます。`(format *error-output* ...)` も同様です。この変数を束縛するとレポートを捕捉でき、これが Common Lisp で警告をテストする通常の方法です:
+
+```lisp
+(string-right-trim '(#\Newline)
+                   (with-output-to-string (*error-output*)
+                     (warn "unexpected value: ~a" 42))) ; => "WARNING: unexpected value: 42"
+```
+
+束縛は動的なので呼び出された関数の内側にも及び、抜けるときに元の値へ復元されます。4 つのバックエンドすべてで同じように動作します。

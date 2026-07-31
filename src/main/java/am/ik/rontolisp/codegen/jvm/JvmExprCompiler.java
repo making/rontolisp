@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.ConcatenateForms;
+import am.ik.rontolisp.compiler.StreamDesignators;
 
 import am.ik.jvm.Opcode;
 
@@ -132,12 +133,17 @@ final class JvmExprCompiler {
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileVarRef(name, ctx);
 		}
-		else if (LispNames.STANDARD_OUTPUT_VAR.equals(name) || LispNames.ERROR_OUTPUT_VAR.equals(name)
-				|| LispNames.STANDARD_INPUT_VAR.equals(name)) {
+		else if (LispNames.STANDARD_OUTPUT_VAR.equals(name) || LispNames.STANDARD_INPUT_VAR.equals(name)) {
 			// The standard stream variables hold the designator t (the interpreter's
 			// permanent value; the program never binds this one, so print/read-family
 			// redirection through it does not exist here).
 			JvmEmitHelper.compileTrue(ctx);
+		}
+		else if (LispNames.ERROR_OUTPUT_VAR.equals(name)) {
+			// *error-output* is the process standard ERROR, which t does not name: it is
+			// the reserved handle 2, the same designator the interpreter holds (the
+			// program never binds this one, so warn's redirect does not exist here).
+			JvmEmitHelper.compileLong(StreamDesignators.STANDARD_ERROR_HANDLE, ctx);
 		}
 		else {
 			// Lisp-2: a bare symbol is a variable reference only; functions must be

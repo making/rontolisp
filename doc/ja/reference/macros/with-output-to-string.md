@@ -31,3 +31,7 @@ optional 引数をそのまま転送するレンダラーという Common Lisp �
   (with-output-to-string (*standard-output*)
     (emit "forwarded"))) ; => "forwarded"
 ```
+
+同じ形で `*error-output*` を束縛すると、[`warn`](warn.md) のレポートを捕捉できます。
+この変数のデフォルト値はプロセスの標準エラーなので、リダイレクトされていない警告が
+標準出力に混ざることはありません。

@@ -78,8 +78,9 @@ ALSO ALL-BACKEND:
 - `open` / `with-open-file` accept the CL keyword shape (`:external-format` /
   `:if-exists` / `:if-does-not-exist`, only with the native default values).
 - `#'aref` wrapper (variadic row-major fold).
-- `*standard-output*` / `*error-output*` read as the designator `t` on the
-  compilers.
+- `*standard-output*` reads as the designator `t` on the compilers,
+  `*error-output*` as the standard-error handle
+  (`.kb/standard-output-redirect.md`).
 - `(lambda ())` returns nil.
 - `array-dimension-limit` is reader-substituted like `most-positive-fixnum`.
 - Non-literal `symbol-function` and `uiop:` stub calls compile into cold-path

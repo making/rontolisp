@@ -1460,9 +1460,15 @@ public final class JvmLispCompiler implements LispCompiler {
 				? JvmSocketRuntimeBuilder.build(cp, thisClass, stringClass, longClass, longValueOf, longValue,
 						stringLengthForIo, stringSubstring, stringConcat)
 				: null;
+		// *error-output* is the reserved stream handle 2 (the process standard error), so
+		// a program that can name it -- explicitly, or through the warn redirect -- gets
+		// the stream built-ins' stderr branch and the reserved table handles; one that
+		// never mentions it keeps its original bytes.
+		final boolean usesErrorOutput = programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR);
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
-					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime)
+					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
+					usesErrorOutput)
 			.methods();
 		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
 		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);
@@ -1548,8 +1554,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// serialization-order reason as above.
 		final FieldrefConstant standardOutputGlobalField = globalFields.get(LispNames.STANDARD_OUTPUT_VAR);
 		final FieldrefConstant standardInputGlobalField = globalFields.get(LispNames.STANDARD_INPUT_VAR);
-		final boolean seedsStandardStream = standardOutputGlobalField != null || standardInputGlobalField != null;
-		final ConstantPool.StringConstant standardOutputTStr = seedsStandardStream ? cp.addString("T") : null;
+		// *error-output* seeds the stream HANDLE 2 instead (the process standard error);
+		// t already names the process standard OUTPUT.
+		final FieldrefConstant errorOutputGlobalField = globalFields.get(LispNames.ERROR_OUTPUT_VAR);
+		final boolean seedsStandardStream = standardOutputGlobalField != null || standardInputGlobalField != null
+				|| errorOutputGlobalField != null;
+		final ConstantPool.StringConstant standardOutputTStr = (standardOutputGlobalField != null
+				|| standardInputGlobalField != null) ? cp.addString("T") : null;
 		final Utf8Constant standardOutputClinitName = seedsStandardStream ? cp.addUtf8("<clinit>") : null;
 		final Utf8Constant standardOutputClinitDesc = seedsStandardStream ? cp.addUtf8("()V") : null;
 
@@ -1821,6 +1832,16 @@ public final class JvmLispCompiler implements LispCompiler {
 								java.util.Objects.requireNonNull(standardOutputTStr).index());
 						clinitCode.add(Opcode.PUTSTATIC);
 						JvmRuntimeBuilder.emitU2(clinitCode, streamGlobal.index());
+					}
+					if (errorOutputGlobalField != null) {
+						// *error-output*'s global default is the reserved handle 2 -- the
+						// process standard error (t already names standard OUTPUT).
+						clinitCode.add(Opcode.ICONST_2);
+						clinitCode.add(Opcode.I2L);
+						clinitCode.add(Opcode.INVOKESTATIC);
+						JvmRuntimeBuilder.emitU2(clinitCode, longValueOf.index());
+						clinitCode.add(Opcode.PUTSTATIC);
+						JvmRuntimeBuilder.emitU2(clinitCode, errorOutputGlobalField.index());
 					}
 					clinitCode.addAll(layoutClinitCode);
 					clinitCode.addAll(structTableClinitFinal);

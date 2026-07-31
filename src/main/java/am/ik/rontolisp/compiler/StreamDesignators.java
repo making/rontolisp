@@ -60,6 +60,37 @@ public final class StreamDesignators {
 				new LispCons(explicit, new LispCons(standardOutput(), LispNil.INSTANCE)));
 	}
 
+	/**
+	 * The stream handle that denotes the process standard ERROR -- the value
+	 * {@code *error-output*} is seeded with on every backend. It is the WASI file
+	 * descriptor 2, which is what the wasm backends already write stderr through; the
+	 * interpreter and the JVM reserve the handles below {@link #FIRST_USER_HANDLE} in
+	 * their stream tables so no user stream can ever collide with it.
+	 */
+	public static final long STANDARD_ERROR_HANDLE = 2;
+
+	/**
+	 * The first handle the interpreter's / the JVM's stream table hands out: 0, 1 and 2
+	 * are reserved for the process standard streams, so the handle numbering agrees with
+	 * the wasm backends' WASI file descriptors.
+	 */
+	public static final long FIRST_USER_HANDLE = 3;
+
+	/**
+	 * The designator the {@code *error-output*} variable holds by default: the process
+	 * standard error. Unlike {@code *standard-output*}'s {@code t} this one is a stream
+	 * HANDLE, because {@code t} already names the process standard OUTPUT.
+	 * @return the seeded {@code *error-output*} value
+	 */
+	public static LispVal standardError() {
+		return new LispInteger(STANDARD_ERROR_HANDLE);
+	}
+
+	/** The {@code *error-output*} read {@code warn} sends its report to. */
+	public static LispVal errorOutput() {
+		return new LispSymbol(LispNames.ERROR_OUTPUT_VAR);
+	}
+
 	/** The {@code *standard-input*} read an omitted stream argument denotes. */
 	public static LispVal standardInput() {
 		return new LispSymbol(LispNames.STANDARD_INPUT_VAR);

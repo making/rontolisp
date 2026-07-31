@@ -1599,6 +1599,35 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void errorOutputIsTheProcessErrorStream() throws Exception {
+		// *error-output* is the standard ERROR designator (the reserved handle 2), so a
+		// diagnostic written through it stays off the program's standard output.
+		assertThat(compileAndRunCapturingErr("""
+				(format *error-output* "diag ~a~%" 1)
+				(write-line "line" *error-output*)
+				(princ "on-stdout")""")).isEqualTo("diag 1\nline");
+		assertThat(compileAndRun("""
+				(format *error-output* "diag~%")
+				(princ "on-stdout")""")).isEqualTo("on-stdout");
+	}
+
+	@Test
+	void bindingErrorOutputCapturesWarnAndRestores() throws Exception {
+		// CL's warning-capture idiom: warn's report defaults to *error-output*, so a
+		// binding captures it -- and the unbound default still reaches stderr.
+		assertThat(compileAndRun("""
+				(princ (with-output-to-string (*error-output*)
+				  (warn "captured")
+				  (format *error-output* "diag~%")))
+				(princ "|")
+				(princ (open-stream-p *error-output*))""")).isEqualTo("WARNING: captured\ndiag\n|T");
+		assertThat(compileAndRunCapturingErr("""
+				(let ((s (%make-string-output-stream)))
+				  (let ((*error-output* s)) (warn "hidden")))
+				(warn "visible")""")).isEqualTo("WARNING: visible");
+	}
+
+	@Test
 	void readtableCaseIsConstantUpcaseAndInternAcceptsFoundKeywordPackage() throws Exception {
 		assertThat(compileAndRun("(print (readtable-case *readtable*))")).isEqualTo(":UPCASE");
 		assertThat(compileAndRun("(print (intern \"ZAP\" (find-package :keyword)))")).isEqualTo(":ZAP");
@@ -2442,11 +2471,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunErrorOutputInsideALambda() throws Exception {
-		// The two standard stream variables are GLOBAL, not lexicals a lambda captures:
+		// The standard stream variables are GLOBAL, not lexicals a lambda captures:
 		// postmodern's generate-prepared reports its reconnect with
 		// (format *error-output* ...) from inside a handler-bind handler, which used to
-		// fail the compile with "Cannot capture variable: *ERROR-OUTPUT*".
-		assertThat(compileAndRun("""
+		// fail the compile with "Cannot capture variable: *ERROR-OUTPUT*". The report
+		// lands on standard ERROR (the designator's default), not on standard output.
+		assertThat(compileAndRunCapturingErr("""
 				(defun report (f) (funcall f "x"))
 				(report (lambda (m) (format *error-output* "seen ~a" m)))
 				""")).isEqualTo("seen x");

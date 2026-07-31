@@ -215,10 +215,12 @@ final class WasmIoRuntimeBuilder {
 		refCast(w, Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 		setLocal(w, FD);
-		// fd_close only for a real fd -- a negative handle is a string stream whose
-		// record just becomes garbage (the bump allocator never frees).
+		// fd_close only for a real USER fd -- a negative handle is a string stream whose
+		// record just becomes garbage (the bump allocator never frees), and the process
+		// standard streams (0/1/2, among them the *error-output* designator) outlive a
+		// close of them, as they do on the interpreter and the JVM.
 		getLocal(w, FD);
-		i32(w, 0);
+		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.IF, 0x40);
 		getLocal(w, FD);

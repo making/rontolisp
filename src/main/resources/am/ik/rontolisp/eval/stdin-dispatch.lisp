@@ -52,6 +52,14 @@
 (defun rontolisp::%io-close (stream)
   (rontolisp::%close-raw stream))
 
+;;; open-stream-p is redirected by the same rewrite, so it needs a definition
+;;; here too or the call compiles to a call-time error and TRAPS -- which is what
+;;; (open-stream-p *error-output*) used to do in a socket-free component. No
+;;; socket can exist in this splice, so every non-nil designator answers t: the
+;;; exact answer sockets.lisp's dispatcher gives a file/stdin handle.
+(defun rontolisp::%io-open-stream-p (s)
+  (if s t nil))
+
 ;;; The sequence ops and the eof-tolerant read-byte the rewrite also redirects:
 ;;; raw passthroughs here (no socket can exist). The %...-future twins are plain
 ;;; defuns -- rontolisp:await passes a settled plain value through -- so a
