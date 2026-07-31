@@ -8424,6 +8424,37 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aRuntimeControlStringDatumRendersItsFormatArguments() {
+		assertThat(evalMulti("""
+				(list (handler-case (error "lit ~a-~a" 1 2) (error (e) (princ-to-string e)))
+				      (let ((c "~a-~a"))
+				        (handler-case (error c 1 2) (error (e) (princ-to-string e))))
+				      (let ((c "PostgreSQL warning: ~A~@[~%~A~]"))
+				        (handler-case (error c "relation already exists, skipping" nil)
+				          (error (e) (princ-to-string e))))
+				      (let ((c "sig ~a/~a"))
+				        (handler-case (signal c 3 4) (condition (e) (princ-to-string e)))))
+				""").print())
+			.isEqualTo("(\"lit 1-2\" \"1-2\" \"PostgreSQL warning: relation already exists, skipping\" \"sig 3/4\")");
+	}
+
+	@Test
+	void aRuntimeControlStringDatumRendersItsFormatArgumentsUnderWarn() {
+		// warn's line goes to standard ERROR, so it needs a capture of its own.
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err));
+		try {
+			new LispEvaluator(new PrintStream(new ByteArrayOutputStream()))
+				.eval(LispReader.readFromString("(let ((c \"rt ~a/~a\")) (warn c 1 2))"));
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		assertThat(err.toString()).contains("WARNING: rt 1/2");
+	}
+
+	@Test
 	void warnRendersTheFormatControlArgumentsOfItsCondition() {
 		// warn's line goes to standard ERROR, so it needs a capture of its own.
 		ByteArrayOutputStream err = new ByteArrayOutputStream();

@@ -20,7 +20,7 @@ every program that formats anything.
 
 ## What reaches the runtime renderer
 
-Five ways in -- all of them funnel into `(%fmt-render control arguments)`:
+Six ways in -- all of them funnel into `(%fmt-render control arguments)`:
 
 1. a computed control expression (cl-who's `escape-string` binds its control to
    a local; cl-postgres carries the server's message);
@@ -34,7 +34,11 @@ Five ways in -- all of them funnel into `(%fmt-render control arguments)`:
    `~p`): `expandFormat` falls back rather than failing the compile, so a library
    carrying such a directive on a cold branch still builds;
 5. a condition's `format-control` slot -- `%format-condition` (see
-   `.kb/error-handling.md`) renders a string control through the renderer.
+   `.kb/error-handling.md`) renders a string control through the renderer;
+6. `(error/warn/signal/cerror <computed datum> args...)` -- a datum that is a
+   STRING at run time is a format control and the arguments after it are its
+   format arguments, so the object-designator expansion's string arm renders it
+   (`.kb/error-handling.md`, todo-220).
 
 ## Injection (compile path) and lazy load (interpreter)
 
@@ -45,7 +49,11 @@ the fast path. The gate scans the program for (a) a renderer call already presen
 (the condition-report runtime injected just above, a spliced library), (b)
 `#'format`, (c) a `(format ...)` call whose control the static path will decline
 -- decided by running the SAME `FmtParser` the expansion runs, so the gate and
-the expansion cannot answer differently.
+the expansion cannot answer differently -- and (d) a signal designator with a
+computed datum and arguments after it (`signalRendersRuntimeControl`, repeating
+`expandSignalDesignatorInner`'s case split, because the expansion it predicts has
+not run yet). (d) is what carries the renderer for a `(warn ctrl a b)`: only
+`error` also injects `%error-runtime`, whose body the (a) scan would have seen.
 
 It has to be a scan of the pre-expansion program: expression expansion happens
 per form much later (Pass 2) and cannot add a top-level defun. A program with no
@@ -103,7 +111,9 @@ zero.
   does. The old cut-down fallback answered lowercase, which is why cl-who's
   numeric entity (`&#x~x;`) changed case when the renderer landed
   (`ClWhoE2eTest`).
-- **`(error <runtime control> args...)` still drops its format arguments** --
-  `expandSignalDesignatorInner` routes a non-literal string datum to the OBJECT
-  designator path, which never sees the arguments. Separate defect, tracked in
-  its own todo; the renderer is not the reason.
+- **A signal's runtime control renders EAGERLY, into the message** -- the
+  condition a handler sees carries the rendered text in `format-control` and nil
+  `format-arguments`, exactly as the literal-control designator has always built
+  it. `.kb/error-handling.md` ("the string designator renders eagerly") has the
+  reason and the one observable consequence; the point here is that BOTH paths
+  deviate the same way, so the two spellings of one signal cannot drift.

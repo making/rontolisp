@@ -1653,6 +1653,28 @@ cases:
       A=1 S="s" D=42 00007% 1,2 cond=c ~ end
       A | B (00007) 1,234,567
       &#xE9;
+  # A STRING datum is a format control and the rest are its format arguments
+  # whatever the datum's shape in the source, so a control computed at run time
+  # renders exactly like a literal one (todo-220).
+  - name: signal-runtime-control-string
+    source: |
+      (print (handler-case (error "lit ~a-~a" 1 2) (error (e) (princ-to-string e))))
+      (let ((ci-sig-c "~a-~a"))
+        (print (handler-case (error ci-sig-c 1 2) (error (e) (princ-to-string e)))))
+      (let ((ci-sig-c "PostgreSQL warning: ~A~@[~%~A~]"))
+        (print (handler-case (error ci-sig-c "relation notes already exists, skipping" nil)
+                 (error (e) (princ-to-string e)))))
+      (defun ci-sig-control () "computed ~5,'0d [~{~a~^,~}]")
+      (print (handler-case (error (ci-sig-control) 42 (list 'a 'b))
+               (error (e) (princ-to-string e))))
+      (let ((ci-sig-c "sig ~a/~a"))
+        (print (handler-case (signal ci-sig-c 3 4) (condition (e) (princ-to-string e)))))
+    expected: |
+      "lit 1-2"
+      "1-2"
+      "PostgreSQL warning: relation notes already exists, skipping"
+      "computed 00042 [A,B]"
+      "sig 3/4"
   - name: format-directives-radix-character-case
     source: |
       (format t "~x ~o ~b ~8r ~x [~8,'0x]~%" 255 256 10 4096 -255 255)

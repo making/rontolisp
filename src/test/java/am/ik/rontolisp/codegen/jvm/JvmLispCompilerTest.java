@@ -562,6 +562,26 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunRuntimeControlStringDatumRendersItsFormatArguments() throws Exception {
+		assertThat(compileAndRun("""
+				(print (list (handler-case (error "lit ~a-~a" 1 2) (error (e) (princ-to-string e)))
+				             (let ((c "~a-~a"))
+				               (handler-case (error c 1 2) (error (e) (princ-to-string e))))
+				             (let ((c "PostgreSQL warning: ~A~@[~%~A~]"))
+				               (handler-case (error c "relation already exists, skipping" nil)
+				                 (error (e) (princ-to-string e))))
+				             (let ((c "sig ~a/~a"))
+				               (handler-case (signal c 3 4) (condition (e) (princ-to-string e))))))
+				"""))
+			.isEqualTo("(\"lit 1-2\" \"1-2\" \"PostgreSQL warning: relation already exists, skipping\" \"sig 3/4\")");
+	}
+
+	@Test
+	void compileAndRunRuntimeControlStringDatumRendersItsFormatArgumentsUnderWarn() throws Exception {
+		assertThat(compileAndRunCapturingErr("(let ((c \"rt ~a/~a\")) (warn c 1 2))")).isEqualTo("WARNING: rt 1/2");
+	}
+
+	@Test
 	void compileAndRunWarnRendersTheFormatControlArguments() throws Exception {
 		assertThat(compileAndRunCapturingErr(
 				"(warn 'simple-warning :format-control \"sw ~A/~A\" :format-arguments (list 1 2))"))

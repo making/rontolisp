@@ -10542,7 +10542,11 @@ public final class LispMacroExpander {
 	 * just above, or a library form spliced with one;</li>
 	 * <li>{@code #'format} is taken as a value, whose wrapper renders through it;</li>
 	 * <li>a {@code (format ...)} call whose control the static expansion will decline --
-	 * see {@link #formatUsesRenderer}.</li>
+	 * see {@link #formatUsesRenderer};</li>
+	 * <li>an {@code error} / {@code warn} / {@code signal} / {@code cerror} call whose
+	 * datum is computed and which carries arguments after it -- a datum that is a STRING
+	 * at runtime is a format control, and the designator expansion renders it -- see
+	 * {@link #signalRendersRuntimeControl}.</li>
 	 * </ul>
 	 * @param forms the program to scan
 	 * @return the program, with the renderer definitions appended when it needs them
@@ -10570,8 +10574,38 @@ public final class LispMacroExpander {
 			if (LispNames.FORMAT.equals(head.name()) && formatUsesRenderer(cons)) {
 				return true;
 			}
+			if (signalRendersRuntimeControl(head.name(), cons)) {
+				return true;
+			}
 		}
 		return reachesFormatRenderer(cons.car()) || reachesFormatRenderer(cons.cdr());
+	}
+
+	/**
+	 * Whether the signal designator will lower this call through the runtime renderer:
+	 * the datum is neither a literal control string nor a statically known condition type
+	 * (a quoted symbol, a literal {@code make-condition}) AND arguments follow it, so the
+	 * expansion carries a {@code %fmt-render} of the datum for the case where it is a
+	 * string at run time (see
+	 * {@link #expandObjectSignal(String, LispVal, ClosRegistry, boolean, LispVal)}). The
+	 * scan runs on the SOURCE program, before the designator expansion, so it has to
+	 * repeat that case split rather than look for the renderer call.
+	 * @param head the call's operator name, qualified or plain
+	 * @param cons the call
+	 * @return true when the expansion of this call contains a renderer call
+	 */
+	private static boolean signalRendersRuntimeControl(String head, LispCons cons) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head);
+		String member = qn == null ? head : qn.member();
+		boolean signalOperator = LispNames.ERROR.equals(member) || LispNames.WARN.equals(member)
+				|| LispNames.SIGNAL.equals(member) || LispNames.CERROR.equals(member);
+		if (!signalOperator || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		// (cerror continue-control datum args...) carries its datum one place later.
+		int datumIndex = LispNames.CERROR.equals(member) ? 2 : 1;
+		return parts.size() > datumIndex + 1 && isRuntimeErrorDatum(parts.get(datumIndex));
 	}
 
 	/**
@@ -12706,7 +12740,11 @@ public final class LispMacroExpander {
 			LispVal symbolCase = listToCons(List.of(new LispSymbol(LispNames.APPLY),
 					listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(opName))), datumVar,
 					listToCons(argList)));
-			LispVal objectCase = expandObjectSignal(internalName, datumVar, closRegistry, signalHook);
+			// A runtime STRING value is a format control, so the object-designator
+			// expansion gets the arguments to render into it (its own string arm tests
+			// stringp first, before this branch's symbol test could see one).
+			LispVal objectCase = expandObjectSignal(internalName, datumVar, closRegistry, signalHook,
+					formatArgumentList(parts));
 			LispVal symbolTest = listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.SYMBOLP, datumVar),
 					callOf(LispNames.NOT, callOf(LispNames.NULL, datumVar))));
 			return makeLet(datumVar.name(), datum, makeIf(symbolTest, symbolCase, objectCase));
@@ -12726,7 +12764,25 @@ public final class LispMacroExpander {
 			listParts.addAll(parts.subList(2, parts.size()));
 			return listToCons(List.of(new LispSymbol(LispNames.ERROR_RUNTIME), datum, listToCons(listParts)));
 		}
-		return expandObjectSignal(internalName, datum, closRegistry, signalHook);
+		return expandObjectSignal(internalName, datum, closRegistry, signalHook, formatArgumentList(parts));
+	}
+
+	/**
+	 * The {@code (list args...)} form of a signal call's arguments after the datum -- the
+	 * format-argument list of a datum that is a control string at runtime -- or null when
+	 * the call has no such arguments (the datum-only shape, whose expansion must stay
+	 * exactly as it was).
+	 * @param parts the whole signal call, operator first
+	 * @return the argument-list form, or null
+	 */
+	private static @Nullable LispVal formatArgumentList(List<LispVal> parts) {
+		if (parts.size() <= 2) {
+			return null;
+		}
+		List<LispVal> listParts = new java.util.ArrayList<>();
+		listParts.add(new LispSymbol(LispNames.LIST));
+		listParts.addAll(parts.subList(2, parts.size()));
+		return listToCons(listParts);
 	}
 
 	/**
@@ -12990,8 +13046,42 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal expandObjectSignal(String internalName, LispVal datumExpr, ClosRegistry closRegistry,
 			boolean signalHook) {
+		return expandObjectSignal(internalName, datumExpr, closRegistry, signalHook, null);
+	}
+
+	/**
+	 * The condition-object designator with the call's remaining arguments (see
+	 * {@link #expandObjectSignal(String, LispVal, ClosRegistry, boolean)}). Per CL a
+	 * STRING datum is a format control and the rest are its format arguments, whatever
+	 * the datum's shape in the source -- so when the datum turns out to be a string at
+	 * runtime, the message is the control RENDERED over those arguments
+	 * ({@code %fmt-render}, the same renderer a computed {@code (format nil ctrl args)}
+	 * uses) instead of the raw control with its directives standing (todo-220).
+	 * <p>
+	 * The rendering is EAGER, exactly as the literal-control designator
+	 * ({@link #expandStringSignal}) renders at expansion time: the instance a handler
+	 * sees carries the rendered text in {@code format-control} and nil
+	 * {@code format-arguments}, so both spellings of the same signal produce the same
+	 * condition. Storing the raw control plus the argument list instead would be closer
+	 * to CLHS, but only the runtime path could do it -- the literal path renders without
+	 * a renderer in the artifact, which is the whole reason there are two paths
+	 * ({@code .kb/format.md}) -- and one operator with two condition shapes is worse than
+	 * one shared deviation.
+	 * @param internalName the internal signalling primitive
+	 * @param datumExpr the datum expression
+	 * @param closRegistry the class registry
+	 * @param signalHook whether to run {@code handler-bind} handlers at the signal point
+	 * @param formatArgs a form answering the format-argument LIST, or null when the call
+	 * has no arguments after the datum (then the expansion is unchanged)
+	 */
+	private static LispVal expandObjectSignal(String internalName, LispVal datumExpr, ClosRegistry closRegistry,
+			boolean signalHook, @Nullable LispVal formatArgs) {
 		boolean warn = LispNames.WARN_INTERNAL.equals(internalName);
 		LispSymbol condVar = new LispSymbol(SIGNAL_COND_VAR);
+		// The string arm's message: the datum itself when nothing can be rendered into
+		// it, the temp holding the rendered text otherwise (bound around the whole arm
+		// below, so the renderer runs once).
+		LispVal stringMessage = formatArgs == null ? condVar : new LispSymbol(SIG_MSG_VAR);
 		LispVal tag = objTag(condVar);
 		LispVal slotMsg = objRef(condVar, 0);
 		LispVal isSimpleWithMessage = listToCons(List.of(new LispSymbol(LispNames.AND),
@@ -13013,18 +13103,18 @@ public final class LispMacroExpander {
 		LispVal conditionCase;
 		if (warn) {
 			LispVal prefixed = listToCons(
-					List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), condVar));
+					List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), stringMessage));
 			stringCase = listToCons(List.of(new LispSymbol(internalName), prefixed));
 			conditionCase = listToCons(List.of(new LispSymbol(internalName), listToCons(
 					List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), message))));
 		}
 		else if (LispNames.SIGNAL_COND_INTERNAL.equals(internalName)) {
-			LispVal instance = objNew(SIMPLE_CONDITION_TAG, List.of(condVar, LispNil.INSTANCE));
-			stringCase = listToCons(List.of(new LispSymbol(internalName), instance, condVar));
+			LispVal instance = objNew(SIMPLE_CONDITION_TAG, List.of(stringMessage, LispNil.INSTANCE));
+			stringCase = listToCons(List.of(new LispSymbol(internalName), instance, stringMessage));
 			conditionCase = listToCons(List.of(new LispSymbol(internalName), condVar, message));
 		}
 		else {
-			stringCase = listToCons(List.of(new LispSymbol(LispNames.ERROR_INTERNAL), condVar));
+			stringCase = listToCons(List.of(new LispSymbol(LispNames.ERROR_INTERNAL), stringMessage));
 			conditionCase = listToCons(List.of(new LispSymbol(LispNames.ERROR_COND_INTERNAL), condVar, message));
 		}
 		// A runtime SYMBOL datum (the compiled #'error/#'signal/#'warn wrappers forward
@@ -13051,15 +13141,21 @@ public final class LispMacroExpander {
 			// instance itself.
 			String simpleTag = warn ? "%class-SIMPLE-WARNING" : LispNames.SIGNAL_COND_INTERNAL.equals(internalName)
 					? SIMPLE_CONDITION_TAG : "%class-SIMPLE-ERROR";
-			stringCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
-					callOf(LispNames.RUN_HANDLERS_INTERNAL, objNew(simpleTag, List.of(condVar, LispNil.INSTANCE))),
-					stringCase));
+			stringCase = listToCons(List.of(new LispSymbol(LispNames.PROGN), callOf(LispNames.RUN_HANDLERS_INTERNAL,
+					objNew(simpleTag, List.of(stringMessage, LispNil.INSTANCE))), stringCase));
 			symbolCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 					callOf(LispNames.RUN_HANDLERS_INTERNAL,
 							objNew(simpleTag, List.of(callOf(LispNames.PRINC_TO_STRING, condVar), LispNil.INSTANCE))),
 					symbolCase));
 			conditionCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 					callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), conditionCase));
+		}
+		if (formatArgs != null) {
+			// Rendered once, around the whole string arm (the restart-mode hook reads the
+			// message too). The argument forms are evaluated only on this arm: a datum
+			// that is not a string carries no format arguments, so the expansion of every
+			// other arm -- and of every call with a datum only -- is unchanged.
+			stringCase = makeLet(SIG_MSG_VAR, FormatRenderer.call(condVar, formatArgs), stringCase);
 		}
 		return makeLet(SIGNAL_COND_VAR, datumExpr, makeIf(callOf(LispNames.STRINGP, condVar), stringCase,
 				makeIf(callOf(LispNames.SYMBOLP, condVar), symbolCase, conditionCase)));
@@ -19203,8 +19299,12 @@ public final class LispMacroExpander {
 			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, d, quotedSymbolList(spellings)),
 					listToCons(List.of(new LispSymbol(helperName), a)))));
 		}
-		clauses.add(listToCons(
-				List.of(LispTrue.INSTANCE, expandObjectSignal(LispNames.ERROR_INTERNAL, d, closRegistry, signalHook))));
+		// The fallthrough: a datum that names no condition class. A STRING one is a
+		// format control, and then the second argument is its format-argument list
+		// rather than an initarg plist, so the object designator renders it (todo-220);
+		// every other value keeps the plain object shape, which ignores the list.
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE,
+				expandObjectSignal(LispNames.ERROR_INTERNAL, d, closRegistry, signalHook, a))));
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);

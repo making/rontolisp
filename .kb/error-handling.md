@@ -87,9 +87,43 @@ everywhere except `--no-gc`.
   rendering (string directly; lambda via `with-output-to-string` + `funcall`),
   a supplied `:format-control` for `simple-*`-style classes, or the legacy
   `Condition ~s was signalled.` shape; object designator dispatches at runtime
-  (string → plain message, simple-* instance → slot 1, else
+  (string → the control RENDERED over the call's remaining arguments, see the
+  next bullet; simple-* instance → slot 1, else
   `Condition of type X was signalled.`). A literal `(make-condition 'type ...)`
-  argument re-routes through the typed path. `make-condition` builds instances
+  argument re-routes through the typed path.
+- **A datum that is a STRING at run time is a format control, and the arguments
+  after it are its format arguments** — CL says so whatever the datum's shape in
+  the source, so `(let ((c "~a-~a")) (error c 1 2))` reports `1-2`, not `NIL-NIL`
+  (todo-220; before it, `expandSignalDesignatorInner` handed the OBJECT
+  designator the datum alone and the arguments were dropped on the floor,
+  identically on all four backends). `expandObjectSignal` takes the argument-list
+  form and its string arm renders `(%fmt-render datum (list args...))`; the three
+  callers that can carry arguments feed it — the compile-path fallthrough, the
+  interpreter's runtime-type-dispatch arm (whose symbol test never sees a string:
+  the object expansion tests `stringp` first), and `%error-runtime`'s `t` clause,
+  where the second argument is a format-argument list rather than an initarg
+  plist precisely because the datum was a string. The renderer is injected for it
+  by a fourth arm of the gate in `.kb/format.md`.
+  - **The rendering is EAGER**, exactly as `expandStringSignal` renders a literal
+    control at expansion time: the instance carries the rendered text in
+    `format-control` and nil `format-arguments`. Storing the raw control plus the
+    argument list would be closer to CLHS *and* would retire the double-render
+    deviation below — but only on this path: the literal path renders without a
+    renderer in the artifact, which is the whole reason there are two of them
+    (`.kb/format.md`), so making it carry the pair would put the renderer into
+    every program that signals `(error "literal ~a" x)`. One operator with two
+    condition shapes is the worse trade. **Re-evaluate if** the renderer ever
+    becomes free (tree-shakeable per directive, or the literal path stops being
+    a concatenation): then both paths should store the pair and render lazily.
+  - The argument forms are evaluated only on the string arm — a datum that turns
+    out to be a condition instance or a type symbol has no format arguments — so
+    every datum-only call and every non-string arm keeps its previous expansion
+    byte for byte.
+  - The lite `#'error`/`#'warn`/`#'signal`/`#'cerror` WRAPPERS still forward the
+    datum only (`BuiltinFunctionWrappers.SIGNAL_FUNCTIONS`), so
+    `(apply #'error c '(1 2))` drops the arguments on the compiled backends.
+    That is the wrappers' documented datum-only lite semantics (initargs go the
+    same way), not this defect. `make-condition` builds instances
   the same way (registry overload; the registry-less overload keeps the old
   string collapse for `--no-gc` and `macroexpand-1`).
 - Channels: interpreter `LispEvalException` carries a nullable
@@ -383,17 +417,20 @@ belonged (cl-postgres surfaces every server NOTICE that way).
   `(princ-to-string ...)` form in the injected `format-render.lisp` defuns and gets
   rewritten with everything else.
 - **Known lite deviation**: rontolisp's string-designator signal path renders the
-  message EAGERLY, so a `handler-case`-synthesized `simple-error` carries an
+  message EAGERLY -- a LITERAL control at expansion time, a RUNTIME one through
+  `%fmt-render` at the signal point (Phase 2, todo-220) -- so a
+  `handler-case`-synthesized `simple-error` carries an
   already-rendered message in `format-control`. Printing it renders it a second
   time, which is invisible unless the rendered text still contains a live directive
   (`(error "~a" "~a")` prints `NIL` where CL prints `~a`). Rendering unconditionally
   is the CLHS-specified report and keeps `~%`-bearing controls with no arguments
   correct, which is the commoner shape.
 - Pinned by `conditionReport*`/`simpleConditionFamily*`/`warnRenders*`/
-  `aPrintObjectMethodStillWins*`/`aConditionWithNoReport*` in `LispEvaluatorTest`,
-  their `compileAndRun*` twins in `JvmLispCompilerTest`, the `ehConditionReport*`
-  block of `WasmLispCompilerIntegrationTest`, and the cross-backend ci-spec case
-  `condition-report-printing`.
+  `aRuntimeControlStringDatum*`/`aPrintObjectMethodStillWins*`/
+  `aConditionWithNoReport*` in `LispEvaluatorTest`, their `compileAndRun*` twins
+  in `JvmLispCompilerTest`, the `ehConditionReport*`/`ehRuntimeControlString*`
+  block of `WasmLispCompilerIntegrationTest`, and the cross-backend ci-spec cases
+  `condition-report-printing` + `signal-runtime-control-string`.
 
 ## cerror + signal-operator function values (todo-085, cl-base64)
 
