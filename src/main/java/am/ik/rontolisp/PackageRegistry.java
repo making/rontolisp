@@ -282,7 +282,16 @@ public final class PackageRegistry {
 	 */
 	private static final Set<String> CLOSER_MOP_EXTERNALS = Set.of(LispNames.CLASS_SLOTS, LispNames.ENSURE_FINALIZED,
 			LispNames.CLASSP, LispNames.CLASS_NAME, LispNames.CLASS_DIRECT_SUPERCLASSES, LispNames.CLASS_FINALIZED_P,
-			LispNames.SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_INITARGS, LispNames.SLOT_DEFINITION_TYPE);
+			LispNames.SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_INITARGS, LispNames.SLOT_DEFINITION_TYPE,
+			// The metaclass protocol generics (system defaults in
+			// macro/mop-protocol.lisp)
+			// and the two slot-definition base-class names a user metaclass protocol
+			// subclasses -- MOP names, not CL symbols, so they resolve only through this
+			// package (closer-common-lisp re-exports them).
+			LispNames.VALIDATE_SUPERCLASS, LispNames.DIRECT_SLOT_DEFINITION_CLASS,
+			LispNames.EFFECTIVE_SLOT_DEFINITION_CLASS, LispNames.COMPUTE_EFFECTIVE_SLOT_DEFINITION,
+			LispNames.FINALIZE_INHERITANCE, ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME,
+			ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME);
 
 	private static final List<String> USOCKET_FUNCTION_NAMES = sorted(USOCKET_FUNCTIONS);
 

@@ -253,26 +253,49 @@ allocate-instance -- Phase A COMPLETE):
 - `closer-common-lisp` package: flat re-export of CL union closer-mop
   exports, nicknames `c2cl`; re-point the `C2CL` nickname.
 
-### Phase B -- metaclass protocol at class definition
+### Phase B -- metaclass protocol at class definition -- DONE 2026-08-01
 
-- `expandDefclass` accepts `(:metaclass M)`; with a metaclass present,
-  unknown CLASS options become initargs (`:table-name`, `:keys` ->
-  `:keys` initarg per upstream) and unknown SLOT options are collected as
-  initargs for `direct-slot-definition-class` (`:col-type`, `:col-default`,
-  `:col-name`, `:references`, `:column`, `:ghost`, ...). WITHOUT a
-  metaclass the current strict errors stay.
-- The static side still registers the class in `ClosRegistry` (instances of a
-  DAO class are ordinary instances; `:initarg`/`:accessor`/`:initform` keep
-  their existing meaning; col-* options are stripped from the static slot
-  spec).
-- A definition-time driver (`%ensure-class-with-metaclass`, in the MOP
-  library, driven from the expander through the evaluator at hand): builds
-  direct-slot-definition metaobjects via `direct-slot-definition-class`,
-  `make-instance`s the metaclass with class options as initargs (running the
-  user's `shared-initialize` hooks), `validate-superclass`, then eager
-  finalization: per slot name, `compute-effective-slot-definition` with the
-  `*direct-column-slot*` dynamic-extent contract, then
-  `finalize-inheritance` (the `:after` runs `build-dao-methods`).
+Landed (all four backends agree, byte-identical output; mechanics in
+`.kb/clos.md`):
+
+- `expandDefclass` accepts `(:metaclass M)` (M registered + descends from
+  standard-class, else error; strict errors stay without a metaclass):
+  unknown CLASS options -> metaclass initargs valued with the option TAIL
+  list; unknown SLOT options -> per-slot extras (single occurrence each)
+  riding the canonical spec plist. Static registration unchanged; the
+  expansion emits one `(%ensure-class-with-metaclass ...)` driver call last.
+- The driver + protocol defaults (validate-superclass permissive /
+  direct-slot-definition-class / effective-slot-definition-class /
+  compute-effective-slot-definition with the `*direct-column-slot*`
+  dynamic-extent contract / finalize-inheritance EAGER) live in
+  `macro/mop-protocol.lisp` (`MopProtocol.forms()`, FormatRenderer pattern),
+  self-contained over `%obj-ref` indexes, defmethods only so user hooks merge
+  in either order. Defaults answer class NAMES so plain closer-mop programs
+  drag no find-class runtime in.
+- Interpreter: `ensureMopProtocolLoaded` on the first `:metaclass` defclass
+  (+ MOP seeding on a defclass extending a seeded base class); builtins
+  `%mop-make-instance` (re-enters ordinary make-instance with quote-wrapped
+  args) and `%register-class-metaobject`
+  (`ClosRegistry.registerClassMetaobject` primes the memo). Compile paths:
+  protocol forms PREPENDED (their find-class use flips the metaobject
+  runtime), `seededMopConstructorDefuns` + generated `%mop-make-instance`
+  (arms = metaobject-ancestored classes only) + `%register-class-metaobject`
+  appended post-walk.
+- Ceiling fallout fixed the essential way AGAIN: the runtime-slot-name
+  `slot-value`/`slot-boundp` dispatch was inline per call site and grew with
+  the registry; the new ci-spec classes pushed a corpus dolist body past the
+  JVM signed 16-bit branch encoding. Now outlined into shared
+  `%slot-value-runtime`/`%slot-boundp-runtime` defuns (gated on a
+  non-literal-name site; the interpreter resolves natively). Bonus: a
+  top-level compile crash now names the offending form (JvmLispCompiler
+  chunk-loop wrapper). Runtime-name `(setf (slot-value ...))` was and stays
+  unsupported.
+- Tests: `defclassMetaclassRunsTheClassDefinitionProtocol` (+ the
+  requires-a-registered-metaclass error case) on LispEvaluatorTest, mirrored
+  on JVM + WASM; ci-spec `defclass-metaclass-protocol`. Docs: defclass page
+  (en+ja) gained the metaclass section + example and dropped the stale "no
+  find-class" clause. `CLOSER_MOP_EXTERNALS` grew the 5 protocol names + the
+  2 slot-definition class names (closer-common-lisp re-exports them).
 
 ### Phase C -- build-dao-methods: %eval interception ("expand and splice")
 

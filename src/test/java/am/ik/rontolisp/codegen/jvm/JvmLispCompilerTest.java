@@ -194,6 +194,66 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileDefclassMetaclassRunsTheClassDefinitionProtocol() throws Exception {
+		// The postmodern dao-class shape on the compile path, mirroring
+		// LispEvaluatorTest#defclassMetaclassRunsTheClassDefinitionProtocol: the
+		// MopProtocol defaults and the %mop-make-instance/%register-class-metaobject
+		// runtime are injected by the :metaclass gate, the driver call runs at program
+		// start in top-level order, and find-class/class-of answer the driver-built
+		// metaclass instance from then on.
+		assertThat(compileAndRun("""
+				(defvar *direct-column-slot* nil)
+				(defclass mc-dao-class (standard-class)
+				  ((direct-keys :initarg :keys :initform nil :accessor mc-direct-keys)
+				   (table-name)))
+				(defclass mc-direct-column-slot (closer-mop:standard-direct-slot-definition)
+				  ((col-type :initarg :col-type :accessor mc-column-type)))
+				(defclass mc-effective-column-slot (closer-mop:standard-effective-slot-definition)
+				  ((direct-slot :initform *direct-column-slot* :reader mc-slot-column)))
+				(defmethod closer-mop:validate-superclass ((class mc-dao-class) (super standard-class)) t)
+				(defmethod shared-initialize :before ((class mc-dao-class) slot-names
+				                                      &key table-name &allow-other-keys)
+				  (if table-name
+				      (setf (slot-value class 'table-name) (car table-name))
+				      (slot-makunbound class 'table-name)))
+				(defmethod closer-mop:direct-slot-definition-class ((class mc-dao-class) &rest initargs
+				                                                    &key col-type &allow-other-keys)
+				  (if col-type (find-class 'mc-direct-column-slot) (call-next-method)))
+				(defmethod closer-mop:compute-effective-slot-definition ((class mc-dao-class) name dsds)
+				  (let ((*direct-column-slot* (find-if (lambda (s) (typep s 'mc-direct-column-slot)) dsds)))
+				    (call-next-method)))
+				(defmethod closer-mop:effective-slot-definition-class ((class mc-dao-class) &rest initargs)
+				  (if *direct-column-slot* (find-class 'mc-effective-column-slot) (call-next-method)))
+				(defvar *mc-finalized* nil)
+				(defmethod closer-mop:finalize-inheritance :after ((class mc-dao-class))
+				  (setq *mc-finalized* (cons (%obj-ref class 0) *mc-finalized*)))
+				(defclass mc-user ()
+				  ((id :col-type integer :initarg :id :accessor mc-user-id)
+				   (note :initarg :note :initform "n/a"))
+				  (:metaclass mc-dao-class)
+				  (:table-name "users")
+				  (:keys id))
+				(print (list (let ((c (find-class 'mc-user)))
+				               (list (%obj-ref c 0)
+				                     (typep c 'mc-dao-class)
+				                     (eq (class-of c) (find-class 'mc-dao-class))
+				                     (slot-value c 'table-name)
+				                     (mc-direct-keys c)
+				                     *mc-finalized*
+				                     (%obj-ref c 4)))
+				             (let ((u (make-instance 'mc-user :id 7)))
+				               (list (mc-user-id u) (slot-value u 'note) (eq (class-of u) (find-class 'mc-user))))
+				             (mapcar (lambda (s)
+				                       (list (%obj-ref s 0)
+				                             (if (typep s 'mc-effective-column-slot)
+				                                 (mc-column-type (mc-slot-column s))
+				                                 :plain)))
+				                     (%obj-ref (find-class 'mc-user) 3))))
+				"""))
+			.isEqualTo("((MC-USER T T \"users\" (ID) (MC-USER) T) (7 \"n/a\" T) ((ID INTEGER) (NOTE :PLAIN)))");
+	}
+
+	@Test
 	void compileCloserCommonLispPackageServesTheDaoPackageShape() throws Exception {
 		// (:use :closer-common-lisp) implies cl, and the closer-mop members inherit
 		// through the re-export -- the postmodern DAO package shape on the compile

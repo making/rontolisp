@@ -23,6 +23,7 @@ import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.macro.FormatRenderer;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.MopProtocol;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispFuture;
 import am.ik.rontolisp.LispNil;
@@ -735,6 +736,48 @@ public final class LispEvaluator {
 								: LispNil.INSTANCE;
 					}
 					return new LispInstance(layout, slots);
+				}));
+		this.globalEnv.defineFunction(LispNames.MOP_MAKE_INSTANCE,
+				new LispFunction(LispNames.MOP_MAKE_INSTANCE, args -> {
+					// (%mop-make-instance designator initargs...) -- the metaclass
+					// protocol's runtime-class make-instance: the designator (a class
+					// metaobject or a name symbol) picks the class at RUN time, which the
+					// static make-instance expansion cannot. Re-enters the ordinary
+					// make-instance evaluation with every argument quote-wrapped, so the
+					// constructor semantics and the initialization-generic hooks stay the
+					// single implementation.
+					if (args.isEmpty()) {
+						throw new LispEvalException(
+								LispNames.MOP_MAKE_INSTANCE + " expects a class designator, got 0 arguments");
+					}
+					LispVal designator = args.get(0);
+					if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
+						designator = inst.slot(0);
+					}
+					if (!(designator instanceof LispSymbol classSym)) {
+						throw new LispEvalException(LispNames.MOP_MAKE_INSTANCE + " expects a class designator, got "
+								+ args.get(0).print());
+					}
+					LispVal call = LispNil.INSTANCE;
+					for (int i = args.size() - 1; i >= 1; i--) {
+						call = new LispCons(quoteForm(args.get(i)), call);
+					}
+					call = new LispCons(new LispSymbol(LispNames.MAKE_INSTANCE),
+							new LispCons(quoteForm(classSym), call));
+					return eval(call, this.globalEnv);
+				}));
+		this.globalEnv.defineFunction(LispNames.REGISTER_CLASS_METAOBJECT,
+				new LispFunction(LispNames.REGISTER_CLASS_METAOBJECT, args -> {
+					// (%register-class-metaobject name metaobject) -- primes the registry
+					// memo, so find-class/class-of answer the driver-built metaclass
+					// instance instead of materializing the plain standard-class view.
+					if (args.size() != 2 || !(args.get(0) instanceof LispSymbol nameSym)
+							|| !(args.get(1) instanceof LispInstance metaobject)) {
+						throw new LispEvalException(
+								LispNames.REGISTER_CLASS_METAOBJECT + " expects a class name and a metaobject");
+					}
+					this.closRegistry.registerClassMetaobject(nameSym.name(), metaobject);
+					return metaobject;
 				}));
 		this.globalEnv.defineFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL,
 				new LispFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL, args -> {
@@ -2472,6 +2515,33 @@ public final class LispEvaluator {
 		}
 	}
 
+	private boolean mopProtocolLoaded;
+
+	/**
+	 * Evaluates the metaclass protocol once, on the first {@code :metaclass} defclass:
+	 * the MOP base-class seeding, the seeded classes' keyword constructors (their
+	 * defclass never ran, so {@code %mop-make-instance} could not dispatch to them
+	 * otherwise), and the {@code MopProtocol} default methods plus the
+	 * {@code %ensure-class-with-metaclass} driver. User protocol methods defined BEFORE
+	 * this point (postmodern's hooks precede its first DAO class) auto-created their
+	 * generics; the defaults merge into them like any later defmethod.
+	 */
+	private void ensureMopProtocolLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.mopProtocolLoaded) {
+				return;
+			}
+			this.mopProtocolLoaded = true;
+			this.closRegistry.ensureMopClassesSeeded();
+			for (LispVal form : LispMacroExpander.seededMopConstructorDefuns(this.closRegistry)) {
+				eval(form, this.globalEnv);
+			}
+			for (LispVal form : MopProtocol.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
 	/**
 	 * Evaluates the WIT runtime ({@code wit.lisp}: the provider registry,
 	 * {@code rontolisp:wit-provide} and the {@code rontolisp:wit-error} condition -- the
@@ -3274,6 +3344,16 @@ public final class LispEvaluator {
 		// class that never went through the trivial-gray-streams shim).
 		if (!this.grayStreamsLoaded && referencesGrayBaseClass(cons)) {
 			ensureGrayStreamsLoaded();
+		}
+		// A defclass extending a seeded MOP base class (a metaclass definition, a
+		// slot-definition subclass) needs the seeding before the superclass lookup; one
+		// carrying (:metaclass M) additionally loads the metaclass protocol, whose
+		// driver the expansion below calls as its last generated form.
+		if (LispMacroExpander.defclassNamesMopBaseSuperclass(cons)) {
+			this.closRegistry.ensureMopClassesSeeded();
+		}
+		if (LispMacroExpander.defclassUsesMetaclass(cons)) {
+			ensureMopProtocolLoaded();
 		}
 		// Expand into the generated defuns (constructor, readers/accessors) and
 		// evaluate each, then regenerate the dispatchers that test class specializers:

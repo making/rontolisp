@@ -8715,6 +8715,83 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defclassMetaclassRunsTheClassDefinitionProtocol() {
+		// The postmodern dao-class shape end to end, WITHOUT the closer-mop shim (the
+		// protocol is self-contained): the metaclass instance is what find-class and
+		// class-of answer; the unknown class options arrive as initargs whose value is
+		// the option tail (:table-name -> ("users"), parsed by the user's
+		// shared-initialize :before hook); unknown slot options pick the
+		// direct-slot-definition class; compute-effective-slot-definition's
+		// call-next-method runs the effective-slot instantiation INSIDE the user's
+		// *direct-column-slot* binding (the :initform of the effective slot class reads
+		// it); finalize-inheritance :after fires eagerly at definition time; instances
+		// of the class stay ordinary.
+		assertThat(evalMulti("""
+				(defvar *direct-column-slot* nil)
+				(defclass mc-dao-class (standard-class)
+				  ((direct-keys :initarg :keys :initform nil :accessor mc-direct-keys)
+				   (table-name)))
+				(defclass mc-direct-column-slot (closer-mop:standard-direct-slot-definition)
+				  ((col-type :initarg :col-type :accessor mc-column-type)))
+				(defclass mc-effective-column-slot (closer-mop:standard-effective-slot-definition)
+				  ((direct-slot :initform *direct-column-slot* :reader mc-slot-column)))
+				(defmethod closer-mop:validate-superclass ((class mc-dao-class) (super standard-class)) t)
+				(defmethod shared-initialize :before ((class mc-dao-class) slot-names
+				                                      &key table-name &allow-other-keys)
+				  (if table-name
+				      (setf (slot-value class 'table-name) (car table-name))
+				      (slot-makunbound class 'table-name)))
+				(defmethod closer-mop:direct-slot-definition-class ((class mc-dao-class) &rest initargs
+				                                                    &key col-type &allow-other-keys)
+				  (if col-type (find-class 'mc-direct-column-slot) (call-next-method)))
+				(defmethod closer-mop:compute-effective-slot-definition ((class mc-dao-class) name dsds)
+				  (let ((*direct-column-slot* (find-if (lambda (s) (typep s 'mc-direct-column-slot)) dsds)))
+				    (call-next-method)))
+				(defmethod closer-mop:effective-slot-definition-class ((class mc-dao-class) &rest initargs)
+				  (if *direct-column-slot* (find-class 'mc-effective-column-slot) (call-next-method)))
+				(defvar *mc-finalized* nil)
+				(defmethod closer-mop:finalize-inheritance :after ((class mc-dao-class))
+				  (setq *mc-finalized* (cons (%obj-ref class 0) *mc-finalized*)))
+				(defclass mc-user ()
+				  ((id :col-type integer :initarg :id :accessor mc-user-id)
+				   (note :initarg :note :initform "n/a"))
+				  (:metaclass mc-dao-class)
+				  (:table-name "users")
+				  (:keys id))
+				(list (let ((c (find-class 'mc-user)))
+				        (list (%obj-ref c 0)
+				              (typep c 'mc-dao-class)
+				              (eq (class-of c) (find-class 'mc-dao-class))
+				              (slot-value c 'table-name)
+				              (mc-direct-keys c)
+				              *mc-finalized*
+				              (%obj-ref c 4)))
+				      (let ((u (make-instance 'mc-user :id 7)))
+				        (list (mc-user-id u) (slot-value u 'note) (eq (class-of u) (find-class 'mc-user))))
+				      (mapcar (lambda (s)
+				                (list (%obj-ref s 0)
+				                      (if (typep s 'mc-effective-column-slot)
+				                          (mc-column-type (mc-slot-column s))
+				                          :plain)))
+				              (%obj-ref (find-class 'mc-user) 3)))
+				""").print())
+			.isEqualTo("((MC-USER T T \"users\" (ID) (MC-USER) T) (7 \"n/a\" T) ((ID INTEGER) (NOTE :PLAIN)))");
+	}
+
+	@Test
+	void defclassMetaclassRequiresARegisteredMetaclass() {
+		// :metaclass must name a class inheriting standard-class, defined first -- the
+		// static model's definition-time contract.
+		assertThatThrownBy(() -> evalMulti("""
+				(defclass mc-bad () ((x)) (:metaclass mc-no-such-metaclass))
+				""")).hasMessageContaining(":metaclass must name a class inheriting standard-class");
+		assertThatThrownBy(() -> evalMulti("""
+				(defclass mc-plain () ())
+				(defclass mc-bad2 () ((x)) (:metaclass mc-plain))
+				""")).hasMessageContaining(":metaclass must name a class inheriting standard-class");
+	}
+
+	@Test
 	void closerCommonLispPackageServesTheDaoPackageShape() {
 		// (:use :closer-common-lisp) -- postmodern's DAO package -- sees cl AND the
 		// closer-mop overlay; the qualified c2cl spellings resolve to the home

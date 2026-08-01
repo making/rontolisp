@@ -939,6 +939,20 @@ public final class ClosRegistry {
 		return metaobject;
 	}
 
+	/**
+	 * Primes the metaobject memo with a driver-built instance (the metaclass protocol's
+	 * {@code %register-class-metaobject}): from then on {@code find-class} and
+	 * {@code class-of} answer this instance -- an instance of the USER metaclass --
+	 * instead of building the plain {@code standard-class} view. Keyed like
+	 * {@link #classMetaobject} memoizes, so every spelling resolves to it.
+	 * @param name the class name as the driver received it (the canonical spelling)
+	 * @param metaobject the metaclass instance to answer
+	 */
+	public void registerClassMetaobject(String name, LispInstance metaobject) {
+		ClassInfo info = findClass(name);
+		this.classMetaobjects.put(normalize(info != null ? info.name() : name), metaobject);
+	}
+
 	// The struct half of classMetaobject: built from the layout (slot types all read T,
 	// like slotDefs; readers stay nil -- the accessor names are conc-name spellings the
 	// registry does not keep), superclasses from the direct :include parent.

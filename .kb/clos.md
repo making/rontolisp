@@ -462,18 +462,83 @@ before and every existing artifact stays byte-identical.
   construction contract is its positional constructor). The
   `closer-common-lisp` package that table.lisp `:use`s is a resolver-level
   flat re-export -- mechanics in `.kb/packages.md`.
+  The metaclass protocol (Phase B, 2026-08-01) is IN: a `defclass` carrying
+  `(:metaclass M)` -- `M` must be registered and descend from `standard-class`,
+  i.e. defined by an earlier `defclass (standard-class)` -- keeps its full
+  static expansion (constructor, accessors, registry entry; instances of the
+  class stay ordinary) and additionally emits ONE
+  `(%ensure-class-with-metaclass 'name 'M '(supers) '(slot-spec-plists)
+  '(class-initargs))` driver call as its last generated form. Unknown CLASS
+  options become metaclass initargs whose value is the option TAIL list
+  (`(:table-name "u")` -> `:table-name ("u")`, AMOP canonicalization); unknown
+  SLOT options are collected per slot (single occurrence each) and ride the
+  canonical `(:name .. :initargs .. :initform .. :type .. :readers ..)` spec
+  plist as `direct-slot-definition-class` initargs. The driver + the system
+  default methods for `closer-mop:{validate-superclass (permissive t),
+  direct-slot-definition-class, effective-slot-definition-class,
+  compute-effective-slot-definition, finalize-inheritance}` are Lisp source:
+  `macro/mop-protocol.lisp` via `MopProtocol.forms()` (the `FormatRenderer`
+  pattern), SELF-CONTAINED over the `%obj-ref` index contract -- no closer-mop
+  shim dependency, defMETHODs only (no defgenerics) so user hook methods
+  defined before OR after merge into the same generics. The dynamic-extent
+  contract postmodern relies on holds: the default
+  `compute-effective-slot-definition` calls `effective-slot-definition-class`
+  and instantiates its answer INSIDE the user override's `call-next-method`
+  (so a `*direct-column-slot*` binding is visible to the effective slot
+  class's `:initform`). `finalize-inheritance` runs EAGERLY at definition time
+  (documented divergence; user `:after` methods = postmodern's
+  `build-dao-methods` hook, Phase C). The protocol runs "in the evaluator at
+  hand": the interpreter's `evalDefclass` loads the protocol once
+  (`ensureMopProtocolLoaded`; a defclass merely EXTENDING a seeded MOP base
+  class just seeds), which also covers the compile paths' macro-time
+  evaluator; the compiled program runs the same driver call at program start
+  in top-level order. Compile-path gate (`usesMetaclassProtocol` /
+  `namesMopBaseSuperclass` in `expandTopLevelDefinitions`): PREPENDS
+  `MopProtocol.forms()` to the program (before the reference scans, so the
+  driver's own `find-class` use switches the metaobject runtime on) and
+  appends `seededMopConstructorDefuns` (keyword constructors for the three
+  seeded MOP base classes, whose defclass never ran), the generated
+  `%mop-make-instance` (runtime-class make-instance: designator -> name ->
+  per-class `apply` of the generated constructor + the program's
+  initialization generic, arms bounded to METAOBJECT-ancestored classes) and
+  `%register-class-metaobject` (prepends onto `%class-metaobjects%`, so the
+  driver-built metaclass instance shadows the materialized plain view -- the
+  memo scan takes the first hit; the interpreter twin primes
+  `ClosRegistry.classMetaobjects` via `registerClassMetaobject`). Lite
+  divergences (documented on the defclass page): shared-initialize hooks run
+  AFTER constructor slot-filling (the default primary is identity, so the DAO
+  protocol cannot tell), inherited effective slots are reused from the
+  superclass metaobject unless shadowed (the direct-definition list handed to
+  compute-effective-slot-definition is the shadowing definition alone), and
+  validate-superclass's default is permissive.
   Pinning tests: `LispEvaluatorTest`/`JvmLispCompilerTest`/
   `WasmLispCompilerIntegrationTest` `*FindClass*` + `*CloserMopShim*` +
   `classOf*`/`compileAndRunClassOf`/`classOfAndSlotAccessors` +
-  `allocateInstance*`/`compileAllocateInstance*`, ci-spec
-  `find-class-metaobject-substrate` (raw metaobject print shape included). Still
+  `allocateInstance*`/`compileAllocateInstance*` +
+  `defclassMetaclass*`/`compileDefclassMetaclass*`/
+  `defclassMetaclassRunsTheClassDefinitionProtocol` (WASM), ci-spec
+  `find-class-metaobject-substrate` (raw metaobject print shape included) and
+  `defclass-metaclass-protocol` (the dao-class shape end to end). Still
   OUT (the divergence's remaining "why": classes are compile-time-static,
   `--optimize` DCE and the dispatch tables depend on it): runtime class
-  construction (`ensure-class` from computed data), `add-method`,
-  `compute-applicable-methods`, class redefinition, `update-instance-for-*`.
+  construction (`ensure-class` from computed data, a non-top-level
+  `defclass`), `add-method`, `compute-applicable-methods`, class
+  redefinition, `update-instance-for-*`.
   Known static-model seam: on the compile paths `find-class`/`class-of` see the
   WHOLE program's classes regardless of form order, while the interpreter only
   knows classes already defined at call time.
+  Registry-growth lesson (relearned 2026-08-01, Phase B): the RUNTIME-slot-name
+  `slot-value`/`slot-boundp` dispatch used to be inlined per call site and
+  grows with every layout times its slots -- the metaclass protocol's five
+  extra ci-spec classes pushed a corpus dolist body past the JVM's SIGNED
+  16-BIT branch encoding (32 KB, hit before the 64 KB method cap). It is now
+  outlined into the shared `%slot-value-runtime`/`%slot-boundp-runtime` defuns
+  (`runtimeSlotValueDefun`, gated on a non-literal-name site,
+  `needsRuntimeSlotNameDispatch`; the interpreter resolves runtime names
+  natively and never calls them). The defun bodies still grow with the
+  registry under the 64 KB cap -- chunk them like `%ALLOC-INST-<n>` if a
+  registry ever gets near it. Top-level compile crashes now name the
+  offending form (`JvmLispCompiler` chunk-loop wrapper).
   `change-class` is the ONE runtime exception and is not MOP: both classes are literal, so
   the whole change is a static expansion (see above).
 - Multiple inheritance, `:allocation`/`:writer` slot options, eql specializers

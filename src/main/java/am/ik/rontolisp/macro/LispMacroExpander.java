@@ -7931,11 +7931,32 @@ public final class LispMacroExpander {
 		// Class options after the slot list: (:documentation "...") is accepted and
 		// ignored; (:default-initargs :initarg form ...) overrides the matching slots'
 		// constructor defaults (evaluated at make-instance time when the initarg is
-		// absent, like CL).
+		// absent, like CL). (:metaclass M) switches on the metaclass protocol: any
+		// OTHER unknown class option then becomes a metaclass initarg whose value is
+		// the option's tail list (AMOP canonicalization -- postmodern's
+		// (:table-name "users") arrives as :table-name ("users")), instead of erroring.
 		java.util.Map<String, LispVal> defaultInitargs = new java.util.LinkedHashMap<>();
+		String metaclassName = null;
+		List<LispVal> classInitargs = new java.util.ArrayList<>();
 		for (int i = 4; i < parts.size(); i++) {
 			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
-					&& ":DOCUMENTATION".equals(plainTypeName(optSym))) {
+					&& ":METACLASS".equals(plainTypeName(optSym))) {
+				List<LispVal> option = optCons.toList();
+				if (option.size() != 2 || !(option.get(1) instanceof LispSymbol metaclassSym)) {
+					throw new IllegalArgumentException(
+							LispNames.DEFCLASS + " :metaclass expects a class name: " + cons.print());
+				}
+				ClosRegistry.ClassInfo metaclassInfo = closRegistry.findClass(metaclassSym.name());
+				if (metaclassInfo == null || !metaclassInfo.ancestors().contains(ClosRegistry.STANDARD_CLASS_NAME)) {
+					throw new IllegalArgumentException(LispNames.DEFCLASS + " :metaclass must name a class inheriting "
+							+ "standard-class, defined before its first use: " + metaclassSym.name());
+				}
+				metaclassName = metaclassInfo.name();
+			}
+		}
+		for (int i = 4; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
+					&& (":DOCUMENTATION".equals(plainTypeName(optSym)) || ":METACLASS".equals(plainTypeName(optSym)))) {
 				continue;
 			}
 			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
@@ -7950,13 +7971,19 @@ public final class LispMacroExpander {
 				}
 				continue;
 			}
+			if (metaclassName != null && parts.get(i) instanceof LispCons optCons
+					&& optCons.car() instanceof LispSymbol optSym && optSym.isKeyword()) {
+				classInitargs.add(optSym);
+				classInitargs.add(optCons.cdr());
+				continue;
+			}
 			throw new UnsupportedOperationException(
 					LispNames.DEFCLASS + " option is not supported: " + parts.get(i).print());
 		}
 		List<ParsedSlot> ownSlots = new java.util.ArrayList<>();
 		if (parts.size() > 3 && parts.get(3) instanceof LispCons slotsCons) {
 			for (LispVal spec : slotsCons.toList()) {
-				ownSlots.add(parseDefclassSlot(spec, cons));
+				ownSlots.add(parseDefclassSlot(spec, cons, metaclassName != null));
 			}
 		}
 		else if (parts.size() > 3 && !(parts.get(3) instanceof LispNil)) {
@@ -8073,7 +8100,63 @@ public final class LispMacroExpander {
 				structAccessors.put(accessor, SETF_FUNCTION_MARKER);
 			}
 		}
+		if (metaclassName != null) {
+			// The definition-time driver call, LAST among the generated forms: the class
+			// is statically registered above, and every consumer evaluates the generated
+			// forms in order at definition time (the interpreter's evalDefclass, the
+			// compile paths' macro-time evaluator) or at program start in top-level order
+			// (the compiled program), so the metaclass protocol runs with the class's
+			// own definitions already in place.
+			forms.add(ensureClassWithMetaclassCall(className, metaclassName, superInfo, ownSlots, classInitargs));
+		}
 		return forms;
+	}
+
+	/**
+	 * Builds the {@code (%ensure-class-with-metaclass 'name 'metaclass '(supers)
+	 * '(slot-specs) '(class-initargs))} driver call of a {@code :metaclass} defclass.
+	 * Every argument is quoted data: the direct slot specs are canonicalized plists
+	 * ({@code :name}/{@code :initargs}/{@code :initform}/{@code :type}/{@code :readers}
+	 * -- the seeded slot-definition initarg contract -- followed by the slot's
+	 * non-standard options verbatim), the class initargs are the unknown class options
+	 * keyed by their keyword with the option TAIL as the value.
+	 */
+	private static LispVal ensureClassWithMetaclassCall(String className, String metaclassName,
+			ClosRegistry.@org.jspecify.annotations.Nullable ClassInfo superInfo, List<ParsedSlot> ownSlots,
+			List<LispVal> classInitargs) {
+		List<LispVal> slotSpecs = new java.util.ArrayList<>();
+		for (ParsedSlot parsed : ownSlots) {
+			ClosRegistry.SlotSpec slot = parsed.spec();
+			List<LispVal> spec = new java.util.ArrayList<>();
+			spec.add(new LispSymbol(":NAME"));
+			spec.add(new LispSymbol(slot.baseName()));
+			spec.add(new LispSymbol(":INITARGS"));
+			spec.add(listToCons(List.of(new LispSymbol(slot.initargKeyword()))));
+			spec.add(new LispSymbol(":INITFORM"));
+			spec.add(slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE);
+			spec.add(new LispSymbol(":TYPE"));
+			spec.add(new LispSymbol(slot.type()));
+			spec.add(new LispSymbol(":READERS"));
+			List<String> readerNames = new java.util.ArrayList<>(slot.readers());
+			readerNames.addAll(slot.accessors());
+			LispVal readers = LispNil.INSTANCE;
+			for (int i = readerNames.size() - 1; i >= 0; i--) {
+				readers = new LispCons(new LispSymbol(readerNames.get(i)), readers);
+			}
+			spec.add(readers);
+			spec.addAll(parsed.extras());
+			slotSpecs.add(listToCons(spec));
+		}
+		LispVal supers = superInfo == null ? LispNil.INSTANCE : listToCons(List.of(new LispSymbol(superInfo.name())));
+		return listToCons(List.of(new LispSymbol(LispNames.ENSURE_CLASS_WITH_METACLASS), quoteOf(className),
+				quoteOf(metaclassName), quotedData(supers),
+				quotedData(slotSpecs.isEmpty() ? LispNil.INSTANCE : listToCons(slotSpecs)),
+				quotedData(classInitargs.isEmpty() ? LispNil.INSTANCE : listToCons(classInitargs))));
+	}
+
+	/** Builds a {@code (quote datum)} form around an arbitrary value. */
+	private static LispVal quotedData(LispVal datum) {
+		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), datum));
 	}
 
 	/** Parameter holding the new value in a generated {@code %setf-} writer method. */
@@ -8084,8 +8167,13 @@ public final class LispMacroExpander {
 	 * wrote. A shadowing subclass slot inherits every option it does not write (CLHS
 	 * 7.5.3), so "written or not" has to survive parsing -- {@code SlotSpec} alone cannot
 	 * tell an omitted {@code :initarg} from one that happens to equal the default.
+	 * {@code extras} holds the non-standard slot options a {@code :metaclass} class may
+	 * carry ({@code :col-type}, {@code :column}, ...), as an alternating keyword/value
+	 * list in source order: they are stripped from the static {@code SlotSpec} and handed
+	 * to {@code direct-slot-definition-class} as initargs by the definition-time driver
+	 * (single occurrence per key, the AMOP canonicalization for one appearance).
 	 */
-	private record ParsedSlot(ClosRegistry.SlotSpec spec, boolean initargSupplied) {
+	private record ParsedSlot(ClosRegistry.SlotSpec spec, boolean initargSupplied, List<LispVal> extras) {
 	}
 
 	/**
@@ -8169,8 +8257,14 @@ public final class LispMacroExpander {
 		return List.of(read, boundp);
 	}
 
-	/** Parses one defclass slot specification; see {@link #expandDefclass}. */
-	private static ParsedSlot parseDefclassSlot(LispVal spec, LispCons defclassForm) {
+	/**
+	 * Parses one defclass slot specification; see {@link #expandDefclass}. With
+	 * {@code metaclassPresent}, an unknown slot option is collected into the parsed
+	 * slot's {@code extras} instead of erroring -- the metaclass protocol's
+	 * {@code direct-slot-definition-class} initargs; without a metaclass the strict error
+	 * stays.
+	 */
+	private static ParsedSlot parseDefclassSlot(LispVal spec, LispCons defclassForm, boolean metaclassPresent) {
 		LispSymbol slotSym;
 		// No :initform means the slot starts UNBOUND (CLHS 7.5.3), not nil.
 		LispVal initform = unboundMarker();
@@ -8179,6 +8273,7 @@ public final class LispMacroExpander {
 		String type = "T";
 		List<String> readers = new java.util.ArrayList<>();
 		List<String> accessors = new java.util.ArrayList<>();
+		List<LispVal> extras = new java.util.ArrayList<>();
 		if (spec instanceof LispSymbol s) {
 			slotSym = s;
 		}
@@ -8221,8 +8316,20 @@ public final class LispMacroExpander {
 							type = plainTypeName(typeSym);
 						}
 					}
-					default -> throw new UnsupportedOperationException(LispNames.DEFCLASS + " slot option "
-							+ keySym.name() + " is not supported: " + spec.print());
+					default -> {
+						if (!metaclassPresent) {
+							throw new UnsupportedOperationException(LispNames.DEFCLASS + " slot option " + keySym.name()
+									+ " is not supported: " + spec.print());
+						}
+						for (int e = 0; e < extras.size(); e += 2) {
+							if (extras.get(e) instanceof LispSymbol prev && prev.name().equals(keySym.name())) {
+								throw new UnsupportedOperationException(LispNames.DEFCLASS + " slot option "
+										+ keySym.name() + " may appear only once: " + spec.print());
+							}
+						}
+						extras.add(keySym);
+						extras.add(optValue);
+					}
 				}
 			}
 		}
@@ -8235,7 +8342,7 @@ public final class LispMacroExpander {
 		return new ParsedSlot(
 				new ClosRegistry.SlotSpec(slotSym.name(), baseName, initform, initformSupplied,
 						initarg == null ? ":" + baseName : initarg, List.copyOf(readers), List.copyOf(accessors), type),
-				initarg != null);
+				initarg != null, List.copyOf(extras));
 	}
 
 	private static String requireSlotFunctionName(LispVal value, LispVal spec) {
@@ -8535,19 +8642,31 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands a {@code slot-value} whose slot name is a runtime value into a name
-	 * dispatch over every slot name any registered layout declares -- structs included,
-	 * since the layout registry is the one source of slot shapes. Names sitting at the
-	 * same index in every type that declares them share one {@code member} arm (the
-	 * common case, and the whole dispatch when no name is ambiguous); a name at differing
-	 * indexes gets an inner instance-TAG dispatch instead of the old hard error, so an
-	 * ambiguous runtime name resolves rather than failing. An unknown name signals at run
-	 * time.
+	 * Expands a {@code slot-value} whose slot name is a runtime value into a call of the
+	 * shared {@code %slot-value-runtime} defun ({@link #runtimeSlotValueDefun}). The
+	 * dispatch used to be inlined per call site, but its body grows with the whole
+	 * registry, and a call site inside a loop grew the ci-spec corpus's loop body past
+	 * the JVM's signed 16-bit branch encoding the day the metaclass protocol added five
+	 * classes -- the {@code %class-slot-defs} lesson again.
 	 */
 	private static LispVal expandRuntimeSlotValue(LispVal objExpr, LispVal nameExpr, ClosRegistry closRegistry) {
-		String prefix = "__sv" + MV_COUNTER.getAndIncrement();
-		LispSymbol v = new LispSymbol(prefix + "_v");
-		LispSymbol n = new LispSymbol(prefix + "_n");
+		return mvCall(LispNames.SLOT_VALUE_RUNTIME, objExpr, nameExpr);
+	}
+
+	/**
+	 * Builds the shared {@code %slot-value-runtime} defun: a name dispatch over every
+	 * slot name any registered layout declares -- structs included, since the layout
+	 * registry is the one source of slot shapes. Names sitting at the same index in every
+	 * type that declares them share one {@code member} arm (the common case, and the
+	 * whole dispatch when no name is ambiguous); a name at differing indexes gets an
+	 * inner instance-TAG dispatch instead of a hard error, so an ambiguous runtime name
+	 * resolves rather than failing. An unknown name signals at run time. Injected by
+	 * {@link #expandTopLevelDefinitions} AFTER the walk (the registry is complete), and
+	 * only when the program contains a non-literal-name {@code slot-value}.
+	 */
+	private static LispVal runtimeSlotValueDefun(ClosRegistry closRegistry) {
+		LispSymbol v = new LispSymbol("%svr_v");
+		LispSymbol n = new LispSymbol("%svr_n");
 		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR),
 				new LispString(LispNames.SLOT_VALUE + ": unknown runtime slot name")));
 		// slot base name -> index -> the tags placing it there, in registration order.
@@ -8589,7 +8708,8 @@ public final class LispMacroExpander {
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
-		return makeLet(v.name(), objExpr, makeLet(n.name(), nameExpr, listToCons(condParts)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SLOT_VALUE_RUNTIME),
+				listToCons(List.of(v, n)), listToCons(condParts)));
 	}
 
 	/**
@@ -8718,15 +8838,23 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands a {@code slot-boundp} whose slot name is a runtime value: a class-tag
-	 * dispatch over the registered layouts, each arm testing the runtime name against
-	 * that type's declared slot names and, when it matches, the slot against the unbound
-	 * marker.
+	 * Expands a {@code slot-boundp} whose slot name is a runtime value into a call of the
+	 * shared {@code %slot-boundp-runtime} defun -- outlined for the same reason as
+	 * {@link #expandRuntimeSlotValue}.
 	 */
 	private static LispVal expandRuntimeSlotBoundp(LispVal objExpr, LispVal nameExpr, ClosRegistry closRegistry) {
-		String prefix = "__sbn" + MV_COUNTER.getAndIncrement();
-		LispSymbol v = new LispSymbol(prefix + "_v");
-		LispSymbol n = new LispSymbol(prefix + "_n");
+		return mvCall(LispNames.SLOT_BOUNDP_RUNTIME, objExpr, nameExpr);
+	}
+
+	/**
+	 * Builds the shared {@code %slot-boundp-runtime} defun: a class-tag dispatch over the
+	 * registered layouts, each arm testing the runtime name against that type's declared
+	 * slot names and, when it matches, the slot against the unbound marker. Injected
+	 * beside {@link #runtimeSlotValueDefun}, same gate.
+	 */
+	private static LispVal runtimeSlotBoundpDefun(ClosRegistry closRegistry) {
+		LispSymbol v = new LispSymbol("%sbr_v");
+		LispSymbol n = new LispSymbol("%sbr_n");
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		for (LispLayout layout : closRegistry.layouts().values()) {
 			if (layout.slotCount() == 0) {
@@ -8748,7 +8876,38 @@ public final class LispMacroExpander {
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
-		return makeLet(v.name(), objExpr, makeLet(n.name(), nameExpr, listToCons(condParts)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SLOT_BOUNDP_RUNTIME),
+				listToCons(List.of(v, n)), listToCons(condParts)));
+	}
+
+	/**
+	 * Whether the program contains a {@code slot-value} or {@code slot-boundp} whose
+	 * slot-name argument is not a literal quoted symbol -- the condition under which
+	 * {@link #expandTopLevelDefinitions} injects the shared runtime-slot-name dispatch
+	 * defuns (the call sites lower to them during the backend passes). Quoted data is
+	 * skipped.
+	 */
+	private static boolean needsRuntimeSlotNameDispatch(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::containsRuntimeSlotName);
+	}
+
+	private static boolean containsRuntimeSlotName(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String member = memberOf(op.name());
+			if (LispNames.QUOTE.equals(member)) {
+				return false;
+			}
+			if ((LispNames.SLOT_VALUE.equals(member) || LispNames.SLOT_BOUNDP.equals(member)) && cons.isProperList()) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() == 3 && quotedSymbol(parts.get(2)) == null) {
+					return true;
+				}
+			}
+		}
+		return containsRuntimeSlotName(cons.car()) || containsRuntimeSlotName(cons.cdr());
 	}
 
 	/**
@@ -10577,6 +10736,23 @@ public final class LispMacroExpander {
 		// The one whole-program pass both compilers already run, so the load-time-value
 		// hoist rides along instead of needing its own registration in every pipeline.
 		program = hoistLoadTimeValues(program);
+		// A defclass carrying (:metaclass M) switches the metaclass protocol on: the
+		// protocol's default methods and driver (MopProtocol) are PREPENDED so the walk
+		// below registers them like user definitions -- ahead of the reference scans,
+		// so the driver's find-class use activates the metaobject runtime by itself --
+		// and the %mop-make-instance/%register-class-metaobject runtime is appended
+		// after the walk once the registry is complete. A defclass merely EXTENDING one
+		// of the seeded MOP base classes (a metaclass definition, a slot-definition
+		// subclass) only needs the seeding.
+		boolean metaclassProtocol = usesMetaclassProtocol(program);
+		if (metaclassProtocol || namesMopBaseSuperclass(program)) {
+			closRegistry.ensureMopClassesSeeded();
+		}
+		if (metaclassProtocol) {
+			List<LispVal> withProtocol = new java.util.ArrayList<>(MopProtocol.forms());
+			withProtocol.addAll(program);
+			program = withProtocol;
+		}
 		// The closer-mop library's classp is (typep x 'standard-class): when its defuns
 		// are in the program (spliced by the system loaders, which have no registry in
 		// scope), the MOP base classes must register before any type test over them
@@ -10720,12 +10896,32 @@ public final class LispMacroExpander {
 			// the per-class construction arms cover every class the program defines.
 			out.addAll(allocateInstanceDefuns(closRegistry));
 		}
+		if (metaclassProtocol) {
+			// The metaclass-protocol runtime: constructors for the three seeded MOP
+			// base classes (their defclass never ran, so nothing else generates them),
+			// the %mop-make-instance name dispatch over the metaobject-ancestored
+			// classes, and the %register-class-metaobject memo primer. All
+			// position-independent defuns; the memo defvar they rely on was injected
+			// with the metaobject runtime above (the protocol's find-class reference
+			// guarantees that gate fired).
+			out.addAll(seededMopConstructorDefuns(closRegistry));
+			out.add(mopMakeInstanceDefun(closRegistry));
+			out.add(registerClassMetaobjectDefun());
+		}
 		if (classSlotDefsRuntime) {
 			// Same shape as the typep runtime: the defun is position-independent and
 			// appended; the data table is a top-level defvar and must run before any
 			// top-level %class-slot-defs call, so it goes FIRST.
 			out.add(classSlotDefsRuntimeDefun(closRegistry));
 			out.addAll(0, classSlotDefsTableForms(closRegistry));
+		}
+		if (needsRuntimeSlotNameDispatch(program)) {
+			// The shared runtime-slot-name dispatch defuns: the slot-value/slot-boundp
+			// call sites lower to them during the backend passes, and the bodies are
+			// built HERE, once the registry is complete -- position-independent defuns,
+			// appended.
+			out.add(runtimeSlotValueDefun(closRegistry));
+			out.add(runtimeSlotBoundpDefun(closRegistry));
 		}
 		// The registry is complete and every class constructor is spliced, so this is the
 		// final answer: everything injected below (the runtime-error helpers, the print
@@ -20135,6 +20331,211 @@ public final class LispMacroExpander {
 		condParts.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(helperName),
 				listToCons(List.<LispVal>of(name)), listToCons(condParts)));
+	}
+
+	/** Whether any top-level {@code defclass} carries a {@code (:metaclass M)} option. */
+	private static boolean usesMetaclassProtocol(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (isNamedForm(form, LispNames.DEFCLASS) && defclassUsesMetaclass((LispCons) form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the {@code defclass} form carries a {@code (:metaclass M)} class option --
+	 * the trigger that loads the metaclass protocol (the interpreter's
+	 * {@code ensureMopProtocolLoaded}, the compile paths' {@code MopProtocol} injection).
+	 * @param cons the defclass expression
+	 * @return true when a {@code :metaclass} option is present
+	 */
+	public static boolean defclassUsesMetaclass(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		for (int i = 4; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
+					&& ":METACLASS".equals(plainTypeName(optSym))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether any top-level {@code defclass} extends a seeded MOP base class. */
+	private static boolean namesMopBaseSuperclass(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (isNamedForm(form, LispNames.DEFCLASS) && defclassNamesMopBaseSuperclass((LispCons) form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the {@code defclass} form names one of the seeded MOP base classes
+	 * ({@code standard-class}, the two slot-definition classes) as a superclass -- a
+	 * metaclass or slot-definition-class definition, which needs
+	 * {@code ClosRegistry.ensureMopClassesSeeded()} to have run before the superclass
+	 * lookup. Qualified spellings ({@code closer-mop:standard-direct-slot-definition})
+	 * match by member name, like the registry's own lookup.
+	 * @param cons the defclass expression
+	 * @return true when a MOP base class is a superclass
+	 */
+	public static boolean defclassNamesMopBaseSuperclass(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(2) instanceof LispCons superCons)) {
+			return false;
+		}
+		for (LispVal superName : superCons.toList()) {
+			if (superName instanceof LispSymbol sym) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+				String member = qn == null ? sym.name() : qn.member();
+				if (ClosRegistry.STANDARD_CLASS_NAME.equals(member)
+						|| ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME.equals(member)
+						|| ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME.equals(member)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Builds the keyword constructors of the three seeded MOP base classes
+	 * ({@code %make-standard-class}, ...): their {@code defclass} never ran, so the
+	 * {@code expandDefclass}-generated constructor every {@code make-instance} path
+	 * dispatches to does not otherwise exist. Same shape as the generated ones -- one
+	 * {@code &key} parameter per slot under its seeded {@code :slot-name} initarg (nil
+	 * default) plus {@code &allow-other-keys}. Shared by the compile paths (appended with
+	 * the metaclass runtime) and the interpreter (evaluated once at protocol load).
+	 * @param closRegistry the registry, already seeded
+	 * @return the three constructor defuns
+	 */
+	public static List<LispVal> seededMopConstructorDefuns(ClosRegistry closRegistry) {
+		List<LispVal> defuns = new java.util.ArrayList<>();
+		for (String name : List.of(ClosRegistry.STANDARD_CLASS_NAME, ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME,
+				ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME)) {
+			ClosRegistry.ClassInfo info = java.util.Objects.requireNonNull(closRegistry.findClass(name),
+					"MOP base class not seeded: " + name);
+			List<LispVal> lambdaList = new java.util.ArrayList<>();
+			lambdaList.add(new LispSymbol(LispNames.LAMBDA_KEY));
+			List<LispVal> slotVars = new java.util.ArrayList<>();
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				LispVal keywordAndVar = listToCons(
+						List.of(new LispSymbol(slot.initargKeyword()), new LispSymbol(slot.name())));
+				lambdaList.add(listToCons(List.of(keywordAndVar, slot.initform())));
+				slotVars.add(new LispSymbol(slot.name()));
+			}
+			lambdaList.add(new LispSymbol(LispNames.LAMBDA_ALLOW_OTHER_KEYS));
+			defuns.add(
+					listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(affixFor("%make-", name) + name),
+							listToCons(lambdaList), objNew(LispLayout.CLASS_TAG_PREFIX + name, slotVars))));
+		}
+		return defuns;
+	}
+
+	/**
+	 * Builds the generated {@code %mop-make-instance} defun: the runtime-class
+	 * {@code make-instance} of the metaclass protocol. The designator (a metaobject's
+	 * name slot, or the name symbol itself) dispatches by name to the class's generated
+	 * keyword constructor, then runs the program's initialization generic exactly like
+	 * the static {@code make-instance} expansion (the user's {@code shared-initialize}
+	 * hooks on metaobjects are the point of the exercise). Only the METAOBJECT-ancestored
+	 * classes get arms -- the protocol instantiates metaclasses and slot-definition
+	 * classes, and bounding the arm set keeps the defun from growing with every class the
+	 * program defines.
+	 */
+	private static LispVal mopMakeInstanceDefun(ClosRegistry closRegistry) {
+		LispSymbol cls = new LispSymbol("%mmi_class");
+		LispSymbol args = new LispSymbol("%mmi_args");
+		LispSymbol name = new LispSymbol("%mmi_name");
+		LispSymbol obj = new LispSymbol("%mmi_obj");
+		ClosRegistry.GenericInfo init = closRegistry.generics()
+			.values()
+			.stream()
+			.filter(g -> "INITIALIZE-INSTANCE".equals(plainName(g.name())))
+			.findFirst()
+			.orElse(null);
+		boolean sharedInit = false;
+		if (init == null) {
+			init = closRegistry.generics()
+				.values()
+				.stream()
+				.filter(g -> "SHARED-INITIALIZE".equals(plainName(g.name())))
+				.findFirst()
+				.orElse(null);
+			sharedInit = init != null;
+		}
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			if (!seen.add(info.name()) || !isMetaobjectClass(info)) {
+				continue;
+			}
+			List<String> spellings = new java.util.ArrayList<>();
+			spellings.add(info.name());
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
+			if (qn != null && closRegistry.findClass(qn.member()) == info) {
+				spellings.add(qn.member());
+			}
+			String ctor = qn == null ? affixFor("%make-", info.name()) + info.name()
+					: qn.pkg() + "::" + affixFor("%make-", qn.member()) + qn.member();
+			LispVal construct = listToCons(List.of(new LispSymbol(LispNames.APPLY), functionRef(ctor), args));
+			LispVal arm;
+			if (init == null) {
+				arm = construct;
+			}
+			else {
+				List<LispVal> initCall = new java.util.ArrayList<>();
+				initCall.add(new LispSymbol(LispNames.APPLY));
+				initCall.add(functionRef(init.name()));
+				initCall.add(obj);
+				if (sharedInit) {
+					initCall.add(LispTrue.INSTANCE);
+				}
+				initCall.add(args);
+				arm = listToCons(List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(List.of(obj, construct)))), listToCons(initCall), obj));
+			}
+			condParts.add(listToCons(List.of(mvCall(LispNames.MEMBER, name, quotedSymbolList(spellings)), arm)));
+		}
+		condParts.add(listToCons(List.of(LispTrue.INSTANCE, listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString(LispNames.MOP_MAKE_INSTANCE + ": not an instantiable class: ~A"), name)))));
+		LispVal designator = makeIf(callOf(LispNames.OBJ_P, cls), mvCall(LispNames.OBJ_REF, cls, new LispInteger(0)),
+				cls);
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.MOP_MAKE_INSTANCE),
+				listToCons(List.of(cls, new LispSymbol(LispNames.LAMBDA_REST), args)),
+				makeLet(name.name(), designator, listToCons(condParts))));
+	}
+
+	/** Whether the class descends from one of the seeded MOP base classes. */
+	private static boolean isMetaobjectClass(ClosRegistry.ClassInfo info) {
+		return info.ancestors().contains(ClosRegistry.STANDARD_CLASS_NAME)
+				|| info.ancestors().contains(ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME)
+				|| info.ancestors().contains(ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME);
+	}
+
+	/** Builds a {@code (function name)} reference. */
+	private static LispVal functionRef(String name) {
+		return listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(name)));
+	}
+
+	/**
+	 * Builds the generated {@code %register-class-metaobject} defun: prepends the (name .
+	 * metaobject) pair onto the {@code find-class} memo, so the driver-built metaclass
+	 * instance SHADOWS the plain materialized view from then on (the memo scan takes the
+	 * first hit). Registered under the canonical class name, which is what
+	 * {@code %find-class-materialize} both scans and memoizes by.
+	 */
+	private static LispVal registerClassMetaobjectDefun() {
+		LispSymbol name = new LispSymbol("%rcm_name");
+		LispSymbol metaobject = new LispSymbol("%rcm_obj");
+		LispVal push = listToCons(List.of(new LispSymbol(LispNames.SETQ),
+				new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO), mvCall(LispNames.CONS,
+						mvCall(LispNames.CONS, name, metaobject), new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO))));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.REGISTER_CLASS_METAOBJECT),
+				listToCons(List.of(name, metaobject)), push, metaobject));
 	}
 
 	/** The literal type specifier an argument form denotes, or null for a runtime one. */

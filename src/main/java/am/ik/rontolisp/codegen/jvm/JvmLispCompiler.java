@@ -1046,7 +1046,18 @@ public final class JvmLispCompiler implements LispCompiler {
 				topChunkNames.add(nameUtf8);
 				topChunkRefs.add(cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, topChunkDesc)));
 			}
-			JvmExprCompiler.compileExpr(expr, chunkCtx, this.className);
+			try {
+				JvmExprCompiler.compileExpr(expr, chunkCtx, this.className);
+			}
+			catch (IllegalStateException ex) {
+				// Name the form like the defun wrapper above does: a per-method limit hit
+				// inside a top-level form is otherwise unattributable in a large program.
+				String shown = expr.print();
+				if (shown.length() > 120) {
+					shown = shown.substring(0, 120) + "...";
+				}
+				throw new IllegalStateException("while compiling top-level form " + shown + ": " + ex.getMessage(), ex);
+			}
 			chunkCtx.emit(Opcode.POP);
 		}
 		if (chunkCtx != null) {

@@ -2462,6 +2462,60 @@ public final class LispNames {
 	public static final String FIND_CLASS_MATERIALIZE = "%FIND-CLASS-MATERIALIZE";
 
 	/**
+	 * The shared runtime-slot-name READ dispatch: {@code (%slot-value-runtime obj name)}
+	 * resolves a slot name known only at run time over every registered layout. The
+	 * dispatch body grows with the whole registry (every layout times its slots), so it
+	 * is generated ONCE per program as this defun ({@code LispMacroExpander}, gated on a
+	 * non-literal-name {@code slot-value}) instead of inline per call site -- a call site
+	 * inside a loop otherwise grows the loop body past the JVM's signed 16-bit branch
+	 * encoding, the same disease the {@code %class-slot-defs} inline dispatch had. The
+	 * interpreter never calls it (its evaluator resolves runtime names natively).
+	 */
+	public static final String SLOT_VALUE_RUNTIME = "%SLOT-VALUE-RUNTIME";
+
+	/**
+	 * The shared runtime-slot-name {@code slot-boundp} dispatch, the boundness twin of
+	 * {@link #SLOT_VALUE_RUNTIME} -- same gate, same reason.
+	 */
+	public static final String SLOT_BOUNDP_RUNTIME = "%SLOT-BOUNDP-RUNTIME";
+
+	/**
+	 * The internal runtime-class {@code make-instance}: {@code (%mop-make-instance
+	 * designator initargs...)} instantiates a class chosen at RUN time (a metaobject or a
+	 * name symbol) -- what the static {@code make-instance} expansion cannot do, and what
+	 * the metaclass protocol needs (the class it instantiates is the answer of a user
+	 * generic). The interpreter defines it as a builtin that re-enters the ordinary
+	 * {@code make-instance} evaluation; the compile paths generate a name-dispatch defun
+	 * over the METAOBJECT-ancestored classes only ({@code LispMacroExpander}), gated on a
+	 * {@code :metaclass} defclass.
+	 */
+	public static final String MOP_MAKE_INSTANCE = "%MOP-MAKE-INSTANCE";
+
+	/**
+	 * The internal metaobject-registration primitive behind the metaclass protocol:
+	 * {@code (%register-class-metaobject name metaobject)} primes the {@code find-class}
+	 * memo (the interpreter's registry memo, the compile paths'
+	 * {@link #CLASS_METAOBJECT_MEMO}) so {@code find-class}/{@code class-of} answer the
+	 * driver-built instance of the user metaclass instead of materializing a plain
+	 * {@code standard-class} view.
+	 */
+	public static final String REGISTER_CLASS_METAOBJECT = "%REGISTER-CLASS-METAOBJECT";
+
+	/**
+	 * The definition-time driver of the metaclass protocol
+	 * ({@code macro/mop-protocol.lisp}): a {@code defclass} carrying {@code (:metaclass
+	 * M)} expands to its usual static definitions plus one
+	 * {@code (%ensure-class-with-metaclass 'name 'M '(supers) '(slot-specs)
+	 * '(class-initargs))} call, which instantiates the metaclass (running the user's
+	 * {@code shared-initialize} hooks), builds the direct-slot-definition metaobjects
+	 * through {@code direct-slot-definition-class}, validates superclasses, and eagerly
+	 * finalizes ({@code compute-effective-slot-definition} under the
+	 * {@code *direct-column-slot*}-style dynamic-extent contract, then
+	 * {@code finalize-inheritance}).
+	 */
+	public static final String ENSURE_CLASS_WITH_METACLASS = "%ENSURE-CLASS-WITH-METACLASS";
+
+	/**
 	 * The {@code print-unreadable-object} macro: a lite expansion writing
 	 * {@code #<[class ]...>} around the body ({@code :type} prints the {@code class-of}
 	 * designator, {@code :identity} is ignored), returning nil.
@@ -4826,6 +4880,48 @@ public final class LispNames {
 
 	/** {@code closer-mop:slot-definition-type}. */
 	public static final String SLOT_DEFINITION_TYPE = "SLOT-DEFINITION-TYPE";
+
+	/**
+	 * {@code closer-mop:validate-superclass} -- the metaclass protocol's compatibility
+	 * check; the system default method ({@code macro/mop-protocol.lisp}) is permissive
+	 * (always true), a documented lite divergence.
+	 */
+	public static final String VALIDATE_SUPERCLASS = "VALIDATE-SUPERCLASS";
+
+	/**
+	 * {@code closer-mop:direct-slot-definition-class} -- the class of the
+	 * direct-slot-definition metaobject built for one {@code defclass} slot spec; the
+	 * default method answers the {@code standard-direct-slot-definition} NAME (a
+	 * designator {@code %mop-make-instance} accepts, so the default drags no
+	 * {@code find-class} runtime into the program).
+	 */
+	public static final String DIRECT_SLOT_DEFINITION_CLASS = "DIRECT-SLOT-DEFINITION-CLASS";
+
+	/**
+	 * {@code closer-mop:effective-slot-definition-class} -- as
+	 * {@link #DIRECT_SLOT_DEFINITION_CLASS} for the effective side; called INSIDE
+	 * {@code compute-effective-slot-definition}'s default method, i.e. within the dynamic
+	 * extent of the user method's {@code call-next-method} (postmodern binds
+	 * {@code *direct-column-slot*} around it).
+	 */
+	public static final String EFFECTIVE_SLOT_DEFINITION_CLASS = "EFFECTIVE-SLOT-DEFINITION-CLASS";
+
+	/**
+	 * {@code closer-mop:compute-effective-slot-definition} -- builds one
+	 * effective-slot-definition metaobject from the direct definitions of a slot name;
+	 * the default method instantiates {@code effective-slot-definition-class}'s answer
+	 * through {@code %mop-make-instance}.
+	 */
+	public static final String COMPUTE_EFFECTIVE_SLOT_DEFINITION = "COMPUTE-EFFECTIVE-SLOT-DEFINITION";
+
+	/**
+	 * {@code closer-mop:finalize-inheritance} -- computes a class metaobject's effective
+	 * slots (inherited first, own after, shadowing merged in place) and marks it
+	 * finalized. The metaclass driver calls it EAGERLY at definition time, a documented
+	 * divergence from CL's lazy finalization; user {@code :after} methods are where
+	 * postmodern builds its DAO methods.
+	 */
+	public static final String FINALIZE_INHERITANCE = "FINALIZE-INHERITANCE";
 
 	/** The {@code flexi-streams} shim package (and built-in ASDF system) name. */
 	public static final String FLEXI_STREAMS_PKG = "FLEXI-STREAMS";

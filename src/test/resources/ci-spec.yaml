@@ -6418,3 +6418,64 @@ cases:
       (T T T FCM-NODE STRING)
       #<STANDARD-CLASS :NAME INTEGER :DIRECT-SUPERCLASSES NIL :DIRECT-SLOTS NIL :EFFECTIVE-SLOTS NIL :FINALIZED-P T>
       (T NIL "rex" NIL :SIGNALED)
+  - name: defclass-metaclass-protocol
+    source: |
+      ;; The metaclass protocol (the postmodern dao-class shape): a defclass
+      ;; carrying (:metaclass M) instantiates the user metaclass at definition
+      ;; time -- shared-initialize hooks see the unknown class options as
+      ;; initargs (the value is the option tail) -- builds its slot-definition
+      ;; metaobjects through direct-slot-definition-class, computes effective
+      ;; slots inside the *direct-column-slot* dynamic-extent contract, and
+      ;; finalizes eagerly; find-class/class-of answer the metaclass instance,
+      ;; while instances of the class stay ordinary.
+      (defvar *direct-column-slot* nil)
+      (defclass mcp-dao-class (standard-class)
+        ((direct-keys :initarg :keys :initform nil :accessor mcp-direct-keys)
+         (table-name)))
+      (defclass mcp-direct-column-slot (closer-mop:standard-direct-slot-definition)
+        ((col-type :initarg :col-type :accessor mcp-column-type)))
+      (defclass mcp-effective-column-slot (closer-mop:standard-effective-slot-definition)
+        ((direct-slot :initform *direct-column-slot* :reader mcp-slot-column)))
+      (defmethod closer-mop:validate-superclass ((class mcp-dao-class) (super standard-class)) t)
+      (defmethod shared-initialize :before ((class mcp-dao-class) slot-names
+                                            &key table-name &allow-other-keys)
+        (if table-name
+            (setf (slot-value class 'table-name) (car table-name))
+            (slot-makunbound class 'table-name)))
+      (defmethod closer-mop:direct-slot-definition-class ((class mcp-dao-class) &rest initargs
+                                                          &key col-type &allow-other-keys)
+        (if col-type (find-class 'mcp-direct-column-slot) (call-next-method)))
+      (defmethod closer-mop:compute-effective-slot-definition ((class mcp-dao-class) name dsds)
+        (let ((*direct-column-slot* (find-if (lambda (s) (typep s 'mcp-direct-column-slot)) dsds)))
+          (call-next-method)))
+      (defmethod closer-mop:effective-slot-definition-class ((class mcp-dao-class) &rest initargs)
+        (if *direct-column-slot* (find-class 'mcp-effective-column-slot) (call-next-method)))
+      (defvar *mcp-finalized* nil)
+      (defmethod closer-mop:finalize-inheritance :after ((class mcp-dao-class))
+        (setq *mcp-finalized* (cons (%obj-ref class 0) *mcp-finalized*)))
+      (defclass mcp-user ()
+        ((id :col-type integer :initarg :id :accessor mcp-user-id)
+         (note :initarg :note :initform "n/a"))
+        (:metaclass mcp-dao-class)
+        (:table-name "users")
+        (:keys id))
+      (let ((c (find-class 'mcp-user)))
+        (print (list (%obj-ref c 0)
+                     (typep c 'mcp-dao-class)
+                     (eq (class-of c) (find-class 'mcp-dao-class))
+                     (slot-value c 'table-name)
+                     (mcp-direct-keys c)
+                     *mcp-finalized*
+                     (%obj-ref c 4))))
+      (let ((u (make-instance 'mcp-user :id 7)))
+        (print (list (mcp-user-id u) (slot-value u 'note) (eq (class-of u) (find-class 'mcp-user)))))
+      (print (mapcar (lambda (s)
+                       (list (%obj-ref s 0)
+                             (if (typep s 'mcp-effective-column-slot)
+                                 (mcp-column-type (mcp-slot-column s))
+                                 :plain)))
+                     (%obj-ref (find-class 'mcp-user) 3)))
+    expected: |
+      (MCP-USER T T "users" (ID) (MCP-USER) T)
+      (7 "n/a" T)
+      ((ID INTEGER) (NOTE :PLAIN))
