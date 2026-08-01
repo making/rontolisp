@@ -3332,6 +3332,14 @@ public final class LispMacroExpander {
 					// (setf (slot-value obj 'slot) val) -> (%obj-set obj <index> val):
 					// the index comes from the CLOS class registry.
 					LispSymbol litSlot = placeParts.size() == 3 ? quotedSymbol(placeParts.get(2)) : null;
+					if (litSlot == null && placeParts.size() == 3) {
+						// A runtime slot name: the write-side twin of the runtime-name
+						// read -- one shared dispatch defun on the compile paths
+						// (runtimeSlotValueSetDefuns), a native builtin on the
+						// interpreter. Argument order keeps place subforms ahead of the
+						// value, like every other setf expansion.
+						yield mvCall(LispNames.SLOT_VALUE_SET_RUNTIME, placeParts.get(1), placeParts.get(2), value);
+					}
 					if (litSlot != null && ambiguousSlotPosition(litSlot, closRegistry)) {
 						// The name sits at different indexes in unrelated types, so no
 						// one
@@ -8643,7 +8651,7 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands a {@code slot-value} whose slot name is a runtime value into a call of the
-	 * shared {@code %slot-value-runtime} defun ({@link #runtimeSlotValueDefun}). The
+	 * shared {@code %slot-value-runtime} defun ({@link #runtimeSlotValueDefuns}). The
 	 * dispatch used to be inlined per call site, but its body grows with the whole
 	 * registry, and a call site inside a loop grew the ci-spec corpus's loop body past
 	 * the JVM's signed 16-bit branch encoding the day the metaclass protocol added five
@@ -8651,6 +8659,47 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal expandRuntimeSlotValue(LispVal objExpr, LispVal nameExpr, ClosRegistry closRegistry) {
 		return mvCall(LispNames.SLOT_VALUE_RUNTIME, objExpr, nameExpr);
+	}
+
+	/**
+	 * Wraps runtime-dispatch cond clauses into a public defun, CHAINING overflow into
+	 * {@code <helperPrefix><n>} helper defuns by cons-node budget: each chunk's
+	 * fall-through arm calls the next helper, and only the last falls back to
+	 * {@code fallback}. A dispatch that fits one chunk stays a single defun,
+	 * byte-identical to the pre-chunking shape -- a real library's registry (postmodern
+	 * loads ~40 classes with hundreds of slots) otherwise grows one cond past the JVM's
+	 * signed 16-bit branch encoding.
+	 */
+	private static List<LispVal> chainedDispatchDefuns(String publicName, String helperPrefix, List<LispSymbol> params,
+			List<LispVal> clauses, LispVal fallback) {
+		List<List<LispVal>> chunks = new java.util.ArrayList<>();
+		List<LispVal> current = new java.util.ArrayList<>();
+		int nodes = 0;
+		for (LispVal clause : clauses) {
+			current.add(clause);
+			nodes += consNodeCount(clause);
+			if (nodes >= 600) {
+				chunks.add(current);
+				current = new java.util.ArrayList<>();
+				nodes = 0;
+			}
+		}
+		if (!current.isEmpty() || chunks.isEmpty()) {
+			chunks.add(current);
+		}
+		List<LispVal> defuns = new java.util.ArrayList<>();
+		for (int i = 0; i < chunks.size(); i++) {
+			String name = i == 0 ? publicName : helperPrefix + i;
+			LispVal tail = i == chunks.size() - 1 ? fallback
+					: mvCall(helperPrefix + (i + 1), params.toArray(LispVal[]::new));
+			List<LispVal> condParts = new java.util.ArrayList<>();
+			condParts.add(new LispSymbol(LispNames.COND));
+			condParts.addAll(chunks.get(i));
+			condParts.add(listToCons(List.of(LispTrue.INSTANCE, tail)));
+			defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name),
+					listToCons(new java.util.ArrayList<LispVal>(params)), listToCons(condParts))));
+		}
+		return defuns;
 	}
 
 	/**
@@ -8662,9 +8711,10 @@ public final class LispMacroExpander {
 	 * inner instance-TAG dispatch instead of a hard error, so an ambiguous runtime name
 	 * resolves rather than failing. An unknown name signals at run time. Injected by
 	 * {@link #expandTopLevelDefinitions} AFTER the walk (the registry is complete), and
-	 * only when the program contains a non-literal-name {@code slot-value}.
+	 * only when the program contains a non-literal-name {@code slot-value}; chained
+	 * chunking via {@link #chainedDispatchDefuns}.
 	 */
-	private static LispVal runtimeSlotValueDefun(ClosRegistry closRegistry) {
+	private static List<LispVal> runtimeSlotValueDefuns(ClosRegistry closRegistry) {
 		LispSymbol v = new LispSymbol("%svr_v");
 		LispSymbol n = new LispSymbol("%svr_n");
 		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR),
@@ -8704,12 +8754,59 @@ public final class LispMacroExpander {
 			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, n, quotedSymbolList(List.of(entry.getKey()))),
 					listToCons(innerCond))));
 		}
-		clauses.add(listToCons(List.of(LispTrue.INSTANCE, signal)));
-		List<LispVal> condParts = new java.util.ArrayList<>();
-		condParts.add(new LispSymbol(LispNames.COND));
-		condParts.addAll(clauses);
-		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SLOT_VALUE_RUNTIME),
-				listToCons(List.of(v, n)), listToCons(condParts)));
+		return chainedDispatchDefuns(LispNames.SLOT_VALUE_RUNTIME, "%SVR-", List.of(v, n), clauses, signal);
+	}
+
+	/**
+	 * Builds the shared {@code %slot-value-set-runtime} defun: the write-side twin of
+	 * {@link #runtimeSlotValueDefuns}, same name dispatch, each arm storing through
+	 * {@code %obj-set} and answering the stored value. Injected by
+	 * {@link #expandTopLevelDefinitions} gated on a runtime-name
+	 * {@code (setf (slot-value ...))} so read-only programs stay byte-identical.
+	 */
+	private static List<LispVal> runtimeSlotValueSetDefuns(ClosRegistry closRegistry) {
+		LispSymbol v = new LispSymbol("%svw_v");
+		LispSymbol n = new LispSymbol("%svw_n");
+		LispSymbol nv = new LispSymbol("%svw_nv");
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString(LispNames.SLOT_VALUE + ": unknown runtime slot name")));
+		java.util.Map<String, java.util.Map<Integer, List<String>>> byName = new java.util.LinkedHashMap<>();
+		for (LispLayout layout : closRegistry.layouts().values()) {
+			for (int i = 0; i < layout.slotCount(); i++) {
+				byName.computeIfAbsent(layout.slotNames().get(i), k -> new java.util.LinkedHashMap<>())
+					.computeIfAbsent(i, k -> new java.util.ArrayList<>())
+					.add(layout.tag());
+			}
+		}
+		java.util.Map<Integer, List<String>> unambiguousByIndex = new java.util.LinkedHashMap<>();
+		java.util.Map<String, java.util.Map<Integer, List<String>>> ambiguous = new java.util.LinkedHashMap<>();
+		byName.forEach((name, byIndex) -> {
+			if (byIndex.size() == 1) {
+				unambiguousByIndex.computeIfAbsent(byIndex.keySet().iterator().next(), k -> new java.util.ArrayList<>())
+					.add(name);
+			}
+			else {
+				ambiguous.put(name, byIndex);
+			}
+		});
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		for (java.util.Map.Entry<Integer, List<String>> entry : unambiguousByIndex.entrySet()) {
+			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, n, quotedSymbolList(entry.getValue())),
+					makeProgn(List.of(objSet(v, entry.getKey(), nv), nv)))));
+		}
+		for (java.util.Map.Entry<String, java.util.Map<Integer, List<String>>> entry : ambiguous.entrySet()) {
+			List<LispVal> inner = new java.util.ArrayList<>();
+			entry.getValue()
+				.forEach((index, tags) -> inner
+					.add(listToCons(List.of(objIs(v, tags), makeProgn(List.of(objSet(v, index, nv), nv))))));
+			inner.add(listToCons(List.of(LispTrue.INSTANCE, signal)));
+			List<LispVal> innerCond = new java.util.ArrayList<>();
+			innerCond.add(new LispSymbol(LispNames.COND));
+			innerCond.addAll(inner);
+			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, n, quotedSymbolList(List.of(entry.getKey()))),
+					listToCons(innerCond))));
+		}
+		return chainedDispatchDefuns(LispNames.SLOT_VALUE_SET_RUNTIME, "%SVW-", List.of(v, n, nv), clauses, signal);
 	}
 
 	/**
@@ -8850,9 +8947,9 @@ public final class LispMacroExpander {
 	 * Builds the shared {@code %slot-boundp-runtime} defun: a class-tag dispatch over the
 	 * registered layouts, each arm testing the runtime name against that type's declared
 	 * slot names and, when it matches, the slot against the unbound marker. Injected
-	 * beside {@link #runtimeSlotValueDefun}, same gate.
+	 * beside {@link #runtimeSlotValueDefuns}, same gate, same chained chunking.
 	 */
-	private static LispVal runtimeSlotBoundpDefun(ClosRegistry closRegistry) {
+	private static List<LispVal> runtimeSlotBoundpDefuns(ClosRegistry closRegistry) {
 		LispSymbol v = new LispSymbol("%sbr_v");
 		LispSymbol n = new LispSymbol("%sbr_n");
 		List<LispVal> clauses = new java.util.ArrayList<>();
@@ -8872,12 +8969,7 @@ public final class LispMacroExpander {
 			innerCond.addAll(inner);
 			clauses.add(listToCons(List.of(objIs(v, List.of(layout.tag())), listToCons(innerCond))));
 		}
-		clauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
-		List<LispVal> condParts = new java.util.ArrayList<>();
-		condParts.add(new LispSymbol(LispNames.COND));
-		condParts.addAll(clauses);
-		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SLOT_BOUNDP_RUNTIME),
-				listToCons(List.of(v, n)), listToCons(condParts)));
+		return chainedDispatchDefuns(LispNames.SLOT_BOUNDP_RUNTIME, "%SBR-", List.of(v, n), clauses, LispNil.INSTANCE);
 	}
 
 	/**
@@ -8889,6 +8981,38 @@ public final class LispMacroExpander {
 	 */
 	private static boolean needsRuntimeSlotNameDispatch(List<LispVal> program) {
 		return program.stream().anyMatch(LispMacroExpander::containsRuntimeSlotName);
+	}
+
+	/**
+	 * Whether the program writes through a runtime slot name -- a {@code (setf
+	 * (slot-value obj name-expr) ...)} whose name is not a literal quote -- the gate for
+	 * the generated {@code %slot-value-set-runtime} defun. Only a direct single-pair
+	 * {@code setf} is recognized; an exotic spelling that reaches the same expansion
+	 * without the defun fails loudly at compile time rather than silently.
+	 */
+	private static boolean needsRuntimeSlotSetDispatch(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::containsRuntimeSlotSet);
+	}
+
+	private static boolean containsRuntimeSlotSet(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String member = memberOf(op.name());
+			if (LispNames.QUOTE.equals(member)) {
+				return false;
+			}
+			if (LispNames.SETF.equals(member) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispCons place && place.car() instanceof LispSymbol placeOp
+					&& LispNames.SLOT_VALUE.equals(memberOf(placeOp.name())) && place.isProperList()) {
+				List<LispVal> parts = place.toList();
+				if (parts.size() == 3 && quotedSymbol(parts.get(2)) == null) {
+					return true;
+				}
+			}
+		}
+		return containsRuntimeSlotSet(cons.car()) || containsRuntimeSlotSet(cons.cdr());
 	}
 
 	private static boolean containsRuntimeSlotName(LispVal form) {
@@ -10715,6 +10839,26 @@ public final class LispMacroExpander {
 				&& functionName.equals(memberOf(name.name()));
 	}
 
+	// A #'make-instance VALUE reference anywhere outside quoted data -- a literal
+	// (make-instance ...) call keeps the static expansion and does not count.
+	private static boolean referencesMakeInstanceValue(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String member = memberOf(op.name());
+			if (LispNames.QUOTE.equals(member)) {
+				return false;
+			}
+			if (LispNames.FUNCTION.equals(member) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol named
+					&& LispNames.MAKE_INSTANCE.equals(memberOf(named.name()))) {
+				return true;
+			}
+		}
+		return referencesMakeInstanceValue(cons.car()) || referencesMakeInstanceValue(cons.cdr());
+	}
+
 	// A call of the named function, or a #'name reference, anywhere outside quoted data.
 	private static boolean referencesFunction(LispVal form, String functionName) {
 		if (!(form instanceof LispCons cons)) {
@@ -10799,6 +10943,12 @@ public final class LispMacroExpander {
 		// (no-op for the definition-time method construction a splice already carried
 		// out, an error for everything else -- see CompileRuntime).
 		boolean compileRuntime = needsCompileRuntime(program);
+		// #'make-instance taken as a VALUE (the (apply #'make-instance class args)
+		// idiom of postmodern's make-dao): the backends inject a wrapper forwarding to
+		// %mop-make-instance, so the runtime defun must be emitted with its dispatch
+		// arms widened to every registered class. A literal (make-instance 'name ...)
+		// call keeps the static expansion and never flips this.
+		boolean makeInstanceFunction = program.stream().anyMatch(LispMacroExpander::referencesMakeInstanceValue);
 		// A %class-slot-defs call site lowers to the shared runtime defun during the
 		// backend passes; the defun and its table are injected below once the registry
 		// is complete.
@@ -10817,8 +10967,8 @@ public final class LispMacroExpander {
 		// constructor.
 		closRegistry.setRoutesConditionReports(mayCreateConditions(program, closRegistry));
 		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !metaobjectRuntime
-				&& !allocateInstanceRuntime && !compileRuntime && !classSlotDefsRuntime && !readsSlots(program)
-				&& !closRegistry.routesConditionReports()
+				&& !allocateInstanceRuntime && !compileRuntime && !makeInstanceFunction && !classSlotDefsRuntime
+				&& !readsSlots(program) && !closRegistry.routesConditionReports()
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
 							|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
@@ -10924,17 +11074,26 @@ public final class LispMacroExpander {
 			// the program, and an error for anything else (see CompileRuntime).
 			out.addAll(CompileRuntime.forms());
 		}
-		if (metaclassProtocol) {
+		if (metaclassProtocol || makeInstanceFunction) {
 			// The metaclass-protocol runtime: constructors for the three seeded MOP
 			// base classes (their defclass never ran, so nothing else generates them),
 			// the %mop-make-instance name dispatch over the metaobject-ancestored
-			// classes, and the %register-class-metaobject memo primer. All
-			// position-independent defuns; the memo defvar they rely on was injected
-			// with the metaobject runtime above (the protocol's find-class reference
-			// guarantees that gate fired).
-			out.addAll(seededMopConstructorDefuns(closRegistry));
-			out.add(mopMakeInstanceDefun(closRegistry));
-			out.add(registerClassMetaobjectDefun());
+			// classes (widened to EVERY registered class when the program takes
+			// make-instance as a value -- the arms must construct whatever class the
+			// runtime designator names), and the %register-class-metaobject memo
+			// primer. All position-independent defuns; the memo defvar the protocol
+			// relies on was injected with the metaobject runtime above (its find-class
+			// reference guarantees that gate fired). A #'make-instance program without
+			// a :metaclass defclass may never have seeded the MOP base classes, so
+			// their constructors (and the primer) are emitted only when they are
+			// registered respectively when the protocol runs.
+			if (closRegistry.findClass(ClosRegistry.STANDARD_CLASS_NAME) != null) {
+				out.addAll(seededMopConstructorDefuns(closRegistry));
+			}
+			out.addAll(mopMakeInstanceDefuns(closRegistry, makeInstanceFunction));
+			if (metaclassProtocol) {
+				out.add(registerClassMetaobjectDefun());
+			}
 		}
 		if (classSlotDefsRuntime) {
 			// Same shape as the typep runtime: the defun is position-independent and
@@ -10948,8 +11107,13 @@ public final class LispMacroExpander {
 			// call sites lower to them during the backend passes, and the bodies are
 			// built HERE, once the registry is complete -- position-independent defuns,
 			// appended.
-			out.add(runtimeSlotValueDefun(closRegistry));
-			out.add(runtimeSlotBoundpDefun(closRegistry));
+			out.addAll(runtimeSlotValueDefuns(closRegistry));
+			out.addAll(runtimeSlotBoundpDefuns(closRegistry));
+		}
+		if (needsRuntimeSlotSetDispatch(program)) {
+			// The write-side twin, separately gated so read-only programs stay
+			// byte-identical.
+			out.addAll(runtimeSlotValueSetDefuns(closRegistry));
 		}
 		// The registry is complete and every class constructor is spliced, so this is the
 		// final answer: everything injected below (the runtime-error helpers, the print
@@ -20503,9 +20667,15 @@ public final class LispMacroExpander {
 	 * hooks on metaobjects are the point of the exercise). Only the METAOBJECT-ancestored
 	 * classes get arms -- the protocol instantiates metaclasses and slot-definition
 	 * classes, and bounding the arm set keeps the defun from growing with every class the
-	 * program defines.
+	 * program defines. When the program takes {@code make-instance} itself as a VALUE
+	 * ({@code allClasses}), the arms widen to every registered class the program can
+	 * construct -- and the dispatch is CHUNKED into {@code %MMI-<n>} helper defuns by
+	 * cons-node budget (the {@code %ALLOC-INST} pattern: a real library registers enough
+	 * classes to push one cond past the JVM's signed 16-bit branch encoding), with the
+	 * initialization-generic call hoisted into the public defun so each arm stays one
+	 * constructor {@code apply}.
 	 */
-	private static LispVal mopMakeInstanceDefun(ClosRegistry closRegistry) {
+	private static List<LispVal> mopMakeInstanceDefuns(ClosRegistry closRegistry, boolean allClasses) {
 		LispSymbol cls = new LispSymbol("%mmi_class");
 		LispSymbol args = new LispSymbol("%mmi_args");
 		LispSymbol name = new LispSymbol("%mmi_name");
@@ -20526,11 +20696,35 @@ public final class LispMacroExpander {
 				.orElse(null);
 			sharedInit = init != null;
 		}
-		List<LispVal> condParts = new java.util.ArrayList<>();
-		condParts.add(new LispSymbol(LispNames.COND));
+		LispVal initCallOnObj = null;
+		if (init != null) {
+			List<LispVal> initCall = new java.util.ArrayList<>();
+			initCall.add(new LispSymbol(LispNames.APPLY));
+			initCall.add(functionRef(init.name()));
+			initCall.add(obj);
+			if (sharedInit) {
+				initCall.add(LispTrue.INSTANCE);
+			}
+			initCall.add(args);
+			initCallOnObj = listToCons(initCall);
+		}
+		LispVal designator = makeIf(callOf(LispNames.OBJ_P, cls), mvCall(LispNames.OBJ_REF, cls, new LispInteger(0)),
+				cls);
+		LispVal errorForm = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString(LispNames.MOP_MAKE_INSTANCE + ": not an instantiable class: ~A"), name));
+		List<LispVal> defuns = new java.util.ArrayList<>();
+		List<LispVal> clauses = new java.util.ArrayList<>();
 		java.util.Set<String> seen = new java.util.HashSet<>();
+		List<String> helperNames = new java.util.ArrayList<>();
+		int clauseNodes = 0;
 		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
-			if (!seen.add(info.name()) || !isMetaobjectClass(info)) {
+			if (!seen.add(info.name()) || (!allClasses && !isMetaobjectClass(info))) {
+				continue;
+			}
+			// A seeded class other than the MOP trio (the condition hierarchy) has no
+			// generated keyword constructor to dispatch to; the fall-through error arm
+			// answers for it.
+			if (allClasses && closRegistry.isSeededClass(info.name()) && !isMetaobjectClass(info)) {
 				continue;
 			}
 			List<String> spellings = new java.util.ArrayList<>();
@@ -20543,30 +20737,66 @@ public final class LispMacroExpander {
 					: qn.pkg() + "::" + affixFor("%make-", qn.member()) + qn.member();
 			LispVal construct = listToCons(List.of(new LispSymbol(LispNames.APPLY), functionRef(ctor), args));
 			LispVal arm;
-			if (init == null) {
+			if (allClasses || initCallOnObj == null) {
+				// Chunked mode (and the no-init-generic case): the arm only constructs;
+				// the public defun runs the initialization generic on the result.
 				arm = construct;
 			}
 			else {
-				List<LispVal> initCall = new java.util.ArrayList<>();
-				initCall.add(new LispSymbol(LispNames.APPLY));
-				initCall.add(functionRef(init.name()));
-				initCall.add(obj);
-				if (sharedInit) {
-					initCall.add(LispTrue.INSTANCE);
-				}
-				initCall.add(args);
 				arm = listToCons(List.of(new LispSymbol(LispNames.LET),
-						listToCons(List.of(listToCons(List.of(obj, construct)))), listToCons(initCall), obj));
+						listToCons(List.of(listToCons(List.of(obj, construct)))), initCallOnObj, obj));
 			}
-			condParts.add(listToCons(List.of(mvCall(LispNames.MEMBER, name, quotedSymbolList(spellings)), arm)));
+			LispVal clause = listToCons(List.of(mvCall(LispNames.MEMBER, name, quotedSymbolList(spellings)), arm));
+			clauses.add(clause);
+			if (allClasses) {
+				clauseNodes += consNodeCount(clause);
+				if (clauseNodes >= 600) {
+					defuns.add(mopMakeInstanceHelperDefun(helperNames, clauses, name, args));
+					clauses = new java.util.ArrayList<>();
+					clauseNodes = 0;
+				}
+			}
 		}
-		condParts.add(listToCons(List.of(LispTrue.INSTANCE, listToCons(List.of(new LispSymbol(LispNames.ERROR),
-				new LispString(LispNames.MOP_MAKE_INSTANCE + ": not an instantiable class: ~A"), name)))));
-		LispVal designator = makeIf(callOf(LispNames.OBJ_P, cls), mvCall(LispNames.OBJ_REF, cls, new LispInteger(0)),
-				cls);
-		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.MOP_MAKE_INSTANCE),
-				listToCons(List.of(cls, new LispSymbol(LispNames.LAMBDA_REST), args)),
-				makeLet(name.name(), designator, listToCons(condParts))));
+		if (!allClasses) {
+			List<LispVal> condParts = new java.util.ArrayList<>();
+			condParts.add(new LispSymbol(LispNames.COND));
+			condParts.addAll(clauses);
+			condParts.add(listToCons(List.of(LispTrue.INSTANCE, errorForm)));
+			defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.MOP_MAKE_INSTANCE),
+					listToCons(List.of(cls, new LispSymbol(LispNames.LAMBDA_REST), args)),
+					makeLet(name.name(), designator, listToCons(condParts)))));
+			return defuns;
+		}
+		if (!clauses.isEmpty()) {
+			defuns.add(mopMakeInstanceHelperDefun(helperNames, clauses, name, args));
+		}
+		LispVal chain = LispNil.INSTANCE;
+		if (!helperNames.isEmpty()) {
+			List<LispVal> orParts = new java.util.ArrayList<>();
+			orParts.add(new LispSymbol(LispNames.OR));
+			for (String helper : helperNames) {
+				orParts.add(mvCall(helper, name, args));
+			}
+			chain = listToCons(orParts);
+		}
+		LispVal found = initCallOnObj == null ? obj : makeProgn(List.of(initCallOnObj, obj));
+		LispVal body = makeLet(name.name(), designator, makeLet(obj.name(), chain, makeIf(obj, found, errorForm)));
+		defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.MOP_MAKE_INSTANCE),
+				listToCons(List.of(cls, new LispSymbol(LispNames.LAMBDA_REST), args)), body)));
+		return defuns;
+	}
+
+	/** One {@code %MMI-<n>} helper: a cond over its chunk's construction arms. */
+	private static LispVal mopMakeInstanceHelperDefun(List<String> helperNames, List<LispVal> clauses, LispSymbol name,
+			LispSymbol args) {
+		String helperName = "%MMI-" + helperNames.size();
+		helperNames.add(helperName);
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		condParts.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(helperName),
+				listToCons(List.of(name, args)), listToCons(condParts)));
 	}
 
 	/** Whether the class descends from one of the seeded MOP base classes. */

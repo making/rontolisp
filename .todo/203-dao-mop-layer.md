@@ -338,19 +338,48 @@ new compile doc page):
   registers in the dispatcher unconditionally and fails on the unassigned
   body global if called.
 
-### Phase D -- feature flip + integration
+### Phase D -- feature flip + integration -- DONE 2026-08-01
 
-- `postmodern-deps.asd`: add `:postmodern-use-mop` to `:rontolisp-features`,
-  add the `closer-mop` dependency (upstream carries it as
-  `(:feature :postmodern-use-mop "closer-mop")` -- keep that shape).
-  `table.lisp` rejoins the build via the verbatim `:if-feature`; postmodern's
-  own `defpackage` switches `:use` to `:closer-common-lisp` by itself.
-- `save-dao/transaction`, `do-select-dao`, `with-column-writers`,
-  `dao-row-reader-with-body`; `handler-case` on `unique-violation` /
-  `columns-error` / `unbound-slot`.
-- Update `AsdfSystemsTest` pins (`parsesTheBundledPostmodernReplacementAsd`
-  expects table.lisp ABSENT today; `thePostmodernMopBuildIsAFeatureFlip`
-  stops passing a synthetic feature set once the real one is on).
+Landed (full JVM suite 5044 green; the DAO probe -- quickload + dao-class
+defclass + dao-table-definition + dao-keys -- answers identically on the
+interpreter, the JVM and the WASM component; Preview 1 stays the documented
+cl-postgres socket compile error):
+
+- `postmodern-deps.asd` flipped: `:rontolisp-features` gained
+  `:postmodern-use-mop`, `:depends-on` gained upstream's verbatim
+  `(:feature :postmodern-use-mop "closer-mop")` clause; table.lisp rejoined
+  via the untouched `:if-feature`; the defpackage switched to
+  `:closer-common-lisp` by itself. `AsdfSystemsTest` pins updated
+  (`parsesTheBundledPostmodernReplacementAsd` = the MOP graph;
+  `thePostmodernMopBuildIsAFeatureFlip` now strips the declaration and
+  asserts table.lisp + closer-mop leave again).
+- Five substrate gaps surfaced by the flip, each fixed at the root
+  (mechanics: `.kb/packages.md`, `.kb/clos.md`):
+  1. defpackage re-export/`:import-from` of a REDIRECTED member recorded the
+     intermediate package, not the true home (`PackageResolver.trueHome`) --
+     postmodern's `#:class-finalized-p` re-export spelled its own references
+     into the undefined `CLOSER-COMMON-LISP:` symbol.
+  2. `initialize-instance`/`reinitialize-instance`/`shared-initialize` joined
+     `CL_FUNCTIONS` (one cl-owned generic each, the print-object precedent;
+     list-functions 350 -> 353, four pins bumped) -- per-package generics
+     split the init chain and postmodern's `sql-name`-computing
+     `shared-initialize :after` never fired.
+  3. `#'make-instance` as a first-class value: REFERENCE_GATED wrapper over
+     `%mop-make-instance` (make-dao's `(apply #'make-instance class args)`),
+     interpreter twin defined natively; arms widened to every
+     program-registered class and chunked into `%MMI-<n>` helpers.
+  4. Runtime-name `(setf (slot-value ...))`: shared
+     `%slot-value-set-runtime` defun (separately gated) + interpreter
+     builtin (dao-from-fields writes every column that way).
+  5. The runtime slot dispatch defuns themselves outgrew the JVM signed
+     16-bit branch encoding under the full postmodern registry -- all three
+     now chained-chunked (`chainedDispatchDefuns`, `%SVR-/%SBR-/%SVW-<n>`),
+     byte-identical when they fit.
+
+Runtime behaviors that need a live database (`save-dao`,
+`save-dao/transaction`, `do-select-dao`, `with-column-writers`,
+`dao-row-reader-with-body`, the `unique-violation`/`columns-error`/
+`unbound-slot` handler-case paths) are Phase E's E2E scope.
 
 ### Phase E -- E2E + docs + kb
 

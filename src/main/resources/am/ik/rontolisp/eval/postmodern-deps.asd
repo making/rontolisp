@@ -9,12 +9,13 @@
 ;;;; that form makes the file unreadable -- and a push would be invisible to the
 ;;;; reader anyway (.todo/181). Both decisions are therefore taken here, once:
 ;;;;
-;;;; :postmodern-use-mop -- OFF. Nothing activates the feature, so table.lisp
-;;;; (the :if-feature component below) contributes no source and postmodern's
-;;;; own defpackage takes its #-postmodern-use-mop branch, using :common-lisp
-;;;; rather than :closer-common-lisp. That is the non-MOP build: everything
-;;;; except the DAO layer. The :if-feature clause is kept verbatim rather than
-;;;; deleted so the MOP build is a feature flip, not a re-edit of this file.
+;;;; :postmodern-use-mop -- ON. table.lisp (the :if-feature component below)
+;;;; joins the build and postmodern's own defpackage takes its
+;;;; #+postmodern-use-mop branch, using :closer-common-lisp. That is the full
+;;;; MOP build: the DAO layer runs on the static definition-time MOP subset
+;;;; (defclass :metaclass protocol + build-dao-methods' compile interception --
+;;;; .kb/clos.md). The closer-mop dependency is carried in upstream's own
+;;;; (:feature ...) shape so the whole decision stays a feature flip.
 ;;;;
 ;;;; :postmodern-thread-safe -- ON (.todo/204). rontolisp DOES run concurrent
 ;;;; handlers (one virtual thread per request under `serve`), so postmodern's
@@ -48,9 +49,10 @@
 
 (defsystem "postmodern"
   :description "PostgreSQL programming API"
-  :rontolisp-features (:postmodern-thread-safe)
+  :rontolisp-features (:postmodern-thread-safe :postmodern-use-mop)
   :depends-on ("alexandria" "bordeaux-threads" "cl-postgres" "s-sql"
-               "split-sequence" "uiop" "cl-ppcre" "uax-15")
+               "split-sequence" "uiop" "cl-ppcre" "uax-15"
+               (:feature :postmodern-use-mop "closer-mop"))
   :components
   ((:module "postmodern"
     :components ((:file "package")

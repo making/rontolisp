@@ -5006,7 +5006,7 @@ class LispEvaluatorTest {
 			.contains("CLASS-OF", "CLASS-NAME", "FIND-CLASS", "TYPE-OF", "COMPILE")
 			.doesNotContain("%class-designator", "%find-class")
 			.isSorted()
-			.hasSize(350);
+			.hasSize(353);
 	}
 
 	@Test
@@ -8712,6 +8712,62 @@ class LispEvaluatorTest {
 				      (handler-case (allocate-instance 'ai-node) (error (e) :signaled))
 				      (typep (allocate-instance (find-class 'ai-ok) :v 1 :junk 2) 'ai-ok))
 				""").print()).isEqualTo("(:SIGNALED :SIGNALED T)");
+	}
+
+	@Test
+	void setfSlotValueWithARuntimeSlotName() {
+		// (setf (slot-value obj name-var) v) -- postmodern's dao-from-fields writes
+		// every column through a runtime slot name. The write dispatches like the
+		// runtime-name read and answers the stored value.
+		assertThat(evalMulti("""
+				(defclass rs-pt () ((x :initarg :x :initform 0) (y :initform 1)))
+				(let ((p (make-instance 'rs-pt))
+				      (n 'y))
+				  (list (setf (slot-value p n) 42) (slot-value p 'y) (slot-value p n)))
+				""").print()).isEqualTo("(42 42 42)");
+	}
+
+	@Test
+	void makeInstanceIsAFirstClassFunction() {
+		// (apply #'make-instance class initargs) is the postmodern make-dao idiom: the
+		// class arrives at RUN time (a metaobject or a name), which the static
+		// make-instance expansion cannot serve -- the function value routes through
+		// the runtime-class construction path instead.
+		assertThat(evalMulti("""
+				(defclass fv-pt () ((x :initarg :x :initform 0)))
+				(defclass fv-line () ((n :initarg :n)))
+				(let ((a (apply #'make-instance (list (find-class 'fv-pt) :x 7)))
+				      (b (funcall #'make-instance 'fv-line :n 3)))
+				  (list (slot-value a 'x) (slot-value b 'n) (typep a 'fv-pt) (typep b 'fv-line)))
+				""").print()).isEqualTo("(7 3 T T)");
+	}
+
+	@Test
+	void initProtocolGenericsAreSharedAcrossPackages() {
+		// initialize-instance / shared-initialize / reinitialize-instance are CL
+		// symbols with ONE generic each, like print-object: a method defined inside
+		// any (:use :cl) package joins the same generic. Before that classification a
+		// package minted its own generic (CL-PPCRE::INITIALIZE-INSTANCE), so
+		// make-instance found the first plain-name match and another package's
+		// shared-initialize hooks (postmodern's sql-name computation on its slot
+		// metaobjects) silently never ran.
+		assertThat(evalMulti("""
+				(defpackage :ip-lib (:use :cl) (:export :ip-str :ip-str-len))
+				(in-package :ip-lib)
+				(defclass ip-str () ((len :initform :unset :accessor ip-str-len)))
+				(defmethod initialize-instance :after ((s ip-str) &rest initargs)
+				  (declare (ignore initargs))
+				  (setf (ip-str-len s) 0))
+				(defpackage :ip-dao (:use :cl))
+				(in-package :ip-dao)
+				(defclass ip-slot () ((sql-name :reader ip-sql-name)))
+				(defmethod shared-initialize :after ((slot ip-slot) slot-names &key name &allow-other-keys)
+				  (declare (ignore slot-names))
+				  (setf (slot-value slot 'sql-name) (string-downcase (symbol-name name))))
+				(in-package :cl-user)
+				(list (ip-lib:ip-str-len (make-instance 'ip-lib:ip-str))
+				      (ip-dao::ip-sql-name (make-instance 'ip-dao::ip-slot :name 'ip-dao::user-id)))
+				""").print()).isEqualTo("(0 \"user-id\")");
 	}
 
 	@Test

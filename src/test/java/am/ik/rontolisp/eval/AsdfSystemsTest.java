@@ -377,7 +377,8 @@ class AsdfSystemsTest {
 	void parsesTheBundledPostmodernReplacementAsd() {
 		// The .asd upstream postmodern ships opens with an eval-when that pushes its two
 		// features, which the data-only front end cannot read; AsdOverrides substitutes
-		// this replacement. Pin the resolved graph: the non-MOP build drops table.lisp,
+		// this replacement. Pin the resolved graph: the MOP build is ON (table.lisp in,
+		// deftable after it, closer-mop through upstream's (:feature ...) clause),
 		// global-vars (declared upstream, zero call sites) is gone, and cl-ppcre +
 		// uax-15 (called by the sources, never declared upstream) are present.
 		String source = AsdOverrides.replacementSource("postmodern.asd");
@@ -388,29 +389,35 @@ class AsdfSystemsTest {
 		AsdfSystems.LispSystem system = systems.get(0);
 		assertThat(system.name()).isEqualTo("postmodern");
 		assertThat(system.dependsOn()).containsExactly("alexandria", "bordeaux-threads", "cl-postgres", "s-sql",
-				"split-sequence", "uiop", "cl-ppcre", "uax-15");
-		// :postmodern-thread-safe is declared statically (upstream pushes it from an
-		// eval-when, which the reader never sees), so the lock sites take their
-		// #+postmodern-thread-safe branch.
-		assertThat(system.features()).containsExactly("postmodern-thread-safe");
+				"split-sequence", "uiop", "cl-ppcre", "uax-15", "closer-mop");
+		// Both features are declared statically (upstream pushes them from an
+		// eval-when, which the reader never sees): the lock sites take their
+		// #+postmodern-thread-safe branch, package.lisp/table.lisp/deftable.lisp/
+		// json-encoder.lisp their #+postmodern-use-mop branches.
+		assertThat(system.features()).containsExactly("postmodern-thread-safe", "postmodern-use-mop");
 		assertThat(system.files()).containsExactly("postmodern/package.lisp", "postmodern/config.lisp",
 				"postmodern/connect.lisp", "postmodern/json-encoder.lisp", "postmodern/query.lisp",
 				"postmodern/prepare.lisp", "postmodern/roles.lisp", "postmodern/util.lisp",
 				"postmodern/transaction.lisp", "postmodern/namespace.lisp", "postmodern/execute-file.lisp",
-				"postmodern/deftable.lisp");
+				"postmodern/table.lisp", "postmodern/deftable.lisp");
 	}
 
 	@Test
 	void thePostmodernMopBuildIsAFeatureFlip() {
-		// The :if-feature / (:feature ...) clauses are kept verbatim in the replacement
-		// so the DAO layer arrives by activating the feature, not by re-editing the
-		// file: table.lisp joins the build and deftable depends on it.
+		// The :if-feature / (:feature ...) clauses stay verbatim in the replacement so
+		// the DAO layer rides the feature, not a file edit: with the declared features
+		// stripped of :postmodern-use-mop, table.lisp (and the closer-mop dependency)
+		// would leave the build again -- pinned by re-parsing the same source with the
+		// declaration line reduced to :postmodern-thread-safe alone.
 		String source = AsdOverrides.replacementSource("postmodern.asd");
 		assertThat(source).isNotNull();
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "sw/postmodern.asd",
-				Features.of("rontolisp", "postmodern-use-mop"));
-		assertThat(systems.get(0).files()).contains("postmodern/table.lisp")
-			.containsSubsequence("postmodern/table.lisp", "postmodern/deftable.lisp");
+		String nonMop = source.replace(":rontolisp-features (:postmodern-thread-safe :postmodern-use-mop)",
+				":rontolisp-features (:postmodern-thread-safe)");
+		assertThat(nonMop).isNotEqualTo(source);
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(nonMop, "sw/postmodern.asd",
+				Features.INTERPRETER);
+		assertThat(systems.get(0).files()).doesNotContain("postmodern/table.lisp").contains("postmodern/deftable.lisp");
+		assertThat(systems.get(0).dependsOn()).doesNotContain("closer-mop");
 	}
 
 	@Test

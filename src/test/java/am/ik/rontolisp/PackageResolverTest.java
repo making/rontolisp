@@ -424,6 +424,35 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void reExportOfARedirectedMemberRecordsItsTrueHome() {
+		// postmodern's MOP-build shape: (:use :closer-common-lisp) + (:export
+		// #:class-finalized-p). c2cl holds class-finalized-p only as a REDIRECT to
+		// closer-mop, so the re-export must follow that chain to the true home --
+		// recording c2cl itself would spell the package's own references
+		// CLOSER-COMMON-LISP:CLASS-FINALIZED-P, a spelling no definition lives under.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :pomo (:use :closer-common-lisp) (:export :class-finalized-p))");
+		resolve(resolver, "(in-package :pomo)");
+		assertThat(resolve(resolver, "(class-finalized-p c)")).isEqualTo("(CLOSER-MOP:CLASS-FINALIZED-P POMO::C)");
+		assertThat(resolve(resolver, "(pomo:class-finalized-p c)")).isEqualTo("(CLOSER-MOP:CLASS-FINALIZED-P POMO::C)");
+		// A package using the re-exporter follows the same chain through usedExport.
+		resolve(resolver, "(defpackage :pomo-client (:use :cl :pomo))");
+		resolve(resolver, "(in-package :pomo-client)");
+		assertThat(resolve(resolver, "(class-finalized-p c)"))
+			.isEqualTo("(CLOSER-MOP:CLASS-FINALIZED-P POMO-CLIENT::C)");
+	}
+
+	@Test
+	void importFromARedirectedMemberRecordsItsTrueHome() {
+		// The :import-from spelling of the same chain: importing a member the source
+		// package itself holds only as a redirect must land on the true home.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :impdao (:use :cl) (:import-from :closer-common-lisp :class-finalized-p))");
+		resolve(resolver, "(in-package :impdao)");
+		assertThat(resolve(resolver, "(class-finalized-p c)")).isEqualTo("(CLOSER-MOP:CLASS-FINALIZED-P IMPDAO::C)");
+	}
+
+	@Test
 	void defpackageAcceptsStringAndBareSymbolDesignators() {
 		PackageResolver resolver = new PackageResolver();
 		assertThat(resolve(resolver, "(defpackage \"STRPKG\" (:use cl) (:export \"F\" g :h))"))

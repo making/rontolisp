@@ -809,34 +809,55 @@ public final class LispEvaluator {
 					}
 					return new LispInstance(layout, slots);
 				}));
+		// (%mop-make-instance designator initargs...) -- the metaclass protocol's
+		// runtime-class make-instance: the designator (a class metaobject or a name
+		// symbol) picks the class at RUN time, which the static make-instance expansion
+		// cannot. Re-enters the ordinary make-instance evaluation with every argument
+		// quote-wrapped, so the constructor semantics and the initialization-generic
+		// hooks stay the single implementation. The same body doubles as the function
+		// value of make-instance itself (the (apply #'make-instance class args) idiom
+		// of postmodern's make-dao); the literal-call path never consults it.
+		java.util.function.Function<List<LispVal>, LispVal> runtimeMakeInstance = args -> {
+			if (args.isEmpty()) {
+				throw new LispEvalException(
+						LispNames.MOP_MAKE_INSTANCE + " expects a class designator, got 0 arguments");
+			}
+			LispVal designator = args.get(0);
+			if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
+				designator = inst.slot(0);
+			}
+			if (!(designator instanceof LispSymbol classSym)) {
+				throw new LispEvalException(
+						LispNames.MOP_MAKE_INSTANCE + " expects a class designator, got " + args.get(0).print());
+			}
+			LispVal call = LispNil.INSTANCE;
+			for (int i = args.size() - 1; i >= 1; i--) {
+				call = new LispCons(quoteForm(args.get(i)), call);
+			}
+			call = new LispCons(new LispSymbol(LispNames.MAKE_INSTANCE), new LispCons(quoteForm(classSym), call));
+			return eval(call, this.globalEnv);
+		};
 		this.globalEnv.defineFunction(LispNames.MOP_MAKE_INSTANCE,
-				new LispFunction(LispNames.MOP_MAKE_INSTANCE, args -> {
-					// (%mop-make-instance designator initargs...) -- the metaclass
-					// protocol's runtime-class make-instance: the designator (a class
-					// metaobject or a name symbol) picks the class at RUN time, which the
-					// static make-instance expansion cannot. Re-enters the ordinary
-					// make-instance evaluation with every argument quote-wrapped, so the
-					// constructor semantics and the initialization-generic hooks stay the
-					// single implementation.
-					if (args.isEmpty()) {
-						throw new LispEvalException(
-								LispNames.MOP_MAKE_INSTANCE + " expects a class designator, got 0 arguments");
+				new LispFunction(LispNames.MOP_MAKE_INSTANCE, runtimeMakeInstance::apply));
+		this.globalEnv.defineFunction(LispNames.MAKE_INSTANCE,
+				new LispFunction(LispNames.MAKE_INSTANCE, runtimeMakeInstance::apply));
+		this.globalEnv.defineFunction(LispNames.SLOT_VALUE_SET_RUNTIME,
+				new LispFunction(LispNames.SLOT_VALUE_SET_RUNTIME, args -> {
+					// (%slot-value-set-runtime obj name value) -- what the shared setf
+					// expansion emits for a runtime slot name (the compile paths generate
+					// a dispatch defun of the same name); resolves natively like the
+					// runtime-name slot-value read.
+					if (args.size() != 3) {
+						throw new LispEvalException(LispNames.SLOT_VALUE_SET_RUNTIME + " expects (obj name value), got "
+								+ args.size() + " arguments");
 					}
-					LispVal designator = args.get(0);
-					if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
-						designator = inst.slot(0);
+					SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
+					if (slot == null) {
+						throw new LispEvalException(LispNames.SLOT_VALUE + ": unknown slot " + args.get(1).print()
+								+ " on " + args.get(0).print());
 					}
-					if (!(designator instanceof LispSymbol classSym)) {
-						throw new LispEvalException(LispNames.MOP_MAKE_INSTANCE + " expects a class designator, got "
-								+ args.get(0).print());
-					}
-					LispVal call = LispNil.INSTANCE;
-					for (int i = args.size() - 1; i >= 1; i--) {
-						call = new LispCons(quoteForm(args.get(i)), call);
-					}
-					call = new LispCons(new LispSymbol(LispNames.MAKE_INSTANCE),
-							new LispCons(quoteForm(classSym), call));
-					return eval(call, this.globalEnv);
+					slot.write(args.get(2));
+					return args.get(2);
 				}));
 		this.globalEnv.defineFunction(LispNames.REGISTER_CLASS_METAOBJECT,
 				new LispFunction(LispNames.REGISTER_CLASS_METAOBJECT, args -> {

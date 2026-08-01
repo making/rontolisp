@@ -109,6 +109,12 @@ public final class BuiltinFunctionWrappers {
 		// which LispMacroExpander injects only for a program that references class-of
 		// (or find-class) itself -- the injected wrapper body is outside that scan.
 		gated.add(LispNames.CLASS_OF);
+		// #'make-instance forwards to the generated %mop-make-instance runtime-class
+		// construction defun, which LispMacroExpander injects (with arms widened to
+		// every registered class) exactly when the program takes make-instance as a
+		// value -- the (apply #'make-instance class args) idiom of postmodern's
+		// make-dao.
+		gated.add(LispNames.MAKE_INSTANCE);
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
 	}
 
@@ -755,6 +761,13 @@ public final class BuiltinFunctionWrappers {
 			// cl-utilities' compose folds with (reduce #'funcall fns ...).
 			new WrapperDef(LispNames.FUNCALL, List.of("f", LispNames.LAMBDA_REST, "r"),
 					List.of(callV(LispNames.APPLY, new LispSymbol("f"), new LispSymbol("r")))),
+			// #'make-instance (gated by REFERENCE_GATED_FUNCTIONS): forwards to the
+			// generated %mop-make-instance runtime-class construction defun.
+			new WrapperDef(LispNames.MAKE_INSTANCE, List.of("class", LispNames.LAMBDA_REST, "r"),
+					List.of(callV(LispNames.APPLY,
+							listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
+									new LispSymbol(LispNames.MOP_MAKE_INSTANCE))),
+							new LispSymbol("class"), new LispSymbol("r")))),
 			// Predicates (arity 1)
 			unary(LispNames.NULL), unary(LispNames.NOT), unary(LispNames.ATOM),
 			// Type predicates (arity 1)

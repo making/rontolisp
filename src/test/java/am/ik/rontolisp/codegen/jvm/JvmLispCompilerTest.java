@@ -141,6 +141,33 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileSetfSlotValueWithARuntimeSlotName() throws Exception {
+		// The write-side twin of the runtime-name slot-value read: postmodern's
+		// dao-from-fields writes every column through a runtime slot name.
+		assertThat(compileAndRun("""
+				(defclass rs-pt () ((x :initarg :x :initform 0) (y :initform 1)))
+				(let ((p (make-instance 'rs-pt))
+				      (n 'y))
+				  (print (list (setf (slot-value p n) 42) (slot-value p 'y) (slot-value p n))))
+				""")).isEqualTo("(42 42 42)");
+	}
+
+	@Test
+	void compileMakeInstanceAsAFirstClassFunction() throws Exception {
+		// (apply #'make-instance class initargs) -- the postmodern make-dao idiom: a
+		// runtime class (metaobject or name) routes through the generated
+		// %mop-make-instance dispatch, whose arms widen to every registered class when
+		// the program takes make-instance as a value.
+		assertThat(compileAndRun("""
+				(defclass fv-pt () ((x :initarg :x :initform 0)))
+				(defclass fv-line () ((n :initarg :n)))
+				(let ((a (apply #'make-instance (list (find-class 'fv-pt) :x 7)))
+				      (b (funcall #'make-instance 'fv-line :n 3)))
+				  (print (list (slot-value a 'x) (slot-value b 'n) (typep a 'fv-pt) (typep b 'fv-line))))
+				""")).isEqualTo("(7 3 T T)");
+	}
+
+	@Test
 	void compileCloserMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators() throws Exception {
 		// The closer-mop system is spliced by the compile-time LoadInliner pass (cli),
 		// mirroring the CLI pipeline; the shim serves BOTH generations, exactly like the
@@ -6166,12 +6193,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("350");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("353");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("350");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("353");
 	}
 
 	@Test

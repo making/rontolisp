@@ -116,11 +116,22 @@ threaded through `Ctx.Builder` beside `structAccessors`).
   complete regardless of definition order. Non-top-level
   defclass/defgeneric/defmethod -> `Jvm/WasmExprCompiler` "only supported as a
   top-level form" cases (beside DEFSTRUCT).
-- **`make-instance`/`slot-value`** are macro-classified (`CL_MACROS`, no
-  function value) and expand at the three dispatch sites (`evalCons` + both
-  ExprCompilers) through the registry; both require literal quoted names.
+- **`make-instance`/`slot-value`** are macro-classified (`CL_MACROS`) and
+  expand at the three dispatch sites (`evalCons` + both ExprCompilers) through
+  the registry; a literal quoted name gets the static expansion.
   `expandSetf` gained a third parameter (`closRegistry`) with a SLOT_VALUE
-  place case; the three setf dispatch sites pass it.
+  place case; the three setf dispatch sites pass it. Since the DAO milestone
+  (2026-08-01) the non-literal forms resolve too: `#'make-instance` taken as a
+  VALUE gets a `BuiltinFunctionWrappers` wrapper (REFERENCE_GATED) forwarding
+  to the generated `%mop-make-instance` (the interpreter defines the same
+  function natively beside it) -- postmodern's make-dao
+  `(apply #'make-instance class args)`; a runtime slot NAME dispatches through
+  the shared `%slot-value-runtime`/`%slot-boundp-runtime`/
+  `%slot-value-set-runtime` defuns (the setf twin is separately gated on a
+  runtime-name `(setf (slot-value ...))` -- `needsRuntimeSlotSetDispatch` --
+  so read-only programs stay byte-identical; the interpreter serves
+  `%slot-value-set-runtime` as a builtin) -- postmodern's dao-from-fields
+  column writes.
 - **`UserMacroExpander`** (cl-who-critical): top-level
   defclass/defgeneric/defmethod are `macroEval.eval`'d into the macro-time
   evaluator (so a defmacro body can CALL a generic at expansion time — cl-who's
@@ -131,10 +142,22 @@ threaded through `Ctx.Builder` beside `structAccessors`).
 
 ## The instance-initialization protocol (todo-173)
 
-`initialize-instance`, `reinitialize-instance` and `shared-initialize` have no
-system-supplied primary method in the static subset (the generated constructor
-already fills the slots), so `expandDefmethod` SYNTHESIZES one the first time a
-program defines any method on one of them — and the CL chain with it:
+`initialize-instance`, `reinitialize-instance` and `shared-initialize` are CL
+symbols (`PackageRegistry.CL_FUNCTIONS`, like `print-object` and for the same
+reason): CL has ONE generic each, so a method defined inside any `(:use :cl)`
+package joins the same generic. Before that classification (pre-DAO,
+2026-08-01) each package minted its own
+(`CL-PPCRE::INITIALIZE-INSTANCE` vs `POSTMODERN::SHARED-INITIALIZE`), and
+`make-instance`'s protocol chain — which matches generics by PLAIN name and
+takes the first hit — ran one package's chain while another package's hooks
+silently never fired (postmodern's `sql-name`-computing
+`shared-initialize :after` on its slot metaobjects was the symptom; pinned by
+`LispEvaluatorTest#initProtocolGenericsAreSharedAcrossPackages`).
+
+They have no system-supplied primary method in the static subset (the
+generated constructor already fills the slots), so `expandDefmethod`
+SYNTHESIZES one the first time a program defines any method on one of them —
+and the CL chain with it:
 `initialize-instance`'s and `reinitialize-instance`'s defaults
 `(apply #'shared-initialize instance t/nil initargs)`, `shared-initialize`'s
 returns the instance. When the program has no `shared-initialize` method yet, the
@@ -500,7 +523,11 @@ before and every existing artifact stays byte-identical.
   seeded MOP base classes, whose defclass never ran), the generated
   `%mop-make-instance` (runtime-class make-instance: designator -> name ->
   per-class `apply` of the generated constructor + the program's
-  initialization generic, arms bounded to METAOBJECT-ancestored classes) and
+  initialization generic; arms bounded to METAOBJECT-ancestored classes,
+  WIDENED to every program-registered class -- seeded condition classes
+  excluded, they have no keyword constructor -- and chunked into `%MMI-<n>`
+  helpers with the init call hoisted, whenever the program takes
+  `#'make-instance` as a value) and
   `%register-class-metaobject` (prepends onto `%class-metaobjects%`, so the
   driver-built metaclass instance shadows the materialized plain view -- the
   memo scan takes the first hit; the interpreter twin primes
@@ -568,12 +595,17 @@ before and every existing artifact stays byte-identical.
   grows with every layout times its slots -- the metaclass protocol's five
   extra ci-spec classes pushed a corpus dolist body past the JVM's SIGNED
   16-BIT branch encoding (32 KB, hit before the 64 KB method cap). It is now
-  outlined into the shared `%slot-value-runtime`/`%slot-boundp-runtime` defuns
-  (`runtimeSlotValueDefun`, gated on a non-literal-name site,
-  `needsRuntimeSlotNameDispatch`; the interpreter resolves runtime names
-  natively and never calls them). The defun bodies still grow with the
-  registry under the 64 KB cap -- chunk them like `%ALLOC-INST-<n>` if a
-  registry ever gets near it. Top-level compile crashes now name the
+  outlined into the shared `%slot-value-runtime`/`%slot-boundp-runtime`/
+  `%slot-value-set-runtime` defuns (`runtimeSlotValueDefuns` etc., gated on a
+  non-literal-name site, `needsRuntimeSlotNameDispatch` /
+  `needsRuntimeSlotSetDispatch`; the interpreter resolves runtime names
+  natively and never calls the read pair, and serves the set twin as a
+  builtin). The defuns themselves are CHAINED-CHUNKED by cons-node budget
+  (`chainedDispatchDefuns`: overflow arms call `%SVR-<n>`/`%SBR-<n>`/
+  `%SVW-<n>` helpers; a dispatch that fits stays one defun, byte-identical to
+  the pre-chunking shape) -- the full postmodern MOP build's registry pushed
+  the single-defun shape past the JVM's signed 16-bit branch encoding.
+  Top-level compile crashes now name the
   offending form (`JvmLispCompiler` chunk-loop wrapper).
   `change-class` is the ONE runtime exception and is not MOP: both classes are literal, so
   the whole change is a static expansion (see above).

@@ -500,7 +500,7 @@ public final class PackageResolver {
 						if (!member.equals(lower) && sourceProvides(source, lower) && !sourceProvides(source, member)) {
 							member = lower;
 						}
-						imports.put(member, source);
+						imports.put(member, trueHome(source, member));
 					}
 				}
 				// Metadata: accepted for portability, not recorded anywhere.
@@ -540,7 +540,7 @@ public final class PackageResolver {
 			}
 			for (String used : useList) {
 				if (!LispNames.CL_PKG.equals(used) && this.registry.get(used).exports(exported)) {
-					imports.put(exported, used);
+					imports.put(exported, trueHome(used, exported));
 					break;
 				}
 			}
@@ -1093,6 +1093,26 @@ public final class PackageResolver {
 			return new LispSymbol(name);
 		}
 		return canonical(home, name);
+	}
+
+	/**
+	 * The package a member actually lives in, following the source package's own import
+	 * map: a package that provides a name only as a redirect (a re-export chain, or the
+	 * {@code closer-common-lisp} overlay) is not the member's home, and recording it
+	 * would spell references under a package that names no definition. Every recorded
+	 * import already points at a true home (this method guards each recording site), so a
+	 * single hop suffices.
+	 * @param source the package the member was named through
+	 * @param member the unqualified symbol name
+	 * @return the member's home package
+	 */
+	private String trueHome(String source, String member) {
+		LispPackage pkg = this.registry.get(source);
+		if (pkg == null) {
+			return source;
+		}
+		String home = pkg.imports().get(member);
+		return home == null ? source : home;
 	}
 
 	private boolean currentUsesCl() {

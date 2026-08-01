@@ -2491,6 +2491,16 @@ public final class LispNames {
 	public static final String SLOT_BOUNDP_RUNTIME = "%SLOT-BOUNDP-RUNTIME";
 
 	/**
+	 * The shared runtime-slot-name WRITE dispatch, the {@code setf} twin of
+	 * {@link #SLOT_VALUE_RUNTIME}: {@code (%slot-value-set-runtime obj name value)}
+	 * stores through a slot name known only at run time and answers the stored value
+	 * (postmodern's {@code dao-from-fields} writes every column this way). Generated on
+	 * the compile paths gated on a runtime-name {@code (setf (slot-value ...))}; the
+	 * interpreter serves it as a native builtin.
+	 */
+	public static final String SLOT_VALUE_SET_RUNTIME = "%SLOT-VALUE-SET-RUNTIME";
+
+	/**
 	 * The internal runtime-class {@code make-instance}: {@code (%mop-make-instance
 	 * designator initargs...)} instantiates a class chosen at RUN time (a metaobject or a
 	 * name symbol) -- what the static {@code make-instance} expansion cannot do, and what
@@ -4713,6 +4723,23 @@ public final class LispNames {
 	 * only routes a type some method specializes on.
 	 */
 	public static final String PRINT_OBJECT = "PRINT-OBJECT";
+
+	/**
+	 * The {@code initialize-instance} generic: {@code make-instance} runs it on the fresh
+	 * instance with the initargs. Like {@link #PRINT_OBJECT} it has to be ONE cl-owned
+	 * generic -- CL's instance-initialization protocol chains through the same three
+	 * generics whatever package a method is defined in.
+	 */
+	public static final String INITIALIZE_INSTANCE = "INITIALIZE-INSTANCE";
+
+	/** The {@code reinitialize-instance} generic; see {@link #INITIALIZE_INSTANCE}. */
+	public static final String REINITIALIZE_INSTANCE = "REINITIALIZE-INSTANCE";
+
+	/**
+	 * The {@code shared-initialize} generic both {@link #INITIALIZE_INSTANCE} and
+	 * {@link #REINITIALIZE_INSTANCE} chain to; see {@link #INITIALIZE_INSTANCE}.
+	 */
+	public static final String SHARED_INITIALIZE = "SHARED-INITIALIZE";
 
 	/**
 	 * The internal {@code (%print-object-str x escape)} renderer: the text the printer

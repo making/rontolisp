@@ -5810,6 +5810,30 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void setfSlotValueWithARuntimeSlotName() throws Exception {
+		// Mirrors JvmLispCompilerTest#compileSetfSlotValueWithARuntimeSlotName.
+		assertThat(compileAndRun("""
+				(defclass rs-pt () ((x :initarg :x :initform 0) (y :initform 1)))
+				(let ((p (make-instance 'rs-pt))
+				      (n 'y))
+				  (print (list (setf (slot-value p n) 42) (slot-value p 'y) (slot-value p n))))
+				""")).isEqualTo("(42 42 42)");
+	}
+
+	@Test
+	void makeInstanceAsAFirstClassFunction() throws Exception {
+		// (apply #'make-instance class initargs) with a runtime class, mirroring
+		// JvmLispCompilerTest#compileMakeInstanceAsAFirstClassFunction.
+		assertThat(compileAndRun("""
+				(defclass fv-pt () ((x :initarg :x :initform 0)))
+				(defclass fv-line () ((n :initarg :n)))
+				(let ((a (apply #'make-instance (list (find-class 'fv-pt) :x 7)))
+				      (b (funcall #'make-instance 'fv-line :n 3)))
+				  (print (list (slot-value a 'x) (slot-value b 'n) (typep a 'fv-pt) (typep b 'fv-line))))
+				""")).isEqualTo("(7 3 T T)");
+	}
+
+	@Test
 	void defclassMetaclassRunsTheClassDefinitionProtocol() throws Exception {
 		// The postmodern dao-class shape on the WASM path, mirroring
 		// JvmLispCompilerTest#compileDefclassMetaclassRunsTheClassDefinitionProtocol.
@@ -7720,7 +7744,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("350");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("353");
 	}
 
 	@Test

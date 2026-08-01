@@ -110,6 +110,19 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * Whether the named class was SEEDED by this registry (the built-in condition
+	 * hierarchy, the MOP base classes) rather than registered by a program
+	 * {@code defclass}/{@code define-condition}. Seeded classes have no generated keyword
+	 * constructor -- the only exception, the MOP base trio, gets its constructors emitted
+	 * separately by the metaclass-protocol runtime.
+	 * @param name the canonical class name
+	 * @return {@code true} for a seeded class
+	 */
+	public boolean isSeededClass(String name) {
+		return this.seededClassNames.contains(name);
+	}
+
+	/**
 	 * The {@code :report} of the seeded {@code unbound-slot}, as the AST a
 	 * {@code define-condition} would have registered:
 	 * {@code (lambda (c s) (format s "The slot ~S is unbound in ~S" (%obj-ref c 0) (%obj-ref c 1)))}.
@@ -213,6 +226,7 @@ public final class ClosRegistry {
 	 * each accepting its {@code :slot-name} initarg.
 	 */
 	private void seedClass(String name, @Nullable String parent, String... slotNames) {
+		this.seededClassNames.add(name);
 		ClassInfo parentInfo = parent == null ? null : this.classes.get(parent);
 		java.util.List<SlotSpec> slots = new java.util.ArrayList<>(parentInfo == null ? List.of() : parentInfo.slots());
 		for (String slotName : slotNames) {
@@ -488,6 +502,9 @@ public final class ClosRegistry {
 
 	/** Whether {@link #ensureMopClassesSeeded()} has run. */
 	private boolean mopClassesSeeded;
+
+	/** The names registered by {@code seedClass} (see {@link #isSeededClass}). */
+	private final Set<String> seededClassNames = new java.util.HashSet<>();
 
 	/**
 	 * Class name (normalized) to the extra parent types beyond the first -- the lite
