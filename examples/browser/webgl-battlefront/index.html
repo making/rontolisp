@@ -434,11 +434,11 @@
       </p>
     </aside>
 
+    <!-- On a phone the controls ARE the on-screen joystick and buttons, which
+         say what they do; a paragraph explaining them only steals screen. All
+         that survives on touch is the source link. -->
     <aside class="hud bottom-left" id="touch-hint" style="display: none;">
       <p class="panel keys">
-        left thumb moves · drag the right side to aim ·
-        <b>FIRE</b> attacks · small buttons jump &amp; swap weapon —
-        blast the troopers &amp; walkers, then finish Vader with the saber ·
         <a href="https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-battlefront">source</a>
       </p>
     </aside>
@@ -451,12 +451,6 @@
           click to attack.<br />
           <kbd>F</kbd> swaps the lightsaber and the blaster — Vader's blade deflects
           blaster bolts,<br />so cut the boss down with your own.
-        </p>
-        <p id="start-text-touch" style="display: none;">
-          Left thumb moves, drag the right side of the screen to aim,
-          <b>FIRE</b> attacks.<br />
-          The small button swaps the lightsaber and the blaster — Vader's blade
-          deflects blaster bolts,<br />so cut the boss down with your own.
         </p>
         <button id="start-btn" type="button">click to deploy</button>
       </div>
@@ -552,7 +546,11 @@
       // emissive, shine) at a time and uploads slices with uploadVertices;
       // `floats` carries the mat4 uniform.
       const FLOATS_PER_VERT = 11;
-      const MAX_VERTS = 40000;
+      // Must match +max-verts+ in battlefront.lisp -- that is the GPU buffer's
+      // capacity, this is the staging array setVertex writes into, and a store
+      // past a typed array's end is silently dropped rather than raising, so a
+      // smaller value here loses triangles without any error to notice.
+      const MAX_VERTS = 190000;
       const staging = new Float32Array(FLOATS_PER_VERT * MAX_VERTS);
       const floats = new Float32Array(16);
       const curColor = [1, 1, 1];  // latched by setColor
@@ -655,13 +653,15 @@
       const kbHint = document.getElementById("kb-hint");
       const touchHint = document.getElementById("touch-hint");
       const startTextKb = document.getElementById("start-text-kb");
-      const startTextTouch = document.getElementById("start-text-touch");
 
       function applyTouchMode() {
         kbHint.style.display = touchMode ? "none" : "";
         touchHint.style.display = touchMode ? "" : "none";
+        // The start card drops its paragraph entirely on touch: a phone screen
+        // is short, the keyboard instructions do not apply, and a card tall
+        // enough to hold the touch equivalent covers the arena it is inviting
+        // you into. HOTH plus the deploy button is the whole card there.
         startTextKb.style.display = touchMode ? "none" : "";
-        startTextTouch.style.display = touchMode ? "" : "none";
       }
       applyTouchMode();
       coarseMQ.addEventListener("change", (e) => { touchMode = e.matches; applyTouchMode(); });
@@ -674,7 +674,13 @@
           touchUi.classList.add("on");
           startOv.classList.remove("on");
         } else {
-          canvas.requestPointerLock?.();
+          // Chrome returns a promise here and rejects it when the browser
+          // declines the lock (its post-Esc cooldown, a click the page did not
+          // originate). The start card stays up in that case, which is the
+          // right behaviour; swallow the rejection so it does not surface as an
+          // unhandled error in the console.
+          const lock = canvas.requestPointerLock?.();
+          if (lock && typeof lock.catch === "function") lock.catch(() => {});
         }
       }
 

@@ -152,7 +152,9 @@ void main() {
   lit += rim * sky;
 
   vec3 shown = mix(lit, vC, vE);            // emissive: ignore the light
-  float fog = smoothstep(30.0, 95.0, distance(uEye, vW)) * (1.0 - vE);
+  // the fog reaches further than it used to: the horizon is a range of peaks
+  // now rather than a wall, and saturating it at 95m erased the whole skyline
+  float fog = smoothstep(45.0, 150.0, distance(uEye, vW)) * (1.0 - vE);
   color = vec4(mix(shown, sky, fog), 1.0);
 }")
 
@@ -273,11 +275,15 @@ void main() {
 (defvar *vao* 0)
 (defvar *buf* 0)
 
-;; Rounded parts (ellipsoid heads, cylinder limbs/barrels/blades, and the
-;; round bolts/sparks/shadows) cost more triangles per feature than a box, so
-;; the capacity is well above the old boxes-only budget; still trivial GPU
-;; memory (+max-verts+ * +stride+ bytes).
-(defconstant +max-verts+ 60000)         ; lit-triangle vertex capacity
+;; Rounded parts (ellipsoid heads, tapered limbs, rounded-box armour and the
+;; round bolts/sparks/shadows) cost far more triangles per feature than a box,
+;; so the capacity is well above the old boxes-only budget; still trivial GPU
+;; memory (+max-verts+ * +stride+ bytes ~ 8 MB). It MUST match the page's own
+;; staging Float32Array (MAX_VERTS in index.html): the staging array is what
+;; setVertex writes into, and a JS typed-array store past the end is silently
+;; dropped, so a Lisp-side cap above the page's would lose triangles with no
+;; error anywhere.
+(defconstant +max-verts+ 190000)        ; lit-triangle vertex capacity
 (defconstant +stride+ 44)               ; 11 floats per vertex
 
 (defun setup-gl ()
@@ -313,13 +319,40 @@ void main() {
 
 (defvar *v* 0)                          ; vertex write cursor
 (defvar *static-verts* 0)               ; the baked snow field, uploaded once
-(defvar *corners* nil)                  ; the current box's world corners, (3 8)
+
+;; Edge softening: a box face can be stamped with per-corner normals bent
+;; towards the corner's own outward direction instead of the flat face normal.
+;; The silhouette stays a box, but the shading gradient across each face is the
+;; one a bevelled edge would produce -- which is most of what separates a
+;; "moulded panel" from a "cardboard carton" at gameplay distance, and it costs
+;; not one extra vertex. The factor is latched by `soften` and CONSUMED by
+;; emit-box (reset to 0 afterwards), so a box that does not ask for softening
+;; can never inherit the previous one's.
+(defvar *ccx* 0.0)
+(defvar *ccy* 0.0)
+(defvar *ccz* 0.0)
+(defvar *csoft* 0.0)
+
+(defun soften (k) (setq *csoft* k))
 
 (defun emit-v (col nx ny nz)
   ;; stages corner `col` of *corners* with the latched color + the given normal
-  (set-vertex *v* (aref *corners* 0 col) (aref *corners* 1 col) (aref *corners* 2 col)
-              nx ny nz)
-  (setq *v* (+ *v* 1)))
+  (when (< *v* +max-verts+)
+   (let ((x (aref *corners* 0 col))
+        (y (aref *corners* 1 col))
+        (z (aref *corners* 2 col)))
+    (if (> *csoft* 0.0)
+        (let* ((dx (- x *ccx*)) (dy (- y *ccy*)) (dz (- z *ccz*))
+               (dl (max 0.000001 (sqrt (+ (* dx dx) (* dy dy) (* dz dz)))))
+               (k *csoft*)
+               (j (- 1.0 k))
+               (mx (+ (* j nx) (* k (/ dx dl))))
+               (my (+ (* j ny) (* k (/ dy dl))))
+               (mz (+ (* j nz) (* k (/ dz dl))))
+               (ml (max 0.000001 (sqrt (+ (* mx mx) (* my my) (* mz mz))))))
+          (set-vertex *v* x y z (/ mx ml) (/ my ml) (/ mz ml)))
+        (set-vertex *v* x y z nx ny nz))
+    (setq *v* (+ *v* 1)))))
 
 (defun emit-face (a b c d nx ny nz)
   (emit-v a nx ny nz)
@@ -329,31 +362,39 @@ void main() {
   (emit-v c nx ny nz)
   (emit-v d nx ny nz))
 
+;; The corner buffer is allocated ONCE and refilled in place. It used to be
+;; rebuilt per box as (linalg:add (linalg:matmul rot local) centre) -- elegant,
+;; and the right tool for the camera matrices, but the wrong one here: that is
+;; four array allocations and a general nested-loop matmul for eight corners,
+;; paid for every box in every frame. The cast is now boxes-plus-rounded-boxes
+;; in the hundreds per frame, and the allocation dominated the frame. The
+;; algebra below is the SAME rotation, written out: yaw only mixes x and z, so
+;; the rotation's two interesting columns are the local +x and +z edge vectors,
+;; and each corner is the centre plus or minus each of them.
+(defvar *corners* (linalg:full '(3 8) 0.0 'single-float))
+
 (defun emit-box (cx cy cz hx hy hz yaw)
+  (setq *ccx* cx *ccy* cy *ccz* cz)
   (let* ((c (cos yaw))
          (s (sin yaw))
-         ;; the yaw rotation about +y, as a 3x3 matrix
-         (rot (linalg:from-list (list (list c 0.0 s)
-                                      (list 0.0 1.0 0.0)
-                                      (list (- 0.0 s) 0.0 c))
-                                'single-float))
-         ;; the 8 local corners as columns of a (3 8) matrix
-         (local (linalg:full '(3 8) 0.0 'single-float)))
+         (axx (* c hx)) (axz (- 0.0 (* s hx)))   ; the local +x edge, in world
+         (azx (* s hz)) (azz (* c hz)))          ; the local +z edge, in world
     (dotimes (i 8)
-      (setf (aref local 0 i) (if (= (logand i 1) 1) hx (- 0.0 hx)))
-      (setf (aref local 1 i) (if (= (logand i 2) 2) hy (- 0.0 hy)))
-      (setf (aref local 2 i) (if (= (logand i 4) 4) hz (- 0.0 hz))))
-    ;; rotate every corner at once, then broadcast the center onto all 8
-    (setq *corners* (linalg:add (linalg:matmul rot local)
-                                (linalg:from-list (list (list cx) (list cy) (list cz))
-                                                  'single-float)))
-    ;; the face normals are the rotation's columns (yaw only tilts x / z)
-    (emit-face 4 5 7 6 (aref rot 0 2) (aref rot 1 2) (aref rot 2 2))                     ; +z
-    (emit-face 1 0 2 3 (- 0.0 (aref rot 0 2)) (- 0.0 (aref rot 1 2)) (- 0.0 (aref rot 2 2))) ; -z
-    (emit-face 5 1 3 7 (aref rot 0 0) (aref rot 1 0) (aref rot 2 0))                     ; +x
-    (emit-face 0 4 6 2 (- 0.0 (aref rot 0 0)) (- 0.0 (aref rot 1 0)) (- 0.0 (aref rot 2 0))) ; -x
-    (emit-face 6 7 3 2 0.0 1.0 0.0)                                                      ; +y
-    (emit-face 0 1 5 4 0.0 -1.0 0.0)))                                                   ; -y
+      (let ((sx (if (= (logand i 1) 1) 1.0 -1.0))
+            (sy (if (= (logand i 2) 2) hy (- 0.0 hy)))
+            (sz (if (= (logand i 4) 4) 1.0 -1.0)))
+        (setf (aref *corners* 0 i) (+ cx (* sx axx) (* sz azx)))
+        (setf (aref *corners* 1 i) (+ cy sy))
+        (setf (aref *corners* 2 i) (+ cz (* sx axz) (* sz azz)))))
+    ;; the face normals are the same two edge directions, normalized (yaw only
+    ;; tilts x / z, so +y and -y stay axis-aligned)
+    (emit-face 4 5 7 6 s 0.0 c)                                  ; +z
+    (emit-face 1 0 2 3 (- 0.0 s) 0.0 (- 0.0 c))                  ; -z
+    (emit-face 5 1 3 7 c 0.0 (- 0.0 s))                          ; +x
+    (emit-face 0 4 6 2 (- 0.0 c) 0.0 s)                          ; -x
+    (emit-face 6 7 3 2 0.0 1.0 0.0)                              ; +y
+    (emit-face 0 1 5 4 0.0 -1.0 0.0)                             ; -y
+    (setq *csoft* 0.0)))
 
 ;; --- rounded primitives: cylinders and ellipsoids ------------------------------
 ;;
@@ -366,13 +407,24 @@ void main() {
 ;; here -- only the explicit per-vertex normal does.
 
 (defun emit-vertex (x y z nx ny nz)
-  (set-vertex *v* x y z nx ny nz)
-  (setq *v* (+ *v* 1)))
+  ;; the cursor is checked here (and in emit-v) rather than trusted: a frame
+  ;; that overruns the staging array would otherwise upload a slice longer than
+  ;; the page's buffer and take the whole canvas down, instead of just dropping
+  ;; the triangles nobody budgeted for.
+  (when (< *v* +max-verts+)
+    (set-vertex *v* x y z nx ny nz)
+    (setq *v* (+ *v* 1))))
 
-(defun emit-tri (x0 y0 z0 nx0 ny0 nz0 x1 y1 z1 nx1 ny1 nz1 x2 y2 z2 nx2 ny2 nz2)
-  (emit-vertex x0 y0 z0 nx0 ny0 nz0)
-  (emit-vertex x1 y1 z1 nx1 ny1 nz1)
-  (emit-vertex x2 y2 z2 nx2 ny2 nz2))
+;; NOTE ON SIGNATURES. The WASM backend's callable types stop at seven
+;; parameters; a wider fixed-arity defun still compiles, but only because the
+;; compiler rewrites it to bundle the surplus arguments into a freshly consed
+;; list at EVERY call site. That is invisible in a cold helper and ruinous in
+;; one called per triangle, so every function below that runs per vertex or per
+;; triangle is kept at seven parameters or fewer, and the values that are
+;; constant across a whole primitive (the ellipsoid's centre/radii/yaw, the
+;; rounded box's extents) are latched in globals instead of threaded through
+;; the signature. That is why there is no emit-tri: three emit-vertex calls
+;; cost nothing, an 18-parameter helper costs twelve cons cells a triangle.
 
 ;; A vertical (local +y axis) cylinder: radius r, half-height hy, yaw-rotated
 ;; and centered at (cx cy cz) exactly like emit-box. Used for upright limbs
@@ -391,18 +443,18 @@ void main() {
              (n1x (+ (* c lx1) (* s lz1))) (n1z (- (* c lz1) (* s lx1)))
              (x0 (+ cx (* r n0x))) (z0 (+ cz (* r n0z)))
              (x1 (+ cx (* r n1x))) (z1 (+ cz (* r n1z))))
-        (emit-tri x0 ytop z0 n0x 0.0 n0z
-                  x0 ybot z0 n0x 0.0 n0z
-                  x1 ybot z1 n1x 0.0 n1z)
-        (emit-tri x0 ytop z0 n0x 0.0 n0z
-                  x1 ybot z1 n1x 0.0 n1z
-                  x1 ytop z1 n1x 0.0 n1z)
-        (emit-tri cx ytop cz 0.0 1.0 0.0
-                  x0 ytop z0 0.0 1.0 0.0
-                  x1 ytop z1 0.0 1.0 0.0)
-        (emit-tri cx ybot cz 0.0 -1.0 0.0
-                  x1 ybot z1 0.0 -1.0 0.0
-                  x0 ybot z0 0.0 -1.0 0.0)))))
+        (emit-vertex x0 ytop z0 n0x 0.0 n0z)
+        (emit-vertex x0 ybot z0 n0x 0.0 n0z)
+        (emit-vertex x1 ybot z1 n1x 0.0 n1z)
+        (emit-vertex x0 ytop z0 n0x 0.0 n0z)
+        (emit-vertex x1 ybot z1 n1x 0.0 n1z)
+        (emit-vertex x1 ytop z1 n1x 0.0 n1z)
+        (emit-vertex cx ytop cz 0.0 1.0 0.0)
+        (emit-vertex x0 ytop z0 0.0 1.0 0.0)
+        (emit-vertex x1 ytop z1 0.0 1.0 0.0)
+        (emit-vertex cx ybot cz 0.0 -1.0 0.0)
+        (emit-vertex x1 ybot z1 0.0 -1.0 0.0)
+        (emit-vertex x0 ybot z0 0.0 -1.0 0.0)))))
 
 ;; A horizontal beam cylinder, the round counterpart of emit-arm-to's oriented
 ;; box: its axis is the yaw-rotated local +x direction (half-len long), radius
@@ -425,63 +477,310 @@ void main() {
              (kx0 (- bx0 (* half-len axx))) (kz0 (- bz0 (* half-len axz)))
              (fx1 (+ bx1 (* half-len axx))) (fz1 (+ bz1 (* half-len axz)))
              (kx1 (- bx1 (* half-len axx))) (kz1 (- bz1 (* half-len axz))))
-        (emit-tri fx0 by0 fz0 n0x n0y n0z
-                  kx0 by0 kz0 n0x n0y n0z
-                  kx1 by1 kz1 n1x n1y n1z)
-        (emit-tri fx0 by0 fz0 n0x n0y n0z
-                  kx1 by1 kz1 n1x n1y n1z
-                  fx1 by1 fz1 n1x n1y n1z)
-        (emit-tri (+ cx (* half-len axx)) cy (+ cz (* half-len axz)) axx 0.0 axz
-                  fx0 by0 fz0 axx 0.0 axz
-                  fx1 by1 fz1 axx 0.0 axz)
-        (emit-tri (- cx (* half-len axx)) cy (- cz (* half-len axz)) (- 0.0 axx) 0.0 (- 0.0 axz)
-                  kx1 by1 kz1 (- 0.0 axx) 0.0 (- 0.0 axz)
-                  kx0 by0 kz0 (- 0.0 axx) 0.0 (- 0.0 axz))))))
+        (emit-vertex fx0 by0 fz0 n0x n0y n0z)
+        (emit-vertex kx0 by0 kz0 n0x n0y n0z)
+        (emit-vertex kx1 by1 kz1 n1x n1y n1z)
+        (emit-vertex fx0 by0 fz0 n0x n0y n0z)
+        (emit-vertex kx1 by1 kz1 n1x n1y n1z)
+        (emit-vertex fx1 by1 fz1 n1x n1y n1z)
+        (emit-vertex (+ cx (* half-len axx)) cy (+ cz (* half-len axz)) axx 0.0 axz)
+        (emit-vertex fx0 by0 fz0 axx 0.0 axz)
+        (emit-vertex fx1 by1 fz1 axx 0.0 axz)
+        (emit-vertex (- cx (* half-len axx)) cy (- cz (* half-len axz))
+                     (- 0.0 axx) 0.0 (- 0.0 axz))
+        (emit-vertex kx1 by1 kz1 (- 0.0 axx) 0.0 (- 0.0 axz))
+        (emit-vertex kx0 by0 kz0 (- 0.0 axx) 0.0 (- 0.0 axz))))))
 
 ;; A yaw-rotated ellipsoid (rx ry rz half-extents; a sphere when they match) --
 ;; a UV mesh of lon-segs longitude wedges x lat-segs latitude bands, poles
 ;; included. Non-uniform radii need the inverse-square normal correction
 ;; (normalize(n/r) rather than n) to stay lit correctly.
-(defun emit-ellipsoid (cx cy cz rx ry rz yaw lon-segs lat-segs)
-  (let ((c (cos yaw)) (s (sin yaw)))
-    (dotimes (j lat-segs)
-      (let* ((th0 (* +pi+ (/ (float j) (float lat-segs))))
-             (th1 (* +pi+ (/ (float (+ j 1)) (float lat-segs))))
-             (y0 (cos th0)) (rad0 (sin th0))
-             (y1 (cos th1)) (rad1 (sin th1)))
-        (dotimes (i lon-segs)
-          (let* ((p0 (* +two-pi+ (/ (float i) (float lon-segs))))
-                 (p1 (* +two-pi+ (/ (float (+ i 1)) (float lon-segs))))
-                 (cp0 (cos p0)) (sp0 (sin p0))
-                 (cp1 (cos p1)) (sp1 (sin p1))
-                 ;; the four unit-sphere corners of this lat/lon quad
-                 (u00x (* rad0 cp0)) (u00y y0) (u00z (* rad0 sp0))
-                 (u01x (* rad0 cp1)) (u01y y0) (u01z (* rad0 sp1))
-                 (u10x (* rad1 cp0)) (u10y y1) (u10z (* rad1 sp0))
-                 (u11x (* rad1 cp1)) (u11y y1) (u11z (* rad1 sp1)))
-            (emit-ellipsoid-tri cx cy cz rx ry rz c s
-                                 u00x u00y u00z u10x u10y u10z u11x u11y u11z)
-            (emit-ellipsoid-tri cx cy cz rx ry rz c s
-                                 u00x u00y u00z u11x u11y u11z u01x u01y u01z)))))))
+;; The ellipsoid being sampled: latched once per primitive so the per-vertex
+;; call carries only the unit-sphere direction (see the signature note above).
+(defvar *el-cx* 0.0)
+(defvar *el-cy* 0.0)
+(defvar *el-cz* 0.0)
+(defvar *el-rx* 1.0)
+(defvar *el-ry* 1.0)
+(defvar *el-rz* 1.0)
+(defvar *el-c* 1.0)
+(defvar *el-s* 0.0)
 
-;; One ellipsoid triangle from three UNIT-sphere corners: scales each into the
+;; One ellipsoid vertex from a UNIT-sphere direction: scales it into the
 ;; ellipsoid, yaw-rotates the result into world space, and derives the
 ;; correctly-lit normal (scale by 1/r, then renormalize) the same way.
-(defun ellipsoid-vertex (cx cy cz rx ry rz c s ux uy uz)
-  (let* ((nx (/ ux rx)) (ny (/ uy ry)) (nz (/ uz rz))
-         (nl (sqrt (+ (* nx nx) (* ny ny) (* nz nz))))
+(defun ellipsoid-vertex (ux uy uz)
+  (let* ((nx (/ ux *el-rx*)) (ny (/ uy *el-ry*)) (nz (/ uz *el-rz*))
+         (nl (max 0.000001 (sqrt (+ (* nx nx) (* ny ny) (* nz nz)))))
          (nnx (/ nx nl)) (nny (/ ny nl)) (nnz (/ nz nl))
-         (lx (* ux rx)) (lz (* uz rz))
-         (wx (+ cx (* c lx) (* s lz))) (wz (+ cz (- (* c lz) (* s lx))))
-         (wy (+ cy (* uy ry)))
-         (rnx (+ (* c nnx) (* s nnz))) (rnz (- (* c nnz) (* s nnx))))
+         (lx (* ux *el-rx*)) (lz (* uz *el-rz*))
+         (wx (+ *el-cx* (* *el-c* lx) (* *el-s* lz)))
+         (wz (+ *el-cz* (- (* *el-c* lz) (* *el-s* lx))))
+         (wy (+ *el-cy* (* uy *el-ry*)))
+         (rnx (+ (* *el-c* nnx) (* *el-s* nnz)))
+         (rnz (- (* *el-c* nnz) (* *el-s* nnx))))
     (emit-vertex wx wy wz rnx nny rnz)))
 
-(defun emit-ellipsoid-tri (cx cy cz rx ry rz c s
-                            u0x u0y u0z u1x u1y u1z u2x u2y u2z)
-  (ellipsoid-vertex cx cy cz rx ry rz c s u0x u0y u0z)
-  (ellipsoid-vertex cx cy cz rx ry rz c s u1x u1y u1z)
-  (ellipsoid-vertex cx cy cz rx ry rz c s u2x u2y u2z))
+(defun emit-ellipsoid (cx cy cz rx ry rz yaw lon-segs lat-segs)
+  (setq *el-cx* cx *el-cy* cy *el-cz* cz)
+  (setq *el-rx* rx *el-ry* ry *el-rz* rz)
+  (setq *el-c* (cos yaw) *el-s* (sin yaw))
+  (dotimes (j lat-segs)
+    (let* ((th0 (* +pi+ (/ (float j) (float lat-segs))))
+           (th1 (* +pi+ (/ (float (+ j 1)) (float lat-segs))))
+           (y0 (cos th0)) (rad0 (sin th0))
+           (y1 (cos th1)) (rad1 (sin th1)))
+      (dotimes (i lon-segs)
+        (let* ((p0 (* +two-pi+ (/ (float i) (float lon-segs))))
+               (p1 (* +two-pi+ (/ (float (+ i 1)) (float lon-segs))))
+               (cp0 (cos p0)) (sp0 (sin p0))
+               (cp1 (cos p1)) (sp1 (sin p1))
+               ;; the four unit-sphere corners of this lat/lon quad
+               (u00x (* rad0 cp0)) (u00z (* rad0 sp0))
+               (u01x (* rad0 cp1)) (u01z (* rad0 sp1))
+               (u10x (* rad1 cp0)) (u10z (* rad1 sp0))
+               (u11x (* rad1 cp1)) (u11z (* rad1 sp1)))
+          (ellipsoid-vertex u00x y0 u00z)
+          (ellipsoid-vertex u10x y1 u10z)
+          (ellipsoid-vertex u11x y1 u11z)
+          (ellipsoid-vertex u00x y0 u00z)
+          (ellipsoid-vertex u11x y1 u11z)
+          (ellipsoid-vertex u01x y0 u01z))))))
+
+;; --- the articulated limb ------------------------------------------------------
+;;
+;; A tapered tube (a truncated cone) between two ARBITRARY world points. This is
+;; the primitive the older shape vocabulary was missing: emit-cylinder is
+;; upright and emit-cyl-beam is horizontal, so every limb built from them had to
+;; be a straight vertical post or a straight horizontal plank -- which is
+;; exactly why the walkers read as tables and the arms as broomsticks. With a
+;; free-standing segment, a leg becomes thigh + knee ball + shin at real angles,
+;; and it can taper the way a limb does.
+;;
+;; The frame: `a` is the unit axis, and t1/t2 are any two unit vectors
+;; perpendicular to it (built from a reference vector deliberately chosen NOT to
+;; be near-parallel to the axis). The side normal is the radial direction tilted
+;; along the axis by the taper's slope, so a strongly-tapered cone is lit as a
+;; cone and not as a cylinder.
+
+;; The far-end radius and the ring count are latched rather than passed: the
+;; signature is already at the seven-parameter ceiling with the two endpoints
+;; and the near radius. `taper` is CONSUMED -- emit-limb resets it after use --
+;; so a forgotten taper yields a plain cylinder rather than a stale cone.
+(defvar *limb-r1* -1.0)                 ; < 0 = "same as r0", i.e. no taper
+(defvar *limb-n* 8)                     ; ring segments, before the LOD scale
+(defvar *limb-caps* t)                  ; end discs; off for a buried base
+
+(defun taper (r1) (setq *limb-r1* r1))
+(defun limb-sides (n) (setq *limb-n* n))
+(defun limb-caps (b) (setq *limb-caps* b))
+
+(defvar *lx0* 0.0)                      ; the limb's cached perpendicular frame
+(defvar *ly0* 0.0)
+(defvar *lz0* 0.0)
+(defvar *lx1* 0.0)
+(defvar *ly1* 0.0)
+(defvar *lz1* 0.0)
+
+(defun limb-frame (ax ay az)
+  ;; t1 = normalize(u x a), t2 = a x t1, for a reference u that is (0 1 0)
+  ;; unless the axis is itself near-vertical, in which case (1 0 0).
+  (let* ((vert (> (* ay ay) 0.86))
+         (ux (if vert 1.0 0.0))
+         (uy (if vert 0.0 1.0))
+         (p1x (* uy az))
+         (p1y (- 0.0 (* ux az)))
+         (p1z (- (* ux ay) (* uy ax)))
+         (p1l (max 0.000001 (sqrt (+ (* p1x p1x) (* p1y p1y) (* p1z p1z))))))
+    (setq *lx0* (/ p1x p1l) *ly0* (/ p1y p1l) *lz0* (/ p1z p1l))
+    (setq *lx1* (- (* ay *lz0*) (* az *ly0*))
+          *ly1* (- (* az *lx0*) (* ax *lz0*))
+          *lz1* (- (* ax *ly0*) (* ay *lx0*)))))
+
+(defun emit-limb (x0 y0 z0 x1 y1 z1 r0)
+  (let* ((dx (- x1 x0)) (dy (- y1 y0)) (dz (- z1 z0))
+         (r1 (if (< *limb-r1* 0.0) r0 *limb-r1*))
+         (nsides (segs *limb-n*))
+         (len (sqrt (+ (* dx dx) (* dy dy) (* dz dz)))))
+    (setq *limb-r1* -1.0)               ; consumed
+    (when (> len 0.000001)
+      (let* ((ax (/ dx len)) (ay (/ dy len)) (az (/ dz len))
+             (slope (/ (- r0 r1) len)))
+        (limb-frame ax ay az)
+        (dotimes (i nsides)
+          (let* ((a0 (* +two-pi+ (/ (float i) (float nsides))))
+                 (a1 (* +two-pi+ (/ (float (+ i 1)) (float nsides))))
+                 (c0 (cos a0)) (s0 (sin a0))
+                 (c1 (cos a1)) (s1 (sin a1))
+                 ;; the two radial directions bounding this side quad
+                 (d0x (+ (* c0 *lx0*) (* s0 *lx1*)))
+                 (d0y (+ (* c0 *ly0*) (* s0 *ly1*)))
+                 (d0z (+ (* c0 *lz0*) (* s0 *lz1*)))
+                 (d1x (+ (* c1 *lx0*) (* s1 *lx1*)))
+                 (d1y (+ (* c1 *ly0*) (* s1 *ly1*)))
+                 (d1z (+ (* c1 *lz0*) (* s1 *lz1*)))
+                 ;; the taper tilts the side normal along the axis
+                 (m0x (+ d0x (* slope ax))) (m0y (+ d0y (* slope ay)))
+                 (m0z (+ d0z (* slope az)))
+                 (m0l (max 0.000001 (sqrt (+ (* m0x m0x) (* m0y m0y) (* m0z m0z)))))
+                 (n0x (/ m0x m0l)) (n0y (/ m0y m0l)) (n0z (/ m0z m0l))
+                 (m1x (+ d1x (* slope ax))) (m1y (+ d1y (* slope ay)))
+                 (m1z (+ d1z (* slope az)))
+                 (m1l (max 0.000001 (sqrt (+ (* m1x m1x) (* m1y m1y) (* m1z m1z)))))
+                 (n1x (/ m1x m1l)) (n1y (/ m1y m1l)) (n1z (/ m1z m1l))
+                 (a0x (+ x0 (* r0 d0x))) (a0y (+ y0 (* r0 d0y))) (a0z (+ z0 (* r0 d0z)))
+                 (b0x (+ x1 (* r1 d0x))) (b0y (+ y1 (* r1 d0y))) (b0z (+ z1 (* r1 d0z)))
+                 (a1x (+ x0 (* r0 d1x))) (a1y (+ y0 (* r0 d1y))) (a1z (+ z0 (* r0 d1z)))
+                 (b1x (+ x1 (* r1 d1x))) (b1y (+ y1 (* r1 d1y))) (b1z (+ z1 (* r1 d1z))))
+            (emit-vertex a0x a0y a0z n0x n0y n0z)
+            (emit-vertex b0x b0y b0z n0x n0y n0z)
+            (emit-vertex b1x b1y b1z n1x n1y n1z)
+            (emit-vertex a0x a0y a0z n0x n0y n0z)
+            (emit-vertex b1x b1y b1z n1x n1y n1z)
+            (emit-vertex a1x a1y a1z n1x n1y n1z)
+            ;; both ends are capped by default: a limb is nearly always met by
+            ;; a joint ball or sunk into a hull, but the one time it is not, an
+            ;; open tube shows the inside of the figure through it. A buried
+            ;; end (a mountain's base) turns the caps off instead -- a lid
+            ;; underground is not just wasted, it is the thing that surfaces as
+            ;; a dark plate the moment the cone leans.
+            (when *limb-caps*
+              (emit-vertex x0 y0 z0 (- 0.0 ax) (- 0.0 ay) (- 0.0 az))
+              (emit-vertex a1x a1y a1z (- 0.0 ax) (- 0.0 ay) (- 0.0 az))
+              (emit-vertex a0x a0y a0z (- 0.0 ax) (- 0.0 ay) (- 0.0 az))
+              (emit-vertex x1 y1 z1 ax ay az)
+              (emit-vertex b0x b0y b0z ax ay az)
+              (emit-vertex b1x b1y b1z ax ay az))))))))
+
+;; --- the rounded box ------------------------------------------------------------
+;;
+;; A box with genuinely rounded edges and corners: the Minkowski sum of a
+;; smaller "core" box (half-extents shrunk by the fillet radius br) and a sphere
+;; of radius br. Sampling it is one uniform rule -- take a point P on the outer
+;; box, clamp it into the core box to get q, and place the surface at
+;; q + br * normalize(P - q), whose normal is exactly that same normalized
+;; direction. On a face interior the clamp does nothing but move q inward by br,
+;; so the flat face comes back exactly; near an edge or a corner the direction
+;; swings and traces the fillet. Splitting each face's parameter range at the
+;; core boundary (-h, -a, +a, +h) puts the sample lines exactly where the
+;; curvature starts, so a 3x3 grid per face is enough: one flat centre quad,
+;; four edge fillets, four corner fillets.
+;;
+;; This is what armour plates, hulls, packs and boots want -- shapes that ARE
+;; boxes but were never machined with knife edges.
+
+(defvar *rb-hx* 1.0)                    ; the box being sampled (local frame)
+(defvar *rb-hy* 1.0)
+(defvar *rb-hz* 1.0)
+(defvar *rb-ax* 1.0)                    ; ... and its core half-extents
+(defvar *rb-ay* 1.0)
+(defvar *rb-az* 1.0)
+(defvar *rb-br* 0.1)
+(defvar *rb-cx* 0.0)
+(defvar *rb-cy* 0.0)
+(defvar *rb-cz* 0.0)
+(defvar *rb-c* 1.0)
+(defvar *rb-s* 0.0)
+
+(defun clamp1 (v lim) (max (- 0.0 lim) (min lim v)))
+
+(defun rbox-vertex (px py pz)
+  ;; one sample of the rounded surface, from a point on the *outer* box
+  (let* ((qx (clamp1 px *rb-ax*))
+         (qy (clamp1 py *rb-ay*))
+         (qz (clamp1 pz *rb-az*))
+         (dx (- px qx)) (dy (- py qy)) (dz (- pz qz))
+         (dl (max 0.000001 (sqrt (+ (* dx dx) (* dy dy) (* dz dz)))))
+         (nx (/ dx dl)) (ny (/ dy dl)) (nz (/ dz dl))
+         (lx (+ qx (* *rb-br* nx)))
+         (ly (+ qy (* *rb-br* ny)))
+         (lz (+ qz (* *rb-br* nz))))
+    (emit-vertex (+ *rb-cx* (* *rb-c* lx) (* *rb-s* lz))
+                 (+ *rb-cy* ly)
+                 (+ *rb-cz* (- (* *rb-c* lz) (* *rb-s* lx)))
+                 (+ (* *rb-c* nx) (* *rb-s* nz))
+                 ny
+                 (- (* *rb-c* nz) (* *rb-s* nx)))))
+
+;; one quad of a face, given in that face's (u v) parameters plus the pinned
+;; coordinate `f`; `axis` selects the permutation back to (x y z).
+(defun rbox-quad (axis f u0 v0 u1 v1)
+  (cond ((= axis 0)
+         (rbox-vertex f u0 v0) (rbox-vertex f u1 v0) (rbox-vertex f u1 v1)
+         (rbox-vertex f u0 v0) (rbox-vertex f u1 v1) (rbox-vertex f u0 v1))
+        ((= axis 1)
+         (rbox-vertex u0 f v0) (rbox-vertex u1 f v0) (rbox-vertex u1 f v1)
+         (rbox-vertex u0 f v0) (rbox-vertex u1 f v1) (rbox-vertex u0 f v1))
+        (t
+         (rbox-vertex u0 v0 f) (rbox-vertex u1 v0 f) (rbox-vertex u1 v1 f)
+         (rbox-vertex u0 v0 f) (rbox-vertex u1 v1 f) (rbox-vertex u0 v1 f))))
+
+;; one face of the outer box, as a 3x3 grid split at the core boundary. The
+;; face is addressed through a small permutation: `axis` says which coordinate
+;; is pinned to the face (0 = x, 1 = y, 2 = z) and `sgn` which side.
+(defun rbox-face (axis sgn)
+  (let* ((f (if (= axis 0) (* sgn *rb-hx*) (if (= axis 1) (* sgn *rb-hy*) (* sgn *rb-hz*))))
+         ;; the two in-plane axes and their split points
+         (uh (if (= axis 0) *rb-hy* *rb-hx*))
+         (ua (if (= axis 0) *rb-ay* *rb-ax*))
+         (vh (if (= axis 2) *rb-hy* *rb-hz*))
+         (va (if (= axis 2) *rb-ay* *rb-az*)))
+    (dotimes (iu 3)
+      (let ((u0 (if (= iu 0) (- 0.0 uh) (if (= iu 1) (- 0.0 ua) ua)))
+            (u1 (if (= iu 0) (- 0.0 ua) (if (= iu 1) ua uh))))
+        (dotimes (iv 3)
+          (let ((v0 (if (= iv 0) (- 0.0 vh) (if (= iv 1) (- 0.0 va) va)))
+                (v1 (if (= iv 0) (- 0.0 va) (if (= iv 1) va vh))))
+            (rbox-quad axis f u0 v0 u1 v1)))))))
+
+;; The yaw is latched (see the signature note): every call site is a figure
+;; part, and the figure's frame already knows its heading.
+(defun rbox-yaw (yaw) (setq *rb-c* (cos yaw) *rb-s* (sin yaw)))
+
+(defun emit-rbox (cx cy cz hx hy hz br)
+  (let ((r (max 0.004 (min br (* 0.98 (min hx (min hy hz)))))))
+    (setq *rb-cx* cx *rb-cy* cy *rb-cz* cz)
+    (setq *rb-hx* hx *rb-hy* hy *rb-hz* hz *rb-br* r)
+    (setq *rb-ax* (max 0.0 (- hx r)) *rb-ay* (max 0.0 (- hy r))
+          *rb-az* (max 0.0 (- hz r)))
+    (rbox-face 0 1.0)
+    (rbox-face 0 -1.0)
+    (rbox-face 1 1.0)
+    (rbox-face 1 -1.0)
+    (rbox-face 2 1.0)
+    (rbox-face 2 -1.0)))
+
+;; --- level of detail -----------------------------------------------------------
+;;
+;; A rounded box is nine quads a face and a limb is a ring per side, so the cast
+;; costs far more per figure than the old all-boxes one did. What keeps the
+;; frame honest is that detail nobody can resolve is not drawn: *lod* is picked
+;; per figure from its APPARENT size (world height over distance to the eye), so
+;; the trooper in your face is fully machined and the one across the arena is
+;; the same model at a coarser ring count with its fillets dropped. `segs`
+;; scales a ring/band count, and `roundp` is the switch a part uses to fall back
+;; from a rounded box to a soft-normalled plain one.
+
+(defvar *lod* 2)
+
+(defun set-lod (x z size)
+  (let* ((dx (- x (aref *eye* 0)))
+         (dy (- 1.0 (aref *eye* 1)))
+         (dz (- z (aref *eye* 2)))
+         (d (max 0.5 (sqrt (+ (* dx dx) (* dy dy) (* dz dz)))))
+         (k (/ size d)))
+    ;; the top tier is deliberately narrow: a rounded box is nine quads a face,
+    ;; so full detail is worth paying for only on a figure that genuinely fills
+    ;; part of the screen. At the default follow distance that is you, whoever
+    ;; is in melee range, and a walker you are standing under
+    (setq *lod* (cond ((> k 0.32) 2) ((> k 0.075) 1) (t 0)))))
+
+(defun segs (n)
+  (cond ((>= *lod* 2) n)
+        ((= *lod* 1) (max 4 (floor (* 0.7 (float n)))))
+        (t (max 3 (floor (* 0.45 (float n)))))))
+
+(defun roundp () (>= *lod* 2))
 
 ;; A local frame for composite figures: set-origin latches a world position +
 ;; yaw, and part emits one box given in that frame's local coordinates. The
@@ -500,35 +799,62 @@ void main() {
   (setq *oz* z)
   (setq *oyaw* yaw)
   (setq *oc* (cos yaw))
-  (setq *os* (sin yaw)))
+  (setq *os* (sin yaw))
+  (rbox-yaw yaw))
 
-(defun part (lx ly lz hx hy hz)
-  (emit-box (+ *ox* (* lx *oc*) (* lz *os*))
-            (+ *oy* ly)
-            (+ *oz* (- (* lz *oc*) (* lx *os*)))
-            hx hy hz *oyaw*))
+;; local -> world, one coordinate at a time (a limb needs both endpoints
+;; converted, and this Lisp has no cheap 3-value return worth the ceremony)
+(defun lwx (lx lz) (+ *ox* (* lx *oc*) (* lz *os*)))
+(defun lwy (ly) (+ *oy* ly))
+(defun lwz (lx lz) (+ *oz* (- (* lz *oc*) (* lx *os*))))
 
-;; The rounded counterparts of `part`, in the same local frame: an upright
-;; cylinder (thighs, shins, neck), a horizontal beam cylinder (arms, barrels,
-;; blade rods -- see emit-arm-to for the box version this mirrors) and an
-;; ellipsoid (heads, helmet domes).
+;; The figure-local wrappers. There is no plain `part` any more: with the
+;; rounded box, the tapered limb and the joint ball in the vocabulary, nothing
+;; in the cast turned out to want a bare yaw-rotated box -- the handful of
+;; genuinely machined slabs left (a pistol's receiver, its grip) call emit-box
+;; directly, preceded by `soften`.
 (defun part-cyl (lx ly lz r hy &optional (nsides 8))
-  (emit-cylinder (+ *ox* (* lx *oc*) (* lz *os*))
-                 (+ *oy* ly)
-                 (+ *oz* (- (* lz *oc*) (* lx *os*)))
-                 r hy *oyaw* nsides))
-
-(defun part-cyl-beam (lx ly lz half-len r &optional (nsides 8))
-  (emit-cyl-beam (+ *ox* (* lx *oc*) (* lz *os*))
-                 (+ *oy* ly)
-                 (+ *oz* (- (* lz *oc*) (* lx *os*)))
-                 half-len r *oyaw* nsides))
+  (emit-cylinder (lwx lx lz) (lwy ly) (lwz lx lz) r hy *oyaw* (segs nsides)))
 
 (defun part-ellipsoid (lx ly lz rx ry rz &optional (lon-segs 8) (lat-segs 5))
-  (emit-ellipsoid (+ *ox* (* lx *oc*) (* lz *os*))
-                  (+ *oy* ly)
-                  (+ *oz* (- (* lz *oc*) (* lx *os*)))
-                  rx ry rz *oyaw* lon-segs lat-segs))
+  (emit-ellipsoid (lwx lx lz) (lwy ly) (lwz lx lz)
+                  rx ry rz *oyaw* (segs lon-segs) (segs lat-segs)))
+
+;; A rounded box in the local frame -- when the fillet is actually worth nine
+;; times the triangles of a plain box, which is a question about THIS PART, not
+;; about the figure it belongs to. A torso at arm's length earns its fillet; the
+;; 2cm brow ridge on the same figure never will, and neither will anything at
+;; all on a trooper across the arena. So the test is the part's own apparent
+;; size -- its largest half-extent over its distance to the eye -- with the
+;; figure's detail tier as a floor. Everything below falls back to the plain
+;; box with soft edge normals, which at that size is indistinguishable.
+(defun rbox-worth-it (x y z h)
+  (let* ((dx (- x (aref *eye* 0)))
+         (dy (- y (aref *eye* 1)))
+         (dz (- z (aref *eye* 2)))
+         (d (max 0.5 (sqrt (+ (* dx dx) (* dy dy) (* dz dz))))))
+    (> (/ h d) 0.013)))
+
+(defun part-rbox (lx ly lz hx hy hz br)
+  (let ((wx (lwx lx lz)) (wy (lwy ly)) (wz (lwz lx lz)))
+    (if (and (roundp) (rbox-worth-it wx wy wz (max hx (max hy hz))))
+        (emit-rbox wx wy wz hx hy hz br)
+        (progn (soften 0.5)
+               (emit-box wx wy wz hx hy hz *oyaw*)))))
+
+;; A free-standing tapered segment between two LOCAL points -- the articulated
+;; limb in figure coordinates. Precede it with (taper r1) for a cone.
+(defun part-limb (lx0 ly0 lz0 lx1 ly1 lz1 r0)
+  (emit-limb (lwx lx0 lz0) (lwy ly0) (lwz lx0 lz0)
+             (lwx lx1 lz1) (lwy ly1) (lwz lx1 lz1) r0))
+
+;; A joint ball at a local point -- what turns two limb segments into a knee or
+;; a shoulder instead of two sticks that happen to touch.
+(defun part-joint (lx ly lz r)
+  ;; coarser than a head or a helmet on purpose: a joint ball is small on
+  ;; screen and there are a dozen of them per figure
+  (emit-ellipsoid (lwx lx lz) (lwy ly) (lwz lx lz)
+                  r r r *oyaw* (segs 6) (segs 3)))
 
 ;; colour + emissive + shine helpers
 ;; *hit-tint* (0..1) reddens and lights whatever `col` draws next -- set around
@@ -555,14 +881,67 @@ void main() {
 ;; as round in life, so worth the baked-once extra triangles). Each block is
 ;; (x0 y0 z0 x1 y1 z1 r g b); nothing here collides -- the arena is open.
 
+;; The snow plate. It runs far beyond the mountains, not merely up to them: the
+;; plate is a solid slab, so wherever its rim falls inside the view you see the
+;; slab's own edge and underside -- mid-grey and near-black under this light --
+;; ruled across the snow. Pushing the rim past the fog's saturation distance is
+;; what makes the field read as endless. It is also kept thin, so a stray
+;; sightline under a peak sees as little of the edge as possible.
 (defconstant +scenery+
-  '((-40.0 -1.5 -40.0 60.0 0.0 40.0 0.90 0.93 0.98)       ; the snow plate
-    ;; the ring of Hoth mountains on the horizon -- broken terrain reads fine
-    ;; as facets, so these stay boxes
-    (-40.0 -1.0 -70.0 60.0 22.0 -46.0 0.80 0.86 0.94)
-    (-40.0 -1.0 46.0 60.0 20.0 70.0 0.80 0.86 0.94)
-    (-80.0 -1.0 -60.0 -46.0 24.0 60.0 0.80 0.86 0.94)
-    (66.0 -1.0 -60.0 104.0 26.0 60.0 0.80 0.86 0.94)))
+  '((-260.0 -0.6 -260.0 300.0 0.0 260.0 0.90 0.93 0.98)))
+
+;; The horizon used to be four tall boxes, which from inside the arena is a
+;; flat grey wall with two conspicuous vertical corners running up the sky. It
+;; is a broken RIDGE now: squat cones whose apexes are nudged off centre and
+;; whose skirts overlap, at jittered sizes, so the skyline is a range. All of
+;; it is baked once with the rest of the field, so the triangles cost nothing
+;; per frame.
+(defconstant +peak-base+ -2.6)          ; how far the cone is planted below the snow
+
+(defun emit-peak (px pz r h)
+  ;; The apex leans off the base's centre -- that lean is the difference
+  ;; between a mountain and a party hat. Two bounds on it: a share of the
+  ;; SMALLER of radius and height, or a squat wide cone leans over into a
+  ;; wedge; and, decisively, little enough that the (tilted) base ring stays
+  ;; buried. Tilting a cone tilts its base ring with it, and the ring's uphill
+  ;; edge rises by about radius * lean / height -- for a 25m-wide apron that is
+  ;; metres, so an unbounded lean lifts the buried end clean out of the snow.
+  (let* ((rise (- h +peak-base+))
+         (lean (min (* 0.30 (min r h))
+                    (* 0.85 (/ (* (- 0.0 +peak-base+) rise) r)))))
+    (col (rand-range 0.79 0.87) (rand-range 0.85 0.91) (rand-range 0.93 0.98))
+    (limb-sides 7)
+    (limb-caps nil)                     ; the base is underground, the tip a point
+    (taper 0.0)                         ; a true point, so no lid is missed
+    (emit-limb px +peak-base+ pz
+               (+ px (rand-range (- 0.0 lean) lean)) h
+               (+ pz (rand-range (- 0.0 lean) lean))
+               r)
+    (limb-caps t)))
+
+;; The apron the ranges stand on: very wide, very low cones. A box shelf would
+;; do the same job of stopping daylight showing between the peaks' skirts, but
+;; a box has vertical faces, and the one facing away from the sun becomes a
+;; dark grey band ruled across the horizon -- exactly the wall the peaks were
+;; brought in to replace. A cone has no vertical face; every normal on it
+;; points mostly up, so the whole apron stays snow-bright from any angle.
+(defun emit-apron (x0 z0 dx dz n)
+  (dotimes (i n)
+    (let ((t0 (float i)))
+      (emit-peak (+ x0 (* dx t0) (rand-range -8.0 8.0))
+                 (+ z0 (* dz t0) (rand-range -8.0 8.0))
+                 (rand-range 22.0 34.0)
+                 (rand-range 1.5 3.4)))))
+
+(defun emit-peaks (x0 z0 dx dz n hlo hhi)
+  ;; the perpendicular jitter is deliberately as large as the step: a range
+  ;; laid out on a straight line reads as a fence of cones
+  (dotimes (i n)
+    (let ((t0 (float i)))
+      (emit-peak (+ x0 (* dx t0) (rand-range -9.0 9.0))
+                 (+ z0 (* dz t0) (rand-range -9.0 9.0))
+                 (rand-range 9.0 20.0)
+                 (rand-range hlo hhi)))))
 
 (defun emit-block (b)
   (col (nth 6 b) (nth 7 b) (nth 8 b))
@@ -632,6 +1011,22 @@ void main() {
 (defun bake-static ()
   (setq *v* 0)
   (dolist (b +scenery+) (emit-block b))
+  ;; the apron first, then the four ranges: each is a near row of low hills
+  ;; with a far row of tall peaks behind it, so the horizon has depth instead
+  ;; of one silhouette
+  (emit-apron -90.0 -66.0 22.0 0.0 10)
+  (emit-apron -90.0 66.0 22.0 0.0 10)
+  (emit-apron -70.0 -66.0 0.0 20.0 8)
+  (emit-apron 90.0 -66.0 0.0 20.0 8)
+  (emit-peaks -84.0 -60.0 13.0 0.0 15 5.0 11.0)
+  (emit-peaks -84.0 -76.0 13.0 0.0 15 12.0 24.0)
+  (emit-peaks -84.0 60.0 13.0 0.0 15 5.0 10.0)
+  (emit-peaks -84.0 76.0 13.0 0.0 15 11.0 22.0)
+  (emit-peaks -62.0 -60.0 0.0 12.0 11 5.0 11.0)
+  (emit-peaks -80.0 -60.0 0.0 12.0 11 12.0 25.0)
+  (emit-peaks 82.0 -60.0 0.0 12.0 11 5.0 11.0)
+  (emit-peaks 100.0 -60.0 0.0 12.0 11 13.0 26.0)
+  (limb-sides 8)                        ; restore the default ring count
   (dolist (b +drifts+) (emit-drift b))
   (dolist (b +boulders+) (emit-boulder b))
   (dolist (c +clouds+) (emit-cloud c))
@@ -968,9 +1363,10 @@ void main() {
             (setf (aref *afire* i) (- (aref *afire* i) dt))
             (when (<= (aref *afire* i) 0.0)
               (setf (aref *afire* i) (rand-range 3.0 4.6))
-              (let ((muzzle (linalg:from-list (list (+ (aref p 0) (* (cos (aref *ayaw* i)) 2.4))
-                                  4.6
-                                  (- (aref p 2) (* (sin (aref *ayaw* i)) 2.4))) 'single-float)))
+              ;; the muzzle is the tip of the chin blasters (local x 3.4, y 3.04)
+              (let ((muzzle (linalg:from-list (list (+ (aref p 0) (* (cos (aref *ayaw* i)) 3.4))
+                                  3.04
+                                  (- (aref p 2) (* (sin (aref *ayaw* i)) 3.4))) 'single-float)))
                 (spawn-bolt muzzle
                             (linalg:sub (linalg:from-list (list (+ (aref *ppos* 0) (rand-range -0.7 0.7))
                                               (+ (aref *ppos* 1) 1.0)
@@ -1282,90 +1678,154 @@ void main() {
   (col 0.55 0.60 0.68)
   (emit-ellipsoid x 0.02 z r 0.006 r 0.0 10 3))
 
+;; scratch for the leg's ankle hand-off and for Vader's cape sampler
+(defvar *cp-x* 0.0)
+(defvar *cp-y* 0.0)
+(defvar *cp-z* 0.0)
+
+;; --- the humanoid leg ------------------------------------------------------
+;;
+;; Shared by all three figures: hip ball, tapered thigh, knee ball, tapered
+;; shin, ankle, and a boot the caller draws. `sw` is the walk cycle's -1..1
+;; swing for this leg, so the knee leads the ankle and the foot lifts as it
+;; comes forward -- the thing a rigid pair of posts sliding fore and aft can
+;; never do. Colours are whatever the caller latched, except the boot.
+(defun humanoid-leg (lz sw hipy scale)
+  (let* ((kx (* 0.11 sw scale))
+         (ky (* hipy 0.53))
+         (ax (* 0.24 sw scale))
+         (ay (+ (* hipy 0.135) (max 0.0 (* 0.055 sw scale)))))
+    ;; both segments are bracketed -- hip ball above, knee ball between, boot
+    ;; below -- so their end discs are inside solid geometry. Dropping them
+    ;; halves the leg's triangles for nothing you could ever see.
+    (limb-caps nil)
+    (part-joint 0.0 hipy lz (* 0.125 scale))
+    (taper (* 0.098 scale))
+    (part-limb 0.0 hipy lz kx ky lz (* 0.115 scale))
+    (part-joint kx ky lz (* 0.098 scale))
+    (taper (* 0.078 scale))
+    (part-limb kx ky lz ax ay lz (* 0.096 scale))
+    (limb-caps t)
+    ;; no ankle ball either: the boot swallows it, and a sphere nobody can see
+    ;; is the most expensive kind of detail there is.
+    ;; the ankle position is left in these two globals for the boot
+    (setq *cp-x* ax *cp-y* ay)))
+
 ;; You, in Hoth (Echo Base) gear: tan jacket over dark trousers and boots,
-;; the field backpack, a knit cap, holding either the glowing blue lightsaber
-;; or the blaster. Human-ish proportions, ~1.7 tall.
+;; the field backpack, the knit cap with its snow goggles pushed up on it,
+;; holding either the glowing blue lightsaber or the blaster. ~1.72 tall.
 (defun emit-player (tm)
   (emit-shadow (aref *ppos* 0) (aref *ppos* 2) 0.36)
+  ;; you are always the closest figure on screen, so never let the distance
+  ;; heuristic coarsen you
+  (setq *lod* 2)
   (set-origin (aref *ppos* 0) (aref *ppos* 1) (aref *ppos* 2) *pyaw*)
   (let* ((sw (sin *run-phase*))
-         (leg (* 0.15 sw))
          (arm (* -0.13 sw)))
-    ;; boots (boxy is right here -- real boots are angular, not round)
-    (col 0.16 0.13 0.10)
-    (part leg 0.07 -0.10 0.085 0.07 0.11)
-    (part (- 0.0 leg) 0.07 0.10 0.085 0.07 0.11)
-    ;; trouser legs (olive-tan) -- cylindrical thighs read as an actual leg,
-    ;; not a plank
-    (col 0.48 0.44 0.33)
-    (part-cyl leg 0.42 -0.10 0.087 0.30)
-    (part-cyl (- 0.0 leg) 0.42 0.10 0.087 0.30)
-    ;; hips / belt
-    (col 0.42 0.37 0.28)
-    (part 0.0 0.79 0.0 0.16 0.10 0.13)
-    (metal 0.28 0.22 0.16)
-    (part 0.03 0.76 0.0 0.14 0.045 0.135)      ; belt buckle -- metal
-    ;; the tan jacket torso, with a darker vest panel
+    ;; legs: dark olive trousers over the articulated frame, then the boots
+    (col 0.44 0.41 0.31)
+    (humanoid-leg -0.105 sw 0.80 1.0)
+    (let ((bx *cp-x*) (by *cp-y*))
+      (col 0.15 0.12 0.10)
+      (part-rbox (+ bx 0.025) (- by 0.045) -0.105 0.095 0.062 0.083 0.035))
+    (col 0.44 0.41 0.31)
+    (humanoid-leg 0.105 (- 0.0 sw) 0.80 1.0)
+    (let ((bx *cp-x*) (by *cp-y*))
+      (col 0.15 0.12 0.10)
+      (part-rbox (+ bx 0.025) (- by 0.045) 0.105 0.095 0.062 0.083 0.035))
+    ;; hips and the utility belt
+    (col 0.42 0.38 0.29)
+    (part-rbox 0.0 0.84 0.0 0.152 0.105 0.125 0.055)
+    (col 0.26 0.22 0.17)
+    (part-rbox 0.0 0.75 0.0 0.158 0.042 0.130 0.028)
+    (metal 0.55 0.47 0.28)
+    (part-rbox 0.15 0.75 0.0 0.022 0.032 0.040 0.012)   ; buckle
+    (col 0.22 0.19 0.15)                                 ; holster
+    (part-rbox 0.02 0.70 -0.145 0.045 0.075 0.035 0.022)
+    ;; the tan quilted jacket: a chest and a slightly narrower waist, so the
+    ;; torso has a taper instead of being one carton
     (col 0.80 0.70 0.52)
-    (part 0.0 1.07 0.0 0.185 0.22 0.135)
-    (col 0.60 0.50 0.36)
-    (part 0.05 1.05 0.0 0.13 0.17 0.13)
-    (col 0.86 0.78 0.62)                        ; collar
-    (part 0.0 1.28 0.0 0.125 0.05 0.115)
-    ;; the Hoth field pack on the back
+    (part-rbox 0.0 1.14 0.0 0.185 0.135 0.140 0.075)
+    (part-rbox 0.0 0.97 0.0 0.163 0.115 0.125 0.065)
+    (col 0.62 0.53 0.38)                                 ; the vest panel
+    (part-rbox 0.075 1.08 0.0 0.115 0.155 0.118 0.055)
+    (col 0.86 0.78 0.62)                                 ; the fur collar
+    (part-cyl 0.0 1.29 0.0 0.112 0.048 10)
+    ;; the Hoth field pack, its straps and a canteen
     (col 0.33 0.31 0.27)
-    (part -0.17 1.05 0.0 0.08 0.19 0.15)
-    (col 0.20 0.20 0.21)
-    (part -0.25 1.09 0.0 0.03 0.10 0.09)
-    ;; shoulders
+    (part-rbox -0.185 1.06 0.0 0.075 0.185 0.145 0.055)
+    (col 0.24 0.22 0.19)
+    (part-rbox -0.06 1.14 -0.105 0.115 0.075 0.026 0.013)
+    (part-rbox -0.06 1.14 0.105 0.115 0.075 0.026 0.013)
+    (metal 0.42 0.44 0.46)
+    (part-limb -0.27 1.02 0.085 -0.27 1.16 0.085 0.048)
+    ;; shoulders and the off arm (the weapon arm is drawn by emit-arm-to)
+    (col 0.78 0.68 0.50)
+    (part-joint 0.0 1.215 -0.178 0.076)
+    (part-joint 0.0 1.215 0.178 0.076)
     (col 0.74 0.64 0.47)
-    (part 0.0 1.22 -0.20 0.07 0.06 0.075)
-    (part 0.0 1.22 0.20 0.07 0.06 0.075)
-    ;; the off hand (upper arm + fist), swinging; the weapon arm is drawn by
-    ;; emit-arm-to, reaching to the animated weapon hand
-    (col 0.74 0.64 0.47)
-    (part-cyl (- 0.0 arm) 1.02 0.22 0.06 0.16)
+    (taper 0.047)
+    (part-limb 0.0 1.215 0.192 (* 0.6 arm) 1.02 0.212 0.056)
+    (part-joint (* 0.6 arm) 1.02 0.212 0.048)
+    (taper 0.041)
+    (part-limb (* 0.6 arm) 1.02 0.212 arm 0.855 0.218 0.047)
     (col 0.18 0.15 0.12)
-    (part-ellipsoid (- 0.0 arm) 0.85 0.22 0.055 0.055 0.055)
-    ;; neck + head (smaller head = less toy-like)
-    (col 0.80 0.62 0.50)
-    (part-cyl 0.0 1.37 0.0 0.05 0.05)
+    (part-ellipsoid arm 0.833 0.218 0.048 0.052 0.048 7 4)
+    ;; neck and head
+    (col 0.78 0.60 0.48)
+    (part-cyl 0.0 1.335 0.0 0.05 0.05)
     (col 0.86 0.70 0.58)
-    (part-ellipsoid 0.02 1.49 0.0 0.095 0.105 0.095)
-    (col 0.32 0.25 0.20)                        ; brow shadow
-    (part 0.09 1.49 0.0 0.02 0.03 0.07)
-    ;; the knit cap with its darker band
+    (part-ellipsoid 0.012 1.455 0.0 0.092 0.103 0.092 10 6)
+    (part-ellipsoid 0.088 1.445 0.0 0.026 0.022 0.024 6 4)  ; nose
+    (col 0.34 0.27 0.21)
+    (part-rbox 0.078 1.492 0.0 0.022 0.016 0.070 0.008)     ; brow
+    ;; the knit cap, its band, and the snow goggles pushed up onto it
     (col 0.70 0.62 0.46)
-    (part-ellipsoid 0.0 1.60 0.0 0.11 0.055 0.11)
+    (part-ellipsoid 0.0 1.545 0.0 0.108 0.075 0.108 10 5)
     (col 0.50 0.43 0.33)
-    (part 0.0 1.55 0.0 0.113 0.02 0.113))
+    (part-cyl 0.0 1.528 0.0 0.112 0.020 10)
+    (metal 0.20 0.20 0.22)
+    (part-limb 0.055 1.560 -0.100 0.055 1.560 0.100 0.030)
+    (col 0.30 0.42 0.48)
+    (part-ellipsoid 0.082 1.560 -0.048 0.020 0.026 0.030 6 4)
+    (part-ellipsoid 0.082 1.560 0.048 0.020 0.026 0.030 6 4))
   (if (= *weapon* 0)
       (emit-player-saber tm)
       (emit-player-blaster)))
 
-;; A forearm reaching from the weapon-side shoulder to the (animated) weapon
-;; hand -- so the arm visibly follows the hand as it swings. yaw-only, so the
-;; beam tracks it in the horizontal plane; the small vertical tilt is folded
-;; into the midpoint height. A round beam (emit-cyl-beam) instead of a box
-;; reads as a sleeve, not a plank.
+;; The weapon arm, reaching from the weapon-side shoulder to the (animated)
+;; weapon hand. It is a real two-segment arm: the elbow sits off the straight
+;; shoulder-to-hand line, dropped and pushed outboard, so a raised weapon bends
+;; the arm the way an arm bends instead of running one rigid pole from the
+;; shoulder to the fist. Everything here is WORLD space -- the hand is already
+;; solved in the aim frame by the caller, not in the figure's local frame.
 (defun emit-arm-to (hx hy hz r g b)
   (let* ((arrx (- 0.0 (sin *cam-yaw*)))       ; aim-right
          (arrz (cos *cam-yaw*))
          (sx (+ (aref *ppos* 0) (* arrx -0.18)))   ; weapon-side shoulder
          (sz (+ (aref *ppos* 2) (* arrz -0.18)))
          (sy (+ (aref *ppos* 1) 1.16))
-         (ddx (- hx sx)) (ddz (- hz sz))
-         (len (sqrt (+ (* ddx ddx) (* ddz ddz)))))
+         ;; the elbow: midway, sagging, and bowed out along the aim-right axis
+         (ex (+ (* 0.5 (+ sx hx)) (* arrx -0.07)))
+         (ez (+ (* 0.5 (+ sz hz)) (* arrz -0.07)))
+         (ey (- (* 0.5 (+ sy hy)) 0.085)))
     (col r g b)
-    (emit-cyl-beam (* 0.5 (+ sx hx)) (* 0.5 (+ sy hy)) (* 0.5 (+ sz hz))
-                   (max 0.06 (* 0.5 len)) 0.05 (atan2 (- 0.0 ddz) ddx) 8)))
+    (limb-caps nil)                     ; shoulder ball, elbow ball, then a fist
+    (emit-ellipsoid sx sy sz 0.070 0.070 0.070 0.0 (segs 6) (segs 3))
+    (taper 0.042)
+    (emit-limb sx sy sz ex ey ez 0.052)
+    (emit-ellipsoid ex ey ez 0.044 0.044 0.044 0.0 (segs 6) (segs 3))
+    (taper 0.039)
+    (emit-limb ex ey ez hx hy hz 0.045)
+    (limb-caps t)))
 
 ;; blade-glow inflation: pad the thin cross-axes more than the long axis
 (defun glowh (h) (if (< h 0.2) (+ h 0.045) (+ h 0.03)))
 (defun glowh2 (h) (if (< h 0.2) (+ h 0.09) (+ h 0.055)))
 
 (defun emit-player-blaster ()
-  ;; a compact grey blaster pistol, held out along the aim
+  ;; a compact grey blaster pistol, held out along the aim: a stepped barrel
+  ;; with a muzzle collar, a receiver block, a sight rib and a raked grip
   (let* ((theta *cam-yaw*)
          (fwx (cos theta)) (fwz (sin theta))
          (arx (- 0.0 (sin theta))) (arz (cos theta))
@@ -1374,12 +1834,27 @@ void main() {
          (hy (+ (aref *ppos* 1) 0.98)))
     (emit-arm-to hx hy hz 0.74 0.64 0.47)
     (col 0.15 0.12 0.10)
-    (emit-ellipsoid hx hy hz 0.05 0.05 0.05 0.0 8 5)     ; fist
-    (metal 0.17 0.18 0.21)
-    (emit-cyl-beam (+ hx (* fwx 0.12)) (+ hy 0.01) (+ hz (* fwz 0.12))
-                   0.12 0.035 *pyaw* 8)                  ; barrel -- round metal
-    (col 0.13 0.13 0.15)
-    (emit-box hx (- hy 0.06) hz 0.03 0.055 0.03 0.0)))   ; grip
+    (emit-ellipsoid hx hy hz 0.052 0.055 0.052 0.0 (segs 8) (segs 5))  ; fist
+    ;; the pistol's blocks are centimetres across -- plain soft-edged boxes,
+    ;; never rounded ones; only the round parts of it are round
+    (soften 0.5)
+    (emit-box (+ hx (* fwx 0.03)) (+ hy 0.015) (+ hz (* fwz 0.03))
+              0.075 0.045 0.032 *pyaw*)
+    (metal 0.20 0.21 0.24)                                ; barrel
+    (taper 0.026)
+    (emit-limb (+ hx (* fwx 0.07)) (+ hy 0.022) (+ hz (* fwz 0.07))
+               (+ hx (* fwx 0.25)) (+ hy 0.022) (+ hz (* fwz 0.25)) 0.030)
+    (metal 0.34 0.35 0.38)                                ; muzzle collar
+    (emit-limb (+ hx (* fwx 0.23)) (+ hy 0.022) (+ hz (* fwz 0.23))
+               (+ hx (* fwx 0.26)) (+ hy 0.022) (+ hz (* fwz 0.26)) 0.037)
+    (col 0.11 0.11 0.13)                                  ; sight rib
+    (soften 0.5)
+    (emit-box (+ hx (* fwx 0.10)) (+ hy 0.062) (+ hz (* fwz 0.10))
+              0.055 0.012 0.010 *pyaw*)
+    (col 0.13 0.13 0.15)                                  ; grip
+    (soften 0.5)
+    (emit-box (- hx (* fwx 0.015)) (- hy 0.075) (- hz (* fwz 0.015))
+              0.030 0.062 0.028 *pyaw*)))
 
 ;; The lightsaber is stored as a generic oriented box (center + half-extents +
 ;; yaw) so both the opaque core pass and the additive bloom pass can redraw it,
@@ -1451,69 +1926,191 @@ void main() {
     (emit-cylinder *sab-cx* *sab-cy* *sab-cz*
                    (glowh2 *sab-hx*) (glowh2 *sab-hy*) *sab-yaw* 8)))
 
-;; A stormtrooper: white armour plates over a black bodysuit, the iconic helmet
-;; (dome + black brow band + vocoder snout), an E-11 blaster. ~1.65 tall.
+;; A stormtrooper: white armour over a black bodysuit. The armour is a SET OF
+;; SEPARATE ROUNDED PLATES riding on the black limbs underneath -- chest, abdo,
+;; shoulder bells, biceps, forearms, thigh and shin guards, boots -- because
+;; that gap between plate and suit is the whole look; a single white cylinder
+;; per limb reads as a robot. The helmet is built from the features people
+;; actually recognise it by: the dome, the brow band, the two eye lenses, the
+;; frown grille and the tube stripes on the cheeks. ~1.68 tall.
 (defun emit-trooper (i tm)
   (setq *hit-tint* (min 1.0 (* (aref *thit* i) 6.0)))   ; red when just struck
   (let ((p (aref *tpos* i)))
+    (set-lod (aref p 0) (aref p 2) 1.68)
     (if (aref *talive* i)
         (let* ((sw (sin (aref *tstep* i)))
-               (leg (* 0.13 sw))
                (arm (* -0.11 sw)))
           (set-origin (aref p 0) 0.0 (aref p 2) (aref *tyaw* i))
           (emit-shadow (aref p 0) (aref p 2) 0.34)
-          ;; black bodysuit legs (cylindrical), white shin/thigh armor plates
-          ;; (flat plates over a round limb -- keep the plates boxy) and boots
+          ;; the black bodysuit legs, then the white plates over them
           (col 0.11 0.11 0.13)
-          (part-cyl leg 0.40 -0.10 0.077 0.30)
-          (part-cyl (- 0.0 leg) 0.40 0.10 0.077 0.30)
-          (col 0.92 0.93 0.97)
-          (part leg 0.24 -0.10 0.088 0.16 0.083)     ; shin plate
-          (part (- 0.0 leg) 0.24 0.10 0.088 0.16 0.083)
-          (part leg 0.06 -0.10 0.09 0.06 0.10)       ; boot
-          (part (- 0.0 leg) 0.06 0.10 0.09 0.06 0.10)
-          ;; black belt
-          (col 0.10 0.10 0.12)
-          (part 0.0 0.76 0.0 0.145 0.05 0.115)
-          ;; the white chest + ab plates
-          (col 0.93 0.94 0.97)
-          (part 0.0 1.04 0.0 0.16 0.19 0.115)
-          (col 0.82 0.84 0.88)
-          (part 0.03 0.90 0.0 0.14 0.055 0.11)       ; ab line
-          ;; shoulder bells + round white arms + black fists
-          (col 0.93 0.94 0.97)
-          (part 0.0 1.20 -0.19 0.07 0.06 0.08)
-          (part 0.0 1.20 0.19 0.07 0.06 0.08)
-          (part-cyl arm 1.02 -0.22 0.058 0.16)
-          (part-cyl (- 0.0 arm) 1.02 0.22 0.058 0.16)
-          (col 0.10 0.10 0.12)
-          (part-ellipsoid 0.18 0.86 -0.22 0.05 0.055 0.05)
-          (part-ellipsoid (- 0.0 arm) 0.86 0.22 0.05 0.055 0.05)
-          ;; black neck seal
-          (col 0.10 0.10 0.12)
-          (part-cyl 0.0 1.29 0.0 0.06 0.05)
-          ;; the helmet: a rounded dome (the trooper's most recognizable
-          ;; silhouette line, so the biggest single win from an ellipsoid),
-          ;; black brow band, vocoder snout -- both flat plates, kept boxy
-          (metal 0.95 0.96 0.99)
-          (part-ellipsoid 0.0 1.44 0.0 0.098 0.108 0.098)
-          (col 0.10 0.10 0.12)
-          (part 0.07 1.46 0.0 0.045 0.05 0.088)
+          (humanoid-leg -0.10 sw 0.78 0.95)
+          (let ((ax *cp-x*) (ay *cp-y*))
+            (col 0.93 0.94 0.97)
+            (part-rbox (* 0.06 sw) 0.58 -0.10 0.088 0.13 0.088 0.045)   ; thigh
+            (part-rbox (* 0.18 sw) 0.28 -0.10 0.082 0.13 0.082 0.040)   ; shin
+            (part-rbox (+ ax 0.03) (- ay 0.035) -0.10 0.098 0.062 0.088 0.032))
+          (col 0.11 0.11 0.13)
+          (humanoid-leg 0.10 (- 0.0 sw) 0.78 0.95)
+          (let ((ax *cp-x*) (ay *cp-y*))
+            (col 0.93 0.94 0.97)
+            (part-rbox (* -0.06 sw) 0.58 0.10 0.088 0.13 0.088 0.045)
+            (part-rbox (* -0.18 sw) 0.28 0.10 0.082 0.13 0.082 0.040)
+            (part-rbox (+ ax 0.03) (- ay 0.035) 0.10 0.098 0.062 0.088 0.032))
+          ;; hip block and the black belt with its side pouches
           (col 0.90 0.91 0.95)
-          (part 0.10 1.39 0.0 0.03 0.05 0.05)
-          (col 0.18 0.18 0.20)
-          (part 0.115 1.39 0.0 0.014 0.035 0.03)
-          ;; the E-11 blaster held across the body -- a round metal barrel
-          (metal 0.10 0.10 0.12)
-          (part-cyl-beam 0.30 0.90 -0.20 0.12 0.028)
-          (part 0.20 0.84 -0.20 0.028 0.05 0.028))
-        ;; a fallen trooper: a flattened heap with the helmet beside it
+          (part-rbox 0.0 0.82 0.0 0.142 0.085 0.112 0.05)
+          (col 0.09 0.09 0.11)
+          (part-rbox 0.0 0.735 0.0 0.148 0.038 0.118 0.022)
+          (part-rbox 0.02 0.735 -0.115 0.045 0.050 0.030 0.018)
+          (part-rbox 0.02 0.735 0.115 0.045 0.050 0.030 0.018)
+          ;; the chest and abdominal plates, and the back plate behind them
+          (col 0.94 0.95 0.98)
+          (part-rbox 0.005 1.08 0.0 0.158 0.115 0.115 0.06)
+          (col 0.88 0.89 0.93)
+          (part-rbox 0.02 0.935 0.0 0.140 0.055 0.108 0.035)
+          (col 0.90 0.91 0.95)
+          (part-rbox -0.06 1.05 0.0 0.095 0.145 0.108 0.05)
+          (col 0.11 0.11 0.13)                       ; the chest control panel
+          (part-rbox 0.15 1.115 -0.045 0.020 0.030 0.038 0.008)
+          (col 0.70 0.20 0.18)
+          (part-rbox 0.15 1.115 0.030 0.020 0.014 0.020 0.006)
+          ;; shoulder bells, black under-arms and the white arm plates
+          (col 0.94 0.95 0.98)
+          (part-rbox 0.0 1.205 -0.185 0.078 0.062 0.085 0.045)
+          (part-rbox 0.0 1.205 0.185 0.078 0.062 0.085 0.045)
+          (col 0.11 0.11 0.13)
+          (taper 0.048)
+          (part-limb 0.0 1.19 -0.20 (* 0.5 arm) 1.00 -0.215 0.058)
+          (part-joint (* 0.5 arm) 1.00 -0.215 0.050)
+          (taper 0.042)
+          (part-limb (* 0.5 arm) 1.00 -0.215 arm 0.845 -0.222 0.050)
+          (taper 0.048)
+          (part-limb 0.0 1.19 0.20 (* -0.5 arm) 1.00 0.215 0.058)
+          (part-joint (* -0.5 arm) 1.00 0.215 0.050)
+          (taper 0.042)
+          (part-limb (* -0.5 arm) 1.00 0.215 (- 0.0 arm) 0.845 0.222 0.050)
+          (col 0.93 0.94 0.97)
+          (part-rbox (* 0.25 arm) 1.115 -0.208 0.062 0.060 0.062 0.030)
+          (part-rbox (* -0.25 arm) 1.115 0.208 0.062 0.060 0.062 0.030)
+          (part-rbox (* 0.8 arm) 0.925 -0.218 0.058 0.058 0.058 0.028)
+          (part-rbox (* -0.8 arm) 0.925 0.218 0.058 0.058 0.058 0.028)
+          (col 0.10 0.10 0.12)                       ; gloves
+          (part-ellipsoid arm 0.815 -0.222 0.048 0.052 0.048 7 4)
+          (part-ellipsoid (- 0.0 arm) 0.815 0.222 0.048 0.052 0.048 7 4)
+          ;; the black neck seal
+          (col 0.10 0.10 0.12)
+          (part-cyl 0.0 1.245 0.0 0.062 0.048)
+          ;; the helmet
+          (metal 0.95 0.96 0.99)
+          (part-ellipsoid -0.005 1.375 0.0 0.098 0.105 0.100 10 6)
+          (part-rbox 0.062 1.360 0.0 0.048 0.082 0.086 0.030)   ; faceplate
+          (col 0.09 0.09 0.11)                                  ; brow band
+          (part-rbox 0.090 1.408 0.0 0.032 0.020 0.080 0.008)
+          (part-rbox 0.098 1.372 -0.042 0.026 0.026 0.028 0.008) ; eye lenses
+          (part-rbox 0.098 1.372 0.042 0.026 0.026 0.028 0.008)
+          (part-rbox 0.096 1.312 0.0 0.028 0.024 0.040 0.010)    ; frown grille
+          (metal 0.20 0.20 0.22)                                 ; cheek tubes
+          (taper 0.008)
+          (part-limb 0.086 1.330 -0.062 0.062 1.296 -0.075 0.011)
+          (taper 0.008)
+          (part-limb 0.086 1.330 0.062 0.062 1.296 0.075 0.011)
+          (col 0.88 0.89 0.93)                                   ; ear vents
+          (part-rbox 0.010 1.345 -0.095 0.038 0.040 0.014 0.010)
+          (part-rbox 0.010 1.345 0.095 0.038 0.040 0.014 0.010)
+          ;; the E-11 held across the body: barrel, receiver, folding stock,
+          ;; magazine and the scope rail
+          (metal 0.13 0.13 0.15)
+          (part-rbox 0.20 0.905 -0.20 0.075 0.038 0.030 0.014)
+          (metal 0.18 0.18 0.21)
+          (taper 0.020)
+          (part-limb 0.27 0.912 -0.20 0.46 0.912 -0.20 0.024)
+          (col 0.10 0.10 0.12)
+          (part-rbox 0.19 0.845 -0.20 0.026 0.045 0.024 0.010)   ; magazine
+          (part-rbox 0.08 0.905 -0.20 0.060 0.024 0.022 0.010)   ; stock
+          (metal 0.22 0.22 0.25)
+          (part-rbox 0.24 0.955 -0.20 0.048 0.014 0.014 0.006))  ; scope rail
+        ;; a fallen trooper: face down in the snow, one arm flung out and the
+        ;; helmet rolled clear of the body
         (progn
           (set-origin (aref p 0) 0.0 (aref p 2) (aref *tyaw* i))
-          (col 0.86 0.88 0.92)
-          (part 0.0 0.08 0.0 0.24 0.08 0.15)
-          (part 0.22 0.08 0.06 0.09 0.08 0.09))))
+          (emit-shadow (aref p 0) (aref p 2) 0.36)
+          (col 0.11 0.11 0.13)
+          (taper 0.075)
+          (part-limb -0.10 0.10 -0.06 -0.44 0.07 -0.11 0.088)
+          (taper 0.075)
+          (part-limb -0.10 0.10 0.06 -0.42 0.07 0.14 0.088)
+          (col 0.88 0.90 0.94)
+          (part-rbox -0.02 0.10 0.0 0.20 0.095 0.135 0.06)
+          (col 0.11 0.11 0.13)
+          (taper 0.048)
+          (part-limb 0.10 0.11 -0.14 0.34 0.06 -0.30 0.055)
+          (metal 0.92 0.93 0.97)
+          (part-ellipsoid 0.34 0.095 0.10 0.095 0.095 0.098 8 5)
+          (col 0.09 0.09 0.11)
+          (part-rbox 0.40 0.11 0.14 0.030 0.026 0.036 0.008))))
   (setq *hit-tint* 0.0))
+
+;; --- the AT-AT ------------------------------------------------------------
+;;
+;; The walker used to be four vertical posts under a slab, which reads as a
+;; table on legs from any angle. A real AT-AT's whole silhouette is its GAIT:
+;; each leg is two long segments meeting at a knee that stands well forward of
+;; the line from hip to foot, and the foot is a broad pad that stays flat on the
+;; snow. So the leg is solved rather than drawn -- the foot is animated
+;; (swinging fore and aft, lifting only while it travels forward), and the knee
+;; is placed by the two-link inverse kinematics that the fixed thigh and shin
+;; lengths force. That is what makes it stride instead of slide.
+
+;; The two segments are only a little longer than the hip-to-foot distance, so
+;; the knee stands proud of the leg line without the deep insect crouch a bigger
+;; excess would give.
+(defconstant +atat-thigh+ 1.56)
+(defconstant +atat-shin+ 1.40)
+(defconstant +atat-hip-y+ 3.15)
+
+(defun atat-leg (fx fz th walking)
+  (let* ((sw (if walking (* 0.44 (sin th)) 0.0))
+         ;; lift only on the forward half of the stroke, so the planted foot
+         ;; never skates
+         (lift (if walking (max 0.0 (* 0.26 (cos th))) 0.0))
+         (ankx (+ fx 0.10 sw))
+         (anky (+ 0.44 lift))
+         (dx (- ankx fx))
+         (dy (- anky +atat-hip-y+))
+         (d (min (* 0.995 (+ +atat-thigh+ +atat-shin+))
+                 (max 0.3 (sqrt (+ (* dx dx) (* dy dy))))))
+         (ux (/ dx d)) (uy (/ dy d))
+         ;; cosine rule: how far along hip->ankle the knee's foot-point lies,
+         ;; and how far it stands off that line
+         (a (/ (+ (* d d) (- (* +atat-thigh+ +atat-thigh+)
+                             (* +atat-shin+ +atat-shin+)))
+               (* 2.0 d)))
+         (hh (sqrt (max 0.0 (- (* +atat-thigh+ +atat-thigh+) (* a a)))))
+         ;; the offset direction, chosen to put the knee FORWARD (+x local)
+         (kx (+ fx (* a ux) (* hh (- 0.0 uy))))
+         (ky (+ +atat-hip-y+ (* a uy) (* hh ux))))
+    ;; hip housing and ball
+    (metal 0.56 0.58 0.61)
+    (part-rbox fx +atat-hip-y+ fz 0.34 0.30 0.34 0.14)
+    (metal 0.40 0.42 0.45)
+    (part-joint fx +atat-hip-y+ fz 0.28)
+    ;; thigh, knee, shin, ankle -- each segment runs ball to ball, so no caps
+    (metal 0.58 0.60 0.63)
+    (limb-caps nil)
+    (taper 0.23)
+    (part-limb fx +atat-hip-y+ fz kx ky fz 0.31)
+    (metal 0.40 0.42 0.45)
+    (part-joint kx ky fz 0.26)
+    (metal 0.58 0.60 0.63)
+    (taper 0.19)
+    (part-limb kx ky fz ankx anky fz 0.24)
+    (limb-caps t)
+    (metal 0.40 0.42 0.45)
+    (part-joint ankx anky fz 0.20)
+    ;; the broad foot pad
+    (metal 0.50 0.52 0.55)
+    (part-rbox (+ ankx 0.05) (+ lift 0.16) fz 0.40 0.15 0.33 0.11)))
 
 (defun emit-atat (i tm)
   (setq *hit-tint* (min 1.0 (* (aref *ahit* i) 6.0)))   ; red when just struck
@@ -1521,48 +2118,91 @@ void main() {
          (dx (- (aref *ppos* 0) (aref p 0)))
          (dz (- (aref *ppos* 2) (aref p 2)))
          (far2 (+ (* dx dx) (* dz dz))))    ; squared horizontal distance to you
+    (set-lod (aref p 0) (aref p 2) 5.5)
     (if (aref *aalive* i)
         (let* ((yaw (aref *ayaw* i))
-               (walk (if (> far2 170.0) (sin (* tm 2.2)) 0.0)))
+               (walking (> far2 170.0))
+               (th (* tm 2.1)))
           (set-origin (aref p 0) 0.0 (aref p 2) yaw)
-          ;; four legs -- the hull-plate design really is boxy/mechanical, so
-          ;; these stay boxes; just gets the armor's metal shine
-          (metal 0.52 0.54 0.57)
-          (part (* 0.35 walk) 1.6 -0.9 0.16 1.6 0.16)
-          (part (* -0.35 walk) 1.6 0.9 0.16 1.6 0.16)
-          (part (* -0.35 walk) 1.6 -0.9 0.16 1.6 0.16)
-          (part (* 0.35 walk) 1.6 0.9 0.16 1.6 0.16)
-          ;; a rounded hip joint ball where each leg meets the hull --
-          ;; softens the hard box-on-box seam without redesigning the
-          ;; (deliberately mechanical/boxy) legs themselves
+          ;; the four legs, on the diagonal gait a quadruped actually uses:
+          ;; front-left with rear-right, front-right with rear-left
+          (atat-leg 1.05 -0.92 th walking)
+          (atat-leg -1.05 0.92 th walking)
+          (atat-leg 1.05 0.92 (+ th +pi+) walking)
+          (atat-leg -1.05 -0.92 (+ th +pi+) walking)
+          ;; the hull: a belly the legs hang from, the main armoured box, a
+          ;; dorsal ridge and the rear engine block with its two thrusters
+          (metal 0.54 0.56 0.59)
+          (part-rbox 0.0 3.28 0.0 1.30 0.24 0.82 0.16)
+          (metal 0.64 0.66 0.69)
+          (part-rbox 0.0 3.88 0.0 1.55 0.55 0.98 0.26)
+          (metal 0.58 0.60 0.63)
+          (part-rbox -0.15 4.48 0.0 1.12 0.13 0.60 0.09)
           (metal 0.46 0.48 0.51)
-          (part-ellipsoid (* 0.35 walk) 3.05 -0.9 0.22 0.22 0.22 8 5)
-          (part-ellipsoid (* -0.35 walk) 3.05 0.9 0.22 0.22 0.22 8 5)
-          (part-ellipsoid (* -0.35 walk) 3.05 -0.9 0.22 0.22 0.22 8 5)
-          (part-ellipsoid (* 0.35 walk) 3.05 0.9 0.22 0.22 0.22 8 5)
-          ;; the slab body
-          (metal 0.62 0.64 0.67)
-          (part 0.0 3.7 0.0 1.5 0.8 0.95)
-          (metal 0.56 0.58 0.61)
-          (part 0.3 3.7 0.0 1.1 0.62 0.8)
-          ;; neck (boxy) + the domed/nosed head -- the one genuinely rounded
-          ;; line on the hull, so an ellipsoid instead of a box here is the
-          ;; single biggest AT-AT silhouette win
-          (metal 0.6 0.62 0.65)
-          (part 1.55 4.2 0.0 0.4 0.42 0.35)
+          (part-rbox 0.10 3.80 -1.00 1.05 0.30 0.07 0.05)
+          (part-rbox 0.10 3.80 1.00 1.05 0.30 0.07 0.05)
+          (metal 0.44 0.46 0.49)
+          (part-rbox -1.64 3.82 0.0 0.22 0.42 0.72 0.13)
+          (metal 0.26 0.27 0.29)
+          (part-limb -1.80 3.82 -0.36 -2.00 3.82 -0.36 0.17)
+          (part-limb -1.80 3.82 0.36 -2.00 3.82 0.36 0.17)
+          ;; the neck: a narrow trunk that slopes DOWN and forward out of the
+          ;; hull's chest, with two armour rings, so the head hangs clear
+          ;; below the hull line the way the real machine's does -- run it
+          ;; level with the hull instead and the whole thing reads as a dog
+          (metal 0.50 0.52 0.55)
+          (taper 0.28)
+          (part-limb 1.42 3.86 0.0 2.14 3.52 0.0 0.42)
+          (metal 0.60 0.62 0.65)
+          (part-limb 1.60 3.78 0.0 1.70 3.73 0.0 0.40)
+          (part-limb 1.92 3.63 0.0 2.02 3.58 0.0 0.34)
+          ;; the head: a blunt armoured box with a dark visor band, a jaw, two
+          ;; temple cannons and the heavy chin blasters
           (metal 0.66 0.68 0.71)
-          (part-ellipsoid 2.1 4.55 0.0 0.42 0.36 0.5)
-          ;; the two chin guns -- round barrels
-          (metal 0.2 0.2 0.22)
-          (part-cyl-beam 2.45 4.35 -0.16 0.22 0.05)
-          (part-cyl-beam 2.45 4.35 0.16 0.22 0.05))
-        ;; a smoking wreck: the body slumped to the snow
-        (let ((k (min 1.0 (/ (aref *awreck* i) 1.2))))
+          (part-rbox 2.54 3.40 0.0 0.42 0.40 0.50 0.13)
+          (col 0.13 0.14 0.16)
+          (part-rbox 2.94 3.52 0.0 0.07 0.12 0.40 0.04)
+          (metal 0.58 0.60 0.63)
+          (part-rbox 2.60 3.02 0.0 0.34 0.13 0.38 0.07)
+          (metal 0.44 0.46 0.49)
+          (part-rbox 2.30 3.60 -0.56 0.16 0.14 0.12 0.05)
+          (part-rbox 2.30 3.60 0.56 0.16 0.14 0.12 0.05)
+          (metal 0.22 0.22 0.24)
+          (part-limb 2.42 3.60 -0.56 2.90 3.60 -0.56 0.055)
+          (part-limb 2.42 3.60 0.56 2.90 3.60 0.56 0.055)
+          (metal 0.20 0.20 0.22)
+          (taper 0.058)
+          (part-limb 2.70 3.08 -0.20 3.34 3.04 -0.20 0.085)
+          (taper 0.058)
+          (part-limb 2.70 3.08 0.20 3.34 3.04 0.20 0.085))
+        ;; a smoking wreck: the hull slumped into the snow with its neck bent
+        ;; under it, and a column of soot still lifting off the engine block
+        (let* ((k (min 1.0 (/ (aref *awreck* i) 1.2)))
+               (drop (* 0.9 k)))
           (set-origin (aref p 0) 0.0 (aref p 2) (aref *ayaw* i))
-          (col 0.34 0.34 0.35)
-          (part 0.0 (- 1.3 (* 0.8 k)) 0.0 1.5 0.7 0.95)
+          (metal 0.34 0.34 0.35)
+          (part-rbox 0.0 (- 1.5 drop) 0.0 1.5 0.55 0.95 0.24)
+          (metal 0.28 0.28 0.30)
+          (part-rbox -1.5 (- 1.4 drop) 0.0 0.24 0.40 0.70 0.13)
+          (taper 0.30)
+          (part-limb 1.3 (- 1.4 drop) 0.0 2.0 (- 0.6 (* 0.3 k)) 0.0 0.44)
           (col 0.22 0.22 0.24)
-          (part 1.4 (- 1.2 (* 0.7 k)) 0.0 0.5 0.4 0.45))))
+          (part-rbox 2.35 (- 0.62 (* 0.3 k)) 0.0 0.40 0.36 0.46 0.12)
+          ;; the collapsed legs, splayed where they folded
+          (metal 0.38 0.40 0.43)
+          (taper 0.16)
+          (part-limb 1.0 (- 1.2 drop) -0.9 1.9 0.22 -1.5 0.24)
+          (taper 0.16)
+          (part-limb -1.0 (- 1.2 drop) 0.9 -1.9 0.22 1.5 0.24)
+          (taper 0.16)
+          (part-limb 1.0 (- 1.2 drop) 0.9 1.7 0.22 1.6 0.24)
+          (taper 0.16)
+          (part-limb -1.0 (- 1.2 drop) -0.9 -1.8 0.22 -1.4 0.24)
+          ;; soot, thinning as it climbs
+          (col 0.30 0.30 0.32)
+          (part-ellipsoid -1.4 (+ 2.1 (* 0.8 k)) 0.0 0.55 0.40 0.50 7 4)
+          (col 0.42 0.42 0.44)
+          (part-ellipsoid -1.1 (+ 3.0 (* 1.4 k)) 0.2 0.42 0.34 0.40 6 3))))
   (setq *hit-tint* 0.0))
 
 ;; Vader's blade, stored as a generic oriented box like yours.
@@ -1575,6 +2215,66 @@ void main() {
 (defvar *vsab-yaw* 0.0)
 (defvar *vsab-vis* nil)
 
+;; --- the cape --------------------------------------------------------------
+;;
+;; A cape is the one part of the boss that a box can never stand in for: its
+;; whole character is that it is a SURFACE -- it wraps the shoulders, widens
+;; towards the hem, and hangs in folds. So it is sampled from a parametric
+;; patch, u running from the collar (0) to the hem (1) and v across the back
+;; (-1 to 1). The half-angle it subtends and its distance from the body axis
+;; both grow with u, which is the flare; a sine in v adds the standing folds,
+;; and a slow drift in the phase makes them breathe as he walks.
+;;
+;; Normals come from finite differences of the same function, so the folds
+;; catch the light instead of being painted-on stripes. The patch is emitted in
+;; the figure's local frame like everything else.
+(defconstant +cape-u+ 7)                ; bands from collar to hem
+(defconstant +cape-v+ 9)                ; panels across the back
+
+(defun cape-set (u v ph)
+  (let* ((spread (+ 0.80 (* 0.45 u)))          ; half-angle around the body
+         (ang (* v spread))
+         (fold (* 0.05 u (sin (+ (* 4.0 v) ph))))
+         (rad (+ 0.21 (* 0.26 u u) fold))
+         ;; the top edge follows the shoulder line down towards the front
+         ;; instead of running level, or the collar reads as a shelf
+         (yy (- (- 1.58 (* 0.13 v v)) (* 1.40 u))))
+    (setq *cp-x* (- 0.0 (* rad (cos ang)))
+          *cp-y* yy
+          *cp-z* (* rad (sin ang)))))
+
+(defun cape-vertex (u v ph)
+  (cape-set u v ph)
+  (let ((px *cp-x*) (py *cp-y*) (pz *cp-z*))
+    (cape-set (min 1.0 (+ u 0.03)) v ph)
+    (let ((ax (- *cp-x* px)) (ay (- *cp-y* py)) (az (- *cp-z* pz)))
+      (cape-set u (min 1.0 (+ v 0.03)) ph)
+      (let* ((bx (- *cp-x* px)) (by (- *cp-y* py)) (bz (- *cp-z* pz))
+             (nx (- (* ay bz) (* az by)))
+             (ny (- (* az bx) (* ax bz)))
+             (nz (- (* ax by) (* ay bx)))
+             (nl (max 0.000001 (sqrt (+ (* nx nx) (* ny ny) (* nz nz)))))
+             ;; face the normal AWAY from the body axis -- the cross product's
+             ;; sign flips as v crosses the back's centre line
+             (sgn (if (< (+ (* nx px) (* nz pz)) 0.0) (- 0.0 1.0) 1.0))
+             (mx (* sgn (/ nx nl))) (my (* sgn (/ ny nl))) (mz (* sgn (/ nz nl))))
+        (emit-vertex (lwx px pz) (lwy py) (lwz px pz)
+                     (+ (* *oc* mx) (* *os* mz)) my (- (* *oc* mz) (* *os* mx)))))))
+
+(defun emit-cape (ph)
+  (dotimes (j +cape-u+)
+    (let ((u0 (/ (float j) (float +cape-u+)))
+          (u1 (/ (float (+ j 1)) (float +cape-u+))))
+      (dotimes (i +cape-v+)
+        (let ((v0 (- (* 2.0 (/ (float i) (float +cape-v+))) 1.0))
+              (v1 (- (* 2.0 (/ (float (+ i 1)) (float +cape-v+))) 1.0)))
+          (cape-vertex u0 v0 ph)
+          (cape-vertex u1 v0 ph)
+          (cape-vertex u1 v1 ph)
+          (cape-vertex u0 v0 ph)
+          (cape-vertex u1 v1 ph)
+          (cape-vertex u0 v1 ph))))))
+
 ;; Vader: all black armour under a heavy cape, the domed helmet with its
 ;; flared mask, the chest control box, a red lightsaber. Tall (~1.9) and broad.
 ;; Only shown once he engages -- dormant until the walkers fall.
@@ -1583,64 +2283,88 @@ void main() {
   (setq *hit-tint* (min 1.0 (* *vhitf* 6.0)))          ; red when just struck
   (when (and *valive* *vactive*)
     (let ((vdx (aref *vpos* 0)) (vdz (aref *vpos* 2)))
+      (set-lod vdx vdz 1.95)
       (set-origin vdx 0.0 vdz *vyaw*)
-      (emit-shadow vdx vdz 0.44)
-      ;; the cape, drawn first: a broad slab down the back and a lower flare
-      (col 0.04 0.04 0.05)
-      (part -0.15 1.02 0.0 0.06 0.86 0.30)
-      (part -0.11 0.42 0.0 0.10 0.42 0.34)
-      ;; boots + round legs
-      (col 0.05 0.05 0.06)
-      (part 0.0 0.09 -0.14 0.11 0.09 0.13)
-      (part 0.0 0.09 0.14 0.11 0.09 0.13)
+      (emit-shadow vdx vdz 0.46)
+      ;; legs and boots, under the cape
       (col 0.07 0.07 0.08)
-      (part-cyl 0.0 0.52 -0.14 0.11 0.36)
-      (part-cyl 0.0 0.52 0.14 0.11 0.36)
-      ;; belt with side boxes
-      (col 0.10 0.10 0.11)
-      (part 0.0 0.92 0.0 0.20 0.08 0.15)
-      (metal 0.16 0.14 0.10)
-      (part 0.13 0.92 -0.09 0.045 0.05 0.045)
-      (part 0.13 0.92 0.09 0.045 0.05 0.045)
-      ;; torso + the chest control box with its glowing indicator lights
+      (humanoid-leg -0.135 0.0 0.90 1.10)
+      (col 0.05 0.05 0.06)
+      (part-rbox 0.045 0.075 -0.135 0.115 0.075 0.105 0.045)
+      (col 0.07 0.07 0.08)
+      (humanoid-leg 0.135 0.0 0.90 1.10)
+      (col 0.05 0.05 0.06)
+      (part-rbox 0.045 0.075 0.135 0.115 0.075 0.105 0.045)
+      ;; hips, the wide belt and its side boxes
       (col 0.08 0.08 0.09)
-      (part 0.0 1.28 0.0 0.20 0.30 0.145)
-      (metal 0.13 0.13 0.15)
-      (part 0.15 1.30 0.0 0.06 0.13 0.11)
+      (part-rbox 0.0 0.96 0.0 0.185 0.10 0.145 0.07)
+      (col 0.11 0.11 0.12)
+      (part-rbox 0.0 0.88 0.0 0.195 0.048 0.152 0.026)
+      (metal 0.34 0.29 0.16)
+      (part-rbox 0.14 0.88 -0.095 0.042 0.048 0.042 0.016)
+      (part-rbox 0.14 0.88 0.095 0.042 0.048 0.042 0.016)
+      (part-rbox 0.16 0.88 0.0 0.030 0.036 0.038 0.014)
+      ;; torso: a broad armoured chest over a narrower midriff
+      (col 0.08 0.08 0.09)
+      (part-rbox 0.0 1.36 0.0 0.195 0.185 0.155 0.085)
+      (part-rbox 0.0 1.12 0.0 0.165 0.115 0.135 0.065)
+      ;; the chest control box and its indicator lights
+      (metal 0.14 0.14 0.16)
+      (part-rbox 0.16 1.32 0.0 0.055 0.115 0.105 0.024)
       (glow-col 1.0 0.2 0.18)
-      (emit-ellipsoid (+ vdx (* (cos *vyaw*) 0.205)) 1.34
-                       (- vdz (* (sin *vyaw*) 0.205)) 0.02 0.02 0.02 0.0 6 3)
-      (emit-ellipsoid (+ vdx (* (cos *vyaw*) 0.205)) 1.27
-                       (- vdz (* (sin *vyaw*) 0.205)) 0.018 0.018 0.018 0.0 6 3)
+      (part-ellipsoid 0.215 1.375 -0.045 0.018 0.018 0.018 6 3)
+      (part-ellipsoid 0.215 1.300 -0.045 0.016 0.016 0.016 6 3)
       (glow-col 0.2 0.85 0.3)
-      (emit-ellipsoid (+ vdx (* (cos *vyaw*) 0.205)) 1.31
-                       (- vdz (* (sin *vyaw*) 0.205)) 0.016 0.016 0.016 0.0 6 3)
-      ;; shoulders + round arms + gloved fists
-      (col 0.05 0.05 0.06)
-      (part 0.0 1.52 -0.22 0.09 0.055 0.10)
-      (part 0.0 1.52 0.22 0.09 0.055 0.10)
+      (part-ellipsoid 0.215 1.338 0.040 0.015 0.015 0.015 6 3)
+      (metal 0.18 0.18 0.20)                   ; the shoulder-strap clasps
+      (part-limb -0.02 1.55 -0.085 0.13 1.20 -0.075 0.022)
+      (part-limb -0.02 1.55 0.085 0.13 1.20 0.075 0.022)
+      ;; shoulder mantles, arms and gloved fists
+      (metal 0.10 0.10 0.12)
+      (part-rbox 0.0 1.545 -0.215 0.105 0.055 0.115 0.05)
+      (part-rbox 0.0 1.545 0.215 0.105 0.055 0.115 0.05)
       (col 0.07 0.07 0.08)
-      (part-cyl 0.0 1.30 -0.26 0.065 0.22)
-      (part-cyl 0.14 1.28 0.26 0.065 0.20)
+      (taper 0.062)
+      (part-limb 0.0 1.50 -0.235 0.05 1.24 -0.255 0.078)
+      (part-joint 0.05 1.24 -0.255 0.064)
+      (taper 0.055)
+      (part-limb 0.05 1.24 -0.255 0.02 1.03 -0.262 0.064)
       (col 0.03 0.03 0.04)
-      (part-ellipsoid 0.0 1.05 -0.26 0.06 0.06 0.06)
-      ;; neck
+      (part-ellipsoid 0.02 1.005 -0.262 0.058 0.062 0.058 7 4)
+      ;; neck, and the standing collar behind it -- the cape hangs off this,
+      ;; and its two raked panels are as much of the silhouette as the helmet
       (col 0.06 0.06 0.07)
-      (part-cyl 0.0 1.62 0.0 0.075 0.06)
-      ;; the helmet: a rounded dome, flared sides (angled plates, kept boxy),
-      ;; angled face mask, mouth grille
-      (metal 0.06 0.06 0.07)
-      (part-ellipsoid -0.01 1.78 0.0 0.125 0.135 0.135)
-      (col 0.06 0.06 0.07)
-      (part 0.0 1.66 -0.14 0.075 0.10 0.055)
-      (part 0.0 1.66 0.14 0.075 0.10 0.055)
-      (metal 0.09 0.09 0.10)
-      (part 0.08 1.74 0.0 0.075 0.115 0.115)
-      (col 0.03 0.03 0.04)                     ; the eye lenses
-      (part 0.135 1.78 -0.05 0.02 0.028 0.03)
-      (part 0.135 1.78 0.05 0.02 0.028 0.03)
-      (col 0.12 0.12 0.13)                     ; the mouth grille
-      (part 0.14 1.66 0.0 0.025 0.045 0.05)
+      (part-cyl 0.0 1.655 0.0 0.078 0.055)
+      (col 0.05 0.05 0.06)
+      (part-rbox -0.115 1.660 -0.105 0.055 0.115 0.075 0.028)
+      (part-rbox -0.115 1.660 0.105 0.055 0.115 0.075 0.028)
+      (part-rbox -0.145 1.630 0.0 0.045 0.090 0.115 0.030)
+      ;; the helmet: the dome, the flared skirt that drops over the neck (a
+      ;; cone widening downward -- that flare IS the silhouette), the raked
+      ;; face mask, the eye lenses, the mouth grille and its ribs
+      ;; a shade lighter than the cloth around it, and fully polished: black
+      ;; armour against a black cape is legible only by its highlight
+      (metal 0.11 0.11 0.13)
+      (part-ellipsoid -0.012 1.815 0.0 0.122 0.128 0.126 10 6)
+      (taper 0.152)
+      (part-limb -0.012 1.815 0.0 -0.012 1.640 0.0 0.118)
+      (metal 0.14 0.14 0.16)                   ; the raked face plate
+      (part-rbox 0.088 1.800 0.0 0.062 0.105 0.100 0.030)
+      (part-rbox 0.070 1.690 0.0 0.070 0.055 0.078 0.026)
+      (col 0.02 0.02 0.03)                     ; the eye lenses
+      (part-rbox 0.140 1.828 -0.050 0.022 0.030 0.034 0.010)
+      (part-rbox 0.140 1.828 0.050 0.022 0.030 0.034 0.010)
+      (col 0.05 0.05 0.06)                     ; the brow ridge between them
+      (part-rbox 0.142 1.872 0.0 0.020 0.020 0.088 0.008)
+      (col 0.13 0.13 0.14)                     ; the mouth grille
+      (part-rbox 0.140 1.712 0.0 0.028 0.042 0.052 0.014)
+      (metal 0.24 0.24 0.26)
+      (part-limb 0.166 1.752 -0.030 0.166 1.674 -0.030 0.008)
+      (part-limb 0.166 1.752 0.0 0.166 1.674 0.0 0.008)
+      (part-limb 0.166 1.752 0.030 0.166 1.674 0.030 0.008)
+      ;; the cape last, so it is drawn over the shoulders it hangs from
+      (col 0.045 0.045 0.055)
+      (emit-cape (* tm 1.4))
       ;; the red blade -- swept horizontally during a melee strike, like yours
       (let* ((theta (- 0.0 *vyaw*))
              (fwx (cos theta)) (fwz (sin theta))
