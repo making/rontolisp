@@ -103,6 +103,7 @@ page.
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- the digit weight in the given radix (default 10), or nil |
 | `digit-char` | `(digit-char 11 16)` | `#\B` -- the character for a weight in the radix (default 10), or nil |
 | `eval` | `(eval '(+ 1 2))` | Evaluate an expression (all three backends). Returns the result |
+| `compile` | `(compile nil '(lambda (x) (* x x)))` | Coerce a lambda expression to a function (null lexical environment). In compiled programs, only the definition-time method-construction idiom is supported |
 | `load` | `(load "bar.lisp")` | Read and evaluate every top-level form in a file in the global environment (all three backends). Returns `t` |
 | `require` | `(require :util)`, `(require :util "lib/util.lisp")` | Load a module's file (`<name>.lisp` next to the requiring file, or the explicit path) unless already `provide`d. Returns the module name. On the compile path it must be a literal, top-level form |
 | `provide` | `(provide :util)` | Mark a module as loaded so a later `require` of it is a no-op. Returns the module name. On the compile path it must be a literal, top-level form |

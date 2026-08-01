@@ -23,6 +23,7 @@ import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.macro.FormatRenderer;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.MopEvalCapture;
 import am.ik.rontolisp.macro.MopProtocol;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispFuture;
@@ -352,6 +353,15 @@ public final class LispEvaluator {
 	private final ClosRegistry closRegistry = new ClosRegistry();
 
 	/**
+	 * The {@code compile} built-in's capture target when this evaluator is a compile
+	 * path's MACRO-TIME evaluator: {@code UserMacroExpander} attaches a list here, and an
+	 * intercepted definition-time method construction (see {@link MopEvalCapture}) is
+	 * recorded into it instead of evaluated, to be spliced into the program as top-level
+	 * forms. Null on a live interpreter, which evaluates the capture in place.
+	 */
+	@Nullable private List<LispVal> mopEvalSpliceSink;
+
+	/**
 	 * The program's output stream, wrapped so expansion-time output can be silenced; see
 	 * {@link MutablePrintStream}.
 	 */
@@ -440,6 +450,23 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Attaches the {@code compile} built-in's capture target -- see
+	 * {@link #mopEvalSpliceSink}. {@code UserMacroExpander} sets this on the macro-time
+	 * evaluator so a definition-time method construction intercepted during macro-time
+	 * evaluation is recorded for splicing instead of evaluated here.
+	 * @param sink the list intercepted top-level forms are appended to
+	 */
+	public void setMopEvalSpliceSink(List<LispVal> sink) {
+		this.mopEvalSpliceSink = sink;
+	}
+
+	/** The package-stripped member of a possibly qualified name. */
+	private static String memberName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	/**
 	 * Sets the extra directories searched for {@code NAME.asd} files by
 	 * {@code asdf:load-system}, after the directory of the loading file. The CLI threads
 	 * the {@code --system-path} option and the {@code RONTOLISP_SOURCE_REGISTRY}
@@ -518,6 +545,51 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.EVAL + " expects 1 argument, got " + args.size());
 			}
 			return eval(args.get(0));
+		}));
+		// compile: coerce a literal (lambda ...) definition to a function in the null
+		// lexical environment. A no-argument definition that DEFINES METHODS over class
+		// metaobjects -- postmodern's build-dao-methods (funcall (compile nil `(lambda ()
+		// ,code))) idiom -- is intercepted instead: the metaobject literals fold to
+		// static references (MopEvalCapture) and the body is either evaluated in place
+		// (live interpreter) or recorded through the splice sink UserMacroExpander
+		// attaches so it joins the compiled program as top-level forms.
+		this.globalEnv.defineFunction(LispNames.COMPILE, new LispFunction(LispNames.COMPILE, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(
+						LispNames.COMPILE + " expects (compile name definition), got " + args.size() + " argument(s)");
+			}
+			LispVal definition = MopEvalCapture.foldClassMetaobjects(args.get(1), this.closRegistry);
+			if (!(definition instanceof LispCons defCons) || !(defCons.car() instanceof LispSymbol head)
+					|| !LispNames.LAMBDA.equals(memberName(head.name())) || !defCons.isProperList()) {
+				throw new LispEvalException(
+						LispNames.COMPILE + " expects a (lambda ...) definition, got " + args.get(1).print());
+			}
+			List<LispVal> defParts = defCons.toList();
+			if (defParts.size() >= 2 && defParts.get(1) instanceof LispNil && MopEvalCapture.definesMethods(defCons)) {
+				// Definition-time method construction ("expand and splice"): the folded
+				// body forms are the definition's whole effect, so they run (or splice)
+				// as top-level forms and the returned function is a no-op.
+				List<LispVal> body = List.copyOf(defParts.subList(2, defParts.size()));
+				if (this.mopEvalSpliceSink != null) {
+					this.mopEvalSpliceSink.addAll(body);
+					return new LispFunction("compiled-definition", callArgs -> LispNil.INSTANCE);
+				}
+				return new LispFunction("compiled-definition", callArgs -> {
+					LispVal result = LispNil.INSTANCE;
+					for (LispVal bodyForm : body) {
+						result = eval(bodyForm);
+					}
+					return result;
+				});
+			}
+			LispVal fn = eval(defCons);
+			if (args.get(0) instanceof LispSymbol name && !name.isKeyword()) {
+				// (compile 'name def) also installs the function under the name and
+				// returns the name, per CL.
+				this.globalEnv.defineFunction(name.name(), fn);
+				return name;
+			}
+			return fn;
 		}));
 		// macroexpand-1/macroexpand live on the evaluator (not Environment) because they
 		// need the user macro table. On the compile path, calls with a literal quoted

@@ -5003,10 +5003,10 @@ class LispEvaluatorTest {
 					"%string-compare", "%run-handlers")
 			.contains("MAKE-PATHNAME", "MERGE-PATHNAMES", "TRUENAME", "PROBE-FILE", "DIRECTORY", "PATHNAME-DIRECTORY")
 			.doesNotContain("%list-directory", "%wild-match", "%dir-namestring", "%pathname-typed-p")
-			.contains("CLASS-OF", "CLASS-NAME", "FIND-CLASS", "TYPE-OF")
+			.contains("CLASS-OF", "CLASS-NAME", "FIND-CLASS", "TYPE-OF", "COMPILE")
 			.doesNotContain("%class-designator", "%find-class")
 			.isSorted()
-			.hasSize(349);
+			.hasSize(350);
 	}
 
 	@Test
@@ -8789,6 +8789,57 @@ class LispEvaluatorTest {
 				(defclass mc-plain () ())
 				(defclass mc-bad2 () ((x)) (:metaclass mc-plain))
 				""")).hasMessageContaining(":metaclass must name a class inheriting standard-class");
+	}
+
+	@Test
+	void compileCoercesALambdaExpressionToAFunction() {
+		// (compile nil '(lambda ...)) answers the function (null lexical environment);
+		// (compile 'name '(lambda ...)) also installs it and answers the name, per CL.
+		assertThat(evalMulti("""
+				(list (funcall (compile nil '(lambda (x) (* x x))) 7)
+				      (compile 'cmp-inc '(lambda (x) (+ x 1)))
+				      (cmp-inc 41))
+				""").print()).isEqualTo("(49 CMP-INC 42)");
+	}
+
+	@Test
+	void compileInterceptsDefinitionTimeMethodConstruction() {
+		// The build-dao-methods idiom (postmodern table.lisp): a finalize-inheritance
+		// :after hook funcalls (compile nil `(lambda () ,code)) where code defines
+		// methods whose specializers are the class METAOBJECT spliced as a literal --
+		// plus an (eql (class-name ,class)) form -- and whose bodies close over let*
+		// bindings and labels functions computed from the metaobject. The interception
+		// folds the metaobject literals (specializers to names, expressions to
+		// (find-class 'name), the eql form to the literal name) and evaluates the body
+		// in place; the driver registers the metaobject BEFORE finalization, so the
+		// find-class lookups inside answer the metaclass instance.
+		assertThat(evalMulti("""
+				(defclass ce-tbl-class (standard-class)
+				  ((table-name :initform nil)))
+				(defmethod shared-initialize :before ((class ce-tbl-class) slot-names
+				                                      &key table-name &allow-other-keys)
+				  (if table-name (setf (slot-value class 'table-name) (car table-name)) nil))
+				(defgeneric ce-row-tag (obj))
+				(defgeneric ce-fetch-row (type key))
+				(defun ce-eval (code)
+				  (funcall (compile nil (list 'lambda nil code))))
+				(defun ce-build-methods (class)
+				  (ce-eval
+				   `(let* ((tname (slot-value ,class 'table-name)))
+				      (labels ((prefix (s) (concatenate 'string tname ":" s)))
+				        (defmethod ce-row-tag ((object ,class))
+				          (prefix "row"))
+				        (defmethod ce-fetch-row ((type (eql (class-name ,class))) key)
+				          (prefix key))))))
+				(defmethod closer-mop:finalize-inheritance :after ((class ce-tbl-class))
+				  (ce-build-methods class))
+				(defclass ce-user ()
+				  ((id :initarg :id))
+				  (:metaclass ce-tbl-class)
+				  (:table-name "users"))
+				(list (ce-row-tag (make-instance 'ce-user :id 1))
+				      (ce-fetch-row 'ce-user "k7"))
+				""").print()).isEqualTo("(\"users:row\" \"users:k7\")");
 	}
 
 	@Test

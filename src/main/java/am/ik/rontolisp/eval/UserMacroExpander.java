@@ -55,10 +55,19 @@ public final class UserMacroExpander {
 				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)
 				&& program.stream().noneMatch(UserMacroExpander::usesReadEvalMarker)
-				&& program.stream().noneMatch(UserMacroExpander::isParameterizedDeftype)) {
+				&& program.stream().noneMatch(UserMacroExpander::isParameterizedDeftype)
+				&& program.stream().noneMatch(UserMacroExpander::isMetaclassDefclass)) {
 			return program;
 		}
 		LispEvaluator macroEval = new LispEvaluator(new PrintStream(OutputStream.nullOutputStream()));
+		// A :metaclass defclass evaluated below runs the class-definition protocol in the
+		// macro-time evaluator; a build-dao-methods-style (compile nil `(lambda ()
+		// ,code))
+		// inside a finalize-inheritance hook is intercepted there and its folded method
+		// definitions land here (see MopEvalCapture), to be spliced after the defclass as
+		// top-level forms the compilers expand statically.
+		List<LispVal> mopSplice = new ArrayList<>();
+		macroEval.setMopEvalSpliceSink(mopSplice);
 		List<LispVal> result = new ArrayList<>();
 		for (LispVal rawForm : program) {
 			// Resolve #. markers first (before package resolution, like the interpreter
@@ -160,6 +169,19 @@ public final class UserMacroExpander {
 			// to cl:defconstant under a package shadowing defconstant).
 			result
 				.add(expanded.print().equals(resolved.print()) ? form : requalifyShadowedClNames(expanded, macroEval));
+			// Drain the definition-time method constructions the form's macro-time
+			// evaluation captured (a :metaclass defclass whose finalize-inheritance hook
+			// ran a build-dao-methods-style compile): the folded forms join the program
+			// right after the defclass, so at run time the driver call has completed --
+			// and registered the metaobject -- before they evaluate. Their macro-time
+			// evaluation was skipped (the sink swallows it), so they walk through
+			// expandAll like any generated expansion.
+			if (!mopSplice.isEmpty()) {
+				for (LispVal spliced : new ArrayList<>(mopSplice)) {
+					result.add(requalifyShadowedClNames(expandAll(spliced, macroEval), macroEval));
+				}
+				mopSplice.clear();
+			}
 		}
 		return result;
 	}
@@ -271,6 +293,18 @@ public final class UserMacroExpander {
 		return isOperator(form, LispNames.DEFUN) || isOperator(form, LispNames.DEFCLASS)
 				|| isOperator(form, LispNames.DEFGENERIC) || isOperator(form, LispNames.DEFMETHOD)
 				|| isOperator(form, LispNames.DEFINE_CONDITION) || isOperator(form, LispNames.DEFSTRUCT);
+	}
+
+	/**
+	 * Whether the top-level form is a {@code defclass} carrying {@code (:metaclass M)} --
+	 * which activates the pass even without a defmacro: the class-definition protocol
+	 * must run in the macro-time evaluator so a {@code build-dao-methods}-style
+	 * {@code compile} inside a {@code finalize-inheritance} hook is intercepted and its
+	 * method definitions spliced (see {@code MopEvalCapture}).
+	 */
+	private static boolean isMetaclassDefclass(LispVal form) {
+		return isOperator(form, LispNames.DEFCLASS) && form instanceof LispCons cons && cons.isProperList()
+				&& LispMacroExpander.defclassUsesMetaclass(cons);
 	}
 
 	/** Whether the form contains a {@code %read-eval} marker symbol anywhere. */

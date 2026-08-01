@@ -297,26 +297,46 @@ Landed (all four backends agree, byte-identical output; mechanics in
   find-class" clause. `CLOSER_MOP_EXTERNALS` grew the 5 protocol names + the
   2 slot-definition class names (closer-common-lisp re-exports them).
 
-### Phase C -- build-dao-methods: %eval interception ("expand and splice")
+### Phase C -- build-dao-methods: %eval interception ("expand and splice") -- DONE 2026-08-01
 
-- Add `compile`: `(compile nil form)` = function from the lambda form,
-  evaluated in the evaluator at hand (interpreter + macro-time evaluator).
-- The `%eval`'d form is captured as AST (backquote has already run, so the
-  class-object literal sits in the tree). Transform at capture time:
-  class-object specializer -> the class name; `(eql (class-name ,class))` ->
-  the folded name symbol; each `defmethod` -> STATIC method registration in
-  `ClosRegistry` whose body funcalls a generated global, plus a `setq` of
-  that global to `(lambda (params) body)` IN PLACE inside the let*/labels
-  form -- so the lexical closure capture (sql templates) rides the existing
-  first-class lambda machinery that works on all backends.
-- The transformed let*/labels form is then: evaluated immediately on the
-  interpreter; spliced as a top-level runtime form on the compile paths
-  (macro expansion of `sql-template` etc. happens there like any user macro).
-  Dispatchers regenerate/emit through the existing defmethod plumbing.
-- Open sub-decision (validate while implementing): intercept specifically at
-  `%eval`/`compile` (pattern-targeted), or make "defmethod inside evaluated
-  code at definition time" general. Start pattern-targeted; the general form
-  has no second consumer today.
+Landed (all four backends; full mechanics in `.kb/clos.md`, user surface on the
+new compile doc page):
+
+- `compile` built-in in `LispEvaluator` (CL semantics: literal lambda ->
+  function, null lexical env; non-nil name installs + returns the name);
+  `COMPILE` joined `CL_FUNCTIONS` (list-functions 349 -> 350, five pins
+  bumped incl. ci-spec).
+- Interception is pattern-targeted at `compile` (the open sub-decision):
+  a NO-ARGUMENT definition containing a defmethod. `macro/MopEvalCapture`
+  folds the metaobject literals (specializer -> class name,
+  `(eql (class-name ,class))` -> `(eql 'name)`, expression -> `(find-class
+  'name)`); NO trampoline layer was needed -- the existing let-nested
+  defmethod machinery (cl-ppcre idiom) carries the closures, widened to
+  defmethods at ANY depth (`expandLetNestedDefmethods` +
+  `rewriteNestedDefmethods`, byte-identical for the shallow case).
+- The driver in mop-protocol.lisp now registers the metaobject BEFORE
+  finalize-inheritance (CL's ensure-class order) -- load-bearing: it makes
+  the folded `(find-class 'name)` valid inside the :after hook on the
+  interpreter.
+- Interpreter: the returned function evaluates the folded body in place.
+  Compile paths: `UserMacroExpander` (now ALSO activated by a :metaclass
+  defclass, no defmacro needed) attaches a splice sink to the macro-time
+  evaluator (`setMopEvalSpliceSink`) and appends the folded forms right
+  after the triggering defclass, through expandAll + requalify.
+- Runtime re-execution on compiled programs: generated `compile` runtime
+  (`macro/CompileRuntime` + `compile-runtime.lisp`, gated on a compile
+  reference without a user defun; native-image resource-config entry) --
+  defmethod-containing definition = no-op function, else signals.
+- Tests: `compileCoercesALambdaExpressionToAFunction` +
+  `compileInterceptsDefinitionTimeMethodConstruction` on
+  LispEvaluatorTest/JvmLispCompilerTest/WasmLispCompilerIntegrationTest;
+  ci-spec `compile-definition-time-method-construction`. Docs: compile page
+  (en+ja) + catalog + curated row.
+- Known soft edge (documented in `.kb/clos.md`): a method-defining compile
+  from RUNTIME data in a compiled program is silently absorbed (no-op), not
+  signalled; a definition-time-guarded method (upstream's `when key-fields`)
+  registers in the dispatcher unconditionally and fails on the unassigned
+  body global if called.
 
 ### Phase D -- feature flip + integration
 

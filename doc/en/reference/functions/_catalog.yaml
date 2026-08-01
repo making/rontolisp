@@ -298,6 +298,7 @@ categories:
       - { slug: set-dispatch-macro-character, name: "set-dispatch-macro-character" }
       - { slug: readtable-case, name: "readtable-case" }
       - { slug: eval, name: "eval" }
+      - { slug: compile, name: "compile" }
       - { slug: load, name: "load" }
       - { slug: require, name: "require" }
       - { slug: provide, name: "provide" }

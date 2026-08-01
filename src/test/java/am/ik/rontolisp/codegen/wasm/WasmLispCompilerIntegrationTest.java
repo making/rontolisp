@@ -5866,6 +5866,49 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileInterceptsDefinitionTimeMethodConstruction() throws Exception {
+		// The build-dao-methods idiom on the WASM path, mirroring
+		// JvmLispCompilerTest#compileInterceptsDefinitionTimeMethodConstruction: the
+		// UserMacroExpander pass intercepts the (compile nil `(lambda () ,code)) inside
+		// the finalize-inheritance :after hook and splices the folded method
+		// definitions; the generated compile runtime answers the run-time re-execution
+		// with a no-op.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+					(defclass ce-tbl-class (standard-class)
+					  ((table-name :initform nil)))
+					(defmethod shared-initialize :before ((class ce-tbl-class) slot-names
+					                                      &key table-name &allow-other-keys)
+					  (if table-name (setf (slot-value class 'table-name) (car table-name)) nil))
+					(defgeneric ce-row-tag (obj))
+					(defgeneric ce-fetch-row (type key))
+					(defun ce-eval (code)
+					  (funcall (compile nil (list 'lambda nil code))))
+					(defun ce-build-methods (class)
+					  (ce-eval
+					   `(let* ((tname (slot-value ,class 'table-name)))
+					      (labels ((prefix (s) (concatenate 'string tname ":" s)))
+					        (defmethod ce-row-tag ((object ,class))
+					          (prefix "row"))
+					        (defmethod ce-fetch-row ((type (eql (class-name ,class))) key)
+					          (prefix key))))))
+					(defmethod closer-mop:finalize-inheritance :after ((class ce-tbl-class))
+					  (ce-build-methods class))
+					(defclass ce-user ()
+					  ((id :initarg :id))
+					  (:metaclass ce-tbl-class)
+					  (:table-name "users"))
+					(print (list (ce-row-tag (make-instance 'ce-user :id 1))
+					             (ce-fetch-row 'ce-user "k7")))
+					""")));
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", path("test.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("(\"users:row\" \"users:k7\")");
+	}
+
+	@Test
 	void simpleConditionFormatAccessors() throws Exception {
 		assertThat(compileAndRun(
 				"(handler-case (error \"boom ~a\" 1)" + " (error (c) (print (simple-condition-format-control c))"
@@ -7677,7 +7720,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("349");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("350");
 	}
 
 	@Test

@@ -511,14 +511,50 @@ before and every existing artifact stays byte-identical.
   superclass metaobject unless shadowed (the direct-definition list handed to
   compute-effective-slot-definition is the shadowing definition alone), and
   validate-superclass's default is permissive.
+  Definition-time method construction (Phase C, 2026-08-01) is IN: the
+  `(funcall (compile nil `(lambda () ,code)))` idiom of postmodern's
+  `build-dao-methods` (`%eval`), where `code` is a `let*`/`labels` form whose
+  nested `defmethod`s carry the class METAOBJECT spliced as a literal
+  specializer (plus `(eql (class-name ,class))`) and whose bodies close over
+  the bindings. The evaluator's `compile` built-in (`LispEvaluator`; CL
+  semantics otherwise: coerce a literal lambda to a function in the null
+  lexical env, a non-nil name installs and returns the name) intercepts a
+  NO-ARGUMENT definition containing a defmethod and folds the metaobject
+  literals first (`macro/MopEvalCapture`): specializer position -> the class
+  name, `(eql (class-name <inst>))` -> `(eql 'name)`, every other occurrence
+  -> `(find-class 'name)` -- valid during finalization because the driver now
+  registers the metaobject BEFORE `finalize-inheritance` (mop-protocol.lisp,
+  like CL's ensure-class; that ordering is LOAD-BEARING for the fold). Then:
+  the live interpreter returns a function evaluating the folded body in place
+  (nested defmethods + closures are native); the compile paths' MACRO-TIME
+  evaluator records the body into the splice sink `UserMacroExpander`
+  attaches (`setMopEvalSpliceSink`), and the pass -- now also activated by a
+  bare `:metaclass` defclass -- splices the folded forms right after the
+  triggering defclass, where `expandLetNestedDefmethods` (widened from
+  cl-ppcre's direct-body idiom to defmethods at ANY depth, quote-skipped,
+  byte-identical for the shallow case) registers them statically and the
+  nested method-body defuns compile to global-closure setqs. The run-time
+  re-execution of the same call in a compiled program goes through the
+  generated `compile` runtime (`macro/CompileRuntime` +
+  `compile-runtime.lisp`, injected gated on a compile reference without a
+  user defun, registered in the native-image resource-config): a
+  defmethod-containing definition answers a do-nothing function (the splice
+  already did the work), anything else signals -- so a method-defining form
+  built from RUNTIME data is silently absorbed rather than signalled, the one
+  soft edge of the divergence. A method under a false definition-time guard
+  (`when key-fields`) still registers in the dispatcher; calling it fails on
+  the unassigned body global instead of no-applicable-method.
   Pinning tests: `LispEvaluatorTest`/`JvmLispCompilerTest`/
   `WasmLispCompilerIntegrationTest` `*FindClass*` + `*CloserMopShim*` +
   `classOf*`/`compileAndRunClassOf`/`classOfAndSlotAccessors` +
   `allocateInstance*`/`compileAllocateInstance*` +
   `defclassMetaclass*`/`compileDefclassMetaclass*`/
-  `defclassMetaclassRunsTheClassDefinitionProtocol` (WASM), ci-spec
-  `find-class-metaobject-substrate` (raw metaobject print shape included) and
-  `defclass-metaclass-protocol` (the dao-class shape end to end). Still
+  `defclassMetaclassRunsTheClassDefinitionProtocol` (WASM),
+  `compileCoercesALambdaExpressionToAFunction` +
+  `compileInterceptsDefinitionTimeMethodConstruction` (all three suites),
+  ci-spec `find-class-metaobject-substrate` (raw metaobject print shape
+  included), `defclass-metaclass-protocol` (the dao-class shape end to end)
+  and `compile-definition-time-method-construction`. Still
   OUT (the divergence's remaining "why": classes are compile-time-static,
   `--optimize` DCE and the dispatch tables depend on it): runtime class
   construction (`ensure-class` from computed data, a non-top-level

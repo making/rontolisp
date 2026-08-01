@@ -83,9 +83,9 @@
   ;; The definition-time driver: instantiate the metaclass (the user's
   ;; shared-initialize hooks run with the canonicalized slot-spec plists as the
   ;; :direct-slots initarg, per AMOP), validate the superclasses, build the
-  ;; direct-slot-definition metaobjects through the protocol, finalize
-  ;; EAGERLY (a documented divergence -- inputs are static, so only the timing
-  ;; of definition errors moves), and prime the find-class/class-of memo.
+  ;; direct-slot-definition metaobjects through the protocol, prime the
+  ;; find-class/class-of memo, and finalize EAGERLY (a documented divergence --
+  ;; inputs are static, so only the timing of definition errors moves).
   (let* ((super-metaobjects (mapcar #'find-class supers))
          (class (apply #'%mop-make-instance metaclass
                        :name name
@@ -105,6 +105,10 @@
                            spec)
                     direct-slots)))
       (%obj-set class 2 (reverse direct-slots)))
-    (closer-mop:finalize-inheritance class)
+    ;; Register BEFORE finalizing, like CL's ensure-class: find-class must
+    ;; answer THIS metaobject inside finalize-inheritance's user :after hooks
+    ;; (the captured build-dao-methods method definitions read the class back
+    ;; through (find-class 'name), see MopEvalCapture).
     (%register-class-metaobject name class)
+    (closer-mop:finalize-inheritance class)
     class))

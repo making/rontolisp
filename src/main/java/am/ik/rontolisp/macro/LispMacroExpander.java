@@ -10674,6 +10674,24 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Whether the program references {@code compile} without defining it -- the gate for
+	 * the generated {@code compile} runtime (see {@code CompileRuntime}). A user (or
+	 * library) {@code defun compile} wins and suppresses the injection.
+	 * @param program the top-level forms
+	 * @return true when the runtime is needed
+	 */
+	private static boolean needsCompileRuntime(List<LispVal> program) {
+		boolean referenced = false;
+		for (LispVal form : program) {
+			if (definesFunction(form, LispNames.COMPILE)) {
+				return false;
+			}
+			referenced = referenced || referencesFunction(form, LispNames.COMPILE);
+		}
+		return referenced;
+	}
+
+	/**
 	 * Whether the program references {@code class-of} -- whose expansion resolves through
 	 * the generated {@code %find-class} -- and so needs the metaobject runtime even when
 	 * {@code find-class} itself is absent (or user-defined). Quoted data is skipped.
@@ -10777,6 +10795,10 @@ public final class LispMacroExpander {
 		// metaobject argument only ever comes from find-class/class-of, whose own
 		// references already seed above.
 		boolean allocateInstanceRuntime = needsAllocateInstanceRuntime(program);
+		// A compile reference compiles to the generated runtime defun injected below
+		// (no-op for the definition-time method construction a splice already carried
+		// out, an error for everything else -- see CompileRuntime).
+		boolean compileRuntime = needsCompileRuntime(program);
 		// A %class-slot-defs call site lowers to the shared runtime defun during the
 		// backend passes; the defun and its table are injected below once the registry
 		// is complete.
@@ -10795,7 +10817,7 @@ public final class LispMacroExpander {
 		// constructor.
 		closRegistry.setRoutesConditionReports(mayCreateConditions(program, closRegistry));
 		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !metaobjectRuntime
-				&& !allocateInstanceRuntime && !classSlotDefsRuntime && !readsSlots(program)
+				&& !allocateInstanceRuntime && !compileRuntime && !classSlotDefsRuntime && !readsSlots(program)
 				&& !closRegistry.routesConditionReports()
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
@@ -10895,6 +10917,12 @@ public final class LispMacroExpander {
 			// Position-independent defuns, appended once the registry is complete so
 			// the per-class construction arms cover every class the program defines.
 			out.addAll(allocateInstanceDefuns(closRegistry));
+		}
+		if (compileRuntime) {
+			// Position-independent defuns, appended: a compiled program's compile is a
+			// no-op for the definition-time method construction already spliced into
+			// the program, and an error for anything else (see CompileRuntime).
+			out.addAll(CompileRuntime.forms());
 		}
 		if (metaclassProtocol) {
 			// The metaclass-protocol runtime: constructors for the three seeded MOP
@@ -11225,7 +11253,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> parts = cons.toList();
 		for (int i = 2; i < parts.size(); i++) {
-			if (isNamedForm(parts.get(i), LispNames.DEFMETHOD)) {
+			if (MopEvalCapture.definesMethods(parts.get(i))) {
 				return true;
 			}
 		}
@@ -11237,7 +11265,15 @@ public final class LispMacroExpander {
 	 * place: each is registered with the registry and replaced by its method-body defun
 	 * (which, being nested, compiles to a global-closure {@code setq}); the rebuilt let
 	 * is added to {@code out} and each generic's dispatcher slot is reserved at top level
-	 * after it.
+	 * after it. A defmethod that is a DIRECT body member has its expansion progn spliced
+	 * into the body (cl-ppcre's closure-over-let idiom, kept byte-identical); one nested
+	 * DEEPER -- under the {@code labels}/{@code when} structure of a captured
+	 * {@code build-dao-methods} splice (see {@link MopEvalCapture}) -- is rewritten in
+	 * place, its expansion progn standing where the defmethod stood. A method under a
+	 * conditional registers unconditionally (dispatch is static); when the guard is false
+	 * at run time its body global is never assigned, so calling it fails on the
+	 * unassigned global rather than as no-applicable-method -- the static subset's
+	 * documented divergence.
 	 */
 	private static void expandLetNestedDefmethods(LispCons letForm, ClosRegistry closRegistry, List<LispVal> out,
 			java.util.Map<Integer, String> dispatcherSlots, java.util.Set<String> placedDispatchers) {
@@ -11246,7 +11282,7 @@ public final class LispMacroExpander {
 		List<String> generics = new java.util.ArrayList<>();
 		for (LispVal bodyForm : parts.subList(2, parts.size())) {
 			if (!isNamedForm(bodyForm, LispNames.DEFMETHOD)) {
-				rebuilt.add(bodyForm);
+				rebuilt.add(rewriteNestedDefmethods(bodyForm, closRegistry, generics));
 				continue;
 			}
 			LispVal expandedMethod = expandDefmethod((LispCons) bodyForm, closRegistry);
@@ -11266,6 +11302,30 @@ public final class LispMacroExpander {
 				out.add(LispNil.INSTANCE);
 			}
 		}
+	}
+
+	// Rewrites every defmethod nested below a top-level let body member in place
+	// (quoted data skipped): registered like a top-level defmethod, replaced by its
+	// expansion progn -- an expression-position form, so no splicing is possible or
+	// needed. The method-body defun inside compiles to a global-closure setq exactly
+	// like the direct-member case.
+	private static LispVal rewriteNestedDefmethods(LispVal form, ClosRegistry closRegistry, List<String> generics) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String member = memberOf(op.name());
+			if (LispNames.QUOTE.equals(member)) {
+				return form;
+			}
+			if (LispNames.DEFMETHOD.equals(member) && cons.isProperList()) {
+				LispVal expandedMethod = expandDefmethod(cons, closRegistry);
+				generics.add(ClosRegistry.normalize(((LispSymbol) cons.toList().get(1)).name()));
+				return expandedMethod;
+			}
+		}
+		return new LispCons(rewriteNestedDefmethods(cons.car(), closRegistry, generics),
+				rewriteNestedDefmethods(cons.cdr(), closRegistry, generics));
 	}
 
 	private static LispVal rewriteSetfFunctionDefun(LispCons cons, java.util.Map<String, Integer> structAccessors) {

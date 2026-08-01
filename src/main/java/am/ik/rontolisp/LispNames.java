@@ -1154,6 +1154,17 @@ public final class LispNames {
 	public static final String ALLOCATE_INSTANCE = "ALLOCATE-INSTANCE";
 
 	/**
+	 * The {@code compile} function. Interpreter (and the compile paths' macro-time
+	 * evaluator): coerces a literal {@code (lambda ...)} definition to a function in the
+	 * null lexical environment; a no-argument definition that DEFINES METHODS over class
+	 * metaobjects (postmodern's {@code build-dao-methods} {@code %eval} idiom) is instead
+	 * captured as top-level forms ("expand and splice", see {@code MopEvalCapture}).
+	 * Compiled programs get a generated runtime defun for the re-execution of the same
+	 * idiom (see {@code CompileRuntime}).
+	 */
+	public static final String COMPILE = "COMPILE";
+
+	/**
 	 * The {@code slot-value} macro (static CLOS subset). Requires a literal quoted slot
 	 * name; expands to the slot's {@code nth} position and is a {@code setf} place.
 	 */
