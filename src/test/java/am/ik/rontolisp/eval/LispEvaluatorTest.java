@@ -5006,7 +5006,7 @@ class LispEvaluatorTest {
 			.contains("CLASS-OF", "CLASS-NAME", "FIND-CLASS", "TYPE-OF")
 			.doesNotContain("%class-designator", "%find-class")
 			.isSorted()
-			.hasSize(348);
+			.hasSize(349);
 	}
 
 	@Test
@@ -8682,6 +8682,57 @@ class LispEvaluatorTest {
 				(handler-case (error 'co-oops :format-control "x")
 				  (error (e) (list (class-name (class-of e)) (type-of e) (type-of 42))))
 				""").print()).isEqualTo("(CO-OOPS CO-OOPS INTEGER)");
+	}
+
+	@Test
+	void allocateInstanceAnswersAnAllSlotsUnboundInstance() {
+		// allocate-instance takes the class metaobject (or its name) and answers an
+		// instance with EVERY slot unbound -- no initforms, no initialize-instance;
+		// the dao-from-fields idiom fills the slots by setf slot-value afterwards.
+		assertThat(evalMulti("""
+				(defclass ai-pt () ((x :initarg :x :initform 7) (y :initarg :y)))
+				(let ((p (allocate-instance (find-class 'ai-pt))))
+				  (list (typep p 'ai-pt)
+				        (eq (class-of p) (find-class 'ai-pt))
+				        (slot-boundp p 'x)
+				        (slot-boundp p 'y)
+				        (progn (setf (slot-value p 'x) 10) (slot-value p 'x))
+				        (let ((q (allocate-instance 'ai-pt))) (slot-boundp q 'x))))
+				""").print()).isEqualTo("(T T NIL NIL 10 NIL)");
+	}
+
+	@Test
+	void allocateInstanceRejectsNonClosClasses() {
+		// Only registered CLOS classes allocate: a built-in class and a struct class
+		// signal, like CL's built-in-class behavior; extra initargs are ignored.
+		assertThat(evalMulti("""
+				(defclass ai-ok () ((v :initarg :v)))
+				(defstruct ai-node value)
+				(list (handler-case (allocate-instance (find-class 'integer)) (error (e) :signaled))
+				      (handler-case (allocate-instance 'ai-node) (error (e) :signaled))
+				      (typep (allocate-instance (find-class 'ai-ok) :v 1 :junk 2) 'ai-ok))
+				""").print()).isEqualTo("(:SIGNALED :SIGNALED T)");
+	}
+
+	@Test
+	void closerCommonLispPackageServesTheDaoPackageShape() {
+		// (:use :closer-common-lisp) -- postmodern's DAO package -- sees cl AND the
+		// closer-mop overlay; the qualified c2cl spellings resolve to the home
+		// packages, so the shim defuns serve them.
+		assertThat(evalMulti("""
+				(asdf:load-system "closer-mop")
+				(defpackage :ccl-probe (:use :closer-common-lisp) (:export :probe))
+				(in-package :ccl-probe)
+				(defclass ccl-pt () ((x :initarg :x) (y :initarg :y)))
+				(defun probe ()
+				  (let ((c (find-class 'ccl-pt)))
+				    (list (classp c)
+				          (mapcar #'slot-definition-name (class-slots c))
+				          (c2cl:class-name c)
+				          (car (c2cl:list 1 2)))))
+				(in-package :cl-user)
+				(ccl-probe:probe)
+				""").print()).isEqualTo("(T (X Y) CCL-PROBE::CCL-PT 1)");
 	}
 
 	@Test

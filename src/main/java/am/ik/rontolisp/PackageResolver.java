@@ -281,12 +281,29 @@ public final class PackageResolver {
 			if (canonical.equals(target)) {
 				throw new LispPackageException("Cannot " + LispNames.USE_PACKAGE + " " + target + " in itself");
 			}
-			if (!useList.contains(canonical)) {
-				useList.add(canonical);
+			for (String use : withImpliedUses(canonical)) {
+				if (!useList.contains(use)) {
+					useList.add(use);
+				}
 			}
 		}
 		this.registry.define(new LispPackage(pkg.name(), List.copyOf(useList), pkg.symbols(), pkg.externals(),
 				pkg.imports(), pkg.shadows()));
+	}
+
+	/**
+	 * The use-list entries a use of the given package implies, the package itself first.
+	 * {@code closer-common-lisp} is a flat re-export of the WHOLE {@code cl} package
+	 * (overlaid with {@code closer-mop}), so using it must make the cl symbols visible
+	 * unqualified exactly as {@code (:use :cl)} would -- and cl visibility is judged by a
+	 * DIRECT use ({@link #currentUsesCl}, {@link #resolveQualified}'s inherited-cl
+	 * branch), so the implication is recorded in the use list itself.
+	 */
+	private static List<String> withImpliedUses(String canonical) {
+		if (LispNames.CLOSER_COMMON_LISP_PKG.equals(canonical)) {
+			return List.of(canonical, LispNames.CL_PKG);
+		}
+		return List.of(canonical);
 	}
 
 	/** A literal package designator: a string, keyword/#: symbol, or quoted symbol. */
@@ -429,8 +446,10 @@ public final class PackageResolver {
 						if (!this.registry.contains(used)) {
 							throw new LispPackageException("No such package: " + used);
 						}
-						if (!useList.contains(used)) {
-							useList.add(used);
+						for (String use : withImpliedUses(used)) {
+							if (!useList.contains(use)) {
+								useList.add(use);
+							}
 						}
 					}
 				}
@@ -999,8 +1018,9 @@ public final class PackageResolver {
 			}
 			// Using a package makes only its external (exported) symbols accessible,
 			// like Common Lisp; internal symbols still require the double colon.
-			if (this.registry.get(used).exports(name)) {
-				return canonical(used, name);
+			LispSymbol viaUsed = usedExport(used, name);
+			if (viaUsed != null) {
+				return viaUsed;
 			}
 		}
 		// The reader upcases user spellings, but a wit-import package's members are
@@ -1013,8 +1033,11 @@ public final class PackageResolver {
 				return canonical(this.currentPackage, lower);
 			}
 			for (String used : current.useList()) {
-				if (!LispNames.CL_PKG.equals(used) && this.registry.get(used).exports(lower)) {
-					return canonical(used, lower);
+				if (!LispNames.CL_PKG.equals(used)) {
+					LispSymbol viaUsed = usedExport(used, lower);
+					if (viaUsed != null) {
+						return viaUsed;
+					}
 				}
 			}
 		}
@@ -1037,13 +1060,39 @@ public final class PackageResolver {
 				return canonical(this.currentPackage, upper);
 			}
 			for (String used : current.useList()) {
-				if (!LispNames.CL_PKG.equals(used) && this.registry.get(used).exports(upper)) {
-					return canonical(used, upper);
+				if (!LispNames.CL_PKG.equals(used)) {
+					LispSymbol viaUsed = usedExport(used, upper);
+					if (viaUsed != null) {
+						return viaUsed;
+					}
 				}
 			}
 		}
 		// Unknown symbol: a user definition or forward reference in the current package.
 		return canonical(this.currentPackage, name);
+	}
+
+	/**
+	 * The canonical spelling of an EXPORTED member of a used package, or null when the
+	 * package does not export it. A re-exported member (recorded in the package's import
+	 * map: a {@code defpackage} {@code :export} of a used package's symbol, or the
+	 * {@code closer-common-lisp} overlay) redirects to its HOME package -- resolution is
+	 * textual, so spelling it under the re-exporting package would name a different
+	 * function.
+	 */
+	private @Nullable LispSymbol usedExport(String used, String name) {
+		LispPackage pkg = this.registry.get(used);
+		if (!pkg.exports(name)) {
+			return null;
+		}
+		String home = pkg.imports().get(name);
+		if (home == null) {
+			return canonical(used, name);
+		}
+		if (LispNames.CL_PKG.equals(home) || LispNames.CL_USER_PKG.equals(home)) {
+			return new LispSymbol(name);
+		}
+		return canonical(home, name);
 	}
 
 	private boolean currentUsesCl() {
@@ -1270,6 +1319,15 @@ public final class PackageResolver {
 		}
 		LispPackage p = this.registry.get(pkg);
 		if (p.owns(member) || p.exports(member) || p.imports().containsKey(member)) {
+			// An imported (re-exported) member lives in its home package; redirect
+			// like resolveQualified so find-symbol answers the same spelling a call
+			// site resolves to (closer-common-lisp:class-slots IS
+			// closer-mop:class-slots).
+			String home = p.imports().get(member);
+			if (home != null) {
+				return LispNames.CL_PKG.equals(home) || LispNames.CL_USER_PKG.equals(home) ? member
+						: canonical(home, member).name();
+			}
 			return canonical(pkg, member).name();
 		}
 		return null;

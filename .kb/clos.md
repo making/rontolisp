@@ -446,9 +446,26 @@ before and every existing artifact stays byte-identical.
   direct-superclasses, direct-slots, effective-slots, finalized-p;
   slot-definitions: name, initargs, initform, type, readers) is a `%obj-ref`
   index contract shared with the closer-mop shim -- append, never reorder.
+  `allocate-instance` (2026-08-01) is IN: an instance of a registered CLOS
+  class (metaobject or name designator) with EVERY slot the unbound marker --
+  no initforms, no `initialize-instance` -- the `dao-from-fields` idiom;
+  initargs accepted and ignored. Interpreter: a registry-backed built-in
+  beside `find-class` (`LispEvaluator`). Compile paths: `%obj-new` needs a
+  LITERAL tag, so `LispMacroExpander.allocateInstanceDefuns` (gated on an
+  `allocate-instance` reference, `needsAllocateInstanceRuntime`; a user defun
+  wins) emits one construction arm per registered class, chunked into
+  `%ALLOC-INST-<n>` helper defuns by cons-node budget so no method grows with
+  the registry (the `%error-runtime` lesson), plus the public
+  `allocate-instance` defun over an `or`-chain. It does NOT seed the MOP
+  classes: a metaobject argument only comes from find-class/class-of, whose
+  own references seed already. Built-in and struct classes signal (a struct's
+  construction contract is its positional constructor). The
+  `closer-common-lisp` package that table.lisp `:use`s is a resolver-level
+  flat re-export -- mechanics in `.kb/packages.md`.
   Pinning tests: `LispEvaluatorTest`/`JvmLispCompilerTest`/
   `WasmLispCompilerIntegrationTest` `*FindClass*` + `*CloserMopShim*` +
-  `classOf*`/`compileAndRunClassOf`/`classOfAndSlotAccessors`, ci-spec
+  `classOf*`/`compileAndRunClassOf`/`classOfAndSlotAccessors` +
+  `allocateInstance*`/`compileAllocateInstance*`, ci-spec
   `find-class-metaobject-substrate` (raw metaobject print shape included). Still
   OUT (the divergence's remaining "why": classes are compile-time-static,
   `--optimize` DCE and the dispatch tables depend on it): runtime class

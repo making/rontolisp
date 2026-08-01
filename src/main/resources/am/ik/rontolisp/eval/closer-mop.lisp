@@ -9,7 +9,8 @@
 ;; ClosRegistry.ensureMopClassesSeeded; the %obj-ref indexes below are that
 ;; seeding's documented order contract).
 ;; Written in canonical (pre-resolved) shape like usocket.lisp; the package and
-;; its nicknames (c2mop, c2cl) are seeded in PackageRegistry.
+;; its nickname (c2mop) are seeded in PackageRegistry, as is the flat
+;; closer-common-lisp (nickname c2cl) re-export package over cl + this one.
 
 (defun closer-mop:classp (class)
   (typep class 'standard-class))

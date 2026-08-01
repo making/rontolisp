@@ -135,7 +135,7 @@ public final class PackageRegistry {
 			LispNames.SCALE_FLOAT, LispNames.DECODE_FLOAT, LispNames.SUBTYPEP, LispNames.CHAR_NAME,
 			LispNames.FDEFINITION, LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.MAKE_BROADCAST_STREAM,
 			LispNames.PATHNAMEP, LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P, LispNames.OPEN_STREAM_P,
-			LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF, LispNames.CLASS_NAME,
+			LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF, LispNames.CLASS_NAME, LispNames.ALLOCATE_INSTANCE,
 			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
 			LispNames.TYPE_ERROR_DATUM, LispNames.TYPE_ERROR_EXPECTED_TYPE, LispNames.CELL_ERROR_NAME,
 			LispNames.UNBOUND_SLOT_INSTANCE, LispNames.MAKE_PATHNAME, LispNames.MERGE_PATHNAMES, LispNames.TRUENAME,
@@ -275,6 +275,15 @@ public final class PackageRegistry {
 
 	private static final Set<String> USOCKET_EXTERNALS = union(USOCKET_FUNCTIONS, USOCKET_MACROS, USOCKET_VARIABLES);
 
+	/**
+	 * The symbols exported by the {@code closer-mop} shim package
+	 * ({@code closer-mop.lisp}, see {@code eval.ShimLibraries}) -- also the overlay half
+	 * of the {@code closer-common-lisp} re-export package.
+	 */
+	private static final Set<String> CLOSER_MOP_EXTERNALS = Set.of(LispNames.CLASS_SLOTS, LispNames.ENSURE_FINALIZED,
+			LispNames.CLASSP, LispNames.CLASS_NAME, LispNames.CLASS_DIRECT_SUPERCLASSES, LispNames.CLASS_FINALIZED_P,
+			LispNames.SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_INITARGS, LispNames.SLOT_DEFINITION_TYPE);
+
 	private static final List<String> USOCKET_FUNCTION_NAMES = sorted(USOCKET_FUNCTIONS);
 
 	private static final List<String> CL_FUNCTION_NAMES = sorted(CL_FUNCTIONS);
@@ -299,7 +308,7 @@ public final class PackageRegistry {
 	 */
 	private static final Map<String, String> BUILTIN_NICKNAMES = Map.of("COMMON-LISP", LispNames.CL_PKG,
 			"COMMON-LISP-USER", LispNames.CL_USER_PKG, "RL", LispNames.RONTOLISP_PKG, "LA", LispNames.LINALG_PKG,
-			"QUICKLISP", LispNames.QL_PKG, "C2MOP", LispNames.CLOSER_MOP_PKG, "C2CL", LispNames.CLOSER_MOP_PKG,
+			"QUICKLISP", LispNames.QL_PKG, "C2MOP", LispNames.CLOSER_MOP_PKG, "C2CL", LispNames.CLOSER_COMMON_LISP_PKG,
 			"FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG, "BT", LispNames.BORDEAUX_THREADS_PKG);
 
 	/**
@@ -317,8 +326,9 @@ public final class PackageRegistry {
 	private static final Set<String> BUILTIN_PACKAGE_NAMES = Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
 			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
 			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
-			LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
-			LispNames.BORDEAUX_THREADS_PKG, LispNames.BABEL_PKG, LispNames.BABEL_ENCODINGS_PKG, "KEYWORD");
+			LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG,
+			LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG, LispNames.BABEL_PKG,
+			LispNames.BABEL_ENCODINGS_PKG, "KEYWORD");
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -404,14 +414,26 @@ public final class PackageRegistry {
 		uiopSymbols.add(LispNames.GET_PATHNAME_DEFAULTS);
 		define(new LispPackage(LispNames.UIOP_PKG, List.of(), uiopSymbols, uiopExternals));
 		// The dependency-shim packages behind the built-in ASDF systems of the same
-		// names (see eval.ShimLibraries): closer-mop (nicknames c2mop/c2cl),
+		// names (see eval.ShimLibraries): closer-mop (nickname c2mop),
 		// flexi-streams, org.shirakumo.float-features (nickname float-features) and
 		// trivial-gray-streams.
-		define(new LispPackage(LispNames.CLOSER_MOP_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.CLASS_SLOTS, LispNames.ENSURE_FINALIZED, LispNames.CLASSP,
-						LispNames.CLASS_NAME, LispNames.CLASS_DIRECT_SUPERCLASSES, LispNames.CLASS_FINALIZED_P,
-						LispNames.SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_INITARGS,
-						LispNames.SLOT_DEFINITION_TYPE))));
+		define(new LispPackage(LispNames.CLOSER_MOP_PKG, List.of(), new HashSet<>(CLOSER_MOP_EXTERNALS)));
+		// closer-common-lisp (nickname c2cl): the flat re-export of the cl externals
+		// overlaid with the closer-mop externals (closer-mop wins collisions, per the
+		// upstream package of the same name). Resolution is textual, so every member is
+		// recorded as an IMPORT redirecting to its home package -- a qualified
+		// closer-common-lisp:class-slots resolves to closer-mop:class-slots and
+		// closer-common-lisp:mapcar to the bare cl name -- and using this package
+		// implies using cl (see PackageResolver.impliedUses).
+		Map<String, String> c2clImports = new HashMap<>();
+		for (String name : CL_EXTERNALS) {
+			c2clImports.put(name, LispNames.CL_PKG);
+		}
+		for (String name : CLOSER_MOP_EXTERNALS) {
+			c2clImports.put(name, LispNames.CLOSER_MOP_PKG);
+		}
+		define(new LispPackage(LispNames.CLOSER_COMMON_LISP_PKG, List.of(LispNames.CL_PKG),
+				Set.copyOf(c2clImports.keySet()), Set.copyOf(c2clImports.keySet()), Map.copyOf(c2clImports)));
 		define(new LispPackage(LispNames.FLEXI_STREAMS_PKG, List.of(), new HashSet<>(
 				Set.of(LispNames.MAKE_FLEXI_STREAM, LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING))));
 		define(new LispPackage(LispNames.FLOAT_FEATURES_PKG, List.of(),

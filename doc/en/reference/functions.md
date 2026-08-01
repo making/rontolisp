@@ -96,6 +96,7 @@ page.
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | Lite stub: `(values nil t nil)` (no source recorded) |
 | `list-all-packages` | `(list-all-packages)` | Lite stub: always `nil` (no enumerable package tables) |
 | `find-class` | `(find-class 'c)` | The memoized (`eq`-stable) class metaobject; signals unless `errorp` is `nil` |
+| `allocate-instance` | `(allocate-instance (find-class 'c))` | A fresh instance with every slot unbound; no initforms, no `initialize-instance` |
 | `class-name` | `(class-name (class-of 42))` | The name symbol of a class metaobject |
 | `get` | `(get 'sym 'prop)`, `(setf (get 'sym 'prop) v)` | Symbol property lists over one program-global name-keyed store |
 | `lower-case-p` `upper-case-p` | `(lower-case-p #\a)`, `(upper-case-p #\A)` | `t`, `t` -- true when up/down-casing changes the character (follows the Unicode case tables) |

@@ -1142,6 +1142,18 @@ public final class LispNames {
 	public static final String MAKE_INSTANCE = "MAKE-INSTANCE";
 
 	/**
+	 * The {@code allocate-instance} function: an instance of the given class metaobject
+	 * (or class name) with EVERY slot unbound -- no initforms, no
+	 * {@code initialize-instance} -- the {@code dao-from-fields} idiom of filling slots
+	 * by {@code setf slot-value} afterwards. Extra initargs are accepted and ignored, per
+	 * CL (they are for methods on it, which the static subset has none of). Interpreter:
+	 * a registry-backed built-in beside {@code find-class}; compile paths: a generated
+	 * defun injected when referenced (see
+	 * {@code LispMacroExpander.allocateInstanceDefuns}).
+	 */
+	public static final String ALLOCATE_INSTANCE = "ALLOCATE-INSTANCE";
+
+	/**
 	 * The {@code slot-value} macro (static CLOS subset). Requires a literal quoted slot
 	 * name; expands to the slot's {@code nth} position and is a {@code setf} place.
 	 */
@@ -4770,6 +4782,14 @@ public final class LispNames {
 
 	/** The {@code closer-mop} shim package (and built-in ASDF system) name. */
 	public static final String CLOSER_MOP_PKG = "CLOSER-MOP";
+
+	/**
+	 * The {@code closer-common-lisp} package (nickname {@code c2cl}): a flat re-export of
+	 * the {@code cl} externals overlaid with the {@code closer-mop} externals (closer-mop
+	 * wins name collisions), like the upstream closer-mop library's package of the same
+	 * name -- what postmodern's DAO layer {@code :use}s.
+	 */
+	public static final String CLOSER_COMMON_LISP_PKG = "CLOSER-COMMON-LISP";
 
 	/**
 	 * {@code closer-mop:class-slots} -- the effective-slot-definition metaobjects of a

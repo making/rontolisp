@@ -10596,6 +10596,11 @@ public final class LispMacroExpander {
 		if (metaobjectRuntime) {
 			closRegistry.ensureMopClassesSeeded();
 		}
+		// An allocate-instance reference compiles to the generated per-class
+		// construction runtime injected below. It needs no MOP seeding of its own: a
+		// metaobject argument only ever comes from find-class/class-of, whose own
+		// references already seed above.
+		boolean allocateInstanceRuntime = needsAllocateInstanceRuntime(program);
 		// A %class-slot-defs call site lowers to the shared runtime defun during the
 		// backend passes; the defun and its table are injected below once the registry
 		// is complete.
@@ -10614,7 +10619,8 @@ public final class LispMacroExpander {
 		// constructor.
 		closRegistry.setRoutesConditionReports(mayCreateConditions(program, closRegistry));
 		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !metaobjectRuntime
-				&& !classSlotDefsRuntime && !readsSlots(program) && !closRegistry.routesConditionReports()
+				&& !allocateInstanceRuntime && !classSlotDefsRuntime && !readsSlots(program)
+				&& !closRegistry.routesConditionReports()
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
 							|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
@@ -10708,6 +10714,11 @@ public final class LispMacroExpander {
 			// materializer is in their view.
 			out.addAll(findClassRuntimeDefuns(findClassDefun));
 			out.addAll(0, classMetaTableForms(closRegistry));
+		}
+		if (allocateInstanceRuntime) {
+			// Position-independent defuns, appended once the registry is complete so
+			// the per-class construction arms cover every class the program defines.
+			out.addAll(allocateInstanceDefuns(closRegistry));
 		}
 		if (classSlotDefsRuntime) {
 			// Same shape as the typep runtime: the defun is position-independent and
@@ -20020,6 +20031,110 @@ public final class LispMacroExpander {
 						makeIf(hit, mvCall(LispNames.CDR, hit), construct)))));
 		return publicFindClass ? List.of(findClassInternal, findClass, materialize)
 				: List.of(findClassInternal, materialize);
+	}
+
+	/**
+	 * Whether the program references {@code allocate-instance} -- a call, or
+	 * {@code #'allocate-instance} taken as a value -- without bringing its own
+	 * definition, which is the condition under which {@link #expandTopLevelDefinitions}
+	 * injects the generated {@code allocate-instance} defun and its per-class
+	 * construction helpers. Quoted data is skipped.
+	 * @param program the top-level forms
+	 * @return true when the generated allocate-instance runtime is needed
+	 */
+	private static boolean needsAllocateInstanceRuntime(List<LispVal> program) {
+		boolean referenced = false;
+		for (LispVal form : program) {
+			if (definesFunction(form, LispNames.ALLOCATE_INSTANCE)) {
+				return false;
+			}
+			referenced = referenced || referencesFunction(form, LispNames.ALLOCATE_INSTANCE);
+		}
+		return referenced;
+	}
+
+	/**
+	 * Builds the generated {@code allocate-instance} runtime: per-class construction
+	 * helper defuns ({@code %ALLOC-INST-<n>}, chunked by cons-node budget so no single
+	 * method grows with the registry -- the {@code %error-runtime} lesson), each
+	 * answering an instance with EVERY slot unbound for its subset of the registered
+	 * classes, and the public {@code allocate-instance} defun resolving the class
+	 * designator (a metaobject's name slot, or the name symbol itself) through them.
+	 * {@code %obj-new} needs a LITERAL tag on the compile backends, so the dispatch
+	 * cannot be data-driven like the metaobject table -- each class gets its own arm.
+	 * Only registered CLOS classes allocate; anything else signals, like CL's
+	 * built-in-class behavior -- struct classes included (their construction contract is
+	 * the positional constructor, not slot filling), matching the interpreter built-in.
+	 */
+	private static List<LispVal> allocateInstanceDefuns(ClosRegistry closRegistry) {
+		LispSymbol name = new LispSymbol("%ai_name");
+		List<LispVal> defuns = new java.util.ArrayList<>();
+		List<String> helperNames = new java.util.ArrayList<>();
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		int clauseNodes = 0;
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			if (!seen.add(info.name())) {
+				continue;
+			}
+			List<String> spellings = new java.util.ArrayList<>();
+			spellings.add(info.name());
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
+			if (qn != null && closRegistry.findClass(qn.member()) == info) {
+				spellings.add(qn.member());
+			}
+			List<LispVal> unboundSlots = new java.util.ArrayList<>();
+			for (int i = 0; i < info.slots().size(); i++) {
+				unboundSlots.add(objNew(ClosRegistry.UNBOUND_TAG, List.of()));
+			}
+			LispVal clause = listToCons(List.of(mvCall(LispNames.MEMBER, name, quotedSymbolList(spellings)),
+					objNew(LispLayout.CLASS_TAG_PREFIX + info.name(), unboundSlots)));
+			clauses.add(clause);
+			clauseNodes += consNodeCount(clause);
+			if (clauseNodes >= 600) {
+				defuns.add(allocateInstanceHelperDefun(helperNames, clauses, name));
+				clauses = new java.util.ArrayList<>();
+				clauseNodes = 0;
+			}
+		}
+		if (!clauses.isEmpty()) {
+			defuns.add(allocateInstanceHelperDefun(helperNames, clauses, name));
+		}
+		LispSymbol cls = new LispSymbol("%ai_class");
+		LispSymbol initargs = new LispSymbol("%ai_initargs");
+		LispSymbol result = new LispSymbol("%ai_r");
+		// (if (%obj-p class) (%obj-ref class 0) class) -- a metaobject designates
+		// through its name slot; anything else is taken as the name itself.
+		LispVal designator = makeIf(callOf(LispNames.OBJ_P, cls), mvCall(LispNames.OBJ_REF, cls, new LispInteger(0)),
+				cls);
+		LispVal chain = LispNil.INSTANCE;
+		if (!helperNames.isEmpty()) {
+			List<LispVal> orParts = new java.util.ArrayList<>();
+			orParts.add(new LispSymbol(LispNames.OR));
+			for (String helper : helperNames) {
+				orParts.add(mvCall(helper, name));
+			}
+			chain = listToCons(orParts);
+		}
+		LispVal body = makeLet(name.name(), designator,
+				makeLet(result.name(), chain, makeIf(result, result, listToCons(List.of(new LispSymbol(LispNames.ERROR),
+						new LispString(LispNames.ALLOCATE_INSTANCE + ": not an allocatable class: ~A"), name)))));
+		defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.ALLOCATE_INSTANCE),
+				listToCons(List.of(cls, new LispSymbol(LispNames.LAMBDA_REST), initargs)), body)));
+		return defuns;
+	}
+
+	/** One {@code %ALLOC-INST-<n>} helper: a cond over its chunk's class arms. */
+	private static LispVal allocateInstanceHelperDefun(List<String> helperNames, List<LispVal> clauses,
+			LispSymbol name) {
+		String helperName = "%ALLOC-INST-" + helperNames.size();
+		helperNames.add(helperName);
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		condParts.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(helperName),
+				listToCons(List.<LispVal>of(name)), listToCons(condParts)));
 	}
 
 	/** The literal type specifier an argument form denotes, or null for a runtime one. */

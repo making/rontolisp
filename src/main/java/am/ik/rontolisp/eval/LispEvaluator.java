@@ -704,6 +704,38 @@ public final class LispEvaluator {
 			}
 			return LispNil.INSTANCE;
 		}));
+		this.globalEnv.defineFunction(LispNames.ALLOCATE_INSTANCE,
+				new LispFunction(LispNames.ALLOCATE_INSTANCE, args -> {
+					// (allocate-instance class &rest initargs) -- an instance with EVERY
+					// slot unbound: no initforms, no initialize-instance (dao-from-fields
+					// fills the slots by setf slot-value afterwards). The initargs are
+					// accepted and ignored, per CL: they are for methods on it, which the
+					// static subset has none of. The class may be a metaobject (the
+					// find-class/class-of answer) or a class name; only registered CLOS
+					// classes allocate -- a built-in or struct class signals, like CL's
+					// built-in-class behavior.
+					if (args.isEmpty()) {
+						throw new LispEvalException(LispNames.ALLOCATE_INSTANCE + " expects a class, got 0 arguments");
+					}
+					LispVal designator = args.get(0);
+					if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
+						designator = inst.slot(0);
+					}
+					LispLayout layout = designator instanceof LispSymbol sym
+							? this.closRegistry.findClassLayout(sym.name()) : null;
+					if (layout == null) {
+						throw new LispEvalException(LispNames.ALLOCATE_INSTANCE + ": not an allocatable class: "
+								+ (designator instanceof LispSymbol s ? s.name() : args.get(0).print()));
+					}
+					LispLayout unbound = java.util.Objects
+						.requireNonNull(this.closRegistry.findLayoutByTag(ClosRegistry.UNBOUND_TAG));
+					LispVal[] slots = new LispVal[layout.capacity()];
+					for (int i = 0; i < slots.length; i++) {
+						slots[i] = i < layout.slotCount() ? new LispInstance(unbound, new LispVal[0])
+								: LispNil.INSTANCE;
+					}
+					return new LispInstance(layout, slots);
+				}));
 		this.globalEnv.defineFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL,
 				new LispFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL, args -> {
 					requireSingleArg(LispNames.CLASS_SLOT_DEFS_INTERNAL, args);

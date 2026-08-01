@@ -6897,6 +6897,45 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAllocateInstanceAnswersAnAllSlotsUnboundInstance() throws Exception {
+		// The generated allocate-instance runtime (injected when referenced) resolves a
+		// metaobject OR a name designator to the per-class construction arm; every
+		// slot starts unbound, mirroring the interpreter built-in.
+		assertThat(compileAndRunEh("""
+				(defclass ai-pt () ((x :initarg :x :initform 7) (y :initarg :y)))
+				(defstruct ai-node value)
+				(let ((p (allocate-instance (find-class 'ai-pt))))
+				  (print (list (typep p 'ai-pt)
+				               (slot-boundp p 'x)
+				               (progn (setf (slot-value p 'x) 10) (slot-value p 'x))
+				               (let ((q (allocate-instance 'ai-pt))) (slot-boundp q 'x))
+				               (handler-case (allocate-instance 'ai-node) (error (e) :signaled)))))
+				""")).isEqualTo("(T NIL 10 NIL :SIGNALED)");
+	}
+
+	@Test
+	void compileCloserCommonLispPackageServesTheDaoPackageShape() throws Exception {
+		// (:use :closer-common-lisp) implies cl, and the closer-mop members inherit
+		// through the re-export -- the postmodern DAO package shape on the compile
+		// path (shim spliced by LoadInliner, like the closer-mop test above).
+		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+				(asdf:load-system "closer-mop")
+				(defpackage :ccl-probe (:use :closer-common-lisp))
+				(in-package :ccl-probe)
+				(defclass ccl-pt () ((x :initarg :x) (y :initarg :y)))
+				(let ((c (find-class 'ccl-pt)))
+				  (print (list (classp c)
+				               (mapcar #'slot-definition-name (class-slots c))
+				               (c2cl:class-name c)
+				               (car (c2cl:list 1 2)))))
+				"""), path -> {
+			throw new java.io.FileNotFoundException(path);
+		});
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
+			.isEqualTo("(T (X Y) CCL-PROBE::CCL-PT 1)");
+	}
+
+	@Test
 	void requireNotConsumedByInlinerThrows() {
 		// One that reaches the compiler (nested, or a unit test bypassing the pass) is
 		// a hard error -- unlike load, the compiled runtime reader cannot execute it.
@@ -7582,7 +7621,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("348");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("349");
 	}
 
 	@Test

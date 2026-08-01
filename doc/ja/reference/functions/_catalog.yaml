@@ -147,6 +147,7 @@ categories:
       - { slug: function-lambda-expression, name: "function-lambda-expression" }
       - { slug: list-all-packages, name: "list-all-packages" }
       - { slug: find-class, name: "find-class" }
+      - { slug: allocate-instance, name: "allocate-instance" }
       - { slug: class-name, name: "class-name" }
       - { slug: get, name: "get" }
       - { slug: case-char-p, name: "lower-case-p upper-case-p" }

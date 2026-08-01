@@ -200,8 +200,30 @@ Landed 2026-08-01, the `class-of` -> metaobject migration (all four backends):
   class-of/find-class/type-of rewritten + new class-name page (en+ja);
   `.kb/clos.md` boundary paragraph rewritten.
 
-Remaining in Phase A: the `closer-common-lisp` package + re-pointing the
-`C2CL` nickname (today it aliases CLOSER-MOP), and `allocate-instance`.
+Landed 2026-08-01, the Phase A remainder (closer-common-lisp +
+allocate-instance -- Phase A COMPLETE):
+
+- `closer-common-lisp` package (nickname `c2cl`, the built-in `C2CL` nickname
+  RE-POINTED off CLOSER-MOP): a flat re-export seeded in `PackageRegistry` --
+  every member recorded in `LispPackage.imports` pointing at its home package
+  (cl or closer-mop, closer-mop wins collisions e.g. `class-name`), so
+  resolution stays textual. Using it implies using cl
+  (`PackageResolver.withImpliedUses`, applied at defpackage `:use` and
+  use-package time); the `resolveUnqualified` use-list loops now redirect
+  through a used package's imports (`usedExport`) -- the essential fix, which
+  also repairs the latent "re-export inherited through :use spells under the
+  re-exporter" bug for user packages; `memberSpelling` (find-symbol) redirects
+  the same way. Mechanics + pinning tests: `.kb/packages.md`.
+- `allocate-instance` on all four backends: all-slots-unbound instance from a
+  metaobject or name designator, initargs ignored; CLOS classes only (built-in
+  and struct classes signal). Interpreter = registry-backed built-in beside
+  find-class; compile paths = `allocateInstanceDefuns` gated on a reference
+  (`%ALLOC-INST-<n>` helpers chunked by cons-node budget -- %obj-new needs a
+  literal tag, so the dispatch cannot be table-driven), no MOP seeding of its
+  own. `ALLOCATE-INSTANCE` joined `CL_FUNCTIONS` (list-functions 348 -> 349,
+  four pins bumped incl. ci-spec). Docs: allocate-instance pages (en+ja) +
+  catalog + curated rows; asdf-systems shim table row rewritten. ci-spec
+  `find-class-metaobject-substrate` extended with the allocate round-trip.
 
 - A MOP base library (grow `closer-mop.lisp` into it, or a sibling loaded with
   it): `standard-object`, `standard-class`, `standard-direct-slot-definition`,

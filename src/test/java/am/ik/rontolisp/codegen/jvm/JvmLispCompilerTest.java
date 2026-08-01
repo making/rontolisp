@@ -167,6 +167,55 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAllocateInstanceAnswersAnAllSlotsUnboundInstance() throws Exception {
+		// The generated allocate-instance runtime (injected when referenced) resolves a
+		// metaobject OR a name designator to the per-class construction arm; every
+		// slot starts unbound, mirroring the interpreter built-in.
+		assertThat(compileAndRun("""
+				(defclass ai-pt () ((x :initarg :x :initform 7) (y :initarg :y)))
+				(let ((p (allocate-instance (find-class 'ai-pt))))
+				  (print (list (typep p 'ai-pt)
+				               (slot-boundp p 'x)
+				               (slot-boundp p 'y)
+				               (progn (setf (slot-value p 'x) 10) (slot-value p 'x))
+				               (let ((q (allocate-instance 'ai-pt))) (slot-boundp q 'x)))))
+				""")).isEqualTo("(T NIL NIL 10 NIL)");
+	}
+
+	@Test
+	void compileAllocateInstanceRejectsNonClosClasses() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass ai-ok () ((v :initarg :v)))
+				(defstruct ai-node value)
+				(print (list (handler-case (allocate-instance (find-class 'integer)) (error (e) :signaled))
+				             (handler-case (allocate-instance 'ai-node) (error (e) :signaled))
+				             (typep (allocate-instance (find-class 'ai-ok) :v 1 :junk 2) 'ai-ok)))
+				""")).isEqualTo("(:SIGNALED :SIGNALED T)");
+	}
+
+	@Test
+	void compileCloserCommonLispPackageServesTheDaoPackageShape() throws Exception {
+		// (:use :closer-common-lisp) implies cl, and the closer-mop members inherit
+		// through the re-export -- the postmodern DAO package shape on the compile
+		// path (shim spliced by LoadInliner, like the closer-mop test above).
+		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+				(asdf:load-system "closer-mop")
+				(defpackage :ccl-probe (:use :closer-common-lisp))
+				(in-package :ccl-probe)
+				(defclass ccl-pt () ((x :initarg :x) (y :initarg :y)))
+				(let ((c (find-class 'ccl-pt)))
+				  (print (list (classp c)
+				               (mapcar #'slot-definition-name (class-slots c))
+				               (c2cl:class-name c)
+				               (car (c2cl:list 1 2)))))
+				"""), path -> {
+			throw new java.io.FileNotFoundException(path);
+		});
+		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
+			.isEqualTo("(T (X Y) CCL-PROBE::CCL-PT 1)");
+	}
+
+	@Test
 	void compileAndRunHandlerCaseCatchesTypedErrorByClass() throws Exception {
 		assertThat(compileAndRun("""
 				(define-condition hc-err (error) ((v :initarg :v :reader hc-err-v)))
@@ -6014,12 +6063,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("348");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("349");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("348");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("349");
 	}
 
 	@Test

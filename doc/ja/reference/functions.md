@@ -93,6 +93,7 @@
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | ライト版スタブ: `(values nil t nil)`(ソース未記録) |
 | `list-all-packages` | `(list-all-packages)` | ライト版スタブ: 常に `nil`(列挙可能なパッケージテーブルなし) |
 | `find-class` | `(find-class 'c)` | メモ化された(`eq` 安定な)クラスメタオブジェクト。`errorp` が `nil` でなければシグナル |
+| `allocate-instance` | `(allocate-instance (find-class 'c))` | すべてのスロットが未束縛の新しいインスタンス。initform も `initialize-instance` も実行しない |
 | `class-name` | `(class-name (class-of 42))` | クラスメタオブジェクトの名前シンボル |
 | `get` | `(get 'sym 'prop)`、`(setf (get 'sym 'prop) v)` | シンボル属性リスト(プログラム全体で 1 つの名前キーのストア) |
 | `lower-case-p` `upper-case-p` | `(lower-case-p #\a)`, `(upper-case-p #\A)` | `t`, `t` -- 大文字化・小文字化で文字が変化するとき真（Unicode ケース表に従う） |

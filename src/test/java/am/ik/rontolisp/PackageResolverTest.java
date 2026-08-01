@@ -387,6 +387,43 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void closerCommonLispQualifiedMembersResolveToTheirHomePackages() {
+		// closer-common-lisp (nickname c2cl) is the flat re-export of the cl externals
+		// overlaid with the closer-mop externals: each member resolves to its HOME
+		// package's canonical spelling, closer-mop winning collisions (class-name).
+		assertThat(resolve("(c2cl:mapcar f x)")).isEqualTo("(MAPCAR F X)");
+		assertThat(resolve("(closer-common-lisp:class-slots c)")).isEqualTo("(CLOSER-MOP:CLASS-SLOTS C)");
+		assertThat(resolve("(c2cl:class-name c)")).isEqualTo("(CLOSER-MOP:CLASS-NAME C)");
+		assertThat(resolve("(c2cl:defclass foo nil nil)")).isEqualTo("(DEFCLASS FOO NIL NIL)");
+	}
+
+	@Test
+	void usingCloserCommonLispMakesClAndCloserMopVisible() {
+		// (:use :closer-common-lisp) -- postmodern's DAO package shape -- implies
+		// (:use :cl), and the closer-mop members inherit through the re-export.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :dao (:use :closer-common-lisp))");
+		resolve(resolver, "(in-package :dao)");
+		assertThat(resolve(resolver, "(defun probe (c) (mapcar #'slot-definition-name (class-slots c)))")).isEqualTo(
+				"(DEFUN DAO::PROBE (DAO::C) (MAPCAR (FUNCTION CLOSER-MOP:SLOT-DEFINITION-NAME) (CLOSER-MOP:CLASS-SLOTS DAO::C)))");
+		// The inherited-cl double-colon tolerance follows the implied use too.
+		assertThat(resolve(resolver, "(dao::car dao::x)")).isEqualTo("(CAR DAO::X)");
+	}
+
+	@Test
+	void useListReExportResolvesToTheHomePackage() {
+		// A defpackage :export of a symbol inherited from a used package is a
+		// re-export (recorded as an import); a package USING the re-exporter must
+		// resolve the name to its home package, not the re-exporter's spelling.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :home (:use :cl) (:export :thing))");
+		resolve(resolver, "(defpackage :facade (:use :cl :home) (:export :thing))");
+		resolve(resolver, "(defpackage :client (:use :cl :facade))");
+		resolve(resolver, "(in-package :client)");
+		assertThat(resolve(resolver, "(thing)")).isEqualTo("(HOME:THING)");
+	}
+
+	@Test
 	void defpackageAcceptsStringAndBareSymbolDesignators() {
 		PackageResolver resolver = new PackageResolver();
 		assertThat(resolve(resolver, "(defpackage \"STRPKG\" (:use cl) (:export \"F\" g :h))"))
