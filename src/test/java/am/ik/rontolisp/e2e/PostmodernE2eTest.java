@@ -26,14 +26,16 @@ import org.testcontainers.utility.DockerImageName;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The REAL postmodern (quickloaded verbatim from the live Quicklisp dist, non-MOP build)
- * talks to a live PostgreSQL 17 on every backend that can open a TCP socket: the
- * interpreter, the JVM compiler and the WASM component. This is the acceptance test for
- * the {@code .todo/202} milestone -- {@link ClPostgresE2eTest} covers the driver
- * underneath it, this one covers the programming API on top.
+ * The REAL postmodern (quickloaded verbatim from the live Quicklisp dist, MOP build --
+ * {@code :postmodern-use-mop} on, so {@code table.lisp} and the DAO layer are in) talks
+ * to a live PostgreSQL 17 on every backend that can open a TCP socket: the interpreter,
+ * the JVM compiler and the WASM component. This is the acceptance test for the
+ * query/transaction milestone and the DAO/MOP milestone on top of it --
+ * {@link ClPostgresE2eTest} covers the driver underneath, this one covers the programming
+ * API.
  *
  * <p>
- * Two exercises, each run on all three backends and asserted to produce byte-identical
+ * The exercises, each run on all three backends and asserted to produce byte-identical
  * output:
  *
  * <ol>
@@ -55,7 +57,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * inserts a row and calls {@code retry-transaction}: the insert has to be rolled back and
  * replayed, which the row's presence (rather than a duplicate-key error) proves. Both
  * compile backends throw out of {@code invoke-restart} here, which is {@code .todo/207};
- * widen this leg to all three when that lands.</li>
+ * widen this leg to all three when that lands;</li>
+ * <li><b>the DAO round trip</b> -- the object-mapping layer the MOP build exists for: a
+ * {@code dao-class} class definition runs the metaclass protocol at definition time,
+ * {@code deftable}/{@code create-table} derive the table from it, and
+ * {@code insert-dao}/{@code get-dao}/{@code upsert-dao}/{@code select-dao} round-trip
+ * instances against the live server.</li>
  * </ol>
  *
  * WASM Preview 1 is the fourth backend and is deliberately absent from both: TCP is a
@@ -123,6 +130,14 @@ class PostmodernE2eTest {
 
 	private static final String RETRY_EXPECTED = """
 			(2 20)
+			""";
+
+	private static final String DAO_EXPECTED = """
+			CREATE TABLE fruit (id INTEGER NOT NULL, name TEXT NOT NULL, PRIMARY KEY (id))
+			"alice"
+			("bob" NIL)
+			("carol" T)
+			("bob" "carol")
 			""";
 
 	/** Generous: the component leg compiles a ~5000-line library tree first. */
@@ -213,6 +228,23 @@ class PostmodernE2eTest {
 		// back to all three the way the reconnect leg above is when that lands.
 		assertThat(runOn(Backend.INTERPRETER, workDir, retryTransaction(Backend.INTERPRETER)))
 			.isEqualToNormalizingWhitespace(RETRY_EXPECTED);
+	}
+
+	@Test
+	void daoRoundTripOnTheInterpreter(@TempDir Path workDir) throws Exception {
+		assertThat(runOn(Backend.INTERPRETER, workDir, dao(Backend.INTERPRETER)))
+			.isEqualToNormalizingWhitespace(DAO_EXPECTED);
+	}
+
+	@Test
+	void daoRoundTripOnJvm(@TempDir Path workDir) throws Exception {
+		assertThat(runOn(Backend.JVM, workDir, dao(Backend.JVM))).isEqualToNormalizingWhitespace(DAO_EXPECTED);
+	}
+
+	@Test
+	void daoRoundTripOnWasmComponent(@TempDir Path workDir) throws Exception {
+		assertThat(runOn(Backend.COMPONENT, workDir, dao(Backend.COMPONENT)))
+			.isEqualToNormalizingWhitespace(DAO_EXPECTED);
 	}
 
 	@Test
@@ -321,6 +353,49 @@ class PostmodernE2eTest {
 				    (print (list tries (pomo:query (:select 'n :from '%s :where (:= 'id 2)) :single))))
 				  (pomo:execute (:drop-table '%s)))
 				""".formatted(DATABASE, USER, PASSWORD, host, port, table, table, table, table, table);
+	}
+
+	// The DAO leg -- the MOP build's acceptance exercise. The fruit class pins the
+	// dao-table-definition SQL itself (no server involved, hence the fixed class name);
+	// the person class does the full round trip through the metaclass-built methods:
+	// deftable + !dao-def + create-table, insert-dao, get-dao (an (eql 'person)
+	// dispatch), upsert-dao twice for BOTH answers of its (values dao inserted-p)
+	// contract (update an existing row -> nil, fall through to insert-dao -> t), and
+	// select-dao materializing DAOs through allocate-instance + runtime-name
+	// (setf slot-value). The :keys class option only reaches dao-keys because the
+	// initarg re-fill replays it over dao-class's shared-initialize :before reset --
+	// the CL initialization-order divergence this leg exists to keep pinned.
+	private static Exercise dao(Backend backend) {
+		String table = "dao_person_" + backend.name().toLowerCase(Locale.ROOT);
+		return (host, port) -> """
+				(ql:quickload "postmodern")
+				(defclass fruit ()
+				  ((id :col-type integer :initarg :id :accessor fruit-id)
+				   (name :col-type text :initarg :name :accessor fruit-name))
+				  (:metaclass pomo:dao-class)
+				  (:keys id))
+				(format t "~a~%%" (pomo:dao-table-definition 'fruit))
+				(defclass person ()
+				  ((id :col-type integer :initarg :id :accessor person-id)
+				   (name :col-type text :initarg :name :accessor person-name))
+				  (:metaclass pomo:dao-class)
+				  (:keys id)
+				  (:table-name %s))
+				(pomo:deftable person (pomo:!dao-def))
+				(pomo:with-connection '("%s" "%s" "%s" "%s" :port %d)
+				  (pomo:execute (:drop-table :if-exists '%s))
+				  (pomo:create-table 'person)
+				  (pomo:insert-dao (make-instance 'person :id 1 :name "alice"))
+				  (print (person-name (pomo:get-dao 'person 1)))
+				  (multiple-value-bind (dao inserted-p)
+				      (pomo:upsert-dao (make-instance 'person :id 1 :name "bob"))
+				    (print (list (person-name dao) inserted-p)))
+				  (multiple-value-bind (dao inserted-p)
+				      (pomo:upsert-dao (make-instance 'person :id 2 :name "carol"))
+				    (print (list (person-name dao) inserted-p)))
+				  (print (mapcar #'person-name (pomo:select-dao 'person t 'id)))
+				  (pomo:execute (:drop-table '%s)))
+				""".formatted(table, DATABASE, USER, PASSWORD, host, port, table, table);
 	}
 
 	/**

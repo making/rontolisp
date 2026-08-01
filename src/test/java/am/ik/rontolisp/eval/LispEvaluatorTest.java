@@ -8835,6 +8835,33 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defclassMetaclassSharedInitializeBeforeRunsBeforeInitargFilling() {
+		// Upstream postmodern's dao-class shared-initialize :before RESETS its
+		// direct-keys slot and relies on CL's initialization order (:before methods run
+		// BEFORE the initargs fill the slots) to see the reset overwritten by the :keys
+		// class option. The static model fills slots in the constructor first, so
+		// initarg-SUPPLIED slots are re-filled after the initialization generic returns
+		// (for classes a :before method specializes); a slot without a declared
+		// :initarg (table-name) keeps the :before's write. The #'make-instance leg
+		// covers the runtime-class path next to the defclass driver's.
+		assertThat(evalMulti("""
+				(defclass mcb-meta (standard-class)
+				  ((ks :initarg :keys :initform nil :reader mcb-ks)
+				   (table-name)))
+				(defmethod shared-initialize :before ((c mcb-meta) slot-names
+				                                      &key table-name &allow-other-keys)
+				  (setf (slot-value c 'ks) nil)
+				  (if table-name
+				      (setf (slot-value c 'table-name) (car table-name))
+				      (slot-makunbound c 'table-name)))
+				(defclass mcb-user () ((id)) (:metaclass mcb-meta) (:keys id) (:table-name "users"))
+				(let ((c (find-class 'mcb-user))
+				      (m (apply #'make-instance (list 'mcb-meta :name 'raw :keys '(k)))))
+				  (list (mcb-ks c) (slot-value c 'table-name) (mcb-ks m)))
+				""").print()).isEqualTo("((ID) \"users\" (K))");
+	}
+
+	@Test
 	void defclassMetaclassRequiresARegisteredMetaclass() {
 		// :metaclass must name a class inheriting standard-class, defined first -- the
 		// static model's definition-time contract.

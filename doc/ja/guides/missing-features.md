@@ -17,7 +17,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `symbol-macrolet` | 利用不可（`macrolet` は利用可能） |
 | `&environment` | `defmacro` のラムダリストで受け付けますが、常に `nil` に束縛されます（マクロ展開環境オブジェクトは存在しません）。`&whole` は `defmacro`・`destructuring-bind` の双方で動作します |
 | `loop`（拡張版） | 一部対応（後述） |
-| CLOS | 一部対応（静的サブセット、MOP なし） |
+| CLOS | 一部対応（静的サブセット + 定義時 MOP サブセット） |
 | `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default) ...)` は利用可能 |
 | `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op（コンパイルには影響しない） |
 | `typep` / `subtypep` / `coerce` / `concatenate` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型）、`concatenate` はこの 3 つのシーケンス系統を構築 |
@@ -131,9 +131,18 @@ CLOS は**静的なサブセット**です
 [`slot-makunbound`](../reference/macros/slot-makunbound.md) が元に戻し、
 読み取りは `unbound-slot` をシグナルします。
 [`change-class`](../reference/macros/change-class.md) は、両方のクラスが
-リテラルであれば、インスタンスのクラスをその場で変更します。対象外: 多重継承、
-第 2 引数以降の specializer、MOP / 実行時クラス操作
-（`find-class`、`add-method`、`compute-applicable-methods`、クラス再定義、
+リテラルであれば、インスタンスのクラスをその場で変更します。**定義時 MOP
+サブセット**が入っています:
+[`find-class`](../reference/functions/find-class.md) と
+[`class-of`](../reference/functions/class-of.md) は実物の `standard-class`
+メタオブジェクトを返し、
+[`allocate-instance`](../reference/functions/allocate-instance.md) が動作し、
+クラスオプション `(:metaclass M)` は定義時にクラス定義プロトコルを実行します
+（[`defclass`](../reference/special-forms/defclass.md) 参照）— これが postmodern
+の DAO 層を無改変でロードする仕組みです。対象外: 多重継承、
+第 2 引数以降の specializer、実行時のクラス構築
+（計算されたデータからの `ensure-class`、トップレベル以外の `defclass`、
+`add-method`、`compute-applicable-methods`、クラス再定義、
 `update-instance-for-different-class`）—
 コンパイルされたプログラムのクラスとメソッドの集合はコンパイル時に固定されます。
 

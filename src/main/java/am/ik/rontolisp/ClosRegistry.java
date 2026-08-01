@@ -230,8 +230,8 @@ public final class ClosRegistry {
 		ClassInfo parentInfo = parent == null ? null : this.classes.get(parent);
 		java.util.List<SlotSpec> slots = new java.util.ArrayList<>(parentInfo == null ? List.of() : parentInfo.slots());
 		for (String slotName : slotNames) {
-			slots.add(new SlotSpec(slotName, slotName, LispNil.INSTANCE, true, ":" + slotName, List.of(), List.of(),
-					"T"));
+			slots.add(new SlotSpec(slotName, slotName, LispNil.INSTANCE, true, ":" + slotName, true, List.of(),
+					List.of(), "T"));
 		}
 		java.util.Set<String> ancestors = new java.util.LinkedHashSet<>();
 		if (parentInfo != null) {
@@ -260,12 +260,17 @@ public final class ClosRegistry {
 	 * false means {@code initform} is the unbound marker, which is also what makes a
 	 * shadowing subclass slot inherit the superclass initform instead of overriding it
 	 * @param initargKeyword the keyword accepted by the constructor, with the colon
+	 * @param initargSupplied whether the slot specification wrote an {@code :initarg};
+	 * false means {@code initargKeyword} is the slot-name default that only the generated
+	 * constructor honors -- CL's initialization protocol (the {@code shared-initialize}
+	 * initarg fill, and therefore the metaclass-protocol re-fill after a {@code :before}
+	 * hook) only ever fills DECLARED initargs
 	 * @param readers the {@code :reader} function names
 	 * @param accessors the {@code :accessor} function names (also setf places)
 	 * @param type the package-stripped {@code :type} option name ({@code "t"} if none)
 	 */
 	public record SlotSpec(String name, String baseName, LispVal initform, boolean initformSupplied,
-			String initargKeyword, List<String> readers, List<String> accessors, String type) {
+			String initargKeyword, boolean initargSupplied, List<String> readers, List<String> accessors, String type) {
 	}
 
 	/**
@@ -842,6 +847,51 @@ public final class ClosRegistry {
 	 */
 	public Map<String, GenericInfo> generics() {
 		return this.generics;
+	}
+
+	/**
+	 * The class names carrying a {@code :before} method (through their first parameter
+	 * specializer) on an instance-initialization generic ({@code initialize-instance} or
+	 * {@code shared-initialize}). In CL such a {@code :before} runs BEFORE the initargs
+	 * fill the slots; the static model's constructor fills first, so
+	 * {@code make-instance} (literal and {@code %mop-make-instance} alike) re-fills the
+	 * declared-initarg slots of these classes -- and only these -- after the
+	 * initialization generic returns, restoring the observable CL order (postmodern's
+	 * {@code dao-class} resets its {@code direct-keys} slot that way and relies on the
+	 * {@code :keys} class option surviving).
+	 * @return the specialized class names, possibly empty
+	 */
+	public Set<String> initRefillTargets() {
+		Set<String> targets = new java.util.LinkedHashSet<>();
+		for (GenericInfo generic : this.generics.values()) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
+			String plain = qn == null ? generic.name() : qn.member();
+			if (!"INITIALIZE-INSTANCE".equals(plain) && !"SHARED-INITIALIZE".equals(plain)) {
+				continue;
+			}
+			for (MethodInfo method : generic.methods().values()) {
+				if (":BEFORE".equals(method.qualifier()) && !method.specializers().isEmpty()
+						&& method.specializers().get(0).kind() == SpecializerKind.CLASS) {
+					targets.add(java.util.Objects.requireNonNull(method.specializers().get(0).name()));
+				}
+			}
+		}
+		return targets;
+	}
+
+	/**
+	 * Whether {@code make-instance} of the class must re-fill its declared-initarg slots
+	 * after the initialization generic returns -- see {@link #initRefillTargets()}.
+	 * @param info the class
+	 * @return true when a {@code :before} initialization method specializes the class or
+	 * one of its ancestors
+	 */
+	public boolean needsInitRefill(ClassInfo info) {
+		Set<String> targets = initRefillTargets();
+		if (targets.isEmpty()) {
+			return false;
+		}
+		return info.ancestors().stream().anyMatch(targets::contains);
 	}
 
 	/**

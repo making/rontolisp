@@ -19,10 +19,9 @@
 ;;   rontolisp examples/db/postmodern-crud.lisp -o postmodern-crud.wasm --component --optimize
 ;;   wasmtime run -W gc=y -W exceptions=y -S tcp=y -S inherit-network=y --env DATABASE_URL postmodern-crud.wasm
 ;;
-;; This is the non-MOP build of postmodern: the query, transaction and
-;; prepared-statement layers shown below. The DAO layer (defclass with
-;; :metaclass dao-class, get-dao / select-dao / insert-dao) needs the MOP and
-;; is not available.
+;; This file shows the query, transaction and prepared-statement layers. The
+;; DAO layer on top of them (defclass with :metaclass dao-class, get-dao /
+;; select-dao / insert-dao) is postmodern-dao.lisp beside this file.
 
 (ql:quickload "postmodern")
 

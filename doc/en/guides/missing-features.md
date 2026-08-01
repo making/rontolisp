@@ -16,7 +16,7 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 | `symbol-macrolet` | not available (`macrolet` is) |
 | `&environment` | accepted in a `defmacro` lambda list but always bound to `nil` (there is no macro-expansion environment object). `&whole` works, in `defmacro` and `destructuring-bind` alike |
 | `loop` (extended) | partial (see below) |
-| CLOS | partial (static subset; no MOP) |
+| CLOS | partial (static subset + a definition-time MOP subset) |
 | `defstruct` `:include` | single inheritance only; slot-overrides `(:include parent (slot default) ...)` work |
 | `declare` / `declaim` / `proclaim` / `the` | parsed no-ops (no effect on compilation) |
 | `typep` / `subtypep` / `coerce` / `concatenate` | literal (quoted) type specifiers only; `coerce` targets `'list` / `'vector` / `'string` (or a float type), `concatenate` builds those same three sequence families |
@@ -128,9 +128,16 @@ A slot written with no `:initform` starts UNBOUND, as in CL:
 [`slot-makunbound`](../reference/macros/slot-makunbound.md) restores it, and a
 read signals `unbound-slot`.
 [`change-class`](../reference/macros/change-class.md) changes an instance's class
-in place, both classes being literal. Out of scope: multiple inheritance,
-specializers on later arguments, and the MOP / runtime class operations
-(`find-class`, `add-method`, `compute-applicable-methods`, class redefinition,
+in place, both classes being literal. A **definition-time MOP subset** is in:
+[`find-class`](../reference/functions/find-class.md) and
+[`class-of`](../reference/functions/class-of.md) answer real `standard-class`
+metaobjects, [`allocate-instance`](../reference/functions/allocate-instance.md)
+works, and a `(:metaclass M)` class option runs the class-definition protocol at
+definition time (see [`defclass`](../reference/special-forms/defclass.md)) — this
+is what loads postmodern's DAO layer verbatim. Out of scope: multiple
+inheritance, specializers on later arguments, and runtime class construction
+(`ensure-class` from computed data, a non-top-level `defclass`, `add-method`,
+`compute-applicable-methods`, class redefinition,
 `update-instance-for-different-class`) — the class and method sets of a compiled
 program are fixed at compile time.
 

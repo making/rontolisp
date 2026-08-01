@@ -6427,7 +6427,10 @@ cases:
       ;; metaobjects through direct-slot-definition-class, computes effective
       ;; slots inside the *direct-column-slot* dynamic-extent contract, and
       ;; finalizes eagerly; find-class/class-of answer the metaclass instance,
-      ;; while instances of the class stay ordinary.
+      ;; while instances of the class stay ordinary. The :before's reset of
+      ;; direct-keys is upstream dao-class's exact move: CL fills the initargs
+      ;; AFTER the :before methods, so (ID) below pins the initarg re-fill --
+      ;; while table-name (no declared :initarg) keeps the :before's write.
       (defvar *direct-column-slot* nil)
       (defclass mcp-dao-class (standard-class)
         ((direct-keys :initarg :keys :initform nil :accessor mcp-direct-keys)
@@ -6439,6 +6442,7 @@ cases:
       (defmethod closer-mop:validate-superclass ((class mcp-dao-class) (super standard-class)) t)
       (defmethod shared-initialize :before ((class mcp-dao-class) slot-names
                                             &key table-name &allow-other-keys)
+        (setf (slot-value class 'direct-keys) nil)
         (if table-name
             (setf (slot-value class 'table-name) (car table-name))
             (slot-makunbound class 'table-name)))

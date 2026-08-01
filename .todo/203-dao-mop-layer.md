@@ -381,12 +381,44 @@ Runtime behaviors that need a live database (`save-dao`,
 `dao-row-reader-with-body`, the `unique-violation`/`columns-error`/
 `unbound-slot` handler-case paths) are Phase E's E2E scope.
 
-### Phase E -- E2E + docs + kb
+### Phase E -- E2E + docs + kb -- DONE 2026-08-01
 
-- Extend `PostmodernE2eTest` with a DAO round-trip (deftable + create +
-  insert-dao + get-dao + upsert-dao returning `(values dao inserted-p)`),
-  byte-identical across interpreter/JVM/WASM-component.
-- Docs: DAO pages (en+ja); document the static restrictions above.
-- `.kb/clos.md`: replace "MOP permanently out" with the precise new boundary
-  (static definition-time MOP subset IN; runtime class construction OUT),
-  the why, and the re-evaluation trigger, per the working principles.
+The DAO round-trip surfaced ONE substrate bug, fixed at the root first
+(failing tests, then the fix; full mechanics in `.kb/clos.md`):
+
+- **The initarg re-fill.** Upstream dao-class's `shared-initialize :before`
+  RESETS `direct-keys` and relies on CL's order (:before -> initarg fill) to
+  restore it from `:keys`; our constructor fills first, so the reset was
+  final -- `dao-keys` answered NIL, `dao-table-definition` lost `PRIMARY KEY`
+  and `get-dao` signalled "has no key slots". Phase B's "the default primary
+  is identity, so the DAO protocol cannot tell" premise was WRONG. Fix: for
+  classes specialized by a `:before` on initialize-instance/shared-initialize
+  (`ClosRegistry.initRefillTargets`), make-instance re-sets the
+  DECLARED-initarg slots the call supplies after the init generic returns
+  (`SlotSpec.initargSupplied` is new; the slot-name-default keyword is NOT
+  refilled -- `table-name` keeps the :before's write). Emission:
+  `expandMakeInstance` statically per literal site (covers the interpreter
+  builtin via its quote-wrapped re-entry), `%MMI-REFILL`/`%MMI-INIT-TAIL` in
+  the generated `%mop-make-instance` (arm-inline + after the chunked mode's
+  hoisted init call). Pinned:
+  `defclassMetaclassSharedInitializeBeforeRunsBeforeInitargFilling` on all
+  three suites; ci-spec `defclass-metaclass-protocol` grew the reset line
+  (same expected output = the re-fill pin).
+
+Landed:
+
+- `PostmodernE2eTest` DAO leg (`daoRoundTripOn{TheInterpreter,Jvm,WasmComponent}`):
+  dao-table-definition SQL pin + deftable/!dao-def/create-table + insert-dao +
+  get-dao + upsert-dao both ways (`(values dao inserted-p)` = nil-update /
+  t-insert) + select-dao with test+ordering; identical output on all three
+  TCP backends against live PostgreSQL 17.
+- `examples/db/postmodern-dao.lisp` (full DAO CRUD, DATABASE_URL harness),
+  verified by hand on interpreter/JVM/component; README row + notes rewritten,
+  postmodern-crud.lisp's "not available" comment re-pointed.
+- Docs: asdf-systems.md postmodern row = the MOP build (DAO surface + static
+  restrictions), missing-features.md CLOS section/table = definition-time MOP
+  subset IN with the precise OUT list, defclass.md gained the :before/fill
+  order sentence (all en+ja).
+- `.kb/clos.md`: the lite-divergence paragraph replaced by the re-fill
+  contract + residual edges (specialized primary without call-next-method; an
+  :after writing a supplied declared-initarg slot on a refill-target class).

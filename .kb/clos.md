@@ -533,8 +533,34 @@ before and every existing artifact stays byte-identical.
   memo scan takes the first hit; the interpreter twin primes
   `ClosRegistry.classMetaobjects` via `registerClassMetaobject`). Lite
   divergences (documented on the defclass page): shared-initialize hooks run
-  AFTER constructor slot-filling (the default primary is identity, so the DAO
-  protocol cannot tell), inherited effective slots are reused from the
+  AFTER constructor slot-filling -- and that IS observable, the earlier "the
+  default primary is identity, so the DAO protocol cannot tell" claim was
+  wrong: upstream dao-class's `shared-initialize :before` RESETS its
+  `direct-keys` slot and counts on CL's order (:before -> initarg fill) to
+  restore it from the `:keys` class option. The repair is the initarg RE-FILL
+  (2026-08-01): for a class specialized by a `:before` method on
+  initialize-instance/shared-initialize (`ClosRegistry.initRefillTargets`,
+  ancestor-inclusive via `needsInitRefill`), make-instance re-sets every
+  DECLARED-initarg slot the call supplies (`SlotSpec.initargSupplied`; the
+  slot-name-default keyword a `:initarg`-less slot gets is deliberately NOT
+  refilled -- dao-class's `table-name` slot must keep the :before's write)
+  after the initialization generic returns, leftmost initarg wins. Three
+  emission sites, one semantic: `expandMakeInstance` folds it statically per
+  literal call site (`%obj-set` with the baked slot index; the interpreter's
+  `%mop-make-instance`/`#'make-instance` builtin re-enters this expansion with
+  quoted args, so `literalKeyword` unwraps both spellings), and the generated
+  `%mop-make-instance` runtime carries `%MMI-REFILL` (one cond bounded by the
+  :before-specialized class set) + `%MMI-INIT-TAIL` (plist scan) -- called
+  inside the per-class arm right after the initialization generic, and after
+  the hoisted init call in the chunked `#'make-instance`-as-value mode.
+  Residual (accepted, no known library hits it): a specialized PRIMARY without
+  call-next-method should suppress the fill entirely, and an `:after` writing a
+  supplied declared-initarg slot on a refill-target class would be re-clobbered
+  -- both need the fill to happen INSIDE the generic chain, which the static
+  constructor model cannot do. Pinned by
+  `defclassMetaclassSharedInitializeBeforeRunsBeforeInitargFilling` (all three
+  suites) and the PostmodernE2eTest DAO leg. Other lite divergences: inherited
+  effective slots are reused from the
   superclass metaobject unless shadowed (the direct-definition list handed to
   compute-effective-slot-definition is the shadowing definition alone), and
   validate-superclass's default is permissive.

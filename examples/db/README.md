@@ -9,6 +9,7 @@ rontolisp-specific binding.
 | [`postgres-hello.lisp`](postgres-hello.lisp) | connect and run two select queries | <https://github.com/marijnh/Postmodern> |
 | [`postgres-crud.lisp`](postgres-crud.lisp) | full CRUD cycle: prepared statements (`prepare-query` + `exec-prepared`), an alist row reader, all inside a rolled-back transaction so it is safe to re-run | <https://github.com/marijnh/Postmodern> |
 | [`postmodern-crud.lisp`](postmodern-crud.lisp) | the same cycle one layer up: `with-connection`, statements written as S-SQL s-expressions, `with-transaction`, `defprepared`, and the result formats (`:alists`, `:single`, `:column`) | <https://github.com/marijnh/Postmodern> |
+| [`postmodern-dao.lisp`](postmodern-dao.lisp) | the DAO layer on top: a `(:metaclass pomo:dao-class)` class as the table definition, `dao-table-definition`, `deftable`/`create-table`, and the CRUD cycle as `insert-dao` / `get-dao` / `update-dao` / `upsert-dao` / `select-dao` / `delete-dao` | <https://github.com/marijnh/Postmodern> |
 | [`postgres-web.lisp`](postgres-web.lisp) | notes app: PostgreSQL storage + `rontolisp:http-handler` + cl-who for HTML | <https://github.com/edicl/cl-who> |
 | [`database-url.lisp`](database-url.lisp) | not a program: the `DATABASE_URL` parser the four above share, `(load)`ed by each of them | — |
 
@@ -48,6 +49,7 @@ the hardcoded connection this file exists to remove.
 rontolisp examples/db/postgres-hello.lisp
 rontolisp examples/db/postgres-crud.lisp
 rontolisp examples/db/postmodern-crud.lisp
+rontolisp examples/db/postmodern-dao.lisp
 rontolisp examples/db/postgres-web.lisp   # then open http://127.0.0.1:8080
 
 rontolisp examples/db/postgres-hello.lisp -o Prog.class && java Prog
@@ -151,10 +153,12 @@ provides only the service world.
 
 ## Notes
 
-- **postmodern loads in its non-MOP build.** The query, transaction and
-  prepared-statement layers `postmodern-crud.lisp` shows all work; the DAO layer
-  (`:metaclass dao-class`, `get-dao` / `select-dao` / `insert-dao`) needs the
-  metaobject protocol and is not available.
+- **postmodern loads in its MOP build.** The query, transaction and
+  prepared-statement layers `postmodern-crud.lisp` shows all work, and so does
+  the DAO layer `postmodern-dao.lisp` shows (`:metaclass dao-class`, `get-dao` /
+  `select-dao` / `insert-dao` / `upsert-dao`), running on the definition-time
+  metaobject subset: DAO classes are top-level `defclass` forms with literal
+  options.
 - **SCRAM-SHA-256** completes on all backends within PostgreSQL's default
   60-second `authentication_timeout`. The interpreter is the slow one: its
   4096-round PBKDF2 takes ~50 s, so on a slow machine give the server headroom

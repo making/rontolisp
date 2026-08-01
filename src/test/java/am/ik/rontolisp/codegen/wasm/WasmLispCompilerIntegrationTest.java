@@ -5890,6 +5890,28 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void defclassMetaclassSharedInitializeBeforeRunsBeforeInitargFilling() throws Exception {
+		// Mirrors
+		// JvmLispCompilerTest#compileDefclassMetaclassSharedInitializeBeforeRunsBeforeInitargFilling
+		// on the WASM path.
+		assertThat(compileAndRun("""
+				(defclass mcb-meta (standard-class)
+				  ((ks :initarg :keys :initform nil :reader mcb-ks)
+				   (table-name)))
+				(defmethod shared-initialize :before ((c mcb-meta) slot-names
+				                                      &key table-name &allow-other-keys)
+				  (setf (slot-value c 'ks) nil)
+				  (if table-name
+				      (setf (slot-value c 'table-name) (car table-name))
+				      (slot-makunbound c 'table-name)))
+				(defclass mcb-user () ((id)) (:metaclass mcb-meta) (:keys id) (:table-name "users"))
+				(print (let ((c (find-class 'mcb-user))
+				             (m (apply #'make-instance (list 'mcb-meta :name 'raw :keys '(k)))))
+				         (list (mcb-ks c) (slot-value c 'table-name) (mcb-ks m))))
+				""")).isEqualTo("((ID) \"users\" (K))");
+	}
+
+	@Test
 	void compileInterceptsDefinitionTimeMethodConstruction() throws Exception {
 		// The build-dao-methods idiom on the WASM path, mirroring
 		// JvmLispCompilerTest#compileInterceptsDefinitionTimeMethodConstruction: the
