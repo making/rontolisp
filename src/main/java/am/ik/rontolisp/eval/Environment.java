@@ -2075,6 +2075,41 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.GET_INTERNAL_RUN_TIME, args, 0);
 			return new LispInteger(System.nanoTime() / 1000000L);
 		}));
+		// sleep: park the thread for a non-negative number of seconds and answer nil.
+		// Registered as a real function (not only as the %sleep-ms expansion) so #'sleep
+		// and native-image mode work; the argument may be any real, sub-second values
+		// included.
+		env.defineFunction(LispNames.SLEEP, new LispFunction(LispNames.SLEEP, args -> {
+			requireArgCount(LispNames.SLEEP, args, 1);
+			double seconds = asDouble(args.get(0));
+			long millis = Math.round(seconds * 1000.0);
+			if (millis > 0) {
+				try {
+					Thread.sleep(millis);
+				}
+				catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new LispEvalException(LispNames.SLEEP + " was interrupted");
+				}
+			}
+			return LispNil.INSTANCE;
+		}));
+		// The internal primitive the compile-path expansion lowers onto, registered here
+		// too so an interpreted program that reached the expanded form still runs.
+		env.defineFunction(LispNames.SLEEP_MS, new LispFunction(LispNames.SLEEP_MS, args -> {
+			requireArgCount(LispNames.SLEEP_MS, args, 1);
+			long millis = (long) asDouble(args.get(0));
+			if (millis > 0) {
+				try {
+					Thread.sleep(millis);
+				}
+				catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new LispEvalException(LispNames.SLEEP + " was interrupted");
+				}
+			}
+			return LispNil.INSTANCE;
+		}));
 		// uiop:getenv: the value of an environment variable as a string, or nil if unset.
 		// Homed in uiop, not cl: Common Lisp has no getenv, and uiop's is the portable
 		// spelling every implementation-independent library already uses.
@@ -3444,6 +3479,13 @@ public final class Environment implements Scope {
 		// two conversations crossed on the survivor (.todo/193). The table and the
 		// counter must therefore stay thread-safe; see .kb/tcp-sockets.md.
 		Map<Long, Closeable> streams = new ConcurrentHashMap<>();
+		// The namestring each FILE stream was opened on, keyed by the same handle. It is
+		// what file-length stats: a Reader/Writer does not remember where it came from,
+		// and re-deriving it is impossible. Only `open` fills it, so every other stream
+		// kind (string streams, sockets, the standard streams) is simply absent here and
+		// file-length answers nil for it. Concurrent for the same reason the table above
+		// is (one virtual thread per served request).
+		Map<Long, String> streamPaths = new ConcurrentHashMap<>();
 		// Handles 0/1/2 are the process standard streams (the WASI file descriptors the
 		// wasm backends use), so a user stream never collides with the *error-output*
 		// designator; the table entry for 2 makes every stream operation -- print family,
@@ -3624,11 +3666,40 @@ public final class Environment implements Scope {
 			streams.put(handle, new StringWriter());
 			return new LispInteger(handle);
 		}));
-		// Lite: streams do not support repositioning or length queries; callers (which
-		// guard these with ignore-errors in portable code) take their fallback path.
+		// Lite: streams do not support repositioning; callers (which guard this with
+		// ignore-errors in portable code) take their fallback path.
 		env.defineFunction(LispNames.FILE_POSITION,
 				new LispFunction(LispNames.FILE_POSITION, args -> LispNil.INSTANCE));
-		env.defineFunction(LispNames.FILE_LENGTH, new LispFunction(LispNames.FILE_LENGTH, args -> LispNil.INSTANCE));
+		// file-length: real for a FILE stream, answered from the path it was opened with
+		// (streamPaths). Every other stream -- string streams, sockets, the standard
+		// streams -- has no file behind it and answers nil, which is exactly what Common
+		// Lisp prescribes for "the length cannot be determined".
+		env.defineFunction(LispNames.FILE_LENGTH, new LispFunction(LispNames.FILE_LENGTH, args -> {
+			requireArgCount(LispNames.FILE_LENGTH, args, 1);
+			if (!(args.get(0) instanceof LispInteger handle)) {
+				return LispNil.INSTANCE;
+			}
+			String path = streamPaths.get(handle.value());
+			if (path == null) {
+				return LispNil.INSTANCE;
+			}
+			// An output stream buffers, so flush before stat'ing: file-length must count
+			// what has been written, not what happens to have reached the disk.
+			if (streams.get(handle.value()) instanceof java.io.Flushable flushable) {
+				try {
+					flushable.flush();
+				}
+				catch (IOException ignored) {
+					// A stream that cannot flush still has whatever length it has.
+				}
+			}
+			try {
+				return new LispInteger(Files.size(Path.of(path)));
+			}
+			catch (IOException | RuntimeException ex) {
+				return LispNil.INSTANCE;
+			}
+		}));
 		env.defineFunction(LispNames.INPUT_STREAM_P, new LispFunction(LispNames.INPUT_STREAM_P, args -> {
 			requireArgCount(LispNames.INPUT_STREAM_P, args, 1);
 			// Lite: any stream handle answers t for both directions; the t designator
@@ -3886,11 +3957,32 @@ public final class Environment implements Scope {
 				}
 				long handle = nextStreamHandle.getAndIncrement();
 				streams.put(handle, stream);
+				streamPaths.put(handle, path.value());
 				return new LispInteger(handle);
 			}
 			catch (IOException ex) {
 				throw new LispEvalException(
 						LispNames.OPEN + ": cannot open file " + path.value() + ": " + ex.getMessage());
+			}
+		}));
+		// %make-directories: the ONE directory-CREATING primitive, the write-side sibling
+		// of %list-directory. Uses Files directly, like open -- the SourceLoader seam is
+		// the read side, and a host that cannot open a file for writing cannot create a
+		// directory either. Everything user-facing (ensure-directories-exist) is Lisp
+		// source over it, in LispPreludeLibrary, so the "which part of the namestring is
+		// the directory" rule has one definition for every backend.
+		env.defineFunction(LispNames.MAKE_DIRECTORIES, new LispFunction(LispNames.MAKE_DIRECTORIES, args -> {
+			requireArgCount(LispNames.MAKE_DIRECTORIES, args, 1);
+			if (!(args.get(0) instanceof LispString path)) {
+				throw new LispEvalException(LispNames.MAKE_DIRECTORIES + " expects a string pathname");
+			}
+			try {
+				Files.createDirectories(Path.of(path.value()));
+				return LispTrue.INSTANCE;
+			}
+			catch (IOException | RuntimeException ex) {
+				throw new LispEvalException(
+						LispNames.MAKE_DIRECTORIES + ": cannot create " + path.value() + ": " + ex.getMessage());
 			}
 		}));
 		env.defineFunction(LispNames.CLOSE, new LispFunction(LispNames.CLOSE, args -> {
@@ -3910,6 +4002,7 @@ public final class Environment implements Scope {
 				return LispTrue.INSTANCE;
 			}
 			Closeable stream = streams.remove(handle.value());
+			streamPaths.remove(handle.value());
 			if (stream == null) {
 				throw new LispEvalException(LispNames.CLOSE + ": not an open stream: " + handle.value());
 			}

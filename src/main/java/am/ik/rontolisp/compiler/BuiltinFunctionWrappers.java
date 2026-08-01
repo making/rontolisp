@@ -115,6 +115,19 @@ public final class BuiltinFunctionWrappers {
 		// value -- the (apply #'make-instance class args) idiom of postmodern's
 		// make-dao.
 		gated.add(LispNames.MAKE_INSTANCE);
+		// #'file-length / #'file-write-date call JVM runtime helpers the compiler emits
+		// only for a program that NAMES the operator -- and that gate scans the source
+		// program, not the injected wrappers, so an ungated wrapper would call a method
+		// the class does not declare (the self-call check catches it, loudly). Gating the
+		// wrappers on the same reference puts both sides on one scan.
+		gated.add(LispNames.FILE_LENGTH);
+		gated.add(LispNames.FILE_WRITE_DATE);
+		// #'sleep for a sharper reason: under --component `sleep` lowers to
+		// (await (wait-for ms)), which puts the module in async (and therefore EH) mode.
+		// An ungated wrapper would do that to EVERY component -- changing the wasmtime
+		// flags of programs that never sleep -- and the mode gate, which scans the source
+		// program, would not even see it coming.
+		gated.add(LispNames.SLEEP);
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
 	}
 
@@ -747,7 +760,9 @@ public final class BuiltinFunctionWrappers {
 			everySomeWrapper(LispNames.EVERY, true), everySomeWrapper(LispNames.SOME, false), binary(LispNames.REMOVE),
 			binary(LispNames.REMOVE_IF), binary(LispNames.REMOVE_IF_NOT), binary(LispNames.DELETE),
 			binary(LispNames.DELETE_IF), binary(LispNames.DELETE_IF_NOT), ternary(LispNames.SUBSTITUTE),
-			ternary(LispNames.NSUBSTITUTE), binary(LispNames.SORT), variadicStableSort(), unary(LispNames.COPY_SEQ),
+			ternary(LispNames.NSUBSTITUTE), ternary(LispNames.SUBSTITUTE_IF), ternary(LispNames.SUBSTITUTE_IF_NOT),
+			ternary(LispNames.NSUBSTITUTE_IF), ternary(LispNames.NSUBSTITUTE_IF_NOT), binary(LispNames.SORT),
+			variadicStableSort(), unary(LispNames.COPY_SEQ),
 			// The mapping family as first-class values (alexandria hands #'mapcar to
 			// its own combinators). Every member carries ANY number of lists, the same
 			// as in call position -- see mapFamilyWrapper.
@@ -803,10 +818,11 @@ public final class BuiltinFunctionWrappers {
 			// The wrapper takes the positional shape the built-in compiles.
 			// Lite stream/type introspection stubs (macro-lowered; slot-boundp and
 			// slot-makunbound are omitted -- their expansions need a literal slot name)
-			unary(LispNames.PROBE_FILE), unary(LispNames.FILE_POSITION), unary(LispNames.FILE_LENGTH),
-			unary(LispNames.PATHNAMEP), unary(LispNames.INPUT_STREAM_P), unary(LispNames.OUTPUT_STREAM_P),
-			unary(LispNames.STREAM_ELEMENT_TYPE), unary(LispNames.CLASS_OF),
-			unary(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL), unary(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS),
+			unary(LispNames.PROBE_FILE), unary(LispNames.SLEEP), unary(LispNames.FILE_POSITION),
+			unary(LispNames.FILE_LENGTH), unary(LispNames.FILE_WRITE_DATE), unary(LispNames.PATHNAMEP),
+			unary(LispNames.INPUT_STREAM_P), unary(LispNames.OUTPUT_STREAM_P), unary(LispNames.STREAM_ELEMENT_TYPE),
+			unary(LispNames.CLASS_OF), unary(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL),
+			unary(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS),
 			new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(), List.of(call(LispNames.MAKE_BROADCAST_STREAM))),
 			// 1+ and 1-: body is (+ a 1) and (- a 1)
 			new WrapperDef(LispNames.ONE_PLUS, List.of("a"),

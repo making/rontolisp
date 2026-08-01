@@ -4085,6 +4085,107 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSubstituteIf() {
+		assertThat(eval("(substitute-if 0 #'oddp '(1 2 3 4 5))").print()).isEqualTo("(0 2 0 4 0)");
+		assertThat(eval("(substitute-if-not 0 #'oddp '(1 2 3 4 5))").print()).isEqualTo("(1 0 3 0 5)");
+		// :key selects what the predicate sees; the REPLACED value is still the element.
+		assertThat(eval("(substitute-if 0 #'oddp '((1) (2) (3)) :key #'car)").print()).isEqualTo("(0 (2) 0)");
+		// A string sequence rebuilds as a string -- lack/util:find-middleware's call.
+		assertThat(eval("(substitute-if #\\- (lambda (c) (member c '(#\\. #\\/) :test 'char=)) \"lack/mw.backtrace\")")
+			.print()).isEqualTo("\"lack-mw-backtrace\"");
+		assertThat(eval("(nsubstitute-if 0 #'oddp (list 1 2 3))").print()).isEqualTo("(0 2 0)");
+		assertThat(eval("(nsubstitute-if-not 0 #'oddp (list 1 2 3))").print()).isEqualTo("(1 0 3)");
+		assertThat(evalMulti("(funcall #'substitute-if 0 #'oddp '(1 2 3))").print()).isEqualTo("(0 2 0)");
+		// The -if family takes :key only; the predicate IS the test.
+		assertThatThrownBy(() -> eval("(substitute-if 0 #'oddp '(1) :test #'eql)"))
+			.hasMessageContaining("expects keyword arguments :KEY, got: :TEST");
+	}
+
+	@Test
+	void evalSleepParksAndReturnsNil() {
+		assertThat(eval("(sleep 0)")).isEqualTo(LispNil.INSTANCE);
+		long before = System.currentTimeMillis();
+		assertThat(eval("(sleep 0.05)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(System.currentTimeMillis() - before).isGreaterThanOrEqualTo(40L);
+		assertThat(evalMulti("(funcall #'sleep 0)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalFileWriteDateAndFileLength(@TempDir Path tempDir) throws Exception {
+		Path file = tempDir.resolve("wd.txt");
+		Files.writeString(file, "hello\n");
+		String path = file.toString().replace("\\", "\\\\");
+		// A universal time is seconds since 1900, so it is well past the 1970 offset.
+		LispVal date = eval("(file-write-date \"" + path + "\")");
+		assertThat(date).isInstanceOf(LispInteger.class);
+		assertThat(((LispInteger) date).value()).isGreaterThan(2208988800L);
+		// Common Lisp's "cannot be determined" answer, not a signal.
+		assertThat(eval("(file-write-date \"" + path + ".missing\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(with-open-file (in \"" + path + "\") (file-length in))")).isEqualTo(new LispInteger(6));
+		// Only an OPEN file stream has a file behind it; a closed handle, a string stream
+		// and a non-stream all answer nil.
+		assertThat(evalMulti("(setq h (open \"" + path + "\")) (close h) (file-length h)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(with-output-to-string (s) (file-length s))").print()).isEqualTo("\"\"");
+		assertThat(eval("(file-length \"not-a-stream\")")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalEnsureDirectoriesExist(@TempDir Path tempDir) {
+		String base = tempDir.toString().replace("\\", "\\\\");
+		// The DIRECTORY component is everything up to the last slash, so the file name
+		// itself is not created.
+		assertThat(eval("(ensure-directories-exist \"" + base + "/a/b/app.log\")").print())
+			.isEqualTo("\"" + base + "/a/b/app.log\"");
+		assertThat(Files.isDirectory(tempDir.resolve("a/b"))).isTrue();
+		assertThat(Files.exists(tempDir.resolve("a/b/app.log"))).isFalse();
+		// A namestring that already ends in a slash IS the directory.
+		assertThat(eval("(ensure-directories-exist \"" + base + "/c/d/\")").print()).isEqualTo("\"" + base + "/c/d/\"");
+		assertThat(Files.isDirectory(tempDir.resolve("c/d"))).isTrue();
+		// No slash at all: a file in the working directory, so nothing is created.
+		assertThat(eval("(ensure-directories-exist \"plain.txt\")").print()).isEqualTo("\"plain.txt\"");
+	}
+
+	@Test
+	void evalExportMakesASymbolExternal() {
+		// export before the definitions: symbols are identified by their canonical
+		// SPELLING here, and exporting flips that spelling from mypkg::run to mypkg:run
+		// (see .kb/packages.md).
+		assertThat(evalMulti("""
+				(defpackage :expkg (:use :cl))
+				(in-package :expkg)
+				(export '(run))
+				(defun run () 42)
+				(in-package :cl-user)
+				(expkg:run)
+				""")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void evalUnexportMakesASymbolInternalAgain() {
+		assertThat(evalMulti("""
+				(defpackage :unexpkg (:use :cl) (:export #:a #:b))
+				(in-package :unexpkg)
+				(unexport 'b)
+				(defun a () 1)
+				(defun b () 2)
+				(in-package :cl-user)
+				(+ (unexpkg:a) (unexpkg::b))
+				""")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalLoadContextSpecialsAreLetBindable() {
+		// clack's %load-file binds all four around its read/eval loop.
+		assertThat(evalMulti("""
+				(let ((*package* *package*)
+				      (*readtable* *readtable*)
+				      (*load-pathname* "p")
+				      (*load-truename* "t"))
+				  (list *load-pathname* *load-truename* *readtable*))
+				""").print()).isEqualTo("(\"p\" \"t\" NIL)");
+	}
+
+	@Test
 	void evalDefparameterAlwaysAssigns() {
 		// Unlike defvar, defparameter re-assigns even when already bound.
 		assertThat(evalMulti("(defparameter *x* 1) (defparameter *x* 2) *x*")).isEqualTo(new LispInteger(2));
@@ -5051,7 +5152,7 @@ class LispEvaluatorTest {
 			.contains("CLASS-OF", "CLASS-NAME", "FIND-CLASS", "TYPE-OF", "COMPILE")
 			.doesNotContain("%class-designator", "%find-class")
 			.isSorted()
-			.hasSize(353);
+			.hasSize(362);
 	}
 
 	@Test

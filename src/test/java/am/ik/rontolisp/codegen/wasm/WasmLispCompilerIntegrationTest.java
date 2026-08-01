@@ -2404,7 +2404,12 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	private static String compileAndRunComponent(String lispCode) throws Exception {
-		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
+		// The wait-for splice mirrors the CLI order (a no-op for a program that
+		// references neither rontolisp:wait-for nor sleep -- under --component `sleep`
+		// IS that splice's defun, over the real wasi:clocks timer).
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.WaitForLibrary.process(LispReader.readAllFromString(lispCode),
+					am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT));
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
@@ -3202,6 +3207,83 @@ class WasmLispCompilerIntegrationTest {
 	void substitute() throws Exception {
 		assertThat(compileAndRun("(print (substitute 0 2 '(1 2 3 2 1)))")).isEqualTo("(1 0 3 0 1)");
 		assertThat(compileAndRun("(print (nsubstitute 9 1 '(1 2 1 3)))")).isEqualTo("(9 2 9 3)");
+	}
+
+	@Test
+	void substituteIf() throws Exception {
+		assertThat(compileAndRun("(print (substitute-if 0 #'oddp '(1 2 3 4 5)))")).isEqualTo("(0 2 0 4 0)");
+		assertThat(compileAndRun("(print (substitute-if-not 0 #'oddp '(1 2 3 4 5)))")).isEqualTo("(1 0 3 0 5)");
+		assertThat(compileAndRun("(print (substitute-if 0 #'oddp '((1) (2) (3)) :key #'car))")).isEqualTo("(0 (2) 0)");
+		assertThat(compileAndRun(
+				"(print (substitute-if #\\- (lambda (c) (member c '(#\\. #\\/) :test 'char=)) \"lack/mw.backtrace\"))"))
+			.isEqualTo("\"lack-mw-backtrace\"");
+		assertThat(compileAndRun("(print (nsubstitute-if 0 #'oddp (list 1 2 3)))")).isEqualTo("(0 2 0)");
+		assertThat(compileAndRun("(print (nsubstitute-if-not 0 #'oddp (list 1 2 3)))")).isEqualTo("(1 0 3)");
+		assertThat(compileAndRun("(print (funcall #'substitute-if 0 #'oddp '(1 2 3)))")).isEqualTo("(0 2 0)");
+	}
+
+	@Test
+	void sleepSpinsOnTheClockOnPreview1() throws Exception {
+		// Preview 1 imports a clock but no host timer, so sleep loops on
+		// get-internal-real-time -- the interval really elapses, which is what this
+		// checks. The component takes the wait.lisp timer instead (see
+		// componentSleepUsesTheHostTimerInsteadOfSpinning).
+		assertThat(compileAndRun("""
+				(setq s (get-internal-real-time))
+				(sleep 0.05)
+				(print (if (>= (- (get-internal-real-time) s) 40) "slept" "too-fast"))
+				(print (sleep 0))
+				""")).isEqualTo("\"slept\"\nNIL");
+	}
+
+	@Test
+	void componentSleepUsesTheHostTimerInsteadOfSpinning() throws Exception {
+		// Under --component `sleep` is the spliced wait.lisp defun: it FORCES a
+		// wasi:clocks timer future through the module scheduler, so the wait costs no CPU
+		// and other pending tasks still progress. It stays an ordinary synchronous defun
+		// (an await would only be legal at top level or inside an async-defun), which is
+		// what lets it be called from inside a plain defun -- clack's handler `stop`
+		// shape -- and what makes #'sleep work with no built-in wrapper.
+		assertThat(compileAndRunComponent("""
+				(defun nap () (sleep 0.05))
+				(setq s (get-internal-real-time))
+				(nap)
+				(print (if (>= (- (get-internal-real-time) s) 40) "slept" "too-fast"))
+				(print (funcall #'sleep 0))
+				(print (sleep 0))
+				""")).isEqualTo("\"slept\"\nNIL\nNIL");
+	}
+
+	@Test
+	void loadContextSpecialsAreLetBindable() throws Exception {
+		assertThat(compileAndRun("""
+				(print (let ((*package* *package*)
+				             (*readtable* *readtable*)
+				             (*load-pathname* "p")
+				             (*load-truename* "t"))
+				         (list *load-pathname* *load-truename* *readtable*)))
+				""")).isEqualTo("(\"p\" \"t\" NIL)");
+	}
+
+	@Test
+	void exportAndUnexport() throws Exception {
+		// Both are consumed by the PackageResolver, so they work here even though the
+		// compiled module carries no package registry.
+		assertThat(compileAndRun("""
+				(defpackage :expkg (:use :cl))
+				(in-package :expkg)
+				(export '(run))
+				(defun run () 42)
+				(in-package :cl-user)
+				(print (expkg:run))
+				(defpackage :unexpkg (:use :cl) (:export #:a #:b))
+				(in-package :unexpkg)
+				(unexport 'b)
+				(defun a () 1)
+				(defun b () 2)
+				(in-package :cl-user)
+				(print (+ (unexpkg:a) (unexpkg::b)))
+				""")).isEqualTo("42\n3");
 	}
 
 	@Test
@@ -6451,6 +6533,23 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void fileMetadataAnswersNilAndDirectoryCreationSignals() throws Exception {
+		// The documented WASM divergence (.kb/read-load-streams.md): no WASI filestat
+		// call is imported, and "cannot be determined" IS Common Lisp's answer for
+		// file-length / file-write-date -- so they answer nil here while the interpreter
+		// and the JVM answer for real. ensure-directories-exist has no such escape in its
+		// contract, so it SIGNALS rather than pretending the directory is there.
+		String code = """
+				(with-open-file (out "meta.txt" :direction :output) (write-line "hello" out))
+				(print (file-write-date "meta.txt"))
+				(with-open-file (in "meta.txt") (print (file-length in)))
+				(print (ignore-errors (ensure-directories-exist "sub/dir/x.txt")))
+				(print (if (probe-file "sub/dir/x.txt") 'made 'absent))
+				""";
+		assertThat(compileAndRunWithDir(code)).isEqualTo("NIL\nNIL\nNIL\nABSENT");
+	}
+
+	@Test
 	void probeFileLeaksNoDescriptor() throws Exception {
 		// A probe must close what it opened: 300 probes with a leak exhaust the
 		// descriptor table and the subsequent open fails (traps).
@@ -7766,7 +7865,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("353");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("362");
 	}
 
 	@Test

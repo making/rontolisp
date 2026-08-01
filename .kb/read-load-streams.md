@@ -144,3 +144,41 @@ Pinned by `HttpHandlerTest#concurrentRequestsGetTheirOwnSocketHandle` and
 `StreamHandleConcurrencySupport`: 24 simultaneous requests x 3 rounds, each opening its
 own socket to an echo server; the assertion is both "no handle handed out twice" and "the
 echo that came back is my own").
+
+**`file-length` is REAL on the interpreter and the JVM, and `nil` everywhere else -- which
+is in contract, not a stub** (todo-225, the clack milestone). A `Reader`/`Writer` does not
+remember the path it came from, so both backends keep a side table alongside the stream
+table and `file-length` stats what it finds there: interpreter = a `Map<Long, String>
+streamPaths` in `Environment` filled by `open` and cleared by `close`; JVM = an
+`Object[] _streamPaths` field indexed by handle exactly like `_streams`, written by
+`_setStreamPath` (which `_open` wraps its `_addStream` call in) and nulled by
+`_closeStream`. `_fileLength` runs the handle through `_forceOutput` first, so an output
+stream's answer counts what was WRITTEN rather than what happened to reach the disk (the
+interpreter flushes a `Flushable` entry for the same reason). Only `open` fills the table,
+so every other stream kind -- string streams, sockets, the standard streams, a handle
+already closed -- answers nil. **Both WASM backends always answer nil, file streams
+included**, and so does `file-write-date`: CL says both answer nil when the value "cannot
+be determined", and no WASI `filestat` call is imported here. **Reason for the
+divergence**: the fix is a tenth preview1 import (`fd_filestat_get` covers both -- length
+from a live fd, mtime via the `probe-file` open/stat/close shape), which shifts every
+defined function index and needs `adapter.wat` + `adapter-http-server-p1.wat` + the
+`--no-wasi` trap stub in step, the way `fd_readdir` did (`.kb/directory-listing.md`).
+**Re-evaluation trigger**: if any consumer needs a real length or timestamp on WASM, that
+import is the change to make -- nothing else is missing. The JVM side is GATED per
+operator (`JvmIoRuntimeBuilder.FileMeta`), so a program that asks for neither keeps its
+exact bytes; `#'file-length` / `#'file-write-date` are in `REFERENCE_GATED_FUNCTIONS`
+because their wrapper bodies call those helpers and the gate scans the SOURCE program, not
+the injected wrappers. Pinned by `LispEvaluatorTest#evalFileWriteDateAndFileLength`,
+`JvmLispCompilerTest#compileAndRunFileWriteDateAndFileLength` and
+`WasmLispCompilerIntegrationTest#fileMetadataAnswersNilAndDirectoryCreationSignals`.
+
+**`ensure-directories-exist` is Lisp source over ONE creating primitive** (`%make-directories`,
+the write-side sibling of `%list-directory`): `LispPreludeLibrary` holds the defun, so the
+"the directory component is everything up to and including the last slash" rule has one
+definition for every backend, and only the primitive is per-backend (interpreter/JVM
+`Files.createDirectories` / `File.mkdirs`; both WASM backends a call-time
+`LispMacroExpander.makeDirectoriesStub()` error). It signals on WASM where `file-length`
+answers nil because its contract has no "cannot be determined" answer -- the directory
+either exists afterwards or it does not. Lite: CL's second value (`created`) is not
+returned, since a prelude defun's secondary value does not cross the function boundary on
+the compile paths (`.todo/212`).

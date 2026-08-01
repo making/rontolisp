@@ -1429,7 +1429,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      353
+      362
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -1464,6 +1464,61 @@ cases:
       (print (ci-use-hello))
     expected: |
       "hi"
+  # A runtime (export ...) is consumed by the PackageResolver like use-package, so the
+  # names it publishes resolve on every backend. It must PRECEDE the definitions: symbols
+  # are identified by their canonical spelling, and exporting flips ci-exp::f to ci-exp:f.
+  - name: export-and-unexport
+    source: |
+      (defpackage :ci-exp (:use :cl))
+      (in-package :ci-exp)
+      (export '(ci-exp-run))
+      (defun ci-exp-run () 42)
+      (in-package :cl-user)
+      (print (ci-exp:ci-exp-run))
+      (defpackage :ci-unexp (:use :cl) (:export :ci-unexp-a :ci-unexp-b))
+      (in-package :ci-unexp)
+      (unexport 'ci-unexp-b)
+      (defun ci-unexp-a () 1)
+      (defun ci-unexp-b () 2)
+      (in-package :cl-user)
+      (print (+ (ci-unexp:ci-unexp-a) (ci-unexp::ci-unexp-b)))
+    expected: |
+      42
+      3
+  # The clack-enablement batch that CAN be cross-backend: substitute-if (lack/util's
+  # runtime middleware-name build), sleep (clack.handler's stop) and the load-context
+  # specials clack's %load-file rebinds. file-write-date / file-length /
+  # ensure-directories-exist are deliberately NOT here: they diverge on WASM by design
+  # (.kb/read-load-streams.md).
+  - name: clack-enablement-builtins
+    source: |
+      (print (substitute-if #\- (lambda (c) (member c '(#\. #\/) :test 'char=)) "lack/mw.backtrace"))
+      (print (substitute-if 0 #'oddp '(1 2 3 4 5)))
+      (print (substitute-if-not 0 #'oddp '(1 2 3 4 5)))
+      (print (substitute-if 0 #'oddp '((1) (2) (3)) :key #'car))
+      (print (nsubstitute-if 0 #'oddp (list 1 2 3)))
+      (print (nsubstitute-if-not 0 #'oddp (list 1 2 3)))
+      (print (funcall #'substitute-if 0 #'oddp '(1 2 3)))
+      (setq ci-sleep-start (get-internal-real-time))
+      (sleep 0.05)
+      (print (if (>= (- (get-internal-real-time) ci-sleep-start) 40) 'slept 'too-fast))
+      (print (sleep 0))
+      (print (let ((*package* *package*)
+                   (*readtable* *readtable*)
+                   (*load-pathname* "p")
+                   (*load-truename* "t"))
+               (list *load-pathname* *load-truename* *readtable*)))
+    expected: |
+      "lack-mw-backtrace"
+      (0 2 0 4 0)
+      (1 0 3 0 5)
+      (0 (2) 0)
+      (0 2 0)
+      (1 0 3)
+      (0 2 0)
+      SLEPT
+      NIL
+      ("p" "t" NIL)
   # rl/la are built-in nicknames for rontolisp/linalg; a user defpackage nickname
   # resolves everywhere the canonical name does.
   - name: builtin-package-nicknames

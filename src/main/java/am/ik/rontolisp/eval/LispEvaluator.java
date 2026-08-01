@@ -949,6 +949,19 @@ public final class LispEvaluator {
 			// The truename is the namestring itself (see LispNames.PROBE_FILE).
 			return this.sourceLoader.exists(path.value()) ? path : LispNil.INSTANCE;
 		}));
+		// file-write-date: the same SourceLoader mediation as probe-file, for the same
+		// reason -- a host without a filesystem has no modification times and answers the
+		// nil Common Lisp already prescribes for "cannot be determined".
+		this.globalEnv.defineFunction(LispNames.FILE_WRITE_DATE, new LispFunction(LispNames.FILE_WRITE_DATE, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.FILE_WRITE_DATE + " expects 1 argument, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispString path)) {
+				throw new LispEvalException(LispNames.FILE_WRITE_DATE + " expects a string pathname");
+			}
+			Long universal = this.sourceLoader.writeDate(path.value());
+			return universal == null ? LispNil.INSTANCE : new LispInteger(universal);
+		}));
 		// %list-directory: the one directory-LISTING primitive, mediated by the same
 		// SourceLoader as probe-file so a host without a filesystem simply says nil.
 		// Answers (t . names) for a readable directory -- the leading t is what tells
@@ -1013,6 +1026,33 @@ public final class LispEvaluator {
 			this.packageResolver.usePackage(used, target);
 			return LispTrue.INSTANCE;
 		}));
+		// export/unexport: the same split as use-package -- a literal top-level call is
+		// consumed by the PackageResolver (so it works on every backend), and these
+		// runtime bindings serve the computed calls only the interpreter can run,
+		// resolving against the very same resolver so they take effect for the forms read
+		// after them.
+		for (String name : List.of(LispNames.EXPORT, LispNames.UNEXPORT)) {
+			boolean export = LispNames.EXPORT.equals(name);
+			this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+				if (args.isEmpty() || args.size() > 2) {
+					throw new LispEvalException(name + " expects 1 or 2 arguments, got " + args.size());
+				}
+				List<String> symbols = new ArrayList<>();
+				// A symbol or a LIST of symbols, like CL.
+				if (args.get(0) instanceof LispCons list) {
+					for (LispVal element : list.toList()) {
+						symbols.add(packageNameDesignator(name, element));
+					}
+				}
+				else if (!(args.get(0) instanceof LispNil)) {
+					symbols.add(packageNameDesignator(name, args.get(0)));
+				}
+				String target = args.size() == 2 ? packageNameDesignator(name, args.get(1))
+						: this.packageResolver.currentPackageName();
+				this.packageResolver.exportSymbols(symbols, target, export);
+				return LispTrue.INSTANCE;
+			}));
+		}
 		this.globalEnv.defineFunction(LispNames.SLOT_MAKUNBOUND, new LispFunction(LispNames.SLOT_MAKUNBOUND, args -> {
 			if (args.size() != 2) {
 				throw new LispEvalException(LispNames.SLOT_MAKUNBOUND + " expects 2 arguments, got " + args.size());
@@ -1489,6 +1529,19 @@ public final class LispEvaluator {
 			return Environment.seqResult(args.get(1),
 					removeIfValues(args.get(0), Environment.seqAsList(args.get(1)), true));
 		}));
+		// substitute-if/-if-not and their destructive n- twins: like substitute, but the
+		// element is selected by a predicate instead of an eql comparison. Registered
+		// here
+		// rather than in Environment because they call back into apply (the :key selector
+		// and the predicate itself).
+		this.globalEnv.defineFunction(LispNames.SUBSTITUTE_IF,
+				new LispFunction(LispNames.SUBSTITUTE_IF, args -> substituteIfValues(LispNames.SUBSTITUTE_IF, args)));
+		this.globalEnv.defineFunction(LispNames.SUBSTITUTE_IF_NOT, new LispFunction(LispNames.SUBSTITUTE_IF_NOT,
+				args -> substituteIfValues(LispNames.SUBSTITUTE_IF_NOT, args)));
+		this.globalEnv.defineFunction(LispNames.NSUBSTITUTE_IF, new LispFunction(LispNames.NSUBSTITUTE_IF,
+				args -> nsubstituteIfValues(LispNames.NSUBSTITUTE_IF, args)));
+		this.globalEnv.defineFunction(LispNames.NSUBSTITUTE_IF_NOT, new LispFunction(LispNames.NSUBSTITUTE_IF_NOT,
+				args -> nsubstituteIfValues(LispNames.NSUBSTITUTE_IF_NOT, args)));
 		// delete-if/delete-if-not are the destructive variants of
 		// remove-if/remove-if-not:
 		// splice out matching cells in place (Common Lisp semantics; use the return
@@ -3273,6 +3326,14 @@ public final class LispEvaluator {
 				return eval(LispMacroExpander.expandSubstitute(cons), env);
 			case LispNames.NSUBSTITUTE:
 				return eval(LispMacroExpander.expandNsubstitute(cons), env);
+			case LispNames.SUBSTITUTE_IF:
+				return eval(LispMacroExpander.expandSubstituteIf(cons), env);
+			case LispNames.SUBSTITUTE_IF_NOT:
+				return eval(LispMacroExpander.expandSubstituteIfNot(cons), env);
+			case LispNames.NSUBSTITUTE_IF:
+				return eval(LispMacroExpander.expandNsubstituteIf(cons), env);
+			case LispNames.NSUBSTITUTE_IF_NOT:
+				return eval(LispMacroExpander.expandNsubstituteIfNot(cons), env);
 			case LispNames.REVAPPEND:
 				return eval(LispMacroExpander.expandRevappend(cons), env);
 			case LispNames.NRECONC:
@@ -5695,6 +5756,71 @@ public final class LispEvaluator {
 			result = new LispCons(kept.get(i), result);
 		}
 		return result;
+	}
+
+	// (substitute-if new pred seq &key key) and its -if-not complement: a fresh sequence
+	// whose elements satisfying (resp. failing) the predicate are replaced by new. The
+	// result keeps the argument's sequence kind, like substitute.
+	private LispVal substituteIfValues(String name, List<LispVal> args) {
+		if (args.size() < 3) {
+			throw new LispEvalException(name + " expects at least 3 arguments, got " + args.size());
+		}
+		requireKeyKeyword(name, args, 3);
+		LispVal keyFn = optionalKeywordArg(args, 3, LispNames.KEY_KEYWORD);
+		boolean negated = LispNames.SUBSTITUTE_IF_NOT.equals(name);
+		LispVal newItem = args.get(0);
+		LispVal predicate = args.get(1);
+		List<LispVal> out = new ArrayList<>();
+		LispVal cursor = Environment.seqAsList(args.get(2));
+		while (cursor instanceof LispCons cell) {
+			out.add(matchesSubstituteIf(predicate, keyFn, cell.car()) != negated ? newItem : cell.car());
+			cursor = cell.cdr();
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = out.size() - 1; i >= 0; i--) {
+			result = new LispCons(out.get(i), result);
+		}
+		return Environment.seqResult(args.get(2), result);
+	}
+
+	// The destructive twins: rewrite the matching cars in place and return the (possibly
+	// mutated) original list.
+	private LispVal nsubstituteIfValues(String name, List<LispVal> args) {
+		if (args.size() < 3) {
+			throw new LispEvalException(name + " expects at least 3 arguments, got " + args.size());
+		}
+		requireKeyKeyword(name, args, 3);
+		LispVal keyFn = optionalKeywordArg(args, 3, LispNames.KEY_KEYWORD);
+		boolean negated = LispNames.NSUBSTITUTE_IF_NOT.equals(name);
+		LispVal newItem = args.get(0);
+		LispVal predicate = args.get(1);
+		LispVal list = args.get(2);
+		LispVal cursor = list;
+		while (cursor instanceof LispCons cell) {
+			if (matchesSubstituteIf(predicate, keyFn, cell.car()) != negated) {
+				cell.setCar(newItem);
+			}
+			cursor = cell.cdr();
+		}
+		return list;
+	}
+
+	private boolean matchesSubstituteIf(LispVal predicate, @Nullable LispVal keyFn, LispVal element) {
+		LispVal selected = (keyFn == null) ? element : apply(keyFn, List.of(element), this.globalEnv);
+		return isTruthy(apply(predicate, List.of(selected), this.globalEnv));
+	}
+
+	// The -if family takes :key only (no :test -- the predicate IS the test), so its
+	// keyword tail gets its own validator rather than requireTestKeyKeywords.
+	private static void requireKeyKeyword(String name, List<LispVal> args, int start) {
+		for (int i = start; i < args.size(); i += 2) {
+			if (!(args.get(i) instanceof LispSymbol kw) || !LispNames.KEY_KEYWORD.equals(kw.name())) {
+				throw new LispEvalException(name + " expects keyword argument :key, got: " + args.get(i).print());
+			}
+			if (i + 1 >= args.size()) {
+				throw new LispEvalException(name + " expects a value after " + kw.name());
+			}
+		}
 	}
 
 	// Destructively splice out every cell whose car satisfies the predicate

@@ -1494,13 +1494,24 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The directory-LISTING helper joins the stream runtime only for a program that
 		// calls the primitive, so every artifact compiled without one keeps its bytes.
 		final boolean usesListDirectory = programUsesSymbol(program, LispNames.LIST_DIRECTORY);
+		// The file-metadata helpers ride the same rule, one gate each: file-length also
+		// grows _open and adds the _streamPaths side table, so a program that never asks
+		// for it must not pay for either.
+		final JvmIoRuntimeBuilder.FileMeta fileMeta = new JvmIoRuntimeBuilder.FileMeta(
+				programUsesSymbol(program, LispNames.FILE_WRITE_DATE),
+				programUsesSymbol(program, LispNames.MAKE_DIRECTORIES),
+				programUsesSymbol(program, LispNames.FILE_LENGTH));
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
-					usesErrorOutput, usesListDirectory)
+					usesErrorOutput, usesListDirectory, fileMeta)
 			.methods();
 		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
 		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);
+		final @Nullable Utf8Constant streamPathsFieldName = fileMeta.fileLength()
+				? cp.addUtf8(JvmIoRuntimeBuilder.STREAM_PATHS_FIELD) : null;
+		final @Nullable Utf8Constant streamPathsFieldDesc = fileMeta.fileLength()
+				? cp.addUtf8(JvmIoRuntimeBuilder.STREAM_PATHS_DESC) : null;
 		Utf8Constant streamCountFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_FIELD);
 		Utf8Constant streamCountFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_DESC);
 		// Tracks whether stdout is at the start of a line (0 = at line start), so
@@ -1632,6 +1643,14 @@ public final class JvmLispCompiler implements LispCompiler {
 					.writeU2(streamCountFieldName)
 					.writeU2(streamCountFieldDesc)
 					.writeU2(0));
+				if (streamPathsFieldName != null) {
+					// VOLATILE for the same reason _streams is: _setStreamPath is
+					// synchronized and its write-back publishes the table.
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
+						.writeU2(streamPathsFieldName)
+						.writeU2(java.util.Objects.requireNonNull(streamPathsFieldDesc))
+						.writeU2(0));
+				}
 				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 					.writeU2(colFieldName)
 					.writeU2(colFieldDesc)

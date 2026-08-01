@@ -5256,6 +5256,110 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands (substitute-if new pred seq) like {@link #expandSubstitute(LispCons)}, with
+	 * the {@code eql} comparison replaced by a call of the predicate on the (optionally
+	 * {@code :key}-selected) element.
+	 * @param cons the substitute-if expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSubstituteIf(LispCons cons) {
+		return expandSubstituteIf(cons, true, false);
+	}
+
+	/**
+	 * Expands (substitute-if-not new pred seq): the complement of
+	 * {@link #expandSubstituteIf(LispCons)}, replacing the elements the predicate
+	 * rejects.
+	 * @param cons the substitute-if-not expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSubstituteIfNot(LispCons cons) {
+		return expandSubstituteIf(cons, true, true);
+	}
+
+	/**
+	 * Like {@link #expandSubstituteIf(LispCons)} /
+	 * {@link #expandSubstituteIfNot(LispCons)}, but lets a backend drop the vector arm of
+	 * the dispatch when no array can exist in this program (see
+	 * {@code seqResultDispatchForm} and {@link #expandCoerce(LispCons, boolean)}).
+	 * @param cons the substitute-if / substitute-if-not expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @param negated whether the predicate's verdict is inverted (the {@code -if-not}
+	 * form)
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSubstituteIf(LispCons cons, boolean arraysExist, boolean negated) {
+		String name = negated ? LispNames.SUBSTITUTE_IF_NOT : LispNames.SUBSTITUTE_IF;
+		List<LispVal> parts = cons.toList();
+		requireKeywords(name, parts, 4, LispNames.KEY_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 4, LispNames.KEY_KEYWORD);
+		LispSymbol newItem = new LispSymbol("__substif_new");
+		LispSymbol pred = new LispSymbol("__substif_pred");
+		LispSymbol acc = new LispSymbol("__substif_acc");
+		LispSymbol cur = new LispSymbol("__substif_cur");
+		// The new item and the predicate bind outside the string dispatch to keep the
+		// argument evaluation order (new, predicate, then sequence) -- expandSubstitute's
+		// shape with (funcall pred elem) in place of the eql test.
+		LispVal scan = seqResultDispatchForm(parts.get(3), lst -> {
+			LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
+					listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
+			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
+			LispVal match = listToCons(
+					List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, callOf(LispNames.CAR, cur))));
+			LispVal chosen = negated ? makeIf(match, callOf(LispNames.CAR, cur), newItem)
+					: makeIf(match, newItem, callOf(LispNames.CAR, cur));
+			LispVal body = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
+					listToCons(List.of(new LispSymbol(LispNames.CONS), chosen, acc))));
+			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause, body)));
+		}, arraysExist);
+		return makeLet(newItem.name(), parts.get(1), makeLet(pred.name(), parts.get(2), scan));
+	}
+
+	/**
+	 * Expands (nsubstitute-if new pred lst) like {@link #expandNsubstitute(LispCons)},
+	 * with the {@code eql} comparison replaced by a call of the predicate on the
+	 * (optionally {@code :key}-selected) element.
+	 * @param cons the nsubstitute-if expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNsubstituteIf(LispCons cons) {
+		return expandNsubstituteIf(cons, false);
+	}
+
+	/**
+	 * Expands (nsubstitute-if-not new pred lst): the complement of
+	 * {@link #expandNsubstituteIf(LispCons)}.
+	 * @param cons the nsubstitute-if-not expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandNsubstituteIfNot(LispCons cons) {
+		return expandNsubstituteIf(cons, true);
+	}
+
+	private static LispVal expandNsubstituteIf(LispCons cons, boolean negated) {
+		String name = negated ? LispNames.NSUBSTITUTE_IF_NOT : LispNames.NSUBSTITUTE_IF;
+		List<LispVal> parts = cons.toList();
+		requireKeywords(name, parts, 4, LispNames.KEY_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 4, LispNames.KEY_KEYWORD);
+		LispSymbol newItem = new LispSymbol("__nsubif_new");
+		LispSymbol pred = new LispSymbol("__nsubif_pred");
+		LispSymbol lst = new LispSymbol("__nsubif_lst");
+		LispSymbol cur = new LispSymbol("__nsubif_cur");
+		LispVal initCur = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, lst));
+		LispVal whileTest = listToCons(List.of(new LispSymbol(LispNames.CONSP), cur));
+		LispVal match = listToCons(
+				List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, callOf(LispNames.CAR, cur))));
+		LispVal replace = listToCons(List.of(new LispSymbol(LispNames.RPLACA), cur, newItem));
+		LispVal ifExpr = negated ? makeIf(match, LispNil.INSTANCE, replace) : makeIf(match, replace, LispNil.INSTANCE);
+		LispVal advance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
+		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), whileTest, ifExpr, advance));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(newItem, parts.get(1))), listToCons(List.of(pred, parts.get(2))),
+						listToCons(List.of(lst, parts.get(3))), listToCons(List.of(cur, LispNil.INSTANCE))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, initCur, whileExpr, lst));
+	}
+
+	/**
 	 * Expands (delete item lst) into a destructive splice that removes every cons whose
 	 * {@code car} is {@code eql} to {@code item}, reusing the surviving cons cells.
 	 * Accepts the same {@code :test}/{@code :key} keywords as {@code member}.
@@ -7351,6 +7455,50 @@ public final class LispMacroExpander {
 
 	private static LispVal callOf(String op, LispVal arg) {
 		return listToCons(List.of(new LispSymbol(op), arg));
+	}
+
+	/**
+	 * Expands {@code (sleep seconds)}, the waiting form, into the shared
+	 * seconds-to-whole-milliseconds conversion plus the backend's wait.
+	 *
+	 * <p>
+	 * {@code spin} false (interpreter, JVM) yields
+	 * {@code (let ((__sleep_ms (round (* seconds 1000)))) (if (> __sleep_ms 0) (%sleep-ms __sleep_ms) nil))}
+	 * -- the guard is here, not in the primitive, so {@code %sleep-ms} is a straight-line
+	 * "park for this many milliseconds" call and a zero/negative duration is a no-op like
+	 * every Common Lisp.
+	 *
+	 * <p>
+	 * {@code spin} true is WASM <strong>Preview 1</strong> only: it loops on
+	 * {@code get-internal-real-time} until the deadline, because Preview 1's nine imports
+	 * include a CLOCK but no host timer, so burning the interval is the only way to
+	 * elapse it. {@code --component} never comes here -- {@code sleep} is the spliced
+	 * {@code wait.lisp} defun over the real {@code wasi:clocks} timer there. See
+	 * {@code .kb/time-environment-builtins.md} for both, and the re-evaluation trigger
+	 * for the Preview 1 spin.
+	 * @param cons the sleep expression
+	 * @param spin whether this backend must loop on the clock instead of parking
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSleep(LispCons cons, boolean spin) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.SLEEP + " expects 1 argument, got " + (parts.size() - 1));
+		}
+		LispVal millis = callOf(LispNames.ROUND,
+				listToCons(List.of(new LispSymbol(LispNames.MUL), parts.get(1), new LispInteger(1000))));
+		if (!spin) {
+			LispSymbol ms = new LispSymbol("__sleep_ms");
+			LispVal positive = listToCons(List.of(new LispSymbol(LispNames.GT), ms, new LispInteger(0)));
+			return makeLet(ms.name(), millis, makeIf(positive, callOf(LispNames.SLEEP_MS, ms), LispNil.INSTANCE));
+		}
+		LispSymbol end = new LispSymbol("__sleep_end");
+		LispVal now = listToCons(List.of(new LispSymbol(LispNames.GET_INTERNAL_REAL_TIME)));
+		LispVal deadline = listToCons(List.of(new LispSymbol(LispNames.ADD), now, millis));
+		LispVal spinLoop = listToCons(List.of(new LispSymbol(LispNames.WHILE),
+				listToCons(List.of(new LispSymbol(LispNames.LT), now, end)), LispNil.INSTANCE));
+		return makeLet(end.name(), deadline,
+				listToCons(List.of(new LispSymbol(LispNames.PROGN), spinLoop, LispNil.INSTANCE)));
 	}
 
 	/**
@@ -16984,6 +17132,21 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The call-time stub both WASM backends lower {@code %make-directories} -- and
+	 * therefore {@code ensure-directories-exist} -- to. WASI's import set here carries no
+	 * directory-creation call, and unlike {@code file-length} / {@code file-write-date}
+	 * this primitive has no "cannot be determined" answer in its contract: either the
+	 * directory exists afterwards or it does not, so answering anything but an error
+	 * would be a lie. Like the other stubs it keeps a library defun merely CONTAINING the
+	 * form compilable and signals only if it is actually called.
+	 * @return the signaling expression
+	 */
+	public static LispVal makeDirectoriesStub() {
+		return listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString("ensure-directories-exist is not supported on the WASM backends")));
+	}
+
+	/**
 	 * The call-time stub the compiled backends lower {@code handler-bind} to: an
 	 * unconditional {@code error}. Its handlers would have to run at the signal point
 	 * without unwinding, which no backend's condition machinery models; the stub keeps a
@@ -21458,11 +21621,15 @@ public final class LispMacroExpander {
 		boolean usesFloatFormat = false;
 		boolean usesPrintEscape = false;
 		boolean usesPrintReadably = false;
-		// The load-context pathname variables (LispNames.LOAD_TRUENAME_VAR &c). On the
-		// compile paths they are all nil and stay nil: a library file is SPLICED into the
-		// program at compile time, so nothing is being loaded -- nor compile-file'd -- at
-		// run time. Declared anyway so a library that reads one (local-time's
-		// (or *compile-file-truename* *load-truename*) zoneinfo lookup) compiles.
+		// The load-context pathname variables (LispNames.LOAD_TRUENAME_VAR &c) plus
+		// *readtable*, which a loader binds in the same let (clack's %load-file binds all
+		// four around its read/eval loop). On the compile paths they are all nil and stay
+		// nil: a library file is SPLICED into the program at compile time, so nothing is
+		// being loaded -- nor compile-file'd -- at run time, and the reader is the
+		// frontend's, with no runtime readtable object to name. Declared anyway so a
+		// library that reads or rebinds one (local-time's
+		// (or *compile-file-truename* *load-truename*) zoneinfo lookup) compiles; nil is
+		// also what the interpreter's *readtable* holds, so the value agrees everywhere.
 		java.util.List<String> loadContextVars = new java.util.ArrayList<>();
 		for (LispVal form : program) {
 			usesMv = usesMv || usesMvOperator(form);
@@ -21471,7 +21638,7 @@ public final class LispMacroExpander {
 			usesPrintReadably = usesPrintReadably || usesSymbol(form, LispNames.PRINT_READABLY_VAR);
 		}
 		for (String name : List.of(LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR,
-				LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR)) {
+				LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.READTABLE_VAR)) {
 			for (LispVal form : program) {
 				if (usesSymbol(form, name)) {
 					loadContextVars.add(name);

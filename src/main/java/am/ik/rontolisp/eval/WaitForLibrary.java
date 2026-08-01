@@ -66,7 +66,11 @@ public final class WaitForLibrary {
 		}
 		boolean referenced = false;
 		for (LispVal form : program) {
-			if (references(form, LispNames.WAIT_FOR)) {
+			// `sleep` counts as a reference here: under --component it lowers to
+			// (await (wait-for ms)) in WasmExprCompiler, which resolves to THIS splice's
+			// defun -- and that lowering happens long after this pass, so the trigger has
+			// to name the surface form. Preview 1 spins instead and never gets here.
+			if (references(form, LispNames.WAIT_FOR) || referencesSleep(form)) {
 				referenced = true;
 				break;
 			}
@@ -101,6 +105,24 @@ public final class WaitForLibrary {
 		return switch (form) {
 			case LispSymbol sym -> namesRontolispMember(sym.name(), member);
 			case LispCons cons -> references(cons.car(), member) || references(cons.cdr(), member);
+			default -> false;
+		};
+	}
+
+	// Whether the form mentions cl:sleep, in either source spelling (bare or cl:sleep --
+	// this scan runs before PackageResolver, so it normalizes itself). A #'sleep counts:
+	// (function sleep) contains the symbol, and its wrapper body compiles through the
+	// same lowering.
+	private static boolean referencesSleep(LispVal form) {
+		return switch (form) {
+			case LispSymbol sym -> {
+				if (LispNames.SLEEP.equals(sym.name())) {
+					yield true;
+				}
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+				yield qn != null && LispNames.CL_PKG.equals(qn.pkg()) && LispNames.SLEEP.equals(qn.member());
+			}
+			case LispCons cons -> referencesSleep(cons.car()) || referencesSleep(cons.cdr());
 			default -> false;
 		};
 	}

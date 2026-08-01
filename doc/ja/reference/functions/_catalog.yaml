@@ -219,6 +219,10 @@ categories:
       - { slug: mismatch, name: "mismatch" }
       - { slug: substitute, name: "substitute" }
       - { slug: nsubstitute, name: "nsubstitute" }
+      - { slug: substitute-if, name: "substitute-if" }
+      - { slug: substitute-if-not, name: "substitute-if-not" }
+      - { slug: nsubstitute-if, name: "nsubstitute-if" }
+      - { slug: nsubstitute-if-not, name: "nsubstitute-if-not" }
   - title: "集合"
     functions:
       - { slug: union, name: "union" }
@@ -319,6 +323,8 @@ categories:
       - { slug: macroexpand, name: "macroexpand" }
       - { slug: fdefinition, name: "fdefinition" }
       - { slug: use-package, name: "use-package" }
+      - { slug: export, name: "export" }
+      - { slug: unexport, name: "unexport" }
   - title: "ストリームとファイル"
     functions:
       - { slug: open, name: "open" }
@@ -340,6 +346,8 @@ categories:
       - { slug: write-sequence, name: "write-sequence" }
       - { slug: file-position, name: "file-position" }
       - { slug: file-length, name: "file-length" }
+      - { slug: file-write-date, name: "file-write-date" }
+      - { slug: ensure-directories-exist, name: "ensure-directories-exist" }
       - { slug: make-string-output-stream, name: "make-string-output-stream" }
       - { slug: get-output-stream-string, name: "get-output-stream-string" }
       - { slug: make-synonym-stream, name: "make-synonym-stream" }
@@ -354,6 +362,7 @@ categories:
       - { slug: decode-universal-time, name: "decode-universal-time" }
       - { slug: get-internal-real-time, name: "get-internal-real-time" }
       - { slug: get-internal-run-time, name: "get-internal-run-time" }
+      - { slug: sleep, name: "sleep" }
   - title: "rontolisp パッケージ"
     functions:
       - { slug: rontolisp-version, name: "rontolisp:version" }

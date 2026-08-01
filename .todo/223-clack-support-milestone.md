@@ -62,7 +62,20 @@ JVM and component legs are green too (or their divergence is recorded).
    around it, so the cached-source patch the spike used is NOT reproducible
    without 226.
 2. `.todo/225` missing CL builtins batch (substitute-if, file-write-date, sleep,
-   ensure-directories-exist, file-length, export, ...) — 低〜中
+   ensure-directories-exist, file-length, export, ...) — 低〜中 —
+   **DONE 2026-08-01** (all seven items on all four backends; see the todo's own
+   status section). Three of them are deliberate WASM divergences, each with its
+   reason and re-evaluation trigger in `.kb`: `file-length`/`file-write-date`
+   answer nil there (CL's own "cannot be determined", not a stub — the fix is a
+   tenth `fd_filestat_get` preview1 import), `ensure-directories-exist` signals
+   (no nil escape in its contract), and `sleep` busy-waits on the clock on
+   PREVIEW 1 ONLY — the component leg waits on the real wasi:clocks timer
+   (measured 0 CPU), which costs it `-W exceptions=y` because the timer puts the
+   module in async/EH mode. One limit surfaced that the milestone should know
+   about: **`export` must precede the definitions it names**, because a symbol is
+   identified by its canonical spelling and exporting flips `pkg::name` to
+   `pkg:name` — so a `clack.handler.rontolisp`-style shim keeps using the
+   `defpackage` `:export` clause, exactly as the spike wrote it.
 3. `.todo/226` shim widening: uiop `symbol-call` + `uiop/image`, usocket host
    resolution, swank stub system — 低 — **DONE 2026-08-01** (all four backends;
    see the todo's own status section). With 224 + 226 the whole LACK side now

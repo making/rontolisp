@@ -1801,6 +1801,88 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSubstituteIf() throws Exception {
+		assertThat(compileAndRun("(print (substitute-if 0 #'oddp '(1 2 3 4 5)))")).isEqualTo("(0 2 0 4 0)");
+		assertThat(compileAndRun("(print (substitute-if-not 0 #'oddp '(1 2 3 4 5)))")).isEqualTo("(1 0 3 0 5)");
+		assertThat(compileAndRun("(print (substitute-if 0 #'oddp '((1) (2) (3)) :key #'car))")).isEqualTo("(0 (2) 0)");
+		assertThat(compileAndRun(
+				"(print (substitute-if #\\- (lambda (c) (member c '(#\\. #\\/) :test 'char=)) \"lack/mw.backtrace\"))"))
+			.isEqualTo("\"lack-mw-backtrace\"");
+		assertThat(compileAndRun("(print (nsubstitute-if 0 #'oddp (list 1 2 3)))")).isEqualTo("(0 2 0)");
+		assertThat(compileAndRun("(print (nsubstitute-if-not 0 #'oddp (list 1 2 3)))")).isEqualTo("(1 0 3)");
+		assertThat(compileAndRun("(print (funcall #'substitute-if 0 #'oddp '(1 2 3)))")).isEqualTo("(0 2 0)");
+	}
+
+	@Test
+	void compileAndRunSleep() throws Exception {
+		assertThat(compileAndRun("""
+				(setq s (get-internal-real-time))
+				(sleep 0.05)
+				(print (if (>= (- (get-internal-real-time) s) 40) "slept" "too-fast"))
+				(print (sleep 0))
+				""")).isEqualTo("\"slept\"\nNIL");
+	}
+
+	@Test
+	void compileAndRunFileWriteDateAndFileLength() throws Exception {
+		String file = tempDir.resolve("meta.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output) (write-line "hello" out))
+				(print (integerp (file-write-date "%s")))
+				(print (file-write-date "%s.missing"))
+				(with-open-file (in "%s") (print (file-length in)))
+				(setq h (open "%s"))
+				(close h)
+				(print (file-length h))
+				(print (file-length "not-a-stream"))
+				""".formatted(file, file, file, file, file))).isEqualTo("T\nNIL\n6\nNIL\nNIL");
+	}
+
+	@Test
+	void compileAndRunEnsureDirectoriesExist() throws Exception {
+		String base = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(print (ensure-directories-exist "%s/a/b/app.log"))
+				(print (if (uiop:directory-exists-p "%s/a/b/") "made" "missing"))
+				(print (probe-file "%s/a/b/app.log"))
+				""".formatted(base, base, base))).isEqualTo("\"" + base + "/a/b/app.log\"\n\"made\"\nNIL");
+	}
+
+	@Test
+	void compileAndRunExportAndUnexport() throws Exception {
+		// A literal top-level export is consumed by the PackageResolver, which is what
+		// makes it work here at all: the compiled output has no package registry.
+		assertThat(compileAndRun("""
+				(defpackage :expkg (:use :cl))
+				(in-package :expkg)
+				(export '(run))
+				(defun run () 42)
+				(in-package :cl-user)
+				(print (expkg:run))
+				(defpackage :unexpkg (:use :cl) (:export #:a #:b))
+				(in-package :unexpkg)
+				(unexport 'b)
+				(defun a () 1)
+				(defun b () 2)
+				(in-package :cl-user)
+				(print (+ (unexpkg:a) (unexpkg::b)))
+				""")).isEqualTo("42\n3");
+	}
+
+	@Test
+	void compileAndRunLoadContextSpecialsAreLetBindable() throws Exception {
+		// clack's %load-file binds all four; on the compile paths they are declared nil
+		// and stay nil (nothing is being loaded at run time).
+		assertThat(compileAndRun("""
+				(print (let ((*package* *package*)
+				             (*readtable* *readtable*)
+				             (*load-pathname* "p")
+				             (*load-truename* "t"))
+				         (list *load-pathname* *load-truename* *readtable*)))
+				""")).isEqualTo("(\"p\" \"t\" NIL)");
+	}
+
+	@Test
 	void withOpenFileWriteThenRead() throws Exception {
 		String file = tempDir.resolve("wof.txt").toString().replace("\\", "\\\\");
 		assertThat(compileAndRun("""
@@ -6242,12 +6324,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("353");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("362");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("353");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("362");
 	}
 
 	@Test

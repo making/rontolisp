@@ -144,6 +144,18 @@ public final class PackageResolver {
 					return consumed;
 				}
 			}
+			// A literal top-level (export '(a b)) / (unexport 'a) is consumed for the
+			// same
+			// reason use-package is: which symbols are external is a read/compile-time
+			// notion here, so the directive must take effect on THIS pass for the forms
+			// that follow -- and consuming it is what makes it work on the compiled
+			// backends, which have no registry at runtime.
+			if (LispNames.EXPORT.equals(member) || LispNames.UNEXPORT.equals(member)) {
+				LispVal consumed = tryConsumeExport(cons, LispNames.EXPORT.equals(member));
+				if (consumed != null) {
+					return consumed;
+				}
+			}
 			if (LispNames.PUSH_PACKAGE.equals(member)) {
 				pushPackage();
 				return quotedSymbol(this.currentPackage);
@@ -222,6 +234,74 @@ public final class PackageResolver {
 		}
 		usePackage(used, target);
 		return LispTrue.INSTANCE;
+	}
+
+	/**
+	 * Consumes a literal top-level {@code (export SYMBOLS [PACKAGE])} -- or its
+	 * {@code unexport} inverse -- call: rewrites the target package's external set and
+	 * returns {@code t}, the standard functions' return value. Returns null when an
+	 * argument is not literal (a runtime call only the interpreter can serve).
+	 */
+	private @Nullable LispVal tryConsumeExport(LispCons cons, boolean export) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			return null;
+		}
+		List<String> names = literalDesignatorList(parts.get(1));
+		String target = this.currentPackage;
+		if (parts.size() == 3) {
+			target = literalDesignator(parts.get(2));
+		}
+		if (names == null || target == null) {
+			return null;
+		}
+		exportSymbols(names, target, export);
+		return LispTrue.INSTANCE;
+	}
+
+	/**
+	 * Makes the named symbols external (or, with {@code export} false, internal again) in
+	 * the target package -- the shared machinery behind the
+	 * {@code export}/{@code unexport} directives and their interpreter-side runtime
+	 * functions. A name the package does not define but INHERITS through its use list is
+	 * re-exported through the same import redirect {@code defpackage}'s {@code :export}
+	 * clause records, so the exported symbol stays the used package's one rather than a
+	 * fresh symbol of the same name.
+	 * @param names the symbol names to export (a qualified spelling is reduced to its
+	 * member name)
+	 * @param targetPackage the package whose external set changes
+	 * @param export true to export, false to unexport
+	 */
+	public void exportSymbols(List<String> names, String targetPackage, boolean export) {
+		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		if (!this.registry.contains(target)) {
+			throw new LispPackageException("No such package: " + targetPackage);
+		}
+		LispPackage pkg = this.registry.get(target);
+		Set<String> externals = new HashSet<>(pkg.externals());
+		Set<String> owned = new HashSet<>(pkg.symbols());
+		Map<String, String> imports = new HashMap<>(pkg.imports());
+		for (String spelled : names) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(spelled);
+			String name = qn == null ? spelled : qn.member();
+			if (!export) {
+				// unexport leaves the symbol PRESENT, just no longer external.
+				externals.remove(name);
+				continue;
+			}
+			externals.add(name);
+			owned.add(name);
+			if (!pkg.shadows().contains(name) && !imports.containsKey(name) && !PackageRegistry.isClSymbol(name)) {
+				for (String used : pkg.useList()) {
+					if (!LispNames.CL_PKG.equals(used) && this.registry.get(used).exports(name)) {
+						imports.put(name, trueHome(used, name));
+						break;
+					}
+				}
+			}
+		}
+		this.registry.define(new LispPackage(pkg.name(), pkg.useList(), Set.copyOf(owned), Set.copyOf(externals),
+				Map.copyOf(imports), pkg.shadows()));
 	}
 
 	/**

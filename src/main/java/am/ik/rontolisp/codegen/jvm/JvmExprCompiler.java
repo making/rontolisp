@@ -434,6 +434,9 @@ final class JvmExprCompiler {
 				case LispNames.CLOSE -> JvmCloseCompiler.compile(cons, ctx, className);
 				case LispNames.PROBE_FILE -> JvmProbeFileCompiler.compile(cons, ctx, className);
 				case LispNames.LIST_DIRECTORY -> JvmListDirectoryCompiler.compile(cons, ctx, className);
+				case LispNames.SLEEP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandSleep(cons, false), ctx, className);
+				case LispNames.SLEEP_MS -> JvmSleepCompiler.compile(cons, ctx, className);
 				case LispNames.WRITE_LINE -> JvmWriteLineCompiler.compile(cons, ctx, className);
 				case LispNames.WRITE_STRING -> {
 					LispVal bounded = LispMacroExpander.lowerWriteStringBounds(cons);
@@ -523,8 +526,10 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx, className);
 				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons), ctx, className);
-				case LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.PATHNAMEP -> JvmExprCompiler
+				case LispNames.FILE_POSITION, LispNames.PATHNAMEP -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, className);
+				case LispNames.FILE_WRITE_DATE, LispNames.MAKE_DIRECTORIES, LispNames.FILE_LENGTH ->
+					JvmFileMetaCompiler.compile(cons, ctx, className, sym.name());
 				case LispNames.STREAM_ELEMENT_TYPE -> JvmExprCompiler.compileExpr(
 						LispMacroExpander.expandConstantResult(cons, LispMacroExpander.quotedCharacterTypeName()), ctx,
 						className);
@@ -766,6 +771,14 @@ final class JvmExprCompiler {
 					.compileExpr(LispMacroExpander.expandSubstitute(cons, ctx.usesArrays), ctx, className);
 				case LispNames.NSUBSTITUTE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandNsubstitute(cons), ctx, className);
+				case LispNames.SUBSTITUTE_IF -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandSubstituteIf(cons, ctx.usesArrays, false), ctx, className);
+				case LispNames.SUBSTITUTE_IF_NOT -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandSubstituteIf(cons, ctx.usesArrays, true), ctx, className);
+				case LispNames.NSUBSTITUTE_IF ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIf(cons), ctx, className);
+				case LispNames.NSUBSTITUTE_IF_NOT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIfNot(cons), ctx, className);
 				case LispNames.REMOVE_DUPLICATES -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons, ctx.usesArrays), ctx, className);
 				case LispNames.NCONC ->

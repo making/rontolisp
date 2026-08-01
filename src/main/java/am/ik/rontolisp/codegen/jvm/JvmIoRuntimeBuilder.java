@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ConstantPool;
@@ -86,6 +87,42 @@ final class JvmIoRuntimeBuilder {
 	static final String LIST_DIRECTORY_METHOD = "_listDirectory";
 
 	static final String LIST_DIRECTORY_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/** {@code file-write-date}: the universal time, or null when it cannot be told. */
+	static final String FILE_WRITE_DATE_METHOD = "_fileWriteDate";
+
+	static final String FILE_WRITE_DATE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/** {@code %make-directories}: the write-side sibling of {@code _listDirectory}. */
+	static final String MAKE_DIRECTORIES_METHOD = "_makeDirectories";
+
+	static final String MAKE_DIRECTORIES_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * {@code file-length}: the byte length of the file behind a FILE stream, read off the
+	 * {@link #STREAM_PATHS_FIELD} table; null for every other stream kind.
+	 */
+	static final String FILE_LENGTH_METHOD = "_fileLength";
+
+	static final String FILE_LENGTH_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * Records the namestring a handle was opened on, mirroring {@code _streams}. Returns
+	 * the handle so {@code _open} can wrap its {@code _addStream} call in it.
+	 */
+	static final String SET_STREAM_PATH_METHOD = "_setStreamPath";
+
+	static final String SET_STREAM_PATH_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * The namestring of each FILE stream, indexed by handle exactly like
+	 * {@code _streams}. A Reader/Writer does not remember where it came from, so
+	 * {@code file-length} needs this side table; only {@code _open} fills it, which is
+	 * why every other stream kind answers nil.
+	 */
+	static final String STREAM_PATHS_FIELD = "_streamPaths";
+
+	static final String STREAM_PATHS_DESC = "[Ljava/lang/Object;";
 
 	static final String WRITE_LINE_METHOD = "_writeLine";
 
@@ -327,6 +364,21 @@ final class JvmIoRuntimeBuilder {
 	 */
 	private final boolean listDirectory;
 
+	/** Which file-metadata helpers to emit; see {@link FileMeta}. */
+	private final FileMeta fileMeta;
+
+	@Nullable private final MethodrefConstant fileLastModified;
+
+	@Nullable private final MethodrefConstant fileMkdirs;
+
+	@Nullable private final MethodrefConstant fileLengthRef;
+
+	@Nullable private final FieldrefConstant streamPathsField;
+
+	@Nullable private final MethodrefConstant setStreamPathRef;
+
+	@Nullable private final MethodrefConstant forceOutputRef;
+
 	/**
 	 * Socket-runtime constants, non-null only when the program uses a tcp built-in; the
 	 * stream built-ins then grow socket branches (a socket entry is a raw
@@ -355,10 +407,11 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
-			boolean errorOutput, boolean listDirectory) {
+			boolean errorOutput, boolean listDirectory, FileMeta fileMeta) {
 		this.sockets = sockets;
 		this.errorOutput = errorOutput;
 		this.listDirectory = listDirectory;
+		this.fileMeta = fileMeta;
 		this.systemErr = errorOutput ? cp.addFieldref(cp.addClass(cp.addUtf8("java/lang/System")),
 				cp.addNameAndType(cp.addUtf8("err"), cp.addUtf8("Ljava/io/PrintStream;"))) : null;
 		this.cp = cp;
@@ -508,6 +561,37 @@ final class JvmIoRuntimeBuilder {
 						cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/File;Ljava/lang/String;)V")))
 				: null;
 		this.slashQuoteStr = listDirectory ? cp.addString("/\"") : null;
+		// The file-metadata trio, each minted only for a program that calls it so every
+		// other artifact keeps its original bytes (the %list-directory rule above).
+		this.fileLastModified = fileMeta.writeDate()
+				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("lastModified"), cp.addUtf8("()J")))
+				: null;
+		this.fileMkdirs = fileMeta.makeDirectories()
+				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("mkdirs"), cp.addUtf8("()Z"))) : null;
+		this.fileLengthRef = fileMeta.fileLength()
+				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()J"))) : null;
+		this.streamPathsField = fileMeta.fileLength() ? cp.addFieldref(thisClass,
+				cp.addNameAndType(cp.addUtf8(STREAM_PATHS_FIELD), cp.addUtf8(STREAM_PATHS_DESC))) : null;
+		this.setStreamPathRef = fileMeta.fileLength() ? cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(SET_STREAM_PATH_METHOD), cp.addUtf8(SET_STREAM_PATH_DESC))) : null;
+		this.forceOutputRef = fileMeta.fileLength() ? cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(FORCE_OUTPUT_METHOD), cp.addUtf8(FORCE_OUTPUT_DESC))) : null;
+	}
+
+	/**
+	 * Which of the three file-metadata helpers the program actually calls. They are gated
+	 * one by one rather than as a group so a program using only {@code file-write-date}
+	 * does not carry the {@code file-length} stream-path table, and every artifact
+	 * compiled before any of them existed keeps its exact bytes.
+	 *
+	 * @param writeDate whether {@code file-write-date} is called
+	 * @param makeDirectories whether {@code %make-directories} is called
+	 * @param fileLength whether {@code file-length} is called
+	 */
+	record FileMeta(boolean writeDate, boolean makeDirectories, boolean fileLength) {
+
+		static final FileMeta NONE = new FileMeta(false, false, false);
+
 	}
 
 	static JvmIoRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
@@ -515,10 +599,10 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
-			boolean errorOutput, boolean listDirectory) {
+			boolean errorOutput, boolean listDirectory, FileMeta fileMeta) {
 		return new JvmIoRuntimeBuilder(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue,
 				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets,
-				errorOutput, listDirectory);
+				errorOutput, listDirectory, fileMeta);
 	}
 
 	/**
@@ -571,6 +655,20 @@ final class JvmIoRuntimeBuilder {
 		if (this.listDirectory) {
 			ms.add(new IoMethod(this.cp.addUtf8(LIST_DIRECTORY_METHOD), this.cp.addUtf8(LIST_DIRECTORY_DESC), 5, 7,
 					buildListDirectory()));
+		}
+		if (this.fileMeta.writeDate()) {
+			ms.add(new IoMethod(this.cp.addUtf8(FILE_WRITE_DATE_METHOD), this.cp.addUtf8(FILE_WRITE_DATE_DESC), 6, 4,
+					buildFileWriteDate()));
+		}
+		if (this.fileMeta.makeDirectories()) {
+			ms.add(new IoMethod(this.cp.addUtf8(MAKE_DIRECTORIES_METHOD), this.cp.addUtf8(MAKE_DIRECTORIES_DESC), 4, 2,
+					buildMakeDirectories()));
+		}
+		if (this.fileMeta.fileLength()) {
+			ms.add(new IoMethod(this.cp.addUtf8(SET_STREAM_PATH_METHOD), this.cp.addUtf8(SET_STREAM_PATH_DESC), 4, 4,
+					buildSetStreamPath(), AccessFlag.ACC_SYNCHRONIZED));
+			ms.add(new IoMethod(this.cp.addUtf8(FILE_LENGTH_METHOD), this.cp.addUtf8(FILE_LENGTH_DESC), 4, 4,
+					buildFileLength()));
 		}
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_LINE_METHOD), this.cp.addUtf8(WRITE_LINE_DESC), 5, 4,
 				buildWriteLine()));
@@ -1104,10 +1202,17 @@ final class JvmIoRuntimeBuilder {
 		patchBranch(code, gotoStorePos, code.size());
 		patchBranch(code, gotoStorePos1, code.size());
 		patchBranch(code, gotoStorePos2, code.size());
-		// return _addStream(stream);
+		// return _addStream(stream); -- or, for a program that asks for file-length,
+		// return _setStreamPath(_addStream(stream), p), which records the namestring the
+		// Reader/Writer itself does not remember.
 		code.add(Opcode.ALOAD_3);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, this.addStreamRef.index());
+		if (this.fileMeta.fileLength()) {
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, Objects.requireNonNull(this.setStreamPathRef).index());
+		}
 		code.add(Opcode.ARETURN);
 		return code;
 	}
@@ -1156,6 +1261,247 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.ARETURN);
 		return code;
+	}
+
+	/**
+	 * {@code _fileWriteDate(Object path) -> Long | null}. The file's modification time as
+	 * a universal time (seconds since 1900). Quotes are stripped like {@code _probeFile}
+	 * does, and a missing or unreadable file answers null -- {@code File.lastModified}
+	 * reports 0 for both, which is also the answer Common Lisp prescribes for "the time
+	 * cannot be determined". (A file genuinely stamped at the Unix epoch therefore reads
+	 * as unknown; no other JDK call distinguishes them without throwing.)
+	 */
+	private List<Integer> buildFileWriteDate() {
+		// Slots: 0=path (Object), 1=p (String), 2/3=millis (long)
+		List<Integer> code = new ArrayList<>();
+		emitStripQuotes(code, Opcode.ALOAD_0, Opcode.ASTORE_1, Opcode.ALOAD_1);
+		// millis = new File(p).lastModified();
+		code.add(Opcode.NEW);
+		emitU2(code, this.fileClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.fileInit.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, Objects.requireNonNull(this.fileLastModified).index());
+		code.add(Opcode.DUP2);
+		code.add(Opcode.LSTORE_2);
+		// if (millis == 0L) return null;
+		code.add(Opcode.LCONST_0);
+		code.add(Opcode.LCMP);
+		int ifKnownPos = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifKnownPos, code.size());
+		// return Long.valueOf(millis / 1000 + 2208988800L);
+		code.add(Opcode.LLOAD_2);
+		emitLongConst(code, 1000L);
+		code.add(Opcode.LDIV);
+		emitLongConst(code, 2208988800L);
+		code.add(Opcode.LADD);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.longValueOf.index());
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _makeDirectories(Object path) -> "T"}. Creates the directory and every
+	 * missing parent. {@code mkdirs} answers false for a directory that already exists,
+	 * which is a success here, so the boolean is dropped: the primitive's contract is "it
+	 * exists afterwards", and a path that could not be created fails at the next open.
+	 */
+	private List<Integer> buildMakeDirectories() {
+		// Slots: 0=path (Object), 1=p (String)
+		List<Integer> code = new ArrayList<>();
+		emitStripQuotes(code, Opcode.ALOAD_0, Opcode.ASTORE_1, Opcode.ALOAD_1);
+		code.add(Opcode.NEW);
+		emitU2(code, this.fileClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.fileInit.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, Objects.requireNonNull(this.fileMkdirs).index());
+		code.add(Opcode.POP);
+		emitLdc(code, this.tStr.index());
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _setStreamPath(Object handle, Object path) -> handle}. Records the
+	 * namestring a handle was opened on, growing the side table to fit. Emitted
+	 * {@code synchronized} for the same reason {@code _addStream} is: served requests
+	 * open files concurrently, and the growth swaps the array.
+	 */
+	private List<Integer> buildSetStreamPath() {
+		// Slots: 0=handle, 1=path, 2=arr, 3=idx (int)
+		List<Integer> code = new ArrayList<>();
+		FieldrefConstant paths = Objects.requireNonNull(this.streamPathsField);
+		// idx = (int) ((Long) handle).longValue();
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.ISTORE_3);
+		// arr = _streamPaths == null ? new Object[16] : _streamPaths;
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, paths.index());
+		code.add(Opcode.ASTORE_2);
+		code.add(Opcode.ALOAD_2);
+		int ifHavePos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		code.add(Opcode.BIPUSH);
+		code.add(16);
+		code.add(Opcode.ANEWARRAY);
+		emitU2(code, this.objectClass.index());
+		code.add(Opcode.ASTORE_2);
+		patchBranch(code, ifHavePos, code.size());
+		// if (idx >= arr.length) arr = Arrays.copyOf(arr, (idx + 1) * 2);
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ARRAYLENGTH);
+		int ifFitsPos = code.size();
+		code.add(Opcode.IF_ICMPLT);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.IADD);
+		code.add(Opcode.ICONST_2);
+		code.add(Opcode.IMUL);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.arraysCopyOf.index());
+		code.add(Opcode.ASTORE_2);
+		patchBranch(code, ifFitsPos, code.size());
+		// arr[idx] = path; _streamPaths = arr; return handle;
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ILOAD_3);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.AASTORE);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, paths.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _fileLength(Object handle) -> Long | null}. The length of the file the
+	 * handle was opened on. Anything the side table does not know -- a string stream, a
+	 * socket, a standard stream, a closed handle -- answers null, Common Lisp's "cannot
+	 * be determined". An output stream is flushed first (through {@code _forceOutput},
+	 * which already knows every entry kind), so the answer counts what has been WRITTEN
+	 * rather than what happens to have reached the disk.
+	 */
+	private List<Integer> buildFileLength() {
+		// Slots: 0=handle, 1=arr, 2=idx (int), 3=p
+		List<Integer> code = new ArrayList<>();
+		FieldrefConstant paths = Objects.requireNonNull(this.streamPathsField);
+		List<Integer> gotoNils = new ArrayList<>();
+		// arr = _streamPaths; if (arr == null) return null;
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, paths.index());
+		code.add(Opcode.ASTORE_1);
+		code.add(Opcode.ALOAD_1);
+		gotoNils.add(code.size());
+		code.add(Opcode.IFNULL);
+		emitU2(code, 0);
+		// if (!(handle instanceof Long)) return null;
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
+		gotoNils.add(code.size());
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		// idx = (int) handle;
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.ISTORE_2);
+		// if (idx < 0 || idx >= arr.length) return null;
+		code.add(Opcode.ILOAD_2);
+		gotoNils.add(code.size());
+		code.add(Opcode.IFLT);
+		emitU2(code, 0);
+		code.add(Opcode.ILOAD_2);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ARRAYLENGTH);
+		gotoNils.add(code.size());
+		code.add(Opcode.IF_ICMPGE);
+		emitU2(code, 0);
+		// p = arr[idx]; if (p == null) return null;
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.ILOAD_2);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.ASTORE_3);
+		code.add(Opcode.ALOAD_3);
+		gotoNils.add(code.size());
+		code.add(Opcode.IFNULL);
+		emitU2(code, 0);
+		// _forceOutput(handle);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, Objects.requireNonNull(this.forceOutputRef).index());
+		code.add(Opcode.POP);
+		// return Long.valueOf(new File((String) p).length());
+		code.add(Opcode.NEW);
+		emitU2(code, this.fileClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.stringClass.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.fileInit.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, Objects.requireNonNull(this.fileLengthRef).index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, this.longValueOf.index());
+		code.add(Opcode.ARETURN);
+		for (int gotoNil : gotoNils) {
+			patchBranch(code, gotoNil, code.size());
+		}
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * Emits {@code <store> = ((String) <load>).substring(1, length - 1)} -- the quote
+	 * stripping every path-taking helper starts with (a rontolisp string value carries
+	 * its quotes).
+	 */
+	private void emitStripQuotes(List<Integer> code, int argLoad, int store, int load) {
+		code.add(argLoad);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.stringClass.index());
+		code.add(store);
+		code.add(load);
+		code.add(Opcode.ICONST_1);
+		code.add(load);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringLength.index());
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringSubstring.index());
+		code.add(store);
+	}
+
+	/** Pushes a raw {@code long} constant. */
+	private void emitLongConst(List<Integer> code, long value) {
+		code.add(Opcode.LDC2_W);
+		emitU2(code, this.cp.addLong(value).index());
 	}
 
 	/**
@@ -1421,6 +1767,30 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.ILOAD_1);
 		code.add(Opcode.ACONST_NULL);
 		code.add(Opcode.AASTORE);
+		// The path side table is released with the entry, so file-length on a CLOSED
+		// handle answers nil rather than the length the file happens to have now -- the
+		// interpreter (which removes the map entry in close) says the same.
+		if (this.fileMeta.fileLength()) {
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, Objects.requireNonNull(this.streamPathsField).index());
+			int ifNoPathsPos = code.size();
+			code.add(Opcode.IFNULL);
+			emitU2(code, 0);
+			code.add(Opcode.ILOAD_1);
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, this.streamPathsField.index());
+			code.add(Opcode.ARRAYLENGTH);
+			int ifOutOfRangePos = code.size();
+			code.add(Opcode.IF_ICMPGE);
+			emitU2(code, 0);
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, this.streamPathsField.index());
+			code.add(Opcode.ILOAD_1);
+			code.add(Opcode.ACONST_NULL);
+			code.add(Opcode.AASTORE);
+			patchBranch(code, ifNoPathsPos, code.size());
+			patchBranch(code, ifOutOfRangePos, code.size());
+		}
 		emitLdc(code, this.tStr.index());
 		code.add(Opcode.ARETURN);
 		return code;

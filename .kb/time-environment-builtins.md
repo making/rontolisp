@@ -65,3 +65,51 @@ over a process-wide `SecureRandom`, the JVM emits `_randomByte` from
 entropy-free program never loads `java.security` and stays byte-identical), and
 WASM loads the low byte of a `random_get` draw and boxes it as an i31. This is
 what retired `ironclad-prng.lisp`'s signalling stub -- see `.kb/asdf.md`.
+
+**`sleep`: a real host timer everywhere but Preview 1 (todo-225)**.
+`LispMacroExpander.expandSleep` does the shared seconds-to-whole-milliseconds conversion
+(`(round (* n 1000))`, so `0.5` is 500 ms) and the non-positive guard; the wait itself is
+per backend.
+
+- **Interpreter / JVM**: park, through the `%SLEEP-MS` internal primitive -- an
+  `Environment` registration and `JvmSleepCompiler`'s `Number.longValue` +
+  `Thread.sleep(J)`, whose two constant-pool entries are minted at the call site so a
+  sleep-free program keeps its bytes.
+- **`--component`**: `sleep` is NOT a compiler lowering at all but the spliced
+  `wait.lisp` DEFUN (`eval/WaitForLibrary`, whose trigger is `rontolisp:wait-for` OR
+  `sleep`), which FORCES a `wasi:clocks/monotonic-clock` timer future through
+  `rontolisp::%future-force`. Measured: a 2 s sleep costs 0 CPU above the empty-program
+  baseline, where the spin cost 2.16 s of it.
+- **WASM Preview 1**: the clock spin (`expandSleep`'s `spin` arm) -- its nine imports
+  include a clock but no timer to wait on, so burning the interval is the only way to
+  elapse it. **Re-evaluation trigger**: a `poll_oneoff` import would retire it.
+
+**Why the component arm is a defun and FORCES rather than AWAITS** -- three constraints
+that between them leave exactly one shape, all three found by trying the alternatives:
+(1) an `await` is only legal at top level or inside an `async-defun`/`async-lambda`
+(`RONTOLISP:AWAIT is only allowed inside ...`), and `sleep` has to be callable from
+anywhere -- clack's handler `stop` calls it inside a plain defun -- so the wait must be
+`%future-force`, the same synchronous/asynchronous split sockets.lisp's `tcp-*` surface
+uses (`.kb/tcp-sockets.md`); (2) the lowering cannot live in `WasmExprCompiler`, because
+the `await`/future machinery it introduces has to be in the program BEFORE
+`WasmLispCompiler`'s async pass runs and that compiler runs long after it -- a lowering
+emitted there compiles to a `#<FUTURE>` value instead of a wait; (3) being a defun is what
+makes `#'sleep` work, since no built-in wrapper is injected for a name the program
+defines. `WasmExprCompiler` therefore only handles the Preview 1 spin and, in component
+mode, raises an explicit compile error when the splice is missing rather than letting the
+call fall through to a runtime "undefined function" (the `uiop:getenv` pattern).
+`#'sleep` is in `BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS` for the sharper
+version of the same reason: an ungated wrapper would put `(sleep x)` into EVERY component,
+including the ones the splice skipped.
+
+**Cost of the component arm, accepted deliberately**: awaiting a host timer puts the
+module in async -- and therefore EH -- mode, so a sleeping component needs
+`-W exceptions=y` where the old spin needed no flag. That is a real change to the "a
+program without those forms keeps its flags" line, taken because a busy-wait under
+`--component` blocks the whole instance and burns a core.
+
+Pinned by `LispEvaluatorTest#evalSleepParksAndReturnsNil`,
+`JvmLispCompilerTest#compileAndRunSleep`,
+`WasmLispCompilerIntegrationTest#sleepSpinsOnTheClockOnPreview1` +
+`#componentSleepUsesTheHostTimerInsteadOfSpinning` (which also pins the plain-defun call
+site and `#'sleep`), and the ci-spec case `clack-enablement-builtins`.

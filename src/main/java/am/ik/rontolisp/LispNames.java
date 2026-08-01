@@ -131,6 +131,23 @@ public final class LispNames {
 	/** The {@code get-internal-run-time} built-in function. */
 	public static final String GET_INTERNAL_RUN_TIME = "GET-INTERNAL-RUN-TIME";
 
+	/**
+	 * The {@code sleep} built-in function: block for the given number of seconds (a
+	 * non-negative real; sub-second values are rounded to whole milliseconds) and return
+	 * nil. The interpreter and the JVM park the thread through {@link #SLEEP_MS}; both
+	 * WASM backends BUSY-WAIT on {@link #GET_INTERNAL_REAL_TIME} because no host timer is
+	 * importable there (see {@code .kb/time-environment-builtins.md}).
+	 */
+	public static final String SLEEP = "SLEEP";
+
+	/**
+	 * The {@code %sleep-ms} internal primitive backing {@link #SLEEP} on the interpreter
+	 * and the JVM: park the current thread for a POSITIVE whole number of milliseconds.
+	 * The non-positive case is filtered out by the expansion, so the primitive itself
+	 * never has to decide what a zero or negative duration means.
+	 */
+	public static final String SLEEP_MS = "%SLEEP-MS";
+
 	/** The {@code sin} built-in function. */
 	public static final String SIN = "SIN";
 
@@ -553,6 +570,32 @@ public final class LispNames {
 	 * new item in place and returns the mutated list).
 	 */
 	public static final String NSUBSTITUTE = "NSUBSTITUTE";
+
+	/**
+	 * The {@code substitute-if} built-in function (return a copy of the sequence with
+	 * each element satisfying the predicate replaced by the new item). Accepts
+	 * {@code :key} like {@link #SUBSTITUTE}; the selector applies to the scanned elements
+	 * only.
+	 */
+	public static final String SUBSTITUTE_IF = "SUBSTITUTE-IF";
+
+	/**
+	 * The {@code substitute-if-not} built-in function (the complement of
+	 * {@link #SUBSTITUTE_IF}: replaces the elements the predicate rejects).
+	 */
+	public static final String SUBSTITUTE_IF_NOT = "SUBSTITUTE-IF-NOT";
+
+	/**
+	 * The {@code nsubstitute-if} built-in function (destructive variant of
+	 * {@link #SUBSTITUTE_IF}; see {@link #NSUBSTITUTE}).
+	 */
+	public static final String NSUBSTITUTE_IF = "NSUBSTITUTE-IF";
+
+	/**
+	 * The {@code nsubstitute-if-not} built-in function (destructive variant of
+	 * {@link #SUBSTITUTE_IF_NOT}; see {@link #NSUBSTITUTE}).
+	 */
+	public static final String NSUBSTITUTE_IF_NOT = "NSUBSTITUTE-IF-NOT";
 
 	/**
 	 * The {@code subst} function (a prelude defun): non-destructive tree substitution of
@@ -2929,6 +2972,24 @@ public final class LispNames {
 	public static final String USE_PACKAGE = "USE-PACKAGE";
 
 	/**
+	 * The {@code export} standard function, which makes symbols EXTERNAL in a package --
+	 * the runtime spelling of {@code defpackage}'s {@code :export} clause, used by
+	 * libraries that build their export list programmatically. Handled exactly like
+	 * {@link #USE_PACKAGE}: a literal top-level call is consumed by the
+	 * {@code PackageResolver} (so it takes effect for the forms that follow and works on
+	 * every backend), while a computed call stays a runtime function only the interpreter
+	 * can serve.
+	 */
+	public static final String EXPORT = "EXPORT";
+
+	/**
+	 * The {@code unexport} standard function, the inverse of {@link #EXPORT}: the symbol
+	 * stays present in the package but is no longer visible unqualified through a
+	 * {@code use}. Same literal-consumption rule.
+	 */
+	public static final String UNEXPORT = "UNEXPORT";
+
+	/**
 	 * Internal marker inserted by {@code LoadInliner} before the spliced forms of a
 	 * loaded file: it makes the {@code PackageResolver} save the current package so a
 	 * file's internal {@code in-package} cannot leak past the load, mirroring Common Lisp
@@ -4588,8 +4649,45 @@ public final class LispNames {
 	 */
 	public static final String FILE_POSITION = "FILE-POSITION";
 
-	/** The {@code file-length} built-in function -- lite: always {@code nil}. */
+	/**
+	 * The {@code file-length} built-in function: the byte length of the file a FILE
+	 * stream is open on. Interpreter and JVM answer it from the path the stream was
+	 * opened with; every other stream (string streams, sockets, the standard streams) and
+	 * both WASM backends answer {@code nil} -- which is what Common Lisp prescribes when
+	 * the length cannot be determined, not a stub (see {@code .kb/read-load-streams.md}).
+	 */
 	public static final String FILE_LENGTH = "FILE-LENGTH";
+
+	/**
+	 * The {@code file-write-date} built-in function: the file's last-modification time as
+	 * a universal time (seconds since 1900), or {@code nil} when it cannot be determined
+	 * -- which is the answer on both WASM backends, whose WASI import set carries no
+	 * {@code filestat} call.
+	 */
+	public static final String FILE_WRITE_DATE = "FILE-WRITE-DATE";
+
+	/**
+	 * The {@code ensure-directories-exist} built-in function: creates the directory
+	 * component of the given namestring (a trailing {@code /} makes the whole string the
+	 * directory) and returns the namestring. Interpreter and JVM create for real; both
+	 * WASM backends signal at CALL time, since no WASI directory-creation call is
+	 * imported and silently answering "it exists" would be a lie.
+	 *
+	 * <p>
+	 * Lite deviation: Common Lisp returns {@code (values pathspec created)} and this
+	 * returns the pathspec only -- a prelude defun's secondary value would not survive
+	 * the function boundary on the compile paths, so promising one would be the lie.
+	 */
+	public static final String ENSURE_DIRECTORIES_EXIST = "ENSURE-DIRECTORIES-EXIST";
+
+	/**
+	 * The {@code %make-directories} internal primitive: create the named directory and
+	 * every missing parent, answering {@code t}. The write-side sibling of
+	 * {@link #LIST_DIRECTORY}, and the one call {@link #ENSURE_DIRECTORIES_EXIST} is Lisp
+	 * source over, so the "which part of the namestring is the directory" rule has a
+	 * single definition. Both WASM backends lower it to a call-time error.
+	 */
+	public static final String MAKE_DIRECTORIES = "%MAKE-DIRECTORIES";
 
 	/**
 	 * The {@code make-broadcast-stream} built-in function -- lite: with no component

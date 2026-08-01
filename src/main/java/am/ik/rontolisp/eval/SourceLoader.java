@@ -66,6 +66,20 @@ public interface SourceLoader {
 	}
 
 	/**
+	 * The file's last-modification time as a Common Lisp universal time (seconds since
+	 * 1900-01-01 GMT) -- what {@code file-write-date} answers. Like {@link #exists} and
+	 * {@link #listDirectory} it must never throw; {@code null} means "cannot be
+	 * determined", which is the answer Common Lisp prescribes and also the default here,
+	 * since a loader that is not a filesystem (the browser playground's in-memory map)
+	 * has no modification times to report.
+	 * @param path the path to stat
+	 * @return the universal time, or {@code null} when it cannot be determined
+	 */
+	@Nullable default Long writeDate(String path) {
+		return null;
+	}
+
+	/**
 	 * Returns a loader that reads files from the local filesystem.
 	 * @return a filesystem-backed loader
 	 */
@@ -85,6 +99,19 @@ public interface SourceLoader {
 					// An unrepresentable path (a NUL byte, say) is not an existing
 					// file -- probe-file answers nil rather than signalling.
 					return false;
+				}
+			}
+
+			@Override
+			@Nullable public Long writeDate(String path) {
+				try {
+					// The 1900 Common Lisp epoch is 2208988800 seconds before the Unix
+					// one -- the same offset get-universal-time applies.
+					return Files.getLastModifiedTime(Path.of(path)).toMillis() / 1000L + 2208988800L;
+				}
+				catch (IOException | RuntimeException ex) {
+					// Missing, unreadable or unrepresentable: "cannot be determined".
+					return null;
 				}
 			}
 

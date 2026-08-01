@@ -362,6 +362,19 @@ public final class LispPreludeLibrary {
 				        %dn-p
 				        (concatenate 'string %dn-p "/"))))
 				""");
+		// ensure-directories-exist: the DIRECTORY component of the namestring is
+		// everything
+		// up to and including the last slash, so "logs/app.log" creates "logs/" and a
+		// namestring that already ends in a slash IS the directory. A namestring with no
+		// slash names a file in the working directory and creates nothing. Returns the
+		// pathspec (see LispNames.ENSURE_DIRECTORIES_EXIST for the missing second value).
+		SOURCES.put(LispNames.ENSURE_DIRECTORIES_EXIST, """
+				(defun ensure-directories-exist (%ede-path)
+				  (let* ((%ede-p (if (stringp %ede-path) %ede-path ""))
+				         (%ede-s (position #\\/ %ede-p :from-end t))
+				         (%ede-d (if %ede-s (subseq %ede-p 0 (+ %ede-s 1)) "")))
+				    (if (string= %ede-d "") %ede-path (progn (%make-directories %ede-d) %ede-path))))
+				""");
 		SOURCES.put(LispNames.DIRECTORY, """
 				(defun directory (%dir-spec)
 				  (let* ((%dir-p (if (stringp %dir-spec) %dir-spec ""))

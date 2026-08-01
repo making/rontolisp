@@ -23,3 +23,19 @@
   (if (if (integerp %wait-for-ms) (>= %wait-for-ms 0) nil)
       (%mono-clock:wait-for (* %wait-for-ms 1000000))
       (error "rontolisp:wait-for expects a non-negative integer (milliseconds)")))
+
+;; cl:sleep on this backend, over the same host timer. It FORCES the timer future
+;; rather than awaiting it, which is what lets it stay an ordinary synchronous defun:
+;; an `await` is only legal inside an async-defun/async-lambda or at top level, and
+;; sleep has to be callable from anywhere (clack's handler `stop` calls it inside a
+;; plain defun). %future-force blocks on the module scheduler -- so the wait costs no
+;; CPU and other pending tasks still progress, unlike the Preview 1 clock spin, which
+;; exists only because Preview 1 has no timer to force. This is the same synchronous /
+;; asynchronous split sockets.lisp's tcp-* surface uses (.kb/tcp-sockets.md).
+;;
+;; Being a defun is also what makes `#'sleep` work: no built-in wrapper is injected for
+;; a name the program defines. The positive guard keeps a zero duration from costing a
+;; host round trip, and matches the interpreter/JVM lowering exactly.
+(defun sleep (%sleep-seconds)
+  (let ((%sleep-ms (round (* %sleep-seconds 1000))))
+    (if (> %sleep-ms 0) (rontolisp::%future-force (rontolisp:wait-for %sleep-ms)) nil)))

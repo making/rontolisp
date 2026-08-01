@@ -539,6 +539,26 @@ final class WasmExprCompiler {
 				compileExpr(LispMacroExpander.expandWithMutex(cons, ctx.ehMode), ctx);
 				return;
 			}
+			// sleep: on Preview 1 a spin on the clock, the only wait its nine imports
+			// can express. Under --component it is the SPLICED wait.lisp defun instead
+			// (eval/WaitForLibrary), which awaits the real wasi:clocks timer and so
+			// YIELDS -- the rest of the instance keeps running -- so the name falls
+			// through to the ordinary call path that resolves the defun, exactly like
+			// uiop:getenv above. The lowering cannot live here for the component: the
+			// await it introduces has to exist before WasmLispCompiler's async pass runs,
+			// and this compiler runs long after it. Reaching here with no such defun
+			// means
+			// the pipeline skipped the splice.
+			if (LispNames.SLEEP.equals(sym.name())) {
+				if (!ctx.component) {
+					compileExpr(LispMacroExpander.expandSleep(cons, true), ctx);
+					return;
+				}
+				if (!ctx.functions.containsKey(LispNames.SLEEP)) {
+					throw new UnsupportedOperationException(LispNames.SLEEP
+							+ " under --component is the spliced wait.lisp binding, but the program was compiled without it (eval/WaitForLibrary.process must run on the compile path)");
+				}
+			}
 			switch (sym.name()) {
 				case LispNames.ADD -> {
 					if (!WasmIntFusionCompiler.tryCompile(cons, ctx)) {
@@ -748,8 +768,14 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx);
 				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons), ctx);
-				case LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.PATHNAMEP ->
+				// file-length and file-write-date answer nil here rather than signalling:
+				// no WASI filestat call is imported, and "cannot be determined" is what
+				// Common Lisp prescribes for exactly that. %make-directories has no such
+				// escape -- a create either happened or it did not -- so it signals.
+				case LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.FILE_WRITE_DATE, LispNames.PATHNAMEP ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx);
+				case LispNames.MAKE_DIRECTORIES ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.makeDirectoriesStub(), ctx);
 				case LispNames.STREAM_ELEMENT_TYPE -> WasmExprCompiler.compileExpr(
 						LispMacroExpander.expandConstantResult(cons, LispMacroExpander.quotedCharacterTypeName()), ctx);
 				case LispNames.MAKE_BROADCAST_STREAM ->
@@ -976,6 +1002,14 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSubstitute(cons), ctx);
 				case LispNames.NSUBSTITUTE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandNsubstitute(cons), ctx);
+				case LispNames.SUBSTITUTE_IF ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSubstituteIf(cons), ctx);
+				case LispNames.SUBSTITUTE_IF_NOT ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSubstituteIfNot(cons), ctx);
+				case LispNames.NSUBSTITUTE_IF ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIf(cons), ctx);
+				case LispNames.NSUBSTITUTE_IF_NOT ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIfNot(cons), ctx);
 				case LispNames.REMOVE_DUPLICATES ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons), ctx);
 				case LispNames.NCONC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNconc(cons), ctx);
