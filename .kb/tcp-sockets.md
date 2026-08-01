@@ -378,6 +378,27 @@ splice). Key mechanics:
 - **`get-local-name`/`get-peer-name`** end in a literal `(values address
   port)`, which flows through the multiple-values tier's user-function
   channel, so `multiple-value-bind` receives both values on every backend.
+- **`host-to-hostname`/`get-host-by-name`** (todo-226, for clack's
+  `clack.handler:run`, which normalizes its `:address` through the pair before
+  handing it to a backend handler) are pure Lisp over `format`/`elt`/`ash`, so
+  unlike everything else in the shim they answer on Preview 1 too.
+  `host-to-hostname` is REAL for every designator shape upstream accepts (nil →
+  `"0.0.0.0"`, string → itself, vector quad / list of four octets and a
+  host-byte-order 32-bit integer → the dotted quad). `get-host-by-name` is
+  LITE -- it renders through `host-to-hostname` instead of resolving, because
+  **rontolisp has no name-resolution primitive on any backend**; the composite
+  is then an identity on the address, and the `tcp-connect`/`tcp-listen` the
+  address eventually reaches resolves it inside the host anyway.
+  **Why it is not resolved on the interpreter/JVM, where `InetAddress` could**:
+  that would buy nothing (both sides hand the result straight back to a socket
+  call that resolves it regardless) and would cost a real backend divergence in
+  a library that is SPLICED INTO EVERY socket program. Re-evaluation trigger:
+  the day a cross-backend resolver exists -- `.todo/048` (wiring
+  `wasi:sockets/ip-name-lookup@0.3.0`) is what that waits on -- this should
+  return upstream's real vector quad on all four, not on two of them. Pinned by
+  `LispEvaluatorTest.usocketHostToHostname*`,
+  `JvmLispCompilerTest.compileAndRunUsocketHostToHostnameRendersEveryDesignatorShape`
+  and `WasmLispCompilerIntegrationTest.usocketHostToHostnameRendersEveryDesignatorShape`.
 - **The four `with-*` macros** (`with-client-socket`, `with-connected-socket`,
   `with-server-socket` (alias), `with-socket-listener`) are built-in
   `LispMacroExpander.expandUsocketWith*` expansions (the

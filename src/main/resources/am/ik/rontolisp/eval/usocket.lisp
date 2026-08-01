@@ -120,3 +120,38 @@
 
 (defun usocket:get-peer-name (socket)
   (values (rontolisp:tcp-peer-address socket) (rontolisp:tcp-peer-port socket)))
+
+(defun usocket:host-to-hostname (host)
+  ;; Every host-designator shape upstream accepts, rendered the way upstream
+  ;; renders it: a string passes through, a vector quad (or list of four
+  ;; octets) and a host-byte-order 32-bit integer become the dotted quad, and
+  ;; nil is the wildcard host.
+  (cond ((null host) "0.0.0.0")
+        ((stringp host) host)
+        ((integerp host)
+         (format nil "~D.~D.~D.~D"
+                 (logand (ash host -24) 255)
+                 (logand (ash host -16) 255)
+                 (logand (ash host -8) 255)
+                 (logand host 255)))
+        ((or (vectorp host) (consp host))
+         (format nil "~D.~D.~D.~D"
+                 (elt host 0) (elt host 1) (elt host 2) (elt host 3)))
+        (t (string host))))
+
+(defun usocket:get-host-by-name (name)
+  ;; Lite, and identically so on every backend: rontolisp has no name-resolution
+  ;; primitive at all, so this cannot return upstream's resolved vector quad. It
+  ;; renders the designator instead, which keeps clack's normalize-then-hand-on
+  ;; chain -- (host-to-hostname (get-host-by-name address)) -- an identity on the
+  ;; address it is given; the tcp-connect/tcp-listen call that address eventually
+  ;; reaches does the real resolution inside the host (natively on the
+  ;; interpreter and the JVM; IPv4 literals only on WASM).
+  ;;
+  ;; Deliberately NOT resolved on the interpreter/JVM only: a per-backend answer
+  ;; here would buy nothing (both sides hand the result straight back to a socket
+  ;; call that resolves anyway) and would cost a backend divergence in a library
+  ;; every socket program splices. Re-evaluate when a cross-backend resolver
+  ;; primitive exists -- wiring wasi:sockets/ip-name-lookup is what that waits on
+  ;; -- at which point this should return a real vector quad on all four.
+  (usocket:host-to-hostname name))

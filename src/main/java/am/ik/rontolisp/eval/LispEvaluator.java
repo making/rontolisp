@@ -1730,6 +1730,33 @@ public final class LispEvaluator {
 			}
 			return new LispString("");
 		}));
+		// uiop:symbol-call -- real UIOP's late-binding call: look NAME up in PACKAGE at
+		// run time and apply it to the remaining arguments. The interpreter can do this
+		// for real (the resolver knows every package's members and the global function
+		// table is live); the compile backends have no runtime name-to-function table,
+		// so there the call lowers to the generic uiop call-time error instead. lack's
+		// find-package-or-load reaches it only on the quicklisp branch, which rontolisp
+		// never takes (:quicklisp is not in *features*, so the asdf branch runs).
+		String symbolCallName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.SYMBOL_CALL);
+		this.globalEnv.defineFunction(symbolCallName, new LispFunction(symbolCallName, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.UIOP_SYMBOL_CALL + " expects (package name &rest args), got "
+						+ args.size() + " arguments");
+			}
+			String designator = packageDesignator(LispNames.UIOP_SYMBOL_CALL, args.get(0));
+			String member = packageDesignator(LispNames.UIOP_SYMBOL_CALL, args.get(1));
+			if (this.packageResolver.findPackageName(designator) == null) {
+				throw new LispEvalException(LispNames.UIOP_SYMBOL_CALL + ": package " + designator + " does not exist");
+			}
+			// find-symbol* semantics: an absent name is an error, not nil -- the caller
+			// is about to apply it.
+			String spelling = this.packageResolver.memberSpelling(designator, member);
+			if (spelling == null) {
+				throw new LispEvalException(
+						LispNames.UIOP_SYMBOL_CALL + ": symbol " + member + " is not present in package " + designator);
+			}
+			return apply(resolveFunction(spelling), args.subList(2, args.size()), this.globalEnv);
+		}));
 		// ql:quickload = auto-download (real Quicklisp dist) + asdf:load-system. It
 		// accepts a single system name or a list of names, downloads each (with its
 		// dependencies) into the cache, adds the extracted .asd directories to the search

@@ -50,6 +50,8 @@ import org.jspecify.annotations.Nullable;
  * (a rontolisp pathname IS its namestring), and {@code probe-file} plus a signal on a
  * missing file, which is what makes the {@code (ignore-errors (truename x))}
  * existence-probe idiom work.</li>
+ * <li>{@code uiop/image:print-condition-backtrace} -- lite: prints the CONDITION and no
+ * backtrace (no backend carries a Lisp-level call stack).</li>
  * <li>{@code directory} plus {@code uiop:directory-exists-p} /
  * {@code uiop:directory-files} / {@code uiop:subdirectories} /
  * {@code uiop:collect-sub*directories} -- the directory-LISTING family, one rendering of
@@ -130,6 +132,18 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.LAST_CHAR, """
 				(defun uiop:last-char (s)
 				  (and (stringp s) (plusp (length s)) (char s (1- (length s)))))
+				""");
+		// uiop/image:print-condition-backtrace -- lite: no backend carries a Lisp-level
+		// call stack, so there is no backtrace to print and the honest rendering is the
+		// condition alone. Real UIOP's own fallback for an implementation without a
+		// backtrace API is the same shape. Defined in its home package (uiop/image);
+		// the uiop package IMPORTS the name (PackageRegistry), so both spellings a
+		// library may use name this one function. lack-middleware-backtrace calls it as
+		// the first line of its error report.
+		SOURCES.put(LispNames.PRINT_CONDITION_BACKTRACE, """
+				(defun uiop/image:print-condition-backtrace (%pcb-condition &key (stream *error-output*) count)
+				  (format stream "~A~%" %pcb-condition)
+				  (values))
 				""");
 		SOURCES.put(LispNames.SXHASH, """
 				(defun sxhash (obj)

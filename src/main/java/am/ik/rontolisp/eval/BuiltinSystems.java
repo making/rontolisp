@@ -27,7 +27,8 @@ public final class BuiltinSystems {
 			features -> ShimLibraries.forms("float-features", features), "trivial-gray-streams",
 			features -> ShimLibraries.forms("trivial-gray-streams", features), "bordeaux-threads",
 			features -> ShimLibraries.forms("bordeaux-threads", features), "babel",
-			features -> ShimLibraries.forms("babel", features),
+			features -> ShimLibraries.forms("babel", features), "swank",
+			features -> ShimLibraries.forms("swank", features),
 			// The uiop package stub is seeded in PackageRegistry; the system contributes
 			// no forms (real libraries only name it so its symbols resolve).
 			"uiop", features -> List.of());

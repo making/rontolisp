@@ -135,6 +135,30 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void dependsOnBuiltinSwankResolvesWithoutNetworkAndCreateServerSignals() {
+		// clack.asd hard-depends on "swank", whose real .asd is a program the
+		// defsystem-as-data front-end cannot read -- without the stub system the
+		// dependency sends quickload after the slime tarball. stop-server is a nil
+		// no-op (clack calls it whenever a swank port was recorded); create-server
+		// signals, because a caller reaching it explicitly asked for a remote REPL.
+		String output = run("""
+				(asdf:load-system "repl-lib")
+				(print (repl-lib:stop 4005))
+				(print (handler-case (swank:create-server :port 4005)
+				         (error (c) :signaled)))
+				""", Map.of(//
+				"repl-lib.asd", """
+						(defsystem :repl-lib
+						  :depends-on ("swank")
+						  :components ((:file "repl")))""", //
+				"repl.lisp", """
+						(defpackage :repl-lib (:use :cl) (:export :stop))
+						(in-package :repl-lib)
+						(defun stop (port) (swank:stop-server port))"""), List.of());
+		assertThat(output).contains("NIL").contains(":SIGNALED");
+	}
+
+	@Test
 	void loadSystemAcceptsAComputedNameAtRuntime() {
 		String output = run("""
 				(defvar *sys* "my-lib")

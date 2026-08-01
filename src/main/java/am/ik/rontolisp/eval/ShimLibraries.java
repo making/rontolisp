@@ -53,6 +53,12 @@ import org.jspecify.annotations.Nullable;
  * {@code .kb/asdf.md}.
  *
  * <p>
+ * {@code swank} is the degenerate end of the same ladder: a shim system whose whole
+ * content is two functions, one of which signals. It exists because clack's {@code .asd}
+ * hard-depends on it, and the alternative -- letting {@code ql:quickload} fetch SLIME --
+ * ends in an unparseable system definition rather than a clear message.
+ *
+ * <p>
  * A third, lighter form of substitution rewrites INDIVIDUAL FORMS of a real component and
  * leaves the rest of the file verbatim: {@link #rewriteComponentSource} hands uax-15's
  * table-building forms to {@link Uax15Tables}, which derives the same tables from the
@@ -66,7 +72,8 @@ public final class ShimLibraries {
 	 */
 	private static final Map<String, String> RESOURCES = Map.of("closer-mop", "closer-mop.lisp", "flexi-streams",
 			"flexi-streams.lisp", "float-features", "float-features.lisp", "trivial-gray-streams",
-			"trivial-gray-streams.lisp", "bordeaux-threads", "bordeaux-threads.lisp", "babel", "babel.lisp");
+			"trivial-gray-streams.lisp", "bordeaux-threads", "bordeaux-threads.lisp", "babel", "babel.lisp", "swank",
+			"swank.lisp");
 
 	/**
 	 * Leaf-module substitutions: system name to (component file relative to the system's

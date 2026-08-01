@@ -258,7 +258,8 @@ public final class PackageRegistry {
 	 */
 	private static final Set<String> USOCKET_FUNCTIONS = Set.of(LispNames.USOCKET_SOCKET_CONNECT, "SOCKET-LISTEN",
 			"SOCKET-ACCEPT", "SOCKET-CLOSE", "SOCKET-STREAM", "GET-LOCAL-PORT", "GET-LOCAL-ADDRESS", "GET-LOCAL-NAME",
-			"GET-PEER-PORT", "GET-PEER-ADDRESS", "GET-PEER-NAME");
+			"GET-PEER-PORT", "GET-PEER-ADDRESS", "GET-PEER-NAME", LispNames.USOCKET_HOST_TO_HOSTNAME,
+			LispNames.USOCKET_GET_HOST_BY_NAME);
 
 	/**
 	 * The macros exported by the {@code usocket} package: built-in
@@ -343,7 +344,7 @@ public final class PackageRegistry {
 			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
 			LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG,
 			LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG, LispNames.BABEL_PKG,
-			LispNames.BABEL_ENCODINGS_PKG, "KEYWORD");
+			LispNames.BABEL_ENCODINGS_PKG, LispNames.UIOP_IMAGE_PKG, LispNames.SWANK_PKG, "KEYWORD");
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -417,17 +418,27 @@ public final class PackageRegistry {
 		// the directory-listing trio (directory-files / subdirectories /
 		// collect-sub*directories, Lisp source over cl:directory); the rest resolve but
 		// are undefined-function errors when called.
-		Set<String> uiopExternals = Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING, LispNames.GETENV,
-				LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
+		// uiop/image: real UIOP is a bundle of sub-packages that the uiop package
+		// re-exports, and a library may name either spelling -- lack-middleware-backtrace
+		// spells (:import-from :uiop/image :print-condition-backtrace), which fails at
+		// READ time when the package is absent. The one member lives here (its home
+		// package, as upstream) and uiop imports it below, so both spellings name the
+		// SAME symbol rather than two functions with one member name.
+		define(new LispPackage(LispNames.UIOP_IMAGE_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.PRINT_CONDITION_BACKTRACE))));
+		Set<String> uiopExternals = new HashSet<>(Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING,
+				LispNames.GETENV, LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
 				LispNames.MERGE_PATHNAMES_STAR, LispNames.FILE_EXISTS_P, LispNames.RUN_PROGRAM, LispNames.EMPTYP,
 				LispNames.FIRST_CHAR, LispNames.LAST_CHAR, LispNames.DIRECTORY_EXISTS_P,
-				LispNames.COLLECT_SUB_DIRECTORIES, LispNames.DIRECTORY_FILES, LispNames.SUBDIRECTORIES);
+				LispNames.COLLECT_SUB_DIRECTORIES, LispNames.DIRECTORY_FILES, LispNames.SUBDIRECTORIES,
+				LispNames.SYMBOL_CALL, LispNames.PRINT_CONDITION_BACKTRACE));
 		Set<String> uiopSymbols = new HashSet<>(uiopExternals);
 		// Internal in real UIOP too: every call site spells it
 		// uiop::get-pathname-defaults. Owned by the package rather than reached by
 		// the resolver's tolerance for an unknown :: member.
 		uiopSymbols.add(LispNames.GET_PATHNAME_DEFAULTS);
-		define(new LispPackage(LispNames.UIOP_PKG, List.of(), uiopSymbols, uiopExternals));
+		define(new LispPackage(LispNames.UIOP_PKG, List.of(), uiopSymbols, Set.copyOf(uiopExternals),
+				Map.of(LispNames.PRINT_CONDITION_BACKTRACE, LispNames.UIOP_IMAGE_PKG)));
 		// The dependency-shim packages behind the built-in ASDF systems of the same
 		// names (see eval.ShimLibraries): closer-mop (nickname c2mop),
 		// flexi-streams, org.shirakumo.float-features (nickname float-features) and
@@ -484,6 +495,14 @@ public final class PackageRegistry {
 		// than left to the resolver's tolerance for an unknown :: member.
 		babelSymbols.add(LispNames.NORMALIZE_ENCODING);
 		define(new LispPackage(LispNames.BABEL_PKG, List.of(), babelSymbols, babelExternals));
+		// swank: the STUB behind the built-in ASDF system of the same name
+		// (swank.lisp, eval.ShimLibraries). The real swank is SLIME's server half --
+		// a remote REPL attached to a running image, which no backend can offer, and
+		// whose .asd is a program the defsystem-as-data front-end cannot read at all.
+		// clack's .asd hard-depends on it, so without the stub (ql:quickload "clack")
+		// downloads the SLIME tarball and dies on it.
+		define(new LispPackage(LispNames.SWANK_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.CREATE_SERVER, LispNames.STOP_SERVER))));
 	}
 
 	/**

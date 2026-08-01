@@ -507,6 +507,8 @@ categories:
       - { slug: uiop-emptyp, name: "uiop:emptyp" }
       - { slug: uiop-first-char, name: "uiop:first-char" }
       - { slug: uiop-last-char, name: "uiop:last-char" }
+      - { slug: uiop-symbol-call, name: "uiop:symbol-call" }
+      - { slug: uiop-print-condition-backtrace, name: "uiop/image:print-condition-backtrace" }
   - title: "ql パッケージ (Quicklisp)"
     functions:
       - { slug: ql-quickload, name: "ql:quickload" }
@@ -517,6 +519,7 @@ categories:
       - { slug: usocket-socket-accept, name: "usocket:socket-accept" }
       - { slug: usocket-socket-stream, name: "usocket:socket-stream usocket:socket-close" }
       - { slug: usocket-accessors, name: "usocket:get-local-port usocket:get-local-address usocket:get-local-name usocket:get-peer-address usocket:get-peer-port usocket:get-peer-name" }
+      - { slug: usocket-host-names, name: "usocket:host-to-hostname usocket:get-host-by-name" }
   - title: "コンディション"
     functions:
       - { slug: simple-condition-format-control, name: "simple-condition-format-control" }

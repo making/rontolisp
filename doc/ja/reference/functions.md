@@ -537,6 +537,8 @@ rontolisp が実装しているメンバは以下のとおりで、各名前は�
 | `uiop:emptyp` | `(uiop:emptyp "")` | `nil` および長さ 0 のベクタ・文字列に対して `t`、それ以外は `nil` |
 | `uiop:first-char` | `(uiop:first-char "hello")` | `#\h` — 空でない文字列の最初の文字。空文字列や文字列以外では `nil` |
 | `uiop:last-char` | `(uiop:last-char "hello")` | `#\o` — 空でない文字列の最後の文字。空文字列や文字列以外では `nil` |
+| `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | 実行時にパッケージから名前を引いて適用します — 依存関係に持たないシステムを呼ぶための UIOP の遅延束縛呼び出しです。インタプリタのみ。コンパイル済みバックエンドは名前から関数への実行時テーブルを持たないため、呼び出しはコンパイルできますが実行するとエラーになります |
+| `uiop/image:print-condition-backtrace` | `(uiop/image:print-condition-backtrace c :stream s)` | コンディションのレポートを出力します (ライト版: どのバックエンドも Lisp レベルのコールスタックを持たないため、出力されるのはコンディション自体だけです)。`uiop:print-condition-backtrace` としても再エクスポートされています |
 
 `uiop::get-pathname-defaults` (本物の UIOP でも内部シンボルなので二重コロンで綴ります)
 も実装されており、すべてのバックエンドで `""` を返します。相対パスはホストの作業
@@ -594,6 +596,8 @@ UDP(`socket-send` / `socket-receive`)、`wait-for-input`、`socket-server`、
 | `usocket:get-peer-port` | `(usocket:get-peer-port sock)` | 接続済みソケットのリモートポート |
 | `usocket:get-local-name` | `(usocket:get-local-name sock)` | ローカルのアドレスとポートを `(values address port)` で返す |
 | `usocket:get-peer-name` | `(usocket:get-peer-name sock)` | リモートのアドレスとポートを `(values address port)` で返す |
+| `usocket:host-to-hostname` | `(usocket:host-to-hostname #(192 168 0 1))` | ホスト指定子 (文字列・4 要素ベクタ・ホストバイトオーダ整数・`nil`) をホスト名／ドット区切り文字列として返す |
+| `usocket:get-host-by-name` | `(usocket:get-host-by-name "example.com")` | ライト版: 名前解決せず `host-to-hostname` で描画して返す — 名前解決のプリミティブがどのバックエンドにもなく、そのアドレスが届くソケット呼び出しが実際の解決を行うため |
 
 `with-*` 便利マクロ(`usocket:with-client-socket` / `with-connected-socket` /
 `with-server-socket` / `with-socket-listener`)は

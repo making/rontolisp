@@ -3959,6 +3959,23 @@ public final class LispNames {
 	public static final String USOCKET_SOCKET_CONNECT = "SOCKET-CONNECT";
 
 	/**
+	 * {@code usocket:host-to-hostname host} -- a host designator (string, vector quad,
+	 * host-byte-order integer or nil) as a hostname/dotted-quad STRING. Real: every input
+	 * shape upstream accepts is rendered the way upstream renders it.
+	 */
+	public static final String USOCKET_HOST_TO_HOSTNAME = "HOST-TO-HOSTNAME";
+
+	/**
+	 * {@code usocket:get-host-by-name name} -- lite: no backend has a name-resolution
+	 * primitive (the {@code tcp-*} built-ins resolve host names inside the host), so the
+	 * designator comes back rendered by {@link #USOCKET_HOST_TO_HOSTNAME} rather than
+	 * resolved to upstream's vector quad. clack's {@code handler:run} calls the pair only
+	 * to normalize its {@code :address} before handing it to a backend handler, which
+	 * resolves it for real.
+	 */
+	public static final String USOCKET_GET_HOST_BY_NAME = "GET-HOST-BY-NAME";
+
+	/**
 	 * The {@code usocket::%usock-guard} internal form: wraps a socket-operation body so
 	 * an underlying failure is re-signaled as a typed {@code usocket:socket-error}. A
 	 * {@code handler-case} wrap on the interpreter and the JVM; a plain pass-through on
@@ -5178,6 +5195,59 @@ public final class LispNames {
 	 * {@code (merge-pathnames X (get-pathname-defaults))} yields {@code X} unchanged.
 	 */
 	public static final String GET_PATHNAME_DEFAULTS = "GET-PATHNAME-DEFAULTS";
+
+	/**
+	 * {@code uiop:symbol-call package name &rest args} -- real UIOP's late-binding call:
+	 * look the name up in the package at RUN time and apply it. Not a stub on the
+	 * interpreter (a global function in {@code LispEvaluator} over the package resolver's
+	 * member spelling); on the compile backends it lowers to the generic uiop call-time
+	 * error, because a compiled program has no runtime name-to-function table. lack's
+	 * {@code util.lisp} spells it with a SINGLE colon, so the name has to be external for
+	 * the whole file to read.
+	 */
+	public static final String SYMBOL_CALL = "SYMBOL-CALL";
+
+	/** The canonical package-qualified spelling of {@link #SYMBOL_CALL}. */
+	public static final String UIOP_SYMBOL_CALL = UIOP_PKG + ":" + SYMBOL_CALL;
+
+	/**
+	 * The {@code uiop/image} package name. Real UIOP is a bundle of packages that the
+	 * {@code uiop} package re-exports; libraries name the sub-package directly in an
+	 * {@code (:import-from :uiop/image ...)} clause, which fails at read time when the
+	 * package is absent. Only {@link #PRINT_CONDITION_BACKTRACE} lives here.
+	 */
+	public static final String UIOP_IMAGE_PKG = "UIOP/IMAGE";
+
+	/**
+	 * {@code uiop/image:print-condition-backtrace condition &key stream count} -- lite:
+	 * no backend carries a Lisp-level call stack, so it prints the CONDITION to the
+	 * stream and nothing else. Re-exported by {@link #UIOP_PKG} like real UIOP does.
+	 * {@code lack-middleware-backtrace} is the caller.
+	 */
+	public static final String PRINT_CONDITION_BACKTRACE = "PRINT-CONDITION-BACKTRACE";
+
+	/**
+	 * The {@code swank} stub package (and built-in ASDF system) name. The real swank is
+	 * SLIME's server half, whose {@code .asd} is a program rontolisp cannot parse and
+	 * whose job (attaching a remote REPL to a running image) no backend can do. clack's
+	 * {@code .asd} hard-depends on it all the same, so the stub is what keeps
+	 * {@code (ql:quickload "clack")} from downloading SLIME and dying on it.
+	 */
+	public static final String SWANK_PKG = "SWANK";
+
+	/**
+	 * {@code swank:create-server} -- signals: a remote REPL server is not something any
+	 * backend can start. clack reaches it only when {@code clackup} is passed
+	 * {@code :swank-port}.
+	 */
+	public static final String CREATE_SERVER = "CREATE-SERVER";
+
+	/**
+	 * {@code swank:stop-server} -- a nil no-op, the honest counterpart of
+	 * {@link #CREATE_SERVER}: clack's {@code stop} calls it unconditionally when a swank
+	 * port was recorded, and nothing was ever started.
+	 */
+	public static final String STOP_SERVER = "STOP-SERVER";
 
 	/**
 	 * The {@code defpackage} {@code :local-nicknames} clause keyword -- lite: each

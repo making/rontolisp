@@ -8496,6 +8496,35 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void usocketHostToHostnameRendersEveryDesignatorShape() throws Exception {
+		// The clack.handler:run address-normalization pair, spliced like the CLI
+		// pre-pass does. Pure Lisp in the shim and it opens no socket, so it answers on
+		// Preview 1 too -- and must answer exactly what the interpreter and the JVM do.
+		String output = compileAndRunProgram(
+				am.ik.rontolisp.eval.UsocketLibrary.process(LispReader.readAllFromString("""
+						(print (usocket:host-to-hostname nil))
+						(print (usocket:host-to-hostname #(192 168 0 1)))
+						(print (usocket:host-to-hostname 2130706433))
+						(print (usocket:host-to-hostname (usocket:get-host-by-name "example.com")))
+						""")));
+		assertThat(output).isEqualTo("\"0.0.0.0\"\n\"192.168.0.1\"\n\"127.0.0.1\"\n\"example.com\"");
+	}
+
+	@Test
+	void printConditionBacktracePrintsTheCondition() throws Exception {
+		// The prelude entry defines the uiop/image symbol and the uiop package imports
+		// the name, so both spellings a library may use select the one definition.
+		String output = compileAndRunProgram(
+				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+						(handler-case (error "boom")
+						  (error (c) (uiop/image:print-condition-backtrace c :stream *standard-output*)))
+						(handler-case (error "boom2")
+						  (error (c) (uiop:print-condition-backtrace c :stream *standard-output*)))
+						""")));
+		assertThat(output).isEqualTo("boom\nboom2");
+	}
+
+	@Test
 	void componentUsocketEchoOverLoopback() throws Exception {
 		// The usocket shim (usocket.lisp, spliced by UsocketLibrary.process like the
 		// CLI pre-pass) over the same loopback choreography as componentTcpLoopbackEcho.

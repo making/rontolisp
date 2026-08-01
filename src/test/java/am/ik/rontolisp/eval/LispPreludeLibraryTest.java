@@ -99,6 +99,18 @@ class LispPreludeLibraryTest {
 	}
 
 	@Test
+	void bothUiopSpellingsOfPrintConditionBacktraceSelectTheOneEntry() {
+		// The entry defines UIOP/IMAGE:PRINT-CONDITION-BACKTRACE (its home package,
+		// as upstream); the uiop package IMPORTS the name, so a program spelling
+		// uiop: resolves to the same symbol and must select the same single defun --
+		// not miss the splice and compile to a call-time undefined-function error.
+		assertThat(splicedNames("(uiop/image:print-condition-backtrace c :stream s)"))
+			.containsExactly("UIOP/IMAGE:PRINT-CONDITION-BACKTRACE");
+		assertThat(splicedNames("(uiop:print-condition-backtrace c :stream s)"))
+			.containsExactly("UIOP/IMAGE:PRINT-CONDITION-BACKTRACE");
+	}
+
+	@Test
 	void aProgramDefiningABareClPreludeNameItselfGetsNoSplice() {
 		assertThat(splicedNames("""
 				(defun equalp (a b) (eq a b))

@@ -583,6 +583,8 @@ implements the members below; each name links to its own page.
 | `uiop:emptyp` | `(uiop:emptyp "")` | `t` for `nil` and for a zero-length vector or string, `nil` otherwise |
 | `uiop:first-char` | `(uiop:first-char "hello")` | `#\h` — the first character of a non-empty string, `nil` for an empty string or a non-string |
 | `uiop:last-char` | `(uiop:last-char "hello")` | `#\o` — the last character of a non-empty string, `nil` for an empty string or a non-string |
+| `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | look the name up in the package at run time and apply it — UIOP's late-binding call into a system the caller does not depend on. Interpreter only; the compiled backends carry no run-time name-to-function table, so the call compiles and signals when executed |
+| `uiop/image:print-condition-backtrace` | `(uiop/image:print-condition-backtrace c :stream s)` | print a report for a condition (lite: the condition alone — no backend carries a Lisp-level call stack). Re-exported as `uiop:print-condition-backtrace` |
 
 `uiop::get-pathname-defaults` (internal in real UIOP too, so it is spelled with
 the double colon) is implemented as well and answers `""` on every backend: a
@@ -644,6 +646,8 @@ a worked overview and the full limitation list.
 | `usocket:get-peer-port` | `(usocket:get-peer-port sock)` | the remote port of a connected socket |
 | `usocket:get-local-name` | `(usocket:get-local-name sock)` | local address and port as `(values address port)` |
 | `usocket:get-peer-name` | `(usocket:get-peer-name sock)` | remote address and port as `(values address port)` |
+| `usocket:host-to-hostname` | `(usocket:host-to-hostname #(192 168 0 1))` | a host designator (string, vector quad, host-byte-order integer or `nil`) as a hostname/dotted-quad string |
+| `usocket:get-host-by-name` | `(usocket:get-host-by-name "example.com")` | lite: renders the designator through `host-to-hostname` instead of resolving it — no backend has a name-resolution primitive, and the socket call the address reaches resolves it for real |
 
 The `with-*` convenience macros (`usocket:with-client-socket` /
 `with-connected-socket` / `with-server-socket` / `with-socket-listener`) are

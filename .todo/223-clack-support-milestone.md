@@ -64,7 +64,14 @@ JVM and component legs are green too (or their divergence is recorded).
 2. `.todo/225` missing CL builtins batch (substitute-if, file-write-date, sleep,
    ensure-directories-exist, file-length, export, ...) — 低〜中
 3. `.todo/226` shim widening: uiop `symbol-call` + `uiop/image`, usocket host
-   resolution, swank stub system — 低
+   resolution, swank stub system — 低 — **DONE 2026-08-01** (all four backends;
+   see the todo's own status section). With 224 + 226 the whole LACK side now
+   loads verbatim with ZERO userland workarounds: `(ql:quickload "lack")` /
+   `"lack-util"` / `"lack-middleware-backtrace"` complete on the interpreter and
+   the backtrace middleware runs end to end. `(ql:quickload "clack")` now stops
+   at `No such package: BT2` in clack's own `src/handler.lisp` — i.e. the next
+   blocker is exactly `.todo/227`, and nothing in 224/225/226 stands in front of
+   it any more.
 4. `.todo/227` bordeaux-threads: `bt2` package + real thread creation — 中〜高
 5. `.todo/228` the `clack-handler-rontolisp` backend + E2E + docs — 中〜高
 6. `.todo/229` runtime intern->funcall dispatch on the compile backends — 高

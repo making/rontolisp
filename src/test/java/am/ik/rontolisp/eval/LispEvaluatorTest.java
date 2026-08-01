@@ -4704,6 +4704,51 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void uiopSymbolCallLooksTheNameUpAtRuntimeAndApplies() {
+		// The late-binding call real UIOP offers. Both designator spellings a caller
+		// uses (keyword and string) name the same symbol, and the arguments after the
+		// name are the call's own.
+		assertThat(eval("(uiop:symbol-call :cl :+ 1 2 3)")).isEqualTo(new LispInteger(6));
+		assertThat(eval("(uiop:symbol-call \"CL\" \"LIST\" 1 2)").print()).isEqualTo("(1 2)");
+		assertThat(evalMulti("""
+				(defpackage :sc-demo (:use :cl) (:export :twice))
+				(in-package :sc-demo)
+				(defun twice (x) (* 2 x))
+				(in-package :cl-user)
+				(uiop:symbol-call :sc-demo :twice 21)
+				""")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void uiopSymbolCallSignalsForAnAbsentPackageOrSymbol() {
+		// find-symbol* semantics: the caller is about to apply the result, so an
+		// absent name is an error rather than a nil that fails one frame later.
+		assertThatThrownBy(() -> eval("(uiop:symbol-call :no-such-package :foo)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("package NO-SUCH-PACKAGE does not exist");
+		assertThatThrownBy(() -> eval("(uiop:symbol-call :cl :definitely-not-a-cl-symbol)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("is not present in package");
+	}
+
+	@Test
+	void printConditionBacktracePrintsTheConditionUnderBothSpellings() {
+		// Lite: no backend carries a Lisp-level call stack, so the condition alone is
+		// the whole report. uiop:print-condition-backtrace is an IMPORT of the
+		// uiop/image symbol, so both spellings must reach the one definition --
+		// lack-middleware-backtrace imports the uiop/image one.
+		assertThat(evalMulti("""
+				(with-output-to-string (s)
+				  (handler-case (error "boom")
+				    (error (c) (uiop/image:print-condition-backtrace c :stream s))))
+				""")).isEqualTo(new LispString("boom\n"));
+		assertThat(evalMulti("""
+				(with-output-to-string (s)
+				  (handler-case (error "boom")
+				    (error (c) (uiop:print-condition-backtrace c :stream s))))
+				""")).isEqualTo(new LispString("boom\n"));
+	}
+
+	@Test
 	void directoryGoesThroughTheInstalledSourceLoader() {
 		// A host with no filesystem (the browser playground) has no directories, so the
 		// whole family answers rather than failing.
@@ -5448,6 +5493,32 @@ class LispEvaluatorTest {
 		// The program's FIRST usocket reference is a variable read, not a function
 		// call: the evalSymbolRef lazy-load hook must fire.
 		assertThat(eval("usocket:*wildcard-host*")).isEqualTo(new LispString("0.0.0.0"));
+	}
+
+	@Test
+	void usocketHostToHostnameRendersEveryHostDesignatorShape() {
+		// The four shapes upstream accepts: nil (wildcard), a string (identity), a
+		// vector quad and a host-byte-order 32-bit integer.
+		String program = """
+				(list (usocket:host-to-hostname nil)
+				      (usocket:host-to-hostname "example.com")
+				      (usocket:host-to-hostname #(192 168 0 1))
+				      (usocket:host-to-hostname 2130706433))
+				""";
+		assertThat(eval(program).print()).isEqualTo("(\"0.0.0.0\" \"example.com\" \"192.168.0.1\" \"127.0.0.1\")");
+	}
+
+	@Test
+	void usocketGetHostByNameRendersTheDesignatorWithoutResolving() {
+		// Lite by construction (no backend has a name-resolution primitive), and the
+		// property clack depends on: normalizing an address through the pair that
+		// clack.handler:run uses leaves the address it was given, so the socket call
+		// downstream still receives something it can resolve itself.
+		String program = """
+				(list (usocket:host-to-hostname (usocket:get-host-by-name "127.0.0.1"))
+				      (usocket:host-to-hostname (usocket:get-host-by-name "example.com")))
+				""";
+		assertThat(eval(program).print()).isEqualTo("(\"127.0.0.1\" \"example.com\")");
 	}
 
 	@Test

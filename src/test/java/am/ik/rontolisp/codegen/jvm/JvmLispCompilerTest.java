@@ -783,6 +783,31 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUsocketHostToHostnameRendersEveryDesignatorShape() throws Exception {
+		// The clack.handler:run address-normalization pair. Pure Lisp in the shim, so
+		// the compiled answer must equal the interpreter's for every input shape.
+		assertThat(compileAndRunUsocket("""
+				(print (usocket:host-to-hostname nil))
+				(print (usocket:host-to-hostname #(192 168 0 1)))
+				(print (usocket:host-to-hostname 2130706433))
+				(print (usocket:host-to-hostname (usocket:get-host-by-name "example.com")))
+				""")).isEqualTo("\"0.0.0.0\"\n\"192.168.0.1\"\n\"127.0.0.1\"\n\"example.com\"");
+	}
+
+	@Test
+	void compileAndRunPrintConditionBacktracePrintsTheCondition() throws Exception {
+		// The prelude entry defines the uiop/image symbol; a program spelling either
+		// package must select it, so neither one compiles to a call-time
+		// undefined-function error.
+		assertThat(compileAndRun("""
+				(handler-case (error "boom")
+				  (error (c) (uiop/image:print-condition-backtrace c :stream *standard-output*)))
+				(handler-case (error "boom2")
+				  (error (c) (uiop:print-condition-backtrace c :stream *standard-output*)))
+				""")).isEqualTo("boom\nboom2");
+	}
+
+	@Test
 	void compileAndRunTypedErrorKeepsLegacyUncaughtMessage() {
 		assertThatThrownBy(() -> compileAndRun(
 				"(define-condition my-cond-err (error) ((v :initarg :v))) (error 'my-cond-err :v 42)"))
