@@ -18,9 +18,16 @@ public class ImportDef extends CountingDef<ImportDef> {
 	 * @return this instance for chaining
 	 */
 	public ImportDef addImport(String moduleName, String fieldName, ExternalKind externalKind, int signatureIndex) {
-		return this.add(imprt -> imprt.write(moduleName.length(), moduleName, //
-				fieldName.length(), fieldName, //
-				externalKind, signatureIndex));
+		// The two name lengths and the imported index are WASM u32 LEB128 fields --
+		// same reasoning as ExportDef.addExport and FunctionDef.addFunction. Every
+		// value stays below 128 in today's output, so the encoding is byte-identical
+		// until one of them genuinely needs the second byte.
+		return this.add(imprt -> imprt.writeUnsignedLeb128(moduleName.length())
+			.write(moduleName)
+			.writeUnsignedLeb128(fieldName.length())
+			.write(fieldName)
+			.write(externalKind)
+			.writeUnsignedLeb128(signatureIndex));
 	}
 
 }
