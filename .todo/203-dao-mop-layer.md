@@ -136,12 +136,43 @@ Landed so far (2026-08-01, interpreter side):
 - Tests: 5 new `LispEvaluatorTest` cases (metaobject identity/shape, errorp,
   seeded conditions, shim both-generations).
 
-Remaining in Phase A: compile-path `find-class`/metaobject materialization
-(runtime construction memoized in globals, gated on reference), the
-`class-of` -> metaobject migration with its consumer sweep, the
-`closer-common-lisp` package + re-pointing the `C2CL` nickname (today it
-aliases CLOSER-MOP), `allocate-instance`, and the find-class/class-of doc
-pages (update only when all four backends agree).
+Landed 2026-08-01, compile-path slice (all four backends now agree on
+find-class):
+
+- `expandTopLevelDefinitions` injects, gated on a `find-class` reference in the
+  program (`needsFindClassRuntime`; a user/library `defun find-class` wins and
+  suppresses it), the generated metaobject runtime: `%class-meta-table%`
+  (chunked quoted data, one entry per registered class: spellings list /
+  canonical superclass / per-slot `(name initargs initform type readers)`),
+  the `%class-metaobjects%` memo global, and the `find-class` +
+  `%find-class-materialize` defun pair. Materialization recurses through
+  `find-class` for the superclass and memoizes under the canonical name (car of
+  the spellings), so the answer is eq-stable across calls AND spellings.
+- The gate seeds `ensureMopClassesSeeded()` BEFORE the walk (typep tables and
+  %obj-new layouts see one registry) and joins the fast-path disjunction. The
+  unknown-name signal is a literal-control `(error "FIND-CLASS: there is no
+  class named ~A" sym)` -- the plain-message path, so no condition machinery is
+  dragged in.
+- The prelude's always-nil `find-class` stub is DELETED (LispPreludeLibrary).
+- Ceiling fallout fixed in the same pass: seeding the three MOP classes grew the
+  per-call-site `%class-slot-defs` inline dispatch past the JVM 65535-byte
+  method limit in the ci-spec corpus (70178 bytes, `_top$21`). The expansion now
+  lowers to a shared `%class-slot-defs-runtime` defun + node-budget-chunked
+  `%class-slot-defs-table%` (same shape as `%typep-runtime`), injected by
+  `expandTopLevelDefinitions` gated on a `%class-slot-defs` reference.
+  `am.ik.jvm.MethodsDef` now names the offending method in the ceiling error.
+- Static-model seam (documented in `.kb/clos.md`): compiled find-class sees the
+  whole program's classes regardless of form order; the interpreter only knows
+  classes already defined at call time.
+- Tests: the 5 interpreter cases mirrored on JVM (`JvmLispCompilerTest
+  compileFindClass* / compileCloserMopShim*`) and WASM
+  (`WasmLispCompilerIntegrationTest`, same names); find-class doc pages +
+  curated table rewritten (en+ja).
+
+Remaining in Phase A: the `class-of` -> metaobject migration with its consumer
+sweep, the `closer-common-lisp` package + re-pointing the `C2CL` nickname
+(today it aliases CLOSER-MOP), `allocate-instance`, and the class-of doc page
+(update only when the migration lands on all four backends).
 
 - A MOP base library (grow `closer-mop.lisp` into it, or a sibling loaded with
   it): `standard-object`, `standard-class`, `standard-direct-slot-definition`,

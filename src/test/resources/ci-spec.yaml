@@ -6367,3 +6367,25 @@ cases:
       (1 2 3 4 5 6 7 0 9)
       :FELL-BACK
       NIL
+  - name: find-class-metaobject-substrate
+    source: |
+      ;; The static MOP subset: find-class answers a memoized standard-class
+      ;; instance (eq-stable across calls), slot 0 = name, slot 1 = the
+      ;; direct-superclass metaobjects, slot 4 = finalized-p; CL errorp
+      ;; semantics; the seeded condition hierarchy is findable too.
+      (defclass fcm-animal () ((legs :initarg :legs :accessor fcm-legs :type integer)))
+      (defclass fcm-dog (fcm-animal) ((name :initarg :name)))
+      (let ((c (find-class 'fcm-dog)))
+        (print (list (eq c (find-class 'fcm-dog))
+                     (%obj-ref c 0)
+                     (eq (car (%obj-ref c 1)) (find-class 'fcm-animal))
+                     (%obj-ref c 4))))
+      (print (find-class 'fcm-no-such nil))
+      (print (handler-case (find-class 'fcm-no-such) (error (e) :signaled)))
+      (let ((c (find-class 'type-error)))
+        (print (list (%obj-ref c 0) (%obj-ref (car (%obj-ref c 1)) 0))))
+    expected: |
+      (T FCM-DOG T T)
+      NIL
+      :SIGNALED
+      (TYPE-ERROR ERROR)

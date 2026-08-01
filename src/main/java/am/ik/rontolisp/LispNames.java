@@ -2405,11 +2405,35 @@ public final class LispNames {
 	public static final String LIST_ALL_PACKAGES = "LIST-ALL-PACKAGES";
 
 	/**
-	 * The {@code find-class} standard function: a lite prelude stub returning nil (no
-	 * class metaobjects exist -- {@code class-of} is a name stub), regardless of
-	 * {@code errorp}.
+	 * The {@code find-class} standard function: answers the memoized class metaobject of
+	 * a registered class, with CL {@code errorp} semantics. The interpreter defines it
+	 * over {@code ClosRegistry.classMetaobject}; the compile paths emit a defun over the
+	 * {@link #CLASS_META_TABLE} data table ({@code LispMacroExpander}), gated on the
+	 * program referencing the function.
 	 */
 	public static final String FIND_CLASS = "FIND-CLASS";
+
+	/**
+	 * The quoted per-class data table backing the compile paths' generated
+	 * {@code find-class}: one entry per registered class -- the accepted name spellings,
+	 * the canonical superclass name (or nil), and the effective-slot data each metaobject
+	 * is materialized from.
+	 */
+	public static final String CLASS_META_TABLE = "%CLASS-META-TABLE";
+
+	/**
+	 * The generated {@code find-class}'s memo alist (canonical class name to its
+	 * materialized metaobject), which is what makes the answer {@code eq}-stable across
+	 * calls like the interpreter's registry memo.
+	 */
+	public static final String CLASS_METAOBJECT_MEMO = "%CLASS-METAOBJECTS";
+
+	/**
+	 * The generated helper materializing one class metaobject from its
+	 * {@link #CLASS_META_TABLE} entry (recursing into {@code find-class} for the
+	 * superclass) and memoizing it in {@link #CLASS_METAOBJECT_MEMO}.
+	 */
+	public static final String FIND_CLASS_MATERIALIZE = "%FIND-CLASS-MATERIALIZE";
 
 	/**
 	 * The {@code print-unreadable-object} macro: a lite expansion writing
@@ -4506,6 +4530,23 @@ public final class LispNames {
 	 * so slot-walking serializers (jzon) see real fields. Not a public function.
 	 */
 	public static final String CLASS_SLOT_DEFS_INTERNAL = "%CLASS-SLOT-DEFS";
+
+	/**
+	 * The shared dispatch defun a compile-path {@code %class-slot-defs} call lowers to:
+	 * scans {@link #CLASS_SLOT_DEFS_TABLE} for the designator and answers the
+	 * {@code (name type)} pair list. One defun per program instead of one inlined
+	 * membership cond per call site -- the inline shape grew with the registry and put
+	 * the ci-spec corpus's biggest top-level form past the JVM's 65535-byte method
+	 * ceiling when the MOP base classes joined the registry.
+	 */
+	public static final String CLASS_SLOT_DEFS_RUNTIME = "%CLASS-SLOT-DEFS-RUNTIME";
+
+	/**
+	 * The quoted data table backing {@link #CLASS_SLOT_DEFS_RUNTIME}: one entry per
+	 * registered class/struct layout -- the accepted designator spellings (instance tag +
+	 * print name) followed by the {@code (name type)} pairs.
+	 */
+	public static final String CLASS_SLOT_DEFS_TABLE = "%CLASS-SLOT-DEFS-TABLE";
 
 	/**
 	 * The internal instance constructor: {@code (%obj-new '<tag> v1 ... vn)} builds an

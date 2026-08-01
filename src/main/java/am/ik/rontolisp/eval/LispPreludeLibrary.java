@@ -221,9 +221,6 @@ public final class LispPreludeLibrary {
 				                   (intern (subseq s 0 idx) :keyword)
 				                   :cl-user))))))
 				""");
-		SOURCES.put(LispNames.FIND_CLASS, """
-				(defun find-class (symbol &optional errorp environment) nil)
-				""");
 		// type-of over class-of: class-of yields a struct/CLOS instance's TAG symbol
 		// (%struct-NAME / %class-NAME), and type-of is the type NAME -- so a digest
 		// object's type is usable as the digest-name designator it came from. The tag

@@ -6812,6 +6812,79 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileFindClassReturnsAnEqStableClassMetaobject() throws Exception {
+		// The generated metaobject runtime memoizes per canonical name, so the answer is
+		// eq across calls; slot 0 = name, slot 1 = direct-superclass metaobjects, slot 4
+		// = finalized-p (the %obj-ref index contract of the seeded MOP layouts).
+		assertThat(compileAndRun("""
+				(defclass fc-animal () ((legs :initarg :legs :accessor fc-legs :type integer)))
+				(defclass fc-dog (fc-animal) ((name :initarg :name)))
+				(let ((c (find-class 'fc-dog)))
+				  (print (list (eq c (find-class 'fc-dog))
+				               (%obj-ref c 0)
+				               (eq (car (%obj-ref c 1)) (find-class 'fc-animal))
+				               (%obj-ref c 4))))
+				""")).isEqualTo("(T FC-DOG T T)");
+	}
+
+	@Test
+	void compileFindClassMetaobjectCarriesEffectiveSlotDefinitions() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass fc-box () ((w :initarg :w :accessor fc-w :type integer) (h :initform 2)))
+				(let* ((c (find-class 'fc-box))
+				       (slots (%obj-ref c 3)))
+				  (print (list (length slots)
+				               (mapcar (lambda (s) (%obj-ref s 0)) slots)
+				               (%obj-ref (car slots) 1)
+				               (%obj-ref (car slots) 3)
+				               (%obj-ref (car slots) 4)
+				               (%obj-ref (car (cdr slots)) 2))))
+				""")).isEqualTo("(2 (W H) (:W) INTEGER (FC-W) 2)");
+	}
+
+	@Test
+	void compileFindClassUnknownSignalsUnlessErrorpNil() throws Exception {
+		assertThat(compileAndRunEh("""
+				(print (list (find-class 'fc-no-such nil)
+				             (handler-case (find-class 'fc-no-such) (error (e) :signaled))))
+				""")).isEqualTo("(NIL :SIGNALED)");
+	}
+
+	@Test
+	void compileFindClassAnswersForSeededConditionClasses() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((c (find-class 'type-error)))
+				  (print (list (%obj-ref c 0) (%obj-ref (car (%obj-ref c 1)) 0))))
+				""")).isEqualTo("(TYPE-ERROR ERROR)");
+	}
+
+	@Test
+	void compileCloserMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators() throws Exception {
+		// The closer-mop system is spliced by the compile-time LoadInliner pass (cli),
+		// mirroring the CLI pipeline; the shim serves BOTH generations, exactly like the
+		// interpreter
+		// (LispEvaluatorTest#closerMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators).
+		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+				(asdf:load-system "closer-mop")
+				(defclass cmm-p () ((name :initarg :name) (age :initarg :age :type integer)))
+				(let ((c (find-class 'cmm-p)))
+				  (print (list (closer-mop:classp c)
+				               (closer-mop:classp 42)
+				               (closer-mop:class-name c)
+				               (closer-mop:class-finalized-p c)
+				               (mapcar #'closer-mop:slot-definition-name (closer-mop:class-slots c))
+				               (mapcar #'closer-mop:slot-definition-type (closer-mop:class-slots c))
+				               (mapcar #'closer-mop:slot-definition-initargs (closer-mop:class-slots c))
+				               (mapcar #'closer-mop:slot-definition-name
+				                       (closer-mop:class-slots (class-of (make-instance 'cmm-p :name "x")))))))
+				"""), path -> {
+			throw new java.io.FileNotFoundException(path);
+		});
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
+			.isEqualTo("(T NIL CMM-P T (NAME AGE) (T INTEGER) ((:NAME) (:AGE)) (NAME AGE))");
+	}
+
+	@Test
 	void requireNotConsumedByInlinerThrows() {
 		// One that reaches the compiler (nested, or a unit test bypassing the pass) is
 		// a hard error -- unlike load, the compiled runtime reader cannot execute it.

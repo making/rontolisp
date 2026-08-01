@@ -227,14 +227,22 @@ over `(c2mop:class-slots (class-of obj))`) forced compile-path support for a
 RUNTIME (non-literal) slot name and for `%class-slot-defs`:
 
 - `expandClassSlotDefs` (both compilers dispatch `%class-slot-defs` through it):
-  a `member` cond over every registered LAYOUT -- classes AND structs, since
-  `ClosRegistry.slotDefs` is the one resolver both it and the interpreter use --
-  designators being the instance tag (`%class-NAME`/`%struct-NAME`, what
-  `class-of` yields) and the plain name, yielding the quoted
-  `((slot-name declared-type) ...)` list (a struct's types all read `T`).
-  Anything else (builtin type names included) is nil, the interpreter's
-  semantics. A struct answering here is what lets a slot-walking serializer
-  (json.lisp's `%json-out-instance`) treat a struct like a CLOS instance.
+  lowers the call site to the SHARED `%class-slot-defs-runtime` defun, injected by
+  `expandTopLevelDefinitions` (gated on a `%class-slot-defs` reference) together
+  with its `%class-slot-defs-table%` data table -- one entry per registered
+  LAYOUT (classes AND structs, since `ClosRegistry.slotDefs` is the one resolver
+  both it and the interpreter use), designators being the instance tag
+  (`%class-NAME`/`%struct-NAME`, what `class-of` yields) and the plain name,
+  answering the `((slot-name declared-type) ...)` list (a struct's types all
+  read `T`). Anything else (builtin type names included) is nil, the
+  interpreter's semantics. A struct answering here is what lets a slot-walking
+  serializer (json.lisp's `%json-out-instance`) treat a struct like a CLOS
+  instance. It used to inline the membership cond PER CALL SITE; that shape
+  grows with the registry, and the ci-spec corpus's rtd form hit the JVM
+  65535-byte method ceiling (70178 bytes) the day the three MOP base classes
+  joined the registry -- if the shared-defun shape ever needs revisiting, the
+  table is chunked by cons-node budget (`nodeBudgetedTableForms`), not entry
+  count.
 - `expandSlotValue` with a non-literal name falls to `expandRuntimeSlotValue`:
   a NAME dispatch over every slot name any layout declares. Names sitting at the
   same index everywhere share one `member` arm (the common case); a name at
@@ -402,10 +410,30 @@ before and every existing artifact stays byte-identical.
   eql/type-specialized qualified methods combine only with same-specializer
   primaries + the default method (cross-type subtyping among specializers is not
   computed).
-- MOP / runtime class ops (`find-class`, `add-method`,
-  `compute-applicable-methods`, class redefinition, `update-instance-for-*`):
-  permanently out (contradicts the static compile model + `--optimize`).
-  `change-class` is the ONE exception and is not MOP: both classes are literal, so
+- MOP boundary (redrawn 2026-08-01, the DAO/MOP milestone): the STATIC metaobject
+  subset is IN -- `find-class` answers a real memoized `standard-class` instance on
+  all four backends. Interpreter: a Java built-in over
+  `ClosRegistry.classMetaobject` (lazy `ensureMopClassesSeeded()`; NEVER seed
+  unconditionally -- an unconditional seed joins every runtime dispatch table and
+  once pushed the ci-spec corpus over the JVM 64 KB method ceiling). Compile paths:
+  `LispMacroExpander.expandTopLevelDefinitions` injects, gated on the program
+  referencing `find-class`, a `%class-meta-table%` data table (chunked, one entry
+  per registered class: spellings / superclass / effective-slot data) plus a
+  generated `find-class` + `%find-class-materialize` pair that builds and memoizes
+  the metaobjects at runtime -- the prelude's old always-nil stub is GONE. The
+  metaobject slot order (name, direct-superclasses, direct-slots, effective-slots,
+  finalized-p; slot-definitions: name, initargs, initform, type, readers) is a
+  `%obj-ref` index contract shared with the closer-mop shim -- append, never
+  reorder. Pinning tests: `LispEvaluatorTest`/`JvmLispCompilerTest`/
+  `WasmLispCompilerIntegrationTest` `*FindClass*` + `*CloserMopShim*`. Still OUT
+  (the divergence's remaining "why": classes are compile-time-static, `--optimize`
+  DCE and the dispatch tables depend on it): runtime class construction
+  (`ensure-class` from computed data), `add-method`,
+  `compute-applicable-methods`, class redefinition, `update-instance-for-*`.
+  Known static-model seam: on the compile paths `find-class` sees the WHOLE
+  program's classes regardless of form order, while the interpreter only knows
+  classes already defined at call time.
+  `change-class` is the ONE runtime exception and is not MOP: both classes are literal, so
   the whole change is a static expansion (see above).
 - Multiple inheritance, `:allocation`/`:writer` slot options, eql specializers
   on strings.

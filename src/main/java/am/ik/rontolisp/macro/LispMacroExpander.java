@@ -8817,12 +8817,15 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (%class-slot-defs designator)} into a membership dispatch over every
-	 * registered class AND struct, yielding the type's quoted
-	 * {@code ((slot-name declared-type) ...)} list -- the interpreter's semantics: the
-	 * designator is an instance-tag symbol ({@code %class-NAME}/{@code %struct-NAME},
-	 * what {@code class-of} yields for an instance) or the plain type name, and anything
-	 * else (built-in type names included) yields nil.
+	 * Expands {@code (%class-slot-defs designator)} into a call of the shared
+	 * {@code %class-slot-defs-runtime} dispatch defun, which
+	 * {@link #expandTopLevelDefinitions} injects together with its data table -- the
+	 * interpreter's semantics: the designator is an instance-tag symbol
+	 * ({@code %class-NAME}/{@code %struct-NAME}, what {@code class-of} yields for an
+	 * instance) or the plain type name, and anything else (built-in type names included)
+	 * yields nil. It used to inline the membership dispatch per call site; that shape
+	 * grows with the registry and put the ci-spec corpus's biggest top-level form past
+	 * the JVM's 65535-byte method ceiling when the MOP base classes joined the registry.
 	 * @param cons the %class-slot-defs expression
 	 * @param closRegistry the class registry
 	 * @return the expanded expression
@@ -8833,29 +8836,80 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(
 					LispNames.CLASS_SLOT_DEFS_INTERNAL + " expects exactly one argument: " + cons.print());
 		}
-		String prefix = "__csd" + MV_COUNTER.getAndIncrement();
-		LispSymbol v = new LispSymbol(prefix + "_v");
-		List<LispVal> clauses = new java.util.ArrayList<>();
+		return mvCall(LispNames.CLASS_SLOT_DEFS_RUNTIME, parts.get(1));
+	}
+
+	/**
+	 * Builds the {@code %class-slot-defs-table%} data-table forms backing the shared
+	 * runtime {@code %class-slot-defs} defun: one entry per registered class/struct
+	 * layout -- the designator spellings (instance tag + print name) as the head,
+	 * followed by the {@code (name type)} pairs, so the defun answers {@code (cdr
+	 * entry)} directly.
+	 */
+	private static List<LispVal> classSlotDefsTableForms(ClosRegistry closRegistry) {
+		List<LispVal> entries = new java.util.ArrayList<>();
 		for (LispLayout layout : closRegistry.layouts().values()) {
 			List<ClosRegistry.SlotDef> defs = closRegistry.slotDefs(layout.tag());
 			if (defs == null) {
 				continue;
 			}
-			List<LispVal> pairs = new java.util.ArrayList<>();
+			List<LispVal> entryParts = new java.util.ArrayList<>();
+			entryParts.add(listToCons(List.of(new LispSymbol(layout.tag()), new LispSymbol(layout.printName()))));
 			for (ClosRegistry.SlotDef def : defs) {
-				pairs.add(listToCons(List.of(new LispSymbol(def.name()), new LispSymbol(def.type()))));
+				entryParts.add(listToCons(List.of(new LispSymbol(def.name()), new LispSymbol(def.type()))));
 			}
-			LispVal quotedPairs = pairs.isEmpty() ? LispNil.INSTANCE
-					: listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(pairs)));
-			LispVal designators = listToCons(List.of(new LispSymbol(LispNames.QUOTE),
-					listToCons(List.of(new LispSymbol(layout.tag()), new LispSymbol(layout.printName())))));
-			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, v, designators), quotedPairs)));
+			entries.add(listToCons(entryParts));
 		}
-		clauses.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
-		List<LispVal> condParts = new java.util.ArrayList<>();
-		condParts.add(new LispSymbol(LispNames.COND));
-		condParts.addAll(clauses);
-		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))), listToCons(condParts));
+		return nodeBudgetedTableForms(LispNames.CLASS_SLOT_DEFS_TABLE, entries, 600);
+	}
+
+	/**
+	 * Builds the shared {@code (defun %class-slot-defs-runtime (v) ...)} dispatch defun:
+	 * scans the {@code %class-slot-defs-table%} designator spellings and answers the
+	 * entry's pair list, nil for anything unregistered.
+	 */
+	private static LispVal classSlotDefsRuntimeDefun() {
+		LispSymbol v = new LispSymbol("%csd_v");
+		LispSymbol hit = new LispSymbol("%csd_hit");
+		LispSymbol scan = new LispSymbol("%csd_x");
+		LispVal tableScan = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
+				listToCons(List.of(scan, new LispSymbol(LispNames.CLASS_SLOT_DEFS_TABLE), LispNil.INSTANCE)),
+				makeIf(mvCall(LispNames.MEMBER, v, mvCall(LispNames.CAR, scan)),
+						listToCons(List.of(new LispSymbol(LispNames.PROGN),
+								listToCons(List.of(new LispSymbol(LispNames.SETQ), hit, scan)),
+								listToCons(List.of(new LispSymbol(LispNames.RETURN), LispNil.INSTANCE)))),
+						LispNil.INSTANCE)));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(hit, LispNil.INSTANCE)))),
+						tableScan, makeIf(hit, mvCall(LispNames.CDR, hit), LispNil.INSTANCE)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.CLASS_SLOT_DEFS_RUNTIME),
+				listToCons(List.of(v)), body));
+	}
+
+	/**
+	 * Whether the program calls {@code %class-slot-defs} -- the condition under which
+	 * {@link #expandTopLevelDefinitions} injects the shared runtime defun and its data
+	 * table (the call sites lower to it via {@link #expandClassSlotDefs} during the
+	 * backend passes). Quoted data is skipped.
+	 */
+	private static boolean needsClassSlotDefsRuntime(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::referencesClassSlotDefs);
+	}
+
+	private static boolean referencesClassSlotDefs(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String member = memberOf(op.name());
+			if (LispNames.QUOTE.equals(member)) {
+				return false;
+			}
+			if (LispNames.CLASS_SLOT_DEFS_INTERNAL.equals(member)) {
+				return true;
+			}
+		}
+		return referencesClassSlotDefs(cons.car()) || referencesClassSlotDefs(cons.cdr());
 	}
 
 	// --- the instance seam -----------------------------------------------------------
@@ -10408,6 +10462,57 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Whether the program references {@code find-class} -- a call, or
+	 * {@code #'find-class} taken as a value -- without bringing its own definition, which
+	 * is the condition under which {@link #expandTopLevelDefinitions} injects the
+	 * generated metaobject runtime: the {@code %class-meta-table%} data table, the
+	 * metaobject memo global, the materializer, and the real {@code find-class} defun.
+	 * Quoted data is skipped.
+	 * @param program the top-level forms
+	 * @return true when the metaobject runtime is needed
+	 */
+	private static boolean needsFindClassRuntime(List<LispVal> program) {
+		boolean referenced = false;
+		for (LispVal form : program) {
+			if (isNamedForm(form, LispNames.DEFUN) && form instanceof LispCons cons
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+					&& LispNames.FIND_CLASS.equals(memberOf(name.name()))) {
+				// The program (or a spliced library) defines find-class itself; its
+				// definition wins and the runtime stays out.
+				return false;
+			}
+			referenced = referenced || referencesFindClass(form);
+		}
+		return referenced;
+	}
+
+	/** The package-stripped member of a possibly qualified name. */
+	private static String memberOf(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	private static boolean referencesFindClass(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String member = memberOf(op.name());
+			if (LispNames.QUOTE.equals(member)) {
+				return false;
+			}
+			if (LispNames.FIND_CLASS.equals(member)) {
+				return true;
+			}
+			if (LispNames.FUNCTION.equals(member) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol named && LispNames.FIND_CLASS.equals(memberOf(named.name()))) {
+				return true;
+			}
+		}
+		return referencesFindClass(cons.car()) || referencesFindClass(cons.cdr());
+	}
+
+	/**
 	 * As {@link #expandTopLevelDefinitions(List, java.util.Map, ClosRegistry)}, threading
 	 * the export oracle a {@code defstruct} needs to spell its generated names the way
 	 * the program's call sites do -- see
@@ -10434,6 +10539,18 @@ public final class LispMacroExpander {
 		if (definesCloserMopFunction(program)) {
 			closRegistry.ensureMopClassesSeeded();
 		}
+		// A find-class reference compiles to the generated metaobject runtime injected
+		// below; the MOP base classes must register BEFORE the walk so the emitted
+		// %obj-new tags, the typep tables and every dispatch answer see one consistent
+		// registry.
+		boolean findClassRuntime = needsFindClassRuntime(program);
+		if (findClassRuntime) {
+			closRegistry.ensureMopClassesSeeded();
+		}
+		// A %class-slot-defs call site lowers to the shared runtime defun during the
+		// backend passes; the defun and its table are injected below once the registry
+		// is complete.
+		boolean classSlotDefsRuntime = needsClassSlotDefsRuntime(program);
 		// Every change-class target, recorded BEFORE the walk so the capacity reservation
 		// below can widen its ancestors the moment the whole registry is known.
 		registerChangeClassTargets(program, closRegistry);
@@ -10447,8 +10564,8 @@ public final class LispMacroExpander {
 		// the expanded program, where a define-condition has become a %obj-new
 		// constructor.
 		closRegistry.setRoutesConditionReports(mayCreateConditions(program, closRegistry));
-		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !readsSlots(program)
-				&& !closRegistry.routesConditionReports()
+		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !findClassRuntime
+				&& !classSlotDefsRuntime && !readsSlots(program) && !closRegistry.routesConditionReports()
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
 							|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
@@ -10533,6 +10650,23 @@ public final class LispMacroExpander {
 		// Same phase, same reason as the dispatchers: a struct predicate emitted before
 		// its :include children were registered tests too few tags.
 		refreshStructPredicates(out, closRegistry);
+		if (findClassRuntime) {
+			// The metaobject runtime: the two defuns are position-independent and
+			// appended; the data table and the memo global are top-level defvars and must
+			// run before any top-level find-class call, so they go FIRST (after the
+			// dispatcher slots above were filled by index). Emitted before the
+			// instance/condition re-answers below so the %obj-new inside the
+			// materializer is in their view.
+			out.addAll(findClassRuntimeDefuns());
+			out.addAll(0, classMetaTableForms(closRegistry));
+		}
+		if (classSlotDefsRuntime) {
+			// Same shape as the typep runtime: the defun is position-independent and
+			// appended; the data table is a top-level defvar and must run before any
+			// top-level %class-slot-defs call, so it goes FIRST.
+			out.add(classSlotDefsRuntimeDefun());
+			out.addAll(0, classSlotDefsTableForms(closRegistry));
+		}
 		// The registry is complete and every class constructor is spliced, so this is the
 		// final answer: everything injected below (the runtime-error helpers, the print
 		// renderer) reads it, and so does every signal site compiled in Pass 2.
@@ -19590,6 +19724,191 @@ public final class LispMacroExpander {
 		condParts.addAll(clauses);
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.TYPEP_RUNTIME),
 				listToCons(List.of(v, tn)), listToCons(condParts)));
+	}
+
+	/**
+	 * Builds the {@code %class-meta-table%} data-table forms (and the metaobject memo
+	 * global) backing the generated runtime {@code find-class}: one entry per registered
+	 * class holding the name spellings that designate it, the canonical superclass name
+	 * (nil at a root), and per effective slot the {@code (name initargs initform type
+	 * readers)} data its slot-definition metaobject is materialized from -- the same
+	 * shape {@code ClosRegistry.classMetaobject} builds on the interpreter, so the
+	 * {@code %obj-ref} index contract of the seeded MOP layouts is served identically.
+	 * Pure quoted data, emitted through {@link #chunkedTableForms}.
+	 */
+	private static List<LispVal> classMetaTableForms(ClosRegistry closRegistry) {
+		List<LispVal> entries = new java.util.ArrayList<>();
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			if (!seen.add(info.name())) {
+				continue;
+			}
+			java.util.LinkedHashSet<String> spellings = new java.util.LinkedHashSet<>();
+			// The canonical spelling comes FIRST: the generated find-class memoizes (and
+			// names the metaobject) by (car (car entry)).
+			spellings.add(info.name());
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
+			if (qn != null) {
+				spellings.add(qn.member());
+			}
+			List<LispVal> spellingSyms = new java.util.ArrayList<>();
+			for (String spelling : spellings) {
+				spellingSyms.add(new LispSymbol(spelling));
+			}
+			List<LispVal> slotDefs = new java.util.ArrayList<>();
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				List<String> readerNames = new java.util.ArrayList<>(slot.readers());
+				readerNames.addAll(slot.accessors());
+				LispVal readers = LispNil.INSTANCE;
+				for (int i = readerNames.size() - 1; i >= 0; i--) {
+					readers = new LispCons(new LispSymbol(readerNames.get(i)), readers);
+				}
+				slotDefs.add(listToCons(List.of(new LispSymbol(slot.baseName()),
+						listToCons(List.of(new LispSymbol(slot.initargKeyword()))),
+						slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()),
+						readers)));
+			}
+			entries.add(listToCons(List.of(listToCons(spellingSyms),
+					info.superclass() == null ? LispNil.INSTANCE : new LispSymbol(info.superclass()),
+					slotDefs.isEmpty() ? LispNil.INSTANCE : listToCons(slotDefs))));
+		}
+		// Chunked by NODE budget, not entry count: unlike the flat typep/subtypep tag
+		// tables, one entry here nests the whole slot-data tree, so a 48-entry chunk of a
+		// class-heavy program compiles past the JVM's 65535-byte method ceiling (the
+		// ci-spec corpus did, at 70178 bytes).
+		List<LispVal> forms = new java.util.ArrayList<>(
+				nodeBudgetedTableForms(LispNames.CLASS_META_TABLE, entries, 600));
+		forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO),
+				LispNil.INSTANCE)));
+		return forms;
+	}
+
+	/**
+	 * As {@link #chunkedTableForms}, but bounding each chunk by the TOTAL cons-node count
+	 * of its entries instead of by entry count -- for tables whose entries are deep trees
+	 * (quoted data compiles to construction code proportional to its node count, and a
+	 * chunk lands inside one top-level method).
+	 */
+	private static List<LispVal> nodeBudgetedTableForms(String varName, List<LispVal> entries, int nodeBudget) {
+		List<LispVal> forms = new java.util.ArrayList<>();
+		List<LispVal> chunk = new java.util.ArrayList<>();
+		int chunkNodes = 0;
+		boolean first = true;
+		for (int i = 0; i <= entries.size(); i++) {
+			boolean flush = i == entries.size() || (!chunk.isEmpty() && chunkNodes >= nodeBudget);
+			if (flush && (!chunk.isEmpty() || first)) {
+				LispVal data = listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(chunk)));
+				if (first) {
+					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(varName), data)));
+					first = false;
+				}
+				else {
+					forms.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(varName),
+							listToCons(List.of(new LispSymbol(LispNames.APPEND), data, new LispSymbol(varName))))));
+				}
+				chunk = new java.util.ArrayList<>();
+				chunkNodes = 0;
+			}
+			if (i < entries.size()) {
+				chunk.add(entries.get(i));
+				chunkNodes += consNodeCount(entries.get(i));
+			}
+		}
+		return forms;
+	}
+
+	/** The cons-cell count of a tree -- the size measure of quoted-data construction. */
+	private static int consNodeCount(LispVal value) {
+		if (!(value instanceof LispCons cons)) {
+			return 0;
+		}
+		return 1 + consNodeCount(cons.car()) + consNodeCount(cons.cdr());
+	}
+
+	/**
+	 * Builds the generated metaobject runtime's two defuns: the real {@code find-class}
+	 * (CL {@code errorp} semantics; scans the {@code %class-meta-table%} spellings) and
+	 * the {@code %find-class-materialize} helper, which builds one class metaobject from
+	 * its table entry -- effective-slot-definition instances, the superclass metaobject
+	 * through a recursive {@code find-class} -- and memoizes it under the canonical name
+	 * so the answer is {@code eq}-stable across calls and spellings, like the
+	 * interpreter's registry memo. Both are position-independent plain defuns; the size
+	 * is constant -- the per-class data lives in the table.
+	 */
+	private static List<LispVal> findClassRuntimeDefuns() {
+		LispSymbol sym = new LispSymbol("%fc_sym");
+		LispSymbol errorp = new LispSymbol("%fc_errorp");
+		LispSymbol env = new LispSymbol("%fc_env");
+		LispSymbol entry = new LispSymbol("%fc_e");
+		LispSymbol scan = new LispSymbol("%fc_x");
+		// (dolist (x table) (if (member sym (car x)) (progn (setq e x) (return nil))
+		// nil))
+		LispVal tableScan = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
+				listToCons(List.of(scan, new LispSymbol(LispNames.CLASS_META_TABLE), LispNil.INSTANCE)),
+				makeIf(mvCall(LispNames.MEMBER, sym, mvCall(LispNames.CAR, scan)),
+						listToCons(List.of(new LispSymbol(LispNames.PROGN),
+								listToCons(List.of(new LispSymbol(LispNames.SETQ), entry, scan)),
+								listToCons(List.of(new LispSymbol(LispNames.RETURN), LispNil.INSTANCE)))),
+						LispNil.INSTANCE)));
+		LispVal answer = makeIf(entry,
+				mvCall(LispNames.FIND_CLASS_MATERIALIZE, mvCall(LispNames.CAR, mvCall(LispNames.CAR, entry)), entry),
+				makeIf(errorp,
+						listToCons(List.of(new LispSymbol(LispNames.ERROR),
+								new LispString(LispNames.FIND_CLASS + ": there is no class named ~A"), sym)),
+						LispNil.INSTANCE));
+		LispVal findClass = listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.FIND_CLASS),
+				listToCons(List.of(sym, new LispSymbol(LispNames.LAMBDA_OPTIONAL),
+						listToCons(List.of(errorp, LispTrue.INSTANCE)), env)),
+				listToCons(List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(List.of(entry, LispNil.INSTANCE)))), tableScan, answer))));
+
+		LispSymbol name = new LispSymbol("%fc_name");
+		LispSymbol hit = new LispSymbol("%fc_hit");
+		LispSymbol slots = new LispSymbol("%fc_slots");
+		LispSymbol slotDef = new LispSymbol("%fc_s");
+		LispSymbol metaobject = new LispSymbol("%fc_mo");
+		// (dolist (x memo) (if (eq (car x) name) (progn (setq hit x) (return nil)) nil))
+		LispVal memoScan = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
+				listToCons(List.of(scan, new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO), LispNil.INSTANCE)),
+				makeIf(mvCall(LispNames.EQ_GENERAL, mvCall(LispNames.CAR, scan), name),
+						listToCons(List.of(new LispSymbol(LispNames.PROGN),
+								listToCons(List.of(new LispSymbol(LispNames.SETQ), hit, scan)),
+								listToCons(List.of(new LispSymbol(LispNames.RETURN), LispNil.INSTANCE)))),
+						LispNil.INSTANCE)));
+		// Slot data (name initargs initform type readers) -> the effective-slot
+		// instance, consed in reverse table order.
+		LispVal slotData = mvCall(LispNames.CAR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, entry)));
+		LispVal s0 = mvCall(LispNames.CAR, slotDef);
+		LispVal s1 = mvCall(LispNames.CAR, mvCall(LispNames.CDR, slotDef));
+		LispVal s2 = mvCall(LispNames.CAR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, slotDef)));
+		LispVal s3 = mvCall(LispNames.CAR,
+				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, slotDef))));
+		LispVal s4 = mvCall(LispNames.CAR,
+				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, slotDef)))));
+		LispVal slotBuild = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
+				listToCons(List.of(slotDef, slotData, LispNil.INSTANCE)),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), slots, mvCall(LispNames.CONS,
+						objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
+								List.of(s0, s1, s2, s3, s4)),
+						slots)))));
+		LispVal superName = mvCall(LispNames.CAR, mvCall(LispNames.CDR, entry));
+		LispVal supers = makeIf(superName,
+				mvCall(LispNames.CONS, mvCall(LispNames.FIND_CLASS, superName), LispNil.INSTANCE), LispNil.INSTANCE);
+		LispVal buildMetaobject = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME,
+				List.of(name, supers, LispNil.INSTANCE, mvCall(LispNames.REVERSE, slots), LispTrue.INSTANCE));
+		LispVal memoize = listToCons(List.of(new LispSymbol(LispNames.SETQ),
+				new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO), mvCall(LispNames.CONS,
+						mvCall(LispNames.CONS, name, metaobject), new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO))));
+		LispVal construct = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(slots, LispNil.INSTANCE)))), slotBuild,
+				listToCons(List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(List.of(metaobject, buildMetaobject)))), memoize, metaobject))));
+		LispVal materialize = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
+				new LispSymbol(LispNames.FIND_CLASS_MATERIALIZE), listToCons(List.of(name, entry)),
+				listToCons(List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(List.of(hit, LispNil.INSTANCE)))), memoScan,
+						makeIf(hit, mvCall(LispNames.CDR, hit), construct)))));
+		return List.of(findClass, materialize);
 	}
 
 	/** The literal type specifier an argument form denotes, or null for a runtime one. */
