@@ -93,10 +93,13 @@ through.
 `consp`, `listp` and `typep 'cons`/`'list`/`'sequence` are nil on an instance,
 and `atom` is t. `(nth 1 c)` on a caught condition — once the documented way to
 read a `simple-error`'s message — is retired; use
-`simple-condition-format-control` or a slot reader. `class-of` returns the
-instance TAG symbol (`%class-NAME` / `%struct-NAME`), which is also the
-designator `%class-slot-defs` accepts, so a slot-walking serializer works
-against structs and CLOS instances alike (json.lisp's `%json-out-instance`).
+`simple-condition-format-control` or a slot reader. The internal
+`%class-designator` returns the instance TAG symbol (`%class-NAME` /
+`%struct-NAME`), which is also a designator `%class-slot-defs` accepts, so a
+slot-walking serializer works against structs and CLOS instances alike
+(json.lisp's `%json-out-instance`). `class-of` answers the class METAOBJECT
+(`.kb/clos.md`), and `%class-slot-defs` accepts that too (through its name
+slot).
 
 `equal` on two instances is STRUCTURAL: same layout, every slot recursively
 `equal`. **This is a deliberate deviation from CL**, where distinct structures

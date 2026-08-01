@@ -221,20 +221,28 @@ public final class LispPreludeLibrary {
 				                   (intern (subseq s 0 idx) :keyword)
 				                   :cl-user))))))
 				""");
-		// type-of over class-of: class-of yields a struct/CLOS instance's TAG symbol
+		// type-of over %class-designator (NOT class-of, which answers a metaobject
+		// since the migration): the designator is a struct/CLOS instance's TAG symbol
 		// (%struct-NAME / %class-NAME), and type-of is the type NAME -- so a digest
 		// object's type is usable as the digest-name designator it came from. The tag
 		// spelling is read with prin1-to-string, since symbol-name would drop the
-		// package qualifier a canonical type name carries. Everything else answers what
-		// class-of does (a built-in type name, or T).
+		// package qualifier a canonical type name carries. Everything else answers the
+		// designator itself (a built-in type name, or T).
 		SOURCES.put(LispNames.TYPE_OF, """
 				(defun type-of (object)
-				  (let* ((c (class-of object))
+				  (let* ((c (%class-designator object))
 				         (s (prin1-to-string c))
 				         (n (length s)))
 				    (cond ((and (> n 8) (string= (subseq s 0 8) "%struct-")) (intern (subseq s 8)))
 				          ((and (> n 7) (string= (subseq s 0 7) "%class-")) (intern (subseq s 7)))
 				          (t c))))
+				""");
+		// class-name reads the metaobject's name slot -- index 0 of the seeded
+		// standard-class slot-order contract (ClosRegistry.ensureMopClassesSeeded),
+		// the same read the closer-mop shim's class-name does.
+		SOURCES.put(LispNames.CLASS_NAME, """
+				(defun class-name (class)
+				  (%obj-ref class 0))
 				""");
 		SOURCES.put(LispNames.GET, """
 				(defvar %symbol-plists nil)

@@ -4945,14 +4945,52 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunClassOf() throws Exception {
-		assertThat(compileAndRun("(print (class-of 42)) (print (class-of \"s\")) (print (class-of 'foo))"
-				+ " (print (class-of :k)) (print (class-of 1.5)) (print (class-of (CONS 1 2)))"
-				+ " (print (class-of nil)) (print (class-of t)) (print (class-of (make-hash-table)))"
-				+ " (print (class-of #'car))"))
-			.isEqualTo("INTEGER\nSTRING\nSYMBOL\nKEYWORD\nFLOAT\nCONS\nNULL\nBOOLEAN\nHASH-TABLE\nFUNCTION");
-		assertThat(
-				compileAndRun("(defclass co-pt () ((x :initarg :x))) (print (class-of (make-instance 'co-pt :x 1)))"))
-			.isEqualTo("%class-CO-PT");
+		// class-of answers the metaobject view: class-name reads the name of the
+		// memoized standard-class instance, eq to what find-class yields -- for
+		// built-ins, CLOS instances and struct instances alike.
+		assertThat(compileAndRun("(print (class-name (class-of 42))) (print (class-name (class-of \"s\")))"
+				+ " (print (class-name (class-of 'foo))) (print (class-name (class-of :k)))"
+				+ " (print (class-name (class-of 1.5))) (print (class-name (class-of (CONS 1 2))))"
+				+ " (print (class-name (class-of nil))) (print (class-name (class-of t)))"
+				+ " (print (class-name (class-of (make-hash-table)))) (print (class-name (class-of #'car)))"
+				+ " (print (class-name (class-of (make-array 1))))"))
+			.isEqualTo("INTEGER\nSTRING\nSYMBOL\nKEYWORD\nFLOAT\nCONS\nNULL\nBOOLEAN\nHASH-TABLE\nFUNCTION\nT");
+		assertThat(compileAndRun("""
+				(defclass co-pt () ((x :initarg :x)))
+				(defstruct co-node value)
+				(print (list (eq (class-of (make-instance 'co-pt :x 1)) (find-class 'co-pt))
+				             (eq (class-of (make-co-node :value 1)) (find-class 'co-node))
+				             (eq (class-of 42) (find-class 'integer))
+				             (class-name (class-of (make-instance 'co-pt :x 1)))
+				             (class-name (class-of (make-co-node :value 2)))))
+				""")).isEqualTo("(T T T CO-PT CO-NODE)");
+	}
+
+	@Test
+	void compileAndRunClassDesignatorKeepsTheTagView() throws Exception {
+		// The internal %class-designator is the pre-migration class-of: instance tags
+		// and built-in type name symbols -- the light view type-of and the serializers
+		// ride, with no metaobject runtime in the artifact.
+		assertThat(compileAndRun("""
+				(defclass cd-pt () ())
+				(defstruct cd-node)
+				(print (list (%class-designator (make-instance 'cd-pt))
+				             (%class-designator (make-cd-node))
+				             (%class-designator 42)
+				             (%class-designator "s")))
+				""")).isEqualTo("(%class-CD-PT %struct-CD-NODE INTEGER STRING)");
+	}
+
+	@Test
+	void compileAndRunClassSlotDefsAcceptsAClassMetaobjectDesignator() throws Exception {
+		// A metaobject designates through its name slot, so the pre-migration idiom
+		// (%class-slot-defs (class-of x)) keeps answering the (name type) pairs.
+		assertThat(compileAndRun("""
+				(defclass csm-p () ((name :initarg :name) (age :type integer)))
+				(print (list (%class-slot-defs (class-of (make-instance 'csm-p)))
+				             (%class-slot-defs (%class-designator (make-instance 'csm-p)))
+				             (%class-slot-defs (find-class 'integer))))
+				""")).isEqualTo("(((NAME T) (AGE INTEGER)) ((NAME T) (AGE INTEGER)) NIL)");
 	}
 
 	@Test
@@ -5976,12 +6014,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("347");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("348");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("347");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("348");
 	}
 
 	@Test

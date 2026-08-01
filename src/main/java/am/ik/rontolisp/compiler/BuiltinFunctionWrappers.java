@@ -105,6 +105,10 @@ public final class BuiltinFunctionWrappers {
 		gated.add(LispNames.READ_CHAR);
 		gated.add(LispNames.PEEK_CHAR);
 		gated.add(LispNames.READ_BYTE);
+		// #'class-of resolves through the generated %find-class metaobject runtime,
+		// which LispMacroExpander injects only for a program that references class-of
+		// (or find-class) itself -- the injected wrapper body is outside that scan.
+		gated.add(LispNames.CLASS_OF);
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
 	}
 

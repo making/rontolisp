@@ -5781,13 +5781,25 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void classOfAndSlotAccessors() throws Exception {
-		assertThat(compileAndRun("(print (class-of 42)) (print (class-of \"s\")) (print (class-of 'foo))"
-				+ " (print (class-of :k)) (print (class-of 1.5)) (print (class-of (cons 1 2)))"
-				+ " (print (class-of nil)) (print (class-of t)) (print (class-of (make-hash-table)))"
-				+ " (print (class-of #'car))"
-				+ " (defclass co-pt () ((x :initarg :x))) (print (class-of (make-instance 'co-pt :x 1)))"))
-			.isEqualTo(
-					"INTEGER\nSTRING\nSYMBOL\nKEYWORD\nFLOAT\nCONS\nNULL\nBOOLEAN\nHASH-TABLE\nFUNCTION\n%class-CO-PT");
+		// class-of answers the metaobject view: class-name (a prelude defun, so the
+		// program goes through the prelude pre-pass like the CLI pipeline) reads the
+		// name of the memoized standard-class instance, eq to what find-class yields.
+		// The internal %class-designator keeps the pre-migration tag/type-name view.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(
+				LispReader.readAllFromString("(print (class-name (class-of 42))) (print (class-name (class-of \"s\")))"
+						+ " (print (class-name (class-of 'foo))) (print (class-name (class-of :k)))"
+						+ " (print (class-name (class-of 1.5))) (print (class-name (class-of (cons 1 2))))"
+						+ " (print (class-name (class-of nil))) (print (class-name (class-of t)))"
+						+ " (print (class-name (class-of (make-hash-table)))) (print (class-name (class-of #'car)))"
+						+ " (defclass co-pt () ((x :initarg :x))) (defstruct co-node value)"
+						+ " (print (list (eq (class-of (make-instance 'co-pt :x 1)) (find-class 'co-pt))"
+						+ "              (eq (class-of (make-co-node :value 1)) (find-class 'co-node))"
+						+ "              (eq (class-of 42) (find-class 'integer))"
+						+ "              (class-name (class-of (make-instance 'co-pt :x 1)))))"
+						+ " (print (list (%class-designator (make-instance 'co-pt :x 1)) (%class-designator 42)))"
+						+ " (print (%class-slot-defs (class-of (make-instance 'co-pt :x 1))))"))))
+			.isEqualTo("INTEGER\nSTRING\nSYMBOL\nKEYWORD\nFLOAT\nCONS\nNULL\nBOOLEAN\nHASH-TABLE\nFUNCTION\n"
+					+ "(T T T CO-PT)\n(%class-CO-PT INTEGER)\n((X T))");
 		// Real unboundness (todo-199): the supplied slot is bound, an unknown one is
 		// not, and slot-makunbound puts it back to unbound.
 		assertThat(compileAndRun(
@@ -7570,7 +7582,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("347");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("348");
 	}
 
 	@Test
@@ -10220,7 +10232,7 @@ class WasmLispCompilerIntegrationTest {
 				(let* ((b (make-instance 'wc-base :conn "c")) (alias b))
 				  (print (list (wc-open-p b) (slot-boundp b 'conn)))
 				  (change-class b 'wc-sub :extra :pooled)
-				  (print (list (class-of alias) (wc-conn alias) (wc-extra alias) (wc-sub-open-p alias)))
+				  (print (list (%class-designator alias) (wc-conn alias) (wc-extra alias) (wc-sub-open-p alias)))
 				  (with-accessors ((e wc-extra)) alias (setf e (list e :seen)))
 				  (print (wc-extra alias)))
 				(print (format nil "~a|~s" (make-wc-node :value 1) (make-wc-node :value 2)))
@@ -10235,7 +10247,7 @@ class WasmLispCompilerIntegrationTest {
 				(let ((o (make-instance 'wu-box)))
 				  (print (list (slot-boundp o 'a) (slot-boundp o 'b)))
 				  (print (handler-case (slot-value o 'a)
-				           (unbound-slot (e) (list (slot-value e 'name) (class-of (slot-value e 'instance))))))
+				           (unbound-slot (e) (list (slot-value e 'name) (%class-designator (slot-value e 'instance))))))
 				  (setf (slot-value o 'a) 1)
 				  (print (list (slot-boundp o 'a) (slot-value o 'a)))
 				  (slot-makunbound o 'a)

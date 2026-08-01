@@ -5003,8 +5003,10 @@ class LispEvaluatorTest {
 					"%string-compare", "%run-handlers")
 			.contains("MAKE-PATHNAME", "MERGE-PATHNAMES", "TRUENAME", "PROBE-FILE", "DIRECTORY", "PATHNAME-DIRECTORY")
 			.doesNotContain("%list-directory", "%wild-match", "%dir-namestring", "%pathname-typed-p")
+			.contains("CLASS-OF", "CLASS-NAME", "FIND-CLASS", "TYPE-OF")
+			.doesNotContain("%class-designator", "%find-class")
 			.isSorted()
-			.hasSize(347);
+			.hasSize(348);
 	}
 
 	@Test
@@ -8638,6 +8640,74 @@ class LispEvaluatorTest {
 				(let ((c (find-class 'type-error)))
 				  (list (%obj-ref c 0) (%obj-ref (car (%obj-ref c 1)) 0)))
 				""").print()).isEqualTo("(TYPE-ERROR ERROR)");
+	}
+
+	@Test
+	void classOfReturnsTheClassMetaobjectEqToFindClass() {
+		// class-of answers the metaobject view: the same memoized standard-class
+		// instance find-class yields, for CLOS instances AND struct instances (a struct
+		// class is a standard-class instance too -- no structure-class, a documented
+		// divergence). class-name reads its name.
+		assertThat(evalMulti("""
+				(defclass co-pt () ((x :initarg :x)))
+				(defstruct co-node value)
+				(list (eq (class-of (make-instance 'co-pt :x 1)) (find-class 'co-pt))
+				      (eq (class-of (make-co-node :value 1)) (find-class 'co-node))
+				      (class-name (class-of (make-instance 'co-pt :x 1)))
+				      (class-name (class-of (make-co-node :value 2))))
+				""").print()).isEqualTo("(T T CO-PT CO-NODE)");
+	}
+
+	@Test
+	void classOfBuiltinValuesAnswerBuiltinClassMetaobjects() {
+		// A non-instance value answers a slot-less built-in class metaobject, memoized
+		// under its name so find-class resolves it to the same object.
+		assertThat(eval("""
+				(list (eq (class-of 42) (find-class 'integer))
+				      (class-name (class-of 42))
+				      (class-name (class-of "s"))
+				      (class-name (class-of nil))
+				      (class-name (class-of t))
+				      (class-name (class-of 'sym))
+				      (class-name (class-of (make-array 1))))
+				""").print()).isEqualTo("(T INTEGER STRING NULL BOOLEAN SYMBOL T)");
+	}
+
+	@Test
+	void classOfConditionAndTypeOfStayCoherent() {
+		// type-of rides the %class-designator view (the plain NAME), untouched by the
+		// metaobject migration; class-of on a condition answers the seeded class.
+		assertThat(evalMulti("""
+				(define-condition co-oops (simple-error) ())
+				(handler-case (error 'co-oops :format-control "x")
+				  (error (e) (list (class-name (class-of e)) (type-of e) (type-of 42))))
+				""").print()).isEqualTo("(CO-OOPS CO-OOPS INTEGER)");
+	}
+
+	@Test
+	void classDesignatorKeepsTheTagView() {
+		// The internal %class-designator is the pre-migration class-of: instance tags
+		// and built-in type name symbols.
+		assertThat(evalMulti("""
+				(defclass cd-pt () ())
+				(defstruct cd-node)
+				(list (%class-designator (make-instance 'cd-pt))
+				      (%class-designator (make-cd-node))
+				      (%class-designator 42)
+				      (%class-designator "s"))
+				""").print()).isEqualTo("(%class-CD-PT %struct-CD-NODE INTEGER STRING)");
+	}
+
+	@Test
+	void classSlotDefsAcceptsAClassMetaobjectDesignator() {
+		// A metaobject designates through its name slot, so the pre-migration idiom
+		// (%class-slot-defs (class-of x)) keeps answering the (name type) pairs.
+		assertThat(evalMulti("""
+				(defclass csm-p () ((name :initarg :name) (age :type integer)))
+				(list (%class-slot-defs (class-of (make-instance 'csm-p)))
+				      (%class-slot-defs (%class-designator (make-instance 'csm-p)))
+				      (%class-slot-defs (find-class 'integer)))
+				""").print()).isEqualTo("(((NAME T) (AGE INTEGER)) ((NAME T) (AGE INTEGER)) NIL)");
 	}
 
 	@Test

@@ -169,10 +169,39 @@ find-class):
   (`WasmLispCompilerIntegrationTest`, same names); find-class doc pages +
   curated table rewritten (en+ja).
 
-Remaining in Phase A: the `class-of` -> metaobject migration with its consumer
-sweep, the `closer-common-lisp` package + re-pointing the `C2CL` nickname
-(today it aliases CLOSER-MOP), `allocate-instance`, and the class-of doc page
-(update only when the migration lands on all four backends).
+Landed 2026-08-01, the `class-of` -> metaobject migration (all four backends):
+
+- `class-of` answers the memoized class metaobject for EVERY value: CLOS
+  instances, struct instances (a `standard-class` instance too --
+  `structure-class` does not exist, documented divergence), and built-in
+  classes (`ClosRegistry.BUILTIN_CLASS_NAMES` = the `%class-designator` result
+  set; `T` for everything else). `(eq (class-of x) (find-class name))` holds;
+  `find-class` resolves struct names and built-in names now too.
+- The old tag/type-name view became the internal `%class-designator` (new
+  builtin + `expandClassDesignator`); consumer sweep re-pointed prelude
+  `type-of`, `print-unreadable-object :type` (`typeNameOf`), the
+  no-applicable-method message, and json.lisp's `%json-out-instance` at it --
+  none of them drags the metaobject runtime in, outputs unchanged.
+- Compile paths: `(class-of x)` = `(%find-class <designator dispatch> t)`;
+  runtime restructured into internal `%find-class` (table scan + builtin
+  fallback) + public `find-class` wrapper (injected only when referenced and
+  not user-defined); `%class-meta-table%` entries gained the instance-tag
+  spelling and struct-layout entries (`ClosRegistry.structParent` records the
+  direct `:include` parent for the superclass chain).
+- `%class-slot-defs` accepts a metaobject designator (name slot);
+  `#'class-of`'s wrapper joined `REFERENCE_GATED_FUNCTIONS` (ungated it
+  referenced `%find-class` in runtime-less programs). `class-name` added as a
+  core prelude defun (CL_SYMBOLS count 347 -> 348).
+- Tests: interpreter `classOf*`/`classDesignator*`/`classSlotDefs*` + JVM
+  `compileAndRunClassOf`/`compileAndRunClassDesignator*`/... + WASM
+  `classOfAndSlotAccessors`; ci-spec `find-class-metaobject-substrate` extended
+  (incl. the raw metaobject print shape), `lite-builtins-residue` and
+  `instance-print-syntax-and-identity` moved to the class-name view. Docs:
+  class-of/find-class/type-of rewritten + new class-name page (en+ja);
+  `.kb/clos.md` boundary paragraph rewritten.
+
+Remaining in Phase A: the `closer-common-lisp` package + re-pointing the
+`C2CL` nickname (today it aliases CLOSER-MOP), and `allocate-instance`.
 
 - A MOP base library (grow `closer-mop.lisp` into it, or a sibling loaded with
   it): `standard-object`, `standard-class`, `standard-direct-slot-definition`,

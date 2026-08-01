@@ -381,7 +381,7 @@
   ;; so one walk covers them. An UNBOUND slot is skipped, not written as null --
   ;; jzon's coerced-fields does the same, and reading it would signal.
   (let ((a (cons "{" acc)) (firstp t))
-    (do ((defs (%class-slot-defs (class-of v)) (cdr defs)))
+    (do ((defs (%class-slot-defs (%class-designator v)) (cdr defs)))
         ((null defs))
       (let ((name (car (car defs))))
         (when (slot-boundp v name)

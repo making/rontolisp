@@ -1429,7 +1429,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      347
+      348
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -3843,7 +3843,8 @@ cases:
       (print (list (equal (make-ips-pt :x 1 :y 2) (make-ips-pt :x 1 :y 2))
                    (equal (make-ips-pt :x 1 :y 2) (make-ips-pt :x 1 :y 9))
                    (equalp (make-ips-pt :x 1 :y "A") (make-ips-pt :x 1 :y "a"))))
-      (print (class-of (make-ips-pt :x 1 :y 2)))
+      ;; class-of answers the class metaobject; class-name reads its name
+      (print (class-name (class-of (make-ips-pt :x 1 :y 2))))
       (print (princ-to-string (make-instance 'ips-box :w 1 :h 2)))
       (let ((ips-h (make-hash-table :test 'equal)))
         (setf (gethash (make-ips-pt :x 1 :y 2) ips-h) :ips-v)
@@ -3858,7 +3859,7 @@ cases:
       #S(IPS-PT :X 1 :Y "s")|#S(IPS-PT :X 1 :Y s)
       (NIL NIL T T T)
       (T NIL T)
-      %struct-IPS-PT
+      IPS-PT
       "#<IPS-BOX :W 1 :H 2>"
       :IPS-V
       "{\"x\":1,\"y\":\"s\"}"
@@ -5132,10 +5133,16 @@ cases:
       (print (list (file-position t) (file-length t) (pathnamep "/tmp/x")))
       (print (list (input-stream-p t) (output-stream-p (make-broadcast-stream)) (input-stream-p "s")))
       (print (stream-element-type t))
-      (print (list (class-of 42) (class-of "s") (class-of nil) (class-of t)))
+      ;; class-of = the metaobject view (eq to find-class); %class-designator
+      ;; keeps the raw tag/type-name symbols
+      (print (mapcar #'class-name (list (class-of 42) (class-of "s") (class-of nil) (class-of t))))
+      (print (list (%class-designator 42) (%class-designator "s")))
       (defclass lbr-pt () ((lbr-x :initarg :lbr-x)))
       (let ((lbr-p (make-instance 'lbr-pt :lbr-x 1)))
-        (print (class-of lbr-p))
+        (print (list (class-name (class-of lbr-p))
+                     (eq (class-of lbr-p) (find-class 'lbr-pt))
+                     (eq (class-of 42) (find-class 'integer))
+                     (%class-designator lbr-p)))
         (print (list (slot-boundp lbr-p 'lbr-x) (slot-boundp lbr-p 'lbr-z)))
         (slot-makunbound lbr-p 'lbr-x)
         (print (slot-boundp lbr-p 'lbr-x)))
@@ -5155,7 +5162,8 @@ cases:
       (T T NIL)
       CHARACTER
       (INTEGER STRING NULL BOOLEAN)
-      %class-LBR-PT
+      (INTEGER STRING)
+      (LBR-PT T T %class-LBR-PT)
       (T NIL)
       NIL
       "lbr 7"
@@ -5622,7 +5630,7 @@ cases:
       (let ((ic-r (initial-ic-regs)))
         (setf (ic-regs-y ic-r) 99)
         (print (list ic-r (ic-regs-x ic-r) (vectorp ic-r))))
-      ;; type-of names the type; class-of yields the instance tag.
+      ;; type-of names the type (over the internal designator view).
       (print (list (type-of (make-ic-base)) (type-of 42) (type-of "s")))
       ;; a package is its upcased name as a keyword, and the two APIs agree
       (print (list (find-package :cl) (find-package "no-such-pkg") (symbol-package :ic-kw)))
@@ -6384,8 +6392,19 @@ cases:
       (print (handler-case (find-class 'fcm-no-such) (error (e) :signaled)))
       (let ((c (find-class 'type-error)))
         (print (list (%obj-ref c 0) (%obj-ref (car (%obj-ref c 1)) 0))))
+      ;; class-of answers the same memoized metaobjects, for instances (CLOS and
+      ;; struct alike), and built-in classes exist for everything else
+      (defstruct fcm-node value)
+      (print (list (eq (class-of (make-instance 'fcm-dog)) (find-class 'fcm-dog))
+                   (eq (class-of (make-fcm-node :value 1)) (find-class 'fcm-node))
+                   (eq (class-of 42) (find-class 'integer))
+                   (class-name (class-of (make-fcm-node)))
+                   (class-name (find-class 'string))))
+      (print (class-of 42))
     expected: |
       (T FCM-DOG T T)
       NIL
       :SIGNALED
       (TYPE-ERROR ERROR)
+      (T T T FCM-NODE STRING)
+      #<STANDARD-CLASS :NAME INTEGER :DIRECT-SUPERCLASSES NIL :DIRECT-SLOTS NIL :EFFECTIVE-SLOTS NIL :FINALIZED-P T>

@@ -93,6 +93,7 @@
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | ライト版スタブ: `(values nil t nil)`(ソース未記録) |
 | `list-all-packages` | `(list-all-packages)` | ライト版スタブ: 常に `nil`(列挙可能なパッケージテーブルなし) |
 | `find-class` | `(find-class 'c)` | メモ化された(`eq` 安定な)クラスメタオブジェクト。`errorp` が `nil` でなければシグナル |
+| `class-name` | `(class-name (class-of 42))` | クラスメタオブジェクトの名前シンボル |
 | `get` | `(get 'sym 'prop)`、`(setf (get 'sym 'prop) v)` | シンボル属性リスト(プログラム全体で 1 つの名前キーのストア) |
 | `lower-case-p` `upper-case-p` | `(lower-case-p #\a)`, `(upper-case-p #\A)` | `t`, `t` -- 大文字化・小文字化で文字が変化するとき真（Unicode ケース表に従う） |
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- 指定した基数(デフォルト10)での桁の重み、またはnil |
@@ -299,8 +300,8 @@
 | `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t` |
 | `output-stream-p` | `(output-stream-p s)` | 任意のストリームハンドルに `t` |
 | `stream-element-type` | `(stream-element-type s)` | 常に `character` -- すべてのストリームは文字ストリーム |
-| `class-of` | `(class-of 42)` | `integer` -- 型/クラス「名」のシンボルで、メタオブジェクトではありません |
-| `type-of` | `(type-of 42)` | `integer` -- `class-of` と同様ですが、構造体/CLOS インスタンスにはインスタンスタグではなく構造体/クラスの「名前」のシンボルを返します |
+| `class-of` | `(class-of 42)` | 値のクラスメタオブジェクト。`(find-class 'integer)` と `eq`。組み込み値・CLOS・構造体インスタンスのいずれも |
+| `type-of` | `(type-of 42)` | `integer` -- 型「名」のシンボル。構造体/CLOS インスタンスには構造体/クラスの名前を返し、`(class-name (class-of x))` と一致します |
 | `simple-condition-format-control` | `(simple-condition-format-control c)` | コンディションの `:format-control` スロット、なければ `nil` |
 | `simple-condition-format-arguments` | `(simple-condition-format-arguments c)` | コンディションの `:format-arguments` スロット、なければ `nil` |
 | `type-error-datum` | `(type-error-datum c)` | `type-error` の `datum` スロット — 型が誤っていたオブジェクト |

@@ -197,6 +197,17 @@ public final class ClosRegistry {
 	public static final String STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME = "STANDARD-EFFECTIVE-SLOT-DEFINITION";
 
 	/**
+	 * The built-in class names {@code class-of} can answer for a non-instance value --
+	 * exactly the result set of the {@code %class-designator} dispatch
+	 * ({@code LispMacroExpander.expandClassDesignator} and the interpreter's
+	 * {@code builtinTypeName} agree on it), so the metaobject view and the designator
+	 * view name the same classes on every backend. {@code find-class} resolves these
+	 * names too ({@link #builtinClassMetaobject}).
+	 */
+	public static final List<String> BUILTIN_CLASS_NAMES = List.of("T", "NULL", "BOOLEAN", "INTEGER", "RATIO", "FLOAT",
+			"STRING", "CHARACTER", "KEYWORD", "SYMBOL", "HASH-TABLE", "FUNCTION", "CONS");
+
+	/**
 	 * Registers a built-in class (a condition of the seeded hierarchy, or one of the MOP
 	 * base classes) with nil-defaulted slots: parent slots first, then the given ones,
 	 * each accepting its {@code :slot-name} initarg.
@@ -505,6 +516,14 @@ public final class ClosRegistry {
 	private final Map<String, Set<String>> structAncestors = new LinkedHashMap<>();
 
 	/**
+	 * Struct type name (normalized) to its DIRECT {@code :include} parent (normalized as
+	 * given) -- what {@link #classMetaobject} builds the direct-superclass list of a
+	 * struct metaobject from ({@link #structAncestors} flattens the chain into a set and
+	 * cannot answer "the parent").
+	 */
+	private final Map<String, String> structParents = new LinkedHashMap<>();
+
+	/**
 	 * Struct type name (normalized) to the name of the predicate defun {@code defstruct}
 	 * generated for it (absent when {@code (:predicate nil)} suppressed it, or for a
 	 * {@code :type} struct, which has no instance tag to test). A predicate bakes the
@@ -613,6 +632,11 @@ public final class ClosRegistry {
 			List<LispVal> initforms) {
 		String key = normalize(structName);
 		this.structTags.put(key, LispLayout.STRUCT_TAG_PREFIX + structName);
+		// A redefinition invalidates the memoized metaobject, like registerClass.
+		this.classMetaobjects.remove(key);
+		if (parentName != null) {
+			this.structParents.put(key, parentName);
+		}
 		Set<String> ancestors = new java.util.LinkedHashSet<>();
 		if (parentName != null) {
 			Set<String> parentAncestors = this.structAncestors.get(normalize(parentName));
@@ -853,21 +877,33 @@ public final class ClosRegistry {
 	}
 
 	/**
-	 * The class METAOBJECT of a registered class: an instance of
+	 * The class METAOBJECT of a registered class or struct type: an instance of
 	 * {@link #STANDARD_CLASS_NAME} holding the name, the direct-superclass metaobject
 	 * list, the direct slots (nil until a metaclass protocol fills them), the effective
 	 * slots as {@link #STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME} instances, and
-	 * finalized-p (t -- a plain registered class is always complete). Memoized, so
+	 * finalized-p (t -- a plain registered type is always complete). Memoized, so
 	 * {@code eq} identity holds across calls ({@code (eq (find-class 'a) (find-class
-	 * 'a))} is true) and {@code class-of} can answer with the same object.
-	 * @param name the class name as spelled
-	 * @return the metaobject, or null when no such class is registered
+	 * 'a))} is true) and {@code class-of} answers with the same object. The designator
+	 * may be an instance TAG ({@code %class-<name>}/{@code %struct-<name>}, what
+	 * {@code class-of} reads off a value) as well as a plain name, mirroring
+	 * {@link #slotDefs}; a struct answers a {@code standard-class} instance too --
+	 * rontolisp has no {@code structure-class}, a documented divergence.
+	 * @param designator the type name as spelled, or an instance tag
+	 * @return the metaobject, or null when no such class or struct is registered
 	 */
-	@Nullable public LispInstance classMetaobject(String name) {
+	@Nullable public LispInstance classMetaobject(String designator) {
 		ensureMopClassesSeeded();
+		boolean structOnly = designator.startsWith(LispLayout.STRUCT_TAG_PREFIX);
+		String name = LispLayout.printNameOfTag(designator);
+		if (name == null) {
+			name = designator;
+		}
+		if (structOnly) {
+			return structMetaobject(name);
+		}
 		ClassInfo info = findClass(name);
 		if (info == null) {
-			return null;
+			return designator.startsWith(LispLayout.CLASS_TAG_PREFIX) ? null : structMetaobject(name);
 		}
 		String key = normalize(info.name());
 		LispInstance cached = this.classMetaobjects.get(key);
@@ -900,6 +936,72 @@ public final class ClosRegistry {
 		LispInstance metaobject = newSeededInstance(STANDARD_CLASS_NAME, new LispSymbol(info.name()), supers,
 				LispNil.INSTANCE, effectiveSlots, LispTrue.INSTANCE);
 		this.classMetaobjects.put(key, metaobject);
+		return metaobject;
+	}
+
+	// The struct half of classMetaobject: built from the layout (slot types all read T,
+	// like slotDefs; readers stay nil -- the accessor names are conc-name spellings the
+	// registry does not keep), superclasses from the direct :include parent.
+	@Nullable private LispInstance structMetaobject(String name) {
+		String tag = findStructTag(name);
+		if (tag == null) {
+			return null;
+		}
+		LispLayout layout = this.layoutsByTag.get(tag);
+		if (layout == null) {
+			return null;
+		}
+		String key = normalize(layout.printName());
+		LispInstance cached = this.classMetaobjects.get(key);
+		if (cached != null) {
+			return cached;
+		}
+		LispVal supers = LispNil.INSTANCE;
+		String parent = this.structParents.get(key);
+		if (parent != null) {
+			LispInstance superMetaobject = classMetaobject(parent);
+			if (superMetaobject != null) {
+				supers = new LispCons(superMetaobject, LispNil.INSTANCE);
+			}
+		}
+		LispVal effectiveSlots = LispNil.INSTANCE;
+		List<String> slotNames = layout.slotNames();
+		for (int i = slotNames.size() - 1; i >= 0; i--) {
+			LispInstance slotDefinition = newSeededInstance(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
+					new LispSymbol(slotNames.get(i)),
+					new LispCons(new LispSymbol(":" + slotNames.get(i)), LispNil.INSTANCE), layout.initforms().get(i),
+					new LispSymbol("T"), LispNil.INSTANCE);
+			effectiveSlots = new LispCons(slotDefinition, effectiveSlots);
+		}
+		LispInstance metaobject = newSeededInstance(STANDARD_CLASS_NAME, new LispSymbol(layout.printName()), supers,
+				LispNil.INSTANCE, effectiveSlots, LispTrue.INSTANCE);
+		this.classMetaobjects.put(key, metaobject);
+		return metaobject;
+	}
+
+	/**
+	 * The memoized metaobject of a BUILT-IN class name ({@link #BUILTIN_CLASS_NAMES}) --
+	 * what {@code class-of} answers for a non-instance value and {@code find-class} falls
+	 * back to when no registered class matches. A {@code standard-class} instance with no
+	 * slots and no superclasses ({@code built-in-class} does not exist, a documented
+	 * divergence); the {@code T} class's name slot holds the boolean {@code t} value,
+	 * matching what the compiled table's quoted {@code T} reads as.
+	 * @param name the built-in class name (upcased)
+	 * @return the metaobject, or null when the name is not a built-in class
+	 */
+	@Nullable public LispInstance builtinClassMetaobject(String name) {
+		if (!BUILTIN_CLASS_NAMES.contains(name)) {
+			return null;
+		}
+		ensureMopClassesSeeded();
+		LispInstance cached = this.classMetaobjects.get(name);
+		if (cached != null) {
+			return cached;
+		}
+		LispVal nameVal = "T".equals(name) ? LispTrue.INSTANCE : new LispSymbol(name);
+		LispInstance metaobject = newSeededInstance(STANDARD_CLASS_NAME, nameVal, LispNil.INSTANCE, LispNil.INSTANCE,
+				LispNil.INSTANCE, LispTrue.INSTANCE);
+		this.classMetaobjects.put(name, metaobject);
 		return metaobject;
 	}
 
@@ -1055,6 +1157,22 @@ public final class ClosRegistry {
 	 */
 	public Map<String, LispLayout> layouts() {
 		return this.layoutsByTag;
+	}
+
+	/**
+	 * The direct {@code :include} parent of a registered struct type, or null -- what a
+	 * struct metaobject's direct-superclass list is built from, on the interpreter
+	 * ({@link #classMetaobject}) and in the compile paths' {@code %class-meta-table%}
+	 * entries alike.
+	 * @param structName the struct name as spelled
+	 * @return the parent name as given at registration, or null
+	 */
+	@Nullable public String structParent(String structName) {
+		String parent = this.structParents.get(normalize(structName));
+		if (parent == null && PackageRegistry.splitQualified(structName) instanceof PackageRegistry.QualifiedName qn) {
+			parent = this.structParents.get(qn.member());
+		}
+		return parent;
 	}
 
 	/**

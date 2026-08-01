@@ -2,8 +2,11 @@
 
 `(class-of object)`
 
-lite 版: CLOS インスタンスにはクラスタグのシンボルを、それ以外の値には組み込み型名のシンボル (`integer`、`string`、`cons` など) を返します。クラスメタオブジェクトではなく名前です (rontolisp に MOP はありません)。
+任意の値のクラスメタオブジェクトを返します — [`find-class`](find-class.md) が返すのと同じメモ化された `standard-class` インスタンスであり、`(eq (class-of x) (find-class 'name))` が成り立ちます。CLOS インスタンスはそのクラスを、`defstruct` インスタンスはその構造体型を(こちらも `standard-class` インスタンスとして — `structure-class` はありません)、それ以外の値は `integer`、`string`、`cons` などの名前を持つスロットなしの組み込みクラスを返し、その集合の外の値(配列など)は `t` になります。名前は [`class-name`](class-name.md) で読み取れます。
 
 ```lisp
-(class-of 42) ; => INTEGER
+(defclass point () ((x :initarg :x)))
+(list (class-name (class-of 42))
+      (class-name (class-of (make-instance 'point)))
+      (eq (class-of 42) (find-class 'integer))) ; => (INTEGER POINT T)
 ```

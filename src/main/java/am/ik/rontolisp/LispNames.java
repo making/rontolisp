@@ -408,9 +408,10 @@ public final class LispNames {
 	public static final String GET = "GET";
 
 	/**
-	 * The {@code type-of} standard function, a prelude defun over {@link #CLASS_OF}: the
-	 * type NAME of a struct/CLOS instance (class-of yields the instance TAG), else the
-	 * built-in type name class-of reports.
+	 * The {@code type-of} standard function, a prelude defun over
+	 * {@link #CLASS_DESIGNATOR_INTERNAL}: the type NAME of a struct/CLOS instance (the
+	 * designator is the instance TAG), else the built-in type name the designator
+	 * reports.
 	 */
 	public static final String TYPE_OF = "TYPE-OF";
 
@@ -2406,18 +2407,31 @@ public final class LispNames {
 
 	/**
 	 * The {@code find-class} standard function: answers the memoized class metaobject of
-	 * a registered class, with CL {@code errorp} semantics. The interpreter defines it
-	 * over {@code ClosRegistry.classMetaobject}; the compile paths emit a defun over the
-	 * {@link #CLASS_META_TABLE} data table ({@code LispMacroExpander}), gated on the
-	 * program referencing the function.
+	 * a registered class or struct type, of a built-in type name ({@code integer},
+	 * {@code string}, ...), with CL {@code errorp} semantics. The interpreter defines it
+	 * over {@code ClosRegistry.classMetaobject}; the compile paths emit a thin wrapper
+	 * over {@link #FIND_CLASS_INTERNAL} ({@code LispMacroExpander}), gated on the program
+	 * referencing the function.
 	 */
 	public static final String FIND_CLASS = "FIND-CLASS";
 
 	/**
+	 * The generated internal resolver behind both {@link #FIND_CLASS} and
+	 * {@link #CLASS_OF} on the compile paths: {@code (%find-class sym errorp)} scans the
+	 * {@link #CLASS_META_TABLE} spellings (instance tags included), falls back to the
+	 * built-in class names ({@code ClosRegistry.BUILTIN_CLASS_NAMES}), and materializes
+	 * through {@link #FIND_CLASS_MATERIALIZE}. It is separate from the public
+	 * {@code find-class} defun so a program defining its own {@code find-class} does not
+	 * change what {@code class-of} answers.
+	 */
+	public static final String FIND_CLASS_INTERNAL = "%FIND-CLASS";
+
+	/**
 	 * The quoted per-class data table backing the compile paths' generated
-	 * {@code find-class}: one entry per registered class -- the accepted name spellings,
-	 * the canonical superclass name (or nil), and the effective-slot data each metaobject
-	 * is materialized from.
+	 * {@link #FIND_CLASS_INTERNAL}: one entry per registered class or struct layout --
+	 * the accepted name spellings (instance tag included, so a {@code class-of}
+	 * designator resolves directly), the canonical superclass name (or nil), and the
+	 * effective-slot data each metaobject is materialized from.
 	 */
 	public static final String CLASS_META_TABLE = "%CLASS-META-TABLE";
 
@@ -2430,8 +2444,8 @@ public final class LispNames {
 
 	/**
 	 * The generated helper materializing one class metaobject from its
-	 * {@link #CLASS_META_TABLE} entry (recursing into {@code find-class} for the
-	 * superclass) and memoizing it in {@link #CLASS_METAOBJECT_MEMO}.
+	 * {@link #CLASS_META_TABLE} entry (recursing into {@link #FIND_CLASS_INTERNAL} for
+	 * the superclass) and memoizing it in {@link #CLASS_METAOBJECT_MEMO}.
 	 */
 	public static final String FIND_CLASS_MATERIALIZE = "%FIND-CLASS-MATERIALIZE";
 
@@ -4517,17 +4531,32 @@ public final class LispNames {
 	public static final String SLOT_BOUND_P_INTERNAL = "%SLOT-BOUND-P";
 
 	/**
-	 * The {@code class-of} built-in function -- lite: the class-tag symbol of a CLOS
-	 * instance, or the type name symbol of a built-in value.
+	 * The {@code class-of} standard function: the class METAOBJECT of any value -- the
+	 * memoized {@code standard-class} instance {@code find-class} answers for a
+	 * struct/CLOS instance's type, or the built-in class metaobject
+	 * ({@code ClosRegistry.BUILTIN_CLASS_NAMES}) of everything else. The old lite view
+	 * (the raw tag / type-name symbol) lives on as {@link #CLASS_DESIGNATOR_INTERNAL} for
+	 * the internal consumers that only need a name.
 	 */
 	public static final String CLASS_OF = "CLASS-OF";
 
 	/**
+	 * The internal {@code (%class-designator x)} function -- what {@code class-of} was
+	 * before the metaobject migration: the instance-tag symbol of a struct/CLOS instance
+	 * ({@code %struct-NAME}/{@code %class-NAME}), else a built-in type NAME symbol. The
+	 * light view internal consumers ride ({@code type-of},
+	 * {@code print-unreadable-object :type}, the no-applicable-method message, json.lisp)
+	 * so they neither drag the metaobject runtime into every program nor change output.
+	 */
+	public static final String CLASS_DESIGNATOR_INTERNAL = "%CLASS-DESIGNATOR";
+
+	/**
 	 * The internal {@code %class-slot-defs} introspection helper: takes a class
-	 * designator (the {@code %class-<name>} tag symbol {@code class-of} returns, or the
-	 * class name) and returns a list of {@code (slot-name declared-type)} pairs for the
-	 * class's full slot list. The closer-mop shim's {@code class-slots} is built on it,
-	 * so slot-walking serializers (jzon) see real fields. Not a public function.
+	 * designator (the {@code %class-<name>} tag symbol {@code %class-designator} returns,
+	 * the class name, or a class METAOBJECT -- whose name slot is read) and returns a
+	 * list of {@code (slot-name declared-type)} pairs for the class's full slot list. The
+	 * closer-mop shim's {@code class-slots} is built on it, so slot-walking serializers
+	 * (jzon) see real fields. Not a public function.
 	 */
 	public static final String CLASS_SLOT_DEFS_INTERNAL = "%CLASS-SLOT-DEFS";
 
@@ -4580,7 +4609,7 @@ public final class LispNames {
 	/**
 	 * The internal instance tag reader: {@code (%obj-tag obj)} yields the
 	 * {@code %struct-<name>} / {@code %class-<name>} symbol of an instance, or nil for a
-	 * non-instance. {@code class-of} is built on it.
+	 * non-instance. {@code %class-designator} is built on it.
 	 */
 	public static final String OBJ_TAG = "%OBJ-TAG";
 
@@ -4755,7 +4784,12 @@ public final class LispNames {
 	/** {@code closer-mop:classp} -- whether a value is a class metaobject. */
 	public static final String CLASSP = "CLASSP";
 
-	/** {@code closer-mop:class-name} -- the name symbol of a class metaobject. */
+	/**
+	 * The {@code class-name} standard function (and {@code closer-mop:class-name}): the
+	 * name symbol of a class metaobject. The core side is a prelude defun reading the
+	 * metaobject's name slot ({@code (%obj-ref class 0)} -- the seeded
+	 * {@code standard-class} slot-order contract).
+	 */
 	public static final String CLASS_NAME = "CLASS-NAME";
 
 	/** {@code closer-mop:class-direct-superclasses} over a class metaobject. */

@@ -3,10 +3,11 @@
 ;; com.inuoe.jzon, and of postmodern's DAO layer). Two generations of slot
 ;; "metaobject" coexist here: the legacy (name declared-type) pair
 ;; %class-slot-defs returns from the class registry (what slot-walking
-;; serializers handed a class-of TAG symbol consume), and the real
+;; serializers handed a %class-designator TAG symbol consume), and the real
 ;; standard-class / standard-effective-slot-definition instances find-class
-;; answers with (seeded layouts, see ClosRegistry.seedMopClasses; the %obj-ref
-;; indexes below are that seeding's documented order contract).
+;; and class-of answer with (seeded layouts, see
+;; ClosRegistry.ensureMopClassesSeeded; the %obj-ref indexes below are that
+;; seeding's documented order contract).
 ;; Written in canonical (pre-resolved) shape like usocket.lisp; the package and
 ;; its nicknames (c2mop, c2cl) are seeded in PackageRegistry.
 

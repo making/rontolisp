@@ -25,9 +25,11 @@ Upcased because the compile paths' spelling comes from reader-upcased literals.
   `LispPreludeLibrary` defun elsewhere, which reads the qualifier off
   `prin1-to-string` and therefore cannot tell `cl` from `cl-user` (both answer
   `:CL-USER` on the compiled backends).
-- `type-of`: also a prelude defun, over `class-of` — it strips the
-  `%struct-`/`%class-` tag prefix to yield the type NAME, so a digest object's
-  type is usable as the digest-name designator it came from.
+- `type-of`: also a prelude defun, over the internal `%class-designator` (NOT
+  `class-of`, which answers a class metaobject since the DAO/MOP migration) —
+  it strips the `%struct-`/`%class-` tag prefix to yield the type NAME, so a
+  digest object's type is usable as the digest-name designator it came from,
+  and it drags no metaobject runtime into the program.
 - **2-argument `find-symbol`**: interpreter = registry-backed ("interned" means
   the package owns/exports/imports the verbatim name), returning the canonical
   spelling so plist and dispatch lookups keyed by a resolver-canonicalized quote

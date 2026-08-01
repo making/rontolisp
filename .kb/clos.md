@@ -232,7 +232,8 @@ RUNTIME (non-literal) slot name and for `%class-slot-defs`:
   with its `%class-slot-defs-table%` data table -- one entry per registered
   LAYOUT (classes AND structs, since `ClosRegistry.slotDefs` is the one resolver
   both it and the interpreter use), designators being the instance tag
-  (`%class-NAME`/`%struct-NAME`, what `class-of` yields) and the plain name,
+  (`%class-NAME`/`%struct-NAME`, what `%class-designator` yields), the plain
+  name, and a class metaobject (what `class-of` yields; its name slot is read),
   answering the `((slot-name declared-type) ...)` list (a struct's types all
   read `T`). Anything else (builtin type names included) is nil, the
   interpreter's semantics. A struct answering here is what lets a slot-walking
@@ -411,28 +412,51 @@ before and every existing artifact stays byte-identical.
   primaries + the default method (cross-type subtyping among specializers is not
   computed).
 - MOP boundary (redrawn 2026-08-01, the DAO/MOP milestone): the STATIC metaobject
-  subset is IN -- `find-class` answers a real memoized `standard-class` instance on
-  all four backends. Interpreter: a Java built-in over
-  `ClosRegistry.classMetaobject` (lazy `ensureMopClassesSeeded()`; NEVER seed
-  unconditionally -- an unconditional seed joins every runtime dispatch table and
-  once pushed the ci-spec corpus over the JVM 64 KB method ceiling). Compile paths:
-  `LispMacroExpander.expandTopLevelDefinitions` injects, gated on the program
-  referencing `find-class`, a `%class-meta-table%` data table (chunked, one entry
-  per registered class: spellings / superclass / effective-slot data) plus a
-  generated `find-class` + `%find-class-materialize` pair that builds and memoizes
-  the metaobjects at runtime -- the prelude's old always-nil stub is GONE. The
-  metaobject slot order (name, direct-superclasses, direct-slots, effective-slots,
-  finalized-p; slot-definitions: name, initargs, initform, type, readers) is a
-  `%obj-ref` index contract shared with the closer-mop shim -- append, never
-  reorder. Pinning tests: `LispEvaluatorTest`/`JvmLispCompilerTest`/
-  `WasmLispCompilerIntegrationTest` `*FindClass*` + `*CloserMopShim*`. Still OUT
-  (the divergence's remaining "why": classes are compile-time-static, `--optimize`
-  DCE and the dispatch tables depend on it): runtime class construction
-  (`ensure-class` from computed data), `add-method`,
+  subset is IN -- `find-class` AND `class-of` answer a real memoized
+  `standard-class` instance on all four backends, `eq` to each other for the
+  same class. Interpreter: Java built-ins over `ClosRegistry.classMetaobject`
+  (designator-aware: plain names AND instance tags; struct layouts answer too --
+  a struct class is a `standard-class` instance, `structure-class` does not
+  exist) and `ClosRegistry.builtinClassMetaobject`
+  (`ClosRegistry.BUILTIN_CLASS_NAMES` = exactly the `%class-designator` result
+  set, `T` for everything else e.g. arrays); lazy `ensureMopClassesSeeded()` --
+  NEVER seed unconditionally: an unconditional seed joins every runtime dispatch
+  table and once pushed the ci-spec corpus over the JVM 64 KB method ceiling.
+  Compile paths: `LispMacroExpander.expandTopLevelDefinitions` injects, gated on
+  the program referencing `find-class` OR `class-of`, a `%class-meta-table%`
+  data table (node-budget-chunked, one entry per registered class AND struct
+  layout: spellings -- the instance TAG among them, so a `class-of` designator
+  resolves by the same scan -- / superclass / effective-slot data) plus the
+  generated `%find-class` (internal resolver: table scan, then the built-in
+  class fallback, CL errorp semantics) + `%find-class-materialize` pair; the
+  public `find-class` defun is a thin wrapper injected only when the program
+  references it without defining it, so a user `find-class` never changes what
+  `class-of` answers. `(class-of x)` expands to `(%find-class
+  <%class-designator dispatch> t)`. The OLD tag/type-name view lives on as the
+  internal `%class-designator`, which is what the light consumers ride (prelude
+  `type-of`, `print-unreadable-object :type`, the no-applicable-method message,
+  json.lisp's `%json-out-instance`) -- they drag no metaobject runtime in and
+  keep every non-MOP program byte-identical. `%class-slot-defs` accepts a class
+  metaobject as designator too (reads its name slot; the generated
+  `%class-slot-defs-runtime` gains that preamble only when `standard-class` is
+  registered). `#'class-of`'s wrapper is REFERENCE_GATED in
+  `BuiltinFunctionWrappers` -- ungated it referenced `%find-class` in programs
+  the injection scan said needed no runtime. `class-name` is core (a prelude
+  defun over metaobject slot 0). The metaobject slot order (name,
+  direct-superclasses, direct-slots, effective-slots, finalized-p;
+  slot-definitions: name, initargs, initform, type, readers) is a `%obj-ref`
+  index contract shared with the closer-mop shim -- append, never reorder.
+  Pinning tests: `LispEvaluatorTest`/`JvmLispCompilerTest`/
+  `WasmLispCompilerIntegrationTest` `*FindClass*` + `*CloserMopShim*` +
+  `classOf*`/`compileAndRunClassOf`/`classOfAndSlotAccessors`, ci-spec
+  `find-class-metaobject-substrate` (raw metaobject print shape included). Still
+  OUT (the divergence's remaining "why": classes are compile-time-static,
+  `--optimize` DCE and the dispatch tables depend on it): runtime class
+  construction (`ensure-class` from computed data), `add-method`,
   `compute-applicable-methods`, class redefinition, `update-instance-for-*`.
-  Known static-model seam: on the compile paths `find-class` sees the WHOLE
-  program's classes regardless of form order, while the interpreter only knows
-  classes already defined at call time.
+  Known static-model seam: on the compile paths `find-class`/`class-of` see the
+  WHOLE program's classes regardless of form order, while the interpreter only
+  knows classes already defined at call time.
   `change-class` is the ONE runtime exception and is not MOP: both classes are literal, so
   the whole change is a static expansion (see above).
 - Multiple inheritance, `:allocation`/`:writer` slot options, eql specializers

@@ -640,17 +640,39 @@ public final class LispEvaluator {
 		}));
 		this.globalEnv.defineFunction(LispNames.CLASS_OF, new LispFunction(LispNames.CLASS_OF, args -> {
 			requireSingleArg(LispNames.CLASS_OF, args);
-			// Lite: the instance-tag symbol of a struct/CLOS instance, or a built-in type
-			// name.
+			// The class METAOBJECT of any value: the memoized standard-class instance
+			// find-class answers for an instance's type, or the built-in class
+			// metaobject of everything else -- (eq (class-of x) (find-class name))
+			// holds. The old tag/type-name view lives on as %class-designator.
 			LispVal v = args.get(0);
 			if (v instanceof LispInstance inst) {
-				return new LispSymbol(inst.layout().tag());
+				LispVal metaobject = this.closRegistry.classMetaobject(inst.layout().tag());
+				if (metaobject != null) {
+					return metaobject;
+				}
+				// A layout-only internal type (the unbound marker); T is the one class
+				// that covers everything.
+				return java.util.Objects.requireNonNull(this.closRegistry.builtinClassMetaobject("T"));
 			}
-			// The class name is a symbol, printed uppercase like every symbol under the
-			// reader's upcase premise (the compile backends return INTEGER/STRING/...
-			// too).
-			return new LispSymbol(builtinTypeName(v).toUpperCase(java.util.Locale.ROOT));
+			// builtinTypeName only yields members of BUILTIN_CLASS_NAMES, so the answer
+			// is never null.
+			return java.util.Objects.requireNonNull(
+					this.closRegistry.builtinClassMetaobject(builtinTypeName(v).toUpperCase(java.util.Locale.ROOT)));
 		}));
+		this.globalEnv.defineFunction(LispNames.CLASS_DESIGNATOR_INTERNAL,
+				new LispFunction(LispNames.CLASS_DESIGNATOR_INTERNAL, args -> {
+					requireSingleArg(LispNames.CLASS_DESIGNATOR_INTERNAL, args);
+					// The light view class-of had before the metaobject migration: the
+					// instance-tag symbol of a struct/CLOS instance, or a built-in type
+					// name (printed uppercase like every symbol under the reader's
+					// upcase premise; the compile backends return INTEGER/STRING/...
+					// too).
+					LispVal v = args.get(0);
+					if (v instanceof LispInstance inst) {
+						return new LispSymbol(inst.layout().tag());
+					}
+					return new LispSymbol(builtinTypeName(v).toUpperCase(java.util.Locale.ROOT));
+				}));
 		this.globalEnv.defineFunction(LispNames.FIND_CLASS, new LispFunction(LispNames.FIND_CLASS, args -> {
 			// (find-class symbol &optional (errorp t) environment) -- a registered class
 			// answers with its memoized metaobject (eq-stable across calls), anything
@@ -662,9 +684,19 @@ public final class LispEvaluator {
 			boolean errorp = args.size() < 2 || !(args.get(1) instanceof LispNil);
 			if (args.get(0) instanceof LispSymbol sym) {
 				LispVal metaobject = this.closRegistry.classMetaobject(sym.name());
+				if (metaobject == null) {
+					// The built-in classes (integer, string, ..., t) exist too, so
+					// (eq (class-of 42) (find-class 'integer)) holds.
+					metaobject = this.closRegistry.builtinClassMetaobject(sym.name());
+				}
 				if (metaobject != null) {
 					return metaobject;
 				}
+			}
+			else if (args.get(0) instanceof LispTrue) {
+				// (find-class t) -- T the class of everything; the reader yields the
+				// boolean, not a symbol.
+				return java.util.Objects.requireNonNull(this.closRegistry.builtinClassMetaobject("T"));
 			}
 			if (errorp) {
 				throw new LispEvalException(LispNames.FIND_CLASS + ": there is no class named "
@@ -676,8 +708,14 @@ public final class LispEvaluator {
 				new LispFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL, args -> {
 					requireSingleArg(LispNames.CLASS_SLOT_DEFS_INTERNAL, args);
 					// ((slot-name declared-type) ...) for the type's full slot list; nil
-					// for anything that is not a registered class or struct designator.
-					if (!(args.get(0) instanceof LispSymbol sym)) {
+					// for anything that is not a registered class or struct designator. A
+					// class METAOBJECT designates through its name slot (what class-of
+					// hands a slot-walking serializer since the metaobject migration).
+					LispVal designator = args.get(0);
+					if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
+						designator = inst.slot(0);
+					}
+					if (!(designator instanceof LispSymbol sym)) {
 						return LispNil.INSTANCE;
 					}
 					List<ClosRegistry.SlotDef> defs = this.closRegistry.slotDefs(sym.name());
@@ -1664,7 +1702,10 @@ public final class LispEvaluator {
 		};
 	}
 
-	/** The built-in type name of a runtime value ({@code class-of} lite). */
+	/**
+	 * The built-in type name of a runtime value (the {@code %class-designator} view; the
+	 * result set is {@code ClosRegistry.BUILTIN_CLASS_NAMES}).
+	 */
 	private static String builtinTypeName(LispVal v) {
 		return switch (v) {
 			case LispInteger ignored -> "integer";

@@ -247,13 +247,15 @@ whenever `usesFloatArray` / `usesIntArray` is, and an `aref` only compiles to
 `_ivAref1` / `_fvAref1` when that tier is emitted, so a wrapper body can never
 name one the class lacks.
 
-`(class-of x)` was the one lowering whose gated call was NOT behind such a test
-from the gate's point of view: its `cond` chain included a `hash-table-p` clause
-unconditionally, so every class that compiled a `class-of` referenced `_hashP`.
-`expandClassOf` now takes a `hashTablesExist` flag (the interpreter and both
-WASM backends pass `true`; the JVM passes `Ctx.usesHashTables`) and drops the
-clause when no hash table can exist -- the same reasoning that keeps the
-character-vector arm out of a compiled `stringp`.
+The `%class-designator` dispatch (what `class-of` lowered to directly before
+the metaobject migration) was the one lowering whose gated call was NOT behind
+such a test from the gate's point of view: its `cond` chain included a
+`hash-table-p` clause unconditionally, so every class that compiled one
+referenced `_hashP`. `expandClassDesignator` now takes a `hashTablesExist` flag
+(the interpreter and both WASM backends pass `true`; the JVM passes
+`Ctx.usesHashTables`) and drops the clause when no hash table can exist -- the
+same reasoning that keeps the character-vector arm out of a compiled
+`stringp`.
 
 Why this shape and not the alternatives: scanning the expanded program is not
 available (the expansions are lazy, per-site, inside `compileExpr`), and

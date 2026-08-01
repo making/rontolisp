@@ -652,7 +652,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// lowering only emits calls to a helper that is actually present.
 		boolean usesSeqString = ConcatenateForms.needsSeqString(program);
 		// The hash-table runtime gate. Like the array gate it is a source scan that a
-		// lowering can outrun -- (class-of x) expands into a hash-table-p test, so a
+		// lowering can outrun -- (%class-designator x) expands into a hash-table-p test,
+		// so a
 		// hash-free program can still reference _hashP -- and forcedGroups carries the
 		// previous run's verdict when it did (see compile(List)).
 		boolean usesHashTables = programUsesAnyHashOp(program) || forcedGroups.contains(GROUP_HASH);
@@ -3299,9 +3300,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		/**
 		 * True when the hash-table runtime helper group ({@link JvmHashRuntimeBuilder})
 		 * is emitted for this program. Gates the {@code hash-table-p} clause of the
-		 * {@code class-of} lowering: without the runtime no hash table can exist, so the
-		 * clause would only be a call to a {@code _hashP} that was never generated.
-		 * Shared across every context.
+		 * {@code %class-designator} lowering: without the runtime no hash table can
+		 * exist, so the clause would only be a call to a {@code _hashP} that was never
+		 * generated. Shared across every context.
 		 */
 		boolean usesHashTables = false;
 

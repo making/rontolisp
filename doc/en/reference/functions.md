@@ -96,6 +96,7 @@ page.
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | Lite stub: `(values nil t nil)` (no source recorded) |
 | `list-all-packages` | `(list-all-packages)` | Lite stub: always `nil` (no enumerable package tables) |
 | `find-class` | `(find-class 'c)` | The memoized (`eq`-stable) class metaobject; signals unless `errorp` is `nil` |
+| `class-name` | `(class-name (class-of 42))` | The name symbol of a class metaobject |
 | `get` | `(get 'sym 'prop)`, `(setf (get 'sym 'prop) v)` | Symbol property lists over one program-global name-keyed store |
 | `lower-case-p` `upper-case-p` | `(lower-case-p #\a)`, `(upper-case-p #\A)` | `t`, `t` -- true when up/down-casing changes the character (follows the Unicode case tables) |
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- the digit weight in the given radix (default 10), or nil |
@@ -303,8 +304,8 @@ page.
 | `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle |
 | `output-stream-p` | `(output-stream-p s)` | `t` for any stream handle |
 | `stream-element-type` | `(stream-element-type s)` | always `character` -- every stream is a character stream |
-| `class-of` | `(class-of 42)` | `integer` -- a type/class NAME symbol, not a metaobject |
-| `type-of` | `(type-of 42)` | `integer` -- like `class-of`, but a struct/CLOS instance answers its structure/class NAME symbol, not the instance tag |
+| `class-of` | `(class-of 42)` | The value's class metaobject, `eq` to `(find-class 'integer)`; built-ins, CLOS and struct instances alike |
+| `type-of` | `(type-of 42)` | `integer` -- the type NAME symbol: a struct/CLOS instance answers its structure/class name, agreeing with `(class-name (class-of x))` |
 | `simple-condition-format-control` | `(simple-condition-format-control c)` | the condition's `:format-control` slot, or `nil` |
 | `simple-condition-format-arguments` | `(simple-condition-format-arguments c)` | the condition's `:format-arguments` slot, or `nil` |
 | `type-error-datum` | `(type-error-datum c)` | the `datum` slot of a `type-error` -- the object whose type was wrong |
