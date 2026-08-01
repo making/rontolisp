@@ -4292,6 +4292,15 @@ public final class LispNames {
 	public static final String LOAD_SYSTEM = "LOAD-SYSTEM";
 
 	/**
+	 * {@code register-system-packages} -- a top-level {@code .asd} form real ASDF uses to
+	 * map package names onto the system that defines them
+	 * ({@code (register-system-packages "lack-component" '(:lack.component))}). Parsed
+	 * and skipped: nothing here consults such a map, since a package is located by its
+	 * own {@code defpackage} (and its nicknames), never by the system that holds it.
+	 */
+	public static final String REGISTER_SYSTEM_PACKAGES = "REGISTER-SYSTEM-PACKAGES";
+
+	/**
 	 * {@code %read-eval} -- the internal marker the tolerant reader wraps a {@code #.}
 	 * read-time-eval datum in ({@code #.datum} lexes to {@code (%read-eval datum)}), so
 	 * {@code .asd} consumers ({@code eval.AsdfSystems}) can resolve the datum against the

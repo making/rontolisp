@@ -454,10 +454,13 @@ public final class LoadInliner {
 			return null;
 		}
 		List<LispVal> items = cons.toList();
-		if (items.size() != 2) {
+		if (items.size() < 2) {
 			throw new IllegalStateException(LispNames.QL_QUICKLOAD
 					+ " expects exactly one system name (or a quoted list of names): " + form.print());
 		}
+		// Trailing keyword options (:silent t, ...) are accepted and ignored, like the
+		// interpreter's runtime quickload.
+		AsdfSystems.checkIgnoredLoadOptions(LispNames.QL_QUICKLOAD, items.subList(2, items.size()));
 		LispVal arg = items.get(1);
 		// A quoted list of names: '("a" "b") reads as (quote ("a" "b")).
 		if (arg instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp

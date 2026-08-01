@@ -104,7 +104,9 @@ below.
 ## What is (and is not) supported
 
 - `.asd` files are parsed as **data**: `defsystem` (bare or
-  `asdf:`-qualified), `in-package`/`defpackage` forms (skipped), and top-level
+  `asdf:`-qualified), `in-package`/`defpackage` forms (skipped),
+  `register-system-packages` forms (skipped — a package is found through its
+  own `defpackage`, never through the system that holds it), and top-level
   `defparameter`s of pure literal/conditional values (evaluated into a
   parse-time environment) may appear. `#+`/`#-` feature conditionals work
   (evaluated against the target backend's features, see
@@ -115,7 +117,9 @@ below.
   `(:feature EXPR DEP)`, contributing its dependency only when the feature
   expression holds.
 - `defsystem` supports the metadata options (ignored), `:depends-on`,
-  `:serial` and `:components` with `:file`/`:module`/`:static-file` entries;
+  `:serial`, `:pathname` (a literal directory prefixed to every component, so
+  a system whose sources live in `src/` can name them bare) and `:components`
+  with `:file`/`:module`/`:static-file` entries;
   a component may carry `:if-feature expr`, which drops the component's files
   when the feature expression does not hold (how libraries gate CLOS-only
   files behind `(:or :sbcl ...)`) while keeping its place in the dependency
@@ -127,7 +131,9 @@ below.
 - Loading a system twice is a no-op; circular `:depends-on` chains are
   detected and reported.
 - The compile path requires a literal, top-level `(asdf:load-system NAME)`;
-  the interpreter also accepts a computed name at runtime.
+  the interpreter also accepts a computed name at runtime. Both accept and
+  ignore trailing keyword options (`:verbose nil`, `:force t`, `:silent t`),
+  which real libraries pass when they load a system at runtime.
 - **Compiling tree-shakes the system.** A function, variable or constant a
   loaded system defines but your program never reaches — following names
   through the source, including quoted symbols and whole string literals — is

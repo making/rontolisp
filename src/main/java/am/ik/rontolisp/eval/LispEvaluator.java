@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
@@ -1606,9 +1607,13 @@ public final class LispEvaluator {
 		// path (LoadInliner), the runtime function accepts a computed system name.
 		String loadSystemName = PackageRegistry.qualify(LispNames.ASDF_PKG, LispNames.LOAD_SYSTEM);
 		this.globalEnv.defineFunction(loadSystemName, new LispFunction(loadSystemName, args -> {
-			if (args.size() != 1) {
+			if (args.isEmpty()) {
 				throw new LispEvalException(LispNames.ASDF_LOAD_SYSTEM + " expects 1 argument, got " + args.size());
 			}
+			// Keyword options are accepted and ignored, like the compile path's --
+			// a library that loads a system at run time spells the call that way
+			// (lack's find-package-or-load passes :verbose nil).
+			ignoreLoadOptions(LispNames.ASDF_LOAD_SYSTEM, args.subList(1, args.size()));
 			String name = AsdfSystems.designator(LispNames.ASDF_LOAD_SYSTEM, args.get(0));
 			loadSystem(name);
 			return new LispSymbol(name);
@@ -1733,9 +1738,11 @@ public final class LispEvaluator {
 		// system names, like real quickload.
 		String quickloadName = PackageRegistry.qualify(LispNames.QL_PKG, LispNames.QUICKLOAD);
 		this.globalEnv.defineFunction(quickloadName, new LispFunction(quickloadName, args -> {
-			if (args.size() != 1) {
+			if (args.isEmpty()) {
 				throw new LispEvalException(LispNames.QL_QUICKLOAD + " expects 1 argument, got " + args.size());
 			}
+			// (ql:quickload "x" :silent t) -- the options are ignored, see load-system.
+			ignoreLoadOptions(LispNames.QL_QUICKLOAD, args.subList(1, args.size()));
 			List<LispVal> designators = args.get(0) instanceof LispCons list && list.isProperList() ? list.toList()
 					: List.of(args.get(0));
 			List<LispVal> loaded = new java.util.ArrayList<>();
@@ -2151,6 +2158,21 @@ public final class LispEvaluator {
 		}
 		this.systemPath = List.copyOf(merged);
 		loadSystem(name);
+	}
+
+	/**
+	 * Checks the trailing keyword options of a runtime {@code asdf:load-system} /
+	 * {@code ql:quickload} call, which are accepted and ignored
+	 * ({@link AsdfSystems#checkIgnoredLoadOptions}), rethrowing the shape error as a Lisp
+	 * condition so a program's {@code handler-case} can see it.
+	 */
+	private static void ignoreLoadOptions(String context, List<LispVal> options) {
+		try {
+			AsdfSystems.checkIgnoredLoadOptions(context, options);
+		}
+		catch (IllegalStateException ex) {
+			throw new LispEvalException(Objects.requireNonNullElse(ex.getMessage(), context));
+		}
 	}
 
 	private void loadSystem(String name) {

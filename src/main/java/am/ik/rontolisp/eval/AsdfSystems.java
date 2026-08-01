@@ -34,10 +34,10 @@ import org.jspecify.annotations.Nullable;
  * The supported {@code defsystem} grammar is: a literal system name (string, keyword or
  * symbol), the ignored metadata options ({@code :description}, {@code :version} and
  * friends), {@code :depends-on} (system names loaded first, through the same search
- * path), {@code :serial} (each component implicitly depends on the previous one), and
- * {@code :components} with {@code (:file "name" [:depends-on (...)])},
- * {@code (:module "dir" :components (...))} (a path prefix) and
- * {@code (:static-file "name")} (ignored) entries.
+ * path), {@code :serial} (each component implicitly depends on the previous one),
+ * {@code :pathname} (a path prefix for every component), and {@code :components} with
+ * {@code (:file "name" [:depends-on (...)])}, {@code (:module "dir" :components (...))}
+ * (a path prefix) and {@code (:static-file "name")} (ignored) entries.
  *
  * <p>
  * Consumers: the compile path splices systems in the {@code LoadInliner} pass (so the
@@ -92,10 +92,12 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * If {@code form} is an {@code (asdf:load-system NAME)} call, returns the literal
-	 * system name; otherwise returns {@code null}. A {@code load-system} whose argument
-	 * is not a literal designator is a hard error: the compile path cannot evaluate it
-	 * (the interpreter's runtime function accepts computed names instead).
+	 * If {@code form} is an {@code (asdf:load-system NAME [:option value]...)} call,
+	 * returns the literal system name; otherwise returns {@code null}. A
+	 * {@code load-system} whose argument is not a literal designator is a hard error: the
+	 * compile path cannot evaluate it (the interpreter's runtime function accepts
+	 * computed names instead). Keyword options are accepted and IGNORED -- see
+	 * {@link #checkIgnoredLoadOptions}.
 	 * @param form the form to test
 	 * @return the system name, or {@code null} if the form is not a
 	 * {@code asdf:load-system} call
@@ -106,11 +108,37 @@ public final class AsdfSystems {
 			return null;
 		}
 		List<LispVal> items = cons.toList();
-		if (items.size() != 2) {
+		if (items.size() < 2) {
 			throw new IllegalStateException(
 					LispNames.ASDF_LOAD_SYSTEM + " expects exactly one system name: " + form.print());
 		}
+		checkIgnoredLoadOptions(LispNames.ASDF_LOAD_SYSTEM, items.subList(2, items.size()));
 		return designator(LispNames.ASDF_LOAD_SYSTEM, items.get(1));
+	}
+
+	/**
+	 * Validates the trailing keyword options of an {@code asdf:load-system} /
+	 * {@code ql:quickload} call, which are accepted and then IGNORED: there is no
+	 * {@code operate} machinery for {@code :force}/{@code :verbose} to drive and loading
+	 * a system twice is already a no-op. Tolerating them is not cosmetic -- a library
+	 * that loads a system at RUN time spells the call that way (lack's
+	 * {@code find-package-or-load} passes {@code :verbose nil}), so rejecting the option
+	 * would make the library unloadable over a clause that has no effect either way. The
+	 * shape is still checked: the options must be {@code :keyword value} pairs, so a
+	 * mistyped second system name is an error rather than a silent no-op.
+	 * @param context the operator name for error messages
+	 * @param options the argument forms/values after the system name
+	 */
+	public static void checkIgnoredLoadOptions(String context, List<LispVal> options) {
+		if (options.size() % 2 != 0) {
+			throw new IllegalStateException(context + " expects :option value pairs after the system name");
+		}
+		for (int i = 0; i < options.size(); i += 2) {
+			if (!(options.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
+				throw new IllegalStateException(
+						context + " expects a keyword option after the system name, got " + options.get(i).print());
+			}
+		}
 	}
 
 	/**
@@ -151,6 +179,14 @@ public final class AsdfSystems {
 			if (operatorMemberIs(form, LispNames.IN_PACKAGE) || operatorMemberIs(form, LispNames.DEFPACKAGE)) {
 				continue;
 			}
+			if (operatorMemberIs(form, LispNames.REGISTER_SYSTEM_PACKAGES)) {
+				// Real ASDF records "package P lives in system S" so a later
+				// find-package can autoload S. Nothing here consults such a map: a
+				// package is located by its own defpackage (lack gives every one of
+				// its packages the dotted nickname this form would register), so the
+				// form is parsed and dropped like in-package/defpackage.
+				continue;
+			}
 			if (operatorMemberIs(form, LispNames.DEFPARAMETER)) {
 				defineParameter(form, parameters, asdPath);
 				continue;
@@ -160,8 +196,8 @@ public final class AsdfSystems {
 				continue;
 			}
 			throw new IllegalStateException(asdPath + ": unsupported form in .asd file (only " + LispNames.DEFSYSTEM
-					+ ", " + LispNames.DEFPACKAGE + ", " + LispNames.IN_PACKAGE + " and " + LispNames.DEFPARAMETER
-					+ " are recognized): " + form.print());
+					+ ", " + LispNames.DEFPACKAGE + ", " + LispNames.IN_PACKAGE + ", " + LispNames.DEFPARAMETER
+					+ " and " + LispNames.REGISTER_SYSTEM_PACKAGES + " are recognized): " + form.print());
 		}
 		return systems;
 	}
@@ -327,6 +363,7 @@ public final class AsdfSystems {
 		List<String> dependsOn = new ArrayList<>();
 		boolean serial = false;
 		LispVal components = null;
+		String pathname = null;
 		for (int i = 2; i < items.size(); i += 2) {
 			if (!(items.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
 				throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
@@ -355,16 +392,24 @@ public final class AsdfSystems {
 				}
 				case ":SERIAL" -> serial = !(value instanceof LispNil);
 				case ":COMPONENTS" -> components = value;
+				// The system-level :pathname is a path prefix for EVERY component,
+				// exactly like a module's -- lack.asd says :pathname "src" and then
+				// names its components bare. It composes with both (a component-level
+				// :pathname and a :module prefix nest inside it), and an empty string
+				// adds no directory level, the same rule a module follows.
+				case ":PATHNAME" -> pathname = pathnamePrefix(LispNames.ASDF_DEFSYSTEM + " " + name, value);
 				// Already consumed by declaredFeatures above.
 				case ":RONTOLISP-FEATURES" -> {
 				}
 				default -> throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
 						+ ": unsupported option " + key.name() + " (supported: :name :description :long-description"
-						+ " :version :author :maintainer :license :depends-on :serial :components"
+						+ " :version :author :maintainer :license :depends-on :serial :components :pathname"
 						+ " :rontolisp-features)");
 			}
 		}
-		List<String> files = components == null ? List.of() : orderComponents(name, components, serial, "", features);
+		String prefix = pathname == null || pathname.isEmpty() ? "" : pathname + "/";
+		List<String> files = components == null ? List.of()
+				: orderComponents(name, components, serial, prefix, features);
 		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir, declaredFeatures);
 	}
 
@@ -682,16 +727,20 @@ public final class AsdfSystems {
 		return new Component(name, dependsOn, featureEnabled ? files : List.of());
 	}
 
-	/**
-	 * Reads a component's {@code :pathname} value. Only a literal namestring is accepted
-	 * ({@code "uri"}, or the {@code #P"uri"} the reader hands over as a string): a
-	 * computed pathname would need the pathname machinery ASDF-as-data deliberately does
-	 * not have. A trailing slash is dropped so the module case composes one separator.
-	 */
 	private static String componentPathname(String systemName, String name, LispVal value) {
+		return pathnamePrefix("system " + systemName + ": component " + name, value);
+	}
+
+	/**
+	 * Reads a system-level or component-level {@code :pathname} value. Only a literal
+	 * namestring is accepted ({@code "src"}, or the {@code #P"src"} the reader hands over
+	 * as a string): a computed pathname would need the pathname machinery ASDF-as-data
+	 * deliberately does not have. A trailing slash is dropped so the caller composes
+	 * exactly one separator.
+	 */
+	private static String pathnamePrefix(String context, LispVal value) {
 		if (!(value instanceof LispString str)) {
-			throw new IllegalStateException("system " + systemName + ": component " + name
-					+ " :pathname expects a namestring literal, got " + value.print());
+			throw new IllegalStateException(context + " :pathname expects a namestring literal, got " + value.print());
 		}
 		String path = str.value();
 		return path.endsWith("/") ? path.substring(0, path.length() - 1) : path;

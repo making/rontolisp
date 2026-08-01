@@ -544,4 +544,134 @@ class AsdfSystemsTest {
 		assertThat(systems.get(0).files()).containsExactly("main.lisp");
 	}
 
+	@Test
+	void aSystemPathnameIsAPrefixForEveryComponent() {
+		// lack.asd's shape: the system says :pathname "src" once and then names its
+		// components bare.
+		AsdfSystems.LispSystem system = parse("""
+				(defsystem "lack"
+				  :depends-on ("lack-component" "lack-util")
+				  :pathname "src"
+				  :components ((:file "lack" :depends-on ("builder"))
+				               (:file "builder")))""");
+		assertThat(system.dependsOn()).containsExactly("lack-component", "lack-util");
+		assertThat(system.files()).containsExactly("src/builder.lisp", "src/lack.lisp");
+	}
+
+	@Test
+	void aSystemPathnameComposesWithModulesAndComponentPathnames() {
+		// The prefix nests: a module adds its own level inside it, and a component-level
+		// :pathname still names the file within the composed directory.
+		AsdfSystems.LispSystem system = parse("""
+				(defsystem :lib
+				  :pathname "src/"
+				  :components ((:file "one")
+				               (:file "two" :pathname "other.lisp")
+				               (:module "sub" :components ((:file "three")))))""");
+		assertThat(system.files()).containsExactly("src/one.lisp", "src/other.lisp", "src/sub/three.lisp");
+	}
+
+	@Test
+	void anEmptySystemPathnameAddsNoDirectoryLevel() {
+		AsdfSystems.LispSystem system = parse("""
+				(defsystem :lib :pathname "" :components ((:file "main")))""");
+		assertThat(system.files()).containsExactly("main.lisp");
+	}
+
+	@Test
+	void aComputedSystemPathnameIsAHardError() {
+		assertThatThrownBy(() -> parse("(defsystem :lib :pathname (foo) :components ((:file \"a\")))"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining(":pathname expects a namestring literal");
+	}
+
+	@Test
+	void parseAsdSourceSkipsRegisterSystemPackages() {
+		// lack-component.asd verbatim: real ASDF maps the package onto the system for
+		// its own autoloading; nothing here consults such a map, so the form is dropped
+		// like in-package/defpackage rather than failing the whole .asd.
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(defsystem "lack-component"
+				  :version "0.2.0"
+				  :author "Eitaro Fukamachi"
+				  :license "MIT"
+				  :components ((:file "src/component")))
+
+				(register-system-packages "lack-component" '(:lack.component))""", "lack-component.asd",
+				Features.INTERPRETER);
+		assertThat(systems).hasSize(1);
+		assertThat(systems.get(0).files()).containsExactly("src/component.lisp");
+	}
+
+	@Test
+	void parsesTheVerbatimLackAsd() {
+		// The whole upstream lack.asd (lack-20260101-git): the :pathname system, the
+		// eighteen one-line alias systems, and the lack/tests system whose :pathname,
+		// nested :module, #+todo-guarded component and :perform must all parse.
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(defsystem "lack"
+				  :version "0.3.0"
+				  :author "Eitaro Fukamachi"
+				  :license "MIT"
+				  :depends-on ("lack-component"
+				               "lack-util")
+				  :pathname "src"
+				  :components ((:file "lack" :depends-on ("builder"))
+				               (:file "builder"))
+				  :description "A minimal Clack"
+				  :in-order-to ((test-op (test-op "lack/tests"))))
+
+				(defsystem "lack/component" :depends-on ("lack-component"))
+				(defsystem "lack/middleware/backtrace" :depends-on ("lack-middleware-backtrace"))
+
+				(defsystem "lack/tests"
+				  :depends-on ("lack" "lack/component" "rove")
+				  :pathname "tests"
+				  :serial t
+				  :components ((:file "builder")
+				               (:file "util")
+				               (:module "middleware"
+				                :components
+				                ((:file "static")
+				                 (:file "auth/basic")))
+				               (:module "session"
+				                :components
+				                ((:module "store"
+				                  :components
+				                  ((:file "dbi")
+				                   #+todo
+				                   (:file "redis"))))))
+				  :perform (test-op (op c) (symbol-call :rove :run c)))""", "lack/lack.asd", Features.INTERPRETER);
+		assertThat(systems.stream().map(AsdfSystems.LispSystem::name)).containsExactly("lack", "lack/component",
+				"lack/middleware/backtrace", "lack/tests");
+		assertThat(systems.get(0).files()).containsExactly("src/builder.lisp", "src/lack.lisp");
+		assertThat(systems.get(0).baseDir()).isEqualTo("lack");
+		assertThat(systems.get(1).dependsOn()).containsExactly("lack-component");
+		assertThat(systems.get(1).files()).isEmpty();
+		// :serial t makes the modules follow the two files; the #+todo component is
+		// read-suppressed, so the store module contributes dbi.lisp alone.
+		assertThat(systems.get(3).files()).containsExactly("tests/builder.lisp", "tests/util.lisp",
+				"tests/middleware/static.lisp", "tests/middleware/auth/basic.lisp", "tests/session/store/dbi.lisp");
+	}
+
+	@Test
+	void loadSystemNameIgnoresKeywordOptions() {
+		// lack's find-package-or-load spells its runtime reload
+		// (asdf:load-system name :verbose nil).
+		assertThat(AsdfSystems.loadSystemName(form("(asdf:load-system \"lib\" :verbose nil)"))).isEqualTo("lib");
+		assertThat(AsdfSystems.loadSystemName(form("(asdf:load-system :lib :force t :verbose nil)"))).isEqualTo("lib");
+	}
+
+	@Test
+	void loadSystemNameRejectsANonKeywordSecondArgument() {
+		// The shape is still checked, so a second system name is an error rather than a
+		// silently dropped load.
+		assertThatThrownBy(() -> AsdfSystems.loadSystemName(form("(asdf:load-system \"a\" \"b\" \"c\")")))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("expects a keyword option");
+		assertThatThrownBy(() -> AsdfSystems.loadSystemName(form("(asdf:load-system \"a\" :verbose)")))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("expects :option value pairs");
+	}
+
 }

@@ -1,8 +1,8 @@
 # ql:quickload
 
-`(ql:quickload name-or-names)`
+`(ql:quickload name-or-names &rest options)`
 
-Downloads a system (and its dependencies) from the real [Quicklisp](https://www.quicklisp.org/) distribution into a local cache, then loads it exactly like [`asdf:load-system`](asdf-load-system.md). The argument is a single system-name designator (string, keyword or symbol) or a list of them; the return value is the list of loaded system names as symbols. `quicklisp` is a nickname for the `ql` package.
+Downloads a system (and its dependencies) from the real [Quicklisp](https://www.quicklisp.org/) distribution into a local cache, then loads it exactly like [`asdf:load-system`](asdf-load-system.md). The argument is a single system-name designator (string, keyword or symbol) or a list of them; the return value is the list of loaded system names as symbols. `quicklisp` is a nickname for the `ql` package. Keyword options (`:silent t`, ...) are accepted and ignored, like [`asdf:load-system`](asdf-load-system.md)'s.
 
 The download uses the Quicklisp dist metadata: `quicklisp.txt` (the distinfo) points at `systems.txt` (dependency resolution) and `releases.txt` (the tarball URL per project). Each release tarball is fetched, extracted and cached under `~/.rontolisp/quicklisp/` (override the location with the `RONTOLISP_QUICKLISP_HOME` environment variable), so a second `quickload` of the same system does no network I/O. After the sources are present, the extracted `.asd` directories are added to the system search path and loading proceeds through the `asdf` subset — so `ql:quickload` is `asdf:load-system` with an auto-download step in front of it. It is subject to the same limitations: many libraries use Common Lisp features rontolisp does not implement (the full CLOS protocol, the condition system) and will not load even once downloaded.
 

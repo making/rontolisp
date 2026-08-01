@@ -54,7 +54,13 @@ Interpreter leg lands first in each unit, but a unit is DONE only when the
 JVM and component legs are green too (or their divergence is recorded).
 
 1. `.todo/224` ASDF front-end: system-level `:pathname`, `register-system-packages`,
-   `load-system` kwargs — 低
+   `load-system` kwargs — 低 — **DONE 2026-08-01** (all four backends; the
+   unpatched `lack.asd` parses whole and every lack/clack component file loads,
+   see `.kb/asdf.md`). The next blocker on the verbatim path is `.todo/226`'s
+   `uiop:symbol-call`, which fails at package-resolution time of lack's
+   `src/util.lisp` — a userland `(defun uiop::symbol-call ...)` cannot work
+   around it, so the cached-source patch the spike used is NOT reproducible
+   without 226.
 2. `.todo/225` missing CL builtins batch (substitute-if, file-write-date, sleep,
    ensure-directories-exist, file-length, export, ...) — 低〜中
 3. `.todo/226` shim widening: uiop `symbol-call` + `uiop/image`, usocket host
